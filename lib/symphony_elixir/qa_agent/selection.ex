@@ -28,7 +28,8 @@ defmodule SymphonyElixir.QaAgent.Selection do
   its passes too, and needs it configured the same way. The `macos_app` playbook's
   dev server runs on the QA host instead, never on this host, on its
   `dev_server_port`, and its `launch_env` reaches the app (see
-  `SymphonyElixir.PlaybookSettings`); it needs only `verification.dev_server`
+  `SymphonyElixir.PlaybookSettings`), which also gives it the walkthrough's `:window_size` and
+  the wide pass's `:wide_pass_size`; it needs only `verification.dev_server`
   (`dev_server_command?: true`), since `verification.enabled` turns on this host's
   dev server, for agent runs too. Its `live` server, when set, is carried as
   `:live_server`; when `live/3` says it should run, the playbook is selected even for a
@@ -142,6 +143,8 @@ defmodule SymphonyElixir.QaAgent.Selection do
           optional(:build_timeout_ms) => pos_integer() | nil,
           optional(:dev_server_port) => pos_integer(),
           optional(:launch_env) => %{optional(String.t()) => String.t()},
+          optional(:window_size) => {pos_integer(), pos_integer()},
+          optional(:wide_pass_size) => {pos_integer(), pos_integer()},
           optional(:apk_paths) => [String.t()],
           optional(:application_ids) => [String.t()],
           optional(:browser_mcp) => map() | nil,
@@ -418,7 +421,9 @@ defmodule SymphonyElixir.QaAgent.Selection do
         app: Map.fetch!(override, "app"),
         build_timeout_ms: if(is_integer(timeout) and timeout > 0, do: timeout),
         dev_server_port: if(is_integer(port) and port in 1..65_535, do: port, else: PlaybookSettings.default_port()),
-        launch_env: if(is_map(launch_env), do: stringify_keys(launch_env), else: %{})
+        launch_env: if(is_map(launch_env), do: stringify_keys(launch_env), else: %{}),
+        window_size: PlaybookSettings.window_size(override),
+        wide_pass_size: PlaybookSettings.wide_pass_size(override)
       })
 
     case PlaybookSettings.live_server(override) do

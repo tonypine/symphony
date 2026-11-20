@@ -164,14 +164,19 @@ defmodule SymphonyElixir.QaDriver do
   it copies to and from the QA host) is a `0700` directory under Symphony's
   state root, outside every path the agent sandbox may write.
 
-  Wide pass: `qa_resize_window` sizes an app's window to at least 1400×900 pt,
-  or the screen's usable area when that is smaller, and remembers the size it
-  reached. `qa_check_app` then says whether the app still runs, answers an
+  Window sizes: `qa_resize_window` with `pass: "walkthrough"` sizes an app's
+  window to the playbook's walkthrough size (`window_width`×`window_height`,
+  1366×768 pt by default, `SymphonyElixir.PlaybookSettings`), where QA runs the
+  walkthrough, its screenshots and the design check. Without a `pass`, or with
+  `pass: "wide"`, it runs the wide pass: the window fills a screen of the
+  playbook's wide pass size (`wide_pass_width`×`wide_pass_height`, 2560×1440 pt
+  by default), or the screen's usable area when that is smaller, and the driver
+  remembers the size it reached. `qa_check_app` then says whether the app still runs, answers an
   accessibility request within 10 seconds, and has left no new
   `~/Library/Logs/DiagnosticReports/<executable>*` crash report (listed on the QA
   host at launch and again at each check), naming the page
-  the agent passes and that window size in each problem. A resize on a screen
-  whose usable area is under 1400×900 pt marks the pass's wide pass limited
+  the agent passes and that window size in each problem. A wide pass on a screen
+  under the wide pass size marks the pass's wide pass limited
   (`wide_pass/1`), which `SymphonyElixir.QaAgent` reports as `blocked`. A `pass`
   with no resize at all (`wide_pass/1` is `nil`) is `inconclusive` (an epic review
   reports it `blocked`, unless it launched no app, `launched_app?/1`), unless the
@@ -304,10 +309,8 @@ defmodule SymphonyElixir.QaDriver do
   @character_keys String.graphemes("abcdefghijklmnopqrstuvwxyz0123456789[],./;'-=`\\")
   @modifiers ~w(command shift option control)
   @element_path ~r/\A\d{1,4}(\.\d{1,4}){0,63}\z/
-  # The wide pass needs a window at least this size (points).
-  @wide_width 1400
-  @wide_height 900
-  @max_window_size 8192
+  # `qa_resize_window`'s `pass`: the walkthrough's window size, or the wide pass.
+  @resize_passes ~w(walkthrough wide)
   # Screen coordinates `qa_hover` and `qa_context_menu` take, in points; a
   # display left of or above the main one has negative ones.
   @max_coordinate 32_768
@@ -469,8 +472,9 @@ defmodule SymphonyElixir.QaDriver do
 
   @doc """
   The pass's wide pass: the screen, its usable area and the window size of the
-  last `qa_resize_window`, and whether that screen limited it (`limited: true`
-  when its usable area is under 1400×900 pt). `nil` when no window was resized
+  last wide `qa_resize_window`, the size it `needed`, and whether that screen
+  limited it (`limited: true` when the screen is under the wide pass size).
+  `nil` when no window was resized for the wide pass
   or there is no driver.
   """
   @spec wide_pass(pid() | nil) :: map() | nil
@@ -846,14 +850,17 @@ defmodule SymphonyElixir.QaDriver do
   defp run_tool("qa_resize_window", driver, config, args) do
     with {:ok, pid} <- running_pid(driver, args),
          {:ok, path} <- optional_element_path(Map.get(args, "path")),
-         {:ok, width} <- optional_integer(args, "width", @wide_width, @max_window_size),
-         {:ok, height} <- optional_integer(args, "height", @wide_height, @max_window_size),
+         {:ok, pass} <- resize_pass(Map.get(args, "pass")),
+         {default_width, default_height} = resize_target(config, pass),
+         {min_width, min_height} = resize_minimum(config, pass),
+         {:ok, width} <- optional_integer(args, "width", min_width, PlaybookSettings.max_window_size()),
+         {:ok, height} <- optional_integer(args, "height", min_height, PlaybookSettings.max_window_size()),
          {:ok, helper} <- helper(driver, config),
-         size_args = [Integer.to_string(width || @wide_width), Integer.to_string(height || @wide_height)],
+         target = {width || default_width, height || default_height},
+         size_args = [Integer.to_string(elem(target, 0)), Integer.to_string(elem(target, 1))],
          {:ok, resized} <- run_helper(config, helper, ["ax-resize", Integer.to_string(pid), path | size_args]),
-         {:ok, wide_pass} <- wide_pass_of(resized) do
-      GenServer.call(driver, {:resized, pid, wide_pass})
-      {:ok, Map.merge(resized, %{"limited" => wide_pass.limited, "note" => resize_note(wide_pass)})}
+         {:ok, reached} <- reached_size(resized, target, config.wide_pass_size) do
+      record_resize(driver, pid, pass, reached, resized)
     end
   end
 
@@ -1652,11 +1659,37 @@ defmodule SymphonyElixir.QaDriver do
 
   # -- wide pass --------------------------------------------------------------
 
-  defp wide_pass_of(resized) do
+  defp resize_pass(nil), do: {:ok, "wide"}
+  defp resize_pass(pass) when pass in @resize_passes, do: {:ok, pass}
+  defp resize_pass(_pass), do: tool_error("invalid_arguments", "`pass` must be `walkthrough` or `wide`.")
+
+  defp resize_target(config, "walkthrough"), do: config.window_size
+  defp resize_target(config, "wide"), do: config.wide_pass_size
+
+  # The wide pass is never smaller than its size; the walkthrough window takes any size.
+  defp resize_minimum(_config, "walkthrough"), do: {PlaybookSettings.min_window_size(), PlaybookSettings.min_window_size()}
+  defp resize_minimum(config, "wide"), do: config.wide_pass_size
+
+  # The walkthrough resize sets the window `qa_check_app` names; only the wide pass is remembered
+  # as the pass's wide pass.
+  defp record_resize(driver, pid, "walkthrough", reached, resized) do
+    GenServer.call(driver, {:resized, pid, reached.window, nil})
+    {:ok, Map.merge(resized, %{"pass" => "walkthrough", "note" => walkthrough_note(reached)})}
+  end
+
+  defp record_resize(driver, pid, "wide", reached, resized) do
+    GenServer.call(driver, {:resized, pid, reached.window, reached})
+    {:ok, Map.merge(resized, %{"pass" => "wide", "limited" => reached.limited, "note" => resize_note(reached)})}
+  end
+
+  # A screen smaller than the wide pass's size limits it: the window fills the screen's usable
+  # area, which the menu bar and the Dock always make a little smaller than the screen.
+  defp reached_size(resized, target, {needed_width, needed_height} = needed) do
     with {:ok, window} <- size_of(resized, "window"),
-         {:ok, screen} <- size_of(resized, "screen"),
-         {:ok, {vw, vh} = visible} <- size_of(resized, "visible") do
-      {:ok, %{window: window, screen: screen, visible: visible, limited: vw < @wide_width or vh < @wide_height}}
+         {:ok, {sw, sh} = screen} <- size_of(resized, "screen"),
+         {:ok, visible} <- size_of(resized, "visible") do
+      limited = sw < needed_width or sh < needed_height
+      {:ok, %{window: window, screen: screen, visible: visible, target: target, needed: needed, limited: limited}}
     else
       :error -> tool_error("qa_helper_failed", "The QA helper returned no window size: #{inspect(resized)}")
     end
@@ -1670,17 +1703,30 @@ defmodule SymphonyElixir.QaDriver do
   end
 
   defp resize_note(%{limited: true} = wide_pass) do
-    "The QA screen is #{size(wide_pass.screen)} with #{size(wide_pass.visible)} usable, under the #{size({@wide_width, @wide_height})} " <>
+    "The QA screen is #{size(wide_pass.screen)} with #{size(wide_pass.visible)} usable, under the #{size(wide_pass.needed)} " <>
       "the wide pass needs, so the window is #{size(wide_pass.window)}. Run the wide pass at this size, report the screen size, " <>
       "and mark the Wide pass step `blocked` as limited: Symphony reports a pass whose wide pass was limited as `blocked`."
   end
 
-  defp resize_note(%{window: {w, h}} = wide_pass) when w < @wide_width or h < @wide_height do
-    "The app kept its window at #{size(wide_pass.window)} on a #{size(wide_pass.screen)} screen: the window has a maximum size " <>
-      "or ignored the resize. Resize the app's main window (pass its `path`) for the wide pass."
+  defp resize_note(wide_pass) do
+    if short_of_target?(wide_pass),
+      do:
+        "The app kept its window at #{size(wide_pass.window)} on a #{size(wide_pass.screen)} screen: the window has a maximum size " <>
+          "or ignored the resize. Resize the app's main window (pass its `path`) for the wide pass.",
+      else: "The window is #{size(wide_pass.window)} on a #{size(wide_pass.screen)} screen."
   end
 
-  defp resize_note(wide_pass), do: "The window is #{size(wide_pass.window)} on a #{size(wide_pass.screen)} screen."
+  defp walkthrough_note(%{window: {w, h}, target: {tw, th}} = reached) do
+    if w < tw or h < th,
+      do:
+        "The window is #{size(reached.window)}, not the #{size(reached.target)} asked for, on a #{size(reached.screen)} screen " <>
+          "with #{size(reached.visible)} usable: the screen is too small or the app keeps a size of its own. Run the walkthrough " <>
+          "at this size and name it in each step.",
+      else: "The window is #{size(reached.window)} for the walkthrough. Run every step at this size unless the step names another."
+  end
+
+  # The window is short of the size asked for, or of the usable area when that is smaller.
+  defp short_of_target?(%{window: {w, h}, target: {tw, th}, visible: {vw, vh}}), do: w < min(tw, vw) or h < min(th, vh)
 
   defp size({w, h}), do: "#{w}×#{h} pt"
 
@@ -2112,6 +2158,8 @@ defmodule SymphonyElixir.QaDriver do
       relaunch_poll_ms: Keyword.get(opts, :relaunch_poll_ms, @relaunch_poll_ms),
       feed_poll: Keyword.get(opts, :feed_poll, @feed_poll),
       launch_env: PlaybookSettings.launch_env(playbook),
+      window_size: Map.get(playbook, :window_size) || PlaybookSettings.default_window_size(),
+      wide_pass_size: Map.get(playbook, :wide_pass_size) || PlaybookSettings.default_wide_pass_size(),
       dev_server_lease: Keyword.get(opts, :dev_server_lease, DevServerLease),
       qa_build: Keyword.get(opts, :qa_build, QaBuild),
       ticket: Keyword.get(opts, :ticket),
@@ -2271,9 +2319,9 @@ defmodule SymphonyElixir.QaDriver do
   end
 
   # The app may have quit since the resize; the pass's wide pass still counts.
-  def handle_call({:resized, pid, wide_pass}, _from, state) do
-    state = update_in(state.apps, &Map.replace_lazy(&1, pid, fn app -> %{app | window: wide_pass.window} end))
-    {:reply, :ok, %{state | wide_pass: wide_pass}}
+  def handle_call({:resized, pid, window, wide_pass}, _from, state) do
+    state = update_in(state.apps, &Map.replace_lazy(&1, pid, fn app -> %{app | window: window} end))
+    {:reply, :ok, if(wide_pass, do: %{state | wide_pass: wide_pass}, else: state)}
   end
 
   def handle_call({:running, pid}, _from, state) do
@@ -2373,7 +2421,7 @@ defmodule SymphonyElixir.QaDriver do
       {:ok, port, pid} ->
         Logger.info("QA driver launched app pid=#{pid} executable=#{executable} root=#{info.root} openrouter_stub=#{stub_url}")
         app = Map.merge(info, %{port: port, output: "", exit_status: nil, window: nil})
-        payload = %{"pid" => pid, "qa_mode" => true, "root" => info.root, "note" => "Wait for the window to settle before judging it."}
+        payload = %{"pid" => pid, "qa_mode" => true, "root" => info.root, "note" => launch_note(state.config)}
         payload = if info.api_fixtures, do: Map.put(payload, "api_fixtures", info.api_fixtures), else: payload
         payload = environment_payload(payload, state, info)
         state = if info[:pair_bundle], do: put_in(state.pair_launches[info.pair_bundle], info), else: state
@@ -2382,6 +2430,11 @@ defmodule SymphonyElixir.QaDriver do
       {:error, reason} ->
         {:reply, tool_error("qa_launch_failed", "The app could not start: #{inspect(reason)}"), state}
     end
+  end
+
+  defp launch_note(config) do
+    "Wait for the window to settle, then call `qa_resize_window` with `pass: \"walkthrough\"`: it sets the main window to " <>
+      "#{size(config.window_size)}, the size every walkthrough step, screenshot and design check runs at unless the step names another."
   end
 
   # A fresh root is a new, empty folder beside the first, where the app runs: no

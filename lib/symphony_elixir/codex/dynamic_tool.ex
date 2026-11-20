@@ -896,7 +896,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "qa_resize_window",
       "description" =>
-        "Wide pass: move the launched app's main window (or the AXWindow at `path`) to the top left of the screen and resize it to width x height points (default 1400 x 900), or the screen's usable area when that is smaller. Returns the window frame it reached, the screen and its usable area, and `limited` when the screen is under 1400 x 900 pt.",
+        "Size the launched app's main window (or the AXWindow at `path`): move it to the top left of the screen and resize it to width x height points, or the screen's usable area when that is smaller. `pass: \"walkthrough\"` sets the size the walkthrough, its screenshots and the design check run at (the playbook's walkthrough size, 1366 x 768 by default). `pass: \"wide\"` (the default) runs the wide pass: the window fills a screen of the playbook's wide pass size (2560 x 1440 by default) and never asks for less. Returns the window frame it reached, the screen and its usable area, and for the wide pass `limited` when the screen is under the wide pass size.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -904,8 +904,24 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "properties" => %{
           "pid" => @pid_property,
           "path" => %{"type" => "string", "description" => "The AXWindow's element path from qa_ax_tree, like `0`. Defaults to the app's main window."},
-          "width" => %{"type" => "integer", "minimum" => 1400, "maximum" => 8192, "default" => 1400},
-          "height" => %{"type" => "integer", "minimum" => 900, "maximum" => 8192, "default" => 900}
+          "pass" => %{
+            "type" => "string",
+            "enum" => ["walkthrough", "wide"],
+            "default" => "wide",
+            "description" => "`walkthrough` for the size every step runs at, `wide` for the wide pass."
+          },
+          "width" => %{
+            "type" => "integer",
+            "minimum" => 320,
+            "maximum" => 8192,
+            "description" => "Points. Defaults to the pass's width; the wide pass takes no less than its own."
+          },
+          "height" => %{
+            "type" => "integer",
+            "minimum" => 320,
+            "maximum" => 8192,
+            "description" => "Points. Defaults to the pass's height; the wide pass takes no less than its own."
+          }
         }
       }
     },
@@ -1226,7 +1242,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_context_menu" => ["pid", "path", "x", "y"],
     "qa_scroll" => ["pid", "path", "x", "y", "edge", "dx", "dy", "unit"],
     "qa_key" => ["pid", "key", "modifiers"],
-    "qa_resize_window" => ["pid", "path", "width", "height"],
+    "qa_resize_window" => ["pid", "path", "pass", "width", "height"],
     "qa_check_app" => ["pid", "page"],
     "qa_sample" => ["pid", "page", "seconds", "name"],
     "qa_open_status_menu" => ["pid"],

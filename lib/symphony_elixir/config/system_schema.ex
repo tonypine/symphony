@@ -154,6 +154,10 @@ defmodule SymphonyElixir.Config.SystemSchema do
     auto_review.playbooks.macos_app.dev_server
     auto_review.playbooks.macos_app.dev_server_port
     auto_review.playbooks.macos_app.launch_env
+    auto_review.playbooks.macos_app.wide_pass_height
+    auto_review.playbooks.macos_app.wide_pass_width
+    auto_review.playbooks.macos_app.window_height
+    auto_review.playbooks.macos_app.window_width
   )
 
   # The sections passed to their `Config.Schema` embed as they are: their keys are its fields.

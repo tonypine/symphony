@@ -35,9 +35,9 @@ public struct LaunchVariable: Equatable, Identifiable {
     }
 }
 
-/// The `macos_app` QA playbook settings that run the project's dev server on the QA host and hand the app its
-/// environment, in the text of a `symphony.yml`: `dev_server`, `dev_server_port` and `launch_env` under
-/// `auto_review.playbooks.macos_app`. Only the lines that change are rewritten, or inserted when missing, so the
+/// The `macos_app` QA playbook settings that run the project's dev server on the QA host, hand the app its
+/// environment and size its window, in the text of a `symphony.yml`: `dev_server`, `dev_server_port`, `launch_env`,
+/// `window_width`, `window_height`, `wide_pass_width` and `wide_pass_height` under `auto_review.playbooks.macos_app`. Only the lines that change are rewritten, or inserted when missing, so the
 /// rest of the file stays as it is.
 public struct MacAppQAPlaybook: Equatable {
     /// Whether a pass on the QA host starts `verification.dev_server` there, beside the app.
@@ -46,17 +46,41 @@ public struct MacAppQAPlaybook: Equatable {
     public var devServerPort: Int
     /// The extra variables the app gets, after Symphony's own.
     public var launchEnv: [LaunchVariable]
+    /// The width, in points, QA sets the app's main window to for the walkthrough.
+    public var windowWidth: Int
+    /// The height, in points, QA sets the app's main window to for the walkthrough.
+    public var windowHeight: Int
+    /// The width, in points, of the screen the wide pass fills.
+    public var widePassWidth: Int
+    /// The height, in points, of the screen the wide pass fills.
+    public var widePassHeight: Int
 
     /// What Symphony uses when a key is missing or null.
     public static let defaultDevServerPort = 8090
+    public static let defaultWindowWidth = 1366
+    public static let defaultWindowHeight = 768
+    public static let defaultWidePassWidth = 2560
+    public static let defaultWidePassHeight = 1440
 
     static let path = ["auto_review", "playbooks", "macos_app"]
     static let emptyMaps: Set<String> = ["{}", "~", "null", "Null", "NULL"]
 
-    public init(devServer: Bool = false, devServerPort: Int = defaultDevServerPort, launchEnv: [LaunchVariable] = []) {
+    public init(
+        devServer: Bool = false,
+        devServerPort: Int = defaultDevServerPort,
+        launchEnv: [LaunchVariable] = [],
+        windowWidth: Int = defaultWindowWidth,
+        windowHeight: Int = defaultWindowHeight,
+        widePassWidth: Int = defaultWidePassWidth,
+        widePassHeight: Int = defaultWidePassHeight
+    ) {
         self.devServer = devServer
         self.devServerPort = devServerPort
         self.launchEnv = launchEnv
+        self.windowWidth = windowWidth
+        self.windowHeight = windowHeight
+        self.widePassWidth = widePassWidth
+        self.widePassHeight = widePassHeight
     }
 
     /// These settings without the variable rows left blank, names trimmed.
@@ -74,8 +98,12 @@ public struct MacAppQAPlaybook: Equatable {
         guard let range = try block(path, in: document) else { return MacAppQAPlaybook() }
         return MacAppQAPlaybook(
             devServer: try devServer(document.child("dev_server", in: range)),
-            devServerPort: try port(document.child("dev_server_port", in: range)),
-            launchEnv: try launchEnv(document.child("launch_env", in: range), in: document)
+            devServerPort: try integer(document.child("dev_server_port", in: range), key: "dev_server_port", default: defaultDevServerPort),
+            launchEnv: try launchEnv(document.child("launch_env", in: range), in: document),
+            windowWidth: try integer(document.child("window_width", in: range), key: "window_width", default: defaultWindowWidth),
+            windowHeight: try integer(document.child("window_height", in: range), key: "window_height", default: defaultWindowHeight),
+            widePassWidth: try integer(document.child("wide_pass_width", in: range), key: "wide_pass_width", default: defaultWidePassWidth),
+            widePassHeight: try integer(document.child("wide_pass_height", in: range), key: "wide_pass_height", default: defaultWidePassHeight)
         )
     }
 
@@ -83,6 +111,15 @@ public struct MacAppQAPlaybook: Equatable {
     /// goes first under `macos_app:`, so they are set last to first and read in order.
     public static func updating(_ yaml: String, from old: MacAppQAPlaybook, to new: MacAppQAPlaybook) throws -> String {
         var yaml = yaml
+        let sizes: [(String, KeyPath<MacAppQAPlaybook, Int>)] = [
+            ("wide_pass_height", \.widePassHeight),
+            ("wide_pass_width", \.widePassWidth),
+            ("window_height", \.windowHeight),
+            ("window_width", \.windowWidth),
+        ]
+        for (key, size) in sizes where new[keyPath: size] != old[keyPath: size] {
+            yaml = try setting(key, to: String(new[keyPath: size]), in: yaml)
+        }
         if new.launchEnv != old.launchEnv {
             yaml = try settingLaunchEnv(new.launchEnv, in: yaml)
         }
@@ -124,14 +161,15 @@ public struct MacAppQAPlaybook: Equatable {
         }
     }
 
-    private static func port(_ key: Document.Key?) throws -> Int {
-        guard let key else { return defaultDevServerPort }
+    /// A whole-number setting such as `dev_server_port` or `window_width`, with `fallback` when it is missing or null.
+    private static func integer(_ key: Document.Key?, key name: String, default fallback: Int) throws -> Int {
+        guard let key else { return fallback }
         let value = ValueLine(key.rest).value
-        if TokenLimits.nullValues.contains(value) { return defaultDevServerPort }
-        guard let port = Int(value.filter { $0 != "_" }) else {
-            throw MacAppQAPlaybookError.unreadable(key: "dev_server_port", value: value)
+        if TokenLimits.nullValues.contains(value) { return fallback }
+        guard let number = Int(value.filter { $0 != "_" }) else {
+            throw MacAppQAPlaybookError.unreadable(key: name, value: value)
         }
-        return port
+        return number
     }
 
     /// The `NAME: value` lines of the `launch_env` block, in file order.
