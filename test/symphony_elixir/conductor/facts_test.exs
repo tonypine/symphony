@@ -1,8 +1,8 @@
 defmodule SymphonyElixir.Conductor.FactsTest do
   use ExUnit.Case, async: true
 
-  alias SymphonyElixir.Conductor.Facts
-  alias SymphonyElixir.{RunStore, TicketEvents}
+  alias SymphonyElixir.Conductor.{Answer, Facts}
+  alias SymphonyElixir.{RunStore, TicketEvents, TicketPlan}
 
   @description """
   Intro line.
@@ -293,10 +293,11 @@ defmodule SymphonyElixir.Conductor.FactsTest do
     defp family!(ctx) do
       n = System.unique_integer([:positive])
       parent = %{repo_key: ctx.repo, issue_id: "parent-#{n}", issue_identifier: "PAR-#{n}", phase: "Waiting on sub-tickets", title: "Filters"}
-      sibling = %{repo_key: ctx.repo, issue_id: "sibling-#{n}", issue_identifier: "SIB-#{n}", phase: "Done", title: "The API filter", parent: %{identifier: parent.issue_identifier}}
+      child_of = %{identifier: parent.issue_identifier}
+      sibling = %{repo_key: ctx.repo, issue_id: "sibling-#{n}", issue_identifier: "SIB-#{n}", phase: "Done", title: "The API filter", parent: child_of}
       quiet = %{sibling | issue_id: "quiet-#{n}", issue_identifier: "QUIET-#{n}"}
       for record <- [parent, sibling, quiet], do: :ok = RunStore.put_ticket_state(record)
-      child = Map.put(ctx.record, :parent, %{identifier: parent.issue_identifier})
+      child = Map.put(ctx.record, :parent, child_of)
       :ok = RunStore.put_ticket_state(child)
       %{parent: parent, sibling: sibling, child: child}
     end
@@ -316,7 +317,7 @@ defmodule SymphonyElixir.Conductor.FactsTest do
     end
 
     test "the document is what was asked and the layer vocabulary, with no run facts", ctx do
-      {:ok, ask} = SymphonyElixir.TicketPlan.record_ask(ctx.repo, ctx.issue_id, "Keep the filter after a reload.")
+      {:ok, ask} = TicketPlan.record_ask(ctx.repo, ctx.issue_id, "Keep the filter after a reload.")
       note = record!(ctx, "note", %{text: "Only the list."}, actor: {:person, "Director"})
 
       facts = Facts.build(ctx.record, "grooming", token_cap: 10)
@@ -329,7 +330,7 @@ defmodule SymphonyElixir.Conductor.FactsTest do
       assert id == note.id
       assert facts.decisions == [%{title: "Scope", answer: "Only the button."}]
       assert facts.answers == []
-      assert Enum.map(facts.layers, & &1.name) == SymphonyElixir.Conductor.Answer.layers()
+      assert Enum.map(facts.layers, & &1.name) == Answer.layers()
       assert Enum.all?(facts.layers, &is_binary(&1.means))
       refute Map.has_key?(facts, :last_run)
       assert {:ok, _json} = Jason.encode(facts)
@@ -337,7 +338,7 @@ defmodule SymphonyElixir.Conductor.FactsTest do
 
     test "a sub-ticket reads its parent's plan and notes, and its siblings' tagged notes", ctx do
       family = family!(ctx)
-      {:ok, written} = SymphonyElixir.TicketPlan.write(ctx.repo, family.parent.issue_id, plan())
+      {:ok, written} = TicketPlan.write(ctx.repo, family.parent.issue_id, plan())
       {:ok, base} = TicketEvents.record(ctx.repo, family.parent.issue_id, "note", %{text: "main fails to build.", tag: "base_fault"}, actor: agent("run-p", "implementation"))
       {:ok, found} = TicketEvents.record(ctx.repo, family.sibling.issue_id, "note", %{text: "The endpoint pages by 50.", tag: "discovery"}, actor: agent("run-s", "implementation"))
       {:ok, _plain} = TicketEvents.record(ctx.repo, family.sibling.issue_id, "note", %{text: "No tag."}, actor: agent("run-s", "implementation"))
