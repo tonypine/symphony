@@ -10,7 +10,9 @@ defmodule SymphonyElixir.PhaseSteps.WindowTests do
   (`covers`, globs where `**` spans folders) and, optionally, why it is `off` in the QA VM: an entry
   that does not pass on main there is never run. The step runs (`selected/1`) every entry whose
   script or covered path the change touches, every entry when the manifest itself changed, and is
-  skipped with the reason when none is selected (`skip_reason/1`). `SymphonyElixir.PhaseSteps.changes/1`
+  skipped with the reason when no entry covers the change (`skip_reason/1`). An entry that is off
+  and covers the change is never skipped quietly: the step ends could not run, naming it
+  (`off_covering/1`). `SymphonyElixir.PhaseSteps.changes/1`
   reads the manifest with the changed files.
 
   A run of the step (`run/2`):
@@ -126,19 +128,28 @@ defmodule SymphonyElixir.PhaseSteps.WindowTests do
   defp covers?(entry, changed), do: Enum.any?(changed, fn path -> path == entry.script or Enum.any?(entry.covers, &Selection.glob_match?(path, &1)) end)
 
   @doc """
-  Why the step is skipped for `changes`, else nil: the workspace declares no window tests, nothing a
-  test covers changed, or only tests that are off in the QA VM cover it. A manifest that can't be
-  read is not a skip: the step runs and fails, naming why.
+  The tests that are off in the QA VM and cover `changes` (their script, a path they cover, or the
+  manifest changed). The step never skips them: it can't run them, so it stops and says so.
+  """
+  @spec off_covering(map()) :: [entry()]
+  def off_covering(%{window_tests: {:ok, entries}, changed: changed}) do
+    Enum.filter(entries, &(is_binary(&1.off) and (@manifest_path in changed or covers?(&1, changed))))
+  end
+
+  def off_covering(_changes), do: []
+
+  @doc """
+  Why the step is skipped for `changes`, else nil: the workspace declares no window tests, or
+  nothing a test covers changed. A change a test that is off in the QA VM covers is not a skip: the
+  step can't run that test, so it ends could not run (`run/2`), and the run never hands off with a
+  window test unrun. A manifest that can't be read is not a skip either: the step runs and fails,
+  naming why.
   """
   @spec skip_reason(map()) :: String.t() | nil
   def skip_reason(%{window_tests: {:error, _why}}), do: nil
 
-  def skip_reason(%{window_tests: {:ok, entries}, changed: changed} = changes) do
-    case {selected(changes), Enum.filter(entries, &(is_binary(&1.off) and covers?(&1, changed)))} do
-      {[_ | _], _off} -> nil
-      {[], []} -> "nothing a window test covers changed"
-      {[], off} -> "only tests that are off in the QA VM cover what changed: " <> Enum.map_join(off, "; ", &"#{&1.script} (#{&1.off})")
-    end
+  def skip_reason(%{window_tests: {:ok, _entries}} = changes) do
+    if selected(changes) == [] and off_covering(changes) == [], do: "nothing a window test covers changed"
   end
 
   def skip_reason(_changes), do: "the workspace declares no window tests (#{@manifest_path})"
@@ -158,12 +169,22 @@ defmodule SymphonyElixir.PhaseSteps.WindowTests do
     opts = Map.get(context, :window_tests_opts, [])
     deadline = System.monotonic_time(:millisecond) + timeout_ms
     tests = selected(context.changes)
+    off = off_covering(context.changes)
+    result = if tests == [], do: {:done, "", 0}, else: run_tests(context, tests, opts, deadline)
 
-    case run_tests(context, tests, opts, deadline) do
-      {:done, output, status} -> {:ok, {output, status}}
-      {:timeout, output} -> {:timeout, output}
-      {:could_not_run, why, output} -> {:ask, could_not_run_output(output, why), question(context, why)}
+    case {result, off} do
+      {{:done, output, 0}, [_ | _]} -> {:ask, could_not_run_output(output, off_why(off)), question(context, off_why(off))}
+      {{:done, output, status}, _off} -> {:ok, {output, status}}
+      {{:timeout, output}, _off} -> {:timeout, output}
+      {{:could_not_run, why, output}, _off} -> {:ask, could_not_run_output(output, why), question(context, why)}
     end
+  end
+
+  # The tests the change needs that the QA VM can't run yet: the run stops rather than hand off
+  # with them unrun.
+  defp off_why(off) do
+    names = Enum.map_join(off, "; ", &"the #{&1.title} (#{&1.off})")
+    "the change touches what a window test covers that is off in the QA VM until it passes on main there: #{names}"
   end
 
   defp run_tests(context, tests, opts, deadline) do

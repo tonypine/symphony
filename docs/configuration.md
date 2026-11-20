@@ -3939,7 +3939,9 @@ which paths each covers is declared in one place, `macos/Tests/window-tests.json
 each test's `script`, its `title` in plain words, the `run` line the Mac CI build runs from `macos/`,
 the `covers` globs (`**` spans folders) and, for a test that does not pass on main in the QA VM, why
 it is `off` there. The step runs every test that is on whose script or covered path the change
-touches (every one when the manifest itself changed), and is skipped, saying why, when there is none.
+touches (every one when the manifest itself changed), and is skipped, saying why, when no test covers
+the change. A change a test that is `off` covers is never skipped: the step runs the tests that are on
+and then stops on a Question naming the test it could not run, so no run hands off with one unrun.
 It builds the workspace's commit with the QA build a QA pass uses (cached by tree, so the QA pass of
 the same commit reuses it), takes the QA VM, copies the commit to a run directory of its own there
 and runs each test from `macos/` with the Mac CI build's environment: the pinned Xcode as
@@ -3948,7 +3950,8 @@ as `SYMPHONY_QA_APP`. Every test's output is the step's output. A test that fail
 the merge-base with the base branch: when it passes there, the change broke it, and the run goes
 back to `code` with the output; when every failing test fails there too, the fault is the VM's or
 main's. The step never passes by default: when it could not run (no QA VM, the VM unreachable or
-refused, the build could not run there, a tool missing, or a test failing on main too), it pauses on
+refused, the build could not run there, a tool missing, a test failing on main too, or a covering test
+that is `off`), it pauses on
 a Question in the Inbox naming the VM problem, so the run stops before Hand off and nothing is
 pushed; the answer runs it again, or sends the person's words to `code`. The QA VM is one machine:
 a `macos_app` QA pass holds it for its whole pass and the step while its tests run, so they never

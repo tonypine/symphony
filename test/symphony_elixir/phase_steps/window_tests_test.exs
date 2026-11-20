@@ -193,12 +193,16 @@ defmodule SymphonyElixir.PhaseSteps.WindowTestsTest do
       assert WindowTests.skip_reason(changes(["priv/qa_driver/x.swift"])) == nil
     end
 
-    test "a change nothing covers, or only a test that is off in the QA VM covers, skips the step with the reason" do
+    test "a change nothing covers skips the step with the reason; one a test that is off in the QA VM covers does not" do
       assert WindowTests.selected(changes(["lib/symphony_elixir/foo.ex"])) == []
       assert WindowTests.skip_reason(changes(["lib/symphony_elixir/foo.ex"])) == "nothing a window test covers changed"
+      assert WindowTests.off_covering(changes(["lib/symphony_elixir/foo.ex"])) == []
 
-      assert WindowTests.skip_reason(changes(["macos/Tests/off-test.sh"])) ==
-               "only tests that are off in the QA VM cover what changed: macos/Tests/off-test.sh (it fails on main there)"
+      assert WindowTests.selected(changes(["macos/Tests/off-test.sh"])) == []
+      assert [%{script: "macos/Tests/off-test.sh"}] = WindowTests.off_covering(changes(["priv/off/driver.swift"]))
+      assert [%{script: "macos/Tests/off-test.sh"}] = WindowTests.off_covering(changes([WindowTests.manifest_path()]))
+      assert WindowTests.skip_reason(changes(["macos/Tests/off-test.sh"])) == nil
+      assert WindowTests.off_covering(%{changed: ["macos/Tests/off-test.sh"]}) == []
 
       assert WindowTests.selected(%{changed: ["macos/Tests/pass-test.sh"]}) == []
       assert WindowTests.skip_reason(%{changed: []}) == "the workspace declares no window tests (macos/Tests/window-tests.json)"
@@ -280,6 +284,30 @@ defmodule SymphonyElixir.PhaseSteps.WindowTestsTest do
       assert [%{label: "Run it again", recommended?: true}, %{label: "Send it back to the code", recommended?: false}] = question.options
       assert PhaseSteps.machine_resume(%{question | answer: %{option: 1, text: "Run it again"}}) == :again
       assert PhaseSteps.machine_resume(%{question | answer: %{option: 2, text: "Send it back to the code"}}) == :words
+    end
+
+    test "a change a test that is off in the QA VM covers stops on a question naming it, and never hands off with it unrun", ctx do
+      assert {:paused, %{id: "window_tests"}, question_id} = walk(context(ctx, ["macos/Tests/off-test.sh"], opts(ctx)))
+      refute_received {:vm_cmd, _run, _opts}
+      assert [%{outcome: "paused", question_id: ^question_id} = paused] = completed()
+      assert output(paused) =~ "(could not run: the change touches what a window test covers that is off in the QA VM"
+      assert %{why: why} = Questions.find({:ticket, @repo_key, @issue_id}, question_id)
+      assert why =~ "the test off in the VM (it fails on main there)"
+      refute Enum.any?(events("step.started"), &(&1.payload.step_id == "handoff"))
+    end
+
+    test "the tests that are on still run first: one the change broke goes back to the code, and passing ones stop for the off one", ctx do
+      change_flaky!(ctx, "echo it broke\nexit 3\n")
+      both = ["macos/Sources/Window/View.swift", "priv/off/driver.swift"]
+      assert {:turn, %{id: "code"}, %{output: output}} = walk(context(ctx, both, opts(ctx)))
+      assert output =~ "Broken by this change: macos/Tests/flaky-test.sh"
+
+      :ok = RunStore.clear()
+      change_flaky!(ctx, "echo fine again\n")
+      assert {:paused, %{id: "window_tests"}, _question_id} = walk(context(ctx, both, opts(ctx)))
+      assert [%{outcome: "paused"} = paused] = completed()
+      assert output(paused) =~ "fine again\n(passed)"
+      assert output(paused) =~ "(could not run: the change touches what a window test covers that is off in the QA VM"
     end
 
     test "an unreachable QA VM holds the run on a question, with nothing run and nothing pushed", ctx do
