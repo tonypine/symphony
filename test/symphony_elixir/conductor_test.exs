@@ -517,6 +517,26 @@ defmodule SymphonyElixir.ConductorTest do
       assert [%{text: "Waiting for TP-2000 to finish" <> _rest}] = ctx.issue_id |> RunStore.get_ticket_state() |> TicketState.pause_reasons()
     end
 
+    test "a blocking ticket filed whose hold cannot be set is named in the update and kept as the route, and the pass goes on", ctx do
+      blocked!(ctx.issue_id)
+      hold = fn _repo_key, _issue, _identifier -> {:error, :store_down} end
+      answer = routed(ticket_route(), %{"update" => "QA could not build the app."})
+
+      log =
+        capture_log(fn ->
+          assert Conductor.route_blocked_qa(ctx.issue, "default", turn: turn(answer), settings: @on, filing: [fixer: FakeFixer, hold: hold]) == :none
+        end)
+
+      assert log =~ "Conductor filed TP-2000 (blocks)"
+      assert log =~ "could not hold the ticket on it: :store_down"
+      assert [%{payload: %{identifier: "TP-2000", by: "conductor"}}] = events(ctx.issue_id, "ticket.filed")
+      assert [%{payload: %{route: "ticket"}}] = events(ctx.issue_id, "conductor.instructions")
+      assert [%{payload: %{text: text}}] = events(ctx.issue_id, "conductor.update")
+      assert text =~ "QA could not build the app.\n\nI filed `TP-2000` as blocking this ticket: "
+      assert text =~ "This ticket could not be held on it (:store_down), so it goes on for now."
+      assert ctx.issue_id |> RunStore.get_ticket_state() |> TicketState.pause_reasons() == []
+    end
+
     test "a follow-up ticket route files it and leaves the pass going; a refused one is dropped and the message kept", ctx do
       blocked!(ctx.issue_id)
       follow_up = ticket_route(%{"relation" => "follow_up"})

@@ -197,12 +197,13 @@ defmodule SymphonyElixir.Conductor.FilingTest do
     assert events(ctx.issue_id, "ticket.filed") == []
   end
 
-  test "a ticket created whose hold cannot be set is still recorded and counted, and the error names it", ctx do
+  test "a ticket created whose hold cannot be set is still returned, recorded and counted, and says why", ctx do
     hold = fn _repo_key, _issue, _identifier -> {:error, :store_down} end
 
     log =
       capture_log(fn ->
-        assert {:error, "I filed `TP-2000`, but this ticket could not be held on it: :store_down"} = file(ctx, route(), @settings, hold: hold)
+        assert {:ok, %{identifier: "TP-2000", relation: "blocks", existing: false, unheld: ":store_down"} = filed} = file(ctx, route(), @settings, hold: hold)
+        assert Filing.message(filed, "Cycle has no Mac app.") =~ "This ticket could not be held on it (:store_down), so it goes on for now."
       end)
 
     assert log =~ "could not hold it"

@@ -120,8 +120,9 @@ Its shape, every field required but `existing` and `evidence`:
   in Todo and Urgent, and it starts at once. Walkthrough steps are plain steps a person takes; name
   no test and no check in them.
 - `filings` says whether the route is open (`open`, and `closed`, why not), the tickets already
-  filed from this ticket (`filed`) and how many filings remain (`left`). At most 2 per ticket, and a
-  ticket the Conductor filed files none of its own. Never file again what `filings.filed` already
+  filed from this ticket (`filed`) and how many filings remain (`left`), under a per-ticket limit
+  set in the settings: file only while `left` is above 0, and a ticket the Conductor filed files
+  none of its own. Never file again what `filings.filed` already
   holds. A route Symphony refuses (closed, a repo it does not manage, a missing field) is dropped,
   and your message is kept without it: then use your other routes, and ask the person last.
 - Never give it with a question: asking leaves the choice to the person. Symphony adds a line

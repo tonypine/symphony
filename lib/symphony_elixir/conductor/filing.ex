@@ -55,8 +55,12 @@ defmodule SymphonyElixir.Conductor.Filing do
   @reason_max 600
   @evidence_max 6
 
-  @typedoc "A ticket the route filed or linked: its identifier, URL, relation, title, and whether it existed already."
+  @typedoc """
+  A ticket the route filed or linked: its identifier, URL, relation, title, and whether it existed
+  already; `unheld` says why a `blocks` ticket that exists could not hold the current one.
+  """
   @type filed :: %{
+          optional(:unheld) => String.t(),
           identifier: String.t(),
           url: String.t() | nil,
           relation: String.t(),
@@ -89,8 +93,8 @@ defmodule SymphonyElixir.Conductor.Filing do
   `repo_key`, the Conductor's `run_id` and the ticket's `events`, oldest first), within the bounds
   of `settings` (the `conductor` section). `{:ok, filed}` once the ticket exists and is linked (and,
   for `blocks`, the current ticket is held on it); `{:error, why}`, in plain words, when the route is
-  refused or the filing failed. A ticket created whose hold could not be set is still recorded, and
-  `why` names it. `opts`: the injectable `:tracker`, `:fixer`, `:hold` (`SymphonyElixir.SelfHeal.file_ticket/3`'s),
+  refused or no ticket was filed. A ticket created whose hold could not be set is still recorded and
+  returned with `unheld`, which says why, so the update names it and the current ticket goes on. `opts`: the injectable `:tracker`, `:fixer`, `:hold` (`SymphonyElixir.SelfHeal.file_ticket/3`'s),
   `:repo` (`(key -> {:ok, repo} | {:error, term})`, default `Config.repo/1`) and `:terminal_states`.
   """
   @spec file(map(), map(), Schema.Conductor.t(), keyword()) :: {:ok, filed()} | {:error, String.t()}
@@ -113,8 +117,7 @@ defmodule SymphonyElixir.Conductor.Filing do
   end
 
   defp filed({:error, {:hold_failed, reason}, ticket}, route, relation, context) do
-    filed = record_filed(ticket, route, relation, context)
-    {:error, "I filed `#{filed.identifier}`, but this ticket could not be held on it: #{inspect(reason)}"}
+    {:ok, ticket |> record_filed(route, relation, context) |> Map.put(:unheld, inspect(reason))}
   end
 
   defp filed({:error, reason}, _route, _relation, _context), do: {:error, "the ticket could not be filed: #{inspect(reason)}"}
@@ -129,9 +132,10 @@ defmodule SymphonyElixir.Conductor.Filing do
     because = if is_binary(reason), do: " " <> fit(reason, 300), else: ""
     title = String.trim_trailing(title, ".")
 
-    case relation do
-      "blocks" -> "#{verb} as blocking this ticket: #{title}.#{because} This ticket waits for it to be Done, then continues where it stopped."
-      "follow_up" -> "#{verb} as a follow-up: #{title}.#{because} This ticket goes on without it."
+    case {relation, filed[:unheld]} do
+      {"blocks", nil} -> "#{verb} as blocking this ticket: #{title}.#{because} This ticket waits for it to be Done, then continues where it stopped."
+      {"blocks", why} -> "#{verb} as blocking this ticket: #{title}.#{because} This ticket could not be held on it (#{why}), so it goes on for now."
+      {"follow_up", _unheld} -> "#{verb} as a follow-up: #{title}.#{because} This ticket goes on without it."
     end
   end
 

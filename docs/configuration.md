@@ -3615,7 +3615,8 @@ it to Rework then, and to ask the person last.
   this ticket in the same repo under the same title, or an open ticket already linked as blocking
   this one (by hand or by the self-heal lane) under the same title, is linked instead; that is not
   a filing. A ticket created whose hold could not be set is still recorded, so the limit counts it
-  and no later turn files it again.
+  and no later turn files it again, and the turn keeps the route: its update names the ticket and
+  says this ticket could not be held on it, and the ticket goes on.
 - Bounds: at most `max_filed_tickets` per ticket over its whole life, and a ticket the Conductor
   filed files none of its own. A route past a bound, naming a repo Symphony does not manage,
   missing a section or a relation, or given with a question is dropped and logged; the turn's

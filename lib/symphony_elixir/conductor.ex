@@ -414,7 +414,7 @@ defmodule SymphonyElixir.Conductor do
     # The question goes first: the update's `question` block names the decision it opened.
     asked = ask_person(answer.ask_person, plan, issue, run_id)
     # A ticket that blocks this one holds it as a question does; only a question lets a watch stop the run.
-    held = if filed && filed.relation == "blocks", do: :held, else: asked
+    held = if holds?(filed), do: :held, else: asked
     record_update(with_filed(answer, filed, route), plan, run_id, {facts, record})
     steer(plan, answer, asked)
 
@@ -455,13 +455,18 @@ defmodule SymphonyElixir.Conductor do
   end
 
   # The ticket a ticket route files or links (`Filing`), with the route kept for the instructions; a
-  # route `Filing` refuses is dropped and logged, and the turn's message is kept without it.
+  # route `Filing` refuses is dropped and logged, and the turn's message is kept without it. A ticket
+  # filed whose hold could not be set is still the route's: the update names it, and the ticket goes on.
   defp ticket_route(%{to: "ticket"} = route, plan, issue, run_id, opts) do
     events = Facts.events(plan.issue_id)
     settings = Keyword.get_lazy(opts, :settings, &Config.conductor_settings/0)
     context = %{issue: issue, repo_key: plan.repo_key, run_id: run_id, events: events}
 
     case Filing.file(route, context, settings, Keyword.get(opts, :filing, [])) do
+      {:ok, %{unheld: why} = filed} ->
+        Logger.warning("Conductor filed #{filed.identifier} (#{filed.relation}) #{context(issue, plan)} run_id=#{run_id} but could not hold the ticket on it: #{why}")
+        {route, filed}
+
       {:ok, filed} ->
         Logger.info("Conductor filed #{filed.identifier} (#{filed.relation}) #{context(issue, plan)} run_id=#{run_id}")
         {route, filed}
@@ -473,6 +478,10 @@ defmodule SymphonyElixir.Conductor do
   end
 
   defp ticket_route(route, _plan, _issue, _run_id, _opts), do: {route, nil}
+
+  # A filed ticket that blocks this one holds it, unless its hold could not be set.
+  defp holds?(%{relation: "blocks"} = filed), do: not Map.has_key?(filed, :unheld)
+  defp holds?(_filed), do: false
 
   # The update names the ticket the route filed, before its `Next:` paragraph, and is written even
   # when the answer had none.
