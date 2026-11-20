@@ -614,6 +614,7 @@ defmodule SymphonyElixir.QaBuildTest do
       File.mkdir_p!(origin)
       on_exit(fn -> File.rm_rf(root) end)
       git!(origin, ["init", "--quiet", "--initial-branch=main"])
+      git!(origin, ["config", "uploadpack.allowAnySHA1InWant", "true"])
       File.write!(Path.join(origin, "a.txt"), "one\n")
       git!(origin, ["add", "--all"])
       git!(origin, ["commit", "--quiet", "-m", "one"])
@@ -634,7 +635,7 @@ defmodule SymphonyElixir.QaBuildTest do
 
       auto_review = %{worker_host: "qa-vm", playbooks: %{macos_app: %{build: "make app", app: "build/Demo.app"}}}
       write_workflow_file!(Workflow.workflow_file_path(), auto_review: auto_review)
-      %{clone: clone, android: android, swift: swift}
+      %{origin: origin, clone: clone, android: android, swift: swift}
     end
 
     defp ticket(labels \\ []), do: %Issue{id: "issue-select", identifier: "TP-9", title: "Select", state: "QA", labels: labels}
@@ -648,9 +649,27 @@ defmodule SymphonyElixir.QaBuildTest do
       refute QaBuild.selects_app?("default", ticket(["qa:skip"]), swift, workspace: clone)
     end
 
-    test "a diff that can't be read selects every enabled playbook, and a repository without settings none", %{clone: clone} do
-      assert QaBuild.selects_app?("default", ticket(), String.duplicate("0", 40), workspace: clone)
-      assert QaBuild.selects_app?("default", ticket(), @sha)
+    test "a head only on origin is fetched before its diff is read", %{origin: origin, clone: clone} do
+      git!(origin, ["checkout", "--quiet", "-b", "feature"])
+      File.mkdir_p!(Path.join(origin, "app"))
+      File.write!(Path.join(origin, "app/Main.kt"), "fun main() {}\n")
+      git!(origin, ["add", "--all"])
+      git!(origin, ["commit", "--quiet", "-m", "android on origin"])
+      android = git!(origin, ["rev-parse", "HEAD"])
+      File.mkdir_p!(Path.join(origin, "macos"))
+      File.write!(Path.join(origin, "macos/App.swift"), "import SwiftUI\n")
+      git!(origin, ["add", "--all"])
+      git!(origin, ["commit", "--quiet", "-m", "swift on origin"])
+      swift = git!(origin, ["rev-parse", "HEAD"])
+      git!(origin, ["checkout", "--quiet", "main"])
+
+      refute QaBuild.selects_app?("default", ticket(), android, workspace: clone)
+      assert QaBuild.selects_app?("default", ticket(), swift, workspace: clone)
+    end
+
+    test "a diff that can't be read even after a fetch selects nothing, nor a repository without settings", %{clone: clone} do
+      refute QaBuild.selects_app?("default", ticket(), String.duplicate("0", 40), workspace: clone)
+      refute QaBuild.selects_app?("default", ticket(), @sha)
       refute QaBuild.selects_app?("no-such-repo", ticket(), @sha, workspace: clone)
 
       write_workflow_file!(Workflow.workflow_file_path(), auto_review: %{worker_host: "qa-vm"})

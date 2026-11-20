@@ -202,9 +202,12 @@ defmodule SymphonyElixir.QaBuild do
   playbook: the selection the pass makes (`SymphonyElixir.QaPolicy.decision/3`) from the paths `sha`
   changes in the ticket's workspace, its `qa:<kind>` labels and its walkthrough. Only such a head is
   built ahead of QA and held for its build, so a repository whose passes select only another
-  playbook (an Android app) never builds the Mac app. A diff that cannot be read selects every
-  enabled playbook, as the pass does. Options: `:workspace` (default the ticket's workspace) and
-  `:git` (`SymphonyElixir.QaPolicy.changed_paths/4`'s).
+  playbook (an Android app) never builds the Mac app. A commit or base branch the workspace does not
+  hold (branch upkeep through the API, a person's push) is fetched from `origin` first. A diff that
+  still cannot be read selects nothing: no build ahead of QA, no hold and no send-back, and the pass,
+  which reads the diff in its own fetched worktree, asks for the build itself (`fetch/4`) when it
+  selects the app. Options: `:workspace` (default the ticket's workspace) and `:git` (`fn args, cwd
+  -> {output, status}`).
   """
   @spec selects_app?(String.t(), Issue.t(), String.t(), keyword()) :: boolean()
   def selects_app?(repo_key, %Issue{} = issue, sha, opts \\ []) when is_binary(repo_key) and is_binary(sha) do
@@ -215,14 +218,28 @@ defmodule SymphonyElixir.QaBuild do
   end
 
   defp pass_playbooks(settings, repo_key, issue, sha, opts) do
+    git = Keyword.get(opts, :git, &default_git/2)
+
     with {:ok, workspace} <- workspace_of(issue, repo_key, opts),
-         {:ok, paths} <- QaPolicy.changed_paths(workspace, repo_key, sha, Keyword.take(opts, [:git])) do
+         {:ok, paths} <- changed_paths(workspace, repo_key, sha, git) do
       case QaPolicy.decision(issue, settings, paths) do
         {:run, playbooks, _reason} -> playbooks
         _skip_or_nothing_to_verify -> []
       end
     else
-      {:error, _unreadable} -> QaPolicy.enabled_playbooks(settings)
+      {:error, _unreadable} -> []
+    end
+  end
+
+  # The paths `sha` changes, fetching it and the base branch from `origin` first when the workspace
+  # can't read them.
+  defp changed_paths(workspace, repo_key, sha, git) do
+    with {:error, _missing} <- QaPolicy.changed_paths(workspace, repo_key, sha, git: git),
+         {_output, 0} <- Fetcher.fetch(workspace, fn -> git.(["fetch", "--quiet", "origin", sha, Config.base_branch(repo_key)], workspace) end) do
+      QaPolicy.changed_paths(workspace, repo_key, sha, git: git)
+    else
+      {:ok, paths} -> {:ok, paths}
+      {_output, status} -> {:error, {:fetch_failed, status}}
     end
   end
 

@@ -2297,8 +2297,10 @@ agent, before QA starts. There is no setting for it: it is on exactly when the p
   selection the pass makes from the paths the head changes, the `qa:<kind>` labels and the
   walkthrough. A head whose pass selects only another playbook (an Android-only repository, a change
   outside the app's `paths`) gets no build and no hold, and a build that failed on it sends nothing
-  to `Rework`. A head whose changed paths can't be read is built, as its pass selects every enabled
-  playbook.
+  to `Rework`, whatever held it before. A commit or base branch the ticket's workspace does not hold
+  is fetched first. A head whose changed paths still can't be read is not built ahead of QA, held or
+  sent back: its pass reads the diff in its own worktree and asks for the build itself when it
+  selects the app.
 - **What is built.** A build is kept by the commit's tree (`git rev-parse <sha>^{tree}`), so a head
   whose content was already built, such as a merge of the base branch that changed nothing, is ready
   at once. A tree that built, or whose build failed, is never built again: its files did not change.

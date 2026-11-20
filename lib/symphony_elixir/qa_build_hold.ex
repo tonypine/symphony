@@ -55,18 +55,25 @@ defmodule SymphonyElixir.QaBuildHold do
   def resolve(repo_key, %Issue{id: issue_id} = issue, head, opts \\ []) when is_binary(repo_key) and is_binary(issue_id) do
     builder = Keyword.get(opts, :builder, QaBuild)
 
-    if is_binary(head) and is_binary(issue.identifier) and builder.builds?(repo_key) and app_pass?(repo_key, issue, head, builder) do
-      act(builder.lookup(repo_key, head), repo_key, issue, head, builder, opts)
+    with true <- is_binary(head) and is_binary(issue.identifier) and builder.builds?(repo_key),
+         record = builder.lookup(repo_key, head),
+         true <- app_pass?(record, repo_key, issue, head, builder) do
+      act(record, repo_key, issue, head, builder, opts)
     else
-      release(repo_key, issue_id, issue.identifier)
-      :dispatch
+      false ->
+        release(repo_key, issue_id, issue.identifier)
+        :dispatch
     end
   end
 
   # Only a head whose QA pass selects the `macos_app` playbook is built for (`QaBuild.selects_app?/4`).
-  # A head this hold already holds was selected when it was first held, so its diff is not read again
-  # on every pass while it builds.
-  defp app_pass?(repo_key, issue, head, builder) do
+  # A failed build reads the selection every time, so it sends back only a head whose pass selects
+  # the app, whatever held it before (a hold older than the selection, a `qa:skip` label added since).
+  # While a head this hold already holds builds or waits on the QA host, its diff is not read again
+  # on every pass.
+  defp app_pass?(%{status: :failed}, repo_key, issue, head, builder), do: builder.selects_app?(repo_key, issue, head)
+
+  defp app_pass?(_record, repo_key, issue, head, builder) do
     Enum.any?(reasons(repo_key, issue.id), &(held_head(&1) == head)) or builder.selects_app?(repo_key, issue, head)
   end
 

@@ -267,6 +267,21 @@ defmodule SymphonyElixir.QaBuildHoldTest do
       assert commits() == []
     end
 
+    test "a failed build reads the selection again, even on a head already held for it" do
+      capture_log(fn -> assert resolve(@head) == :held end)
+      assert_received {:selection_read, @repo_key, @issue_id, @head}
+      assert commits() == [@head]
+
+      # The pass no longer selects the app (a hold older than the selection, a qa:skip label since).
+      Process.put(:qa_selects_app?, false)
+      record!(@head, @failed)
+
+      capture_log(fn -> assert resolve(@head) == :dispatch end)
+      assert_received {:selection_read, @repo_key, @issue_id, @head}
+      refute_received {:marked, _repo_key, _tree, _issue_id, _arrival}
+      assert commits() == []
+    end
+
     test "a head already held for its build is not read again" do
       capture_log(fn -> assert resolve(@head) == :held end)
       assert_received {:selection_read, @repo_key, @issue_id, @head}
