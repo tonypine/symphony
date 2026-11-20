@@ -23,26 +23,45 @@ public final class MenuTrailLineView: NSView {
 
     /// The line's least width: the menu grows to it, and stretches it wider to its own width.
     public static func naturalWidth(title: String, trail: String, image: NSImage?) -> CGFloat {
-        let edge = DesignTokens.Menu.padding + DesignTokens.Menu.itemInset
         let lead = image.map { $0.size.width + DesignTokens.Menu.itemGap } ?? 0
-        return ceil(2 * edge + lead + width(title) + DesignTokens.Menu.hintGap + width(trail))
+        return ceil(leadingInset + lead + width(title) + DesignTokens.Menu.hintGap + width(trail) + trailingInset)
     }
 
-    /// The parts' places in `bounds`: the image and the title from the leading inset, the trailing text ending at the
-    /// trailing inset, each centred on the line.
+    /// Where the trailing text ends, from the menu's right edge: where the key equivalents end.
+    public static let trailingInset = DesignTokens.Menu.padding + DesignTokens.Menu.itemInset
+
+    /// Where the image and the title start, from the menu's left edge: where the system starts an ordinary item's
+    /// title and image. A menu is as wide as its widest title plus the item's two margins, rounded up to a whole
+    /// point, so the margins are measured from menus of one plain item at several title widths, and an ordinary
+    /// item's margins are even on both sides. The catalog's inset is the fallback when the menu can't be measured.
+    public static let leadingInset: CGFloat = {
+        var margins = CGFloat.greatestFiniteMagnitude
+        for count in 8..<24 {
+            let title = String(repeating: "Wi", count: count) + String(repeating: "l", count: count % 5)
+            let menu = NSMenu()
+            menu.addItem(NSMenuItem(title: title, action: nil, keyEquivalent: ""))
+            let titleWidth = (title as NSString).size(withAttributes: [.font: font]).width
+            margins = min(margins, menu.size.width - titleWidth)
+        }
+        // Half of the two margins, to the nearest half point.
+        let measured = margins.rounded() / 2
+        return measured > 0 ? measured : DesignTokens.Menu.padding + DesignTokens.Menu.itemInset
+    }()
+
+    /// The parts' places in `bounds`: the image and the title from where the system starts an item, the trailing text
+    /// ending where the key equivalents end, each centred on the line.
     public static func layout(in bounds: NSRect, title: String, trail: String, image: NSImage?) -> Layout {
-        let edge = DesignTokens.Menu.padding + DesignTokens.Menu.itemInset
         let font = Self.font
         let textHeight = ceil(font.ascender - font.descender + font.leading)
         let textY = bounds.minY + floor((bounds.height - textHeight) / 2)
-        var x = bounds.minX + edge
+        var x = bounds.minX + leadingInset
         var imageRect = NSRect(x: x, y: bounds.midY, width: 0, height: 0)
         if let size = image?.size {
             imageRect = NSRect(x: x, y: bounds.minY + floor((bounds.height - size.height) / 2), width: size.width, height: size.height)
             x += size.width + DesignTokens.Menu.itemGap
         }
         let trailWidth = width(trail)
-        let trailRect = NSRect(x: bounds.maxX - edge - trailWidth, y: textY, width: trailWidth, height: textHeight)
+        let trailRect = NSRect(x: bounds.maxX - trailingInset - trailWidth, y: textY, width: trailWidth, height: textHeight)
         let titleWidth = max(0, min(width(title), trailRect.minX - DesignTokens.Menu.hintGap - x))
         let titleRect = NSRect(x: x, y: textY, width: titleWidth, height: textHeight)
         let highlight = bounds.insetBy(dx: DesignTokens.Menu.padding, dy: 0)
