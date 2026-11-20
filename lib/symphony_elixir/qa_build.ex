@@ -8,7 +8,11 @@ defmodule SymphonyElixir.QaBuild do
   Review or QA (`SymphonyElixir.PrWatch.Repo`), at the QA dispatch gate for a head nobody asked for
   yet (`SymphonyElixir.QaBuildHold`), and by the QA pass's `qa_build` (`fetch/4`). Asking twice
   changes nothing. It builds for a repository whose `macos_app` playbook has a `build` command and
-  an `app`, on its `auto_review.worker_host`; for any other repository a request does nothing.
+  an `app`, on its `auto_review.worker_host`; for any other repository a request does nothing. A
+  request that brings the ticket's issue builds only a head whose QA pass selects that playbook: a
+  ticket whose pass selects only another playbook is never built for, held or sent back for a build.
+  The paths a head changes are read once, with its tree, in the builder's task (`paths/4`), and
+  stored with it; `selection/4` answers from that record, so the dispatch gate runs no git.
 
   A build is keyed by the repository and the commit's tree (`git rev-parse <sha>^{tree}`, read in
   the ticket's workspace, fetching the commit first when the workspace does not hold it), so a head
@@ -47,6 +51,7 @@ defmodule SymphonyElixir.QaBuild do
   require Logger
 
   alias SymphonyElixir.{Config, QaBuildHold, QaPolicy, RunStore, Workspace}
+  alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaBuild.Store
   alias SymphonyElixir.Repo.Fetcher
 
@@ -58,13 +63,16 @@ defmodule SymphonyElixir.QaBuild do
   @typedoc """
   The ticket a build is asked for: its workspace holds the commit. `held: true` when
   `SymphonyElixir.QaBuildHold` holds it for the build; `new_head: true` when the commit is a head
-  the ticket just arrived with, which asks again for a build that could not run.
+  the ticket just arrived with, which asks again for a build that could not run. `issue` when the
+  build runs only if the ticket's QA pass of the commit selects the `macos_app` playbook (every
+  caller but the QA pass's own `qa_build`, whose pass already selected it).
   """
   @type ticket :: %{
           required(:identifier) => String.t(),
           optional(:issue_id) => String.t() | nil,
           optional(:held) => boolean(),
-          optional(:new_head) => boolean()
+          optional(:new_head) => boolean(),
+          optional(:issue) => Issue.t()
         }
 
   @typedoc "Runs git with `args` in a directory and returns its output and exit status."
@@ -87,6 +95,8 @@ defmodule SymphonyElixir.QaBuild do
             plan_fun: nil,
             workspace_fun: nil,
             tree_fun: nil,
+            paths_fun: nil,
+            selects_fun: nil,
             build_fun: nil,
             cancel_fun: nil,
             release_fun: nil,
@@ -104,7 +114,9 @@ defmodule SymphonyElixir.QaBuild do
   @doc """
   Starts the builder. Options: `:name`, `:run_store`, `:task_supervisor`, and the functions it
   works through, each with a production default: `:plan` (`plan/1`), `:workspace` (`repo_key,
-  identifier -> {:ok, path} | {:error, term}`), `:tree` (`tree/3` with the default git), `:build`
+  identifier -> {:ok, path} | {:error, term}`), `:tree` (`tree/3` with the default git), `:paths`
+  (`paths/4` with the default git), `:selects` (`repo_key, issue, paths -> boolean`, whether the QA
+  pass selects the `macos_app` playbook), `:build`
   (`SymphonyElixir.QaBuild.Store.build/2`), `:cancel` (`SymphonyElixir.QaBuild.Store.cancel/3`) and
   `:release` (`SymphonyElixir.QaBuildHold.release/3`).
   """
@@ -194,6 +206,52 @@ defmodule SymphonyElixir.QaBuild do
     end
   end
 
+  @doc """
+  What the QA pass of commit `sha` of `repo_key`'s ticket `issue` selects, from the paths the builder
+  stored when it read the commit, so the caller runs no git: `:app` when the pass selects the
+  `macos_app` playbook (`SymphonyElixir.QaPolicy.decision/3`: the paths, the ticket's `qa:<kind>`
+  labels and its walkthrough), `:none` when it does not or when the commit's change could not be
+  read, and `:unread` when the builder has not read the commit yet: a request for its build that
+  brings the issue reads it, once. A change that can't be read selects nothing: no build ahead of
+  QA, no hold and no send-back, and the pass, which reads the diff in its own fetched worktree, asks
+  for the build itself (`fetch/4`) when it selects the app. Options: `:run_store`.
+  """
+  @spec selection(String.t(), Issue.t(), String.t(), keyword()) :: :app | :none | :unread
+  def selection(repo_key, %Issue{} = issue, sha, opts \\ []) when is_binary(repo_key) and is_binary(sha) do
+    case read(store(opts), {:qa_build_head, repo_key, sha}) do
+      %{paths: paths} when is_list(paths) -> if selects?(repo_key, issue, paths), do: :app, else: :none
+      %{paths: :unreadable} -> :none
+      %{status: :unavailable} -> :none
+      _unread -> :unread
+    end
+  end
+
+  defp selects?(repo_key, issue, paths) do
+    with {:ok, settings} <- Config.settings_for_repo(repo_key),
+         {:run, playbooks, _reason} <- QaPolicy.decision(issue, settings, paths) do
+      Enum.any?(playbooks, &(&1.kind == "macos_app"))
+    else
+      _no_settings_skip_or_nothing_to_verify -> false
+    end
+  end
+
+  @doc """
+  The paths commit `sha` changes against `repo_key`'s base branch in `workspace`
+  (`SymphonyElixir.QaPolicy.changed_paths/4`), fetching the commit and the base branch from `origin`
+  first when the workspace can't read them (branch upkeep through the API, a person's push). Runs in
+  the builder's task, never in its caller. `git` is `fn args, cwd -> {output, status}`.
+  """
+  @spec paths(Path.t(), String.t(), String.t(), git()) :: {:ok, [String.t()]} | {:error, term()}
+  def paths(workspace, repo_key, sha, git \\ &default_git/2) do
+    with {:error, _missing} <- QaPolicy.changed_paths(workspace, repo_key, sha, git: git),
+         {_output, 0} <- Fetcher.fetch(workspace, fn -> git.(["fetch", "--quiet", "origin", sha, Config.base_branch(repo_key)], workspace) end) do
+      QaPolicy.changed_paths(workspace, repo_key, sha, git: git)
+    else
+      {:ok, paths} -> {:ok, paths}
+      {_output, status} -> {:error, {:fetch_failed, status}}
+    end
+  end
+
   @doc "The record of `repo_key`'s build of `tree`, or nil. Options: `:run_store`."
   @spec get(String.t(), String.t(), keyword()) :: record() | nil
   def get(repo_key, tree, opts \\ []), do: read(store(opts), {:qa_build, repo_key, tree})
@@ -257,6 +315,8 @@ defmodule SymphonyElixir.QaBuild do
       plan_fun: Keyword.get(opts, :plan, &plan/1),
       workspace_fun: Keyword.get(opts, :workspace, &Workspace.local_path_for_issue(&2, &1)),
       tree_fun: Keyword.get(opts, :tree, &tree/2),
+      paths_fun: Keyword.get(opts, :paths, &paths/3),
+      selects_fun: Keyword.get(opts, :selects, &selects?/3),
       build_fun: Keyword.get(opts, :build, &Store.build/2),
       cancel_fun: Keyword.get(opts, :cancel, &Store.cancel/3),
       release_fun: Keyword.get(opts, :release, &QaBuildHold.release/3)
@@ -350,8 +410,12 @@ defmodule SymphonyElixir.QaBuild do
   # A head that could not be read is read again only when it is a new head.
   defp requested(state, {repo_key, sha} = head, ticket, plan) do
     case read(state.store, {:qa_build_head, repo_key, sha}) do
-      %{tree: tree} ->
-        with_tree(state, {repo_key, tree}, sha, ticket, plan)
+      # Read before its paths were stored: read again for a ticket whose pass decides the build.
+      %{tree: _tree} = record when is_map_key(ticket, :issue) and not is_map_key(record, :paths) ->
+        read_tree(state, head, ticket)
+
+      %{tree: tree} = record ->
+        build_for(state, {repo_key, tree}, sha, ticket, plan, Map.get(record, :paths))
 
       %{status: :unavailable} = record ->
         if Map.get(ticket, :new_head) do
@@ -367,14 +431,17 @@ defmodule SymphonyElixir.QaBuild do
     end
   end
 
-  # One task reads a commit's tree, whoever asks meanwhile.
+  # One task reads a commit's tree and the paths it changes, whoever asks meanwhile.
   defp read_tree(state, head, ticket) when is_map_key(state.heads, head), do: %{state | heads: Map.update!(state.heads, head, &[ticket | &1])}
 
   defp read_tree(state, {repo_key, sha} = head, ticket) do
-    %{workspace_fun: workspace_fun, tree_fun: tree_fun} = state
+    %{workspace_fun: workspace_fun, tree_fun: tree_fun, paths_fun: paths_fun} = state
 
     read = fn ->
-      with {:ok, workspace} <- workspace_fun.(repo_key, ticket.identifier), do: tree_fun.(workspace, sha)
+      with {:ok, workspace} <- workspace_fun.(repo_key, ticket.identifier),
+           {:ok, tree} <- tree_fun.(workspace, sha) do
+        {:ok, tree, readable(paths_fun.(workspace, repo_key, sha))}
+      end
     end
 
     case start_task(state, read) do
@@ -386,13 +453,19 @@ defmodule SymphonyElixir.QaBuild do
     end
   end
 
-  defp tree_read(state, {repo_key, sha} = head, tree) do
+  defp readable({:ok, paths}) when is_list(paths), do: paths
+  defp readable(_unreadable), do: :unreadable
+
+  # The paths are stored even when they could not be read, so a head whose fetch failed is not
+  # fetched again until a new head asks.
+  defp tree_read(state, {repo_key, sha} = head, tree, paths) do
     {tickets, heads} = Map.pop(state.heads, head)
-    write(state, {:qa_build_head, repo_key, sha}, %{tree: tree})
+    write(state, {:qa_build_head, repo_key, sha}, %{tree: tree, paths: paths})
+    if paths == :unreadable, do: Logger.info("QA build: the paths the commit changes could not be read repo_key=#{repo_key} head_sha=#{sha} #{issue_context(tickets)}")
 
     case state.plan_fun.(repo_key) do
       {:ok, plan} ->
-        tickets |> Enum.reverse() |> Enum.reduce(%{state | heads: heads}, &with_tree(&2, {repo_key, tree}, sha, &1, plan))
+        tickets |> Enum.reverse() |> Enum.reduce(%{state | heads: heads}, &build_for(&2, {repo_key, tree}, sha, &1, plan, paths))
 
       :none ->
         answer(state, tickets, nil)
@@ -409,6 +482,22 @@ defmodule SymphonyElixir.QaBuild do
     answer(state, tickets, record)
     %{state | heads: heads}
   end
+
+  # A ticket that brings its issue is built for only when its QA pass of the head selects the app;
+  # otherwise it is answered at once, so a held ticket is released.
+  defp build_for(state, {repo_key, _tree} = key, sha, %{issue: %Issue{} = issue} = ticket, plan, paths) do
+    ticket = Map.delete(ticket, :issue)
+
+    if is_list(paths) and state.selects_fun.(repo_key, issue, paths) do
+      with_tree(state, key, sha, ticket, plan)
+    else
+      Logger.info("QA build not needed: the QA pass of the commit does not select the macos_app playbook repo_key=#{repo_key} head_sha=#{sha} #{issue_context([ticket])}")
+      answer(state, [ticket], nil)
+      state
+    end
+  end
+
+  defp build_for(state, key, sha, ticket, plan, _paths), do: with_tree(state, key, sha, ticket, plan)
 
   # The ticket's head now needs `key`: the build of the tree its earlier head needed goes when
   # nothing else needs it.
@@ -512,7 +601,7 @@ defmodule SymphonyElixir.QaBuild do
     state = %{state | reading: reading}
 
     case result do
-      {:ok, tree} -> {:noreply, tree_read(state, head, tree)}
+      {:ok, tree, paths} -> {:noreply, tree_read(state, head, tree, paths)}
       {:error, reason} -> {:noreply, tree_unread(state, head, if(is_binary(reason), do: reason, else: inspect(reason)))}
     end
   end

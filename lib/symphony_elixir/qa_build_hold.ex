@@ -4,11 +4,12 @@ defmodule SymphonyElixir.QaBuildHold do
   review flow holds it while CI runs: QA runs only on an app Symphony built.
 
   `resolve/4` runs in the orchestrator's dispatch pass for each ticket in the QA phase that is not
-  running, with the head the PR watcher recorded for it. It acts on the build's record alone:
+  running, with the head the PR watcher recorded for it. It acts on what the builder stored alone
+  (the head's selection and its build's record), and runs no git:
 
     * `:ready` -> QA dispatches;
-    * no record -> the build is asked for and the ticket is held; `:building` -> held. The hold is
-      one `:build` reason on the ticket's pause (`waits_on: %{commit: sha}`), set by the rule "QA
+    * a head the builder has not read yet, or no record -> the build is asked for, with the issue,
+      and the ticket is held; `:building` -> held. The hold is one `:build` reason on the ticket's pause (`waits_on: %{commit: sha}`), set by the rule "QA
       build hold", which a ticket read says as "Waiting for a build" (`SymphonyElixir.Situation`).
       The builder clears it when the build ends, whatever the outcome (`release/3`); the pause's
       change runs a dispatch cycle at once, so nothing waits on a timer;
@@ -22,8 +23,11 @@ defmodule SymphonyElixir.QaBuildHold do
       <reason>". Nothing asks for the build again on a timer: a new head does, Symphony's start
       does, and a person who lifts the hold with Unblock does (`lifted/4`, which asks the builder
       again before the reason goes).
-    * a repository with nothing to build (no `macos_app` `build` and `app`, or no `worker_host`), or
-      no builder -> QA dispatches as it does without the pre-build.
+    * a repository with nothing to build (no `macos_app` `build` and `app`, or no `worker_host`), a
+      head whose QA pass does not select the `macos_app` playbook (`SymphonyElixir.QaBuild.selection/4`:
+      an Android-only repository, a change outside the app's paths, a change that could not be read),
+      or no builder -> QA dispatches as it does without the pre-build, and a build that failed on such
+      a head sends nothing back.
 
   A reason left for another commit or another outcome (the head moved, the build ended) is
   replaced, and the pass clears the hold of a ticket that left QA (`release/3`). The hold only stops
@@ -53,11 +57,17 @@ defmodule SymphonyElixir.QaBuildHold do
   def resolve(repo_key, %Issue{id: issue_id} = issue, head, opts \\ []) when is_binary(repo_key) and is_binary(issue_id) do
     builder = Keyword.get(opts, :builder, QaBuild)
 
-    if is_binary(head) and is_binary(issue.identifier) and builder.builds?(repo_key) do
-      act(builder.lookup(repo_key, head), repo_key, issue, head, builder, opts)
+    # Only a head whose QA pass selects the `macos_app` playbook is built for. The selection is read
+    # on every pass, from what the builder stored when it read the head, so this runs no git: a failed
+    # build sends back only a head whose pass selects the app now, whatever held it before.
+    with true <- is_binary(head) and is_binary(issue.identifier) and builder.builds?(repo_key),
+         selection when selection in [:app, :unread] <- builder.selection(repo_key, issue, head) do
+      record = if selection == :app, do: builder.lookup(repo_key, head)
+      act(record, repo_key, issue, head, builder, opts)
     else
-      release(repo_key, issue_id, issue.identifier)
-      :dispatch
+      _nothing_to_build ->
+        release(repo_key, issue_id, issue.identifier)
+        :dispatch
     end
   end
 
@@ -78,10 +88,12 @@ defmodule SymphonyElixir.QaBuildHold do
     :held
   end
 
-  # Asked for again while it builds too: after a restart the builder learns who waits from this.
+  # Asked for again while it builds too: after a restart the builder learns who waits from this. A
+  # head the builder has not read yet is held the same way: the builder reads it with the issue, and
+  # releases the ticket at once when its pass does not select the app.
   defp act(_none_or_building, repo_key, issue, head, builder, _opts) do
     hold(repo_key, issue, head, building_reason(head))
-    builder.request(repo_key, head, %{identifier: issue.identifier, issue_id: issue.id, held: true})
+    builder.request(repo_key, head, %{identifier: issue.identifier, issue_id: issue.id, held: true, issue: issue})
     :held
   end
 
