@@ -14,10 +14,14 @@ defmodule SymphonyElixir.Conductor.Tree do
   had: it is adopted as it is.
 
   A sub-ticket that waits `after` siblings is created in `Backlog`, linked as blocked by each of
-  them, and only then moved to `Todo`, so no dispatch finds it before its links. The identifiers
-  are written back as a new version of the plan as soon as a sub-ticket exists, so a split that
-  stops half way (3 of 5 created) creates only the missing ones when it runs again; the links and
-  the move to `Todo` are read from the tracker and made where they are missing.
+  them, and only then moved to `Todo`, so no dispatch finds it before its links. Each sub-ticket is
+  recorded on the parent the moment it exists (a `ticket.filed`, `kind: split_off`, keyed by its
+  identifier), and the identifiers are written back as a new version of the plan once the loop
+  ends. A split that stops half way (3 of 5 created, or the process died before the plan was
+  written) therefore creates only the missing ones when it runs again: an entry with no identifier
+  takes the sub-ticket already filed from this ticket under its title, else a sub-ticket the ticket
+  already has with exactly that title, before a new one is created. The links and the move to
+  `Todo` are read from the tracker and made where they are missing.
 
   Once every entry has its sub-ticket, Symphony's records take the new sub-tickets (an observation
   of the parent and of each, not a poll) and the parent moves to the waiting state
@@ -174,21 +178,64 @@ defmodule SymphonyElixir.Conductor.Tree do
     end
   end
 
-  # Each entry with no sub-ticket yet gets one, in order; the first that fails stops the rest.
+  # Each entry with no sub-ticket yet gets one, in order; the first that fails stops the rest. A
+  # sub-ticket an earlier, interrupted split left under the ticket is taken instead of a second one.
   defp create_missing(entries, repo_key, issue, opts) do
-    Enum.reduce(entries, {[], nil}, fn
-      %{identifier: identifier} = entry, {done, failure} when is_binary(identifier) ->
-        {done ++ [entry], failure}
+    with true <- Enum.any?(entries, &(not is_binary(Map.get(&1, :identifier)))),
+         {:ok, left} <- left_behind(issue, opts) do
+      taken = for %{identifier: identifier} <- entries, is_binary(identifier), do: identifier
+      {entries, failure, _left} = Enum.reduce(entries, {[], nil, Enum.reject(left, &(&1.identifier in taken))}, &create_or_adopt(&1, &2, {repo_key, issue, opts}))
+      {entries, failure}
+    else
+      false -> {entries, nil}
+      {:error, why} -> {entries, {:error, why}}
+    end
+  end
 
-      entry, {done, nil} ->
+  defp create_or_adopt(%{identifier: identifier} = entry, {done, failure, left}, _context) when is_binary(identifier), do: {done ++ [entry], failure, left}
+
+  defp create_or_adopt(entry, {done, nil, left}, {repo_key, issue, opts}) do
+    case Enum.find(left, &(&1.title == entry.title)) do
+      %{identifier: identifier} = adopted ->
+        Logger.info("Took the sub-ticket #{identifier} an earlier split left for #{entry.key} #{context(issue, repo_key)}")
+        # One the split created and never recorded is Symphony's all the same: it is asked, linked and started.
+        if TicketPlan.ask(adopted.id) == [], do: asked(Map.get(entry, :repo) || repo_key, adopted, entry.ask, issue, opts)
+        {done ++ [Map.put(entry, :identifier, identifier)], nil, left -- [adopted]}
+
+      nil ->
         case create(repo_key, issue, entry, opts) do
-          {:ok, child} -> {done ++ [Map.put(entry, :identifier, child.identifier)], nil}
-          {:error, why} -> {done ++ [entry], {:error, "sub-ticket #{entry.key} could not be created: #{why}"}}
+          {:ok, child} -> {done ++ [Map.put(entry, :identifier, child.identifier)], nil, left}
+          {:error, why} -> {done ++ [entry], {:error, "sub-ticket #{entry.key} could not be created: #{why}"}, left}
         end
+    end
+  end
 
-      entry, {done, failure} ->
-        {done ++ [entry], failure}
-    end)
+  defp create_or_adopt(entry, {done, failure, left}, _context), do: {done ++ [entry], failure, left}
+
+  # The sub-tickets the tracker lists under the ticket, each with the title a plan entry would
+  # name it by: the one it was filed under from this ticket (`ticket.filed`), else its own.
+  defp left_behind(%Issue{id: issue_id}, opts) do
+    with {:ok, %Issue{} = parent} <- read_one(issue_id, opts),
+         [_ | _] = ids <- sub_issue_ids(parent),
+         {:ok, children} <- tracker(opts).fetch_issue_states_by_ids(ids) do
+      filed = filed_titles(issue_id)
+      {:ok, Enum.map(children, &%{id: &1.id, identifier: &1.identifier, title: Map.get(filed, &1.identifier, &1.title)})}
+    else
+      [] -> {:ok, []}
+      {:error, why} when is_binary(why) -> {:error, why}
+      {:error, reason} -> {:error, "the ticket's sub-tickets could not be read: #{inspect(reason)}"}
+    end
+  end
+
+  defp sub_issue_ids(%Issue{sub_issues: sub_issues}) when is_list(sub_issues), do: for(%{id: id} <- sub_issues, is_binary(id), do: id)
+  defp sub_issue_ids(_issue), do: []
+
+  # The title each sub-ticket Symphony filed from the ticket was filed under, by its identifier.
+  defp filed_titles(issue_id) do
+    for %{type: "ticket.filed", payload: %{identifier: identifier, title: title} = payload} <- Facts.events(issue_id),
+        not is_map_key(payload, :by),
+        into: %{},
+        do: {identifier, title}
   end
 
   @doc """
@@ -209,14 +256,29 @@ defmodule SymphonyElixir.Conductor.Tree do
     with {:ok, team, project} <- target(issue, repo_key, repo, opts),
          attrs = %{title: entry.title, description: entry.ask, priority: @urgent, state: first_state(entry), team: team, project: project},
          {:ok, %{id: id, identifier: identifier}} <- tracker(opts).create_issue(attrs |> Map.put(:assignee_id, issue.assignee_id) |> Map.merge(family)) do
-      from = issue.identifier || parent_id
-      asked = TicketPlan.record_ask(repo, id, entry.ask, Keyword.get(opts, :ask, source: "parent", from: from, idempotency: "ask.recorded:parent"))
-      with {:error, reason} <- asked, do: Logger.warning("Could not record the ask of sub-ticket #{identifier} of #{from}: #{inspect(reason)}")
-      {:ok, %{id: id, identifier: identifier, repo: repo}}
+      child = %{id: id, identifier: identifier, repo: repo}
+      if family != %{}, do: filed(repo_key, parent_id, child, entry)
+      asked(repo, child, entry.ask, issue, opts)
+      {:ok, child}
     else
       {:error, why} when is_binary(why) -> {:error, why}
       {:error, reason} -> {:error, inspect(reason)}
     end
+  end
+
+  defp asked(repo, %{id: id, identifier: identifier}, ask, %Issue{} = issue, opts) do
+    from = issue.identifier || issue.id
+    asked = TicketPlan.record_ask(repo, id, ask, Keyword.get(opts, :ask, source: "parent", from: from, idempotency: "ask.recorded:parent"))
+    with {:error, reason} <- asked, do: Logger.warning("Could not record the ask of sub-ticket #{identifier} of #{from}: #{inspect(reason)}")
+  end
+
+  # The sub-ticket is on its parent's record the moment it exists, so a split or an operation that
+  # stops right after never creates it a second time.
+  defp filed(repo_key, parent_id, child, entry) do
+    payload = %{identifier: child.identifier, kind: "split_off", title: String.slice(entry.title, 0, 300), repo: child.repo}
+
+    with {:error, reason} <- TicketEvents.record(repo_key, parent_id, "ticket.filed", payload),
+         do: Logger.warning("Could not record the sub-ticket #{child.identifier} on its parent issue_id=#{parent_id}: #{inspect(reason)}")
   end
 
   defp first_state(entry), do: if(Map.get(entry, :after, []) == [], do: @todo, else: @backlog)

@@ -98,6 +98,8 @@ defmodule SymphonyElixir.Conductor.TreeTest do
     end
   end
 
+  defp events(issue_id, type), do: issue_id |> Facts.events() |> Enum.filter(&(&1.type == type))
+
   defp status_notes(issue_id), do: for(%{type: "note", payload: %{status: true, text: text}} <- Facts.events(issue_id), do: text)
 
   describe "split/3" do
@@ -163,6 +165,45 @@ defmodule SymphonyElixir.Conductor.TreeTest do
       assert TicketPlan.current(ctx.issue_id).version == 3
     end
 
+    test "a split interrupted before the plan took the identifiers creates no sub-ticket twice", ctx do
+      write!(ctx)
+      [first, second] = two()
+
+      # The first sub-ticket exists and is on the parent's record; the plan never got its identifier.
+      assert {:ok, %{identifier: "MT-9002"}} = Tree.create("default", ctx.issue, first, [])
+      assert [%{payload: %{identifier: "MT-9002", kind: "split_off", title: "The API filter", repo: "default"} = filed}] = events(ctx.issue_id, "ticket.filed")
+      refute Map.has_key?(filed, :by)
+
+      # The second exists in the tracker only (Symphony stopped before it recorded it), and a person renamed the first.
+      by_hand = Map.merge(%{description: second.ask, state: "Backlog", team: "MT", parent_id: ctx.issue_id}, Map.take(second, [:title]))
+      {:ok, %{identifier: "MT-9003"}} = Memory.create_issue(by_hand)
+      issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+      renamed = Enum.map(issues, &if(&1.identifier == "MT-9002", do: %{&1 | title: "The API filter, renamed"}, else: &1))
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, renamed)
+      mailbox()
+
+      assert capture_log([level: :info], fn -> assert Grooming.split("default", ctx.issue) == :ok end) =~ "Took the sub-ticket MT-9003 an earlier split left for s2"
+
+      writes = mailbox()
+      refute Enum.any?(writes, &(elem(&1, 0) == :memory_tracker_issue_created))
+      assert [%{key: "s1", identifier: "MT-9002"}, %{key: "s2", identifier: "MT-9003"}] = TicketPlan.current(ctx.issue_id).sub_tickets
+      assert RunStore.get_ticket_state(ctx.issue_id).phase == @waiting
+      # The one Symphony never recorded is asked, linked and started as the others are.
+      assert [%{source: "parent", text: "Read it in the list."}] = TicketPlan.ask("memory-issue-3")
+      assert {:memory_tracker_blocked_by_added, "MT-9002", "memory-issue-3"} in writes
+      assert {:memory_tracker_state_update, "memory-issue-3", "Todo"} in writes
+    end
+
+    test "a split that can't read what an earlier one left creates nothing", ctx do
+      write!(ctx)
+      assert {:ok, _child} = Tree.create("default", ctx.issue, hd(two()), [])
+      mailbox()
+      script(:fetch_issue_states_by_ids, [:pass, {:error, :timeout}])
+
+      assert Tree.split("default", ctx.issue, tracker: Scripted) == {:error, "the ticket's sub-tickets could not be read: :timeout"}
+      refute Enum.any?(mailbox(), &(elem(&1, 0) == :memory_tracker_issue_created))
+    end
+
     test "adopts a sub-ticket the ticket already has, and leaves one a person keeps in Backlog there", ctx do
       existing = %Issue{id: "by-hand", identifier: "MT-50", title: "The API filter", state: "Backlog", parent: %{identifier: ctx.issue.identifier}}
       parent = %{ctx.issue | sub_issues: [%{id: "by-hand", identifier: "MT-50", state: "Backlog"}]}
@@ -218,7 +259,7 @@ defmodule SymphonyElixir.Conductor.TreeTest do
             {:create_issue, [{:error, :refused}], "sub-ticket s1 could not be created: :refused"},
             {:fetch_issue_states_by_ids, [{:error, :timeout}], "the ticket could not be read: :timeout"},
             {:fetch_issue_states_by_ids, [{:ok, []}], "the tracker does not return the ticket"},
-            {:fetch_issue_states_by_ids, [:pass, {:error, :timeout}], "the sub-tickets could not be read: :timeout"},
+            {:fetch_issue_states_by_ids, [:pass, :pass, {:error, :timeout}], "the sub-tickets could not be read: :timeout"},
             {:add_blocked_by, [{:error, :refused}], "MT-9003 could not be linked as blocked by MT-9002: :refused"},
             {:update_issue_state, [{:error, :refused}], "MT-9003 could not be moved to Todo: :refused"},
             {:fetch_issue_states_by_ids, [:pass, :pass, {:error, :timeout}], "the new sub-tickets could not be read back: :timeout"},
