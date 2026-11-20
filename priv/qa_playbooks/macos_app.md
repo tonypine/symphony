@@ -379,6 +379,15 @@ GitHub or Linear in QA:
   Symphony to add one."; typing is impossible and no request is logged. Walk it at 1440×900 and
   2560×1440, light and dark: the field and its line are never clipped, and at 2560×1440 the
   field stops at 720 pt wide.
+- **Symphony's wait notes (TP-1552):** pass
+  `macos/Tests/Fixtures/director-app/ticket-waiting-ci` as `api_fixtures` and open SHOP-410
+  from Tickets. Its pull request #512 waits on CI: the ticket's status reads "Waiting for CI"
+  ("Checks are running on PR #512."). Its feed holds two wait notes Symphony marked as its own
+  ("Waiting for GitHub to pick up ccc3333…" and "Waiting for CI · sha ccc3333…"): the main
+  Timeline draws neither. An older wait note recorded before the mark ("Waiting for CI · sha
+  bbb2222…") and the Director's note ("Note by you") are drawn as before. Turn on "Show all
+  events": both marked notes are listed. A note added from the field is the same
+  `POST /api/v1/control/note` as for the Ticket note above.
 - **Move to… (TP-1328):** pass `macos/Tests/Fixtures/director-app/parked-backlog` as
   `api_fixtures` and open SHOP-430 from Tickets. The dispatch loop parked it in Backlog with its
   question ("SHOP-430 looks stuck: run it again?"). The page's action bar has **Move to…** beside

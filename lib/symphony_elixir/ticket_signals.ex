@@ -230,7 +230,9 @@ defmodule SymphonyElixir.TicketSignals do
     * A held `blocked` or `handoff_missing`, `unblocked`, `dispatch_loop`, `ci_wait`,
       `decision requested`, a review's merge confirmation or escalation, and a Decide that moved
       nothing are `:mirrored`.
-    * Any other signal is a machine `note` rendered from its name and details.
+    * Any other signal is a machine `note` rendered from its name and details. A machine note is
+      Symphony's own wait or status message: it carries `status: true`, so the Director's timeline
+      lists it only under "Show all events".
   """
   @spec event(String.t(), term()) :: mapping()
   def event(name, details) when is_map(details), do: map_signal(name, details)
@@ -339,7 +341,7 @@ defmodule SymphonyElixir.TicketSignals do
       |> Enum.sort()
 
     text = Enum.join([Map.get(@notes, name, name) | facts], " · ") <> " (#{name})"
-    {"note", %{text: String.slice(text, 0, @note_max)}, []}
+    {"note", %{text: String.slice(text, 0, @note_max), status: true}, []}
   end
 
   defp fact(key, value) when is_binary(value) or is_number(value) or is_boolean(value), do: ["#{key} #{value}"]
