@@ -14,7 +14,7 @@ defmodule SymphonyElixir.Lifecycle do
   back out of CI Fix or Rework into the stage they serve is the same visit going on. A phase outside
   the five (Backlog, Todo, Plan Review) belongs to no stage.
 
-  A stage behind the one the ticket is in reads `passed` (or `skipped`, never entered); the one it is
+  A stage behind the one the ticket is in reads `passed` (or `skipped`, never entered and with no run counted in it); the one it is
   in reads `current`, or `paused` while the ticket is held (its record holds a pause). A stage ahead
   reads by the ticket's last move out of it: `sent_back` when it went into Rework (a review's or
   QA's verdict), `passed` when it went on to a later stage, and `not_yet` otherwise or when the ticket
@@ -313,7 +313,7 @@ defmodule SymphonyElixir.Lifecycle do
     %{
       id: id,
       name: name,
-      state: stage_state(id, index, visits, where),
+      state: stage_state(id, index, worked(visits, runs_in_stage), where),
       visits: visits,
       time_ms: in_stage |> Enum.map(& &1.time_ms) |> Enum.sum(),
       agent_time_ms: runs_in_stage |> Enum.map(& &1.agent_time_ms) |> Enum.sum(),
@@ -321,6 +321,11 @@ defmodule SymphonyElixir.Lifecycle do
       runs: length(runs_in_stage)
     }
   end
+
+  # A stage with no recorded entry that runs still worked in was not skipped: a ticket moved by hand
+  # leaves no `phase.entered`, and its runs count for the stage all the same.
+  defp worked(0, [_ | _]), do: 1
+  defp worked(visits, _runs), do: visits
 
   defp stage_state(id, _index, _visits, %{current: id, held?: true}), do: "paused"
   defp stage_state(id, _index, _visits, %{current: id}), do: "current"

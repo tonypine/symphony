@@ -225,6 +225,16 @@ defmodule SymphonyElixir.LifecycleTest do
       assert states(Lifecycle.compute(events ++ moved([{"11:30", "Done"}]), held)) == ["passed", "passed", "skipped", "skipped", "passed"]
     end
 
+    test "a stage with no recorded entry that a run worked in reads passed, not skipped" do
+      events = [started("2026-10-30T09:00", "run-1"), ended("2026-10-30T09:30", "run-1", tokens: 1_500)] ++ moved([{"10:00", "Code Review"}, {"11:00", "QA"}])
+
+      result = Lifecycle.compute(events, @facts)
+
+      assert states(result) == ["passed", "passed", "current", "not_yet", "not_yet"]
+      assert stages(result)["coding"].tokens == 1_500
+      assert stages(result)["coding"].visits == 0
+    end
+
     test "a stage the ticket went past without entering reads skipped" do
       events = moved([{"10:00", "In Progress"}, {"11:00", "Code Review"}, {"11:30", "Merging"}])
 
