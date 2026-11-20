@@ -82,7 +82,7 @@ struct ConductorSection: View {
                 "Final check rounds before it asks you",
                 text: Binding(
                     get: { String(settings.finalCheckRounds) },
-                    set: { text in if let number = Int(text) { settings.finalCheckRounds = number } }
+                    set: { text in if let rounds = Int(text) { settings = settings.setting(finalCheckRounds: rounds) } }
                 ),
                 disabledReason: detailReason,
                 mono: true

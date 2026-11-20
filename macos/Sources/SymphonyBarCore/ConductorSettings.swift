@@ -135,10 +135,19 @@ public struct ConductorSettings: Equatable {
     /// Grooming's time limit in whole seconds, for the field.
     public var groomingTimeoutSeconds: Int { Int((Double(groomingTimeoutMs) / Double(Self.msPerSecond)).rounded()) }
 
-    /// These settings with the field's time limit for Grooming; an untouched field keeps the exact value.
+    /// These settings with the field's time limit for Grooming; an untouched field keeps the exact value, and so does
+    /// one under a second, which Symphony refuses (`grooming_timeout_ms` is above zero).
     public func setting(groomingTimeoutSeconds seconds: Int) -> ConductorSettings {
         var settings = self
-        if seconds != groomingTimeoutSeconds { settings.groomingTimeoutMs = seconds * Self.msPerSecond }
+        if seconds > 0, seconds != groomingTimeoutSeconds { settings.groomingTimeoutMs = seconds * Self.msPerSecond }
+        return settings
+    }
+
+    /// These settings with the field's final check rounds; fewer than one, which Symphony refuses
+    /// (`final_check_rounds` is above zero), keeps the value.
+    public func setting(finalCheckRounds rounds: Int) -> ConductorSettings {
+        var settings = self
+        if rounds > 0 { settings.finalCheckRounds = rounds }
         return settings
     }
 

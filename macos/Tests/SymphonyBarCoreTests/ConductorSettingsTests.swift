@@ -178,6 +178,17 @@ final class ConductorSettingsTests: XCTestCase {
         )
     }
 
+    /// Symphony refuses a `grooming_timeout_ms` or a `final_check_rounds` that is not above zero.
+    func testGroomingsTimeLimitAndTheFinalCheckRoundsStayAboveZero() {
+        let settings = ConductorSettings(groomingTimeoutMs: 300_000, finalCheckRounds: 4)
+        for refused in [0, -1] {
+            XCTAssertEqual(settings.setting(groomingTimeoutSeconds: refused), settings)
+            XCTAssertEqual(settings.setting(finalCheckRounds: refused), settings)
+        }
+        XCTAssertEqual(settings.setting(groomingTimeoutSeconds: 1).groomingTimeoutMs, 1_000)
+        XCTAssertEqual(settings.setting(finalCheckRounds: 1).finalCheckRounds, 1)
+    }
+
     // MARK: Controls
 
     func testTheJunctionRowsAndTheirTitles() {
