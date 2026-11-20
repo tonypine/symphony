@@ -8,6 +8,8 @@ defmodule SymphonyElixir.PromptSafety do
   @title_limit 500
   @description_limit 10_000
   @comment_limit 5_000
+  # The asks, the plan's text and its checks together.
+  @ticket_plan_limit 60_000
   # Symphony's own workpad is read back and rewritten whole by the agent, so a cut here
   # deletes the tail from Linear on the next update.
   @workpad_comment_limit 50_000
@@ -43,6 +45,13 @@ defmodule SymphonyElixir.PromptSafety do
   """
   @spec linear_issue_body(String.t()) :: String.t()
   def linear_issue_body(value), do: value |> IssueSummary.strip() |> copyable_block("linear_issue_body", @description_limit)
+
+  @doc """
+  Wraps a groomed ticket's ask, plan and checks (`SymphonyElixir.TicketJourney.plan_text/1`) as
+  untrusted text, with a limit that holds a whole plan: a cut would drop the checks at its end.
+  """
+  @spec ticket_plan_body(String.t()) :: String.t()
+  def ticket_plan_body(value), do: copyable_block(value, "linear_ticket_plan", @ticket_plan_limit)
 
   @spec linear_issue_comment_body(String.t()) :: String.t()
   def linear_issue_comment_body(value), do: copyable_block(value, "linear_issue_comment_body", @comment_limit)
