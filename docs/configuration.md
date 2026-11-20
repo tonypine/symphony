@@ -3611,8 +3611,11 @@ it to Rework then, and to ask the person last.
   `evidence` names. It files it through the self-heal lane's filer, the one way Symphony creates a
   ticket: in Todo, Urgent, labelled `tech debt`, assigned to the owner the target repo polls for, in
   that repo's team and project. No question and no approval.
-- Before filing, an open ticket the answer names (`existing`), or an open one it already filed from
-  this ticket in the same repo under the same title, is linked instead; that is not a filing.
+- Before filing, an open ticket the answer names (`existing`), an open one it already filed from
+  this ticket in the same repo under the same title, or an open ticket already linked as blocking
+  this one (by hand or by the self-heal lane) under the same title, is linked instead; that is not
+  a filing. A ticket created whose hold could not be set is still recorded, so the limit counts it
+  and no later turn files it again.
 - Bounds: at most `max_filed_tickets` per ticket over its whole life, and a ticket the Conductor
   filed files none of its own. A route past a bound, naming a repo Symphony does not manage,
   missing a section or a relation, or given with a question is dropped and logged; the turn's

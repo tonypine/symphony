@@ -24,8 +24,9 @@ defmodule SymphonyElixir.Conductor.Filing do
   `conductor.max_filed_tickets` tickets filed per ticket over its whole life (a link to an open
   ticket that already covers the problem is not a filing); and a ticket the Conductor filed
   (`ticket.filed_from`) files none of its own. Before filing, an open ticket the turn names as
-  covering the problem (`existing`), or an open one it already filed from this ticket in the same
-  repo under the same title, is linked instead of a duplicate.
+  covering the problem (`existing`), an open one it already filed from this ticket in the same repo
+  under the same title, or an open ticket already linked as blocking this one under the same title,
+  is linked instead of a duplicate.
 
   What a filing records: a `ticket.filed` on the current ticket (`by: conductor`, the relation as
   its `kind`: `split_off` for `blocks`, `follow_up`), and a `ticket.filed_from` on the new one. A
@@ -88,8 +89,9 @@ defmodule SymphonyElixir.Conductor.Filing do
   `repo_key`, the Conductor's `run_id` and the ticket's `events`, oldest first), within the bounds
   of `settings` (the `conductor` section). `{:ok, filed}` once the ticket exists and is linked (and,
   for `blocks`, the current ticket is held on it); `{:error, why}`, in plain words, when the route is
-  refused or the filing failed. `opts`: the injectable `:tracker`, `:fixer`, `:repo` (`(key ->
-  {:ok, repo} | {:error, term})`, default `Config.repo/1`) and `:terminal_states`.
+  refused or the filing failed. A ticket created whose hold could not be set is still recorded, and
+  `why` names it. `opts`: the injectable `:tracker`, `:fixer`, `:hold` (`SymphonyElixir.SelfHeal.file_ticket/3`'s),
+  `:repo` (`(key -> {:ok, repo} | {:error, term})`, default `Config.repo/1`) and `:terminal_states`.
   """
   @spec file(map(), map(), Schema.Conductor.t(), keyword()) :: {:ok, filed()} | {:error, String.t()}
   def file(%{to: "ticket"} = route, %{issue: %Issue{} = issue, events: events} = context, %Schema.Conductor{} = settings, opts \\ []) do
@@ -97,16 +99,25 @@ defmodule SymphonyElixir.Conductor.Filing do
          {:ok, relation} <- relation(route),
          :ok <- managed(route.repo, opts),
          :ok <- sections(route),
-         existing = existing(route, issue, events, opts),
-         {:ok, ticket} <- file_ticket(route, relation, existing, context, opts) do
-      filed = %{identifier: ticket.identifier, url: Map.get(ticket, :url), relation: relation, title: route.title, existing: ticket.existing, repo: route.repo}
-      record_filed(filed, route, ticket, context)
-      {:ok, filed}
+         existing = existing(route, issue, events, opts) do
+      route |> file_ticket(relation, existing, context, opts) |> filed(route, relation, context)
     else
       why when is_binary(why) -> {:error, why}
-      {:error, reason} -> {:error, "the ticket could not be filed: #{inspect(reason)}"}
     end
   end
+
+  # A ticket that exists is recorded (`ticket.filed`, `ticket.filed_from`) whether or not its hold
+  # could be set, so the limit and the dedupe count it and the next turn never files it again.
+  defp filed({:ok, ticket}, route, relation, context) do
+    {:ok, record_filed(ticket, route, relation, context)}
+  end
+
+  defp filed({:error, {:hold_failed, reason}, ticket}, route, relation, context) do
+    filed = record_filed(ticket, route, relation, context)
+    {:error, "I filed `#{filed.identifier}`, but this ticket could not be held on it: #{inspect(reason)}"}
+  end
+
+  defp filed({:error, reason}, _route, _relation, _context), do: {:error, "the ticket could not be filed: #{inspect(reason)}"}
 
   @doc """
   The sentence the Conductor's update on the current ticket carries about `filed`: the ticket, its
@@ -177,12 +188,37 @@ defmodule SymphonyElixir.Conductor.Filing do
   end
 
   # The open ticket that already covers the problem: the one the turn named, else one it already
-  # filed from this ticket in the same repo under the same title. A named ticket that is terminal,
-  # unreadable or the current one covers nothing, and a new ticket is filed.
+  # filed from this ticket in the same repo under the same title, else an open ticket already linked
+  # as blocking this one (by hand, or by the self-heal lane) under the same title. A named ticket that
+  # is terminal, unreadable or the current one covers nothing, and a new ticket is filed.
   defp existing(route, issue, events, opts) do
     named = route.existing && open_ticket(route.existing, issue, opts)
-    named || already_filed(route, issue, events, opts)
+    named || already_filed(route, issue, events, opts) || linked_blocker(route, issue, opts)
   end
+
+  defp linked_blocker(route, issue, opts) do
+    issue
+    |> blockers(opts)
+    |> Enum.reject(&(is_binary(&1[:state]) and terminal?(&1.state, opts)))
+    |> Enum.find_value(fn %{identifier: identifier} ->
+      case open_issue(identifier, issue, opts) do
+        %Issue{title: title, url: url} -> if same_title?(title, route.title), do: %{identifier: identifier, url: url}
+        nil -> nil
+      end
+    end)
+  end
+
+  # The tickets linked as blocking `issue`: the ones it carries, else the tracker's read of it.
+  defp blockers(%Issue{blocked_by: [_ | _] = blockers}, _opts), do: Enum.filter(blockers, &is_binary(&1[:identifier]))
+
+  defp blockers(%Issue{identifier: identifier}, opts) when is_binary(identifier) do
+    case tracker(opts).fetch_issue_by_identifier(identifier) do
+      {:ok, %Issue{blocked_by: [_ | _] = blockers}} -> Enum.filter(blockers, &is_binary(&1[:identifier]))
+      _other -> []
+    end
+  end
+
+  defp blockers(_issue, _opts), do: []
 
   defp already_filed(route, issue, events, opts) do
     events
@@ -198,13 +234,21 @@ defmodule SymphonyElixir.Conductor.Filing do
   defp normalize(text), do: text |> String.downcase() |> String.replace(~r/\s+/, " ") |> String.trim()
 
   defp open_ticket(identifier, issue, opts) do
-    case tracker(opts).fetch_issue_by_identifier(identifier) do
-      {:ok, %Issue{id: id, state: state, url: url}} when id != issue.id ->
-        if terminal?(state, opts), do: nil, else: %{identifier: identifier, url: url}
+    case open_issue(identifier, issue, opts) do
+      %Issue{url: url} ->
+        %{identifier: identifier, url: url}
 
-      _other ->
+      nil ->
         Logger.info("Conductor cannot link #{identifier} from #{issue.identifier}: it is not an open ticket of its own")
         nil
+    end
+  end
+
+  # The ticket `identifier` names when it is open and not `issue` itself, else nil.
+  defp open_issue(identifier, issue, opts) do
+    case tracker(opts).fetch_issue_by_identifier(identifier) do
+      {:ok, %Issue{id: id, state: state} = found} when id != issue.id -> if terminal?(state, opts), do: nil, else: found
+      _other -> nil
     end
   end
 
@@ -218,8 +262,9 @@ defmodule SymphonyElixir.Conductor.Filing do
       existing: existing && existing.identifier
     }
 
-    case SelfHeal.file_ticket(issue, ticket, [repo_key: repo_key, priority: @urgent] ++ Keyword.take(opts, [:fixer])) do
+    case SelfHeal.file_ticket(issue, ticket, [repo_key: repo_key, priority: @urgent] ++ Keyword.take(opts, [:fixer, :hold])) do
       {:ok, filed} -> {:ok, Map.merge(%{url: existing && existing.url}, filed)}
+      {:error, reason, filed} -> {:error, reason, Map.merge(%{url: existing && existing.url}, filed)}
       {:error, _reason} = error -> error
     end
   end
@@ -265,8 +310,9 @@ defmodule SymphonyElixir.Conductor.Filing do
     "- #{line} (event #{event.id})"
   end
 
-  defp record_filed(filed, route, ticket, %{issue: issue, repo_key: repo_key, run_id: run_id}) do
-    kind = Map.fetch!(@relations, filed.relation)
+  defp record_filed(ticket, route, relation, %{issue: issue, repo_key: repo_key, run_id: run_id}) do
+    filed = %{identifier: ticket.identifier, url: Map.get(ticket, :url), relation: relation, title: route.title, existing: ticket.existing, repo: route.repo}
+    kind = Map.fetch!(@relations, relation)
 
     payload =
       %{identifier: filed.identifier, kind: kind, title: String.slice(filed.title, 0, 300), by: "conductor", repo: filed.repo, url: filed.url, existing: filed.existing}
@@ -276,6 +322,8 @@ defmodule SymphonyElixir.Conductor.Filing do
 
     if not filed.existing and is_binary(Map.get(ticket, :id)),
       do: record(filed.repo, ticket.id, "ticket.filed_from", %{from: issue.identifier || issue.id, by: "conductor", kind: kind}, run_id)
+
+    filed
   end
 
   # Best-effort: a filing already made is never undone because its record could not be written.

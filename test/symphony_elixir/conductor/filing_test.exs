@@ -191,10 +191,68 @@ defmodule SymphonyElixir.Conductor.FilingTest do
     end
   end
 
-  test "a filing the tracker refuses, or a hold that cannot be set, is the error", ctx do
+  test "a filing the tracker refuses is the error, and nothing is recorded", ctx do
     Process.put(:create_result, {:error, :rate_limited})
     assert {:error, "the ticket could not be filed: {:file_ticket_failed, :rate_limited}"} = file(ctx, route())
     assert events(ctx.issue_id, "ticket.filed") == []
+  end
+
+  test "a ticket created whose hold cannot be set is still recorded and counted, and the error names it", ctx do
+    hold = fn _repo_key, _issue, _identifier -> {:error, :store_down} end
+
+    log =
+      capture_log(fn ->
+        assert {:error, "I filed `TP-2000`, but this ticket could not be held on it: :store_down"} = file(ctx, route(), @settings, hold: hold)
+      end)
+
+    assert log =~ "could not hold it"
+    assert Process.get(:blocked) == {ctx.issue_id, "TP-2000"}
+    assert [%{payload: %{identifier: "TP-2000", existing: false}}] = events(ctx.issue_id, "ticket.filed")
+    assert [%{payload: %{from: from}}] = events("new-id", "ticket.filed_from")
+    assert from == ctx.identifier
+    assert pause_reasons(ctx.issue_id) == []
+
+    # The limit counts it, and the same problem again links it instead of filing a duplicate.
+    assert %{left: 1, filed: [%{identifier: "TP-2000"}]} = Filing.facts(Facts.events(ctx.issue_id), @settings, repos: [])
+    Process.put({:ticket, "TP-2000"}, {:ok, %Issue{id: "new-id", identifier: "TP-2000", state: "Todo"}})
+    Process.delete(:created)
+    assert {:ok, %{identifier: "TP-2000", existing: true}} = file(ctx, route())
+    assert Process.get(:created) == nil
+  end
+
+  test "an open ticket already linked as blocking this one under the same title is linked, not filed again", ctx do
+    title = route().title
+    Process.put({:ticket, "TP-1553"}, {:ok, %Issue{id: "tp-1553", identifier: "TP-1553", title: title, state: "In Progress", url: "https://linear.app/t/TP-1553"}})
+    Process.put({:ticket, "TP-1554"}, {:ok, %Issue{id: "tp-1554", identifier: "TP-1554", title: "Something else", state: "Todo"}})
+
+    blockers = [
+      %{id: "done", identifier: "TP-1500", state: "Done"},
+      %{id: nil, identifier: nil, state: "Todo"},
+      %{id: "gone", identifier: "TP-404", state: "Todo"},
+      %{id: "tp-1554", identifier: "TP-1554", state: "Todo"},
+      %{id: "tp-1553", identifier: "TP-1553", state: nil}
+    ]
+
+    # The blockers the issue carries.
+    issue = %{ctx.issue | blocked_by: blockers}
+    assert {:ok, %{identifier: "TP-1553", existing: true, url: "https://linear.app/t/TP-1553"}} = file(%{ctx | issue: issue}, route())
+    assert Process.get(:created) == nil
+    assert Process.get(:blocked) == {ctx.issue_id, "TP-1553"}
+    assert [%{text: "Waiting for TP-1553 to finish" <> _rest}] = pause_reasons(ctx.issue_id)
+    assert [%{payload: %{identifier: "TP-1553", existing: true}}] = events(ctx.issue_id, "ticket.filed")
+
+    # Else the blockers the tracker reads of it.
+    Process.put({:ticket, ctx.identifier}, {:ok, %Issue{id: ctx.issue_id, identifier: ctx.identifier, blocked_by: blockers}})
+    assert {:ok, %{identifier: "TP-1553", existing: true}} = file(ctx, route(%{relation: "follow_up"}))
+    assert Process.get(:related) == {ctx.issue_id, "TP-1553"}
+    assert Process.get(:created) == nil
+
+    # A linked ticket under another title covers nothing, and an issue without an identifier reads none.
+    assert {:ok, %{identifier: "TP-2000", existing: false}} = file(ctx, route(%{relation: "follow_up", title: "Another problem"}))
+    Process.delete(:created)
+    issue = %{ctx.issue | identifier: nil}
+    assert {:ok, %{identifier: "TP-2000", existing: false}} = file(%{ctx | issue: issue}, route(%{relation: "follow_up", title: "Yet another"}), %{@settings | max_filed_tickets: 5})
+    assert Process.get(:created) != nil
   end
 
   test "the update's sentence names the ticket, its relation and why" do

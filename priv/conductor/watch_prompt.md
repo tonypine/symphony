@@ -70,8 +70,8 @@ Its shape, every field required but `existing` and `evidence`:
 - `repo` may be any repo Symphony manages (`filings.repos`): a ticket of one repo may file against
   Symphony's own.
 - `existing`: an open ticket you know already covers the problem; Symphony links that one instead
-  of filing a duplicate, and it also links an open ticket it already filed from this ticket under
-  the same title.
+  of filing a duplicate, and it also links an open ticket it already filed from this ticket, or one
+  already linked as blocking this ticket, under the same title.
 - Write the ticket for someone who has not read this one: Symphony writes it in the house format
   (Problem, Wanted behaviour, Acceptance criteria, User walkthrough, and the evidence you name),
   in Todo and Urgent, and it starts at once. Walkthrough steps are plain steps a person takes; name

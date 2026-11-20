@@ -551,17 +551,25 @@ defmodule SymphonyElixir.SelfHeal do
   (default as a fix ticket's), in the scope repo's team and project, assigned as a fix ticket is
   (`SymphonyElixir.SelfHeal.Fixer`). Then `blocks` links `issue` as blocked by it and holds it on it
   (`hold/3`), and `follow_up` links the two as related and leaves `issue` as it is. A link that
-  fails is logged and never undoes the filing; a hold that fails is the error. `opts` takes
-  `:repo_key` (`issue`'s repo), and the injectable `:fixer`.
+  fails is logged and never undoes the filing. A hold that fails once the ticket exists is
+  `{:error, {:hold_failed, reason}, filed}`: the ticket is handed back with the error, so the caller
+  still records what it filed. `opts` takes `:repo_key` (`issue`'s repo), and the injectable `:fixer`
+  and `:hold` (default `hold/3`).
   """
-  @spec file_ticket(Issue.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
+  @spec file_ticket(Issue.t(), map(), keyword()) :: {:ok, map()} | {:error, term()} | {:error, {:hold_failed, term()}, map()}
   def file_ticket(%Issue{} = issue, %{scope: scope, relation: relation} = ticket, opts) when relation in ["blocks", "follow_up"] do
     repo_key = repo_key(issue, opts)
 
-    with {:ok, filed} <- filed_or_existing(issue, repo_key, ticket, opts),
-         :ok <- linked(relation, issue, repo_key, filed, opts) do
-      Logger.info("Filed #{filed.identifier} (#{relation}) in #{scope} for #{label(issue)}")
-      {:ok, filed}
+    with {:ok, filed} <- filed_or_existing(issue, repo_key, ticket, opts) do
+      case linked(relation, issue, repo_key, filed, opts) do
+        :ok ->
+          Logger.info("Filed #{filed.identifier} (#{relation}) in #{scope} for #{label(issue)}")
+          {:ok, filed}
+
+        {:error, reason} ->
+          Logger.warning("Filed #{filed.identifier} (#{relation}) in #{scope} for #{label(issue)}, but could not hold it: #{inspect(reason)}")
+          {:error, {:hold_failed, reason}, filed}
+      end
     end
   end
 
@@ -586,7 +594,7 @@ defmodule SymphonyElixir.SelfHeal do
 
   defp linked("blocks", issue, repo_key, filed, opts) do
     link(%{issue: issue, opts: opts}, filed)
-    hold(repo_key, issue, filed.identifier)
+    Keyword.get(opts, :hold, &hold/3).(repo_key, issue, filed.identifier)
   end
 
   defp linked("follow_up", issue, _repo_key, filed, opts) do
