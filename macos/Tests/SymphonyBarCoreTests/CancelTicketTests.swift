@@ -179,7 +179,10 @@ final class CancelTicketTests: XCTestCase {
 
         let after = try page("TP-1244", from: fixtures)
         XCTAssertFalse(after.isRunning)
-        XCTAssertEqual(after.phaseName, "Canceled")
+        // The page reads Cancelled from the ticket read itself: the lists the State fact comes from no longer hold it.
+        XCTAssertEqual(after.situation?.kind, .cancelled)
+        XCTAssertEqual(after.situation?.word, "Cancelled")
+        XCTAssertEqual(after.lifecycleRead?.phasePath?.current, "Canceled")
         XCTAssertEqual(after.factsRead?.pullRequest?.state, "closed")
         XCTAssertEqual(after.factsRead?.pullRequest?.number, 741)
         let rail = TicketActionRail(identifier: after.identifier, moves: try XCTUnwrap(after.moves))
