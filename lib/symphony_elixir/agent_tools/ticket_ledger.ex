@@ -29,6 +29,7 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
     Artifacts,
     PathSafety,
     PhaseSteps,
+    PromptSafety,
     RunStore,
     TicketChecks,
     TicketEvents,
@@ -143,7 +144,8 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
   @doc """
   `ticket_plan`: what the current ticket works from (see the moduledoc). The plan is given without
   its checks, which `checks` lists with where each stands; a note says whether it is the ticket's
-  own or its parent's (`on`).
+  own or its parent's (`on`). Each ask's `text`, the plan's `text` and each sub-ticket's `ask` come
+  wrapped as untrusted text (`<linear_ticket_plan>`), as the prompts carry them.
   """
   @spec plan(context()) :: {:ok, map()} | {:error, error() | term()}
   def plan(context) do
@@ -153,13 +155,25 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
 
       {:ok,
        %{
-         "ask" => TicketPlan.ask(events),
-         "plan" => plan && Map.delete(plan, :checks),
+         "ask" => Enum.map(TicketPlan.ask(events), &untrusted(&1, :text)),
+         "plan" => plan && plan |> Map.delete(:checks) |> untrusted(:text) |> untrusted_asks(),
          "checks" => TicketChecks.list(events),
          "notes" => notes(events, "ticket") ++ parent_notes(TicketPlan.parent_id(issue_id))
        }}
     end
   end
+
+  # What a person wrote, and what a turn wrote from it, is data for the run that reads it: wrapped
+  # as a prompt wraps a groomed ticket's ask and plan (`PromptSafety.ticket_plan_body/1`).
+  defp untrusted(map, key) do
+    case map do
+      %{^key => text} when is_binary(text) -> Map.put(map, key, PromptSafety.ticket_plan_body(text))
+      _no_text -> map
+    end
+  end
+
+  defp untrusted_asks(%{sub_tickets: [_ | _] = entries} = plan), do: %{plan | sub_tickets: Enum.map(entries, &untrusted(&1, :ask))}
+  defp untrusted_asks(plan), do: plan
 
   defp parent_notes(nil), do: []
   defp parent_notes(parent_id), do: notes(parent_id, "parent")
