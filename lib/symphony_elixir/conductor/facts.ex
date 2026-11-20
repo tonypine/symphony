@@ -108,7 +108,8 @@ defmodule SymphonyElixir.Conductor.Facts do
            "reach, an `attached` check for a file that cannot exist) holds the handoff for good. When a run's notes or its " <>
            "failed `plan_checks` step say so and you agree, waive it: " <>
            ~s(`waive: [{"check_id": ..., "reason": ...}]`, ) <>
-           "with the reason in plain words. Never waive a check only because it is hard or still unproved."
+           "with the reason in plain words. Never waive a check only because it is hard or still unproved. " <>
+           "A check of kind `outcome` is what the person asked for: Symphony refuses its waiver, and only the person can waive it."
   @plan_text_max 6_000
   @max_siblings 20
   # The layers a plan names (`SymphonyElixir.Conductor.Answer.layers/0`), each with what it means.

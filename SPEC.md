@@ -606,7 +606,9 @@ statement a version changed counts only the proofs and waivers recorded after th
 newest one is the ticket's plan, and a ticket is groomed exactly when it holds one), `check.proved`
 (any run's, or the machine's: a check of the current plan proved by a test, QA, the design or
 something attached, recorded once per check and head and refused for an id the plan does not hold),
-`check.waived` (machine only: a check nobody has to prove any more, and why),
+`check.waived` (machine only: a check nobody has to prove any more, and why; an `outcome` check is
+waived only by the person's own decision, and a plan version may remove or reword one only after a
+new ask),
 `conductor.intervention` (machine only: what the Conductor of another ticket did to this one,
 `stopped`, `replanned`, `canceled`, `replaced` or `added`, and why) and
 `note` (which may carry a `tag` its writer gives it: `discovery`, something a run found that is not its

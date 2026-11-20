@@ -4197,7 +4197,10 @@ open, and passes at once when none is, or when the ticket has no plan. The failu
 check is proved, and that a check nothing can prove this way is the Conductor's to waive: its
 answer's `waive` (each a `check_id` and a `reason`) is read at the junctions `conductor.junctions`
 names for it, above, and on a watch turn (a `plan_checks` step that fails again wakes one,
-`step_failed_twice`), and recorded as `check.waived`. So that a check nobody
+`step_failed_twice`), and recorded as `check.waived`. Outcomes bind: Symphony refuses the
+Conductor's waiver of a check of kind `outcome`, which only the person's own pick waives, and it
+refuses a plan version that removes an outcome check or changes its statement unless the person
+asked for something new since the version before it (an `ask.recorded`). So that a check nobody
 proves or waives never sends a ticket around for good, each refusal is noted on the ticket, and
 when two coding runs in a row were refused with no new plan version and no waiver in between,
 Symphony asks the person: send it back for the checks, waive them and pass the ticket on to Code

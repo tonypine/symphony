@@ -456,7 +456,7 @@ defmodule SymphonyElixir.Conductor.FactsTest do
 
     test "the ticket is read through its ask and its checks, never its description", ctx do
       {:ok, proof} = SymphonyElixir.TicketChecks.prove(ctx.repo, ctx.issue_id, %{check_id: "c1", by: "test", test: "login_test › signs in"})
-      {:ok, _waived} = SymphonyElixir.TicketChecks.waive(ctx.repo, ctx.issue_id, "c3", "No export exists to attach.")
+      {:ok, _waived} = SymphonyElixir.TicketChecks.waive(ctx.repo, ctx.issue_id, "c3", "No export exists to attach.", by: :person)
       {:ok, note} = TicketEvents.record(ctx.repo, ctx.issue_id, "note", %{text: "c3 cannot be proved: there is no export."}, actor: {:agent, "run-1", "implementation"}, run_id: "run-1")
       {:ok, _own} = TicketEvents.record(ctx.repo, ctx.issue_id, "note", %{text: "Symphony's own note.", status: true})
 

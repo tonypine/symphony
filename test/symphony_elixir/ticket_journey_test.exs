@@ -152,7 +152,7 @@ defmodule SymphonyElixir.TicketJourneyTest do
     end
 
     test "a waived check is no step and no criterion, and a plan with no QA check has nothing to walk" do
-      {:ok, _waived} = TicketChecks.waive(@repo_key, @issue_id, "c1", "Nothing can test it.")
+      {:ok, _waived} = TicketChecks.waive(@repo_key, @issue_id, "c1", "Nothing can test it.", by: :person)
       {:ok, _waived} = TicketChecks.waive(@repo_key, @issue_id, "c2", "Nothing to fold.")
 
       assert [%{number: 4}] = TicketJourney.steps(issue())

@@ -11,8 +11,9 @@ defmodule SymphonyElixir.TicketChecks do
   before the branch's last change still counts. It is `:waived` when no proof names it and a
   `check.waived` does, and `:open` otherwise.
 
-  `prove/4` and `waive/4` record those events, and refuse an id the plan does not hold
-  (`{:unknown_check, id}`), so nothing is ever proved that the plan does not ask for. A proof is
+  `prove/4` and `waive/5` record those events, and refuse an id the plan does not hold
+  (`{:unknown_check, id}`), so nothing is ever proved that the plan does not ask for. An `outcome`
+  check binds: `waive/5` refuses it (`:outcome_binds`) unless the person decided it. A proof is
   recorded once per check and head: a second one on the same head returns the first.
 
   A check that changes state is shown in Linear at once: the ticket's description is projected
@@ -102,14 +103,27 @@ defmodule SymphonyElixir.TicketChecks do
     end
   end
 
-  @doc "Records that nobody has to prove the check `check_id` of `repo_key`'s ticket `issue_id` any more, and why. An id the plan does not hold is refused."
-  @spec waive(String.t() | nil, String.t(), String.t(), String.t()) :: {:ok, Event.t()} | {:error, term()}
-  def waive(repo_key, issue_id, check_id, reason) when is_binary(issue_id) do
+  @doc """
+  Records that nobody has to prove the check `check_id` of `repo_key`'s ticket `issue_id` any more,
+  and why. An id the plan does not hold is refused (`{:unknown_check, id}`). So is an `outcome`
+  check (`:outcome_binds`): the outcomes are what the person asked for, so only the person's own
+  decision waives one (`by: :person`), never a turn or a rule.
+  """
+  @spec waive(String.t() | nil, String.t(), String.t(), String.t(), by: :person | :machine) ::
+          {:ok, Event.t()} | {:error, term()}
+  def waive(repo_key, issue_id, check_id, reason, opts \\ []) when is_binary(issue_id) do
     with {:ok, check_id, _since} <- known(issue_id, check_id),
+         :ok <- waivable(issue_id, check_id, Keyword.get(opts, :by, :machine)),
          {:ok, event} <- TicketEvents.record(repo_key, issue_id, "check.waived", %{check_id: check_id, reason: reason}) do
       TicketProjection.changed(repo_key, issue_id)
       {:ok, event}
     end
+  end
+
+  defp waivable(_issue_id, _check_id, :person), do: :ok
+
+  defp waivable(issue_id, check_id, _machine) do
+    if Enum.any?(list(issue_id), &(&1.id == check_id and &1.kind == "outcome")), do: {:error, :outcome_binds}, else: :ok
   end
 
   # The check's id and the plan version that last changed it.

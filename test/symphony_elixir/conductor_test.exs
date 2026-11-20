@@ -650,7 +650,7 @@ defmodule SymphonyElixir.ConductorTest do
 
   describe "waiving a check" do
     setup ctx do
-      checks = [%{id: "c1", kind: "outcome", statement: "The export matches.", proof: "test"}, %{id: "c2", kind: "outcome", statement: "It signs in.", proof: "test"}]
+      checks = [%{id: "c1", kind: "evidence", statement: "The export matches.", proof: "test"}, %{id: "c2", kind: "evidence", statement: "It signs in.", proof: "test"}]
       plan = %{shape: "single", layers: ["engine"], summary: "s", text: "t", checks: checks, size: %{tokens: 1, runs: 1}}
       {:ok, _plan} = SymphonyElixir.TicketPlan.write("default", ctx.issue_id, Map.merge(plan, %{reason: "Grooming", by: "grooming"}))
       :ok

@@ -35,7 +35,7 @@ defmodule SymphonyElixir.Conductor.MessageTest do
         layers: ["engine"],
         summary: "The list keeps its filter.",
         text: "Approach: store the filter.",
-        checks: [%{id: "c1", kind: "outcome", statement: "The filter survives a reload.", proof: "test"}],
+        checks: [%{id: "c1", kind: "evidence", statement: "The filter survives a reload.", proof: "test"}],
         size: %{tokens: 1, runs: 1},
         reason: "Grooming",
         by: "grooming"

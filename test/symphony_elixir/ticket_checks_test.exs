@@ -86,6 +86,16 @@ defmodule SymphonyElixir.TicketChecksTest do
     assert TicketChecks.list(RunStore.list_ticket_events(@issue_id, [])) == TicketChecks.list(@issue_id)
   end
 
+  test "an outcome binds: only the person's decision waives one" do
+    plan!()
+    assert TicketChecks.waive(@repo_key, @issue_id, "c1", "No test can reach it.") == {:error, :outcome_binds}
+    assert TicketChecks.waive(@repo_key, @issue_id, "c1", "No test can reach it.", by: :machine) == {:error, :outcome_binds}
+    assert states()["c1"] == :open
+
+    assert {:ok, _waived} = TicketChecks.waive(@repo_key, @issue_id, "c1", "The person waived it.", by: :person)
+    assert states()["c1"] == :waived
+  end
+
   test "an id the plan does not hold is refused and nothing is written" do
     plan!()
     before = RunStore.list_ticket_events(@issue_id, [])
@@ -149,9 +159,10 @@ defmodule SymphonyElixir.TicketChecksTest do
     {:ok, _proved} = TicketChecks.prove(@repo_key, @issue_id, %{check_id: "c2", by: "qa"}, head_sha: "abc1234", at: at(1))
     {:ok, _waived} = TicketChecks.waive(@repo_key, @issue_id, "c3", "Nothing can be attached.")
 
-    # c1 is reworded, c2 is dropped for a new check that comes with no id, and c3 stands.
+    # c1 is reworded, which a new ask permits, c2 is dropped for a new check that comes with no id, and c3 stands.
+    {:ok, _ask} = TicketPlan.record_ask(@repo_key, @issue_id, "And its summary.", source: "message")
     reworded = %{@outcome | statement: "The page shows the plan and its summary."}
-    new = %{kind: "outcome", statement: "The page shows the size.", proof: "test"}
+    new = %{kind: "evidence", statement: "The page shows the size.", proof: "test"}
     plan!(%{@plan | reason: "The ask changed.", by: "recalibration", checks: [reworded, new, @attached]}, [])
     assert states() == %{"c1" => :open, "c4" => :open, "c3" => :waived}
 

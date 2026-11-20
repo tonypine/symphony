@@ -112,7 +112,7 @@ defmodule SymphonyElixir.TicketPlanTest do
     end
 
     test "a check keeps the id it had, and a new one gets an id no version of the ticket ever used" do
-      new = fn statement -> %{kind: "outcome", statement: statement, proof: "test"} end
+      new = fn statement -> %{kind: "evidence", statement: statement, proof: "test"} end
 
       # The first version's checks are named in order, whatever ids they came with.
       first = [new.("A."), Map.put(new.("B."), :id, "c7"), Map.put(new.("C."), "id", "mine")]
@@ -126,12 +126,34 @@ defmodule SymphonyElixir.TicketPlanTest do
       assert [%{id: "c1", statement: "A."}, %{id: "c4", statement: "D."}, %{id: "c5", statement: "E."}] = current.checks
 
       # Nor is a later version's: c2 was used once, so it is never a new check's id.
-      third = %{"checks" => [%{"kind" => "outcome", "statement" => "F.", "proof" => "test"}]}
+      third = %{"checks" => [%{"kind" => "evidence", "statement" => "F.", "proof" => "test"}]}
       {:ok, _v3} = TicketPlan.write(@repo_key, @issue_id, @plan |> Map.delete(:checks) |> Map.merge(third), at: at(2))
       assert [%{id: "c6", statement: "F."}] = TicketPlan.current(@issue_id).checks
 
       # Checks that are no list are the schema's to refuse.
       assert {:error, {:invalid_payload, [:checks]}} = TicketPlan.write(@repo_key, @issue_id, %{@plan | checks: "none"})
+    end
+
+    test "outcomes bind: a version that drops or rewords one is refused until the person asks for something new" do
+      kept = %{id: "c2", kind: "evidence", statement: "A screenshot.", proof: "attached"}
+      {:ok, _ask} = TicketPlan.record_ask(@repo_key, @issue_id, "Show the plan.", at: at(0))
+      {:ok, _v1} = TicketPlan.write(@repo_key, @issue_id, %{@plan | checks: [@check, kept]}, at: at(1))
+
+      # Everything else may change: the other checks, the text, the same outcome under more words around it.
+      {:ok, _v2} = TicketPlan.write(@repo_key, @issue_id, %{@plan | checks: [%{@check | statement: " The page shows the plan. "}], text: "Another way."}, at: at(2))
+
+      reworded = %{@check | statement: "The page shows half the plan."}
+      as_evidence = %{@check | kind: "evidence"}
+      binds = fn id, how -> {:error, {:invalid_plan, ["outcome check #{id} was #{how}, and no new ask says so"]}} end
+      assert TicketPlan.write(@repo_key, @issue_id, %{@plan | checks: [reworded]}, at: at(3)) == binds.("c1", "reworded")
+      assert TicketPlan.write(@repo_key, @issue_id, %{@plan | checks: [kept]}, at: at(3)) == binds.("c1", "removed")
+      assert TicketPlan.write(@repo_key, @issue_id, %{@plan | checks: [as_evidence]}, at: at(3)) == binds.("c1", "removed")
+      assert length(TicketPlan.versions(@issue_id)) == 2
+
+      # A new ask is what permits it, for the next version only.
+      {:ok, _ask} = TicketPlan.record_ask(@repo_key, @issue_id, "Half of it is enough.", source: "message", at: at(4))
+      assert {:ok, _v3} = TicketPlan.write(@repo_key, @issue_id, %{@plan | checks: [reworded]}, at: at(5))
+      assert TicketPlan.write(@repo_key, @issue_id, %{@plan | checks: [kept]}, at: at(6)) == binds.("c1", "removed")
     end
 
     test "a signal the machinery recorded with a plan is not part of the plan" do
