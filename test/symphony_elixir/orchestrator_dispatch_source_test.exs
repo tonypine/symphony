@@ -365,71 +365,61 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
       refute_received {:memory_tracker_fetch_issue_states_by_ids, _ids}
     end
 
-    test "a plan parent under review is read by id, so the plan-comment reader sees its comments", ctx do
+    test "a plan parent under review takes its newest comment from its record, and a delivered comment sends it to Rework", ctx do
       commented_at = ~U[2026-10-29 09:10:00Z]
       parent = issue(ctx.repo_key, 1, state: "Plan Review", labels: ["plan"])
-      read = %{parent | comments: [%{author: "Tony", body: "Split the history screen out", created_at: commented_at}]}
       other = issue(ctx.repo_key, 2, state: "Plan Review")
-      Application.put_env(:symphony_elixir, :memory_tracker_issues, [read, other])
-      no_new_comments = %{parent.id => %{state_changes: [], comments: []}}
-      Application.put_env(:symphony_elixir, :memory_tracker_plan_comments, no_new_comments)
       observe!(ctx.repo_key, [parent, other], :poll)
-      state = %{orchestrator_state() | watching: %{parent.id => %{}, other.id => %{}}}
-
-      {result, state} = Orchestrator.run_repo_poll_task_for_test(state, [], 0)
-
-      # Only the plan parent is read: its comments are in no poll and no record.
       parent_id = parent.id
-      assert_received {:memory_tracker_fetch_issue_states_by_ids, [^parent_id]}
-      assert {:ok, watched} = result.watching_result
-      assert Enum.find(watched, &(&1.id == parent_id)).comments == read.comments
 
-      state = Orchestrator.act_on_plan_comments_for_test(state, watched)
+      Application.put_env(:symphony_elixir, :memory_tracker_plan_comments, %{
+        parent_id => %{
+          state_changes: [%{at: @linear_at, from: "In Progress", to: "Plan Review"}],
+          comments: [%{id: "c1", body: "Split the history screen out", created_at: commented_at, parent_id: nil, bot?: false}]
+        }
+      })
+
+      state = %{orchestrator_state() | watching: %{parent_id => %{}, other.id => %{}}}
+
+      # No comment yet: the cycle reads nothing by id and has no comments to read.
+      {result, state} = Orchestrator.run_repo_poll_task_for_test(state, [], 0)
+      refute_received {:memory_tracker_fetch_issue_states_by_ids, _ids}
+      assert {:ok, watched} = result.watching_result
+      assert Orchestrator.act_on_plan_comments_for_test(state, watched) == state
+      refute_received {:memory_tracker_plan_comments, _issue_id}
+
+      # A person comments on the plan: the delivery writes the comment's time into its record.
+      comment = %{id: "c1", author: "Tony", body: "Split the history screen out", created_at: commented_at}
+      assert TicketObservation.observe_delivery({:comment, :create, parent_id, comment}, repos: ctx.repos) == :updated
+
+      {result, state} = Orchestrator.run_repo_poll_task_for_test(state, [], 50)
+      refute_received {:memory_tracker_fetch_issue_states_by_ids, _ids}
+      assert {:ok, watched} = result.watching_result
+      assert %Issue{last_comment_at: ^commented_at, comments: []} = Enum.find(watched, &(&1.id == parent_id))
+
+      # The newer comment starts the plan-comment read, and the plan goes to Rework as under poll.
+      {state, _log} = with_log(fn -> Orchestrator.act_on_plan_comments_for_test(state, watched) end)
       assert_received {:memory_tracker_plan_comments, ^parent_id}
+      assert_received {:memory_tracker_state_update, ^parent_id, "Rework"}
       assert state.plan_comment_checks == %{parent_id => commented_at}
     end
 
-    test "a forced or stopped plan parent under review is taken from its record; only a watched one is read by id", ctx do
+    test "a forced, stopped or watched plan parent under review is taken from its record, with no by-id read", ctx do
       forced = issue(ctx.repo_key, 1, state: "Plan Review", labels: ["plan", "expedite"])
       stopped = issue(ctx.repo_key, 2, state: "Plan Review", labels: ["plan"])
       forced_and_watched = issue(ctx.repo_key, 3, state: "Plan Review", labels: ["plan"])
-      Application.put_env(:symphony_elixir, :memory_tracker_issues, [forced, stopped, forced_and_watched])
-      observe!(ctx.repo_key, [forced, stopped], :poll)
+      observe!(ctx.repo_key, [forced, stopped, forced_and_watched], :poll)
+      both_id = forced_and_watched.id
 
-      state = %{
-        orchestrator_state()
-        | forced: %{forced.id => %{}}
-      }
-
+      state = %{orchestrator_state() | forced: %{forced.id => %{}, both_id => %{}}, watching: %{both_id => %{}}}
       :ok = SymphonyElixir.Pauses.stop({:ticket, ctx.repo_key, stopped.id}, DateTime.utc_now())
 
-      # Neither is watched, so neither reaches the plan-comment reader: no by-id read.
       {result, _state} = Orchestrator.run_repo_poll_task_for_test(state, [], 0)
       refute_received {:memory_tracker_fetch_issue_states_by_ids, _ids}
-      assert {:ok, [%Issue{identifier: "ACME-1", state: "Plan Review"}]} = result.forced_result
+      assert {:ok, [%Issue{identifier: "ACME-3", state: "Plan Review"}]} = result.watching_result
       assert {:ok, [%Issue{identifier: "ACME-2", state: "Plan Review"}]} = result.stopped_result
-
-      # A forced parent that is also watched is read once, for the watched group.
-      observe!(ctx.repo_key, [forced_and_watched], :poll)
-      both_id = forced_and_watched.id
-      state = %{state | forced: Map.put(state.forced, both_id, %{}), watching: %{both_id => %{}}}
-
-      {result, _state} = Orchestrator.run_repo_poll_task_for_test(state, [], 0)
-      assert_received {:memory_tracker_fetch_issue_states_by_ids, [^both_id]}
-      refute_received {:memory_tracker_fetch_issue_states_by_ids, _ids}
-      assert {:ok, [%Issue{identifier: "ACME-3"}]} = result.watching_result
       assert {:ok, forced_issues} = result.forced_result
       assert forced_issues |> Enum.map(& &1.identifier) |> Enum.sort() == ["ACME-1", "ACME-3"]
-    end
-
-    test "a plan parent whose by-id read fails keeps every watched ticket as it was", ctx do
-      parent = issue(ctx.repo_key, 1, state: "Plan Review", labels: ["plan"])
-      {:ok, :updated} = TicketObservation.observe(ctx.repo_key, parent, source: :poll)
-      Application.put_env(:symphony_elixir, :memory_tracker_fetch_issue_states_result, {:error, :linear_down})
-      state = %{orchestrator_state() | watching: %{parent.id => %{}}}
-
-      {result, _state} = Orchestrator.run_repo_poll_task_for_test(state, [], 0)
-      assert result.watching_result == {:error, :linear_down}
     end
   end
 
