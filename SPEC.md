@@ -558,7 +558,9 @@ only: a workspace made again, why, the heads compared and the one it started on)
 terminal state or another cleanup), `rule.action` (machine only: a rule of Symphony's acted on the
 ticket, with the rule's name and what it did), `ticket.filed` (machine only: a ticket split off from
 this one, or an epic review's follow-up), `note.read` (machine only: the first run whose prompt carried a
-person's note, keyed by the note), `brief.written` (an implementation, rework or review-feedback run's
+person's note, keyed by the note; history from before messages), `message.sent` (the person's message to
+the ticket, its own event each time), `message.read` (machine only: the run that was given a message as
+new, keyed by the message), `brief.written` (an implementation, rework or review-feedback run's
 brief of the ticket: what it does and why and its walkthrough, in a person's words, with no backtick; the
 newest one is the ticket read's `brief`), `conductor.update` and `conductor.instructions` (machine only:
 what the Conductor's turn at a junction wrote, naming the junction: an update for the person, markdown in the Conductor's voice, at most
@@ -6682,20 +6684,29 @@ Minimum endpoints:
     `restart` starts it over, each clearing the reason and the hold.
 
 - `POST /api/v1/control/note` (OPTIONAL)
-  - Writes the Director's note on a ticket: `repo_key`, `issue_identifier` and `text`. The ticket
-    resolves as the events feed resolves it. The note is a `note` event (Section 4.1.11) whose actor
-    is the person "the Director", since the control API authenticates one shared token. It shows in
-    the ticket's timeline and in the summary the next agent run starts from, under Notes.
-  - Answers `200` `{"event": ...}` with the event as the feed shows it, and writes a `director_note`
-    audit record (`event_id`, the text's first 500 characters). Text that is blank, or longer than
-    the `note` type's 4,000 characters, is `400` `invalid_note` with a message that says why; a
-    ticket with no state record in that repo is `404` `ticket_not_found`; a request without
-    `repo_key` or `issue_identifier` is `422`. None of them writes an event or an audit record.
-    Unlike a stop's event, the note is the request: an answer other than `200` means it wasn't
-    written.
-  - The ticket read's `note` is the newest note a person left, with `read_by`: the first run whose
-    prompt carried it (the summary holds every note), from a machine `note.read` event keyed by the
-    note. A newer note replaces it, unread until a run reads it.
+  - Writes the Director's message to a ticket: `repo_key`, `issue_identifier` and `text`. The ticket
+    resolves as the events feed resolves it. The message is a `message.sent` event (Section 4.1.11)
+    whose actor is the person "the Director", since the control API authenticates one shared token.
+    Each message is its own event; none replaces or hides another. Sending one never starts, stops or
+    reorders a run.
+  - Answers `200` `{"event": ...}` with the event as the feed shows it (`summary.title` "You wrote",
+    and `read`, null until a run read it), and writes a `director_note` audit record (`event_id`, the
+    text's first 500 characters). Text that is blank, or longer than the `message.sent` type's 4,000
+    characters, is `400` `invalid_note` with a message that says why; a ticket with no state record in
+    that repo is `404` `ticket_not_found`; a request without `repo_key` or `issue_identifier` is `422`.
+    None of them writes an event or an audit record. Unlike a stop's event, the message is the
+    request: an answer other than `200` means it wasn't written.
+  - The next run of the ticket, of any kind, is given every message no run was given yet, oldest
+    first, at the top of its prompt, under a heading that says they come from the person and when
+    each was written, and Symphony records a machine `message.read` for each (the message's event id
+    and the run's id), keyed by the message: a message is given to one run as new, and later runs read
+    it in the ticket's history summary. A run is given only the messages written before it started,
+    however many prompts it builds (each step, a retry), so a message sent while it works waits for
+    the next run; that run's own history summary leaves it out as well.
+  - The ticket read carries `unread_messages`, the count no run read yet, and, for the Mac app release
+    that reads one note, `note`: the newest unread message.
+  - Each ticket's note from before messages (a person's `note`, read by a `note.read`) was turned into
+    one `message.sent` at its time, with its `message.read` when a run had read it, once at startup.
 
 - `POST /api/v1/control/looked` (OPTIONAL)
   - Marks that the person looked at a ticket now: `issue_identifier` and an optional `repo_key`. The

@@ -2,7 +2,7 @@ defmodule SymphonyElixir.PromptBuilderTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.{DecisionRequest, Decisions, Marks, RunKind, TicketEvents, TicketState, WorkflowPreview}
+  alias SymphonyElixir.{DecisionRequest, Decisions, Messages, RunKind, TicketEvents, TicketState, WorkflowPreview}
   alias SymphonyElixir.TicketEvents.Brief
 
   test "prompt builder uses PR prompt branch for PR runs" do
@@ -1034,6 +1034,122 @@ defmodule SymphonyElixir.PromptBuilderTest do
     end
   end
 
+  describe "the messages written to the ticket" do
+    setup do
+      :ok = RunStore.clear()
+      write_workflow_file!(Workflow.workflow_file_path(), prompt: "Issue {{ issue.identifier }}")
+      record = TicketState.new("r", "i", %{phase: "In Progress", issue_identifier: "MT-MSG"})
+      :ok = RunStore.put_ticket_state(record)
+
+      %{issue: %Issue{id: "i", identifier: "MT-MSG", title: "Messages", state: "In Progress"}, record: record}
+    end
+
+    defp message!(text, at), do: elem(TicketEvents.record("r", "i", "message.sent", %{text: text}, actor: {:person, "the Director"}, at: at), 1)
+
+    defp reads, do: "i" |> TicketEvents.query(types: ["message.read"]) |> Enum.map(&{&1.payload.message_id, &1.payload.run_id})
+
+    test "two messages before a run are given to it at the top of its prompt, in order, and both marked read by it", %{issue: issue, record: record} do
+      first = message!("Keep the export button where it is.", ~U[2026-11-19 10:00:00Z])
+      second = message!("And use the new copy.", ~U[2026-11-19 10:05:00Z])
+
+      prompt = PromptBuilder.build_prompt(issue, ticket_state: record, run_id: "run-1", run_kind: :implementation)
+
+      assert String.starts_with?(prompt, "## Messages from the person\n")
+      assert prompt =~ "wrote 2 messages that no run has read yet, oldest first."
+      assert prompt =~ "say in your first lines how you took them into account"
+
+      assert prompt =~
+               "### the Director wrote, 2026-11-19T10:00:00Z\n\nKeep the export button where it is.\n\n### the Director wrote, 2026-11-19T10:05:00Z\n\nAnd use the new copy.\n\n"
+
+      assert reads() == [{first.id, "run-1"}, {second.id, "run-1"}]
+      assert [%{actor: %{kind: :machine}, run_id: "run-1"} | _] = TicketEvents.query("i", types: ["message.read"])
+
+      # The next run reads them in the history, not as new.
+      prompt = PromptBuilder.build_prompt(issue, ticket_state: record, run_id: "run-2")
+      refute prompt =~ "## Messages from the person"
+      assert prompt =~ "the Director wrote (given to a run at "
+      assert length(reads()) == 2
+    end
+
+    test "a message sent while a run works waits for the next run", %{issue: issue, record: record} do
+      run_started = %{run_id: "run-1", run_kind: "implementation", run_number: 1, state: "In Progress"}
+      {:ok, _started} = TicketEvents.record("r", "i", "run.started", run_started, run_id: "run-1", at: ~U[2026-11-19 09:00:00Z])
+      refute PromptBuilder.build_prompt(issue, ticket_state: record, run_id: "run-1") =~ "Messages from the person"
+
+      message = message!("Stop after the first screen.", ~U[2026-11-19 10:00:00Z])
+      assert reads() == []
+
+      # The run building its prompt again (its next step, a retry) is not given it at all: not as
+      # new, and not in its history either, and it records no read.
+      refute PromptBuilder.build_prompt(issue, ticket_state: record, run_id: "run-1") =~ "Stop after the first screen."
+      assert reads() == []
+
+      prompt = PromptBuilder.build_prompt(issue, ticket_state: record, run_id: "run-2")
+      assert prompt =~ "wrote a message that no run has read yet"
+      assert prompt =~ "Stop after the first screen."
+      assert reads() == [{message.id, "run-2"}]
+    end
+
+    # The kinds whose prompt this builder writes; Code Review and QA build their own, and their
+    # suites (review_agent_test.exs, qa_agent_test.exs, qa_agent/steps_test.exs) prove they get them.
+    test "a run of each kind the builder writes is given the messages no run read yet", %{issue: issue, record: record} do
+      kinds = [implementation: "In Progress", rework: "Rework", ci_fix: "CI Fix"]
+
+      for {kind, state} <- kinds do
+        message = message!("For the #{kind} run.", DateTime.utc_now())
+        run_id = "run-#{kind}"
+
+        opts = [ticket_state: record, run_id: run_id, run_kind: kind]
+        prompt = PromptBuilder.build_prompt(%{issue | state: state}, opts)
+
+        assert String.starts_with?(prompt, "## Messages from the person\n"), "#{kind}"
+        assert prompt =~ "For the #{kind} run.", "#{kind}"
+        assert {message.id, run_id} in reads(), "#{kind}"
+      end
+
+      assert length(reads()) == 3
+    end
+
+    # A Codex prompt over the stdio soft limit is sent as the compact prompt: the run is given the
+    # same messages in it, and the reads still name that run, once.
+    test "a Codex run sent the compact prompt is given the messages too", %{issue: issue, record: record} do
+      message = message!("Keep the button.", ~U[2026-11-19 10:00:00Z])
+
+      {:ok, settings} = Schema.parse(%{execution: %{codex_stdio_prompt_soft_limit: 1}})
+      settings = %{settings | execution: %{settings.execution | harness: "codex", command: "codex app-server"}}
+
+      prompt = AgentRunner.build_first_turn_prompt(issue, settings: settings, ticket_state: record, run_id: "run-codex")
+
+      assert String.starts_with?(prompt, "## Messages from the person\n")
+      assert prompt =~ "You are working on Linear ticket `MT-MSG`."
+      assert prompt =~ "Keep the button."
+      assert reads() == [{message.id, "run-codex"}]
+    end
+
+    test "a prompt with no run, or with the messages passed in, records no read", %{issue: issue, record: record} do
+      message = message!("Keep the button.", ~U[2026-11-19 10:00:00Z])
+
+      assert PromptBuilder.build_prompt(issue, ticket_state: record) =~ "Keep the button."
+      assert PromptBuilder.build_prompt(issue, ticket_state: record, run_id: "run-1", messages: [message]) =~ "Keep the button."
+      refute PromptBuilder.build_prompt(issue, ticket_state: record, run_id: "run-1", messages: []) =~ "Messages from the person"
+      refute PromptBuilder.build_prompt(issue) =~ "Messages from the person"
+      assert reads() == []
+    end
+
+    test "Symphony's own notes are never given to a run as the person's words", %{issue: issue, record: record} do
+      {:ok, _note} = TicketEvents.record("r", "i", "note", %{text: "QA waits on the PR watcher."})
+      {:ok, _note} = TicketEvents.record("r", "i", "note", %{text: "An older note."}, actor: {:person, "the Director"})
+
+      refute PromptBuilder.build_prompt(issue, ticket_state: record, run_id: "run-1") =~ "Messages from the person"
+      assert reads() == []
+    end
+
+    test "a message's writer other than the Director is named", %{issue: issue, record: record} do
+      {:ok, _message} = Messages.send_message("r", "i", "Ship it narrow.", by: "Sam")
+      assert PromptBuilder.build_prompt(issue, ticket_state: record, run_id: "run-1") =~ "### Sam wrote, "
+    end
+  end
+
   describe "the ticket's history summary" do
     setup do
       :ok = RunStore.clear()
@@ -1066,23 +1182,6 @@ defmodule SymphonyElixir.PromptBuilderTest do
       end
     end
 
-    test "a run's prompt that carries the Director's note records that run read it, once", %{issue: issue, record: record, at: at} do
-      {:ok, note} = TicketEvents.record("r", "i", "note", %{text: "Keep the button."}, actor: {:person, "the Director"}, at: at)
-      :ok = RunStore.update_ticket_state("i", %{phase: "QA"})
-
-      # The workflow preview's summary and a prompt with no run read nothing.
-      PromptBuilder.build_prompt(issue, ticket_state: record)
-      PromptBuilder.build_prompt(issue, ticket_state: record, run_id: "run-preview", ticket_ledger: %{text: "sample", tokens: 1})
-      assert TicketEvents.query("i", types: ["note.read"]) == []
-
-      assert PromptBuilder.build_prompt(issue, ticket_state: record, run_id: "run-1") =~ "Keep the button."
-      PromptBuilder.build_compact_prompt(issue, ticket_state: record, run_id: "run-2")
-
-      note_id = note.id
-      assert [%{type: "note.read", actor: %{kind: :machine}, payload: %{note_id: ^note_id, run_id: "run-1"}}] = TicketEvents.query("i", types: ["note.read"])
-      assert %{read_by: %{run_id: "run-1"}} = "i" |> TicketEvents.query(limit: :all) |> Marks.note()
-    end
-
     test "every run kind's prompt carries the ticket's current brief", %{issue: issue, record: record, at: at} do
       impl = {:agent, "run-1", "implementation"}
       brief = %{text: "Each ticket says in plain words what it delivers.", walkthrough: "Read a ticket a run just finished."}
@@ -1104,23 +1203,6 @@ defmodule SymphonyElixir.PromptBuilderTest do
           refute prompt =~ "An older brief.", state
         end
       end
-    end
-
-    # A Codex prompt over the stdio soft limit is sent as the compact prompt, which carries the
-    # summary too: the run that is sent it has read the note, and the read names that run.
-    test "a Codex run sent the compact prompt carries the note and records its read", %{issue: issue, record: record, at: at} do
-      {:ok, note} = TicketEvents.record("r", "i", "note", %{text: "Keep the button."}, actor: {:person, "the Director"}, at: at)
-      :ok = RunStore.update_ticket_state("i", %{phase: "QA"})
-
-      {:ok, settings} = Schema.parse(%{execution: %{codex_stdio_prompt_soft_limit: 1}})
-      settings = %{settings | execution: %{settings.execution | harness: "codex", command: "codex app-server"}}
-
-      prompt = AgentRunner.build_first_turn_prompt(issue, settings: settings, ticket_state: record, run_id: "run-codex")
-
-      assert prompt =~ "You are working on Linear ticket `MT-LB`."
-      assert prompt =~ "Keep the button."
-      note_id = note.id
-      assert [%{type: "note.read", payload: %{note_id: ^note_id, run_id: "run-codex"}}] = TicketEvents.query("i", types: ["note.read"])
     end
 
     test "is not rendered when no ticket state is passed", %{issue: issue} do

@@ -1,8 +1,6 @@
 defmodule SymphonyElixir.MarksTest do
   use ExUnit.Case, async: true
 
-  import ExUnit.CaptureLog
-
   alias SymphonyElixir.{Marks, RunStore, TicketEvents, TicketState}
   alias SymphonyElixir.TicketEvents.Event
 
@@ -84,46 +82,28 @@ defmodule SymphonyElixir.MarksTest do
     assert TicketState.normalize(%{looked: "now"}).looked == %{}
   end
 
-  describe "note/1" do
-    test "is the newest note a person left, with the first run that read it", %{ticket: ticket} do
-      assert Marks.note(events(ticket)) == nil
+  describe "read/2's messages" do
+    test "counts the messages no run read yet, and serves the newest as the older app's note", %{ticket: ticket} do
+      read = fn -> Marks.read(RunStore.get_ticket_state(ticket.issue_id), events(ticket)) end
+      assert %{unread_messages: 0, note: nil} = read.()
 
+      # Symphony's notes and an agent's are not messages.
       record!(ticket, "note", %{text: "an agent's note"}, at: at(1), actor: {:agent, "run-0", "implementation"})
-      assert Marks.note(events(ticket)) == nil
+      record!(ticket, "note", %{text: "QA waits on the PR watcher"}, at: at(1))
+      assert %{unread_messages: 0, note: nil} = read.()
 
-      first = record!(ticket, "note", %{text: "Keep the button."}, at: at(2), actor: {:person, "the Director"})
+      first = record!(ticket, "message.sent", %{text: "Keep the button."}, at: at(2), actor: {:person, "the Director"})
+      second = record!(ticket, "message.sent", %{text: "Use the new copy."}, at: at(3), actor: {:person, "the Director"})
 
-      assert Marks.note(events(ticket)) == %{id: first.id, text: "Keep the button.", at: DateTime.to_iso8601(at(2)), by: "the Director", read_by: nil}
+      assert %{unread_messages: 2, note: note} = read.()
+      assert note == %{id: second.id, text: "Use the new copy.", at: DateTime.to_iso8601(at(3)), by: "the Director", read_by: nil}
 
-      :ok = Marks.record_note_read(ticket.repo_key, ticket.issue_id, "run-1")
-      :ok = Marks.record_note_read(ticket.repo_key, ticket.issue_id, "run-2")
-
-      assert %{id: id, read_by: %{run_id: "run-1", at: read_at}} = Marks.note(events(ticket))
+      record!(ticket, "message.read", %{message_id: second.id, run_id: "run-1"}, run_id: "run-1")
+      assert %{unread_messages: 1, note: %{id: id}} = read.()
       assert id == first.id
-      assert is_binary(read_at)
-      assert ticket |> events() |> Enum.count(&(&1.type == "note.read")) == 1
 
-      # A newer note replaces it, unread until the next run.
-      second = record!(ticket, "note", %{text: "Use the new copy."}, at: at(10), actor: {:person, "the Director"})
-      assert %{id: id, text: "Use the new copy.", read_by: nil} = Marks.note(events(ticket))
-      assert id == second.id
-
-      :ok = Marks.record_note_read(ticket.repo_key, ticket.issue_id, "run-3")
-      assert %{read_by: %{run_id: "run-3"}} = Marks.note(events(ticket))
-    end
-
-    test "a ticket with no note records no read", %{ticket: ticket} do
-      assert Marks.record_note_read(ticket.repo_key, ticket.issue_id, "run-1") == :ok
-      assert events(ticket) == []
-    end
-
-    test "a read the store refuses is logged, and the prompt goes on", %{ticket: ticket} do
-      record!(ticket, "note", %{text: "Keep the button."}, at: at(1), actor: {:person, "the Director"})
-
-      log = capture_log(fn -> assert Marks.record_note_read(ticket.repo_key, ticket.issue_id, " ") == :ok end)
-
-      assert log =~ "Could not record the note's read issue_id=#{ticket.issue_id}"
-      assert Marks.note(events(ticket)).read_by == nil
+      record!(ticket, "message.read", %{message_id: first.id, run_id: "run-1"}, run_id: "run-1")
+      assert %{unread_messages: 0, note: nil} = read.()
     end
   end
 

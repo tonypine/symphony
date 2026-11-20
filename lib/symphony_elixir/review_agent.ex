@@ -6,7 +6,7 @@ defmodule SymphonyElixir.ReviewAgent do
 
   require Logger
 
-  alias SymphonyElixir.{AgentTmpDir, Config, GitConfigCommands, ProjectGuides, PromptSafety, SSH}
+  alias SymphonyElixir.{AgentTmpDir, Config, GitConfigCommands, Messages, ProjectGuides, PromptSafety, SSH}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Decisions
   alias SymphonyElixir.EscalationRules
@@ -375,7 +375,12 @@ defmodule SymphonyElixir.ReviewAgent do
 
     with {:ok, agent_module} <- resolve_agent_module(opts, reviewer_settings) do
       decision_opts = [repo_key: Keyword.get(opts, :repo_key)]
-      prompt = reviewer_prompt(issue, source, decision_opts, reasons)
+      # The person's messages no run was given yet open the review's prompt, as they open every run's.
+      prompt =
+        issue
+        |> reviewer_prompt(source, decision_opts, reasons)
+        |> Messages.prepend_unread(Keyword.get(opts, :repo_key), issue.id, Keyword.get(opts, :run_id))
+
       message_collector = Keyword.get(opts, :review_agent_message_collector, self())
       on_message = reviewer_on_message(message_collector, Keyword.get(opts, :on_message))
 
