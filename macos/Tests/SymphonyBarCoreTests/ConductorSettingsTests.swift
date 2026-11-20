@@ -109,6 +109,35 @@ final class ConductorSettingsTests: XCTestCase {
         }
     }
 
+    // MARK: Grooming and the final check
+
+    func testReadsAndWritesGroomingsTimeLimitAndTheFinalCheckRounds() throws {
+        XCTAssertEqual(ConductorSettings().groomingTimeoutMs, 600_000)
+        XCTAssertEqual(ConductorSettings().groomingTimeoutSeconds, 600)
+        XCTAssertEqual(ConductorSettings().finalCheckRounds, 3)
+        XCTAssertEqual(try ConductorSettings.values(in: config).groomingTimeoutMs, 600_000)
+
+        let read = try ConductorSettings.values(in: "conductor:\n  grooming_timeout_ms: 300_500\n  final_check_rounds: 5\n")
+        XCTAssertEqual([read.groomingTimeoutMs, read.finalCheckRounds], [300_500, 5])
+        // An untouched field keeps a limit that is no whole number of seconds.
+        XCTAssertEqual(read.groomingTimeoutSeconds, 301)
+        XCTAssertEqual(read.setting(groomingTimeoutSeconds: 301), read)
+        XCTAssertEqual(read.setting(groomingTimeoutSeconds: 900).groomingTimeoutMs, 900_000)
+        XCTAssertThrowsError(try ConductorSettings.values(in: "conductor:\n  final_check_rounds: many\n")) { error in
+            XCTAssertEqual(error as? ConductorSettingsError, .unreadable(key: "conductor.final_check_rounds", value: "many"))
+        }
+
+        var changed = configSettings
+        changed.groomingTimeoutMs = 900_000
+        changed.finalCheckRounds = 1
+        let written = try ConductorSettings.updating(config, from: configSettings, to: changed)
+        XCTAssertEqual(try ConductorSettings.values(in: written), changed)
+        XCTAssertEqual(
+            Set(written.components(separatedBy: "\n")).subtracting(config.components(separatedBy: "\n")),
+            ["  grooming_timeout_ms: 900000", "  final_check_rounds: 1"]
+        )
+    }
+
     // MARK: Controls
 
     func testTheJunctionRowsAndTheirTitles() {
