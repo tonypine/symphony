@@ -51,6 +51,16 @@ defmodule SymphonyElixir.Conductor.Answer do
       first. A Grooming answer holds a plan or a question; one with neither is refused, and so is
       a plan that misses this shape. Its `instructions` may be null.
 
+    * `done` and `tree` (a turn's on a ticket with sub-tickets, `tree: true`: `sub_ticket_ended` and
+      `final_check`, `SymphonyElixir.Conductor.Tree`): `done` is `true` when the final check found
+      the whole ticket done, anything else reads as `false`; `tree` lists at most 10 operations on
+      the sub-tickets, each `{"op": ...}` with the `reason` it is made for (required, cut to 1,000
+      characters): `add` (a new sub-ticket: `title`, `ask`, the identifiers of the sub-tickets it
+      waits `after`, a `repo`), `cancel` (`ticket`, a sub-ticket's identifier), `rewrite`
+      (`ticket`, its new `ask`, and `stop: true` to stop its run first) and `stop` (`ticket`). An
+      operation that misses its shape is dropped and logged, and never fails the answer. Such a
+      turn's `instructions` may be null.
+
   A text longer than its limit is cut to it at a sentence or word boundary (`Facts.fit/2`) and
   logged, never refused; only an answer that is not readable (not JSON, a wrong type, a blank
   required text) is.
@@ -89,6 +99,9 @@ defmodule SymphonyElixir.Conductor.Answer do
   @check_walk_max 400
   @sub_ticket_ask_max 4_000
   @id_max 20
+  @operations ~w(add cancel rewrite stop)
+  @operations_max 10
+  @reason_max 1_000
 
   @type t :: %{
           instructions: String.t() | nil,
@@ -99,8 +112,16 @@ defmodule SymphonyElixir.Conductor.Answer do
           stop: %{reason: String.t()} | nil,
           blocks: [map()],
           route: %{to: String.t()} | %{to: String.t(), finding: String.t()} | ticket_route() | nil,
-          plan: plan() | nil
+          plan: plan() | nil,
+          done: boolean(),
+          tree: [operation()]
         }
+
+  @typedoc """
+  One operation on a ticket's sub-tickets (see the module doc): its `op`, its `reason`, and what the
+  op takes (`title`, `ask`, `after` and `repo`; or `ticket`, and for a `rewrite` its `ask` and `stop`).
+  """
+  @type operation :: %{required(:op) => String.t(), required(:reason) => String.t(), optional(atom()) => term()}
 
   @typedoc """
   A plan as the answer gave it (see the module doc), its keys as `plan.written` names them;
@@ -176,15 +197,17 @@ defmodule SymphonyElixir.Conductor.Answer do
   @doc """
   Checks one JSON object's text against the schema; `watch: true` for a watch turn's, `route: true`
   for a turn's at `after_qa_blocked`, whose every route is read, `route: :ticket` for a turn's
-  at a junction whose `ticket` route only is read, and `plan: true` for the Grooming turn's, whose
-  `plan` is read.
+  at a junction whose `ticket` route only is read, `plan: true` for the Grooming turn's, whose
+  `plan` is read, and `tree: true` for a turn's on a ticket with sub-tickets, whose `done` and
+  `tree` are read.
   """
   @spec parse(String.t(), keyword()) :: {:ok, t()} | {:error, String.t()}
   def parse(text, opts \\ []) when is_binary(text) do
     plan? = Keyword.get(opts, :plan, false)
+    tree? = Keyword.get(opts, :tree, false)
 
     with {:ok, %{} = answer} <- decode(text),
-         {:ok, instructions} <- instructions(Map.get(answer, "instructions"), plan? or Keyword.get(opts, :watch, false)),
+         {:ok, instructions} <- instructions(Map.get(answer, "instructions"), plan? or tree? or Keyword.get(opts, :watch, false)),
          {:ok, update} <- update(Map.get(answer, "update")),
          {:ok, refs} <- refs(Map.get(answer, "refs")),
          {:ok, ask_person} <- ask_person(Map.get(answer, "ask_person")),
@@ -192,9 +215,57 @@ defmodule SymphonyElixir.Conductor.Answer do
          {:ok, stop} <- stop(Map.get(answer, "stop")),
          {:ok, route} <- route(Map.get(answer, "route"), Keyword.get(opts, :route, false)),
          {:ok, plan} <- plan(Map.get(answer, "plan"), plan?, ask_person) do
-      answer = %{instructions: instructions, update: update, refs: refs, ask_person: ask_person, steer: steer, stop: stop, blocks: blocks(Map.get(answer, "blocks"))}
-      {:ok, Map.merge(answer, %{route: route, plan: plan})}
+      read = %{instructions: instructions, update: update, refs: refs, ask_person: ask_person, steer: steer, stop: stop, blocks: blocks(Map.get(answer, "blocks"))}
+      tree = if tree?, do: operations(Map.get(answer, "tree")), else: []
+      {:ok, Map.merge(read, %{route: route, plan: plan, done: tree? and Map.get(answer, "done") == true, tree: tree})}
     end
+  end
+
+  # The operations that are well formed, the first ten; the rest are dropped one by one and logged.
+  defp operations(operations) when is_list(operations) do
+    operations
+    |> Enum.with_index(1)
+    |> Enum.flat_map(fn {operation, place} -> operation |> operation("tree[#{place}]") |> kept("tree[#{place}]") end)
+    |> Enum.take(@operations_max)
+  end
+
+  defp operations(_operations), do: []
+
+  defp kept(nil, where) do
+    Logger.warning("Conductor answer's `#{where}` was dropped: it misses its shape or its reason")
+    []
+  end
+
+  defp kept(operation, _where), do: [operation]
+
+  defp operation(%{"op" => op} = operation, where) when op in @operations do
+    with reason when is_binary(reason) <- optional_text(operation, "reason", @reason_max, where),
+         %{} = read <- operation(op, operation, where) do
+      Map.merge(read, %{op: op, reason: reason})
+    else
+      _malformed -> nil
+    end
+  end
+
+  defp operation(_operation, _where), do: nil
+
+  defp operation("add", operation, where) do
+    with title when is_binary(title) <- optional_text(operation, "title", @ticket_title_max, where),
+         ask when is_binary(ask) <- optional_text(operation, "ask", @sub_ticket_ask_max, where) do
+      waits = for id <- List.wrap(Map.get(operation, "after")), is_binary(id), String.trim(id) != "", uniq: true, do: String.trim(id)
+      put_text(%{title: title, ask: ask, after: waits}, :repo, operation, 200, where)
+    end
+  end
+
+  defp operation("rewrite", operation, where) do
+    with ticket when is_binary(ticket) <- optional_text(operation, "ticket", 50, where),
+         ask when is_binary(ask) <- optional_text(operation, "ask", @sub_ticket_ask_max, where) do
+      %{ticket: ticket, ask: ask, stop: Map.get(operation, "stop") == true}
+    end
+  end
+
+  defp operation(_cancel_or_stop, operation, where) do
+    with ticket when is_binary(ticket) <- optional_text(operation, "ticket", 50, where), do: %{ticket: ticket}
   end
 
   # Read only for the Grooming turn, and only when it asked nothing: a question leaves the plan to

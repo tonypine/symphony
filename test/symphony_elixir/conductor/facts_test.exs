@@ -388,4 +388,54 @@ defmodule SymphonyElixir.Conductor.FactsTest do
       assert {:ok, %{junction: "grooming"}} = Facts.read(ctx.identifier, "grooming", token_cap: nil)
     end
   end
+
+  describe "at a turn on a ticket with sub-tickets" do
+    test "the document is the tree: the plan, each sub-ticket's standing, what merged and the rounds", ctx do
+      family = family!(ctx)
+      parent_id = family.parent.issue_id
+      {:ok, ask} = TicketPlan.record_ask(ctx.repo, parent_id, "Filter the list.")
+      {:ok, written} = TicketPlan.write(ctx.repo, parent_id, plan())
+      {:ok, _round} = TicketPlan.write(ctx.repo, parent_id, %{plan() | reason: "Final check: the docs are missing.", by: "recalibration"})
+      {:ok, _plan} = TicketPlan.write(ctx.repo, family.sibling.issue_id, %{plan() | shape: "single", summary: "The API takes a filter."})
+      {:ok, child_ask} = TicketPlan.record_ask(ctx.repo, family.sibling.issue_id, "Add it.", source: "parent", from: family.parent.issue_identifier)
+      agent = agent("run-s", "implementation")
+      {:ok, found} = TicketEvents.record(ctx.repo, family.sibling.issue_id, "note", %{text: "The endpoint pages by 50.", tag: "discovery"}, actor: agent)
+      url = "https://github.com/acme/app/pull/77"
+      :ok = SymphonyElixir.TicketPullRequest.put(ctx.repo, family.sibling.issue_id, %{pr_url: url})
+      :ok = SymphonyElixir.TicketPullRequest.mark_finished(ctx.repo, url, "merged")
+      known = %{id: family.sibling.issue_id, identifier: family.sibling.issue_identifier, state: "Done"}
+      parent = Map.put(family.parent, :sub_issues, [known, %{id: "untracked", identifier: "NEW-1", state: "Canceled"}])
+
+      facts = Facts.build(parent, "final_check", token_cap: nil)
+
+      assert %{schema: "symphony.conductor.facts/1", junction: "final_check", conductor: [], decisions: [], notes: [], answers: []} = facts
+      assert facts.focus =~ "The last sub-ticket ended"
+      assert facts.ticket == %{identifier: family.parent.issue_identifier, title: "Filters", url: nil, repo: ctx.repo, phase: "Waiting on sub-tickets", pull_request: "none"}
+      assert facts.asks == [%{event_id: ask.id, source: "linear", text: "Filter the list."}]
+      assert %{version: 2, shape: "split", summary: "Two sub-tickets: the API, then the list."} = facts.plan
+      assert facts.plan.event_id != written.id
+      assert facts.checks == [%{id: "c1", kind: "outcome", statement: "The list is filtered.", proof: "test", state: "open"}]
+      assert facts.rounds == %{made: 1, limit: 3, left: 2}
+
+      assert facts.sub_tickets == [
+               %{
+                 identifier: family.sibling.issue_identifier,
+                 title: "The API filter",
+                 phase: "Done",
+                 state: "Done",
+                 pull_request: "merged",
+                 plan: "The API takes a filter.",
+                 checks: [%{id: "c1", kind: "outcome", statement: "The list is filtered.", proof: "test", state: "open"}],
+                 notes: [%{event_id: found.id, tag: "discovery", text: "The endpoint pages by 50."}],
+                 asks: [%{event_id: child_ask.id, source: "parent", from: family.parent.issue_identifier, text: "Add it."}]
+               },
+               %{identifier: "NEW-1", state: "Canceled"}
+             ]
+
+      assert {:ok, _json} = Jason.encode(facts)
+      assert %{junction: "sub_ticket_ended", sub_tickets: [_tracked, _untracked]} = Facts.build(parent, "sub_ticket_ended", token_cap: nil)
+      # A ticket with no plan reads as at any other junction.
+      assert %{ticket: %{problem: _problem}} = Facts.build(ctx.record, "final_check", token_cap: nil)
+    end
+  end
 end

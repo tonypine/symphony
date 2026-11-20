@@ -1,8 +1,9 @@
 defmodule SymphonyElixir.Conductor.TreeTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.{Conductor, Questions, SubIssueWait, TicketPlan, TicketPullRequest, TicketSignals}
   alias SymphonyElixir.Conductor.{Facts, Grooming, Tree}
-  alias SymphonyElixir.{SubIssueWait, TicketPlan}
+  alias SymphonyElixir.Config.{Cache, Schema}
   alias SymphonyElixir.Tracker.Memory
 
   @waiting "Waiting on sub-tickets"
@@ -61,6 +62,12 @@ defmodule SymphonyElixir.Conductor.TreeTest do
   end
 
   defp script(call, replies), do: Process.put({:scripted, call}, replies)
+
+  defp append_symphony_yml!(yaml) do
+    path = Workflow.symphony_file_path()
+    File.write!(path, File.read!(path) <> yaml)
+    Cache.clear()
+  end
 
   defp plan(sub_tickets) do
     %{
@@ -272,5 +279,276 @@ defmodule SymphonyElixir.Conductor.TreeTest do
 
     assert %{title: "The sub-tickets could not be created", options: [%{action: "continue", recommended: true}, %{action: "cancel"}]} = Tree.question("Linear is down")
     assert capture_log(fn -> assert Tree.failed(nil, "tree-unrecorded", "why") == :retry end) =~ "Could not record a note"
+  end
+
+  describe "the close of a groomed ticket" do
+    @on %Schema.Conductor{enabled: true}
+    @off %Schema.Conductor{enabled: false}
+    @terminal ["Done", "Canceled"]
+
+    defp waiting!(ctx, sub_issues, sub_tickets \\ two()) do
+      {:ok, _event} = TicketPlan.write("default", ctx.issue_id, Map.merge(plan(sub_tickets), %{reason: "Grooming", by: "grooming"}))
+      :ok = TicketSignals.record_phase("default", ctx.issue_id, @waiting)
+      :ok = RunStore.update_ticket_state(ctx.issue_id, %{sub_issues: sub_issues, team: ctx.issue.team, assignee: "user-1"})
+      parent = %{ctx.issue | state: @waiting, sub_issues: sub_issues}
+      children = for sub <- sub_issues, do: %Issue{id: sub.id, identifier: sub.identifier, state: sub.state}
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [parent | children])
+      parent
+    end
+
+    defp ended, do: [%{id: "c1", identifier: "MT-1", state: "Done"}, %{id: "c2", identifier: "MT-2", state: "Canceled"}]
+
+    defp merged!(issue_id, state \\ "merged") do
+      url = "https://github.com/acme/app/pull/#{System.unique_integer([:positive])}"
+      :ok = TicketPullRequest.put("default", issue_id, %{pr_url: url})
+      if state != "open", do: :ok = TicketPullRequest.mark_finished("default", url, state)
+      :ok
+    end
+
+    test "waits while a sub-ticket is open, one in Backlog included, then owes the final check", ctx do
+      parent = waiting!(ctx, ended())
+      backlog = %{parent | sub_issues: ended() ++ [%{id: "c3", identifier: "MT-3", state: "Backlog"}]}
+
+      assert Tree.due(backlog, @terminal, conductor: @on) == nil
+      assert Tree.due(%{parent | sub_issues: :unknown}, @terminal, conductor: @on) == nil
+      assert Tree.due(nil, @terminal) == nil
+      assert Tree.due(parent, @terminal, conductor: @on) == :final_check
+      # With the Conductor or its junction off, the ticket closes on its sub-tickets alone.
+      assert Tree.due(parent, @terminal, conductor: @off) == :close
+      assert Tree.due(parent, @terminal, conductor: %{@on | junctions: ["grooming"]}) == :close
+      assert Tree.due(parent, @terminal) == :close
+      # No sub-ticket is left under it at all: nothing to check.
+      assert Tree.due(%{parent | sub_issues: []}, @terminal, conductor: @on) == :close
+
+      settings = Config.settings!()
+      assert SubIssueWait.close?(parent, @terminal, settings)
+      refute SubIssueWait.close?(backlog, @terminal, settings)
+      refute SubIssueWait.close?(%{parent | state: "Todo"}, @terminal, settings)
+    end
+
+    test "with a pull request of its own, closes only once that merged", ctx do
+      parent = waiting!(ctx, ended())
+      merged!(ctx.issue_id, "open")
+      assert Tree.due(parent, @terminal, conductor: @on) == nil
+      assert Tree.due(parent, @terminal, conductor: @off) == nil
+
+      # The merge's own mark counts, as the record's merged pull request does.
+      :ok = RunStore.put_merged_wait(ctx.issue_id)
+      assert Tree.due(parent, @terminal, conductor: @off) == :close
+      :ok = RunStore.delete_merged_wait(ctx.issue_id)
+      merged!(ctx.issue_id)
+      assert Tree.due(parent, @terminal, conductor: @on) == :final_check
+      merged!(ctx.issue_id, "closed")
+      assert Tree.due(parent, @terminal, conductor: @on) == nil
+    end
+
+    test "the orchestrator closes it by the rule when no final check is owed, and tends it when one is", ctx do
+      parent = waiting!(ctx, ended())
+      state = %Orchestrator.State{max_concurrent_agents: 1, running: %{}, claimed: MapSet.new(), retry_attempts: %{}}
+
+      Orchestrator.close_finished_parents_for_test([parent], state)
+      assert_received {:memory_tracker_state_update, parent_id, "Done"}
+      assert parent_id == ctx.issue_id
+      assert %{phase: "Done"} = RunStore.get_ticket_state(ctx.issue_id)
+
+      # With the Conductor on, the final check comes first: the poll reads the ticket again for it.
+      :ok = TicketSignals.record_phase("default", ctx.issue_id, @waiting)
+      append_symphony_yml!("conductor:\n  enabled: true\n")
+      Orchestrator.close_finished_parents_for_test([parent], state)
+      refute_received {:memory_tracker_state_update, _parent, "Done"}
+
+      Application.put_env(:symphony_elixir, :memory_tracker_fetch_issue_states_result, {:error, :timeout})
+      candidates = [parent, nil, %{parent | state: "Todo"}]
+      log = capture_log(fn -> Orchestrator.tend_groomed_parents_for_test(candidates, state) end)
+      assert log =~ "Failed to refresh a ticket before its Conductor turn; retrying next poll: issue_id=#{ctx.issue_id}"
+
+      # A sub-ticket filed since the cached poll: no turn is owed any more.
+      Application.delete_env(:symphony_elixir, :memory_tracker_fetch_issue_states_result)
+      filed = %{parent | sub_issues: ended() ++ [%{id: "c3", identifier: "MT-3", state: "Todo"}]}
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [filed])
+      assert capture_log(fn -> Orchestrator.tend_groomed_parents_for_test([parent], state) end) == ""
+      assert Facts.events(ctx.issue_id) |> Enum.filter(&(&1.type == "run.started")) == []
+    end
+  end
+
+  describe "the final check" do
+    defp final(ctx, reply, opts \\ []) do
+      turn = fn _plan, _issue, _run_id, _prompt -> reply end
+      Conductor.tend(ctx.parent, "final_check", "default", [settings: @on, turn: turn] ++ opts)
+    end
+
+    defp answered(attrs), do: {:ok, [Jason.encode!(Map.merge(%{"update" => "I checked the whole ticket.\n\nNext: it closes."}, attrs))], 7}
+    defp add(title, extra \\ %{}), do: Map.merge(%{"op" => "add", "title" => title, "ask" => "Build #{title}.", "reason" => "#{title} is missing."}, extra)
+
+    setup ctx do
+      %{parent: waiting!(ctx, ended())}
+    end
+
+    test "done moves the ticket to Done through its own edge, with a note", ctx do
+      :ok = RunStore.put_merged_wait(ctx.issue_id)
+      test = self()
+
+      turn = fn _plan, _issue, _run_id, prompt ->
+        send(test, {:prompt, prompt})
+        answered(%{"done" => true, "tree" => []})
+      end
+
+      assert Conductor.tend(ctx.parent, "final_check", "default", settings: @on, turn: turn) == :ok
+
+      assert_received {:prompt, prompt}
+      assert prompt =~ "This turn's junction is `final_check`: the last sub-ticket ended"
+      assert prompt =~ ~s("rounds": {)
+      refute prompt =~ "{{"
+      assert_received {:memory_tracker_state_update, parent_id, "Done"}
+      assert parent_id == ctx.issue_id
+      assert %{phase: "Done", phase_owner: :symphony} = RunStore.get_ticket_state(ctx.issue_id)
+      refute RunStore.merged_wait?(ctx.issue_id)
+      assert [note] = status_notes(ctx.issue_id)
+      assert note =~ "The final check passed"
+      assert [%{payload: %{junction: "final_check"}}] = Enum.filter(Facts.events(ctx.issue_id), &(&1.type == "conductor.update"))
+    end
+
+    test "sub-tickets it adds are a round: created, recorded on them and written on a new plan version", ctx do
+      adds = [add("The docs"), add("The export", %{"after" => ["MT-1", "MT-404"]})]
+
+      assert final(ctx, answered(%{"done" => false, "tree" => adds})) == :ok
+
+      assert_received {:memory_tracker_issue_created, "memory-issue-4", docs}
+      assert %{title: "The docs", state: "Todo", priority: 1, team: "MT", assignee_id: "user-1"} = docs
+      assert_received {:memory_tracker_issue_created, "memory-issue-5", %{title: "The export", state: "Backlog", parent_id: _parent}}
+      assert_received {:memory_tracker_blocked_by_added, "MT-1", "memory-issue-5"}
+      assert_received {:memory_tracker_state_update, "memory-issue-5", "Todo"}
+      refute_received {:memory_tracker_state_update, _parent, "Done"}
+
+      current = TicketPlan.current(ctx.issue_id)
+      assert %{version: 2, by: "recalibration", reason: "Final check: The docs is missing. The export is missing."} = current
+      assert [_s1, _s2, %{key: "s3", identifier: "MT-9004", after: []}, %{key: "s4", identifier: "MT-9005"}] = current.sub_tickets
+      events = Facts.events(ctx.issue_id)
+      assert Tree.rounds(events) == 1
+      assert Tree.round_limit(events, @on) == 3
+
+      by = ctx.issue.identifier
+
+      assert [%{payload: %{action: "added", reason: "The docs is missing.", by: ^by, target: "MT-9004"}}] =
+               Enum.filter(Facts.events("memory-issue-4"), &(&1.type == "conductor.intervention"))
+
+      assert [%{source: "parent", text: "Build The docs."}] = TicketPlan.ask("memory-issue-4")
+      assert [_c1, _c2, %{identifier: "MT-9004"}, %{identifier: "MT-9005"}] = RunStore.get_ticket_state(ctx.issue_id).sub_issues
+      assert status_notes(ctx.issue_id) == []
+    end
+
+    test "a 4th round is refused, and Symphony asks the person, whose answer lets one more through", ctx do
+      for round <- 1..3 do
+        {:ok, _event} = TicketPlan.write("default", ctx.issue_id, Map.merge(plan(two()), %{reason: "Final check: round #{round}", by: "recalibration"}))
+      end
+
+      assert final(ctx, answered(%{"done" => false, "tree" => [add("One more")]})) == :ok
+
+      refute_received {:memory_tracker_issue_created, _id, _attrs}
+      assert [%{title: "The final check still finds work after 3 rounds", options: options}] = Questions.open({:ticket, "default", ctx.issue_id})
+      assert [%{label: "Allow one more round"}, %{label: "Close it as it is", move: %{to: "Done"}}] = options
+      events = Facts.events(ctx.issue_id)
+      assert Tree.rounds(events) == 3
+      assert Tree.round_limit(events, @on) == 4
+      assert [asked] = status_notes(ctx.issue_id)
+      assert asked =~ "After 3 rounds the final check still wanted to add sub-tickets"
+
+      # The person let it go on: the next final check may add once more.
+      assert final(ctx, answered(%{"done" => false, "tree" => [add("One more")]})) == :ok
+      assert_received {:memory_tracker_issue_created, _id, %{title: "One more"}}
+      assert Tree.rounds(Facts.events(ctx.issue_id)) == 4
+    end
+
+    test "a check that changes nothing is counted twice, then the ticket closes on its sub-tickets alone", ctx do
+      assert Tree.due(ctx.parent, @terminal, conductor: @on) == :final_check
+
+      log = capture_log(fn -> assert final(ctx, {:error, :boom, 3}) == :ok end)
+      assert log =~ "Conductor turn wrote nothing"
+      assert ["The final check did not finish (failed). Symphony tries once more."] = status_notes(ctx.issue_id)
+      assert Tree.due(ctx.parent, @terminal, conductor: @on) == :final_check
+
+      # Neither done nor anything to add, and a sub-ticket that can't be created, change nothing either.
+      Application.put_env(:symphony_elixir, :memory_tracker_create_issue_result, {:error, :linear_down})
+      log = capture_log(fn -> assert final(ctx, answered(%{"done" => false, "tree" => [add("The docs")]})) == :ok end)
+      assert log =~ "A sub-ticket could not be added"
+      assert [_first, last] = status_notes(ctx.issue_id)
+      assert last == "The final check did not finish, 2 times (answered). This ticket closes on its sub-tickets alone."
+      assert Tree.due(ctx.parent, @terminal, conductor: @on) == :close
+      assert final(ctx, answered(%{"done" => false, "tree" => []})) == :ok
+    end
+
+    test "a question holds the ticket and carries nothing out, and a turn Symphony can't plan runs nothing", ctx do
+      ask = %{
+        "title" => "Is the export needed?",
+        "question" => "The ask does not say.",
+        "why" => "Nothing settles it.",
+        "if_unanswered" => "The ticket stays paused.",
+        "recommendation_reason" => "It was asked for.",
+        "options" => [
+          %{"label" => "Yes", "effect" => "The check runs again.", "recommended" => true, "action" => "continue"},
+          %{"label" => "Cancel", "effect" => "The ticket is cancelled.", "action" => "cancel"}
+        ]
+      }
+
+      assert final(ctx, answered(%{"done" => true, "tree" => [add("The docs")], "ask_person" => ask})) == :ok
+      assert [%{title: "Is the export needed?"}] = Questions.open({:ticket, "default", ctx.issue_id})
+      refute_received {:memory_tracker_issue_created, _id, _attrs}
+      refute_received {:memory_tracker_state_update, _parent, "Done"}
+      assert status_notes(ctx.issue_id) == []
+
+      no_turn = fn _plan, _issue, _run_id, _prompt -> flunk("no turn runs") end
+      assert Conductor.tend(ctx.parent, "final_check", "default", settings: @off, turn: no_turn) == :ok
+      assert Conductor.tend(ctx.parent, "final_check", "default", settings: @on, turn: no_turn, available?: fn _profile -> false end) == :ok
+      assert capture_log(fn -> assert Conductor.tend(ctx.parent, "final_check", "default", settings: @on, turn: :not_a_function) == :ok end) =~ "wrote nothing"
+      log = capture_log(fn -> assert Conductor.tend(ctx.parent, "final_check", "default", settings: @on, turn: no_turn, record: :unreadable) == :ok end)
+      assert log =~ "Conductor turn failed issue_id=#{ctx.issue_id}"
+      assert log =~ "junction=final_check"
+    end
+
+    test "a pass Linear refuses still moves Symphony's record, and one for a state the team lacks is counted", ctx do
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [{:error, :state_not_found}])
+      log = capture_log(fn -> assert final(ctx, answered(%{"done" => true})) == :ok end)
+      assert log =~ "The final check passed, but the ticket could not be moved to Done"
+      assert %{phase: @waiting} = RunStore.get_ticket_state(ctx.issue_id)
+      assert [_try] = status_notes(ctx.issue_id)
+    end
+
+    test "what can't be recorded or read back is logged, and the sub-ticket stays added", ctx do
+      answer = %{done: false, tree: [%{op: "add", title: "The docs", ask: "Write them.", after: [], reason: "Missing."}]}
+      ctx_of = &%{junction: "final_check", issue: &1, repo_key: &2, run_id: "run-1", conductor: @on}
+
+      script(:fetch_issue_states_by_ids, [{:error, :timeout}])
+      log = capture_log(fn -> assert Tree.apply(answer, ctx_of.(ctx.parent, "default"), tracker: Scripted) == :ok end)
+      assert log =~ "The added sub-tickets are not on Symphony's records yet"
+      assert Tree.rounds(Facts.events(ctx.issue_id)) == 1
+
+      # A ticket Symphony holds no record of, under no repo key: nothing can be written.
+      bare = %Issue{id: "tree-bare-#{System.unique_integer([:positive])}", identifier: "BARE-1", team: %{key: "MT"}, sub_issues: []}
+      {:ok, _event} = TicketPlan.write("default", bare.id, Map.merge(plan(two()), %{reason: "Grooming", by: "grooming"}))
+      log = capture_log(fn -> assert Tree.apply(answer, ctx_of.(bare, nil), []) == :ok end)
+      assert log =~ "Could not record conductor.intervention on MT-"
+      assert log =~ "The plan's new version could not be written issue_id=#{bare.id}"
+      assert Tree.rounds(Facts.events(bare.id)) == 0
+    end
+
+    test "a turn at sub_ticket_ended runs and carries nothing out yet", ctx do
+      turn = fn _plan, _issue, _run_id, _prompt -> answered(%{"done" => true, "tree" => [add("The docs")]}) end
+      assert Conductor.tend(ctx.parent, "sub_ticket_ended", "default", settings: @on, turn: turn) == :ok
+      refute_received {:memory_tracker_issue_created, _id, _attrs}
+      refute_received {:memory_tracker_state_update, _parent, "Done"}
+      assert status_notes(ctx.issue_id) == []
+    end
+
+    test "a sub-ticket that can't be linked or started is said on the parent", ctx do
+      Application.put_env(:symphony_elixir, :memory_tracker_add_blocked_by_result, {:error, :refused})
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [{:error, :refused}])
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_add_blocked_by_result) end)
+
+      capture_log(fn -> assert final(ctx, answered(%{"tree" => [add("The export", %{"after" => ["MT-1"]})]})) == :ok end)
+
+      assert [note] = status_notes(ctx.issue_id)
+      assert note =~ "Symphony added MT-9004 but could not make the link to MT-1 (:refused) or its move to Todo (:refused)"
+      assert Tree.rounds(Facts.events(ctx.issue_id)) == 1
+    end
   end
 end

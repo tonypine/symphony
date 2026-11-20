@@ -29,9 +29,11 @@ defmodule SymphonyElixir.SubIssueWait do
 
   require Logger
 
-  alias SymphonyElixir.{Config, RunStore, TicketPlan, TicketPullRequest}
+  alias SymphonyElixir.Conductor.Tree
+  alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.{RunStore, TicketPlan, TicketPullRequest}
   alias SymphonyElixir.{TicketSignals, TicketState, Tracker, TransitionGuard}
 
   @parked_from_state "In Progress"
@@ -202,33 +204,60 @@ defmodule SymphonyElixir.SubIssueWait do
   (`wait_on_merge/3`) or its record says its pull request merged (`pr_merged?/1`), so a ticket whose
   merge mark was lost still closes. One a person moved there, its pull request open, waits for them.
   Sub-issues a read did not carry (`:unknown`) never close it.
+
+  A groomed ticket (`groomed?/1`) follows its own rule (`SymphonyElixir.Conductor.Tree.due/3`):
+  its pull request merged or it never had one, no sub-ticket is left outside `terminal_states` (one
+  in `Backlog` holds it), and the Conductor's final check is not owed: that check closes the
+  ticket itself, and Symphony closes it here only when the check is off or could not be made.
   """
   @spec close?(Issue.t() | term(), Enumerable.t(String.t()), Schema.t() | term()) :: boolean()
   def close?(%Issue{sub_issues: sub_issues} = issue, terminal_states, settings) when is_list(sub_issues) do
-    in_state?(issue, settings) and not Issue.breakdown?(issue) and
-      started_sub_issues(issue, terminal_states) == [] and (RunStore.merged_wait?(issue.id) == true or pr_merged?(issue.id))
+    in_state?(issue, settings) and closes?(issue, terminal_states)
   end
 
   def close?(_issue, _terminal_states, _settings), do: false
 
-  @doc """
-  Whether Symphony's record of the ticket `issue_id` says its pull request merged: the PR and CI
-  watcher's last read of it (`pull_request`, kept once the watch ends, or `pr_watch`'s facts), or the
-  ticket's pull request record (`SymphonyElixir.TicketPullRequest`). False for a ticket with no record.
-  """
-  @spec pr_merged?(String.t() | term()) :: boolean()
-  def pr_merged?(issue_id) when is_binary(issue_id) do
-    case RunStore.get_ticket_state(issue_id) do
-      %{} = record -> record |> TicketState.normalize() |> record_merged?()
-      _none -> false
+  defp closes?(issue, terminal_states) do
+    if groomed?(issue) do
+      Tree.due(issue, terminal_states) == :close
+    else
+      not Issue.breakdown?(issue) and started_sub_issues(issue, terminal_states) == [] and
+        (RunStore.merged_wait?(issue.id) == true or pr_merged?(issue.id))
     end
   end
 
-  def pr_merged?(_issue_id), do: false
+  @doc "Whether Symphony's record of the ticket `issue_id` says its pull request merged (`pull_request/1`)."
+  @spec pr_merged?(String.t() | term()) :: boolean()
+  def pr_merged?(issue_id), do: pull_request(issue_id) == :merged
 
-  defp record_merged?(%{pull_request: %{state: "merged"}}), do: true
-  defp record_merged?(%{pr_watch: %{facts: %{pr: :merged}}}), do: true
-  defp record_merged?(record), do: match?(%{state: "merged"}, TicketPullRequest.get(record.repo_key, record.issue_id))
+  @doc """
+  What Symphony's record of the ticket `issue_id` says of its pull request: `:merged`, `:unmerged`
+  (it has one, open or closed) or `:none` (it never had one, or Symphony holds no record of the
+  ticket). The ticket's pull request record comes first (`SymphonyElixir.TicketPullRequest`), then
+  the PR and CI watcher's last read of it (`pull_request`, kept once the watch ends, and
+  `pr_watch`'s facts).
+  """
+  @spec pull_request(String.t() | term()) :: :merged | :unmerged | :none
+  def pull_request(issue_id) when is_binary(issue_id) do
+    case RunStore.get_ticket_state(issue_id) do
+      %{} = record -> record |> TicketState.normalize() |> recorded_pull_request()
+      _none -> :none
+    end
+  end
+
+  def pull_request(_issue_id), do: :none
+
+  defp recorded_pull_request(record) do
+    case TicketPullRequest.get(record.repo_key, record.issue_id) do
+      %{state: "merged"} -> :merged
+      %{state: "open"} -> :unmerged
+      own -> watched_pull_request(record, is_map(own))
+    end
+  end
+
+  defp watched_pull_request(%{pull_request: %{state: "merged"}}, _recorded?), do: :merged
+  defp watched_pull_request(%{pr_watch: %{facts: %{pr: :merged}}}, _recorded?), do: :merged
+  defp watched_pull_request(%{pull_request: pull_request}, recorded?), do: if(recorded? or is_map(pull_request), do: :unmerged, else: :none)
 
   @doc """
   True when `blocker` (a blocked-by link's `%{id, state}`) no longer blocks although it is not

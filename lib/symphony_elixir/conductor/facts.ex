@@ -48,16 +48,27 @@ defmodule SymphonyElixir.Conductor.Facts do
   vocabulary a plan names, each with what it means), `conductor` (what earlier turns wrote) and
   `budget`.
 
+  At `sub_ticket_ended` and `final_check`, on a groomed ticket, the document is the tree's (same
+  `schema`, `junction` and `focus`): `ticket` (identifier, title, URL, `repo`, `phase` and its own
+  `pull_request`: `merged`, `unmerged` or `none`), `asks`, the ticket's current `plan` and its
+  `checks` with where each stands, `sub_tickets` (each one's identifier, title and state, and for
+  one Symphony tracks its `phase`, its plan's `summary`, its `checks`, the notes a run tagged, its
+  `asks` and whether its `pull_request` merged), `rounds` (how many the final check `made`, the
+  `limit` and how many are `left`), the person's `decisions`, `notes` and `answers`, `conductor`
+  and `budget`.
+
   Each fact read from an event carries the event's id (`event_id`), so a claim built on it can be
   traced. Long texts are cut with a marker (`#{inspect(" [cut by Symphony]")}`), lists keep their
   newest entries, and no transcript is read, so a normal ticket's document stays well under 20,000
   tokens.
   """
 
-  alias SymphonyElixir.Conductor.Filing
-  alias SymphonyElixir.{Config, RunStore, TicketBrief, TicketEvents, TicketPlan, TicketState, Walkthrough, Workspace}
+  alias SymphonyElixir.Conductor.{Filing, Tree}
+  alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.{RunStore, SubIssueWait, TicketBrief, TicketChecks, TicketEvents}
   alias SymphonyElixir.TicketEvents.{Event, StepWord}
+  alias SymphonyElixir.{TicketPlan, TicketState, Walkthrough, Workspace}
 
   @schema "symphony.conductor.facts/1"
   @cut_marker " [cut by Symphony]"
@@ -74,6 +85,7 @@ defmodule SymphonyElixir.Conductor.Facts do
   @coding_kinds ["implementation", "rework"]
   @qa_blocked "after_qa_blocked"
   @grooming "grooming"
+  @tree_junctions ["sub_ticket_ended", "final_check"]
   @plan_text_max 6_000
   @max_siblings 20
   # The layers a plan names (`SymphonyElixir.Conductor.Answer.layers/0`), each with what it means.
@@ -162,7 +174,58 @@ defmodule SymphonyElixir.Conductor.Facts do
   def build(record, junction, opts \\ []) do
     record = TicketState.normalize(record)
     events = Keyword.get_lazy(opts, :events, fn -> events(record.issue_id) end)
-    if junction == @grooming, do: grooming(record, events, opts), else: junction_facts(record, junction, events, opts)
+
+    cond do
+      junction == @grooming -> grooming(record, events, opts)
+      junction in @tree_junctions and TicketPlan.groomed?(events) -> tree(record, junction, events, opts)
+      true -> junction_facts(record, junction, events, opts)
+    end
+  end
+
+  # A groomed ticket and its sub-tickets: what was planned, where each piece stands, what merged.
+  defp tree(record, junction, events, opts) do
+    records = Keyword.get_lazy(opts, :records, &records/0)
+    made = Tree.rounds(events)
+    limit = Tree.round_limit(events, Keyword.get_lazy(opts, :conductor, &Config.conductor_settings/0))
+
+    %{
+      schema: @schema,
+      junction: junction,
+      focus: Map.fetch!(@focus, junction),
+      ticket: Map.merge(family_ticket(record), %{url: record.url, repo: record.repo_key}),
+      asks: asks(events),
+      plan: plan_facts(TicketPlan.current(events)),
+      checks: checks(events),
+      sub_tickets: for(%{identifier: identifier} = sub <- List.wrap(record.sub_issues), do: sub_ticket(sub, Enum.find(records, &(&1.issue_identifier == identifier)))),
+      rounds: %{made: made, limit: limit, left: max(limit - made, 0)},
+      decisions: Enum.map(record.decisions, &%{title: &1.title, answer: cut(&1.answer, @text_max)}),
+      notes: person_notes(events),
+      answers: answers(events),
+      conductor: conductor(events),
+      budget: budget(record, events, opts)
+    }
+  end
+
+  defp family_ticket(record) do
+    pull_request = Atom.to_string(SubIssueWait.pull_request(record.issue_id))
+    %{identifier: record.issue_identifier, title: record.title, phase: record.phase, pull_request: pull_request}
+  end
+
+  # A sub-ticket as the parent's record lists it, with what its own record and events hold when Symphony tracks it.
+  defp sub_ticket(sub, %{issue_id: issue_id} = record) when is_binary(issue_id) do
+    plan = TicketPlan.current(issue_id)
+
+    record
+    |> family_ticket()
+    |> Map.merge(%{state: Map.get(sub, :state), plan: plan && plan.summary, checks: checks(issue_id), notes: tagged_notes(issue_id), asks: asks(issue_id)})
+  end
+
+  defp sub_ticket(sub, _untracked), do: %{identifier: sub.identifier, state: Map.get(sub, :state)}
+
+  defp asks(ticket), do: for(ask <- TicketPlan.ask(ticket), do: drop_nil(%{event_id: ask.event_id, source: ask.source, from: ask.from, text: cut(ask.text, @plan_text_max)}))
+
+  defp checks(ticket) do
+    for check <- TicketChecks.list(ticket), do: %{id: check.id, kind: check.kind, statement: check.statement, proof: check.proof, state: Atom.to_string(check.state)}
   end
 
   defp junction_facts(record, junction, events, opts) do

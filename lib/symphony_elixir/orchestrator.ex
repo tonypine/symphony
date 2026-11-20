@@ -77,6 +77,7 @@ defmodule SymphonyElixir.Orchestrator do
   }
 
   alias SymphonyElixir.Artifacts.Transcript
+  alias SymphonyElixir.Conductor.Tree, as: ConductorTree
   alias SymphonyElixir.Config.{Cache, Schema}
   alias SymphonyElixir.Dispatch.{Candidates, Order, Settings, Settle, Shadow}
   alias SymphonyElixir.EpicReview.MainCi
@@ -1811,6 +1812,7 @@ defmodule SymphonyElixir.Orchestrator do
           |> release_merging_ci_waits(issues)
           |> grant_step_turns()
           |> close_finished_parents(issues)
+          |> tend_groomed_parents(issues)
 
         if available_slots(state) > 0 or available_finishing_slots(state) > 0 or forced_pass_needed?(state, issues) do
           issues
@@ -2593,6 +2595,10 @@ defmodule SymphonyElixir.Orchestrator do
   @doc false
   @spec act_on_plan_comments_for_test(term(), [Issue.t()]) :: term()
   def act_on_plan_comments_for_test(%State{} = state, issues) when is_list(issues), do: state |> act_on_plan_comments(issues) |> await_tracker_tasks()
+
+  @doc false
+  @spec tend_groomed_parents_for_test([Issue.t()], term()) :: term()
+  def tend_groomed_parents_for_test(issues, %State{} = state) when is_list(issues), do: state |> tend_groomed_parents(issues) |> await_tracker_tasks()
 
   @doc false
   @spec close_finished_parents_for_test([Issue.t()], term()) :: term()
@@ -3986,6 +3992,48 @@ defmodule SymphonyElixir.Orchestrator do
 
       {:error, reason} ->
         Logger.warning("Failed to refresh issues waiting on sub-issues before closing them; retrying next poll reason=#{inspect(reason)}")
+    end
+  end
+
+  # A groomed ticket waiting on its sub-tickets is owed a Conductor turn once the last of them ended
+  # (`Conductor.Tree.due/3`): the final check, which closes it or adds what is missing. Like the close
+  # above it takes no slot and runs on every poll, one at a time per ticket, on a fresh read of the
+  # ticket. A paused ticket (a question the check asked) waits for its pause to lift.
+  defp tend_groomed_parents(%State{} = state, issues) do
+    settings = Config.settings!()
+    terminal_states = terminal_state_set()
+
+    Enum.reduce(issues, state, &tend_groomed_parent(&2, &1, settings, terminal_states))
+  end
+
+  defp tend_groomed_parent(%State{} = state, issue, settings, terminal_states) do
+    with %Issue{id: issue_id} <- issue,
+         true <- SubIssueWait.in_state?(issue, settings) and SubIssueWait.groomed?(issue),
+         false <- parent_busy?(state, :tree_turn, issue_id) or hold?(issue),
+         junction when is_binary(junction) <- tree_junction(issue, terminal_states) do
+      available? = conductor_available?(state, issue)
+      turn = fn -> tend_fresh(issue, junction, hold_repo_key(issue), terminal_states, available?) end
+      start_tracker_task(state, %{kind: :tree_turn, issue_ids: [issue_id]}, turn)
+    else
+      _not_owed -> state
+    end
+  end
+
+  defp tree_junction(issue, terminal_states) do
+    case ConductorTree.due(issue, terminal_states) do
+      :final_check -> "final_check"
+      _close_or_none -> nil
+    end
+  end
+
+  defp tend_fresh(%Issue{id: issue_id} = issue, junction, repo_key, terminal_states, available?) do
+    with {:ok, [%Issue{} = fresh | _rest]} <- Tracker.fetch_issue_states_by_ids([issue_id]),
+         fresh = %{fresh | repo_key: fresh.repo_key || repo_key},
+         ^junction <- tree_junction(fresh, terminal_states) do
+      Conductor.tend(fresh, junction, repo_key, available?: available?)
+    else
+      {:error, reason} -> Logger.warning("Failed to refresh a ticket before its Conductor turn; retrying next poll: #{issue_context(issue)} reason=#{inspect(reason)}")
+      _no_longer_owed -> :ok
     end
   end
 

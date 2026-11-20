@@ -98,7 +98,12 @@ defmodule SymphonyElixir.Conductor do
   @grooming_prompt_path Path.expand(Path.join([__DIR__, "..", "..", "priv", "conductor", "grooming_prompt.md"]))
   @external_resource @grooming_prompt_path
   @grooming_prompt File.read!(@grooming_prompt_path)
+  @tree_prompt_path Path.expand(Path.join([__DIR__, "..", "..", "priv", "conductor", "tree_prompt.md"]))
+  @external_resource @tree_prompt_path
+  @tree_prompt File.read!(@tree_prompt_path)
   @grooming "grooming"
+  @final_check "final_check"
+  @tree_junctions ["sub_ticket_ended", "final_check"]
   @junction_words %{
     "grooming" => "the ticket is new; you write its plan before any work starts",
     "message" => "a person sent a message on the ticket; you answer it",
@@ -360,6 +365,32 @@ defmodule SymphonyElixir.Conductor do
   end
 
   @doc """
+  The turn a groomed ticket with sub-tickets is owed outside any dispatch (`Tree.due/3`), run now:
+  `final_check` once its last sub-ticket ended. Nothing runs while the Conductor or the junction is
+  off, or no provider of `runs.conductor` can take a run now: the next poll asks again. The turn's
+  answer is carried out as it is recorded (`Tree.apply/3`), and a final check that changed nothing
+  is counted (`Tree.checked/3`). Always `:ok`. `opts`: `plan/4`'s and `run/3`'s.
+  """
+  @spec tend(Issue.t(), String.t(), String.t() | nil, keyword()) :: :ok
+  def tend(%Issue{id: issue_id} = issue, junction, repo_key, opts \\ []) when junction in @tree_junctions do
+    case plan_with(issue_id, repo_key, opts, fn _events -> junction end) do
+      nil -> :ok
+      plan -> tend_turn(plan, issue, opts)
+    end
+  rescue
+    error ->
+      Logger.warning("Conductor turn failed issue_id=#{issue_id} issue_identifier=#{issue.identifier} repo_key=#{repo_key} junction=#{junction}: #{Exception.message(error)}")
+      :ok
+  end
+
+  defp tend_turn(%{junction: junction} = plan, issue, opts) do
+    made = Tree.rounds(Facts.events(plan.issue_id))
+    {exit, held, _route} = turn(plan, issue, opts)
+    left = %{held: held, rounds: made, exit: exit}
+    if junction == @final_check, do: Tree.checked(plan.repo_key, issue, left), else: :ok
+  end
+
+  @doc """
   Runs the planned turn on `issue` and records what it wrote. Answers `:held` when the turn asked the
   person a question, which pauses the ticket, so the run that would follow does not start; `:again`
   when a Grooming turn left the ticket to its next dispatch, which starts at once (a try that
@@ -548,6 +579,7 @@ defmodule SymphonyElixir.Conductor do
 
   defp prompt_text("during_run"), do: @watch_prompt
   defp prompt_text(@grooming), do: @grooming_prompt
+  defp prompt_text(junction) when junction in @tree_junctions, do: @tree_prompt
   defp prompt_text(_junction), do: @prompt
 
   # The turn runs in a task of its own, bounded by `timeout_ms`: one that runs over is stopped, and
@@ -555,6 +587,7 @@ defmodule SymphonyElixir.Conductor do
   defp timed_turn(plan, issue, run_id, prompt, turn) do
     task = Task.Supervisor.async_nolink(SymphonyElixir.TaskSupervisor, fn -> turn.(plan, issue, run_id, prompt) end)
     read_opts = [watch: Map.has_key?(plan, :watch), route: route_read(plan.junction), plan: plan.junction == @grooming]
+    read_opts = Keyword.put(read_opts, :tree, plan.junction in @tree_junctions)
 
     case Task.yield(task, plan.timeout_ms) || Task.shutdown(task, :brutal_kill) do
       {:ok, {:ok, texts, tokens}} -> answer(texts, tokens, read_opts)
@@ -586,7 +619,7 @@ defmodule SymphonyElixir.Conductor do
     # The question goes first: the update's `question` block names the decision it opened.
     asked = ask_person(answer.ask_person, plan, issue, run_id)
     # A ticket that blocks this one holds it as a question does; only a question lets a watch stop the run.
-    held = if holds?(filed), do: :held, else: asked
+    held = if holds?(filed), do: :held, else: tend_tree(answer, plan, issue, run_id, asked, opts)
     record_update(with_filed(answer, filed, route), plan, run_id, {facts, record})
     steer(plan, answer, asked)
 
@@ -602,6 +635,21 @@ defmodule SymphonyElixir.Conductor do
     Logger.warning("Conductor turn wrote nothing #{context(issue, plan)} run_id=#{run_id} junction=#{plan.junction}: #{inspect(reason)}; the next run starts without it")
     {exit_text(reason), :ok, nil}
   end
+
+  # What a turn on a ticket with sub-tickets answered about its tree (`Tree.apply/3`), unless it
+  # asked the person, who then decides first. A round Symphony refuses becomes its own question.
+  defp tend_tree(answer, %{junction: junction} = plan, issue, run_id, :ok, opts) when junction in @tree_junctions do
+    settings = Keyword.get_lazy(opts, :settings, &Config.conductor_settings/0)
+    ctx = %{issue: issue, repo_key: plan.repo_key, run_id: run_id, junction: junction, conductor: settings}
+
+    with {:ask, request} <- Tree.apply(answer, ctx, Keyword.take(opts, [:tracker, :repo, :routed_teams, :observe])),
+         :held <- ask_person(request, plan, issue, run_id) do
+      Tree.asked(plan.repo_key, plan.issue_id)
+      :held
+    end
+  end
+
+  defp tend_tree(_answer, _plan, _issue, _run_id, asked, _opts), do: asked
 
   # The answer's route when Symphony takes it now: one of the plan's open routes, and never beside a
   # question, which leaves the choice to the person. A route past its bound is dropped and logged.
@@ -868,6 +916,8 @@ defmodule SymphonyElixir.Conductor do
 
   defp option_move(%{action: action}, _settings, _state, _head, _run_id) when action in ["continue", "rerun"], do: {:ok, nil}
   defp option_move(%{action: "cancel"}, _settings, _state, _head, _run_id), do: {:ok, %{to: @canceled}}
+  # Symphony's own option, when the final check may add no more: the ticket closes as it is.
+  defp option_move(%{action: "close"}, _settings, _state, _head, _run_id), do: {:ok, %{to: "Done"}}
 
   defp option_move(%{action: "rework", finding: finding}, _settings, state, _head, run_id) do
     if state == @rework,
