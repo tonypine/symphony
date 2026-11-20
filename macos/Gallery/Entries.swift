@@ -158,8 +158,8 @@ let galleryEntries: [GalleryEntry] = [
         files: ["SymphonyBarUI/BriefPanel.swift", "SymphonyBarCore/BriefPanel.swift", "SymphonyBarUI/DesignSystem/StoryRow.swift"]),
     GalleryEntry(
         id: "action-rail", title: "Action rail, Move to… and Start now", kind: .component,
-        prefixes: ["action-rail-", "move-sheet", "start-now-"],
-        files: ["SymphonyBar/ActionRail.swift", "SymphonyBar/InboxMoveViews.swift", "SymphonyBarCore/TicketMoves", "SymphonyBarCore/TicketActionRail"]),
+        prefixes: ["action-rail-", "move-sheet", "start-now-", "cancel-ticket-sheet"],
+        files: ["SymphonyBar/ActionRail.swift", "SymphonyBar/InboxMoveViews.swift", "SymphonyBarCore/TicketMoves", "SymphonyBarCore/TicketActionRail", "SymphonyBarCore/CancelTicket.swift"]),
     GalleryEntry(
         id: "run-path", title: "Run path", kind: .component, prefixes: ["run-path-"],
         files: ["SymphonyBarUI/DesignSystem/ConductorBlockComponents.swift", "SymphonyBarCore/ConductorPathReading.swift"]),

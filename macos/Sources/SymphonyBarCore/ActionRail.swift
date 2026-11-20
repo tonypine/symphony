@@ -55,7 +55,8 @@ public struct TicketMoves: Equatable {
 /// first and primary, then Open Pull Request when the ticket has one and Force (or Stop Forcing); on a desktop Stop
 /// Run… after a separator; then More: the rarer moves, a separator, Copy Link, Copy Workspace Path and Open in Linear,
 /// and on a laptop Stop Run… last under a separator, in the destructive style. Every move Symphony judges comes from
-/// the read's `moves`; a move the read refuses stays in its place, disabled, with the read's reason. The links come from
+/// the read's `moves`; a move the read refuses stays in its place, disabled, with the read's reason, but for Cancel
+/// Ticket…, which a closed ticket doesn't offer. The links come from
 /// the ticket read too (its pull request, its Linear link, its workspace) and are left out when it has none.
 public struct TicketActionRail: Equatable {
     /// The moves the rail offers, by their name in the read; the last four are links the read carries, not moves it
@@ -131,6 +132,8 @@ public struct TicketActionRail: Equatable {
         case restart
         /// The box above the timeline, to write to the ticket.
         case note
+        /// Cancel Ticket…'s consequence sheet, with its note (TP-1317).
+        case cancel
     }
 
     /// What pressing a move asks for.
@@ -139,20 +142,10 @@ public struct TicketActionRail: Equatable {
         case send(ControlAction)
         /// The consequence sheet, which sends the call from its own button.
         case sheet(Sheet)
-        /// A yes-or-no confirmation, then the call.
-        case confirm(Confirmation)
         /// A link opened in its own app: the pull request on GitHub, the ticket in Linear.
         case open(URL)
         /// Text put on the pasteboard: the ticket's link, its workspace path.
         case copy(String)
-    }
-
-    /// A move that asks before it goes and has no sheet of its own.
-    public struct Confirmation: Equatable {
-        public var title: String
-        public var message: String
-        public var button: String
-        public var action: ControlAction
     }
 
     /// Why a move the read refuses without a reason can't act.
@@ -192,6 +185,11 @@ public struct TicketActionRail: Equatable {
             case .openPullRequest: return links.pullRequest.map { _ in Item(move: move, states: []) }
             case .copyLink, .openInLinear: return links.linear.map { _ in Item(move: move, states: []) }
             case .copyWorkspacePath: return links.workspacePath.map { _ in Item(move: move, states: []) }
+            case .cancel:
+                // Symphony refuses Cancel only for a closed ticket (Done or Canceled) or one it has no record of: there
+                // is nothing to cancel, so the rail doesn't offer it (TP-1317).
+                guard moves[move.rawValue]?.allowed == true else { return nil }
+                return Item(move: move, states: [])
             default:
                 guard let read = moves[move.rawValue] else { return nil }
                 return Item(move: move, reason: read.allowed ? nil : (read.reason ?? Self.unknownReason), states: read.states)
@@ -230,13 +228,7 @@ public struct TicketActionRail: Equatable {
         case .restart: return .sheet(.restart)
         case .unblock: return .send(.unblock(identifier))
         case .note: return .sheet(.note)
-        case .cancel:
-            return .confirm(Confirmation(
-                title: "Cancel \(identifier)?",
-                message: "Symphony moves \(identifier) to Cancelled, ends any run working on it and closes its pull request.",
-                button: "Cancel Ticket",
-                action: .cancel(identifier, note: nil)
-            ))
+        case .cancel: return .sheet(.cancel)
         case .openPullRequest: return links.pullRequest.map(Request.open)
         case .openInLinear: return links.linear.map(Request.open)
         case .copyLink: return links.linear.map { .copy($0.absoluteString) }

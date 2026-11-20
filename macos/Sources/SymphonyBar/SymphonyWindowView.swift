@@ -234,6 +234,12 @@ final class SymphonyWindowModel: ObservableObject {
     @Published var moveInFlight = false
     /// What went wrong with it, shown in the sheet.
     @Published var moveError: String?
+    /// The Cancel Ticket… sheet shown (TP-1317); nothing is cancelled until its button is pressed.
+    @Published var ticketCancelSheet: CancelTicketSheet?
+    /// True while the sheet's cancel is on its way to Symphony.
+    @Published var cancelInFlight = false
+    /// Why Symphony refused it, or what went wrong, shown in the sheet.
+    @Published var cancelError: String?
     /// The banner a Move to… showed, which the ticket page and Tickets show while it stays.
     @Published var moveBannerID: UUID?
     /// The ticket whose Start now (TP-1330) is on its way to Symphony; its button shows progress meanwhile.
@@ -1119,6 +1125,7 @@ struct SymphonyWindowView: View {
             }
             .modifier(StopRunSheetPresenter(model: model))
             .modifier(MoveSheetPresenter(model: model))
+            .modifier(CancelTicketSheetPresenter(model: model))
             .modifier(DispatchSheetsPresenter(model: model))
         }
         .ignoresSafeArea(.container, edges: .top)

@@ -8,14 +8,12 @@ import SymphonyBarCore
 /// reason under it without a press. The rail keeps no state of its own: it changes when the read does.
 ///
 /// Pressing a move hands `perform` its request: a control call to send, the consequence sheet to show first, a link to
-/// open or text to copy. Cancel Ticket… asks here before its call goes. The rail wraps onto a second line before any
-/// button shrinks.
+/// open or text to copy. The rail wraps onto a second line before any button shrinks.
 struct ActionRail: View {
     let rail: TicketActionRail
     let perform: (TicketActionRail.Request) -> Void
     /// Snapshots only: More drawn open, as a list under its button (`ImageRenderer` can't draw a menu).
     var moreOpen = false
-    @State private var confirming: TicketActionRail.Confirmation?
 
     /// The glyph before Open Pull Request (the catalog's `pr`).
     static let pullRequestGlyph = "arrow.triangle.pull"
@@ -41,16 +39,6 @@ struct ActionRail: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Moves")
-        .confirmationDialog(
-            confirming?.title ?? "",
-            isPresented: Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } }),
-            presenting: confirming
-        ) { confirmation in
-            Button(confirmation.button, role: .destructive) { perform(.send(confirmation.action)) }
-            Button("Keep It", role: .cancel) {}
-        } message: { confirmation in
-            Text(confirmation.message)
-        }
     }
 
     /// A move on the rail: the catalog's medium button, disabled with the read's reason under it.
@@ -72,11 +60,7 @@ struct ActionRail: View {
     }
 
     private func press(_ move: TicketActionRail.Move, _ state: String?) {
-        switch rail.request(move, state: state) {
-        case let .confirm(confirmation)?: confirming = confirmation
-        case let request?: perform(request)
-        case nil: break
-        }
+        if let request = rail.request(move, state: state) { perform(request) }
     }
 }
 
