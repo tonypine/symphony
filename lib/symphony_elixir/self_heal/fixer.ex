@@ -37,7 +37,10 @@ defmodule SymphonyElixir.SelfHeal.Fixer do
   @priority 2
   @todo_state "Todo"
 
-  @doc "Files the fix ticket `attrs` (a `scope`, a `component`, a `title` and a `description`)."
+  @doc """
+  Files the fix ticket `attrs` (a `scope`, a `component`, a `title` and a `description`), under
+  the ticket `parent_id` names when it has one.
+  """
   @spec create(map(), keyword()) :: {:ok, map()} | {:error, term()}
   def create(%{scope: scope} = attrs, opts) do
     with {:ok, repo} <- repo(scope, opts),
@@ -49,7 +52,8 @@ defmodule SymphonyElixir.SelfHeal.Fixer do
         team: team,
         project: project,
         assignee_id: assignee_id(scope, repo, Map.get(attrs, :issue), opts),
-        state: @todo_state
+        state: @todo_state,
+        parent_id: Map.get(attrs, :parent_id)
       }
       |> Linear.Adapter.create_issue()
       |> labelled(Map.get(attrs, :labels, []))

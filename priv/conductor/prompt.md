@@ -100,7 +100,7 @@ ticket's to solve, instead of Rework, a rerun or a question. Prefer it to Rework
   tool), doubling what Code Review and QA must judge.
 Its shape, every field required but `existing` and `evidence`:
 
-{"to": "ticket", "relation": "blocks" or "follow_up", "repo": "<a repo key from filings.repos>",
+{"to": "ticket", "relation": "<one of filings.relations>", "repo": "<a repo key from filings.repos>",
  "title": "<at most 120 characters>", "problem": "<what is wrong and where, from the facts>",
  "wanted": "<the behaviour wanted>", "acceptance": ["<one criterion>", ...],
  "walkthrough": ["<a step a person takes, with what they see>", ...],
@@ -110,6 +110,11 @@ Its shape, every field required but `existing` and `evidence`:
   Use it when this ticket cannot get a real result until the problem is fixed.
 - `follow_up`: the new ticket is linked and this ticket goes on at once. Use it when this ticket
   can finish without it.
+- When `filings.relations` lists `before` and `after` instead, this ticket has a plan and the new
+  ticket becomes a sub-ticket of it, which must end before this ticket closes. `before`: this
+  ticket waits for it to be Done, then continues from where it stopped. `after`: this ticket goes
+  on at once, and the sub-ticket starts once this ticket's pull request has merged; use it for work
+  that builds on this ticket's code.
 - `repo` may be any repo Symphony manages (`filings.repos`): a ticket of one repo may file against
   Symphony's own.
 - `existing`: an open ticket you know already covers the problem; Symphony links that one instead

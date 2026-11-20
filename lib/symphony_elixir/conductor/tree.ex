@@ -306,6 +306,16 @@ defmodule SymphonyElixir.Conductor.Tree do
     end
   end
 
+  @doc """
+  Puts the ticket `issue_id` and its new sub-tickets `children` on Symphony's records now: each is
+  read from the tracker by id and observed under its repo, so the parent lists its sub-tickets and
+  each names its parent before any poll. `opts`: `tracker` and `observe`, as `split/3`'s.
+  """
+  @spec observed(String.t(), String.t(), [child()], keyword()) :: :ok | {:error, String.t()}
+  def observed(repo_key, issue_id, children, opts) do
+    observe([issue_id | Enum.map(children, & &1.id)], children, repo_key, opts)
+  end
+
   defp park(repo_key, %Issue{id: issue_id} = issue, opts) do
     ctx = %{repo_key: repo_key, settings: Config.settings_for_repo!(repo_key), issue_identifier: issue.identifier}
 

@@ -45,7 +45,8 @@ defmodule SymphonyElixir.Conductor do
   `after_rework` and `during_run` its route may file a ticket for a problem that is not this
   ticket's to solve (`SymphonyElixir.Conductor.Filing`): one that `blocks` holds the ticket on it, as
   a question does (the run the turn came before does not start, and the QA pass asks nothing of
-  its own), and a `follow_up` leaves it going; the update then names the ticket. A dispatch pause
+  its own), and a `follow_up` leaves it going; the update then names the ticket. On a groomed
+  ticket the ticket filed is a sub-ticket of it, pointing `before` (it holds the ticket) or `after`. A dispatch pause
   stops it as it stops any run. With `conductor.enabled` off, nothing here reads or writes anything.
 
   Grooming is the one turn that differs. It runs before a ticket's first run, in the ticket's
@@ -702,7 +703,7 @@ defmodule SymphonyElixir.Conductor do
   defp ticket_route(route, _plan, _issue, _run_id, _opts), do: {route, nil}
 
   # A filed ticket that blocks this one holds it, unless its hold could not be set.
-  defp holds?(%{relation: "blocks"} = filed), do: not Map.has_key?(filed, :unheld)
+  defp holds?(%{relation: relation} = filed) when relation in ["blocks", "before"], do: not Map.has_key?(filed, :unheld)
   defp holds?(_filed), do: false
 
   # The update names the ticket the route filed, before its `Next:` paragraph, and is written even

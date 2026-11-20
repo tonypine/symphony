@@ -14,6 +14,18 @@ defmodule SymphonyElixir.Conductor.Filing do
       in;
     * `follow_up`: the two are linked as related, and the current ticket goes on at once.
 
+  On a groomed ticket (`SymphonyElixir.TicketPlan`) the ticket is filed as a **sub-ticket** of the
+  current one, and the relation says where it points:
+
+    * `before`: the current ticket is held on it, as `blocks` holds it;
+    * `after`: the current ticket goes on at once, and the sub-ticket is linked as blocked by the
+      current ticket, so it starts once the current ticket's pull request has merged.
+
+  A sub-ticket holds the current ticket's close (`SymphonyElixir.Conductor.Tree`). Its description
+  is recorded on it as its ask (`ask.recorded`, `source: parent`), and Symphony's records take it
+  at once. `blocks` and `follow_up` read as `before` and `after` there, and on a ticket with no
+  plan `before` and `after` are refused, so such a ticket keeps what it had.
+
   Symphony assembles the description in the house format (Problem, Wanted behaviour, Acceptance
   criteria, User walkthrough, and the evidence from the current ticket's events, naming the ticket
   it came from) and files it through the self-heal lane's filer (`SymphonyElixir.SelfHeal.file_ticket/3`),
@@ -36,15 +48,23 @@ defmodule SymphonyElixir.Conductor.Filing do
 
   require Logger
 
-  alias SymphonyElixir.Conductor.Facts
-  alias SymphonyElixir.{Config, SelfHeal, TicketEvents}
+  alias SymphonyElixir.Conductor.{Facts, Tree}
+  alias SymphonyElixir.{Config, SelfHeal, TicketEvents, TicketPlan}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.TicketEvents.{Event, Summary}
 
   @label "tech debt"
   @urgent 1
-  @relations %{"blocks" => "split_off", "follow_up" => "follow_up"}
+  # Each relation: the kind its `ticket.filed` records, and the self-heal lane's relation it is filed with.
+  @relations %{
+    "blocks" => {"split_off", "blocks"},
+    "follow_up" => {"follow_up", "follow_up"},
+    "before" => {"split_off", "blocks"},
+    "after" => {"follow_up", "follow_up"}
+  }
+  @plain ["blocks", "follow_up"]
+  @child %{"blocks" => "before", "follow_up" => "after", "before" => "before", "after" => "after"}
   @sections [
     title: "a title",
     problem: "its problem",
@@ -72,14 +92,19 @@ defmodule SymphonyElixir.Conductor.Filing do
   @doc """
   What the turn's facts say about the route (`filings`): whether it is `open` now and, when it is
   not, why (`closed`); the tickets the Conductor already filed or linked for this ticket (`filed`);
-  how many filings remain (`left`); and the repos a ticket may be filed in (`repos`). `opts`:
+  how many filings remain (`left`); the relations it takes on this ticket (`relations`: `before` and
+  `after` on a groomed ticket, `blocks` and `follow_up` on any other); and the repos a ticket may be
+  filed in (`repos`). `opts`:
   `repos` (the managed repo keys, default `Config.repos/0`'s).
   """
   @spec facts([Event.t()], Schema.Conductor.t(), keyword()) :: map()
   def facts(events, %Schema.Conductor{} = settings, opts \\ []) when is_list(events) do
-    filed = filed(events)
+    groomed? = TicketPlan.groomed?(events)
+    # What a groomed ticket filed is a sub-ticket: it reads as pointing before or after.
+    filed = for ticket <- filed(events), do: if(groomed?, do: %{ticket | relation: Map.fetch!(@child, ticket.relation)}, else: ticket)
 
     %{
+      relations: if(groomed?, do: ["before", "after"], else: @plain),
       open: closed(events, settings) == nil,
       closed: closed(events, settings),
       filed: Enum.map(filed, &Map.take(&1, [:identifier, :relation, :repo, :title, :existing, :event_id])),
@@ -100,7 +125,7 @@ defmodule SymphonyElixir.Conductor.Filing do
   @spec file(map(), map(), Schema.Conductor.t(), keyword()) :: {:ok, filed()} | {:error, String.t()}
   def file(%{to: "ticket"} = route, %{issue: %Issue{} = issue, events: events} = context, %Schema.Conductor{} = settings, opts \\ []) do
     with nil <- closed(events, settings),
-         {:ok, relation} <- relation(route),
+         {:ok, relation} <- relation(route, TicketPlan.groomed?(events)),
          :ok <- managed(route.repo, opts),
          :ok <- sections(route) do
       existing = existing(route, issue, events, opts)
@@ -136,6 +161,9 @@ defmodule SymphonyElixir.Conductor.Filing do
       {"blocks", nil} -> "#{verb} as blocking this ticket: #{title}.#{because} This ticket waits for it to be Done, then continues where it stopped."
       {"blocks", why} -> "#{verb} as blocking this ticket: #{title}.#{because} This ticket could not be held on it (#{why}), so it goes on for now."
       {"follow_up", _unheld} -> "#{verb} as a follow-up: #{title}.#{because} This ticket goes on without it."
+      {"before", nil} -> "#{verb} as a sub-ticket to do first: #{title}.#{because} This ticket waits for it to be Done, then continues where it stopped."
+      {"before", why} -> "#{verb} as a sub-ticket to do first: #{title}.#{because} This ticket could not be held on it (#{why}), so it goes on for now."
+      {"after", _unheld} -> "#{verb} as a sub-ticket to do after: #{title}.#{because} This ticket goes on, and the sub-ticket starts once this ticket's pull request has merged."
     end
   end
 
@@ -172,8 +200,11 @@ defmodule SymphonyElixir.Conductor.Filing do
     Enum.find_value(events, fn event -> if event.type == "ticket.filed_from", do: field(event, :from) end)
   end
 
-  defp relation(%{relation: relation}) when is_map_key(@relations, relation), do: {:ok, relation}
-  defp relation(_route), do: "the ticket route's relation must be blocks or follow_up"
+  # On a groomed ticket the ticket is a sub-ticket, pointing before or after; elsewhere it blocks or follows up.
+  defp relation(%{relation: relation}, true) when is_map_key(@child, relation), do: {:ok, Map.fetch!(@child, relation)}
+  defp relation(_route, true), do: "the ticket route's relation must be before or after"
+  defp relation(%{relation: relation}, false) when relation in @plain, do: {:ok, relation}
+  defp relation(_route, false), do: "the ticket route's relation must be blocks or follow_up"
 
   defp managed(repo, opts) when is_binary(repo) do
     case Keyword.get(opts, :repo, &Config.repo/1).(repo) do
@@ -258,21 +289,52 @@ defmodule SymphonyElixir.Conductor.Filing do
   end
 
   defp file_ticket(route, relation, existing, %{issue: issue, repo_key: repo_key} = context, opts) do
+    {_kind, lane} = Map.fetch!(@relations, relation)
+    description = description(route, relation, context)
+
     ticket = %{
       scope: route.repo,
-      relation: relation,
+      relation: lane,
       title: route.title,
-      description: description(route, relation, context),
+      description: description,
       labels: [@label],
-      existing: existing && existing.identifier
+      existing: existing && existing.identifier,
+      parent_id: if(relation not in @plain, do: issue.id)
     }
 
+    child = &(&1 |> with_url(existing) |> sub_ticket(relation, description, route, context, opts))
+
     case SelfHeal.file_ticket(issue, ticket, [repo_key: repo_key, priority: @urgent] ++ Keyword.take(opts, [:fixer, :hold])) do
-      {:ok, filed} -> {:ok, Map.merge(%{url: existing && existing.url}, filed)}
-      {:error, reason, filed} -> {:error, reason, Map.merge(%{url: existing && existing.url}, filed)}
+      {:ok, filed} -> {:ok, child.(filed)}
+      {:error, reason, filed} -> {:error, reason, child.(filed)}
       {:error, _reason} = error -> error
     end
   end
+
+  defp with_url(filed, existing), do: Map.merge(%{url: existing && existing.url}, filed)
+
+  # A sub-ticket just created under a groomed ticket: its ask is recorded on it from its parent, one
+  # that comes after waits on its parent's merge, and Symphony's records take it now, not at a poll.
+  defp sub_ticket(%{existing: false, id: id, identifier: identifier} = filed, relation, description, route, context, opts)
+       when relation not in @plain and is_binary(id) do
+    %{issue: issue, repo_key: repo_key} = context
+    from = issue.identifier || issue.id
+    child = %{id: id, identifier: identifier, repo: route.repo}
+
+    attempts = [
+      {"record its ask", fn -> TicketPlan.record_ask(route.repo, id, String.slice(description, 0, 20_000), source: "parent", from: from, idempotency: "ask.recorded:parent") end},
+      {"link it as blocked by #{from}", fn -> if(relation == "after", do: tracker(opts).add_blocked_by(from, id), else: :ok) end},
+      {"put it on Symphony's records", fn -> Tree.observed(repo_key, issue.id, [child], Keyword.take(opts, [:tracker, :observe])) end}
+    ]
+
+    for {what, attempt} <- attempts, {:error, reason} <- [attempt.()] do
+      Logger.warning("Conductor filed the sub-ticket #{identifier} of #{from} but could not #{what}: #{inspect(reason)}")
+    end
+
+    filed
+  end
+
+  defp sub_ticket(filed, _relation, _description, _route, _context, _opts), do: filed
 
   @doc """
   The description Symphony writes for the ticket `route` names, filed from `context`'s issue: the
@@ -287,6 +349,8 @@ defmodule SymphonyElixir.Conductor.Filing do
       case relation do
         "blocks" -> "The Conductor filed this ticket from #{from}, which waits for it to be Done and then continues."
         "follow_up" -> "The Conductor filed this ticket from #{from} as a follow-up; #{from} goes on without it."
+        "before" -> "The Conductor filed this sub-ticket of #{from}, which waits for it to be Done and then continues."
+        "after" -> "The Conductor filed this sub-ticket of #{from} to do after it: it starts once #{from}'s pull request has merged."
       end
 
     [
@@ -317,7 +381,7 @@ defmodule SymphonyElixir.Conductor.Filing do
 
   defp record_filed(ticket, route, relation, %{issue: issue, repo_key: repo_key, run_id: run_id}) do
     filed = %{identifier: ticket.identifier, url: Map.get(ticket, :url), relation: relation, title: route.title, existing: ticket.existing, repo: route.repo}
-    kind = Map.fetch!(@relations, relation)
+    {kind, _lane} = Map.fetch!(@relations, relation)
 
     payload =
       %{identifier: filed.identifier, kind: kind, title: String.slice(filed.title, 0, 300), by: "conductor", repo: filed.repo, url: filed.url, existing: filed.existing}
