@@ -3957,7 +3957,8 @@ defmodule SymphonyElixir.Orchestrator do
   # waited as long as every slot stayed busy (MOT-93, TP-1560). The first poll after a start closes
   # one left waiting while Symphony was down. Candidates come from the repo poll cache, so each one
   # is read again first: a sub-issue filed meanwhile keeps it waiting, and a person may have moved it
-  # on.
+  # on. That read is by id and carries no repo key, so each candidate's own goes with it: the close
+  # moves Symphony's record too, and no later read finds Linear ahead of the record.
   defp close_finished_parents(%State{} = state, issues) do
     settings = Config.settings!()
     terminal_states = terminal_state_set()
@@ -3969,16 +3970,19 @@ defmodule SymphonyElixir.Orchestrator do
         state
 
       closeable ->
-        issue_ids = Enum.map(closeable, & &1.id)
-        close = fn -> close_finished_parents_fresh(issue_ids, terminal_states, settings) end
-        start_tracker_task(state, %{kind: :close_parents, issue_ids: issue_ids}, close)
+        repo_keys = Map.new(closeable, &{&1.id, hold_repo_key(&1)})
+        close = fn -> close_finished_parents_fresh(repo_keys, terminal_states, settings) end
+        start_tracker_task(state, %{kind: :close_parents, issue_ids: Map.keys(repo_keys)}, close)
     end
   end
 
-  defp close_finished_parents_fresh(issue_ids, terminal_states, settings) do
-    case Tracker.fetch_issue_states_by_ids(issue_ids) do
+  defp close_finished_parents_fresh(repo_keys, terminal_states, settings) do
+    case Tracker.fetch_issue_states_by_ids(Map.keys(repo_keys)) do
       {:ok, fresh_issues} ->
-        for %Issue{} = issue <- fresh_issues, SubIssueWait.close?(issue, terminal_states, settings), do: close_finished_parent(issue)
+        for %Issue{} = fresh <- fresh_issues,
+            issue = %{fresh | repo_key: fresh.repo_key || Map.get(repo_keys, fresh.id)},
+            SubIssueWait.close?(issue, terminal_states, settings),
+            do: close_finished_parent(issue)
 
       {:error, reason} ->
         Logger.warning("Failed to refresh issues waiting on sub-issues before closing them; retrying next poll reason=#{inspect(reason)}")

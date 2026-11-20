@@ -29,7 +29,7 @@ defmodule SymphonyElixir.SubIssueWait do
 
   require Logger
 
-  alias SymphonyElixir.{Config, RunStore, TicketSignals, Tracker, TransitionGuard}
+  alias SymphonyElixir.{Config, RunStore, TicketPullRequest, TicketSignals, TicketState, Tracker, TransitionGuard}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
 
@@ -187,16 +187,36 @@ defmodule SymphonyElixir.SubIssueWait do
   True when Symphony closes `issue` itself: it sits in the waiting state, is not a `breakdown` parent
   (its epic review closes it), every one of its sub-issues is in `terminal_states` or `Backlog` (or
   it has none left: each was re-parented away or deleted), and its pull request's merge put it there
-  (`wait_on_merge/3`). One a person moved there waits for them. Sub-issues a read did not carry
-  (`:unknown`) never close it.
+  (`wait_on_merge/3`) or its record says its pull request merged (`pr_merged?/1`), so a ticket whose
+  merge mark was lost still closes. One a person moved there, its pull request open, waits for them.
+  Sub-issues a read did not carry (`:unknown`) never close it.
   """
   @spec close?(Issue.t() | term(), Enumerable.t(String.t()), Schema.t() | term()) :: boolean()
   def close?(%Issue{sub_issues: sub_issues} = issue, terminal_states, settings) when is_list(sub_issues) do
     in_state?(issue, settings) and not Issue.breakdown?(issue) and
-      started_sub_issues(issue, terminal_states) == [] and RunStore.merged_wait?(issue.id) == true
+      started_sub_issues(issue, terminal_states) == [] and (RunStore.merged_wait?(issue.id) == true or pr_merged?(issue.id))
   end
 
   def close?(_issue, _terminal_states, _settings), do: false
+
+  @doc """
+  Whether Symphony's record of the ticket `issue_id` says its pull request merged: the PR and CI
+  watcher's last read of it (`pull_request`, kept once the watch ends, or `pr_watch`'s facts), or the
+  ticket's pull request record (`SymphonyElixir.TicketPullRequest`). False for a ticket with no record.
+  """
+  @spec pr_merged?(String.t() | term()) :: boolean()
+  def pr_merged?(issue_id) when is_binary(issue_id) do
+    case RunStore.get_ticket_state(issue_id) do
+      %{} = record -> record |> TicketState.normalize() |> record_merged?()
+      _none -> false
+    end
+  end
+
+  def pr_merged?(_issue_id), do: false
+
+  defp record_merged?(%{pull_request: %{state: "merged"}}), do: true
+  defp record_merged?(%{pr_watch: %{facts: %{pr: :merged}}}), do: true
+  defp record_merged?(record), do: match?(%{state: "merged"}, TicketPullRequest.get(record.repo_key, record.issue_id))
 
   @doc """
   True when `blocker` (a blocked-by link's `%{id, state}`) no longer blocks although it is not
@@ -219,13 +239,33 @@ defmodule SymphonyElixir.SubIssueWait do
 
   def merged_blocker?(_blocker), do: false
 
-  @doc "Moves `issue` to `Done` and comments how each of its sub-issues ended or waits."
+  @doc """
+  Moves `issue` to `Done` and comments how each of its sub-issues ended or waits. The move is made
+  under the ticket's repo key, the issue's or else its record's (an issue read by id carries none),
+  so Symphony's record takes `Done` with it and no later read sees Linear ahead of the record. The
+  merge mark `close?/3` reads is dropped only once the record holds `Done`: a ticket whose record
+  did not move can still be closed by a later poll.
+  """
   @spec close(Issue.t(), module()) :: :ok | {:error, term()}
   def close(%Issue{id: issue_id} = issue, tracker) do
-    with :ok <- TransitionGuard.perform(issue_id, :sub_issues_done, %{repo_key: issue.repo_key}, tracker: tracker) do
+    repo_key = issue.repo_key || recorded_repo_key(issue_id)
+    ctx = %{repo_key: repo_key, issue_identifier: issue.identifier}
+
+    with :ok <- TransitionGuard.perform(issue_id, :sub_issues_done, ctx, tracker: tracker) do
       Logger.info("Moved issue to #{@done_state}: every sub-issue is finished #{issue_fields(issue)}")
-      _ = RunStore.delete_merged_wait(issue_id)
+      forget_merge(repo_key, issue_id)
       comment(issue, close_comment(issue), tracker)
+    end
+  end
+
+  defp forget_merge(repo_key, issue_id) do
+    if TicketSignals.recorded_phase(repo_key, issue_id) == {:ok, @done_state}, do: RunStore.delete_merged_wait(issue_id)
+  end
+
+  defp recorded_repo_key(issue_id) do
+    case RunStore.get_ticket_state(issue_id) do
+      %{repo_key: repo_key} when is_binary(repo_key) -> repo_key
+      _none -> nil
     end
   end
 
