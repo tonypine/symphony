@@ -58,7 +58,7 @@ defmodule SymphonyElixir.WorkflowPreviewSnapshotTest do
 
     assert flat =~ "If the issue above has a `## Plan` and a `## Checks` section, the ticket has a plan: work from its checks."
     assert flat =~ "Otherwise the two walkthrough bullets below apply."
-    assert flat =~ "call `linear_record_walkthrough_proofs` with the check's id as `check` and its test as the code names it"
+    assert flat =~ "call `linear_record_walkthrough_proofs` with the check's id as `step` and its test as the code names it"
     assert flat =~ "The handoff is refused while one of them is open."
     assert flat =~ "If the prompt has a `## Checks` section, record the proof for the check instead"
   end

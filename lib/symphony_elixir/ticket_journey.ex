@@ -196,7 +196,8 @@ defmodule SymphonyElixir.TicketJourney do
 
   @doc """
   Checks the tests an implementer names for checks of the plan of the ticket `issue_id`: `proofs`
-  is a non-empty list of `%{"check" => id, "test" => test}`. A check the plan does not hold is
+  is a non-empty list of `%{"step" => id, "test" => test}`, the check's id where a walkthrough's
+  proof has its step's number (`"check"` names it too). A check the plan does not hold is
   refused, naming the plan's checks, as is one the plan gives to QA (`proof: qa` or `design`) and
   a test that is blank, holds a backtick or runs over one line.
   """
@@ -212,11 +213,20 @@ defmodule SymphonyElixir.TicketJourney do
     end)
   end
 
-  def check_proofs(_issue_id, _proofs), do: invalid("`proofs` must be a non-empty list of objects, each with a `check` id and a `test`")
+  def check_proofs(_issue_id, _proofs), do: invalid("`proofs` must be a non-empty list of objects, each with a check's id as `step` and a `test`")
 
-  defp check_proof(%{"check" => id, "test" => test}, checks) when is_binary(id) and is_binary(test) do
-    test = String.trim(test)
+  defp check_proof(%{"test" => test} = proof, checks) when is_binary(test) do
+    case Map.get(proof, "check", Map.get(proof, "step")) do
+      id when is_binary(id) -> check_proof(String.trim(id), String.trim(test), checks)
+      _other -> not_a_check()
+    end
+  end
 
+  defp check_proof(_proof, _checks), do: not_a_check()
+
+  defp not_a_check, do: invalid("this ticket has a plan: each proof needs the id of the check it proves as `step` (`c1`) and a string `test`")
+
+  defp check_proof(id, test, checks) do
     case Enum.find(checks, &(&1.id == id)) do
       nil ->
         invalid("`#{id}` is not a check of this ticket's plan. Its checks are: #{Enum.map_join(checks, ", ", & &1.id)}")
@@ -230,8 +240,6 @@ defmodule SymphonyElixir.TicketJourney do
           else: {:ok, %{check_id: id, test: test}}
     end
   end
-
-  defp check_proof(_proof, _checks), do: invalid("this ticket has a plan: each proof needs the `check` id it proves and a string `test`")
 
   defp invalid(message), do: {:error, {:invalid_walkthrough_proof, message}}
 
@@ -288,7 +296,7 @@ defmodule SymphonyElixir.TicketJourney do
     The plan has #{length(checks)} open check(s) that a test or an attachment proves, so the ticket is not handed off yet:
     #{Enum.map_join(checks, "\n", &"- [#{&1.id}] #{one_line(&1.statement)} (proof: #{&1.proof})")}
     Prove each one, then record it: a `proof: test` check with a test of this PR \
-    (`linear_record_walkthrough_proofs` with the check's id and the test), a `proof: attached` check with \
+    (`linear_record_walkthrough_proofs` with the check's id as `step` and the test), a `proof: attached` check with \
     `ticket_record` (`check.proved`, `by: attached`, and the `evidence` event that holds the file).
     A check nothing can prove this way is waived by the Conductor after coding, with its reason: \
     say which one and why in a `note` and in the workpad `Confusions`, and end the turn.\

@@ -1570,6 +1570,67 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     end
   end
 
+  describe "linear_record_walkthrough_proofs on a groomed ticket" do
+    @groomed_plan %{
+      reason: "Grooming",
+      by: "grooming",
+      shape: "single",
+      layers: ["engine"],
+      summary: "The proofs name checks.",
+      text: "Record a proof for a check.",
+      checks: [
+        %{id: "c1", kind: "outcome", statement: "The tool records the proof.", proof: "test"},
+        %{id: "c2", kind: "qa", statement: "The page shows it.", proof: "qa", action: "Open it", expect: "The proof"}
+      ],
+      size: %{tokens: 100_000, runs: 1}
+    }
+
+    setup do
+      :ok = RunStore.clear()
+      :ok = RunStore.put_ticket_state(%{repo_key: "repo-a", issue_id: "issue-current", issue_identifier: "TP-7"})
+      {:ok, _plan} = SymphonyElixir.TicketPlan.write("repo-a", "issue-current", @groomed_plan)
+      :ok
+    end
+
+    defp record_check_proofs(proofs) do
+      opts = [
+        issue: %Issue{id: "issue-current", identifier: "TP-7", repo_key: "repo-a"},
+        linear_client: fn _query, _variables, _opts -> flunk("a groomed ticket's proofs read nothing from Linear") end,
+        run_id: "run-1",
+        run_kind: "implementation"
+      ]
+
+      Jason.decode!(DynamicTool.execute("linear_record_walkthrough_proofs", %{"proofs" => proofs}, opts)["output"])
+    end
+
+    test "records a check.proved for each check named, with no walkthrough in the description" do
+      assert %{"checks" => ["c1"], "events" => [%{"type" => "check.proved"}]} =
+               record_check_proofs([%{"step" => "c1", "test" => " test/x_test.exs › records the proof "}])
+
+      assert [%{id: "c1", state: :proved, proved_by: proved}, %{id: "c2", state: :open}] = SymphonyElixir.TicketChecks.list("issue-current")
+      assert %{by: "test", test: "test/x_test.exs › records the proof", run_id: "run-1"} = proved
+      assert TicketEvents.query("issue-current", types: ["evidence"]) == []
+    end
+
+    test "refuses a check QA proves, a check the plan lacks and a step number, and records nothing" do
+      for {proof, why} <- [
+            {%{"step" => "c2", "test" => "x_test.exs"}, "check c2 is proved by QA"},
+            {%{"step" => "c9", "test" => "x_test.exs"}, "`c9` is not a check of this ticket's plan. Its checks are: c1, c2"},
+            {%{"step" => 1, "test" => "x_test.exs"}, "this ticket has a plan: each proof needs the id of the check it proves as `step`"}
+          ] do
+        assert %{"error" => %{"code" => "invalid_walkthrough_proof", "message" => message}} = record_check_proofs([proof])
+        assert message =~ why
+      end
+
+      assert TicketEvents.query("issue-current", types: ["check.proved"]) == []
+    end
+
+    test "an event the ledger refuses is the tool's error" do
+      assert %{"error" => _refused} = record_check_proofs([%{"step" => "c1", "test" => String.duplicate("x", 501)}])
+      assert TicketEvents.query("issue-current", types: ["check.proved"]) == []
+    end
+  end
+
   describe "linear document tools" do
     @document_scope %{"id" => "issue-current", "identifier" => "TP-7", "project" => %{"id" => "project-1"}, "attachments" => %{"nodes" => []}}
 

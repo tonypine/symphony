@@ -214,7 +214,7 @@ defmodule SymphonyElixir.TicketJourneyTest do
     end
 
     test "check_proofs/2 takes a test for a check the plan proves by a test or an attachment" do
-      assert TicketJourney.check_proofs(@issue_id, [%{"check" => "c1", "test" => " plan_test.exs › shows the plan "}, %{"check" => "c3", "test" => "attached_test.exs"}]) ==
+      assert TicketJourney.check_proofs(@issue_id, [%{"step" => " c1 ", "test" => " plan_test.exs › shows the plan "}, %{"check" => "c3", "test" => "attached_test.exs"}]) ==
                {:ok, [%{check_id: "c1", test: "plan_test.exs › shows the plan"}, %{check_id: "c3", test: "attached_test.exs"}]}
 
       unknown = [%{"check" => "c9", "test" => "x"}]
@@ -232,11 +232,13 @@ defmodule SymphonyElixir.TicketJourneyTest do
                  TicketJourney.check_proofs(@issue_id, [%{"check" => "c1", "test" => test}])
       end
 
-      assert {:error, {:invalid_walkthrough_proof, "this ticket has a plan: each proof needs the `check` id it proves and a string `test`"}} =
-               TicketJourney.check_proofs(@issue_id, [%{"step" => 1, "test" => "x"}])
+      for proof <- [%{"step" => 1, "test" => "x"}, %{"step" => "c1"}, "c1"] do
+        assert {:error, {:invalid_walkthrough_proof, "this ticket has a plan: each proof needs the id of the check it proves as `step` (`c1`) and a string `test`"}} =
+                 TicketJourney.check_proofs(@issue_id, [proof])
+      end
 
       for proofs <- [[], nil, %{}] do
-        assert {:error, {:invalid_walkthrough_proof, "`proofs` must be a non-empty list of objects, each with a `check` id and a `test`"}} =
+        assert {:error, {:invalid_walkthrough_proof, "`proofs` must be a non-empty list of objects, each with a check's id as `step` and a `test`"}} =
                  TicketJourney.check_proofs(@issue_id, proofs)
       end
     end
@@ -275,7 +277,7 @@ defmodule SymphonyElixir.TicketJourneyTest do
 
       assert message =~ "The plan has 2 open check(s) that a test or an attachment proves, so the ticket is not handed off yet:"
       assert message =~ "- [c1] The page shows the plan. (proof: test)\n- [c3] The design was compared. (proof: attached)"
-      assert message =~ "`linear_record_walkthrough_proofs` with the check's id and the test"
+      assert message =~ "`linear_record_walkthrough_proofs` with the check's id as `step` and the test"
       assert message =~ "is waived by the Conductor after coding, with its reason"
       refute message =~ "—"
 

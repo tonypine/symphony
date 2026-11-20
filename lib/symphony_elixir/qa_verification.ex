@@ -101,6 +101,7 @@ defmodule SymphonyElixir.QaVerification do
     RunStore,
     SelfHeal,
     TicketEvents,
+    TicketJourney,
     TicketPullRequest,
     TicketSignals,
     TicketState,
@@ -379,7 +380,7 @@ defmodule SymphonyElixir.QaVerification do
   defp pre_check(issue, workspace, opts, settings, {head, pr_url}, playbooks) do
     pre_check_opts = [proof_check: settings.proof_check] ++ Keyword.take(opts, [:gh_runner, :git])
 
-    case QaPreCheck.run(Walkthrough.proof_steps(Walkthrough.recorded_proofs(issue.id), settings.proof_check), pr_url, head, workspace, pre_check_opts) do
+    case QaPreCheck.run(TicketJourney.proof_steps(issue, settings.proof_check), pr_url, head, workspace, pre_check_opts) do
       :none -> run_agent(issue, workspace, opts, settings, head, playbooks, [])
       {:pass, results} -> run_agent(issue, workspace, opts, settings, head, playbooks, results)
       {:fail, results} -> fail(issue, opts, settings, head, pre_check_failed(results))

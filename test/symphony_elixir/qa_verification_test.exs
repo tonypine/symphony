@@ -251,6 +251,33 @@ defmodule SymphonyElixir.QaVerificationTest do
     {:ok, _event} = SymphonyElixir.TicketEvents.record(@repo_key, @issue_id, "evidence", payload, actor: {:agent, "run-1", "implementation"})
   end
 
+  # A plan on the ticket: an outcome a test proves and two QA checks, one of them a design check.
+  @groomed_plan %{
+    reason: "Grooming",
+    by: "grooming",
+    shape: "single",
+    layers: ["engine"],
+    summary: "The check command passes and the dashboard shows it.",
+    text: "Make `symphony check` pass and show its result.",
+    checks: [
+      %{id: "c1", kind: "outcome", statement: "`symphony check` passes.", proof: "test"},
+      %{id: "c2", kind: "qa", statement: "The dashboard shows the result.", proof: "qa", state: "A run that passed", action: "Open the dashboard", expect: "It says passed"},
+      %{id: "c3", kind: "qa", statement: "The result matches the design.", proof: "design", action: "Compare it", expect: "It matches"}
+    ],
+    size: %{tokens: 100_000, runs: 1}
+  }
+
+  defp groom!(plan \\ @groomed_plan) do
+    {:ok, _ask} = SymphonyElixir.TicketPlan.record_ask(@repo_key, @issue_id, "Make the check pass and show it.")
+    {:ok, _plan} = SymphonyElixir.TicketPlan.write(@repo_key, @issue_id, plan)
+    :ok
+  end
+
+  defp prove_check!(check_id, test) do
+    proof = %{check_id: check_id, by: "test", test: test}
+    {:ok, _event} = SymphonyElixir.TicketChecks.prove(@repo_key, @issue_id, proof, actor: {:agent, "run-1", "implementation"})
+  end
+
   # An empty store, but for the open pull request every QA ticket here has.
   defp clear_store! do
     :ok = RunStore.clear()
@@ -2202,6 +2229,29 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert report =~ "### Pre-checks"
       assert report =~ "- **pass** step 1 (Proved by: `make-all` › test/check_test.exs): `make-all` passed on `#{String.slice(head, 0, 12)}` and `test/check_test.exs` is in the checkout (#{@run_url})"
       assert [%{outcome: "pass", head_sha: ^head}] = verdicts()
+    end
+
+    test "a groomed ticket's check a test proves is confirmed on the head, whatever its description says" do
+      {workspace, head} = named_workspace!()
+      groom!()
+      prove_check!("c1", "test/check_test.exs")
+
+      assert :ok = run_named(workspace, "No walkthrough.", gh_runner: gh(head, [make_all("COMPLETED", "SUCCESS")]))
+
+      assert_received {:qa_agent_run, job, %Schema{}}
+      assert [%{status: :pass, url: @run_url, step: %{number: 1, check_id: "c1", text: "[c1] `symphony check` passes."}}] = job.proofs
+      assert_received {:memory_tracker_state_update, @issue_id, "Merging"}
+    end
+
+    test "a groomed ticket's proof that failed on the head fails the pass before any agent runs" do
+      {workspace, head} = named_workspace!()
+      groom!()
+      prove_check!("c1", "test/check_test.exs")
+
+      assert :ok = run_named(workspace, "No walkthrough.", gh_runner: gh(head, [make_all("COMPLETED", "FAILURE")]))
+
+      refute_received {:qa_agent_run, _job, _settings}
+      assert [%{outcome: "fail", head_sha: ^head}] = verdicts()
     end
 
     test "a ticket whose steps no event proves reads no check and QA walks every step" do
