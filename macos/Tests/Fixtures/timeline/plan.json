@@ -1,0 +1,72 @@
+{
+  "timeline": [
+    {"id": "a1", "seq": 1, "at": "2026-10-08T08:59:00Z", "type": "ask.recorded", "actor": {"kind": "machine"},
+     "payload": {"text": "The paused line should say why the ticket is paused.", "source": "linear"},
+     "summary": {"title": "Ask recorded", "detail": "The paused line should say why the ticket is paused."}, "artifacts": [], "children": []},
+    {
+      "kind": "run", "run_id": "run-c1", "run_kind": "conductor", "run_number": 1,
+      "model": "claude-opus-5-5", "model_name": "Claude Opus 5.5", "effort": "high", "status": "ended", "exit": "ended", "outcome": null,
+      "verdict": null, "started_at": "2026-10-08T09:00:00Z", "ended_at": "2026-10-08T09:02:00Z", "head": null,
+      "events": [
+        {"id": "g1", "seq": 2, "at": "2026-10-08T09:00:00Z", "type": "run.started", "run_id": "run-c1",
+         "payload": {"run_kind": "conductor", "run_number": 1, "model": "claude-opus-5-5", "effort": "high"}, "summary": {"title": "Conductor run 1 started"}, "artifacts": [], "children": []},
+        {"id": "g2", "seq": 3, "at": "2026-10-08T09:01:50Z", "type": "plan.written", "run_id": "run-c1", "actor": {"kind": "machine"},
+         "payload": {"version": 1, "reason": "Grooming", "by": "grooming", "shape": "single", "layers": ["screen", "engine"],
+                     "summary": "Add the paused line under the title.", "text": "Read the pause from the ticket read.",
+                     "checks": [{"id": "c1", "kind": "outcome", "statement": "The line says why the ticket is paused", "proof": "test"}],
+                     "size": {"tokens": 4000000, "runs": 2}},
+         "summary": {"title": "Plan written", "detail": "Add the paused line under the title."}, "artifacts": [], "children": []},
+        {"id": "g3", "seq": 4, "at": "2026-10-08T09:01:55Z", "type": "conductor.update", "run_id": "run-c1", "actor": {"kind": "machine"},
+         "payload": {"junction": "grooming", "text": "I planned this as one change with three checks."},
+         "summary": {"title": "Update", "detail": "I planned this as one change with three checks."}, "artifacts": [], "children": []},
+        {"id": "g4", "seq": 5, "at": "2026-10-08T09:02:00Z", "type": "run.ended", "run_id": "run-c1",
+         "payload": {"run_kind": "conductor", "run_number": 1, "exit": "ended", "duration_ms": 120000, "tokens": 30000}, "summary": {"title": "Conductor run 1 ended"}, "artifacts": [], "children": []}
+      ]
+    },
+    {
+      "kind": "run", "run_id": "run-1", "run_kind": "implementation", "run_number": 1,
+      "model": "claude-opus-5-5", "model_name": "Claude Opus 5.5", "effort": "high", "status": "ended", "exit": "handoff", "outcome": "Handed off",
+      "verdict": null, "started_at": "2026-10-08T09:03:00Z", "ended_at": "2026-10-08T09:40:00Z", "head": "8f3e2a1c9d",
+      "events": [
+        {"id": "i1", "seq": 6, "at": "2026-10-08T09:03:00Z", "type": "run.started", "run_id": "run-1",
+         "payload": {"run_kind": "implementation", "run_number": 1, "model": "claude-opus-5-5", "effort": "high"}, "summary": {"title": "Implementation run 1 started"}, "artifacts": [], "children": []},
+        {"id": "k1", "seq": 7, "at": "2026-10-08T09:30:00Z", "type": "check.proved", "run_id": "run-1", "actor": {"kind": "agent", "run_id": "run-1", "run_kind": "implementation"},
+         "payload": {"check_id": "c1", "by": "test", "test": "PausedLineTests › says why"},
+         "summary": {"title": "Check proved", "detail": "The line says why the ticket is paused"}, "artifacts": [], "children": []},
+        {"id": "k2", "seq": 8, "at": "2026-10-08T09:31:00Z", "type": "check.proved", "run_id": "run-1", "actor": {"kind": "agent", "run_id": "run-1", "run_kind": "implementation"},
+         "payload": {"check_id": "c2", "by": "test", "test": "PausedLineTests › says since when"},
+         "summary": {"title": "Check proved", "detail": "The line says since when"}, "artifacts": [], "children": []},
+        {"id": "i2", "seq": 9, "at": "2026-10-08T09:40:00Z", "type": "run.ended", "run_id": "run-1",
+         "payload": {"run_kind": "implementation", "run_number": 1, "exit": "handoff", "duration_ms": 2220000, "tokens": 1200000}, "summary": {"title": "Implementation run 1 handed off"}, "artifacts": [], "children": []}
+      ]
+    },
+    {"id": "k3", "seq": 10, "at": "2026-10-08T09:41:00Z", "type": "check.waived", "actor": {"kind": "machine"},
+     "payload": {"check_id": "c4", "reason": "No test can hold a real pause open."},
+     "summary": {"title": "Check waived", "detail": "No test can hold a real pause open."}, "artifacts": [], "children": []},
+    {"id": "m1", "seq": 11, "at": "2026-10-08T09:45:00Z", "type": "message.sent", "actor": {"kind": "person", "name": "Tony"},
+     "payload": {"text": "Keep the button word Release."}, "summary": {"title": "You wrote", "detail": "Keep the button word Release."},
+     "read": null, "artifacts": [], "children": []},
+    {
+      "kind": "run", "run_id": "run-c2", "run_kind": "conductor", "run_number": 2,
+      "model": "claude-opus-5-5", "model_name": "Claude Opus 5.5", "effort": "high", "status": "ended", "exit": "ended", "outcome": null,
+      "verdict": null, "started_at": "2026-10-08T09:45:05Z", "ended_at": "2026-10-08T09:46:00Z", "head": "8f3e2a1c9d",
+      "events": [
+        {"id": "r1", "seq": 12, "at": "2026-10-08T09:45:40Z", "type": "plan.written", "run_id": "run-c2", "actor": {"kind": "machine"},
+         "payload": {"version": 2, "reason": "The button keeps the word Release", "by": "recalibration", "shape": "single", "layers": ["screen"],
+                     "summary": "Add the paused line under the title.", "text": "Read the pause from the ticket read.", "checks": [], "size": {"tokens": 4000000, "runs": 2}},
+         "summary": {"title": "Plan written", "detail": "Add the paused line under the title."}, "artifacts": [], "children": []},
+        {"id": "r2", "seq": 13, "at": "2026-10-08T09:45:50Z", "type": "conductor.update", "run_id": "run-c2", "parent": "m1", "actor": {"kind": "machine"},
+         "payload": {"junction": "message", "text": "Release stays. I added a check for the word.",
+                     "blocks": [{"type": "budget", "tokens_used": 1200000, "tokens_cap": 4000000, "parts": [{"kind": "implementation", "runs": 1, "tokens": 1200000}]}]},
+         "summary": {"title": "Update", "detail": "Release stays. I added a check for the word."}, "artifacts": [], "children": []}
+      ]
+    },
+    {"id": "n1", "seq": 14, "at": "2026-10-08T09:50:00Z", "type": "conductor.intervention", "actor": {"kind": "machine"},
+     "payload": {"action": "replanned", "reason": "The parent's plan changed.", "by": "TP-1300", "target": "TP-1301"},
+     "summary": {"title": "The Conductor of TP-1300 replanned this ticket", "detail": "The parent's plan changed."}, "artifacts": [], "children": []},
+    {"id": "m2", "seq": 15, "at": "2026-10-08T10:20:00Z", "type": "message.sent", "actor": {"kind": "person", "name": "Tony"},
+     "payload": {"text": "And keep the times at 11 pt."}, "summary": {"title": "You wrote", "detail": "And keep the times at 11 pt."},
+     "read": null, "artifacts": [], "children": []}
+  ],
+  "next_since": "2026-10-08T10:20:00Z"
+}

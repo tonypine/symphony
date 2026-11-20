@@ -376,7 +376,7 @@ final class TimelineTests: XCTestCase {
             XCTAssertFalse(kind.word.isEmpty)
         }
         let green = TimelineEntry.Kind.allCases.filter { $0.tone == .status(.done) }
-        XCTAssertEqual(Set(green), [.questionAnswered, .runPassed])
+        XCTAssertEqual(Set(green), [.questionAnswered, .runPassed, .checkProved])
         XCTAssertEqual(TimelineEntry.Kind.phase.tone, .accent)
     }
 

@@ -12,6 +12,7 @@ public struct TimelineEntry: Equatable, Identifiable {
     public enum Kind: String, CaseIterable, Equatable {
         case phase, sendBack, pause, pauseCleared, questionAsked, questionAnswered, questionClosed, runStarted, runPassed
         case runFailed, runStopped, person, rule, finding, findingResolved, note, message, update, ticket, situation, other
+        case plan, ask, checkProved, checkWaived, intervention
 
         /// The glyph inside the entry's round mark (the catalog's `.tl-entry .mark`, which draws the circle itself).
         public var symbol: String {
@@ -37,16 +38,23 @@ public struct TimelineEntry: Equatable, Identifiable {
             case .ticket: "doc.badge.plus"
             case .situation: "arrow.clockwise"
             case .other: "circle.fill"
+            case .plan: "doc.text.magnifyingglass"
+            case .ask: "text.quote"
+            case .checkProved: "checkmark.seal"
+            case .checkWaived: "seal"
+            case .intervention: "arrow.triangle.branch"
             }
         }
 
         public var tone: Tone {
             switch self {
-            case .phase, .person, .message: .accent
-            case .pause, .questionClosed, .runStopped, .rule, .findingResolved, .note, .update, .ticket, .other: .status(.idle)
+            case .phase, .person, .message, .ask: .accent
+            case .pause, .questionClosed, .runStopped, .rule, .findingResolved, .note, .update, .ticket, .other, .plan, .checkWaived,
+                 .intervention:
+                .status(.idle)
             case .pauseCleared, .runStarted: .status(.working)
             case .questionAsked: .status(.you)
-            case .questionAnswered, .runPassed: .status(.done)
+            case .questionAnswered, .runPassed, .checkProved: .status(.done)
             case .runFailed, .finding, .situation, .sendBack: .status(.problem)
             }
         }
@@ -75,6 +83,11 @@ public struct TimelineEntry: Equatable, Identifiable {
             case .ticket: "ticket"
             case .situation: "situation"
             case .other: "event"
+            case .plan: "plan"
+            case .ask: "ask"
+            case .checkProved: "check proved"
+            case .checkWaived: "check waived"
+            case .intervention: "Conductor action"
             }
         }
     }
@@ -112,8 +125,11 @@ public struct TimelineEntry: Equatable, Identifiable {
     /// with a title.
     public var conductor: ConductorMessage?
     /// A message written to the ticket that no run read yet: it sits on top of the timeline, above the run now, until
-    /// the next run reads it.
+    /// the next run reads it. On a groomed ticket it waits for the Conductor's reply instead.
     public var waitsForRun = false
+    /// The Conductor's reply to a message (`conductor.update` at the `message` junction, whose parent is the message):
+    /// drawn directly under the message's words, in the place of its read line.
+    public var reply: ConductorMessage?
 
     public init(
         id: String, kind: Kind, at: Date, title: String, detail: String? = nil, actor: String, endedAt: Date? = nil,
@@ -161,7 +177,8 @@ public struct TimelineEntry: Equatable, Identifiable {
     public func accessibilityLabel(time: String) -> String {
         let lasted = durationSeconds.map { (isOngoing ? "for " : "lasted ") + Overview.spokenDuration($0) + (isOngoing ? " so far" : "") }
         let new = isNew ? Self.newWords : nil
-        return ([time, kind.word, title, detail, lasted, "by " + actor, new].compactMap { $0 }).joined(separator: ", ")
+        let answered = reply?.accessibilityLabel(time: nil)
+        return ([time, kind.word, title, detail, lasted, "by " + actor, answered, new].compactMap { $0 }).joined(separator: ", ")
     }
 
     /// The title of the Conductor's update for the person (`conductor.update`).
@@ -171,6 +188,18 @@ public struct TimelineEntry: Equatable, Identifiable {
     public static let messageLead = "You wrote"
     /// A message's line while no run read it.
     public static let messageWaits = "The next run reads it first"
+    /// A message's line on a groomed ticket while the Conductor has not answered: there no run is given a person's message.
+    public static let messageWaitsForConductor = "The Conductor reads it next"
+
+    /// A plan's line (`plan.written`): the first version is written, each later one changed for a reason.
+    public static let planWritten = "Plan written"
+    public static let planChanged = "Plan changed"
+
+    /// "Plan written" for a plan's first version, "Plan changed: <reason>" for a later one.
+    public static func planTitle(_ payload: TicketEventsPayload.Payload) -> String {
+        guard (payload.version ?? 1) > 1 else { return planWritten }
+        return payload.reason?.trimmedNonEmpty.map { "\(planChanged): \($0)" } ?? planChanged
+    }
 
     /// A message's line: `messageWaits` until a run read it, then "Read by Implementation run 2 at 11:51" (the day too
     /// when it isn't `reference`'s).
@@ -184,13 +213,16 @@ public struct TimelineEntry: Equatable, Identifiable {
     }
 
     /// The entry of a message written to the ticket (`message.sent`): "You wrote: “…”" with the whole text, then whether
-    /// a run read it; on top of the timeline while none did.
-    static func message(_ entry: TimelineEntry, event: TicketEventsPayload.Event, reference: Date, calendar: Calendar) -> TimelineEntry {
+    /// a run read it; on top of the timeline while none did. On a `groomed` ticket a message no run read waits for the
+    /// Conductor.
+    static func message(
+        _ entry: TimelineEntry, event: TicketEventsPayload.Event, groomed: Bool = false, reference: Date, calendar: Calendar
+    ) -> TimelineEntry {
         var entry = entry
         let lead = event.summary?.title?.trimmedNonEmpty ?? messageLead
         let text = event.payload.text?.trimmedNonEmpty ?? event.summary?.detail?.trimmedNonEmpty ?? ""
         entry.title = "\(lead): \u{201C}\(text)\u{201D}"
-        entry.detail = messageReadLine(event.read, reference: reference, calendar: calendar)
+        entry.detail = groomed && event.read == nil ? messageWaitsForConductor : messageReadLine(event.read, reference: reference, calendar: calendar)
         entry.waitsForRun = event.read == nil
         return entry
     }
@@ -571,6 +603,12 @@ public struct TimelineModel: Equatable {
     static let mechanicalTypes: Set<String> = ["workspace.synced", "workspace.rebuilt", "attempt.pushed", "conductor.instructions"]
     /// The events whose payload `text` is the entry's body, whole: the summary's detail is their first line only.
     static let wholeTextTypes: Set<String> = ["conductor.update", "conductor.instructions"]
+    /// The plan's events, each one line of the timeline with no detail under it: the Plan panel holds the rest.
+    static let oneLineTypes: Set<String> = ["plan.written", "check.proved", "check.waived", "conductor.intervention", "ask.recorded"]
+    /// A ticket is groomed once its history holds a plan.
+    static let planType = "plan.written"
+    /// The junction a Conductor's reply to a message is written at.
+    static let replyJunction = ConductorJunction.message.rawValue
     /// The rule actions that restate a run's work: the PR watcher keeping the branch current.
     static let mechanicalRuleActions: Set<String> = ["updated_branch"]
     /// The pause reasons that wait on a person.
@@ -584,12 +622,23 @@ public struct TimelineModel: Equatable {
         var drafts: [Draft] = []
         var openPause: [String: Int] = [:]
         var rules: [(event: TicketEventsPayload.Event, at: Date, order: Int)] = []
+        let groomed = history.events.contains { $0.type == planType }
 
         for (order, event) in history.events.enumerated() {
             guard let at = event.date, !silentTypes.contains(event.type), !event.bookkeeping else { continue }
             if let runID = event.runID, history.runs[runID] != nil, runTypes.contains(event.type) { continue }
             // What the Conductor said while it watched a run is drawn inside that run's group, when the page has the run.
             if let watched = ConductorMessage(event: event)?.watchedRunID, history.runs[watched] != nil { continue }
+            // The Conductor's reply to a message is drawn under that message, when the page has it.
+            if event.type == ConductorMessage.eventType, event.payload.junction == replyJunction, let parent = event.parent,
+               let index = drafts.lastIndex(where: { $0.type == "message.sent" && $0.entry.id == parent }),
+               let reply = ConductorMessage(event: event, runTitle: actor(event, history: history)) {
+                drafts[index].entry.reply = reply
+                drafts[index].entry.detail = nil
+                drafts[index].entry.waitsForRun = false
+                drafts[index].fold(event, at: at)
+                continue
+            }
             if event.type == "situation.changed", !situationsShown.contains(event.payload.to ?? "") { continue }
             if event.type == "rule.action", ruleCauses.contains(event.payload.action ?? "") {
                 rules.append((event, at, order))
@@ -597,7 +646,7 @@ public struct TimelineModel: Equatable {
             }
             var draft = Draft(event, at: at, order: order, kind: kind(event), actor: actor(event, history: history))
             if event.type == "message.sent" {
-                draft.entry = TimelineEntry.message(draft.entry, event: event, reference: reference, calendar: calendar)
+                draft.entry = TimelineEntry.message(draft.entry, event: event, groomed: groomed, reference: reference, calendar: calendar)
             }
             // The answers of a run's steps, written as notes before Symphony recorded them on the steps: they fold.
             // So do Symphony's own wait and status messages between runs.
@@ -674,8 +723,9 @@ public struct TimelineModel: Equatable {
                 draft.entry.isMechanical = true
             }
             // Each message is its own entry, the same words written twice too.
+            // So is each check proved or waived, whatever its line says.
             if let last = entries.indices.last, draft.slot == nil, entries[last].kind != .pause, entries[last].kind != .message,
-               entries[last].sameWrite(as: draft.entry) {
+               !distinctKinds.contains(draft.entry.kind), entries[last].sameWrite(as: draft.entry) {
                 entries[last].eventIDs += draft.entry.eventIDs
                 entries[last].isNew = entries[last].isNew || draft.entry.isNew
             } else {
@@ -689,6 +739,9 @@ public struct TimelineModel: Equatable {
             return entry
         }
     }
+
+    /// The classes whose entries never fold into the one before, the same words or not.
+    static let distinctKinds: Set<TimelineEntry.Kind> = [.checkProved, .checkWaived]
 
     /// A note Symphony wrote itself, which folds behind "Show all events": a wait or status message ("Waiting for CI",
     /// "Waiting for GitHub to pick up …"), as the note's own `status` field says, never its words; or, under a run, one
@@ -754,7 +807,11 @@ public struct TimelineModel: Equatable {
         var waitsOnPerson: Bool
 
         init(_ event: TicketEventsPayload.Event, at: Date, order: Int, kind: TimelineEntry.Kind, actor: String) {
-            let title = event.type == "conductor.update" ? TimelineEntry.updateTitle : event.summary?.title?.trimmedNonEmpty ?? event.type
+            let title: String = switch event.type {
+            case "conductor.update": TimelineEntry.updateTitle
+            case TimelineModel.planType: TimelineEntry.planTitle(event.payload)
+            default: event.summary?.title?.trimmedNonEmpty ?? event.type
+            }
             let finding = event.type == "finding.recorded"
                 ? TimelineFinding.card(description: event.payload.description, screenshots: event.screenshots)
                     ?? TimelineFinding(title: title, screenshots: event.screenshots)
@@ -763,8 +820,9 @@ public struct TimelineModel: Equatable {
             // is their first line only.
             let whole = (event.type == "note" && event.payload.signal == nil) || TimelineModel.wholeTextTypes.contains(event.type)
             let note = whole ? event.payload.text?.trimmedNonEmpty : nil
+            let detail = TimelineModel.oneLineTypes.contains(event.type) ? nil : note ?? event.summary?.detail?.trimmedNonEmpty
             entry = TimelineEntry(
-                id: event.id, kind: kind, at: at, title: title, detail: note ?? event.summary?.detail?.trimmedNonEmpty, actor: actor,
+                id: event.id, kind: kind, at: at, title: title, detail: detail, actor: actor,
                 isNew: event.isNew, finding: finding
             )
             entry.conductor = ConductorMessage(event: event, runTitle: actor)
@@ -816,6 +874,11 @@ public struct TimelineModel: Equatable {
         case "conductor.update": return .update
         case "ticket.filed", "ticket.filed_from": return .ticket
         case "situation.changed": return .situation
+        case "plan.written": return .plan
+        case "ask.recorded": return .ask
+        case "check.proved": return .checkProved
+        case "check.waived": return .checkWaived
+        case "conductor.intervention": return .intervention
         default: return .other
         }
     }
@@ -878,9 +941,10 @@ public struct TimelineModel: Equatable {
 }
 
 extension TimelineEntry {
-    /// The same write recorded twice: the same class, words and actor.
+    /// The same write recorded twice: the same class, words and actor, and for the Conductor the same blocks.
     func sameWrite(as other: TimelineEntry) -> Bool {
         kind == other.kind && title == other.title && detail == other.detail && actor == other.actor
+            && (conductor == nil) == (other.conductor == nil) && conductor?.blocks == other.conductor?.blocks
     }
 }
 

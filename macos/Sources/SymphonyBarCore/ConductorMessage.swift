@@ -4,11 +4,17 @@ extension ConductorJunction {
     /// The junction in words, after the Conductor's name on the timeline: "after QA failed".
     public var words: String {
         switch self {
+        case .grooming: "grooming"
         case .afterCoding: "after coding"
         case .afterQAFail: "after QA failed"
         case .afterQABlocked: "after QA was blocked"
         case .afterRework: "after rework"
         case .beforeMerge: "before merge"
+        case .message: "answering your message"
+        case .subTicketEnded: "after a sub-ticket ended"
+        case .finalCheck: "at the final check"
+        case .childMessage: "after a message on a sub-ticket"
+        case .duringRun: "during a run"
         }
     }
 }
@@ -95,10 +101,12 @@ public struct ConductorMessage: Equatable, Identifiable {
         self.blocks = blocks
     }
 
-    /// The message `event` records; nil for any other event or one with no text. `runTitle` names the Conductor's run.
+    /// The message `event` records; nil for any other event or one with neither text nor a block. `runTitle` names the
+    /// Conductor's run.
     public init?(event: TicketEventsPayload.Event, runTitle: String? = nil) {
-        guard event.type == Self.eventType, let text = event.payload.text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty
-        else { return nil }
+        guard event.type == Self.eventType else { return nil }
+        let text = event.payload.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !text.isEmpty || !event.payload.blocks.isEmpty else { return nil }
         self.init(
             id: event.id, at: event.date, text: text, junction: event.payload.junction.flatMap(ConductorJunction.init(rawValue:)),
             runTitle: runTitle, watch: event.payload.watch, blocks: event.payload.blocks
@@ -122,8 +130,11 @@ public struct ConductorMessage: Equatable, Identifiable {
     /// clock as the row shows it.
     public func accessibilityLabel(time: String?) -> String {
         let parts: [String?] = [Self.name, junctionWords, watch?.action, watch?.timing, time, markup.plainText]
-        return parts.compactMap { $0 }.joined(separator: ", ")
+        return parts.compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: ", ")
     }
+
+    /// It answers a person's message (the `message` junction): drawn under that message.
+    public var isReply: Bool { junction == .message }
 
     /// Where it is read in the ticket's history: a run's group holds it when it watched that run.
     public var watchedRunID: String? { watch?.runID }

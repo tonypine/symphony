@@ -47,7 +47,7 @@ struct ConductorSection: View {
             Toggle("Run the Conductor", isOn: $settings.enabled)
                 .help("conductor.enabled")
                 .disabledReason(sectionReason)
-            ForEach(ConductorJunction.allCases) { junction in
+            ForEach(ConductorJunction.settable) { junction in
                 Toggle(junction.title, isOn: Binding(
                     get: { settings.runs(at: junction) },
                     set: { settings = settings.setting(junction, on: $0) }

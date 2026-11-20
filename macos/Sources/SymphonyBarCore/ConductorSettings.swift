@@ -8,7 +8,7 @@ public enum ConductorSettingsError: LocalizedError, Equatable {
     case notOnOrOff(key: String, value: String)
     /// The time limit holds something other than a whole number or `null`.
     case unreadable(key: String, value: String)
-    /// A junction that is not one of the five Symphony knows.
+    /// A junction that is not one Symphony runs the Conductor at by a setting.
     case unknownJunction(String)
 
     public var errorDescription: String? {
@@ -25,8 +25,11 @@ public enum ConductorSettingsError: LocalizedError, Equatable {
     }
 }
 
-/// A moment in a ticket's life at which Symphony runs the Conductor: one item of `conductor.junctions`.
+/// A moment in a ticket's life at which Symphony runs the Conductor, as a `conductor.update` names it. Each but
+/// `duringRun` is one item of `conductor.junctions` (`settable`).
 public enum ConductorJunction: String, CaseIterable, Identifiable {
+    /// Before the first run of a ticket that has no plan: the Conductor writes the plan.
+    case grooming
     /// An implementation run handed off, before Code Review or QA.
     case afterCoding = "after_coding"
     /// QA failed the change, before rework.
@@ -37,12 +40,31 @@ public enum ConductorJunction: String, CaseIterable, Identifiable {
     case afterRework = "after_rework"
     /// QA passed or was skipped, before Merging.
     case beforeMerge = "before_merge"
+    /// A person wrote to the ticket: the Conductor answers.
+    case message
+    /// A sub-ticket reached Done or Canceled while others remain; it runs on the parent.
+    case subTicketEnded = "sub_ticket_ended"
+    /// The last sub-ticket ended; it runs on the parent.
+    case finalCheck = "final_check"
+    /// A person wrote to a sub-ticket; it runs on the parent.
+    case childMessage = "child_message"
+    /// While it watched a running run (`conductor.watch`). Never an item of `conductor.junctions`.
+    case duringRun = "during_run"
 
     public var id: String { rawValue }
+
+    /// The junctions `conductor.junctions` may name, in the order Settings lists them.
+    public static let settable: [ConductorJunction] = allCases.filter { $0 != .duringRun }
 
     /// The junction's row title in Settings.
     public var title: String {
         switch self {
+        case .grooming: return "Grooming a new ticket"
+        case .message: return "On a message from you"
+        case .subTicketEnded: return "After a sub-ticket ends"
+        case .finalCheck: return "At the final check"
+        case .childMessage: return "On a message to a sub-ticket"
+        case .duringRun: return "During a run"
         case .afterCoding: return "After coding"
         case .afterQAFail: return "After a QA fail"
         case .afterQABlocked: return "After a blocked QA"
@@ -70,7 +92,7 @@ public struct ConductorSettings: Equatable {
 
     /// What Symphony uses when a key is missing or null.
     public static let defaultEnabled = false
-    public static let defaultJunctions = Set(ConductorJunction.allCases)
+    public static let defaultJunctions = Set(ConductorJunction.settable)
     public static let defaultTimeoutMs = 180_000
     public static let defaultFileTickets = true
     public static let defaultMaxFiledTickets = 2
@@ -166,7 +188,7 @@ public struct ConductorSettings: Equatable {
 
     /// `[after_coding, before_merge]`, in the junctions' order.
     static func inline(_ junctions: Set<ConductorJunction>) -> String {
-        "[" + ConductorJunction.allCases.filter(junctions.contains).map(\.rawValue).joined(separator: ", ") + "]"
+        "[" + ConductorJunction.settable.filter(junctions.contains).map(\.rawValue).joined(separator: ", ") + "]"
     }
 
     private static func junctions(in yaml: String) throws -> Set<ConductorJunction> {
@@ -183,7 +205,9 @@ public struct ConductorSettings: Equatable {
             items = inlineItems(raw)
         }
         return try items.reduce(into: Set<ConductorJunction>()) { result, item in
-            guard let junction = ConductorJunction(rawValue: unquoted(item)) else { throw ConductorSettingsError.unknownJunction(item) }
+            guard let junction = ConductorJunction(rawValue: unquoted(item)), ConductorJunction.settable.contains(junction) else {
+                throw ConductorSettingsError.unknownJunction(item)
+            }
             result.insert(junction)
         }
     }
