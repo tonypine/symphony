@@ -29,9 +29,9 @@ defmodule SymphonyElixir.SubIssueWait do
 
   require Logger
 
+  alias SymphonyElixir.{Config, RunStore, TicketSignals, Tracker, TransitionGuard}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
-  alias SymphonyElixir.{Config, RunStore, TicketSignals, Tracker, TransitionGuard}
 
   @parked_from_state "In Progress"
   @backlog_state "Backlog"
