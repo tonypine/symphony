@@ -32,6 +32,7 @@ defmodule SymphonyElixir.QaBuildHoldTest do
       send(self(), {:selection_read, repo_key, issue.id, head})
       Process.get(:qa_selects_app?, true)
     end
+
     def lookup(_repo_key, head), do: Map.get(Process.get(:qa_build_records, %{}), head)
 
     def request(repo_key, head, ticket) do
