@@ -457,6 +457,22 @@ GitHub or Linear in QA:
   of content, the desktop's column has the same Send, and it slides out once the read drops the
   question. Walk it in light and dark, and once with Reduce Motion on: the question disappears
   at once.
+- **Cancel Ticket from the ticket page (TP-1317):** the same `ticket-page` fixtures at 1440×900.
+  Open TP-1244 (running, PR #741 open) and choose **Cancel Ticket…** in More: a sheet titled
+  "Cancel TP-1244?" says, in red, that it ends the agent, closes its pull request with your note
+  as the closing comment, and moves TP-1244 from Rework to Canceled for good, withdrawing its
+  questions and clearing its holds; under it what Undo gives back; then the note field ("Why it
+  is cancelled (optional)") with the keyboard in it, **Keep It** and **Cancel Ticket** in red.
+  Keep It closes it and `qa_api_requests` lists nothing. Open it again, type "  superseded by the
+  secrets redesign  " and press Cancel Ticket: the sheet closes, the banner "Cancelled, moved to
+  Canceled" offers Undo, and `qa_api_requests` lists one `POST /api/v1/control/cancel` with
+  `issue_identifier` TP-1244 and `note` "superseded by the secrets redesign" (trimmed); a blank
+  note sends no `note`. Open TP-1246 (done): More has no Cancel Ticket…. Then pass
+  `macos/Tests/Fixtures/director-app/ticket-cancel-refused` and cancel TP-1244: Symphony refuses
+  it, and the sheet stays open with the note as typed and "Couldn't cancel TP-1244: TP-1244's
+  team has no Canceled state, so it can't be cancelled (HTTP 409)" under it. What the timeline
+  and the running list show after a cancel is the live server's to prove. Walk it in light and
+  dark.
 - **Setup (TP-910):** pass `macos/Tests/Fixtures/director-app/setup` as `api_fixtures`. Its
   state has one error, `Team TP has no "Needs Decision" label` (**Create Label…**), and one
   warning, `symphony.yml sets auto_review.enabled, which is deprecated` (**Remove…**). Before

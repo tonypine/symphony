@@ -655,6 +655,16 @@ func moveSheet(error: String? = nil) -> some View {
         .background(DesignTokens.Surface.window.color)
 }
 
+// Cancel Ticket… (TP-1317): the `ticket-page` fixture's TP-1244, running in Rework with PR #741 open.
+
+/// The sheet Cancel Ticket… opens on TP-1244, with the walkthrough's note typed.
+@MainActor
+func cancelTicketSheet(error: String? = nil) -> some View {
+    let sheet = CancelTicketSheet(identifier: "TP-1244", from: "Rework", isRunning: true, hasOpenPullRequest: true)
+    return CancelTicketSheetView(sheet: sheet, working: false, error: error, note: "superseded by the secrets redesign", keep: {}, confirm: { _ in })
+        .background(DesignTokens.Surface.window.color)
+}
+
 // Start now (TP-1330): the `start-now` fixture's SHOP-320, a Todo ticket waiting while every slot is busy, and the
 // `start-now-paused` fixture's, on a paused Symphony.
 let startAPI = here.appendingPathComponent("../Tests/Fixtures/director-app/start-now/api/v1").standardizedFileURL
@@ -2253,6 +2263,9 @@ MainActor.assumeIsolated {
         render(moveSheet(), scheme, to: "move-sheet-\(suffix).png")
         render(moveSheet(error: "Couldn't move SHOP-430 to In Progress: Symphony has no record of SHOP-430 yet, so it can't move it (HTTP 409)"),
                scheme, to: "move-sheet-refused-\(suffix).png")
+        render(cancelTicketSheet(), scheme, to: "cancel-ticket-sheet-\(suffix).png")
+        render(cancelTicketSheet(error: "Couldn't cancel TP-1244: TP-1244's team has no Canceled state, so it can't be cancelled (HTTP 409)"),
+               scheme, to: "cancel-ticket-sheet-refused-\(suffix).png")
         // Start now (TP-1330): each disabled reason.
         render(startDisabledReasons(), scheme, to: "start-now-disabled-reasons-\(suffix).png")
         // A blocked Inbox row's pause (TP-1253): stopped by the Director, and two reasons, one releasable.

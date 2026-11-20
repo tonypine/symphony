@@ -140,6 +140,20 @@ final class ActionRailTests: XCTestCase {
         XCTAssertNil(rail.more.first { $0.move == .moveTo }?.reason)
     }
 
+    func testADoneTicketOffersNoCancel_AnOpenOneOffersItInMore() throws {
+        // Symphony refuses Cancel only for a closed ticket (or one it has no record of): there is nothing to cancel.
+        let done = try rail("done")
+        XCTAssertFalse(done.items.contains { $0.move == .cancel })
+        XCTAssertNil(done.request(.cancel))
+        let refusedWithoutReason = TicketActionRail(identifier: "TP-1", moves: TicketMoves(["cancel": TicketMoveRead(allowed: false)]))
+        XCTAssertEqual(refusedWithoutReason.items, [])
+        for name in ["working", "waiting_on_you", "held", "nothing_running"] {
+            let cancel = try XCTUnwrap(try rail(name).more.first { $0.move == .cancel }, name)
+            XCTAssertTrue(cancel.allowed, name)
+            XCTAssertEqual(cancel.title, "Cancel Ticket…")
+        }
+    }
+
     func testOnlyTheMovesTheReadJudgedAreOffered_AndARefusalWithoutAReasonStillSaysOne() {
         let rail = TicketActionRail(identifier: "TP-1", moves: TicketMoves([
             "stop": TicketMoveRead(allowed: false), "unforce": TicketMoveRead(allowed: false, reason: "It isn't forced."),
@@ -182,9 +196,7 @@ final class ActionRailTests: XCTestCase {
         XCTAssertEqual(rail.request(.restart), .sheet(.restart))
         XCTAssertEqual(rail.request(.unblock), .send(.unblock("TP-1")))
         XCTAssertEqual(rail.request(.note), .sheet(.note))
-        guard case let .confirm(confirmation)? = rail.request(.cancel) else { return XCTFail("Cancel asks first") }
-        XCTAssertEqual(confirmation.action, .cancel("TP-1", note: nil))
-        XCTAssertEqual(confirmation.title, "Cancel TP-1?")
+        XCTAssertEqual(rail.request(.cancel), .sheet(.cancel))
         // Force is not on a rail that offers Stop Forcing.
         XCTAssertNil(rail.request(.force))
     }
