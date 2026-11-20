@@ -145,7 +145,9 @@ final class UpdateDrainStartTests: XCTestCase {
             logPath: "~/Library/Logs/symphony/menubar-child.log",
             now: began
         )
-        if effects == [.send(.pause)] { effects = machine.handle(.controlFinished(.pause, .done), now: began) }
+        if effects == [.send(machine.pauseAction)] {
+            effects = machine.handle(.controlFinished(machine.pauseAction, .done), now: began)
+        }
         for read in reads.dropFirst() {
             XCTAssertEqual(machine.handle(.polled(stateFails), now: began), [.checkRuns])
             effects = machine.handle(.runsChecked(read), now: began)
