@@ -35,10 +35,11 @@ defmodule SymphonyElixir.PhaseSteps.WindowTests do
   the VM before it ever blames a change for it.
 
   The step never passes by default. When it could not run (no QA VM is set up, the VM is unreachable
-  or refused, the build could not run there, a tool is missing, or the scripts fail on the base
-  too), it answers `{:ask, output, question}`: the step ends `paused` on a Question the Director's
-  Inbox shows, naming the VM problem, and the run stops before Hand off, so nothing is pushed. The
-  answer runs it again, or sends the person's words back to the code step. A build that failed
+  or refused, the build could not run there, a tool is missing, the scripts fail on the base too, or
+  a test the change needs is off), it answers `{:ask, output, question}`: the step ends `paused` on a
+  Question the Director's Inbox shows, naming the cause as it is (`question/3`: the VM, the base
+  branch, or the off test), and the run stops before Hand off, so nothing is pushed. The answer runs
+  it again, or sends the person's words back to the code step. A build that failed
   (`:failed`, the change's) fails the step back to the code step with the build's output.
   """
 
@@ -175,8 +176,7 @@ defmodule SymphonyElixir.PhaseSteps.WindowTests do
 
     case {result, off} do
       {{:done, output, 0}, [_ | _]} ->
-        why = off_why(off)
-        {:ask, could_not_run_output(output, why), question(context, why)}
+        ask(context, output, :off, off_why(off))
 
       {{:done, output, status}, _off} ->
         {:ok, {output, status}}
@@ -184,10 +184,19 @@ defmodule SymphonyElixir.PhaseSteps.WindowTests do
       {{:timeout, output}, _off} ->
         {:timeout, output}
 
-      {{:could_not_run, why, output}, _off} ->
-        {:ask, could_not_run_output(output, why), question(context, why)}
+      {{:base_fault, why, output}, off} ->
+        ask(context, output, :base, with_off(why, off))
+
+      {{:could_not_run, why, output}, off} ->
+        ask(context, output, :vm, with_off(why, off))
     end
   end
+
+  defp ask(context, output, cause, why), do: {:ask, could_not_run_output(output, why), question(context, cause, why)}
+
+  # A stop for another cause still names the off tests the change needs, so the answer covers both.
+  defp with_off(why, []), do: why
+  defp with_off(why, off), do: why <> "; and " <> off_why(off)
 
   # The tests the change needs that the QA VM can't run yet: the run stops rather than hand off
   # with them unrun.
@@ -397,6 +406,7 @@ defmodule SymphonyElixir.PhaseSteps.WindowTests do
       verdict(failing, base_results, output <> "\n-- The failing tests again, on the base branch (#{short(base)}):\n" <> base_output)
     else
       {:could_not_run, why, more} -> {:could_not_run, why, output <> more}
+      {:base_fault, why, more} -> {:base_fault, why, output <> more}
       {:timeout, more} -> {:timeout, output <> "\n-- The failing tests again, on the base branch:\n" <> more}
     end
   end
@@ -405,7 +415,7 @@ defmodule SymphonyElixir.PhaseSteps.WindowTests do
     case for({test, 0} <- base_results, do: test.script) do
       [] ->
         titles = Enum.map_join(failing, ", ", & &1.title)
-        {:could_not_run, "the #{titles} also fails in the QA VM on the base branch, so the fault is the VM's or the base's, not this change's", output}
+        {:base_fault, "the #{titles} also fails in the QA VM on the base branch, so the fault is the VM's or the base's, not this change's", output}
 
       passing ->
         names = Enum.map_join(failing, ", ", & &1.script)
@@ -416,7 +426,7 @@ defmodule SymphonyElixir.PhaseSteps.WindowTests do
   # The base branch that does not build in the QA VM can't tell whose fault the failure is.
   defp base_build(context, base, opts) do
     case build(context, base, opts, "the base branch") do
-      {:done, text, _status} -> {:could_not_run, "the base branch (#{short(base)}) does not build in the QA VM", text}
+      {:done, text, _status} -> {:base_fault, "the base branch (#{short(base)}) does not build in the QA VM", text}
       other -> other
     end
   end
@@ -424,37 +434,76 @@ defmodule SymphonyElixir.PhaseSteps.WindowTests do
   defp could_not_run_output(output, why), do: output <> "\n(could not run: #{why})\n"
 
   @doc """
-  The Question the step pauses on when it could not run: what is wrong with the QA VM, in plain
-  words, and the ways forward: run it again (once the VM is back), or send the person's words to the
-  code step. Neither passes the step.
+  The Question the step pauses on when it could not run, for its `cause`, with `why` in plain
+  words. Neither answer passes the step: it runs again, or the person's words go to the code step.
+
+  - `:vm`: the QA VM could not run the tests (unreachable, refused, no builder, a tool missing).
+    Running them again, once the VM works, is recommended.
+  - `:base`: the failing tests also fail on the base branch, or the base does not build there, so
+    the QA VM or the base branch itself is at fault, not the change. Running them again, once
+    either is fixed, is recommended.
+  - `:off`: the change touches what a test covers that is off in the QA VM until it passes on main
+    there. The VM is not at fault and running again stops again while the test stays off in the
+    change's manifest, so sending it to the code step is recommended.
   """
-  @spec question(map(), String.t()) :: map()
-  def question(context, why) do
+  @spec question(map(), :vm | :base | :off, String.t()) :: map()
+  def question(context, cause, why) do
     name = Map.get(context, :identifier) || "this ticket"
     problem = why |> PlainWords.scrub() |> String.slice(0, @why_chars)
+    words = wording(cause, name)
 
     %{
-      title: String.slice("#{name}: the window tests could not run in the QA VM", 0, 120),
-      question: "The window tests of #{name} could not run in the QA VM, so the run stopped before it pushed anything. Should Symphony run them again?",
-      why:
-        "The change touches tests that drive an app window, and those run only in the QA VM. They could not run there: #{problem}. " <>
-          "Symphony never counts them as passed without running them, so nothing was pushed.",
+      title: String.slice("#{name}: #{words.title}", 0, 120),
+      question: words.question,
+      why: words.why <> problem <> ". Symphony never counts a window test as passed without running it, so nothing was pushed.",
       if_unanswered: "#{name} stays paused before its hand off, and nothing is pushed.",
-      recommendation_reason: "Once the QA VM works again, running the tests again lets the run hand off with them passed.",
+      recommendation_reason: words.reason,
       options: [
         %{
           label: @run_again,
           effect: "Symphony runs the window tests of #{name} again in the QA VM.",
-          recommended: true,
-          tradeoffs: [%{kind: "risk", text: "It stops here again while the QA VM still has the problem."}]
+          recommended: cause != :off,
+          tradeoffs: [%{kind: "risk", text: words.again_risk}]
         },
         %{
           label: SymphonyElixir.PhaseSteps.back_to_code(),
           effect: "Symphony sends your answer to the run's code step, which works on #{name} again before the tests run.",
-          recommended: false,
+          recommended: cause == :off,
           tradeoffs: [%{kind: "cost", text: "The run goes back to writing the code, and the window tests run again after it."}]
         }
       ]
+    }
+  end
+
+  defp wording(:vm, name) do
+    %{
+      title: "the window tests could not run in the QA VM",
+      question: "The window tests of #{name} could not run in the QA VM, so the run stopped before it pushed anything. Should Symphony run them again?",
+      why: "The change touches tests that drive an app window, and those run only in the QA VM. They could not run there: ",
+      reason: "Once the QA VM works again, running the tests again lets the run hand off with them passed.",
+      again_risk: "It stops here again while the QA VM still has the problem."
+    }
+  end
+
+  defp wording(:base, name) do
+    %{
+      title: "the window tests fail without this change too",
+      question:
+        "The window tests of #{name} failed, and the main branch, without this change, fails them too or does not build in the QA VM, so the run stopped before it pushed anything. Should Symphony run them again?",
+      why: "The change touches tests that drive an app window, and those run only in the QA VM. The main branch fails there too, so the QA VM or the main branch itself is broken, not this change: ",
+      reason: "The fault is the QA VM's or the main branch's; once either is fixed, running the tests again lets the run hand off with them passed.",
+      again_risk: "It stops here again while the QA VM or the main branch is still broken."
+    }
+  end
+
+  defp wording(:off, name) do
+    %{
+      title: "a window test this change needs is turned off",
+      question:
+        "The change of #{name} touches what a window test checks, and that test is turned off in the QA VM until it is seen passing on the main branch there. The run stopped before it pushed anything. What should the run do?",
+      why: "The QA VM works; the test is off, so Symphony cannot run it for this change: ",
+      reason: "Running again stops again while the test is off; the code step can leave out what the test covers, or bring in the main branch once a later change turned the test on.",
+      again_risk: "It stops here again while the test is still off in this change's list of window tests."
     }
   end
 

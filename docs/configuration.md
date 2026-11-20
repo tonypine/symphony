@@ -3998,8 +3998,10 @@ back to `code` with the output; when every failing test fails there too, the fau
 main's. The step never passes by default: when it could not run (no QA VM, the VM unreachable or
 refused, the build could not run there, a tool missing, a test failing on main too, or a covering test
 that is `off`), it pauses on
-a Question in the Inbox naming the VM problem, so the run stops before Hand off and nothing is
-pushed; the answer runs it again, or sends the person's words to `code`. The QA VM is one machine:
+a Question in the Inbox naming its cause as it is (the QA VM, main failing or not building there
+too, or a test that is `off`, which recommends sending it to `code`, since running again stops
+again while the test stays `off`), so the run stops before Hand off and nothing is pushed; the
+answer runs it again, or sends the person's words to `code`. The QA VM is one machine:
 a `macos_app` QA pass holds it for its whole pass and the step while its tests run, so they never
 overlap; a step that waits says on the ticket's timeline which ticket holds it, and a QA pass that
 waits is listed as waiting for the QA VM.

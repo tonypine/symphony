@@ -280,8 +280,10 @@ defmodule SymphonyElixir.PhaseSteps.WindowTestsTest do
       assert output(paused) =~ "(could not run: the breakable test also fails in the QA VM on the base branch"
 
       question = Questions.find({:ticket, @repo_key, @issue_id}, question_id)
-      assert question.title == "TP-77: the window tests could not run in the QA VM"
+      assert question.title == "TP-77: the window tests fail without this change too"
+      assert question.why =~ "the QA VM or the main branch itself is broken, not this change"
       assert question.why =~ "the breakable test also fails in the QA VM on the base branch"
+      assert question.recommendation_reason =~ "The fault is the QA VM's or the main branch's"
       assert [%{label: "Run it again", recommended?: true}, %{label: "Send it back to the code", recommended?: false}] = question.options
       assert PhaseSteps.machine_resume(%{question | answer: %{option: 1, text: "Run it again"}}) == :again
       assert PhaseSteps.machine_resume(%{question | answer: %{option: 2, text: "Send it back to the code"}}) == :words
@@ -292,8 +294,14 @@ defmodule SymphonyElixir.PhaseSteps.WindowTestsTest do
       refute_received {:vm_cmd, _run, _opts}
       assert [%{outcome: "paused", question_id: ^question_id} = paused] = completed()
       assert output(paused) =~ "(could not run: the change touches what a window test covers that is off in the QA VM"
-      assert %{why: why} = Questions.find({:ticket, @repo_key, @issue_id}, question_id)
-      assert why =~ "the test off in the VM (it fails on main there)"
+      question = Questions.find({:ticket, @repo_key, @issue_id}, question_id)
+      assert question.title == "TP-77: a window test this change needs is turned off"
+      assert question.why =~ "The QA VM works; the test is off"
+      assert question.why =~ "the test off in the VM (it fails on main there)"
+      refute question.recommendation_reason =~ "QA VM works again"
+      assert question.recommendation_reason =~ "Running again stops again while the test is off"
+      assert [%{label: "Run it again", recommended?: false}, %{label: "Send it back to the code", recommended?: true}] = question.options
+      assert PhaseSteps.machine_resume(%{question | answer: %{option: 2, text: "Send it back to the code"}}) == :words
       refute Enum.any?(events("step.started"), &(&1.payload.step_id == "handoff"))
     end
 
@@ -320,6 +328,17 @@ defmodule SymphonyElixir.PhaseSteps.WindowTestsTest do
       assert why =~ "the QA VM could not be reached or could not run the breakable test (exit 255)"
       assert [%{outcome: "paused"}] = completed()
       refute Enum.any?(events("step.started"), &(&1.payload.step_id == "handoff"))
+    end
+
+    test "an unreachable QA VM and an off test the change needs: the VM problem leads, naming the off test beside it", ctx do
+      change_flaky!(ctx, "echo fine\n")
+      unreachable = %{cmd: fn _args, _run -> {:ok, {"ssh: connect to host qa-vm port 22: Operation timed out\n", 255}} end}
+      both = ["macos/Tests/flaky-test.sh", "priv/off/driver.swift"]
+      assert {:paused, _step, question_id} = walk(context(ctx, both, opts(ctx, %{host: unreachable})))
+      question = Questions.find({:ticket, @repo_key, @issue_id}, question_id)
+      assert question.title == "TP-77: the window tests could not run in the QA VM"
+      assert question.why =~ "(exit 255); and the change touches what a window test covers that is off in the QA VM"
+      assert [%{label: "Run it again", recommended?: true}, _back] = question.options
     end
 
     test "a QA VM the safety checks refuse, a commit it can't take, a tool it lacks or a test it can't say how ended all could not run", ctx do
