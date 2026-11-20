@@ -29,6 +29,10 @@ defmodule SymphonyElixir.Tracker.Memory do
   issue's `"blockedBy"` list, read back as the issue's `blocked_by` with the blocker's identifier and
   current state; with `:memory_tracker_issues` set, it edits the issue's `blocked_by` there.
 
+  An entry's optional `"parentId"` names its parent's id: the parent reads it back among its
+  `sub_issues` (with its identifier and current state), and the child reads its `parent` as Linear's
+  parent node gives it (`SymphonyElixir.Connected.parent/1`).
+
   A priority (`update_issue_priority/2`, Linear's number) is the issue's `"priority"` in the
   issues file, read back as the issue's `priority`; with `:memory_tracker_issues` set, it edits the
   issue's `priority` there.
@@ -38,7 +42,7 @@ defmodule SymphonyElixir.Tracker.Memory do
 
   require Logger
 
-  alias SymphonyElixir.Config
+  alias SymphonyElixir.{Config, Connected}
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Routing.Resolver
   alias SymphonyElixir.Tracker
@@ -640,6 +644,8 @@ defmodule SymphonyElixir.Tracker.Memory do
         team: json_map(entry["team"], key: "key", name: "name"),
         project: json_map(entry["project"], id: "id", name: "name", slug_id: "slug_id"),
         blocked_by: file_blockers(entry, entries),
+        sub_issues: file_sub_issues(id, entries),
+        parent: file_parent(entry["parentId"], entries),
         priority: file_priority(entry["priority"])
       }
     ]
@@ -655,6 +661,31 @@ defmodule SymphonyElixir.Tracker.Memory do
     for blocker_id <- List.wrap(entry["blockedBy"]),
         %{"id" => ^blocker_id} = blocker <- entries,
         do: %{id: blocker_id, identifier: blocker["identifier"], state: blocker["state"]}
+  end
+
+  # The issues whose `"parentId"` names `id`, each with its identifier and its current state.
+  defp file_sub_issues(id, entries) do
+    for %{"parentId" => ^id, "id" => child_id} = child <- entries,
+        do: %{id: child_id, identifier: child["identifier"], state: child["state"]}
+  end
+
+  # The parent an entry's `"parentId"` names, as Linear's parent node reads (`Connected.parent/1`):
+  # its children's states by Linear's state type.
+  defp file_parent(parent_id, entries) when is_binary(parent_id) do
+    with %{} = parent <- Enum.find(entries, &(&1["id"] == parent_id)) do
+      children = for child <- file_sub_issues(parent_id, entries), do: %{"state" => %{"type" => state_type(child.state)}}
+      Connected.parent(Map.put(parent, "children", %{"nodes" => children}))
+    end
+  end
+
+  defp file_parent(_parent_id, _entries), do: nil
+
+  defp state_type(state) do
+    case normalize_state(state) do
+      "done" -> "completed"
+      canceled when canceled in ["canceled", "cancelled"] -> "canceled"
+      _open -> "started"
+    end
   end
 
   # The team (`key`, `name`) or project (`id`, `name`, `slug_id`) of an issues-file entry.

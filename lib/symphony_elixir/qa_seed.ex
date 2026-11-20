@@ -25,6 +25,10 @@ defmodule SymphonyElixir.QaSeed do
     (`SymphonyElixir.Conductor.actioned_options/5`), so Decide acts on it;
   - `runs`: finished runs (`issue`, `status`, `minutes_ago`, `runtime_seconds`, `total_tokens`), each
     with its transcript, a JSONL file of agent events (`transcript`, relative to the seed);
+  - `merged_waits`: the tickets whose PR's merge put them in `Waiting on sub-tickets`
+    (`SymphonyElixir.RunStore.put_merged_wait/1`, as `SymphonyElixir.SubIssueWait.wait_on_merge/3`
+    records it), so Symphony closes each one once its last sub-ticket ends; a tracker issue's
+    `"parentId"` makes it a sub-ticket;
   - `pull_requests`: a ticket's open PR (`number`) and what the PR watcher read of its checks (`ci`:
     `green`, `red` with its `failing_check`, or `pending`);
   - `events`: a ticket's ledger history (`SymphonyElixir.TicketEvents.record/5`), oldest first: each
@@ -101,6 +105,7 @@ defmodule SymphonyElixir.QaSeed do
          :ok <- each(Map.get(seed, "holds", []), &hold(repo_key, tracker, &1)),
          :ok <- each(Map.get(seed, "questions", []), &question(repo_key, tracker, &1)),
          :ok <- each(Map.get(seed, "runs", []), &run(dir, repo_key, tracker, now, &1)),
+         :ok <- each(Map.get(seed, "merged_waits", []), &merged_wait(tracker, &1)),
          :ok <- each(Map.get(seed, "pull_requests", []), &pull_request(repo_key, tracker, now, &1)),
          :ok <- each(Map.get(seed, "events", []), &event(dir, repo_key, tracker, now, &1)) do
       Logger.info("QA seed loaded dir=#{dir} repo_key=#{repo_key} issues=#{length(issues)}")
@@ -258,6 +263,12 @@ defmodule SymphonyElixir.QaSeed do
 
   defp transcript_path(nil, _dir), do: nil
   defp transcript_path(file, dir), do: Path.expand(file, dir)
+
+  defp merged_wait(tracker, identifier) do
+    with {:ok, issue} <- issue(tracker, identifier) do
+      tagged(RunStore.put_merged_wait(issue.id), {:merged_wait, identifier})
+    end
+  end
 
   defp pull_request(repo_key, tracker, now, %{"issue" => identifier, "number" => number} = entry) do
     with {:ok, ci} <- ci(identifier, Map.get(entry, "ci", "pending")),

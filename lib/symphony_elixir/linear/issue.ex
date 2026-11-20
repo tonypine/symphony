@@ -7,6 +7,8 @@ defmodule SymphonyElixir.Linear.Issue do
   carries its `comments` instead and leaves it nil.
   """
 
+  alias SymphonyElixir.SubIssueWait
+
   # A human puts the `plan` label on a parent ticket to have it groomed into sub-tickets; it stays on
   # while the sub-tickets are worked. `breakdown` is its older name, still accepted.
   @breakdown_labels ["plan", "breakdown"]
@@ -142,16 +144,22 @@ defmodule SymphonyElixir.Linear.Issue do
   @doc """
   The issue's blockers still outside `terminal_states`. A blocker counts as resolved only once it
   is terminal (`Done`, `Canceled`, ...): `Merging`, `Code Review`, `QA`, `CI Fix` and `Rework` still
-  block, since the blocker's code is not on the default branch yet. A blocker without a known state
-  counts as open.
+  block, since the blocker's code is not on the default branch yet. One more counts as resolved: a
+  blocker whose PR merged and that waits on its own sub-tickets
+  (`SymphonyElixir.SubIssueWait.merged_blocker?/1`), whose code is on the default branch; a
+  sub-ticket blocked by such a parent would otherwise wait on it while it waits on the sub-ticket.
+  A blocker without a known state counts as open.
   """
   @spec open_blockers(t(), Enumerable.t(String.t())) :: [map()]
   def open_blockers(%__MODULE__{blocked_by: blockers}, terminal_states) when is_list(blockers) do
     terminal_states = MapSet.new(terminal_states, &normalize_state/1)
 
     Enum.reject(blockers, fn
-      %{state: state} when is_binary(state) -> MapSet.member?(terminal_states, normalize_state(state))
-      _blocker -> false
+      %{state: state} = blocker when is_binary(state) ->
+        MapSet.member?(terminal_states, normalize_state(state)) or SubIssueWait.merged_blocker?(blocker)
+
+      _blocker ->
+        false
     end)
   end
 

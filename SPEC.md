@@ -3834,7 +3834,10 @@ An issue is dispatch-eligible only if all are true:
     merge commit.
   - A blocker counts as resolved only once its state is in `terminal_states`. `Merging`,
     `Code Review`, `QA` and `Rework` still block, since the blocker's change is not on the
-    default branch yet. A blocker without a known state counts as open.
+    default branch yet. One exception: a non-plan blocker its PR's merge put in the waiting state
+    (default `Waiting on sub-tickets`) counts as resolved, since its change is on the default
+    branch; a sub-ticket blocked by its own merged parent would otherwise deadlock with it. A plan
+    parent in the waiting state still blocks. A blocker without a known state counts as open.
   - A blocker linked while a run is under way never stops the worker once its agent session
     started: the turn in flight finishes, the run starts no further turn, and the next dispatch is
     held. A blocker that reaches the ticket's record while the run is still starting (dispatched, no
@@ -7593,7 +7596,9 @@ infrastructure.
 - plan parent in `In Progress` with an approved non-terminal sub-issue moves to the waiting state;
   a plan parent in the waiting state whose sub-issues are all terminal, or that has none left (each
   re-parented to another epic or deleted), moves to `Epic Review`; a non-plan ticket the merge put
-  there with none left moves to `Done`
+  there with none left moves to `Done` on every poll, whether or not a slot is free or a dispatch
+  pass runs, so the first poll after a start also closes one left waiting; its status reads
+  "Closing", never "The epic review is next"
 - a child's webhook delivery that moves it to another parent, or files, removes or changes the
   state of it, reads its old and new parent again by id, so their sub-issue lists are current within
   seconds; the reconcile reads by id the parents in `Plan Review`, the waiting state and

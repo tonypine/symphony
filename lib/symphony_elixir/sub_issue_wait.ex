@@ -15,7 +15,8 @@ defmodule SymphonyElixir.SubIssueWait do
 
   Any other issue whose pull request merges with a sub-issue still open outside `Backlog` waits there
   too, instead of closing (`wait_on_merge?/3`), and Symphony moves it to `Done` itself, with no run,
-  once every sub-issue outside `Backlog` is terminal (`close?/3`). Its `Backlog` sub-issues wait for a person to promote them and never hold it: with only
+  once every sub-issue outside `Backlog` is terminal (`close?/3`), on every poll whether or not a
+  dispatch pass runs. A blocked-by link to it no longer blocks (`merged_blocker?/1`). Its `Backlog` sub-issues wait for a person to promote them and never hold it: with only
   those open, the merge closes it as if it had none. A sub-issue filed or canceled meanwhile just
   counts in that check. The RunStore records each issue the merge put there,
   so one a person moved there, with its pull request still open, waits for a human as before.
@@ -28,9 +29,9 @@ defmodule SymphonyElixir.SubIssueWait do
 
   require Logger
 
+  alias SymphonyElixir.{Config, RunStore, TicketSignals, Tracker, TransitionGuard}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
-  alias SymphonyElixir.{RunStore, TicketSignals, Tracker, TransitionGuard}
 
   @parked_from_state "In Progress"
   @backlog_state "Backlog"
@@ -196,6 +197,27 @@ defmodule SymphonyElixir.SubIssueWait do
   end
 
   def close?(_issue, _terminal_states, _settings), do: false
+
+  @doc """
+  True when `blocker` (a blocked-by link's `%{id, state}`) no longer blocks although it is not
+  terminal: it sits in the waiting state because its pull request merged (`wait_on_merge/3`
+  recorded it), so its code is on the default branch. A sub-ticket blocked by its own parent would
+  otherwise wait on the parent while the parent waits on it (MOT-85 and MOT-100). A plan parent in
+  the waiting state still blocks: its work is its sub-tickets, and nothing recorded a merge for it.
+  """
+  @spec merged_blocker?(map() | term()) :: boolean()
+  def merged_blocker?(%{id: blocker_id, state: blocker_state}) when is_binary(blocker_id) and is_binary(blocker_state) do
+    # The store read comes first: it rules out nearly every blocker for less than a config read.
+    with true <- RunStore.merged_wait?(blocker_id),
+         {:ok, settings} <- Config.settings(),
+         state when is_binary(state) <- state(settings) do
+      normalize(blocker_state) == normalize(state)
+    else
+      _not_waiting -> false
+    end
+  end
+
+  def merged_blocker?(_blocker), do: false
 
   @doc "Moves `issue` to `Done` and comments how each of its sub-issues ended or waits."
   @spec close(Issue.t(), module()) :: :ok | {:error, term()}
