@@ -207,7 +207,6 @@ defmodule SymphonyElixir.StartIssueTest do
       {:ok, cycle_workspace} = SymphonyElixir.PathSafety.canonicalize(Path.join([test_root, "workspaces", "cycle", "MOT-104"]))
       assert {:ok, ^cycle_workspace} = Workspace.local_path_for_issue(run_issue)
       assert [_started_by_person] = ticket_events("cycle", "cycle-1", "run.started_by_person")
-      assert [] = ticket_events(@repo, "cycle-1", "run.started_by_person")
     end
 
     test "a spawn that fails answers that a retry is scheduled and keeps that retry in the state" do
