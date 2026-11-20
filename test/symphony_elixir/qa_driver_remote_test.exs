@@ -636,7 +636,7 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
       assert :ok = Remote.kill(ssh_host, pid)
 
       assert {:ok, port, _pid} = Remote.launch(ssh_host, "/bin/echo", cd: root, args: ["release", "pair with spaces"])
-      assert_receive {^port, {:data, "release pair with spaces\n"}}, 5_000
+      assert collect_port_data(port, "") == "release pair with spaces\n"
     end
 
     test "launch reports a host that exits or never answers", %{root: root, ssh_host: ssh_host} do
@@ -706,6 +706,15 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
       fun.() -> :ok
       attempts == 0 -> flunk("condition never held")
       true -> Process.sleep(25) && wait_until(fun, attempts - 1)
+    end
+  end
+
+  defp collect_port_data(port, acc) do
+    receive do
+      {^port, {:data, data}} -> collect_port_data(port, acc <> data)
+      {^port, {:exit_status, _status}} -> acc
+    after
+      5_000 -> acc
     end
   end
 end
