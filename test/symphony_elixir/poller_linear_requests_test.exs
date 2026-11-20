@@ -193,6 +193,21 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
       assert {:ok, [%Issue{id: "issue-1", state: "Code Review"}]} = result.running_result
       assert {:ok, [%Issue{id: "issue-4"}]} = result.stopped_result
     end
+
+    test "under dispatch.source: record a watched plan parent in Plan Review is read by id no more" do
+      start_linear!(4)
+      dispatch_from!("record")
+      observe_records()
+      parent = %Issue{id: "issue-2", identifier: "TEAM-2", title: "The plan", state: "Plan Review", labels: ["plan"], updated_at: DateTime.add(@now, 60)}
+      {:ok, :updated} = TicketObservation.observe(@repo_key, parent, source: :poll)
+      Usage.reset()
+
+      {result, _state} = Orchestrator.run_repo_poll_task_for_test(tick_state(), repos(), 0)
+
+      assert Map.keys(linear_requests()) -- ["SymphonyLinearPoll", "SymphonyLinearViewer"] == []
+      refute "SymphonyLinearIssuesById" in Enum.map(Usage.snapshot().queries, & &1.query)
+      assert {:ok, [%Issue{id: "issue-2", state: "Plan Review", labels: ["plan"]}]} = result.watching_result
+    end
   end
 
   defp dispatch_from!(source) do
