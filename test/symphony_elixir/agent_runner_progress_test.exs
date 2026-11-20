@@ -1365,6 +1365,77 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     end
   end
 
+  describe "a CI Fix run on the default step list (TP-1555)" do
+    @red_test_job %{
+      failed_steps: ["Run coverage partition"],
+      annotations: ["failure ExUnit failure: 1) test it works (App.ThingTest)\n test/app/thing_test.exs:12"],
+      log: ""
+    }
+
+    # The workspace's shell: the changed-files script reports a changed module and its test file,
+    # the failed test file's run answers `test_result` and is reported to the test, and every
+    # other command passes.
+    defp failed_check_runner(test_result) do
+      parent = self()
+
+      fn command, _env, _timeout_ms ->
+        cond do
+          command =~ "git merge-base" -> {:ok, {"M\tlib/app/thing.ex\nT\ttest/app/thing_test.exs\n", 0}}
+          command == "mix test test/app/thing_test.exs" -> send(parent, {:ran, command}) && test_result
+          true -> {:ok, {"", 0}}
+        end
+      end
+    end
+
+    # GitHub's read of the red job, as the CI log tool returns it, reported to the test.
+    defp red_job_read do
+      parent = self()
+
+      fn repo, {:job, job_id}, opts ->
+        send(parent, {:ci_log_read, repo, job_id, Keyword.take(opts, [:failed_only])})
+        {:ok, %{jobs: [@red_test_job]}}
+      end
+    end
+
+    defp run_ci_fix_walk!(test_result) do
+      checks = [%{name: "coverage (2/4)", status: "COMPLETED", conclusion: "FAILURE", job_id: 101}]
+      :ok = put_pending_ci_failure(approved: false, commit_sha: "sha-red", failed_checks: checks)
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-red", checks: []}})
+
+      capture_log(fn ->
+        # A pending CI failure makes the In Progress run a CI Fix run.
+        run_issue!("In Progress",
+          heads: ["sha-red", "sha-fix"],
+          max_turns: 6,
+          symphony_steps: "",
+          runner_opts: [step_command_runner: failed_check_runner(test_result), failed_check_opts: [read: red_job_read()], run_id: "run-progress"]
+        )
+      end)
+    end
+
+    defp step_events(type, step_id) do
+      for %{payload: %{step_id: ^step_id}} = event <- SymphonyElixir.TicketEvents.query("issue-progress", types: [type], limit: 200), do: event
+    end
+
+    test "the runner gives the step the run's failure and PR: it runs the failed test file, and the hand off starts only after it passes" do
+      run_ci_fix_walk!({:ok, {"ok\n", 0}})
+
+      assert_received {:ci_log_read, "example/repo", "101", [failed_only: true]}
+      assert_received {:ran, "mix test test/app/thing_test.exs"}
+      assert [%{seq: passed_seq, payload: %{outcome: "passed"}}] = step_events("step.completed", "failed_check")
+      assert [%{seq: handoff_seq} | _rest] = step_events("step.started", "handoff")
+      assert passed_seq < handoff_seq
+    end
+
+    test "the runner sends a failed test back to the fix step, and the hand off never starts" do
+      run_ci_fix_walk!({:ok, {"1) test it works\nAssertion failed", 2}})
+
+      assert_received {:ran, "mix test test/app/thing_test.exs"}
+      assert [%{payload: %{outcome: "failed", returns_to: "fix"}} | _rest] = step_events("step.completed", "failed_check")
+      assert step_events("step.started", "handoff") == []
+    end
+  end
+
   describe "a CI-fix run that pushes nothing" do
     # TP-656: the red check was a flake (also red on main), and its rerun on the PR head passed.
     @green_checks [%{name: "make-all", status: "COMPLETED", conclusion: "SUCCESS"}]
@@ -1896,7 +1967,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
   defp put_pending_ci_failure(opts) do
     failure = %{
       commit_sha: Keyword.get(opts, :commit_sha, "sha-same"),
-      failed_checks: [%{name: "make-all", status: "COMPLETED", conclusion: "FAILURE"}],
+      failed_checks: Keyword.get(opts, :failed_checks, [%{name: "make-all", status: "COMPLETED", conclusion: "FAILURE"}]),
       log_excerpt: "stub_test.exs:21 failed",
       approved: Keyword.fetch!(opts, :approved)
     }

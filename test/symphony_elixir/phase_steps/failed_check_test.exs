@@ -183,8 +183,13 @@ defmodule SymphonyElixir.PhaseSteps.FailedCheckTest do
       assert FailedCheck.failed_checks(%{ci_failure: failure([%{name: "lint", job_id: ""}])}) == [%{name: "lint", job_id: nil}]
       assert FailedCheck.failed_checks(%{ci_failure: nil}) == []
       assert FailedCheck.failed_checks(%{}) == []
-      assert FailedCheck.skip_reason(%{ci_failure: nil}) == "no check failed on GitHub for this run"
-      assert FailedCheck.skip_reason(%{ci_failure: failure([%{name: "lint"}])}) == nil
+
+      assert FailedCheck.skip_reason(%{ci_failure: nil, pr_conflict: %{mergeable: "CONFLICTING"}}) ==
+               "the run was sent for a merge conflict, and no check failed on GitHub for it"
+
+      assert FailedCheck.skip_reason(%{ci_failure: failure([%{name: "lint"}]), pr_conflict: %{mergeable: "CONFLICTING"}}) == nil
+      assert FailedCheck.skip_reason(%{ci_failure: nil, pr_conflict: nil}) == nil
+      assert FailedCheck.skip_reason(%{ci_failure: nil}) == nil
     end
   end
 
@@ -228,8 +233,24 @@ defmodule SymphonyElixir.PhaseSteps.FailedCheckTest do
     end
 
     test "a run sent for a merge conflict, with no failed check, skips the step" do
-      assert {:turn, %{id: "handoff"}, nil} = walk(context([], %{}, %{ci_failure: nil}))
-      assert [%{outcome: "skipped", reason: "no check failed on GitHub for this run"}] = completed()
+      assert {:turn, %{id: "handoff"}, nil} = walk(context([], %{}, %{ci_failure: nil, pr_conflict: %{mergeable: "CONFLICTING"}}))
+      assert [%{outcome: "skipped", reason: "the run was sent for a merge conflict, and no check failed on GitHub for it"}] = completed()
+    end
+
+    test "a CI Fix run with neither a failed check nor a merge conflict stops on a question before the push" do
+      for overrides <- [%{ci_failure: nil}, %{ci_failure: failure([])}] do
+        :ok = RunStore.clear()
+
+        assert {:paused, %{id: "failed_check"}, question_id} = walk(context([], %{}, Map.put(overrides, :pr_conflict, nil)))
+        refute_received {:read, _repo, _job, _opts}
+        refute_received {:ran, _command}
+        assert [%{outcome: "paused", question_id: ^question_id} = paused] = completed()
+        assert output(paused) =~ "(could not run: Symphony does not know which check failed on GitHub for this run)"
+        refute Enum.any?(events("step.started"), &(&1.payload.step_id == "handoff"))
+
+        question = Questions.find({:ticket, @repo_key, @issue_id}, question_id)
+        assert question.question =~ "The CI Fix run of TP-88 fixed what failed on GitHub, but Symphony"
+      end
     end
 
     test "a coverage report and failed steps run once each, in order, and a failure stops the rest" do

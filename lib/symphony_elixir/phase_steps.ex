@@ -122,8 +122,9 @@ defmodule SymphonyElixir.PhaseSteps do
   (`runner`, default the workspace's), the options its output is kept with (`artifact_opts`), who
   hears the step start and end (`on_step`), on an agent step the lines of its turns so far
   (`transcript_lines`) and where its answer goes (`answer_dir`, `answer_path/2`), the walk's own
-  commands (`builtins`), and on a CI Fix run the red head's failure it was sent for (`ci_failure`)
-  and its pull request (`pr_url`), which the failed-check step reads.
+  commands (`builtins`), and on a CI Fix run the red head's failure it was sent for (`ci_failure`),
+  the merge conflict it was sent for (`pr_conflict`) and its pull request (`pr_url`), which the
+  failed-check step reads.
   """
   @type context :: %{
           required(:repo_key) => String.t(),
@@ -144,6 +145,7 @@ defmodule SymphonyElixir.PhaseSteps do
           optional(:window_tests) => (map(), pos_integer() -> runner_result() | {:ask, String.t(), map()}),
           optional(:answer_dir) => Path.t() | nil,
           optional(:ci_failure) => map() | nil,
+          optional(:pr_conflict) => map() | nil,
           optional(:pr_url) => String.t() | nil,
           optional(:failed_check_opts) => keyword()
         }
@@ -360,7 +362,7 @@ defmodule SymphonyElixir.PhaseSteps do
     end
   end
 
-  # The failed-check step of a CI Fix run sent for no failed check (a merge conflict) has nothing
+  # The failed-check step of a CI Fix run sent for a merge conflict and no failed check has nothing
   # to run again.
   defp builtin_skip_reason(step, context) do
     if commands(step, context.changes) == [Phases.failed_check_command()], do: FailedCheck.skip_reason(context)

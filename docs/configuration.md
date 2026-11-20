@@ -4090,8 +4090,10 @@ CI fix list: `dialyzer` (its full run), `protected paths` and `validate-pr-descr
 pull request on GitHub), the `macos` gate (it sums up the Mac checks), and the Mac checks' QA signing
 identity and update tests (they change the machine they run on). Any other check the step has no way
 to run, or can't read, stops the run on a Question before the push: the person lets CI prove it ("Go
-on past it"), runs it again, or sends their words to `fix`. A CI Fix run sent for a merge conflict has
-no failed check, and the step is skipped.
+on past it"), runs it again, or sends their words to `fix`. A CI Fix run sent for a merge conflict, with
+no failed check, skips the step. A CI Fix run with neither a failed check nor a merge conflict (a
+failure record lost, or a ticket moved into CI Fix by hand) stops on the same Question: the step
+never passes without running what failed.
 
 Agents run none of the commands in these lists: the prompts name no check command, and a run with no
 step list leaves them to CI, apart from the test it is fixing and the push check.

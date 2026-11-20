@@ -28,8 +28,9 @@ defmodule SymphonyElixir.PhaseSteps.FailedCheck do
   (`{:ask, output, question}`): it pauses on a Question in the Director's Inbox, so the run stops
   before Hand off and nothing is pushed. Only the declared checks are left to CI without one.
 
-  A CI Fix run that fixes a merge conflict was sent for no failed check: the step is skipped
-  (`skip_reason/1`).
+  A CI Fix run sent for a merge conflict (its `pr_conflict`) and no failed check: the step is
+  skipped (`skip_reason/1`). Any other run with no failed check it knows of stops on the question
+  before the push: the step never passes without running what failed.
   """
 
   alias SymphonyElixir.Config.Schema.Phases
@@ -87,10 +88,15 @@ defmodule SymphonyElixir.PhaseSteps.FailedCheck do
   @spec step_commands() :: %{{String.t(), String.t()} => String.t()}
   def step_commands, do: @step_commands
 
-  @doc "Why the step is skipped for `context`: the run was sent for no failed check (a merge conflict). Else nil."
+  @doc """
+  Why the step is skipped for `context`: the run was sent for a merge conflict (its `pr_conflict`)
+  and for no failed check. Else nil: a CI Fix run with no failed check it knows of and no conflict
+  runs the step, which stops it on a question before the push (`run/3`).
+  """
   @spec skip_reason(map()) :: String.t() | nil
   def skip_reason(context) do
-    if failed_checks(context) == [], do: "no check failed on GitHub for this run"
+    if is_map(Map.get(context, :pr_conflict)) and failed_checks(context) == [],
+      do: "the run was sent for a merge conflict, and no check failed on GitHub for it"
   end
 
   @doc """
@@ -199,8 +205,14 @@ defmodule SymphonyElixir.PhaseSteps.FailedCheck do
   """
   @spec run(map(), pos_integer(), shell()) :: result()
   def run(context, timeout_ms, shell) do
+    case failed_checks(context) do
+      [] -> could_not_run(context, [], "", "Symphony does not know which check failed on GitHub for this run")
+      checks -> run_checks(context, checks, timeout_ms, shell)
+    end
+  end
+
+  defp run_checks(context, checks, timeout_ms, shell) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
-    checks = failed_checks(context)
     planned = Enum.map(checks, &{&1, plan(&1, read(context, &1), context.changes)})
     items = Enum.flat_map(planned, &elem(&1, 1))
     header = header(context, planned)
@@ -326,7 +338,7 @@ defmodule SymphonyElixir.PhaseSteps.FailedCheck do
     %{
       title: String.slice("#{name}: a failed check cannot be run again before the push", 0, 120),
       question:
-        "The CI Fix run of #{name} fixed what failed on GitHub (#{checks}), but Symphony has no way to run one of those checks again outside GitHub, so the run stopped before it pushed the fix. Should Symphony push the fix and let CI prove it?",
+        "The CI Fix run of #{name} fixed what failed on GitHub#{if checks != "", do: " (#{checks})"}, but Symphony has no way to run one of those checks again outside GitHub, so the run stopped before it pushed the fix. Should Symphony push the fix and let CI prove it?",
       why:
         "Symphony runs again what failed on GitHub before it pushes a CI fix, so the fix is seen passing first. It could not here: #{problem}. " <>
           "Only the checks Settings › Phases lists as proved by CI alone are pushed without that.",
