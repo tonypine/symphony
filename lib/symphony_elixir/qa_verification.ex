@@ -1295,7 +1295,7 @@ defmodule SymphonyElixir.QaVerification do
   defp malformed_answer(detail) when detail in [:no_verdict_object, :empty_response],
     do: "the QA agent ended its run without saying whether the change passed or failed"
 
-  defp malformed_answer(_detail), do: "the QA agent gave a verdict Symphony could not read"
+  defp malformed_answer(_detail), do: "the QA agent gave a pass or fail answer Symphony could not read"
 
   defp repo_key(issue, opts), do: Keyword.get(opts, :repo_key) || Map.get(issue, :repo_key)
 

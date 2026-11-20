@@ -1024,7 +1024,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       end)
 
       assert %{why: why} = deciding()
-      assert why =~ "the QA agent gave a verdict Symphony could not read"
+      assert why =~ "the QA agent gave a pass or fail answer Symphony could not read"
       refute why =~ "{:"
     end
 
