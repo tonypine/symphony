@@ -59,6 +59,12 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
                {:error, {:invalid_payload, [:signal, :signal_details]}}
     end
 
+    test "a note's status is the machinery's: Symphony records it, an agent never does, and a tool's caller never sees it" do
+      assert {:ok, %{text: "Waiting for CI", status: true}} = Types.validate("note", %{text: "Waiting for CI", status: true}, :machine, nil)
+      assert Types.validate("note", %{text: "x", status: true}, :agent, "implementation") == {:error, {:invalid_payload, [:status]}}
+      refute "status" in Enum.map(Types.schema("note").optional, & &1.name)
+    end
+
     test "the retired holds' and decision requests' types are legacy: still in the catalog, so history reads them" do
       assert Types.legacy_types() == ["hold.set", "hold.cleared", "decision.requested", "decision.recorded", "decision.withdrawn"]
 

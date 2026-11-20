@@ -91,7 +91,9 @@ defmodule SymphonyElixir.PrWatch.HeadSyncTest do
              "GitHub picked up 280641b1 on PR #820; CI running on 280641b1"
            ]
 
-    assert [%{head_sha: @head} | _rest] = TicketEvents.query("issue-1", types: ["note"])
+    assert [%{head_sha: @head} | _rest] = events = TicketEvents.query("issue-1", types: ["note"])
+    # Each is Symphony's own status message, which the timeline lists only under "Show all events".
+    assert Enum.all?(events, &(&1.payload.status == true))
   end
 
   test "a PR GitHub still has not re-synced after the wait is still lagging, nudged once" do

@@ -1267,6 +1267,15 @@ func timeline(
     .background(DesignTokens.Surface.content.color)
 }
 
+/// Symphony's own wait notes between runs (`Tests/Fixtures/timeline/wait-notes.json`): the PR head sync waiting for
+/// GitHub and the CI wait, beside a person's move and note. The waits fold behind "Show all events".
+let timelineModelWaitNotes: TimelineModel = {
+    guard let events = try? Data(contentsOf: timelineFixtures.appendingPathComponent("wait-notes.json")),
+          let history = TicketEventsPayload.decode(events)
+    else { fatalError("The wait notes fixture is missing from \(timelineFixtures.path)") }
+    return TimelineModel.build(history, reference: timelineReference, calendar: timelineCalendar)
+}()
+
 /// The Conductor's turn after the first run handed off (`Tests/Fixtures/timeline/conductor.json`): its update for you,
 /// its instructions to the next run and its own run.
 let timelineModelConductor: TimelineModel = {
@@ -1972,6 +1981,9 @@ MainActor.assumeIsolated {
         render(timeline(width: 780), scheme, to: "timeline-events-folded-\(suffix).png")
         render(timeline(width: 780, showAllEvents: true), scheme, to: "timeline-all-events-\(suffix).png")
         render(timeline(width: 780, model: timelineModelResolved), scheme, to: "timeline-finding-resolved-\(suffix).png")
+        // Symphony's own wait notes: folded, and listed with all events shown.
+        render(timeline(width: 780, model: timelineModelWaitNotes), scheme, to: "timeline-wait-notes-folded-\(suffix).png")
+        render(timeline(width: 780, model: timelineModelWaitNotes, showAllEvents: true), scheme, to: "timeline-wait-notes-all-events-\(suffix).png")
         // The Conductor (its update for you always shows; its instructions and its own run under Show all events).
         render(timeline(width: 780, model: timelineModelConductor), scheme, to: "timeline-conductor-update-\(suffix).png")
         render(timeline(width: 780, model: timelineModelConductor, showAllEvents: true), scheme, to: "timeline-conductor-all-events-\(suffix).png")

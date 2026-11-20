@@ -367,7 +367,7 @@ defmodule SymphonyElixir.TicketSignalsTest do
       assert {"phase.entered", %{to: "In Progress", signal: "claim", signal_details: %{from: "Todo", to: "In Progress"}}, [phase: "In Progress"]} =
                TicketSignals.signal_event("claim", %{from: "Todo", to: "In Progress"})
 
-      assert {"note", %{text: "unblocked · by the Director (unblocked)", signal: "unblocked", signal_details: %{by: "the Director"}}, []} =
+      assert {"note", %{text: "unblocked · by the Director (unblocked)", status: true, signal: "unblocked", signal_details: %{by: "the Director"}}, []} =
                TicketSignals.signal_event("unblocked", %{by: "the Director"})
 
       assert {"note", %{text: "ci_wait (ci_wait)", signal: "ci_wait", signal_details: %{}}, []} = TicketSignals.signal_event("ci_wait", :not_a_map)
@@ -391,7 +391,7 @@ defmodule SymphonyElixir.TicketSignalsTest do
     end
 
     test "a signal that names no state, and an unknown one, is a note rendered from its name and details" do
-      assert {"note", %{text: "claim (claim)"}, []} = TicketSignals.event("claim", %{})
+      assert {"note", %{text: "claim (claim)", status: true}, []} = TicketSignals.event("claim", %{})
       assert {"note", %{text: "brand_new (brand_new)"}, []} = TicketSignals.event("brand_new", :not_a_map)
 
       assert {"note", %{text: "Code Review waits on the PR watcher · head abc123 · reason the PR watcher (R24): Checks are running · status running (code_review_head_not_green)"}, []} =
