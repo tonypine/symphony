@@ -1,0 +1,51 @@
+{
+ "timeline": [
+  {
+   "kind": "run",
+   "run_id": "qa-2",
+   "run_kind": "qa",
+   "run_number": 2,
+   "status": "ended",
+   "exit": "ended",
+   "started_at": "2026-11-20T10:00:00Z",
+   "ended_at": "2026-11-20T10:40:00Z",
+   "events": [
+    {"id": "s1", "seq": 170, "at": "2026-11-20T10:05:00Z", "type": "step.completed", "run_id": "qa-2",
+     "payload": {"step_id": "plan", "title": "Plan the pass", "mode": "agent", "outcome": "passed", "duration_ms": 300000},
+     "artifacts": [], "children": []},
+    {"id": "s2", "seq": 177, "at": "2026-11-20T10:15:00Z", "type": "step.completed", "run_id": "qa-2",
+     "payload": {"step_id": "walk_1", "title": "Walk step 1", "mode": "agent", "outcome": "passed", "duration_ms": 600000,
+                 "result": {"status": "fail", "expected": "The answer acts on the ticket", "actual": "The seeded ticket kept its question"}},
+     "artifacts": [], "children": []},
+    {"id": "s3", "seq": 179, "at": "2026-11-20T10:25:00Z", "type": "step.completed", "run_id": "qa-2",
+     "payload": {"step_id": "design_check", "title": "Design check", "mode": "agent", "outcome": "passed", "duration_ms": 600000,
+                 "result": {"status": "blocked", "expected": "The design's Question block", "actual": "No screen showed it"}},
+     "artifacts": [], "children": []},
+    {"id": "s4", "seq": 180, "at": "2026-11-20T10:30:00Z", "type": "step.completed", "run_id": "qa-2",
+     "payload": {"step_id": "wide_pass", "title": "Wide pass", "mode": "agent", "outcome": "passed", "duration_ms": 300000,
+                 "result": {"status": "pass", "expected": "Nothing clipped", "actual": "Nothing clipped"}},
+     "artifacts": [], "children": []},
+    {"id": "s5", "seq": 181, "at": "2026-11-20T10:40:00Z", "type": "step.completed", "run_id": "qa-2",
+     "payload": {"step_id": "review", "title": "Review", "mode": "agent", "outcome": "passed", "duration_ms": 600000,
+                 "verdict_summary": "Pass. Walk step 1's fail was an artifact of the seed, so the review overruled it."},
+     "artifacts": [], "children": []}
+   ]
+  },
+  {"id": "u1", "seq": 184, "at": "2026-11-20T10:41:00Z", "type": "conductor.update",
+   "payload": {"text": "QA passed on the second pass.", "junction": "after_qa",
+               "blocks": [{"type": "steps", "run_id": "qa-2", "run_kind": "qa", "steps": [
+                 {"step_id": "plan", "title": "Plan the pass", "outcome": "passed", "duration_ms": 300000},
+                 {"step_id": "walk_1", "title": "Walk step 1", "outcome": "passed", "duration_ms": 600000},
+                 {"step_id": "design_check", "title": "Design check", "outcome": "passed", "duration_ms": 600000},
+                 {"step_id": "wide_pass", "title": "Wide pass", "outcome": "passed", "duration_ms": 300000},
+                 {"step_id": "review", "title": "Review", "outcome": "passed", "duration_ms": 600000}]}]},
+   "artifacts": [], "children": []},
+  {"id": "u2", "seq": 190, "at": "2026-11-20T10:50:00Z", "type": "conductor.update",
+   "payload": {"text": "The same pass, as Symphony now writes the block.", "junction": "after_qa",
+               "blocks": [{"type": "steps", "run_id": "qa-2", "run_kind": "qa", "steps": [
+                 {"step_id": "walk_1", "title": "Walk step 1", "outcome": "failed"},
+                 {"step_id": "design_check", "title": "Design check", "outcome": "blocked"},
+                 {"step_id": "wide_pass", "title": "Wide pass", "outcome": "passed"}]}]},
+   "artifacts": [], "children": []}
+ ]
+}

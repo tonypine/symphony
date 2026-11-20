@@ -396,6 +396,7 @@ public struct TicketEventsPayload: Equatable {
             }
         }
         payload.events = Self.ordered(Self.unique(payload.events))
+        payload.settleStepWords()
         return payload
     }
 
@@ -418,8 +419,38 @@ public struct TicketEventsPayload: Equatable {
         if added > 0 { events = Self.ordered(events) }
         nextSince = newer.nextSince ?? nextSince
         settleMessageReads()
+        settleStepWords()
         return added
     }
+
+    /// A Conductor `steps` block written before Symphony drew a QA check with what it judged says "passed" for a check
+    /// that judged fail or blocked. Each such step takes the word its own `step.completed` draws, matched as Symphony
+    /// picked them: the run's newest steps before the update that passed, failed or were skipped, in order.
+    private mutating func settleStepWords() {
+        for at in events.indices where events[at].type == "conductor.update" {
+            events[at].payload.blocks = events[at].payload.blocks.map { settled($0, before: at) }
+        }
+    }
+
+    private func settled(_ block: ConductorBlock, before at: Int) -> ConductorBlock {
+        guard case var .steps(steps) = block, let runID = steps.runID else { return block }
+        let ended = events[..<at].filter {
+            $0.type == "step.completed" && $0.runID == runID && Self.blockOutcomes.contains($0.payload.outcome?.lowercased() ?? "")
+        }
+        let picked = Array(ended.suffix(steps.steps.count))
+        guard picked.count == steps.steps.count else { return block }
+        for index in steps.steps.indices where steps.steps[index].outcome == .passed && steps.steps[index].stepID == picked[index].payload.stepID {
+            switch picked[index].payload.answer?.result?.judgement {
+            case .failed: steps.steps[index].outcome = .failed
+            case .blocked: steps.steps[index].outcome = .blocked
+            default: break
+            }
+        }
+        return .steps(steps)
+    }
+
+    /// The outcomes a `steps` block lists.
+    static let blockOutcomes: Set<String> = ["passed", "failed", "skipped"]
 
     /// Gives each message no run had read yet the `message.read` the history now holds for it: the feed adds `read`
     /// to a `message.sent` only on the page that serves it, so a read that comes on a later page is applied here.
@@ -595,7 +626,7 @@ public struct TicketEventsPayload: Equatable {
     static func eventResult(_ event: Event) -> TicketPage.Step.Result {
         switch event.type {
         case "finding.recorded": return .failed
-        case "step.completed": return stepResult(event.payload.outcome)
+        case "step.completed": return stepResult(event.payload)
         case "verdict.recorded": return event.payload.outcome.map { verdictState(kind: event.payload.kind, outcome: $0).0 } ?? .done
         case "run.ended": return exitState(event.payload.exit).0
         case "hold.set": return .stopped
@@ -603,12 +634,13 @@ public struct TicketEventsPayload: Equatable {
         }
     }
 
-    /// How a step ended: failed, paused on a question (stopped), or done, when it passed or was skipped.
-    static func stepResult(_ outcome: String?) -> TicketPage.Step.Result {
-        switch outcome?.lowercased() {
-        case "failed": return .failed
-        case "paused": return .stopped
-        default: return .done
+    /// How a step ended: failed, paused on a question (stopped), or done, when it passed or was skipped. A QA check
+    /// that ran is drawn with what it judged: failed or blocked reads failed, as a blocked verdict does.
+    static func stepResult(_ payload: Payload) -> TicketPage.Step.Result {
+        switch RunGroupModel.completion(payload).0 {
+        case .failed, .blocked: return .failed
+        case .paused: return .stopped
+        case .done, .current, .skipped: return .done
         }
     }
 

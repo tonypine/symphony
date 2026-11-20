@@ -41,9 +41,10 @@ final class ConductorBlockViewsTests: XCTestCase {
     }
 
     func testTheStepsBlockIsTheRunGroupsOwnRowsAndReadsItsOutcomes() throws {
-        guard case let .steps(steps)? = blocks(#"[{"type":"steps","steps":[{"step_id":"c","title":"Code","outcome":"passed","duration_ms":120000},{"step_id":"b","title":"Build","outcome":"failed","returns_to":"Code"}]}]"#).first else { return XCTFail() }
+        guard case let .steps(steps)? = blocks(#"[{"type":"steps","steps":[{"step_id":"c","title":"Code","outcome":"passed","duration_ms":120000},{"step_id":"b","title":"Build","outcome":"failed","returns_to":"Code"},{"step_id":"d","title":"Design check","outcome":"blocked"},{"step_id":"l","title":"Lint","outcome":"skipped"}]}]"#).first else { return XCTFail() }
         let rows = StepsBlockView.runSteps(steps)
-        XCTAssertEqual(rows.map(\.state), [.done, .failed])
+        XCTAssertEqual(rows.map(\.state), [.done, .failed, .blocked, .skipped])
+        XCTAssertEqual(rows[2].state.word, "Blocked")
         XCTAssertEqual(rows[0].duration, "2 min")
         XCTAssertEqual(rows[1].reason, "back to Code")
         XCTAssertFalse(rows[0].canUnfold, "not expandable here")

@@ -29,7 +29,8 @@ final class StepAnswerTests: XCTestCase {
     func testAResultReadsItsStatusExpectedAndActual() throws {
         let read = try XCTUnwrap(answer(#"{"step_id":"c","outcome":"failed","result":{"status":"blocked","expected":"A row","actual":"None"}}"#))
         XCTAssertEqual(read.result, .init(status: "blocked", expected: "A row", actual: "None"))
-        XCTAssertEqual(read.result?.extraWord, "blocked")
+        XCTAssertNil(read.result?.extraWord, "the step's state says blocked")
+        XCTAssertEqual(StepAnswer.Result(status: "plan_mismatch", expected: nil, actual: nil).extraWord, "plan_mismatch")
         XCTAssertNil(StepAnswer.Result(status: "failed", expected: nil, actual: nil).extraWord)
         XCTAssertNil(StepAnswer.Result(status: "Passed", expected: nil, actual: nil).extraWord)
     }
@@ -74,7 +75,7 @@ final class StepAnswerTests: XCTestCase {
         XCTAssertTrue(run.steps.allSatisfy(\.canUnfold), "each step has an answer, though none has a transcript")
         XCTAssertNotNil(run.steps[0].answer?.plan)
         XCTAssertEqual(run.steps[1].answer?.result?.status, "failed")
-        XCTAssertEqual(run.steps[2].answer?.result?.extraWord, "blocked")
+        XCTAssertEqual(run.steps[2].answer?.result?.judgement, .blocked)
         XCTAssertEqual(run.steps[3].answer?.rechecks.count, 2)
         XCTAssertNotNil(run.steps[4].answer?.verdictSummary)
         XCTAssertFalse(RunStep(id: "a", stepID: "a", title: "A", state: .done).canUnfold)

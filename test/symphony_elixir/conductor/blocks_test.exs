@@ -67,6 +67,19 @@ defmodule SymphonyElixir.Conductor.BlocksTest do
     assert log =~ "Conductor dropped a steps block"
   end
 
+  test "steps: a QA check is drawn with what it judged, from events recorded before the word", ctx do
+    check = fn id, status -> %{step_id: id, title: id, mode: "agent", outcome: "passed", result: %{status: status, expected: "x", actual: "y"}} end
+    record!(ctx, "step.completed", check.("walk_1", "fail"), run_id: "run-1")
+    record!(ctx, "step.completed", check.("design_check", "blocked"), run_id: "run-1")
+    record!(ctx, "step.completed", check.("wide_pass", "pass"), run_id: "run-1")
+    record!(ctx, "step.completed", %{step_id: "review", title: "Review", mode: "agent", outcome: "passed"}, run_id: "run-1")
+
+    assert [%{steps: steps}] = resolve(ctx, [%{type: "steps"}])
+    assert Enum.map(steps, &{&1.step_id, &1.outcome}) == [{"walk_1", "failed"}, {"design_check", "blocked"}, {"wide_pass", "passed"}, {"review", "passed"}]
+
+    assert [%{tries: [%{outcome: "failed"}]}] = resolve(ctx, [%{type: "attempts", step_id: "walk_1"}])
+  end
+
   test "steps keeps the newest 8", ctx do
     for n <- 1..10, do: record!(ctx, "step.completed", %{step_id: "s#{n}", title: "S#{n}", mode: "machine", outcome: "passed"}, run_id: "run-1")
     assert [%{steps: steps}] = resolve(ctx, [%{type: "steps"}])

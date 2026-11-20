@@ -982,7 +982,7 @@ case or by id: a ticket with none is `404` `ticket_not_found`. `junction` is opt
 | `junction`, `focus` | The junction the document is shaped for (null for none) and what the turn there is for. |
 | `ticket` | `identifier`, `title`, `url`; the description's `problem`, `acceptance` and `walkthrough` sections; `proved_steps`, the walkthrough steps recorded as proved by a test (`step`, `test`, `event_id`; the newest proof of each, which QA's pre-check runs instead of QA walking the step); the newest `brief`; the person's `decisions`, `notes` and `answers` to questions. |
 | `standing` | `phase`, `attempt` (the implementation and rework runs started), `pull_request` (`number`, `url`, `state`) and its `head`. |
-| `last_run` | The newest run that ended other than the Conductor's own: `kind`, `model`, `exit`, `duration_ms`, `tokens`, its `steps` and their results, `files_changed` (`path`, `added`, `removed`; left out when the workspace does not exist) and `resolved_findings`. |
+| `last_run` | The newest run that ended other than the Conductor's own: `kind`, `model`, `exit`, `duration_ms`, `tokens`, its `steps` and their results (each step's `outcome` is its one word: a QA check reads what it judged), `files_changed` (`path`, `added`, `removed`; left out when the workspace does not exist) and `resolved_findings`. |
 | `findings` | Every finding: `state` (`open`, `resolved`, `reopened`, `confirmed`), `class`, `class_count` (how many times that class was recorded on the ticket), `severity`, `step`, `description`, `evidence`, its `resolution` and the event that reopened it. |
 | `verdicts` | The newest verdicts: `kind`, `outcome`, `head`, `reason` (a QA verdict's from its details). |
 | `qa_passes` | At `after_qa_blocked` only: every QA verdict (the newest 10), oldest first: `event_id`, `run_id`, `outcome`, `head`, `reason`, `on_ci` (a block on CI), and `blocked_steps`, the steps of its pass that ended blocked (a stepped pass's `step_id`, `title` and `result`: `status`, `expected`, `actual`; the verdict's own `step` and `details`), at most 4. |
@@ -1000,7 +1000,7 @@ records, as `blocks` (absent when none), in this order, each a map with a `type`
 
 | `type` | Shape |
 | --- | --- |
-| `steps` | `run_id`, `run_kind`, `steps`: `step_id`, `title`, `outcome` (`passed`, `failed`, `skipped`), `duration_ms`, `returns_to` (the newest 8). |
+| `steps` | `run_id`, `run_kind`, `steps`: `step_id`, `title`, `outcome` (`passed`, `failed`, `blocked`, `skipped`: the step's one word, so a QA check that judged `fail` or `blocked` reads `failed` or `blocked`), `duration_ms`, `returns_to` (the newest 8). |
 | `evidence` | `items`: `event_id`, `artifact_id` (the screenshot artifact of the event, as its timeline entry loads it), `caption` (1 to 4). |
 | `budget` | `tokens_used`, `tokens_cap` (absent without a cap), `parts`: `kind`, `runs`, `tokens` by run kind, largest first (5). |
 | `path` | `stops`: `phase`, `state` (`done`, `failed`, `current`, `upcoming`), `times`, `run_number`; `loops` (entries of Rework); `elapsed_ms`. |

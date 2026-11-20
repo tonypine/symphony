@@ -109,11 +109,21 @@ struct StepsBlockView: View {
         .accessibilityLabel(StepList.accessibilityLabel)
     }
 
+    /// The step's word as the run group's rows draw it.
+    static func state(_ outcome: ConductorBlock.Steps.Step.Outcome) -> RunStep.State {
+        switch outcome {
+        case .passed: .done
+        case .failed: .failed
+        case .blocked: .blocked
+        case .skipped: .skipped
+        }
+    }
+
     static func runSteps(_ block: ConductorBlock.Steps) -> [RunStep] {
         block.steps.enumerated().map { index, step in
             var row = RunStep(
                 id: "\(index)", stepID: step.stepID ?? "\(index)", title: step.title,
-                state: step.outcome == .failed ? .failed : step.outcome == .skipped ? .skipped : .done
+                state: state(step.outcome)
             )
             row.durationSeconds = step.durationMs.map { $0 / 1_000 }
             row.reason = step.returnsTo.map { "back to \($0)" }
