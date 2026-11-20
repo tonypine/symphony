@@ -568,6 +568,7 @@ struct TicketPageContent: View, Equatable {
                 closeBanner: { model.dismissBanner() }
             )
             .environment(\.artifactImages, model.artifactImages)
+            .environment(\.openImageViewer, OpenImageViewerAction { model.onOpenImageViewer($0, $1, $2) })
         } else {
             EmptyState(title: "Reading the ticket…", symbol: "doc.text.magnifyingglass", showsSpinner: true)
         }

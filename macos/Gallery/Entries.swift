@@ -178,6 +178,12 @@ let galleryEntries: [GalleryEntry] = [
             "SymphonyBarUI/DesignSystem/ConductorBlocksView.swift", "SymphonyBarUI/DesignSystem/ConductorMessageViews.swift",
             "SymphonyBarCore/ConductorBlock.swift",
         ]),
+    GalleryEntry(
+        id: "image-viewer", title: "Image viewer", kind: .component, prefixes: ["image-viewer-"],
+        files: ["SymphonyBarUI/DesignSystem/ImageViewer.swift", "SymphonyBarUI/DesignSystem/TimelineParts.swift", "SymphonyBarCore/ImageViewerModel.swift"]),
+    GalleryEntry(
+        id: "thumbnail-row", title: "Thumbnail row", kind: .component, prefixes: ["thumbnail-row-"],
+        files: ["SymphonyBarUI/DesignSystem/TimelineParts.swift", "SymphonyBarCore/ThumbnailRowPlan.swift"]),
     GalleryEntry(id: "type-styles", title: "Type styles", kind: .component, prefixes: ["type-styles-"], files: []),
     // Screens.
     GalleryEntry(

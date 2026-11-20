@@ -104,11 +104,7 @@ struct TimelineFindingCard: View {
                 .lineLimit(1)
             }
             if !finding.screenshots.isEmpty {
-                HStack(alignment: .top, spacing: DesignTokens.Space.s2) {
-                    ForEach(finding.screenshots) { shot in
-                        FindingShot(shot: shot)
-                    }
-                }
+                ThumbnailSet(shots: finding.screenshots, size: FindingShot.size, showsLabels: true)
             }
         }
         .padding(.vertical, DesignTokens.Space.s3)
@@ -120,34 +116,157 @@ struct TimelineFindingCard: View {
     }
 }
 
-/// The screenshots a run recorded, in its group: under the step they were recorded in, else under the run. One row of
-/// thumbnails with no captions; each opens large in the screenshot sheet.
-struct ScreenshotRow: View {
+/// The screenshots a run recorded, in its group: under the step they were recorded in, else under the run. Thumbnails
+/// with no captions, wrapping in the width they are given (`ThumbnailSet`); each opens in the image viewer, which holds
+/// the whole set.
+public struct ScreenshotRow: View {
     let shots: [TicketScreenshot]
+    /// The width the row is drawn at, when it is fixed (a snapshot); nil measures what the container gives.
+    var width: CGFloat? = nil
 
     static let size = CGSize(width: 120, height: 75)
 
+    public init(shots: [TicketScreenshot], width: CGFloat? = nil) {
+        self.shots = shots
+        self.width = width
+    }
+
+    public var body: some View {
+        ThumbnailSet(shots: shots, size: Self.size, width: width)
+    }
+}
+
+/// A set of thumbnails that never draws wider than the width it is given: they wrap onto further rows, leading
+/// aligned, with `Space.s2` between them, in at most two rows. When the set does not fit two rows, the last cell of the
+/// second is a "+N" tile that opens the image viewer on the first image not shown. The viewer always holds the whole
+/// set.
+struct ThumbnailSet: View {
+    let shots: [TicketScreenshot]
+    let size: CGSize
+    /// Each thumbnail with its label under it (a finding's shots), else the thumbnail alone.
+    var showsLabels = false
+    var width: CGFloat? = nil
+
+    @State private var measuredWidth: CGFloat?
+
+    private static let spacing = DesignTokens.Space.s2
+    /// Before the width is measured every thumbnail is drawn: wide enough to hold any set.
+    private static let unmeasuredWidth: CGFloat = 100_000
+
+    private var plan: ThumbnailRowPlan {
+        ThumbnailRowPlan(
+            count: shots.count, width: width ?? measuredWidth ?? Self.unmeasuredWidth, thumbnailWidth: size.width, spacing: Self.spacing
+        )
+    }
+
     var body: some View {
-        HStack(alignment: .top, spacing: DesignTokens.Space.s2) {
-            ForEach(shots) { shot in
-                ScreenshotThumbnail(shot: shot, size: Self.size)
+        let plan = plan
+        ThumbnailWrap(cellWidth: size.width, columns: plan.columns, spacing: Self.spacing) {
+            ForEach(0..<plan.shown, id: \.self) { index in
+                if showsLabels {
+                    FindingShot(shot: shots[index], set: shots)
+                } else {
+                    ScreenshotThumbnail(shot: shots[index], set: shots, size: size)
+                }
+            }
+            if plan.hasMoreTile {
+                MoreScreenshotsTile(hidden: plan.hidden, first: shots[plan.shown], set: shots, size: size)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }, action: { measuredWidth = $0 })
         .accessibilityElement(children: .contain)
     }
 }
 
-/// A screenshot's thumbnail, cut from its top left in a hairline frame: a button that opens it large in the screenshot
-/// sheet. It is read once through the page's `ArtifactImages`; without one (a snapshot that keeps none), or while it
-/// reads, the frame holds its place.
-struct ScreenshotThumbnail: View {
-    let shot: TicketScreenshot
-    var size: CGSize = FindingShot.size
-    @State private var opened = false
+/// Lays its cells out in rows of `columns`, leading aligned, never wider than it is offered.
+private struct ThumbnailWrap: Layout {
+    let cellWidth: CGFloat
+    let columns: Int
+    let spacing: CGFloat
+
+    private func rows(_ subviews: Subviews) -> [[Int]] {
+        stride(from: 0, to: subviews.count, by: columns).map { Array($0..<min($0 + columns, subviews.count)) }
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let cellProposal = ProposedViewSize(width: cellWidth, height: nil)
+        var height: CGFloat = 0
+        let rows = rows(subviews)
+        for row in rows {
+            height += row.map { subviews[$0].sizeThatFits(cellProposal).height }.max() ?? 0
+        }
+        height += spacing * CGFloat(max(0, rows.count - 1))
+        let natural = CGFloat(min(columns, subviews.count)) * cellWidth + spacing * CGFloat(max(0, min(columns, subviews.count) - 1))
+        return CGSize(width: min(natural, proposal.width ?? natural), height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let cellProposal = ProposedViewSize(width: cellWidth, height: nil)
+        var y = bounds.minY
+        for row in rows(subviews) {
+            var rowHeight: CGFloat = 0
+            for (column, index) in row.enumerated() {
+                subviews[index].place(
+                    at: CGPoint(x: bounds.minX + CGFloat(column) * (cellWidth + spacing), y: y), anchor: .topLeading, proposal: cellProposal
+                )
+                rowHeight = max(rowHeight, subviews[index].sizeThatFits(cellProposal).height)
+            }
+            y += rowHeight + spacing
+        }
+    }
+}
+
+/// The last cell of a set that does not fit: "+N", drawn like a thumbnail's frame. It opens the image viewer on the
+/// first image not shown.
+struct MoreScreenshotsTile: View {
+    let hidden: Int
+    let first: TicketScreenshot
+    let set: [TicketScreenshot]
+    let size: CGSize
     @Environment(\.artifactImages) private var images
+    @Environment(\.openImageViewer) private var openImageViewer
 
     var body: some View {
-        Button { opened = true } label: {
+        let shape = RoundedRectangle(cornerRadius: DesignTokens.Radius.mark, style: .continuous)
+        Button {
+            if let images { openImageViewer?(set, current: first, images: images) }
+        } label: {
+            Text(ThumbnailRowPlan.moreText(hidden))
+                .textStyle(.rowTitle)
+                .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                .monospacedDigit()
+                .frame(width: size.width, height: size.height)
+                .background(DesignTokens.Surface.separator.color.opacity(0.4), in: shape)
+                .overlay(shape.strokeBorder(DesignTokens.Surface.separator.color, lineWidth: 1))
+                .contentShape(shape)
+        }
+        .buttonStyle(.plain)
+        .help(ThumbnailRowPlan.moreAccessibilityLabel(hidden))
+        .accessibilityLabel(ThumbnailRowPlan.moreAccessibilityLabel(hidden))
+    }
+}
+
+/// A screenshot's thumbnail, cut from its top left in a hairline frame: a button that opens it in the image viewer,
+/// on `set` (the images it sits among: its row, its finding, its evidence), which it is one of. It is read once through
+/// the page's `ArtifactImages`; without one (a snapshot that keeps none), or while it reads, the frame holds its place.
+struct ScreenshotThumbnail: View {
+    let shot: TicketScreenshot
+    var set: [TicketScreenshot]
+    var size: CGSize = FindingShot.size
+    @Environment(\.artifactImages) private var images
+    @Environment(\.openImageViewer) private var openImageViewer
+
+    init(shot: TicketScreenshot, set: [TicketScreenshot]? = nil, size: CGSize = FindingShot.size) {
+        self.shot = shot
+        self.set = set ?? [shot]
+        self.size = size
+    }
+
+    var body: some View {
+        Button {
+            if let images { openImageViewer?(set, current: shot, images: images) }
+        } label: {
             Group {
                 if let images {
                     FindingThumbnail(shot: shot, images: images, size: size)
@@ -167,86 +286,20 @@ struct ScreenshotThumbnail: View {
         .disabled(!shot.available)
         .help(shot.label)
         .accessibilityLabel(shot.available ? shot.accessibilityLabel : shot.unavailableAccessibilityLabel)
-        .sheet(isPresented: $opened) {
-            ScreenshotSheet(shot: shot, images: images) { opened = false }
-        }
     }
 }
 
-/// A screenshot large (§2 question 5): its label and Close over the whole image, fitted to the sheet.
-struct ScreenshotSheet: View {
-    let shot: TicketScreenshot
-    let images: ArtifactImages?
-    let close: () -> Void
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(alignment: .center, spacing: DesignTokens.Space.s2) {
-                Text(shot.label)
-                    .font(DesignTokens.TypeStyle.heading.font)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .accessibilityAddTraits(.isHeader)
-                Spacer(minLength: DesignTokens.Space.s2)
-                Button(Self.closeTitle, action: close)
-                    .directorButton(.secondary, size: .small)
-                    .keyboardShortcut(.cancelAction)
-            }
-            .padding(.horizontal, DesignTokens.Space.s5)
-            .padding(.vertical, DesignTokens.Space.s3)
-            Divider()
-            Group {
-                if let images {
-                    LargeScreenshot(shot: shot, images: images)
-                } else {
-                    FindingShot.placeholder(nil)
-                }
-            }
-            .padding(DesignTokens.Space.s5)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .frame(minWidth: 720, minHeight: 480)
-        .background(DesignTokens.Surface.window.color)
-    }
-
-    static let closeTitle = "Close"
-}
-
-private struct LargeScreenshot: View {
-    let shot: TicketScreenshot
-    @ObservedObject var images: ArtifactImages
-
-    var body: some View {
-        Group {
-            switch images.image(shot) {
-            case let .loaded(data):
-                if let image = NSImage(data: data) {
-                    Image(nsImage: image)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .accessibilityLabel("Screenshot \(shot.label)")
-                } else {
-                    FindingShot.placeholder(TicketScreenshot.unavailableTitle)
-                }
-            case .unavailable:
-                FindingShot.placeholder(TicketScreenshot.unavailableTitle)
-            case .loading, .failed:
-                FindingShot.placeholder(nil)
-            }
-        }
-        .onAppear { images.load(shot) }
-    }
-}
-
-/// One screenshot of a finding: its thumbnail, which opens it large, and its label under it.
+/// One screenshot of a finding: its thumbnail, which opens it in the image viewer with the finding's other shots (`set`),
+/// and its label under it.
 struct FindingShot: View {
     let shot: TicketScreenshot
+    var set: [TicketScreenshot]? = nil
 
     static let size = CGSize(width: 160, height: 100)
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
-            ScreenshotThumbnail(shot: shot, size: Self.size)
+            ScreenshotThumbnail(shot: shot, set: set, size: Self.size)
             Text(shot.label)
                 .font(DesignTokens.TypeStyle.secondary.font)
                 .foregroundStyle(.secondary)
@@ -271,7 +324,7 @@ struct FindingShot: View {
     }
 }
 
-private struct FindingThumbnail: View {
+struct FindingThumbnail: View {
     let shot: TicketScreenshot
     @ObservedObject var images: ArtifactImages
     var size: CGSize = FindingShot.size

@@ -35,6 +35,8 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
     private var model: SymphonyWindowModel?
     /// The session readers (D4, TP-1452), which stay open after the main window closes.
     private lazy var readers = SessionReaderWindows(client: client)
+    /// The image viewer, one window for every screenshot.
+    private let imageViewer = ImageViewerWindow()
     private var state = WindowState.stopped
     private var paused = false
     private var updateHold: UpdateHold?
@@ -195,6 +197,9 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
             model.onCheckConfig = { [weak self] path in
                 guard let secrets = self?.secrets else { return .failed("The app's secrets aren't available to run symphony check.") }
                 return await ReposWindowController.configCheck(path, secrets: secrets)
+            }
+            model.onOpenImageViewer = { [weak self] set, current, images in
+                self?.imageViewer.open(set, current: current, images: images)
             }
             model.onReadSession = { [weak self] identifier, run, follow in
                 self?.readers.open(identifier: identifier, run: run, follow: follow)
