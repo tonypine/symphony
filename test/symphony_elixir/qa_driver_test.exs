@@ -3867,8 +3867,14 @@ defmodule SymphonyElixir.QaDriverTest do
       assert_received {:cmd, @helper, ["ax-resize", pid_arg, "", "2560", "1440"], _opts}
       assert pid_arg == Integer.to_string(pid)
 
-      assert QaDriver.wide_pass(driver) ==
-               %{window: {2560, 1415}, screen: {2560, 1440}, visible: {2560, 1415}, target: {2560, 1440}, needed: {2560, 1440}, limited: false}
+      assert QaDriver.wide_pass(driver) == %{
+               window: {2560, 1415},
+               screen: {2560, 1440},
+               visible: {2560, 1415},
+               target: {2560, 1440},
+               needed: {2560, 1440},
+               limited: false
+             }
 
       assert {:ok, %{"limited" => false}} =
                QaDriver.call_tool(driver, "qa_resize_window", %{"pid" => pid, "path" => "1", "pass" => "wide", "width" => 3000, "height" => 1600})
@@ -3948,7 +3954,8 @@ defmodule SymphonyElixir.QaDriverTest do
       assert {:ok, %{"limited" => true, "note" => note}} = QaDriver.call_tool(driver, "qa_resize_window", %{"pid" => pid})
       assert note =~ "The QA screen is 1920×1200 pt with 1920×1175 pt usable, under the 2560×1440 pt the wide pass needs"
       assert note =~ "mark the Wide pass step `blocked`"
-      assert %{limited: true, screen: {1920, 1200}, window: {1920, 1175}, needed: {2560, 1440}} = QaDriver.wide_pass(driver)
+      wide_pass = QaDriver.wide_pass(driver)
+      assert %{limited: true, screen: {1920, 1200}, window: {1920, 1175}, needed: {2560, 1440}} = wide_pass
     end
 
     test "tells an app that keeps its window small from a small screen", %{worktree: worktree} do

@@ -2178,7 +2178,8 @@ defmodule SymphonyElixir.QaAgentTest do
       assert Report.render(%{verdict: :blocked, reason: reason, sha: @sha, target_state: "Human Review"}) =~ "Reason: the wide pass was limited"
 
       # A 1920×1200 screen, enough for the old 1400×900 wide pass, is under the 2560×1440 one.
-      assert {:ok, %{result: %{verdict: :blocked, reason: reason}}} = run.({1920, 1200}, {:ok, %{result: FakeSession.pass_json()}})
+      small_screen_run = run.({1920, 1200}, {:ok, %{result: FakeSession.pass_json()}})
+      assert {:ok, %{result: %{verdict: :blocked, reason: reason}}} = small_screen_run
       assert reason =~ "the QA screen is 1920×1200 pt (1920×1107 pt usable), under the 2560×1440 pt screen the wide pass needs"
 
       assert {:ok, %{result: %{verdict: :pass}}} = run.({2560, 1440}, {:ok, %{result: FakeSession.pass_json()}})
