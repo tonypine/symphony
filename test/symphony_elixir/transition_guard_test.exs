@@ -81,6 +81,7 @@ defmodule SymphonyElixir.TransitionGuardTest do
                %{signal: :qa_pass, from: ["QA"], to: "Merging", confirm: true},
                %{signal: :qa_skip, from: ["QA"], to: "Merging", confirm: true},
                %{signal: :qa_fail, from: ["QA"], to: "Rework"},
+               %{signal: :qa_blocked_rework, from: ["QA"], to: "Rework"},
                %{signal: :ci_fix_enter_code_review, from: ["Code Review"], to: :ci_fix_state},
                %{signal: :ci_fix_enter_qa, from: ["QA"], to: :ci_fix_state},
                %{signal: :ci_fix_enter_merging, from: ["Merging"], to: :ci_fix_state},
@@ -265,6 +266,7 @@ defmodule SymphonyElixir.TransitionGuardTest do
         :code_review_rework,
         :code_review_escalate,
         :qa_fail,
+        :qa_blocked_rework,
         :handoff,
         :ci_fix_mechanical
       ]

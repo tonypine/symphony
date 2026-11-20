@@ -973,7 +973,7 @@ deterministic JSON document built only from what Symphony already holds on the t
 its events, plus the workspace's git diff stat when the workspace exists. Like the other reads of
 `/api/v1`, it needs no token. The identifier resolves through the ticket's record, by identifier in any
 case or by id: a ticket with none is `404` `ticket_not_found`. `junction` is optional; one that is not
-`after_coding`, `after_qa_fail`, `after_rework` or `before_merge` is `400` `invalid_query`.
+`after_coding`, `after_qa_fail`, `after_qa_blocked`, `after_rework`, `before_merge` or `during_run` is `400` `invalid_query`.
 
 | Key | What it holds |
 | --- | --- |
@@ -983,8 +983,9 @@ case or by id: a ticket with none is `404` `ticket_not_found`. `junction` is opt
 | `standing` | `phase`, `attempt` (the implementation and rework runs started), `pull_request` (`number`, `url`, `state`) and its `head`. |
 | `last_run` | The newest run that ended other than the Conductor's own: `kind`, `model`, `exit`, `duration_ms`, `tokens`, its `steps` and their results, `files_changed` (`path`, `added`, `removed`; left out when the workspace does not exist) and `resolved_findings`. |
 | `findings` | Every finding: `state` (`open`, `resolved`, `reopened`, `confirmed`), `class`, `class_count` (how many times that class was recorded on the ticket), `severity`, `step`, `description`, `evidence`, its `resolution` and the event that reopened it. |
-| `verdicts` | The newest verdicts: `kind`, `outcome`, `head`, `reason`. |
-| `conductor` | The Conductor's earlier updates and instructions on the ticket. |
+| `verdicts` | The newest verdicts: `kind`, `outcome`, `head`, `reason` (a QA verdict's from its details). |
+| `qa_passes` | At `after_qa_blocked` only: every QA verdict (the newest 10), oldest first: `event_id`, `run_id`, `outcome`, `head`, `reason`, `on_ci` (a block on CI), and `blocked_steps`, the steps of its pass that ended blocked (a stepped pass's `step_id`, `title` and `result`: `status`, `expected`, `actual`; the verdict's own `step` and `details`), at most 4. |
+| `conductor` | The Conductor's earlier updates, instructions and steers on the ticket (the newest 10): `type` (`update`, `instructions`, `steer`), `junction`, `at`, `text`, and an instruction's `route` (`rerun`, `rework`) or a steer's `when` and `trigger`. |
 | `budget` | `tokens_used` (every run's, the Conductor's among them), `tokens_cap` (`execution.limits.tokens_per_issue`), `qa_passes` and `rework_runs`. |
 
 A watch turn (`during_run`) reads the same document plus `live`: the run's `run_id`, `kind`, `model`,

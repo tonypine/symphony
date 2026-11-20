@@ -88,7 +88,10 @@ defmodule SymphonyElixir.TransitionGuard do
   #
   # The `:qa_*` rows are the QA run's verdicts (`SymphonyElixir.QaVerification`): pass carries the
   # ticket to `Merging`, fail returns it to `Rework`, and a skip — the same hybrid rule seen from the
-  # QA state — carries it to `Merging` without a run.
+  # QA state — carries it to `Merging` without a run. `:qa_blocked_rework` is the Conductor's route
+  # after a pass that could not judge the change (`SymphonyElixir.Conductor`, `after_qa_blocked`):
+  # the ticket returns to `Rework` with the Conductor's finding, under its own signal, so the
+  # timeline tells it from a fail.
   #
   # The `:ci_fix_enter_*` rows are the CI Fix lane's entries (`SymphonyElixir.CiFix`): one row per
   # phase whose head can go red or conflict, so each origin is its own legal edge and the caller
@@ -168,6 +171,7 @@ defmodule SymphonyElixir.TransitionGuard do
     %{signal: :qa_pass, from: ["QA"], to: "Merging", confirm: true},
     %{signal: :qa_skip, from: ["QA"], to: "Merging", confirm: true},
     %{signal: :qa_fail, from: ["QA"], to: "Rework"},
+    %{signal: :qa_blocked_rework, from: ["QA"], to: "Rework"},
     %{signal: :ci_fix_enter_code_review, from: ["Code Review"], to: :ci_fix_state},
     %{signal: :ci_fix_enter_qa, from: ["QA"], to: :ci_fix_state},
     %{signal: :ci_fix_enter_merging, from: ["Merging"], to: :ci_fix_state},

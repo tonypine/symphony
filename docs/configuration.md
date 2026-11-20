@@ -1768,8 +1768,8 @@ run store, which the dashboard's run history shows. The `QA` state applies the v
 | `pass` | every step behaved as the ticket describes, the wide pass included | `Merging` |
 | `pass` with `scope: none` | the change has nothing on screen to judge: neither the diff nor the ticket names a walkthrough step or a screen, by the agent's answer or by the QA policy (below) | `Merging` with the reason in the report, but only when the pass ran `qa_build`, `qa_launch_app` and a `qa_check_app` that found the app healthy, so the merge still waits on the app starting; without them it is `inconclusive` |
 | `fail` | a step shows a defect in the change | `Rework` |
-| `inconclusive` | the QA run itself fell short: a `macos_app` pass that judged screens but never ran the wide pass, or a `scope: none` pass that never started the app | QA runs once more on the same head, then the ticket pauses in `QA` on a Needs Decision hold. Nothing in the environment is broken, so no fix ticket is filed |
-| `blocked` | the pass could not test the change | retried once on the same head, then: the self-heal lane when the QA tools raised the block themselves (`qa_worker_*`, `qa_host_missing_tool`, `qa_host_tool_check_failed`, `qa_host_tunnel_failed`, `qa_dev_server_failed`), when only a person can clear it (`needs_person`, an access hold), or when the agent named the open ticket that covers it (`covered_by`) or the project's missing dev server (`needs_dev_server`, unless the repository rules a dev server out: below); a block whose only open steps are `unprovable` (below) asks a person at once; any other block (the agent's own account, a crash, the token limit, a check that never finished) pauses the ticket in `QA` on a Needs Decision hold instead of filing a fix ticket for a problem nothing names |
+| `inconclusive` | the QA run itself fell short: a `macos_app` pass that judged screens but never ran the wide pass, or a `scope: none` pass that never started the app | QA runs once more on the same change, then the ticket pauses in `QA` on a Needs Decision hold. Nothing in the environment is broken, so no fix ticket is filed. With the Conductor's `after_qa_blocked` junction on, its turn routes the pass first (below) |
+| `blocked` | the pass could not test the change | retried once on the same change, then: the self-heal lane when the QA tools raised the block themselves (`qa_worker_*`, `qa_host_missing_tool`, `qa_host_tool_check_failed`, `qa_host_tunnel_failed`, `qa_dev_server_failed`), when only a person can clear it (`needs_person`, an access hold), or when the agent named the open ticket that covers it (`covered_by`) or the project's missing dev server (`needs_dev_server`, unless the repository rules a dev server out: below); a block whose only open steps are `unprovable` (below) asks a person at once; any other block (the agent's own account, a crash, the token limit, a check that never finished) pauses the ticket in `QA` on a Needs Decision hold instead of filing a fix ticket for a problem nothing names; with the Conductor's `after_qa_blocked` junction on, such a block takes the Conductor's turn first (below) |
 
 **Steps QA cannot prove here.** A step can need what no playbook of the pass gives: the running app
 on a pass the diff did not select the app's playbook for (a server-only fix whose walkthrough
@@ -1789,8 +1789,14 @@ is then decided by the other steps, the pre-checks and CI:
 | one passes, or a pre-check passed | `pass` → `Merging`, the report naming each unprovable step and its reason |
 | none is left | `blocked` with no retry and no fix ticket: the ticket pauses in `QA` on the "QA could not finish" Needs Decision hold at once, with its three options and **Merge without a QA result** recommended |
 
+A pass's retries count the passes in a row that reached no result on the ticket's current change:
+since its last implementation or rework run ended, whatever head each judged, so a merge of the base
+branch into the pull request starts no new count (a block on CI spends none).
+
 Picking an option of that hold is all the person does; Symphony makes the move. **Run QA again**
-clears the hold and QA runs once more on the same change. **Send it back to Rework** moves the
+clears the hold and QA runs once more on the same change. It is the recommended option until the
+person picked it on the current change and QA ended the same way after it; from then on **Send it
+back to Rework** is. **Send it back to Rework** moves the
 ticket to `Rework`. **Merge without a QA result** records a `qa` verdict `skip` (skipped by
 decision) on the change QA judged and moves the ticket to `Merging`, where it merges on its review
 and CI alone. The move is made before the hold clears, so QA never starts again in between, and
@@ -3469,13 +3475,14 @@ a status tag (`{problem}...{/}`, `{done}...{/}`, `{you}...{/}`) to colour it by 
 prompt carries the newest instructions, Code Review's reviewer and QA included. When the same class
 of finding came back or the budget is going wrong, it may ask the person a question, through the
 same validated decision path as any other: the ticket pauses on it, and the run the turn came before
-does not start. Each setting has a control in the Mac app's Settings, under
-Conductor.
+does not start. A question is its last resort: the prompts tell it to decide what it can from the
+facts, and to ask only for what needs a person's judgement or something only a person has. Each
+setting has a control in the Mac app's Settings, under Conductor.
 
 ```yaml
 conductor:
   enabled: false
-  junctions: [after_coding, after_qa_fail, after_rework, before_merge]
+  junctions: [after_coding, after_qa_fail, after_qa_blocked, after_rework, before_merge]
   timeout_ms: 180000
   watch:
     enabled: false
@@ -3488,23 +3495,51 @@ conductor:
 
 - `enabled` (default `false`): whether the Conductor runs at all. Off, nothing reads or writes
   anything, and prompts are unchanged.
-- `junctions` (default all four): `after_coding` (an implementation run handed off, before Code
-  Review or QA), `after_qa_fail` (QA failed, before rework), `after_rework` (a rework run handed
-  off, before Code Review or QA again) and `before_merge` (QA passed or was skipped, before
-  Merging). The first three run in the next run's own task before its agent starts, and that run's
-  start is recorded once the turn is done, so the turn sits between the two runs on the timeline;
-  `before_merge` runs as the QA or Code Review run that carried the ticket into Merging ends, on its
-  own.
+- `junctions` (default all five): `after_coding` (an implementation run handed off, before Code
+  Review or QA), `after_qa_fail` (QA failed, before rework), `after_qa_blocked` (a QA pass could
+  not judge the change, before Symphony retries it or asks the person; below), `after_rework` (a
+  rework run handed off, before Code Review or QA again) and `before_merge` (QA passed or was
+  skipped, before Merging). `after_coding`, `after_qa_fail` and `after_rework` run in the next
+  run's own task before its agent starts, and that run's start is recorded once the turn is done, so
+  the turn sits between the two runs on the timeline; `after_qa_blocked` runs inside the QA run, once
+  its verdict is recorded and its report published; `before_merge` runs as the QA or Code Review run
+  that carried the ticket into Merging ends, on its own. A `symphony.yml` that lists its junctions
+  gets `after_qa_blocked` only when it adds it.
 - `timeout_ms` (default `180000`): how long one turn may take. A turn that runs over, fails, answers
   outside its schema or whose provider is held with no free fallback is logged, records nothing for
   the person, and the next run starts as if the Conductor were off.
 
 The turn runs in an empty folder under the workspace root with read-only tools and no ticket, so it
-can neither change nor read the repository. It never moves the ticket or changes its plan. Its own
+can neither change nor read the repository. It never changes the ticket's plan, and it moves the
+ticket only at `after_qa_blocked`, through Symphony (below). Its own
 run is recorded on the ticket (`run.started`, `run.ended` with its model and tokens, `counted: false`
 so the dispatch-loop guard ignores it), and its tokens count toward the ticket under the phase it ran
 in. A dispatch pause stops it as it stops any run. Read on each dispatch, so a change applies without
 a restart. The prompt lives in `priv/conductor/prompt.md`.
+
+**After a blocked QA** (`after_qa_blocked`). A QA pass that ended `blocked` or `inconclusive` on the
+QA agent's own account (not a head CI rejects, not a block the self-heal lane takes, not one whose
+steps no playbook of the pass can prove) takes the Conductor's turn on every such verdict, before
+Symphony's retry or question: a turn costs far less than another QA pass. Its facts add `qa_passes`
+(every QA verdict with its outcome, head and reason, and the steps of each pass that ended blocked,
+with what QA expected and saw) and `routes`, the routes Symphony takes now. Its job is to get the
+ticket a real QA result without the person, and its answer may hold a `route`:
+
+- `{"to": "rework", "finding": "<at most 600 characters>"}`: what must change so QA can prove the
+  step (a test seam, a fixture, a stand-in, a flag QA can set, or a named automated test for a step
+  no QA tool can reach). Symphony records the finding in the QA run (`unclassified`, `unrated`) and
+  moves the ticket to Rework under its own signal, `qa_blocked_rework`, so the timeline tells it from
+  a fail; the rework run reads the finding and the turn's instructions, and meets no second turn
+  before it starts. At most 2 per ticket.
+- `{"to": "rerun"}`: QA runs once more on the same change, and every step of the pass reads the
+  turn's instructions, stepped or not. Only while fewer than 3 passes in a row reached no result on
+  the ticket's current change.
+
+A route past its bound is dropped and logged, and so is a route given with a question: the person
+decides. Then the pass goes on as without the Conductor (the retry, the self-heal lane or the "QA
+could not finish" question). A question the turn asks holds the ticket, and Symphony then asks none
+of its own. The route Symphony took is recorded on the turn's `conductor.instructions` (`route`).
+The Conductor never routes a ticket past QA, and never narrows what QA checks.
 
 **Message blocks.** An answer may pick at most 3 `blocks` to draw under the update's body: `steps`
 (`run_id`, optional), `evidence` (`refs`: 1 to 4 event ids of evidence or finding events that carry a
@@ -3538,6 +3573,9 @@ cut to 3,000 characters) and may answer:
 - `stop`, only with `allow_stop: true` and together with a question to the person (`ask_person`):
   the run ends through the run-stop path (the one behind `POST /api/v1/control/stop`, never the
   ticket cancel) and the ticket pauses on the question.
+
+A QA step blocked for a cause earlier passes already reported gets no steer to try again: the watch
+leaves it, and the turn after the pass (`after_qa_blocked`) routes the ticket.
 
 Each steer is recorded as it reaches the run, a `conductor.steer` event under the run's `run_id` with
 its text, `when`, `trigger` and how and when it was delivered; one the run never reached is recorded
