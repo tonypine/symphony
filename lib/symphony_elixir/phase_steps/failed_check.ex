@@ -77,6 +77,9 @@ defmodule SymphonyElixir.PhaseSteps.FailedCheck do
           | {:window, String.t()}
           | {:unknown, String.t()}
 
+  @typedoc "A failed check: its `name` and any other fields, such as its `job_id`."
+  @type check :: %{required(:name) => String.t(), optional(atom()) => term()}
+
   @typedoc "What the step answers the step runner, as a command's result or a Question to pause on."
   @type result :: {:ok, {String.t(), integer()}} | {:timeout, String.t()} | {:ask, String.t(), map()}
 
@@ -137,7 +140,7 @@ defmodule SymphonyElixir.PhaseSteps.FailedCheck do
   log tool read it, or why it could not be read) and `changes` (the workspace's files, for which
   test files are still there). See the moduledoc.
   """
-  @spec plan(%{required(:name) => String.t(), optional(atom()) => term()}, {:ok, map()} | {:error, term()}, map()) :: [item()]
+  @spec plan(check(), {:ok, map()} | {:error, term()}, map()) :: [item()]
   def plan(%{name: name} = _check, read, changes) do
     case {ci_only(name), read} do
       {%{why: why}, _read} -> [{:ci_only, name, why}]
