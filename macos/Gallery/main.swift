@@ -1479,6 +1479,28 @@ func briefPanel(_ story: BriefStory, width: CGFloat) -> some View {
         .background(DesignTokens.Surface.content.color)
 }
 
+/// The plan in a groomed ticket's Brief place (`Tests/Fixtures/director-app/ticket-page`, TP-1247): as the page opens
+/// it, with its summary and a check in each state; unfolded, with the plan for the runs and what was asked; and a plan
+/// that holds a summary alone.
+enum PlanStory: String, CaseIterable {
+    case folded, unfolded, summaryOnly = "summary-only"
+}
+
+@MainActor
+func planPanel(_ story: PlanStory, width: CGFloat) -> some View {
+    var read = ticketPageRead("TP-1247").detailsRead
+    if story == .summaryOnly {
+        read?.checks = []
+        read?.asks = []
+        read?.plan?.text = ""
+    }
+    guard let model = PlanPanelModel.build(read) else { fatalError("The ticket page's fixture TP-1247 holds no plan") }
+    return PlanPanel(model: model, open: .constant(story == .unfolded))
+        .frame(width: width, alignment: .leading)
+        .padding(DesignTokens.Space.s5)
+        .background(DesignTokens.Surface.content.color)
+}
+
 // MARK: - The ticket page at laptop width (TP-1448)
 
 /// Three moments of one ticket (`Tests/Fixtures/director-app/ticket-page`): TP-1244 with a run working on its tests,
@@ -1621,6 +1643,30 @@ func ticketPageMessage(read: Bool) -> TicketEventsPayload {
         """
     guard let payload = TicketEventsPayload.decode(Data(json.utf8)) else { fatalError("The gallery's message doesn't read") }
     return payload
+}
+
+/// Writing to a groomed ticket (TP-1247), in the laptop's 780 pt column: a message with the Conductor's reply under
+/// it, and a message the Conductor has not answered yet, on top.
+enum GroomedWriting: String, CaseIterable {
+    case answered = "message-answered", waiting = "message-waits-for-conductor"
+}
+
+@MainActor
+func groomedTicketWriting(_ moment: GroomedWriting) -> some View {
+    var page = ticketPageRead("TP-1247")
+    if moment == .waiting { page.history?.merge(ticketPageMessage(read: false)) }
+    return VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
+        TimelineTitle(marks: nil)
+        TimelineComposer(composer: TicketMessageComposer(identifier: page.identifier), drawnAs: .rest, groomed: page.isGroomed, send: {})
+        TimelineSection(
+            model: page.timelineModel(calendar: timelineCalendar), idle: TimelineIdleLine(page.situation, reference: page.reference),
+            transcripts: StepTranscripts { _ in .unreachable }, calendar: timelineCalendar
+        )
+        .environment(\.readSession, ReadSessionAction(page.identifier) { _ in })
+    }
+    .padding(DesignTokens.Space.s5)
+    .frame(width: 780, alignment: .leading)
+    .background(DesignTokens.Surface.content.color)
 }
 
 @MainActor
@@ -2106,6 +2152,12 @@ MainActor.assumeIsolated {
                 render(briefPanel(story, width: width), scheme, to: "brief-panel-\(story.rawValue)-\(name)-\(suffix).png")
             }
         }
+        // The plan in the brief's place on a groomed ticket: folded, unfolded and a plan of a summary alone.
+        for story in PlanStory.allCases {
+            for (name, width) in briefWidths {
+                render(planPanel(story, width: width), scheme, to: "plan-panel-\(story.rawValue)-\(name)-\(suffix).png")
+            }
+        }
         // The ticket page at laptop width (TP-1448): a run working, waiting on you, shipped; and Answer's sheet open.
         // The ticket page (TP-1448, TP-1449): a run working, waiting on you, shipped. In a laptop's window the page is
         // one column beside the rail; from the 1600 pt breakpoint on, the desktop's arrangement.
@@ -2115,6 +2167,13 @@ MainActor.assumeIsolated {
         // The brief and the Decisions panel (TP-1504) on TP-1244's page: unfolded, "Asked for", and no decisions.
         for brief in TicketPageBrief.allCases where brief != .folded {
             renderScreen(scheme, to: "ticket-page-brief-\(brief.rawValue)") { ticketPage("TP-1244", window: $0, brief: brief) }
+        }
+        // A groomed ticket's page (TP-1247): the plan in the brief's place, folded and unfolded.
+        renderScreen(scheme, to: "ticket-page-groomed") { ticketPage("TP-1247", window: $0) }
+        renderScreen(scheme, to: "ticket-page-plan-unfolded") { ticketPage("TP-1247", window: $0, brief: .unfolded) }
+        // Writing to a groomed ticket: the Conductor's reply under the message, and a message it has not answered yet.
+        for moment in GroomedWriting.allCases {
+            render(groomedTicketWriting(moment), scheme, to: "ticket-page-\(moment.rawValue)-\(suffix).png")
         }
         // Writing to the ticket (TP-1503): the box empty, with a draft, a message waiting for the next run, one a run read.
         for moment in TicketWriting.allCases {
