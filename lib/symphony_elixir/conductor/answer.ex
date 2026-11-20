@@ -9,8 +9,11 @@ defmodule SymphonyElixir.Conductor.Answer do
       as null);
     * `refs`: the ids of the events the update rests on (optional; only ids the facts carry are kept);
     * `ask_person`: null, or a question to the person: `title`, `question`, `why`, `if_unanswered`,
-      `recommendation_reason` and two to four `options`, each with a `label`, an `effect` and
-      `recommended` (the request `SymphonyElixir.Questions.ask/3` takes);
+      `recommendation_reason` and two to four `options`, each with a `label`, an `effect`,
+      `recommended` and the `action` Symphony takes when it is picked, one of `actions/0`
+      (`rework` with its `finding`, cut to 600 characters). A question with an option whose action
+      is missing or not one of them is dropped and logged, and the rest of the answer is kept: the
+      turn records its message without the question;
     * `steer` (a watch turn's, `SymphonyElixir.Conductor.Watch`): null, or guidance for the running
       run: `message` (at most 1,500 characters) and `when` (`next_turn` or `now`);
     * `blocks` (optional): at most 3 message blocks to pick, each `{"type": ...}` with the facts it
@@ -45,6 +48,7 @@ defmodule SymphonyElixir.Conductor.Answer do
   @evidence_max 4
   @compare_text_max 80
   @question_fields ~w(title question why if_unanswered recommendation_reason)
+  @actions ~w(continue rerun rework accept_without_qa cancel)
 
   @type t :: %{
           instructions: String.t() | nil,
@@ -56,6 +60,18 @@ defmodule SymphonyElixir.Conductor.Answer do
           blocks: [map()],
           route: %{to: String.t()} | %{to: String.t(), finding: String.t()} | nil
         }
+
+  @typedoc """
+  What picking a question's option makes Symphony do (`SymphonyElixir.Conductor`): `continue` clears
+  the pause only, `rerun` runs the stage again, `rework` moves the ticket to Rework with the
+  option's finding, `accept_without_qa` records QA's `skip` verdict and moves it to Merging (in QA
+  only), `cancel` cancels it.
+  """
+  @type action :: String.t()
+
+  @doc "The actions a question's option may name, the closed list Symphony acts on."
+  @spec actions() :: [action()]
+  def actions, do: @actions
 
   @doc "The most characters `instructions` may hold."
   @spec instructions_max() :: pos_integer()
@@ -219,7 +235,14 @@ defmodule SymphonyElixir.Conductor.Answer do
   defp ask_person(%{} = ask) do
     with {:ok, fields} <- question_fields(ask),
          {:ok, options} <- options(Map.get(ask, "options")) do
-      {:ok, Map.put(fields, :options, options)}
+      case actioned(options, Map.get(ask, "options")) do
+        {:ok, options} ->
+          {:ok, Map.put(fields, :options, options)}
+
+        {:error, why} ->
+          Logger.warning("Conductor answer's question #{inspect(fields.title)} was dropped: #{why}")
+          {:ok, nil}
+      end
     end
   end
 
@@ -255,4 +278,26 @@ defmodule SymphonyElixir.Conductor.Answer do
   end
 
   defp options(_options), do: {:error, "`ask_person.options` must list two to four options"}
+
+  # Each option's action, from the closed list Symphony acts on; one it can't act on drops the question.
+  defp actioned(options, raw) do
+    Enum.zip(options, raw)
+    |> Enum.reduce_while({:ok, []}, fn {option, raw_option}, {:ok, acc} ->
+      case action(Map.get(raw_option, "action"), Map.get(raw_option, "finding")) do
+        {:ok, action} -> {:cont, {:ok, acc ++ [Map.merge(option, action)]}}
+        {:error, why} -> {:halt, {:error, "option #{inspect(option.label)} #{why}"}}
+      end
+    end)
+  end
+
+  defp action("rework", finding) when is_binary(finding) do
+    case String.trim(finding) do
+      "" -> {:error, "sends the ticket to Rework with a blank `finding`"}
+      finding -> {:ok, %{action: "rework", finding: fit(finding, @finding_max, "ask_person.options.finding")}}
+    end
+  end
+
+  defp action("rework", _finding), do: {:error, "sends the ticket to Rework without a `finding`"}
+  defp action(action, _finding) when action in @actions, do: {:ok, %{action: action}}
+  defp action(action, _finding), do: {:error, "names the action #{inspect(action)}, not one of #{Enum.join(@actions, ", ")}"}
 end

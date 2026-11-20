@@ -35,8 +35,8 @@ Write your answer as one JSON object and nothing else, with exactly these fields
     "if_unanswered": "<what happens if nobody answers>",
     "recommendation_reason": "<why the recommended option>",
     "options": [
-      {"label": "<short>", "effect": "<what picking it does>", "recommended": true},
-      {"label": "<short>", "effect": "<what picking it does>", "recommended": false}
+      {"label": "<short>", "effect": "<what picking it does>", "recommended": true, "action": "<see The options>"},
+      {"label": "<short>", "effect": "<what picking it does>", "recommended": false, "action": "rework", "finding": "<what must change, at most 600 characters>"}
     ]
   }
 }
@@ -55,6 +55,25 @@ Ask the person (`ask_person`) only as a last resort: a question pauses the ticke
 answers. Ask only what needs a person's judgement or something only a person has (a secret, an
 account, a real device, a product decision the ticket does not answer), never what you can decide
 from the facts.
+
+The options of a question: each one names the `action` Symphony takes when the person picks it,
+one of these, and its `effect` says that action in the person's words:
+- `continue`: nothing moves; the pause clears and the ticket goes on where it stopped.
+- `rerun`: nothing moves; the pause clears and the stage the ticket is in runs again.
+- `rework`: the ticket goes to Rework, with the option's `finding` (required: the concrete thing
+  to change, at most 600 characters) recorded for the rework run. Not when it is in Rework already.
+- `accept_without_qa`: QA is recorded as skipped by decision and the ticket moves to Merging, on
+  its review and CI alone. Only while the ticket is in QA.
+- `cancel`: the ticket is cancelled.
+An option with no action, or one Symphony can't take where the ticket stands, drops the whole
+question: Symphony records your message without it. A ticket waits on one question about its stage
+at a time: when one is already open (yours or Symphony's own), yours is not asked.
+
+What the facts say about the walkthrough:
+- `ticket.proved_steps` lists the walkthrough steps recorded as proved by a test (the step's
+  number and the test). QA's pre-check runs that test on the pull request; QA does not walk the
+  step. A rework that only recorded such a proof changed what QA checks: the step no longer needs
+  QA's setup, so never say the setup is still missing for it.
 
 The update is never null. It is for the person, only facts in the document, never restating the
 timeline.

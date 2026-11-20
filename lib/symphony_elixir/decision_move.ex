@@ -12,6 +12,8 @@ defmodule SymphonyElixir.DecisionMove do
 
   A move may carry a verdict recorded before it, bound to the head the question was asked on: a
   merge without a QA result records the `qa` verdict `skip` with the reason `skipped by decision`.
+  It may also carry a finding recorded before it, as the run that asked's (`finding`, the
+  Conductor's "Send it to Rework" option): the rework run reads it as it reads QA's findings.
   """
 
   alias SymphonyElixir.{MergeConfirmation, TicketSignals, TransitionGuard}
@@ -21,8 +23,11 @@ defmodule SymphonyElixir.DecisionMove do
   @typedoc "A verdict a move records first: its kind, outcome, the head it judges and why."
   @type verdict :: %{kind: String.t(), outcome: String.t(), head_sha: String.t() | nil, reason: String.t()}
 
-  @typedoc "The state a picked option moves the ticket to, and the verdict it records first, if any."
-  @type t :: %{required(:to) => String.t(), optional(:verdict) => verdict()}
+  @typedoc "A finding a move records first: what must change, and the run (its id and kind) it is recorded as."
+  @type finding :: %{description: String.t(), run_id: String.t(), run_kind: String.t()}
+
+  @typedoc "The state a picked option moves the ticket to, and the verdict and finding it records first, if any."
+  @type t :: %{required(:to) => String.t(), optional(:verdict) => verdict(), optional(:finding) => finding()}
 
   @doc "`option` carrying `move`: picking it makes the move."
   @spec option(map(), t()) :: map()
@@ -44,7 +49,7 @@ defmodule SymphonyElixir.DecisionMove do
   end
 
   @doc """
-  Records the move's verdict, then moves the ticket `issue_id` of `repo_key` to the move's state
+  Records the move's finding and verdict, then moves the ticket `issue_id` of `repo_key` to the move's state
   through the guard (`SymphonyElixir.TransitionGuard.perform/4`, which writes the record first). A
   move to Canceled tries the team's other spelling when the first is not one of its states.
   Answers `{:ok, state}` with the state it moved to, or the guard's error. `opts[:issue_identifier]`
@@ -52,6 +57,7 @@ defmodule SymphonyElixir.DecisionMove do
   """
   @spec perform(String.t() | nil, String.t(), t(), keyword()) :: {:ok, String.t()} | {:error, term()}
   def perform(repo_key, issue_id, %{to: to} = move, opts \\ []) do
+    record_finding(repo_key, issue_id, Map.get(move, :finding))
     record_verdict(repo_key, issue_id, Map.get(move, :verdict))
     ctx = %{repo_key: repo_key, issue_identifier: Keyword.get(opts, :issue_identifier)}
 
@@ -68,6 +74,15 @@ defmodule SymphonyElixir.DecisionMove do
     do: TicketSignals.record_verdict(repo_key, issue_id, kind, Map.get(verdict, :head_sha), outcome, %{reason: Map.get(verdict, :reason)})
 
   defp record_verdict(_repo_key, _issue_id, _none), do: :ok
+
+  # Unclassified and unrated until the findings model classifies it, and naming no step, as the
+  # Conductor's route to Rework records its finding.
+  defp record_finding(repo_key, issue_id, %{description: description, run_id: run_id, run_kind: run_kind}) when is_binary(repo_key) do
+    payload = %{class: "unclassified", severity: "unrated", description: String.slice(description, 0, 2_000)}
+    TicketSignals.record_event(repo_key, issue_id, "finding.recorded", payload, actor: {:agent, run_id, run_kind}, idempotency: "finding:#{run_id}:decision")
+  end
+
+  defp record_finding(_repo_key, _issue_id, _none), do: :ok
 
   defp spellings(to), do: if(to in @canceled_spellings, do: [to | @canceled_spellings -- [to]], else: [to])
 

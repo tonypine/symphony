@@ -1,7 +1,8 @@
 defmodule SymphonyElixir.DirectorMovesTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{AuditLog, CiWait}
+  alias SymphonyElixir.{AuditLog, CiWait, Conductor}
+  alias SymphonyElixir.Conductor.Answer
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.{DecisionMove, DecisionRequest, DirectorMoves, DispatchLoop, IdlePark}
   alias SymphonyElixir.Inbox.{FromRecord, Item}
@@ -11,6 +12,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
   alias SymphonyElixir.{StateMachine, TicketSignals, TicketState, TicketStateReconciler, TokenBudget}
 
   @waiting "Waiting on sub-tickets"
+  @conductor_question "How should MOT-40 get past a QA check that cannot set up a failing state request?"
 
   defmodule MissingStateTracker do
     def workflow_state_exists?(_state, _teams), do: {:ok, false}
@@ -1682,6 +1684,58 @@ defmodule SymphonyElixir.DirectorMovesTest do
       refute deciding("pr")
     end
 
+    test "a Conductor question's pick acts: accept without QA skips QA into Merging, Rework records the finding", %{opts: opts} do
+      conductor_repo!()
+
+      question = ask_conductor!("QA", "Accept without QA")
+      pick = %{picks: [%{question: @conductor_question, answer: "Accept without QA"}], question_id: question.id}
+      assert {:ok, result} = DirectorMoves.move(:decide, "MOT-40", pick, opts)
+      assert %{moved: true, from_state: "QA", to_state: "Merging"} = result
+      assert_received {:memory_tracker_state_update, "pr", "Merging"}
+      assert [%{kind: "qa", outcome: "skip", details: %{reason: "skipped by decision"}}] = ticket_verdicts("pr")
+      assert RunStore.get_ticket_state("pr").phase == "Merging"
+      refute deciding("pr")
+      refute Pauses.paused?({:ticket, "repo-director", "pr"})
+      # The Inbox lists a ticket's open questions: it has none left.
+      assert Questions.open({:ticket, "repo-director", "pr"}) == []
+
+      question = ask_conductor!("QA", "Send it to Rework")
+      pick = %{picks: [%{question: @conductor_question, answer: "Send it to Rework"}], question_id: question.id}
+      assert {:ok, %{moved: true, to_state: "Rework"}} = DirectorMoves.move(:decide, "MOT-40", pick, opts)
+      assert_received {:memory_tracker_state_update, "pr", "Rework"}
+      assert [%{actor: %{kind: :agent, run_kind: "conductor"}, payload: finding}] = RunStore.list_ticket_events("pr", types: ["finding.recorded"])
+      assert finding == %{class: "unclassified", severity: "unrated", description: "Add a flag QA can set to fail the state request."}
+    end
+
+    test "a Conductor question's run again and continue move nothing: the pause clears and the stage goes on", %{opts: opts} do
+      conductor_repo!()
+
+      for label <- ["Run QA again", "Leave it as it is"] do
+        question = ask_conductor!("QA", label)
+        pick = %{picks: [%{question: @conductor_question, answer: label}], question_id: question.id}
+        assert {:ok, %{moved: false, to_state: "QA"}} = DirectorMoves.move(:decide, "MOT-40", pick, opts)
+        refute_received {:memory_tracker_state_update, "pr", _state}
+        refute Pauses.paused?({:ticket, "repo-director", "pr"})
+      end
+    end
+
+    test "two questions about QA open at once (an older build's record): answering one closes the other", %{opts: opts} do
+      conductor_repo!()
+      conductor_ticket!("QA")
+      machine = set_qa_hold()
+      conductor = ask_conductor!("QA", "Accept without QA", skip_check: true)
+      assert Enum.map(Questions.open({:ticket, "repo-director", "pr"}), & &1.id) == [machine.id, conductor.id]
+
+      pick = [%{question: @conductor_question, answer: "Leave it as it is"}]
+      assert {:ok, %{moved: false}} = DirectorMoves.move(:decide, "MOT-40", %{picks: pick, question_id: conductor.id}, opts)
+
+      assert Questions.open({:ticket, "repo-director", "pr"}) == []
+      assert %{state: :withdrawn, withdrawn: %{reason: reason}} = Questions.find({:ticket, "repo-director", "pr"}, machine.id)
+      assert reason == ~s(Replaced by your answer to "QA cannot set up a failing state request": Leave it as it is)
+      assert [%{payload: %{cause: "superseded"}}] = RunStore.list_ticket_events("pr", types: ["question.withdrawn"])
+      refute Pauses.paused?({:ticket, "repo-director", "pr"})
+    end
+
     test "a Cancel pick tries the team's other spelling of Canceled", %{opts: opts} do
       put_issues([%{pr("Code Review") | repo_key: "repo-director"}])
 
@@ -2708,6 +2762,56 @@ defmodule SymphonyElixir.DirectorMovesTest do
   end
 
   defp put_issues(issues), do: Application.put_env(:symphony_elixir, :memory_tracker_issues, issues)
+
+  defp conductor_ticket!(phase) do
+    put_issues([%{pr(phase) | repo_key: "repo-director"}])
+    :ok = RunStore.put_ticket_state(%{repo_key: "repo-director", issue_id: "pr", issue_identifier: "MOT-40", phase: phase})
+  end
+
+  defp conductor_repo! do
+    repo = [key: "repo-director", workflow: Workflow.workflow_file_path(), team: "MOT", projects: ["Checkout"]]
+    write_workflow_file!(Workflow.workflow_file_path(), repos: [repo])
+  end
+
+  # A question the Conductor asks on MOT-40 in `phase`, through its own turn, with an option of each
+  # action; `skip_check: true` asks it beside an open question, as an older build did.
+  defp ask_conductor!(phase, recommended, opts \\ []) do
+    unless opts[:skip_check], do: conductor_ticket!(phase)
+
+    options =
+      [
+        %{"label" => "Accept without QA", "effect" => "MOT-40 merges on its review and CI alone.", "action" => "accept_without_qa"},
+        %{"label" => "Send it to Rework", "effect" => "MOT-40 goes back to Rework.", "action" => "rework", "finding" => "Add a flag QA can set to fail the state request."},
+        %{"label" => "Run QA again", "effect" => "QA runs once more.", "action" => "rerun"},
+        %{"label" => "Leave it as it is", "effect" => "MOT-40 stays where it is.", "action" => "continue"}
+      ]
+      |> Enum.map(&Map.put(&1, "recommended", &1["label"] == recommended))
+
+    question = %{
+      "title" => "QA cannot set up a failing state request",
+      "question" => @conductor_question,
+      "why" => "QA ran 7 times and stopped at the same step each time.",
+      "if_unanswered" => "MOT-40 stays in QA.",
+      "recommendation_reason" => "The unit tests already prove the step.",
+      "options" => options
+    }
+
+    settings = Config.settings_for_repo!("repo-director")
+    plan = %{junction: "after_qa_blocked", issue_id: "pr", repo_key: "repo-director", run_profile: Config.run(settings, :conductor), timeout_ms: 5_000}
+    reply = {:ok, [Jason.encode!(%{"instructions" => "Look at the QA report.", "ask_person" => question})], 10}
+    turn = fn _plan, _issue, _run_id, _prompt -> reply end
+
+    if opts[:skip_check] do
+      # An older build asked without reading the open question.
+      {:ok, asked} = reply |> elem(1) |> hd() |> Answer.parse()
+      request = %{asked.ask_person | options: Enum.map(asked.ask_person.options, &Map.drop(&1, [:action, :finding]))}
+      {:ok, question} = Questions.ask({:ticket, "repo-director", "pr"}, request, request: true, asked_in: phase, asked_by: %{kind: :run, name: "Conductor", run_id: "conductor-old"})
+      question
+    else
+      assert Conductor.run(plan, %{pr(phase) | repo_key: "repo-director"}, turn: turn, facts: %{}) == :held
+      Questions.open({:ticket, "repo-director", "pr"}) |> List.last()
+    end
+  end
 
   defp linear_comments(issue_id, comments) do
     linear = %{state_changes: [], comments: comments}

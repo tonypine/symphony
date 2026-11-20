@@ -980,7 +980,7 @@ case or by id: a ticket with none is `404` `ticket_not_found`. `junction` is opt
 | --- | --- |
 | `schema` | `symphony.conductor.facts/1`. |
 | `junction`, `focus` | The junction the document is shaped for (null for none) and what the turn there is for. |
-| `ticket` | `identifier`, `title`, `url`; the description's `problem`, `acceptance` and `walkthrough` sections; the newest `brief`; the person's `decisions`, `notes` and `answers` to questions. |
+| `ticket` | `identifier`, `title`, `url`; the description's `problem`, `acceptance` and `walkthrough` sections; `proved_steps`, the walkthrough steps recorded as proved by a test (`step`, `test`, `event_id`; the newest proof of each, which QA's pre-check runs instead of QA walking the step); the newest `brief`; the person's `decisions`, `notes` and `answers` to questions. |
 | `standing` | `phase`, `attempt` (the implementation and rework runs started), `pull_request` (`number`, `url`, `state`) and its `head`. |
 | `last_run` | The newest run that ended other than the Conductor's own: `kind`, `model`, `exit`, `duration_ms`, `tokens`, its `steps` and their results, `files_changed` (`path`, `added`, `removed`; left out when the workspace does not exist) and `resolved_findings`. |
 | `findings` | Every finding: `state` (`open`, `resolved`, `reopened`, `confirmed`), `class`, `class_count` (how many times that class was recorded on the ticket), `severity`, `step`, `description`, `evidence`, its `resolution` and the event that reopened it. |
