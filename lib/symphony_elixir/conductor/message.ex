@@ -22,6 +22,14 @@ defmodule SymphonyElixir.Conductor.Message do
   poll for a ticket still owed one (`SymphonyElixir.Orchestrator.conductor_owed/1`), which finds
   them again after a restart (`owed_tickets/1`).
 
+  One turn works on a ticket at a time (`SymphonyElixir.Conductor.exclusive/3`): `tend/2` takes
+  the ticket's lock, and while another turn holds it (a tree turn, a run's junction, Grooming)
+  nothing runs and everything stays owed for the next start. One turn answers every message owed at
+  that moment: its reply hangs under the newest, and each earlier one gets a one-line reply that
+  points there, so no message stays without one. A turn no provider of `runs.conductor` can take
+  now, or that a pause of Symphony or the repository stops, is not a failure: it waits, still owed.
+  The turn is given every ask and the newest 20 messages with their replies, no more.
+
   A turn that failed, or whose answer could not be read, is counted on what it was to answer
   (`unanswered/3`, a status note under `message.try:<event id>:<n>`) and stays owed, so the next
   poll tries again. After 3 failed tries Symphony leaves its own short reply under the message,
@@ -46,8 +54,11 @@ defmodule SymphonyElixir.Conductor.Message do
   (`source: message`) with a `ticket.filed_from`.
 
   A message on a sub-ticket is also shown to the parent's Conductor (`child_message`), after the
-  sub-ticket's own turn: it owes no reply, and records nothing unless it changes the tree or the
-  plan.
+  sub-ticket's own turn replied: it owes no reply, and records nothing unless it changes the tree
+  or the plan. It is a turn the parent is owed (`owed/2`'s `children`), run under the parent's own
+  lock, and one turn reads every such message of every sub-ticket that waits; each is then recorded
+  as read on the parent (a status note under `child_message.seen:<event id>`), whatever the turn
+  answered.
 
   A new ask on a ticket that already has a plan, written by its parent (`recalibrate/3`), starts
   the same kind of turn with the ask in place of a message: its answer is the plan's next version.
@@ -70,6 +81,10 @@ defmodule SymphonyElixir.Conductor.Message do
            "ticket, or another of its sub-tickets, should do; otherwise answer with nothing and nothing is recorded."
   @tries 3
   @try_key "message.try:"
+  @seen_key "child_message.seen:"
+  # How many messages, with their replies, a turn is given besides every ask.
+  @conversation_messages 20
+  @together "Answered together with your later message, below."
   @new_ask "This ticket's parent gave it a new ask (`new_ask`) after its plan was written. Write the plan again for what " <>
              "is asked now, as `plan`, with the `reason` it changed for. Keep the id of every check that still stands."
 
@@ -114,7 +129,7 @@ defmodule SymphonyElixir.Conductor.Message do
   """
   @spec plan_written(String.t(), keyword()) :: :ok
   def plan_written(issue_id, opts \\ []) do
-    if due?(issue_id, opts) and owed?(owed(issue_id)), do: notify(issue_id, opts), else: :ok
+    if due?(issue_id, opts) and owed?(owed(issue_id, opts)), do: notify(issue_id, opts), else: :ok
   end
 
   defp notify(issue_id, opts) do
@@ -126,82 +141,117 @@ defmodule SymphonyElixir.Conductor.Message do
     :ok
   end
 
-  @typedoc "What a ticket is owed: the messages with no reply and the parent's asks its plan does not answer, each oldest first."
-  @type owed :: %{messages: [Event.t()], asks: [Event.t()]}
+  @typedoc """
+  What a ticket is owed: the messages with no reply and the parent's asks its plan does not answer,
+  each oldest first, and the messages on its sub-tickets its Conductor has not read (`children`,
+  each the `event` and the sub-ticket's identifier as `child`).
+  """
+  @type owed :: %{messages: [Event.t()], asks: [Event.t()], children: [%{event: Event.t(), child: String.t()}]}
 
   @doc """
-  What the groomed ticket `issue_id` (or the ticket whose events these are, oldest first) is owed
-  (see the module doc). A ticket with no plan is owed nothing: its Grooming comes first.
+  What the groomed ticket `issue_id` is owed (see the module doc). A ticket with no plan is owed
+  nothing: its Grooming comes first. `opts` as `due?/2`'s.
   """
-  @spec owed(String.t() | [Event.t()]) :: owed()
-  def owed(issue_id) when is_binary(issue_id), do: owed(Facts.events(issue_id))
+  @spec owed(String.t(), keyword()) :: owed()
+  def owed(issue_id, opts \\ []) when is_binary(issue_id) do
+    events = Facts.events(issue_id)
 
-  def owed(events) when is_list(events) do
     case Enum.split_while(Enum.reverse(events), &(&1.type != "plan.written")) do
       {_all, []} ->
-        %{messages: [], asks: []}
+        %{messages: [], asks: [], children: []}
 
       {newer, _plan_and_older} ->
-        settled = for %Event{type: "conductor.update", parent: parent} when is_binary(parent) <- events, into: MapSet.new(), do: parent
-        settled = for %Event{type: "message.read"} = read <- events, into: settled, do: field(read, :message_id)
-        open? = &(not MapSet.member?(settled, &1.id) and tries(events, &1.id) < @tries)
+        open? = &(not settled?(events, &1) and tries(events, &1.id) < @tries)
 
         %{
           messages: for(%Event{type: "message.sent"} = message <- events, open?.(message), do: message),
-          asks: for(%Event{type: "ask.recorded"} = ask <- Enum.reverse(newer), field(ask, :source) == "parent", open?.(ask), do: ask)
+          asks: for(%Event{type: "ask.recorded"} = ask <- Enum.reverse(newer), field(ask, :source) == "parent", open?.(ask), do: ask),
+          children: children(issue_id, events, opts)
         }
     end
   end
 
-  defp owed?(%{messages: messages, asks: asks}), do: messages != [] or asks != []
+  # A message is settled once it has a reply, or a run read it while the junction was off.
+  defp settled?(events, %Event{id: id}) do
+    Enum.any?(events, fn
+      %Event{type: "conductor.update", parent: ^id} -> true
+      %Event{type: "message.read"} = read -> field(read, :message_id) == id
+      _other -> false
+    end)
+  end
+
+  # The messages on the ticket's sub-tickets that their own Conductor replied to and this ticket's
+  # has not read, oldest first.
+  defp children(issue_id, events, opts) do
+    settings = Keyword.get_lazy(opts, :settings, &Config.conductor_settings/0)
+    record = RunStore.get_ticket_state(issue_id)
+    subs = for %{id: id, identifier: identifier} <- List.wrap(is_map(record) && Map.get(record, :sub_issues)), is_binary(id), do: {id, identifier}
+    seen = for %Event{type: "note", idempotency: @seen_key <> id} <- events, into: MapSet.new(), do: id
+
+    said =
+      for {id, identifier} <- subs, @child_junction in settings.junctions, said = Facts.events(id), %Event{type: "message.sent"} = message <- said do
+        if not MapSet.member?(seen, message.id) and Enum.any?(said, &match?(%Event{type: "conductor.update", parent: parent} when parent == message.id, &1)),
+          do: %{event: message, child: identifier}
+      end
+
+    said |> Enum.reject(&is_nil/1) |> Enum.sort_by(&{DateTime.to_unix(&1.event.at, :microsecond), &1.event.id})
+  end
+
+  defp owed?(%{messages: messages, asks: asks, children: children}), do: messages != [] or asks != [] or children != []
 
   defp tries(events, id), do: Enum.count(events, &(&1.type == "note" and is_binary(&1.idempotency) and String.starts_with?(&1.idempotency, "#{@try_key}#{id}:")))
 
   @doc """
   The tickets that are owed a turn now, by their issue ids: every ticket Symphony holds a record of
-  whose messages are the Conductor's (`due?/2`) and that is owed something (`owed/1`). The
+  whose messages are the Conductor's (`due?/2`) and that is owed something (`owed/2`). The
   orchestrator reads it once as it starts. `opts` as `due?/2`'s.
   """
   @spec owed_tickets(keyword()) :: [String.t()]
   def owed_tickets(opts \\ []) do
-    for %{issue_id: issue_id} <- List.wrap(RunStore.list_all_ticket_states()), due?(issue_id, opts), owed?(owed(issue_id)), do: issue_id
+    for %{issue_id: issue_id} <- List.wrap(RunStore.list_all_ticket_states()), due?(issue_id, opts), owed?(owed(issue_id, opts)), do: issue_id
   end
 
   @doc """
-  Runs the turns the ticket `issue_id` is owed (`owed/1`), now: first the one that writes its plan
-  again for its parent's newest ask, then one for each message with no reply, oldest first, each
-  also shown to the Conductor of the ticket's parent, when it has one Symphony tracks. `:owed`
-  while something is still owed afterwards (a turn failed and is tried again), `:done` otherwise,
-  and for a ticket whose messages are not the Conductor's. `opts` are
-  `SymphonyElixir.Conductor.message/4`'s.
+  Runs the turns the ticket `issue_id` is owed (`owed/2`), now, while it holds the ticket's lock:
+  the one that writes its plan again for its parent's newest ask, one that answers every message
+  with no reply, and one that reads every unread message of its sub-tickets. Then the ticket's
+  parent, when it has one, is started for what it is owed in turn.
+
+  `:owed` while something is still owed afterwards: another turn holds the ticket's lock, a turn
+  failed and is tried again, or it cannot run now (no provider, a pause). `:done` otherwise, and
+  for a ticket whose messages are not the Conductor's. `opts` are
+  `SymphonyElixir.Conductor.message/4`'s and `start/3`'s.
   """
   @spec tend(String.t(), keyword()) :: :done | :owed
   def tend(issue_id, opts \\ []) do
     with true <- due?(issue_id, opts),
-         %{} = record <- RunStore.get_ticket_state(issue_id) do
-      record = TicketState.normalize(record)
-      answer(record, owed(issue_id), opts)
-      if owed?(owed(issue_id)), do: :owed, else: :done
+         %{} = record <- RunStore.get_ticket_state(issue_id),
+         record = TicketState.normalize(record),
+         answer = fn -> answer(record, owed(issue_id, opts), opts) end,
+         {:ok, _answered} <- Conductor.exclusive(issue_id, :skip, answer) do
+      with parent_id when is_binary(parent_id) <- TicketPlan.parent_id(issue_id), do: plan_written(parent_id, opts)
+      if owed?(owed(issue_id, opts)), do: :owed, else: :done
     else
+      :busy -> :owed
       _not_the_conductors -> :done
     end
   end
 
-  defp answer(record, %{messages: messages, asks: asks}, opts) do
-    with %Event{} = ask <- List.last(asks), do: Conductor.message(issue(record), ask, record.repo_key, opts)
+  defp answer(record, %{messages: messages, asks: asks, children: children}, opts) do
+    issue = issue(record)
+    with %Event{} = ask <- List.last(asks), do: Conductor.message(issue, ask, record.repo_key, opts)
 
-    for %Event{} = message <- messages do
-      Conductor.message(issue(record), message, record.repo_key, Keyword.put(opts, :finished, finished?(record)))
-      to_parent(record, message, opts)
+    with {earlier, [%Event{} = newest]} <- Enum.split(messages, -1) do
+      also = Enum.map(earlier, &%{event: &1})
+      Conductor.message(issue, newest, record.repo_key, Keyword.merge(opts, finished: finished?(record), also: also))
     end
-  end
 
-  # A message on a sub-ticket is shown to its parent's Conductor too, once its own turn answered.
-  defp to_parent(record, message, opts) do
-    with parent_id when is_binary(parent_id) <- TicketPlan.parent_id(record.issue_id),
-         %{} = parent <- RunStore.get_ticket_state(parent_id) do
-      parent = TicketState.normalize(parent)
-      Conductor.message(issue(parent), message, parent.repo_key, opts |> Keyword.drop([:finished]) |> Keyword.merge(junction: @child_junction, child: record.issue_identifier))
+    with {earlier, [%{event: newest, child: child}]} <- Enum.split(children, -1),
+         :ok <- Conductor.message(issue, newest, record.repo_key, Keyword.merge(opts, junction: @child_junction, child: child, also: earlier)) do
+      for %{event: %Event{id: id}, child: child} <- children do
+        note = %{text: "The Conductor read a message a person wrote on #{child}.", status: true}
+        record(%{repo_key: record.repo_key, issue_id: record.issue_id}, "note", note, idempotency: @seen_key <> id)
+      end
     end
   end
 
@@ -221,28 +271,49 @@ defmodule SymphonyElixir.Conductor.Message do
   defp normalize(state), do: state |> to_string() |> String.trim() |> String.downcase()
 
   @doc """
-  What the turn `plan` is about, added to its `facts`: the `message` it answers (and, on a finished
-  ticket, the `rules` that bind the answer), the sub-ticket's message and its reply at
-  `child_message` (`child`), or the `new_ask` a recalibration plans for.
+  What the turn `plan` is about, added to its `facts`: the `message` it answers, with the
+  `earlier_messages` the same reply answers (and, on a finished ticket, the `rules` that bind the
+  answer), the sub-ticket's message and its reply at `child_message` (`child`, with the other
+  unread ones as `other_children`), or the `new_ask` a recalibration plans for. The facts'
+  `conversation` is cut to every ask and the newest #{@conversation_messages} messages.
   """
   @spec facts(map(), map()) :: map()
-  def facts(facts, %{message: %{event: %Event{type: "ask.recorded"} = ask}}) do
+  def facts(facts, plan), do: facts |> capped() |> about(plan)
+
+  # Every ask stays; of the messages, the newest #{@conversation_messages} with their replies.
+  defp capped(%{conversation: said} = facts) when is_list(said) do
+    older = said |> Enum.filter(&(&1.kind == "message")) |> Enum.drop(-@conversation_messages) |> MapSet.new(& &1.event_id)
+    %{facts | conversation: Enum.reject(said, &MapSet.member?(older, &1.event_id))}
+  end
+
+  defp capped(facts), do: facts
+
+  defp about(facts, %{message: %{event: %Event{type: "ask.recorded"} = ask}}) do
     new_ask = %{event_id: ask.id, source: field(ask, :source), from: field(ask, :from), text: Facts.cut(field(ask, :text), 6_000)}
     Map.merge(facts, %{new_ask: new_ask, rules: @new_ask})
   end
 
-  def facts(facts, %{junction: @child_junction, message: %{event: message, child: child}}) do
-    reply = with %Event{} = reply <- reply(message), do: Facts.cut(field(reply, :text), 1_200)
-    Map.merge(facts, %{child: %{identifier: child, event_id: message.id, message: Facts.cut(field(message, :text), 4_000), reply: reply}, rules: @child})
+  defp about(facts, %{junction: @child_junction, message: %{event: message, child: child} = about}) do
+    others = for %{event: event, child: child} <- Map.get(about, :also, []), do: child_said(event, child)
+    facts = Map.merge(facts, %{child: child_said(message, child), rules: @child})
+    if others == [], do: facts, else: Map.put(facts, :other_children, others)
   end
 
-  def facts(facts, %{message: %{event: message, finished: finished}}) do
-    said = %{event_id: message.id, by: Messages.writer(message.actor), text: Facts.cut(field(message, :text), 4_000)}
-    facts = Map.put(facts, :message, said)
+  defp about(facts, %{message: %{event: message, finished: finished} = about}) do
+    earlier = for %{event: event} <- Map.get(about, :also, []), do: said(event)
+    facts = Map.put(facts, :message, said(message))
+    facts = if earlier == [], do: facts, else: Map.put(facts, :earlier_messages, earlier)
     if finished, do: Map.put(facts, :rules, @finished), else: facts
   end
 
-  def facts(facts, _plan), do: facts
+  defp about(facts, _plan), do: facts
+
+  defp said(%Event{} = message), do: %{event_id: message.id, by: Messages.writer(message.actor), text: Facts.cut(field(message, :text), 4_000)}
+
+  defp child_said(%Event{} = message, child) do
+    reply = with %Event{} = reply <- reply(message), do: Facts.cut(field(reply, :text), 1_200)
+    %{identifier: child, event_id: message.id, message: Facts.cut(field(message, :text), 4_000), reply: reply}
+  end
 
   # The Conductor's reply to `message`, when it has one.
   defp reply(%Event{id: id, issue_id: issue_id}) do
@@ -278,7 +349,7 @@ defmodule SymphonyElixir.Conductor.Message do
     next = answered |> Map.delete(:sub_tickets) |> Map.merge(kept) |> Map.merge(%{by: "recalibration", reason: reason})
 
     with {:ok, _event} <- TicketPlan.write(repo_key, issue_id, next, run_id: run_id, idempotency: "plan.written:#{run_id}"),
-         {:ok, _ask} <- record_ask(answer.ask, repo_key, issue_id, message, run_id) do
+         :ok <- record_asks(answer.ask, repo_key, issue_id, answered(plan) ++ [message], run_id) do
       :ok
     else
       {:error, {:invalid_plan, reasons}} -> {:error, "its plan was refused: " <> Enum.join(reasons, "; ")}
@@ -290,11 +361,22 @@ defmodule SymphonyElixir.Conductor.Message do
   defp reason(%{junction: @child_junction, message: %{child: child}}), do: "A message on #{child} changed the plan."
   defp reason(_plan), do: "A message changed what is asked."
 
-  defp record_ask(false, _repo_key, _issue_id, _message, _run_id), do: {:ok, nil}
+  # The earlier messages the turn `plan` answers with its newest.
+  defp answered(%{junction: @junction, message: %{also: also}}), do: for(%{event: %Event{type: "message.sent"} = event} <- also, do: event)
+  defp answered(_plan), do: []
 
-  defp record_ask(true, repo_key, issue_id, %Event{id: id} = message, run_id) do
-    opts = [source: "message", from: id, run_id: run_id, idempotency: "ask.recorded:#{id}"]
-    TicketPlan.record_ask(repo_key, issue_id, field(message, :text), opts)
+  # Each message the turn answered is what is asked now, word for word, oldest first.
+  defp record_asks(false, _repo_key, _issue_id, _messages, _run_id), do: :ok
+
+  defp record_asks(true, repo_key, issue_id, messages, run_id) do
+    Enum.reduce_while(messages, :ok, fn %Event{id: id} = message, :ok ->
+      opts = [source: "message", from: id, run_id: run_id, idempotency: "ask.recorded:#{id}"]
+
+      case TicketPlan.record_ask(repo_key, issue_id, field(message, :text), opts) do
+        {:ok, _ask} -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
   end
 
   @doc """
@@ -308,10 +390,19 @@ defmodule SymphonyElixir.Conductor.Message do
   def acted(answer, %{junction: @junction, message: %{event: %Event{type: "message.sent"} = message}} = plan, %Issue{} = issue, run_id, opts) do
     steer(answer.steer, plan, run_id, opts)
     stop(answer.stop, plan, issue, run_id, opts)
+    together(plan, message, run_id)
     new_ticket(answer, plan, issue, message, opts)
   end
 
   def acted(answer, _plan, _issue, _run_id, _opts), do: answer
+
+  # Each earlier message the turn answered gets a reply of its own, which points at the newest's.
+  defp together(plan, %Event{id: newest}, run_id) do
+    for %Event{id: id} <- answered(plan) do
+      payload = %{junction: @junction, text: @together, refs: [newest]}
+      record(plan, "conductor.update", payload, run_id: run_id, parent: id, idempotency: "conductor.update:together:#{id}")
+    end
+  end
 
   defp steer(nil, _plan, _run_id, _opts), do: :ok
 
@@ -386,8 +477,15 @@ defmodule SymphonyElixir.Conductor.Message do
   the note says that the plan stays as it is. Nothing for a turn that owes nothing (`child_message`).
   """
   @spec unanswered(map(), String.t() | nil, String.t()) :: :ok
-  def unanswered(%{junction: @junction, message: %{event: %Event{type: type, id: id} = event}} = plan, run_id, why) when type in ["message.sent", "ask.recorded"] do
+  def unanswered(%{junction: @junction, message: %{event: %Event{type: type} = event}} = plan, run_id, why) when type in ["message.sent", "ask.recorded"] do
     events = Facts.events(plan.issue_id)
+    for %Event{} = owed <- answered(plan) ++ [event], do: count(plan, owed, events, run_id, why)
+    :ok
+  end
+
+  def unanswered(_plan, _run_id, _why), do: :ok
+
+  defp count(plan, %Event{type: type, id: id} = event, events, run_id, why) do
     try = tries(events, id) + 1
     left? = try < @tries
 
@@ -403,8 +501,6 @@ defmodule SymphonyElixir.Conductor.Message do
         record(plan, "note", %{text: Facts.fit(failed(type, why, left?), 4_000), status: true}, run_id: run_id, idempotency: "#{@try_key}#{id}:#{try}")
     end
   end
-
-  def unanswered(_plan, _run_id, _why), do: :ok
 
   defp failed("message.sent", why, _left?), do: "The Conductor could not answer a message (#{why}). Symphony tries again."
   defp failed("ask.recorded", why, true), do: "The Conductor could not write the plan again for the new ask (#{why}). Symphony tries again."

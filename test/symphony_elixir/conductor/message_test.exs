@@ -234,7 +234,7 @@ defmodule SymphonyElixir.Conductor.MessageTest do
                "The Conductor could not read this message (its answer could not be read), 3 times, so nothing was done with it. " <>
                  "It stays in the ticket's history. Send it again to have it read."
 
-      assert Message.owed(ctx.issue_id) == %{messages: [], asks: []}
+      assert Message.owed(ctx.issue_id) == %{messages: [], asks: [], children: []}
       assert length(TicketPlan.versions(ctx.issue_id)) == 1
       assert length(TicketPlan.ask(ctx.issue_id)) == 1
       assert [%{payload: %{exit: "unreadable answer: " <> _}}, %{payload: %{exit: "its plan was refused: " <> _}}, _third] = events(ctx.issue_id, "run.ended")
@@ -268,7 +268,7 @@ defmodule SymphonyElixir.Conductor.MessageTest do
     test "a message a run already read, or one written before the plan, is owed as the rule says", ctx do
       early = ticket!("MSG-E#{ctx.n}", "msg-e-#{ctx.n}", %{})
       before = say!(early.issue_id, "Mind the empty list.")
-      assert Message.owed(early.issue_id) == %{messages: [], asks: []}
+      assert Message.owed(early.issue_id) == %{messages: [], asks: [], children: []}
       assert Message.plan_written(early.issue_id, opts(%{})) == :ok
       refute_received {:turn, _junction, _prompt}
 
@@ -363,6 +363,117 @@ defmodule SymphonyElixir.Conductor.MessageTest do
       assert log =~ "Conductor's waiver of c9 was dropped"
       assert log =~ "`waive[3]` was dropped"
       assert [%{id: "c1", state: :waived, waived: %{reason: "No test can reach a reload."}}] = TicketChecks.list(ctx.issue_id)
+    end
+  end
+
+  describe "one turn at a time" do
+    defp facts_of(prompt), do: prompt |> String.split("carries that event's id):\n\n") |> List.last() |> Jason.decode!()
+
+    # Another process holds the ticket's lock, as a turn in flight does, until it is told to let go.
+    defp held!(issue_id) do
+      test = self()
+
+      holder =
+        spawn_link(fn ->
+          Conductor.exclusive(issue_id, :wait, fn ->
+            send(test, :held)
+            receive(do: (:release -> :ok))
+          end)
+        end)
+
+      assert_receive :held
+      holder
+    end
+
+    test "one turn answers every message that waits: the reply under the newest, a pointer under each earlier", ctx do
+      first = say!(ctx.issue_id, "Keep the search text too.")
+      second = say!(ctx.issue_id, "And the sort order.")
+      answer = reply(%{"ask" => true, "plan" => answered_plan()})
+
+      assert Message.tend(ctx.issue_id, opts(%{"message" => answer})) == :done
+
+      assert_received {:turn, "message", prompt}
+      refute_received {:turn, _junction, _prompt}
+      facts = facts_of(prompt)
+      assert %{"event_id" => newest, "text" => "And the sort order."} = facts["message"]
+      assert newest == second.id
+      assert [%{"event_id" => earlier, "text" => "Keep the search text too."}] = facts["earlier_messages"]
+      assert earlier == first.id
+
+      assert [pointer, reply] = events(ctx.issue_id, "conductor.update")
+      assert %{parent: ^earlier, payload: %{text: "Answered together with your later message, below.", refs: [^newest]}} = pointer
+      assert %{parent: ^newest, payload: %{text: "I read it as a hint and passed it on."}} = reply
+      # Both messages are what is asked now, in the order they were written.
+      assert [_linear, %{from: ^earlier, text: "Keep the search text too."}, %{from: ^newest}] = TicketPlan.ask(ctx.issue_id)
+      assert Message.owed(ctx.issue_id) == %{messages: [], asks: [], children: []}
+    end
+
+    test "a failed turn is counted on every message it was to answer", ctx do
+      first = say!(ctx.issue_id)
+      second = say!(ctx.issue_id)
+
+      capture_log(fn -> assert Message.tend(ctx.issue_id, opts(%{"message" => {:error, :boom, 0}})) == :owed end)
+
+      keys = for %{type: "note", idempotency: "message.try:" <> key} <- Facts.events(ctx.issue_id), do: key
+      assert keys == ["#{first.id}:1", "#{second.id}:1"]
+    end
+
+    test "nothing runs while another turn works on the ticket, and everything stays owed", ctx do
+      say!(ctx.issue_id)
+      holder = held!(ctx.issue_id)
+      no_turn = fn _plan, _issue, _run_id, _prompt -> flunk("no turn runs") end
+
+      assert Conductor.exclusive(ctx.issue_id, :skip, fn -> :ran end) == :busy
+      assert Message.tend(ctx.issue_id, opts(%{}, turn: no_turn)) == :owed
+      # A tree turn skips too, and asks again at the next poll.
+      assert Conductor.tend(issue(ctx.record), "final_check", "default", settings: @on, turn: no_turn) == :ok
+      assert events(ctx.issue_id, "run.started") == []
+
+      # A turn that belongs to a dispatch waits for the lock.
+      test = self()
+      turn = fn _plan, _issue, _run_id, _prompt -> send(test, :dispatch_turn) && {:ok, [~s({"instructions": "Go on."})], 1} end
+      run_profile = %{model: "m", effort: nil, provider: "p"}
+      plan = %{junction: "after_coding", issue_id: ctx.issue_id, repo_key: "default", timeout_ms: 5_000, run_profile: run_profile}
+      waiting = Task.async(fn -> Conductor.run(plan, issue(ctx.record), turn: turn) end)
+      refute_receive :dispatch_turn, 100
+
+      send(holder, :release)
+      assert Task.await(waiting) == :ok
+      assert_received :dispatch_turn
+      assert Message.tend(ctx.issue_id, opts(%{"message" => reply()})) == :done
+    end
+
+    test "a turn no provider can take, or that a pause stops, waits and is not a failed try", ctx do
+      message = say!(ctx.issue_id)
+      no_turn = fn _plan, _issue, _run_id, _prompt -> flunk("no turn runs") end
+
+      assert Message.tend(ctx.issue_id, opts(%{}, turn: no_turn, available?: fn _profile -> false end)) == :owed
+      assert Message.tend(ctx.issue_id, opts(%{}, turn: no_turn, paused?: &(&1 == :symphony))) == :owed
+      assert Conductor.message(issue(ctx.record), message, "default", settings: @on, turn: no_turn, paused?: &(&1 == {:repository, "default"})) == :waiting
+      assert status_notes(ctx.issue_id) == []
+      assert [%{id: owed}] = Message.owed(ctx.issue_id).messages
+      assert owed == message.id
+    end
+
+    test "the turn is given every ask and the newest 20 messages", ctx do
+      for n <- 1..22 do
+        message = say!(ctx.issue_id, "Message #{n}.")
+        {:ok, _reply} = TicketEvents.record("default", ctx.issue_id, "conductor.update", %{junction: "message", text: "Reply #{n}.", refs: []}, parent: message.id)
+      end
+
+      {:ok, _ask} = TicketPlan.record_ask("default", ctx.issue_id, "And one more thing.", source: "message")
+      say!(ctx.issue_id, "The newest.")
+      assert Message.tend(ctx.issue_id, opts(%{"message" => reply()})) == :done
+
+      assert_received {:turn, "message", prompt}
+      said = facts_of(prompt)["conversation"]
+      assert [%{"text" => "Keep my filter."}, %{"text" => "And one more thing."}] = Enum.filter(said, &(&1["kind"] == "ask"))
+      messages = Enum.filter(said, &(&1["kind"] == "message"))
+      assert length(messages) == 20
+      assert %{"text" => "Message 4.", "reply" => %{"text" => "Reply 4."}} = hd(messages)
+      assert %{"text" => "The newest."} = List.last(messages)
+      # Facts that hold no conversation are left as they are.
+      assert Message.facts(%{ticket: %{}}, %{}) == %{ticket: %{}}
     end
   end
 
@@ -523,6 +634,45 @@ defmodule SymphonyElixir.Conductor.MessageTest do
       assert [%{"identifier" => _child, "plan" => "The list keeps its filter."}] = facts["sub_tickets"]
       assert events(ctx.parent.issue_id, "conductor.update") == []
       assert [%{payload: %{exit: "answered"}}] = events(ctx.parent.issue_id, "run.ended")
+    end
+
+    test "one turn of the parent reads every unread message of its sub-tickets, once each", ctx do
+      other = ticket!("MSG-O#{ctx.n}", "msg-o-#{ctx.n}", %{phase: "In Progress", parent: %{id: ctx.parent.issue_id, identifier: ctx.parent.issue_identifier}})
+      plan!(other.issue_id)
+      subs = for record <- [ctx.record, other], do: %{id: record.issue_id, identifier: record.issue_identifier, state: "In Progress"}
+      :ok = RunStore.update_ticket_state(ctx.parent.issue_id, %{sub_issues: subs})
+      silent = {:ok, [Jason.encode!(%{"update" => nil, "tree" => []})], 100}
+      replies = %{"message" => reply(), "child_message" => silent}
+
+      # Neither is the parent's while its own Conductor has not replied, or with the junction off.
+      first = say!(ctx.issue_id, "Use the store.")
+      assert Message.owed(ctx.parent.issue_id, settings: @on).children == []
+      second = say!(other.issue_id, "Mind the empty list.")
+      parent_only = fn task -> if Process.get(:parent_turns), do: task.() end
+      assert Message.tend(ctx.issue_id, opts(replies, start: parent_only)) == :done
+      assert Message.tend(other.issue_id, opts(replies, start: parent_only)) == :done
+      assert Message.owed(ctx.parent.issue_id, settings: %{@on | junctions: ["message"]}).children == []
+      identifiers = [ctx.record.issue_identifier, other.issue_identifier]
+      assert Enum.map(Message.owed(ctx.parent.issue_id, settings: @on).children, & &1.child) == identifiers
+      assert ctx.parent.issue_id in Message.owed_tickets(settings: @on)
+      for _child <- identifiers, do: assert_received({:turn, "message", _prompt})
+
+      # The parent waits while no provider can take its turn, and reads nothing.
+      assert Message.tend(ctx.parent.issue_id, opts(replies, available?: fn _profile -> false end)) == :owed
+      refute_received {:turn, _junction, _prompt}
+
+      assert Message.tend(ctx.parent.issue_id, opts(replies)) == :done
+      assert_received {:turn, "child_message", prompt}
+      refute_received {:turn, _junction, _prompt}
+      facts = prompt |> String.split("carries that event's id):\n\n") |> List.last() |> Jason.decode!()
+      assert %{"identifier" => newest, "event_id" => newest_id, "message" => "Mind the empty list."} = facts["child"]
+      assert [%{"identifier" => older, "event_id" => older_id, "message" => "Use the store.", "reply" => _reply}] = facts["other_children"]
+      assert {[older, newest], [older_id, newest_id]} == {identifiers, [first.id, second.id]}
+
+      assert status_notes(ctx.parent.issue_id) == Enum.map(identifiers, &"The Conductor read a message a person wrote on #{&1}.")
+      assert Message.owed(ctx.parent.issue_id, settings: @on).children == []
+      assert Message.tend(ctx.parent.issue_id, opts(replies)) == :done
+      refute_received {:turn, _junction, _prompt}
     end
 
     test "the parent's answer may change the tree and its plan, and then it says so", ctx do
