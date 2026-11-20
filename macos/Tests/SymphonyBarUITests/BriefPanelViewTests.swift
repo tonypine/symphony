@@ -17,7 +17,7 @@ final class BriefPanelViewTests: XCTestCase {
     private let brief = BriefPanelModel(
         kind: .brief, title: "Brief", note: "written by Implementation run 2 at 11:20",
         text: String(repeating: "The ticket page opens with the brief, in large reading text at the top of the column. ", count: 12),
-        walkthrough: "Open a ticket.", asked: "## Problem\n\nThe brief is buried."
+        walkthrough: "Open a ticket.", asked: "Problem\n\nThe brief is buried."
     )
 
     func testCodeRunsAreMonoAndProseKeepsTheStylesFont() {

@@ -49,7 +49,8 @@ public struct BriefPanelModel: Equatable {
         _ read: TicketDetailsRead?, runs: [String: TicketEventsPayload.Run], reference: Date, calendar: Calendar = .current
     ) -> BriefPanelModel? {
         let description = read?.ticket?.description?.trimmingWhitespace()
-        let asked = description.flatMap { $0.isEmpty ? nil : $0 }
+        let markdown = description.flatMap { $0.isEmpty ? nil : $0 }
+        let asked = markdown.map(prose(of:)).flatMap { $0.isEmpty ? nil : $0 }
         if let brief = read?.brief, !brief.text.trimmingWhitespace().isEmpty {
             let text = brief.text.trimmingWhitespace()
             let walkthrough = brief.walkthrough?.trimmingWhitespace()
@@ -58,7 +59,7 @@ public struct BriefPanelModel: Equatable {
                 text: text, walkthrough: walkthrough.flatMap { $0.isEmpty ? nil : $0 }, asked: asked
             )
         }
-        guard let asked, let goal = goal(of: asked) else { return nil }
+        guard let markdown, let goal = goal(of: markdown).map(prose(of:)), !goal.isEmpty else { return nil }
         return BriefPanelModel(kind: .askedFor, title: askedForTitle, note: noBriefNote, text: goal, walkthrough: nil, asked: nil)
     }
 
@@ -98,6 +99,48 @@ public struct BriefPanelModel: Equatable {
         return sections.lazy
             .map { $0.joined(separator: "\n").trimmingWhitespace() }
             .first { !$0.isEmpty }
+    }
+
+    /// The description's Markdown as plain prose, the way the catalog's `briefBlock` reads it: a heading is its words
+    /// on a line of their own, a list item or a quote loses its marker (and a task's box), emphasis loses its stars
+    /// and underscores, a link is its text, and an image, a rule, a code fence and Linear's fold marker (`+++`) go;
+    /// a fold's title stays as a line. Code in backticks stays, for the mono face; runs of blank lines are one.
+    public static func prose(of markdown: String) -> String {
+        var lines: [String] = []
+        for raw in markdown.components(separatedBy: "\n") {
+            var line = raw.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("```") || line.hasPrefix("~~~") || isRule(line) { continue }
+            if line.hasPrefix("+++") {
+                line = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+                if line.isEmpty { continue }
+            }
+            if isHeading(line) { line = String(line.drop { $0 == "#" }).trimmingCharacters(in: .whitespaces) }
+            while line.hasPrefix(">") { line = String(line.dropFirst()).trimmingCharacters(in: .whitespaces) }
+            line = replacing(listMarker, in: line, with: "")
+            line = replacing(taskBox, in: line, with: "")
+            line = replacing(image, in: line, with: "")
+            line = replacing(link, in: line, with: "$1")
+            line = replacing(emphasis, in: line, with: "$2")
+            if line.isEmpty, lines.last?.isEmpty ?? true { continue }
+            lines.append(line)
+        }
+        return lines.joined(separator: "\n").trimmingWhitespace()
+    }
+
+    private static let listMarker = try! NSRegularExpression(pattern: #"^(?:[-*+]|\d{1,3}[.)])\s+"#)
+    private static let taskBox = try! NSRegularExpression(pattern: #"^\[[ xX]\]\s+"#)
+    private static let image = try! NSRegularExpression(pattern: #"!\[[^\]]*\]\([^)]*\)"#)
+    private static let link = try! NSRegularExpression(pattern: #"\[([^\]]+)\]\([^)]*\)"#)
+    private static let emphasis = try! NSRegularExpression(pattern: #"(?<![\w*])(\*\*|__|\*|_)(?=\S)(.+?)(?<=\S)\1(?![\w*])"#)
+
+    private static func replacing(_ pattern: NSRegularExpression, in line: String, with template: String) -> String {
+        pattern.stringByReplacingMatches(in: line, range: NSRange(line.startIndex..., in: line), withTemplate: template)
+    }
+
+    private static func isRule(_ line: String) -> Bool {
+        let marks = line.filter { $0 != " " }
+        guard marks.count >= 3, let first = marks.first, "-*_".contains(first) else { return false }
+        return marks.allSatisfy { $0 == first }
     }
 
     private static func isHeading(_ line: String) -> Bool {

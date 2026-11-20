@@ -42,7 +42,10 @@ final class BriefPanelTests: XCTestCase {
         XCTAssertEqual(model.note, "written by Implementation run 1 at 09:12")
         XCTAssertTrue(model.text.hasPrefix("Adds the last three panels"))
         XCTAssertTrue(model.walkthrough?.hasPrefix("Write a note and save it") ?? false)
-        XCTAssertEqual(model.asked, "## Problem\n\nThe brief is buried in the Details panel.\n\n## Acceptance\n\n- The brief is on top of the page.")
+        // What was asked reads as prose: no heading or list markers.
+        XCTAssertEqual(
+            model.asked, "Problem\n\nThe brief is buried in the Details panel.\n\nAcceptance\n\nThe brief is on top of the page."
+        )
     }
 
     func testALaterRunsBriefNamesThatRun() {
@@ -88,6 +91,58 @@ final class BriefPanelTests: XCTestCase {
         XCTAssertNil(BriefPanelModel.build(nil, runs: [:], reference: reference, calendar: utc))
         let blank = TicketDetailsRead(ticket: TicketRecordRead(description: " \n## Problem\n\n## Design\n "))
         XCTAssertNil(BriefPanelModel.build(blank, runs: [:], reference: reference, calendar: utc))
+    }
+
+    func testTheDescriptionReadsAsProseWithoutItsMarkdown() {
+        let markdown = """
+        ## Problem
+
+        The **brief** is _buried_ in [the Details panel](https://linear.app/x).
+
+
+        ## Acceptance
+
+        - The brief is on top.
+        * [x] Keep `snake_case_name` and foo_bar_baz as written.
+        1. First
+        > Quoted
+        ---
+        ![screen](https://uploads.example/a.png)
+        +++ Agent notes
+
+        Runs after TP-1485.
+
+        +++
+        ```
+        mix test
+        ```
+        """
+        XCTAssertEqual(BriefPanelModel.prose(of: markdown), """
+        Problem
+
+        The brief is buried in the Details panel.
+
+        Acceptance
+
+        The brief is on top.
+        Keep `snake_case_name` and foo_bar_baz as written.
+        First
+        Quoted
+
+        Agent notes
+
+        Runs after TP-1485.
+
+        mix test
+        """)
+        // The goal of an unread ticket reads the same way.
+        let unread = TicketDetailsRead(ticket: TicketRecordRead(description: "## Goal\n- Ship **it**."))
+        XCTAssertEqual(BriefPanelModel.build(unread, runs: [:], reference: reference, calendar: utc)?.text, "Ship it.")
+        // A description that is only markup has nothing to ask.
+        let markup = TicketDetailsRead(ticket: TicketRecordRead(description: "+++\n---\n+++"), brief: TicketBriefRead(text: "Done."))
+        XCTAssertNil(BriefPanelModel.build(markup, runs: [:], reference: reference, calendar: utc)?.asked)
+        let onlyMarkup = TicketDetailsRead(ticket: TicketRecordRead(description: "+++\n---\n+++"))
+        XCTAssertNil(BriefPanelModel.build(onlyMarkup, runs: [:], reference: reference, calendar: utc))
     }
 
     func testTheGoalIsTheFirstSectionWithText() {
