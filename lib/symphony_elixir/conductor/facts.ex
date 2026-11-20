@@ -110,6 +110,10 @@ defmodule SymphonyElixir.Conductor.Facts do
            ~s(`waive: [{"check_id": ..., "reason": ...}]`, ) <>
            "with the reason in plain words. Never waive a check only because it is hard or still unproved. " <>
            "A check of kind `outcome` is what the person asked for: Symphony refuses its waiver, and only the person can waive it."
+  @open_checks "These checks of the plan are still open, and the pull request merges next. A merge does not prove them. " <>
+                 "Say so in your update. Waive one that nobody can prove the way the plan says, with its reason " <>
+                 "(never a check of kind `outcome`: only the person waives one), or send the ticket back with instructions " <>
+                 "that name the checks to prove, or ask the person."
   @plan_text_max 6_000
   @max_siblings 20
   # The layers a plan names (`SymphonyElixir.Conductor.Answer.layers/0`), each with what it means.
@@ -311,7 +315,18 @@ defmodule SymphonyElixir.Conductor.Facts do
     }
     |> put_qa_passes(junction, events)
     |> put_checks(events)
+    |> put_open_checks(junction)
   end
+
+  # Before the merge of a groomed ticket's own pull request, the checks nobody proved or waived.
+  defp put_open_checks(facts, "before_merge") do
+    case for(%{state: "open"} = check <- Map.get(facts, :checks, []), do: Map.take(check, [:id, :kind, :statement, :proof])) do
+      [] -> facts
+      open -> Map.put(facts, :open_checks, %{rule: @open_checks, checks: open})
+    end
+  end
+
+  defp put_open_checks(facts, _junction), do: facts
 
   # A groomed ticket's checks, what the runs said in their newest notes, and the rule for waiving one.
   defp put_checks(facts, events) do

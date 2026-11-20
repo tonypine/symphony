@@ -168,6 +168,21 @@ defmodule SymphonyElixir.TicketJourneyTest do
       assert text =~ "plan end"
     end
 
+    test "QA walks every check it proves, whatever its kind: an outcome proved by QA is walked from its statement" do
+      seen = %{kind: "outcome", statement: "The page\nshows the summary.", proof: "qa"}
+      {:ok, _ask} = TicketPlan.record_ask(@repo_key, @issue_id, "And the summary.", source: "message")
+      plan!(%{@plan | checks: [@outcome, seen]})
+
+      assert [%{number: 2, check_id: "c5", text: "[c5] The page shows the summary.", proof: %{by: :qa}}] = TicketJourney.steps(issue())
+      assert TicketJourney.walkthrough?(issue())
+      assert [%{id: "c5"}] = TicketJourney.owed_by_qa(issue())
+      assert TicketJourney.owed_by_qa(nil) == []
+
+      # The pass that saw it proves it, so it is not open for good.
+      :ok = TicketJourney.record_walked(@repo_key, issue(), [%{name: "c5", status: "pass", details: "Seen."}])
+      assert TicketJourney.owed_by_qa(issue()) == []
+    end
+
     test "a waived check is no step and no criterion, and a plan with no QA check has nothing to walk" do
       {:ok, _waived} = TicketChecks.waive(@repo_key, @issue_id, "c1", "Nothing can test it.", by: :person)
       {:ok, _waived} = TicketChecks.waive(@repo_key, @issue_id, "c2", "Nothing to fold.")

@@ -2211,7 +2211,9 @@ The QA agent:
 - **A ticket with a plan.** A run of a ticket whose history holds a `plan.written` reads its ask,
   its plan and its checks where a run of any other ticket reads the description: the implementation,
   rework, review and QA prompts carry `## Ask`, `## Plan` and `## Checks`; QA walks the plan's `qa`
-  checks and judges nothing else; the `outcome` checks are the acceptance criteria; a
+  checks, and every other check the plan proves by QA or against a design, and judges nothing
+  else, and QA MUST NOT be skipped while one of those is open; before the merge the Conductor's
+  facts name every check still open; the `outcome` checks are the acceptance criteria; a
   `check.proved` with `by: test` is confirmed on the PR head by the QA pre-check, and QA records a
   `check.proved` (`by: qa` or `design`) for each check it saw pass. The ticket MUST NOT be handed
   off to Code Review while a check a test or an attachment proves is open. A plan whose layers

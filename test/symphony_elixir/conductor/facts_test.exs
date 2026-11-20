@@ -476,6 +476,15 @@ defmodule SymphonyElixir.Conductor.FactsTest do
       assert [%{event_id: id, run_id: "run-1", text: "c3 cannot be proved: there is no export."}] = facts.check_notes
       assert id == note.id
       assert facts.waive =~ "waive it"
+      assert facts.waive =~ "only the person can waive it"
+      refute Map.has_key?(facts, :open_checks)
+
+      # Before the merge, a check that is still open is said plainly; with none open, nothing is.
+      assert %{open_checks: %{rule: rule, checks: open}} = Facts.build(ctx.record, "before_merge", token_cap: nil)
+      assert rule =~ "still open, and the pull request merges next"
+      assert open == [%{id: "c2", kind: "qa", statement: "The login works.", proof: "qa"}]
+      {:ok, _proved} = SymphonyElixir.TicketChecks.prove(ctx.repo, ctx.issue_id, %{check_id: "c2", by: "qa"})
+      refute Map.has_key?(Facts.build(ctx.record, "before_merge", token_cap: nil), :open_checks)
     end
 
     test "a ticket with no plan holds none of it", ctx do
@@ -485,6 +494,7 @@ defmodule SymphonyElixir.Conductor.FactsTest do
       assert facts.ticket.problem == "The login button does nothing."
       refute Map.has_key?(facts, :checks)
       refute Map.has_key?(facts, :waive)
+      refute Map.has_key?(Facts.build(ungroomed, "before_merge", token_cap: nil), :open_checks)
     end
 
     test "at message the document is the conversation's, and a ticket with no plan reads as at any other junction", ctx do

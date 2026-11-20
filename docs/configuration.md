@@ -1568,6 +1568,11 @@ Before any agent runs, Symphony decides whether the PR needs QA and which playbo
 | a playbook's trigger paths changed | that playbook runs |
 | nothing else | skipped (internal changes rely on tests and Code Review) |
 
+A ticket with a plan is never skipped while its plan holds an open check only QA proves (`proof:
+qa` or `design`, of any kind): the plan asked for the pass, so a `qa:skip` label or a docs-only
+change does not skip it, and every enabled playbook runs. QA walks each such check, a check that
+is not of kind `qa` from its statement.
+
 The built-in `cli` playbook triggers on `bin/**`, `lib/symphony_elixir/cli.ex` and
 `lib/mix/tasks/**`. Every built-in playbook also triggers on its own instructions,
 `priv/qa_playbooks/<kind>.md`, and the `macos_app` and `android_app` playbooks on the host driver

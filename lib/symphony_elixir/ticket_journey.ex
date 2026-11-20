@@ -7,8 +7,10 @@ defmodule SymphonyElixir.TicketJourney do
   (`SymphonyElixir.TicketChecks`), and no run reads its Linear description:
 
     * a `qa` check is a step QA walks: its statement, the app state it needs, the action and what
-      to expect, under the check's id (`[c2]`). A step's number is the check's place in the plan,
-      so one check has one number whoever reads it;
+      to expect, under the check's id (`[c2]`). So is a check of any other kind the plan proves by
+      QA or against a design (`proof: qa` or `design`), walked from its statement: nothing else
+      would ever prove it. A step's number is the check's place in the plan, so one check has one
+      number whoever reads it;
     * an `outcome` check is an acceptance criterion;
     * a `check.proved` with `by: test` is the proof of its check, which the QA pre-check confirms on
       the PR head as it confirms a walkthrough step's recorded proof; QA walks every other `qa`
@@ -53,7 +55,7 @@ defmodule SymphonyElixir.TicketJourney do
   @doc """
   The steps of the ticket, in order, each with the proof recorded for it: QA's to walk, or a named
   test's when one was recorded and the repo has a `proof_check`. For a groomed ticket they are its
-  `qa` checks; else the numbered steps of the description's `## User walkthrough`.
+  `qa` checks and every other check QA proves (`proof: qa` or `design`); else the numbered steps of the description's `## User walkthrough`.
   """
   @spec steps(ticket(), String.t() | nil) :: [step()]
   def steps(ticket, proof_check \\ nil) do
@@ -81,7 +83,7 @@ defmodule SymphonyElixir.TicketJourney do
   end
 
   @doc """
-  Whether the ticket has anything for QA to walk: a `qa` check for a groomed ticket, else what
+  Whether the ticket has anything for QA to walk: a check QA walks for a groomed ticket, else what
   `ungroomed` answers for the description (by default, whether it has a `## User walkthrough`).
   """
   @spec walkthrough?(ticket(), (String.t() | nil -> boolean())) :: boolean()
@@ -313,6 +315,19 @@ defmodule SymphonyElixir.TicketJourney do
     end
   end
 
+  @doc """
+  The checks of a groomed ticket that only a QA pass proves and that are still open (`proof: qa`
+  or `design`, of any kind). While there is one, the plan asks for QA, whatever a label or the
+  diff says (`SymphonyElixir.QaPolicy`). None for a ticket that is not groomed.
+  """
+  @spec owed_by_qa(ticket()) :: [TicketChecks.check()]
+  def owed_by_qa(ticket) do
+    case id(ticket) do
+      nil -> []
+      id -> TicketChecks.open(id, proof: @qa_proofs)
+    end
+  end
+
   @doc "Why a ticket with the `unproved/1` checks `checks` is not handed off, naming each and what proves it."
   @spec unproved_message([TicketChecks.check()]) :: String.t()
   def unproved_message(checks) do
@@ -337,7 +352,11 @@ defmodule SymphonyElixir.TicketJourney do
     end
   end
 
-  defp walked(numbered), do: for({%{kind: "qa", state: state}, _number} = entry <- numbered, state != :waived, do: step(entry))
+  # The checks QA walks: a `qa` check, and a check of any kind the plan proves by QA or against a
+  # design, which nothing else would ever prove. One with no action is walked from its statement.
+  defp walked(numbered), do: for({%{state: state} = check, _number} = entry <- numbered, state != :waived, qa_walks?(check), do: step(entry))
+
+  defp qa_walks?(%{kind: kind, proof: proof}), do: kind == "qa" or proof in @qa_proofs
 
   defp step({check, number}), do: %{number: number, text: step_text(check), proof: %{by: :qa}, check_id: check.id}
 
