@@ -3523,8 +3523,10 @@ Rules:
   retry or the continuation of an earlier run (the reviewer's approve moving the ticket into `QA`)
   dispatches it; a held-back run records `code_review_head_not_green` or `qa_head_not_green`, with
   the PR watcher's reason, once per head and reason. Where the repo's `macos_app` playbook builds
-  an app on a QA host, the QA run also waits for Symphony's build of the head (the QA pre-build,
-  `docs/configuration.md`), and the QA run never builds the app itself: a build queued or running
+  an app on a QA host and the head's QA pass selects that playbook, the QA run also waits for
+  Symphony's build of the head (the QA pre-build, `docs/configuration.md`); a head whose pass selects
+  no `macos_app` playbook is never built for, held or sent back for a build. The QA run never builds
+  the app itself: a build queued or running
   holds the ticket on a `build` pause reason that the build's end clears; a build whose command
   failed, or made no app, sends the ticket to `Rework` with no QA run, each time it arrives in `QA`
   on that tree; a build that could not run holds it on a reason the Director may release, and the
