@@ -77,7 +77,7 @@ struct SettingsView: View {
                         HStack {
                             Text("\(model.settings.notAnsweringAlertSeconds)")
                                 .monospacedDigit()
-                                .foregroundStyle(.primary)
+                                .foregroundStyle(DesignTokens.TextColor.primary.color)
                                 .frame(width: 60, alignment: .leading)
                             Stepper(
                                 "Seconds",
