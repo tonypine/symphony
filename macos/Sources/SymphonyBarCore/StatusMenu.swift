@@ -328,6 +328,8 @@ public enum StatusMenu {
         case .paused where limit.isAPIUnreachable:
             return "Paused: \(apiUnreachableName(limit))" + (limit.error.map { " (\($0))" } ?? "")
                 + approximateTime(", retries", limit.resumeAt, now: now, timeZone: timeZone)
+        case .canary where limit.isSignInFailure:
+            return "Resuming: checking the sign-in to \(provider)…"
         case .canary where limit.isAPIUnreachable:
             return "Resuming: checking \(provider) API…"
         case .paused:
@@ -362,9 +364,12 @@ public enum StatusMenu {
         return "\(providerName(limit.provider)) \(window)"
     }
 
-    /// What an outage hold is on: "Claude API unreachable".
+    /// What an outage hold is on: "Claude API unreachable", or "Agents can't sign in to Claude" when the provider
+    /// refused the agent's sign-in.
     public static func apiUnreachableName(_ limit: StateSnapshot.UsageLimit) -> String {
-        "\(providerName(limit.provider)) API unreachable"
+        limit.isSignInFailure
+            ? "Agents can't sign in to \(providerName(limit.provider))"
+            : "\(providerName(limit.provider)) API unreachable"
     }
 
     /// How people name a provider: "Claude" for `anthropic`.

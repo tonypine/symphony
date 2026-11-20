@@ -1,7 +1,7 @@
 import Foundation
 
-/// Why `workspaces.git_network_timeout_ms`, `execution.timeouts.mcp_tool_ms` or `watchdog.pending_tool_report_after_ms`
-/// can't be read or changed by editing one line.
+/// Why `workspaces.git_network_timeout_ms`, `execution.timeouts.mcp_tool_ms`, `watchdog.pending_tool_report_after_ms` or
+/// `execution.usage_limit.sign_in_ask_after_seconds` can't be read or changed by editing one line.
 public enum OperationTimeoutsError: LocalizedError, Equatable {
     /// The key holds an inline value (for example `timeouts: {mcp_tool_ms: 5}`) instead of an indented block.
     case notABlock(String)
@@ -13,14 +13,15 @@ public enum OperationTimeoutsError: LocalizedError, Equatable {
         case .notABlock(let key):
             return "`\(key):` in symphony.yml is not an indented block. Change the timeouts by hand."
         case let .unreadable(key, value):
-            return "`\(key): \(value)` in symphony.yml is not a whole number of milliseconds. Change it by hand."
+            return "`\(key): \(value)` in symphony.yml is not a whole number. Change it by hand."
         }
     }
 }
 
-/// `workspaces.git_network_timeout_ms`, `execution.timeouts.mcp_tool_ms` and `watchdog.pending_tool_report_after_ms` in
-/// the text of a `symphony.yml`, in milliseconds. Only the lines of the timeouts that change are rewritten, or
-/// inserted when missing, so the rest of the file stays as it is.
+/// `workspaces.git_network_timeout_ms`, `execution.timeouts.mcp_tool_ms`, `watchdog.pending_tool_report_after_ms` and
+/// `execution.usage_limit.sign_in_ask_after_seconds` (TP-1515) in the text of a `symphony.yml`, here in milliseconds
+/// (the last one is saved in seconds). Only the lines of the timeouts that change are rewritten, or inserted when
+/// missing, so the rest of the file stays as it is.
 public struct OperationTimeouts: Equatable {
     /// The wall-clock limit of each git `fetch`, `pull`, `push` or `ls-remote` Symphony runs.
     public var gitNetworkMs: Int
@@ -28,11 +29,14 @@ public struct OperationTimeouts: Equatable {
     public var mcpToolMs: Int
     /// How long one of those calls runs before Symphony's state reports the run as waiting on it.
     public var pendingToolReportMs: Int
+    /// How long agents can't sign in to a provider before Symphony asks a person to sign in again.
+    public var signInAskAfterMs: Int
 
     /// What Symphony uses when a key is missing or null.
     public static let defaultGitNetworkMs = 300_000
     public static let defaultMcpToolMs = 600_000
     public static let defaultPendingToolReportMs = 60_000
+    public static let defaultSignInAskAfterMs = 1_800_000
 
     /// Values Settings offers, in minutes.
     public static let minuteRange = 1...120
@@ -40,15 +44,18 @@ public struct OperationTimeouts: Equatable {
     static let gitNetworkPath = ["workspaces", "git_network_timeout_ms"]
     static let mcpToolPath = ["execution", "timeouts", "mcp_tool_ms"]
     static let pendingToolReportPath = ["watchdog", "pending_tool_report_after_ms"]
+    static let signInAskAfterPath = ["execution", "usage_limit", "sign_in_ask_after_seconds"]
 
     public init(
         gitNetworkMs: Int = defaultGitNetworkMs,
         mcpToolMs: Int = defaultMcpToolMs,
-        pendingToolReportMs: Int = defaultPendingToolReportMs
+        pendingToolReportMs: Int = defaultPendingToolReportMs,
+        signInAskAfterMs: Int = defaultSignInAskAfterMs
     ) {
         self.gitNetworkMs = gitNetworkMs
         self.mcpToolMs = mcpToolMs
         self.pendingToolReportMs = pendingToolReportMs
+        self.signInAskAfterMs = signInAskAfterMs
     }
 
     /// The timeouts, with Symphony's default for a missing or null key.
@@ -56,7 +63,8 @@ public struct OperationTimeouts: Equatable {
         OperationTimeouts(
             gitNetworkMs: try milliseconds(gitNetworkPath, default: defaultGitNetworkMs, in: yaml),
             mcpToolMs: try milliseconds(mcpToolPath, default: defaultMcpToolMs, in: yaml),
-            pendingToolReportMs: try milliseconds(pendingToolReportPath, default: defaultPendingToolReportMs, in: yaml)
+            pendingToolReportMs: try milliseconds(pendingToolReportPath, default: defaultPendingToolReportMs, in: yaml),
+            signInAskAfterMs: try milliseconds(signInAskAfterPath, default: defaultSignInAskAfterMs, scale: 1_000, in: yaml)
         )
     }
 
@@ -68,6 +76,9 @@ public struct OperationTimeouts: Equatable {
         if new.pendingToolReportMs != old.pendingToolReportMs {
             yaml = try setting(pendingToolReportPath, to: new.pendingToolReportMs, in: yaml)
         }
+        if new.signInAskAfterMs != old.signInAskAfterMs {
+            yaml = try setting(signInAskAfterPath, to: new.signInAskAfterMs / 1_000, in: yaml)
+        }
         return yaml
     }
 
@@ -78,22 +89,30 @@ public struct OperationTimeouts: Equatable {
 
     /// These timeouts with the steppers' minutes. A timeout whose minutes didn't move keeps its exact value, so
     /// one that isn't a whole number of minutes is never rewritten by an untouched stepper.
-    public func settingMinutes(gitNetwork: Int, mcpTool: Int, pendingToolReport: Int) -> OperationTimeouts {
-        OperationTimeouts(
+    public func settingMinutes(
+        gitNetwork: Int,
+        mcpTool: Int,
+        pendingToolReport: Int,
+        signInAskAfter: Int? = nil
+    ) -> OperationTimeouts {
+        let signInAskAfter = signInAskAfter ?? Self.minutes(signInAskAfterMs)
+        return OperationTimeouts(
             gitNetworkMs: gitNetwork == Self.minutes(gitNetworkMs) ? gitNetworkMs : gitNetwork * 60_000,
             mcpToolMs: mcpTool == Self.minutes(mcpToolMs) ? mcpToolMs : mcpTool * 60_000,
             pendingToolReportMs: pendingToolReport == Self.minutes(pendingToolReportMs)
-                ? pendingToolReportMs : pendingToolReport * 60_000
+                ? pendingToolReportMs : pendingToolReport * 60_000,
+            signInAskAfterMs: signInAskAfter == Self.minutes(signInAskAfterMs) ? signInAskAfterMs : signInAskAfter * 60_000
         )
     }
 
-    private static func milliseconds(_ path: [String], default defaultMs: Int, in yaml: String) throws -> Int {
+    /// The value at `path` in milliseconds: a key saved in seconds has a `scale` of 1 000.
+    private static func milliseconds(_ path: [String], default defaultMs: Int, scale: Int = 1, in yaml: String) throws -> Int {
         let value = try blockSection { try ConfigSetting.value(at: path, of: yaml) }
         guard let value, !TokenLimits.nullValues.contains(value) else { return defaultMs }
-        guard let ms = Int(value.filter { $0 != "_" }) else {
+        guard let number = Int(value.filter { $0 != "_" }) else {
             throw OperationTimeoutsError.unreadable(key: path.joined(separator: "."), value: value)
         }
-        return ms
+        return number * scale
     }
 
     private static func setting(_ path: [String], to ms: Int, in yaml: String) throws -> String {

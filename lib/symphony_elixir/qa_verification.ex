@@ -1398,7 +1398,14 @@ defmodule SymphonyElixir.QaVerification do
   defp error_reason(reason) when is_binary(reason), do: reason
   defp error_reason({:qa_dev_server_failed, _cause, _log} = reason), do: QaAgent.blocked_reason(reason)
   defp error_reason({:remote_worker_unsupported, host}), do: "QA cannot run on the remote worker #{inspect(host)}"
+  defp error_reason({:malformed_qa_response, detail}), do: malformed_answer(detail)
   defp error_reason(reason), do: inspect(reason)
+
+  # A QA agent that answered without a verdict, in words: the Inbox's "why" quotes it.
+  defp malformed_answer(detail) when detail in [:no_verdict_object, :empty_response],
+    do: "the QA agent ended its run without saying whether the change passed or failed"
+
+  defp malformed_answer(_detail), do: "the QA agent gave a pass or fail answer Symphony could not read"
 
   defp repo_key(issue, opts), do: Keyword.get(opts, :repo_key) || Map.get(issue, :repo_key)
 

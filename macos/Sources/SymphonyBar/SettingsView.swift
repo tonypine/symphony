@@ -286,6 +286,9 @@ struct SettingsView: View {
                     TimeoutRow(title: "Show a pending tool call after", minutes: $model.pendingToolReportMinutes)
                     Text("Shows a run as waiting on one of those calls once the call has run this long.")
                         .foregroundStyle(.secondary)
+                    TimeoutRow(title: "Ask me to sign in again after", minutes: $model.signInAskAfterMinutes)
+                    Text("Asks you in the Inbox once agents have been unable to sign in to their model this long.")
+                        .foregroundStyle(DesignTokens.TextColor.secondary.color)
                     if let error = model.timeoutsError {
                         Text(error).foregroundStyle(.red)
                     }
@@ -294,7 +297,8 @@ struct SettingsView: View {
                 } footer: {
                     SectionFooter(
                         "workspaces.git_network_timeout_ms (default 5 minutes), execution.timeouts.mcp_tool_ms (default "
-                            + "10 minutes) and watchdog.pending_tool_report_after_ms (default 1 minute). Save checks "
+                            + "10 minutes), watchdog.pending_tool_report_after_ms (default 1 minute) and "
+                            + "execution.usage_limit.sign_in_ask_after_seconds (default 30 minutes). Save checks "
                             + "symphony.yml with symphony check first; Symphony reads them on the next call, no restart "
                             + "needed."
                     )

@@ -631,6 +631,7 @@ execution:
     auto_pause: true
     resume_margin_seconds: 120
     unknown_reset_retry_seconds: 900
+    sign_in_ask_after_seconds: 1800
   providers:
     anthropic:
       reserve:
@@ -865,6 +866,15 @@ execution:
   starts whatever `auto_pause` says, probes after 60 seconds and doubles the wait after each
   failed probe. A released outage hold is remembered this long (at least 10 minutes), so a QA run
   that finds the outage again keeps the backoff.
+- A Claude agent that can't sign in to its model (the provider refused it at once: `Failed to
+  authenticate. API Error: 403 …`, an invalid key, an expired token) is held the same way, for a
+  second cause: no attempt is counted, no QA verdict follow-up is sent, and the probe on the same
+  backoff starts the held runs by itself once a sign-in works again. The ticket and Home read
+  "The agent can't sign in to Claude", with the provider's message and since when.
+- `usage_limit.sign_in_ask_after_seconds` (default `1800`, `>= 60`; Settings › Timeouts): how long a
+  sign-in hold lasts before Symphony asks a person once, in the Inbox, with the provider's message
+  and "sign in again" as the suggested action. Answering "I signed in again" checks the hold at
+  once, as Try Now does. The question is withdrawn when the hold lifts.
 - At the resume time one held run (the first in dispatch order) goes out alone. If Claude accepts
   it, the other held runs follow; if it hits the limit again, the hold starts over from the new
   reset time (or `unknown_reset_retry_seconds`). New Claude work stays held meanwhile.

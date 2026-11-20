@@ -201,16 +201,52 @@ final class HomeReadTests: XCTestCase {
         }
     }
 
+    // MARK: - A provider that refuses the agents' sign-in (TP-1515)
+
+    /// Home says once, for the whole factory, that agents can't sign in, with the provider's message and since when,
+    /// from the committed sign-in fixture; the ticket that is due a QA run reads the same wait.
+    func testASignInHoldIsOneLineAboveTheLists() throws {
+        let utc = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        let state = try XCTUnwrap(OverviewState.decode(try Data(contentsOf: fixture("state.json", in: "sign-in-hold"))))
+        let notices = HomeLists.notices(state.snapshot, reference: reference, timeZone: utc)
+        XCTAssertEqual(notices, [
+            "Agents can't sign in to Claude since 14:02 (Failed to authenticate. API Error: 403 Attention Required! | "
+                + "Cloudflare): new runs wait until 14:24.",
+        ])
+
+        let read = try XCTUnwrap(HomeRead.decode(try Data(contentsOf: fixture("home.json", in: "sign-in-hold"))))
+        let lists = HomeLists(read: read, reference: reference, notices: notices)
+        XCTAssertEqual(lists.notices, notices)
+        XCTAssertEqual(lists.row("SHOP-301")?.badge?.word, "Waiting: the agent can't sign in to Claude")
+
+        XCTAssertTrue(try self.lists().notices.isEmpty, "Home's own fixture holds nothing")
+        let plain = try XCTUnwrap(OverviewState.decode(try Data(contentsOf: fixture("state.json"))))
+        XCTAssertTrue(HomeLists.notices(plain.snapshot, reference: reference, timeZone: utc).isEmpty)
+    }
+
+    /// The line is gone once the probe checks the sign-in (canary), and a usage limit or an unreachable API has none.
+    func testOnlyAHeldSignInHasALine() {
+        func limit(_ reason: String, phase: StateSnapshot.UsageLimit.Phase = .paused) -> StateSnapshot.UsageLimit {
+            StateSnapshot.UsageLimit(phase: phase, reason: reason)
+        }
+        var snapshot = StateSnapshot()
+        snapshot.usageLimits = [limit("model_api_sign_in_failed", phase: .canary), limit("usage_limit"), limit("model_api_unreachable")]
+        XCTAssertTrue(HomeLists.notices(snapshot, reference: reference).isEmpty)
+
+        snapshot.usageLimits = [limit("model_api_sign_in_failed")]
+        XCTAssertEqual(HomeLists.notices(snapshot, reference: reference), ["Agents can't sign in to Claude: new runs wait."])
+    }
+
     private func lists() throws -> HomeLists {
         let read = try XCTUnwrap(HomeRead.decode(try Data(contentsOf: fixture("home.json"))))
         return HomeLists(read: read, reference: reference)
     }
 
-    private func fixture(_ name: String) -> URL {
+    private func fixture(_ name: String, in directory: String = "home") -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent("Fixtures/director-app/home/api/v1/\(name)")
+            .appendingPathComponent("Fixtures/director-app/\(directory)/api/v1/\(name)")
     }
 
     // MARK: - No read to show

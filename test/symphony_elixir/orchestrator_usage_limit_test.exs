@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.OrchestratorUsageLimitTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Notifications, Pauses, UsageLimit}
+  alias SymphonyElixir.{Notifications, Pauses, Questions, Situation, UsageLimit}
 
   @anthropic {"anthropic", :all}
   @openai {"openai", :all}
@@ -800,6 +800,100 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     refute_received {:memory_tracker_state_update, "issue-outage", "Backlog"}
     refute_received {:notification_event, %Notifications.Event{event: "run_failed"}}
     assert_received {:notification_event, %Notifications.Event{event: "usage_limit_paused", reason: "Claude API unreachable; resumes at " <> _}}
+  end
+
+  # TP-1515: when the provider refuses the agent's sign-in, Claude prints the refusal as its result
+  # and exits at once. A fake `claude` does that for its first two runs.
+  test "an agent that can't sign in holds the provider, counts no attempt, asks once in time and starts by itself", ctx do
+    runs = Path.join(ctx.test_root, "sign-in-runs")
+    fake_claude = Path.join(ctx.test_root, "fake-claude-sign-in")
+    message = "Failed to authenticate. API Error: 403 Attention Required! | Cloudflare"
+
+    File.write!(fake_claude, """
+    #!/bin/sh
+    cat > /dev/null
+    echo run >> #{runs}
+    if [ "$(wc -l < #{runs})" -le 2 ]; then
+      printf '%s\\n' '{"type":"system","subtype":"init","session_id":"sess-sign-in","cwd":"/tmp","tools":[],"mcp_servers":[{"name":"symphony","status":"connected"}],"model":"claude-opus-5-5","permissionMode":"default","apiKeySource":"none"}'
+      printf '%s\\n' '{"type":"result","subtype":"success","is_error":true,"duration_ms":1500,"num_turns":1,"result":"#{message}","session_id":"sess-sign-in","total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0}}'
+      exit 1
+    fi
+    exec #{ctx.fake_claude}
+    """)
+
+    File.chmod!(fake_claude, 0o755)
+
+    write_usage_workflow!(%{ctx | fake_claude: fake_claude},
+      agent_usage_limit: %{auto_pause: false, sign_in_ask_after_seconds: 60},
+      tracker_active_states: ["Todo"]
+    )
+
+    issue = issue("issue-sign-in", "MT-SIGN-IN", %{state: "Todo"})
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+    name = Module.concat(__MODULE__, :SignInOrchestrator)
+    held_runs = fn -> Enum.filter(RunStore.list_runs(:all), &(&1.issue_id == issue.id and &1.status == "model_api_unreachable")) end
+    sign_in_questions = fn -> Enum.filter(Questions.open(:symphony), &match?("sign_in:" <> _, &1.step)) end
+
+    log =
+      capture_log(fn ->
+        pid = start_orchestrator(ctx, :SignInOrchestrator)
+
+        # 1. The run ends on the refused sign-in, never as the agent's answer: the provider is held,
+        # the retry keeps its attempt, and nobody is asked yet.
+        wait_until(fn -> length(held_runs.()) == 1 end)
+        state = wait_until(fn -> (state = :sys.get_state(pid)) && state.usage_limits[@anthropic] && state end)
+        first_probe = DateTime.add(ctx.now, 60)
+
+        assert %{reason: "model_api_sign_in_failed", source: :api_unreachable, error: ^message, since: since, resume_at: ^first_probe} =
+                 state.usage_limits[@anthropic]
+
+        assert since == ctx.now
+        assert %{attempt: attempt, delay_type: :usage_limit, error: error} = state.retry_attempts[issue.id]
+        assert error == "the agent could not sign in to Claude (#{message}); trying again at #{DateTime.to_iso8601(first_probe)}"
+        assert [%{error: "agent exited: the agent could not sign in (" <> _}] = held_runs.()
+        assert sign_in_questions.() == []
+
+        # 2. The ticket waits for the provider in words, with the message and since when.
+        snapshot = Orchestrator.snapshot(name, 1_000)
+        assert [%{issue_id: "issue-sign-in", sign_in: sign_in}] = snapshot.retrying
+        assert %{provider: "anthropic", cause: :sign_in, error: ^message, sign_in_since: ^since} = sign_in
+
+        assert %{kind: "waiting_for_provider", word: "Waiting: the agent can't sign in to " <> _, cause: cause} =
+                 Situation.read(%{repo_key: Config.repo_key!(), issue_id: issue.id, issue_identifier: issue.identifier, phase: "Todo"}, Situation.live_facts(snapshot, ctx.now), [])
+
+        assert cause =~ message
+        assert cause =~ "since"
+
+        payload = SymphonyElixirWeb.Presenter.state_payload(name, 1_000)
+        assert [%{reason: "model_api_sign_in_failed", error: ^message} = hold] = payload.usage_limits
+        assert UsageLimit.banner(hold, ctx.now, to_local: & &1) == "Paused: The agent can't sign in to Claude (#{message}), retries ~12:01"
+
+        # 3. The probe is refused too, a minute after the hold began: the hold keeps its since and
+        # attempt, and asks a person once, on Symphony itself.
+        set_clock(ctx, first_probe)
+        send(pid, {:usage_limit_resume, @anthropic})
+        wait_until(fn -> length(held_runs.()) == 2 end)
+
+        wait_until(fn ->
+          match?(%{phase: :paused, retry_seconds: 120}, :sys.get_state(pid).usage_limits[@anthropic])
+        end)
+
+        assert %{attempt: ^attempt} = :sys.get_state(pid).retry_attempts[issue.id]
+        assert [%{title: "Agents can't sign in to Claude", why: why}] = wait_until(sign_in_questions)
+        assert why =~ "Failed to authenticate"
+
+        # 4. Sign-in works again: the next probe runs, the hold lifts, and the question is withdrawn.
+        set_clock(ctx, DateTime.add(first_probe, 120))
+        send(pid, {:usage_limit_resume, @anthropic})
+        wait_until(fn -> Enum.find(RunStore.list_runs(:all), &(&1.issue_id == issue.id and &1.status == "success")) end)
+        wait_until(fn -> :sys.get_state(pid).usage_limits == %{} end)
+        assert sign_in_questions.() == []
+      end)
+
+    assert length(Regex.scan(~r/Agents can't sign in; holding dispatch \(Failed to authenticate/, log)) == 1
+    assert log =~ "Agents still can't sign in (#{message}) provider=anthropic"
+    assert log =~ "Agents can't sign in provider=anthropic since=#{DateTime.to_iso8601(ctx.now)}; asked a person"
+    refute log =~ "Parking"
   end
 
   test "a partial hold is listed but leaves dispatch active for the other provider", ctx do
