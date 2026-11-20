@@ -1016,7 +1016,7 @@ final class TicketPageFeedTests: XCTestCase {
         await reader.settle()
 
         XCTAssertTrue(written)
-        XCTAssertEqual(calls.sent, [.note(repoKey: "web-shop", identifier: "SHOP-410", text: text)])
+        XCTAssertEqual(calls.sent, [.message(repoKey: "web-shop", identifier: "SHOP-410", text: text)])
         XCTAssertEqual(calls.reads, 1)
         XCTAssertEqual(composer.text, "")
         XCTAssertFalse(composer.hasDraft)
@@ -1101,12 +1101,12 @@ final class TicketPageFeedTests: XCTestCase {
         // Symphony's refusal: its reason under the box, the text kept, the feed not read.
         composer.text = "Keep it."
         let refusal = ControlAPI.result(
-            .note(repoKey: "web-shop", identifier: "SHOP-410", text: "Keep it."), statusCode: 400,
+            .message(repoKey: "web-shop", identifier: "SHOP-410", text: "Keep it."), statusCode: 400,
             data: Data(#"{"error":{"code":"invalid_note","message":"A note needs text"}}"#.utf8)
         )
         written = await submit(refusal)
         XCTAssertFalse(written)
-        XCTAssertEqual(calls.sent, [.note(repoKey: "web-shop", identifier: "SHOP-410", text: "Keep it.")])
+        XCTAssertEqual(calls.sent, [.message(repoKey: "web-shop", identifier: "SHOP-410", text: "Keep it.")])
         XCTAssertEqual(composer.refusal, "Couldn't send the message to SHOP-410: A note needs text (HTTP 400)")
         XCTAssertEqual(
             TicketMessageComposer.refusalLabel(composer.refusal!), "Message not sent: Couldn't send the message to SHOP-410: A note needs text (HTTP 400)"
@@ -1349,14 +1349,14 @@ final class TicketPageFeedTests: XCTestCase {
         let fixtures = APIFixtures(directory: Self.director("ticket-ledger"), requestLog: root.appendingPathComponent("requests.jsonl"))
 
         let result = await ControlAPI.send(
-            .note(repoKey: "web-shop", identifier: "SHOP-410", text: "Keep the header."), stateRoot: root, fallback: APIFixtures.baseURL,
+            .message(repoKey: "web-shop", identifier: "SHOP-410", text: "Keep the header."), stateRoot: root, fallback: APIFixtures.baseURL,
             token: APIFixtures.token, transport: fixtures.transport
         )
 
         XCTAssertEqual(result, .done)
         let line = try String(contentsOf: fixtures.requestLog, encoding: .utf8).trimmingCharacters(in: .newlines)
         let entry = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])
-        XCTAssertEqual(entry["path"] as? String, "/api/v1/control/note")
+        XCTAssertEqual(entry["path"] as? String, "/api/v1/control/message")
         XCTAssertEqual(entry["body"] as? [String: String], ["repo_key": "web-shop", "issue_identifier": "SHOP-410", "text": "Keep the header."])
     }
 

@@ -210,13 +210,13 @@ final class ControlAPITests: XCTestCase {
         XCTAssertEqual(unreachable, .failed("Couldn't stop TP-7: nothing answered at http://127.0.0.1:4010"))
     }
 
-    func testNoteRequest() throws {
-        let note = ControlAPI.request(.note(repoKey: "web-shop", identifier: "SHOP-410", text: "Keep the header."), base: base, token: "secret")
+    func testMessageRequest() throws {
+        let note = ControlAPI.request(.message(repoKey: "web-shop", identifier: "SHOP-410", text: "Keep the header."), base: base, token: "secret")
         XCTAssertEqual(note.httpMethod, "POST")
-        XCTAssertEqual(note.url?.absoluteString, "http://127.0.0.1:4010/api/v1/control/note")
+        XCTAssertEqual(note.url?.absoluteString, "http://127.0.0.1:4010/api/v1/control/message")
         XCTAssertEqual(note.value(forHTTPHeaderField: "Authorization"), "Bearer secret")
         XCTAssertEqual(try json(note), ["repo_key": "web-shop", "issue_identifier": "SHOP-410", "text": "Keep the header."])
-        XCTAssertNil(ControlAction.note(repoKey: "web-shop", identifier: "SHOP-410", text: "x").moveIdentifier)
+        XCTAssertNil(ControlAction.message(repoKey: "web-shop", identifier: "SHOP-410", text: "x").moveIdentifier)
     }
 
     /// Decide names the Question when the Inbox row carries its id (TP-1240), else the request comment, as a Symphony
@@ -239,7 +239,7 @@ final class ControlAPITests: XCTestCase {
     }
 
     func testNoteResponses() {
-        let note = ControlAction.note(repoKey: "web-shop", identifier: "SHOP-410", text: "Keep the header.")
+        let note = ControlAction.message(repoKey: "web-shop", identifier: "SHOP-410", text: "Keep the header.")
         // Symphony answers the recorded event: the note was written.
         XCTAssertEqual(
             ControlAPI.result(note, statusCode: 200, data: Data(#"{"event":{"id":"ev-1","type":"note","actor":{"kind":"person","name":"the Director"}}}"#.utf8)),
