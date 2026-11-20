@@ -209,6 +209,28 @@ defmodule SymphonyElixir.StartIssueTest do
       assert [_started_by_person] = ticket_events("cycle", "cycle-1", "run.started_by_person")
     end
 
+    test "TP-1566: the queue and a retry dispatch a ticket with no repo key in its record's repository", %{workflow_opts: workflow_opts} do
+      workflow = Workflow.workflow_file_path()
+      repos = [[key: @repo, workflow: workflow, team: "Test"], [key: "cycle", workflow: workflow, team: "Cycle"]]
+      write_workflow_file!(workflow, Keyword.put(workflow_opts, :repos, repos))
+
+      queued = bare_issue("cycle-1", "MOT-104", "In Progress")
+      retried = bare_issue("cycle-2", "MOT-105", "In Progress")
+      tracked([queued, retried])
+
+      for {issue_id, identifier} <- [{"cycle-1", "MOT-104"}, {"cycle-2", "MOT-105"}] do
+        :ok = RunStore.put_ticket_state(%{repo_key: "cycle", issue_id: issue_id, issue_identifier: identifier, phase: "In Progress"})
+      end
+
+      dispatched = Orchestrator.dispatch_chosen_issues_for_test([queued], orchestrator_state(2))
+      assert %{repo_key: "cycle", issue: %Issue{repo_key: "cycle"}} = dispatched.running["cycle-1"]
+
+      {:noreply, after_retry} =
+        Orchestrator.handle_retry_issue_for_test(orchestrator_state(2), "cycle-2", 1, %{identifier: "MOT-105"}, fn _ids -> {:ok, [retried]} end)
+
+      assert %{repo_key: "cycle", issue: %Issue{repo_key: "cycle"}} = after_retry.running["cycle-2"]
+    end
+
     test "a spawn that fails answers that a retry is scheduled and keeps that retry in the state" do
       started = issue("spawn-1", "MT-P1", "In Progress")
       tracked([started])
@@ -298,6 +320,16 @@ defmodule SymphonyElixir.StartIssueTest do
       tracked([bare_issue("nowhere-1", "MT-N1", "Todo")])
 
       assert {:error, {:start_refused, "The ticket has no repository; it can't be started."}} = Orchestrator.start_issue(server, "MT-N1", nil)
+      refute_received {:start_issue_call, _issue, _note}
+    end
+
+    test "TP-1566: a ticket with no repository gets the Start refusals first, as the ticket read does", %{server: server} do
+      tracked([bare_issue("nowhere-1", "MT-N1", "Backlog"), bare_issue("nowhere-2", "MT-N2", "Todo")])
+
+      assert {:error, {:start_refused, "The ticket is in Backlog; move it to Todo with Move to… first."}} = Orchestrator.start_issue(server, "MT-N1", nil)
+
+      {:ok, _pause} = Pauses.set(:symphony, Pauses.dispatch_reason("deploy window"))
+      assert {:error, {:start_refused, "dispatch is paused by the operator: deploy window"}} = Orchestrator.start_issue(server, "MT-N2", nil)
       refute_received {:start_issue_call, _issue, _note}
     end
 

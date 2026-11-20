@@ -101,6 +101,19 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
              {409, "move_not_allowed", "MOT-60 has nothing a person can unblock"}
   end
 
+  test "TP-1566: unblock on a ticket read with no repo key releases the pause under its record's repository", %{moves: moves} do
+    held = %Issue{id: "held", identifier: "MOT-60", title: "Blocked work", state: "In Progress"}
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [held])
+    :ok = RunStore.put_ticket_state(%{repo_key: "repo-api", issue_id: "held", issue_identifier: "MOT-60", phase: "In Progress"})
+    :ok = SymphonyElixir.Pauses.stop({:ticket, "repo-api", "held"}, DateTime.utc_now())
+
+    conn = post(:unblock, %{"issue_identifier" => "MOT-60"}, moves)
+
+    assert conn.status == 200
+    assert %{"move" => "unblock", "to_state" => "In Progress"} = Jason.decode!(conn.resp_body)
+    refute SymphonyElixir.Pauses.paused?({:ticket, "repo-api", "held"})
+  end
+
   test "decide answers a held ticket in place, and a redirecting answer moves it through the guard", %{moves: moves} do
     held = %Issue{id: "held", identifier: "MOT-60", title: "Needs a call", state: "In Progress", repo_key: "repo-api"}
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [held])

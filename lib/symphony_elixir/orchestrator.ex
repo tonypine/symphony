@@ -5225,14 +5225,16 @@ defmodule SymphonyElixir.Orchestrator do
 
   # A start reads the ticket by identifier, which carries no repo key, so it takes its record's: the
   # run works in the repository the record holds, never the primary one (MOT-104, TP-1566). A ticket
-  # with no repository on its record is refused, starting nothing.
+  # with no repository on its record keeps none, and `refute_no_repository/1` refuses it after the
+  # Start refusals, in `TicketMoves.check(:start)`'s order.
   defp fetch_issue_to_start(identifier) do
     with {:ok, %Issue{} = issue} <- fetch_issue_to_force(identifier) do
-      case issue_repo_key(issue) || RunStore.ticket_repo_key(issue.id) do
-        nil -> {:error, {:start_refused, StartNow.no_repository_reason()}}
-        repo_key -> {:ok, %{issue | repo_key: repo_key}}
-      end
+      {:ok, %{issue | repo_key: issue_repo_key(issue) || RunStore.ticket_repo_key(issue.id)}}
     end
+  end
+
+  defp refute_no_repository(%Issue{} = issue) do
+    if is_binary(issue_repo_key(issue)), do: :ok, else: {:error, {:start_refused, StartNow.no_repository_reason()}}
   end
 
   defp entity_not_found?(%{"message" => message}) when is_binary(message), do: message =~ ~r/not found/i
@@ -6749,7 +6751,7 @@ defmodule SymphonyElixir.Orchestrator do
     reason = metadata[:reason] || Map.get(previous_retry, :reason)
     elapsed_ms = metadata[:elapsed_ms] || Map.get(previous_retry, :elapsed_ms)
     delay_type = retry_delay_type(metadata)
-    repo_key = retry_repo_key(state, metadata, previous_retry)
+    repo_key = retry_repo_key(state, metadata, previous_retry, issue_id)
     usage_limit_key = if delay_type == :usage_limit, do: metadata[:usage_limit_key]
 
     if is_reference(old_timer) do
@@ -6817,7 +6819,7 @@ defmodule SymphonyElixir.Orchestrator do
           repo_key: Map.get(retry_entry, :repo_key)
         }
 
-        state = delete_persisted_retry(state, issue_id, retry_repo_key(state, retry_entry, %{}))
+        state = delete_persisted_retry(state, issue_id, retry_repo_key(state, retry_entry, %{}, issue_id))
         {:ok, attempt, metadata, %{state | retry_attempts: Map.delete(state.retry_attempts, issue_id)}}
 
       _ ->
@@ -6879,7 +6881,7 @@ defmodule SymphonyElixir.Orchestrator do
     terminal_states = terminal_state_set()
 
     if active_retry_issue?(issue, terminal_states) do
-      issue = freeze_issue_repo_key(issue, retry_repo_key(state, metadata, %{}))
+      issue = freeze_issue_repo_key(issue, retry_repo_key(state, metadata, %{}, issue_id))
       {:noreply, handle_active_retry_after_readiness(state, issue, attempt, metadata)}
     else
       handle_retry_issue_lookup(issue, state, issue_id, attempt, metadata)
@@ -6894,7 +6896,7 @@ defmodule SymphonyElixir.Orchestrator do
     terminal_states = terminal_state_set()
     # A refetched issue carries no repo key; without the retry's, its repo's settings (the phase
     # state names, the reviewer) would not be read.
-    issue = freeze_issue_repo_key(issue, issue_repo_key(issue) || retry_repo_key(state, metadata, %{}))
+    issue = freeze_issue_repo_key(issue, issue_repo_key(issue) || retry_repo_key(state, metadata, %{}, issue_id))
 
     cond do
       terminal_issue_state?(issue.state, terminal_states) ->
@@ -6903,7 +6905,7 @@ defmodule SymphonyElixir.Orchestrator do
         state = maybe_emit_issue_completed(state, issue)
 
         issue
-        |> terminal_workspace_context(retry_repo_key(state, metadata, %{}))
+        |> terminal_workspace_context(retry_repo_key(state, metadata, %{}, issue_id))
         |> cleanup_issue_workspace(metadata[:worker_host])
 
         {:noreply, state |> forget_completed_issue(issue_id) |> release_issue_claim(issue_id)}
@@ -6917,7 +6919,7 @@ defmodule SymphonyElixir.Orchestrator do
         handle_pushed_quiet_issue(state, issue, issue_id, attempt, metadata, on_pushed)
 
       active_retry_issue?(issue, terminal_states) ->
-        issue = freeze_issue_repo_key(issue, retry_repo_key(state, metadata, %{}))
+        issue = freeze_issue_repo_key(issue, retry_repo_key(state, metadata, %{}, issue_id))
         handle_quality_gated_active_retry(state, issue, attempt, metadata)
 
       true ->
@@ -7854,7 +7856,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp wait_for_slot(%State{} = state, %Issue{} = issue, attempt, metadata, reason) do
     waiting = %{
       attempt: attempt,
-      repo_key: retry_repo_key(state, metadata, %{}),
+      repo_key: retry_repo_key(state, metadata, %{}, issue.id),
       worker_host: metadata[:worker_host],
       since: DateTime.utc_now()
     }
@@ -8077,8 +8079,9 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp running_repo_key(%State{} = state, _running_entry), do: state.repo_key
 
-  defp retry_repo_key(%State{} = state, metadata, previous_retry) do
-    repo_key_from(metadata) || repo_key_from(previous_retry) || state.repo_key
+  # A retry's repository: the run's, else the ticket's record's (TP-1566), else the primary one.
+  defp retry_repo_key(%State{} = state, metadata, previous_retry, issue_id) do
+    repo_key_from(metadata) || repo_key_from(previous_retry) || RunStore.ticket_repo_key(issue_id) || state.repo_key
   end
 
   defp retry_repo_key_from_state(%State{} = state, issue_id) when is_binary(issue_id) do
@@ -9418,6 +9421,7 @@ defmodule SymphonyElixir.Orchestrator do
     if server_available?(server) do
       with {:ok, %Issue{} = issue} <- fetch_issue_to_start(identifier),
            :ok <- refute_start(issue),
+           :ok <- refute_no_repository(issue),
            {:ok, issue} <- StartNow.follow(issue, fetch: &fetch_issue_to_start/1),
            {:ok, issue} <- claim_for_start(issue) do
         GenServer.call(server, {:start_issue, issue, note})
