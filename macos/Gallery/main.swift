@@ -2024,6 +2024,8 @@ MainActor.assumeIsolated {
         render(timeline(width: 780, unfoldedRuns: ["run-2"], model: timelineModelConductorWatch), scheme, to: "timeline-conductor-voice-\(suffix).png")
         render(typeStylesReading(), scheme, to: "type-styles-reading-\(suffix).png")
         conductorBlockRenders(scheme, suffix: suffix)
+        imageViewerRenders(scheme, suffix: suffix)
+        thumbnailRowRenders(scheme, suffix: suffix)
         // The marks (TP-1451): the Timeline title's count, the line where you last looked and the dots above it.
         render(timelineSinceLooked(), scheme, to: "timeline-since-looked-\(suffix).png")
         // The run in place (TP-1452): the run now on top with its newest lines, the no-run line for three situations, and
