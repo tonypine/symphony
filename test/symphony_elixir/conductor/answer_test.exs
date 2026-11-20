@@ -266,4 +266,126 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
     assert Answer.read(["no json here", ""]) == {:error, "the answer holds no JSON object"}
     assert Answer.read([]) == {:error, "the answer holds no JSON object"}
   end
+
+  describe "the Grooming turn's plan" do
+    @plan %{
+      "shape" => "single",
+      "layers" => ["screen", "api", "screen"],
+      "summary" => " The ticket list keeps its filter. ",
+      "text" => "Approach: store the filter in the view state.\n\nOut of scope: sorting.",
+      "checks" => [
+        %{"kind" => "outcome", "statement" => "The filter is kept after a reload.", "proof" => "test"},
+        %{
+          "kind" => "qa",
+          "statement" => "The list shows the filtered tickets.",
+          "proof" => "qa",
+          "state" => "3 tickets, 1 Done",
+          "action" => "Pick Done in the filter, then reload",
+          "expect" => "1 ticket",
+          "size" => "wide",
+          "story" => "ticket-list/filtered"
+        },
+        %{"id" => " proof ", "kind" => "evidence", "statement" => "A screenshot of the list.", "proof" => "attached", "size" => "huge"}
+      ],
+      "size" => %{"tokens" => 2_000_000, "runs" => 2}
+    }
+
+    defp grooming(attrs), do: Answer.parse(json(attrs), plan: true)
+    defp plan(attrs), do: grooming(%{"plan" => Map.merge(@plan, attrs)})
+
+    test "is read as plan.written holds it, each check with an id, and the instructions may be null" do
+      assert {:ok, %{instructions: nil, plan: plan}} = grooming(%{"plan" => @plan, "update" => "I wrote the plan."})
+      assert %{shape: "single", layers: ["screen", "api"], summary: "The ticket list keeps its filter.", size: %{tokens: 2_000_000, runs: 2}} = plan
+      assert plan.text =~ "Out of scope: sorting."
+      refute Map.has_key?(plan, :sub_tickets)
+
+      assert plan.checks == [
+               %{id: "c1", kind: "outcome", statement: "The filter is kept after a reload.", proof: "test"},
+               %{
+                 id: "c2",
+                 kind: "qa",
+                 statement: "The list shows the filtered tickets.",
+                 proof: "qa",
+                 state: "3 tickets, 1 Done",
+                 action: "Pick Done in the filter, then reload",
+                 expect: "1 ticket",
+                 size: "wide",
+                 story: "ticket-list/filtered"
+               },
+               %{id: "proof", kind: "evidence", statement: "A screenshot of the list.", proof: "attached"}
+             ]
+    end
+
+    test "is not read at another turn, which answers as before" do
+      assert {:ok, %{plan: nil}} = Answer.parse(json(%{"instructions" => "x", "plan" => @plan}))
+      assert Answer.parse(json(%{"plan" => @plan})) == {:error, "`instructions` must be a string"}
+    end
+
+    test "a split names its sub-tickets, each with a key; a single plan keeps none" do
+      subs = [
+        %{"title" => "The API returns the filter", "ask" => "Add the filter to the list endpoint.", "repo" => "web"},
+        %{"key" => "screen", "title" => "The list keeps it", "ask" => "Read the filter.", "after" => ["s1", " ", 3, "s1"]}
+      ]
+
+      assert {:ok, %{plan: %{shape: "split", sub_tickets: sub_tickets}}} = plan(%{"shape" => "split", "sub_tickets" => subs})
+
+      assert sub_tickets == [
+               %{key: "s1", title: "The API returns the filter", ask: "Add the filter to the list endpoint.", after: [], repo: "web"},
+               %{key: "screen", title: "The list keeps it", ask: "Read the filter.", after: ["s1"]}
+             ]
+
+      assert {:ok, %{plan: plan}} = plan(%{"sub_tickets" => subs})
+      refute Map.has_key?(plan, :sub_tickets)
+    end
+
+    test "an over-long text is cut, never refused" do
+      long = String.duplicate("word ", 3_000)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, %{plan: plan}} = plan(%{"summary" => long, "text" => long, "checks" => [%{"kind" => "outcome", "statement" => long, "proof" => "test"}]})
+          assert String.length(plan.summary) <= 600
+          assert String.length(plan.text) <= 12_000
+          assert [%{statement: statement}] = plan.checks
+          assert String.length(statement) <= 600
+        end)
+
+      assert log =~ "`plan.summary` was 14999 characters; cut to 600"
+    end
+
+    test "a question leaves the plan unread, and an answer with neither is refused" do
+      assert {:ok, %{plan: nil, ask_person: %{title: _title}}} = grooming(%{"plan" => %{"shape" => "nonsense"}, "ask_person" => @question})
+      assert grooming(%{"update" => "Nothing to plan."}) == {:error, "the answer holds neither a `plan` nor a question (`ask_person`)"}
+    end
+
+    test "a plan that misses its shape is refused, with what is wrong" do
+      check = %{"kind" => "outcome", "statement" => "It works.", "proof" => "test"}
+
+      for {attrs, why} <- [
+            {%{"shape" => "epic"}, "`plan.shape` must be one of single, split"},
+            {%{"layers" => []}, "`plan.layers` must name at least one of screen, gallery, api, engine, config, tooling, docs"},
+            {%{"layers" => ["backend"]}, "`plan.layers` must name only screen, gallery, api, engine, config, tooling, docs"},
+            {%{"summary" => " "}, "`plan.summary` must be a non-blank string"},
+            {%{"text" => 3}, "`plan.text` must be a non-blank string"},
+            {%{"checks" => []}, "`plan.checks` must list at least one entry"},
+            {%{"checks" => ["it works"]}, "`plan.checks[1]` must be an object"},
+            {%{"checks" => [check, %{check | "kind" => "wish"}]}, "`plan.checks[2].kind` must be one of outcome, qa, evidence"},
+            {%{"checks" => [%{check | "proof" => "trust"}]}, "`plan.checks[1].proof` must be one of test, qa, design, attached"},
+            {%{"checks" => [%{check | "statement" => ""}]}, "`plan.checks[1].statement` must be a non-blank string"},
+            {%{"checks" => [%{check | "kind" => "evidence"}]}, "`plan.checks` holds no check of kind `outcome`"},
+            {%{"checks" => [check, %{"kind" => "qa", "statement" => "Seen.", "proof" => "qa", "action" => "Open it"}]},
+             "`plan.checks[2].expect` must be a non-blank string: a `qa` check says what to do and what to expect"},
+            {%{"size" => %{"tokens" => "many", "runs" => 1}}, "`plan.size` must hold `tokens` and `runs`, both whole numbers"},
+            {%{"shape" => "split"}, "`plan.sub_tickets` must list at least one entry"},
+            {%{"shape" => "split", "sub_tickets" => ["one"]}, "`plan.sub_tickets[1]` must be an object"},
+            {%{"shape" => "split", "sub_tickets" => [%{"title" => "One"}]}, "`plan.sub_tickets[1].ask` must be a non-blank string"},
+            {%{"shape" => "split", "sub_tickets" => [%{"ask" => "One"}]}, "`plan.sub_tickets[1].title` must be a non-blank string"}
+          ] do
+        assert plan(attrs) == {:error, why}
+      end
+
+      assert grooming(%{"plan" => "single"}) == {:error, "`plan` must be an object"}
+      assert Answer.layers() == ~w(screen gallery api engine config tooling docs)
+    end
+  end
 end
