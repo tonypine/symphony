@@ -14,6 +14,7 @@ defmodule SymphonyElixirWeb.Presenter do
     Initiatives,
     Lifecycle,
     Marks,
+    Messages,
     ModelNames,
     Orchestrator,
     Pauses,
@@ -790,8 +791,9 @@ defmodule SymphonyElixirWeb.Presenter do
   @spec ticket_events_json(String.t(), String.t(), [Event.t()], keyword()) :: [map()]
   def ticket_events_json(repo_key, issue_id, events, opts \\ []) do
     artifacts = ticket_artifacts(repo_key, issue_id, events)
+    reads = message_reads(issue_id, events)
     mark = event_mark(opts)
-    Enum.map(events, &ticket_event_json(&1, artifacts, mark))
+    Enum.map(events, &ticket_event_json(&1, artifacts, reads, mark))
   end
 
   @doc """
@@ -827,6 +829,7 @@ defmodule SymphonyElixirWeb.Presenter do
 
     timeline = %{
       artifacts: ticket_artifacts(repo_key, issue_id, events),
+      reads: message_reads(issue_id, events),
       runs: runs,
       mark: event_mark(opts),
       members: Enum.group_by(placed, &elem(&1, 1), &elem(&1, 0))
@@ -853,7 +856,7 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp timeline_entry({:event, event}, timeline) do
     event
-    |> ticket_event_json(timeline.artifacts, timeline.mark)
+    |> ticket_event_json(timeline.artifacts, timeline.reads, timeline.mark)
     |> Map.put(:children, timeline_members({:event, event.id}, timeline))
   end
 
@@ -952,11 +955,27 @@ defmodule SymphonyElixirWeb.Presenter do
     end
   end
 
-  defp ticket_event_json(%Event{} = event, artifacts, mark) do
+  defp ticket_event_json(%Event{} = event, artifacts, reads, mark) do
     event
     |> ticket_event_fields(artifacts)
+    |> put_message_read(event, reads)
     |> put_new_mark(event, mark)
   end
+
+  # One read of the ticket's message reads and run starts for the whole page, skipped when the page
+  # holds no message. A store that can't be read leaves every message unread.
+  defp message_reads(issue_id, events) do
+    if Enum.any?(events, &Messages.message?/1),
+      do: issue_id |> RunStore.list_ticket_events(types: ["message.read", "run.started"]) |> List.wrap() |> Enum.filter(&is_struct(&1, Event)),
+      else: []
+  end
+
+  # A message says whether a run read it: null, or the run's title and when.
+  defp put_message_read(json, %Event{type: "message.sent"} = message, reads) do
+    Map.put(json, :read, Messages.read_by(message, reads))
+  end
+
+  defp put_message_read(json, _event, _reads), do: json
 
   defp put_new_mark(json, _event, :none), do: json
   defp put_new_mark(json, event, {:looked, looked_at}), do: Map.put(json, :new, Marks.new?(event, looked_at))

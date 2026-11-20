@@ -936,6 +936,23 @@ defmodule SymphonyElixir.QaAgentTest do
   end
 
   describe "prompt/2 and settings" do
+    # TP-1502: a QA pass is a run like any other, so the person's messages open its prompt.
+    test "the QA prompt opens with the messages no run read yet, oldest first, and marks them read by the pass" do
+      issue = issue(%{id: "issue-qa-messages"})
+      {:ok, first} = SymphonyElixir.Messages.send_message("default", issue.id, "Walk the empty state first.")
+      {:ok, second} = SymphonyElixir.Messages.send_message("default", issue.id, "Then the export.")
+
+      prompt = QaAgent.prompt(job(%{issue: issue, run_id: "qa-run-messages"}), nil)
+
+      assert String.starts_with?(prompt, "## Messages from the person")
+      assert prompt =~ ~r/Walk the empty state first\..*Then the export\..*Issue:/s
+
+      reads = issue.id |> SymphonyElixir.TicketEvents.query(types: ["message.read"]) |> Enum.map(&{&1.payload.message_id, &1.payload.run_id})
+      assert Enum.sort(reads) == Enum.sort([{first.id, "qa-run-messages"}, {second.id, "qa-run-messages"}])
+
+      refute QaAgent.prompt(job(%{issue: issue, run_id: "qa-run-later"}), nil) =~ "Messages from the person"
+    end
+
     test "a pass with the macos_app playbook carries the QA-mode contract, and one without carries none" do
       macos = Selection.playbooks(%{playbooks: %{"macos_app" => %{"build" => "make app", "app" => "build/App.app"}}})
       prompt = QaAgent.prompt(job(%{playbooks: macos}), nil)

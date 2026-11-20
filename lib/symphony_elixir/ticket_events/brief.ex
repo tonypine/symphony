@@ -19,6 +19,10 @@ defmodule SymphonyElixir.TicketEvents.Brief do
       viewport, its commit (the event's, else its run's), when it was last seen (its event, or the
       later event that reopened it) and its whole description.
     * **Notes**: every note, in full, with who wrote it; a person's is the Director's.
+    * **Messages**: every message a person wrote to the ticket (`SymphonyElixir.Messages`), in
+      full, with who wrote it, when, and the run that was given it, or that no run read it yet.
+      Built for a run (`run_id:`), it leaves out the unread messages written after that run
+      started (`SymphonyElixir.Messages.in_history/2`): they wait for the next run.
     * **Runs**: one line per run (kind, number, result or state, commit, when), with the latest
       run's events in full under it. An earlier run's steps are summed up in its line.
     * **Other events**: every event outside a run, one line each from its summary, newest first.
@@ -31,7 +35,7 @@ defmodule SymphonyElixir.TicketEvents.Brief do
   same bytes.
   """
 
-  alias SymphonyElixir.{RunStore, TicketBrief, TicketEvents, TicketState}
+  alias SymphonyElixir.{Messages, RunStore, TicketBrief, TicketEvents, TicketState}
   alias SymphonyElixir.TicketEvents.{Event, Summary}
 
   @type t :: %{
@@ -46,11 +50,12 @@ defmodule SymphonyElixir.TicketEvents.Brief do
   # The types a section renders, which Other events doesn't repeat. A decision event is left out of
   # it only when Decisions renders it: a withdrawal or a second answer naming no request it shows is
   # one of the other events.
-  @section_types ["note", "brief.written", "finding.recorded", "finding.resolved"]
+  @section_types ["note", "message.sent", "brief.written", "finding.recorded", "finding.resolved"]
   @run_types ["run.started", "run.ended"]
   # The payload fields that hold an event's whole free text, which a summary's detail cuts.
   @full_fields %{
     "note" => [:text],
+    "message.sent" => [:text],
     "finding.recorded" => [:severity, :description],
     "finding.resolved" => [:how],
     "checklist.answered" => [:item, :answer],
@@ -66,23 +71,24 @@ defmodule SymphonyElixir.TicketEvents.Brief do
   @doc """
   The summary of the ticket `issue_id`: its record and every event it holds, read from
   `SymphonyElixir.RunStore` (never one capped page of `SymphonyElixir.TicketEvents.query/2`), built
-  by `build/2`.
+  by `build/3` with `opts`.
   """
-  @spec render(String.t()) :: {:ok, t()} | {:error, term()}
-  def render(issue_id) do
+  @spec render(String.t(), keyword()) :: {:ok, t()} | {:error, term()}
+  def render(issue_id, opts \\ []) do
     with state when not is_tuple(state) <- RunStore.get_ticket_state(issue_id),
          events when is_list(events) <- RunStore.list_ticket_events(issue_id, []) do
-      {:ok, build(state, events)}
+      {:ok, build(state, events, opts)}
     end
   end
 
   @doc """
   The summary of a ticket from its record (nil when it has none) and its events, in any order: its
   text, the text's size in tokens (bytes / 4), and how many decisions, open findings, notes and runs
-  it holds.
+  it holds. `opts[:run_id]` names the run the summary is for, whose Messages section leaves out the
+  unread messages written after it started.
   """
-  @spec build(map() | nil, [Event.t() | map()]) :: t()
-  def build(ticket_state, events) do
+  @spec build(map() | nil, [Event.t() | map()], keyword()) :: t()
+  def build(ticket_state, events, opts \\ []) do
     events = events |> Enum.map(&Event.normalize/1) |> Enum.sort_by(&{sort_time(&1.at), &1.seq || 0})
     state = TicketState.normalize(ticket_state)
     runs = runs(events)
@@ -97,6 +103,7 @@ defmodule SymphonyElixir.TicketEvents.Brief do
         decisions_section(decisions),
         findings_section(findings),
         notes_section(notes),
+        messages_section(events, Keyword.get(opts, :run_id)),
         runs_section(runs),
         other_section(events, decisions)
       ]
@@ -277,6 +284,20 @@ defmodule SymphonyElixir.TicketEvents.Brief do
 
   defp notes_section(notes) do
     section("Notes", notes, fn note -> [indent("- #{time(note.at)}, #{actor(note.actor)}: " <> (text(note, :text) || ""), "  ")] end)
+  end
+
+  # Messages
+
+  defp messages_section(events, run_id) do
+    section("Messages", Messages.in_history(events, run_id), fn message ->
+      read =
+        case Messages.read_event(message, events) do
+          nil -> "not read by a run yet"
+          read -> "given to #{Messages.run_title(text(read, :run_id), events)} at #{time(read.at)}"
+        end
+
+      [indent("- #{time(message.at)}, #{Messages.writer(message.actor)} wrote (#{read}): " <> (text(message, :text) || ""), "  ")]
+    end)
   end
 
   # Runs: the events that carry a run id, grouped by it in the order the runs began.

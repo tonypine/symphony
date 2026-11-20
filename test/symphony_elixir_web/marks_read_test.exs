@@ -88,42 +88,66 @@ defmodule SymphonyElixirWeb.MarksReadTest do
     Jason.decode!(conn.resp_body)["events"]
   end
 
-  test "the Director opens a ticket, a run reads their note, and coming back the timeline marks what is new and the note names the run" do
+  defp write(text, audit_dir) do
+    params = %{"repo_key" => @repo, "issue_identifier" => @identifier, "text" => text}
+
+    conn(:post, "/", Jason.encode!(params))
+    |> put_req_header("content-type", "application/json")
+    |> Phoenix.Controller.put_view(SymphonyElixirWeb.ErrorJSON)
+    |> assign(:audit_log, dir: audit_dir)
+    |> Map.put(:params, params)
+    |> Map.put(:body_params, params)
+    |> ControlApiController.note(params)
+  end
+
+  @tag :tmp_dir
+  test "the Director writes twice while a run works; the next run is given both first, and the history says which run read them",
+       %{tmp_dir: tmp_dir} do
     record!("phase.entered", %{to: "In Progress", from: "Todo"}, at: at(1))
-    note = record!("note", %{text: "Keep the export button."}, at: at(2), actor: {:person, "the Director"})
-
-    # Never looked: everything is new, and the note waits for a run.
-    assert %{looked_at: nil, new_since_looked: 2, note: %{id: note_id, text: "Keep the export button.", by: "the Director", read_by: nil}} = read()
-    assert note_id == note.id
-    assert Enum.map(feed(), & &1["new"]) == [true, true]
-
-    # The Director opens the ticket.
-    conn = look(%{"issue_identifier" => @identifier})
-    assert conn.status == 200
-    assert %{"issue_identifier" => @identifier, "looked_at" => looked_at, "new_since_looked" => 0} = Jason.decode!(conn.resp_body)
-    {:ok, looked, 0} = DateTime.from_iso8601(looked_at)
-
-    assert %{looked_at: ^looked_at, new_since_looked: 0} = read()
-    assert Enum.map(feed(), & &1["new"]) == [false, false]
-
-    # A run starts: its prompt carries the note, and the run's events come after the mark.
-    assert DateTime.compare(DateTime.utc_now(), looked) == :gt
-    record!("run.started", %{run_id: "run-1", run_kind: "implementation", run_number: 1}, run_id: "run-1")
-    record = RunStore.get_ticket_state(@id)
     issue = %Issue{id: @id, identifier: @identifier, title: "Marks", state: "In Progress"}
-    assert PromptBuilder.build_prompt(issue, ticket_state: record, run_id: "run-1") =~ "Keep the export button."
+
+    # A run is working: its prompt was built when it started.
+    record!("run.started", %{run_id: "run-1", run_kind: "implementation", run_number: 1}, run_id: "run-1", at: at(2))
+    refute PromptBuilder.build_prompt(issue, ticket_state: RunStore.get_ticket_state(@id), run_id: "run-1") =~ "Messages from the person"
+
+    # Never looked: everything is new.
+    assert %{looked_at: nil, new_since_looked: 2, unread_messages: 0, note: nil} = read()
+
+    # The Director opens the ticket and writes to it twice while the run works.
+    assert look(%{"issue_identifier" => @identifier}).status == 200
+    assert %{"event" => %{"id" => first_id}} = "Keep the export button." |> write(tmp_dir) |> Map.fetch!(:resp_body) |> Jason.decode!()
+    assert %{"event" => %{"id" => second_id}} = "And use the new copy." |> write(tmp_dir) |> Map.fetch!(:resp_body) |> Jason.decode!()
+
+    # Both are in the history as written by the person, each unread; the older app's note is the newest.
+    assert %{unread_messages: 2, note: %{id: ^second_id, text: "And use the new copy.", by: "the Director", read_by: nil}} = read()
+    messages = Enum.filter(feed(), &(&1["type"] == "message.sent"))
+
+    assert Enum.map(messages, &{&1["id"], &1["summary"]["title"], &1["summary"]["detail"], &1["read"], &1["new"]}) == [
+             {first_id, "You wrote", "Keep the export button.", nil, true},
+             {second_id, "You wrote", "And use the new copy.", nil, true}
+           ]
+
+    # The run ends and the next starts: its prompt opens with both, oldest first.
     record!("run.ended", %{run_id: "run-1", exit: "handoff"}, run_id: "run-1")
+    record!("run.started", %{run_id: "run-2", run_kind: "implementation", run_number: 2}, run_id: "run-2")
+    prompt = PromptBuilder.build_prompt(issue, ticket_state: RunStore.get_ticket_state(@id), run_id: "run-2")
+    assert prompt =~ ~r/\A## Messages from the person\n.*Keep the export button\..*And use the new copy\./s
 
-    assert %{looked_at: ^looked_at, new_since_looked: 3, note: %{id: ^note_id, read_by: %{run_id: "run-1"}}} = read()
+    # Both are marked read by that run.
+    assert %{unread_messages: 0, note: nil} = read()
 
-    [phase, note_event, run] = timeline()
-    assert {phase["new"], note_event["new"]} == {false, false}
-    assert run["events"] |> Enum.map(&{&1["type"], &1["new"]}) |> Enum.sort() == [{"note.read", true}, {"run.ended", true}, {"run.started", true}]
+    for message <- Enum.filter(feed(), &(&1["type"] == "message.sent")) do
+      assert %{"run_id" => "run-2", "run" => "Implementation run 2", "at" => at} = message["read"]
+      assert {:ok, _at, 0} = DateTime.from_iso8601(at)
+    end
+
+    [_phase, _run_1, _first, _second, run_2] = timeline()
+    assert run_2["events"] |> Enum.map(& &1["type"]) |> Enum.sort() == ["message.read", "message.read", "run.started"]
+    assert run_2["events"] |> Enum.filter(&(&1["type"] == "message.read")) |> Enum.map(& &1["payload"]["message_id"]) == [first_id, second_id]
 
     # Looking again moves the mark past them.
     assert look(%{"issue_identifier" => @identifier, "repo_key" => @repo}).status == 200
     assert %{new_since_looked: 0} = read()
-    assert timeline() |> List.last() |> Map.fetch!("events") |> Enum.map(& &1["new"]) == [false, false, false]
   end
 
   test "an unknown ticket is 404 and a request without one is 422" do

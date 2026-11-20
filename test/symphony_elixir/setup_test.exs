@@ -332,16 +332,17 @@ defmodule SymphonyElixir.SetupTest do
         assert {:ok, _workflow, [stale: true]} = Cache.get_workflow(workflow)
 
         # The workflow store's poll reads the workflow every second; a read of the removed file
-        # would replace the rejection with the missing file before the check runs (TP-1546).
+        # would replace the rejection with the missing file before the check runs (TP-1546). An
+        # earlier test may have stopped the store, and then nothing polls.
         store = Process.whereis(SymphonyElixir.WorkflowStore)
-        :ok = :sys.suspend(store)
-        on_exit(fn -> if Process.alive?(store), do: :sys.resume(store) end)
+        if store, do: :ok = :sys.suspend(store)
+        on_exit(fn -> if store && Process.alive?(store), do: :sys.resume(store) end)
 
         File.rm!(workflow)
         assert %{problems: [problem]} = Setup.check()
         assert Enum.any?(problem.details, &(&1.label == "Key"))
         refute Enum.any?(problem.details, &(&1.label == "Line"))
-        :ok = :sys.resume(store)
+        if store, do: :ok = :sys.resume(store)
       end)
     end
 
