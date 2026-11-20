@@ -5,7 +5,8 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
   # edit its own comments), the sub-issues it created by identifier (so a later sub-issue may be
   # blocked by an earlier one) and by parent and title (so a looping run can't file one twice), the
   # documents it created (so it may edit them before Linear lists their attachments, and stays
-  # under the cap), whether it opened a PR, and whether it asked a person for a decision.
+  # under the cap), whether it opened a PR, the heads its push and PR tool calls handed off, and
+  # whether it asked a person for a decision.
 
   use Agent
 
@@ -26,6 +27,7 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
       documents: 0,
       created_documents: MapSet.new(),
       pull_request_created: false,
+      handed_off_heads: MapSet.new(),
       human_action_requested: false
     }
 
@@ -161,6 +163,25 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
   @spec pull_request_created?(pid() | nil) :: boolean()
   def pull_request_created?(pid) when is_pid(pid), do: Agent.get(pid, & &1.pull_request_created)
   def pull_request_created?(_pid), do: false
+
+  @doc """
+  Records that a push or PR tool call of this run handed off `head`. A head the tool could not read
+  (`nil`) counts for any head, as the ledger's handoff signal does.
+  """
+  @spec record_handoff(pid() | nil, String.t() | nil) :: :ok
+  def record_handoff(pid, head) when is_pid(pid),
+    do: Agent.update(pid, &Map.update!(&1, :handed_off_heads, fn heads -> MapSet.put(heads, head || :any) end))
+
+  def record_handoff(_pid, _head), do: :ok
+
+  @doc "True once `record_handoff/2` ran for `head`, or for a head the tool could not read."
+  @spec handed_off?(pid() | nil, String.t() | nil) :: boolean()
+  def handed_off?(pid, head) when is_pid(pid) do
+    heads = Agent.get(pid, & &1.handed_off_heads)
+    MapSet.member?(heads, :any) or (is_binary(head) and MapSet.member?(heads, head))
+  end
+
+  def handed_off?(_pid, _head), do: false
 
   defp reserve(pid, counter, cap, cap_error) do
     Agent.get_and_update(pid, fn state ->

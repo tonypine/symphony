@@ -2,6 +2,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.AgentTools.GitHub
+  alias SymphonyElixir.AgentTools.Linear.CommentRegistry
   alias SymphonyElixir.AgentTools.SecretScanner
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
@@ -2046,6 +2047,8 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
         |> Map.put(:command_security, command_security)
 
       settings = %Schema{}
+      {:ok, registry} = CommentRegistry.start_link()
+      context = Map.put(context, :comment_registry, registry)
 
       assert {:ok, %{"branch" => "auto/ACME-483"}} = GitHub.push_branch(context, settings: settings)
 
@@ -2054,6 +2057,14 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
       assert [%{name: "handoff", details: details}] = Handoff.signals(repo_key, issue_id)
       assert details.head == head
       assert details.branch == "auto/ACME-483"
+
+      # The run's registry holds the head too, so a second push of the same head, which the ledger
+      # keeps as one, still says this run handed it off (TP-1186).
+      assert CommentRegistry.handed_off?(registry, head)
+      refute CommentRegistry.handed_off?(registry, "another-head")
+      assert {:ok, _result} = GitHub.push_branch(context, settings: settings)
+      assert [%{name: "handoff"}] = Handoff.signals(repo_key, issue_id)
+      assert CommentRegistry.handed_off?(registry, head)
 
       # Opening the PR is a handoff too.
       RunStore.delete_ticket_state(issue_id)
@@ -2119,12 +2130,17 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
       end
 
       gh_runner = fn _args, _opts -> {"https://github.com/acme/symphony/pull/9\n", 0} end
+      {:ok, registry} = CommentRegistry.start_link()
 
       assert {:ok, %{"url" => "https://github.com/acme/symphony/pull/9"}} =
-               GitHub.create_pull_request(context, "Title", "Body", false,
+               GitHub.create_pull_request(Map.put(context, :comment_registry, registry), "Title", "Body", false,
                  git_runner: git_runner,
                  gh_runner: gh_runner
                )
+
+      # An unreadable head counts for any head in the run's registry too.
+      assert CommentRegistry.handed_off?(registry, "any-head-at-all")
+      refute CommentRegistry.handed_off?(nil, "any-head-at-all")
 
       # The ledger outlives the deleted record, so the newest signal is the one just emitted.
       assert [%{name: "handoff", details: details} | _] = Handoff.signals(repo_key, issue_id)
