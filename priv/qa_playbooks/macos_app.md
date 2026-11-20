@@ -119,10 +119,16 @@ worktree's configured app and on apps you launched:
   and pass the bundle as `local_path` with the GitHub `remote_url` its `origin` should name (such
   as `https://github.com/acme/widgets`) and an optional `remote_name` for the folder. Returns the
   checkout's `path`. Nothing is fetched from or pushed to GitHub.
-- `qa_api_requests`: returns the `requests` an app launched with `api_fixtures` sent since the
-  last call, oldest first: each POST it logged to `api-requests.jsonl` in its QA root, with its
-  `method`, `path` and `body`. It reads one root, the last launch's unless you pass `root`, and
-  names it. The log lives where you cannot read it, so use this instead.
+- `qa_api_requests`: returns the `requests` the app sent, with `api_fixtures` or a live
+  Symphony, that no earlier call returned, oldest first. The log covers reads as well as moves:
+  each GET (the state, health and feed polls, every page's reads) with its `at` time, `method`,
+  `path`, `query` and `status`, and each POST or DELETE with its `at`, `method`, `path` and
+  `body`. Pass `method` (`GET`, `POST`) or `path` (`/api/v1/state`) to narrow the list, so a 5 s
+  poll does not bury the request a step is about; the requests a narrowed call leaves out stay
+  for a later call. At most the last 500 that match are returned, and `dropped` counts the older
+  ones it left out. A step about polling or reads is judged from these entries and their times,
+  never marked blocked for want of them. It reads one root, the last launch's unless you pass
+  `root`, and names it. The logs live where you cannot read them, so use this instead.
 - `qa_build_release_pair`, `qa_relaunched_app` and `qa_update_feed`, with `qa_launch_app`'s
   `release_pair: true`: build release N and its update N+1 signed, launch N, and drive the app
   after it installed N+1. See "After an update: the signed release pair" below.
@@ -799,7 +805,8 @@ anyway: Symphony's tool does it, or it is host setup. Where it can't be installe
    runs the app with `SYMPHONY_BAR_QA_API_FIXTURES` set to a fixtures directory, pass that
    directory as `api_fixtures`, never by setting the variable yourself: the app reads Symphony's
    API from those files instead of a running Symphony. When the walkthrough checks what the app
-   sent (`api-requests.jsonl`), call `qa_api_requests` after the action and judge its `requests`.
+   sent or read (`api-requests.jsonl`, `api-reads.jsonl`), call `qa_api_requests` after the
+   action and judge its `requests`.
    Once the window shows, and after every later launch, call `qa_resize_window` with
    `pass: "walkthrough"`: every step, screenshot and design check runs at the walkthrough size
    unless the step itself names another. Name that size in each step's `viewport`.

@@ -2246,8 +2246,10 @@ The QA agent:
   launched app's status-bar menu on screen through a request file under that app's QA root, which
   only an app in QA mode acts on, and returns the menu's window for `qa_screenshot`. `qa_put_file` MUST read only a regular file of bounded size that resolves inside
   the QA worktree or the pass's temp folder, and MUST refuse symlinks and files with other hard
-  links. `qa_api_requests` returns the requests the app logged to `api-requests.jsonl` in its QA
-  root since the last call, read where the app runs, and MUST read nothing outside that QA root.
+  links. `qa_api_requests` returns the requests the app logged in its QA root that no call
+  returned yet, its moves (`api-requests.jsonl`) and its reads (`api-reads.jsonl`) in time order,
+  narrowed by `method` or `path` when asked, read where the app runs, and MUST read nothing
+  outside that QA root.
   Every launch of a pass shares one QA root unless `qa_launch_app` asks for a fresh one
   (`fresh_root`), a new, empty directory beside it in the same private directory, or names a root
   the pass already has (`root`); it MUST refuse a root the pass does not have. Each launch's

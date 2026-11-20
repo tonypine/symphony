@@ -201,6 +201,64 @@ final class APIFixturesTests: XCTestCase {
         XCTAssertEqual(entry["at"] as? String, "2026-10-03T04:00:00Z")
     }
 
+    func testGetsAreLoggedToTheReadLogWithTheirTimePathQueryAndStatus() throws {
+        let date = Date(timeIntervalSince1970: 1_791_000_000)
+        _ = fixtures.answer(request("api/v1/state"), now: date)
+        var health = request("api/v1/health")
+        health.url = URL(string: "\(APIFixtures.baseURL.absoluteString)/api/v1/health?verbose=1")
+        _ = fixtures.answer(health, now: date)
+        _ = fixtures.answer(request("api/v1/control/pause", method: "POST"), now: date)
+
+        XCTAssertEqual(fixtures.readLog, root.appendingPathComponent("qa/api-reads.jsonl"))
+        let reads = try String(contentsOf: fixtures.readLog, encoding: .utf8).split(separator: "\n")
+            .map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]) }
+        XCTAssertEqual(reads.count, 2)
+        XCTAssertEqual(reads[0]["method"] as? String, "GET")
+        XCTAssertEqual(reads[0]["path"] as? String, "/api/v1/state")
+        XCTAssertEqual(reads[0]["status"] as? Int, 200)
+        XCTAssertEqual(reads[0]["at"] as? String, "2026-10-03T04:00:00Z")
+        XCTAssertNil(reads[0]["query"])
+        XCTAssertEqual(reads[1]["path"] as? String, "/api/v1/health")
+        XCTAssertEqual(reads[1]["query"] as? String, "verbose=1")
+        XCTAssertEqual(reads[1]["status"] as? Int, 404)
+        // The moves' log keeps only the move, so the after-fixtures and the sequences count moves alone.
+        let moves = try String(contentsOf: fixtures.requestLog, encoding: .utf8).split(separator: "\n")
+        XCTAssertEqual(moves.count, 1)
+        XCTAssertEqual(fixtures.postedMoves(), ["pause"])
+    }
+
+    func testTheLiveTransportLogsAsTheFixturesDo() async throws {
+        let date = Date(timeIntervalSince1970: 1_791_000_000)
+        let log = root.appendingPathComponent("live/api-requests.jsonl")
+        let network: ControlAPI.Transport = { request in
+            if request.url?.path == "/api/v1/health" { throw URLError(.timedOut) }
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (Data("{}".utf8), response)
+        }
+        let transport = APIFixtures.logging(network, requestLog: log, now: { date })
+
+        _ = try await transport(request("api/v1/state"))
+        do {
+            _ = try await transport(request("api/v1/health"))
+            XCTFail("the read should fail")
+        } catch {}
+        let (_, answer) = try await transport(request("api/v1/control/pause", method: "POST", body: ["reason": "test"]))
+        XCTAssertEqual((answer as? HTTPURLResponse)?.statusCode, 200)
+
+        let reads = try String(contentsOf: APIFixtures.readLog(beside: log), encoding: .utf8).split(separator: "\n")
+            .map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]) }
+        XCTAssertEqual(reads.map { $0["path"] as? String }, ["/api/v1/state", "/api/v1/health"])
+        XCTAssertEqual(reads[0]["status"] as? Int, 200)
+        // A read that got no answer has no status.
+        XCTAssertNil(reads[1]["status"])
+        let moves = try String(contentsOf: log, encoding: .utf8).split(separator: "\n")
+            .map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]) }
+        XCTAssertEqual(moves.count, 1)
+        XCTAssertEqual(moves[0]["path"] as? String, "/api/v1/control/pause")
+        XCTAssertEqual(moves[0]["body"] as? [String: String], ["reason": "test"])
+        XCTAssertEqual(moves[0]["at"] as? String, "2026-10-03T04:00:00Z")
+    }
+
     func testControlActionsGoToTheFixtures() async throws {
         let result = await ControlAPI.send(
             .pause,

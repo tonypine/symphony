@@ -35,7 +35,7 @@ defmodule SymphonyElixir.QaModeContract do
     contract = QaDriver.app_contract()
 
     [
-      "- `#{contract.qa_root_env}`: the QA root, the launch's run directory on the QA host. The app keeps its settings and secrets there, and every file the driver reads from the app goes there: `qa_api_requests` reads `#{contract.api_requests_log}` from the QA root.",
+      "- `#{contract.qa_root_env}`: the QA root, the launch's run directory on the QA host. The app keeps its settings and secrets there, and every file the driver reads from the app goes there: `qa_api_requests` reads `#{contract.api_requests_log}` from the QA root. The app logs its reads (GETs) to `#{contract.api_reads_log}` beside it, and the tool returns both.",
       "- `#{contract.api_fixtures_env}`: read-only, set on a launch with `api_fixtures`. It names a copy on the QA host of the fixture directory the ticket committed; the app reads Symphony's API answers from it and never writes there.",
       "- `#{contract.appearance_env}`: #{Enum.map_join(contract.appearances, " or ", &"`#{&1}`")} when the launch asks for an appearance."
     ] ++
