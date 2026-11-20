@@ -1,7 +1,7 @@
 import Foundation
 
 // The ticket read's `ticket`, `brief`, `workspace` and `repo_key` (`docs/control-api.md` § `ticket`, § `brief`) and
-// the ticket's decisions (`GET /api/v1/tickets/:identifier/decisions`), and what the facts rail's Decisions panel says
+// its `plan`, `checks` and `asks` (a groomed ticket's, read by `PlanPanel.swift`), and the ticket's decisions (`GET /api/v1/tickets/:identifier/decisions`), and what the facts rail's Decisions panel says
 // from them. The brief on top of the page is `BriefPanelModel`'s.
 
 /// The ticket as its record holds it: its title, phase, Linear priority, labels and description.
@@ -93,18 +93,28 @@ public struct TicketDetailsRead: Equatable, Decodable {
     public var ticket: TicketRecordRead?
     public var brief: TicketBriefRead?
     public var workspace: TicketWorkspaceRead?
+    /// The current plan of a groomed ticket; nil for a ticket Grooming wrote no plan for.
+    public var plan: TicketPlanRead?
+    /// The current plan's checks, each with its state; empty without a plan.
+    public var checks: [TicketCheckRead]
+    /// What was asked, oldest first.
+    public var asks: [TicketAskRead]
 
     public init(
-        repoKey: String? = nil, ticket: TicketRecordRead? = nil, brief: TicketBriefRead? = nil, workspace: TicketWorkspaceRead? = nil
+        repoKey: String? = nil, ticket: TicketRecordRead? = nil, brief: TicketBriefRead? = nil, workspace: TicketWorkspaceRead? = nil,
+        plan: TicketPlanRead? = nil, checks: [TicketCheckRead] = [], asks: [TicketAskRead] = []
     ) {
         self.repoKey = repoKey
         self.ticket = ticket
         self.brief = brief
         self.workspace = workspace
+        self.plan = plan
+        self.checks = checks
+        self.asks = asks
     }
 
     private enum CodingKeys: String, CodingKey {
-        case ticket, brief, workspace
+        case ticket, brief, workspace, plan, checks, asks
         case repoKey = "repo_key"
     }
 
@@ -114,6 +124,10 @@ public struct TicketDetailsRead: Equatable, Decodable {
         ticket = try container.decodeIfPresent(TicketRecordRead.self, forKey: .ticket)
         brief = try container.decodeIfPresent(TicketBriefRead.self, forKey: .brief)
         workspace = try container.decodeIfPresent(TicketWorkspaceRead.self, forKey: .workspace)
+        // The plan's fields never fail the read: a field of another shape reads as missing.
+        plan = (try? container.decodeIfPresent(TicketPlanRead.self, forKey: .plan)) ?? nil
+        checks = ((try? container.decodeIfPresent(LossyList<TicketCheckRead>.self, forKey: .checks)) ?? nil)?.items ?? []
+        asks = ((try? container.decodeIfPresent(LossyList<TicketAskRead>.self, forKey: .asks)) ?? nil)?.items ?? []
     }
 
     /// The fields of a ticket read (`GET /api/v1/:issue_identifier`); nil for anything but a JSON object.
