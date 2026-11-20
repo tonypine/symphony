@@ -77,7 +77,8 @@ defmodule SymphonyElixir.QaBuildHoldTest do
     test "asks for the build and holds the ticket on it, once" do
       log = capture_log(fn -> assert resolve(@head) == :held end)
       assert log =~ "Holding QA for its build: issue_id=#{@issue_id} issue_identifier=TP-7 repo_key=default head_sha=#{@head}"
-      assert_received {:requested, @repo_key, @head, %{identifier: "TP-7", issue_id: @issue_id, held: true, issue: %Issue{id: @issue_id}}}
+      assert_received {:requested, @repo_key, @head, request}
+      assert %{identifier: "TP-7", issue_id: @issue_id, held: true, issue: %Issue{id: @issue_id}} = request
 
       assert [%{kind: :build, waits_on: %{commit: @head}, text: "Waiting for the QA build of e44298c", set_by: @setter} = reason] =
                QaBuildHold.reasons(@repo_key, @issue_id)
