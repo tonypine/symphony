@@ -2125,7 +2125,11 @@ defmodule SymphonyElixir.AgentRunner do
     ticket = %{identifier: identifier, issue_id: issue_id, new_head: true}
     repo_key = run_repo_key(issue, run_context.opts)
 
-    if is_binary(repo_key) and builds_app?(repo_key, issue, head, run_context), do: QaBuild.request(repo_key, head, ticket), else: :ok
+    if is_binary(repo_key) and builds_app?(repo_key, issue, head, run_context) do
+      QaBuild.request(repo_key, head, ticket)
+    else
+      :ok
+    end
   end
 
   defp request_qa_build(_issue, _run_context), do: :ok
