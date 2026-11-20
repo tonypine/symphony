@@ -23,7 +23,7 @@ final class PhaseSettingsTests: XCTestCase {
 
     func testDraggingTestsAboveChecksSavesTheNewOrderAndPreviewsItAsSymphonyDoes() throws {
         let list = reordered()
-        XCTAssertEqual(list.steps.map(\.stepID), ["code", "build", "tests", "checks", "handoff"])
+        XCTAssertEqual(list.steps.map(\.stepID), ["code", "build", "tests", "checks", "window_tests", "handoff"])
         XCTAssertFalse(list.isDefault)
 
         var new = PhaseSettings()
@@ -159,16 +159,16 @@ final class PhaseSettingsTests: XCTestCase {
         XCTAssertEqual(list.steps.last?.stepID, "step")
         XCTAssertEqual(list.steps.last?.id, added)
         XCTAssertEqual(PhaseStep.new(in: list.steps).stepID, "step_2")
-        XCTAssertEqual(PhaseValidation.check(list.steps).reason(for: list.steps[5]), "Every command needs a shell line to run.")
+        XCTAssertEqual(PhaseValidation.check(list.steps).reason(for: list.steps[6]), "Every command needs a shell line to run.")
 
         list.move(added, by: -1)
-        XCTAssertEqual(list.steps.map(\.stepID), ["code", "build", "checks", "tests", "step", "handoff"])
+        XCTAssertEqual(list.steps.map(\.stepID), ["code", "build", "checks", "tests", "window_tests", "step", "handoff"])
         list.move(list.steps[0].id, by: -1)
         XCTAssertEqual(list.steps[0].stepID, "code")
-        list.move(fromOffsets: IndexSet(integer: 0), toOffset: 6)
-        XCTAssertEqual(list.steps.map(\.stepID), ["build", "checks", "tests", "step", "handoff", "code"])
+        list.move(fromOffsets: IndexSet(integer: 0), toOffset: 7)
+        XCTAssertEqual(list.steps.map(\.stepID), ["build", "checks", "tests", "window_tests", "step", "handoff", "code"])
         list.removeStep(added)
-        XCTAssertEqual(list.steps.map(\.stepID), ["build", "checks", "tests", "handoff", "code"])
+        XCTAssertEqual(list.steps.map(\.stepID), ["build", "checks", "tests", "window_tests", "handoff", "code"])
     }
 
     func testAnUnchangedListStaysTheDefault() {
@@ -224,7 +224,7 @@ final class PhaseSettingsTests: XCTestCase {
 
     func testTheReworkDefaultReadsTheFindingsFirst() {
         let steps = PhaseDefaults.steps(for: .rework)
-        XCTAssertEqual(steps.map(\.stepID), ["findings", "code", "build", "checks", "tests", "handoff"])
+        XCTAssertEqual(steps.map(\.stepID), ["findings", "code", "build", "checks", "tests", "window_tests", "handoff"])
         XCTAssertEqual(steps[0], PhaseStep(
             stepID: "findings",
             title: "Read the open findings",
@@ -473,7 +473,7 @@ final class PhaseSettingsTests: XCTestCase {
 
         let passed = try await file.writePhaseSettings(new, from: PhaseSettings()) { _ in .passed }
         XCTAssertEqual(passed, .passed)
-        XCTAssertEqual(try file.readPhaseSettings()[.implementation].steps.map(\.stepID), ["code", "build", "tests", "checks", "handoff"])
+        XCTAssertEqual(try file.readPhaseSettings()[.implementation].steps.map(\.stepID), ["code", "build", "tests", "checks", "window_tests", "handoff"])
     }
 
     // MARK: An orchestrated step's answer fields

@@ -1094,6 +1094,7 @@ defmodule SymphonyElixir.QaAgent do
 
         try do
           with :ok <- QaDriver.host_check(driver),
+               :ok <- QaDriver.take_vm(driver, vm_lease_opts(job, opts)),
                {:ok, host_ports} <- host_ports(driver),
                {:ok, job} <- start_qa_host_dev_server(driver, job, settings, opts) do
             job = Map.merge(job, %{host_ports: host_ports, design_files: fetch_design(job, settings, opts)})
@@ -1187,6 +1188,11 @@ defmodule SymphonyElixir.QaAgent do
       env: [{"SYMPHONY_QA_CONTROL_TOKEN", token}],
       launch_env: [{"SYMPHONY_BAR_CONTROL_URL", url}, {"SYMPHONY_BAR_CONTROL_TOKEN", token}]
     }
+  end
+
+  # The pass holds the QA VM while it runs, so a run's Window tests step waits for it (TP-1554).
+  defp vm_lease_opts(job, opts) do
+    Keyword.merge([issue_id: job.issue.id, ticket: job.issue.identifier, heartbeat: lease_heartbeat(opts)], Keyword.get(opts, :dev_server_lease_opts, []))
   end
 
   defp lease_heartbeat(opts) do

@@ -2171,8 +2171,9 @@ defmodule SymphonyElixir.Config.Schema do
     `prompt`) or a `delegated` step (work the agent does in its session and reports itself); the
     step model is `SymphonyElixir.TicketEvents.Types`'s.
 
-    A kind the file doesn't set follows its default list (`default_steps/1`): the five steps of
-    decision 2 for `implementation` (`code`, `build`, `checks`, `tests`, `handoff`), the same with
+    A kind the file doesn't set follows its default list (`default_steps/1`): the steps of
+    decision 2 for `implementation` (`code`, `build`, `checks`, `tests`, then TP-1554's
+    `window_tests`, and `handoff`), the same with
     `findings` before them for `rework`, none for every other kind. A step list is refused at load, naming the step, when a step's `on_fail` names a step
     not in the list, when failures can loop with no delegated step in the loop (the same commands
     would run again with nothing changed), and when a machine step has no command.
@@ -2190,6 +2191,7 @@ defmodule SymphonyElixir.Config.Schema do
     @kinds RunKind.phase_kinds()
     @kind_names Map.new(@kinds, &{Atom.to_string(&1), &1})
     @findings_command "symphony:findings"
+    @window_tests_command "symphony:window_tests"
     @qa_commands ~w(symphony:qa_pre_checks symphony:qa_build symphony:qa_launch symphony:qa_quit symphony:qa_attach)
 
     defmodule Step do
@@ -2636,6 +2638,13 @@ defmodule SymphonyElixir.Config.Schema do
     def findings_command, do: @findings_command
 
     @doc """
+    The machine step command Symphony runs itself for the Window tests step: it runs the window
+    tests the change selects in the QA VM (`SymphonyElixir.PhaseSteps.WindowTests`).
+    """
+    @spec window_tests_command() :: String.t()
+    def window_tests_command, do: @window_tests_command
+
+    @doc """
     The machine step commands the QA pass runs itself, with the QA host it holds
     (`SymphonyElixir.QaAgent.Steps`): the pre-checks' results, the build, the launch with a health
     check, quitting every app the pass launched, and the evidence the steps recorded. Only a QA
@@ -2675,8 +2684,10 @@ defmodule SymphonyElixir.Config.Schema do
     TP-1085): `implementation` writes the code (delegated), builds it (`make build` when
     `macos/` changed; `mix compile --warnings-as-errors` when Elixir files did), checks it (format, specs and
     credo on the changed files), tests it (the changed test files and `mix cover.changed`, plus
-    `swift test` for the changed targets when `macos/` changed), each returning to `code` on
-    failure, then hands off (delegated). `rework` reads the open findings first (`findings`, machine),
+    `swift test` for the changed targets when `macos/` changed), runs the window tests the change
+    selects in the QA VM (`window_tests`, Symphony's own `window_tests_command/0`; skipped when the
+    change touches nothing a declared window test covers), each returning to `code` on failure, then
+    hands off (delegated). `rework` reads the open findings first (`findings`, machine),
     which pauses on a Question when a failure came back, then follows the same steps. Every other
     kind has none: its run is one agent session.
 
@@ -2788,6 +2799,15 @@ defmodule SymphonyElixir.Config.Schema do
             %{"run" => "cd macos && swift test --filter \"$SYMPHONY_CHANGED_SWIFT_TEST_FILTER\"", "when" => "macos_changed"}
           ],
           "timeout_ms" => 1_800_000,
+          "on_fail" => "code"
+        },
+        # The wait for the QA VM, while a QA pass holds it, is part of the step's time.
+        %{
+          "id" => "window_tests",
+          "title" => "Window tests",
+          "mode" => "machine",
+          "command" => @window_tests_command,
+          "timeout_ms" => 7_200_000,
           "on_fail" => "code"
         },
         %{"id" => "handoff", "title" => "Hand off: push and open the pull request", "mode" => "delegated"}

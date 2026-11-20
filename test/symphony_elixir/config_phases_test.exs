@@ -37,7 +37,7 @@ defmodule SymphonyElixir.ConfigPhasesTest do
   defp machine(id, fields \\ %{}), do: Map.merge(%{"id" => id, "mode" => "machine", "command" => "make #{id}"}, fields)
 
   describe "the default list" do
-    test "a symphony.yml with no phases key follows decision 2's five implementation steps" do
+    test "a symphony.yml with no phases key follows decision 2's implementation steps, with the window tests before the hand off" do
       assert {:ok, system} = SystemSchema.parse(symphony(%{}))
       steps = Phases.steps(system.phases, :implementation)
 
@@ -46,10 +46,15 @@ defmodule SymphonyElixir.ConfigPhasesTest do
                {"build", "machine", "code"},
                {"checks", "machine", "code"},
                {"tests", "machine", "code"},
+               {"window_tests", "machine", "code"},
                {"handoff", "delegated", nil}
              ]
 
-      [_code, build, checks, tests, _handoff] = steps
+      [_code, build, checks, tests, window_tests, _handoff] = steps
+
+      assert %Step{title: "Window tests", when: "always", timeout_ms: 7_200_000} = window_tests
+      assert [%Command{run: "symphony:window_tests", when: "always"}] = window_tests.command
+      assert Phases.window_tests_command() == "symphony:window_tests"
 
       assert [%Command{run: "cd macos && make build", when: "macos_changed"}, %Command{run: "mix compile --warnings-as-errors", when: "elixir_changed"}] =
                build.command
@@ -67,7 +72,7 @@ defmodule SymphonyElixir.ConfigPhasesTest do
 
       assert [%Command{run: "symphony:findings", when: "always"}] = findings.command
       assert Phases.findings_command() == "symphony:findings"
-      assert Enum.map(rest, & &1.id) == ["code", "build", "checks", "tests", "handoff"]
+      assert Enum.map(rest, & &1.id) == ["code", "build", "checks", "tests", "window_tests", "handoff"]
       assert rest == Phases.default_steps(:implementation)
     end
 
@@ -75,7 +80,7 @@ defmodule SymphonyElixir.ConfigPhasesTest do
       assert {:ok, system} = parse(%{"rework" => %{"steps" => [code()]}})
 
       assert [%Step{id: "code"}] = Phases.steps(system.phases, :rework)
-      assert length(Phases.steps(system.phases, :implementation)) == 5
+      assert length(Phases.steps(system.phases, :implementation)) == 6
       assert Phases.steps(system.phases, :qa) == []
       assert Phases.default_steps(:code_review) == []
     end

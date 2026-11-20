@@ -1,0 +1,24 @@
+{
+  "about": "The tests that drive an app's window, which no run can launch on Symphony's host. A run's Window tests step runs, in the QA VM, each test whose script or covered path its change touches (lib/symphony_elixir/phase_steps/window_tests.ex, docs/configuration.md#phases). `run` is the line the Mac CI build runs from macos/ (.github/workflows/mac-checks.yml); `covers` are globs where ** spans folders. A test that does not pass on main in the QA VM is `off` there, with why, until it does.",
+  "tests": [
+    {
+      "script": "macos/Tests/qa-scroll-test.py",
+      "title": "QA driver's scrolling test",
+      "run": "python3 -I Tests/qa-scroll-test.py",
+      "covers": ["priv/qa_driver/**"]
+    },
+    {
+      "script": "macos/Tests/qa-key-test.py",
+      "title": "QA driver's key and click test",
+      "run": "python3 -I Tests/qa-key-test.py",
+      "covers": ["priv/qa_driver/**"],
+      "off": "it failed 'a click outside closes the popover' in the QA VM on main on 2026-11-13 while passing on GitHub"
+    },
+    {
+      "script": "macos/Tests/qa-appearance-test.sh",
+      "title": "QA appearance library test",
+      "run": "sh Tests/qa-appearance-test.sh",
+      "covers": ["priv/qa_driver/**"]
+    }
+  ]
+}

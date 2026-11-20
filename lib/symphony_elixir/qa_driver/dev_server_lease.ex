@@ -17,6 +17,12 @@ defmodule SymphonyElixir.QaDriver.DevServerLease do
   `:heartbeat` every `:heartbeat_ms`, so the orchestrator's first-turn stall check does not stop
   it.
 
+  The same manager keeps the QA VM's desktop (TP-1554): a key `{worker_host, :desktop}` is held by
+  every `macos_app` pass's driver for the whole pass (`SymphonyElixir.QaDriver.take_vm/2`) and by
+  the Window tests step of a run (`SymphonyElixir.PhaseSteps.WindowTests`) while its scripts drive
+  windows there, so the two never use the VM's windows, mouse and keyboard at the same time. Its
+  holder says what it holds the VM for (`use`), and `waiting/2` and `holder/2` name it.
+
   A driver that already holds the lease gets it again. Without the manager (it is not running),
   or when it goes down while a pass waits, the pass goes ahead: the dev server's own port check
   (`SymphonyElixir.QaDriver.DevServer`) still refuses a port another server holds.
@@ -28,14 +34,30 @@ defmodule SymphonyElixir.QaDriver.DevServerLease do
 
   @heartbeat_ms 30_000
 
-  @typedoc "The QA host and the port its dev server listens on."
-  @type key :: {String.t(), pos_integer()}
+  @typedoc "The QA host and the port its dev server listens on, or `:desktop` for the QA VM's windows."
+  @type key :: {String.t(), pos_integer() | :desktop}
 
-  @typedoc "Who takes the lease: the QA driver that runs the server, and the ticket whose pass it is."
-  @type holder :: %{pid: pid(), issue_id: String.t() | nil, ticket: String.t() | nil}
+  @typedoc """
+  Who takes the lease: the process that holds it (the QA driver, or the run of a Window tests
+  step), the ticket it is for and, optionally, what it holds it for (`use`, `"QA pass"` by default).
+  """
+  @type holder :: %{
+          required(:pid) => pid(),
+          required(:issue_id) => String.t() | nil,
+          required(:ticket) => String.t() | nil,
+          optional(:use) => String.t()
+        }
 
-  @typedoc "A pass waiting for a lease: the key and the ticket that holds it."
-  @type wait :: %{worker_host: String.t(), port: pos_integer(), held_by: String.t() | nil}
+  @typedoc """
+  A pass waiting for a lease: the key and the ticket that holds it; for the desktop, also what that
+  ticket holds it for (`held_for`).
+  """
+  @type wait :: %{
+          required(:worker_host) => String.t(),
+          required(:port) => pos_integer() | :desktop,
+          required(:held_by) => String.t() | nil,
+          optional(:held_for) => String.t()
+        }
 
   @doc "Starts the lease manager, registered as `:name` (default `#{inspect(__MODULE__)}`)."
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -82,8 +104,26 @@ defmodule SymphonyElixir.QaDriver.DevServerLease do
     end
   end
 
+  @doc "Who holds the lease on `key` now, else nil."
+  @spec holder(GenServer.server(), key()) :: holder() | nil
+  def holder(server \\ __MODULE__, key) do
+    case GenServer.whereis(server) do
+      nil -> nil
+      pid -> GenServer.call(pid, {:holder, key})
+    end
+  end
+
+  @doc "What the holder of a lease holds it for: its `use`, a QA pass when it names none."
+  @spec use_of(holder() | nil) :: String.t()
+  def use_of(%{use: use}) when is_binary(use), do: use
+  def use_of(_holder), do: "QA pass"
+
   @doc "Why a pass that waits for a lease is passed over: the orchestrator's dispatch reason."
   @spec reason(wait()) :: String.t()
+  def reason(%{worker_host: worker_host, port: :desktop, held_by: held_by} = wait) do
+    "waiting for the QA VM: #{worker_host} is in use by #{held_by || "another ticket"}'s #{Map.get(wait, :held_for, "QA pass")}"
+  end
+
   def reason(%{worker_host: worker_host, port: port, held_by: held_by}) do
     "waiting for the QA host's dev server port: #{port} on #{worker_host} is held by #{held_by || "another ticket"}'s QA pass"
   end
@@ -130,11 +170,14 @@ defmodule SymphonyElixir.QaDriver.DevServerLease do
   def handle_call({:waiting, issue_id}, _from, state) do
     wait =
       Enum.find_value(state.waiters, fn {{worker_host, port} = key, waiters} ->
-        if Enum.any?(waiters, &(&1.holder.issue_id == issue_id)),
-          do: %{worker_host: worker_host, port: port, held_by: state.leases[key].holder.ticket}
+        if Enum.any?(waiters, &(&1.holder.issue_id == issue_id)), do: wait(worker_host, port, state.leases[key].holder)
       end)
 
     {:reply, wait, state}
+  end
+
+  def handle_call({:holder, key}, _from, state) do
+    {:reply, with(%{holder: holder} <- Map.get(state.leases, key), do: holder), state}
   end
 
   @impl true
@@ -172,7 +215,11 @@ defmodule SymphonyElixir.QaDriver.DevServerLease do
     end
   end
 
+  defp wait(worker_host, :desktop, holder), do: %{worker_host: worker_host, port: :desktop, held_by: holder.ticket, held_for: use_of(holder)}
+  defp wait(worker_host, port, holder), do: %{worker_host: worker_host, port: port, held_by: holder.ticket}
+
   defp grant(state, key, lease), do: %{state | leases: Map.put(state.leases, key, lease)}
 
+  defp describe({worker_host, :desktop}), do: "worker_host=#{worker_host} lease=desktop"
   defp describe({worker_host, port}), do: "worker_host=#{worker_host} port=#{port}"
 end

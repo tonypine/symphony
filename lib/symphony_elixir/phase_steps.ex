@@ -69,7 +69,7 @@ defmodule SymphonyElixir.PhaseSteps do
   alias SymphonyElixir.Config.Schema.Phases
   alias SymphonyElixir.Config.Schema.Phases.Step
   alias SymphonyElixir.HumanActions.PlainWords
-  alias SymphonyElixir.PhaseSteps.{Findings, StepAnswer, Transcript}
+  alias SymphonyElixir.PhaseSteps.{Findings, StepAnswer, Transcript, WindowTests}
   alias SymphonyElixir.Workpad.Projection
 
   @output_max_bytes 512 * 1024
@@ -86,17 +86,28 @@ defmodule SymphonyElixir.PhaseSteps do
   @run_again "Run it again"
   @answer_max_bytes 64 * 1024
   @skip_reasons %{"macos_changed" => "nothing in the Mac app changed", "elixir_changed" => "no Elixir changed"}
+  @back_to_code "Send it back to the code"
   # What the changed-files script prints: one `<status>\t<path>` line a change (`D` a deletion),
-  # then `T\t<path>` for each test file the workspace tracks.
+  # then `T\t<path>` for each test file the workspace tracks, and `W\t<manifest>` with the window
+  # tests' manifest on one line when the workspace has one (JSON holds no raw newline in a string).
   @changes_script """
   base=$(git merge-base HEAD "origin/$SYMPHONY_BASE_BRANCH" 2>/dev/null || git rev-parse HEAD 2>/dev/null)
   if [ -n "$base" ]; then git diff --name-status --no-renames "$base" 2>/dev/null; fi
   git ls-files --others --exclude-standard 2>/dev/null | sed 's/^/A\t/'
   git ls-files 'test/*_test.exs' 2>/dev/null | sed 's/^/T\t/'
+  if [ -f "$SYMPHONY_WINDOW_TESTS" ]; then printf 'W\t'; tr '\r\n\t' '   ' < "$SYMPHONY_WINDOW_TESTS"; printf '\n'; fi
   """
 
-  @typedoc "The files a workspace changed against its base branch, and its tracked test files."
-  @type changes :: %{changed: [String.t()], existing: [String.t()], tests: [String.t()]}
+  @typedoc """
+  The files a workspace changed against its base branch, and its tracked test files; with the window
+  tests its manifest declares (`window_tests`, `SymphonyElixir.PhaseSteps.WindowTests`) when it has one.
+  """
+  @type changes :: %{
+          required(:changed) => [String.t()],
+          required(:existing) => [String.t()],
+          required(:tests) => [String.t()],
+          optional(:window_tests) => WindowTests.manifest()
+        }
 
   @typedoc "A step run's notice to its owner: a machine step starting (with its deadline) and ending."
   @type notice :: {:started, Step.t(), DateTime.t()} | {:finished, Step.t()}
@@ -125,6 +136,7 @@ defmodule SymphonyElixir.PhaseSteps do
           optional(:on_step) => (notice() -> term()),
           optional(:transcript_lines) => [Transcript.line()],
           optional(:builtins) => %{String.t() => (map() -> runner_result())},
+          optional(:window_tests) => (map(), pos_integer() -> runner_result() | {:ask, String.t(), map()}),
           optional(:answer_dir) => Path.t() | nil
         }
 
@@ -185,11 +197,12 @@ defmodule SymphonyElixir.PhaseSteps do
   @doc """
   The changed files of `context`'s workspace: what changed against the merge-base with
   `origin/<base_branch>` (else `HEAD`), committed or not, and the files nobody tracks yet, with the
-  test files the workspace tracks. A workspace git can't read changed nothing.
+  test files the workspace tracks, and the window tests its manifest declares
+  (`WindowTests.manifest_path/0`). A workspace git can't read changed nothing.
   """
   @spec changes(context()) :: changes()
   def changes(context) do
-    env = %{"SYMPHONY_BASE_BRANCH" => Map.get(context, :base_branch) || "main"}
+    env = %{"SYMPHONY_BASE_BRANCH" => Map.get(context, :base_branch) || "main", "SYMPHONY_WINDOW_TESTS" => WindowTests.manifest_path()}
 
     case runner(context).(@changes_script, env, 60_000) do
       {:ok, {output, 0}} ->
@@ -203,9 +216,14 @@ defmodule SymphonyElixir.PhaseSteps do
 
   defp parse_changes(output) do
     lines = for line <- String.split(output, "\n", trim: true), [status, path] <- [String.split(line, "\t", parts: 2)], do: {status, path}
-    changed = for {status, path} <- lines, status != "T", uniq: true, do: path
-    existing = for {status, path} <- lines, status not in ["T", "D"], uniq: true, do: path
-    %{changed: changed, existing: existing, tests: for({"T", path} <- lines, do: path)}
+    changed = for {status, path} <- lines, status not in ["T", "W"], uniq: true, do: path
+    existing = for {status, path} <- lines, status not in ["T", "D", "W"], uniq: true, do: path
+    changes = %{changed: changed, existing: existing, tests: for({"T", path} <- lines, do: path)}
+
+    case for({"W", manifest} <- lines, do: manifest) do
+      [manifest | _rest] -> Map.put(changes, :window_tests, WindowTests.parse(manifest))
+      [] -> changes
+    end
   end
 
   @doc "Whether `condition` (a step's or a command's `when`) holds for `changes`."
@@ -329,6 +347,7 @@ defmodule SymphonyElixir.PhaseSteps do
     cond do
       not holds?(condition, changes) -> Map.fetch!(@skip_reasons, condition)
       commands(step, changes) == [] -> step.command |> Enum.map(&Map.get(@skip_reasons, &1.when)) |> Enum.uniq() |> Enum.join(" and ")
+      commands(step, changes) == [Phases.window_tests_command()] -> WindowTests.skip_reason(changes)
       true -> nil
     end
   end
@@ -368,6 +387,7 @@ defmodule SymphonyElixir.PhaseSteps do
   defp run_command(command, context, env, timeout_ms) do
     cond do
       command == Phases.findings_command() -> read_findings(context)
+      command == Phases.window_tests_command() -> Map.get(context, :window_tests, &WindowTests.run/2).(context, timeout_ms)
       builtin = Map.get(Map.get(context, :builtins, %{}), command) -> builtin.(context)
       true -> runner(context).(command, env, timeout_ms)
     end
@@ -770,16 +790,22 @@ defmodule SymphonyElixir.PhaseSteps do
     end
   end
 
+  @doc "The label of the option that sends a machine step's Question to the agent step it fails to."
+  @spec back_to_code() :: String.t()
+  def back_to_code, do: @back_to_code
+
   @doc """
   What the answer to a machine step's Question says to do. On a no-result Question (`question/3`):
   go on past the step (`:go_on`), run it again (`:again`), or, in the person's own words, hand them
-  to the agent step it returns to on failure (`:words`). Every answer to the findings step's Question
+  to the agent step it returns to on failure (`:words`). The Window tests step's "could not run"
+  Question (`WindowTests`) runs it again, or sends the answer to that agent step (`:words`). Every answer to the findings step's Question
   (`Findings.question/2`) goes to that agent step (`:words`).
   """
   @spec machine_resume(Questions.question()) :: :go_on | :again | :words
   def machine_resume(%{answer: %{option: number}, options: options}) when is_integer(number) do
     case Enum.at(options, number - 1) do
       %{label: @go_on} -> :go_on
+      %{label: @back_to_code} -> :words
       _again -> if Findings.asked_here?(%{options: options}), do: :words, else: :again
     end
   end

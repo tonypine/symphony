@@ -31,6 +31,12 @@ phases:
         command: mix format --check-formatted && mix specs.check && mix credo --strict $SYMPHONY_CHANGED_ELIXIR_FILES
         timeout_ms: 600000
         on_fail: code
+      - id: window_tests
+        title: Window tests
+        mode: machine
+        command: symphony:window_tests
+        timeout_ms: 7200000
+        on_fail: code
       - id: handoff
         title: "Hand off: push and open the pull request"
         mode: delegated
