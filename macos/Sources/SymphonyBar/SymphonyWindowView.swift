@@ -235,7 +235,7 @@ final class SymphonyWindowModel: ObservableObject {
     /// What went wrong with it, shown in the sheet.
     @Published var moveError: String?
     /// The Cancel Ticket… sheet shown (TP-1317); nothing is cancelled until its button is pressed.
-    @Published var cancelSheet: CancelTicketSheet?
+    @Published var ticketCancelSheet: CancelTicketSheet?
     /// True while the sheet's cancel is on its way to Symphony.
     @Published var cancelInFlight = false
     /// Why Symphony refused it, or what went wrong, shown in the sheet.

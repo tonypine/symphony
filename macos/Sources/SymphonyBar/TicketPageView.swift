@@ -309,13 +309,13 @@ extension SymphonyWindowModel {
     func openCancel(_ sheet: CancelTicketSheet) {
         guard !cancelInFlight else { return }
         cancelError = nil
-        cancelSheet = sheet
+        ticketCancelSheet = sheet
     }
 
     /// Keep It: the sheet closes and nothing is sent.
     func keepTicket() {
         guard !cancelInFlight else { return }
-        cancelSheet = nil
+        ticketCancelSheet = nil
         cancelError = nil
     }
 
@@ -331,7 +331,7 @@ extension SymphonyWindowModel {
             cancelInFlight = false
             switch result {
             case .done, .moved:
-                cancelSheet = nil
+                ticketCancelSheet = nil
                 showMoveBanner(sheet.banner(after: result.moveOutcome ?? sheet.expectedOutcome))
             case let .failed(message):
                 cancelError = message
@@ -1556,7 +1556,7 @@ struct CancelTicketSheetPresenter: ViewModifier {
     @ObservedObject var model: SymphonyWindowModel
 
     func body(content: Content) -> some View {
-        content.sheet(item: $model.cancelSheet) { sheet in
+        content.sheet(item: $model.ticketCancelSheet) { sheet in
             CancelTicketSheetView(
                 sheet: sheet,
                 working: model.cancelInFlight,
