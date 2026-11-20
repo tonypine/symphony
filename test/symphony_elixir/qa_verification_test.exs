@@ -2138,6 +2138,77 @@ defmodule SymphonyElixir.QaVerificationTest do
     end
   end
 
+  describe "a groomed ticket" do
+    setup do
+      clear_store!()
+      groom!()
+      :ok
+    end
+
+    test "QA's journey is the plan's QA checks, and the prompt carries the plan and its scope" do
+      {workspace, _head} = git_workspace!()
+      assert :ok = run(workspace, [])
+
+      assert_received {:qa_agent_run, job, %Schema{}}
+      assert %{source: "the QA checks of the ticket's plan", groomed: true, steps: [%{number: 2, check_id: "c2"}, %{number: 3, check_id: "c3"}]} = job.journey
+
+      prompt = QaAgent.prompt(job, nil)
+      assert prompt =~ "Journeys to verify, from the QA checks of the ticket's plan:\n2. [c2] The dashboard shows the result.\nState: A run that passed"
+      assert prompt =~ "This ticket has a plan, and the steps above are its QA checks: judge them and nothing else."
+      assert prompt =~ "Anything else you notice is a `note` you record with `ticket_record`, never a finding"
+      assert prompt =~ "Ask, plan and checks:\n<linear_ticket_plan>\n## Ask\n\nMake the check pass and show it."
+      assert prompt =~ "- [c3] qa, proof: design, open: The result matches the design."
+      refute prompt =~ "Run `symphony check`."
+      refute prompt =~ "Description (walkthrough and acceptance criteria):"
+
+      parts = QaAgent.prompt_parts(job, nil, [:issue])
+      assert parts =~ "Ask, plan and checks:\n<linear_ticket_plan>"
+
+      # A ticket with no plan keeps its prompt.
+      clear_store!()
+      assert :ok = run(workspace, [])
+      assert_received {:qa_agent_run, plain, %Schema{}}
+      refute Map.has_key?(plain.journey, :groomed)
+      plain_prompt = QaAgent.prompt(plain, nil)
+      assert plain_prompt =~ "Description (walkthrough and acceptance criteria):\n<linear_issue_body>\n## User walkthrough"
+      refute plain_prompt =~ "This ticket has a plan"
+    end
+
+    test "each check QA saw pass is proved by QA on the head it judged, a design check by design" do
+      {workspace, head} = git_workspace!()
+
+      steps = [
+        %{name: "[c2] The dashboard shows the result", status: "pass", details: "It says passed.", evidence: []},
+        %{name: "[c3] The result matches the design", status: "pass", details: "It matches.", evidence: []}
+      ]
+
+      Process.put(:qa_agent_result, {:ok, %{result: %{verdict: :pass, summary: "Both checks passed.", steps: steps, findings: []}, tokens: %{}}})
+      assert :ok = run(workspace, [])
+
+      assert [%{id: "c1", state: :open}, second, third] = SymphonyElixir.TicketChecks.list(@issue_id)
+      assert %{id: "c2", state: :proved, proved_by: walked} = second
+      assert %{id: "c3", state: :proved, proved_by: design} = third
+
+      assert %{by: "qa", details: "It says passed.", head: ^head} = walked
+      assert %{by: "design", head: ^head} = design
+    end
+
+    test "a check that failed stays open, and the one that passed beside it is proved" do
+      {workspace, _head} = git_workspace!()
+
+      steps = [
+        %{name: "[c2] The dashboard shows the result", status: "pass", details: "It says passed.", evidence: []},
+        %{name: "[c3] The result matches the design", status: "fail", details: "The colour is off.", evidence: []}
+      ]
+
+      failed = %{verdict: :fail, summary: "One check failed.", steps: steps, findings: ["[c3] The colour is off."]}
+      Process.put(:qa_agent_result, {:ok, %{result: failed, tokens: %{}}})
+      assert :ok = run(workspace, [])
+
+      assert [%{id: "c1", state: :open}, %{id: "c2", state: :proved}, %{id: "c3", state: :open}] = SymphonyElixir.TicketChecks.list(@issue_id)
+    end
+  end
+
   describe "the QA pre-check of named tests" do
     @run_url "https://github.com/acme/repo/actions/runs/555/job/1"
 

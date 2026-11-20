@@ -219,12 +219,17 @@ defmodule SymphonyElixir.QaVerification do
   `proof_check` is the repo's `proof_check` (WORKFLOW.md), the check a `Proved by: <test>` step
   names; with none, every step is QA's to walk.
 
+  A groomed ticket's journey is its plan's QA checks (`SymphonyElixir.TicketJourney.journey/3`), and
+  its description is not read.
+
   `label` names whose plan the journeys come from in the source phrase: the ticket for the QA
   state's own run (the default), and the epic for the epic review of a plan parent
   (`SymphonyElixir.EpicReview`), so the prompt reads right about which issue carries them.
   """
-  @spec journey(Issue.t(), String.t() | nil, String.t()) :: %{source: String.t(), text: String.t() | nil, steps: [Walkthrough.step()]}
-  def journey(issue, proof_check, label \\ "the ticket"), do: journey_for(issue, proof_check, label)
+  @spec journey(Issue.t(), String.t() | nil, String.t()) ::
+          %{required(:source) => String.t(), required(:text) => String.t() | nil, required(:steps) => [Walkthrough.step()], optional(:groomed) => true}
+  def journey(issue, proof_check, label \\ "the ticket"),
+    do: TicketJourney.journey(issue, proof_check, label) || journey_for(issue, proof_check, label)
 
   defp journey_for(%Issue{description: description} = issue, proof_check, label) when is_binary(description) do
     cond do
@@ -1231,11 +1236,18 @@ defmodule SymphonyElixir.QaVerification do
     if is_binary(repo_key) do
       run_id = qa_run_id(issue, opts, head)
       record_evidence(repo_key, issue, run_id, outcome)
+      record_checks(repo_key, issue, run_id, head, outcome)
       if verdict == "fail", do: record_findings(repo_key, issue, run_id, outcome)
       if verdict == "pass", do: confirm_findings(repo_key, issue, run_id, head)
     end
 
     record_verdict(issue, opts, head, verdict, details)
+  end
+
+  # A groomed ticket's check QA saw pass is proved by QA on this head (`TicketJourney.record_walked/4`).
+  defp record_checks(repo_key, issue, run_id, head, outcome) do
+    opts = [actor: {:agent, run_id, @run_kind}, run_id: run_id, head_sha: head]
+    TicketJourney.record_walked(repo_key, issue, Map.get(outcome, :steps, []), opts)
   end
 
   # Every step is recorded, with its result, what QA saw, the environment it was proved in and its

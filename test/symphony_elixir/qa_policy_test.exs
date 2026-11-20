@@ -209,6 +209,45 @@ defmodule SymphonyElixir.QaPolicyTest do
       end
     end
 
+    test "a groomed ticket whose plan's layers hold the screen or the Gallery always has something on screen" do
+      :ok = RunStore.clear()
+      settings = settings!(%{"auto_review" => %{"playbooks" => %{"macos_app" => %{"build" => "make app", "app" => "build/App.app"}}}})
+      backend = ["lib/symphony_elixir/orchestrator.ex"]
+      ticket = issue(%{labels: ["qa:macos_app"]})
+      :ok = RunStore.put_ticket_state(%{repo_key: "repo-a", issue_id: ticket.id, issue_identifier: ticket.identifier})
+
+      plan = fn layers, checks ->
+        %{
+          reason: "Grooming",
+          by: "grooming",
+          shape: "single",
+          layers: layers,
+          summary: "The Director shows the decision.",
+          text: "Draw the decision in the Director.",
+          checks: checks,
+          size: %{tokens: 100_000, runs: 1}
+        }
+      end
+
+      outcome = %{id: "c1", kind: "outcome", statement: "The decision is stored.", proof: "test"}
+      walk = %{id: "c2", kind: "qa", statement: "The Director shows it.", proof: "qa", action: "Open it", expect: "It shows"}
+
+      # Layers that are not on screen, and no QA check: today's diff-based policy decides.
+      {:ok, _plan} = SymphonyElixir.TicketPlan.write("repo-a", ticket.id, plan.(["engine"], [outcome]))
+      assert {:run, [%{kind: "macos_app", scope: :none}], _reason} = QaPolicy.decision(ticket, settings, backend)
+
+      for layers <- [["screen"], ["engine", "gallery"]] do
+        {:ok, _plan} = SymphonyElixir.TicketPlan.write("repo-a", ticket.id, plan.(layers, [outcome]))
+        assert {:run, [playbook], "the change delivers or updates a user journey"} = QaPolicy.decision(ticket, settings, backend)
+        refute Map.has_key?(playbook, :scope)
+      end
+
+      # A QA check is something to walk, as a `## User walkthrough` is.
+      {:ok, _plan} = SymphonyElixir.TicketPlan.write("repo-a", ticket.id, plan.(["engine"], [outcome, walk]))
+      assert {:run, [playbook], "the change delivers or updates a user journey"} = QaPolicy.decision(ticket, settings, backend)
+      refute Map.has_key?(playbook, :scope)
+    end
+
     test "marks a macos_app pass live when the PR changes the server and the walkthrough names the Director" do
       live = %{"start_cmd" => "scripts/qa-server-start.sh", "paths" => ["lib/**", "config/**"], "walkthrough_mentions" => ["Director"]}
       settings = live_settings!(live)

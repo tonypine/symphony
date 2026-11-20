@@ -92,13 +92,13 @@ defmodule SymphonyElixir.TicketJourney do
   from its description.
   """
   @typedoc "What QA verifies: where it comes from, its text and its steps."
-  @type journey :: %{source: String.t(), text: String.t(), steps: [step()]}
+  @type journey :: %{source: String.t(), text: String.t(), steps: [step()], groomed: true}
 
   @spec journey(ticket(), String.t() | nil, String.t()) :: journey() | nil
   def journey(ticket, proof_check, label \\ "the ticket") do
     if groomed?(ticket) do
       steps = steps(ticket, proof_check)
-      %{source: "the QA checks of #{label}'s plan", text: journey_text(steps), steps: steps}
+      %{source: "the QA checks of #{label}'s plan", text: journey_text(steps), steps: steps, groomed: true}
     end
   end
 

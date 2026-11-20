@@ -32,6 +32,7 @@ defmodule SymphonyElixir.QaPolicy do
   alias SymphonyElixir.Config
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAgent.Selection
+  alias SymphonyElixir.TicketJourney
   alias SymphonyElixir.Verification
   alias SymphonyElixir.Workspace
 
@@ -126,8 +127,10 @@ defmodule SymphonyElixir.QaPolicy do
     end)
   end
 
+  # A groomed ticket whose plan's layers hold `screen` or `gallery` always has something on screen.
   defp nothing_on_screen?(issue, playbooks, paths) do
     Enum.any?(playbooks, &(&1.kind == "macos_app")) and not Selection.user_walkthrough?(issue) and
+      not TicketJourney.on_screen?(issue) and
       not Enum.any?(paths, fn path -> Enum.any?(playbooks, fn playbook -> Enum.any?(playbook.paths, &Selection.glob_match?(path, &1)) end) end)
   end
 
