@@ -1414,6 +1414,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   defp execute_tool("qa_" <> _rest = tool, _context, args, opts), do: QaDriver.call_tool(Keyword.get(opts, :qa_driver), tool, args)
   defp execute_tool("ticket_events", context, args, _opts), do: TicketLedger.events(context, args)
   defp execute_tool("ticket_record", context, args, opts), do: TicketLedger.record(context, args, opts)
+  defp execute_tool("ticket_plan", context, _args, _opts), do: TicketLedger.plan(context)
   defp execute_tool("review_verdict", _context, args, opts), do: Verdict.record(args, Keyword.get(opts, :review_verdict_sink))
 
   defp execute_authorized_tool(tool, context, args, opts) do

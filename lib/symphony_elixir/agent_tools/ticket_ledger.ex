@@ -3,6 +3,10 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
   The agents' tools on the current ticket's event stream (`SymphonyElixir.TicketEvents`):
   `ticket_events` reads it and `ticket_record` appends to it. `ticket_events` gives each finding's
   `finding.recorded` where the finding stands (`SymphonyElixir.TicketEvents.findings/1`).
+  `ticket_plan` reads what a groomed ticket works from (`SymphonyElixir.TicketPlan`,
+  `SymphonyElixir.TicketChecks`): every ask, the current plan, its checks with where each stands,
+  and the tagged notes of the ticket and of its parent. A ticket that is not groomed has no plan
+  and no checks.
 
   The ticket comes from the session context, never from an argument, as
   `SymphonyElixir.AgentTools.Linear` does. Symphony fills what the agent cannot vouch for: the
@@ -14,13 +18,25 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
   (`unknown_type`) or one the run may not record (`not_allowed`, with the types it may), a payload
   the schema refuses (`invalid_payload`, naming the fields), a `finding.resolved` naming no finding
   of the ticket (`unknown_finding`) or one already resolved (`already_resolved`, naming the
-  resolution), or carrying no head that fixes it (`no_head`), a `parent` that is no event of the ticket (`unknown_parent`)
+  resolution), or carrying no head that fixes it (`no_head`), a `check.proved` naming no check of the
+  current plan (`unknown_check`, with the ids it `known`s), a `parent` that is no event of the ticket (`unknown_parent`)
   and an artifact that is not a regular file under the workspace or the run's `$TMPDIR`
   (`invalid_artifact`). Every check runs before anything is written: a refused call ingests no file
   and records no event.
   """
 
-  alias SymphonyElixir.{Artifacts, PathSafety, PhaseSteps, RunStore, TicketEvents, Workpad, WorkspaceHead}
+  alias SymphonyElixir.{
+    Artifacts,
+    PathSafety,
+    PhaseSteps,
+    RunStore,
+    TicketChecks,
+    TicketEvents,
+    TicketPlan,
+    Workpad,
+    WorkspaceHead
+  }
+
   alias SymphonyElixir.Config.Schema.Phases
   alias SymphonyElixir.TicketEvents.{Event, Types}
   alias SymphonyElixir.Workpad.Projection
@@ -71,7 +87,10 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
         "description" =>
           "Record an event on the current ticket's history. A run records `finding.resolved` (an open or reopened finding it fixed, by `finding_id`; Symphony fills the head that fixes it), " <>
             "a delegated step's `step.started` and `step.completed` (`outcome` `passed`, `failed` with the step it `returns_to`, `paused` with the `question_id` it waits on, or `skipped` with a `reason`; Symphony records machine and orchestrated steps), " <>
-            "`evidence` (with an optional `proof`: the walkthrough `step` number and the `test` that proves it), `checklist.answered` and `note`; a QA run also records `finding.recorded`, and an implementation, rework or review-feedback run `brief.written` " <>
+            "`evidence` (with an optional `proof`: the walkthrough `step` number and the `test` that proves it), `checklist.answered`, " <>
+            "`check.proved` (a check of the plan, by its `check_id`, and how: `by` `test` with the `test` that proves it, `qa`, `design` or `attached`) and `note` " <>
+            "(with an optional `tag`: `discovery` for something found that is not this ticket's to solve, `base_fault` for a fault of the base branch); " <>
+            "a QA run also records `finding.recorded`, and an implementation, rework or review-feedback run `brief.written` " <>
             "(the ticket's brief: `text`, what it does and why in a person's words, under 1,200 characters, and `walkthrough`, the steps a person takes, both with no backtick). " <>
             "Verdicts, moves, pauses, questions and runs are Symphony's: ask a question with the question tool. " <>
             "`artifacts` are paths of files in the workspace or your $TMPDIR, kept with the event (a screenshot shows as a thumbnail in the Director); `parent` nests the event under another. " <>
@@ -87,6 +106,14 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
             "parent" => %{"type" => "string", "description" => "The id of an event of this ticket to nest this one under."}
           }
         }
+      },
+      %{
+        "name" => "ticket_plan",
+        "description" =>
+          "Read what the current ticket works from: `ask` (what a person asked for, word for word, oldest first), `plan` (the current plan: its version, summary, text, shape, layers and size; null when the ticket has none), " <>
+            "`checks` (the plan's checks, each with its id, kind, statement, how it is proved and its `state`: `open`, `proved` or `waived`) and `notes` (the tagged notes of this ticket and of its parent). " <>
+            "It takes no argument.",
+        "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
       }
     ]
   end
@@ -96,7 +123,8 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
   def tool_arguments do
     %{
       "ticket_events" => ["types", "since", "run_id", "open_findings", "limit"],
-      "ticket_record" => ["type", "payload", "artifacts", "parent"]
+      "ticket_record" => ["type", "payload", "artifacts", "parent"],
+      "ticket_plan" => []
     }
   end
 
@@ -111,6 +139,32 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
       {:ok, %{"events" => Enum.map(events, &(&1 |> event_json() |> put_present("finding", finding_json(findings[&1.id]))))}}
     end
   end
+
+  @doc """
+  `ticket_plan`: what the current ticket works from (see the moduledoc). The plan is given without
+  its checks, which `checks` lists with where each stands; a note says whether it is the ticket's
+  own or its parent's (`on`).
+  """
+  @spec plan(context()) :: {:ok, map()} | {:error, error() | term()}
+  def plan(context) do
+    with {:ok, %{issue_id: issue_id}} <- ticket(context),
+         events when is_list(events) <- RunStore.list_ticket_events(issue_id, []) do
+      plan = TicketPlan.current(events)
+
+      {:ok,
+       %{
+         "ask" => TicketPlan.ask(events),
+         "plan" => plan && Map.delete(plan, :checks),
+         "checks" => TicketChecks.list(events),
+         "notes" => notes(events, "ticket") ++ parent_notes(TicketPlan.parent_id(issue_id))
+       }}
+    end
+  end
+
+  defp parent_notes(nil), do: []
+  defp parent_notes(parent_id), do: notes(parent_id, "parent")
+
+  defp notes(ticket, on), do: ticket |> TicketPlan.notes() |> Enum.map(&Map.put(&1, :on, on))
 
   # Where a finding stands, on its `finding.recorded` event.
   defp finding_json(nil), do: nil
@@ -146,11 +200,12 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
          {:ok, payload} <- payload(type, Map.get(args, "payload"), run_kind),
          stored when is_list(stored) <- RunStore.list_ticket_events(ticket.issue_id, []),
          :ok <- finding(type, payload, stored, head),
+         :ok <- check(type, payload, stored),
          {:ok, parent} <- parent(type, Map.get(args, "parent"), stored),
          {:ok, sources} <- sources(type, Map.get(args, "artifacts"), context),
          {:ok, artifact_ids} <- ingest(type, sources, ticket, context),
          {:ok, event} <-
-           TicketEvents.record(ticket.repo_key, ticket.issue_id, type, payload,
+           write(ticket, type, payload,
              actor: {:agent, Map.get(context, :run_id), run_kind},
              head_sha: head,
              parent: parent,
@@ -160,6 +215,10 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
       {:ok, %{"event" => event_json(event)}}
     end
   end
+
+  # A proof is recorded once per check and head (`SymphonyElixir.TicketChecks.prove/4`).
+  defp write(ticket, "check.proved", payload, opts), do: TicketChecks.prove(ticket.repo_key, ticket.issue_id, payload, opts)
+  defp write(ticket, type, payload, opts), do: TicketEvents.record(ticket.repo_key, ticket.issue_id, type, payload, opts)
 
   # A delegated step's event changes the workpad's Plan, rendered in the run's step-list order
   # (`SymphonyElixir.Workpad.Projection`), as the step runner's own step events do.
@@ -272,6 +331,24 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
   end
 
   defp finding(_type, _payload, _stored, _head), do: :ok
+
+  # A proof names a check of the current plan: a ticket with no plan has none.
+  defp check("check.proved", %{check_id: id}, stored) do
+    known = stored |> TicketChecks.list() |> Enum.map(& &1.id)
+
+    cond do
+      id in known ->
+        :ok
+
+      known == [] ->
+        refusal("unknown_check", "This ticket has no plan, so it has no check to prove.", "check.proved", nil, %{"known" => known})
+
+      true ->
+        refusal("unknown_check", "#{inspect(id)} is not a check of this ticket's plan. Its checks are: #{Enum.join(known, ", ")}.", "check.proved", nil, %{"known" => known})
+    end
+  end
+
+  defp check(_type, _payload, _stored), do: :ok
 
   defp parent(_type, nil, _stored), do: {:ok, nil}
 

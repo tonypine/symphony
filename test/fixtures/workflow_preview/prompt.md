@@ -37,6 +37,7 @@ Symphony runtime context:
 Ticket tools:
 
 - `ticket_events` reads this ticket's history (Symphony's ledger) and `ticket_record` adds an event to it. Symphony fills the run, phase and head; verdicts, moves, pauses and questions are Symphony's, and `ticket_record` refuses them.
+- `ticket_plan` reads what the ticket works from when it has a plan: the ask, the plan and its checks, each with its state. A run records a check it proves as `check.proved`, and something it finds that is not this ticket's to solve as a `note` with the `tag` `discovery` (`base_fault` for a fault of the base branch).
 - This implementation run records the ticket's brief first, as a `brief.written` (what it does and why, and its walkthrough, in a person's words), and again at the handoff when the work changed what the ticket does; `step.completed` for each delegated step as it ends it, `evidence` for every screenshot or output it attaches (the files as `artifacts`), and each walkthrough step's proof as `evidence` with `proof` (the step and the test), which `linear_record_walkthrough_proofs` records; a `note` keeps a choice worth knowing later.
 - This run follows a step list: Symphony runs its build, checks and tests itself between turns and brings a failure back to the step it names, with the output. Run none of them yourself: write the code, record what you changed, and end the turn; the handoff step pushes.
 
@@ -93,12 +94,18 @@ branch's changes to write-protected files such as `.agents/skills` come through.
 
 Do not craft raw Linear GraphQL from prompts.
 
-Every run also gets the ticket's own history, Symphony's ledger, through two tools
+Every run also gets the ticket's own history, Symphony's ledger, through three tools
 that act on the current ticket and take no ticket argument:
 `ticket_events(types?, since?, run_id?, open_findings?, limit?)` reads its events
 (`open_findings: true` lists the findings QA has not confirmed fixed, each with
-its state: open, resolved awaiting QA, or reopened, and their screenshots), and
-`ticket_record(type, payload, artifacts?, parent?)` records one: a `note`,
+its state: open, resolved awaiting QA, or reopened, and their screenshots),
+`ticket_plan()` reads what the ticket works from when it has a plan (every ask, the
+current plan, its checks with the state of each, open, proved or waived, and the tagged
+notes of the ticket and of its parent; a ticket with no plan has `plan: null` and no checks), and
+`ticket_record(type, payload, artifacts?, parent?)` records one: a `note` (with an optional `tag`:
+`discovery` for something found that is not this ticket's to solve, `base_fault` for a fault of the
+base branch), a `check.proved` naming a check of the plan by its `check_id` and how it was proved
+(`by`: `test` with the `test`, `qa`, `design` or `attached`; an id the plan does not hold is refused),
 `evidence` (with an optional `proof`: the walkthrough step and the test that proves
 it), a delegated step's `step.started` and `step.completed` (its `outcome`:
 `passed`, `failed` with the step it `returns_to`, `paused` on a question, or

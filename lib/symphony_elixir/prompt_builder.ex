@@ -492,9 +492,10 @@ defmodule SymphonyElixir.PromptBuilder do
   end
 
   @doc """
-  The managed context's paragraph on the two ticket tools every issue run is offered
-  (`SymphonyElixir.AgentTools.TicketLedger`): `ticket_events` reads the ticket's history and
-  `ticket_record` adds to it, and what a run of `run`'s kind records there. A run that walks a step
+  The managed context's paragraph on the ticket tools every issue run is offered
+  (`SymphonyElixir.AgentTools.TicketLedger`): `ticket_events` reads the ticket's history,
+  `ticket_record` adds to it and `ticket_plan` reads the ask, the plan and its checks, and what a
+  run of `run`'s kind records there. A run that walks a step
   list (`run.step_runner`) is told the step list runs the checks and the handoff step pushes.
   """
   @spec ticket_tools_paragraph(%{kind: String.t() | nil, step_runner: boolean()}) :: String.t()
@@ -504,6 +505,8 @@ defmodule SymphonyElixir.PromptBuilder do
       "",
       "- `ticket_events` reads this ticket's history (Symphony's ledger) and `ticket_record` adds an event to it. Symphony fills the run, phase and head; " <>
         "verdicts, moves, pauses and questions are Symphony's, and `ticket_record` refuses them.",
+      "- `ticket_plan` reads what the ticket works from when it has a plan: the ask, the plan and its checks, each with its state. A run records a check it proves as `check.proved`, " <>
+        "and something it finds that is not this ticket's to solve as a `note` with the `tag` `discovery` (`base_fault` for a fault of the base branch).",
       "- " <> records_line(kind),
       step_runner_line(step_runner)
     ]
