@@ -348,6 +348,32 @@ defmodule SymphonyElixir.Conductor.GroomingTest do
     end
   end
 
+  describe "a ticket that already has sub-tickets" do
+    setup ctx do
+      SubIssueWait.reset_for_test("Waiting on sub-tickets")
+      by_hand = [%{id: "h1", identifier: "MT-51", state: "Todo"}, %{id: "h2", identifier: "MT-52", state: "Done"}, %{id: "h3", identifier: "MT-53"}]
+      :ok = RunStore.update_ticket_state(ctx.issue_id, %{sub_issues: [%{id: "h4", identifier: "MT-54", state: "Backlog"}]})
+      %{issue: %{ctx.issue | sub_issues: by_hand}}
+    end
+
+    test "a split names every one that has not ended, or it is refused with the ones it left out", ctx do
+      checks = [%{kind: "outcome", statement: "x", proof: "test"}]
+      base = %{shape: "split", layers: ["api"], summary: "s", text: "t", checks: checks, size: %{tokens: 1, runs: 1}}
+      plan = fn entries -> Map.put(base, :sub_tickets, entries) end
+      entry = fn key, identifier -> %{key: key, title: "Part #{key}", ask: "Build it.", after: [], identifier: identifier} end
+      new = %{key: "s9", title: "The rest", ask: "Build it.", after: []}
+
+      assert {:error, why} = Grooming.write_plan("default", ctx.issue, plan.([new, entry.("s1", "MT-51")]))
+      assert why =~ "its plan was refused: its split leaves out MT-53, MT-54, which the ticket already has as sub-tickets"
+      refute TicketPlan.groomed?(ctx.issue_id)
+
+      # The one that ended needs no entry, and a single plan names none.
+      named = [new, entry.("s1", "MT-51"), entry.("s2", "MT-53"), entry.("s3", "MT-54")]
+      assert {:ok, _event} = Grooming.write_plan("default", ctx.issue, plan.(named))
+      assert {:ok, _event} = Grooming.write_plan("default", ctx.issue, %{base | shape: "single"}, new_ask: true)
+    end
+  end
+
   describe "a turn that writes no plan" do
     test "is tried once more at the next dispatch, then the ticket starts without a plan, with a note", ctx do
       log = capture_log(fn -> assert groom(ctx, {:ok, ["no answer here"], 7}) == :again end)

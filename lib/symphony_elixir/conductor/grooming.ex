@@ -33,8 +33,8 @@ defmodule SymphonyElixir.Conductor.Grooming do
   require Logger
 
   alias SymphonyElixir.Conductor.{Answer, Facts, Tree}
+  alias SymphonyElixir.{Config, RunStore, TicketEvents, TicketPlan, TicketProjection}
   alias SymphonyElixir.Linear.Issue
-  alias SymphonyElixir.{RunStore, TicketEvents, TicketPlan, TicketProjection}
   alias SymphonyElixir.TicketEvents.Event
   alias SymphonyElixir.{Tracker, Workspace, WorkspaceCleanup}
 
@@ -200,7 +200,9 @@ defmodule SymphonyElixir.Conductor.Grooming do
   Records the turn's `plan` as the first version of the plan of `issue` (`by: grooming`).
   `{:error, why}`, in plain words, for a plan `SymphonyElixir.TicketPlan.write/4` refuses, and for
   a `split` whose sub-tickets Symphony refuses (`SymphonyElixir.Conductor.Tree.refusal/4`: an
-  unmanaged repo, or an `identifier` that is not one of the ticket's sub-tickets). A split is
+  unmanaged repo, or an `identifier` that is not one of the ticket's sub-tickets), and for a
+  `split` that leaves out a sub-ticket the ticket already has and that has not ended: it names
+  every one of them by `identifier`, and the reason names the ones it left out. A split is
   carried out after it is recorded (`split/3`); where it can't be (the waiting state is off), the
   plan is recorded as a `single` one. `opts[:repo]` is `Tree.refusal/4`'s; the others are
   `TicketPlan.write/4`'s.
@@ -231,8 +233,11 @@ defmodule SymphonyElixir.Conductor.Grooming do
 
         {:ok, plan |> Map.put(:shape, "single") |> Map.delete(:sub_tickets)}
 
-      why = Tree.refusal(entries, repo_key, sub_tickets(issue), opts) ->
+      why = Tree.refusal(entries, repo_key, Enum.map(sub_tickets(issue), & &1.identifier), opts) ->
         {:error, {:refused, why}}
+
+      (left_out = left_out(entries, sub_tickets(issue), repo_key)) != [] ->
+        {:error, {:refused, "its split leaves out #{Enum.join(left_out, ", ")}, which the ticket already has as sub-tickets: a split names each of them by its `identifier`"}}
 
       true ->
         {:ok, plan}
@@ -241,7 +246,23 @@ defmodule SymphonyElixir.Conductor.Grooming do
 
   defp shaped(_repo_key, _issue, plan, _opts), do: {:ok, plan}
 
-  # The identifiers of the sub-tickets the ticket already has: the issue's, and its record's.
+  # The sub-tickets the ticket already has that are not ended and that no entry names: a split
+  # that left one out would plan the whole ask beside work somebody already cut out of it.
+  defp left_out(entries, existing, repo_key) do
+    named = for %{identifier: identifier} <- entries, do: identifier
+    terminal = terminal_states(repo_key)
+    for %{identifier: identifier} = sub <- existing, identifier not in named, not ended?(sub, terminal), do: identifier
+  end
+
+  defp ended?(%{state: state}, terminal) when is_binary(state), do: normalize(state) in terminal
+  defp ended?(_sub_ticket, _terminal), do: false
+
+  # The repo's settings read: its waiting state is on (`Tree.supported?/1`).
+  defp terminal_states(repo_key), do: Enum.map(Config.settings_for_repo!(repo_key).tracker.terminal_states, &normalize/1)
+
+  defp normalize(state), do: state |> String.trim() |> String.downcase()
+
+  # The sub-tickets the ticket already has, each once: the issue's, and its record's.
   defp sub_tickets(%Issue{id: issue_id, sub_issues: sub_issues}) do
     recorded =
       case RunStore.get_ticket_state(issue_id) do
@@ -249,7 +270,8 @@ defmodule SymphonyElixir.Conductor.Grooming do
         _none -> []
       end
 
-    for %{identifier: identifier} <- List.wrap(if(is_list(sub_issues), do: sub_issues)) ++ List.wrap(if(is_list(recorded), do: recorded)), uniq: true, do: identifier
+    listed = List.wrap(if(is_list(sub_issues), do: sub_issues)) ++ List.wrap(if(is_list(recorded), do: recorded))
+    for(%{identifier: identifier} = sub <- listed, is_binary(identifier), do: sub) |> Enum.uniq_by(& &1.identifier)
   end
 
   @doc """

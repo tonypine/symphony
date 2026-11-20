@@ -31,10 +31,10 @@ How to groom, in order:
    - use `after` only where a sub-ticket builds on another's merged code;
    - arrange them so that sub-tickets that can run at the same time do not touch the same files;
    - when `sub_tickets` in the facts lists sub-tickets the ticket already has (someone made them
-     by hand, or an earlier split stopped half way), adopt each one that covers a piece of the
-     work: list it with its `identifier`, and Symphony keeps it as it is instead of creating a
-     second one. Its `title` and `ask` then only describe it. An existing sub-ticket you do not
-     list stays under the ticket and still has to end before the ticket closes.
+     by hand, or an earlier split stopped half way), your split must list every one of them that
+     has not ended (not Done, not Canceled), each with its `identifier`: Symphony keeps it as it
+     is instead of creating a second one, and its `title` and `ask` then only describe it. Plan
+     the rest of the work around them. Symphony refuses a split that leaves one out.
    After a split Symphony creates the sub-tickets, each in Todo and Urgent under this ticket, and
    this ticket waits for them: it gets no coding run of its own. Each time one ends you are asked
    what is left of the plan, and when the last one ends you check the whole ticket against its

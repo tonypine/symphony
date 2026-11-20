@@ -3633,6 +3633,9 @@ exactly as before.
   and so on (a later version's new check gets an id no version used), cuts a text that is too
   long, and records the plan as `plan.written` (version 1, `by: grooming`) with the turn's update as a `conductor.update` (`junction: grooming`). The run
   then starts, in the same task.
+- A `split` of a ticket that already has sub-tickets names every one that has not ended by its
+  `identifier` (Symphony keeps it instead of creating a second one); a split that leaves one out
+  is refused, a try that failed, and the reason names the ones left out.
 - A `split` is carried out once the plan is recorded, and the run does not start (**The tree**,
   below). Where the waiting state is off (`issues.states.waiting_on_sub_issues`), the plan is
   recorded as a `single` one, with a warning in the log, and the run starts.
