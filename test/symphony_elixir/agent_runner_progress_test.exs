@@ -290,6 +290,44 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       assert missing_handoff_recorded?()
     end
 
+    test "a groomed ticket with an open check a test proves is not handed off, and is once the check is proved" do
+      plan = %{
+        reason: "Grooming",
+        by: "grooming",
+        shape: "single",
+        layers: ["engine"],
+        summary: "The handoff waits for the plan's checks.",
+        text: "Refuse the handoff while a check is open.",
+        checks: [
+          %{id: "c1", kind: "outcome", statement: "The handoff waits.", proof: "test"},
+          %{id: "c2", kind: "qa", statement: "The page shows it.", proof: "qa", action: "Open it", expect: "It shows"}
+        ],
+        size: %{tokens: 100_000, runs: 1}
+      }
+
+      {:ok, _plan} = SymphonyElixir.TicketPlan.write("default", "issue-progress", plan)
+      assert :ok = SymphonyElixir.Handoff.emit("default", "issue-progress", %{head: "sha-rework", branch: "auto/TP-337"})
+
+      log =
+        capture_log(fn ->
+          assert_raise RuntimeError, ~r/rework_handoff_failed.*checks_unproved.*c1/, fn ->
+            run_issue!("Rework", heads: ["sha-old", "sha-rework"], repos: designed_repos())
+          end
+        end)
+
+      assert log =~ "its plan's checks c1 are open"
+      refute_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+
+      assert [%{payload: %{text: note}}] = SymphonyElixir.TicketEvents.query("issue-progress", types: ["note"])
+      assert note =~ "- [c1] The handoff waits. (proof: test)"
+
+      proof = %{check_id: "c1", by: "test", test: "test/handoff_test.exs"}
+      {:ok, _proved} = SymphonyElixir.TicketChecks.prove("default", "issue-progress", proof, actor: {:agent, "run-1", "rework"})
+
+      assert :ok = run_issue!("Rework", heads: ["sha-old", "sha-rework"], repos: designed_repos())
+      assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+    end
+
     test "the explicit handoff signal moves the ticket to Code Review" do
       assert :ok = SymphonyElixir.Handoff.emit("default", "issue-progress", %{head: "sha-rework", branch: "auto/TP-337"})
 

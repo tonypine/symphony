@@ -328,7 +328,9 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "Record which test of this PR proves each `## User walkthrough` step you covered with an automated test: each named step gets an `evidence` event " <>
           "on the ticket's history with `proof` (the step and the test; a later proof of a step replaces an earlier one), and the description is left as it is. " <>
           "Name the test as the code has it (its file path, or a test or scenario name as written), never a check: the repo's `proof_check` names that. " <>
-          "Leave a step no test of this PR covers out, for QA; a step its author marked `Proved by: QA` is refused.",
+          "Leave a step no test of this PR covers out, for QA; a step its author marked `Proved by: QA` is refused. " <>
+          "On a ticket with a plan (the prompt has a `## Checks` section), name the check instead: `step` is the check's id, the proof is recorded as a " <>
+          "`check.proved`, and a check the plan proves by QA is refused.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -342,7 +344,10 @@ defmodule SymphonyElixir.Codex.DynamicTool do
               "additionalProperties" => false,
               "required" => ["step", "test"],
               "properties" => %{
-                "step" => %{"type" => "integer", "minimum" => 1, "description" => "The walkthrough step's number."},
+                "step" => %{
+                  "type" => ["integer", "string"],
+                  "description" => "The walkthrough step's number. On a ticket with a plan, the id of the check the test proves (`c1`)."
+                },
                 "test" => %{
                   "type" => "string",
                   "description" =>

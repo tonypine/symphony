@@ -4111,6 +4111,20 @@ since, the step ends `paused` on a Question before any code is written: it lists
 offers "Try another approach" or "Keep this approach". Every answer, an option or the person's own
 words, goes to the `code` step, in its prompt. A later QA failure of the same class asks again.
 
+`symphony:checks` is a command Symphony runs itself, not in a shell, while the run keeps its slot.
+It guards the handoff of a ticket with a plan: it fails back to the step's `on_fail`, naming them,
+while a check of the plan that a test or an attachment proves (`proof: test`, `proof: attached`) is
+open, and passes at once when none is, or when the ticket has no plan. The failure says how each
+check is proved, and that a check nothing can prove this way is the Conductor's to waive. Place it
+in a step before `handoff`:
+
+```yaml
+- {id: plan_checks, title: "The plan's checks", mode: machine, command: "symphony:checks", timeout_ms: 60000, on_fail: code}
+```
+
+Whatever the step list holds, Symphony does not move such a ticket to Code Review while one of
+those checks is open: the run ends with `checks_unproved` and a note on the ticket names them.
+
 `symphony:window_tests` is the Window tests step's command, which Symphony runs itself (TP-1554): it
 runs the tests that drive an app's window, which no run can launch on Symphony's host, in the QA VM
 (`auto_review.worker_host`, [Running QA in a QA VM](#running-qa-in-a-qa-vm)). Which tests exist and

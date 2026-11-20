@@ -47,7 +47,7 @@ defmodule SymphonyElixir.QaAgent.Selection do
 
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.PlaybookSettings
-  alias SymphonyElixir.Walkthrough
+  alias SymphonyElixir.TicketJourney
 
   @skip_label "qa:skip"
   @live_label "qa:live"
@@ -217,23 +217,10 @@ defmodule SymphonyElixir.QaAgent.Selection do
     end
   end
 
-  # The walkthrough's text QA walks: its steps no recorded proof covers (all of it when it has no
-  # numbered step); "" when a proof covers every step, nil without a walkthrough.
-  defp walked_section(issue, proof_check) do
-    case Walkthrough.section(issue.description) do
-      nil -> nil
-      section -> walked_steps(section, Walkthrough.steps(section), issue, proof_check)
-    end
-  end
-
-  defp walked_steps(section, [], _issue, _proof_check), do: section
-
-  defp walked_steps(_section, steps, issue, proof_check) do
-    steps
-    |> Walkthrough.with_recorded_proofs(Walkthrough.recorded_proofs(issue.id), proof_check)
-    |> Enum.reject(&Walkthrough.named_test?/1)
-    |> Enum.map_join("\n", & &1.text)
-  end
+  # The text QA walks: the steps no recorded proof covers (all of a walkthrough with no numbered
+  # step); "" when a proof covers every step, nil for a ticket with no step. A groomed ticket's
+  # steps are its plan's QA checks (`SymphonyElixir.TicketJourney`).
+  defp walked_section(issue, proof_check), do: TicketJourney.walked_text(issue, proof_check)
 
   defp server_change?(live_server, paths),
     do: Enum.any?(paths, fn path -> Enum.any?(live_server.paths, &glob_match?(path, &1)) end)
@@ -246,12 +233,11 @@ defmodule SymphonyElixir.QaAgent.Selection do
   defp walkthrough_note(%{walkthrough_mentions: []}), do: "the ticket has a `## User walkthrough`"
   defp walkthrough_note(live_server), do: "the `## User walkthrough` names #{words(live_server)}"
 
-  @doc "Whether the issue body has a `## User walkthrough` section."
+  @doc "Whether the issue body has a `## User walkthrough` section, or its plan a QA check (`SymphonyElixir.TicketJourney`)."
   @spec user_walkthrough?(Issue.t()) :: boolean()
-  def user_walkthrough?(%Issue{description: description}) when is_binary(description),
-    do: Regex.match?(@walkthrough_heading, description)
+  def user_walkthrough?(issue), do: TicketJourney.walkthrough?(issue, &walkthrough_heading?/1)
 
-  def user_walkthrough?(_issue), do: false
+  defp walkthrough_heading?(description), do: is_binary(description) and Regex.match?(@walkthrough_heading, description)
 
   @doc "Whether `path` is a docs or test file, by the globs that skip QA for docs/test-only diffs."
   @spec docs_or_test?(String.t()) :: boolean()
