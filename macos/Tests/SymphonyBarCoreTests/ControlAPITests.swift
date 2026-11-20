@@ -161,6 +161,51 @@ final class ControlAPITests: XCTestCase {
         XCTAssertEqual(sent?.value(forHTTPHeaderField: "Authorization"), "Bearer 0123abcd")
     }
 
+    /// During an update the app can be newer than the Symphony it talks to, which serves the message as a note.
+    func testAMessageAnOlderSymphonyDoesNotServeGoesToItsNoteRoute() async throws {
+        try "http://127.0.0.1:4010\n".write(to: root.appendingPathComponent("control_url"), atomically: false, encoding: .utf8)
+        try "0123abcd\n".write(to: root.appendingPathComponent("control_token"), atomically: false, encoding: .utf8)
+        let message = ControlAction.message(repoKey: "web-shop", identifier: "SHOP-410", text: "Keep the header.")
+        var sent: [URLRequest] = []
+
+        let result = await ControlAPI.send(message, stateRoot: root) { request in
+            sent.append(request)
+            return self.response(request.url?.lastPathComponent == "message" ? 404 : 200, for: request)
+        }
+
+        XCTAssertEqual(result, .done)
+        XCTAssertEqual(sent.map { $0.url?.absoluteString }, [
+            "http://127.0.0.1:4010/api/v1/control/message", "http://127.0.0.1:4010/api/v1/control/note",
+        ])
+        XCTAssertEqual(try json(sent[1]), ["repo_key": "web-shop", "issue_identifier": "SHOP-410", "text": "Keep the header."])
+        XCTAssertEqual(sent[1].httpMethod, "POST")
+        XCTAssertEqual(sent[1].value(forHTTPHeaderField: "Authorization"), "Bearer 0123abcd")
+
+        // The note route's answer is the answer, once: a failure there fails the message.
+        sent = []
+        let missing = Data(#"{"error":{"code":"ticket_not_found","message":"No ticket SHOP-410 in web-shop"}}"#.utf8)
+        let refused = await ControlAPI.send(message, stateRoot: root) { request in
+            sent.append(request)
+            return (missing, HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!)
+        }
+        XCTAssertEqual(refused, .failed("Couldn't send the message to SHOP-410: No ticket SHOP-410 in web-shop (HTTP 404)"))
+        XCTAssertEqual(sent.count, 2)
+        let unreachable = await ControlAPI.send(message, stateRoot: root) { request in
+            if request.url?.lastPathComponent == "note" { throw URLError(.cannotConnectToHost) }
+            return self.response(404, for: request)
+        }
+        XCTAssertEqual(unreachable, .failed("Couldn't send the message to SHOP-410: nothing answered at http://127.0.0.1:4010"))
+
+        // No other action is sent twice.
+        sent = []
+        let stop = await ControlAPI.send(.stop("TP-7"), stateRoot: root) { request in
+            sent.append(request)
+            return self.response(404, for: request)
+        }
+        XCTAssertEqual(stop, .failed("Couldn't stop TP-7: HTTP 404"))
+        XCTAssertEqual(sent.count, 1)
+    }
+
     func testStopRequest() throws {
         let stop = ControlAPI.request(.stop("TP-7"), base: base, token: "secret")
         XCTAssertEqual(stop.httpMethod, "POST")

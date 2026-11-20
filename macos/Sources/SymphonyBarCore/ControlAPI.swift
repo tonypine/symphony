@@ -193,6 +193,13 @@ public enum ControlAction: Equatable {
         }
     }
 
+    /// The route a Symphony older than this app serves the action on, with the same body and the same answer, nil when
+    /// the action has none: a message was a note (`POST /api/v1/control/note`).
+    var olderPath: String? {
+        if case .message = self { return "api/v1/control/note" }
+        return nil
+    }
+
     /// The HTTP method: DELETE for a view's deletion, POST for the rest.
     var method: String {
         if case .deleteView = self { return "DELETE" }
@@ -380,7 +387,9 @@ public enum ControlAPI {
 
     /// Sends `action` to the control URL in `stateRoot`, with the bearer token from the same directory.
     /// `fallback` is the control URL used while Symphony hasn't written one, and `token`, when given, is sent instead
-    /// of the state directory's (the live Symphony's or the API fixtures' in QA mode).
+    /// of the state directory's (the live Symphony's or the API fixtures' in QA mode). A 404 for an action an older
+    /// Symphony serves on another route (`ControlAction.olderPath`) is sent once more there, and that answer is the
+    /// result: during an update the app can be newer than the Symphony it talks to.
     public static func send(
         _ action: ControlAction,
         stateRoot: URL,
@@ -394,16 +403,23 @@ public enum ControlAPI {
         guard let token = token ?? StateRoot.controlToken(in: stateRoot) else {
             return missingToken(action, tokenFile: StateRoot.controlTokenFile(in: stateRoot))
         }
-        guard let (data, response) = try? await transport(request(action, base: base, token: token)) else {
+        guard var (data, response) = try? await transport(request(action, base: base, token: token)) else {
             return unreachable(action, base: base)
+        }
+        if (response as? HTTPURLResponse)?.statusCode == 404, let olderPath = action.olderPath {
+            guard let older = try? await transport(request(action, base: base, token: token, path: olderPath)) else {
+                return unreachable(action, base: base)
+            }
+            (data, response) = older
         }
         return result(action, statusCode: (response as? HTTPURLResponse)?.statusCode ?? 0, data: data)
     }
 
-    /// The request for `action`, authenticated with the bearer token from the state directory.
-    public static func request(_ action: ControlAction, base: URL, token: String) -> URLRequest {
+    /// The request for `action`, authenticated with the bearer token from the state directory; on `path` when given,
+    /// else on the action's own.
+    public static func request(_ action: ControlAction, base: URL, token: String, path: String? = nil) -> URLRequest {
         var request = URLRequest(
-            url: base.appendingPathComponent(action.path),
+            url: base.appendingPathComponent(path ?? action.path),
             cachePolicy: .reloadIgnoringLocalCacheData,
             timeoutInterval: timeout
         )
