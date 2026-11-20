@@ -1792,6 +1792,34 @@ defmodule SymphonyElixir.QaVerificationTest do
       refute_received {:memory_tracker_state_update, _, _}
     end
 
+    test "with the Conductor's question open in QA, a blocked pass asks none of its own: the ticket holds one question" do
+      {workspace, _head} = git_workspace!()
+      own_block()
+
+      request = %{
+        title: "QA cannot set up a failing state request",
+        question: "How should TP-816 get past this QA check?",
+        why: "QA stopped at the same step twice.",
+        if_unanswered: "TP-816 stays in QA.",
+        recommendation_reason: "The unit tests prove the step.",
+        options: [%{label: "Run QA again", effect: "QA runs once more.", recommended: true}, %{label: "Leave it", effect: "Nothing moves."}]
+      }
+
+      {:ok, conductor} =
+        SymphonyElixir.Questions.ask({:ticket, @repo_key, @issue_id}, request, request: true, asked_in: "QA", asked_by: %{kind: :run, name: "Conductor", run_id: "conductor-1"})
+
+      assert :ok = run(workspace, conductor: conductor(:none))
+      log = capture_log(fn -> assert :ok = run(workspace, conductor: conductor(:none)) end)
+
+      assert log =~ ~s{QA for TP-816 could not reach a verdict after 2 run(s); it already waits on "QA cannot set up a failing state request", so it asks nothing more}
+      assert [%{id: id}] = SymphonyElixir.Questions.open({:ticket, @repo_key, @issue_id})
+      assert id == conductor.id
+
+      # Answering the one question lets the ticket continue.
+      {:ok, _answered} = SymphonyElixir.Questions.answer({:ticket, @repo_key, @issue_id}, id, "Run QA again")
+      refute SymphonyElixir.Pauses.paused?({:ticket, @repo_key, @issue_id})
+    end
+
     test "an inconclusive pass takes the Conductor's turn too" do
       {workspace, _head} = git_workspace!()
       Process.put(:qa_agent_result, wide_pass_missing())

@@ -571,7 +571,11 @@ entry titled Update (a watch turn's update also carries `watch`: the watched `ru
 prompt carries as its own section, marked as advice and wrapped as untrusted data, and which at
 `after_qa_blocked` carries the `route` Symphony took on the turn's answer (`rerun` or `rework`); a
 question the Conductor asks goes through the decision path, pauses the ticket and holds the run it
-came before),
+came before, and each of its options names the action a pick makes from a closed list (`continue`,
+`rerun`, `rework` with a finding, `accept_without_qa`, which records the `qa` verdict `skip` and moves
+to Merging, and `cancel`), which the decision path performs; a ticket waits on one open question
+about its stage at a time, the Conductor's or QA's own "could not finish its check", and answering
+one withdraws any other open in the same phase as `superseded`; `docs/configuration.md#conductor`),
 `conductor.steer` (machine only: guidance the Conductor's watch gave a running run, under that run's
 `run_id`, with its `text`, `when` it asked for it, `next_turn`, `now` or `stop`, the `trigger` that
 made it look and how and when it was `delivered`; `conductor.watch` in `docs/configuration.md`) and

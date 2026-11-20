@@ -74,7 +74,7 @@ defmodule SymphonyElixir.QaSeedTest do
     assert %{id: ^question_id} = Questions.deciding({:ticket, repo_key, "qa-seed-108"})
 
     runs = RunStore.list_runs(repo_key, :all)
-    assert Enum.map(runs, & &1.issue_identifier) |> Enum.sort() == ["QA-103", "QA-105", "QA-107"]
+    assert Enum.map(runs, & &1.issue_identifier) |> Enum.sort() == ["QA-103", "QA-105", "QA-107", "QA-112", "QA-113"]
     run = Enum.find(runs, &(&1.issue_identifier == "QA-107"))
     assert %{status: "success", runtime_seconds: 980, ended_at: ended_at, pull_request_url: "https://github.com/symphony-qa/seed/pull/452"} = run
     assert DateTime.compare(ended_at, DateTime.add(@now, -20 * 60, :second)) == :eq
@@ -138,13 +138,17 @@ defmodule SymphonyElixir.QaSeedTest do
     assert [
              {"QA-102", :blocked, %{reason: "The agent can't reach the package registry: it needs a token only you can add."}},
              {"QA-108", :action, %{question_id: ^question_id}},
-             {"QA-109", :plan, _plan}
+             {"QA-109", :plan, _plan},
+             {"QA-112", :action, _conductor},
+             {"QA-113", :action, _conductor_after_blocked_pass}
            ] = read_inbox.()
+
+    # The Conductor's questions are walked in their own test; the rest of this one reads around them.
+    read_inbox = fn -> Enum.reject(rows(inbox), &(elem(&1, 0) in ["QA-112", "QA-113"])) end
 
     picks = [%{"question" => "How long a paused repository stays paused", "answer" => "Stay paused until resumed"}]
     assert %{"move" => "decide"} = move.(:decide, %{"issue_identifier" => "QA-108", "question_id" => question_id, "picks" => picks})
     refute Questions.deciding({:ticket, repo_key, "qa-seed-108"})
-    assert [{"QA-102", :blocked, _hold}, {"QA-109", :plan, _plan}] = rows(inbox)
     assert [{"QA-102", :blocked, _hold}, {"QA-109", :plan, _plan}] = read_inbox.()
     assert %{"move" => "undo", "undone" => "decide"} = move.(:undo, %{"issue_identifier" => "QA-108"})
     assert [%{id: ^question_id}] = Questions.open({:ticket, repo_key, "qa-seed-108"})
@@ -175,6 +179,50 @@ defmodule SymphonyElixir.QaSeedTest do
 
     # Stop answers for a ticket with no run: the seeded server's agents never start one.
     assert %{"stopped" => false} = move.(:stop, %{"issue_identifier" => "QA-103"})
+  end
+
+  test "the seeded Conductor questions act when picked: QA-112 accepts without QA, QA-113 holds one question", %{repo_key: repo_key, dir: dir} do
+    assert QaSeed.load(dir, now: @now) == :ok
+    {:ok, orchestrator} = Orchestrator.start_link(name: Module.concat(__MODULE__, :ConductorOrchestrator))
+    on_exit(fn -> stop_process(orchestrator) end)
+    inbox = [name: {:qa_seed_inbox, make_ref()}, github_repos: %{}]
+    moves_server = :"qa_seed_moves_#{System.unique_integer([:positive])}"
+    start_supervised!({DirectorMoves, name: moves_server})
+    moves = [server: moves_server, github: SeedGitHub, workspace: SeedWorkspace, inbox: inbox]
+    move = &control(&1, &2, orchestrator, moves)
+
+    # QA-112: the Conductor's question in QA, each option carrying the move its action makes.
+    assert [%{id: question_id, asked_by: %{kind: :run, name: "Conductor", run_id: "qa-seed-conductor-QA-112"}, asked_in: "QA"} = question] =
+             Questions.open({:ticket, repo_key, "qa-seed-112"})
+
+    head = :sha |> :crypto.hash("QA-112") |> Base.encode16(case: :lower)
+
+    assert [
+             %{label: "Accept without QA", move: %{to: "Merging", verdict: %{kind: "qa", outcome: "skip", head_sha: ^head}}},
+             %{label: "Send back to add a failing upload", move: %{to: "Rework", finding: %{run_kind: "conductor"}}},
+             %{label: "Run QA again"} = rerun
+           ] = question.options
+
+    refute Map.has_key?(rerun, :move)
+    assert Enum.any?(rows(inbox), &match?({"QA-112", :action, %{question_id: ^question_id}}, &1))
+
+    picks = [%{"question" => question.title, "answer" => "Accept without QA"}]
+    assert %{"move" => "decide"} = move.(:decide, %{"issue_identifier" => "QA-112", "question_id" => question_id, "picks" => picks})
+    assert {:ok, %{state: "Merging"}} = Tracker.fetch_issue_by_identifier("QA-112")
+    assert [%{payload: %{outcome: "skip", details: %{reason: "skipped by decision"}}}] = TicketEvents.query("qa-seed-112", types: ["verdict.recorded"])
+    refute Enum.any?(rows(inbox), &(elem(&1, 0) == "QA-112"))
+
+    # QA-113: a QA pass ended blocked with the Conductor's question open, and asked none of its own.
+    assert [%{payload: %{kind: "qa", outcome: "blocked"}}] = TicketEvents.query("qa-seed-113", types: ["verdict.recorded"])
+    assert [%{id: held_id, title: title}] = Questions.open({:ticket, repo_key, "qa-seed-113"})
+    assert %{title: ^title} = Questions.open_stage_question({:ticket, repo_key, "qa-seed-113"}, "QA")
+    assert Enum.count(rows(inbox), &(elem(&1, 0) == "QA-113")) == 1
+
+    picks = [%{"question" => title, "answer" => "Go on as it is"}]
+    assert %{"move" => "decide"} = move.(:decide, %{"issue_identifier" => "QA-113", "question_id" => held_id, "picks" => picks})
+    assert {:ok, %{state: "QA"}} = Tracker.fetch_issue_by_identifier("QA-113")
+    assert Questions.open({:ticket, repo_key, "qa-seed-113"}) == []
+    refute Pauses.paused?({:ticket, repo_key, "qa-seed-113"})
   end
 
   defp rows(inbox), do: %{} |> Inbox.items(inbox) |> Enum.map(&{&1.identifier, &1.kind, &1.review}) |> Enum.sort()
@@ -230,6 +278,15 @@ defmodule SymphonyElixir.QaSeedTest do
     bad_event = &Map.put(&1, "events", [%{"issue" => "QA-105", "type" => "step.completed", "payload" => %{}}])
     assert {:error, {{:event, "QA-105", "step.completed"}, {:invalid_payload, _fields}}} = QaSeed.load(seed_copy(repo_key, bad_event))
     assert {:error, {:issue, "QA-999", :issue_not_found}} = QaSeed.load(seed_copy(repo_key, &Map.put(&1, "events", [%{"issue" => "QA-999", "type" => "note"}])))
+
+    no_action = fn seed ->
+      [conductor | _] = Enum.filter(seed["questions"], &(&1["issue"] == "QA-112"))
+      Map.put(seed, "questions", [%{conductor | "issue" => "QA-103"}])
+    end
+
+    # Accepting without QA from Code Review is no action Symphony could take there.
+    assert {:error, {:question, "QA-103", {:conductor_options, "option \"Accept without QA\" accepts the change without QA" <> _}}} =
+             QaSeed.load(seed_copy(repo_key, no_action))
 
     bad_question = &Map.put(&1, "questions", [%{"issue" => "QA-108", "title" => "Too short"}])
     assert {:error, {:question, "QA-108", {:invalid_decision_request, _message}}} = QaSeed.load(seed_copy(repo_key, bad_question))

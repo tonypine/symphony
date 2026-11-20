@@ -206,12 +206,26 @@ defmodule SymphonyElixir.Conductor.FactsTest do
     assert {:ok, _json} = Jason.encode(facts)
   end
 
+  test "the walkthrough steps recorded as proved by a test are in the facts, the newest proof of each", ctx do
+    record!(ctx, "evidence", %{caption: "Step 2 proof", proof: %{step: 2, test: "old_test.exs"}}, actor: agent("run-1", "implementation"))
+    newest = record!(ctx, "evidence", %{caption: "Step 2 proof", proof: %{step: 2, test: "test/walkthrough_test.exs"}}, actor: agent("run-2", "rework"))
+    first = record!(ctx, "evidence", %{caption: "Step 1 proof", proof: %{step: 1, test: "parses each step"}}, actor: agent("run-2", "rework"))
+    record!(ctx, "evidence", %{caption: "A screenshot"}, actor: agent("run-2", "rework"))
+
+    facts = Facts.build(ctx.record, "after_rework", diff_stat: fn _record -> nil end, token_cap: nil)
+
+    assert facts.ticket.proved_steps == [
+             %{step: 1, test: "parses each step", event_id: first.id},
+             %{step: 2, test: "test/walkthrough_test.exs", event_id: newest.id}
+           ]
+  end
+
   test "a ticket with no events, no description and no pull request reads empty facts", ctx do
     record = %{ctx.record | description: nil} |> Map.put(:pull_request, %{number: 7, url: "https://github.com/o/r/pull/7", state: "OPEN", head_sha: "def456"})
     facts = Facts.build(record, nil, events: [], diff_stat: fn _record -> nil end, token_cap: nil)
 
     assert facts.junction == nil and facts.focus == nil and facts.last_run == nil
-    assert %{problem: nil, acceptance: nil, walkthrough: nil, brief: nil, notes: [], answers: []} = facts.ticket
+    assert %{problem: nil, acceptance: nil, walkthrough: nil, proved_steps: [], brief: nil, notes: [], answers: []} = facts.ticket
     assert facts.standing.pull_request == %{number: 7, url: "https://github.com/o/r/pull/7", state: "OPEN"}
     assert facts.standing.head == "def456"
 

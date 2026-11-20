@@ -2179,7 +2179,10 @@ webhooks off and the control API on, and loads the seed in `priv/qa_seed/symphon
 Needs Decision hold with an open question, one on an access hold, a paused repository, a
 Symphony-wide pause, finished runs with transcripts, PRs whose checks are green, red and
 pending, and a step history on QA-105: a run whose tests failed back to writing the code with
-their output kept, whose build output is gone, and whose next attempt paused on a question. The seed is data, versioned with the fixtures. Nothing in that server reaches Linear or
+their output kept, whose build output is gone, and whose next attempt paused on a question. Two
+tickets in QA hold a Conductor question whose options act when picked: QA-112's "Accept without
+QA" records QA as skipped by decision and moves it to Merging, and QA-113's question stayed the
+ticket's only one when a QA pass after it ended blocked; "Go on as it is" lets it continue. The seed is data, versioned with the fixtures. Nothing in that server reaches Linear or
 GitHub: the tracker is the seed's file, no Linear or GitHub token reaches it, and the `gh` on its
 PATH (`scripts/qa-server-gh.sh`) answers only for the seed's own pull requests. The tracker keeps
 the moves, requests and replies Symphony writes in its copy of the seed's issues, and the Inbox
@@ -3575,6 +3578,36 @@ decides. Then the pass goes on as without the Conductor (the retry, the self-hea
 could not finish" question). A question the turn asks holds the ticket, and Symphony then asks none
 of its own. The route Symphony took is recorded on the turn's `conductor.instructions` (`route`).
 The Conductor never routes a ticket past QA, and never narrows what QA checks.
+
+**A question's options act.** Each option of a question the Conductor asks names what Symphony does
+when the person picks it (`action`), from a closed list:
+
+- `continue`: nothing moves; the answer clears the pause and the ticket goes on where it stopped.
+- `rerun`: nothing moves; the answer clears the pause and the stage the ticket is in runs again.
+- `rework` (with `finding`, at most 600 characters): the ticket moves to Rework, and the finding is
+  recorded as the turn's (`unclassified`, `unrated`) for the rework run to read. Not from Rework.
+- `accept_without_qa`: Symphony records the `qa` verdict `skip` on the head, reason `skipped by
+  decision`, and moves the ticket to where a QA pass goes (Merging). Only while it is in QA.
+- `cancel`: the ticket moves to Canceled.
+
+Symphony keeps the move on the option, as it does for its own questions' options, and the pick
+performs it through the one decision path: the Inbox's Decide and `POST /control/decide` alike. A
+question with an option whose action is missing, not on the list, or not one the ticket's phase can
+take is not asked: the turn records its instructions and update without it, and the log says which
+option and why.
+
+**One question about a stage.** A ticket waits on at most one open question about the stage it is
+in: a question the Conductor asked, or QA's own "QA could not finish its check" (the one that offers
+to merge with QA skipped). While one is open in the ticket's phase, QA asks none of its own and the
+Conductor's question is not asked, and the ticket stays held on the one it has. When the person
+answers one of them and a record an older build wrote holds another open in the same phase, that
+other question is withdrawn (cause `superseded`) with a note naming the answer that replaced it, so
+nothing keeps the ticket paused on a question nobody needs.
+
+**Steps proved by a test.** The facts' `ticket.proved_steps` lists the walkthrough steps recorded as
+proved by a test (`evidence` with `proof`): each step's number, its test and the event. The QA
+pre-check runs that test on the pull request, and QA does not walk the step; both prompts say so, so
+a rework that only recorded a proof is not read as missing QA's setup.
 
 **Message blocks.** An answer may pick at most 3 `blocks` to draw under the update's body: `steps`
 (`run_id`, optional), `evidence` (`refs`: 1 to 4 event ids of evidence or finding events that carry a

@@ -10,8 +10,8 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
     "if_unanswered" => "The ticket stays paused.",
     "recommendation_reason" => "A fourth try would repeat the third.",
     "options" => [
-      %{"label" => "Try another approach", "effect" => "The next rework starts over.", "recommended" => true},
-      %{"label" => "Wait for me", "effect" => "Nothing runs until you say."}
+      %{"label" => "Try another approach", "effect" => "The next rework starts over.", "recommended" => true, "action" => "rework", "finding" => "  Start from the login form. "},
+      %{"label" => "Wait for me", "effect" => "Nothing runs until you say.", "action" => "continue"}
     ]
   }
 
@@ -32,10 +32,39 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
              if_unanswered: "The ticket stays paused.",
              recommendation_reason: "A fourth try would repeat the third.",
              options: [
-               %{label: "Try another approach", effect: "The next rework starts over.", recommended: true},
-               %{label: "Wait for me", effect: "Nothing runs until you say.", recommended: false}
+               %{label: "Try another approach", effect: "The next rework starts over.", recommended: true, action: "rework", finding: "Start from the login form."},
+               %{label: "Wait for me", effect: "Nothing runs until you say.", recommended: false, action: "continue"}
              ]
            }
+  end
+
+  test "every action of the closed list is read" do
+    for action <- Answer.actions() -- ["rework"] do
+      options = [%{"label" => "A", "effect" => "x", "action" => action}, %{"label" => "B", "effect" => "y", "action" => "continue"}]
+      assert {:ok, %{ask_person: %{options: [%{action: ^action} | _rest]}}} = Answer.parse(json(%{"instructions" => "x", "ask_person" => Map.put(@question, "options", options)}))
+    end
+
+    assert Answer.actions() == ["continue", "rerun", "rework", "accept_without_qa", "cancel"]
+  end
+
+  test "a question with an option Symphony cannot act on is dropped, and the rest of the answer kept" do
+    [rework, wait] = @question["options"]
+
+    for {options, why} <- [
+          {[rework, Map.delete(wait, "action")], ~s(option "Wait for me" names the action nil)},
+          {[rework, Map.put(wait, "action", "merge")], ~s(option "Wait for me" names the action "merge", not one of)},
+          {[Map.delete(rework, "finding"), wait], ~s(option "Try another approach" sends the ticket to Rework without a `finding`)},
+          {[Map.put(rework, "finding", " "), wait], ~s(option "Try another approach" sends the ticket to Rework with a blank `finding`)}
+        ] do
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          text = json(%{"instructions" => "Go on.", "update" => "QA is stuck.", "ask_person" => Map.put(@question, "options", options)})
+          assert {:ok, %{instructions: "Go on.", update: "QA is stuck.", ask_person: nil}} = Answer.parse(text)
+        end)
+
+      assert log =~ "question \"The login step failed three times\" was dropped"
+      assert log =~ why
+    end
   end
 
   test "a missing or blank update is none, and so is a missing question and refs" do

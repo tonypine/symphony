@@ -2,7 +2,7 @@ defmodule SymphonyElixir.ConductorTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.{Conductor, TicketEvents}
-  alias SymphonyElixir.Conductor.{Facts, Steer}
+  alias SymphonyElixir.Conductor.{Answer, Facts, Steer}
   alias SymphonyElixir.Config.Schema
 
   @on %Schema.Conductor{enabled: true}
@@ -52,6 +52,30 @@ defmodule SymphonyElixir.ConductorTest do
       %{junction: "after_coding", issue_id: ctx.issue_id, repo_key: "default", run_profile: Config.run(Config.settings_for_repo!("default"), :conductor), timeout_ms: 5_000},
       attrs
     )
+  end
+
+  # Another ticket in `phase`, with no question on it yet.
+  defp fresh_ticket!(phase) do
+    n = System.unique_integer([:positive])
+    issue_id = "issue-conductor-#{n}"
+    :ok = RunStore.put_ticket_state(%{repo_key: "default", issue_id: issue_id, issue_identifier: "COND-#{n}", phase: phase, title: "Fix login"})
+    %{issue_id: issue_id, issue: %Issue{id: issue_id, identifier: "COND-#{n}", title: "Fix login", state: phase, repo_key: "default"}}
+  end
+
+  defp acting_question do
+    %{
+      "title" => "QA cannot set up the failing request",
+      "question" => "How should the ticket get past QA?",
+      "why" => "QA stopped at the same step 7 times.",
+      "if_unanswered" => "The ticket stays paused.",
+      "recommendation_reason" => "The unit tests prove the step.",
+      "options" => [
+        %{"label" => "Accept without QA", "effect" => "It merges on its review and CI.", "recommended" => true, "action" => "accept_without_qa"},
+        %{"label" => "Send it to Rework", "effect" => "It goes back to Rework.", "action" => "rework", "finding" => "Add a flag QA can set."},
+        %{"label" => "Run QA again", "effect" => "QA runs once more.", "action" => "rerun"},
+        %{"label" => "Cancel it", "effect" => "The ticket is cancelled.", "action" => "cancel"}
+      ]
+    }
   end
 
   defp answer(attrs \\ %{}), do: Jason.encode!(Map.merge(%{"instructions" => "Check the empty list first."}, attrs))
@@ -177,8 +201,8 @@ defmodule SymphonyElixir.ConductorTest do
         "if_unanswered" => "The ticket stays paused.",
         "recommendation_reason" => "A fourth try would repeat the third.",
         "options" => [
-          %{"label" => "Start over", "effect" => "The next rework starts from the ticket again.", "recommended" => true},
-          %{"label" => "Wait", "effect" => "Nothing runs until you say."}
+          %{"label" => "Start over", "effect" => "The next rework starts from the ticket again.", "recommended" => true, "action" => "continue"},
+          %{"label" => "Wait", "effect" => "Nothing runs until you say.", "action" => "continue"}
         ]
       }
 
@@ -190,13 +214,66 @@ defmodule SymphonyElixir.ConductorTest do
       Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, {:error, :linear_down})
       on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_create_comment_result) end)
 
+      # A second question about the same stage is not asked: the ticket holds the one it has.
       other = %{question | "title" => "The budget is nearly spent", "question" => "Should the next run go on?"}
       log = capture_log(fn -> assert Conductor.run(plan(ctx), ctx.issue, turn: turn({:ok, [answer(%{"ask_person" => other})], 10}), facts: %{}) == :held end)
+      assert log =~ ~s(the ticket already waits on "Login failed three times")
+      assert [%{title: "Login failed three times"}] = SymphonyElixir.Questions.open({:ticket, "default", ctx.issue_id})
+
+      fresh = fresh_ticket!("Code Review")
+      log = capture_log(fn -> assert Conductor.run(plan(fresh), fresh.issue, turn: turn({:ok, [answer(%{"ask_person" => other})], 10}), facts: %{}) == :held end)
       assert log =~ "Failed to post the decision request"
 
-      bad = Map.put(question, "options", [%{"label" => "A", "effect" => "x", "recommended" => true}, %{"label" => "B", "effect" => "y", "recommended" => true}])
-      log = capture_log(fn -> assert Conductor.run(plan(ctx), ctx.issue, turn: turn({:ok, [answer(%{"ask_person" => bad})], 10}), facts: %{}) == :ok end)
+      bad =
+        Map.put(question, "options", [
+          %{"label" => "A", "effect" => "x", "recommended" => true, "action" => "continue"},
+          %{"label" => "B", "effect" => "y", "recommended" => true, "action" => "continue"}
+        ])
+
+      fresh = fresh_ticket!("Code Review")
+      log = capture_log(fn -> assert Conductor.run(plan(fresh), fresh.issue, turn: turn({:ok, [answer(%{"ask_person" => bad})], 10}), facts: %{}) == :ok end)
       assert log =~ "Conductor's question was not asked"
+    end
+
+    test "each option carries the move its action makes once picked", _ctx do
+      fresh = fresh_ticket!("QA")
+      Conductor.run(plan(fresh), fresh.issue, turn: turn({:ok, [answer(%{"ask_person" => acting_question()})], 10}), facts: %{})
+
+      assert [%{asked_by: %{name: "Conductor", run_id: run_id}, asked_in: "QA", options: options}] = SymphonyElixir.Questions.open({:ticket, "default", fresh.issue_id})
+      assert [accept, rework, rerun, cancel] = options
+      merging = SymphonyElixir.TransitionGuard.target(:qa_pass, %{settings: Config.settings_for_repo!("default")})
+      assert %{to: ^merging, verdict: %{kind: "qa", outcome: "skip", head_sha: nil, reason: "skipped by decision"}} = accept.move
+      assert rework.move == %{to: "Rework", finding: %{description: "Add a flag QA can set.", run_id: run_id, run_kind: "conductor"}}
+      assert cancel.move == %{to: "Canceled"}
+      refute Map.has_key?(rerun, :move)
+      refute Enum.any?(options, &(Map.has_key?(&1, :action) or Map.has_key?(&1, :finding)))
+    end
+
+    test "both prompts name the option actions, the one-question rule and the steps proved by a test", _ctx do
+      for junction <- ["after_rework", "during_run"] do
+        prompt = Conductor.prompt(junction, %{})
+        for action <- Answer.actions(), do: assert(prompt =~ "`#{action}`")
+        assert prompt =~ "`ticket.proved_steps`"
+        assert prompt =~ "QA does not walk the"
+        assert prompt =~ "A ticket waits on one question about its stage"
+      end
+    end
+
+    test "a question with an action the ticket's phase can't take is not asked", _ctx do
+      [_accept, rework | rest] = acting_question()["options"]
+      no_accept = %{acting_question() | "options" => [Map.put(rework, "recommended", true) | rest]}
+
+      for {phase, question, why} <- [
+            {"Code Review", acting_question(), "accepts the change without QA, but the ticket is in Code Review, not QA"},
+            {"Rework", no_accept, "sends the ticket to Rework, where it already is"}
+          ] do
+        fresh = fresh_ticket!(phase)
+        log = capture_log(fn -> assert Conductor.run(plan(fresh), fresh.issue, turn: turn({:ok, [answer(%{"ask_person" => question})], 10}), facts: %{}) == :ok end)
+        assert log =~ "Conductor's question was not asked"
+        assert log =~ why
+        assert SymphonyElixir.Questions.open({:ticket, "default", fresh.issue_id}) == []
+        assert [%{payload: %{text: "Check the empty list first."}}] = events(fresh.issue_id, "conductor.instructions")
+      end
     end
 
     test "a turn that fails, answers outside the schema, crashes or runs over writes nothing for the person", ctx do
@@ -337,8 +414,8 @@ defmodule SymphonyElixir.ConductorTest do
         "if_unanswered" => "The ticket stays paused.",
         "recommendation_reason" => "Only you have the key.",
         "options" => [
-          %{"label" => "I added it", "effect" => "QA runs again with the key.", "recommended" => true},
-          %{"label" => "Merge without it", "effect" => "You decide on the review alone."}
+          %{"label" => "I added it", "effect" => "QA runs again with the key.", "recommended" => true, "action" => "continue"},
+          %{"label" => "Merge without it", "effect" => "You decide on the review alone.", "action" => "continue"}
         ]
       }
 
@@ -512,8 +589,8 @@ defmodule SymphonyElixir.ConductorTest do
         "if_unanswered" => "The ticket stays paused.",
         "recommendation_reason" => "A fourth try would repeat the third.",
         "options" => [
-          %{"label" => "End it", "effect" => "The run ends and waits for you.", "recommended" => true},
-          %{"label" => "Let it go on", "effect" => "The run goes on."}
+          %{"label" => "End it", "effect" => "The run ends and waits for you.", "recommended" => true, "action" => "continue"},
+          %{"label" => "Let it go on", "effect" => "The run goes on.", "action" => "continue"}
         ]
       }
 
@@ -577,8 +654,8 @@ defmodule SymphonyElixir.ConductorTest do
         "if_unanswered" => "The ticket stays paused.",
         "recommendation_reason" => "A fourth try would repeat the third.",
         "options" => [
-          %{"label" => "End it", "effect" => "The run ends and waits for you.", "recommended" => true},
-          %{"label" => "Let it go on", "effect" => "The run goes on."}
+          %{"label" => "End it", "effect" => "The run ends and waits for you.", "recommended" => true, "action" => "continue"},
+          %{"label" => "Let it go on", "effect" => "The run goes on.", "action" => "continue"}
         ]
       }
 
