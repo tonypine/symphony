@@ -95,14 +95,14 @@ defmodule SymphonyElixir.WorkflowPreviewLedgerTest do
     assert {:ok, prompt} = WorkflowPreview.render(file: file)
     brief = Brief.build(WorkflowPreview.sample_ticket_state(), WorkflowPreview.sample_ticket_events())
 
-    assert %{runs: 3, open_findings: 12, decisions: 2, notes: 3} = brief
+    assert %{runs: 3, open_findings: 12, decisions: 2, notes: 2} = brief
     assert prompt =~ "Ticket state:\n\n- Phase: Rework"
     refute prompt =~ "Recent signals:"
     assert prompt =~ "<ticket_ledger>\n" <> String.replace(brief.text, "&", "&amp;") <> "\n</ticket_ledger>"
     assert prompt =~ "Open findings (12):\n- clipped (5):"
     assert prompt =~ "- truncated (4):"
     assert prompt =~ "- state missing (3):"
-    assert prompt =~ "the Director (Sam): The export button stays where it is: users know it there."
+    assert prompt =~ "- 2026-01-05T13:10:00Z, Sam wrote (given to Rework run 1 at 2026-01-05T13:16:00Z): The export button stays where it is: users know it there."
     assert prompt =~ "- Rework run 1 (latest): running in Rework"
     assert RunStore.list_ticket_events("issue_sample_0001", []) == []
   end

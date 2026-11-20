@@ -312,19 +312,20 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
       Enum.to_list(stream)
     end
 
-    test "records the Director's note, answers it as the feed shows it, and the ticket summary lists it under Notes",
+    test "records each message as its own event, answers it as the feed shows it, and the ticket summary lists it under Messages",
          %{ticket: ticket, tmp_dir: tmp_dir} do
       conn = post_note(note_params(ticket, "  Keep the export button where it is.\n"), tmp_dir)
 
       assert conn.status == 200
 
-      assert %{"event" => %{"id" => event_id, "type" => "note", "actor" => %{"kind" => "person", "name" => "the Director"}} = event} =
+      assert %{"event" => %{"id" => event_id, "type" => "message.sent", "actor" => %{"kind" => "person", "name" => "the Director"}} = event} =
                json_body(conn)
 
       assert event["payload"] == %{"text" => "Keep the export button where it is."}
-      assert event["summary"]["detail"] == "Keep the export button where it is."
+      assert event["summary"] == %{"title" => "You wrote", "detail" => "Keep the export button where it is."}
+      assert event["read"] == nil
 
-      assert [%{id: ^event_id, type: "note", actor: %{kind: :person, name: "the Director"}}] =
+      assert [%{id: ^event_id, type: "message.sent", actor: %{kind: :person, name: "the Director"}}] =
                RunStore.list_ticket_events(ticket.issue_id, [])
 
       assert [%{"event_id" => ^event_id, "issue_identifier" => identifier, "repo_key" => repo_key, "text" => "Keep the export button where it is."}] =
@@ -332,9 +333,17 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
 
       assert {identifier, repo_key} == {ticket.issue_identifier, ticket.repo_key}
 
-      # The next agent run starts from the summary, which holds the note in full.
-      assert {:ok, %{notes: 1, text: text}} = Brief.render(ticket.issue_id)
-      assert text =~ ~r/Notes \(1\):\n- \S+, the Director: Keep the export button where it is\.\n/
+      # A second message is a second event: none replaces the first.
+      assert post_note(note_params(ticket, "And the colour."), tmp_dir).status == 200
+
+      assert ticket.issue_id |> RunStore.list_ticket_events([]) |> Enum.map(&{&1.type, &1.payload.text}) == [
+               {"message.sent", "Keep the export button where it is."},
+               {"message.sent", "And the colour."}
+             ]
+
+      # Later runs read them in the summary of the ticket's history.
+      assert {:ok, %{text: text}} = Brief.render(ticket.issue_id)
+      assert text =~ ~r/Messages \(2\):\n- \S+, the Director wrote \(not read by a run yet\): Keep the export button where it is\.\n/
     end
 
     test "refuses empty and over-bound text with 400 and writes nothing", %{ticket: ticket, tmp_dir: tmp_dir} do
@@ -354,7 +363,7 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
       assert RunStore.list_ticket_events(ticket.issue_id, []) == []
       assert audit_records(tmp_dir) == []
 
-      # The bound itself is a note.
+      # The bound itself is a message.
       assert post_note(note_params(ticket, String.duplicate("é", 4_000)), tmp_dir).status == 200
     end
 
@@ -398,7 +407,7 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
         end)
 
       assert log =~ "Failed to record director_note audit event: issue_identifier=#{ticket.issue_identifier}"
-      assert [%{type: "note"}] = RunStore.list_ticket_events(ticket.issue_id, [])
+      assert [%{type: "message.sent"}] = RunStore.list_ticket_events(ticket.issue_id, [])
     end
   end
 
