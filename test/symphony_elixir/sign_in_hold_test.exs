@@ -53,7 +53,7 @@ defmodule SymphonyElixir.SignInHoldTest do
     assert question.title == "Agents can't sign in to Claude"
     assert question.question =~ "since 09:46 UTC, 30 minutes ago"
     assert question.why =~ "Failed to authenticate. API Error: 403 Attention Required!"
-    assert [%{label: "I signed in again", recommended: true}, %{label: "Keep waiting"}] = question.options
+    assert [%{label: "I signed in again", recommended?: true}, %{label: "Keep waiting", recommended?: false}] = question.options
     assert SignInHold.condition_of(question) == "usage_limit:anthropic:all"
 
     # Later refusals of the same hold ask nothing more, answered or not.

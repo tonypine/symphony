@@ -1141,7 +1141,7 @@ defmodule SymphonyElixir.SituationTest do
       facts = Situation.live_facts(snapshot, @at)
 
       assert facts.running == %{"a" => %{run_kind: "qa", started_at: @at, step: nil}}
-      assert facts.retrying["b"] == %{attempt: 2, error: "boom", delay_type: nil, due_at: ~U[2026-10-30 09:01:00.000Z]}
+      assert facts.retrying["b"] == %{attempt: 2, error: "boom", delay_type: nil, sign_in: nil, due_at: ~U[2026-10-30 09:01:00.000Z]}
       assert facts.retrying["c"].due_at == nil
       assert facts.slot_waiting["d"].reason == "work slots full"
       assert facts.skipped["e"] == %{since: @at, reason: "gate", rule: :priority}
