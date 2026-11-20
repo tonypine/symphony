@@ -30,7 +30,9 @@ defmodule SymphonyElixir.Situation do
   (`SymphonyElixir.Inbox.FromRecord`). A plan in `Plan Review` reads `waiting_on_you`, a parent the
   dispatch pass held for its sub-tickets, or one in `Waiting on sub-tickets` with one still open,
   `waiting_on_sub_tickets` ("2 of 5 done", `waits_on` the open ones), and a ticket in `Backlog`
-  `paused_by_rule`.
+  `paused_by_rule`. A ticket that is no plan, which its PR's merge put in `Waiting on sub-tickets`
+  and whose sub-tickets all ended, reads `waiting_for_ci` "Closing": Symphony moves it to `Done` on
+  its next poll. Only a plan there has "The epic review" next.
 
   A ticket the dispatch pass held because the Director paused its run's provider and no fallback of
   its run can take it (its skip's `rule` is `:provider_pause`, naming the `provider`) reads
@@ -60,6 +62,7 @@ defmodule SymphonyElixir.Situation do
   alias SymphonyElixir.AgentProviders
   alias SymphonyElixir.{CiWait, Config, PrDecision, RunStore, TicketEvents, TicketPullRequest, TicketState}
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.PrWatch.{SilentWait, StalledRun}
   alias SymphonyElixir.TicketEvents.{Event, Summary}
 
@@ -459,9 +462,20 @@ defmodule SymphonyElixir.Situation do
 
   # A parent waits on its sub-tickets when the dispatch pass held it for them, or when it is in the
   # waiting state with one still open. One whose sub-tickets all ended has its epic review next.
-  defp waits_on_sub_tickets?(%{gate_skip: %{gate: :sub_tickets}}), do: true
+  # A ticket that is no plan, waiting with every sub-ticket ended, is closing instead (`closing?/1`),
+  # even when the dispatch pass held it in the moment before its close.
+  defp waits_on_sub_tickets?(%{gate_skip: %{gate: :sub_tickets}} = ctx), do: not closing?(ctx)
   defp waits_on_sub_tickets?(%{phase: "waiting on sub-tickets"} = ctx), do: open_sub_issues(ctx) != []
   defp waits_on_sub_tickets?(_ctx), do: false
+
+  # Its merge put it there (`SymphonyElixir.RunStore.merged_wait?/1`): one a person moved there
+  # waits for them, and the close leaves it alone.
+  defp closing?(%{phase: "waiting on sub-tickets"} = ctx),
+    do: not plan?(ctx) and open_sub_issues(ctx) == [] and RunStore.merged_wait?(ctx.record.issue_id) == true
+
+  defp closing?(_ctx), do: false
+
+  defp plan?(ctx), do: Enum.any?(ctx.record.labels, &Issue.breakdown_label?/1)
 
   # A sub-ticket without a known state counts as open, as the dispatch gate counts it.
   defp open_sub_issues(ctx) do
@@ -638,10 +652,18 @@ defmodule SymphonyElixir.Situation do
     base("cancelled", "Cancelled", cancelled_sentence(event), nil, (event && event.at) || ctx.record.phase_at)
   end
 
+  # A ticket that is no plan, waiting on sub-tickets that all ended, has no epic review next:
+  # Symphony moves it to Done itself on its next poll, with no run (`SymphonyElixir.SubIssueWait.close?/3`).
+  defp situation(:nothing, ctx) do
+    if closing?(ctx),
+      do: base("waiting_for_ci", "Closing", "Every sub-ticket has ended, so Symphony moves it to Done; no run is needed.", "It moves to Done on the next poll.", ctx.record.phase_at),
+      else: nothing(ctx)
+  end
+
   # Nothing holds the ticket and no run works on it. When the dispatch pass passed it over, what
   # closed (the skip's `gate`) says what it waits on: it passed no condition but a slot, so it never
   # waits for one. The watcher's own gate is read from its decision, as for a ticket nothing skipped.
-  defp situation(:nothing, %{gate_skip: %{} = skip} = ctx) do
+  defp nothing(%{gate_skip: %{} = skip} = ctx) do
     case skip[:gate] do
       :watch -> watched(skip, ctx)
       gate -> skipped(gate, skip, ctx)
@@ -650,7 +672,7 @@ defmodule SymphonyElixir.Situation do
 
   # What it waits on is read from the watcher's decision and its outcome, the run store and the
   # slots, the record the machine acts on.
-  defp situation(:nothing, ctx), do: from_record(ctx)
+  defp nothing(ctx), do: from_record(ctx)
 
   defp from_record(ctx) do
     case next_of(ctx) do
@@ -760,6 +782,11 @@ defmodule SymphonyElixir.Situation do
       _wait ->
         nil
     end
+  end
+
+  # Only a plan has an epic review: a ticket that is no plan waiting on sub-tickets has no run next.
+  defp phase_run(%{phase: "waiting on sub-tickets"} = ctx) do
+    if plan?(ctx), do: %{label: @phase_runs["waiting on sub-tickets"], why: nil, since: ctx.record.phase_at, silent?: false}
   end
 
   defp phase_run(ctx) do
