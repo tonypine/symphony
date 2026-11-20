@@ -461,6 +461,8 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
       entry = signal(1, "ci_wait_started", %{sha: "aaa1111"})
       epic_one_store(%{signals: [entry]}, [])
       {"note", payload, _opts} = TicketSignals.event(entry.name, entry.details)
+      # An agent never records a note's machine-only status, so its look-alike note has the same text without it.
+      payload = Map.delete(payload, :status)
       {:ok, agent} = TicketEvents.record(@repo_key, @issue_id, "note", payload, actor: {:agent, "run-1", "implementation"}, at: at(1))
 
       assert {:ok, %{tickets: 1, events: 1}} = Backfill.run(now: @now, audit_log: audit)

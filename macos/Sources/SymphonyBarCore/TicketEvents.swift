@@ -172,6 +172,9 @@ public struct TicketEventsPayload: Equatable {
         public var text: String?
         /// The signal a note of Symphony's stands for (`note`); nil on a note a run or a person wrote.
         public var signal: String?
+        /// A note Symphony wrote itself as a wait or status message (`note`'s `status`): it folds behind "Show all
+        /// events". False on a note a person or a run wrote, and on one recorded before notes carried it.
+        public var isStatus: Bool = false
         /// The finding a `finding.resolved` resolves.
         public var findingID: String?
         /// The junction a Conductor's update was written at (`conductor.update`), as Symphony names it.
@@ -187,7 +190,7 @@ public struct TicketEventsPayload: Equatable {
 
         enum CodingKeys: String, CodingKey {
             case kind, outcome, exit, stepId, title, reason, returnsTo, returnsToTitle, questionId, model, effort, tokens, durationMs
-            case to, from, action, rule, setBy, by, askedBy, description, text, signal, findingId, junction, watch, blocks
+            case to, from, action, rule, setBy, by, askedBy, description, text, signal, status, findingId, junction, watch, blocks
             case messageId
         }
 
@@ -196,7 +199,7 @@ public struct TicketEventsPayload: Equatable {
             reason: String? = nil, returnsTo: String? = nil, returnsToTitle: String? = nil, questionID: String? = nil,
             model: String? = nil, effort: String? = nil, tokens: Int? = nil, durationMs: Int? = nil, to: String? = nil,
             from: String? = nil, action: String? = nil, rule: String? = nil, setter: Setter? = nil, description: String? = nil,
-            text: String? = nil, signal: String? = nil, findingID: String? = nil, junction: String? = nil, watch: ConductorWatch? = nil,
+            text: String? = nil, signal: String? = nil, isStatus: Bool = false, findingID: String? = nil, junction: String? = nil, watch: ConductorWatch? = nil,
             blocks: [ConductorBlock] = [], answer: StepAnswer? = nil, messageID: String? = nil
         ) {
             self.kind = kind
@@ -220,6 +223,7 @@ public struct TicketEventsPayload: Equatable {
             self.description = description
             self.text = text
             self.signal = signal
+            self.isStatus = isStatus
             self.findingID = findingID
             self.junction = junction
             self.watch = watch
@@ -244,6 +248,7 @@ public struct TicketEventsPayload: Equatable {
                 description: text(.description),
                 text: text(.text),
                 signal: text(.signal),
+                isStatus: ((try? container?.decodeIfPresent(Bool.self, forKey: .status)) ?? nil) == true,
                 findingID: text(.findingId),
                 junction: text(.junction),
                 watch: (try? container?.decodeIfPresent(ConductorWatch.self, forKey: .watch)) ?? nil,
