@@ -71,12 +71,15 @@ struct SettingsView: View {
                     )
                     LabeledContent("Not answering alert") {
                         HStack {
-                            TextField("Seconds", value: notAnsweringAlertSeconds, format: .number)
-                                .labelsHidden()
-                                .frame(width: 60)
-                            Stepper("Seconds", value: notAnsweringAlertSeconds, in: AppSettings.notAnsweringAlertRange)
-                                .labelsHidden()
-                            Text("seconds")
+                            Text("\(model.settings.notAnsweringAlertSeconds) seconds")
+                                .monospacedDigit()
+                            Stepper(
+                                "Seconds",
+                                value: notAnsweringAlertSeconds,
+                                in: AppSettings.notAnsweringAlertRange,
+                                step: 10
+                            )
+                            .labelsHidden()
                         }
                     }
                     .help(
