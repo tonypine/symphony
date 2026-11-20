@@ -98,7 +98,7 @@ final class PhaseSettingsTests: XCTestCase {
         var list = PhaseSteps.defaults(for: .implementation)
         list.removeStep(list.steps[0].id)
         let validation = PhaseValidation.check(list.steps)
-        XCTAssertEqual(validation.reasons.count, 3)
+        XCTAssertEqual(validation.reasons.count, 4)
         XCTAssertEqual(validation.reason(for: list.steps[0]), "Returns to `code` on failure, but no step in this list has that id.")
     }
 
