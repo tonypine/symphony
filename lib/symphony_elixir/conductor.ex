@@ -610,7 +610,8 @@ defmodule SymphonyElixir.Conductor do
   (`{:error, why}`): accepting without QA outside QA, Rework from Rework. The QA seed builds its
   Conductor questions with it (`SymphonyElixir.QaSeed`).
   """
-  @spec actioned_options([map()], map(), String.t(), String.t() | nil, String.t()) :: {:ok, [map()]} | {:error, String.t()}
+  @spec actioned_options([map()], map(), String.t(), String.t() | nil, String.t()) ::
+          {:ok, [map()]} | {:error, String.t()}
   def actioned_options(options, settings, state, head, run_id) do
     Enum.reduce_while(options, {:ok, []}, fn option, {:ok, acc} ->
       case option_move(option, settings, state, head, run_id) do

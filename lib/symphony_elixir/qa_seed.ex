@@ -44,7 +44,18 @@ defmodule SymphonyElixir.QaSeed do
 
   require Logger
 
-  alias SymphonyElixir.{Artifacts, Conductor, Config, DecisionRequest, Pauses, RunStore, SelfHeal, TicketEvents, TicketObservation}
+  alias SymphonyElixir.{
+    Artifacts,
+    Conductor,
+    Config,
+    DecisionRequest,
+    Pauses,
+    RunStore,
+    SelfHeal,
+    TicketEvents,
+    TicketObservation
+  }
+
   alias SymphonyElixir.Artifacts.Store
   alias SymphonyElixir.PrDecision.Facts
   alias SymphonyElixir.{TicketPullRequest, TicketSignals, Tracker}
