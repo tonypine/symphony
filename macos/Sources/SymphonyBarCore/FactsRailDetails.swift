@@ -1,26 +1,28 @@
 import Foundation
 
-// The ticket read's `ticket`, `brief`, `workspace` and `repo_key` (`docs/control-api.md` § `ticket`, § `brief`), the
-// ticket's decisions (`GET /api/v1/tickets/:identifier/decisions`) and each run's model from its events feed, and what
-// the facts rail's Decisions and Details panels say from them (`docs/design/director-ticket-page.md` §1 facts 17, 22
-// to 25, 27, 30 and 33).
+// The ticket read's `ticket`, `brief`, `workspace` and `repo_key` (`docs/control-api.md` § `ticket`, § `brief`) and
+// the ticket's decisions (`GET /api/v1/tickets/:identifier/decisions`), and what the facts rail's Decisions panel says
+// from them. The brief on top of the page is `BriefPanelModel`'s.
 
-/// The ticket as its record holds it: its title, phase, Linear priority and labels.
+/// The ticket as its record holds it: its title, phase, Linear priority, labels and description.
 public struct TicketRecordRead: Equatable, Decodable {
     public var title: String?
     public var phase: String?
     /// Linear's: 0 none, 1 urgent, 2 high, 3 medium, 4 low; nil when unknown.
     public var priority: Int?
     public var labels: [String]
+    /// The description as a run receives it, without Symphony's summary block.
+    public var description: String?
 
-    public init(title: String? = nil, phase: String? = nil, priority: Int? = nil, labels: [String] = []) {
+    public init(title: String? = nil, phase: String? = nil, priority: Int? = nil, labels: [String] = [], description: String? = nil) {
         self.title = title
         self.phase = phase
         self.priority = priority
         self.labels = labels
+        self.description = description
     }
 
-    private enum CodingKeys: String, CodingKey { case title, phase, priority, labels }
+    private enum CodingKeys: String, CodingKey { case title, phase, priority, labels, description }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -28,28 +30,48 @@ public struct TicketRecordRead: Equatable, Decodable {
         phase = try container.decodeIfPresent(String.self, forKey: .phase)
         priority = try container.decodeIfPresent(Int.self, forKey: .priority)
         labels = try container.decodeIfPresent([String].self, forKey: .labels) ?? []
+        description = try container.decodeIfPresent(String.self, forKey: .description)
     }
 }
 
-/// What the ticket does and why, in a person's words, with its walkthrough: written by the implementation run.
+/// What the ticket does and why, in a person's words, with its walkthrough: written by an implementation, rework or
+/// review-feedback run, named by `by`.
 public struct TicketBriefRead: Equatable, Decodable {
     public var text: String
     public var walkthrough: String?
     public var at: Date?
+    /// The run that wrote it (`by.run_id`), and its kind (`by.run_kind`).
+    public var runID: String?
+    public var runKind: String?
 
-    public init(text: String, walkthrough: String? = nil, at: Date? = nil) {
+    public init(text: String, walkthrough: String? = nil, at: Date? = nil, runID: String? = nil, runKind: String? = nil) {
         self.text = text
         self.walkthrough = walkthrough
         self.at = at
+        self.runID = runID
+        self.runKind = runKind
     }
 
-    private enum CodingKeys: String, CodingKey { case text, walkthrough, at }
+    private enum CodingKeys: String, CodingKey { case text, walkthrough, at, by }
+
+    private struct Author: Decodable {
+        var runID: String?
+        var runKind: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case runID = "run_id"
+            case runKind = "run_kind"
+        }
+    }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         text = try container.decodeIfPresent(String.self, forKey: .text) ?? ""
         walkthrough = try container.decodeIfPresent(String.self, forKey: .walkthrough)
         at = try container.decodeIfPresent(String.self, forKey: .at).flatMap(SymphonyState.parseDate)
+        let author = try? container.decodeIfPresent(Author.self, forKey: .by)
+        runID = author?.runID
+        runKind = author?.runKind
     }
 }
 
@@ -64,7 +86,8 @@ public struct TicketWorkspaceRead: Equatable, Decodable {
     }
 }
 
-/// The ticket read's facts the Details panel says, each nil when the read holds none.
+/// The ticket read's facts the page says beside its timeline: the brief, the record's ticket, the workspace; each nil
+/// when the read holds none.
 public struct TicketDetailsRead: Equatable, Decodable {
     public var repoKey: String?
     public var ticket: TicketRecordRead?
@@ -116,156 +139,56 @@ enum FactsMoment {
 
 // MARK: - The Decisions panel
 
-/// What the Decisions panel says: the decisions recorded on the ticket, newest first, each folded to its label and
-/// what was decided, unfolding into the question and the answer.
+/// What the Decisions panel says: one row per decision the person recorded on the ticket, newest first, each the
+/// decision and, under it, who answered and when (the catalog's `decisionsPanel`, TP-1504). A ticket with none has no
+/// panel.
 public struct DecisionsPanelModel: Equatable {
     public struct Row: Equatable, Identifiable {
         /// "D2".
         public var id: String
-        /// The folded line: the decision's title, else its answer.
-        public var headline: String
-        /// When it was decided, as the record says it ("2026-11-10").
-        public var date: String?
-        /// The question it answered in its own words; nil for a ruling recorded without one.
-        public var question: String?
-        public var answer: String
-        /// What it means for the ticket's scope.
-        public var scope: String?
+        /// The decision: its title, else its answer.
+        public var title: String
+        /// "You · today", "You · yesterday", "You · Fri 6 Nov".
+        public var byline: String
         public var accessibilityLabel: String
     }
 
     public var rows: [Row]
 
+    /// No decision: the page draws no Decisions label and no panel.
+    public var isEmpty: Bool { rows.isEmpty }
+
     public static let title = "Decisions"
-    public static let emptyLine = "No decisions recorded on this ticket yet."
-    /// The question's place on a ruling recorded without one.
-    public static let noQuestionLine = "Recorded without a question."
+    /// Who answers a ticket's questions and records its rulings.
+    public static let answeredBy = "You"
 
-    /// The panel from the ticket's decisions in the order recorded: the newest reads first.
-    public static func build(_ decisions: [TicketDecision]) -> DecisionsPanelModel {
-        DecisionsPanelModel(rows: decisions.reversed().map(row))
+    /// The panel from the ticket's decisions in the order recorded: the newest reads first. Days read in `calendar`,
+    /// against `reference`'s.
+    public static func build(_ decisions: [TicketDecision], reference: Date = Date(), calendar: Calendar = .current) -> DecisionsPanelModel {
+        DecisionsPanelModel(rows: decisions.reversed().map { row($0, reference: reference, calendar: calendar) })
     }
 
-    static func row(_ decision: TicketDecision) -> Row {
-        let headline = decision.title?.trimmingWhitespace().nonEmpty ?? decision.answer
-        let question = decision.question?.trimmingWhitespace().nonEmpty
-        let spoken = ["Decision \(decision.id)", headline, decision.date.map { "decided \($0)" }].compactMap { $0 }
-        return Row(
-            id: decision.id, headline: headline, date: decision.date, question: question, answer: decision.answer,
-            scope: decision.scope?.trimmingWhitespace().nonEmpty, accessibilityLabel: spoken.joined(separator: ", ")
-        )
-    }
-}
-
-// MARK: - The Details panel
-
-/// What the Details panel says, as the Key-value list: the repo, priority, labels, workspace, each run's model and the
-/// links out, then the brief with its walkthrough above the agent's description.
-public struct DetailsPanelModel: Equatable {
-    public struct RunModel: Equatable, Identifiable {
-        public var id: String
-        /// "Implementation run 2".
-        public var run: String
-        /// "Claude Opus 5.5 · high effort": the model's name as the timeline reads it.
-        public var model: String
+    static func row(_ decision: TicketDecision, reference: Date, calendar: Calendar) -> Row {
+        let title = decision.title?.trimmingWhitespace().nonEmpty ?? decision.answer.trimmingWhitespace()
+        let day = decision.date.map { day($0, reference: reference, calendar: calendar) }
+        let byline = [answeredBy, day].compactMap { $0 }.joined(separator: " · ")
+        let spoken = ["Decision \(decision.id)", title, "answered by you" + (day.map { ", \($0)" } ?? "")]
+        return Row(id: decision.id, title: title, byline: byline, accessibilityLabel: spoken.joined(separator: ", "))
     }
 
-    public struct Link: Equatable, Identifiable {
-        public var id: String { title }
-        /// "Ticket in Linear", "PR #741 on GitHub".
-        public var title: String
-        public var url: URL
-    }
-
-    public struct Brief: Equatable {
-        public var text: String
-        public var walkthrough: String?
-        /// "Written today at 09:12".
-        public var written: String?
-    }
-
-    public var repo: String?
-    /// "Urgent", "High", "Medium", "Low", "No priority".
-    public var priority: String?
-    public var labels: [String]
-    public var workspace: String?
-    /// The machine the workspace is on, when Symphony names one.
-    public var workspaceHost: String?
-    public var models: [RunModel]
-    /// The models' fold folded: "3 runs · Claude Opus 5.5".
-    public var modelsSummary: String?
-    public var links: [Link]
-    public var brief: Brief?
-    /// The ticket's description the agent works from; nil when the app has none.
-    public var agentDescription: String?
-
-    public static let title = "Details"
-    public static let briefTitle = "Brief"
-    public static let walkthroughTitle = "Walkthrough"
-    public static let agentDescriptionTitle = "Agent description"
-    public static let noBriefLine = "No brief yet. The implementation run writes one when it starts."
-    public static let noDescriptionLine = "The description the agent works from is on the ticket in Linear."
-    public static let noLabelsLine = "None"
-    public static let copyTitle = "Copy"
-    public static let copiedTitle = "Copied"
-
-    /// The panel from the ticket read, its run headers from the events feed (`runs`, by run id), the ticket's Linear
-    /// URL and its pull request's, and its description when the app has one. Dates read in `calendar`, against
-    /// `reference`'s day.
-    public static func build(
-        _ read: TicketDetailsRead?, runs: [String: TicketEventsPayload.Run], linearURL: URL?, pullRequest: TicketPullRequest?,
-        description: String?, reference: Date, calendar: Calendar = .current
-    ) -> DetailsPanelModel {
-        let read = read ?? TicketDetailsRead()
-        let models = runModels(runs)
-        let brief = read.brief.flatMap { brief -> Brief? in
-            guard let text = brief.text.trimmingWhitespace().nonEmpty else { return nil }
-            return Brief(
-                text: text, walkthrough: brief.walkthrough?.trimmingWhitespace().nonEmpty,
-                written: brief.at.map { "Written " + FactsMoment.say($0, reference: reference, calendar: calendar) }
-            )
+    /// "today", "yesterday", "Fri 6 Nov": a record's "2026-11-10" against `reference`'s day; as written when it is no
+    /// date.
+    static func day(_ date: String, reference: Date, calendar: Calendar) -> String {
+        let parts = date.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3,
+              let day = calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2]))
+        else { return date }
+        if calendar.isDate(day, inSameDayAs: reference) { return "today" }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: reference), calendar.isDate(day, inSameDayAs: yesterday) {
+            return "yesterday"
         }
-        var links: [Link] = []
-        if let linearURL { links.append(Link(title: "Ticket in Linear", url: linearURL)) }
-        if let pullRequest, let url = pullRequest.url { links.append(Link(title: "PR #\(pullRequest.number) on GitHub", url: url)) }
-        return DetailsPanelModel(
-            repo: read.repoKey?.nonEmpty, priority: read.ticket?.priority.flatMap(priorityWord),
-            labels: read.ticket?.labels ?? [], workspace: read.workspace?.path.nonEmpty, workspaceHost: read.workspace?.host?.nonEmpty,
-            models: models, modelsSummary: modelsSummary(models), links: links, brief: brief,
-            agentDescription: description?.trimmingWhitespace().nonEmpty
-        )
-    }
-
-    static func priorityWord(_ priority: Int) -> String? {
-        TicketPriority.named(String(priority))?.title
-    }
-
-    /// Each run that names its model, oldest first.
-    static func runModels(_ runs: [String: TicketEventsPayload.Run]) -> [RunModel] {
-        runs.values
-            .sorted { ($0.startedAt ?? "", $0.runID) < ($1.startedAt ?? "", $1.runID) }
-            .compactMap { run in
-                let modelID = run.model?.trimmingWhitespace().nonEmpty
-                guard let model = run.modelName?.trimmingWhitespace().nonEmpty ?? modelID.map(ModelName.display) else {
-                    return nil
-                }
-                let effort = run.effort?.trimmingWhitespace().nonEmpty.map { "\($0) effort" }
-                return RunModel(
-                    id: run.runID, run: TicketEventsPayload.runTitle(kind: run.runKind, number: run.runNumber),
-                    model: [model, effort].compactMap { $0 }.joined(separator: " · ")
-                )
-            }
-    }
-
-    /// "1 run · Claude Opus 5.5", "3 runs · Claude Opus 5.5, Deepseek V4": how many runs, and their models once each.
-    static func modelsSummary(_ models: [RunModel]) -> String? {
-        guard !models.isEmpty else { return nil }
-        var names: [String] = []
-        for model in models {
-            let name = String(model.model.split(separator: " · ").first ?? "")
-            if !names.contains(name) { names.append(name) }
-        }
-        return "\(models.count == 1 ? "1 run" : "\(models.count) runs") · \(names.joined(separator: ", "))"
+        let sameYear = calendar.component(.year, from: day) == calendar.component(.year, from: reference)
+        return SharedDateFormatter.string(day, format: sameYear ? "EEE d MMM" : "d MMM yyyy", locale: SharedDateFormatter.british, calendar: calendar)
     }
 }
 

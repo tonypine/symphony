@@ -1415,47 +1415,49 @@ func factsRail(_ name: String, width: CGFloat) -> some View {
     .background(DesignTokens.Surface.window.color)
 }
 
-// MARK: - The facts rail's Decisions and Details panels (TP-1447)
+// MARK: - The facts rail's Decisions panel and the brief (TP-1447, TP-1504)
 
-/// Three tickets (`Tests/Fixtures/facts-rail/details*.json`, the runs' models from `details-events.json`): two decisions
-/// (the older unfolded) and every detail, the run models unfolded; no decisions and no brief; and a ticket Symphony holds
-/// nothing of.
-let factsDetailTickets = ["details", "details-unread", "details-empty"]
+/// The Decisions panel with two decisions, the newest first: one answered today, a ruling from three days before.
+@MainActor
+func factsDecisions(width: CGFloat) -> some View {
+    let decisions = [
+        TicketDecision(
+            id: "D1", date: "2026-11-07", title: "Keep the facts rail at 340 pt on a laptop",
+            question: "How wide is the facts rail on a laptop?", answer: "340 pt, as the catalog shows; the desktop keeps 440 pt."
+        ),
+        TicketDecision(id: "D2", date: "2026-11-10", answer: "Fold the brief to three lines by default."),
+    ]
+    return DecisionsPanel(model: DecisionsPanelModel.build(decisions, reference: factsReference, calendar: timelineCalendar))
+        .frame(width: width, alignment: .leading)
+        .padding(DesignTokens.Space.s5)
+        .background(DesignTokens.Surface.window.color)
+}
+
+/// The brief's three forms: folded, unfolded with its walkthrough and what was asked, and "Asked for" before any run
+/// wrote one (`Tests/Fixtures/facts-rail/details.json` and `details-unread.json`).
+enum BriefStory: String, CaseIterable {
+    case folded, unfolded, askedFor = "asked-for"
+}
+
+/// The main column's widths: a laptop's (780 pt) and a desktop's (1040 pt).
+let briefWidths: [(String, CGFloat)] = [("laptop", 780), ("desktop", 1040)]
 
 @MainActor
-func factsDetails(_ name: String, width: CGFloat) -> some View {
-    func data(_ file: String) -> Data {
-        guard let data = try? Data(contentsOf: factsFixtures.appendingPathComponent("\(file).json")) else {
+func briefPanel(_ story: BriefStory, width: CGFloat) -> some View {
+    func read(_ file: String) -> TicketDetailsRead {
+        guard let data = try? Data(contentsOf: factsFixtures.appendingPathComponent("\(file).json")), let read = TicketDetailsRead.decode(data) else {
             fatalError("The facts rail fixture \(file) is missing from \(factsFixtures.path)")
         }
-        return data
+        return read
     }
-    guard let read = TicketDetailsRead.decode(data(name)), let history = TicketEventsPayload.decode(data("details-events")) else {
-        fatalError("The facts rail fixture \(name) doesn't decode")
-    }
-    let full = name == "details"
-    let runs = name == "details-empty" ? [:] : history.runs
-    let decisions: [TicketDecision] = full ? [
-        TicketDecision(
-            id: "D1", date: "2026-11-09", title: "Keep the facts rail at 340 pt on a laptop",
-            question: "How wide is the facts rail on a laptop?", answer: "340 pt, as the catalog shows; the desktop keeps 440 pt.",
-            scope: "The rail's width is fixed; the main column gives way."
-        ),
-        TicketDecision(id: "D2", date: "2026-11-10", answer: "Fold the agent description by default."),
-    ] : []
-    let details = DetailsPanelModel.build(
-        read, runs: runs, linearURL: full ? URL(string: "https://linear.app/acme/issue/TP-1447") : nil,
-        pullRequest: full ? TicketPullRequest(number: 870, url: URL(string: "https://github.com/acme/symphony/pull/870")) : nil,
-        description: full ? "## Goal\n\nTwo more FactsRail panels: Decisions and Details." : nil,
-        reference: factsReference, calendar: timelineCalendar
-    )
-    return VStack(alignment: .leading, spacing: DesignTokens.Space.s5) {
-        DecisionsPanel(model: DecisionsPanelModel.build(decisions), unfolded: ["D1"])
-        DetailsPanel(model: details, open: { _ in }, copy: { _ in }, modelsUnfolded: full)
-    }
-    .frame(width: width, alignment: .leading)
-    .padding(DesignTokens.Space.s5)
-    .background(DesignTokens.Surface.window.color)
+    let runs = (try? Data(contentsOf: factsFixtures.appendingPathComponent("details-events.json"))).flatMap(TicketEventsPayload.decode)?.runs ?? [:]
+    guard let model = BriefPanelModel.build(
+        read(story == .askedFor ? "details-unread" : "details"), runs: runs, reference: factsReference, calendar: timelineCalendar
+    ) else { fatalError("The brief's fixture holds no brief and no description") }
+    return BriefPanel(model: model, open: .constant(story == .unfolded))
+        .frame(width: width, alignment: .leading)
+        .padding(DesignTokens.Space.s5)
+        .background(DesignTokens.Surface.content.color)
 }
 
 // MARK: - The ticket page at laptop width (TP-1448)
@@ -1566,12 +1568,12 @@ func ticketPageDecisions(_ identifier: String) -> [TicketDecision] {
 /// The whole page of `identifier` in a 1440 × 900 window beside the sidebar: about 1180 pt of content, the rail at
 /// 340 pt. The page scrolls as one, so it is drawn at its whole height, down to the rail's foot.
 @MainActor
-func ticketPageLaptop(_ identifier: String, width: CGFloat = TicketPageLayout.laptopPageWidth) -> some View {
-    let page = ticketPageRead(identifier)
+func ticketPageLaptop(_ identifier: String, width: CGFloat = TicketPageLayout.laptopPageWidth, brief: TicketPageBrief = .folded) -> some View {
+    let page = brief.page(identifier)
     return TicketPageBody(
         page: page, questions: TicketPage.questions(of: identifier, in: ticketPageInbox.items), width: width,
         transcripts: StepTranscripts { _ in .unreachable }, message: TicketMessageComposer(identifier: identifier),
-        decisions: ticketPageDecisions(identifier), calendar: timelineCalendar
+        decisions: brief.decisions(identifier), calendar: timelineCalendar, briefOpen: .constant(brief == .unfolded)
     )
     .environment(\.artifactImages, ticketPageImages())
     .frame(width: width, alignment: .topLeading)
@@ -1661,13 +1663,16 @@ func ticketPageAnswering(picks: DecisionPicks = DecisionPicks(), sending: Bool =
 /// arrangement, with a waiting ticket's Questions as the column on the far right; at 1590 and 1610 pt the two sides of
 /// the 1600 pt breakpoint. The page hasn't scrolled, and is drawn at its whole height.
 @MainActor
-func ticketPageWide(_ identifier: String, width: CGFloat = TicketPageLayout.desktopPageWidth, picks: DecisionPicks = DecisionPicks()) -> some View {
-    let page = ticketPageRead(identifier)
+func ticketPageWide(
+    _ identifier: String, width: CGFloat = TicketPageLayout.desktopPageWidth, picks: DecisionPicks = DecisionPicks(), brief: TicketPageBrief = .folded
+) -> some View {
+    let page = brief.page(identifier)
     let height = TicketPageLayout.desktopPageHeight
     return TicketPageBody(
         page: page, questions: TicketPage.questions(of: identifier, in: ticketPageInbox.items), answers: TicketPageAnswers(picks: picks), width: width,
         transcripts: StepTranscripts { _ in .unreachable }, message: TicketMessageComposer(identifier: identifier),
-        decisions: ticketPageDecisions(identifier), scroll: TicketPageScroll(viewport: height), calendar: timelineCalendar
+        decisions: brief.decisions(identifier), scroll: TicketPageScroll(viewport: height), calendar: timelineCalendar,
+        briefOpen: .constant(brief == .unfolded)
     )
     .environment(\.artifactImages, ticketPageImages())
     .frame(width: width, alignment: .topLeading)
@@ -1678,10 +1683,31 @@ func ticketPageWide(_ identifier: String, width: CGFloat = TicketPageLayout.desk
 /// `identifier`'s page as a window `window` wide draws it, beside the sidebar: under the breakpoint the laptop's
 /// arrangement (with `answering`, Answer's sheet open over it), from it on the desktop's.
 @MainActor
-func ticketPage(_ identifier: String, window: CGFloat, picks: DecisionPicks = DecisionPicks(), answering: Bool = false) -> AnyView {
+func ticketPage(
+    _ identifier: String, window: CGFloat, picks: DecisionPicks = DecisionPicks(), answering: Bool = false, brief: TicketPageBrief = .folded
+) -> AnyView {
     let width = window - DesignTokens.Layout.sidebarWidth
-    if TicketPageLayout.isDesktop(page: width) { return AnyView(ticketPageWide(identifier, width: width, picks: picks)) }
-    return answering ? AnyView(ticketPageAnswering(picks: picks, width: width)) : AnyView(ticketPageLaptop(identifier, width: width))
+    if TicketPageLayout.isDesktop(page: width) { return AnyView(ticketPageWide(identifier, width: width, picks: picks, brief: brief)) }
+    return answering ? AnyView(ticketPageAnswering(picks: picks, width: width)) : AnyView(ticketPageLaptop(identifier, width: width, brief: brief))
+}
+
+/// The brief on top of the page and the Decisions panel (TP-1504): as the fixture has them (the brief folded, a
+/// decision), the brief unfolded, "Asked for" before any run wrote a brief, and a ticket with no decisions, which has no
+/// Decisions panel.
+enum TicketPageBrief: String, CaseIterable {
+    case folded, unfolded, askedFor = "asked-for", noDecisions = "no-decisions"
+
+    /// `identifier`'s page, its brief taken away for "Asked for".
+    func page(_ identifier: String) -> TicketPage {
+        var page = ticketPageRead(identifier)
+        if self == .askedFor { page.detailsRead?.brief = nil }
+        return page
+    }
+
+    @MainActor
+    func decisions(_ identifier: String) -> [TicketDecision] {
+        self == .noDecisions ? [] : ticketPageDecisions(identifier)
+    }
 }
 
 // MARK: - Work › Tickets as the table with filters (TP-1456)
@@ -2047,16 +2073,24 @@ MainActor.assumeIsolated {
             render(factsRail(name, width: FactsRail.laptopWidth), scheme, to: "facts-rail-\(name)-laptop-\(suffix).png")
             render(factsRail(name, width: FactsRail.desktopWidth), scheme, to: "facts-rail-\(name)-desktop-\(suffix).png")
         }
-        // The Decisions and Details panels (TP-1447): with every fact, with less, and with nothing, at both rail widths.
-        for name in factsDetailTickets {
-            render(factsDetails(name, width: FactsRail.laptopWidth), scheme, to: "facts-rail-\(name)-laptop-\(suffix).png")
-            render(factsDetails(name, width: FactsRail.desktopWidth), scheme, to: "facts-rail-\(name)-desktop-\(suffix).png")
+        // The Decisions panel (TP-1504), at both rail widths; a ticket with none has no panel.
+        render(factsDecisions(width: FactsRail.laptopWidth), scheme, to: "facts-rail-decisions-laptop-\(suffix).png")
+        render(factsDecisions(width: FactsRail.desktopWidth), scheme, to: "facts-rail-decisions-desktop-\(suffix).png")
+        // The brief (TP-1504): folded, unfolded and "Asked for", at the main column's laptop and desktop widths.
+        for story in BriefStory.allCases {
+            for (name, width) in briefWidths {
+                render(briefPanel(story, width: width), scheme, to: "brief-panel-\(story.rawValue)-\(name)-\(suffix).png")
+            }
         }
         // The ticket page at laptop width (TP-1448): a run working, waiting on you, shipped; and Answer's sheet open.
         // The ticket page (TP-1448, TP-1449): a run working, waiting on you, shipped. In a laptop's window the page is
         // one column beside the rail; from the 1600 pt breakpoint on, the desktop's arrangement.
         for (identifier, moment) in ticketPageMoments {
             renderScreen(scheme, to: "ticket-page-\(moment)") { ticketPage(identifier, window: $0) }
+        }
+        // The brief and the Decisions panel (TP-1504) on TP-1244's page: unfolded, "Asked for", and no decisions.
+        for brief in TicketPageBrief.allCases where brief != .folded {
+            renderScreen(scheme, to: "ticket-page-brief-\(brief.rawValue)") { ticketPage("TP-1244", window: $0, brief: brief) }
         }
         // Writing to the ticket (TP-1503): the box empty, with a draft, a message waiting for the next run, one a run read.
         for moment in TicketWriting.allCases {

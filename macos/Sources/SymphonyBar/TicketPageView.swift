@@ -444,8 +444,11 @@ struct TicketPageActions {
     var openTicket: (String) -> Void = { _ in }
     /// The epic's row in the Connected panel: its place in Initiatives.
     var openInitiatives: () -> Void = {}
-    /// The Details panel's Copy beside the workspace path.
-    var copy: (String) -> Void = DetailsPanel.pasteboardCopy
+    /// More › Copy Workspace Path: the text on the general pasteboard.
+    var copy: (String) -> Void = { text in
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
     /// ⌘↩ or Send in the box above the timeline.
     var sendMessage: () -> Void = {}
     /// A run's More › Read the whole session: the session reader on that run.
@@ -601,6 +604,8 @@ struct TicketPageView: View {
     @State private var scroll = TicketPageScroll()
     @State private var sheetOpen = false
     @State private var confirmingRestart = false
+    /// The brief unfolded: it stays so while the page shows the same ticket.
+    @State private var briefOpen = false
     @FocusState private var answerFocused: Bool
     @FocusState private var messageFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -622,7 +627,7 @@ struct TicketPageView: View {
                     page: page, timeline: timeline, timelineStore: timelineStore, questions: questions, width: width, transcripts: transcripts, focus: focus, message: message, decisions: decisions,
                     actions: actions, sheetOpen: sheetOpen, answerFocus: $answerFocused, messageFocus: $messageFocused,
                     move: { handle($0, proxy: proxy) }, answer: { sheetOpen = true },
-                    scroll: scroll, decisionsInRow: false
+                    scroll: scroll, decisionsInRow: false, briefOpen: $briefOpen
                 )
                 .environment(\.mentionReferences, references)
                 // A duration so far counts on by itself; the page isn't built again for it (TP-1479).
@@ -689,6 +694,7 @@ struct TicketPageView: View {
         }
         .onChange(of: page.identifier) { _, _ in
             sheetOpen = false
+            briefOpen = false
         }
     }
 
@@ -819,8 +825,8 @@ struct TicketPageBody: View {
     /// window's page keeps only its room there and pins the column over its scroll view (`PinnedDecisions`).
     var decisionsInRow = true
     var calendar: Calendar = .current
-    /// Snapshots only: the Details panel's run models unfolded.
-    var detailsUnfolded = false
+    /// The brief's fold, which the page keeps; a snapshot draws it still.
+    var briefOpen: Binding<Bool> = .constant(false)
 
     /// The page's scroll view, where the columns' row is measured as the page scrolls.
     static let viewportSpace = "ticket-page-viewport"
@@ -879,6 +885,10 @@ struct TicketPageBody: View {
             if !desktop {
                 DecisionsLineView(line: line, open: sheetOpen, focus: answerFocus, answer: answer, review: actions.review)
             }
+            // The brief first, above the Lifecycle; a ticket with neither a brief nor a description has none.
+            if let brief = BriefPanelModel.build(page.detailsRead, runs: page.history?.runs ?? [:], reference: page.reference, calendar: calendar) {
+                BriefPanel(model: brief, open: briefOpen)
+            }
             if let lifecycle = page.lifecycleRead?.lifecycle {
                 LifecycleSection(model: LifecycleModel.build(
                     lifecycle, path: page.lifecycleRead?.phasePath, situation: page.situation, conductorTokens: page.history?.conductorTokens ?? 0
@@ -912,10 +922,9 @@ struct TicketPageBody: View {
     }
 
     private func rail(width: CGFloat?) -> some View {
-        let runs = page.history?.runs ?? [:]
         let connected = ConnectedPanelModel.build(page.factsRead?.connected)
-        // Pull request, Connected, Decisions (`docs/design/director-window-and-home.md`), then the Details panel until
-        // TP-1504 replaces it.
+        let decided = DecisionsPanelModel.build(decisions, reference: page.reference, calendar: calendar)
+        // Pull request, Connected, Decisions (`docs/design/director-window-and-home.md`); there is no Details panel.
         return VStack(alignment: .leading, spacing: gap) {
             // Each card draws again only when its model changed; their actions don't open the gate (TP-1480).
             PullRequestPanel(model: PullRequestPanelModel.build(page.factsRead?.pullRequest), open: actions.openURL)
@@ -925,16 +934,11 @@ struct TicketPageBody: View {
                 ConnectedPanel(model: connected, openTicket: actions.openTicket, openInitiatives: actions.openInitiatives)
                     .equatable()
             }
-            DecisionsPanel(model: DecisionsPanelModel.build(decisions))
-                .equatable()
-            DetailsPanel(
-                model: DetailsPanelModel.build(
-                    page.detailsRead, runs: runs, linearURL: page.url, pullRequest: page.factsRead?.pullRequest, description: nil,
-                    reference: page.reference, calendar: calendar
-                ),
-                open: actions.openURL, copy: actions.copy, modelsUnfolded: detailsUnfolded
-            )
-            .equatable()
+            // Decisions only once the person has answered something on the ticket.
+            if !decided.isEmpty {
+                DecisionsPanel(model: decided)
+                    .equatable()
+            }
         }
         .frame(width: width, alignment: .topLeading)
         .accessibilityElement(children: .contain)

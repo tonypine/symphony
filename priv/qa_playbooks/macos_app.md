@@ -416,11 +416,12 @@ GitHub or Linear in QA:
   Decisions and the note field under it are gone). Open TP-1244 from Tickets: the header has
   TP-1244 with its repo and epic chips, the title, the situation line "Working on the tests
   step", and the moves on their own row (Start Now dimmed, Force…, More with Stop Run… last in
-  red); under it the quiet line "Nothing needs you"; then Lifecycle, then Timeline with
-  implementation run 2 first and unfolded on its Tests step; beside them a 340 pt column with
-  Pull request (PR #741 and its checks), Connected, Note for the next run, Decisions (D1) and
-  Details. Scroll the page: everything scrolls as one, the column's Details panel is reachable,
-  and nothing scrolls sideways or is clipped. Open TP-1245: the line under the header reads "A
+  red); under it the quiet line "Nothing needs you"; then the Brief (three lines and "Read all
+  of it, with the walkthrough"), then Lifecycle, then Timeline with implementation run 2 first
+  and unfolded on its Tests step; beside them a 340 pt column with Pull request (PR #741 and its
+  checks), Connected and Decisions (D1), and no Details panel. Scroll the page: everything
+  scrolls as one, the column's Decisions panel is reachable, and nothing scrolls sideways or is
+  clipped. Open TP-1245: the line under the header reads "A
   question waits on you" with **Answer…**, and its height matches TP-1244's quiet line. Press
   Answer…: a sheet slides in from the right over the dimmed page with the question and its two
   options, the recommended one picked and Send on. Press Escape: the sheet closes and the

@@ -145,18 +145,23 @@ extension StoryRow where Under == EmptyView {
 }
 
 /// The catalog's story fold (`.story-more`, TP-1500): one line under the story's rows that unfolds the rest in place
-/// ("20 more wait in line, in this order") and folds them again, in the accent's text with its chevron.
+/// ("20 more wait in line, in this order") and folds them again, in the accent's text with its chevron. VoiceOver reads
+/// it as a button with its state, expanded or collapsed.
 public struct StoryFold: View {
     let title: String
     let open: Bool
+    let leading: Double
     let toggle: () -> Void
 
     @State private var hovered = false
     @FocusState private var focused: Bool
 
-    public init(_ title: String, open: Bool, toggle: @escaping () -> Void) {
+    /// `leading` is the inset before it: past a story row's number by default; the brief's (`.brief-more`) pulls it
+    /// back by its own padding so its chevron lines up with the text.
+    public init(_ title: String, open: Bool, leading: Double = DesignTokens.StoryRow.foldLeading, toggle: @escaping () -> Void) {
         self.title = title
         self.open = open
+        self.leading = leading
         self.toggle = toggle
     }
 
@@ -187,9 +192,10 @@ public struct StoryFold: View {
             toggle()
             return .handled
         }
-        .padding(.leading, DesignTokens.StoryRow.foldLeading)
+        .padding(.leading, leading)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(title)
+        .accessibilityValue(open ? "expanded" : "collapsed")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { toggle() }
     }
