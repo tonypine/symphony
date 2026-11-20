@@ -140,6 +140,11 @@ defmodule SymphonyElixir.TicketEvents.Types do
   `note` event's id) read it (`run_id`), keyed by the note so only the first read is kept
   (`SymphonyElixir.Marks`).
 
+  `message.sent` is the person's: what they wrote to the ticket (`text`), through the control API's
+  note endpoint, each message its own event (`SymphonyElixir.Messages`). `message.read` is
+  machinery-only: the run (`run_id`) whose prompt was given the message (`message_id`, the
+  `message.sent` event's id) as new, keyed by the message so it is given to one run only.
+
   `report.published` is machinery-only: a status report a report run published through its one tool
   (`SymphonyElixir.Reports`), recorded on the reports ledger and never on a ticket's: the period, the
   tickets and the events it rests on, its sentences, their text, each sentence's citations, the run,
@@ -632,6 +637,20 @@ defmodule SymphonyElixir.TicketEvents.Types do
       required: [note_id: :string, run_id: :string],
       optional: @signal,
       idempotency: {:fields, [:note_id]}
+    },
+    "message.sent" => %{
+      writers: [:person],
+      run_kinds: [],
+      required: [text: {:string, 4_000}],
+      optional: @signal,
+      idempotency: :writer
+    },
+    "message.read" => %{
+      writers: [:machine],
+      run_kinds: [],
+      required: [message_id: :string, run_id: :string],
+      optional: @signal,
+      idempotency: {:fields, [:message_id]}
     },
     "note" => %{
       writers: [:machine, :agent, :person],

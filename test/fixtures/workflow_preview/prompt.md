@@ -1103,15 +1103,18 @@ Open findings (12):
   - open, major, at laptop 1440×900, step Start the export, commit 4f1c2a9, last seen 2026-01-05T11:40:00Z: A failed export shows no error.
   - open, major, at desktop 2560×1440, step Open the export dialog, commit 4f1c2a9, last seen 2026-01-05T11:43:00Z: The dialog shows no empty state when there are no rows.
 
-Notes (3):
+Notes (2):
 - 2026-01-05T09:25:00Z, an agent (Implementation run): The export spends most of its time writing rows one by one; batching them is the plan.
-- 2026-01-05T13:10:00Z, the Director (Sam): The export button stays where it is: users know it there.
 - 2026-01-05T13:50:00Z, an agent (Rework run): The truncated labels come from a fixed column width; the next step makes it flexible.
+
+Messages (1):
+- 2026-01-05T13:10:00Z, Sam wrote (given to Rework run 1 at 2026-01-05T13:16:00Z): The export button stays where it is: users know it there.
 
 Runs (3):
 - Implementation run 1: ended: success, at 4f1c2a9, started 2026-01-05T09:01:00Z
 - QA run 1: ended: failed, at 4f1c2a9, started 2026-01-05T11:05:00Z
 - Rework run 1 (latest): running in Rework, at 4f1c2a9, started 2026-01-05T13:15:00Z
+  - 2026-01-05T13:16:00Z Message read by a run
   - 2026-01-05T13:20:00Z Step started: Fix the clipped export dialog at the laptop viewport
   - 2026-01-05T13:40:00Z Evidence recorded with 1 file: The export dialog at 1440×900 after the fix (files: art_sample_1)
   - 2026-01-05T13:45:00Z Step passed: Fix the clipped export dialog at the laptop viewport

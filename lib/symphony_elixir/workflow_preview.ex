@@ -8,7 +8,7 @@ defmodule SymphonyElixir.WorkflowPreview do
   assembly) via its `:workflow` seam, so the preview never drifts from runtime.
 
   With `ledger.prompt_brief_enabled` on, the sample ticket carries a sample record and ledger,
-  whose summary `SymphonyElixir.TicketEvents.Brief.build/2` renders, so the preview shows the
+  whose summary `SymphonyElixir.TicketEvents.Brief.build/3` renders, so the preview shows the
   ticket history summary agents get; no store is read.
 
   With `:run_kind`, the preview opens with the step list a run of that kind follows
@@ -217,8 +217,9 @@ defmodule SymphonyElixir.WorkflowPreview do
       {182, "phase.entered", %{to: "Rework", from: "QA"}, :machine},
       {240, "decision.recorded", %{answer: "In the background, with a notification when it is done.", request: "evt_sample_170"}, director},
       {245, "decision.requested", %{title: "CSV header", question: "Should the export keep its CSV header row?"}, :machine},
-      {250, "note", %{text: "The export button stays where it is: users know it there."}, director},
+      {250, "message.sent", %{text: "The export button stays where it is: users know it there."}, director},
       {255, "run.started", %{run_id: "run_sample_3", run_kind: "rework", run_number: 1, state: "Rework", head: head}, :machine, "run_sample_3"},
+      {256, "message.read", %{message_id: "evt_sample_250", run_id: "run_sample_3"}, :machine, "run_sample_3"},
       {260, "step.started", %{step_id: "code", title: "Fix the clipped export dialog at the laptop viewport", mode: "delegated"}, rework},
       {280, "evidence", %{caption: "The export dialog at 1440×900 after the fix", artifacts: ["art_sample_1"]}, rework, nil, ["art_sample_1"]},
       {285, "step.completed", %{step_id: "code", title: "Fix the clipped export dialog at the laptop viewport", mode: "delegated", outcome: "passed"}, rework},

@@ -86,7 +86,7 @@ defmodule SymphonyElixir.QaAgent do
   alias SymphonyElixir.Decisions
   alias SymphonyElixir.Harnesses.Launcher
   alias SymphonyElixir.Linear.Issue
-  alias SymphonyElixir.{PathSafety, PromptSafety, QaDriver, QaModeContract, ReviewAgent}
+  alias SymphonyElixir.{Messages, PathSafety, PromptSafety, QaDriver, QaModeContract, ReviewAgent}
   alias SymphonyElixir.PlaybookSettings
   alias SymphonyElixir.QaAgent.Design
   alias SymphonyElixir.QaAgent.Steps
@@ -270,6 +270,13 @@ defmodule SymphonyElixir.QaAgent do
   """
   @spec prompt(job(), map() | nil) :: String.t()
   def prompt(job, parent) do
+    # The person's messages no run was given yet open the pass's prompt, as they open every run's.
+    job
+    |> pass_prompt(parent)
+    |> Messages.prepend_unread(Map.get(job, :repo_key), Map.get(job.issue, :id), Map.get(job, :run_id))
+  end
+
+  defp pass_prompt(job, parent) do
     issue = job.issue
 
     """
