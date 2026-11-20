@@ -174,10 +174,18 @@ defmodule SymphonyElixir.PhaseSteps.WindowTests do
     result = if tests == [], do: {:done, "", 0}, else: run_tests(context, tests, opts, deadline)
 
     case {result, off} do
-      {{:done, output, 0}, [_ | _]} -> {:ask, could_not_run_output(output, off_why(off)), question(context, off_why(off))}
-      {{:done, output, status}, _off} -> {:ok, {output, status}}
-      {{:timeout, output}, _off} -> {:timeout, output}
-      {{:could_not_run, why, output}, _off} -> {:ask, could_not_run_output(output, why), question(context, why)}
+      {{:done, output, 0}, [_ | _]} ->
+        why = off_why(off)
+        {:ask, could_not_run_output(output, why), question(context, why)}
+
+      {{:done, output, status}, _off} ->
+        {:ok, {output, status}}
+
+      {{:timeout, output}, _off} ->
+        {:timeout, output}
+
+      {{:could_not_run, why, output}, _off} ->
+        {:ask, could_not_run_output(output, why), question(context, why)}
     end
   end
 
