@@ -93,7 +93,14 @@ under the five Linear waits for the answer), Symphony observes it into the ticke
   or a new ticket the by-id read doesn't return). Such a ticket waits for the next poll.
 - An `Issue` remove sets the record's `removed_at` in every repo that has one (`removed`), or finds
   none (`no_record`).
-- A `Comment` or any other delivery is only counted, with no observation.
+- A `Comment` create on a ticket a configured repo keeps a record of writes the comment's time into
+  that record (`last_comment_at`) when it is newer than the one the record knows (`updated`, else
+  `unchanged`); on a ticket no repo keeps a record of it writes nothing (`no_record`). A read that
+  carries the ticket's comments (the poll, a by-id read) keeps the same time from them. Under
+  `dispatch.source: record` the record's change is announced, so the ticket's repo runs a cycle at
+  once, and a plan parent in `Plan Review` gets its plan-comment check from that time instead of a
+  by-id read. A `Comment` update or remove, and any other delivery, is only counted, with no
+  observation.
 
 A store refusal, a crash or a timeout is logged and counted as `error`; the delivery is still
 answered `200`.
@@ -108,7 +115,8 @@ The webhook only says "read now": the poll reads Linear and dispatches from what
 from the record. Requests for one repo coalesce: deliveries before its forced poll starts share
 that poll, and one arriving after it started, inside the two-second window, is polled once more at
 the window's end, so it is never dropped. `unchanged`, `stale`, `unrouted`, `no_record`, `error`, a
-`Comment` and any other delivery ask for nothing.
+`Comment` and any other delivery ask for nothing (a `Comment` that updated a record is announced,
+which under `dispatch.source: record` runs the repo's cycle).
 
 `GET /api/v1/state` shows the counts under `linear_webhooks`:
 
