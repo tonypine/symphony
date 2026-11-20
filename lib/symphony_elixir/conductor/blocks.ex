@@ -8,8 +8,9 @@ defmodule SymphonyElixir.Conductor.Blocks do
 
   The resolved shapes (all keys present unless marked optional):
 
-    * `steps`: `run_id`, `run_kind`, `steps` (`step_id`, `title`, `outcome` of `passed`, `failed` or
-      `skipped`, `duration_ms`, `returns_to`; the newest 8);
+    * `steps`: `run_id`, `run_kind`, `steps` (`step_id`, `title`, `outcome` of `passed`, `failed`,
+      `blocked` or `skipped`, the step's one word (`SymphonyElixir.TicketEvents.StepWord`: a QA check
+      is drawn with what it judged), `duration_ms`, `returns_to`; the newest 8);
     * `evidence`: `items` (`event_id`, `artifact_id`, `caption`; 1 to 4);
     * `budget`: `tokens_used`, `tokens_cap` (left out when no cap is set), `parts` (`kind`, `runs`,
       `tokens` by run kind, largest first, at most 5);
@@ -18,7 +19,7 @@ defmodule SymphonyElixir.Conductor.Blocks do
       and its `state` is how that visit ended: a review's or QA's newest verdict since it opened
       (`failed` unless it approved, passed or skipped), else `failed` when it left into Rework;
       `times` counts every entry, `loops` every entry into Rework;
-    * `attempts`: `run_id`, `step_id`, `title`, `tries` (`at`, `outcome`, `duration_ms`, `line`; the
+    * `attempts`: `run_id`, `step_id`, `title`, `tries` (`at`, `outcome` as the step's word, `duration_ms`, `line`; the
       newest 5), `same_line`;
     * `compare`: `expected` and `actual`, each `%{text}` or `%{event_id, artifact_id}`;
     * `findings`: `items` (`id`, `title`, `state` of `open` or `resolved`, `severity`; at most 8, open
@@ -32,7 +33,7 @@ defmodule SymphonyElixir.Conductor.Blocks do
 
   alias SymphonyElixir.{Artifacts, RunStore, TicketEvents, TicketState}
   alias SymphonyElixir.Conductor.Facts
-  alias SymphonyElixir.TicketEvents.Event
+  alias SymphonyElixir.TicketEvents.{Event, StepWord}
 
   @steps_max 8
   @tries_max 5
@@ -114,7 +115,7 @@ defmodule SymphonyElixir.Conductor.Blocks do
   defp steps(run_id, %{events: events}) do
     steps =
       for %Event{type: "step.completed", run_id: ^run_id} = step <- events, field(step, :outcome) in @step_outcomes do
-        %{step_id: field(step, :step_id), title: field(step, :title), outcome: field(step, :outcome)}
+        %{step_id: field(step, :step_id), title: field(step, :title), outcome: StepWord.word(step.payload)}
         |> put_present(:duration_ms, field(step, :duration_ms))
         |> put_present(:returns_to, field(step, :returns_to))
       end
@@ -322,7 +323,7 @@ defmodule SymphonyElixir.Conductor.Blocks do
   end
 
   defp try_of(step) do
-    %{at: iso8601(step.at), outcome: field(step, :outcome), title: field(step, :title)}
+    %{at: iso8601(step.at), outcome: StepWord.word(step.payload), title: field(step, :title)}
     |> put_present(:duration_ms, field(step, :duration_ms))
     |> put_present(:line, output_line(step))
   end

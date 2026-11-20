@@ -605,7 +605,18 @@ it once the turn is over. While a run is live, the ticket read's `running` says 
 (`current_step`) and the run's newest lines from the session stream (`recent_lines`, at most 20):
 that step's while one is open, else the lines since the run's last step completed, or the whole
 stream's for a run that walks no steps (a QA or Code Review run). There is no `step.skipped`: a skip is `step.completed` with `outcome:
-skipped`. A `question.answered` naming the question a paused step waits on resumes that step. Each
+skipped`. A `question.answered` naming the question a paused step waits on resumes that step.
+
+A step is drawn with one word. A stepped QA pass's check step (a walk, a design check, the wide pass,
+a recheck) records `outcome: passed` once it ran to an answer Symphony takes, and what it judged in
+`result.status` (`pass`, `fail`, `blocked`); such a step is drawn, on the ticket page, in the
+Conductor's `steps` and `attempts` blocks and in the Conductor's facts, with what it judged: `passed`,
+`failed` or `blocked`. That it ran stays a fact of the event, not the word shown, and a judged
+failure does not stop the run. Every other step (a machine step, a step without a result, one that
+ended `failed`, `paused` or `skipped`) is drawn with its outcome. The word is read from the event as
+recorded, so events written before it existed draw the same way without a migration. When the
+review overrules a check's judgement, the check keeps what it judged and the verdict's summary says
+which step was overruled and why. Each
 outcome renders one line ("Build failed after 4 min: back to writing the code", "Tests passed in 2
 min", "Paused on your answer", "Checks skipped: no Elixir changed"), and while a run is under way
 its group's line names the step it is on.

@@ -48,9 +48,9 @@ final class StepAnswerViewTests: XCTestCase {
 
     func testAStepsRowSaysItsResultsStatusWhenItAddsInformation() {
         var step = RunStep(id: "c", stepID: "c", title: "Check", state: .failed)
-        step.answer = StepAnswer(result: .init(status: "blocked", expected: "x", actual: "y"))
+        step.answer = StepAnswer(result: .init(status: "plan_mismatch", expected: "x", actual: "y"))
         XCTAssertTrue(step.canUnfold)
-        XCTAssertEqual(step.answer?.result?.extraWord, "blocked")
+        XCTAssertEqual(step.answer?.result?.extraWord, "plan_mismatch")
     }
 
     func testAnAnswersEntriesAreKeyValueRowsWithValuesCutAtEightLines() {

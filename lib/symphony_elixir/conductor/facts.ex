@@ -17,8 +17,10 @@ defmodule SymphonyElixir.Conductor.Facts do
     * `standing`: phase, coding attempt (the implementation and rework runs started), the pull
       request and its head;
     * `last_run`: the newest run that ended, other than the Conductor's own: its kind, model, exit,
-      tokens, steps and their results, the files it changed with a diff stat (only when the workspace
-      exists), and the findings it marked resolved;
+      tokens, steps and their results (each step's `outcome` is its one word,
+      `SymphonyElixir.TicketEvents.StepWord`: a QA check reads what it judged), the files it
+      changed with a diff stat (only when the workspace exists), and the findings it marked
+      resolved;
     * `findings`: every finding with its state (`open`, `resolved`, `reopened`, `confirmed`), class,
       severity, description, evidence, its resolution, and how many times its class was recorded on
       this ticket (`class_count`);
@@ -44,7 +46,7 @@ defmodule SymphonyElixir.Conductor.Facts do
   alias SymphonyElixir.Conductor.Filing
   alias SymphonyElixir.{Config, RunStore, TicketBrief, TicketEvents, TicketState, Walkthrough, Workspace}
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.TicketEvents.Event
+  alias SymphonyElixir.TicketEvents.{Event, StepWord}
 
   @schema "symphony.conductor.facts/1"
   @cut_marker " [cut by Symphony]"
@@ -303,7 +305,7 @@ defmodule SymphonyElixir.Conductor.Facts do
         step_id: payload(step, :step_id),
         title: payload(step, :title),
         mode: payload(step, :mode),
-        outcome: payload(step, :outcome),
+        outcome: StepWord.word(step.payload),
         returns_to: payload(step, :returns_to),
         reason: payload(step, :reason),
         result: result(payload(step, :result)),

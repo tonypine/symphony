@@ -100,6 +100,7 @@ defmodule SymphonyElixir.Conductor.WatchTest do
     events = [
       %Event{id: "s1", type: "step.started", payload: %{step_id: "code", title: "Write the code", mode: "delegated"}},
       step("c1", "code", "passed"),
+      %Event{id: "w1", type: "step.completed", payload: %{step_id: "walk_1", outcome: "passed", result: %{"status" => "fail"}}},
       %Event{id: "s2", type: "step.started", payload: %{step_id: "build", title: "Build", mode: "machine"}}
     ]
 
@@ -107,7 +108,7 @@ defmodule SymphonyElixir.Conductor.WatchTest do
     live = Watch.live(run, events)
 
     assert %{kind: "implementation", model: "m", harness: "claude", tokens: 10, elapsed_minutes: 0} = live
-    assert live.steps == [%{event_id: "c1", step_id: "code", outcome: "passed"}]
+    assert live.steps == [%{event_id: "c1", step_id: "code", outcome: "passed"}, %{event_id: "w1", step_id: "walk_1", outcome: "failed"}]
     assert live.current_step == %{step_id: "build", title: "Build", mode: "machine"}
     assert live.newest_lines == ["compiling", "error: undefined", "{:raw, 1}"]
     assert Watch.live(%{run | run_profile: nil}, []).current_step == nil

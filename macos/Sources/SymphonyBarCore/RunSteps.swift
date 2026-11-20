@@ -158,7 +158,8 @@ public struct RunNow: Equatable {
 /// One step of a run, as the Step list's row shows it.
 public struct RunStep: Equatable, Identifiable {
     public enum State: String, Equatable {
-        case done, current, failed, paused, skipped
+        /// `blocked`: a QA check that could not judge (`StepAnswer.Result.judgement`).
+        case done, current, failed, paused, skipped, blocked
 
         /// The row's word.
         public var word: String {
@@ -168,6 +169,7 @@ public struct RunStep: Equatable, Identifiable {
             case .failed: "Failed"
             case .paused: "Asked a question"
             case .skipped: "Skipped"
+            case .blocked: "Blocked"
             }
         }
 
@@ -179,6 +181,7 @@ public struct RunStep: Equatable, Identifiable {
             case .failed: .problem
             case .paused: .you
             case .skipped: .idle
+            case .blocked: .problem
             }
         }
 
@@ -190,6 +193,7 @@ public struct RunStep: Equatable, Identifiable {
             case .failed: "xmark.circle.fill"
             case .paused: "questionmark.circle.fill"
             case .skipped: "arrow.uturn.forward.circle"
+            case .blocked: "exclamationmark.circle.fill"
             }
         }
 
@@ -201,6 +205,7 @@ public struct RunStep: Equatable, Identifiable {
             case .failed: "xmark"
             case .paused: "questionmark"
             case .skipped: "arrow.uturn.forward"
+            case .blocked: "exclamationmark"
             }
         }
     }
@@ -248,6 +253,11 @@ public struct RunStep: Equatable, Identifiable {
     static let rowReasonLimit = 80
 
     public var isLive: Bool { state == .current }
+
+    /// A step the run stopped at: one that failed to run (not a QA check that judged the change failed), or asked.
+    public var stopsTheRun: Bool {
+        state == .paused || (state == .failed && answer?.result?.judgement != .failed)
+    }
 
     /// Whether the step has lines to unfold into: a transcript, or the run now's lines. The step the run now is on
     /// unfolds before its first line comes, so that line fades in where the person sees it.
@@ -419,18 +429,17 @@ public struct RunGroupModel: Equatable, Identifiable {
     public static let metaSeparator = " · "
 
     /// The step the folded line names: the one it is on, else the one it stopped at (failed or asked), else its last.
+    /// A QA check that judged the change failed did not stop the run, so it is not where it stopped.
     public var stoppedAt: RunStep? {
-        steps.last { $0.state == .current } ?? steps.last { [.failed, .paused].contains($0.state) } ?? steps.last
+        steps.last { $0.state == .current } ?? steps.last(where: \.stopsTheRun) ?? steps.last
     }
 
     /// The folded line's "on Tests", "stopped at Checks", "ended after Handoff".
     public var whereText: String? {
         guard let step = stoppedAt else { return nil }
-        switch step.state {
-        case .current: return "on \(step.title)"
-        case .failed, .paused: return "stopped at \(step.title)"
-        case .done, .skipped: return isLive ? "after \(step.title)" : "ended after \(step.title)"
-        }
+        if step.state == .current { return "on \(step.title)" }
+        if step.stopsTheRun { return "stopped at \(step.title)" }
+        return isLive ? "after \(step.title)" : "ended after \(step.title)"
     }
 
     /// The header for VoiceOver: "Implementation run 2, running, on Tests, 42 minutes, 1.2M tokens".
@@ -630,9 +639,12 @@ public struct RunGroupModel: Equatable, Identifiable {
 
     static let endedInStep = "The run ended during this step"
 
-    /// A `step.completed`'s state and its reason.
+    /// A `step.completed`'s state and its reason. A step that ran to an answer and judged it (a QA check's
+    /// `result.status`) is drawn with what it judged; "the step ran" is not what the row says.
     static func completion(_ payload: TicketEventsPayload.Payload) -> (RunStep.State, String?) {
         switch payload.outcome?.lowercased() {
+        case "passed":
+            return (payload.answer?.result?.judgement ?? .done, payload.reason?.trimmingWhitespace().nonEmpty)
         case "failed":
             let back = payload.returnsToTitle?.trimmingWhitespace().nonEmpty ?? payload.returnsTo?.trimmingWhitespace().nonEmpty
             return (.failed, back.map { "back to \($0)" } ?? payload.reason?.trimmingWhitespace().nonEmpty)

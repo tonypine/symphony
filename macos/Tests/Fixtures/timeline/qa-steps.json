@@ -102,9 +102,9 @@
      "payload": {
       "step_id": "check-1",
       "title": "Check: Needs-a-fix row",
-      "outcome": "failed",
+      "outcome": "passed",
       "result": {
-       "status": "failed",
+       "status": "fail",
        "expected": "The Needs-a-fix row shows the problem mark and the problem colour, taken from the same source as the strip above it, in light and in dark, at 1440 and at 2560 pt.",
        "actual": "The row still reads Next in line with the neutral clock. The strip is red at position 6 and its legend says 1 needs a fix.\nAt 2560 pt the row is cut at its right edge.\nIn dark the clock is the same grey as the idle rows."
       }
@@ -134,7 +134,7 @@
      "payload": {
       "step_id": "check-2",
       "title": "Check: Done recently card",
-      "outcome": "failed",
+      "outcome": "passed",
       "result": {
        "status": "blocked",
        "expected": "Landed tickets, newest first",
