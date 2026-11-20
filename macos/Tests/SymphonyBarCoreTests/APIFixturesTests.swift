@@ -74,6 +74,48 @@ final class APIFixturesTests: XCTestCase {
         XCTAssertEqual(String(decoding: data, as: UTF8.self), #"{"counts":{"running":2}}"#)
     }
 
+    func testALateStateHoldsOnlyTheStateReadsInsideItsWindow() throws {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let state = request("api/v1/state")
+        XCTAssertNil(fixtures.lateState)
+        XCTAssertEqual(fixtures.hold(state, now: start.addingTimeInterval(40), since: start), 0, "no late file, no hold")
+
+        try Data(#"{"after": 30, "for": 60}"#.utf8)
+            .write(to: root.appendingPathComponent("fixtures/api/v1/state.late.json"))
+        XCTAssertEqual(fixtures.lateState, APIFixtures.LateState(after: 30, for: 60))
+        XCTAssertEqual(fixtures.hold(state, now: start.addingTimeInterval(29), since: start), 0, "before the window")
+        XCTAssertEqual(fixtures.hold(state, now: start.addingTimeInterval(30), since: start), 60)
+        XCTAssertEqual(fixtures.hold(state, now: start.addingTimeInterval(75), since: start), 15, "held until the window ends")
+        XCTAssertEqual(fixtures.hold(state, now: start.addingTimeInterval(90), since: start), 0, "it answers again")
+        // The health read and every other read answer at once, and a move is never held.
+        let inside = start.addingTimeInterval(40)
+        XCTAssertEqual(fixtures.hold(request("api/v1/health"), now: inside, since: start), 0)
+        XCTAssertEqual(fixtures.hold(request("api/v1/tickets"), now: inside, since: start), 0)
+        XCTAssertEqual(fixtures.hold(request("api/v1/state", method: "POST"), now: inside, since: start), 0)
+        // Held or not, the answer is the state file's.
+        XCTAssertEqual(fixtures.answer(state).1.statusCode, 200)
+    }
+
+    func testTheTransportAnswersAReadOutsideALateWindowAtOnce() async throws {
+        let (data, _) = try await fixtures.transport(request("api/v1/state"))
+        XCTAssertEqual(String(decoding: data, as: UTF8.self), #"{"counts":{"running":2}}"#)
+    }
+
+    func testTheSymphonyLateFixtureIsTheTicketPageWithALateState() throws {
+        let fixtures = Self.shippedRunning.deletingLastPathComponent()
+        let late = APIFixtures(
+            directory: fixtures.appendingPathComponent("symphony-late"), requestLog: root.appendingPathComponent("late.jsonl")
+        )
+        XCTAssertEqual(late.lateState, APIFixtures.LateState(after: 60, for: 60))
+        let page = APIFixtures(
+            directory: fixtures.appendingPathComponent("ticket-page"), requestLog: root.appendingPathComponent("page.jsonl")
+        )
+        XCTAssertNil(page.lateState)
+        for path in ["api/v1/state", "api/v1/tickets", "api/v1/TP-1244"] {
+            XCTAssertEqual(late.answer(request(path)).0, page.answer(request(path)).0, path)
+        }
+    }
+
     func testGetAnswers404WithoutAFile() {
         XCTAssertEqual(fixtures.answer(request("api/v1/inbox")).1.statusCode, 404)
     }

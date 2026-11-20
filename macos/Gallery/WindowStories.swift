@@ -74,13 +74,17 @@ let windowStories: [ComponentStory] = {
 
 // The catalog's window sidebar and status line (`winSidebar`, `winStatus`, `dispatchControl`): the sidebar expanded and
 // folded to its glyphs, in a front window and behind one, with a row under the pointer, pressed and with the keyboard;
-// the status line with dispatch on, paused, its menu open, without Home's read and with Symphony stopped.
+// the status line with dispatch on, paused, its menu open, without Home's read and with Symphony stopped. While
+// Symphony is late (TP-1562) the sidebar's counts are its last answer's, in idle grey, and the status line says it
+// isn't answering, with its last counts in the tertiary colour and Open Logs and Restart Symphony.
 
-/// The sidebar's rows as the window fills them: Home with two that need the Director, Factory with two problems.
+/// The sidebar's rows as the window fills them: Home with two that need the Director, Factory with two problems,
+/// marked not current while Symphony is late.
 @MainActor
-func sidebarStoryEntries(waiting: Int = 2, problems: Int = 2) -> [SidebarEntry<SidebarItem>] {
+func sidebarStoryEntries(waiting: Int = 2, problems: Int = 2, current: Bool = true) -> [SidebarEntry<SidebarItem>] {
     SymphonySidebar.entries(SidebarRows().items) { destination in
-        destination.badge(waitingOnYou: waiting, setup: SetupSummary(errors: problems))
+        let badge = destination.badge(waitingOnYou: waiting, setup: SetupSummary(errors: problems))
+        return current ? badge : badge?.notCurrent
     }
 }
 
@@ -95,11 +99,12 @@ let sidebarStoryHeight: CGFloat = {
 @MainActor
 func sidebarStory(
     collapsed: Bool = false, windowActive: Bool = true, drawn: [SidebarItem: DesignTokens.Interaction] = [:], waiting: Int = 2,
-    problems: Int = 2
+    problems: Int = 2, countsCurrent: Bool = true
 ) -> AnyView {
     AnyView(
         Sidebar(
-            sidebarStoryEntries(waiting: waiting, problems: problems), current: .destination(.work), collapsed: collapsed,
+            sidebarStoryEntries(waiting: waiting, problems: problems, current: countsCurrent), current: .destination(.work),
+            collapsed: collapsed,
             windowActive: windowActive, drawn: drawn
         ) { _ in }
             .frame(height: sidebarStoryHeight)
@@ -120,7 +125,7 @@ func statusLineStory(
     let control = DispatchControl(window: window, paused: paused, state: nil, now: now)
     let line = HealthLine(
         window: window, dispatch: control, build: DiagnosticsPayload.Build(version: "0.0.1.926", sha: "a0be0aa5c1d2e3f4"),
-        appVersion: "0.0.1.926", lastUpdate: now, counts: window == .connected ? counts : nil, timeZone: TimeZone(identifier: "UTC")!
+        appVersion: "0.0.1.926", lastUpdate: now, counts: window.countsKnown ? counts : nil, timeZone: TimeZone(identifier: "UTC")!
     )
     return AnyView(
         StatusLine(line) { DispatchStatusControl(control, open: open, drawnAs: face) {} }
@@ -153,6 +158,8 @@ let sidebarStatusStories: [ComponentStory] = {
         side("expanded-no-counts") { sidebarStory(waiting: 0, problems: 0) },
         side("collapsed", collapsed: true) { sidebarStory(collapsed: true) },
         side("collapsed-window-not-focused", collapsed: true) { sidebarStory(collapsed: true, windowActive: false) },
+        side("expanded-symphony-late") { sidebarStory(countsCurrent: false) },
+        side("collapsed-symphony-late", collapsed: true) { sidebarStory(collapsed: true, countsCurrent: false) },
         line("dispatch-on") { statusLineStory() },
         line("dispatch-on-hover") { statusLineStory(face: .hover) },
         line("dispatch-on-menu-open") { statusLineStory(open: true) },
@@ -160,5 +167,7 @@ let sidebarStatusStories: [ComponentStory] = {
         line("dispatch-paused") { statusLineStory(paused: true) },
         line("without-home-read") { statusLineStory(counts: nil) },
         line("symphony-stopped") { statusLineStory(window: .stopped) },
+        line("symphony-late") { statusLineStory(window: .lagging("\(StatusMachine.notAnsweringTitle) · 25 s")) },
+        line("symphony-late-paused") { statusLineStory(window: .lagging("\(StatusMachine.notAnsweringTitle) · 25 s"), paused: true) },
     ]
 }()

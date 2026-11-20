@@ -1,0 +1,47 @@
+{
+  "in_progress": [
+    {
+      "kind": "ticket",
+      "issue_id": "i-1244",
+      "identifier": "TP-1244",
+      "title": "The paused line on the ticket page",
+      "repo_key": "symphony",
+      "phase": "Rework",
+      "situation": {
+        "kind": "working",
+        "word": "Working on the tests step",
+        "cause": "Implementation run 2 is answering QA's finding.",
+        "since": "2026-10-08T10:15:06Z"
+      },
+      "since": "2026-10-08T10:15:06Z",
+      "working": true,
+      "move": null
+    },
+    {
+      "kind": "ticket",
+      "issue_id": "i-1245",
+      "identifier": "TP-1245",
+      "title": "The paused line on the ticket page",
+      "repo_key": "symphony",
+      "phase": "Rework",
+      "situation": {
+        "kind": "waiting_on_you",
+        "word": "Waiting on you",
+        "cause": "Implementation run 2 asked how the paused line's times should read.",
+        "since": "2026-10-08T10:04:31Z"
+      },
+      "since": "2026-10-08T10:04:31Z",
+      "working": false,
+      "move": null
+    }
+  ],
+  "queue": {
+    "roots": []
+  },
+  "outside": {
+    "backlog": 0,
+    "below_priority": 0,
+    "epic": 0,
+    "behind": 0
+  }
+}

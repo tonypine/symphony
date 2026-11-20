@@ -56,6 +56,7 @@ control-bar-setup-checking
 control-bar-shipped
 control-bar-tickets
 control-bar-tickets-filtered
+count-badge-not-current
 count-badge-over-99
 count-badge-problems
 count-badge-quiet
@@ -156,12 +157,14 @@ segmented-control-segment-hover
 segmented-control-small
 segmented-control-two-segments
 sidebar-collapsed
+sidebar-collapsed-symphony-late
 sidebar-collapsed-window-not-focused
 sidebar-expanded
 sidebar-expanded-no-counts
 sidebar-expanded-row-hover
 sidebar-expanded-row-keyboard-focus
 sidebar-expanded-row-pressed
+sidebar-expanded-symphony-late
 sidebar-expanded-window-not-focused
 status-dot-done
 status-dot-forced
@@ -175,6 +178,8 @@ status-line-dispatch-on-hover
 status-line-dispatch-on-keyboard-focus
 status-line-dispatch-on-menu-open
 status-line-dispatch-paused
+status-line-symphony-late
+status-line-symphony-late-paused
 status-line-symphony-stopped
 status-line-without-home-read
 table-header-and-row-default

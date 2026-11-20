@@ -1,0 +1,13 @@
+{
+  "issue_identifier": "TP-1245",
+  "decisions": [
+    {
+      "id": "D1",
+      "date": "2026-10-07",
+      "title": "Fold the pause reasons under one line",
+      "question": "Show every pause reason, or one line with the rest folded?",
+      "answer": "One line; the reasons fold under it.",
+      "scope": "The paused line is one row on a laptop."
+    }
+  ]
+}
