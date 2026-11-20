@@ -607,6 +607,57 @@ defmodule SymphonyElixir.QaBuildTest do
     end
   end
 
+  describe "selects_app?/4" do
+    setup do
+      root = Path.join(System.tmp_dir!(), "qa-build-select-#{System.unique_integer([:positive])}")
+      origin = Path.join(root, "origin")
+      File.mkdir_p!(origin)
+      on_exit(fn -> File.rm_rf(root) end)
+      git!(origin, ["init", "--quiet", "--initial-branch=main"])
+      File.write!(Path.join(origin, "a.txt"), "one\n")
+      git!(origin, ["add", "--all"])
+      git!(origin, ["commit", "--quiet", "-m", "one"])
+      clone = Path.join(root, "clone")
+      {_output, 0} = System.cmd("git", ["clone", "--quiet", origin, clone], stderr_to_stdout: true)
+
+      File.mkdir_p!(Path.join(clone, "app"))
+      File.write!(Path.join(clone, "app/Main.kt"), "fun main() {}\n")
+      git!(clone, ["add", "--all"])
+      git!(clone, ["commit", "--quiet", "-m", "android"])
+      android = git!(clone, ["rev-parse", "HEAD"])
+
+      File.mkdir_p!(Path.join(clone, "macos"))
+      File.write!(Path.join(clone, "macos/App.swift"), "import SwiftUI\n")
+      git!(clone, ["add", "--all"])
+      git!(clone, ["commit", "--quiet", "-m", "swift"])
+      swift = git!(clone, ["rev-parse", "HEAD"])
+
+      auto_review = %{worker_host: "qa-vm", playbooks: %{macos_app: %{build: "make app", app: "build/Demo.app"}}}
+      write_workflow_file!(Workflow.workflow_file_path(), auto_review: auto_review)
+      %{clone: clone, android: android, swift: swift}
+    end
+
+    defp ticket(labels \\ []), do: %Issue{id: "issue-select", identifier: "TP-9", title: "Select", state: "QA", labels: labels}
+
+    test "only a head whose QA pass selects the macos_app playbook", %{clone: clone, android: android, swift: swift} do
+      refute QaBuild.selects_app?("default", ticket(), android, workspace: clone)
+      assert QaBuild.selects_app?("default", ticket(), swift, workspace: clone)
+
+      # The pass's labels select or skip it, whatever the diff.
+      assert QaBuild.selects_app?("default", ticket(["qa:macos_app"]), android, workspace: clone)
+      refute QaBuild.selects_app?("default", ticket(["qa:skip"]), swift, workspace: clone)
+    end
+
+    test "a diff that can't be read selects every enabled playbook, and a repository without settings none", %{clone: clone} do
+      assert QaBuild.selects_app?("default", ticket(), String.duplicate("0", 40), workspace: clone)
+      assert QaBuild.selects_app?("default", ticket(), @sha)
+      refute QaBuild.selects_app?("no-such-repo", ticket(), @sha, workspace: clone)
+
+      write_workflow_file!(Workflow.workflow_file_path(), auto_review: %{worker_host: "qa-vm"})
+      refute QaBuild.selects_app?("default", ticket(), @sha, workspace: clone)
+    end
+  end
+
   describe "tree/3" do
     setup do
       root = Path.join(System.tmp_dir!(), "qa-build-test-#{System.unique_integer([:positive])}")

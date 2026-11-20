@@ -27,6 +27,11 @@ defmodule SymphonyElixir.QaBuildHoldTest do
   defmodule Builder do
     @moduledoc false
     def builds?(_repo_key), do: Process.get(:qa_builds?, true)
+
+    def selects_app?(repo_key, issue, head) do
+      send(self(), {:selection_read, repo_key, issue.id, head})
+      Process.get(:qa_selects_app?, true)
+    end
     def lookup(_repo_key, head), do: Map.get(Process.get(:qa_build_records, %{}), head)
 
     def request(repo_key, head, ticket) do
@@ -241,6 +246,40 @@ defmodule SymphonyElixir.QaBuildHoldTest do
       assert resolve(@head) == :dispatch
       refute_received {:requested, @repo_key, @head, %{identifier: nil}}
       assert commits() == []
+    end
+
+    test "a head whose QA pass selects no Mac app: no build, no hold, and a failed build sends nothing back" do
+      Process.put(:qa_selects_app?, false)
+      record!(@head, @failed)
+
+      assert resolve(@head) == :dispatch
+      assert_received {:selection_read, @repo_key, @issue_id, @head}
+      refute_received {:requested, _repo_key, _head, _ticket}
+      refute_received {:marked, _repo_key, _tree, _issue_id, _arrival}
+      assert commits() == []
+
+      # A hold left for an earlier head that did select the app goes.
+      Process.put(:qa_selects_app?, true)
+      capture_log(fn -> assert resolve(@new_head) == :held end)
+      Process.put(:qa_selects_app?, false)
+      assert capture_log(fn -> assert resolve(@head) == :dispatch end) =~ "Released from the QA build hold"
+      assert commits() == []
+    end
+
+    test "a head already held for its build is not read again" do
+      capture_log(fn -> assert resolve(@head) == :held end)
+      assert_received {:selection_read, @repo_key, @issue_id, @head}
+      Process.put(:qa_selects_app?, false)
+
+      record!(@head, %{status: :building, tree: @tree})
+      assert resolve(@head) == :held
+      refute_received {:selection_read, _repo_key, _issue_id, _head}
+
+      record!(@head, %{status: :unavailable, tree: @tree, reason: "ssh: timeout"})
+      capture_log(fn -> assert resolve(@head) == :held end)
+      assert resolve(@head) == :held
+      refute_received {:selection_read, _repo_key, _issue_id, _head}
+      assert commits() == ["qa_build:" <> @head]
     end
 
     test "without the builder nothing is held" do

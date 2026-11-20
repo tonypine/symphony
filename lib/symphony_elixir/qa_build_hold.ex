@@ -22,8 +22,10 @@ defmodule SymphonyElixir.QaBuildHold do
       <reason>". Nothing asks for the build again on a timer: a new head does, Symphony's start
       does, and a person who lifts the hold with Unblock does (`lifted/4`, which asks the builder
       again before the reason goes).
-    * a repository with nothing to build (no `macos_app` `build` and `app`, or no `worker_host`), or
-      no builder -> QA dispatches as it does without the pre-build.
+    * a repository with nothing to build (no `macos_app` `build` and `app`, or no `worker_host`), a
+      head whose QA pass does not select the `macos_app` playbook (`SymphonyElixir.QaBuild.selects_app?/4`:
+      an Android-only repository, a change outside the app's paths), or no builder -> QA dispatches
+      as it does without the pre-build, and a build that failed on such a head sends nothing back.
 
   A reason left for another commit or another outcome (the head moved, the build ended) is
   replaced, and the pass clears the hold of a ticket that left QA (`release/3`). The hold only stops
@@ -53,13 +55,23 @@ defmodule SymphonyElixir.QaBuildHold do
   def resolve(repo_key, %Issue{id: issue_id} = issue, head, opts \\ []) when is_binary(repo_key) and is_binary(issue_id) do
     builder = Keyword.get(opts, :builder, QaBuild)
 
-    if is_binary(head) and is_binary(issue.identifier) and builder.builds?(repo_key) do
+    if is_binary(head) and is_binary(issue.identifier) and builder.builds?(repo_key) and app_pass?(repo_key, issue, head, builder) do
       act(builder.lookup(repo_key, head), repo_key, issue, head, builder, opts)
     else
       release(repo_key, issue_id, issue.identifier)
       :dispatch
     end
   end
+
+  # Only a head whose QA pass selects the `macos_app` playbook is built for (`QaBuild.selects_app?/4`).
+  # A head this hold already holds was selected when it was first held, so its diff is not read again
+  # on every pass while it builds.
+  defp app_pass?(repo_key, issue, head, builder) do
+    Enum.any?(reasons(repo_key, issue.id), &(held_head(&1) == head)) or builder.selects_app?(repo_key, issue, head)
+  end
+
+  defp held_head(%{kind: :build, waits_on: %{commit: commit}}), do: commit
+  defp held_head(reason), do: unavailable_head(reason)
 
   defp act(%{status: :ready}, repo_key, issue, _head, _builder, _opts) do
     release(repo_key, issue.id, issue.identifier)

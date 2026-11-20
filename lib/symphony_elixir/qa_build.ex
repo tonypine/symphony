@@ -8,7 +8,9 @@ defmodule SymphonyElixir.QaBuild do
   Review or QA (`SymphonyElixir.PrWatch.Repo`), at the QA dispatch gate for a head nobody asked for
   yet (`SymphonyElixir.QaBuildHold`), and by the QA pass's `qa_build` (`fetch/4`). Asking twice
   changes nothing. It builds for a repository whose `macos_app` playbook has a `build` command and
-  an `app`, on its `auto_review.worker_host`; for any other repository a request does nothing.
+  an `app`, on its `auto_review.worker_host`; for any other repository a request does nothing. The
+  callers ask only for a head whose QA pass selects that playbook (`selects_app?/4`): a ticket whose
+  pass selects only another playbook is never built for, held or sent back for a build.
 
   A build is keyed by the repository and the commit's tree (`git rev-parse <sha>^{tree}`, read in
   the ticket's workspace, fetching the commit first when the workspace does not hold it), so a head
@@ -47,6 +49,7 @@ defmodule SymphonyElixir.QaBuild do
   require Logger
 
   alias SymphonyElixir.{Config, QaBuildHold, QaPolicy, RunStore, Workspace}
+  alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaBuild.Store
   alias SymphonyElixir.Repo.Fetcher
 
@@ -191,6 +194,42 @@ defmodule SymphonyElixir.QaBuild do
       {:ok, %{worker_host: worker_host, build: build, app: app, build_timeout_ms: Map.get(playbook, :build_timeout_ms) || @default_build_timeout_ms}}
     else
       _nothing_to_build -> :none
+    end
+  end
+
+  @doc """
+  Whether the QA pass for commit `sha` of `repo_key`'s ticket `issue` selects the `macos_app`
+  playbook: the selection the pass makes (`SymphonyElixir.QaPolicy.decision/3`) from the paths `sha`
+  changes in the ticket's workspace, its `qa:<kind>` labels and its walkthrough. Only such a head is
+  built ahead of QA and held for its build, so a repository whose passes select only another
+  playbook (an Android app) never builds the Mac app. A diff that cannot be read selects every
+  enabled playbook, as the pass does. Options: `:workspace` (default the ticket's workspace) and
+  `:git` (`SymphonyElixir.QaPolicy.changed_paths/4`'s).
+  """
+  @spec selects_app?(String.t(), Issue.t(), String.t(), keyword()) :: boolean()
+  def selects_app?(repo_key, %Issue{} = issue, sha, opts \\ []) when is_binary(repo_key) and is_binary(sha) do
+    case Config.settings_for_repo(repo_key) do
+      {:ok, settings} -> settings |> pass_playbooks(repo_key, issue, sha, opts) |> Enum.any?(&(&1.kind == "macos_app"))
+      _no_settings -> false
+    end
+  end
+
+  defp pass_playbooks(settings, repo_key, issue, sha, opts) do
+    with {:ok, workspace} <- workspace_of(issue, repo_key, opts),
+         {:ok, paths} <- QaPolicy.changed_paths(workspace, repo_key, sha, Keyword.take(opts, [:git])) do
+      case QaPolicy.decision(issue, settings, paths) do
+        {:run, playbooks, _reason} -> playbooks
+        _skip_or_nothing_to_verify -> []
+      end
+    else
+      {:error, _unreadable} -> QaPolicy.enabled_playbooks(settings)
+    end
+  end
+
+  defp workspace_of(issue, repo_key, opts) do
+    case Keyword.fetch(opts, :workspace) do
+      {:ok, workspace} when is_binary(workspace) -> {:ok, workspace}
+      _default -> Workspace.local_path_for_issue(issue.identifier, repo_key)
     end
   end
 

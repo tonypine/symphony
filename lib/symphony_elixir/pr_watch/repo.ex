@@ -1107,14 +1107,15 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
   # A new head of a ticket in Code Review or QA (branch upkeep, a person's push), and the head a
   # ticket comes back to one of them with (a CI Fix return), is built for QA at once
-  # (`SymphonyElixir.QaBuild`), so its build runs beside the review and CI. Asking again for a head
-  # already asked for changes nothing.
+  # (`SymphonyElixir.QaBuild`), so its build runs beside the review and CI, when its QA pass selects
+  # the app (`QaBuild.selects_app?/4`). Asking again for a head already asked for changes nothing.
   defp request_qa_build(%{head_sha: head}, previous, %{phase: phase, issue: %{identifier: identifier} = issue}, state)
        when is_binary(head) and is_binary(identifier) and phase in [:code_review, :qa] do
     new_head? = carried(previous, :head_sha, nil) != head
+    qa_build = Keyword.get(state.opts, :qa_build, QaBuild)
 
-    if new_head? or not built_phase?(previous) do
-      Keyword.get(state.opts, :qa_build, QaBuild).request(state.repo_key, head, %{identifier: identifier, issue_id: issue.id, new_head: new_head?})
+    if (new_head? or not built_phase?(previous)) and qa_build.builds?(state.repo_key) and qa_build.selects_app?(state.repo_key, issue, head) do
+      qa_build.request(state.repo_key, head, %{identifier: identifier, issue_id: issue.id, new_head: new_head?})
     end
 
     :ok
