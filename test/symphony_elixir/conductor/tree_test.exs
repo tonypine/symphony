@@ -414,6 +414,31 @@ defmodule SymphonyElixir.Conductor.TreeTest do
       assert [%{payload: %{junction: "final_check"}}] = Enum.filter(Facts.events(ctx.issue_id), &(&1.type == "conductor.update"))
     end
 
+    test "done reads the sub-tickets again: one added meanwhile keeps the ticket waiting", ctx do
+      # A sub-ticket filed after the turn read the tree: the tracker lists it, the turn's facts did not.
+      added = %{id: "c9", identifier: "MT-9", state: "Todo"}
+
+      turn = fn _plan, _issue, _run_id, _prompt ->
+        Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{ctx.parent | sub_issues: ended() ++ [added]}])
+        answered(%{"done" => true, "tree" => []})
+      end
+
+      assert Conductor.tend(ctx.parent, "final_check", "default", settings: @on, turn: turn) == :ok
+
+      refute_received {:memory_tracker_state_update, _parent, "Done"}
+      assert %{phase: @waiting} = RunStore.get_ticket_state(ctx.issue_id)
+      assert ["The final check passed, but MT-9 was added meanwhile and has not ended. This ticket waits for it."] = status_notes(ctx.issue_id)
+      assert Questions.open({:ticket, "default", ctx.issue_id}) == []
+
+      # A read that fails closes nothing either: the person is asked.
+      script(:fetch_issue_states_by_ids, [{:error, :timeout}])
+      answer = %{done: true, tree: []}
+      apply_ctx = %{junction: "final_check", issue: ctx.parent, repo_key: "default", run_id: "run-1", conductor: @on}
+      log = capture_log(fn -> assert {:ask, :stuck, _question} = Tree.apply(answer, apply_ctx, tracker: Scripted) end)
+      assert log =~ "the ticket's sub-tickets could not be read again"
+      refute_received {:memory_tracker_state_update, _parent, "Done"}
+    end
+
     test "sub-tickets it adds are a round: created, recorded on them and written on a new plan version", ctx do
       adds = [add("The docs"), add("The export", %{"after" => ["MT-1", "MT-404"]})]
 

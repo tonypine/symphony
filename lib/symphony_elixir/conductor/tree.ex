@@ -80,6 +80,7 @@ defmodule SymphonyElixir.Conductor.Tree do
   @final_try_key "final_check.try:"
   @asked_key "final_check.asked:"
   @stuck_key "final_check.stuck:"
+  @waits_key "final_check.waits:"
   @round "Final check"
   @recalibration "Recalibration"
   @ended_key "tree.ended:"
@@ -456,7 +457,8 @@ defmodule SymphonyElixir.Conductor.Tree do
   `ctx` holds the `issue`, its `repo_key`, the turn's `run_id` and `junction`, and the `conductor`
   settings.
 
-  At `final_check`: `done` with nothing to add moves the ticket to `Done`; sub-tickets to add are a
+  At `final_check`: `done` with nothing to add moves the ticket to `Done`, once a fresh read of its
+  sub-tickets shows none open (one added meanwhile keeps it waiting, with a note); sub-tickets to add are a
   round, made while one is left (`round_limit/2`), else `{:ask, :rounds, question}` is answered and
   nothing is added: the person decides. Only `add` is read there. A check that concluded nothing
   (not done with nothing to add, no sub-ticket it wanted could be created, or the move to `Done`
@@ -492,7 +494,29 @@ defmodule SymphonyElixir.Conductor.Tree do
     :ok
   end
 
+  # The ticket's sub-tickets are read again first: one added since the turn read them (no other
+  # turn can add one meanwhile, but a person or a run can) keeps the ticket open, and it waits on it.
   defp pass(repo_key, %Issue{id: issue_id} = issue, opts) do
+    case open_now(issue_id, repo_key, opts) do
+      {:ok, []} ->
+        done(repo_key, issue, opts)
+
+      {:ok, open} ->
+        names = Enum.map_join(open, ", ", &(Map.get(&1, :identifier) || "one without an identifier"))
+        waits = keyed(Facts.events(issue_id), @waits_key) + 1
+        note(repo_key, issue_id, "The final check passed, but #{names} was added meanwhile and has not ended. This ticket waits for it.", "#{@waits_key}#{waits}")
+
+      {:error, why} ->
+        Logger.warning("The final check passed, but the ticket's sub-tickets could not be read again #{context(issue, repo_key)}: #{why}")
+        {:ask, :stuck, stuck_question(issue_id, "it passed, but Symphony could not read the sub-tickets again to make sure none was added")}
+    end
+  end
+
+  defp open_now(issue_id, repo_key, opts) do
+    with {:ok, fresh} <- read_one(issue_id, opts), do: {:ok, Issue.open_sub_issues(fresh, terminal_states(repo_key))}
+  end
+
+  defp done(repo_key, %Issue{id: issue_id} = issue, opts) do
     ctx = %{repo_key: repo_key, issue_identifier: issue.identifier}
 
     case TransitionGuard.perform(issue_id, :final_check_pass, ctx, tracker: tracker(opts)) do
@@ -503,7 +527,7 @@ defmodule SymphonyElixir.Conductor.Tree do
 
       {:error, reason} ->
         Logger.warning("The final check passed, but the ticket could not be moved to #{@done} #{context(issue, repo_key)}: #{inspect(reason)}")
-        {:ask, :stuck, stuck_question(issue_id, "it passed, but the ticket could not be moved to #{@done} ")}
+        {:ask, :stuck, stuck_question(issue_id, "it passed, but the ticket could not be moved to #{@done}")}
     end
   end
 
@@ -731,16 +755,23 @@ defmodule SymphonyElixir.Conductor.Tree do
 
   @doc """
   Looks at what a `final_check` turn left: `before` holds whether it paused the ticket (`held`),
-  how many rounds were made when it started (`rounds`) and how the turn ended (`exit`). A turn that
-  closed the ticket, paused it or made a round changed something. Any other did not finish and is
+  how many rounds were made when it started (`rounds`), when (`at`) and how the turn ended (`exit`).
+  A turn that closed the ticket, paused it, made a round or found a sub-ticket added meanwhile
+  changed something. Any other did not finish and is
   counted, as a status note (see the module doc): the next poll tries once more, and after 2 in a
   row `{:ask, :stuck, question}` is answered, since the ticket never closes without its check.
   """
   @spec checked(String.t(), Issue.t(), map()) :: :ok | {:ask, :stuck, map()}
-  def checked(repo_key, %Issue{id: issue_id}, %{held: held, rounds: before, exit: exit}) do
+  def checked(repo_key, %Issue{id: issue_id}, %{held: held, rounds: before, exit: exit} = left) do
     events = Facts.events(issue_id)
+    # A pass that found a sub-ticket added meanwhile settled the check: the ticket waits on that one.
+    since = Map.get(left, :at)
+    since? = &(is_nil(since) or DateTime.compare(&1.at, since) != :lt)
+    waits? = Enum.any?(events, &(keyed?(&1, @waits_key) and since?.(&1)))
 
-    if held == :held or rounds(events) > before or match?(%{phase: @done}, RunStore.get_ticket_state(issue_id)) do
+    done? = match?(%{phase: @done}, RunStore.get_ticket_state(issue_id))
+
+    if held == :held or waits? or done? or rounds(events) > before do
       :ok
     else
       try = tries(events) + 1

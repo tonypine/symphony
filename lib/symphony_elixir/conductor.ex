@@ -457,9 +457,10 @@ defmodule SymphonyElixir.Conductor do
 
   defp tend_turn(%{junction: junction} = plan, issue, opts) do
     made = Tree.rounds(Facts.events(plan.issue_id))
+    started = DateTime.utc_now()
     if junction != @final_check, do: Tree.seen(plan.repo_key, issue, Config.settings_for_repo!(plan.repo_key).tracker.terminal_states)
     {exit, held, _route} = turn(plan, issue, opts)
-    left = %{held: held, rounds: made, exit: exit}
+    left = %{held: held, rounds: made, exit: exit, at: started}
     if junction == @final_check, do: ask_about(Tree.checked(plan.repo_key, issue, left), plan, issue)
     :ok
   end
