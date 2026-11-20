@@ -52,6 +52,17 @@ defmodule SymphonyElixir.WorkflowPreviewSnapshotTest do
     refute flat =~ "asks QA for light mode only"
   end
 
+  test "the preview tells a run with a plan to work from its checks, and any other run from the walkthrough" do
+    assert {:ok, prompt} = WorkflowPreview.render(file: @repo_workflow, agent_kind: "claude", repo_key: "app")
+    flat = String.replace(prompt, ~r/\s+/, " ")
+
+    assert flat =~ "If the issue above has a `## Plan` and a `## Checks` section, the ticket has a plan: work from its checks."
+    assert flat =~ "Otherwise the two walkthrough bullets below apply."
+    assert flat =~ "call `linear_record_walkthrough_proofs` with the check's id as `check` and its test as the code names it"
+    assert flat =~ "The handoff is refused while one of them is open."
+    assert flat =~ "If the prompt has a `## Checks` section, record the proof for the check instead"
+  end
+
   test "the preview names none of the retired states, checks or tickets" do
     assert {:ok, prompt} = WorkflowPreview.render(file: @repo_workflow, agent_kind: "claude", repo_key: "app")
 

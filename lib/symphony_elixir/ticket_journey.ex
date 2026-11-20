@@ -170,6 +170,19 @@ defmodule SymphonyElixir.TicketJourney do
   end
 
   @doc """
+  The issue as a run reads it: a groomed ticket's description is its ask, plan and checks
+  (`plan_text/1`), so whatever a caller reads from the description is read from the plan. An issue
+  that is not groomed comes back as it is.
+  """
+  @spec planned(issue) :: issue when issue: map()
+  def planned(%{} = issue) do
+    case plan_text(issue) do
+      nil -> issue
+      text -> Map.put(issue, :description, text)
+    end
+  end
+
+  @doc """
   The ticket as a prompt shows it: a groomed ticket's ask, plan and checks, as untrusted text, else
   what `ungroomed` renders from the description.
   """
