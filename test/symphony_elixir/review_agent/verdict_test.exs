@@ -97,6 +97,17 @@ defmodule SymphonyElixir.ReviewAgent.VerdictTest do
       assert {:error, :missing_block_reason} = Verdict.from_map(%{"verdict" => "block"})
     end
 
+    test "keeps the trimmed files the reviewer did not read, and leaves them out when it read everything" do
+      assert {:ok, %{unread_files: ["lib/a.ex", "lib/b.ex"]}} =
+               Verdict.from_map(%{"verdict" => "approve", "unread_files" => [" lib/a.ex ", "", "lib/b.ex", "lib/a.ex"]})
+
+      assert {:ok, result} = Verdict.from_map(%{"verdict" => "approve", "unread_files" => []})
+      refute Map.has_key?(result, :unread_files)
+
+      assert {:error, :invalid_unread_files} = Verdict.from_map(%{"verdict" => "approve", "unread_files" => "lib/a.ex"})
+      assert {:error, :invalid_unread_files} = Verdict.from_map(%{"verdict" => "approve", "unread_files" => [3]})
+    end
+
     test "refuses malformed comments, findings and finding fields" do
       assert {:error, :not_a_json_object} = Verdict.from_map(["approve"])
       assert {:error, :invalid_comments} = Verdict.from_map(%{"verdict" => "approve", "comments" => "note"})
@@ -146,7 +157,7 @@ defmodule SymphonyElixir.ReviewAgent.VerdictTest do
     finding_schema = get_in(spec, ["inputSchema", "properties", "findings", "items"])
     assert finding_schema["required"] == ["summary", "file", "line_range", "quoted_snippet", "suggested_fix"]
     assert get_in(finding_schema, ["properties", "line_range", "minItems"]) == 2
-    assert Enum.sort(Verdict.tool_arguments()) == ["comments", "findings", "reason", "verdict"]
+    assert Enum.sort(Verdict.tool_arguments()) == ["comments", "findings", "reason", "unread_files", "verdict"]
   end
 
   test "describe_error/1 names what to fix for every parser error" do
@@ -158,6 +169,7 @@ defmodule SymphonyElixir.ReviewAgent.VerdictTest do
           {:not_a_json_object, "the verdict must be a JSON object."},
           {:invalid_verdict, "`verdict` must be one of approve, request_changes or block."},
           {:invalid_comments, "`comments` must be a list of strings."},
+          {:invalid_unread_files, "`unread_files` must be a list of file paths."},
           {:invalid_findings, "`findings` must be a list of objects."},
           {:invalid_finding, "each finding must be an object."},
           {:invalid_finding_summary, "each finding needs a non-empty `summary`."},

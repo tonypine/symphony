@@ -79,6 +79,7 @@ defmodule SymphonyElixir.CodeReview do
     WorkspaceSync
   }
 
+  alias SymphonyElixir.CodeReview.Rounds
   alias SymphonyElixir.HumanActions.PlainWords
   alias SymphonyElixir.Linear.Issue
 
@@ -499,12 +500,26 @@ defmodule SymphonyElixir.CodeReview do
 
   defp apply_verdict(issue, workspace, opts, settings, verdict, result) do
     head = workspace_head(workspace, opts)
-    record_verdict(issue, opts, head, to_string(verdict), %{reason: verdict_summary(result)})
+    {findings, round} = round(issue, workspace, opts, {verdict, head}, result)
+    record_verdict(issue, opts, head, to_string(verdict), Map.put(round, :reason, verdict_summary(result)))
     Logger.info("Code Review verdict for #{issue_label(issue)} head=#{head || "unknown"} verdict=#{inspect(verdict)}")
 
-    judged = %{reason: verdict_reason(result), findings: findings(result)}
+    judged = %{reason: verdict_reason(result), findings: findings}
     route_verdict(issue, workspace, opts, settings, verdict, judged)
   end
+
+  # A change request is one round of findings: its count goes on the verdict, and on a pull request
+  # reviewed before, each finding says whether its lines changed since the last reviewed head, the
+  # ones that did not counted as missed earlier (`CodeReview.Rounds`). It is read before this
+  # verdict is recorded, so the last reviewed head is an earlier one.
+  defp round(issue, workspace, opts, {:request_changes, head}, result) do
+    previous = if is_binary(head), do: Rounds.previous_head(verdicts(issue, opts), head)
+    marked = Rounds.mark(Map.get(result, :findings, []), previous, git(workspace, opts))
+    findings = Rounds.annotate(findings(result), marked, previous)
+    {findings, Rounds.details(findings, marked, previous)}
+  end
+
+  defp round(_issue, _workspace, _opts, _verdict, result), do: {findings(result), %{}}
 
   # The routing half of a decided verdict, shared by a verdict this run just made and a deepening an
   # earlier version recorded. Every edge goes through the one writer.
@@ -689,14 +704,16 @@ defmodule SymphonyElixir.CodeReview do
     cause = ReviewAgent.inconclusive_cause(reason)
     record_inconclusive_cause(issue, opts, cause)
 
+    details = inconclusive_details(cause, reason)
+
     if retries < @max_inconclusive_retries do
-      record_verdict(issue, opts, head, "inconclusive", %{cause: cause})
+      record_verdict(issue, opts, head, "inconclusive", details)
 
       Logger.warning("Code Review for #{issue_label(issue)} head=#{head || "unknown"} was inconclusive cause=#{cause} (attempt #{retries + 1}/#{@max_inconclusive_retries}); retrying")
 
       {:error, {:code_review_inconclusive, reason}}
     else
-      record_verdict(issue, opts, head, "inconclusive_escalated", %{cause: cause})
+      record_verdict(issue, opts, head, "inconclusive_escalated", details)
       Logger.warning("Code Review for #{issue_label(issue)} head=#{head || "unknown"} stayed inconclusive: #{inspect(reason)}")
       escalate(issue, opts, settings, head, "The reviewer could not reach a decision on the change after #{retries} more tries.", :rework)
     end
@@ -713,6 +730,14 @@ defmodule SymphonyElixir.CodeReview do
 
     escalate(issue, opts, settings, head, verdict_reason(payload), :rework)
   end
+
+  # A review the reviewer could not finish names the changed files it did not read, on the verdict
+  # and in its summary, so the ticket's history says what the next review must cover.
+  defp inconclusive_details(cause, {:review_incomplete, files}) do
+    %{cause: cause, unread_files: files, reason: "The reviewer did not read " <> Enum.join(files, ", ")}
+  end
+
+  defp inconclusive_details(cause, _reason), do: %{cause: cause}
 
   defp inconclusive_retries(issue, opts, head) do
     issue
