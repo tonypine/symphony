@@ -31,7 +31,8 @@ defmodule SymphonyElixir.ReviewAgent do
           required(:line_range) => {pos_integer(), pos_integer()},
           required(:quoted_snippet) => String.t(),
           required(:suggested_fix) => String.t(),
-          optional(:decision) => String.t()
+          optional(:decision) => String.t(),
+          optional(:since_last_review) => :changed | :unchanged
         }
   @type result :: %{
           required(:verdict) => verdict(),

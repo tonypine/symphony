@@ -44,7 +44,7 @@ defmodule SymphonyElixir.CodeReview.Rounds do
   `previous_head` and `HEAD`, `:changed` when one did, and left as it is when `git` cannot compare
   its file. Nothing is marked without a previous head.
   """
-  @spec mark([ReviewAgent.finding()], String.t() | nil, git()) :: [map()]
+  @spec mark([ReviewAgent.finding()], String.t() | nil, git()) :: [ReviewAgent.finding()]
   def mark(findings, nil, _git), do: findings
 
   def mark(findings, previous_head, git) when is_list(findings) and is_binary(previous_head) do
@@ -61,7 +61,7 @@ defmodule SymphonyElixir.CodeReview.Rounds do
   or about lines changed since the last reviewed head. A comment that is no marked finding's stays as
   it is.
   """
-  @spec annotate([String.t()], [map()], String.t() | nil) :: [String.t()]
+  @spec annotate([String.t()], [ReviewAgent.finding()], String.t() | nil) :: [String.t()]
   def annotate(comments, _marked, nil), do: comments
 
   def annotate(comments, marked, previous_head) do
@@ -74,7 +74,7 @@ defmodule SymphonyElixir.CodeReview.Rounds do
   comments), and, once the pull request was reviewed before, `previous_head` and `missed_earlier`
   (how many findings sit on lines that did not change since), with `missed_findings` naming them.
   """
-  @spec details([String.t()], [map()], String.t() | nil) :: map()
+  @spec details([String.t()], [ReviewAgent.finding()], String.t() | nil) :: map()
   def details(comments, marked, previous_head) do
     missed = Enum.filter(marked, &(Map.get(&1, :since_last_review) == :unchanged))
     base = %{findings_count: length(comments)}
