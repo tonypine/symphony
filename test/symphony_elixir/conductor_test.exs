@@ -254,6 +254,155 @@ defmodule SymphonyElixir.ConductorTest do
     end
   end
 
+  describe "route_blocked_qa/3" do
+    defp blocked!(issue_id, head \\ "aaa"), do: record!(issue_id, "verdict.recorded", %{kind: "qa", outcome: "blocked", head: head, details: %{reason: "QA cannot fail the request"}})
+
+    defp routed(route, attrs \\ %{}), do: {:ok, [answer(Map.merge(%{"route" => route}, attrs))], 35_000}
+
+    defp rework_route, do: %{"to" => "rework", "finding" => "Add a flag QA can set to make the state request fail."}
+
+    test "nothing runs or is recorded while the Conductor is off or lacks the junction", ctx do
+      blocked!(ctx.issue_id)
+      never = fn _plan, _issue, _run_id, _prompt -> flunk("no turn runs") end
+
+      assert Conductor.route_blocked_qa(ctx.issue, "default", turn: never) == :none
+      assert Conductor.route_blocked_qa(ctx.issue, "default", turn: never, settings: %{@on | junctions: ["after_qa_fail"]}) == :none
+      assert Conductor.route_blocked_qa(ctx.issue, nil, turn: never, settings: @on) == :none
+      assert events(ctx.issue_id, "run.started") == []
+    end
+
+    test "a rework route within its bound is taken: the instructions record it, and the facts name the open routes", ctx do
+      blocked!(ctx.issue_id)
+      test = self()
+
+      turn = fn _plan, _issue, _run_id, prompt ->
+        send(test, {:prompt, prompt})
+        routed(rework_route())
+      end
+
+      assert Conductor.route_blocked_qa(ctx.issue, "default", turn: turn, settings: @on) == {:rework, "Add a flag QA can set to make the state request fail."}
+      assert_received {:prompt, prompt}
+      assert prompt =~ "The junction now: after_qa_blocked (QA could not judge the change; you decide how the ticket gets a real QA result)"
+      assert prompt =~ ~s("routes": [\n    "rerun",\n    "rework"\n  ])
+      assert prompt =~ ~s("qa_passes": [)
+      assert [%{payload: %{junction: "after_qa_blocked", route: "rework", text: "Check the empty list first."}}] = events(ctx.issue_id, "conductor.instructions")
+      assert [%{payload: %{run_kind: "conductor", exit: "answered", tokens: 35_000}}] = events(ctx.issue_id, "run.ended")
+    end
+
+    test "a rerun route is taken while fewer than 3 passes in a row reached no result", ctx do
+      blocked!(ctx.issue_id, "aaa")
+      assert Conductor.route_blocked_qa(ctx.issue, "default", turn: turn(routed(%{"to" => "rerun"})), settings: @on) == :rerun
+
+      # Main merged into the pull request: a new head, the same change, so the passes count on.
+      blocked!(ctx.issue_id, "bbb")
+      blocked!(ctx.issue_id, "ccc")
+
+      log = capture_log(fn -> assert Conductor.route_blocked_qa(ctx.issue, "default", turn: turn(routed(%{"to" => "rerun"})), settings: @on) == :none end)
+      assert log =~ "Conductor's route rerun dropped"
+      assert log =~ "Symphony takes rework now"
+      assert [%{payload: %{route: "rerun"}}, %{payload: dropped}] = events(ctx.issue_id, "conductor.instructions")
+      refute Map.has_key?(dropped, :route)
+
+      # A rework run ended: a new change, and a new count.
+      ran!(ctx.issue_id, "rework")
+      blocked!(ctx.issue_id, "ddd")
+      assert Conductor.route_blocked_qa(ctx.issue, "default", turn: turn(routed(%{"to" => "rerun"})), settings: @on) == :rerun
+    end
+
+    test "at most 2 routes to rework per ticket", ctx do
+      for head <- ["aaa", "bbb"] do
+        blocked!(ctx.issue_id, head)
+        assert {:rework, _finding} = Conductor.route_blocked_qa(ctx.issue, "default", turn: turn(routed(rework_route())), settings: @on)
+        ran!(ctx.issue_id, "rework")
+      end
+
+      blocked!(ctx.issue_id, "ccc")
+      assert Conductor.open_routes(Facts.events(ctx.issue_id)) == ["rerun"]
+      log = capture_log(fn -> assert Conductor.route_blocked_qa(ctx.issue, "default", turn: turn(routed(rework_route())), settings: @on) == :none end)
+      assert log =~ "Conductor's route rework dropped"
+
+      for head <- ["ddd", "eee"], do: blocked!(ctx.issue_id, head)
+      assert Conductor.open_routes(Facts.events(ctx.issue_id)) == []
+      log = capture_log(fn -> assert Conductor.route_blocked_qa(ctx.issue, "default", turn: turn(routed(%{"to" => "rerun"})), settings: @on) == :none end)
+      assert log =~ "Symphony takes no route now"
+    end
+
+    test "a question holds the ticket, and a route given with it is dropped: the person decides", ctx do
+      blocked!(ctx.issue_id)
+
+      question = %{
+        "title" => "QA needs a signing key",
+        "question" => "Can you add the signing key to the QA host?",
+        "why" => "Every pass stops at the signing step.",
+        "if_unanswered" => "The ticket stays paused.",
+        "recommendation_reason" => "Only you have the key.",
+        "options" => [
+          %{"label" => "I added it", "effect" => "QA runs again with the key.", "recommended" => true},
+          %{"label" => "Merge without it", "effect" => "You decide on the review alone."}
+        ]
+      }
+
+      log = capture_log(fn -> assert Conductor.route_blocked_qa(ctx.issue, "default", turn: turn(routed(rework_route(), %{"ask_person" => question})), settings: @on) == :held end)
+      assert log =~ "Conductor's route rework dropped"
+      assert [%{payload: %{title: "QA needs a signing key", asked_by: %{name: "Conductor"}}}] = events(ctx.issue_id, "question.asked")
+      assert [%{payload: payload}] = events(ctx.issue_id, "conductor.instructions")
+      refute Map.has_key?(payload, :route)
+      assert Conductor.open_routes(Facts.events(ctx.issue_id)) == ["rerun", "rework"]
+    end
+
+    test "a turn that fails, answers no route or cannot be planned leaves QA as it would be without it", ctx do
+      blocked!(ctx.issue_id)
+
+      capture_log(fn -> assert Conductor.route_blocked_qa(ctx.issue, "default", turn: turn({:error, :usage_limited, 5}), settings: @on) == :none end)
+      assert Conductor.route_blocked_qa(ctx.issue, "default", turn: turn({:ok, [answer()], 5}), settings: @on) == :none
+      assert Conductor.route_blocked_qa(ctx.issue, "default", turn: turn(routed(nil)), settings: @on) == :none
+
+      capture_log(fn -> assert Conductor.route_blocked_qa(ctx.issue, "default", turn: turn(routed(%{"to" => "merge"})), settings: @on) == :none end)
+      assert %{payload: %{exit: "unreadable answer: `route` must be null" <> _rest}} = List.last(events(ctx.issue_id, "run.ended"))
+
+      log = capture_log(fn -> assert Conductor.route_blocked_qa(ctx.issue, "default", settings: @on, available?: fn _run -> false end) == :none end)
+      assert log =~ "no provider of runs.conductor can take a run now"
+
+      log = capture_log(fn -> assert Conductor.route_blocked_qa(ctx.issue, "default", turn: turn(routed(rework_route())), settings: @on, events: :not_a_list) == :none end)
+      assert log =~ "Conductor turn failed issue_id=#{ctx.issue_id}"
+    end
+
+    test "a route answered at another junction is never taken, and its facts name no routes", ctx do
+      ran!(ctx.issue_id, "implementation")
+      test = self()
+
+      turn = fn _plan, _issue, _run_id, prompt ->
+        send(test, {:prompt, prompt})
+        routed(rework_route())
+      end
+
+      assert Conductor.run(plan(ctx), ctx.issue, turn: turn) == :ok
+      assert_received {:prompt, prompt}
+      refute prompt =~ ~s("routes":)
+      # The budget counts the QA passes; only `after_qa_blocked` lists them.
+      refute prompt =~ ~s("qa_passes": [)
+      assert [%{payload: payload}] = events(ctx.issue_id, "conductor.instructions")
+      refute Map.has_key?(payload, :route)
+    end
+
+    test "the rework the route sends the ticket to meets no second turn before it starts", ctx do
+      record!(ctx.issue_id, "run.started", %{run_id: "qa-1", run_kind: "qa"}, run_id: "qa-1")
+      blocked!(ctx.issue_id)
+      assert {:rework, _finding} = Conductor.route_blocked_qa(ctx.issue, "default", turn: turn(routed(rework_route())), settings: @on)
+      record!(ctx.issue_id, "phase.entered", %{to: "Rework", from: "QA", via: "qa_blocked_rework", signal: "qa"})
+      record!(ctx.issue_id, "run.ended", %{run_id: "qa-1", run_kind: "qa", exit: "normal"}, run_id: "qa-1")
+
+      assert Conductor.dispatch_junction(:rework, Facts.events(ctx.issue_id)) == nil
+      assert Conductor.plan(ctx.issue, :rework, "default", settings: @on) == nil
+
+      # The rework run reads the turn's instructions.
+      assert Conductor.prompt_section(ctx.issue_id, settings: @on) =~ "Check the empty list first."
+
+      ran!(ctx.issue_id, "rework")
+      assert Conductor.dispatch_junction(:qa, Facts.events(ctx.issue_id)) == "after_rework"
+    end
+  end
+
   describe "the next run's prompt" do
     test "carries the newest instructions only while the Conductor is on", ctx do
       assert Conductor.prompt_section(ctx.issue_id, settings: @on) == ""

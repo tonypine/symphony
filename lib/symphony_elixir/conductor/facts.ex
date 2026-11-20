@@ -20,7 +20,12 @@ defmodule SymphonyElixir.Conductor.Facts do
       severity, description, evidence, its resolution, and how many times its class was recorded on
       this ticket (`class_count`);
     * `verdicts`: the newest verdicts;
-    * `conductor`: the Conductor's earlier updates and instructions on this ticket;
+    * `qa_passes` (at `after_qa_blocked` only): the ticket's QA verdicts, oldest first, each with
+      its outcome, head and reason, whether it was a block on CI, and the steps of its pass that
+      ended blocked: a stepped pass's step answers (`status`, `expected`, `actual`) and the steps
+      the pass's verdict named blocked;
+    * `conductor`: the Conductor's earlier updates, instructions (with the route Symphony took on
+      them, at `after_qa_blocked`) and the guidance its watch gave running runs on this ticket;
     * `budget`: tokens used against the cap (`execution.limits.tokens_per_issue`), QA passes and
       rework runs so far.
 
@@ -41,12 +46,18 @@ defmodule SymphonyElixir.Conductor.Facts do
   @max_findings 30
   @verdicts_shown 10
   @max_notes 10
-  @max_conductor 6
+  @max_conductor 10
   @max_files 40
+  @max_qa_passes 10
+  @max_blocked_steps 4
+  @step_text_max 500
   @coding_kinds ["implementation", "rework"]
+  @qa_blocked "after_qa_blocked"
   @focus %{
     "after_coding" => "The implementation run handed off; Code Review or QA judges it next.",
     "after_qa_fail" => "QA failed; a rework run answers its findings next.",
+    "after_qa_blocked" =>
+      "QA could not judge the change: its newest pass ended blocked or inconclusive. You decide how the ticket gets a real QA result; `qa_passes` holds every pass and why each was blocked.",
     "after_rework" => "The rework run handed off; Code Review or QA judges it again next.",
     "before_merge" => "QA passed or was skipped; the pull request merges next.",
     "during_run" => "A run is working on the ticket now; its live state is under `live`."
@@ -116,6 +127,7 @@ defmodule SymphonyElixir.Conductor.Facts do
       conductor: conductor(events),
       budget: budget(record, events, opts)
     }
+    |> put_qa_passes(junction, events)
   end
 
   @doc "The events of the ticket `issue_id`, oldest first; none when the store can't read them."
@@ -364,12 +376,80 @@ defmodule SymphonyElixir.Conductor.Facts do
     events
     |> Enum.filter(&(&1.type == "verdict.recorded" and is_nil(payload(&1, :signal))))
     |> Enum.take(-@verdicts_shown)
-    |> Enum.map(&drop_nil(%{event_id: &1.id, kind: payload(&1, :kind), outcome: payload(&1, :outcome), head: payload(&1, :head), reason: cut(payload(&1, :reason), @text_max)}))
+    |> Enum.map(&drop_nil(%{event_id: &1.id, kind: payload(&1, :kind), outcome: payload(&1, :outcome), head: payload(&1, :head), reason: cut(verdict_reason(&1), @text_max)}))
   end
+
+  # A QA verdict keeps its reason in its details.
+  defp verdict_reason(verdict), do: payload(verdict, :reason) || field(payload(verdict, :details) || %{}, :reason)
+
+  # Every QA verdict with the steps of its pass that ended blocked, read from the events its run
+  # recorded: a stepped pass's `step.completed` answers, and the `evidence` of each step the pass's
+  # verdict named.
+  defp put_qa_passes(facts, @qa_blocked, events), do: Map.put(facts, :qa_passes, qa_passes(events))
+  defp put_qa_passes(facts, _junction, _events), do: facts
+
+  defp qa_passes(events) do
+    events
+    |> Enum.filter(&(&1.type == "verdict.recorded" and payload(&1, :kind) == "qa" and is_nil(payload(&1, :signal))))
+    |> Enum.take(-@max_qa_passes)
+    |> Enum.map(fn verdict ->
+      details = payload(verdict, :details) || %{}
+
+      %{
+        event_id: verdict.id,
+        run_id: verdict.run_id,
+        outcome: payload(verdict, :outcome),
+        head: payload(verdict, :head),
+        reason: cut(verdict_reason(verdict), @text_max),
+        on_ci: if(field(details, :component) == "ci", do: true),
+        blocked_steps: blocked_steps(events, verdict.run_id)
+      }
+      |> drop_nil()
+    end)
+  end
+
+  defp blocked_steps(_events, nil), do: []
+
+  defp blocked_steps(events, run_id) do
+    events
+    |> Enum.filter(&(&1.run_id == run_id))
+    |> Enum.flat_map(&blocked_step/1)
+    |> Enum.take(@max_blocked_steps)
+  end
+
+  defp blocked_step(%Event{type: "step.completed"} = step) do
+    case payload(step, :result) do
+      %{} = result ->
+        if field(result, :status) == "blocked",
+          do: [drop_nil(%{event_id: step.id, step_id: payload(step, :step_id), title: payload(step, :title), result: step_result(result)})],
+          else: []
+
+      _none ->
+        []
+    end
+  end
+
+  defp blocked_step(%Event{type: "evidence"} = evidence) do
+    if payload(evidence, :status) == "blocked",
+      do: [drop_nil(%{event_id: evidence.id, step: payload(evidence, :step), details: cut(payload(evidence, :details), @step_text_max)})],
+      else: []
+  end
+
+  defp blocked_step(_event), do: []
+
+  defp step_result(result) do
+    %{
+      status: field(result, :status),
+      expected: cut(field(result, :expected), @step_text_max),
+      actual: cut(field(result, :actual), @step_text_max)
+    }
+  end
+
+  defp field(map, key), do: Map.get(map, key, Map.get(map, Atom.to_string(key)))
 
   defp conductor(events) do
     events
-    |> Enum.filter(&(&1.type in ["conductor.update", "conductor.instructions"]))
+    |> Enum.filter(&(&1.type in ["conductor.update", "conductor.instructions", "conductor.steer"]))
     |> Enum.take(-@max_conductor)
     |> Enum.map(fn event ->
       %{
@@ -379,6 +459,7 @@ defmodule SymphonyElixir.Conductor.Facts do
         at: iso8601(event.at),
         text: cut(payload(event, :text), @text_max)
       }
+      |> Map.merge(drop_nil(%{route: payload(event, :route), when: payload(event, :when), trigger: payload(event, :trigger)}))
     end)
   end
 
