@@ -1,7 +1,7 @@
 {
   "identifier": "TP-1447",
   "repo_key": "symphony",
-  "ticket": { "title": "The facts rail's Note, Decisions and Details panels", "phase": "In Progress", "priority": 1, "labels": ["skip-update-hold", "qa:fixture"] },
+  "ticket": { "title": "The facts rail's Note, Decisions and Details panels", "phase": "In Progress", "priority": 1, "labels": ["skip-update-hold", "qa:fixture"], "description": "## Problem\n\nThe brief is buried in the Details panel.\n\n## Acceptance\n\n- The brief is on top of the page." },
   "workspace": { "path": "/Users/tonypine/symphony-workspaces/symphony/TP-1447", "host": null },
   "brief": {
     "id": "01M746BRIEF",

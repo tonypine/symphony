@@ -68,6 +68,12 @@ b=$($store work feature/b release 2>/dev/null); echo b-state > "$b/state"; $stor
 check "a branch gets its own state back" a-state "$(cat "$($store work pr-a release 2>/dev/null)/state")"
 check "main's is untouched" main-state "$(cat "$($store work main release 2>/dev/null)/state")"
 check "--fresh empties it" "" "$(ls "$($store work main release --fresh 2>/dev/null)")"
+# A saved state's object of a source the branch deleted is dropped; one with a source stays.
+orph="$($store work main release --fresh 2>/dev/null)/x/App.build"; mkdir -p "$orph"
+touch "$orph/a.swift.o" "$orph/gone.swift.o" "$orph/gone.swift.d"
+$store work main release >/dev/null 2>&1
+check "an object whose source was deleted is dropped" "a.swift.o" "$(ls "$orph" | tr '\n' ' ' | sed 's/ $//')"
+$store work main release --fresh >/dev/null 2>&1
 $store save pr-a release 2>/dev/null
 check "a save for another branch than the active one saves nothing" a-state "$(cat "$($store work pr-a release 2>/dev/null)/state")"
 check "a save leaves no copy half-way" "" "$(find "$SYMPHONY_CI_CACHE"/work/*/refs/pr-a -mindepth 1 -maxdepth 1 ! -name release)"
