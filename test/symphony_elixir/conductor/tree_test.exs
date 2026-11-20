@@ -309,6 +309,12 @@ defmodule SymphonyElixir.Conductor.TreeTest do
       parent = waiting!(ctx, ended())
       backlog = %{parent | sub_issues: ended() ++ [%{id: "c3", identifier: "MT-3", state: "Backlog"}]}
 
+      # Sub-tickets ended while one is open: a look at the plan is owed, once.
+      assert Tree.due(backlog, @terminal, conductor: @on) == :sub_ticket_ended
+      assert Tree.due(backlog, @terminal, conductor: @off) == nil
+      assert Tree.due(backlog, @terminal, conductor: %{@on | junctions: ["final_check"]}) == nil
+      assert Tree.seen("default", backlog, @terminal) == :ok
+      assert ["Sub-ticket MT-1 ended: Done.", "Sub-ticket MT-2 ended: Canceled."] = status_notes(ctx.issue_id)
       assert Tree.due(backlog, @terminal, conductor: @on) == nil
       assert Tree.due(%{parent | sub_issues: :unknown}, @terminal, conductor: @on) == nil
       assert Tree.due(nil, @terminal) == nil
@@ -470,7 +476,7 @@ defmodule SymphonyElixir.Conductor.TreeTest do
       # Neither done nor anything to add, and a sub-ticket that can't be created, change nothing either.
       Application.put_env(:symphony_elixir, :memory_tracker_create_issue_result, {:error, :linear_down})
       log = capture_log(fn -> assert final(ctx, answered(%{"done" => false, "tree" => [add("The docs")]})) == :ok end)
-      assert log =~ "A sub-ticket could not be added"
+      assert log =~ "The Conductor's add was not carried out"
       assert [_first, last] = status_notes(ctx.issue_id)
       assert last == "The final check did not finish, 2 times (answered). This ticket closes on its sub-tickets alone."
       assert Tree.due(ctx.parent, @terminal, conductor: @on) == :close
@@ -500,7 +506,7 @@ defmodule SymphonyElixir.Conductor.TreeTest do
       assert Conductor.tend(ctx.parent, "final_check", "default", settings: @off, turn: no_turn) == :ok
       assert Conductor.tend(ctx.parent, "final_check", "default", settings: @on, turn: no_turn, available?: fn _profile -> false end) == :ok
       assert capture_log(fn -> assert Conductor.tend(ctx.parent, "final_check", "default", settings: @on, turn: :not_a_function) == :ok end) =~ "wrote nothing"
-      log = capture_log(fn -> assert Conductor.tend(ctx.parent, "final_check", "default", settings: @on, turn: no_turn, record: :unreadable) == :ok end)
+      log = capture_log(fn -> assert Conductor.tend(ctx.parent, "final_check", "default", settings: @on, turn: no_turn, record: %{}) == :ok end)
       assert log =~ "Conductor turn failed issue_id=#{ctx.issue_id}"
       assert log =~ "junction=final_check"
     end
@@ -531,14 +537,6 @@ defmodule SymphonyElixir.Conductor.TreeTest do
       assert Tree.rounds(Facts.events(bare.id)) == 0
     end
 
-    test "a turn at sub_ticket_ended runs and carries nothing out yet", ctx do
-      turn = fn _plan, _issue, _run_id, _prompt -> answered(%{"done" => true, "tree" => [add("The docs")]}) end
-      assert Conductor.tend(ctx.parent, "sub_ticket_ended", "default", settings: @on, turn: turn) == :ok
-      refute_received {:memory_tracker_issue_created, _id, _attrs}
-      refute_received {:memory_tracker_state_update, _parent, "Done"}
-      assert status_notes(ctx.issue_id) == []
-    end
-
     test "a sub-ticket that can't be linked or started is said on the parent", ctx do
       Application.put_env(:symphony_elixir, :memory_tracker_add_blocked_by_result, {:error, :refused})
       Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [{:error, :refused}])
@@ -549,6 +547,133 @@ defmodule SymphonyElixir.Conductor.TreeTest do
       assert [note] = status_notes(ctx.issue_id)
       assert note =~ "Symphony added MT-9004 but could not make the link to MT-1 (:refused) or its move to Todo (:refused)"
       assert Tree.rounds(Facts.events(ctx.issue_id)) == 1
+    end
+  end
+
+  describe "recalibration, when a sub-ticket ended and others are open" do
+    setup ctx do
+      subs = [
+        %{id: "c1", identifier: "MT-1", state: "Done"},
+        %{id: "c2", identifier: "MT-2", state: "In Progress"},
+        %{id: "c3", identifier: "MT-3", state: "Todo"}
+      ]
+
+      entries = [
+        %{key: "s1", title: "The API", ask: "Add the filter.", after: [], identifier: "MT-1"},
+        %{key: "s2", title: "The list", ask: "Read the filter.", after: ["s1"], identifier: "MT-2"},
+        %{key: "s3", title: "The export", ask: "Export it.", after: [], identifier: "MT-3"}
+      ]
+
+      parent = waiting!(ctx, subs, entries)
+      :ok = RunStore.put_ticket_state(%{repo_key: "default", issue_id: "c2", issue_identifier: "MT-2", phase: "In Progress"})
+      test = self()
+
+      cancel = fn identifier, note ->
+        send(test, {:cancelled, identifier, note})
+        {:ok, %{}}
+      end
+
+      stop = fn identifier ->
+        send(test, {:stopped, identifier})
+        {:ok, %{stopped: true}}
+      end
+
+      %{parent: parent, opts: [settings: @on, cancel: cancel, stop: stop]}
+    end
+
+    defp recalibrate(ctx, operations, opts \\ []) do
+      turn = fn _plan, _issue, _run_id, _prompt -> {:ok, [Jason.encode!(%{"tree" => operations, "update" => nil})], 5} end
+      Conductor.tend(ctx.parent, "sub_ticket_ended", "default", [turn: turn] ++ Keyword.merge(ctx.opts, opts))
+    end
+
+    defp interventions(issue_id), do: for(%{type: "conductor.intervention", payload: payload} <- Facts.events(issue_id), do: payload)
+
+    test "each operation is carried out, recorded on the sub-ticket it touched, and written on a new plan version", ctx do
+      assert Tree.due(ctx.parent, @terminal, conductor: @on) == :sub_ticket_ended
+
+      operations = [
+        %{"op" => "cancel", "ticket" => "MT-3", "reason" => "The API exports already."},
+        %{"op" => "rewrite", "ticket" => "MT-2", "ask" => "Read the renamed field.", "stop" => true, "reason" => "The field was renamed."},
+        %{"op" => "stop", "ticket" => "MT-2", "reason" => "It builds on the old name."},
+        %{"op" => "add", "title" => "The docs", "ask" => "Describe the filter.", "after" => ["MT-1"], "reason" => "Nobody holds the docs."}
+      ]
+
+      assert recalibrate(ctx, operations) == :ok
+
+      by = ctx.issue.identifier
+      assert_received {:cancelled, "MT-3", note}
+      assert note == "The Conductor of #{by} cancelled this sub-ticket: The API exports already."
+      assert_received {:stopped, "MT-2"}
+      assert_received {:memory_tracker_issue_created, "memory-issue-5", %{title: "The docs", state: "Backlog"}}
+      assert_received {:memory_tracker_blocked_by_added, "MT-1", "memory-issue-5"}
+
+      assert [%{action: "canceled", reason: "The API exports already.", by: ^by, target: "MT-3"}] = interventions("c3")
+      assert [%{action: "stopped", reason: "The field was renamed."}, %{action: "replanned", target: "MT-2"}] = interventions("c2")
+      assert [%{action: "added", target: "MT-9005"}] = interventions("memory-issue-5")
+      assert [%{source: "parent", from: ^by, text: "Read the renamed field."}] = TicketPlan.ask("c2")
+
+      current = TicketPlan.current(ctx.issue_id)
+      assert %{version: 2, by: "recalibration", shape: "split"} = current
+      assert current.reason == "Recalibration: The API exports already. The field was renamed. It builds on the old name. Nobody holds the docs."
+
+      assert [
+               %{key: "s1", identifier: "MT-1"},
+               %{key: "s2", identifier: "MT-2", ask: "Read the renamed field."},
+               %{key: "s4", identifier: "MT-9005", after: ["s1"], title: "The docs"}
+             ] = current.sub_tickets
+
+      # The turn was owed once for the sub-ticket that ended, and no round of the final check was made.
+      assert ["Sub-ticket MT-1 ended: Done."] = status_notes(ctx.issue_id)
+      assert Tree.due(ctx.parent, @terminal, conductor: @on) == nil
+      assert Tree.rounds(Facts.events(ctx.issue_id)) == 0
+    end
+
+    test "an operation that can't be carried out is logged and left out, and nothing is written for none", ctx do
+      refused = [
+        %{"op" => "cancel", "ticket" => "MT-1", "reason" => "It is done."},
+        %{"op" => "cancel", "ticket" => "MT-404", "reason" => "Not ours."},
+        %{"op" => "cancel", "ticket" => "MT-3", "reason" => "The move fails."},
+        %{"op" => "stop", "ticket" => "MT-2", "reason" => "No run works on it."},
+        %{"op" => "rewrite", "ticket" => "MT-2", "ask" => "Something else.", "stop" => true, "reason" => "Its run can't be stopped."}
+      ]
+
+      cancel = fn _identifier, _note -> {:error, :pr_close_failed} end
+      opts = [cancel: cancel, stop: fn _identifier -> {:ok, %{stopped: false}} end]
+      log = capture_log(fn -> assert recalibrate(ctx, refused, opts) == :ok end)
+
+      assert log =~ "The Conductor's cancel was not carried out"
+      assert log =~ "on=MT-1: MT-1 already ended (Done)"
+      assert log =~ "on=MT-404: MT-404 is not a sub-ticket of this ticket"
+      assert log =~ "on=MT-3: :pr_close_failed"
+      assert log =~ "on=MT-2: its run was not stopped ({:ok, %{stopped: false}})"
+      assert TicketPlan.current(ctx.issue_id).version == 1
+      assert interventions("c2") == []
+      assert TicketPlan.ask("c2") == []
+
+      assert recalibrate(ctx, []) == :ok
+      assert TicketPlan.current(ctx.issue_id).version == 1
+    end
+
+    test "a rewrite with no stop leaves the run going, and an ask that can't be recorded is left out", ctx do
+      rewrite = %{op: "rewrite", ticket: "MT-3", ask: "Export as CSV.", stop: false, reason: "CSV was asked."}
+      tree_ctx = %{junction: "sub_ticket_ended", issue: ctx.parent, repo_key: "default", run_id: "run-1", conductor: @on}
+
+      assert Tree.apply(%{done: false, tree: [rewrite]}, tree_ctx, ctx.opts) == :ok
+      refute_received {:stopped, _identifier}
+      # A sub-ticket Symphony keeps no record of is written under its parent's repo.
+      assert [%{text: "Export as CSV.", source: "parent"}] = TicketPlan.ask("c3")
+      assert [%{action: "replanned"}] = interventions("c3")
+      assert %{version: 2, reason: "Recalibration: CSV was asked."} = TicketPlan.current(ctx.issue_id)
+
+      long = %{rewrite | ask: String.duplicate("x", 30_000)}
+      log = capture_log(fn -> assert Tree.apply(%{done: false, tree: [long]}, tree_ctx, ctx.opts) == :ok end)
+      assert log =~ "The Conductor's rewrite was not carried out"
+      assert TicketPlan.current(ctx.issue_id).version == 2
+
+      # Under a repo Symphony can't read, no state counts as ended.
+      stop = %{op: "stop", ticket: "MT-1", reason: "Stop it."}
+      capture_log(fn -> assert Tree.apply(%{done: false, tree: [stop]}, %{tree_ctx | repo_key: "no-such-repo"}, ctx.opts) == :ok end)
+      assert_received {:stopped, "MT-1"}
     end
   end
 end

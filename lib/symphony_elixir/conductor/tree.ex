@@ -40,6 +40,17 @@ defmodule SymphonyElixir.Conductor.Tree do
   (`apply/3` answers `{:ask, question}`); "Allow one more round" lets one through (`asked/2` records
   it, `round_limit/2` counts it), and "Close it as it is" moves the ticket to `Done`.
 
+  ## Recalibration
+
+  While sub-tickets are still open, each one that ends owes the parent a `sub_ticket_ended` turn
+  (`due/3`, `seen/3`), which may change the tree with `tree` operations: `add` a sub-ticket,
+  `cancel` one that is not Done (the Director's cancel move: its run stops, its pull request
+  closes), `rewrite` one (a new `ask.recorded` on it, `source: parent`; its working run is stopped
+  first only with `stop: true`) and `stop` a sub-ticket's working run. Each operation carried out is
+  recorded on the sub-ticket it touched as a `conductor.intervention` (`added`, `canceled`,
+  `replanned`, `stopped`) with its reason, and together they give the parent's plan a new version
+  (`by: recalibration`, its reason opening with `Recalibration`), whose `sub_tickets` follow them.
+
   A final check that changed nothing (the turn failed, or answered neither `done` nor a sub-ticket
   it could create, nor a question) is counted (`checked/3`, a status note under
   `final_check.try:<round>:<n>`). After 2 of them, or with the Conductor or its `final_check`
@@ -50,7 +61,7 @@ defmodule SymphonyElixir.Conductor.Tree do
   require Logger
 
   alias SymphonyElixir.Conductor.Facts
-  alias SymphonyElixir.{Config, RepoTeams, RunStore, SubIssueWait}
+  alias SymphonyElixir.{Config, DirectorMoves, Orchestrator, RepoTeams, RunStore, SubIssueWait}
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.{TicketEvents, TicketObservation, TicketPlan, Tracker, TransitionGuard}
 
@@ -63,6 +74,8 @@ defmodule SymphonyElixir.Conductor.Tree do
   @final_try_key "final_check.try:"
   @asked_key "final_check.asked:"
   @round "Final check"
+  @recalibration "Recalibration"
+  @ended_key "tree.ended:"
   @done "Done"
   @written_fields [:event_id, :at, :version]
 
@@ -332,19 +345,33 @@ defmodule SymphonyElixir.Conductor.Tree do
 
   @doc """
   What the groomed ticket `issue`, in the waiting state, is owed now (see the module doc): `:close`
-  (Symphony moves it to `Done` itself), `:final_check` (the Conductor's turn), or nil while it
-  waits: a sub-ticket is open, its sub-tickets were not read (`:unknown`), or it has a pull request
-  that did not merge, which is a person's to settle. `opts`: `conductor` (the `conductor`
+  (Symphony moves it to `Done` itself), `:final_check` (the Conductor's turn),
+  `:sub_ticket_ended` (the Conductor's turn too: sub-tickets are still open, and one ended that no
+  such turn looked at yet, `seen/3`), or nil while it waits: a sub-ticket is open, its sub-tickets
+  were not read (`:unknown`), or it has a pull request that did not merge, which is a person's to
+  settle. `opts`: `conductor` (the `conductor`
   settings, default `Config.conductor_settings/0`) and `events` (the ticket's, default its record's).
   """
-  @spec due(Issue.t() | term(), Enumerable.t(String.t()), keyword()) :: :close | :final_check | nil
+  @spec due(Issue.t() | term(), Enumerable.t(String.t()), keyword()) :: :close | :final_check | :sub_ticket_ended | nil
   def due(%Issue{id: issue_id, sub_issues: sub_issues} = issue, terminal_states, opts)
       when is_binary(issue_id) and is_list(sub_issues) do
     settings = Keyword.get_lazy(opts, :conductor, &Config.conductor_settings/0)
     events = Keyword.get_lazy(opts, :events, fn -> Facts.events(issue_id) end)
 
+    if Issue.open_sub_issues(issue, terminal_states) == [],
+      do: due_ended(issue, settings, events),
+      else: due_open(issue, terminal_states, settings, events)
+  end
+
+  def due(_issue, _terminal_states, _opts), do: nil
+
+  @doc "`due/3` with the `conductor` settings and the ticket's events as they are now."
+  @spec due(Issue.t() | term(), Enumerable.t(String.t())) :: :close | :final_check | :sub_ticket_ended | nil
+  def due(issue, terminal_states), do: due(issue, terminal_states, [])
+
+  # Every sub-ticket ended (or none is left): the ticket closes, after its final check when one is owed.
+  defp due_ended(%Issue{id: issue_id, sub_issues: sub_issues}, settings, events) do
     cond do
-      Issue.open_sub_issues(issue, terminal_states) != [] -> nil
       RunStore.merged_wait?(issue_id) != true and SubIssueWait.pull_request(issue_id) == :unmerged -> nil
       sub_issues == [] -> :close
       turn?(settings, "final_check") and tries(events) < @final_tries -> :final_check
@@ -352,13 +379,32 @@ defmodule SymphonyElixir.Conductor.Tree do
     end
   end
 
-  def due(_issue, _terminal_states, _opts), do: nil
-
-  @doc "`due/3` with the `conductor` settings and the ticket's events as they are now."
-  @spec due(Issue.t() | term(), Enumerable.t(String.t())) :: :close | :final_check | nil
-  def due(issue, terminal_states), do: due(issue, terminal_states, [])
+  defp due_open(issue, terminal_states, settings, events) do
+    if turn?(settings, "sub_ticket_ended") and unseen(issue, terminal_states, events) != [], do: :sub_ticket_ended
+  end
 
   defp turn?(settings, junction), do: settings.enabled == true and junction in settings.junctions
+
+  # The sub-tickets that ended and that no `sub_ticket_ended` turn was started for yet.
+  defp unseen(%Issue{sub_issues: sub_issues} = issue, terminal_states, events) do
+    open = MapSet.new(Issue.open_sub_issues(issue, terminal_states), & &1.id)
+    seen = for %{type: "note", idempotency: @ended_key <> id} <- events, into: MapSet.new(), do: id
+    Enum.reject(sub_issues, &(MapSet.member?(open, &1.id) or MapSet.member?(seen, &1.id)))
+  end
+
+  @doc """
+  Records each sub-ticket of `issue` that ended and was not looked at yet as seen (a status note
+  under `tree.ended:<its id>`), as the `sub_ticket_ended` turn that looks at them starts: one turn
+  is owed for them, whatever it answers.
+  """
+  @spec seen(String.t(), Issue.t(), Enumerable.t(String.t())) :: :ok
+  def seen(repo_key, %Issue{id: issue_id} = issue, terminal_states) do
+    for sub <- unseen(issue, terminal_states, Facts.events(issue_id)) do
+      note(repo_key, issue_id, "Sub-ticket #{sub.identifier} ended: #{sub.state}.", @ended_key <> sub.id)
+    end
+
+    :ok
+  end
 
   @doc "How many rounds of sub-tickets the final check added to the ticket whose `events` these are."
   @spec rounds([TicketEvents.Event.t()]) :: non_neg_integer()
@@ -382,9 +428,19 @@ defmodule SymphonyElixir.Conductor.Tree do
   @doc """
   Carries out what a turn on the ticket answered about its tree (`answer`'s `done` and `tree`).
   `ctx` holds the `issue`, its `repo_key`, the turn's `run_id` and `junction`, and the `conductor`
-  settings. At `final_check`: `done` with nothing to add moves the ticket to `Done`; sub-tickets to
-  add are a round, made while one is left (`round_limit/2`), else `{:ask, question}` is answered
-  and nothing is added: the person decides. `opts`: as `split/3`'s.
+  settings.
+
+  At `final_check`: `done` with nothing to add moves the ticket to `Done`; sub-tickets to add are a
+  round, made while one is left (`round_limit/2`), else `{:ask, question}` is answered and nothing
+  is added: the person decides. Only `add` is read there.
+
+  At `sub_ticket_ended` every operation is carried out, in order (see the module doc). One that
+  can't be (the ticket it names is not a sub-ticket of this one, or it ended, or the step failed) is
+  logged and left out.
+
+  `opts`: as `split/3`'s, and `cancel` (`(identifier, reason -> {:ok, term} | {:error, term})`,
+  default the Director's cancel move) and `stop` (`(identifier -> {:ok, %{stopped: boolean}} | term)`,
+  default `SymphonyElixir.Orchestrator.stop_running/1`).
   """
   @spec apply(map(), map(), keyword()) :: :ok | {:ask, map()}
   def apply(%{done: done, tree: operations}, %{junction: "final_check", issue: %Issue{id: issue_id} = issue} = ctx, opts) do
@@ -396,11 +452,11 @@ defmodule SymphonyElixir.Conductor.Tree do
       adds == [] and done -> pass(ctx.repo_key, issue, opts)
       adds == [] -> :ok
       made >= round_limit(events, ctx.conductor) -> {:ask, rounds_question(made, adds)}
-      true -> add(adds, @round, %{ctx | issue: with_record(issue)}, opts)
+      true -> carry_out(adds, @round, ctx, opts)
     end
   end
 
-  def apply(_answer, _ctx, _opts), do: :ok
+  def apply(%{tree: operations}, ctx, opts), do: carry_out(operations, @recalibration, ctx, opts)
 
   defp pass(repo_key, %Issue{id: issue_id} = issue, opts) do
     ctx = %{repo_key: repo_key, issue_identifier: issue.identifier}
@@ -416,66 +472,154 @@ defmodule SymphonyElixir.Conductor.Tree do
     end
   end
 
-  # The sub-tickets the operations add, each created, linked and started, then written on a new
-  # version of the plan whose reason opens with `why`. One that can't be created is logged and left out.
-  defp add(adds, why, %{issue: %Issue{id: issue_id} = issue, repo_key: repo_key} = ctx, opts) do
-    plan = TicketPlan.current(issue_id)
-    known = known_children(issue_id)
+  # Each operation in order, on the plan's sub-ticket entries. What was carried out is written as a
+  # new version of the plan, whose reason opens with `why` and holds each operation's own.
+  defp carry_out([], _why, _ctx, _opts), do: :ok
 
-    {entries, created} =
-      Enum.reduce(adds, {Map.get(plan, :sub_tickets, []), []}, fn operation, {entries, created} ->
-        entry = entry(operation, entries, known)
+  defp carry_out(operations, why, %{issue: %Issue{id: issue_id} = issue, repo_key: repo_key} = ctx, opts) do
+    ctx = Map.merge(ctx, %{issue: with_record(issue), known: known_children(issue_id), terminal: terminal_states(repo_key)})
+    versions = TicketPlan.versions(issue_id)
+    plan = List.last(versions)
+    ctx = Map.put(ctx, :keys, for(version <- versions, entry <- Map.get(version, :sub_tickets, []), into: MapSet.new(), do: entry.key))
+    start = %{entries: Map.get(plan, :sub_tickets, []), created: [], reasons: []}
 
-        case create(repo_key, issue, entry, opts) do
-          {:ok, child} ->
-            start(child, entry, known, ctx, opts)
-            intervene(child, "added", operation.reason, ctx)
-            {entries ++ [Map.merge(entry, %{identifier: child.identifier, after: plan_keys(entry.after, entries)})], created ++ [child]}
+    done =
+      Enum.reduce(operations, start, fn operation, acc ->
+        case operate(operation, acc, ctx, opts) do
+          {:ok, acc} ->
+            %{acc | reasons: acc.reasons ++ [operation.reason]}
 
           {:error, reason} ->
-            Logger.warning("A sub-ticket could not be added #{context(issue, repo_key)} title=#{inspect(entry.title)}: #{reason}")
-            {entries, created}
+            Logger.warning("The Conductor's #{operation.op} was not carried out #{context(issue, repo_key)} on=#{operation[:ticket] || operation[:title]}: #{reason}")
+            acc
         end
       end)
 
-    if created != [], do: record_round(plan, entries, why, adds, created, ctx, opts)
+    if done.reasons != [], do: record_version(plan, done, why, ctx, opts)
     :ok
   end
 
-  defp record_round(plan, entries, why, adds, created, %{issue: %Issue{id: issue_id}, repo_key: repo_key}, opts) do
-    reason = Facts.fit("#{why}: " <> Enum.map_join(adds, " ", & &1.reason), 1_000)
-    next = plan |> Map.drop(@written_fields) |> Map.merge(%{sub_tickets: entries, reason: reason, by: "recalibration"})
+  defp record_version(plan, done, why, %{issue: %Issue{id: issue_id}, repo_key: repo_key}, opts) do
+    reason = Facts.fit("#{why}: " <> Enum.join(done.reasons, " "), 1_000)
+    next = plan |> Map.drop(@written_fields ++ [:sub_tickets]) |> Map.merge(%{reason: reason, by: "recalibration"})
+    next = if done.entries == [], do: next, else: Map.put(next, :sub_tickets, done.entries)
 
     with {:error, why} <- TicketPlan.write(repo_key, issue_id, next),
          do: Logger.warning("The plan's new version could not be written issue_id=#{issue_id} repo_key=#{repo_key}: #{inspect(why)}")
 
-    with {:error, why} <- observe([issue_id | Enum.map(created, & &1.id)], entries, repo_key, opts),
+    with [_ | _] = created <- done.created,
+         {:error, why} <- observe([issue_id | Enum.map(created, & &1.id)], done.entries, repo_key, opts),
          do: Logger.warning("The added sub-tickets are not on Symphony's records yet issue_id=#{issue_id} repo_key=#{repo_key}: #{why}")
   end
 
-  # A plan entry for an added sub-ticket, under the next free key. Its `after` are the identifiers
-  # of the ticket's sub-tickets it waits on; any other name is dropped.
-  defp entry(operation, entries, known) do
-    keys = MapSet.new(entries, & &1.key)
-    key = Enum.find_value(Stream.iterate(length(entries) + 1, &(&1 + 1)), &if(not MapSet.member?(keys, "s#{&1}"), do: "s#{&1}"))
+  # A new sub-ticket: created, linked to what it waits on and started, under the next free key.
+  defp operate(%{op: "add"} = operation, acc, %{issue: issue, repo_key: repo_key} = ctx, opts) do
+    entry = entry(operation, acc.entries, ctx)
+
+    with {:ok, child} <- create(repo_key, issue, entry, opts) do
+      start(child, entry, ctx, opts)
+      intervene(child, "added", operation.reason, ctx)
+      listed = Map.merge(entry, %{identifier: child.identifier, after: plan_keys(entry.after, acc.entries)})
+      {:ok, %{acc | entries: acc.entries ++ [listed], created: acc.created ++ [child]}}
+    end
+  end
+
+  # A sub-ticket that is no longer needed: cancelled as the Director cancels one, and off the plan.
+  defp operate(%{op: "cancel", ticket: identifier} = operation, acc, ctx, opts) do
+    cancel = Keyword.get(opts, :cancel, &DirectorMoves.move(:cancel, &1, %{note: &2}))
+
+    with {:ok, child} <- open_child(identifier, ctx),
+         {:ok, _moved} <- cancel.(identifier, "The Conductor of #{by(ctx)} cancelled this sub-ticket: #{operation.reason}") do
+      intervene(child, "canceled", operation.reason, ctx)
+      {:ok, %{acc | entries: Enum.reject(acc.entries, &(Map.get(&1, :identifier) == identifier))}}
+    else
+      {:error, reason} -> {:error, text(reason)}
+    end
+  end
+
+  # A sub-ticket asked for something else: its new ask is recorded on it, from this ticket.
+  defp operate(%{op: "rewrite", ticket: identifier, ask: ask} = operation, acc, ctx, opts) do
+    with {:ok, child} <- open_child(identifier, ctx),
+         :ok <- if(operation.stop, do: stop(child, operation.reason, ctx, opts), else: :ok),
+         {:ok, _event} <- TicketPlan.record_ask(child.repo, child.id, ask, source: "parent", from: by(ctx)) do
+      intervene(child, "replanned", operation.reason, ctx)
+      {:ok, %{acc | entries: Enum.map(acc.entries, &if(Map.get(&1, :identifier) == identifier, do: %{&1 | ask: ask}, else: &1))}}
+    else
+      {:error, reason} -> {:error, text(reason)}
+    end
+  end
+
+  defp operate(%{op: "stop", ticket: identifier} = operation, acc, ctx, opts) do
+    with {:ok, child} <- open_child(identifier, ctx),
+         :ok <- stop(child, operation.reason, ctx, opts) do
+      {:ok, acc}
+    end
+  end
+
+  defp stop(child, reason, ctx, opts) do
+    case Keyword.get(opts, :stop, &Orchestrator.stop_running/1).(child.identifier) do
+      {:ok, %{stopped: true}} -> intervene(child, "stopped", reason, ctx)
+      other -> {:error, "its run was not stopped (#{inspect(other)})"}
+    end
+  end
+
+  # The sub-ticket `identifier` names, when it is this ticket's and has not ended.
+  defp open_child(identifier, %{known: known, terminal: terminal, repo_key: repo_key}) do
+    case Map.get(known, identifier) do
+      nil ->
+        {:error, "#{identifier} is not a sub-ticket of this ticket"}
+
+      %{id: id, state: state} ->
+        open_child(%{id: id, identifier: identifier, repo: recorded_repo(id) || repo_key}, state, terminal)
+    end
+  end
+
+  defp open_child(child, state, terminal) do
+    if normalize(state) in terminal, do: {:error, "#{child.identifier} already ended (#{state})"}, else: {:ok, child}
+  end
+
+  defp recorded_repo(issue_id), do: with(%{repo_key: repo_key} <- RunStore.get_ticket_state(issue_id), do: repo_key)
+
+  defp terminal_states(repo_key) do
+    case Config.settings_for_repo(repo_key) do
+      {:ok, settings} -> Enum.map(settings.tracker.terminal_states, &normalize/1)
+      {:error, _reason} -> []
+    end
+  end
+
+  defp normalize(state), do: state |> to_string() |> String.trim() |> String.downcase()
+
+  defp text(reason) when is_binary(reason), do: reason
+  defp text(reason), do: inspect(reason)
+
+  defp by(%{issue: issue}), do: issue.identifier || issue.id
+
+  # A plan entry for an added sub-ticket, under the next key no version of the plan ever used. Its
+  # `after` are the identifiers of the ticket's sub-tickets it waits on; any other name is dropped.
+  defp entry(operation, entries, %{known: known, keys: used}) do
+    keys = MapSet.union(used, MapSet.new(entries, & &1.key))
+    key = Enum.find_value(Stream.iterate(1, &(&1 + 1)), &if(not MapSet.member?(keys, "s#{&1}"), do: "s#{&1}"))
     waits = Enum.filter(Map.get(operation, :after, []), &is_map_key(known, &1))
     operation |> Map.take([:title, :ask, :repo]) |> Map.merge(%{key: key, after: waits})
   end
 
   defp plan_keys(identifiers, entries), do: for(%{identifier: identifier, key: key} <- entries, identifier in identifiers, do: key)
 
-  # The ticket's sub-tickets as its record lists them: identifier to id.
+  # The ticket's sub-tickets as its record lists them: each identifier with its id and state.
   defp known_children(issue_id) do
     record = RunStore.get_ticket_state(issue_id)
-    for %{id: id, identifier: identifier} <- List.wrap(is_map(record) && Map.get(record, :sub_issues)), into: %{}, do: {identifier, id}
+
+    for %{id: id, identifier: identifier} = sub <- List.wrap(is_map(record) && Map.get(record, :sub_issues)), into: %{} do
+      {identifier, %{id: id, state: Map.get(sub, :state)}}
+    end
   end
 
   # A sub-ticket created in Backlog is linked to what it waits on, then moved to Todo. A step that
   # fails is said on the parent, and the sub-ticket still starts when it can: it must not hold the
   # parent from Backlog for good.
-  defp start(_child, %{after: []}, _known, _ctx, _opts), do: :ok
+  defp start(_child, %{after: []}, _ctx, _opts), do: :ok
 
-  defp start(child, %{after: waits}, _known, %{issue: issue, repo_key: repo_key}, opts) do
+  defp start(child, %{after: waits}, %{issue: issue, repo_key: repo_key}, opts) do
     linked = for blocker <- waits, {:error, reason} <- [tracker(opts).add_blocked_by(blocker, child.id)], do: "the link to #{blocker} (#{inspect(reason)})"
     promoted = TransitionGuard.perform(child.id, :breakdown_promote, %{repo_key: child.repo, issue_identifier: child.identifier}, tracker: tracker(opts))
     failed = linked ++ for({:error, reason} <- [promoted], do: "its move to #{@todo} (#{inspect(reason)})")
@@ -489,8 +633,8 @@ defmodule SymphonyElixir.Conductor.Tree do
   end
 
   # What the Conductor of `ctx.issue` did to the sub-ticket `child`, on the sub-ticket's own record.
-  defp intervene(child, action, reason, %{issue: issue, run_id: run_id}) do
-    payload = %{action: action, reason: reason, by: issue.identifier || issue.id, target: child.identifier}
+  defp intervene(child, action, reason, %{run_id: run_id} = ctx) do
+    payload = %{action: action, reason: reason, by: by(ctx), target: child.identifier}
 
     case TicketEvents.record(child.repo, child.id, "conductor.intervention", payload, idempotency: "conductor.intervention:#{run_id}:#{action}") do
       {:ok, _event} -> :ok

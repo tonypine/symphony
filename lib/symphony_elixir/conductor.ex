@@ -366,7 +366,8 @@ defmodule SymphonyElixir.Conductor do
 
   @doc """
   The turn a groomed ticket with sub-tickets is owed outside any dispatch (`Tree.due/3`), run now:
-  `final_check` once its last sub-ticket ended. Nothing runs while the Conductor or the junction is
+  `sub_ticket_ended` when one of them ended and others are open, `final_check` once the last one
+  ended. Nothing runs while the Conductor or the junction is
   off, or no provider of `runs.conductor` can take a run now: the next poll asks again. The turn's
   answer is carried out as it is recorded (`Tree.apply/3`), and a final check that changed nothing
   is counted (`Tree.checked/3`). Always `:ok`. `opts`: `plan/4`'s and `run/3`'s.
@@ -385,6 +386,7 @@ defmodule SymphonyElixir.Conductor do
 
   defp tend_turn(%{junction: junction} = plan, issue, opts) do
     made = Tree.rounds(Facts.events(plan.issue_id))
+    if junction != @final_check, do: Tree.seen(plan.repo_key, issue, Config.settings_for_repo!(plan.repo_key).tracker.terminal_states)
     {exit, held, _route} = turn(plan, issue, opts)
     left = %{held: held, rounds: made, exit: exit}
     if junction == @final_check, do: Tree.checked(plan.repo_key, issue, left), else: :ok
@@ -642,7 +644,7 @@ defmodule SymphonyElixir.Conductor do
     settings = Keyword.get_lazy(opts, :settings, &Config.conductor_settings/0)
     ctx = %{issue: issue, repo_key: plan.repo_key, run_id: run_id, junction: junction, conductor: settings}
 
-    with {:ask, request} <- Tree.apply(answer, ctx, Keyword.take(opts, [:tracker, :repo, :routed_teams, :observe])),
+    with {:ask, request} <- Tree.apply(answer, ctx, Keyword.take(opts, [:tracker, :repo, :routed_teams, :observe, :cancel, :stop])),
          :held <- ask_person(request, plan, issue, run_id) do
       Tree.asked(plan.repo_key, plan.issue_id)
       :held

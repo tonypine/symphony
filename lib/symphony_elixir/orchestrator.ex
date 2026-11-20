@@ -3995,8 +3995,9 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # A groomed ticket waiting on its sub-tickets is owed a Conductor turn once the last of them ended
-  # (`Conductor.Tree.due/3`): the final check, which closes it or adds what is missing. Like the close
+  # A groomed ticket waiting on its sub-tickets is owed a Conductor turn each time one of them ends
+  # (`Conductor.Tree.due/3`): a look at what is left of its plan while others are open, and the final
+  # check, which closes it or adds what is missing, once the last one ended. Like the close
   # above it takes no slot and runs on every poll, one at a time per ticket, on a fresh read of the
   # ticket. A paused ticket (a question the check asked) waits for its pause to lift.
   defp tend_groomed_parents(%State{} = state, issues) do
@@ -4022,6 +4023,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp tree_junction(issue, terminal_states) do
     case ConductorTree.due(issue, terminal_states) do
       :final_check -> "final_check"
+      :sub_ticket_ended -> "sub_ticket_ended"
       _close_or_none -> nil
     end
   end
