@@ -202,7 +202,9 @@ defmodule SymphonyElixir.Conductor.FilingTest do
 
     log =
       capture_log(fn ->
-        assert {:ok, %{identifier: "TP-2000", relation: "blocks", existing: false, unheld: ":store_down"} = filed} = file(ctx, route(), @settings, hold: hold)
+        assert {:ok, %{identifier: "TP-2000", relation: "blocks", existing: false, unheld: ":store_down"} = filed} =
+                 file(ctx, route(), @settings, hold: hold)
+
         assert Filing.message(filed, "Cycle has no Mac app.") =~ "This ticket could not be held on it (:store_down), so it goes on for now."
       end)
 
