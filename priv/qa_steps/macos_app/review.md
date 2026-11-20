@@ -6,7 +6,8 @@ behaving as the ticket describes, on the screens the design names?
 You may first ask for a recheck: when an answer is `plan_mismatch`, when a step was walked against
 the wrong screen or state, or when an answer does not let you judge the step. Then write
 `{"recheck": [<brief>, ...]}` to the answer file: at most three briefs, each in the shape of your
-plan's `walk` briefs (with `step`, `where`, `launch`, `do`, `expect`, `design`, `screenshots`). Each
+plan's `walk` briefs (with `step`, `where`, `launch`, `do`, `expect`, `design`, `screenshots`, and
+`surface` when your plan's briefs carried one). Each
 runs as a fresh walk turn, and you review again with its answer. Symphony allows two rounds of
 recheck; past them a pass without a verdict is inconclusive.
 
