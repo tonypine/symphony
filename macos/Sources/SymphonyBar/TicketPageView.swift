@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import SymphonyBarCore
+import SymphonyBarUI
 
 // MARK: - The window model's ticket page, navigation and Stop Run
 
@@ -1483,7 +1484,6 @@ struct CancelTicketSheetView: View {
     let confirm: (_ note: String) -> Void
     @State private var note: String
     @FocusState private var noteFocused: Bool
-    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
 
     init(sheet: CancelTicketSheet, working: Bool, error: String?, note: String = "", keep: @escaping () -> Void,
          confirm: @escaping (String) -> Void) {
@@ -1507,25 +1507,13 @@ struct CancelTicketSheetView: View {
                 .fixedSize(horizontal: false, vertical: true)
             Text(sheet.stays)
                 .font(DesignTokens.TypeStyle.body.font)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DesignTokens.TextColor.secondary.color)
                 .fixedSize(horizontal: false, vertical: true)
-            if offscreenSnapshot {
-                // `ImageRenderer` can't draw a text field: its text stands in.
-                Text(note.isEmpty ? CancelTicketSheet.notePlaceholder : note)
-                    .font(DesignTokens.TypeStyle.body.font)
-                    .foregroundStyle(note.isEmpty ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary))
-                    .padding(.horizontal, DesignTokens.Space.s2)
-                    .padding(.vertical, DesignTokens.Space.s1)
-                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .topLeading)
-                    .background(DesignTokens.Surface.content.color, in: RoundedRectangle(cornerRadius: 5))
-                    .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(DesignTokens.Surface.separator.color))
-            } else {
-                TextField(CancelTicketSheet.notePlaceholder, text: $note, axis: .vertical)
-                    .lineLimit(2...5)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($noteFocused)
-                    .accessibilityLabel(CancelTicketSheet.notePrompt)
-            }
+            DirectorTextField(
+                nil, text: $note, placeholder: CancelTicketSheet.notePlaceholder,
+                disabledReason: working ? TicketList.waitReason : nil, focused: $noteFocused
+            )
+            .accessibilityLabel(CancelTicketSheet.notePrompt)
             if let error {
                 Label(error, systemImage: DesignTokens.Status.problem.symbol)
                     .font(DesignTokens.TypeStyle.secondary.font)
