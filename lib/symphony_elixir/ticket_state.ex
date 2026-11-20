@@ -15,7 +15,8 @@ defmodule SymphonyElixir.TicketState do
   team, project, labels, priority, assignee, open blockers and sub-issues (each by id, identifier and
   state), parent, URL, creation time and Linear's `updatedAt`, with when it was observed, which read
   brought the last change (`observed_from`) and when a webhook said the ticket was removed
-  (`removed_at`), and the projections to Linear that failed and wait for the reconciler
+  (`removed_at`), and when the ticket's newest comment was made (`last_comment_at`, from a `Comment`
+  delivery or a read's comments, `observe_comment/3`), and the projections to Linear that failed and wait for the reconciler
   (`pending_projection`, `mark_projection/4`), and when the reconciler's by-id read of a record no
   read had observed did not find the ticket, archived or deleted in Linear (`not_found_at`), so it
   does not read it again; dispatch ignores it; and the ticket's `pause` (`SymphonyElixir.Pauses`):
@@ -297,6 +298,7 @@ defmodule SymphonyElixir.TicketState do
           observed_at: DateTime.t() | nil,
           observed_from: observation_source() | nil,
           removed_at: DateTime.t() | nil,
+          last_comment_at: DateTime.t() | nil,
           pending_projection: [projection()],
           not_found_at: DateTime.t() | nil,
           pause: Pauses.pause() | nil,
@@ -341,7 +343,7 @@ defmodule SymphonyElixir.TicketState do
   @kept_when_delivery_lacks [:description, :team, :project]
 
   # The fields an observation of the ticket in Linear writes (`observe/4`).
-  @observed_fields ~w(issue_identifier phase title description team project labels priority assignee blockers sub_issues parent url created_at linear_updated_at)a
+  @observed_fields ~w(issue_identifier phase title description team project labels priority assignee blockers sub_issues parent url created_at linear_updated_at last_comment_at)a
 
   @doc """
   A new record for `repo_key`'s `issue_id`, with any `attrs` applied. `attrs` may set `:phase`,
@@ -393,6 +395,7 @@ defmodule SymphonyElixir.TicketState do
       observed_at: map_datetime(record, :observed_at),
       observed_from: observation_source(Map.get(record, :observed_from)),
       removed_at: map_datetime(record, :removed_at),
+      last_comment_at: map_datetime(record, :last_comment_at),
       pending_projection: normalize_projections(Map.get(record, :pending_projection)),
       not_found_at: map_datetime(record, :not_found_at),
       pause: Pauses.normalize(Map.get(record, :pause)),
@@ -439,6 +442,7 @@ defmodule SymphonyElixir.TicketState do
       observed_at: nil,
       observed_from: nil,
       removed_at: nil,
+      last_comment_at: nil,
       pending_projection: [],
       not_found_at: nil,
       pause: nil,
@@ -503,6 +507,21 @@ defmodule SymphonyElixir.TicketState do
   @spec observation(t()) :: map()
   def observation(record),
     do: record |> normalize() |> Map.take(@observed_fields ++ [:phase_at, :phase_owner, :observed_at, :observed_from, :updated_at])
+
+  @doc """
+  Records that a comment was made on the ticket at `commented_at`, as a `Comment` create delivery
+  says: `last_comment_at` becomes the newer of the two, with `updated_at` set to `at`. Returns the
+  record and `:changed`, or `:unchanged` when the record already knows of a comment as new. Nothing
+  else changes: the delivery says nothing else of the ticket, so `observed_from` stays the read's.
+  """
+  @spec observe_comment(t(), DateTime.t(), DateTime.t()) :: {t(), :changed | :unchanged}
+  def observe_comment(record, %DateTime{} = commented_at, %DateTime{} = at) do
+    record = normalize(record)
+
+    if newer?(commented_at, record.last_comment_at),
+      do: {%{record | last_comment_at: commented_at, updated_at: at}, :changed},
+      else: {record, :unchanged}
+  end
 
   @doc """
   Marks the ticket removed in Linear at `removed_at`, as an `Issue` remove delivery says. Nothing else
@@ -610,6 +629,24 @@ defmodule SymphonyElixir.TicketState do
   defp stale?(%DateTime{} = known, %DateTime{} = fact), do: DateTime.compare(fact, known) == :lt
   defp stale?(_known, _fact), do: false
 
+  # The newest comment a read carries, never older than the one the record already knows: a read
+  # holds the ticket's last comments only, and a delivery none (`:unknown`).
+  defp latest_comment_at(comments, known) when is_list(comments) do
+    comments
+    |> Enum.flat_map(fn
+      %{created_at: %DateTime{} = at} -> [at]
+      _comment -> []
+    end)
+    |> Enum.reduce(known, &later/2)
+  end
+
+  defp latest_comment_at(_comments, known), do: known
+
+  defp later(at, known), do: if(newer?(at, known), do: at, else: known)
+
+  defp newer?(_at, nil), do: true
+  defp newer?(at, known), do: DateTime.compare(at, known) == :gt
+
   defp observed_fields(issue, record, source) do
     kept = if source == :webhook, do: @kept_when_missing ++ @kept_when_delivery_lacks, else: @kept_when_missing
 
@@ -628,7 +665,8 @@ defmodule SymphonyElixir.TicketState do
       parent: issue.parent,
       url: issue.url,
       created_at: issue.created_at,
-      linear_updated_at: issue.updated_at
+      linear_updated_at: issue.updated_at,
+      last_comment_at: latest_comment_at(issue.comments, record.last_comment_at)
     ]
     |> Enum.reject(fn {field, value} -> value == :unknown or (is_nil(value) and field in kept) end)
     |> Map.new()
@@ -993,6 +1031,39 @@ defmodule SymphonyElixir.TicketState do
     end)
     |> Enum.reverse()
   end
+
+  @doc """
+  The events of `events` (oldest first) after the newest `run.ended` of an implementation or rework
+  run, oldest first: what happened to the ticket's current change, whatever head the pull request
+  moved to since (a merge of the base branch is no change of its own). All of `events` when no such
+  run ended.
+  """
+  @spec events_since_coding_run_in([Event.t()]) :: [Event.t()]
+  def events_since_coding_run_in(events) when is_list(events) do
+    events
+    |> Enum.reverse()
+    |> Enum.take_while(&(not coding_run_ended?(&1)))
+    |> Enum.reverse()
+  end
+
+  @doc """
+  The `qa` verdicts on the ticket's current change that reached no result (`blocked` or
+  `inconclusive`), newest first, back to the newest one that did (a pass, a fail, a skip): the
+  verdicts `events` (oldest first) record since the newest implementation or rework run ended
+  (`events_since_coding_run_in/1`), on any head. A block on CI (its `component` `ci`) is passed
+  over: CI's state is the PR watcher's, so it spends no QA attempt.
+  """
+  @spec qa_verdicts_without_result_in([Event.t()]) :: [verdict()]
+  def qa_verdicts_without_result_in(events) when is_list(events) do
+    events
+    |> events_since_coding_run_in()
+    |> verdicts_in()
+    |> Enum.filter(&(&1.kind == "qa" and map_string(&1.details, :component) != "ci"))
+    |> Enum.take_while(&(&1.outcome in ["blocked", "inconclusive"]))
+  end
+
+  defp coding_run_ended?(%Event{type: "run.ended", payload: payload}), do: map_string(payload, :run_kind) in ["implementation", "rework"]
+  defp coding_run_ended?(_event), do: false
 
   @doc """
   The runs dispatched since the ticket last made progress, newest first, read from its event stream

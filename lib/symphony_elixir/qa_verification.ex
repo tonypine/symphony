@@ -17,7 +17,7 @@ defmodule SymphonyElixir.QaVerification do
       launched and checked the app; otherwise `inconclusive`
     * `fail` -> `Rework`, with the report on the ticket for the next run
     * `inconclusive` (the QA run's own omission, such as a pass that claimed screens but ran no wide
-      pass) -> rerun once on the same head, then a Needs Decision hold in `QA`; never the self-heal
+      pass) -> rerun once on the same change, then a Needs Decision hold in `QA`; never the self-heal
       lane, since nothing in the environment is broken
     * skip (the deterministic docs-only/internal-only rule, `SymphonyElixir.QaPolicy`) -> `Merging`
     * no open pull request, or a PR whose diff GitHub reports empty -> a Needs Decision hold in `QA`
@@ -26,9 +26,15 @@ defmodule SymphonyElixir.QaVerification do
       GitHub's diff is not empty is out of sync: it is re-synced once, and one that still finds
       nothing pauses the ticket on a reason the Director releases with Unblock
       (`SymphonyElixir.EmptyChange`)
-    * `blocked` (tooling or environment) -> retried boundedly on the same head, then the self-heal
+    * `blocked` (tooling or environment) -> retried boundedly on the same change, then the self-heal
       lane when the QA tools raised the block themselves or only a person can clear it, else a Needs
       Decision hold in `QA`: a block nothing names as broken gets no fix ticket
+    * a `blocked` or `inconclusive` pass on the QA agent's own account (no CI rejection, nothing for
+      the self-heal lane, not `unprovable`) -> first the Conductor's turn at `after_qa_blocked`
+      (`SymphonyElixir.Conductor.route_blocked_qa/3`), once the verdict is recorded and the report
+      published: its route sends the ticket to `Rework` with its finding (`qa_blocked_rework`) or to
+      one more pass, and its question holds the ticket so Symphony asks none of its own. A Conductor
+      that is off, fails or routes nothing leaves the retry and the question as they are
     * a step the pass cannot prove here (`unprovable`: it needs the app on a pass the diff did not
       select the app's playbook for, or the project's own server on a repo whose setup rules a dev
       server out of a pass none of whose playbooks runs it,
@@ -45,6 +51,11 @@ defmodule SymphonyElixir.QaVerification do
     * a provider usage limit, or a model API the agent could not reach -> no verdict and no report:
       the run comes back as `{:error, {:usage_limited, info}}`, and the orchestrator holds it until
       the limit resets (SPEC §8.4.1)
+
+  A pass's attempts count the passes in a row that reached no result on the ticket's current
+  change: since its last implementation or rework run ended, whatever head each judged
+  (`SymphonyElixir.TicketState.qa_verdicts_without_result_in/1`), so a merge of the base branch into
+  the pull request starts no new count.
 
   First the run brings its workspace to the PR's current head (a reused workspace still holds the
   head of its last run, and branch upkeep may have updated the PR since), resetting it only when it
@@ -76,6 +87,7 @@ defmodule SymphonyElixir.QaVerification do
   alias SymphonyElixir.{
     CiWait,
     ClosedPullRequest,
+    Conductor,
     Config,
     DecisionMove,
     DecisionRequest,
@@ -90,6 +102,7 @@ defmodule SymphonyElixir.QaVerification do
     TicketEvents,
     TicketPullRequest,
     TicketSignals,
+    TicketState,
     TransitionGuard,
     Walkthrough,
     WorkspaceHead,
@@ -107,13 +120,17 @@ defmodule SymphonyElixir.QaVerification do
   @max_inconclusive_attempts 2
   @head_unreadable_signal "qa_head_unreadable"
   @ci_component "ci"
+  @run_again "Run QA again"
   @acceptance_heading ~r/^\s*\#{1,6}\s+Acceptance criteria\s*:?\s*$/i
   @any_heading ~r/^\s*\#{1,6}\s+\S/
 
   @doc """
   Runs the QA agent for `issue` when it is a `QA` ticket, else `:skip` so the
   caller falls through to the executor run. `opts[:qa_agent]`, `opts[:qa_policy]` and
-  `opts[:tracker]` override the agent, the skip policy and the tracker (tests, a fake).
+  `opts[:tracker]` override the agent, the skip policy and the tracker (tests, a fake), and
+  `opts[:conductor]` the Conductor's turn after a pass that could not judge the change
+  (`(Issue.t(), repo_key) -> SymphonyElixir.Conductor.blocked_qa_route()`, default
+  `SymphonyElixir.Conductor.route_blocked_qa/3`).
   """
   @spec run(Issue.t(), Path.t(), keyword()) :: :skip | :ok | {:error, term()}
   def run(%Issue{} = issue, workspace, opts) when is_binary(workspace) do
@@ -691,8 +708,9 @@ defmodule SymphonyElixir.QaVerification do
   # An inconclusive pass is the QA run's own omission, not a fault of its environment: it ran but did
   # not reach a verdict it could ground (a pass that claimed screens but ran no wide pass, a
   # `scope: none` pass that never started the app). Nothing is broken for the self-heal lane to
-  # repair, so it never goes there: the pass reruns once on the same head, like an inconclusive Code
-  # Review, then asks a person on a Needs Decision hold. A head CI rejects is the PR watcher's first.
+  # repair, so it never goes there: the Conductor's turn routes it first (`conduct/3`), and without a
+  # route the pass reruns once on the same change, like an inconclusive Code Review, then asks a
+  # person on a Needs Decision hold. A head CI rejects is the PR watcher's first.
   defp inconclusive(issue, opts, settings, head, outcome) do
     case ci_rejection(issue, opts, head) do
       nil -> inconclusive_run(issue, opts, settings, head, outcome)
@@ -703,7 +721,7 @@ defmodule SymphonyElixir.QaVerification do
   defp inconclusive_run(issue, opts, settings, head, outcome) do
     details = blocked_details(opts, settings, outcome)
     record_pass_verdict(issue, opts, head, "inconclusive", outcome, details)
-    attempts = count_verdicts(issue, opts, head, "inconclusive")
+    attempts = count_verdicts(issue, opts, "inconclusive")
     rerun? = attempts < @max_inconclusive_attempts
     publish_report(issue, opts, head, outcome, if(rerun?, do: "QA (inconclusive, rerunning)", else: "QA (inconclusive; a person decides)"))
 
@@ -712,7 +730,10 @@ defmodule SymphonyElixir.QaVerification do
         "(attempt #{attempts}/#{@max_inconclusive_attempts}); #{if rerun?, do: "rerunning", else: "asking a person"}: #{details.reason}"
     )
 
-    if rerun?, do: :ok, else: escalate(issue, opts, settings, head, attempts, details.reason)
+    case conduct(issue, opts, outcome) do
+      :none -> if rerun?, do: :ok, else: escalate(issue, opts, settings, head, attempts, details.reason)
+      route -> follow_route(route, issue, opts, settings, head)
+    end
   end
 
   defp qa_result(outcome) do
@@ -739,8 +760,10 @@ defmodule SymphonyElixir.QaVerification do
     move(issue, opts, settings, :qa_fail, %{reason: verdict_reason(outcome)})
   end
 
-  # A blocked run is retried boundedly on the same head: a transient environment failure says
-  # nothing about the change. Once the attempts are used up the block goes to the self-heal lane
+  # A blocked run is retried boundedly on the same change: a transient environment failure says
+  # nothing about the change. A block on the QA agent's own account takes the Conductor's turn
+  # first (`conduct/3`), whose route or question replaces the retry and Symphony's own question.
+  # Once the attempts are used up the block goes to the self-heal lane
   # (`SymphonyElixir.SelfHeal`), which files or reuses the fix ticket for the broken component,
   # holds the ticket on it, and resumes it by itself when the fix lands — or, for a block only a
   # person can clear, takes the access hold a person lifts. Either way the ticket pauses in QA
@@ -757,7 +780,7 @@ defmodule SymphonyElixir.QaVerification do
   defp blocked_on_environment(issue, opts, settings, head, outcome) do
     details = blocked_details(opts, settings, outcome)
     record_pass_verdict(issue, opts, head, "blocked", outcome, details)
-    attempts = blocked_attempts(issue, opts, head)
+    attempts = blocked_attempts(issue, opts)
     next = blocked_next(attempts, outcome)
     publish_report(issue, opts, head, outcome, blocked_target(attempts, outcome))
 
@@ -767,10 +790,57 @@ defmodule SymphonyElixir.QaVerification do
         "#{next_label(next)}: #{details.reason}"
     )
 
-    case next do
-      :retry -> :ok
-      :self_heal -> self_heal(issue, opts, attempts, outcome)
-      :escalate -> escalate(issue, opts, settings, head, attempts, details.reason, unprovable?(outcome))
+    case conduct(issue, opts, outcome) do
+      :none -> blocked_next_step(next, issue, opts, settings, head, {attempts, details.reason, outcome})
+      route -> follow_route(route, issue, opts, settings, head)
+    end
+  end
+
+  defp blocked_next_step(:retry, _issue, _opts, _settings, _head, _block), do: :ok
+  defp blocked_next_step(:self_heal, issue, opts, _settings, _head, {attempts, _reason, outcome}), do: self_heal(issue, opts, attempts, outcome)
+
+  defp blocked_next_step(:escalate, issue, opts, settings, head, {attempts, reason, outcome}),
+    do: escalate(issue, opts, settings, head, attempts, reason, unprovable?(outcome))
+
+  # The Conductor's turn after a pass that could not judge the change (`Conductor.route_blocked_qa/3`,
+  # `opts[:conductor]`), on the QA agent's own account of it only: a block the self-heal lane takes
+  # or an `unprovable` one keeps its own path, as does a block on CI, which never gets here.
+  defp conduct(issue, opts, outcome) do
+    if self_heal_input?(outcome) or unprovable?(outcome),
+      do: :none,
+      else: Keyword.get(opts, :conductor, &Conductor.route_blocked_qa/2).(issue, repo_key(issue, opts))
+  end
+
+  # What the Conductor's route does. A question it asked holds the ticket, so Symphony asks none of
+  # its own and does not rerun; a rerun leaves the ticket in QA for the next pass, which reads the
+  # turn's instructions; a rework records the turn's finding in this QA run and moves the ticket to
+  # Rework under its own signal, and the rework run reads the finding and the instructions.
+  defp follow_route(:held, issue, _opts, _settings, _head) do
+    Logger.info("QA for #{issue_label(issue)} waits on the Conductor's question; Symphony asks none of its own")
+    :ok
+  end
+
+  defp follow_route(:rerun, issue, _opts, _settings, head) do
+    Logger.info("QA for #{issue_label(issue)} runs again on the Conductor's route head=#{head}")
+    :ok
+  end
+
+  defp follow_route({:rework, finding}, issue, opts, settings, head) do
+    Logger.info("QA for #{issue_label(issue)} goes back to Rework on the Conductor's route head=#{head}: #{finding}")
+    record_conductor_finding(issue, opts, head, finding)
+    move(issue, opts, settings, :qa_blocked_rework, %{reason: finding})
+  end
+
+  # The Conductor's finding, recorded as the QA run's like its own findings: `unclassified` and
+  # `unrated` until the findings model classifies them, and naming no step, so it is never read as
+  # QA failing a step again.
+  defp record_conductor_finding(issue, opts, head, finding) do
+    repo_key = repo_key(issue, opts)
+
+    if is_binary(repo_key) do
+      run_id = qa_run_id(issue, opts, head)
+      payload = %{class: "unclassified", severity: "unrated", description: cut(finding, 2_000)}
+      TicketSignals.record_event(repo_key, issue.id, "finding.recorded", payload, pass_event_opts(run_id, "finding:#{run_id}:conductor", []))
     end
   end
 
@@ -809,24 +879,30 @@ defmodule SymphonyElixir.QaVerification do
 
   # A pass that keeps ending without a verdict and names nothing the machine can repair: the ticket
   # pauses in QA on a person's decision. "Run QA again" clears the hold and QA runs again on the same
-  # head; each further run that ends the same way asks again. The other two picks are moves Symphony
+  # change; each further run that ends the same way asks again. The other two picks are moves Symphony
   # makes itself (`SymphonyElixir.DecisionMove`): Rework, or the QA pass's target with a `qa`
   # verdict `skip` bound to this head, recorded as skipped by decision.
   #
-  # A pass with nothing it could prove here (every open step `unprovable`) asks at once, with the
-  # same three options: another run would end the same way, so merging without a QA result is the
-  # recommended one.
+  # "Run QA again" is recommended until the person picked it on this change and QA ended the same
+  # way after it (`rerun_answered?/2`); from then on "Send it back to Rework" is. A pass with nothing
+  # it could prove here (every open step `unprovable`) asks at once, with the same three options:
+  # another run would end the same way, so merging without a QA result is the recommended one.
   defp escalate(issue, opts, settings, head, attempts, reason, unprovable? \\ false) do
     Logger.warning("QA for #{issue_label(issue)} could not reach a verdict after #{attempts} run(s); asking a person: #{reason}")
     hold_opts = opts |> Keyword.take([:tracker, :store]) |> Keyword.put(:repo_key, repo_key(issue, opts))
+    recommended = escalation_pick(unprovable?, rerun_answered?(issue, opts))
 
-    case DecisionRequest.ask(issue, escalation_request(issue, settings, head, attempts, reason, unprovable?), hold_opts) do
+    case DecisionRequest.ask(issue, escalation_request(issue, settings, head, {attempts, reason, unprovable?}, recommended), hold_opts) do
       :ok -> :ok
       {:error, error} -> {:error, {:qa_escalation_failed, error}}
     end
   end
 
-  defp escalation_request(issue, settings, head, attempts, reason, unprovable?) do
+  defp escalation_pick(true = _unprovable?, _rerun_answered?), do: :merge
+  defp escalation_pick(false, true), do: :rework
+  defp escalation_pick(false, false), do: :rerun
+
+  defp escalation_request(issue, settings, head, {attempts, reason, unprovable?}, recommended) do
     merging = TransitionGuard.target(:qa_pass, %{settings: settings})
     skip = %{kind: @verdict_kind, outcome: "skip", head_sha: head, reason: "skipped by decision"}
 
@@ -835,20 +911,37 @@ defmodule SymphonyElixir.QaVerification do
       question: escalation_question(issue, attempts, unprovable?),
       why: escalation_why(reason, unprovable?),
       options: [
-        recommend(%{label: "Run QA again", effect: "the ticket continues in QA and QA runs once more on the same change"}, not unprovable?),
-        DecisionMove.option(%{label: "Send it back to Rework", effect: "Symphony moves #{issue_label(issue)} to Rework, and its next run reads QA's report"}, %{to: "Rework"}),
+        recommend(%{label: @run_again, effect: "the ticket continues in QA and QA runs once more on the same change"}, recommended == :rerun),
+        recommend(
+          DecisionMove.option(%{label: "Send it back to Rework", effect: "Symphony moves #{issue_label(issue)} to Rework, and its next run reads QA's report"}, %{to: "Rework"}),
+          recommended == :rework
+        ),
         recommend(
           DecisionMove.option(
             %{label: "Merge without a QA result", effect: "Symphony moves #{issue_label(issue)} to #{merging}, and it merges on its review and CI alone"},
             %{to: merging, verdict: skip}
           ),
-          unprovable?
+          recommended == :merge
         )
       ],
       if_unanswered: "#{issue_label(issue)} stays in #{settings.tracker.qa_state} and goes no further.",
-      recommendation_reason: escalation_recommendation(unprovable?)
+      recommendation_reason: escalation_recommendation(recommended)
     }
   end
+
+  # Whether the person already answered this question with "Run QA again" on the ticket's current
+  # change (since its last implementation or rework run ended), read from the recorded question
+  # events: an answer that picked that option of a question Symphony asked.
+  defp rerun_answered?(issue, opts) do
+    events = qa_events(issue, opts)
+    asked = for %{type: "question.asked", payload: payload} <- events, symphony_asked?(payload), into: MapSet.new(), do: Map.get(payload, :question_id)
+
+    events
+    |> TicketState.events_since_coding_run_in()
+    |> Enum.any?(&(&1.type == "question.answered" and Map.get(&1.payload, :option) == @run_again and MapSet.member?(asked, Map.get(&1.payload, :question_id))))
+  end
+
+  defp symphony_asked?(payload), do: to_string(get_in(payload, [:asked_by, :kind])) == "symphony"
 
   defp escalation_question(issue, _attempts, true),
     do: "QA could not prove any step of #{issue_mention(issue)} here, because each one needs something this repo's QA pass does not have. How should it continue?"
@@ -862,8 +955,12 @@ defmodule SymphonyElixir.QaVerification do
   defp escalation_why(reason, false),
     do: "The last run ended with: #{PlainWords.scrub(reason)}. No QA tool reported a broken part of the QA environment, so the machine files no fix ticket for it."
 
-  defp escalation_recommendation(true), do: "QA can never prove these steps on this repo, so another run would end the same way; the review and CI already judged the change."
-  defp escalation_recommendation(false), do: "A run that ends without a result is often a passing hiccup, and one more run costs little."
+  defp escalation_recommendation(:merge), do: "QA can never prove these steps on this repo, so another run would end the same way; the review and CI already judged the change."
+
+  defp escalation_recommendation(:rework),
+    do: "QA ended the same way after the last rerun you asked for, so one more run would likely end the same way. A rework can change what stops QA."
+
+  defp escalation_recommendation(:rerun), do: "A run that ends without a result is often a passing hiccup, and one more run costs little."
 
   defp recommend(option, true), do: Map.put(option, :recommended, true)
   defp recommend(option, false), do: option
@@ -935,13 +1032,28 @@ defmodule SymphonyElixir.QaVerification do
     if retry_blocked?(attempts, outcome), do: "QA (blocked, retrying)", else: "QA (blocked)"
   end
 
-  # A block on CI is the watcher's, not the environment's, so it spends no attempt.
-  defp blocked_attempts(issue, opts, head), do: count_verdicts(issue, opts, head, "blocked")
+  # The passes in a row that reached no result on the ticket's current change, on any head
+  # (`TicketState.qa_verdicts_without_result_in/1`): a merge of the base branch into the PR is no
+  # change of its own, so it starts no new count. A block on CI is the watcher's, not the
+  # environment's, so it spends no attempt.
+  defp blocked_attempts(issue, opts), do: count_verdicts(issue, opts, "blocked")
 
-  defp count_verdicts(issue, opts, head, outcome) do
+  defp count_verdicts(issue, opts, outcome) do
     issue
-    |> verdicts(opts)
-    |> Enum.count(&(&1.head_sha == head and &1.outcome == outcome and Map.get(&1.details, :component) != @ci_component))
+    |> qa_events(opts)
+    |> TicketState.qa_verdicts_without_result_in()
+    |> Enum.count(&(&1.outcome == outcome))
+  end
+
+  # The ticket's events a QA decision reads: its verdicts, the runs that ended and the questions; none
+  # for a ticket with no repo key, which records none.
+  defp qa_events(issue, opts) do
+    with repo_key when is_binary(repo_key) <- repo_key(issue, opts),
+         events when is_list(events) <- RunStore.list_ticket_events(issue.id, types: ["verdict.recorded", "run.ended", "question.asked", "question.answered"]) do
+      events
+    else
+      _none -> []
+    end
   end
 
   defp needs_person?(%{needs_person: true}), do: true
@@ -1278,8 +1390,6 @@ defmodule SymphonyElixir.QaVerification do
     |> Handoff.verdicts(issue_id, @verdict_kind)
     |> Enum.find(&(&1.head_sha == head))
   end
-
-  defp verdicts(issue, opts), do: Handoff.verdicts(repo_key(issue, opts), issue.id, @verdict_kind)
 
   defp verdict_reason(%{findings: [first | _]}) when is_binary(first), do: first
   defp verdict_reason(%{reason: reason}) when is_binary(reason) and reason != "", do: reason

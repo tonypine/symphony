@@ -2064,8 +2064,8 @@ defmodule SymphonyElixir.Config.Schema do
     @moduledoc """
     `symphony.yml`'s `conductor` section (`SymphonyElixir.Conductor`): whether Symphony runs the
     Conductor's short turn at a ticket's junctions (`enabled`, off by default), at which junctions
-    (`junctions`: `after_coding`, `after_qa_fail`, `after_rework`, `before_merge`; all four by
-    default) and how long one turn may take before the next run starts without it (`timeout_ms`,
+    (`junctions`: `after_coding`, `after_qa_fail`, `after_qa_blocked`, `after_rework`,
+    `before_merge`; all five by default) and how long one turn may take before the next run starts without it (`timeout_ms`,
     three minutes by default), and whether it watches running runs to steer them (`watch`,
     `SymphonyElixir.Conductor.Watch`, off by default). Its model is `runs.conductor`'s.
     """
@@ -2075,7 +2075,7 @@ defmodule SymphonyElixir.Config.Schema do
     @type t :: %__MODULE__{}
 
     @primary_key false
-    @junctions ~w(after_coding after_qa_fail after_rework before_merge)
+    @junctions ~w(after_coding after_qa_fail after_qa_blocked after_rework before_merge)
 
     defmodule Watch do
       @moduledoc """

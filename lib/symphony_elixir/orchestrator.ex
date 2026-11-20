@@ -1611,7 +1611,7 @@ defmodule SymphonyElixir.Orchestrator do
     list_records = Map.get(input, :list_records, &RunStore.list_all_ticket_states/0)
     read = tick_reader(input.by_id, list_records)
     {running_ids, running_result} = read.(ids.running)
-    {watching_ids, watching_result} = ids.watching |> read.() |> plan_comments_for(input.by_id)
+    {watching_ids, watching_result} = read.(ids.watching)
     {forced_ids, forced_result} = read.(ids.forced)
     {stopped_ids, stopped_result} = read.(ids.stopped)
 
@@ -1709,31 +1709,6 @@ defmodule SymphonyElixir.Orchestrator do
       %{removed_at: nil} = record -> {record.issue_id, Candidates.issue_from_record(record)}
       record -> {record.issue_id, :removed}
     end)
-  end
-
-  # The watched tickets are the only ones the plan-comment reader acts on
-  # (`apply_watching_issue_states_result/3`). A plan parent in `Plan Review` is in no repo poll (it is
-  # not an active state) and its record keeps no comments, so the comments a person leaves on a plan
-  # under review exist only in Linear. Such a watched parent the plan-comment reader acts on
-  # (`PlanComments.action/3`) is read by id, as under `poll`, so it sees the same comments.
-  defp plan_comments_for({known, {:ok, issues}}, {:record, _held}), do: {known, plan_comment_reads(issues)}
-  defp plan_comments_for(read, _by_id), do: read
-
-  defp plan_comment_reads(issues) do
-    settings = Config.settings!()
-    {active_states, terminal_states} = {active_state_set(settings), terminal_state_set(settings)}
-    unpolled? = &(PlanComments.action(&1, terminal_states, settings) != nil and not active_issue_state?(&1.state, active_states))
-
-    case Enum.filter(issues, unpolled?) do
-      [] ->
-        {:ok, issues}
-
-      unpolled ->
-        with {:ok, read} <- fetch_observed_issues_by_ids(Enum.map(unpolled, & &1.id)) do
-          read_by_id = Map.new(read, &{&1.id, &1})
-          {:ok, Enum.map(issues, &Map.get(read_by_id, &1.id, &1))}
-        end
-    end
   end
 
   defp fetch_issue_states_if_needed([]), do: {:ok, []}
@@ -2205,7 +2180,8 @@ defmodule SymphonyElixir.Orchestrator do
     :parent,
     :url,
     :repo_key,
-    :created_at
+    :created_at,
+    :last_comment_at
   ]
 
   defp dispatch_side(side, :poll), do: side.cache
@@ -4131,7 +4107,9 @@ defmodule SymphonyElixir.Orchestrator do
   # A person's new comment on a `breakdown` parent's plan (see `PlanComments`): a plan under review
   # goes to `Rework`, where the plan is revised in place, and an approved plan gets a reply. Parents
   # waiting for review come from the watching refresh (which watches `Plan Review` like any
-  # non-active state), approved ones from the candidates.
+  # non-active state), approved ones from the candidates. Under `dispatch.source: record` a parent in
+  # `Plan Review` is rebuilt from its record, which keeps no comments but the newest one's time, from
+  # a `Comment` delivery (`TicketObservation.observe_delivery/2`): no by-id read is made to see it.
   # `plan_comment_checks` keeps the newest comment each parent's poll showed once it was acted on,
   # so Linear is read again only when a newer comment shows up. `plan_comments_since` is when this
   # orchestrator started: comments on an approved plan from before it get no reply.
@@ -4229,16 +4207,19 @@ defmodule SymphonyElixir.Orchestrator do
     |> Enum.all?(&(&1 == :ok))
   end
 
-  defp newest_comment_at(%Issue{comments: comments}) when is_list(comments) do
+  # The newest comment the issue shows: from its comments when Linear's read carries them, and from
+  # the time its record keeps (`last_comment_at`, a `Comment` delivery's) when it was rebuilt from the
+  # record, as a plan parent in `Plan Review` is under `dispatch.source: record`.
+  defp newest_comment_at(%Issue{comments: comments, last_comment_at: recorded}) do
     comments
+    |> List.wrap()
     |> Enum.flat_map(fn
       %{created_at: %DateTime{} = at} -> [at]
       _comment -> []
     end)
+    |> Enum.concat(List.wrap(recorded))
     |> Enum.max(DateTime, fn -> nil end)
   end
-
-  defp newest_comment_at(_issue), do: nil
 
   defp newer_comment?(_newest, nil), do: true
   defp newer_comment?(newest, checked), do: DateTime.compare(newest, checked) == :gt

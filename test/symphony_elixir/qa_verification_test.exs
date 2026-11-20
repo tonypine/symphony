@@ -3,6 +3,8 @@ defmodule SymphonyElixir.QaVerificationTest do
 
   alias SymphonyElixir.CiFix
   alias SymphonyElixir.CiWait
+  alias SymphonyElixir.Conductor
+  alias SymphonyElixir.Conductor.Facts
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Handoff
   alias SymphonyElixir.Linear.Issue
@@ -850,7 +852,7 @@ defmodule SymphonyElixir.QaVerificationTest do
   end
 
   describe "blocked runs" do
-    test "retry boundedly on the same head, then file the fix ticket and hold the ticket on it" do
+    test "retry boundedly on the same change, then file the fix ticket and hold the ticket on it" do
       {workspace, head} = git_workspace!()
 
       Process.put(:qa_agent_result, {:error, {:qa_host_tunnel_failed, "ssh exited with status 255"}, %{}})
@@ -1150,7 +1152,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert Enum.all?(verdicts(), &(&1.head_sha == head))
     end
 
-    test "a QA host block that keeps changing retries, until the head runs out of attempts" do
+    test "a QA host block that keeps changing retries, until the change runs out of attempts" do
       {workspace, _head} = git_workspace!()
 
       Process.put(:qa_agent_result, {:error, {:qa_host_missing_tool, ["go"]}, %{}})
@@ -1159,7 +1161,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert_received {:fixer_create, %{component: "worker_host"}}
       lift_fix_ticket_hold()
 
-      # Each run misses another tool: real progress, so each earns a retry while the head has
+      # Each run misses another tool: real progress, so each earns a retry while the change has
       # attempts left.
       for tool <- ["pg_ctl", "node"] do
         Process.put(:qa_agent_result, {:error, {:qa_host_missing_tool, [tool]}, %{}})
@@ -1167,7 +1169,7 @@ defmodule SymphonyElixir.QaVerificationTest do
         refute deciding()
       end
 
-      # The fifth blocked run on the same head escalates however the failure changed.
+      # The fifth blocked run on the same change escalates however the failure changed.
       Process.put(:qa_agent_result, {:error, {:qa_host_missing_tool, ["swift"]}, %{}})
       assert :ok = run(workspace, [])
 
@@ -1682,6 +1684,205 @@ defmodule SymphonyElixir.QaVerificationTest do
 
       assert [%{outcome: "blocked", details: %{component: "ci", reason: "CI is red on this head"}}] = verdicts()
       refute deciding()
+    end
+  end
+
+  describe "the Conductor after a pass that could not judge the change (TP-1550)" do
+    @own_block "QA cannot make the app's own Symphony fail its state request"
+    @finding "Add a flag QA can set to make the state request fail, and name it in walkthrough step 3."
+
+    # The Conductor's turn, standing in for the real one: it says it ran and answers what the test gives.
+    defp conductor(route) do
+      test = self()
+
+      fn issue, repo_key ->
+        send(test, {:conductor, issue.id, repo_key})
+        route
+      end
+    end
+
+    defp own_block, do: Process.put(:qa_agent_result, blocked_result(["Watch the state error"], @own_block))
+
+    defp new_head!(workspace) do
+      {_out, 0} = System.cmd("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "merge main"], cd: workspace)
+      {head, 0} = System.cmd("git", ["rev-parse", "HEAD"], cd: workspace)
+      String.trim(head)
+    end
+
+    defp rework_ended! do
+      {:ok, _event} = SymphonyElixir.TicketEvents.record(@repo_key, @issue_id, "run.ended", %{run_id: "rework-1", run_kind: "rework", exit: "handoff"}, run_id: "rework-1")
+    end
+
+    test "a Conductor that routes nothing leaves the pass as it was: a retry, then Symphony's own question" do
+      {workspace, _head} = git_workspace!()
+      own_block()
+
+      assert :ok = run(workspace, conductor: conductor(:none))
+      assert_received {:conductor, @issue_id, @repo_key}
+      refute deciding()
+
+      assert :ok = run(workspace, conductor: conductor(:none))
+      assert_received {:conductor, @issue_id, @repo_key}
+      assert %{title: "QA could not finish its check of TP-816"} = deciding()
+      refute_received {:memory_tracker_state_update, _, _}
+    end
+
+    test "with the Conductor off, the default turn runs nothing and the pass goes on as before" do
+      {workspace, _head} = git_workspace!()
+      own_block()
+
+      assert :ok = run(workspace, [])
+      assert :ok = run(workspace, [])
+      assert %{title: "QA could not finish its check of TP-816"} = deciding()
+      assert RunStore.list_ticket_events(@issue_id, types: ["run.started", "conductor.instructions"]) == []
+    end
+
+    test "a rework route records the Conductor's finding in the QA run and moves the ticket to Rework under its own signal" do
+      {workspace, head} = git_workspace!()
+      own_block()
+
+      log = capture_log(fn -> assert :ok = run(workspace, conductor: conductor({:rework, @finding})) end)
+
+      assert log =~ "QA for TP-816 goes back to Rework on the Conductor's route head=#{head}"
+      assert_received {:memory_tracker_state_update, @issue_id, "Rework"}
+      refute deciding()
+      refute_received {:fixer_create, _attrs}
+      assert [%{outcome: "blocked", head_sha: ^head}] = verdicts()
+
+      assert [%{name: "qa", details: %{signal: "qa_blocked_rework", target: "Rework", reason: @finding}} | _] =
+               Handoff.signals(@repo_key, @issue_id)
+
+      run_id = "qa-TP-816-" <> String.slice(head, 0, 12)
+
+      assert [%{run_id: ^run_id, actor: %{kind: :agent}, payload: finding}] =
+               RunStore.list_ticket_events(@issue_id, types: ["finding.recorded"])
+
+      assert finding == %{class: "unclassified", severity: "unrated", description: @finding}
+      assert [%{payload: %{to: "Rework", via: "qa_blocked_rework"}}] = RunStore.list_ticket_events(@issue_id, types: ["phase.entered"])
+    end
+
+    test "a rerun route leaves the ticket in QA for one more pass where Symphony would have asked" do
+      {workspace, _head} = git_workspace!()
+      own_block()
+
+      assert :ok = run(workspace, conductor: conductor(:none))
+      log = capture_log(fn -> assert :ok = run(workspace, conductor: conductor(:rerun)) end)
+
+      assert log =~ "QA for TP-816 runs again on the Conductor's route"
+      refute deciding()
+      refute_received {:memory_tracker_state_update, _, _}
+      assert Enum.map(verdicts(), & &1.outcome) == ["blocked", "blocked"]
+
+      # The passes this module records are what bounds the Conductor's next rerun.
+      assert Conductor.open_routes(Facts.events(@issue_id)) == ["rerun", "rework"]
+      new_head!(workspace)
+      assert :ok = run(workspace, conductor: conductor(:rerun))
+      assert Conductor.open_routes(Facts.events(@issue_id)) == ["rework"]
+    end
+
+    test "a question the Conductor asked holds the ticket, and Symphony asks none of its own" do
+      {workspace, _head} = git_workspace!()
+      own_block()
+
+      assert :ok = run(workspace, conductor: conductor(:none))
+      log = capture_log(fn -> assert :ok = run(workspace, conductor: conductor(:held)) end)
+
+      assert log =~ "QA for TP-816 waits on the Conductor's question; Symphony asks none of its own"
+      refute deciding()
+      refute_received {:memory_tracker_state_update, _, _}
+    end
+
+    test "an inconclusive pass takes the Conductor's turn too" do
+      {workspace, _head} = git_workspace!()
+      Process.put(:qa_agent_result, wide_pass_missing())
+
+      capture_log(fn -> assert :ok = run(workspace, conductor: conductor({:rework, @finding})) end)
+
+      assert_received {:conductor, @issue_id, @repo_key}
+      assert_received {:memory_tracker_state_update, @issue_id, "Rework"}
+      assert [%{outcome: "inconclusive"}] = verdicts()
+
+      clear_store!()
+      assert :ok = run(workspace, conductor: conductor(:none))
+      log = capture_log(fn -> assert :ok = run(workspace, conductor: conductor(:none)) end)
+      assert log =~ "(attempt 2/2); asking a person"
+      assert %{} = deciding()
+    end
+
+    test "a block for the self-heal lane, one nothing here can prove, or one on CI never takes the Conductor's turn" do
+      {workspace, head} = git_workspace!()
+
+      Process.put(:qa_agent_result, {:error, {:qa_host_tunnel_failed, "ssh exited with status 255"}, %{}})
+      assert :ok = run(workspace, conductor: conductor({:rework, @finding}))
+
+      result = %{verdict: :blocked, summary: "No key.", steps: [], findings: [], needs_person: true, reason: "the QA host has no signing key"}
+      Process.put(:qa_agent_result, {:ok, %{result: result, tokens: %{}}})
+      capture_log(fn -> assert :ok = run(workspace, conductor: conductor({:rework, @finding})) end)
+
+      clear_store!()
+      Process.put(:qa_agent_result, {:ok, %{result: needs_dev_server([]), tokens: %{}}})
+      assert :ok = run(workspace, settings: hub_settings(), conductor: conductor({:rework, @finding}))
+
+      clear_store!()
+      watch = [phase: :qa, head_sha: head, facts: %{ci: :red}, decision: :wait]
+      SymphonyElixir.PrWatchSupport.put_watch!(@repo_key, @issue_id, watch)
+      own_block()
+      capture_log(fn -> assert :ok = run(workspace, conductor: conductor({:rework, @finding})) end)
+
+      refute_received {:conductor, _issue_id, _repo_key}
+      refute_received {:memory_tracker_state_update, _, "Rework"}
+    end
+
+    test "a new head with no change of the PR's own counts on: main merged into the PR earns no fresh retries" do
+      {workspace, first} = git_workspace!()
+      own_block()
+
+      assert :ok = run(workspace, [])
+      refute deciding()
+
+      second = new_head!(workspace)
+      log = capture_log(fn -> assert :ok = run(workspace, []) end)
+
+      assert log =~ "QA blocked for TP-816 head=#{second} model=claude-test needs_person=false playbooks=cli (attempt 2/2); asking a person"
+      assert %{question: question} = deciding()
+      assert question == "QA ran TP-816 (Land the QA state) 2 times on the same change without a pass or a fail. How should it continue?"
+      assert Enum.map(verdicts(), & &1.head_sha) == [second, first]
+
+      # A rework run ended: its change is new, and so is the count.
+      rework_ended!()
+      new_head!(workspace)
+      log = capture_log(fn -> assert :ok = run(workspace, []) end)
+      assert log =~ "(attempt 1/2); retrying"
+    end
+
+    test "once the person picked Run QA again and QA ended the same way, the question recommends sending it back to Rework" do
+      {workspace, _head} = git_workspace!()
+      own_block()
+
+      assert :ok = run(workspace, [])
+      capture_log(fn -> assert :ok = run(workspace, []) end)
+      assert %{id: first_id, options: [%{label: "Run QA again", recommended?: true}, rework, _merge]} = deciding()
+      refute rework.recommended?
+      assert {:ok, _answered} = SymphonyElixir.Questions.answer({:ticket, @repo_key, @issue_id}, first_id, "Run QA again")
+      refute deciding()
+
+      new_head!(workspace)
+      capture_log(fn -> assert :ok = run(workspace, []) end)
+
+      assert %{id: second_id} = decision = deciding()
+      assert second_id != first_id
+      assert decision.question =~ "3 times on the same change"
+      assert [%{label: "Run QA again"} = again, %{label: "Send it back to Rework", recommended?: true, move: %{to: "Rework"}}, merge] = decision.options
+      refute again.recommended?
+      refute merge.recommended?
+      assert decision.recommendation_reason == "QA ended the same way after the last rerun you asked for, so one more run would likely end the same way. A rework can change what stops QA."
+
+      # The rework ran: its change is new, and one more run is worth it again.
+      assert {:ok, _answered} = SymphonyElixir.Questions.answer({:ticket, @repo_key, @issue_id}, second_id, "Send it back to Rework")
+      rework_ended!()
+      assert :ok = run(workspace, [])
+      capture_log(fn -> assert :ok = run(workspace, []) end)
+      assert %{options: [%{label: "Run QA again", recommended?: true} | _rest]} = deciding()
     end
   end
 

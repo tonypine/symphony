@@ -79,25 +79,32 @@ defmodule SymphonyElixir.OrchestratorDispatchSettleTest do
     test "with no relation after the settle, dispatches as today" do
       created = new_ticket()
       linear!([created])
-      Application.put_env(:symphony_elixir, :dispatch_settle_ms, 50)
+      # A settle long enough that no slow first dispatch outruns it.
+      Application.put_env(:symphony_elixir, :dispatch_settle_ms, 60_000)
 
       state = capture(fn -> Orchestrator.dispatch_chosen_issues_for_test([created], orchestrator_state()) end)
       assert Settle.settling?(state.dispatch_settle, created.id)
       assert state.dispatch_skipped[created.id].reason == "waiting for its relations: Linear created it a moment ago"
 
-      # The settle's one timer fires and reads the ticket; nothing blocks it, and a cycle is asked for.
+      # The settle's one timer is set for its end; its message reads the ticket (and cancels the
+      # timer): nothing blocks it, and a cycle is asked for.
       created_id = created.id
-      assert_receive {:dispatch_settle, ^created_id}, 1_000
+      %{timer: timer} = state.dispatch_settle[created_id]
+      assert Process.read_timer(timer) in 1..60_000
       {:noreply, state} = Orchestrator.handle_info({:dispatch_settle, created_id}, state)
+      refute Process.read_timer(timer)
       assert_received {:memory_tracker_fetch_issue_states_by_ids, [^created_id]}
       refute Pauses.paused?({:ticket, "default", created_id})
       assert state.tick_timer_ref != nil or state.cycle_requested
+
+      # The settle is over by the next cycle (a settle of 0 ms stands for its end, with no wait).
+      Application.put_env(:symphony_elixir, :dispatch_settle_ms, 0)
 
       # The cycle dispatches it: it passes the settle and its revalidation, and its run starts.
       state = capture(fn -> Orchestrator.dispatch_chosen_issues_for_test([created], state) end)
       assert Map.has_key?(state.running, created_id)
 
-      # Its settle timer fired no sooner than the end of the settle, so the dispatch dropped its entry.
+      # Past the settle, the dispatch dropped its entry.
       refute Map.has_key?(state.dispatch_settle, created_id)
       stop_runs(state)
     end

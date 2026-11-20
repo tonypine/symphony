@@ -42,6 +42,7 @@ defmodule SymphonyElixir.TicketStateTest do
                observed_at: nil,
                observed_from: nil,
                removed_at: nil,
+               last_comment_at: nil,
                pending_projection: [],
                not_found_at: nil,
                pause: nil,
@@ -181,6 +182,7 @@ defmodule SymphonyElixir.TicketStateTest do
                observed_at: nil,
                observed_from: nil,
                removed_at: nil,
+               last_comment_at: nil,
                pending_projection: [],
                not_found_at: nil,
                pause: nil,
@@ -816,6 +818,45 @@ defmodule SymphonyElixir.TicketStateTest do
     end
   end
 
+  describe "the ticket's current change" do
+    test "is what happened after its newest implementation or rework run ended, or everything when none did" do
+      implementation = event("run.ended", %{run_id: "run-1", run_kind: "implementation", exit: "handoff"}, at: at(1))
+      qa = event("run.ended", %{run_id: "run-2", run_kind: "qa", exit: "normal"}, at: at(2))
+      rework = event("run.ended", %{run_id: "run-3", run_kind: "rework", exit: "handoff"}, at: at(3))
+      note = event("note", %{text: "after"}, at: at(4))
+
+      assert TicketState.events_since_coding_run_in([implementation, qa, rework, note]) == [note]
+      assert TicketState.events_since_coding_run_in([implementation, qa]) == [qa]
+      assert TicketState.events_since_coding_run_in([qa, note]) == [qa, note]
+      assert TicketState.events_since_coding_run_in([]) == []
+    end
+
+    test "TP-1550: its QA passes without a result count on across heads, pass over a block on CI and stop at a result" do
+      qa = fn outcome, head, minute, details ->
+        event("verdict.recorded", %{kind: "qa", outcome: outcome, head: head, details: details}, at: at(minute))
+      end
+
+      events = [
+        qa.("blocked", "a", 1, %{}),
+        event("run.ended", %{run_id: "run-1", run_kind: "rework", exit: "handoff"}, at: at(2)),
+        qa.("fail", "b", 3, %{}),
+        qa.("blocked", "b", 4, %{}),
+        qa.("blocked", "b", 5, %{component: "ci"}),
+        event("verdict.recorded", %{kind: "code_review", outcome: "approve", head: "c"}, at: at(6)),
+        # Main merged into the pull request: a new head, no change of its own.
+        qa.("inconclusive", "c", 7, %{}),
+        qa.("blocked", "c", 8, %{})
+      ]
+
+      assert [%{outcome: "blocked", head_sha: "c"}, %{outcome: "inconclusive", head_sha: "c"}, %{outcome: "blocked", head_sha: "b"}] =
+               TicketState.qa_verdicts_without_result_in(events)
+
+      assert TicketState.qa_verdicts_without_result_in(events ++ [qa.("pass", "c", 9, %{})]) == []
+      implementation = event("run.ended", %{run_id: "run-2", run_kind: "implementation", exit: "handoff"}, at: at(9))
+      assert TicketState.qa_verdicts_without_result_in(events ++ [implementation]) == []
+    end
+  end
+
   test "the mutators default their timestamp to now" do
     record = TicketState.new("repo-a", "issue-1")
 
@@ -944,7 +985,7 @@ defmodule SymphonyElixir.TicketStateTest do
     @created_at ~U[2026-10-01 08:00:00Z]
     @team %{key: "ACME", name: "Acme"}
     @project %{id: "project-1", name: "Symphony", slug_id: "symphony-1a2b"}
-    @observed_fields ~w(issue_identifier phase title description team project labels priority assignee blockers sub_issues parent url created_at linear_updated_at)a
+    @observed_fields ~w(issue_identifier phase title description team project labels priority assignee blockers sub_issues parent url created_at linear_updated_at last_comment_at)a
 
     defp linear_issue(attrs \\ %{}) do
       struct!(
@@ -989,9 +1030,44 @@ defmodule SymphonyElixir.TicketStateTest do
                  url: "https://linear.app/acme/issue/ACME-1",
                  created_at: @created_at,
                  linear_updated_at: @linear_at,
+                 last_comment_at: nil,
                  observed_at: @observed_at,
                  updated_at: @observed_at
                }
+    end
+
+    test "a read's comments give the newest comment's time, never older than the record's" do
+      first = ~U[2026-10-29 08:10:00Z]
+      newest = ~U[2026-10-29 08:20:00Z]
+
+      older = %{author: "Tony", body: "Two", created_at: first}
+      comments = [%{author: "Tony", body: "One", created_at: newest}, older, %{author: "Bot", body: "Three"}]
+
+      {record, :changed} = TicketState.observe(TicketState.new("repo-a", "issue-1"), linear_issue(%{comments: comments}), @observed_at)
+      assert record.last_comment_at == newest
+
+      # A read whose last comments are older, none, or a delivery that carries none, keeps it.
+      later = DateTime.add(@observed_at, 60)
+      assert {^record, :unchanged} = TicketState.observe(record, linear_issue(%{comments: [older]}), later)
+      assert {^record, :unchanged} = TicketState.observe(record, linear_issue(%{comments: []}), later)
+      assert {^record, :unchanged} = TicketState.observe(record, linear_issue(%{comments: :unknown}), later, :webhook)
+    end
+
+    test "observe_comment/3 keeps the newest comment's time, and changes nothing else" do
+      record = TicketState.new("repo-a", "issue-1", %{observed_from: :poll})
+      commented_at = ~U[2026-10-29 08:10:00Z]
+
+      assert {commented, :changed} = TicketState.observe_comment(record, commented_at, @observed_at)
+      assert commented.last_comment_at == commented_at
+      assert {commented.updated_at, commented.observed_from} == {@observed_at, :poll}
+      unchanged_keys = [:last_comment_at, :updated_at]
+      assert Map.drop(commented, unchanged_keys) == Map.drop(TicketState.normalize(record), unchanged_keys)
+
+      assert {^commented, :unchanged} = TicketState.observe_comment(commented, commented_at, DateTime.add(@observed_at, 60))
+      assert {^commented, :unchanged} = TicketState.observe_comment(commented, DateTime.add(commented_at, -60), DateTime.add(@observed_at, 60))
+
+      newer = DateTime.add(commented_at, 60)
+      assert {%{last_comment_at: ^newer}, :changed} = TicketState.observe_comment(commented, newer, DateTime.add(@observed_at, 60))
     end
 
     test "the same issue again changes nothing, and keeps the first observation's time" do
