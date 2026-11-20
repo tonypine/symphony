@@ -81,8 +81,7 @@ public struct ReadingText: View {
 
     /// `text` as one attributed run of prose and code, the code in the mono face.
     public static func attributed(_ text: String) -> AttributedString {
-        let size = DesignTokens.TypeStyle.reading.scaledSize(by: DesignTokens.TypeStyle.textScale) * ReadingSpans.codeScale
-        let mono = Font(NSFont.monospacedSystemFont(ofSize: CGFloat(size), weight: .regular) as CTFont)
+        let mono = DesignTokens.TypeStyle.monoFont(size: DesignTokens.TypeStyle.reading.size * ReadingSpans.codeScale, weight: 400)
         var whole = AttributedString()
         for span in ReadingSpans.split(text) {
             var piece = AttributedString(span.text)

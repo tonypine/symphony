@@ -36,7 +36,7 @@ public struct DecisionRow: View {
         HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
             RowLeadMark(lead: .glyph(TimelineEntry.Kind.questionAnswered.symbol, .statusDone))
                 .frame(width: DesignTokens.Row.leadSize)
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: DesignTokens.Row.lineGap) {
                 Text(row.title)
                     .textStyle(.rowTitle)
                     .foregroundStyle(DesignTokens.TextColor.primary.color)
