@@ -214,6 +214,114 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
     end
   end
 
+  describe "a groomed ticket's description" do
+    alias SymphonyElixir.{IssueSummary, TicketChecks, TicketPlan, TicketProjection}
+
+    @checks [
+      %{id: "c1", kind: "outcome", statement: "Notes\n ship.", proof: "test"},
+      %{id: "c2", kind: "qa", statement: "The page shows them.", proof: "qa", action: "Open it", expect: "They show"},
+      %{id: "c3", kind: "evidence", statement: "A file.", proof: "attached"}
+    ]
+    @plan %{shape: "single", layers: ["docs"], summary: "The release notes\nship with the release.", text: "Approach: write them."}
+
+    defp description_writes do
+      receive do
+        {:memory_tracker_description_update, @issue_id, written} -> [written | description_writes()]
+      after
+        0 -> []
+      end
+    end
+
+    defp groom! do
+      plan = Map.merge(@plan, %{checks: @checks, size: %{tokens: 1, runs: 1}, reason: "Grooming", by: "grooming"})
+      {:ok, _ask} = TicketPlan.record_ask(@repo_key, @issue_id, "Ship the release notes.\n\n## Acceptance criteria\n\n* Notes ship.")
+      {:ok, _plan} = TicketPlan.write(@repo_key, @issue_id, plan)
+    end
+
+    test "is the ask, the plan's summary and the checks, above Symphony's own blocks, and is written again as they change" do
+      {:ok, summary} = IssueSummary.new(%{"status" => "PR open", "changelog_entry" => "Opened the PR"})
+      {:ok, description} = IssueSummary.put("Someone's own words.\n\n## User walkthrough\n\n1. Run it.", summary, ~D[2026-11-04])
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue() | description: description}])
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, @issue_id))
+      proof = %{caption: "step 1", proof: %{step: 1, test: "test/a_test.exs"}}
+      {:ok, _event} = SymphonyElixir.TicketEvents.record(@repo_key, @issue_id, "evidence", proof, actor: {:agent, "run-1", "implementation"})
+
+      # Until the plan is written the description is the person's, with the proofs block.
+      groom!()
+      assert [ungroomed, written] = description_writes()
+      assert ungroomed =~ "Someone's own words."
+      assert ungroomed =~ "Proved by: `test/a_test.exs`"
+
+      text = """
+      ## Ask
+
+      Ship the release notes.
+
+      ## Acceptance criteria
+
+      * Notes ship.
+
+      ## Plan
+
+      The release notes ship with the release.
+
+      ## Checks
+
+      - [open] c1: Notes ship.
+      - [open] c2: The page shows them.
+      - [open] c3: A file.\
+      """
+
+      assert String.starts_with?(written, text <> "\n\n" <> IssueSummary.start_marker())
+      assert written =~ "**Status:** PR open"
+      refute written =~ "Someone's own words."
+      refute written =~ "Proved by:"
+
+      # A check that changes state, and a new ask, are each written at once.
+      {:ok, _proved} = TicketChecks.prove(@repo_key, @issue_id, %{check_id: "c1", by: "test", test: "test/a_test.exs"})
+      {:ok, _waived} = TicketChecks.waive(@repo_key, @issue_id, "c3", "No file exists.")
+      {:ok, _ask} = TicketPlan.record_ask(@repo_key, @issue_id, "And the changelog.", source: "message", from: "m1")
+      assert [proved, waived, asked] = description_writes()
+      assert proved =~ "- [proved] c1: Notes ship.\n- [open] c2"
+      assert waived =~ "- [waived] c3: A file."
+      assert asked =~ "* Notes ship.\n\nAnd the changelog.\n\n## Plan"
+
+      # A person's edit in Linear is ignored, and overwritten at the next projection.
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue() | description: "I rewrote it.\n\n" <> asked}])
+      assert Projector.project_now(@ticket) == :ok
+      assert description_writes() == []
+      {:ok, _proved} = TicketChecks.prove(@repo_key, @issue_id, %{check_id: "c2", by: "qa"})
+      assert [again] = description_writes()
+      refute again =~ "I rewrote it."
+      assert again =~ "- [proved] c2: The page shows them."
+    end
+
+    test "keeps the Decisions section, and an ask alone or a ticket with no repo projects nothing" do
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, @issue_id))
+      {:ok, _ask} = TicketPlan.record_ask(@repo_key, @issue_id, "Ship the release notes.")
+      assert description_writes() == []
+      assert TicketProjection.changed(nil, @issue_id) == :ok
+      assert TicketProjection.render([]) == nil
+
+      decisions = Decisions.start_marker() <> "\n## Decisions\n\nKept.\n" <> Decisions.end_marker()
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue() | description: "Old words.\n\n" <> decisions <> "\n\nMore old words."}])
+      groom!()
+      written = List.last(description_writes())
+      assert written =~ ~r/\A## Ask\n\nShip the release notes\.\n\nShip the release notes\.\n\n## Acceptance/
+      assert String.ends_with?(written, "- [open] c3: A file.\n\n" <> decisions)
+      refute written =~ "old words"
+
+      # A block that was never closed is not kept, and no ask reads as none.
+      assert TicketProjection.put("Old.\n\n" <> Decisions.start_marker() <> "\nhalf", "## Ask") == "## Ask"
+      assert TicketProjection.put(nil, "## Ask") == "## Ask"
+
+      {:ok, plan} =
+        SymphonyElixir.TicketEvents.record(@repo_key, "issue-2", "plan.written", Map.merge(@plan, %{checks: @checks, size: %{tokens: 1, runs: 1}, reason: "Grooming", by: "grooming", version: 1}), [])
+
+      assert TicketProjection.render([plan]) =~ "## Ask\n\nNo ask was recorded.\n\n## Plan"
+    end
+  end
+
   describe "the walkthrough's Proved by: block" do
     @walkthrough "## User walkthrough\n\n1. Run it.\n2. Look at it. Proved by: QA\n\n## Acceptance criteria\n\n* Notes ship."
 

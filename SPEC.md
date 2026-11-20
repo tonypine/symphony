@@ -3134,7 +3134,9 @@ run to the step its `on_fail` names, with its output; a step that ends with no r
 default is `code` (delegated), `build`, `checks`, `tests`, `window_tests` and `plan_checks` (machine, each
 returning to `code` on failure) and `handoff` (delegated). `plan_checks` (`symphony:checks`) runs no
 shell: it fails, naming them, while a check of the ticket's plan that a test or an attachment proves
-is open, and passes at once for a ticket with no plan. `window_tests` runs, in the QA VM, the
+is open, and passes at once for a ticket with no plan; the second coding run in a row it (or the
+handoff itself) refuses, with no new plan version and no waiver in between, pauses the ticket on a
+question to the person (send it back, waive the checks and pass it on, cancel). `window_tests` runs, in the QA VM, the
 window-driving tests whose script or covered path the change touches, as the manifest beside them
 declares, and is skipped otherwise; a test that fails there and passes on the base branch returns
 the run to `code`, and a step that could not run (the VM unreachable, a build the VM could not run,
@@ -6815,12 +6817,17 @@ Minimum endpoints:
     hold. One still active stays skipped until a person acts: `unblock` runs it again in place and
     `restart` starts it over, each clearing the reason and the hold.
 
-- `POST /api/v1/control/note` (OPTIONAL)
+- `POST /api/v1/control/message`, and its alias `POST /api/v1/control/note` (OPTIONAL)
   - Writes the Director's message to a ticket: `repo_key`, `issue_identifier` and `text`. The ticket
     resolves as the events feed resolves it. The message is a `message.sent` event (Section 4.1.11)
     whose actor is the person "the Director", since the control API authenticates one shared token.
     Each message is its own event; none replaces or hides another. Sending one never starts, stops or
-    reorders a run.
+    reorders a run, but on a groomed ticket whose Conductor answers messages (`conductor.enabled`
+    and the `message` junction): there no run is given the message, the Conductor's turn starts at
+    once, and its reply is a `conductor.update` (`junction: "message"`) whose `parent` is the
+    message. That turn may record a new plan version and the message as an ask, steer or stop the
+    working run, change the ticket's sub-tickets or waive a check; on a finished ticket it may only
+    reply or have a new, related ticket created. A turn that fails leaves Symphony's own reply.
   - Answers `200` `{"event": ...}` with the event as the feed shows it (`summary.title` "You wrote",
     and `read`, null until a run read it), and writes a `director_note` audit record (`event_id`, the
     text's first 500 characters). Text that is blank, or longer than the `message.sent` type's 4,000

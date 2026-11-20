@@ -46,7 +46,8 @@ defmodule SymphonyElixir.Conductor.Tree do
   (`due/3`, `seen/3`), which may change the tree with `tree` operations: `add` a sub-ticket,
   `cancel` one that is not Done (the Director's cancel move: its run stops, its pull request
   closes), `rewrite` one (a new `ask.recorded` on it, `source: parent`; its working run is stopped
-  first only with `stop: true`) and `stop` a sub-ticket's working run. Each operation carried out is
+  first only with `stop: true`; a sub-ticket that already has a plan then writes it again in a
+  Conductor turn of its own, `SymphonyElixir.Conductor.Message.recalibrate/3`) and `stop` a sub-ticket's working run. Each operation carried out is
   recorded on the sub-ticket it touched as a `conductor.intervention` (`added`, `canceled`,
   `replanned`, `stopped`) with its reason, and together they give the parent's plan a new version
   (`by: recalibration`, its reason opening with `Recalibration`), whose `sub_tickets` follow them.
@@ -60,7 +61,7 @@ defmodule SymphonyElixir.Conductor.Tree do
 
   require Logger
 
-  alias SymphonyElixir.Conductor.Facts
+  alias SymphonyElixir.Conductor.{Facts, Message}
   alias SymphonyElixir.{Config, DirectorMoves, Orchestrator, RepoTeams, RunStore, SubIssueWait}
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.{TicketEvents, TicketObservation, TicketPlan, Tracker, TransitionGuard}
@@ -187,17 +188,22 @@ defmodule SymphonyElixir.Conductor.Tree do
   Creates the sub-ticket `entry` describes (its `title`, its `ask`, the sibling keys it waits
   `after` and optionally its `repo`) under `issue`, and records its ask on it. It is created in
   `Todo`, or in `Backlog` when it waits `after` a sibling, whose link must exist before it is
-  dispatched. `opts`: as `split/3`'s.
+  dispatched. `opts`: as `split/3`'s, and `standalone: true` for a ticket of its own, in the same
+  team and project and assigned the same but not under `issue` (the ticket a message on a finished
+  ticket asks for, `SymphonyElixir.Conductor.Message`), with `ask`, how its ask is recorded
+  (`SymphonyElixir.TicketPlan.record_ask/4`'s options; default from its parent).
   """
   @spec create(String.t(), Issue.t(), map(), keyword()) :: {:ok, child()} | {:error, String.t()}
   def create(repo_key, %Issue{id: parent_id} = issue, entry, opts) do
     repo = Map.get(entry, :repo) || repo_key
+    issue = with_record(issue)
+    family = if Keyword.get(opts, :standalone, false), do: %{}, else: %{parent_id: parent_id}
 
     with {:ok, team, project} <- target(issue, repo_key, repo, opts),
          attrs = %{title: entry.title, description: entry.ask, priority: @urgent, state: first_state(entry), team: team, project: project},
-         {:ok, %{id: id, identifier: identifier}} <- tracker(opts).create_issue(Map.merge(attrs, %{assignee_id: issue.assignee_id, parent_id: parent_id})) do
+         {:ok, %{id: id, identifier: identifier}} <- tracker(opts).create_issue(attrs |> Map.put(:assignee_id, issue.assignee_id) |> Map.merge(family)) do
       from = issue.identifier || parent_id
-      asked = TicketPlan.record_ask(repo, id, entry.ask, source: "parent", from: from, idempotency: "ask.recorded:parent")
+      asked = TicketPlan.record_ask(repo, id, entry.ask, Keyword.get(opts, :ask, source: "parent", from: from, idempotency: "ask.recorded:parent"))
       with {:error, reason} <- asked, do: Logger.warning("Could not record the ask of sub-ticket #{identifier} of #{from}: #{inspect(reason)}")
       {:ok, %{id: id, identifier: identifier, repo: repo}}
     else
@@ -449,8 +455,9 @@ defmodule SymphonyElixir.Conductor.Tree do
   logged and left out.
 
   `opts`: as `split/3`'s, and `cancel` (`(identifier, reason -> {:ok, term} | {:error, term})`,
-  default the Director's cancel move) and `stop` (`(identifier -> {:ok, %{stopped: boolean}} | term)`,
-  default `SymphonyElixir.Orchestrator.stop_running/1`).
+  default the Director's cancel move), `stop` (`(identifier -> {:ok, %{stopped: boolean}} | term)`,
+  default `SymphonyElixir.Orchestrator.stop_running/1`) and `recalibrate` (`(issue_id, ask event ->
+  term)`, what a `rewrite` starts on the sub-ticket).
   """
   @spec apply(map(), map(), keyword()) :: :ok | {:ask, map()}
   def apply(%{done: done, tree: operations}, %{junction: "final_check", issue: %Issue{id: issue_id} = issue} = ctx, opts) do
@@ -551,8 +558,10 @@ defmodule SymphonyElixir.Conductor.Tree do
   defp operate(%{op: "rewrite", ticket: identifier, ask: ask} = operation, acc, ctx, opts) do
     with {:ok, child} <- open_child(identifier, ctx),
          :ok <- if(operation.stop, do: stop(child, operation.reason, ctx, opts), else: :ok),
-         {:ok, _event} <- TicketPlan.record_ask(child.repo, child.id, ask, source: "parent", from: by(ctx)) do
+         {:ok, event} <- TicketPlan.record_ask(child.repo, child.id, ask, source: "parent", from: by(ctx)) do
       intervene(child, "replanned", operation.reason, ctx)
+      # A sub-ticket that already has a plan writes it again for the new ask, in a turn of its own.
+      Keyword.get(opts, :recalibrate, &Message.recalibrate/2).(child.id, event)
       {:ok, %{acc | entries: Enum.map(acc.entries, &if(Map.get(&1, :identifier) == identifier, do: %{&1 | ask: ask}, else: &1))}}
     else
       {:error, reason} -> {:error, text(reason)}

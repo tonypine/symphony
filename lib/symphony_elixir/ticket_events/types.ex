@@ -278,7 +278,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
   # The junctions of a ticket's life the Conductor runs at (`SymphonyElixir.Config.Schema.Conductor.junctions/0`).
   @conductor_junctions ~w(grooming after_coding after_qa_fail after_qa_blocked after_rework before_merge message sub_ticket_ended final_check child_message during_run)
   # What made the Conductor's watch look at a running run (`SymphonyElixir.Conductor.Watch`).
-  @watch_triggers ~w(step_failed step_failed_twice qa_step_answer run_minutes run_tokens)
+  @watch_triggers ~w(step_failed step_failed_twice qa_step_answer run_minutes run_tokens message)
 
   # How a check of a plan is proved (`SymphonyElixir.TicketChecks`).
   @check_proofs ~w(test qa design attached)

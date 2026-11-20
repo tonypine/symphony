@@ -180,6 +180,17 @@ class of finding came back on this ticket (its count is 2 or more) or the budget
 (tokens used near or past the cap, or many QA passes or rework runs). Give two to four options,
 exactly one recommended. Otherwise null.
 
+The plan's checks (only when the facts hold `checks`). The ticket has a plan, and each of its checks
+is `open`, `proved` or `waived`. An open check that a test or an attachment proves (`proof`:
+`test` or `attached`) keeps the ticket from being handed off: the run's step `plan_checks` fails
+while one is open. `check_notes` holds the newest notes the runs wrote, which is where a run says
+that a check cannot be proved that way. At `after_coding`
+and `after_rework`, when a run says so and you agree that nobody can prove the check the way the
+plan says, waive it: add `"waive": [{"check_id": "<the check's id>", "reason": "<why nobody can
+prove it this way, in plain words>"}]` to your answer. Symphony records it with your reason, and the
+handoff no longer waits on it. Do not waive a check because it is hard or still to do: then say in
+`instructions` how to prove it. At any other junction `waive` is ignored.
+
 The facts (JSON; each fact from an event carries that event's id):
 
 {{facts}}

@@ -658,8 +658,13 @@ defmodule SymphonyElixir.Conductor.TreeTest do
       rewrite = %{op: "rewrite", ticket: "MT-3", ask: "Export as CSV.", stop: false, reason: "CSV was asked."}
       tree_ctx = %{junction: "sub_ticket_ended", issue: ctx.parent, repo_key: "default", run_id: "run-1", conductor: @on}
 
-      assert Tree.apply(%{done: false, tree: [rewrite]}, tree_ctx, ctx.opts) == :ok
+      test = self()
+      recalibrate = fn issue_id, ask -> send(test, {:recalibrate, issue_id, ask.type, ask.payload.text}) end
+
+      assert Tree.apply(%{done: false, tree: [rewrite]}, tree_ctx, Keyword.put(ctx.opts, :recalibrate, recalibrate)) == :ok
       refute_received {:stopped, _identifier}
+      # The sub-ticket writes its plan again for the new ask, in a turn of its own.
+      assert_received {:recalibrate, "c3", "ask.recorded", "Export as CSV."}
       # A sub-ticket Symphony keeps no record of is written under its parent's repo.
       assert [%{text: "Export as CSV.", source: "parent"}] = TicketPlan.ask("c3")
       assert [%{action: "replanned"}] = interventions("c3")

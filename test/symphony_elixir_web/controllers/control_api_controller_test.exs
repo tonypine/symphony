@@ -346,6 +346,35 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
       assert text =~ ~r/Messages \(2\):\n- \S+, the Director wrote \(not read by a run yet\): Keep the export button where it is\.\n/
     end
 
+    test "POST /control/message is the same call, and on a groomed ticket it starts the Conductor's turn", %{ticket: ticket, tmp_dir: tmp_dir} do
+      assert Phoenix.Router.route_info(SymphonyElixirWeb.Router, "POST", "/api/v1/control/message", "localhost").plug_opts == :message
+      assert Phoenix.Router.route_info(SymphonyElixirWeb.Router, "POST", "/api/v1/control/note", "localhost").plug_opts == :note
+      test = self()
+      on = %SymphonyElixir.Config.Schema.Conductor{enabled: true}
+      started = [settings: on, start: fn _task -> send(test, :conductor_started) end]
+
+      post_message = fn text ->
+        build_conn(:post, "/api/v1/control/message", note_params(ticket, text))
+        |> Plug.Conn.assign(:audit_log, dir: tmp_dir)
+        |> Plug.Conn.assign(:conductor_message, started)
+        |> send_to(:message, start_stub([]), note_params(ticket, text))
+      end
+
+      # No plan yet: the next run reads the message, and no turn starts.
+      conn = post_message.("Keep the export button.")
+      assert %{"event" => %{"type" => "message.sent", "payload" => %{"text" => "Keep the export button."}}} = json_body(conn)
+      refute_received :conductor_started
+
+      plan = %{shape: "single", layers: ["engine"], summary: "s", text: "t", size: %{tokens: 1, runs: 1}, reason: "Grooming", by: "grooming"}
+      {:ok, _plan} = SymphonyElixir.TicketPlan.write(ticket.repo_key, ticket.issue_id, Map.put(plan, :checks, [%{id: "c1", kind: "outcome", statement: "s", proof: "test"}]))
+
+      conn = post_message.("And the colour.")
+      assert conn.status == 200
+      assert %{"event" => %{"type" => "message.sent", "read" => nil}} = json_body(conn)
+      assert_received :conductor_started
+      assert length(audit_records(tmp_dir)) == 2
+    end
+
     test "refuses empty and over-bound text with 400 and writes nothing", %{ticket: ticket, tmp_dir: tmp_dir} do
       for {text, message} <- [
             {"", "A note needs text"},

@@ -63,7 +63,8 @@ defmodule SymphonyElixirWeb.ControlApiController do
   when the ticket is in no configured repository, that read fails, or `to` is not a phase of the
   repo, and 200 with `moved: false` when the ticket is already there.
 
-  `note` writes the Director's message to a ticket (`SymphonyElixir.Messages`): it takes
+  `message` writes the Director's message to a ticket (`SymphonyElixir.Messages`), and `note` is
+  an alias of it, kept for callers that still post there: it takes
   `repo_key`, `issue_identifier` and `text`, resolves the ticket as the events feed does
   (`SymphonyElixirWeb.TicketEventsController`), records a `message.sent` event by the Director and a
   `director_note` audit record, and answers 200 with the event as the feed shows it. Each message is
@@ -71,6 +72,12 @@ defmodule SymphonyElixirWeb.ControlApiController do
   that is blank or longer than the `message.sent` type allows is 400 and writes nothing; a ticket
   Symphony has no record of is 404. Unlike a stop's event, the message is the request: the answer
   says whether it was written.
+
+  On a groomed ticket, while the Conductor and its `message` junction are on, the message goes to
+  the ticket's Conductor (`SymphonyElixir.Conductor.Message`): its turn starts at once, in a task of
+  its own, after the answer is sent, and its reply arrives later as a `conductor.update` event whose
+  `parent` is the message (or Symphony's own short reply when the turn failed). No run is given the
+  message there. On any other ticket the next run reads it, as before.
 
   `looked` marks that the person looked at a ticket now (`SymphonyElixir.Marks`): it takes
   `issue_identifier` and an optional `repo_key`, writes the mark on the ticket's record (a view mark,
@@ -113,6 +120,7 @@ defmodule SymphonyElixirWeb.ControlApiController do
 
   alias Plug.Conn
   alias SymphonyElixir.{AuditLog, DirectorBlockers, DirectorLabels, DirectorMoves, DirectorPriority, DirectorRulings}
+  alias SymphonyElixir.Conductor.Message, as: ConductorMessage
   alias SymphonyElixir.{Marks, Messages, Orchestrator, TicketMoves, TicketSignals}
   alias SymphonyElixir.TicketEvents.Types
   alias SymphonyElixirWeb.{Endpoint, Presenter, TicketEventsController}
@@ -337,6 +345,7 @@ defmodule SymphonyElixirWeb.ControlApiController do
          # A store error raises, as a read of the feed does: the answer is never a 200 for a note not written.
          {:ok, event} <- Messages.send_message(record.repo_key, record.issue_id, text) do
       record_note(conn, record, event)
+      ConductorMessage.start(record, event, Map.get(conn.assigns, :conductor_message, []))
       json(conn, %{event: hd(Presenter.ticket_events_json(record.repo_key, record.issue_id, [event]))})
     else
       {:error, :missing_ticket} -> error_response(conn, 422, "invalid_request", "repo_key and issue_identifier are required")
@@ -344,6 +353,9 @@ defmodule SymphonyElixirWeb.ControlApiController do
       {:error, :not_found} -> error_response(conn, 404, "ticket_not_found", TicketMoves.no_ticket_reason(params["issue_identifier"], params["repo_key"]))
     end
   end
+
+  @spec message(Conn.t(), map()) :: Conn.t()
+  def message(conn, params), do: note(conn, params)
 
   @spec looked(Conn.t(), map()) :: Conn.t()
   def looked(conn, params) do

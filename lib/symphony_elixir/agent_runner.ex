@@ -14,6 +14,7 @@ defmodule SymphonyElixir.AgentRunner do
     AgentTools,
     AgentTools.Linear.CommentRegistry,
     AuditLog,
+    ChecksHold,
     CiFix,
     CiPoller,
     ClosedPullRequest,
@@ -2163,13 +2164,21 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  # The refusal is a note on the ticket, once per head, so the next run reads which checks it owes.
+  # The refusal is a note on the ticket, once per run and head, so the next run reads which checks
+  # it owes. The second run in a row that is refused asks the person (`SymphonyElixir.ChecksHold`),
+  # which pauses the ticket: a check nobody can prove must not send it around for good.
   defp refuse_unproved(%Issue{id: issue_id} = issue, checks, post_pr_state, reason, run_context) do
     ids = Enum.map(checks, & &1.id)
     Logger.warning("Not moving #{issue_context(issue)} to #{post_pr_state} #{reason}: its plan's checks #{Enum.join(ids, ", ")} are open")
     repo_key = Keyword.get(run_context.opts, :repo_key) || issue_repo_key(issue)
-    note = %{text: String.slice(TicketJourney.unproved_message(checks), 0, 4_000)}
-    TicketSignals.record_event(repo_key, issue_id, "note", note, idempotency: "checks_unproved:#{run_context.progress.head}:#{Enum.join(ids, ",")}")
+    run = %{run_id: Keyword.get(run_context.opts, :run_id), head: run_context.progress.head}
+
+    with :ask <- ChecksHold.refused(repo_key, issue_id, checks, run) do
+      request = ChecksHold.question(issue.identifier || issue_id, checks, post_pr_state)
+      asked = DecisionRequest.ask(issue, request, [repo_key: repo_key] ++ Keyword.take(run_context.opts, [:tracker]))
+      Logger.info("Asked the person about the open checks of #{issue_context(issue)}: #{inspect(asked)}")
+    end
+
     {:error, {:checks_unproved, ids}}
   end
 

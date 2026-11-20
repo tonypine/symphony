@@ -328,6 +328,31 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
     end
 
+    test "the second run in a row refused for open checks asks the person what to do" do
+      checks = [%{id: "c1", kind: "outcome", statement: "The handoff waits.", proof: "test"}]
+      plan = %{reason: "Grooming", by: "grooming", shape: "single", layers: ["engine"], summary: "s", text: "t", checks: checks}
+      {:ok, _plan} = SymphonyElixir.TicketPlan.write("default", "issue-progress", Map.put(plan, :size, %{tokens: 1, runs: 1}))
+      assert :ok = SymphonyElixir.Handoff.emit("default", "issue-progress", %{head: "sha-rework", branch: "auto/TP-337"})
+      ticket = {:ticket, "default", "issue-progress"}
+
+      for run_id <- ["run-a", "run-b"] do
+        started = %{run_id: run_id, run_kind: "rework"}
+        {:ok, _started} = SymphonyElixir.TicketEvents.record("default", "issue-progress", "run.started", started, run_id: run_id)
+
+        capture_log(fn ->
+          assert_raise RuntimeError, ~r/checks_unproved.*c1/, fn ->
+            run_issue!("Rework", heads: ["sha-old", "sha-rework"], repos: designed_repos(), runner_opts: [run_id: run_id])
+          end
+        end)
+
+        if run_id == "run-a", do: assert(SymphonyElixir.Questions.open(ticket) == [])
+      end
+
+      assert [%{title: "TP-337: checks of its plan are still not proved", options: [_back, waive, _cancel]}] = SymphonyElixir.Questions.open(ticket)
+      assert %{label: "Waive them and pass it on", move: %{to: "Code Review", waive: [%{check_id: "c1"}]}} = waive
+      refute_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+    end
+
     test "the explicit handoff signal moves the ticket to Code Review" do
       assert :ok = SymphonyElixir.Handoff.emit("default", "issue-progress", %{head: "sha-rework", branch: "auto/TP-337"})
 

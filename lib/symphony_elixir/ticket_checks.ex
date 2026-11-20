@@ -11,11 +11,14 @@ defmodule SymphonyElixir.TicketChecks do
   (`{:unknown_check, id}`), so nothing is ever proved that the plan does not ask for. A proof is
   recorded once per check and head: a second one on the same head returns the first.
 
+  A check that changes state is shown in Linear at once: the ticket's description is projected
+  again (`SymphonyElixir.TicketProjection`).
+
   Every read takes the ticket's issue id or the events a caller already holds, as
   `SymphonyElixir.TicketPlan`'s do.
   """
 
-  alias SymphonyElixir.{RunStore, TicketEvents, TicketPlan}
+  alias SymphonyElixir.{RunStore, TicketEvents, TicketPlan, TicketProjection}
   alias SymphonyElixir.TicketEvents.Event
 
   @types ["plan.written", "check.proved", "check.waived"]
@@ -65,16 +68,21 @@ defmodule SymphonyElixir.TicketChecks do
   @spec prove(String.t() | nil, String.t(), map(), keyword()) ::
           {:ok, Event.t()} | {:error, {:unknown_check, String.t()} | term()}
   def prove(repo_key, issue_id, proof, opts \\ []) when is_binary(issue_id) and is_map(proof) do
-    with {:ok, check_id} <- known(issue_id, Map.get(proof, :check_id, Map.get(proof, "check_id"))) do
-      TicketEvents.record(repo_key, issue_id, "check.proved", proof, Keyword.put_new(opts, :idempotency, proof_key(check_id, Keyword.get(opts, :head_sha))))
+    with {:ok, check_id} <- known(issue_id, Map.get(proof, :check_id, Map.get(proof, "check_id"))),
+         opts = Keyword.put_new(opts, :idempotency, proof_key(check_id, Keyword.get(opts, :head_sha))),
+         {:ok, event} <- TicketEvents.record(repo_key, issue_id, "check.proved", proof, opts) do
+      TicketProjection.changed(repo_key, issue_id)
+      {:ok, event}
     end
   end
 
   @doc "Records that nobody has to prove the check `check_id` of `repo_key`'s ticket `issue_id` any more, and why. An id the plan does not hold is refused."
   @spec waive(String.t() | nil, String.t(), String.t(), String.t()) :: {:ok, Event.t()} | {:error, term()}
   def waive(repo_key, issue_id, check_id, reason) when is_binary(issue_id) do
-    with {:ok, check_id} <- known(issue_id, check_id) do
-      TicketEvents.record(repo_key, issue_id, "check.waived", %{check_id: check_id, reason: reason})
+    with {:ok, check_id} <- known(issue_id, check_id),
+         {:ok, event} <- TicketEvents.record(repo_key, issue_id, "check.waived", %{check_id: check_id, reason: reason}) do
+      TicketProjection.changed(repo_key, issue_id)
+      {:ok, event}
     end
   end
 

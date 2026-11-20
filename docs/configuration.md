@@ -3569,8 +3569,12 @@ conductor:
   that carried the ticket into Merging ends, on its own. `sub_ticket_ended` (a sub-ticket of a
   groomed ticket reached Done or Canceled while others are open) and `final_check` (the last one
   ended) run on the parent, on a poll, outside any dispatch (**The tree**, below). `message` (a
-  person sent a message on the ticket) and `child_message` (a message on a sub-ticket) are named
-  here and plan no turn yet. A `symphony.yml` that lists its junctions gets `after_qa_blocked`, `grooming` and the other
+  person sent a message on a groomed ticket) runs as the message is written, outside any dispatch:
+  the Conductor replies to it, and no run is given the message; `child_message` then shows a
+  sub-ticket's message to its parent's Conductor (`docs/control-api.md`, **Messages**). With
+  `message` off, a groomed ticket's messages are read by its next run, as before plans. At
+  `message`, `after_coding`, `after_rework`, `sub_ticket_ended`, `final_check` and on a watch turn
+  the answer may waive a check of the plan nobody can prove (`check.waived`, with its reason). A `symphony.yml` that lists its junctions gets `after_qa_blocked`, `grooming` and the other
   new ones only when it adds them: a file that names no `junctions` runs every one.
 - `timeout_ms` (default `180000`): how long one turn may take. A turn that runs over, fails, answers
   outside its schema or whose provider is held with no free fallback is logged, records nothing for
@@ -3585,7 +3589,7 @@ conductor:
   files none.
 
 But for Grooming, the turn runs in an empty folder under the workspace root with read-only tools and
-no ticket, so it can neither change nor read the repository. Past Grooming it never changes the ticket's plan, and it moves the
+no ticket, so it can neither change nor read the repository. Past Grooming it changes the ticket's plan only when a person's message, or the ticket's parent, changes what is asked (a new plan version, with its reason), and it moves the
 ticket only at `after_qa_blocked`, through Symphony (below); a ticket it files that blocks this one
 holds it, as a question does. Its own
 run is recorded on the ticket (`run.started`, `run.ended` with its model and tokens, `counted: false`
@@ -3634,6 +3638,14 @@ exactly as before.
   and the ticket is groomed again at its next dispatch, which Symphony starts at once. After the second the
   run starts without a plan, as it did before plans, and the note says so. A ticket never waits on
   Grooming.
+- Once a ticket has a plan, its description in Linear is Symphony's to write, and no run reads it:
+  `## Ask` (every ask, word for word, oldest first), `## Plan` (the plan's summary) and `## Checks`
+  (one line per check: `[open]`, `[proved]` or `[waived]`, its id and its statement), above
+  Symphony's own blocks (the summary block and the Decisions section), which stay. It is written
+  again each time an ask, a plan version, a proof or a waiver is recorded, by the same pass that
+  writes the Decisions section. Text a person types into the description is overwritten then: on
+  such a ticket the ask changes through a message. The walkthrough's `Proved by:` block is not
+  written there.
 
 **The tree** (`sub_ticket_ended`, `final_check`). A groomed ticket and the sub-tickets under it.
 
@@ -4171,7 +4183,14 @@ words, goes to the `code` step, in its prompt. A later QA failure of the same cl
 It guards the handoff of a ticket with a plan: it fails back to the step's `on_fail`, naming them,
 while a check of the plan that a test or an attachment proves (`proof: test`, `proof: attached`) is
 open, and passes at once when none is, or when the ticket has no plan. The failure says how each
-check is proved, and that a check nothing can prove this way is the Conductor's to waive. The
+check is proved, and that a check nothing can prove this way is the Conductor's to waive: its
+answer's `waive` (each a `check_id` and a `reason`) is read after coding, after rework, on a watch
+turn (a `plan_checks` step that fails again wakes one, `step_failed_twice`), on a message and on
+the turns of a ticket with sub-tickets, and recorded as `check.waived`. So that a check nobody
+proves or waives never sends a ticket around for good, each refusal is noted on the ticket, and
+when two coding runs in a row were refused with no new plan version and no waiver in between,
+Symphony asks the person: send it back for the checks, waive them and pass the ticket on to Code
+Review (the pick records each `check.waived`, then moves it), or cancel it. The
 default `implementation` and `rework` lists run it as `plan_checks`, directly before `handoff`. A
 `symphony.yml` that lists its own steps is not changed: add the step to it, before `handoff`:
 
