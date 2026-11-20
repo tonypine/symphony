@@ -998,7 +998,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "qa_api_requests",
       "description" =>
-        "Return the requests an app launched with api_fixtures logged to api-requests.jsonl in its QA root since the last call (each POST with its path and body), oldest first, at most the last 500 (`dropped` counts the rest). Reads one root: `root`, or the last launch's.",
+        "Return the requests the app logged in its QA root that no call returned yet, with api_fixtures or a live Symphony: each move (POST, DELETE) from api-requests.jsonl with its body and each read (GET) from api-reads.jsonl with its query and status, every one with its `at` time, `method` and `path`, oldest first. `method` and `path` narrow the list, and the requests they leave out stay for a later call. At most the last 500 that match (`dropped` counts the rest). Reads one root: `root`, or the last launch's.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -1007,6 +1007,14 @@ defmodule SymphonyElixir.Codex.DynamicTool do
             "type" => "integer",
             "minimum" => 1,
             "description" => "The QA root whose apps' requests to return, as qa_launch_app returned it. Defaults to the root of the last launch."
+          },
+          "method" => %{
+            "type" => "string",
+            "description" => "Only the requests with this method (GET, POST or DELETE, any case)."
+          },
+          "path" => %{
+            "type" => "string",
+            "description" => "Only the requests to this path, as the app sent it without its query (for example /api/v1/state)."
           }
         }
       }
@@ -1248,7 +1256,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_open_status_menu" => ["pid"],
     "qa_put_file" => ["local_path", "remote_name"],
     "qa_put_checkout" => ["local_path", "remote_url", "remote_name"],
-    "qa_api_requests" => ["root"],
+    "qa_api_requests" => ["root", "method", "path"],
     "qa_android_install" => ["apk"],
     "qa_android_launch" => ["application_id"],
     "qa_android_stop" => ["application_id"],

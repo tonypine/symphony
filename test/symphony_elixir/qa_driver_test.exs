@@ -1543,6 +1543,83 @@ defmodule SymphonyElixir.QaDriverTest do
       assert length(requests) == 500
     end
 
+    test "returns the reads beside the moves in time order, narrowed by method or path", %{worktree: worktree} do
+      {driver, _pid} = launched_app(worktree)
+      %{qa_root: qa_root} = GenServer.call(driver, :config)
+      File.mkdir_p!(qa_root)
+      moves = Path.join(qa_root, "api-requests.jsonl")
+      reads = Path.join(qa_root, "api-reads.jsonl")
+
+      pause = %{"at" => "2026-11-20T19:45:05Z", "method" => "POST", "path" => "/api/v1/control/pause"}
+      state = fn at -> %{"at" => at, "method" => "GET", "path" => "/api/v1/state", "status" => 200} end
+      health = %{"at" => "2026-11-20T19:45:05Z", "method" => "GET", "path" => "/api/v1/health", "status" => 200}
+
+      File.write!(moves, Jason.encode!(pause) <> "\n")
+
+      File.write!(
+        reads,
+        Enum.map_join([state.("2026-11-20T19:45:00Z"), health, state.("2026-11-20T19:45:10Z")], &(Jason.encode!(&1) <> "\n"))
+      )
+
+      # Only the state path: the others stay for a later call.
+      assert QaDriver.call_tool(driver, "qa_api_requests", %{"path" => "/api/v1/state"}) ==
+               {:ok, %{"requests" => [state.("2026-11-20T19:45:00Z"), state.("2026-11-20T19:45:10Z")], "dropped" => 0, "root" => 1}}
+
+      refute File.exists?(moves)
+      refute File.exists?(reads)
+      %{host_dir: host_dir} = GenServer.call(driver, :config)
+      assert Path.wildcard(Path.join(host_dir, "api-reads-*.jsonl")) == []
+
+      # A newer read the app logged meanwhile joins the held ones, in time order.
+      File.write!(reads, Jason.encode!(state.("2026-11-20T19:45:15Z")) <> "\n" <> "not json\n")
+
+      assert QaDriver.call_tool(driver, "qa_api_requests", %{"method" => "post"}) ==
+               {:ok, %{"requests" => [pause], "dropped" => 0, "root" => 1}}
+
+      assert QaDriver.call_tool(driver, "qa_api_requests", %{"method" => "GET", "path" => "/api/v1/health"}) ==
+               {:ok, %{"requests" => [health], "dropped" => 0, "root" => 1}}
+
+      assert api_requests(driver) == {:ok, %{"requests" => [state.("2026-11-20T19:45:15Z"), "not json"], "dropped" => 0, "root" => 1}}
+      assert api_requests(driver) == {:ok, %{"requests" => [], "dropped" => 0, "root" => 1}}
+
+      # An overflow drops the oldest of the matching requests, and counts them.
+      File.write!(reads, Enum.map_join(1..503, &(Jason.encode!(%{"n" => &1, "method" => "GET", "path" => "/api/v1/state"}) <> "\n")))
+      File.write!(moves, Jason.encode!(pause) <> "\n")
+
+      assert {:ok, %{"requests" => [%{"n" => 4} | _rest] = requests, "dropped" => 3}} =
+               QaDriver.call_tool(driver, "qa_api_requests", %{"method" => "GET"})
+
+      assert length(requests) == 500
+      assert api_requests(driver) == {:ok, %{"requests" => [pause], "dropped" => 0, "root" => 1}}
+
+      for {key, value} <- [{"method", 1}, {"path", ""}] do
+        assert {:error, {:qa_tool, "invalid_arguments", message}} = QaDriver.call_tool(driver, "qa_api_requests", %{key => value})
+        assert message =~ "`#{key}` must be a non-empty string"
+      end
+    end
+
+    test "keeps the moves it took when the read log cannot be taken", %{worktree: worktree} do
+      denied = fn
+        "/bin/mv", ["-f", log, _taken] = args, opts ->
+          if String.ends_with?(log, "api-reads.jsonl"),
+            do: {:ok, {"mv: Permission denied\n", 1}},
+            else: default_cmd("/bin/mv", args, opts, %{})
+
+        exe, args, opts ->
+          default_cmd(exe, args, opts, %{})
+      end
+
+      driver = start_driver(worktree, host: host(%{cmd: denied}))
+      %{qa_root: qa_root} = GenServer.call(driver, :config)
+      File.mkdir_p!(qa_root)
+      File.write!(Path.join(qa_root, "api-requests.jsonl"), ~s({"method":"POST","path":"/api/v1/refresh"}\n))
+
+      assert {:error, {:qa_tool, "qa_api_requests_failed", message}} = api_requests(driver)
+      assert message =~ "api-reads.jsonl could not be taken: mv: Permission denied"
+      refute File.exists?(Path.join(qa_root, "api-requests.jsonl"))
+      assert GenServer.call(driver, {:select_requests, 1, %{}}) == [%{"method" => "POST", "path" => "/api/v1/refresh"}]
+    end
+
     test "reports a log that cannot be read", %{worktree: worktree} do
       driver = start_driver(worktree, host: Map.put(host(), :read, fn _path -> {:error, :unreadable} end))
       %{qa_root: qa_root} = GenServer.call(driver, :config)

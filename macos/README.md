@@ -1413,7 +1413,9 @@ Ten more variables, read only in QA mode:
   file is missing, and each control POST (Pause, Resume, Force, Stop Run, and the Inbox's moves and Undo) is
   appended as one JSON line to `api-requests.jsonl` under the QA root and answered 200, with
   `<dir>/<path>.json` as the body when there is one (the `inbox` fixtures answer each move from
-  `api/v1/control/`). The menu, the Repos window and the Symphony window
+  `api/v1/control/`). Each GET is logged too, to `api-reads.jsonl` beside it, with its time, path,
+  query and status, so a QA pass sees the reads the app made; a live Symphony in QA mode
+  (`SYMPHONY_BAR_CONTROL_URL`) gets both logs the same way. The menu, the Repos window and the Symphony window
   all read through it, so the app shows Symphony as running (external). The fixtures of a running Symphony
   are in [`Tests/Fixtures/director-app/running`](Tests/Fixtures/director-app/running), and those of the
   Overview's four states next to it: `flowing`, `attention` (a stuck forced ticket and a Codex usage-limit
