@@ -53,6 +53,7 @@ defmodule SymphonyElixir.AgentRunner do
     SetupBlock,
     StateMachine,
     SubIssueWait,
+    TicketJourney,
     TicketPullRequest,
     TicketSignals,
     Tracker,
@@ -2152,7 +2153,27 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp request_qa_build(_issue, _run_context), do: :ok
 
+  # A groomed ticket is not handed off while a check of its plan that a test or an attachment
+  # proves is open (`SymphonyElixir.TicketJourney.unproved/1`): a push is not gated by the step the
+  # run is on, so the step list's `symphony:checks` guard alone would not hold it.
   defp hand_off_to_state(%Issue{id: issue_id} = issue, post_pr_state, reason, run_context) do
+    case TicketJourney.unproved(issue_id) do
+      [] -> hand_off_proved(issue, post_pr_state, reason, run_context)
+      checks -> refuse_unproved(issue, checks, post_pr_state, reason, run_context)
+    end
+  end
+
+  # The refusal is a note on the ticket, once per head, so the next run reads which checks it owes.
+  defp refuse_unproved(%Issue{id: issue_id} = issue, checks, post_pr_state, reason, run_context) do
+    ids = Enum.map(checks, & &1.id)
+    Logger.warning("Not moving #{issue_context(issue)} to #{post_pr_state} #{reason}: its plan's checks #{Enum.join(ids, ", ")} are open")
+    repo_key = Keyword.get(run_context.opts, :repo_key) || issue_repo_key(issue)
+    note = %{text: String.slice(TicketJourney.unproved_message(checks), 0, 4_000)}
+    TicketSignals.record_event(repo_key, issue_id, "note", note, idempotency: "checks_unproved:#{run_context.progress.head}:#{Enum.join(ids, ",")}")
+    {:error, {:checks_unproved, ids}}
+  end
+
+  defp hand_off_proved(%Issue{id: issue_id} = issue, post_pr_state, reason, run_context) do
     settings = Keyword.fetch!(run_context.opts, :settings)
 
     if Handoff.origin?(issue.state) and not handoff_emitted?(issue, run_context) do

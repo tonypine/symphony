@@ -2194,6 +2194,15 @@ when that is unset (`repositories[].manual_review`). Its `escalate` rules (and a
 
 The QA agent:
 
+- **A ticket with a plan.** A run of a ticket whose history holds a `plan.written` reads its ask,
+  its plan and its checks where a run of any other ticket reads the description: the implementation,
+  rework, review and QA prompts carry `## Ask`, `## Plan` and `## Checks`; QA walks the plan's `qa`
+  checks and judges nothing else; the `outcome` checks are the acceptance criteria; a
+  `check.proved` with `by: test` is confirmed on the PR head by the QA pre-check, and QA records a
+  `check.proved` (`by: qa` or `design`) for each check it saw pass. The ticket MUST NOT be handed
+  off to Code Review while a check a test or an attachment proves is open. A plan whose layers
+  hold `screen` or `gallery` MUST NOT be scoped to "nothing on screen". A ticket with no plan
+  keeps the behaviour below.
 - **Walkthrough proofs.** The person writing a ticket describes the user's flow in plain steps and
   names no test and no check. The implementer, who writes the tests, ends each step a test of its PR
   covers with `Proved by: <test>` through `linear_record_walkthrough_proofs`, which records each
@@ -5063,7 +5072,10 @@ Scoped Linear tool extension contract:
   apart from the issue's own); `linear_update_document` still MUST refuse them.
 - `linear_update_issue_summary` is the only tool that writes the current issue's description (the
   Decisions section is Symphony's own write, outside any tool).
-  `linear_record_walkthrough_proofs` accepts only `proofs`, a list of a step number and a test; it
+  On a ticket with a plan, `linear_record_walkthrough_proofs` takes the id of a check of the plan as
+  each proof's `step`, reads nothing from Linear, and MUST record one `check.proved` (`by: test`) per
+  proof; it MUST refuse a check the plan lacks or proves by QA (`proof: qa`, `proof: design`).
+  Otherwise `linear_record_walkthrough_proofs` accepts only `proofs`, a list of a step number and a test; it
   MUST read the description, check each proof against its `## User walkthrough`, and record one
   `evidence` event per step on the ticket's history with `proof` (the step and the test), leaving the
   description unchanged. It MUST refuse, with nothing recorded, a test holding a ` › ` or ` > `
