@@ -77,6 +77,7 @@ defmodule SymphonyElixir.Orchestrator do
   }
 
   alias SymphonyElixir.Artifacts.Transcript
+  alias SymphonyElixir.Conductor.Message, as: ConductorMessage
   alias SymphonyElixir.Conductor.Tree, as: ConductorTree
   alias SymphonyElixir.Config.{Cache, Schema}
   alias SymphonyElixir.Dispatch.{Candidates, Order, Settings, Settle, Shadow}
@@ -219,6 +220,10 @@ defmodule SymphonyElixir.Orchestrator do
       quality_gate_tasks: %{},
       dispatch_readiness_tasks: %{},
       tracker_tasks: %{},
+      # The groomed tickets owed a Conductor turn outside any dispatch (`Conductor.Message.owed/1`)
+      # that could not start yet, by issue id; read from the records once, on the first poll.
+      conductor_owed: MapSet.new(),
+      conductor_owed_read: false,
       dispatch_refresh: nil,
       usage_limits: %{},
       # The providers the Director paused (`SymphonyElixir.Pauses`, subject `{:provider, provider}`):
@@ -401,6 +406,8 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp slow_callback_ms, do: Application.get_env(:symphony_elixir, :orchestrator_slow_callback_ms, @slow_callback_ms)
+
+  defp handle_cast_message({:conductor_owed, issue_id}, state), do: {:noreply, tend_owed_turn(state, issue_id)}
 
   defp handle_cast_message({:request_refresh, repo_key, :now}, state) do
     now_ms = System.monotonic_time(:millisecond)
@@ -1813,6 +1820,7 @@ defmodule SymphonyElixir.Orchestrator do
           |> grant_step_turns()
           |> close_finished_parents(issues)
           |> tend_groomed_parents(issues)
+          |> tend_owed_turns()
 
         if available_slots(state) > 0 or available_finishing_slots(state) > 0 or forced_pass_needed?(state, issues) do
           issues
@@ -2595,6 +2603,10 @@ defmodule SymphonyElixir.Orchestrator do
   @doc false
   @spec act_on_plan_comments_for_test(term(), [Issue.t()]) :: term()
   def act_on_plan_comments_for_test(%State{} = state, issues) when is_list(issues), do: state |> act_on_plan_comments(issues) |> await_tracker_tasks()
+
+  @doc false
+  @spec tend_owed_turns_for_test(term()) :: term()
+  def tend_owed_turns_for_test(%State{} = state), do: state |> tend_owed_turns() |> await_tracker_tasks()
 
   @doc false
   @spec tend_groomed_parents_for_test([Issue.t()], term()) :: term()
@@ -4019,6 +4031,38 @@ defmodule SymphonyElixir.Orchestrator do
       start_tracker_task(state, %{kind: :tree_turn, issue_ids: [issue_id]}, turn)
     else
       _not_owed -> state
+    end
+  end
+
+  # A groomed ticket is also owed a turn for a person's message with no reply and for a new ask of
+  # its parent (`Conductor.Message.owed/1`). It runs as the same kind of task as a tree turn, so one
+  # Conductor turn works on a ticket at a time: a ticket whose turn is in flight waits in
+  # `conductor_owed`, and is taken up when that turn ends. One still owed afterwards (its turn
+  # failed, or no provider can take it now) waits there for the next poll. The first poll reads the
+  # tickets owed a turn from the records, so none is lost over a restart.
+  defp tend_owed_turns(%State{conductor_owed_read: false} = state) do
+    state = %{state | conductor_owed_read: true}
+    start_tracker_task(state, %{kind: :conductor_owed, issue_ids: []}, fn -> {:ok, ConductorMessage.owed_tickets()} end)
+  end
+
+  defp tend_owed_turns(%State{} = state), do: Enum.reduce(state.conductor_owed, state, &tend_owed_turn(&2, &1))
+
+  defp tend_owed_turn(%State{} = state, issue_id) do
+    if tracker_task_in_flight?(state, :tree_turn, issue_id) do
+      %{state | conductor_owed: MapSet.put(state.conductor_owed, issue_id)}
+    else
+      available? = conductor_available?(state, %Issue{id: issue_id})
+      state = %{state | conductor_owed: MapSet.delete(state.conductor_owed, issue_id)}
+      start_tracker_task(state, %{kind: :tree_turn, issue_ids: [issue_id]}, fn -> {:ok, ConductorMessage.tend(issue_id, available?: available?)} end)
+    end
+  end
+
+  # A turn on the ticket ended: one asked for meanwhile starts now, one still owed waits for a poll.
+  defp finish_tree_turn(%State{} = state, issue_id, result) do
+    cond do
+      MapSet.member?(state.conductor_owed, issue_id) -> tend_owed_turn(state, issue_id)
+      result == {:ok, :owed} -> %{state | conductor_owed: MapSet.put(state.conductor_owed, issue_id)}
+      true -> state
     end
   end
 
@@ -8960,6 +9004,9 @@ defmodule SymphonyElixir.Orchestrator do
   defp handle_tracker_task_result(%State{} = state, %{kind: :plan_comments} = context, result), do: finish_plan_comments(state, context, result)
   defp handle_tracker_task_result(%State{} = state, %{kind: :usage_limit_canary} = context, result), do: finish_usage_limit_canary_read(state, context, result)
 
+  defp handle_tracker_task_result(%State{} = state, %{kind: :tree_turn, issue_ids: [issue_id]}, result), do: finish_tree_turn(state, issue_id, result)
+  defp handle_tracker_task_result(%State{} = state, %{kind: :conductor_owed}, {:ok, issue_ids}), do: Enum.reduce(issue_ids, state, &tend_owed_turn(&2, &1))
+
   defp handle_tracker_task_result(%State{} = state, %{kind: :park_parents}, {:ok, parked_ids}),
     do: %{state | parked_parents: MapSet.union(state.parked_parents, MapSet.new(parked_ids))}
 
@@ -9420,6 +9467,19 @@ defmodule SymphonyElixir.Orchestrator do
     else
       :unavailable
     end
+  end
+
+  @doc """
+  Says that the groomed ticket `issue_id` is owed a Conductor turn outside any dispatch (a person's
+  message, or a new ask of its parent): the orchestrator starts it, or keeps it until the turn in
+  flight on the ticket ends. `:unavailable` when no orchestrator runs.
+  """
+  @spec conductor_owed(String.t()) :: :ok | :unavailable
+  def conductor_owed(issue_id), do: conductor_owed(__MODULE__, issue_id)
+
+  @spec conductor_owed(GenServer.server(), String.t()) :: :ok | :unavailable
+  def conductor_owed(server, issue_id) when is_binary(issue_id) do
+    if server_available?(server), do: GenServer.cast(server, {:conductor_owed, issue_id}), else: :unavailable
   end
 
   @spec stop_running(String.t()) :: {:ok, map()} | :unavailable | {:error, term()}

@@ -86,6 +86,11 @@ defmodule SymphonyElixir.Conductor.MessageTest do
 
   defp opts(replies, more \\ []), do: Keyword.merge([settings: @on, turn: turns(replies), start: fn task -> task.() end, running: fn _id -> nil end], more)
 
+  # What the ticket is owed is run now, as the orchestrator's task does.
+  defp answer(record, _message, opts), do: with(_left <- Message.tend(record.issue_id, opts), do: :ok)
+
+  defp status_notes(issue_id), do: for(%{type: "note", payload: %{status: true, text: text}} <- Facts.events(issue_id), do: text)
+
   defp events(issue_id, type), do: issue_id |> Facts.events() |> Enum.filter(&(&1.type == type))
 
   defp conductor_on! do
@@ -167,7 +172,7 @@ defmodule SymphonyElixir.Conductor.MessageTest do
       message = say!(ctx.issue_id, "Keep the search text too.")
       answer = reply(%{"ask" => true, "plan" => answered_plan(%{"shape" => "split", "sub_tickets" => [%{"title" => "x", "ask" => "y"}]})})
 
-      assert Message.answer(ctx.record, message, opts(%{"message" => answer})) == :ok
+      assert answer(ctx.record, message, opts(%{"message" => answer})) == :ok
 
       assert [_first, %{version: 2, by: "recalibration", reason: "The person also wants the search text kept.", shape: "single"} = plan] = TicketPlan.versions(ctx.issue_id)
       refute Map.has_key?(plan, :sub_tickets)
@@ -188,7 +193,7 @@ defmodule SymphonyElixir.Conductor.MessageTest do
       message = say!(ctx.issue_id, "Keep the search text too.")
       answer = reply(%{"ask" => true, "plan" => Map.delete(answered_plan(), "reason")})
 
-      assert Message.answer(ctx.record, message, opts(%{"message" => answer})) == :ok
+      assert answer(ctx.record, message, opts(%{"message" => answer})) == :ok
       assert %{version: 2, reason: "A message changed what is asked."} = TicketPlan.current(ctx.issue_id)
     end
 
@@ -197,7 +202,7 @@ defmodule SymphonyElixir.Conductor.MessageTest do
 
       log =
         capture_log(fn ->
-          assert Message.answer(ctx.record, message, opts(%{"message" => reply(%{"ask" => true})})) == :ok
+          assert answer(ctx.record, message, opts(%{"message" => reply(%{"ask" => true})})) == :ok
 
           twice =
             answered_plan(%{
@@ -207,20 +212,35 @@ defmodule SymphonyElixir.Conductor.MessageTest do
               ]
             })
 
-          assert Message.answer(ctx.record, message, opts(%{"message" => reply(%{"ask" => true, "plan" => twice})})) == :ok
+          assert answer(ctx.record, message, opts(%{"message" => reply(%{"ask" => true, "plan" => twice})})) == :ok
+
+          # Two tries failed: the message is still owed its turn, and nothing answers it yet.
+          assert events(ctx.issue_id, "conductor.update") == []
+          assert %{messages: [%{id: owed}]} = Message.owed(ctx.issue_id)
+          assert owed == message.id
+          assert Message.tend(ctx.issue_id, opts(%{"message" => reply(%{"ask" => true})})) == :done
         end)
 
       assert log =~ "`ask` is true, so the answer must hold the new `plan`"
       assert log =~ "its plan was refused: check id c1 is used twice"
+
+      assert [first, second] = status_notes(ctx.issue_id)
+      assert first == "The Conductor could not answer a message (its answer could not be read). Symphony tries again."
+      assert second =~ "(its plan was refused: check id c1 is used twice)"
       assert [%{parent: parent, payload: %{junction: "message", text: text}}] = events(ctx.issue_id, "conductor.update")
       assert parent == message.id
-      assert text == "The Conductor could not read this message (its answer could not be read), so nothing was done with it. It stays in the ticket's history. Send it again to have it read."
+
+      assert text ==
+               "The Conductor could not read this message (its answer could not be read), 3 times, so nothing was done with it. " <>
+                 "It stays in the ticket's history. Send it again to have it read."
+
+      assert Message.owed(ctx.issue_id) == %{messages: [], asks: []}
       assert length(TicketPlan.versions(ctx.issue_id)) == 1
       assert length(TicketPlan.ask(ctx.issue_id)) == 1
-      assert [%{payload: %{exit: "unreadable answer: " <> _}}, %{payload: %{exit: "its plan was refused: " <> _}}] = events(ctx.issue_id, "run.ended")
+      assert [%{payload: %{exit: "unreadable answer: " <> _}}, %{payload: %{exit: "its plan was refused: " <> _}}, _third] = events(ctx.issue_id, "run.ended")
     end
 
-    test "a turn that fails, runs over or crashes leaves Symphony's reply", ctx do
+    test "a turn that fails, runs over or crashes is counted on its message, which stays owed", ctx do
       for {turn, why} <- [
             {fn _plan, _issue, _run_id, _prompt -> {:error, :boom, 0} end, "the turn failed"},
             {fn _plan, _issue, _run_id, _prompt -> Process.sleep(:infinity) end, "the turn ran past its time limit"}
@@ -231,18 +251,48 @@ defmodule SymphonyElixir.Conductor.MessageTest do
           assert Conductor.message(issue(ctx.record), message, "default", settings: %{@on | timeout_ms: 50}, turn: turn) == :ok
         end)
 
-        assert %{parent: parent, payload: %{text: text}} = ctx.issue_id |> events("conductor.update") |> List.last()
-        assert parent == message.id
-        assert text =~ "could not read this message (#{why})"
+        assert List.last(status_notes(ctx.issue_id)) == "The Conductor could not answer a message (#{why}). Symphony tries again."
+        assert message.id in Enum.map(Message.owed(ctx.issue_id).messages, & &1.id)
       end
 
       message = say!(ctx.issue_id)
 
       log = capture_log(fn -> assert Conductor.message(issue(ctx.record), message, "default", settings: @on, facts: fn -> raise "no facts" end, turn: turns(%{})) == :ok end)
       assert log =~ "Conductor turn failed"
-      assert %{parent: parent, run_id: nil, payload: %{text: text}} = ctx.issue_id |> events("conductor.update") |> List.last()
-      assert parent == message.id
+      assert events(ctx.issue_id, "conductor.update") == []
+      assert %{run_id: nil, payload: %{text: text}, idempotency: key} = ctx.issue_id |> events("note") |> List.last()
       assert text =~ "(the turn failed)"
+      assert key == "message.try:#{message.id}:1"
+    end
+
+    test "a message a run already read, or one written before the plan, is owed as the rule says", ctx do
+      early = ticket!("MSG-E#{ctx.n}", "msg-e-#{ctx.n}", %{})
+      before = say!(early.issue_id, "Mind the empty list.")
+      assert Message.owed(early.issue_id) == %{messages: [], asks: []}
+      assert Message.plan_written(early.issue_id, opts(%{})) == :ok
+      refute_received {:turn, _junction, _prompt}
+
+      # The plan is written: the message that waited is answered, with no new message to start it.
+      plan!(early.issue_id)
+      assert [%{id: owed}] = Message.owed(early.issue_id).messages
+      assert owed == before.id
+      assert Message.owed_tickets(settings: @on) |> Enum.member?(early.issue_id)
+      assert Message.owed_tickets() == []
+      assert Message.plan_written(early.issue_id, opts(%{"message" => reply()})) == :ok
+      assert_received {:turn, "message", _prompt}
+      assert [%{parent: parent}] = events(early.issue_id, "conductor.update")
+      assert parent == before.id
+      assert Message.plan_written(early.issue_id, opts(%{})) == :ok
+      assert Message.tend(early.issue_id, opts(%{})) == :done
+
+      # One a run read while the junction was off is that run's.
+      read = say!(ctx.issue_id)
+      {:ok, _read} = TicketEvents.record("default", ctx.issue_id, "message.read", %{message_id: read.id, run_id: "run-#{ctx.n}"})
+      assert Message.owed(ctx.issue_id).messages == []
+
+      # With no orchestrator to take it, starting what is owed is still fine.
+      assert Message.start(ctx.record, say!(ctx.issue_id), settings: @on) == :ok
+      assert Message.tend("no-such-ticket", settings: @on) == :done
     end
 
     test "nothing runs for a ticket with no plan, and a crash before any plan is only logged", ctx do
@@ -256,7 +306,7 @@ defmodule SymphonyElixir.Conductor.MessageTest do
       steer = %{"steer" => %{"message" => "Keep the filter in the view state store.", "when" => "now"}}
       message = say!(ctx.issue_id)
 
-      assert Message.answer(ctx.record, message, opts(%{"message" => reply(steer)})) == :ok
+      assert answer(ctx.record, message, opts(%{"message" => reply(steer)})) == :ok
       assert [%{payload: %{junction: "message", text: "Keep the filter in the view state store."}}] = events(ctx.issue_id, "conductor.instructions")
 
       conductor_on!()
@@ -265,7 +315,7 @@ defmodule SymphonyElixir.Conductor.MessageTest do
       working = fn kind -> fn _id -> %{run_id: "run-w-#{kind}-#{ctx.n}", issue_id: ctx.issue_id, run_profile: %{harness: kind}} end end
 
       Steer.during_turn("run-w-claude-#{ctx.n}", fn ->
-        assert Message.answer(ctx.record, say!(ctx.issue_id), opts(%{"message" => reply(steer)}, running: working.("claude"))) == :ok
+        assert answer(ctx.record, say!(ctx.issue_id), opts(%{"message" => reply(steer)}, running: working.("claude"))) == :ok
         assert_received {:conductor_interrupt, _run_id, _sent_ms}
         send(test, :turned)
       end)
@@ -275,7 +325,7 @@ defmodule SymphonyElixir.Conductor.MessageTest do
       assert [%{payload: %{trigger: "message", when: "now"}}] = events(ctx.issue_id, "conductor.steer")
 
       later = %{"steer" => %{"message" => "And test it.", "when" => "now"}}
-      assert Message.answer(ctx.record, say!(ctx.issue_id), opts(%{"message" => reply(later)}, running: fn _id -> %{run_id: "run-w-codex-#{ctx.n}", issue_id: ctx.issue_id} end)) == :ok
+      assert answer(ctx.record, say!(ctx.issue_id), opts(%{"message" => reply(later)}, running: fn _id -> %{run_id: "run-w-codex-#{ctx.n}", issue_id: ctx.issue_id} end)) == :ok
       assert Steer.interrupt("run-w-codex-#{ctx.n}") == :no_turn
       assert Steer.turn_prompt("run-w-codex-#{ctx.n}", false, fn -> "own" end) =~ "And test it."
       assert length(events(ctx.issue_id, "conductor.instructions")) == 1
@@ -286,19 +336,21 @@ defmodule SymphonyElixir.Conductor.MessageTest do
       test = self()
       stopped = fn name -> send(test, {:stopped, name}) && {:ok, %{stopped: true}} end
 
-      assert Message.answer(ctx.record, say!(ctx.issue_id), opts(%{"message" => reply(stop)}, stop: stopped)) == :ok
+      assert answer(ctx.record, say!(ctx.issue_id), opts(%{"message" => reply(stop)}, stop: stopped)) == :ok
       identifier = ctx.record.issue_identifier
       assert_received {:stopped, ^identifier}
 
       assert [%{payload: %{action: "stopped", reason: "The person no longer wants the filter stored.", by: ^identifier, target: ^identifier}}] =
                events(ctx.issue_id, "conductor.intervention")
 
-      assert Message.answer(ctx.record, say!(ctx.issue_id), opts(%{"message" => reply(stop)}, stop: fn _name -> {:ok, %{stopped: false}} end)) == :ok
+      assert answer(ctx.record, say!(ctx.issue_id), opts(%{"message" => reply(stop)}, stop: fn _name -> {:ok, %{stopped: false}} end)) == :ok
       assert length(events(ctx.issue_id, "conductor.intervention")) == 1
 
       # A record the ledger refuses is logged, and the reply is still written.
       long = %{ctx.record | issue_identifier: String.duplicate("X", 300)}
-      log = capture_log(fn -> assert Message.answer(long, say!(ctx.issue_id), opts(%{"message" => reply(stop)}, stop: stopped)) == :ok end)
+      :ok = RunStore.put_ticket_state(long)
+      refused = opts(%{"message" => reply(stop)}, stop: stopped)
+      log = capture_log(fn -> assert answer(long, say!(ctx.issue_id), refused) == :ok end)
       assert log =~ "Conductor could not record conductor.intervention"
       assert length(events(ctx.issue_id, "conductor.update")) == 3
     end
@@ -306,11 +358,69 @@ defmodule SymphonyElixir.Conductor.MessageTest do
     test "the answer may waive a check nobody can prove; an id the plan does not hold is dropped", ctx do
       waive = %{"waive" => [%{"check_id" => "c1", "reason" => "No test can reach a reload."}, %{"check_id" => "c9", "reason" => "x"}, %{"check_id" => "c1"}]}
 
-      log = capture_log(fn -> assert Message.answer(ctx.record, say!(ctx.issue_id), opts(%{"message" => reply(waive)})) == :ok end)
+      log = capture_log(fn -> assert answer(ctx.record, say!(ctx.issue_id), opts(%{"message" => reply(waive)})) == :ok end)
 
       assert log =~ "Conductor's waiver of c9 was dropped"
       assert log =~ "`waive[3]` was dropped"
       assert [%{id: "c1", state: :waived, waived: %{reason: "No test can reach a reload."}}] = TicketChecks.list(ctx.issue_id)
+    end
+  end
+
+  describe "the orchestrator" do
+    defp state(attrs \\ %{}) do
+      struct!(%Orchestrator.State{max_concurrent_agents: 1, running: %{}, claimed: MapSet.new(), retry_attempts: %{}}, attrs)
+    end
+
+    # No provider can take the Conductor's turn, so what is owed stays owed and no harness starts.
+    defp paused(attrs \\ %{}) do
+      providers = for profile <- Config.runs(Config.settings!(), :conductor), into: MapSet.new(), do: profile.provider
+      state(Map.put(attrs, :paused_providers, providers))
+    end
+
+    test "reads the tickets owed a turn on its first poll, and keeps one still owed for the next", ctx do
+      conductor_on!()
+      message = say!(ctx.issue_id)
+
+      state = Orchestrator.tend_owed_turns_for_test(paused())
+      assert state.conductor_owed_read
+      assert state.tracker_tasks == %{}
+      assert MapSet.member?(state.conductor_owed, ctx.issue_id)
+      assert events(ctx.issue_id, "run.started") == []
+
+      # The next poll asks again, and a ticket that is owed nothing any more leaves the list.
+      assert Orchestrator.tend_owed_turns_for_test(state).conductor_owed == state.conductor_owed
+      {:ok, _reply} = TicketEvents.record("default", ctx.issue_id, "conductor.update", %{junction: "message", text: "Read.", refs: []}, parent: message.id)
+      assert Orchestrator.tend_owed_turns_for_test(state).conductor_owed == MapSet.new()
+    end
+
+    test "starts what a message owes at once, or once the turn in flight on the ticket ended", ctx do
+      conductor_on!()
+      say!(ctx.issue_id)
+      assert Orchestrator.conductor_owed(self(), ctx.issue_id) == :ok
+      assert_received {:"$gen_cast", {:conductor_owed, issue_id}}
+      assert issue_id == ctx.issue_id
+      assert Orchestrator.conductor_owed(:no_such_orchestrator, ctx.issue_id) == :unavailable
+
+      read = %{conductor_owed_read: true}
+      {:noreply, started} = Orchestrator.handle_cast({:conductor_owed, ctx.issue_id}, paused(read))
+      assert [%{kind: :tree_turn, issue_ids: [^issue_id]}] = Map.values(started.tracker_tasks)
+      assert MapSet.member?(Orchestrator.tend_owed_turns_for_test(started).conductor_owed, ctx.issue_id)
+
+      # A turn works on the ticket: the message waits for it, then its own turn starts.
+      in_flight = make_ref()
+      busy = paused(Map.put(read, :tracker_tasks, %{in_flight => %{kind: :tree_turn, issue_ids: [ctx.issue_id]}}))
+      {:noreply, waiting} = Orchestrator.handle_cast({:conductor_owed, ctx.issue_id}, busy)
+      assert Map.keys(waiting.tracker_tasks) == [in_flight]
+      assert MapSet.member?(waiting.conductor_owed, ctx.issue_id)
+
+      {:noreply, next} = Orchestrator.handle_info({in_flight, {:tracker_task_result, :ok}}, waiting)
+      assert [%{kind: :tree_turn}] = Map.values(next.tracker_tasks)
+      assert next.conductor_owed == MapSet.new()
+
+      # A turn that ends with nothing asked for meanwhile starts nothing.
+      {:noreply, idle} = Orchestrator.handle_info({in_flight, {:tracker_task_result, :ok}}, busy)
+      assert idle.tracker_tasks == %{}
+      assert Orchestrator.tend_owed_turns_for_test(next).tracker_tasks == %{}
     end
   end
 
@@ -339,7 +449,7 @@ defmodule SymphonyElixir.Conductor.MessageTest do
           "new_ticket" => %{"title" => "Keep the search text", "ask" => "Also keep the search text."}
         })
 
-      assert Message.answer(ctx.record, message, opts(%{"message" => answer}, stop: fn _name -> flunk("a finished ticket has no run") end)) == :ok
+      assert answer(ctx.record, message, opts(%{"message" => answer}, stop: fn _name -> flunk("a finished ticket has no run") end)) == :ok
 
       assert_received {:turn, "message", prompt}
       assert prompt =~ "This ticket is finished, so nothing on it changes any more."
@@ -366,11 +476,11 @@ defmodule SymphonyElixir.Conductor.MessageTest do
 
       log =
         capture_log(fn ->
-          assert Message.answer(ctx.record, say!(ctx.issue_id), opts(%{"message" => reply(new)})) == :ok
-          assert Message.answer(ctx.record, say!(ctx.issue_id), opts(%{"message" => reply(%{"new_ticket" => %{"title" => "No ask"}})})) == :ok
-          assert Message.answer(ctx.record, say!(ctx.issue_id), opts(%{"message" => reply(%{"new_ticket" => "x"})})) == :ok
+          assert answer(ctx.record, say!(ctx.issue_id), opts(%{"message" => reply(new)})) == :ok
+          assert answer(ctx.record, say!(ctx.issue_id), opts(%{"message" => reply(%{"new_ticket" => %{"title" => "No ask"}})})) == :ok
+          assert answer(ctx.record, say!(ctx.issue_id), opts(%{"message" => reply(%{"new_ticket" => "x"})})) == :ok
           linked = %{"new_ticket" => %{"title" => "Keep the search text", "ask" => "Also keep the search text."}}
-          assert Message.answer(ctx.record, say!(ctx.issue_id), opts(%{"message" => reply(linked)}, tracker: NoLink)) == :ok
+          assert answer(ctx.record, say!(ctx.issue_id), opts(%{"message" => reply(linked)}, tracker: NoLink)) == :ok
         end)
 
       assert log =~ "Conductor's new ticket was not created"
@@ -396,7 +506,7 @@ defmodule SymphonyElixir.Conductor.MessageTest do
       message = say!(ctx.issue_id)
       silent = {:ok, [Jason.encode!(%{"update" => "Noted.", "tree" => []})], 100}
 
-      assert Message.answer(ctx.record, message, opts(%{"message" => reply(), "child_message" => silent})) == :ok
+      assert answer(ctx.record, message, opts(%{"message" => reply(), "child_message" => silent})) == :ok
 
       assert_received {:turn, "message", _prompt}
       assert_received {:turn, "child_message", prompt}
@@ -421,7 +531,7 @@ defmodule SymphonyElixir.Conductor.MessageTest do
       acts = %{"update" => "I stopped the sub-ticket.", "tree" => [%{"op" => "stop", "ticket" => identifier, "reason" => "The person changed course."}], "plan" => answered_plan(%{"reason" => nil})}
       stop = fn name -> send(test, {:stopped, name}) && {:ok, %{stopped: true}} end
 
-      assert Message.answer(ctx.record, say!(ctx.issue_id), opts(%{"message" => reply(), "child_message" => {:ok, [Jason.encode!(acts)], 100}}, stop: stop)) == :ok
+      assert answer(ctx.record, say!(ctx.issue_id), opts(%{"message" => reply(), "child_message" => {:ok, [Jason.encode!(acts)], 100}}, stop: stop)) == :ok
 
       assert_received {:stopped, ^identifier}
       assert [%{parent: nil, payload: %{junction: "child_message", text: "I stopped the sub-ticket."}}] = events(ctx.parent.issue_id, "conductor.update")
@@ -433,7 +543,7 @@ defmodule SymphonyElixir.Conductor.MessageTest do
 
     test "a parent's turn that fails leaves no reply, since none is owed", ctx do
       capture_log(fn ->
-        assert Message.answer(ctx.record, say!(ctx.issue_id), opts(%{"message" => reply(), "child_message" => {:error, :boom, 0}})) == :ok
+        assert answer(ctx.record, say!(ctx.issue_id), opts(%{"message" => reply(), "child_message" => {:error, :boom, 0}})) == :ok
       end)
 
       assert events(ctx.parent.issue_id, "conductor.update") == []
@@ -455,9 +565,26 @@ defmodule SymphonyElixir.Conductor.MessageTest do
       assert events(ctx.issue_id, "conductor.update") == []
       assert length(TicketPlan.ask(ctx.issue_id)) == 2
 
-      capture_log(fn -> assert Message.recalibrate(ctx.issue_id, ask, opts(%{"message" => {:error, :boom, 0}})) == :ok end)
+      # The plan answers the ask now: it is owed no turn.
+      assert Message.recalibrate(ctx.issue_id, ask, opts(%{})) == :ok
+      refute_received {:turn, _junction, _prompt}
+
+      # A turn that fails is tried again, 3 times in all, and then the plan stays as it is.
+      {:ok, again} = TicketPlan.record_ask("default", ctx.issue_id, "Read the other field.", source: "parent", from: ctx.parent.issue_identifier)
+      failing = opts(%{"message" => {:error, :boom, 0}})
+
+      capture_log(fn ->
+        assert Message.recalibrate(ctx.issue_id, again, failing) == :ok
+        assert Message.tend(ctx.issue_id, failing) == :owed
+        assert Message.tend(ctx.issue_id, failing) == :done
+        assert Message.tend(ctx.issue_id, failing) == :done
+      end)
+
       assert events(ctx.issue_id, "conductor.update") == []
-      assert_received {:turn, "message", _failed}
+      assert [_first, _second, third] = status_notes(ctx.issue_id)
+      assert third == "The Conductor could not write the plan again for the new ask (the turn failed), 3 times. The plan stays as it is."
+      assert %{version: 2} = TicketPlan.current(ctx.issue_id)
+      for _try <- 1..3, do: assert_received({:turn, "message", _failed})
 
       ungroomed = ticket!("MSG-W#{ctx.n}", "msg-w-#{ctx.n}", %{})
       assert Message.recalibrate(ungroomed.issue_id, ask, opts(%{})) == :ok

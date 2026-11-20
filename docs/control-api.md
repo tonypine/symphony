@@ -504,9 +504,13 @@ request answers as above, and the Conductor's turn starts at once, in the backgr
   whose work the message makes wrong is stopped (`conductor.intervention`, `action: "stopped"`).
 - On a ticket with sub-tickets the answer may change them (the tree operations), and it may waive a
   check nobody can prove (`check.waived`).
-- A turn that fails, times out or answers something Symphony cannot read leaves Symphony's own reply
-  under the message: "The Conductor could not read this message (…), so nothing was done with it. It
-  stays in the ticket's history. Send it again to have it read."
+- A turn that fails, times out or answers something Symphony cannot read is counted on the message
+  in a status note, and the message stays owed its turn: the next poll tries again. After 3 failed
+  tries Symphony leaves its own reply under the message: "The Conductor could not read this message
+  (…), 3 times, so nothing was done with it. It stays in the ticket's history. Send it again to have
+  it read."
+- A message written before the ticket had its plan is answered as soon as the plan is written. A
+  message with no reply yet is still owed its turn after a restart of Symphony.
 - On a ticket in Done or Canceled the Conductor may only reply, or have a new ticket created: in
   Todo, Urgent, in the same team and project, linked to the finished one as related, with the
   message as its ask (`ask.recorded`, `source: "message"`) and a `ticket.filed_from`.

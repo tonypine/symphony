@@ -4,12 +4,28 @@ defmodule SymphonyElixir.Conductor.Message do
   Symphony does around that turn (`SymphonyElixir.Conductor.message/4`).
 
   A message is the Conductor's when the ticket is groomed and the `message` junction is on
-  (`due?/2`). Then no run is given the message (`SymphonyElixir.Messages.prepend_unread/4`), and
-  `start/3` starts the turn at once, in a task of its own. The turn reads the whole conversation
-  (`SymphonyElixir.Conductor.Facts`) and the message it answers (`facts/2`), and its reply is a
-  `conductor.update` at the `message` junction whose `parent` is the message. A turn that failed,
-  or whose answer could not be read, leaves a short reply from Symphony instead (`unanswered/3`),
-  so no message stays without one.
+  (`due?/2`). Then no run is given the message (`SymphonyElixir.Messages.prepend_unread/4`). The
+  turn reads the whole conversation (`SymphonyElixir.Conductor.Facts`) and the message it answers
+  (`facts/2`), and its reply is a `conductor.update` at the `message` junction whose `parent` is
+  the message.
+
+  ## Owed turns
+
+  A groomed ticket is owed a turn (`owed/1`) for each `message.sent` that has no reply yet (and
+  that no run read while the junction was off), and for an `ask.recorded` its parent wrote after
+  the current version of its plan (`source: parent`), which the turn answers by writing the plan
+  again. So a message written while Grooming still ran, when no turn could start, is answered once
+  the plan exists: `SymphonyElixir.Conductor` says so as Grooming ends (`plan_written/2`).
+
+  `tend/2` runs what a ticket is owed. It is started as a message is written (`start/3`), as a
+  parent writes a new ask (`recalibrate/3`), as a plan is first written, and by the orchestrator's
+  poll for a ticket still owed one (`SymphonyElixir.Orchestrator.conductor_owed/1`), which finds
+  them again after a restart (`owed_tickets/1`).
+
+  A turn that failed, or whose answer could not be read, is counted on what it was to answer
+  (`unanswered/3`, a status note under `message.try:<event id>:<n>`) and stays owed, so the next
+  poll tries again. After 3 failed tries Symphony leaves its own short reply under the message,
+  or says that the plan stays as it is, and the turn is owed no more.
 
   What the answer may do besides reply (`acted/5`, `write_plan/4`):
 
@@ -52,6 +68,8 @@ defmodule SymphonyElixir.Conductor.Message do
   @child "A person sent this message on a sub-ticket of this ticket, and the sub-ticket's own Conductor already answered " <>
            "it. You owe no reply. Answer with `tree` operations or a new `plan` only when the message changes what this " <>
            "ticket, or another of its sub-tickets, should do; otherwise answer with nothing and nothing is recorded."
+  @tries 3
+  @try_key "message.try:"
   @new_ask "This ticket's parent gave it a new ask (`new_ask`) after its plan was written. Write the plan again for what " <>
              "is asked now, as `plan`, with the `reason` it changed for. Keep the id of every check that still stands."
 
@@ -68,55 +86,123 @@ defmodule SymphonyElixir.Conductor.Message do
   end
 
   @doc """
-  Starts the Conductor's turn on `message`, a `message.sent` of the ticket `record`, in a task of
-  its own (`answer/3`), when the message is the Conductor's (`due?/2`). Always `:ok`. `opts`:
-  `start` (`((-> term) -> term)`, how the task starts) and `answer/3`'s.
+  Starts what the ticket `record` is owed (`tend/2`) now that `message`, a `message.sent`, was
+  written on it, when the message is the Conductor's (`due?/2`). Always `:ok`. `opts`: `start`
+  (`((-> term) -> term)`, how the work starts; by default the orchestrator starts it,
+  `SymphonyElixir.Orchestrator.conductor_owed/1`) and `tend/2`'s.
   """
   @spec start(map(), Event.t(), keyword()) :: :ok
-  def start(record, %Event{} = message, opts) do
-    if due?(Map.get(record, :issue_id), opts) do
-      start = Keyword.get(opts, :start, &Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, &1))
-      start.(fn -> answer(record, message, opts) end)
+  def start(record, %Event{}, opts) do
+    issue_id = Map.get(record, :issue_id)
+    if due?(issue_id, opts), do: notify(issue_id, opts), else: :ok
+  end
+
+  @doc """
+  Starts the turn that writes the plan of the ticket `issue_id` again for the `ask.recorded` its
+  parent just wrote on it (`tend/2`). Nothing starts for a ticket that has no plan yet (its Grooming
+  reads the ask) or whose messages are not the Conductor's. Always `:ok`. `opts` as `start/3`'s.
+  """
+  @spec recalibrate(String.t(), Event.t(), keyword()) :: :ok
+  def recalibrate(issue_id, %Event{}, opts \\ []) do
+    if due?(issue_id, opts), do: notify(issue_id, opts), else: :ok
+  end
+
+  @doc """
+  Starts what the ticket `issue_id` is owed once its plan is written: a message that arrived while
+  Grooming ran had no turn to start. Nothing starts for a ticket that is owed nothing. Always `:ok`.
+  `opts` as `start/3`'s.
+  """
+  @spec plan_written(String.t(), keyword()) :: :ok
+  def plan_written(issue_id, opts \\ []) do
+    if due?(issue_id, opts) and owed?(owed(issue_id)), do: notify(issue_id, opts), else: :ok
+  end
+
+  defp notify(issue_id, opts) do
+    case Keyword.get(opts, :start) do
+      nil -> Orchestrator.conductor_owed(issue_id)
+      start -> start.(fn -> tend(issue_id, opts) end)
     end
 
     :ok
   end
 
+  @typedoc "What a ticket is owed: the messages with no reply and the parent's asks its plan does not answer, each oldest first."
+  @type owed :: %{messages: [Event.t()], asks: [Event.t()]}
+
   @doc """
-  Runs the turn that answers `message` on the ticket `record`, then shows the message to the
-  Conductor of the ticket's parent, when it has one Symphony tracks. Always `:ok`. `opts` are
+  What the groomed ticket `issue_id` (or the ticket whose events these are, oldest first) is owed
+  (see the module doc). A ticket with no plan is owed nothing: its Grooming comes first.
+  """
+  @spec owed(String.t() | [Event.t()]) :: owed()
+  def owed(issue_id) when is_binary(issue_id), do: owed(Facts.events(issue_id))
+
+  def owed(events) when is_list(events) do
+    case Enum.split_while(Enum.reverse(events), &(&1.type != "plan.written")) do
+      {_all, []} ->
+        %{messages: [], asks: []}
+
+      {newer, _plan_and_older} ->
+        settled = for %Event{type: "conductor.update", parent: parent} when is_binary(parent) <- events, into: MapSet.new(), do: parent
+        settled = for %Event{type: "message.read"} = read <- events, into: settled, do: field(read, :message_id)
+        open? = &(not MapSet.member?(settled, &1.id) and tries(events, &1.id) < @tries)
+
+        %{
+          messages: for(%Event{type: "message.sent"} = message <- events, open?.(message), do: message),
+          asks: for(%Event{type: "ask.recorded"} = ask <- Enum.reverse(newer), field(ask, :source) == "parent", open?.(ask), do: ask)
+        }
+    end
+  end
+
+  defp owed?(%{messages: messages, asks: asks}), do: messages != [] or asks != []
+
+  defp tries(events, id), do: Enum.count(events, &(&1.type == "note" and is_binary(&1.idempotency) and String.starts_with?(&1.idempotency, "#{@try_key}#{id}:")))
+
+  @doc """
+  The tickets that are owed a turn now, by their issue ids: every ticket Symphony holds a record of
+  whose messages are the Conductor's (`due?/2`) and that is owed something (`owed/1`). The
+  orchestrator reads it once as it starts. `opts` as `due?/2`'s.
+  """
+  @spec owed_tickets(keyword()) :: [String.t()]
+  def owed_tickets(opts \\ []) do
+    for %{issue_id: issue_id} <- List.wrap(RunStore.list_all_ticket_states()), due?(issue_id, opts), owed?(owed(issue_id)), do: issue_id
+  end
+
+  @doc """
+  Runs the turns the ticket `issue_id` is owed (`owed/1`), now: first the one that writes its plan
+  again for its parent's newest ask, then one for each message with no reply, oldest first, each
+  also shown to the Conductor of the ticket's parent, when it has one Symphony tracks. `:owed`
+  while something is still owed afterwards (a turn failed and is tried again), `:done` otherwise,
+  and for a ticket whose messages are not the Conductor's. `opts` are
   `SymphonyElixir.Conductor.message/4`'s.
   """
-  @spec answer(map(), Event.t(), keyword()) :: :ok
-  def answer(record, %Event{} = message, opts) do
-    record = TicketState.normalize(record)
-    Conductor.message(issue(record), message, record.repo_key, Keyword.put(opts, :finished, finished?(record)))
+  @spec tend(String.t(), keyword()) :: :done | :owed
+  def tend(issue_id, opts \\ []) do
+    with true <- due?(issue_id, opts),
+         %{} = record <- RunStore.get_ticket_state(issue_id) do
+      record = TicketState.normalize(record)
+      answer(record, owed(issue_id), opts)
+      if owed?(owed(issue_id)), do: :owed, else: :done
+    else
+      _not_the_conductors -> :done
+    end
+  end
 
+  defp answer(record, %{messages: messages, asks: asks}, opts) do
+    with %Event{} = ask <- List.last(asks), do: Conductor.message(issue(record), ask, record.repo_key, opts)
+
+    for %Event{} = message <- messages do
+      Conductor.message(issue(record), message, record.repo_key, Keyword.put(opts, :finished, finished?(record)))
+      to_parent(record, message, opts)
+    end
+  end
+
+  # A message on a sub-ticket is shown to its parent's Conductor too, once its own turn answered.
+  defp to_parent(record, message, opts) do
     with parent_id when is_binary(parent_id) <- TicketPlan.parent_id(record.issue_id),
          %{} = parent <- RunStore.get_ticket_state(parent_id) do
       parent = TicketState.normalize(parent)
       Conductor.message(issue(parent), message, parent.repo_key, opts |> Keyword.drop([:finished]) |> Keyword.merge(junction: @child_junction, child: record.issue_identifier))
     end
-
-    :ok
-  end
-
-  @doc """
-  Starts the turn that writes the plan of the ticket `issue_id` again for `ask`, the `ask.recorded`
-  its parent just wrote on it, in a task of its own. Nothing starts for a ticket that has no plan
-  yet (its Grooming reads the ask) or whose messages are not the Conductor's. Always `:ok`. `opts`
-  as `start/3`'s.
-  """
-  @spec recalibrate(String.t(), Event.t(), keyword()) :: :ok
-  def recalibrate(issue_id, %Event{} = ask, opts \\ []) do
-    with true <- due?(issue_id, opts),
-         %{} = record <- RunStore.get_ticket_state(issue_id) do
-      record = TicketState.normalize(record)
-      start = Keyword.get(opts, :start, &Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, &1))
-      start.(fn -> Conductor.message(issue(record), ask, record.repo_key, opts) end)
-    end
-
-    :ok
   end
 
   defp issue(record), do: %Issue{id: record.issue_id, identifier: record.issue_identifier, title: record.title, state: record.phase, repo_key: record.repo_key}
@@ -294,21 +380,35 @@ defmodule SymphonyElixir.Conductor.Message do
   end
 
   @doc """
-  Records Symphony's own reply to the message the turn `plan` was to answer, when it has none: the
-  Conductor could not read it (`why`, in plain words), and the message stays in the ticket's
-  history. Nothing for a turn that answers no person's message.
+  Counts a turn that failed for `why`, in plain words, on what it was to answer (a status note),
+  so it stays owed and is tried again. From the third failure on it is owed no more: a
+  message gets Symphony's own reply and stays in the ticket's history, and for a parent's new ask
+  the note says that the plan stays as it is. Nothing for a turn that owes nothing (`child_message`).
   """
   @spec unanswered(map(), String.t() | nil, String.t()) :: :ok
-  def unanswered(%{junction: @junction, message: %{event: %Event{type: "message.sent", id: id} = message}} = plan, run_id, why) do
-    if is_nil(reply(message)) do
-      text = "The Conductor could not read this message (#{why}), so nothing was done with it. It stays in the ticket's history. Send it again to have it read."
-      record(plan, "conductor.update", %{junction: @junction, text: Facts.fit(text, Answer.update_max()), refs: []}, run_id: run_id, parent: id, idempotency: "conductor.update:unanswered:#{id}")
-    else
-      :ok
+  def unanswered(%{junction: @junction, message: %{event: %Event{type: type, id: id} = event}} = plan, run_id, why) when type in ["message.sent", "ask.recorded"] do
+    events = Facts.events(plan.issue_id)
+    try = tries(events, id) + 1
+    left? = try < @tries
+
+    cond do
+      type == "message.sent" and reply(event) != nil ->
+        :ok
+
+      type == "message.sent" and not left? ->
+        text = "The Conductor could not read this message (#{why}), #{@tries} times, so nothing was done with it. It stays in the ticket's history. Send it again to have it read."
+        record(plan, "conductor.update", %{junction: @junction, text: Facts.fit(text, Answer.update_max()), refs: []}, run_id: run_id, parent: id, idempotency: "conductor.update:unanswered:#{id}")
+
+      true ->
+        record(plan, "note", %{text: Facts.fit(failed(type, why, left?), 4_000), status: true}, run_id: run_id, idempotency: "#{@try_key}#{id}:#{try}")
     end
   end
 
   def unanswered(_plan, _run_id, _why), do: :ok
+
+  defp failed("message.sent", why, _left?), do: "The Conductor could not answer a message (#{why}). Symphony tries again."
+  defp failed("ask.recorded", why, true), do: "The Conductor could not write the plan again for the new ask (#{why}). Symphony tries again."
+  defp failed("ask.recorded", why, false), do: "The Conductor could not write the plan again for the new ask (#{why}), #{@tries} times. The plan stays as it is."
 
   defp record(plan, type, payload, opts) do
     with {:error, reason} <- TicketEvents.record(plan.repo_key, plan.issue_id, type, payload, opts),

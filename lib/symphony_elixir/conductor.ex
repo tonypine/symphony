@@ -71,7 +71,8 @@ defmodule SymphonyElixir.Conductor do
 
   A person's message on a groomed ticket is answered by a turn of its own (`message/4`,
   `SymphonyElixir.Conductor.Message`), started as the message is written and tied to no dispatch:
-  the `message` junction on the ticket, then `child_message` on its parent. It reads the whole
+  the `message` junction on the ticket, then `child_message` on its parent. One written before the
+  plan existed is answered as Grooming ends, and a turn that failed is tried again, up to 3 times. It reads the whole
   conversation on its own prompt (`priv/conductor/message_prompt.md`), and its reply is the
   `conductor.update` whose `parent` is the message. The same turn writes a ticket's plan again when
   its parent gave it a new ask.
@@ -481,7 +482,10 @@ defmodule SymphonyElixir.Conductor do
   def run(nil, _issue, _opts), do: :ok
 
   def run(%{junction: @grooming} = plan, %Issue{} = issue, opts) do
-    groom(plan, issue, opts)
+    left = groom(plan, issue, opts)
+    # What was written to the ticket while it had no plan is answered now that it has one.
+    Message.plan_written(plan.issue_id, Keyword.take(opts, [:settings, :start]))
+    left
   rescue
     error ->
       Logger.warning("Grooming failed #{context(issue, plan)}: #{Exception.message(error)}")
