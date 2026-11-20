@@ -41,7 +41,6 @@ public struct TimelineComposer: View {
                 minLines: 1, maxLines: Self.maxLines, minHeight: DesignTokens.Control.large.height, focused: focus, drawnAs: drawnAs,
                 send: { if sendable { send() } }
             )
-            .disabled(composer.sending)
             if let refusal = composer.refusal {
                 Refusal(reason: refusal)
                     .accessibilityLabel(TicketMessageComposer.refusalLabel(refusal))
@@ -51,9 +50,8 @@ public struct TimelineComposer: View {
                     Spacer(minLength: 0)
                     KeyboardHint(TicketMessageComposer.shortcut)
                         .accessibilityHidden(true)
-                    Button(composer.sending ? TicketMessageComposer.sendingTitle : TicketMessageComposer.sendTitle, action: send)
+                    Button(composer.sending ? TicketMessageComposer.sendingTitle : TicketMessageComposer.sendTitle) { if sendable { send() } }
                         .directorButton(.primary, size: .small)
-                        .disabled(!sendable)
                         .help(TicketMessageComposer.sendTitle + " (⌘↩)")
                 }
                 .transition(.opacity)
