@@ -146,6 +146,18 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
              %{title: "Code Review verdict: approve", detail: "adds 300, changes 50, removes 2,100 lines. ok · on e051234"}
   end
 
+  test "a review round's verdict counts its findings and the ones missed earlier (TP-1516)" do
+    round = %{kind: "code_review", outcome: "request_changes", head: "e051234abcdef", reason: "The fix is wrong."}
+
+    assert render("verdict.recorded", Map.put(round, :details, %{findings_count: 3, missed_earlier: 2})).detail ==
+             "3 findings · 2 missed earlier · The fix is wrong. · on e051234"
+
+    assert render("verdict.recorded", Map.put(round, :details, %{"findings_count" => 1, "missed_earlier" => 0})).detail ==
+             "1 finding · The fix is wrong. · on e051234"
+
+    assert render("verdict.recorded", Map.put(round, :details, %{missed_earlier: "two"})).detail == "The fix is wrong. · on e051234"
+  end
+
   test "a known type with a missing or malformed payload renders what it can" do
     for {type, _payload, _artifacts, _summary} <- @fixtures do
       assert %{title: title} = render(type, %{})
