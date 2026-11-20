@@ -248,15 +248,15 @@ final class ControlAPITests: XCTestCase {
         // A refusal says why, in Symphony's words: the text stays in the field with it.
         XCTAssertEqual(
             ControlAPI.result(note, statusCode: 400, data: Data(#"{"error":{"code":"invalid_note","message":"A note holds at most 4,000 characters; this one has 4,001"}}"#.utf8)),
-            .failed("Couldn't add the note to SHOP-410: A note holds at most 4,000 characters; this one has 4,001 (HTTP 400)")
+            .failed("Couldn't send the message to SHOP-410: A note holds at most 4,000 characters; this one has 4,001 (HTTP 400)")
         )
         XCTAssertEqual(
             ControlAPI.result(note, statusCode: 404, data: Data(#"{"error":{"code":"ticket_not_found","message":"No ticket SHOP-410 in web-shop"}}"#.utf8)),
-            .failed("Couldn't add the note to SHOP-410: No ticket SHOP-410 in web-shop (HTTP 404)")
+            .failed("Couldn't send the message to SHOP-410: No ticket SHOP-410 in web-shop (HTTP 404)")
         )
         XCTAssertEqual(
             ControlAPI.result(note, statusCode: 401, data: Data()),
-            .failed("Couldn't add the note to SHOP-410: it rejected the control token (HTTP 401)")
+            .failed("Couldn't send the message to SHOP-410: it rejected the control token (HTTP 401)")
         )
     }
 

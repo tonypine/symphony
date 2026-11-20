@@ -1,9 +1,9 @@
 import Foundation
 
-// The ticket read's `ticket`, `note`, `brief`, `workspace`, `repo_key` and `moves.note` (`docs/control-api.md`
-// § `ticket`, § Marks, § `brief`, § `moves`), the ticket's decisions (`GET /api/v1/tickets/:identifier/decisions`) and
-// each run's model from its events feed, and what the facts rail's Note for the next run, Decisions and Details panels
-// say from them (`docs/design/director-ticket-page.md` §1 facts 17, 18, 22 to 25, 27, 30 and 33).
+// The ticket read's `ticket`, `brief`, `workspace` and `repo_key` (`docs/control-api.md` § `ticket`, § `brief`), the
+// ticket's decisions (`GET /api/v1/tickets/:identifier/decisions`) and each run's model from its events feed, and what
+// the facts rail's Decisions and Details panels say from them (`docs/design/director-ticket-page.md` §1 facts 17, 22
+// to 25, 27, 30 and 33).
 
 /// The ticket as its record holds it: its title, phase, Linear priority and labels.
 public struct TicketRecordRead: Equatable, Decodable {
@@ -28,60 +28,6 @@ public struct TicketRecordRead: Equatable, Decodable {
         phase = try container.decodeIfPresent(String.self, forKey: .phase)
         priority = try container.decodeIfPresent(Int.self, forKey: .priority)
         labels = try container.decodeIfPresent([String].self, forKey: .labels) ?? []
-    }
-}
-
-/// The note for the next run: the newest note a person left, and the first run that read it.
-public struct TicketNoteRead: Equatable, Decodable {
-    public struct ReadBy: Equatable, Decodable {
-        public var runID: String
-        public var at: Date?
-
-        public init(runID: String, at: Date? = nil) {
-            self.runID = runID
-            self.at = at
-        }
-
-        private enum CodingKeys: String, CodingKey {
-            case at
-            case runID = "run_id"
-        }
-
-        public init(from decoder: Decoder) throws {
-            let container = try decoder.container(keyedBy: CodingKeys.self)
-            runID = try container.decode(String.self, forKey: .runID)
-            at = try container.decodeIfPresent(String.self, forKey: .at).flatMap(SymphonyState.parseDate)
-        }
-    }
-
-    public var id: String?
-    public var text: String
-    public var at: Date?
-    /// Who set it, by name.
-    public var by: String?
-    /// Nil until a run read it.
-    public var readBy: ReadBy?
-
-    public init(id: String? = nil, text: String, at: Date? = nil, by: String? = nil, readBy: ReadBy? = nil) {
-        self.id = id
-        self.text = text
-        self.at = at
-        self.by = by
-        self.readBy = readBy
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case id, text, at, by
-        case readBy = "read_by"
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decodeIfPresent(String.self, forKey: .id)
-        text = try container.decodeIfPresent(String.self, forKey: .text) ?? ""
-        at = try container.decodeIfPresent(String.self, forKey: .at).flatMap(SymphonyState.parseDate)
-        by = try container.decodeIfPresent(String.self, forKey: .by)
-        readBy = try container.decodeIfPresent(ReadBy.self, forKey: .readBy)
     }
 }
 
@@ -118,44 +64,33 @@ public struct TicketWorkspaceRead: Equatable, Decodable {
     }
 }
 
-/// The ticket read's facts the Note and Details panels say, each nil when the read holds none.
+/// The ticket read's facts the Details panel says, each nil when the read holds none.
 public struct TicketDetailsRead: Equatable, Decodable {
     public var repoKey: String?
     public var ticket: TicketRecordRead?
-    public var note: TicketNoteRead?
     public var brief: TicketBriefRead?
     public var workspace: TicketWorkspaceRead?
-    /// `moves.note`: whether a note may be written now.
-    public var noteMove: TicketMoveRead?
 
     public init(
-        repoKey: String? = nil, ticket: TicketRecordRead? = nil, note: TicketNoteRead? = nil, brief: TicketBriefRead? = nil,
-        workspace: TicketWorkspaceRead? = nil, noteMove: TicketMoveRead? = nil
+        repoKey: String? = nil, ticket: TicketRecordRead? = nil, brief: TicketBriefRead? = nil, workspace: TicketWorkspaceRead? = nil
     ) {
         self.repoKey = repoKey
         self.ticket = ticket
-        self.note = note
         self.brief = brief
         self.workspace = workspace
-        self.noteMove = noteMove
     }
 
     private enum CodingKeys: String, CodingKey {
-        case ticket, note, brief, workspace, moves
+        case ticket, brief, workspace
         case repoKey = "repo_key"
     }
-
-    private enum MoveKeys: String, CodingKey { case note }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         repoKey = try container.decodeIfPresent(String.self, forKey: .repoKey)
         ticket = try container.decodeIfPresent(TicketRecordRead.self, forKey: .ticket)
-        note = try container.decodeIfPresent(TicketNoteRead.self, forKey: .note)
         brief = try container.decodeIfPresent(TicketBriefRead.self, forKey: .brief)
         workspace = try container.decodeIfPresent(TicketWorkspaceRead.self, forKey: .workspace)
-        let moves = try? container.nestedContainer(keyedBy: MoveKeys.self, forKey: .moves)
-        noteMove = try moves?.decodeIfPresent(TicketMoveRead.self, forKey: .note)
     }
 
     /// The fields of a ticket read (`GET /api/v1/:issue_identifier`); nil for anything but a JSON object.
@@ -176,91 +111,6 @@ enum FactsMoment {
         }
         let day = SharedDateFormatter.string(date, format: "EEE d MMM", locale: SharedDateFormatter.british, calendar: calendar)
         return "\(day) at \(time)"
-    }
-}
-
-// MARK: - The Note for the next run panel
-
-/// What the Note for the next run panel says: the note set, who set it and when, which run read it and when (or that
-/// none has yet), and whether Save Note may write a new one.
-public struct NotePanelModel: Equatable {
-    public struct Current: Equatable {
-        public var text: String
-        /// "Set by Tony today at 14:02".
-        public var setLine: String
-        /// "Read by implementation run 3 at 14:02", or `notReadLine`.
-        public var readLine: String
-        public var read: Bool
-        /// What the next run is told: `nextRunReadsLine` until a run read it, then `laterRunsLine`.
-        public var confirmation: String
-        public var accessibilityLabel: String
-    }
-
-    public var current: Current?
-    /// Why no note can be written on the ticket now, from `moves.note`; nil when it can.
-    public var refusal: String?
-
-    public static let title = "Note for the next run"
-    public static let emptyLine = "No note. The next run reads the ticket and its history only."
-    public static let notReadLine = "Not read yet"
-    public static let nextRunReadsLine = "The next run reads this note before it starts."
-    public static let laterRunsLine = "Every later run still reads it in the ticket's history."
-    public static let placeholder = "Write a note for the next run"
-    public static let saveTitle = "Save Note"
-    public static let savingTitle = "Saving…"
-    /// Save's reason while the field is empty.
-    public static let emptyFieldReason = "Write a note first."
-    /// The line under the field: what a saved note does.
-    public static let fieldHint = "The next run reads it first. A new note replaces this one."
-
-    /// The panel from the read's `note` and `moves.note`; a reading run is named from `runs`, the ticket's run headers
-    /// by run id. Dates read in `calendar`, against `reference`'s day.
-    public static func build(
-        note: TicketNoteRead?, move: TicketMoveRead?, runs: [String: TicketEventsPayload.Run], reference: Date,
-        calendar: Calendar = .current
-    ) -> NotePanelModel {
-        let refusal = move.flatMap { $0.allowed ? nil : ($0.reason ?? "Symphony can't take a note on this ticket now.") }
-        guard let note, !note.text.trimmingWhitespace().isEmpty else { return NotePanelModel(current: nil, refusal: refusal) }
-        let when = note.at.map { FactsMoment.say($0, reference: reference, calendar: calendar) }
-        let setLine = ["Set", note.by.map { "by \($0)" }, when].compactMap { $0 }.joined(separator: " ")
-        let readLine: String
-        if let readBy = note.readBy {
-            let run = runName(runs[readBy.runID])
-            let at = readBy.at.map { date -> String in
-                let moment = FactsMoment.say(date, reference: reference, calendar: calendar)
-                return moment.hasPrefix("today ") ? String(moment.dropFirst("today ".count)) : moment
-            }
-            readLine = ["Read by \(run)", at].compactMap { $0 }.joined(separator: " ")
-        } else {
-            readLine = notReadLine
-        }
-        let read = note.readBy != nil
-        let confirmation = read ? laterRunsLine : nextRunReadsLine
-        let current = Current(
-            text: note.text, setLine: setLine, readLine: readLine, read: read, confirmation: confirmation,
-            accessibilityLabel: ["Note for the next run", note.text, setLine, readLine].joined(separator: ", ")
-        )
-        return NotePanelModel(current: current, refusal: refusal)
-    }
-
-    /// Why Save Note is off for `text`: the ticket takes no note now, the field is empty, or the note is too long; nil
-    /// when it may save.
-    public func saveReason(_ text: String) -> String? {
-        if let refusal { return refusal }
-        let note = text.trimmingWhitespace()
-        if note.isEmpty { return Self.emptyFieldReason }
-        return TicketNoteComposer.tooLong(note)
-    }
-
-    /// "implementation run 3", "QA run 2", "code review run 1": a run as a sentence names it; "a run" when the ticket's
-    /// history doesn't hold its header.
-    static func runName(_ run: TicketEventsPayload.Run?) -> String {
-        guard let run else { return "a run" }
-        let title = TicketEventsPayload.runTitle(kind: run.runKind, number: run.runNumber)
-        return title.split(separator: " ").map { word in
-            word.count > 1 && word.allSatisfy(\.isUppercase) ? String(word) : word.lowercased()
-        }
-        .joined(separator: " ")
     }
 }
 

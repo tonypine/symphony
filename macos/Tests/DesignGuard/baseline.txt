@@ -124,10 +124,9 @@ SymphonyBar/WorkflowSetupSheet.swift disabled 2
 SymphonyBarUI/ChipText.swift rawColor 1
 SymphonyBarUI/ChipTextView.swift rawColor 7
 SymphonyBarUI/ChipTextView.swift number 1
-SymphonyBarUI/FactsRailDetailPanels.swift font 2
-SymphonyBarUI/FactsRailDetailPanels.swift color 15
+SymphonyBarUI/FactsRailDetailPanels.swift font 1
+SymphonyBarUI/FactsRailDetailPanels.swift color 9
 SymphonyBarUI/FactsRailDetailPanels.swift number 3
-SymphonyBarUI/FactsRailDetailPanels.swift disabled 2
 SymphonyBarUI/FactsRailPanels.swift font 7
 SymphonyBarUI/FactsRailPanels.swift color 13
 SymphonyBarUI/FactsRailPanels.swift number 3

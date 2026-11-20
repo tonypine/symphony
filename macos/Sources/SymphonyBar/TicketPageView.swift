@@ -126,7 +126,7 @@ extension SymphonyWindowModel {
         case let .ticket(identifier):
             // A Journal row's event stays the page's focus only on its own ticket.
             if ticketFocus?.identifier != identifier { ticketFocus = nil }
-            ticketNote.show(identifier)
+            ticketMessage.show(identifier)
             ticketDecisions.show(identifier)
             ticketSources = TicketPage.Sources()
             ticketSlowReadAt = nil
@@ -387,12 +387,14 @@ extension SymphonyWindowModel {
         }
     }
 
-    /// Save Note in the facts rail: the note goes on the shown ticket, then the page reads what is new in its feed and
-    /// the ticket read again, so the panel shows it at once.
-    func submitNote() {
+    /// ⌘↩ or Send in the box above the timeline: the message goes on the shown ticket, then the page reads what is new
+    /// in its feed and the ticket read again, so the message is the timeline's newest entry at once, and VoiceOver says
+    /// it was sent.
+    func submitMessage() {
         guard let page = ticketPage else { return }
         Task {
-            if await ticketNote.submit(on: page, send: onControl, read: { [ticketFeed] in ticketFeed.read() }) {
+            if await ticketMessage.submit(on: page, send: onControl, read: { [ticketFeed] in ticketFeed.read() }) {
+                AccessibilityNotification.Announcement(TicketMessageComposer.sentAnnouncement).post()
                 readTicket()
             }
         }
@@ -444,8 +446,8 @@ struct TicketPageActions {
     var openInitiatives: () -> Void = {}
     /// The Details panel's Copy beside the workspace path.
     var copy: (String) -> Void = DetailsPanel.pasteboardCopy
-    /// The Note panel's Save Note.
-    var saveNote: () -> Void = {}
+    /// ⌘↩ or Send in the box above the timeline.
+    var sendMessage: () -> Void = {}
     /// A run's More › Read the whole session: the session reader on that run.
     var readSession: (RunGroupModel) -> Void = { _ in }
     /// The decisions line's Review: the Inbox's drawer on the ticket's item, nil while the Inbox lists none (TP-1454).
@@ -549,13 +551,13 @@ struct TicketPageContent: View, Equatable {
                     openTicket: { model.openTicket($0) },
                     openInitiatives: { model.show(.initiatives) },
                     copy: { model.copy($0) },
-                    saveNote: { model.submitNote() },
+                    sendMessage: { model.submitMessage() },
                     readSession: { model.readSession(identifier, run: $0) },
                     review: context.reviewItemID.map { id in { model.reviewInDrawer(id) } }
                 ),
                 transcripts: model.stepTranscripts,
                 focus: context.focus,
-                note: model.ticketNote,
+                message: model.ticketMessage,
                 decisions: decisions.decisions,
                 restart: { model.send(.restart(identifier, reason: TicketPageView.restartReason)) },
                 banner: context.banner,
@@ -588,7 +590,7 @@ struct TicketPageView: View {
     let transcripts: StepTranscripts
     /// The event the page opened at (a Journal row's), selected and scrolled into view once the timeline holds it.
     var focus: TimelineFocus?
-    let note: TicketNoteComposer
+    let message: TicketMessageComposer
     var decisions: [TicketDecision] = []
     /// Restart… once confirmed.
     var restart: () -> Void = {}
@@ -601,10 +603,12 @@ struct TicketPageView: View {
     @State private var sheetOpen = false
     @State private var confirmingRestart = false
     @FocusState private var answerFocused: Bool
+    @FocusState private var messageFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static let restartReason = "Restarted from the ticket page"
-    static let noteAnchor = "note-panel"
+    /// The box above the timeline, which Write a Note… scrolls to.
+    static let composerAnchor = "ticket-composer"
 
     private var desktop: Bool { TicketPageLayout.isDesktop(page: width) }
     private var waiting: Bool { DecisionsLine(openQuestions: page.openQuestions, questions: questions).waiting }
@@ -616,8 +620,8 @@ struct TicketPageView: View {
         ScrollViewReader { proxy in
             TicketPageScroller(insets: { scroll.update(insets: $0) }) {
                 TicketPageBody(
-                    page: page, timeline: timeline, timelineStore: timelineStore, questions: questions, width: width, transcripts: transcripts, focus: focus, note: note, decisions: decisions,
-                    actions: actions, sheetOpen: sheetOpen, answerFocus: $answerFocused,
+                    page: page, timeline: timeline, timelineStore: timelineStore, questions: questions, width: width, transcripts: transcripts, focus: focus, message: message, decisions: decisions,
+                    actions: actions, sheetOpen: sheetOpen, answerFocus: $answerFocused, messageFocus: $messageFocused,
                     move: { handle($0, proxy: proxy) }, answer: { sheetOpen = true },
                     scroll: scroll, decisionsInRow: false
                 )
@@ -689,14 +693,16 @@ struct TicketPageView: View {
         }
     }
 
-    /// A move on the rail: the page shows Answer's sheet (the desktop's header has no Answer), asks before Restart… and takes Write a Note… to the Note
-    /// panel; the rest go to the window.
+    /// A move on the rail: the page shows Answer's sheet (the desktop's header has no Answer), asks before Restart… and
+    /// takes Write a Note… to the box above the timeline, with the keyboard in it; the rest go to the window.
     private func handle(_ request: TicketActionRail.Request, proxy: ScrollViewProxy) {
         switch request {
         case .sheet(.answer):
             sheetOpen = true
         case .sheet(.restart): confirmingRestart = true
-        case .sheet(.note): withAnimation { proxy.scrollTo(Self.noteAnchor, anchor: .top) }
+        case .sheet(.note):
+            withAnimation { proxy.scrollTo(Self.composerAnchor, anchor: .center) }
+            messageFocused = true
         case let .open(url): actions.openURL(url)
         case let .copy(text): actions.copy(text)
         default: actions.move(request)
@@ -794,12 +800,16 @@ struct TicketPageBody: View {
     let transcripts: StepTranscripts
     /// The event the page opened at, selected on the timeline.
     var focus: TimelineFocus?
-    let note: TicketNoteComposer
+    let message: TicketMessageComposer
     var decisions: [TicketDecision] = []
     var actions = TicketPageActions()
     /// Answer stays pressed while the sheet is open.
     var sheetOpen = false
     var answerFocus: FocusState<Bool>.Binding?
+    /// The keyboard in the box above the timeline.
+    var messageFocus: FocusState<Bool>.Binding?
+    /// Snapshots only: the box drawn in one state.
+    var composerDrawnAs: DesignTokens.Field.State?
     /// A move on the Action rail.
     var move: (TicketActionRail.Request) -> Void = { _ in }
     /// The decisions line's Answer.
@@ -878,6 +888,11 @@ struct TicketPageBody: View {
             }
             VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
                 TimelineTitle(marks: page.marksRead)
+                // Writing to the ticket: one box above the first entry; none on a ticket no run will read again.
+                if page.takesMessages {
+                    TimelineComposer(composer: message, focus: messageFocus, drawnAs: composerDrawnAs, send: actions.sendMessage)
+                        .id(TicketPageView.composerAnchor)
+                }
                 Group {
                     if let timelineStore {
                         StoredTimelineSection(
@@ -900,8 +915,8 @@ struct TicketPageBody: View {
     private func rail(width: CGFloat?) -> some View {
         let runs = page.history?.runs ?? [:]
         let connected = ConnectedPanelModel.build(page.factsRead?.connected)
-        // Pull request, Connected, Decisions (`docs/design/director-window-and-home.md`), then the Note and Details
-        // panels until later tickets replace them.
+        // Pull request, Connected, Decisions (`docs/design/director-window-and-home.md`), then the Details panel until
+        // TP-1504 replaces it.
         return VStack(alignment: .leading, spacing: gap) {
             // Each card draws again only when its model changed; their actions don't open the gate (TP-1480).
             PullRequestPanel(model: PullRequestPanelModel.build(page.factsRead?.pullRequest), open: actions.openURL)
@@ -913,14 +928,6 @@ struct TicketPageBody: View {
             }
             DecisionsPanel(model: DecisionsPanelModel.build(decisions))
                 .equatable()
-            NotePanel(
-                model: NotePanelModel.build(
-                    note: page.detailsRead?.note, move: page.detailsRead?.noteMove, runs: runs, reference: page.reference, calendar: calendar
-                ),
-                composer: note, save: actions.saveNote
-            )
-            .equatable()
-            .id(TicketPageView.noteAnchor)
             DetailsPanel(
                 model: DetailsPanelModel.build(
                     page.detailsRead, runs: runs, linearURL: page.url, pullRequest: page.factsRead?.pullRequest, description: nil,

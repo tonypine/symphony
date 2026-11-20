@@ -439,7 +439,6 @@ read yet (facts 6 and 18 of `docs/design/director-ticket-page.md`; `SymphonyElix
 | `looked_at` | When the person last looked at the ticket, set by `POST /api/v1/control/looked`; null when they never did. |
 | `new_since_looked` | How many of the ticket's events are later than `looked_at`; every event when it is null. |
 | `unread_messages` | How many messages (see Messages below) no run was given yet. |
-| `note` | Served only for the Mac app release that reads one note: the newest unread message, as `id`, `text`, `at` (when it was written), `by` and `read_by` (always null); null when every message was read. It is removed once the app's ticket page reads the messages. |
 
 `POST /api/v1/control/looked` takes `issue_identifier` and an optional `repo_key`, and needs the control
 token. It writes the mark on the ticket's record, keyed by person (the Director, the one person the token

@@ -42,8 +42,9 @@ final class SymphonyWindowModel: ObservableObject {
     let stepTranscripts: StepTranscripts
     /// The screenshots of the timeline's findings, read through `client` and kept by artifact id.
     let artifactImages: ArtifactImages
-    /// The facts rail's Note for the next run: what is typed, the note on its way, why the last one wasn't added.
-    let ticketNote = TicketNoteComposer()
+    /// The box above the ticket page's timeline: what is typed on each ticket, the message on its way, why the last one
+    /// wasn't sent.
+    let ticketMessage = TicketMessageComposer()
     /// The facts rail's Decisions panel: the decisions recorded on the shown ticket.
     let ticketDecisions = TicketDecisionsEditor()
     /// The build of the Symphony the window last read, to tell a restart onto another build.
