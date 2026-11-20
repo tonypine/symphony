@@ -13,7 +13,9 @@ An implementation run follows these steps (the default list, `phases.implementat
    - when macos/ changed: `cd macos && swift test --filter "$SYMPHONY_CHANGED_SWIFT_TEST_FILTER"`
 5. `window_tests` Window tests · machine · times out after 120 min · on failure returns to `code`
    - `symphony:window_tests`
-6. `handoff` Hand off: push and open the pull request · delegated
+6. `plan_checks` The plan's checks are proved · machine · times out after 1 min · on failure returns to `code`
+   - `symphony:checks`
+7. `handoff` Hand off: push and open the pull request · delegated
 
 
 ---

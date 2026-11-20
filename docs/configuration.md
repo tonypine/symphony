@@ -2142,7 +2142,8 @@ change gives a reason.
 
 A pass is live when its PR changes one of `paths` and the ticket's `## User walkthrough` names one
 of `walkthrough_mentions`. A `qa:live` label makes it live whatever the diff, and a `qa:fixture`
-label never does (it wins over `qa:live`). The QA decision's reason says which. The same rule
+label never does (it wins over `qa:live`). The QA decision's reason says which. For a ticket with a
+plan, the plan's QA checks are the steps, and the reason names them. The same rule
 selects the `macos_app` playbook when no changed path matches its own `paths`: a server-only change
 whose walkthrough walks the Director gets a live pass of the app. A pass that is not live starts no
 server.
@@ -4060,6 +4061,12 @@ phases:
         command: symphony:window_tests
         timeout_ms: 7200000
         on_fail: code
+      - id: plan_checks
+        title: The plan's checks are proved
+        mode: machine
+        command: symphony:checks
+        timeout_ms: 60000
+        on_fail: code
       - id: handoff
         title: "Hand off: push and open the pull request"
         mode: delegated
@@ -4077,7 +4084,7 @@ phases:
         command: symphony:findings
         timeout_ms: 60000
         on_fail: code
-      # code, build, checks, tests, window_tests and handoff, as in the implementation list
+      # code, build, checks, tests, window_tests, plan_checks and handoff, as in the implementation list
   ci_fix:
     steps:
       - id: fix
@@ -4115,11 +4122,12 @@ words, goes to the `code` step, in its prompt. A later QA failure of the same cl
 It guards the handoff of a ticket with a plan: it fails back to the step's `on_fail`, naming them,
 while a check of the plan that a test or an attachment proves (`proof: test`, `proof: attached`) is
 open, and passes at once when none is, or when the ticket has no plan. The failure says how each
-check is proved, and that a check nothing can prove this way is the Conductor's to waive. Place it
-in a step before `handoff`:
+check is proved, and that a check nothing can prove this way is the Conductor's to waive. The
+default `implementation` and `rework` lists run it as `plan_checks`, directly before `handoff`. A
+`symphony.yml` that lists its own steps is not changed: add the step to it, before `handoff`:
 
 ```yaml
-- {id: plan_checks, title: "The plan's checks", mode: machine, command: "symphony:checks", timeout_ms: 60000, on_fail: code}
+- {id: plan_checks, title: "The plan's checks are proved", mode: machine, command: "symphony:checks", timeout_ms: 60000, on_fail: code}
 ```
 
 Whatever the step list holds, Symphony does not move such a ticket to Code Review while one of

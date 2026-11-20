@@ -77,7 +77,6 @@ defmodule SymphonyElixir.PhaseSteps do
   alias SymphonyElixir.Workpad.Projection
 
   @output_max_bytes 512 * 1024
-  @checks_command "symphony:checks"
   @prompt_output_bytes 12_000
   @end_line ~r/^\((exit status \d+|stopped: .*|could not run: .*)\)$/
   @reason_command 80
@@ -299,7 +298,7 @@ defmodule SymphonyElixir.PhaseSteps do
   end
 
   defp shell_command?(step, changes),
-    do: Enum.any?(commands(step, changes), &(&1 not in [Phases.findings_command(), @checks_command]))
+    do: Enum.any?(commands(step, changes), &(&1 not in [Phases.findings_command(), Phases.checks_command()]))
 
   @doc """
   The built-in command of the step that guards the handoff of a groomed ticket (`symphony:checks`):
@@ -308,7 +307,7 @@ defmodule SymphonyElixir.PhaseSteps do
   Symphony runs it itself, not in a shell.
   """
   @spec checks_command() :: String.t()
-  def checks_command, do: @checks_command
+  def checks_command, do: Phases.checks_command()
 
   @doc """
   Runs the machine steps of `steps` from `step` on (see the moduledoc) and returns where the run
@@ -414,7 +413,7 @@ defmodule SymphonyElixir.PhaseSteps do
   defp run_command(command, context, env, timeout_ms) do
     cond do
       command == Phases.findings_command() -> read_findings(context)
-      command == @checks_command -> read_checks(context)
+      command == Phases.checks_command() -> read_checks(context)
       command == Phases.window_tests_command() -> Map.get(context, :window_tests, &WindowTests.run/2).(context, timeout_ms)
       command == Phases.failed_check_command() -> FailedCheck.run(context, timeout_ms, &runner(context).(&1, env, &2))
       builtin = Map.get(Map.get(context, :builtins, %{}), command) -> builtin.(context)

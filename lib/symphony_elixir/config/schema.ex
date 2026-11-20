@@ -2189,7 +2189,7 @@ defmodule SymphonyElixir.Config.Schema do
 
     A kind the file doesn't set follows its default list (`default_steps/1`): the steps of
     decision 2 for `implementation` (`code`, `build`, `checks`, `tests`, then TP-1554's
-    `window_tests`, and `handoff`), the same with
+    `window_tests`, the `plan_checks` guard of a ticket with a plan, and `handoff`), the same with
     `findings` before them for `rework`, TP-1555's list for `ci_fix` (`fix`, the same checks, then
     `failed_check` before `window_tests`, and `handoff`), none for every other kind. A step list is refused at load, naming the step, when a step's `on_fail` names a step
     not in the list, when failures can loop with no delegated step in the loop (the same commands
@@ -2209,6 +2209,7 @@ defmodule SymphonyElixir.Config.Schema do
     @kind_names Map.new(@kinds, &{Atom.to_string(&1), &1})
     @findings_command "symphony:findings"
     @window_tests_command "symphony:window_tests"
+    @checks_command "symphony:checks"
     @failed_check_command "symphony:failed_check"
     # The checks the CI Fix run's failed-check step can't run outside GitHub (TP-1555): a check, or
     # one step of it, and why. Short on purpose; the Director's Settings › Phases lists them
@@ -2674,6 +2675,14 @@ defmodule SymphonyElixir.Config.Schema do
     def window_tests_command, do: @window_tests_command
 
     @doc """
+    The machine step command Symphony runs itself for the step that guards the handoff of a ticket
+    with a plan: it fails, naming them, while a check of the plan that a test or an attachment
+    proves is open, and passes at once for a ticket with no plan (`SymphonyElixir.PhaseSteps`).
+    """
+    @spec checks_command() :: String.t()
+    def checks_command, do: @checks_command
+
+    @doc """
     The machine step command Symphony runs itself for a CI Fix run's failed-check step: it runs
     again, on the run's new commit, what failed on GitHub (`SymphonyElixir.PhaseSteps.FailedCheck`).
     """
@@ -2732,7 +2741,9 @@ defmodule SymphonyElixir.Config.Schema do
     `swift test` for the changed targets when `macos/` changed), runs the window tests the change
     selects in the QA VM (`window_tests`, Symphony's own `window_tests_command/0`; skipped when the
     change touches nothing a declared window test covers), each returning to `code` on failure, then
-    hands off (delegated). `rework` reads the open findings first (`findings`, machine),
+    makes sure the plan's checks a test or an attachment proves are proved (`plan_checks`, Symphony's
+    own `checks_command/0`, which returns to `code` too and passes at once for a ticket with no
+    plan), then hands off (delegated). `rework` reads the open findings first (`findings`, machine),
     which pauses on a Question when a failure came back, then follows the same steps. `ci_fix`
     (TP-1555) fixes the failed check (`fix`, delegated), runs the same build, checks and tests,
     then runs again what failed on GitHub (`failed_check`, Symphony's own `failed_check_command/0`),
@@ -2819,7 +2830,23 @@ defmodule SymphonyElixir.Config.Schema do
     defp default_implementation_steps do
       [%{"id" => "code", "title" => "Write the code", "mode" => "delegated"}] ++
         default_check_steps("code") ++
-        [default_window_tests_step("code"), %{"id" => "handoff", "title" => "Hand off: push and open the pull request", "mode" => "delegated"}]
+        [
+          default_window_tests_step("code"),
+          default_plan_checks_step(),
+          %{"id" => "handoff", "title" => "Hand off: push and open the pull request", "mode" => "delegated"}
+        ]
+    end
+
+    # The guard reads the ticket's events and runs no shell: a ticket with no plan passes it at once.
+    defp default_plan_checks_step do
+      %{
+        "id" => "plan_checks",
+        "title" => "The plan's checks are proved",
+        "mode" => "machine",
+        "command" => @checks_command,
+        "timeout_ms" => 60_000,
+        "on_fail" => "code"
+      }
     end
 
     # The failed check runs after the build, checks and tests, on what they passed, and before the

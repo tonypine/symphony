@@ -454,6 +454,11 @@ public enum PhaseDefaults {
     /// the QA VM (`Config.Schema.Phases.window_tests_command/0`).
     public static let windowTestsCommand = "symphony:window_tests"
 
+    /// The machine step command Symphony runs itself for the step that guards the handoff of a ticket with a plan: it
+    /// fails while a check of the plan that a test or an attachment proves is open, and passes at once for a ticket with
+    /// no plan (`Config.Schema.Phases.checks_command/0`).
+    public static let checksCommand = "symphony:checks"
+
     /// The machine step command Symphony runs itself for a CI Fix run's failed-check step: what failed on GitHub, run
     /// again on the run's commit (`Config.Schema.Phases.failed_check_command/0`).
     public static let failedCheckCommand = "symphony:failed_check"
@@ -519,7 +524,18 @@ public enum PhaseDefaults {
 
     private static var implementation: [PhaseStep] {
         [PhaseStep(stepID: "code", title: "Write the code", mode: .delegated)] + checks(returningTo: "code")
-            + [windowTests(returningTo: "code"), PhaseStep(stepID: "handoff", title: "Hand off: push and open the pull request", mode: .delegated)]
+            + [
+                windowTests(returningTo: "code"),
+                PhaseStep(
+                    stepID: "plan_checks",
+                    title: "The plan's checks are proved",
+                    mode: .machine,
+                    commands: [StepCommand(run: checksCommand)],
+                    timeoutMs: 60_000,
+                    onFail: "code"
+                ),
+                PhaseStep(stepID: "handoff", title: "Hand off: push and open the pull request", mode: .delegated),
+            ]
     }
 
     private static var ciFix: [PhaseStep] {

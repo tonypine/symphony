@@ -3127,8 +3127,10 @@ commands Symphony runs, `orchestrated` steps agent turns Symphony starts from a 
 `delegated` steps work the agent does in its session and records itself. A failed step returns the
 run to the step its `on_fail` names, with its output; a step that ends with no result
 `no_result_limit` times in a row (default 2) pauses the run on a Question. The implementation
-default is `code` (delegated), `build`, `checks`, `tests` and `window_tests` (machine, each
-returning to `code` on failure) and `handoff` (delegated). `window_tests` runs, in the QA VM, the
+default is `code` (delegated), `build`, `checks`, `tests`, `window_tests` and `plan_checks` (machine, each
+returning to `code` on failure) and `handoff` (delegated). `plan_checks` (`symphony:checks`) runs no
+shell: it fails, naming them, while a check of the ticket's plan that a test or an attachment proves
+is open, and passes at once for a ticket with no plan. `window_tests` runs, in the QA VM, the
 window-driving tests whose script or covered path the change touches, as the manifest beside them
 declares, and is skipped otherwise; a test that fails there and passes on the base branch returns
 the run to `code`, and a step that could not run (the VM unreachable, a build the VM could not run,
