@@ -322,7 +322,7 @@ defmodule SymphonyElixir.Conductor.FactsTest do
 
       facts = Facts.build(ctx.record, "grooming", token_cap: 10)
 
-      assert %{schema: "symphony.conductor.facts/1", junction: "grooming", parent: nil, siblings: [], conductor: []} = facts
+      assert %{schema: "symphony.conductor.facts/1", junction: "grooming", parent: nil, siblings: [], sub_tickets: [], conductor: []} = facts
       assert %{tokens_used: 0, tokens_cap: 10} = facts.budget
       assert facts.focus =~ "you write its plan"
       assert facts.ticket == %{identifier: ctx.identifier, title: "Fix login", url: ctx.record.url, repo: ctx.repo, labels: []}
@@ -364,6 +364,19 @@ defmodule SymphonyElixir.Conductor.FactsTest do
       assert facts.siblings == [
                %{identifier: family.sibling.issue_identifier, title: "The API filter", phase: "Done", notes: [%{event_id: found.id, tag: "discovery", text: "The endpoint pages by 50."}]}
              ]
+    end
+
+    test "a ticket that already has sub-tickets lists them, for a split to adopt", ctx do
+      family = family!(ctx)
+      known = %{id: family.sibling.issue_id, identifier: family.sibling.issue_identifier, state: "Done"}
+      parent = Map.put(family.parent, :sub_issues, [known, %{id: "untracked", identifier: "NEW-1", state: "Backlog"}])
+
+      assert Facts.build(parent, "grooming", token_cap: nil).sub_tickets == [
+               %{identifier: family.sibling.issue_identifier, title: "The API filter", state: "Done"},
+               %{identifier: "NEW-1", title: nil, state: "Backlog"}
+             ]
+
+      assert Facts.build(Map.put(family.parent, :sub_issues, :unknown), "grooming", token_cap: nil).sub_tickets == []
     end
 
     test "a parent Symphony does not track, or one with no plan yet, gives what there is", ctx do

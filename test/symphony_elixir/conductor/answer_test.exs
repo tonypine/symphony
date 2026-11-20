@@ -324,14 +324,16 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
     test "a split names its sub-tickets, each with a key; a single plan keeps none" do
       subs = [
         %{"title" => "The API returns the filter", "ask" => "Add the filter to the list endpoint.", "repo" => "web"},
-        %{"key" => "screen", "title" => "The list keeps it", "ask" => "Read the filter.", "after" => ["s1", " ", 3, "s1"]}
+        %{"key" => "screen", "title" => "The list keeps it", "ask" => "Read the filter.", "after" => ["s1", " ", 3, "s1"]},
+        %{"title" => "The docs", "ask" => "Describe it.", "identifier" => " TP-12 "}
       ]
 
       assert {:ok, %{plan: %{shape: "split", sub_tickets: sub_tickets}}} = plan(%{"shape" => "split", "sub_tickets" => subs})
 
       assert sub_tickets == [
                %{key: "s1", title: "The API returns the filter", ask: "Add the filter to the list endpoint.", after: [], repo: "web"},
-               %{key: "screen", title: "The list keeps it", ask: "Read the filter.", after: ["s1"]}
+               %{key: "screen", title: "The list keeps it", ask: "Read the filter.", after: ["s1"]},
+               %{key: "s3", title: "The docs", ask: "Describe it.", after: [], identifier: "TP-12"}
              ]
 
       assert {:ok, %{plan: plan}} = plan(%{"sub_tickets" => subs})

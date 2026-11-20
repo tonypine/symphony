@@ -4,7 +4,8 @@ defmodule SymphonyElixir.SubIssueWaitTest do
   import ExUnit.CaptureLog
 
   alias SymphonyElixir.Config.{Schema, SystemSchema}
-  alias SymphonyElixir.{RunKind, RunStore, SubIssueWait, TicketObservation, TicketPullRequest, TicketSignals}
+  alias SymphonyElixir.{RunKind, RunStore, SubIssueWait}
+  alias SymphonyElixir.{TicketObservation, TicketPlan, TicketPullRequest, TicketSignals}
 
   @waiting "Waiting on sub-tickets"
 
@@ -130,6 +131,30 @@ defmodule SymphonyElixir.SubIssueWaitTest do
 
       capture_log(fn -> assert :disabled = SubIssueWait.check_tracker_state(Config.settings!(), []) end)
       refute SubIssueWait.enabled?(Config.settings!())
+    end
+  end
+
+  describe "a groomed ticket whose plan label survived" do
+    test "is out of the old plan flow: no breakdown run, no epic review, and it is held in the waiting state" do
+      settings = Config.settings!()
+      done = [%{id: "c1", identifier: "MT-2", state: "Done"}]
+      parent = %Issue{id: "groomed-labelled", identifier: "MT-1", title: "Parent", state: @waiting, labels: ["plan"], sub_issues: done}
+      assert RunKind.classify(parent, terminal_states: ["Done"], settings: settings) == :epic_review
+      refute SubIssueWait.groomed?(parent)
+      refute SubIssueWait.groomed?(nil)
+
+      checks = [%{id: "c1", kind: "outcome", statement: "It works.", proof: "test"}]
+      plan = %{reason: "Grooming", by: "grooming", shape: "single", layers: ["engine"], summary: "s", text: "t"}
+      plan = Map.merge(plan, %{checks: checks, size: %{tokens: 1, runs: 1}})
+      {:ok, _event} = TicketPlan.write("default", "groomed-labelled", plan)
+
+      assert SubIssueWait.groomed?(parent)
+      refute SubIssueWait.close_out_ready?(parent, ["Done"], settings)
+      assert SubIssueWait.held?(parent, ["Done"], settings)
+      assert RunKind.classify(parent, terminal_states: ["Done"], settings: settings) == :implementation
+      unsplit = %{parent | state: "Todo", sub_issues: []}
+      assert RunKind.classify(unsplit, terminal_states: ["Done"], settings: settings) == :implementation
+      assert RunKind.classify(%{parent | id: nil, state: "Todo", sub_issues: []}, settings: settings) == :breakdown
     end
   end
 

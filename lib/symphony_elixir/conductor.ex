@@ -82,7 +82,7 @@ defmodule SymphonyElixir.Conductor do
   }
 
   alias SymphonyElixir.ClaudeCode.AppServer, as: ClaudeAppServer
-  alias SymphonyElixir.Conductor.{Answer, Blocks, Facts, Filing, Grooming, Steer, Watch}
+  alias SymphonyElixir.Conductor.{Answer, Blocks, Facts, Filing, Grooming, Steer, Tree, Watch}
   alias SymphonyElixir.Config.Runs.Run
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Harnesses.Launcher
@@ -173,7 +173,7 @@ defmodule SymphonyElixir.Conductor do
   """
   @spec dispatch_junction(atom() | String.t(), [Event.t()]) :: String.t() | nil
   def dispatch_junction(next_kind, events) when is_list(events) do
-    if Grooming.due?(next_kind, events), do: @grooming, else: junction_after_run(next_kind, events)
+    if Grooming.due?(next_kind, events) or Grooming.split_due?(next_kind, events), do: @grooming, else: junction_after_run(next_kind, events)
   end
 
   defp junction_after_run(next_kind, events) do
@@ -394,11 +394,39 @@ defmodule SymphonyElixir.Conductor do
   # it left decides what the dispatched run does. A question holds it. A plan lets it start (or, on
   # a ticket taken out of the old plan flow, leaves the start to the next dispatch). Anything else
   # is a try that failed.
-  defp groom(%{unavailable: provider} = plan, issue, _opts) do
+  # A ticket whose plan is already a split gets no turn: the split is carried out (again), which
+  # creates what is missing and leaves the ticket waiting on its sub-tickets.
+  defp groom(%{issue_id: issue_id} = plan, issue, opts) do
+    if split?(issue_id), do: split(plan, issue, opts), else: groom_turn(plan, issue, opts)
+  end
+
+  defp split?(issue_id), do: match?(%{shape: "split"}, TicketPlan.current(issue_id))
+
+  # The ticket waits on its sub-tickets once the split is done, so its run does not start. A split
+  # that failed is tried again at the next dispatch, and after a few failures the person is asked.
+  defp split(plan, issue, opts) do
+    case Grooming.split(plan.repo_key, issue, Keyword.take(opts, [:tracker, :repo, :routed_teams, :observe])) do
+      :ok -> :again
+      {:error, why} -> split_failed(plan, issue, why)
+    end
+  end
+
+  defp split_failed(plan, issue, why) do
+    Logger.warning("Grooming could not split the ticket #{context(issue, plan)}: #{why}")
+
+    with :ask <- Tree.failed(plan.repo_key, plan.issue_id, why),
+         :held <- ask_person(Tree.question(why), plan, issue, "conductor-split-" <> Event.ulid(DateTime.utc_now())) do
+      :held
+    else
+      _retry -> :again
+    end
+  end
+
+  defp groom_turn(%{unavailable: provider} = plan, issue, _opts) do
     ungroomed(plan, issue, "no provider of runs.conductor can take a run now (#{provider})")
   end
 
-  defp groom(%{issue_id: issue_id, repo_key: repo_key} = plan, issue, opts) do
+  defp groom_turn(%{issue_id: issue_id, repo_key: repo_key} = plan, issue, opts) do
     Grooming.record_ask(repo_key, issue, record(issue_id, opts), Facts.events(issue_id))
 
     case turn(in_workspace(plan, issue, opts), issue, opts) do
@@ -421,9 +449,12 @@ defmodule SymphonyElixir.Conductor do
   defp after_grooming(false = _groomed?, exit, plan, issue, _opts), do: ungroomed(plan, issue, why_ungroomed(exit))
 
   defp after_grooming(true, _exit, plan, issue, opts) do
-    case Grooming.take_over(plan.repo_key, issue, Keyword.take(opts, [:tracker])) do
-      :taken_over -> :again
-      :unchanged -> :ok
+    taken = Grooming.take_over(plan.repo_key, issue, Keyword.take(opts, [:tracker]))
+
+    cond do
+      split?(plan.issue_id) -> split(plan, issue, opts)
+      taken == :taken_over -> :again
+      true -> :ok
     end
   end
 
@@ -463,7 +494,7 @@ defmodule SymphonyElixir.Conductor do
     Logger.info("Conductor turn started #{context(issue, plan)} run_id=#{run_id} junction=#{junction} model=#{plan.run_profile.model}")
 
     turn = Keyword.get(opts, :turn, &harness_turn(&1, &2, &3, &4, Keyword.get(opts, :agent_module)))
-    outcome = plan |> timed_turn(issue, run_id, prompt(junction, facts), turn) |> with_plan(plan, issue, run_id)
+    outcome = plan |> timed_turn(issue, run_id, prompt(junction, facts), turn) |> with_plan(plan, issue, run_id, opts)
     tokens = elem(outcome, 2)
     {exit, held, route} = record_outcome(outcome, plan, %{issue | state: phase}, run_id, {facts, record, opts})
     record_run_ended(plan, issue, run_id, %{exit: exit, tokens: tokens, started_at: started_at, phase: phase})
@@ -472,14 +503,14 @@ defmodule SymphonyElixir.Conductor do
 
   # The plan a Grooming turn answered, recorded before anything else of the answer: a plan Symphony
   # refuses makes the whole answer unreadable, so nothing of it is recorded.
-  defp with_plan({:ok, %{plan: %{} = answered}, tokens} = outcome, plan, issue, run_id) do
-    case Grooming.write_plan(plan.repo_key, issue, answered, run_id: run_id, idempotency: "plan.written:#{run_id}") do
+  defp with_plan({:ok, %{plan: %{} = answered}, tokens} = outcome, plan, issue, run_id, opts) do
+    case Grooming.write_plan(plan.repo_key, issue, answered, [run_id: run_id, idempotency: "plan.written:#{run_id}"] ++ Keyword.take(opts, [:repo])) do
       {:ok, _event} -> outcome
       {:error, why} -> {:error, {:plan_refused, why}, tokens}
     end
   end
 
-  defp with_plan(outcome, _plan, _issue, _run_id), do: outcome
+  defp with_plan(outcome, _plan, _issue, _run_id, _opts), do: outcome
 
   # Whether the Grooming turn can read the code: it runs in the ticket's workspace when one exists.
   defp with_code(facts, %{junction: @grooming} = plan) do

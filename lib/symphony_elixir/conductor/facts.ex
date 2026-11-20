@@ -41,7 +41,9 @@ defmodule SymphonyElixir.Conductor.Facts do
   (same `schema`, `junction` and `focus`): `ticket` (identifier, title, URL, `repo` and labels),
   `asks` (every `ask.recorded`, oldest first, word for word: its `source` and where it came
   `from`), the person's `decisions`, `notes` and `answers`, `parent` (when the ticket has one
-  Symphony tracks: its identifier, title, current `plan` and the notes a run tagged), `siblings`
+  Symphony tracks: its identifier, title, current `plan` and the notes a run tagged), `sub_tickets`
+  (the sub-tickets the ticket already has, made by hand or by an earlier split: each one's
+  identifier, title and state, for a split to adopt), `siblings`
   (the parent's other sub-tickets that hold a tagged note, with those notes), `layers` (the layer
   vocabulary a plan names, each with what it means), `conductor` (what earlier turns wrote) and
   `budget`.
@@ -207,6 +209,7 @@ defmodule SymphonyElixir.Conductor.Facts do
       notes: person_notes(events),
       answers: answers(events),
       parent: parent && parent_facts(parent),
+      sub_tickets: sub_tickets(record, records),
       siblings: siblings(record, parent, records),
       layers: for({name, means} <- @layers, do: %{name: Atom.to_string(name), means: means}),
       conductor: conductor(events),
@@ -216,6 +219,12 @@ defmodule SymphonyElixir.Conductor.Facts do
 
   defp records do
     with({:error, _reason} <- RunStore.list_all_ticket_states(), do: []) |> List.wrap() |> Enum.map(&TicketState.normalize/1)
+  end
+
+  # The sub-tickets the ticket already has, each with the title its own record holds.
+  defp sub_tickets(%{sub_issues: sub_issues}, records) do
+    titles = Map.new(records, &{&1.issue_identifier, &1.title})
+    for %{identifier: identifier} = sub <- List.wrap(sub_issues), do: %{identifier: identifier, title: titles[identifier], state: Map.get(sub, :state)}
   end
 
   defp parent_record(%{parent: %{identifier: identifier}}, records), do: Enum.find(records, &(&1.issue_identifier == identifier and is_binary(&1.issue_id)))

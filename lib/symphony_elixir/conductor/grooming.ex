@@ -13,8 +13,12 @@ defmodule SymphonyElixir.Conductor.Grooming do
   word but for Symphony's own blocks, once. The turn runs in the ticket's workspace
   (`workspace/3`), created as the run's would be, with read-only tools, so it may read the code.
 
-  A plan the turn wrote is recorded as version 1 (`write_plan/4`, `by: grooming`). A `split` is not
-  carried out yet (`split/3`): its plan is recorded as a `single` one. A ticket labelled `plan` or
+  A plan the turn wrote is recorded as version 1 (`write_plan/4`, `by: grooming`). A `split` is
+  carried out once it is written (`split/3`, `SymphonyElixir.Conductor.Tree`): its sub-tickets are
+  created, and the ticket waits on them with no run of its own. A first run about to start on a
+  ticket whose plan is a split carries the split out again instead (`split_due?/2`), creating only
+  what is missing. Where the waiting state is off, a split plan is recorded as a `single` one. A
+  ticket labelled `plan` or
   `breakdown` is groomed like any other: once its plan is written the label is taken off
   (`take_over/3`), in the tracker and on the record, so no breakdown run follows.
 
@@ -28,7 +32,7 @@ defmodule SymphonyElixir.Conductor.Grooming do
 
   require Logger
 
-  alias SymphonyElixir.Conductor.{Answer, Facts}
+  alias SymphonyElixir.Conductor.{Answer, Facts, Tree}
   alias SymphonyElixir.{Decisions, IssueSummary, RunStore, TicketEvents, TicketPlan}
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.TicketEvents.Event
@@ -57,6 +61,16 @@ defmodule SymphonyElixir.Conductor.Grooming do
   end
 
   defp plan?(%Event{type: type}), do: type == "plan.written"
+
+  @doc """
+  Whether a run of `next_kind` about to start on the ticket whose `events` these are meets a split
+  instead: it is a first run, and the ticket's plan is a `split`. Such a ticket gets no run: its
+  split is carried out (`split/3`), which leaves it waiting on its sub-tickets.
+  """
+  @spec split_due?(atom() | String.t(), [Event.t()]) :: boolean()
+  def split_due?(next_kind, events) when is_list(events) do
+    to_string(next_kind) in @first_kinds and match?(%{shape: "split"}, TicketPlan.current(events))
+  end
 
   defp worked?(%Event{type: type} = event) when type in ["run.started", "run.ended"], do: payload(event, :run_kind) != "conductor"
   defp worked?(_event), do: false
@@ -141,42 +155,69 @@ defmodule SymphonyElixir.Conductor.Grooming do
   end
 
   @doc """
-  Records the turn's `plan` as the first version of the plan of `issue` (`by: grooming`). A `split`
-  plan goes through `split/3` first. `{:error, why}`, in plain words, for a plan
-  `SymphonyElixir.TicketPlan.write/4` refuses.
+  Records the turn's `plan` as the first version of the plan of `issue` (`by: grooming`).
+  `{:error, why}`, in plain words, for a plan `SymphonyElixir.TicketPlan.write/4` refuses, and for
+  a `split` whose sub-tickets Symphony refuses (`SymphonyElixir.Conductor.Tree.refusal/4`: an
+  unmanaged repo, or an `identifier` that is not one of the ticket's sub-tickets). A split is
+  carried out after it is recorded (`split/3`); where it can't be (the waiting state is off), the
+  plan is recorded as a `single` one. `opts[:repo]` is `Tree.refusal/4`'s; the others are
+  `TicketPlan.write/4`'s.
   """
   @spec write_plan(String.t(), Issue.t(), Answer.plan(), keyword()) :: {:ok, Event.t()} | {:error, String.t()}
   def write_plan(repo_key, %Issue{id: issue_id} = issue, plan, opts \\ []) do
-    plan = repo_key |> shaped(issue, plan) |> Map.merge(%{reason: @reason, by: "grooming"})
+    {split_opts, opts} = Keyword.split(opts, [:repo])
 
-    case TicketPlan.write(repo_key, issue_id, plan, opts) do
-      {:ok, event} -> {:ok, event}
+    with {:ok, plan} <- shaped(repo_key, issue, plan, split_opts),
+         {:ok, event} <- TicketPlan.write(repo_key, issue_id, Map.merge(plan, %{reason: @reason, by: "grooming"}), opts) do
+      {:ok, event}
+    else
       {:error, {:invalid_plan, reasons}} -> {:error, "its plan was refused: " <> Enum.join(reasons, "; ")}
+      {:error, {:refused, why}} -> {:error, "its plan was refused: " <> why}
       {:error, reason} -> {:error, "its plan could not be recorded: #{inspect(reason)}"}
     end
   end
 
-  # A split is carried out by `split/3`. Until it is, the plan is recorded as a single ticket's.
-  defp shaped(repo_key, issue, %{shape: "split"} = plan) do
-    {:error, :not_supported} = split(repo_key, issue, plan)
+  defp shaped(repo_key, issue, %{shape: "split"} = plan, opts) do
+    entries = Map.get(plan, :sub_tickets, [])
 
-    Logger.warning(
-      "Grooming planned a split issue_id=#{issue.id} issue_identifier=#{issue.identifier} repo_key=#{repo_key} " <>
-        "sub_tickets=#{length(Map.get(plan, :sub_tickets, []))}; a split is not carried out yet, so the ticket goes on as a single one"
-    )
+    cond do
+      not Tree.supported?(repo_key) ->
+        Logger.warning(
+          "Grooming planned a split issue_id=#{issue.id} issue_identifier=#{issue.identifier} repo_key=#{repo_key} " <>
+            "sub_tickets=#{length(entries)}; the waiting state is off, so the ticket goes on as a single one"
+        )
 
-    plan |> Map.put(:shape, "single") |> Map.delete(:sub_tickets)
+        {:ok, plan |> Map.put(:shape, "single") |> Map.delete(:sub_tickets)}
+
+      why = Tree.refusal(entries, repo_key, sub_tickets(issue), opts) ->
+        {:error, {:refused, why}}
+
+      true ->
+        {:ok, plan}
+    end
   end
 
-  defp shaped(_repo_key, _issue, plan), do: plan
+  defp shaped(_repo_key, _issue, plan, _opts), do: {:ok, plan}
+
+  # The identifiers of the sub-tickets the ticket already has: the issue's, and its record's.
+  defp sub_tickets(%Issue{id: issue_id, sub_issues: sub_issues}) do
+    recorded =
+      case RunStore.get_ticket_state(issue_id) do
+        %{sub_issues: recorded} -> recorded
+        _none -> []
+      end
+
+    for %{identifier: identifier} <- List.wrap(if(is_list(sub_issues), do: sub_issues)) ++ List.wrap(if(is_list(recorded), do: recorded)), uniq: true, do: identifier
+  end
 
   @doc """
-  Carries out a `split` plan on `issue`: one sub-ticket per `sub_tickets` entry, after which the
-  ticket waits on them and no run starts on it. Not supported yet: `{:error, :not_supported}`, on
-  which `write_plan/4` records the plan as a `single` one and the first run starts.
+  Carries out the `split` plan `issue` holds (`SymphonyElixir.Conductor.Tree.split/3`): one
+  sub-ticket per `sub_tickets` entry that names none yet, after which the ticket waits on them and
+  no run starts on it. `:ok` once it waits; `{:error, why}` when a step failed, with what was
+  created kept on the plan, so the next call creates only what is missing.
   """
-  @spec split(String.t(), Issue.t(), Answer.plan()) :: {:error, :not_supported}
-  def split(_repo_key, %Issue{}, %{shape: "split"}), do: {:error, :not_supported}
+  @spec split(String.t(), Issue.t(), keyword()) :: :ok | {:error, String.t()}
+  def split(repo_key, %Issue{} = issue, opts \\ []), do: Tree.split(repo_key, issue, opts)
 
   @doc """
   Takes a groomed `issue` out of the old plan flow: a ticket labelled `plan` or `breakdown` loses

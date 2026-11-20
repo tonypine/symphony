@@ -44,8 +44,9 @@ defmodule SymphonyElixir.Conductor.Answer do
       `statement` (cut to 600) and its `proof` (`test`, `qa`, `design`, `attached`); a `qa` check
       also the `action` and what to `expect`, and any check may say the app `state` it needs (each
       cut to 400), the `size` it is walked at (`normal`, `wide`) and a Gallery `story`. A sub-ticket
-      holds a `title` (cut to 120) and an `ask` (cut to 4,000), the sibling keys it waits `after`
-      and a `repo`. A check with no `id` gets `c<its place>` and a sub-ticket with no `key`
+      holds a `title` (cut to 120) and an `ask` (cut to 4,000), the sibling keys it waits `after`,
+      a `repo`, and the `identifier` of a sub-ticket the ticket already has, which is adopted
+      instead of created. A check with no `id` gets `c<its place>` and a sub-ticket with no `key`
       `s<its place>`. With a question (`ask_person`) the plan is left unread: the person answers
       first. A Grooming answer holds a plan or a question; one with neither is refused, and so is
       a plan that misses this shape. Its `instructions` may be null.
@@ -276,6 +277,7 @@ defmodule SymphonyElixir.Conductor.Answer do
 
       %{key: id(entry, "key", "s", place), title: title, ask: ask, after: waits}
       |> put_text(:repo, entry, 200, where)
+      |> put_text(:identifier, entry, 50, where)
       |> then(&{:ok, &1})
     end
   end

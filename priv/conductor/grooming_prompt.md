@@ -29,7 +29,16 @@ How to groom, in order:
    - write each `ask` as a complete request, for someone who has read nothing else: it gets its
      own Grooming;
    - use `after` only where a sub-ticket builds on another's merged code;
-   - arrange them so that sub-tickets that can run at the same time do not touch the same files.
+   - arrange them so that sub-tickets that can run at the same time do not touch the same files;
+   - when `sub_tickets` in the facts lists sub-tickets the ticket already has (someone made them
+     by hand, or an earlier split stopped half way), adopt each one that covers a piece of the
+     work: list it with its `identifier`, and Symphony keeps it as it is instead of creating a
+     second one. Its `title` and `ask` then only describe it. An existing sub-ticket you do not
+     list stays under the ticket and still has to end before the ticket closes.
+   After a split Symphony creates the sub-tickets, each in Todo and Urgent under this ticket, and
+   this ticket waits for them: it gets no coding run of its own. Each time one ends you are asked
+   what is left of the plan, and when the last one ends you check the whole ticket against its
+   outcomes before it closes.
 4. Write the outcomes: checks of kind `outcome`. Each is one statement that someone can observe
    to be true or false when the work is done ("The ticket list keeps its filter after a reload"),
    not a task ("Refactor the list") and not a way of building it. Write few. They are the only
@@ -93,7 +102,8 @@ Write your answer as one JSON object and nothing else:
        "action": "<what the person does>", "expect": "<what they see>", "size": "normal" or "wide", "story": "<optional Gallery story id>"}
     ],
     "size": {"tokens": <whole number>, "runs": <whole number>},
-    "sub_tickets": [{"title": "<at most 120 characters>", "ask": "<the complete request>", "after": ["s1"], "repo": "<optional repo key>"}]
+    "sub_tickets": [{"title": "<at most 120 characters>", "ask": "<the complete request>", "after": ["s1"], "repo": "<optional repo key>",
+                     "identifier": "<only to adopt a sub-ticket the ticket already has>"}]
   },
   "update": "<for the person> or null",
   "ask_person": null or {"title": "<at most 120 characters>", "question": "<one question>", "why": "<why the ask is ambiguous>",

@@ -29,9 +29,10 @@ defmodule SymphonyElixir.SubIssueWait do
 
   require Logger
 
-  alias SymphonyElixir.{Config, RunStore, TicketPullRequest, TicketSignals, TicketState, Tracker, TransitionGuard}
+  alias SymphonyElixir.{Config, RunStore, TicketPlan, TicketPullRequest}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.{TicketSignals, TicketState, Tracker, TransitionGuard}
 
   @parked_from_state "In Progress"
   @backlog_state "Backlog"
@@ -111,15 +112,22 @@ defmodule SymphonyElixir.SubIssueWait do
   True when a `breakdown` parent is ready for its epic's close, the epic review: its sub-issues are
   all terminal (`Issue.close_out_ready?/2`), or it sits in the waiting state with none left, as when
   every child was re-parented to another epic or deleted. A parent with no sub-issues anywhere else
-  (`Todo`, `In Progress`) has no plan yet: it gets a plan run, not the close.
+  (`Todo`, `In Progress`) has no plan yet: it gets a plan run, not the close. A groomed ticket
+  (`SymphonyElixir.TicketPlan`) is never ready for it, even when its `plan` label survived: its
+  close is the Conductor's final check.
   """
   @spec close_out_ready?(Issue.t() | term(), Enumerable.t(String.t()), Schema.t() | term()) :: boolean()
   def close_out_ready?(%Issue{} = issue, terminal_states, settings) do
-    Issue.close_out_ready?(issue, terminal_states) or
-      (Issue.breakdown?(issue) and issue.sub_issues == [] and in_state?(issue, settings))
+    (Issue.close_out_ready?(issue, terminal_states) or
+       (Issue.breakdown?(issue) and issue.sub_issues == [] and in_state?(issue, settings))) and not groomed?(issue)
   end
 
   def close_out_ready?(_issue, _terminal_states, _settings), do: false
+
+  @doc "Whether `issue` is groomed: its record holds a plan (`SymphonyElixir.TicketPlan.groomed?/1`)."
+  @spec groomed?(Issue.t() | term()) :: boolean()
+  def groomed?(%Issue{id: issue_id}) when is_binary(issue_id), do: TicketPlan.groomed?(issue_id)
+  def groomed?(_issue), do: false
 
   @doc """
   True when an issue in the waiting state must not run: anything but a `breakdown`
