@@ -17,14 +17,18 @@ defmodule SymphonyElixir.Conductor.Answer do
       points at (`steps`, `evidence`, `budget`, `path`, `attempts`, `compare`, `findings`, `epic`;
       `SymphonyElixir.Conductor.Blocks` resolves them); an unknown or malformed entry is dropped, and
       never fails the answer;
-    * `stop` (a watch turn's): null, or `{"reason": ...}` to end the running run.
+    * `stop` (a watch turn's): null, or `{"reason": ...}` to end the running run;
+    * `route` (a turn's at `after_qa_blocked` only, `route: true`; ignored at every other junction):
+      null, `{"to": "rerun"}` (QA runs again on the same change) or `{"to": "rework", "finding":
+      ...}` (the ticket goes to Rework with the finding: what must change so QA can prove the step,
+      a non-blank string cut to 600 characters).
 
   A text longer than its limit is cut to it at a sentence or word boundary (`Facts.fit/2`) and
   logged, never refused; only an answer that is not readable (not JSON, a wrong type, a blank
   required text) is.
 
   A watch turn (`watch: true`) may leave `instructions` null. An answer that misses the schema is
-  refused with why, in plain words.
+  refused with why, in plain words: a malformed `route` too, since it decides a move.
   """
 
   require Logger
@@ -34,6 +38,7 @@ defmodule SymphonyElixir.Conductor.Answer do
 
   @instructions_max 3_000
   @update_max 1_200
+  @finding_max 600
   @steer_max 1_500
   @title_max 120
   @blocks_max 3
@@ -48,7 +53,8 @@ defmodule SymphonyElixir.Conductor.Answer do
           ask_person: map() | nil,
           steer: %{message: String.t(), when: String.t()} | nil,
           stop: %{reason: String.t()} | nil,
-          blocks: [map()]
+          blocks: [map()],
+          route: %{to: String.t()} | %{to: String.t(), finding: String.t()} | nil
         }
 
   @doc "The most characters `instructions` may hold."
@@ -78,7 +84,10 @@ defmodule SymphonyElixir.Conductor.Answer do
   defp first_error({:error, "the answer holds no JSON object"}, refused), do: refused
   defp first_error(error, _refused), do: error
 
-  @doc "Checks one JSON object's text against the schema; `watch: true` for a watch turn's."
+  @doc """
+  Checks one JSON object's text against the schema; `watch: true` for a watch turn's, `route: true`
+  for a turn's at `after_qa_blocked`, the one junction whose `route` is read.
+  """
   @spec parse(String.t(), keyword()) :: {:ok, t()} | {:error, String.t()}
   def parse(text, opts \\ []) when is_binary(text) do
     with {:ok, %{} = answer} <- decode(text),
@@ -87,8 +96,10 @@ defmodule SymphonyElixir.Conductor.Answer do
          {:ok, refs} <- refs(Map.get(answer, "refs")),
          {:ok, ask_person} <- ask_person(Map.get(answer, "ask_person")),
          {:ok, steer} <- steer(Map.get(answer, "steer")),
-         {:ok, stop} <- stop(Map.get(answer, "stop")) do
-      {:ok, %{instructions: instructions, update: update, refs: refs, ask_person: ask_person, steer: steer, stop: stop, blocks: blocks(Map.get(answer, "blocks"))}}
+         {:ok, stop} <- stop(Map.get(answer, "stop")),
+         {:ok, route} <- route(Map.get(answer, "route"), Keyword.get(opts, :route, false)) do
+      answer = %{instructions: instructions, update: update, refs: refs, ask_person: ask_person, steer: steer, stop: stop, blocks: blocks(Map.get(answer, "blocks"))}
+      {:ok, Map.put(answer, :route, route)}
     end
   end
 
@@ -123,6 +134,21 @@ defmodule SymphonyElixir.Conductor.Answer do
   defp stop(nil), do: {:ok, nil}
   defp stop(%{"reason" => reason}) when is_binary(reason) and reason != "", do: {:ok, %{reason: String.trim(reason)}}
   defp stop(_stop), do: {:error, "`stop` must be null or hold a `reason`"}
+
+  # Read only where Symphony takes a route; anywhere else the field is ignored.
+  defp route(_route, false = _read?), do: {:ok, nil}
+  defp route(nil, true), do: {:ok, nil}
+  defp route(%{"to" => "rerun"} = route, true) when map_size(route) == 1, do: {:ok, %{to: "rerun"}}
+
+  defp route(%{"to" => "rework", "finding" => finding} = route, true) when is_binary(finding) and map_size(route) == 2 do
+    finding = String.trim(finding)
+
+    if finding == "",
+      do: {:error, "`route.finding` is blank"},
+      else: {:ok, %{to: "rework", finding: fit(finding, @finding_max, "route.finding")}}
+  end
+
+  defp route(_route, true), do: {:error, "`route` must be null, `{\"to\": \"rerun\"}` or `{\"to\": \"rework\", \"finding\": ...}`"}
 
   defp update(nil), do: {:ok, nil}
 

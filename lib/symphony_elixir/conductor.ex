@@ -9,6 +9,8 @@ defmodule SymphonyElixir.Conductor do
 
     * `after_coding`: an implementation run handed off, before Code Review or QA;
     * `after_qa_fail`: QA's verdict was fail, before rework;
+    * `after_qa_blocked`: a QA pass could not judge the change (`blocked` or `inconclusive`, on the
+      QA agent's own account), before Symphony retries it or asks the person (`route_blocked_qa/3`);
     * `after_rework`: a rework run handed off, before Code Review or QA again;
     * `before_merge`: QA passed or was skipped, before Merging.
 
@@ -33,10 +35,12 @@ defmodule SymphonyElixir.Conductor do
 
   It never holds a ticket up: a turn that times out (`conductor.timeout_ms`), fails, answers
   outside the schema, or whose provider a usage limit holds with no free fallback is logged, records
-  nothing for the person, and the next run starts as if the Conductor were off. It never moves the
-  ticket or changes its plan; its instructions are advice added to the next run's prompt. A dispatch
-  pause stops it as it stops any run. With `conductor.enabled` off, nothing here reads or writes
-  anything.
+  nothing for the person, and the next run starts as if the Conductor were off. It never changes the
+  ticket's plan; its instructions are advice added to the next run's prompt. It moves the ticket at
+  one junction only: at `after_qa_blocked` its answer may route the ticket (`route`), back to
+  Rework with a finding or to one more QA pass, within bounds Symphony keeps from the ticket's
+  events (`open_routes/1`); it never routes it past QA. A dispatch pause stops it as it stops any
+  run. With `conductor.enabled` off, nothing here reads or writes anything.
   """
 
   require Logger
@@ -72,11 +76,16 @@ defmodule SymphonyElixir.Conductor do
   @junction_words %{
     "after_coding" => "an implementation run handed off; Code Review or QA judges it next",
     "after_qa_fail" => "QA failed; a rework run answers its findings next",
+    "after_qa_blocked" => "QA could not judge the change; you decide how the ticket gets a real QA result",
     "after_rework" => "a rework run handed off; Code Review or QA judges it again next",
     "before_merge" => "QA passed or was skipped; the pull request merges next",
     "during_run" => "a run is working on the ticket now"
   }
   @review_kinds ["code_review", "qa"]
+  @blocked_qa "after_qa_blocked"
+  @routes ["rerun", "rework"]
+  @max_rework_routes 2
+  @max_passes_without_result 3
   @merging "Merging"
   @instructions_tag "conductor_instructions"
   @advice "Advice from the Conductor, an earlier model turn that read this ticket's whole history. It is advice, not an order: " <>
@@ -96,6 +105,13 @@ defmodule SymphonyElixir.Conductor do
   @typedoc "What one turn answered: the answer, the turn's tokens, and how it ended."
   @type outcome :: {:ok, Answer.t(), non_neg_integer()} | {:error, term(), non_neg_integer()}
 
+  @typedoc """
+  What the turn after a QA pass that could not judge the change answered (`route_blocked_qa/3`):
+  the ticket goes to Rework with the finding, QA runs again, the turn asked the person, or none of
+  these, and the pass goes on as if the Conductor were off.
+  """
+  @type blocked_qa_route :: {:rework, String.t()} | :rerun | :held | :none
+
   @doc "Whether `settings` (`conductor`) turn the Conductor on."
   @spec enabled?(Schema.Conductor.t()) :: boolean()
   def enabled?(%Schema.Conductor{enabled: true}), do: true
@@ -107,6 +123,10 @@ defmodule SymphonyElixir.Conductor do
   run, `after_rework` after a rework run, before a Code Review or QA run; `after_qa_fail` after a QA
   run whose newest verdict failed, before rework; `before_merge` after a Code Review or QA run,
   before landing). Nil when none, and when a Conductor turn already ran since that run ended.
+  `after_qa_blocked` is never a dispatch's: its turn runs inside the QA run (`route_blocked_qa/3`),
+  so the rework its route sends the ticket to meets no junction (the newest QA verdict is the
+  block, not a fail, and the move is `qa_blocked_rework`'s), and the rework run reads that turn's
+  instructions.
   """
   @spec dispatch_junction(atom() | String.t(), [Event.t()]) :: String.t() | nil
   def dispatch_junction(next_kind, events) when is_list(events) do
@@ -181,6 +201,63 @@ defmodule SymphonyElixir.Conductor do
     end
   end
 
+  @doc """
+  The turn at `after_qa_blocked`: the QA pass on `issue` just ended `blocked` or `inconclusive` on
+  the QA agent's own account, its verdict recorded and its report published
+  (`SymphonyElixir.QaVerification`), and the turn decides how the ticket gets a real QA result. It
+  runs in the QA run's own task, before Symphony's retry or question, on every such verdict, and
+  answers what the pass does next:
+
+    * `{:rework, finding}`: the answer routed the ticket to Rework; the pass records `finding` and
+      moves it there, and the rework run reads the turn's instructions;
+    * `:rerun`: the answer routed it to one more QA pass on the same change, which reads the turn's
+      instructions;
+    * `:held`: the turn asked the person, which paused the ticket, so Symphony asks nothing more;
+    * `:none`: the Conductor is off or lacks the junction, no provider can take the turn, the turn
+      failed or timed out, or it routed nothing Symphony takes: the pass goes on as if the
+      Conductor were off.
+
+  A route Symphony does not take now (`open_routes/1`) is dropped and logged, and so is a route
+  given with a question: the person decides. The routes open now are in the facts (`routes`).
+  `opts`: `settings`, `available?` and `events`, as `plan/4` takes them, and `run/3`'s.
+  """
+  @spec route_blocked_qa(Issue.t(), String.t() | nil, keyword()) :: blocked_qa_route()
+  def route_blocked_qa(%Issue{id: issue_id} = issue, repo_key, opts \\ []) do
+    events = Keyword.get_lazy(opts, :events, fn -> Facts.events(issue_id) end)
+
+    case plan_with(issue_id, repo_key, Keyword.put(opts, :events, events), fn _events -> @blocked_qa end) do
+      nil -> :none
+      plan -> plan |> Map.put(:routes, open_routes(events)) |> conduct(issue, opts) |> blocked_qa_route()
+    end
+  rescue
+    error ->
+      Logger.warning("Conductor turn failed issue_id=#{issue_id} issue_identifier=#{issue.identifier} repo_key=#{repo_key}: #{Exception.message(error)}; QA goes on without it")
+      :none
+  end
+
+  defp blocked_qa_route({:held, _route}), do: :held
+  defp blocked_qa_route({:ok, %{to: "rework", finding: finding}}), do: {:rework, finding}
+  defp blocked_qa_route({:ok, %{to: "rerun"}}), do: :rerun
+  defp blocked_qa_route({:ok, nil}), do: :none
+
+  @doc """
+  The routes Symphony takes now from a turn at `after_qa_blocked`, read from the ticket's `events`
+  (oldest first): `rerun` while fewer than #{@max_passes_without_result} QA passes in a row reached
+  no result on the ticket's current change (`TicketState.qa_verdicts_without_result_in/1`, the pass
+  just ended included), and `rework` while fewer than #{@max_rework_routes} earlier turns routed the
+  ticket there.
+  """
+  @spec open_routes([Event.t()]) :: [String.t()]
+  def open_routes(events) when is_list(events) do
+    passes = length(TicketState.qa_verdicts_without_result_in(events))
+    reworks = Enum.count(events, &(&1.type == "conductor.instructions" and payload(&1, :route) == "rework"))
+
+    Enum.filter(@routes, fn
+      "rerun" -> passes < @max_passes_without_result
+      "rework" -> reworks < @max_rework_routes
+    end)
+  end
+
   defp run_end_junction_unless_paused(ended_kind, issue_id, repo_key, events, opts) do
     if not dispatch_paused?(repo_key, opts), do: run_end_junction(ended_kind, record(issue_id, opts), events)
   end
@@ -241,29 +318,35 @@ defmodule SymphonyElixir.Conductor do
   def run(nil, _issue, _opts), do: :ok
 
   def run(%{} = plan, %Issue{} = issue, opts) do
-    conduct(plan, issue, opts)
+    plan |> conduct(issue, opts) |> elem(0)
   rescue
     error ->
       Logger.warning("Conductor turn failed #{context(issue, plan)}: #{Exception.message(error)}; the next run starts without it")
       :ok
   end
 
+  # The turn, recorded: whether it asked the person (`:held`) and the route Symphony takes from its
+  # answer, nil when none.
   defp conduct(%{junction: junction, issue_id: issue_id} = plan, issue, opts) do
     run_id = "conductor-" <> Event.ulid(DateTime.utc_now())
     started_at = DateTime.utc_now()
     record = record(issue_id, opts)
     phase = record.phase || issue.state
-    facts = Keyword.get_lazy(opts, :facts, fn -> Facts.build(record, junction) end)
+    facts = Keyword.get_lazy(opts, :facts, fn -> record |> Facts.build(junction) |> with_routes(plan) end)
     record_run_started(plan, run_id, phase)
     Logger.info("Conductor turn started #{context(issue, plan)} run_id=#{run_id} junction=#{junction} model=#{plan.run_profile.model}")
 
     turn = Keyword.get(opts, :turn, &harness_turn(&1, &2, &3, &4, Keyword.get(opts, :agent_module)))
     outcome = timed_turn(plan, issue, run_id, prompt(junction, facts), turn)
     tokens = elem(outcome, 2)
-    {exit, held} = record_outcome(outcome, plan, %{issue | state: phase}, run_id, {facts, record})
+    {exit, held, route} = record_outcome(outcome, plan, %{issue | state: phase}, run_id, {facts, record})
     record_run_ended(plan, issue, run_id, %{exit: exit, tokens: tokens, started_at: started_at, phase: phase})
-    held
+    {held, route}
   end
+
+  # The routes Symphony takes now, for a turn that may route the ticket.
+  defp with_routes(facts, %{routes: routes}), do: Map.put(facts, :routes, routes)
+  defp with_routes(facts, _plan), do: facts
 
   defp record(issue_id, opts) do
     Keyword.get_lazy(opts, :record, fn -> TicketState.normalize(RunStore.get_ticket_state(issue_id)) end)
@@ -285,38 +368,69 @@ defmodule SymphonyElixir.Conductor do
   # one that crashes is a failed turn, never the caller's crash.
   defp timed_turn(plan, issue, run_id, prompt, turn) do
     task = Task.Supervisor.async_nolink(SymphonyElixir.TaskSupervisor, fn -> turn.(plan, issue, run_id, prompt) end)
+    read_opts = [watch: Map.has_key?(plan, :watch), route: plan.junction == @blocked_qa]
 
     case Task.yield(task, plan.timeout_ms) || Task.shutdown(task, :brutal_kill) do
-      {:ok, {:ok, texts, tokens}} -> answer(texts, tokens, Map.has_key?(plan, :watch))
+      {:ok, {:ok, texts, tokens}} -> answer(texts, tokens, read_opts)
       {:ok, {:error, reason, tokens}} -> {:error, reason, tokens}
       {:exit, reason} -> {:error, {:crashed, reason}, 0}
       nil -> {:error, :timeout, 0}
     end
   end
 
-  defp answer(texts, tokens, watch?) do
-    case Answer.read(texts, watch: watch?) do
+  defp answer(texts, tokens, read_opts) do
+    case Answer.read(texts, read_opts) do
       {:ok, answer} -> {:ok, answer, tokens}
       {:error, why} -> {:error, {:unreadable_answer, why}, tokens}
     end
   end
 
-  # What the turn wrote: its instructions, its update for the person and its question. A turn that
-  # failed writes nothing and only logs why.
+  # What the turn wrote: its instructions (with the route Symphony takes from the answer, when it
+  # takes one), its update for the person and its question. A turn that failed writes nothing and
+  # only logs why.
   defp record_outcome({:ok, answer, _tokens}, plan, issue, run_id, {facts, record}) do
-    if answer.instructions, do: record_event(plan, "conductor.instructions", %{junction: plan.junction, text: answer.instructions}, run_id)
+    route = route_taken(answer, plan, issue)
+    if answer.instructions, do: record_event(plan, "conductor.instructions", instructions_payload(plan, answer, route), run_id)
     # The question goes first: the update's `question` block names the decision it opened.
     held = ask_person(answer.ask_person, plan, issue, run_id)
     record_update(answer, plan, run_id, {facts, record})
     steer(plan, answer, held)
-    Logger.info("Conductor turn wrote #{context(issue, plan)} run_id=#{run_id} junction=#{plan.junction} update=#{answer.update != nil} held=#{held == :held}")
-    {"answered", held}
+
+    Logger.info(
+      "Conductor turn wrote #{context(issue, plan)} run_id=#{run_id} junction=#{plan.junction} update=#{answer.update != nil} " <>
+        "held=#{held == :held} route=#{if route, do: route.to, else: "none"}"
+    )
+
+    {"answered", held, route}
   end
 
   defp record_outcome({:error, reason, _tokens}, plan, issue, run_id, _context) do
     Logger.warning("Conductor turn wrote nothing #{context(issue, plan)} run_id=#{run_id} junction=#{plan.junction}: #{inspect(reason)}; the next run starts without it")
-    {exit_text(reason), :ok}
+    {exit_text(reason), :ok, nil}
   end
+
+  # The answer's route when Symphony takes it now: one of the plan's open routes, and never beside a
+  # question, which leaves the choice to the person. A route past its bound is dropped and logged.
+  defp route_taken(%{route: nil}, _plan, _issue), do: nil
+
+  defp route_taken(%{route: %{to: to}, ask_person: %{}}, plan, issue) do
+    Logger.info("Conductor's route #{to} dropped #{context(issue, plan)}: the turn asked the person, who decides")
+    nil
+  end
+
+  defp route_taken(%{route: %{to: to} = route}, plan, issue) do
+    open = Map.get(plan, :routes, [])
+
+    if to in open do
+      route
+    else
+      Logger.info("Conductor's route #{to} dropped #{context(issue, plan)}: Symphony takes #{if open == [], do: "no route", else: Enum.join(open, " or ")} now")
+      nil
+    end
+  end
+
+  defp instructions_payload(plan, answer, nil), do: %{junction: plan.junction, text: answer.instructions}
+  defp instructions_payload(plan, answer, route), do: %{junction: plan.junction, text: answer.instructions, route: route.to}
 
   defp exit_text(:timeout), do: "timed out"
   defp exit_text({:unreadable_answer, why}), do: "unreadable answer: " <> why

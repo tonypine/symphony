@@ -1033,6 +1033,39 @@ defmodule SymphonyElixir.TicketState do
   end
 
   @doc """
+  The events of `events` (oldest first) after the newest `run.ended` of an implementation or rework
+  run, oldest first: what happened to the ticket's current change, whatever head the pull request
+  moved to since (a merge of the base branch is no change of its own). All of `events` when no such
+  run ended.
+  """
+  @spec events_since_coding_run_in([Event.t()]) :: [Event.t()]
+  def events_since_coding_run_in(events) when is_list(events) do
+    events
+    |> Enum.reverse()
+    |> Enum.take_while(&(not coding_run_ended?(&1)))
+    |> Enum.reverse()
+  end
+
+  @doc """
+  The `qa` verdicts on the ticket's current change that reached no result (`blocked` or
+  `inconclusive`), newest first, back to the newest one that did (a pass, a fail, a skip): the
+  verdicts `events` (oldest first) record since the newest implementation or rework run ended
+  (`events_since_coding_run_in/1`), on any head. A block on CI (its `component` `ci`) is passed
+  over: CI's state is the PR watcher's, so it spends no QA attempt.
+  """
+  @spec qa_verdicts_without_result_in([Event.t()]) :: [verdict()]
+  def qa_verdicts_without_result_in(events) when is_list(events) do
+    events
+    |> events_since_coding_run_in()
+    |> verdicts_in()
+    |> Enum.filter(&(&1.kind == "qa" and map_string(&1.details, :component) != "ci"))
+    |> Enum.take_while(&(&1.outcome in ["blocked", "inconclusive"]))
+  end
+
+  defp coding_run_ended?(%Event{type: "run.ended", payload: payload}), do: map_string(payload, :run_kind) in ["implementation", "rework"]
+  defp coding_run_ended?(_event), do: false
+
+  @doc """
   The runs dispatched since the ticket last made progress, newest first, read from its event stream
   (`dispatches_in/1`). A record whose events can't be read lists none, so a store error never stops
   a dispatch.
