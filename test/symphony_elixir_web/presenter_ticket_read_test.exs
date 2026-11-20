@@ -47,11 +47,11 @@ defmodule SymphonyElixirWeb.PresenterTicketReadTest do
 
     assert {:ok, payload} = Presenter.issue_payload("QA-105", orchestrator(), 1_000)
 
-    assert payload.ticket == %{title: "Undo a Director move within ten seconds", phase: "Rework", priority: 1, labels: ["qa:live", "director"]}
+    assert payload.ticket == %{title: "Undo a Director move within ten seconds", description: nil, phase: "Rework", priority: 1, labels: ["qa:live", "director"]}
     assert payload.phase_path.current == nil
 
     columns = record |> TicketState.normalize() |> TicketColumns.values()
-    assert payload.ticket == %{title: columns["title"], phase: columns["phase"], priority: columns["priority"], labels: columns["labels"]}
+    assert payload.ticket == %{title: columns["title"], description: nil, phase: columns["phase"], priority: columns["priority"], labels: columns["labels"]}
   end
 
   test "a running ticket Symphony holds no record of yet reads an empty ticket" do
@@ -69,6 +69,6 @@ defmodule SymphonyElixirWeb.PresenterTicketReadTest do
     }
 
     assert {:ok, payload} = Presenter.issue_payload("MT-2", orchestrator(%{running: [entry]}), 1_000)
-    assert payload.ticket == %{title: nil, phase: nil, priority: nil, labels: []}
+    assert payload.ticket == %{title: nil, description: nil, phase: nil, priority: nil, labels: []}
   end
 end

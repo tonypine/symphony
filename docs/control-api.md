@@ -29,7 +29,7 @@ the open page on the next poll, as before. Opening a ticket's page reads both in
 
 The ticket itself, as its record holds it: the same values the ticket list's `title`, `phase`,
 `priority` and `labels` columns serve (`GET /api/v1/tickets`, below), so a client reads one ticket's
-title without listing every ticket.
+title without listing every ticket, and its description as runs receive it.
 
 ```json
 { "title": "Undo a Director move within ten seconds", "phase": "Rework", "priority": 1, "labels": ["qa:live"] }
@@ -41,6 +41,7 @@ title without listing every ticket.
 | `phase` | The phase (state) the record says it is in, also when its ledger holds no `phase.entered` and `phase_path.current` is null. |
 | `priority` | Linear's priority: 0 none, 1 urgent, 2 high, 3 medium, 4 low; null when unknown. |
 | `labels` | The ticket's labels; `[]` when it has none. |
+| `description` | The ticket's description as the last read of Linear gave it, without Symphony's summary block: the text a run receives. The ticket page shows its first section before a run writes a brief, and all of it under the brief's "What was asked". Null when Symphony holds none. |
 
 ## `situation`
 
