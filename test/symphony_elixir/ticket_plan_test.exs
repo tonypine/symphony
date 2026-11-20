@@ -154,6 +154,9 @@ defmodule SymphonyElixir.TicketPlanTest do
       {:ok, _ask} = TicketPlan.record_ask(@repo_key, @issue_id, "Half of it is enough.", source: "message", at: at(4))
       assert {:ok, _v3} = TicketPlan.write(@repo_key, @issue_id, %{@plan | checks: [reworded]}, at: at(5))
       assert TicketPlan.write(@repo_key, @issue_id, %{@plan | checks: [kept]}, at: at(6)) == binds.("c1", "removed")
+
+      # So does the caller that records the new ask right after the version.
+      assert {:ok, _v4} = TicketPlan.write(@repo_key, @issue_id, %{@plan | checks: [kept]}, at: at(6), new_ask: true)
     end
 
     test "a signal the machinery recorded with a plan is not part of the plan" do

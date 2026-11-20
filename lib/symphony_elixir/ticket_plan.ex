@@ -63,7 +63,7 @@ defmodule SymphonyElixir.TicketPlan do
   @doc """
   Records `plan` as the next version of the plan of `repo_key`'s ticket `issue_id`: a
   `plan.written` whose `version` is one more than the newest (1 for the first), whatever version
-  `plan` names. `opts` are `SymphonyElixir.TicketEvents.record/5`'s.
+  `plan` names. `opts` are `SymphonyElixir.TicketEvents.record/5`'s, and `new_ask` (below).
 
   It names the checks: a check that comes with the id a check of an earlier version had keeps it,
   and with it what was recorded for that check; any other (no id, or one no version used) gets a
@@ -76,7 +76,8 @@ defmodule SymphonyElixir.TicketPlan do
 
   Outcomes bind: a version that removes an `outcome` check of the version before it, or changes
   its statement, is refused the same way, unless an `ask.recorded` was written after that version.
-  A new ask is what permits changing what the ticket must reach. The first version is free.
+  A new ask is what permits changing what the ticket must reach. The first version is free. A
+  caller that records the new ask right after the version it permits says so with `new_ask: true`.
   """
   @spec write(String.t() | nil, String.t(), map(), keyword()) :: {:ok, Event.t()} | {:error, term()}
   def write(repo_key, issue_id, plan, opts \\ []) when is_binary(issue_id) and is_map(plan) do
@@ -84,8 +85,11 @@ defmodule SymphonyElixir.TicketPlan do
     earlier = versions(history)
     payload = plan |> Map.drop([:version, "version"]) |> Map.put(:version, length(earlier) + 1) |> identified(earlier)
 
+    {new_ask?, opts} = Keyword.pop(opts, :new_ask, false)
+    binding = if new_ask?, do: [], else: history
+
     with {:ok, valid} <- Types.validate("plan.written", payload, :machine, nil),
-         :ok <- coherent(valid, changed_outcomes(valid, history)),
+         :ok <- coherent(valid, changed_outcomes(valid, binding)),
          {:ok, event} <- TicketEvents.record(repo_key, issue_id, "plan.written", valid, opts) do
       TicketProjection.changed(repo_key, issue_id)
       {:ok, event}
