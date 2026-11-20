@@ -23,7 +23,6 @@ final class SymphonyRunner {
 
     /// Where this build's embedded Symphony is, at `Contents/Resources/symphony`.
     nonisolated static let embeddedSymphonyPath = EmbeddedSymphony.path(resourcesPath: Bundle.main.resourcePath)
-    nonisolated static let qaDriverAppPath = QADriverApp.path(bundlePath: Bundle.main.bundlePath)
 
     /// True when this build carries an embedded Symphony.
     nonisolated static var hasEmbeddedSymphony: Bool { EmbeddedSymphony.isAvailable(at: embeddedSymphonyPath) }
@@ -182,7 +181,6 @@ final class SymphonyRunner {
             secrets: secrets,
             baseEnvironment: AppStores.current.environment,
             embeddedSymphonyPath: binary ?? Self.embeddedSymphonyPath,
-            qaDriverAppPath: Self.qaDriverAppPath,
             subcommand: subcommand
         )
     }
