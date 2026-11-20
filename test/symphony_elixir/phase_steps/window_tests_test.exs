@@ -180,8 +180,7 @@ defmodule SymphonyElixir.PhaseSteps.WindowTestsTest do
       assert {:ok, tests} = File.read!(WindowTests.manifest_path()) |> WindowTests.parse()
       assert Enum.map(tests, & &1.script) |> Enum.sort() == ["macos/Tests/qa-appearance-test.sh", "macos/Tests/qa-key-test.py", "macos/Tests/qa-scroll-test.py"]
       assert Enum.all?(tests, &File.exists?(&1.script))
-      assert %{off: "it failed" <> _} = Enum.find(tests, &(&1.script == "macos/Tests/qa-key-test.py"))
-      assert Enum.all?(tests, &is_binary(&1.off)), "every window test stays off until a run sees it pass on main in the QA VM (TP-1554 D1)"
+      assert Enum.all?(tests, &is_nil(&1.off)), "TP-1563 turned every window test on once its Window tests step saw it pass in the QA VM"
     end
   end
 

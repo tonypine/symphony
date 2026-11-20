@@ -368,15 +368,20 @@ def main():
         check_click(binary, pid, find(binary, pid, "Count", ["AXButton"]), "Count", "a click presses a button")
         check_click(binary, pid, find(binary, pid, "Row Alpha", ["AXStaticText", "AXCell", "AXRow"]), "Row Alpha", "a click selects a row")
 
-        # 6. The popover opens on a click, and a click outside it, on the window's title
-        # bar far from the popover, closes it.
+        # 6. The popover opens on a click, and a click outside it, on the window's empty
+        # content under the pane (its bottom-left corner, far from the popover and every
+        # control), closes it. Not on the title bar: there the window server takes the
+        # mouse-down for a window drag, and on the QA VM's macOS the app never sees it, so
+        # the popover stayed open ('Clicked: Popover', 2026-11-13) while GitHub's runner
+        # passed. A click in the content always reaches the app's event loop, which is what
+        # closes a transient popover.
         check_click(binary, pid, find(binary, pid, "Details", ["AXButton"]), "Popover", "a click opens the popover")
         main = next((w for w in driver(binary, "windows", pid).get("windows", []) if w.get("title") == "qa-key-fixture"), None)
         if main is None:
             fail("a click outside closes the popover", "the main window is not in the window list")
         else:
             frame = main["frame"]
-            outside = f"{frame['x'] + frame['w'] - 40},{frame['y'] + 12}"
+            outside = f"{frame['x'] + 20},{frame['y'] + frame['h'] - 20}"
             check_click(binary, pid, outside, "Closed", "a click outside closes the popover")
 
         # 7. A fold past the nodes the driver's window-wide change check reads: the click
