@@ -26,13 +26,17 @@ public struct StatusLine<Dispatch: View>: View {
         let tokens = DesignTokens.StatusLine.self
         HStack(spacing: tokens.gap) {
             dispatch
+                .fixedSize()
             if let counts = line.counts {
-                HairlineDivider(.vertical, length: tokens.separatorHeight)
-                    .padding(.horizontal, tokens.separatorInset)
-                ForEach(counts.texts, id: \.self) { text in
-                    Text(text).monospacedDigit()
-                        .foregroundStyle((line.countsCurrent ? DesignTokens.TextColor.secondary : DesignTokens.TextColor.tertiary).color)
+                // The counts yield first when the line runs out of room (TP-1562: the late line adds Open Logs and
+                // Restart Symphony): the last ones drop whole, so the dispatch control and the build stay readable.
+                ViewThatFits(in: .horizontal) {
+                    ForEach(Array(stride(from: counts.texts.count, to: 0, by: -1)), id: \.self) { shown in
+                        countsView(Array(counts.texts.prefix(shown)))
+                    }
+                    Color.clear.frame(width: 0, height: 0)
                 }
+                .layoutPriority(1)
             }
             Spacer(minLength: 0)
             if let build = line.build {
@@ -41,6 +45,7 @@ public struct StatusLine<Dispatch: View>: View {
                     .truncationMode(.middle)
                     .foregroundStyle(tokens.build.color)
                     .help(build.help ?? build.text)
+                    .layoutPriority(2)
             }
             HStack(spacing: tokens.dotGap) {
                 if let status = line.connection.status { StatusDot(status) }
@@ -65,6 +70,20 @@ public struct StatusLine<Dispatch: View>: View {
         .overlay(alignment: .top) { HairlineDivider() }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(line.accessibilityLabel)
+    }
+
+    /// The hairline and `texts`, Home's counts, in the tertiary colour while they are Symphony's last answer.
+    private func countsView(_ texts: [String]) -> some View {
+        let tokens = DesignTokens.StatusLine.self
+        return HStack(spacing: tokens.gap) {
+            HairlineDivider(.vertical, length: tokens.separatorHeight)
+                .padding(.horizontal, tokens.separatorInset)
+            ForEach(texts, id: \.self) { text in
+                Text(text).monospacedDigit()
+                    .foregroundStyle((line.countsCurrent ? DesignTokens.TextColor.secondary : DesignTokens.TextColor.tertiary).color)
+            }
+        }
+        .fixedSize()
     }
 }
 

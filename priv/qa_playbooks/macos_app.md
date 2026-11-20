@@ -521,7 +521,8 @@ GitHub or Linear in QA:
   restart. The health read answers throughout, so the menu bar shows no problem and no
   notification is sent. The look is also drawn by the gallery's `status-line-symphony-late`,
   `status-line-symphony-late-paused`, `sidebar-expanded-symphony-late`,
-  `sidebar-collapsed-symphony-late` and `count-badge-not-current` stories. Relaunch on a fresh
+  `sidebar-collapsed-symphony-late`, `window-bar-ticket-page-symphony-late`,
+  `window-bar-work-tickets-symphony-late` and `count-badge-not-current` stories. Relaunch on a fresh
   QA root to walk it again.
 - **Setup (TP-910):** pass `macos/Tests/Fixtures/director-app/setup` as `api_fixtures`. Its
   state has one error, `Team TP has no "Needs Decision" label` (**Create Label…**), and one

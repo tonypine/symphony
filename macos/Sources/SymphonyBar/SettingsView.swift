@@ -71,14 +71,14 @@ struct SettingsView: View {
                             + "and how long an update at a set time waits for them before it tries the next day."
                     )
                     LabeledContent("Not answering alert") {
-                        // Laid out as Stop timeout's row: the number where its field is, in the primary colour,
-                        // the stepper in the same column, then the unit. No field to type in: the stepper keeps
+                        // Laid out as Stop timeout's row: the number in its field's column, in the primary colour,
+                        // its edge beside the stepper, the stepper in the same column, then the unit. No field to type in: the stepper keeps
                         // the limit to steps of 10.
                         HStack {
                             Text("\(model.settings.notAnsweringAlertSeconds)")
                                 .monospacedDigit()
                                 .foregroundStyle(DesignTokens.TextColor.primary.color)
-                                .frame(width: 60, alignment: .leading)
+                                .frame(width: 60, alignment: .trailing)
                             Stepper(
                                 "Seconds",
                                 value: notAnsweringAlertSeconds,

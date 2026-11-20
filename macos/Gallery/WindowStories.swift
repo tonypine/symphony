@@ -18,14 +18,16 @@ let ticketCrumbs = WindowBreadcrumb(place: .ticket("TP-1382"), shownFrom: .ticke
 let ticketNoEpicCrumbs = WindowBreadcrumb(place: .ticket("TP-1382"), shownFrom: .tickets)
 let pullRequestCrumbs = WindowBreadcrumb(place: .pullRequest(PullRequestPlace(repoKey: "symphony", number: 448)), shownFrom: .tickets)
 
-/// A bar story: the bar at `breadcrumb`, Work's switch on `workTab` when given, Find a ticket in `find`'s state.
+/// A bar story: the bar at `breadcrumb`, Work's switch on `workTab` when given, Find a ticket in `find`'s state, the
+/// Inbox's count in idle grey unless `countsCurrent` (a late Symphony's last answer, TP-1562).
 @MainActor
 func windowBarStory(
     _ breadcrumb: WindowBreadcrumb, workTab: SymphonyView? = nil, canGoBack: Bool = false, inboxShown: Bool = false,
-    sidebarShown: Bool = true, find: DesignTokens.Field.State? = nil
+    sidebarShown: Bool = true, find: DesignTokens.Field.State? = nil, countsCurrent: Bool = true
 ) -> AnyView {
     let controls = WindowBarControls(
-        sidebarShown: sidebarShown, canGoBack: canGoBack, breadcrumb: breadcrumb, inboxCount: 2, inboxShown: inboxShown
+        sidebarShown: sidebarShown, canGoBack: canGoBack, breadcrumb: breadcrumb, inboxCount: 2, inboxCountCurrent: countsCurrent,
+        inboxShown: inboxShown
     )
     let workSwitch = workTab.map { tab in
         SegmentedControl(
@@ -62,6 +64,8 @@ let windowStories: [ComponentStory] = {
         bar("ticket-page-find-focused") { windowBarStory(ticketCrumbs, canGoBack: true, find: .focused) },
         bar("ticket-page-inbox-open") { windowBarStory(ticketCrumbs, canGoBack: true, inboxShown: true) },
         bar("ticket-page-sidebar-hidden") { windowBarStory(ticketCrumbs, canGoBack: true, sidebarShown: false) },
+        bar("ticket-page-symphony-late") { windowBarStory(ticketCrumbs, canGoBack: true, countsCurrent: false) },
+        bar("work-tickets-symphony-late") { windowBarStory(workCrumbs, workTab: .tickets, canGoBack: true, countsCurrent: false) },
         crumbs("destination", homeCrumbs),
         crumbs("ticket-page", ticketCrumbs),
         crumbs("ticket-page-link-hover", ticketCrumbs, hovered: 0),
