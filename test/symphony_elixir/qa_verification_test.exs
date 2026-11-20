@@ -1014,6 +1014,20 @@ defmodule SymphonyElixir.QaVerificationTest do
       refute why =~ "{:"
     end
 
+    test "an answer whose verdict cannot be read asks, and says why in words" do
+      {workspace, _head} = git_workspace!()
+      Process.put(:qa_agent_result, {:error, {:malformed_qa_response, :invalid_verdict}, %{}})
+
+      capture_log(fn ->
+        assert :ok = run(workspace, [])
+        assert :ok = run(workspace, [])
+      end)
+
+      assert %{why: why} = deciding()
+      assert why =~ "the QA agent gave a verdict Symphony could not read"
+      refute why =~ "{:"
+    end
+
     test "a block a QA answer says an open ticket already covers holds on that ticket and files nothing" do
       {workspace, _head} = git_workspace!()
 
