@@ -444,6 +444,61 @@
      },
      "artifacts": [],
      "children": []
+    },
+    {
+     "id": "b12",
+     "seq": 21,
+     "at": "2026-10-08T09:21:00Z",
+     "type": "conductor.update",
+     "run_id": "run-c1",
+     "payload": {
+      "text": "QA {problem}failed{/}: the walk of step 1 found the row unchanged, and the design check could not reach the card.\n\nNext: the rework fixes the row.",
+      "blocks": [
+       {
+        "type": "steps",
+        "run_id": "qa-3",
+        "run_kind": "qa",
+        "steps": [
+         {
+          "step_id": "plan",
+          "title": "Plan the pass",
+          "outcome": "passed",
+          "duration_ms": 120000
+         },
+         {
+          "step_id": "walk_1",
+          "title": "Walk step 1",
+          "outcome": "failed",
+          "duration_ms": 300000
+         },
+         {
+          "step_id": "design_check",
+          "title": "Design check",
+          "outcome": "blocked",
+          "duration_ms": 180000
+         },
+         {
+          "step_id": "wide_pass",
+          "title": "Wide pass",
+          "outcome": "passed",
+          "duration_ms": 60000
+         },
+         {
+          "step_id": "review",
+          "title": "Review and verdict",
+          "outcome": "passed",
+          "duration_ms": 60000
+         }
+        ]
+       }
+      ],
+      "junction": "after_qa"
+     },
+     "actor": {
+      "kind": "machine"
+     },
+     "artifacts": [],
+     "children": []
     }
    ]
   }

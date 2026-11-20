@@ -163,6 +163,7 @@ func conductorBlockRenders(_ scheme: ColorScheme, suffix: String) {
     // Each block inside a message.
     for (index, name) in [
         "steps", "evidence", "budget", "question", "reference", "epic", "path", "attempts", "compare", "compare-screenshots", "findings",
+        "steps-qa-judged",
     ].enumerated() {
         render(conductorBlockMessage("b\(index + 1)"), scheme, to: "conductor-blocks-\(name)-\(suffix).png")
     }
@@ -196,6 +197,48 @@ func qaStepRenders(_ scheme: ColorScheme, suffix: String) {
     render(qaRunGroup(unfolding: "check-1"), scheme, to: "run-group-qa-check-result-\(suffix).png")
     render(qaRunGroup(unfolding: "plan"), scheme, to: "run-group-qa-plan-\(suffix).png")
     render(qaRunGroup(unfolding: "review"), scheme, to: "run-group-qa-recheck-\(suffix).png")
+    render(qaJudgedRunGroup(), scheme, to: "run-group-qa-judged-\(suffix).png")
+    render(qaJudgedTimeline(), scheme, to: "conductor-blocks-steps-qa-settled-\(suffix).png")
+}
+
+/// TP-1556's second QA pass (`Tests/Fixtures/timeline/qa-judged-steps.json`), recorded before a check drew what it
+/// judged: a walk step judged fail, a design check judged blocked, and the Conductor's steps blocks under it, the old one
+/// that said passed and the one Symphony writes now.
+let qaJudgedHistory: TicketEventsPayload = {
+    guard let events = try? Data(contentsOf: timelineFixtures.appendingPathComponent("qa-judged-steps.json")),
+          let history = TicketEventsPayload.decode(events)
+    else { fatalError("The QA judged steps fixture is missing from \(timelineFixtures.path)") }
+    return history
+}()
+
+/// The judged QA pass's run group, its design check unfolded: Failed and Blocked rows.
+@MainActor
+func qaJudgedRunGroup() -> AnyView {
+    guard let run = TimelineModel.build(qaJudgedHistory, reference: timelineReference, calendar: timelineCalendar).run("qa-2")
+    else { fatalError("The QA judged steps fixture has no run qa-2") }
+    return AnyView(
+        RunGroup(run: run, transcripts: StepTranscripts { _ in .unreachable }, unfolded: true, unfoldedSteps: ["design_check"])
+            .padding(DesignTokens.Space.s5)
+            .frame(width: 760)
+            .background(DesignTokens.Surface.content.color)
+    )
+}
+
+/// The judged QA pass's Conductor messages, each with its steps block, as the timeline draws them.
+@MainActor
+func qaJudgedTimeline() -> AnyView {
+    var model = TimelineModel.build(qaJudgedHistory, reference: timelineReference, calendar: timelineCalendar)
+    for day in model.days.indices { model.days[day].items = model.days[day].items.filter { ["entry-u1", "entry-u2"].contains($0.id) } }
+    model.days.removeAll { $0.items.isEmpty }
+    return AnyView(
+        TimelineSection(model: model, transcripts: StepTranscripts { _ in .unreachable }, calendar: timelineCalendar)
+            .padding(DesignTokens.Space.s5)
+            .frame(width: 780, alignment: .leading)
+            .background(DesignTokens.Surface.content.color)
+            .environment(\.conductorQuestions, conductorQuestionContext)
+            .environment(\.mentionReferences, conductorReferences)
+            .environment(\.artifactImages, ticketPageImages())
+    )
 }
 
 /// An implementation run (`Tests/Fixtures/timeline/step-answers.json`) whose first step answered in three entries, one of

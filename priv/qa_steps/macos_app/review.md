@@ -39,5 +39,8 @@ Rules Symphony keeps on the verdict:
   A change with nothing on screen to judge answers `pass` with `"scope": "none"` and the reason;
   Symphony accepts it only when the app built, launched and checked healthy.
 - Name each step's environment (`fixture` or `live`).
+- A walk, design check or wide pass keeps what it judged: the step list shows its word. When you
+  overrule one (a `fail` you judge an artifact of the seed, a `blocked` a recheck settled), say in
+  the verdict's `summary` which step you overruled and why.
 
 If the `qa_verdict` tool is not available, write the verdict object to the answer file instead.

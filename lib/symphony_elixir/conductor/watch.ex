@@ -26,7 +26,7 @@ defmodule SymphonyElixir.Conductor.Watch do
 
   alias SymphonyElixir.{Artifacts, Conductor, Config, Orchestrator}
   alias SymphonyElixir.Conductor.{Facts, Steer}
-  alias SymphonyElixir.TicketEvents.Event
+  alias SymphonyElixir.TicketEvents.{Event, StepWord}
   alias SymphonyElixirWeb.ObservabilityPubSub
 
   @tick_ms 30_000
@@ -213,7 +213,7 @@ defmodule SymphonyElixir.Conductor.Watch do
       kind: run_profile(run, :kind),
       model: run_profile(run, :model),
       harness: run_profile(run, :harness),
-      steps: for(%Event{type: "step.completed"} = step <- events, do: %{event_id: step.id, step_id: step.payload[:step_id], outcome: step.payload[:outcome]}),
+      steps: for(%Event{type: "step.completed"} = step <- events, do: %{event_id: step.id, step_id: step.payload[:step_id], outcome: StepWord.word(step.payload)}),
       failed_step: failed_step(events),
       current_step: events |> Enum.filter(&(&1.type == "step.started" and &1.payload[:step_id] not in completed)) |> List.last() |> current_step(),
       newest_lines: run |> Map.get(:transcript_buffer, []) |> Enum.take(-20) |> Enum.map(&line/1),
