@@ -3,7 +3,7 @@ import Foundation
 import XCTest
 
 /// A groomed ticket's timeline, from `Tests/Fixtures/timeline/plan.json`: the plan's events are one line each, a
-/// person's message holds the Conductor's reply under it, and a message with no reply yet waits on top.
+/// person's message holds the Conductor's reply under it, and a message with no reply yet waits on top until the ticket moves on.
 final class PlanTimelineTests: XCTestCase {
     private static let fixture = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
@@ -121,13 +121,101 @@ final class PlanTimelineTests: XCTestCase {
         )
     }
 
-    func testAMessageWithNoReplyYetWaitsOnTopForTheConductor() throws {
+    func testAMessageWithNoReplyYetWaitsOnTopWithNoLineOfItsOwn() throws {
         let model = TimelineModel.build(try history(), reference: reference, calendar: utc)
         XCTAssertEqual(model.items.first?.id, "entry-m2")
         let waiting = try entry("m2")
         XCTAssertTrue(waiting.waitsForRun)
         XCTAssertNil(waiting.reply)
-        XCTAssertEqual(waiting.detail, "The Conductor reads it next")
+        XCTAssertNil(waiting.detail)
+    }
+
+    // MARK: - A message nothing answers
+
+    private static let plan = #"{"id": "p1", "at": "2026-10-08T09:00:00Z", "type": "plan.written", "payload": {"version": 1}}"#
+
+    private func sent(_ id: String, at: String, read: String = "null") -> String {
+        #"{"id": "\#(id)", "at": "2026-10-08T\#(at)Z", "type": "message.sent", "actor": {"kind": "person", "name": "Tony"}, "#
+            + #""payload": {"text": "Hi."}, "summary": {"title": "You wrote"}, "read": \#(read)}"#
+    }
+
+    private func update(_ id: String, at: String, junction: String = "after_coding", parent: String? = nil, payload: String = #""text": "Noted.""#) -> String {
+        let parent = parent.map { #""parent": "\#($0)", "# } ?? ""
+        return #"{"id": "\#(id)", "at": "2026-10-08T\#(at)Z", "type": "conductor.update", \#(parent)"payload": {"junction": "\#(junction)", \#(payload)}}"#
+    }
+
+    private func message(_ id: String, in events: [String]) throws -> TimelineEntry {
+        try XCTUnwrap(entries(try page(events)).first { $0.id == id })
+    }
+
+    func testAMessageNoOneAnswersLeavesTheTopOnceTheConductorSpeaksLater() throws {
+        // Within a few minutes the message still waits; past them the Conductor's next update lets it go.
+        XCTAssertTrue(try message("m1", in: [Self.plan, sent("m1", at: "09:45:00"), update("u1", at: "09:49:00")]).waitsForRun)
+        let released = try message("m1", in: [Self.plan, sent("m1", at: "09:45:00"), update("u1", at: "09:51:00")])
+        XCTAssertFalse(released.waitsForRun)
+        XCTAssertNil(released.reply)
+        XCTAssertNil(released.detail)
+        let model = TimelineModel.build(
+            try page([Self.plan, sent("m1", at: "09:45:00"), update("u1", at: "09:51:00")]), reference: reference, calendar: utc
+        )
+        XCTAssertEqual(model.items.map(\.id), ["entry-u1", "entry-m1", "entry-p1"])
+    }
+
+    func testAMessageNoOneAnswersLeavesTheTopOnceARunMovesOnOrARunReadsIt() throws {
+        let started = #"{"id": "s1", "at": "2026-10-08T09:52:00Z", "type": "run.started", "run_id": "run-9", "payload": {"kind": "implementation"}}"#
+        XCTAssertFalse(try message("m1", in: [Self.plan, sent("m1", at: "09:45:00"), started]).waitsForRun)
+        // An event of no run and not the Conductor's keeps it waiting, however late.
+        let moved = #"{"id": "x1", "at": "2026-10-08T10:20:00Z", "type": "phase.entered", "payload": {"to": "QA"}, "summary": {"title": "Moved to QA"}}"#
+        XCTAssertTrue(try message("m1", in: [Self.plan, sent("m1", at: "09:45:00"), moved]).waitsForRun)
+        // What happened before the message never lets it go.
+        XCTAssertTrue(try message("m1", in: [Self.plan, update("u0", at: "09:10:00"), sent("m1", at: "09:45:00")]).waitsForRun)
+        // A run that read it (`message.read`, the message's `read`) unpins it as on a ticket with no plan.
+        let read = #"{"run_id": "run-9", "run": "Implementation run 2", "at": "2026-10-08T09:46:00Z"}"#
+        let readOne = try message("m1", in: [Self.plan, sent("m1", at: "09:45:00", read: read)])
+        XCTAssertFalse(readOne.waitsForRun)
+        XCTAssertEqual(readOne.detail, "Read by Implementation run 2 at 09:46")
+    }
+
+    func testOnATicketWithNoPlanALaterUpdateLeavesTheMessageOnTop() throws {
+        XCTAssertTrue(try message("m1", in: [sent("m1", at: "09:45:00"), update("u1", at: "09:51:00")]).waitsForRun)
+    }
+
+    func testALateReplyStillDrawsUnderItsMessage() throws {
+        let late = try message("m1", in: [
+            Self.plan, sent("m1", at: "09:45:00"), update("u1", at: "09:51:00"),
+            update("r1", at: "09:58:00", junction: "message", parent: "m1", payload: #""text": "Hello.""#),
+        ])
+        XCTAssertFalse(late.waitsForRun)
+        XCTAssertEqual(late.reply?.text, "Hello.")
+    }
+
+    // MARK: - Replies
+
+    func testAReplyOfBlocksAloneDrawsUnderItsMessage() throws {
+        let block = #"{"type": "budget", "tokens_used": 10, "tokens_cap": 20, "parts": []}"#
+        let answered = try message("m1", in: [
+            Self.plan, sent("m1", at: "09:45:00"),
+            update("r1", at: "09:46:00", junction: "message", parent: "m1", payload: #""text": "", "blocks": [\#(block)]"#),
+        ])
+        let reply = try XCTUnwrap(answered.reply)
+        XCTAssertEqual(reply.text, "")
+        XCTAssertEqual(reply.blocks.count, 1)
+        XCTAssertFalse(answered.waitsForRun)
+        XCTAssertEqual(answered.eventIDs, ["m1", "r1"])
+    }
+
+    func testTwoMessagesEachHoldTheirOwnReplyInOrder() throws {
+        let events = [
+            Self.plan, sent("m1", at: "09:45:00"), sent("m2", at: "09:46:00"),
+            update("r2", at: "09:47:00", junction: "message", parent: "m2", payload: #""text": "Second.""#),
+            update("r1", at: "09:48:00", junction: "message", parent: "m1", payload: #""text": "First.""#),
+        ]
+        let all = entries(try page(events))
+        // Newest first, each message where it was written, its reply under it and no entry of its own.
+        XCTAssertEqual(all.map(\.id), ["m2", "m1", "p1"])
+        XCTAssertEqual(all.map { $0.reply?.text }, ["Second.", "First.", nil])
+        XCTAssertEqual(all.map(\.eventIDs), [["m2", "r2"], ["m1", "r1"], ["p1"]])
+        XCTAssertEqual(all.map(\.waitsForRun), [false, false, false])
     }
 
     func testOnATicketWithoutAPlanAMessageWaitsForTheNextRunAsBefore() throws {

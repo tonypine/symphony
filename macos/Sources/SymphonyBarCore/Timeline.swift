@@ -188,8 +188,6 @@ public struct TimelineEntry: Equatable, Identifiable {
     public static let messageLead = "You wrote"
     /// A message's line while no run read it.
     public static let messageWaits = "The next run reads it first"
-    /// A message's line on a groomed ticket while the Conductor has not answered: there no run is given a person's message.
-    public static let messageWaitsForConductor = "The Conductor reads it next"
 
     /// A plan's line (`plan.written`): the first version is written, each later one changed for a reason.
     public static let planWritten = "Plan written"
@@ -213,8 +211,8 @@ public struct TimelineEntry: Equatable, Identifiable {
     }
 
     /// The entry of a message written to the ticket (`message.sent`): "You wrote: “…”" with the whole text, then whether
-    /// a run read it; on top of the timeline while none did. On a `groomed` ticket a message no run read waits for the
-    /// Conductor.
+    /// a run read it; on top of the timeline while none did. On a `groomed` ticket a message no run read has no line of
+    /// its own: the Conductor's reply is drawn there once it comes.
     static func message(
         _ entry: TimelineEntry, event: TicketEventsPayload.Event, groomed: Bool = false, reference: Date, calendar: Calendar
     ) -> TimelineEntry {
@@ -222,7 +220,7 @@ public struct TimelineEntry: Equatable, Identifiable {
         let lead = event.summary?.title?.trimmedNonEmpty ?? messageLead
         let text = event.payload.text?.trimmedNonEmpty ?? event.summary?.detail?.trimmedNonEmpty ?? ""
         entry.title = "\(lead): \u{201C}\(text)\u{201D}"
-        entry.detail = groomed && event.read == nil ? messageWaitsForConductor : messageReadLine(event.read, reference: reference, calendar: calendar)
+        entry.detail = groomed && event.read == nil ? nil : messageReadLine(event.read, reference: reference, calendar: calendar)
         entry.waitsForRun = event.read == nil
         return entry
     }
@@ -607,6 +605,9 @@ public struct TimelineModel: Equatable {
     static let oneLineTypes: Set<String> = ["plan.written", "check.proved", "check.waived", "conductor.intervention", "ask.recorded"]
     /// A ticket is groomed once its history holds a plan.
     static let planType = "plan.written"
+    /// How long a groomed ticket's message stays on top with no reply: past it, the Conductor's next update or the next
+    /// run's event lets it go, as a run reading it does on a ticket with no plan.
+    static let replyWait: TimeInterval = 5 * 60
     /// The junction a Conductor's reply to a message is written at.
     static let replyJunction = ConductorJunction.message.rawValue
     /// The rule actions that restate a run's work: the PR watcher keeping the branch current.
@@ -626,6 +627,13 @@ public struct TimelineModel: Equatable {
 
         for (order, event) in history.events.enumerated() {
             guard let at = event.date, !silentTypes.contains(event.type), !event.bookkeeping else { continue }
+            // A groomed ticket's message nothing answered leaves the top once the ticket has moved on without a reply.
+            if groomed, event.type == ConductorMessage.eventType || event.runID != nil {
+                for index in drafts.indices
+                where drafts[index].type == "message.sent" && at.timeIntervalSince(drafts[index].entry.at) > replyWait {
+                    drafts[index].entry.waitsForRun = false
+                }
+            }
             if let runID = event.runID, history.runs[runID] != nil, runTypes.contains(event.type) { continue }
             // What the Conductor said while it watched a run is drawn inside that run's group, when the page has the run.
             if let watched = ConductorMessage(event: event)?.watchedRunID, history.runs[watched] != nil { continue }

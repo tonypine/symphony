@@ -1480,10 +1480,26 @@ func briefPanel(_ story: BriefStory, width: CGFloat) -> some View {
 }
 
 /// The plan in a groomed ticket's Brief place (`Tests/Fixtures/director-app/ticket-page`, TP-1247): as the page opens
-/// it, with its summary and a check in each state; unfolded, with the plan for the runs and what was asked; and a plan
-/// that holds a summary alone.
+/// it, with its summary and a check in each state; unfolded, with the plan for the runs and what was asked; a plan
+/// that holds a summary alone; and one check in each state: open, proved by a test, proved by QA, waived with its reason.
 enum PlanStory: String, CaseIterable {
-    case folded, unfolded, summaryOnly = "summary-only"
+    case folded, unfolded, summaryOnly = "summary-only", checkStates = "check-states"
+
+    static let eachState = [
+        TicketCheckRead(id: "c1", kind: "outcome", statement: "The button on the paused line reads Release", proof: "test"),
+        TicketCheckRead(
+            id: "c2", kind: "outcome", statement: "The paused line says who paused the ticket, after why and since when", proof: "test",
+            state: .proved, provedBy: .init(by: "test", test: "PausedLineTests › says who paused it")
+        ),
+        TicketCheckRead(
+            id: "c3", kind: "qa", statement: "On a paused ticket's page the line reads the reason, the time and who paused it", proof: "qa",
+            state: .proved, provedBy: .init(by: "qa", details: "One line at 1366 pt: why, since when, who.")
+        ),
+        TicketCheckRead(
+            id: "c4", kind: "evidence", statement: "A screenshot of the Tickets table's paused column", proof: "attached", state: .waived,
+            waived: .init(reason: "The Tickets table's paused column is out of scope for this ticket")
+        ),
+    ]
 }
 
 @MainActor
@@ -1494,6 +1510,7 @@ func planPanel(_ story: PlanStory, width: CGFloat) -> some View {
         read?.asks = []
         read?.plan?.text = ""
     }
+    if story == .checkStates { read?.checks = PlanStory.eachState }
     guard let model = PlanPanelModel.build(read) else { fatalError("The ticket page's fixture TP-1247 holds no plan") }
     return PlanPanel(model: model, open: .constant(story == .unfolded))
         .frame(width: width, alignment: .leading)
@@ -1526,13 +1543,14 @@ func ticketPageImages() -> ArtifactImages {
     return images
 }
 
-/// `identifier`'s page as the window builds it from the fixture.
-func ticketPageRead(_ identifier: String) -> TicketPage {
+/// `identifier`'s page as the window builds it from the fixture; with `state`, from the reads the fixture serves
+/// after that move (`state.<state>.json`, `<identifier>.<state>.json`).
+func ticketPageRead(_ identifier: String, state: String? = nil) -> TicketPage {
     func data(_ path: String) -> Data? { try? Data(contentsOf: ticketPageAPI.appendingPathComponent(path)) }
     let events = data("repos/symphony/tickets/\(identifier)/events.json").flatMap(TicketEventsPayload.decode)
     return TicketPage(
         identifier: identifier,
-        sources: TicketPage.Sources(state: data("state.json"), issue: data("\(identifier).json"), events: events, feedAbsence: .unread),
+        sources: TicketPage.Sources(state: data(["state", state, "json"].compactMap { $0 }.joined(separator: ".")), issue: data([identifier, state, "json"].compactMap { $0 }.joined(separator: ".")), events: events, feedAbsence: .unread),
         timeZone: TimeZone(identifier: "UTC")!
     )
 }
@@ -1646,18 +1664,21 @@ func ticketPageMessage(read: Bool) -> TicketEventsPayload {
 }
 
 /// Writing to a groomed ticket (TP-1247), in the laptop's 780 pt column: a message with the Conductor's reply under
-/// it, and a message the Conductor has not answered yet, on top.
+/// it; a message the Conductor has not answered yet, on top; and the ticket once Done (the fixture after a move), which
+/// keeps its box.
 enum GroomedWriting: String, CaseIterable {
-    case answered = "message-answered", waiting = "message-waits-for-conductor"
+    case answered = "message-answered", waiting = "message-waits-for-conductor", finished = "groomed-finished"
 }
 
 @MainActor
 func groomedTicketWriting(_ moment: GroomedWriting) -> some View {
-    var page = ticketPageRead("TP-1247")
+    var page = ticketPageRead("TP-1247", state: moment == .finished ? "after-move" : nil)
     if moment == .waiting { page.history?.merge(ticketPageMessage(read: false)) }
     return VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
         TimelineTitle(marks: nil)
-        TimelineComposer(composer: TicketMessageComposer(identifier: page.identifier), drawnAs: .rest, groomed: page.isGroomed, send: {})
+        if page.takesMessages {
+            TimelineComposer(composer: TicketMessageComposer(identifier: page.identifier), drawnAs: .rest, send: {})
+        }
         TimelineSection(
             model: page.timelineModel(calendar: timelineCalendar), idle: TimelineIdleLine(page.situation, reference: page.reference),
             transcripts: StepTranscripts { _ in .unreachable }, calendar: timelineCalendar

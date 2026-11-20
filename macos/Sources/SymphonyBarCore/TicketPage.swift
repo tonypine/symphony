@@ -288,8 +288,9 @@ public struct TicketPage: Equatable {
     public var isGroomed: Bool { detailsRead?.plan != nil }
 
     /// Whether the page draws the box above the timeline: not on a ticket that is Done or Cancelled, which no run will
-    /// read a message on.
+    /// read a message on. A groomed ticket keeps it once finished: its Conductor still answers.
     public var takesMessages: Bool {
+        if isGroomed { return true }
         if case .done = phase { return false }
         return !Self.closedPhases.contains(phaseName ?? "")
     }

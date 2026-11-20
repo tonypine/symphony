@@ -22,11 +22,11 @@ final class PlanPanelTests: XCTestCase {
         try XCTUnwrap(TicketDetailsRead.decode(try data("\(identifier).json")))
     }
 
-    private func page(_ identifier: String) throws -> TicketPage {
+    private func page(_ identifier: String, state: String? = nil) throws -> TicketPage {
         TicketPage(
             identifier: identifier,
             sources: TicketPage.Sources(
-                state: try data("state.json"), issue: try data("\(identifier).json"),
+                state: try data(["state", state, "json"].compactMap { $0 }.joined(separator: ".")), issue: try data([identifier, state, "json"].compactMap { $0 }.joined(separator: ".")),
                 events: TicketEventsPayload.decode(try data("repos/symphony/tickets/\(identifier)/events.json"))
             ),
             timeZone: utc
@@ -116,7 +116,10 @@ final class PlanPanelTests: XCTestCase {
         XCTAssertEqual(model.checks[5].help, "No test can hold a real pause open, and QA walks the same line.")
         XCTAssertEqual(model.checks[0].accessibilityLabel, "Proved, The paused line says who paused the ticket, after why and since when, Test")
         XCTAssertEqual(model.checks[2].accessibilityLabel, "Open, The button on the paused line reads Release, Test")
-        XCTAssertEqual(model.checks[5].accessibilityLabel, "Waived, A recording of a real pause being released")
+        XCTAssertEqual(
+            model.checks[5].accessibilityLabel,
+            "Waived, A recording of a real pause being released, No test can hold a real pause open, and QA walks the same line."
+        )
         XCTAssertFalse(model.isEmpty)
     }
 
@@ -129,9 +132,8 @@ final class PlanPanelTests: XCTestCase {
             model.asked,
             "The paused line should say who paused the ticket, after why and since when.\n\nKeep the button word Release."
         )
-        XCTAssertEqual(PlanPanelModel.foldTitle(open: false), "Read the whole plan")
+        XCTAssertEqual(PlanPanelModel.foldTitle(open: false), "Show more")
         XCTAssertEqual(PlanPanelModel.foldTitle(open: true), "Show less")
-        XCTAssertEqual(PlanPanelModel.textTitle, "Plan for the runs")
     }
 
     func testTheProgressCountsProvedChecksAndAPlanWithoutChecksHasNone() {
@@ -169,14 +171,53 @@ final class PlanPanelTests: XCTestCase {
 
     // MARK: - The page
 
-    func testAGroomedTicketsPageIsGroomedAndItsBoxSaysTheConductorAnswers() throws {
+    func testAGroomedTicketsPageIsGroomedAndItsBoxKeepsItsWords() throws {
         XCTAssertTrue(try page("TP-1247").isGroomed)
         XCTAssertTrue(try page("TP-1247").takesMessages)
         XCTAssertFalse(try page("TP-1244").isGroomed)
-        XCTAssertEqual(TicketMessageComposer.placeholder(groomed: true), "Write to the ticket. The Conductor answers.")
-        XCTAssertEqual(TicketMessageComposer.placeholder(groomed: false), "Write to the ticket. The next run reads it first.")
-        XCTAssertEqual(TicketMessageComposer.sentAnnouncement(groomed: true), "Message sent. The Conductor answers.")
+        XCTAssertEqual(TicketMessageComposer.placeholder, "Write to the ticket. The next run reads it first.")
+        XCTAssertEqual(TicketMessageComposer.sentAnnouncement(groomed: true), "Message sent.")
         XCTAssertEqual(TicketMessageComposer.sentAnnouncement(groomed: false), "Message sent. The next run reads it first.")
+    }
+
+    func testAFinishedGroomedTicketStillTakesAMessageAndOneWithNoPlanDoesNot() throws {
+        // The ticket once moved to Done, as the fixture serves it after the move.
+        let finished = try page("TP-1247", state: "after-move")
+        XCTAssertEqual(finished.phaseName, "Done")
+        guard case .done = finished.phase else { return XCTFail("The moved ticket's page is not done") }
+        XCTAssertTrue(finished.isGroomed)
+        XCTAssertTrue(finished.takesMessages)
+        var page = try page("TP-1247")
+        for phase in ["Done", "Canceled", "Cancelled"] {
+            page.phaseName = phase
+            XCTAssertTrue(page.takesMessages, phase)
+        }
+        page.phase = .done(pullRequest: nil, mergedAt: nil)
+        XCTAssertTrue(page.takesMessages)
+        // With no plan a finished ticket has no box, as before.
+        page.detailsRead?.plan = nil
+        XCTAssertFalse(page.takesMessages)
+        XCTAssertEqual(try self.page("TP-1246").phaseName, "Done")
+        XCTAssertFalse(try self.page("TP-1246").takesMessages)
+    }
+
+    func testAWaivedCheckSaysWhyOnItsLineAndTheOthersDoNot() throws {
+        let waived = PlanPanelModel.check(
+            TicketCheckRead(id: "c1", statement: "S", proof: "attached", state: .waived, waived: .init(reason: " Out of scope. "))
+        )
+        XCTAssertEqual(waived.reason, "Out of scope.")
+        XCTAssertEqual(waived.proof, "Waived")
+        XCTAssertEqual(waived.accessibilityLabel, "Waived, S, Out of scope.")
+        XCTAssertNil(PlanPanelModel.check(TicketCheckRead(id: "c1", statement: "S", state: .waived, waived: .init(reason: " "))).reason)
+        XCTAssertNil(PlanPanelModel.check(TicketCheckRead(id: "c1", statement: "S", state: .waived)).reason)
+        // A check not waived has no reason, whatever its read holds.
+        let proved = PlanPanelModel.check(
+            TicketCheckRead(id: "c2", statement: "S", proof: "qa", state: .proved, provedBy: .init(by: "qa"), waived: .init(reason: "Old"))
+        )
+        XCTAssertNil(proved.reason)
+        XCTAssertEqual(proved.accessibilityLabel, "Proved, S, QA")
+        let fixture = try XCTUnwrap(PlanPanelModel.build(try read("TP-1247")))
+        XCTAssertEqual(fixture.checks.filter { $0.reason != nil }.map(\.state), [.waived])
     }
 
     func testTheGroomedTicketsTimelineHoldsThePlanAndTheReplyUnderItsMessage() throws {

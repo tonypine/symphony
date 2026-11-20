@@ -940,11 +940,9 @@ struct TicketPageBody: View {
             }
             VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
                 TimelineTitle(marks: page.marksRead)
-                // Writing to the ticket: one box above the first entry; none on a ticket no run will read again.
+                // Writing to the ticket: one box above the first entry; none on a Done or Cancelled ticket with no plan.
                 if page.takesMessages {
-                    TimelineComposer(
-                        composer: message, focus: messageFocus, drawnAs: composerDrawnAs, groomed: page.isGroomed, send: actions.sendMessage
-                    )
+                    TimelineComposer(composer: message, focus: messageFocus, drawnAs: composerDrawnAs, send: actions.sendMessage)
                         .id(TicketPageView.composerAnchor)
                 }
                 Group {

@@ -2,7 +2,7 @@ import Foundation
 
 // The plan on top of a groomed ticket's page, in the Brief panel's place: what Grooming planned, in the Conductor's
 // summary, then the plan's checks, one line each with its state and how it is proved. Its title line says how far the
-// checks are ("3 of 5 checks proved"); unfolded it shows the plan as the runs read it and what was asked. A ticket
+// checks are ("3 of 5 checks proved"); unfolded it shows the plan as the runs read it and what was asked. A waived check says why on its line. A ticket
 // with no plan keeps the Brief panel (`BriefPanelModel`).
 
 // MARK: - The ticket read
@@ -190,6 +190,8 @@ public struct PlanPanelModel: Equatable {
         public var state: TicketCheckRead.State
         /// "Test", "QA", "Design", "Attached"; "Waived" for a waived one; nil when the plan names no proof.
         public var proof: String?
+        /// Why it was waived, on its line after the statement; nil for a check not waived, or waived with no reason.
+        public var reason: String?
         /// The test that proved it and what the proof says, or why it was waived, under the pointer.
         public var help: String?
 
@@ -211,9 +213,9 @@ public struct PlanPanelModel: Equatable {
             }
         }
 
-        /// "Proved, The line says why the ticket is paused, Test".
+        /// "Proved, The line says why the ticket is paused, Test"; a waived one ends with why.
         public var accessibilityLabel: String {
-            [stateWord, statement, state == .waived ? nil : proof].compactMap { $0 }.joined(separator: ", ")
+            [stateWord, statement, state == .waived ? reason : proof].compactMap { $0 }.joined(separator: ", ")
         }
     }
 
@@ -230,8 +232,7 @@ public struct PlanPanelModel: Equatable {
     public var asked: String?
 
     public static let title = "Plan"
-    public static let textTitle = "Plan for the runs"
-    public static let readAllTitle = "Read the whole plan"
+    public static let showMoreTitle = "Show more"
     public static let waived = "Waived"
 
     /// Whether the panel has a fold: only a plan with text for the runs, or an ask, does.
@@ -244,7 +245,7 @@ public struct PlanPanelModel: Equatable {
     public var line: String { [title, note].compactMap { $0 }.joined(separator: " · ") }
 
     /// The fold control's title as it reads while `open`.
-    public static func foldTitle(open: Bool) -> String { open ? BriefPanelModel.showLessTitle : readAllTitle }
+    public static func foldTitle(open: Bool) -> String { open ? BriefPanelModel.showLessTitle : showMoreTitle }
 
     /// "3 of 5 checks proved", "1 of 1 check proved"; nil without checks.
     public static func progress(_ checks: [TicketCheckRead]) -> String? {
@@ -280,7 +281,10 @@ public struct PlanPanelModel: Equatable {
         let proof = read.state == .waived ? waived : proofWord(read.provedBy?.by) ?? proofWord(read.proof)
         let said = read.state == .waived ? [read.waived?.reason] : [read.provedBy?.test, read.provedBy?.details]
         let help = said.compactMap { $0?.trimmingWhitespace().nonEmpty }.joined(separator: "\n")
-        return Check(id: read.id, statement: read.statement.trimmingWhitespace(), state: read.state, proof: proof, help: help.nonEmpty)
+        let reason = read.state == .waived ? read.waived?.reason?.trimmingWhitespace().nonEmpty : nil
+        return Check(
+            id: read.id, statement: read.statement.trimmingWhitespace(), state: read.state, proof: proof, reason: reason, help: help.nonEmpty
+        )
     }
 }
 

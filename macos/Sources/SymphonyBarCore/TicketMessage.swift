@@ -14,8 +14,6 @@ public final class TicketMessageComposer: ObservableObject {
     /// What VoiceOver reads the box as.
     public static let label = "Write to the ticket"
     public static let placeholder = "Write to the ticket. The next run reads it first."
-    /// The box's placeholder on a groomed ticket, where the ticket's Conductor answers.
-    public static let groomedPlaceholder = "Write to the ticket. The Conductor answers."
     public static let sendTitle = "Send"
     public static let sendingTitle = "Sending…"
     /// The keys that send, as the hint beside Send shows them.
@@ -23,10 +21,7 @@ public final class TicketMessageComposer: ObservableObject {
     /// What VoiceOver says once a message is sent.
     public static let sentAnnouncement = "Message sent. The next run reads it first."
     /// What VoiceOver says once a message is sent on a groomed ticket.
-    public static let groomedSentAnnouncement = "Message sent. The Conductor answers."
-
-    /// The box's placeholder, by whether the ticket is `groomed`.
-    public static func placeholder(groomed: Bool) -> String { groomed ? groomedPlaceholder : placeholder }
+    public static let groomedSentAnnouncement = "Message sent."
 
     /// What VoiceOver says once a message is sent, by whether the ticket is `groomed`.
     public static func sentAnnouncement(groomed: Bool) -> String { groomed ? groomedSentAnnouncement : sentAnnouncement }

@@ -34,7 +34,7 @@ public struct PlanPanel: View {
                 FoldBody(expanded: unfolded) {
                     VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
                         if let text = model.text {
-                            BriefPart(title: PlanPanelModel.textTitle, text: text, secondary: false).foldRow(0)
+                            BriefPart(title: nil, text: text, secondary: false).foldRow(0)
                         }
                         if let asked = model.asked {
                             BriefPart(title: BriefPanelModel.askedTitle, text: asked, secondary: true).foldRow(1)
@@ -50,7 +50,8 @@ public struct PlanPanel: View {
 }
 
 /// One check on one line: its state's mark, its statement, cut with an ellipsis where the line ends, and at the
-/// trailing end how it is proved. The whole statement, and the test that proved it, are under the pointer.
+/// trailing end how it is proved. A waived check says why after its statement, in the secondary style, cut where the
+/// line ends. The whole statement, and the test that proved it, are under the pointer.
 struct PlanCheckRow: View {
     let check: PlanPanelModel.Check
 
@@ -67,7 +68,16 @@ struct PlanCheckRow: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .foregroundStyle((check.state == .waived ? DesignTokens.TextColor.secondary : DesignTokens.TextColor.primary).color)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: check.reason == nil ? .infinity : nil, alignment: .leading)
+                .layoutPriority(1)
+            if let reason = check.reason {
+                Text(reason)
+                    .textStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
             if let proof = check.proof {
                 RowValue(proof)
             }

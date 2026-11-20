@@ -12,8 +12,6 @@ public struct TimelineComposer: View {
     let send: () -> Void
     var focus: FocusState<Bool>.Binding?
     var drawnAs: DesignTokens.Field.State?
-    /// The ticket has a plan: the box says the Conductor answers.
-    var groomed = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// The most lines the box grows to before it scrolls.
@@ -23,12 +21,11 @@ public struct TimelineComposer: View {
 
     /// `composer` holds the box's text, whether a message is on its way and why the last one wasn't sent; `send` posts
     /// it. `focus` is the box's keyboard focus, for a move that takes the person to it; `drawnAs` draws the box in one
-    /// state, for an offscreen render. On a `groomed` ticket the box says the Conductor answers.
+    /// state, for an offscreen render.
     public init(
         composer: TicketMessageComposer, focus: FocusState<Bool>.Binding? = nil, drawnAs: DesignTokens.Field.State? = nil,
-        groomed: Bool = false, send: @escaping () -> Void
+        send: @escaping () -> Void
     ) {
-        self.groomed = groomed
         self.composer = composer
         self.focus = focus
         self.drawnAs = drawnAs
@@ -40,7 +37,7 @@ public struct TimelineComposer: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
             TextArea(
-                TicketMessageComposer.label, text: $composer.text, placeholder: TicketMessageComposer.placeholder(groomed: groomed), hint: Self.hint,
+                TicketMessageComposer.label, text: $composer.text, placeholder: TicketMessageComposer.placeholder, hint: Self.hint,
                 minLines: 1, maxLines: Self.maxLines, minHeight: DesignTokens.Control.large.height, focused: focus, drawnAs: drawnAs,
                 send: { if sendable { send() } }
             )
