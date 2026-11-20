@@ -4,9 +4,10 @@ defmodule SymphonyElixir.QaSeedTest do
   import Plug.Conn
   import Plug.Test
 
-  alias SymphonyElixir.{Artifacts, Config, DirectorMoves, Inbox, Orchestrator, Pauses, PlanBrief, QaSeed, Questions}
-  alias SymphonyElixir.{Paths, RunStore, Situation, SubIssueWait, TicketEvents, TicketPullRequest, Tracker, Workflow}
+  alias SymphonyElixir.{Artifacts, Config, DirectorMoves, Inbox, Orchestrator, Paths, Pauses, PlanBrief, QaSeed}
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.{Questions, RunStore, Situation, SubIssueWait, TicketEvents, TicketPullRequest, Tracker}
+  alias SymphonyElixir.Workflow
   alias SymphonyElixirWeb.ControlApiController
 
   # The restart's reset, which the QA server's `gh` stand-in answers for the seed's own PRs.
@@ -236,7 +237,18 @@ defmodule SymphonyElixir.QaSeedTest do
     assert RunStore.merged_wait?("qa-seed-114")
     waiting = record(repo_key, "qa-seed-114")
     assert %{phase: "Waiting on sub-tickets", labels: [], sub_issues: [%{identifier: "QA-115", state: "Todo"}]} = waiting
-    live = %{running: %{}, retrying: %{}, slot_waiting: %{}, skipped: %{}, limit: 4, symphony_pause: nil, max_tries: 3, terminal_states: terminal_states}
+
+    live = %{
+      running: %{},
+      retrying: %{},
+      slot_waiting: %{},
+      skipped: %{},
+      limit: 4,
+      symphony_pause: nil,
+      max_tries: 3,
+      terminal_states: terminal_states
+    }
+
     status = Situation.compute(waiting, [], live)
     assert %{kind: "waiting_on_sub_tickets", waits_on: %{sub_tickets: ["QA-115"]}} = status
     refute status.cause =~ "epic review"
@@ -258,7 +270,8 @@ defmodule SymphonyElixir.QaSeedTest do
     on_exit(fn -> stop_process(orchestrator) end)
     moves_server = :"qa_seed_moves_#{System.unique_integer([:positive])}"
     start_supervised!({DirectorMoves, name: moves_server})
-    moves = [server: moves_server, github: SeedGitHub, workspace: SeedWorkspace, inbox: [name: {:qa_seed_inbox, make_ref()}, github_repos: %{}]]
+    inbox = [name: {:qa_seed_inbox, make_ref()}, github_repos: %{}]
+    moves = [server: moves_server, github: SeedGitHub, workspace: SeedWorkspace, inbox: inbox]
 
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
