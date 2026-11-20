@@ -11,7 +11,7 @@ defmodule SymphonyElixir.PhaseSteps.WindowTests do
   that does not pass on main there is never run. The step runs (`selected/1`) every entry whose
   script or covered path the change touches, every entry when the manifest itself changed, and is
   skipped with the reason when no entry covers the change (`skip_reason/1`). An entry that is off
-  and covers the change is never skipped quietly: the step ends could not run, naming it
+  and covers the change (its script or a covered path) is never skipped quietly: the step ends could not run, naming it
   (`off_covering/1`). `SymphonyElixir.PhaseSteps.changes/1`
   reads the manifest with the changed files.
 
@@ -128,12 +128,13 @@ defmodule SymphonyElixir.PhaseSteps.WindowTests do
   defp covers?(entry, changed), do: Enum.any?(changed, fn path -> path == entry.script or Enum.any?(entry.covers, &Selection.glob_match?(path, &1)) end)
 
   @doc """
-  The tests that are off in the QA VM and cover `changes` (their script, a path they cover, or the
-  manifest changed). The step never skips them: it can't run them, so it stops and says so.
+  The tests that are off in the QA VM and cover `changes` (their script or a path they cover). The
+  step never skips them: it can't run them, so it stops and says so. A change to the manifest alone
+  is not one of them, so a change that turns one test on runs it without stopping for those still off.
   """
   @spec off_covering(map()) :: [entry()]
   def off_covering(%{window_tests: {:ok, entries}, changed: changed}) do
-    Enum.filter(entries, &(is_binary(&1.off) and (@manifest_path in changed or covers?(&1, changed))))
+    Enum.filter(entries, &(is_binary(&1.off) and covers?(&1, changed)))
   end
 
   def off_covering(_changes), do: []

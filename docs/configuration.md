@@ -3940,8 +3940,11 @@ each test's `script`, its `title` in plain words, the `run` line the Mac CI buil
 the `covers` globs (`**` spans folders) and, for a test that does not pass on main in the QA VM, why
 it is `off` there. The step runs every test that is on whose script or covered path the change
 touches (every one when the manifest itself changed), and is skipped, saying why, when no test covers
-the change. A change a test that is `off` covers is never skipped: the step runs the tests that are on
-and then stops on a Question naming the test it could not run, so no run hands off with one unrun.
+the change. A change to the script or a covered path of a test that is `off` is never skipped: the
+step runs the tests that are on and then stops on a Question naming the test it could not run, so no
+run hands off with one unrun (a change to the manifest alone does not stop for the tests still `off`,
+so a change can turn one test on at a time). Every test ships `off` until a run's step sees it pass on
+main in the QA VM.
 It builds the workspace's commit with the QA build a QA pass uses (cached by tree, so the QA pass of
 the same commit reuses it), takes the QA VM, copies the commit to a run directory of its own there
 and runs each test from `macos/` with the Mac CI build's environment: the pinned Xcode as
