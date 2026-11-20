@@ -462,4 +462,81 @@ final class TimelineTests: XCTestCase {
         XCTAssertEqual(DesignTokens.Motion.enterTintDuration, 1.2)
         XCTAssertEqual(DesignTokens.Motion.enterTint, DesignTokens.StateSurface.selected.color)
     }
+
+    // MARK: - Messages written to the ticket (TP-1503)
+
+    private func message(_ id: String, _ at: String, day: String = "2026-10-08", text: String, read: String = "null") -> String {
+        #"{"id": "\#(id)", "at": "\#(day)T\#(at)Z", "type": "message.sent", "actor": {"kind": "person", "name": "Tony"}, "payload": {"text": "\#(text)"}, "summary": {"title": "You wrote", "detail": "\#(text)"}, "read": \#(read)}"#
+    }
+
+    func testAMessageNoRunReadSitsOnTopAboveTheRunNowInFullAndOneARunReadSaysWhichRunAndWhen() throws {
+        var history = try history()
+        history.merge(try page([
+            message("w1", "10:20:00", text: #"Keep the button word Release.\nAnd the new copy."#),
+            message("w2", "09:00:00", text: "Use the catalog chip.", read: #"{"run_id": "run-2", "run": "Implementation run 2", "at": "2026-10-08T09:05:00Z"}"#),
+            event("w2r", "09:05:00", "message.read", title: "Message read by a run", payload: #"{"message_id": "w2", "run_id": "run-2"}"#),
+        ]))
+        let model = TimelineModel.build(history, reference: reference, calendar: utc)
+        // Waiting for the next run, it is the timeline's first line, above the run now, whenever it was written.
+        XCTAssertEqual(model.items.prefix(2).map(\.id), ["entry-w1", "run-run-2"])
+        XCTAssertEqual(model.runNow?.id, "run-2")
+        XCTAssertEqual(model.days.first?.items.first?.id, "entry-w1")
+
+        let shown = entries(model)
+        let unread = try XCTUnwrap(shown.first { $0.id == "w1" })
+        XCTAssertEqual(unread.kind, .message)
+        XCTAssertEqual(unread.lead, "You wrote:")
+        XCTAssertEqual(unread.rest, "\u{201C}Keep the button word Release.\nAnd the new copy.\u{201D}")
+        XCTAssertEqual(unread.detail, "The next run reads it first")
+        XCTAssertEqual(unread.actor, "Tony")
+        XCTAssertTrue(unread.waitsForRun)
+        XCTAssertFalse(unread.isMechanical)
+
+        // Read: it sits by its time, under the run now, and says which run read it and when.
+        let read = try XCTUnwrap(shown.first { $0.id == "w2" })
+        XCTAssertEqual(read.detail, "Read by Implementation run 2 at 09:05")
+        XCTAssertFalse(read.waitsForRun)
+        let order = model.items.map(\.id)
+        XCTAssertLessThan(try XCTUnwrap(order.firstIndex(of: "entry-n1")), try XCTUnwrap(order.firstIndex(of: "entry-w2")))
+        // The read itself is bookkeeping: the message says it.
+        XCTAssertFalse(shown.contains { $0.eventIDs.contains("w2r") })
+
+        XCTAssertEqual(TimelineEntry.Kind.message.symbol, "note.text")
+        XCTAssertEqual(TimelineEntry.Kind.message.tone, .accent)
+        XCTAssertEqual(TimelineEntry.Kind.message.word, "message")
+        XCTAssertEqual(unread.accessibilityLabel(time: "10:20"), "10:20, message, You wrote: \u{201C}Keep the button word Release.\nAnd the new copy.\u{201D}, The next run reads it first, by Tony")
+    }
+
+    func testEachMessageIsItsOwnEntryAndAnOldUnreadOneSitsInTheNewestDay() throws {
+        let history = try page([
+            message("o1", "18:00:00", day: "2026-10-07", text: "Migrated from the note."),
+            event("p1", "09:00:00", "phase.entered", title: "Entered In Progress from Todo", payload: #"{"to": "In Progress", "from": "Todo"}"#),
+            message("t1", "09:10:00", text: "Same words.", read: #"{"run_id": "r", "run": "Implementation run 1", "at": "2026-10-08T09:20:00Z"}"#),
+            message("t2", "09:11:00", text: "Same words.", read: #"{"run_id": "r", "run": "Implementation run 1", "at": "2026-10-08T09:20:00Z"}"#),
+        ])
+        let model = TimelineModel.build(history, reference: reference, calendar: utc)
+        XCTAssertEqual(model.days.map(\.id), ["2026-10-08"])
+        XCTAssertEqual(model.items.map(\.id), ["entry-o1", "entry-t2", "entry-t1", "entry-p1"])
+        XCTAssertEqual(entries(model).filter { $0.kind == .message }.map(\.eventIDs), [["o1"], ["t2"], ["t1"]])
+    }
+
+    func testAMessagesReadLineNamesTheDayWhenItIsNotTodayAndARunItDoesNotName() {
+        let yesterday = ISO8601DateFormatter().date(from: "2026-10-07T08:05:00Z")!
+        XCTAssertEqual(TimelineEntry.messageReadLine(nil, reference: reference, calendar: utc), "The next run reads it first")
+        XCTAssertEqual(
+            TimelineEntry.messageReadLine(.init(runID: "r", run: "Code review run 2", at: yesterday), reference: reference, calendar: utc),
+            "Read by Code review run 2 yesterday at 08:05"
+        )
+        XCTAssertEqual(TimelineEntry.messageReadLine(.init(runID: "r"), reference: reference, calendar: utc), "Read by a run")
+    }
+
+    func testAMessageReadDecodesFromTheFeedAndAnyOtherEventHasNone() throws {
+        let history = try page([
+            message("w1", "10:20:00", text: "Hi.", read: #"{"run_id": "run-2", "run": "Implementation run 2", "at": "2026-10-08T10:21:00Z"}"#),
+            event("e1", "10:00:00", "note", title: "Note added"),
+        ])
+        let read = try XCTUnwrap(history.events.first { $0.id == "w1" }?.read)
+        XCTAssertEqual(read, TicketEventsPayload.MessageRead(runID: "run-2", run: "Implementation run 2", at: ISO8601DateFormatter().date(from: "2026-10-08T10:21:00Z")))
+        XCTAssertNil(history.events.first { $0.id == "e1" }?.read)
+    }
 }

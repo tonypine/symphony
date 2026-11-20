@@ -232,6 +232,17 @@ public struct ExpectedAndActual: View {
     /// The least width of a pane before the two stack.
     static let paneMinimum: CGFloat = 220
 
+    /// The screenshot each pane shows, expected first: the set the image viewer opens on.
+    private var screenshots: [TicketScreenshot] {
+        [(Self.expectedLabel, compare.expected), (actualLabel, compare.actual)].compactMap { label, side in
+            if case let .screenshot(artifactID, _) = side { Self.screenshot(artifactID, label: label) } else { nil }
+        }
+    }
+
+    private static func screenshot(_ artifactID: String, label: String) -> TicketScreenshot {
+        TicketScreenshot(id: artifactID, label: label, path: "api/v1/artifacts/\(artifactID)", available: true)
+    }
+
     public var body: some View {
         EqualPanes(minimum: Self.paneMinimum, gap: DesignTokens.Space.s3 - 2) {
             pane(Self.expectedLabel, compare.expected)
@@ -253,10 +264,7 @@ public struct ExpectedAndActual: View {
                 ClampedText(text: text, lines: lineLimit)
                     .accessibilityLabel(label + ": " + text)
             case let .screenshot(artifactID, _):
-                ScreenshotThumbnail(
-                    shot: TicketScreenshot(id: artifactID, label: label, path: "api/v1/artifacts/\(artifactID)", available: true),
-                    size: FindingShot.size
-                )
+                ScreenshotThumbnail(shot: Self.screenshot(artifactID, label: label), set: screenshots, size: FindingShot.size)
             }
         }
         .padding(.vertical, DesignTokens.Space.s2 + 2)

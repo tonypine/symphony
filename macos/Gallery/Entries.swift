@@ -175,11 +175,20 @@ let galleryEntries: [GalleryEntry] = [
             "SymphonyBarUI/DesignSystem/ConductorBlocksView.swift", "SymphonyBarUI/DesignSystem/ConductorMessageViews.swift",
             "SymphonyBarCore/ConductorBlock.swift",
         ]),
+    GalleryEntry(
+        id: "image-viewer", title: "Image viewer", kind: .component, prefixes: ["image-viewer-"],
+        files: ["SymphonyBarUI/DesignSystem/ImageViewer.swift", "SymphonyBarUI/DesignSystem/TimelineParts.swift", "SymphonyBarCore/ImageViewerModel.swift"]),
+    GalleryEntry(
+        id: "thumbnail-row", title: "Thumbnail row", kind: .component, prefixes: ["thumbnail-row-"],
+        files: ["SymphonyBarUI/DesignSystem/TimelineParts.swift", "SymphonyBarCore/ThumbnailRowPlan.swift"]),
     GalleryEntry(id: "type-styles", title: "Type styles", kind: .component, prefixes: ["type-styles-"], files: []),
     // Screens.
     GalleryEntry(
         id: "ticket-page", title: "Ticket page", kind: .screen, prefixes: ["ticket-page-"],
-        files: ["SymphonyBar/TicketPageView.swift", "SymphonyBarCore/TicketPage"]),
+        files: [
+            "SymphonyBar/TicketPageView.swift", "SymphonyBarCore/TicketPage", "SymphonyBarUI/TimelineComposer.swift",
+            "SymphonyBarCore/TicketMessage.swift",
+        ]),
     GalleryEntry(
         id: "home", title: "Home", kind: .screen, prefixes: ["home-lists", "home-unavailable"],
         files: ["SymphonyBar/HomeView.swift", "SymphonyBarCore/Home"]),

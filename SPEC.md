@@ -3088,7 +3088,8 @@ An agent step MAY set what its turn runs with (`model`, `effort`), the session i
 `repeat: walkthrough`; a machine step MUST NOT. Today only a stepped QA pass acts on them.
 
 A QA pass walks a step list instead of being one agent session when `phases.qa.stepped` is on and
-the pass (not an epic review) runs one playbook with a list (`phases.qa.playbooks.<kind>.steps`, or
+the pass (not an epic review) runs one playbook with a list, alone or beside the `cli` playbook, whose
+walkthrough steps the plan MAY give to the command line (`surface: "cli"`) (`phases.qa.playbooks.<kind>.steps`, or
 the `macos_app` default: pre-checks, build, plan, launch, one walk per walkthrough step, design
 check, wide pass, quit, attach, review). Off, it MUST run as one agent session as before
 (`SymphonyElixir.QaAgent.Steps`, `docs/configuration.md#stepped-qa-passes`). Every step MUST be
@@ -6695,8 +6696,8 @@ Minimum endpoints:
     it in the ticket's history summary. A run is given only the messages written before it started,
     however many prompts it builds (each step, a retry), so a message sent while it works waits for
     the next run; that run's own history summary leaves it out as well.
-  - The ticket read carries `unread_messages`, the count no run read yet, and, for the Mac app release
-    that reads one note, `note`: the newest unread message.
+  - The ticket read carries `unread_messages`, the count no run read yet. The Director's ticket page
+    shows each message as an entry of the timeline, from the events feed.
   - Each ticket's note from before messages (a person's `note`, read by a `note.read`) was turned into
     one `message.sent` at its time, with its `message.read` when a run had read it, once at startup.
 

@@ -2,114 +2,10 @@ import AppKit
 import SwiftUI
 import SymphonyBarCore
 
-// The facts rail's last three panels (`docs/design/director-ticket-page.md` §1 facts 17, 18, 22 to 25, 27, 30 and
-// 33): Note for the next run (the note set, by whom and when, which run read it, and the field with Save Note), the
+// The facts rail's last two panels (`docs/design/director-ticket-page.md` §1 facts 17, 22 to 25, 27, 30 and 33): the
 // Decisions (newest first, each folding into its question and answer) and the Details (the catalog's Key-value list:
 // repo, priority, labels, workspace with Copy, each run's model folded, links out, then the brief and walkthrough
 // above the agent description, which stays folded). Titles sit outside the cards as the rail's first two panels'.
-
-// MARK: - The Note for the next run panel
-
-public struct NotePanel: View {
-    let model: NotePanelModel
-    @ObservedObject var composer: TicketNoteComposer
-    let save: () -> Void
-
-    @FocusState private var focused: Bool
-
-    /// `composer` holds the field's text, whether a note is on its way and why the last one wasn't saved; `save` posts
-    /// it (`TicketNoteComposer.submit(identifier:repoKey:send:read:)`).
-    public init(model: NotePanelModel, composer: TicketNoteComposer, save: @escaping () -> Void) {
-        self.model = model
-        self.composer = composer
-        self.save = save
-    }
-
-    private var saveReason: String? { model.saveReason(composer.text) }
-
-    public var body: some View {
-        FactsPanel(title: NotePanelModel.title) {
-            if let current = model.current {
-                CurrentNote(current: current)
-            } else {
-                EmptyLine(text: NotePanelModel.emptyLine)
-            }
-            VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-                field
-                Text(NotePanelModel.fieldHint)
-                    .font(DesignTokens.TypeStyle.caption.font)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityHidden(true)
-                if let refusal = composer.refusal {
-                    Refusal(reason: refusal)
-                        .accessibilityLabel(TicketNoteComposer.refusalLabel(refusal))
-                }
-                HStack(spacing: DesignTokens.Space.s2) {
-                    if let reason = saveReason, composer.refusal == nil {
-                        Text(reason)
-                            .font(DesignTokens.TypeStyle.caption.font)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer(minLength: DesignTokens.Space.s2)
-                    Button(composer.sending ? NotePanelModel.savingTitle : NotePanelModel.saveTitle, action: save)
-                        .directorButton(.primary, size: .medium)
-                        .disabled(saveReason != nil || composer.sending)
-                        .help(saveReason ?? NotePanelModel.saveTitle)
-                        .accessibilityHint(saveReason ?? NotePanelModel.fieldHint)
-                }
-            }
-        }
-    }
-
-    /// The shared text area: two lines tall, growing to six; Return adds a line and ⌘↩ saves, as Save Note does.
-    private var field: some View {
-        TextArea(
-            composer.identifier.map(TicketNoteComposer.fieldLabel) ?? NotePanelModel.title, text: $composer.text,
-            placeholder: NotePanelModel.placeholder, hint: NotePanelModel.fieldHint, minLines: 2, maxLines: 6, focused: $focused,
-            send: { if saveReason == nil, !composer.sending { save() } }
-        )
-        .disabled(composer.sending)
-    }
-}
-
-/// The note set: its text, who set it and when, and which run read it, or that none has yet.
-private struct CurrentNote: View {
-    let current: NotePanelModel.Current
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-            Text(current.text)
-                .font(DesignTokens.TypeStyle.body.font)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
-            Text(current.setLine)
-                .font(DesignTokens.TypeStyle.caption.font)
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
-            HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s1) {
-                Image(systemName: current.read ? "checkmark.circle.fill" : "clock")
-                    .font(.system(size: 11))
-                    .foregroundStyle(current.read ? AnyShapeStyle(DesignTokens.Status.done.tint) : AnyShapeStyle(.tertiary))
-                    .accessibilityHidden(true)
-                Text(current.readLine)
-                    .font(DesignTokens.TypeStyle.caption.font.weight(.medium))
-                    .foregroundStyle(current.read ? AnyShapeStyle(DesignTokens.Status.done.tint) : AnyShapeStyle(.secondary))
-                    .monospacedDigit()
-            }
-            Text(current.confirmation)
-                .font(DesignTokens.TypeStyle.secondary.font)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(DesignTokens.Space.s3)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(DesignTokens.Surface.raised.color, in: RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous))
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(current.accessibilityLabel)
-    }
-}
 
 // MARK: - The Decisions panel
 
@@ -409,12 +305,7 @@ public struct DetailsPanel: View {
     }
 }
 
-// The facts rail's cards draw again only when their model changed (TP-1480): the Note card's field is its composer's,
-// which it observes itself.
-
-extension NotePanel: Equatable {
-    nonisolated public static func == (lhs: NotePanel, rhs: NotePanel) -> Bool { lhs.model == rhs.model && lhs.composer === rhs.composer }
-}
+// The facts rail's cards draw again only when their model changed (TP-1480).
 
 extension DecisionsPanel: Equatable {
     nonisolated public static func == (lhs: DecisionsPanel, rhs: DecisionsPanel) -> Bool { lhs.model == rhs.model }

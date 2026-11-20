@@ -82,6 +82,19 @@ public struct TicketEventsPayload: Equatable {
         public var detail: String?
     }
 
+    /// Which run read a message (`message.sent`'s `read`): the run, its title ("Implementation run 2") and when.
+    public struct MessageRead: Equatable {
+        public var runID: String?
+        public var run: String?
+        public var at: Date?
+
+        public init(runID: String? = nil, run: String? = nil, at: Date? = nil) {
+            self.runID = runID
+            self.run = run
+            self.at = at
+        }
+    }
+
     /// A file an event carries.
     public struct Artifact: Decodable, Equatable {
         public var id: String
@@ -169,10 +182,13 @@ public struct TicketEventsPayload: Equatable {
         public var blocks: [ConductorBlock] = []
         /// What a stepped QA pass's step answered (`step.completed`): a check's result, the plan, rechecks, a verdict.
         public var answer: StepAnswer?
+        /// The message a `message.read` says a run read.
+        public var messageID: String?
 
         enum CodingKeys: String, CodingKey {
             case kind, outcome, exit, stepId, title, reason, returnsTo, returnsToTitle, questionId, model, effort, tokens, durationMs
             case to, from, action, rule, setBy, by, askedBy, description, text, signal, findingId, junction, watch, blocks
+            case messageId
         }
 
         public init(
@@ -181,7 +197,7 @@ public struct TicketEventsPayload: Equatable {
             model: String? = nil, effort: String? = nil, tokens: Int? = nil, durationMs: Int? = nil, to: String? = nil,
             from: String? = nil, action: String? = nil, rule: String? = nil, setter: Setter? = nil, description: String? = nil,
             text: String? = nil, signal: String? = nil, findingID: String? = nil, junction: String? = nil, watch: ConductorWatch? = nil,
-            blocks: [ConductorBlock] = [], answer: StepAnswer? = nil
+            blocks: [ConductorBlock] = [], answer: StepAnswer? = nil, messageID: String? = nil
         ) {
             self.kind = kind
             self.outcome = outcome
@@ -209,6 +225,7 @@ public struct TicketEventsPayload: Equatable {
             self.watch = watch
             self.blocks = blocks
             self.answer = answer
+            self.messageID = messageID
         }
 
         public init(from decoder: Decoder) throws {
@@ -231,7 +248,8 @@ public struct TicketEventsPayload: Equatable {
                 junction: text(.junction),
                 watch: (try? container?.decodeIfPresent(ConductorWatch.self, forKey: .watch)) ?? nil,
                 blocks: ((try? container?.decodeIfPresent([LossyConductorBlock].self, forKey: .blocks)) ?? nil)?.compactMap(\.block) ?? [],
-                answer: BlockFields(decoder).flatMap(StepAnswer.init(fields:))
+                answer: BlockFields(decoder).flatMap(StepAnswer.init(fields:)),
+                messageID: text(.messageId)
             )
         }
     }
@@ -257,11 +275,13 @@ public struct TicketEventsPayload: Equatable {
         /// It only records Symphony's bookkeeping (a review waiting on the PR watcher, a workspace already on the PR
         /// head): the timeline leaves it out; Diagnostics keeps it.
         public var bookkeeping: Bool = false
+        /// A message's read: the run that read it and when; nil while no run did, and on any other event.
+        public var read: MessageRead?
 
         public init(
             id: String, seq: Int?, at: String?, type: String, runID: String?, parent: String?, actor: Actor?,
             summary: Summary?, payload: Payload, artifacts: [Artifact], isNew: Bool = false, rule: String? = nil,
-            bookkeeping: Bool = false
+            bookkeeping: Bool = false, read: MessageRead? = nil
         ) {
             self.id = id
             self.seq = seq
@@ -277,6 +297,7 @@ public struct TicketEventsPayload: Equatable {
             self.isNew = isNew
             self.rule = rule
             self.bookkeeping = bookkeeping
+            self.read = read
         }
 
         /// The screenshots it carries.
@@ -391,7 +412,24 @@ public struct TicketEventsPayload: Equatable {
         }
         if added > 0 { events = Self.ordered(events) }
         nextSince = newer.nextSince ?? nextSince
+        settleMessageReads()
         return added
+    }
+
+    /// Gives each message no run had read yet the `message.read` the history now holds for it: the feed adds `read`
+    /// to a `message.sent` only on the page that serves it, so a read that comes on a later page is applied here.
+    /// The run's title comes from its header, as Symphony names it, else "a run".
+    private mutating func settleMessageReads() {
+        var reads: [String: Event] = [:]
+        for event in events where event.type == "message.read" {
+            if let id = event.payload.messageID, reads[id] == nil { reads[id] = event }
+        }
+        guard !reads.isEmpty else { return }
+        for at in events.indices where events[at].type == "message.sent" && events[at].read == nil {
+            guard let read = reads[events[at].id] else { continue }
+            let title = read.runID.flatMap { runs[$0] }.map { Self.runTitle(kind: $0.runKind, number: $0.runNumber) }
+            events[at].read = MessageRead(runID: read.runID, run: title ?? "a run", at: read.date)
+        }
     }
 
     /// The words for a run Symphony closed without its end, as the feed says them.
@@ -656,7 +694,11 @@ public struct TicketEventsPayload: Equatable {
 /// reads as nothing; only `id` is required.
 extension TicketEventsPayload.Event: Decodable {
     enum CodingKeys: String, CodingKey {
-        case id, seq, at, type, runId, parent, actor, summary, payload, artifacts, new, rule, bookkeeping
+        case id, seq, at, type, runId, parent, actor, summary, payload, artifacts, new, rule, bookkeeping, read
+    }
+
+    private enum ReadKeys: String, CodingKey {
+        case runId, run, at
     }
 
     public init(from decoder: Decoder) throws {
@@ -674,7 +716,14 @@ extension TicketEventsPayload.Event: Decodable {
             artifacts: (try? container.decodeIfPresent([TicketEventsPayload.Artifact].self, forKey: .artifacts)) ?? [],
             isNew: (try? container.decodeIfPresent(Bool.self, forKey: .new)) == true,
             rule: try? container.decodeIfPresent(String.self, forKey: .rule),
-            bookkeeping: (try? container.decodeIfPresent(Bool.self, forKey: .bookkeeping)) == true
+            bookkeeping: (try? container.decodeIfPresent(Bool.self, forKey: .bookkeeping)) == true,
+            read: (try? container.nestedContainer(keyedBy: ReadKeys.self, forKey: .read)).map { read in
+                TicketEventsPayload.MessageRead(
+                    runID: try? read.decodeIfPresent(String.self, forKey: .runId),
+                    run: try? read.decodeIfPresent(String.self, forKey: .run),
+                    at: (try? read.decodeIfPresent(String.self, forKey: .at)).flatMap(TicketPage.date)
+                )
+            }
         )
     }
 }

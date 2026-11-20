@@ -1529,7 +1529,8 @@ startup, for a person to move it on by hand.
 #### QA passes
 
 A QA pass is one agent session given its playbooks, unless `phases.qa.stepped` is on and the pass
-runs one playbook with a step list: then Symphony walks the list, step by step (see
+runs one playbook with a step list (the `cli` playbook may run beside it): then Symphony walks the
+list, step by step (see
 [Stepped QA passes](#stepped-qa-passes)).
 
 Before any agent runs, Symphony decides whether the PR needs QA and which playbooks apply:
@@ -3938,8 +3939,11 @@ phases:
 
 With `stepped: true`, a QA pass (not an epic review) that runs one playbook with a step list walks
 it (`SymphonyElixir.QaAgent.Steps`) instead of giving one agent session the whole playbook. With
-`stepped: false`, on a pass that runs several playbooks, or for a playbook with no list, the pass is
-one agent session as before. `phases.qa.steps`, like every kind's `steps`, stays as it was; a file
+`stepped: false`, on a pass that runs two playbooks other than `cli`, or for a playbook with no
+list, the pass is one agent session as before. The `cli` playbook may run beside the playbook whose
+list the pass walks: the plan then gives each walkthrough step a `surface`, `app` or `cli`, and a
+`cli` step's turn runs the brief's commands from a shell in the worktree, with the `cli` playbook's
+rules and no app. It runs even when the app did not launch. `phases.qa.steps`, like every kind's `steps`, stays as it was; a file
 that sets only `stepped` or `playbooks` under `phases.qa` needs no `steps`. A playbook's list is
 checked as any list is, every load error naming its key (`phases.qa.playbooks.<kind>.steps…`), and
 must have an orchestrated step `review`, which gives the verdict. Only a playbook's list may run the

@@ -4,8 +4,14 @@ defmodule SymphonyElixir.QaAgent.Steps do
   (`phases.qa.playbooks.<kind>.steps`, else the playbook's default,
   `SymphonyElixir.Config.Schema.Phases.qa_steps/2`) walks that list instead of handing the agent the
   whole playbook in one session (`list/2`, `run/6`). With the switch off, in an epic review, on a
-  pass that runs several playbooks, or for a playbook with no list, the pass is one agent session
+  pass that runs two playbooks other than `cli`, or for a playbook with no list, the pass is one agent session
   as before (`SymphonyElixir.QaAgent`).
+
+  The `cli` playbook may run beside the playbook whose list the pass walks. The plan is then told
+  (`priv/qa_steps/cli/plan.md`) to give each brief a `surface`: `app`, or `cli` for a step commands
+  alone can walk. A `cli` brief's walk turn reads `priv/qa_steps/cli/walk.md` and the `cli`
+  playbook's rules in place of the app's prompt and the launched app, and runs whether or not the
+  app launched.
 
   Every step is recorded on the ticket's record under the pass's `run_id` (`step.started`,
   `step.completed`, `SymphonyElixir.PhaseSteps`), so the Director's timeline shows the pass as it
@@ -83,6 +89,11 @@ defmodule SymphonyElixir.QaAgent.Steps do
   @max_rechecks 3
   @max_recheck_rounds 2
   @small_model "small"
+  # The playbooks a walk turn can run without the app, from a shell in the worktree. A pass that
+  # selects one beside the playbook whose list it walks stays stepped: the plan says, brief by brief,
+  # which steps are walked on the command line (`surface: "cli"`).
+  @command_line_kinds ~w(cli)
+  @command_line "cli"
   @run_session "run"
   @fact_bytes 12_000
   @answer_bytes 4_000
@@ -98,7 +109,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
 
   @doc """
   The step list `job`'s pass walks, or `[]` for a pass that is one agent session: the list of its
-  only playbook when `phases.qa.stepped` is on (`opts[:qa_system]`, default `Config.system/0`).
+  one playbook, beside `cli` or alone, when `phases.qa.stepped` is on (`opts[:qa_system]`, default `Config.system/0`).
   `opts[:qa_step_list]` gives the list outright.
   """
   @spec list(QaAgent.job(), keyword()) :: [Step.t()]
@@ -111,8 +122,14 @@ defmodule SymphonyElixir.QaAgent.Steps do
 
   defp configured(%{epic_review: true}, _system), do: []
 
-  defp configured(%{playbooks: [%{kind: kind}]}, {:ok, %{phases: %Phases{} = phases}}) when is_binary(kind) do
-    if Phases.qa_stepped?(phases), do: Phases.qa_steps(phases, kind), else: []
+  defp configured(%{playbooks: [_ | _] = playbooks}, {:ok, %{phases: %Phases{} = phases}}) do
+    with true <- Phases.qa_stepped?(phases),
+         [kind] <- Enum.map(playbooks, &Map.get(&1, :kind)) -- @command_line_kinds,
+         true <- is_binary(kind) do
+      Phases.qa_steps(phases, kind)
+    else
+      _one_session -> []
+    end
   end
 
   defp configured(_job, _system), do: []
@@ -408,6 +425,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
   defp agent_skip(state, step) do
     cond do
       not MapSet.member?(state.app_steps, step.id) -> nil
+      command_line?(state, walk_brief(state, step)) -> nil
       not match?({:launched, _app}, state.launch) -> "the app did not launch"
       state.rounds == 0 and nothing_on_screen?(state) -> @nothing_on_screen
       true -> nil
@@ -848,7 +866,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
     [
       QaAgent.prompt_parts(state.job, parent(state), [:intro]),
       general_rules(),
-      PhaseSteps.prompt_section(step, nil, notes),
+      PhaseSteps.prompt_section(surface_step(state, step), nil, notes),
       context_for(state, step)
     ]
     |> Enum.reject(&(&1 in [nil, ""]))
@@ -856,6 +874,17 @@ defmodule SymphonyElixir.QaAgent.Steps do
   end
 
   defp parent(state), do: Keyword.get(state.opts, :qa_parent)
+
+  # A walk turn the plan gave to the command line reads that playbook's walk prompt, not the app's.
+  defp surface_step(state, %Step{} = step) do
+    with true <- Map.has_key?(state.walk_targets, step.id) or Map.has_key?(state.briefs, step.id),
+         true <- command_line?(state, walk_brief(state, step)),
+         prompt when is_binary(prompt) <- StepPrompts.prompt(@command_line, "walk") do
+      %Step{step | prompt: prompt}
+    else
+      _the_apps -> step
+    end
+  end
 
   defp general_rules do
     """
@@ -871,8 +900,10 @@ defmodule SymphonyElixir.QaAgent.Steps do
     [
       QaAgent.prompt_parts(state.job, parent(state), [:issue, :design, :servers, :unprovable]),
       plan_facts(state),
+      command_line_plan(state),
       screen_rules(state)
     ]
+    |> Enum.reject(&(&1 == ""))
     |> Enum.join("\n\n")
   end
 
@@ -893,16 +924,40 @@ defmodule SymphonyElixir.QaAgent.Steps do
 
   defp walk_context(state, step) do
     target = Map.get(state.walk_targets, step.id)
-    brief = Map.get(state.briefs, step.id) || plan_brief(state, target)
+    brief = walk_brief(state, step)
 
     [
       target_text(target),
       if(brief, do: "Your brief, from the lead QA agent:\n" <> json(brief), else: "The plan gave no brief for this step: walk it from its text and the ticket."),
-      app_line(state),
+      if(command_line?(state, brief), do: command_line_rules(state), else: app_line(state)),
       QaAgent.prompt_parts(state.job, nil, [:servers, :qa_mode])
     ]
     |> Enum.reject(&(&1 == ""))
     |> Enum.join("\n\n")
+  end
+
+  defp walk_brief(state, step), do: Map.get(state.briefs, step.id) || plan_brief(state, Map.get(state.walk_targets, step.id))
+
+  # A brief the plan gave to the command line, on a pass that selected a command-line playbook.
+  defp command_line?(state, %{"surface" => @command_line}), do: command_line_playbook(state) != nil
+  defp command_line?(_state, _brief), do: false
+
+  defp command_line_playbook(state), do: Enum.find(state.job.playbooks, &(Map.get(&1, :kind) in @command_line_kinds))
+
+  defp command_line_rules(state) do
+    case command_line_playbook(state) do
+      %{prompt: prompt} when is_binary(prompt) -> "The playbook's rules for the command line:\n\n" <> prompt
+      _none -> ""
+    end
+  end
+
+  # What the plan is told when the pass also selected a command-line playbook: which steps it may
+  # give to a shell, and what such a brief holds.
+  defp command_line_plan(state) do
+    case command_line_playbook(state) do
+      nil -> ""
+      %{kind: kind} -> StepPrompts.prompt(kind, @plan) || ""
+    end
   end
 
   defp target_text(nil), do: ""
@@ -913,6 +968,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
   end
 
   defp plan_brief(%{plan: nil}, _target), do: nil
+  defp plan_brief(_state, nil), do: nil
   defp plan_brief(%{plan: plan}, target), do: Enum.find(List.wrap(plan["walk"]), &(brief_number(&1) == target.number))
 
   defp check_context(state) do

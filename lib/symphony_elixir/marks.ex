@@ -9,9 +9,8 @@ defmodule SymphonyElixir.Marks do
   looked at.
 
   The messages are what a person wrote to the ticket (`SymphonyElixir.Messages`): the ticket read
-  carries how many no run read yet (`unread_messages`). The Mac app release before messages reads
-  one `note`: it is served from the newest unread message until the app's ticket page reads the
-  messages, and then removed.
+  carries how many no run read yet (`unread_messages`); the Mac app reads each one as an entry of
+  the ticket's events feed.
   """
 
   alias SymphonyElixir.{Messages, RunStore, TicketState}
@@ -19,19 +18,10 @@ defmodule SymphonyElixir.Marks do
 
   @person Messages.person()
 
-  @type note :: %{
-          id: String.t(),
-          text: String.t() | nil,
-          at: String.t() | nil,
-          by: String.t() | nil,
-          read_by: %{run_id: String.t() | nil, at: String.t() | nil} | nil
-        }
-
   @type read :: %{
           looked_at: String.t() | nil,
           new_since_looked: non_neg_integer(),
-          unread_messages: non_neg_integer(),
-          note: note() | nil
+          unread_messages: non_neg_integer()
         }
 
   @doc "The one person the control API names today."
@@ -70,8 +60,8 @@ defmodule SymphonyElixir.Marks do
 
   @doc """
   The marks of the ticket of `record` holding `events`, as the ticket read carries them: when the
-  person last looked (ISO 8601, nil when never), how many events are newer, how many messages no
-  run read yet, and the older app's `note` (`note/1`).
+  person last looked (ISO 8601, nil when never), how many events are newer, and how many messages
+  no run read yet.
   """
   @spec read(map() | nil, [Event.t()]) :: read()
   def read(record, events) do
@@ -81,22 +71,8 @@ defmodule SymphonyElixir.Marks do
     %{
       looked_at: iso8601(looked_at),
       new_since_looked: Enum.count(events, &new?(&1, looked_at)),
-      unread_messages: length(unread),
-      note: note(events)
+      unread_messages: length(unread)
     }
-  end
-
-  @doc """
-  The note the Mac app release before messages reads, from `events`: the newest message no run
-  read yet, with its text, when it was written and by whom, and `read_by` nil. Nil when every
-  message was read.
-  """
-  @spec note([Event.t()]) :: note() | nil
-  def note(events) do
-    case events |> Messages.unread() |> List.last() do
-      nil -> nil
-      %Event{} = message -> %{id: message.id, text: Map.get(message.payload, :text), at: iso8601(message.at), by: Map.get(message.actor, :name), read_by: nil}
-    end
   end
 
   defp find(issue_identifier, repo_key) do
