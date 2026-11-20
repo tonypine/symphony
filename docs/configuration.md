@@ -1501,7 +1501,19 @@ line range `"12-15"`, a reversed pair), and a verdict Symphony still cannot read
 turn in the same session, with the error, before the review counts as inconclusive. A finding
 whose quote cannot be found in the diff or the file is kept as a comment marked "could not be
 placed" and the verdict stands; only a change request none of whose findings can be placed is
-unverifiable. `/api/v1/state` counts inconclusive Code Review runs per cause
+unverifiable.
+
+The reviewer is told to read the whole change before it decides and to list every finding it would
+block on in one verdict, so the rework run answers them together. A reviewer that runs out of time
+or turns before reading every changed file names them in the verdict's `unread_files`, and the
+review counts as inconclusive (`review_incomplete`) and runs again, rather than approving or
+blocking on part of the change. A change request records its number of findings on its verdict; on
+a pull request reviewed before, Symphony compares each finding's lines with the last reviewed head
+and marks a finding on lines that did not change since as "missed earlier", in the findings comment
+and on the verdict. The Mac app's ticket page shows both counts on the verdict's row
+("3 findings · 1 missed earlier").
+
+`/api/v1/state` counts inconclusive Code Review runs per cause
 (`counts.review_inconclusive`), and the Mac app's ticket page shows the cause on the run's row.
 
 The pre-push reviewer that used to review an implementation run's commits before its first push
