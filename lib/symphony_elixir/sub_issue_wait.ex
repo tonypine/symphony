@@ -164,10 +164,14 @@ defmodule SymphonyElixir.SubIssueWait do
   state is on, the issue is not a `breakdown` parent (those wait from their plan's approval) and it
   has a sub-issue outside `terminal_states` and outside `Backlog`. A `Backlog` sub-issue waits for a
   person to promote it, so it does not hold the issue open.
+
+  A groomed ticket (`groomed?/1`) waits on every sub-ticket it has: one in `Backlog` holds it too,
+  and with all of them ended it still waits there, for the Conductor's final check of the whole
+  ticket (`SymphonyElixir.Conductor.Tree`), which closes it.
   """
   @spec wait_on_merge?(Issue.t() | term(), Enumerable.t(String.t()), Schema.t() | term()) :: boolean()
   def wait_on_merge?(%Issue{} = issue, terminal_states, settings) do
-    enabled?(settings) and not Issue.breakdown?(issue) and started_sub_issues(issue, terminal_states) != []
+    enabled?(settings) and holding_sub_issues(issue, terminal_states) != []
   end
 
   def wait_on_merge?(_issue, _terminal_states, _settings), do: false
@@ -232,9 +236,19 @@ defmodule SymphonyElixir.SubIssueWait do
   recorded it), so its code is on the default branch. A sub-ticket blocked by its own parent would
   otherwise wait on the parent while the parent waits on it (MOT-85 and MOT-100). A plan parent in
   the waiting state still blocks: its work is its sub-tickets, and nothing recorded a merge for it.
+
+  A groomed blocker (`groomed?/1`) no longer blocks once its record says its pull request merged
+  (`pr_merged?/1`), whatever state it is in: merged is not Done, and a ticket that builds on its
+  code waits on the merge only.
   """
   @spec merged_blocker?(map() | term()) :: boolean()
   def merged_blocker?(%{id: blocker_id, state: blocker_state}) when is_binary(blocker_id) and is_binary(blocker_state) do
+    merged_waiting?(blocker_id, blocker_state) or (pr_merged?(blocker_id) and TicketPlan.groomed?(blocker_id))
+  end
+
+  def merged_blocker?(_blocker), do: false
+
+  defp merged_waiting?(blocker_id, blocker_state) do
     # The store read comes first: it rules out nearly every blocker for less than a config read.
     with true <- RunStore.merged_wait?(blocker_id),
          {:ok, settings} <- Config.settings(),
@@ -244,8 +258,6 @@ defmodule SymphonyElixir.SubIssueWait do
       _not_waiting -> false
     end
   end
-
-  def merged_blocker?(_blocker), do: false
 
   @doc """
   Moves `issue` to `Done` and comments how each of its sub-issues ended or waits. The move is made
@@ -294,6 +306,16 @@ defmodule SymphonyElixir.SubIssueWait do
     end
   end
 
+  # The sub-issues that keep a merged issue from closing: a groomed ticket's, every one; any other
+  # issue's, the open ones a person or a plan's approval started, and none for a `breakdown` parent.
+  defp holding_sub_issues(%Issue{sub_issues: sub_issues} = issue, terminal_states) do
+    cond do
+      groomed?(issue) -> List.wrap(if(is_list(sub_issues), do: sub_issues))
+      Issue.breakdown?(issue) -> []
+      true -> started_sub_issues(issue, terminal_states)
+    end
+  end
+
   # Open sub-issues a person or a plan's approval started: outside `terminal_states` and `Backlog`.
   defp started_sub_issues(issue, terminal_states), do: issue |> Issue.open_sub_issues(terminal_states) |> Enum.reject(&backlog_sub_issue?/1)
 
@@ -301,6 +323,25 @@ defmodule SymphonyElixir.SubIssueWait do
   defp backlog_sub_issue?(_sub_issue), do: false
 
   defp wait_comment(issue, waiting_state, terminal_states) do
+    if groomed?(issue),
+      do: groomed_wait_comment(issue, waiting_state, terminal_states),
+      else: started_wait_comment(issue, waiting_state, terminal_states)
+  end
+
+  defp groomed_wait_comment(issue, waiting_state, terminal_states) do
+    check = "the Conductor checks the whole ticket against its plan, and it moves to #{@done_state}"
+
+    case issue |> Issue.open_sub_issues(terminal_states) |> Enum.map_join(", ", &sub_issue_label/1) do
+      "" ->
+        "#{waiting_state}: the PR merged and every sub-ticket has ended. Next, #{check}."
+
+      open ->
+        "#{waiting_state}: the PR merged with sub-tickets still open (#{open}). Once each one is #{@done_state} or " <>
+          "canceled, one in #{@backlog_state} included, #{check}."
+    end
+  end
+
+  defp started_wait_comment(issue, waiting_state, terminal_states) do
     open = issue |> started_sub_issues(terminal_states) |> Enum.map_join(", ", &sub_issue_label/1)
 
     "#{waiting_state}: the PR merged with sub-tickets still open (#{open}), so this ticket moves to " <>

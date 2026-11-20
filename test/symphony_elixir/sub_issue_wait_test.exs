@@ -134,6 +134,90 @@ defmodule SymphonyElixir.SubIssueWaitTest do
     end
   end
 
+  describe "a groomed ticket and the tickets around it" do
+    defp groomed!(issue_id) do
+      checks = [%{id: "c1", kind: "outcome", statement: "It works.", proof: "test"}]
+      plan = %{reason: "Grooming", by: "grooming", shape: "single", layers: ["engine"], summary: "s", text: "t"}
+      {:ok, _event} = TicketPlan.write("default", issue_id, Map.merge(plan, %{checks: checks, size: %{tokens: 1, runs: 1}}))
+      :ok
+    end
+
+    defp merged!(issue_id) do
+      url = "https://github.com/acme/app/pull/#{System.unique_integer([:positive])}"
+      :ok = TicketPullRequest.put("default", issue_id, %{pr_url: url})
+      :ok = TicketPullRequest.mark_finished("default", url, "merged")
+    end
+
+    test "a blocked ticket starts once its groomed blocker's pull request merged, while the blocker is not Done" do
+      state = orchestrator_state()
+      terminal_states = Config.settings!().tracker.terminal_states
+      for id <- ["blocker-groomed", "blocker-plain"], do: :ok = TicketSignals.record_phase("default", id, "Merging")
+      groomed!("blocker-groomed")
+      blocker = %{id: "blocker-groomed", identifier: "MT-2101", state: "Merging"}
+      blocked = %Issue{id: "blocked-by-groomed", identifier: "MT-2102", title: "Next", state: "Todo", blocked_by: [blocker]}
+
+      # Its pull request is still open: it blocks.
+      assert Issue.blocked?(blocked, terminal_states)
+      assert [%{issue_id: "blocked-by-groomed"}] = Orchestrator.put_blocked_for_test(state, [blocked]).blocked
+
+      merged!("blocker-groomed")
+      assert SubIssueWait.merged_blocker?(blocker)
+      assert Issue.open_blockers(blocked, terminal_states) == []
+      assert Orchestrator.put_blocked_for_test(state, [blocked]).blocked == []
+      assert Orchestrator.should_dispatch_issue_for_test(blocked, state)
+
+      # A ticket with no plan keeps today's rule: merged, it still blocks until it is Done.
+      merged!("blocker-plain")
+      plain = %{id: "blocker-plain", identifier: "MT-2103", state: "Merging"}
+      refute SubIssueWait.merged_blocker?(plain)
+      assert Issue.blocked?(%{blocked | blocked_by: [plain]}, terminal_states)
+    end
+
+    test "MOT-85: a sub-ticket blocked by its own groomed parent dispatches once the parent's pull request merged" do
+      state = orchestrator_state()
+      :ok = TicketSignals.record_phase("default", "groomed-parent", @waiting)
+      groomed!("groomed-parent")
+      merged!("groomed-parent")
+      parent = %{id: "groomed-parent", identifier: "MT-2201", state: @waiting}
+      child = %Issue{id: "child-of-groomed", identifier: "MT-2202", title: "Builds on it", state: "Todo", blocked_by: [parent]}
+
+      # No merge mark is left for it: the record's merged pull request is enough.
+      refute RunStore.merged_wait?("groomed-parent")
+      assert Orchestrator.put_blocked_for_test(state, [child]).blocked == []
+      assert Orchestrator.should_dispatch_issue_for_test(child, state)
+    end
+
+    test "a sub-ticket in Backlog holds a groomed ticket whose pull request merged, and so does one that ended" do
+      settings = Config.settings!()
+      terminal_states = settings.tracker.terminal_states
+      backlog = [%{id: "c1", identifier: "MT-2302", state: "Backlog"}]
+      plain = %Issue{id: "plain-merged", identifier: "MT-2301", title: "Work", state: "Merging", sub_issues: backlog, repo_key: "default"}
+      groomed = %{plain | id: "groomed-merged"}
+      groomed!("groomed-merged")
+
+      refute SubIssueWait.wait_on_merge?(plain, terminal_states, settings)
+      assert SubIssueWait.wait_on_merge?(groomed, terminal_states, settings)
+      assert SubIssueWait.wait_on_merge?(%{groomed | labels: ["plan"]}, terminal_states, settings)
+      refute SubIssueWait.wait_on_merge?(%{groomed | sub_issues: []}, terminal_states, settings)
+      refute SubIssueWait.wait_on_merge?(%{groomed | sub_issues: :unknown}, terminal_states, settings)
+      refute SubIssueWait.wait_on_merge?(%{plain | labels: ["plan"]}, terminal_states, settings)
+
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [groomed])
+      assert :ok = SubIssueWait.wait_on_merge(groomed, settings, Tracker.adapter())
+      assert_received {:memory_tracker_comment, "groomed-merged", waiting}
+      assert waiting =~ "the PR merged with sub-tickets still open (MT-2302)"
+      assert waiting =~ "one in Backlog included, the Conductor checks the whole ticket against its plan"
+
+      # Every sub-ticket ended before the merge: it still waits, for the final check.
+      ended = %{groomed | id: "groomed-ended", sub_issues: [%{id: "c1", identifier: "MT-2302", state: "Done"}]}
+      groomed!("groomed-ended")
+      assert SubIssueWait.wait_on_merge?(ended, terminal_states, settings)
+      assert :ok = SubIssueWait.wait_on_merge(ended, settings, Tracker.adapter())
+      assert_received {:memory_tracker_comment, "groomed-ended", checked}
+      assert checked == "#{@waiting}: the PR merged and every sub-ticket has ended. Next, the Conductor checks the whole ticket against its plan, and it moves to Done."
+    end
+  end
+
   describe "a groomed ticket whose plan label survived" do
     test "is out of the old plan flow: no breakdown run, no epic review, and it is held in the waiting state" do
       settings = Config.settings!()
