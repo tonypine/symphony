@@ -484,6 +484,25 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       refute Enum.any?(rest, &(&1.prompt =~ "Guidance from the Conductor"))
       assert [%{run_id: "qa-steps-run", payload: %{delivered: %{how: "next_turn"}}}] = events("conductor.steer")
     end
+
+    # TP-1550: a pass the Conductor sent back to QA reads what it must do differently, in every agent step.
+    test "every agent step reads the Conductor's newest instructions, as the one session's prompt does", ctx do
+      path = Workflow.symphony_file_path()
+      File.write!(path, File.read!(path) <> "conductor:\n  enabled: true\n")
+      Cache.clear()
+      instructions = %{junction: "after_qa_blocked", text: "Point the app at the stand-in server before step 2.", route: "rerun"}
+      {:ok, _event} = SymphonyElixir.TicketEvents.record("default", @issue_id, "conductor.instructions", instructions)
+
+      answers(%{"plan" => [{:write, plan([1, 2])}], "review" => [{:verdict, @pass}]})
+      assert {:ok, _run} = run(ctx)
+
+      prompts = Map.new(turns(), &{&1.id, &1.prompt})
+
+      for id <- ["plan", "walk_1", "walk_2", "design_check", "review"] do
+        assert prompts[id] =~ "Advice from the Conductor", id
+        assert prompts[id] =~ "Point the app at the stand-in server before step 2.", id
+      end
+    end
   end
 
   describe "the messages written to the ticket" do

@@ -405,9 +405,11 @@ defmodule SymphonyElixir.QaAgent do
   @doc """
   The parts of `prompt/2` an agent step of a stepped pass reads (`SymphonyElixir.QaAgent.Steps`),
   as `parts` names them: `:intro` (the pass, the worktree and what the agent may not do), `:issue`
-  (the ticket with its decisions and parent), `:design` (the design and the files Symphony
-  downloaded), `:servers` (the dev or live server and the host ports), `:qa_mode` (what the driver
-  gives the app) and `:unprovable` (the steps no playbook of the pass can prove).
+  (the ticket with its decisions and parent, and the Conductor's newest instructions, as the one
+  session's prompt carries them), `:conductor` (those instructions alone), `:design` (the design
+  and the files Symphony downloaded), `:servers` (the dev or live server and the host ports),
+  `:qa_mode` (what the driver gives the app) and `:unprovable` (the steps no playbook of the pass
+  can prove).
   """
   @spec prompt_parts(job(), map() | nil, [atom()]) :: String.t()
   def prompt_parts(job, parent, parts) when is_list(parts) do
@@ -425,10 +427,12 @@ defmodule SymphonyElixir.QaAgent do
     Identifier: #{issue.identifier}
     Title: #{PromptSafety.linear_issue_title(issue.title || "")}
     Description (walkthrough and acceptance criteria):
-    #{PromptSafety.linear_issue_body(Decisions.strip(issue.description) || "")}
+    #{PromptSafety.linear_issue_body(Decisions.strip(issue.description) || "")}#{SymphonyElixir.Conductor.prompt_section(Map.get(issue, :id))}
     #{decisions_rule(issue, job)}#{parent_section(parent)}
     """
   end
+
+  defp prompt_part(:conductor, %{issue: issue}, _parent), do: SymphonyElixir.Conductor.prompt_section(Map.get(issue, :id))
 
   defp prompt_part(:design, job, parent), do: design_section(job, parent)
   defp prompt_part(:servers, job, _parent), do: dev_server_section(job) <> host_ports_section(Map.get(job, :host_ports, []))

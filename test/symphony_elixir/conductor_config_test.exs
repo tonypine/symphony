@@ -12,8 +12,8 @@ defmodule SymphonyElixir.ConductorConfigTest do
 
   test "is off, at every junction, for three minutes, when the section is missing" do
     assert {:ok, %{conductor: conductor}} = SystemSchema.parse(@base)
-    assert conductor == %Schema.Conductor{enabled: false, junctions: ~w(after_coding after_qa_fail after_rework before_merge), timeout_ms: 180_000}
-    assert Schema.Conductor.junctions() == ~w(after_coding after_qa_fail after_rework before_merge)
+    assert conductor == %Schema.Conductor{enabled: false, junctions: ~w(after_coding after_qa_fail after_qa_blocked after_rework before_merge), timeout_ms: 180_000}
+    assert Schema.Conductor.junctions() == ~w(after_coding after_qa_fail after_qa_blocked after_rework before_merge)
   end
 
   test "reads the section, and refuses an unknown key, an unknown junction or a timeout of 0" do

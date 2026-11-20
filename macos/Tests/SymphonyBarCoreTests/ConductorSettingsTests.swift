@@ -112,8 +112,8 @@ final class ConductorSettingsTests: XCTestCase {
     // MARK: Controls
 
     func testTheJunctionRowsAndTheirTitles() {
-        XCTAssertEqual(ConductorJunction.allCases.map(\.rawValue), ["after_coding", "after_qa_fail", "after_rework", "before_merge"])
-        XCTAssertEqual(ConductorJunction.allCases.map(\.title), ["After coding", "After a QA fail", "After rework", "Before merge"])
+        XCTAssertEqual(ConductorJunction.allCases.map(\.rawValue), ["after_coding", "after_qa_fail", "after_qa_blocked", "after_rework", "before_merge"])
+        XCTAssertEqual(ConductorJunction.allCases.map(\.title), ["After coding", "After a QA fail", "After a blocked QA", "After rework", "Before merge"])
         XCTAssertTrue(configSettings.runs(at: .afterCoding))
         XCTAssertFalse(configSettings.runs(at: .afterRework))
         XCTAssertEqual(configSettings.setting(.afterCoding, on: true), configSettings)

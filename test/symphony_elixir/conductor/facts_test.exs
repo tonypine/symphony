@@ -157,6 +157,55 @@ defmodule SymphonyElixir.Conductor.FactsTest do
     assert [%{state: "resolved", resolution: %{how: "Wired the handler."}}] = facts.findings
   end
 
+  test "TP-1550: after a blocked QA the facts hold every QA pass, why each was blocked, and the Conductor's earlier routes and steers", ctx do
+    record!(ctx, "run.started", %{run_id: "qa-1", run_kind: "qa"}, run_id: "qa-1")
+
+    step =
+      record!(
+        ctx,
+        "step.completed",
+        %{step_id: "walk_1", title: "Walk 1", mode: "orchestrated", outcome: "passed", result: %{status: "blocked", expected: "A state error", actual: "QA cannot make the state request fail"}},
+        run_id: "qa-1"
+      )
+
+    passed = %{step_id: "walk_2", title: "Walk 2", mode: "orchestrated", outcome: "passed", result: %{status: "pass", expected: "Rows", actual: "Rows"}}
+    record!(ctx, "step.completed", passed, run_id: "qa-1")
+    record!(ctx, "step.completed", %{step_id: "plan", title: "Plan", mode: "orchestrated", outcome: "passed"}, run_id: "qa-1")
+    evidence = record!(ctx, "evidence", %{caption: "Step 3: blocked", step: "Step 3", status: "blocked", details: "No way to fail the request."}, actor: agent("qa-1", "qa"))
+    record!(ctx, "evidence", %{caption: "Step 1: pass", step: "Step 1", status: "pass"}, actor: agent("qa-1", "qa"))
+    first = record!(ctx, "verdict.recorded", %{kind: "qa", outcome: "blocked", head: "aaa", details: %{reason: "QA cannot make the state request fail"}}, run_id: "qa-1")
+    record!(ctx, "conductor.instructions", %{junction: "after_qa_blocked", text: "Use the stand-in server.", route: "rerun"}, run_id: "conductor-1")
+    record!(ctx, "conductor.steer", %{text: "Leave the blocked step.", when: "next_turn", trigger: "qa_step_answer"}, run_id: "qa-2")
+    ci = record!(ctx, "verdict.recorded", %{kind: "qa", outcome: "blocked", head: "bbb", details: %{reason: "CI is red on this head", component: "ci"}})
+    record!(ctx, "verdict.recorded", %{kind: "code_review", outcome: "approve", head: "bbb"})
+
+    facts = Facts.build(ctx.record, "after_qa_blocked", diff_stat: fn _record -> nil end, token_cap: nil)
+    assert facts.focus =~ "QA could not judge the change"
+
+    assert [blocked, on_ci] = facts.qa_passes
+
+    assert blocked == %{
+             event_id: first.id,
+             run_id: "qa-1",
+             outcome: "blocked",
+             head: "aaa",
+             reason: "QA cannot make the state request fail",
+             blocked_steps: [
+               %{event_id: step.id, step_id: "walk_1", title: "Walk 1", result: %{status: "blocked", expected: "A state error", actual: "QA cannot make the state request fail"}},
+               %{event_id: evidence.id, step: "Step 3", details: "No way to fail the request."}
+             ]
+           }
+
+    assert on_ci == %{event_id: ci.id, outcome: "blocked", head: "bbb", reason: "CI is red on this head", on_ci: true, blocked_steps: []}
+    assert Enum.find(facts.verdicts, &(&1.event_id == first.id)).reason == "QA cannot make the state request fail"
+
+    assert [%{type: "instructions", route: "rerun", junction: "after_qa_blocked"}, %{type: "steer", text: "Leave the blocked step.", when: "next_turn", trigger: "qa_step_answer"}] =
+             facts.conductor
+
+    refute Map.has_key?(Facts.build(ctx.record, "after_qa_fail", diff_stat: fn _record -> nil end, token_cap: nil), :qa_passes)
+    assert {:ok, _json} = Jason.encode(facts)
+  end
+
   test "a ticket with no events, no description and no pull request reads empty facts", ctx do
     record = %{ctx.record | description: nil} |> Map.put(:pull_request, %{number: 7, url: "https://github.com/o/r/pull/7", state: "OPEN", head_sha: "def456"})
     facts = Facts.build(record, nil, events: [], diff_stat: fn _record -> nil end, token_cap: nil)
@@ -192,7 +241,7 @@ defmodule SymphonyElixir.Conductor.FactsTest do
     assert identifier == ctx.identifier
     assert {:ok, %{junction: nil}} = Facts.read(ctx.issue_id, "", diff_stat: fn _ -> nil end, token_cap: 1)
     assert Facts.read("NOPE-1", nil) == {:error, :not_found}
-    assert {:error, {:invalid, "junction must be one of: after_coding, after_qa_fail, after_rework, before_merge, during_run"}} = Facts.read(ctx.identifier, "whenever")
+    assert {:error, {:invalid, "junction must be one of: after_coding, after_qa_fail, after_qa_blocked, after_rework, before_merge, during_run"}} = Facts.read(ctx.identifier, "whenever")
   end
 
   describe "fit/2" do

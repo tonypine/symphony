@@ -5,8 +5,8 @@ defmodule SymphonyElixirWeb.TicketFactsController do
       GET /api/v1/tickets/:issue_identifier/facts?junction=<name>
 
   answers the facts document, built only from what Symphony already holds on the ticket (its record
-  and its events), shaped for `junction` (`after_coding`, `after_qa_fail`, `after_rework` or
-  `before_merge`; optional). The identifier resolves through the ticket's record, by identifier in
+  and its events), shaped for `junction` (`after_coding`, `after_qa_fail`, `after_qa_blocked`,
+  `after_rework`, `before_merge` or `during_run`; optional). The identifier resolves through the ticket's record, by identifier in
   any case or by id: a ticket with none is 404, and a junction that is not one is 400. Like the
   other reads of `/api/v1`, it needs no token.
   """

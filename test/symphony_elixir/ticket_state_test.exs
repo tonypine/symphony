@@ -816,6 +816,45 @@ defmodule SymphonyElixir.TicketStateTest do
     end
   end
 
+  describe "the ticket's current change" do
+    test "is what happened after its newest implementation or rework run ended, or everything when none did" do
+      implementation = event("run.ended", %{run_id: "run-1", run_kind: "implementation", exit: "handoff"}, at: at(1))
+      qa = event("run.ended", %{run_id: "run-2", run_kind: "qa", exit: "normal"}, at: at(2))
+      rework = event("run.ended", %{run_id: "run-3", run_kind: "rework", exit: "handoff"}, at: at(3))
+      note = event("note", %{text: "after"}, at: at(4))
+
+      assert TicketState.events_since_coding_run_in([implementation, qa, rework, note]) == [note]
+      assert TicketState.events_since_coding_run_in([implementation, qa]) == [qa]
+      assert TicketState.events_since_coding_run_in([qa, note]) == [qa, note]
+      assert TicketState.events_since_coding_run_in([]) == []
+    end
+
+    test "TP-1550: its QA passes without a result count on across heads, pass over a block on CI and stop at a result" do
+      qa = fn outcome, head, minute, details ->
+        event("verdict.recorded", %{kind: "qa", outcome: outcome, head: head, details: details}, at: at(minute))
+      end
+
+      events = [
+        qa.("blocked", "a", 1, %{}),
+        event("run.ended", %{run_id: "run-1", run_kind: "rework", exit: "handoff"}, at: at(2)),
+        qa.("fail", "b", 3, %{}),
+        qa.("blocked", "b", 4, %{}),
+        qa.("blocked", "b", 5, %{component: "ci"}),
+        event("verdict.recorded", %{kind: "code_review", outcome: "approve", head: "c"}, at: at(6)),
+        # Main merged into the pull request: a new head, no change of its own.
+        qa.("inconclusive", "c", 7, %{}),
+        qa.("blocked", "c", 8, %{})
+      ]
+
+      assert [%{outcome: "blocked", head_sha: "c"}, %{outcome: "inconclusive", head_sha: "c"}, %{outcome: "blocked", head_sha: "b"}] =
+               TicketState.qa_verdicts_without_result_in(events)
+
+      assert TicketState.qa_verdicts_without_result_in(events ++ [qa.("pass", "c", 9, %{})]) == []
+      implementation = event("run.ended", %{run_id: "run-2", run_kind: "implementation", exit: "handoff"}, at: at(9))
+      assert TicketState.qa_verdicts_without_result_in(events ++ [implementation]) == []
+    end
+  end
+
   test "the mutators default their timestamp to now" do
     record = TicketState.new("repo-a", "issue-1")
 
