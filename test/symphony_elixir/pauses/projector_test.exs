@@ -34,6 +34,18 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
     def fetch_plan_comments(_issue_id), do: raise("Linear is down")
   end
 
+  # A tracker whose read of the description shows whether another writer can have it meanwhile.
+  defmodule LockProbeTracker do
+    @moduledoc false
+    def fetch_issue_description(issue_id) do
+      other = Task.async(fn -> SymphonyElixir.DescriptionLock.locked(issue_id, fn -> :wrote_after end) end)
+      send(self(), {:other_writer, other, Task.yield(other, 100)})
+      {:ok, "Words."}
+    end
+
+    def update_issue_description(_issue_id, _description), do: :ok
+  end
+
   defmodule FailingStore do
     def get_ticket_state(_issue_id), do: {:error, :boom}
   end
@@ -314,6 +326,16 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
       assert [written] = description_writes()
       assert written =~ "And keep the old ones.\n\n## Plan"
       assert stored().projected.described
+    end
+
+    test "is read and written while no other writer has the description" do
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, @issue_id))
+      groom!("Words.")
+      _ = description_writes()
+
+      assert Projector.apply(stored(), tracker: LockProbeTracker, force: true) == :ok
+      assert_received {:other_writer, other, nil}
+      assert Task.await(other) == :wrote_after
     end
 
     test "words too long for an ask are left where the person wrote them, and an ask the store refuses is a write that failed" do

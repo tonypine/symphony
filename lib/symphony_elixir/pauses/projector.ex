@@ -34,7 +34,9 @@ defmodule SymphonyElixir.Pauses.Projector do
   (`projected`: the labels and the section's hash). A record it never projected compares its labels
   with the ones the last observation of the ticket in Linear saw. The section is written into the
   description read right before the write (`Decisions.put/2`), so a person's text since stays, and
-  an entry already there is never written twice. A write Linear refuses leaves the record as it is,
+  an entry already there is never written twice. That read and write hold the description's lock
+  (`SymphonyElixir.DescriptionLock`), which a run's summary tool holds for its own, so neither
+  writes over the other. A write Linear refuses leaves the record as it is,
   keeps what did land in `projected`, and marks the projection pending (`pending_projection`,
   `:pause`): the reconciler applies it again (`SymphonyElixir.TicketObservation.reconcile_all/3`).
   A second apply of the same record writes nothing.
@@ -66,7 +68,7 @@ defmodule SymphonyElixir.Pauses.Projector do
 
   require Logger
 
-  alias SymphonyElixir.{DecisionRequest, Decisions, IssueSummary, RunStore, TicketEvents}
+  alias SymphonyElixir.{DecisionRequest, Decisions, DescriptionLock, IssueSummary, RunStore, TicketEvents}
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.{TicketPlan, TicketProjection, TicketSignals, TicketState, Tracker, Walkthrough}
 
@@ -293,7 +295,13 @@ defmodule SymphonyElixir.Pauses.Projector do
   defp apply_section(_tracker, record, last, %{section: section}, _events) when section in [nil, last],
     do: {last, described?(record), []}
 
+  # The read and the write are one turn at the description (`DescriptionLock`): a run's summary
+  # tool writes it too.
   defp apply_section(tracker, record, last, desired, events) do
+    DescriptionLock.locked(record.issue_id, fn -> write_section(tracker, record, last, desired, events) end)
+  end
+
+  defp write_section(tracker, record, last, desired, events) do
     issue_id = record.issue_id
 
     with {:ok, description} <- call(fn -> tracker.fetch_issue_description(issue_id) end),
