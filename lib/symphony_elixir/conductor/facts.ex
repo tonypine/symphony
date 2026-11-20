@@ -41,8 +41,8 @@ defmodule SymphonyElixir.Conductor.Facts do
   tokens.
   """
 
-  alias SymphonyElixir.{Config, RunStore, TicketBrief, TicketEvents, TicketState, Walkthrough, Workspace}
   alias SymphonyElixir.Conductor.Filing
+  alias SymphonyElixir.{Config, RunStore, TicketBrief, TicketEvents, TicketState, Walkthrough, Workspace}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.TicketEvents.Event
 

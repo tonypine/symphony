@@ -31,6 +31,12 @@ defmodule SymphonyElixir.SelfHeal.FixerTest do
         query =~ "SymphonyCreateIssue" -> Process.get(:create_result, {:ok, create_response()})
         query =~ "SymphonyProjectsAndTeams" -> Process.get(:projects_result, {:ok, %{"data" => %{"projects" => %{"nodes" => []}, "teams" => %{"nodes" => []}}}})
         query =~ "SymphonyIssueId" -> Process.get(:issue_id_result, {:ok, %{"data" => %{"issue" => %{"id" => "blocker-id"}}}})
+        true -> label_query(query)
+      end
+    end
+
+    defp label_query(query) do
+      cond do
         query =~ "SymphonyResolveIssueLabel" -> Process.get(:label_lookup_result, {:ok, label_lookup_response()})
         query =~ "SymphonyAddIssueLabel" -> {:ok, %{"data" => %{"issueAddLabel" => %{"success" => true}}}}
         true -> flunk("unexpected query: #{query}")

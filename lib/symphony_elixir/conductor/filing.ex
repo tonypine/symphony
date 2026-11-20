@@ -35,6 +35,7 @@ defmodule SymphonyElixir.Conductor.Filing do
 
   require Logger
 
+  alias SymphonyElixir.Conductor.Facts
   alias SymphonyElixir.{Config, SelfHeal, TicketEvents}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
@@ -43,12 +44,25 @@ defmodule SymphonyElixir.Conductor.Filing do
   @label "tech debt"
   @urgent 1
   @relations %{"blocks" => "split_off", "follow_up" => "follow_up"}
-  @sections [title: "a title", problem: "its problem", wanted: "its wanted behaviour", acceptance: "its acceptance criteria", walkthrough: "its walkthrough"]
+  @sections [
+    title: "a title",
+    problem: "its problem",
+    wanted: "its wanted behaviour",
+    acceptance: "its acceptance criteria",
+    walkthrough: "its walkthrough"
+  ]
   @reason_max 600
   @evidence_max 6
 
   @typedoc "A ticket the route filed or linked: its identifier, URL, relation, title, and whether it existed already."
-  @type filed :: %{identifier: String.t(), url: String.t() | nil, relation: String.t(), title: String.t(), existing: boolean(), repo: String.t()}
+  @type filed :: %{
+          identifier: String.t(),
+          url: String.t() | nil,
+          relation: String.t(),
+          title: String.t(),
+          existing: boolean(),
+          repo: String.t()
+        }
 
   @doc """
   What the turn's facts say about the route (`filings`): whether it is `open` now and, when it is
@@ -271,7 +285,12 @@ defmodule SymphonyElixir.Conductor.Filing do
   end
 
   defp repo_keys(opts) do
-    Keyword.get_lazy(opts, :repos, fn -> with({:ok, repos} <- Config.repos(), do: Enum.map(repos, & &1.name), else: (_unreadable -> [])) end)
+    Keyword.get_lazy(opts, :repos, fn ->
+      case Config.repos() do
+        {:ok, repos} -> Enum.map(repos, & &1.name)
+        _unreadable -> []
+      end
+    end)
   end
 
   defp terminal?(state, opts) do
@@ -279,7 +298,7 @@ defmodule SymphonyElixir.Conductor.Filing do
     normalize(to_string(state)) in Enum.map(terminal, &normalize/1)
   end
 
-  defp fit(text, max), do: SymphonyElixir.Conductor.Facts.fit(text, max)
+  defp fit(text, max), do: Facts.fit(text, max)
 
   defp field(%Event{payload: payload}, key), do: Map.get(payload, key, Map.get(payload, Atom.to_string(key)))
 

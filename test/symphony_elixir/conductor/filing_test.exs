@@ -1,9 +1,9 @@
 defmodule SymphonyElixir.Conductor.FilingTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{TicketEvents, TicketState}
   alias SymphonyElixir.Conductor.{Facts, Filing}
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.{TicketEvents, TicketState}
 
   @settings %Schema.Conductor{enabled: true}
 
@@ -33,7 +33,8 @@ defmodule SymphonyElixir.Conductor.FilingTest do
     n = System.unique_integer([:positive])
     issue_id = "issue-filing-#{n}"
     identifier = "MOT-#{n}"
-    :ok = RunStore.put_ticket_state(%{repo_key: "default", issue_id: issue_id, issue_identifier: identifier, phase: "QA", title: "Translate Cycle"})
+    state = %{repo_key: "default", issue_id: issue_id, issue_identifier: identifier, phase: "QA", title: "Translate Cycle"}
+    :ok = RunStore.put_ticket_state(state)
     issue = %Issue{id: issue_id, identifier: identifier, title: "Translate Cycle", state: "QA", repo_key: "default"}
     %{issue: issue, issue_id: issue_id, identifier: identifier}
   end
@@ -177,7 +178,14 @@ defmodule SymphonyElixir.Conductor.FilingTest do
 
     for existing <- ["TP-1553", "SELF", "TP-404"] do
       Process.delete(:created)
-      log = capture_log(fn -> assert {:ok, %{identifier: "TP-2000", existing: false}} = file(ctx, route(%{existing: existing, title: "New #{existing}"}), %{@settings | max_filed_tickets: 5}) end)
+      settings = %{@settings | max_filed_tickets: 5}
+
+      log =
+        capture_log(fn ->
+          route = route(%{existing: existing, title: "New #{existing}"})
+          assert {:ok, %{identifier: "TP-2000", existing: false}} = file(ctx, route, settings)
+        end)
+
       assert Process.get(:created) != nil
       if existing != "TP-1553", do: assert(log =~ "Conductor cannot link #{existing}")
     end

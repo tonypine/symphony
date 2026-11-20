@@ -593,7 +593,9 @@ defmodule SymphonyElixir.TicketEvents.Types do
       writers: [:machine],
       run_kinds: [],
       required: [identifier: :string, kind: {:enum, ~w(split_off follow_up)}],
-      optional: [title: {:string, 300}, by: {:enum, ~w(conductor)}, repo: :string, url: :string, reason: {:string, 600}, existing: :boolean] ++ @signal,
+      optional:
+        [title: {:string, 300}, by: {:enum, ~w(conductor)}, repo: :string, url: :string] ++
+          [reason: {:string, 600}, existing: :boolean] ++ @signal,
       idempotency: {:fields, [:identifier]}
     },
     # On a ticket the Conductor filed (`SymphonyElixir.Conductor.Filing`): the ticket it came from,
