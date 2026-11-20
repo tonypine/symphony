@@ -100,7 +100,9 @@ defmodule SymphonyElixir.ConfigPhasesTest do
 
       [_code, i_build, i_checks, i_tests, i_window_tests, _handoff] = Phases.default_steps(:implementation)
 
-      for {ci_fix, implementation} <- [{build, i_build}, {checks, i_checks}, {tests, i_tests}, {window_tests, i_window_tests}] do
+      pairs = [{build, i_build}, {checks, i_checks}, {tests, i_tests}, {window_tests, i_window_tests}]
+
+      for {ci_fix, implementation} <- pairs do
         assert %{ci_fix | on_fail: "code"} == implementation
       end
 

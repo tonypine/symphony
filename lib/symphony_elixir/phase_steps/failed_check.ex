@@ -80,7 +80,8 @@ defmodule SymphonyElixir.PhaseSteps.FailedCheck do
   @type result :: {:ok, {String.t(), integer()}} | {:timeout, String.t()} | {:ask, String.t(), map()}
 
   @typedoc "Runs a shell line in the workspace within a time, as the step runner's runner does."
-  @type shell :: (String.t(), pos_integer() -> {:ok, {String.t(), integer()}} | {:timeout, String.t()} | {:error, term()})
+  @type shell ::
+          (String.t(), pos_integer() -> {:ok, {String.t(), integer()}} | {:timeout, String.t()} | {:error, term()})
 
   @doc "The shell lines the step runs for a failed step of a check outside GitHub, by check and step."
   @spec step_commands() :: %{{String.t(), String.t()} => String.t()}
@@ -148,21 +149,21 @@ defmodule SymphonyElixir.PhaseSteps.FailedCheck do
         files -> files
       end
 
-    present = MapSet.new(Map.get(changes, :tests, []) ++ Map.get(changes, :existing, []))
     coverage = for line <- List.wrap(job[:annotations]), [_line, file] <- [Regex.run(@coverage_annotation, line)], uniq: true, do: file
 
     cond do
-      named != [] ->
-        case Enum.filter(named, &MapSet.member?(present, &1)) do
-          [] -> [{:unknown, "the test files #{name} failed are no longer in the workspace: #{Enum.join(named, ", ")}"}]
-          files -> [{:tests, files}]
-        end
+      named != [] -> plan_tests(name, named, changes)
+      coverage != [] -> [{:coverage, coverage}]
+      true -> plan_steps(name, List.wrap(job[:failed_steps]), changes)
+    end
+  end
 
-      coverage != [] ->
-        [{:coverage, coverage}]
+  defp plan_tests(name, named, changes) do
+    present = MapSet.new(Map.get(changes, :tests, []) ++ Map.get(changes, :existing, []))
 
-      true ->
-        plan_steps(name, List.wrap(job[:failed_steps]), changes)
+    case Enum.filter(named, &MapSet.member?(present, &1)) do
+      [] -> [{:unknown, "the test files #{name} failed are no longer in the workspace: #{Enum.join(named, ", ")}"}]
+      files -> [{:tests, files}]
     end
   end
 
@@ -206,14 +207,18 @@ defmodule SymphonyElixir.PhaseSteps.FailedCheck do
 
     with {:done, output} <- run_shells(commands(items), shell, deadline, header),
          {:done, output} <- run_windows(context, items, deadline, output) do
-      case for({:unknown, why} <- items, do: why) do
-        [] -> {:ok, {output <> passed_line(items), 0}}
-        unknown -> could_not_run(context, checks, output, Enum.join(unknown, "; "))
-      end
+      finish(context, checks, items, output)
     else
       {:failed, output} -> {:ok, {output, 1}}
       {:timeout, output} -> {:timeout, output}
       {:ask, output, question} -> {:ask, output, question}
+    end
+  end
+
+  defp finish(context, checks, items, output) do
+    case for({:unknown, why} <- items, do: why) do
+      [] -> {:ok, {output <> passed_line(items), 0}}
+      unknown -> could_not_run(context, checks, output, Enum.join(unknown, "; "))
     end
   end
 
