@@ -1204,11 +1204,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         }
         let heading = NSMenuItem(title: StatusMenu.providersTitle, action: nil, keyEquivalent: "")
         heading.isEnabled = false
+        let others = menu.items.filter { !$0.isHidden && !$0.isSeparatorItem }.map(\.title)
+        let trail = Self.trailStop(lines.map { ($0.title, $0.state) }, others: others)
         let rows = lines.map { line in
             let item = menuItem(line.title, action: #selector(moveProvider(_:)))
             item.representedObject = line.action
             item.image = Self.statusDot(line.status)
-            item.badge = NSMenuItemBadge(string: line.state)
+            item.attributedTitle = Self.trailedTitle(line.title, trail: line.state, at: trail)
             item.setAccessibilityLabel("\(line.title), \(line.spoken)")
             return item
         }
@@ -1217,6 +1219,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         for (offset, item) in providerItems.enumerated() {
             menu.insertItem(item, at: start + offset)
         }
+    }
+
+    /// The catalog's `.menu-trail`: the title, then the trailing text in the secondary colour, right-aligned on a
+    /// tab stop at `stop`, with no background.
+    private static func trailedTitle(_ title: String, trail: String, at stop: CGFloat) -> NSAttributedString {
+        let font = NSFont.menuFont(ofSize: 0)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.tabStops = [NSTextTab(textAlignment: .right, location: stop)]
+        let line = NSMutableAttributedString(
+            string: title,
+            attributes: [.font: font, .foregroundColor: NSColor.labelColor, .paragraphStyle: paragraph]
+        )
+        line.append(NSAttributedString(
+            string: "\t" + trail,
+            attributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor, .paragraphStyle: paragraph]
+        ))
+        return line
+    }
+
+    /// Where the trailing texts end: past the widest title and its trail with a gap between them, and no nearer
+    /// than the menu's widest other line, so the states sit at the menu's right edge.
+    private static func trailStop(_ lines: [(title: String, trail: String)], others: [String]) -> CGFloat {
+        let font = NSFont.menuFont(ofSize: 0)
+        func width(_ text: String) -> CGFloat { ceil((text as NSString).size(withAttributes: [.font: font]).width) }
+        let titles = lines.map { width($0.title) }.max() ?? 0
+        let trails = lines.map { width($0.trail) }.max() ?? 0
+        let widest = others.map(width).max() ?? 0
+        return max(titles + DesignTokens.Space.s6 + trails, widest)
     }
 
     /// Pauses or resumes the provider of the line chosen, then reads the state again for the menu and the window.
