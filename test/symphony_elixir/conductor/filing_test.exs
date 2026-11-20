@@ -377,6 +377,20 @@ defmodule SymphonyElixir.Conductor.FilingTest do
       assert log =~ "could not hold"
     end
 
+    test "a sub-ticket the ticket may not get is refused and said on it, and a link to an open ticket is not", ctx do
+      for n <- 1..20 do
+        {:ok, _filed} = TicketEvents.record("default", ctx.issue_id, "ticket.filed", %{identifier: "TP-#{3000 + n}", kind: "split_off", title: "Part #{n}"})
+      end
+
+      assert {:error, "this ticket already got 20 sub-tickets, the most one ticket may get"} = file(ctx, route(%{relation: "after"}))
+      refute Process.get(:created)
+      assert [%{payload: %{status: true, text: text}}] = events(ctx.issue_id, "note")
+      assert text == "Symphony did not create the sub-ticket #{inspect(route().title)}: this ticket already got 20 sub-tickets, the most one ticket may get."
+
+      Process.put({:ticket, "TP-77"}, {:ok, %Issue{id: "other", identifier: "TP-77", state: "Todo", url: "https://linear.app/t/TP-77"}})
+      assert {:ok, %{identifier: "TP-77", existing: true}} = file(ctx, route(%{relation: "before", existing: "TP-77"}))
+    end
+
     test "an open ticket that already covers the problem is linked as it is, not made a sub-ticket", ctx do
       Process.put({:ticket, "TP-77"}, {:ok, %Issue{id: "other", identifier: "TP-77", state: "Todo", url: "https://linear.app/t/TP-77"}})
 

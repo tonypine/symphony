@@ -1,8 +1,8 @@
 defmodule SymphonyElixir.Conductor.TreeTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Conductor, Questions, SubIssueWait, TicketPlan, TicketPullRequest, TicketSignals}
-  alias SymphonyElixir.Conductor.{Facts, Grooming, Tree}
+  alias SymphonyElixir.{Conductor, Questions, SubIssueWait, TicketEvents, TicketPlan, TicketPullRequest, TicketSignals}
+  alias SymphonyElixir.Conductor.{Facts, Filing, Grooming, Tree}
   alias SymphonyElixir.Config.{Cache, Schema}
   alias SymphonyElixir.Tracker.Memory
 
@@ -642,6 +642,123 @@ defmodule SymphonyElixir.Conductor.TreeTest do
       assert [note] = status_notes(ctx.issue_id)
       assert note =~ "Symphony added MT-9004 but could not make the link to MT-1 (:refused) or its move to Todo (:refused)"
       assert Tree.rounds(Facts.events(ctx.issue_id)) == 1
+    end
+  end
+
+  describe "the bounds" do
+    setup ctx do
+      %{parent: waiting!(ctx, ended())}
+    end
+
+    defp filed!(issue_id, count) do
+      for n <- 1..count do
+        {:ok, _event} = TicketEvents.record("default", issue_id, "ticket.filed", %{identifier: "MT-#{500 + n}", kind: "split_off", title: "Part #{n}"})
+      end
+    end
+
+    # A chain of records, each the sub-ticket of the one before: the last is `levels` below the first.
+    defp deep!(ctx, levels) do
+      Enum.reduce(1..levels, %{issue_id: ctx.issue_id, issue_identifier: ctx.issue.identifier}, fn level, parent ->
+        n = System.unique_integer([:positive])
+        record = %{repo_key: "default", issue_id: "deep-#{n}", issue_identifier: "DEEP-#{n}", phase: "Todo", title: "Level #{level}"}
+        :ok = RunStore.put_ticket_state(Map.put(record, :parent, %{id: parent.issue_id, identifier: parent.issue_identifier}))
+        record
+      end)
+    end
+
+    test "a ticket gets at most 20 sub-tickets over its life: one more is refused, said in the facts, and asked about once", ctx do
+      filed!(ctx.issue_id, 18)
+      # A sub-ticket a plan names counts with the ones filed, once each.
+      assert Tree.created(ctx.issue_id) == 18
+      entry = &%{key: &1, title: &2, ask: "a", after: [], identifier: &3}
+      entries = [entry.("s1", "Part 1", "MT-501"), entry.("s2", "Other", "MT-1")]
+      {:ok, _event} = TicketPlan.write("default", ctx.issue_id, Map.merge(plan(entries), %{reason: "Sub-tickets created", by: "grooming"}))
+      assert Tree.created(ctx.issue_id) == 19
+      assert Tree.room(ctx.issue_id) == :ok
+
+      test = self()
+
+      turn = fn _plan, _issue, _run_id, prompt ->
+        send(test, {:prompt, prompt})
+        answered(%{"done" => false, "tree" => [add("The docs"), add("The export")]})
+      end
+
+      log = capture_log(fn -> assert Conductor.tend(ctx.parent, "final_check", "default", settings: @on, turn: turn) == :ok end)
+      assert log =~ "The Conductor's add was not carried out"
+      assert log =~ "this ticket already got 20 sub-tickets, the most one ticket may get"
+
+      assert_received {:prompt, first}
+      assert first =~ ~s("limits": {)
+      assert first =~ ~s("created": 19)
+
+      # The 20th was created, the 21st refused.
+      assert [{:memory_tracker_issue_created, _id, %{title: "The docs"}}] = Enum.filter(mailbox(), &(elem(&1, 0) == :memory_tracker_issue_created))
+      assert Tree.created(ctx.issue_id) == 20
+      assert {:error, "already got 20 sub-tickets, the most one ticket may get"} = Tree.room(ctx.issue_id)
+      refused = ~s(Symphony did not create the sub-ticket "The export": this ticket already got 20 sub-tickets, the most one ticket may get.)
+      assert [^refused, "Symphony refused a sub-ticket this ticket may not get, and asked the person."] = status_notes(ctx.issue_id)
+
+      assert [%{title: "This ticket may get no more sub-tickets", question: question, options: [%{label: "Go on without it"}, %{label: "Cancel the ticket"}]}] =
+               Questions.open({:ticket, "default", ctx.issue_id})
+
+      assert question =~ refused
+
+      # The next turn reads what was refused, and a second refusal asks nothing more about the bound.
+      assert Tree.limit_ask(ctx.issue_id) == :ok
+      facts = Tree.facts(%{}, ctx.issue_id)
+      assert %{sub_tickets: %{created: 20, max: 20}, depth: %{level: 0, max: 3}, refused: [^refused], rule: rule} = facts.limits
+      assert rule =~ "at most 20 sub-tickets"
+      apply_ctx = %{junction: "final_check", issue: ctx.parent, repo_key: "default", run_id: "run-2", conductor: @on}
+      again = %{done: false, tree: [%{op: "add", title: "The export", ask: "Build it.", after: [], reason: "Missing."}]}
+
+      capture_log(fn ->
+        assert {:ask, :stuck, %{question: stuck}} = Tree.apply(again, apply_ctx, [])
+        assert stuck =~ "none of the sub-tickets it wanted to add could be created (The export)"
+      end)
+    end
+
+    test "a ticket 3 levels below its root gets no sub-tickets, and its plan is never a split", ctx do
+      second = deep!(ctx, 2)
+      third = deep!(%{issue_id: second.issue_id, issue: %{identifier: second.issue_identifier}}, 1)
+      assert Tree.depth(ctx.issue_id) == 0
+      assert Tree.depth(second.issue_id) == 2
+      assert Tree.depth(third.issue_id) == 3
+      assert Tree.room(second.issue_id) == :ok
+      assert {:error, "is 3 levels below its root ticket, and a ticket that deep gets no sub-tickets"} = Tree.room(third.issue_id)
+      # Records that name each other end the walk at the bound.
+      assert Tree.depth(deep!(%{issue_id: third.issue_id, issue: %{identifier: third.issue_identifier}}, 3).issue_id) == 3
+
+      split = plan(two())
+      assert Tree.fit("default", second.issue_id, split) == split
+      single = Tree.fit("default", third.issue_id, split)
+      assert %{shape: "single"} = single
+      refute Map.has_key?(single, :sub_tickets)
+      assert ["The plan split this ticket into sub-tickets, but it is 3 levels below its root ticket, so it is built as one ticket."] = status_notes(third.issue_id)
+      assert Tree.fit("default", third.issue_id, single) == single
+
+      # Its Grooming is told before it plans; a ticket with no plan higher up reads nothing new.
+      assert %{limits: %{depth: %{level: 3, max: 3}, refused: []}} = Tree.facts(%{}, third.issue_id)
+      assert Tree.facts(%{a: 1}, second.issue_id) == %{a: 1}
+
+      deep = %Issue{id: third.issue_id, identifier: third.issue_identifier, team: %{key: "MT"}}
+      log = capture_log(fn -> assert {:error, "this ticket is 3 levels below its root ticket" <> _rest} = Tree.create("default", deep, hd(two()), []) end)
+      assert log == ""
+      refute_received {:memory_tracker_issue_created, _id, _attrs}
+      assert {:ask, :limit, %{question: question}} = Tree.limit_ask(third.issue_id)
+      assert question =~ ~s(Symphony did not create the sub-ticket "The API filter")
+    end
+
+    test "a sub-ticket Symphony creates carries where it came from, so it files no ticket of its own", ctx do
+      assert {:ok, child} = Tree.create("default", ctx.issue, hd(two()), [])
+      from = ctx.issue.identifier
+      assert [%{payload: %{from: ^from, by: "conductor", kind: "split_off"}}] = events(child.id, "ticket.filed_from")
+      assert %{open: false, closed: closed} = Filing.facts(Facts.events(child.id), @on, repos: ["default"])
+      assert closed =~ "this ticket was itself filed by the Conductor (from #{from})"
+
+      # A ticket of its own, for a finished ticket's message, is no sub-ticket and is not recorded as one.
+      assert {:ok, own} = Tree.create("default", ctx.issue, hd(two()), standalone: true)
+      assert events(own.id, "ticket.filed_from") == []
+      assert length(events(ctx.issue_id, "ticket.filed")) == 1
     end
   end
 

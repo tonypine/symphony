@@ -467,7 +467,10 @@ defmodule SymphonyElixir.Conductor do
 
   # A question Symphony itself asks about a ticket's tree, outside any turn's answer.
   defp ask_about({:ask, kind, request}, plan, issue) do
-    with :held <- ask_person(request, plan, issue, "conductor-tree-" <> Event.ulid(DateTime.utc_now())), do: Tree.asked(plan.repo_key, plan.issue_id, kind)
+    with :held <- ask_person(request, plan, issue, "conductor-tree-" <> Event.ulid(DateTime.utc_now())) do
+      Tree.asked(plan.repo_key, plan.issue_id, kind)
+      :held
+    end
   end
 
   defp ask_about(:ok, _plan, _issue), do: :ok
@@ -644,7 +647,7 @@ defmodule SymphonyElixir.Conductor do
     started_at = DateTime.utc_now()
     record = record(issue_id, opts)
     phase = record.phase || issue.state
-    facts = Keyword.get_lazy(opts, :facts, fn -> record |> Facts.build(junction) |> with_routes(plan) |> with_code(plan) |> Message.facts(plan) end)
+    facts = Keyword.get_lazy(opts, :facts, fn -> record |> Facts.build(junction) |> with_routes(plan) |> with_code(plan) |> Message.facts(plan) |> Tree.facts(issue_id) end)
     record_run_started(plan, run_id, phase)
     Logger.info("Conductor turn started #{context(issue, plan)} run_id=#{run_id} junction=#{junction} model=#{plan.run_profile.model}")
 
@@ -666,6 +669,9 @@ defmodule SymphonyElixir.Conductor do
   end
 
   defp with_plan({:ok, %{plan: %{} = answered}, tokens} = outcome, plan, issue, run_id, opts) do
+    # A ticket too deep in its tree to get sub-tickets is never split: its plan is recorded as single.
+    answered = Tree.fit(plan.repo_key, plan.issue_id, answered)
+
     case Grooming.write_plan(plan.repo_key, issue, answered, [run_id: run_id, idempotency: "plan.written:#{run_id}"] ++ Keyword.take(opts, [:repo])) do
       {:ok, _event} -> outcome
       {:error, why} -> {:error, {:plan_refused, why}, tokens}
@@ -777,6 +783,8 @@ defmodule SymphonyElixir.Conductor do
     asked = ask_person(answer.ask_person, plan, issue, run_id)
     # A ticket that blocks this one holds it as a question does; only a question lets a watch stop the run.
     held = if holds?(filed), do: :held, else: tend_tree(answer, plan, issue, run_id, asked, opts)
+    # A sub-ticket Symphony refused because the ticket reached a bound: the person is asked, once.
+    held = if held == :ok and ask_about(Tree.limit_ask(plan.issue_id), plan, issue) == :held, do: :held, else: held
     answer = Message.acted(answer, plan, issue, run_id, opts)
     record_update(with_filed(answer, filed, route), plan, run_id, {facts, record})
     steer(plan, answer, asked)

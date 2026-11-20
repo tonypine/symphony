@@ -35,7 +35,10 @@ defmodule SymphonyElixir.Conductor.Filing do
   The bounds, read from the ticket's events: `conductor.file_tickets` on; at most
   `conductor.max_filed_tickets` tickets filed per ticket over its whole life (a link to an open
   ticket that already covers the problem is not a filing); and a ticket the Conductor filed
-  (`ticket.filed_from`) files none of its own. Before filing, an open ticket the turn names as
+  (`ticket.filed_from`) files none of its own, which holds for a sub-ticket a split or a tree
+  operation created too. A sub-ticket also counts against what its parent may get
+  (`SymphonyElixir.Conductor.Tree.room/3`: 20 sub-tickets over its life, none 3 levels below its
+  root). Before filing, an open ticket the turn names as
   covering the problem (`existing`), an open one it already filed from this ticket in the same repo
   under the same title, or an open ticket already linked as blocking this one under the same title,
   is linked instead of a duplicate.
@@ -127,8 +130,9 @@ defmodule SymphonyElixir.Conductor.Filing do
     with nil <- closed(events, settings),
          {:ok, relation} <- relation(route, TicketPlan.groomed?(events)),
          :ok <- managed(route.repo, opts),
-         :ok <- sections(route) do
-      existing = existing(route, issue, events, opts)
+         :ok <- sections(route),
+         existing = existing(route, issue, events, opts),
+         :ok <- room(relation, existing, context, route) do
       route |> file_ticket(relation, existing, context, opts) |> filed(route, relation, context)
     else
       why when is_binary(why) -> {:error, why}
@@ -205,6 +209,14 @@ defmodule SymphonyElixir.Conductor.Filing do
   defp relation(_route, true), do: "the ticket route's relation must be before or after"
   defp relation(%{relation: relation}, false) when relation in @plain, do: {:ok, relation}
   defp relation(_route, false), do: "the ticket route's relation must be blocks or follow_up"
+
+  # A sub-ticket counts against what its parent may get (`Tree.room/3`), from whatever source.
+  # A link to a ticket that exists creates nothing.
+  defp room(relation, existing, _context, _route) when relation in @plain or existing != nil, do: :ok
+
+  defp room(_relation, nil, %{issue: issue, repo_key: repo_key}, route) do
+    with {:error, why} <- Tree.room(repo_key, issue.id, route.title), do: why
+  end
 
   defp managed(repo, opts) when is_binary(repo) do
     case Keyword.get(opts, :repo, &Config.repo/1).(repo) do

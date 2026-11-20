@@ -3696,6 +3696,15 @@ exactly as before.
   wanted could be created, when the move to `Done` failed, and when the turn failed or could not be
   read 2 times in a row (each counted in a status note). While no provider of `runs.conductor` can
   take a run, the next poll asks again.
+- **The bounds.** They are fixed, not settings. A ticket gets at most 20 sub-tickets over its whole
+  life, counted from every source (a split, a tree operation, a ticket a run's turn files), and a
+  ticket 3 levels below its root gets none: its Grooming plan of shape `split` is recorded as
+  `single`, with a status note. A sub-ticket Symphony refuses is said on the ticket in a status
+  note, the Conductor's next turn reads it in its facts (`limits`: the count, the depth, the rule
+  and what was refused), and the person is asked once per ticket ("Go on without it" or cancel).
+  Every sub-ticket Symphony creates records where it came from (`ticket.filed_from`), so it files
+  no ticket of its own from a run's turn, and is recorded on its parent as it is created
+  (`ticket.filed`), so a split that stopped half way creates none of them twice.
 - Both turns run on `priv/conductor/tree_prompt.md`. A question either one asks holds the ticket,
   and its operations are not carried out: the person decides first.
 

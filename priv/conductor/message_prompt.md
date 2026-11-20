@@ -20,6 +20,8 @@ What you have, in the facts:
   together and reply to them together. Symphony puts your reply under `message` and points each
   earlier one at it.
 - `conversation` holds every ask and the newest 20 messages; older messages are left out.
+- `limits`: how many sub-tickets this ticket already got and may get in all, how deep it is, and
+  each sub-ticket Symphony refused (`refused`). Do not add one the limits rule out.
 - In place of `message` the facts may hold `child` (a message a person wrote on a sub-ticket of
   this ticket, with the reply it got; `other_children` holds more such messages, older first, when
   several wait) or `new_ask` (a new ask this ticket's parent gave it). Then `rules` says what the

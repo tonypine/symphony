@@ -32,6 +32,18 @@ defmodule SymphonyElixir.Conductor.Tree do
   A split that fails is counted (`failed/3`, a status note under `grooming.split_try:<n>`): it is
   tried again at the next dispatch, and from the third failure on the person is asked each time.
 
+  ## The bounds
+
+  What the Conductor may create under a ticket is bounded (`room/1`), whatever asks for it (a
+  split, a tree operation, a ticket a run's turn files): a ticket gets at most 20 sub-tickets
+  over its whole life (`created/1` counts every one ever created under it), and a ticket 3
+  levels below its root gets none (`depth/1`). A sub-ticket Symphony refuses is said on the ticket
+  (a status note under `tree.limit:<n>`), the next turn reads it in its facts (`facts/2`, `limits`),
+  and the person is asked once (`limit_ask/1`). A plan of shape `split` on a ticket that deep is
+  recorded as `single`, with a note (`fit/3`). Each sub-ticket Symphony creates carries where it
+  came from (`ticket.filed_from`), so it files no ticket of its own from a run's turn
+  (`SymphonyElixir.Conductor.Filing`).
+
   ## The close of a groomed ticket
 
   A groomed ticket in the waiting state closes by one rule (`due/3`): its own pull request merged
@@ -90,6 +102,14 @@ defmodule SymphonyElixir.Conductor.Tree do
   @ended_key "tree.ended:"
   @done "Done"
   @written_fields [:event_id, :at, :version]
+  # The bounds on what the Conductor creates under one ticket. They are constants, not settings:
+  # they stop a tree that grows without end, and no repo needs its own.
+  # How many sub-tickets a ticket may get over its whole life, from every source.
+  @max_sub_tickets 20
+  # How many levels below its root a ticket may be and still get sub-tickets of its own.
+  @max_depth 3
+  @limit_key "tree.limit:"
+  @limit_asked_key "tree.limit_asked"
 
   @typedoc "A sub-ticket Symphony created: its id, its identifier and the repo it belongs to."
   @type child :: %{id: String.t(), identifier: String.t(), repo: String.t()}
@@ -126,6 +146,127 @@ defmodule SymphonyElixir.Conductor.Tree do
   end
 
   defp managed?(repo, opts), do: match?({:ok, _repo}, Keyword.get(opts, :repo, &Config.repo/1).(repo))
+
+  @doc "How many sub-tickets were ever created under the ticket `issue_id`: the ones recorded on it as filed, and the ones its plans name."
+  @spec created(String.t()) :: non_neg_integer()
+  def created(issue_id) when is_binary(issue_id), do: created_in(Facts.events(issue_id))
+
+  defp created_in(events) do
+    filed = for %{type: "ticket.filed", payload: %{identifier: identifier} = payload} <- events, Map.get(payload, :existing) != true, do: identifier
+    planned = for version <- TicketPlan.versions(events), %{identifier: identifier} <- Map.get(version, :sub_tickets, []), is_binary(identifier), do: identifier
+    length(Enum.uniq(filed ++ planned))
+  end
+
+  @doc "How many levels below its root the ticket `issue_id` is, by Symphony's records: 0 for a ticket with no parent."
+  @spec depth(String.t()) :: non_neg_integer()
+  def depth(issue_id) when is_binary(issue_id), do: depth(issue_id, 0)
+
+  # No tree is read deeper than the bound, so records that name each other end the walk too.
+  defp depth(_issue_id, @max_depth), do: @max_depth
+
+  defp depth(issue_id, level) do
+    case TicketPlan.parent_id(issue_id) do
+      nil -> level
+      parent_id -> depth(parent_id, level + 1)
+    end
+  end
+
+  @doc """
+  Whether the ticket `issue_id` may get one more sub-ticket (see **The bounds** in the module doc):
+  `:ok`, or `{:error, why}` with the bound it reached, in plain words that follow "this ticket".
+  """
+  @spec room(String.t()) :: :ok | {:error, String.t()}
+  def room(issue_id) when is_binary(issue_id) do
+    cond do
+      depth(issue_id) >= @max_depth -> {:error, "is #{@max_depth} levels below its root ticket, and a ticket that deep gets no sub-tickets"}
+      created(issue_id) >= @max_sub_tickets -> {:error, "already got #{@max_sub_tickets} sub-tickets, the most one ticket may get"}
+      true -> :ok
+    end
+  end
+
+  @doc """
+  `room/1` for the sub-ticket `title` about to be created under `repo_key`'s ticket `issue_id`: a
+  refusal is said on the ticket, as a status note, so its next turn reads it and the person is asked.
+  """
+  @spec room(String.t() | nil, String.t(), String.t()) :: :ok | {:error, String.t()}
+  def room(repo_key, issue_id, title) do
+    with {:error, why} <- room(issue_id) do
+      refused = keyed(Facts.events(issue_id), @limit_key) + 1
+      note(repo_key, issue_id, "Symphony did not create the sub-ticket #{inspect(title)}: this ticket #{why}.", "#{@limit_key}#{refused}")
+      {:error, "this ticket #{why}"}
+    end
+  end
+
+  @doc """
+  The plan Grooming answered for the ticket `issue_id`, as Symphony records it: a plan of shape
+  `split` on a ticket that may get no sub-tickets because of its depth is recorded as `single`,
+  without its `sub_tickets`, and a status note on the ticket says so. Any other plan is unchanged.
+  """
+  @spec fit(String.t() | nil, String.t(), map()) :: map()
+  def fit(repo_key, issue_id, %{shape: "split"} = plan) do
+    if depth(issue_id) >= @max_depth do
+      text = "The plan split this ticket into sub-tickets, but it is #{@max_depth} levels below its root ticket, so it is built as one ticket."
+      note(repo_key, issue_id, text, "tree.single")
+      plan |> Map.delete(:sub_tickets) |> Map.put(:shape, "single")
+    else
+      plan
+    end
+  end
+
+  def fit(_repo_key, _issue_id, plan), do: plan
+
+  @doc """
+  The turn's `facts` with the bounds of the groomed ticket `issue_id` (`limits`): how many
+  sub-tickets it got and may get, how deep it is and how deep a ticket with sub-tickets may be, the
+  rule in words, and each sub-ticket Symphony refused (`refused`). Facts of a ticket with no plan
+  are unchanged, but when its depth already rules a split out.
+  """
+  @spec facts(map(), String.t()) :: map()
+  def facts(facts, issue_id) when is_binary(issue_id) do
+    events = Facts.events(issue_id)
+    level = depth(issue_id)
+
+    if TicketPlan.groomed?(events) or level >= @max_depth do
+      limits = %{
+        sub_tickets: %{created: created_in(events), max: @max_sub_tickets},
+        depth: %{level: level, max: @max_depth},
+        rule: "A ticket gets at most #{@max_sub_tickets} sub-tickets over its whole life, and a ticket #{@max_depth} levels below its root gets none: it is never split. Symphony refuses any more.",
+        refused: for(%{payload: %{text: text}} = event <- events, keyed?(event, @limit_key), do: text)
+      }
+
+      Map.put(facts, :limits, limits)
+    else
+      facts
+    end
+  end
+
+  @doc """
+  The question Symphony asks the person, once per ticket, after it refused a sub-ticket on the
+  ticket `issue_id` (`{:ask, :limit, question}`); `:ok` when it refused none, or already asked.
+  """
+  @spec limit_ask(String.t()) :: :ok | {:ask, :limit, map()}
+  def limit_ask(issue_id) when is_binary(issue_id) do
+    events = Facts.events(issue_id)
+
+    case for(%{payload: %{text: text}} = event <- events, keyed?(event, @limit_key), do: text) do
+      [_ | _] = refused -> if keyed(events, @limit_asked_key) == 0, do: {:ask, :limit, limit_question(List.last(refused))}, else: :ok
+      [] -> :ok
+    end
+  end
+
+  defp limit_question(refused) do
+    %{
+      title: "This ticket may get no more sub-tickets",
+      question: "#{Facts.fit(refused, 700)} Go on without that sub-ticket, or cancel this ticket?",
+      why: "The number of sub-tickets under one ticket, and how deep they go, is bounded, so a ticket cannot grow without end.",
+      if_unanswered: "The ticket stays paused, and the work the sub-ticket was for is not done.",
+      recommendation_reason: "The rest of the ticket's work is not affected.",
+      options: [
+        %{label: "Go on without it", effect: "The ticket continues, and the Conductor is told it may add no more.", recommended: true, action: "continue"},
+        %{label: "Cancel the ticket", effect: "The ticket is cancelled.", recommended: false, action: "cancel"}
+      ]
+    }
+  end
 
   @doc """
   Carries out the split the current plan of `issue` holds (see the module doc) and parks the ticket
@@ -253,11 +394,12 @@ defmodule SymphonyElixir.Conductor.Tree do
     issue = with_record(issue)
     family = if Keyword.get(opts, :standalone, false), do: %{}, else: %{parent_id: parent_id}
 
-    with {:ok, team, project} <- target(issue, repo_key, repo, opts),
+    with :ok <- if(family == %{}, do: :ok, else: room(repo_key, parent_id, entry.title)),
+         {:ok, team, project} <- target(issue, repo_key, repo, opts),
          attrs = %{title: entry.title, description: entry.ask, priority: @urgent, state: first_state(entry), team: team, project: project},
          {:ok, %{id: id, identifier: identifier}} <- tracker(opts).create_issue(attrs |> Map.put(:assignee_id, issue.assignee_id) |> Map.merge(family)) do
       child = %{id: id, identifier: identifier, repo: repo}
-      if family != %{}, do: filed(repo_key, parent_id, child, entry)
+      if family != %{}, do: filed(repo_key, issue, child, entry)
       asked(repo, child, entry.ask, issue, opts)
       {:ok, child}
     else
@@ -274,11 +416,15 @@ defmodule SymphonyElixir.Conductor.Tree do
 
   # The sub-ticket is on its parent's record the moment it exists, so a split or an operation that
   # stops right after never creates it a second time.
-  defp filed(repo_key, parent_id, child, entry) do
+  defp filed(repo_key, %Issue{id: parent_id} = parent, child, entry) do
     payload = %{identifier: child.identifier, kind: "split_off", title: String.slice(entry.title, 0, 300), repo: child.repo}
+    from = %{from: parent.identifier || parent_id, by: "conductor", kind: "split_off"}
 
-    with {:error, reason} <- TicketEvents.record(repo_key, parent_id, "ticket.filed", payload),
-         do: Logger.warning("Could not record the sub-ticket #{child.identifier} on its parent issue_id=#{parent_id}: #{inspect(reason)}")
+    # Where it came from is on the sub-ticket too, so it files no ticket of its own from a run's turn.
+    for {key, issue_id, type, payload} <- [{repo_key, parent_id, "ticket.filed", payload}, {child.repo, child.id, "ticket.filed_from", from}],
+        {:error, reason} <- [TicketEvents.record(key, issue_id, type, payload)] do
+      Logger.warning("Could not record #{type} for the sub-ticket #{child.identifier} of issue_id=#{parent_id}: #{inspect(reason)}")
+    end
   end
 
   defp first_state(entry), do: if(Map.get(entry, :after, []) == [], do: @todo, else: @backlog)
@@ -546,8 +692,10 @@ defmodule SymphonyElixir.Conductor.Tree do
       adds == [] and done -> pass(ctx.repo_key, issue, opts)
       adds == [] -> {:ask, :stuck, stuck_question(issue_id, "it answered that the ticket is not done, and added no sub-ticket")}
       made >= round_limit(events, ctx.conductor) -> {:ask, :rounds, rounds_question(made, titles)}
-      carry_out(adds, @round, ctx, opts) == 0 -> {:ask, :stuck, stuck_question(issue_id, "none of the sub-tickets it wanted to add could be created (#{titles})")}
-      true -> :ok
+      carry_out(adds, @round, ctx, opts) > 0 -> :ok
+      # A bound refused them and the person was not asked about it yet: that question comes first.
+      limit_ask(issue_id) != :ok -> :ok
+      true -> {:ask, :stuck, stuck_question(issue_id, "none of the sub-tickets it wanted to add could be created (#{titles})")}
     end
   end
 
@@ -802,12 +950,17 @@ defmodule SymphonyElixir.Conductor.Tree do
   @doc """
   Records that the person was asked about the final check, once the question holds the ticket:
   `:rounds`, whether it may add one more round, which lets one through once they answer; `:stuck`,
-  what to do with a check that did not conclude, after which its failed tries count from zero.
+  what to do with a check that did not conclude, after which its failed tries count from zero. Or
+  about a sub-ticket the ticket may not get (`:limit`), which is asked once per ticket.
   """
-  @spec asked(String.t(), String.t(), :rounds | :stuck) :: :ok
+  @spec asked(String.t(), String.t(), :rounds | :stuck | :limit) :: :ok
   def asked(repo_key, issue_id, :rounds) do
     made = rounds(Facts.events(issue_id))
     note(repo_key, issue_id, "After #{made} rounds the final check still wanted to add sub-tickets, so Symphony asked the person.", "#{@asked_key}#{made}")
+  end
+
+  def asked(repo_key, issue_id, :limit) do
+    note(repo_key, issue_id, "Symphony refused a sub-ticket this ticket may not get, and asked the person.", @limit_asked_key)
   end
 
   def asked(repo_key, issue_id, :stuck) do
