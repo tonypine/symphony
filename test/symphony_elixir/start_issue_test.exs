@@ -179,7 +179,8 @@ defmodule SymphonyElixir.StartIssueTest do
       tracked([nowhere])
 
       for state <- [orchestrator_state(1), %{orchestrator_state(1) | repo_key: nil}] do
-        {:reply, reply, next_state} = Orchestrator.handle_call({:start_issue, nowhere, nil}, {self(), make_ref()}, state)
+        {:reply, reply, next_state} =
+          Orchestrator.handle_call({:start_issue, nowhere, nil}, {self(), make_ref()}, state)
 
         assert {:error, {:start_refused, "The ticket has no repository; it can't be started."}} = reply
         assert next_state.running == %{}
