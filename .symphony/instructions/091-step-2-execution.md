@@ -91,7 +91,7 @@ In this repository, a QA pass of the Director has two environments: the committe
 
 Apply this whenever a ticket adds or changes a screen or pane.
 
-- Viewports are inputs to any layout change; the repo's `WORKFLOW.md` names them with a goal each: `functional` (every control reachable; scroll and collapse allowed; nothing clipped) or `optimize` (use the space). Where a repo names none, the QA wide pass size (1400×900 pt) is the functional viewport.
+- Viewports are inputs to any layout change; the repo's `WORKFLOW.md` names them with a goal each: `functional` (every control reachable; scroll and collapse allowed; nothing clipped) or `optimize` (use the space). Where a repo names none, the QA walkthrough size (1366×768 pt) is the functional viewport.
 - Design before code, recorded in the workpad under `### Design`:
   1. Layout: the top-level sections and, per viewport, what shows, what collapses, what scrolls, what hides. Persistent chrome (navigation, side panels, detail panes) is part of the budget: when one opens, content gives way by a mechanism, never by being pushed off-screen or truncated to unreadability.
   2. Each section designed on its own, then reviewed together.

@@ -4,8 +4,10 @@ defmodule SymphonyElixir.QaSeedTest do
   import Plug.Conn
   import Plug.Test
 
-  alias SymphonyElixir.{Artifacts, Config, DirectorMoves, Inbox, Orchestrator, Pauses, PlanBrief, QaSeed, Questions}
-  alias SymphonyElixir.{Paths, RunStore, TicketEvents, TicketPullRequest, Tracker, Workflow}
+  alias SymphonyElixir.{Artifacts, Config, DirectorMoves, Inbox, Orchestrator, Paths, Pauses, PlanBrief, QaSeed}
+  alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.{Questions, RunStore, Situation, SubIssueWait, TicketEvents, TicketPullRequest, Tracker}
+  alias SymphonyElixir.Workflow
   alias SymphonyElixirWeb.ControlApiController
 
   # The restart's reset, which the QA server's `gh` stand-in answers for the seed's own PRs.
@@ -223,6 +225,68 @@ defmodule SymphonyElixir.QaSeedTest do
     assert {:ok, %{state: "QA"}} = Tracker.fetch_issue_by_identifier("QA-113")
     assert Questions.open({:ticket, repo_key, "qa-seed-113"}) == []
     refute Pauses.paused?({:ticket, repo_key, "qa-seed-113"})
+  end
+
+  test "TP-1560: the seed's merged QA-114 waits on its one sub-ticket, and closes once the Director cancels it", %{repo_key: repo_key, dir: dir} do
+    assert QaSeed.load(dir, now: @now) == :ok
+    settings = Config.settings!()
+    terminal_states = settings.tracker.terminal_states
+
+    # QA-114 is no plan, its merge put it in the waiting state, and its one sub-ticket is open: its
+    # status names that sub-ticket and never the epic review.
+    assert RunStore.merged_wait?("qa-seed-114")
+    waiting = record(repo_key, "qa-seed-114")
+    assert %{phase: "Waiting on sub-tickets", labels: [], sub_issues: [%{identifier: "QA-115", state: "Todo"}]} = waiting
+
+    live = %{
+      running: %{},
+      retrying: %{},
+      slot_waiting: %{},
+      skipped: %{},
+      limit: 4,
+      symphony_pause: nil,
+      max_tries: 3,
+      terminal_states: terminal_states
+    }
+
+    status = Situation.compute(waiting, [], live)
+    assert %{kind: "waiting_on_sub_tickets", waits_on: %{sub_tickets: ["QA-115"]}} = status
+    refute status.cause =~ "epic review"
+
+    # QA-115 is its sub-ticket and is blocked by it too, yet the merged parent does not hold it;
+    # QA-116, which QA-114 blocks, is not held either.
+    assert {:ok, %{parent: %{identifier: "QA-114", done: 0, total: 1}} = child} = Tracker.fetch_issue_by_identifier("QA-115")
+    refute Issue.blocked?(child, terminal_states)
+    assert {:ok, blocked} = Tracker.fetch_issue_by_identifier("QA-116")
+    assert [%{identifier: "QA-114"}] = blocked.blocked_by
+    refute Issue.blocked?(blocked, terminal_states)
+
+    # Linear's parent node counts a Done child as done and leaves a cancelled one out.
+    :ok = Tracker.update_issue_state("qa-seed-115", "Done")
+    assert {:ok, %{parent: %{done: 1, total: 1}}} = Tracker.fetch_issue_by_identifier("QA-115")
+    :ok = Tracker.update_issue_state("qa-seed-115", "Todo")
+
+    {:ok, orchestrator} = Orchestrator.start_link(name: Module.concat(__MODULE__, :ClosingOrchestrator))
+    on_exit(fn -> stop_process(orchestrator) end)
+    moves_server = :"qa_seed_moves_#{System.unique_integer([:positive])}"
+    start_supervised!({DirectorMoves, name: moves_server})
+    inbox = [name: {:qa_seed_inbox, make_ref()}, github_repos: %{}]
+    moves = [server: moves_server, github: SeedGitHub, workspace: SeedWorkspace, inbox: inbox]
+
+    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+    # The Director cancels the sub-ticket; the next poll moves QA-114 to Done, with no run, though
+    # the seed keeps Symphony paused.
+    assert %{"to_state" => "Canceled"} = control(:cancel, %{"issue_identifier" => "QA-115"}, orchestrator, moves)
+    assert {:ok, %{parent: %{done: 0, total: 0}}} = Tracker.fetch_issue_by_identifier("QA-115")
+    assert {:ok, parent} = Tracker.fetch_issue_by_identifier("QA-114")
+    assert SubIssueWait.close?(parent, terminal_states, settings)
+
+    send(orchestrator, :run_poll_cycle)
+    assert_receive {:memory_tracker_state_update, "qa-seed-114", "Done"}, 5_000
+    assert {:ok, %{state: "Done"}} = Tracker.fetch_issue_by_identifier("QA-114")
+    refute RunStore.merged_wait?("qa-seed-114")
+    assert RunStore.list_runs(repo_key, :all) |> Enum.filter(&(&1.issue_identifier == "QA-114")) == []
   end
 
   defp rows(inbox), do: %{} |> Inbox.items(inbox) |> Enum.map(&{&1.identifier, &1.kind, &1.review}) |> Enum.sort()

@@ -533,6 +533,65 @@ defmodule SymphonyElixir.SubIssueWaitTest do
       refute RunStore.merged_wait?("orphaned")
     end
 
+    test "MOT-93: a poll cycle closes a merged ticket whose last sub-ticket was cancelled even when it dispatches nothing" do
+      waiting = %Issue{
+        id: "waiting-poll",
+        identifier: "MT-1601",
+        title: "Translate",
+        state: @waiting,
+        team: %{key: "Test"},
+        labels: ["improvement"],
+        sub_issues: [%{id: "child-1", identifier: "MT-1602", state: "Canceled"}]
+      }
+
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [waiting])
+      :ok = RunStore.put_merged_wait("waiting-poll")
+
+      orchestrator_name = Module.concat(__MODULE__, :ClosingOrchestrator)
+      {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+      on_exit(fn ->
+        if Process.alive?(pid), do: GenServer.stop(pid)
+      end)
+
+      # A quality gate pass still in flight defers the dispatch pass, as a busy slot or a gate that
+      # skips the ticket keeps it from one; the close does not wait for it.
+      :sys.replace_state(pid, &%{&1 | quality_gate_tasks: %{make_ref() => :poll}})
+      send(pid, :run_poll_cycle)
+
+      assert_receive {:memory_tracker_state_update, "waiting-poll", "Done"}, 2_000
+      assert %{running: running} = :sys.get_state(pid)
+      refute Map.has_key?(running, "waiting-poll")
+    end
+
+    test "MOT-85: a blocked-by link to a merged ticket waiting on its sub-tickets is met, so its sub-ticket dispatches" do
+      state = orchestrator_state()
+      parent = %{id: "merged-parent", identifier: "MT-1651", state: @waiting}
+      child = %Issue{id: "child-of-merged", identifier: "MT-1652", title: "Follow-up", state: "Todo", blocked_by: [parent]}
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [child])
+      terminal_states = Config.settings!().tracker.terminal_states
+
+      # Before its merge is recorded (a plan parent waits there with nothing recorded), the link holds.
+      refute SubIssueWait.merged_blocker?(parent)
+      assert Issue.blocked?(child, terminal_states)
+      assert [%{issue_id: "child-of-merged"}] = Orchestrator.put_blocked_for_test(state, [child]).blocked
+
+      :ok = RunStore.put_merged_wait("merged-parent")
+
+      assert SubIssueWait.merged_blocker?(parent)
+      assert Issue.open_blockers(child, terminal_states) == []
+      refute Issue.blocked?(child, terminal_states)
+      assert Orchestrator.put_blocked_for_test(state, [child]).blocked == []
+      assert Orchestrator.should_dispatch_issue_for_test(child, state)
+
+      # Once a person moves it out of the waiting state, it blocks again until it is terminal.
+      reopened = %{child | blocked_by: [%{parent | state: "In Progress"}]}
+      refute SubIssueWait.merged_blocker?(%{parent | state: "In Progress"})
+      assert Issue.blocked?(reopened, terminal_states)
+      refute SubIssueWait.merged_blocker?(%{id: nil, state: @waiting})
+      refute SubIssueWait.merged_blocker?(:not_a_blocker)
+    end
+
     test "a poll cycle parks a breakdown parent In Progress and does not dispatch it" do
       Application.put_env(:symphony_elixir, :memory_tracker_issues, [
         %Issue{

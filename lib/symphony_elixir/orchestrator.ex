@@ -1803,6 +1803,7 @@ defmodule SymphonyElixir.Orchestrator do
           |> put_blocked(issues)
           |> release_merging_ci_waits(issues)
           |> grant_step_turns()
+          |> close_finished_parents(issues)
 
         if available_slots(state) > 0 or available_finishing_slots(state) > 0 or forced_pass_needed?(state, issues) do
           issues
@@ -3865,7 +3866,6 @@ defmodule SymphonyElixir.Orchestrator do
       issues
       |> park_breakdown_parents(release_pause_held_retries(state))
       |> then(&review_breakdown_parents(issues, &1))
-      |> close_finished_parents(issues)
       |> act_on_plan_comments(issues)
 
     state =
@@ -3945,9 +3945,12 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # An issue that waits on its sub-issues after its PR merged (not a `breakdown` parent) moves to
-  # Done once every sub-issue is terminal; its PR is merged, so no run is needed. Candidates come
-  # from the repo poll cache, so each one is read again first: a sub-issue filed meanwhile keeps it
-  # waiting, and a person may have moved it on.
+  # Done once every sub-issue is terminal; its PR is merged, so no run is needed. It runs on every
+  # poll, before the slot check: the move takes no slot, and a close that waited for a dispatch pass
+  # waited as long as every slot stayed busy (MOT-93, TP-1560). The first poll after a start closes
+  # one left waiting while Symphony was down. Candidates come from the repo poll cache, so each one
+  # is read again first: a sub-issue filed meanwhile keeps it waiting, and a person may have moved it
+  # on.
   defp close_finished_parents(%State{} = state, issues) do
     settings = Config.settings!()
     terminal_states = terminal_state_set()

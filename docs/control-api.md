@@ -112,6 +112,9 @@ closest one:
 - A plan in `Plan Review` reads `waiting_on_you`.
 - A parent the dispatch pass held for its sub-tickets, or one in `Waiting on sub-tickets` with one
   still open, reads `waiting_on_sub_tickets`: its cause says how many are done ("2 of 5 done.").
+  A ticket that is no plan, which its PR's merge put there and whose sub-tickets all ended, reads
+  `waiting_for_ci` "Closing": Symphony moves it to `Done` on its next poll, with no run. Only a plan
+  reads "The epic review is next" there.
 - A ticket paused on a wait for CI on a commit (an epic review held for CI on its base branch), and
   one whose run ended on CI still running and starts again after it, read `waiting_for_ci` naming the
   commit and the workflows still running.

@@ -62,6 +62,47 @@ defmodule SymphonyElixir.PlaybookSettingsTest do
     end
   end
 
+  describe "window sizes" do
+    test "default to 1366×768 for the walkthrough and 2560×1440 for the wide pass" do
+      assert PlaybookSettings.default_window_size() == {1366, 768}
+      assert PlaybookSettings.default_wide_pass_size() == {2560, 1440}
+      assert PlaybookSettings.window_size(%{}) == {1366, 768}
+      assert PlaybookSettings.wide_pass_size(%{"wide_pass_width" => nil}) == {2560, 1440}
+      assert {PlaybookSettings.min_window_size(), PlaybookSettings.max_window_size()} == {320, 8192}
+    end
+
+    test "take a playbook's own sizes, with atom or string keys, and the default for a size out of range" do
+      assert PlaybookSettings.window_size(%{"window_width" => 1440, "window_height" => 900}) == {1440, 900}
+      assert PlaybookSettings.wide_pass_size(%{wide_pass_width: 3008, wide_pass_height: 1692}) == {3008, 1692}
+      assert PlaybookSettings.window_size(%{"window_width" => 100, "window_height" => "900"}) == {1366, 768}
+    end
+
+    test "accept whole points in range, and a wide pass at least the walkthrough window" do
+      sizes = %{"window_width" => 1440, "window_height" => 900, "wide_pass_width" => 1440, "wide_pass_height" => 900}
+      assert PlaybookSettings.validate(macos_app(sizes)) == :ok
+      assert PlaybookSettings.validate(macos_app(%{"window_width" => nil})) == :ok
+
+      for {settings, message} <- [
+            {%{"window_width" => 319}, "auto_review.playbooks.macos_app.window_width must be a whole number of points from 320 to 8192"},
+            {%{"window_height" => "768"}, "auto_review.playbooks.macos_app.window_height must be a whole number of points from 320 to 8192"},
+            {%{"wide_pass_width" => 9000}, "auto_review.playbooks.macos_app.wide_pass_width must be a whole number of points from 320 to 8192"},
+            {%{"wide_pass_height" => 1440.5}, "auto_review.playbooks.macos_app.wide_pass_height must be a whole number of points from 320 to 8192"},
+            {%{"wide_pass_width" => 1280, "wide_pass_height" => 720},
+             "auto_review.playbooks.macos_app.wide_pass_width and wide_pass_height (1280×720) must be at least the walkthrough window " <>
+               "(window_width and window_height, 1366×768)"}
+          ] do
+        assert PlaybookSettings.validate(macos_app(settings)) == {:error, message}
+      end
+    end
+
+    test "the macos_app playbook carries them" do
+      [macos_app] =
+        %{playbooks: macos_app(%{"window_width" => 1440, "window_height" => 900})} |> Selection.playbooks() |> Enum.filter(&(&1.kind == "macos_app"))
+
+      assert %{window_size: {1440, 900}, wide_pass_size: {2560, 1440}} = macos_app
+    end
+  end
+
   describe "launch_env/1" do
     test "puts the dev server's port into the values, sorted by name" do
       playbook = %{dev_server_port: 8091, launch_env: %{"HUB_URL" => "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}", "HUB_OWNER_TOKEN" => "abc"}}

@@ -46,4 +46,27 @@ defmodule SymphonyElixir.QaDriver.MachineTest do
     assert Machine.same_machine?(ioreg(output(@uuid)), fn -> {:error, "ioreg printed no IOPlatformUUID"} end) ==
              {:error, "the hardware UUID of this host could not be read: ioreg printed no IOPlatformUUID"}
   end
+
+  defp displays(displays), do: {:ok, {Jason.encode!(%{"SPDisplaysDataType" => [%{"sppci_model" => "Apple Paravirtual device", "spdisplays_ndrvs" => displays}]}), 0}}
+
+  test "reads the main display's size in points, as it looks, not its pixels" do
+    retina = %{"_name" => "Retina", "_spdisplays_pixels" => "2560 x 1440", "_spdisplays_resolution" => "1280 x 720 @ 60.00Hz"}
+    full = %{"_name" => "Display", "_spdisplays_pixels" => "2560 x 1440", "_spdisplays_resolution" => "2560 x 1440 @ 60.00Hz"}
+
+    assert Machine.screen_points(ioreg(displays([full]))) == {:ok, {2560, 1440}}
+    assert_received {:cmd, "/usr/sbin/system_profiler", ["SPDisplaysDataType", "-json"], opts}
+    assert opts[:timeout_ms] == 30_000
+
+    assert Machine.screen_points(ioreg(displays([full, Map.put(retina, "spdisplays_main", "spdisplays_yes")]))) == {:ok, {1280, 720}}
+    assert Machine.screen_points(ioreg(displays([retina, full]))) == {:ok, {1280, 720}}
+  end
+
+  test "says when it can't read a display size" do
+    assert Machine.screen_points(ioreg(displays([]))) == {:error, "system_profiler reported no display size"}
+    assert Machine.screen_points(ioreg(displays([%{"_spdisplays_resolution" => "unknown"}]))) == {:error, "system_profiler reported no display size"}
+    assert Machine.screen_points(ioreg({:ok, {"not json", 0}})) == {:error, "system_profiler reported no display size"}
+    assert Machine.screen_points(ioreg({:ok, {~s({"SPDisplaysDataType": [{"sppci_model": "none"}]}), 0}})) == {:error, "system_profiler reported no display size"}
+    assert Machine.screen_points(ioreg({:ok, {"denied\n", 1}})) == {:error, "system_profiler exited with status 1: denied"}
+    assert Machine.screen_points(ioreg({:error, :timeout})) == {:error, "system_profiler could not run: :timeout"}
+  end
 end

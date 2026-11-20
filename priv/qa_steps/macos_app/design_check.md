@@ -7,8 +7,10 @@ The running app:
 
 - The host's appearance is never switched: launch the app once per appearance. `qa_quit_app` the
   app Symphony launched, then `qa_launch_app` with `appearance: "dark"` (and the `api_fixtures` and
-  stand-ins the plan's briefs name for the screens you judge). Open each changed window; when the
-  design names a size of 1400×900 pt or more, set it with `qa_resize_window`. Let each settle
+  stand-ins the plan's briefs name for the screens you judge). Open each changed window and
+  call `qa_resize_window` with `pass: "walkthrough"` (and the window's `path` when it is not the
+  main one): judge it at the walkthrough size (Window sizes, 1366×768 pt by default), or at the size
+  the design names, passed as `width` and `height`. Let each settle
   (about 10 seconds, change focus once) and `qa_screenshot` it, named with the appearance
   (`overview-dark`). The status-bar menu: `qa_open_status_menu`, `qa_screenshot` with its
   `window_id`, then `qa_key` `escape`. Then quit and do the same with `appearance: "light"`.

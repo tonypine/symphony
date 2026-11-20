@@ -221,5 +221,63 @@
       "name": "Symphony QA seed",
       "slug_id": "symphony-qa-seed"
     }
+  },
+  {
+    "id": "qa-seed-114",
+    "identifier": "QA-114",
+    "state": "Waiting on sub-tickets",
+    "title": "Translate the Director into Portuguese",
+    "description": "Translate the Director into Portuguese.\n\nSeeded for the QA server: no repository holds this work.",
+    "labels": [],
+    "team": {
+      "key": "QA",
+      "name": "QA"
+    },
+    "project": {
+      "id": "qa-seed-project",
+      "name": "Symphony QA seed",
+      "slug_id": "symphony-qa-seed"
+    }
+  },
+  {
+    "id": "qa-seed-115",
+    "identifier": "QA-115",
+    "state": "Todo",
+    "title": "Have a native speaker review the Portuguese copy",
+    "description": "Have a native speaker review the Portuguese copy.\n\nSeeded for the QA server: no repository holds this work.",
+    "labels": [],
+    "parentId": "qa-seed-114",
+    "blockedBy": [
+      "qa-seed-114"
+    ],
+    "team": {
+      "key": "QA",
+      "name": "QA"
+    },
+    "project": {
+      "id": "qa-seed-project",
+      "name": "Symphony QA seed",
+      "slug_id": "symphony-qa-seed"
+    }
+  },
+  {
+    "id": "qa-seed-116",
+    "identifier": "QA-116",
+    "state": "Todo",
+    "title": "Choose the Director's language in Settings",
+    "description": "Choose the Director's language in Settings.\n\nSeeded for the QA server: no repository holds this work.",
+    "labels": [],
+    "blockedBy": [
+      "qa-seed-114"
+    ],
+    "team": {
+      "key": "QA",
+      "name": "QA"
+    },
+    "project": {
+      "id": "qa-seed-project",
+      "name": "Symphony QA seed",
+      "slug_id": "symphony-qa-seed"
+    }
   }
 ]

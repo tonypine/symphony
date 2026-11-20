@@ -20,13 +20,22 @@ defmodule SymphonyElixir.Setup.Checks.QaHostTest do
 
   defp ioreg(uuid), do: {:ok, {~s(+-o Mac  <class IOPlatformExpertDevice>\n    {\n      "IOPlatformUUID" = "#{uuid}"\n    }\n), 0}}
 
-  # Fakes `ioreg` on this host (`@this_mac`) and on the QA host, which answers `qa_reply`.
-  defp fake_machines(qa_reply) do
+  defp screen({w, h}),
+    do: {:ok, {Jason.encode!(%{"SPDisplaysDataType" => [%{"spdisplays_ndrvs" => [%{"_spdisplays_resolution" => "#{w} x #{h} @ 60.00Hz"}]}]}), 0}}
+
+  # Fakes `ioreg` on this host (`@this_mac`) and on the QA host, which answers `qa_reply`, and the
+  # QA host's `system_profiler`, which answers `screen_reply` (a 2560×1440 pt screen by default).
+  defp fake_machines(qa_reply, screen_reply \\ screen({2560, 1440})) do
     test = self()
 
-    qa_cmd = fn worker_host, executable, args, _opts ->
-      send(test, {:qa_cmd, worker_host, executable, args})
-      qa_reply
+    qa_cmd = fn
+      worker_host, "/usr/sbin/system_profiler" = executable, args, _opts ->
+        send(test, {:qa_cmd, worker_host, executable, args})
+        screen_reply
+
+      worker_host, executable, args, _opts ->
+        send(test, {:qa_cmd, worker_host, executable, args})
+        qa_reply
     end
 
     Application.put_env(:symphony_elixir, :setup_qa_machine, qa_cmd: qa_cmd, local_uuid: fn -> {:ok, @this_mac} end)
@@ -83,5 +92,46 @@ defmodule SymphonyElixir.Setup.Checks.QaHostTest do
     assert %{problems: [], not_checked: [not_checked]} = Setup.check(checks: [QaHost], linear_api_key?: true)
     assert not_checked.id == "qa_host"
     assert not_checked.reason =~ "the QA host qa@qa-vm: the hardware UUID of the QA host could not be read: ioreg could not run: :timeout"
+  end
+
+  test "a QA VM whose screen is under the wide pass size is an error naming the sizes and the command that fixes it" do
+    vm = ioreg("99999999-8888-7777-6666-555544443333")
+    fake_machines(vm, screen({1280, 720}))
+    write_qa_config!(%{playbooks: @macos_app, worker_host: "qa@qa-vm"})
+
+    assert [problem] = problems()
+    assert problem.id == "qa_host:small_screen:qa@qa-vm"
+    assert problem.severity == "error"
+    assert problem.title == "The QA VM's screen is too small for the wide pass"
+    assert problem.consequence =~ "The QA host qa@qa-vm has a 1280×720 pt screen, under the 2560×1440 pt the wide pass of default fills"
+    assert problem.consequence =~ "run tart set <the QA VM> --display 2560x1440pt with the VM stopped"
+    assert problem.repos == ["default"]
+    assert problem.fix == @docs_fix
+    assert %{label: "Screen", value: "1280×720 pt"} in problem.details
+    assert %{label: "Needs", value: "2560×1440 pt"} in problem.details
+    assert %{label: "Fix", value: "tart set <the QA VM> --display 2560x1440pt"} in problem.details
+    assert_received {:qa_cmd, "qa@qa-vm", "/usr/sbin/system_profiler", ["SPDisplaysDataType", "-json"]}
+
+    # The playbook's own wide pass size is the one the screen needs.
+    small = %{window_width: 960, window_height: 600, wide_pass_width: 1280, wide_pass_height: 720}
+    write_qa_config!(%{playbooks: %{macos_app: Map.merge(@macos_app.macos_app, small)}, worker_host: "qa@qa-vm"})
+    assert problems() == []
+
+    fake_machines(vm, screen({2560, 1440}))
+    write_qa_config!(%{playbooks: @macos_app, worker_host: "qa@qa-vm"})
+    assert problems() == []
+  end
+
+  test "a QA VM whose screen it can't read leaves the check not checked; this Mac's screen is never read" do
+    fake_machines(ioreg("99999999-8888-7777-6666-555544443333"), {:error, :timeout})
+    write_qa_config!(%{playbooks: @macos_app, worker_host: "qa@qa-vm"})
+
+    assert %{problems: [], not_checked: [not_checked]} = Setup.check(checks: [QaHost], linear_api_key?: true)
+    assert not_checked.reason =~ "the QA host qa@qa-vm: the screen size could not be read: system_profiler could not run: :timeout"
+
+    fake_machines(ioreg(@this_mac), {:error, :timeout})
+    write_qa_config!(%{playbooks: @macos_app, worker_host: "qa@localhost"})
+    assert [%{id: "qa_host:same_machine:qa@localhost"}] = problems()
+    refute_received {:qa_cmd, "qa@localhost", "/usr/sbin/system_profiler", _args}
   end
 end
