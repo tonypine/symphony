@@ -110,8 +110,8 @@ defmodule SymphonyElixir.QaAgent do
   @missing_verdict [:no_verdict_object, :empty_response]
   @browser_mcp_name "browser"
   @localhost_domains ["localhost", "127.0.0.1"]
-  @wide_pass_missing_reason "the wide pass did not run: no `qa_resize_window` call resized the app's window, " <>
-                              "so layouts at 1400×900 pt were not checked"
+  @wide_pass_missing_reason "the wide pass did not run: no `qa_resize_window` call resized the app's window for it, " <>
+                              "so layouts at the wide pass size were not checked"
   # The default browser MCP server runs on the Symphony host, outside the agent sandbox, so it
   # is pinned to an exact version and never fetched during a pass (`npx --no`). To bump it,
   # change this version, check the flags in `default_browser_mcp/2` against that release, and
@@ -442,8 +442,32 @@ defmodule SymphonyElixir.QaAgent do
   # What the driver gives the app in QA mode, by the driver's own names (TP-1346).
   defp qa_mode_section(job) do
     case QaModeContract.section(job.playbooks) do
-      nil -> ""
-      section -> "\n" <> section <> "\n"
+      nil -> window_sizes_section(job)
+      section -> "\n" <> section <> "\n" <> window_sizes_section(job)
+    end
+  end
+
+  # The sizes a `macos_app` pass judges the app at (TP-1561), from the playbook's settings.
+  defp window_sizes_section(job) do
+    case Enum.find(job.playbooks, &(Map.get(&1, :kind) == "macos_app")) do
+      nil ->
+        ""
+
+      playbook ->
+        {ww, wh} = Map.get(playbook, :window_size) || PlaybookSettings.default_window_size()
+        {pw, ph} = Map.get(playbook, :wide_pass_size) || PlaybookSettings.default_wide_pass_size()
+
+        """
+
+        Window sizes:
+        - Walkthrough: #{ww}×#{wh} pt. After each `qa_launch_app`, once the window shows and before the
+          first step, call `qa_resize_window` with `pass: "walkthrough"`. Every walkthrough step,
+          screenshot and design check runs at that size unless the step itself names another; name
+          the size in each step's `viewport`, and the report names it.
+        - Wide pass: #{pw}×#{ph} pt, the screen the window fills. Call `qa_resize_window` with
+          `pass: "wide"` and no size; the `Wide pass` step names the window size it reached and the
+          screen size.
+        """
     end
   end
 
@@ -927,7 +951,7 @@ defmodule SymphonyElixir.QaAgent do
     1. Walk the walkthrough steps marked `Proved by: QA`, or naming no proof: no test can drive them.
     2. Judge every UI deliverable by sight. A UI deliverable is each window, page, screen, panel or
        menu the change adds or changes. Screenshot it in the real app in light and in dark, at the
-       sizes the design names (at the size it opens when the design names none), and compare both
+       sizes the design names (at the walkthrough size when the design names none), and compare both
        with its design above: layout, spacing, alignment, truncation, contrast, symbols, wording,
        and whether it looks finished. Report one step per UI deliverable named
        `Design check: <deliverable>`, with both screenshots in `evidence`, and in `details` the
@@ -1311,10 +1335,12 @@ defmodule SymphonyElixir.QaAgent do
     {sw, sh} = wide_pass.screen
     {vw, vh} = wide_pass.visible
     {ww, wh} = wide_pass.window
+    {nw, nh} = wide_pass.needed
 
-    "the wide pass was limited: the QA screen is #{sw}×#{sh} pt (#{vw}×#{vh} pt usable), so the app's window reached only " <>
-      "#{ww}×#{wh} pt, under the 1400×900 pt the wide pass needs, and layouts wider than that were not checked. " <>
-      "An operator enlarges the QA machine's display (for the tart VM, `tart set <vm> --display 1920x1200`) and QA runs again"
+    "the wide pass was limited: the QA screen is #{sw}×#{sh} pt (#{vw}×#{vh} pt usable), under the #{nw}×#{nh} pt screen the " <>
+      "wide pass needs, so the app's window reached only #{ww}×#{wh} pt and layouts wider than that were not checked. " <>
+      "An operator enlarges the QA machine's display (for the tart VM, `tart set <vm> --display #{nw}x#{nh}pt`, then restart it) " <>
+      "and QA runs again"
   end
 
   # Only a pass that runs the `web` playbook, or one with `dev_server: true`, starts the dev

@@ -119,6 +119,34 @@ final class MacAppQAPlaybookTests: XCTestCase {
         XCTAssertEqual(try MacAppQAPlaybook.updating(config, from: configPlaybook, to: configPlaybook), config)
     }
 
+    func testReadsAndWritesTheWindowSizes() throws {
+        let defaults = MacAppQAPlaybook()
+        XCTAssertEqual([defaults.windowWidth, defaults.windowHeight, defaults.widePassWidth, defaults.widePassHeight], [1366, 768, 2560, 1440])
+        let yaml = "auto_review:\n  playbooks:\n    macos_app:\n      window_width: 1_440\n      window_height: ~\n"
+        let read = try MacAppQAPlaybook.values(in: yaml)
+        XCTAssertEqual(read, MacAppQAPlaybook(windowWidth: 1440))
+
+        var new = read
+        new.windowHeight = 900
+        new.widePassWidth = 3008
+        new.widePassHeight = 1692
+        let updated = try MacAppQAPlaybook.updating(yaml, from: read, to: new)
+        XCTAssertEqual(
+            updated,
+            "auto_review:\n  playbooks:\n    macos_app:\n      wide_pass_width: 3008\n      wide_pass_height: 1692\n"
+                + "      window_width: 1_440\n      window_height: 900\n"
+        )
+        XCTAssertEqual(try MacAppQAPlaybook.values(in: updated), new)
+        XCTAssertEqual(
+            try MacAppQAPlaybook.updating("", from: MacAppQAPlaybook(), to: MacAppQAPlaybook(windowWidth: 1280, widePassHeight: 1600)),
+            "auto_review:\n  playbooks:\n    macos_app:\n      window_width: 1280\n      wide_pass_height: 1600\n"
+        )
+        let unreadable = "auto_review:\n  playbooks:\n    macos_app:\n      wide_pass_width: big\n"
+        XCTAssertThrowsError(try MacAppQAPlaybook.values(in: unreadable)) { error in
+            XCTAssertEqual(error as? MacAppQAPlaybookError, .unreadable(key: "wide_pass_width", value: "big"))
+        }
+    }
+
     func testRemovingEveryVariableLeavesAnEmptyMap() throws {
         var new = configPlaybook
         new.launchEnv = []

@@ -81,10 +81,12 @@ worktree's configured app and on apps you launched:
   `no_scroll_area` when nothing scrolls there, and like `qa_click` when the target is off screen
   or covered.
 - `qa_resize_window`: moves the app's main window (or the `AXWindow` at `path`) to the top left
-  of the screen and resizes it to `width`×`height` points, 1400×900 by default, or the screen's
-  usable area when that is smaller. It returns the window's new frame in `window` (`x`, `y`, `w`,
-  `h`), the `screen` size, its `visible` (usable) area, and `limited: true` when that area is
-  under 1400×900 pt.
+  of the screen and resizes it to `width`×`height` points, or the screen's usable area when that
+  is smaller. `pass: "walkthrough"` sets the walkthrough size (the Window sizes section names it,
+  1366×768 by default); `pass: "wide"`, the default, runs the wide pass at the wide pass size
+  (2560×1440 by default), and takes no smaller size. It returns the window's new frame in `window`
+  (`x`, `y`, `w`, `h`), the `screen` size, its `visible` (usable) area, and for the wide pass
+  `limited: true` when the screen is under the wide pass size.
 - `qa_check_app`: says whether the app is still `running`, `responding` (it answered an
   accessibility request within 10 seconds; a hung app does not) and has written no new crash
   report since launch (`crash_reports`, from `~/Library/Logs/DiagnosticReports` on the machine
@@ -656,10 +658,10 @@ and menu the ticket adds or changes by sight in both appearances. The host's app
 switched; launch the app once per appearance instead:
 
 - **Dark:** `qa_launch_app` with `appearance: "dark"` (plus the walkthrough's `api_fixtures` and
-  stand-ins). Open the windows the ticket changes. When the design names a size of 1400×900 pt or
-  more for one, set it with `qa_resize_window` (`width`, `height`, and the window's `path` when it
-  is not the main window); the tool makes no window smaller, so judge one whose design names a
-  smaller size at the size it opens, and give both sizes in the step. Let each settle (step 4
+  stand-ins). Open the windows the ticket changes and set each to the walkthrough size with
+  `qa_resize_window` and `pass: "walkthrough"` (and the window's `path` when it is not the main
+  window). When the design names another size for one, pass it as `width` and `height`, and give
+  both sizes in the step. Let each settle (step 4
   below) and `qa_screenshot` it, named with the appearance (for example `overview-dark`).
 - **Status-bar menu:** when the ticket changes the status-bar menu, or a step reads it:
   `qa_open_status_menu`, then `qa_screenshot` with the `window_id` it returned (for example
@@ -792,6 +794,9 @@ anyway: Symphony's tool does it, or it is host setup. Where it can't be installe
    directory as `api_fixtures`, never by setting the variable yourself: the app reads Symphony's
    API from those files instead of a running Symphony. When the walkthrough checks what the app
    sent (`api-requests.jsonl`), call `qa_api_requests` after the action and judge its `requests`.
+   Once the window shows, and after every later launch, call `qa_resize_window` with
+   `pass: "walkthrough"`: every step, screenshot and design check runs at the walkthrough size
+   unless the step itself names another. Name that size in each step's `viewport`.
 3. Open each window the ticket's walkthrough and acceptance criteria touch (menu items,
    buttons, Settings), using `qa_ax_tree` to find elements and `qa_ax_press` to act. When an
    element answers `qa_ax_press` with `unsupported`:
@@ -848,10 +853,11 @@ anyway: Symphony's tool does it, or it is host setup. Where it can't be installe
    "the design system alone: no Screens cover it") and the size it judged. `pass` when both
    screenshots match the design; `fail` when either visibly differs, naming what differs.
 9. **Wide pass.** Layout bugs that only show in wide windows (a layout loop, a constraint
-   crash) never appear at the default size, so after the walkthrough run the app wide:
-   - call `qa_resize_window` for the app's main window. When the main window is not the one the
-     PR changes (a Settings window, a panel), pass that window's `path`. Use the default
-     1400×900 unless the ticket names a larger size;
+   crash) never appear at the walkthrough size, so after the walkthrough run the app wide:
+   - call `qa_resize_window` with `pass: "wide"` for the app's main window. When the main window
+     is not the one the PR changes (a Settings window, a panel), pass that window's `path`. Leave
+     out the size: the window fills a screen of the wide pass size (2560×1440 by default). Pass a
+     size only when the ticket names a larger one;
    - with the window at that size, open each page or view the PR changes (the main page when it
      changes none), and on each one the inspector or side panel where the page has one;
    - on each of them, wait 30 seconds with the app running (`sleep 30` in your shell), then call
@@ -863,9 +869,9 @@ anyway: Symphony's tool does it, or it is host setup. Where it can't be installe
    or it wrote a new crash report): quote its `problems`, which name the page and the window
    size, and list each one in `findings`. When the app exits, wait 10 seconds and call
    `qa_check_app` once more, because macOS writes the crash report a few seconds after the
-   crash. When `qa_resize_window` returns `limited: true`, the QA screen is too small for the
-   wide pass: still run it at the size you got, say in the step that the wide pass was limited
-   with the screen size, and mark the step `blocked`. Symphony reports a pass whose wide pass
+   crash. When `qa_resize_window` returns `limited: true`, the QA screen is under the wide pass
+   size: still run it at the size you got, say in the step that the wide pass was limited with
+   the screen size and the size it needs, and mark the step `blocked`. Symphony reports a pass whose wide pass
    was limited as `blocked` either way, so a person enlarges the QA screen, and reports a pass
    with no `qa_resize_window` call as `inconclusive`, because its wide pass did not run, and runs
    QA again. In an epic review that launches no app, because the epic changed none, there is no

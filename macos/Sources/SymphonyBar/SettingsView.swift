@@ -573,7 +573,8 @@ private struct RiskRulesSection: View {
 }
 
 /// The `macos_app` QA playbook: the tools the QA host needs, the project's dev server there and the variables the
-/// app under test gets (`auto_review.playbooks.macos_app.requires`, `dev_server`, `dev_server_port` and `launch_env`).
+/// app under test gets (`auto_review.playbooks.macos_app.requires`, `dev_server`, `dev_server_port` and `launch_env`),
+/// and the window sizes QA judges it at (`window_width`, `window_height`, `wide_pass_width` and `wide_pass_height`).
 private struct MacAppQASection: View {
     @ObservedObject var model: SettingsViewModel
 
@@ -596,6 +597,7 @@ private struct MacAppQASection: View {
             }
             .disabled(!model.canEditQAHostTools)
             Group {
+                windowSizeControls
                 devServerControls
             }
             .disabled(!model.canEditMacAppQA)
@@ -603,11 +605,21 @@ private struct MacAppQASection: View {
             Text("macOS app QA (saved in symphony.yml)")
         } footer: {
             SectionFooter(
-                "auto_review.playbooks.macos_app.requires (default none), dev_server (default off), dev_server_port "
-                    + "(default 8090) and launch_env (default none). A repository's WORKFLOW.md can set them too, and "
+                "auto_review.playbooks.macos_app.requires (default none), window_width and window_height (default "
+                    + "1366 × 768), wide_pass_width and wide_pass_height (default 2560 × 1440), dev_server (default off), "
+                    + "dev_server_port (default 8090) and launch_env (default none). A repository's WORKFLOW.md can set them too, and "
                     + "wins. scripts/qa-vm/provision.sh installs Go, Postgres and jq on a QA VM. Save checks "
                     + "symphony.yml with symphony check first; the next QA pass uses them."
             )
+        }
+    }
+
+    @ViewBuilder private var windowSizeControls: some View {
+        LabeledContent("Walkthrough window") {
+            SizeFields(name: "Walkthrough window", width: $model.macAppQA.windowWidth, height: $model.macAppQA.windowHeight)
+        }
+        LabeledContent("Wide pass screen") {
+            SizeFields(name: "Wide pass screen", width: $model.macAppQA.widePassWidth, height: $model.macAppQA.widePassHeight)
         }
     }
 
@@ -644,6 +656,30 @@ private struct MacAppQASection: View {
         .foregroundStyle(.secondary)
         if let error = model.macAppQAError {
             Text(error).foregroundStyle(.red)
+        }
+    }
+}
+
+/// A width and a height in points, side by side, for one of the macOS app QA window sizes.
+private struct SizeFields: View {
+    let name: String
+    @Binding var width: Int
+    @Binding var height: Int
+
+    var body: some View {
+        HStack(spacing: 4) {
+            TextField("\(name) width", value: $width, format: .number.grouping(.never))
+                .labelsHidden()
+                .multilineTextAlignment(.trailing)
+                .frame(width: 64)
+                .accessibilityLabel("\(name) width, in points")
+            Text("×").foregroundStyle(.secondary)
+            TextField("\(name) height", value: $height, format: .number.grouping(.never))
+                .labelsHidden()
+                .multilineTextAlignment(.trailing)
+                .frame(width: 64)
+                .accessibilityLabel("\(name) height, in points")
+            Text("pt").foregroundStyle(.secondary)
         }
     }
 }
