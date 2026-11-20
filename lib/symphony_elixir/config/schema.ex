@@ -894,17 +894,19 @@ defmodule SymphonyElixir.Config.Schema do
         field(:auto_pause, :boolean, default: true)
         field(:resume_margin_seconds, :integer, default: 120)
         field(:unknown_reset_retry_seconds, :integer, default: 900)
+        field(:sign_in_ask_after_seconds, :integer, default: 1800)
       end
 
-      @fields [:auto_pause, :resume_margin_seconds, :unknown_reset_retry_seconds]
+      @fields [:auto_pause, :resume_margin_seconds, :unknown_reset_retry_seconds, :sign_in_ask_after_seconds]
 
       @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
       def changeset(schema, attrs) do
         schema
         |> cast(attrs, @fields, empty_values: [])
-        |> Schema.validate_present([:auto_pause, :resume_margin_seconds, :unknown_reset_retry_seconds])
+        |> Schema.validate_present(@fields)
         |> validate_number(:resume_margin_seconds, greater_than_or_equal_to: 0)
         |> validate_number(:unknown_reset_retry_seconds, greater_than_or_equal_to: 60)
+        |> validate_number(:sign_in_ask_after_seconds, greater_than_or_equal_to: 60)
       end
     end
 

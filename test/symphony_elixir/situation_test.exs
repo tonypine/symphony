@@ -245,6 +245,36 @@ defmodule SymphonyElixir.SituationTest do
              } = compute(record(%{phase: "Rework"}), [], live(%{skipped: skipped, slot_waiting: slot}))
     end
 
+    test "a ticket held because no agent can sign in says so, with the provider's message and since when (TP-1515)" do
+      message = "Failed to authenticate. API Error: 403 Attention Required! | Cloudflare"
+      skip = %{since: @later, reason: "The agent can't sign in to Claude", rule: :usage_limit, provider: "anthropic", cause: :sign_in, error: message, sign_in_since: @at}
+
+      assert %{
+               kind: "waiting_for_provider",
+               word: "Waiting: the agent can't sign in to Anthropic",
+               cause: cause,
+               next: "Starts by itself once a sign-in to Anthropic works again.",
+               since: @at,
+               waits_on: %{provider: "anthropic"}
+             } = compute(record(%{phase: "QA"}), [], live(%{skipped: %{@id => skip}}))
+
+      assert cause =~ "no agent has been able to sign in to it since #{Situation.clock(@at)}. It answered: #{message}"
+
+      # Without a message or a since it still reads in words, since the skip's own time.
+      bare = %{skip | error: nil, sign_in_since: nil}
+      assert %{cause: cause, since: @later} = compute(record(), [], live(%{skipped: %{@id => bare}}))
+      assert cause == "The implementation run runs on Anthropic, and no agent has been able to sign in to it."
+    end
+
+    test "a retry held because no agent can sign in waits for the provider, never reads Retrying" do
+      sign_in = %{provider: "anthropic", cause: :sign_in, error: "Invalid API key", sign_in_since: @at}
+      retry = %{attempt: 2, error: "the agent could not sign in to Claude (Invalid API key)", delay_type: :usage_limit, due_at: @later, sign_in: sign_in}
+      facts = live(%{retrying: %{@id => retry}})
+
+      assert %{kind: "waiting_for_provider", word: "Waiting: the agent can't sign in to Anthropic", since: @at} = compute(record(), [], facts)
+      assert %{@id => {false, false, false, nil, nil, nil}} = Situation.live_signature(facts)
+    end
+
     test "a skip of another rule is no provider's" do
       skipped = %{@id => %{since: @at, reason: "Claude 5-hour limit reached", rule: :usage_limit}}
       assert %{kind: "paused_by_rule"} = compute(record(), [], live(%{skipped: skipped}))

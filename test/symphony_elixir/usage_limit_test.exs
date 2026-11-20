@@ -7,7 +7,7 @@ defmodule SymphonyElixir.UsageLimitTest do
   alias SymphonyElixir.{Pauses, Providers, UsageLimit}
 
   @now ~U[2026-10-03 03:46:00Z]
-  @config %UsageLimitConfig{auto_pause: true, resume_margin_seconds: 120, unknown_reset_retry_seconds: 900}
+  @config %UsageLimitConfig{auto_pause: true, resume_margin_seconds: 120, unknown_reset_retry_seconds: 900, sign_in_ask_after_seconds: 1800}
 
   defmodule FailingStore do
     def get_usage_limits, do: {:error, :mnesia_down}
@@ -133,6 +133,56 @@ defmodule SymphonyElixir.UsageLimitTest do
       assert UsageLimit.banner(Map.delete(entry, :error), @now, to_local) == "Paused: Claude API unreachable, retries ~03:47"
 
       assert [%{reason: "model_api_unreachable", error: "ENOTFOUND", source: :api_unreachable}] = UsageLimit.snapshot(%{{"anthropic", :all} => entry}, %{})
+    end
+  end
+
+  describe "an agent that can't sign in (TP-1515)" do
+    @message "Failed to authenticate. API Error: 403 Attention Required! | Cloudflare"
+
+    defp sign_in(attrs \\ %{}),
+      do:
+        Map.merge(
+          %{provider: "anthropic", window: nil, scope: :all, resets_at: nil, utilization: nil, source: :api_unreachable, cause: :sign_in, error: @message},
+          attrs
+        )
+
+    test "holds the provider for a second cause, probed on the outage's backoff with the provider's message" do
+      entry = put(nil, sign_in(), issue_identifier: "TP-1505")
+
+      assert %{
+               reason: "model_api_sign_in_failed",
+               source: :api_unreachable,
+               error: @message,
+               since: @now,
+               retry_seconds: 60,
+               phase: :paused
+             } = entry
+
+      assert UsageLimit.sign_in_failed?(entry)
+      assert UsageLimit.sign_in_failed?(sign_in())
+      assert UsageLimit.api_unreachable?(entry)
+      refute UsageLimit.sign_in_failed?(put(nil, info()))
+      refute UsageLimit.sign_in_failed?(%{reason: "model_api_unreachable"})
+
+      # A refused probe keeps since and doubles the wait; so does a run that finds it again after release.
+      canary = UsageLimit.canary(entry, "issue-1")
+      later = DateTime.add(@now, 60)
+      assert %{reason: "model_api_sign_in_failed", since: @now, retry_seconds: 120} = put(canary, sign_in(), now: later)
+      released = %{entry | resume_at: later}
+      assert %{since: @now, retry_seconds: 120} = put(nil, sign_in(), now: DateTime.add(later, 30), last_outage: released)
+    end
+
+    test "reads in words: the label, the banner and the pause's reason with since when" do
+      entry = put(nil, sign_in())
+      to_local = [to_local: & &1]
+
+      assert UsageLimit.limit_label(entry) == "The agent can't sign in to Claude"
+      assert UsageLimit.hold_label(entry) == "The agent can't sign in to Claude"
+      assert UsageLimit.provider_name("anthropic") == "Claude"
+      assert UsageLimit.banner(entry, @now, to_local) == "Paused: The agent can't sign in to Claude (#{@message}), retries ~03:47"
+
+      assert UsageLimit.reason(entry, @now, to_local).text ==
+               "The agent can't sign in to Claude since 03:46 UTC (#{@message}), trying again at 03:47 UTC"
     end
   end
 
@@ -394,16 +444,16 @@ defmodule SymphonyElixir.UsageLimitTest do
     test "defaults to auto pause with a 120s margin and a 900s unknown-reset retry" do
       write_workflow_file!(Workflow.workflow_file_path())
 
-      assert %UsageLimitConfig{auto_pause: true, resume_margin_seconds: 120, unknown_reset_retry_seconds: 900} =
+      assert %UsageLimitConfig{auto_pause: true, resume_margin_seconds: 120, unknown_reset_retry_seconds: 900, sign_in_ask_after_seconds: 1800} =
                Config.settings!().execution.usage_limit
     end
 
     test "reads the three keys" do
       write_workflow_file!(Workflow.workflow_file_path(),
-        agent_usage_limit: %{auto_pause: false, resume_margin_seconds: 0, unknown_reset_retry_seconds: 60}
+        agent_usage_limit: %{auto_pause: false, resume_margin_seconds: 0, unknown_reset_retry_seconds: 60, sign_in_ask_after_seconds: 600}
       )
 
-      assert %UsageLimitConfig{auto_pause: false, resume_margin_seconds: 0, unknown_reset_retry_seconds: 60} =
+      assert %UsageLimitConfig{auto_pause: false, resume_margin_seconds: 0, unknown_reset_retry_seconds: 60, sign_in_ask_after_seconds: 600} =
                Config.settings!().execution.usage_limit
     end
 
@@ -458,6 +508,7 @@ defmodule SymphonyElixir.UsageLimitTest do
             {%{resume_margin_seconds: -1}, "execution.usage_limit.resume_margin_seconds"},
             {%{unknown_reset_retry_seconds: 59}, "execution.usage_limit.unknown_reset_retry_seconds"},
             {%{unknown_reset_retry_seconds: "soon"}, "execution.usage_limit.unknown_reset_retry_seconds"},
+            {%{sign_in_ask_after_seconds: 59}, "execution.usage_limit.sign_in_ask_after_seconds"},
             {%{resume_after: 5}, "execution.usage_limit"}
           ] do
         write_workflow_file!(Workflow.workflow_file_path(), agent_usage_limit: usage_limit)

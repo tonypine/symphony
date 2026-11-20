@@ -373,15 +373,22 @@ public struct StateSnapshot: Equatable {
         /// Why Symphony holds the provider, for example `claude_usage_limit` or `model_api_unreachable`; nil when
         /// Symphony predates it.
         public var reason: String?
-        /// What the agent got when it couldn't reach the model API, for example `ENOTFOUND`.
+        /// What the agent got when it couldn't reach the model API, for example `ENOTFOUND`, or the provider's message
+        /// when it refused the agent's sign-in.
         public var error: String?
+        /// Since when the hold has lasted; nil when Symphony predates it.
+        public var since: Date?
         /// A check of the limit (its canary) was refused by the provider: the limit is still on (`still_on`).
         public var stillOn: Bool
         /// The reserve a headroom hold was set at, from 0 to 1, when Symphony says.
         public var reserve: Double?
 
-        /// Symphony holds the provider because its API couldn't be reached, not for a usage limit.
-        public var isAPIUnreachable: Bool { reason == "model_api_unreachable" }
+        /// Symphony holds the provider because its API couldn't be reached, or refused the agent's sign-in, not for a
+        /// usage limit: a probe on a backoff checks it.
+        public var isAPIUnreachable: Bool { reason == "model_api_unreachable" || isSignInFailure }
+
+        /// Symphony holds the provider because it refused the agent's sign-in (TP-1515).
+        public var isSignInFailure: Bool { reason == "model_api_sign_in_failed" }
 
         /// What the hold's reason on Symphony's pause waits on, and what Try Now names: `usage_limit:anthropic:all`.
         public var condition: String { "usage_limit:\(provider):\(scope)" }
@@ -401,7 +408,8 @@ public struct StateSnapshot: Equatable {
             reason: String? = nil,
             error: String? = nil,
             stillOn: Bool = false,
-            reserve: Double? = nil
+            reserve: Double? = nil,
+            since: Date? = nil
         ) {
             self.provider = provider
             self.scope = scope
@@ -414,6 +422,7 @@ public struct StateSnapshot: Equatable {
             self.error = error
             self.stillOn = stillOn
             self.reserve = reserve
+            self.since = since
         }
     }
 
@@ -969,7 +978,8 @@ public enum SymphonyState {
                 reason: limit.reason,
                 error: limit.error,
                 stillOn: limit.stillOn ?? false,
-                reserve: limit.reserve
+                reserve: limit.reserve,
+                since: limit.since.flatMap(parseDate)
             )
         }
         snapshot.budget = payload.budget.map { budget in
@@ -1137,6 +1147,7 @@ public enum SymphonyState {
             let error: String?
             let stillOn: Bool?
             let reserve: Double?
+            let since: String?
         }
 
         struct Budget: Decodable {

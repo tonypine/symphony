@@ -36,7 +36,10 @@ defmodule SymphonyElixir.Situation do
   its run can take it (its skip's `rule` is `:provider_pause`, naming the `provider`) reads
   `waiting_for_provider`, "Waiting: you paused Anthropic", never a slot's or a rule's words; one held
   because its provider is at its reserve (a `:usage_limit` skip naming the `provider` and its
-  `reserve`) reads `waiting_for_provider` too, "Waiting: Anthropic is at its 90% reserve".
+  `reserve`) reads `waiting_for_provider` too, "Waiting: Anthropic is at its 90% reserve", and so
+  does one held, or whose retry is held, because no agent can sign in to its provider (a skip or a
+  retry with `cause: :sign_in`, `SymphonyElixir.UsageLimit.sign_in_failed?/1`): "Waiting: the agent
+  can't sign in to Anthropic", with the provider's message and since when, never "Retrying".
 
   `waiting_for_slot` is said only of a ticket that passed every dispatch condition but a free slot.
   A dispatch skip reads `paused_by_rule` only when the orchestrator names the rule behind it (its
@@ -167,7 +170,7 @@ defmodule SymphonyElixir.Situation do
       running: by_issue(snapshot, :running, &Map.take(&1, [:run_kind, :started_at, :step])),
       retrying: by_issue(snapshot, :retrying, &retry_facts(&1, now)),
       slot_waiting: by_issue(snapshot, :slot_waiting, &Map.take(&1, [:since, :reason, :ci_wait])),
-      skipped: by_issue(snapshot, :dispatch_skipped, &Map.take(&1, [:since, :reason, :rule, :gate, :provider, :reserve])),
+      skipped: by_issue(snapshot, :dispatch_skipped, &Map.take(&1, [:since, :reason, :rule, :gate, :provider, :reserve, :cause, :error, :sign_in_since])),
       limit: snapshot |> Map.get(:concurrency) |> max_total(),
       symphony_pause: snapshot |> Map.get(:pause) |> symphony_pause(),
       max_tries: settings.watchdog.dispatch_loop_runs,
@@ -186,7 +189,13 @@ defmodule SymphonyElixir.Situation do
   defp retry_facts(retry, now) do
     due_at = if is_integer(Map.get(retry, :due_in_ms)), do: DateTime.add(now, retry.due_in_ms, :millisecond)
 
-    %{attempt: Map.get(retry, :attempt), error: Map.get(retry, :error), delay_type: Map.get(retry, :delay_type), due_at: due_at}
+    %{
+      attempt: Map.get(retry, :attempt),
+      error: Map.get(retry, :error),
+      delay_type: Map.get(retry, :delay_type),
+      due_at: due_at,
+      sign_in: Map.get(retry, :sign_in)
+    }
   end
 
   @doc """
@@ -367,7 +376,7 @@ defmodule SymphonyElixir.Situation do
       ci_retry: live.retrying |> Map.get(issue_id) |> ci_retry(),
       slot: Map.get(live.slot_waiting, issue_id),
       skipped: live.skipped |> Map.get(issue_id) |> rule_skip(running),
-      provider_skip: live.skipped |> Map.get(issue_id) |> provider_skip(),
+      provider_skip: provider_skip(Map.get(live.skipped, issue_id)) || sign_in_retry(Map.get(live.retrying, issue_id)),
       gate_skip: live.skipped |> Map.get(issue_id) |> gate_skip(running),
       facts: facts(record)
     }
@@ -383,6 +392,12 @@ defmodule SymphonyElixir.Situation do
   defp provider_skip(%{rule: :provider_pause, provider: provider} = skip) when is_binary(provider), do: skip
   defp provider_skip(%{rule: :usage_limit, provider: provider} = skip) when is_binary(provider), do: skip
   defp provider_skip(_skip), do: nil
+
+  # A retry held on an agent that can't sign in waits for the provider, as a skip for it does.
+  defp sign_in_retry(%{sign_in: %{provider: provider} = sign_in}) when is_binary(provider),
+    do: %{rule: :usage_limit, provider: provider, cause: :sign_in, error: sign_in[:error], sign_in_since: sign_in[:sign_in_since]}
+
+  defp sign_in_retry(_retry), do: nil
 
   defp rule_skip(%{rule: rule} = skip, nil) when not is_nil(rule), do: skip
   defp rule_skip(_skip, _running), do: nil
@@ -400,6 +415,7 @@ defmodule SymphonyElixir.Situation do
 
   defp failure_retry(retry), do: if(failure_retry?(retry), do: retry)
 
+  defp failure_retry?(%{sign_in: %{}}), do: false
   defp failure_retry?(%{delay_type: delay_type}), do: delay_type not in @quiet_retries
   defp failure_retry?(_retry), do: false
 
@@ -497,6 +513,22 @@ defmodule SymphonyElixir.Situation do
     base("waiting_on_sub_tickets", "Waiting on its sub-tickets", cause, "It moves on when every sub-ticket has ended.", since, %{
       sub_tickets: open |> Enum.map(& &1.identifier) |> Enum.filter(&is_binary/1)
     })
+  end
+
+  defp situation("waiting_for_provider", %{provider_skip: %{rule: :usage_limit, cause: :sign_in, provider: provider} = skip} = ctx) do
+    name = AgentProviders.display_name(provider)
+    since = skip[:sign_in_since]
+    message = if is_binary(skip[:error]) and skip[:error] != "", do: " It answered: #{sentence(skip[:error])}", else: ""
+    since_words = if since, do: " since #{clock(since)}", else: ""
+
+    base(
+      "waiting_for_provider",
+      "Waiting: the agent can't sign in to #{name}",
+      "#{next_run_label(ctx)} runs on #{name}, and no agent has been able to sign in to it#{since_words}.#{message}",
+      "Starts by itself once a sign-in to #{name} works again.",
+      since || skip[:since],
+      %{provider: provider}
+    )
   end
 
   defp situation("waiting_for_provider", %{provider_skip: %{rule: :usage_limit, provider: provider} = skip} = ctx) do

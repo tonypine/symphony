@@ -51,6 +51,7 @@ defmodule SymphonyElixir.Orchestrator do
     SelfHeal,
     SetupBlock,
     ShippedToday,
+    SignInHold,
     StartNow,
     StateMachine,
     StateProvisioning,
@@ -1314,7 +1315,12 @@ defmodule SymphonyElixir.Orchestrator do
   defp pause_for_usage_limit(%State{} = state, issue_id, running_entry, session_id, info) do
     {state, entry} = put_usage_limit(state, info, running_entry.identifier)
 
-    cause = if UsageLimit.api_unreachable?(entry), do: "could not reach the model API", else: "hit the usage limit"
+    cause =
+      cond do
+        UsageLimit.sign_in_failed?(entry) -> "could not sign in to the model API"
+        UsageLimit.api_unreachable?(entry) -> "could not reach the model API"
+        true -> "hit the usage limit"
+      end
 
     if pr_run_entry?(running_entry) do
       Logger.warning("PR agent task #{cause} for issue_id=#{issue_id} session_id=#{session_id}; PR runs are not retried")
@@ -1376,7 +1382,9 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp agent_exit_reason_summary({:model_api_unreachable, info}) do
-    "model API unreachable (#{Map.get(info, :error)})"
+    if UsageLimit.sign_in_failed?(info),
+      do: "the agent could not sign in (#{Map.get(info, :error)})",
+      else: "model API unreachable (#{Map.get(info, :error)})"
   end
 
   defp agent_exit_reason_summary({:instructions_behind, %{commit: commit} = behind}) do
@@ -4601,9 +4609,27 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # A skip for a provider at its reserve names the provider and the reserve, so the ticket's situation
-  # says which provider and where it stops new runs; a skip for a reached limit names neither.
+  # says which provider and where it stops new runs; a skip for an agent that can't sign in names the
+  # provider, its message and since when; a skip for a reached limit names neither.
   defp reserve_of(%{phase: :headroom, provider: provider} = hold), do: %{provider: provider, reserve: Map.get(hold, :reserve)}
+  defp reserve_of(%{provider: provider} = hold) when is_binary(provider), do: sign_in_facts(hold)
   defp reserve_of(_hold), do: %{}
+
+  # What a ticket held on an agent that can't sign in says about the hold (`Situation`).
+  defp sign_in_facts(hold) do
+    if UsageLimit.sign_in_failed?(hold),
+      do: %{provider: hold.provider, cause: :sign_in, error: Map.get(hold, :error), sign_in_since: Map.get(hold, :since)},
+      else: %{}
+  end
+
+  defp retry_sign_in_facts(%State{} = state, %{usage_limit_key: key}) when not is_nil(key) do
+    case Map.get(state.usage_limits, key) || Map.get(state.api_outages, key) do
+      %{} = hold -> if UsageLimit.sign_in_failed?(hold), do: sign_in_facts(hold)
+      nil -> nil
+    end
+  end
+
+  defp retry_sign_in_facts(_state, _retry), do: nil
 
   # An entry keeps its `since` while its reason stays the same; a new or changed reason is logged once.
   defp settle_dispatch_skipped(%State{dispatch_skipped: skipped} = state, previous) do
@@ -9962,6 +9988,7 @@ defmodule SymphonyElixir.Orchestrator do
           reason: Map.get(retry, :reason),
           elapsed_ms: Map.get(retry, :elapsed_ms),
           delay_type: retry_delay_type(retry),
+          sign_in: retry_sign_in_facts(state, retry),
           forced: forced_queued?(issue_id, state)
         }
       end)
@@ -10745,7 +10772,18 @@ defmodule SymphonyElixir.Orchestrator do
     log_usage_limit_put(entry, existing || continued_outage, identifier, newly_paused?)
 
     state = put_usage_limits(state, Map.put(state.usage_limits, key, entry))
+    ask_about_sign_in(entry, state.clock.())
     {arm_usage_limit_timer(state, key, entry), entry}
+  end
+
+  # A hold on an agent that can't sign in asks a person once it has lasted
+  # `execution.usage_limit.sign_in_ask_after_seconds` (`SignInHold`): one question on Symphony itself.
+  defp ask_about_sign_in(entry, now) do
+    case SignInHold.maybe_ask(entry, now, Config.settings!().execution.usage_limit) do
+      :asked -> Logger.warning("Agents can't sign in provider=#{entry.provider} since=#{DateTime.to_iso8601(entry.since)}; asked a person")
+      :not_due -> :ok
+      {:error, reason} -> Logger.warning("Could not ask about the sign-in hold provider=#{entry.provider}: #{inspect(reason)}")
+    end
   end
 
   defp log_usage_limit_put(entry, existing, identifier, newly_paused?) do
@@ -10792,17 +10830,34 @@ defmodule SymphonyElixir.Orchestrator do
 
   # One line when the outage is found, then one per probe that still can't get through.
   defp log_model_api_unreachable(entry, existing, identifier) do
-    if UsageLimit.api_unreachable?(existing || %{}) do
-      Logger.warning(
-        "Model API still unreachable (#{entry.error}) provider=#{entry.provider} " <>
-          "next_probe_at=#{DateTime.to_iso8601(entry.resume_at)} issue_identifier=#{identifier}"
-      )
-    else
-      Logger.warning(
-        "Model API unreachable (#{entry.error}); holding dispatch provider=#{entry.provider} " <>
-          "probe_at=#{DateTime.to_iso8601(entry.resume_at)} issue_identifier=#{identifier}"
-      )
+    cond do
+      UsageLimit.sign_in_failed?(entry) -> log_sign_in_failed(entry, existing, identifier)
+      UsageLimit.api_unreachable?(existing || %{}) -> log_api_still_unreachable(entry, identifier)
+      true -> log_api_unreachable(entry, identifier)
     end
+  end
+
+  defp log_sign_in_failed(entry, existing, identifier) do
+    words = if UsageLimit.api_unreachable?(existing || %{}), do: "Agents still can't sign in", else: "Agents can't sign in; holding dispatch"
+
+    Logger.warning(
+      "#{words} (#{entry.error}) provider=#{entry.provider} since=#{DateTime.to_iso8601(entry.since)} " <>
+        "probe_at=#{DateTime.to_iso8601(entry.resume_at)} issue_identifier=#{identifier}"
+    )
+  end
+
+  defp log_api_still_unreachable(entry, identifier) do
+    Logger.warning(
+      "Model API still unreachable (#{entry.error}) provider=#{entry.provider} " <>
+        "next_probe_at=#{DateTime.to_iso8601(entry.resume_at)} issue_identifier=#{identifier}"
+    )
+  end
+
+  defp log_api_unreachable(entry, identifier) do
+    Logger.warning(
+      "Model API unreachable (#{entry.error}); holding dispatch provider=#{entry.provider} " <>
+        "probe_at=#{DateTime.to_iso8601(entry.resume_at)} issue_identifier=#{identifier}"
+    )
   end
 
   # `execution.providers.anthropic.reserve`: a window at or above it puts the provider at its reserve,
@@ -10916,6 +10971,10 @@ defmodule SymphonyElixir.Orchestrator do
   defp usage_limit_error(%{phase: :headroom} = entry) do
     "provider at its reserve (provider=#{entry.provider} reserve=#{Map.get(entry, :reserve)} scope=#{UsageLimit.scope_label(entry.scope)}); " <>
       "resuming at #{DateTime.to_iso8601(entry.resume_at)}"
+  end
+
+  defp usage_limit_error(%{reason: "model_api_sign_in_failed"} = entry) do
+    "the agent could not sign in to #{UsageLimit.provider_name(entry.provider)} (#{entry.error}); trying again at #{DateTime.to_iso8601(entry.resume_at)}"
   end
 
   defp usage_limit_error(%{reason: "model_api_unreachable"} = entry) do
@@ -11084,6 +11143,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp clear_usage_limit(%State{} = state, key, entry) do
     Logger.warning("Usage limit resumed provider=#{entry.provider} scope=#{UsageLimit.scope_label(entry.scope)} paused_for_s=#{DateTime.diff(state.clock.(), entry.since)}")
     emit_usage_limit_event(:usage_limit_resumed, entry)
+    withdraw_sign_in_question(entry)
 
     state =
       state
@@ -11114,7 +11174,12 @@ defmodule SymphonyElixir.Orchestrator do
   defp finish_api_outage(%State{} = state, key, outage) do
     Logger.warning("Usage limit resumed provider=#{outage.provider} scope=#{UsageLimit.scope_label(outage.scope)} paused_for_s=#{DateTime.diff(outage.resume_at, outage.since)}")
     emit_usage_limit_event(:usage_limit_resumed, outage)
+    withdraw_sign_in_question(outage)
     %{state | api_outages: Map.delete(state.api_outages, key)}
+  end
+
+  defp withdraw_sign_in_question(entry) do
+    if UsageLimit.sign_in_failed?(entry), do: SignInHold.withdraw(entry)
   end
 
   defp schedule_immediate_tick(%State{} = state) do

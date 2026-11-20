@@ -154,6 +154,23 @@ final class OverviewTests: XCTestCase {
         XCTAssertEqual(problems.first?.sentence, "Claude API unreachable: new runs wait until 13:56.")
     }
 
+    func testAHoldOnAgentsThatCantSignInSaysSoOnceWithTheMessageAndSinceWhen() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        var snapshot = StateSnapshot()
+        let message = "Failed to authenticate. API Error: 403 Attention Required! | Cloudflare"
+        snapshot.usageLimits = [StateSnapshot.UsageLimit(
+            provider: "anthropic", resumeAt: now.addingTimeInterval(600), reason: "model_api_sign_in_failed", error: message,
+            since: now.addingTimeInterval(-300)
+        )]
+        let problems = Overview.problems(OverviewState(snapshot: snapshot, generatedAt: now), now: now, timeZone: utc)
+        XCTAssertEqual(problems.count, 1)
+        XCTAssertEqual(problems.first?.sentence, "Agents can't sign in to Claude since 13:41 (\(message)): new runs wait until 13:56.")
+
+        snapshot.usageLimits = [StateSnapshot.UsageLimit(provider: "anthropic", reason: "model_api_sign_in_failed")]
+        let bare = Overview.problems(OverviewState(snapshot: snapshot, generatedAt: now), now: now, timeZone: utc)
+        XCTAssertEqual(bare.first?.sentence, "Agents can't sign in to Claude: new runs wait.")
+    }
+
     func testAFailingTicketsProblemCarriesItsSituation() throws {
         let problems = Overview.problems(try state("tickets"), now: wallClock, timeZone: utc)
         let failing = try XCTUnwrap(problems.first { $0.id == "SHOP-311" })

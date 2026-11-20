@@ -612,6 +612,61 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       assert {:api_unreachable, %{error: "ECONNRESET"}} = AppServer.parse_event(line)
     end
 
+    test "parses a result whose sign-in the provider refused as a sign-in failure, not the agent's answer" do
+      text = "Failed to authenticate. API Error: 403 Attention Required! | Cloudflare"
+
+      line =
+        Jason.encode!(%{
+          "type" => "result",
+          "subtype" => "success",
+          "is_error" => true,
+          "result" => text,
+          "total_cost_usd" => 0,
+          "usage" => %{"input_tokens" => 0, "output_tokens" => 0}
+        })
+
+      assert {:api_unreachable, info} = AppServer.parse_event(line)
+
+      assert info == %{
+               provider: "anthropic",
+               scope: :all,
+               window: nil,
+               resets_at: nil,
+               utilization: nil,
+               source: :api_unreachable,
+               cause: :sign_in,
+               error: text
+             }
+
+      # Its first line only, and an invalid key or an expired token read the same way.
+      line = Jason.encode!(%{"type" => "result", "subtype" => "success", "is_error" => true, "result" => "Invalid API key · Please run /login\nmore"})
+      assert {:api_unreachable, %{cause: :sign_in, error: "Invalid API key · Please run /login"}} = AppServer.parse_event(line)
+
+      line =
+        Jason.encode!(%{
+          "type" => "result",
+          "subtype" => "success",
+          "is_error" => false,
+          "result" => "API Error: 401 OAuth token has expired.",
+          "usage" => %{"input_tokens" => 0, "output_tokens" => 0}
+        })
+
+      assert {:api_unreachable, %{cause: :sign_in}} = AppServer.parse_event(line)
+    end
+
+    test "keeps an agent's answer that mentions a sign-in error as its answer" do
+      line =
+        Jason.encode!(%{
+          "type" => "result",
+          "subtype" => "success",
+          "is_error" => false,
+          "result" => "Done. The 'Invalid API key' message now explains how to sign in.",
+          "usage" => %{"input_tokens" => 12, "output_tokens" => 3}
+        })
+
+      assert {:turn_completed, %{total_tokens: 15}} = AppServer.parse_event(line)
+    end
+
     test "keeps today's parsing for API errors the API returned and for agent text that mentions one" do
       line = ~s({"type":"result","subtype":"success","is_error":true,"result":"API Error: 500 Internal server error","usage":{}})
       assert {:turn_completed, _usage} = AppServer.parse_event(line)
@@ -2132,6 +2187,44 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
         end)
 
         assert_received {:turn_msg, {:turn_failed, "model API unreachable (ENOTFOUND)"}}
+        refute_received {:turn_msg, {:turn_completed, _usage}}
+      after
+        File.rm_rf(test_root)
+      end
+    end
+
+    test "a turn whose agent can't sign in fails as a sign-in failure, never as a completed turn" do
+      test_root = Path.join(System.tmp_dir!(), "symphony-elixir-claude-code-sign-in-#{System.unique_integer([:positive])}")
+
+      try do
+        workspace_root = Path.join(test_root, "workspaces")
+        workspace = Path.join(workspace_root, "ACME-SIGN-IN")
+        fake_claude = Path.join(test_root, "fake-claude")
+        File.mkdir_p!(workspace)
+
+        File.write!(fake_claude, """
+        #!/bin/sh
+        printf '%s\\n' '{"type":"system","subtype":"init","session_id":"sess-sign-in","cwd":"/tmp","tools":[],"mcp_servers":[],"model":"claude-opus-4-5","permissionMode":"default","apiKeySource":"none"}'
+        printf '%s\\n' '{"type":"result","subtype":"success","is_error":true,"result":"Failed to authenticate. API Error: 403 Attention Required! | Cloudflare","session_id":"sess-sign-in","total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0}}'
+        exit 1
+        """)
+
+        File.chmod!(fake_claude, 0o755)
+
+        write_workflow_file!(Workflow.workflow_file_path(),
+          workspace_root: workspace_root,
+          agent_kind: "claude",
+          agent_command: fake_claude
+        )
+
+        session = local_session(workspace, test_root)
+        test_pid = self()
+        on_message = fn msg -> send(test_pid, {:turn_msg, msg}) end
+
+        assert {:error, {:model_api_unreachable, %{provider: "anthropic", cause: :sign_in, error: "Failed to authenticate. API Error: 403 Attention Required! | Cloudflare"}}} =
+                 AppServer.run_turn(session, "do the thing", nil, on_message: on_message)
+
+        assert_received {:turn_msg, {:turn_failed, "the agent could not sign in (Failed to authenticate. API Error: 403 Attention Required! | Cloudflare)"}}
         refute_received {:turn_msg, {:turn_completed, _usage}}
       after
         File.rm_rf(test_root)

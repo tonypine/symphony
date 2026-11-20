@@ -286,6 +286,9 @@ struct SettingsView: View {
                     TimeoutRow(title: "Show a pending tool call after", minutes: $model.pendingToolReportMinutes)
                     Text("Shows a run as waiting on one of those calls once the call has run this long.")
                         .foregroundStyle(.secondary)
+                    TimeoutRow(title: "Ask me to sign in again after", minutes: $model.signInAskAfterMinutes)
+                    Text("Asks you in the Inbox once agents have been unable to sign in to their model this long.")
+                        .foregroundStyle(.secondary)
                     if let error = model.timeoutsError {
                         Text(error).foregroundStyle(.red)
                     }
