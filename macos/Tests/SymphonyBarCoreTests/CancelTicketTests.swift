@@ -145,7 +145,9 @@ final class CancelTicketTests: XCTestCase {
             let path = TicketsQuery().path(scope: .all, now: Date())
             let tickets = try XCTUnwrap(TicketsPayload.decode(try get(path, from: fixtures)), name)
             XCTAssertNil(tickets.error, name)
-            XCTAssertEqual(tickets.rows.map(\.identifier), ["TP-1244", "TP-1245", "TP-1246"], name)
+            // The ticket page's fixture holds a groomed ticket too, TP-1247.
+            let groomed = name == "ticket-page" ? ["TP-1247"] : []
+            XCTAssertEqual(tickets.rows.map(\.identifier), ["TP-1244", "TP-1245", "TP-1246"] + groomed, name)
             XCTAssertNotNil(TicketView.views(fromViews: try get(TicketsPayload.viewsPath, from: fixtures), catalog: TicketColumn.catalog), name)
 
             let home = try XCTUnwrap(HomeRead.decode(try get(HomeRead.path, from: fixtures)), name)

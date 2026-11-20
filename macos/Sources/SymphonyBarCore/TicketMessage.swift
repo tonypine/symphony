@@ -2,7 +2,8 @@ import Foundation
 
 /// The box above a ticket's timeline (`docs/design/director-window-and-home.md`, "Writing to the ticket"): what the
 /// Director writes to the ticket, which Symphony records as a message of the ticket's history
-/// (`POST /api/v1/control/note`, a `message.sent` event) and the next run reads first. ⌘↩ or Send posts it; on success
+/// (`POST /api/v1/control/message`, a `message.sent` event); the ticket's Conductor answers it on a groomed ticket, and
+/// on any other the next run reads it first. ⌘↩ or Send posts it; on success
 /// the box clears and the page reads what is new in the feed, so the message is the timeline's newest entry at once. A
 /// refusal keeps the text and says why under the box. What is typed and not sent stays with its ticket while the app
 /// runs: leaving the page and coming back finds it there.
@@ -13,12 +14,22 @@ public final class TicketMessageComposer: ObservableObject {
     /// What VoiceOver reads the box as.
     public static let label = "Write to the ticket"
     public static let placeholder = "Write to the ticket. The next run reads it first."
+    /// The box's placeholder on a groomed ticket, where the ticket's Conductor answers.
+    public static let groomedPlaceholder = "Write to the ticket. The Conductor answers."
     public static let sendTitle = "Send"
     public static let sendingTitle = "Sending…"
     /// The keys that send, as the hint beside Send shows them.
     public static let shortcut = "⌘ ↩"
     /// What VoiceOver says once a message is sent.
     public static let sentAnnouncement = "Message sent. The next run reads it first."
+    /// What VoiceOver says once a message is sent on a groomed ticket.
+    public static let groomedSentAnnouncement = "Message sent. The Conductor answers."
+
+    /// The box's placeholder, by whether the ticket is `groomed`.
+    public static func placeholder(groomed: Bool) -> String { groomed ? groomedPlaceholder : placeholder }
+
+    /// What VoiceOver says once a message is sent, by whether the ticket is `groomed`.
+    public static func sentAnnouncement(groomed: Bool) -> String { groomed ? groomedSentAnnouncement : sentAnnouncement }
     /// The reason under the box when Symphony doesn't serve the ticket's events feed (a 404 not the feed's own), which a
     /// message is written to.
     public static let unsupportedReason = "This version of Symphony can't take messages. Update Symphony to write to the ticket."
@@ -100,7 +111,7 @@ public final class TicketMessageComposer: ObservableObject {
         }
         sending = true
         refusal = nil
-        let result = await send(.note(repoKey: repoKey, identifier: identifier, text: message))
+        let result = await send(.message(repoKey: repoKey, identifier: identifier, text: message))
         guard self.identifier == identifier else {
             // The page moved to another ticket meanwhile: the sent text leaves that ticket's draft; a refused one stays.
             if result == .done, drafts[identifier]?.trimmingWhitespace() == message { drafts[identifier] = nil }

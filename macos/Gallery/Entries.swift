@@ -157,6 +157,9 @@ let galleryEntries: [GalleryEntry] = [
         id: "brief-panel", title: "Brief", kind: .component, prefixes: ["brief-panel-"],
         files: ["SymphonyBarUI/BriefPanel.swift", "SymphonyBarCore/BriefPanel.swift", "SymphonyBarUI/DesignSystem/StoryRow.swift"]),
     GalleryEntry(
+        id: "plan-panel", title: "Plan", kind: .component, prefixes: ["plan-panel-"],
+        files: ["SymphonyBarUI/PlanPanelView.swift", "SymphonyBarCore/PlanPanel.swift", "SymphonyBarUI/BriefPanel.swift"]),
+    GalleryEntry(
         id: "action-rail", title: "Action rail, Move to… and Start now", kind: .component,
         prefixes: ["action-rail-", "move-sheet", "start-now-", "cancel-ticket-sheet"],
         files: ["SymphonyBar/ActionRail.swift", "SymphonyBar/InboxMoveViews.swift", "SymphonyBarCore/TicketMoves", "SymphonyBarCore/TicketActionRail", "SymphonyBarCore/CancelTicket.swift"]),
@@ -191,6 +194,7 @@ let galleryEntries: [GalleryEntry] = [
         files: [
             "SymphonyBar/TicketPageView.swift", "SymphonyBarCore/TicketPage", "SymphonyBarUI/TimelineComposer.swift",
             "SymphonyBarCore/TicketMessage.swift", "SymphonyBarUI/BriefPanel.swift", "SymphonyBarCore/BriefPanel.swift",
+            "SymphonyBarUI/PlanPanelView.swift", "SymphonyBarCore/PlanPanel.swift",
         ]),
     GalleryEntry(
         id: "home", title: "Home", kind: .screen, prefixes: ["home-lists", "home-unavailable"],

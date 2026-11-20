@@ -431,7 +431,7 @@ extension SymphonyWindowModel {
         guard let page = ticketPage else { return }
         Task {
             if await ticketMessage.submit(on: page, send: onControl, read: { [ticketFeed] in ticketFeed.read() }) {
-                AccessibilityNotification.Announcement(TicketMessageComposer.sentAnnouncement).post()
+                AccessibilityNotification.Announcement(TicketMessageComposer.sentAnnouncement(groomed: page.isGroomed)).post()
                 readTicket()
             }
         }
@@ -925,8 +925,11 @@ struct TicketPageBody: View {
             if !desktop {
                 DecisionsLineView(line: line, open: sheetOpen, focus: answerFocus, answer: answer, review: actions.review)
             }
-            // The brief first, above the Lifecycle; a ticket with neither a brief nor a description has none.
-            if let brief = BriefPanelModel.build(page.detailsRead, runs: page.history?.runs ?? [:], reference: page.reference, calendar: calendar) {
+            // The plan first on a groomed ticket, in the brief's place; else the brief, above the Lifecycle. A ticket with
+            // neither a brief nor a description has none.
+            if let plan = PlanPanelModel.build(page.detailsRead) {
+                if !plan.isEmpty { PlanPanel(model: plan, open: briefOpen) }
+            } else if let brief = BriefPanelModel.build(page.detailsRead, runs: page.history?.runs ?? [:], reference: page.reference, calendar: calendar) {
                 BriefPanel(model: brief, open: briefOpen)
             }
             if let lifecycle = page.lifecycleRead?.lifecycle {
@@ -939,7 +942,9 @@ struct TicketPageBody: View {
                 TimelineTitle(marks: page.marksRead)
                 // Writing to the ticket: one box above the first entry; none on a ticket no run will read again.
                 if page.takesMessages {
-                    TimelineComposer(composer: message, focus: messageFocus, drawnAs: composerDrawnAs, send: actions.sendMessage)
+                    TimelineComposer(
+                        composer: message, focus: messageFocus, drawnAs: composerDrawnAs, groomed: page.isGroomed, send: actions.sendMessage
+                    )
                         .id(TicketPageView.composerAnchor)
                 }
                 Group {
