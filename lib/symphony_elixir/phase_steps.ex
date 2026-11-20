@@ -32,7 +32,11 @@ defmodule SymphonyElixir.PhaseSteps do
   One command is Symphony's own and runs in this process, not in a shell: the findings command
   (`Phases.findings_command/0`, `SymphonyElixir.PhaseSteps.Findings`) keeps the open findings by class
   as the step's output and, when a failure came back, ends the step `paused` on a Question before
-  any code is written. A step that runs only that holds on to the run's slot. A walk may bring
+  any code is written. A step that runs only that holds on to the run's slot. The failed-check
+  command of a CI Fix run (`Phases.failed_check_command/0`, `SymphonyElixir.PhaseSteps.FailedCheck`)
+  runs again what failed on GitHub, read from the check's own result, running its shell lines
+  through the step's runner and its window tests in the QA VM; a run sent for no failed check skips
+  it. A walk may bring
   commands of its own the same way (`builtins` in the context): the QA pass's
   (`Phases.qa_commands/0`, `SymphonyElixir.QaAgent.Steps`) run with the QA host the pass holds, one
   step at a time (`run_machine_step/3`).
@@ -69,7 +73,7 @@ defmodule SymphonyElixir.PhaseSteps do
   alias SymphonyElixir.Config.Schema.Phases
   alias SymphonyElixir.Config.Schema.Phases.Step
   alias SymphonyElixir.HumanActions.PlainWords
-  alias SymphonyElixir.PhaseSteps.{Findings, StepAnswer, Transcript, WindowTests}
+  alias SymphonyElixir.PhaseSteps.{FailedCheck, Findings, StepAnswer, Transcript, WindowTests}
   alias SymphonyElixir.Workpad.Projection
 
   @output_max_bytes 512 * 1024
@@ -117,8 +121,10 @@ defmodule SymphonyElixir.PhaseSteps do
   (`run_id`), the workspace and its host, the changed files (`changes/1`), the command runner
   (`runner`, default the workspace's), the options its output is kept with (`artifact_opts`), who
   hears the step start and end (`on_step`), on an agent step the lines of its turns so far
-  (`transcript_lines`) and where its answer goes (`answer_dir`, `answer_path/2`), and the walk's own
-  commands (`builtins`).
+  (`transcript_lines`) and where its answer goes (`answer_dir`, `answer_path/2`), the walk's own
+  commands (`builtins`), and on a CI Fix run the red head's failure it was sent for (`ci_failure`),
+  the merge conflict it was sent for (`pr_conflict`) and its pull request (`pr_url`), which the
+  failed-check step reads.
   """
   @type context :: %{
           required(:repo_key) => String.t(),
@@ -137,7 +143,11 @@ defmodule SymphonyElixir.PhaseSteps do
           optional(:transcript_lines) => [Transcript.line()],
           optional(:builtins) => %{String.t() => (map() -> runner_result())},
           optional(:window_tests) => (map(), pos_integer() -> runner_result() | {:ask, String.t(), map()}),
-          optional(:answer_dir) => Path.t() | nil
+          optional(:answer_dir) => Path.t() | nil,
+          optional(:ci_failure) => map() | nil,
+          optional(:pr_conflict) => map() | nil,
+          optional(:pr_url) => String.t() | nil,
+          optional(:failed_check_opts) => keyword()
         }
 
   @type runner_result :: {:ok, {String.t(), integer()}} | {:timeout, String.t()} | {:error, term()}
@@ -333,7 +343,7 @@ defmodule SymphonyElixir.PhaseSteps do
   # One attempt of a machine step: `:passed`, `:skipped`, `{:failed, output}`, `{:again, output}`
   # (no result, under the cap) or `{:paused, question_id}` (no result at the cap).
   defp run_machine(%Step{} = step, context, attempt) do
-    case skip_reason(step, context.changes) do
+    case skip_reason(step, context.changes) || builtin_skip_reason(step, context) do
       nil ->
         execute(step, context, attempt)
 
@@ -350,6 +360,12 @@ defmodule SymphonyElixir.PhaseSteps do
       commands(step, changes) == [Phases.window_tests_command()] -> WindowTests.skip_reason(changes)
       true -> nil
     end
+  end
+
+  # The failed-check step of a CI Fix run sent for a merge conflict and no failed check has nothing
+  # to run again.
+  defp builtin_skip_reason(step, context) do
+    if commands(step, context.changes) == [Phases.failed_check_command()], do: FailedCheck.skip_reason(context)
   end
 
   defp commands(%Step{command: commands}, changes), do: for(command <- commands, holds?(command.when, changes), do: command.run)
@@ -388,6 +404,7 @@ defmodule SymphonyElixir.PhaseSteps do
     cond do
       command == Phases.findings_command() -> read_findings(context)
       command == Phases.window_tests_command() -> Map.get(context, :window_tests, &WindowTests.run/2).(context, timeout_ms)
+      command == Phases.failed_check_command() -> FailedCheck.run(context, timeout_ms, &runner(context).(&1, env, &2))
       builtin = Map.get(Map.get(context, :builtins, %{}), command) -> builtin.(context)
       true -> runner(context).(command, env, timeout_ms)
     end
@@ -794,10 +811,19 @@ defmodule SymphonyElixir.PhaseSteps do
   @spec back_to_code() :: String.t()
   def back_to_code, do: @back_to_code
 
+  @doc "The label of the option that goes on past a machine step's Question, counting the step done."
+  @spec go_on_past() :: String.t()
+  def go_on_past, do: @go_on
+
+  @doc "The label of the option that runs a machine step again."
+  @spec run_again() :: String.t()
+  def run_again, do: @run_again
+
   @doc """
   What the answer to a machine step's Question says to do. On a no-result Question (`question/3`):
   go on past the step (`:go_on`), run it again (`:again`), or, in the person's own words, hand them
-  to the agent step it returns to on failure (`:words`). The Window tests step's "could not run"
+  to the agent step it returns to on failure (`:words`). The failed-check step's Question
+  (`FailedCheck.question/3`) takes the same three. The Window tests step's "could not run"
   Question (`WindowTests`) runs it again, or sends the answer to that agent step (`:words`). Every answer to the findings step's Question
   (`Findings.question/2`) goes to that agent step (`:words`).
   """

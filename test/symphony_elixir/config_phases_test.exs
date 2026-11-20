@@ -76,6 +76,40 @@ defmodule SymphonyElixir.ConfigPhasesTest do
       assert rest == Phases.default_steps(:implementation)
     end
 
+    test "a symphony.yml with no phases key gives ci_fix its list: fix, the implementation checks, the failed check, window tests, hand off" do
+      assert {:ok, system} = SystemSchema.parse(symphony(%{}))
+      steps = Phases.steps(system.phases, :ci_fix)
+      assert steps == Phases.default_steps(:ci_fix)
+
+      assert Enum.map(steps, &{&1.id, &1.mode, &1.on_fail}) == [
+               {"fix", "delegated", nil},
+               {"build", "machine", "fix"},
+               {"checks", "machine", "fix"},
+               {"tests", "machine", "fix"},
+               {"failed_check", "machine", "fix"},
+               {"window_tests", "machine", "fix"},
+               {"handoff", "delegated", nil}
+             ]
+
+      [fix, build, checks, tests, failed_check, window_tests, handoff] = steps
+      assert %Step{title: "Fix the failed check"} = fix
+      assert %Step{title: "The failed check", timeout_ms: 3_600_000} = failed_check
+      assert [%Command{run: "symphony:failed_check", when: "always"}] = failed_check.command
+      assert Phases.failed_check_command() == "symphony:failed_check"
+      assert %Step{title: "Hand off: push the fix"} = handoff
+
+      [_code, i_build, i_checks, i_tests, i_window_tests, _handoff] = Phases.default_steps(:implementation)
+
+      pairs = [{build, i_build}, {checks, i_checks}, {tests, i_tests}, {window_tests, i_window_tests}]
+
+      for {ci_fix, implementation} <- pairs do
+        assert %{ci_fix | on_fail: "code"} == implementation
+      end
+
+      assert Enum.any?(Phases.ci_only_checks(), &(&1.check == "dialyzer" and &1.step == nil))
+      assert length(Phases.ci_only_checks()) <= 8
+    end
+
     test "every other kind has none, and a kind the file doesn't set keeps its default" do
       assert {:ok, system} = parse(%{"rework" => %{"steps" => [code()]}})
 

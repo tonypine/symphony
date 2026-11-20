@@ -121,7 +121,7 @@ defmodule SymphonyElixir.WorkflowPreview do
     Enum.map_join(commands, fn command ->
       prefix = if when_text = condition(command.when), do: when_text <> ": ", else: ""
       "   - #{prefix}`#{command.run}`\n"
-    end)
+    end) <> ci_only_lines(commands)
   end
 
   defp step_body(%Step{mode: "orchestrated", prompt: prompt}) do
@@ -129,6 +129,18 @@ defmodule SymphonyElixir.WorkflowPreview do
   end
 
   defp step_body(%Step{}), do: ""
+
+  # The failed-check step lists the checks it leaves to CI (`Phases.ci_only_checks/0`), as the
+  # Director's Settings › Phases shows them.
+  defp ci_only_lines(commands) do
+    if Enum.any?(commands, &(&1.run == Phases.failed_check_command())) do
+      Enum.map_join(Phases.ci_only_checks(), fn check ->
+        "   - can only be proved by CI: #{Enum.join(Enum.reject([check.check, check.step], &is_nil/1), " › ")} (#{check.why})\n"
+      end)
+    else
+      ""
+    end
+  end
 
   defp condition("macos_changed"), do: "when macos/ changed"
   defp condition("elixir_changed"), do: "when Elixir files changed"

@@ -426,7 +426,8 @@ public struct PhaseSteps: Equatable {
 
 /// The default step lists, as `Config.Schema.Phases.default_steps/1` gives them (decision 2 of TP-1085):
 /// `implementation` writes, builds, checks, tests, runs the window tests in the QA VM and hands off; `rework` reads the
-/// open findings first; every other kind has none.
+/// open findings first; `ci_fix` fixes the failed check, runs the same checks, then what failed on GitHub (TP-1555);
+/// every other kind has none.
 public enum PhaseDefaults {
     public static func steps(for kind: PhaseKind) -> [PhaseStep] {
         switch kind {
@@ -442,6 +443,8 @@ public enum PhaseDefaults {
                 onFail: "code"
             )
             return [findings] + implementation
+        case .ciFix:
+            return ciFix
         default:
             return []
         }
@@ -450,6 +453,23 @@ public enum PhaseDefaults {
     /// The machine step command Symphony runs itself for the Window tests step: the window tests the change selects, in
     /// the QA VM (`Config.Schema.Phases.window_tests_command/0`).
     public static let windowTestsCommand = "symphony:window_tests"
+
+    /// The machine step command Symphony runs itself for a CI Fix run's failed-check step: what failed on GitHub, run
+    /// again on the run's commit (`Config.Schema.Phases.failed_check_command/0`).
+    public static let failedCheckCommand = "symphony:failed_check"
+
+    /// The checks only CI can prove, which the failed-check step leaves to CI (`Config.Schema.Phases.ci_only_checks/0`):
+    /// a check, or one step of it, and why.
+    public static let ciOnlyChecks: [CIOnlyCheck] = [
+        CIOnlyCheck(check: "dialyzer", why: "its full run of the whole code base takes longer than a run's step allows"),
+        CIOnlyCheck(check: "protected paths", why: "it reads the pull request's author and reviews on GitHub"),
+        CIOnlyCheck(check: "validate-pr-description", why: "it reads the pull request's description on GitHub"),
+        CIOnlyCheck(check: "macos", why: "it only sums up the Mac checks, which the step runs itself"),
+        CIOnlyCheck(check: "mac checks", step: "Test the QA signing identity script", why: "it changes the keychain of the machine it runs on"),
+        CIOnlyCheck(
+            check: "mac checks", step: "Test update, restart and rollback", why: "it signs, installs and launches the app on the machine it runs on"
+        ),
+    ]
 
     /// The machine step commands the QA pass runs itself, with the QA host it holds (`Config.Schema.Phases.qa_commands/0`).
     /// Only a QA playbook's list runs them.
@@ -498,8 +518,27 @@ public enum PhaseDefaults {
     }
 
     private static var implementation: [PhaseStep] {
+        [PhaseStep(stepID: "code", title: "Write the code", mode: .delegated)] + checks(returningTo: "code")
+            + [windowTests(returningTo: "code"), PhaseStep(stepID: "handoff", title: "Hand off: push and open the pull request", mode: .delegated)]
+    }
+
+    private static var ciFix: [PhaseStep] {
+        [PhaseStep(stepID: "fix", title: "Fix the failed check", mode: .delegated)] + checks(returningTo: "fix") + [
+            PhaseStep(
+                stepID: "failed_check",
+                title: "The failed check",
+                mode: .machine,
+                commands: [StepCommand(run: failedCheckCommand)],
+                timeoutMs: 3_600_000,
+                onFail: "fix"
+            ),
+            windowTests(returningTo: "fix"),
+            PhaseStep(stepID: "handoff", title: "Hand off: push the fix", mode: .delegated),
+        ]
+    }
+
+    private static func checks(returningTo agentStep: String) -> [PhaseStep] {
         [
-            PhaseStep(stepID: "code", title: "Write the code", mode: .delegated),
             PhaseStep(
                 stepID: "build",
                 title: "Build",
@@ -509,7 +548,7 @@ public enum PhaseDefaults {
                     StepCommand(run: "mix compile --warnings-as-errors", when: .elixirChanged),
                 ],
                 timeoutMs: 900_000,
-                onFail: "code"
+                onFail: agentStep
             ),
             PhaseStep(
                 stepID: "checks",
@@ -521,7 +560,7 @@ public enum PhaseDefaults {
                     ),
                 ],
                 timeoutMs: 600_000,
-                onFail: "code",
+                onFail: agentStep,
                 when: .elixirChanged
             ),
             PhaseStep(
@@ -533,19 +572,38 @@ public enum PhaseDefaults {
                     StepCommand(run: "cd macos && swift test --filter \"$SYMPHONY_CHANGED_SWIFT_TEST_FILTER\"", when: .macosChanged),
                 ],
                 timeoutMs: 1_800_000,
-                onFail: "code"
+                onFail: agentStep
             ),
-            PhaseStep(
-                stepID: "window_tests",
-                title: "Window tests",
-                mode: .machine,
-                commands: [StepCommand(run: windowTestsCommand)],
-                timeoutMs: 7_200_000,
-                onFail: "code"
-            ),
-            PhaseStep(stepID: "handoff", title: "Hand off: push and open the pull request", mode: .delegated),
         ]
     }
+
+    private static func windowTests(returningTo agentStep: String) -> PhaseStep {
+        PhaseStep(
+            stepID: "window_tests",
+            title: "Window tests",
+            mode: .machine,
+            commands: [StepCommand(run: windowTestsCommand)],
+            timeoutMs: 7_200_000,
+            onFail: agentStep
+        )
+    }
+}
+
+/// A check only CI can prove (`Config.Schema.Phases.ci_only_checks/0`): its name as GitHub names the job, the one step
+/// of it when only that step is CI's, and why.
+public struct CIOnlyCheck: Equatable {
+    public let check: String
+    public let step: String?
+    public let why: String
+
+    public init(check: String, step: String? = nil, why: String) {
+        self.check = check
+        self.step = step
+        self.why = why
+    }
+
+    /// `dialyzer`, or `mac checks › Test update, restart and rollback`.
+    public var name: String { step.map { "\(check) › \($0)" } ?? check }
 }
 
 /// What is wrong with a step list, by the rules Symphony loads it with (`Config.Schema.Phases`): one reason per
@@ -702,9 +760,11 @@ public enum PhasePreview {
     private static func body(_ step: PhaseStep, playbook: QAPlaybookKind?) -> String {
         switch step.mode {
         case .machine:
-            return step.commands.map { command in
+            let commands = step.commands.map { command in
                 "   - " + (command.when.previewText.map { $0 + ": " } ?? "") + "`\(command.run)`\n"
             }.joined()
+            guard step.commands.contains(where: { $0.run == PhaseDefaults.failedCheckCommand }) else { return commands }
+            return commands + PhaseDefaults.ciOnlyChecks.map { "   - can only be proved by CI: \($0.name) (\($0.why))\n" }.joined()
         case .orchestrated:
             if let playbook, step.prompt.trimmingWhitespace().isEmpty {
                 return "   - prompt: Symphony's own (`priv/qa_steps/\(playbook.rawValue)/\(step.stepID).md`)\n" + answer(step)

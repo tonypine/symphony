@@ -167,11 +167,17 @@ defmodule SymphonyElixir.PhaseSteps.WindowTests do
   @spec run(map(), pos_integer()) :: result()
   def run(%{changes: %{window_tests: {:error, why}}}, _timeout_ms), do: {:ok, {"The window tests could not be read: #{why}.\n", 1}}
 
-  def run(context, timeout_ms) do
+  def run(context, timeout_ms), do: run_entries(context, selected(context.changes), off_covering(context.changes), timeout_ms)
+
+  @doc """
+  Runs `tests` in the QA VM as `run/2` does, and ends could not run, naming them, when `off` (tests
+  that are off in the QA VM) is not empty. `run/2` runs the tests the change selects; a CI Fix run's
+  failed-check step (`SymphonyElixir.PhaseSteps.FailedCheck`) runs the ones that failed on GitHub.
+  """
+  @spec run_entries(map(), [entry()], [entry()], pos_integer()) :: result()
+  def run_entries(context, tests, off, timeout_ms) do
     opts = Map.get(context, :window_tests_opts, [])
     deadline = System.monotonic_time(:millisecond) + timeout_ms
-    tests = selected(context.changes)
-    off = off_covering(context.changes)
     result = if tests == [], do: {:done, "", 0}, else: run_tests(context, tests, opts, deadline)
 
     case {result, off} do
