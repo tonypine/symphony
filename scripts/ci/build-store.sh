@@ -106,6 +106,24 @@ idle() { [ $(( $(date +%s) - $(stat -f %m "$1" 2>/dev/null || echo 0) )) -ge $((
 # the active place, `save` files the active state back under the branch. A runner runs one job at
 # a time and has a work area of its own, so the active place has one user.
 
+# A saved state keeps the object of every source file the branch it came from had. A source this
+# branch deleted leaves its object behind, and the linker takes it in with the rest (undefined
+# symbols from a file that no longer exists). So an object with no source of that name in the
+# checkout is dropped, with the files the compiler wrote beside it, and so are the build plans,
+# which the compiler writes again from the sources it finds.
+prune_orphans() {
+  local dir=$1 obj base stem
+  [ -d "$dir" ] || return 0
+  while IFS= read -r obj; do
+    base=$(basename "$obj" .o)   # File.swift
+    stem=${base%.swift}
+    [ -n "$(find "$REPO/macos" "$REPO/priv" -name "$base" -not -path '*/.build/*' -print -quit 2>/dev/null)" ] && continue
+    note "work: dropping the object of a deleted source: $base"
+    rm -f "$(dirname "$obj")/$stem".*
+  done < <(find "$dir" -name '*.swift.o' 2>/dev/null)
+  find "$dir" -maxdepth 2 -name '*.yaml' -delete 2>/dev/null || true
+}
+
 cmd_work() {
   local ref=${1:?ref} flavour=${2:?flavour} fresh=${3:-}
   enabled || { echo ""; return 0; }
@@ -126,6 +144,7 @@ cmd_work() {
     rm -rf "$active"; mkdir -p "$active"
   fi
   echo "$ref" > "$active.ref"
+  prune_orphans "$active"
   # a branch in use is the last to be pruned
   if [ -d "$base/refs/$(safe_ref "$ref")" ]; then touch "$base/refs/$(safe_ref "$ref")"; fi
   echo "$active"
