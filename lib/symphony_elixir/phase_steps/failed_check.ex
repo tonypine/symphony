@@ -133,11 +133,11 @@ defmodule SymphonyElixir.PhaseSteps.FailedCheck do
   end
 
   @doc """
-  What the step does for the failed check `check` (`%{name: name}`), from `read` (its job as the CI
+  What the step does for the failed check `check` (a map with its `name`), from `read` (its job as the CI
   log tool read it, or why it could not be read) and `changes` (the workspace's files, for which
   test files are still there). See the moduledoc.
   """
-  @spec plan(%{name: String.t()}, {:ok, map()} | {:error, term()}, map()) :: [item()]
+  @spec plan(%{required(:name) => String.t(), optional(atom()) => term()}, {:ok, map()} | {:error, term()}, map()) :: [item()]
   def plan(%{name: name} = _check, read, changes) do
     case {ci_only(name), read} do
       {%{why: why}, _read} -> [{:ci_only, name, why}]
