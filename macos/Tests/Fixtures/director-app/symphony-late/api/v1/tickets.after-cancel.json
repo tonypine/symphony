@@ -77,7 +77,7 @@
     "column": "identifier",
     "direction": "asc"
   },
-  "count": 3,
+  "count": 4,
   "tickets": [
     {
       "issue_id": "i-1244",
@@ -129,6 +129,23 @@
       "created_at": "2026-10-06T09:00:00Z",
       "phase_at": "2026-10-08T11:42:00Z",
       "updated_at": "2026-10-08T11:42:00Z"
+    },
+    {
+      "issue_id": "i-1247",
+      "identifier": "TP-1247",
+      "title": "The paused line names who paused the ticket",
+      "repo": "symphony",
+      "epic": null,
+      "phase": "Code Review",
+      "situation": "waiting_for_ci",
+      "situation_since": "2026-10-08T09:40:02Z",
+      "labels": [],
+      "priority": 1,
+      "assignee": "director",
+      "url": "https://linear.app/acme/issue/TP-1247",
+      "created_at": "2026-10-08T08:58:00Z",
+      "phase_at": "2026-10-08T09:40:02Z",
+      "updated_at": "2026-10-08T09:46:00Z"
     }
   ]
 }
