@@ -326,12 +326,25 @@ defmodule SymphonyElixir.Conductor.Facts do
     |> Enum.map(&drop_nil(%{event_id: &1.id, run_id: &1.run_id, at: iso8601(&1.at), text: cut(payload(&1, :text), @text_max)}))
   end
 
-  @doc "The events of the ticket `issue_id`, oldest first; none when the store can't read them."
+  @doc """
+  The events of the ticket `issue_id`, oldest first; none when the store can't read them. A caller
+  that reads "no events" as a fact about the ticket (it never ran, it has no plan) reads them with
+  `read_events/1`, which tells a read that failed from a ticket that holds none.
+  """
   @spec events(String.t() | nil) :: [Event.t()]
   def events(issue_id) do
-    case TicketEvents.query(issue_id, limit: :all) do
-      events when is_list(events) -> events
+    case read_events(issue_id) do
+      {:ok, events} -> events
       {:error, _reason} -> []
+    end
+  end
+
+  @doc "The events of the ticket `issue_id`, oldest first, or why the store could not read them."
+  @spec read_events(String.t() | nil) :: {:ok, [Event.t()]} | {:error, term()}
+  def read_events(issue_id) do
+    case TicketEvents.query(issue_id, limit: :all) do
+      events when is_list(events) -> {:ok, events}
+      {:error, reason} -> {:error, reason}
     end
   end
 

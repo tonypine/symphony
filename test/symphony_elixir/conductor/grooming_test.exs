@@ -154,6 +154,17 @@ defmodule SymphonyElixir.Conductor.GroomingTest do
       assert Facts.events(ctx.issue_id) == []
     end
 
+    test "a ledger that can't be read grooms nothing, and counts no try" do
+      # No issue id is a read the store refuses.
+      assert {:error, :invalid_issue_id} = Facts.read_events(nil)
+      assert Facts.events(nil) == []
+      refute Grooming.due?(:implementation, Facts.read_events(nil))
+      assert Grooming.due?(:implementation, {:ok, []})
+
+      log = capture_log(fn -> assert Grooming.failed("default", nil, "the turn failed") == :give_up end)
+      assert log =~ "Grooming could not read the ticket's events"
+    end
+
     test "a turn no provider can take is planned as a try that failed", ctx do
       log = capture_log(fn -> send(self(), Conductor.plan(ctx.issue, :implementation, "default", settings: @on, available?: fn _run -> false end)) end)
       assert_received %{junction: "grooming", unavailable: provider} = plan

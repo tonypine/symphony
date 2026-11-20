@@ -53,9 +53,13 @@ defmodule SymphonyElixir.Conductor.Grooming do
   @doc """
   Whether Grooming comes before a run of `next_kind` on the ticket whose `events` (oldest first)
   these are: the run is a ticket's first, the ticket has no plan and no run but the Conductor's, and
-  fewer than `max_tries/0` tries failed.
+  fewer than `max_tries/0` tries failed. It also takes what `Facts.read_events/1` read: events that
+  could not be read say nothing about the ticket, which may be in flight, so Grooming is not due.
   """
-  @spec due?(atom() | String.t(), [Event.t()]) :: boolean()
+  @spec due?(atom() | String.t(), [Event.t()] | {:ok, [Event.t()]} | {:error, term()}) :: boolean()
+  def due?(_next_kind, {:error, _reason}), do: false
+  def due?(next_kind, {:ok, events}), do: due?(next_kind, events)
+
   def due?(next_kind, events) when is_list(events) do
     to_string(next_kind) in @first_kinds and not Enum.any?(events, &(plan?(&1) or worked?(&1))) and tries(events) < @max_tries
   end
@@ -84,12 +88,22 @@ defmodule SymphonyElixir.Conductor.Grooming do
   @doc """
   Counts a try that wrote no plan, with `why` in plain words, as a status note on `repo_key`'s ticket
   `issue_id`. Answers `:retry` when the ticket is groomed again at its next dispatch, and `:give_up`
-  when it starts without a plan: this was the last try, or the count could not be written, so a
-  ticket never waits on a count that does not grow.
+  when it starts without a plan: this was the last try, or the count could not be read or written,
+  so a ticket never waits on a count that does not grow.
   """
   @spec failed(String.t(), String.t(), String.t()) :: :retry | :give_up
-  def failed(repo_key, issue_id, why) when is_binary(issue_id) and is_binary(why) do
-    try = tries(Facts.events(issue_id)) + 1
+  def failed(repo_key, issue_id, why) when is_binary(why) do
+    case Facts.read_events(issue_id) do
+      {:ok, events} ->
+        count_try(repo_key, issue_id, why, tries(events) + 1)
+
+      {:error, reason} ->
+        Logger.warning("Grooming could not read the ticket's events issue_id=#{issue_id} repo_key=#{repo_key}: #{inspect(reason)}; no try is counted, and the ticket starts without a plan")
+        :give_up
+    end
+  end
+
+  defp count_try(repo_key, issue_id, why, try) do
     last? = try >= @max_tries
 
     case TicketEvents.record(repo_key, issue_id, "note", %{text: try_text(why, last?), status: true}, idempotency: "#{@try_key}#{try}") do
