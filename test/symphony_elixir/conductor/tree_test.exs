@@ -632,16 +632,23 @@ defmodule SymphonyElixir.Conductor.TreeTest do
       assert Tree.rounds(Facts.events(bare.id)) == 0
     end
 
-    test "a sub-ticket that can't be linked or started is said on the parent", ctx do
+    test "a sub-ticket that can't be linked is not started, and one that can't be started is said on the parent too", ctx do
       Application.put_env(:symphony_elixir, :memory_tracker_add_blocked_by_result, {:error, :refused})
-      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [{:error, :refused}])
       on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_add_blocked_by_result) end)
 
       capture_log(fn -> assert final(ctx, answered(%{"tree" => [add("The export", %{"after" => ["MT-1"]})]})) == :ok end)
 
       assert [note] = status_notes(ctx.issue_id)
-      assert note =~ "Symphony added MT-9004 but could not make the link to MT-1 (:refused) or its move to Todo (:refused)"
+      assert note == "Symphony created MT-9004 but could not make the link to MT-1 (:refused). It stays in Backlog, where it holds this ticket, and Symphony tries again."
+      refute_received {:memory_tracker_state_update, "memory-issue-4", "Todo"}
       assert Tree.rounds(Facts.events(ctx.issue_id)) == 1
+
+      Application.delete_env(:symphony_elixir, :memory_tracker_add_blocked_by_result)
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [{:error, :refused}])
+      child = %{id: "memory-issue-4", identifier: "MT-9004", repo: "default"}
+      assert Tree.start(child, ["MT-1"], ctx.parent, "default", []) == {:error, "its move to Todo (:refused)"}
+      assert Tree.start(child, ["MT-1"], ctx.parent, "default", []) == :ok
+      assert_received {:memory_tracker_state_update, "memory-issue-4", "Todo"}
     end
   end
 

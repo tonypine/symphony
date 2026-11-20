@@ -109,6 +109,7 @@ defmodule SymphonyElixir.Conductor.Tree do
   # How many levels below its root a ticket may be and still get sub-tickets of its own.
   @max_depth 3
   @limit_key "tree.limit:"
+  @start_failed_key "tree.start_failed:"
   @limit_asked_key "tree.limit_asked"
 
   @typedoc "A sub-ticket Symphony created: its id, its identifier and the repo it belongs to."
@@ -787,7 +788,8 @@ defmodule SymphonyElixir.Conductor.Tree do
     entry = entry(operation, acc.entries, ctx)
 
     with {:ok, child} <- create(repo_key, issue, entry, opts) do
-      start(child, entry, ctx, opts)
+      # One that could not be linked or moved stays added: it is said on the parent and tried again.
+      if entry.after != [], do: start(child, entry.after, issue, repo_key, opts)
       intervene(child, "added", operation.reason, ctx)
       listed = Map.merge(entry, %{identifier: child.identifier, after: plan_keys(entry.after, acc.entries)})
       {:ok, %{acc | entries: acc.entries ++ [listed], created: acc.created ++ [child]}}
@@ -886,22 +888,38 @@ defmodule SymphonyElixir.Conductor.Tree do
     end
   end
 
-  # A sub-ticket created in Backlog is linked to what it waits on, then moved to Todo. A step that
-  # fails is said on the parent, and the sub-ticket still starts when it can: it must not hold the
-  # parent from Backlog for good.
-  defp start(_child, %{after: []}, _ctx, _opts), do: :ok
+  @doc """
+  Starts the sub-ticket `child` of `parent`, which Symphony created in `Backlog` because it waits
+  on `blockers` (identifiers): it is linked as blocked by each of them and only then moved to
+  `Todo`, so no dispatch finds it before its links. When a link fails it is not moved: it stays in
+  `Backlog`, where no run starts on it. `:ok` once it is in `Todo`; `{:error, why}`, in plain
+  words, when a step failed, which is also said on the parent (a status note under
+  `tree.start_failed:<the sub-ticket's id>`). `opts`: `tracker`.
+  """
+  @spec start(child(), [String.t()], Issue.t(), String.t() | nil, keyword()) :: :ok | {:error, String.t()}
+  def start(child, blockers, %Issue{id: parent_id}, repo_key, opts) do
+    case link_and_promote(child, blockers, opts) do
+      :ok ->
+        :ok
 
-  defp start(child, %{after: waits}, %{issue: issue, repo_key: repo_key}, opts) do
-    linked = for blocker <- waits, {:error, reason} <- [tracker(opts).add_blocked_by(blocker, child.id)], do: "the link to #{blocker} (#{inspect(reason)})"
-    promoted = TransitionGuard.perform(child.id, :breakdown_promote, %{repo_key: child.repo, issue_identifier: child.identifier}, tracker: tracker(opts))
-    failed = linked ++ for({:error, reason} <- [promoted], do: "its move to #{@todo} (#{inspect(reason)})")
-
-    if failed != [] do
-      text = "Symphony added #{child.identifier} but could not make #{Enum.join(failed, " or ")}. Check it by hand: in #{@backlog} it holds this ticket."
-      note(repo_key, issue.id, text, "tree.start_failed:#{child.id}")
+      {:error, why} ->
+        text = "Symphony created #{child.identifier} but could not make #{why}. It stays in #{@backlog}, where it holds this ticket, and Symphony tries again."
+        note(repo_key, parent_id, text, "#{@start_failed_key}#{child.id}")
+        {:error, why}
     end
+  end
 
-    :ok
+  defp link_and_promote(child, blockers, opts) do
+    case for(blocker <- blockers, {:error, reason} <- [tracker(opts).add_blocked_by(blocker, child.id)], do: "the link to #{blocker} (#{inspect(reason)})") do
+      [] ->
+        ctx = %{repo_key: child.repo, issue_identifier: child.identifier}
+
+        with {:error, reason} <- TransitionGuard.perform(child.id, :breakdown_promote, ctx, tracker: tracker(opts)),
+             do: {:error, "its move to #{@todo} (#{inspect(reason)})"}
+
+      failed ->
+        {:error, Enum.join(failed, " or ")}
+    end
   end
 
   # What the Conductor of `ctx.issue` did to the sub-ticket `child`, on the sub-ticket's own record.

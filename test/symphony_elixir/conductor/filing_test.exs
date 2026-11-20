@@ -33,6 +33,11 @@ defmodule SymphonyElixir.Conductor.FilingTest do
       Process.get(:link_result, :ok)
     end
 
+    def update_issue_state(issue_id, state) do
+      Process.put(:moved, {issue_id, state})
+      Process.get(:move_result, :ok)
+    end
+
     def fetch_issue_states_by_ids(ids) do
       Process.put(:read, ids)
       Process.get(:read_result, {:ok, []})
@@ -317,6 +322,8 @@ defmodule SymphonyElixir.Conductor.FilingTest do
       {attrs, _opts} = Process.get(:created)
       assert attrs.parent_id == ctx.issue_id
       assert attrs.description =~ "The Conductor filed this sub-ticket of #{ctx.identifier}, which waits for it to be Done and then continues."
+      assert attrs.state == nil
+      refute Process.get(:moved)
       assert Process.get(:blocked) == {ctx.issue_id, "TP-2000"}
       assert [%{kind: :ticket, waits_on: %{identifier: "TP-2000"}}] = pause_reasons(ctx.issue_id)
       refute Process.get(:linked)
@@ -346,7 +353,11 @@ defmodule SymphonyElixir.Conductor.FilingTest do
       {attrs, _opts} = Process.get(:created)
       assert attrs.parent_id == ctx.issue_id
       assert attrs.description =~ "to do after it: it starts once #{ctx.identifier}'s pull request has merged."
+      # Created where no dispatch finds it, linked, and only then started.
+      assert attrs.state == "Backlog"
       assert Process.get(:linked) == {ctx.identifier, "new-id"}
+      assert Process.get(:moved) == {"new-id", "Todo"}
+      assert events(ctx.issue_id, "note") == []
       assert pause_reasons(ctx.issue_id) == []
       assert [%{payload: %{kind: "follow_up"}}] = events(ctx.issue_id, "ticket.filed")
 
@@ -367,8 +378,12 @@ defmodule SymphonyElixir.Conductor.FilingTest do
 
       log = capture_log(fn -> assert {:ok, %{identifier: "TP-2000"}} = file(ctx, route(%{relation: "after"})) end)
 
-      assert log =~ "could not link it as blocked by #{ctx.identifier}: :refused"
+      assert log =~ "could not start it: the link to #{ctx.identifier} (:refused)"
       assert log =~ "could not put it on Symphony's records"
+      # It never starts without its link: it stays in Backlog, and that is said on this ticket.
+      refute Process.get(:moved)
+      assert [%{idempotency: "tree.start_failed:new-id", payload: %{status: true, text: text}}] = events(ctx.issue_id, "note")
+      assert text =~ "Symphony created TP-2000 but could not make the link to #{ctx.identifier} (:refused). It stays in Backlog"
 
       # One whose hold could not be set is still a sub-ticket with its ask.
       hold = fn _repo_key, _issue, _identifier -> {:error, :store_down} end

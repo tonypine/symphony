@@ -3753,7 +3753,10 @@ it to Rework then, and to ask the person last.
   goes on at once. On a groomed ticket the new ticket is filed as a sub-ticket of this one, and the
   relation is `before` (this ticket is held on it, as `blocks` holds it) or `after` (this ticket
   goes on, and the sub-ticket is linked as blocked by it, so it starts once this ticket's pull
-  request has merged); its description is recorded on it as its ask. The facts name the relations
+  request has merged; it is created in `Backlog`, linked, and only then moved to `Todo`, and when
+  the link fails it stays in `Backlog`, which a status note on this ticket says); its description
+  is recorded on it as its ask. A sub-ticket counts against what the ticket may get (**The
+  bounds**, above). The facts name the relations
   a ticket takes (`filings.relations`).
 - `repo`: any repo Symphony manages; a ticket of one repo may file against Symphony.
 - Symphony writes the description in the house format: Problem (with the ticket it came from),

@@ -19,7 +19,10 @@ defmodule SymphonyElixir.Conductor.Filing do
 
     * `before`: the current ticket is held on it, as `blocks` holds it;
     * `after`: the current ticket goes on at once, and the sub-ticket is linked as blocked by the
-      current ticket, so it starts once the current ticket's pull request has merged.
+      current ticket, so it starts once the current ticket's pull request has merged. It is created
+      in `Backlog`, linked, and only then moved to `Todo` (`SymphonyElixir.Conductor.Tree.start/5`),
+      so no dispatch finds it before its link; when the link fails it stays in `Backlog`, which is
+      said on the current ticket, and Symphony tries the link and the move again.
 
   A sub-ticket holds the current ticket's close (`SymphonyElixir.Conductor.Tree`). Its description
   is recorded on it as its ask (`ask.recorded`, `source: parent`), and Symphony's records take it
@@ -58,6 +61,7 @@ defmodule SymphonyElixir.Conductor.Filing do
   alias SymphonyElixir.TicketEvents.{Event, Summary}
 
   @label "tech debt"
+  @backlog "Backlog"
   @urgent 1
   # Each relation: the kind its `ticket.filed` records, and the self-heal lane's relation it is filed with.
   @relations %{
@@ -311,7 +315,9 @@ defmodule SymphonyElixir.Conductor.Filing do
       description: description,
       labels: [@label],
       existing: existing && existing.identifier,
-      parent_id: if(relation not in @plain, do: issue.id)
+      parent_id: if(relation not in @plain, do: issue.id),
+      # One that comes after waits in Backlog until its blocker is linked, as a split's does.
+      state: if(relation == "after", do: @backlog)
     }
 
     child = &(&1 |> with_url(existing) |> sub_ticket(relation, description, route, context, opts))
@@ -335,12 +341,12 @@ defmodule SymphonyElixir.Conductor.Filing do
 
     attempts = [
       {"record its ask", fn -> TicketPlan.record_ask(route.repo, id, String.slice(description, 0, 20_000), source: "parent", from: from, idempotency: "ask.recorded:parent") end},
-      {"link it as blocked by #{from}", fn -> if(relation == "after", do: tracker(opts).add_blocked_by(from, id), else: :ok) end},
+      {"start it", fn -> if(relation == "after", do: Tree.start(child, [from], issue, repo_key, Keyword.take(opts, [:tracker])), else: :ok) end},
       {"put it on Symphony's records", fn -> Tree.observed(repo_key, issue.id, [child], Keyword.take(opts, [:tracker, :observe])) end}
     ]
 
     for {what, attempt} <- attempts, {:error, reason} <- [attempt.()] do
-      Logger.warning("Conductor filed the sub-ticket #{identifier} of #{from} but could not #{what}: #{inspect(reason)}")
+      Logger.warning("Conductor filed the sub-ticket #{identifier} of #{from} but could not #{what}: #{text(reason)}")
     end
 
     filed
@@ -422,6 +428,9 @@ defmodule SymphonyElixir.Conductor.Filing do
   end
 
   defp fit(text, max), do: Facts.fit(text, max)
+
+  defp text(reason) when is_binary(reason), do: reason
+  defp text(reason), do: inspect(reason)
 
   defp field(%Event{payload: payload}, key), do: Map.get(payload, key, Map.get(payload, Atom.to_string(key)))
 
