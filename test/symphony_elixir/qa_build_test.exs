@@ -36,11 +36,18 @@ defmodule SymphonyElixir.QaBuildTest do
   end
 
   # The builder with every boundary faked. A tree read answers from `trees` (a commit mapped to
-  # `:wait` blocks until the test sends the reader its answer), and a build tells the test it
-  # started and blocks until the test sends its outcome.
+  # `:wait` blocks until the test sends the reader its answer), a paths read from `paths_of` (a
+  # Swift change by default), and a build tells the test it started and blocks until the test sends
+  # its outcome. The QA pass selects the app for a change to `macos/App.swift`.
   defp start_builder!(opts \\ []) do
     test = self()
     trees = Keyword.get(opts, :trees, %{@sha => @tree, @sha2 => @tree2})
+    paths_of = Keyword.get(opts, :paths_of, %{})
+
+    paths = fn _workspace, _repo_key, sha ->
+      send(test, {:paths_read, sha})
+      Map.get(paths_of, sha, {:ok, ["macos/App.swift"]})
+    end
 
     tree = fn workspace, sha ->
       send(test, {:reading, workspace, sha, self()})
@@ -71,6 +78,8 @@ defmodule SymphonyElixir.QaBuildTest do
       end,
       workspace: fn repo_key, identifier -> {:ok, "/workspaces/#{repo_key}/#{identifier}"} end,
       tree: tree,
+      paths: paths,
+      selects: fn _repo_key, %Issue{}, paths -> "macos/App.swift" in paths end,
       build: build,
       cancel: fn repo_key, plan, [] ->
         send(test, {:cancelling, repo_key, plan.worker_host, self()})
@@ -80,7 +89,7 @@ defmodule SymphonyElixir.QaBuildTest do
     ]
 
     # An option given as nil leaves the builder its own default.
-    opts = defaults |> Keyword.merge(Keyword.drop(opts, [:trees])) |> Enum.reject(fn {_name, value} -> is_nil(value) end)
+    opts = defaults |> Keyword.merge(Keyword.drop(opts, [:trees, :paths_of])) |> Enum.reject(fn {_name, value} -> is_nil(value) end)
     start_supervised!({QaBuild, opts}, id: opts[:name])
     opts[:name]
   end
@@ -604,6 +613,159 @@ defmodule SymphonyElixir.QaBuildTest do
       write_workflow_file!(Workflow.workflow_file_path(), auto_review: %{worker_host: "qa-vm"})
       assert QaBuild.plan("default") == :none
       assert QaBuild.plan("no-such-repo") == :none
+    end
+  end
+
+  describe "a request that brings the ticket's issue" do
+    @issue %Issue{id: "issue-1", identifier: "TP-1", title: "Select", state: "QA"}
+
+    test "builds only a head whose QA pass selects the app, and reads each head's paths once" do
+      server = start_builder!(paths_of: %{@sha2 => {:ok, ["app/Main.kt"]}})
+      ticket = Map.put(@held, :issue, @issue)
+
+      log =
+        capture_log(fn ->
+          QaBuild.request(@repo_key, @sha2, ticket, server: server)
+          assert_receive {:reading, _workspace, @sha2, _reader}
+          assert_receive {:paths_read, @sha2}
+          assert_receive {:released, @repo_key, "issue-1", "TP-1"}
+        end)
+
+      assert log =~ "QA build not needed: the QA pass of the commit does not select the macos_app playbook repo_key=demo head_sha=#{@sha2}"
+      assert RunStore.get_github_updates({:qa_build_head, @repo_key, @sha2}) == %{tree: @tree2, paths: ["app/Main.kt"]}
+      refute_received {:building, _job, _builder}
+
+      # Asked again for the same head: answered from the stored paths, with no read.
+      capture_log(fn -> QaBuild.request(@repo_key, @sha2, ticket, server: server) end)
+      assert_receive {:released, @repo_key, "issue-1", "TP-1"}
+      refute_received {:reading, _workspace, @sha2, _reader}
+      refute_received {:paths_read, @sha2}
+      refute_received {:building, _job, _builder}
+
+      # A head that changes the app is built.
+      capture_log(fn ->
+        QaBuild.request(@repo_key, @sha, ticket, server: server)
+        assert_receive {:building, %{sha: @sha, tree: @tree}, builder}
+        send(builder, {:outcome, {:ready, @app}})
+        assert_receive {:released, @repo_key, "issue-1", "TP-1"}
+      end)
+    end
+
+    test "a head whose paths can't be read is stored so, never built for its issue and never read again" do
+      server = start_builder!(paths_of: %{@sha => {:error, {:fetch_failed, 128}}})
+      ticket = Map.put(@held, :issue, @issue)
+
+      log =
+        capture_log(fn ->
+          QaBuild.request(@repo_key, @sha, ticket, server: server)
+          assert_receive {:released, @repo_key, "issue-1", "TP-1"}
+        end)
+
+      assert log =~ "QA build: the paths the commit changes could not be read repo_key=demo head_sha=#{@sha}"
+      assert RunStore.get_github_updates({:qa_build_head, @repo_key, @sha}) == %{tree: @tree, paths: :unreadable}
+
+      capture_log(fn -> QaBuild.request(@repo_key, @sha, ticket, server: server) end)
+      assert_receive {:released, @repo_key, "issue-1", "TP-1"}
+      assert_received {:paths_read, @sha}
+      refute_received {:paths_read, @sha}
+      refute_received {:building, _job, _builder}
+    end
+
+    test "a head read before its paths were stored is read again for a ticket with its issue" do
+      :ok = RunStore.put_github_updates({:qa_build_head, @repo_key, @sha}, %{tree: @tree})
+      server = start_builder!()
+
+      capture_log(fn ->
+        QaBuild.request(@repo_key, @sha, Map.put(@ticket, :issue, @issue), server: server)
+        assert_receive {:reading, _workspace, @sha, _reader}
+        assert_receive {:building, %{sha: @sha, tree: @tree}, builder}
+        send(builder, {:outcome, {:ready, @app}})
+      end)
+
+      assert RunStore.get_github_updates({:qa_build_head, @repo_key, @sha}) == %{tree: @tree, paths: ["macos/App.swift"]}
+    end
+  end
+
+  describe "selection/4" do
+    setup do
+      auto_review = %{worker_host: "qa-vm", playbooks: %{macos_app: %{build: "make app", app: "build/Demo.app"}}}
+      write_workflow_file!(Workflow.workflow_file_path(), auto_review: auto_review)
+    end
+
+    defp ticket(labels \\ []), do: %Issue{id: "issue-select", identifier: "TP-9", title: "Select", state: "QA", labels: labels}
+
+    defp head!(record), do: :ok = RunStore.put_github_updates({:qa_build_head, "default", @sha}, record)
+
+    test "answers from the paths stored for the head, with the ticket's labels" do
+      head!(%{tree: @tree, paths: ["macos/App.swift"]})
+      assert QaBuild.selection("default", ticket(), @sha) == :app
+      assert QaBuild.selection("default", ticket(["qa:skip"]), @sha) == :none
+      :ok = RunStore.put_github_updates({:qa_build_head, "no-such-repo", @sha}, %{tree: @tree, paths: ["macos/App.swift"]})
+      assert QaBuild.selection("no-such-repo", ticket(), @sha) == :none
+
+      head!(%{tree: @tree, paths: ["app/Main.kt"]})
+      assert QaBuild.selection("default", ticket(), @sha) == :none
+      assert QaBuild.selection("default", ticket(["qa:macos_app"]), @sha) == :app
+    end
+
+    test "a change or a tree that could not be read selects nothing, and a head not read yet is unread" do
+      head!(%{tree: @tree, paths: :unreadable})
+      assert QaBuild.selection("default", ticket(), @sha) == :none
+
+      head!(%{status: :unavailable, reason: "the commit's tree could not be read"})
+      assert QaBuild.selection("default", ticket(), @sha) == :none
+
+      head!(%{tree: @tree})
+      assert QaBuild.selection("default", ticket(), @sha) == :unread
+      assert QaBuild.selection("default", ticket(), @sha2) == :unread
+    end
+  end
+
+  describe "paths/4" do
+    setup do
+      root = Path.join(System.tmp_dir!(), "qa-build-paths-#{System.unique_integer([:positive])}")
+      origin = Path.join(root, "origin")
+      File.mkdir_p!(origin)
+      on_exit(fn -> File.rm_rf(root) end)
+      git!(origin, ["init", "--quiet", "--initial-branch=main"])
+      git!(origin, ["config", "uploadpack.allowAnySHA1InWant", "true"])
+      File.write!(Path.join(origin, "a.txt"), "one\n")
+      git!(origin, ["add", "--all"])
+      git!(origin, ["commit", "--quiet", "-m", "one"])
+      clone = Path.join(root, "clone")
+      {_output, 0} = System.cmd("git", ["clone", "--quiet", origin, clone], stderr_to_stdout: true)
+      write_workflow_file!(Workflow.workflow_file_path())
+      %{origin: origin, clone: clone}
+    end
+
+    defp commit!(repo, path) do
+      File.mkdir_p!(Path.dirname(Path.join(repo, path)))
+      File.write!(Path.join(repo, path), "change\n")
+      git!(repo, ["add", "--all"])
+      git!(repo, ["commit", "--quiet", "-m", path])
+      git!(repo, ["rev-parse", "HEAD"])
+    end
+
+    test "the paths a commit the workspace holds changes against its base branch", %{clone: clone} do
+      android = commit!(clone, "app/Main.kt")
+      swift = commit!(clone, "macos/App.swift")
+
+      assert QaBuild.paths(clone, "default", android) == {:ok, ["app/Main.kt"]}
+      assert {:ok, paths} = QaBuild.paths(clone, "default", swift)
+      assert "macos/App.swift" in paths
+    end
+
+    test "a commit only on origin is fetched before its diff is read", %{origin: origin, clone: clone} do
+      git!(origin, ["checkout", "--quiet", "-b", "feature"])
+      android = commit!(origin, "app/Main.kt")
+      git!(origin, ["checkout", "--quiet", "main"])
+
+      assert QaBuild.paths(clone, "default", android) == {:ok, ["app/Main.kt"]}
+    end
+
+    test "a commit origin does not have either can't be read", %{clone: clone} do
+      assert {:error, {:fetch_failed, status}} = QaBuild.paths(clone, "default", String.duplicate("0", 40))
+      assert status != 0
     end
   end
 

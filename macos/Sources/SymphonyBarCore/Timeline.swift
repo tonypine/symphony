@@ -600,6 +600,7 @@ public struct TimelineModel: Equatable {
                 draft.entry = TimelineEntry.message(draft.entry, event: event, reference: reference, calendar: calendar)
             }
             // The answers of a run's steps, written as notes before Symphony recorded them on the steps: they fold.
+            // So do Symphony's own wait and status messages between runs.
             if isMachineNote(event, history: history) { draft.mechanical = true }
 
             // A finding resolved says so on its finding's card, not as an entry of its own.
@@ -689,12 +690,14 @@ public struct TimelineModel: Equatable {
         }
     }
 
-    /// A note Symphony wrote itself under a run, one of the old shapes that held a step's answer before the step carried it
-    /// (`MachineNote`). A person's note, and any note under no run, is never one.
+    /// A note Symphony wrote itself, which folds behind "Show all events": a wait or status message ("Waiting for CI",
+    /// "Waiting for GitHub to pick up …"), as the note's own `status` field says, never its words; or, under a run, one
+    /// of the old shapes that held a step's answer before the step carried it (`MachineNote`). A person's note is never
+    /// one, and a wait note recorded before notes carried `status`, or a note under no run, is drawn as it was.
     static func isMachineNote(_ event: TicketEventsPayload.Event, history: TicketEventsPayload) -> Bool {
-        guard event.type == "note", event.actor?.kind != "person", let runID = event.runID, let run = history.runs[runID],
-              let text = event.payload.text
-        else { return false }
+        guard event.type == "note", event.actor?.kind != "person" else { return false }
+        if event.payload.isStatus { return true }
+        guard let runID = event.runID, let run = history.runs[runID], let text = event.payload.text else { return false }
         return MachineNote.isMachineWritten(text, runKind: run.runKind)
     }
 
