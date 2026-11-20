@@ -297,29 +297,20 @@ final class ChildLaunchTests: XCTestCase {
         XCTAssertFalse(EmbeddedSymphony.isAvailable(at: nil, files: StubFileChecker(files: [embedded])))
     }
 
-    func testTheBundledQADriverHelperIsPassedToSymphonyWhenItIsThere() throws {
-        let helper = "/Applications/Symphony.app/Contents/Helpers/SymphonyQADriver.app"
-        XCTAssertEqual(QADriverApp.path(bundlePath: "/Applications/Symphony.app"), helper)
-        XCTAssertNil(QADriverApp.path(bundlePath: nil))
-        XCTAssertNil(QADriverApp.path(bundlePath: ""))
-
-        func launch(development: Bool, files: StubFileChecker) throws -> ChildLaunch {
+    func testSymphonyIsNotToldOfABundledQADriverHelper() throws {
+        // TP-1083: QA drives the app on the QA VM only, so the app ships no helper and names none.
+        func launch(development: Bool) throws -> ChildLaunch {
             try ChildLaunchBuilder.build(
                 settings: development ? settings() : AppSettings(configPath: "/Users/me/ops/symphony.yml"),
                 secrets: SecretSettings(linearAPIKey: key),
                 baseEnvironment: [:],
                 embeddedSymphonyPath: embedded,
-                qaDriverAppPath: helper,
-                files: files
+                files: StubFileChecker(files: [embedded, "/src/symphony/bin/symphony"])
             )
         }
 
-        let present = StubFileChecker(directories: [helper], files: [embedded, "/src/symphony/bin/symphony"])
-        XCTAssertEqual(try launch(development: false, files: present).environment["SYMPHONY_QA_DRIVER_APP"], helper)
-        XCTAssertEqual(try launch(development: true, files: present).environment["SYMPHONY_QA_DRIVER_APP"], helper)
-
-        let missing = StubFileChecker(files: [embedded, "/src/symphony/bin/symphony"])
-        XCTAssertNil(try launch(development: false, files: missing).environment["SYMPHONY_QA_DRIVER_APP"])
+        XCTAssertNil(try launch(development: false).environment["SYMPHONY_QA_DRIVER_APP"])
+        XCTAssertNil(try launch(development: true).environment["SYMPHONY_QA_DRIVER_APP"])
     }
 
     func testOnlyTheBinaryProblemIsFixedOutsideSettings() {
