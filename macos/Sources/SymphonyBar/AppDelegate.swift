@@ -577,7 +577,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         case #selector(installUpdate(_:)):
             return availableRelease != nil && !updater.isUpdating && !restarting && !runner.isStarting
                 && !runner.isStopping
-                && updateBlocker == nil && (!runner.isRunning || StatusMenu.canRestart(machine.status))
+                && updateBlocker == nil
+                && UpdateDrainStart.canInstall(
+                    status: machine.status,
+                    symphonyRunning: runner.isRunning,
+                    drain: drainReadForFailedState
+                )
         default:
             return true
         }
@@ -659,6 +664,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     }
 
     private var restarting: Bool { restarter.machine.isRestarting }
+
+    /// Symphony's drain read, taken after a poll whose state failed to load while the app's Symphony runs: what an
+    /// update starts from when the state doesn't load (TP-1550).
+    private var drainRead = FailedStateDrainRead()
+
+    /// The drain read, while the last poll's state failed to load.
+    private var drainReadForFailedState: DrainStatus? { drainRead.current(status: machine.status) }
+
+    /// Reads Symphony's drain request after a poll whose state failed to load, so an update can still start and its
+    /// drain end; any other poll forgets the last read.
+    private func readDrainIfStateFailed(_ poll: StatusPoll) {
+        guard drainRead.polled(poll, symphonyRunning: runner.isRunning, restarting: restarting) else { return }
+        let stateRoot = runner.stateRoot
+        Task { [weak self] in
+            let drain = await StatusPoller.fetchDrain(stateRoot: stateRoot)
+            guard let self, drainRead.received(drain, status: machine.status) else { return }
+            autoUpdateTick()
+        }
+    }
 
     /// Opens the window's Pause Dispatch sheet (D12a). Scripted QA mode can't press the sheet's button, so it answers
     /// the sheet the way it answers a prompt: the rest of the command file is the reason, none for the menu's.
@@ -890,24 +914,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     /// Pauses dispatch, waits for agent runs and stops Symphony, then hands over. A Symphony the app doesn't run
     /// is left alone. `kind` decides how the drain waits: see `UpdateKind`.
     private func drainForUpdate(_ update: PreparedUpdate, kind: UpdateKind) {
-        guard !runner.isStarting else {
-            updater.fail("Symphony is starting, stopping or restarting; try again once it runs.")
+        // While Symphony's state fails to load, its drain read says whether dispatch is paused (TP-1550).
+        let start = UpdateDrainStart(
+            status: machine.status,
+            symphonyRunning: runner.isRunning,
+            symphonyStarting: runner.isStarting,
+            symphonyStopping: runner.isStopping,
+            restarting: restarting,
+            drain: drainReadForFailedState
+        )
+        let alreadyPaused: Bool
+        switch start {
+        case .refused:
+            updater.fail(UpdateDrainStart.refusal)
             return
-        }
-        guard runner.isRunning else {
-            updater.log.append("Symphony isn't running from the app; nothing to drain")
+        case .nothingToDrain:
+            updater.log.append(UpdateDrainStart.nothingToDrainLog)
             handOff(update, symphonyStopped: false, resumeDispatch: false)
             return
+        case let .drain(paused):
+            alreadyPaused = paused
         }
-        guard !restarting, !runner.isStopping, StatusMenu.canRestart(machine.status) else {
-            updater.fail("Symphony is starting, stopping or restarting; try again once it runs.")
-            return
-        }
-        let alreadyPaused = StatusMenu.canResume(machine.status)
-        updater.log.append(
-            (alreadyPaused ? "dispatch already paused" : "pausing dispatch")
-                + "; waiting for agent runs, then stopping Symphony"
-        )
+        if let line = start.startLog { updater.log.append(line) }
         restarter.drainForUpdate(alreadyPaused: alreadyPaused, kind: kind, version: update.release.version) {
             [weak self] stopped, pausedByUpdate in
             guard let self else { return }
@@ -916,7 +944,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                 if restarter.machine.postponed { autoUpdater.postponed() }
                 return
             }
-            updater.log.append("drain done: agent runs finished and Symphony stopped")
+            updater.log.append(UpdateDrainStart.doneLog)
             handOff(update, symphonyStopped: true, resumeDispatch: pausedByUpdate)
         }
     }
@@ -995,7 +1023,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             time: settings.updateTime,
             offer: availableRelease.map { UpdateOffer($0, skips: updater.skips) },
             blocker: updater.blocker(developmentMode: settings.developmentMode),
-            activity: SymphonyActivity(status: machine.status, symphonyRunning: runner.isRunning, busy: busy),
+            activity: SymphonyActivity(
+                status: machine.status,
+                symphonyRunning: runner.isRunning,
+                busy: busy,
+                drain: drainReadForFailedState
+            ),
             runsTimeout: TimeInterval(runner.restartTimeoutMinutes * 60)
         )
     }
@@ -1131,6 +1164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                     handleHealth(.otherRunning)
                 }
             }
+            readDrainIfStateFailed(poll)
             autoUpdateTick()
             // A release Symphony reports starts the update check now instead of at the timer.
             if case let .state(snapshot) = poll { updates.reported(snapshot.latestRelease) }
