@@ -68,7 +68,16 @@ defmodule SymphonyElixir.Conductor.BlocksTest do
   end
 
   test "steps: a QA check is drawn with what it judged, from events recorded before the word", ctx do
-    check = fn id, status -> %{step_id: id, title: id, mode: "agent", outcome: "passed", result: %{status: status, expected: "x", actual: "y"}} end
+    check = fn id, status ->
+      %{
+        step_id: id,
+        title: id,
+        mode: "agent",
+        outcome: "passed",
+        result: %{status: status, expected: "x", actual: "y"}
+      }
+    end
+
     record!(ctx, "step.completed", check.("walk_1", "fail"), run_id: "run-1")
     record!(ctx, "step.completed", check.("design_check", "blocked"), run_id: "run-1")
     record!(ctx, "step.completed", check.("wide_pass", "pass"), run_id: "run-1")
