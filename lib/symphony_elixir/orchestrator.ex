@@ -4319,6 +4319,7 @@ defmodule SymphonyElixir.Orchestrator do
   # entries of issues outside this pass stay as they were. `dispatch_skipped` is rebuilt the same
   # way: every candidate the pass neither starts nor leaves waiting for a slot gets the reason.
   defp dispatch_chosen_issues(issues, state, opts \\ []) do
+    issues = Enum.map(issues, &with_record_repo_key/1)
     active_states = active_state_set()
     terminal_states = terminal_state_set()
     previous_waiting = state.slot_waiting || %{}
@@ -6879,9 +6880,10 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp handle_retry_issue_lookup_sync_for_test(%Issue{} = issue, state, issue_id, attempt, metadata) do
     terminal_states = terminal_state_set()
+    # As `handle_retry_issue_lookup/5`: the repo key first, so the hold read is its repository's.
+    issue = freeze_issue_repo_key(issue, issue_repo_key(issue) || retry_repo_key(state, metadata, %{}, issue_id))
 
     if active_retry_issue?(issue, terminal_states) do
-      issue = freeze_issue_repo_key(issue, retry_repo_key(state, metadata, %{}, issue_id))
       {:noreply, handle_active_retry_after_readiness(state, issue, attempt, metadata)}
     else
       handle_retry_issue_lookup(issue, state, issue_id, attempt, metadata)
@@ -8062,6 +8064,18 @@ defmodule SymphonyElixir.Orchestrator do
   defp pr_run_entry?(%{issue: %Issue{run_kind: :pr}}), do: true
   defp pr_run_entry?(%{issue: %Issue{run_kind: "pr"}}), do: true
   defp pr_run_entry?(_running_entry), do: false
+
+  # A candidate read without a repo key takes its record's before any gate reads it, so its pause,
+  # its hold and its run are its own repository's, never the primary one's (TP-1566).
+  defp with_record_repo_key(issue) do
+    with %Issue{id: issue_id} <- issue,
+         nil <- issue_repo_key(issue),
+         repo_key when is_binary(repo_key) <- RunStore.ticket_repo_key(issue_id) do
+      %{issue | repo_key: repo_key}
+    else
+      _carried_or_none -> issue
+    end
+  end
 
   # A ticket's repository: the key it carries, else its record's (a read by id or identifier carries
   # none), else the primary one, for a ticket Symphony has no record of yet (TP-1566).
