@@ -208,7 +208,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
   defp events(type), do: @issue_id |> TicketEvents.query(types: [type], limit: 500) |> Enum.sort_by(& &1.seq)
 
   describe "list/2" do
-    test "walks a list only when the switch is on and the pass runs one playbook that has one" do
+    test "walks a list only when the switch is on and the pass runs one playbook that has one, beside the command line's" do
       steps = Phases.default_qa_steps("macos_app")
       phases = fn qa -> {:ok, %{phases: struct(Phases, qa: qa)}} end
       on = phases.(%Phases.QaPhase{stepped: true})
@@ -217,7 +217,10 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       assert Steps.list(job(), qa_system: phases.(%Phases.QaPhase{stepped: false})) == []
       assert Steps.list(job(), qa_system: {:ok, %{phases: %Phases{}}}) == []
       assert Steps.list(job(%{playbooks: [%{kind: "cli"}]}), qa_system: on) == []
-      assert Steps.list(job(%{playbooks: [%{kind: "macos_app"}, %{kind: "cli"}]}), qa_system: on) == []
+      assert Steps.list(job(%{playbooks: [%{kind: "cli"}, %{kind: "macos_app"}]}), qa_system: on) == steps
+      assert Steps.list(job(%{playbooks: [%{kind: "macos_app"}, %{kind: "web"}]}), qa_system: on) == []
+      assert Steps.list(job(%{playbooks: [%{kind: "cli"}, %{kind: "web"}]}), qa_system: on) == []
+      assert Steps.list(job(%{playbooks: [%{}]}), qa_system: on) == []
       assert Steps.list(job(%{epic_review: true}), qa_system: on) == []
       assert Steps.list(job(), qa_system: {:error, :missing}) == []
       assert Steps.list(job(), qa_step_list: [:given]) == [:given]
@@ -396,6 +399,64 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       assert {:ok, _result} = run(ctx, %{playbooks: [%{kind: "macos_app"}]}, [qa_driver: nil], [plan_step(), review()])
       [plan_turn, _review] = turns()
       refute plan_turn.prompt =~ "Component Gallery"
+    end
+  end
+
+  describe "a pass that also runs the cli playbook" do
+    @both [%{kind: "cli", prompt: "CLI rules: throwaway locations."}, %{kind: "macos_app", prompt: "Screen rules."}]
+
+    defp plan_with_cli do
+      plan([1], %{walk: [%{step: 1, surface: "app", where: "Page 1"}, %{step: 2, surface: "cli", do: ["bin/symphony check"], expect: "exit 0"}]})
+    end
+
+    test "the plan is told how to brief a command-line step, and that step's turn reads the cli rules, not the app's", ctx do
+      answers(%{"plan" => [{:write, plan_with_cli()}], "review" => [{:verdict, @pass}]})
+
+      assert {:ok, %{result: %{verdict: :pass}}} = run(ctx, %{playbooks: @both})
+      turns = Map.new(turns(), &{&1.id, &1.prompt})
+
+      assert turns["plan"] =~ "This pass also runs the `cli` playbook"
+      assert turns["walk_1"] =~ "in the macOS app"
+      assert turns["walk_1"] =~ "Symphony launched it as PID 4242"
+      refute turns["walk_1"] =~ "CLI rules"
+      assert turns["walk_2"] =~ "on the command line"
+      assert turns["walk_2"] =~ "The playbook's rules for the command line:\n\nCLI rules: throwaway locations."
+      assert turns["walk_2"] =~ "bin/symphony check"
+      refute turns["walk_2"] =~ "Symphony launched it"
+      refute turns["walk_2"] =~ "in the macOS app"
+    end
+
+    test "a command-line step runs even when the app did not launch", ctx do
+      tools = Application.get_env(:symphony_elixir, @tools)
+      Application.put_env(:symphony_elixir, @tools, Map.put(tools, "qa_check_app", {:ok, %{"healthy" => false}}))
+      answers(%{"plan" => [{:write, plan_with_cli()}], "review" => [{:verdict, @pass}]})
+
+      walk = Enum.find(Phases.default_qa_steps("macos_app"), &(&1.id == "walk"))
+      steps = [plan_step(), machine("launch", "symphony:qa_launch", %{"on_fail" => "walk_1"}), walk, machine("quit", "symphony:qa_quit"), review()]
+
+      assert {:ok, _result} = run(ctx, %{playbooks: @both}, [], steps)
+      assert Enum.map(turns(), & &1.id) == ["plan", "walk_2", "review"]
+      assert [%{payload: %{reason: "the app did not launch"}}] = Enum.filter(events("step.completed"), &(&1.payload.step_id == "walk_1"))
+    end
+
+    test "a recheck brief for the command line is walked there, and a cli playbook with no text gives no rules", ctx do
+      recheck = %{recheck: [%{step: 2, surface: "cli", do: ["bin/symphony check --again"], expect: "exit 0"}]}
+      answers(%{"plan" => [{:write, plan_with_cli()}], "review" => [{:write, recheck}, {:verdict, @pass}]})
+
+      assert {:ok, %{result: %{verdict: :pass}}} = run(ctx, %{playbooks: [%{kind: "cli"}, %{kind: "macos_app", prompt: "Screen rules."}]})
+      again = Enum.find(turns(), &(&1.id == "recheck_1_1"))
+      assert again.prompt =~ "on the command line"
+      assert again.prompt =~ "bin/symphony check --again"
+      refute again.prompt =~ "The playbook's rules for the command line"
+    end
+
+    test "a brief that names the command line on a pass without the cli playbook is walked in the app", ctx do
+      answers(%{"plan" => [{:write, plan_with_cli()}], "review" => [{:verdict, @pass}]})
+
+      assert {:ok, _result} = run(ctx)
+      turns = Map.new(turns(), &{&1.id, &1.prompt})
+      refute turns["plan"] =~ "This pass also runs the `cli` playbook"
+      assert turns["walk_2"] =~ "in the macOS app"
     end
   end
 
@@ -821,7 +882,9 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
   describe "StepPrompts" do
     test "has a prompt for each agent step of the default list" do
       for %Step{mode: "orchestrated", id: id} <- Phases.default_qa_steps("macos_app"), do: assert(is_binary(StepPrompts.prompt("macos_app", id)))
-      assert StepPrompts.prompt("cli", "plan") == nil
+      assert StepPrompts.prompt("cli", "plan") =~ "`surface`"
+      assert StepPrompts.prompt("cli", "walk") =~ "on the command line"
+      assert StepPrompts.prompt("web", "plan") == nil
       assert {"macos_app", "walk"} in StepPrompts.known()
     end
 
