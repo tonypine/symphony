@@ -344,7 +344,7 @@ defmodule SymphonyElixir.TicketObservationTest do
   end
 
   test "a read of Linear that changes the record, which announces nothing, is a reason to compute the ticket's situation", %{repo_key: repo_key} do
-    waiting = linear_issue(%{state: "Waiting on sub-tickets", blocked_by: []})
+    waiting = linear_issue(%{state: "Waiting on sub-tickets", blocked_by: [], labels: ["plan"]})
     {:ok, :updated} = TicketObservation.observe(repo_key, waiting, now: @now)
 
     recorder = start_supervised!(Recorder)
