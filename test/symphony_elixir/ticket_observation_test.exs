@@ -632,8 +632,53 @@ defmodule SymphonyElixir.TicketObservationTest do
       assert log =~ "Ticket removal failed for issue_id=issue-never-seen repo_key=#{@default_repo}: {:no_exists"
     end
 
-    test "comments and other deliveries are not observed" do
+    test "a Comment create writes the comment's time into the ticket's record and announces it", %{repo_key: repo_key} do
+      stored = poll!(repo_key)
+      :ok = SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_records()
+      commented_at = DateTime.add(@now, 30)
+      comment = %{id: "c1", author: "Tony", body: "Split it", created_at: commented_at}
+      later = DateTime.add(@now, 60)
+
+      assert TicketObservation.observe_delivery({:comment, :create, "issue-observed", comment}, now: later, orchestrator: self()) == :updated
+      assert_receive {:ticket_record, ^repo_key, "issue-observed", :changed, [:last_comment_at]}
+      # Under the poll source nothing else happens: no poll is asked for.
+      refute_received {:"$gen_cast", _request}
+
+      record = RunStore.get_ticket_state("issue-observed")
+      assert {record.last_comment_at, record.updated_at} == {commented_at, later}
+      assert record.observed_from == stored.observed_from
+
+      # The same comment again, or an older one, writes nothing.
+      older = %{comment | id: "c0", created_at: @now}
+      assert TicketObservation.observe_delivery({:comment, :create, "issue-observed", comment}, now: later) == :unchanged
+      assert TicketObservation.observe_delivery({:comment, :create, "issue-observed", older}, now: later) == :unchanged
+      refute_received {:ticket_record, _repo_key, _issue_id, :changed, _fields}
+      assert RunStore.get_ticket_state("issue-observed").last_comment_at == commented_at
+    end
+
+    test "a Comment on a ticket no configured repo keeps a record of writes nothing; a store refusal is an error", %{repo_key: repo_key} do
+      comment = %{id: "c1", author: "Tony", body: "Split it", created_at: @now}
+      assert TicketObservation.observe_delivery({:comment, :create, "issue-never-seen", comment}, now: @now) == :no_record
+      assert RunStore.get_ticket_state("issue-never-seen") == nil
+
+      poll!(repo_key)
+      assert TicketObservation.observe_delivery({:comment, :create, "issue-observed", comment}, now: @now, repos: [%{name: "elsewhere"}]) == :no_record
+      assert RunStore.get_ticket_state("issue-observed").last_comment_at == nil
+
+      log =
+        capture_log(fn ->
+          observe = fn -> TicketObservation.observe_delivery({:comment, :create, "issue-observed", comment}, now: @now) end
+          assert ticket_records_unreadable(observe) == :error
+        end)
+
+      assert log =~ "Ticket comment observation failed for issue_id=issue-observed: {:no_exists"
+    end
+
+    test "comment updates and removals, a comment without a time, and other deliveries are not observed" do
       assert TicketObservation.observe_delivery({:comment, :create, "issue-observed", %{id: "c1"}}) == nil
+      assert TicketObservation.observe_delivery({:comment, :create, "issue-observed", %{id: "c1", created_at: nil}}) == nil
+      assert TicketObservation.observe_delivery({:comment, :update, "issue-observed", %{id: "c1", created_at: @now}}) == nil
+      assert TicketObservation.observe_delivery({:comment, :remove, "issue-observed", %{id: "c1", created_at: @now}}) == nil
       assert TicketObservation.observe_delivery(:ignored) == nil
       assert TicketObservation.observe_delivery({:error, :malformed}) == nil
     end

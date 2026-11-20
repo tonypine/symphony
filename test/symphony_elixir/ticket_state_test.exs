@@ -42,6 +42,7 @@ defmodule SymphonyElixir.TicketStateTest do
                observed_at: nil,
                observed_from: nil,
                removed_at: nil,
+               last_comment_at: nil,
                pending_projection: [],
                not_found_at: nil,
                pause: nil,
@@ -181,6 +182,7 @@ defmodule SymphonyElixir.TicketStateTest do
                observed_at: nil,
                observed_from: nil,
                removed_at: nil,
+               last_comment_at: nil,
                pending_projection: [],
                not_found_at: nil,
                pause: nil,
@@ -944,7 +946,7 @@ defmodule SymphonyElixir.TicketStateTest do
     @created_at ~U[2026-10-01 08:00:00Z]
     @team %{key: "ACME", name: "Acme"}
     @project %{id: "project-1", name: "Symphony", slug_id: "symphony-1a2b"}
-    @observed_fields ~w(issue_identifier phase title description team project labels priority assignee blockers sub_issues parent url created_at linear_updated_at)a
+    @observed_fields ~w(issue_identifier phase title description team project labels priority assignee blockers sub_issues parent url created_at linear_updated_at last_comment_at)a
 
     defp linear_issue(attrs \\ %{}) do
       struct!(
@@ -989,9 +991,40 @@ defmodule SymphonyElixir.TicketStateTest do
                  url: "https://linear.app/acme/issue/ACME-1",
                  created_at: @created_at,
                  linear_updated_at: @linear_at,
+                 last_comment_at: nil,
                  observed_at: @observed_at,
                  updated_at: @observed_at
                }
+    end
+
+    test "a read's comments give the newest comment's time, never older than the record's" do
+      first = ~U[2026-10-29 08:10:00Z]
+      newest = ~U[2026-10-29 08:20:00Z]
+      comments = [%{author: "Tony", body: "One", created_at: newest}, %{author: "Tony", body: "Two", created_at: first}, %{author: "Bot", body: "Three"}]
+
+      {record, :changed} = TicketState.observe(TicketState.new("repo-a", "issue-1"), linear_issue(%{comments: comments}), @observed_at)
+      assert record.last_comment_at == newest
+
+      # A read whose last comments are older, none, or a delivery that carries none, keeps it.
+      later = DateTime.add(@observed_at, 60)
+      assert {^record, :unchanged} = TicketState.observe(record, linear_issue(%{comments: [hd(tl(comments))]}), later)
+      assert {^record, :unchanged} = TicketState.observe(record, linear_issue(%{comments: []}), later)
+      assert {^record, :unchanged} = TicketState.observe(record, linear_issue(%{comments: :unknown}), later, :webhook)
+    end
+
+    test "observe_comment/3 keeps the newest comment's time, and changes nothing else" do
+      record = TicketState.new("repo-a", "issue-1", %{observed_from: :poll})
+      commented_at = ~U[2026-10-29 08:10:00Z]
+
+      assert {commented, :changed} = TicketState.observe_comment(record, commented_at, @observed_at)
+      assert {commented.last_comment_at, commented.updated_at, commented.observed_from} == {commented_at, @observed_at, :poll}
+      assert Map.drop(commented, [:last_comment_at, :updated_at]) == Map.drop(TicketState.normalize(record), [:last_comment_at, :updated_at])
+
+      assert {^commented, :unchanged} = TicketState.observe_comment(commented, commented_at, DateTime.add(@observed_at, 60))
+      assert {^commented, :unchanged} = TicketState.observe_comment(commented, DateTime.add(commented_at, -60), DateTime.add(@observed_at, 60))
+
+      newer = DateTime.add(commented_at, 60)
+      assert {%{last_comment_at: ^newer}, :changed} = TicketState.observe_comment(commented, newer, DateTime.add(@observed_at, 60))
     end
 
     test "the same issue again changes nothing, and keeps the first observation's time" do

@@ -139,7 +139,7 @@ defmodule SymphonyElixir.Dispatch.Candidates do
   @doc """
   The `SymphonyElixir.Linear.Issue` a ticket record describes: its id, identifier, title, description,
   team, project, state (the record's `phase`), labels, priority, assignee, blockers, sub-issues,
-  parent, URL, repo, creation time and Linear's `updatedAt`. The record keeps only the blockers that were open when it was observed; one
+  parent, URL, repo, creation time, Linear's `updatedAt` and the newest comment's time. The record keeps only the blockers that were open when it was observed; one
   a record read before blockers kept their state has no known state, which `Issue.blocked?/2` counts
   as open.
   """
@@ -164,7 +164,8 @@ defmodule SymphonyElixir.Dispatch.Candidates do
       url: record.url,
       repo_key: record.repo_key,
       created_at: record.created_at,
-      updated_at: record.linear_updated_at
+      updated_at: record.linear_updated_at,
+      last_comment_at: record.last_comment_at
     }
   end
 

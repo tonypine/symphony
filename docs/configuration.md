@@ -3224,10 +3224,12 @@ ticket whose record left the active states stops its run, a forced ticket keeps 
 them, and a stopped ticket stays skipped while its record is a candidate. A record a webhook marked
 removed reads as a ticket Linear no longer returns; a ticket with no observed record is not judged
 that cycle, as when a read fails. Each keeps the text Symphony already holds for it (the poll's, else
-its run's). The one exception is a watched plan parent in Plan Review with the `plan` label: no poll
-reads that state and the record keeps no comments, so it is still read by id, and the plan-comment
-reader, which acts on watched tickets only, sees a person's new comment as under `poll`. A forced or
-stopped plan parent that is not watched is taken from its record like any other. A retry's own read
+its run's). A watched plan parent in Plan Review is taken from its record too: no poll reads that
+state, so its record keeps the newest comment's time, which each `Comment` webhook delivery writes
+(`docs/linear-webhooks.md`). The delivery runs the repo's cycle at once, and the plan-comment
+reader, which acts on watched tickets only, reads the plan's comments when that time is newer than
+the last it acted on, so a person's new comment sends the plan to Rework as under `poll`, with no
+by-id read of the parent on any cycle. A retry's own read
 of its ticket is written into the record, so the check before its start is never older than that
 read.
 

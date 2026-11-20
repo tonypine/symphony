@@ -217,8 +217,14 @@ defmodule SymphonyElixir.TicketObservation do
   @doc """
   Observes what a verified Linear webhook delivery says (`SymphonyElixir.Linear.Webhook.parse/1`):
   an `Issue` create or update goes through `observe/3` with `source: :webhook`, under the repo whose
-  record of the ticket the reads already keep, and an `Issue` remove marks the ticket's record in
-  every configured repo removed. Any other delivery is not observed, and gives nil.
+  record of the ticket the reads already keep, an `Issue` remove marks the ticket's record in
+  every configured repo removed, and a `Comment` create writes the comment's time into the record a
+  configured repo keeps of its ticket (`last_comment_at`, `TicketState.observe_comment/3`):
+  `:updated` and announced when it is newer than the record's, `:unchanged` otherwise, and
+  `:no_record` with nothing written for a ticket no configured repo keeps a record of. Under
+  `dispatch.source: record` the announcement runs a cycle of the ticket's repo, whose plan-comment
+  check reads the plan's comments when the time is newer than the last it acted on. Any other
+  delivery is not observed, and gives nil.
 
   A ticket no configured repo has a record of yet (a new one) is filed under the one repo whose poll
   would return it, as `SymphonyElixir.Routing.PollScope.route/3` decides from the delivery's fields.
@@ -655,6 +661,7 @@ defmodule SymphonyElixir.TicketObservation do
 
   defp observed_delivery?({:issue, _action, %Issue{}, _updated_at}), do: true
   defp observed_delivery?({:issue_removed, issue_id, _identifier}), do: is_binary(issue_id)
+  defp observed_delivery?({:comment, :create, issue_id, %{created_at: %DateTime{}}}), do: is_binary(issue_id)
   defp observed_delivery?(_parsed), do: false
 
   # A changed record is announced (`ObservabilityPubSub.subscribe_ticket_records/0`), so dispatch from
@@ -899,6 +906,7 @@ defmodule SymphonyElixir.TicketObservation do
 
   defp parsed_issue_id({:issue, _action, %Issue{id: id}, _updated_at}), do: id
   defp parsed_issue_id({:issue_removed, id, _identifier}), do: id
+  defp parsed_issue_id({:comment, :create, id, _comment}), do: id
 
   defp observe_parsed({:issue, _action, issue, _updated_at}, opts) do
     {repos, opts} = Keyword.pop_lazy(opts, :repos, &configured_repos/0)
@@ -920,6 +928,27 @@ defmodule SymphonyElixir.TicketObservation do
       :error in outcomes -> :error
       :removed in outcomes -> :removed
       true -> :no_record
+    end
+  end
+
+  # A comment made on a ticket a configured repo keeps a record of: its time becomes the record's
+  # `last_comment_at`, announced like any change a delivery brings, so under `dispatch.source: record`
+  # the ticket's repo runs a cycle at once and its plan-comment check reads the comments. A ticket no
+  # repo keeps a record of gets nothing written; nor does an older comment than the record knows.
+  defp observe_parsed({:comment, :create, issue_id, %{created_at: commented_at}}, opts) do
+    {repos, opts} = Keyword.pop_lazy(opts, :repos, &configured_repos/0)
+    now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
+
+    with {:ok, %{repo_key: repo_key} = stored} <- read(issue_id),
+         true <- repo_key in repo_keys(repos),
+         {record, :changed} <- TicketState.observe_comment(stored, commented_at, now),
+         :ok <- RunStore.update_ticket_state(issue_id, Map.take(record, [:last_comment_at, :updated_at])) do
+      :ok = ObservabilityPubSub.broadcast_ticket_record_changed(repo_key, issue_id, [:last_comment_at])
+      :updated
+    else
+      {_record, :unchanged} -> :unchanged
+      {:error, reason} -> comment_failed(issue_id, reason)
+      _no_record -> :no_record
     end
   end
 
@@ -1013,6 +1042,12 @@ defmodule SymphonyElixir.TicketObservation do
       {:ok, nil} -> :no_record
       {:error, reason} -> removal_failed(repo_key, issue_id, reason)
     end
+  end
+
+  defp comment_failed(issue_id, reason) do
+    Logger.warning("Ticket comment observation failed for issue_id=#{issue_id}: #{inspect(reason)}")
+    bump(:errors)
+    :error
   end
 
   defp removal_failed(repo_key, issue_id, reason) do

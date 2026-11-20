@@ -9,7 +9,8 @@ defmodule SymphonyElixir.Linear.Webhook do
 
   `parse/1` reads a verified delivery into Symphony's terms: an `Issue` delivery becomes the same
   `Linear.Issue` the poll builds for that ticket (`Linear.IssueNormalizer`), a `Comment` delivery the
-  comment and its issue's id. Nothing acts on what it returns yet.
+  comment and its issue's id. `SymphonyElixir.TicketObservation.observe_delivery/2` writes what it
+  returns into the ticket's record.
   """
 
   alias SymphonyElixir.{Config, Secret}
