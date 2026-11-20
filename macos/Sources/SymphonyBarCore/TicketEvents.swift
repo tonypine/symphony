@@ -182,10 +182,13 @@ public struct TicketEventsPayload: Equatable {
         public var blocks: [ConductorBlock] = []
         /// What a stepped QA pass's step answered (`step.completed`): a check's result, the plan, rechecks, a verdict.
         public var answer: StepAnswer?
+        /// The message a `message.read` says a run read.
+        public var messageID: String?
 
         enum CodingKeys: String, CodingKey {
             case kind, outcome, exit, stepId, title, reason, returnsTo, returnsToTitle, questionId, model, effort, tokens, durationMs
             case to, from, action, rule, setBy, by, askedBy, description, text, signal, findingId, junction, watch, blocks
+            case messageId
         }
 
         public init(
@@ -194,7 +197,7 @@ public struct TicketEventsPayload: Equatable {
             model: String? = nil, effort: String? = nil, tokens: Int? = nil, durationMs: Int? = nil, to: String? = nil,
             from: String? = nil, action: String? = nil, rule: String? = nil, setter: Setter? = nil, description: String? = nil,
             text: String? = nil, signal: String? = nil, findingID: String? = nil, junction: String? = nil, watch: ConductorWatch? = nil,
-            blocks: [ConductorBlock] = [], answer: StepAnswer? = nil
+            blocks: [ConductorBlock] = [], answer: StepAnswer? = nil, messageID: String? = nil
         ) {
             self.kind = kind
             self.outcome = outcome
@@ -222,6 +225,7 @@ public struct TicketEventsPayload: Equatable {
             self.watch = watch
             self.blocks = blocks
             self.answer = answer
+            self.messageID = messageID
         }
 
         public init(from decoder: Decoder) throws {
@@ -244,7 +248,8 @@ public struct TicketEventsPayload: Equatable {
                 junction: text(.junction),
                 watch: (try? container?.decodeIfPresent(ConductorWatch.self, forKey: .watch)) ?? nil,
                 blocks: ((try? container?.decodeIfPresent([LossyConductorBlock].self, forKey: .blocks)) ?? nil)?.compactMap(\.block) ?? [],
-                answer: BlockFields(decoder).flatMap(StepAnswer.init(fields:))
+                answer: BlockFields(decoder).flatMap(StepAnswer.init(fields:)),
+                messageID: text(.messageId)
             )
         }
     }
@@ -407,7 +412,24 @@ public struct TicketEventsPayload: Equatable {
         }
         if added > 0 { events = Self.ordered(events) }
         nextSince = newer.nextSince ?? nextSince
+        settleMessageReads()
         return added
+    }
+
+    /// Gives each message no run had read yet the `message.read` the history now holds for it: the feed adds `read`
+    /// to a `message.sent` only on the page that serves it, so a read that comes on a later page is applied here.
+    /// The run's title comes from its header, as Symphony names it, else "a run".
+    private mutating func settleMessageReads() {
+        var reads: [String: Event] = [:]
+        for event in events where event.type == "message.read" {
+            if let id = event.payload.messageID, reads[id] == nil { reads[id] = event }
+        }
+        guard !reads.isEmpty else { return }
+        for at in events.indices where events[at].type == "message.sent" && events[at].read == nil {
+            guard let read = reads[events[at].id] else { continue }
+            let title = read.runID.flatMap { runs[$0] }.map { Self.runTitle(kind: $0.runKind, number: $0.runNumber) }
+            events[at].read = MessageRead(runID: read.runID, run: title ?? "a run", at: read.date)
+        }
     }
 
     /// The words for a run Symphony closed without its end, as the feed says them.

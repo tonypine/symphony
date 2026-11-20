@@ -1034,6 +1034,40 @@ final class TicketPageFeedTests: XCTestCase {
         XCTAssertTrue(message.waitsForRun)
     }
 
+    func testAMessageReadOnALaterPageSaysWhichRunReadItAndNoLongerWaitsOnTop() async throws {
+        // The feed adds `read` to a message only on the page that serves it: a later page brings the run's start and
+        // its `message.read` alone, and the message already held is read from them.
+        let feed = ScriptedFeed()
+        let text = "Keep the run header visible when the pane is narrow."
+        let readPage = TicketEventsResult.loaded(Data(TicketEventsTests.page(nextSince: "2026-10-18T11:19:40Z", entries: [
+            TicketEventsTests.run("run-impl-2", kind: "implementation", number: 2, status: "running", started: "2026-10-18T11:19:30Z", events: [
+                TicketEventsTests.event("ev-21", seq: 21, type: "run.started", at: "2026-10-18T11:19:30Z", run: "run-impl-2", title: "Implementation run 2 started"),
+                TicketEventsTests.event(
+                    "ev-22", seq: 22, type: "message.read", at: "2026-10-18T11:19:40Z", run: "run-impl-2", title: "Message read by a run",
+                    payload: #"{"message_id":"ev-20","run_id":"run-impl-2"}"#
+                ),
+            ]),
+        ]).utf8))
+        feed.answers = [.loaded(try feedData), Self.messagePage(text), readPage]
+        let reader = TicketEventsReader(get: feed.get)
+        reader.follow(identifier: "SHOP-410", repoKey: "web-shop")
+        await reader.settle()
+        reader.read()
+        await reader.settle()
+        let waiting = try XCTUnwrap(messages(try fixturePage("ticket-ledger", events: reader.events)).first)
+        XCTAssertTrue(waiting.waitsForRun)
+
+        reader.read()
+        await reader.settle()
+        let page = try fixturePage("ticket-ledger", events: reader.events)
+        let message = try XCTUnwrap(messages(page).first)
+        XCTAssertEqual(message.detail, "Read by Implementation run 2 at 11:19")
+        XCTAssertFalse(message.waitsForRun)
+        XCTAssertNotEqual(page.timelineModel(calendar: utcCalendar).items.first?.id, "entry-ev-20")
+        let held = try XCTUnwrap(reader.events?.events.first { $0.id == "ev-20" })
+        XCTAssertEqual(held.read?.runID, "run-impl-2")
+    }
+
     func testAMessageThatIsEmptyOrTooLongOrRefusedIsNotRecordedAndTheBoxSaysWhy() async throws {
         let page = try fixturePage("ticket-ledger", events: try TicketEventsTests.sharedPayload())
         let composer = TicketMessageComposer()
