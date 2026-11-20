@@ -187,15 +187,17 @@ defmodule SymphonyElixir.PhaseSteps.FailedCheck do
       cond do
         entry = ci_only(name, step) -> {:ci_only, "#{name} › #{step}", entry.why}
         command = Map.get(@step_commands, {key, step}) -> {:shell, command}
-        script && MapSet.member?(declared, script) -> {:window, script}
+        script && script in declared -> {:window, script}
         script -> {:unknown, "the window tests manifest declares no #{script}, which the step #{step} of #{name} runs"}
         true -> {:unknown, "Symphony has no way to run the step #{step} of #{name} outside GitHub"}
       end
     end)
   end
 
-  defp manifest_scripts(%{window_tests: {:ok, entries}}), do: MapSet.new(entries, & &1.script)
-  defp manifest_scripts(_changes), do: MapSet.new()
+  # A plain list: Dialyzer reads a MapSet built in one clause and empty in the other as a
+  # mismatch of its opaque type.
+  defp manifest_scripts(%{window_tests: {:ok, entries}}), do: Enum.map(entries, & &1.script)
+  defp manifest_scripts(_changes), do: []
 
   @doc """
   Runs the step for `context` (a step runner context with `changes`, `ci_failure` and `pr_url`)
