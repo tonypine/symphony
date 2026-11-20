@@ -212,8 +212,10 @@ defmodule SymphonyElixir.TicketEvents.Types do
   # A note Symphony wrote itself as a wait or status message (`SymphonyElixir.TicketSignals`, the PR
   # head sync): the Director's timeline lists it only with "Show all events".
   @status [status: :boolean]
-  # The fields only the machinery passes: an agent never records them and a tool's caller never sees them.
-  @machine_fields Keyword.keys(@signal) ++ Keyword.keys(@status)
+  # The fields only the machinery passes: an agent never records them and a tool's caller never sees
+  # them. A note's `status` is the machinery's; evidence has a `status` of its own an agent records.
+  @machine_fields Keyword.keys(@signal)
+  @note_machine_fields @machine_fields ++ Keyword.keys(@status)
   # The model and effort the run profile resolved at dispatch (`run.started`, copied onto `run.ended`).
   @run_profile [model: :string, effort: :string]
   @drift [record_phase: :string, linear_phase: :string]
@@ -717,7 +719,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
   def schema(type) do
     case fetch(type) do
       {:ok, entry} ->
-        optional = entry.optional |> Keyword.drop(@machine_fields) |> describe_fields(Map.get(entry, :conditional, []))
+        optional = entry.optional |> Keyword.drop(machine_fields(type)) |> describe_fields(Map.get(entry, :conditional, []))
         %{required: describe_fields(entry.required), optional: optional}
 
       {:error, _reason} ->
@@ -768,13 +770,16 @@ defmodule SymphonyElixir.TicketEvents.Types do
   # A value of a field only some writers may record: an agent records only a delegated step, and
   # never the signal a machine's event records or the status a machine's note is.
   defp agent_values(type, entry, normalized, :agent) do
-    case Enum.filter(@machine_fields, &Map.has_key?(normalized, &1)) do
+    case Enum.filter(machine_fields(type), &Map.has_key?(normalized, &1)) do
       [] -> agent_field_values(type, entry, normalized)
       fields -> {:error, {:invalid_payload, fields}}
     end
   end
 
   defp agent_values(_type, _entry, _normalized, _actor_kind), do: :ok
+
+  defp machine_fields("note"), do: @note_machine_fields
+  defp machine_fields(_type), do: @machine_fields
 
   defp agent_field_values(type, entry, normalized) do
     Enum.reduce_while(Map.get(entry, :agent_values, []), :ok, fn {field, values}, :ok ->

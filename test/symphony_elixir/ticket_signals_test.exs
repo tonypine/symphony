@@ -41,7 +41,7 @@ defmodule SymphonyElixir.TicketSignalsTest do
     assert [%{name: "ci_rerun", details: %{sha: "abc123", runs: [%{id: "1"}]}}] = ticket_signals("issue-1")
 
     assert [%{type: "note", actor: %{kind: :machine}, payload: payload}] = RunStore.list_ticket_events("issue-1", [])
-    assert payload == %{text: "Symphony reran the failed CI · sha abc123 (ci_rerun)", signal: "ci_rerun", signal_details: %{sha: "abc123", runs: [%{id: "1"}]}}
+    assert payload == %{text: "Symphony reran the failed CI · sha abc123 (ci_rerun)", status: true, signal: "ci_rerun", signal_details: %{sha: "abc123", runs: [%{id: "1"}]}}
 
     # A signal that is a move is only its event here: no phase is written.
     assert :ok = TicketSignals.record_kept(@repo_key, "issue-2", "claim", %{from: "Todo", to: "In Progress"})
