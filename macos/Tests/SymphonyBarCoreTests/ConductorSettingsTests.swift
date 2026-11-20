@@ -92,6 +92,46 @@ final class ConductorSettingsTests: XCTestCase {
         XCTAssertEqual(changedLines(config, try ConductorSettings.updating(config, from: configSettings, to: slower)), ["  timeout_ms: 240000"])
     }
 
+    /// A missing `junctions` runs it at every junction, the ones a later release adds too; a list freezes it.
+    func testEveryJunctionOnWritesNoListAndOneOffWritesTheList() throws {
+        let all = Set(ConductorJunction.settable)
+        var everyOn = configSettings
+        everyOn.junctions = all
+        let withoutKey = try ConductorSettings.updating(config, from: configSettings, to: everyOn)
+        XCTAssertEqual(withoutKey, config.replacingOccurrences(of: "  junctions: [after_coding, before_merge]\n", with: ""))
+        XCTAssertEqual(try ConductorSettings.values(in: withoutKey), everyOn)
+
+        // A block list goes with its items.
+        let block = "conductor:\n  enabled: true\n  junctions:\n    - after_coding\n    # the last one\n  timeout_ms: 120000\n"
+        XCTAssertEqual(
+            try ConductorSettings.updating(block, from: ConductorSettings.values(in: block), to: everyOn),
+            "conductor:\n  enabled: true\n  timeout_ms: 120000\n"
+        )
+
+        // No key and one junction off: the list of the rest.
+        let oneOff = everyOn.setting(.grooming, on: false)
+        XCTAssertEqual(
+            changedLines(withoutKey, try ConductorSettings.updating(withoutKey, from: everyOn, to: oneOff)),
+            ["  junctions: " + ConductorSettings.inline(oneOff.junctions)]
+        )
+        // No key and nothing off: nothing to write.
+        var slower = everyOn
+        slower.timeoutMs = 240_000
+        XCTAssertFalse(try ConductorSettings.updating(withoutKey, from: everyOn, to: slower).contains("junctions:"))
+    }
+
+    /// A list written before a release added junctions shows them off: the file says so.
+    func testAListReadsAsItSaysWithNoNewerJunctionOn() throws {
+        let older = "conductor:\n  junctions: [after_coding, after_qa_fail, after_qa_blocked, after_rework, before_merge]\n"
+        let read = try ConductorSettings.values(in: older)
+        XCTAssertEqual(read.junctions, [.afterCoding, .afterQAFail, .afterQABlocked, .afterRework, .beforeMerge])
+        XCTAssertFalse(read.runs(at: .grooming))
+        // Turning the rest on drops the list.
+        var everyOn = read
+        everyOn.junctions = Set(ConductorJunction.settable)
+        XCTAssertFalse(try ConductorSettings.updating(older, from: read, to: everyOn).contains("junctions"))
+    }
+
     func testInsertsTheConductorSectionWhenMissing() throws {
         XCTAssertEqual(
             try ConductorSettings.updating(

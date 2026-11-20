@@ -164,7 +164,8 @@ public struct ConductorSettings: Equatable {
     }
 
     /// The settings, with Symphony's default for a missing or null key. `junctions` reads an inline list
-    /// (`[after_coding, before_merge]`) or a block list; `[]` runs it at none.
+    /// (`[after_coding, before_merge]`) or a block list; `[]` runs it at none. A list reads as it says: a junction it
+    /// does not name is off.
     public static func values(in yaml: String) throws -> ConductorSettings {
         ConductorSettings(
             enabled: try onOff(enabledPath, default: defaultEnabled, in: yaml),
@@ -188,10 +189,12 @@ public struct ConductorSettings: Equatable {
     }
 
     /// The same text with the settings that differ between `old` and `new` set to their `new` values. A missing key is
-    /// inserted at the top of `conductor:`, so they are written last to first and read in order.
+    /// inserted at the top of `conductor:`, so they are written last to first and read in order. `junctions` is written
+    /// only while one is off: with every junction on the key is removed, since Symphony reads a list as exactly that
+    /// list and a missing key as every junction, the ones a later release adds too.
     public static func updating(_ yaml: String, from old: ConductorSettings, to new: ConductorSettings) throws -> String {
         let (w, o) = (new.watch, old.watch)
-        let changes: [(path: [String], changed: Bool, value: String)] = [
+        let changes: [(path: [String], changed: Bool, value: String?)] = [
             (ConductorWatchSettings.path("allow_stop"), w.allowStop != o.allowStop, w.allowStop ? "true" : "false"),
             (ConductorWatchSettings.path("max_turns_per_run"), w.maxTurnsPerRun != o.maxTurnsPerRun, String(w.maxTurnsPerRun)),
             (ConductorWatchSettings.path("min_interval_minutes"), w.minIntervalMinutes != o.minIntervalMinutes, String(w.minIntervalMinutes)),
@@ -203,14 +206,25 @@ public struct ConductorSettings: Equatable {
             (maxFiledTicketsPath, new.maxFiledTickets != old.maxFiledTickets, String(new.maxFiledTickets)),
             (fileTicketsPath, new.fileTickets != old.fileTickets, new.fileTickets ? "true" : "false"),
             (timeoutPath, new.timeoutMs != old.timeoutMs, String(new.timeoutMs)),
-            (junctionsPath, new.junctions != old.junctions, inline(new.junctions)),
+            (junctionsPath, new.junctions != old.junctions, new.junctions == defaultJunctions ? nil : inline(new.junctions)),
             (enabledPath, new.enabled != old.enabled, new.enabled ? "true" : "false"),
         ]
         var yaml = yaml
         for change in changes where change.changed {
-            yaml = try blockSection { try ConfigSetting.setting(at: change.path, to: change.value, in: yaml) }
+            if let value = change.value {
+                yaml = try blockSection { try ConfigSetting.setting(at: change.path, to: value, in: yaml) }
+            } else {
+                yaml = try removing(change.path, in: yaml)
+            }
         }
         return yaml
+    }
+
+    /// The same text without the key at `path`, its block list and a `conductor:` the removal leaves empty; the same
+    /// text when the key is missing.
+    private static func removing(_ path: [String], in yaml: String) throws -> String {
+        guard try blockSection({ try ConfigSetting.value(at: path, of: yaml) }) != nil else { return yaml }
+        return try PhaseSettings.removing(path, in: yaml)
     }
 
     /// `[after_coding, before_merge]`, in the junctions' order.
