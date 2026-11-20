@@ -112,6 +112,7 @@ defmodule SymphonyElixir.Conductor.FactsTest do
     assert update_id == seeded.update.id
 
     assert facts.budget == %{tokens_used: 1_790, tokens_cap: 5_000, qa_passes: 2, rework_runs: 1}
+    assert %{open: true, filed: [], left: 2} = facts.filings
     assert {:ok, _json} = Jason.encode(facts)
   end
 

@@ -21,10 +21,20 @@ defmodule SymphonyElixir.Conductor.Answer do
       `SymphonyElixir.Conductor.Blocks` resolves them); an unknown or malformed entry is dropped, and
       never fails the answer;
     * `stop` (a watch turn's): null, or `{"reason": ...}` to end the running run;
-    * `route` (a turn's at `after_qa_blocked` only, `route: true`; ignored at every other junction):
-      null, `{"to": "rerun"}` (QA runs again on the same change) or `{"to": "rework", "finding":
-      ...}` (the ticket goes to Rework with the finding: what must change so QA can prove the step,
-      a non-blank string cut to 600 characters).
+    * `route` (a turn's at `after_qa_blocked`, `route: true`): null, `{"to": "rerun"}` (QA runs
+      again on the same change), `{"to": "rework", "finding": ...}` (the ticket goes to Rework with
+      the finding: what must change so QA can prove the step, a non-blank string cut to 600
+      characters) or a `ticket` route (below). At `after_qa_fail`, `after_rework` and `during_run`
+      (`route: :ticket`) only a `ticket` route is read, and any other is ignored; at every other
+      junction the field is ignored;
+    * a `ticket` route, `{"to": "ticket", "relation": "blocks" | "follow_up", "repo": ..., "title":
+      ..., "problem": ..., "wanted": ..., "acceptance": [...], "walkthrough": [...], "evidence":
+      [<event id>, ...], "existing": <identifier>}`: a ticket Symphony files for a problem that is
+      not the current ticket's to solve (`SymphonyElixir.Conductor.Filing`). It is read as given,
+      each text trimmed (a blank or non-string one reads as nil) and the lists kept to their
+      non-blank strings; `Filing` refuses one missing a section or naming a repo Symphony does not
+      manage, and the turn records its message without it, so a malformed ticket route never
+      refuses the answer.
 
   A text longer than its limit is cut to it at a sentence or word boundary (`Facts.fit/2`) and
   logged, never refused; only an answer that is not readable (not JSON, a wrong type, a blank
@@ -49,6 +59,10 @@ defmodule SymphonyElixir.Conductor.Answer do
   @compare_text_max 80
   @question_fields ~w(title question why if_unanswered recommendation_reason)
   @actions ~w(continue rerun rework accept_without_qa cancel)
+  @ticket_title_max 120
+  @ticket_text_max 2_000
+  @ticket_items_max 12
+  @ticket_item_max 500
 
   @type t :: %{
           instructions: String.t() | nil,
@@ -58,7 +72,21 @@ defmodule SymphonyElixir.Conductor.Answer do
           steer: %{message: String.t(), when: String.t()} | nil,
           stop: %{reason: String.t()} | nil,
           blocks: [map()],
-          route: %{to: String.t()} | %{to: String.t(), finding: String.t()} | nil
+          route: %{to: String.t()} | %{to: String.t(), finding: String.t()} | ticket_route() | nil
+        }
+
+  @typedoc "A `ticket` route as the answer gave it (see the module doc); `SymphonyElixir.Conductor.Filing` checks it."
+  @type ticket_route :: %{
+          to: String.t(),
+          relation: String.t() | nil,
+          repo: String.t() | nil,
+          title: String.t() | nil,
+          problem: String.t() | nil,
+          wanted: String.t() | nil,
+          acceptance: [String.t()],
+          walkthrough: [String.t()],
+          evidence: [String.t()],
+          existing: String.t() | nil
         }
 
   @typedoc """
@@ -102,7 +130,8 @@ defmodule SymphonyElixir.Conductor.Answer do
 
   @doc """
   Checks one JSON object's text against the schema; `watch: true` for a watch turn's, `route: true`
-  for a turn's at `after_qa_blocked`, the one junction whose `route` is read.
+  for a turn's at `after_qa_blocked`, whose every route is read, and `route: :ticket` for a turn's
+  at a junction whose `ticket` route only is read.
   """
   @spec parse(String.t(), keyword()) :: {:ok, t()} | {:error, String.t()}
   def parse(text, opts \\ []) when is_binary(text) do
@@ -151,9 +180,12 @@ defmodule SymphonyElixir.Conductor.Answer do
   defp stop(%{"reason" => reason}) when is_binary(reason) and reason != "", do: {:ok, %{reason: String.trim(reason)}}
   defp stop(_stop), do: {:error, "`stop` must be null or hold a `reason`"}
 
-  # Read only where Symphony takes a route; anywhere else the field is ignored.
+  # Read only where Symphony takes a route; anywhere else the field is ignored. Where only a ticket
+  # route is taken, any other route is ignored too.
   defp route(_route, false = _read?), do: {:ok, nil}
-  defp route(nil, true), do: {:ok, nil}
+  defp route(nil, _read), do: {:ok, nil}
+  defp route(%{"to" => "ticket"} = route, _read), do: {:ok, ticket_route(route)}
+  defp route(_route, :ticket), do: {:ok, nil}
   defp route(%{"to" => "rerun"} = route, true) when map_size(route) == 1, do: {:ok, %{to: "rerun"}}
 
   defp route(%{"to" => "rework", "finding" => finding} = route, true) when is_binary(finding) and map_size(route) == 2 do
@@ -164,7 +196,45 @@ defmodule SymphonyElixir.Conductor.Answer do
       else: {:ok, %{to: "rework", finding: fit(finding, @finding_max, "route.finding")}}
   end
 
-  defp route(_route, true), do: {:error, "`route` must be null, `{\"to\": \"rerun\"}` or `{\"to\": \"rework\", \"finding\": ...}`"}
+  defp route(_route, true),
+    do: {:error, "`route` must be null, `{\"to\": \"rerun\"}`, `{\"to\": \"rework\", \"finding\": ...}` or `{\"to\": \"ticket\", ...}`"}
+
+  # Read as given: `Filing` names what a ticket route misses, so the turn's message is still kept.
+  defp ticket_route(route) do
+    %{
+      to: "ticket",
+      relation: ticket_text(route, "relation", 40),
+      repo: ticket_text(route, "repo", 200),
+      title: ticket_text(route, "title", @ticket_title_max),
+      problem: ticket_text(route, "problem", @ticket_text_max),
+      wanted: ticket_text(route, "wanted", @ticket_text_max),
+      acceptance: ticket_items(route, "acceptance", @ticket_item_max),
+      walkthrough: ticket_items(route, "walkthrough", @ticket_item_max),
+      evidence: ticket_items(route, "evidence", 200),
+      existing: ticket_text(route, "existing", 40)
+    }
+  end
+
+  defp ticket_text(route, field, max) do
+    case Map.get(route, field) do
+      text when is_binary(text) -> if String.trim(text) == "", do: nil, else: fit(String.trim(text), max, "route.#{field}")
+      _missing -> nil
+    end
+  end
+
+  defp ticket_items(route, field, max) do
+    case Map.get(route, field) do
+      items when is_list(items) ->
+        items
+        |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
+        |> Enum.map(&fit(String.trim(&1), max, "route.#{field}"))
+        |> Enum.uniq()
+        |> Enum.take(@ticket_items_max)
+
+      _missing ->
+        []
+    end
+  end
 
   defp update(nil), do: {:ok, nil}
 

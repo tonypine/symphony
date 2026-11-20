@@ -214,7 +214,7 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
     assert {:ok, %{route: %{finding: finding}}} = Answer.parse(json(%{"instructions" => "x", "route" => %{"to" => "rework", "finding" => long}}), route: true)
     assert String.length(finding) <= 600 and String.ends_with?(finding, " [cut by Symphony]")
 
-    malformed = "`route` must be null, `{\"to\": \"rerun\"}` or `{\"to\": \"rework\", \"finding\": ...}`"
+    malformed = "`route` must be null, `{\"to\": \"rerun\"}`, `{\"to\": \"rework\", \"finding\": ...}` or `{\"to\": \"ticket\", ...}`"
 
     for {route, why} <- [
           {%{"to" => "merge"}, malformed},
@@ -226,6 +226,36 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
         ] do
       assert Answer.parse(json(%{"instructions" => "x", "route" => route}), route: true) == {:error, why}
     end
+  end
+
+  test "a ticket route is read as given where Symphony may file one, and only there" do
+    route = %{
+      "to" => "ticket",
+      "relation" => "blocks",
+      "repo" => " symphony ",
+      "title" => String.duplicate("Long title ", 20),
+      "problem" => "QA builds a Mac app Cycle lacks.",
+      "wanted" => "  ",
+      "acceptance" => ["A pass starts.", " ", 3, "A pass starts."],
+      "walkthrough" => "not a list",
+      "evidence" => ["evt_1"],
+      "existing" => 12
+    }
+
+    assert {:ok, %{route: ticket}} = Answer.parse(json(%{"instructions" => "x", "route" => route}), route: :ticket)
+    assert %{to: "ticket", relation: "blocks", repo: "symphony", problem: "QA builds a Mac app Cycle lacks.", wanted: nil, existing: nil} = ticket
+    assert ticket.acceptance == ["A pass starts."]
+    assert ticket.walkthrough == []
+    assert ticket.evidence == ["evt_1"]
+    assert String.length(ticket.title) <= 120
+
+    # At `after_qa_blocked` it is one route among the others.
+    assert {:ok, %{route: %{to: "ticket"}}} = Answer.parse(json(%{"instructions" => "x", "route" => route}), route: true)
+
+    # Where only a ticket route is read, any other is ignored; where none is, a ticket route is too.
+    assert {:ok, %{route: nil}} = Answer.parse(json(%{"instructions" => "x", "route" => %{"to" => "rerun"}}), route: :ticket)
+    assert {:ok, %{route: nil}} = Answer.parse(json(%{"instructions" => "x", "route" => "merge"}), route: :ticket)
+    assert {:ok, %{route: nil}} = Answer.parse(json(%{"instructions" => "x", "route" => route}))
   end
 
   test "reads the first answer that meets the schema among the turn's texts, else the first refusal" do

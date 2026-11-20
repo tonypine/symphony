@@ -3,7 +3,8 @@ import SymphonyBarCore
 import SymphonyBarUI
 
 /// Settings › Conductor: whether Symphony runs the Conductor (`conductor.enabled`), the junctions of a ticket's life it
-/// runs at, one row each (`conductor.junctions`), how long one turn may take (`conductor.timeout_ms`), and its watch over
+/// runs at, one row each (`conductor.junctions`), how long one turn may take (`conductor.timeout_ms`), whether it may file
+/// a linked ticket and how many per ticket (`conductor.file_tickets`, `conductor.max_filed_tickets`), and its watch over
 /// running runs (`conductor.watch`): on or off, when it looks, how often, and whether it may stop a run. Everything
 /// below the first switch waits while it is off, and the watch's limits wait while the watch is off.
 struct ConductorSection: View {
@@ -19,10 +20,13 @@ struct ConductorSection: View {
     static let off = "Turn on Run the Conductor first"
     /// Why the watch's limits wait.
     static let watchOff = "Turn on Watch running runs first"
+    /// Why the filing limit waits.
+    static let filingOff = "Turn on File linked tickets first"
 
     private var sectionReason: String? { editable ? nil : Self.notEditable }
     private var detailReason: String? { sectionReason ?? (settings.enabled ? nil : Self.off) }
     private var watchReason: String? { detailReason ?? (settings.watch.enabled ? nil : Self.watchOff) }
+    private var filingReason: String? { detailReason ?? (settings.fileTickets ? nil : Self.filingOff) }
 
     /// A whole-number field for one of the watch's limits.
     private func limitField(_ label: String, key: String, value: WritableKeyPath<ConductorWatchSettings, Int>) -> some View {
@@ -63,6 +67,19 @@ struct ConductorSection: View {
                 mono: true
             )
             .help("conductor.timeout_ms")
+            Toggle("File linked tickets", isOn: $settings.fileTickets)
+                .help("conductor.file_tickets")
+                .disabledReason(detailReason)
+            DirectorTextField(
+                "Tickets one ticket may file",
+                text: Binding(
+                    get: { String(settings.maxFiledTickets) },
+                    set: { text in if let number = Int(text) { settings.maxFiledTickets = number } }
+                ),
+                disabledReason: filingReason,
+                mono: true
+            )
+            .help("conductor.max_filed_tickets")
             Toggle("Watch running runs", isOn: $settings.watch.enabled)
                 .help("conductor.watch.enabled")
                 .disabledReason(detailReason)

@@ -30,7 +30,10 @@ defmodule SymphonyElixir.Conductor.Facts do
     * `conductor`: the Conductor's earlier updates, instructions (with the route Symphony took on
       them, at `after_qa_blocked`) and the guidance its watch gave running runs on this ticket;
     * `budget`: tokens used against the cap (`execution.limits.tokens_per_issue`), QA passes and
-      rework runs so far.
+      rework runs so far;
+    * `filings`: the Conductor's `ticket` route on this ticket (`SymphonyElixir.Conductor.Filing.facts/3`):
+      whether it is open, the tickets it already filed or linked from this ticket, how many filings
+      remain, and the repos a ticket may be filed in.
 
   Each fact read from an event carries the event's id (`event_id`), so a claim built on it can be
   traced. Long texts are cut with a marker (`#{inspect(" [cut by Symphony]")}`), lists keep their
@@ -39,6 +42,7 @@ defmodule SymphonyElixir.Conductor.Facts do
   """
 
   alias SymphonyElixir.{Config, RunStore, TicketBrief, TicketEvents, TicketState, Walkthrough, Workspace}
+  alias SymphonyElixir.Conductor.Filing
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.TicketEvents.Event
 
@@ -68,8 +72,17 @@ defmodule SymphonyElixir.Conductor.Facts do
   @problem_heading ~r/\A(problem|why|context|background|summary|goal|what)\b/i
   @acceptance_heading ~r/acceptance/i
 
-  @typedoc "`build/3`'s options: `events:` (the ticket's events, oldest first), `token_cap:`, `diff_stat:` (`(record -> [map()] | nil)`)."
-  @type opt :: {:events, [Event.t()]} | {:token_cap, pos_integer() | nil} | {:diff_stat, (map() -> [map()] | nil)}
+  @typedoc """
+  `build/3`'s options: `events:` (the ticket's events, oldest first), `token_cap:`, `diff_stat:`
+  (`(record -> [map()] | nil)`), `conductor:` (the `conductor` settings, default
+  `Config.conductor_settings/0`) and `repos:` (the managed repo keys, as `Filing.facts/3` takes them).
+  """
+  @type opt ::
+          {:events, [Event.t()]}
+          | {:token_cap, pos_integer() | nil}
+          | {:diff_stat, (map() -> [map()] | nil)}
+          | {:conductor, Schema.Conductor.t()}
+          | {:repos, [String.t()]}
 
   @doc "The junctions a document may be shaped for: the Conductor's, and `during_run` for a watch turn."
   @spec junctions() :: [String.t()]
@@ -128,7 +141,8 @@ defmodule SymphonyElixir.Conductor.Facts do
       findings: findings(events),
       verdicts: verdicts(events),
       conductor: conductor(events),
-      budget: budget(record, events, opts)
+      budget: budget(record, events, opts),
+      filings: Filing.facts(events, Keyword.get_lazy(opts, :conductor, &Config.conductor_settings/0), Keyword.take(opts, [:repos]))
     }
     |> put_qa_passes(junction, events)
   end

@@ -31,6 +31,8 @@ defmodule SymphonyElixir.SelfHeal.FixerTest do
         query =~ "SymphonyCreateIssue" -> Process.get(:create_result, {:ok, create_response()})
         query =~ "SymphonyProjectsAndTeams" -> Process.get(:projects_result, {:ok, %{"data" => %{"projects" => %{"nodes" => []}, "teams" => %{"nodes" => []}}}})
         query =~ "SymphonyIssueId" -> Process.get(:issue_id_result, {:ok, %{"data" => %{"issue" => %{"id" => "blocker-id"}}}})
+        query =~ "SymphonyResolveIssueLabel" -> Process.get(:label_lookup_result, {:ok, label_lookup_response()})
+        query =~ "SymphonyAddIssueLabel" -> {:ok, %{"data" => %{"issueAddLabel" => %{"success" => true}}}}
         true -> flunk("unexpected query: #{query}")
       end
     end
@@ -48,6 +50,15 @@ defmodule SymphonyElixir.SelfHeal.FixerTest do
               ]
             }
           }
+        }
+      }
+    end
+
+    defp label_lookup_response do
+      %{
+        "data" => %{
+          "issue" => %{"team" => %{"id" => "t1"}, "labels" => %{"nodes" => []}},
+          "issueLabels" => %{"nodes" => [%{"id" => "label-tech-debt", "team" => nil}]}
         }
       }
     end
@@ -276,6 +287,53 @@ defmodule SymphonyElixir.SelfHeal.FixerTest do
 
       assert {:error, :invalid_blocked_by} = Fixer.block(%Issue{id: nil}, %{identifier: "TP-900"}, [])
       assert {:error, :invalid_blocked_by} = Fixer.block(%Issue{id: "affected-id"}, %{identifier: nil}, [])
+    end
+  end
+
+  describe "a ticket the Conductor files" do
+    import ExUnit.CaptureLog
+
+    test "carries its labels, set once the ticket exists; a label that cannot be set is logged" do
+      attrs = Map.put(create_attrs(), :labels, ["tech debt"])
+      assert {:ok, %{identifier: "TP-900"}} = Fixer.create(attrs, repo("TP", ["Fix Project"]))
+
+      {_query, variables} = Enum.find(Process.get(:graphql_calls), &(elem(&1, 0) =~ "SymphonyAddIssueLabel"))
+      assert variables == %{issueId: "i1", labelId: "label-tech-debt"}
+
+      Process.put(:label_lookup_result, {:error, :rate_limited})
+      log = capture_log(fn -> assert {:ok, %{identifier: "TP-900"}} = Fixer.create(attrs, repo("TP", ["Fix Project"])) end)
+      assert log =~ ~s(Could not label TP-900 "tech debt": :rate_limited)
+    end
+
+    test "for another repo goes to that repo's team, not the affected ticket's" do
+      Process.put(:teams_result, {:ok, %{"data" => %{"teams" => %{"nodes" => [%{"id" => "t1", "key" => "TP"}, %{"id" => "t2", "key" => "MOT"}]}}}})
+      issue = %Issue{id: "affected-id", team: %{key: "MOT", name: "Cycle"}, project: %{id: "p9", name: "Cycle"}}
+      opts = Keyword.put(repo("TP", ["Fix Project"]), :routed_teams, fn _repo -> ["TP"] end)
+      attrs = create_attrs() |> Map.merge(%{issue: issue, repo_key: "repo-cycle", team: :scope})
+
+      assert {:ok, _ticket} = Fixer.create(attrs, opts)
+      assert created_input()["teamId"] == "t1"
+      assert created_input()["projectId"] == "p1"
+
+      # Its own repo's ticket stays in the affected ticket's team and project.
+      Process.delete(:graphql_calls)
+      own = %{attrs | repo_key: @scope, issue: %Issue{issue | team: %{key: "TP", name: "Tony"}, project: %{id: "p2", name: "Symphony"}}}
+      assert {:ok, _ticket} = Fixer.create(own, opts)
+      assert created_input()["projectId"] == "p2"
+    end
+
+    test "a follow-up is linked as related, and a link that fails is reported" do
+      assert :ok = Fixer.relate(%Issue{id: "affected-id"}, %{identifier: "TP-900"}, [])
+      {_query, %{input: input}} = Enum.find(Process.get(:graphql_calls), &(elem(&1, 0) =~ "SymphonyCreateIssueRelation"))
+      assert input == %{"issueId" => "blocker-id", "relatedIssueId" => "affected-id", "type" => "related"}
+
+      Process.put(:relation_result, {:error, :rate_limited})
+      assert {:error, :rate_limited} = Fixer.relate(%Issue{id: "affected-id"}, %{identifier: "TP-900"}, [])
+      Process.put(:relation_result, {:ok, %{"data" => %{"issueRelationCreate" => %{"success" => false}}}})
+      assert {:error, :issue_relation_failed} = Fixer.relate(%Issue{id: "affected-id"}, %{identifier: "TP-900"}, [])
+
+      assert {:error, :invalid_related} = Fixer.relate(%Issue{id: nil}, %{identifier: "TP-900"}, [])
+      assert {:error, :invalid_related} = Linear.Adapter.add_related(nil, "affected-id")
     end
   end
 end

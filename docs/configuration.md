@@ -3522,6 +3522,8 @@ conductor:
   enabled: false
   junctions: [after_coding, after_qa_fail, after_qa_blocked, after_rework, before_merge]
   timeout_ms: 180000
+  file_tickets: true
+  max_filed_tickets: 2
   watch:
     enabled: false
     run_minutes: 30
@@ -3546,10 +3548,15 @@ conductor:
 - `timeout_ms` (default `180000`): how long one turn may take. A turn that runs over, fails, answers
   outside its schema or whose provider is held with no free fallback is logged, records nothing for
   the person, and the next run starts as if the Conductor were off.
+- `file_tickets` (default `true`): whether the Conductor's answer may file a linked ticket for a
+  problem that is not the current ticket's to solve (below).
+- `max_filed_tickets` (default `2`): how many tickets one ticket may file over its whole life; `0`
+  files none.
 
 The turn runs in an empty folder under the workspace root with read-only tools and no ticket, so it
 can neither change nor read the repository. It never changes the ticket's plan, and it moves the
-ticket only at `after_qa_blocked`, through Symphony (below). Its own
+ticket only at `after_qa_blocked`, through Symphony (below); a ticket it files that blocks this one
+holds it, as a question does. Its own
 run is recorded on the ticket (`run.started`, `run.ended` with its model and tokens, `counted: false`
 so the dispatch-loop guard ignores it), and its tokens count toward the ticket under the phase it ran
 in. A dispatch pause stops it as it stops any run. Read on each dispatch, so a change applies without
@@ -3578,6 +3585,45 @@ decides. Then the pass goes on as without the Conductor (the retry, the self-hea
 could not finish" question). A question the turn asks holds the ticket, and Symphony then asks none
 of its own. The route Symphony took is recorded on the turn's `conductor.instructions` (`route`).
 The Conductor never routes a ticket past QA, and never narrows what QA checks.
+
+**Filing a linked ticket** (`file_tickets`). At `after_qa_blocked`, `after_qa_fail`,
+`after_rework` and during a watched run, the answer's `route` may be a ticket for a problem that is
+not this ticket's to solve: it lives in another repo or in Symphony's own QA tooling, or solving it
+here would add a separate piece of work to review and QA. The prompts tell the Conductor to prefer
+it to Rework then, and to ask the person last.
+
+```json
+{"to": "ticket", "relation": "blocks", "repo": "symphony",
+ "title": "...", "problem": "...", "wanted": "...",
+ "acceptance": ["..."], "walkthrough": ["..."],
+ "evidence": ["<event id>"], "existing": "<identifier, optional>"}
+```
+
+- `relation`: `blocks` links the new ticket as blocking this one and holds this ticket on it (the
+  same `Waiting for <ticket> to finish` hold a self-heal fix ticket sets): a run the turn came before
+  does not start, and a QA pass asks nothing of its own. When the new ticket is Done the hold lifts
+  by itself (for a fix to Symphony's own repo, once the running build has it) and the ticket
+  continues from the stage it was held in. `follow_up` links the two as related, and this ticket
+  goes on at once.
+- `repo`: any repo Symphony manages; a ticket of one repo may file against Symphony.
+- Symphony writes the description in the house format: Problem (with the ticket it came from),
+  Wanted behaviour, Acceptance criteria, User walkthrough, and the evidence lines of the events
+  `evidence` names. It files it through the self-heal lane's filer, the one way Symphony creates a
+  ticket: in Todo, Urgent, labelled `tech debt`, assigned to the owner the target repo polls for, in
+  that repo's team and project. No question and no approval.
+- Before filing, an open ticket the answer names (`existing`), or an open one it already filed from
+  this ticket in the same repo under the same title, is linked instead; that is not a filing.
+- Bounds: at most `max_filed_tickets` per ticket over its whole life, and a ticket the Conductor
+  filed files none of its own. A route past a bound, naming a repo Symphony does not manage,
+  missing a section or a relation, or given with a question is dropped and logged; the turn's
+  message is kept without it.
+- Records: a `ticket.filed` on this ticket (`by: conductor`, `kind` `split_off` for `blocks` or
+  `follow_up`, `repo`, `url`, `reason`, `existing`), a `ticket.filed_from` on the new one, and
+  `route: ticket` on the turn's `conductor.instructions`. The turn's update gains a line naming the
+  ticket, its relation and why, written even when the answer had no update. The facts' `filings`
+  say whether the route is open (and why not), the tickets already filed and how many remain.
+- The Conductor never edits this ticket's acceptance criteria or walkthrough, and never moves or
+  cancels a ticket through this route.
 
 **A question's options act.** Each option of a question the Conductor asks names what Symphony does
 when the person picks it (`action`), from a closed list:

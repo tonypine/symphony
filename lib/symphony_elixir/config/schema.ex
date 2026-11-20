@@ -2067,7 +2067,10 @@ defmodule SymphonyElixir.Config.Schema do
     (`junctions`: `after_coding`, `after_qa_fail`, `after_qa_blocked`, `after_rework`,
     `before_merge`; all five by default) and how long one turn may take before the next run starts without it (`timeout_ms`,
     three minutes by default), and whether it watches running runs to steer them (`watch`,
-    `SymphonyElixir.Conductor.Watch`, off by default). Its model is `runs.conductor`'s.
+    `SymphonyElixir.Conductor.Watch`, off by default), whether its answer may file a linked ticket
+    for a problem that is not the current ticket's to solve (`file_tickets`, on by default;
+    `SymphonyElixir.Conductor.Filing`) and how many one ticket may file over its whole life
+    (`max_filed_tickets`, 2). Its model is `runs.conductor`'s.
     """
     use Ecto.Schema
     import Ecto.Changeset
@@ -2118,6 +2121,8 @@ defmodule SymphonyElixir.Config.Schema do
       field(:enabled, :boolean, default: false)
       field(:junctions, {:array, :string}, default: @junctions)
       field(:timeout_ms, :integer, default: 180_000)
+      field(:file_tickets, :boolean, default: true)
+      field(:max_filed_tickets, :integer, default: 2)
       embeds_one(:watch, Watch, on_replace: :update, defaults_to_struct: true)
     end
 
@@ -2128,10 +2133,11 @@ defmodule SymphonyElixir.Config.Schema do
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
       schema
-      |> cast(attrs, [:enabled, :junctions, :timeout_ms], empty_values: [])
-      |> Schema.validate_present([:enabled, :junctions, :timeout_ms])
+      |> cast(attrs, [:enabled, :junctions, :timeout_ms, :file_tickets, :max_filed_tickets], empty_values: [])
+      |> Schema.validate_present([:enabled, :junctions, :timeout_ms, :file_tickets, :max_filed_tickets])
       |> validate_subset(:junctions, @junctions, message: "must name only #{Enum.join(@junctions, ", ")}")
       |> validate_number(:timeout_ms, greater_than: 0)
+      |> validate_number(:max_filed_tickets, greater_than_or_equal_to: 0)
       |> cast_embed(:watch, with: &Watch.changeset/2)
     end
   end

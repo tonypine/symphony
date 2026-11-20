@@ -19,6 +19,11 @@ defmodule SymphonyElixir.SelfHeal.Fixer do
   ticket falls outside an assignee-filtered poll. With no assignee configured, or when it cannot be
   resolved, it takes the affected ticket's assignee.
 
+  The same filer files the Conductor's tickets (`SymphonyElixir.SelfHeal.file_ticket/3`): those
+  carry `team: :scope`, so a ticket for another repo goes to that repo's team rather than the
+  affected ticket's, and `labels`, set once the ticket exists (a label that cannot be set is
+  logged, never undoes the filing); a follow-up is linked as related (`relate/3`).
+
   `SymphonyElixir.SelfHeal` takes this module through `opts[:fixer]`, so tests use a fake and no
   Linear call is made.
   """
@@ -37,7 +42,7 @@ defmodule SymphonyElixir.SelfHeal.Fixer do
   def create(%{scope: scope} = attrs, opts) do
     with {:ok, repo} <- repo(scope, opts),
          {:ok, team, project} <- target(attrs, repo, opts) do
-      Linear.Adapter.create_issue(%{
+      %{
         title: attrs.title,
         description: attrs.description,
         priority: Keyword.get(opts, :priority, priority(Map.get(attrs, :issue))),
@@ -45,9 +50,32 @@ defmodule SymphonyElixir.SelfHeal.Fixer do
         project: project,
         assignee_id: assignee_id(scope, repo, Map.get(attrs, :issue), opts),
         state: @todo_state
-      })
+      }
+      |> Linear.Adapter.create_issue()
+      |> labelled(Map.get(attrs, :labels, []))
     end
   end
+
+  defp labelled({:ok, %{id: id, identifier: identifier}} = created, labels) do
+    for label <- labels do
+      case Linear.Adapter.add_issue_label(id, label) do
+        :ok -> :ok
+        {:error, reason} -> Logger.warning("Could not label #{identifier} #{inspect(label)}: #{inspect(reason)}")
+      end
+    end
+
+    created
+  end
+
+  defp labelled(other, _labels), do: other
+
+  @doc "Records that `issue` and `ticket` are related: a follow-up the Conductor filed, which holds nothing."
+  @spec relate(Issue.t(), map(), keyword()) :: :ok | {:error, term()}
+  def relate(%Issue{id: issue_id}, %{identifier: identifier}, _opts) when is_binary(issue_id) and is_binary(identifier) do
+    Linear.Adapter.add_related(identifier, issue_id)
+  end
+
+  def relate(_issue, _ticket, _opts), do: {:error, :invalid_related}
 
   @doc "Attaches `body` as a comment on the fix ticket named `identifier`."
   @spec attach(String.t(), String.t(), keyword()) :: :ok | {:error, term()}
@@ -76,8 +104,9 @@ defmodule SymphonyElixir.SelfHeal.Fixer do
   defp target(%{scope: scope} = attrs, repo, opts) do
     issue = Map.get(attrs, :issue)
     own_repo? = scope == Map.get(attrs, :repo_key)
+    team = if Map.get(attrs, :team) == :scope and not own_repo?, do: repo_team(repo, opts), else: present(issue_team(issue)) || repo_team(repo, opts)
 
-    case present(issue_team(issue)) || repo_team(repo, opts) do
+    case team do
       nil -> {:error, {:self_heal_team_unknown, scope}}
       team -> {:ok, team, (own_repo? && present(issue_project(issue))) || List.first(Map.get(repo, :projects) || [])}
     end

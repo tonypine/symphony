@@ -593,8 +593,17 @@ defmodule SymphonyElixir.TicketEvents.Types do
       writers: [:machine],
       run_kinds: [],
       required: [identifier: :string, kind: {:enum, ~w(split_off follow_up)}],
-      optional: [title: {:string, 300}] ++ @signal,
+      optional: [title: {:string, 300}, by: {:enum, ~w(conductor)}, repo: :string, url: :string, reason: {:string, 600}, existing: :boolean] ++ @signal,
       idempotency: {:fields, [:identifier]}
+    },
+    # On a ticket the Conductor filed (`SymphonyElixir.Conductor.Filing`): the ticket it came from,
+    # so a ticket it filed never files one of its own.
+    "ticket.filed_from" => %{
+      writers: [:machine],
+      run_kinds: [],
+      required: [from: :string, by: {:enum, ~w(conductor)}],
+      optional: [kind: {:enum, ~w(split_off follow_up)}] ++ @signal,
+      idempotency: {:fields, [:from]}
     },
     "conductor.update" => %{
       writers: [:machine],
@@ -607,7 +616,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
       writers: [:machine],
       run_kinds: [],
       required: [junction: {:enum, @conductor_junctions}, text: {:string, 3_000}],
-      optional: [route: {:enum, ~w(rerun rework)}] ++ @signal,
+      optional: [route: {:enum, ~w(rerun rework ticket)}] ++ @signal,
       idempotency: :writer
     },
     "conductor.steer" => %{

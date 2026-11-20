@@ -986,8 +986,9 @@ case or by id: a ticket with none is `404` `ticket_not_found`. `junction` is opt
 | `findings` | Every finding: `state` (`open`, `resolved`, `reopened`, `confirmed`), `class`, `class_count` (how many times that class was recorded on the ticket), `severity`, `step`, `description`, `evidence`, its `resolution` and the event that reopened it. |
 | `verdicts` | The newest verdicts: `kind`, `outcome`, `head`, `reason` (a QA verdict's from its details). |
 | `qa_passes` | At `after_qa_blocked` only: every QA verdict (the newest 10), oldest first: `event_id`, `run_id`, `outcome`, `head`, `reason`, `on_ci` (a block on CI), and `blocked_steps`, the steps of its pass that ended blocked (a stepped pass's `step_id`, `title` and `result`: `status`, `expected`, `actual`; the verdict's own `step` and `details`), at most 4. |
-| `conductor` | The Conductor's earlier updates, instructions and steers on the ticket (the newest 10): `type` (`update`, `instructions`, `steer`), `junction`, `at`, `text`, and an instruction's `route` (`rerun`, `rework`) or a steer's `when` and `trigger`. |
+| `conductor` | The Conductor's earlier updates, instructions and steers on the ticket (the newest 10): `type` (`update`, `instructions`, `steer`), `junction`, `at`, `text`, and an instruction's `route` (`rerun`, `rework`, `ticket`) or a steer's `when` and `trigger`. |
 | `budget` | `tokens_used` (every run's, the Conductor's among them), `tokens_cap` (`execution.limits.tokens_per_issue`), `qa_passes` and `rework_runs`. |
+| `filings` | The Conductor's `ticket` route on this ticket: `open`, `closed` (why not, or null), `filed` (each ticket it filed or linked: `identifier`, `relation`, `repo`, `title`, `existing`, `event_id`), `left` (filings that remain) and `repos` (the repo keys a ticket may be filed in). |
 
 A watch turn (`during_run`) reads the same document plus `live`: the run's `run_id`, `kind`, `model`,
 `harness`, its `steps` and their outcomes, `failed_step` (the newest step that ended `failed`: `step_id`,
