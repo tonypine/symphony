@@ -3565,10 +3565,11 @@ conductor:
   run's own task before its agent starts, and that run's start is recorded once the turn is done, so
   the turn sits between the two runs on the timeline; `after_qa_blocked` runs inside the QA run, once
   its verdict is recorded and its report published; `before_merge` runs as the QA or Code Review run
-  that carried the ticket into Merging ends, on its own. `message` (a person sent a message on the
-  ticket), `sub_ticket_ended` (a sub-ticket reached Done or Canceled), `final_check` (the last
-  sub-ticket ended) and `child_message` (a message on a sub-ticket) are named here and plan no turn
-  yet. A `symphony.yml` that lists its junctions gets `after_qa_blocked`, `grooming` and the other
+  that carried the ticket into Merging ends, on its own. `sub_ticket_ended` (a sub-ticket of a
+  groomed ticket reached Done or Canceled while others are open) and `final_check` (the last one
+  ended) run on the parent, on a poll, outside any dispatch (**The tree**, below). `message` (a
+  person sent a message on the ticket) and `child_message` (a message on a sub-ticket) are named
+  here and plan no turn yet. A `symphony.yml` that lists its junctions gets `after_qa_blocked`, `grooming` and the other
   new ones only when it adds them: a file that names no `junctions` runs every one.
 - `timeout_ms` (default `180000`): how long one turn may take. A turn that runs over, fails, answers
   outside its schema or whose provider is held with no free fallback is logged, records nothing for
@@ -3576,7 +3577,7 @@ conductor:
 - `grooming_timeout_ms` (default `600000`): how long the Grooming turn may take. It is longer than
   `timeout_ms` because that turn may read the code.
 - `final_check_rounds` (default `3`): how many rounds of sub-tickets a parent's final check may add
-  before it must ask the person. No turn reads it yet.
+  before the person is asked (**The tree**, below).
 - `file_tickets` (default `true`): whether the Conductor's answer may file a linked ticket for a
   problem that is not the current ticket's to solve (below).
 - `max_filed_tickets` (default `2`): how many tickets one ticket may file over its whole life; `0`
@@ -3616,8 +3617,9 @@ exactly as before.
   and so on, cuts a text that is too long, and records the plan as `plan.written` (version 1,
   `by: grooming`) with the turn's update as a `conductor.update` (`junction: grooming`). The run
   then starts, in the same task.
-- A `split` is not carried out yet: the plan is recorded as a `single` one, with a warning in the
-  log, and the run starts.
+- A `split` is carried out once the plan is recorded, and the run does not start (**The tree**,
+  below). Where the waiting state is off (`issues.states.waiting_on_sub_issues`), the plan is
+  recorded as a `single` one, with a warning in the log, and the run starts.
 - A ticket labelled `plan` or `breakdown` is groomed like any other and gets no plan run. Once its
   plan is written Symphony takes the label off, in the tracker and on the ticket's record, says so
   in a status note, and the next dispatch starts its first coding run.
@@ -3631,6 +3633,49 @@ exactly as before.
   and the ticket is groomed again at its next dispatch, which Symphony starts at once. After the second the
   run starts without a plan, as it did before plans, and the note says so. A ticket never waits on
   Grooming.
+
+**The tree** (`sub_ticket_ended`, `final_check`). A groomed ticket and the sub-tickets under it.
+
+- **Split.** For each entry of a split plan's `sub_tickets` Symphony creates a sub-ticket under the
+  ticket: Urgent, in the ticket's team and project, assigned as the ticket is (an entry with a
+  `repo` of its own goes to that repo's first routed team and project). The entry's `ask` is its
+  description and its first `ask.recorded` (`source: parent`), so its own Grooming plans from it. A
+  sub-ticket that waits `after` siblings is created in `Backlog`, linked as blocked by them, then
+  moved to `Todo`; any other is created in `Todo`. An entry that names the `identifier` of a
+  sub-ticket the ticket already has (the Grooming facts list them under `sub_tickets`) adopts it
+  instead. The identifiers are written back as a new version of the plan as they are made, so a
+  split that stopped half way creates only what is missing when it runs again. Symphony's records
+  take the sub-tickets at once, and the ticket then moves to the waiting state (`groomed_split`)
+  and gets no run of its own. A first run about to start on a ticket whose plan is a split carries
+  the split out again instead. A split that fails is retried at the next dispatch, and from the
+  third failure on the person is asked ("Try again" or cancel).
+- **Merged is not Done.** A blocked-by link to a groomed ticket stops blocking once that ticket's
+  record says its pull request merged, whatever state it is in.
+- **The close rule.** A groomed ticket in the waiting state closes when its own pull request merged
+  or it never had one, and no sub-ticket is left outside Done or Canceled: one in `Backlog` holds
+  it. A groomed ticket whose pull request merges waits there on every sub-ticket it has. A ticket
+  with no plan keeps the rule it had (a `Backlog` sub-ticket does not hold it).
+- **`sub_ticket_ended`.** Each sub-ticket that ends while others are open owes the parent one turn.
+  Its facts are the tree (the parent's plan and checks; each sub-ticket's state, plan summary,
+  checks, tagged notes, asks and whether its pull request merged; the rounds), and its answer may
+  hold `tree` operations, each with a `reason`: `add` (`title`, `ask`, `after`, `repo`), `cancel`
+  (`ticket`; the Director's cancel move), `rewrite` (`ticket`, `ask`, and `stop: true` to stop its
+  working run first; the new ask is an `ask.recorded` on the sub-ticket, `source: parent`) and
+  `stop` (`ticket`). Each one carried out records a `conductor.intervention` on the sub-ticket
+  (`added`, `canceled`, `replanned`, `stopped`) and together they give the parent's plan a new
+  version (`by: recalibration`). One that can't be carried out is logged and left out.
+- **`final_check`.** Once the last sub-ticket ended and the close rule holds, the parent owes the
+  final check. `done: true` with no operation moves the ticket to `Done` (`final_check_pass`).
+  `add` operations are a round: the plan's new version has a `reason` that starts with
+  `Final check`, and those versions are the count. After `final_check_rounds` rounds Symphony
+  refuses one more and asks the person: "Allow one more round" lets one through, "Close it as it
+  is" moves the ticket to `Done`. A check that changed nothing (the turn failed, or answered
+  neither `done`, nor a sub-ticket it could create, nor a question) is counted in a status note;
+  after 2 of them, or with the Conductor or the junction off, the ticket closes on its sub-tickets
+  alone, so it never waits on a turn. While no provider of `runs.conductor` can take a run, the
+  next poll asks again.
+- Both turns run on `priv/conductor/tree_prompt.md`. A question either one asks holds the ticket,
+  and its operations are not carried out: the person decides first.
 
 **After a blocked QA** (`after_qa_blocked`). A QA pass that ended `blocked` or `inconclusive` on the
 QA agent's own account (not a head CI rejects, not a block the self-heal lane takes, not one whose
@@ -3674,7 +3719,11 @@ it to Rework then, and to ask the person last.
   does not start, and a QA pass asks nothing of its own. When the new ticket is Done the hold lifts
   by itself (for a fix to Symphony's own repo, once the running build has it) and the ticket
   continues from the stage it was held in. `follow_up` links the two as related, and this ticket
-  goes on at once.
+  goes on at once. On a groomed ticket the new ticket is filed as a sub-ticket of this one, and the
+  relation is `before` (this ticket is held on it, as `blocks` holds it) or `after` (this ticket
+  goes on, and the sub-ticket is linked as blocked by it, so it starts once this ticket's pull
+  request has merged); its description is recorded on it as its ask. The facts name the relations
+  a ticket takes (`filings.relations`).
 - `repo`: any repo Symphony manages; a ticket of one repo may file against Symphony.
 - Symphony writes the description in the house format: Problem (with the ticket it came from),
   Wanted behaviour, Acceptance criteria, User walkthrough, and the evidence lines of the events

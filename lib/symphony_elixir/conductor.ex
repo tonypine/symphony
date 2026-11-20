@@ -9,6 +9,7 @@ defmodule SymphonyElixir.Conductor do
 
     * `grooming`: a ticket's first run is about to start and the ticket has no plan; the turn
       writes it (`SymphonyElixir.Conductor.Grooming`, below);
+    * `sub_ticket_ended` and `final_check`: a sub-ticket of a groomed ticket ended (below);
     * `after_coding`: an implementation run handed off, before Code Review or QA;
     * `after_qa_fail`: QA's verdict was fail, before rework;
     * `after_qa_blocked`: a QA pass could not judge the change (`blocked` or `inconclusive`, on the
@@ -57,9 +58,17 @@ defmodule SymphonyElixir.Conductor do
   counted, and the run does not start (`run/3` answers `:again`): the ticket is groomed again at its
   next dispatch, which follows at once, and after
   2 failed tries (`Grooming.max_tries/0`) it starts without a plan, with a note that says why. A turn
-  no provider can take now is such a try, so a ticket never waits on Grooming. The other
-  junctions the settings name (`message`, `sub_ticket_ended`, `final_check`, `child_message`) plan
-  no turn yet.
+  no provider can take now is such a try, so a ticket never waits on Grooming. A plan of shape
+  `split` is carried out instead of a first run (`SymphonyElixir.Conductor.Tree`): the ticket's
+  sub-tickets are created and it waits on them.
+
+  Two junctions belong to a groomed ticket that waits on its sub-tickets, and are met outside any
+  dispatch (`tend/4`, which the orchestrator starts on a poll): `sub_ticket_ended`, each time one of
+  them ends while others are open, whose answer may change the tree, and `final_check`, once the
+  last one ended, whose answer closes the ticket or adds what is missing. Both read the tree's facts
+  on a prompt of their own (`priv/conductor/tree_prompt.md`) and answer `done` and `tree`
+  operations, which Symphony carries out and records (`Tree.apply/3`). The junctions `message` and
+  `child_message` plan no turn yet.
   """
 
   require Logger
