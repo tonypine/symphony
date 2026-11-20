@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import SymphonyBarCore
+import SymphonyBarUI
 
 // MARK: - The window model's ticket page, navigation and Stop Run
 
@@ -305,6 +306,42 @@ extension SymphonyWindowModel {
         }
     }
 
+    /// Cancel Ticket… (TP-1317): opens the cancel's sheet; nothing is cancelled until its button is pressed.
+    func openCancel(_ sheet: CancelTicketSheet) {
+        guard !cancelInFlight else { return }
+        cancelError = nil
+        ticketCancelSheet = sheet
+    }
+
+    /// Keep It: the sheet closes and nothing is sent.
+    func keepTicket() {
+        guard !cancelInFlight else { return }
+        ticketCancelSheet = nil
+        cancelError = nil
+    }
+
+    /// The sheet's button: the cancel with the note. On success the sheet closes, the banner offers Undo for 10 s and
+    /// the state and the page are read again at once; a refusal or a failure keeps the sheet open, with the note, and
+    /// says why.
+    func confirmCancel(_ sheet: CancelTicketSheet, note: String) {
+        guard !cancelInFlight else { return }
+        cancelInFlight = true
+        cancelError = nil
+        Task {
+            let result = await onControl(sheet.action(note: note))
+            cancelInFlight = false
+            switch result {
+            case .done, .moved:
+                ticketCancelSheet = nil
+                showMoveBanner(sheet.banner(after: result.moveOutcome ?? sheet.expectedOutcome))
+            case let .failed(message):
+                cancelError = message
+            }
+            client.refresh()
+            readTicket(force: true)
+        }
+    }
+
     /// Start now (TP-1330): Symphony starts the ticket's run at once, ahead of the queue. The button is only clickable
     /// when the payload said it may start; on success the state and the page are read again at once, so the running
     /// line shows. A refusal (the state changed between the read and the click) shows Symphony's reason on the banner.
@@ -470,11 +507,13 @@ extension SymphonyWindowModel {
             if let sheet = page.moveSheet(to: state) { openMove(sheet) }
         case .sheet(.force):
             openForceSheet(page.identifier)
+        case .sheet(.cancel):
+            openCancel(page.cancelSheet)
         case let .open(url):
             onOpenURL(url)
         case let .copy(text):
             copy(text)
-        case .sheet(.answer), .sheet(.restart), .sheet(.note), .confirm:
+        case .sheet(.answer), .sheet(.restart), .sheet(.note):
             break
         }
     }
@@ -1428,6 +1467,90 @@ struct MoveSheetPresenter: ViewModifier {
                 error: model.moveError,
                 cancel: model.cancelMove,
                 confirm: { note in model.confirmMove(sheet, note: note) }
+            )
+        }
+    }
+}
+
+// MARK: - TP-1317: the Cancel Ticket sheet
+
+/// The Cancel Ticket sheet: the question, what the cancel does and what Undo gives back, the note ("Why it is
+/// cancelled"), then Keep It and Cancel Ticket in the destructive style. A refusal shows under the note and keeps it.
+struct CancelTicketSheetView: View {
+    let sheet: CancelTicketSheet
+    let working: Bool
+    let error: String?
+    let keep: () -> Void
+    let confirm: (_ note: String) -> Void
+    @State private var note: String
+    @FocusState private var noteFocused: Bool
+
+    init(sheet: CancelTicketSheet, working: Bool, error: String?, note: String = "", keep: @escaping () -> Void,
+         confirm: @escaping (String) -> Void) {
+        self.sheet = sheet
+        self.working = working
+        self.error = error
+        self.keep = keep
+        self.confirm = confirm
+        _note = State(initialValue: note)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
+            Text(sheet.title)
+                .font(DesignTokens.TypeStyle.sentence.font)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityAddTraits(.isHeader)
+            Text(sheet.happens)
+                .font(DesignTokens.TypeStyle.body.font)
+                .foregroundStyle(DesignTokens.Status.problem.tint)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(sheet.stays)
+                .font(DesignTokens.TypeStyle.body.font)
+                .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                .fixedSize(horizontal: false, vertical: true)
+            DirectorTextField(
+                nil, text: $note, placeholder: CancelTicketSheet.notePlaceholder,
+                disabledReason: working ? TicketList.waitReason : nil, focused: $noteFocused
+            )
+            .accessibilityLabel(CancelTicketSheet.notePrompt)
+            if let error {
+                Label(error, systemImage: DesignTokens.Status.problem.symbol)
+                    .font(DesignTokens.TypeStyle.secondary.font)
+                    .foregroundStyle(DesignTokens.Status.problem.tint)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack(alignment: .top, spacing: DesignTokens.Space.s2) {
+                if working {
+                    ProgressView().controlSize(.small).accessibilityLabel("Working")
+                }
+                Spacer(minLength: 0)
+                Button(CancelTicketSheet.keepTitle, role: .cancel, action: keep)
+                    .keyboardShortcut(.cancelAction)
+                    .directorButton(disabledReason: working ? TicketList.waitReason : nil)
+                Button(CancelTicketSheet.verb, role: .destructive) { confirm(note) }
+                    .keyboardShortcut(.defaultAction)
+                    .directorButton(.destructiveFilled, disabledReason: working ? TicketList.waitReason : nil)
+            }
+        }
+        .padding(DesignTokens.Space.s5)
+        .frame(width: 460)
+        .onAppear { noteFocused = true }
+    }
+}
+
+/// Presents the window model's Cancel Ticket sheet on any view that offers Cancel Ticket….
+struct CancelTicketSheetPresenter: ViewModifier {
+    @ObservedObject var model: SymphonyWindowModel
+
+    func body(content: Content) -> some View {
+        content.sheet(item: $model.ticketCancelSheet) { sheet in
+            CancelTicketSheetView(
+                sheet: sheet,
+                working: model.cancelInFlight,
+                error: model.cancelError,
+                keep: model.keepTicket,
+                confirm: { note in model.confirmCancel(sheet, note: note) }
             )
         }
     }
