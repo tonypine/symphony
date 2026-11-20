@@ -137,6 +137,27 @@ final class CancelTicketTests: XCTestCase {
         XCTAssertFalse(doneRail.items.contains { $0.move == .cancel })
     }
 
+    /// QA reaches TP-1244's page on both fixtures the way a person does: from its row in Tickets or on Home, so
+    /// neither view draws "Update Symphony" for a read the fixtures lack. TP-1246, done, is in Tickets too.
+    func testBothCancelFixturesOpenTP1244FromTicketsAndHome() throws {
+        for name in ["ticket-page", "ticket-cancel-refused"] {
+            let fixtures = fixtures(name)
+            let path = TicketsQuery().path(scope: .all, now: Date())
+            let tickets = try XCTUnwrap(TicketsPayload.decode(try get(path, from: fixtures)), name)
+            XCTAssertNil(tickets.error, name)
+            XCTAssertEqual(tickets.rows.map(\.identifier), ["TP-1244", "TP-1245", "TP-1246"], name)
+            XCTAssertNotNil(TicketView.views(fromViews: try get(TicketsPayload.viewsPath, from: fixtures), catalog: TicketColumn.catalog), name)
+
+            let home = try XCTUnwrap(HomeRead.decode(try get(HomeRead.path, from: fixtures)), name)
+            let onHome: [String] = home.inProgress.compactMap { entry in
+                if case let .ticket(ticket) = entry { return ticket.identifier }
+                return nil
+            }
+            XCTAssertEqual(onHome, ["TP-1244", "TP-1245"], name)
+            XCTAssertEqual(try page("TP-1244", from: fixtures).identifier, "TP-1244", name)
+        }
+    }
+
     func testTheRefusedFixtureAnswersTheCancelWithSymphonysReason() throws {
         let fixtures = fixtures("ticket-cancel-refused")
         let sheet = try page("TP-1244", from: fixtures).cancelSheet
