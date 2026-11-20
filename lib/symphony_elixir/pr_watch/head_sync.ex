@@ -172,8 +172,9 @@ defmodule SymphonyElixir.PrWatch.HeadSync do
     head = target.head
     opts = [head_sha: head, idempotency: "pr_head_sync:#{kind}:#{head}", run_id: Map.get(target, :run_id)]
 
-    # The note is the wait's trace on the timeline; a write the store refuses never stops the wait.
-    _ = TicketEvents.record(repo_key, issue_id, "note", %{text: note_text(kind, target, pr_head)}, opts)
+    # The note is the wait's trace on the timeline, a status message of Symphony's own (`status`), which
+    # the timeline lists only under "Show all events"; a write the store refuses never stops the wait.
+    _ = TicketEvents.record(repo_key, issue_id, "note", %{text: note_text(kind, target, pr_head), status: true}, opts)
     :ok
   end
 
