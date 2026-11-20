@@ -346,6 +346,21 @@ defmodule SymphonyElixir.Pauses.DependenciesTest do
     end
   end
 
+  describe "a ticket the Conductor filed as blocking" do
+    test "holds the ticket through the self-heal hold, which lifts once the filed ticket is Done, with no answer from anyone" do
+      assert :ok = SymphonyElixir.SelfHeal.hold(@repo_key, issue(%{state: "QA"}), "TP-900")
+      assert Pauses.why(@ticket) == [@fix_line]
+
+      Process.put({:read, "TP-900"}, {:ok, %Issue{id: "filed-id", identifier: "TP-900", state: "In Progress"}})
+      assert {0, _cache} = sweep(issue(%{state: "QA"}), build(), UpdateHold.empty_cache())
+      assert Pauses.paused?(@ticket)
+
+      Process.put({:read, "TP-900"}, {:ok, %Issue{id: "filed-id", identifier: "TP-900", state: "Done"}})
+      assert {1, _cache} = sweep(issue(%{state: "QA"}), build(), UpdateHold.empty_cache())
+      refute Pauses.paused?(@ticket)
+    end
+  end
+
   describe "a fix ticket self-heal filed" do
     setup do
       {:ok, _pause} = Pauses.set(@ticket, Pauses.ticket_reason(:fix_ticket, "TP-900"), set_by: Dependencies.setter(:fix_ticket))

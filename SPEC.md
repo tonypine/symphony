@@ -557,7 +557,10 @@ only: a workspace made again, why, the heads compared and the one it started on)
 `workspace.removed` (machine only: Symphony removed a ticket's workspace, for the age GC, a Stop, a
 terminal state or another cleanup), `rule.action` (machine only: a rule of Symphony's acted on the
 ticket, with the rule's name and what it did), `ticket.filed` (machine only: a ticket split off from
-this one, or an epic review's follow-up), `note.read` (machine only: the first run whose prompt carried a
+this one, or an epic review's follow-up; one the Conductor filed or linked through its `ticket` route
+also carries `by: conductor`, `repo`, `url`, `reason` and `existing`), `ticket.filed_from` (machine
+only: on a ticket the Conductor filed, the ticket it came from, so it files none of its own),
+`note.read` (machine only: the first run whose prompt carried a
 person's note, keyed by the note; history from before messages), `message.sent` (the person's message to
 the ticket, its own event each time), `message.read` (machine only: the run that was given a message as
 new, keyed by the message), `brief.written` (an implementation, rework or review-feedback run's
@@ -569,7 +572,11 @@ entry titled Update (a watch turn's update also carries `watch`: the watched `ru
 `when` and `stopped`), and the `blocks` the Conductor picked, resolved from the ticket's records
 (`docs/control-api.md`); and advice for the next run, at most 3,000 characters, which the next run's
 prompt carries as its own section, marked as advice and wrapped as untrusted data, and which at
-`after_qa_blocked` carries the `route` Symphony took on the turn's answer (`rerun` or `rework`); a
+`after_qa_blocked` carries the `route` Symphony took on the turn's answer (`rerun` or `rework`), and
+at `after_qa_blocked`, `after_qa_fail`, `after_rework` and during a watched run `ticket`, a linked ticket
+Symphony filed through the self-heal lane's filer for a problem that is not this ticket's to solve, which
+holds the ticket when it `blocks` it (at most `conductor.max_filed_tickets`, 2, per ticket, never from a
+ticket the Conductor filed; `docs/configuration.md#conductor`); a
 question the Conductor asks goes through the decision path, pauses the ticket and holds the run it
 came before, and each of its options names the action a pick makes from a closed list (`continue`,
 `rerun`, `rework` with a finding, `accept_without_qa`, which records the `qa` verdict `skip` and moves

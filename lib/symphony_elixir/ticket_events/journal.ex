@@ -44,6 +44,7 @@ defmodule SymphonyElixir.TicketEvents.Journal do
     "park.backfilled" => "pause",
     "rule.action" => "rule",
     "ticket.filed" => "ticket",
+    "ticket.filed_from" => "ticket",
     "situation.changed" => "situation",
     "run.started" => "run",
     "run.started_by_person" => "run",

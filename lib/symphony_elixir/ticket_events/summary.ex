@@ -313,6 +313,8 @@ defmodule SymphonyElixir.TicketEvents.Summary do
     {title, [text(payload, :title)]}
   end
 
+  defp summary("ticket.filed_from", payload, _event), do: {"Filed by the Conductor from #{text(payload, :from) || "another ticket"}", []}
+
   # A machine note a signal wrote says the signal's words (`TicketSignals.note_title/1`) and the reason it
   # was recorded with; the facts it lists after them are Symphony's codes, kept for Diagnostics.
   defp summary("note", payload, _event) do

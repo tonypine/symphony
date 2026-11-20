@@ -84,7 +84,8 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
     {"report.published", %{run_id: "report-1", text: "TP-1 merged."}, [], %{title: "Report published", detail: "TP-1 merged."}},
     {"rule.action", %{rule: "PR watcher R22", action: "rerun", text: "A check failed on PR #741: Symphony reran it once"}, [],
      %{title: "Reran the failed checks", detail: "A check failed on PR #741: Symphony reran it once"}},
-    {"ticket.filed", %{identifier: "TP-1500", kind: "split_off", title: "Split the parser"}, [], %{title: "Split off TP-1500", detail: "Split the parser"}}
+    {"ticket.filed", %{identifier: "TP-1500", kind: "split_off", title: "Split the parser"}, [], %{title: "Split off TP-1500", detail: "Split the parser"}},
+    {"ticket.filed_from", %{from: "MOT-93", by: "conductor"}, [], %{title: "Filed by the Conductor from MOT-93", detail: nil}}
   ]
 
   defp event(type, payload, artifacts \\ []), do: %Event{type: type, payload: payload, artifacts: artifacts}
@@ -125,6 +126,7 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
     assert render("rule.action", %{}).title == "Acted"
     assert render("ticket.filed", %{identifier: "TP-1502", kind: "follow_up"}) == %{title: "Follow-up TP-1502 filed", detail: nil}
     assert render("ticket.filed", %{}).title == "Split off a ticket"
+    assert render("ticket.filed_from", %{}).title == "Filed by the Conductor from another ticket"
   end
 
   test "a message is the person's own words, and another writer is named" do
@@ -542,6 +544,7 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
       {"workspace.removed", %{reason: "age_gc"}},
       {"rule.action", %{rule: "PR watcher R29", action: "auto_merge", text: "#{@watcher_reason}: auto-merge on for #{@sha}", head: @sha}},
       {"ticket.filed", %{identifier: "TP-1500", kind: "follow_up", title: "Split the parser"}},
+      {"ticket.filed_from", %{from: "TP-1500", by: "conductor", kind: "split_off"}},
       {"brief.written", %{text: "Plain words.", walkthrough: "Read it."}},
       {"conductor.update", %{junction: "before_merge", text: "QA passed every step; it merges next."}},
       {"conductor.instructions", %{junction: "after_rework", text: "Walk the empty state first."}},

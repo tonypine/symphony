@@ -39,8 +39,12 @@ defmodule SymphonyElixir.Conductor do
   ticket's plan; its instructions are advice added to the next run's prompt. It moves the ticket at
   one junction only: at `after_qa_blocked` its answer may route the ticket (`route`), back to
   Rework with a finding or to one more QA pass, within bounds Symphony keeps from the ticket's
-  events (`open_routes/1`); it never routes it past QA. A dispatch pause stops it as it stops any
-  run. With `conductor.enabled` off, nothing here reads or writes anything.
+  events (`open_routes/1`); it never routes it past QA. At `after_qa_blocked`, `after_qa_fail`,
+  `after_rework` and `during_run` its route may file a ticket for a problem that is not this
+  ticket's to solve (`SymphonyElixir.Conductor.Filing`): one that `blocks` holds the ticket on it, as
+  a question does (the run the turn came before does not start, and the QA pass asks nothing of
+  its own), and a `follow_up` leaves it going; the update then names the ticket. A dispatch pause
+  stops it as it stops any run. With `conductor.enabled` off, nothing here reads or writes anything.
   """
 
   require Logger
@@ -63,7 +67,7 @@ defmodule SymphonyElixir.Conductor do
   }
 
   alias SymphonyElixir.ClaudeCode.AppServer, as: ClaudeAppServer
-  alias SymphonyElixir.Conductor.{Answer, Blocks, Facts, Steer, Watch}
+  alias SymphonyElixir.Conductor.{Answer, Blocks, Facts, Filing, Steer, Watch}
   alias SymphonyElixir.Config.Runs.Run
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Harnesses.Launcher
@@ -87,6 +91,8 @@ defmodule SymphonyElixir.Conductor do
   @review_kinds ["code_review", "qa"]
   @blocked_qa "after_qa_blocked"
   @routes ["rerun", "rework"]
+  # The junctions whose answer may file a ticket, besides `after_qa_blocked`, which takes every route.
+  @ticket_junctions ["after_qa_fail", "after_rework", "during_run"]
   @max_rework_routes 2
   @max_passes_without_result 3
   @merging "Merging"
@@ -218,7 +224,8 @@ defmodule SymphonyElixir.Conductor do
       moves it there, and the rework run reads the turn's instructions;
     * `:rerun`: the answer routed it to one more QA pass on the same change, which reads the turn's
       instructions;
-    * `:held`: the turn asked the person, which paused the ticket, so Symphony asks nothing more;
+    * `:held`: the turn asked the person, or filed a ticket that blocks this one, which paused the
+      ticket, so Symphony asks nothing more;
     * `:none`: the Conductor is off or lacks the junction, no provider can take the turn, the turn
       failed or timed out, or it routed nothing Symphony takes: the pass goes on as if the
       Conductor were off.
@@ -244,6 +251,7 @@ defmodule SymphonyElixir.Conductor do
   defp blocked_qa_route({:held, _route}), do: :held
   defp blocked_qa_route({:ok, %{to: "rework", finding: finding}}), do: {:rework, finding}
   defp blocked_qa_route({:ok, %{to: "rerun"}}), do: :rerun
+  defp blocked_qa_route({:ok, %{to: "ticket"}}), do: :none
   defp blocked_qa_route({:ok, nil}), do: :none
 
   @doc """
@@ -345,7 +353,7 @@ defmodule SymphonyElixir.Conductor do
     turn = Keyword.get(opts, :turn, &harness_turn(&1, &2, &3, &4, Keyword.get(opts, :agent_module)))
     outcome = timed_turn(plan, issue, run_id, prompt(junction, facts), turn)
     tokens = elem(outcome, 2)
-    {exit, held, route} = record_outcome(outcome, plan, %{issue | state: phase}, run_id, {facts, record})
+    {exit, held, route} = record_outcome(outcome, plan, %{issue | state: phase}, run_id, {facts, record, opts})
     record_run_ended(plan, issue, run_id, %{exit: exit, tokens: tokens, started_at: started_at, phase: phase})
     {held, route}
   end
@@ -374,7 +382,7 @@ defmodule SymphonyElixir.Conductor do
   # one that crashes is a failed turn, never the caller's crash.
   defp timed_turn(plan, issue, run_id, prompt, turn) do
     task = Task.Supervisor.async_nolink(SymphonyElixir.TaskSupervisor, fn -> turn.(plan, issue, run_id, prompt) end)
-    read_opts = [watch: Map.has_key?(plan, :watch), route: plan.junction == @blocked_qa]
+    read_opts = [watch: Map.has_key?(plan, :watch), route: route_read(plan.junction)]
 
     case Task.yield(task, plan.timeout_ms) || Task.shutdown(task, :brutal_kill) do
       {:ok, {:ok, texts, tokens}} -> answer(texts, tokens, read_opts)
@@ -383,6 +391,12 @@ defmodule SymphonyElixir.Conductor do
       nil -> {:error, :timeout, 0}
     end
   end
+
+  # Which routes a junction's answer may hold: every one at `after_qa_blocked`, a ticket route only
+  # where the Conductor may file one, none elsewhere.
+  defp route_read(@blocked_qa), do: true
+  defp route_read(junction) when junction in @ticket_junctions, do: :ticket
+  defp route_read(_junction), do: false
 
   defp answer(texts, tokens, read_opts) do
     case Answer.read(texts, read_opts) do
@@ -394,13 +408,15 @@ defmodule SymphonyElixir.Conductor do
   # What the turn wrote: its instructions (with the route Symphony takes from the answer, when it
   # takes one), its update for the person and its question. A turn that failed writes nothing and
   # only logs why.
-  defp record_outcome({:ok, answer, _tokens}, plan, issue, run_id, {facts, record}) do
-    route = route_taken(answer, plan, issue)
+  defp record_outcome({:ok, answer, _tokens}, plan, issue, run_id, {facts, record, opts}) do
+    {route, filed} = answer |> route_taken(plan, issue) |> ticket_route(plan, issue, run_id, opts)
     if answer.instructions, do: record_event(plan, "conductor.instructions", instructions_payload(plan, answer, route), run_id)
     # The question goes first: the update's `question` block names the decision it opened.
-    held = ask_person(answer.ask_person, plan, issue, run_id)
-    record_update(answer, plan, run_id, {facts, record})
-    steer(plan, answer, held)
+    asked = ask_person(answer.ask_person, plan, issue, run_id)
+    # A ticket that blocks this one holds it as a question does; only a question lets a watch stop the run.
+    held = if holds?(filed), do: :held, else: asked
+    record_update(with_filed(answer, filed, route), plan, run_id, {facts, record})
+    steer(plan, answer, asked)
 
     Logger.info(
       "Conductor turn wrote #{context(issue, plan)} run_id=#{run_id} junction=#{plan.junction} update=#{answer.update != nil} " <>
@@ -424,6 +440,9 @@ defmodule SymphonyElixir.Conductor do
     nil
   end
 
+  # A ticket route's bounds are `Filing`'s, which names why it refuses one.
+  defp route_taken(%{route: %{to: "ticket"} = route}, _plan, _issue), do: route
+
   defp route_taken(%{route: %{to: to} = route}, plan, issue) do
     open = Map.get(plan, :routes, [])
 
@@ -432,6 +451,56 @@ defmodule SymphonyElixir.Conductor do
     else
       Logger.info("Conductor's route #{to} dropped #{context(issue, plan)}: Symphony takes #{if open == [], do: "no route", else: Enum.join(open, " or ")} now")
       nil
+    end
+  end
+
+  # The ticket a ticket route files or links (`Filing`), with the route kept for the instructions; a
+  # route `Filing` refuses is dropped and logged, and the turn's message is kept without it. A ticket
+  # filed whose hold could not be set is still the route's: the update names it, and the ticket goes on.
+  defp ticket_route(%{to: "ticket"} = route, plan, issue, run_id, opts) do
+    events = Facts.events(plan.issue_id)
+    settings = Keyword.get_lazy(opts, :settings, &Config.conductor_settings/0)
+    context = %{issue: issue, repo_key: plan.repo_key, run_id: run_id, events: events}
+
+    case Filing.file(route, context, settings, Keyword.get(opts, :filing, [])) do
+      {:ok, %{unheld: why} = filed} ->
+        Logger.warning("Conductor filed #{filed.identifier} (#{filed.relation}) #{context(issue, plan)} run_id=#{run_id} but could not hold the ticket on it: #{why}")
+        {route, filed}
+
+      {:ok, filed} ->
+        Logger.info("Conductor filed #{filed.identifier} (#{filed.relation}) #{context(issue, plan)} run_id=#{run_id}")
+        {route, filed}
+
+      {:error, why} ->
+        Logger.info("Conductor's ticket route refused #{context(issue, plan)} run_id=#{run_id}: #{why}")
+        {nil, nil}
+    end
+  end
+
+  defp ticket_route(route, _plan, _issue, _run_id, _opts), do: {route, nil}
+
+  # A filed ticket that blocks this one holds it, unless its hold could not be set.
+  defp holds?(%{relation: "blocks"} = filed), do: not Map.has_key?(filed, :unheld)
+  defp holds?(_filed), do: false
+
+  # The update names the ticket the route filed, before its `Next:` paragraph, and is written even
+  # when the answer had none.
+  defp with_filed(answer, nil, _route), do: answer
+
+  defp with_filed(answer, filed, route) do
+    line = Filing.message(filed, route.problem)
+    %{answer | update: Facts.fit(update_with(answer.update, line), Answer.update_max())}
+  end
+
+  defp update_with(nil, line), do: line
+
+  defp update_with(text, line) do
+    room = Answer.update_max() - String.length(line) - 2
+    paragraphs = text |> Facts.fit(room) |> String.split(~r/\n\s*\n/)
+
+    case List.last(paragraphs) do
+      "Next:" <> _rest = next -> Enum.join(Enum.drop(paragraphs, -1) ++ [line, next], "\n\n")
+      _other -> Enum.join(paragraphs ++ [line], "\n\n")
     end
   end
 

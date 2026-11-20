@@ -53,13 +53,18 @@ public enum ConductorJunction: String, CaseIterable, Identifiable {
 }
 
 /// The Conductor's settings in the text of a `symphony.yml`: `conductor.enabled`, whether Symphony runs the Conductor
-/// at all; `conductor.junctions`, the moments it runs at; and `conductor.timeout_ms`, how long one turn may take before
-/// the next run starts without it. Only the lines of the settings that change are rewritten, or inserted with
+/// at all; `conductor.junctions`, the moments it runs at; `conductor.timeout_ms`, how long one turn may take before
+/// the next run starts without it; `conductor.file_tickets`, whether it may file a linked ticket for a problem that is
+/// not the current ticket's to solve; and `conductor.max_filed_tickets`, how many one ticket may file. Only the lines of the settings that change are rewritten, or inserted with
 /// `conductor:` when missing, so the rest of the file stays as it is.
 public struct ConductorSettings: Equatable {
     public var enabled: Bool
     public var junctions: Set<ConductorJunction>
     public var timeoutMs: Int
+    /// `conductor.file_tickets`: whether the Conductor may file a linked ticket.
+    public var fileTickets: Bool
+    /// `conductor.max_filed_tickets`: how many tickets one ticket may file over its whole life.
+    public var maxFiledTickets: Int
     /// `conductor.watch`: whether it watches running runs and may steer them, and its limits.
     public var watch: ConductorWatchSettings
 
@@ -67,6 +72,8 @@ public struct ConductorSettings: Equatable {
     public static let defaultEnabled = false
     public static let defaultJunctions = Set(ConductorJunction.allCases)
     public static let defaultTimeoutMs = 180_000
+    public static let defaultFileTickets = true
+    public static let defaultMaxFiledTickets = 2
 
     /// Milliseconds in one second, the unit Settings shows the time limit in.
     public static let msPerSecond = 1_000
@@ -74,14 +81,19 @@ public struct ConductorSettings: Equatable {
     static let enabledPath = ["conductor", "enabled"]
     static let junctionsPath = ["conductor", "junctions"]
     static let timeoutPath = ["conductor", "timeout_ms"]
+    static let fileTicketsPath = ["conductor", "file_tickets"]
+    static let maxFiledTicketsPath = ["conductor", "max_filed_tickets"]
 
     public init(
         enabled: Bool = defaultEnabled, junctions: Set<ConductorJunction> = defaultJunctions, timeoutMs: Int = defaultTimeoutMs,
+        fileTickets: Bool = defaultFileTickets, maxFiledTickets: Int = defaultMaxFiledTickets,
         watch: ConductorWatchSettings = ConductorWatchSettings()
     ) {
         self.enabled = enabled
         self.junctions = junctions
         self.timeoutMs = timeoutMs
+        self.fileTickets = fileTickets
+        self.maxFiledTickets = maxFiledTickets
         self.watch = watch
     }
 
@@ -113,6 +125,8 @@ public struct ConductorSettings: Equatable {
             enabled: try onOff(enabledPath, default: defaultEnabled, in: yaml),
             junctions: try junctions(in: yaml),
             timeoutMs: try number(timeoutPath, default: defaultTimeoutMs, in: yaml),
+            fileTickets: try onOff(fileTicketsPath, default: defaultFileTickets, in: yaml),
+            maxFiledTickets: try number(maxFiledTicketsPath, default: defaultMaxFiledTickets, in: yaml),
             watch: ConductorWatchSettings(
                 enabled: try onOff(ConductorWatchSettings.path("enabled"), default: false, in: yaml),
                 runMinutes: try number(ConductorWatchSettings.path("run_minutes"), default: ConductorWatchSettings.defaultRunMinutes, in: yaml),
@@ -137,6 +151,8 @@ public struct ConductorSettings: Equatable {
             (ConductorWatchSettings.path("run_tokens"), w.runTokens != o.runTokens, String(w.runTokens)),
             (ConductorWatchSettings.path("run_minutes"), w.runMinutes != o.runMinutes, String(w.runMinutes)),
             (ConductorWatchSettings.path("enabled"), w.enabled != o.enabled, w.enabled ? "true" : "false"),
+            (maxFiledTicketsPath, new.maxFiledTickets != old.maxFiledTickets, String(new.maxFiledTickets)),
+            (fileTicketsPath, new.fileTickets != old.fileTickets, new.fileTickets ? "true" : "false"),
             (timeoutPath, new.timeoutMs != old.timeoutMs, String(new.timeoutMs)),
             (junctionsPath, new.junctions != old.junctions, inline(new.junctions)),
             (enabledPath, new.enabled != old.enabled, new.enabled ? "true" : "false"),

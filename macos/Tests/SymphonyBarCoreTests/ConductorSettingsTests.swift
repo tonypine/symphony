@@ -187,4 +187,31 @@ final class ConductorSettingsTests: XCTestCase {
         XCTAssertThrowsError(try ConductorSettings.values(in: "conductor:\n  watch:\n    run_minutes: soon\n"))
         XCTAssertThrowsError(try ConductorSettings.values(in: "conductor:\n  watch:\n    allow_stop: maybe\n"))
     }
+
+    // MARK: Filing linked tickets
+
+    func testFilesTicketsTwoPerTicketWhenMissing() throws {
+        let read = try ConductorSettings.values(in: "")
+        XCTAssertTrue(read.fileTickets)
+        XCTAssertEqual(read.maxFiledTickets, 2)
+        XCTAssertTrue(SettingsUIManifest.keyPaths.contains("conductor.file_tickets"))
+        XCTAssertTrue(SettingsUIManifest.keyPaths.contains("conductor.max_filed_tickets"))
+    }
+
+    func testReadsAndWritesTheFilingSettings() throws {
+        let yaml = "conductor:\n  enabled: true\n  file_tickets: false\n  max_filed_tickets: 1\n"
+        let read = try ConductorSettings.values(in: yaml)
+        XCTAssertEqual(read.fileTickets, false)
+        XCTAssertEqual(read.maxFiledTickets, 1)
+
+        var changed = read
+        changed.fileTickets = true
+        changed.maxFiledTickets = 3
+        let written = try ConductorSettings.updating(yaml, from: read, to: changed)
+        XCTAssertEqual(changedLines(yaml, written), ["  file_tickets: true", "  max_filed_tickets: 3"])
+        XCTAssertEqual(try ConductorSettings.values(in: written), changed)
+
+        XCTAssertThrowsError(try ConductorSettings.values(in: "conductor:\n  file_tickets: sometimes\n"))
+        XCTAssertThrowsError(try ConductorSettings.values(in: "conductor:\n  max_filed_tickets: two\n"))
+    }
 }
