@@ -2133,11 +2133,12 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   # The head a ticket enters Code Review with is built for QA at once (`SymphonyElixir.QaBuild`), so
-  # the build runs beside the review. A run whose head could not be read asks for none: the PR
+  # the build runs beside the review, when its QA pass selects the app: the builder reads that from
+  # the head with the ticket's issue. A run whose head could not be read asks for none: the PR
   # watcher asks when it records the head.
   defp request_qa_build(%Issue{id: issue_id, identifier: identifier} = issue, %{progress: %{head: head}} = run_context)
        when is_binary(head) and is_binary(identifier) do
-    ticket = %{identifier: identifier, issue_id: issue_id, new_head: true}
+    ticket = %{identifier: identifier, issue_id: issue_id, new_head: true, issue: issue}
 
     case run_repo_key(issue, run_context.opts) do
       repo_key when is_binary(repo_key) -> QaBuild.request(repo_key, head, ticket)
