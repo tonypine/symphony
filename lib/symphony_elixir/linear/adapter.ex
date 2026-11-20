@@ -510,8 +510,9 @@ defmodule SymphonyElixir.Linear.Adapter do
 
   @doc """
   Creates an issue from `attrs` — `title`, `description`, `priority`, `team` (a key or an id),
-  `state` (a state name, `Todo` by default), an optional `project` (a name, slug id or id) and an
-  optional `assignee_id` (a Linear user id) — and returns its `%{id:, identifier:, url:}`. The
+  `state` (a state name, `Todo` by default), an optional `project` (a name, slug id or id), an
+  optional `assignee_id` (a Linear user id) and an optional `parent_id` (the id of the issue it is
+  a sub-issue of) — and returns its `%{id:, identifier:, url:}`. The
   team's state and project are resolved from the team, so a machine that files work (the self-heal
   lane's fix tickets) does not need an issue to read them from. Only a Linear tracker files issues.
   """
@@ -525,7 +526,8 @@ defmodule SymphonyElixir.Linear.Adapter do
          input =
            team_id
            |> create_issue_input(state_id, project_id, title, description, priority)
-           |> maybe_put("assigneeId", attrs |> Map.get(:assignee_id) |> blank_nil()),
+           |> maybe_put("assigneeId", attrs |> Map.get(:assignee_id) |> blank_nil())
+           |> maybe_put("parentId", attrs |> Map.get(:parent_id) |> blank_nil()),
          {:ok, response} <- client_module().graphql(@create_issue_mutation, %{input: input}),
          true <- get_in(response, ["data", "issueCreate", "success"]) == true,
          %{"id" => id, "identifier" => identifier} <- get_in(response, ["data", "issueCreate", "issue"]) do

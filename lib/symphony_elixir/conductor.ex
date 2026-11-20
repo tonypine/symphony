@@ -9,6 +9,7 @@ defmodule SymphonyElixir.Conductor do
 
     * `grooming`: a ticket's first run is about to start and the ticket has no plan; the turn
       writes it (`SymphonyElixir.Conductor.Grooming`, below);
+    * `sub_ticket_ended` and `final_check`: a sub-ticket of a groomed ticket ended (below);
     * `after_coding`: an implementation run handed off, before Code Review or QA;
     * `after_qa_fail`: QA's verdict was fail, before rework;
     * `after_qa_blocked`: a QA pass could not judge the change (`blocked` or `inconclusive`, on the
@@ -45,7 +46,8 @@ defmodule SymphonyElixir.Conductor do
   `after_rework` and `during_run` its route may file a ticket for a problem that is not this
   ticket's to solve (`SymphonyElixir.Conductor.Filing`): one that `blocks` holds the ticket on it, as
   a question does (the run the turn came before does not start, and the QA pass asks nothing of
-  its own), and a `follow_up` leaves it going; the update then names the ticket. A dispatch pause
+  its own), and a `follow_up` leaves it going; the update then names the ticket. On a groomed
+  ticket the ticket filed is a sub-ticket of it, pointing `before` (it holds the ticket) or `after`. A dispatch pause
   stops it as it stops any run. With `conductor.enabled` off, nothing here reads or writes anything.
 
   Grooming is the one turn that differs. It runs before a ticket's first run, in the ticket's
@@ -56,9 +58,17 @@ defmodule SymphonyElixir.Conductor do
   counted, and the run does not start (`run/3` answers `:again`): the ticket is groomed again at its
   next dispatch, which follows at once, and after
   2 failed tries (`Grooming.max_tries/0`) it starts without a plan, with a note that says why. A turn
-  no provider can take now is such a try, so a ticket never waits on Grooming. The other
-  junctions the settings name (`message`, `sub_ticket_ended`, `final_check`, `child_message`) plan
-  no turn yet.
+  no provider can take now is such a try, so a ticket never waits on Grooming. A plan of shape
+  `split` is carried out instead of a first run (`SymphonyElixir.Conductor.Tree`): the ticket's
+  sub-tickets are created and it waits on them.
+
+  Two junctions belong to a groomed ticket that waits on its sub-tickets, and are met outside any
+  dispatch (`tend/4`, which the orchestrator starts on a poll): `sub_ticket_ended`, each time one of
+  them ends while others are open, whose answer may change the tree, and `final_check`, once the
+  last one ended, whose answer closes the ticket or adds what is missing. Both read the tree's facts
+  on a prompt of their own (`priv/conductor/tree_prompt.md`) and answer `done` and `tree`
+  operations, which Symphony carries out and records (`Tree.apply/3`). The junctions `message` and
+  `child_message` plan no turn yet.
   """
 
   require Logger
@@ -82,7 +92,7 @@ defmodule SymphonyElixir.Conductor do
   }
 
   alias SymphonyElixir.ClaudeCode.AppServer, as: ClaudeAppServer
-  alias SymphonyElixir.Conductor.{Answer, Blocks, Facts, Filing, Grooming, Steer, Watch}
+  alias SymphonyElixir.Conductor.{Answer, Blocks, Facts, Filing, Grooming, Steer, Tree, Watch}
   alias SymphonyElixir.Config.Runs.Run
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Harnesses.Launcher
@@ -98,7 +108,12 @@ defmodule SymphonyElixir.Conductor do
   @grooming_prompt_path Path.expand(Path.join([__DIR__, "..", "..", "priv", "conductor", "grooming_prompt.md"]))
   @external_resource @grooming_prompt_path
   @grooming_prompt File.read!(@grooming_prompt_path)
+  @tree_prompt_path Path.expand(Path.join([__DIR__, "..", "..", "priv", "conductor", "tree_prompt.md"]))
+  @external_resource @tree_prompt_path
+  @tree_prompt File.read!(@tree_prompt_path)
   @grooming "grooming"
+  @final_check "final_check"
+  @tree_junctions ["sub_ticket_ended", "final_check"]
   @junction_words %{
     "grooming" => "the ticket is new; you write its plan before any work starts",
     "message" => "a person sent a message on the ticket; you answer it",
@@ -173,7 +188,7 @@ defmodule SymphonyElixir.Conductor do
   """
   @spec dispatch_junction(atom() | String.t(), [Event.t()]) :: String.t() | nil
   def dispatch_junction(next_kind, events) when is_list(events) do
-    if Grooming.due?(next_kind, events), do: @grooming, else: junction_after_run(next_kind, events)
+    if Grooming.due?(next_kind, events) or Grooming.split_due?(next_kind, events), do: @grooming, else: junction_after_run(next_kind, events)
   end
 
   defp junction_after_run(next_kind, events) do
@@ -360,6 +375,34 @@ defmodule SymphonyElixir.Conductor do
   end
 
   @doc """
+  The turn a groomed ticket with sub-tickets is owed outside any dispatch (`Tree.due/3`), run now:
+  `sub_ticket_ended` when one of them ended and others are open, `final_check` once the last one
+  ended. Nothing runs while the Conductor or the junction is
+  off, or no provider of `runs.conductor` can take a run now: the next poll asks again. The turn's
+  answer is carried out as it is recorded (`Tree.apply/3`), and a final check that changed nothing
+  is counted (`Tree.checked/3`). Always `:ok`. `opts`: `plan/4`'s and `run/3`'s.
+  """
+  @spec tend(Issue.t(), String.t(), String.t() | nil, keyword()) :: :ok
+  def tend(%Issue{id: issue_id} = issue, junction, repo_key, opts \\ []) when junction in @tree_junctions do
+    case plan_with(issue_id, repo_key, opts, fn _events -> junction end) do
+      nil -> :ok
+      plan -> tend_turn(plan, issue, opts)
+    end
+  rescue
+    error ->
+      Logger.warning("Conductor turn failed issue_id=#{issue_id} issue_identifier=#{issue.identifier} repo_key=#{repo_key} junction=#{junction}: #{Exception.message(error)}")
+      :ok
+  end
+
+  defp tend_turn(%{junction: junction} = plan, issue, opts) do
+    made = Tree.rounds(Facts.events(plan.issue_id))
+    if junction != @final_check, do: Tree.seen(plan.repo_key, issue, Config.settings_for_repo!(plan.repo_key).tracker.terminal_states)
+    {exit, held, _route} = turn(plan, issue, opts)
+    left = %{held: held, rounds: made, exit: exit}
+    if junction == @final_check, do: Tree.checked(plan.repo_key, issue, left), else: :ok
+  end
+
+  @doc """
   Runs the planned turn on `issue` and records what it wrote. Answers `:held` when the turn asked the
   person a question, which pauses the ticket, so the run that would follow does not start; `:again`
   when a Grooming turn left the ticket to its next dispatch, which starts at once (a try that
@@ -394,11 +437,39 @@ defmodule SymphonyElixir.Conductor do
   # it left decides what the dispatched run does. A question holds it. A plan lets it start (or, on
   # a ticket taken out of the old plan flow, leaves the start to the next dispatch). Anything else
   # is a try that failed.
-  defp groom(%{unavailable: provider} = plan, issue, _opts) do
+  # A ticket whose plan is already a split gets no turn: the split is carried out (again), which
+  # creates what is missing and leaves the ticket waiting on its sub-tickets.
+  defp groom(%{issue_id: issue_id} = plan, issue, opts) do
+    if split?(issue_id), do: split(plan, issue, opts), else: groom_turn(plan, issue, opts)
+  end
+
+  defp split?(issue_id), do: match?(%{shape: "split"}, TicketPlan.current(issue_id))
+
+  # The ticket waits on its sub-tickets once the split is done, so its run does not start. A split
+  # that failed is tried again at the next dispatch, and after a few failures the person is asked.
+  defp split(plan, issue, opts) do
+    case Grooming.split(plan.repo_key, issue, Keyword.take(opts, [:tracker, :repo, :routed_teams, :observe])) do
+      :ok -> :again
+      {:error, why} -> split_failed(plan, issue, why)
+    end
+  end
+
+  defp split_failed(plan, issue, why) do
+    Logger.warning("Grooming could not split the ticket #{context(issue, plan)}: #{why}")
+
+    with :ask <- Tree.failed(plan.repo_key, plan.issue_id, why),
+         :held <- ask_person(Tree.question(why), plan, issue, "conductor-split-" <> Event.ulid(DateTime.utc_now())) do
+      :held
+    else
+      _retry -> :again
+    end
+  end
+
+  defp groom_turn(%{unavailable: provider} = plan, issue, _opts) do
     ungroomed(plan, issue, "no provider of runs.conductor can take a run now (#{provider})")
   end
 
-  defp groom(%{issue_id: issue_id, repo_key: repo_key} = plan, issue, opts) do
+  defp groom_turn(%{issue_id: issue_id, repo_key: repo_key} = plan, issue, opts) do
     Grooming.record_ask(repo_key, issue, record(issue_id, opts), Facts.events(issue_id))
 
     case turn(in_workspace(plan, issue, opts), issue, opts) do
@@ -421,9 +492,12 @@ defmodule SymphonyElixir.Conductor do
   defp after_grooming(false = _groomed?, exit, plan, issue, _opts), do: ungroomed(plan, issue, why_ungroomed(exit))
 
   defp after_grooming(true, _exit, plan, issue, opts) do
-    case Grooming.take_over(plan.repo_key, issue, Keyword.take(opts, [:tracker])) do
-      :taken_over -> :again
-      :unchanged -> :ok
+    taken = Grooming.take_over(plan.repo_key, issue, Keyword.take(opts, [:tracker]))
+
+    cond do
+      split?(plan.issue_id) -> split(plan, issue, opts)
+      taken == :taken_over -> :again
+      true -> :ok
     end
   end
 
@@ -463,7 +537,7 @@ defmodule SymphonyElixir.Conductor do
     Logger.info("Conductor turn started #{context(issue, plan)} run_id=#{run_id} junction=#{junction} model=#{plan.run_profile.model}")
 
     turn = Keyword.get(opts, :turn, &harness_turn(&1, &2, &3, &4, Keyword.get(opts, :agent_module)))
-    outcome = plan |> timed_turn(issue, run_id, prompt(junction, facts), turn) |> with_plan(plan, issue, run_id)
+    outcome = plan |> timed_turn(issue, run_id, prompt(junction, facts), turn) |> with_plan(plan, issue, run_id, opts)
     tokens = elem(outcome, 2)
     {exit, held, route} = record_outcome(outcome, plan, %{issue | state: phase}, run_id, {facts, record, opts})
     record_run_ended(plan, issue, run_id, %{exit: exit, tokens: tokens, started_at: started_at, phase: phase})
@@ -472,14 +546,14 @@ defmodule SymphonyElixir.Conductor do
 
   # The plan a Grooming turn answered, recorded before anything else of the answer: a plan Symphony
   # refuses makes the whole answer unreadable, so nothing of it is recorded.
-  defp with_plan({:ok, %{plan: %{} = answered}, tokens} = outcome, plan, issue, run_id) do
-    case Grooming.write_plan(plan.repo_key, issue, answered, run_id: run_id, idempotency: "plan.written:#{run_id}") do
+  defp with_plan({:ok, %{plan: %{} = answered}, tokens} = outcome, plan, issue, run_id, opts) do
+    case Grooming.write_plan(plan.repo_key, issue, answered, [run_id: run_id, idempotency: "plan.written:#{run_id}"] ++ Keyword.take(opts, [:repo])) do
       {:ok, _event} -> outcome
       {:error, why} -> {:error, {:plan_refused, why}, tokens}
     end
   end
 
-  defp with_plan(outcome, _plan, _issue, _run_id), do: outcome
+  defp with_plan(outcome, _plan, _issue, _run_id, _opts), do: outcome
 
   # Whether the Grooming turn can read the code: it runs in the ticket's workspace when one exists.
   defp with_code(facts, %{junction: @grooming} = plan) do
@@ -517,6 +591,7 @@ defmodule SymphonyElixir.Conductor do
 
   defp prompt_text("during_run"), do: @watch_prompt
   defp prompt_text(@grooming), do: @grooming_prompt
+  defp prompt_text(junction) when junction in @tree_junctions, do: @tree_prompt
   defp prompt_text(_junction), do: @prompt
 
   # The turn runs in a task of its own, bounded by `timeout_ms`: one that runs over is stopped, and
@@ -524,6 +599,7 @@ defmodule SymphonyElixir.Conductor do
   defp timed_turn(plan, issue, run_id, prompt, turn) do
     task = Task.Supervisor.async_nolink(SymphonyElixir.TaskSupervisor, fn -> turn.(plan, issue, run_id, prompt) end)
     read_opts = [watch: Map.has_key?(plan, :watch), route: route_read(plan.junction), plan: plan.junction == @grooming]
+    read_opts = Keyword.put(read_opts, :tree, plan.junction in @tree_junctions)
 
     case Task.yield(task, plan.timeout_ms) || Task.shutdown(task, :brutal_kill) do
       {:ok, {:ok, texts, tokens}} -> answer(texts, tokens, read_opts)
@@ -555,7 +631,7 @@ defmodule SymphonyElixir.Conductor do
     # The question goes first: the update's `question` block names the decision it opened.
     asked = ask_person(answer.ask_person, plan, issue, run_id)
     # A ticket that blocks this one holds it as a question does; only a question lets a watch stop the run.
-    held = if holds?(filed), do: :held, else: asked
+    held = if holds?(filed), do: :held, else: tend_tree(answer, plan, issue, run_id, asked, opts)
     record_update(with_filed(answer, filed, route), plan, run_id, {facts, record})
     steer(plan, answer, asked)
 
@@ -571,6 +647,21 @@ defmodule SymphonyElixir.Conductor do
     Logger.warning("Conductor turn wrote nothing #{context(issue, plan)} run_id=#{run_id} junction=#{plan.junction}: #{inspect(reason)}; the next run starts without it")
     {exit_text(reason), :ok, nil}
   end
+
+  # What a turn on a ticket with sub-tickets answered about its tree (`Tree.apply/3`), unless it
+  # asked the person, who then decides first. A round Symphony refuses becomes its own question.
+  defp tend_tree(answer, %{junction: junction} = plan, issue, run_id, :ok, opts) when junction in @tree_junctions do
+    settings = Keyword.get_lazy(opts, :settings, &Config.conductor_settings/0)
+    ctx = %{issue: issue, repo_key: plan.repo_key, run_id: run_id, junction: junction, conductor: settings}
+
+    with {:ask, request} <- Tree.apply(answer, ctx, Keyword.take(opts, [:tracker, :repo, :routed_teams, :observe, :cancel, :stop])),
+         :held <- ask_person(request, plan, issue, run_id) do
+      Tree.asked(plan.repo_key, plan.issue_id)
+      :held
+    end
+  end
+
+  defp tend_tree(_answer, _plan, _issue, _run_id, asked, _opts), do: asked
 
   # The answer's route when Symphony takes it now: one of the plan's open routes, and never beside a
   # question, which leaves the choice to the person. A route past its bound is dropped and logged.
@@ -621,7 +712,7 @@ defmodule SymphonyElixir.Conductor do
   defp ticket_route(route, _plan, _issue, _run_id, _opts), do: {route, nil}
 
   # A filed ticket that blocks this one holds it, unless its hold could not be set.
-  defp holds?(%{relation: "blocks"} = filed), do: not Map.has_key?(filed, :unheld)
+  defp holds?(%{relation: relation} = filed) when relation in ["blocks", "before"], do: not Map.has_key?(filed, :unheld)
   defp holds?(_filed), do: false
 
   # The update names the ticket the route filed, before its `Next:` paragraph, and is written even
@@ -837,6 +928,8 @@ defmodule SymphonyElixir.Conductor do
 
   defp option_move(%{action: action}, _settings, _state, _head, _run_id) when action in ["continue", "rerun"], do: {:ok, nil}
   defp option_move(%{action: "cancel"}, _settings, _state, _head, _run_id), do: {:ok, %{to: @canceled}}
+  # Symphony's own option, when the final check may add no more: the ticket closes as it is.
+  defp option_move(%{action: "close"}, _settings, _state, _head, _run_id), do: {:ok, %{to: "Done"}}
 
   defp option_move(%{action: "rework", finding: finding}, _settings, state, _head, run_id) do
     if state == @rework,

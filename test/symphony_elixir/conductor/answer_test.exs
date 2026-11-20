@@ -1,6 +1,8 @@
 defmodule SymphonyElixir.Conductor.AnswerTest do
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
+
   alias SymphonyElixir.Conductor.Answer
 
   @question %{
@@ -324,14 +326,16 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
     test "a split names its sub-tickets, each with a key; a single plan keeps none" do
       subs = [
         %{"title" => "The API returns the filter", "ask" => "Add the filter to the list endpoint.", "repo" => "web"},
-        %{"key" => "screen", "title" => "The list keeps it", "ask" => "Read the filter.", "after" => ["s1", " ", 3, "s1"]}
+        %{"key" => "screen", "title" => "The list keeps it", "ask" => "Read the filter.", "after" => ["s1", " ", 3, "s1"]},
+        %{"title" => "The docs", "ask" => "Describe it.", "identifier" => " TP-12 "}
       ]
 
       assert {:ok, %{plan: %{shape: "split", sub_tickets: sub_tickets}}} = plan(%{"shape" => "split", "sub_tickets" => subs})
 
       assert sub_tickets == [
                %{key: "s1", title: "The API returns the filter", ask: "Add the filter to the list endpoint.", after: [], repo: "web"},
-               %{key: "screen", title: "The list keeps it", ask: "Read the filter.", after: ["s1"]}
+               %{key: "screen", title: "The list keeps it", ask: "Read the filter.", after: ["s1"]},
+               %{key: "s3", title: "The docs", ask: "Describe it.", after: [], identifier: "TP-12"}
              ]
 
       assert {:ok, %{plan: plan}} = plan(%{"sub_tickets" => subs})
@@ -386,6 +390,60 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
 
       assert grooming(%{"plan" => "single"}) == {:error, "`plan` must be an object"}
       assert Answer.layers() == ~w(screen gallery api engine config tooling docs)
+    end
+  end
+
+  describe "a turn's answer on a ticket with sub-tickets" do
+    defp tree(attrs), do: Answer.parse(Jason.encode!(attrs), tree: true)
+
+    test "holds done and the operations, each with its reason; the instructions may be null" do
+      operations = [
+        %{"op" => "add", "title" => "The docs", "ask" => "Write them.", "after" => ["TP-2", " ", 3, "TP-2"], "repo" => "web", "reason" => "Nobody holds them."},
+        %{"op" => "cancel", "ticket" => " TP-3 ", "reason" => "The API covers it."},
+        %{"op" => "rewrite", "ticket" => "TP-4", "ask" => "Read the new field.", "stop" => true, "reason" => "The field was renamed."},
+        %{"op" => "rewrite", "ticket" => "TP-5", "ask" => "Read it.", "reason" => "Same."},
+        %{"op" => "stop", "ticket" => "TP-6", "reason" => "It builds on TP-3."}
+      ]
+
+      assert {:ok, %{instructions: nil, done: true, tree: tree}} = tree(%{"done" => true, "tree" => operations})
+
+      assert tree == [
+               %{op: "add", title: "The docs", ask: "Write them.", after: ["TP-2"], repo: "web", reason: "Nobody holds them."},
+               %{op: "cancel", ticket: "TP-3", reason: "The API covers it."},
+               %{op: "rewrite", ticket: "TP-4", ask: "Read the new field.", stop: true, reason: "The field was renamed."},
+               %{op: "rewrite", ticket: "TP-5", ask: "Read it.", stop: false, reason: "Same."},
+               %{op: "stop", ticket: "TP-6", reason: "It builds on TP-3."}
+             ]
+
+      assert {:ok, %{done: false, tree: []}} = tree(%{"done" => "yes", "tree" => "none"})
+      assert {:ok, %{done: false, tree: []}} = tree(%{})
+    end
+
+    test "an operation that misses its shape or its reason is dropped and logged, and at most ten are kept" do
+      malformed = [
+        "cancel TP-3",
+        %{"op" => "merge", "ticket" => "TP-3", "reason" => "Why not."},
+        %{"op" => "cancel", "ticket" => "TP-3"},
+        %{"op" => "cancel", "reason" => "No ticket."},
+        %{"op" => "add", "title" => "The docs", "reason" => "No ask."},
+        %{"op" => "add", "ask" => "Write them.", "reason" => "No title."},
+        %{"op" => "rewrite", "ticket" => "TP-4", "reason" => "No ask."},
+        %{"op" => "rewrite", "ask" => "Read it.", "reason" => "No ticket."},
+        %{"op" => "stop", "ticket" => "TP-6", "reason" => "It is kept."}
+      ]
+
+      log = capture_log(fn -> assert {:ok, %{tree: [%{op: "stop", ticket: "TP-6"}]}} = tree(%{"tree" => malformed}) end)
+      assert log =~ "`tree[1]` was dropped"
+      assert log =~ "`tree[8]` was dropped"
+      refute log =~ "`tree[9]`"
+
+      many = for n <- 1..12, do: %{"op" => "stop", "ticket" => "TP-#{n}", "reason" => "Stop."}
+      assert {:ok, %{tree: kept}} = tree(%{"tree" => many})
+      assert length(kept) == 10
+    end
+
+    test "any other turn's answer holds neither" do
+      assert {:ok, %{done: false, tree: []}} = Answer.parse(Jason.encode!(%{"instructions" => "Go on.", "done" => true, "tree" => [%{"op" => "stop"}]}))
     end
   end
 end

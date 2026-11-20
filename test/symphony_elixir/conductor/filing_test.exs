@@ -3,7 +3,7 @@ defmodule SymphonyElixir.Conductor.FilingTest do
 
   alias SymphonyElixir.Conductor.{Facts, Filing}
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.{TicketEvents, TicketState}
+  alias SymphonyElixir.{TicketEvents, TicketPlan, TicketState}
 
   @settings %Schema.Conductor{enabled: true}
 
@@ -27,6 +27,16 @@ defmodule SymphonyElixir.Conductor.FilingTest do
 
   defmodule Tracker do
     def fetch_issue_by_identifier(identifier), do: Process.get({:ticket, identifier}, {:error, :not_found})
+
+    def add_blocked_by(blocker, blocked_id) do
+      Process.put(:linked, {blocker, blocked_id})
+      Process.get(:link_result, :ok)
+    end
+
+    def fetch_issue_states_by_ids(ids) do
+      Process.put(:read, ids)
+      Process.get(:read_result, {:ok, []})
+    end
   end
 
   setup do
@@ -285,5 +295,103 @@ defmodule SymphonyElixir.Conductor.FilingTest do
   test "with no options, the filing reads Symphony's own config and tracker", ctx do
     context = %{issue: ctx.issue, repo_key: "default", run_id: "conductor-defaults", events: Facts.events(ctx.issue_id)}
     assert {:error, _why} = Filing.file(route(%{repo: "no-such-repo"}), context, @settings)
+  end
+
+  describe "on a groomed ticket" do
+    setup ctx do
+      checks = [%{id: "c1", kind: "outcome", statement: "Cycle is translated.", proof: "test"}]
+      plan = %{reason: "Grooming", by: "grooming", shape: "single", layers: ["engine"], summary: "s", text: "t"}
+      {:ok, _event} = TicketPlan.write("default", ctx.issue_id, Map.merge(plan, %{checks: checks, size: %{tokens: 1, runs: 1}}))
+      :ok
+    end
+
+    test "a ticket to do first is filed as a sub-ticket, with its ask, on the records at once, and holds the ticket", ctx do
+      test = self()
+      child = %Issue{id: "new-id", identifier: "TP-2000"}
+      Process.put(:read_result, {:ok, [%{ctx.issue | sub_issues: [%{id: "new-id", identifier: "TP-2000", state: "Todo"}]}, child]})
+      observe = fn repo_key, issue -> send(test, {:observed, repo_key, issue.id}) end
+
+      assert {:ok, filed} = file(ctx, route(%{relation: "before"}), @settings, observe: observe)
+      assert %{identifier: "TP-2000", relation: "before", existing: false} = filed
+
+      {attrs, _opts} = Process.get(:created)
+      assert attrs.parent_id == ctx.issue_id
+      assert attrs.description =~ "The Conductor filed this sub-ticket of #{ctx.identifier}, which waits for it to be Done and then continues."
+      assert Process.get(:blocked) == {ctx.issue_id, "TP-2000"}
+      assert [%{kind: :ticket, waits_on: %{identifier: "TP-2000"}}] = pause_reasons(ctx.issue_id)
+      refute Process.get(:linked)
+
+      from = ctx.identifier
+      assert [%{source: "parent", from: ^from, text: "## Problem" <> _rest}] = TicketPlan.ask("new-id")
+      assert Process.get(:read) == [ctx.issue_id, "new-id"]
+      assert_received {:observed, "default", parent_id}
+      assert parent_id == ctx.issue_id
+      assert_received {:observed, "default", "new-id"}
+      assert [%{payload: %{kind: "split_off", identifier: "TP-2000"}}] = events(ctx.issue_id, "ticket.filed")
+      assert [%{payload: %{from: ^from}}] = events("new-id", "ticket.filed_from")
+
+      assert Filing.message(filed, nil) ==
+               "I filed `TP-2000` as a sub-ticket to do first: #{route().title}. This ticket waits for it to be Done, then continues where it stopped."
+
+      assert Filing.message(Map.put(filed, :unheld, ":boom"), nil) =~ "This ticket could not be held on it (:boom), so it goes on for now."
+
+      facts = Filing.facts(Facts.events(ctx.issue_id), @settings, repos: ["default"])
+      assert facts.relations == ["before", "after"]
+      assert [%{identifier: "TP-2000", relation: "before"}] = facts.filed
+    end
+
+    test "a ticket to do after is a sub-ticket that waits on this ticket's merge, and holds nothing", ctx do
+      assert {:ok, %{relation: "after"} = filed} = file(ctx, route(%{relation: "after"}))
+
+      {attrs, _opts} = Process.get(:created)
+      assert attrs.parent_id == ctx.issue_id
+      assert attrs.description =~ "to do after it: it starts once #{ctx.identifier}'s pull request has merged."
+      assert Process.get(:linked) == {ctx.identifier, "new-id"}
+      assert pause_reasons(ctx.issue_id) == []
+      assert [%{payload: %{kind: "follow_up"}}] = events(ctx.issue_id, "ticket.filed")
+
+      assert Filing.message(filed, "It builds on this change.") ==
+               "I filed `TP-2000` as a sub-ticket to do after: #{route().title}. It builds on this change. " <>
+                 "This ticket goes on, and the sub-ticket starts once this ticket's pull request has merged."
+    end
+
+    test "blocks and follow_up read as before and after, and any other relation is refused", ctx do
+      assert {:error, "the ticket route's relation must be before or after"} = file(ctx, route(%{relation: "sideways"}))
+      assert {:ok, %{relation: "after"}} = file(ctx, route(%{relation: "follow_up"}))
+      assert {:ok, %{relation: "before"}} = file(ctx, route(%{relation: "blocks", title: "Another problem"}))
+    end
+
+    test "what can't be done around the sub-ticket is logged, and the sub-ticket stays filed", ctx do
+      Process.put(:link_result, {:error, :refused})
+      Process.put(:read_result, {:error, :timeout})
+
+      log = capture_log(fn -> assert {:ok, %{identifier: "TP-2000"}} = file(ctx, route(%{relation: "after"})) end)
+
+      assert log =~ "could not link it as blocked by #{ctx.identifier}: :refused"
+      assert log =~ "could not put it on Symphony's records"
+
+      # One whose hold could not be set is still a sub-ticket with its ask.
+      hold = fn _repo_key, _issue, _identifier -> {:error, :store_down} end
+      first = route(%{relation: "before", title: "Held badly"})
+      log = capture_log(fn -> assert {:ok, %{unheld: ":store_down"}} = file(ctx, first, @settings, hold: hold) end)
+      assert log =~ "could not hold"
+    end
+
+    test "an open ticket that already covers the problem is linked as it is, not made a sub-ticket", ctx do
+      Process.put({:ticket, "TP-77"}, {:ok, %Issue{id: "other", identifier: "TP-77", state: "Todo", url: "https://linear.app/t/TP-77"}})
+
+      assert {:ok, %{identifier: "TP-77", existing: true, relation: "before"}} = file(ctx, route(%{relation: "before", existing: "TP-77"}))
+      refute Process.get(:created)
+      refute Process.get(:read)
+    end
+  end
+
+  test "a ticket with no plan takes neither before nor after, and files no sub-ticket", ctx do
+    assert {:error, "the ticket route's relation must be blocks or follow_up"} = file(ctx, route(%{relation: "before"}))
+    assert {:ok, _filed} = file(ctx, route())
+    {attrs, _opts} = Process.get(:created)
+    assert attrs.parent_id == nil
+    assert TicketPlan.ask("new-id") == []
+    assert Filing.facts(Facts.events(ctx.issue_id), @settings, repos: ["default"]).relations == ["blocks", "follow_up"]
   end
 end

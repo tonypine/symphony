@@ -33,6 +33,11 @@ defmodule SymphonyElixir.Tracker.Memory do
   `sub_issues` (with its identifier and current state), and the child reads its `parent` as Linear's
   parent node gives it (`SymphonyElixir.Connected.parent/1`).
 
+  An issue created (`create_issue/1`) joins the issues, in `:memory_tracker_issues` or the issues
+  file: its id is `memory-issue-<n>` and its identifier `<team>-<9000 + n>`, `n` being its place
+  among the issues. With a `parent_id` it is that issue's sub-issue, and in the issues file it takes
+  its parent's team and project. A related link (`add_related/2`) only reports its event.
+
   A priority (`update_issue_priority/2`, Linear's number) is the issue's `"priority"` in the
   issues file, read back as the issue's `priority`; with `:memory_tracker_issues` set, it edits the
   issue's `priority` there.
@@ -256,6 +261,27 @@ defmodule SymphonyElixir.Tracker.Memory do
   @spec remove_blocked_by(String.t(), String.t()) :: :ok | {:error, term()}
   def remove_blocked_by(blocker, blocked_issue_id), do: update_blocked_by(:remove, blocker, blocked_issue_id)
 
+  @spec create_issue(map()) :: {:ok, Tracker.created_issue()} | {:error, term()}
+  def create_issue(%{title: title} = attrs) when is_binary(title) do
+    with :ok <- next_result(:memory_tracker_create_issue_result) do
+      number = length(issue_entries()) + 1
+      created = %{id: "memory-issue-#{number}", identifier: "#{Map.get(attrs, :team) || "MEM"}-#{9000 + number}", url: nil}
+      put_created_issue(created, attrs)
+      send_event({:memory_tracker_issue_created, created.id, attrs})
+      {:ok, created}
+    end
+  end
+
+  def create_issue(_attrs), do: {:error, :invalid_issue_create}
+
+  @spec add_related(String.t(), String.t()) :: :ok | {:error, term()}
+  def add_related(related, issue_id) do
+    with :ok <- next_result(:memory_tracker_add_related_result) do
+      send_event({:memory_tracker_related_added, related, issue_id})
+      :ok
+    end
+  end
+
   @spec update_issue_priority(String.t(), 0..4) :: :ok | {:error, term()}
   def update_issue_priority(issue_id, priority) do
     with :ok <- next_result(:memory_tracker_update_issue_priority_result) do
@@ -443,6 +469,64 @@ defmodule SymphonyElixir.Tracker.Memory do
       {:error, _reason} = error ->
         error
     end
+  end
+
+  # The new issue where the issues come from; its parent, when it names one, lists it as a sub-issue.
+  defp put_created_issue(created, attrs) do
+    parent_id = Map.get(attrs, :parent_id)
+    state = Map.get(attrs, :state) || "Todo"
+
+    case Application.fetch_env(:symphony_elixir, :memory_tracker_issues) do
+      {:ok, issues} ->
+        parent = Enum.find(issues, &match?(%Issue{id: ^parent_id}, &1))
+
+        issue = %Issue{
+          id: created.id,
+          identifier: created.identifier,
+          title: attrs.title,
+          description: Map.get(attrs, :description),
+          state: state,
+          priority: Map.get(attrs, :priority),
+          assignee_id: Map.get(attrs, :assignee_id),
+          team: parent && parent.team,
+          project: parent && parent.project,
+          parent: parent && %{identifier: parent.identifier, title: parent.title}
+        }
+
+        sub_issue = %{id: created.id, identifier: created.identifier, state: state}
+        Application.put_env(:symphony_elixir, :memory_tracker_issues, Enum.map(issues, &with_sub_issue(&1, parent_id, sub_issue)) ++ [issue])
+
+      :error ->
+        entry = %{"id" => created.id, "identifier" => created.identifier, "state" => state, "title" => attrs.title}
+        entry = entry |> Map.put("description", Map.get(attrs, :description)) |> Map.put("priority", Map.get(attrs, :priority))
+        append_file_issue(entry, parent_id)
+    end
+  end
+
+  defp with_sub_issue(%Issue{id: parent_id, sub_issues: sub_issues} = parent, parent_id, sub_issue) when is_list(sub_issues),
+    do: %{parent | sub_issues: sub_issues ++ [sub_issue]}
+
+  defp with_sub_issue(issue, _parent_id, _sub_issue), do: issue
+
+  # Appends an issue to the issues file, one writer at a time, under its parent when it names one.
+  defp append_file_issue(entry, parent_id) do
+    with {:ok, %{tracker: %{memory_issues_file: path}}} when is_binary(path) <- Config.settings() do
+      :global.trans({__MODULE__, path}, fn -> rewrite_file_with(path, entry, parent_id) end)
+    end
+
+    :ok
+  end
+
+  defp rewrite_file_with(path, entry, parent_id) do
+    entries = read_issues_file(path)
+
+    family =
+      case Enum.find(entries, &(is_binary(parent_id) and &1["id"] == parent_id)) do
+        nil -> %{}
+        parent -> parent |> Map.take(["team", "project"]) |> Map.put("parentId", parent_id)
+      end
+
+    File.write!(path, Jason.encode!(entries ++ [entry |> Map.merge(family) |> Map.put("updatedAt", now_iso8601())], pretty: true))
   end
 
   defp put_env_list(key, value) do

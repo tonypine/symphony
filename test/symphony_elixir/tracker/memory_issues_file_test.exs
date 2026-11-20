@@ -156,4 +156,68 @@ defmodule SymphonyElixir.Tracker.MemoryIssuesFileTest do
     assert Memory.add_blocked_by("QA-1", "issue-2") == :ok
     assert {:ok, %Issue{blocked_by: [%{id: "issue-1"}]}} = Memory.fetch_issue_by_identifier("QA-2")
   end
+
+  describe "create_issue/1 and add_related/2" do
+    setup do
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      on_exit(fn ->
+        keys = [:memory_tracker_recipient, :memory_tracker_create_issue_result, :memory_tracker_add_related_result]
+        for key <- [:memory_tracker_issues | keys], do: Application.delete_env(:symphony_elixir, key)
+      end)
+    end
+
+    test "an issue created in the issues file is read back, under its parent with the parent's team and project", %{issues_file: issues_file} do
+      entries = issues_file |> File.read!() |> Jason.decode!()
+      parent = entries |> hd() |> Map.merge(%{"team" => %{"key" => "QA", "name" => "QA"}, "project" => %{"id" => "p1", "name" => "App", "slug_id" => "app"}})
+      File.write!(issues_file, Jason.encode!([parent | tl(entries)]))
+
+      attrs = %{title: "A sub-ticket", description: "Build the list.", priority: 1, team: "QA", parent_id: "issue-1"}
+      assert {:ok, %{id: "memory-issue-3", identifier: "QA-9003", url: nil} = created} = Tracker.create_issue(attrs)
+      assert_received {:memory_tracker_issue_created, "memory-issue-3", ^attrs}
+
+      assert {:ok, %Issue{} = child} = Memory.fetch_issue_by_identifier(created.identifier)
+      assert %{title: "A sub-ticket", description: "Build the list.", state: "Todo", priority: 1, team: %{key: "QA"}, project: %{slug_id: "app"}} = child
+      assert %{identifier: "QA-1"} = child.parent
+      assert {:ok, %Issue{sub_issues: [%{id: "memory-issue-3", identifier: "QA-9003", state: "Todo"}]}} = Memory.fetch_issue_by_identifier("QA-1")
+
+      # One with no parent, or a parent the file does not hold, stands alone.
+      assert {:ok, %{identifier: "MEM-9004"}} = Memory.create_issue(%{title: "Alone", state: "Backlog", parent_id: "gone"})
+      assert {:ok, %Issue{state: "Backlog", parent: nil, team: nil}} = Memory.fetch_issue_by_identifier("MEM-9004")
+    end
+
+    test "an issue created among `:memory_tracker_issues` joins them, and its parent lists it" do
+      parent = %Issue{id: "parent", identifier: "MT-1", title: "Parent", state: "Todo", team: %{key: "MT"}, project: %{id: "p1", name: "App"}}
+      unread = %Issue{id: "unread", identifier: "MT-2", state: "Todo", sub_issues: :unknown}
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [parent, unread])
+
+      assert {:ok, %{id: "memory-issue-3", identifier: "MT-9003"}} =
+               Memory.create_issue(%{title: "Child", description: "Do it.", team: "MT", priority: 1, assignee_id: "user-1", parent_id: "parent"})
+
+      assert {:ok, [listing, %Issue{sub_issues: :unknown}, child]} = Memory.fetch_issue_states_by_ids(["parent", "unread", "memory-issue-3"])
+      assert listing.sub_issues == [%{id: "memory-issue-3", identifier: "MT-9003", state: "Todo"}]
+
+      assert %Issue{title: "Child", description: "Do it.", state: "Todo", priority: 1, assignee_id: "user-1"} = child
+      assert %Issue{team: %{key: "MT"}, project: %{id: "p1"}} = child
+      assert child.parent == %{identifier: "MT-1", title: "Parent"}
+
+      assert {:ok, %{identifier: "MEM-9004"}} = Memory.create_issue(%{title: "Alone"})
+      assert {:ok, %Issue{parent: nil}} = Memory.fetch_issue_by_identifier("MEM-9004")
+    end
+
+    test "a scripted failure creates nothing, and an issue needs a title" do
+      Application.put_env(:symphony_elixir, :memory_tracker_create_issue_result, [{:error, :linear_down}])
+      assert {:error, :linear_down} = Memory.create_issue(%{title: "Child"})
+      assert {:ok, %{id: "memory-issue-3"}} = Memory.create_issue(%{title: "Child"})
+      assert {:error, :invalid_issue_create} = Memory.create_issue(%{description: "No title"})
+    end
+
+    test "a related link reports its event" do
+      assert :ok = Tracker.add_related("QA-2", "issue-1")
+      assert_received {:memory_tracker_related_added, "QA-2", "issue-1"}
+
+      Application.put_env(:symphony_elixir, :memory_tracker_add_related_result, {:error, :linear_down})
+      assert {:error, :linear_down} = Memory.add_related("QA-2", "issue-1")
+    end
+  end
 end

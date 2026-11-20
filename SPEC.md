@@ -587,7 +587,11 @@ at `grooming`, before the first run of a ticket with no plan and no run of its o
 in the ticket's workspace with read-only tools and its answer holds the ticket's plan, which
 Symphony records as `plan.written` after recording the ask as `ask.recorded`: a try that writes
 neither a plan nor a question is counted in a status note, the ticket is groomed again at its next
-dispatch, and after 2 such tries it starts without a plan),
+dispatch, and after 2 such tries it starts without a plan; a plan of shape `split` is carried out
+instead of a first run: its sub-tickets are created under the ticket, which then waits on them; on
+such a ticket the junctions `sub_ticket_ended` and `final_check` run outside any dispatch, and
+their answer's `tree` operations and `done` are carried out by Symphony: `docs/configuration.md`,
+The tree),
 `conductor.steer` (machine only: guidance the Conductor's watch gave a running run, under that run's
 `run_id`, with its `text`, `when` it asked for it, `next_turn`, `now` or `stop`, the `trigger` that
 made it look and how and when it was `delivered`; `conductor.watch` in `docs/configuration.md`),
@@ -3874,7 +3878,9 @@ An issue is dispatch-eligible only if all are true:
     default branch yet. One exception: a non-plan blocker its PR's merge put in the waiting state
     (default `Waiting on sub-tickets`) counts as resolved, since its change is on the default
     branch; a sub-ticket blocked by its own merged parent would otherwise deadlock with it. A plan
-    parent in the waiting state still blocks. A blocker without a known state counts as open.
+    parent in the waiting state still blocks. A groomed blocker (one that holds a `plan.written`)
+    counts as resolved once its record says its pull request merged, whatever its state. A blocker
+    without a known state counts as open.
   - A blocker linked while a run is under way never stops the worker once its agent session
     started: the turn in flight finishes, the run starts no further turn, and the next dispatch is
     held. A blocker that reaches the ticket's record while the run is still starting (dispatched, no
@@ -3961,6 +3967,12 @@ An issue is dispatch-eligible only if all are true:
     parent with at least one sub-issue, every one terminal, moves to `Epic Review`, where the epic
     review runs. Any other issue in that state is never dispatched, and waits for a human unless the
     merge of its pull request put it there (below).
+  - A groomed issue (one that holds a `plan.written`) follows its own rule there, whatever its
+    labels: it is never dispatched, and it closes once its own pull request merged or it never had
+    one and none of its sub-issues is outside `terminal_states` (one in `Backlog` holds it), after
+    the Conductor's final check when that junction is on. A groomed issue whose pull request merges
+    waits there on every sub-issue it has. The move that closes it updates Symphony's record of the
+    issue with Linear, for a groomed issue and any other.
   - When a pull request of an issue that is not a plan parent merges while the issue has a
     sub-issue that is neither terminal nor in `Backlog`, the service moves the issue to the waiting
     state instead of `Done`, whoever merged it and even when Linear's GitHub integration or a

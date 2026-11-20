@@ -65,6 +65,9 @@ defmodule SymphonyElixir.Tracker do
           team_keys: [String.t()]
         }
 
+  @typedoc "An issue `create_issue/1` made: its id, its identifier and its URL."
+  @type created_issue :: %{id: String.t(), identifier: String.t(), url: String.t() | nil}
+
   @typedoc "A Linear team a repo route can name: by its key or its id."
   @type team :: %{id: String.t() | nil, key: String.t() | nil, name: String.t() | nil}
 
@@ -99,6 +102,8 @@ defmodule SymphonyElixir.Tracker do
   @callback add_blocked_by(String.t(), String.t()) :: :ok | {:error, term()}
   @callback remove_blocked_by(String.t(), String.t()) :: :ok | {:error, term()}
   @callback update_issue_priority(String.t(), 0..4) :: :ok | {:error, term()}
+  @callback create_issue(map()) :: {:ok, created_issue()} | {:error, term()}
+  @callback add_related(String.t(), String.t()) :: :ok | {:error, term()}
 
   @spec fetch_candidate_issues() :: {:ok, [term()]} | {:error, term()}
   def fetch_candidate_issues do
@@ -296,6 +301,20 @@ defmodule SymphonyElixir.Tracker do
   @spec update_issue_priority(String.t(), 0..4) :: :ok | {:error, term()}
   def update_issue_priority(issue_id, priority) when is_binary(issue_id) and priority in 0..4,
     do: adapter().update_issue_priority(issue_id, priority)
+
+  @doc """
+  Creates an issue from `attrs`: `title`, `description`, `priority` (Linear's number), `team` (a key
+  or an id), `state` (a state name, `Todo` by default), and optionally `project` (a name, slug id or
+  id), `assignee_id` and `parent_id` (the id of the issue it is a sub-issue of). Returns its id,
+  identifier and URL. The split of a groomed ticket files its sub-tickets with it
+  (`SymphonyElixir.Conductor.Grooming.split/4`).
+  """
+  @spec create_issue(map()) :: {:ok, created_issue()} | {:error, term()}
+  def create_issue(attrs) when is_map(attrs), do: adapter().create_issue(attrs)
+
+  @doc "Records that the issue `related` (an id or an identifier) and the issue `issue_id` are related: a link that holds neither."
+  @spec add_related(String.t(), String.t()) :: :ok | {:error, term()}
+  def add_related(related, issue_id) when is_binary(related) and is_binary(issue_id), do: adapter().add_related(related, issue_id)
 
   @spec adapter() :: module()
   def adapter do

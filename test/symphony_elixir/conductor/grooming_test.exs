@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.Conductor.GroomingTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Conductor, Questions, TicketChecks, TicketEvents, TicketPlan, Workspace}
+  alias SymphonyElixir.{Conductor, Questions, SubIssueWait, TicketChecks, TicketEvents, TicketPlan, Workspace}
   alias SymphonyElixir.Conductor.{Facts, Grooming}
   alias SymphonyElixir.Config.Schema
 
@@ -30,6 +30,11 @@ defmodule SymphonyElixir.Conductor.GroomingTest do
     end
 
     def stop_session(_session), do: :ok
+  end
+
+  defmodule NoWaitingState do
+    @moduledoc false
+    def workflow_state_exists?(_state, _teams), do: {:ok, false}
   end
 
   # A tracker that takes a label off, or refuses to.
@@ -85,6 +90,8 @@ defmodule SymphonyElixir.Conductor.GroomingTest do
       attrs
     )
   end
+
+  defp subs, do: [%{"title" => "The API", "ask" => "Add the filter."}, %{"title" => "The list", "ask" => "Read it.", "after" => ["s1"]}]
 
   defp answer(attrs), do: Jason.encode!(attrs)
   defp planned(attrs \\ %{}), do: {:ok, [answer(%{"plan" => written(attrs), "update" => "I read this as one small change.\n\nNext: one coding run."})], 9_000}
@@ -205,17 +212,19 @@ defmodule SymphonyElixir.Conductor.GroomingTest do
       assert log =~ "Grooming could not record the ask issue_id=#{other}"
     end
 
-    test "a split is not carried out yet: the plan is recorded as a single ticket's", ctx do
-      subs = [%{"title" => "The API", "ask" => "Add the filter."}, %{"title" => "The list", "ask" => "Read it.", "after" => ["s1"]}]
+    test "where the waiting state is off, a split is recorded as a single ticket's plan", ctx do
+      settings = Config.settings!()
+      capture_log(fn -> assert :disabled = SubIssueWait.check_tracker_state(settings, [], tracker: NoWaitingState) end)
+      on_exit(fn -> SubIssueWait.reset_for_test("Waiting on sub-tickets") end)
 
-      log = capture_log(fn -> assert groom(ctx, planned(%{"shape" => "split", "sub_tickets" => subs})) == :ok end)
+      log = capture_log(fn -> assert groom(ctx, planned(%{"shape" => "split", "sub_tickets" => subs()})) == :ok end)
 
       assert log =~ "Grooming planned a split issue_id=#{ctx.issue_id}"
       assert log =~ "sub_tickets=2"
       plan = TicketPlan.current(ctx.issue_id)
       assert plan.shape == "single"
       refute Map.has_key?(plan, :sub_tickets)
-      assert Grooming.split("default", ctx.issue, %{shape: "split"}) == {:error, :not_supported}
+      refute Grooming.split_due?(:implementation, Facts.events(ctx.issue_id))
     end
 
     test "a ticket labelled plan loses the label, and its first coding run is left to the next dispatch", ctx do
@@ -232,6 +241,82 @@ defmodule SymphonyElixir.Conductor.GroomingTest do
       assert note =~ "took the Plan and breakdown label off"
       assert TicketPlan.groomed?(ctx.issue_id)
       assert Grooming.take_over("default", ctx.issue) == :unchanged
+    end
+  end
+
+  describe "a turn that writes a split" do
+    setup ctx do
+      SubIssueWait.reset_for_test("Waiting on sub-tickets")
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+      issue = %{ctx.issue | team: %{key: "MT"}, assignee_id: "user-1"}
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_create_issue_result) end)
+      %{issue: issue}
+    end
+
+    defp no_turn, do: fn _plan, _issue, _run_id, _prompt -> flunk("a split runs no turn") end
+
+    test "creates the sub-tickets and parks the ticket, whose run does not start", ctx do
+      assert groom(ctx, planned(%{"shape" => "split", "sub_tickets" => subs()})) == :again
+
+      assert_received {:memory_tracker_issue_created, "memory-issue-2", %{title: "The API", state: "Todo", parent_id: _parent}}
+      assert_received {:memory_tracker_issue_created, "memory-issue-3", %{title: "The list", state: "Backlog"}}
+      assert_received {:memory_tracker_state_update, parent_id, "Waiting on sub-tickets"}
+      assert parent_id == ctx.issue_id
+      assert %{version: 2, shape: "split", sub_tickets: sub_tickets} = TicketPlan.current(ctx.issue_id)
+      assert [%{identifier: "MT-9002"}, %{identifier: "MT-9003"}] = sub_tickets
+      assert [%{payload: %{junction: "grooming"}}] = events(ctx.issue_id, "conductor.update")
+
+      # A first run about to start on it again (a person moved it back) meets the split, never a turn.
+      events = Facts.events(ctx.issue_id)
+      refute Grooming.due?(:implementation, events)
+      assert Grooming.split_due?(:implementation, events)
+      refute Grooming.split_due?(:qa, events)
+      assert Conductor.dispatch_junction(:implementation, events) == "grooming"
+      assert Conductor.run(plan(ctx), ctx.issue, turn: no_turn()) == :again
+      assert Conductor.run(plan(ctx, %{unavailable: "anthropic"}), ctx.issue, turn: no_turn()) == :again
+      refute_received {:memory_tracker_issue_created, _id, _attrs}
+    end
+
+    test "a ticket labelled plan is split too, and its label is taken off", ctx do
+      labelled = %{ctx.issue | labels: ["plan"]}
+      :ok = RunStore.put_ticket_state(Map.put(ctx.record, :labels, labelled.labels))
+
+      assert Conductor.run(plan(ctx), labelled, turn: turn(planned(%{"shape" => "split", "sub_tickets" => subs()})), worker_host: "elsewhere") == :again
+
+      assert RunStore.get_ticket_state(ctx.issue_id).labels == []
+      assert_received {:memory_tracker_state_update, _parent, "Waiting on sub-tickets"}
+    end
+
+    test "a split that keeps failing is tried again, then the person is asked", ctx do
+      Application.put_env(:symphony_elixir, :memory_tracker_create_issue_result, {:error, :linear_down})
+      split = planned(%{"shape" => "split", "sub_tickets" => subs()})
+
+      log = capture_log(fn -> assert groom(ctx, split) == :again end)
+      assert log =~ "Grooming could not split the ticket issue_id=#{ctx.issue_id}"
+      assert log =~ "sub-ticket s1 could not be created: :linear_down"
+      assert Questions.open({:ticket, "default", ctx.issue_id}) == []
+
+      capture_log(fn -> assert Conductor.run(plan(ctx), ctx.issue, turn: no_turn()) == :again end)
+      capture_log(fn -> assert Conductor.run(plan(ctx), ctx.issue, turn: no_turn()) == :held end)
+
+      assert [%{title: "The sub-tickets could not be created"}] = Questions.open({:ticket, "default", ctx.issue_id})
+      assert length(status_notes(ctx.issue_id)) == 3
+      refute_received {:memory_tracker_state_update, _parent, "Waiting on sub-tickets"}
+
+      # Once Linear answers, the next dispatch finishes the split.
+      Application.delete_env(:symphony_elixir, :memory_tracker_create_issue_result)
+      assert Conductor.run(plan(ctx), ctx.issue, turn: no_turn()) == :again
+      assert_received {:memory_tracker_state_update, _parent, "Waiting on sub-tickets"}
+    end
+
+    test "a split Symphony refuses is an answer it can't read, and the try is counted", ctx do
+      adopt = [%{"title" => "The API", "ask" => "Add the filter.", "identifier" => "MT-404"}]
+      log = capture_log(fn -> assert groom(ctx, planned(%{"shape" => "split", "sub_tickets" => adopt})) == :again end)
+
+      assert log =~ "sub-ticket s1 names MT-404, which is not a sub-ticket of this ticket"
+      refute TicketPlan.groomed?(ctx.issue_id)
+      assert Grooming.tries(Facts.events(ctx.issue_id)) == 1
     end
   end
 
