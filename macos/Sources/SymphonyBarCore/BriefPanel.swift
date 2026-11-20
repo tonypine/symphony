@@ -103,13 +103,30 @@ public struct BriefPanelModel: Equatable {
 
     /// The description's Markdown as plain prose, the way the catalog's `briefBlock` reads it: a heading is its words
     /// on a line of their own, a list item or a quote loses its marker (and a task's box), emphasis loses its stars
-    /// and underscores, a link is its text, and an image, a rule, a code fence and Linear's fold marker (`+++`) go;
-    /// a fold's title stays as a line. Code in backticks stays, for the mono face; runs of blank lines are one.
+    /// and underscores, a link is its text, and an image, a rule, a code fence's markers and Linear's fold marker
+    /// (`+++`) go; a fold's title stays as a line. Code is never rewritten: a span in backticks keeps its text for the
+    /// mono face, a line inside a code fence is kept as written (in backticks, so it is set in the mono face too), and
+    /// emphasis only counts between spaces or punctuation, so a glob (`lib/**/*.ex`), a dunder name (`__MODULE__`) or
+    /// a snake_case name in plain text stays as written. Runs of blank lines are one.
     public static func prose(of markdown: String) -> String {
         var lines: [String] = []
+        var fenced = false
         for raw in markdown.components(separatedBy: "\n") {
             var line = raw.trimmingCharacters(in: .whitespaces)
-            if line.hasPrefix("```") || line.hasPrefix("~~~") || isRule(line) { continue }
+            if line.hasPrefix("```") || line.hasPrefix("~~~") {
+                fenced.toggle()
+                continue
+            }
+            if fenced {
+                if line.isEmpty {
+                    if lines.last?.isEmpty ?? true { continue }
+                } else if !line.contains("`") {
+                    line = "`\(line)`"
+                }
+                lines.append(line)
+                continue
+            }
+            if isRule(line) { continue }
             if line.hasPrefix("+++") {
                 line = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
                 if line.isEmpty { continue }
@@ -118,20 +135,57 @@ public struct BriefPanelModel: Equatable {
             while line.hasPrefix(">") { line = String(line.dropFirst()).trimmingCharacters(in: .whitespaces) }
             line = replacing(listMarker, in: line, with: "")
             line = replacing(taskBox, in: line, with: "")
-            line = replacing(image, in: line, with: "")
-            line = replacing(link, in: line, with: "$1")
-            line = replacing(emphasis, in: line, with: "$2")
+            line = outsideCode(line, inline)
             if line.isEmpty, lines.last?.isEmpty ?? true { continue }
             lines.append(line)
         }
         return lines.joined(separator: "\n").trimmingWhitespace()
     }
 
+    /// `line` with `transform` applied to the text between its backtick spans; the spans stay as written.
+    private static func outsideCode(_ line: String, _ transform: (String) -> String) -> String {
+        var result = ""
+        var cursor = line.startIndex
+        for match in codeSpan.matches(in: line, range: NSRange(line.startIndex..., in: line)) {
+            guard let range = Range(match.range, in: line) else { continue }
+            result += transform(String(line[cursor..<range.lowerBound])) + line[range]
+            cursor = range.upperBound
+        }
+        return result + transform(String(line[cursor...]))
+    }
+
+    private static func inline(_ text: String) -> String {
+        var text = replacing(image, in: text, with: "")
+        text = replacing(link, in: text, with: "$1")
+        return unemphasised(text)
+    }
+
+    /// `text` without its emphasis markers. A double underscore around one bare word (`__MODULE__`, `__init__`) is a
+    /// dunder name, not bold, and stays.
+    private static func unemphasised(_ text: String) -> String {
+        var result = ""
+        var cursor = text.startIndex
+        for match in emphasis.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+            guard let range = Range(match.range, in: text), let marker = Range(match.range(at: 1), in: text),
+                  let inner = Range(match.range(at: 2), in: text) else { continue }
+            let content = String(text[inner])
+            if text[marker] == "__", content.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" }) { continue }
+            result += text[cursor..<range.lowerBound] + content
+            cursor = range.upperBound
+        }
+        return result + text[cursor...]
+    }
+
     private static let listMarker = try! NSRegularExpression(pattern: #"^(?:[-*+]|\d{1,3}[.)])\s+"#)
     private static let taskBox = try! NSRegularExpression(pattern: #"^\[[ xX]\]\s+"#)
+    private static let codeSpan = try! NSRegularExpression(pattern: #"`[^`]+`"#)
     private static let image = try! NSRegularExpression(pattern: #"!\[[^\]]*\]\([^)]*\)"#)
     private static let link = try! NSRegularExpression(pattern: #"\[([^\]]+)\]\([^)]*\)"#)
-    private static let emphasis = try! NSRegularExpression(pattern: #"(?<![\w*])(\*\*|__|\*|_)(?=\S)(.+?)(?<=\S)\1(?![\w*])"#)
+    /// A marker opens only at the start or after a space or an opening mark, and closes only before the end, a space
+    /// or punctuation; the emphasised text neither starts nor ends with a space, a star or an underscore.
+    private static let emphasis = try! NSRegularExpression(
+        pattern: #"(?<![^\s(\["'])(\*\*|__|\*|_)(?![\s*_])(.+?)(?<![\s*_])\1(?![^\s.,;:!?)\]"'])"#
+    )
 
     private static func replacing(_ pattern: NSRegularExpression, in line: String, with template: String) -> String {
         pattern.stringByReplacingMatches(in: line, range: NSRange(line.startIndex..., in: line), withTemplate: template)

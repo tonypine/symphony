@@ -133,7 +133,7 @@ final class BriefPanelTests: XCTestCase {
 
         Runs after TP-1485.
 
-        mix test
+        `mix test`
         """)
         // The goal of an unread ticket reads the same way.
         let unread = TicketDetailsRead(ticket: TicketRecordRead(description: "## Goal\n- Ship **it**."))
@@ -143,6 +143,35 @@ final class BriefPanelTests: XCTestCase {
         XCTAssertNil(BriefPanelModel.build(markup, runs: [:], reference: reference, calendar: utc)?.asked)
         let onlyMarkup = TicketDetailsRead(ticket: TicketRecordRead(description: "+++\n---\n+++"))
         XCTAssertNil(BriefPanelModel.build(onlyMarkup, runs: [:], reference: reference, calendar: utc))
+    }
+
+    func testProseNeverRewritesCode() {
+        // Code in backticks keeps every character, globs and dunder names included.
+        XCTAssertEqual(
+            BriefPanelModel.prose(of: "- Check `macos/Sources/**/*.swift`, `__MODULE__`, `*args*` and `[a](b)`."),
+            "Check `macos/Sources/**/*.swift`, `__MODULE__`, `*args*` and `[a](b)`."
+        )
+        // The same in plain text: emphasis needs a space or punctuation on its outer side.
+        XCTAssertEqual(
+            BriefPanelModel.prose(of: "Globs lib/**/*.ex and **/*.swift, __MODULE__, snake_case_name, 2 * 3 * 4."),
+            "Globs lib/**/*.ex and **/*.swift, __MODULE__, snake_case_name, 2 * 3 * 4."
+        )
+        // Emphasis between spaces or punctuation still goes.
+        XCTAssertEqual(BriefPanelModel.prose(of: "*args* and (**bold**), _two words_; __very strong__!"), "args and (bold), two words; very strong!")
+        // A code fence's lines are kept as written, in the mono face.
+        XCTAssertEqual(BriefPanelModel.prose(of: "Run:\n```sh\n- not a list\n\n\nlib/**/*.ex\necho `x`\n```\nDone."), """
+        Run:
+        `- not a list`
+
+        `lib/**/*.ex`
+        echo `x`
+        Done.
+        """)
+        // Inline code still reaches the view as code.
+        XCTAssertEqual(
+            ReadingSpans.split(BriefPanelModel.prose(of: "See `lib/**/*.ex` now.")),
+            [.init("See ", code: false), .init("lib/**/*.ex", code: true), .init(" now.", code: false)]
+        )
     }
 
     func testTheGoalIsTheFirstSectionWithText() {
