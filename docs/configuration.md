@@ -2293,6 +2293,17 @@ agent, before QA starts. There is no setting for it: it is on exactly when the p
   the review and CI, when the PR watcher records a new head for a ticket in `Code Review` or `QA`
   (branch upkeep, a CI Fix return, a person's push), and at QA dispatch for a head nobody asked for
   yet. Builds left running when Symphony stopped are asked for again when it starts.
+- **Which heads.** Only a head whose QA pass selects the `macos_app` playbook is built: the same
+  selection the pass makes from the paths the head changes, the `qa:<kind>` labels and the
+  walkthrough. A head whose pass selects only another playbook (an Android-only repository, a change
+  outside the app's `paths`) gets no build and no hold, and a build that failed on it sends nothing
+  to `Rework`, whatever held it before. The builder reads the paths a head changes once, with its
+  tree, in its own task (fetching a commit or base branch the ticket's workspace does not hold), and
+  stores them with the head; the QA dispatch gate decides from that stored answer and runs no git. A
+  head the builder has not read yet is held while it reads, and released at once when its pass
+  selects no `macos_app` playbook. A head whose changed paths still can't be read is stored so and
+  not read again; it is not built ahead of QA, held or sent back: its pass reads the diff in its own
+  worktree and asks for the build itself when it selects the app.
 - **What is built.** A build is kept by the commit's tree (`git rev-parse <sha>^{tree}`), so a head
   whose content was already built, such as a merge of the base branch that changed nothing, is ready
   at once. A tree that built, or whose build failed, is never built again: its files did not change.

@@ -233,8 +233,9 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       pid = start_repo!(repo_key, qa_build: FakeQaBuild)
 
       assert {:ok, _summary} = Repo.poll(pid)
-      assert_received {:qa_build, ^repo_key, "sha-1", %{identifier: "TP-1", issue_id: "1"}}
-      assert_received {:qa_build, ^repo_key, "sha-2", %{identifier: "TP-2", issue_id: "2"}}
+      # Each with the ticket's issue: the builder builds only a head whose QA pass selects the app.
+      assert_received {:qa_build, ^repo_key, "sha-1", %{identifier: "TP-1", issue_id: "1", issue: %Issue{id: "1"}}}
+      assert_received {:qa_build, ^repo_key, "sha-2", %{identifier: "TP-2", issue_id: "2", issue: %Issue{id: "2"}}}
       refute_received {:qa_build, _repo_key, _head, _ticket}
 
       # The same head on the next read asks for nothing.
@@ -543,6 +544,21 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
 
     assert {:ok, %{errors: 0}} = Repo.poll(pid)
     assert_received {:gh, ["api", "--include", "repos/tonypine/symphony/releases/latest"]}
+  end
+
+  test "a newest-release read that finds the release unchanged is a clean tick", %{repo_key: repo_key} do
+    issues!([])
+    test_pid = self()
+
+    gh_runner = fn args, _opts ->
+      send(test_pid, {:gh, args})
+      {"HTTP/2.0 304 Not Modified\r\n\r\n", 0}
+    end
+
+    pid = start_repo!(repo_key, app_release: true, gh_runner: gh_runner)
+
+    assert {:ok, %{errors: 0}} = Repo.poll(pid)
+    assert_received {:gh, ["api", "--include" | _rest]}
   end
 
   test "a rate-limited read backs off until the reset and marks the tickets it didn't read", %{repo_key: repo_key} do

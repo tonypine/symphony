@@ -3485,8 +3485,12 @@ Rules:
   list's machine `handoff` step pushes with its own command, so in each the runner, on seeing the PR
   on that HEAD, records the signal for that head and hands off in the same run. A machine `handoff`
   step does so only on the ticket as it stands when the
-  step ends: not on a hold, still in the phase the run works, nothing pending, and in `Rework` the head
-  moved past the one the `Rework` started from. A run that ends without it MUST record `handoff_missing`
+  step ends: not on a hold, still in the phase the run works, and nothing pending. A `Rework` run hands
+  off once its head moved past the one the `Rework` started from, or, for a fix that needs no commit
+  (a walkthrough proof recorded again, a description field), once the run itself called the push or
+  pull-request tool for its unchanged head, or its machine `handoff` step pushed it, with no review,
+  CI or conflict signal pending; a `Rework` run that only goes quiet on that head stays in `Rework`.
+  A run that ends without it MUST record `handoff_missing`
   and leave the ticket where it is for the retry machinery, which MUST back off its quiet runs and
   hold the ticket `Blocked` with `handoff_missing` after a bounded number on the same head. A
   ticket on a hold is not counted: it waits on the hold alone. Before the hold, Symphony asks a
@@ -3523,8 +3527,10 @@ Rules:
   retry or the continuation of an earlier run (the reviewer's approve moving the ticket into `QA`)
   dispatches it; a held-back run records `code_review_head_not_green` or `qa_head_not_green`, with
   the PR watcher's reason, once per head and reason. Where the repo's `macos_app` playbook builds
-  an app on a QA host, the QA run also waits for Symphony's build of the head (the QA pre-build,
-  `docs/configuration.md`), and the QA run never builds the app itself: a build queued or running
+  an app on a QA host and the head's QA pass selects that playbook, the QA run also waits for
+  Symphony's build of the head (the QA pre-build, `docs/configuration.md`); a head whose pass selects
+  no `macos_app` playbook is never built for, held or sent back for a build. The QA run never builds
+  the app itself: a build queued or running
   holds the ticket on a `build` pause reason that the build's end clears; a build whose command
   failed, or made no app, sends the ticket to `Rework` with no QA run, each time it arrives in `QA`
   on that tree; a build that could not run holds it on a reason the Director may release, and the

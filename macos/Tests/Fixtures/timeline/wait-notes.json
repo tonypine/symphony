@@ -1,0 +1,9 @@
+{
+  "timeline": [
+    {"id": "w1", "seq": 1, "at": "2026-10-08T09:00:00Z", "type": "ticket.moved", "actor": {"kind": "person", "name": "Tony"}, "payload": {"from": "Code Review", "to": "Rework"}, "summary": {"title": "Moved to Rework from Code Review", "detail": "The dark screenshots are missing"}, "artifacts": [], "children": [], "new": false},
+    {"id": "w2", "seq": 2, "at": "2026-10-08T09:20:00Z", "type": "note", "actor": {"kind": "machine"}, "payload": {"text": "Waiting for GitHub to pick up 280641b1: the branch is at it, but PR #820 still shows 353903e1", "status": true}, "summary": {"title": "Note added", "detail": "Waiting for GitHub to pick up 280641b1: the branch is at it, but PR #820 still shows 353903e1"}, "artifacts": [], "children": [], "new": false},
+    {"id": "w3", "seq": 3, "at": "2026-10-08T09:21:00Z", "type": "note", "actor": {"kind": "machine"}, "payload": {"text": "Waiting for CI · sha 280641b1 (ci_wait_started)", "status": true, "signal": "ci_wait_started", "signal_details": {"sha": "280641b1"}}, "summary": {"title": "Waiting for CI"}, "artifacts": [], "children": [], "new": false},
+    {"id": "w4", "seq": 4, "at": "2026-10-08T09:30:00Z", "type": "note", "actor": {"kind": "person", "name": "Tony"}, "payload": {"text": "Check the dark screenshots first"}, "summary": {"title": "Note added", "detail": "Check the dark screenshots first"}, "artifacts": [], "children": [], "new": false}
+  ],
+  "next_since": "2026-10-08T09:30:00Z"
+}
