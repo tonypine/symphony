@@ -1459,12 +1459,13 @@ defmodule SymphonyElixir.AgentRunner do
     Handoff.origin?(issue.state) and not waiting_on_hold?(issue, opts) and machine_head_finished?(issue, run_context)
   end
 
-  # In `Rework` the head must have moved past where the Rework started, with nothing pending
-  # (`rework_finished?/2`); any other origin needs nothing pending and the PR on the head
+  # In `Rework` nothing may be pending and the PR must be on the head (`rework_finished?/3`): the
+  # handoff step's own push hands off a head the rework left unchanged too; any other origin needs
+  # nothing pending and the PR on the head
   # (`post_pr_quiet_continuation?/3`).
   defp machine_head_finished?(%Issue{} = issue, %{opts: opts, progress: %{head: head}} = run_context) do
     if rework_state?(issue.state) do
-      rework_finished?(issue, run_context)
+      rework_finished?(issue, run_context, :handoff_step)
     else
       is_binary(head) and attached_pr?(issue, opts) and no_pending_rework_signal?(issue, opts) and
         pr_url_head?(ticket_pr_url(issue, opts), head, run_context)
@@ -2021,14 +2022,28 @@ defmodule SymphonyElixir.AgentRunner do
   # The rework is done once the workspace HEAD has moved past the head the Rework started from (by
   # this run or an earlier one), that HEAD is the attached PR's head, and no review, CI, QA or
   # conflict signal is pending.
-  defp rework_finished?(%Issue{} = issue, %{progress: %{head: head} = progress} = run_context) when is_binary(head) do
+  #
+  # A rework whose fix needs no commit (a walkthrough proof recorded again, a description field)
+  # leaves the HEAD where the Rework started. It is done too once the run handed that head off
+  # explicitly (TP-1186): its push or PR tool call in this run handed off that head (the ledger keeps
+  # one push per head, so only the run's own registry tells this run's push apart), or the step
+  # list's machine `handoff` step (`:handoff_step`) pushed it. A run that only goes quiet on the
+  # unchanged head stays in Rework.
+  defp rework_finished?(issue, run_context, handoff \\ :tool_call)
+
+  defp rework_finished?(%Issue{} = issue, %{progress: %{head: head} = progress} = run_context, handoff) when is_binary(head) do
     rework_state?(issue.state) and attached_pr?(issue, run_context.opts) and
-      head != progress.rework_base and
+      (head != progress.rework_base or unchanged_head_handed_off?(issue, run_context, handoff)) and
       no_pending_rework_signal?(issue, run_context.opts) and
       pr_head?(issue, head, run_context)
   end
 
-  defp rework_finished?(_issue, _run_context), do: false
+  defp rework_finished?(_issue, _run_context, _handoff), do: false
+
+  defp unchanged_head_handed_off?(_issue, _run_context, :handoff_step), do: true
+
+  defp unchanged_head_handed_off?(_issue, %{opts: opts, progress: %{head: head}}, :tool_call),
+    do: CommentRegistry.handed_off?(Keyword.get(opts, :linear_comment_registry), head)
 
   defp pr_head?(%Issue{} = issue, head, run_context) do
     github = Keyword.get(run_context.opts, :github, PullRequest)
@@ -2046,7 +2061,7 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  # `rework_finished?/2` already read the workspace HEAD as the PR's head, so the rework is on its PR
+  # `rework_finished?/3` already read the workspace HEAD as the PR's head, so the rework is on its PR
   # however it got there. A push outside the tool hooks (a shell push, a step's own command) emits no
   # signal, and the run would fail and retry on a head with nothing left to push, so the signal is
   # recorded for the head here, as `hand_off_quiet_pr_head/3` does outside Rework.
@@ -2074,7 +2089,7 @@ defmodule SymphonyElixir.AgentRunner do
   # there: in the post-PR state it starts QA on green, and re-runs a flaky failure or dispatches a
   # fix run on red. So the run moves to that state instead of turning while CI runs until the idle
   # check parks it. Gives the CI action (`:pending` or `:success`), or nil for a head with no checks
-  # yet, a red head or another PR head. `Rework` and `Merging` keep their own rules (`rework_finished?/2`,
+  # yet, a red head or another PR head. `Rework` and `Merging` keep their own rules (`rework_finished?/3`,
   # `merging_ci_pending?/2`).
   defp pushed_head_handoff_ci_action(%Issue{} = issue, %{progress: %{head: head, start_head: start_head}} = run_context)
        when is_binary(head) and is_binary(start_head) do
@@ -2250,7 +2265,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   # A Rework run that pushed a new head to its PR, with CI on it running or green, waits on that CI,
   # so it is not idle: it moves to the post-PR state, where the PR and CI watcher takes the head over. That
-  # covers what `rework_finished?/2` skips, such as a Rework started by a CI failure, which stays
+  # covers what `rework_finished?/3` skips, such as a Rework started by a CI failure, which stays
   # pending until the run ends. A CI-caused Rework that rightly pushes nothing takes the same handoff
   # when its head is green or still running: another run would have nothing to repair. Outside Rework,
   # `pushed_head_handoff_ci_action/2` already handed off such a head. A run whose HEAD is the PR head
@@ -2342,8 +2357,8 @@ defmodule SymphonyElixir.AgentRunner do
   # approved (in `Merging`) when the signal came, and the head it came on; or nil. A CI-fix run
   # answers a CI failure; a merge-conflict run answers a conflict, and only a PR GitHub now calls
   # `MERGEABLE` shows it needed no commit, so one still conflicting (or not computed yet) is parked
-  # as before, whatever else is pending. `Rework` keeps its own rule (`rework_finished?/2`): a
-  # rework that adds no commit is not done.
+  # as before, whatever else is pending. `Rework` keeps its own rule (`rework_finished?/3`): a
+  # rework that adds no commit is done only once the run hands its head off explicitly.
   defp green_fix(%Issue{} = issue, ci_status, %{opts: opts}) do
     cond do
       rework_state?(issue.state) -> nil
