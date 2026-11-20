@@ -235,8 +235,7 @@ defmodule SymphonyElixir.QaAgent.Selection do
 
   @doc "Whether the issue body has a `## User walkthrough` section, or its plan a QA check (`SymphonyElixir.TicketJourney`)."
   @spec user_walkthrough?(Issue.t()) :: boolean()
-  def user_walkthrough?(%Issue{} = issue), do: TicketJourney.walkthrough?(issue, &walkthrough_heading?/1)
-  def user_walkthrough?(_issue), do: false
+  def user_walkthrough?(issue), do: TicketJourney.walkthrough?(issue, &walkthrough_heading?/1)
 
   defp walkthrough_heading?(description), do: is_binary(description) and Regex.match?(@walkthrough_heading, description)
 
