@@ -156,7 +156,8 @@ defmodule SymphonyElixir.TicketEvents.Types do
 
   `conductor.update` and `conductor.instructions` are machine-only: what the Conductor's turn at a
   junction of the ticket's life wrote (`SymphonyElixir.Conductor`), naming the junction
-  (`after_coding`, `after_qa_fail`, `after_qa_blocked`, `after_rework`, `before_merge`). The update
+  (`grooming`, `after_coding`, `after_qa_fail`, `after_qa_blocked`, `after_rework`, `before_merge`,
+  `message`, `sub_ticket_ended`, `final_check`, `child_message`). The update
   is for the person (`text`, at most 900 characters) with the ids of the events it rests on
   (`refs`); the instructions are advice for the next run's prompt (`text`, at most 3,000), and at
   `after_qa_blocked` carry the route Symphony took on the turn's answer (`route`: `rerun`, QA runs
@@ -275,7 +276,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
   @rule_actions ~w(rerun paused parked filed_ticket lifted_pause moved updated_branch auto_merge asked other)
 
   # The junctions of a ticket's life the Conductor runs at (`SymphonyElixir.Config.Schema.Conductor.junctions/0`).
-  @conductor_junctions ~w(after_coding after_qa_fail after_qa_blocked after_rework before_merge during_run)
+  @conductor_junctions ~w(grooming after_coding after_qa_fail after_qa_blocked after_rework before_merge message sub_ticket_ended final_check child_message during_run)
   # What made the Conductor's watch look at a running run (`SymphonyElixir.Conductor.Watch`).
   @watch_triggers ~w(step_failed step_failed_twice qa_step_answer run_minutes run_tokens)
 

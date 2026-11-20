@@ -2064,9 +2064,12 @@ defmodule SymphonyElixir.Config.Schema do
     @moduledoc """
     `symphony.yml`'s `conductor` section (`SymphonyElixir.Conductor`): whether Symphony runs the
     Conductor's short turn at a ticket's junctions (`enabled`, off by default), at which junctions
-    (`junctions`: `after_coding`, `after_qa_fail`, `after_qa_blocked`, `after_rework`,
-    `before_merge`; all five by default) and how long one turn may take before the next run starts without it (`timeout_ms`,
-    three minutes by default), and whether it watches running runs to steer them (`watch`,
+    (`junctions`: `grooming`, `after_coding`, `after_qa_fail`, `after_qa_blocked`, `after_rework`,
+    `before_merge`, `message`, `sub_ticket_ended`, `final_check`, `child_message`; every one by
+    default) and how long one turn may take before the next run starts without it (`timeout_ms`,
+    three minutes by default; `grooming_timeout_ms`, ten minutes, for the Grooming turn, which may
+    read the code), how many rounds of sub-tickets a parent's final check may add before it asks
+    the person (`final_check_rounds`, 3), and whether it watches running runs to steer them (`watch`,
     `SymphonyElixir.Conductor.Watch`, off by default), whether its answer may file a linked ticket
     for a problem that is not the current ticket's to solve (`file_tickets`, on by default;
     `SymphonyElixir.Conductor.Filing`) and how many one ticket may file over its whole life
@@ -2078,7 +2081,8 @@ defmodule SymphonyElixir.Config.Schema do
     @type t :: %__MODULE__{}
 
     @primary_key false
-    @junctions ~w(after_coding after_qa_fail after_qa_blocked after_rework before_merge)
+    @junctions ~w(grooming after_coding after_qa_fail after_qa_blocked after_rework before_merge message sub_ticket_ended final_check child_message)
+    @fields ~w(enabled junctions timeout_ms grooming_timeout_ms final_check_rounds file_tickets max_filed_tickets)a
 
     defmodule Watch do
       @moduledoc """
@@ -2121,6 +2125,8 @@ defmodule SymphonyElixir.Config.Schema do
       field(:enabled, :boolean, default: false)
       field(:junctions, {:array, :string}, default: @junctions)
       field(:timeout_ms, :integer, default: 180_000)
+      field(:grooming_timeout_ms, :integer, default: 600_000)
+      field(:final_check_rounds, :integer, default: 3)
       field(:file_tickets, :boolean, default: true)
       field(:max_filed_tickets, :integer, default: 2)
       embeds_one(:watch, Watch, on_replace: :update, defaults_to_struct: true)
@@ -2133,10 +2139,12 @@ defmodule SymphonyElixir.Config.Schema do
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
       schema
-      |> cast(attrs, [:enabled, :junctions, :timeout_ms, :file_tickets, :max_filed_tickets], empty_values: [])
-      |> Schema.validate_present([:enabled, :junctions, :timeout_ms, :file_tickets, :max_filed_tickets])
+      |> cast(attrs, @fields, empty_values: [])
+      |> Schema.validate_present(@fields)
       |> validate_subset(:junctions, @junctions, message: "must name only #{Enum.join(@junctions, ", ")}")
       |> validate_number(:timeout_ms, greater_than: 0)
+      |> validate_number(:grooming_timeout_ms, greater_than: 0)
+      |> validate_number(:final_check_rounds, greater_than: 0)
       |> validate_number(:max_filed_tickets, greater_than_or_equal_to: 0)
       |> cast_embed(:watch, with: &Watch.changeset/2)
     end

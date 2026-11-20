@@ -81,6 +81,11 @@ defmodule SymphonyElixir.Conductor do
   @external_resource @watch_prompt_path
   @watch_prompt File.read!(@watch_prompt_path)
   @junction_words %{
+    "grooming" => "the ticket is new; you write its plan before any work starts",
+    "message" => "a person sent a message on the ticket; you answer it",
+    "sub_ticket_ended" => "a sub-ticket of this ticket ended; you look at what is left of its plan",
+    "final_check" => "the last sub-ticket ended; you check the whole ticket against its plan",
+    "child_message" => "a person sent a message on a sub-ticket of this ticket",
     "after_coding" => "an implementation run handed off; Code Review or QA judges it next",
     "after_qa_fail" => "QA failed; a rework run answers its findings next",
     "after_qa_blocked" => "QA could not judge the change; you decide how the ticket gets a real QA result",

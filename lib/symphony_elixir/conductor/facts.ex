@@ -37,6 +37,15 @@ defmodule SymphonyElixir.Conductor.Facts do
       whether it is open, the tickets it already filed or linked from this ticket, how many filings
       remain, and the repos a ticket may be filed in.
 
+  At `grooming` the ticket is new and no run has worked on it, so the document is another one
+  (same `schema`, `junction` and `focus`): `ticket` (identifier, title, URL, `repo` and labels),
+  `asks` (every `ask.recorded`, oldest first, word for word: its `source` and where it came
+  `from`), the person's `decisions`, `notes` and `answers`, `parent` (when the ticket has one
+  Symphony tracks: its identifier, title, current `plan` and the notes a run tagged), `siblings`
+  (the parent's other sub-tickets that hold a tagged note, with those notes), `layers` (the layer
+  vocabulary a plan names, each with what it means), `conductor` (what earlier turns wrote) and
+  `budget`.
+
   Each fact read from an event carries the event's id (`event_id`), so a claim built on it can be
   traced. Long texts are cut with a marker (`#{inspect(" [cut by Symphony]")}`), lists keep their
   newest entries, and no transcript is read, so a normal ticket's document stays well under 20,000
@@ -44,7 +53,7 @@ defmodule SymphonyElixir.Conductor.Facts do
   """
 
   alias SymphonyElixir.Conductor.Filing
-  alias SymphonyElixir.{Config, RunStore, TicketBrief, TicketEvents, TicketState, Walkthrough, Workspace}
+  alias SymphonyElixir.{Config, RunStore, TicketBrief, TicketEvents, TicketPlan, TicketState, Walkthrough, Workspace}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.TicketEvents.{Event, StepWord}
 
@@ -62,7 +71,25 @@ defmodule SymphonyElixir.Conductor.Facts do
   @step_text_max 500
   @coding_kinds ["implementation", "rework"]
   @qa_blocked "after_qa_blocked"
+  @grooming "grooming"
+  @plan_text_max 6_000
+  @max_siblings 20
+  # The layers a plan names (`SymphonyElixir.Conductor.Answer.layers/0`), each with what it means.
+  @layers [
+    screen: "something a person sees or does in the app changes",
+    gallery: "a design-system component or its Gallery story changes",
+    api: "an HTTP route or a tool other code calls changes",
+    engine: "the service's own behaviour changes: dispatch, runs, rules, state",
+    config: "a setting, its schema or its default changes",
+    tooling: "the build, CI, a script or a developer tool changes",
+    docs: "documentation changes"
+  ]
   @focus %{
+    "grooming" => "The ticket is new and no run has worked on it; you write its plan from what was asked.",
+    "message" => "A person sent a message on the ticket; you answer it.",
+    "sub_ticket_ended" => "A sub-ticket of this ticket ended; you look at what is left of its plan.",
+    "final_check" => "The last sub-ticket ended; you check the whole ticket against its plan.",
+    "child_message" => "A person sent a message on a sub-ticket of this ticket.",
     "after_coding" => "The implementation run handed off; Code Review or QA judges it next.",
     "after_qa_fail" => "QA failed; a rework run answers its findings next.",
     "after_qa_blocked" =>
@@ -77,7 +104,8 @@ defmodule SymphonyElixir.Conductor.Facts do
   @typedoc """
   `build/3`'s options: `events:` (the ticket's events, oldest first), `token_cap:`, `diff_stat:`
   (`(record -> [map()] | nil)`), `conductor:` (the `conductor` settings, default
-  `Config.conductor_settings/0`) and `repos:` (the managed repo keys, as `Filing.facts/3` takes them).
+  `Config.conductor_settings/0`), `repos:` (the managed repo keys, as `Filing.facts/3` takes them)
+  and `records:` (every ticket record, where `grooming` finds the parent and its other sub-tickets).
   """
   @type opt ::
           {:events, [Event.t()]}
@@ -85,6 +113,7 @@ defmodule SymphonyElixir.Conductor.Facts do
           | {:diff_stat, (map() -> [map()] | nil)}
           | {:conductor, Schema.Conductor.t()}
           | {:repos, [String.t()]}
+          | {:records, [map()]}
 
   @doc "The junctions a document may be shaped for: the Conductor's, and `during_run` for a watch turn."
   @spec junctions() :: [String.t()]
@@ -131,6 +160,10 @@ defmodule SymphonyElixir.Conductor.Facts do
   def build(record, junction, opts \\ []) do
     record = TicketState.normalize(record)
     events = Keyword.get_lazy(opts, :events, fn -> events(record.issue_id) end)
+    if junction == @grooming, do: grooming(record, events, opts), else: junction_facts(record, junction, events, opts)
+  end
+
+  defp junction_facts(record, junction, events, opts) do
     last_run = last_run(events)
 
     %{
@@ -156,6 +189,71 @@ defmodule SymphonyElixir.Conductor.Facts do
       events when is_list(events) -> events
       {:error, _reason} -> []
     end
+  end
+
+  # Grooming: what was asked, and what the ticket's family already knows.
+
+  defp grooming(record, events, opts) do
+    records = Keyword.get_lazy(opts, :records, &records/0)
+    parent = parent_record(record, records)
+
+    %{
+      schema: @schema,
+      junction: @grooming,
+      focus: Map.fetch!(@focus, @grooming),
+      ticket: %{identifier: record.issue_identifier, title: record.title, url: record.url, repo: record.repo_key, labels: record.labels},
+      asks: for(ask <- TicketPlan.ask(events), do: drop_nil(%{event_id: ask.event_id, source: ask.source, from: ask.from, text: ask.text})),
+      decisions: Enum.map(record.decisions, &%{title: &1.title, answer: cut(&1.answer, @text_max)}),
+      notes: person_notes(events),
+      answers: answers(events),
+      parent: parent && parent_facts(parent),
+      siblings: siblings(record, parent, records),
+      layers: for({name, means} <- @layers, do: %{name: Atom.to_string(name), means: means}),
+      conductor: conductor(events),
+      budget: budget(record, events, opts)
+    }
+  end
+
+  defp records do
+    with({:error, _reason} <- RunStore.list_all_ticket_states(), do: []) |> List.wrap() |> Enum.map(&TicketState.normalize/1)
+  end
+
+  defp parent_record(%{parent: %{identifier: identifier}}, records), do: Enum.find(records, &(&1.issue_identifier == identifier and is_binary(&1.issue_id)))
+  defp parent_record(_record, _records), do: nil
+
+  defp parent_facts(parent) do
+    %{identifier: parent.issue_identifier, title: parent.title, plan: plan_facts(TicketPlan.current(parent.issue_id)), notes: tagged_notes(parent.issue_id)}
+  end
+
+  defp plan_facts(nil), do: nil
+
+  defp plan_facts(plan) do
+    %{
+      event_id: plan.event_id,
+      version: plan.version,
+      shape: plan.shape,
+      layers: plan.layers,
+      summary: plan.summary,
+      text: cut(plan.text, @plan_text_max),
+      sub_tickets: for(entry <- Map.get(plan, :sub_tickets, []), do: Map.take(entry, [:key, :title, :after, :identifier]))
+    }
+  end
+
+  # The parent's other sub-tickets that hold a note a run tagged.
+  defp siblings(_record, nil, _records), do: []
+
+  defp siblings(record, parent, records) do
+    for %{parent: %{identifier: identifier}, issue_id: issue_id} = sibling <- records,
+        identifier == parent.issue_identifier and is_binary(issue_id) and issue_id != record.issue_id,
+        notes = tagged_notes(issue_id),
+        notes != [] do
+      %{identifier: sibling.issue_identifier, title: sibling.title, phase: sibling.phase, notes: notes}
+    end
+    |> Enum.take(@max_siblings)
+  end
+
+  defp tagged_notes(issue_id) do
+    for note <- issue_id |> TicketPlan.notes() |> Enum.take(-@max_notes), do: %{event_id: note.event_id, tag: note.tag, text: cut(note.text, @text_max)}
   end
 
   # The ticket.
