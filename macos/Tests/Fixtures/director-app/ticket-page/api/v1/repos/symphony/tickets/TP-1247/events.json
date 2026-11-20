@@ -95,7 +95,8 @@
         "proof": "qa",
         "action": "Open the paused ticket",
         "expect": "One line: why, since when, who",
-        "size": "normal"
+        "size": "normal",
+        "needs": "A ticket paused by a person"
        },
        {
         "id": "c5",
@@ -105,7 +106,8 @@
         "action": "Open the paused ticket in a wide window",
         "expect": "The line as the Gallery draws it",
         "size": "wide",
-        "story": "paused-line"
+        "story": "paused-line",
+        "needs": "A ticket paused by a person"
        },
        {
         "id": "c6",
@@ -121,7 +123,7 @@
      },
      "summary": {
       "title": "Plan written",
-      "detail": "Add who paused the ticket to the paused line, after the reason and the time. A rule's pause names the rule."
+      "detail": "Grooming"
      },
      "artifacts": [],
      "children": [],
@@ -482,7 +484,8 @@
         "proof": "qa",
         "action": "Open the paused ticket",
         "expect": "One line: why, since when, who",
-        "size": "normal"
+        "size": "normal",
+        "needs": "A ticket paused by a person"
        },
        {
         "id": "c5",
@@ -492,7 +495,8 @@
         "action": "Open the paused ticket in a wide window",
         "expect": "The line as the Gallery draws it",
         "size": "wide",
-        "story": "paused-line"
+        "story": "paused-line",
+        "needs": "A ticket paused by a person"
        },
        {
         "id": "c6",
@@ -507,8 +511,8 @@
       }
      },
      "summary": {
-      "title": "Plan written",
-      "detail": "Add who paused the ticket to the paused line, after the reason and the time. A rule's pause names the rule. The button keeps the word Release."
+      "title": "Plan changed",
+      "detail": "The button keeps the word Release"
      },
      "artifacts": [],
      "children": [],

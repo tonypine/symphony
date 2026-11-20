@@ -302,7 +302,8 @@
     "size": {
       "tokens": 4000000,
       "runs": 2
-    }
+    },
+    "sub_tickets": []
   },
   "checks": [
     {
@@ -314,9 +315,14 @@
       "proved_by": {
         "by": "test",
         "test": "PausedLineTests › says who paused it",
+        "evidence": null,
+        "details": null,
+        "event_id": "k1",
         "at": "2026-10-08T09:30:00Z",
+        "head": "8f3e2a1c9d",
         "run_id": "run-1"
-      }
+      },
+      "waived": null
     },
     {
       "id": "c2",
@@ -327,9 +333,14 @@
       "proved_by": {
         "by": "test",
         "test": "PausedLineTests › names the rule",
+        "evidence": null,
+        "details": null,
+        "event_id": "k2",
         "at": "2026-10-08T09:31:00Z",
+        "head": "8f3e2a1c9d",
         "run_id": "run-1"
-      }
+      },
+      "waived": null
     },
     {
       "id": "c3",
@@ -337,34 +348,45 @@
       "statement": "The button on the paused line reads Release",
       "proof": "test",
       "state": "open",
-      "proved_by": null
+      "proved_by": null,
+      "waived": null
     },
     {
       "id": "c4",
       "kind": "qa",
       "statement": "On a paused ticket's page the line under the title reads the reason, the time and who paused it, on one line at 1366 pt",
       "proof": "qa",
+      "state": "open",
+      "proved_by": null,
+      "waived": null,
+      "needs": "A ticket paused by a person",
       "action": "Open the paused ticket",
       "expect": "One line: why, since when, who",
       "size": "normal",
-      "state": "open",
-      "proved_by": null
+      "story": null
     },
     {
       "id": "c5",
       "kind": "qa",
       "statement": "The paused line matches the catalog at the wide size",
       "proof": "design",
-      "action": "Open the paused ticket in a wide window",
-      "expect": "The line as the Gallery draws it",
-      "size": "wide",
-      "story": "paused-line",
       "state": "proved",
       "proved_by": {
         "by": "design",
+        "test": null,
+        "evidence": null,
         "details": "Matches the Gallery story at 2560 pt.",
-        "at": "2026-10-08T09:35:00Z"
-      }
+        "event_id": "k5",
+        "at": "2026-10-08T09:35:00Z",
+        "head": "8f3e2a1c9d",
+        "run_id": "run-1"
+      },
+      "waived": null,
+      "needs": "A ticket paused by a person",
+      "action": "Open the paused ticket in a wide window",
+      "expect": "The line as the Gallery draws it",
+      "size": "wide",
+      "story": "paused-line"
     },
     {
       "id": "c6",
@@ -372,7 +394,12 @@
       "statement": "A recording of a real pause being released",
       "proof": "attached",
       "state": "waived",
-      "proved_by": null
+      "proved_by": null,
+      "waived": {
+        "reason": "No test can hold a real pause open, and QA walks the same line.",
+        "event_id": "k6",
+        "at": "2026-10-08T09:41:00Z"
+      }
     }
   ],
   "asks": [

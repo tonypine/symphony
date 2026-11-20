@@ -51,7 +51,8 @@ public struct TicketPlanRead: Equatable, Decodable {
     }
 }
 
-/// One of the ticket read's `checks`: a check of the current plan with its `state` and, once proved, `proved_by`.
+/// One of the ticket read's `checks`: a check of the current plan with its `state` and, once proved, `proved_by`, or
+/// once waived, `waived`. A QA check's `needs`, `action`, `expect`, `size` and `story` are QA's to read, not the page's.
 public struct TicketCheckRead: Equatable, Decodable, Identifiable {
     /// Where a check stands. A state this app does not know reads as open.
     public enum State: String, Equatable {
@@ -79,6 +80,22 @@ public struct TicketCheckRead: Equatable, Decodable, Identifiable {
         }
     }
 
+    /// Why it was waived (`waived`, a `check.waived`'s fields).
+    public struct Waiver: Equatable, Decodable {
+        public var reason: String?
+
+        public init(reason: String? = nil) {
+            self.reason = reason
+        }
+
+        private enum CodingKeys: String, CodingKey { case reason }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.init(reason: (try? container.decodeIfPresent(String.self, forKey: .reason)) ?? nil)
+        }
+    }
+
     /// "c1": the same across the plan's versions.
     public var id: String
     /// `outcome`, `qa` or `evidence`.
@@ -88,8 +105,13 @@ public struct TicketCheckRead: Equatable, Decodable, Identifiable {
     public var proof: String?
     public var state: State
     public var provedBy: Proof?
+    public var waived: Waiver?
 
-    public init(id: String, kind: String? = nil, statement: String, proof: String? = nil, state: State = .open, provedBy: Proof? = nil) {
+    public init(
+        id: String, kind: String? = nil, statement: String, proof: String? = nil, state: State = .open, provedBy: Proof? = nil,
+        waived: Waiver? = nil
+    ) {
+        self.waived = waived
         self.id = id
         self.kind = kind
         self.statement = statement
@@ -99,7 +121,7 @@ public struct TicketCheckRead: Equatable, Decodable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, kind, statement, proof, state
+        case id, kind, statement, proof, state, waived
         case provedBy = "proved_by"
     }
 
@@ -107,11 +129,12 @@ public struct TicketCheckRead: Equatable, Decodable, Identifiable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         func text(_ key: CodingKeys) -> String? { (try? container.decodeIfPresent(String.self, forKey: key)) ?? nil }
         let provedBy = (try? container.decodeIfPresent(Proof.self, forKey: .provedBy)) ?? nil
-        // A state that is none of the three is open, unless the check names what proved it.
-        let state = text(.state).flatMap(State.init(rawValue:)) ?? (provedBy == nil ? .open : .proved)
+        let waived = (try? container.decodeIfPresent(Waiver.self, forKey: .waived)) ?? nil
+        // A state that is none of the three is what the check's own fields say: waived, proved, else open.
+        let state = text(.state).flatMap(State.init(rawValue:)) ?? (waived != nil ? .waived : provedBy == nil ? .open : .proved)
         self.init(
             id: try container.decode(String.self, forKey: .id), kind: text(.kind), statement: text(.statement) ?? "", proof: text(.proof),
-            state: state, provedBy: provedBy
+            state: state, provedBy: provedBy, waived: waived
         )
     }
 }
@@ -167,7 +190,7 @@ public struct PlanPanelModel: Equatable {
         public var state: TicketCheckRead.State
         /// "Test", "QA", "Design", "Attached"; "Waived" for a waived one; nil when the plan names no proof.
         public var proof: String?
-        /// The test that proved it and what the proof says, under the pointer.
+        /// The test that proved it and what the proof says, or why it was waived, under the pointer.
         public var help: String?
 
         /// The state's glyph.
@@ -255,7 +278,8 @@ public struct PlanPanelModel: Equatable {
     static func check(_ read: TicketCheckRead) -> Check {
         // A proved check says what proved it; an open one how it is to be proved.
         let proof = read.state == .waived ? waived : proofWord(read.provedBy?.by) ?? proofWord(read.proof)
-        let help = [read.provedBy?.test, read.provedBy?.details].compactMap { $0?.trimmingWhitespace().nonEmpty }.joined(separator: "\n")
+        let said = read.state == .waived ? [read.waived?.reason] : [read.provedBy?.test, read.provedBy?.details]
+        let help = said.compactMap { $0?.trimmingWhitespace().nonEmpty }.joined(separator: "\n")
         return Check(id: read.id, statement: read.statement.trimmingWhitespace(), state: read.state, proof: proof, help: help.nonEmpty)
     }
 }

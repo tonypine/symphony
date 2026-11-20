@@ -54,6 +54,8 @@ final class PlanPanelTests: XCTestCase {
         XCTAssertEqual(read.checks.map(\.kind), ["outcome", "outcome", "outcome", "qa", "qa", "evidence"])
         XCTAssertEqual(read.checks.map(\.proof), ["test", "test", "test", "qa", "design", "attached"])
         XCTAssertEqual(read.checks[0].provedBy, .init(by: "test", test: "PausedLineTests › says who paused it"))
+        XCTAssertEqual(read.checks[5].waived, .init(reason: "No test can hold a real pause open, and QA walks the same line."))
+        XCTAssertNil(read.checks[0].waived)
         XCTAssertEqual(read.checks[4].provedBy, .init(by: "design", details: "Matches the Gallery story at 2560 pt."))
         XCTAssertNil(read.checks[2].provedBy)
 
@@ -78,14 +80,15 @@ final class PlanPanelTests: XCTestCase {
             {"repo_key": "symphony", "brief": {"text": "Kept."},
              "plan": {"version": "two", "summary": 7, "text": "Do it.", "layers": "screen"},
              "checks": [{"id": "c1", "statement": "Stays", "state": "The app is paused", "proved_by": {"by": "qa"}},
-                        {"id": "c2", "statement": "Open still", "state": "somewhere"}, {"statement": "No id"}, "c4"],
+                        {"id": "c2", "statement": "Open still", "state": "somewhere"}, {"statement": "No id"}, "c4",
+                        {"id": "c5", "statement": "Let go", "waived": {"reason": "Not provable"}}],
              "asks": {"text": "not a list"}}
             """#)
         XCTAssertEqual(read.brief?.text, "Kept.")
         XCTAssertEqual(read.plan, TicketPlanRead(text: "Do it."))
-        // A state that is none of the three is open, unless the check names what proved it.
-        XCTAssertEqual(read.checks.map(\.id), ["c1", "c2"])
-        XCTAssertEqual(read.checks.map(\.state), [.proved, .open])
+        // A state that is none of the three is what the check's own fields say: proved, waived, else open.
+        XCTAssertEqual(read.checks.map(\.id), ["c1", "c2", "c5"])
+        XCTAssertEqual(read.checks.map(\.state), [.proved, .open, .waived])
         XCTAssertEqual(read.asks, [])
         XCTAssertNil(try decode(#"{"plan": "soon"}"#).plan)
     }
@@ -110,6 +113,7 @@ final class PlanPanelTests: XCTestCase {
         XCTAssertEqual(model.checks[0].help, "PausedLineTests › says who paused it")
         XCTAssertEqual(model.checks[4].help, "Matches the Gallery story at 2560 pt.")
         XCTAssertNil(model.checks[2].help)
+        XCTAssertEqual(model.checks[5].help, "No test can hold a real pause open, and QA walks the same line.")
         XCTAssertEqual(model.checks[0].accessibilityLabel, "Proved, The paused line says who paused the ticket, after why and since when, Test")
         XCTAssertEqual(model.checks[2].accessibilityLabel, "Open, The button on the paused line reads Release, Test")
         XCTAssertEqual(model.checks[5].accessibilityLabel, "Waived, A recording of a real pause being released")
