@@ -288,7 +288,7 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                     TimeoutRow(title: "Ask me to sign in again after", minutes: $model.signInAskAfterMinutes)
                     Text("Asks you in the Inbox once agents have been unable to sign in to their model this long.")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DesignTokens.TextColor.secondary.color)
                     if let error = model.timeoutsError {
                         Text(error).foregroundStyle(.red)
                     }
