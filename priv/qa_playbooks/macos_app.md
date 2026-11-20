@@ -466,6 +466,34 @@ GitHub or Linear in QA:
   of content, the desktop's column has the same Send, and it slides out once the read drops the
   question. Walk it in light and dark, and once with Reduce Motion on: the question disappears
   at once.
+- **Cancel Ticket from the ticket page (TP-1317):** the same `ticket-page` fixtures at 1440×900.
+  Open TP-1244 (running, PR #741 open) from its row in Work › Tickets, or on Home under in
+  progress: the fixtures list TP-1244, TP-1245 and TP-1246 there. Choose **Cancel Ticket…** in
+  More: a sheet titled "Cancel TP-1244?" says, in red, that it ends the agent, closes its pull
+  request with your note as the closing comment, and moves TP-1244 from Rework to Canceled for
+  good, withdrawing its questions and clearing its holds; under it what Undo gives back; then
+  the note field ("Why it is cancelled (optional)") with the keyboard in it, **Keep It** and
+  **Cancel Ticket** in red. Keep It closes it and `qa_api_requests` lists nothing. Open it
+  again, type "  superseded by the secrets redesign  " and press Cancel Ticket: the sheet
+  closes, the banner "Cancelled, moved to Canceled" offers Undo, and `qa_api_requests` lists one
+  `POST /api/v1/control/cancel` with `issue_identifier` TP-1244 and `note` "superseded by the
+  secrets redesign" (trimmed); a blank note sends no `note`. Open TP-1246 (done) from Tickets:
+  More has no Cancel Ticket…. Then pass
+  `macos/Tests/Fixtures/director-app/ticket-cancel-refused`, open TP-1244 from Tickets the same
+  way and cancel it: Symphony refuses it, and the sheet stays open with the note as typed and
+  "Couldn't cancel TP-1244: TP-1244's team has no Canceled state, so it can't be cancelled (HTTP
+  409)" under it. Walk it in light and dark.
+- **After the cancel, walkthrough step 2 (TP-1317):** on `ticket-page`, once the cancel above
+  went through, the fixtures answer every read again with Symphony's state after a cancel
+  (`.after-cancel` files): the status-bar menu counts no running ticket, Home's
+  in progress has TP-1245 only, Work › Tickets reads TP-1244 Canceled, and TP-1244's page reads
+  Canceled, PR #741 closed, More without Cancel Ticket…, and its timeline ends "Cancelled from
+  Rework" with the note, after implementation run 2 stopped. The test
+  `testTheTicketPageFixture_AfterTheCancel_TP1244LeavesTheRunningListAndItsPullRequestIsClosed`
+  proves those reads, and the server's own cancel (the run stopped, the PR closed with the note)
+  is proved by `test/symphony_elixir/director_moves_test.exs`' "cancels a running ticket: the run
+  stops, its pull request closes with the note, nothing waits on it". Relaunch the app on a fresh
+  QA root to see the before state again.
 - **Setup (TP-910):** pass `macos/Tests/Fixtures/director-app/setup` as `api_fixtures`. Its
   state has one error, `Team TP has no "Needs Decision" label` (**Create Label…**), and one
   warning, `symphony.yml sets auto_review.enabled, which is deprecated` (**Remove…**). Before

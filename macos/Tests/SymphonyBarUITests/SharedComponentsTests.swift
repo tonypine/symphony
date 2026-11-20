@@ -99,6 +99,125 @@ final class SharedComponentsTests: XCTestCase {
         }
     }
 
+    /// TP-1517: the label's capitals sit halfway between a button's top and bottom edges in every kind and size,
+    /// within a quarter point (a centred line left them up to half a point low), its glyph is level with them, and the
+    /// content keeps the size's padding on both sides.
+    func testAButtonsLabelIsCentredInItsShapeInEveryKindAndSize() throws {
+        for size in DesignTokens.Control.allCases {
+            for kind in ButtonKind.allCases {
+                for state in [DesignTokens.Interaction.rest, .hover] {
+                    let plain = try XCTUnwrap(Self.ink(ButtonFace(label: Text("HHH"), kind: kind, size: size, state: state, reduceMotion: true)))
+                    XCTAssertEqual(plain.runs.count, 1, "\(kind) \(size) \(state): the label alone")
+                    let label = try XCTUnwrap(plain.runs.first)
+                    XCTAssertEqual(plain.size.height, size.height, accuracy: 0.5)
+                    XCTAssertEqual(label.middle, size.height / 2, accuracy: 0.25, "\(kind) \(size) \(state): the capitals' middle")
+                    XCTAssertEqual(label.left, plain.size.width - label.right, accuracy: 0.5, "\(kind) \(size) \(state): centred across")
+                    XCTAssertEqual(label.left, size.padding, accuracy: 1.5, "\(kind) \(size) \(state): the size's padding")
+
+                    let glyphed = try XCTUnwrap(Self.ink(ButtonFace(label: Text("HHH"), kind: kind, size: size, glyph: "plus", state: state, reduceMotion: true)))
+                    XCTAssertEqual(glyphed.runs.count, 2, "\(kind) \(size) \(state): the glyph and the label")
+                    let glyph = try XCTUnwrap(glyphed.runs.first), words = try XCTUnwrap(glyphed.runs.last)
+                    XCTAssertEqual(words.middle, size.height / 2, accuracy: 0.25, "\(kind) \(size) \(state): the capitals' middle")
+                    XCTAssertEqual(glyph.middle, words.middle, accuracy: 0.5, "\(kind) \(size) \(state): the glyph on the capitals")
+                    XCTAssertEqual(glyph.left, size.padding, accuracy: 2.5)
+                    XCTAssertEqual(glyphed.size.width - words.right, size.padding, accuracy: 1.5)
+                }
+            }
+        }
+    }
+
+    /// TP-1517: a menu button's title is centred down as a button's is, its chevron level with the capitals, with the
+    /// catalog's padding before the title and its shorter padding after the chevron.
+    func testAMenuButtonsTitleAndChevronAreCentredInItsShape() throws {
+        for size in DesignTokens.Control.allCases {
+            for state in [DesignTokens.Interaction.rest, .hover] {
+                let face = try XCTUnwrap(Self.ink(MenuControlFace(.menu(title: "HHH", glyph: nil), size: size, state: state, reduceMotion: true)))
+                XCTAssertEqual(face.runs.count, 2, "\(size) \(state): the title and the chevron")
+                let title = try XCTUnwrap(face.runs.first), chevron = try XCTUnwrap(face.runs.last)
+                XCTAssertEqual(title.middle, size.height / 2, accuracy: 0.25, "\(size) \(state): the capitals' middle")
+                XCTAssertEqual(chevron.middle, title.middle, accuracy: 0.5, "\(size) \(state): the chevron on the capitals")
+                XCTAssertEqual(title.left, size.padding, accuracy: 1.5)
+                XCTAssertEqual(face.size.width - chevron.right, size.padding * DesignTokens.MenuControl.trailingScale, accuracy: 2)
+            }
+        }
+    }
+
+    /// TP-1517: an icon button's glyph is centred both ways in its square.
+    func testAnIconButtonsGlyphIsCentredBothWays() throws {
+        for size in DesignTokens.Control.allCases {
+            for state in [DesignTokens.Interaction.rest, .hover] {
+                let face = try XCTUnwrap(Self.ink(IconButtonFace("plus", size: size, state: state, reduceMotion: true)))
+                let glyph = try XCTUnwrap(face.runs.first)
+                XCTAssertEqual(face.runs.count, 1)
+                XCTAssertEqual(glyph.middle, size.height / 2, accuracy: 0.25, "\(size) \(state)")
+                XCTAssertEqual((glyph.left + glyph.right) / 2, size.height / 2, accuracy: 0.25, "\(size) \(state)")
+            }
+        }
+    }
+
+    /// TP-1517: the pointing hand over an enabled shared control, and the pointer left as it is over a disabled one.
+    func testThePointerIsTheHandOnlyOverAnEnabledButton() {
+        XCTAssertTrue(ButtonPointer.hand(enabled: true))
+        XCTAssertFalse(ButtonPointer.hand(enabled: false))
+        XCTAssertNotNil(ButtonPointer.style(enabled: true))
+        XCTAssertNil(ButtonPointer.style(enabled: false))
+    }
+
+    /// One run of ink across a drawn face: its edges in points, and the middle of its top and bottom.
+    struct Ink {
+        var left: Double
+        var right: Double
+        var top: Double
+        var bottom: Double
+        var middle: Double { (top + bottom) / 2 }
+    }
+
+    /// Draws `face` in light at four pixels a point, and finds what is drawn on its fill (the colour 3 pt in from its
+    /// left edge, halfway down): the runs of it across, apart from each other by 3 pt or more (a glyph, a label, a
+    /// chevron), each with its top and bottom. The 3 pt along the top and bottom and 5 pt at each side are left out,
+    /// for the face's edge, its highlight and its corners.
+    static func ink(_ face: some View, scale: Double = 4) -> (size: CGSize, runs: [Ink])? {
+        let renderer = ImageRenderer(content: face.environment(\.colorScheme, .light))
+        renderer.scale = scale
+        guard let image = renderer.cgImage, let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+        let width = image.width, height = image.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let drawn = pixels.withUnsafeMutableBytes { buffer -> Bool in
+            guard let context = CGContext(
+                data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4, space: space,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) else { return false }
+            context.setFillColor(.white)
+            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard drawn else { return nil }
+        func pixel(_ x: Int, _ y: Int) -> [Int] {
+            let at = (y * width + x) * 4
+            return [Int(pixels[at]), Int(pixels[at + 1]), Int(pixels[at + 2])]
+        }
+        let fill = pixel(Int(3 * scale), height / 2)
+        let across = Int(5 * scale), down = Int(3 * scale)
+        var runs: [Ink] = []
+        var last: Int?
+        for x in across..<(width - across) {
+            let inked = (down..<(height - down)).filter { y in zip(pixel(x, y), fill).map { abs($0 - $1) }.reduce(0, +) > 3 * 96 }
+            guard let top = inked.first, let bottom = inked.last else { continue }
+            let column = Ink(left: Double(x) / scale, right: Double(x + 1) / scale, top: Double(top) / scale, bottom: Double(bottom + 1) / scale)
+            if let last, x - last < Int(3 * scale), var run = runs.popLast() {
+                run.right = column.right
+                run.top = min(run.top, column.top)
+                run.bottom = max(run.bottom, column.bottom)
+                runs.append(run)
+            } else {
+                runs.append(column)
+            }
+            last = x
+        }
+        return (CGSize(width: Double(width) / scale, height: Double(height) / scale), runs)
+    }
+
     func testAnIconButtonIsSquareAtEachSize() {
         for size in DesignTokens.Control.allCases {
             for on in [false, true] {

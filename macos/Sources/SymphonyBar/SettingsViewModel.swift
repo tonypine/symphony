@@ -90,6 +90,7 @@ final class SettingsViewModel: ObservableObject {
     @Published var gitNetworkTimeoutMinutes = OperationTimeouts.minutes(OperationTimeouts.defaultGitNetworkMs)
     @Published var mcpToolTimeoutMinutes = OperationTimeouts.minutes(OperationTimeouts.defaultMcpToolMs)
     @Published var pendingToolReportMinutes = OperationTimeouts.minutes(OperationTimeouts.defaultPendingToolReportMs)
+    @Published var signInAskAfterMinutes = OperationTimeouts.minutes(OperationTimeouts.defaultSignInAskAfterMs)
     /// Why `symphony check` rejected the changed timeouts, shown in their section.
     @Published private(set) var timeoutsError: String?
     /// `github.webhooks.fallback_poll_interval_ms` and `github.webhooks.silence_alert_minutes` in the configured
@@ -477,6 +478,7 @@ final class SettingsViewModel: ObservableObject {
             gitNetworkTimeoutMinutes = OperationTimeouts.minutes(timeouts.gitNetworkMs)
             mcpToolTimeoutMinutes = OperationTimeouts.minutes(timeouts.mcpToolMs)
             pendingToolReportMinutes = OperationTimeouts.minutes(timeouts.pendingToolReportMs)
+            signInAskAfterMinutes = OperationTimeouts.minutes(timeouts.signInAskAfterMs)
             loadedTimeouts = timeouts
         } catch {
             configFileError = "Could not read the timeouts from symphony.yml: \(error.localizedDescription)"
@@ -671,7 +673,8 @@ final class SettingsViewModel: ObservableObject {
         let timeouts = loadedTimeouts?.settingMinutes(
             gitNetwork: gitNetworkTimeoutMinutes,
             mcpTool: mcpToolTimeoutMinutes,
-            pendingToolReport: pendingToolReportMinutes
+            pendingToolReport: pendingToolReportMinutes,
+            signInAskAfter: signInAskAfterMinutes
         )
         let oldTimeouts = loadedTimeouts.flatMap { $0 != timeouts ? $0 : nil }
         gitHubUpdatesError = nil

@@ -631,6 +631,7 @@ execution:
     auto_pause: true
     resume_margin_seconds: 120
     unknown_reset_retry_seconds: 900
+    sign_in_ask_after_seconds: 1800
   providers:
     anthropic:
       reserve:
@@ -865,6 +866,15 @@ execution:
   starts whatever `auto_pause` says, probes after 60 seconds and doubles the wait after each
   failed probe. A released outage hold is remembered this long (at least 10 minutes), so a QA run
   that finds the outage again keeps the backoff.
+- A Claude agent that can't sign in to its model (the provider refused it at once: `Failed to
+  authenticate. API Error: 403 …`, an invalid key, an expired token) is held the same way, for a
+  second cause: no attempt is counted, no QA verdict follow-up is sent, and the probe on the same
+  backoff starts the held runs by itself once a sign-in works again. The ticket and Home read
+  "The agent can't sign in to Claude", with the provider's message and since when.
+- `usage_limit.sign_in_ask_after_seconds` (default `1800`, `>= 60`; Settings › Timeouts): how long a
+  sign-in hold lasts before Symphony asks a person once, in the Inbox, with the provider's message
+  and "sign in again" as the suggested action. Answering "I signed in again" checks the hold at
+  once, as Try Now does. The question is withdrawn when the hold lifts.
 - At the resume time one held run (the first in dispatch order) goes out alone. If Claude accepts
   it, the other held runs follow; if it hits the limit again, the hold starts over from the new
   reset time (or `unknown_reset_retry_seconds`). New Claude work stays held meanwhile.
@@ -1491,7 +1501,19 @@ line range `"12-15"`, a reversed pair), and a verdict Symphony still cannot read
 turn in the same session, with the error, before the review counts as inconclusive. A finding
 whose quote cannot be found in the diff or the file is kept as a comment marked "could not be
 placed" and the verdict stands; only a change request none of whose findings can be placed is
-unverifiable. `/api/v1/state` counts inconclusive Code Review runs per cause
+unverifiable.
+
+The reviewer is told to read the whole change before it decides and to list every finding it would
+block on in one verdict, so the rework run answers them together. A reviewer that runs out of time
+or turns before reading every changed file names them in the verdict's `unread_files`, and the
+review counts as inconclusive (`review_incomplete`) and runs again, rather than approving or
+blocking on part of the change. A change request records its number of findings on its verdict; on
+a pull request reviewed before, Symphony compares each finding's lines with the last reviewed head
+and marks a finding on lines that did not change since as "missed earlier", in the findings comment
+and on the verdict. The Mac app's ticket page shows both counts on the verdict's row
+("3 findings · 1 missed earlier").
+
+`/api/v1/state` counts inconclusive Code Review runs per cause
 (`counts.review_inconclusive`), and the Mac app's ticket page shows the cause on the run's row.
 
 The pre-push reviewer that used to review an implementation run's commits before its first push

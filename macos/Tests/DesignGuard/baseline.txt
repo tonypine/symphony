@@ -5,7 +5,6 @@
 # text editors (`field`), and (TP-1510) how many stock tables (`table`). It must equal what the guard counts: lower a
 # number in the same change that removes a bypass, and delete the line when it reaches zero. A file not listed here
 # may have none.
-SymphonyBar/ActionRail.swift button 2
 SymphonyBar/AddRepoView.swift font 9
 SymphonyBar/AddRepoView.swift color 30
 SymphonyBar/AddRepoView.swift number 15

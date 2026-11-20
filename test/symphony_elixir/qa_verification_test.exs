@@ -974,6 +974,62 @@ defmodule SymphonyElixir.QaVerificationTest do
       refute_received {:fixer_create, _}
     end
 
+    test "an agent that could not sign in holds the run: no verdict, no question, no attempt" do
+      {workspace, _head} = git_workspace!()
+
+      info = %{
+        provider: "anthropic",
+        scope: :all,
+        source: :api_unreachable,
+        cause: :sign_in,
+        error: "Failed to authenticate. API Error: 403 Attention Required! | Cloudflare",
+        window: nil,
+        resets_at: nil,
+        utilization: nil
+      }
+
+      Process.put(:qa_agent_result, {:error, {:qa_agent_failed, {:model_api_unreachable, info}}, %{}})
+
+      capture_log(fn ->
+        assert {:error, {:usage_limited, ^info}} = run(workspace, [])
+        assert {:error, {:usage_limited, ^info}} = run(workspace, [])
+        assert {:error, {:usage_limited, ^info}} = run(workspace, [])
+      end)
+
+      assert verdicts() == []
+      refute deciding()
+      refute blocked?(@issue_id)
+    end
+
+    test "a real answer without a verdict still asks, and says why in words" do
+      {workspace, _head} = git_workspace!()
+      Process.put(:qa_agent_result, {:error, {:malformed_qa_response, :no_verdict_object}, %{}})
+
+      capture_log(fn ->
+        assert :ok = run(workspace, [])
+        assert :ok = run(workspace, [])
+      end)
+
+      assert %{title: "QA could not finish its check of TP-816", why: why} = deciding()
+      assert why =~ "the QA agent ended its run without saying whether the change passed or failed"
+      refute why =~ "malformed"
+      refute why =~ "{:"
+    end
+
+    test "an answer whose verdict cannot be read asks, and says why in words" do
+      {workspace, _head} = git_workspace!()
+      Process.put(:qa_agent_result, {:error, {:malformed_qa_response, :invalid_verdict}, %{}})
+
+      capture_log(fn ->
+        assert :ok = run(workspace, [])
+        assert :ok = run(workspace, [])
+      end)
+
+      assert %{why: why} = deciding()
+      assert why =~ "the QA agent gave a pass or fail answer Symphony could not read"
+      refute why =~ "{:"
+    end
+
     test "a block a QA answer says an open ticket already covers holds on that ticket and files nothing" do
       {workspace, _head} = git_workspace!()
 

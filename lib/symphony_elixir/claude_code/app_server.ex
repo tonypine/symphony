@@ -266,9 +266,12 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   @typedoc """
   A turn Claude ended because it could not reach the model API (a DNS failure, a refused or
   dropped connection): `error` is the code it named, such as `ENOTFOUND`. The orchestrator holds
-  the provider's runs on it as on a usage limit (see `SymphonyElixir.UsageLimit`).
+  the provider's runs on it as on a usage limit (see `SymphonyElixir.UsageLimit`). A turn that
+  ended because the agent could not sign in carries `cause: :sign_in`, and `error` is the
+  provider's message.
   """
   @type api_unreachable_info :: %{
+          optional(:cause) => :sign_in,
           provider: String.t(),
           window: nil,
           scope: :all,
@@ -345,9 +348,11 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   # When the model API can't be reached, Claude still ends the turn with a `success` result:
   # its text is `API Error: Can't reach the API server … (ENOTFOUND)` and nothing was used.
   defp parse_reachable_result(event, line) do
-    case api_unreachable_from_result(event) do
+    with :error <- api_unreachable_from_result(event),
+         :error <- sign_in_failed_from_result(event) do
+      parse_result_event(event, line)
+    else
       {:ok, info} -> {:api_unreachable, info}
-      :error -> parse_result_event(event, line)
     end
   end
 
@@ -1676,6 +1681,42 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     else
       :error
     end
+  end
+
+  # The agent could not sign in to the model API: Claude ends the turn at once with the provider's
+  # refusal as its result (`Failed to authenticate. API Error: 403 …`, `Invalid API key`, an expired
+  # OAuth token), and nothing was used. That is no answer of the agent's: it holds the provider as an
+  # unreachable API does, with `cause: :sign_in` and the provider's message as the `error`.
+  @sign_in_failed_pattern ~r/failed to authenticate|authentication_error|invalid api key|oauth token (?:has )?(?:expired|been revoked|revoked)|please run \/login|\bAPI Error: 40[13]\b/iu
+  @sign_in_message_max 200
+
+  defp sign_in_failed_from_result(event) do
+    text = Enum.find_value(["result", "error"], &(is_binary(Map.get(event, &1)) && Map.get(event, &1)))
+
+    if is_binary(text) and Regex.match?(@sign_in_failed_pattern, text) and
+         (Map.get(event, "is_error") == true or extract_turn_result(event).total_tokens == 0) do
+      {:ok,
+       %{
+         provider: "anthropic",
+         window: nil,
+         scope: :all,
+         resets_at: nil,
+         utilization: nil,
+         source: :api_unreachable,
+         cause: :sign_in,
+         error: sign_in_message(text)
+       }}
+    else
+      :error
+    end
+  end
+
+  defp sign_in_message(text) do
+    text
+    |> String.split("\n", trim: true)
+    |> hd()
+    |> String.trim()
+    |> String.slice(0, @sign_in_message_max)
   end
 
   defp api_error_code(text) do

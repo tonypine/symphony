@@ -234,6 +234,12 @@ final class SymphonyWindowModel: ObservableObject {
     @Published var moveInFlight = false
     /// What went wrong with it, shown in the sheet.
     @Published var moveError: String?
+    /// The Cancel Ticket… sheet shown (TP-1317); nothing is cancelled until its button is pressed.
+    @Published var ticketCancelSheet: CancelTicketSheet?
+    /// True while the sheet's cancel is on its way to Symphony.
+    @Published var cancelInFlight = false
+    /// Why Symphony refused it, or what went wrong, shown in the sheet.
+    @Published var cancelError: String?
     /// The banner a Move to… showed, which the ticket page and Tickets show while it stays.
     @Published var moveBannerID: UUID?
     /// The ticket whose Start now (TP-1330) is on its way to Symphony; its button shows progress meanwhile.
@@ -1119,6 +1125,7 @@ struct SymphonyWindowView: View {
             }
             .modifier(StopRunSheetPresenter(model: model))
             .modifier(MoveSheetPresenter(model: model))
+            .modifier(CancelTicketSheetPresenter(model: model))
             .modifier(DispatchSheetsPresenter(model: model))
         }
         .ignoresSafeArea(.container, edges: .top)
@@ -1283,9 +1290,11 @@ struct OverviewContent: View {
 }
 
 extension SymphonyWindowModel {
-    /// Home's two lists, their ages on Symphony's clock.
+    /// Home's two lists, their ages on Symphony's clock, under the line of a provider that refuses the agents' sign-in.
     var homeLists: HomeLists? {
-        home.map { HomeLists(read: $0, reference: overviewState?.generatedAt ?? Date()) }
+        let reference = overviewState?.generatedAt ?? Date()
+        let notices = overviewState.map { HomeLists.notices($0.snapshot, reference: reference) } ?? []
+        return home.map { HomeLists(read: $0, reference: reference, notices: notices) }
     }
 
     /// What Home's rows do: open the ticket's page or the epic in Initiatives, and the row's move as the ticket page

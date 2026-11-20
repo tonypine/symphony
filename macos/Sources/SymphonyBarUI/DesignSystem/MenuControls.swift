@@ -48,7 +48,8 @@ public struct MenuControlFace: View {
 
     public var body: some View {
         let shape = RoundedRectangle(cornerRadius: size.radius, style: .continuous)
-        HStack(spacing: DesignTokens.Space.s2) {
+        // The glyph, the dot and the chevron are centred on the label's capitals, and the capitals between the edges.
+        HStack(alignment: .capCenter, spacing: DesignTokens.Space.s2) {
             switch content {
             case let .menu(title, glyph):
                 if let glyph {
@@ -57,13 +58,15 @@ public struct MenuControlFace: View {
                         .foregroundStyle(glyphColor)
                         .accessibilityHidden(true)
                 }
-                Text(title)
+                Text(title).capCentered(size)
             case let .popUp(label, value, marked):
                 if let label, !label.isEmpty {
-                    Text(label).foregroundStyle(state.disabled ? DesignTokens.TextColor.tertiary.color : DesignTokens.TextColor.secondary.color)
+                    Text(label)
+                        .foregroundStyle(state.disabled ? DesignTokens.TextColor.tertiary.color : DesignTokens.TextColor.secondary.color)
+                        .capCentered(size)
                 }
-                HStack(spacing: DesignTokens.MenuControl.markGap) {
-                    valueText(value)
+                HStack(alignment: .capCenter, spacing: DesignTokens.MenuControl.markGap) {
+                    valueText(value).capCentered(size)
                     if marked {
                         Circle()
                             .fill(DesignTokens.ColorToken.accent.color)
@@ -86,7 +89,7 @@ public struct MenuControlFace: View {
         .foregroundStyle(foreground)
         .padding(.leading, size.padding)
         .padding(.trailing, quiet && !isPopUp ? size.padding : size.padding * DesignTokens.MenuControl.trailingScale)
-        .frame(height: size.height)
+        .frame(height: size.height, alignment: .capCenter)
         .background { background(shape) }
         .overlay {
             if let edge { shape.strokeBorder(edge, lineWidth: DesignTokens.Control.edgeWidth) }
@@ -208,6 +211,7 @@ private struct MenuControlStyle: ButtonStyle {
             }
             .contentShape(RoundedRectangle(cornerRadius: size.radius, style: .continuous))
             .onHover { hovered = $0 }
+            .buttonPointer(enabled: isEnabled)
         }
     }
 }

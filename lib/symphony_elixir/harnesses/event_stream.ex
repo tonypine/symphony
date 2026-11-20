@@ -360,7 +360,7 @@ defmodule SymphonyElixir.Harnesses.EventStream do
 
   defp apply_event({:api_unreachable, info}, on_message, acc) do
     info = %{info | provider: acc.provider}
-    reason = "model API unreachable (#{info.error})"
+    reason = if Map.get(info, :cause) == :sign_in, do: "the agent could not sign in (#{info.error})", else: "model API unreachable (#{info.error})"
     on_message.({:turn_failed, reason})
     %{acc | api_unreachable: info, turn_failed: reason}
   end

@@ -30,6 +30,11 @@ defmodule SymphonyElixir.UsageLimit do
   the wait, up to `unknown_reset_retry_seconds`. With no run held on it (QA, a PR run) the hold is released at `resume_at` and remembered for `outage_memory_seconds/1`, so
   the next run finding the outage again doubles the wait as a canary would.
 
+  A run whose agent could not sign in to the model API (the provider refused it: a 401 or 403, an
+  expired token; the info's `cause: :sign_in`) is held the same way, for a second cause: reason
+  `model_api_sign_in_failed`, with the provider's message as its `error` (`sign_in_failed?/1`). Its
+  lines say the agent can't sign in, with the message and since when.
+
   The orchestrator owns the holds and persists them with `RunStore.put_usage_limits/1`;
   this module builds and matches them. Each hold is also an `:environment` reason of Symphony's
   pause (`SymphonyElixir.Pauses`, `reason/3`), set with the hold and cleared when it ends
@@ -43,6 +48,8 @@ defmodule SymphonyElixir.UsageLimit do
   @type key :: {String.t(), String.t() | :all}
 
   @api_unreachable_reason "model_api_unreachable"
+  @sign_in_failed_reason "model_api_sign_in_failed"
+  @outage_reasons [@api_unreachable_reason, @sign_in_failed_reason]
   @api_unreachable_first_retry_seconds 60
   @api_outage_min_memory_seconds 600
 
@@ -142,7 +149,7 @@ defmodule SymphonyElixir.UsageLimit do
 
     previous =
       case existing do
-        %{phase: :canary, reason: @api_unreachable_reason} -> existing
+        %{phase: :canary, reason: reason} when reason in @outage_reasons -> existing
         _other -> recent_outage(Keyword.get(opts, :last_outage), now, config)
       end
 
@@ -158,7 +165,7 @@ defmodule SymphonyElixir.UsageLimit do
     %{
       provider: provider,
       scope: scope,
-      reason: @api_unreachable_reason,
+      reason: outage_reason(info),
       window: nil,
       since: since,
       resets_at: nil,
@@ -173,7 +180,10 @@ defmodule SymphonyElixir.UsageLimit do
     }
   end
 
-  defp recent_outage(%{reason: @api_unreachable_reason, resume_at: %DateTime{} = released_at} = outage, now, config) do
+  defp outage_reason(%{cause: :sign_in}), do: @sign_in_failed_reason
+  defp outage_reason(_info), do: @api_unreachable_reason
+
+  defp recent_outage(%{reason: reason, resume_at: %DateTime{} = released_at} = outage, now, config) when reason in @outage_reasons do
     if DateTime.diff(now, released_at) < outage_memory_seconds(config), do: outage
   end
 
@@ -188,10 +198,19 @@ defmodule SymphonyElixir.UsageLimit do
   @spec outage_memory_seconds(map()) :: pos_integer()
   def outage_memory_seconds(config), do: max(config.unknown_reset_retry_seconds, @api_outage_min_memory_seconds)
 
-  @doc "Whether `entry` (a hold, or the agent's info for one) is for a model API that could not be reached."
+  @doc """
+  Whether `entry` (a hold, or the agent's info for one) is for a model API that could not be reached,
+  or that refused the agent's sign-in: both are probed on a backoff.
+  """
   @spec api_unreachable?(map()) :: boolean()
   def api_unreachable?(entry) when is_map(entry) do
-    Map.get(entry, :reason) == @api_unreachable_reason or Map.get(entry, :source) in [:api_unreachable, "api_unreachable"]
+    Map.get(entry, :reason) in @outage_reasons or Map.get(entry, :source) in [:api_unreachable, "api_unreachable"]
+  end
+
+  @doc "Whether `entry` (a hold, or the agent's info for one) is for an agent that could not sign in to the model API."
+  @spec sign_in_failed?(map()) :: boolean()
+  def sign_in_failed?(entry) when is_map(entry) do
+    Map.get(entry, :reason) == @sign_in_failed_reason or Map.get(entry, :cause) in [:sign_in, "sign_in"]
   end
 
   @doc """
@@ -393,13 +412,16 @@ defmodule SymphonyElixir.UsageLimit do
   def scope_label(:all), do: "all"
   def scope_label(scope) when is_binary(scope), do: scope
 
-  @doc "The limit a hold is on, as people read it: `Claude 5-hour limit`, or `Claude API unreachable`."
+  @doc """
+  The limit a hold is on, as people read it: `Claude 5-hour limit`, `Claude API unreachable`, or
+  `The agent can't sign in to Claude`.
+  """
   @spec limit_label(map()) :: String.t()
   def limit_label(entry) when is_map(entry) do
-    if api_unreachable?(entry) do
-      "#{provider_label(Map.get(entry, :provider))} API unreachable"
-    else
-      "#{provider_label(Map.get(entry, :provider))} #{window_label(Map.get(entry, :window))}"
+    cond do
+      sign_in_failed?(entry) -> "The agent can't sign in to #{provider_label(Map.get(entry, :provider))}"
+      api_unreachable?(entry) -> "#{provider_label(Map.get(entry, :provider))} API unreachable"
+      true -> "#{provider_label(Map.get(entry, :provider))} #{window_label(Map.get(entry, :window))}"
     end
   end
 
@@ -415,6 +437,10 @@ defmodule SymphonyElixir.UsageLimit do
       true -> "#{limit_label(entry)} reached"
     end
   end
+
+  @doc "A provider as people name it: `Claude` for `anthropic`."
+  @spec provider_name(String.t() | nil) :: String.t()
+  def provider_name(provider), do: provider_label(provider)
 
   defp provider_label(provider) when provider in [nil, "anthropic"], do: "Claude"
   defp provider_label("openrouter"), do: "OpenRouter"
@@ -500,7 +526,9 @@ defmodule SymphonyElixir.UsageLimit do
   `usage_limit:<provider>:<scope>`: `Claude's 5-hour limit until 14:30 UTC-3` (its resume time),
   `Claude's 5-hour limit is still on, until 17:30 UTC-3` once a canary was refused, for a
   headroom hold `Anthropic at its 90% reserve: new runs wait until 14:30 UTC-3` (its reset time)
-  and for an unreachable API `Claude API unreachable, retrying at 14:05 UTC-3`. Times as
+  for an unreachable API `Claude API unreachable, retrying at 14:05 UTC-3`, and for a refused sign-in
+  `The agent can't sign in to Claude since 13:46 UTC-3 (Failed to authenticate. …), trying again at
+  14:05 UTC-3`. Times as
   `local_time/3`, followed by their zone (`zone_label/2`), so the line reads in one clock beside
   the hold's UTC times.
   """
@@ -517,6 +545,9 @@ defmodule SymphonyElixir.UsageLimit do
     cond do
       headroom?(entry) ->
         "#{at_reserve(entry)}: new runs wait" <> at(" until ", entry.resets_at, now, opts)
+
+      sign_in_failed?(entry) ->
+        limit_label(entry) <> at(" since ", entry.since, now, opts) <> error_suffix(entry) <> at(", trying again at ", entry.resume_at, now, opts)
 
       api_unreachable?(entry) ->
         limit_label(entry) <> at(", retrying at ", entry.resume_at, now, opts)

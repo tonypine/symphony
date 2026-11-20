@@ -1622,6 +1622,9 @@ Fields:
   - Default: `120`. Added to the reported reset time before runs resume.
 - `usage_limit.unknown_reset_retry_seconds` (integer `>= 60`)
   - Default: `900`. How long the hold lasts when no reset time is known.
+- `usage_limit.sign_in_ask_after_seconds` (integer `>= 60`)
+  - Default: `1800`. How long a hold on an agent that cannot sign in lasts before a person is asked
+    (Section 8.4.1).
 - `providers.<provider>.reserve` (number in `(0, 1]` or null)
   - Default: `null` (no reserve). Where new runs on the provider stop, as a share of any of its
     usage windows: a window at or above it puts the provider at its reserve, a headroom hold on its
@@ -2057,7 +2060,17 @@ the cited range before anywhere else), moving the finding's line range to where 
 When no finding of a `request_changes` can be grounded, Symphony SHOULD give the same reviewer session one re-quote turn
 that shows the text actually at the cited lines. The reviewer prompt SHOULD tell the reviewer to
 review the diff by reading it and not to run the test suite, coverage or static analysis, which CI
-runs.
+runs. It SHOULD tell the reviewer to read the whole change before giving a verdict and to list
+every finding it would block on, each with its file and line range, in one verdict, with the most
+important one as its `reason`. A reviewer that runs out of time or turns before reading every
+changed file SHOULD name them in the verdict's `unread_files`; Symphony SHOULD treat such a verdict
+as inconclusive (`review_incomplete`, with the unread files on the recorded verdict) rather than
+approve or request changes on a part of the change. A `request_changes` verdict SHOULD record its
+count of findings (`findings_count`) on the ticket's history. On a pull request reviewed before,
+Symphony SHOULD compare each finding's lines with the last reviewed head (the newest other head with
+an `approve`, `request_changes` or `block` verdict): a finding on lines that did not change since is
+marked "missed earlier" in the findings comment and counted on the verdict (`previous_head`,
+`missed_earlier`, `missed_findings`), and the verdict's summary shows both counts.
 
 Reviewer outcome handling MUST distinguish a `block` from an inconclusive review. Reviewer parse
 failures, turn-budget failures, self-check turns that retract every finding, and a change request
@@ -2726,6 +2739,7 @@ not require recognizing or validating extension fields unless that extension is 
 - `execution.usage_limit.auto_pause`: boolean, default `true`
 - `execution.usage_limit.resume_margin_seconds`: integer `>= 0`, default `120`
 - `execution.usage_limit.unknown_reset_retry_seconds`: integer `>= 60`, default `900`
+- `execution.usage_limit.sign_in_ask_after_seconds`: integer `>= 60`, default `1800`
 - `execution.providers.<provider>.reserve`: number in `(0, 1]` or null, default `null`; only for a
   provider whose usage Symphony reads (`anthropic`). It replaces
   `execution.usage_limit.headroom_utilization`, which a start migrates to
@@ -4258,6 +4272,15 @@ not an outage and keeps its normal path.
   and `Model API still unreachable (…) … next_probe_at=…` per failed probe. Show the hold in the
   status surfaces as `Paused: Claude API unreachable (ENOTFOUND), retries ~14:05`, and in
   `/api/v1/state` `usage_limits` with its `reason` and `error`.
+- An agent that could not sign in to the model API (the Claude CLI's error result naming a refused
+  authentication: `Failed to authenticate`, a 401 or 403, an invalid key or an expired token, with
+  nothing used) is the same outage for a second cause: `reason: "model_api_sign_in_failed"`, its
+  `error` the provider's message. It is never read as the agent's answer: no QA verdict follow-up,
+  no counted attempt. The ticket's situation reads `Waiting: the agent can't sign in to Claude`
+  with the message and since when, and Home lists the hold once. Once the hold has lasted
+  `usage_limit.sign_in_ask_after_seconds`, Symphony asks once on Symphony itself (one Inbox row,
+  no ticket), recommending "I signed in again", which checks the hold at once as Try Now does; the
+  question is withdrawn when the hold lifts.
 
 ### 8.5 Active Run Reconciliation
 

@@ -117,7 +117,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "execution.permissions.network" => ~w(mode allowed_domains denied_domains),
     "execution.permissions.outer_sandbox" => ~w(kind command enable_weaker_network_isolation),
     "execution.mcp" => ~w(inherit allowed_servers servers),
-    "execution.usage_limit" => ~w(auto_pause resume_margin_seconds unknown_reset_retry_seconds),
+    "execution.usage_limit" => ~w(auto_pause resume_margin_seconds unknown_reset_retry_seconds sign_in_ask_after_seconds),
     "execution.providers" => ~w(anthropic),
     "execution.providers.anthropic" => ~w(reserve),
     "workers" => ~w(ssh_hosts max_concurrent_agents_per_host),
