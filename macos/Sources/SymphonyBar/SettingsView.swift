@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import SymphonyBarCore
+import SymphonyBarUI
 
 struct SettingsView: View {
     @ObservedObject var model: SettingsViewModel
@@ -615,12 +616,23 @@ private struct MacAppQASection: View {
     }
 
     @ViewBuilder private var windowSizeControls: some View {
-        LabeledContent("Walkthrough window") {
-            SizeFields(name: "Walkthrough window", width: $model.macAppQA.windowWidth, height: $model.macAppQA.windowHeight)
-        }
-        LabeledContent("Wide pass screen") {
-            SizeFields(name: "Wide pass screen", width: $model.macAppQA.widePassWidth, height: $model.macAppQA.widePassHeight)
-        }
+        sizeField("Walkthrough window width in points", key: "window_width", value: \.windowWidth)
+        sizeField("Walkthrough window height in points", key: "window_height", value: \.windowHeight)
+        sizeField("Wide pass screen width in points", key: "wide_pass_width", value: \.widePassWidth)
+        sizeField("Wide pass screen height in points", key: "wide_pass_height", value: \.widePassHeight)
+    }
+
+    /// A whole-number field for one of the window sizes QA judges the app at.
+    private func sizeField(_ label: String, key: String, value: WritableKeyPath<MacAppQAPlaybook, Int>) -> some View {
+        DirectorTextField(
+            label,
+            text: Binding(
+                get: { String(model.macAppQA[keyPath: value]) },
+                set: { text in if let number = Int(text) { model.macAppQA[keyPath: value] = number } }
+            ),
+            mono: true
+        )
+        .help("auto_review.playbooks.macos_app.\(key)")
     }
 
     @ViewBuilder private var devServerControls: some View {
@@ -656,30 +668,6 @@ private struct MacAppQASection: View {
         .foregroundStyle(.secondary)
         if let error = model.macAppQAError {
             Text(error).foregroundStyle(.red)
-        }
-    }
-}
-
-/// A width and a height in points, side by side, for one of the macOS app QA window sizes.
-private struct SizeFields: View {
-    let name: String
-    @Binding var width: Int
-    @Binding var height: Int
-
-    var body: some View {
-        HStack(spacing: 4) {
-            TextField("\(name) width", value: $width, format: .number.grouping(.never))
-                .labelsHidden()
-                .multilineTextAlignment(.trailing)
-                .frame(width: 64)
-                .accessibilityLabel("\(name) width, in points")
-            Text("×").foregroundStyle(.secondary)
-            TextField("\(name) height", value: $height, format: .number.grouping(.never))
-                .labelsHidden()
-                .multilineTextAlignment(.trailing)
-                .frame(width: 64)
-                .accessibilityLabel("\(name) height, in points")
-            Text("pt").foregroundStyle(.secondary)
         }
     }
 }
