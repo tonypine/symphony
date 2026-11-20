@@ -134,6 +134,25 @@ defmodule SymphonyElixir.TicketPlanTest do
       assert {:error, {:invalid_payload, [:checks]}} = TicketPlan.write(@repo_key, @issue_id, %{@plan | checks: "none"})
     end
 
+    test "a plan holds at most 30 checks and 12 sub-tickets" do
+      check = %{kind: "evidence", statement: "It works.", proof: "test"}
+      subs = for n <- 1..13, do: %{key: "s#{n}", title: "Part #{n}", ask: "Build it."}
+      large = %{@plan | checks: List.duplicate(check, 31), shape: "split"} |> Map.put(:sub_tickets, subs)
+
+      assert TicketPlan.write(@repo_key, @issue_id, large) ==
+               {:error, {:invalid_plan, ["a plan holds at most 30 checks, and this one holds 31", "a plan holds at most 12 sub-tickets, and this one holds 13"]}}
+
+      # The event's own schema holds the same limits, whoever writes it.
+      payload = Map.put(large, :version, 1)
+      assert {:error, {:invalid_payload, fields}} = TicketEvents.Types.validate("plan.written", payload, :machine, nil)
+      assert Enum.sort(fields) == [:checks, :sub_tickets]
+
+      at_the_limit = %{large | checks: List.duplicate(check, 30)} |> Map.put(:sub_tickets, Enum.take(subs, 12))
+      assert {:ok, %{payload: %{checks: checks, sub_tickets: written}}} = TicketPlan.write(@repo_key, @issue_id, at_the_limit)
+      assert {length(checks), length(written)} == {30, 12}
+      assert {TicketPlan.max_checks(), TicketPlan.max_sub_tickets()} == {30, 12}
+    end
+
     test "outcomes bind: a version that drops or rewords one is refused until the person asks for something new" do
       kept = %{id: "c2", kind: "evidence", statement: "A screenshot.", proof: "attached"}
       {:ok, _ask} = TicketPlan.record_ask(@repo_key, @issue_id, "Show the plan.", at: at(0))

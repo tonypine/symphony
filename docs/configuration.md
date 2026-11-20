@@ -3623,9 +3623,10 @@ exactly as before.
   names a plan may use, and, for a sub-ticket, the parent's current plan and tagged notes and the
   tagged notes of its sibling tickets.
 - Its answer holds a `plan`: `shape` (`single` or `split`), `layers`, `summary`, `text`, `checks`,
-  `size` (`tokens`, `runs`) and, for a split, `sub_tickets`. Symphony names the checks `c1`, `c2`
-  and so on, cuts a text that is too long, and records the plan as `plan.written` (version 1,
-  `by: grooming`) with the turn's update as a `conductor.update` (`junction: grooming`). The run
+  `size` (`tokens`, `runs`) and, for a split, `sub_tickets`. A plan holds at most 30 checks and 12
+  sub-tickets: one with more is an answer Symphony refuses. Symphony names the checks `c1`, `c2`
+  and so on (a later version's new check gets an id no version used), cuts a text that is too
+  long, and records the plan as `plan.written` (version 1, `by: grooming`) with the turn's update as a `conductor.update` (`junction: grooming`). The run
   then starts, in the same task.
 - A `split` is carried out once the plan is recorded, and the run does not start (**The tree**,
   below). Where the waiting state is off (`issues.states.waiting_on_sub_issues`), the plan is

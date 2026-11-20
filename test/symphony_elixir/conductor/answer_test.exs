@@ -295,6 +295,20 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
     defp grooming(attrs), do: Answer.parse(json(attrs), plan: true)
     defp plan(attrs), do: grooming(%{"plan" => Map.merge(@plan, attrs)})
 
+    test "a plan with more checks or sub-tickets than a person reads is refused, naming the limit" do
+      check = %{"kind" => "outcome", "statement" => "It works.", "proof" => "test"}
+      sub = %{"title" => "A part", "ask" => "Build it."}
+      assert {:ok, %{plan: %{checks: checks}}} = plan(%{"checks" => List.duplicate(check, 30)})
+      assert length(checks) == 30
+      assert plan(%{"checks" => List.duplicate(check, 31)}) == {:error, "`plan.checks` lists 31 entries, and a plan holds at most 30"}
+
+      assert {:ok, %{plan: %{sub_tickets: subs}}} = plan(%{"shape" => "split", "sub_tickets" => List.duplicate(sub, 12)})
+      assert length(subs) == 12
+
+      assert plan(%{"shape" => "split", "sub_tickets" => List.duplicate(sub, 13)}) ==
+               {:error, "`plan.sub_tickets` lists 13 entries, and a plan holds at most 12"}
+    end
+
     test "is read as plan.written holds it, each check with the id it gave or none, and the instructions may be null" do
       assert {:ok, %{instructions: nil, plan: plan}} = grooming(%{"plan" => @plan, "update" => "I wrote the plan."})
       assert %{shape: "single", layers: ["screen", "api"], summary: "The ticket list keeps its filter.", size: %{tokens: 2_000_000, runs: 2}} = plan

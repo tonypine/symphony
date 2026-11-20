@@ -113,7 +113,8 @@ Write your answer as one JSON object and nothing else:
 }
 
 `sub_tickets` is given only with `"shape": "split"`. Symphony names them `s1`, `s2`, ... in the
-order you list them, and the checks `c1`, `c2`, ...; `after` refers to those names.
+order you list them, and the checks `c1`, `c2`, ...; `after` refers to those names. A plan holds at
+most 30 checks and 12 sub-tickets: Symphony refuses a longer one.
 
 A small example, for the ask "The ticket list forgets my filter when I reload. Keep it.":
 

@@ -25,6 +25,8 @@ defmodule SymphonyElixir.TicketPlan do
 
   @machine_fields [:signal, :signal_details]
   @ask_max 100_000
+  @max_checks 30
+  @max_sub_tickets 12
 
   @typedoc "A ticket: its issue id, or its events, oldest first."
   @type ticket :: String.t() | [Event.t()]
@@ -70,7 +72,8 @@ defmodule SymphonyElixir.TicketPlan do
   new id that no version of the ticket ever used (`c1`, `c2`, and on from the highest ever used).
 
   Besides what the type's schema refuses (`{:invalid_payload, fields}`), a plan is refused, with
-  what is wrong in plain words (`{:invalid_plan, reasons}`), when two checks share an id, a `qa`
+  what is wrong in plain words (`{:invalid_plan, reasons}`), when it holds more than
+  `max_checks/0` checks or `max_sub_tickets/0` sub-tickets, two checks share an id, a `qa`
   check names no `action` or nothing to `expect`, two sub-tickets share a key, or a sub-ticket
   waits `after` itself or a key the plan does not hold. Nothing is written then.
 
@@ -88,12 +91,24 @@ defmodule SymphonyElixir.TicketPlan do
     {new_ask?, opts} = Keyword.pop(opts, :new_ask, false)
     binding = if new_ask?, do: [], else: history
 
-    with {:ok, valid} <- Types.validate("plan.written", payload, :machine, nil),
+    with :ok <- sized(payload),
+         {:ok, valid} <- Types.validate("plan.written", payload, :machine, nil),
          :ok <- coherent(valid, changed_outcomes(valid, binding)),
          {:ok, event} <- TicketEvents.record(repo_key, issue_id, "plan.written", valid, opts) do
       TicketProjection.changed(repo_key, issue_id)
       {:ok, event}
     end
+  end
+
+  # A plan a person can read: no more checks or sub-tickets than the limits.
+  defp sized(plan) do
+    reasons =
+      for {key, max, what} <- [{:checks, @max_checks, "checks"}, {:sub_tickets, @max_sub_tickets, "sub-tickets"}],
+          entries = field(plan, key),
+          is_list(entries) and length(entries) > max,
+          do: "a plan holds at most #{max} #{what}, and this one holds #{length(entries)}"
+
+    if reasons == [], do: :ok, else: {:error, {:invalid_plan, reasons}}
   end
 
   # Each check under an id of its own: the one it kept from an earlier version, else a new one no
@@ -178,6 +193,14 @@ defmodule SymphonyElixir.TicketPlan do
   @doc "The most characters one ask holds (`ask.recorded`'s `text`). A longer one is never cut: it is not recorded."
   @spec ask_max() :: pos_integer()
   def ask_max, do: @ask_max
+
+  @doc "The most checks one plan version holds."
+  @spec max_checks() :: pos_integer()
+  def max_checks, do: @max_checks
+
+  @doc "The most sub-tickets one plan version holds."
+  @spec max_sub_tickets() :: pos_integer()
+  def max_sub_tickets, do: @max_sub_tickets
 
   @doc "Every ask of the ticket, oldest first (`t:ask/0`)."
   @spec ask(ticket()) :: [ask()]

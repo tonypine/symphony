@@ -182,8 +182,8 @@ defmodule SymphonyElixir.TicketEvents.Types do
   (`reason`, at most 1,000) and `by` what (`grooming`, `recalibration`, `parent`, `run`), its
   `shape` (`single` or `split`), the `layers` it touches (`screen`, `gallery`, `api`, `engine`,
   `config`, `tooling`, `docs`), a `summary` for a person (at most 600), the plan's `text` for agents
-  (at most 12,000), its `checks`, its `size` (`tokens` and `runs`) and, for a split, its
-  `sub_tickets`. A check has an `id` that is its alone across versions (`c1`, `c2`; a new check gets one no
+  (at most 12,000), its `checks` (at most 30), its `size` (`tokens` and `runs`) and, for a split, its
+  `sub_tickets` (at most 12). A check has an `id` that is its alone across versions (`c1`, `c2`; a new check gets one no
   version used, and a check whose `statement` changed starts unproved), a `kind`
   (`outcome`, `qa`, `evidence`), a `statement` (at most 600) and how it is proved (`proof`: `test`,
   `qa`, `design`, `attached`); a `qa` check also says the app `state` it needs, the `action` and
@@ -758,10 +758,10 @@ defmodule SymphonyElixir.TicketEvents.Types do
         layers: {:list, {:enum, ~w(screen gallery api engine config tooling docs)}},
         summary: {:string, 600},
         text: {:string, 12_000},
-        checks: {:list, @plan_check},
+        checks: {:list, @plan_check, 30},
         size: {:map, [tokens: :non_neg_integer, runs: :non_neg_integer]}
       ],
-      optional: [sub_tickets: {:list, @plan_sub_ticket}] ++ @signal,
+      optional: [sub_tickets: {:list, @plan_sub_ticket, 12}] ++ @signal,
       idempotency: :writer
     },
     # A check of the current plan, proved (`SymphonyElixir.TicketChecks`): once per check and head,
@@ -863,6 +863,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
   defp describe({:prose, max}), do: %{type: "string", max: max, forbids: "`"}
   defp describe({:enum, values}), do: %{type: "enum", values: values}
   defp describe({:list, spec}), do: %{type: "list", item: describe(spec)}
+  defp describe({:list, spec, max}), do: %{type: "list", item: describe(spec), max_items: max}
   defp describe({:any_of, specs}), do: %{type: "any_of", of: Enum.map(specs, &describe/1)}
   defp describe({:map, fields}), do: %{type: "map", fields: fields |> Enum.map(&unwrap_optional/1) |> describe_fields()}
   defp describe(spec) when is_atom(spec), do: %{type: Atom.to_string(spec)}
@@ -1055,6 +1056,8 @@ defmodule SymphonyElixir.TicketEvents.Types do
       _unknown -> :error
     end
   end
+
+  defp check({:list, spec, max}, value) when is_list(value) and length(value) <= max, do: check({:list, spec}, value)
 
   defp check({:list, spec}, value) when is_list(value) do
     case Enum.reduce_while(value, {:ok, []}, &check_item(spec, &1, &2)) do

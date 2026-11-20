@@ -28,6 +28,9 @@ defmodule SymphonyElixir.TicketJourney do
   @handoff_proofs ["test", "attached"]
   # The proofs QA gives: a test of the PR never stands in for them.
   @qa_proofs ["qa", "design"]
+  # Room left for the section headings and for what escaping untrusted text adds.
+  @plan_text_margin 2_000
+  @cut "\n\n[Cut here to fit the prompt. The `ticket_plan` tool reads it whole.]"
 
   @typedoc "A ticket: its issue (a struct or a map with `id` and `description`) or its issue id."
   @type ticket :: map() | String.t() | nil
@@ -156,6 +159,10 @@ defmodule SymphonyElixir.TicketJourney do
   oldest first, as written), `## Plan` (the plan's text) and `## Checks` (one line per check: its
   id, kind, how it is proved, where it stands and its statement, and under a `qa` check what it
   needs, the action and what to expect). Nil for a ticket that is not groomed.
+
+  The text fits the prompt's limit for it (`SymphonyElixir.PromptSafety.ticket_plan_limit/0`) with
+  every check whole: when it would not, the ask and then the plan's text are cut, each ending in a
+  line that says so, and the `ticket_plan` tool still reads them whole.
   """
   @spec plan_text(ticket()) :: String.t() | nil
   def plan_text(ticket) do
@@ -165,8 +172,25 @@ defmodule SymphonyElixir.TicketJourney do
 
       plan ->
         id = id(ticket)
-        "## Ask\n\n#{asks(id)}\n\n## Plan\n\n#{plan_words(plan)}\n\n## Checks\n\n#{check_lines(TicketChecks.list(id))}"
+        checks = check_lines(TicketChecks.list(id))
+        {ask, words} = fit(asks(id), plan_words(plan), PromptSafety.ticket_plan_limit() - String.length(checks) - @plan_text_margin)
+        "## Ask\n\n#{ask}\n\n## Plan\n\n#{words}\n\n## Checks\n\n#{checks}"
     end
+  end
+
+  # The ask and the plan's text in `room` characters: the checks, which come last, are never what a
+  # prompt's limit cuts. A long ask leaves the plan's text at least half the room.
+  defp fit(ask, words, room) do
+    if String.length(ask) + String.length(words) <= room do
+      {ask, words}
+    else
+      ask = cut(ask, max(room - String.length(words), div(room, 2)))
+      {ask, cut(words, room - String.length(ask))}
+    end
+  end
+
+  defp cut(text, room) do
+    if String.length(text) <= room, do: text, else: String.slice(text, 0, max(room - String.length(@cut), 0)) <> @cut
   end
 
   @doc """
