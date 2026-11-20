@@ -175,9 +175,8 @@ final class PlanPanelTests: XCTestCase {
         XCTAssertTrue(try page("TP-1247").isGroomed)
         XCTAssertTrue(try page("TP-1247").takesMessages)
         XCTAssertFalse(try page("TP-1244").isGroomed)
-        XCTAssertEqual(TicketMessageComposer.placeholder, "Write to the ticket. The next run reads it first.")
-        XCTAssertEqual(TicketMessageComposer.sentAnnouncement(groomed: true), "Message sent.")
-        XCTAssertEqual(TicketMessageComposer.sentAnnouncement(groomed: false), "Message sent. The next run reads it first.")
+        XCTAssertEqual(TicketMessageComposer.placeholder, "Write to the ticket.")
+        XCTAssertEqual(TicketMessageComposer.sentAnnouncement, "Message sent.")
     }
 
     func testAFinishedGroomedTicketStillTakesAMessageAndOneWithNoPlanDoesNot() throws {

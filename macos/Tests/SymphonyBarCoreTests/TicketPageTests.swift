@@ -1152,7 +1152,7 @@ final class TicketPageFeedTests: XCTestCase {
             TicketMessageComposer.unsupportedReason, "This version of Symphony can't take messages. Update Symphony to write to the ticket."
         )
         XCTAssertEqual(TicketMessageComposer.label, "Write to the ticket")
-        XCTAssertEqual(TicketMessageComposer.placeholder, "Write to the ticket. The next run reads it first.")
+        XCTAssertEqual(TicketMessageComposer.placeholder, "Write to the ticket.")
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixtures.requestLog.path))
 
         // A feed that read but holds nothing still takes messages; a ticket whose repo isn't known doesn't, and says it

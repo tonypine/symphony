@@ -13,18 +13,13 @@ public final class TicketMessageComposer: ObservableObject {
     public nonisolated static let maxLength = 4_000
     /// What VoiceOver reads the box as.
     public static let label = "Write to the ticket"
-    public static let placeholder = "Write to the ticket. The next run reads it first."
+    public static let placeholder = "Write to the ticket."
     public static let sendTitle = "Send"
     public static let sendingTitle = "Sending…"
     /// The keys that send, as the hint beside Send shows them.
     public static let shortcut = "⌘ ↩"
     /// What VoiceOver says once a message is sent.
-    public static let sentAnnouncement = "Message sent. The next run reads it first."
-    /// What VoiceOver says once a message is sent on a groomed ticket.
-    public static let groomedSentAnnouncement = "Message sent."
-
-    /// What VoiceOver says once a message is sent, by whether the ticket is `groomed`.
-    public static func sentAnnouncement(groomed: Bool) -> String { groomed ? groomedSentAnnouncement : sentAnnouncement }
+    public static let sentAnnouncement = "Message sent."
     /// The reason under the box when Symphony doesn't serve the ticket's events feed (a 404 not the feed's own), which a
     /// message is written to.
     public static let unsupportedReason = "This version of Symphony can't take messages. Update Symphony to write to the ticket."

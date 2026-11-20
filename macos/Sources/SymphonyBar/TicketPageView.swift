@@ -431,7 +431,7 @@ extension SymphonyWindowModel {
         guard let page = ticketPage else { return }
         Task {
             if await ticketMessage.submit(on: page, send: onControl, read: { [ticketFeed] in ticketFeed.read() }) {
-                AccessibilityNotification.Announcement(TicketMessageComposer.sentAnnouncement(groomed: page.isGroomed)).post()
+                AccessibilityNotification.Announcement(TicketMessageComposer.sentAnnouncement).post()
                 readTicket()
             }
         }

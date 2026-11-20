@@ -1658,7 +1658,7 @@ window.CATALOG = (function () {
      and the next run reads it first. There is no separate note panel. */
   function composer(p) {
     const draft = !!p.noteDraft;
-    return '<div class="tl-compose' + (draft ? " has-draft" : "") + '"><div class="input"><textarea rows="' + (draft ? 2 : 1) + '" aria-label="Write to the ticket" placeholder="Write to the ticket. The next run reads it first.">' + (draft ? "Use the catalog’s chip in the header, not a new one." : "") + "</textarea></div>" +
+    return '<div class="tl-compose' + (draft ? " has-draft" : "") + '"><div class="input"><textarea rows="' + (draft ? 2 : 1) + '" aria-label="Write to the ticket" placeholder="Write to the ticket.">' + (draft ? "Use the catalog’s chip in the header, not a new one." : "") + "</textarea></div>" +
       (draft ? '<div class="tl-compose-foot">' + kbd("⌘ ↩") + button({ label: "Send", variant: "primary", size: "small" }) + "</div>" : "") + "</div>";
   }
 
