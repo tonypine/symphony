@@ -370,6 +370,12 @@ GitHub or Linear in QA:
   shows QA skipped by decision, and its Inbox row goes. QA-113 had a QA pass end blocked after its
   question was asked: the Inbox lists one question for it, and "Go on as it is" takes the row away
   and leaves it in QA with no pause. Look at both questions at 1440×900, light and dark.
+- **A merged ticket closes after its sub-ticket (TP-1560):** on the live server the seed's QA-114
+  is no plan, its PR merged and it sits in Waiting on sub-tickets on its one open sub-ticket,
+  QA-115: its page says it waits on its sub-tickets and names QA-115, never that the epic review
+  is next. QA-115 and QA-116 are blocked by QA-114, yet neither is held by it. Cancel QA-115
+  from its page: within a poll QA-114's page shows Done with no run started for it. Look at
+  QA-114 at 1440×900, light and dark.
 - **Ticket note (TP-1195):** with the same `ticket-ledger` fixture, SHOP-410's page has a
   one-line field pinned under the page, "Add a note for the next run"; it stays on screen
   however far the page scrolls. The fixture's feed already holds the Director's note, "Note by
