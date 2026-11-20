@@ -129,12 +129,7 @@ private struct EvidenceBlockView: View {
     let evidence: ConductorBlock.Evidence
 
     var body: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: FindingShot.size.width), spacing: DesignTokens.Space.s2, alignment: .topLeading)], alignment: .leading, spacing: DesignTokens.Space.s2) {
-            ForEach(Array(evidence.items.enumerated()), id: \.offset) { _, item in
-                FindingShot(shot: item.screenshot)
-            }
-        }
-        .accessibilityElement(children: .contain)
+        ThumbnailSet(shots: evidence.items.map(\.screenshot), size: FindingShot.size, showsLabels: true)
     }
 }
 
