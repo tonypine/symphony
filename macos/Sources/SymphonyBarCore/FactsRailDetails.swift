@@ -170,9 +170,9 @@ public struct DecisionsPanelModel: Equatable {
 
     static func row(_ decision: TicketDecision, reference: Date, calendar: Calendar) -> Row {
         let title = decision.title?.trimmingWhitespace().nonEmpty ?? decision.answer.trimmingWhitespace()
-        let day = decision.date.map { day($0, reference: reference, calendar: calendar) }
-        let byline = [answeredBy, day].compactMap { $0 }.joined(separator: " · ")
-        let spoken = ["Decision \(decision.id)", title, "answered by you" + (day.map { ", \($0)" } ?? "")]
+        let when: String? = decision.date.map { Self.day($0, reference: reference, calendar: calendar) }
+        let byline = [answeredBy, when].compactMap { $0 }.joined(separator: " · ")
+        let spoken = ["Decision \(decision.id)", title, "answered by you" + (when.map { ", \($0)" } ?? "")]
         return Row(id: decision.id, title: title, byline: byline, accessibilityLabel: spoken.joined(separator: ", "))
     }
 
