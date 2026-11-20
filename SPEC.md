@@ -568,8 +568,10 @@ what the Conductor's turn at a junction wrote, naming the junction: an update fo
 entry titled Update (a watch turn's update also carries `watch`: the watched `run_id`, `trigger`, `steered`,
 `when` and `stopped`), and the `blocks` the Conductor picked, resolved from the ticket's records
 (`docs/control-api.md`); and advice for the next run, at most 3,000 characters, which the next run's
-prompt carries as its own section, marked as advice and wrapped as untrusted data; a question the
-Conductor asks goes through the decision path, pauses the ticket and holds the run it came before),
+prompt carries as its own section, marked as advice and wrapped as untrusted data, and which at
+`after_qa_blocked` carries the `route` Symphony took on the turn's answer (`rerun` or `rework`); a
+question the Conductor asks goes through the decision path, pauses the ticket and holds the run it
+came before),
 `conductor.steer` (machine only: guidance the Conductor's watch gave a running run, under that run's
 `run_id`, with its `text`, `when` it asked for it, `next_turn`, `now` or `stop`, the `trigger` that
 made it look and how and when it was `delivered`; `conductor.watch` in `docs/configuration.md`) and
@@ -2242,8 +2244,10 @@ The QA agent:
   with no `qa_resize_window` call MUST NOT be reported `pass` either: its wide pass did not run, so
   its `pass` becomes `inconclusive` with that reason (an epic review's becomes `blocked`). A missing
   wide pass is the QA run's omission, never an environment fault: an `inconclusive` pass MUST be
-  rerun once on the same head and then pause the ticket on a Needs Decision hold, and MUST NOT reach
-  the self-heal lane. A `pass` with `scope: none` (the change has nothing on screen to judge, by the
+  rerun once on the same change (the passes in a row without a result since the ticket's last
+  implementation or rework run ended, on any head) and then pause the ticket on a Needs Decision
+  hold, and MUST NOT reach the self-heal lane. With the Conductor's `after_qa_blocked` junction on,
+  its turn runs first and its route or question takes the place of the rerun and the hold. A `pass` with `scope: none` (the change has nothing on screen to judge, by the
   agent's answer or because the QA policy found no changed path matching any selected playbook's
   `paths` and no `## User walkthrough`) owes no wide pass, but MUST be recorded `pass` only when the
   pass built the app (`qa_build`), launched it (`qa_launch_app`) and a `qa_check_app` found it
@@ -3686,7 +3690,17 @@ Rules:
   `qa_host_tunnel_failed`, `qa_dev_server_failed`), the `needs_person` access cases, and the QA
   answer's `covered_by` and `needs_dev_server`. Any other blocked QA pass (the agent's own account
   of the block, a crashed or token-limited run, a check that never finished) names nothing broken,
-  so it MUST pause on a Needs Decision hold after its retries instead of filing a fix ticket.
+  so it MUST pause on a Needs Decision hold after its retries instead of filing a fix ticket. The
+  retries count the blocked passes in a row on the ticket's current change (since its last
+  implementation or rework run ended, on any head; a block on CI spends none), so a merge of the
+  base branch into the pull request starts no new count. That hold recommends running QA again
+  until the person picked that option on the current change and QA ended the same way after it;
+  from then on it recommends sending the ticket back to Rework. With the Conductor's
+  `after_qa_blocked` junction on, such a pass (and an `inconclusive` one) first takes the
+  Conductor's turn, after its verdict and report: the turn's `route` sends the ticket to Rework with
+  its finding (at most 2 times per ticket) or to one more pass (while fewer than 3 passes in a row
+  reached no result), and a question it asks holds the ticket in place of Symphony's own. A turn
+  that is off, fails or routes nothing leaves the retry and the hold as they are.
   A run that fails in its own setup before the agent's first turn (any
   `verification_failed`: the dev server's build, start, health check or the bridge to its port) is a
   setup block: nothing changes between attempts, so it is not retried as a crash and goes to the

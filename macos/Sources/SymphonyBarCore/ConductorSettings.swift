@@ -8,7 +8,7 @@ public enum ConductorSettingsError: LocalizedError, Equatable {
     case notOnOrOff(key: String, value: String)
     /// The time limit holds something other than a whole number or `null`.
     case unreadable(key: String, value: String)
-    /// A junction that is not one of the four Symphony knows.
+    /// A junction that is not one of the five Symphony knows.
     case unknownJunction(String)
 
     public var errorDescription: String? {
@@ -31,6 +31,8 @@ public enum ConductorJunction: String, CaseIterable, Identifiable {
     case afterCoding = "after_coding"
     /// QA failed the change, before rework.
     case afterQAFail = "after_qa_fail"
+    /// QA could not judge the change (its pass ended blocked or inconclusive), before Symphony retries it or asks.
+    case afterQABlocked = "after_qa_blocked"
     /// A rework run handed off.
     case afterRework = "after_rework"
     /// QA passed or was skipped, before Merging.
@@ -43,6 +45,7 @@ public enum ConductorJunction: String, CaseIterable, Identifiable {
         switch self {
         case .afterCoding: return "After coding"
         case .afterQAFail: return "After a QA fail"
+        case .afterQABlocked: return "After a blocked QA"
         case .afterRework: return "After rework"
         case .beforeMerge: return "Before merge"
         }

@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.SelfHeal do
   # The blocked runs one head may spend before a changed failure stops earning a retry: the flow's
   # own bounded retries, the run that files the fix ticket, and a few more once the repair lands.
-  @max_head_attempts 5
+  @max_blocked_runs 5
 
   @moduledoc """
   The self-heal lane: a flow blocked by tooling or environment repairs itself
@@ -27,8 +27,9 @@ defmodule SymphonyElixir.SelfHeal do
     * when a repair has landed and the block recurs, compares the new failure against the last one
       (`compare/2`): a narrowed or otherwise changed failure is progress and earns another attempt,
       and the same failure with no new information escalates to a `Needs Decision` hold, with its
-      decision request posted on the ticket. The retries are bounded: a head with
-      #{@max_head_attempts} blocked runs escalates however the failure changed, so a run that words
+      decision request posted on the ticket. The retries are bounded: a change with
+      #{@max_blocked_runs} blocked runs in a row escalates however the failure changed (the QA pass
+      counts them across heads, `SymphonyElixir.QaVerification`), so a run that words
       the same block differently each time cannot loop. A block whose fix belongs to another repo
       than the last one's is a new break, filed in its own repo rather than compared.
 
@@ -194,8 +195,8 @@ defmodule SymphonyElixir.SelfHeal do
   capability) holds the ticket on that ticket instead, even when an earlier failure was recorded:
   it is linked as the blocker and gets the evidence, and no fix ticket is filed.
 
-  A changed failure retries only while the head has fewer than #{@max_head_attempts} blocked runs
-  (`:attempts`); past that it escalates like an unchanged one.
+  A changed failure retries only while the change has fewer than #{@max_blocked_runs} blocked runs
+  in a row (`:attempts`); past that it escalates like an unchanged one.
 
   `opts` carries `:outcome` (required), `:attempts` (the retries already spent), `:repo_key`, and
   the injectable `:store`, `:tracker`, `:fixer`, `:symphony_repo_key` and `:terminal_states`
@@ -331,8 +332,8 @@ defmodule SymphonyElixir.SelfHeal do
   # another attempt. The new failure is recorded — so the next identical one escalates — and
   # attached to the fix ticket the repair came from when the record still names one (the lift that
   # cleared that repair's reason dropped the pointer, keeping the signature that proves the change).
-  # The attempts are bounded per head: once it has used them up, a changed failure escalates too.
-  defp revisit(%{attempts: attempts} = ctx, _change) when attempts >= @max_head_attempts do
+  # The attempts are bounded per change: once it has used them up, a changed failure escalates too.
+  defp revisit(%{attempts: attempts} = ctx, _change) when attempts >= @max_blocked_runs do
     escalate(ctx, :out_of_attempts)
   end
 
@@ -688,7 +689,7 @@ defmodule SymphonyElixir.SelfHeal do
     do: "Self-heal retries a changed failure on its own, but this one carries no new information, so there is no next step for the machine to try."
 
   defp why(:out_of_attempts),
-    do: "Self-heal retries a changed failure on its own, but only #{@max_head_attempts} times for one change, so the machine stops retrying it."
+    do: "Self-heal retries a changed failure on its own, but only #{@max_blocked_runs} times for one change, so the machine stops retrying it."
 
   defp cause(outcome) do
     Map.get(outcome, :cause) || Map.get(outcome, :reason)
