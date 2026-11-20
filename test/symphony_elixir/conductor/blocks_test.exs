@@ -72,7 +72,7 @@ defmodule SymphonyElixir.Conductor.BlocksTest do
       %{
         step_id: id,
         title: id,
-        mode: "agent",
+        mode: "orchestrated",
         outcome: "passed",
         result: %{status: status, expected: "x", actual: "y"}
       }
@@ -81,7 +81,7 @@ defmodule SymphonyElixir.Conductor.BlocksTest do
     record!(ctx, "step.completed", check.("walk_1", "fail"), run_id: "run-1")
     record!(ctx, "step.completed", check.("design_check", "blocked"), run_id: "run-1")
     record!(ctx, "step.completed", check.("wide_pass", "pass"), run_id: "run-1")
-    record!(ctx, "step.completed", %{step_id: "review", title: "Review", mode: "agent", outcome: "passed"}, run_id: "run-1")
+    record!(ctx, "step.completed", %{step_id: "review", title: "Review", mode: "orchestrated", outcome: "passed"}, run_id: "run-1")
 
     assert [%{steps: steps}] = resolve(ctx, [%{type: "steps"}])
     assert Enum.map(steps, &{&1.step_id, &1.outcome}) == [{"walk_1", "failed"}, {"design_check", "blocked"}, {"wide_pass", "passed"}, {"review", "passed"}]
