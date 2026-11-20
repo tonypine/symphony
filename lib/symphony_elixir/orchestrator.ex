@@ -872,6 +872,9 @@ defmodule SymphonyElixir.Orchestrator do
             :held ->
               handle_held_agent_exit(state, issue_id, running_entry, session_id)
 
+            :groom_again ->
+              state |> handle_held_agent_exit(issue_id, running_entry, session_id) |> request_cycle()
+
             _ ->
               handle_abnormal_agent_exit(state, issue_id, running_entry, session_id, reason)
           end
@@ -1019,6 +1022,10 @@ defmodule SymphonyElixir.Orchestrator do
     if not pr_run_entry?(running_entry) and hold?(issue), do: :held, else: :normal
   end
 
+  # A run whose Grooming turn left the ticket to its next dispatch never started
+  # (`conduct_before_run/4`): its claim is released as a held run's is, and it is dispatched again
+  # at once (`handle_agent_down/4`).
+  defp held_exit({:shutdown, :groom_again}, _running_entry), do: :groom_again
   defp held_exit(reason, _running_entry), do: reason
 
   # The ticket is dispatched again as any held ticket is: by the poll that finds its hold lifted, or
@@ -6266,7 +6273,9 @@ defmodule SymphonyElixir.Orchestrator do
     record_started = fn -> record_dispatch(issue, repo_key, run_id, run_profile, running_attrs) end
 
     case Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
-           :ok = conduct_before_run(conductor, issue, record_started)
+           siblings = sibling_active_workspace_identifiers(state, issue.id, repo_key)
+           conductor_opts = [worker_host: worker_host, active_workspace_identifiers: siblings]
+           :ok = conduct_before_run(conductor, issue, record_started, conductor_opts)
 
            opts =
              [
@@ -6277,7 +6286,7 @@ defmodule SymphonyElixir.Orchestrator do
                run_profile: run_profile,
                reviewer_run_profile: reviewer_run_profile,
                verification: verification,
-               active_workspace_identifiers: sibling_active_workspace_identifiers(state, issue.id, repo_key)
+               active_workspace_identifiers: siblings
              ] ++ runner_opts
 
            AgentRunner.run(issue, recipient, opts)
@@ -6396,12 +6405,16 @@ defmodule SymphonyElixir.Orchestrator do
   # The Conductor's turn runs in the run's task before its agent, and the run's `run.started` is
   # recorded once the turn is done, so the turn sits before the run on the timeline. A turn that asked
   # the person a question paused the ticket: the run ends here, before it starts, and the orchestrator
-  # reads its normal end as held.
-  defp conduct_before_run(nil, _issue, _record_started), do: :ok
+  # reads its normal end as held. A Grooming turn (`SymphonyElixir.Conductor.Grooming`) that left the
+  # ticket to its next dispatch ends the run here too, with an end of its own (`held_exit/2`): no
+  # continuation follows it, and a cycle dispatches the ticket again at once, as a first run.
+  # `opts` say where the run's workspace is made, which Grooming reads.
+  defp conduct_before_run(nil, _issue, _record_started, _opts), do: :ok
 
-  defp conduct_before_run(plan, issue, record_started) do
-    case Conductor.run(plan, issue, []) do
+  defp conduct_before_run(plan, issue, record_started, opts) do
+    case Conductor.run(plan, issue, opts) do
       :held -> exit(:normal)
+      :again -> exit({:shutdown, :groom_again})
       :ok -> record_started.()
     end
 
@@ -6467,7 +6480,7 @@ defmodule SymphonyElixir.Orchestrator do
   # which the next run's `SymphonyElixir.WorkspaceSync` compares. A run a usage limit, an
   # unreachable model API, a CI wait or its ticket's hold stopped records `counted: false`, as its
   # dispatch outcome is dropped.
-  # A run the Conductor's turn came before records its start after the turn (`conduct_before_run/3`):
+  # A run the Conductor's turn came before records its start after the turn (`conduct_before_run/4`):
   # one the turn's question held, or one stopped during the turn, never started, and records no end.
   defp record_run_ended(repo_key, issue_id, run_id, %{conductor_turn: true} = running_entry, reason) do
     if run_events(issue_id, "run.started", &(&1[:run_id] == run_id)) == [],

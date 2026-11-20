@@ -1,0 +1,375 @@
+defmodule SymphonyElixir.Conductor.GroomingTest do
+  use SymphonyElixir.TestSupport
+
+  alias SymphonyElixir.{Conductor, Questions, TicketChecks, TicketEvents, TicketPlan, Workspace}
+  alias SymphonyElixir.Conductor.{Facts, Grooming}
+  alias SymphonyElixir.Config.Schema
+
+  @on %Schema.Conductor{enabled: true}
+
+  @description """
+  The ticket list forgets my filter when I reload. Keep it.
+
+  <!-- symphony:decisions:start -->
+  ## Decisions
+  - **D1** · 2026-11-18 · Only the list <!-- symphony:decision:k1 -->
+  <!-- symphony:decisions:end -->
+  """
+
+  defmodule FakeAgent do
+    @moduledoc false
+    def start_session(workspace, opts) do
+      send(Application.fetch_env!(:symphony_elixir, :grooming_fake_agent).pid, {:session, workspace, opts})
+      {:ok, %{workspace: workspace}}
+    end
+
+    def run_turn(_session, prompt, _issue, _opts) do
+      %{pid: pid, turn: turn} = Application.fetch_env!(:symphony_elixir, :grooming_fake_agent)
+      send(pid, {:turn, prompt})
+      turn
+    end
+
+    def stop_session(_session), do: :ok
+  end
+
+  # A tracker that takes a label off, or refuses to.
+  defmodule Labels do
+    @moduledoc false
+    def remove_issue_label(issue_id, "breakdown"), do: {:error, {:refused, issue_id}}
+
+    def remove_issue_label(issue_id, label) do
+      send(self(), {:label_removed, issue_id, label})
+      :ok
+    end
+  end
+
+  setup do
+    n = System.unique_integer([:positive])
+    issue_id = "issue-grooming-#{n}"
+    identifier = "GROOM-#{n}"
+    ticket = %{repo_key: "default", issue_id: issue_id, issue_identifier: identifier, phase: "Todo"}
+    record = Map.merge(ticket, %{title: "Keep the list's filter", description: @description})
+    :ok = RunStore.put_ticket_state(record)
+    issue = %Issue{id: issue_id, identifier: identifier, title: record.title, description: @description, state: "Todo", repo_key: "default", labels: []}
+    %{issue: issue, record: record, issue_id: issue_id}
+  end
+
+  defp record!(issue_id, type, payload, run_id) do
+    {:ok, event} = TicketEvents.record("default", issue_id, type, payload, run_id: run_id)
+    event
+  end
+
+  defp events(issue_id, type), do: issue_id |> Facts.events() |> Enum.filter(&(&1.type == type))
+  defp status_notes(issue_id), do: for(%{payload: %{status: true, text: text}} <- events(issue_id, "note"), do: text)
+
+  defp plan(ctx, attrs \\ %{}) do
+    Map.merge(
+      %{junction: "grooming", issue_id: ctx.issue_id, repo_key: "default", run_profile: Config.run(Config.settings_for_repo!("default"), :conductor), timeout_ms: 5_000},
+      attrs
+    )
+  end
+
+  defp written(attrs \\ %{}) do
+    Map.merge(
+      %{
+        "shape" => "single",
+        "layers" => ["screen"],
+        "summary" => "The ticket list remembers its filter.",
+        "text" => "Approach: store the filter with the view state.",
+        "checks" => [
+          %{"kind" => "outcome", "statement" => "The filter is applied after a reload.", "proof" => "test"},
+          %{"kind" => "qa", "statement" => "The list is still filtered.", "proof" => "qa", "state" => "2 states", "action" => "Reload", "expect" => "Filtered"}
+        ],
+        "size" => %{"tokens" => 3_000_000, "runs" => 3}
+      },
+      attrs
+    )
+  end
+
+  defp answer(attrs), do: Jason.encode!(attrs)
+  defp planned(attrs \\ %{}), do: {:ok, [answer(%{"plan" => written(attrs), "update" => "I read this as one small change.\n\nNext: one coding run."})], 9_000}
+  defp turn(reply), do: fn _plan, _issue, _run_id, _prompt -> reply end
+  # No checkout: these turns plan from the facts.
+  defp groom(ctx, reply, opts \\ []), do: Conductor.run(plan(ctx), ctx.issue, [turn: turn(reply), worker_host: "elsewhere"] ++ opts)
+
+  defp question(action) do
+    %{
+      "title" => "Which list?",
+      "question" => "Is it the ticket list or the run list?",
+      "why" => "The ask names no list.",
+      "if_unanswered" => "The ticket stays paused.",
+      "recommendation_reason" => "The ticket list has the filter.",
+      "options" => [
+        %{"label" => "The ticket list", "effect" => "Grooming runs again with this answer.", "recommended" => true, "action" => action},
+        %{"label" => "Cancel it", "effect" => "The ticket is cancelled.", "action" => "cancel"}
+      ]
+    }
+  end
+
+  describe "the junction" do
+    test "is due before a ticket's first run, while it has no plan and no run of its own", ctx do
+      assert Grooming.due?(:implementation, [])
+      assert Grooming.due?("breakdown", [])
+      refute Grooming.due?(:code_review, [])
+      refute Grooming.due?(:rework, [])
+      assert Conductor.dispatch_junction(:implementation, []) == "grooming"
+      assert Conductor.dispatch_junction(:qa, []) == nil
+
+      # The Conductor's own turn is no run of the ticket's.
+      record!(ctx.issue_id, "run.started", %{run_id: "conductor-1", run_kind: "conductor"}, "conductor-1")
+      record!(ctx.issue_id, "run.ended", %{run_id: "conductor-1", run_kind: "conductor", exit: "failed"}, "conductor-1")
+      assert Conductor.dispatch_junction(:implementation, Facts.events(ctx.issue_id)) == "grooming"
+    end
+
+    test "a ticket with runs but no plan is never groomed", ctx do
+      started = record!(ctx.issue_id, "run.started", %{run_id: "run-1", run_kind: "implementation"}, "run-1")
+      refute Grooming.due?(:implementation, [started])
+
+      ended = record!(ctx.issue_id, "run.ended", %{run_id: "run-1", exit: "normal"}, "run-1")
+      refute Grooming.due?(:implementation, [ended])
+      assert Conductor.dispatch_junction(:implementation, Facts.events(ctx.issue_id)) == nil
+      assert Conductor.plan(ctx.issue, :implementation, "default", settings: @on) == nil
+    end
+
+    test "a ticket with a plan is not groomed again", ctx do
+      assert groom(ctx, planned()) == :ok
+      refute Grooming.due?(:implementation, Facts.events(ctx.issue_id))
+      assert Conductor.plan(ctx.issue, :implementation, "default", settings: @on) == nil
+    end
+
+    test "is planned for ten minutes, and not at all with the Conductor or the junction off", ctx do
+      assert %{junction: "grooming", timeout_ms: 600_000, run_profile: %{kind: :conductor}} = Conductor.plan(ctx.issue, :implementation, "default", settings: @on)
+      assert %{timeout_ms: 1_000} = Conductor.plan(ctx.issue, :breakdown, "default", settings: %{@on | grooming_timeout_ms: 1_000})
+
+      assert Conductor.plan(ctx.issue, :implementation, "default", settings: %Schema.Conductor{}, events: :never_read) == nil
+      assert Conductor.plan(ctx.issue, :implementation, "default") == nil
+      assert Conductor.plan(ctx.issue, :implementation, "default", settings: %{@on | junctions: Schema.Conductor.junctions() -- ["grooming"]}) == nil
+      assert Facts.events(ctx.issue_id) == []
+    end
+
+    test "a turn no provider can take is planned as a try that failed", ctx do
+      log = capture_log(fn -> send(self(), Conductor.plan(ctx.issue, :implementation, "default", settings: @on, available?: fn _run -> false end)) end)
+      assert_received %{junction: "grooming", unavailable: provider} = plan
+      assert is_binary(provider)
+      refute Map.has_key?(plan, :run_profile)
+      assert log =~ "Conductor skipped issue_id=#{ctx.issue_id}"
+    end
+  end
+
+  describe "a turn that writes a plan" do
+    test "records the ask once, the plan and the update, and the run goes on", ctx do
+      test = self()
+
+      turn = fn _plan, _issue, run_id, prompt ->
+        send(test, {:prompt, run_id, prompt})
+        planned()
+      end
+
+      assert Conductor.run(plan(ctx), ctx.issue, turn: turn, worker_host: "elsewhere") == :ok
+
+      assert [%{text: "The ticket list forgets my filter when I reload. Keep it.", source: "linear"}] = TicketPlan.ask(ctx.issue_id)
+      assert_received {:prompt, run_id, prompt}
+      assert prompt =~ "this turn is Grooming"
+      assert prompt =~ "The ticket list forgets my filter when I reload. Keep it."
+      refute prompt =~ "symphony:decisions"
+      refute prompt =~ "{{"
+      assert prompt =~ "No checkout of the repository is available to this turn."
+
+      current = TicketPlan.current(ctx.issue_id)
+      assert %{version: 1, by: "grooming", reason: "Grooming", shape: "single", layers: ["screen"]} = current
+      assert current.size == %{tokens: 3_000_000, runs: 3}
+      assert [%{run_id: ^run_id}] = events(ctx.issue_id, "plan.written")
+      assert [%{id: "c1", kind: "outcome", state: :open}, %{id: "c2", kind: "qa", needs: "2 states", state: :open}] = TicketChecks.list(ctx.issue_id)
+      assert [%{payload: %{junction: "grooming", text: "I read this as one small change." <> _rest}}] = events(ctx.issue_id, "conductor.update")
+      assert events(ctx.issue_id, "conductor.instructions") == []
+      assert [%{payload: %{run_kind: "conductor", state: "Todo"}}] = events(ctx.issue_id, "run.started")
+      assert [%{payload: %{run_kind: "conductor", exit: "answered", tokens: 9_000, counted: false}}] = events(ctx.issue_id, "run.ended")
+      assert status_notes(ctx.issue_id) == []
+
+      # The ask is never recorded twice.
+      assert Grooming.record_ask("default", ctx.issue, ctx.record, Facts.events(ctx.issue_id)) == :ok
+      assert length(TicketPlan.ask(ctx.issue_id)) == 1
+    end
+
+    test "a ticket with no description asks its title, and an ask that can't be recorded is logged", ctx do
+      bare = %{ctx.issue | description: nil}
+      assert Grooming.record_ask("default", bare, %{ctx.record | description: "  "}, []) == :ok
+      assert [%{text: "Keep the list's filter"}] = TicketPlan.ask(ctx.issue_id)
+
+      other = "issue-grooming-other-#{System.unique_integer([:positive])}"
+      assert Grooming.record_ask("default", %Issue{id: other}, %{}, []) == :ok
+      assert TicketPlan.ask(other) == []
+
+      long = %{bare | id: other, title: String.duplicate("x", 30_000)}
+      log = capture_log(fn -> assert Grooming.record_ask(nil, long, %{}, []) == :ok end)
+      assert log =~ "Grooming could not record the ask issue_id=#{other}"
+    end
+
+    test "a split is not carried out yet: the plan is recorded as a single ticket's", ctx do
+      subs = [%{"title" => "The API", "ask" => "Add the filter."}, %{"title" => "The list", "ask" => "Read it.", "after" => ["s1"]}]
+
+      log = capture_log(fn -> assert groom(ctx, planned(%{"shape" => "split", "sub_tickets" => subs})) == :ok end)
+
+      assert log =~ "Grooming planned a split issue_id=#{ctx.issue_id}"
+      assert log =~ "sub_tickets=2"
+      plan = TicketPlan.current(ctx.issue_id)
+      assert plan.shape == "single"
+      refute Map.has_key?(plan, :sub_tickets)
+      assert Grooming.split("default", ctx.issue, %{shape: "split"}) == {:error, :not_supported}
+    end
+
+    test "a ticket labelled plan loses the label, and its first coding run is left to the next dispatch", ctx do
+      labelled = %{ctx.issue | labels: ["Plan", "type:bug", "breakdown"]}
+      :ok = RunStore.put_ticket_state(Map.put(ctx.record, :labels, labelled.labels))
+
+      log = capture_log(fn -> assert Conductor.run(plan(ctx), labelled, turn: turn(planned()), worker_host: "elsewhere", tracker: Labels) == :again end)
+
+      assert_received {:label_removed, _issue_id, "Plan"}
+      assert log =~ "Grooming could not take the label off issue_id=#{ctx.issue_id}"
+      assert log =~ "label=breakdown"
+      assert RunStore.get_ticket_state(ctx.issue_id).labels == ["type:bug"]
+      assert [note] = status_notes(ctx.issue_id)
+      assert note =~ "took the Plan and breakdown label off"
+      assert TicketPlan.groomed?(ctx.issue_id)
+      assert Grooming.take_over("default", ctx.issue) == :unchanged
+    end
+  end
+
+  describe "a turn that writes no plan" do
+    test "is tried once more at the next dispatch, then the ticket starts without a plan, with a note", ctx do
+      log = capture_log(fn -> assert groom(ctx, {:ok, ["no answer here"], 7}) == :again end)
+      assert log =~ "the ticket is groomed again at its next dispatch"
+      assert [first] = status_notes(ctx.issue_id)
+      assert first == "Grooming did not finish: unreadable answer: the answer holds no JSON object. Symphony tries once more before the first run."
+      assert Grooming.tries(Facts.events(ctx.issue_id)) == 1
+      assert %{junction: "grooming"} = Conductor.plan(ctx.issue, :implementation, "default", settings: @on)
+
+      log = capture_log(fn -> assert groom(ctx, {:error, :usage_limited, 5}) == :ok end)
+      assert log =~ "the ticket starts without a plan"
+      assert [^first, last] = status_notes(ctx.issue_id)
+      assert last == "Grooming did not finish, 2 times: the turn failed. This ticket starts without a plan."
+
+      refute TicketPlan.groomed?(ctx.issue_id)
+      assert Conductor.plan(ctx.issue, :implementation, "default", settings: @on) == nil
+      assert events(ctx.issue_id, "conductor.update") == []
+      assert [_ask] = TicketPlan.ask(ctx.issue_id)
+      assert Grooming.max_tries() == 2
+    end
+
+    test "a provider that can take no run follows the same bound, and runs no turn", ctx do
+      unavailable = plan(ctx, %{unavailable: "anthropic"}) |> Map.delete(:run_profile)
+
+      capture_log(fn ->
+        assert Conductor.run(unavailable, ctx.issue, []) == :again
+        assert Conductor.run(unavailable, ctx.issue, []) == :ok
+      end)
+
+      assert [first, _last] = status_notes(ctx.issue_id)
+      assert first =~ "no provider of runs.conductor can take a run now (anthropic)"
+      assert events(ctx.issue_id, "run.started") == []
+      assert TicketPlan.ask(ctx.issue_id) == []
+      refute Grooming.due?(:implementation, Facts.events(ctx.issue_id))
+    end
+
+    test "a turn that runs over, a plan Symphony refuses and a question that can't be asked are tries that failed", ctx do
+      twice = written(%{"checks" => [%{"id" => "c1", "kind" => "outcome", "statement" => "A.", "proof" => "test"}, %{"id" => "c1", "kind" => "outcome", "statement" => "B.", "proof" => "test"}]})
+
+      cases = [
+        {fn _plan, _issue, _run_id, _prompt -> Process.sleep(1_000) end, %{timeout_ms: 20}, "the turn ran past its time limit"},
+        {turn({:ok, [answer(%{"plan" => twice, "update" => "Planned."})], 3}), %{}, "its plan was refused: check id c1 is used twice"},
+        {turn({:ok, [answer(%{"ask_person" => question("accept_without_qa")})], 3}), %{}, "its question could not be asked"}
+      ]
+
+      for {turn, attrs, why} <- cases do
+        fresh = fresh!(ctx)
+        capture_log(fn -> assert Conductor.run(plan(fresh, attrs), fresh.issue, turn: turn, worker_host: "elsewhere") == :again end)
+        assert [note] = status_notes(fresh.issue_id)
+        assert note =~ why
+        assert events(fresh.issue_id, "plan.written") == []
+        assert events(fresh.issue_id, "conductor.update") == []
+      end
+    end
+
+    test "a turn Symphony itself fails, and a try it can't count, never hold the ticket for good", ctx do
+      log = capture_log(fn -> assert Conductor.run(plan(ctx), ctx.issue, turn: turn(planned()), facts: %{bad: {:not, :json}}, worker_host: "elsewhere") == :again end)
+      assert log =~ "Grooming failed issue_id=#{ctx.issue_id}"
+      assert [note] = status_notes(ctx.issue_id)
+      assert note =~ "Symphony could not run the turn"
+
+      log = capture_log(fn -> assert Grooming.failed(nil, "issue-grooming-nowhere", "the turn failed") == :give_up end)
+      assert log =~ "Grooming could not count its try"
+    end
+
+    test "a plan that can't be recorded says so" do
+      issue = %Issue{id: "issue-grooming-unrecorded", identifier: "GROOM-0"}
+      checks = [%{id: "c1", kind: "outcome", statement: "x", proof: "test"}]
+      plan = %{shape: "single", layers: ["docs"], summary: "s", text: "t", checks: checks, size: %{tokens: 1, runs: 1}}
+      assert {:error, "its plan could not be recorded: " <> _why} = Grooming.write_plan(nil, issue, plan)
+    end
+  end
+
+  test "a question holds the ticket, writes no plan and counts no try", ctx do
+    reply = {:ok, [answer(%{"plan" => written(), "ask_person" => question("continue")})], 4}
+
+    assert groom(ctx, reply) == :held
+
+    assert [%{title: "Which list?"}] = Questions.open({:ticket, "default", ctx.issue_id})
+    refute TicketPlan.groomed?(ctx.issue_id)
+    assert Grooming.tries(Facts.events(ctx.issue_id)) == 0
+    assert status_notes(ctx.issue_id) == []
+    # Once answered, the ticket is groomed again: the junction is still due.
+    assert Grooming.due?(:implementation, Facts.events(ctx.issue_id))
+  end
+
+  describe "the turn's session" do
+    setup do
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :grooming_fake_agent) end)
+      reply = {:ok, %{result: answer(%{"plan" => written()})}}
+      Application.put_env(:symphony_elixir, :grooming_fake_agent, %{pid: self(), turn: reply})
+    end
+
+    test "runs in the ticket's workspace, which is kept, with read-only tools and more than one model turn", ctx do
+      test = self()
+      {:ok, workspace} = Workspace.local_path_for_issue(ctx.issue.identifier, "default")
+      on_exit(fn -> File.rm_rf(workspace) end)
+
+      create = fn issue, host, repo_key, opts ->
+        send(test, {:created, issue.identifier, host, repo_key, opts})
+        File.mkdir_p!(workspace)
+        {:ok, workspace}
+      end
+
+      assert Conductor.run(plan(ctx, %{timeout_ms: 4_321}), ctx.issue, agent_module: FakeAgent, create_workspace: create, active_workspace_identifiers: ["GROOM-0"]) == :ok
+
+      assert_received {:created, identifier, nil, "default", [active_workspace_identifiers: ["GROOM-0"]]}
+      assert identifier == ctx.issue.identifier
+      assert_received {:session, ^workspace, session_opts}
+      assert session_opts[:tool_scope] == :read_only and session_opts[:read_only] == true
+      assert session_opts[:settings].execution.max_turns > 1
+      assert session_opts[:settings].execution.turn_timeout_ms == 4_321
+      assert File.dir?(workspace)
+      assert_received {:turn, prompt}
+      assert prompt =~ "The repository is checked out in your working directory."
+      assert TicketPlan.groomed?(ctx.issue_id)
+    end
+
+    test "plans without the code when the workspace can't be made, in a folder that is removed", ctx do
+      create = fn _issue, _host, _repo_key, _opts -> {:error, :disk_full} end
+
+      log = capture_log(fn -> assert Conductor.run(plan(ctx), ctx.issue, agent_module: FakeAgent, create_workspace: create) == :ok end)
+
+      assert log =~ "Grooming has no workspace issue_id=#{ctx.issue_id}"
+      assert_received {:session, folder, _session_opts}
+      assert folder =~ ".conductor"
+      refute File.exists?(folder)
+      assert Grooming.workspace(ctx.issue, "default", worker_host: "elsewhere") == {:error, {:remote_worker, "elsewhere"}}
+    end
+  end
+
+  defp fresh!(ctx) do
+    n = System.unique_integer([:positive])
+    record = %{ctx.record | issue_id: "issue-grooming-#{n}", issue_identifier: "GROOM-#{n}"}
+    :ok = RunStore.put_ticket_state(record)
+    %{issue_id: record.issue_id, record: record, issue: %{ctx.issue | id: record.issue_id, identifier: record.issue_identifier}}
+  end
+end
