@@ -338,10 +338,10 @@ defmodule SymphonyElixir.QaAgentTest do
   end
 
   # A QA host whose stored build is the playbook's `App.app` and whose screen is `{w, h}`
-  # points, 93 pt of its height taken by the menu bar and the Dock; the window reaches at most 1400×900.
+  # points, 93 pt of its height taken by the menu bar and the Dock; the window fills the usable area.
   defp wide_pass_host({w, h}) do
     usable = h - 93
-    window = %{x: 0, y: 25, w: min(w, 1400), h: min(usable, 900)}
+    window = %{x: 0, y: 25, w: w, h: usable}
     resized = Jason.encode!(%{ok: true, window: window, screen: %{w: w, h: h}, visible: %{x: 0, y: 25, w: w, h: usable}})
 
     cmd = fn
@@ -1113,6 +1113,28 @@ defmodule SymphonyElixir.QaAgentTest do
 
       epic = QaAgent.prompt(job(%{epic_review: true, base_ref: "origin/main"}), nil)
       assert epic =~ "QA's three jobs, in this order:"
+    end
+
+    test "names the walkthrough and wide pass sizes of a macos_app pass, from the playbook's settings" do
+      macos_app = fn settings ->
+        [playbook] =
+          Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => Map.merge(%{"build" => "make app", "app" => "build/App.app"}, settings)}})
+
+        QaAgent.prompt(job(%{playbooks: [playbook]}), nil) |> String.replace(~r/\s+/, " ")
+      end
+
+      prompt = macos_app.(%{})
+      assert prompt =~ ~s(Window sizes: - Walkthrough: 1366×768 pt. After each `qa_launch_app`)
+      assert prompt =~ ~s(call `qa_resize_window` with `pass: "walkthrough"`)
+      assert prompt =~ "- Wide pass: 2560×1440 pt, the screen the window fills."
+
+      prompt = macos_app.(%{"window_width" => 1440, "window_height" => 900, "wide_pass_width" => 3008, "wide_pass_height" => 1692})
+      assert prompt =~ "Walkthrough: 1440×900 pt."
+      assert prompt =~ "Wide pass: 3008×1692 pt"
+
+      # A playbook built without the sizes takes the defaults; a pass with no macos_app names none.
+      assert QaAgent.prompt(job(%{playbooks: [%{kind: "macos_app", paths: [], prompt: "Drive the app."}]}), nil) =~ "Walkthrough: 1366×768 pt."
+      refute QaAgent.prompt(job(), nil) =~ "Window sizes:"
     end
 
     test "the viewport passes name the layout defect rule and the finding format" do
@@ -2151,10 +2173,16 @@ defmodule SymphonyElixir.QaAgentTest do
                run.({1024, 768}, {:ok, %{result: FakeSession.pass_json()}})
 
       assert reason =~ "the wide pass was limited: the QA screen is 1024×768 pt (1024×675 pt usable)"
-      assert reason =~ "reached only 1024×675 pt, under the 1400×900 pt the wide pass needs"
+      assert reason =~ "under the 2560×1440 pt screen the wide pass needs, so the app's window reached only 1024×675 pt"
+      assert reason =~ "`tart set <vm> --display 2560x1440pt`"
       assert Report.render(%{verdict: :blocked, reason: reason, sha: @sha, target_state: "Human Review"}) =~ "Reason: the wide pass was limited"
 
-      assert {:ok, %{result: %{verdict: :pass}}} = run.({1920, 1200}, {:ok, %{result: FakeSession.pass_json()}})
+      # A 1920×1200 screen, enough for the old 1400×900 wide pass, is under the 2560×1440 one.
+      small_screen_run = run.({1920, 1200}, {:ok, %{result: FakeSession.pass_json()}})
+      assert {:ok, %{result: %{verdict: :blocked, reason: reason}}} = small_screen_run
+      assert reason =~ "the QA screen is 1920×1200 pt (1920×1107 pt usable), under the 2560×1440 pt screen the wide pass needs"
+
+      assert {:ok, %{result: %{verdict: :pass}}} = run.({2560, 1440}, {:ok, %{result: FakeSession.pass_json()}})
 
       blocked_json =
         Jason.encode!(%{
@@ -2216,7 +2244,7 @@ defmodule SymphonyElixir.QaAgentTest do
             QaAgent.run(job(%{playbooks: [macos_app]}), Config.settings!(),
               git: fake_git(),
               qa_agent_module: session,
-              qa_driver_opts: qa_vm_opts(wide_pass_host({1920, 1200})) ++ [git: fn _args, _cwd -> {"", 0} end]
+              qa_driver_opts: qa_vm_opts(wide_pass_host({2560, 1440})) ++ [git: fn _args, _cwd -> {"", 0} end]
             )
           end)
 
@@ -2257,7 +2285,7 @@ defmodule SymphonyElixir.QaAgentTest do
           QaAgent.run(job(%{playbooks: [Map.put(macos_app, :scope, :none)]}), Config.settings!(),
             git: fake_git(),
             qa_agent_module: AppCheckSession,
-            qa_driver_opts: qa_vm_opts(wide_pass_host({1920, 1200})) ++ [git: fn _args, _cwd -> {"", 0} end]
+            qa_driver_opts: qa_vm_opts(wide_pass_host({2560, 1440})) ++ [git: fn _args, _cwd -> {"", 0} end]
           )
         end)
 
@@ -2329,7 +2357,7 @@ defmodule SymphonyElixir.QaAgentTest do
             QaAgent.run(epic_job, Config.settings!(),
               git: fake_git(),
               qa_agent_module: session,
-              qa_driver_opts: qa_vm_opts(wide_pass_host({1920, 1200})) ++ [git: fn _args, _cwd -> {"", 0} end]
+              qa_driver_opts: qa_vm_opts(wide_pass_host({2560, 1440})) ++ [git: fn _args, _cwd -> {"", 0} end]
             )
           end)
 
@@ -2358,7 +2386,7 @@ defmodule SymphonyElixir.QaAgentTest do
                       QaAgent.run(%{epic_job | playbooks: [Map.put(macos_app, :scope, :none)]}, Config.settings!(),
                         git: fake_git(),
                         qa_agent_module: FakeSession,
-                        qa_driver_opts: qa_vm_opts(wide_pass_host({1920, 1200})) ++ [git: fn _args, _cwd -> {"", 0} end]
+                        qa_driver_opts: qa_vm_opts(wide_pass_host({2560, 1440})) ++ [git: fn _args, _cwd -> {"", 0} end]
                       )
                     end)
 

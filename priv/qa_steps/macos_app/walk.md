@@ -8,6 +8,10 @@ How to drive the app:
   asks for something else (`api_fixtures`, `appearance`, `fresh_root`, `root`, `environment`,
   stand-in ports), quit the app with `qa_quit_app` and call `qa_launch_app` with those arguments.
   At most three launched apps run at once.
+- Before the first step, and after each launch, call `qa_resize_window` with
+  `pass: "walkthrough"`: it sets the main window to the walkthrough size (Window sizes, 1366×768 pt
+  by default). Judge and screenshot every step there unless the brief names another size, and name
+  the size in the step's `viewport`.
 - Find elements with `qa_ax_tree` (narrow it with `role` or `text`) and act with `qa_ax_press`. When
   an element answers `unsupported`: select a table or outline row with `qa_ax_select`; press a key
   or shortcut with `qa_key` (`key`, `modifiers`); click any other control with `qa_click`; hover or

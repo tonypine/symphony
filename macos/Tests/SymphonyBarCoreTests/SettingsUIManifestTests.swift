@@ -138,7 +138,15 @@ final class SettingsUIManifestTests: XCTestCase {
         yaml = try record("setting the QA host tools", {
             try QAHostTools.updating($0, from: QAHostTools(), to: QAHostTools(tools: ["go", "pg_ctl"]))
         }, from: yaml)
-        let macAppQA = MacAppQAPlaybook(devServer: true, devServerPort: 8091, launchEnv: [LaunchVariable(name: "HUB_OWNER_TOKEN", value: "abc")])
+        let macAppQA = MacAppQAPlaybook(
+            devServer: true,
+            devServerPort: 8091,
+            launchEnv: [LaunchVariable(name: "HUB_OWNER_TOKEN", value: "abc")],
+            windowWidth: 1440,
+            windowHeight: 900,
+            widePassWidth: 3008,
+            widePassHeight: 1692
+        )
         yaml = try record("setting the macOS app QA dev server", {
             try MacAppQAPlaybook.updating($0, from: MacAppQAPlaybook(), to: macAppQA)
         }, from: yaml)

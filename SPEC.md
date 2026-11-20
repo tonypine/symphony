@@ -2267,14 +2267,17 @@ The QA agent:
   scroll area at an element or point by a delta or to an edge with scroll-wheel events, and MAY
   post them again at the pointer, over the app's own window, when the app took none of them. They
   MUST refuse the same points as `qa_click` before the pointer moves.
-  `qa_resize_window` (the playbook's wide pass) sizes a launched app's window to at least 1400×900
-  points, or the screen's usable area when that is smaller, through the Accessibility grant alone, and
+  `qa_resize_window` sizes a launched app's window, through the Accessibility grant alone: for the
+  walkthrough to the playbook's walkthrough size (1366×768 points by default), where every walkthrough
+  step, screenshot and design check runs unless the step names another size, and for the playbook's
+  wide pass to fill a screen of its wide pass size (2560×1440 points by default), or the screen's
+  usable area when that is smaller, and
   `qa_check_app` reports whether the app still runs, answers an accessibility request within 10
   seconds, and has written a crash report since launch, naming the page the agent passes and that
   window size. `qa_sample` runs `/usr/bin/sample` on the QA host against a running app the driver
   launched, for 1 to 10 seconds, saves the whole report as evidence and returns the main thread's
   heaviest stack from its call graph, so a hang finding names its cause; it MUST answer `qa_no_app`
-  when that app is not running. A pass whose resize met a usable screen area under 1400×900 points MUST NOT be
+  when that app is not running. A pass whose wide pass met a screen under the wide pass size MUST NOT be
   reported `pass`: its `pass` becomes `blocked`, and that pass's `blocked` goes to a person. A pass
   with no `qa_resize_window` call MUST NOT be reported `pass` either: its wide pass did not run, so
   its `pass` becomes `inconclusive` with that reason (an epic review's becomes `blocked`). A missing

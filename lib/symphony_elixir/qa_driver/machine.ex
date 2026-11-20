@@ -15,6 +15,11 @@ defmodule SymphonyElixir.QaDriver.Machine do
   @ioreg "/usr/sbin/ioreg"
   @ioreg_args ["-rd1", "-c", "IOPlatformExpertDevice"]
   @uuid ~r/"IOPlatformUUID"\s*=\s*"([0-9A-Fa-f-]+)"/
+  @system_profiler "/usr/sbin/system_profiler"
+  @displays_args ["SPDisplaysDataType", "-json"]
+  # `_spdisplays_resolution` is the size the display looks like, in points
+  # (`2560 x 1440 @ 60.00Hz`); `_spdisplays_pixels` is its pixels.
+  @points ~r/\A\s*(\d+)\s*x\s*(\d+)/
   @timeout_ms 30_000
   @output_limit 64_000
 
@@ -64,4 +69,44 @@ defmodule SymphonyElixir.QaDriver.Machine do
 
   defp side({:ok, uuid}, _where), do: {:ok, uuid}
   defp side({:error, reason}, where), do: {:error, "the hardware UUID of #{where} could not be read: #{reason}"}
+
+  @doc """
+  The size in points of the main display of the machine `cmd` runs on, as
+  `system_profiler SPDisplaysDataType -json` reports it: what the display looks like, so a Retina
+  mode of a 2560×1440 display is 1280×720. The display marked main, or else the first one.
+  """
+  @spec screen_points(cmd()) :: {:ok, {pos_integer(), pos_integer()}} | {:error, String.t()}
+  def screen_points(cmd) do
+    case cmd.(@system_profiler, @displays_args, timeout_ms: @timeout_ms, output_limit: @output_limit) do
+      {:ok, {output, 0}} ->
+        output |> displays() |> main_display()
+
+      {:ok, {output, status}} ->
+        {:error, "system_profiler exited with status #{status}: #{String.slice(String.trim(output), -500, 500)}"}
+
+      {:error, reason} ->
+        {:error, "system_profiler could not run: #{inspect(reason)}"}
+    end
+  end
+
+  defp displays(output) do
+    case Jason.decode(output) do
+      {:ok, %{"SPDisplaysDataType" => gpus}} when is_list(gpus) ->
+        for %{"spdisplays_ndrvs" => displays} <- gpus, is_list(displays), %{} = display <- displays, do: display
+
+      _other ->
+        []
+    end
+  end
+
+  defp main_display(displays) do
+    display = Enum.find(displays, &(Map.get(&1, "spdisplays_main") == "spdisplays_yes")) || List.first(displays)
+
+    with %{"_spdisplays_resolution" => resolution} when is_binary(resolution) <- display,
+         [_match, width, height] <- Regex.run(@points, resolution) do
+      {:ok, {String.to_integer(width), String.to_integer(height)}}
+    else
+      _other -> {:error, "system_profiler reported no display size"}
+    end
+  end
 end
