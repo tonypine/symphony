@@ -700,6 +700,7 @@ defmodule SymphonyElixir.QaBuildTest do
       head!(%{tree: @tree, paths: ["macos/App.swift"]})
       assert QaBuild.selection("default", ticket(), @sha) == :app
       assert QaBuild.selection("default", ticket(["qa:skip"]), @sha) == :none
+      :ok = RunStore.put_github_updates({:qa_build_head, "no-such-repo", @sha}, %{tree: @tree, paths: ["macos/App.swift"]})
       assert QaBuild.selection("no-such-repo", ticket(), @sha) == :none
 
       head!(%{tree: @tree, paths: ["app/Main.kt"]})
