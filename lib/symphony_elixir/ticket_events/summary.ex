@@ -178,9 +178,12 @@ defmodule SymphonyElixir.TicketEvents.Summary do
     {title, [text(payload, :intent) || text(payload, :pr_url)]}
   end
 
+  # A review round's verdict counts its findings and the ones missed earlier, so the ticket page
+  # tells three rounds of one finding each from one round that found three (TP-1516).
   defp summary("verdict.recorded", payload, _event) do
     title = "#{kind_name(text(payload, :kind)) || "Review"} verdict" <> suffix(": ", words(text(payload, :outcome)))
-    {title, [text(payload, :reason) | prefixed("on", short_sha(text(payload, :head)))]}
+    counts = round_counts(map_or_empty(field(payload, :details)))
+    {title, [counts, text(payload, :reason) | prefixed("on", short_sha(text(payload, :head)))]}
   end
 
   defp summary("decision.requested", payload, _event) do
@@ -553,6 +556,11 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   defp ordinal(n) when rem(n, 10) == 2, do: "#{n}nd"
   defp ordinal(n) when rem(n, 10) == 3, do: "#{n}rd"
   defp ordinal(n), do: "#{n}th"
+
+  defp round_counts(details) do
+    missed = if (count(details, :missed_earlier) || 0) > 0, do: "#{count(details, :missed_earlier)} missed earlier"
+    join([plural(count(details, :findings_count) || 0, "finding"), missed])
+  end
 
   defp plural(0, _noun), do: nil
   defp plural(1, noun), do: "1 #{noun}"

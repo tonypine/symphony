@@ -31,13 +31,15 @@ defmodule SymphonyElixir.ReviewAgent do
           required(:line_range) => {pos_integer(), pos_integer()},
           required(:quoted_snippet) => String.t(),
           required(:suggested_fix) => String.t(),
-          optional(:decision) => String.t()
+          optional(:decision) => String.t(),
+          optional(:since_last_review) => :changed | :unchanged
         }
   @type result :: %{
           required(:verdict) => verdict(),
           required(:comments) => [String.t()],
           optional(:findings) => [finding()],
           optional(:reason) => String.t(),
+          optional(:unread_files) => [String.t()],
           optional(:source) => map(),
           optional(:escalation_reasons) => [EscalationRules.reason()]
         }
@@ -317,7 +319,9 @@ defmodule SymphonyElixir.ReviewAgent do
     Map.put(result, :comments, Enum.map(findings, &finding_comment/1) ++ unplaced)
   end
 
-  defp finding_comment(%{summary: summary, file: file, line_range: {start_line, end_line}, suggested_fix: suggested_fix}) do
+  @doc "A finding as one line of a verdict's comments: its summary, where it is and its suggested fix."
+  @spec finding_comment(finding()) :: String.t()
+  def finding_comment(%{summary: summary, file: file, line_range: {start_line, end_line}, suggested_fix: suggested_fix}) do
     "#{summary} (#{file}:#{start_line}-#{end_line}) Suggested fix: #{suggested_fix}"
   end
 
@@ -404,6 +408,7 @@ defmodule SymphonyElixir.ReviewAgent do
             reviewer_turn_opts(opts, reviewer_settings, on_message, linear_comment_registry: Keyword.get(opts, :linear_comment_registry))
 
           with {:ok, verdict} <- review_or_nudge(agent_module, session, prompt, issue, message_collector, turn_opts),
+               {:ok, verdict} <- whole_change_read(verdict),
                verdict = honour_decisions(verdict, issue, decision_opts),
                {:ok, checked} <- self_check(agent_module, session, issue, verdict, message_collector, turn_opts) do
             checked = honour_decisions(checked, issue, decision_opts)
@@ -494,6 +499,15 @@ defmodule SymphonyElixir.ReviewAgent do
     If the `review_verdict` tool is not available, your final message must be only this JSON object, with no prose before or after it.
     """
   end
+
+  @doc """
+  A verdict given before the reviewer read the whole change is no verdict: one that names files it
+  did not read (`unread_files`) is inconclusive (`review_incomplete`, with the files), so the review
+  runs again rather than approving or blocking on a part of the change.
+  """
+  @spec whole_change_read(result()) :: {:ok, result()} | {:error, term()}
+  def whole_change_read(%{unread_files: [_file | _rest] = files}), do: {:error, {:review_agent_inconclusive, {:review_incomplete, files}}}
+  def whole_change_read(result), do: {:ok, result}
 
   defp classify_review_turn_result({:ok, _result} = ok), do: ok
 
@@ -688,6 +702,7 @@ defmodule SymphonyElixir.ReviewAgent do
     - The repo's code rules: read the repo's agent instructions (`AGENTS.md`, `CLAUDE.md`) for its rules, such as required specs, style and module patterns. Narrow scope is a code rule: flag unrelated refactors, stray debug code and dead code left in the diff.
 
     #{ticket_judgment()}
+    #{completeness_rule()}
     #{rule_findings(reasons)}
     Diff context:
     #{truncate(source.diff, @max_diff_prompt_bytes)}
@@ -719,7 +734,8 @@ defmodule SymphonyElixir.ReviewAgent do
           "suggested_fix": "<concrete fix>"
         }
       ],
-      "reason": "<required for block>"
+      "reason": "<the most important problem; required for block>",
+      "unread_files": ["<only when you could not read the whole change: each changed file you did not read>"]
     }\
     """
   end
@@ -727,6 +743,17 @@ defmodule SymphonyElixir.ReviewAgent do
   defp ticket_judgment do
     "This is the pull request's Code Review, so also judge the change against the ticket: check that the diff meets each of the ticket's acceptance criteria " <>
       "and stays within its scope and intent. Request changes for an unmet criterion or for work outside the ticket, naming the criterion or the out-of-scope change."
+  end
+
+  # One review reports everything it finds (TP-1516): a reviewer that stops at the first problem
+  # costs a rework run, a review run and a CI run for each problem it left for the next round.
+  defp completeness_rule do
+    """
+    Completeness. One review reports every problem in the change, so the rework run fixes them together and a second round is only about the fix:
+    - Read the whole change, every changed file, before you decide the verdict. Do not stop at the first problem you are sure of.
+    - List every finding you would block on in `findings`, each with its own `file` and `line_range`, in this one verdict. Put the most important one in `reason`; the others stay in `findings`, never dropped.
+    - If you run out of time or turns before you have read every changed file, do not approve or request changes on the part you read: record the verdict with `unread_files` naming each changed file you did not read. Symphony runs the review again.
+    """
   end
 
   # What the repo's risk rules found in the change, so the one review weighs it. Nothing when none

@@ -57,7 +57,12 @@ defmodule SymphonyElixir.ReviewAgent.Verdict do
         "verdict" => %{"type" => "string", "enum" => ["approve", "request_changes", "block"]},
         "findings" => %{"type" => "array", "items" => @finding_schema, "description" => "Each problem, with the evidence that proves it."},
         "comments" => %{"type" => "array", "items" => %{"type" => "string"}, "description" => "Notes that are not findings."},
-        "reason" => %{"type" => "string", "description" => "Why the change is blocked; required for block."}
+        "reason" => %{"type" => "string", "description" => "Why the change is blocked; required for block."},
+        "unread_files" => %{
+          "type" => "array",
+          "items" => %{"type" => "string"},
+          "description" => "The changed files you did not read before giving the verdict, when you ran out of time or turns. Leave it out once you read the whole change."
+        }
       }
     }
   }
@@ -105,7 +110,14 @@ defmodule SymphonyElixir.ReviewAgent.Verdict do
          {:ok, comments} <- coerce_comments(Map.get(decoded, "comments")),
          {:ok, findings} <- coerce_findings(Map.get(decoded, "findings")),
          {:ok, reason} <- coerce_reason(Map.get(decoded, "reason"), verdict),
-         result = %{verdict: verdict, comments: comments, findings: findings, reason: reason},
+         {:ok, unread_files} <- coerce_unread_files(Map.get(decoded, "unread_files")),
+         result = %{
+           verdict: verdict,
+           comments: comments,
+           findings: findings,
+           reason: reason,
+           unread_files: unread_files
+         },
          {:ok, result} <- validate_result(result) do
       {:ok, compact_result(result)}
     end
@@ -121,6 +133,7 @@ defmodule SymphonyElixir.ReviewAgent.Verdict do
   def describe_error({:invalid_json, %Jason.DecodeError{} = error}), do: "the JSON object did not parse (#{Exception.message(error)})."
   def describe_error(:invalid_verdict), do: "`verdict` must be one of approve, request_changes or block."
   def describe_error(:invalid_comments), do: "`comments` must be a list of strings."
+  def describe_error(:invalid_unread_files), do: "`unread_files` must be a list of file paths."
   def describe_error(:invalid_findings), do: "`findings` must be a list of objects."
   def describe_error(:invalid_finding), do: "each finding must be an object."
   def describe_error(:invalid_finding_summary), do: "each finding needs a non-empty `summary`."
@@ -158,6 +171,16 @@ defmodule SymphonyElixir.ReviewAgent.Verdict do
   end
 
   defp coerce_comments(_comments), do: {:error, :invalid_comments}
+
+  defp coerce_unread_files(nil), do: {:ok, []}
+
+  defp coerce_unread_files(files) when is_list(files) do
+    if Enum.all?(files, &is_binary/1),
+      do: {:ok, files |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == "")) |> Enum.uniq()},
+      else: {:error, :invalid_unread_files}
+  end
+
+  defp coerce_unread_files(_files), do: {:error, :invalid_unread_files}
 
   defp coerce_findings(nil), do: {:ok, []}
 
@@ -265,6 +288,13 @@ defmodule SymphonyElixir.ReviewAgent.Verdict do
   defp validate_result(%{verdict: :request_changes, comments: [], findings: []}), do: {:error, :missing_request_changes_comments}
   defp validate_result(result), do: {:ok, result}
 
-  defp compact_result(%{reason: nil} = result), do: Map.delete(result, :reason)
-  defp compact_result(result), do: result
+  defp compact_result(result) do
+    result
+    |> drop_when(:reason, nil)
+    |> drop_when(:unread_files, [])
+  end
+
+  defp drop_when(result, key, empty) do
+    if Map.get(result, key) == empty, do: Map.delete(result, key), else: result
+  end
 end
