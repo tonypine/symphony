@@ -82,7 +82,7 @@ defmodule SymphonyElixirWeb.ConditionalJSONTest do
 
     defp put_ticket(phase) do
       repo_key = Config.repo_key!()
-      :ok = RunStore.put_ticket_state(TicketState.new(repo_key, "issue-cj", %{issue_identifier: "CJ-1", phase: phase, title: "Export"}))
+      :ok = RunStore.put_ticket_state(TicketState.new(repo_key, "issue-cj", %{issue_identifier: "CJ-1", phase: phase, title: "Export", description: "## Goal\nExport it."}))
     end
 
     test "an unchanged ticket answers 304 with no body; a state move answers in full with a new tag" do
@@ -102,6 +102,7 @@ defmodule SymphonyElixirWeb.ConditionalJSONTest do
       moved = build_conn() |> put_req_header("if-none-match", tag) |> get("/api/v1/CJ-1")
       assert moved.status == 200
       assert Jason.decode!(moved.resp_body)["ticket"]["phase"] == "Code Review"
+      assert Jason.decode!(moved.resp_body)["ticket"]["description"] == "## Goal\nExport it."
       assert etag(moved) != tag
     end
 
