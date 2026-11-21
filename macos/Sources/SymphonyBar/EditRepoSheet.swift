@@ -53,7 +53,6 @@ struct EditRepoSheet: View {
                     .lineLimit(1)
             }
             Button("Save", action: model.save)
-                .buttonPointer()
                 .keyboardShortcut(.defaultAction)
                 .disabled(!model.canSave)
                 .help(saveHelp)

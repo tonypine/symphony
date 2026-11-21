@@ -126,7 +126,6 @@ struct PRWatchCardView: View {
         HStack(spacing: DesignTokens.Space.s2) {
             ForEach(card.buttons, id: \.self) { button in
                 Button(button.title) { perform(button) }
-                    .buttonPointer()
                     .disabled(button == .checkNow && checking)
                     .help(help(button))
             }

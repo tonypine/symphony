@@ -143,7 +143,6 @@ struct WorkflowSetupSheet: View {
                     .lineLimit(1)
             }
             Button(ConnectedWorkflowSetup.createTitle, action: model.create)
-                .buttonPointer()
                 .keyboardShortcut(.defaultAction)
                 .disabled(!model.canCreate)
         }

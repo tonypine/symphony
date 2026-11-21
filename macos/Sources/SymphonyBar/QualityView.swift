@@ -74,7 +74,6 @@ struct QualityCards: View {
                             .foregroundStyle(.secondary)
                         if quality.reviewFailed {
                             Button("Try Again", action: readReviewAgain).controlSize(.small)
-                                .buttonPointer()
                         }
                     }
                 } else {
@@ -187,7 +186,6 @@ private struct AgreementChart: View {
                         Text(repo.mode).font(DesignTokens.TypeStyle.secondary.font).foregroundStyle(.secondary)
                         Spacer()
                         Button(Quality.changeReviewTitle) { changeReview(repo.repoKey) }
-                            .buttonPointer()
                             .accessibilityLabel("\(Quality.changeReviewTitle) \(repo.repoKey)")
                     }
                 }
@@ -264,7 +262,6 @@ private struct AllRunsSheet: View {
             HStack {
                 Spacer()
                 Button("Done", action: done).keyboardShortcut(.defaultAction)
-                    .buttonPointer()
             }
         }
         .padding(DesignTokens.Space.s5)

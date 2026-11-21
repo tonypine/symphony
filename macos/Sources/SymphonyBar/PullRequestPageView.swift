@@ -284,11 +284,9 @@ private struct PullRequestHeader: View {
                 switch action {
                 case let .openOnGitHub(url):
                     Button(action.title) { actions.openURL(url) }
-                        .buttonPointer()
                         .help("Open #\(screen.place.number) on GitHub, where its diff is")
                 case let .openTicket(ticket):
                     Button(action.title) { actions.openTicket(ticket) }
-                        .buttonPointer()
                         .help("Open \(ticket)'s page")
                 }
             }
