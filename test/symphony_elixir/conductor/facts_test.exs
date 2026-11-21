@@ -322,7 +322,8 @@ defmodule SymphonyElixir.Conductor.FactsTest do
 
       facts = Facts.build(ctx.record, "grooming", token_cap: 10)
 
-      assert %{schema: "symphony.conductor.facts/1", junction: "grooming", parent: nil, siblings: [], sub_tickets: [], conductor: [], earlier_tries: []} = facts
+      assert %{schema: "symphony.conductor.facts/1", junction: "grooming", parent: nil, siblings: [], sub_tickets: []} = facts
+      assert %{conductor: [], earlier_tries: []} = facts
       assert %{tokens_used: 0, tokens_cap: 10} = facts.budget
       assert facts.focus =~ "you write its plan"
       assert facts.ticket == %{identifier: ctx.identifier, title: "Fix login", url: ctx.record.url, repo: ctx.repo, labels: []}
