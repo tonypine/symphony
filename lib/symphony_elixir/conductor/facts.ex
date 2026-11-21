@@ -45,8 +45,10 @@ defmodule SymphonyElixir.Conductor.Facts do
   (the sub-tickets the ticket already has, made by hand or by an earlier split: each one's
   identifier, title and state, for a split to adopt), `siblings`
   (the parent's other sub-tickets that hold a tagged note, with those notes), `layers` (the layer
-  vocabulary a plan names, each with what it means), `conductor` (what earlier turns wrote) and
-  `budget`.
+  vocabulary a plan names, each with what it means; a plan may name none), `conductor` (what earlier
+  turns wrote), `earlier_tries` (each Grooming try on the ticket that wrote no plan, oldest first:
+  the `try`'s number and the `reason` Symphony gave, such as why it refused the answer; empty on a
+  first try) and `budget`.
 
   At `sub_ticket_ended` and `final_check`, on a groomed ticket, the document is the tree's (same
   `schema`, `junction` and `focus`): `ticket` (identifier, title, URL, `repo`, `phase` and its own
@@ -116,13 +118,16 @@ defmodule SymphonyElixir.Conductor.Facts do
                  "that name the checks to prove, or ask the person."
   @plan_text_max 6_000
   @max_siblings 20
+  # The key `SymphonyElixir.Conductor.Grooming` counts a failed try under: `grooming.try:<n>`.
+  @grooming_try_key "grooming.try:"
   # The layers a plan names (`SymphonyElixir.Conductor.Answer.layers/0`), each with what it means.
   @layers [
-    screen: "something a person sees or does in the app changes",
-    gallery: "a design-system component or its Gallery story changes",
-    api: "an HTTP route or a tool other code calls changes",
-    engine: "the service's own behaviour changes: dispatch, runs, rules, state",
+    screen: "something a person sees or does in the app changes: a screen, a view, a control",
+    gallery: "a reusable component of the app's design system, or its preview or catalog entry, changes",
+    api: "an interface other code or programs call changes: an HTTP route, a command, a tool, a public function",
+    logic: "what the code does behind the screens changes: its rules, its data, its state, its background work",
     config: "a setting, its schema or its default changes",
+    tests: "only tests change: a test is added, fixed or made stable, and what the code does stays the same",
     tooling: "the build, CI, a script or a developer tool changes",
     docs: "documentation changes"
   ]
@@ -384,8 +389,17 @@ defmodule SymphonyElixir.Conductor.Facts do
       siblings: siblings(record, parent, records),
       layers: for({name, means} <- @layers, do: %{name: Atom.to_string(name), means: means}),
       conductor: conductor(events),
+      earlier_tries: earlier_tries(events),
       budget: budget(record, events, opts)
     }
+  end
+
+  # The Grooming tries that wrote no plan, each with the note that says why: the next try reads the
+  # reason, so it does not give the answer Symphony refused again.
+  defp earlier_tries(events) do
+    for %Event{type: "note", idempotency: @grooming_try_key <> try} = event <- events do
+      %{event_id: event.id, try: try, at: iso8601(event.at), reason: cut(payload(event, :text), @text_max)}
+    end
   end
 
   defp records do

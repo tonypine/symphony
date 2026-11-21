@@ -37,7 +37,9 @@ defmodule SymphonyElixir.Conductor.Answer do
       refuses the answer;
     * `plan` (the Grooming turn's, `plan: true`): the ticket's plan, as `plan.written` holds it
       (`SymphonyElixir.TicketPlan`) but for what Symphony fills in (`version`, `reason`, `by`):
-      `shape` (`single` or `split`), `layers` (at least one of `layers/0`), `summary` (for a person,
+      `shape` (`single` or `split`), `layers` (the names of `layers/0` it gives, each once: a name
+      outside it is dropped, `engine` reads as `logic`, its older name, and a missing or empty
+      list reads as none, so layers never refuse a plan), `summary` (for a person,
       cut to 600 characters), `text` (for agents, cut to 12,000), `checks` (at least one, at most 30,
       and at least one of kind `outcome`), `size` (`tokens` and `runs`, whole numbers) and, for a
       split, `sub_tickets` (at least one, at most 12). A check holds a `kind` (`outcome`, `qa`, `evidence`), a
@@ -105,7 +107,9 @@ defmodule SymphonyElixir.Conductor.Answer do
   @ticket_items_max 12
   @ticket_item_max 500
   @plan_shapes ~w(single split)
-  @plan_layers ~w(screen gallery api engine config tooling docs)
+  @plan_layers ~w(screen gallery api logic config tests tooling docs)
+  # Names a plan may still give and what each reads as: `engine` was `logic`'s name.
+  @older_layers %{"engine" => "logic"}
   @plan_summary_max 600
   @plan_text_max 12_000
   @check_kinds ~w(outcome qa evidence)
@@ -187,7 +191,10 @@ defmodule SymphonyElixir.Conductor.Answer do
   @spec actions() :: [action()]
   def actions, do: @actions
 
-  @doc "The layers a plan may name, the closed list validation follows."
+  @doc """
+  The layers a plan may name, the list the Grooming facts offer. A plan's other names are dropped
+  (`engine` reads as `logic`), and a plan may name none.
+  """
   @spec layers() :: [String.t()]
   def layers, do: @plan_layers
 
@@ -363,7 +370,7 @@ defmodule SymphonyElixir.Conductor.Answer do
 
   defp plan(%{} = plan, _read, nil) do
     with {:ok, shape} <- one_of(plan, "shape", @plan_shapes, "plan"),
-         {:ok, layers} <- plan_layers(Map.get(plan, "layers")),
+         layers = plan_layers(Map.get(plan, "layers")),
          {:ok, summary} <- required_text(plan, "summary", @plan_summary_max, "plan"),
          {:ok, text} <- required_text(plan, "text", @plan_text_max, "plan"),
          {:ok, checks} <- entries(Map.get(plan, "checks"), "plan.checks", TicketPlan.max_checks(), &check/2),
@@ -378,13 +385,12 @@ defmodule SymphonyElixir.Conductor.Answer do
 
   defp plan(_plan, true, nil), do: {:error, "`plan` must be an object"}
 
-  defp plan_layers([_ | _] = layers) do
-    if Enum.all?(layers, &(&1 in @plan_layers)),
-      do: {:ok, Enum.uniq(layers)},
-      else: {:error, "`plan.layers` must name only #{Enum.join(@plan_layers, ", ")}"}
+  # Layers only add QA to work a person sees, so they never refuse a plan: unknown names are dropped.
+  defp plan_layers(layers) when is_list(layers) do
+    layers |> Enum.map(&Map.get(@older_layers, &1, &1)) |> Enum.filter(&(&1 in @plan_layers)) |> Enum.uniq()
   end
 
-  defp plan_layers(_layers), do: {:error, "`plan.layers` must name at least one of #{Enum.join(@plan_layers, ", ")}"}
+  defp plan_layers(_layers), do: []
 
   defp with_outcome(checks) do
     if Enum.any?(checks, &(&1.kind == "outcome")), do: :ok, else: {:error, "`plan.checks` holds no check of kind `outcome`"}

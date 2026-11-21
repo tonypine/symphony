@@ -161,7 +161,7 @@ defmodule SymphonyElixir.TicketEvents.Brief do
         [
           "Plan (version #{plan.version}, written #{time(plan.at)}: #{plan.reason}):",
           "- Shape: #{plan.shape}",
-          "- Layers: #{Enum.join(plan.layers, ", ")}",
+          "- Layers: #{layers(plan.layers)}",
           indent("- Summary: " <> plan.summary, "  ")
         ],
         "\n"
@@ -438,6 +438,9 @@ defmodule SymphonyElixir.TicketEvents.Brief do
 
   defp files([]), do: ""
   defp files(ids), do: " (files: #{Enum.join(ids, ", ")})"
+
+  defp layers([]), do: "none"
+  defp layers(layers), do: Enum.join(layers, ", ")
 
   # A multi-line text keeps its lines, each continuation indented under its bullet.
   defp indent(line, prefix), do: line |> String.split(~r/\r?\n/) |> Enum.join("\n" <> prefix)

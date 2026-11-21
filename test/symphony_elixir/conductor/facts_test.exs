@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.Conductor.FactsTest do
   use ExUnit.Case, async: true
 
-  alias SymphonyElixir.Conductor.{Answer, Facts}
+  alias SymphonyElixir.Conductor.{Answer, Facts, Grooming}
   alias SymphonyElixir.{RunStore, TicketEvents, TicketPlan}
 
   @description """
@@ -322,7 +322,8 @@ defmodule SymphonyElixir.Conductor.FactsTest do
 
       facts = Facts.build(ctx.record, "grooming", token_cap: 10)
 
-      assert %{schema: "symphony.conductor.facts/1", junction: "grooming", parent: nil, siblings: [], sub_tickets: [], conductor: []} = facts
+      assert %{schema: "symphony.conductor.facts/1", junction: "grooming", parent: nil, siblings: [], sub_tickets: []} = facts
+      assert %{conductor: [], earlier_tries: []} = facts
       assert %{tokens_used: 0, tokens_cap: 10} = facts.budget
       assert facts.focus =~ "you write its plan"
       assert facts.ticket == %{identifier: ctx.identifier, title: "Fix login", url: ctx.record.url, repo: ctx.repo, labels: []}
@@ -335,6 +336,28 @@ defmodule SymphonyElixir.Conductor.FactsTest do
       assert Enum.all?(facts.layers, &is_binary(&1.means))
       refute Map.has_key?(facts, :last_run)
       assert {:ok, _json} = Jason.encode(facts)
+    end
+
+    test "the layer vocabulary fits any repository: an app's screens, its logic and its tests", ctx do
+      layers = Map.new(Facts.build(ctx.record, "grooming", token_cap: 10).layers, &{&1.name, &1.means})
+
+      assert layers["screen"] =~ "a person sees"
+      assert layers["logic"] =~ "behind the screens"
+      assert layers["tests"] =~ "only tests change"
+      refute Map.has_key?(layers, "engine")
+
+      for {name, means} <- layers, word <- ["Symphony", "dispatch", "runs,", "Director"] do
+        refute means =~ word, "#{name} means #{inspect(means)}, which names Symphony's own internals"
+      end
+    end
+
+    test "a try after a refused answer reads why the earlier one was refused", ctx do
+      why = "unreadable answer: `plan.layers` must name at least one of screen, gallery"
+      assert Grooming.failed(ctx.repo, ctx.issue_id, why) == :retry
+
+      assert [%{try: "1", reason: reason, event_id: id, at: at}] = Facts.build(ctx.record, "grooming", token_cap: 10).earlier_tries
+      assert reason =~ why
+      assert is_binary(id) and is_binary(at)
     end
 
     test "a sub-ticket reads its parent's plan and notes, and its siblings' tagged notes", ctx do
