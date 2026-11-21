@@ -18,8 +18,8 @@ phases:
         title: Tests and coverage
         mode: machine
         command:
-          - run: mix test $SYMPHONY_CHANGED_TEST_FILES && mix cover.changed
-            when: elixir_changed
+          - run: (test -z "$SYMPHONY_CHANGED_TEST_FILES" || mix test $SYMPHONY_CHANGED_TEST_FILES) && mix cover.changed
+            when: elixir_source_changed
           - run: cd macos && swift test --filter "$SYMPHONY_CHANGED_SWIFT_TEST_FILTER"
             when: macos_changed
         timeout_ms: 1800000
@@ -27,8 +27,8 @@ phases:
       - id: checks
         title: Format, specs and credo
         mode: machine
-        when: elixir_changed
-        command: mix format --check-formatted && mix specs.check && mix credo --strict $SYMPHONY_CHANGED_ELIXIR_FILES
+        when: elixir_source_changed
+        command: mix format --check-formatted && mix specs.check && (test -z "$SYMPHONY_CHANGED_ELIXIR_FILES" || mix credo --strict $SYMPHONY_CHANGED_ELIXIR_FILES)
         timeout_ms: 600000
         on_fail: code
       - id: window_tests

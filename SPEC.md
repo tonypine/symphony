@@ -3212,7 +3212,10 @@ the changed files, and records `step.started` and `step.completed` with its outp
 `step_output` artifact. `passed` goes to the next step; `failed` to its `on_fail`, the next turn's
 prompt carrying the output; no result runs it again, up to `no_result_limit` in a row, then ends it
 `paused` on a Question (go on past it, run it again, or the person's own words) that pauses the
-ticket; a `when` that doesn't match the change skips it with the reason.
+ticket; a `when` that doesn't match the change skips it with the reason. A machine step whose last
+run of the same commands passed on the workspace's current head, with nothing uncommitted then and
+now, MUST NOT run again: it is `skipped`, naming that pass, and the walk goes on (a restarted run on
+the same head). A step of Symphony's own commands, which read the ticket, always runs.
 
 An agent step MAY set what its turn runs with (`model`, `effort`), the session it continues
 (`session`: steps with one name continue one session; `fresh` starts one for that step alone) and

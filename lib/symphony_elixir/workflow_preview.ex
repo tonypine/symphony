@@ -144,6 +144,7 @@ defmodule SymphonyElixir.WorkflowPreview do
 
   defp condition("macos_changed"), do: "when macos/ changed"
   defp condition("elixir_changed"), do: "when Elixir files changed"
+  defp condition("elixir_source_changed"), do: "when Elixir source files changed"
   defp condition(_always), do: nil
 
   defp timeout(%Step{timeout_ms: nil}), do: nil
