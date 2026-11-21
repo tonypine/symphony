@@ -544,11 +544,13 @@ struct SetupContent: View {
                             cancel: model.cancelGitHubUpdatesSheet,
                             confirm: { model.confirm(sheet) }
                         )
+                        .pointerButtons()
                     }
                 }
                 .sheet(item: githubSetup) { setup in
                     GitHubUpdatesSetupView(setup: setup, actions: githubSetupActions)
                         .interactiveDismissDisabled()
+                        .pointerButtons()
                 }
                 // Back from Terminal after Grant Permission…: the row checks at once.
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -564,6 +566,7 @@ struct SetupContent: View {
                 .animation(.standard, value: model.setupBanner)
                 .sheet(item: sheet) { sheet in
                     SetupFixSheetView(sheet: sheet, cancel: model.cancelSetupSheet, confirm: { model.confirm(sheet) }, open: model.open)
+                        .pointerButtons()
                 }
             }
         }
@@ -825,7 +828,7 @@ struct DispatchShadowLineView: View {
                         Label(DispatchShadowLine.disclosureTitle, systemImage: expanded ? "chevron.down" : "chevron.right")
                             .font(DesignTokens.TypeStyle.secondary.font)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.plainPointer)
                     .foregroundStyle(.secondary)
                     .accessibilityLabel(expanded ? "Hide the last dispatch differences" : "Show the last dispatch differences")
                     if expanded {
@@ -934,7 +937,7 @@ struct ReconcileLineView: View {
                         Label(ReconcileLine.disclosureTitle, systemImage: expanded ? "chevron.down" : "chevron.right")
                             .font(DesignTokens.TypeStyle.secondary.font)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.plainPointer)
                     .foregroundStyle(.secondary)
                     .accessibilityLabel(expanded ? "Hide the last drift" : "Show the last drift")
                     if expanded {
@@ -1127,7 +1130,7 @@ struct SetupRowView: View {
                         Label(SetupPage.detailsTitle, systemImage: expanded ? "chevron.down" : "chevron.right")
                             .font(DesignTokens.TypeStyle.secondary.font)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.plainPointer)
                     .foregroundStyle(.secondary)
                     .accessibilityLabel(expanded ? "Hide details" : "Show details")
                     if expanded { details }
@@ -1189,7 +1192,7 @@ struct SetupRowView: View {
         Button { actions.openTicket(identifier) } label: {
             Text(identifier).foregroundStyle(Color.accentColor)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.plainPointer)
         .help("Open \(identifier)'s page")
         .accessibilityAddTraits(.isLink)
     }
@@ -1323,7 +1326,7 @@ struct SetupBannerView: View {
             Button(action: close) {
                 Image(systemName: "xmark").foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.plainPointer)
             .accessibilityLabel("Close")
         }
         .padding(.horizontal, DesignTokens.Space.s4)

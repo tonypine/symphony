@@ -338,6 +338,7 @@ private struct OptionCardButtonStyle: ButtonStyle {
             )
             .contentShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous))
             .onHover { hovered = $0 }
+            .buttonPointer()
         }
     }
 }

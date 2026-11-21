@@ -233,8 +233,7 @@ struct PhaseStepRow: View {
                     }
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
-                .pointerStyle(.link)
+                .buttonStyle(.plainPointer)
                 .accessibilityLabel("Step \(number), \(step.stepID): \(step.shownTitle)")
                 .accessibilityHint(isExpanded ? "Closes the step's fields" : "Opens the step's fields")
 

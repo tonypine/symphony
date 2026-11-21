@@ -5,8 +5,9 @@ import SymphonyBarCore
 // The catalog's Timeline section and Timeline entry (`docs/design/director-ticket-page.md` §1 facts 12 and 32, §4):
 // a ticket's history newest first in one column of at most 780 pt, a separator on each day with its date and how long
 // the day's history ran, each entry with its time, its class's glyph, what happened and who did it, and each run as
-// its Run group with the run now on top, unfolded. A row is selected with a click or the arrow keys (the accent tint
-// and ring), Return and Space fold the selected run, and Escape clears the selection. A new event drops in from 12 pt
+// its Run group with the run now on top, unfolded. A row is selected with the arrow keys (the accent tint and ring),
+// Return and Space fold the selected run, and Escape clears the selection. A click leaves no selection (TP-1572): it
+// gives the timeline the keyboard and clears what the arrows selected, and a click on a run's line folds it. A new event drops in from 12 pt
 // above on a spring and its tint fades over 1.2 s; under Reduce Motion it is there at once. The marks (TP-1451): the
 // line "Since you last looked, at 16:50" above the newest item the person saw, and a small accent dot on every entry
 // and ended run newer than it; the Timeline title (`TimelineTitle`) counts the new events. The run in place (TP-1452):
@@ -234,25 +235,31 @@ public struct TimelineSection: View {
 
     public static let title = "Timeline"
 
-    @ViewBuilder
-    private func row(_ item: TimelineItem, connects: Bool) -> some View {
-        let selected = selection == item.id
-        switch item {
-        // Each row draws again only when what it shows changed: a new event draws its own row (TP-1480).
-        case let .entry(entry):
-            TimelineEntryRow(entry: entry, time: clock(entry.at), selected: selected, connects: connects) { select(item.id) }
-                .equatable()
-        case let .run(run, at):
-            TimelineRunRow(run: run, time: clock(at), selected: selected, transcripts: transcripts, fold: fold(run)) {
-                select(item.id)
+    private func row(_ item: TimelineItem, connects: Bool) -> TimelineRow {
+        Self.makeRow(
+            item, selection: selection, connects: connects, clock: clock, transcripts: transcripts, fold: { fold($0) },
+            // The live selection, read when the click lands: an equatable row keeps the closure it was first drawn with.
+            click: TimelineClick(takeKeyboard: { focused = true }) { next in
+                guard selection != next else { return }
+                withAnimation(.motion(.standard, reduceMotion: reduceMotion)) { selection = next }
             }
-            .equatable()
-        }
+        )
     }
 
-    private func select(_ id: String) {
-        focused = true
-        withAnimation(.motion(.standard, reduceMotion: reduceMotion)) { selection = id }
+    /// The row `item` draws as, and what a click on it does: `click`, which never selects the row (TP-1572).
+    static func makeRow(
+        _ item: TimelineItem, selection: String?, connects: Bool, clock: (Date) -> String, transcripts: StepTranscripts,
+        fold: (RunGroupModel) -> Binding<Bool>, click: TimelineClick
+    ) -> TimelineRow {
+        let selected = selection == item.id
+        switch item {
+        case let .entry(entry):
+            return .entry(TimelineEntryRow(entry: entry, time: clock(entry.at), selected: selected, connects: connects, select: click.perform))
+        case let .run(run, at):
+            return .run(TimelineRunRow(
+                run: run, time: clock(at), selected: selected, transcripts: transcripts, fold: fold(run), select: click.perform
+            ))
+        }
     }
 
     private func handle(_ action: TimelineKeys.Action, proxy: ScrollViewProxy) -> KeyPress.Result {
@@ -483,6 +490,9 @@ struct TimelineEntryRow: View {
     var ticket: TimelineTicketChip?
     /// The rule line runs from its mark down to the next entry's.
     var connects = false
+    /// A click acts on the row (the Journal's rows open their ticket), so the pointer turns into the hand over it. A
+    /// ticket page's entry does nothing on a click and keeps the arrow (TP-1572).
+    var opens = false
     let select: () -> Void
     @State private var hovered = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -490,13 +500,14 @@ struct TimelineEntryRow: View {
 
     init(
         entry: TimelineEntry, time: String, selected: Bool, ticket: TimelineTicketChip? = nil, connects: Bool = false,
-        select: @escaping () -> Void
+        opens: Bool = false, select: @escaping () -> Void
     ) {
         self.entry = entry
         self.time = time
         self.selected = selected
         self.ticket = ticket
         self.connects = connects
+        self.opens = opens
         self.select = select
     }
 
@@ -587,6 +598,7 @@ struct TimelineEntryRow: View {
         .contentShape(Rectangle())
         .onHover { hovered = $0 }
         .onTapGesture(perform: select)
+        .buttonPointer(enabled: opens)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(spokenLabel)
         .accessibilityHint(ticket?.hint ?? "")
@@ -705,6 +717,40 @@ struct TimelineTicketChipView: View {
     }
 }
 
+/// What a click on a timeline row does (TP-1572): the timeline takes the keyboard, so the arrows move from there, and a
+/// selection the arrows left is cleared. It never selects the row: the accent tint and ring are the arrow keys' alone,
+/// so a click leaves no outline to dismiss with Escape. A click on a run's line folds it through the run's own header.
+struct TimelineClick {
+    let takeKeyboard: () -> Void
+    let select: (String?) -> Void
+
+    func perform() {
+        takeKeyboard()
+        select(nil)
+    }
+}
+
+/// A timeline row, an entry or a run, each drawing again only when what it shows changed (TP-1480).
+enum TimelineRow: View {
+    case entry(TimelineEntryRow)
+    case run(TimelineRunRow)
+
+    /// What a click on the row does.
+    var click: () -> Void {
+        switch self {
+        case let .entry(row): row.select
+        case let .run(row): row.select
+        }
+    }
+
+    var body: some View {
+        switch self {
+        case let .entry(row): row.equatable()
+        case let .run(row): row.equatable()
+        }
+    }
+}
+
 /// A run on the timeline: its start in the column of times, then its Run group; selected, it takes the accent tint
 /// and ring around the whole group.
 struct TimelineRunRow: View {
@@ -756,8 +802,8 @@ struct TimelineRunRow: View {
             }
         }
         .contentShape(Rectangle())
-        // A click selects the run as its fold header takes the same click: both read the press as it ends, so neither
-        // gesture waits on the other to fail (TP-1480's QA: a tap here took the click from the header's).
+        // A click gives the timeline the keyboard as the run's fold header takes the same click: both read the press as it
+        // ends, so neither gesture waits on the other to fail (TP-1480's QA: a tap here took the click from the header's).
         .simultaneousGesture(
             DragGesture(minimumDistance: 0).onEnded { value in
                 if CollapsibleHead<EmptyView>.isClick(value.translation) { select() }
@@ -838,7 +884,7 @@ private struct TimelineEntering: ViewModifier {
 extension TimelineEntryRow: Equatable {
     nonisolated static func == (lhs: TimelineEntryRow, rhs: TimelineEntryRow) -> Bool {
         guard lhs.entry == rhs.entry, lhs.time == rhs.time, lhs.selected == rhs.selected else { return false }
-        return lhs.ticket == rhs.ticket && lhs.connects == rhs.connects
+        return lhs.ticket == rhs.ticket && lhs.connects == rhs.connects && lhs.opens == rhs.opens
     }
 }
 

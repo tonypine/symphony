@@ -104,6 +104,7 @@ struct InboxSheetPresenter: ViewModifier {
                 cancel: model.cancelSheet,
                 confirm: { reason in model.confirm(sheet, reason: reason) }
             )
+            .pointerButtons()
         }
     }
 }

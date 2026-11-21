@@ -119,6 +119,7 @@ public struct StoryRow<Under: View, Trail: View>: View {
         .focusEffectDisabled()
         .focused($focused)
         .onTapGesture { open() }
+        .buttonPointer()
         .onKeyPress(.return) {
             open()
             return .handled
@@ -184,6 +185,7 @@ public struct StoryFold: View {
         .focusEffectDisabled()
         .focused($focused)
         .onTapGesture { toggle() }
+        .buttonPointer()
         .onKeyPress(.return) {
             toggle()
             return .handled

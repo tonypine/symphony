@@ -271,6 +271,7 @@ private struct RowActions: ViewModifier {
             content
         } else {
             clicks(content)
+                .buttonPointer()
                 .onKeyPress(.return) {
                     guard let open else { return .ignored }
                     open()
@@ -399,6 +400,7 @@ public struct TreeList<ID: Hashable, RowContent: View>: View {
             case let .row(id):
                 row(id, TreeRowState(selected: picked, focused: picked && focused))
                     .simultaneousGesture(TapGesture().onEnded { selection = line.key })
+                    .buttonPointer()
             case .more:
                 TreeMore(hidden: line.hidden, focused: picked && focused) {
                     opened.insert(line.root)
@@ -470,6 +472,7 @@ private struct TreeMore: View {
         .contentShape(Capsule())
         .onHover { hovered = $0 }
         .onTapGesture(perform: action)
+        .buttonPointer()
         .help(DesignTokens.Tree.More.help(hidden))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(DesignTokens.Tree.More.help(hidden))

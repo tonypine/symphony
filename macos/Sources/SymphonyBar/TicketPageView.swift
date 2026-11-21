@@ -1471,6 +1471,7 @@ struct MoveSheetPresenter: ViewModifier {
                 cancel: model.cancelMove,
                 confirm: { note in model.confirmMove(sheet, note: note) }
             )
+            .pointerButtons()
         }
     }
 }
@@ -1555,6 +1556,7 @@ struct CancelTicketSheetPresenter: ViewModifier {
                 keep: model.keepTicket,
                 confirm: { note in model.confirmCancel(sheet, note: note) }
             )
+            .pointerButtons()
         }
     }
 }
@@ -1650,6 +1652,7 @@ struct StopRunSheetPresenter: ViewModifier {
                 cancel: model.cancelStop,
                 confirm: { alsoBacklog, note in model.confirmStop(sheet, alsoBacklog: alsoBacklog, note: note) }
             )
+            .pointerButtons()
         }
     }
 }

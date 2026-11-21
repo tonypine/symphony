@@ -43,7 +43,10 @@ public struct JournalSection<Report: View>: View {
                 ForEach(day.items) { item in
                     switch item {
                     case let .event(row):
-                        TimelineEntryRow(entry: row.entry, time: clock(row.entry.at), selected: highlighted.contains(row.id), ticket: Self.chip(row)) {
+                        TimelineEntryRow(
+                            entry: row.entry, time: clock(row.entry.at), selected: highlighted.contains(row.id), ticket: Self.chip(row),
+                            opens: row.focus != nil
+                        ) {
                             if row.focus != nil { open(row) }
                         }
                         .id(Self.rowID(row.id))

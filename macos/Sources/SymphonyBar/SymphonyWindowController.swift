@@ -208,7 +208,7 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
             model.loadProviderKeys(with: secrets)
 
             let hostingController = NSHostingController(
-                rootView: SymphonyWindowView(model: model).environment(\.openURL, URLOpener.action)
+                rootView: SymphonyWindowView(model: model).environment(\.openURL, URLOpener.action).pointerButtons()
             )
             // The Director draws its own bar (TP-1496): nothing of SwiftUI's goes in a system toolbar, the window has
             // none, and its title is not drawn; the window buttons stay over the sidebar's top.

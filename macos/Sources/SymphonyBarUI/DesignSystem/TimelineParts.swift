@@ -241,7 +241,7 @@ struct MoreScreenshotsTile: View {
                 .overlay(shape.strokeBorder(DesignTokens.Surface.separator.color, lineWidth: 1))
                 .contentShape(shape)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.plainPointer)
         .help(ThumbnailRowPlan.moreAccessibilityLabel(hidden))
         .accessibilityLabel(ThumbnailRowPlan.moreAccessibilityLabel(hidden))
     }
@@ -282,7 +282,7 @@ struct ScreenshotThumbnail: View {
             )
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.plainPointer)
         .disabled(!shot.available)
         .help(shot.label)
         .accessibilityLabel(shot.available ? shot.accessibilityLabel : shot.unavailableAccessibilityLabel)
