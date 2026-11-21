@@ -50,11 +50,13 @@ final class SettingsPage: ObservableObject {
         load()
     }
 
-    /// Saves the form; once everything was stored, the form reads the saved values again and the page says so.
+    /// Saves the form; once everything was stored, the form reads the saved values again and the page says so. A Save
+    /// that finishes after the window closed (or after the form was read again) changes nothing on the page, so the next
+    /// window still reads fresh values.
     func save() {
         guard let model else { return }
-        model.save { [weak self] in
-            guard let self else { return }
+        model.save { [weak self, weak model] in
+            guard let self, let model, self.model === model else { return }
             load()
             saved = true
         }

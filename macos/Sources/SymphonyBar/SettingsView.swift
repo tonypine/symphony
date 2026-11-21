@@ -182,10 +182,6 @@ struct SettingsView: View {
         .padding(20)
     }
 
-    /// How wide the Gallery's stories draw a block: about the form's width beside the section list in a window of the
-    /// default size. The page itself fills the window.
-    static let width: CGFloat = 840
-
     @ViewBuilder private func block(_ block: SettingsBlock) -> some View {
         switch block {
         case .symphony: symphonyBlock
