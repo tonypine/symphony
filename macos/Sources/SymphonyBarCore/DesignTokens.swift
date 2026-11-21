@@ -2217,6 +2217,15 @@ public enum DesignTokens {
         public static let groupsGap = Space.s6
         /// The group title's letter spacing, as a fraction of its size: the key-value list's group heading's.
         public static let titleTracking = KeyValue.groupHeadingTracking
+        /// A text field's width at a row's trailing end (a path, a name, a model), and a pair's (a variable's name
+        /// and value) on a line of its own (TP-1576).
+        public static let fieldWidth: Double = 280
+        /// A page of settings: its groups at most this wide, this far from the page's edges (TP-1576).
+        public static let pageMaxWidth: Double = 760
+        public static let pageInset = Space.s6
+        /// A preview inside a group (the step list as `symphony workflow preview` prints it): its least and most height.
+        public static let previewMinHeight: Double = 80
+        public static let previewMaxHeight: Double = 260
 
         /// What shows under the label: the reason while the row is off, else the error, else the help; one at most.
         public static func footnote(help: String?, error: String?, disabledReason: String?) -> Field.Footnote? {
@@ -2232,8 +2241,25 @@ public enum DesignTokens {
     /// typed text is read as a whole number and brought inside it, text that is no number puts the value back, and a
     /// half of the stepper that would leave the range is off.
     public enum NumberField {
-        /// The number's room, before the stepper.
+        /// The number's room, before the stepper: the least it takes, for a short value.
         public static let width: Double = 56
+        /// A digit's advance as a share of the font size: the input font's digits are monospaced, a little under 0.6
+        /// of an em, rounded up so a value never touches the field's edge.
+        public static let digitAdvance: Double = 0.62
+        /// The room after the last digit for the text cursor.
+        public static let cursorRoom: Double = 2
+        /// The most characters the room grows for: a whole number's 19 digits and its sign.
+        public static let maxCharacters = 20
+
+        /// The number's room for `text` (the value shown or being typed): `width` at least, wider by a digit's advance
+        /// for each character past what `width` holds, so "50000" or a 9-digit value shows whole (TP-1576).
+        public static func width(for text: String, fontSize: Double, padding: Double) -> Double {
+            let needed = 2 * padding + Double(min(text.count, maxCharacters)) * fontSize * digitAdvance + cursorRoom
+            return max(width, needed.rounded(.up))
+        }
+        /// The digits a value is drawn with, in the still drawing and the live field alike, and measured for by
+        /// `width(for:)`: plain digits with no grouping separator, so 50000 reads "50000", never "50,000" (TP-1576).
+        public static func digits(_ value: Int) -> String { String(value) }
         /// The stepper's width inside the field's trailing end, and its glyphs.
         public static let stepperWidth: Double = 16
         public static let stepperGlyph: Double = 7
@@ -2252,6 +2278,12 @@ public enum DesignTokens {
             let (sum, overflow) = clamp(value, to: range).addingReportingOverflow(by)
             if overflow { return by > 0 ? range.upperBound : range.lowerBound }
             return clamp(sum, to: range)
+        }
+
+        /// The values a field's typed text may set: `accepts` widened to hold `range`, or `range` alone.
+        public static func typedRange(_ range: ClosedRange<Int>, accepts: ClosedRange<Int>?) -> ClosedRange<Int> {
+            guard let accepts else { return range }
+            return min(accepts.lowerBound, range.lowerBound)...max(accepts.upperBound, range.upperBound)
         }
 
         /// Whether a step of `by` changes the value: false at the end of the range it moves toward.

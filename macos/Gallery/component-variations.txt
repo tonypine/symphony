@@ -104,7 +104,9 @@ number-field-disabled-with-reason
 number-field-error
 number-field-focused
 number-field-hover
+number-field-long-value
 number-field-rest
+number-field-typed-out-of-range
 pop-up-default
 pop-up-disabled-with-reason
 pop-up-focused
@@ -144,6 +146,7 @@ save-bar-changes-not-saved
 save-bar-no-scope
 save-bar-nothing-changed
 save-bar-refused
+save-bar-save-waits
 save-bar-saved
 save-bar-saving
 search-field-empty
@@ -170,6 +173,9 @@ segmented-control-small
 segmented-control-two-segments
 settings-group-updates
 settings-group-with-an-error
+settings-line-error
+settings-line-text
+settings-line-with-fields
 settings-row-disabled-with-reason
 settings-row-error
 settings-row-label-alone

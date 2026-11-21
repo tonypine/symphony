@@ -16,35 +16,23 @@ let conductorSettingsStates: [(name: String, settings: ConductorSettings, error:
     ("refused", ConductorSettings(enabled: true), "symphony check rejected these settings, so nothing was saved: conductor.timeout_ms must be greater than 0"),
 ]
 
-/// Settings › Conductor holding `settings`, live: its toggles and its field change what it draws. The picture renderer
-/// draws a scroll-backed form empty, so a still draws the section's rows unscrolled, its switches as the form's.
+/// Settings › Conductor holding `settings`, live: its switches and its fields change what it draws. It is drawn as
+/// Settings draws it, a design-system group of rows (TP-1576), at the page's width.
 private struct ConductorSettingsStory: View {
-    /// The width the story draws the section at: the old Settings window's form width.
-    static let width: CGFloat = 840
+    /// The width the story draws the section at: a Settings page's groups at their widest.
+    static let width = CGFloat(DesignTokens.SettingsRow.pageMaxWidth)
 
     @State var settings: ConductorSettings
     let error: String?
-    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
 
     var body: some View {
-        if offscreenSnapshot {
-            VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-                ConductorSection(settings: $settings, error: error, editable: true)
-            }
-            .toggleStyle(.switch)
-            .padding(DesignTokens.Space.s5)
-            .frame(width: Self.width, alignment: .leading)
-        } else {
-            Form {
-                ConductorSection(settings: $settings, error: error, editable: true)
-            }
-            .formStyle(.grouped)
-            .frame(width: Self.width, height: error == nil ? 300 : 340)
-        }
+        ConductorSection(settings: $settings, error: error, editable: true)
+            .padding(DesignTokens.SettingsRow.pageInset)
+            .frame(width: Self.width + 2 * CGFloat(DesignTokens.SettingsRow.pageInset), alignment: .leading)
     }
 }
 
-/// The section in a Settings form, at a fixed story width.
+/// The section as Settings draws it, at a fixed story width.
 @MainActor
 func conductorSettings(_ settings: ConductorSettings, error: String?) -> some View {
     ConductorSettingsStory(settings: settings, error: error)
