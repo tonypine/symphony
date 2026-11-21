@@ -144,7 +144,7 @@ defmodule SymphonyElixir.TicketJourney do
     if groomed?(ticket) do
       for {%{kind: "outcome", state: state} = check, _number} <- numbered(ticket),
           state != :waived,
-          do: "[#{check.id}] #{one_line(check.statement)}#{if TicketChecks.after_merge?(check), do: " (after the merge: nothing before it proves this)"}"
+          do: "[#{check.id}] #{one_line(check.statement)}#{after_merge_suffix(check)}"
     else
       ungroomed.(description(ticket))
     end
@@ -360,8 +360,17 @@ defmodule SymphonyElixir.TicketJourney do
   # The checks QA walks: a `qa` check, and a check of any kind the plan proves by QA or against a
   # design, which nothing else would ever prove. One with no action is walked from its statement.
   # A check marked as seen only after the merge is no step: QA judges the pull request before it.
-  defp walked(numbered),
-    do: for({%{state: state} = check, _number} = entry <- numbered, state != :waived, qa_walks?(check), not TicketChecks.after_merge?(check), do: step(entry))
+  defp walked(numbered) do
+    for {%{state: state} = check, _number} = entry <- numbered,
+        state != :waived,
+        qa_walks?(check),
+        not TicketChecks.after_merge?(check),
+        do: step(entry)
+  end
+
+  defp after_merge_suffix(check) do
+    if TicketChecks.after_merge?(check), do: " (after the merge: nothing before it proves this)", else: ""
+  end
 
   defp qa_walks?(%{kind: kind, proof: proof}), do: kind == "qa" or proof in @qa_proofs
 
