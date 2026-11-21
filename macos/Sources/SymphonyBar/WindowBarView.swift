@@ -119,7 +119,7 @@ struct FindTicketResults: View {
                                 .padding(.vertical, DesignTokens.Space.s1)
                                 .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.plainPointer)
                         .rowStyle()
                         .accessibilityLabel(row.accessibilityLabel(reference: tickets?.reference ?? Date()))
                     }

@@ -148,6 +148,7 @@ private struct ListCardStyle: ButtonStyle {
             )
             .contentShape(RoundedRectangle(cornerRadius: DesignTokens.ListCard.radius, style: .continuous))
             .onHover { hovered = $0 }
+            .buttonPointer(enabled: isEnabled)
         }
     }
 }

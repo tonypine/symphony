@@ -101,7 +101,7 @@ final class SessionReaderWindows: NSObject, NSWindowDelegate {
         let transcripts = StepTranscripts(get: { [client] path in await client.answer(path) })
         let model = SessionReaderModel(identifier: identifier, run: run, transcripts: transcripts, follow: follow)
         let hostingController = NSHostingController(
-            rootView: SessionReaderContent(model: model).environment(\.openURL, URLOpener.action)
+            rootView: SessionReaderContent(model: model).environment(\.openURL, URLOpener.action).pointerButtons()
         )
         hostingController.sizingOptions = [.minSize]
         let window = NSWindow(contentViewController: hostingController)

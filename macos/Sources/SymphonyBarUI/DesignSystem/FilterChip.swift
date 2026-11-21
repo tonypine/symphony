@@ -136,6 +136,7 @@ private struct FilterChipRemoveStyle: ButtonStyle {
                 .focusRing(keyboardFocus, Capsule())
                 .contentShape(shape)
                 .onHover { hovered = $0 }
+                .buttonPointer()
         }
     }
 }

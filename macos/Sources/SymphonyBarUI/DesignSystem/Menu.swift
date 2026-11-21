@@ -417,6 +417,7 @@ public struct MenuList: View {
                 label
                     .onHover { inside in hover(inside ? index : nil) }
                     .onTapGesture { pick(index) }
+                    .buttonPointer(enabled: item.disabledReason == nil)
                     .help(item.disabledReason ?? "")
             } else {
                 label

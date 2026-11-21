@@ -473,7 +473,7 @@ struct JournalReportCardView: View {
                         .padding(.vertical, 1)
                         .background(DesignTokens.Surface.separator.color.opacity(0.5), in: Capsule())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.plainPointer)
                 .help("Open \(focus.identifier) at the event this report cites")
                 .accessibilityLabel("Open \(focus.identifier) at the event this report cites")
                 .onHover { inside in hover(inside ? Set(card.events(of: focus.identifier)) : []) }

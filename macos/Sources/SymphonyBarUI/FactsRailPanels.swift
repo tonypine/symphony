@@ -403,6 +403,7 @@ struct FactRowStyle: ButtonStyle {
                     bleed: EdgeInsets(top: 3, leading: DesignTokens.Space.s2, bottom: 3, trailing: DesignTokens.Space.s2)
                 ))
                 .onHover { hovered = $0 }
+                .buttonPointer()
         }
     }
 }
