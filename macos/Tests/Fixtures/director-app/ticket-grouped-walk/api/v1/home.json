@@ -1,0 +1,30 @@
+{
+  "in_progress": [
+    {
+      "kind": "ticket",
+      "issue_id": "i-410",
+      "identifier": "SHOP-410",
+      "title": "Keep the run header visible",
+      "repo_key": "web-shop",
+      "phase": "QA",
+      "situation": {
+        "kind": "working",
+        "word": "Working",
+        "cause": "QA run 1 walked the pass; Step 2 failed.",
+        "since": "2026-10-18T10:45:00Z"
+      },
+      "since": "2026-10-18T10:45:00Z",
+      "working": true,
+      "move": null
+    }
+  ],
+  "queue": {
+    "roots": []
+  },
+  "outside": {
+    "backlog": 0,
+    "below_priority": 0,
+    "epic": 0,
+    "behind": 0
+  }
+}

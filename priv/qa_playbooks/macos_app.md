@@ -380,8 +380,8 @@ GitHub or Linear in QA:
   and 2560×1440, light and dark: nothing clipped. On the live server the seed gives QA-105 the
   same history, with its own test output to open and its build output gone.
 - **A grouped walk step (TP-1594):** pass
-  `macos/Tests/Fixtures/director-app/ticket-grouped-walk` as `api_fixtures` and open SHOP-410
-  from Tickets. Its timeline holds "QA run 1" with the pass's steps, as Symphony's server writes
+  `macos/Tests/Fixtures/director-app/ticket-grouped-walk` as `api_fixtures`, open Work ›
+  Tickets (it lists SHOP-410 alone, in QA) and open SHOP-410. Its timeline holds "QA run 1" with the pass's steps, as Symphony's server writes
   them. "Walk a step 1, 2, 3" reads Failed and lists its three checks under it, one line each:
   "Step 1" Done, "Step 2" Failed in the problem colour with "Agents shows two rows; Codex is
   missing", and "Step 3" Done, each with its own mark. Unfold the step: each check's Expected

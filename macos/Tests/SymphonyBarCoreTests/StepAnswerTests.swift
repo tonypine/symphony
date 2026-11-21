@@ -76,6 +76,18 @@ final class StepAnswerTests: XCTestCase {
         XCTAssertEqual(run.steps.first { $0.stepID == "walk_4" }?.state, .done)
     }
 
+    /// QA opens SHOP-410 from Work › Tickets: every list the app reads on the way is answered, and Tickets lists it.
+    func testTheGroupedWalkFixtureReachesItsTicketFromTickets() throws {
+        let api = TicketEventsTests.director("ticket-grouped-walk")
+        func read(_ path: String) throws -> Data { try Data(contentsOf: api.appendingPathComponent(path + ".json")) }
+        let tickets = try XCTUnwrap(TicketsPayload.decode(try read(TicketsPayload.path)))
+        XCTAssertEqual(tickets.rows.map(\.identifier), ["SHOP-410"])
+        XCTAssertNotNil(try JSONSerialization.jsonObject(with: try read(TicketsPayload.viewsPath)) as? [String: Any])
+        XCTAssertNotNil(HomeRead.decode(try read(HomeRead.path)))
+        XCTAssertNotNil(InboxPayload.decode(try read(InboxPayload.path)))
+        XCTAssertNotNil(InitiativesPayload.decode(try read(InitiativesPayload.path)))
+    }
+
     func testAPlanReadsItsSummaryChecksAndSkips() throws {
         let read = try XCTUnwrap(answer(#"{"plan":{"summary":"Three checks.","checks":[{"title":"A","expect":"a"},{"title":"B"},{"expect":"no title"}],"skips":[{"title":"C","why":"Not here"},{"why":"no title"}]}}"#)).plan
         XCTAssertEqual(read?.summary, "Three checks.")
