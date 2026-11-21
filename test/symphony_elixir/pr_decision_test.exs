@@ -208,6 +208,40 @@ defmodule SymphonyElixir.PrDecisionTest do
     end
   end
 
+  describe "R9a: the plan holds the merge (TP-1589)" do
+    test "a plan rewritten after the code, a Conductor hold or an open check holds the merge from every phase it leads to" do
+      for phase <- [:code_review, :qa, :ci_fix, :merging], guard <- [:open_checks, :rewritten, :held] do
+        action = decide(phase: phase, origin: :code_review, review: :approved, merge_guard: guard)
+        assert %Action{rule: "R9a", kind: :hold_merge, args: %{why: ^guard}} = action, inspect({phase, guard})
+      end
+
+      assert %Action{reason: "PR #42 does not merge: its plan has open checks"} = decide(phase: :merging, merge_guard: :open_checks)
+      assert %Action{reason: "PR #42 does not merge: the Conductor held it"} = decide(phase: :merging, merge_guard: :held)
+
+      assert %Action{reason: "PR #42 does not merge: the plan was rewritten after its code was written, so no approval of it counts"} =
+               decide(phase: :ci_fix, origin: :code_review, merge_guard: :rewritten)
+    end
+
+    test "it ranks above the merge, auto-merge, CI Fix's return with its approvals and the approved head's carry-on" do
+      assert %Action{rule: "R29"} = decide(phase: :merging)
+      assert %Action{rule: "R9a"} = decide(phase: :merging, merge_guard: :rewritten)
+      assert %Action{rule: "R30"} = decide(phase: :merging, ci: :pending)
+      assert %Action{rule: "R9a"} = decide(phase: :merging, ci: :pending, merge_guard: :open_checks)
+      assert %Action{rule: "R9a"} = decide(phase: :merging, ci: :pending, auto_merge: :armed, merge_guard: :held)
+      assert %Action{rule: "R25"} = decide(phase: :ci_fix, origin: :code_review)
+      assert %Action{rule: "R9a"} = decide(phase: :ci_fix, origin: :code_review, merge_guard: :rewritten)
+      assert %Action{rule: "R27"} = decide(phase: :code_review, review: :approved)
+      assert %Action{rule: "R9a"} = decide(phase: :code_review, review: :approved, merge_guard: :rewritten)
+    end
+
+    test "it waits for a hold and a run, and acts nowhere a coding run is next" do
+      assert %Action{rule: "R4"} = decide(phase: :merging, hold: :question, merge_guard: :rewritten)
+      assert %Action{rule: "R9"} = decide(phase: :ci_fix, run: :active, merge_guard: :rewritten)
+      assert %Action{rule: "R26"} = decide(phase: :rework, merge_guard: :rewritten)
+      assert %Action{rule: "R12"} = decide(phase: :in_progress, merge_guard: :rewritten)
+    end
+  end
+
   describe "the whole table" do
     test "every combination of fact values gets exactly one rule, every wait has an owner and a clearing condition, and every rule fires" do
       report = check_table(Facts.combinations())
@@ -240,7 +274,7 @@ defmodule SymphonyElixir.PrDecisionTest do
 
     test "rule ids are unique and each rule names its phases and a line for the docs" do
       assert Enum.uniq(@ids) == @ids
-      assert length(@ids) == 38
+      assert length(@ids) == 39
 
       for rule <- PrDecision.rules() do
         assert rule.phases != [] and rule.phases -- Facts.phases() == []

@@ -22,6 +22,7 @@ defmodule SymphonyElixir.ChecksHold do
   @coding_kinds ["implementation", "rework"]
   @changes ["plan.written", "check.waived"]
   @waived_by_person "The person waived it: two runs in a row could not prove it."
+  @waived_on_merge "The person waived it: the pull request merged before it was proved."
 
   @typedoc "What a refusal is recorded with: the run it was refused in, and that run's head when known."
   @type run :: %{optional(:run_id) => String.t() | nil, optional(:head) => String.t() | nil}
@@ -82,6 +83,30 @@ defmodule SymphonyElixir.ChecksHold do
         %{label: "Send it back for the checks", effect: "A run tries once more to prove them.", recommended: true},
         %{label: "Waive them and pass it on", effect: "Symphony records each check as waived and moves #{name} to #{to}.", recommended: false, move: %{to: to, waive: waivers}},
         %{label: "Cancel the ticket", effect: "#{name} is cancelled.", recommended: false, move: %{to: "Canceled"}}
+      ]
+    }
+  end
+
+  @doc """
+  The question to the person about the ticket `name` whose pull request `pr` merged while the
+  `checks` of its plan were still open (merged by hand on GitHub; `pr` names it, `PR #12`, or is
+  nil): the ticket stays out of `Done` until the person waives them and closes it, or cancels it.
+  """
+  @spec merged_question(String.t(), String.t() | nil, [TicketChecks.check()]) :: map()
+  def merged_question(name, pr, checks) do
+    pr = pr || "The pull request"
+    listed = Enum.map_join(checks, "; ", &"[#{&1.id}] #{one_line(&1.statement)} (proof: #{&1.proof})")
+    waivers = Enum.map(checks, &%{check_id: &1.id, reason: @waived_on_merge})
+
+    %{
+      title: String.slice("#{name}: merged with checks of its plan still open", 0, 120),
+      question: "#{pr} of #{name} merged, but these checks of its plan are still not proved: #{Facts.fit(listed, 1_500)}. Should Symphony close #{name}?",
+      why: "A ticket reaches Done only once every check of its plan is proved or waived. #{pr} merged without Symphony, so nothing proved these checks first.",
+      if_unanswered: "#{name} stays out of Done and nobody works on it.",
+      recommendation_reason: "The change is already merged. Waiving records that the checks were not proved before it.",
+      options: [
+        %{label: "Waive them and close it", effect: "Symphony records each check as waived and moves #{name} to Done.", recommended: true, move: %{to: "Done", waive: waivers}},
+        %{label: "Cancel the ticket", effect: "#{name} is cancelled, and the checks stay open on it.", recommended: false, move: %{to: "Canceled"}}
       ]
     }
   end
