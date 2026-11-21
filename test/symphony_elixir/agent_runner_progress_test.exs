@@ -699,8 +699,8 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     end
 
     test "is not parked after two turns that change nothing, and goes on to its next step" do
-      # The handoff turn pushes and the ticket leaves In Progress.
-      log = run_unpushed!("sha-unpushed", states: ["In Progress", "In Progress", "Code Review"])
+      # The handoff turn pushes and the ticket leaves the active states.
+      log = run_unpushed!("sha-unpushed", states: ["In Progress", "In Progress", "Done"])
 
       assert log =~ "Not parking issue_id=issue-progress issue_identifier=TP-337; its head sha-unpushed was never pushed and its step list goes on from code to checks"
       assert turns() == 3
@@ -719,7 +719,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
 
       # The person's "Run it again" lifts the park; the new run starts on the same unpushed head.
       next_run()
-      log = run_unpushed!("sha-unpushed", states: ["In Progress", "In Progress", "Code Review"])
+      log = run_unpushed!("sha-unpushed", states: ["In Progress", "In Progress", "Done"])
 
       assert log =~ "its head sha-unpushed was never pushed and its step list goes on from code to checks"
       assert turns() == 3
