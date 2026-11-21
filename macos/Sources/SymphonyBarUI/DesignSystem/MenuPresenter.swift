@@ -238,7 +238,7 @@ final class MenuPanel: NSPanel {
         // A searchable list narrows under its field as the Director types: the panel keeps the full list's size, the
         // list stays at its top, and nothing resizes the panel under it.
         let root = session.search == nil ? AnyView(list.padding(room)) : AnyView(list.padding(room).frame(maxHeight: .infinity, alignment: .top))
-        host = MenuHostingView(rootView: root, session: session, label: label)
+        host = MenuHostingView(rootView: AnyView(root.pointerButtons()), session: session, label: label)
         relay.host = host
         let fitting = host.fittingSize
         if session.search != nil { host.sizingOptions = [] }

@@ -554,7 +554,7 @@ public struct SearchField: View {
             .frame(width: DesignTokens.Field.clearSize, height: DesignTokens.Field.clearSize)
             .contentShape(Circle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.plainPointer)
         .onHover { clearHovered = $0 }
         .help(Self.clearTitle)
         .accessibilityLabel(Self.clearTitle)
