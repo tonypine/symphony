@@ -33,7 +33,13 @@
 #                                               (in <ref>'s working folder, $SYMPHONY_CI_REF) and filed
 #   build-store.sh server <build-number> <dest> the release at <dest>: from the store, else built and filed
 #   build-store.sh prune                        drops old pieces and this runner's old working folders;
-#                                               never one used in the last $SYMPHONY_CI_IN_USE_MINUTES (180)
+#                                               never one used in the last $SYMPHONY_CI_IN_USE_MINUTES (180).
+#                                               While the disk has less than $SYMPHONY_CI_MIN_FREE_GB (20) free,
+#                                               it drops idle ones past the count limits too, oldest first
+#   build-store.sh space [<path>...]            reports the disk's free space against that floor, and the
+#                                               size of the store, the work area and each <path>
+#   build-store.sh room [<path>...]             prune, then space; exit 1 when the floor is still not met,
+#                                               so a full disk is named before a build fails on it
 #
 # The key lists (APP_INPUTS, SERVER_INPUTS) are the whole contract: a path that feeds a piece and
 # is missing from its list lets a job take a stale piece. When unsure, list it. A release never
@@ -47,6 +53,9 @@ KEEP_PIECES=${SYMPHONY_CI_KEEP_PIECES:-30}
 KEEP_REFS=${SYMPHONY_CI_KEEP_REFS:-20}
 # Longer than any job: a folder touched more recently may be in use by another runner's job.
 IN_USE_MINUTES=${SYMPHONY_CI_IN_USE_MINUTES:-180}
+# The free space a job needs (a clean gate run builds the app and two releases and copies them).
+# Below it, prune drops idle pieces and branch states beyond KEEP_PIECES and KEEP_REFS.
+MIN_FREE_GB=${SYMPHONY_CI_MIN_FREE_GB:-20}
 
 # What feeds the SymphonyBar executable. Tests, snapshots, Info.plist, Resources and the QA driver
 # are not in it: `make app` assembles those around it on every build.
@@ -296,6 +305,60 @@ cmd_prune() {
     done < <(ls -1dt "$kind"refs/*/ 2>/dev/null)
     for dir in "$kind"refs/*/.save.* "$kind"old/*; do if [ -e "$dir" ] && idle "$dir"; then rm -rf "$dir"; fi; done
   done
+  prune_for_room
+}
+
+# The free space, in KB, of the volume the cache is on. SYMPHONY_CI_FREE_KB_COMMAND replaces the
+# reading (the test's made-up disk, which frees what prune removes).
+free_kb() {
+  if [ -n "${SYMPHONY_CI_FREE_KB_COMMAND:-}" ]; then bash -c "$SYMPHONY_CI_FREE_KB_COMMAND"; return; fi
+  local at=${ROOT:-$REPO}
+  until [ -e "$at" ]; do at=$(dirname "$at"); done   # the cache's folder before its first job
+  df -Pk "$at" | awk 'NR == 2 { print $4 }'
+}
+short_of_room() { [ "$(free_kb)" -lt $((MIN_FREE_GB * 1024 * 1024)) ]; }
+gb() { awk -v kb="$1" 'BEGIN { printf "%.1f", kb / 1048576 }'; }
+
+# Below the floor: every idle piece and every idle branch state of this Xcode but main's, oldest
+# first, one at a time until the floor is met. Never the active folders, main's state or anything
+# used in the last IN_USE_MINUTES.
+prune_for_room() {
+  short_of_room || return 0
+  note "prune: $(gb "$(free_kb)") GB free, under the floor of $MIN_FREE_GB GB: dropping idle pieces and branch states, oldest first"
+  local entry path dir
+  while IFS= read -r entry; do
+    short_of_room || return 0
+    path=${entry#* }
+    note "prune: $path (for room)"; rm -rf "$path"
+  done < <(
+    {
+      for dir in "$ROOT"/store/*/*/; do
+        if [ -d "$dir" ] && idle "$dir"; then echo "$(stat -f %m "$dir") $dir"; fi
+      done
+      for dir in "$WORK/$(toolchain)"/refs/*/; do
+        if [ -d "$dir" ] && [ "$(basename "$dir")" != main ] && idle "$dir"; then echo "$(stat -f %m "$dir") $dir"; fi
+      done
+    } | sort -n
+  )
+  if short_of_room; then note "prune: nothing idle is left, and $(gb "$(free_kb)") GB is free"; fi
+}
+
+cmd_space() {
+  local path
+  echo "disk: $(gb "$(free_kb)") GB free on the volume of ${ROOT:-$REPO}; the floor is $MIN_FREE_GB GB"
+  # du counts an APFS clone in full, so the sizes add up to more than the disk holds.
+  for path in ${ROOT:+"$ROOT/store"} ${WORK:+"$WORK"} "$@"; do
+    if [ -e "$path" ]; then echo "size: $(du -sk "$path" 2>/dev/null | awk '{ printf "%.1f", $1 / 1048576 }') GB $path"; fi
+  done
+}
+
+cmd_room() {
+  cmd_prune
+  cmd_space "$@"
+  if short_of_room; then
+    echo "::error::The runner's disk has $(gb "$(free_kb)") GB free after pruning the build cache, under the $MIN_FREE_GB GB a job needs. Free space on the runner (the sizes above say where it went)."
+    return 1
+  fi
 }
 
 command=${1:-}; [ $# -gt 0 ] && shift
@@ -315,5 +378,7 @@ case "$command" in
   app) cmd_app "$@";;
   server) cmd_server "$@";;
   prune) cmd_prune;;
-  *) sed -n '2,40p' "$0" >&2; exit 2;;
+  space) cmd_space "$@";;
+  room) cmd_room "$@";;
+  *) sed -n '2,46p' "$0" >&2; exit 2;;
 esac
