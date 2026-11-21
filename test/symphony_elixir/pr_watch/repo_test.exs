@@ -1179,7 +1179,11 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       issues!([repo_key |> with_pr(issue("1", "QA"), 1)])
       pid = start_repo!(repo_key, github: BaseFixGitHub)
       url = pr_url(1)
-      red = fn head, kind -> reads!(%{url => {:ok, read_of(url, %{head_sha: head, ci: :red, red_kind: kind, failing_check: "audit", failed_checks: [], check_names: ["audit"]})}}) end
+
+      red = fn head, kind ->
+        read = %{head_sha: head, ci: :red, red_kind: kind, failing_check: "audit", failed_checks: [], check_names: ["audit"]}
+        reads!(%{url => {:ok, read_of(url, read)}})
+      end
 
       # The base is red on the same check: the head waits.
       red.("sha-held", :also_red_on_base)

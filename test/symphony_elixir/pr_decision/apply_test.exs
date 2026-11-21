@@ -500,8 +500,10 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       held = %{Attempts.new() | base_held: "head-1"}
       facts = %{ci: :red, red_kind: :failure, base_held: true}
 
-      assert %{outcome: :applied, attempts: %{updated_from: "head-1", base_held: "head-1"}, applied: [%{rule: "R20a", kind: :update_branch}]} =
+      assert %{outcome: :applied, attempts: %{updated_from: "head-1", base_held: "head-1"}, applied: applied} =
                Apply.apply(action("R20a", :update_branch), ctx(:qa, facts: facts, attempts: held))
+
+      assert [%{rule: "R20a", kind: :update_branch}] = applied
 
       assert_received {:update_branch, @pr_url, "head-1", _opts}
       refute_received {:rerun_failed, _run_id, _opts}
@@ -522,8 +524,10 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
 
       log =
         capture_log(fn ->
-          assert %{outcome: :applied, attempts: %{base_held: nil, updated_from: nil}, action: %Action{rule: "R20a", kind: :wait, owner: :ci} = wait} =
+          assert %{outcome: :applied, attempts: %{base_held: nil, updated_from: nil}, action: wait} =
                    Apply.apply(action("R20a", :update_branch), ctx(:ci_fix, facts: facts, attempts: held))
+
+          assert %Action{rule: "R20a", kind: :wait, owner: :ci} = wait
 
           assert wait.reason == "GitHub did not update PR #7 from the base branch: its failed checks are rerun once before CI Fix"
         end)

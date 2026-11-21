@@ -984,7 +984,11 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       :ok = put_pending_ci_failure(approved: false)
       # GitHub lists no check on the merged head yet.
       Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-merged", checks: []}})
-      reader = fn _workspace, nil, start_head, base_ref -> send(test_pid, {:base_read, start_head, base_ref}) && true end
+
+      reader = fn _workspace, nil, start_head, base_ref ->
+        send(test_pid, {:base_read, start_head, base_ref}) && true
+      end
+
       pusher = fn _workspace, nil, _source_repo -> send(test_pid, :pushed) && :nothing end
 
       log =
@@ -1016,7 +1020,12 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       reader = fn _workspace, nil, _start_head, _base_ref -> false end
 
       capture_log(fn ->
-        run_issue!("CI Fix", heads: ["sha-start", "sha-merged"], max_turns: 5, repos: designed_repos(), runner_opts: [workspace_base_reader: reader])
+        run_issue!("CI Fix",
+          heads: ["sha-start", "sha-merged"],
+          max_turns: 5,
+          repos: designed_repos(),
+          runner_opts: [workspace_base_reader: reader]
+        )
       end)
 
       assert_received {:memory_tracker_comment, "issue-progress", "Symphony parked this issue where it is" <> _note}
@@ -1030,7 +1039,12 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       pusher = fn _workspace, nil, _source_repo -> send(test_pid, :push_refused) && {:error, :origin_mismatch} end
 
       capture_log(fn ->
-        run_issue!("CI Fix", heads: ["sha-start", "sha-merged"], max_turns: 5, repos: designed_repos(), runner_opts: [workspace_base_reader: reader, workspace_pusher: pusher])
+        run_issue!("CI Fix",
+          heads: ["sha-start", "sha-merged"],
+          max_turns: 5,
+          repos: designed_repos(),
+          runner_opts: [workspace_base_reader: reader, workspace_pusher: pusher]
+        )
       end)
 
       assert turns() == 3
