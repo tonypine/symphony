@@ -200,11 +200,11 @@ defmodule SymphonyElixir.QaPreCheck do
   `opts[:git]` runs git (`fn args, dir -> {output, status} end`).
   """
   @spec missing_test(String.t() | nil, Path.t(), keyword()) :: String.t() | nil
-  def missing_test(test, workspace, opts \\ [])
-  def missing_test(nil, _workspace, _opts), do: nil
+  def missing_test(test, workspace, opts \\ []) do
+    if is_binary(test), do: find_test(test, workspace, Keyword.get(opts, :git, &git/2))
+  end
 
-  def missing_test(test, workspace, opts) when is_binary(test) do
-    git = Keyword.get(opts, :git, &git/2)
+  defp find_test(test, workspace, git) do
     files = tracked_files(git, workspace)
 
     test
