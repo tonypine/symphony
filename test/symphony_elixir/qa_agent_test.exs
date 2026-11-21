@@ -393,7 +393,9 @@ defmodule SymphonyElixir.QaAgentTest do
         {:ok, dest}
       end,
       cleanup: fn dir -> File.rm_rf!(dir) && :ok end,
-      kill: fn _pid -> :ok end
+      kill: fn _pid -> :ok end,
+      # Every launch draws the app in the QA target's appearance, with the library built on the QA host.
+      appearance_library: fn dir -> {:ok, Path.join(dir, "appearance/symphony-qa-appearance.dylib")} end
     }
 
     ioreg = fn
@@ -1157,30 +1159,40 @@ defmodule SymphonyElixir.QaAgentTest do
       assert epic =~ "A finding names the viewport, the screen, the mechanism expected, the actual, and the evidence file."
     end
 
-    test "each UI playbook runs the Design check in light and dark between the walkthrough and its other checks" do
+    test "each UI playbook runs the Design check between the walkthrough and its other checks; the macos_app one at the QA target" do
       macos_app = %{build: "make app", app: "build/App.app"}
       android_app = %{build: "./gradlew assembleDebug", apk_path: "app.apk", application_ids: ["com.example.app"]}
       config = %{android: %{avd: "Pixel_3a_API_34"}, playbooks: %{macos_app: macos_app, android_app: android_app}}
       playbooks = Map.new(Selection.playbooks(config, dev_server?: true), &{&1.kind, String.replace(&1.prompt, ~r/\s+/, " ")})
 
-      for kind <- ["macos_app", "web", "android_app"] do
+      for kind <- ["web", "android_app"] do
         prompt = Map.fetch!(playbooks, kind)
 
         assert prompt =~
                  ~r/QA does three things, in this order: \(a\) the walkthrough steps marked `Proved by: QA`.*\(b\) the `Design check` of every UI deliverable, by sight, in light and dark.*\(c\)/
 
-        assert prompt =~ "named `Design check: <deliverable>`", "#{kind} playbook must name the Design check step"
-        assert prompt =~ "the design it compared with", "#{kind} playbook must name the design compared with"
-        assert prompt =~ "the design system alone", "#{kind} playbook must fall back to the design system"
         assert prompt =~ ~r/A `Design check` whose light or dark screenshot visibly differs from the design .* is a failing step/
       end
 
+      for kind <- ["macos_app", "web", "android_app"] do
+        prompt = Map.fetch!(playbooks, kind)
+        assert prompt =~ "named `Design check: <deliverable>`", "#{kind} playbook must name the Design check step"
+        assert prompt =~ "the design it compared with", "#{kind} playbook must name the design compared with"
+        assert prompt =~ "the design system alone", "#{kind} playbook must fall back to the design system"
+      end
+
       macos = Map.fetch!(playbooks, "macos_app")
-      assert macos =~ ~s(`qa_launch_app` with `appearance: "dark"`)
-      assert macos =~ ~s(do the same with `appearance: "light"`)
+
+      assert macos =~
+               ~r/QA does three things, in this order: \(a\) the walkthrough steps marked `Proved by: QA`.*\(b\) the `Design check` of every UI deliverable, by sight.*\(c\) nothing more: all of it at the QA target/
+
+      assert macos =~ "in the QA target's appearance at its window size"
+      assert macos =~ "Judge another appearance or size only when the ticket is about it"
       assert macos =~ "Judge the menu from that screenshot, not only from the tree"
       assert macos =~ "`qa_open_status_menu`, then `qa_screenshot` with the `window_id` it returned"
-      assert macos =~ ~r/8\. \*\*Design check\.\*\*.* 9\. \*\*Wide pass\.\*\*/
+      assert macos =~ ~r/8\. \*\*Design check\.\*\*.* 9\. \*\*Nothing on screen to judge\.\*\*/
+      refute macos =~ "Wide pass"
+      refute macos =~ ~s(do the same with `appearance: "light"`)
 
       assert Map.fetch!(playbooks, "android_app") =~ "Dark: `qa_android_dark_mode` `on`"
       assert Map.fetch!(playbooks, "web") =~ "await page.emulateMedia({ colorScheme: 'dark' })"

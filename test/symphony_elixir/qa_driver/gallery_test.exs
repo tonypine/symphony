@@ -234,7 +234,11 @@ defmodule SymphonyElixir.QaDriver.GalleryTest do
       assert_received {:cmd, @gallery, ["--shot", "button", "--out", _out], _opts}
 
       # One appearance alone when the call names it.
-      assert {:ok, _files} = Gallery.shoot(config, @gallery, %{entry: "button", variation: nil, width: nil, appearance: "dark"})
+      dark = config(context, entries_then(&draw(&1, ["button-1-dark.png"])))
+
+      assert {:ok, %{"files" => [%{"path" => "qa-evidence/button-1-dark.png"}]}} =
+               Gallery.shoot(dark, @gallery, %{entry: "button", variation: nil, width: nil, appearance: "dark"})
+
       assert_received {:cmd, @gallery, ["--shot", "button", "--appearance", "dark", "--out", _out], _opts}
 
       assert {"invalid_arguments", message} = failure(Gallery.shoot(config, @gallery, %{entry: "home", variation: nil, width: "laptop"}))

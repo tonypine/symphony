@@ -2224,6 +2224,8 @@ defmodule SymphonyElixir.QaDriverTest do
 
   describe "worker_host" do
     @run_dir "/Users/qa/.symphony-qa/runs/run.abc123"
+    # What every launch adds by default: the QA target's dark appearance and the library that draws it.
+    @dark_env [{"SYMPHONY_BAR_QA_APPEARANCE", "dark"}, {"DYLD_INSERT_LIBRARIES", @run_dir <> "/appearance/symphony-qa-appearance.dylib"}]
     @stored_app "/Users/qa/.symphony-qa/store/demo/builds/aaaa/Demo.app"
 
     # A stubbed QA host: the build and bundle script answer without touching the
@@ -2324,7 +2326,7 @@ defmodule SymphonyElixir.QaDriverTest do
       assert executable == bundle_dest <> "/Demo.app/Contents/MacOS/Demo"
       assert launch_opts[:cd] == @run_dir <> "/app-root"
       # The app's SSH session forwards a loopback port on the QA host back to this pass's stub.
-      assert [{"SYMPHONY_BAR_QA_ROOT", qa_root}, {"SYMPHONY_QA_OPENROUTER_URL", stub_url}] = launch_opts[:env]
+      assert [{"SYMPHONY_BAR_QA_ROOT", qa_root}, {"SYMPHONY_QA_OPENROUTER_URL", stub_url} | @dark_env] = launch_opts[:env]
       assert qa_root == @run_dir <> "/app-root"
       %{stub: %{port: stub_port}} = :sys.get_state(driver)
       assert [{"127.0.0.1:" <> remote_port, local}] = launch_opts[:reverse_forwards]
@@ -2363,7 +2365,7 @@ defmodule SymphonyElixir.QaDriverTest do
       assert_received {:cmd, "/bin/mkdir", [@run_dir <> "/qa-root-2"], _opts}
       assert_received {:launched, _executable, launch_opts, _port, ^pid}
       assert launch_opts[:cd] == @run_dir <> "/qa-root-2"
-      assert [{"SYMPHONY_BAR_QA_ROOT", @run_dir <> "/qa-root-2"}, {"SYMPHONY_QA_OPENROUTER_URL", _url}] = launch_opts[:env]
+      assert [{"SYMPHONY_BAR_QA_ROOT", @run_dir <> "/qa-root-2"}, {"SYMPHONY_QA_OPENROUTER_URL", _url} | @dark_env] = launch_opts[:env]
 
       assert {:error, {:qa_tool, "qa_launch_failed", message}} = QaDriver.call_tool(driver, "qa_launch_app", %{"fresh_root" => true})
       assert message =~ "A fresh QA root could not be made on the QA host at #{@run_dir}/qa-root-3"
@@ -2605,7 +2607,7 @@ defmodule SymphonyElixir.QaDriverTest do
       assert String.starts_with?(tar, scratch_dir <> "/")
       refute File.exists?(tar)
       assert_received {:launched, _executable, launch_opts, _port, ^pid}
-      assert [{"SYMPHONY_BAR_QA_ROOT", _root}, {"SYMPHONY_QA_OPENROUTER_URL", _url}, {"SYMPHONY_BAR_QA_API_FIXTURES", ^copy}] = launch_opts[:env]
+      assert [{"SYMPHONY_BAR_QA_ROOT", _root}, {"SYMPHONY_QA_OPENROUTER_URL", _url}, {"SYMPHONY_BAR_QA_API_FIXTURES", ^copy} | @dark_env] = launch_opts[:env]
 
       failing =
         remote_driver(
@@ -2658,7 +2660,7 @@ defmodule SymphonyElixir.QaDriverTest do
                {"SYMPHONY_QA_LINEAR_URL", linear_url},
                {"SYMPHONY_BAR_QA_OPEN_PANEL_DIR", ^path},
                {"SYMPHONY_BAR_UPDATE_URL", feed_url},
-               {"SYMPHONY_BAR_UPDATE_CHECK_INTERVAL", "30"}
+               {"SYMPHONY_BAR_UPDATE_CHECK_INTERVAL", "30"} | @dark_env
              ] = launch_opts[:env]
 
       assert gh_url == "http://localhost:#{gh_port}"
@@ -3034,7 +3036,7 @@ defmodule SymphonyElixir.QaDriverTest do
       {{:ok, %{"pid" => pid}}, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
       assert_received {:launched, _executable, launch_opts, _port, ^pid}
 
-      assert [{"SYMPHONY_BAR_QA_ROOT", _root}, {"SYMPHONY_QA_OPENROUTER_URL", _url}, {"HUB_OWNER_TOKEN", "abc"}, {"HUB_URL", "http://127.0.0.1:8091"}] =
+      assert [{"SYMPHONY_BAR_QA_ROOT", _root}, {"SYMPHONY_QA_OPENROUTER_URL", _url} | @dark_env ++ [{"HUB_OWNER_TOKEN", "abc"}, {"HUB_URL", "http://127.0.0.1:8091"}]] =
                launch_opts[:env]
     end
 
@@ -3059,7 +3061,7 @@ defmodule SymphonyElixir.QaDriverTest do
         {{:ok, %{"pid" => pid} = payload}, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", args) end)
         assert payload["environment"] == environment
         assert_received {:launched, _executable, launch_opts, _port, ^pid}
-        assert Enum.drop(launch_opts[:env], 2) == [{"HUB", "x"} | env]
+        assert Enum.drop(launch_opts[:env], 2) == @dark_env ++ [{"HUB", "x"} | env]
         assert {:ok, _quit} = QaDriver.call_tool(driver, "qa_quit_app", %{"pid" => pid})
       end
 
