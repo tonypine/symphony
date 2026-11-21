@@ -43,11 +43,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # The release gate: every Mac check, from a clean build of this commit, on the self-hosted runner
-  # (mac-checks.yml). Pull requests run only the groups their paths feed, so this is where the rest
-  # run. Nothing is published from a commit that fails it: the app stays on its current version,
-  # and Symphony, which reads this run on its `workflow_run` delivery, files an Urgent fix ticket
-  # (lib/symphony_elixir/release_gate.ex; the job's name is how it tells the gate from the build).
+  # The release gate: every Mac check, from a clean build of this commit (mac-checks.yml), in three
+  # jobs that run at once: one on each self-hosted runner and the script tests on Linux. Pull
+  # requests run only the groups their paths feed, so this is where the rest run. Nothing is
+  # published from a commit that fails it: `release` needs every job of it, so the app stays on its
+  # current version, and Symphony, which reads this run on its `workflow_run` delivery, files an
+  # Urgent fix ticket (lib/symphony_elixir/release_gate.ex; the jobs' names, `release gate / ...`,
+  # are how it tells the gate from the build). The gate's smoke test builds and files the release
+  # this job publishes (docs/releasing.md, The release run).
   gate:
     name: release gate
     uses: ./.github/workflows/mac-checks.yml
@@ -126,16 +129,19 @@ jobs:
           echo "$(dirname "$(mise which erl)")" >> "$GITHUB_PATH"
           echo "$(dirname "$(mise which elixir)")" >> "$GITHUB_PATH"
 
-      - name: Build the Symphony release
+      # The release the gate's smoke test built from nothing for this commit and build number and
+      # smoke-tested, from the build store; built here, from nothing, when the store has none.
+      - name: Get the Symphony release
         env:
-          SYMPHONY_BUILD_NUMBER: ${{ steps.version.outputs.build }}
           # The commit and repository the app is built from: Symphony holds a ticket blocked by
-          # a fix in this repository until the running app includes the fix's merge commit.
+          # a fix in this repository until the running app includes the fix's merge commit. They
+          # are part of the release's key in the store.
           SYMPHONY_BUILD_SHA: ${{ github.sha }}
           SYMPHONY_BUILD_REPO: ${{ github.server_url }}/${{ github.repository }}
+          BUILD_NUMBER: ${{ steps.version.outputs.build }}
         run: |
-          make release
-          test -x _build/prod/rel/symphony/bin/symphony-app
+          bash scripts/ci/build-store.sh server "$BUILD_NUMBER" "$RUNNER_TEMP/release/symphony"
+          test -x "$RUNNER_TEMP/release/symphony/bin/symphony-app"
 
       # The executable the gate built from nothing for this commit, from the build store; built
       # here, from nothing, when the store has none. A release never takes an incremental build.
@@ -185,7 +191,7 @@ jobs:
             echo "signed=true" >> "$GITHUB_OUTPUT"
             identity="$MACOS_SIGNING_IDENTITY"
           fi
-          make bundle PREBUILT_EXECUTABLE="$RUNNER_TEMP/release/SymphonyBar" SYMPHONY_RELEASE="$GITHUB_WORKSPACE/_build/prod/rel/symphony" SIGNING_IDENTITY="$identity"
+          make bundle PREBUILT_EXECUTABLE="$RUNNER_TEMP/release/SymphonyBar" SYMPHONY_RELEASE="$RUNNER_TEMP/release/symphony" SIGNING_IDENTITY="$identity"
           codesign -dvv build/Symphony.app 2>&1 | grep -E '^(Identifier|Authority|Signature)=' || true
 
       - name: Smoke-test Symphony.app

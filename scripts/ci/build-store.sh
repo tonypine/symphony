@@ -21,8 +21,10 @@
 #
 #   build-store.sh key app                      the app executable's key at HEAD
 #   build-store.sh key server <build-number>    the release's key at HEAD for that build number
-#   build-store.sh work <ref> <flavour> [--fresh]   puts the branch's saved state (else main's) in the
-#                                               active folder and prints it; --fresh empties it
+#   build-store.sh work <ref> <flavour> [--fresh|--fresh-once]   puts the branch's saved state (else
+#                                               main's) in the active folder and prints it; --fresh
+#                                               empties it; --fresh-once empties it unless this job
+#                                               already did, at this commit
 #   build-store.sh save <ref> <flavour>         files the active folder's state under the branch (whole:
 #                                               copied beside it, then swapped in)
 #   build-store.sh stamp                        gives the sources content-made times (after checkout)
@@ -136,21 +138,34 @@ prune_orphans() {
 cmd_work() {
   local ref=${1:?ref} flavour=${2:?flavour} fresh=${3:-}
   enabled || { echo ""; return 0; }
-  local base active own seed
+  local base active own seed job
   base="$WORK/$(toolchain)"; active="$base/active/$flavour"
   own="$base/refs/$(safe_ref "$ref")/$flavour"; seed="$base/refs/main/$flavour"
   mkdir -p "$(dirname "$active")"
   touch "$base"   # a toolchain in use is never pruned
+  # --fresh-once: from nothing, unless this job (run, attempt, job, commit) already emptied it and
+  # has built in it since. A second build of the same commit in the same job, on top of that clean
+  # state, is a clean build too: nothing in it came from another commit.
+  job="${GITHUB_RUN_ID:-}.${GITHUB_RUN_ATTEMPT:-}.${GITHUB_JOB:-}.$(git -C "$REPO" rev-parse HEAD 2>/dev/null || true)"
+  if [ "$fresh" = "--fresh-once" ]; then
+    if [ -n "${GITHUB_RUN_ID:-}" ] && [ "$(cat "$active.fresh" 2>/dev/null)" = "$job" ] &&
+      [ "$(cat "$active.ref" 2>/dev/null)" = "$ref" ] && [ -d "$active" ]; then
+      note "work: $ref/$flavour was built from nothing earlier in this job; building on it"
+      fresh=""
+    else
+      fresh="--fresh"
+    fi
+  fi
   if [ "$(cat "$active.ref" 2>/dev/null)" = "$ref" ] && [ -d "$active" ] && [ "$fresh" != "--fresh" ]; then
     : # the active state is already this branch's (the last job was the same branch's)
   elif [ "$fresh" = "--fresh" ]; then
-    rm -rf "$active"; mkdir -p "$active"
+    rm -rf "$active"; mkdir -p "$active"; echo "$job" > "$active.fresh"
   elif [ -d "$own" ] && copy "$own" "$active"; then
-    :
+    rm -f "$active.fresh"
   elif [ -d "$seed" ] && note "work: $ref/$flavour starts from main's" && copy "$seed" "$active"; then
-    :
+    rm -f "$active.fresh"
   else
-    rm -rf "$active"; mkdir -p "$active"
+    rm -rf "$active"; mkdir -p "$active"; rm -f "$active.fresh"
   fi
   echo "$ref" > "$active.ref"
   prune_orphans "$active"
@@ -255,14 +270,16 @@ cmd_app() {
 }
 
 # The Symphony release for <build-number> at <dest>. Mix compiles in the ref's working folder
-# when there is one, so the second release of a job, and the next push, compile little.
+# when there is one, so the second release of a job, and the next push, compile little. On main the
+# job's first release builds from nothing and its later ones build on that (--fresh-once): the
+# gate's three releases (the update test's two and the one the release job publishes) compile once.
 cmd_server() {
   local build=${1:?build number} dest=${2:?dest} key="" work="" built
   if enabled; then key=$(server_key "$build") || { note "server: uncommitted changes under the release's inputs; building without the store"; key=""; }; fi
   if [ -n "$key" ] && cmd_get server "$key" "$dest"; then return 0; fi
   note "server: building the Symphony release for build $build (make release)"
   if enabled; then
-    if [ "${SYMPHONY_CI_REF:-main}" = main ]; then work=$(cmd_work main mix --fresh); else work=$(cmd_work "$SYMPHONY_CI_REF" mix); fi
+    if [ "${SYMPHONY_CI_REF:-main}" = main ]; then work=$(cmd_work main mix --fresh-once); else work=$(cmd_work "$SYMPHONY_CI_REF" mix); fi
     export MIX_BUILD_ROOT="$work/_build" MIX_DEPS_PATH="$work/deps"
     built="$work/_build/prod/rel/symphony"
   else

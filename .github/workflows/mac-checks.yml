@@ -1,22 +1,29 @@
 name: mac-checks
 
-# Every check that needs a Mac, in one job, one checkout and one build, on a self-hosted runner of
-# the `ci-macos` VM (a VM that keeps its disk, so builds are incremental: scripts/ci/build-store.sh).
-# The VM runs two runners (ci-macos, ci-macos-2), so two jobs run at once. They share one login
-# session, so a step that uses the screen, the keyboard, the keychain search list or the Symphony
-# app runs under the desktop lock (scripts/ci/desktop-lock.sh, its `shell:`): one such step at a
-# time on the VM, while builds and tests run beside it. Its timeout-minutes is the lock's wait plus
-# its run limit, so a step waiting in line never reads as a hang.
+# Every check that needs a Mac, in two jobs on the self-hosted runners of the `ci-macos` VM (a VM
+# that keeps its disk, so builds are incremental: scripts/ci/build-store.sh), and the script tests
+# that need no Mac in a third, on Linux. The VM runs two runners (ci-macos, ci-macos-2), so the two
+# Mac jobs run at once, one on each:
+#   mac checks (app)    the app's release build and what runs on it: the release smoke test, the
+#                       update test, the install script, and the scripts' tests that need a Mac.
+#   mac checks (tests)  the Swift tests, the gallery, the agent-sandbox build and the QA driver.
+#   mac checks (scripts) on ubuntu-latest: the Xcode selection script and the shared test helpers.
+# The two Mac jobs share one login session, so a step that uses the screen, the keyboard, the
+# keychain search list or the Symphony app runs under the desktop lock (scripts/ci/desktop-lock.sh,
+# its `shell:`): one such step at a time on the VM, while builds and tests run beside it. Its
+# timeout-minutes is the lock's wait plus its run limit, so a step waiting in line never reads as a
+# hang. A job runs only when one of its groups is on.
 #
 # Two workflows call it, and each says which groups of steps run:
 #   macos.yml    on a pull request: the groups whose inputs the pull request changed.
 #   release.yml  on a merge to main, as the release gate: every group, from a clean build, before
 #                anything is published.
 # A group a pull request skips still runs on main, in the gate. A failed gate publishes nothing,
-# and Symphony files a fix ticket for it (lib/symphony_elixir/release_gate.ex).
+# and Symphony files a fix ticket for it (lib/symphony_elixir/release_gate.ex: every job here is
+# `release gate / mac checks (...)` there).
 #
-# A pull request stops at the first step that fails (`fail_fast`), so the runner is free for the
-# next job. The gate runs every group whatever fails: its fix ticket names everything broken.
+# A pull request stops each job at its first step that fails (`fail_fast`), so the runner is free
+# for the next job. The gate runs every group whatever fails: its fix ticket names everything broken.
 
 on:
   workflow_call:
@@ -34,7 +41,7 @@ on:
         type: boolean
         default: false
       build:
-        description: Build the app and file its executable.
+        description: Build the app and file its executable, and build the gallery.
         type: boolean
         default: false
       unit:
@@ -46,7 +53,7 @@ on:
         type: boolean
         default: false
       helpers:
-        description: The script tests (Xcode selection, shared test helpers, update helper, QA signing identity).
+        description: The script tests (Xcode selection, shared test helpers, build store, desktop lock, update helper, QA signing identity).
         type: boolean
         default: false
       driver:
@@ -70,13 +77,39 @@ permissions:
   contents: read
 
 jobs:
-  mac:
-    name: mac checks
+  # The script tests that run anywhere: no Xcode, no keychain, no build store.
+  scripts:
+    name: mac checks (scripts)
+    if: ${{ inputs.helpers }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      # A fake /Applications and a stub xcodebuild: the script's choice, not the runner's Xcode.
+      - name: Test the Xcode selection script
+        if: ${{ inputs.fail_fast && success() || !inputs.fail_fast && !cancelled() }}
+        run: sh scripts/ci/xcode-developer-dir-test.sh
+
+      # The shared test helpers (test/support/README.md): the update feed, gh and Linear
+      # stand-ins and the release pair's layout, on made-up inputs. No build, no sudo.
+      - name: Test the shared test helpers
+        if: ${{ inputs.fail_fast && success() || !inputs.fail_fast && !cancelled() }}
+        run: python3 --version && make support-test
+
+  # The app's executable and everything that runs on it or on the Symphony release.
+  app:
+    name: mac checks (app)
+    if: ${{ inputs.build || inputs.update || inputs.smoke || inputs.installer || inputs.helpers }}
     # The app targets macOS 26 (DD3): its tests run only on 26 or later, built with the Xcode pinned
     # in .xcode-version, which the runner has beside the image's own.
     runs-on: [self-hosted, macOS, tahoe]
     # Room for the desktop steps to wait for the other runner's.
-    timeout-minutes: 90
+    timeout-minutes: 75
     env:
       SYMPHONY_CI_REF: ${{ inputs.ref }}
       CLEAN: ${{ inputs.clean }}
@@ -118,16 +151,7 @@ jobs:
           runner_work=$(dirname "$RUNNER_WORKSPACE")
           bash scripts/ci/build-store.sh room "$RUNNER_TEMP" "$runner_work" "$(dirname "$runner_work")/_diag"
 
-      - name: Test the Xcode selection script
-        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.helpers }}
-        run: sh scripts/ci/xcode-developer-dir-test.sh
-
-      # The shared test helpers (test/support/README.md): the update feed, gh and Linear
-      # stand-ins and the release pair's layout, on made-up inputs. No build, no sudo.
-      - name: Test the shared test helpers
-        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.helpers }}
-        run: python3 --version && make support-test
-
+      # APFS clones and BSD stat: the store's own folders, so a Mac.
       - name: Test the build store
         if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.helpers }}
         run: bash scripts/ci/build-store-test.sh
@@ -138,6 +162,21 @@ jobs:
         if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.helpers }}
         timeout-minutes: 5
         run: bash scripts/ci/desktop-lock-test.sh
+
+      - name: Test the update helper
+        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.helpers }}
+        working-directory: macos
+        run: time sh Tests/update-helper-test.sh
+
+      # The QA host's signing identity (docs/configuration.md, QA host setup), in a temporary
+      # keychain with a fake sudo. The run limit turns any wait for a dialog into a failure. It puts
+      # its keychain on the user's search list, which the update test and the release's signing also
+      # change, so it holds the desktop.
+      - name: Test the QA signing identity script
+        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.helpers }}
+        shell: bash scripts/ci/desktop-lock.sh --wait 15 --limit 5 -- bash -e {0}
+        timeout-minutes: 20
+        run: time sh scripts/qa/install-test-signing-identity-test.sh
 
       # Builds in the branch's saved state, so a push compiles what it changed; main builds from
       # nothing. The executable is filed in the store for the steps and jobs that need the app.
@@ -158,98 +197,41 @@ jobs:
             fi
           fi
 
-      - name: Run tests
-        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.unit }}
-        working-directory: macos
+      # The release and the app around it, built as the `release` workflow builds them, and the
+      # release smoke test on the app's launcher: the service-instance step (the release running
+      # as the service under symphony@127.0.0.1, registered with epmd) runs nowhere else. The release
+      # comes from the store under this run's build number and commit, and is filed there: on main
+      # the release job publishes that same build rather than compile it a second time.
+      - name: Smoke-test the release
+        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.smoke }}
+        env:
+          SYMPHONY_BUILD_NUMBER: ${{ github.run_number }}
+          SYMPHONY_BUILD_SHA: ${{ github.sha }}
+          SYMPHONY_BUILD_REPO: ${{ github.server_url }}/${{ github.repository }}
         run: |
           store="bash $GITHUB_WORKSPACE/scripts/ci/build-store.sh"
-          fresh=""; if [ "$CLEAN" = true ]; then fresh="--fresh"; fi
-          scratch="$($store work "$SYMPHONY_CI_REF" debug $fresh)"
-          time swift test ${scratch:+--scratch-path "$scratch"}
-          if [ -n "$scratch" ]; then $store save "$SYMPHONY_CI_REF" debug; fi
-
-      # The Component Gallery's stories are compiled against the app's views (macos/Gallery/), apart
-      # from the app. A change to a view that breaks a story is found here, not when QA opens it.
-      - name: Build the gallery
-        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.build }}
-        working-directory: macos
-        run: |
-          store="bash $GITHUB_WORKSPACE/scripts/ci/build-store.sh"
-          scratch="$($store work "$SYMPHONY_CI_REF" debug)"
-          time make build-gallery ${scratch:+SWIFT_FLAGS="--scratch-path $scratch"}
-          build/SymphonyGallery --check
-
-      # An agent's sandbox can't write the per-user temp dir, where a sandboxed Foundation stages
-      # its atomic writes, so a plain `swift build` fails there. Symphony gives a local macOS
-      # Claude session the env that routes them elsewhere (`SymphonyElixir.AgentTmpDir.env/3`);
-      # this builds and tests with that env in a sandbox that also denies those writes. The build
-      # that must fail runs in an empty folder: in a built one it has nothing to write.
-      - name: Build and test in a sandbox like an agent's
-        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.sandbox }}
-        working-directory: macos
-        run: |
-          store="bash $GITHUB_WORKSPACE/scripts/ci/build-store.sh"
-          profile='(version 1)(allow default)(deny file-write* (subpath "/private/var/folders"))'
-          scratch="$RUNNER_TEMP/agent-sandbox"
-          rm -rf "$scratch"; mkdir -p "$scratch/tmp"
-          export TMPDIR="$scratch/tmp" SWIFTPM_MODULECACHE_OVERRIDE="$scratch/tmp/swiftpm-module-cache"
-          if sandbox-exec -p "$profile" swift build --disable-sandbox --build-system native --scratch-path "$scratch/probe" > "$scratch/without-env.log" 2>&1; then
-            echo "swift build passed in the sandbox without DIRHELPER_USER_DIR_SUFFIX, so the sandbox no longer stands in for an agent's"
-            exit 1
-          fi
-          tail -n 3 "$scratch/without-env.log"
-          fresh=""; if [ "$CLEAN" = true ]; then fresh="--fresh"; fi
-          build="$($store work "$SYMPHONY_CI_REF" sandbox $fresh)"; build="${build:-$scratch/build}"
-          export DIRHELPER_USER_DIR_SUFFIX=symphony/none
-          time sandbox-exec -p "$profile" swift build --disable-sandbox --build-system native --scratch-path "$build"
-          time sandbox-exec -p "$profile" swift test --disable-sandbox --build-system native --scratch-path "$build"
-          $store save "$SYMPHONY_CI_REF" sandbox
-
-      - name: Test the update helper
-        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.helpers }}
-        working-directory: macos
-        run: time sh Tests/update-helper-test.sh
-
-      # The QA host's signing identity (docs/configuration.md, QA host setup), in a temporary
-      # keychain with a fake sudo. The run limit turns any wait for a dialog into a failure. It puts
-      # its keychain on the user's search list, which the update test and the release's signing also
-      # change, so it holds the desktop.
-      - name: Test the QA signing identity script
-        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.helpers }}
-        shell: bash scripts/ci/desktop-lock.sh --wait 15 --limit 5 -- bash -e {0}
-        timeout-minutes: 20
-        run: time sh scripts/qa/install-test-signing-identity-test.sh
-
-      # QA's `appearance` launch: the library Symphony injects turns an ordinary AppKit app
-      # dark or light whatever this runner's appearance.
-      - name: Test the QA appearance library
-        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.driver }}
-        working-directory: macos
-        shell: bash ../scripts/ci/desktop-lock.sh --wait 15 --limit 10 -- bash -e {0}
-        timeout-minutes: 25
-        run: time sh Tests/qa-appearance-test.sh
-
-      # `qa_scroll`: the QA driver scrolls a SwiftUI ScrollView that loads pages at its end and a
-      # List to their last rows, and by a delta, in a fixture app with a window.
-      - name: Test the QA driver's scrolling
-        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.driver }}
-        working-directory: macos
-        shell: bash ../scripts/ci/desktop-lock.sh --wait 15 --limit 10 -- bash -e {0}
-        timeout-minutes: 25
-        run: time python3 -I Tests/qa-scroll-test.py
-
-      # `qa_key`: the QA driver's ⌘ shortcuts reach a fixture app's menu (Back, Inbox, Settings,
-      # Close), and a plain key still types into the focused field.
-      - name: Test the QA driver's key shortcuts
-        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.driver }}
-        working-directory: macos
-        shell: bash ../scripts/ci/desktop-lock.sh --wait 15 --limit 10 -- bash -e {0}
-        timeout-minutes: 25
-        run: time python3 -I Tests/qa-key-test.py
+          pieces="$RUNNER_TEMP/smoke"; rm -rf "$pieces"; mkdir -p "$pieces"
+          only=""; if [ "$CLEAN" = true ]; then only="--clean"; fi
+          $store app "$pieces/SymphonyBar" $only
+          time $store server "$SYMPHONY_BUILD_NUMBER" "$pieces/symphony"
+          test -x "$pieces/symphony/bin/symphony-app"
+          cd macos
+          time make bundle BUILD_DIR="$pieces/build" PREBUILT_EXECUTABLE="$pieces/SymphonyBar" SYMPHONY_RELEASE="$pieces/symphony" SIGNING_IDENTITY=-
+          app="$pieces/build/Symphony.app"
+          codesign --verify --strict --deep "$app"
+          test -x "$app/Contents/Resources/symphony"
+          test -f "$app/Contents/Resources/symphony-release/releases/start_erl.data"
+          test "$(plutil -extract LSMinimumSystemVersion raw "$app/Contents/Info.plist")" = 26.0
+          cd ..
+          time scripts/release/smoke_test.sh "$app/Contents/Resources/symphony" "$GITHUB_WORKSPACE/symphony.yml"
+          ditto -c -k --keepParent "$app" "$RUNNER_TEMP/Symphony.zip"
+          echo "Symphony.zip: $(stat -f %z "$RUNNER_TEMP/Symphony.zip") bytes" | tee -a "$GITHUB_STEP_SUMMARY"
 
       # Update, Restart and rollback end to end (macos/Tests/e2e/README.md) on releases N and N+1
       # of this commit. The app's executable and the two Symphony releases come from the store,
-      # and are built and filed there when it has none: a build, so outside the desktop lock.
+      # and are built and filed there when it has none: a build, so outside the desktop lock. On
+      # main they compile on the smoke test's clean release of this commit (build-store.sh
+      # --fresh-once), not from nothing twice more.
       - name: Get the update test's app and releases
         id: update-pieces
         if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.update }}
@@ -293,34 +275,6 @@ jobs:
             !${{ runner.temp }}/symphony-e2e/*/Applications/
           retention-days: 7
 
-      # The release and the app around it, built as the `release` workflow builds them, and the
-      # release smoke test on the app's launcher: the service-instance step (the release running
-      # as the service under symphony@127.0.0.1, registered with epmd) runs nowhere else.
-      - name: Smoke-test the release
-        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.smoke }}
-        env:
-          SYMPHONY_BUILD_NUMBER: ${{ github.run_number }}
-          SYMPHONY_BUILD_SHA: ${{ github.sha }}
-          SYMPHONY_BUILD_REPO: ${{ github.server_url }}/${{ github.repository }}
-        run: |
-          store="bash $GITHUB_WORKSPACE/scripts/ci/build-store.sh"
-          pieces="$RUNNER_TEMP/smoke"; rm -rf "$pieces"; mkdir -p "$pieces"
-          only=""; if [ "$CLEAN" = true ]; then only="--clean"; fi
-          $store app "$pieces/SymphonyBar" $only
-          time make release
-          test -x _build/prod/rel/symphony/bin/symphony-app
-          cd macos
-          time make bundle BUILD_DIR="$pieces/build" PREBUILT_EXECUTABLE="$pieces/SymphonyBar" SYMPHONY_RELEASE="$GITHUB_WORKSPACE/_build/prod/rel/symphony" SIGNING_IDENTITY=-
-          app="$pieces/build/Symphony.app"
-          codesign --verify --strict --deep "$app"
-          test -x "$app/Contents/Resources/symphony"
-          test -f "$app/Contents/Resources/symphony-release/releases/start_erl.data"
-          test "$(plutil -extract LSMinimumSystemVersion raw "$app/Contents/Info.plist")" = 26.0
-          cd ..
-          time scripts/release/smoke_test.sh "$app/Contents/Resources/symphony" "$GITHUB_WORKSPACE/symphony.yml"
-          ditto -c -k --keepParent "$app" "$RUNNER_TEMP/Symphony.zip"
-          echo "Symphony.zip: $(stat -f %z "$RUNNER_TEMP/Symphony.zip") bytes" | tee -a "$GITHUB_STEP_SUMMARY"
-
       - name: Test the install script
         if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.installer }}
         env:
@@ -361,6 +315,133 @@ jobs:
             echo "::error::$APP still has the quarantine flag"
             exit 1
           fi
+
+      - name: Tidy the build cache
+        if: ${{ always() }}
+        run: |
+          bash scripts/ci/build-store.sh prune
+          runner_work=$(dirname "$RUNNER_WORKSPACE")
+          bash scripts/ci/build-store.sh space "$RUNNER_TEMP" "$runner_work" "$(dirname "$runner_work")/_diag"
+
+  # The Swift tests and the builds beside the app's: the debug build, the gallery on it, the
+  # agent-sandbox build, and the QA driver's tests.
+  tests:
+    name: mac checks (tests)
+    if: ${{ inputs.unit || inputs.build || inputs.sandbox || inputs.driver }}
+    runs-on: [self-hosted, macOS, tahoe]
+    # Room for the desktop steps to wait for the other runner's.
+    timeout-minutes: 75
+    env:
+      SYMPHONY_CI_REF: ${{ inputs.ref }}
+      CLEAN: ${{ inputs.clean }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Select the pinned Xcode
+        run: echo "DEVELOPER_DIR=$(sh scripts/ci/xcode-developer-dir.sh)" >> "$GITHUB_ENV"
+
+      # Homebrew's tools and mise's Erlang and Elixir, as the app job prepares them, and the
+      # sources' content-made times.
+      - name: Prepare the runner
+        run: |
+          tools="$RUNNER_TEMP/tools"; rm -rf "$tools"; mkdir -p "$tools"
+          for tool in mise minisign shellcheck jq socat; do ln -s "/opt/homebrew/bin/$tool" "$tools/$tool"; done
+          echo "$tools" >> "$GITHUB_PATH"
+          export PATH="$tools:$PATH"
+          mise trust -q && mise install -q
+          echo "$(dirname "$(mise which erl)")" >> "$GITHUB_PATH"
+          echo "$(dirname "$(mise which elixir)")" >> "$GITHUB_PATH"
+          bash scripts/ci/build-store.sh stamp
+          sw_vers
+          xcodebuild -version
+          swift --version
+          echo "build cache: ${SYMPHONY_CI_CACHE:-none}; ref: $SYMPHONY_CI_REF; clean: $CLEAN"
+
+      - name: Make room on the disk
+        run: |
+          runner_work=$(dirname "$RUNNER_WORKSPACE")
+          bash scripts/ci/build-store.sh room "$RUNNER_TEMP" "$runner_work" "$(dirname "$runner_work")/_diag"
+
+      - name: Run tests
+        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.unit }}
+        working-directory: macos
+        run: |
+          store="bash $GITHUB_WORKSPACE/scripts/ci/build-store.sh"
+          fresh=""; if [ "$CLEAN" = true ]; then fresh="--fresh"; fi
+          scratch="$($store work "$SYMPHONY_CI_REF" debug $fresh)"
+          time swift test ${scratch:+--scratch-path "$scratch"}
+          if [ -n "$scratch" ]; then $store save "$SYMPHONY_CI_REF" debug; fi
+
+      # The Component Gallery's stories are compiled against the app's views (macos/Gallery/), apart
+      # from the app. A change to a view that breaks a story is found here, not when QA opens it.
+      # It builds on the tests' debug build.
+      - name: Build the gallery
+        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.build }}
+        working-directory: macos
+        run: |
+          store="bash $GITHUB_WORKSPACE/scripts/ci/build-store.sh"
+          scratch="$($store work "$SYMPHONY_CI_REF" debug)"
+          time make build-gallery ${scratch:+SWIFT_FLAGS="--scratch-path $scratch"}
+          build/SymphonyGallery --check
+
+      # An agent's sandbox can't write the per-user temp dir, where a sandboxed Foundation stages
+      # its atomic writes, so a plain `swift build` fails there. Symphony gives a local macOS
+      # Claude session the env that routes them elsewhere (`SymphonyElixir.AgentTmpDir.env/3`);
+      # this builds and tests with that env in a sandbox that also denies those writes. The build
+      # that must fail runs in an empty folder: in a built one it has nothing to write. The build
+      # with the env is incremental on main too, from main's last one, as an agent's is: the
+      # from-nothing builds of this commit are the tests' and the app's, and this step proves the
+      # env, not the sources.
+      - name: Build and test in a sandbox like an agent's
+        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.sandbox }}
+        working-directory: macos
+        run: |
+          store="bash $GITHUB_WORKSPACE/scripts/ci/build-store.sh"
+          profile='(version 1)(allow default)(deny file-write* (subpath "/private/var/folders"))'
+          scratch="$RUNNER_TEMP/agent-sandbox"
+          rm -rf "$scratch"; mkdir -p "$scratch/tmp"
+          export TMPDIR="$scratch/tmp" SWIFTPM_MODULECACHE_OVERRIDE="$scratch/tmp/swiftpm-module-cache"
+          if sandbox-exec -p "$profile" swift build --disable-sandbox --build-system native --scratch-path "$scratch/probe" > "$scratch/without-env.log" 2>&1; then
+            echo "swift build passed in the sandbox without DIRHELPER_USER_DIR_SUFFIX, so the sandbox no longer stands in for an agent's"
+            exit 1
+          fi
+          tail -n 3 "$scratch/without-env.log"
+          build="$($store work "$SYMPHONY_CI_REF" sandbox)"; build="${build:-$scratch/build}"
+          export DIRHELPER_USER_DIR_SUFFIX=symphony/none
+          time sandbox-exec -p "$profile" swift build --disable-sandbox --build-system native --scratch-path "$build"
+          time sandbox-exec -p "$profile" swift test --disable-sandbox --build-system native --scratch-path "$build"
+          $store save "$SYMPHONY_CI_REF" sandbox
+
+      # QA's `appearance` launch: the library Symphony injects turns an ordinary AppKit app
+      # dark or light whatever this runner's appearance.
+      - name: Test the QA appearance library
+        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.driver }}
+        working-directory: macos
+        shell: bash ../scripts/ci/desktop-lock.sh --wait 15 --limit 10 -- bash -e {0}
+        timeout-minutes: 25
+        run: time sh Tests/qa-appearance-test.sh
+
+      # `qa_scroll`: the QA driver scrolls a SwiftUI ScrollView that loads pages at its end and a
+      # List to their last rows, and by a delta, in a fixture app with a window.
+      - name: Test the QA driver's scrolling
+        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.driver }}
+        working-directory: macos
+        shell: bash ../scripts/ci/desktop-lock.sh --wait 15 --limit 10 -- bash -e {0}
+        timeout-minutes: 25
+        run: time python3 -I Tests/qa-scroll-test.py
+
+      # `qa_key`: the QA driver's ⌘ shortcuts reach a fixture app's menu (Back, Inbox, Settings,
+      # Close), and a plain key still types into the focused field.
+      - name: Test the QA driver's key shortcuts
+        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.driver }}
+        working-directory: macos
+        shell: bash ../scripts/ci/desktop-lock.sh --wait 15 --limit 10 -- bash -e {0}
+        timeout-minutes: 25
+        run: time python3 -I Tests/qa-key-test.py
 
       - name: Tidy the build cache
         if: ${{ always() }}

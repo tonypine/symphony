@@ -78,6 +78,22 @@ $store save pr-a release 2>/dev/null
 check "a save for another branch than the active one saves nothing" a-state "$(cat "$($store work pr-a release 2>/dev/null)/state")"
 check "a save leaves no copy half-way" "" "$(find "$SYMPHONY_CI_CACHE"/work/*/refs/pr-a -mindepth 1 -maxdepth 1 ! -name release)"
 
+# --fresh-once: from nothing once per job and commit; that job's later builds take the clean state.
+once() { GITHUB_RUN_ID="$1" GITHUB_RUN_ATTEMPT=1 GITHUB_JOB="$2" $store work main mix --fresh-once 2>/dev/null; }
+echo stale > "$(once 1 app)/state"
+check "--fresh-once empties it the first time in a job" "" "$(ls "$(once 2 app)")"
+echo built > "$(once 2 app)/state"
+check "and keeps it for the same job's next build" built "$(cat "$(once 2 app)/state")"
+check "another job starts from nothing" "" "$(ls "$(once 2 release)")"
+echo built > "$(once 3 app)/state"
+check "and so does another run" "" "$(ls "$(once 4 app)")"
+echo built > "$(once 5 app)/state"; echo "x" >> "$repo/docs/x.md"; commit five
+check "and the same job at another commit" "" "$(ls "$(once 5 app)")"
+echo built > "$(once 6 app)/state"; $store work pr-a mix >/dev/null 2>&1; $store work main mix >/dev/null 2>&1
+check "a state another branch's job put in the folder is never taken for the job's" "" "$(ls "$(once 6 app)")"
+echo built > "$(GITHUB_RUN_ID="" $store work main mix --fresh-once 2>/dev/null)/state"
+check "outside a GitHub job it is --fresh" "" "$(ls "$(GITHUB_RUN_ID="" $store work main mix --fresh-once 2>/dev/null)")"
+
 # Two runners on one VM: each has a work area of its own (SYMPHONY_CI_WORK), and the default is today's.
 check "the default work area is the cache's work folder" "$SYMPHONY_CI_CACHE/work" "$(dirname "$(dirname "$(dirname "$a")")")"
 two=$(SYMPHONY_CI_WORK="$tmp/work-2" $store work pr-a release 2>/dev/null)
