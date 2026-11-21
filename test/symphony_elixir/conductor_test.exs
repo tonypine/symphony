@@ -650,7 +650,7 @@ defmodule SymphonyElixir.ConductorTest do
 
   describe "waiving a check" do
     setup ctx do
-      checks = [%{id: "c1", kind: "outcome", statement: "The export matches.", proof: "test"}, %{id: "c2", kind: "outcome", statement: "It signs in.", proof: "test"}]
+      checks = [%{id: "c1", kind: "evidence", statement: "The export matches.", proof: "test"}, %{id: "c2", kind: "evidence", statement: "It signs in.", proof: "test"}]
       plan = %{shape: "single", layers: ["engine"], summary: "s", text: "t", checks: checks, size: %{tokens: 1, runs: 1}}
       {:ok, _plan} = SymphonyElixir.TicketPlan.write("default", ctx.issue_id, Map.merge(plan, %{reason: "Grooming", by: "grooming"}))
       :ok
@@ -674,8 +674,8 @@ defmodule SymphonyElixir.ConductorTest do
       assert prompt =~ "waive it"
 
       # A junction that may not waive reads none.
-      before_merge = plan(ctx, %{junction: "before_merge"})
-      assert Conductor.run(before_merge, ctx.issue, turn: turn([answer(%{"waive" => [%{"check_id" => "c2", "reason" => "x"}]})] |> then(&{:ok, &1, 10}))) == :ok
+      no_waiver = plan(ctx, %{junction: "after_qa_fail"})
+      assert Conductor.run(no_waiver, ctx.issue, turn: turn([answer(%{"waive" => [%{"check_id" => "c2", "reason" => "x"}]})] |> then(&{:ok, &1, 10}))) == :ok
       assert [_waived, %{id: "c2", state: :open}] = SymphonyElixir.TicketChecks.list(ctx.issue_id)
     end
 

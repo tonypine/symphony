@@ -253,12 +253,15 @@ defmodule SymphonyElixir.TicketState do
   @typedoc """
   What the pause projector last applied to Linear (`SymphonyElixir.Pauses.Projector`): the machine
   labels the ticket carries, the hash of its Decisions section's entries, nil before it wrote one,
-  and each question's comments by its id (`projected_comment/0`), nil before it wrote any.
+  each question's comments by its id (`projected_comment/0`), nil before it wrote any, and
+  `described`, there once it wrote a groomed ticket's description
+  (`SymphonyElixir.TicketProjection`).
   """
   @type projected :: %{
-          labels: [String.t()],
-          section: String.t() | nil,
-          comments: %{String.t() => projected_comment()} | nil
+          required(:labels) => [String.t()],
+          required(:section) => String.t() | nil,
+          required(:comments) => %{String.t() => projected_comment()} | nil,
+          optional(:described) => true
         }
 
   @typedoc """
@@ -592,11 +595,13 @@ defmodule SymphonyElixir.TicketState do
   defp normalize_projection(_mark), do: []
 
   defp normalize_projected(%{} = projected) do
-    %{
+    normalized = %{
       labels: projected |> Map.get(:labels) |> string_list() |> Enum.sort(),
       section: map_string(projected, :section),
       comments: projected_comments(Map.get(projected, :comments))
     }
+
+    if Map.get(projected, :described) == true, do: Map.put(normalized, :described, true), else: normalized
   end
 
   defp normalize_projected(_projected), do: nil

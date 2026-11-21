@@ -545,8 +545,9 @@ defmodule SymphonyElixir.SelfHeal do
   Files a ticket for `issue` through the same filer and hold as a fix ticket: the one way Symphony
   creates a ticket. `ticket` names the `scope` (the repo key the ticket belongs to), the `title`,
   the `description`, the `relation` (`blocks` or `follow_up`) and, optionally, the open ticket that
-  already covers it (`existing`, an identifier), the `labels` to set, and the id of the ticket it
-  is filed under as a sub-ticket (`parent_id`).
+  already covers it (`existing`, an identifier), the `labels` to set, the id of the ticket it
+  is filed under as a sub-ticket (`parent_id`), and the `state` it is created in when that is not
+  Todo (`Backlog`, for a sub-ticket whose blocker must be linked before it may start).
 
   With `existing`, nothing is created; otherwise the ticket is created in Todo, at `opts[:priority]`
   (default as a fix ticket's), in the scope repo's team and project, assigned as a fix ticket is
@@ -586,7 +587,8 @@ defmodule SymphonyElixir.SelfHeal do
       description: ticket.description,
       labels: Map.get(ticket, :labels, []),
       team: :scope,
-      parent_id: Map.get(ticket, :parent_id)
+      parent_id: Map.get(ticket, :parent_id),
+      state: Map.get(ticket, :state)
     }
 
     case fixer(opts).create(attrs, opts) do

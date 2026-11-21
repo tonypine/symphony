@@ -38,15 +38,16 @@ defmodule SymphonyElixir.Conductor.Answer do
     * `plan` (the Grooming turn's, `plan: true`): the ticket's plan, as `plan.written` holds it
       (`SymphonyElixir.TicketPlan`) but for what Symphony fills in (`version`, `reason`, `by`):
       `shape` (`single` or `split`), `layers` (at least one of `layers/0`), `summary` (for a person,
-      cut to 600 characters), `text` (for agents, cut to 12,000), `checks` (at least one, and at
-      least one of kind `outcome`), `size` (`tokens` and `runs`, whole numbers) and, for a split,
-      `sub_tickets` (at least one). A check holds a `kind` (`outcome`, `qa`, `evidence`), a
+      cut to 600 characters), `text` (for agents, cut to 12,000), `checks` (at least one, at most 30,
+      and at least one of kind `outcome`), `size` (`tokens` and `runs`, whole numbers) and, for a
+      split, `sub_tickets` (at least one, at most 12). A check holds a `kind` (`outcome`, `qa`, `evidence`), a
       `statement` (cut to 600) and its `proof` (`test`, `qa`, `design`, `attached`); a `qa` check
       also the `action` and what to `expect`, and any check may say the app `state` it needs (each
       cut to 400), the `size` it is walked at (`normal`, `wide`) and a Gallery `story`. A sub-ticket
       holds a `title` (cut to 120) and an `ask` (cut to 4,000), the sibling keys it waits `after`,
       a `repo`, and the `identifier` of a sub-ticket the ticket already has, which is adopted
-      instead of created. A check with no `id` gets `c<its place>` and a sub-ticket with no `key`
+      instead of created. A check keeps the `id` it gives and is left without one otherwise:
+      `SymphonyElixir.TicketPlan.write/4` names the checks. A sub-ticket with no `key` gets
       `s<its place>`. With a question (`ask_person`) the plan is left unread: the person answers
       first. A Grooming answer holds a plan or a question; one with neither is refused, and so is
       a plan that misses this shape. Its `instructions` may be null.
@@ -87,6 +88,7 @@ defmodule SymphonyElixir.Conductor.Answer do
 
   alias SymphonyElixir.Conductor.Facts
   alias SymphonyElixir.ReviewAgent
+  alias SymphonyElixir.TicketPlan
 
   @instructions_max 3_000
   @update_max 1_200
@@ -364,7 +366,7 @@ defmodule SymphonyElixir.Conductor.Answer do
          {:ok, layers} <- plan_layers(Map.get(plan, "layers")),
          {:ok, summary} <- required_text(plan, "summary", @plan_summary_max, "plan"),
          {:ok, text} <- required_text(plan, "text", @plan_text_max, "plan"),
-         {:ok, checks} <- entries(Map.get(plan, "checks"), "plan.checks", &check/2),
+         {:ok, checks} <- entries(Map.get(plan, "checks"), "plan.checks", TicketPlan.max_checks(), &check/2),
          :ok <- with_outcome(checks),
          {:ok, size} <- plan_size(Map.get(plan, "size")),
          {:ok, sub_tickets} <- sub_tickets(Map.get(plan, "sub_tickets"), shape) do
@@ -400,7 +402,8 @@ defmodule SymphonyElixir.Conductor.Answer do
          {:ok, statement} <- required_text(check, "statement", @check_statement_max, where),
          {:ok, proof} <- one_of(check, "proof", @check_proofs, where),
          :ok <- walkable(check, kind, where) do
-      %{id: id(check, "id", "c", place), kind: kind, statement: statement, proof: proof}
+      %{kind: kind, statement: statement, proof: proof}
+      |> put_text(:id, check, @id_max, where)
       |> put_text(:state, check, @check_walk_max, where)
       |> put_text(:action, check, @check_walk_max, where)
       |> put_text(:expect, check, @check_walk_max, where)
@@ -423,7 +426,7 @@ defmodule SymphonyElixir.Conductor.Answer do
   defp walkable(_check, _kind, _where), do: :ok
 
   defp sub_tickets(_entries, "single"), do: {:ok, nil}
-  defp sub_tickets(entries, "split"), do: entries(entries, "plan.sub_tickets", &sub_ticket/2)
+  defp sub_tickets(entries, "split"), do: entries(entries, "plan.sub_tickets", TicketPlan.max_sub_tickets(), &sub_ticket/2)
 
   defp sub_ticket(%{} = entry, place) do
     where = "plan.sub_tickets[#{place}]"
@@ -432,7 +435,7 @@ defmodule SymphonyElixir.Conductor.Answer do
          {:ok, ask} <- required_text(entry, "ask", @sub_ticket_ask_max, where) do
       waits = for key <- List.wrap(Map.get(entry, "after")), is_binary(key), String.trim(key) != "", uniq: true, do: String.trim(key)
 
-      %{key: id(entry, "key", "s", place), title: title, ask: ask, after: waits}
+      %{key: key(entry, place), title: title, ask: ask, after: waits}
       |> put_text(:repo, entry, 200, where)
       |> put_text(:identifier, entry, 50, where)
       |> then(&{:ok, &1})
@@ -441,8 +444,11 @@ defmodule SymphonyElixir.Conductor.Answer do
 
   defp sub_ticket(_entry, place), do: {:error, "`plan.sub_tickets[#{place}]` must be an object"}
 
-  # A non-empty list whose every entry reads (`read.(entry, its place)`), else the first refusal.
-  defp entries([_ | _] = entries, _where, read) do
+  # A list of 1 to `max` entries whose every entry reads (`read.(entry, its place)`), else the first refusal.
+  defp entries([_ | _] = entries, where, max, _read) when length(entries) > max,
+    do: {:error, "`#{where}` lists #{length(entries)} entries, and a plan holds at most #{max}"}
+
+  defp entries([_ | _] = entries, _where, _max, read) do
     entries
     |> Enum.with_index(1)
     |> Enum.reduce_while({:ok, []}, fn {entry, place}, {:ok, acc} ->
@@ -453,13 +459,13 @@ defmodule SymphonyElixir.Conductor.Answer do
     end)
   end
 
-  defp entries(_entries, where, _read), do: {:error, "`#{where}` must list at least one entry"}
+  defp entries(_entries, where, _max, _read), do: {:error, "`#{where}` must list at least one entry"}
 
-  # The id the entry gives, else its place's (`c1`, `s2`).
-  defp id(entry, field, prefix, place) do
-    case Map.get(entry, field) do
-      id when is_binary(id) -> if String.trim(id) == "", do: "#{prefix}#{place}", else: id |> String.trim() |> String.slice(0, @id_max)
-      _missing -> "#{prefix}#{place}"
+  # The key the sub-ticket entry gives, else its place's (`s2`).
+  defp key(entry, place) do
+    case Map.get(entry, "key") do
+      key when is_binary(key) -> if String.trim(key) == "", do: "s#{place}", else: key |> String.trim() |> String.slice(0, @id_max)
+      _missing -> "s#{place}"
     end
   end
 

@@ -600,12 +600,15 @@ rewritten, with its `source`, `linear`, `message` or `parent`, and the parent ti
 came `from`), `plan.written` (machine only: one version of a groomed ticket's plan, with its
 `version`, the `reason` it was written and `by` what, its `shape`, `single` or `split`, the `layers`
 it touches, a `summary` for a person, the plan's `text` for agents, its `checks`, each with an `id`
-that stays the same across versions, a `kind`, `outcome`, `qa` or `evidence`, a `statement` and its
+that is its alone across versions (a new check gets an id no version used, and a check whose
+statement a version changed counts only the proofs and waivers recorded after that version), a `kind`, `outcome`, `qa` or `evidence`, a `statement` and its
 `proof`, `test`, `qa`, `design` or `attached`, its `size` and, for a split, its `sub_tickets`; the
 newest one is the ticket's plan, and a ticket is groomed exactly when it holds one), `check.proved`
 (any run's, or the machine's: a check of the current plan proved by a test, QA, the design or
 something attached, recorded once per check and head and refused for an id the plan does not hold),
-`check.waived` (machine only: a check nobody has to prove any more, and why),
+`check.waived` (machine only: a check nobody has to prove any more, and why; an `outcome` check is
+waived only by the person's own decision, and a plan version may remove or reword one only after a
+new ask),
 `conductor.intervention` (machine only: what the Conductor of another ticket did to this one,
 `stopped`, `replanned`, `canceled`, `replaced` or `added`, and why) and
 `note` (which may carry a `tag` its writer gives it: `discovery`, something a run found that is not its
@@ -2208,7 +2211,9 @@ The QA agent:
 - **A ticket with a plan.** A run of a ticket whose history holds a `plan.written` reads its ask,
   its plan and its checks where a run of any other ticket reads the description: the implementation,
   rework, review and QA prompts carry `## Ask`, `## Plan` and `## Checks`; QA walks the plan's `qa`
-  checks and judges nothing else; the `outcome` checks are the acceptance criteria; a
+  checks, and every other check the plan proves by QA or against a design, and judges nothing
+  else, and QA MUST NOT be skipped while one of those is open; before the merge the Conductor's
+  facts name every check still open; the `outcome` checks are the acceptance criteria; a
   `check.proved` with `by: test` is confirmed on the PR head by the QA pre-check, and QA records a
   `check.proved` (`by: qa` or `design`) for each check it saw pass. The ticket MUST NOT be handed
   off to Code Review while a check a test or an attachment proves is open. A plan whose layers
@@ -3980,7 +3985,9 @@ An issue is dispatch-eligible only if all are true:
   - A groomed issue (one that holds a `plan.written`) follows its own rule there, whatever its
     labels: it is never dispatched, and it closes once its own pull request merged or it never had
     one and none of its sub-issues is outside `terminal_states` (one in `Backlog` holds it), after
-    the Conductor's final check when that junction is on. A groomed issue whose pull request merges
+    the Conductor's final check when that junction is on. A final check that ran and did not
+    conclude MUST NOT close the issue: the service asks the person and the issue stays in the
+    waiting state until they answer. A groomed issue whose pull request merges
     waits there on every sub-issue it has. The move that closes it updates Symphony's record of the
     issue with Linear, for a groomed issue and any other, under the issue's repo key; an issue read
     with no repo key MUST NOT be moved, and its close is tried again on the next poll.

@@ -504,14 +504,28 @@ request answers as above, and the Conductor's turn starts at once, in the backgr
   whose work the message makes wrong is stopped (`conductor.intervention`, `action: "stopped"`).
 - On a ticket with sub-tickets the answer may change them (the tree operations), and it may waive a
   check nobody can prove (`check.waived`).
-- A turn that fails, times out or answers something Symphony cannot read leaves Symphony's own reply
-  under the message: "The Conductor could not read this message (…), so nothing was done with it. It
-  stays in the ticket's history. Send it again to have it read."
+- A turn that fails, times out or answers something Symphony cannot read is counted on the message
+  in a status note, and the message stays owed its turn: the next poll tries again. After 3 failed
+  tries Symphony leaves its own reply under the message: "The Conductor could not read this message
+  (…), 3 times, so nothing was done with it. It stays in the ticket's history. Send it again to have
+  it read."
+- A message written before the ticket had its plan is answered as soon as the plan is written. A
+  message with no reply yet is still owed its turn after a restart of Symphony.
+- One Conductor turn works on a ticket at a time. A message that arrives while another turn works on
+  the ticket (a tree turn, a run's junction, Grooming, an earlier message's turn) waits, and its turn
+  starts when that one ends. One turn answers every message that waits at that moment: the reply
+  hangs under the newest, and each earlier one gets its own `conductor.update` ("Answered together
+  with your later message, below.", `refs` the newest message). The turn reads every ask and the
+  newest 20 messages with their replies.
+- While no provider of `runs.conductor` can take a run (a paused provider, a usage limit), or
+  Symphony or the repository is paused, the turn waits, still owed, and is not counted as failed.
 - On a ticket in Done or Canceled the Conductor may only reply, or have a new ticket created: in
   Todo, Urgent, in the same team and project, linked to the finished one as related, with the
   message as its ask (`ask.recorded`, `source: "message"`) and a `ticket.filed_from`.
-- A message on a sub-ticket is also shown to its parent's Conductor (`child_message`), which owes no
-  reply and records nothing unless it changes the parent's plan or its sub-tickets.
+- A message on a sub-ticket is also shown to its parent's Conductor (`child_message`), once the
+  sub-ticket's own Conductor replied. It owes no reply and records nothing unless it changes the
+  parent's plan or its sub-tickets. One turn of the parent reads every such message that waits, and
+  the parent records each as read in a status note.
 
 No `message.read` is written for such a message, and `read` stays null in the feed. With the
 Conductor or the `message` junction off, a groomed ticket's messages are read by its next run, as

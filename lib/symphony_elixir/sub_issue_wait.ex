@@ -273,7 +273,9 @@ defmodule SymphonyElixir.SubIssueWait do
   """
   @spec merged_blocker?(map() | term()) :: boolean()
   def merged_blocker?(%{id: blocker_id, state: blocker_state}) when is_binary(blocker_id) and is_binary(blocker_state) do
-    merged_waiting?(blocker_id, blocker_state) or (pr_merged?(blocker_id) and TicketPlan.groomed?(blocker_id))
+    # Whether it is groomed comes first: one read rules out every blocker with no plan, which then
+    # costs no read of its pull request.
+    merged_waiting?(blocker_id, blocker_state) or (TicketPlan.groomed?(blocker_id) and pr_merged?(blocker_id))
   end
 
   def merged_blocker?(_blocker), do: false

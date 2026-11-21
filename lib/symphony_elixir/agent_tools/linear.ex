@@ -19,6 +19,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.Config.Schema.Workspace.Attachments
   alias SymphonyElixir.DecisionRequest
   alias SymphonyElixir.Decisions
+  alias SymphonyElixir.DescriptionLock
   alias SymphonyElixir.HumanActions
   alias SymphonyElixir.HumanActions.Collector, as: HumanActionsCollector
   alias SymphonyElixir.HumanActions.Request
@@ -2005,15 +2006,23 @@ defmodule SymphonyElixir.AgentTools.Linear do
   review brief and artifact links, and one new changelog entry dated today (UTC) on top of the
   ones the block holds, with a line for each push and verdict on the ticket's history
   (`IssueSummary.event_entries/1`), capped. The description is read right before the write, and every byte
-  outside the block stays as it is, so a person's edit between runs survives. Fields holding a
+  outside the block stays as it is, so a person's edit between runs survives. The read and the
+  write hold the description's lock (`SymphonyElixir.DescriptionLock`), so the projector, which
+  writes the same description, never writes between them. Fields holding a
   secret pattern are refused before any Linear call.
   """
   @spec update_issue_summary(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def update_issue_summary(context, attrs, opts \\ []) when is_map(attrs) do
     with {:ok, issue_id} <- current_issue_id(context),
          {:ok, summary} <- IssueSummary.new(attrs),
-         :ok <- SecretScanner.reject_fields_if_secret_pattern(summary_secret_fields(summary), context, "linear_update_issue_summary", opts),
-         {:ok, body} <- graphql(@issue_description_query, %{id: issue_id}, opts),
+         :ok <- SecretScanner.reject_fields_if_secret_pattern(summary_secret_fields(summary), context, "linear_update_issue_summary", opts) do
+      # The projector writes the same description, so the read and the write are one turn at it.
+      DescriptionLock.locked(issue_id, fn -> write_issue_summary(issue_id, summary, opts) end)
+    end
+  end
+
+  defp write_issue_summary(issue_id, summary, opts) do
+    with {:ok, body} <- graphql(@issue_description_query, %{id: issue_id}, opts),
          {:ok, issue} <- fetch_path(body, ["data", "issue"], :issue_not_found),
          {:ok, description} <- IssueSummary.put(issue["description"], summary, Keyword.get_lazy(opts, :today, &Date.utc_today/0), IssueSummary.history(issue_id)),
          variables = %{id: issue_id, description: description},

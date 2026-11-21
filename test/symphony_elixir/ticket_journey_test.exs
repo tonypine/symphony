@@ -151,8 +151,40 @@ defmodule SymphonyElixir.TicketJourneyTest do
       assert TicketJourney.walked_text(issue(), "make-all") == "[c4] The panel matches the design.\nAction: Open it\nExpect: It matches"
     end
 
+    test "the prompt's text keeps every check whole: a long ask is what gets cut, and the plan's text only after it" do
+      limit = SymphonyElixir.PromptSafety.ticket_plan_limit()
+      checks = for n <- 1..30, do: %{kind: "evidence", statement: String.duplicate("s", 590) <> " end #{n}", proof: "attached"}
+      {:ok, _ask} = TicketPlan.record_ask(@repo_key, @issue_id, String.duplicate("a", 99_000) <> " ask end")
+      plan!(%{@plan | checks: [@outcome | Enum.drop(checks, 1)], text: String.duplicate("p", 11_000) <> " plan end"})
+
+      text = TicketJourney.plan_text(@issue_id)
+      assert String.length(text) < limit
+      assert text =~ "end 30"
+      assert String.ends_with?(text, "end 30")
+      refute text =~ "ask end"
+      assert text =~ "aaa\n\n[Cut here to fit the prompt. The `ticket_plan` tool reads it whole.]\n\n## Plan"
+      # The wrapped text is whole too: nothing after the fit is cut.
+      refute TicketJourney.body(@issue_id, fn -> "" end) =~ "truncated by Symphony"
+      assert text =~ "plan end"
+    end
+
+    test "QA walks every check it proves, whatever its kind: an outcome proved by QA is walked from its statement" do
+      seen = %{kind: "outcome", statement: "The page\nshows the summary.", proof: "qa"}
+      {:ok, _ask} = TicketPlan.record_ask(@repo_key, @issue_id, "And the summary.", source: "message")
+      plan!(%{@plan | checks: [@outcome, seen]})
+
+      assert [%{number: 2, check_id: "c5", text: "[c5] The page shows the summary.", proof: %{by: :qa}}] = TicketJourney.steps(issue())
+      assert TicketJourney.walkthrough?(issue())
+      assert [%{id: "c5"}] = TicketJourney.owed_by_qa(issue())
+      assert TicketJourney.owed_by_qa(nil) == []
+
+      # The pass that saw it proves it, so it is not open for good.
+      :ok = TicketJourney.record_walked(@repo_key, issue(), [%{name: "c5", status: "pass", details: "Seen."}])
+      assert TicketJourney.owed_by_qa(issue()) == []
+    end
+
     test "a waived check is no step and no criterion, and a plan with no QA check has nothing to walk" do
-      {:ok, _waived} = TicketChecks.waive(@repo_key, @issue_id, "c1", "Nothing can test it.")
+      {:ok, _waived} = TicketChecks.waive(@repo_key, @issue_id, "c1", "Nothing can test it.", by: :person)
       {:ok, _waived} = TicketChecks.waive(@repo_key, @issue_id, "c2", "Nothing to fold.")
 
       assert [%{number: 4}] = TicketJourney.steps(issue())

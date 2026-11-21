@@ -24,14 +24,19 @@ defmodule SymphonyElixir.Pauses.Projector do
 
   A groomed ticket's description is Symphony's whole (`SymphonyElixir.TicketProjection`): the same
   pass writes `## Ask`, `## Plan` and `## Checks` in place of everything but Symphony's own blocks,
-  each time that text changes, so a person's edit of it in Linear is overwritten then. The
+  each time that text changes, so a person's edit of it in Linear is overwritten then. Only before
+  the first such write (`projected.described`) is the description read for words a person typed
+  that the record does not hold: they are recorded as a further `ask.recorded` first
+  (`TicketProjection.unrecorded_ask/2`). A ticket that holds no ask gets no such text. The
   walkthrough's `Proved by:` block is not written there: the checks say what is proved.
 
   `apply/2` writes only what differs from what it last applied, which the record keeps
   (`projected`: the labels and the section's hash). A record it never projected compares its labels
   with the ones the last observation of the ticket in Linear saw. The section is written into the
   description read right before the write (`Decisions.put/2`), so a person's text since stays, and
-  an entry already there is never written twice. A write Linear refuses leaves the record as it is,
+  an entry already there is never written twice. That read and write hold the description's lock
+  (`SymphonyElixir.DescriptionLock`), which a run's summary tool holds for its own, so neither
+  writes over the other. A write Linear refuses leaves the record as it is,
   keeps what did land in `projected`, and marks the projection pending (`pending_projection`,
   `:pause`): the reconciler applies it again (`SymphonyElixir.TicketObservation.reconcile_all/3`).
   A second apply of the same record writes nothing.
@@ -63,9 +68,9 @@ defmodule SymphonyElixir.Pauses.Projector do
 
   require Logger
 
-  alias SymphonyElixir.{DecisionRequest, Decisions, IssueSummary, RunStore, TicketProjection, TicketSignals}
+  alias SymphonyElixir.{DecisionRequest, Decisions, DescriptionLock, IssueSummary, RunStore, TicketEvents}
   alias SymphonyElixir.HumanActions.Request
-  alias SymphonyElixir.{TicketState, Tracker, Walkthrough}
+  alias SymphonyElixir.{TicketPlan, TicketProjection, TicketSignals, TicketState, Tracker, Walkthrough}
 
   @blocked "Blocked"
   @question_label "Needs Decision"
@@ -215,9 +220,11 @@ defmodule SymphonyElixir.Pauses.Projector do
     last = last_applied(record, opts)
 
     {labels, label_errors} = apply_labels(tracker, record.issue_id, last.labels, desired.labels)
-    {section, section_errors} = apply_section(tracker, record.issue_id, last.section, desired, events)
+    {section, described, section_errors} = apply_section(tracker, record, last.section, desired, events)
     {comments, comment_errors} = apply_comments(tracker, record.issue_id, last.comments, desired.comments)
-    remember(record, %{labels: labels, section: section, comments: comments}, Keyword.get(opts, :store, RunStore))
+    projected = %{labels: labels, section: section, comments: comments}
+    projected = if described, do: Map.put(projected, :described, true), else: projected
+    remember(record, projected, Keyword.get(opts, :store, RunStore))
 
     case label_errors ++ section_errors ++ comment_errors do
       [] ->
@@ -283,16 +290,54 @@ defmodule SymphonyElixir.Pauses.Projector do
     issue_id |> RunStore.list_ticket_events(types: types) |> List.wrap() |> Enum.filter(&is_struct/1)
   end
 
-  defp apply_section(_tracker, _issue_id, last, %{section: section}, _events) when section in [nil, last], do: {last, []}
+  # The section's hash as it stands in Linear now, whether a groomed ticket's description was ever
+  # written, and the errors.
+  defp apply_section(_tracker, record, last, %{section: section}, _events) when section in [nil, last],
+    do: {last, described?(record), []}
 
-  defp apply_section(tracker, issue_id, last, %{entries: entries, section: section} = desired, events) do
+  # The read and the write are one turn at the description (`DescriptionLock`): a run's summary
+  # tool writes it too.
+  defp apply_section(tracker, record, last, desired, events) do
+    DescriptionLock.locked(record.issue_id, fn -> write_section(tracker, record, last, desired, events) end)
+  end
+
+  defp write_section(tracker, record, last, desired, events) do
+    issue_id = record.issue_id
+
     with {:ok, description} <- call(fn -> tracker.fetch_issue_description(issue_id) end),
-         {:ok, updated} <- Decisions.put(projected(description, desired), entries),
+         {:ok, desired, events} <- with_linear_ask(record, description, desired, events),
+         {:ok, updated} <- Decisions.put(projected(description, desired), desired.entries),
          updated = updated |> put_proofs(desired) |> IssueSummary.put_changelog(events),
          :ok <- write_description(tracker, issue_id, description || "", updated) do
-      {section, []}
+      {desired.section, described?(record) or is_binary(desired.projection), []}
     else
-      {:error, reason} -> {last, [reason]}
+      {:error, reason} -> {last, described?(record), [reason]}
+    end
+  end
+
+  defp described?(record), do: match?(%{projected: %{described: true}}, record)
+
+  # Before a groomed ticket's first projection: what a person typed into the description that the
+  # record does not hold is recorded as a further ask, and the projection is rendered with it.
+  # Words too long for an ask are never cut: the description is left to the person.
+  defp with_linear_ask(record, description, %{projection: projection} = desired, events) do
+    first? = is_binary(projection) and not described?(record)
+
+    case if(first?, do: TicketProjection.unrecorded_ask(description, events)) do
+      nil -> {:ok, desired, events}
+      text -> record_linear_ask(record, text, desired)
+    end
+  end
+
+  defp record_linear_ask(record, text, desired) do
+    if String.length(text) > TicketPlan.ask_max() do
+      Logger.warning("The description of issue_id=#{record.issue_id} holds more than an ask may; it is left as the person wrote it")
+      {:ok, %{desired | projection: nil}, []}
+    else
+      with {:ok, _ask} <- TicketEvents.record(record.repo_key, record.issue_id, "ask.recorded", %{text: text, source: "linear"}) do
+        events = history(record.issue_id)
+        {:ok, desired(record, events), events}
+      end
     end
   end
 

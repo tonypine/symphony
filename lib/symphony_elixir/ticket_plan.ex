@@ -24,6 +24,9 @@ defmodule SymphonyElixir.TicketPlan do
   alias SymphonyElixir.TicketEvents.{Event, Types}
 
   @machine_fields [:signal, :signal_details]
+  @ask_max 100_000
+  @max_checks 30
+  @max_sub_tickets 12
 
   @typedoc "A ticket: its issue id, or its events, oldest first."
   @type ticket :: String.t() | [Event.t()]
@@ -62,32 +65,122 @@ defmodule SymphonyElixir.TicketPlan do
   @doc """
   Records `plan` as the next version of the plan of `repo_key`'s ticket `issue_id`: a
   `plan.written` whose `version` is one more than the newest (1 for the first), whatever version
-  `plan` names. `opts` are `SymphonyElixir.TicketEvents.record/5`'s.
+  `plan` names. `opts` are `SymphonyElixir.TicketEvents.record/5`'s, and `new_ask` (below).
+
+  It names the checks: a check that comes with the id a check of an earlier version had keeps it,
+  and with it what was recorded for that check; any other (no id, or one no version used) gets a
+  new id that no version of the ticket ever used (`c1`, `c2`, and on from the highest ever used).
 
   Besides what the type's schema refuses (`{:invalid_payload, fields}`), a plan is refused, with
-  what is wrong in plain words (`{:invalid_plan, reasons}`), when two checks share an id, a `qa`
+  what is wrong in plain words (`{:invalid_plan, reasons}`), when it holds more than
+  `max_checks/0` checks or `max_sub_tickets/0` sub-tickets, two checks share an id, a `qa`
   check names no `action` or nothing to `expect`, two sub-tickets share a key, or a sub-ticket
   waits `after` itself or a key the plan does not hold. Nothing is written then.
+
+  Outcomes bind: a version that removes an `outcome` check of the version before it, or changes
+  its statement, is refused the same way, unless an `ask.recorded` was written after that version.
+  A new ask is what permits changing what the ticket must reach. The first version is free. A
+  caller that records the new ask right after the version it permits says so with `new_ask: true`.
   """
   @spec write(String.t() | nil, String.t(), map(), keyword()) :: {:ok, Event.t()} | {:error, term()}
   def write(repo_key, issue_id, plan, opts \\ []) when is_binary(issue_id) and is_map(plan) do
-    payload = plan |> Map.drop([:version, "version"]) |> Map.put(:version, length(events(issue_id, "plan.written")) + 1)
+    history = issue_id |> RunStore.list_ticket_events(types: ["plan.written", "ask.recorded"]) |> List.wrap() |> Enum.filter(&is_struct(&1, Event))
+    earlier = versions(history)
+    payload = plan |> Map.drop([:version, "version"]) |> Map.put(:version, length(earlier) + 1) |> identified(earlier)
 
-    with {:ok, valid} <- Types.validate("plan.written", payload, :machine, nil),
-         :ok <- coherent(valid),
+    {new_ask?, opts} = Keyword.pop(opts, :new_ask, false)
+    binding = if new_ask?, do: [], else: history
+
+    with :ok <- sized(payload),
+         {:ok, valid} <- Types.validate("plan.written", payload, :machine, nil),
+         :ok <- coherent(valid, changed_outcomes(valid, binding)),
          {:ok, event} <- TicketEvents.record(repo_key, issue_id, "plan.written", valid, opts) do
       TicketProjection.changed(repo_key, issue_id)
       {:ok, event}
     end
   end
 
-  defp coherent(plan) do
+  # A plan a person can read: no more checks or sub-tickets than the limits.
+  defp sized(plan) do
+    reasons =
+      for {key, max, what} <- [{:checks, @max_checks, "checks"}, {:sub_tickets, @max_sub_tickets, "sub-tickets"}],
+          entries = field(plan, key),
+          is_list(entries) and length(entries) > max,
+          do: "a plan holds at most #{max} #{what}, and this one holds #{length(entries)}"
+
+    if reasons == [], do: :ok, else: {:error, {:invalid_plan, reasons}}
+  end
+
+  # Each check under an id of its own: the one it kept from an earlier version, else a new one no
+  # version of the ticket ever used, so a new check never meets what was recorded for an old one.
+  defp identified(plan, earlier) do
+    key = if is_map_key(plan, "checks"), do: "checks", else: :checks
+
+    case Map.get(plan, key) do
+      checks when is_list(checks) -> Map.put(plan, key, identify(checks, used_ids(earlier)))
+      _not_a_list -> plan
+    end
+  end
+
+  defp identify(checks, used) do
+    newest = used |> Enum.flat_map(&number/1) |> Enum.max(fn -> 0 end)
+
+    {checks, _newest} =
+      Enum.map_reduce(checks, newest, fn check, newest ->
+        if is_map(check) and check_id(check) not in used, do: {put_id(check, "c#{newest + 1}"), newest + 1}, else: {check, newest}
+      end)
+
+    checks
+  end
+
+  defp used_ids(versions), do: for(%{checks: checks} <- versions, check <- checks, uniq: true, do: check_id(check))
+
+  defp number("c" <> digits) do
+    case Integer.parse(digits) do
+      {number, ""} -> [number]
+      _other -> []
+    end
+  end
+
+  defp number(_id), do: []
+
+  defp check_id(check), do: field(check, :id)
+  defp put_id(check, id), do: check |> Map.drop([:id, "id"]) |> Map.put(if(Enum.any?(Map.keys(check), &is_binary/1), do: "id", else: :id), id)
+
+  # Outcomes bind: a version that drops an outcome check of the one before it, or rewords it, is
+  # refused, unless the person asked for something since that version was written.
+  defp changed_outcomes(plan, history) do
+    {newer, older} = history |> Enum.reverse() |> Enum.split_while(&(&1.type != "plan.written"))
+
+    case older do
+      [%Event{payload: previous} | _rest] when newer == [] ->
+        for %{} = check <- field(previous, :checks), field(check, :kind) == "outcome", change = outcome_change(check, plan.checks), do: change
+
+      _first_version_or_new_ask ->
+        []
+    end
+  end
+
+  defp outcome_change(check, checks) do
+    id = field(check, :id)
+
+    case Enum.find(checks, &(&1.id == id)) do
+      %{kind: "outcome", statement: statement} ->
+        if String.trim(statement) == String.trim(to_string(field(check, :statement))), do: nil, else: "outcome check #{id} was reworded, and no new ask says so"
+
+      _dropped ->
+        "outcome check #{id} was removed, and no new ask says so"
+    end
+  end
+
+  defp coherent(plan, outcome_changes) do
     checks = plan.checks
     sub_tickets = Map.get(plan, :sub_tickets, [])
     keys = Enum.map(sub_tickets, & &1.key)
 
     reasons =
-      repeated("check id", Enum.map(checks, & &1.id)) ++
+      outcome_changes ++
+        repeated("check id", Enum.map(checks, & &1.id)) ++
         for(%{kind: "qa"} = check <- checks, field <- [:action, :expect], not Map.has_key?(check, field), do: "QA check #{check.id} has no #{field}") ++
         repeated("sub-ticket key", keys) ++
         for(%{key: key} = entry <- sub_tickets, after_key <- Map.get(entry, :after, []), after_key == key or after_key not in keys, do: "sub-ticket #{key} waits after #{after_key}")
@@ -96,6 +189,18 @@ defmodule SymphonyElixir.TicketPlan do
   end
 
   defp repeated(what, values), do: for(value <- Enum.uniq(values -- Enum.uniq(values)), do: "#{what} #{value} is used twice")
+
+  @doc "The most characters one ask holds (`ask.recorded`'s `text`). A longer one is never cut: it is not recorded."
+  @spec ask_max() :: pos_integer()
+  def ask_max, do: @ask_max
+
+  @doc "The most checks one plan version holds."
+  @spec max_checks() :: pos_integer()
+  def max_checks, do: @max_checks
+
+  @doc "The most sub-tickets one plan version holds."
+  @spec max_sub_tickets() :: pos_integer()
+  def max_sub_tickets, do: @max_sub_tickets
 
   @doc "Every ask of the ticket, oldest first (`t:ask/0`)."
   @spec ask(ticket()) :: [ask()]

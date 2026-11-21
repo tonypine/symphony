@@ -3,7 +3,9 @@ defmodule SymphonyElixir.SelfHeal.Fixer do
   Files and updates the fix tickets the self-heal lane opens, through the machine-side Linear
   adapter (`SymphonyElixir.Linear.Adapter`).
 
-  A fix ticket is created in **Todo** — not Backlog: it is work the machine is already waiting on —
+  A fix ticket is created in **Todo** — not Backlog: it is work the machine is already waiting on
+  (only a ticket the Conductor files to do after its parent names another `state`: `Backlog`, until
+  its blocker is linked) —
   at the affected ticket's priority when that is more urgent than High (an Urgent ticket's fix is
   Urgent, so `tickets.priorities` dispatches it like the ticket it unblocks), else at High, in the
   affected ticket's Linear team (else the team of the repo the scope rule names,
@@ -39,7 +41,7 @@ defmodule SymphonyElixir.SelfHeal.Fixer do
 
   @doc """
   Files the fix ticket `attrs` (a `scope`, a `component`, a `title` and a `description`), under
-  the ticket `parent_id` names when it has one.
+  the ticket `parent_id` names when it has one, in the `state` it names when it names one.
   """
   @spec create(map(), keyword()) :: {:ok, map()} | {:error, term()}
   def create(%{scope: scope} = attrs, opts) do
@@ -52,7 +54,7 @@ defmodule SymphonyElixir.SelfHeal.Fixer do
         team: team,
         project: project,
         assignee_id: assignee_id(scope, repo, Map.get(attrs, :issue), opts),
-        state: @todo_state,
+        state: Map.get(attrs, :state) || @todo_state,
         parent_id: Map.get(attrs, :parent_id)
       }
       |> Linear.Adapter.create_issue()

@@ -350,6 +350,8 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
 
   describe "schema/1" do
     test "describes each field a tool's caller may send, leaving out the machinery's signal" do
+      assert %{type: "list", max_items: 30} = Enum.find(Types.schema("plan.written").required, &(&1.name == "checks"))
+      assert %{type: "list", max_items: 12} = Enum.find(Types.schema("plan.written").optional, &(&1.name == "sub_tickets"))
       modes = ~w(machine orchestrated delegated)
 
       assert %{required: [%{name: "step_id", max: 200}, %{name: "title", max: 200}, %{name: "mode", type: "enum", values: ^modes}]} = Types.schema("step.started")
@@ -424,7 +426,7 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
     test "an ask is the machine's or a person's, word for word, from Linear, a message or the parent" do
       assert {:ok, %{text: "Show the plan.", source: "linear"}} = Types.validate("ask.recorded", %{text: "Show the plan.", source: :linear}, :machine, nil)
       assert {:ok, %{source: "message", from: "evt-1"}} = Types.validate("ask.recorded", %{text: "Keep it.", source: "message", from: "evt-1"}, :person, nil)
-      longest = %{text: String.duplicate("a", 20_000), source: "parent", from: "TP-1"}
+      longest = %{text: String.duplicate("a", 100_000), source: "parent", from: "TP-1"}
       assert {:ok, _ask} = Types.validate("ask.recorded", longest, :machine, nil)
       assert {:error, {:invalid_payload, [:text]}} = Types.validate("ask.recorded", %{longest | text: longest.text <> "a"}, :machine, nil)
       assert {:error, {:invalid_payload, [:source]}} = Types.validate("ask.recorded", %{text: "x", source: "comment"}, :machine, nil)

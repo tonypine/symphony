@@ -28,7 +28,8 @@ defmodule SymphonyElixir.TicketChecksTest do
   end
 
   defp at(minutes), do: DateTime.add(@base, minutes * 60)
-  defp plan!(plan \\ @plan), do: TicketPlan.write(@repo_key, @issue_id, plan) |> elem(1)
+  # Written before every proof these tests date (`at/1`).
+  defp plan!(plan \\ @plan, opts \\ [at: at(0)]), do: TicketPlan.write(@repo_key, @issue_id, plan, opts) |> elem(1)
   defp states, do: Map.new(TicketChecks.list(@issue_id), &{&1.id, &1.state})
 
   test "a ticket that is not groomed has no checks, and none can be proved or waived" do
@@ -85,6 +86,16 @@ defmodule SymphonyElixir.TicketChecksTest do
     assert TicketChecks.list(RunStore.list_ticket_events(@issue_id, [])) == TicketChecks.list(@issue_id)
   end
 
+  test "an outcome binds: only the person's decision waives one" do
+    plan!()
+    assert TicketChecks.waive(@repo_key, @issue_id, "c1", "No test can reach it.") == {:error, :outcome_binds}
+    assert TicketChecks.waive(@repo_key, @issue_id, "c1", "No test can reach it.", by: :machine) == {:error, :outcome_binds}
+    assert states()["c1"] == :open
+
+    assert {:ok, _waived} = TicketChecks.waive(@repo_key, @issue_id, "c1", "The person waived it.", by: :person)
+    assert states()["c1"] == :waived
+  end
+
   test "an id the plan does not hold is refused and nothing is written" do
     plan!()
     before = RunStore.list_ticket_events(@issue_id, [])
@@ -119,18 +130,17 @@ defmodule SymphonyElixir.TicketChecksTest do
     assert id == headless_again.id
   end
 
-  test "a check keeps its state through a new plan version that keeps its id, and a check the newest plan dropped is not listed" do
+  test "a check keeps its state through a new plan version that keeps it as it reads, and a check the newest plan dropped is not listed" do
     plan!()
-    {:ok, _proved} = TicketChecks.prove(@repo_key, @issue_id, %{check_id: "c1", by: "test"}, head_sha: "abc1234")
-    {:ok, _proved} = TicketChecks.prove(@repo_key, @issue_id, %{check_id: "c2", by: "qa"}, head_sha: "abc1234")
+    {:ok, _proved} = TicketChecks.prove(@repo_key, @issue_id, %{check_id: "c1", by: "test"}, head_sha: "abc1234", at: at(1))
+    {:ok, _proved} = TicketChecks.prove(@repo_key, @issue_id, %{check_id: "c2", by: "qa"}, head_sha: "abc1234", at: at(1))
     {:ok, _waived} = TicketChecks.waive(@repo_key, @issue_id, "c3", "Nothing can be attached.")
 
-    added = %{id: "c4", kind: "outcome", statement: "The checks show their state.", proof: "test"}
-    reworded = %{@outcome | statement: "The page shows the plan and its summary."}
-    plan!(%{@plan | reason: "The ask changed.", by: "recalibration", checks: [reworded, @attached, added]})
+    added = %{kind: "outcome", statement: "The checks show their state.", proof: "test"}
+    plan!(%{@plan | reason: "The ask changed.", by: "recalibration", checks: [@outcome, @attached, added]}, [])
 
     assert [
-             %{id: "c1", statement: "The page shows the plan and its summary.", state: :proved},
+             %{id: "c1", statement: "The page shows the plan.", state: :proved},
              %{id: "c3", state: :waived},
              %{id: "c4", state: :open, proved_by: nil}
            ] = TicketChecks.list(@issue_id)
@@ -141,6 +151,30 @@ defmodule SymphonyElixir.TicketChecksTest do
     # A proof wins over a waiver, whichever came first.
     {:ok, _proved} = TicketChecks.prove(@repo_key, @issue_id, %{check_id: "c3", by: "attached"})
     assert %{state: :proved, waived: %{reason: "Nothing can be attached."}} = Enum.find(TicketChecks.list(@issue_id), &(&1.id == "c3"))
+  end
+
+  test "a new check never inherits the proof of a check that had its place, and a reworded check starts unproved" do
+    plan!()
+    {:ok, old} = TicketChecks.prove(@repo_key, @issue_id, %{check_id: "c1", by: "test"}, head_sha: "abc1234", at: at(1))
+    {:ok, _proved} = TicketChecks.prove(@repo_key, @issue_id, %{check_id: "c2", by: "qa"}, head_sha: "abc1234", at: at(1))
+    {:ok, _waived} = TicketChecks.waive(@repo_key, @issue_id, "c3", "Nothing can be attached.")
+
+    # c1 is reworded, which a new ask permits, c2 is dropped for a new check that comes with no id, and c3 stands.
+    {:ok, _ask} = TicketPlan.record_ask(@repo_key, @issue_id, "And its summary.", source: "message")
+    reworded = %{@outcome | statement: "The page shows the plan and its summary."}
+    new = %{kind: "evidence", statement: "The page shows the size.", proof: "test"}
+    plan!(%{@plan | reason: "The ask changed.", by: "recalibration", checks: [reworded, new, @attached]}, [])
+    assert states() == %{"c1" => :open, "c4" => :open, "c3" => :waived}
+
+    # The reworded check is proved again, on the head its old wording was proved on too.
+    {:ok, again} = TicketChecks.prove(@repo_key, @issue_id, %{check_id: "c1", by: "test"}, head_sha: "abc1234")
+    assert again.id != old.id
+    assert again.idempotency == "check.proved:c1:v2:abc1234"
+    assert states()["c1"] == :proved
+
+    # A check a version dropped and a later one put back starts unproved too.
+    plan!(%{@plan | reason: "Back.", by: "recalibration", checks: [reworded, @walk]}, [])
+    assert states() == %{"c1" => :proved, "c2" => :open}
   end
 
   test "a stored proof whose payload kept string keys still reads" do
