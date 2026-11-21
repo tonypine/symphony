@@ -366,6 +366,33 @@ defmodule SymphonyElixir.Conductor.MessageTest do
     end
   end
 
+  test "a message that changes what is asked may change an outcome, and no other answer may", ctx do
+    changed = answered_plan(%{"checks" => [%{"id" => "c1", "kind" => "outcome", "statement" => "The filter survives a restart of the app.", "proof" => "test"}]})
+    say!(ctx.issue_id, "It must survive a restart of the app, not only a reload.")
+
+    assert Message.tend(ctx.issue_id, opts(%{"message" => reply(%{"ask" => true, "plan" => changed})})) == :done
+    assert %{version: 2, checks: [%{statement: "The filter survives a restart of the app."}]} = TicketPlan.current(ctx.issue_id)
+    assert length(TicketPlan.ask(ctx.issue_id)) == 2
+  end
+
+  test "a turn before the merge may waive a check that is not an outcome", ctx do
+    checks = [
+      %{id: "c1", kind: "outcome", statement: "The filter survives a reload.", proof: "test"},
+      %{id: "c2", kind: "evidence", statement: "A screenshot of the list.", proof: "attached"}
+    ]
+
+    {:ok, _event} = TicketPlan.write("default", ctx.issue_id, plan(%{checks: checks, reason: "More checks", by: "recalibration"}))
+    waive = %{"instructions" => "Merge.", "waive" => [%{"check_id" => "c2", "reason" => "No screen changed."}, %{"check_id" => "c1", "reason" => "Hard."}]}
+    turn = fn _plan, _issue, _run_id, _prompt -> {:ok, [Jason.encode!(waive)], 1} end
+    run_profile = %{model: "m", effort: nil, provider: "p"}
+    plan = %{junction: "before_merge", issue_id: ctx.issue_id, repo_key: "default", timeout_ms: 5_000, run_profile: run_profile}
+
+    log = capture_log(fn -> assert Conductor.run(plan, issue(ctx.record), turn: turn) == :ok end)
+
+    assert log =~ "Conductor's waiver of c1 was dropped"
+    assert [%{id: "c1", state: :open}, %{id: "c2", state: :waived}] = TicketChecks.list(ctx.issue_id)
+  end
+
   describe "one turn at a time" do
     defp facts_of(prompt), do: prompt |> String.split("carries that event's id):\n\n") |> List.last() |> Jason.decode!()
 

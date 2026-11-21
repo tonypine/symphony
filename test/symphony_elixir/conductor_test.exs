@@ -674,8 +674,8 @@ defmodule SymphonyElixir.ConductorTest do
       assert prompt =~ "waive it"
 
       # A junction that may not waive reads none.
-      before_merge = plan(ctx, %{junction: "before_merge"})
-      assert Conductor.run(before_merge, ctx.issue, turn: turn([answer(%{"waive" => [%{"check_id" => "c2", "reason" => "x"}]})] |> then(&{:ok, &1, 10}))) == :ok
+      no_waiver = plan(ctx, %{junction: "after_qa_fail"})
+      assert Conductor.run(no_waiver, ctx.issue, turn: turn([answer(%{"waive" => [%{"check_id" => "c2", "reason" => "x"}]})] |> then(&{:ok, &1, 10}))) == :ok
       assert [_waived, %{id: "c2", state: :open}] = SymphonyElixir.TicketChecks.list(ctx.issue_id)
     end
 

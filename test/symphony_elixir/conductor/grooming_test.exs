@@ -511,4 +511,25 @@ defmodule SymphonyElixir.Conductor.GroomingTest do
     :ok = RunStore.put_ticket_state(record)
     %{issue_id: record.issue_id, record: record, issue: %{ctx.issue | id: record.issue_id, identifier: record.issue_identifier}}
   end
+
+  describe "what the turn needs before it runs" do
+    test "a read of the ticket's events that failed plans no turn", ctx do
+      failed = fn _issue_id -> {:error, :store_down} end
+      assert Conductor.plan(ctx.issue, :implementation, "default", settings: @on, read: failed) == nil
+      assert %{junction: "grooming"} = Conductor.plan(ctx.issue, :implementation, "default", settings: @on, read: &Facts.read_events/1)
+    end
+
+    test "an ask too long to record starts the run without a plan, and one the store refuses is a failed try", ctx do
+      long = %{ctx.issue | description: String.duplicate("x", TicketPlan.ask_max() + 1)}
+      assert Conductor.run(plan(ctx), long, turn: no_turn()) == :ok
+      assert TicketPlan.ask(ctx.issue_id) == []
+      refute TicketPlan.groomed?(ctx.issue_id)
+
+      other = %{ctx.issue | id: "groom-unasked-#{System.unique_integer([:positive])}"}
+      unrecorded = %{plan(ctx) | issue_id: other.id, repo_key: nil}
+      log = capture_log(fn -> assert Conductor.run(unrecorded, other, turn: no_turn(), record: %{}) in [:ok, :again] end)
+      assert log =~ "Grooming wrote no plan"
+      assert log =~ "what was asked could not be recorded"
+    end
+  end
 end

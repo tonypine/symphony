@@ -3581,7 +3581,7 @@ conductor:
   the Conductor replies to it, and no run is given the message; `child_message` then shows a
   sub-ticket's message to its parent's Conductor (`docs/control-api.md`, **Messages**). With
   `message` off, a groomed ticket's messages are read by its next run, as before plans. At
-  `message`, `after_coding`, `after_rework`, `sub_ticket_ended`, `final_check` and on a watch turn
+  `message`, `after_coding`, `after_rework`, `before_merge`, `sub_ticket_ended`, `final_check` and on a watch turn
   the answer may waive a check of the plan nobody can prove (`check.waived`, with its reason). A `symphony.yml` that lists its junctions gets `after_qa_blocked`, `grooming` and the other
   new ones only when it adds them: a file that names no `junctions` runs every one.
 - `timeout_ms` (default `180000`): how long one turn may take. A turn that runs over, fails, answers

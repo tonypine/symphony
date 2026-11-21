@@ -348,7 +348,8 @@ defmodule SymphonyElixir.Conductor.Message do
     reason = Map.get(answered, :reason) || reason(plan)
     next = answered |> Map.delete(:sub_tickets) |> Map.merge(kept) |> Map.merge(%{by: "recalibration", reason: reason})
 
-    with {:ok, _event} <- TicketPlan.write(repo_key, issue_id, next, run_id: run_id, idempotency: "plan.written:#{run_id}"),
+    # A message that changes what is asked may change the outcomes: its ask is recorded right after.
+    with {:ok, _event} <- TicketPlan.write(repo_key, issue_id, next, run_id: run_id, idempotency: "plan.written:#{run_id}", new_ask: answer.ask == true),
          :ok <- record_asks(answer.ask, repo_key, issue_id, answered(plan) ++ [message], run_id) do
       :ok
     else

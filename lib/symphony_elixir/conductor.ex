@@ -85,10 +85,10 @@ defmodule SymphonyElixir.Conductor do
   `conductor.update` whose `parent` is the message. The same turn writes a ticket's plan again when
   its parent gave it a new ask.
 
-  At `message`, `after_coding`, `after_rework`, `sub_ticket_ended`, `final_check` and on a watch
-  turn the answer may waive checks of the plan nobody can prove (`waive`), which Symphony records
-  as `check.waived` (`SymphonyElixir.TicketChecks.waive/4`); one that names no check of the plan is
-  dropped and logged.
+  At `message`, `after_coding`, `after_rework`, `before_merge`, `sub_ticket_ended`, `final_check`
+  and on a watch turn the answer may waive checks of the plan nobody can prove (`waive`), which
+  Symphony records as `check.waived` (`SymphonyElixir.TicketChecks.waive/4`); one that names no
+  check of the plan, or names an outcome, which only the person waives, is dropped and logged.
   """
 
   require Logger
@@ -144,7 +144,7 @@ defmodule SymphonyElixir.Conductor do
   @child_message "child_message"
   @message_junctions [@message, @child_message]
   # The junctions whose answer may waive a check of the plan.
-  @waive_junctions ["message", "after_coding", "after_rework", "sub_ticket_ended", "final_check", "during_run"]
+  @waive_junctions ["message", "after_coding", "after_rework", "before_merge", "sub_ticket_ended", "final_check", "during_run"]
   @junction_words %{
     "grooming" => "the ticket is new; you write its plan before any work starts",
     "message" => "a person sent a message on the ticket; you answer it",
@@ -295,7 +295,9 @@ defmodule SymphonyElixir.Conductor do
   when no enabled junction is due (`dispatch_junction/2`), or when no run profile of `runs.conductor`
   can take a run now (but at `grooming`, whose turn is then planned as a try that failed). `opts`: `available?` (`(Run.t() -> boolean())`, whether a profile's provider
   can take a run now, default every one), `settings` (the `conductor` section, default
-  `Config.conductor_settings/0`) and `events` (the ticket's events, default its record's).
+  `Config.conductor_settings/0`) and `events` (the ticket's events, default its record's, read
+  with `read`, `Facts.read_events/1`: a read that failed plans no turn, so it never looks like a
+  ticket with no events, which Grooming would take for a new one).
   """
   @spec plan(Issue.t(), atom() | String.t(), String.t() | nil, keyword()) :: plan() | nil
   def plan(%Issue{id: issue_id}, next_kind, repo_key, opts \\ []) do
@@ -389,8 +391,9 @@ defmodule SymphonyElixir.Conductor do
   defp plan_with(issue_id, repo_key, opts, junction_of) do
     settings = Keyword.get_lazy(opts, :settings, &Config.conductor_settings/0)
 
+    # A read of the ticket's events that failed plans nothing: it must never look like a new ticket.
     with true <- enabled?(settings) and is_binary(issue_id) and is_binary(repo_key),
-         events = Keyword.get_lazy(opts, :events, fn -> Facts.events(issue_id) end),
+         {:ok, events} <- read_events(issue_id, opts),
          junction when is_binary(junction) <- junction_of.(events),
          true <- junction in settings.junctions do
       %{junction: junction, issue_id: issue_id, repo_key: repo_key, timeout_ms: timeout_ms(settings, junction)}
@@ -403,6 +406,11 @@ defmodule SymphonyElixir.Conductor do
     error ->
       Logger.warning("Conductor could not plan a turn issue_id=#{issue_id} repo_key=#{repo_key}: #{Exception.message(error)}")
       nil
+  end
+
+  # The ticket's events: the ones given, else a read of its record (`opts[:read]`, `Facts.read_events/1`).
+  defp read_events(issue_id, opts) do
+    with :error <- Keyword.fetch(opts, :events), do: Keyword.get(opts, :read, &Facts.read_events/1).(issue_id)
   end
 
   defp timeout_ms(settings, @grooming), do: settings.grooming_timeout_ms
@@ -633,8 +641,17 @@ defmodule SymphonyElixir.Conductor do
   end
 
   defp groom_turn(%{issue_id: issue_id, repo_key: repo_key} = plan, issue, opts) do
-    Grooming.record_ask(repo_key, issue, record(issue_id, opts), Facts.events(issue_id))
+    # The turn runs only once the ask is on the ticket's record: its plan would otherwise stand in
+    # Linear in place of words Symphony does not hold.
+    case Grooming.record_ask(repo_key, issue, record(issue_id, opts), Facts.events(issue_id)) do
+      :ok -> groom_asked(plan, issue, opts)
+      # The note is written and Grooming is never due again: the run starts without a plan.
+      {:error, :ask_too_long} -> :ok
+      {:error, _reason} -> ungroomed(plan, issue, "what was asked could not be recorded")
+    end
+  end
 
+  defp groom_asked(%{issue_id: issue_id} = plan, issue, opts) do
     case turn(in_workspace(plan, issue, opts), issue, opts) do
       {_exit, :held, _route} -> :held
       {exit, :ok, _route} -> after_grooming(TicketPlan.groomed?(issue_id), exit, plan, issue, opts)

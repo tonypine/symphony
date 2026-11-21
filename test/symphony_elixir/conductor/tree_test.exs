@@ -358,6 +358,8 @@ defmodule SymphonyElixir.Conductor.TreeTest do
       assert ["Sub-ticket MT-1 ended: Done.", "Sub-ticket MT-2 ended: Canceled."] = status_notes(ctx.issue_id)
       assert Tree.due(backlog, @terminal, conductor: @on) == nil
       assert Tree.due(%{parent | sub_issues: :unknown}, @terminal, conductor: @on) == nil
+      # A read of the ticket's events that failed owes nothing: every ended sub-ticket would look unseen.
+      assert Tree.due(backlog, @terminal, conductor: @on, read: fn _id -> {:error, :store_down} end) == nil
       assert Tree.due(nil, @terminal) == nil
       assert Tree.due(parent, @terminal, conductor: @on) == :final_check
       # With the Conductor or its junction off, the ticket closes on its sub-tickets alone.

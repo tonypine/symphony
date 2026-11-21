@@ -614,20 +614,24 @@ defmodule SymphonyElixir.Conductor.Tree do
   linked and started, `start_left/3`), or nil while it waits: a sub-ticket is open, its sub-tickets
   were not read (`:unknown`), or it has a pull request that did not merge, which is a person's to
   settle. `opts`: `conductor` (the `conductor`
-  settings, default `Config.conductor_settings/0`) and `events` (the ticket's, default its record's).
+  settings, default `Config.conductor_settings/0`) and `events` (the ticket's, default its record's,
+  read with `read`, `Facts.read_events/1`; while that read fails nothing is owed).
   """
   @spec due(Issue.t() | term(), Enumerable.t(String.t()), keyword()) :: owed()
   def due(%Issue{id: issue_id, sub_issues: sub_issues} = issue, terminal_states, opts)
       when is_binary(issue_id) and is_list(sub_issues) do
     settings = Keyword.get_lazy(opts, :conductor, &Config.conductor_settings/0)
-    events = Keyword.get_lazy(opts, :events, fn -> Facts.events(issue_id) end)
 
     if Issue.open_sub_issues(issue, terminal_states) == [],
       do: due_ended(issue, settings),
-      else: due_open(issue, terminal_states, settings, events)
+      else: due_open(issue, terminal_states, settings, read_events(issue_id, opts))
   end
 
   def due(_issue, _terminal_states, _opts), do: nil
+
+  defp read_events(issue_id, opts) do
+    with :error <- Keyword.fetch(opts, :events), do: Keyword.get(opts, :read, &Facts.read_events/1).(issue_id)
+  end
 
   @doc "`due/3` with the `conductor` settings and the ticket's events as they are now."
   @spec due(Issue.t() | term(), Enumerable.t(String.t())) :: owed()
@@ -644,7 +648,10 @@ defmodule SymphonyElixir.Conductor.Tree do
     end
   end
 
-  defp due_open(issue, terminal_states, settings, events) do
+  # A read of the events that failed owes nothing: every ended sub-ticket would look unseen.
+  defp due_open(_issue, _terminal_states, _settings, {:error, _reason}), do: nil
+
+  defp due_open(issue, terminal_states, settings, {:ok, events}) do
     cond do
       turn?(settings, "sub_ticket_ended") and unseen(issue, terminal_states, events) != [] -> :sub_ticket_ended
       left(issue, events) != [] -> :start
