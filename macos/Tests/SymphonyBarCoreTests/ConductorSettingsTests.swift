@@ -279,7 +279,7 @@ final class ConductorSettingsTests: XCTestCase {
         let file = SymphonyConfigFile(path: url.path)
 
         let before = try file.readConductorSettings()
-        XCTAssertEqual(before.junctions, Set(ConductorJunction.allCases))
+        XCTAssertEqual(before.junctions, [.afterCoding, .afterQAFail, .afterQABlocked, .afterRework, .beforeMerge])
         let after = before.setting(.afterRework, on: false)
         let passed = try await file.writeConductorSettings(after, from: before) { _ in .passed }
         XCTAssertEqual(passed, .passed)
@@ -307,7 +307,7 @@ final class ConductorSettingsTests: XCTestCase {
         let defaults = try ConductorSettings.values(in: empty)
         XCTAssertEqual(
             try ConductorSettings.updating(empty, from: defaults, to: defaults.setting(.beforeMerge, on: false)),
-            "conductor:\n  junctions: [after_coding, after_qa_fail, after_qa_blocked, after_rework]\ntracker: linear\n"
+            "conductor:\n  junctions: [grooming, after_coding, after_qa_fail, after_qa_blocked, after_rework, message, sub_ticket_ended, final_check, child_message]\ntracker: linear\n"
         )
     }
 
