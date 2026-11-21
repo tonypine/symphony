@@ -2271,7 +2271,7 @@ public enum DesignTokens {
             // A number too long for an Int still says which end it is past.
             let sign = digits.first == "-" ? -1 : 1
             let rest = sign < 0 ? digits.dropFirst() : Substring(digits)
-            guard !rest.isEmpty, rest.allSatisfy { $0.isASCII && $0.isNumber } else { return nil }
+            guard !rest.isEmpty, rest.allSatisfy({ $0.isASCII && $0.isNumber }) else { return nil }
             return sign < 0 ? range.lowerBound : range.upperBound
         }
 
