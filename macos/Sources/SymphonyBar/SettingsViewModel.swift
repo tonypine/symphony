@@ -754,11 +754,11 @@ final class SettingsViewModel: ObservableObject {
             case .runKind(let kind):
                 phaseKind = kind
                 phaseQAPlaybook = nil
-                phasesError = "The \(kind.title) step list has a step that can't be saved, so nothing was saved; see Phases."
+                phasesError = "The \(kind.title) step list has a step that can't be saved, so nothing was saved; see \(SettingsBlock.phases.pointer)."
             case .qaPlaybook(let playbook):
                 phaseKind = .qa
                 phaseQAPlaybook = playbook
-                phasesError = "The \(playbook.title) QA playbook's step list has a step that can't be saved, so nothing was saved; see Phases."
+                phasesError = "The \(playbook.title) QA playbook's step list has a step that can't be saved, so nothing was saved; see \(SettingsBlock.phases.pointer)."
             }
             return
         }

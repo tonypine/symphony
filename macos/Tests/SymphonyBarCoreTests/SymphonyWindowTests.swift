@@ -204,13 +204,14 @@ final class SymphonyWindowTests: XCTestCase {
         XCTAssertEqual(memory.page(for: .journal), .journal)
         memory.remember(.tickets)
         memory.remember(.audit)
-        // Repos and Settings open their own windows: Factory stays on the page it showed.
+        // Repos opens its own window: Factory stays on the page it showed. Settings is a page (TP-1575).
         memory.remember(.diagnostics)
         memory.remember(.repos)
-        memory.remember(.settings)
         XCTAssertEqual(memory.page(for: .work), .tickets)
         XCTAssertEqual(memory.page(for: .insights), .audit)
         XCTAssertEqual(memory.page(for: .factory), .diagnostics)
+        memory.remember(.settings)
+        XCTAssertEqual(memory.page(for: .factory), .settings)
         XCTAssertEqual(DestinationMemory().page(for: .work), .initiatives)
     }
 
@@ -254,7 +255,7 @@ final class SymphonyWindowTests: XCTestCase {
         XCTAssertEqual(sidebar.restoredView(saved: "journal"), .journal)
         XCTAssertEqual(sidebar.restoredView(saved: "audit"), .audit)
         XCTAssertEqual(sidebar.restoredView(saved: "repos"), .overview)
-        XCTAssertEqual(sidebar.restoredView(saved: "settings"), .overview)
+        XCTAssertEqual(sidebar.restoredView(saved: "settings"), .settings)
         XCTAssertEqual(sidebar.restoredView(saved: "nonsense"), .overview)
     }
 
@@ -271,7 +272,9 @@ final class SymphonyWindowTests: XCTestCase {
             XCTAssertFalse(destination.firstPage.opensOwnWindow)
         }
         XCTAssertTrue(SymphonyView.repos.opensOwnWindow)
-        XCTAssertTrue(SymphonyView.settings.opensOwnWindow)
+        // Settings is a page of the window (TP-1575); Repos keeps its own.
+        XCTAssertFalse(SymphonyView.settings.opensOwnWindow)
+        XCTAssertEqual(SidebarRows().item(for: .settings), .page(.settings))
         XCTAssertFalse(SymphonyView.diagnostics.opensOwnWindow)
         // A tabbed destination's name is where the window bar's breadcrumb says the window is, as its tabs name the page.
         XCTAssertEqual(SymphonyView.tickets.toolbarTitle, "Work")

@@ -186,7 +186,7 @@ Symphony, so you need no checkout, `mise` or Elixir.
    request that adds it (or writes it into a local checkout). For a more tailored file, invoke the
    `symphony-init-workflow` skill from Claude or Codex in the target repo; the agent inspects the repo and
    writes one.
-4. **Start Symphony.** In the app's Settings window, choose your `symphony.yml` and paste a Linear
+4. **Start Symphony.** On the app's Settings page (⌘,), choose your `symphony.yml` and paste a Linear
    personal API key (Settings → Security & access → Personal API keys); the app keeps it in a file
    only you can read. Click Save, then choose **Start Symphony** from the menu.
 
