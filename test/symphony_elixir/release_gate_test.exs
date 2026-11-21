@@ -457,6 +457,10 @@ defmodule SymphonyElixir.ReleaseGateTest do
       assert ReleaseGate.red_bases(nil, opts) == [%{base: "main", check: "release gate", issue_identifiers: []}]
       assert ReleaseGate.red_bases(skipped, repos: {:error, :no_config}) == []
 
+      # A failure reported with no attempt keeps none.
+      capture_log(fn -> assert {:filed, "TP-1520"} = ReleaseGate.failed(build(%{attempt: nil}), opts) end)
+      assert %{attempt: nil, red: true} = RunStore.get_github_updates({:release_gate_fix, "symphony"})
+
       Process.put({:release_gate_issue, "TP-1520"}, "In Progress")
       capture_log(fn -> assert ReleaseGate.passed(build(%{attempt: 2}), opts) == :green end)
       assert ReleaseGate.red_bases(skipped, opts) == []

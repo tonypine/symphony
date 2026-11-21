@@ -555,6 +555,7 @@ defmodule SymphonyElixir.ReleaseBuildTest do
       :ok = RunStore.put_github_updates({:release_build, @sha}, record)
       assert ReleaseBuild.line(@sha, nil) == "Waiting for the v#{version()} build: queued on GitHub for a while"
       assert ReleaseBuild.line(nil, nil) == nil
+      assert ReleaseBuild.line(String.duplicate("c", 40), nil) == nil
     end
   end
 

@@ -260,7 +260,7 @@ defmodule SymphonyElixir.ReleaseGate do
   gate is green. Reads only the run store. `opts`: `:run_store`, `:repos`.
   """
   @spec red_bases([map()], keyword()) :: [map()]
-  def red_bases(skipped, opts \\ []) do
+  def red_bases(skipped, opts) do
     case Keyword.get_lazy(opts, :repos, &Config.repos/0) do
       {:ok, repos} ->
         for %{name: repo_key} when is_binary(repo_key) <- repos, match?(%{red: true}, fix(repo_key, opts)) do
