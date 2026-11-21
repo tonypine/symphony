@@ -145,6 +145,14 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
     Enum.find_value(1..300, fn _attempt -> if File.exists?(path) and File.read!(path) != "", do: true, else: Process.sleep(10) && nil end)
   end
 
+  # Kills the `gh` the relay runs now. The pid file can still name a `gh` an earlier action
+  # replaced, so the relay's own state says which process to kill.
+  defp kill_relay(relay) do
+    %{os_pid: os_pid} = :sys.get_state(relay)
+    assert is_integer(os_pid)
+    System.cmd("kill", ["-9", Integer.to_string(os_pid)])
+  end
+
   defp relay_args(dir) do
     assert wait_for(Path.join(dir, "args"))
     dir |> Path.join("args") |> File.read!() |> String.split("\n", trim: true)
@@ -301,19 +309,17 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
     assert WebhookSetup.section(opts).mode == "on"
 
     # Killed once: it restarts after 1 s and runs again.
-    pid = dir |> Path.join("pid") |> File.read!() |> String.trim()
-    File.rm!(Path.join(dir, "pid"))
-    System.cmd("kill", ["-9", pid])
-    assert_receive {:relay_timer, 1_000, :start}, 2_000
     [relay] = Registry.lookup(Module.concat(ctx.relays, Registry), "app") |> Enum.map(&elem(&1, 0))
+    File.rm!(Path.join(dir, "pid"))
+    kill_relay(relay)
+    assert_receive {:relay_timer, 1_000, :start}, 2_000
     send(relay, :start)
     assert wait_for(Path.join(dir, "pid"))
     assert %{relay: %{state: "running"}} = repo(WebhookSetup.section(opts), "app")
 
     # Dropped again and failing to come back: degraded, and the step says why.
     File.write!(Path.join(dir, "fail"), "")
-    pid = dir |> Path.join("pid") |> File.read!() |> String.trim()
-    System.cmd("kill", ["-9", pid])
+    kill_relay(relay)
     assert_receive {:relay_timer, 2_000, :start}, 2_000
     send(relay, :start)
     assert_receive {:relay_timer, 4_000, :start}, 2_000
@@ -370,10 +376,8 @@ defmodule SymphonyElixir.GitHub.WebhookSetupTest do
     [relay] = Registry.lookup(Module.concat(ctx.relays, Registry), "app") |> Enum.map(&elem(&1, 0))
 
     for _kill <- 1..3 do
-      assert wait_for(Path.join(dir, "pid"))
-      pid = dir |> Path.join("pid") |> File.read!() |> String.trim()
-      File.rm!(Path.join(dir, "pid"))
-      System.cmd("kill", ["-9", pid])
+      File.rm(Path.join(dir, "pid"))
+      kill_relay(relay)
       assert_receive {:relay_timer, _ms, :start}, 2_000
       send(relay, :start)
     end
