@@ -336,8 +336,7 @@ defmodule SymphonyElixir.TicketJourney do
 
   @doc """
   The checks of a groomed ticket its merge waits on: every open one of its current plan, whatever
-  proves it, but for one marked as seen only after the ticket's own merge
-  (`SymphonyElixir.TicketChecks.after_merge?/1`). While there is one, the ticket does not enter
+  proves it. While there is one, the ticket does not enter
   `Merging`, its pull request is not merged and it does not reach `Done`
   (`SymphonyElixir.TransitionGuard`, `SymphonyElixir.PrDecision`). None for a ticket that is not groomed.
   """
@@ -345,7 +344,7 @@ defmodule SymphonyElixir.TicketJourney do
   def owed_before_merge(ticket) do
     case id(ticket) do
       nil -> []
-      id -> TicketChecks.open(id, after_merge: false)
+      id -> TicketChecks.open(id)
     end
   end
 

@@ -548,8 +548,7 @@ defmodule SymphonyElixir.TransitionGuardTest do
       summary: "The merge waits on the plan.",
       text: "Guard the merge.",
       checks: [
-        %{id: "c1", kind: "outcome", statement: "The merge waits on open checks.", proof: "test"},
-        %{id: "c2", kind: "outcome", statement: "Main is green after the merge.", proof: "test", after_merge: true}
+        %{id: "c1", kind: "outcome", statement: "The merge waits on open checks.", proof: "test"}
       ],
       size: %{tokens: 1_000, runs: 1}
     }
@@ -583,7 +582,7 @@ defmodule SymphonyElixir.TransitionGuardTest do
       assert log =~ "Refused a move whose plan has open checks issue_id=guarded-1 issue_identifier=TP-1 signal=qa_pass to=Merging checks=c1"
       assert %{phase: nil} = RunStore.get_ticket_state("guarded-1")
 
-      # Proved, it moves: the check seen only after the merge holds nothing.
+      # Proved, it moves.
       {:ok, _proof} = TicketChecks.prove("repo-guard", "guarded-1", %{check_id: "c1", by: "test", test: "guard_test.exs"})
       assert :ok = TransitionGuard.perform("guarded-1", :qa_pass, ctx, tracker: FakeTracker, on_merging: fn -> :ok end)
       assert_received {:moved, "guarded-1", "Merging"}

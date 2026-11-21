@@ -343,12 +343,11 @@ defmodule SymphonyElixir.TicketJourneyTest do
       {:ok, _event} = TicketEvents.record(@repo_key, @issue_id, "conductor.instructions", %{junction: "before_merge", text: "Hold it.", route: "hold"})
     end
 
-    test "owed_before_merge/1 lists every open check whatever proves it, but for one seen only after the merge" do
+    test "owed_before_merge/1 lists every open check whatever proves it" do
       assert TicketJourney.owed_before_merge(issue()) == []
       assert TicketJourney.owed_before_merge(nil) == []
 
-      seen_on_main = %{id: "c5", kind: "outcome", statement: "Main is green after the merge.", proof: "test", after_merge: true}
-      plan!(%{@plan | checks: @plan.checks ++ [seen_on_main]})
+      plan!()
       assert Enum.map(TicketJourney.owed_before_merge(issue()), & &1.id) == ["c1", "c2", "c3", "c4"]
 
       prove!(%{check_id: "c1", by: "test", test: "plan_test.exs"})

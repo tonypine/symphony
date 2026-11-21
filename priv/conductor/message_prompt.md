@@ -79,7 +79,7 @@ request would merge the old work. Write the new `plan`, and hold the merge: `"ho
 most 1000 characters>"}`. Symphony turns auto-merge off and moves the ticket to Rework, even when it
 already entered Merging, and the reason becomes the next run's instructions. Saying in the `update`
 that the pull request is about to merge the wrong thing changes nothing: only `hold` stops it. Never
-hold for a check marked `after_merge: true`. Otherwise leave `hold` null.
+hold because something could be better. Otherwise leave `hold` null.
 
 Always reply. The `update` is your reply to the person, and it must be there: say what you took the
 message to be and what you did about it, in the first person, as markdown of at most 1200

@@ -185,8 +185,8 @@ nothing proves it before the merge, the code does the opposite of a check), hold
 `"hold": {"reason": "<what the pull request would merge that is not asked, and what the next run
 must change, in plain words, at most 1000 characters>"}`. Symphony turns auto-merge off and moves
 the ticket to Rework, even when it already entered Merging, and the reason becomes the next run's
-instructions. Saying it in the `update` changes nothing: only `hold` stops the merge. Never hold for
-a check marked `after_merge: true`, or because something could be better. Otherwise leave `hold`
+instructions. Saying it in the `update` changes nothing: only `hold` stops the merge. Never hold because
+something could be better. Otherwise leave `hold`
 null.
 
 The facts (JSON; each fact from an event carries that event's id):
