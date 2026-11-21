@@ -128,6 +128,10 @@ workflow) also runs the Mac checks' `smoke` group (`scripts/ci/mac-check-groups.
 release and the app as `release` does and runs the whole script on the app's launcher, service
 step included. Every merge to `main` runs it again in the release gate.
 
+The script gives each run a fresh `HOME` and creates an empty git repo there at every
+`repo: ~/...` path the config names, since `symphony check` rejects a `strategy: worktree`
+repo that doesn't exist.
+
 ## The release run
 
 A merge to `main` starts one `release` run. Its gate is the Mac checks with every group on, from a
@@ -145,10 +149,6 @@ clean build, in three jobs that start together (TP-1591):
 The `release` job needs all three, so a red gate publishes nothing. It takes the app's executable
 and the smoke-tested release from the build store (building either from nothing when the store has
 none), signs, smoke-tests the signed app, packages and publishes.
-
-The script gives each run a fresh `HOME` and creates an empty git repo there at every
-`repo: ~/...` path the config names, since `symphony check` rejects a `strategy: worktree`
-repo that doesn't exist.
 
 ## When the release gate fails
 
