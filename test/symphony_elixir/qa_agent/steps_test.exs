@@ -1182,4 +1182,175 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
 
   defp step(%Step{} = step), do: step
   defp step(attrs), do: attrs |> then(&Step.changeset(%Step{}, &1)) |> Ecto.Changeset.apply_action!(:validate)
+
+  describe "an update's restart at a step boundary (TP-1590)" do
+    # Symphony's start ends the run its restart stopped with the restart's error.
+    defp restart_stopped(run_id) do
+      :ok =
+        RunStore.put_run(%{
+          run_id: run_id,
+          repo_key: "default",
+          issue_id: @issue_id,
+          issue_identifier: "TP-77",
+          state: "QA",
+          status: "running"
+        })
+
+      {:ok, _count} = RunStore.interrupt_running_runs("default", RunStore.restart_error())
+    end
+
+    defp boundaries do
+      receive do
+        {:boundary, id} -> [id | boundaries()]
+      after
+        0 -> []
+      end
+    end
+
+    test "a pass asks to begin each next step at the boundary before it, and forgets where it stood once it ends", ctx do
+      answers(%{"plan" => [{:write, plan([1, 2])}], "review" => [{:verdict, @pass}]})
+      test = self()
+      boundary = fn step -> send(test, {:boundary, step.id}) && :ok end
+
+      assert {:ok, %{result: %{verdict: :pass}}} = run(ctx, %{}, qa_boundary: boundary)
+      assert boundaries() == ~w(build plan launch walk_1 walk_2 design_check wide_pass quit attach review)
+      assert RunStore.get_qa_pass("default", @issue_id) == nil
+    end
+
+    test "a pass the restart stopped mid-step goes on at that step with the finished steps' results, and walks none of them again", ctx do
+      answers(%{
+        "plan" => [{:write, plan([1, 2])}],
+        "walk" => [{:write, Map.put(FakeAgent.pass_answer(), :actual, "Page shows its title")}],
+        "design_check" => [{:messages, [:update_now_anyway], {:write, FakeAgent.pass_answer()}}, {:write, FakeAgent.pass_answer()}],
+        "review" => [{:verdict, @pass}]
+      })
+
+      File.write!(Path.join([ctx.worktree, "qa-evidence", "walk-1.png"]), "png")
+      # Update Now Anyway stops Symphony while the design check's turn is under way.
+      stop = fn
+        :update_now_anyway -> throw(:symphony_stopped)
+        _message -> :ok
+      end
+
+      assert catch_throw(run(ctx, %{}, on_message: stop)) == :symphony_stopped
+      assert Enum.map(turns(), & &1.id) == ["plan", "walk_1", "walk_2", "design_check"]
+      flush_tools()
+
+      # The restart: the run is ended with the restart's error, and the worktree is made again.
+      restart_stopped("qa-steps-run")
+      File.rm_rf!(Path.join(ctx.worktree, "qa-evidence"))
+      File.mkdir_p!(Path.join(ctx.worktree, "qa-evidence"))
+
+      assert {:ok, %{result: %{verdict: :pass}}} = run(ctx, %{run_id: "qa-steps-run-2"})
+
+      # Only the step the restart stopped runs again; no finished step is walked again.
+      turns = turns()
+      assert Enum.map(turns, & &1.id) == ["design_check", "wide_pass", "review"]
+
+      # The app is built and launched again on the new QA session: that walks no step.
+      assert_received {:tool, _driver, "qa_build", _args}
+      assert_received {:tool, _driver, "qa_launch_app", %{}}
+
+      resumed = events("step.completed") |> Enum.filter(&(&1.run_id == "qa-steps-run-2")) |> Enum.map(& &1.payload.step_id)
+      assert resumed == ["build", "launch", "design_check", "wide_pass", "quit", "attach", "review"]
+
+      # The steps after it are given what they would have had: the plan, the walk results and the evidence.
+      [design, _wide, review] = turns
+      assert design.prompt =~ ~s("entry": "button")
+      assert design.prompt =~ "Symphony launched it as PID 4242"
+      assert review.prompt =~ "Page shows its title"
+      assert review.prompt =~ "- `walk_1` (Walk a step 1): passed"
+      assert review.turn[:resume_session_id] == "session-plan"
+      assert File.read!(Path.join([ctx.worktree, "qa-evidence", "walk-1.png"])) == "png"
+      assert RunStore.get_qa_pass("default", @issue_id) == nil
+    end
+
+    test "a pass that can't keep where it stands still walks its list", ctx do
+      answers(%{"plan" => [{:write, plan([1])}], "review" => [{:verdict, @pass}]})
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{result: %{verdict: :pass}}} =
+                   Steps.run(FakeAgent, job(%{repo_key: " "}), ctx.worktree, QaAgent.qa_settings(Config.settings!()), Enum.map(Phases.default_qa_steps("macos_app"), &step/1),
+                     qa_tmp_dir: ctx.tmp_dir,
+                     qa_driver: self(),
+                     qa_driver_module: FakeDriver,
+                     qa_step_runner: fn _command, _env, _timeout -> {:ok, {"", 0}} end,
+                     qa_launch_settle_ms: 0
+                   )
+        end)
+
+      assert log =~ "could not keep where it stands"
+    end
+
+    test "a pass whose last run was not stopped by a restart starts its list from the top", ctx do
+      answers(%{"plan" => [{:write, plan([1])}], "review" => [{:verdict, @pass}]})
+      stop = fn step -> if step.id == "walk_1", do: throw(:symphony_stopped), else: :ok end
+
+      assert catch_throw(run(ctx, %{}, qa_boundary: stop)) == :symphony_stopped
+      assert %{next: "walk_1"} = RunStore.get_qa_pass("default", @issue_id)
+      _ = turns()
+
+      # The run ended some other way: nothing is taken from it.
+      assert {:ok, %{result: %{verdict: :pass}}} = run(ctx, %{run_id: "qa-steps-run-2"})
+      assert Enum.map(turns(), & &1.id) |> List.first() == "plan"
+    end
+
+    test "a pass stopped between the review's recheck and the recheck round goes on with the round", ctx do
+      answers(%{
+        "plan" => [{:write, plan([1])}],
+        "review" => [{:write, %{recheck: [%{step: 1, where: "Page 1", do: "Open it", expect: "It shows"}]}}, {:verdict, @pass}]
+      })
+
+      # The second boundary before the review is the one after its recheck, before the round.
+      stop = fn step ->
+        reviews = if step.id == "review", do: Process.put(:reviews, Process.get(:reviews, 0) + 1) || 0, else: 0
+        if reviews == 1, do: throw(:symphony_stopped), else: :ok
+      end
+
+      assert catch_throw(run(ctx, %{}, qa_boundary: stop)) == :symphony_stopped
+      assert List.last(Enum.map(turns(), & &1.id)) == "review"
+      flush_tools()
+      restart_stopped("qa-steps-run")
+
+      assert {:ok, %{result: %{verdict: :pass}}} = run(ctx, %{run_id: "qa-steps-run-2"})
+      assert Enum.map(turns(), & &1.id) == ["recheck_1_1", "review"]
+    end
+  end
+
+  describe "boundary/2" do
+    test "asks the orchestrator to begin the next step and waits for its answer" do
+      test = self()
+
+      orchestrator =
+        spawn(fn ->
+          receive do
+            {:run_step, "issue-1", {:qa_boundary, pass, %{id: "walk_1"}}} ->
+              send(test, :asked)
+              send(pass, {:run_step_turn, "issue-1"})
+          end
+        end)
+
+      assert Steps.boundary(orchestrator, "issue-1").(%{id: "walk_1"}) == :ok
+      assert_received :asked
+    end
+
+    test "goes on when the orchestrator is gone, and is nil with no orchestrator" do
+      gone = spawn(fn -> :ok end)
+      ref = Process.monitor(gone)
+      assert_receive {:DOWN, ^ref, :process, _pid, _reason}
+
+      assert {:error, {:orchestrator_down, _reason}} = Steps.boundary(gone, "issue-1").(%{id: "walk_1"})
+      assert Steps.boundary(nil, "issue-1") == nil
+    end
+  end
+
+  defp flush_tools do
+    receive do
+      {:tool, _driver, _tool, _args} -> flush_tools()
+      {:session_started, _worktree, _opts} -> flush_tools()
+    after
+      0 -> :ok
+    end
+  end
 end

@@ -103,6 +103,7 @@ defmodule SymphonyElixir.Conductor do
   alias SymphonyElixir.{
     AgentTelemetry,
     CiPoller,
+    ConductorGate,
     Config,
     DecisionMove,
     DecisionRequest,
@@ -144,6 +145,8 @@ defmodule SymphonyElixir.Conductor do
   @external_resource @message_prompt_path
   @message_prompt File.read!(@message_prompt_path)
   @grooming "grooming"
+  # How a turn ends that `SymphonyElixir.ConductorGate` did not let start.
+  @closed "closed"
   @final_check "final_check"
   @tree_junctions ["sub_ticket_ended", "final_check"]
   # Not a junction: what `tend/4` does for a waiting ticket with a sub-ticket left in Backlog.
@@ -393,8 +396,10 @@ defmodule SymphonyElixir.Conductor do
     if not dispatch_paused?(repo_key, opts), do: run_end_junction(ended_kind, record(issue_id, opts), events)
   end
 
+  # An app update's pause holds ticket runs alone: Conductor turns keep starting and answering
+  # under it (TP-1590), and `SymphonyElixir.ConductorGate` keeps the restart from cutting one off.
   defp dispatch_paused?(repo_key, opts) do
-    paused? = Keyword.get(opts, :paused?, &Pauses.paused?/1)
+    paused? = Keyword.get(opts, :paused?, &Pauses.paused_beyond_update?/1)
     paused?.(:symphony) or (is_binary(repo_key) and paused?.({:repository, repo_key}))
   end
 
@@ -516,8 +521,11 @@ defmodule SymphonyElixir.Conductor do
   end
 
   # While another turn works on the ticket (a message's), nothing runs: the next poll asks again.
+  # So too while Symphony is about to stop (`SymphonyElixir.ConductorGate`): nothing of the turn is
+  # recorded, so the junction stays due for after the restart.
   defp tend_alone(plan, issue, opts) do
-    _ran_or_busy = exclusive(plan.issue_id, :skip, fn -> tend_turn(plan, issue, opts) end)
+    gate = Keyword.get(opts, :gate, ConductorGate)
+    _ran_or_busy = exclusive(plan.issue_id, :skip, fn -> ConductorGate.run(gate, fn -> tend_turn(plan, issue, opts) end) end)
     :ok
   end
 
@@ -571,8 +579,10 @@ defmodule SymphonyElixir.Conductor do
   end
 
   defp message_turn(plan, issue, opts) do
-    turn(plan, issue, opts)
-    :ok
+    case turn(plan, issue, opts) do
+      {@closed, _held, _route} -> :waiting
+      _ran -> :ok
+    end
   rescue
     error ->
       Logger.warning("Conductor turn failed #{context(issue, plan)} junction=#{plan.junction}: #{Exception.message(error)}")
@@ -716,8 +726,17 @@ defmodule SymphonyElixir.Conductor do
     {held, route}
   end
 
-  # The same, with how the turn ended (`answered`, or why it wrote nothing).
-  defp turn(%{junction: junction, issue_id: issue_id} = plan, issue, opts) do
+  # The same, with how the turn ended (`answered`, or why it wrote nothing). The turn enters
+  # `SymphonyElixir.ConductorGate` as it starts: one the gate refuses (Symphony is about to stop
+  # for an update or a restart) runs and records nothing, and ends `closed`.
+  defp turn(plan, issue, opts) do
+    case ConductorGate.run(Keyword.get(opts, :gate, ConductorGate), fn -> gated_turn(plan, issue, opts) end) do
+      {:ok, outcome} -> outcome
+      :closed -> {@closed, :ok, nil}
+    end
+  end
+
+  defp gated_turn(%{junction: junction, issue_id: issue_id} = plan, issue, opts) do
     run_id = "conductor-" <> Event.ulid(DateTime.utc_now())
     started_at = DateTime.utc_now()
     record = record(issue_id, opts)

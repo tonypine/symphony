@@ -727,6 +727,7 @@ defmodule SymphonyElixir.PhaseSteps do
           optional(:answer_path) => Path.t(),
           optional(:answer_error) => String.t(),
           optional(:resume) => Questions.question(),
+          optional(:restarted) => :mid_step | :between_steps,
           optional(:answers) => [{Step.t(), map()}]
         }
 
@@ -747,6 +748,7 @@ defmodule SymphonyElixir.PhaseSteps do
     |> Kernel.++(how_it_ends(step, notes))
     |> Kernel.++(reminder(step, notes))
     |> Kernel.++(resumed(Map.get(notes, :resume)))
+    |> Kernel.++(restarted(Map.get(notes, :restarted)))
     |> Kernel.++(earlier_answers(Map.get(notes, :answers, [])))
     |> Kernel.++(step_prompt(step))
     |> Kernel.++(failure(carry))
@@ -792,6 +794,23 @@ defmodule SymphonyElixir.PhaseSteps do
   end
 
   defp resumed(_none), do: []
+
+  defp restarted(:mid_step) do
+    [
+      "- Symphony restarted (to install an update) while this step's turn was under way, and the run goes on from where it stopped. " <>
+        "When this session remembers the turn, go on from where it was; otherwise read the workspace and the ticket's history first. " <>
+        "Do not redo what is already done: the steps before this one are done, and your changes in the workspace are kept."
+    ]
+  end
+
+  defp restarted(:between_steps) do
+    [
+      "- Symphony restarted (to install an update) between this run's steps, and the run goes on from this step. " <>
+        "The steps before it are done (the ticket's history holds them), and the workspace is kept: do not redo them."
+    ]
+  end
+
+  defp restarted(_none), do: []
 
   defp earlier_answers([]), do: []
 
@@ -957,6 +976,100 @@ defmodule SymphonyElixir.PhaseSteps do
       {step, question}
     else
       _none -> nil
+    end
+  end
+
+  @typedoc """
+  Where a run goes on after Symphony restarted mid-run (`restart_point/2`): the step, what a
+  machine step that failed before it carries to its turn, the agent session to resume (the
+  interrupted turn's, for a step stopped mid-turn) and whether the step was stopped mid-turn.
+  """
+  @type restart :: %{step: Step.t(), carry: carry(), session_id: String.t() | nil, mid_step: boolean()}
+
+  @doc """
+  The step a new run of `context`'s ticket goes on at because Symphony restarted while the ticket's
+  last run was under way (TP-1590): an update's restart, a plain Restart, or Update Now Anyway. The
+  ticket's newest step event (`step.started`, `step.completed`), with no phase change since
+  (`phase.entered`, `ticket.moved`), must be a run's that the restart interrupted
+  (`SymphonyElixir.RunStore.restart_interrupted?/1`) in the phase the ticket is in now; else nil,
+  and the run walks its list from the start.
+
+    * a step started and not ended (the restart stopped its turn, or its machine commands): the run
+      goes on at that step. An agent step resumes the interrupted turn's session
+      (`session_id`, the run's), so its conversation goes on; a machine step runs again;
+    * a step that ended `passed` or `skipped` (the run waited between steps: for a slot or for the
+      pause to lift): the run goes on at the step after it, and `:end` past the last one is nil;
+    * a machine step that `failed`: the run goes on at the step its `on_fail` names, carrying the
+      failed step's kept output, as the run would have; an agent step that failed goes on at the
+      step it returns to;
+    * a step `paused` on a Question is `resume_point/2`'s.
+
+  No step that ended runs again, and the workspace the run worked in is kept.
+  """
+  @spec restart_point([Step.t()], context()) :: restart() | nil
+  def restart_point(steps, context) when is_list(steps) do
+    with [_ | _] = events <- RunStore.list_ticket_events(context.issue_id, []),
+         %{type: type, run_id: run_id} = last when type in ["step.started", "step.completed"] and is_binary(run_id) <- newest_mark(events),
+         %{} = run <- interrupted_run(context, run_id),
+         %Step{} = step <- Enum.find(steps, &(&1.id == Map.get(last.payload, :step_id))),
+         {:ok, point} <- point_after(steps, step, last, run) do
+      point
+    else
+      _none -> nil
+    end
+  end
+
+  defp newest_mark(events) do
+    case Enum.filter(events, &(&1.type in ["step.started", "step.completed", "phase.entered", "ticket.moved"])) do
+      [] -> nil
+      marks -> Enum.max_by(marks, &{DateTime.to_unix(&1.at, :microsecond), &1.seq})
+    end
+  end
+
+  defp interrupted_run(context, run_id) do
+    with runs when is_list(runs) <- RunStore.list_issue_runs(context.repo_key, context.issue_id),
+         %{} = run <- Enum.find(runs, &(Map.get(&1, :run_id) == run_id)),
+         true <- RunStore.restart_interrupted?(run) and Map.get(run, :state) == context.phase do
+      run
+    else
+      _none -> nil
+    end
+  end
+
+  defp point_after(_steps, step, %{type: "step.started"}, run) do
+    session_id = if machine?(step), do: nil, else: Map.get(run, :session_id)
+    {:ok, %{step: step, carry: nil, session_id: if(is_binary(session_id), do: session_id), mid_step: true}}
+  end
+
+  defp point_after(steps, step, %{payload: %{outcome: outcome}}, _run) when outcome in ["passed", "skipped"] do
+    with {:ok, next_step} <- next(steps, step, :passed),
+         do: {:ok, %{step: next_step, carry: nil, session_id: nil, mid_step: false}}
+  end
+
+  defp point_after(steps, %Step{mode: "machine"} = step, %{payload: %{outcome: "failed"}} = completed, _run) do
+    with {:ok, next_step} <- next(steps, step, :failed),
+         do: {:ok, %{step: next_step, carry: carried(step, completed), session_id: nil, mid_step: false}}
+  end
+
+  # An agent step that failed goes back to the step it names, as `return_walk` takes it.
+  defp point_after(steps, _step, %{payload: %{outcome: "failed", returns_to: returns_to}}, _run) do
+    with %Step{} = next_step <- Enum.find(steps, &(&1.id == returns_to)),
+         do: {:ok, %{step: next_step, carry: nil, session_id: nil, mid_step: false}}
+  end
+
+  defp point_after(_steps, _step, _completed, _run), do: nil
+
+  defp carried(step, completed), do: %{step: step, output: kept_output(completed)}
+
+  # What a failed machine step printed, from the output its `step.completed` kept; nothing when it
+  # is gone.
+  defp kept_output(completed) do
+    with [id | _rest] <- completed.artifacts,
+         {:ok, path} <- Artifacts.path(id),
+         {:ok, output} <- File.read(path) do
+      output
+    else
+      _gone -> ""
     end
   end
 

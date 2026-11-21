@@ -37,19 +37,21 @@ final class RestartController {
     /// Drains Symphony for an update like a restart, but stops it instead of starting it again. The running Symphony
     /// doesn't check symphony.yml: the new build did, before this. `finished` is called once the
     /// drain stops Symphony or ends early. `kind` decides how it waits for agent runs: see `UpdateKind`. Its pause
-    /// names `version`, the version it installs.
+    /// names `version`, the version it installs. `armed` is the swap of an update Symphony had ready (TP-1590): it
+    /// drains behind the pause Symphony set and never pauses on its own.
     func drainForUpdate(
         alreadyPaused: Bool,
         kind: UpdateKind,
         version: String,
+        armed: Bool = false,
         finished: @escaping (_ stopped: Bool, _ pausedByUpdate: Bool) -> Void
     ) {
         guard !machine.isRestarting else { return }
         updateFinished = finished
         perform(
             machine.begin(
-                alreadyPaused: alreadyPaused,
-                purpose: kind.drainPurpose,
+                alreadyPaused: armed || alreadyPaused,
+                purpose: armed ? .armedUpdate : kind.drainPurpose,
                 updatingTo: version,
                 runsTimeout: kind.runsTimeout(restartTimeout: TimeInterval(runner.restartTimeoutMinutes * 60)),
                 logPath: runner.logPath,
@@ -104,7 +106,7 @@ final class RestartController {
         }
         if !machine.isRestarting, let finished = updateFinished {
             updateFinished = nil
-            finished(effects.contains(.stopped), machine.pausedByRestart)
+            finished(effects.contains(.stopped), machine.resumesDispatch)
         }
     }
 

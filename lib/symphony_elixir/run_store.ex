@@ -67,6 +67,7 @@ defmodule SymphonyElixir.RunStore do
   @quality_gate_cache_key :quality_gate_cache
   @quality_gate_comment_keys_key :quality_gate_comment_keys
   @mnesia_core_dir "core_dumps"
+  @restart_error "orchestrator restarted before worker exit"
   # A run's row keeps only the newest events of its transcript buffer. The live run keeps its whole
   # buffer in memory for the dashboard; the row only feeds a finished run's transcript after a
   # restart, and every event it holds is rewritten with the table on each Mnesia log dump.
@@ -295,6 +296,22 @@ defmodule SymphonyElixir.RunStore do
   @spec memoize_runs(term(), String.t(), (-> {:ok, term()} | {:error, term()})) :: {:ok, term()} | {:error, term()}
   def memoize_runs(key, kind, fun) when is_function(fun, 0), do: RunIndex.memoize(key, kind, fun)
 
+  @doc """
+  The error a run still running when Symphony starts again is ended with
+  (`interrupt_running_runs/2`): Symphony stopped (an update's restart, a plain Restart) before its
+  worker ended.
+  """
+  @spec restart_error() :: String.t()
+  def restart_error, do: @restart_error
+
+  @doc """
+  Whether the run `record` was ended because Symphony restarted while it was under way, so a new run
+  of its ticket may go on from where it stopped (`SymphonyElixir.PhaseSteps.restart_point/2`).
+  """
+  @spec restart_interrupted?(map()) :: boolean()
+  def restart_interrupted?(%{status: "failure", error: @restart_error}), do: true
+  def restart_interrupted?(_record), do: false
+
   @spec interrupt_running_runs(String.t(), String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
   def interrupt_running_runs(repo_key, error) when is_binary(error) do
     now = DateTime.utc_now()
@@ -466,6 +483,42 @@ defmodule SymphonyElixir.RunStore do
   end
 
   def delete_rework_base(_repo_key, _issue_id), do: {:error, :invalid_issue_id}
+
+  @doc """
+  Keeps where a stepped QA pass of `issue_id` stands (`SymphonyElixir.QaAgent.Steps`): written at
+  each step's end, so a pass Symphony's restart stopped goes on at its next step (TP-1590).
+  """
+  @spec put_qa_pass(String.t(), String.t(), map()) :: :ok | {:error, term()}
+  def put_qa_pass(repo_key, issue_id, %{} = pass) when is_binary(issue_id) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      durable_transaction(fn ->
+        :mnesia.write({@totals_table, qa_pass_key(repo_key, issue_id), pass})
+        :ok
+      end)
+    end
+  end
+
+  @doc "Where `issue_id`'s stepped QA pass stood at its last step's end (`put_qa_pass/3`), or nil."
+  @spec get_qa_pass(String.t(), String.t()) :: map() | nil | {:error, term()}
+  def get_qa_pass(repo_key, issue_id) when is_binary(issue_id) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      transaction(fn -> read_qa_pass(repo_key, issue_id) end)
+    end
+  end
+
+  @doc "Forgets `issue_id`'s stepped QA pass: it ended."
+  @spec delete_qa_pass(String.t(), String.t()) :: :ok | {:error, term()}
+  def delete_qa_pass(repo_key, issue_id) when is_binary(issue_id) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      durable_transaction(fn ->
+        :mnesia.delete({@totals_table, qa_pass_key(repo_key, issue_id)})
+        :ok
+      end)
+    end
+  end
 
   # When Symphony itself last moved an issue's state in Linear. Symphony and the person reviewing
   # can share one Linear user, so the issue's history alone cannot tell their moves apart.
@@ -2916,6 +2969,14 @@ defmodule SymphonyElixir.RunStore do
   defp scoped_key(repo_key, id), do: {repo_key, id}
 
   defp rework_base_key(repo_key, issue_id), do: {:rework_base, repo_key, issue_id}
+  defp qa_pass_key(repo_key, issue_id), do: {:qa_pass, repo_key, issue_id}
+
+  defp read_qa_pass(repo_key, issue_id) do
+    case :mnesia.read(@totals_table, qa_pass_key(repo_key, issue_id)) do
+      [{@totals_table, _key, %{} = pass}] -> pass
+      _none -> nil
+    end
+  end
 
   defp read_rework_base(repo_key, issue_id) do
     case :mnesia.read(@totals_table, rework_base_key(repo_key, issue_id)) do

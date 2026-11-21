@@ -25,6 +25,22 @@ final class DispatchTests: XCTestCase {
         XCTAssertTrue(control.limits.isEmpty)
     }
 
+    /// c6 (TP-1590): an update Symphony has ready holds nothing, so dispatch reads as on and Pause stays.
+    func testAnUpdateReadyLeavesDispatchOnAndNamesTheVersion() throws {
+        let ready = UpdateHold(release: nil, downloading: false, drain: RestartMachine(), ready: "0.0.1.1056")
+        let control = DispatchControl(window: .connected, paused: false, state: try state("tickets"), update: ready, now: Date(), timeZone: utc)
+
+        XCTAssertEqual(control.mode, .on)
+        XCTAssertEqual(control.word, "Dispatch on · v0.0.1.1056 ready")
+        XCTAssertNil(control.updatingTo)
+        XCTAssertTrue(control.canPause)
+        XCTAssertTrue(control.offersPause, "the popover keeps Pause Dispatch beside Cancel Update, as the menu does")
+        XCTAssertTrue(control.canCancelUpdate)
+        XCTAssertFalse(control.canUpdateNow)
+        XCTAssertEqual(control.update?.waitingLine, "Installs at the first moment no agent run is active")
+        XCTAssertEqual(control.accessibilityLabel, "Dispatch on · v0.0.1.1056 ready, 2 working")
+    }
+
     func testPausedSaysWhoWhenAndWhyInOrange() throws {
         let control = DispatchControl(window: .connected, paused: true, state: try state("paused"), now: Date(), timeZone: utc)
         XCTAssertEqual(control.mode, .paused)
@@ -185,6 +201,7 @@ final class DispatchTests: XCTestCase {
         XCTAssertFalse(control.canUpdateNow)
         XCTAssertFalse(control.canResume)
         XCTAssertFalse(control.canPause)
+        XCTAssertFalse(control.offersPause)
         XCTAssertTrue(control.canForce)
         XCTAssertEqual(DispatchControl.cancelUpdateTitle, "Cancel Update")
         XCTAssertEqual(DispatchControl.updateNowTitle, "Update Now Anyway")

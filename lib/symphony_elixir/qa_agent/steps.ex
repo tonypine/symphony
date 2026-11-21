@@ -81,7 +81,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
 
   require Logger
 
-  alias SymphonyElixir.{AgentTelemetry, AgentTmpDir, Messages, PhaseSteps, PromptSafety, QaAgent, QaDriver}
+  alias SymphonyElixir.{AgentTelemetry, AgentTmpDir, Messages, PhaseSteps, PromptSafety, QaAgent, QaDriver, RunStore}
   alias SymphonyElixir.Conductor.Steer
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Phases
@@ -147,6 +147,31 @@ defmodule SymphonyElixir.QaAgent.Steps do
   defp configured(_job, _system), do: []
 
   @doc """
+  What a pass of ticket `issue_id` asks at each boundary between two steps (`opts[:qa_boundary]`):
+  the orchestrator `recipient` answers at once, unless an update holds dispatch for its restart,
+  which then comes at this boundary (TP-1590). It answers `:ok` once the next step may begin, or
+  `{:error, {:orchestrator_down, reason}}`. Nil, so the pass goes on unasked, with no orchestrator.
+  """
+  @spec boundary(pid() | nil, String.t() | nil) :: (map() -> :ok | {:error, term()}) | nil
+  def boundary(recipient, issue_id) when is_pid(recipient) and is_binary(issue_id) do
+    fn step ->
+      monitor = Process.monitor(recipient)
+      send(recipient, {:run_step, issue_id, {:qa_boundary, self(), step}})
+
+      receive do
+        {:run_step_turn, ^issue_id} ->
+          Process.demonitor(monitor, [:flush])
+          :ok
+
+        {:DOWN, ^monitor, :process, _pid, reason} ->
+          {:error, {:orchestrator_down, reason}}
+      end
+    end
+  end
+
+  def boundary(_recipient, _issue_id), do: nil
+
+  @doc """
   Walks `steps` for `job`'s pass in `worktree` with the QA agent `agent_module` and the QA session
   settings `qa_settings`, and returns what a pass that is one session returns
   (`QaAgent.run_result/0`): the review's verdict, `inconclusive` past the recheck rounds, `blocked`
@@ -165,7 +190,10 @@ defmodule SymphonyElixir.QaAgent.Steps do
     drain_verdicts(nil)
 
     try do
-      state |> walk(List.first(state.steps)) |> finish()
+      {state, start} = restore(state)
+      result = state |> walk(start) |> finish()
+      forget_pass(state)
+      result
     after
       Process.delete(@app_key)
       drain_verdicts(nil)
@@ -301,11 +329,164 @@ defmodule SymphonyElixir.QaAgent.Steps do
   defp walk(%{verdict: verdict} = state, _step) when not is_nil(verdict), do: state
   defp walk(%{error: error} = state, _step) when not is_nil(error), do: state
 
+  defp walk(state, {:recheck, briefs, review}), do: state |> recheck_round(briefs) |> step_ended(review) |> walk(review)
+
   defp walk(state, step) do
     case run_step(state, step) do
-      {state, {:recheck, briefs}} -> state |> recheck_round(briefs) |> walk(step)
-      {state, outcome} -> walk(state, next_step(state, step, outcome))
+      {state, {:recheck, briefs}} -> state |> step_ended({:recheck, briefs, step}) |> walk({:recheck, briefs, step})
+      {state, outcome} -> state |> step_ended(next_step(state, step, outcome)) |> walk(next_step(state, step, outcome))
     end
+  end
+
+  # -- the step boundary ----------------------------------------------------------
+  #
+  # Between two steps the pass keeps where it stands (`RunStore.put_qa_pass/3`), then asks to begin
+  # its next step (`opts[:qa_boundary]`, the orchestrator's answer): while an update waits for its
+  # moment, a pass between steps counts as no active run, and once the update holds dispatch its next
+  # step waits, so Symphony restarts at that boundary rather than after the rest of the pass
+  # (TP-1590). A recheck round (the launch again, the rechecks, the quit and the evidence) is one
+  # piece: the boundary comes before it and after it.
+  defp step_ended(state, next) do
+    if goes_on?(state, next) do
+      keep_pass(state, next)
+      await_boundary(state, next)
+    end
+
+    state
+  end
+
+  defp goes_on?(%{verdict: nil, error: nil}, %Step{}), do: true
+  defp goes_on?(%{verdict: nil, error: nil}, {:recheck, _briefs, _review}), do: true
+  defp goes_on?(_state, _next), do: false
+
+  defp await_boundary(state, next) do
+    case Keyword.get(state.opts, :qa_boundary) do
+      boundary when is_function(boundary, 1) -> boundary.(boundary_step(next))
+      nil -> :ok
+    end
+  end
+
+  defp boundary_step({:recheck, _briefs, review}), do: boundary_step(review)
+  defp boundary_step(%Step{} = step), do: %{id: step.id, title: step.title, mode: step.mode}
+
+  # What a pass that goes on after a restart needs: its list as walked so far (rechecks included),
+  # the step it goes on at, and each finished step's result, answer and session.
+  defp keep_pass(state, next) do
+    {next_id, recheck} =
+      case next do
+        {:recheck, briefs, review} -> {review.id, briefs}
+        %Step{id: id} -> {id, nil}
+      end
+
+    pass = %{
+      run_id: Map.get(state.job, :run_id),
+      sha: Map.get(state.job, :sha),
+      listed: Enum.map(state.listed, & &1.id),
+      next: next_id,
+      recheck: recheck,
+      steps: state.steps,
+      results: state.results,
+      answers: state.answers,
+      plan: state.plan,
+      briefs: state.briefs,
+      walk_targets: state.walk_targets,
+      app_steps: state.app_steps,
+      sessions: state.sessions,
+      tokens: state.tokens,
+      rounds: state.rounds,
+      launched: match?({:launched, _app}, state.launch),
+      launch: if(match?({:failed, _output}, state.launch), do: state.launch)
+    }
+
+    keep_evidence(state)
+
+    case RunStore.put_qa_pass(state.context.repo_key, state.context.issue_id, pass) do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("QA pass of #{state.job.issue.identifier} could not keep where it stands: #{inspect(reason)}")
+    end
+  end
+
+  defp forget_pass(state) do
+    File.rm_rf(kept_evidence_dir(state))
+    RunStore.delete_qa_pass(state.context.repo_key, state.context.issue_id)
+  end
+
+  # The evidence the finished steps wrote under `qa-evidence/` is kept beside the worktree, which the
+  # next pass makes again from scratch, and is put back when the pass goes on after a restart.
+  defp kept_evidence_dir(state), do: state.worktree <> ".kept-evidence"
+
+  defp keep_evidence(state) do
+    copy_evidence(Path.join(state.worktree, @evidence_dir), kept_evidence_dir(state))
+  end
+
+  defp put_back_evidence(state) do
+    copy_evidence(kept_evidence_dir(state), Path.join(state.worktree, @evidence_dir))
+  end
+
+  defp copy_evidence(from, to) do
+    for file <- Path.wildcard(Path.join(from, "**"), match_dot: false), File.regular?(file) do
+      target = Path.join(to, Path.relative_to(file, from))
+
+      if not File.exists?(target) or File.stat!(target).size != File.stat!(file).size do
+        File.mkdir_p!(Path.dirname(target))
+        File.cp!(file, target)
+      end
+    end
+
+    :ok
+  end
+
+  # A pass whose last run Symphony's restart stopped (`RunStore.restart_interrupted?/1`), on the same
+  # commit and list, goes on at the step after the last one that ended, with the results of the
+  # steps already done; the step the restart stopped mid-step runs again, and no step that ended does.
+  # The app the earlier run launched is gone with its QA session, so the build and launch steps run
+  # again first when the next step drives the app. Anything else starts the list from the top.
+  defp restore(state) do
+    with %{} = pass <- RunStore.get_qa_pass(state.context.repo_key, state.context.issue_id),
+         true <- pass.sha == Map.get(state.job, :sha) and pass.listed == Enum.map(state.listed, & &1.id),
+         true <- restart_interrupted?(state, pass.run_id),
+         %Step{} = next <- Enum.find(pass.steps, &(&1.id == pass.next)) do
+      Logger.info("QA pass of #{state.job.issue.identifier} goes on at step #{next.id} after Symphony's restart")
+      state = restored(state, pass)
+      put_back_evidence(state)
+      state = if pass.launched and (pass.recheck != nil or MapSet.member?(state.app_steps, next.id)), do: relaunch(state), else: state
+      {state, if(pass.recheck, do: {:recheck, pass.recheck, next}, else: next)}
+    else
+      _none ->
+        forget_pass(state)
+        {state, List.first(state.steps)}
+    end
+  end
+
+  defp restart_interrupted?(state, run_id) do
+    runs = RunStore.list_issue_runs(state.context.repo_key, state.context.issue_id)
+    is_list(runs) and Enum.any?(runs, &(Map.get(&1, :run_id) == run_id and RunStore.restart_interrupted?(&1)))
+  end
+
+  defp restored(state, pass) do
+    %{
+      state
+      | steps: pass.steps,
+        context: %{state.context | steps: pass.steps},
+        results: pass.results,
+        answers: pass.answers,
+        plan: pass.plan,
+        briefs: pass.briefs,
+        walk_targets: pass.walk_targets,
+        app_steps: pass.app_steps,
+        sessions: pass.sessions,
+        tokens: pass.tokens,
+        rounds: pass.rounds,
+        launch: pass.launch
+    }
+  end
+
+  # The app is launched again, on a QA session that may be new: the build and the launch steps run
+  # again. That prepares the app; it walks no step.
+  defp relaunch(state) do
+    state.listed
+    |> Enum.filter(&(runs?(&1, "symphony:qa_build") or runs?(&1, @launch)))
+    |> Enum.reduce(state, fn step, state -> state |> run_step(step) |> elem(0) end)
   end
 
   defp next_step(state, step, outcome) do

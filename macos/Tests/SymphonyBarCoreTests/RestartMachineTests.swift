@@ -41,6 +41,7 @@ final class RestartMachineTests: XCTestCase {
     private func waitingForAnswer(alreadyPaused: Bool = false) -> RestartMachine {
         var machine = waiting(alreadyPaused: alreadyPaused)
         _ = machine.handle(.polled(pausedPoll(running: 0)), now: began)
+        _ = machine.handle(.controlFinished(.handover, .done), now: began)
         _ = machine.handle(.exited(.signaled(15)), now: began)
         _ = machine.handle(.startFinished(error: nil), now: began)
         return machine
@@ -106,7 +107,8 @@ final class RestartMachineTests: XCTestCase {
         XCTAssertEqual(machine.handle(.polled(.unreachable)), [])
         XCTAssertEqual(machine.menuLine, "Waiting for 1 agent run…")
 
-        XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 0))), [.stop])
+        XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 0))), [.send(.handover)])
+        XCTAssertEqual(machine.handle(.controlFinished(.handover, .done)), [.stop])
         XCTAssertEqual(machine.menuLine, "Restarting: stopping Symphony…")
         XCTAssertEqual(machine.handle(.exited(.signaled(15))), [.start])
         XCTAssertEqual(machine.phase, .starting)
@@ -137,11 +139,12 @@ final class RestartMachineTests: XCTestCase {
         effects += machine.handle(.configChecked(.passed))
         XCTAssertEqual(machine.phase, .waitingForRuns(running: nil))
         effects += machine.handle(.polled(pausedPoll(running: 0)))
+        effects += machine.handle(.controlFinished(.handover, .done))
         effects += machine.handle(.exited(.signaled(15)))
         effects += machine.handle(.startFinished(error: nil))
         effects += machine.handle(.polled(pausedPoll(running: 0)))
 
-        XCTAssertEqual(effects, [.checkConfig, .pollNow, .stop, .start])
+        XCTAssertEqual(effects, [.checkConfig, .pollNow, .send(.handover), .stop, .start])
         XCTAssertFalse(machine.pausedByRestart)
         XCTAssertEqual(machine.phase, .idle)
         XCTAssertNil(machine.menuLine)
@@ -162,12 +165,13 @@ final class RestartMachineTests: XCTestCase {
 
         effects = machine.handle(.polled(pausedPoll(running: 2)))
         effects += machine.handle(.polled(pausedPoll(running: 0)))
+        effects += machine.handle(.controlFinished(.handover, .done))
         effects += machine.handle(.exited(.signaled(15)))
         effects += machine.handle(.startFinished(error: nil))
         effects += machine.handle(.polled(pausedPoll(running: 0)))
         effects += machine.handle(.controlFinished(.resume, .done))
 
-        XCTAssertEqual(effects, [.stop, .start, .send(.resume)])
+        XCTAssertEqual(effects, [.send(.handover), .stop, .start, .send(.resume)])
         XCTAssertEqual(machine.phase, .idle)
         XCTAssertNil(machine.menuLine)
     }
@@ -215,7 +219,8 @@ final class RestartMachineTests: XCTestCase {
         XCTAssertEqual(machine.phase, .waitingForRuns(running: 1))
         XCTAssertEqual(machine.menuLine, "Waiting for 1 agent run…", "The menu counts only the run the update waits for")
 
-        XCTAssertEqual(machine.handle(.polled(betweenTurnsPoll(running: 1, betweenTurns: 1)), now: began), [.stop])
+        XCTAssertEqual(machine.handle(.polled(betweenTurnsPoll(running: 1, betweenTurns: 1)), now: began), [.send(.handover)])
+        XCTAssertEqual(machine.handle(.controlFinished(.handover, .done), now: began), [.stop])
         XCTAssertEqual(machine.phase, .stopping)
         XCTAssertEqual(machine.handle(.exited(.signaled(15)), now: began), [.stopped], "The update completes")
     }
@@ -226,13 +231,15 @@ final class RestartMachineTests: XCTestCase {
         _ = machine.handle(.configChecked(.passed), now: began)
         _ = machine.handle(.controlFinished(.pauseForUpdate(version: "0.0.1.856"), .done), now: began)
 
-        XCTAssertEqual(machine.handle(.polled(betweenTurnsPoll(running: 1, betweenTurns: 1)), now: began), [.stop])
+        XCTAssertEqual(machine.handle(.polled(betweenTurnsPoll(running: 1, betweenTurns: 1)), now: began), [.send(.handover)])
+        XCTAssertEqual(machine.handle(.controlFinished(.handover, .done), now: began), [.stop])
         XCTAssertFalse(machine.postponed)
     }
 
     func testARestartStopsSymphonyWithARunBetweenTurns() {
         var machine = waiting()
-        XCTAssertEqual(machine.handle(.polled(betweenTurnsPoll(running: 1, betweenTurns: 1)), now: began), [.stop])
+        XCTAssertEqual(machine.handle(.polled(betweenTurnsPoll(running: 1, betweenTurns: 1)), now: began), [.send(.handover)])
+        XCTAssertEqual(machine.handle(.controlFinished(.handover, .done), now: began), [.stop])
     }
 
     func testTimeoutOffersRestartNow() {
@@ -288,6 +295,7 @@ final class RestartMachineTests: XCTestCase {
     func testStartFailureSurfacesAnError() {
         var machine = waiting()
         _ = machine.handle(.polled(pausedPoll(running: 0)))
+        _ = machine.handle(.controlFinished(.handover, .done))
         _ = machine.handle(.exited(.signaled(15)))
 
         let effects = machine.handle(.startFinished(error: "Linear API key not set. Add it in Settings."))
@@ -406,7 +414,8 @@ final class RestartMachineTests: XCTestCase {
         XCTAssertEqual(machine.handle(.controlFinished(.pause, .done), now: began), [.pollNow])
         XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 2)), now: began), [])
         XCTAssertEqual(machine.menuLine, "Waiting for 2 agent runs…")
-        XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 0)), now: began), [.stop])
+        XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 0)), now: began), [.send(.handover)])
+        XCTAssertEqual(machine.handle(.controlFinished(.handover, .done), now: began), [.stop])
         XCTAssertEqual(machine.menuLine, "Updating: stopping Symphony…")
 
         effects = machine.handle(.exited(.signaled(15)), now: began)
@@ -420,7 +429,11 @@ final class RestartMachineTests: XCTestCase {
     /// TP-339: running the new version's Symphony deletes the running version's unpacked release, so an update
     /// checks symphony.yml with the running Symphony and starts none before it hands over to the relaunched app.
     func testUpdateRunsNoOtherSymphonyBeforeTheOldOneStops() {
-        for waiting in [[Event.polled(pausedPoll(running: 0))], [.polled(pausedPoll(running: 1)), .restartNow]] {
+        let drains: [([Event], [Effect])] = [
+            ([.polled(pausedPoll(running: 0)), .controlFinished(.handover, .done)], [.send(.handover)]),
+            ([.polled(pausedPoll(running: 1)), .restartNow], []),
+        ]
+        for (waiting, asked) in drains {
             var (machine, effects) = beginUpdate()
             var now = began
             for event in [.controlFinished(.pause, .done)] + waiting + [.exited(.signaled(15))] {
@@ -428,14 +441,15 @@ final class RestartMachineTests: XCTestCase {
                 effects += machine.handle(event, now: now)
             }
 
-            XCTAssertEqual(effects, [.send(.pause), .pollNow, .stop, .stopped])
+            XCTAssertEqual(effects, [.send(.pause), .pollNow] + asked + [.stop, .stopped])
         }
     }
 
     func testUpdateKeepsAPauseTheUserMade() {
         var (machine, effects) = beginUpdate(alreadyPaused: true)
         XCTAssertEqual(effects, [.pollNow])
-        XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 0)), now: began), [.stop])
+        XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 0)), now: began), [.send(.handover)])
+        XCTAssertEqual(machine.handle(.controlFinished(.handover, .done), now: began), [.stop])
 
         XCTAssertEqual(machine.handle(.exited(.signaled(15)), now: began), [.stopped])
         XCTAssertFalse(machine.pausedByRestart)
@@ -449,7 +463,8 @@ final class RestartMachineTests: XCTestCase {
         XCTAssertEqual(machine.handle(.polled(dispatchingPoll(running: 1)), now: began), [.send(.pause)])
         XCTAssertEqual(machine.menuLine, "Updating: pausing dispatch…")
         XCTAssertEqual(machine.handle(.controlFinished(.pause, .done), now: began), [.pollNow])
-        XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 0)), now: began), [.stop])
+        XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 0)), now: began), [.send(.handover)])
+        XCTAssertEqual(machine.handle(.controlFinished(.handover, .done), now: began), [.stop])
 
         XCTAssertEqual(machine.handle(.exited(.signaled(15)), now: began), [.stopped])
         XCTAssertTrue(machine.pausedByRestart)
@@ -487,7 +502,8 @@ final class RestartMachineTests: XCTestCase {
         XCTAssertTrue(machine.purpose.isUpdate)
         XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 1)), now: began.addingTimeInterval(60)), [])
         XCTAssertEqual(machine.menuLine, "Waiting for 1 agent run…")
-        XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 0)), now: began.addingTimeInterval(120)), [.stop])
+        XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 0)), now: began.addingTimeInterval(120)), [.send(.handover)])
+        XCTAssertEqual(machine.handle(.controlFinished(.handover, .done)), [.stop])
         XCTAssertEqual(machine.menuLine, "Updating: stopping Symphony…")
 
         XCTAssertEqual(machine.handle(.exited(.signaled(15)), now: began), [.stopped])
@@ -732,7 +748,8 @@ final class RestartMachineTests: XCTestCase {
 
         XCTAssertEqual(machine.handle(.polled(stateFails), now: began), [.checkRuns])
         XCTAssertEqual(machine.phase, .waitingForRuns(running: nil))
-        XCTAssertEqual(machine.handle(.runsChecked(DrainStatus(running: 1, betweenTurns: 1, paused: true)), now: began), [.stop])
+        XCTAssertEqual(machine.handle(.runsChecked(DrainStatus(running: 1, betweenTurns: 1, paused: true)), now: began), [.send(.handover)])
+        XCTAssertEqual(machine.handle(.controlFinished(.handover, .done), now: began), [.stop])
         XCTAssertEqual(machine.phase, .stopping)
         XCTAssertEqual(machine.handle(.exited(.signaled(15)), now: began), [.stopped], "the update installs")
         XCTAssertTrue(machine.pausedByRestart)
@@ -747,7 +764,8 @@ final class RestartMachineTests: XCTestCase {
         XCTAssertEqual(machine.menuLine, "Waiting for 1 agent run…")
 
         XCTAssertEqual(machine.handle(.polled(stateFails), now: began), [.checkRuns])
-        XCTAssertEqual(machine.handle(.runsChecked(DrainStatus(running: 0, paused: true)), now: began), [.stop])
+        XCTAssertEqual(machine.handle(.runsChecked(DrainStatus(running: 0, paused: true)), now: began), [.send(.handover)])
+        XCTAssertEqual(machine.handle(.controlFinished(.handover, .done), now: began), [.stop])
     }
 
     func testADrainReadShowingDispatchResumedPausesItAgain() {
@@ -786,5 +804,129 @@ final class RestartMachineTests: XCTestCase {
         var idle = RestartMachine()
         XCTAssertEqual(idle.handle(.runsChecked(DrainStatus(running: 0, paused: true))), [])
         XCTAssertEqual(idle, RestartMachine())
+    }
+
+    // MARK: The handover (TP-1590)
+
+    private func pausedPoll(running: Int, conductorRuns: Int) -> StatusPoll {
+        var snapshot = StateSnapshot(running: running, pause: .init(reason: ControlAction.pauseReason))
+        snapshot.conductorRuns = conductorRuns
+        return .state(snapshot)
+    }
+
+    /// c9: the stop waits for a Conductor run mid-run, asks Symphony once per answer, and stops once it is handed over.
+    func testTheStopWaitsForAConductorRunMidRunAndAsksOncePerAnswer() {
+        var machine = waiting()
+
+        XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 0, conductorRuns: 1)), now: began), [.send(.handover)])
+        XCTAssertEqual(machine.phase, .handingOver(conductorRuns: 1))
+        XCTAssertTrue(machine.canCancel)
+        XCTAssertEqual(machine.menuLine, "Waiting for a Conductor run to end…")
+        // A poll before Symphony answered sends no second ask.
+        XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 0, conductorRuns: 2)), now: began), [])
+        XCTAssertEqual(machine.menuLine, "Waiting for 2 Conductor runs to end…")
+
+        XCTAssertEqual(machine.handle(.controlFinished(.handover, .failed(ControlAPI.conductorRunning)), now: began), [])
+        XCTAssertEqual(machine.phase, .handingOver(conductorRuns: 2))
+        XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 0, conductorRuns: 0)), now: began), [.send(.handover)])
+        XCTAssertEqual(machine.menuLine, "Restarting: stopping Symphony…")
+
+        XCTAssertEqual(machine.handle(.controlFinished(.handover, .done), now: began), [.stop])
+        XCTAssertEqual(machine.phase, .stopping)
+        XCTAssertEqual(machine.handle(.exited(.signaled(15)), now: began), [.start])
+    }
+
+    func testAHandoverRefusedWithNoCountStillWaitsForOneRun() {
+        var machine = waiting()
+        _ = machine.handle(.polled(pausedPoll(running: 0)), now: began)
+
+        XCTAssertEqual(machine.handle(.controlFinished(.handover, .failed(ControlAPI.conductorRunning)), now: began), [])
+        XCTAssertEqual(machine.phase, .handingOver(conductorRuns: 1))
+    }
+
+    func testASymphonyThatPredatesTheHandoverStopsAsBefore() {
+        var machine = waiting()
+        _ = machine.handle(.polled(pausedPoll(running: 0)), now: began)
+
+        XCTAssertEqual(machine.handle(.controlFinished(.handover, .failed("Symphony can't stop yet: HTTP 404")), now: began), [.stop])
+        XCTAssertEqual(machine.phase, .stopping)
+    }
+
+    func testAnAgentRunStartingDuringTheHandoverSendsTheStopBackToWaitingForIt() {
+        var machine = waiting()
+        _ = machine.handle(.polled(pausedPoll(running: 0, conductorRuns: 1)), now: began)
+        _ = machine.handle(.controlFinished(.handover, .failed(ControlAPI.conductorRunning)), now: began)
+
+        XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 1)), now: began), [])
+        XCTAssertEqual(machine.phase, .waitingForRuns(running: 1))
+        XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 0)), now: began), [.send(.handover)])
+    }
+
+    func testCancelAndRestartNowDuringTheHandover() {
+        var cancelled = waiting()
+        _ = cancelled.handle(.polled(pausedPoll(running: 0, conductorRuns: 1)), now: began)
+        XCTAssertEqual(cancelled.handle(.cancel, now: began), [.send(.resume)])
+
+        var anyway = waiting()
+        _ = anyway.handle(.polled(pausedPoll(running: 0, conductorRuns: 1)), now: began)
+        _ = anyway.handle(.controlFinished(.handover, .failed(ControlAPI.conductorRunning)), now: began)
+        let late = began.addingTimeInterval(runsTimeout)
+        XCTAssertEqual(anyway.handle(.polled(pausedPoll(running: 0, conductorRuns: 1)), now: late), [.send(.handover)])
+        XCTAssertTrue(anyway.offersRestartNow)
+        XCTAssertEqual(anyway.handle(.restartNow, now: late), [.stop])
+
+        var gone = waiting()
+        _ = gone.handle(.polled(pausedPoll(running: 0, conductorRuns: 1)), now: began)
+        XCTAssertEqual(gone.handle(.exited(.exited(1)), now: began), [])
+        XCTAssertFalse(gone.isRestarting)
+    }
+
+    func testTheDrainReadCountsConductorRunsToo() {
+        var (machine, _) = beginUpdate()
+        _ = machine.handle(.controlFinished(.pause, .done), now: began)
+        _ = machine.handle(.polled(.failed("HTTP 500")), now: began)
+
+        let read = DrainStatus(running: 0, paused: true, conductorRuns: 1)
+        XCTAssertEqual(machine.handle(.runsChecked(read), now: began), [.send(.handover)])
+        XCTAssertEqual(machine.phase, .handingOver(conductorRuns: 1))
+        XCTAssertEqual(machine.menuLine(updatingTo: "0.0.1.1057", now: began), "Waiting for a Conductor run to end…")
+    }
+
+    func testTheUpdateCardSaysItWaitsForAConductorRun() throws {
+        var (machine, _) = beginUpdate()
+        _ = machine.handle(.controlFinished(.pause, .done), now: began)
+        _ = machine.handle(.polled(pausedPoll(running: 0, conductorRuns: 2)), now: began)
+        let release = Release(
+            version: "0.0.1.1057", build: 1057, notes: "",
+            pageURL: URL(string: "https://github.com/tonypine/symphony/releases/tag/v0.0.1.1057")!, changes: nil
+        )
+
+        let hold = try XCTUnwrap(UpdateHold(release: release, downloading: false, drain: machine))
+        XCTAssertEqual(hold.step, .waitingForConductor(runs: 2))
+        XCTAssertEqual(hold.waitingLine, "Waiting for 2 Conductor runs to end")
+        XCTAssertTrue(hold.canCancel)
+
+        _ = machine.handle(.controlFinished(.handover, .failed(ControlAPI.conductorRunning)), now: began)
+        _ = machine.handle(.polled(pausedPoll(running: 0, conductorRuns: 1)), now: began)
+        XCTAssertEqual(UpdateHold(release: release, downloading: false, drain: machine)?.waitingLine, "Waiting for a Conductor run to end")
+
+        _ = machine.handle(.polled(pausedPoll(running: 0, conductorRuns: 0)), now: began)
+        XCTAssertEqual(UpdateHold(release: release, downloading: false, drain: machine)?.step, .stopping)
+    }
+
+    func testTheHandoverRequestAndItsAnswers() throws {
+        let request = ControlAPI.request(.handover, base: URL(string: "http://127.0.0.1:4000")!, token: "t")
+        XCTAssertEqual(request.url?.path, "/api/v1/control/handover")
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertNil(ControlAction.handover.moveIdentifier)
+
+        let busy = Data(#"{"handover":false,"conductor_runs":1,"error":{"code":"conductor_running","message":"1 Conductor run is still running"}}"#.utf8)
+        XCTAssertEqual(ControlAPI.result(.handover, statusCode: 409, data: busy), .failed(ControlAPI.conductorRunning))
+        XCTAssertEqual(ControlAPI.result(.handover, statusCode: 200, data: Data(#"{"handover":true}"#.utf8)), .done)
+        XCTAssertEqual(ControlAPI.result(.handover, statusCode: 404, data: Data()), .failed("Symphony can't stop yet: HTTP 404"))
+
+        let drain = try XCTUnwrap(DrainStatus.parse(data: Data(#"{"running":1,"between_turns":1,"paused":true,"conductor_runs":2}"#.utf8), statusCode: 200))
+        XCTAssertEqual(drain.conductorRuns, 2)
+        XCTAssertEqual(DrainStatus.parse(data: Data(#"{"running":0,"between_turns":0,"paused":true}"#.utf8), statusCode: 200)?.conductorRuns, 0)
     }
 }
