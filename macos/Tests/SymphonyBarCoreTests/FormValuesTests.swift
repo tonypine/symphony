@@ -32,7 +32,8 @@ final class FormValuesTests: XCTestCase {
         let read = values(AppSettings())
         var edited = AppSettings()
         edited.restartTimeoutMinutes += 1
-        let phases = PhaseSettings(lists: [.implementation: PhaseSteps(steps: [PhaseStep(run: "mix test")], isDefault: false)])
+        let step = PhaseStep(stepID: "test", mode: .machine, commands: [StepCommand(run: "mix test")])
+        let phases = PhaseSettings(lists: [.implementation: PhaseSteps(steps: [step], isDefault: false)])
 
         XCTAssertEqual(read.changes(to: values(edited, phases: phases, key: "lin_api_new")), 3)
     }
