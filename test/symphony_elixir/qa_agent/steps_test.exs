@@ -595,7 +595,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
 
       single = Enum.find(turns, &(&1.id == "walk_4"))
       assert single.prompt =~ "Step 4: open page 4."
-      refute single.prompt =~ "You walk"
+      refute single.prompt =~ "in this one session"
 
       completed = Map.new(events("step.completed"), &{&1.payload.step_id, &1.payload})
 
@@ -667,7 +667,8 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       })
 
       assert {:ok, _result} = run(ctx, journey([1, 2, 3]))
-      [first, second] = Enum.filter(turns(), &(&1.id == "walk_1_2_3"))
+      turns = turns()
+      [first, second] = Enum.filter(turns, &(&1.id == "walk_1_2_3"))
       refute first.prompt =~ "Your last answer was refused"
       assert second.prompt =~ "Your last answer was refused: `results` has no result with a `status` of pass, fail, blocked, plan_mismatch for walkthrough step 2, 3"
 
@@ -679,7 +680,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
 
       assert not_judged =~ "not judged"
 
-      review = List.last(turns())
+      review = List.last(turns)
       assert review.prompt =~ "walkthrough step 1: pass; walkthrough step 2: blocked; walkthrough step 3: blocked"
 
       # An answer with no results list is refused twice and fails the step: none of its checks passed.
@@ -748,7 +749,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       assert Enum.map(rechecks, & &1.id) == ["recheck_1_1", "recheck_1_2", "recheck_1_3"]
       [together, alone, not_walked] = rechecks
       assert together.prompt =~ "You walk 2 walkthrough steps in this one session (steps 1, 2)"
-      refute alone.prompt =~ "You walk"
+      refute alone.prompt =~ "in this one session"
       assert alone.prompt =~ "The menu"
       assert not_walked.prompt =~ "Not walked"
 
