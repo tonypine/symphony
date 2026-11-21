@@ -668,11 +668,17 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       assert_ends_as_today(workspace_tree_reader: fn _workspace, nil -> "uncommitted-digest" end)
     end
 
-    test "with the PR on another head, ends as it does today" do
+    # Today a HEAD the PR does not show yet is waited on (`await_pr_head/2`), not parked, so the run
+    # keeps turning: what matters is that it does not move to QA.
+    test "with the PR on another head, does not move to QA" do
       found!(:resolved)
       Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-other", checks: []}})
 
-      assert_ends_as_today()
+      run_issue!("Rework", heads: ["sha-rework"], states: ["Rework", "Todo"])
+
+      refute_received {:memory_tracker_state_update, _issue_id, "QA"}
+      refute_received {:memory_tracker_state_update, _issue_id, "Code Review"}
+      refute Enum.any?(ticket_signals("issue-progress"), &match?(%{details: %{to: "QA"}}, &1))
     end
 
     test "a run that pushed its unchanged head with a finding open still goes to Code Review" do
