@@ -191,10 +191,6 @@ plan says, waive it: add `"waive": [{"check_id": "<the check's id>", "reason": "
 prove it this way, in plain words>"}]` to your answer. Symphony records it with your reason, and the
 handoff no longer waits on it. Do not waive a check because it is hard or still to do: then say in
 `instructions` how to prove it. At any other junction `waive` is ignored.
-A check with `after_merge: true` can only be seen once the ticket's own pull request has merged (a
-green run on main, a release, a deploy). Nothing before the merge waits on it: it never holds the
-handoff, QA does not walk it, and it is not among the `open_checks` before the merge. Never waive it,
-send the ticket back for it, or ask the person about it before the merge.
 
 The merge hold. At `before_merge` (at any other junction `hold` is ignored), whenever the ticket is on its way to the merge, look at
 whether the pull request is about to merge what is asked now. When it is not (the plan was

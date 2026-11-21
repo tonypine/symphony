@@ -70,8 +70,7 @@ defmodule SymphonyElixir.Conductor.Facts do
   On a groomed ticket the other junctions' `ticket` is read through `SymphonyElixir.TicketJourney`
   (`problem` is what was asked, `acceptance` the plan's outcome checks, `walkthrough` its QA
   checks, `proved_steps` the checks a test proved), and the document also holds `checks` (each
-  check of the plan with where it stands, the reason of a waived one, and `after_merge: true` on
-  one that can only be seen once the ticket's own pull request merged), `check_notes` (the
+  check of the plan with where it stands, and the reason of a waived one), `check_notes` (the
   newest notes the runs wrote, which is where a run says a check cannot be proved) and `waive`
   (the rule for waiving one).
 
@@ -299,15 +298,7 @@ defmodule SymphonyElixir.Conductor.Facts do
 
   defp checks(ticket) do
     for check <- TicketChecks.list(ticket) do
-      drop_nil(%{
-        id: check.id,
-        kind: check.kind,
-        statement: check.statement,
-        proof: check.proof,
-        state: Atom.to_string(check.state),
-        waived: check.waived && check.waived.reason,
-        after_merge: if(TicketChecks.after_merge?(check), do: true)
-      })
+      drop_nil(%{id: check.id, kind: check.kind, statement: check.statement, proof: check.proof, state: Atom.to_string(check.state), waived: check.waived && check.waived.reason})
     end
   end
 
@@ -332,10 +323,9 @@ defmodule SymphonyElixir.Conductor.Facts do
     |> put_open_checks(junction)
   end
 
-  # Before the merge of a groomed ticket's own pull request, the checks nobody proved or waived,
-  # but for the ones marked as seen only after that merge, which nothing before it proves.
+  # Before the merge of a groomed ticket's own pull request, the checks nobody proved or waived.
   defp put_open_checks(facts, "before_merge") do
-    case for(%{state: "open"} = check <- Map.get(facts, :checks, []), not Map.has_key?(check, :after_merge), do: Map.take(check, [:id, :kind, :statement, :proof])) do
+    case for(%{state: "open"} = check <- Map.get(facts, :checks, []), do: Map.take(check, [:id, :kind, :statement, :proof])) do
       [] -> facts
       open -> Map.put(facts, :open_checks, %{rule: @open_checks, checks: open})
     end

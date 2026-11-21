@@ -192,9 +192,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
   (`outcome`, `qa`, `evidence`), a `statement` (at most 600) and how it is proved (`proof`: `test`,
   `qa`, `design`, `attached`); a `qa` check also says the app `state` it needs, the `action` and
   what to `expect` (at most 400 each), the `size` it is walked at (`normal`, `wide`) and the Gallery
-  `story` a design proof compares. Any check may be marked `after_merge` (`true`): it can only be
-  seen once the ticket's own pull request has merged, so nothing before the merge gates on it. A
-  sub-ticket entry has a `key` (`s1`), a `title` (at most 120),
+  `story` a design proof compares. A sub-ticket entry has a `key` (`s1`), a `title` (at most 120),
   an `ask` (at most 4,000), the sibling keys whose merge it waits on (`after`), a `repo` when it is
   not the parent's and the `identifier` Symphony fills once the ticket exists.
 
@@ -299,8 +297,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
                  action: {:optional, {:string, 400}},
                  expect: {:optional, {:string, 400}},
                  size: {:optional, {:enum, ~w(normal wide)}},
-                 story: {:optional, {:string, 200}},
-                 after_merge: {:optional, :boolean}
+                 story: {:optional, {:string, 200}}
                ]}
   @plan_sub_ticket {:map,
                     [
