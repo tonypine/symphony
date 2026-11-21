@@ -41,4 +41,23 @@ final class ConductorSteerTests: XCTestCase {
         XCTAssertNil(RunSteer(event: try event("conductor.steer", text: "  ")))
         XCTAssertNil(RunSteer(event: try event("note", text: "Read the error.")))
     }
+
+    /// The server records a steer a person's message caused with `trigger: "message"`; a trigger this build has no
+    /// name for must not drop the event either.
+    func testASteerIsReadWhateverItsTrigger() throws {
+        for trigger in ["message", "step_failed_twice", "a_trigger_added_later"] {
+            let json: [String: Any] = [
+                "id": "s-\(trigger)", "seq": 1, "at": "2026-10-08T09:20:00Z", "type": "conductor.steer", "run_id": "run-2",
+                "payload": ["text": "Keep the button word.", "when": "next_turn", "trigger": trigger, "delivered": ["how": "next_turn"]],
+                "summary": ["title": "Conductor steered", "detail": "Keep the button word."], "artifacts": [], "children": [],
+            ]
+            let event = try JSONDecoder().decode(TicketEventsPayload.Event.self, from: JSONSerialization.data(withJSONObject: json))
+            XCTAssertEqual(RunSteer(event: event)?.text, "Keep the button word.", trigger)
+
+            let update = #"{"text":"Told the run.","watch":{"run_id":"run-2","trigger":"\#(trigger)","steered":true,"when":"next_turn","stopped":false}}"#
+            let watch = try JSONDecoder().decode(TicketEventsPayload.Payload.self, from: Data(update.utf8)).watch
+            XCTAssertEqual(watch?.trigger, trigger)
+            XCTAssertEqual(watch?.steered, true)
+        }
+    }
 }

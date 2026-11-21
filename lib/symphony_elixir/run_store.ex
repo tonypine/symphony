@@ -705,6 +705,21 @@ defmodule SymphonyElixir.RunStore do
   def get_ticket_state(_issue_id), do: {:error, :invalid_issue_id}
 
   @doc """
+  The repository of the ticket `issue_id`'s record, or nil when it has no record (or the store can't
+  be read). A read of the ticket from Linear, by id or identifier, carries no repo key; the record's
+  is the one its runs, holds and questions live under (TP-1566).
+  """
+  @spec ticket_repo_key(String.t() | term()) :: String.t() | nil
+  def ticket_repo_key(issue_id) when is_binary(issue_id) do
+    case get_ticket_state(issue_id) do
+      %{repo_key: repo_key} when is_binary(repo_key) and repo_key != "" -> repo_key
+      _none -> nil
+    end
+  end
+
+  def ticket_repo_key(_issue_id), do: nil
+
+  @doc """
   Merges `attrs` into the ticket `issue_id`'s record; `{:error, :ticket_state_not_found}` when it
   has none. A `repo_key` in `attrs` is the route observation writes: the same record moves to it.
   """

@@ -1115,6 +1115,47 @@ defmodule SymphonyElixir.ReviewAgentTest do
     end
   end
 
+  describe "a groomed ticket" do
+    test "the Code Review prompt carries the ask, the plan and the checks, never the description" do
+      test_root = unique_tmp("symphony-elixir-review-agent-groomed-prompt")
+      groomed = %{issue() | id: "issue-review-groomed"}
+
+      plan = %{
+        reason: "Grooming",
+        by: "grooming",
+        shape: "single",
+        layers: ["engine"],
+        summary: "Reviews read the plan.",
+        text: "Hand the reviewer the plan.",
+        checks: [%{id: "c1", kind: "outcome", statement: "The reviewer reads the plan.", proof: "test"}],
+        size: %{tokens: 100_000, runs: 1}
+      }
+
+      try do
+        {:ok, _ask} = SymphonyElixir.TicketPlan.record_ask("default", groomed.id, "Make the reviewer read the plan.")
+        {:ok, _plan} = SymphonyElixir.TicketPlan.write("default", groomed.id, plan)
+        repo = git_repo_with_change!(test_root)
+        put_sequence_responses!([~s({"verdict":"approve","comments":[]})])
+        write_workflow_file!(Workflow.workflow_file_path(), review_agent: %{enabled: true, kind: "codex", command: "codex app-server"})
+
+        opts = [review_agent_module: SequenceReviewer]
+        assert {:ok, %{verdict: :approve}} = ReviewAgent.evaluate(groomed, repo, Config.settings!(), opts)
+
+        assert_receive {:review_agent_sequence_call, 1, prompt, _opts}
+        [_intro, issue_part] = String.split(prompt, "Issue (context for what the diff is for):\n", parts: 2)
+        [issue_part, context_part] = String.split(issue_part, "Review criteria.", parts: 2)
+
+        assert issue_part =~ "Description:\n<linear_ticket_plan>\n## Ask\n\nMake the reviewer read the plan.\n\n## Plan\n\nHand the reviewer the plan."
+        assert issue_part =~ "- [c1] outcome, proof: test, open: The reviewer reads the plan.\n</linear_ticket_plan>"
+        assert context_part =~ "[c1] The reviewer reads the plan."
+        refute prompt =~ "Reviewer findings need quoted evidence."
+      after
+        clear_sequence_responses!()
+        File.rm_rf(test_root)
+      end
+    end
+  end
+
   describe "one review reports everything it finds (TP-1516)" do
     test "a review with three blocking problems returns three findings in one verdict" do
       test_root = unique_tmp("symphony-elixir-review-agent-three-findings")

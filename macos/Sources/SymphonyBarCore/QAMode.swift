@@ -285,9 +285,19 @@ public struct AppStores {
 
     public var isQAMode: Bool { qaMode != nil }
 
-    /// What sends the app's requests to Symphony's local API: the fixtures when they answer, else the network.
+    /// What sends the app's requests to Symphony's local API: the fixtures when they answer, else the network, logged
+    /// under the QA root as the fixtures log them when a live Symphony answers in QA mode.
     public var apiTransport: ControlAPI.Transport {
-        apiFixtures?.transport ?? { try await URLSession.shared.data(for: $0) }
+        if let apiFixtures { return apiFixtures.transport }
+        let network: ControlAPI.Transport = { try await URLSession.shared.data(for: $0) }
+        return liveRequestLog.map { APIFixtures.logging(network, requestLog: $0) } ?? network
+    }
+
+    /// Where the app logs its requests to a live Symphony in QA mode: the request log under the QA root, nil
+    /// otherwise.
+    public var liveRequestLog: URL? {
+        guard liveControl != nil, let qaMode else { return nil }
+        return qaMode.root.appendingPathComponent(APIFixtures.requestLogFileName)
     }
 
     /// What opens Symphony's live channel (`EventStream`): the fixtures when they answer, else a stream from the network.

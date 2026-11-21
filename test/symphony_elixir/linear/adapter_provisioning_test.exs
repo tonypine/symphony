@@ -480,6 +480,13 @@ defmodule SymphonyElixir.Linear.AdapterProvisioningTest do
       assert_received {:create_issue_variables, %{input: %{"assigneeId" => "user-1"}}}
     end
 
+    test "files the issue under its parent" do
+      put(:teams, {:ok, @teams_response})
+
+      assert {:ok, %{identifier: "TP-900"}} = Adapter.create_issue(%{title: "A sub-ticket", team: "TP", parent_id: "parent-id"})
+      assert_received {:create_issue_variables, %{input: %{"parentId" => "parent-id"}}}
+    end
+
     test "defaults to Todo, and drops a priority, project or assignee that is not given" do
       put(:teams, {:ok, @teams_response})
 

@@ -34,6 +34,18 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
     def fetch_plan_comments(_issue_id), do: raise("Linear is down")
   end
 
+  # A tracker whose read of the description shows whether another writer can have it meanwhile.
+  defmodule LockProbeTracker do
+    @moduledoc false
+    def fetch_issue_description(issue_id) do
+      other = Task.async(fn -> SymphonyElixir.DescriptionLock.locked(issue_id, fn -> :wrote_after end) end)
+      send(self(), {:other_writer, other, Task.yield(other, 100)})
+      {:ok, "Words."}
+    end
+
+    def update_issue_description(_issue_id, _description), do: :ok
+  end
+
   defmodule FailingStore do
     def get_ticket_state(_issue_id), do: {:error, :boom}
   end
@@ -211,6 +223,163 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
       assert Decisions.record(@issue_id, [entry], repo_key: @repo_key, description: written) == :ok
       refute_received {:memory_tracker_description_update, _issue_id, _description}
       assert stored().projected.section == Projector.desired(stored()).section
+    end
+  end
+
+  describe "a groomed ticket's description" do
+    alias SymphonyElixir.{IssueSummary, TicketChecks, TicketPlan, TicketProjection}
+
+    @checks [
+      %{id: "c1", kind: "outcome", statement: "Notes\n ship.", proof: "test"},
+      %{id: "c2", kind: "qa", statement: "The page shows them.", proof: "qa", action: "Open it", expect: "They show"},
+      %{id: "c3", kind: "evidence", statement: "A file.", proof: "attached"}
+    ]
+    @plan %{shape: "single", layers: ["docs"], summary: "The release notes\nship with the release.", text: "Approach: write them."}
+
+    defp description_writes do
+      receive do
+        {:memory_tracker_description_update, @issue_id, written} -> [written | description_writes()]
+      after
+        0 -> []
+      end
+    end
+
+    @ask "Ship the release notes.\n\n## Acceptance criteria\n\n* Notes ship."
+
+    defp groom!(ask \\ @ask) do
+      plan = Map.merge(@plan, %{checks: @checks, size: %{tokens: 1, runs: 1}, reason: "Grooming", by: "grooming"})
+      {:ok, _ask} = TicketPlan.record_ask(@repo_key, @issue_id, ask)
+      {:ok, _plan} = TicketPlan.write(@repo_key, @issue_id, plan)
+    end
+
+    test "is the ask, the plan's summary and the checks, above Symphony's own blocks, and is written again as they change" do
+      {:ok, summary} = IssueSummary.new(%{"status" => "PR open", "changelog_entry" => "Opened the PR"})
+      {:ok, description} = IssueSummary.put(@ask <> "\n\n## User walkthrough\n\n1. Run it.", summary, ~D[2026-11-04])
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue() | description: description}])
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, @issue_id))
+      proof = %{caption: "step 1", proof: %{step: 1, test: "test/a_test.exs"}}
+      {:ok, _event} = SymphonyElixir.TicketEvents.record(@repo_key, @issue_id, "evidence", proof, actor: {:agent, "run-1", "implementation"})
+
+      # Until the plan is written the description is the person's, with the proofs block.
+      # The proofs block is Symphony's own, so the description holds no words the ask does not.
+      groom!(@ask <> "\n\n## User walkthrough\n\n1. Run it.")
+      assert [ungroomed, written] = description_writes()
+      assert ungroomed =~ "Ship the release notes."
+      assert ungroomed =~ "Proved by: `test/a_test.exs`"
+      assert [_one] = TicketPlan.ask(@issue_id)
+      assert stored().projected.described
+
+      text = """
+      ## Ask
+
+      Ship the release notes.
+
+      ## Acceptance criteria
+
+      * Notes ship.
+
+      ## User walkthrough
+
+      1. Run it.
+
+      ## Plan
+
+      The release notes ship with the release.
+
+      ## Checks
+
+      - [open] c1: Notes ship.
+      - [open] c2: The page shows them.
+      - [open] c3: A file.\
+      """
+
+      assert String.starts_with?(written, text <> "\n\n" <> IssueSummary.start_marker())
+      assert written =~ "**Status:** PR open"
+      refute written =~ "Proved by:"
+
+      # A check that changes state, and a new ask, are each written at once.
+      {:ok, _proved} = TicketChecks.prove(@repo_key, @issue_id, %{check_id: "c1", by: "test", test: "test/a_test.exs"})
+      {:ok, _waived} = TicketChecks.waive(@repo_key, @issue_id, "c3", "No file exists.")
+      {:ok, _ask} = TicketPlan.record_ask(@repo_key, @issue_id, "And the changelog.", source: "message", from: "m1")
+      assert [proved, waived, asked] = description_writes()
+      assert proved =~ "- [proved] c1: Notes ship.\n- [open] c2"
+      assert waived =~ "- [waived] c3: A file."
+      assert asked =~ "1. Run it.\n\nAnd the changelog.\n\n## Plan"
+
+      # A person's edit in Linear is ignored, and overwritten at the next projection.
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue() | description: "I rewrote it.\n\n" <> asked}])
+      assert Projector.project_now(@ticket) == :ok
+      assert description_writes() == []
+      {:ok, _proved} = TicketChecks.prove(@repo_key, @issue_id, %{check_id: "c2", by: "qa"})
+      assert [again] = description_writes()
+      refute again =~ "I rewrote it."
+      assert again =~ "- [proved] c2: The page shows them."
+      assert length(TicketPlan.ask(@issue_id)) == 2
+    end
+
+    test "words a person typed while Grooming ran are recorded as a further ask before the first projection" do
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, @issue_id))
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue() | description: @ask <> "\n\nAnd keep the old ones."}])
+      groom!()
+
+      assert [%{text: @ask, source: "linear"}, %{text: @ask <> "\n\nAnd keep the old ones.", source: "linear"}] = TicketPlan.ask(@issue_id)
+      assert [written] = description_writes()
+      assert written =~ "And keep the old ones.\n\n## Plan"
+      assert stored().projected.described
+    end
+
+    test "is read and written while no other writer has the description" do
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, @issue_id))
+      groom!("Words.")
+      _ = description_writes()
+
+      assert Projector.apply(stored(), tracker: LockProbeTracker, force: true) == :ok
+      assert_received {:other_writer, other, nil}
+      assert Task.await(other) == :wrote_after
+    end
+
+    test "words too long for an ask are left where the person wrote them, and an ask the store refuses is a write that failed" do
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, @issue_id))
+      long = String.duplicate("x", TicketPlan.ask_max() + 1)
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue() | description: long}])
+      log = capture_log(fn -> groom!() end)
+      assert log =~ "holds more than an ask may"
+      assert description_writes() == []
+      assert [_one] = TicketPlan.ask(@issue_id)
+      refute Map.has_key?(stored().projected, :described)
+
+      # A record under no repository: its ask can't be written, so its description is not either.
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue() | description: "Other words."}])
+      log = capture_log(fn -> assert {:error, :invalid_repo_key} = Projector.apply(%{stored() | repo_key: nil}, force: true) end)
+      assert log =~ "Failed to project the pause"
+      assert description_writes() == []
+    end
+
+    test "keeps the Decisions section, and an ask alone or a ticket with no repo projects nothing" do
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, @issue_id))
+      {:ok, _ask} = TicketPlan.record_ask(@repo_key, @issue_id, "Ship the release notes.")
+      assert description_writes() == []
+      assert TicketProjection.changed(nil, @issue_id) == :ok
+      assert TicketProjection.render([]) == nil
+
+      decisions = Decisions.start_marker() <> "\n## Decisions\n\nKept.\n" <> Decisions.end_marker()
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue() | description: "Old words.\n\n" <> decisions <> "\n\nMore old words."}])
+      groom!()
+      written = List.last(description_writes())
+      assert written =~ ~r/\A## Ask\n\nShip the release notes\.\n\nShip the release notes\.\n\n## Acceptance/
+      assert String.ends_with?(written, "- [open] c3: A file.\n\n" <> decisions)
+      # What stood around the section was a person's, so it is an ask now.
+      assert written =~ "* Notes ship.\n\nOld words.\n\nMore old words.\n\n## Plan"
+
+      # A block that was never closed is not kept, and a plan with no ask is never projected.
+      assert TicketProjection.put("Old.\n\n" <> Decisions.start_marker() <> "\nhalf", "## Ask") == "## Ask"
+      assert TicketProjection.put(nil, "## Ask") == "## Ask"
+
+      {:ok, plan} =
+        SymphonyElixir.TicketEvents.record(@repo_key, "issue-2", "plan.written", Map.merge(@plan, %{checks: @checks, size: %{tokens: 1, runs: 1}, reason: "Grooming", by: "grooming", version: 1}), [])
+
+      assert TicketProjection.render([plan]) == nil
+      assert TicketProjection.person_text(nil) == ""
     end
   end
 

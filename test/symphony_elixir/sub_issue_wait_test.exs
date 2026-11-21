@@ -5,6 +5,7 @@ defmodule SymphonyElixir.SubIssueWaitTest do
 
   alias SymphonyElixir.Config.{Schema, SystemSchema}
   alias SymphonyElixir.{RunKind, RunStore, SubIssueWait}
+  alias SymphonyElixir.{TicketObservation, TicketPlan, TicketPullRequest, TicketSignals}
 
   @waiting "Waiting on sub-tickets"
 
@@ -133,6 +134,114 @@ defmodule SymphonyElixir.SubIssueWaitTest do
     end
   end
 
+  describe "a groomed ticket and the tickets around it" do
+    defp groomed!(issue_id) do
+      checks = [%{id: "c1", kind: "outcome", statement: "It works.", proof: "test"}]
+      plan = %{reason: "Grooming", by: "grooming", shape: "single", layers: ["engine"], summary: "s", text: "t"}
+      {:ok, _event} = TicketPlan.write("default", issue_id, Map.merge(plan, %{checks: checks, size: %{tokens: 1, runs: 1}}))
+      :ok
+    end
+
+    defp merged!(issue_id) do
+      url = "https://github.com/acme/app/pull/#{System.unique_integer([:positive])}"
+      :ok = TicketPullRequest.put("default", issue_id, %{pr_url: url})
+      :ok = TicketPullRequest.mark_finished("default", url, "merged")
+    end
+
+    test "a blocked ticket starts once its groomed blocker's pull request merged, while the blocker is not Done" do
+      state = orchestrator_state()
+      terminal_states = Config.settings!().tracker.terminal_states
+      for id <- ["blocker-groomed", "blocker-plain"], do: :ok = TicketSignals.record_phase("default", id, "Merging")
+      groomed!("blocker-groomed")
+      blocker = %{id: "blocker-groomed", identifier: "MT-2101", state: "Merging"}
+      blocked = %Issue{id: "blocked-by-groomed", identifier: "MT-2102", title: "Next", state: "Todo", blocked_by: [blocker]}
+
+      # Its pull request is still open: it blocks.
+      assert Issue.blocked?(blocked, terminal_states)
+      assert [%{issue_id: "blocked-by-groomed"}] = Orchestrator.put_blocked_for_test(state, [blocked]).blocked
+
+      merged!("blocker-groomed")
+      assert SubIssueWait.merged_blocker?(blocker)
+      assert Issue.open_blockers(blocked, terminal_states) == []
+      assert Orchestrator.put_blocked_for_test(state, [blocked]).blocked == []
+      assert Orchestrator.should_dispatch_issue_for_test(blocked, state)
+
+      # A ticket with no plan keeps today's rule: merged, it still blocks until it is Done.
+      merged!("blocker-plain")
+      plain = %{id: "blocker-plain", identifier: "MT-2103", state: "Merging"}
+      refute SubIssueWait.merged_blocker?(plain)
+      assert Issue.blocked?(%{blocked | blocked_by: [plain]}, terminal_states)
+    end
+
+    test "MOT-85: a sub-ticket blocked by its own groomed parent dispatches once the parent's pull request merged" do
+      state = orchestrator_state()
+      :ok = TicketSignals.record_phase("default", "groomed-parent", @waiting)
+      groomed!("groomed-parent")
+      merged!("groomed-parent")
+      parent = %{id: "groomed-parent", identifier: "MT-2201", state: @waiting}
+      child = %Issue{id: "child-of-groomed", identifier: "MT-2202", title: "Builds on it", state: "Todo", blocked_by: [parent]}
+
+      # No merge mark is left for it: the record's merged pull request is enough.
+      refute RunStore.merged_wait?("groomed-parent")
+      assert Orchestrator.put_blocked_for_test(state, [child]).blocked == []
+      assert Orchestrator.should_dispatch_issue_for_test(child, state)
+    end
+
+    test "a sub-ticket in Backlog holds a groomed ticket whose pull request merged, and so does one that ended" do
+      settings = Config.settings!()
+      terminal_states = settings.tracker.terminal_states
+      backlog = [%{id: "c1", identifier: "MT-2302", state: "Backlog"}]
+      plain = %Issue{id: "plain-merged", identifier: "MT-2301", title: "Work", state: "Merging", sub_issues: backlog, repo_key: "default"}
+      groomed = %{plain | id: "groomed-merged"}
+      groomed!("groomed-merged")
+
+      refute SubIssueWait.wait_on_merge?(plain, terminal_states, settings)
+      assert SubIssueWait.wait_on_merge?(groomed, terminal_states, settings)
+      assert SubIssueWait.wait_on_merge?(%{groomed | labels: ["plan"]}, terminal_states, settings)
+      refute SubIssueWait.wait_on_merge?(%{groomed | sub_issues: []}, terminal_states, settings)
+      refute SubIssueWait.wait_on_merge?(%{groomed | sub_issues: :unknown}, terminal_states, settings)
+      refute SubIssueWait.wait_on_merge?(%{plain | labels: ["plan"]}, terminal_states, settings)
+
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [groomed])
+      assert :ok = SubIssueWait.wait_on_merge(groomed, settings, Tracker.adapter())
+      assert_received {:memory_tracker_comment, "groomed-merged", waiting}
+      assert waiting =~ "the PR merged with sub-tickets still open (MT-2302)"
+      assert waiting =~ "one in Backlog included, the Conductor checks the whole ticket against its plan"
+
+      # Every sub-ticket ended before the merge: it still waits, for the final check.
+      ended = %{groomed | id: "groomed-ended", sub_issues: [%{id: "c1", identifier: "MT-2302", state: "Done"}]}
+      groomed!("groomed-ended")
+      assert SubIssueWait.wait_on_merge?(ended, terminal_states, settings)
+      assert :ok = SubIssueWait.wait_on_merge(ended, settings, Tracker.adapter())
+      assert_received {:memory_tracker_comment, "groomed-ended", checked}
+      assert checked == "#{@waiting}: the PR merged and every sub-ticket has ended. Next, the Conductor checks the whole ticket against its plan, and it moves to Done."
+    end
+  end
+
+  describe "a groomed ticket whose plan label survived" do
+    test "is out of the old plan flow: no breakdown run, no epic review, and it is held in the waiting state" do
+      settings = Config.settings!()
+      done = [%{id: "c1", identifier: "MT-2", state: "Done"}]
+      parent = %Issue{id: "groomed-labelled", identifier: "MT-1", title: "Parent", state: @waiting, labels: ["plan"], sub_issues: done}
+      assert RunKind.classify(parent, terminal_states: ["Done"], settings: settings) == :epic_review
+      refute SubIssueWait.groomed?(parent)
+      refute SubIssueWait.groomed?(nil)
+
+      checks = [%{id: "c1", kind: "outcome", statement: "It works.", proof: "test"}]
+      plan = %{reason: "Grooming", by: "grooming", shape: "single", layers: ["engine"], summary: "s", text: "t"}
+      plan = Map.merge(plan, %{checks: checks, size: %{tokens: 1, runs: 1}})
+      {:ok, _event} = TicketPlan.write("default", "groomed-labelled", plan)
+
+      assert SubIssueWait.groomed?(parent)
+      refute SubIssueWait.close_out_ready?(parent, ["Done"], settings)
+      assert SubIssueWait.held?(parent, ["Done"], settings)
+      assert RunKind.classify(parent, terminal_states: ["Done"], settings: settings) == :implementation
+      unsplit = %{parent | state: "Todo", sub_issues: []}
+      assert RunKind.classify(unsplit, terminal_states: ["Done"], settings: settings) == :implementation
+      assert RunKind.classify(%{parent | id: nil, state: "Todo", sub_issues: []}, settings: settings) == :breakdown
+    end
+  end
+
   describe "held?/3, park?/3 and the Issue helpers" do
     test "holds everything in the waiting state except a breakdown parent ready for close-out" do
       settings = Config.settings!()
@@ -239,6 +348,12 @@ defmodule SymphonyElixir.SubIssueWaitTest do
 
       # Closing it leaves a Backlog sub-issue there, and says so.
       parked = %{waiting | sub_issues: [%{id: "c1", identifier: "MT-2", state: "Done"}, %{id: "c2", identifier: "MT-3", state: "Backlog"}]}
+      # With no repo key there is no record to move: nothing moves and the mark stays (MOT-93).
+      assert {:error, :no_repo_key} = SubIssueWait.close(parked, SymphonyElixir.Tracker.Memory)
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+      assert RunStore.merged_wait?("p")
+      parked = %{parked | repo_key: "repo-sub-wait"}
+
       capture_log([level: :info], fn -> assert :ok = SubIssueWait.close(parked, SymphonyElixir.Tracker.Memory) end)
       assert_received {:memory_tracker_state_update, "p", "Done"}
       refute_received {:memory_tracker_state_update, _issue_id, _state}
@@ -248,7 +363,8 @@ defmodule SymphonyElixir.SubIssueWaitTest do
                "Every sub-ticket is finished, so this ticket is Done:\n\n- MT-2: Done\n- MT-3: Backlog\n\n" <>
                  "Sub-tickets in Backlog stay there until a person moves them to Todo with Move to… in the Director."
 
-      capture_log([level: :info], fn -> assert :ok = SubIssueWait.close(%{waiting | sub_issues: []}, SymphonyElixir.Tracker.Memory) end)
+      orphan = %{waiting | sub_issues: [], repo_key: "repo-sub-wait"}
+      capture_log([level: :info], fn -> assert :ok = SubIssueWait.close(orphan, SymphonyElixir.Tracker.Memory) end)
       assert_received {:memory_tracker_state_update, "p", "Done"}
       assert_received {:memory_tracker_comment, "p", "No sub-ticket is left under this ticket, so it is Done."}
     end
@@ -460,7 +576,16 @@ defmodule SymphonyElixir.SubIssueWaitTest do
         %{id: "child-3", identifier: "MT-1704", state: "Duplicate"}
       ]
 
-      waiting = %Issue{id: "waiting", identifier: "MT-1701", title: "Work", state: @waiting, labels: ["improvement"], sub_issues: sub_issues}
+      waiting = %Issue{
+        id: "waiting",
+        identifier: "MT-1701",
+        title: "Work",
+        state: @waiting,
+        labels: ["improvement"],
+        sub_issues: sub_issues,
+        repo_key: "default"
+      }
+
       running = %{waiting | id: "waiting-running", identifier: "MT-1705"}
       claimed = %{waiting | id: "waiting-claimed", identifier: "MT-1706"}
       breakdown = %{waiting | id: "waiting-breakdown", identifier: "MT-1707", labels: ["breakdown"]}
@@ -520,7 +645,7 @@ defmodule SymphonyElixir.SubIssueWaitTest do
     test "moves an issue waiting after its PR merged to Done once its last sub-ticket is re-parented away" do
       state = orchestrator_state()
       # Its last open child moved to another epic: the fresh read lists no sub-ticket at all.
-      waiting = %Issue{id: "orphaned", identifier: "MT-1801", title: "Audit", state: @waiting, labels: ["improvement"], sub_issues: []}
+      waiting = %Issue{id: "orphaned", identifier: "MT-1801", title: "Audit", state: @waiting, labels: ["improvement"], sub_issues: [], repo_key: "default"}
       Application.put_env(:symphony_elixir, :memory_tracker_issues, [waiting])
       :ok = RunStore.put_merged_wait("orphaned")
 
@@ -531,6 +656,90 @@ defmodule SymphonyElixir.SubIssueWaitTest do
       assert_received {:memory_tracker_state_update, "orphaned", "Done"}
       assert_received {:memory_tracker_comment, "orphaned", "No sub-ticket is left under this ticket, so it is Done."}
       refute RunStore.merged_wait?("orphaned")
+    end
+
+    test "TP-1565: a close through the read by id moves the record to Done, and the drift check after it moves nothing" do
+      repo_key = "default"
+      RunStore.delete_ticket_state("by-id")
+      sub_issues = [%{id: "child-1", identifier: "MT-2002", state: "Canceled"}]
+      # Linear's read by id carries no repo key; the poll's candidate does.
+      read_by_id = %Issue{id: "by-id", identifier: "MT-2001", title: "Translate", state: @waiting, labels: ["improvement"], sub_issues: sub_issues}
+      candidate = %{read_by_id | repo_key: repo_key}
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [read_by_id])
+      :ok = TicketSignals.record_phase(repo_key, "by-id", @waiting)
+      :ok = RunStore.put_merged_wait("by-id")
+
+      log =
+        capture_log([level: :info], fn ->
+          Orchestrator.close_finished_parents_for_test([candidate], orchestrator_state())
+        end)
+
+      assert_received {:memory_tracker_state_update, "by-id", "Done"}
+      refute log =~ "Moving a ticket with no record key"
+      assert %{phase: "Done"} = RunStore.get_ticket_state("by-id")
+      refute RunStore.merged_wait?("by-id")
+
+      # Linear now says Done, and so does the record: the drift check moves nothing back.
+      done = %{candidate | state: "Done", updated_at: DateTime.utc_now()}
+      assert {:ok, _outcome} = TicketObservation.observe(repo_key, done)
+      refute_received {:memory_tracker_state_update, "by-id", _state}
+      refute Enum.any?(TicketObservation.summary().drift.recent, &(&1.identifier == "MT-2001"))
+      assert %{phase: "Done"} = RunStore.get_ticket_state("by-id")
+    end
+
+    test "TP-1565: a close whose record cannot move keeps the merge's mark, and the next pass closes it" do
+      RunStore.delete_ticket_state("no-key")
+      sub_issues = [%{id: "child-1", identifier: "MT-2102", state: "Done"}]
+      waiting = %Issue{id: "no-key", identifier: "MT-2101", title: "Work", state: @waiting, labels: ["improvement"], sub_issues: sub_issues}
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [waiting])
+      :ok = RunStore.put_merged_wait("no-key")
+
+      # Neither the candidate nor the read carries a repo key: no record to move, so nothing moves.
+      log = capture_log(fn -> Orchestrator.close_finished_parents_for_test([waiting], orchestrator_state()) end)
+      assert log =~ "Failed to move an issue whose sub-issues are finished to Done; retrying next poll: issue_id=no-key"
+      assert log =~ ":no_repo_key"
+      refute_received {:memory_tracker_state_update, "no-key", _state}
+      assert RunStore.merged_wait?("no-key")
+
+      capture_log([level: :info], fn ->
+        Orchestrator.close_finished_parents_for_test([%{waiting | repo_key: "default"}], orchestrator_state())
+      end)
+
+      assert_received {:memory_tracker_state_update, "no-key", "Done"}
+      assert %{phase: "Done"} = RunStore.get_ticket_state("no-key")
+      refute RunStore.merged_wait?("no-key")
+    end
+
+    test "TP-1565: a ticket stranded in the waiting state with no mark closes from its record's merged pull request" do
+      repo_key = "default"
+      pr_url = "https://github.com/acme/repo/pull/85"
+      RunStore.delete_ticket_state("stranded")
+      sub_issues = [%{id: "child-1", identifier: "MT-2202", state: "Done"}]
+      read_by_id = %Issue{id: "stranded", identifier: "MT-2201", title: "Work", state: @waiting, labels: ["improvement"], sub_issues: sub_issues}
+      candidate = %{read_by_id | repo_key: repo_key}
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [read_by_id])
+      :ok = TicketSignals.record_phase(repo_key, "stranded", @waiting)
+      refute RunStore.merged_wait?("stranded")
+      settings = Config.settings!()
+      terminal = settings.tracker.terminal_states
+
+      # Its pull request still open: a person moved it there, so it waits for them.
+      :ok = TicketPullRequest.record_created(repo_key, "stranded", pr_url, "auto/MT-2201")
+      refute SubIssueWait.close?(candidate, terminal, settings)
+      Orchestrator.close_finished_parents_for_test([candidate], orchestrator_state())
+      refute_received {:memory_tracker_state_update, "stranded", _state}
+
+      :ok = TicketPullRequest.mark_finished(repo_key, pr_url, "merged")
+      assert SubIssueWait.close?(candidate, terminal, settings)
+      # The read by id alone has no repo key, so no record to look the pull request up in.
+      refute SubIssueWait.close?(read_by_id, terminal, settings)
+
+      capture_log([level: :info], fn ->
+        Orchestrator.close_finished_parents_for_test([candidate], orchestrator_state())
+      end)
+
+      assert_received {:memory_tracker_state_update, "stranded", "Done"}
+      assert %{phase: "Done"} = RunStore.get_ticket_state("stranded")
     end
 
     test "MOT-93: a poll cycle closes a merged ticket whose last sub-ticket was cancelled even when it dispatches nothing" do
@@ -664,6 +873,120 @@ defmodule SymphonyElixir.SubIssueWaitTest do
 
       assert [%{name: "merge settled", details: %{sub_issues: 1}}] =
                ticket_signals("waiting-signal")
+    end
+  end
+
+  describe "the close of a ticket read by id (no repo key)" do
+    setup do
+      {:ok, moves} = Task.Supervisor.start_link()
+      %{moves: moves}
+    end
+
+    # The real adapter's by-id read carries no repo key: the tracker here holds the ticket without one.
+    defp waiting_by_id(issue_id, sub_issues) do
+      RunStore.delete_ticket_state(issue_id)
+      RunStore.delete_merged_wait(issue_id)
+      :ok = TicketSignals.record_phase("default", issue_id, @waiting)
+      by_id = %Issue{id: issue_id, identifier: "MT-2001", title: "Work", state: @waiting, labels: ["improvement"], sub_issues: sub_issues}
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [by_id])
+      by_id
+    end
+
+    defp observe_on_record(issue, moves) do
+      observed = %{issue | updated_at: DateTime.add(DateTime.utc_now(), 60, :second)}
+      result = TicketObservation.observe("default", observed, dispatch_source: "record", task_supervisor: moves)
+
+      for pid <- Task.Supervisor.children(moves) do
+        ref = Process.monitor(pid)
+        assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 5_000
+      end
+
+      result
+    end
+
+    test "moves the record to Done with Linear, so the drift check finds nothing to move back", %{moves: moves} do
+      by_id = waiting_by_id("by-id", [%{id: "child-1", identifier: "MT-2002", state: "Done"}])
+      :ok = RunStore.put_merged_wait("by-id")
+      candidate = %{by_id | repo_key: "default"}
+
+      log = capture_log(fn -> Orchestrator.close_finished_parents_for_test([candidate], orchestrator_state()) end)
+
+      assert_received {:memory_tracker_state_update, "by-id", "Done"}
+      refute log =~ "Moving a ticket with no record key"
+      assert %{phase: "Done", phase_owner: :symphony} = RunStore.get_ticket_state("by-id")
+      refute RunStore.merged_wait?("by-id")
+      assert [%{name: "merge settled"}] = ticket_signals("by-id")
+
+      # Linear now says Done, as the record does: no drift, so nothing moves it back.
+      assert {:ok, _outcome} = observe_on_record(%{by_id | state: "Done"}, moves)
+      refute_received {:memory_tracker_state_update, "by-id", _state}
+      assert %{phase: "Done"} = RunStore.get_ticket_state("by-id")
+    end
+
+    # main's rule (TP-1565) holds: the repo key is the issue's own, never looked up in the record.
+    test "does not move a ticket read by id until it carries its repo key, and then moves its record" do
+      by_id = waiting_by_id("by-id-record", [])
+      :ok = RunStore.put_merged_wait("by-id-record")
+
+      assert {:error, :no_repo_key} = SubIssueWait.close(by_id, Tracker.adapter())
+      refute_received {:memory_tracker_state_update, "by-id-record", _state}
+      assert %{phase: @waiting} = RunStore.get_ticket_state("by-id-record")
+      assert RunStore.merged_wait?("by-id-record")
+
+      capture_log([level: :info], fn -> assert :ok = SubIssueWait.close(%{by_id | repo_key: "default"}, Tracker.adapter()) end)
+      assert %{phase: "Done"} = RunStore.get_ticket_state("by-id-record")
+      refute RunStore.merged_wait?("by-id-record")
+    end
+
+    test "keeps the merge mark while the record did not move" do
+      RunStore.delete_ticket_state("keyless")
+      :ok = RunStore.put_merged_wait("keyless")
+      on_exit(fn -> RunStore.delete_merged_wait("keyless") end)
+      keyless = %Issue{id: "keyless", identifier: "MT-2003", title: "Work", state: @waiting, sub_issues: []}
+
+      log = capture_log(fn -> assert {:error, :no_repo_key} = SubIssueWait.close(keyless, Tracker.adapter()) end)
+
+      refute log =~ "Moving a ticket with no record key"
+      refute_received {:memory_tracker_state_update, "keyless", _state}
+      assert RunStore.merged_wait?("keyless")
+    end
+
+    test "closes a stranded ticket: waiting, its merge mark gone, its record saying the pull request merged", %{moves: moves} do
+      settings = Config.settings!()
+      terminal_states = settings.tracker.terminal_states
+      by_id = waiting_by_id("stranded", [%{id: "child-1", identifier: "MT-2002", state: "Canceled"}])
+      candidate = %{by_id | repo_key: "default"}
+
+      # A person moved it there with its pull request open, or it has none: it waits for them.
+      refute SubIssueWait.pr_merged?("stranded")
+      refute SubIssueWait.pr_merged?("no-record-at-all")
+      refute SubIssueWait.pr_merged?(nil)
+      refute SubIssueWait.close?(candidate, terminal_states, settings)
+      :ok = TicketPullRequest.put("default", "stranded", %{pr_url: "https://github.com/acme/app/pull/7"})
+      refute SubIssueWait.close?(candidate, terminal_states, settings)
+
+      :ok = TicketPullRequest.mark_finished("default", "https://github.com/acme/app/pull/7", "merged")
+      assert SubIssueWait.pr_merged?("stranded")
+      assert SubIssueWait.close?(candidate, terminal_states, settings)
+
+      Orchestrator.close_finished_parents_for_test([candidate], orchestrator_state())
+      assert_received {:memory_tracker_state_update, "stranded", "Done"}
+      assert %{phase: "Done"} = RunStore.get_ticket_state("stranded")
+      assert {:ok, _outcome} = observe_on_record(%{by_id | state: "Done"}, moves)
+      refute_received {:memory_tracker_state_update, "stranded", _state}
+    end
+
+    test "reads the merge from the watcher's last read of the pull request" do
+      for {issue_id, fields} <- [
+            {"merged-snapshot", %{pull_request: %{state: "merged", url: "https://github.com/acme/app/pull/8"}}},
+            {"merged-facts", %{pr_watch: %{facts: %SymphonyElixir.PrDecision.Facts{pr: :merged}}}}
+          ] do
+        RunStore.delete_ticket_state(issue_id)
+        :ok = TicketSignals.record_phase("default", issue_id, @waiting)
+        refute SubIssueWait.pr_merged?(issue_id)
+        :ok = RunStore.update_ticket_state(issue_id, fields)
+        assert SubIssueWait.pr_merged?(issue_id)
+      end
     end
   end
 

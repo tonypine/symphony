@@ -485,6 +485,15 @@ defmodule SymphonyElixir.RunStoreTest do
     assert RunStore.update_subject_pause(:dispatch_pause, fn _pause -> {:ok, nil} end) == {:error, :invalid_subject}
   end
 
+  test "TP-1566: a ticket's repository is its record's, nil with no record" do
+    assert RunStore.ticket_repo_key("issue-repo") == nil
+    assert RunStore.ticket_repo_key(nil) == nil
+
+    :ok = RunStore.put_ticket_state(%{repo_key: "cycle", issue_id: "issue-repo", issue_identifier: "MOT-104", phase: "In Progress"})
+
+    assert RunStore.ticket_repo_key("issue-repo") == "cycle"
+  end
+
   test "updates a ticket's pause and appends its events in one transaction, creating the record and keeping the rest of it" do
     at = ~U[2026-10-30 04:00:00Z]
     later = ~U[2026-10-30 05:00:00Z]

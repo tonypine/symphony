@@ -269,10 +269,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             .compactMap { $0 }
             .sink { [weak self] state in self?.inboxNotifications.update(state) }
         apiClient.start()
-        poller.onPoll = { [weak self] poll in
+        poller.onPoll = { [weak self] poll, health in
             guard let self else { return StatusMachine.pollInterval }
+            if let health { machine.handle(.health(answering: health)) }
             handle(.polled(poll))
             return machine.nextPollInterval
+        }
+        // A state read still in flight counts as a late poll; its answer still counts when it comes (TP-1562).
+        poller.onLate = { [weak self] health in
+            guard let self else { return }
+            machine.handle(.health(answering: health))
+            handle(.polled(.unreachable))
         }
 
         // After an update or a rollback, bring Symphony back as it was before the app quit.
@@ -1102,6 +1109,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         showUpdateItems()
     }
 
+    /// Seconds Symphony may not answer before the menu bar shows it and a notification goes out (TP-1562).
+    private var notAnsweringLimit: TimeInterval {
+        TimeInterval(AppStores.current.settingsStore().loadSettings().notAnsweringAlertSeconds)
+    }
+
     private var configPath: String {
         AppStores.current.settingsStore().loadSettings().configPath.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -1125,7 +1137,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         }
         // An open Repos window refreshes with each poll.
         reposWindow.update(status: machine.status)
-        symphonyWindow.update(status: machine.status, configPath: configPath)
+        symphonyWindow.update(status: machine.status, configPath: configPath, lag: machine.lag())
         if let decision = setupOnStart.settle(status: machine.status), decision.openSetup {
             symphonyWindow.showSetup(welcome: decision.welcome ? SetupOnStart.welcome : nil)
         }
@@ -1146,6 +1158,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             for notice in usageLimitNotices.notices(for: poll) {
                 runner.notify(title: notice.title, body: notice.body)
             }
+            // One notification once Symphony, still alive, hasn't answered for the set time (TP-1562).
+            if machine.takeNotAnsweringAlert(limit: notAnsweringLimit) {
+                let notice = StatusMenu.notAnsweringNotice(silence: machine.silence() ?? "")
+                runner.notify(title: notice.title, body: notice.body)
+            }
+        case .health:
+            // The poller hands health reads to the machine itself, with the poll they come with.
+            break
         }
         showStatus()
 
@@ -1171,6 +1191,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         case .started, .exited:
             // Check straight away instead of waiting out the interval.
             poller.pollNow()
+        case .health:
+            break
         }
     }
 
@@ -1179,10 +1201,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         let status = machine.status
 
         let setup = StatusMenu.setupSummary(status, app: updates.current)
+        // Symphony, still shown from its last answer, has been silent past the set time (TP-1562).
+        let notAnswering = machine.notAnswering(limit: notAnsweringLimit)
         if let button = statusItem?.button {
             let badge = StatusMenu.badgeCount(for: status)
-            let label = StatusMenu.iconLabel(for: status, badge: badge, setup: setup)
-            let image = NSImage(systemSymbolName: StatusMenu.iconSymbolName(for: status), accessibilityDescription: label)
+            let label = notAnswering ? StatusMenu.notAnsweringIconLabel : StatusMenu.iconLabel(for: status, badge: badge, setup: setup)
+            let symbol = notAnswering ? StatusMenu.notAnsweringSymbol : StatusMenu.iconSymbolName(for: status)
+            let image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
             image?.isTemplate = true
             let dot = StatusMenu.iconDot(badge: badge, setup: setup)
             button.image = dot.flatMap { dot in image.map { Self.badged($0, dot: dot) } } ?? image
@@ -1197,7 +1222,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             updateHold: UpdateHold(release: updater.release, downloading: updater.preparing != nil, drain: restarter.machine)
         )
 
-        statusTitleItem.title = StatusMenu.statusTitle(status)
+        statusTitleItem.title = notAnswering ? StatusMenu.statusTitle(.error(StatusMachine.notAnsweringTitle)) : StatusMenu.statusTitle(status)
         sourceItem.title = runner.sourceLine
         guard let menu = statusTitleItem.menu else { return }
         detailItems.forEach(menu.removeItem)
@@ -1210,6 +1235,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         detailItems = StatusMenu.detailLines(
             status,
             slowToAnswer: machine.slowToAnswer,
+            lag: machine.lag(),
             waitingForKeychain: runner.isWaitingForKeychain,
             restartLine: restarter.machine.menuLine(updatingTo: updater.release?.version),
             controlError: controlError

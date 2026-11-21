@@ -42,7 +42,13 @@ final class ConductorMessageTests: XCTestCase {
     }
 
     func testEveryJunctionHasItsWords() {
-        XCTAssertEqual(ConductorJunction.allCases.map(\.words), ["after coding", "after QA failed", "after QA was blocked", "after rework", "before merge"])
+        XCTAssertEqual(
+            ConductorJunction.allCases.map(\.words),
+            [
+                "grooming", "after coding", "after QA failed", "after QA was blocked", "after rework", "before merge", "answering your message",
+                "after a sub-ticket ended", "at the final check", "after a message on a sub-ticket", "during a run",
+            ]
+        )
     }
 
     func testAnUnknownJunctionHasNoWords() throws {

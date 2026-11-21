@@ -34,8 +34,10 @@ defmodule SymphonyElixir.QaModeContractTest do
     assert prompt =~ @heading
     assert contract.qa_root_env == "SYMPHONY_BAR_QA_ROOT"
     assert contract.api_requests_log == "api-requests.jsonl"
+    assert contract.api_reads_log == "api-reads.jsonl"
     assert prompt =~ "- `#{contract.qa_root_env}`: the QA root, the launch's run directory on the QA host."
     assert prompt =~ "`qa_api_requests` reads `#{contract.api_requests_log}` from the QA root."
+    assert prompt =~ "The app logs its reads (GETs) to `#{contract.api_reads_log}` beside it"
     assert prompt =~ "- `#{contract.api_fixtures_env}`: read-only, set on a launch with `api_fixtures`."
     assert prompt =~ "- `#{contract.appearance_env}`: `light` or `dark` when the launch asks for an appearance."
 

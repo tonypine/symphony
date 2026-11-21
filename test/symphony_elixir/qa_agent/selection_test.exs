@@ -21,6 +21,54 @@ defmodule SymphonyElixir.QaAgent.SelectionTest do
     {:ok, issue: %Issue{id: issue_id, identifier: "TP-1", labels: [], description: @walkthrough}}
   end
 
+  defp groom!(issue_id, checks) do
+    :ok = RunStore.put_ticket_state(%{repo_key: "repo-a", issue_id: issue_id, issue_identifier: "TP-1"})
+
+    plan = %{
+      reason: "Grooming",
+      by: "grooming",
+      shape: "single",
+      layers: ["engine"],
+      summary: "The Director shows the decision.",
+      text: "Draw the decision in the Director.",
+      checks: checks,
+      size: %{tokens: 100_000, runs: 1}
+    }
+
+    {:ok, _plan} = SymphonyElixir.TicketPlan.write("repo-a", issue_id, plan)
+    :ok
+  end
+
+  test "a groomed ticket's QA checks are what is walked: its description is not read", %{issue: issue} do
+    outcome = %{id: "c1", kind: "outcome", statement: "The decision is stored.", proof: "test"}
+    walk = %{id: "c2", kind: "qa", statement: "The Director shows the decision.", proof: "qa", action: "Open it", expect: "It shows"}
+    plain = %{id: "c3", kind: "qa", statement: "The status prints.", proof: "test", action: "Run `symphony status`", expect: "It prints"}
+
+    groom!(issue.id, [outcome])
+    refute Selection.user_walkthrough?(issue)
+    assert {false, "the ticket's plan has no QA check"} = Selection.live(issue, @live_server, @server_change, "make-all")
+
+    groom!(issue.id, [outcome, plain])
+    assert Selection.user_walkthrough?(%{issue | description: nil})
+    assert {false, "no QA check of the plan names `Director`"} = Selection.live(issue, @live_server, @server_change, "make-all")
+    assert {true, "the PR changes the server and the plan has a QA check"} = Selection.live(issue, %{@live_server | walkthrough_mentions: []}, @server_change)
+
+    groom!(issue.id, [outcome, walk, plain])
+
+    assert {true, "the PR changes the server and a QA check of the plan names `Director`"} =
+             Selection.live(issue, @live_server, @server_change, "make-all")
+
+    proof = %{check_id: "c2", by: "test", test: "test/director_test.exs"}
+    {:ok, _event} = SymphonyElixir.TicketChecks.prove("repo-a", issue.id, proof, actor: {:agent, "run-1", "implementation"})
+    assert {false, "no QA check of the plan names `Director`"} = Selection.live(issue, @live_server, @server_change, "make-all")
+
+    proof = %{check_id: "c3", by: "test", test: "test/status_test.exs"}
+    {:ok, _event} = SymphonyElixir.TicketChecks.prove("repo-a", issue.id, proof, actor: {:agent, "run-1", "implementation"})
+
+    assert {false, "a test recorded on the ticket proves every QA check of the plan"} =
+             Selection.live(issue, @live_server, @server_change, "make-all")
+  end
+
   defp record_proof!(issue_id, step) do
     payload = %{caption: "step #{step}", proof: %{step: step, test: "test/director_test.exs"}}
     {:ok, _event} = TicketEvents.record("repo-a", issue_id, "evidence", payload, actor: {:agent, "run-1", "implementation"})

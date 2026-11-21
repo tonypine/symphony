@@ -925,8 +925,11 @@ struct TicketPageBody: View {
             if !desktop {
                 DecisionsLineView(line: line, open: sheetOpen, focus: answerFocus, answer: answer, review: actions.review)
             }
-            // The brief first, above the Lifecycle; a ticket with neither a brief nor a description has none.
-            if let brief = BriefPanelModel.build(page.detailsRead, runs: page.history?.runs ?? [:], reference: page.reference, calendar: calendar) {
+            // The plan first on a groomed ticket, in the brief's place; else the brief, above the Lifecycle. A ticket with
+            // neither a brief nor a description has none.
+            if let plan = PlanPanelModel.build(page.detailsRead) {
+                if !plan.isEmpty { PlanPanel(model: plan, open: briefOpen) }
+            } else if let brief = BriefPanelModel.build(page.detailsRead, runs: page.history?.runs ?? [:], reference: page.reference, calendar: calendar) {
                 BriefPanel(model: brief, open: briefOpen)
             }
             if let lifecycle = page.lifecycleRead?.lifecycle {
@@ -937,7 +940,7 @@ struct TicketPageBody: View {
             }
             VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
                 TimelineTitle(marks: page.marksRead)
-                // Writing to the ticket: one box above the first entry; none on a ticket no run will read again.
+                // Writing to the ticket: one box above the first entry; none on a Done or Cancelled ticket with no plan.
                 if page.takesMessages {
                     TimelineComposer(composer: message, focus: messageFocus, drawnAs: composerDrawnAs, send: actions.sendMessage)
                         .id(TicketPageView.composerAnchor)

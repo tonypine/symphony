@@ -112,6 +112,8 @@ final class QAModeTests: XCTestCase {
         XCTAssertNil(stores.qaMode?.apiFixtures)
         XCTAssertEqual(stores.apiFallback, URL(string: "http://127.0.0.1:4000"))
         XCTAssertEqual(stores.apiToken, "qa-token")
+        // Its requests are logged under the QA root, as the fixtures log them.
+        XCTAssertEqual(stores.liveRequestLog, root.appendingPathComponent("api-requests.jsonl"))
         // The webhook secret is the live Symphony's state root's to hand off, not a fixture's.
         let stateRoot = root.appendingPathComponent("state", isDirectory: true)
         XCTAssertEqual(stores.webhookSecretHandOff(stateRoot: stateRoot), WebhookSecret.handOffFile(stateRoot: stateRoot))
@@ -125,6 +127,7 @@ final class QAModeTests: XCTestCase {
         XCTAssertEqual(fixtures.apiFixtures?.directory.path, "/tmp/director-app")
         XCTAssertEqual(fixtures.apiFallback, APIFixtures.baseURL)
         XCTAssertEqual(fixtures.apiToken, APIFixtures.token)
+        XCTAssertNil(fixtures.liveRequestLog)
     }
 
     func testQAModeReadsScriptedAndTheUpdateURL() {

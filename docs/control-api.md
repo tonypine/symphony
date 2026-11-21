@@ -464,8 +464,8 @@ every event new then.
 ## Messages
 
 Writing to a ticket works like a prompt sent to it (`SymphonyElixir.Messages`).
-`POST /api/v1/control/note` takes `repo_key`, `issue_identifier` and `text` (at most 4,000 characters),
-and needs the control token. It records a `message.sent` event on the ticket's ledger: the text, who wrote
+`POST /api/v1/control/message` takes `repo_key`, `issue_identifier` and `text` (at most 4,000 characters),
+and needs the control token; `POST /api/v1/control/note` is an alias of it, kept for older callers. It records a `message.sent` event on the ticket's ledger: the text, who wrote
 it (the person, the Director, whom the token names today) and when, and answers `200` with the event as the
 events feed shows it. Each message is its own event; none replaces or hides an earlier one. Blank or
 over-long text is `400` `invalid_note`, a ticket with no record `404` `ticket_not_found`, and a request
@@ -487,6 +487,49 @@ In the events feed (`GET /api/v1/repos/:repo_key/tickets/:issue_identifier/event
 Director), the text as `summary.detail`, and `read`: null while no run read it, else `run_id`, `run` (the
 run's title, "Implementation run 2") and `at`. A `message.read` sits in its run's group as "Message read by a
 run".
+
+### A groomed ticket: the Conductor answers
+
+On a ticket that has a plan (a `plan.written`), while `conductor.enabled` is on and
+`conductor.junctions` lists `message`, a message goes to the ticket's Conductor and to no run. The
+request answers as above, and the Conductor's turn starts at once, in the background:
+
+- Its reply is a `conductor.update` event with `junction: "message"` whose `parent` is the message's
+  event id. It says what the Conductor took the message to be and what it did.
+- A message that changes what is asked: Symphony records a new `plan.written` (`by: recalibration`,
+  with the Conductor's reason) and then the message as an `ask.recorded` (`source: "message"`, `from`
+  the message's event id).
+- Information a run needs is passed to the working run (`conductor.steer`, `trigger: "message"`) or,
+  when none works or steering is off, recorded as `conductor.instructions` for the next run. A run
+  whose work the message makes wrong is stopped (`conductor.intervention`, `action: "stopped"`).
+- On a ticket with sub-tickets the answer may change them (the tree operations), and it may waive a
+  check nobody can prove (`check.waived`).
+- A turn that fails, times out or answers something Symphony cannot read is counted on the message
+  in a status note, and the message stays owed its turn: the next poll tries again. After 3 failed
+  tries Symphony leaves its own reply under the message: "The Conductor could not read this message
+  (…), 3 times, so nothing was done with it. It stays in the ticket's history. Send it again to have
+  it read."
+- A message written before the ticket had its plan is answered as soon as the plan is written. A
+  message with no reply yet is still owed its turn after a restart of Symphony.
+- One Conductor turn works on a ticket at a time. A message that arrives while another turn works on
+  the ticket (a tree turn, a run's junction, Grooming, an earlier message's turn) waits, and its turn
+  starts when that one ends. One turn answers every message that waits at that moment: the reply
+  hangs under the newest, and each earlier one gets its own `conductor.update` ("Answered together
+  with your later message, below.", `refs` the newest message). The turn reads every ask and the
+  newest 20 messages with their replies.
+- While no provider of `runs.conductor` can take a run (a paused provider, a usage limit), or
+  Symphony or the repository is paused, the turn waits, still owed, and is not counted as failed.
+- On a ticket in Done or Canceled the Conductor may only reply, or have a new ticket created: in
+  Todo, Urgent, in the same team and project, linked to the finished one as related, with the
+  message as its ask (`ask.recorded`, `source: "message"`) and a `ticket.filed_from`.
+- A message on a sub-ticket is also shown to its parent's Conductor (`child_message`), once the
+  sub-ticket's own Conductor replied. It owes no reply and records nothing unless it changes the
+  parent's plan or its sub-tickets. One turn of the parent reads every such message that waits, and
+  the parent records each as read in a status note.
+
+No `message.read` is written for such a message, and `read` stays null in the feed. With the
+Conductor or the `message` junction off, a groomed ticket's messages are read by its next run, as
+on any other ticket.
 
 Symphony's own notes (`note`: "QA waits on the PR watcher…", the notes of a stop or a move) are not
 messages: they keep their type and are never given to a run as the person's words.
@@ -514,6 +557,25 @@ at its first delegated step, and again at its handoff when the work changed what
 over its bounds or holding a backtick, and from any other run kind, the machine or a person. Linear's
 description is left as it is. The summary of the ticket's history that every run's prompt carries opens
 with the brief, in full, under `Brief`.
+
+## `plan`, `checks` and `asks`
+
+What a groomed ticket works from (`SymphonyElixir.TicketPlan`, `SymphonyElixir.TicketChecks`). A ticket is
+groomed when its history holds a `plan.written`; a ticket that holds none reads `plan: null`, `checks: []`
+and the asks it has, if any.
+
+| Field | What it holds |
+| --- | --- |
+| `plan` | The newest `plan.written`, without its checks: `version`, `reason`, `by` (`grooming`, `recalibration`, `parent`, `run`), `shape` (`single`, `split`), `layers`, `summary` (for a person), `text` (for agents), `size` (`tokens`, `runs`), `sub_tickets` for a split (each `key`, `title`, `ask`, `after`, `repo`, `identifier`), the event's id as `event_id` and when it was written as `at`. Null for a ticket with no plan. |
+| `checks` | The plan's checks, in its order: `id` (the same across plan versions), `kind` (`outcome`, `qa`, `evidence`), `statement`, `proof` (`test`, `qa`, `design`, `attached`), and for a `qa` check `needs` (the app state it needs), `action`, `expect`, `size` and `story`. |
+| `checks[].state` | `open`, `proved` (a `check.proved` names it, on any head) or `waived` (no proof names it and a `check.waived` does). |
+| `checks[].proved_by` | The newest proof: `by`, `test`, `evidence`, `details`, the proof's `event_id`, `at`, `head` and `run_id`. Null until the check is proved. |
+| `checks[].waived` | The waiver: `reason`, `event_id` and `at`. Null when the check was not waived. |
+| `asks` | Every `ask.recorded`, oldest first: `text` (what a person asked for, word for word), `source` (`linear`, `message`, `parent`), `from` (the parent ticket or the message event), `at` and `event_id`. |
+
+A check the newest plan dropped is no longer listed; one it kept keeps its state. The summary of the
+ticket's history that every run's prompt carries opens, for a groomed ticket, with `Ask`, `Plan` and
+`Checks` in the brief's place.
 
 ## `running`
 
@@ -977,7 +1039,11 @@ deterministic JSON document built only from what Symphony already holds on the t
 its events, plus the workspace's git diff stat when the workspace exists. Like the other reads of
 `/api/v1`, it needs no token. The identifier resolves through the ticket's record, by identifier in any
 case or by id: a ticket with none is `404` `ticket_not_found`. `junction` is optional; one that is not
-`after_coding`, `after_qa_fail`, `after_qa_blocked`, `after_rework`, `before_merge` or `during_run` is `400` `invalid_query`.
+`grooming`, `after_coding`, `after_qa_fail`, `after_qa_blocked`, `after_rework`, `before_merge`, `message`, `sub_ticket_ended`, `final_check`, `child_message` or `during_run` is `400` `invalid_query`.
+
+At `grooming` the document is another one, since no run has worked on the ticket yet: `schema`, `junction` and `focus` as below, `ticket` (`identifier`, `title`, `url`, `repo`, `labels`), `asks` (every `ask.recorded`, oldest first: `event_id`, `source`, `from`, `text`), the person's `decisions`, `notes` and `answers`, `parent` (null, or the parent ticket's `identifier`, `title`, current `plan` (`event_id`, `version`, `shape`, `layers`, `summary`, `text`, `sub_tickets`) and tagged `notes`), `siblings` (the parent's other sub-tickets that hold a tagged note: `identifier`, `title`, `phase`, `notes`), `layers` (each layer a plan may name: `name`, `means`), `conductor` and `budget`. The Grooming turn itself also reads `code`: whether the repository is checked out in its working directory. The document also holds `sub_tickets`: the sub-tickets the ticket already has (`identifier`, `title`, `state`), for a split to adopt.
+
+At `sub_ticket_ended` and `final_check`, on a groomed ticket, the document is the tree's: `schema`, `junction` and `focus` as below, `ticket` (`identifier`, `title`, `url`, `repo`, `phase` and `pull_request`: `merged`, `unmerged` or `none`), `asks`, `plan` (as a parent's at `grooming`), `checks` (each `id`, `kind`, `statement`, `proof` and `state`: `open`, `proved` or `waived`), `sub_tickets` (each `identifier` and `state`, and for one Symphony tracks its `title`, `phase`, `pull_request`, `plan` (its plan's summary), `checks`, tagged `notes` and `asks`), `rounds` (`made`, `limit`, `left`), the person's `decisions`, `notes` and `answers`, `conductor` and `budget`.
 
 | Key | What it holds |
 | --- | --- |
@@ -991,7 +1057,7 @@ case or by id: a ticket with none is `404` `ticket_not_found`. `junction` is opt
 | `qa_passes` | At `after_qa_blocked` only: every QA verdict (the newest 10), oldest first: `event_id`, `run_id`, `outcome`, `head`, `reason`, `on_ci` (a block on CI), and `blocked_steps`, the steps of its pass that ended blocked (a stepped pass's `step_id`, `title` and `result`: `status`, `expected`, `actual`; the verdict's own `step` and `details`), at most 4. |
 | `conductor` | The Conductor's earlier updates, instructions and steers on the ticket (the newest 10): `type` (`update`, `instructions`, `steer`), `junction`, `at`, `text`, and an instruction's `route` (`rerun`, `rework`, `ticket`) or a steer's `when` and `trigger`. |
 | `budget` | `tokens_used` (every run's, the Conductor's among them), `tokens_cap` (`execution.limits.tokens_per_issue`), `qa_passes` and `rework_runs`. |
-| `filings` | The Conductor's `ticket` route on this ticket: `open`, `closed` (why not, or null), `filed` (each ticket it filed or linked: `identifier`, `relation`, `repo`, `title`, `existing`, `event_id`), `left` (filings that remain) and `repos` (the repo keys a ticket may be filed in). |
+| `filings` | The Conductor's `ticket` route on this ticket: `relations` (the relations it takes here: `before` and `after` on a groomed ticket, `blocks` and `follow_up` on any other), `open`, `closed` (why not, or null), `filed` (each ticket it filed or linked: `identifier`, `relation`, `repo`, `title`, `existing`, `event_id`), `left` (filings that remain) and `repos` (the repo keys a ticket may be filed in). |
 
 A watch turn (`during_run`) reads the same document plus `live`: the run's `run_id`, `kind`, `model`,
 `harness`, its `steps` and their outcomes, `failed_step` (the newest step that ended `failed`: `step_id`,

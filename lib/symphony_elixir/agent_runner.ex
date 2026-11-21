@@ -14,6 +14,7 @@ defmodule SymphonyElixir.AgentRunner do
     AgentTools,
     AgentTools.Linear.CommentRegistry,
     AuditLog,
+    ChecksHold,
     CiFix,
     CiPoller,
     ClosedPullRequest,
@@ -53,6 +54,7 @@ defmodule SymphonyElixir.AgentRunner do
     SetupBlock,
     StateMachine,
     SubIssueWait,
+    TicketJourney,
     TicketPullRequest,
     TicketSignals,
     Tracker,
@@ -1062,7 +1064,7 @@ defmodule SymphonyElixir.AgentRunner do
         {:error, {:ci_pending, ci_wait}}
 
       idle_turn_limit_reached?(issue, run_context) ->
-        end_idle_run(issue, run_context)
+        end_idle_turns(issue, run_context)
 
       true ->
         :continue
@@ -2152,7 +2154,35 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp request_qa_build(_issue, _run_context), do: :ok
 
+  # A groomed ticket is not handed off while a check of its plan that a test or an attachment
+  # proves is open (`SymphonyElixir.TicketJourney.unproved/1`): a push is not gated by the step the
+  # run is on, so the step list's `symphony:checks` guard alone would not hold it.
   defp hand_off_to_state(%Issue{id: issue_id} = issue, post_pr_state, reason, run_context) do
+    case TicketJourney.unproved(issue_id) do
+      [] -> hand_off_proved(issue, post_pr_state, reason, run_context)
+      checks -> refuse_unproved(issue, checks, post_pr_state, reason, run_context)
+    end
+  end
+
+  # The refusal is a note on the ticket, once per run and head, so the next run reads which checks
+  # it owes. The second run in a row that is refused asks the person (`SymphonyElixir.ChecksHold`),
+  # which pauses the ticket: a check nobody can prove must not send it around for good.
+  defp refuse_unproved(%Issue{id: issue_id} = issue, checks, post_pr_state, reason, run_context) do
+    ids = Enum.map(checks, & &1.id)
+    Logger.warning("Not moving #{issue_context(issue)} to #{post_pr_state} #{reason}: its plan's checks #{Enum.join(ids, ", ")} are open")
+    repo_key = Keyword.get(run_context.opts, :repo_key) || issue_repo_key(issue)
+    run = %{run_id: Keyword.get(run_context.opts, :run_id), head: run_context.progress.head}
+
+    with :ask <- ChecksHold.refused(repo_key, issue_id, checks, run) do
+      request = ChecksHold.question(issue.identifier || issue_id, checks, post_pr_state)
+      asked = DecisionRequest.ask(issue, request, [repo_key: repo_key] ++ Keyword.take(run_context.opts, [:tracker]))
+      Logger.info("Asked the person about the open checks of #{issue_context(issue)}: #{inspect(asked)}")
+    end
+
+    {:error, {:checks_unproved, ids}}
+  end
+
+  defp hand_off_proved(%Issue{id: issue_id} = issue, post_pr_state, reason, run_context) do
     settings = Keyword.fetch!(run_context.opts, :settings)
 
     if Handoff.origin?(issue.state) and not handoff_emitted?(issue, run_context) do
@@ -2265,6 +2295,29 @@ defmodule SymphonyElixir.AgentRunner do
   # human's merge approval.
   defp idle_turn_limit_reached?(%Issue{} = issue, %{progress: progress}) do
     progress.empty_turns >= @max_empty_turns and !merging_state?(issue.state)
+  end
+
+  # A run that walks a step list with steps still after the current one, on a workspace HEAD no
+  # remote has, is not idle: its work is committed and only the list's handoff, which pushes it, is
+  # left (TP-1568). Its turns change nothing (a run started again on an earlier run's commit has
+  # nothing to add), so the step's outcome walks it on instead of a park asking the person; the
+  # step's own retry and `agent.max_turns` still bound it. On its last step, with a pushed head or
+  # with no list, the run idles out as before, and the park pushes what is left.
+  defp end_idle_turns(%Issue{} = issue, %{walk: %{steps: steps, step: step}} = run_context) do
+    with {:ok, next_step} <- PhaseSteps.next(steps, step, :passed),
+         head when is_binary(head) <- read_unpushed_head(run_context) do
+      Logger.info("Not parking #{issue_context(issue)}; its head #{head} was never pushed and its step list goes on from #{step.id} to #{next_step.id}")
+      :continue
+    else
+      _last_step_or_pushed -> end_idle_run(issue, run_context)
+    end
+  end
+
+  defp end_idle_turns(%Issue{} = issue, run_context), do: end_idle_run(issue, run_context)
+
+  defp read_unpushed_head(%{workspace: workspace, worker_host: worker_host, opts: opts}) do
+    reader = Keyword.get(opts, :workspace_unpushed_head_reader, &WorkspaceHead.unpushed_head/2)
+    reader.(workspace, worker_host)
   end
 
   # A Rework run that pushed a new head to its PR, with CI on it running or green, waits on that CI,
@@ -2535,7 +2588,8 @@ defmodule SymphonyElixir.AgentRunner do
   # note that fails leaves the ticket held.
   defp park_issue(%Issue{id: issue_id} = issue, {repo_key, left_head}, saved, opts) do
     label = "parking #{issue_context(issue)} where it is"
-    :ok = IdlePark.hold({:ticket, repo_key, issue_id}, issue.identifier || issue_id, issue.state, @max_empty_turns, PrWatch.watch(issue_id), left_head)
+    ticket = {:ticket, repo_key, issue_id}
+    :ok = IdlePark.hold(ticket, issue.identifier || issue_id, issue.state, @max_empty_turns, PrWatch.watch(issue_id), left_head, Keyword.get(opts, :run_id))
 
     :ok = RuleActions.record(repo_key, issue_id, "Idle park", "paused", "#{@max_empty_turns} turns in #{issue.state} changed nothing, so it was held where it is")
 

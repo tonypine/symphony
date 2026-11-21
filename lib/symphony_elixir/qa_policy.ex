@@ -11,6 +11,10 @@ defmodule SymphonyElixir.QaPolicy do
   (`SymphonyElixir.QaVerification`), so a skipped ticket never starts an agent and every skip is
   auditable in the ticket's ledger.
 
+  A groomed ticket's plan can ask for QA itself: while a check only QA proves (`proof: qa` or
+  `design`) is open, a `qa:skip` label or a docs-only diff does not skip the run
+  (`SymphonyElixir.TicketJourney.owed_by_qa/1`); every enabled playbook runs then.
+
   A run can have nothing on screen to judge: a `macos_app` pass selected although no changed path
   matches any selected playbook's `paths` (a `qa:macos_app` label on a backend change, say) and the
   ticket has no `## User walkthrough`. Its `macos_app` playbook is then marked `scope: :none`, so
@@ -32,6 +36,7 @@ defmodule SymphonyElixir.QaPolicy do
   alias SymphonyElixir.Config
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAgent.Selection
+  alias SymphonyElixir.TicketJourney
   alias SymphonyElixir.Verification
   alias SymphonyElixir.Workspace
 
@@ -95,8 +100,22 @@ defmodule SymphonyElixir.QaPolicy do
 
   def decision(%Issue{} = issue, settings, paths) when is_list(paths) do
     case Selection.decide(issue, paths, settings.auto_review, Verification.selection_opts(settings)) do
-      {:skip, reason} -> {:skip, reason}
+      {:skip, reason} -> skip(issue, settings, paths, reason)
       {:run, playbooks} -> run(issue, playbooks, paths, Map.get(settings, :proof_check))
+    end
+  end
+
+  # A groomed ticket whose plan holds an open check only QA proves is never skipped: the plan asked
+  # for the pass, whatever a label or the diff says. With no playbook on, nothing can run it.
+  defp skip(issue, settings, paths, reason) do
+    case {TicketJourney.owed_by_qa(issue), enabled_playbooks(settings)} do
+      {[_ | _] = checks, [_ | _] = playbooks} ->
+        ids = Enum.map_join(checks, ", ", & &1.id)
+        {playbooks, live_note} = mark_live(issue, playbooks, paths, Map.get(settings, :proof_check))
+        {:run, playbooks, "the plan has open checks only QA proves (#{ids}), so QA is not skipped though #{reason}" <> live_note}
+
+      _nothing_owed_or_no_playbook ->
+        {:skip, reason}
     end
   end
 
@@ -126,8 +145,10 @@ defmodule SymphonyElixir.QaPolicy do
     end)
   end
 
+  # A groomed ticket whose plan's layers hold `screen` or `gallery` always has something on screen.
   defp nothing_on_screen?(issue, playbooks, paths) do
     Enum.any?(playbooks, &(&1.kind == "macos_app")) and not Selection.user_walkthrough?(issue) and
+      not TicketJourney.on_screen?(issue) and
       not Enum.any?(paths, fn path -> Enum.any?(playbooks, fn playbook -> Enum.any?(playbook.paths, &Selection.glob_match?(path, &1)) end) end)
   end
 

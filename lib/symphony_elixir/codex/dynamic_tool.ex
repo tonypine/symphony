@@ -328,7 +328,9 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "Record which test of this PR proves each `## User walkthrough` step you covered with an automated test: each named step gets an `evidence` event " <>
           "on the ticket's history with `proof` (the step and the test; a later proof of a step replaces an earlier one), and the description is left as it is. " <>
           "Name the test as the code has it (its file path, or a test or scenario name as written), never a check: the repo's `proof_check` names that. " <>
-          "Leave a step no test of this PR covers out, for QA; a step its author marked `Proved by: QA` is refused.",
+          "Leave a step no test of this PR covers out, for QA; a step its author marked `Proved by: QA` is refused. " <>
+          "On a ticket with a plan (the prompt has a `## Checks` section), name the check instead: `step` is the check's id, the proof is recorded as a " <>
+          "`check.proved`, and a check the plan proves by QA is refused.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -342,7 +344,10 @@ defmodule SymphonyElixir.Codex.DynamicTool do
               "additionalProperties" => false,
               "required" => ["step", "test"],
               "properties" => %{
-                "step" => %{"type" => "integer", "minimum" => 1, "description" => "The walkthrough step's number."},
+                "step" => %{
+                  "type" => ["integer", "string"],
+                  "description" => "The walkthrough step's number. On a ticket with a plan, the id of the check the test proves (`c1`)."
+                },
                 "test" => %{
                   "type" => "string",
                   "description" =>
@@ -998,7 +1003,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "qa_api_requests",
       "description" =>
-        "Return the requests an app launched with api_fixtures logged to api-requests.jsonl in its QA root since the last call (each POST with its path and body), oldest first, at most the last 500 (`dropped` counts the rest). Reads one root: `root`, or the last launch's.",
+        "Return the requests the app logged in its QA root that no call returned yet, with api_fixtures or a live Symphony: each move (POST, DELETE) from api-requests.jsonl with its body and each read (GET) from api-reads.jsonl with its query and status, every one with its `at` time, `method` and `path`, oldest first. `method` and `path` narrow the list, and the requests they leave out stay for a later call. At most the last 500 that match (`dropped` counts the rest). Reads one root: `root`, or the last launch's.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -1007,6 +1012,14 @@ defmodule SymphonyElixir.Codex.DynamicTool do
             "type" => "integer",
             "minimum" => 1,
             "description" => "The QA root whose apps' requests to return, as qa_launch_app returned it. Defaults to the root of the last launch."
+          },
+          "method" => %{
+            "type" => "string",
+            "description" => "Only the requests with this method (GET, POST or DELETE, any case)."
+          },
+          "path" => %{
+            "type" => "string",
+            "description" => "Only the requests to this path, as the app sent it without its query (for example /api/v1/state)."
           }
         }
       }
@@ -1248,7 +1261,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_open_status_menu" => ["pid"],
     "qa_put_file" => ["local_path", "remote_name"],
     "qa_put_checkout" => ["local_path", "remote_url", "remote_name"],
-    "qa_api_requests" => ["root"],
+    "qa_api_requests" => ["root", "method", "path"],
     "qa_android_install" => ["apk"],
     "qa_android_launch" => ["application_id"],
     "qa_android_stop" => ["application_id"],
@@ -1414,6 +1427,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   defp execute_tool("qa_" <> _rest = tool, _context, args, opts), do: QaDriver.call_tool(Keyword.get(opts, :qa_driver), tool, args)
   defp execute_tool("ticket_events", context, args, _opts), do: TicketLedger.events(context, args)
   defp execute_tool("ticket_record", context, args, opts), do: TicketLedger.record(context, args, opts)
+  defp execute_tool("ticket_plan", context, _args, _opts), do: TicketLedger.plan(context)
   defp execute_tool("review_verdict", _context, args, opts), do: Verdict.record(args, Keyword.get(opts, :review_verdict_sink))
 
   defp execute_authorized_tool(tool, context, args, opts) do

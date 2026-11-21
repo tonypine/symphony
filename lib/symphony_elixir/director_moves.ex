@@ -632,9 +632,11 @@ defmodule SymphonyElixir.DirectorMoves do
     end
   end
 
-  # A fetched issue carries no repo key; its holds, signals and guard moves live under the repo it
-  # routes to. The tracker fetch has just read the same config, so it is readable here.
-  defp with_repo_key(%Issue{} = issue), do: Resolver.with_repo_key(issue, Config.system!().repos)
+  # A fetched issue carries no repo key; its holds, signals and guard moves live under its record's
+  # repo, else the repo it routes to (TP-1566). The tracker fetch has just read the same config, so it
+  # is readable here.
+  defp with_repo_key(%Issue{} = issue),
+    do: Resolver.with_repo_key(%{issue | repo_key: issue.repo_key || RunStore.ticket_repo_key(issue.id)}, Config.system!().repos)
 
   # Linear answers an unknown identifier with an "Entity not found" GraphQL error.
   defp not_found?({:linear_graphql_errors, errors}), do: Enum.any?(List.wrap(errors), &(is_map(&1) and is_binary(&1["message"]) and &1["message"] =~ ~r/not found/i))

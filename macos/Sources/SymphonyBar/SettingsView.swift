@@ -25,6 +25,14 @@ struct SettingsView: View {
         )
     }
 
+    /// The not-answering limit, moved into range as the field commits (TP-1562).
+    private var notAnsweringAlertSeconds: Binding<Int> {
+        Binding(
+            get: { model.settings.notAnsweringAlertSeconds },
+            set: { model.settings.notAnsweringAlertSeconds = AppSettings.clampedNotAnsweringAlertSeconds($0) }
+        )
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Form {
@@ -61,6 +69,29 @@ struct SettingsView: View {
                     .help(
                         "How long Restart Symphony waits for agent runs before it also offers Restart Now Anyway, "
                             + "and how long an update at a set time waits for them before it tries the next day."
+                    )
+                    LabeledContent("Not answering alert") {
+                        // Laid out as Stop timeout's row: the number in its field's column, in the primary colour,
+                        // its edge beside the stepper, the stepper in the same column, then the unit. No field to type in: the stepper keeps
+                        // the limit to steps of 10.
+                        HStack {
+                            Text("\(model.settings.notAnsweringAlertSeconds)")
+                                .monospacedDigit()
+                                .foregroundStyle(DesignTokens.TextColor.primary.color)
+                                .frame(width: 60, alignment: .trailing)
+                            Stepper(
+                                "Seconds",
+                                value: notAnsweringAlertSeconds,
+                                in: AppSettings.notAnsweringAlertRange,
+                                step: 10
+                            )
+                            .labelsHidden()
+                            Text("seconds")
+                        }
+                    }
+                    .help(
+                        "How long Symphony may not answer before the menu bar shows the problem and the app sends "
+                            + "one notification. The Director keeps its pages meanwhile."
                     )
                     Toggle("Start Symphony when the app opens", isOn: $model.settings.startOnLaunch)
                     Toggle(LoginItem.toggleTitle, isOn: $model.launchAtLogin)

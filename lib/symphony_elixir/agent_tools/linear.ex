@@ -19,6 +19,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.Config.Schema.Workspace.Attachments
   alias SymphonyElixir.DecisionRequest
   alias SymphonyElixir.Decisions
+  alias SymphonyElixir.DescriptionLock
   alias SymphonyElixir.HumanActions
   alias SymphonyElixir.HumanActions.Collector, as: HumanActionsCollector
   alias SymphonyElixir.HumanActions.Request
@@ -30,8 +31,10 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.PromptSafety
   alias SymphonyElixir.Questions
   alias SymphonyElixir.RunKind
+  alias SymphonyElixir.RunStore
   alias SymphonyElixir.SensitivePath
   alias SymphonyElixir.TicketEvents
+  alias SymphonyElixir.TicketJourney
   alias SymphonyElixir.TicketSignals
   alias SymphonyElixir.Tracker
   alias SymphonyElixir.TransitionGuard
@@ -1514,8 +1517,13 @@ defmodule SymphonyElixir.AgentTools.Linear do
       else: {:error, :human_actions_disabled}
   end
 
-  defp issue_repo_key(%{issue: %{repo_key: repo_key}}), do: repo_key
-  defp issue_repo_key(_context), do: nil
+  # The run's issue carries its repo key; one read by identifier (a Start from the Director, before
+  # TP-1566) may not, and the ticket's record holds it then, so its questions and events land where
+  # the readers look.
+  defp issue_repo_key(%{issue: %{repo_key: repo_key}}) when is_binary(repo_key) and repo_key != "", do: repo_key
+
+  # A context with no current issue reads `{:error, reason}`, whose atom has no record.
+  defp issue_repo_key(context), do: context |> current_issue_id() |> elem(1) |> RunStore.ticket_repo_key()
 
   defp issue_identifier(%{issue: %{identifier: identifier}}) when is_binary(identifier), do: identifier
   defp issue_identifier(_context), do: nil
@@ -1998,15 +2006,23 @@ defmodule SymphonyElixir.AgentTools.Linear do
   review brief and artifact links, and one new changelog entry dated today (UTC) on top of the
   ones the block holds, with a line for each push and verdict on the ticket's history
   (`IssueSummary.event_entries/1`), capped. The description is read right before the write, and every byte
-  outside the block stays as it is, so a person's edit between runs survives. Fields holding a
+  outside the block stays as it is, so a person's edit between runs survives. The read and the
+  write hold the description's lock (`SymphonyElixir.DescriptionLock`), so the projector, which
+  writes the same description, never writes between them. Fields holding a
   secret pattern are refused before any Linear call.
   """
   @spec update_issue_summary(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def update_issue_summary(context, attrs, opts \\ []) when is_map(attrs) do
     with {:ok, issue_id} <- current_issue_id(context),
          {:ok, summary} <- IssueSummary.new(attrs),
-         :ok <- SecretScanner.reject_fields_if_secret_pattern(summary_secret_fields(summary), context, "linear_update_issue_summary", opts),
-         {:ok, body} <- graphql(@issue_description_query, %{id: issue_id}, opts),
+         :ok <- SecretScanner.reject_fields_if_secret_pattern(summary_secret_fields(summary), context, "linear_update_issue_summary", opts) do
+      # The projector writes the same description, so the read and the write are one turn at it.
+      DescriptionLock.locked(issue_id, fn -> write_issue_summary(issue_id, summary, opts) end)
+    end
+  end
+
+  defp write_issue_summary(issue_id, summary, opts) do
+    with {:ok, body} <- graphql(@issue_description_query, %{id: issue_id}, opts),
          {:ok, issue} <- fetch_path(body, ["data", "issue"], :issue_not_found),
          {:ok, description} <- IssueSummary.put(issue["description"], summary, Keyword.get_lazy(opts, :today, &Date.utc_today/0), IssueSummary.history(issue_id)),
          variables = %{id: issue_id, description: description},
@@ -2025,20 +2041,51 @@ defmodule SymphonyElixir.AgentTools.Linear do
   rendered from the events by the projector's description pass. A test naming a check, a step
   the walkthrough lacks, and a step its author marked `Proved by: QA` are refused before anything is
   recorded; a test holding a secret pattern before any Linear call.
+
+  On a groomed ticket (`SymphonyElixir.TicketJourney`) each proof names a check of the plan by its
+  id (`check`) instead of a step: it is recorded as a `check.proved` (`by: test`), nothing is read
+  from Linear, and a check the plan lacks or gives to QA is refused.
   """
   @spec record_walkthrough_proofs(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def record_walkthrough_proofs(context, attrs, opts \\ []) when is_map(attrs) do
     proofs = Map.get(attrs, "proofs")
 
     with {:ok, issue_id} <- current_issue_id(context),
-         :ok <- SecretScanner.reject_fields_if_secret_pattern(proof_secret_fields(proofs), context, "linear_record_walkthrough_proofs", opts),
-         {:ok, body} <- graphql(@issue_description_query, %{id: issue_id}, opts),
+         :ok <- SecretScanner.reject_fields_if_secret_pattern(proof_secret_fields(proofs), context, "linear_record_walkthrough_proofs", opts) do
+      if TicketJourney.groomed?(issue_id),
+        do: record_check_proofs(context, issue_id, proofs),
+        else: record_step_proofs(context, issue_id, proofs, opts)
+    end
+  end
+
+  defp record_step_proofs(context, issue_id, proofs, opts) do
+    with {:ok, body} <- graphql(@issue_description_query, %{id: issue_id}, opts),
          {:ok, issue} <- fetch_path(body, ["data", "issue"], :issue_not_found),
          {:ok, entries} <- Walkthrough.check_proofs(issue["description"], proofs),
          {:ok, events} <- record_proof_events(context, entries) do
       project_proofs(context, issue_id)
       {:ok, %{"events" => events, "steps" => Enum.map(entries, & &1.step)}}
     end
+  end
+
+  # A groomed ticket's proofs name checks of its plan (`SymphonyElixir.TicketJourney.check_proofs/2`):
+  # each is a `check.proved` (`by: test`), and the description is never read.
+  defp record_check_proofs(context, issue_id, proofs) do
+    with {:ok, entries} <- TicketJourney.check_proofs(issue_id, proofs),
+         {:ok, events} <- record_check_events(context, entries) do
+      {:ok, %{"events" => events, "checks" => Enum.map(entries, & &1.check_id)}}
+    end
+  end
+
+  defp record_check_events(context, entries) do
+    Enum.reduce_while(entries, {:ok, []}, fn %{check_id: check_id, test: test}, {:ok, events} ->
+      payload = %{"check_id" => check_id, "by" => "test", "test" => test}
+
+      case TicketLedger.record(context, %{"type" => "check.proved", "payload" => payload}) do
+        {:ok, %{"event" => event}} -> {:cont, {:ok, events ++ [event]}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
   end
 
   # The description's `Proved by:` block is rendered from the proof events, in the same pass as the

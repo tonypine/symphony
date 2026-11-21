@@ -119,10 +119,16 @@ worktree's configured app and on apps you launched:
   and pass the bundle as `local_path` with the GitHub `remote_url` its `origin` should name (such
   as `https://github.com/acme/widgets`) and an optional `remote_name` for the folder. Returns the
   checkout's `path`. Nothing is fetched from or pushed to GitHub.
-- `qa_api_requests`: returns the `requests` an app launched with `api_fixtures` sent since the
-  last call, oldest first: each POST it logged to `api-requests.jsonl` in its QA root, with its
-  `method`, `path` and `body`. It reads one root, the last launch's unless you pass `root`, and
-  names it. The log lives where you cannot read it, so use this instead.
+- `qa_api_requests`: returns the `requests` the app sent, with `api_fixtures` or a live
+  Symphony, that no earlier call returned, oldest first. The log covers reads as well as moves:
+  each GET (the state, health and feed polls, every page's reads) with its `at` time, `method`,
+  `path`, `query` and `status`, and each POST or DELETE with its `at`, `method`, `path` and
+  `body`. Pass `method` (`GET`, `POST`) or `path` (`/api/v1/state`) to narrow the list, so a 5 s
+  poll does not bury the request a step is about; the requests a narrowed call leaves out stay
+  for a later call. At most the last 500 that match are returned, and `dropped` counts the older
+  ones it left out. A step about polling or reads is judged from these entries and their times,
+  never marked blocked for want of them. It reads one root, the last launch's unless you pass
+  `root`, and names it. The logs live where you cannot read them, so use this instead.
 - `qa_build_release_pair`, `qa_relaunched_app` and `qa_update_feed`, with `qa_launch_app`'s
   `release_pair: true`: build release N and its update N+1 signed, launch N, and drive the app
   after it installed N+1. See "After an update: the signed release pair" below.
@@ -508,6 +514,22 @@ GitHub or Linear in QA:
   is proved by `test/symphony_elixir/director_moves_test.exs`' "cancels a running ticket: the run
   stops, its pull request closes with the note, nothing waits on it". Relaunch the app on a fresh
   QA root to see the before state again.
+- **Symphony late to answer its state (TP-1562):** pass
+  `macos/Tests/Fixtures/director-app/symphony-late` as `api_fixtures` at 1440×900. It is the
+  `ticket-page` fixtures with `api/v1/state.late.json` (`{"after": 60, "for": 60}`): from 60 s
+  after the app's first read until 120 s, every state read waits until 120 s, while the health
+  read and every other read answer at once. Before 60 s, open Work › Tickets (TP-1244, TP-1245,
+  TP-1246, TP-1247) with the status line reading the connection as answering. About 10 s into the late
+  window the Tickets page stays, with the same tickets, and the status line says "Symphony isn't
+  answering · N s" with Open Logs and Restart Symphony; its counts and the sidebar's badges keep
+  their last values in grey. Open TP-1244 from the list: its page opens from the data the
+  Director has. After 120 s the status line clears and the page updates with no click and no
+  restart. The health read answers throughout, so the menu bar shows no problem and no
+  notification is sent. The look is also drawn by the gallery's `status-line-symphony-late`,
+  `status-line-symphony-late-paused`, `sidebar-expanded-symphony-late`,
+  `sidebar-collapsed-symphony-late`, `window-bar-ticket-page-symphony-late`,
+  `window-bar-work-tickets-symphony-late` and `count-badge-not-current` stories. Relaunch on a fresh
+  QA root to walk it again.
 - **Setup (TP-910):** pass `macos/Tests/Fixtures/director-app/setup` as `api_fixtures`. Its
   state has one error, `Team TP has no "Needs Decision" label` (**Create Label…**), and one
   warning, `symphony.yml sets auto_review.enabled, which is deprecated` (**Remove…**). Before
@@ -799,7 +821,8 @@ anyway: Symphony's tool does it, or it is host setup. Where it can't be installe
    runs the app with `SYMPHONY_BAR_QA_API_FIXTURES` set to a fixtures directory, pass that
    directory as `api_fixtures`, never by setting the variable yourself: the app reads Symphony's
    API from those files instead of a running Symphony. When the walkthrough checks what the app
-   sent (`api-requests.jsonl`), call `qa_api_requests` after the action and judge its `requests`.
+   sent or read (`api-requests.jsonl`, `api-reads.jsonl`), call `qa_api_requests` after the
+   action and judge its `requests`.
    Once the window shows, and after every later launch, call `qa_resize_window` with
    `pass: "walkthrough"`: every step, screenshot and design check runs at the walkthrough size
    unless the step itself names another. Name that size in each step's `viewport`.

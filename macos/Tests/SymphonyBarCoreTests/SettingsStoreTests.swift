@@ -41,6 +41,25 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(fallback.releaseCheckMinutes, 5)
     }
 
+    func testTheNotAnsweringAlertDefaultsToAMinuteAndIsClampedWhenLoaded() {
+        // TP-1562: how long Symphony may not answer before the menu bar shows it and one notification goes out.
+        let fresh = SettingsStore(defaults: MemoryKeyValueStore(), secrets: MemorySecretStore()).loadSettings()
+        XCTAssertEqual(fresh.notAnsweringAlertSeconds, 60)
+        for (stored, loaded) in [(0, 10), (10, 10), (90, 90), (3_600, 3_600), (5_000, 3_600)] {
+            let defaults = MemoryKeyValueStore()
+            defaults.values[SettingsStore.Key.notAnsweringAlertSeconds] = stored
+
+            let settings = SettingsStore(defaults: defaults, secrets: MemorySecretStore()).loadSettings()
+
+            XCTAssertEqual(settings.notAnsweringAlertSeconds, loaded, "\(stored)")
+        }
+        var settings = AppSettings()
+        settings.notAnsweringAlertSeconds = 120
+        let defaults = MemoryKeyValueStore()
+        SettingsStore(defaults: defaults, secrets: MemorySecretStore()).saveSettings(settings)
+        XCTAssertEqual(defaults.values[SettingsStore.Key.notAnsweringAlertSeconds] as? Int, 120)
+    }
+
     func testAnExistingInstallWithoutAStoredUpdateModeGetsOnRelease() {
         let defaults = MemoryKeyValueStore()
         defaults.values[SettingsStore.Key.configPath] = "/src/symphony/symphony.yml"
@@ -125,7 +144,8 @@ final class SettingsStoreTests: XCTestCase {
             developmentMode: true,
             updateMode: .whenIdle,
             updateTime: TimeOfDay(hour: 4, minute: 15),
-            releaseCheckMinutes: 42
+            releaseCheckMinutes: 42,
+            notAnsweringAlertSeconds: 90
         )
 
         SettingsStore(defaults: defaults, secrets: MemorySecretStore()).saveSettings(settings)
@@ -344,6 +364,7 @@ final class SettingsStoreTests: XCTestCase {
                 SettingsStore.Key.updateMode,
                 SettingsStore.Key.updateTime,
                 SettingsStore.Key.releaseCheckMinutes,
+                SettingsStore.Key.notAnsweringAlertSeconds,
             ]
         )
         for value in defaults.values.values {

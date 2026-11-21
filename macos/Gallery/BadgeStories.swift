@@ -118,6 +118,7 @@ let badgeStories: [ComponentStory] = {
         count("over-99") { inboxCount(128, role: .you) },
         count("quiet") { inboxCount(12) },
         count("zero") { inboxCount(0, role: .you) },
+        count("not-current") { inboxCount(4, role: .idle) },
     ]
     stories += catalogRoles.map { role in dot(role.story) { labelledDot(role.status, role.word) } }
     stories += [

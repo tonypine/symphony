@@ -169,6 +169,8 @@ set (or, in Development mode, no checkout folder).
 - **Restart timeout** (1–1440 minutes, 30 by default) is how long Restart Symphony waits for agent runs
   before it also offers Restart Now Anyway, and how long Automatically at a set time waits for them before it
   tries again the next day.
+- **Not answering alert** (10–3600 seconds, 60 by default) is how long a Symphony the app runs may not answer,
+  not even its health check, before the menu bar icon shows the problem and the app sends one notification.
 - **Update mode** (in **Updates**) is how the app installs a newer release:
   - **Manual**: the menu shows the release and you install it with Update to vX. See [Update](#update).
   - **Automatically when idle** installs a new release by itself as soon as no agent runs are active.
@@ -344,12 +346,18 @@ each with its kind's symbol, for example `TP-123 · Plan · Split the importer i
 ticket, what it waits for, its one-line ask (its title when it has none) and how long it has waited. Choosing a
 row opens the Symphony window on it in the Inbox. The menu lists five; **N more…** opens the Inbox for the rest.
 
-Each poll waits up to 5 seconds for an answer. After one missed poll the menu keeps the last status, with
-"Symphony is slow to answer" under it. Only after two missed polls in a row does it show "Symphony isn't
-answering" (error) for a Symphony the app started, or stopped for an external one. That grace counts for an
-external Symphony too, so Start isn't offered while a busy one still holds the control URL; the cost is that
-after an external Symphony exits, Start is offered 5 to 10 seconds later. A Symphony the app started that
-exits unexpectedly shows the error at once.
+A state poll that hasn't answered within 5 seconds is late; the request keeps waiting, up to a minute, and
+its answer counts whenever it arrives. For each late poll the app also asks Symphony's light health check
+(`GET /api/v1/health`), which answers at once from a Symphony that is alive. After one late poll the menu keeps
+the last status, with "Symphony is slow to answer" under it. After two in a row, the menu and the window keep
+showing Symphony's last answer, and say "Symphony isn't answering · 25 s" under it and in the window's status
+line, which also offers **Open Logs** and **Restart Symphony**. The first answer clears it, with no restart.
+Only when the health check doesn't answer either for the **Not answering alert** time (a minute by default)
+does the menu bar icon show a warning, with one notification; a slow state alone never alerts.
+
+An external Symphony whose state and health check both miss two polls in a row shows as stopped and Start is
+offered; while its health check answers, it keeps its last state, so Start isn't offered while a busy one
+still holds the control URL. A Symphony the app started that exits unexpectedly shows the error at once.
 
 ## Usage-limit pause
 
@@ -1219,9 +1227,11 @@ Home the first time, and on the page it showed last after that.
   caller over the last hour, the CI and review pollers and GitHub webhooks, and stray processes. **Copy State
   JSON** copies `/api/v1/state` as Symphony served it, and **Open Logs** does what
   the menu item does.
-- While Symphony doesn't answer, every view shows one placeholder instead: **Start Symphony** while it is
-  stopped, a spinner while it starts, **Open Logs** and **Restart Symphony** when it stopped answering, and
-  **Open Settings…** while no `symphony.yml` is set. A view whose endpoint an older Symphony doesn't serve
+- While there is nothing to show, every view shows one placeholder instead: **Start Symphony** while it is
+  stopped, a spinner while it starts and until it first answers, **Open Logs** and **Restart Symphony** when
+  it exited unexpectedly, and **Open Settings…** while no `symphony.yml` is set. A Symphony that answered and
+  is only slow keeps every page, drawn from its last answer: the status line says "Symphony isn't answering"
+  with how long, the counts show dimmed as not current, and moves are still sent. A view whose endpoint an older Symphony doesn't serve
   says "Update Symphony to see this view."
 
 **Notifications.** The app notifies each new Inbox item ("BIL-206 waits on you") and each new Needs attention
@@ -1403,7 +1413,9 @@ Ten more variables, read only in QA mode:
   file is missing, and each control POST (Pause, Resume, Force, Stop Run, and the Inbox's moves and Undo) is
   appended as one JSON line to `api-requests.jsonl` under the QA root and answered 200, with
   `<dir>/<path>.json` as the body when there is one (the `inbox` fixtures answer each move from
-  `api/v1/control/`). The menu, the Repos window and the Symphony window
+  `api/v1/control/`). Each GET is logged too, to `api-reads.jsonl` beside it, with its time, path,
+  query and status, so a QA pass sees the reads the app made; a live Symphony in QA mode
+  (`SYMPHONY_BAR_CONTROL_URL`) gets both logs the same way. The menu, the Repos window and the Symphony window
   all read through it, so the app shows Symphony as running (external). The fixtures of a running Symphony
   are in [`Tests/Fixtures/director-app/running`](Tests/Fixtures/director-app/running), and those of the
   Overview's four states next to it: `flowing`, `attention` (a stuck forced ticket and a Codex usage-limit

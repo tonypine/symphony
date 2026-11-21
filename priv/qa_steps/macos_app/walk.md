@@ -20,7 +20,8 @@ How to drive the app:
   credentials. Open the status-bar menu only with `qa_open_status_menu`, never by pressing its item.
 - A file the app must open: write it under `qa-evidence/` or `$TMPDIR`, call `qa_put_file`, and
   give the app the `path` it returns. A git checkout: `qa_put_checkout`.
-- What the app sent its API: `qa_api_requests` after the action.
+- What the app sent or read from its API, POSTs and GETs alike: `qa_api_requests` after the
+  action, with `method` or `path` to narrow it.
 - A click that fell back to `AXPress`, or that `covered` or `not_frontmost` refused because of
   another app, is a QA harness fault: answer `blocked`, quoting the tool's result.
 - When `qa_ax_tree`, `qa_scroll` or `qa_key` times out, or `qa_check_app` says the app hung, call

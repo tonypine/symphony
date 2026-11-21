@@ -86,10 +86,14 @@ defmodule SymphonyElixir.QaDriver do
     A PID the pass did not launch, an app that exited, and a process `sample`
     cannot find all answer `qa_no_app`;
   - `qa_api_requests` returns the requests the apps of one QA root (its `root`,
-    by default the last launch's) logged to `api-requests.jsonl` there since the
-    last call (the POSTs they answered from `api_fixtures`), at most the last
-    500, and takes the log away so the next call returns only newer ones. The QA
-    root is on the QA VM, so the agent cannot read the log itself.
+    by default the last launch's) logged there and no call returned yet: the
+    moves (POST, DELETE) from `api-requests.jsonl` and the reads (GET) from
+    `api-reads.jsonl`, each with its `at` time, `method` and `path`, oldest
+    first. `method` and `path` narrow the list, and the requests they leave out
+    are kept for a later call; at most the last 500 that match are returned,
+    `dropped` counting the rest. It takes the logs away, so the next call returns
+    only newer ones. The QA root is on the QA VM, so the agent cannot read the
+    logs itself.
 
   QA roots: every launch shares the pass's first QA root (root 1, `app-root/` in
   the run directory on the QA host), so what a
@@ -269,8 +273,10 @@ defmodule SymphonyElixir.QaDriver do
   @menu_layer 101
   # How many times, and how many ms apart, `qa_open_status_menu` looks for the menu.
   @status_menu_poll {40, 250}
-  # The app logs each request it answers from API fixtures here, under its QA root.
+  # The app logs each move (POST, DELETE) it sends its API here, under its QA root,
+  # and each read (GET) beside it.
   @api_requests_log "api-requests.jsonl"
+  @api_reads_log "api-reads.jsonl"
   @max_api_requests 500
   # The QA host's loopback ports an app's SSH session may forward to the stub,
   # and the ports the release pair's feed may listen on there.
@@ -427,13 +433,15 @@ defmodule SymphonyElixir.QaDriver do
           api_fixtures_env: String.t(),
           appearance_env: String.t(),
           appearances: [String.t()],
-          api_requests_log: String.t()
+          api_requests_log: String.t(),
+          api_reads_log: String.t()
         }
 
   @doc """
   The QA-mode contract the driver keeps with the app: the variable naming the QA root (where
-  `qa_api_requests` reads `api_requests_log`), the one naming the read-only copy of the
-  `api_fixtures` directory, and the appearance variable with its values.
+  `qa_api_requests` reads `api_requests_log`, the moves, and `api_reads_log`, the reads), the
+  one naming the read-only copy of the `api_fixtures` directory, and the appearance variable
+  with its values.
   `SymphonyElixir.QaModeContract` renders it into agent prompts.
   """
   @spec app_contract() :: app_contract()
@@ -443,7 +451,8 @@ defmodule SymphonyElixir.QaDriver do
       api_fixtures_env: @api_fixtures_env,
       appearance_env: @appearance_env,
       appearances: @appearances,
-      api_requests_log: @api_requests_log
+      api_requests_log: @api_requests_log,
+      api_reads_log: @api_reads_log
     }
   end
 
@@ -907,10 +916,17 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
+  # Each log is held by the driver as soon as it is taken, so a request a narrowed
+  # call leaves out, or a read log that fails after the moves' was taken, is not lost.
   defp run_tool("qa_api_requests", driver, config, args) do
-    with {:ok, root, qa_root} <- pass_root(driver, Map.get(args, "root")),
-         {:ok, payload} <- take_api_requests(config, qa_root) do
-      {:ok, Map.put(payload, "root", root)}
+    with {:ok, filter} <- api_request_filter(args),
+         {:ok, root, qa_root} <- pass_root(driver, Map.get(args, "root")),
+         {:ok, moves} <- take_api_requests(config, qa_root, @api_requests_log),
+         :ok <- GenServer.call(driver, {:hold_requests, root, moves}),
+         {:ok, reads} <- take_api_requests(config, qa_root, @api_reads_log) do
+      :ok = GenServer.call(driver, {:hold_requests, root, reads})
+      requests = GenServer.call(driver, {:select_requests, root, filter})
+      {:ok, requests |> api_requests() |> Map.put("root", root)}
     end
   end
 
@@ -926,24 +942,34 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
+  defp api_request_filter(args) do
+    Enum.reduce_while(["method", "path"], {:ok, %{}}, fn key, {:ok, filter} ->
+      case Map.get(args, key) do
+        nil -> {:cont, {:ok, filter}}
+        value when is_binary(value) and value != "" -> {:cont, {:ok, Map.put(filter, key, value)}}
+        _other -> {:halt, tool_error("invalid_arguments", "`#{key}` must be a non-empty string.")}
+      end
+    end)
+  end
+
   # Only the log in this QA root: an app in another root logs to its own.
-  defp take_api_requests(config, qa_root) do
-    log = Path.join(qa_root, @api_requests_log)
-    taken = Path.join(config.host_dir, "api-requests-#{System.unique_integer([:positive])}.jsonl")
+  defp take_api_requests(config, qa_root, name) do
+    log = Path.join(qa_root, name)
+    taken = Path.join(config.host_dir, "#{Path.rootname(name)}-#{System.unique_integer([:positive])}.jsonl")
 
     # Moved aside before it is read, so a request the app logs meanwhile lands in
     # a fresh log for the next call instead of being lost.
     case config.host.cmd.("/bin/mv", ["-f", log, taken], timeout_ms: @helper_timeout_ms, output_limit: @output_limit) do
       {:ok, {_output, 0}} ->
-        read_api_requests(config, taken)
+        read_api_requests(config, taken, name)
 
       {:ok, {output, _status}} ->
         if output =~ "No such file",
-          do: api_requests([]),
-          else: tool_error("qa_api_requests_failed", "The app's #{@api_requests_log} could not be taken: #{String.trim(output)}")
+          do: {:ok, []},
+          else: tool_error("qa_api_requests_failed", "The app's #{name} could not be taken: #{String.trim(output)}")
 
       {:error, reason} ->
-        tool_error("qa_api_requests_failed", "The app's #{@api_requests_log} could not be taken: #{inspect(reason)}")
+        tool_error("qa_api_requests_failed", "The app's #{name} could not be taken: #{inspect(reason)}")
     end
   end
 
@@ -1378,16 +1404,16 @@ defmodule SymphonyElixir.QaDriver do
 
   # The taken log is removed whether or not it could be read, so a long pass
   # leaves no copies behind in the run directory.
-  defp read_api_requests(config, path) do
+  defp read_api_requests(config, path, name) do
     result = config.host.read.(path)
     config.host.cmd.("/bin/rm", ["-f", path], timeout_ms: @helper_timeout_ms, output_limit: @output_limit)
 
     case result do
       {:ok, bytes} ->
-        bytes |> String.split("\n", trim: true) |> Enum.map(&api_request/1) |> api_requests()
+        {:ok, bytes |> String.split("\n", trim: true) |> Enum.map(&api_request/1)}
 
       {:error, reason} ->
-        tool_error("qa_api_requests_failed", "The app's #{@api_requests_log} could not be read: #{inspect(reason)}")
+        tool_error("qa_api_requests_failed", "The app's #{name} could not be read: #{inspect(reason)}")
     end
   end
 
@@ -1400,8 +1426,33 @@ defmodule SymphonyElixir.QaDriver do
 
   defp api_requests(requests) do
     dropped = max(length(requests) - @max_api_requests, 0)
-    {:ok, %{"requests" => Enum.drop(requests, dropped), "dropped" => dropped}}
+    %{"requests" => Enum.drop(requests, dropped), "dropped" => dropped}
   end
+
+  # The held requests and a newly taken log in time order: each is oldest first, and
+  # a held request comes first when the two share a second or one has no time.
+  defp merge_requests(held, []), do: held
+  defp merge_requests([], taken), do: taken
+
+  defp merge_requests([first | rest] = held, [next | later] = taken) do
+    if earlier?(next, first),
+      do: [next | merge_requests(held, later)],
+      else: [first | merge_requests(rest, taken)]
+  end
+
+  defp earlier?(%{"at" => at}, %{"at" => than}) when is_binary(at) and is_binary(than), do: at < than
+  defp earlier?(_request, _than), do: false
+
+  defp request_matches?(_request, filter) when filter == %{}, do: true
+
+  defp request_matches?(%{} = request, filter) do
+    Enum.all?(filter, fn
+      {"method", method} -> String.upcase(to_string(request["method"])) == String.upcase(method)
+      {"path", path} -> request["path"] == path
+    end)
+  end
+
+  defp request_matches?(_line, _filter), do: false
 
   # -- checkouts ---------------------------------------------------------------
 
@@ -2171,6 +2222,8 @@ defmodule SymphonyElixir.QaDriver do
     state = Map.merge(state, %{pair: nil, pair_launches: %{}, feed: nil, dev_server: nil, environment_fault: nil})
     # QA roots by number: 1 is the pass's first, and each fresh_root launch adds the next.
     state = Map.merge(state, %{roots: %{1 => Map.get(state.config, :qa_root)}, last_root: 1})
+    # Requests taken from each root's logs that no qa_api_requests call returned yet.
+    state = Map.put(state, :held_requests, %{})
     state = Map.put(state, :host_check, check_tools(state.config))
     {:ok, open_tunnel(state, @tunnel_attempts)}
   end
@@ -2258,6 +2311,16 @@ defmodule SymphonyElixir.QaDriver do
   def handle_call(:launched_app?, _from, state), do: {:reply, state.launched_app?, state}
   def handle_call(:launched_pids, _from, state), do: {:reply, state.apps |> Map.keys() |> Enum.sort(), state}
   def handle_call(:roots, _from, state), do: {:reply, %{roots: state.roots, last: state.last_root}, state}
+
+  def handle_call({:hold_requests, root, taken}, _from, state) do
+    held = merge_requests(Map.get(state.held_requests, root, []), taken)
+    {:reply, :ok, %{state | held_requests: Map.put(state.held_requests, root, held)}}
+  end
+
+  def handle_call({:select_requests, root, filter}, _from, state) do
+    {selected, kept} = state.held_requests |> Map.get(root, []) |> Enum.split_with(&request_matches?(&1, filter))
+    {:reply, selected, %{state | held_requests: Map.put(state.held_requests, root, kept)}}
+  end
 
   def handle_call(:app_check, _from, state),
     do: {:reply, %{built: state.build != nil, launched: state.launched_app?, checked: state.checked_app?}, state}

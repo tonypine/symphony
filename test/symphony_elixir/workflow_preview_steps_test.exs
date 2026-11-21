@@ -48,7 +48,8 @@ defmodule SymphonyElixir.WorkflowPreviewStepsTest do
     assert steps =~ "   - when Elixir files changed: `mix test $SYMPHONY_CHANGED_TEST_FILES && mix cover.changed`\n"
     assert steps =~ "   - when macos/ changed: `cd macos && swift test --filter \"$SYMPHONY_CHANGED_SWIFT_TEST_FILTER\"`\n"
     assert steps =~ "5. `window_tests` Window tests · machine · times out after 120 min · on failure returns to `code`\n   - `symphony:window_tests`\n"
-    assert steps =~ "6. `handoff` Hand off: push and open the pull request · delegated\n"
+    assert steps =~ "6. `plan_checks` The plan's checks are proved · machine · times out after 1 min · on failure returns to `code`\n   - `symphony:checks`\n"
+    assert steps =~ "7. `handoff` Hand off: push and open the pull request · delegated\n"
     assert prompt =~ "Symphony runtime context:"
   end
 
@@ -125,7 +126,7 @@ defmodule SymphonyElixir.WorkflowPreviewStepsTest do
 
     assert {:ok, steps} = WorkflowPreview.render_steps("implementation")
     assert steps =~ "(the default list, `phases.implementation.steps`)"
-    assert steps =~ "6. `handoff`"
+    assert steps =~ "7. `handoff`"
     assert {:ok, ""} = WorkflowPreview.render_steps(nil)
     assert {:error, _message} = WorkflowPreview.render(file: workflow, run_kind: "deploy")
   end
