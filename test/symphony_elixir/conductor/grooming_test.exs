@@ -154,6 +154,17 @@ defmodule SymphonyElixir.Conductor.GroomingTest do
       assert Facts.events(ctx.issue_id) == []
     end
 
+    test "a ledger that can't be read grooms nothing, and counts no try" do
+      # No issue id is a read the store refuses.
+      assert {:error, :invalid_issue_id} = Facts.read_events(nil)
+      assert Facts.events(nil) == []
+      refute Grooming.due?(:implementation, Facts.read_events(nil))
+      assert Grooming.due?(:implementation, {:ok, []})
+
+      log = capture_log(fn -> assert Grooming.failed("default", nil, "the turn failed") == :give_up end)
+      assert log =~ "Grooming could not read the ticket's events"
+    end
+
     test "a turn no provider can take is planned as a try that failed", ctx do
       log = capture_log(fn -> send(self(), Conductor.plan(ctx.issue, :implementation, "default", settings: @on, available?: fn _run -> false end)) end)
       assert_received %{junction: "grooming", unavailable: provider} = plan
@@ -207,9 +218,26 @@ defmodule SymphonyElixir.Conductor.GroomingTest do
       assert Grooming.record_ask("default", %Issue{id: other}, %{}, []) == :ok
       assert TicketPlan.ask(other) == []
 
-      long = %{bare | id: other, title: String.duplicate("x", 30_000)}
-      log = capture_log(fn -> assert Grooming.record_ask(nil, long, %{}, []) == :ok end)
+      # A store that refuses the ask stops the turn: its plan would overwrite words nobody holds.
+      unasked = %{bare | id: other}
+      log = capture_log(fn -> assert {:error, :invalid_repo_key} = Grooming.record_ask(nil, unasked, %{}, []) end)
       assert log =~ "Grooming could not record the ask issue_id=#{other}"
+    end
+
+    test "an ask too long to record is never cut: the ticket starts without a plan, with one note", ctx do
+      long = %{ctx.issue | description: String.duplicate("x", TicketPlan.ask_max() + 1)}
+      assert Grooming.record_ask("default", long, ctx.record, []) == {:error, :ask_too_long}
+      assert Grooming.record_ask("default", long, ctx.record, []) == {:error, :ask_too_long}
+      assert TicketPlan.ask(ctx.issue_id) == []
+      assert [note] = status_notes(ctx.issue_id)
+      assert note =~ "longer than 100000 characters"
+
+      refute Grooming.due?(:implementation, Facts.read_events(ctx.issue_id))
+      assert Grooming.failed("default", ctx.issue_id, "the turn failed") == :give_up
+      assert [_one] = status_notes(ctx.issue_id)
+
+      at_the_limit = %{ctx.issue | description: String.duplicate("x", TicketPlan.ask_max())}
+      assert Grooming.record_ask("default", at_the_limit, ctx.record, []) == :ok
     end
 
     test "where the waiting state is off, a split is recorded as a single ticket's plan", ctx do
@@ -320,6 +348,32 @@ defmodule SymphonyElixir.Conductor.GroomingTest do
     end
   end
 
+  describe "a ticket that already has sub-tickets" do
+    setup ctx do
+      SubIssueWait.reset_for_test("Waiting on sub-tickets")
+      by_hand = [%{id: "h1", identifier: "MT-51", state: "Todo"}, %{id: "h2", identifier: "MT-52", state: "Done"}, %{id: "h3", identifier: "MT-53"}]
+      :ok = RunStore.update_ticket_state(ctx.issue_id, %{sub_issues: [%{id: "h4", identifier: "MT-54", state: "Backlog"}]})
+      %{issue: %{ctx.issue | sub_issues: by_hand}}
+    end
+
+    test "a split names every one that has not ended, or it is refused with the ones it left out", ctx do
+      checks = [%{kind: "outcome", statement: "x", proof: "test"}]
+      base = %{shape: "split", layers: ["api"], summary: "s", text: "t", checks: checks, size: %{tokens: 1, runs: 1}}
+      plan = fn entries -> Map.put(base, :sub_tickets, entries) end
+      entry = fn key, identifier -> %{key: key, title: "Part #{key}", ask: "Build it.", after: [], identifier: identifier} end
+      new = %{key: "s9", title: "The rest", ask: "Build it.", after: []}
+
+      assert {:error, why} = Grooming.write_plan("default", ctx.issue, plan.([new, entry.("s1", "MT-51")]))
+      assert why =~ "its plan was refused: its split leaves out MT-53, MT-54, which the ticket already has as sub-tickets"
+      refute TicketPlan.groomed?(ctx.issue_id)
+
+      # The one that ended needs no entry, and a single plan names none.
+      named = [new, entry.("s1", "MT-51"), entry.("s2", "MT-53"), entry.("s3", "MT-54")]
+      assert {:ok, _event} = Grooming.write_plan("default", ctx.issue, plan.(named))
+      assert {:ok, _event} = Grooming.write_plan("default", ctx.issue, %{base | shape: "single"}, new_ask: true)
+    end
+  end
+
   describe "a turn that writes no plan" do
     test "is tried once more at the next dispatch, then the ticket starts without a plan, with a note", ctx do
       log = capture_log(fn -> assert groom(ctx, {:ok, ["no answer here"], 7}) == :again end)
@@ -357,11 +411,11 @@ defmodule SymphonyElixir.Conductor.GroomingTest do
     end
 
     test "a turn that runs over, a plan Symphony refuses and a question that can't be asked are tries that failed", ctx do
-      twice = written(%{"checks" => [%{"id" => "c1", "kind" => "outcome", "statement" => "A.", "proof" => "test"}, %{"id" => "c1", "kind" => "outcome", "statement" => "B.", "proof" => "test"}]})
+      refused = written(%{"shape" => "split", "sub_tickets" => [%{"title" => "The API", "ask" => "Add the filter.", "after" => ["s9"]}]})
 
       cases = [
         {fn _plan, _issue, _run_id, _prompt -> Process.sleep(1_000) end, %{timeout_ms: 20}, "the turn ran past its time limit"},
-        {turn({:ok, [answer(%{"plan" => twice, "update" => "Planned."})], 3}), %{}, "its plan was refused: check id c1 is used twice"},
+        {turn({:ok, [answer(%{"plan" => refused, "update" => "Planned."})], 3}), %{}, "its plan was refused: sub-ticket s1 waits after s9"},
         {turn({:ok, [answer(%{"ask_person" => question("accept_without_qa")})], 3}), %{}, "its question could not be asked"}
       ]
 

@@ -1452,9 +1452,12 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       assert %{"error" => %{"code" => "unexpected_arguments", "arguments" => ["description"]}} = Jason.decode!(response["output"])
     end
 
-    test "writes the block through AgentTools.Linear" do
+    test "writes the block through AgentTools.Linear, while no other writer has the description" do
       client = fn query, variables, _opts ->
         if query =~ "SymphonyAgentIssueDescription" do
+          # Between the read and the write, another writer of the same description waits.
+          other = Task.async(fn -> SymphonyElixir.DescriptionLock.locked("issue-current", fn -> :wrote_after end) end)
+          send(self(), {:other_writer, other, Task.yield(other, 100)})
           {:ok, %{"data" => %{"issue" => %{"id" => "issue-current", "description" => "Goal"}}}}
         else
           send(self(), {:description, variables.description})
@@ -1472,6 +1475,8 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
       assert %{"issue" => %{"id" => "issue-current"}} = Jason.decode!(response["output"])
       assert_received {:description, "Goal\n\n<!-- symphony:summary:start -->" <> _block}
+      assert_received {:other_writer, other, nil}
+      assert Task.await(other) == :wrote_after
     end
 
     test "returns explicit error payloads for refusals" do

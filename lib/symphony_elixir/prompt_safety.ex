@@ -8,8 +8,10 @@ defmodule SymphonyElixir.PromptSafety do
   @title_limit 500
   @description_limit 10_000
   @comment_limit 5_000
-  # The asks, the plan's text and its checks together.
-  @ticket_plan_limit 60_000
+  # The asks, the plan's text and its checks together. The longest list of checks a plan may hold
+  # (30, each with its statement, its walk and the test that proved it) is under 75,000 characters,
+  # and `SymphonyElixir.TicketJourney.plan_text/1` fits the ask and the plan's text into the rest.
+  @ticket_plan_limit 100_000
   # Symphony's own workpad is read back and rewritten whole by the agent, so a cut here
   # deletes the tail from Linear on the next update.
   @workpad_comment_limit 50_000
@@ -46,9 +48,14 @@ defmodule SymphonyElixir.PromptSafety do
   @spec linear_issue_body(String.t()) :: String.t()
   def linear_issue_body(value), do: value |> IssueSummary.strip() |> copyable_block("linear_issue_body", @description_limit)
 
+  @doc "The most characters `ticket_plan_body/1` keeps."
+  @spec ticket_plan_limit() :: pos_integer()
+  def ticket_plan_limit, do: @ticket_plan_limit
+
   @doc """
   Wraps a groomed ticket's ask, plan and checks (`SymphonyElixir.TicketJourney.plan_text/1`) as
-  untrusted text, with a limit that holds a whole plan: a cut would drop the checks at its end.
+  untrusted text, with a limit that holds a whole plan: a cut would drop the checks at its end, so
+  `plan_text/1` cuts the ask and the plan's text to leave them room.
   """
   @spec ticket_plan_body(String.t()) :: String.t()
   def ticket_plan_body(value), do: copyable_block(value, "linear_ticket_plan", @ticket_plan_limit)

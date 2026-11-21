@@ -97,10 +97,11 @@ defmodule SymphonyElixir.DecisionMove do
 
   defp record_finding(_repo_key, _issue_id, _none), do: :ok
 
-  # A check the plan no longer holds is skipped: the move still stands.
+  # A check the plan no longer holds is skipped: the move still stands. The move is the person's
+  # pick, so it may waive an outcome too.
   defp record_waivers(repo_key, issue_id, [_ | _] = waivers) do
     for %{check_id: check_id, reason: reason} <- waivers do
-      with {:error, why} <- TicketChecks.waive(repo_key, issue_id, check_id, reason),
+      with {:error, why} <- TicketChecks.waive(repo_key, issue_id, check_id, reason, by: :person),
            do: Logger.warning("Could not waive check #{check_id} on issue_id=#{issue_id} repo_key=#{repo_key}: #{inspect(why)}")
     end
   end

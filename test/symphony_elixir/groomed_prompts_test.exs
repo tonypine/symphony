@@ -118,7 +118,7 @@ defmodule SymphonyElixir.GroomedPromptsTest do
 
     test "reads a groomed ticket's outcome checks as its acceptance criteria, and its plan as its description" do
       groom!()
-      {:ok, _waived} = TicketChecks.waive(@repo_key, @issue_id, "c3", "Nothing can test it.")
+      {:ok, _waived} = TicketChecks.waive(@repo_key, @issue_id, "c3", "Nothing can test it.", by: :person)
 
       assert {:ok, source} = Context.build(issue(), System.tmp_dir!(), "origin/main..HEAD", [], git_fun())
       assert source.acceptance_criteria_items == ["[c1] The prompt carries the plan."]

@@ -33,7 +33,7 @@ defmodule SymphonyElixir.Conductor.Grooming do
   require Logger
 
   alias SymphonyElixir.Conductor.{Answer, Facts, Tree}
-  alias SymphonyElixir.{Decisions, IssueSummary, RunStore, TicketEvents, TicketPlan}
+  alias SymphonyElixir.{Config, RunStore, TicketEvents, TicketPlan, TicketProjection}
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.TicketEvents.Event
   alias SymphonyElixir.{Tracker, Workspace, WorkspaceCleanup}
@@ -43,7 +43,7 @@ defmodule SymphonyElixir.Conductor.Grooming do
   @first_kinds ["implementation", "breakdown"]
   @try_key "grooming.try:"
   @ask_key "ask.recorded:linear"
-  @ask_max 20_000
+  @unplanned_key "grooming.unplanned"
   @reason "Grooming"
 
   @doc "How many tries may fail before the ticket starts without a plan."
@@ -53,12 +53,20 @@ defmodule SymphonyElixir.Conductor.Grooming do
   @doc """
   Whether Grooming comes before a run of `next_kind` on the ticket whose `events` (oldest first)
   these are: the run is a ticket's first, the ticket has no plan and no run but the Conductor's, and
-  fewer than `max_tries/0` tries failed.
+  fewer than `max_tries/0` tries failed, and its ask was not too long to record (`record_ask/4`).
+  It also takes what `Facts.read_events/1` read: events that
+  could not be read say nothing about the ticket, which may be in flight, so Grooming is not due.
   """
-  @spec due?(atom() | String.t(), [Event.t()]) :: boolean()
+  @spec due?(atom() | String.t(), [Event.t()] | {:ok, [Event.t()]} | {:error, term()}) :: boolean()
+  def due?(_next_kind, {:error, _reason}), do: false
+  def due?(next_kind, {:ok, events}), do: due?(next_kind, events)
+
   def due?(next_kind, events) when is_list(events) do
-    to_string(next_kind) in @first_kinds and not Enum.any?(events, &(plan?(&1) or worked?(&1))) and tries(events) < @max_tries
+    to_string(next_kind) in @first_kinds and not Enum.any?(events, &(plan?(&1) or worked?(&1) or unplanned?(&1))) and tries(events) < @max_tries
   end
+
+  # The note of a ticket whose ask was too long to record: it runs without a plan.
+  defp unplanned?(%Event{type: type, idempotency: key}), do: type == "note" and key == @unplanned_key
 
   defp plan?(%Event{type: type}), do: type == "plan.written"
 
@@ -84,12 +92,22 @@ defmodule SymphonyElixir.Conductor.Grooming do
   @doc """
   Counts a try that wrote no plan, with `why` in plain words, as a status note on `repo_key`'s ticket
   `issue_id`. Answers `:retry` when the ticket is groomed again at its next dispatch, and `:give_up`
-  when it starts without a plan: this was the last try, or the count could not be written, so a
-  ticket never waits on a count that does not grow.
+  when it starts without a plan: this was the last try, or the count could not be read or written,
+  so a ticket never waits on a count that does not grow.
   """
   @spec failed(String.t(), String.t(), String.t()) :: :retry | :give_up
-  def failed(repo_key, issue_id, why) when is_binary(issue_id) and is_binary(why) do
-    try = tries(Facts.events(issue_id)) + 1
+  def failed(repo_key, issue_id, why) when is_binary(why) do
+    case Facts.read_events(issue_id) do
+      {:ok, events} ->
+        if Enum.any?(events, &unplanned?/1), do: :give_up, else: count_try(repo_key, issue_id, why, tries(events) + 1)
+
+      {:error, reason} ->
+        Logger.warning("Grooming could not read the ticket's events issue_id=#{issue_id} repo_key=#{repo_key}: #{inspect(reason)}; no try is counted, and the ticket starts without a plan")
+        :give_up
+    end
+  end
+
+  defp count_try(repo_key, issue_id, why, try) do
     last? = try >= @max_tries
 
     case TicketEvents.record(repo_key, issue_id, "note", %{text: try_text(why, last?), status: true}, idempotency: "#{@try_key}#{try}") do
@@ -113,23 +131,47 @@ defmodule SymphonyElixir.Conductor.Grooming do
   @doc """
   Records what was asked on `issue`, once: its description (the issue's, else the `record`'s) with
   Symphony's own blocks taken out, or its title when the description is blank, as an `ask.recorded`
-  from Linear. Nothing when `events` already hold an ask.
+  from Linear. Nothing when `events` already hold an ask. The words are never cut.
+
+  `:ok` when the ticket's ask is on its record. `{:error, reason}` when it is not, and the turn must
+  not run then, since its plan would stand in Linear in place of words Symphony does not hold:
+
+    * `{:error, :ask_too_long}`: the ask is longer than `SymphonyElixir.TicketPlan.ask_max/0`
+      characters. The ticket runs without a plan, and one status note says why; with that note on
+      its record Grooming is never due on it again (`due?/2`), so the run starts.
+    * any other reason: the store refused the ask. The try failed (`failed/3`).
   """
-  @spec record_ask(String.t(), Issue.t(), map(), [Event.t()]) :: :ok
+  @spec record_ask(String.t(), Issue.t(), map(), [Event.t()]) :: :ok | {:error, :ask_too_long | term()}
   def record_ask(repo_key, %Issue{id: issue_id} = issue, record, events) when is_list(events) do
     with [] <- TicketPlan.ask(events),
-         text when is_binary(text) <- ask_text(issue.description || Map.get(record, :description)) || ask_text(issue.title || Map.get(record, :title)),
-         {:error, reason} <- TicketPlan.record_ask(repo_key, issue_id, text, idempotency: @ask_key) do
-      Logger.warning("Grooming could not record the ask issue_id=#{issue_id} repo_key=#{repo_key}: #{inspect(reason)}")
+         text when is_binary(text) <- ask_text(issue.description || Map.get(record, :description)) || ask_text(issue.title || Map.get(record, :title)) do
+      record_ask_text(repo_key, issue_id, text)
     else
       _recorded_or_none -> :ok
     end
   end
 
+  defp record_ask_text(repo_key, issue_id, text) do
+    if String.length(text) > TicketPlan.ask_max() do
+      note = "What was asked is longer than #{TicketPlan.ask_max()} characters, so Symphony wrote no plan for it. This ticket starts without a plan."
+      _ = TicketEvents.record(repo_key, issue_id, "note", %{text: note, status: true}, idempotency: @unplanned_key)
+      {:error, :ask_too_long}
+    else
+      case TicketPlan.record_ask(repo_key, issue_id, text, idempotency: @ask_key) do
+        {:ok, _ask} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("Grooming could not record the ask issue_id=#{issue_id} repo_key=#{repo_key}: #{inspect(reason)}")
+          {:error, reason}
+      end
+    end
+  end
+
   defp ask_text(text) when is_binary(text) do
-    case text |> IssueSummary.strip() |> Decisions.strip() |> String.trim() do
+    case TicketProjection.person_text(text) do
       "" -> nil
-      ask -> String.slice(ask, 0, @ask_max)
+      ask -> ask
     end
   end
 
@@ -158,7 +200,9 @@ defmodule SymphonyElixir.Conductor.Grooming do
   Records the turn's `plan` as the first version of the plan of `issue` (`by: grooming`).
   `{:error, why}`, in plain words, for a plan `SymphonyElixir.TicketPlan.write/4` refuses, and for
   a `split` whose sub-tickets Symphony refuses (`SymphonyElixir.Conductor.Tree.refusal/4`: an
-  unmanaged repo, or an `identifier` that is not one of the ticket's sub-tickets). A split is
+  unmanaged repo, or an `identifier` that is not one of the ticket's sub-tickets), and for a
+  `split` that leaves out a sub-ticket the ticket already has and that has not ended: it names
+  every one of them by `identifier`, and the reason names the ones it left out. A split is
   carried out after it is recorded (`split/3`); where it can't be (the waiting state is off), the
   plan is recorded as a `single` one. `opts[:repo]` is `Tree.refusal/4`'s; the others are
   `TicketPlan.write/4`'s.
@@ -189,8 +233,11 @@ defmodule SymphonyElixir.Conductor.Grooming do
 
         {:ok, plan |> Map.put(:shape, "single") |> Map.delete(:sub_tickets)}
 
-      why = Tree.refusal(entries, repo_key, sub_tickets(issue), opts) ->
+      why = Tree.refusal(entries, repo_key, Enum.map(sub_tickets(issue), & &1.identifier), opts) ->
         {:error, {:refused, why}}
+
+      (left_out = left_out(entries, sub_tickets(issue), repo_key)) != [] ->
+        {:error, {:refused, "its split leaves out #{Enum.join(left_out, ", ")}, which the ticket already has as sub-tickets: a split names each of them by its `identifier`"}}
 
       true ->
         {:ok, plan}
@@ -199,7 +246,23 @@ defmodule SymphonyElixir.Conductor.Grooming do
 
   defp shaped(_repo_key, _issue, plan, _opts), do: {:ok, plan}
 
-  # The identifiers of the sub-tickets the ticket already has: the issue's, and its record's.
+  # The sub-tickets the ticket already has that are not ended and that no entry names: a split
+  # that left one out would plan the whole ask beside work somebody already cut out of it.
+  defp left_out(entries, existing, repo_key) do
+    named = for %{identifier: identifier} <- entries, do: identifier
+    terminal = terminal_states(repo_key)
+    for %{identifier: identifier} = sub <- existing, identifier not in named, not ended?(sub, terminal), do: identifier
+  end
+
+  defp ended?(%{state: state}, terminal) when is_binary(state), do: normalize(state) in terminal
+  defp ended?(_sub_ticket, _terminal), do: false
+
+  # The repo's settings read: its waiting state is on (`Tree.supported?/1`).
+  defp terminal_states(repo_key), do: Enum.map(Config.settings_for_repo!(repo_key).tracker.terminal_states, &normalize/1)
+
+  defp normalize(state), do: state |> String.trim() |> String.downcase()
+
+  # The sub-tickets the ticket already has, each once: the issue's, and its record's.
   defp sub_tickets(%Issue{id: issue_id, sub_issues: sub_issues}) do
     recorded =
       case RunStore.get_ticket_state(issue_id) do
@@ -207,7 +270,8 @@ defmodule SymphonyElixir.Conductor.Grooming do
         _none -> []
       end
 
-    for %{identifier: identifier} <- List.wrap(if(is_list(sub_issues), do: sub_issues)) ++ List.wrap(if(is_list(recorded), do: recorded)), uniq: true, do: identifier
+    listed = List.wrap(if(is_list(sub_issues), do: sub_issues)) ++ List.wrap(if(is_list(recorded), do: recorded))
+    for(%{identifier: identifier} = sub <- listed, is_binary(identifier), do: sub) |> Enum.uniq_by(& &1.identifier)
   end
 
   @doc """

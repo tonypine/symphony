@@ -91,12 +91,11 @@ defmodule SymphonyElixir.TicketPlanTest do
         %{key: "s1", title: "The view", ask: "Draw it.", after: ["s9"]}
       ]
 
-      incoherent = @plan |> Map.put(:checks, [@check, @check, qa]) |> Map.put(:sub_tickets, sub_tickets)
+      incoherent = @plan |> Map.put(:checks, [@check, qa]) |> Map.put(:sub_tickets, sub_tickets)
 
       assert {:error, {:invalid_plan, reasons}} = TicketPlan.write(@repo_key, @issue_id, incoherent)
 
       assert reasons == [
-               "check id c1 is used twice",
                "QA check c2 has no action",
                "QA check c2 has no expect",
                "sub-ticket key s1 is used twice",
@@ -105,6 +104,85 @@ defmodule SymphonyElixir.TicketPlanTest do
              ]
 
       refute TicketPlan.groomed?(@issue_id)
+
+      # An id is one check's: a version that gives a standing check's id to two is refused.
+      {:ok, _first} = TicketPlan.write(@repo_key, @issue_id, @plan)
+      assert {:error, {:invalid_plan, ["check id c1 is used twice"]}} = TicketPlan.write(@repo_key, @issue_id, %{@plan | checks: [@check, @check]})
+      assert [_one] = TicketPlan.versions(@issue_id)
+    end
+
+    test "a check keeps the id it had, and a new one gets an id no version of the ticket ever used" do
+      new = fn statement -> %{kind: "evidence", statement: statement, proof: "test"} end
+
+      # The first version's checks are named in order, whatever ids they came with.
+      first = [new.("A."), Map.put(new.("B."), :id, "c7"), Map.put(new.("C."), "id", "mine")]
+      {:ok, _v1} = TicketPlan.write(@repo_key, @issue_id, %{@plan | checks: first}, at: at(0))
+      assert ["c1", "c2", "c3"] = Enum.map(TicketPlan.current(@issue_id).checks, & &1.id)
+
+      # c2 and c3 are dropped; a check with no id, or with an id nobody had, is not given theirs.
+      second = [Map.put(new.("A."), :id, "c1"), new.("D."), Map.put(new.("E."), :id, "c9")]
+      {:ok, _v2} = TicketPlan.write(@repo_key, @issue_id, %{@plan | checks: second}, at: at(1))
+      current = TicketPlan.current(@issue_id)
+      assert [%{id: "c1", statement: "A."}, %{id: "c4", statement: "D."}, %{id: "c5", statement: "E."}] = current.checks
+
+      # Nor is a later version's: c2 was used once, so it is never a new check's id.
+      third = %{"checks" => [%{"kind" => "evidence", "statement" => "F.", "proof" => "test"}]}
+      {:ok, _v3} = TicketPlan.write(@repo_key, @issue_id, @plan |> Map.delete(:checks) |> Map.merge(third), at: at(2))
+      assert [%{id: "c6", statement: "F."}] = TicketPlan.current(@issue_id).checks
+
+      # Ids an older record holds that are no `c<n>` count for nothing, and are never a new check's.
+      other = "plan-issue-old-ids"
+      old = [Map.put(new.("A."), :id, "proof"), Map.put(new.("B."), :id, "cx"), Map.put(new.("C."), :id, "c2")]
+      {:ok, _v1} = TicketEvents.record(@repo_key, other, "plan.written", @plan |> Map.merge(%{checks: old, version: 1}), at: at(0))
+      {:ok, _v2} = TicketPlan.write(@repo_key, other, %{@plan | checks: [Map.put(new.("A."), :id, "proof"), new.("D.")]}, at: at(1))
+      assert [%{id: "proof"}, %{id: "c3"}] = TicketPlan.current(other).checks
+
+      # Checks that are no list are the schema's to refuse.
+      assert {:error, {:invalid_payload, [:checks]}} = TicketPlan.write(@repo_key, @issue_id, %{@plan | checks: "none"})
+    end
+
+    test "a plan holds at most 30 checks and 12 sub-tickets" do
+      check = %{kind: "evidence", statement: "It works.", proof: "test"}
+      subs = for n <- 1..13, do: %{key: "s#{n}", title: "Part #{n}", ask: "Build it."}
+      large = %{@plan | checks: List.duplicate(check, 31), shape: "split"} |> Map.put(:sub_tickets, subs)
+
+      assert TicketPlan.write(@repo_key, @issue_id, large) ==
+               {:error, {:invalid_plan, ["a plan holds at most 30 checks, and this one holds 31", "a plan holds at most 12 sub-tickets, and this one holds 13"]}}
+
+      # The event's own schema holds the same limits, whoever writes it.
+      payload = Map.put(large, :version, 1)
+      assert {:error, {:invalid_payload, fields}} = TicketEvents.Types.validate("plan.written", payload, :machine, nil)
+      assert Enum.sort(fields) == [:checks, :sub_tickets]
+
+      at_the_limit = %{large | checks: List.duplicate(check, 30)} |> Map.put(:sub_tickets, Enum.take(subs, 12))
+      assert {:ok, %{payload: %{checks: checks, sub_tickets: written}}} = TicketPlan.write(@repo_key, @issue_id, at_the_limit)
+      assert {length(checks), length(written)} == {30, 12}
+      assert {TicketPlan.max_checks(), TicketPlan.max_sub_tickets()} == {30, 12}
+    end
+
+    test "outcomes bind: a version that drops or rewords one is refused until the person asks for something new" do
+      kept = %{id: "c2", kind: "evidence", statement: "A screenshot.", proof: "attached"}
+      {:ok, _ask} = TicketPlan.record_ask(@repo_key, @issue_id, "Show the plan.", at: at(0))
+      {:ok, _v1} = TicketPlan.write(@repo_key, @issue_id, %{@plan | checks: [@check, kept]}, at: at(1))
+
+      # Everything else may change: the other checks, the text, the same outcome under more words around it.
+      {:ok, _v2} = TicketPlan.write(@repo_key, @issue_id, %{@plan | checks: [%{@check | statement: " The page shows the plan. "}], text: "Another way."}, at: at(2))
+
+      reworded = %{@check | statement: "The page shows half the plan."}
+      as_evidence = %{@check | kind: "evidence"}
+      binds = fn id, how -> {:error, {:invalid_plan, ["outcome check #{id} was #{how}, and no new ask says so"]}} end
+      assert TicketPlan.write(@repo_key, @issue_id, %{@plan | checks: [reworded]}, at: at(3)) == binds.("c1", "reworded")
+      assert TicketPlan.write(@repo_key, @issue_id, %{@plan | checks: [kept]}, at: at(3)) == binds.("c1", "removed")
+      assert TicketPlan.write(@repo_key, @issue_id, %{@plan | checks: [as_evidence]}, at: at(3)) == binds.("c1", "removed")
+      assert length(TicketPlan.versions(@issue_id)) == 2
+
+      # A new ask is what permits it, for the next version only.
+      {:ok, _ask} = TicketPlan.record_ask(@repo_key, @issue_id, "Half of it is enough.", source: "message", at: at(4))
+      assert {:ok, _v3} = TicketPlan.write(@repo_key, @issue_id, %{@plan | checks: [reworded]}, at: at(5))
+      assert TicketPlan.write(@repo_key, @issue_id, %{@plan | checks: [kept]}, at: at(6)) == binds.("c1", "removed")
+
+      # So does the caller that records the new ask right after the version.
+      assert {:ok, _v4} = TicketPlan.write(@repo_key, @issue_id, %{@plan | checks: [kept]}, at: at(6), new_ask: true)
     end
 
     test "a signal the machinery recorded with a plan is not part of the plan" do

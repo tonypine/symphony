@@ -1011,7 +1011,7 @@ defmodule SymphonyElixir.Conductor.TreeTest do
       assert [%{action: "replanned"}] = interventions("c3")
       assert %{version: 2, reason: "Recalibration: CSV was asked."} = TicketPlan.current(ctx.issue_id)
 
-      long = %{rewrite | ask: String.duplicate("x", 30_000)}
+      long = %{rewrite | ask: String.duplicate("x", 100_001)}
       log = capture_log(fn -> assert Tree.apply(%{done: false, tree: [long]}, tree_ctx, ctx.opts) == :ok end)
       assert log =~ "The Conductor's rewrite was not carried out"
       assert TicketPlan.current(ctx.issue_id).version == 2

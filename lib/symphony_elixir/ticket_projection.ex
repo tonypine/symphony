@@ -7,9 +7,15 @@ defmodule SymphonyElixir.TicketProjection do
   (the current plan's `summary`, written for a person) and `## Checks` (one line per check of the
   plan: where it stands, its id and its statement). `put/2` sets it in a description in place of
   everything but Symphony's own blocks (the summary block, `SymphonyElixir.IssueSummary`, and the
-  Decisions section, `SymphonyElixir.Decisions`), which stay as they are, below it. So what a
-  person typed into the description in Linear is overwritten at the next projection: on a groomed
-  ticket the ask changes through a message, never through the description.
+  Decisions section, `SymphonyElixir.Decisions`), which stay as they are, below it. A ticket that
+  holds no ask has no projection: the text is never written in place of words Symphony does not
+  hold.
+
+  Before the first projection of a ticket the projector reads what the description holds now: words
+  a person typed there since the ask was recorded (`unrecorded_ask/2`) are recorded as a further
+  ask, and only then is the description written. After that first projection what a person types
+  into the description in Linear is overwritten at the next one: on a groomed ticket the ask
+  changes through a message, never through the description.
 
   The one writer is `SymphonyElixir.Pauses.Projector`, in the pass that also writes the Decisions
   section: it writes when the text changed. `changed/2` runs that pass, and is called each time a
@@ -18,7 +24,7 @@ defmodule SymphonyElixir.TicketProjection do
   left to the person.
   """
 
-  alias SymphonyElixir.{Decisions, IssueSummary, TicketChecks, TicketPlan}
+  alias SymphonyElixir.{Decisions, IssueSummary, TicketChecks, TicketPlan, Walkthrough}
   alias SymphonyElixir.Pauses.Projector
   alias SymphonyElixir.TicketEvents.Event
 
@@ -28,25 +34,49 @@ defmodule SymphonyElixir.TicketProjection do
   @spec event_types() :: [String.t()]
   def event_types, do: @types
 
-  @doc "The description's text for the ticket whose `events` these are (oldest first); nil for a ticket with no plan."
+  @doc """
+  The description's text for the ticket whose `events` these are (oldest first); nil for a ticket
+  with no plan, and for one that holds no ask: the text stands in place of what the person wrote,
+  so it is never written without it.
+  """
   @spec render([Event.t()]) :: String.t() | nil
   def render(events) when is_list(events) do
-    case TicketPlan.current(events) do
-      nil -> nil
-      plan -> "## Ask\n\n#{asks(events)}\n\n## Plan\n\n#{one_line(plan.summary)}\n\n## Checks\n\n#{checks(events)}"
+    case {TicketPlan.current(events), asks(events)} do
+      {nil, _asks} -> nil
+      {_plan, []} -> nil
+      {plan, asks} -> "## Ask\n\n#{Enum.join(asks, "\n\n")}\n\n## Plan\n\n#{one_line(plan.summary)}\n\n## Checks\n\n#{checks(events)}"
     end
   end
 
-  defp asks(events) do
-    case for(%{text: text} <- TicketPlan.ask(events), is_binary(text), do: String.trim(text)) do
-      [] -> "No ask was recorded."
-      texts -> Enum.join(texts, "\n\n")
-    end
+  defp asks(events), do: for(%{text: text} <- TicketPlan.ask(events), is_binary(text), do: String.trim(text))
+
+  @doc """
+  What a person wrote in the `description` Linear holds that the ticket's `events` do not: its
+  text without Symphony's own blocks (`person_text/1`), when it is none of the asks recorded. Nil
+  when the record holds it already, or the description holds no words of a person. The projector
+  records it as a further ask before it writes the ticket's first projection, which would
+  otherwise destroy what a person typed while Grooming ran.
+  """
+  @spec unrecorded_ask(String.t() | nil, [Event.t()]) :: String.t() | nil
+  def unrecorded_ask(description, events) when is_list(events) do
+    text = person_text(description)
+    if text == "" or text in asks(events), do: nil, else: text
   end
 
   defp checks(events), do: Enum.map_join(TicketChecks.list(events), "\n", &"- [#{&1.state}] #{&1.id}: #{one_line(&1.statement)}")
 
   defp one_line(text), do: text |> to_string() |> String.replace(~r/\s+/u, " ") |> String.trim()
+
+  @doc """
+  What a person wrote in `description`: its text without Symphony's own blocks (the summary block,
+  the Decisions section and the walkthrough's `Proved by:` blocks), trimmed. Empty for none.
+  """
+  @spec person_text(String.t() | nil) :: String.t()
+  def person_text(description) when is_binary(description) do
+    description |> IssueSummary.strip() |> Decisions.strip() |> Walkthrough.put_proofs([]) |> String.trim()
+  end
+
+  def person_text(_description), do: ""
 
   @doc """
   `description` with `text` in place of everything but Symphony's own blocks, which follow it in
