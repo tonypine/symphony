@@ -437,6 +437,11 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       assert {:ok, plan} = Types.validate("plan.written", @plan, :machine, nil)
       assert plan == @plan
 
+      # A plan may name no layer, the newer names, and `engine`, the name plans already recorded hold.
+      for layers <- [[], ["logic", "tests"], ["engine"]] do
+        assert {:ok, %{layers: ^layers}} = Types.validate("plan.written", %{@plan | layers: layers}, :machine, nil)
+      end
+
       qa = %{"id" => "c2", "kind" => "qa", "statement" => "The panel folds.", "proof" => "design", "state" => "A groomed ticket", "action" => "Fold it", "expect" => "One line"}
       wide = Map.merge(qa, %{"size" => "wide", "story" => "plan-panel/folded"})
 

@@ -184,8 +184,8 @@ defmodule SymphonyElixir.TicketEvents.Types do
   the message event it came `from`. `plan.written` is machine-only: one version of the ticket's plan
   (`SymphonyElixir.TicketPlan`), with its `version` (1 for Grooming's), why it was written
   (`reason`, at most 1,000) and `by` what (`grooming`, `recalibration`, `parent`, `run`), its
-  `shape` (`single` or `split`), the `layers` it touches (`screen`, `gallery`, `api`, `engine`,
-  `config`, `tooling`, `docs`), a `summary` for a person (at most 600), the plan's `text` for agents
+  `shape` (`single` or `split`), the `layers` it touches (none or more of `screen`, `gallery`,
+  `api`, `logic`, `config`, `tests`, `tooling`, `docs`, and `engine`, `logic`'s older name), a `summary` for a person (at most 600), the plan's `text` for agents
   (at most 12,000), its `checks` (at most 30), its `size` (`tokens` and `runs`) and, for a split, its
   `sub_tickets` (at most 12). A check has an `id` that is its alone across versions (`c1`, `c2`; a new check gets one no
   version used, and a check whose `statement` changed starts unproved), a `kind`
@@ -769,7 +769,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
         reason: {:string, 1_000},
         by: {:enum, ~w(grooming recalibration parent run)},
         shape: {:enum, ~w(single split)},
-        layers: {:list, {:enum, ~w(screen gallery api engine config tooling docs)}},
+        layers: {:list, {:enum, ~w(screen gallery api logic config tests tooling docs engine)}},
         summary: {:string, 600},
         text: {:string, 12_000},
         checks: {:list, @plan_check, 30},

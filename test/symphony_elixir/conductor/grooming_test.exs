@@ -209,6 +209,19 @@ defmodule SymphonyElixir.Conductor.GroomingTest do
       assert length(TicketPlan.ask(ctx.issue_id)) == 1
     end
 
+    test "a plan whose layers Symphony does not know, or that names none, is recorded with its checks", ctx do
+      assert groom(ctx, planned(%{"layers" => ["android", "tests", "unit-tests"]})) == :ok
+      assert %{layers: ["tests"]} = TicketPlan.current(ctx.issue_id)
+      assert [%{id: "c1", kind: "outcome"}, %{id: "c2"}] = TicketChecks.list(ctx.issue_id)
+      assert status_notes(ctx.issue_id) == []
+    end
+
+    test "a plan with an empty list of layers is recorded with its checks", ctx do
+      assert groom(ctx, planned(%{"layers" => []})) == :ok
+      assert %{layers: []} = TicketPlan.current(ctx.issue_id)
+      assert [%{id: "c1", kind: "outcome"}, %{id: "c2"}] = TicketChecks.list(ctx.issue_id)
+    end
+
     test "a ticket with no description asks its title, and an ask that can't be recorded is logged", ctx do
       bare = %{ctx.issue | description: nil}
       assert Grooming.record_ask("default", bare, %{ctx.record | description: "  "}, []) == :ok
@@ -393,6 +406,24 @@ defmodule SymphonyElixir.Conductor.GroomingTest do
       assert events(ctx.issue_id, "conductor.update") == []
       assert [_ask] = TicketPlan.ask(ctx.issue_id)
       assert Grooming.max_tries() == 2
+    end
+
+    test "the next try reads in its facts why the earlier answer was refused", ctx do
+      refused = answer(%{"plan" => written(%{"checks" => [%{"kind" => "evidence", "statement" => "A screenshot.", "proof" => "attached"}]})})
+      capture_log(fn -> assert groom(ctx, {:ok, [refused], 7}) == :again end)
+
+      test = self()
+
+      turn = fn _plan, _issue, _run_id, prompt ->
+        send(test, {:prompt, prompt})
+        planned()
+      end
+
+      assert Conductor.run(plan(ctx), ctx.issue, turn: turn, worker_host: "elsewhere") == :ok
+      assert_received {:prompt, prompt}
+      assert prompt =~ "earlier_tries"
+      assert prompt =~ "`plan.checks` holds no check of kind `outcome`"
+      assert TicketPlan.groomed?(ctx.issue_id)
     end
 
     test "a provider that can take no run follows the same bound, and runs no turn", ctx do

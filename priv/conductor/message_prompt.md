@@ -98,7 +98,7 @@ Write your answer as one JSON object and nothing else:
   "plan": null or {
     "reason": "<what changed and why, at most 1000 characters>",
     "shape": "single" or "split",
-    "layers": ["<a layer name: screen, gallery, api, engine, config, tooling, docs>", ...],
+    "layers": ["<a layer name: screen, gallery, api, logic, config, tests, tooling, docs>", ...] or [],
     "summary": "<for a person: what will be built, at most 600 characters>",
     "text": "<the plan for the agents, labelled sections, at most 12000 characters>",
     "checks": [
