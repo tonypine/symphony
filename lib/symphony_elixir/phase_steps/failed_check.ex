@@ -11,6 +11,11 @@ defmodule SymphonyElixir.PhaseSteps.FailedCheck do
 
   - a check, or a step of one, that only CI can prove (`Phases.ci_only_checks/0`): not run, and the
     output says so with the check's name and why; it does not hold the push back;
+  - a check that only adds up the results of other jobs (`summary/2`, as make-all's "Summarize gate
+    results" does), read from the workspace's workflow files (`changes.workflows`), never from its
+    log: not run. It counts as proved by the jobs it reports on, which the output names: those of
+    them that failed are failed checks of the run too, planned and run as below, so one that fails
+    again ends the step failed and one the step has no way to run still asks;
   - the test files a red test job names (`test/..._test.exs` in its failure annotations, else in
     its log): one
     `mix test` of all of them that are still in the workspace;
@@ -71,6 +76,7 @@ defmodule SymphonyElixir.PhaseSteps.FailedCheck do
   @typedoc "One thing the step does for a failed check."
   @type item ::
           {:ci_only, String.t(), String.t()}
+          | {:summary, String.t(), [String.t()]}
           | {:tests, [String.t()]}
           | {:coverage, [String.t()]}
           | {:shell, String.t()}
@@ -136,16 +142,57 @@ defmodule SymphonyElixir.PhaseSteps.FailedCheck do
   end
 
   @doc """
+  The names of the jobs the check `check` (its name, compared as `normalize/1` reads it) only adds up,
+  from `workflows` (the workspace's workflow files as YAML reads them); nil when it is not such a check.
+
+  A job only adds up others when it `needs` them and its steps run nothing of the repository: it has
+  steps, each a `run` line and none a `uses` (so nothing checks the repository out or runs an
+  action). The jobs it reports on are its `needs`, each by its name in the same file (its id when it
+  has none). The rule reads the job's shape, never its script.
+  """
+  @spec summary(String.t(), [map()]) :: [String.t()] | nil
+  def summary(check, workflows) do
+    name = normalize(check)
+
+    Enum.find_value(List.wrap(workflows), fn workflow ->
+      jobs = jobs(workflow)
+      Enum.find_value(jobs, fn {id, job} -> if normalize(job_name(id, job)) == name, do: reported(job, jobs) end)
+    end)
+  end
+
+  defp jobs(%{"jobs" => %{} = jobs}), do: for({id, %{} = job} <- jobs, do: {to_string(id), job})
+  defp jobs(_workflow), do: []
+
+  defp job_name(_id, %{"name" => name}) when is_binary(name), do: name
+  defp job_name(id, _job), do: id
+
+  defp reported(%{"needs" => needs, "steps" => [_step | _more] = steps} = job, jobs) do
+    needs = needs |> List.wrap() |> Enum.filter(&is_binary/1)
+
+    if needs != [] and not Map.has_key?(job, "uses") and Enum.all?(steps, &run_only?/1) do
+      names = Map.new(jobs, fn {id, job} -> {id, job_name(id, job)} end)
+      Enum.map(needs, &Map.get(names, &1, &1))
+    end
+  end
+
+  defp reported(_job, _jobs), do: nil
+
+  defp run_only?(%{"run" => run} = step) when is_binary(run), do: not Map.has_key?(step, "uses")
+  defp run_only?(_step), do: false
+
+  @doc """
   What the step does for the failed check `check` (a map with its `name`), from `read` (its job as the CI
   log tool read it, or why it could not be read) and `changes` (the workspace's files, for which
-  test files are still there). See the moduledoc.
+  test files are still there, and its workflow files, for which checks only add up others). See the
+  moduledoc.
   """
   @spec plan(check(), {:ok, map()} | {:error, term()}, map()) :: [item()]
   def plan(%{name: name} = _check, read, changes) do
-    case {ci_only(name), read} do
-      {%{why: why}, _read} -> [{:ci_only, name, why}]
-      {nil, {:error, reason}} -> [{:unknown, "Symphony could not read the result of #{name} on GitHub (#{inspect(reason)})"}]
-      {nil, {:ok, job}} -> plan_job(name, job, changes)
+    case {ci_only(name), summary(name, Map.get(changes, :workflows, [])), read} do
+      {%{why: why}, _summary, _read} -> [{:ci_only, name, why}]
+      {nil, [_job | _more] = reported, _read} -> [{:summary, name, reported}]
+      {nil, nil, {:error, reason}} -> [{:unknown, "Symphony could not read the result of #{name} on GitHub (#{inspect(reason)})"}]
+      {nil, nil, {:ok, job}} -> plan_job(name, job, changes)
     end
   end
 
@@ -246,6 +293,7 @@ defmodule SymphonyElixir.PhaseSteps.FailedCheck do
 
     cond do
       ci_only(name) -> {:error, :ci_only}
+      summary(name, Map.get(context.changes, :workflows, [])) -> {:error, :summary}
       is_nil(job_id) -> {:error, :no_job}
       repo = CiLog.repo_from_url(Map.get(context, :pr_url)) -> job(read.(repo, {:job, job_id}, failed_only: true, cwd: context.workspace))
       true -> {:error, :no_pull_request}
@@ -263,6 +311,7 @@ defmodule SymphonyElixir.PhaseSteps.FailedCheck do
   end
 
   defp item_text({:ci_only, _name, why}), do: "can only be proved by CI (#{why})"
+  defp item_text({:summary, _name, jobs}), do: "only adds up the results of #{Enum.join(jobs, ", ")}, so it is proved by them"
   defp item_text({:tests, files}), do: "its failed test files, #{Enum.join(files, ", ")}"
   defp item_text({:coverage, files}), do: "the modules below 100% coverage, in #{Enum.join(files, ", ")}"
   defp item_text({:shell, command}), do: "its failed step, `#{command}`"
@@ -323,9 +372,13 @@ defmodule SymphonyElixir.PhaseSteps.FailedCheck do
   end
 
   defp passed_line(items) do
+    summaries =
+      for({:summary, name, jobs} <- items, do: {name, jobs})
+      |> Enum.map_join(fn {name, jobs} -> "; #{name} only adds up the results of #{Enum.join(jobs, ", ")}, so it counts as proved by them" end)
+
     case for({:ci_only, name, _why} <- items, do: name) do
-      [] -> "(every failed check passed on this run's commit)\n"
-      names -> "(every failed check Symphony can run passed; #{Enum.join(names, ", ")} can only be proved by CI, so the push goes ahead and CI proves it)\n"
+      [] -> "(every failed check passed on this run's commit#{summaries})\n"
+      names -> "(every failed check Symphony can run passed#{summaries}; #{Enum.join(names, ", ")} can only be proved by CI, so the push goes ahead and CI proves it)\n"
     end
   end
 

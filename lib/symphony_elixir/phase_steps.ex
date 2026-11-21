@@ -100,24 +100,30 @@ defmodule SymphonyElixir.PhaseSteps do
   @back_to_code "Send it back to the code"
   # What the changed-files script prints: one `<status>\t<path>` line a change (`D` a deletion),
   # then `T\t<path>` for each test file the workspace tracks, and `W\t<manifest>` with the window
-  # tests' manifest on one line when the workspace has one (JSON holds no raw newline in a string).
+  # tests' manifest on one line when the workspace has one (JSON holds no raw newline in a string),
+  # and `Y\t<base64>` with each of its GitHub workflow files, which the failed-check step reads.
   @changes_script """
   base=$(git merge-base HEAD "origin/$SYMPHONY_BASE_BRANCH" 2>/dev/null || git rev-parse HEAD 2>/dev/null)
   if [ -n "$base" ]; then git diff --name-status --no-renames "$base" 2>/dev/null; fi
   git ls-files --others --exclude-standard 2>/dev/null | sed 's/^/A\t/'
   git ls-files 'test/*_test.exs' 2>/dev/null | sed 's/^/T\t/'
   if [ -f "$SYMPHONY_WINDOW_TESTS" ]; then printf 'W\t'; tr '\r\n\t' '   ' < "$SYMPHONY_WINDOW_TESTS"; printf '\n'; fi
+  for f in .github/workflows/*.yml .github/workflows/*.yaml; do
+    if [ -f "$f" ]; then printf 'Y\t'; base64 < "$f" | tr -d '\r\n'; printf '\n'; fi
+  done
   """
 
   @typedoc """
   The files a workspace changed against its base branch, and its tracked test files; with the window
-  tests its manifest declares (`window_tests`, `SymphonyElixir.PhaseSteps.WindowTests`) when it has one.
+  tests its manifest declares (`window_tests`, `SymphonyElixir.PhaseSteps.WindowTests`) when it has one,
+  and its GitHub workflow files as YAML reads them (`workflows`) when it has any.
   """
   @type changes :: %{
           required(:changed) => [String.t()],
           required(:existing) => [String.t()],
           required(:tests) => [String.t()],
-          optional(:window_tests) => WindowTests.manifest()
+          optional(:window_tests) => WindowTests.manifest(),
+          optional(:workflows) => [map()]
         }
 
   @typedoc "A step run's notice to its owner: a machine step starting (with its deadline) and ending."
@@ -214,8 +220,9 @@ defmodule SymphonyElixir.PhaseSteps do
   @doc """
   The changed files of `context`'s workspace: what changed against the merge-base with
   `origin/<base_branch>` (else `HEAD`), committed or not, and the files nobody tracks yet, with the
-  test files the workspace tracks, and the window tests its manifest declares
-  (`WindowTests.manifest_path/0`). A workspace git can't read changed nothing.
+  test files the workspace tracks, the window tests its manifest declares
+  (`WindowTests.manifest_path/0`) and its GitHub workflow files (`.github/workflows`), each as YAML
+  reads it; one YAML can't read is left out. A workspace git can't read changed nothing.
   """
   @spec changes(context()) :: changes()
   def changes(context) do
@@ -233,13 +240,28 @@ defmodule SymphonyElixir.PhaseSteps do
 
   defp parse_changes(output) do
     lines = for line <- String.split(output, "\n", trim: true), [status, path] <- [String.split(line, "\t", parts: 2)], do: {status, path}
-    changed = for {status, path} <- lines, status not in ["T", "W"], uniq: true, do: path
-    existing = for {status, path} <- lines, status not in ["T", "D", "W"], uniq: true, do: path
+    changed = for {status, path} <- lines, status not in ["T", "W", "Y"], uniq: true, do: path
+    existing = for {status, path} <- lines, status not in ["T", "D", "W", "Y"], uniq: true, do: path
     changes = %{changed: changed, existing: existing, tests: for({"T", path} <- lines, do: path)}
 
-    case for({"W", manifest} <- lines, do: manifest) do
-      [manifest | _rest] -> Map.put(changes, :window_tests, WindowTests.parse(manifest))
+    changes =
+      case for({"W", manifest} <- lines, do: manifest) do
+        [manifest | _rest] -> Map.put(changes, :window_tests, WindowTests.parse(manifest))
+        [] -> changes
+      end
+
+    case for({"Y", encoded} <- lines, {:ok, workflow} <- [workflow(encoded)], do: workflow) do
       [] -> changes
+      workflows -> Map.put(changes, :workflows, workflows)
+    end
+  end
+
+  defp workflow(encoded) do
+    with {:ok, yaml} <- Base.decode64(encoded, ignore: :whitespace),
+         {:ok, %{} = workflow} <- YamlElixir.read_from_string(yaml) do
+      {:ok, workflow}
+    else
+      _unreadable -> :error
     end
   end
 

@@ -26,6 +26,24 @@ defmodule SymphonyElixir.PhaseSteps.FailedCheckTest do
     ]
   }
 
+  # A workflow file as YAML reads it, shaped as the repository's make-all: a summary job that
+  # waits on the others and runs only shell lines, and jobs that check the repository out.
+  @workflow %{
+    "name" => "make-all",
+    "jobs" => %{
+      "lint" => %{"name" => "lint", "steps" => [%{"uses" => "actions/checkout@v5"}, %{"name" => "Run lint", "run" => "mix lint"}]},
+      "coverage" => %{"name" => "coverage (${{ matrix.partition }}/4)", "steps" => [%{"uses" => "actions/checkout@v5"}, %{"run" => "mix test"}]},
+      "coverage-report" => %{"name" => "coverage report", "needs" => "coverage", "steps" => [%{"uses" => "actions/checkout@v5"}, %{"run" => "mix cover"}]},
+      "dialyzer" => %{"steps" => [%{"uses" => "actions/checkout@v5"}, %{"run" => "mix dialyzer"}]},
+      "make-all" => %{
+        "name" => "make-all",
+        "needs" => ["lint", "coverage-report", "dialyzer"],
+        "if" => "${{ !cancelled() }}",
+        "steps" => [%{"name" => "Summarize gate results", "env" => %{"LINT_RESULT" => "${{ needs.lint.result }}"}, "run" => "echo \"lint: $LINT_RESULT\""}]
+      }
+    }
+  }
+
   setup do
     :ok = RunStore.clear()
     :ok
@@ -39,7 +57,8 @@ defmodule SymphonyElixir.PhaseSteps.FailedCheckTest do
         changed: ["lib/app/thing.ex"],
         existing: ["lib/app/thing.ex", "test/app/new_test.exs"],
         tests: ["test/app/thing_test.exs", "test/app/other_test.exs"],
-        window_tests: {:ok, entries()}
+        window_tests: {:ok, entries()},
+        workflows: [%{"on" => "push"}, @workflow]
       },
       extra
     )
@@ -176,6 +195,42 @@ defmodule SymphonyElixir.PhaseSteps.FailedCheckTest do
       assert FailedCheck.step_commands()[{"lint", "Run lint"}] == "mix lint"
     end
 
+    test "a job that waits on others and runs only shell lines only adds them up, read from the workflow files, never from its log" do
+      reported = ["lint", "coverage report", "dialyzer"]
+      assert FailedCheck.summary("make-all", [@workflow]) == reported
+      assert FailedCheck.summary("CI / make-all", [%{"jobs" => []}, @workflow]) == reported
+
+      # Its log is not read: the workflow file decides, whatever GitHub answered.
+      assert [{:summary, "make-all", ^reported}] = FailedCheck.plan(%{name: "make-all"}, {:error, :summary}, changes())
+      assert [{:summary, "make-all", ^reported}] = FailedCheck.plan(%{name: "make-all"}, {:ok, job(%{failed_steps: ["Summarize gate results"]})}, changes())
+
+      # A job that checks the repository out or runs an action, or waits on nothing, is not one.
+      for name <- ["lint", "coverage (1/4)", "coverage report", "dialyzer", "not a job"], do: assert(FailedCheck.summary(name, [@workflow]) == nil)
+
+      shapes = [
+        %{"needs" => ["lint"], "steps" => [%{"run" => "echo", "uses" => "actions/x@v1"}]},
+        %{"needs" => ["lint"], "steps" => [%{"run" => ["echo"]}]},
+        %{"needs" => ["lint"], "steps" => ["echo"]},
+        %{"needs" => ["lint"], "steps" => []},
+        %{"needs" => ["lint"]},
+        %{"needs" => [], "steps" => [%{"run" => "echo"}]},
+        %{"needs" => [7], "steps" => [%{"run" => "echo"}]},
+        %{"steps" => [%{"run" => "echo"}]},
+        %{"needs" => ["lint"], "uses" => "./.github/workflows/gate.yml", "steps" => [%{"run" => "echo"}]}
+      ]
+
+      for job <- shapes, do: assert(FailedCheck.summary("gate", [%{"jobs" => %{"gate" => job, "skip" => "junk"}}]) == nil)
+
+      # A job with no name is its id, and one it needs that the file does not hold is named by its id.
+      assert FailedCheck.summary("gate", [%{"jobs" => %{"gate" => %{"needs" => "elsewhere", "steps" => [%{"run" => "true"}]}}}]) == ["elsewhere"]
+      assert FailedCheck.summary("make-all", []) == nil
+      assert FailedCheck.summary("make-all", nil) == nil
+
+      # Without the workflow files the step behaves as before and has no way to run it.
+      assert [{:unknown, "Symphony has no way to run the step Summarize gate results of make-all outside GitHub"}] =
+               FailedCheck.plan(%{name: "make-all"}, {:ok, job(%{failed_steps: ["Summarize gate results"]})}, Map.delete(changes(), :workflows))
+    end
+
     test "the checks come from the run's failure, with or without GitHub's job, in either key form" do
       assert FailedCheck.failed_checks(%{ci_failure: %{"failed_checks" => [%{"name" => "lint", "job_id" => 77}, %{"name" => nil}, "junk"]}}) ==
                [%{name: "lint", job_id: "77"}]
@@ -230,6 +285,49 @@ defmodule SymphonyElixir.PhaseSteps.FailedCheckTest do
       assert [%{outcome: "passed"} = passed] = completed()
       assert output(passed) =~ "- dialyzer: can only be proved by CI (its full run of the whole code base takes longer than a run's step allows)\n"
       assert output(passed) =~ "dialyzer can only be proved by CI, so the push goes ahead and CI proves it"
+    end
+
+    test "a check that only adds up other jobs counts as proved once the failed ones it reports on pass, and the run pushes without a question" do
+      checks = [%{name: "coverage (2/4)", job_id: "101"}, %{name: "make-all", job_id: "102"}, %{name: "dialyzer", job_id: "103"}]
+      context = context(checks, %{"101" => test_job(), "102" => job(%{failed_steps: ["Summarize gate results"]})})
+
+      assert {:turn, %{id: "handoff"}, nil} = walk(context)
+      assert_received {:read, "acme/app", "101", _opts}
+      refute_received {:read, _repo, "102", _opts}
+      assert_received {:ran, "mix test test/app/thing_test.exs"}
+      assert [%{outcome: "passed"} = passed] = completed()
+      output = output(passed)
+      assert output =~ "- make-all: only adds up the results of lint, coverage report, dialyzer, so it is proved by them
+"
+
+      assert output =~
+               "(every failed check Symphony can run passed; make-all only adds up the results of lint, coverage report, dialyzer, so it counts as proved by them; dialyzer can only be proved by CI"
+
+      assert Questions.open({:ticket, @repo_key, @issue_id}) == []
+
+      :ok = RunStore.clear()
+      assert {:turn, %{id: "handoff"}, nil} = walk(context([%{name: "make-all", job_id: "102"}], %{}))
+      assert [%{outcome: "passed"} = passed] = completed()
+      assert output(passed) =~ "(every failed check passed on this run's commit; make-all only adds up the results of"
+    end
+
+    test "a check that only adds up other jobs hides none of them: one that fails again goes back to the fix, one it can't run still asks" do
+      checks = [%{name: "coverage (2/4)", job_id: "101"}, %{name: "make-all", job_id: "102"}]
+      answers = %{"mix test test/app/thing_test.exs" => {:ok, {"Assertion failed", 2}}}
+
+      assert {:turn, %{id: "fix"}, %{output: output}} = walk(context(checks, %{"101" => test_job()}, %{answers: answers}))
+      assert output =~ "Assertion failed
+(exit status 2)
+"
+      assert [%{outcome: "failed", returns_to: "fix"}] = completed()
+
+      :ok = RunStore.clear()
+      checks = [%{name: "lint"}, %{name: "make-all", job_id: "102"}]
+      assert {:paused, %{id: "failed_check"}, question_id} = walk(context(checks, %{}))
+      assert [%{outcome: "paused"} = paused] = completed()
+      assert output(paused) =~ "(could not run: Symphony could not read the result of lint on GitHub (:no_job))
+"
+      assert Questions.find({:ticket, @repo_key, @issue_id}, question_id).question =~ "(lint, make-all)"
     end
 
     test "a run sent for a merge conflict, with no failed check, skips the step" do
