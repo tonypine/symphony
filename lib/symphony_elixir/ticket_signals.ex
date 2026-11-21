@@ -34,7 +34,7 @@ defmodule SymphonyElixir.TicketSignals do
   alias SymphonyElixir.Pauses.Projector
   alias SymphonyElixirWeb.ObservabilityPubSub
 
-  @phase_signals ["claim", "ci fix return", "review verdict", "merge settled", "restart", "deprioritized"]
+  @phase_signals ["claim", "ci fix return", "rework answered", "review verdict", "merge settled", "restart", "deprioritized"]
   @mirrored_signals ["decision requested", "unblocked", "dispatch_loop", "ci_wait"]
   @review_signals ["code_review", "qa", "epic_review"]
   # A review's move signal that pauses the ticket on a decision instead of moving it.
@@ -221,7 +221,7 @@ defmodule SymphonyElixir.TicketSignals do
   options, or `:mirrored` when a pause or decision event records the same change. Every payload a
   signal maps to carries `signal`, the name it mirrors, except a `note`, whose text names it.
 
-    * A phase move (`claim`, `ci fix return`, `review verdict`, `merge settled`, `restart`,
+    * A phase move (`claim`, `ci fix return`, `rework answered`, `review verdict`, `merge settled`, `restart`,
       `deprioritized`, a `handoff` or `decision returned` that moved the ticket, the idle park's
       `blocked`, a review's move after its verdict, a sub-issue's `plan verdict`) is
       `phase.entered`, in the phase it entered.

@@ -2062,6 +2062,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
     with {:ok, body} <- graphql(@issue_description_query, %{id: issue_id}, opts),
          {:ok, issue} <- fetch_path(body, ["data", "issue"], :issue_not_found),
          {:ok, entries} <- Walkthrough.check_proofs(issue["description"], proofs),
+         :ok <- find_tests(context, entries, "evidence"),
          {:ok, events} <- record_proof_events(context, entries) do
       project_proofs(context, issue_id)
       {:ok, %{"events" => events, "steps" => Enum.map(entries, & &1.step)}}
@@ -2072,9 +2073,21 @@ defmodule SymphonyElixir.AgentTools.Linear do
   # each is a `check.proved` (`by: test`), and the description is never read.
   defp record_check_proofs(context, issue_id, proofs) do
     with {:ok, entries} <- TicketJourney.check_proofs(issue_id, proofs),
+         :ok <- find_tests(context, entries, "check.proved"),
          {:ok, events} <- record_check_events(context, entries) do
       {:ok, %{"events" => events, "checks" => Enum.map(entries, & &1.check_id)}}
     end
+  end
+
+  # Every proof's test is looked for in the checkout before any is recorded, so a refused call
+  # records none of them (`SymphonyElixir.AgentTools.TicketLedger.find_test/3`).
+  defp find_tests(context, entries, type) do
+    Enum.find_value(entries, :ok, fn %{test: test} ->
+      case TicketLedger.find_test(context, test, type) do
+        :ok -> nil
+        refused -> refused
+      end
+    end)
   end
 
   defp record_check_events(context, entries) do

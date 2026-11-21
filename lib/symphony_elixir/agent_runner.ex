@@ -1058,6 +1058,9 @@ defmodule SymphonyElixir.AgentRunner do
       merging_ci_pending?(issue, run_context) ->
         :ok
 
+      rework_answered?(issue, run_context) ->
+        return_answered_rework_to_qa(issue, run_context)
+
       rework_finished?(issue, run_context) ->
         hand_off_finished_rework(issue, run_context)
 
@@ -2059,6 +2062,9 @@ defmodule SymphonyElixir.AgentRunner do
   defp progress_fingerprint(head, tree, issue, opts), do: {head, tree, Map.get(issue, :state), ticket_pr_url(issue, opts)}
 
   # Nothing moves an issue out of `Rework` once its rework is done: the post-PR move skips `Rework`.
+  # A rework that answered every finding of the ticket without a code change goes back to QA on the
+  # same head instead (`rework_answered?/2`), ahead of these rules.
+  #
   # The rework is done once the workspace HEAD has moved past the head the Rework started from (by
   # this run or an earlier one), that HEAD is the attached PR's head, and no review, CI, QA or
   # conflict signal is pending.
@@ -2098,6 +2104,72 @@ defmodule SymphonyElixir.AgentRunner do
       {:error, reason} ->
         Logger.warning("Could not read the PR head for rework #{issue_context(issue)}; continuing reason=#{inspect(reason)}")
         false
+    end
+  end
+
+  # A Rework whose findings are all answered without a code change (a proof recorded again, TP-1579)
+  # has nothing for Code Review to read: the head it leaves is the one QA judged. So once the
+  # workspace HEAD is still the head the Rework started from, with a clean tree, and that HEAD is the
+  # attached PR's head, QA failed that head after Code Review approved it, the ticket has at least
+  # one finding and none still open or reopened, no plan
+  # check a test proves is open (`TicketJourney.unproved/1`) and no reviewer comment, CI failure or
+  # conflict is pending, the run moves the ticket to QA, which runs again on that head (only a pass
+  # carries over a head). This wins over the Code Review handoff even when the run pushed the
+  # unchanged head or called the PR tool. A Rework with no finding, a finding left open or a new head
+  # keeps the rules below.
+  defp rework_answered?(%Issue{id: issue_id} = issue, %{progress: %{head: head} = progress} = run_context) do
+    unchanged_clean_rework_head?(issue, head, progress) and attached_pr?(issue, run_context.opts) and
+      findings_answered?(issue_id) and
+      qa_failed_approved_head?(run_repo_key(issue, run_context.opts), issue_id, head) and
+      TicketJourney.unproved(issue_id) == [] and
+      no_pending_rework_signal?(issue, run_context.opts) and
+      pr_head?(issue, head, run_context)
+  end
+
+  defp unchanged_clean_rework_head?(%Issue{state: state}, head, progress) do
+    rework_state?(state) and is_binary(head) and head == progress.rework_base and clean_tree?(progress)
+  end
+
+  # The Rework came from QA failing `head` after Code Review approved it: QA's newest verdict is a
+  # fail on `head`, Code Review's newest is an approve on `head`, and the fail is the newer. A
+  # Rework Code Review sent back (its request-changes posts no finding) or any other order keeps the
+  # rules below, so the shortcut never skips the review that rejected the head.
+  defp qa_failed_approved_head?(repo_key, issue_id, head) do
+    with %{outcome: "fail", head_sha: ^head, recorded_at: %DateTime{} = failed_at} <- List.first(Handoff.verdicts(repo_key, issue_id, "qa")),
+         %{outcome: "approve", head_sha: ^head, recorded_at: %DateTime{} = approved_at} <-
+           List.first(Handoff.verdicts(repo_key, issue_id, "code_review")) do
+      DateTime.compare(failed_at, approved_at) == :gt
+    else
+      _other -> false
+    end
+  end
+
+  defp clean_tree?(%{fingerprint: {_head, tree, _state, _pr_url}}), do: is_nil(tree)
+
+  # Every finding of the ticket's events is resolved or confirmed, and there is at least one; an
+  # unreadable ledger answers nothing.
+  defp findings_answered?(issue_id) do
+    events = RunStore.list_ticket_events(issue_id, [])
+    states = if is_list(events), do: events |> TicketEvents.findings() |> Enum.map(& &1.state), else: []
+    states != [] and Enum.all?(states, &(&1 in [:resolved, :confirmed]))
+  end
+
+  defp return_answered_rework_to_qa(%Issue{id: issue_id} = issue, %{progress: %{head: head}} = run_context) do
+    settings = Keyword.fetch!(run_context.opts, :settings)
+    qa_state = settings.tracker.qa_state
+    Logger.info("Rework for #{issue_context(issue)} answered every finding on its unchanged PR head #{head}; moving to #{qa_state}")
+
+    ctx = %{settings: settings, repo_key: run_repo_key(issue, run_context.opts)}
+    move = fn -> TransitionGuard.perform(issue_id, :rework_answered, ctx) end
+
+    case with_linear_retry(move, "moving #{issue_context(issue)} to #{qa_state} after an answered rework", run_context.opts) do
+      :ok ->
+        record_move_signal(issue, "rework answered", %{to: qa_state, head: head, move: true}, run_context.opts)
+        forget_rework_base(issue, run_context.opts)
+        :ok
+
+      {:error, reason} ->
+        {:error, {:rework_handoff_failed, reason}}
     end
   end
 
