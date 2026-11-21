@@ -109,6 +109,15 @@ jobs:
           swift --version
           echo "build cache: ${SYMPHONY_CI_CACHE:-none}; ref: $SYMPHONY_CI_REF; clean: $CLEAN"
 
+      # A full disk fails a step far from here with an error about something else (TP-1582: the
+      # QA appearance library could not build the SDK's modules). So the build cache is pruned first,
+      # down to its free-space floor, the disk's use is reported, and the job stops here, naming the
+      # free space, when the floor is still not met.
+      - name: Make room on the disk
+        run: |
+          runner_work=$(dirname "$RUNNER_WORKSPACE")
+          bash scripts/ci/build-store.sh room "$RUNNER_TEMP" "$runner_work" "$(dirname "$runner_work")/_diag"
+
       - name: Test the Xcode selection script
         if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.helpers }}
         run: sh scripts/ci/xcode-developer-dir-test.sh
@@ -355,4 +364,7 @@ jobs:
 
       - name: Tidy the build cache
         if: ${{ always() }}
-        run: bash scripts/ci/build-store.sh prune
+        run: |
+          bash scripts/ci/build-store.sh prune
+          runner_work=$(dirname "$RUNNER_WORKSPACE")
+          bash scripts/ci/build-store.sh space "$RUNNER_TEMP" "$runner_work" "$(dirname "$runner_work")/_diag"
