@@ -36,12 +36,15 @@ defmodule SymphonyElixir.TransitionGuard do
 
   require Logger
 
-  alias SymphonyElixir.{Pauses, PlanReview, Questions, RunStore, SubIssueWait, TicketSignals, Tracker}
+  alias SymphonyElixir.{Pauses, PlanReview, Questions, RunStore, SubIssueWait, TicketJourney, TicketSignals, Tracker}
 
   @in_progress_state "In Progress"
   @merging_state "Merging"
   @rework_state "Rework"
   @backlog_state "Backlog"
+  @done_state "Done"
+  # The moves to `Done` that close a ticket on its own pull request, so its plan's checks hold them.
+  @done_on_own_pr [:landing_done, :pr_merged, :director_move]
   @retired_states ["Auto Review", "In Review", "Human Review"]
   @run %{kind: :run, name: "The run"}
   @unblock_option "Unblock and run again"
@@ -109,6 +112,10 @@ defmodule SymphonyElixir.TransitionGuard do
   # sends a ticket whose conflict with the base branch came back after the conflict fix runs, with
   # no open PR competing for its files, to `Rework`, where a run can change as much as the conflict
   # needs (D16).
+  #
+  # `:merge_held` is its move for a ticket whose plan holds the merge (R9a): a plan version written
+  # after the code, a Conductor hold, or an open check the next step owes. The ticket goes to
+  # `Rework`, where a run codes the plan as it is now; no approval of the older code carries it on.
   #
   # Its lifecycle moves (TP-944): `:pr_closed` sends a ticket whose PR was closed without merging out
   # of a phase that works on that PR to `Rework`, where the run opens a new one from main (D5);
@@ -188,6 +195,7 @@ defmodule SymphonyElixir.TransitionGuard do
     %{signal: :ci_fix_mechanical, from: ["CI Fix"], to: :requested},
     %{signal: :person_push, from: ["Merging"], to: :code_review_state},
     %{signal: :conflict_rework, from: ["Code Review", "QA", "CI Fix", "Merging"], to: "Rework"},
+    %{signal: :merge_held, from: ["Code Review", "QA", "CI Fix", "Merging"], to: "Rework"},
     %{signal: :pr_closed, from: ["Code Review", "QA", "CI Fix", "Merging"], to: "Rework"},
     %{signal: :pr_merged, from: ["In Progress", "Code Review", "QA", "Rework", "CI Fix"], to: "Done"},
     %{signal: :epic_review_enter, from: ["Waiting on sub-tickets"], to: :epic_review_state},
@@ -271,7 +279,11 @@ defmodule SymphonyElixir.TransitionGuard do
   (tests, a fake).
   A move into a retired state is refused with `{:error, {:retired_state, target}}`, and one whose
   target resolves to no state name (a requested or configured state that is nil or blank) with
-  `{:error, {:unresolved_target, signal}}`, before Linear is asked.
+  `{:error, {:unresolved_target, signal}}`, before Linear is asked. So is a move into `Merging`, or
+  a move to `Done` that closes the ticket on its own pull request (`:landing_done`, `:pr_merged`, a
+  person's `:director_move`), while the ticket's current plan has an open check the merge waits on
+  (`SymphonyElixir.TicketJourney.owed_before_merge/1`): `{:error, {:open_checks, ids}}`. A check
+  seen only after the merge holds neither, and a person waives a check to close such a ticket.
   A move into `Merging` asks the PR and CI watcher to read now (`opts[:on_merging]` overrides it), so
   a PR that is already green merges at once instead of on the next timer, by when its head may be
   behind. Any other move asks it to read that ticket's PR now (`opts[:on_moved]` overrides it): no
@@ -300,6 +312,14 @@ defmodule SymphonyElixir.TransitionGuard do
       retired_state?(target) ->
         {:error, {:retired_state, target}}
 
+      (owed = owed_checks(issue_id, signal, target)) != [] ->
+        Logger.warning(
+          "Refused a move whose plan has open checks issue_id=#{issue_id} issue_identifier=#{Map.get(ctx, :issue_identifier)} " <>
+            "signal=#{signal} to=#{target} checks=#{Enum.join(owed, ",")}"
+        )
+
+        {:error, {:open_checks, owed}}
+
       true ->
         repo_key = Map.get(ctx, :repo_key)
         :ok = warn_keyless(repo_key, issue_id, target, ctx)
@@ -307,6 +327,22 @@ defmodule SymphonyElixir.TransitionGuard do
         :ok = TicketSignals.record_phase(repo_key, issue_id, target)
         update_state(issue_id, target, ctx, before, opts)
     end
+  end
+
+  # The ids of the open checks of the ticket's plan that hold this move: a move into `Merging`, or a
+  # move to `Done` that closes the ticket on its own pull request (a merge, a person's move), waits on
+  # every open check of the current plan but those seen only after the merge
+  # (`SymphonyElixir.TicketJourney.owed_before_merge/1`). A ticket whose work is its sub-tickets
+  # closes on them (`:final_check_pass`, `:sub_issues_done`, `:epic_review_pass`), not on its checks.
+  defp owed_checks(issue_id, signal, target) do
+    if merge_gated?(signal, target),
+      do: issue_id |> TicketJourney.owed_before_merge() |> Enum.map(& &1.id),
+      else: []
+  end
+
+  defp merge_gated?(signal, target) do
+    closes_on_own_pr? = state_name_matches?(target, @done_state) and signal in @done_on_own_pr
+    state_name_matches?(target, @merging_state) or closes_on_own_pr?
   end
 
   # A move with no repo key has no record to write: Linear moves while Symphony's record, its events

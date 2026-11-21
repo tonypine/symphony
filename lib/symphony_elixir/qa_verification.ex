@@ -1182,9 +1182,21 @@ defmodule SymphonyElixir.QaVerification do
     if TransitionGuard.confirmation_required?(signal, %{settings: settings}) do
       confirm_merge(issue, opts, parts)
     else
-      move(issue, opts, settings, signal, extra)
+      issue |> move(opts, settings, signal, extra) |> checks_open(issue, opts, settings)
     end
   end
+
+  # A pass the guard refuses to carry into Merging, because checks of the plan are still open (QA
+  # did not prove them, or a test or an attachment did not): the ticket goes to Rework on the
+  # guard's own `:merge_held` edge, with the checks named, instead of sitting in QA where every
+  # read would pass and be refused again.
+  defp checks_open({:error, {:qa_move_failed, _signal, {:open_checks, ids}}}, issue, opts, settings) do
+    reason = "QA passed, but the plan's checks #{Enum.join(ids, ", ")} are still open: the ticket does not merge until they are proved"
+    Logger.warning("#{reason} issue_id=#{issue.id} issue_identifier=#{issue.identifier}")
+    move(issue, opts, settings, :merge_held, %{reason: reason})
+  end
+
+  defp checks_open(result, _issue, _opts, _settings), do: result
 
   defp confirm_merge(issue, opts, parts) do
     summary = MergeConfirmation.summary(issue, opts, parts)

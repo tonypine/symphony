@@ -2174,6 +2174,16 @@ defmodule SymphonyElixir.QaVerificationTest do
       refute plain_prompt =~ "This ticket has a plan"
     end
 
+    test "a pass that leaves checks of the plan open does not merge: the ticket goes to Rework with them named (TP-1589)" do
+      {workspace, _head} = git_workspace!()
+
+      log = capture_log(fn -> assert :ok = run(workspace, []) end)
+
+      assert log =~ "QA passed, but the plan's checks c1, c2, c3 are still open"
+      refute_received {:memory_tracker_state_update, @issue_id, "Merging"}
+      assert_received {:memory_tracker_state_update, @issue_id, "Rework"}
+    end
+
     test "each check QA saw pass is proved by QA on the head it judged, a design check by design" do
       {workspace, head} = git_workspace!()
 
@@ -2304,7 +2314,8 @@ defmodule SymphonyElixir.QaVerificationTest do
 
     test "a groomed ticket's check a test proves is confirmed on the head, whatever its description says" do
       {workspace, head} = named_workspace!()
-      groom!()
+      # Its one check: the pass that confirms it leaves nothing open, so the ticket merges.
+      groom!(%{@groomed_plan | checks: Enum.take(@groomed_plan.checks, 1)})
       prove_check!("c1", "test/check_test.exs")
 
       assert :ok = run_named(workspace, "No walkthrough.", gh_runner: gh(head, [make_all("COMPLETED", "SUCCESS")]))

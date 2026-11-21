@@ -45,10 +45,8 @@ defmodule SymphonyElixir.Conductor.Answer do
       split, `sub_tickets` (at least one, at most 12). A check holds a `kind` (`outcome`, `qa`, `evidence`), a
       `statement` (cut to 600) and its `proof` (`test`, `qa`, `design`, `attached`); a `qa` check
       also the `action` and what to `expect`, and any check may say the app `state` it needs (each
-      cut to 400), the `size` it is walked at (`normal`, `wide`) and a Gallery `story`, and be
-      marked `after_merge: true` when it can only be seen once the ticket's own pull request has
-      merged (any other value reads as unmarked; `SymphonyElixir.TicketChecks.after_merge?/1`). A
-      sub-ticket holds a `title` (cut to 120) and an `ask` (cut to 4,000), the sibling keys it waits `after`,
+      cut to 400), the `size` it is walked at (`normal`, `wide`) and a Gallery `story`. A sub-ticket
+      holds a `title` (cut to 120) and an `ask` (cut to 4,000), the sibling keys it waits `after`,
       a `repo`, and the `identifier` of a sub-ticket the ticket already has, which is adopted
       instead of created. A check keeps the `id` it gives and is left without one otherwise:
       `SymphonyElixir.TicketPlan.write/4` names the checks. A sub-ticket with no `key` gets
@@ -79,6 +77,13 @@ defmodule SymphonyElixir.Conductor.Answer do
     * `waive` (`waive: true`): the checks of the plan nobody can prove the way the plan says, each
       `{"check_id": ..., "reason": ...}` (the reason cut to 1,000 characters); an entry that misses
       its shape is dropped and logged.
+
+    * `hold` (`hold: true`: at `before_merge`, at `message` and on a watch turn): null, or
+      `{"reason": ...}` to hold the ticket's merge, when the pull request is about to merge work
+      that is not what is asked now (the plan changed under it, a check is open). The reason, a
+      non-blank string cut to 1,000 characters, becomes the next run's instructions, so an answer
+      that holds may leave `instructions` null. One that misses its shape is dropped and logged,
+      and never fails the answer.
 
   A text longer than its limit is cut to it at a sentence or word boundary (`Facts.fit/2`) and
   logged, never refused; only an answer that is not readable (not JSON, a wrong type, a blank
@@ -140,7 +145,8 @@ defmodule SymphonyElixir.Conductor.Answer do
           tree: [operation()],
           ask: boolean(),
           new_ticket: new_ticket() | nil,
-          waive: [%{check_id: String.t(), reason: String.t()}]
+          waive: [%{check_id: String.t(), reason: String.t()}],
+          hold: %{reason: String.t()} | nil
         }
 
   @typedoc "The ticket a message on a finished ticket asks for: its title, its ask and, optionally, its repo."
@@ -233,7 +239,7 @@ defmodule SymphonyElixir.Conductor.Answer do
   at a junction whose `ticket` route only is read, `plan: true` for the Grooming turn's, whose
   `plan` is read, and `tree: true` for a turn's on a ticket with sub-tickets, whose `done` and
   `tree` are read; `message: true` for a turn's that answers a person's message, `plan: :optional`,
-  `new_ticket: true` and `waive: true` as the module doc says.
+  `new_ticket: true`, `waive: true` and `hold: true` as the module doc says.
   """
   @spec parse(String.t(), keyword()) :: {:ok, t()} | {:error, String.t()}
   def parse(text, opts \\ []) when is_binary(text) do
@@ -241,7 +247,7 @@ defmodule SymphonyElixir.Conductor.Answer do
     plan_opt = Keyword.get(opts, :plan, false)
 
     with {:ok, %{} = answer} <- decode(text),
-         {:ok, instructions} <- instructions(Map.get(answer, "instructions"), nullable?(opts)),
+         {:ok, instructions} <- instructions(Map.get(answer, "instructions"), nullable?(opts) or holds?(answer, opts)),
          {:ok, update} <- update(Map.get(answer, "update"), message != false),
          {:ok, refs} <- refs(Map.get(answer, "refs")),
          {:ok, ask_person} <- ask_person(Map.get(answer, "ask_person")),
@@ -258,7 +264,10 @@ defmodule SymphonyElixir.Conductor.Answer do
   # A turn whose answer is about something else than the next run may leave `instructions` null.
   defp nullable?(opts), do: Enum.any?([:plan, :tree, :message, :watch], &(Keyword.get(opts, &1, false) != false))
 
-  # What only some turns' answers are read for: the tree, a new ticket, the waivers.
+  # A hold's reason is the next run's instructions, so an answer that holds may leave them null.
+  defp holds?(answer, opts), do: Keyword.get(opts, :hold, false) and is_map(Map.get(answer, "hold"))
+
+  # What only some turns' answers are read for: the tree, a new ticket, the waivers, the hold.
   defp extras(answer, opts) do
     tree? = Keyword.get(opts, :tree, false)
 
@@ -266,8 +275,26 @@ defmodule SymphonyElixir.Conductor.Answer do
       done: tree? and Map.get(answer, "done") == true,
       tree: if(tree?, do: operations(Map.get(answer, "tree")), else: []),
       new_ticket: if(Keyword.get(opts, :new_ticket, false), do: new_ticket(Map.get(answer, "new_ticket"))),
-      waive: if(Keyword.get(opts, :waive, false), do: waivers(Map.get(answer, "waive")), else: [])
+      waive: if(Keyword.get(opts, :waive, false), do: waivers(Map.get(answer, "waive")), else: []),
+      hold: if(Keyword.get(opts, :hold, false), do: hold(Map.get(answer, "hold")))
     }
+  end
+
+  # The merge the turn holds, with why; one that misses its shape is dropped.
+  defp hold(nil), do: nil
+
+  defp hold(%{} = hold) do
+    case optional_text(hold, "reason", @reason_max, "hold") do
+      reason when is_binary(reason) -> %{reason: reason}
+      _blank -> dropped_hold()
+    end
+  end
+
+  defp hold(_hold), do: dropped_hold()
+
+  defp dropped_hold do
+    Logger.warning("Conductor answer's `hold` was dropped: it needs a `reason`")
+    nil
   end
 
   # How the plan is read: the Grooming turn's must be there (`true`), a message that changes the ask
@@ -417,7 +444,6 @@ defmodule SymphonyElixir.Conductor.Answer do
       |> put_text(:expect, check, @check_walk_max, where)
       |> put_text(:story, check, 200, where)
       |> put_present(:size, if(Map.get(check, "size") in @check_sizes, do: Map.get(check, "size")))
-      |> put_present(:after_merge, if(Map.get(check, "after_merge") == true, do: true))
       |> then(&{:ok, &1})
     end
   end

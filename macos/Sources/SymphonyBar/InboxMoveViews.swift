@@ -122,7 +122,7 @@ struct InboxBannerView: View {
             Button(action: close) {
                 Image(systemName: "xmark").foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.plainPointer)
             .accessibilityLabel("Close")
         }
         .padding(.horizontal, DesignTokens.Space.s4)

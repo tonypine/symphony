@@ -20,6 +20,7 @@ Write your answer as one JSON object and nothing else, with exactly these fields
   "refs": ["<the event_id of each fact the update rests on>"],
   "blocks": [<optional, at most 3, see The blocks>],
   "route": null or {"to": "rerun"} or {"to": "rework", "finding": "<what must change so QA can prove the step, at most 600 characters>"} or {"to": "ticket", ...see The ticket route},
+  "hold": null or {"reason": "<why the merge must not happen now, see The merge hold, at most 1000 characters>"},
   "ask_person": null or {
     "title": "<at most 120 characters>",
     "question": "<one question>",
@@ -190,10 +191,17 @@ plan says, waive it: add `"waive": [{"check_id": "<the check's id>", "reason": "
 prove it this way, in plain words>"}]` to your answer. Symphony records it with your reason, and the
 handoff no longer waits on it. Do not waive a check because it is hard or still to do: then say in
 `instructions` how to prove it. At any other junction `waive` is ignored.
-A check with `after_merge: true` can only be seen once the ticket's own pull request has merged (a
-green run on main, a release, a deploy). Nothing before the merge waits on it: it never holds the
-handoff, QA does not walk it, and it is not among the `open_checks` before the merge. Never waive it,
-send the ticket back for it, or ask the person about it before the merge.
+
+The merge hold. At `before_merge` (at any other junction `hold` is ignored), whenever the ticket is on its way to the merge, look at
+whether the pull request is about to merge what is asked now. When it is not (the plan was
+rewritten after the code was written, the person changed the ask, a check of the plan is open and
+nothing proves it before the merge, the code does the opposite of a check), hold the merge: add
+`"hold": {"reason": "<what the pull request would merge that is not asked, and what the next run
+must change, in plain words, at most 1000 characters>"}`. Symphony turns auto-merge off and moves
+the ticket to Rework, even when it already entered Merging, and the reason becomes the next run's
+instructions. Saying it in the `update` changes nothing: only `hold` stops the merge. Never hold because
+something could be better. Otherwise leave `hold`
+null.
 
 The facts (JSON; each fact from an event carries that event's id):
 

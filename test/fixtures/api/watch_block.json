@@ -45,6 +45,7 @@
     "hold": "none",
     "landing_timed_out": false,
     "max_red_attempts": 10,
+    "merge_guard": "clear",
     "mergeable": "clean",
     "missing_checks": [],
     "no_ci": "not_configured",

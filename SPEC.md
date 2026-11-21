@@ -604,10 +604,7 @@ it touches (none or more of `screen`, `gallery`, `api`, `logic`, `config`, `test
 `docs`; a name outside them is dropped and never refuses the plan), a `summary` for a person, the plan's `text` for agents, its `checks`, each with an `id`
 that is its alone across versions (a new check gets an id no version used, and a check whose
 statement a version changed counts only the proofs and waivers recorded after that version), a `kind`, `outcome`, `qa` or `evidence`, a `statement` and its
-`proof`, `test`, `qa`, `design` or `attached`, and an optional `after_merge` marker on a check that
-can only be seen once the ticket's own pull request has merged, which no gate before the merge (the
-checks step, the handoff, QA, the question to waive it) waits on and a split ticket's final check
-reads; its `size` and, for a split, its `sub_tickets`; the
+`proof`, `test`, `qa`, `design` or `attached`, its `size` and, for a split, its `sub_tickets`; the
 newest one is the ticket's plan, and a ticket is groomed exactly when it holds one), `check.proved`
 (any run's, or the machine's: a check of the current plan proved by a test, QA, the design or
 something attached, recorded once per check and head and refused for an id the plan does not hold),
@@ -3675,9 +3672,9 @@ States and owners:
 | `In Progress` | Agent | The claim; `Restart`; PR review comments (addressed on the same PR) | The handoff → `Code Review` |
 | `Code Review` | Agent (reviewer) | The handoff (from `In Progress` or `Rework`); a `CI Fix` return | Approve → `QA`, or `Merging` when QA is skipped; rework → `Rework`; block → `Needs Decision` hold; red head → `CI Fix` |
 | `QA` | Agent (QA) | A Code Review approve; a `Rework` that answered every finding without a code change | Pass → `Merging`; fail → `Rework`; red head → `CI Fix` |
-| `Merging` | Machine | QA pass, or an approve that skipped QA (with manual review on, after its confirmation) | Merged → `Done`, or `Waiting on sub-tickets` while started sub-tickets are open; red head or conflict → `CI Fix` |
+| `Merging` | Machine | QA pass, or an approve that skipped QA (with manual review on, after its confirmation), never while a check of the plan the merge waits on is open | Merged → `Done`, or `Waiting on sub-tickets` while started sub-tickets are open; red head or conflict → `CI Fix`; the plan holds the merge → `Rework` |
 | `Rework` | Agent | A rework verdict; a QA fail; a substantive CI Fix; a plan change | The handoff → `Code Review` (an epic parent → `Plan Review`); every finding of a QA fail answered on the unchanged head → `QA` |
-| `CI Fix` | Agent (mechanical lane) | A red head or a conflict in `Code Review`, `QA`, `Merging` or `Rework` | A green head → the recorded origin, approvals carried; substantive → `Rework`; access needed → `Needs Decision` hold |
+| `CI Fix` | Agent (mechanical lane) | A red head or a conflict in `Code Review`, `QA`, `Merging` or `Rework` | A green head → the recorded origin, approvals carried (none once a plan version was written after the code: → `Rework`); substantive → `Rework`; access needed → `Needs Decision` hold |
 | `Plan Review` | Person | A plan parent's handoff | Approve → `Waiting on sub-tickets` (sub-tickets promoted); a comment or a rejection → `Rework` |
 | `Waiting on sub-tickets` | Machine | Plan approval; a merge with started sub-tickets open | Every sub-ticket terminal → `Epic Review` (a non-plan ticket → `Done`) |
 | `Epic Review` | Machine + QA agent | Every sub-ticket terminal | Pass → `Done`; gaps → follow-ups filed in `Todo`, parent → `Waiting on sub-tickets` |
@@ -3691,6 +3688,14 @@ Rules:
   `Epic Review` or `Waiting on sub-tickets` MUST be refused; so MUST a request to enter `Plan Review`
   from any ticket but a plan parent, for which that request is the plan handoff. A request for
   `In Progress` from `Rework`, `Code Review`, `QA` or `Merging` MUST be refused as a `Restart`.
+- **The plan holds the merge.** A move into `Merging`, and a move to `Done` that closes a ticket on
+  its own pull request (a merge, a person's move), MUST be refused while a check of the ticket's
+  current plan is open, unwaived and not marked `after_merge`. A plan version written after the
+  newest implementation or rework run started cancels every approval of the code: from `Code Review`,
+  `QA`, `CI Fix` and `Merging` the ticket goes to `Rework` and no approval carries it on. So does a
+  Conductor turn's `hold` at `before_merge`, at `message` or on a watch. The PR and CI watcher turns
+  GitHub auto-merge off before such a move (R9a in `docs/pr-ci-decisions.md`). A pull request merged
+  by hand meanwhile leaves the ticket out of `Done` until the person waives the open checks.
 - **Explicit handoff.** `In Progress` and `Rework` advance to `Code Review` only on the handoff
   signal the push and pull-request tool hooks record against the pushed head. A run that stops
   quiet with its open PR already on its workspace HEAD has nothing to push, a finished Rework run

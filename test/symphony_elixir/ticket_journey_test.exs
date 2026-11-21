@@ -318,25 +318,83 @@ defmodule SymphonyElixir.TicketJourneyTest do
       assert TicketJourney.unproved(@issue_id) == []
     end
 
-    test "a check marked after the merge is owed by nobody before the merge, and the prompt says so" do
-      merged = %{id: "c5", kind: "outcome", statement: "The release run on main is green.", proof: "test", after_merge: true}
-      seen = %{id: "c6", kind: "qa", statement: "The release shows.", proof: "qa", action: "Open it", expect: "It shows", after_merge: true}
-      plan!(%{@plan | checks: @plan.checks ++ [merged, seen]})
+    test "a stored check that still carries after_merge is an open check like any other" do
+      marked = %{id: "c5", kind: "outcome", statement: "The release shows.", proof: "test"}
+      walked = %{id: "c6", kind: "qa", statement: "The release opens.", proof: "qa", action: "Open it", expect: "It opens"}
+      assert {:ok, written} = TicketPlan.write(@repo_key, @issue_id, %{@plan | checks: @plan.checks ++ [marked, walked]}, new_ask: true)
 
-      assert Enum.map(TicketJourney.unproved(issue()), & &1.id) == ["c1", "c3"]
-      assert Enum.map(TicketJourney.owed_by_qa(issue()), & &1.id) == ["c2", "c4"]
-      assert Enum.map(TicketJourney.steps(issue()), & &1.check_id) == ["c2", "c4"]
+      # A plan stored while the marker existed still carries it on its checks.
+      checks = Enum.map(written.payload.checks, &if(&1.id in ["c5", "c6"], do: Map.put(&1, :after_merge, true), else: &1))
+      stored = %{written | id: "evt-marked", seq: nil, idempotency: nil, payload: %{written.payload | checks: checks}}
+      assert {:ok, _stored} = RunStore.append_ticket_event(stored)
 
-      text = TicketJourney.plan_text(issue())
-      assert text =~ "- [c5] outcome, proof: test, open, after the merge (nothing before the merge proves it: leave it): The release run on main is green."
-      assert text =~ "- [c1] outcome, proof: test, open: The page shows the plan."
-      assert TicketJourney.acceptance(issue()) == ["[c1] The page shows the plan.", "[c5] The release run on main is green. (after the merge: nothing before it proves this)"]
+      assert Enum.map(TicketJourney.unproved(issue()), & &1.id) == ["c1", "c3", "c5"]
+      assert Enum.map(TicketJourney.owed_by_qa(issue()), & &1.id) == ["c2", "c4", "c6"]
+      assert Enum.map(TicketJourney.steps(issue()), & &1.check_id) == ["c2", "c4", "c6"]
+      assert Enum.map(TicketChecks.open(@issue_id), & &1.id) == ["c1", "c2", "c3", "c4", "c5", "c6"]
+      assert TicketJourney.plan_text(issue()) =~ "- [c5] outcome, proof: test, open: The release shows."
+    end
+  end
 
-      # Once the others are proved, nothing before the merge waits, and the marked check stays open.
+  describe "what the merge waits on (TP-1589)" do
+    defp started!(kind), do: put_dispatch(@repo_key, @issue_id, kind: kind)
+
+    defp held! do
+      {:ok, _event} = TicketEvents.record(@repo_key, @issue_id, "conductor.instructions", %{junction: "before_merge", text: "Hold it.", route: "hold"})
+    end
+
+    test "owed_before_merge/1 lists every open check whatever proves it" do
+      assert TicketJourney.owed_before_merge(issue()) == []
+      assert TicketJourney.owed_before_merge(nil) == []
+
+      plan!()
+      assert Enum.map(TicketJourney.owed_before_merge(issue()), & &1.id) == ["c1", "c2", "c3", "c4"]
+
       prove!(%{check_id: "c1", by: "test", test: "plan_test.exs"})
-      prove!(%{check_id: "c3", by: "attached", evidence: "evt-1"})
-      assert TicketJourney.unproved(@issue_id) == []
-      assert [%{id: "c5", state: :open}, %{id: "c6", state: :open}] = TicketChecks.open(@issue_id) |> Enum.filter(&TicketChecks.after_merge?/1)
+      {:ok, _waived} = TicketChecks.waive(@repo_key, @issue_id, "c3", "Nothing to attach.")
+      assert Enum.map(TicketJourney.owed_before_merge(@issue_id), & &1.id) == ["c2", "c4"]
+    end
+
+    test "outdated/1: a plan version or a Conductor hold after the newest coding run started outdates the code" do
+      assert TicketJourney.outdated(issue()) == nil
+      assert TicketJourney.outdated(nil) == nil
+
+      # The plan the code is written from: grooming writes it before the first run starts.
+      plan!()
+      assert TicketJourney.outdated(@issue_id) == nil
+      started!(:implementation)
+      assert TicketJourney.outdated(@issue_id) == nil
+
+      # A review or a CI Fix run writes no code against the plan.
+      plan!()
+      started!(:code_review)
+      started!(:ci_fix)
+      assert TicketJourney.outdated(issue()) == :rewritten
+
+      # A rework run codes the new plan.
+      started!(:rework)
+      assert TicketJourney.outdated(@issue_id) == nil
+
+      held!()
+      plan!()
+      assert TicketJourney.outdated(@issue_id) == :held
+
+      started!(:rework)
+      assert TicketJourney.outdated(@issue_id) == nil
+    end
+
+    test "outdated/1: a hold counts with no coding run, a plan version does not" do
+      plan!()
+      assert TicketJourney.outdated(@issue_id) == nil
+      held!()
+      assert TicketJourney.outdated(@issue_id) == :held
+
+      # Instructions routed elsewhere, events with no sequence and other events hold nothing.
+      routed = %TicketEvents.Event{type: "conductor.instructions", payload: %{"route" => "rework"}, seq: 9}
+      unsequenced = %TicketEvents.Event{type: "plan.written", payload: %{}, seq: nil}
+      started = %TicketEvents.Event{type: "run.started", payload: %{"run_kind" => "rework"}, seq: 1}
+      note = %TicketEvents.Event{type: "note", payload: %{}, seq: 5}
+      assert TicketJourney.outdated([started, routed, unsequenced, note]) == nil
     end
   end
 end

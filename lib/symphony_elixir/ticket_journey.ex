@@ -23,13 +23,19 @@ defmodule SymphonyElixir.TicketJourney do
   hands in: nothing changes for it.
   """
 
-  alias SymphonyElixir.{PromptSafety, TicketChecks, TicketPlan, Walkthrough}
+  alias SymphonyElixir.{PromptSafety, RunStore, TicketChecks, TicketPlan, Walkthrough}
+  alias SymphonyElixir.TicketEvents.Event
 
   @screen_layers ["screen", "gallery"]
   # The proofs an implementation run owes before it hands the ticket off (`unproved/1`).
   @handoff_proofs ["test", "attached"]
   # The proofs QA gives: a test of the PR never stands in for them.
   @qa_proofs ["qa", "design"]
+  # The runs that write the code a pull request carries.
+  @coding_kinds ["implementation", "rework"]
+  # What can leave the code on a pull request behind its plan: a run that writes it, a plan version,
+  # and the Conductor's hold (its instructions routed `hold`).
+  @outdating_types ["run.started", "plan.written", "conductor.instructions"]
   # Room left for the section headings and for what escaping untrusted text adds.
   @plan_text_margin 2_000
   @cut "\n\n[Cut here to fit the prompt. The `ticket_plan` tool reads it whole.]"
@@ -135,16 +141,13 @@ defmodule SymphonyElixir.TicketJourney do
   defp unproved_text(steps), do: steps |> Enum.reject(&Walkthrough.named_test?/1) |> Enum.map_join("\n", & &1.text)
 
   @doc """
-  The acceptance list: a groomed ticket's `outcome` checks, one line each under its id (one marked
-  as seen only after the merge says so, so a review before the merge does not wait on it), else what
+  The acceptance list: a groomed ticket's `outcome` checks, one line each under its id, else what
   `ungroomed` reads from the description.
   """
   @spec acceptance(ticket(), (String.t() | nil -> [String.t()])) :: [String.t()]
   def acceptance(ticket, ungroomed \\ fn _description -> [] end) do
     if groomed?(ticket) do
-      for {%{kind: "outcome", state: state} = check, _number} <- numbered(ticket),
-          state != :waived,
-          do: "[#{check.id}] #{one_line(check.statement)}#{after_merge_suffix(check)}"
+      for {%{kind: "outcome", state: state} = check, _number} <- numbered(ticket), state != :waived, do: "[#{check.id}] #{one_line(check.statement)}"
     else
       ungroomed.(description(ticket))
     end
@@ -308,30 +311,79 @@ defmodule SymphonyElixir.TicketJourney do
 
   @doc """
   The checks of a groomed ticket an implementation run still owes before the handoff: the open
-  ones a test or an attachment proves, but for one marked as seen only after the ticket's own merge
-  (`SymphonyElixir.TicketChecks.after_merge?/1`), which nothing before the merge can prove. None
-  for a ticket that is not groomed.
+  ones a test or an attachment proves. None for a ticket that is not groomed.
   """
   @spec unproved(ticket()) :: [TicketChecks.check()]
   def unproved(ticket) do
     case id(ticket) do
       nil -> []
-      id -> TicketChecks.open(id, proof: @handoff_proofs, after_merge: false)
+      id -> TicketChecks.open(id, proof: @handoff_proofs)
     end
   end
 
   @doc """
   The checks of a groomed ticket that only a QA pass proves and that are still open (`proof: qa`
-  or `design`, of any kind), but for one marked as seen only after the merge. While there is one,
-  the plan asks for QA, whatever a label or the diff says (`SymphonyElixir.QaPolicy`). None for a ticket that is not groomed.
+  or `design`, of any kind). While there is one, the plan asks for QA, whatever a label or the
+  diff says (`SymphonyElixir.QaPolicy`). None for a ticket that is not groomed.
   """
   @spec owed_by_qa(ticket()) :: [TicketChecks.check()]
   def owed_by_qa(ticket) do
     case id(ticket) do
       nil -> []
-      id -> TicketChecks.open(id, proof: @qa_proofs, after_merge: false)
+      id -> TicketChecks.open(id, proof: @qa_proofs)
     end
   end
+
+  @doc """
+  The checks of a groomed ticket its merge waits on: every open one of its current plan, whatever
+  proves it. While there is one, the ticket does not enter
+  `Merging`, its pull request is not merged and it does not reach `Done`
+  (`SymphonyElixir.TransitionGuard`, `SymphonyElixir.PrDecision`). None for a ticket that is not groomed.
+  """
+  @spec owed_before_merge(ticket()) :: [TicketChecks.check()]
+  def owed_before_merge(ticket) do
+    case id(ticket) do
+      nil -> []
+      id -> TicketChecks.open(id)
+    end
+  end
+
+  @doc """
+  Whether the code on the ticket's pull request no longer stands for what is asked, so no approval
+  of it carries it to the merge: `:held` when the Conductor held its merge (a
+  `conductor.instructions` routed `hold`) since the newest implementation or rework run started,
+  `:rewritten` when a plan version was written since then, nil otherwise. A plan written before any
+  coding run started is the one the code was written from; a hold counts with no coding run too.
+  Read from the ticket's events, in their order (`seq`).
+  """
+  @spec outdated(ticket() | [Event.t()]) :: :held | :rewritten | nil
+  def outdated(events) when is_list(events) do
+    since = events |> Enum.filter(&coding_start?/1) |> Enum.map(& &1.seq) |> Enum.filter(&is_integer/1) |> Enum.max(fn -> -1 end)
+
+    cond do
+      Enum.any?(events, &(hold?(&1) and later?(&1, since))) -> :held
+      since >= 0 and Enum.any?(events, &(&1.type == "plan.written" and later?(&1, since))) -> :rewritten
+      true -> nil
+    end
+  end
+
+  def outdated(ticket) do
+    case id(ticket) do
+      nil -> nil
+      # A store that can't be read holds no event, so it outdates nothing.
+      id -> id |> RunStore.list_ticket_events(types: @outdating_types) |> List.wrap() |> Enum.filter(&is_struct(&1, Event)) |> outdated()
+    end
+  end
+
+  defp coding_start?(%Event{type: "run.started", payload: payload}), do: field(payload, :run_kind) in @coding_kinds
+  defp coding_start?(_event), do: false
+
+  defp hold?(%Event{type: "conductor.instructions", payload: payload}), do: field(payload, :route) == "hold"
+  defp hold?(_event), do: false
+
+  defp later?(%Event{seq: seq}, since), do: is_integer(seq) and seq > since
+
+  defp field(payload, key), do: Map.get(payload, key, Map.get(payload, Atom.to_string(key)))
 
   @doc "Why a ticket with the `unproved/1` checks `checks` is not handed off, naming each and what proves it."
   @spec unproved_message([TicketChecks.check()]) :: String.t()
@@ -359,18 +411,7 @@ defmodule SymphonyElixir.TicketJourney do
 
   # The checks QA walks: a `qa` check, and a check of any kind the plan proves by QA or against a
   # design, which nothing else would ever prove. One with no action is walked from its statement.
-  # A check marked as seen only after the merge is no step: QA judges the pull request before it.
-  defp walked(numbered) do
-    for {%{state: state} = check, _number} = entry <- numbered,
-        state != :waived,
-        qa_walks?(check),
-        not TicketChecks.after_merge?(check),
-        do: step(entry)
-  end
-
-  defp after_merge_suffix(check) do
-    if TicketChecks.after_merge?(check), do: " (after the merge: nothing before it proves this)", else: ""
-  end
+  defp walked(numbered), do: for({%{state: state} = check, _number} = entry <- numbered, state != :waived, qa_walks?(check), do: step(entry))
 
   defp qa_walks?(%{kind: kind, proof: proof}), do: kind == "qa" or proof in @qa_proofs
 
@@ -415,10 +456,8 @@ defmodule SymphonyElixir.TicketJourney do
 
   defp check_line(check) do
     parts = for {label, key} <- [{"State", :needs}, {"Action", :action}, {"Expect", :expect}], value = Map.get(check, key), do: "  #{label}: #{one_line(value)}"
-    Enum.join(["- [#{check.id}] #{check.kind}, proof: #{check.proof}, #{standing(check)}#{after_merge(check)}: #{one_line(check.statement)}" | parts], "\n")
+    Enum.join(["- [#{check.id}] #{check.kind}, proof: #{check.proof}, #{standing(check)}: #{one_line(check.statement)}" | parts], "\n")
   end
-
-  defp after_merge(check), do: if(TicketChecks.after_merge?(check), do: ", after the merge (nothing before the merge proves it: leave it)", else: "")
 
   defp standing(%{state: :proved, proved_by: %{by: by, test: test}}) when is_binary(test), do: "proved by #{by} (#{one_line(test)})"
   defp standing(%{state: :proved, proved_by: %{by: by}}), do: "proved by #{by}"

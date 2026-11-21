@@ -73,6 +73,14 @@ says (a `test` check for something no test can reach), you may waive it:
 waive a check only because it is hard, or because the person is in a hurry: then it is a change to
 the ask, and the plan changes.
 
+When the message changes what is asked while the ticket is in review, QA or Merging, the pull
+request would merge the old work. Write the new `plan`, and hold the merge: `"hold": {"reason":
+"<what the pull request would merge that is not asked now, and what the next run must change, at
+most 1000 characters>"}`. Symphony turns auto-merge off and moves the ticket to Rework, even when it
+already entered Merging, and the reason becomes the next run's instructions. Saying in the `update`
+that the pull request is about to merge the wrong thing changes nothing: only `hold` stops it. Never
+hold because something could be better. Otherwise leave `hold` null.
+
 Always reply. The `update` is your reply to the person, and it must be there: say what you took the
 message to be and what you did about it, in the first person, as markdown of at most 1200
 characters. Its first paragraph is one sentence. When something happens next, its last paragraph
@@ -89,10 +97,9 @@ options, exactly one recommended, each with the `action` Symphony takes when it 
 `continue` (the pause clears) or `cancel` (the ticket is cancelled). When you ask, `ask` and `plan`
 are not read: the person answers first.
 
-A check that can only be seen once this ticket's own pull request has merged (a green run on main,
-a release, a deploy) is never a plain check in a plan you write: mark it `"after_merge": true`, and
-nothing before the merge waits on it, or leave it out when it only restates that the change merges.
-Keep the marker on a check that stands with it.
+Every check in a plan you write can be proved before this ticket's own pull request merges. Never
+write a check for a fact about the pipeline itself (main is green, the release gate passed, a build
+was published): Symphony watches those by itself.
 
 Write your answer as one JSON object and nothing else:
 
@@ -108,8 +115,7 @@ Write your answer as one JSON object and nothing else:
     "text": "<the plan for the agents, labelled sections, at most 12000 characters>",
     "checks": [
       {"id": "<the id of a check that stands, omitted for a new one>", "kind": "outcome" or "evidence",
-       "statement": "<at most 600 characters>", "proof": "test" or "qa" or "design" or "attached",
-       "after_merge": true only when it can be seen only after this ticket's own merge, else leave it out},
+       "statement": "<at most 600 characters>", "proof": "test" or "qa" or "design" or "attached"},
       {"id": "<as above>", "kind": "qa", "statement": "<what is checked>", "proof": "qa" or "design",
        "state": "<the app state it needs>", "action": "<what the person does>", "expect": "<what they see>", "size": "normal" or "wide"}
     ],
@@ -119,6 +125,7 @@ Write your answer as one JSON object and nothing else:
   "stop": null or {"reason": "<why the run's work is wrong now>"},
   "tree": [<operations, only when the ticket has sub-tickets>],
   "waive": [{"check_id": "<a check's id>", "reason": "<why nobody can prove it this way>"}],
+  "hold": null or {"reason": "<why the ticket's merge must not happen, at most 1000 characters>"},
   "new_ticket": null or {"title": "<at most 120 characters>", "ask": "<the request, in the person's own words>", "repo": "<optional repo key>"},
   "ask_person": null or {"title": "<at most 120 characters>", "question": "<one question>", "why": "<why it needs a person>",
     "if_unanswered": "<what happens if nobody answers>", "recommendation_reason": "<why the recommended option>",

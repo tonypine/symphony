@@ -216,5 +216,6 @@ struct SidebarRowStyle<ID: Hashable>: ButtonStyle {
         .scaleEffect(DesignTokens.Motion.scale(DesignTokens.Motion.pressScale, pressed: state.pressed, reduceMotion: reduceMotion))
         .contentShape(shape)
         .animation(.motion(.fast, reduceMotion: reduceMotion), value: state)
+        .buttonPointer()
     }
 }

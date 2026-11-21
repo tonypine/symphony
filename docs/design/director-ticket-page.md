@@ -172,7 +172,7 @@ Every control is one of the catalog's, and has all of its states; the prototype 
 | More menu and its items | overlay | settles | the open menu's button stays pressed | ring | an item that can't act says why when chosen ("The ticket is done.") |
 | Option card (the Question) | lifts a point on a spring; its radio rings in accent | settles to 99 % | accent ring and tint, radio filled with a bounce | ring | – |
 | Answer in my own words | as an option card | | its field unfolds under it and takes focus | ring on the field | Send stays off with "Write your answer first." until there is text |
-| Timeline entry (a row) | overlay | – | accent tint and ring; arrows move the selection | ring | – |
+| Timeline entry (a row) | overlay | – | accent tint and ring, from the arrow keys only: a click leaves no selection to dismiss | ring | – |
 | Run line (fold) | overlay | pressed overlay | unfolded: a tint on the whole group | ring | – |
 | Step line (fold) | overlay | pressed overlay | unfolded: a tint on the step | ring | a step with nothing in it yet can't unfold and says so on hover |
 | Decisions line, Answer | primary brightens | settles | Answer stays pressed while the sheet is open | ring | – |
@@ -208,7 +208,8 @@ step bar stand still, the answered Question disappears at once, and scrolling to
 of gliding. Nothing that carries meaning is lost: the new-since dot, the tints and the words stay.
 
 **Keyboard.** Tab reaches every control in reading order. 1 to 4 pick an option of the open Question
-when focus is not in a text field. Arrow keys move the selection in the timeline. Return and Space
+when focus is not in a text field. Arrow keys move the selection in the timeline; a click on a timeline row selects
+nothing, so no outline stays on it. Return and Space
 toggle a fold or select a row. Escape closes a menu, a screenshot or the decision sheet; inside the More menu the arrow keys move between its items.
 
 ## 5. Responsive rules

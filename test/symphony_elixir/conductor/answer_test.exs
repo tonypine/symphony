@@ -332,13 +332,11 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
              ]
     end
 
-    test "a check marked after the merge is read with its marker; any other value reads as unmarked" do
-      merged = %{"kind" => "outcome", "statement" => "The release run on main is green.", "proof" => "test", "after_merge" => true}
-      loose = %{"kind" => "outcome", "statement" => "The page loads.", "proof" => "test", "after_merge" => "yes"}
+    test "a check that carries after_merge is read as a plain check, without the key" do
+      marked = %{"kind" => "outcome", "statement" => "The page loads.", "proof" => "test", "after_merge" => true}
 
-      assert {:ok, %{plan: %{checks: [read_merged, read_loose | _rest]}}} = plan(%{"checks" => [merged, loose | @plan["checks"]]})
-      assert read_merged == %{kind: "outcome", statement: "The release run on main is green.", proof: "test", after_merge: true}
-      refute Map.has_key?(read_loose, :after_merge)
+      assert {:ok, %{plan: %{checks: [read | _rest]}}} = plan(%{"checks" => [marked | @plan["checks"]]})
+      assert read == %{kind: "outcome", statement: "The page loads.", proof: "test"}
     end
 
     test "is not read at another turn, which answers as before" do
@@ -546,6 +544,29 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
         end)
 
       assert log =~ "`new_ticket` was dropped"
+    end
+  end
+
+  describe "the merge hold (TP-1589)" do
+    defp holding(hold, opts \\ [hold: true]), do: Answer.parse(Jason.encode!(%{"instructions" => "Go on.", "hold" => hold}), opts)
+
+    test "is read where a turn may hold the merge, with its reason, and a malformed one is dropped" do
+      assert {:ok, %{hold: %{reason: "It merges the marker the person asked to remove."}}} = holding(%{"reason" => " It merges the marker the person asked to remove. "})
+      assert {:ok, %{hold: nil}} = holding(%{"reason" => "It merges the marker."}, [])
+      assert {:ok, %{hold: nil}} = holding(nil)
+
+      long = String.duplicate("It merges the old work. ", 60)
+      capture_log(fn -> send(self(), holding(%{"reason" => long})) end)
+      assert_received {:ok, %{hold: %{reason: reason}}}
+      assert String.length(reason) <= 1_000
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{hold: nil}} = holding(%{"reason" => " "})
+          assert {:ok, %{hold: nil}} = holding("hold it")
+        end)
+
+      assert log =~ "`hold` was dropped: it needs a `reason`"
     end
   end
 

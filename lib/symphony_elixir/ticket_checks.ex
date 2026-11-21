@@ -30,8 +30,8 @@ defmodule SymphonyElixir.TicketChecks do
 
   @typedoc """
   A check of the plan (`id`, `kind`, `statement`, `proof`, and a `qa` check's `state`, `action`,
-  `expect`, `size` and `story`, and the `after_merge` marker (`after_merge?/1`), which here sit
-  under the keys the plan gives them but for `state`: the app state a `qa` check needs is `needs`), with where it stands (`state`), the newest proof
+  `expect`, `size` and `story`, which here sit under the keys the plan gives them but for `state`:
+  the app state a `qa` check needs is `needs`), with where it stands (`state`), the newest proof
   (`proved_by`: how, the test, the evidence event, the details, and the proof's event, time, head
   and run) and the waiver (`waived`: the reason, and the waiver's event and time).
   """
@@ -79,30 +79,12 @@ defmodule SymphonyElixir.TicketChecks do
 
   defp same?(statement, other), do: String.trim(to_string(statement)) == String.trim(to_string(other))
 
-  @doc """
-  The checks that are still open. `opts[:proof]` keeps the ones proved in one of those ways
-  (`test`, `qa`, `design`, `attached`), and `after_merge: false` leaves out the ones marked as
-  seen only after the ticket's own merge (`after_merge?/1`), which nothing before the merge owes.
-  """
+  @doc "The checks that are still open. `opts[:proof]` keeps the ones proved in one of those ways (`test`, `qa`, `design`, `attached`)."
   @spec open(TicketPlan.ticket(), keyword()) :: [check()]
   def open(ticket, opts \\ []) do
     proofs = Keyword.get(opts, :proof)
-    after_merge = Keyword.get(opts, :after_merge, true)
-
-    for %{state: :open} = check <- list(ticket),
-        is_nil(proofs) or check.proof in List.wrap(proofs),
-        after_merge or not after_merge?(check),
-        do: check
+    for %{state: :open} = check <- list(ticket), is_nil(proofs) or check.proof in List.wrap(proofs), do: check
   end
-
-  @doc """
-  Whether the check is marked as seen only once the ticket's own pull request has merged (a green
-  run on main, a release, a deploy): the plan's `after_merge: true`. Nothing before the merge gates
-  on such a check (the checks step, the handoff, QA, the question to waive it); it stays open on the
-  ticket, and a split ticket's final check reads it. A check written before the marker has none.
-  """
-  @spec after_merge?(map()) :: boolean()
-  def after_merge?(check) when is_map(check), do: field(check, :after_merge) == true
 
   @doc """
   Records that a check of the current plan of `repo_key`'s ticket `issue_id` is proved: `proof` is
