@@ -370,6 +370,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       for run_id <- ["run-a", "run-b", "run-c"] do
         started = %{run_id: run_id, run_kind: "rework"}
         {:ok, _started} = SymphonyElixir.TicketEvents.record("default", "issue-progress", "run.started", started, run_id: run_id)
+        next_run()
         assert :ok = SymphonyElixir.Handoff.emit("default", "issue-progress", %{head: "sha-rework", branch: "auto/TP-337"})
 
         assert :ok = run_issue!("Rework", heads: ["sha-old", "sha-rework"], repos: designed_repos(), runner_opts: [run_id: run_id])
