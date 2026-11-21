@@ -2241,8 +2241,22 @@ public enum DesignTokens {
     /// typed text is read as a whole number and brought inside it, text that is no number puts the value back, and a
     /// half of the stepper that would leave the range is off.
     public enum NumberField {
-        /// The number's room, before the stepper.
+        /// The number's room, before the stepper: the least it takes, for a short value.
         public static let width: Double = 56
+        /// A digit's advance as a share of the font size: the input font's digits are monospaced, a little under 0.6
+        /// of an em, rounded up so a value never touches the field's edge.
+        public static let digitAdvance: Double = 0.62
+        /// The room after the last digit for the text cursor.
+        public static let cursorRoom: Double = 2
+        /// The most characters the room grows for: a whole number's 19 digits and its sign.
+        public static let maxCharacters = 20
+
+        /// The number's room for `text` (the value shown or being typed): `width` at least, wider by a digit's advance
+        /// for each character past what `width` holds, so "50000" or a 9-digit value shows whole (TP-1576).
+        public static func width(for text: String, fontSize: Double, padding: Double) -> Double {
+            let needed = 2 * padding + Double(min(text.count, maxCharacters)) * fontSize * digitAdvance + cursorRoom
+            return max(width, needed.rounded(.up))
+        }
         /// The stepper's width inside the field's trailing end, and its glyphs.
         public static let stepperWidth: Double = 16
         public static let stepperGlyph: Double = 7

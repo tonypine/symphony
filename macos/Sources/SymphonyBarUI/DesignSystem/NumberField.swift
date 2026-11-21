@@ -116,6 +116,13 @@ public struct NumberField: View {
     /// The values typed text may set and the field shows: `accepts` when given, else the range.
     var typedRange: ClosedRange<Int> { DesignTokens.NumberField.typedRange(range, accepts: accepts) }
     private var shown: Int { DesignTokens.NumberField.clamp(value, to: typedRange) }
+    /// The number's room: wide enough for the value shown and for the text being typed, whichever is longer.
+    private var numberWidth: Double {
+        let digits = "\(shown)"
+        let longest = !still && text.count > digits.count ? text : digits
+        return DesignTokens.NumberField.width(
+            for: longest, fontSize: size.fontSize, padding: size.padding * DesignTokens.Field.paddingScale)
+    }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Field.gap) {
@@ -150,7 +157,7 @@ public struct NumberField: View {
                 .font(size.inputFont)
                 .monospacedDigit()
                 .padding(.horizontal, size.padding * DesignTokens.Field.paddingScale)
-                .frame(width: DesignTokens.NumberField.width, alignment: .trailing)
+                .frame(width: numberWidth, alignment: .trailing)
             FieldStepper(
                 size: size, upEnabled: DesignTokens.NumberField.canStep(shown, by: step, in: range),
                 downEnabled: DesignTokens.NumberField.canStep(shown, by: -step, in: range), disabled: disabled,

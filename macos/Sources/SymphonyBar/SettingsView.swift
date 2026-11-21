@@ -231,6 +231,7 @@ struct SettingsView: View {
                         Spacer(minLength: 0)
                         Button("Open Login Items") { MainAppLoginItem.openSystemSettings() }
                             .directorButton(.secondary, size: .small)
+                            .fixedSize()
                     }
                 }
             }
@@ -772,6 +773,7 @@ struct ReleaseCheckLine: View {
                     if !schedule.isChecking {
                         Button("Check Now", action: checkNow)
                             .directorButton(.secondary, size: .small)
+                            .fixedSize()
                     }
                 }
             }
@@ -1049,8 +1051,10 @@ private struct PathRow: View {
             HStack(spacing: DesignTokens.Space.s2) {
                 DirectorTextField(nil, text: $path, placeholder: "/path/to/…", mono: true)
                     .frame(width: DesignTokens.SettingsRow.fieldWidth)
+                // The button keeps its title whole: the row's label gives up the room first (TP-1576).
                 Button("Choose…", action: choose)
                     .directorButton(.secondary)
+                    .fixedSize()
             }
         }
     }

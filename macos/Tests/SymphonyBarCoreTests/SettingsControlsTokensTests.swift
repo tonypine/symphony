@@ -134,6 +134,22 @@ final class SettingsControlsTokensTests: XCTestCase {
         XCTAssertEqual(Number.step(900, by: -1, in: 1...600), 599, "the stepper steps back inside the range")
     }
 
+    /// TP-1576: a value longer than the field's least room widens it by a digit's advance per character, so 50000
+    /// tokens (the summary size limit) shows whole; a short value keeps the least room, and the room stops growing
+    /// at a whole number's longest text.
+    func testTheNumberFieldWidensForALongValue() {
+        let padding = DesignTokens.Control.medium.padding * DesignTokens.Field.paddingScale
+        let fontSize = DesignTokens.Control.medium.fontSize
+        XCTAssertEqual(Number.width(for: "10", fontSize: fontSize, padding: padding), Number.width)
+        let five = Number.width(for: "50000", fontSize: fontSize, padding: padding)
+        XCTAssertGreaterThanOrEqual(five, 2 * padding + 5 * fontSize * Number.digitAdvance + Number.cursorRoom)
+        XCTAssertGreaterThan(five, Number.width, "five digits do not fit the least room")
+        XCTAssertGreaterThan(Number.width(for: "123456789", fontSize: fontSize, padding: padding), five)
+        let longest = Number.width(for: "\(Int.min)", fontSize: fontSize, padding: padding)
+        XCTAssertEqual(Number.width(for: String(repeating: "9", count: 40), fontSize: fontSize, padding: padding), longest)
+        XCTAssertEqual("\(Int.min)".count, Number.maxCharacters)
+    }
+
     func testTheNumberFieldSaysItsValueAndRange() {
         XCTAssertEqual(Number.spoken(30, unit: "minutes"), "30 minutes")
         XCTAssertEqual(Number.spoken(30, unit: nil), "30")
@@ -252,6 +268,7 @@ final class SettingsControlsTokensTests: XCTestCase {
             "toggle": ["on", "off", "hover", "pressed", "focused", "disabled-with-reason"],
             "number-field": [
                 "rest", "hover", "focused", "disabled-with-reason", "error", "at-its-minimum", "at-its-maximum", "typed-out-of-range",
+                "long-value",
             ],
             "time-field": ["rest", "hover", "focused", "disabled-with-reason", "error"],
             "settings-row": ["with-help", "error", "disabled-with-reason", "label-alone"],

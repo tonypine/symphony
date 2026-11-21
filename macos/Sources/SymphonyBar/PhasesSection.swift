@@ -102,6 +102,7 @@ struct PhasesSection: View {
                             model.phases[owner] = .defaults(for: owner)
                         }
                         .directorButton(.secondary, size: .small)
+                        .fixedSize()
                         .help("Removes \(resetKeyPath) from symphony.yml on Save, so it follows its default list.")
                     }
                 }
@@ -211,6 +212,7 @@ struct QAPhaseControls: View {
                     newKind = ""
                 }
                 .directorButton(.secondary, disabledReason: addReason)
+                .layoutPriority(1)
             }
         }
     }

@@ -104,6 +104,7 @@ number-field-disabled-with-reason
 number-field-error
 number-field-focused
 number-field-hover
+number-field-long-value
 number-field-rest
 number-field-typed-out-of-range
 pop-up-default

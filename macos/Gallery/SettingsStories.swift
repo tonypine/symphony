@@ -60,6 +60,15 @@ func numberFieldOutOfRangeStory() -> AnyView {
     return AnyView(field.frame(width: fieldStoryWidth, alignment: .leading))
 }
 
+/// The summary size limit, a five-digit value: the field widens so 50000 shows whole, the unit after it (TP-1576).
+@MainActor
+func numberFieldLongValueStory() -> AnyView {
+    let field = LiveValue(value: 50_000) { value in
+        NumberField("Summary size limit", value: value, in: 1...Int.max, accepts: Int.min...Int.max, unit: "tokens", drawnAs: .rest)
+    }
+    return AnyView(field.frame(width: fieldStoryWidth, alignment: .leading))
+}
+
 // MARK: - Time field
 
 /// The update time's field: 03:00, in a shown state.
@@ -245,6 +254,7 @@ let settingsStories: [ComponentStory] = {
         number("error") { numberFieldStory(1, state: .focused, error: "Give Symphony 5 seconds at least to stop.") },
         number("disabled-with-reason") { numberFieldStory(reason: "Symphony is stopping: the timeout is in use.") },
         number("typed-out-of-range") { numberFieldOutOfRangeStory() },
+        number("long-value") { numberFieldLongValueStory() },
         time("rest") { timeFieldStory() },
         time("hover") { timeFieldStory(state: .hover) },
         time("focused") { timeFieldStory(state: .focused, part: .hour) },
