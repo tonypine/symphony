@@ -103,7 +103,11 @@ defmodule SymphonyElixir.PhaseSteps do
   @answer_max_bytes 64 * 1024
   # The changed-files script's lines that are not a changed file.
   @listing_statuses ["T", "W", "Y", "H", "C"]
-  @skip_reasons %{"macos_changed" => "nothing in the Mac app changed", "elixir_changed" => "no Elixir changed"}
+  @skip_reasons %{
+    "macos_changed" => "nothing in the Mac app changed",
+    "elixir_changed" => "no Elixir changed",
+    "elixir_source_changed" => "no Elixir source or test file changed"
+  }
   @back_to_code "Send it back to the code"
   # What the changed-files script prints: one `<status>\t<path>` line a change (`D` a deletion),
   # then `T\t<path>` for each test file the workspace tracks, and `W\t<manifest>` with the window
@@ -296,9 +300,11 @@ defmodule SymphonyElixir.PhaseSteps do
   def holds?("always", _changes), do: true
   def holds?("macos_changed", %{changed: changed}), do: Enum.any?(changed, &String.starts_with?(&1, "macos/"))
   def holds?("elixir_changed", %{changed: changed}), do: Enum.any?(changed, &elixir_file?/1)
+  def holds?("elixir_source_changed", %{changed: changed}), do: Enum.any?(changed, &elixir_source?/1)
 
-  # `mix.lock` changes what the Elixir steps build and test, so it makes them run; it is generated,
-  # not source, so no step is given it to lint (`elixir_source?/1`).
+  # `mix.lock` changes what the Elixir code compiles against, so it holds `elixir_changed` (the
+  # build); it is generated, not source, so it holds no `elixir_source_changed` (lint and tests) and
+  # no step is given it to lint. A dependency update is proved by CI's full suite.
   defp elixir_file?(path), do: elixir_source?(path) or path == "mix.lock"
 
   defp elixir_source?(path), do: Path.extname(path) in [".ex", ".exs"]

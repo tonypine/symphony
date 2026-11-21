@@ -4150,7 +4150,7 @@ phases:
       - id: checks
         title: Format, specs and credo
         mode: machine
-        when: elixir_changed
+        when: elixir_source_changed
         command: mix format --check-formatted && mix specs.check && (test -z "$SYMPHONY_CHANGED_ELIXIR_FILES" || mix credo --strict $SYMPHONY_CHANGED_ELIXIR_FILES)
         timeout_ms: 600000
         on_fail: code
@@ -4158,7 +4158,7 @@ phases:
         title: Tests and coverage
         mode: machine
         command:
-          - {run: (test -z "$SYMPHONY_CHANGED_TEST_FILES" || mix test $SYMPHONY_CHANGED_TEST_FILES) && mix cover.changed, when: elixir_changed}
+          - {run: (test -z "$SYMPHONY_CHANGED_TEST_FILES" || mix test $SYMPHONY_CHANGED_TEST_FILES) && mix cover.changed, when: elixir_source_changed}
           - {run: cd macos && swift test --filter "$SYMPHONY_CHANGED_SWIFT_TEST_FILTER", when: macos_changed}
         timeout_ms: 1800000
         on_fail: code
@@ -4334,7 +4334,12 @@ Each step has:
 - `command` (required for a `machine` step, refused on any other): one shell line, or a list of
   entries run in order, each a `run` line with an optional `when` (`always`, the default;
   `macos_changed`, when the change touches `macos/`; `elixir_changed`, when it touches Elixir
-  files, `mix.lock` included). The step runner gives a machine step `SYMPHONY_CHANGED_ELIXIR_FILES`
+  files, `mix.lock` included; `elixir_source_changed`, when it touches an Elixir source or test
+  file, `.ex` or `.exs`, and not for `mix.lock` alone). A step whose `when`, or every command's,
+  does not hold is skipped with a plain reason that says what did not change ("no Elixir source or
+  test file changed"): the default list compiles a lock-only change and runs no credo, no
+  `mix test` and no `mix cover.changed` for it, nor for a change to docs or workflow files only. A
+  dependency update is proved by CI's full suite; no local step runs the whole suite. The step runner gives a machine step `SYMPHONY_CHANGED_ELIXIR_FILES`
   (the Elixir source files, `.ex` and `.exs`, the change touches that still exist; never a
   generated file such as `mix.lock`), `SYMPHONY_CHANGED_TEST_FILES` (the changed test files and the
   tests of the changed `lib/` files; either may be empty, and the default steps then run no credo

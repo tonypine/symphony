@@ -41,11 +41,11 @@ defmodule SymphonyElixir.WorkflowPreviewStepsTest do
                "   - when Elixir files changed: `mix compile --warnings-as-errors`\n"
 
     assert steps =~
-             "3. `checks` Format, specs and credo · machine · when Elixir files changed · times out after 10 min · on failure returns to `code`\n" <>
+             "3. `checks` Format, specs and credo · machine · when Elixir source files changed · times out after 10 min · on failure returns to `code`\n" <>
                "   - `mix format --check-formatted && mix specs.check && (test -z \"$SYMPHONY_CHANGED_ELIXIR_FILES\" || mix credo --strict $SYMPHONY_CHANGED_ELIXIR_FILES)`\n"
 
     assert steps =~ "4. `tests` Tests and coverage · machine · times out after 30 min · on failure returns to `code`\n"
-    assert steps =~ "   - when Elixir files changed: `(test -z \"$SYMPHONY_CHANGED_TEST_FILES\" || mix test $SYMPHONY_CHANGED_TEST_FILES) && mix cover.changed`\n"
+    assert steps =~ "   - when Elixir source files changed: `(test -z \"$SYMPHONY_CHANGED_TEST_FILES\" || mix test $SYMPHONY_CHANGED_TEST_FILES) && mix cover.changed`\n"
     assert steps =~ "   - when macos/ changed: `cd macos && swift test --filter \"$SYMPHONY_CHANGED_SWIFT_TEST_FILTER\"`\n"
     assert steps =~ "5. `window_tests` Window tests · machine · times out after 120 min · on failure returns to `code`\n   - `symphony:window_tests`\n"
     assert steps =~ "6. `plan_checks` The plan's checks are proved · machine · times out after 1 min · on failure returns to `code`\n   - `symphony:checks`\n"

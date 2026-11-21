@@ -95,6 +95,15 @@ defmodule SymphonyElixir.PhaseStepsTest do
     PhaseSteps.run_machine_steps(steps, step(steps, "build"), context(ctx, results, %{run_id: "run-again-#{System.unique_integer([:positive])}", changes: changes}))
   end
 
+  # The commands the runner ran so far, in order, each with its environment.
+  defp ran_commands(ran) do
+    receive do
+      {:ran, command, env, _timeout} -> ran_commands([{command, env} | ran])
+    after
+      0 -> Enum.reverse(ran)
+    end
+  end
+
   defp events(type), do: @issue_id |> TicketEvents.query(types: [type], limit: 200) |> Enum.sort_by(& &1.seq)
 
   describe "one machine step at a time" do
@@ -183,10 +192,12 @@ defmodule SymphonyElixir.PhaseStepsTest do
       assert %{clean: true} = PhaseSteps.changes(%{workspace: ctx.workspace, base_branch: "main"})
     end
 
-    test "a lock-file change runs the Elixir steps but gives credo no generated file" do
+    test "a lock-file change holds the build's condition, not the lint's and tests', and gives credo no generated file" do
       changes = %{changed: ["mix.lock"], existing: ["mix.lock", "lib/a.ex"], tests: []}
 
-      assert PhaseSteps.holds?("elixir_changed", %{changes | existing: ["mix.lock"]})
+      assert PhaseSteps.holds?("elixir_changed", changes)
+      refute PhaseSteps.holds?("elixir_source_changed", changes)
+      assert PhaseSteps.holds?("elixir_source_changed", %{changes | changed: ["mix.exs"]})
       assert %{"SYMPHONY_CHANGED_ELIXIR_FILES" => "lib/a.ex"} = PhaseSteps.step_env(changes)
       assert %{"SYMPHONY_CHANGED_ELIXIR_FILES" => ""} = PhaseSteps.step_env(%{changes | existing: ["mix.lock"]})
     end
@@ -227,7 +238,7 @@ defmodule SymphonyElixir.PhaseStepsTest do
     test "the default checks give credo only the files the step names, and run no test file when none is selected", ctx do
       steps = PhaseSteps.steps(:implementation)
       [checks] = step(steps, "checks").command
-      tests = Enum.find(step(steps, "tests").command, &(&1.when == "elixir_changed"))
+      tests = Enum.find(step(steps, "tests").command, &(&1.when == "elixir_source_changed"))
 
       assert run_with_fake_mix(ctx, checks.run, %{"SYMPHONY_CHANGED_ELIXIR_FILES" => ""}) == ["format --check-formatted", "specs.check"]
 
@@ -236,6 +247,42 @@ defmodule SymphonyElixir.PhaseStepsTest do
 
       assert run_with_fake_mix(ctx, tests.run, %{"SYMPHONY_CHANGED_TEST_FILES" => ""}) == ["cover.changed"]
       assert run_with_fake_mix(ctx, tests.run, %{"SYMPHONY_CHANGED_TEST_FILES" => "test/a_test.exs"}) == ["test test/a_test.exs", "cover.changed"]
+    end
+
+    test "a change the default list selects nothing for skips its lint and tests with a plain reason, and a lock change only compiles", ctx do
+      steps = PhaseSteps.steps(:implementation)
+      ok = {:ok, {"", 0}}
+      results = for step <- steps, step.mode == "machine", command <- step.command, into: %{}, do: {command.run, [ok]}
+
+      walk = fn changed ->
+        RunStore.clear()
+        changes = %{changed: changed, existing: changed, tests: ["test/a_test.exs"]}
+        context = context(ctx, results, %{run_id: "run-#{System.unique_integer([:positive])}", changes: changes})
+        assert {:turn, %Step{id: "handoff"}, nil} = PhaseSteps.run_machine_steps(steps, step(steps, "build"), context)
+        ran = ran_commands([])
+        ends = for %{payload: payload} <- events("step.completed"), into: %{}, do: {payload.step_id, {payload.outcome, Map.get(payload, :reason)}}
+        {Enum.map(ran, &elem(&1, 0)), ends, Enum.map(ran, &elem(&1, 1))}
+      end
+
+      nothing = "no Elixir source or test file changed"
+
+      assert {["mix compile --warnings-as-errors"], ends, _env} = walk.(["mix.lock"])
+      assert %{"build" => {"passed", nil}, "checks" => {"skipped", ^nothing}, "tests" => {"skipped", reason}} = ends
+      assert reason == nothing <> " and nothing in the Mac app changed"
+
+      for changed <- [["README.md"], [".github/workflows/ci.yml"]] do
+        assert {[], %{"build" => {"skipped", _}, "checks" => {"skipped", ^nothing}, "tests" => {"skipped", _}}, _env} = walk.(changed)
+      end
+
+      [checks] = step(steps, "checks").command
+      tests = Enum.find(step(steps, "tests").command, &(&1.when == "elixir_source_changed"))
+
+      assert {[_compile, checks_run, tests_run], _ends, [_, _, env]} = walk.(["lib/a.ex"])
+      assert {checks_run, tests_run} == {checks.run, tests.run}
+      assert %{"SYMPHONY_CHANGED_TEST_FILES" => "test/a_test.exs"} = env
+
+      assert {[_compile, _checks, _tests], _ends, [_, _, %{"SYMPHONY_CHANGED_TEST_FILES" => "test/b_test.exs"}]} = walk.(["test/b_test.exs"])
+      assert {[_compile, _checks, _tests], _ends, [_, _, %{"SYMPHONY_CHANGED_TEST_FILES" => ""}]} = walk.(["lib/no_test.ex"])
     end
 
     test "a workspace git can't read changed nothing", ctx do
