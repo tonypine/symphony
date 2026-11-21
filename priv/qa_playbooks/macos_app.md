@@ -553,8 +553,8 @@ GitHub or Linear in QA:
     `SetupConfigEditTests`, not by reading the file.
   - Refused: launch again with `macos/Tests/Fixtures/director-app/setup-refused`. **Create Label…**
     then **Create Label**: the sheet stays open with "Linear refused to create the label …
-    (HTTP 403) …" in red, **Open Settings…**, **Close** and **Try Again**; **Open Settings…** opens the
-    Settings window with the sheet still open behind it, and the row is still there.
+    (HTTP 403) …" in red, **Open Settings…**, **Close** and **Try Again**; **Open Settings…** closes the
+    sheet and opens the Symphony window's Settings page; back on Setup, the row is still there.
   - Look: judge the page, its Details, both sheets and the banner in light and dark against
     the Component Gallery's `setup-*` stories.
 - **Add Repo's Check setup and the first launch (TP-911):**
