@@ -17,7 +17,8 @@ defmodule SymphonyElixirWeb.ControlApiController do
   clear (a usage limit's) answers 409 `nothing_to_resume`, naming them in `reasons`, and lifts
   nothing. With `kind` it lifts that one reason and keeps every other (whoever set a reason lifts
   that reason): `kind: "build"` with `version` the update's pause for that version, which the menu
-  bar app lifts once its update installed, was rolled back or failed to launch; `kind: "person"`
+  bar app lifts once its update installed, was rolled back or failed to launch, and which calls
+  off the update ready for that version (`update_ready`); `kind: "person"`
   the Director's. Dispatch stays paused while another reason remains, and a reason the pause
   doesn't hold changes nothing: the answer is the pause as it now stands. A `build` without
   `version`, or another kind, is 422 `invalid_resume`. With `condition` (a usage limit's, as its reason's `waits_on.condition` names it:
@@ -26,6 +27,13 @@ defmodule SymphonyElixirWeb.ControlApiController do
   now stands (`usage_limit`, null once it cleared). No hold on `condition` is 404
   `usage_limit_not_found`; a headroom hold, which the provider never refused, is 409
   `usage_limit_headroom`.
+
+  `update_ready` (with `version`, a release's version) tells Symphony the menu bar app has that
+  update downloaded and verified (`SymphonyElixir.Orchestrator.update_ready/2`): dispatch goes on,
+  and Symphony pauses on the update's `build` reason itself at the moment it picks
+  (`SymphonyElixir.UpdateWindow`). A newer version replaces the one ready. It answers 200 with the
+  update as the state payload's `update_window` gives it, and 422 `invalid_update` without a
+  version or with one that isn't a release's.
 
   `repos/:repo_key/pause` (with an optional `reason`) and `repos/:repo_key/resume` pause and resume
   dispatch for one configured repository (`SymphonyElixir.Orchestrator.pause_repository/3`): each
@@ -121,7 +129,7 @@ defmodule SymphonyElixirWeb.ControlApiController do
   alias Plug.Conn
   alias SymphonyElixir.{AuditLog, DirectorBlockers, DirectorLabels, DirectorMoves, DirectorPriority, DirectorRulings}
   alias SymphonyElixir.Conductor.Message, as: ConductorMessage
-  alias SymphonyElixir.{Marks, Messages, Orchestrator, TicketMoves, TicketSignals}
+  alias SymphonyElixir.{Marks, Messages, Orchestrator, TicketMoves, TicketSignals, UpdateWindow}
   alias SymphonyElixir.TicketEvents.Types
   alias SymphonyElixirWeb.{Endpoint, Presenter, TicketEventsController}
 
@@ -186,6 +194,19 @@ defmodule SymphonyElixirWeb.ControlApiController do
 
   defp usage_limit_reason?(%{waits_on: %{condition: "usage_limit:" <> _key}}), do: true
   defp usage_limit_reason?(_reason), do: false
+
+  @spec update_ready(Conn.t(), map()) :: Conn.t()
+  def update_ready(conn, params) do
+    case string_param(params["version"]) do
+      version when is_binary(version) ->
+        if UpdateWindow.version?(version),
+          do: respond(conn, Orchestrator.update_ready(orchestrator(conn), version)),
+          else: error_response(conn, 422, "invalid_update", "An update names the release's version, such as 0.0.1.42, not #{version}")
+
+      nil ->
+        error_response(conn, 422, "invalid_update", "An update names the version it installs")
+    end
+  end
 
   @spec pause_repository(Conn.t(), map()) :: Conn.t()
   def pause_repository(conn, %{"repo_key" => repo_key} = params) do

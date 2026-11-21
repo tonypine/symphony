@@ -740,6 +740,23 @@ joined by `; `. The log line names the kind too (`Dispatch pause active kind=bui
   so a pause the Director set meanwhile keeps dispatch paused.
 - A Symphony that starts on the version a `build` reason waits on, or a later one, clears that
   reason, so the pause of a finished update lifts by itself.
+- An update the menu bar app has ready (`POST /api/v1/control/update_ready` with its `version`,
+  sent once the release is downloaded and verified) does not pause dispatch: Symphony keeps
+  dispatching and picks the moment itself (`SymphonyElixir.UpdateWindow`). It checks when a run
+  ends, before the freed slot is refilled, and at each poll. The first moment no agent run is active
+  (a run between turns does not count, as for the drain), it sets the update's `build` reason itself
+  (`set_by` Symphony); the app then stops Symphony and swaps, so the pause lasts only the restart.
+  When runs never leave such a moment, after 15 minutes ready it holds dispatch so one forms, but
+  only once no active run began less than 3 minutes earlier. A hold lasts at most 10 minutes: with
+  runs still active it is lifted and the 15 minutes start again; with none left (the app never came
+  for it) the update is called off, and the app arms it again. These numbers are fixed and do not
+  depend on how many builds were published: a newer version ready while the update waits or holds
+  replaces the one ready, keeps the time already waited, and moves the hold's reason to the new
+  version, so several builds in a row cost one hold. The update ready is kept in memory and reported
+  as the state payload's `update_window` (`version`, `phase` `waiting` or `holding`, `ready_at`,
+  `holding_since`). Resume with `kind` `build` for its version calls it off; the Director's plain
+  Resume during a hold sends it back to waiting. A Director's Pause still holds dispatch, and an
+  update ready under it swaps as soon as no run is active.
 - Each usage-limit hold (Sections 8.4.1 and 8.4.2) is an `environment` reason waiting on condition
   `usage_limit:<provider>:<scope>`, its line the hold's (`Claude's 5-hour limit until 14:30 UTC-3`,
   its local time naming its zone): set with the hold, its line refreshed when the hold changes,
@@ -5689,6 +5706,9 @@ SHOULD return:
   `execution.providers.<provider>.reserve`, null when it has none or Symphony can't read its usage)
   and `at_reserve` (a headroom hold keeps new runs off it, Section 8.4.2). A
   Pause or a Resume of a provider pushes the new state at once.
+- `update_window`: the update the menu bar app has ready (Section 4.1.11's `update_ready`), null when
+  none is: `version`, `phase` (`waiting` while dispatch goes on, `holding` once Symphony paused for
+  it), `ready_at` and `holding_since`.
 - `pause`, `budget`, `dispatch_state`, and `workspace_lifecycle` when those extensions are enabled.
   `pause` is Symphony's own pause (Section 4.1.11): `paused` while a `person` or `build` reason
   stops all dispatch, with the first such reason's line as `reason` (an update's is

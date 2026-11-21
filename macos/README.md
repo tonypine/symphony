@@ -178,7 +178,8 @@ set (or, in Development mode, no checkout folder).
     it (03:00 by default, in the Mac's time zone), waiting for agent runs like Update to vX. The time shows
     only for this mode, and is kept when you choose another.
   - **Automatically when released** (the default for every install that never saved an update mode)
-    installs a new release by itself as soon as a check finds it, waiting for agent runs like Update to vX.
+    downloads a new release as soon as a check finds it and installs it at the first moment no agent run is
+    active, with dispatch going on until then.
     Under it, **Check for releases every N minutes** (1–60, 5 by default) sets how often the app checks, and
     a line says what the last check found, with **Check Now**. Both show only for this mode. See
     [How often the app checks](#how-often-the-app-checks).
@@ -970,13 +971,19 @@ With one of the automatic modes, the app installs a newer release by itself thro
   was closed (more than 10 minutes late) waits for the next day's time too, so dispatch isn't paused in the
   middle of the day. A release found by another check waits for the set time.
 - **Automatically when released**: as soon as a check finds a release (at launch, every 5 minutes by default,
-  or Check for Updates…), or a status poll sees one already found, the app installs it, whatever agent runs
-  are active. It downloads and verifies it ("Updating: downloading and verifying vX…"), pauses dispatch, waits
-  for the active runs to finish ("Updating to vX: waiting for N agent runs…") and installs, as Update to vX
-  does but without asking. It never gives up on the runs: after the **Restart timeout** the line adds how long
-  it has waited ("(35 min)") and **Update Now Anyway** stops Symphony without waiting more. Release Notes…
-  shows the release under way.
-  - Once it has paused dispatch, it posts a notification, "Updating Symphony to vX", saying how many agent
+  or Check for Updates…), or a status poll sees one already found, the app downloads and verifies it
+  ("Updating: downloading and verifying vX…") and tells Symphony it is ready, without pausing dispatch. The
+  menu says "vX is ready: it installs at the first moment no agent run is active.", and the Symphony window's
+  dispatch control reads "Dispatch on · vX ready", with **Cancel Update**. Symphony keeps dispatching and picks
+  the moment itself: when a run ends and none is left active, before the freed slot is refilled, it pauses for
+  the update, and the app stops Symphony and installs, so dispatch is held only for the restart. When runs
+  never leave such a moment, after 15 minutes Symphony holds new runs so one forms, once no active run began in
+  the last 3 minutes, and lets dispatch go again after 10 minutes if runs are still active, to try later. While
+  it holds, the line reads "Updating to vX: waiting for N agent runs…", and after the **Restart timeout**
+  **Update Now Anyway** stops Symphony without waiting more. A newer release found while an update waits is
+  downloaded in the background and replaces it, so several releases in a row cost one restart, onto the newest.
+  Release Notes… shows the release under way.
+  - Once Symphony has paused dispatch for it, it posts a notification, "Updating Symphony to vX", saying how many agent
     runs it waits for, with **Cancel Update**. It makes no sound, and nothing shows in its place when
     notifications aren't allowed. Clicking it opens the Symphony window. It is removed once the update
     ends, fails or is cancelled, and the other modes post none.

@@ -120,6 +120,7 @@ defmodule SymphonyElixirWeb.Presenter do
           codex_totals: normalize_codex_totals(Map.get(snapshot, :codex_totals)),
           pollers: normalize_pollers(Map.get(snapshot, :pollers)),
           pause: normalize_pause(Map.get(snapshot, :pause)),
+          update_window: normalize_update_window(Map.get(snapshot, :update_window)),
           repositories: Enum.map(repositories, &repository_payload/1),
           all_repositories_paused: repositories != [] and Enum.all?(repositories, & &1.pause),
           providers: snapshot |> Map.get(:providers, []) |> Enum.map(&provider_state_payload/1),
@@ -1617,6 +1618,13 @@ defmodule SymphonyElixirWeb.Presenter do
   defp normalize_pause(_pause) do
     %{paused: false, reason: nil, paused_at: nil, reasons: []}
   end
+
+  # The update the menu bar app has ready (`SymphonyElixir.UpdateWindow`): `waiting` while dispatch
+  # goes on, `holding` once Symphony paused for it.
+  defp normalize_update_window(%{version: version, phase: phase} = window),
+    do: %{version: version, phase: phase, ready_at: iso8601(window.ready_at), holding_since: iso8601(window.holding_since)}
+
+  defp normalize_update_window(_none), do: nil
 
   defp pause_reason_payload(reason),
     do: %{kind: reason.kind, text: reason.text, since: iso8601(Map.get(reason, :since)), waits_on: reason.waits_on}

@@ -18,8 +18,13 @@ public struct RestartMachine: Equatable {
         /// paused and agent runs are still active after `runsTimeout`, resuming the dispatch it paused. Its failures
         /// show in the menu only, without an alert.
         case automaticUpdate
+        /// The swap of an update Symphony had ready (TP-1590): Symphony set the update's pause itself, so the drain
+        /// starts paused and never pauses on its own. When Symphony lifts that pause (its hold reached its limit with
+        /// runs still active) the drain ends quietly and the update waits again. It offers Update Now Anyway after
+        /// the restart timeout, and Cancel Update lifts Symphony's pause, which calls the update off.
+        case armedUpdate
 
-        /// True for both kinds of update.
+        /// True for every kind of update.
         public var isUpdate: Bool { self != .restart }
     }
 
@@ -85,6 +90,8 @@ public struct RestartMachine: Equatable {
     public private(set) var offersRestartNow = false
     /// True once an automatic update gave up because agent runs were still active.
     public private(set) var postponed = false
+    /// True once Symphony lifted the pause an `.armedUpdate` drained behind: the update waits for its next moment.
+    public private(set) var released = false
     /// Why the last restart failed, shown in the menu until the next restart.
     public private(set) var error: String?
     /// The version an update installs, which its pause names; nil for a restart.
@@ -165,7 +172,7 @@ public struct RestartMachine: Equatable {
             return [.stop]
 
         case (.waitingForRuns, .cancel):
-            guard pausedByRestart else {
+            guard pausedByRestart || purpose == .armedUpdate else {
                 enter(.idle, now: now)
                 return []
             }
@@ -299,6 +306,11 @@ public struct RestartMachine: Equatable {
                 if purpose == .automaticUpdate, now.timeIntervalSince(phaseStart) >= runsTimeout {
                     return postpone(now: now)
                 }
+            } else if purpose == .armedUpdate {
+                // Symphony lifted the pause it set for the update: the update waits for its next moment.
+                released = true
+                enter(.idle, now: now)
+                return []
             } else if !mayPredatePause {
                 // Dispatch was resumed after the poll the restart began with, or while it waits. Pause it, so the
                 // restart resumes it afterwards instead of waiting forever for a pause.
@@ -338,6 +350,10 @@ public struct RestartMachine: Equatable {
         phaseStart = now
         offersRestartNow = false
     }
+
+    /// Whether a swap that stopped Symphony and then failed should lift the update's pause: the drain paused
+    /// dispatch, or Symphony paused it for an `.armedUpdate`.
+    public var resumesDispatch: Bool { pausedByRestart || purpose == .armedUpdate }
 
     /// The pause the restart sends: an update's is a `build` reason carrying the version it installs.
     public var pauseAction: ControlAction {

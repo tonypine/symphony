@@ -54,6 +54,8 @@ public struct StateSnapshot: Equatable {
     /// Every reason Symphony's own pause holds (`pause.reasons`), in the order they were set, the usage-limit holds'
     /// included; nil when Symphony predates them, so the header reads `pause` as before.
     public var pauseReasons: [PauseReason]?
+    /// The update the app told Symphony is ready (`update_window`, TP-1590), nil when none is or Symphony predates it.
+    public var updateWindow: UpdateWindow?
     /// Each ticket's situation by identifier (`Situation.byTicket(state:)`): the one line every row that names the
     /// ticket shows.
     public var situations: [String: Situation] = [:]
@@ -62,6 +64,26 @@ public struct StateSnapshot: Equatable {
     public func situation(_ identifier: String?) -> Situation? {
         guard let identifier else { return nil }
         return situations[identifier] ?? situations.first { $0.key.caseInsensitiveCompare(identifier) == .orderedSame }?.value
+    }
+
+    /// An update Symphony knows is ready: it waits, with dispatch going on, for the moment Symphony picks.
+    public struct UpdateWindow: Equatable {
+        public enum Phase: Equatable {
+            /// Dispatch goes on while Symphony waits for a moment with no agent run active.
+            case waiting
+            /// Symphony paused dispatch for it: the app swaps once no agent run is active.
+            case holding
+        }
+
+        public var version: String
+        public var phase: Phase
+        public var readyAt: Date?
+
+        public init(version: String, phase: Phase = .waiting, readyAt: Date? = nil) {
+            self.version = version
+            self.phase = phase
+            self.readyAt = readyAt
+        }
     }
 
     /// One reason of Symphony's pause: who or what holds dispatch and since when.
@@ -971,6 +993,13 @@ public enum SymphonyState {
                 version: version?.isEmpty == false ? version : nil
             )
         }
+        if let window = payload.updateWindow, let version = window.version?.trimmingWhitespace(), !version.isEmpty {
+            snapshot.updateWindow = StateSnapshot.UpdateWindow(
+                version: version,
+                phase: window.phase == "holding" ? .holding : .waiting,
+                readyAt: window.readyAt.flatMap(parseDate)
+            )
+        }
         snapshot.usageLimits = (payload.usageLimits ?? []).map { limit in
             StateSnapshot.UsageLimit(
                 provider: limit.provider ?? "anthropic",
@@ -1140,6 +1169,12 @@ public enum SymphonyState {
             let message: String?
         }
 
+        struct UpdateWindow: Decodable {
+            let version: String?
+            let phase: String?
+            let readyAt: String?
+        }
+
         struct UsageLimit: Decodable {
             let provider: String?
             let scope: String?
@@ -1267,6 +1302,8 @@ public enum SymphonyState {
         /// Missing before Symphony listed every live session with its kind.
         let sessions: [Session]?
         let pause: Pause?
+        /// Missing before Symphony took an update ready (TP-1590).
+        let updateWindow: UpdateWindow?
         let budget: Budget?
         let usageLimits: [UsageLimit]?
         let appUpdate: AppUpdate?

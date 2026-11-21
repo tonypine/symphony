@@ -67,6 +67,7 @@ defmodule SymphonyElixir.Orchestrator do
     Tracker,
     TransitionGuard,
     UpdateHold,
+    UpdateWindow,
     URLUtils,
     UsageLimit,
     Verification,
@@ -97,6 +98,8 @@ defmodule SymphonyElixir.Orchestrator do
   @max_quiet_handoff_runs 2
   # The control API authenticates one shared token, so a Pause or Resume is the Director's.
   @director_setter %{kind: :person, name: "Director"}
+  # Symphony sets an update's pause itself once the moment it picks has come (`SymphonyElixir.UpdateWindow`).
+  @update_setter %{kind: :symphony, name: "Symphony"}
   # A transient Linear error (timeout, refused connection, 5xx) is not the issue's
   # fault: retry soon, without failure backoff. A rate limit waits for its pause.
   @linear_wait_retry_delay_ms 5_000
@@ -236,6 +239,9 @@ defmodule SymphonyElixir.Orchestrator do
       usage_windows: %{},
       api_outages: %{},
       self_heal_opts: [],
+      # The update the menu bar app has ready, waiting for the moment Symphony picks for it
+      # (`SymphonyElixir.UpdateWindow`); nil when none is.
+      update_window: nil,
       clock: &DateTime.utc_now/0
     ]
 
@@ -3892,6 +3898,7 @@ defmodule SymphonyElixir.Orchestrator do
       |> park_breakdown_parents(release_pause_held_retries(state))
       |> then(&review_breakdown_parents(issues, &1))
       |> act_on_plan_comments(issues)
+      |> check_update_window()
 
     state =
       case dispatch_pass_pause(state) do
@@ -5750,10 +5757,11 @@ defmodule SymphonyElixir.Orchestrator do
   # no slot, so only the pause holds it back. A run whose step paused on a Question waits for its
   # answer first, read from the ticket's record (`SymphonyElixir.Questions`): once it is answered the
   # run waits for a slot like any other; a Question withdrawn (Cancel) or gone ends the run.
-  defp grant_step_turns(%State{running: running} = state) do
+  defp grant_step_turns(%State{} = state) do
+    state = check_update_window(state)
     paused? = operator_paused?(state)
 
-    running
+    state.running
     |> Enum.filter(fn {_issue_id, entry} -> match?(%{step: %{waiting: waiting}} when not is_nil(waiting), entry) end)
     |> Enum.sort_by(fn {_issue_id, entry} -> entry.step.started_at end, DateTime)
     |> Enum.reduce(state, fn
@@ -8493,6 +8501,65 @@ defmodule SymphonyElixir.Orchestrator do
     Logger.warning("Lifted a dispatch pause reason; dispatch stays paused reasons=#{inspect(Enum.map(reasons, & &1.text))}")
   end
 
+  # The update the app has ready decides at each run end and poll whether its moment has come
+  # (`SymphonyElixir.UpdateWindow`): holding dispatch sets Symphony's pause on the update's reason,
+  # lifting it clears that reason alone. A pause that can't be written leaves the update as it was,
+  # to try again at the next check.
+  defp check_update_window(%State{update_window: nil} = state), do: state
+
+  defp check_update_window(%State{update_window: window} = state) do
+    now = state.clock.()
+
+    case UpdateWindow.decide(window, active_run_starts(state.running, now), now) do
+      {:none, window} ->
+        %{state | update_window: window}
+
+      {:hold, held} ->
+        apply_update_decision(state, held, Pauses.set(:symphony, update_reason(held.version), set_by: @update_setter), "holds dispatch")
+
+      {decision, after_window} ->
+        result = Pauses.clear_reasons(:symphony, &lifted_by?(&1, {:build, window.version}), by: @update_setter)
+        apply_update_decision(state, after_window, result, if(decision == :lift, do: "lifted its hold", else: "was called off"))
+    end
+  end
+
+  defp apply_update_decision(state, window, {:ok, _pause}, what) do
+    Logger.warning("Update to v#{(window || state.update_window).version} #{what}")
+    notify_dashboard()
+    %{state | update_window: window}
+  end
+
+  defp apply_update_decision(state, _window, {:error, reason}, what) do
+    Logger.warning("Update to v#{state.update_window.version} #{what} failed reason=#{inspect(reason)}")
+    state
+  end
+
+  # The start of each active agent run; one between turns is not active (`GET /api/v1/drain`).
+  defp active_run_starts(running, now) do
+    for {_issue_id, entry} <- running, not match?(%{step: %{waiting: waiting}} when waiting in [:slot, :pause, :answer], entry) do
+      case Map.get(entry, :started_at) do
+        %DateTime{} = started_at -> started_at
+        _unknown -> now
+      end
+    end
+  end
+
+  # The reason the app's own update pause gives (`Pauses.dispatch_reason/1` of `updating to v<version>`).
+  defp update_reason(version), do: %{kind: :build, waits_on: %{version: version}, text: "updating to v" <> version}
+
+  # A newer version ready while the update holds dispatch takes over its pause: the new reason is
+  # set before the old one is cleared, so dispatch never runs between them.
+  defp retarget_update_pause(%UpdateWindow{phase: :holding, version: old}, %UpdateWindow{version: new}) when old != new do
+    with {:ok, _pause} <- Pauses.set(:symphony, update_reason(new), set_by: @update_setter),
+         {:ok, _pause} <- Pauses.clear_reasons(:symphony, &lifted_by?(&1, {:build, old}), by: @update_setter),
+         do: :ok
+  end
+
+  defp retarget_update_pause(_previous, _window), do: :ok
+
+  defp disarm_update(%State{update_window: %UpdateWindow{version: version}} = state, {:build, version}), do: %{state | update_window: nil}
+  defp disarm_update(state, _reason), do: state
+
   # The reason a targeted resume lifts: an update's for its version, or the Director's.
   defp lifted_by?(%{kind: :build, waits_on: %{version: version}}, {:build, version}), do: true
   defp lifted_by?(%{kind: :person}, :person), do: true
@@ -9387,6 +9454,17 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   @doc """
+  The menu bar app has the update to `version` downloaded and verified (`SymphonyElixir.UpdateWindow`):
+  Symphony keeps dispatching and pauses on the update's `:build` reason itself at the moment it
+  picks, which the app waits for to swap. A newer version replaces the one ready. Returns the update
+  as the state payload's `update_window` gives it.
+  """
+  @spec update_ready(GenServer.server(), String.t()) :: {:ok, map()} | :unavailable | {:error, term()}
+  def update_ready(server, version) when is_binary(version) do
+    if server_available?(server), do: GenServer.call(server, {:update_ready, version}), else: :unavailable
+  end
+
+  @doc """
   Checks the usage-limit hold waiting on `condition` (`UsageLimit.condition/1`, for example
   `usage_limit:anthropic:all`) now rather than at its `resume_at`, because a person says the limit
   is back: a paused hold starts its canary at once, as it would at `resume_at`. A canary the
@@ -9778,13 +9856,32 @@ defmodule SymphonyElixir.Orchestrator do
   # changed nothing. Try Now (`try_usage_limit_now/2`) is what checks a usage limit early.
   defp handle_call_message(:resume_dispatch, _from, state) do
     case unliftable_pause(symphony_pause()) do
-      nil -> resume_dispatch_reasons(state, &(&1.kind in [:person, :build]))
+      nil -> resume_dispatch_reasons(%{state | update_window: UpdateWindow.lifted(state.update_window, state.clock.())}, &(&1.kind in [:person, :build]))
       pause -> {:reply, {:error, {:nothing_to_resume, Pauses.dispatch_status(pause).reasons}}, state}
     end
   end
 
+  # Lifting an update's pause for its version calls that update off: the app does so on Cancel
+  # Update, and once the update installed or failed.
   defp handle_call_message({:resume_dispatch, reason}, _from, state) do
-    resume_dispatch_reasons(state, &lifted_by?(&1, reason))
+    resume_dispatch_reasons(disarm_update(state, reason), &lifted_by?(&1, reason))
+  end
+
+  defp handle_call_message({:update_ready, version}, _from, state) do
+    previous = state.update_window
+    window = UpdateWindow.arm(previous, version, state.clock.())
+    state = %{state | update_window: window}
+
+    case retarget_update_pause(previous, window) do
+      :ok ->
+        if previous != window, do: Logger.info("Update ready version=#{window.version} phase=#{window.phase}")
+        state = check_update_window(state)
+        notify_dashboard()
+        {:reply, {:ok, UpdateWindow.status(state.update_window)}, schedule_tick(state, 0)}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, %{state | update_window: previous}}
+    end
   end
 
   defp handle_call_message({:try_usage_limit_now, condition}, _from, state) do
@@ -10247,6 +10344,7 @@ defmodule SymphonyElixir.Orchestrator do
       rate_limits: Map.get(state, :rate_limits),
       usage_limits: UsageLimit.snapshot(state.usage_limits, state.usage_windows),
       pause: symphony_pause_status(),
+      update_window: UpdateWindow.status(state.update_window),
       repositories: repositories_snapshot(),
       providers: providers_snapshot(state),
       workspace_lifecycle: workspace_lifecycle_snapshot(state),

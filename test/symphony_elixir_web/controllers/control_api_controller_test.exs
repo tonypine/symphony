@@ -113,6 +113,31 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
     assert calls(pid) == [{:resume_dispatch, {:build, "0.0.1.956"}}]
   end
 
+  test "POST /control/update_ready tells Symphony the update is ready and answers with it as the state reports it" do
+    window = %{version: "0.0.1.1056", phase: :waiting, ready_at: ~U[2026-11-21 14:17:02Z], holding_since: nil}
+    pid = start_stub([{:ok, window}])
+    params = %{"version" => " 0.0.1.1056 "}
+
+    conn = send_to(build_conn(:post, "/api/v1/control/update_ready", params), :update_ready, pid, params)
+
+    assert conn.status == 200
+    assert json_body(conn) == %{"version" => "0.0.1.1056", "phase" => "waiting", "ready_at" => "2026-11-21T14:17:02Z", "holding_since" => nil}
+    assert calls(pid) == [{:update_ready, "0.0.1.1056"}]
+  end
+
+  test "POST /control/update_ready refuses a missing version and one that isn't a release's" do
+    pid = start_stub([])
+
+    conn = send_to(build_conn(:post, "/api/v1/control/update_ready"), :update_ready, pid, %{})
+    assert conn.status == 422
+    assert json_body(conn)["error"]["code"] == "invalid_update"
+
+    conn = send_to(build_conn(:post, "/api/v1/control/update_ready"), :update_ready, pid, %{"version" => "latest"})
+    assert conn.status == 422
+    assert json_body(conn)["error"]["message"] =~ "not latest"
+    assert calls(pid) == []
+  end
+
   test "POST /control/resume with kind person lifts only the Director's pause" do
     pid = start_stub([{:ok, %{paused: false}}])
     params = %{"kind" => "person"}

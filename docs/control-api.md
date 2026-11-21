@@ -983,6 +983,26 @@ answer carries an `error` (`snapshot_timeout` or `snapshot_unavailable`). An unk
 `view_not_found`; a malformed query, or `view` with inline parameters, is `400` `invalid_query`. It
 reads Symphony's store only, makes no Linear request and needs no token.
 
+# Update ready
+
+    POST /api/v1/control/update_ready  {"version": "0.0.1.1056"}
+
+The menu bar app sends it in Automatically when released once the release is downloaded and
+verified. Dispatch goes on: Symphony pauses on the update's `build` reason itself at the first moment
+no agent run is active, checked when a run ends before its slot is refilled, and the app stops
+Symphony and swaps once it sees that pause with no active run. After 15 minutes ready with runs
+always active, Symphony holds dispatch so a gap forms, once no active run began less than 3 minutes
+earlier, and lifts the hold after 10 minutes if runs are still active, to try again later (SPEC.md,
+Section 4.1.11). A newer version replaces the one ready and keeps the time waited. It answers 200
+with the update as `GET /api/v1/state`'s `update_window` gives it:
+
+```json
+{ "version": "0.0.1.1056", "phase": "waiting", "ready_at": "2026-11-21T14:17:02Z", "holding_since": null }
+```
+
+A missing version, or one that isn't a release's (`0.0.1.42`), is `422` `invalid_update`. Resume
+with `{"kind": "build", "version": "<version>"}` calls the update off.
+
 # Resume and Try Now
 
     POST /api/v1/control/resume

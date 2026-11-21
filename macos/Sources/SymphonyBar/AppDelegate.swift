@@ -83,6 +83,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private var checkedUpdate: PendingUpdate?
     /// Decides when an automatic update mode installs a release.
     private var autoUpdater = AutoUpdater()
+    /// Automatically when released: the verified release Symphony has ready, which waits with dispatch going on for
+    /// the moment Symphony picks (TP-1590).
+    private var arming = UpdateArming()
     /// Posts and withdraws the notification an update Automatically when released posts as it starts.
     private var startNotifier = UpdateStartNotifier()
     /// Fires at the set time, so the attempt doesn't wait for the next status poll.
@@ -637,12 +640,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     /// can be called off, as once it reached the swap.
     @discardableResult
     private func cancelUpdate() -> Bool {
-        guard updater.isUpdating,
+        let ready = arming.waitingVersion == nil ? nil : updater.parked?.release
+        guard updater.isUpdating || ready != nil,
             let cancel = UpdateCancel(
                 downloading: updater.preparing != nil,
                 drain: restarter.machine,
                 kind: updater.kind,
-                release: updater.release
+                release: updater.release,
+                ready: ready
             )
         else { return false }
         if let release = cancel.hold { autoUpdater.hold(release) }
@@ -650,13 +655,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         case .download:
             updater.cancelPreparing()
         case .drain:
+            // During the swap of an update Symphony had ready, the drain's Cancel lifts Symphony's pause.
+            _ = arming.cancel()
             restarter.handle(.cancel)
+        case .ready:
+            performArming(arming.cancel())
+            updater.dropParked()
+            if updater.preparing != nil { updater.cancelPreparing() }
         }
         return true
     }
 
     private var offersCancel: Bool {
-        updater.preparing != nil || restarter.machine.canCancel
+        updater.preparing != nil || restarter.machine.canCancel || arming.waitingVersion != nil
     }
 
     private func startNotice(_ effect: UpdateStartNotifier.Effect?) {
@@ -903,6 +914,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         guard SymphonyRunner.confirm(alert) else { return }
 
         controlError = nil
+        // Installing by hand takes over from an update Symphony has ready.
+        if arming.waitingVersion != nil {
+            performArming(arming.cancel())
+            updater.dropParked()
+        }
         // Installing by hand overrides Skip This Version and a Cancel Update's hold for this build.
         updater.skips.clear(build: release.build)
         autoUpdater.clearHold()
@@ -919,8 +935,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     }
 
     /// Pauses dispatch, waits for agent runs and stops Symphony, then hands over. A Symphony the app doesn't run
-    /// is left alone. `kind` decides how the drain waits: see `UpdateKind`.
-    private func drainForUpdate(_ update: PreparedUpdate, kind: UpdateKind) {
+    /// is left alone. `kind` decides how the drain waits: see `UpdateKind`. `armed` is the swap of an update Symphony
+    /// had ready: it waits behind the pause Symphony set for it, and waits again for its next moment when Symphony
+    /// lifts that pause (TP-1590).
+    private func drainForUpdate(_ update: PreparedUpdate, kind: UpdateKind, armed: Bool = false) {
         // While Symphony's state fails to load, its drain read says whether dispatch is paused (TP-1550).
         let start = UpdateDrainStart(
             status: machine.status,
@@ -933,9 +951,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         let alreadyPaused: Bool
         switch start {
         case .refused:
+            arming.drainEnded(waitsAgain: false)
             updater.fail(UpdateDrainStart.refusal)
             return
         case .nothingToDrain:
+            arming.drainEnded(waitsAgain: false)
             updater.log.append(UpdateDrainStart.nothingToDrainLog)
             handOff(update, symphonyStopped: false, resumeDispatch: false)
             return
@@ -943,14 +963,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             alreadyPaused = paused
         }
         if let line = start.startLog { updater.log.append(line) }
-        restarter.drainForUpdate(alreadyPaused: alreadyPaused, kind: kind, version: update.release.version) {
+        restarter.drainForUpdate(alreadyPaused: alreadyPaused, kind: kind, version: update.release.version, armed: armed) {
             [weak self] stopped, pausedByUpdate in
             guard let self else { return }
             guard stopped else {
+                if armed, restarter.machine.released {
+                    arming.drainEnded(waitsAgain: true)
+                    updater.repark()
+                    return
+                }
+                arming.drainEnded(waitsAgain: false)
                 updater.cancel()
                 if restarter.machine.postponed { autoUpdater.postponed() }
                 return
             }
+            arming.drainEnded(waitsAgain: false)
             updater.log.append(UpdateDrainStart.doneLog)
             handOff(update, symphonyStopped: true, resumeDispatch: pausedByUpdate)
         }
@@ -1036,7 +1063,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                 busy: busy,
                 drain: drainReadForFailedState
             ),
-            runsTimeout: TimeInterval(runner.restartTimeoutMinutes * 60)
+            runsTimeout: TimeInterval(runner.restartTimeoutMinutes * 60),
+            armedBuild: arming.build
         )
     }
 
@@ -1069,11 +1097,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             // No confirmation: a failure shows on the update line, not in an alert.
             guard !updater.isUpdating, !restarting else { return }
             controlError = nil
-            startNotifier.began(release, kind: kind)
-            updater.prepare(release, kind: kind) { [weak self] update in self?.drainForUpdate(update, kind: kind) }
+            // An on-release update announces itself at its swap, not while it downloads.
+            if kind != .onRelease { startNotifier.began(release, kind: kind) }
+            updater.prepare(release, kind: kind) { [weak self] update in
+                guard let self else { return }
+                // Automatically when released arms the verified release with Symphony instead of pausing dispatch.
+                guard kind == .onRelease else { return drainForUpdate(update, kind: kind) }
+                let effects = arming.verified(update)
+                if effects.isEmpty { updater.cancel() } else { updater.park(update) }
+                performArming(effects)
+            }
         case nil:
             break
         }
+    }
+
+    /// Lets the update Symphony has ready act on each status poll: arm it again with a Symphony that forgot it, or
+    /// swap once Symphony paused for it (TP-1590). A newer release downloading meanwhile doesn't hold the swap up.
+    private func armingTick() {
+        guard arming.target != nil else { return }
+        let snapshot: StateSnapshot?
+        switch machine.status {
+        case let .running(state, _), let .paused(state, _):
+            snapshot = state
+        case .stopped, .starting, .error:
+            snapshot = nil
+        }
+        let busy = restarting || updater.prepared != nil || runner.isStarting || runner.isStopping || startWhenStopped
+            || resumeWhenAnswering || health.isChecking
+        let activity = SymphonyActivity(status: machine.status, symphonyRunning: runner.isRunning, busy: busy, drain: drainReadForFailedState)
+        performArming(arming.polled(window: snapshot?.updateWindow, pauseVersion: snapshot?.updatePauseVersion, activity: activity))
+    }
+
+    private func performArming(_ effects: [UpdateArming.Effect]) {
+        let stateRoot = runner.stateRoot
+        for effect in effects {
+            switch effect {
+            case let .arm(version):
+                updater.log.append("telling Symphony v\(version) is ready")
+                Task {
+                    let result = await AppStores.current.sendControl(.updateReady(version: version), stateRoot: stateRoot)
+                    if case let .failed(message) = result { updater.log.append("Symphony didn't take v\(version) as ready: \(message)") }
+                    performArming(arming.armed(version, result: result))
+                    poller.pollNow()
+                }
+            case .swap:
+                guard let update = updater.unpark() else { break }
+                startNotifier.began(update.release, kind: .onRelease)
+                drainForUpdate(update, kind: .onRelease, armed: true)
+            case .drain:
+                guard let update = updater.unpark() else { break }
+                startNotifier.began(update.release, kind: .onRelease)
+                drainForUpdate(update, kind: .onRelease)
+            case let .disarm(version):
+                Task { _ = await AppStores.current.sendControl(.resumeUpdate(version: version), stateRoot: stateRoot) }
+            }
+        }
+        showUpdateItems()
     }
 
     /// Shows or hides the update items.
@@ -1091,7 +1171,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
         // Skip This Version still shows for a release Cancel Update holds (S2e).
         let held = offer?.offersSkip == true && release?.build == autoUpdater.heldBuild
-        let line = updater.menuLine ?? health.menuLine ?? (held ? UpdateMenu.cancelledLine : nil)
+        let line = updater.menuLine ?? health.menuLine ?? arming.waitingVersion.map(UpdateMenu.readyLine(version:))
+            ?? (held ? UpdateMenu.cancelledLine : nil)
             ?? (release == nil ? nil : updateBlocker)
             ?? release.flatMap { updater.skips.entry(forBuild: $0.build) }.flatMap(UpdateMenu.skippedLine)
             ?? release.flatMap { UpdateMenu.migrationLine($0, migrating: settingsMigrating($0)) }
@@ -1186,6 +1267,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             }
             readDrainIfStateFailed(poll)
             autoUpdateTick()
+            armingTick()
             // A release Symphony reports starts the update check now instead of at the timer.
             if case let .state(snapshot) = poll { updates.reported(snapshot.latestRelease) }
         case .started, .exited:
@@ -1219,7 +1301,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         setupItem.image = setup.badge.map { NSImage(systemSymbolName: SymphonyView.setup.symbol, accessibilityDescription: $0.status.word) } ?? nil
         symphonyWindow.dockBadge = StatusMenu.badgeCount(for: status)
         symphonyWindow.update(
-            updateHold: UpdateHold(release: updater.release, downloading: updater.preparing != nil, drain: restarter.machine)
+            updateHold: UpdateHold(
+                release: updater.release,
+                downloading: updater.preparing != nil,
+                drain: restarter.machine,
+                ready: arming.waitingVersion
+            )
         )
 
         statusTitleItem.title = notAnswering ? StatusMenu.statusTitle(.error(StatusMachine.notAnsweringTitle)) : StatusMenu.statusTitle(status)

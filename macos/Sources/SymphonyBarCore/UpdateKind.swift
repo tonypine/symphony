@@ -7,8 +7,10 @@ public enum UpdateKind: Equatable {
     /// Automatically when idle or at a set time: the drain gives up once dispatch is paused and agent runs are still
     /// active after `runsTimeout`; 0 gives up as soon as a run is active.
     case automatic(runsTimeout: TimeInterval)
-    /// Automatically when released: drains as Update to vX does, waiting for agent runs without giving up, and
-    /// offers Update Now Anyway after the restart timeout.
+    /// Automatically when released: the verified release is armed with Symphony (`UpdateArming`), which keeps
+    /// dispatching and pauses for it at the first moment no agent run is active. A Symphony that can't take it drains
+    /// as Update to vX does, waiting for agent runs without giving up, and offers Update Now Anyway after the restart
+    /// timeout.
     case onRelease
 
     /// How the drain waits for agent runs.
@@ -117,6 +119,9 @@ public struct UpdateCancel: Equatable {
         case download
         /// Stop waiting for agent runs, resuming the dispatch the update paused.
         case drain
+        /// Call off the update Symphony has ready, which waits with dispatch going on (TP-1590); a newer release's
+        /// download stops too.
+        case ready
     }
 
     public var step: Step
@@ -126,16 +131,21 @@ public struct UpdateCancel: Equatable {
 
     /// Nil when there is nothing to call off: no update is under way, or it reached the swap (Symphony is
     /// stopping). `downloading` is whether the release is still downloading or being verified, `drain` the update's
-    /// drain, and `release` the release it installs.
-    public init?(downloading: Bool, drain: RestartMachine, kind: UpdateKind, release: Release?) {
-        if downloading {
-            step = .download
-        } else if drain.purpose.isUpdate, drain.canCancel {
+    /// drain, and `release` the release it installs. `ready` is the release Symphony has ready, waiting for its moment
+    /// while dispatch goes on, which Cancel Update holds.
+    public init?(downloading: Bool, drain: RestartMachine, kind: UpdateKind, release: Release?, ready: Release? = nil) {
+        if drain.purpose.isUpdate, drain.canCancel {
             step = .drain
+            hold = kind == .onRelease ? (ready ?? release) : nil
+        } else if let ready {
+            step = .ready
+            hold = ready
+        } else if downloading {
+            step = .download
+            hold = kind == .onRelease ? release : nil
         } else {
             return nil
         }
-        hold = kind == .onRelease ? release : nil
     }
 }
 
@@ -143,6 +153,9 @@ public struct UpdateCancel: Equatable {
 /// which of the menu's actions it offers.
 public struct UpdateHold: Equatable {
     public enum Step: Equatable {
+        /// Symphony has the update ready and keeps dispatching until a moment with no agent run (TP-1590): Cancel
+        /// Update calls it off, and Pause and Resume Dispatch stay.
+        case ready
         /// The release downloads and is verified, symphony.yml is checked or dispatch is paused: nothing to press.
         case preparing
         /// Waiting for agent runs; `runs` is nil until a poll shows dispatch paused.
@@ -164,8 +177,15 @@ public struct UpdateHold: Equatable {
 
     /// Nil while no update is under way, or once the drain resumes the dispatch it paused because the update was
     /// called off. `release` is the release the update installs, `downloading` whether it still downloads or is
-    /// verified, and `drain` the update's drain.
-    public init?(release: Release?, downloading: Bool, drain: RestartMachine) {
+    /// verified, and `drain` the update's drain. `ready` is the version Symphony has ready while it waits, with
+    /// dispatch going on: it shows as ready, even while a newer release downloads in the background.
+    public init?(release: Release?, downloading: Bool, drain: RestartMachine, ready: String? = nil) {
+        if let ready {
+            version = ready
+            step = .ready
+            offersUpdateNow = false
+            return
+        }
         guard let release else { return nil }
         version = release.version
         offersUpdateNow = false
@@ -187,17 +207,23 @@ public struct UpdateHold: Equatable {
         }
     }
 
-    /// Cancel Update shows while the update waits for agent runs, as in the menu.
+    /// Cancel Update shows while the update waits for agent runs, or for its moment, as in the menu.
     public var canCancel: Bool {
-        if case .waiting = step { return true }
-        return false
+        switch step {
+        case .waiting, .ready: return true
+        case .preparing, .stopping: return false
+        }
     }
 
-    /// "Updating to v0.0.1.42".
-    public var title: String { "Updating to v\(version)" }
+    /// True while the update waits for its moment with dispatch going on: it holds nothing.
+    public var isReady: Bool { step == .ready }
+
+    /// "Updating to v0.0.1.42", or "v0.0.1.42 ready" while it waits for its moment.
+    public var title: String { isReady ? "v\(version) ready" : "Updating to v\(version)" }
 
     /// What the update waits for: "Waiting for 2 agent runs", nil while it waits for nothing.
     public var waitingLine: String? {
+        if isReady { return UpdateMenu.readyWaitLine }
         guard case let .waiting(runs) = step else { return nil }
         switch runs {
         case nil: return "Waiting for dispatch to pause"

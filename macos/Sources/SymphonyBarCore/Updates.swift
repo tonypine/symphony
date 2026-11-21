@@ -351,6 +351,14 @@ public enum UpdateMenu {
         return "Updating to v\(version): waiting for \(runs)…" + (minutes.map { " (\($0) min)" } ?? "")
     }
 
+    /// What an update Symphony has ready waits for while dispatch goes on (TP-1590).
+    public static let readyWaitLine = "Installs at the first moment no agent run is active"
+
+    /// Under the update items while Symphony has `version` ready and keeps dispatching (TP-1590).
+    public static func readyLine(version: String) -> String {
+        "v\(version) is ready: it installs at the first moment no agent run is active."
+    }
+
     /// Under a release whose on-release update Cancel Update called off (S2e).
     public static let cancelledLine = "You cancelled this update. It waits for you; a newer release installs by itself."
 
