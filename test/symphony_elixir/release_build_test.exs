@@ -285,6 +285,25 @@ defmodule SymphonyElixir.ReleaseBuildTest do
       assert_received {:gate_failed, %{attempt: 2}}
     end
 
+    test "a gate of several jobs: a failed one files the fix ticket naming its job and step (TP-1591)", %{github: github, opts: opts} do
+      Process.put(:release_gate_test, self())
+      opts = Keyword.put(opts, :release_gate, __MODULE__.Gate)
+
+      set(github, :started, [
+        %{"name" => "release gate / mac checks (scripts)", "conclusion" => "success", "steps" => [%{"name" => "Test the shared test helpers", "conclusion" => "success"}]},
+        %{"name" => "release gate / mac checks (app)", "conclusion" => "success", "steps" => [%{"name" => "Build app", "conclusion" => "success"}]},
+        %{"name" => "release gate / mac checks (tests)", "conclusion" => "failure", "steps" => [%{"name" => "Run tests", "conclusion" => "failure"}]},
+        %{"name" => "release", "conclusion" => "skipped", "steps" => []}
+      ])
+
+      runs(github, [run(1, "completed", "failure")])
+
+      assert {:ok, %{state: :failed, question: nil, fix: %{identifier: "TP-1520"}}} = check(opts)
+      assert_received {:gate_failed, %{failure: %{job: "release gate / mac checks (tests)", step: "Run tests"}}}
+      refute_received {:asked, _ticket, _request}
+      assert symphony_conditions() == []
+    end
+
     test "a build that passes tells the release gate once (TP-1528)", %{github: github, opts: opts} do
       Process.put(:release_gate_test, self())
       opts = Keyword.put(opts, :release_gate, __MODULE__.Gate)
