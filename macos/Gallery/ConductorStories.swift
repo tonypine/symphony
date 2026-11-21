@@ -19,6 +19,9 @@ let conductorSettingsStates: [(name: String, settings: ConductorSettings, error:
 /// Settings › Conductor holding `settings`, live: its toggles and its field change what it draws. The picture renderer
 /// draws a scroll-backed form empty, so a still draws the section's rows unscrolled, its switches as the form's.
 private struct ConductorSettingsStory: View {
+    /// The width the story draws the section at: the old Settings window's form width.
+    static let width: CGFloat = 840
+
     @State var settings: ConductorSettings
     let error: String?
     @Environment(\.offscreenSnapshot) private var offscreenSnapshot
@@ -30,18 +33,18 @@ private struct ConductorSettingsStory: View {
             }
             .toggleStyle(.switch)
             .padding(DesignTokens.Space.s5)
-            .frame(width: SettingsView.width, alignment: .leading)
+            .frame(width: Self.width, alignment: .leading)
         } else {
             Form {
                 ConductorSection(settings: $settings, error: error, editable: true)
             }
             .formStyle(.grouped)
-            .frame(width: SettingsView.width, height: error == nil ? 300 : 340)
+            .frame(width: Self.width, height: error == nil ? 300 : 340)
         }
     }
 }
 
-/// The section in a Settings window's form, as wide as Settings draws it.
+/// The section in a Settings form, at a fixed story width.
 @MainActor
 func conductorSettings(_ settings: ConductorSettings, error: String?) -> some View {
     ConductorSettingsStory(settings: settings, error: error)

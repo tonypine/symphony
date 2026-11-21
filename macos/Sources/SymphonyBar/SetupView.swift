@@ -142,12 +142,12 @@ extension SymphonyWindowModel {
     func open(_ destination: SetupDestination) {
         switch destination {
         case .settings:
-            onAction(.openSettings)
+            openSettings()
         case .symphonyYML:
             if let file = SymphonyConfigFile(settingsPath: configPath()) {
                 NSWorkspace.shared.open(URL(fileURLWithPath: file.path))
             } else {
-                onAction(.openSettings)
+                openSettings()
             }
         case let .linear(url):
             onOpenURL(url ?? URL(string: "https://linear.app")!)
@@ -158,6 +158,13 @@ extension SymphonyWindowModel {
         case .update:
             onAction(.checkForUpdates)
         }
+    }
+
+    /// Open Settings…, from a row or a fix sheet: the window's Settings page (TP-1575), with the sheet closed, as Setup
+    /// is left.
+    private func openSettings() {
+        cancelSetupSheet()
+        onAction(.openSettings)
     }
 
     /// Cancel or Close: nothing is sent.
