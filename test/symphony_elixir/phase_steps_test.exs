@@ -106,6 +106,33 @@ defmodule SymphonyElixir.PhaseStepsTest do
 
   defp events(type), do: @issue_id |> TicketEvents.query(types: [type], limit: 200) |> Enum.sort_by(& &1.seq)
 
+  defp run_record(run_id, attrs) do
+    Map.merge(
+      %{
+        run_id: run_id,
+        repo_key: @repo_key,
+        issue_id: @issue_id,
+        issue_identifier: "TP-77",
+        state: "In Progress",
+        status: "running",
+        session_id: "sess-gone"
+      },
+      attrs
+    )
+  end
+
+  # The run `run_id`, as Symphony's start ends a run still running when it stopped.
+  defp interrupted_run!(run_id, attrs \\ %{}) do
+    :ok = RunStore.put_run(run_record(run_id, attrs))
+    {:ok, _count} = RunStore.interrupt_running_runs(@repo_key, RunStore.restart_error())
+    :ok
+  end
+
+  defp record_step!(context, type, payload) do
+    {:ok, _event} = TicketEvents.record(@repo_key, @issue_id, type, payload, run_id: context.run_id)
+    :ok
+  end
+
   describe "one machine step at a time" do
     test "runs a walk's own command in this process, records the step and leaves the next step to the caller", ctx do
       [step] = steps([%{"id" => "launch", "mode" => "machine", "command" => "symphony:own_launch", "timeout_ms" => 5_000}])
@@ -979,6 +1006,92 @@ defmodule SymphonyElixir.PhaseStepsTest do
       assert PhaseSteps.resume_point(Enum.reject(steps, &(&1.id == "code")), context) == nil
       :ok = PhaseSteps.record_turn_started(step(steps, "code"), context)
       assert PhaseSteps.resume_point(steps, context) == nil
+    end
+
+    # c7 (TP-1590): a run Symphony's restart interrupted goes on from where it stopped, and no
+    # step that ended runs again.
+    test "after a restart mid-run, the next run goes on at the step that run stopped at", ctx do
+      steps = steps()
+      gone = context(ctx, %{}, %{run_id: "run-gone"})
+      assert PhaseSteps.restart_point(steps, gone) == nil
+      {:ok, _note} = TicketEvents.record(@repo_key, @issue_id, "note", %{text: "Not a step."})
+      assert PhaseSteps.restart_point(steps, gone) == nil
+
+      # Stopped mid-turn: the same step, in the interrupted turn's session.
+      :ok = PhaseSteps.record_turn_started(step(steps, "code"), gone)
+      assert PhaseSteps.restart_point(steps, gone) == nil, "the run is not known to be interrupted yet"
+      interrupted_run!("run-gone")
+      assert %{step: %Step{id: "code"}, carry: nil, session_id: "sess-gone", mid_step: true} = PhaseSteps.restart_point(steps, gone)
+
+      # Between steps (the code passed, the run waited for the pause to lift): the next step, no session.
+      :ok = PhaseSteps.record_turn_passed(step(steps, "code"), gone, 5)
+
+      assert %{step: %Step{id: "build"}, carry: nil, session_id: nil, mid_step: false} =
+               PhaseSteps.restart_point(steps, gone)
+
+      # A machine step stopped mid-run runs again.
+      record_step!(gone, "step.started", %{step_id: "tests", title: "Tests", mode: "machine", command: "make test"})
+      assert %{step: %Step{id: "tests"}, session_id: nil, mid_step: true} = PhaseSteps.restart_point(steps, gone)
+
+      record_step!(gone, "step.completed", %{step_id: "tests", title: "Tests", mode: "machine", outcome: "skipped", reason: "nothing changed"})
+      assert %{step: %Step{id: "handoff"}} = PhaseSteps.restart_point(steps, gone)
+
+      # Past the last step there is nothing to go on with, and a paused step is the answer's to resume.
+      :ok = PhaseSteps.record_turn_passed(step(steps, "handoff"), gone, 5)
+      assert PhaseSteps.restart_point(steps, gone) == nil
+      :ok = PhaseSteps.record_turn_completed(step(steps, "handoff"), gone, %{outcome: "paused", question_id: "q-1"}, 5)
+      assert PhaseSteps.restart_point(steps, gone) == nil
+    end
+
+    test "after a restart, a failed machine step's run goes on at the step it fails to, with its kept output", ctx do
+      steps = steps()
+      gone = context(ctx, %{"make build" => [{:ok, {"error: boom\n", 1}}]}, %{run_id: "run-gone"})
+      interrupted_run!("run-gone")
+
+      assert {:turn, %Step{id: "code"}, _carry} = PhaseSteps.run_machine_steps(steps, step(steps, "build"), gone)
+
+      assert %{step: %Step{id: "code"}, carry: %{step: %Step{id: "build"}, output: output}, mid_step: false} =
+               PhaseSteps.restart_point(steps, gone)
+
+      assert output =~ "error: boom"
+
+      # An output that is gone carries nothing, and a failed agent step goes on at the step it returns to.
+      record_step!(gone, "step.completed", %{step_id: "tests", title: "Tests", mode: "machine", outcome: "failed", returns_to: "code"})
+      assert %{step: %Step{id: "code"}, carry: %{step: %Step{id: "tests"}, output: ""}} = PhaseSteps.restart_point(steps, gone)
+      :ok = PhaseSteps.record_turn_completed(step(steps, "handoff"), gone, %{outcome: "failed", returns_to: "code"}, 5)
+      assert %{step: %Step{id: "code"}, carry: nil, session_id: nil} = PhaseSteps.restart_point(steps, gone)
+      :ok = PhaseSteps.record_turn_completed(step(steps, "handoff"), gone, %{outcome: "failed", returns_to: "gone"}, 5)
+      assert PhaseSteps.restart_point(steps, gone) == nil, "a step the list lacks"
+    end
+
+    test "after a restart, nothing is resumed from a run it didn't interrupt, another phase or before a move", ctx do
+      steps = steps()
+      gone = context(ctx, %{}, %{run_id: "run-gone"})
+      :ok = PhaseSteps.record_turn_started(step(steps, "code"), gone)
+
+      # A run that failed on its own starts over.
+      :ok = RunStore.put_run(run_record("run-gone", %{status: "failure", error: "agent exited"}))
+      assert PhaseSteps.restart_point(steps, gone) == nil
+
+      # One the restart interrupted in another phase.
+      interrupted_run!("run-gone", %{state: "Rework"})
+      assert PhaseSteps.restart_point(steps, gone) == nil
+
+      interrupted_run!("run-gone")
+      assert %{step: %Step{id: "code"}} = PhaseSteps.restart_point(steps, gone)
+      # A list without the step goes on nowhere.
+      assert PhaseSteps.restart_point(Enum.reject(steps, &(&1.id == "code")), gone) == nil
+
+      # A move of the ticket since the step: the new phase's run starts from its first step.
+      {:ok, _moved} = TicketEvents.record(@repo_key, @issue_id, "phase.entered", %{to: "In Progress", from: "Rework"})
+      assert PhaseSteps.restart_point(steps, gone) == nil
+    end
+
+    test "a restarted turn's prompt says the run goes on after Symphony's restart" do
+      [code | _rest] = steps()
+      assert PhaseSteps.prompt_section(code, nil, %{restarted: :mid_step}) =~ "while this step's turn was under way"
+      assert PhaseSteps.prompt_section(code, nil, %{restarted: :between_steps}) =~ "between this run's steps"
+      refute PhaseSteps.prompt_section(code, nil) =~ "Symphony restarted"
     end
 
     test "a machine step's answer goes on past it, runs it again, or hands the person's words on" do

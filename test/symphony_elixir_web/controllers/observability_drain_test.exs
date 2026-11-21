@@ -42,13 +42,13 @@ defmodule SymphonyElixirWeb.ObservabilityDrainTest do
   test "GET /api/v1/drain counts the agent runs, those between turns and whether dispatch is paused" do
     serve_snapshot(%{running: [run(nil), run("pause"), run("answer")], retrying: [], pause: %{paused: true, reason: "build"}})
 
-    assert json_response(get(build_conn(), "/api/v1/drain"), 200) == %{"running" => 3, "between_turns" => 2, "paused" => true}
+    assert json_response(get(build_conn(), "/api/v1/drain"), 200) == %{"running" => 3, "between_turns" => 2, "conductor_runs" => 0, "paused" => true}
     assert %{"error" => %{"code" => "method_not_allowed"}} = json_response(post(build_conn(), "/api/v1/drain", %{}), 405)
   end
 
   test "GET /api/v1/drain says dispatch isn't paused when the snapshot has no pause" do
     serve_snapshot(%{running: [], retrying: []})
-    assert json_response(get(build_conn(), "/api/v1/drain"), 200) == %{"running" => 0, "between_turns" => 0, "paused" => false}
+    assert json_response(get(build_conn(), "/api/v1/drain"), 200) == %{"running" => 0, "between_turns" => 0, "conductor_runs" => 0, "paused" => false}
   end
 
   test "GET /api/v1/drain answers 503 when the orchestrator doesn't answer in time" do

@@ -49,8 +49,11 @@ public struct DispatchControl: Equatable {
     public static let cancelUpdateTitle = UpdateMenu.cancelUpdateTitle
     public static let updateNowTitle = UpdateMenu.updateNowTitle
 
-    public var canPause: Bool { update == nil && (mode == .on || mode == .holding) }
-    public var canResume: Bool { update == nil && mode == .paused }
+    /// An update Symphony has ready holds nothing (TP-1590), so Pause and Resume Dispatch stay beside it.
+    public var canPause: Bool { offersPause && (mode == .on || mode == .holding) }
+    /// Pause Dispatch shows, enabled when `canPause`, unless an update under way holds dispatch, as in the menu.
+    public var offersPause: Bool { update?.isReady != false }
+    public var canResume: Bool { update?.isReady != false && mode == .paused }
     /// Try Now sits beside the limits it checks; a stopped Symphony has none.
     public var canTryNow: Bool { mode != .stopped && tryNow != nil }
     public var canForce: Bool { mode != .stopped }
@@ -126,7 +129,7 @@ public struct DispatchControl: Equatable {
             let reason = pause.reason?.trimmingWhitespace() ?? ""
             // The update's version is its `build` reason's field; a Symphony that predates reasons names none.
             let pausedBy = state?.snapshot.updatePauseVersion
-            updatingTo = update?.version ?? pausedBy
+            updatingTo = (update?.isReady == true ? nil : update?.version) ?? pausedBy
             if let updatingTo {
                 word = "Paused · Updating to v\(updatingTo)"
             } else {
@@ -154,10 +157,11 @@ public struct DispatchControl: Equatable {
             word = "Dispatch on"
             pauseFacts = []
         }
-        // The release downloads, or the update pauses dispatch: it isn't paused yet.
+        // The release downloads, or the update pauses dispatch: it isn't paused yet. One Symphony has ready
+        // pauses nothing: dispatch reads as on, and the update names its version (TP-1590).
         if mode != .paused, let update {
-            updatingTo = update.version
-            word = update.title
+            updatingTo = update.isReady ? nil : update.version
+            word = update.isReady ? "\(word) · \(update.title)" : update.title
         }
     }
 

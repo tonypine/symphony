@@ -415,6 +415,13 @@ defmodule SymphonyElixir.Pauses do
   @spec paused?(subject()) :: boolean()
   def paused?(subject), do: reasons(subject) != []
 
+  @doc """
+  Whether `subject` is paused for a reason other than an app update's (`:build`). Conductor turns
+  are held only by such a reason: an update's pause holds ticket runs alone (TP-1590).
+  """
+  @spec paused_beyond_update?(subject()) :: boolean()
+  def paused_beyond_update?(subject), do: subject |> reasons() |> Enum.any?(&(&1.kind != :build))
+
   @doc "Why `subject` is paused: one line in plain words per reason, in the order they were set."
   @spec why(subject()) :: [String.t()]
   def why(subject), do: subject |> reasons() |> Enum.map(& &1.text)

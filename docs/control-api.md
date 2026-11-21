@@ -983,6 +983,41 @@ answer carries an `error` (`snapshot_timeout` or `snapshot_unavailable`). An unk
 `view_not_found`; a malformed query, or `view` with inline parameters, is `400` `invalid_query`. It
 reads Symphony's store only, makes no Linear request and needs no token.
 
+# Update ready
+
+    POST /api/v1/control/update_ready  {"version": "0.0.1.1056"}
+
+The menu bar app sends it in Automatically when released once the release is downloaded and
+verified. Dispatch goes on: Symphony pauses on the update's `build` reason itself at the first moment
+no agent run is active, checked when a run ends before its slot is refilled, and the app stops
+Symphony and swaps once it sees that pause with no active run. After 15 minutes ready with runs
+always active, Symphony holds dispatch so a gap forms, once no active run began less than 3 minutes
+earlier, and lifts the hold after 10 minutes if runs are still active, to try again later (SPEC.md,
+Section 4.1.11). A newer version replaces the one ready and keeps the time waited. It answers 200
+with the update as `GET /api/v1/state`'s `update_window` gives it:
+
+```json
+{ "version": "0.0.1.1056", "phase": "waiting", "ready_at": "2026-11-21T14:17:02Z", "holding_since": null }
+```
+
+A missing version, or one that isn't a release's (`0.0.1.42`), is `422` `invalid_update`. Resume
+with `{"kind": "build", "version": "<version>"}` calls the update off.
+
+Conductor turns are not held by an update's pause: they keep starting and answering while the
+update waits, holds or pauses (SPEC.md, Section 4.1.11).
+
+# Handover
+
+    POST /api/v1/control/handover
+
+The menu bar app asks it once dispatch is paused and no agent run is active, before it stops
+Symphony for an update or a restart. With no Conductor turn running it answers `200`
+`{"handover": true, "conductor_runs": 0}`, and from then on no Conductor turn starts until Symphony is
+up again (one due waits and runs after the restart). While turns run it answers `409`
+`conductor_running` with `{"handover": false, "conductor_runs": 1}`, and the app asks again at its
+next poll. Two minutes after the first ask that finds one, no new turn starts, so a gap forms.
+Resume opens the gate again.
+
 # Resume and Try Now
 
     POST /api/v1/control/resume

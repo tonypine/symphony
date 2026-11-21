@@ -2865,16 +2865,19 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
 
     orchestrator_name = Module.concat(__MODULE__, :OperatorPauseOrchestrator)
-    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
 
-    on_exit(fn ->
-      if Process.alive?(pid) do
-        stop_process(pid)
-      end
-    end)
+    # The pause is logged once, by the first cycle; the boot runs one at start, so the orchestrator
+    # starts inside the capture.
+    {pid, warning} =
+      with_log(fn ->
+        {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
 
-    warning =
-      capture_log(fn ->
+        on_exit(fn ->
+          if Process.alive?(pid) do
+            stop_process(pid)
+          end
+        end)
+
         send(pid, :run_poll_cycle)
 
         assert %{running: [], pause: %{paused: true, reason: "deploy window", paused_at: %DateTime{}}} =
@@ -2882,6 +2885,8 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
                    snapshot.running == [] and snapshot.pause.paused == true and
                      snapshot.polling.checking? == false
                  end)
+
+        pid
       end)
 
     assert warning =~ ~s(Dispatch pause active kind=person reason="deploy window")

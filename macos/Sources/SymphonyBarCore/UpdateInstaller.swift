@@ -195,19 +195,32 @@ public final class UpdateInstaller {
 
     public var stagingDirectory: URL { cacheDirectory.appendingPathComponent(Self.stagingFolder, isDirectory: true) }
 
-    /// Removes downloaded releases.
-    public func removeStaging() {
-        try? fileManager.removeItem(at: stagingDirectory)
+    /// Removes downloaded releases, all but the one of version `keeping`: the release Symphony has ready while a newer
+    /// one downloads (TP-1590).
+    public func removeStaging(keeping version: String? = nil) {
+        guard let version else {
+            try? fileManager.removeItem(at: stagingDirectory)
+            return
+        }
+        let folders = (try? fileManager.contentsOfDirectory(atPath: stagingDirectory.path)) ?? []
+        for folder in folders where folder != version {
+            try? fileManager.removeItem(at: stagingDirectory.appendingPathComponent(folder, isDirectory: true))
+        }
     }
 
     /// Downloads `release` into a fresh staging folder and verifies it, then asks the verified build through
-    /// `checkSettings`. Throws an `UpdateError` on any mismatch, and nothing was touched then.
-    public func prepare(_ release: Release, checkSettings: UpdateSettingsCheck) async throws -> PreparedUpdate {
+    /// `checkSettings`. Throws an `UpdateError` on any mismatch, and nothing was touched then. The download of version
+    /// `keeping`, the release Symphony has ready, stays.
+    public func prepare(
+        _ release: Release,
+        keeping: String? = nil,
+        checkSettings: UpdateSettingsCheck
+    ) async throws -> PreparedUpdate {
         guard let assets = release.assets else { throw UpdateError.noAssets }
         guard let signatureURL = assets.signature else { throw UpdateError.unsigned }
         guard let publicKey else { throw UpdateError.noPublicKey }
 
-        removeStaging()
+        removeStaging(keeping: keeping)
         let folder = stagingDirectory.appendingPathComponent(release.version, isDirectory: true)
         do {
             try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)

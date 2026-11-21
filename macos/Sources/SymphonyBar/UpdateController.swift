@@ -16,6 +16,9 @@ final class UpdateController {
     private(set) var preparing: Release?
     /// The verified update, while Symphony drains before the swap.
     private(set) var prepared: PreparedUpdate?
+    /// The verified update Symphony has ready, waiting for its moment while dispatch goes on (TP-1590); its download
+    /// stays while a newer release downloads.
+    private(set) var parked: PreparedUpdate?
     /// Why the last update failed, shown in the menu until the next one.
     private(set) var error: String?
     /// Who started the update under way: an automatic one's failures show in the menu only.
@@ -112,9 +115,9 @@ final class UpdateController {
         download = Task {
             defer { download = nil }
             do {
-                let update = try await installer.prepare(release, checkSettings: checkSettings)
+                let update = try await installer.prepare(release, keeping: keptVersion, checkSettings: checkSettings)
                 guard preparing != nil else {
-                    installer.removeStaging()
+                    installer.removeStaging(keeping: keptVersion)
                     return
                 }
                 preparing = nil
@@ -124,7 +127,7 @@ final class UpdateController {
                 ready(update)
             } catch {
                 guard preparing != nil else {
-                    installer.removeStaging()
+                    installer.removeStaging(keeping: keptVersion)
                     return
                 }
                 preparing = nil
@@ -149,12 +152,59 @@ final class UpdateController {
         onChange?()
     }
 
+    /// The verified on-release `update` waits, armed with Symphony, for its moment: nothing is under way meanwhile,
+    /// so a newer release can download beside it. A parked one it replaces goes.
+    func park(_ update: PreparedUpdate) {
+        guard prepared == update else { return }
+        prepared = nil
+        parked = update
+        kind = .manual
+        installer.removeStaging(keeping: update.release.version)
+        log.append("v\(update.release.version) is ready; Symphony keeps dispatching until no agent run is active")
+        onChange?()
+    }
+
+    /// The parked update's moment came: it is the update under way, and a newer release's download stops.
+    func unpark() -> PreparedUpdate? {
+        guard let update = parked, prepared == nil else { return nil }
+        if preparing != nil { cancelPreparing() }
+        parked = nil
+        prepared = update
+        kind = .onRelease
+        onChange?()
+        return update
+    }
+
+    /// Cancel Update called off the parked update, or it was dropped; its download goes.
+    func dropParked() {
+        guard let update = parked else { return }
+        log.append("the update to v\(update.release.version) was called off before its moment")
+        parked = nil
+        installer.removeStaging(keeping: prepared?.release.version)
+        onChange?()
+    }
+
+    /// The download to keep while another downloads or is removed: the parked update's, or the one under way once
+    /// a parked update's moment came, so a stopped download never removes it.
+    private var keptVersion: String? { (parked ?? prepared)?.release.version }
+
     /// The drain didn't stop Symphony, so the update is called off; the restart machine said why.
     func cancel() {
         log.append("the update to v\(prepared?.release.version ?? "?") was called off: Symphony wasn't stopped")
         prepared = nil
         kind = .manual
-        installer.removeStaging()
+        installer.removeStaging(keeping: keptVersion)
+        onChange?()
+    }
+
+    /// Symphony lifted the pause the update's swap waited behind: the update is parked again, to wait for its next
+    /// moment.
+    func repark() {
+        guard let update = prepared else { return }
+        log.append("Symphony lifted its hold for v\(update.release.version); the update waits for its next moment")
+        prepared = nil
+        parked = update
+        kind = .manual
         onChange?()
     }
 
@@ -163,7 +213,7 @@ final class UpdateController {
     func fail(_ reason: String, version: String? = nil, retries: Bool = true) {
         log.append("the update to v\(version ?? release?.version ?? "?") failed: \(reason)")
         prepared = nil
-        installer.removeStaging()
+        installer.removeStaging(keeping: keptVersion)
         error = kind.failureLine(reason, retries: retries)
         onChange?()
         guard !kind.isAutomatic else {

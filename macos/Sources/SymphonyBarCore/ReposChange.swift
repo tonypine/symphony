@@ -150,6 +150,10 @@ public struct ReposRestartChip: Equatable {
             title = pending
         case let .waitingForRuns(running: count?):
             title = "\(pending): waiting on \(count) \(count == 1 ? "run" : "runs")"
+        case let .handingOver(conductorRuns: count) where count > 0:
+            title = "\(pending): waiting on \(count) Conductor \(count == 1 ? "run" : "runs")"
+        case .handingOver:
+            title = update ? "Updating Symphony…" : "Restarting Symphony…"
         case .stopping, .starting, .waitingForAnswer, .resuming:
             title = update ? "Updating Symphony…" : "Restarting Symphony…"
         }
