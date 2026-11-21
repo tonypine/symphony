@@ -589,6 +589,132 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     end
   end
 
+  describe "a Rework that answers every finding without a code change (TP-1579)" do
+    # A finding QA recorded, and `resolved` when the rework recorded its fix (`:confirmed` once a
+    # QA pass confirmed it too).
+    defp found!(state) do
+      {:ok, finding} =
+        SymphonyElixir.TicketEvents.record("default", "issue-progress", "finding.recorded", %{class: "proof", severity: "major", description: "No test named c2."}, actor: {:agent, "run-qa", "qa"})
+
+      if state in [:resolved, :confirmed] do
+        {:ok, resolution} =
+          SymphonyElixir.TicketEvents.record("default", "issue-progress", "finding.resolved", %{finding_id: finding.id, how: "Recorded the proof again"},
+            actor: {:agent, "run-rw", "rework"},
+            head_sha: "sha-rework"
+          )
+
+        if state == :confirmed do
+          {:ok, _confirmed} =
+            SymphonyElixir.TicketEvents.record("default", "issue-progress", "finding.confirmed", %{finding_id: finding.id, resolution: resolution.id, head: "sha-rework"})
+        end
+      end
+
+      finding
+    end
+
+    defp in_code_review?, do: Enum.any?(ticket_signals("issue-progress"), &match?(%{details: %{to: "Code Review"}}, &1))
+
+    test "goes back to QA on the same head, without Code Review, a park or a question" do
+      found!(:resolved)
+      found!(:confirmed)
+
+      assert :ok = run_issue!("Rework", heads: ["sha-rework"], max_turns: 5)
+
+      assert turns() == 1
+      assert_received {:pr_head_fetched, @pr_url}
+      assert_received {:memory_tracker_state_update, "issue-progress", "QA"}
+      refute_received {:memory_tracker_state_update, _issue_id, "Code Review"}
+      assert_signal("rework answered", %{to: "QA", head: "sha-rework", move: true})
+      assert [%{payload: %{to: "QA", signal: "rework answered"}, head_sha: "sha-rework"} | _] = SymphonyElixir.TicketEvents.query("issue-progress", types: ["phase.entered"])
+      refute in_code_review?()
+      refute idle_parked?()
+      assert Questions.open({:ticket, "default", "issue-progress"}) == []
+      assert RunStore.get_rework_base("default", "issue-progress") == nil
+    end
+
+    test "goes back to QA even when the run also pushed the unchanged head" do
+      found!(:resolved)
+      push_unchanged_head("sha-rework")
+
+      assert :ok = run_issue!("Rework", heads: ["sha-rework"], handoff: "sha-rework")
+
+      assert turns() == 1
+      assert_received {:memory_tracker_state_update, "issue-progress", "QA"}
+      refute_received {:memory_tracker_state_update, _issue_id, "Code Review"}
+    end
+
+    # Today's end of a fresh Rework run that changed nothing: two empty turns, and no move.
+    defp assert_ends_as_today(runner_opts \\ []) do
+      run_issue!("Rework", heads: ["sha-rework"], states: ["Rework", "Todo"], runner_opts: runner_opts)
+
+      assert turns() == 2
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+    end
+
+    test "with a finding still open, ends as it does today" do
+      found!(:resolved)
+      found!(:open)
+
+      assert_ends_as_today()
+    end
+
+    test "with no finding at all, ends as it does today" do
+      assert_ends_as_today()
+    end
+
+    test "with uncommitted edits in the workspace, ends as it does today" do
+      found!(:resolved)
+
+      assert_ends_as_today(workspace_tree_reader: fn _workspace, nil -> "uncommitted-digest" end)
+    end
+
+    test "with the PR on another head, ends as it does today" do
+      found!(:resolved)
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-other", checks: []}})
+
+      assert_ends_as_today()
+    end
+
+    test "a run that pushed its unchanged head with a finding open still goes to Code Review" do
+      found!(:open)
+      push_unchanged_head("sha-rework")
+
+      assert :ok = run_issue!("Rework", heads: ["sha-rework"], handoff: "sha-rework")
+
+      assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+      refute_received {:memory_tracker_state_update, _issue_id, "QA"}
+    end
+
+    test "a pending review comment keeps today's rules" do
+      found!(:resolved)
+      put_pending_review_comment()
+
+      run_issue!("Rework", heads: ["sha-rework"], states: ["Rework", "Done"])
+
+      refute_received {:memory_tracker_state_update, _issue_id, "QA"}
+    end
+
+    test "a rework that moved the head with a code change still goes to Code Review" do
+      found!(:resolved)
+
+      run_issue!("Rework", heads: ["sha-old", "sha-rework"], handoff: "sha-rework")
+
+      assert turns() == 1
+      assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+      refute_received {:memory_tracker_state_update, _issue_id, "QA"}
+      assert_signal("handoff", %{to: "Code Review", reason: "after rework", head: "sha-rework", move: true})
+    end
+
+    test "a failed move to QA fails the run" do
+      found!(:resolved)
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, {:error, :linear_down})
+
+      assert_raise RuntimeError, ~r/rework_handoff_failed/, fn ->
+        run_issue!("Rework", heads: ["sha-rework"])
+      end
+    end
+  end
+
   test "a Rework run with unresolved review comments on the current head keeps going" do
     assert :ok =
              RunStore.put_pr_review(%{

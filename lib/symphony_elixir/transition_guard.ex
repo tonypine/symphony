@@ -77,6 +77,10 @@ defmodule SymphonyElixir.TransitionGuard do
   # API's `restart` move), which is why `resolve_request/2` refuses an agent asking for
   # `In Progress` from a post-implementation phase: that request is a restart without the reset.
   #
+  # `:rework_answered` sends a `Rework` that answered every finding without a code change back to
+  # the QA state on the same head (`SymphonyElixir.AgentRunner`): with no new commit there is nothing
+  # for Code Review to read.
+  #
   # The `:code_review_*` rows are the reviewer run's verdicts. They bind to the head the reviewer
   # judged (`SymphonyElixir.CodeReview` records the verdict against it): approve carries the ticket
   # on to the QA state, or straight to `Merging` when the QA state's skip rule applies (the
@@ -169,6 +173,7 @@ defmodule SymphonyElixir.TransitionGuard do
     %{signal: :breakdown_cancel, from: ["Backlog"], to: :requested},
     %{signal: :restart, from: :any, to: "In Progress"},
     %{signal: :handoff, from: ["In Progress", "Rework"], to: :code_review_state},
+    %{signal: :rework_answered, from: ["Rework"], to: :qa_state},
     %{signal: :code_review_approve, from: ["Code Review"], to: :qa_state},
     %{signal: :code_review_approve_skip, from: ["Code Review"], to: "Merging", confirm: true},
     %{signal: :code_review_rework, from: ["Code Review"], to: "Rework"},
