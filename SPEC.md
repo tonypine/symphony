@@ -3078,6 +3078,14 @@ Important nuance:
   no-op base update once it has lagged for a minute, records each step as a `note` event on the
   ticket ("waiting for GitHub to pick up <sha>", "nudged it", "picked up"), and then judges the new
   head as above.
+  Nor does it apply to a run that walks a step list with steps still after the current one while
+  the workspace `HEAD` is a commit no remote-tracking branch has: the work is committed and only
+  the list's handoff, which pushes it, is left. The run MUST log why it is not parked and go on as
+  the current step's outcome says, so a run started again on an earlier run's unpushed commit,
+  whose code step has nothing to add, reaches its handoff instead of being parked again. The step's
+  own retry and `execution.limits.max_turns` still bound it. A run on its last step, with no step
+  list, with a pushed `HEAD` or on an SSH worker (whose unpushed commits are not read) is parked as
+  above.
 - Before the park, the workspace's uncommitted changes MUST be committed on its branch
   (`git add -A`, a `WIP: parked by Symphony` commit that skips the repo's hooks), then commits in
   the workspace that no remote has MUST be pushed to the workspace's branch on `origin` (only when every push URL of the workspace's `origin` is the source repo's),

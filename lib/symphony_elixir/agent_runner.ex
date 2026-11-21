@@ -1064,7 +1064,7 @@ defmodule SymphonyElixir.AgentRunner do
         {:error, {:ci_pending, ci_wait}}
 
       idle_turn_limit_reached?(issue, run_context) ->
-        end_idle_run(issue, run_context)
+        end_idle_turns(issue, run_context)
 
       true ->
         :continue
@@ -2295,6 +2295,29 @@ defmodule SymphonyElixir.AgentRunner do
   # human's merge approval.
   defp idle_turn_limit_reached?(%Issue{} = issue, %{progress: progress}) do
     progress.empty_turns >= @max_empty_turns and !merging_state?(issue.state)
+  end
+
+  # A run that walks a step list with steps still after the current one, on a workspace HEAD no
+  # remote has, is not idle: its work is committed and only the list's handoff, which pushes it, is
+  # left (TP-1568). Its turns change nothing (a run started again on an earlier run's commit has
+  # nothing to add), so the step's outcome walks it on instead of a park asking the person; the
+  # step's own retry and `agent.max_turns` still bound it. On its last step, with a pushed head or
+  # with no list, the run idles out as before, and the park pushes what is left.
+  defp end_idle_turns(%Issue{} = issue, %{walk: %{steps: steps, step: step}} = run_context) do
+    with {:ok, next_step} <- PhaseSteps.next(steps, step, :passed),
+         head when is_binary(head) <- read_unpushed_head(run_context) do
+      Logger.info("Not parking #{issue_context(issue)}; its head #{head} was never pushed and its step list goes on from #{step.id} to #{next_step.id}")
+      :continue
+    else
+      _last_step_or_pushed -> end_idle_run(issue, run_context)
+    end
+  end
+
+  defp end_idle_turns(%Issue{} = issue, run_context), do: end_idle_run(issue, run_context)
+
+  defp read_unpushed_head(%{workspace: workspace, worker_host: worker_host, opts: opts}) do
+    reader = Keyword.get(opts, :workspace_unpushed_head_reader, &WorkspaceHead.unpushed_head/2)
+    reader.(workspace, worker_host)
   end
 
   # A Rework run that pushed a new head to its PR, with CI on it running or green, waits on that CI,

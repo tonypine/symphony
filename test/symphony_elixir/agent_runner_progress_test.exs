@@ -633,6 +633,141 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
              "issue-progress" |> SymphonyElixir.TicketEvents.query(types: ["rule.action"]) |> Enum.map(& &1.payload) |> Enum.filter(&(&1.rule == "Idle park"))
   end
 
+  describe "a run whose workspace head was never pushed, with steps left to do (TP-1568)" do
+    # A list whose code step a failing check sends back once, so the code step takes two turns that
+    # change nothing, then the handoff step. `unpushed` is what the workspace's unpushed-head read
+    # gives; `states` the ticket after each turn, as `run_issue!/2` takes it.
+    defp run_unpushed!(unpushed, opts \\ []) do
+      checks = :counters.new(1, [])
+
+      runner = fn command, _env, _timeout_ms ->
+        cond do
+          command =~ "git merge-base" ->
+            {:ok, {"M\tlib/app.ex\n", 0}}
+
+          command == "make check" ->
+            :counters.add(checks, 1, 1)
+            if :counters.get(checks, 1) == 1, do: {:ok, {"1 failure", 1}}, else: {:ok, {"ok", 0}}
+
+          true ->
+            {:ok, {"", 0}}
+        end
+      end
+
+      steps = """
+      phases:
+        implementation:
+          steps:
+            - {id: code, title: Write the code, mode: delegated}
+            - {id: checks, title: Run the checks, mode: machine, command: make check, on_fail: code}
+            - {id: handoff, title: Hand off, mode: delegated}
+      """
+
+      runner_opts = [
+        step_command_runner: runner,
+        run_id: "run-progress",
+        workspace_unpushed_head_reader: fn _workspace, nil -> unpushed end,
+        workspace_pusher: Keyword.get(opts, :pusher, fn _workspace, nil, _repo -> :nothing end)
+      ]
+
+      capture_log(fn ->
+        run_issue!("In Progress",
+          heads: ["sha-unpushed"],
+          states: Keyword.get(opts, :states, ["In Progress"]),
+          pr_url: nil,
+          max_turns: 5,
+          repos: designed_repos(),
+          symphony_steps: steps,
+          runner_opts: runner_opts
+        )
+      end)
+    end
+
+    defp passed_steps do
+      "issue-progress"
+      |> SymphonyElixir.TicketEvents.query(types: ["step.completed"])
+      |> Enum.map(& &1.payload)
+      |> Enum.filter(&(&1[:outcome] == "passed" and &1[:step_id] in ["code", "handoff"]))
+      |> Enum.map(& &1[:step_id])
+    end
+
+    defp idle_parked? do
+      case Pauses.get({:ticket, "default", "issue-progress"}) do
+        {:ok, %{reasons: reasons}} -> Enum.any?(reasons, &match?(%{waits_on: %{condition: "idle_park"}}, &1))
+        _no_pause -> false
+      end
+    end
+
+    test "is not parked after two turns that change nothing, and goes on to its next step" do
+      # The handoff turn pushes and the ticket leaves In Progress.
+      log = run_unpushed!("sha-unpushed", states: ["In Progress", "In Progress", "Code Review"])
+
+      assert log =~ "Not parking issue_id=issue-progress issue_identifier=TP-337; its head sha-unpushed was never pushed and its step list goes on from code to checks"
+      assert turns() == 3
+      assert passed_steps() == ["code", "code", "handoff"]
+      refute idle_parked?()
+      assert Questions.open({:ticket, "default", "issue-progress"}) == []
+    end
+
+    test "a ticket parked with its commit still unpushed reaches its handoff step when it is run again" do
+      # The first run idles out on its last step, and the park's push of the commit fails.
+      log = run_unpushed!("sha-unpushed", pusher: fn _workspace, nil, _repo -> {:error, :rejected} end)
+
+      assert turns() == 3
+      assert log =~ "Could not push issue_id=issue-progress issue_identifier=TP-337's unpushed commits before parking it"
+      assert idle_parked?()
+
+      # The person's "Run it again" lifts the park; the new run starts on the same unpushed head.
+      next_run()
+      log = run_unpushed!("sha-unpushed", states: ["In Progress", "In Progress", "Code Review"])
+
+      assert log =~ "its head sha-unpushed was never pushed and its step list goes on from code to checks"
+      assert turns() == 3
+      assert passed_steps() |> Enum.take(-3) == ["code", "code", "handoff"]
+      refute idle_parked?()
+    end
+
+    test "a run whose head is pushed is still parked after two turns that change nothing" do
+      log = run_unpushed!(nil)
+
+      assert turns() == 2
+      refute log =~ "Not parking"
+      assert passed_steps() == ["code", "code"]
+      assert idle_parked?()
+    end
+  end
+
+  test "a run on its last step is parked after two turns that change nothing, its head unpushed or not" do
+    steps = """
+    phases:
+      implementation:
+        steps:
+          - {id: code, title: Write the code, mode: delegated}
+          - {id: handoff, title: Hand off, mode: delegated}
+    """
+
+    for unpushed <- ["sha-unpushed", nil] do
+      next_run()
+      test_pid = self()
+
+      runner_opts = [
+        run_id: "run-progress",
+        workspace_unpushed_head_reader: fn _workspace, nil -> unpushed end,
+        workspace_pusher: fn _workspace, nil, _repo -> send(test_pid, :park_pushed) && :nothing end
+      ]
+
+      log =
+        capture_log(fn ->
+          run_issue!("In Progress", heads: ["sha-same"], pr_url: nil, max_turns: 5, repos: designed_repos(), symphony_steps: steps, runner_opts: runner_opts)
+        end)
+
+      assert turns() == 2
+      refute log =~ "Not parking"
+      assert_received :park_pushed
+      assert {:ok, %{reasons: [_ | _]}} = Pauses.get({:ticket, "default", "issue-progress"})
+    end
+  end
+
   describe "a CI Fix run with checks running on the head it started on (TP-1175)" do
     test "ends in a wait on CI after its first idle turn: no second turn, no hold, no move" do
       pending = [%{name: "macos-e2e", status: "QUEUED", conclusion: nil, url: "https://ci/1"}, %{name: "specs", status: "COMPLETED", conclusion: "SUCCESS"}]
