@@ -192,7 +192,7 @@ final class DesignGuardTests: XCTestCase {
     }
 
     func testADisabledControlCounts() {
-        let found = scan("Toggle(\"On\", isOn: $on)\n    .disabled(working)\nText(\"x\").disabledReason(reason)")
+        let found = scan("DirectorSwitch(isOn: $on)\n    .disabled(working)\nText(\"x\").disabledReason(reason)")
         XCTAssertEqual(found.map(\.kind), [.disabled])
         XCTAssertEqual(found.first?.line, 2)
         XCTAssertEqual(found.first?.use, DesignGuard.disabledReplacement)
