@@ -2255,7 +2255,7 @@ defmodule SymphonyElixir.Config.Schema do
 
       @primary_key false
       @modes ~w(machine orchestrated delegated)
-      @conditions ~w(always macos_changed elixir_changed)
+      @conditions ~w(always macos_changed elixir_changed elixir_source_changed)
       @keys ~w(id title mode command prompt answer timeout_ms on_fail no_result_limit when model effort session repeat)
       @agent_keys ~w(model effort session repeat)
       @cast ~w(id title mode prompt answer timeout_ms on_fail no_result_limit when model effort session repeat)a
@@ -2736,8 +2736,10 @@ defmodule SymphonyElixir.Config.Schema do
     @doc """
     A kind's default step list, for a `symphony.yml` that doesn't set `phases.<kind>` (decision 2 of
     TP-1085): `implementation` writes the code (delegated), builds it (`make build` when
-    `macos/` changed; `mix compile --warnings-as-errors` when Elixir files did), checks it (format, specs and
-    credo on the changed files), tests it (the changed test files and `mix cover.changed`, plus
+    `macos/` changed; `mix compile --warnings-as-errors` when Elixir files did, `mix.lock` included), checks it (format,
+    specs and credo on the changed source files, only when an Elixir source or test file changed:
+    `elixir_source_changed`), tests it (the changed test files, never `mix test` with no file, and
+    `mix cover.changed`, only when an Elixir source or test file changed, plus
     `swift test` for the changed targets when `macos/` changed), runs the window tests the change
     selects in the QA VM (`window_tests`, Symphony's own `window_tests_command/0`; skipped when the
     change touches nothing a declared window test covers), each returning to `code` on failure, then
@@ -2885,8 +2887,8 @@ defmodule SymphonyElixir.Config.Schema do
           "id" => "checks",
           "title" => "Format, specs and credo",
           "mode" => "machine",
-          "when" => "elixir_changed",
-          "command" => "mix format --check-formatted && mix specs.check && mix credo --strict $SYMPHONY_CHANGED_ELIXIR_FILES",
+          "when" => "elixir_source_changed",
+          "command" => "mix format --check-formatted && mix specs.check && (test -z \"$SYMPHONY_CHANGED_ELIXIR_FILES\" || mix credo --strict $SYMPHONY_CHANGED_ELIXIR_FILES)",
           "timeout_ms" => 600_000,
           "on_fail" => agent_step
         },
@@ -2895,7 +2897,7 @@ defmodule SymphonyElixir.Config.Schema do
           "title" => "Tests and coverage",
           "mode" => "machine",
           "command" => [
-            %{"run" => "mix test $SYMPHONY_CHANGED_TEST_FILES && mix cover.changed", "when" => "elixir_changed"},
+            %{"run" => "(test -z \"$SYMPHONY_CHANGED_TEST_FILES\" || mix test $SYMPHONY_CHANGED_TEST_FILES) && mix cover.changed", "when" => "elixir_source_changed"},
             %{"run" => "cd macos && swift test --filter \"$SYMPHONY_CHANGED_SWIFT_TEST_FILTER\"", "when" => "macos_changed"}
           ],
           "timeout_ms" => 1_800_000,

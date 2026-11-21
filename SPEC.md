@@ -2312,7 +2312,7 @@ The QA agent:
   app is the active app. `qa_click` moves the pointer to the point before it clicks, sends the click
   as a mouse does (through the system's event route, so the app takes it as a click and not as the
   click that activates its window) and MAY press the element through accessibility when the click
-  changed nothing, saying so in its result; `qa_hover` moves the pointer over an element or point and waits for the app to settle,
+  changed nothing, saying so in its result; `qa_hover` moves the pointer over an element or point, waits for the app to settle and reports the cursor shown there by name, or that it cannot be read (never a default shape),
   and `qa_context_menu` right-clicks one and lists the menu that opens; `qa_scroll` scrolls the
   scroll area at an element or point by a delta or to an edge with scroll-wheel events, and MAY
   post them again at the pointer, over the app's own window, when the app took none of them. They
@@ -3215,7 +3215,10 @@ the changed files, and records `step.started` and `step.completed` with its outp
 `step_output` artifact. `passed` goes to the next step; `failed` to its `on_fail`, the next turn's
 prompt carrying the output; no result runs it again, up to `no_result_limit` in a row, then ends it
 `paused` on a Question (go on past it, run it again, or the person's own words) that pauses the
-ticket; a `when` that doesn't match the change skips it with the reason.
+ticket; a `when` that doesn't match the change skips it with the reason. A machine step whose last
+run of the same commands passed on the workspace's current head, with nothing uncommitted then and
+now, MUST NOT run again: it is `skipped`, naming that pass, and the walk goes on (a restarted run on
+the same head). A step of Symphony's own commands, which read the ticket, always runs.
 
 An agent step MAY set what its turn runs with (`model`, `effort`), the session it continues
 (`session`: steps with one name continue one session; `fresh` starts one for that step alone) and
@@ -5893,7 +5896,10 @@ Minimum endpoints:
     MT-1 to land (shares 2 files)`.
   - `red_bases` lists each check that is red on a base branch and holds watched PRs (rule R23 of
     `docs/pr-ci-decisions.md`), once per base and check: `base`, `check` and the
-    `issue_identifiers` waiting for it to go green. A row leaves once the base is green.
+    `issue_identifiers` waiting for it to go green. A row leaves once the base is green. A repo whose
+    release gate is red on `main` (`SymphonyElixir.ReleaseGate`) has a row too: `base` `main`,
+    `check` the gate's job (`release gate`) and the `issue_identifiers` its hold keeps from
+    dispatch; it leaves once the gate is green.
   - `issues` lists the tickets the PR and CI watcher watches, each with `issue_id`, `identifier`,
     `repo_key` and `watch`: `facts`, the facts the decision table reads (`docs/pr-ci-decisions.md`)
     plus `pr_url`, `head_sha`, `source` (`poll`), `read_at`, `github` (`ok` or `rate_limited`, with

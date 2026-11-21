@@ -145,6 +145,13 @@ Todo itself if it ever sits in Backlog. While the gate is red:
 - a ticket held for a build whose gate failed waits for the later build that carries its commit,
   and its line names that build, never the failed one.
 
-The hold lifts when a later build passes the gate or the fix ticket is closed. A later build that
-passes with the fix ticket still open (the check passed with no fix merged) adds a comment to the
-ticket: a check that fails at random is a defect in the check, and the ticket still asks for it.
+The hold follows the gate, not the fix ticket. It lifts as soon as a `release` run on `main` passes
+the gate: a later build, or a rerun of the run that failed on the same commit. Symphony then starts
+a dispatch pass at once, so held tickets do not wait for the next poll, and every poll compares the
+gate with the builds it keeps in case GitHub's delivery was missed. It also lifts when the fix
+ticket is closed. While the gate is red, `/api/v1/state` lists it under `red_bases` with the tickets
+it holds.
+
+A build that passes with the fix ticket still open (the check passed with no fix merged) adds a
+comment to the ticket: a check that fails at random is a defect in the check, and the ticket still
+asks for it. The fix ticket is not closed or moved; it runs on as an ordinary ticket.

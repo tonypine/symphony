@@ -37,6 +37,8 @@
 // (see `movePointer`), only once the app's own window is in front there; `click`
 // then presses the mouse through the HID tap, as a mouse does, once the app is
 // the active app (see `postClick`).
+// `hover` also reports the cursor shown at the pointer by name, or says it
+// cannot be read (see `settledCursor`).
 // `scroll` posts scroll-wheel events in the scroll area at the target, by a delta
 // or to an edge (see `scroll`).
 
@@ -1008,9 +1010,126 @@ func click(_ pid: pid_t, _ argument: String, clicks: Int) {
     emit(result)
 }
 
+// The system's named cursors the helper recognises, by the stable names
+// `hover` reports. The open and closed hands only show over a control that sets
+// them (a drag handle, a drag in progress), and the rest are the ones AppKit
+// offers by name.
+let namedCursors: [(name: String, cursor: NSCursor)] = [
+    ("arrow", .arrow),
+    ("pointing_hand", .pointingHand),
+    ("i_beam", .iBeam),
+    ("vertical_i_beam", .iBeamCursorForVerticalLayout),
+    ("open_hand", .openHand),
+    ("closed_hand", .closedHand),
+    ("crosshair", .crosshair),
+    ("operation_not_allowed", .operationNotAllowed),
+    ("contextual_menu", .contextualMenu),
+    ("drag_copy", .dragCopy),
+    ("drag_link", .dragLink),
+    ("disappearing_item", .disappearingItem),
+    ("resize_left_right", .resizeLeftRight),
+    ("resize_up_down", .resizeUpDown)
+]
+
+// The side of the square a cursor is drawn into to compare it with another.
+let cursorSide = 32
+// The most two drawings of the same cursor differ by, as a mean over every byte
+// of the square (0 to 255): enough for the scaling of a larger pointer size,
+// well below what tells the arrow from the pointing hand.
+let cursorTolerance = 12.0
+// How long `hover` reads the cursor for before it gives up on two reads agreeing.
+let cursorSeconds: TimeInterval = 1
+let cursorPause: useconds_t = 100_000
+
+// A cursor's image drawn into a square of `cursorSide`, its RGBA bytes, and its
+// hot spot as a fraction of the image's size. The image is drawn whole and
+// scaled, so a pointer made larger in Accessibility still matches.
+func cursorPrint(_ cursor: NSCursor) -> (pixels: [UInt8], hotSpot: CGPoint)? {
+    let image = cursor.image
+    let size = image.size
+    guard size.width > 0, size.height > 0 else { return nil }
+    var rect = CGRect(origin: .zero, size: size)
+    guard let cgImage = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) else { return nil }
+    var pixels = [UInt8](repeating: 0, count: cursorSide * cursorSide * 4)
+    let drawn = pixels.withUnsafeMutableBytes { buffer -> Bool in
+        guard let context = CGContext(data: buffer.baseAddress, width: cursorSide, height: cursorSide, bitsPerComponent: 8,
+                                      bytesPerRow: cursorSide * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+        context.interpolationQuality = .high
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: cursorSide, height: cursorSide))
+        return true
+    }
+    guard drawn else { return nil }
+    return (pixels, CGPoint(x: cursor.hotSpot.x / size.width, y: cursor.hotSpot.y / size.height))
+}
+
+// The named cursors' drawings, made once and only by a command that reads the
+// cursor: their images come from the window server.
+enum NamedCursorPrints {
+    static let all: [(name: String, pixels: [UInt8], hotSpot: CGPoint)] = namedCursors.compactMap { named in
+        cursorPrint(named.cursor).map { (named.name, $0.pixels, $0.hotSpot) }
+    }
+}
+
+func cursorDistance(_ a: [UInt8], _ b: [UInt8]) -> Double {
+    var total = 0
+    for index in a.indices { total += abs(Int(a[index]) - Int(b[index])) }
+    return Double(total) / Double(a.count)
+}
+
+// The name of the cursor the system shows now, or why it has none: no cursor
+// (hidden, or the window server gave none), or one that matches no named cursor
+// (an app's own image). Never a default.
+func currentCursor() -> (name: String?, unreadable: String?) {
+    guard let cursor = NSCursor.currentSystem else {
+        return (nil, "The system reported no current cursor: it may be hidden, or this session cannot read it.")
+    }
+    guard let shown = cursorPrint(cursor) else {
+        return (nil, "The current cursor has no image the helper could draw.")
+    }
+    guard !NamedCursorPrints.all.isEmpty else {
+        return (nil, "The helper could not draw the system's named cursors to compare the current one with.")
+    }
+    let matches = NamedCursorPrints.all
+        .filter { abs($0.hotSpot.x - shown.hotSpot.x) < 0.15 && abs($0.hotSpot.y - shown.hotSpot.y) < 0.15 }
+        .map { (name: $0.name, distance: cursorDistance($0.pixels, shown.pixels)) }
+        .sorted { $0.distance < $1.distance }
+    guard let best = matches.first, best.distance <= cursorTolerance else {
+        return (nil, "The current cursor matches none of the system's named cursors: the app draws its own image there.")
+    }
+    return (best.name, nil)
+}
+
+// Reads the cursor until two reads in a row agree, for at most `cursorSeconds`:
+// the app sets the cursor a moment after the pointer arrives (a tracking area, a
+// SwiftUI pointer style), so the first read can still be the one from before
+// the move. Reads that never agree report the cursor as unreadable.
+func settledCursor() -> (name: String?, unreadable: String?) {
+    let deadline = Date().addingTimeInterval(cursorSeconds)
+    var last = currentCursor()
+
+    while Date() < deadline {
+        usleep(cursorPause)
+        let next = currentCursor()
+        if next.name == last.name, next.unreadable == last.unreadable { return next }
+        last = next
+    }
+
+    return (nil, "The cursor kept changing for \(Int(cursorSeconds)) second and never settled on one shape.")
+}
+
+// Adds the settled cursor to a pointer command's result: `cursor` is its name,
+// or null with `cursor_unreadable` saying why.
+func addCursor(_ result: inout [String: Any]) {
+    let cursor = settledCursor()
+    result["cursor"] = cursor.name ?? NSNull()
+    if let reason = cursor.unreadable { result["cursor_unreadable"] = reason }
+}
+
 // Moves the pointer over an element's centre or a point and waits for the app
 // to settle, so a hover state (a button that shows on hover, a highlight, a
-// tooltip's trigger) can be screenshotted. The pointer stays there.
+// tooltip's trigger) can be screenshotted, and reports the cursor the system
+// shows there once it settled (see `settledCursor`). The pointer stays there.
 func hover(_ pid: pid_t, _ argument: String) {
     let app = application(pid)
     let target = pointerTarget(app, argument)
@@ -1026,6 +1145,7 @@ func hover(_ pid: pid_t, _ argument: String) {
     ]
     result["under_pointer"] = elementUnder(app, target.point)
     if let element = target.element { result["element"] = describe(element, path: target.path) }
+    addCursor(&result)
     emit(result)
 }
 
