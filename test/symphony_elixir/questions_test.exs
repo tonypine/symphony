@@ -435,6 +435,19 @@ defmodule SymphonyElixir.QuestionsTest do
       assert %{withdrawn: %{reason: "The ticket was cancelled."}} = Questions.find(@ticket, confirmation.id)
     end
 
+    test "a question a step asked is never one Unblock answers, even with an option Unblock's questions share (TP-1569)" do
+      request = SymphonyElixir.PhaseSteps.WindowTests.question(%{identifier: "TP-1"}, :base, "the scroll test fails on main too")
+      assert Enum.any?(request.options, &(&1.label == "Run it again"))
+
+      {:ok, question} = Questions.ask(@ticket, request, asked_by: %{kind: :symphony, name: "Symphony"}, step: "window_tests")
+      refute Questions.held_question?(question)
+      assert Questions.held(@ticket) == nil
+
+      {:ok, loop} = Questions.ask(@ticket, %{request | title: "TP-1 keeps being dispatched"})
+      assert Questions.held_question?(loop)
+      assert Questions.held(@ticket).id == loop.id
+    end
+
     test "a question Unblock answers is decided by Unblock or Restart, but a terminal state withdraws it" do
       {:ok, question} = Questions.ask(@ticket, SymphonyElixir.TransitionGuard.block_report_question("TP-1"), asked_by: @run)
       assert Questions.held(@ticket).id == question.id
