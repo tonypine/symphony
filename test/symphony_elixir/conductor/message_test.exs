@@ -485,6 +485,38 @@ defmodule SymphonyElixir.Conductor.MessageTest do
       assert owed == message.id
     end
 
+    # c8 (TP-1590): an update's pause holds ticket runs alone; a person's own pause still holds the Conductor.
+    test "a pause for an app update does not hold the Conductor: the message is answered; a person's pause holds it", ctx do
+      message = say!(ctx.issue_id)
+      no_turn = fn _plan, _issue, _run_id, _prompt -> flunk("no turn runs") end
+
+      on_exit(fn -> SymphonyElixir.Pauses.clear(:symphony) end)
+      {:ok, _pause} = SymphonyElixir.Pauses.set(:symphony, SymphonyElixir.Pauses.dispatch_reason("paused from menu bar"))
+      assert Conductor.message(issue(ctx.record), message, "default", settings: @on, turn: no_turn) == :waiting
+
+      {:ok, _pause} = SymphonyElixir.Pauses.clear(:symphony)
+      {:ok, _pause} = SymphonyElixir.Pauses.set(:symphony, SymphonyElixir.Pauses.dispatch_reason("updating to v0.0.1.1057"))
+      assert SymphonyElixir.Pauses.paused?(:symphony)
+      assert Message.tend(ctx.issue_id, Keyword.delete(opts(%{"message" => reply()}), :paused?)) == :done
+      assert_received {:turn, "message", _prompt}
+    end
+
+    # c9 (TP-1590): once Symphony gave the handover for its stop, a message waits, still owed, for the new build.
+    test "a turn the Conductor gate refuses runs nothing and leaves the message owed", ctx do
+      message = say!(ctx.issue_id)
+      no_turn = fn _plan, _issue, _run_id, _prompt -> flunk("no turn runs") end
+      gate = start_supervised!({SymphonyElixir.ConductorGate, name: :"gate-#{ctx.n}"})
+      assert SymphonyElixir.ConductorGate.handover(gate) == :ok
+
+      assert Conductor.message(issue(ctx.record), message, "default", settings: @on, turn: no_turn, gate: gate) == :waiting
+      assert Message.tend(ctx.issue_id, opts(%{}, turn: no_turn, gate: gate)) == :owed
+      assert status_notes(ctx.issue_id) == []
+      assert events(ctx.issue_id, "run.started") == []
+
+      :ok = SymphonyElixir.ConductorGate.reopen(gate)
+      assert Message.tend(ctx.issue_id, opts(%{"message" => reply()}, gate: gate)) == :done
+    end
+
     test "the turn is given every ask and the newest 20 messages", ctx do
       for n <- 1..22 do
         message = say!(ctx.issue_id, "Message #{n}.")

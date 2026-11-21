@@ -737,6 +737,75 @@ joined by `; `. The log line names the kind too (`Dispatch pause active kind=bui
   so a pause the Director set meanwhile keeps dispatch paused.
 - A Symphony that starts on the version a `build` reason waits on, or a later one, clears that
   reason, so the pause of a finished update lifts by itself.
+- An update the menu bar app has ready (`POST /api/v1/control/update_ready` with its `version`,
+  sent once the release is downloaded and verified) does not pause dispatch: Symphony keeps
+  dispatching and picks the moment itself (`SymphonyElixir.UpdateWindow`). It checks when a run
+  ends, before the freed slot is refilled, and at each poll. The first moment no agent run is active
+  (a run between turns does not count, as for the drain), it sets the update's `build` reason itself
+  (`set_by` Symphony); the app then stops Symphony and swaps, so the pause lasts only the restart.
+  When runs never leave such a moment, after 15 minutes ready it holds dispatch so one forms, but
+  only once no active run began less than 3 minutes earlier. A hold lasts at most 10 minutes: with
+  runs still active it is lifted and the 15 minutes start again; with none left (the app never came
+  for it) the update is called off, and the app arms it again. These numbers are fixed and do not
+  depend on how many builds were published: a newer version ready while the update waits or holds
+  replaces the one ready, keeps the time already waited, and moves the hold's reason to the new
+  version, so several builds in a row cost one hold. The update ready is kept in memory and reported
+  as the state payload's `update_window` (`version`, `phase` `waiting` or `holding`, `ready_at`,
+  `holding_since`). Resume with `kind` `build` for its version calls it off; the Director's plain
+  Resume during a hold sends it back to waiting. A Director's Pause still holds dispatch, and an
+  update ready under it swaps as soon as no run is active.
+- An update's `build` reason holds ticket runs alone: Conductor turns (replies to a person's
+  messages, the turns on a ticket's sub-tickets and at the end of a review) keep starting and
+  answering under it, in the update's hold as in its pause, and they never count as agent runs when
+  Symphony looks for a moment with none active. Any other reason (the Director's Pause, a
+  repository's) still holds them.
+- Symphony is never stopped for an update or a restart while a Conductor turn is mid-run
+  (`SymphonyElixir.ConductorGate`). Once dispatch is paused and no agent run is active, the menu
+  bar app asks for the handover (`POST /api/v1/control/handover`) and stops Symphony only once it
+  is given, in every update mode and for a plain Restart. The check and the close are one step of
+  the gate, which every Conductor turn enters as it starts: with no turn running the handover is
+  given and from then on no turn starts (one due waits, still owed, and runs first thing after the
+  restart); with turns running the app is told how many (`409` `conductor_running`, and
+  `conductor_runs` in the state payload and the drain) and asks again at its next poll. Turns keep
+  starting for 2 minutes from the first ask that finds one; after that none starts, so the turns
+  running end and a gap forms even when they overlap, and the wait is bounded by 2 minutes plus a
+  turn's own time limit. A gate given the handover opens again when dispatch is resumed, and after
+  5 minutes with Symphony still up; a wait no one asked about for 1 minute is dropped. Update Now
+  Anyway stays the person's choice and stops Symphony at once.
+- A run Symphony's restart stopped goes on after it from where it stopped
+  (`SymphonyElixir.PhaseSteps.restart_point/2`), for an update's restart in every mode, a plain
+  Restart and Update Now Anyway alike. Symphony's start ends each run still running with the
+  restart's error (`SymphonyElixir.RunStore.restart_error/0`); the ticket's next run of the same
+  phase reads the ticket's newest step event, with no move of the ticket since, and when it is that
+  run's, goes on: at a step that started and did not end (an agent step in the interrupted turn's
+  session, resumed by its id kept on the run's record, so its conversation goes on; a machine step
+  runs again), or at the step after one that ended (the step a failed machine step fails to, with
+  its kept output; the step a failed agent step returns to). The turn's prompt says Symphony
+  restarted. What is kept: the workspace and its changes, every step that ended (none runs again),
+  and the session's conversation when the agent can resume it (Claude, opencode); a session that
+  can't be resumed is replaced, once, by a new session at the same step with the ticket's history.
+  A turn stopped mid-way by Update Now Anyway goes on the same way from its last step event.
+- A stepped QA pass (`SymphonyElixir.QaAgent.Steps`: Plan the pass, Walk a step N, Design check,
+  Wide pass, Review and verdict, with machine steps between them) is active for an update only while
+  a step is in flight. At each boundary between two steps it asks the orchestrator to begin the next
+  one: while it waits there it counts as a run between turns, so an update waiting for its moment
+  may take it, and it begins its next step at once unless an update's `build` reason holds dispatch
+  (its pause, or the hold above); then the next step waits until that reason lifts, and Symphony
+  restarts at the boundary. While the update still waits behind other runs, the pass goes on; a
+  person's own Pause does not stop a pass between its steps. The age rule judges a pass by the start
+  of its step in flight, not of the pass, so a long pass never keeps the hold from starting; the
+  update waits behind a pass at most for the step in flight. A recheck round (the launch again, its
+  rechecks, the quit and the evidence) is one piece, with a boundary before and after it.
+- At each boundary the pass keeps where it stands in the run store: its list as walked so far, the
+  step it goes on at, each finished step's result and answer (the plan, the walk results, the design
+  check), its sessions and tokens, and a copy of the evidence under `qa-evidence/`, kept beside the
+  worktree. A new pass of the ticket on the same commit and list, whose last run Symphony's restart
+  ended (an update's restart in every mode, a plain Restart, Update Now Anyway), goes on at that
+  step with those results and evidence, and its findings ledger is the ticket's as before; no step
+  that ended is walked again. The app under test was gone with its QA session, so when the next step
+  drives it the build and launch steps run again first. A step a person interrupted mid-way with
+  Update Now Anyway was not finished, so it alone runs again. A pass that ends forgets what it kept,
+  and one that finds no such record starts its list from the top.
 - Each usage-limit hold (Sections 8.4.1 and 8.4.2) is an `environment` reason waiting on condition
   `usage_limit:<provider>:<scope>`, its line the hold's (`Claude's 5-hour limit until 14:30 UTC-3`,
   its local time naming its zone): set with the hold, its line refreshed when the hold changes,
@@ -5701,6 +5770,11 @@ SHOULD return:
   `execution.providers.<provider>.reserve`, null when it has none or Symphony can't read its usage)
   and `at_reserve` (a headroom hold keeps new runs off it, Section 8.4.2). A
   Pause or a Resume of a provider pushes the new state at once.
+- `update_window`: the update the menu bar app has ready (Section 4.1.11's `update_ready`), null when
+  none is: `version`, `phase` (`waiting` while dispatch goes on, `holding` once Symphony paused for
+  it), `ready_at` and `holding_since`.
+- `conductor_runs`: the Conductor turns mid-run, which a restart's stop waits for (Section 4.1.11's
+  handover).
 - `pause`, `budget`, `dispatch_state`, and `workspace_lifecycle` when those extensions are enabled.
   `pause` is Symphony's own pause (Section 4.1.11): `paused` while a `person` or `build` reason
   stops all dispatch, with the first such reason's line as `reason` (an update's is
@@ -6193,8 +6267,9 @@ Minimum endpoints:
     which gives each request 250 ms. `/api/v1/state` stays the app's poll.
 
 - `GET /api/v1/drain`
-  - Answers `200` `{"running": 2, "between_turns": 1, "paused": true}`: the agent runs, how many
-    of them wait between turns (as `counts.between_turns`), and whether dispatch is paused. Read
+  - Answers `200` `{"running": 2, "between_turns": 1, "conductor_runs": 0, "paused": true}`: the
+    agent runs, how many of them wait between turns (as `counts.between_turns`), the Conductor turns
+    mid-run, which the stop waits for (Section 4.1.11's handover), and whether dispatch is paused. Read
     from the orchestrator's snapshot alone, with no page presenter, so it answers when
     `/api/v1/state` fails. `503` with `snapshot_timeout` or `snapshot_unavailable` when the
     orchestrator doesn't answer.

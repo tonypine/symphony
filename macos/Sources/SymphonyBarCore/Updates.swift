@@ -332,6 +332,12 @@ public enum UpdateMenu {
     /// Shown while an update waits for agent runs, in place of the restart's items.
     public static let updateNowTitle = "Update Now Anyway"
     public static let cancelUpdateTitle = "Cancel Update"
+
+    /// The menu's cancel item: Cancel Update while an update restarts Symphony, downloads, or waits ready for its
+    /// moment (TP-1590), as its action calls the update off; Cancel Restart otherwise.
+    public static func cancelTitle(restartIsUpdate: Bool, downloading: Bool, ready: Bool) -> String {
+        restartIsUpdate || downloading || ready ? cancelUpdateTitle : StatusMenu.cancelRestartTitle
+    }
     public static let failedTitle = "Symphony wasn't updated"
 
     /// For example "Update to v0.0.1.42".
@@ -349,6 +355,14 @@ public enum UpdateMenu {
     public static func waitingLine(version: String, activeRuns: Int, minutes: Int?) -> String {
         let runs = activeRuns == 1 ? "1 agent run" : "\(activeRuns) agent runs"
         return "Updating to v\(version): waiting for \(runs)…" + (minutes.map { " (\($0) min)" } ?? "")
+    }
+
+    /// What an update Symphony has ready waits for while dispatch goes on (TP-1590).
+    public static let readyWaitLine = "Installs at the first moment no agent run is active"
+
+    /// Under the update items while Symphony has `version` ready and keeps dispatching (TP-1590).
+    public static func readyLine(version: String) -> String {
+        "v\(version) is ready: it installs at the first moment no agent run is active."
     }
 
     /// Under a release whose on-release update Cancel Update called off (S2e).

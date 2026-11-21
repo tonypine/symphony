@@ -854,6 +854,8 @@ defmodule SymphonyElixir.ExtensionsTest do
         "paused_at" => nil,
         "reasons" => []
       },
+      "update_window" => nil,
+      "conductor_runs" => 0,
       "usage_limits" => [],
       "stray_processes" => [],
       "budget" => %{

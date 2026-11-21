@@ -76,6 +76,8 @@ defmodule SymphonyElixir.Application do
           SymphonyElixir.AgentProcesses,
           # Before the task supervisor too: the QA passes it runs wait on its leases.
           SymphonyElixir.QaDriver.DevServerLease,
+          # Before the task supervisor too: the Conductor turns its tasks run enter and leave it.
+          SymphonyElixir.ConductorGate,
           {Task.Supervisor, name: SymphonyElixir.TaskSupervisor},
           SymphonyElixir.WorkspaceCleanup,
           SymphonyElixir.Config.Cache,

@@ -23,8 +23,10 @@ final class UpdateModeTests: XCTestCase {
         XCTAssertTrue(UpdateMode.atTime.explanation.contains("tries again the next day"))
         XCTAssertEqual(
             UpdateMode.onRelease.explanation,
-            "When Symphony finds a new release it installs it straight away: it pauses dispatch, waits for agent runs "
-                + "to finish, updates, and resumes dispatch. A release you skip is never installed by itself."
+            "When Symphony finds a new release it downloads it straight away and keeps dispatching. It updates at "
+                + "the first moment no agent run is active, or after 15 minutes holds new runs for at most 10 so one "
+                + "comes; a newer release published meanwhile replaces it. A release you skip is never installed by "
+                + "itself."
         )
         for mode in UpdateMode.allCases {
             XCTAssertFalse(mode.explanation.contains("Not active yet"), mode.rawValue)
