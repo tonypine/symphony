@@ -50,7 +50,9 @@ defmodule SymphonyElixir.ReleaseGateTest do
     :ok = RunStore.clear()
     on_exit(fn -> :ok = RunStore.clear() end)
     Process.put(:release_gate_test, self())
-    {:ok, opts: [fixer: Fixer, tracker: Tracker, gh_runner: gh(), repos: {:ok, repos()}, terminal_states: ["Done", "Canceled"]]}
+    refresh = fn repo_key -> send(Process.get(:release_gate_test), {:refresh, repo_key}) end
+    opts = [fixer: Fixer, tracker: Tracker, gh_runner: gh(), repos: {:ok, repos()}, terminal_states: ["Done", "Canceled"]]
+    {:ok, opts: opts ++ [refresh: refresh]}
   end
 
   # A config whose primary repo is Cycle, with Symphony's own repository configured beside it.
@@ -76,6 +78,9 @@ defmodule SymphonyElixir.ReleaseGateTest do
         Map.get(overrides, :commit, {Jason.encode!(%{message: "TP-1507 Shared Row (#914)\n\nbody", url: "https://github.com/acme/symphony/commit/9f54098", files: ["macos/Sources/A.swift", 7]}), 0})
     end
   end
+
+  defp put_build(sha, fields),
+    do: :ok = RunStore.put_github_updates({:release_build, sha}, Map.merge(%{sha: sha, repo: @repo, number: 950, state: :built}, fields))
 
   defp build(overrides \\ %{}) do
     Map.merge(
@@ -132,7 +137,7 @@ defmodule SymphonyElixir.ReleaseGateTest do
     end
 
     assert RunStore.get_github_updates({:release_gate_fix, "symphony"}) ==
-             %{identifier: "TP-1520", sha: @sha, step: "Test the update", number: 950, red: true}
+             %{identifier: "TP-1520", sha: @sha, step: "Test the update", number: 950, attempt: 1, red: true}
   end
 
   test "while that ticket is open, the next failure is added to it; once it is closed, a new one is filed", %{opts: opts} do
@@ -299,7 +304,7 @@ defmodule SymphonyElixir.ReleaseGateTest do
       capture_log(fn -> assert {:filed, "TP-1520"} = ReleaseGate.failed(build(), opts) end)
       Process.put({:release_gate_issue, "TP-1520"}, "In Progress")
 
-      # The failed commit's own build, an older one, and another repository's say nothing.
+      # The failed attempt of the failed commit's own run, an older build, and another repository's say nothing.
       assert ReleaseGate.passed(build(%{number: 951}), opts) == :ok
       assert ReleaseGate.passed(build(%{sha: "0000000011111111222222223333333344444444", number: 949}), opts) == :ok
       assert ReleaseGate.passed(build(%{sha: "0000000011111111222222223333333344444444", repo: "acme/other"}), opts) == :ok
@@ -310,6 +315,7 @@ defmodule SymphonyElixir.ReleaseGateTest do
       log = capture_log(fn -> assert ReleaseGate.passed(passing, opts) == :green end)
       assert log =~ "The release gate passed again on 6f280e7e"
       assert ReleaseGate.hold_reason("symphony", "TP-1") == nil
+      assert_received {:refresh, "symphony"}
       assert ReleaseGate.fix_ticket?("symphony", "TP-1520")
 
       assert_received {:attach, "TP-1520", body}
@@ -367,6 +373,97 @@ defmodule SymphonyElixir.ReleaseGateTest do
       log = capture_log(fn -> assert ReleaseGate.reconcile([], "symphony", opts) == :ok end)
       assert log =~ "fix ticket TP-1520 is Canceled; the gate no longer holds the tickets of symphony"
       assert ReleaseGate.hold_reason("symphony", "TP-1") == nil
+    end
+
+    test "a rerun that passes on the commit that failed lifts the hold at once, the fix ticket still open (TP-1583)", %{opts: opts} do
+      capture_log(fn -> assert {:filed, "TP-1520"} = ReleaseGate.failed(build(), opts) end)
+      Process.put({:release_gate_issue, "TP-1520"}, "In Progress")
+      assert ReleaseGate.hold_reason("symphony", "TP-1") =~ "TP-1520 is fixing it"
+
+      # Attempt 2 of the same run, on the same commit and run number, passes.
+      rerun = build(%{attempt: 2})
+      log = capture_log(fn -> assert ReleaseGate.passed(rerun, opts) == :green end)
+      assert log =~ "The release gate passed again on 9f54098b"
+      assert_received {:refresh, "symphony"}
+
+      # Every ticket dispatches again; the fix ticket stays the fix ticket, open, neither moved nor closed.
+      assert ReleaseGate.hold_reason("symphony", "TP-1") == nil
+      assert ReleaseGate.hold_reason("symphony", "TP-1520") == nil
+      assert ReleaseGate.fix_ticket?("symphony", "TP-1520")
+      refute_received {:moved, _id, _state}
+      assert_received {:attach, "TP-1520", body}
+      assert body =~ "The step “Test the update” failed on `9f54098b` and passed when the same run was run again with no change made for it."
+
+      # A poll with the fix ticket open among the active tickets changes nothing more.
+      assert ReleaseGate.reconcile([%{identifier: "TP-1520"}], "symphony", opts) == :ok
+      refute_received {:refresh, _repo_key}
+      refute_received {:moved, _id, _state}
+
+      # A fix record kept before attempts were kept: any pass of the failed commit is a rerun.
+      :ok = RunStore.put_github_updates({:release_gate_fix, "symphony"}, %{identifier: "TP-1520", sha: @sha, number: 950, red: true})
+      capture_log(fn -> assert ReleaseGate.passed(build(), opts) == :green end)
+    end
+
+    test "a poll turns the gate green from the builds kept, when the delivery was missed (TP-1583)", %{opts: opts} do
+      capture_log(fn -> assert {:filed, "TP-1520"} = ReleaseGate.failed(build(), opts) end)
+      Process.put({:release_gate_issue, "TP-1520"}, "In Progress")
+
+      # Nothing built since the failure: the poll reads the fix ticket as before and the gate stays red.
+      put_build(@sha, %{state: :failed, attempt: 1})
+      :ok = RunStore.put_github_updates({:release_build, :latest}, %{sha: "older", number: 949})
+      put_build("older", %{state: :built, number: 949, attempt: 1})
+      put_build("other", %{state: :built, number: 960, attempt: 1, repo: "acme/other"})
+      assert ReleaseGate.reconcile([], "symphony", opts) == :ok
+      assert ReleaseGate.hold_reason("symphony", "TP-1") =~ "TP-1520 is fixing it"
+
+      # Another repository's newer build says nothing about this gate.
+      :ok = RunStore.put_github_updates({:release_build, :latest}, %{sha: "other", number: 960})
+      assert ReleaseGate.reconcile([], "symphony", opts) == :ok
+      assert ReleaseGate.hold_reason("symphony", "TP-1") =~ "TP-1520 is fixing it"
+      refute_received {:refresh, _repo_key}
+
+      # The failed commit's run, rerun and published: green at the poll, with a dispatch pass asked for.
+      put_build(@sha, %{state: :built, attempt: 2})
+      log = capture_log(fn -> assert ReleaseGate.reconcile([%{identifier: "TP-1"}], "symphony", opts) == :ok end)
+      assert log =~ "The release gate passed again on 9f54098b"
+      assert ReleaseGate.hold_reason("symphony", "TP-1") == nil
+      assert ReleaseGate.fix_ticket?("symphony", "TP-1520")
+      assert_received {:refresh, "symphony"}
+      assert_received {:attach, "TP-1520", _body}
+      refute_received {:moved, _id, _state}
+
+      # The newest merge's build, later than the failure, turns it green too.
+      :ok = RunStore.put_github_updates({:release_gate_fix, "symphony"}, %{identifier: "TP-1520", red: true, number: 950, attempt: 1})
+      put_build("newer", %{state: :built, number: 955, attempt: 1})
+      :ok = RunStore.put_github_updates({:release_build, :latest}, %{sha: "newer", number: 955})
+      capture_log(fn -> assert ReleaseGate.reconcile([], "symphony", opts) == :ok end)
+      assert ReleaseGate.hold_reason("symphony", "TP-1") == nil
+      assert_received {:refresh, "symphony"}
+    end
+
+    test "red_bases lists a red gate with the tickets it holds, until it is green (TP-1583)", %{opts: opts} do
+      skipped = [
+        %{identifier: "TP-2", repo_key: "symphony", rule: :release_gate},
+        %{identifier: "TP-1", repo_key: nil, rule: :release_gate},
+        %{identifier: nil, issue_id: "issue-3", repo_key: "symphony", rule: :release_gate},
+        %{identifier: "TP-4", repo_key: "symphony", rule: :priority},
+        %{identifier: "MOT-1", repo_key: "cycle", rule: :release_gate}
+      ]
+
+      assert ReleaseGate.red_bases(skipped, opts) == []
+
+      capture_log(fn -> assert {:filed, "TP-1520"} = ReleaseGate.failed(build(), opts) end)
+      assert ReleaseGate.red_bases(skipped, opts) == [%{base: "main", check: "release gate", issue_identifiers: ["TP-1", "TP-2", "issue-3"]}]
+      assert ReleaseGate.red_bases(nil, opts) == [%{base: "main", check: "release gate", issue_identifiers: []}]
+      assert ReleaseGate.red_bases(skipped, repos: {:error, :no_config}) == []
+
+      # A failure reported with no attempt keeps none.
+      capture_log(fn -> assert {:filed, "TP-1520"} = ReleaseGate.failed(build(%{attempt: nil}), opts) end)
+      assert %{attempt: nil, red: true} = RunStore.get_github_updates({:release_gate_fix, "symphony"})
+
+      Process.put({:release_gate_issue, "TP-1520"}, "In Progress")
+      capture_log(fn -> assert ReleaseGate.passed(build(%{attempt: 2}), opts) == :green end)
+      assert ReleaseGate.red_bases(skipped, opts) == []
     end
   end
 end

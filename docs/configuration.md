@@ -4150,15 +4150,15 @@ phases:
       - id: checks
         title: Format, specs and credo
         mode: machine
-        when: elixir_changed
-        command: mix format --check-formatted && mix specs.check && mix credo --strict $SYMPHONY_CHANGED_ELIXIR_FILES
+        when: elixir_source_changed
+        command: mix format --check-formatted && mix specs.check && (test -z "$SYMPHONY_CHANGED_ELIXIR_FILES" || mix credo --strict $SYMPHONY_CHANGED_ELIXIR_FILES)
         timeout_ms: 600000
         on_fail: code
       - id: tests
         title: Tests and coverage
         mode: machine
         command:
-          - {run: mix test $SYMPHONY_CHANGED_TEST_FILES && mix cover.changed, when: elixir_changed}
+          - {run: (test -z "$SYMPHONY_CHANGED_TEST_FILES" || mix test $SYMPHONY_CHANGED_TEST_FILES) && mix cover.changed, when: elixir_source_changed}
           - {run: cd macos && swift test --filter "$SYMPHONY_CHANGED_SWIFT_TEST_FILTER", when: macos_changed}
         timeout_ms: 1800000
         on_fail: code
@@ -4228,7 +4228,10 @@ words, goes to the `code` step, in its prompt. A later QA failure of the same cl
 `symphony:checks` is a command Symphony runs itself, not in a shell, while the run keeps its slot.
 It guards the handoff of a ticket with a plan: it fails back to the step's `on_fail`, naming them,
 while a check of the plan that a test or an attachment proves (`proof: test`, `proof: attached`) is
-open, and passes at once when none is, or when the ticket has no plan. The failure says how each
+open, and passes at once when none is, or when the ticket has no plan. A check the plan marks
+`after_merge` (it can only be seen once the ticket's own pull request has merged: a green run on
+main, a release) is never one of them: it stays open on the ticket, holds neither this step, the
+handoff nor QA, and is never asked about; a split ticket's final check reads it. The failure says how each
 check is proved, and that a check nothing can prove this way is the Conductor's to waive: its
 answer's `waive` (each a `check_id` and a `reason`) is read at the junctions `conductor.junctions`
 names for it, above, and on a watch turn (a `plan_checks` step that fails again wakes one,
@@ -4334,9 +4337,16 @@ Each step has:
 - `command` (required for a `machine` step, refused on any other): one shell line, or a list of
   entries run in order, each a `run` line with an optional `when` (`always`, the default;
   `macos_changed`, when the change touches `macos/`; `elixir_changed`, when it touches Elixir
-  files). The step runner gives a machine step `SYMPHONY_CHANGED_ELIXIR_FILES` (the Elixir files the
-  change touches that still exist), `SYMPHONY_CHANGED_TEST_FILES` (the changed test files and the
-  tests of the changed `lib/` files) and `SYMPHONY_CHANGED_SWIFT_TEST_FILTER` (the Swift test
+  files, `mix.lock` included; `elixir_source_changed`, when it touches an Elixir source or test
+  file, `.ex` or `.exs`, and not for `mix.lock` alone). A step whose `when`, or every command's,
+  does not hold is skipped with a plain reason that says what did not change ("no Elixir source or
+  test file changed"): the default list compiles a lock-only change and runs no credo, no
+  `mix test` and no `mix cover.changed` for it, nor for a change to docs or workflow files only. A
+  dependency update is proved by CI's full suite; no local step runs the whole suite. The step runner gives a machine step `SYMPHONY_CHANGED_ELIXIR_FILES`
+  (the Elixir source files, `.ex` and `.exs`, the change touches that still exist; never a
+  generated file such as `mix.lock`), `SYMPHONY_CHANGED_TEST_FILES` (the changed test files and the
+  tests of the changed `lib/` files; either may be empty, and the default steps then run no credo
+  and no `mix test`, which would lint or test the whole project) and `SYMPHONY_CHANGED_SWIFT_TEST_FILTER` (the Swift test
   targets of what changed under `macos/`, `.` for all), read against the merge-base with the
   repository's base branch, uncommitted and untracked files included. The command runs in the
   ticket's workspace in a login shell with the environment an agent gets (its allow-list; Symphony's
@@ -4352,6 +4362,13 @@ Each step has:
   timeout for the others): how long the step may run before it ends with no result.
 - `on_fail` (a step id in the list; none ends the run): the step a failure returns to, with the
   failed step's output.
+
+A machine step whose last run of the same commands passed on the commit the workspace holds now,
+with nothing uncommitted then and now, is not run again: a run restarted on that commit (an app
+update, say) records it `skipped`, naming the earlier pass, and goes on to the next step. A step
+that failed since, passed on another commit or with uncommitted changes, or whose commands changed
+runs as before; so does a step of Symphony's own commands (the findings, the plan's checks, the
+failed check), which read the ticket rather than the commit.
 - `no_result_limit` (above 0; default `2`, decision 3 of TP-1085): how many times in a row the step
   may end with no result (its timeout) before the run pauses on a Question carrying the output and
   the ways forward; it never runs again on its own past it.

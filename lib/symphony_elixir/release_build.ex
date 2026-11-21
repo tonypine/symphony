@@ -28,7 +28,10 @@ defmodule SymphonyElixir.ReleaseBuild do
       to the fix ticket still open, once per attempt of the run. A pause would hold the very ticket
       that repairs it.
     * a run that publishes tells the release gate (`SymphonyElixir.ReleaseGate.passed/2`) once,
-      when the check first finds it built: a later build passing the gate turns a red gate green.
+      when the check first finds it built: a later build passing the gate, or a rerun of the failed
+      run passing on the same commit (the record goes from `:failed` to `:built` on the rerun's
+      `workflow_run` delivery), turns a red gate green. The gate also reads the kept records on every
+      poll (`latest/1`, `get/2`), in case that delivery was missed.
 
   A held ticket's line names the build that will bring its commit (`awaited/2`): the commit's own
   build, or, when that one failed its gate or was replaced, the later build on `main` that carries
@@ -299,6 +302,19 @@ defmodule SymphonyElixir.ReleaseBuild do
         url: Map.get(record, :url),
         line: latest_line(record, now(opts))
       }
+    end
+  end
+
+  @doc """
+  What the last check found of the newest watched merge to `main` (`{:release_build, :latest}`),
+  or nil until one was watched. `SymphonyElixir.ReleaseGate.reconcile/3` reads it to turn a red gate
+  green when its delivery was missed. `opts`: `:run_store`.
+  """
+  @spec latest(keyword()) :: t() | nil
+  def latest(opts \\ []) do
+    case latest_pointer(opts) do
+      %{sha: sha} -> get(sha, opts)
+      nil -> nil
     end
   end
 
