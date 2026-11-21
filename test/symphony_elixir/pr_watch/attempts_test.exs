@@ -69,6 +69,24 @@ defmodule SymphonyElixir.PrWatch.AttemptsTest do
     assert %{fix_ticket: nil} = Attempts.filed(attempts, nil)
   end
 
+  test "TP-1587: a head read red on the base too is marked until it moves on or GitHub can't update its branch" do
+    held = Attempts.observe(Attempts.new(), read(red_kind: :also_red_on_base), ticket(), @now)
+    assert %{base_held: "head-1"} = held
+    assert %{base_held: false} = Attempts.facts(Attempts.new(), read(), @settings, @now)
+
+    # The base went green: the same head now reads as a plain failure, and keeps its mark.
+    green_base = Attempts.observe(held, read(red_kind: :failure), ticket(), @now)
+    assert %{base_held: "head-1"} = green_base
+    assert %{base_held: true} = Attempts.facts(green_base, read(red_kind: :failure), @settings, @now)
+    assert %{base_held: "head-1"} = Attempts.normalize(green_base)
+
+    # The head the update made, a read with no PR, and an update GitHub refused carry no mark.
+    assert %{base_held: nil} = Attempts.observe(green_base, read(head_sha: "head-2"), ticket(), @now)
+    assert %{base_held: false} = Attempts.facts(green_base, read(head_sha: "head-2"), @settings, @now)
+    assert %{base_held: nil} = Attempts.observe(green_base, nil, ticket(), @now)
+    assert %{base_held: false} = Attempts.facts(Attempts.base_taken(green_base), read(), @settings, @now)
+  end
+
   test "a head's failed checks are rerun once, and a rerun whose checks left the rollup is still pending" do
     attempts = Attempts.rerun(Attempts.new(), "head-1", ["specs", nil])
 

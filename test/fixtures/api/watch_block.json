@@ -29,6 +29,7 @@
     "ahead": [],
     "auto_merge": "off",
     "base": "ok",
+    "base_held": false,
     "base_red": null,
     "base_ref": null,
     "cancel_reruns": 0,

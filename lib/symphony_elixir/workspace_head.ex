@@ -97,6 +97,30 @@ defmodule SymphonyElixir.WorkspaceHead do
   def push_head(_workspace, worker_host, _source_repo), do: {:error, {:remote_worker, worker_host}}
 
   @doc """
+  Whether the workspace `HEAD` moved past `start_head` only by taking `base_ref` (a remote-tracking
+  ref such as `origin/main`) in: `HEAD` holds `base_ref`, every commit since `start_head` that is not
+  a merge is the base's, and no file is left changed. A CI Fix run whose whole work was merging the
+  base reads true; one with a commit of its own, or with nothing new on `HEAD`, reads false. An SSH
+  worker's workspace, or one that can't be read, reads false. Reads local refs only.
+  """
+  @spec took_base_only?(Path.t() | nil, String.t() | nil, String.t() | nil, String.t()) :: boolean()
+  def took_base_only?(workspace, nil, start_head, base_ref) when is_binary(workspace) and is_binary(start_head) do
+    with true <- toplevel?(workspace),
+         {"", 0} <- trimmed(git(workspace, ["status", "--porcelain=v1", "--untracked-files=all"])),
+         {head, 0} when head != start_head <- trimmed(git(workspace, ["rev-parse", "HEAD"])),
+         {_output, 0} <- git(workspace, ["merge-base", "--is-ancestor", base_ref, "HEAD"]),
+         {"", 0} <- trimmed(git(workspace, ["rev-list", "--no-merges", "HEAD", "^" <> start_head, "^" <> base_ref])) do
+      true
+    else
+      _not_only_the_base -> false
+    end
+  end
+
+  def took_base_only?(_workspace, _worker_host, _start_head, _base_ref), do: false
+
+  defp trimmed({output, status}), do: {String.trim(output), status}
+
+  @doc """
   The workspace's current branch, or nil when `HEAD` is detached, the workspace is an SSH worker's
   or it cannot be read.
   """

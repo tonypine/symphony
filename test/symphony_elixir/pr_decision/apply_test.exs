@@ -553,6 +553,49 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       capture_log(fn -> assert %{outcome: {:error, :timeout}} = Apply.apply(action("U1", :update_branch), ctx(:merging)) end)
     end
 
+    test "TP-1587: R20a takes the base's fix in by an update-branch, with no rerun; a head GitHub can't update loses its mark" do
+      held = %{Attempts.new() | base_held: "head-1"}
+      facts = %{ci: :red, red_kind: :failure, base_held: true}
+
+      assert %{outcome: :applied, attempts: %{updated_from: "head-1", base_held: "head-1"}, applied: applied} =
+               Apply.apply(action("R20a", :update_branch), ctx(:qa, facts: facts, attempts: held))
+
+      assert [%{rule: "R20a", kind: :update_branch}] = applied
+
+      assert_received {:update_branch, @pr_url, "head-1", _opts}
+      refute_received {:rerun_failed, _run_id, _opts}
+      refute_received {:move, _id, _state}
+
+      # The same head on the next tick: the update is not made again, and nothing reruns.
+      applied = [%{head_sha: "head-1", rule: "R20a", kind: :update_branch, at: @now}]
+      assert %{outcome: :recorded} = Apply.apply(action("R20a", :update_branch), ctx(:qa, facts: facts, attempts: held, applied: applied))
+      refute_received {:update_branch, _url, _head, _opts}
+
+      # A conflict is GitHub's answer: the next read shows it, the mark stays.
+      Process.put(:update_branch, {:error, :conflict})
+      assert %{outcome: :applied, attempts: %{base_held: "head-1"}} = Apply.apply(action("R20a", :update_branch), ctx(:qa, facts: facts, attempts: held))
+
+      # Up to date already, or refused: the mark goes, so R22 reruns the check next, and no rule.action says it updated.
+      Process.put(:update_branch, {:error, {:gh_failed, [], 1, "HTTP 422: merge-commit has no new commits"}})
+      recorded = r20a_rule_actions()
+
+      log =
+        capture_log(fn ->
+          assert %{outcome: :applied, attempts: %{base_held: nil, updated_from: nil}, action: wait} =
+                   Apply.apply(action("R20a", :update_branch), ctx(:ci_fix, facts: facts, attempts: held))
+
+          assert %Action{rule: "R20a", kind: :wait, owner: :ci} = wait
+
+          assert wait.reason == "GitHub did not update PR #7 from the base branch: its failed checks are rerun once before CI Fix"
+        end)
+
+      assert log =~ "could not update TP-7 from the base"
+      assert recorded != []
+      assert r20a_rule_actions() == recorded
+    end
+
+    defp r20a_rule_actions, do: @issue_id |> SymphonyElixir.TicketEvents.query(types: ["rule.action"]) |> Enum.filter(&(&1.payload.rule == "PR watcher R20a"))
+
     test "merge_now squash-merges a green, mergeable PR" do
       assert %{outcome: :applied} = Apply.apply(action("R29", :merge_now), ctx(:merging))
       assert_received {:squash_merge, @pr_url, %{pr_node_id: "PR_node", head_sha: "head-1", pr_title: "Add it"}, _opts}
