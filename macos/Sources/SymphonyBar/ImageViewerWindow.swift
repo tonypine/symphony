@@ -24,7 +24,7 @@ final class ImageViewerWindow: NSObject, NSWindowDelegate {
         }
         let session = ImageViewerSession(images: images, model: ImageViewerModel(images: set, current: current))
         let hostingController = NSHostingController(
-            rootView: ImageViewerView(session: session) { [weak self] in self?.window?.performClose(nil) }
+            rootView: ImageViewerView(session: session) { [weak self] in self?.window?.performClose(nil) }.pointerButtons()
         )
         hostingController.sizingOptions = []
         let window = NSWindow(contentViewController: hostingController)

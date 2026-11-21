@@ -88,6 +88,7 @@ struct InsightsControlBar: View {
                 slice.choose(period, today: today)
                 showsRange = false
             }
+            .pointerButtons()
         }
     }
 
@@ -295,6 +296,7 @@ struct InsightsBarChart: View {
         }
         .sheet(isPresented: $showsData) {
             ShowDataSheet(title: chart.title, rows: chart.dataTable) { showsData = false }
+            .pointerButtons()
         }
     }
 

@@ -474,7 +474,7 @@ private struct DataTableHeaderCell<Item: Identifiable>: View {
                         }
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.plainPointer)
                 .onHover { hovered = $0 }
                 .animation(.motion(.fast, reduceMotion: reduceMotion), value: hovered)
                 .padding(.horizontal, DesignTokens.Table.cellPadding - DesignTokens.Table.headerButtonOutset)
@@ -560,6 +560,7 @@ private struct DataTableRowView: View {
         .onHover { hovered = $0 }
         .onTapGesture(count: 2) { open?() }
         .simultaneousGesture(TapGesture().onEnded { select() })
+        .buttonPointer(enabled: open != nil)
         .contextMenu { if let menu { menu } }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(DesignTokens.Table.spokenRow(titles: titles, cells: words))
@@ -601,10 +602,9 @@ private struct DataTableEmptyView: View {
                 .foregroundStyle(DesignTokens.TextColor.secondary.color)
             if let clear = empty.clearFilters {
                 Button("Clear Filters", action: clear)
-                    .buttonStyle(.plain)
+                    .buttonStyle(.plainPointer)
                     .textStyle(.body)
                     .foregroundStyle(DesignTokens.ColorToken.accentText.color)
-                    .pointerStyle(.link)
             }
         }
         .multilineTextAlignment(.center)

@@ -239,6 +239,7 @@ struct SessionLineRow: View {
         .focused($focused)
         .onHover { hovered = $0 }
         .onTapGesture { if line.expands { flip() } }
+        .buttonPointer(enabled: line.expands)
         .onKeyPress(keys: FoldKeys.keys, phases: .down) { press in
             guard line.expands, FoldKeys.toggles(press.key, modifiers: press.modifiers) else { return .ignored }
             flip()

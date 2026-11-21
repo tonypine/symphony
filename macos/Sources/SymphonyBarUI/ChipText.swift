@@ -204,7 +204,9 @@ private struct ChipTextRepresentable: NSViewRepresentable {
     final class Coordinator {
         var openURL: (URL) -> Void = { _ in }
         lazy var popover = ChipPopover { [unowned self] mention in
-            let controller = NSHostingController(rootView: ReferencePopoverView(popover: ReferencePopover(mention), openURL: { self.openURL($0) }))
+            let controller = NSHostingController(
+                rootView: ReferencePopoverView(popover: ReferencePopover(mention), openURL: { self.openURL($0) }).pointerButtons()
+            )
             controller.sizingOptions = .preferredContentSize
             return controller
         }

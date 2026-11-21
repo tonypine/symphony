@@ -53,7 +53,7 @@ struct GitHubUpdatesCardView: View {
                         Label(SetupPage.detailsTitle, systemImage: expanded ? "chevron.down" : "chevron.right")
                             .font(DesignTokens.TypeStyle.secondary.font)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.plainPointer)
                     .foregroundStyle(.secondary)
                     .accessibilityLabel(expanded ? "Hide GitHub updates details" : "Show GitHub updates details")
                     if expanded {
