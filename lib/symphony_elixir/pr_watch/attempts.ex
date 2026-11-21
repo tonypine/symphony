@@ -33,7 +33,9 @@ defmodule SymphonyElixir.PrWatch.Attempts do
   run to its end (`pending`: its head, cause and since when, `pending?/3`); the head an update-branch
   moved past, whose runs are cancelled once the head moves on; and the last head Symphony knows it
   put there in a `Merging` stay (`trusted_head`): the head the stay began on, one a run left, or
-  the one an update-branch made. Any other head in `Merging` is a person's push (`head_origin`).
+  the one an update-branch made. Any other head in `Merging` is a person's push (`head_origin`). And
+  the head read red on the base branch too (`base_held`, R23), until its branch is updated from the
+  base: once the base is green, R20a takes the base's fix in on it instead of a rerun and CI Fix.
 
   Since GitHub shows Symphony's pushes and a person's under the same account, the head's author
   can't tell them apart; where the head came from can.
@@ -105,6 +107,7 @@ defmodule SymphonyElixir.PrWatch.Attempts do
           fix_ticket: String.t() | nil,
           blocked: blocked() | nil,
           updated_from: String.t() | nil,
+          base_held: String.t() | nil,
           trusted_head: String.t() | nil,
           head_origin: :symphony | :person,
           pending: pending() | nil
@@ -155,6 +158,7 @@ defmodule SymphonyElixir.PrWatch.Attempts do
       fix_ticket: nil,
       blocked: nil,
       updated_from: nil,
+      base_held: nil,
       trusted_head: nil,
       head_origin: :symphony,
       pending: nil
@@ -176,6 +180,7 @@ defmodule SymphonyElixir.PrWatch.Attempts do
       fix_ticket: string(Map.get(attempts, :fix_ticket)),
       blocked: blocked(Map.get(attempts, :blocked)),
       updated_from: string(Map.get(attempts, :updated_from)),
+      base_held: string(Map.get(attempts, :base_held)),
       trusted_head: string(Map.get(attempts, :trusted_head)),
       head_origin: if(Map.get(attempts, :head_origin) == :person, do: :person, else: :symphony),
       pending: pending_of(attempts)
@@ -186,7 +191,7 @@ defmodule SymphonyElixir.PrWatch.Attempts do
 
   @doc "The facts these attempts fill, as `SymphonyElixir.PrWatch.Fetch.facts/2` takes them from the ticket."
   @spec fact_keys() :: [atom()]
-  def fact_keys, do: [:red_attempts, :conflict_attempts, :rerun_done, :cancel_reruns, :same_failure_streak, :fix_failures, :landing_timed_out, :head_origin]
+  def fact_keys, do: [:red_attempts, :conflict_attempts, :rerun_done, :base_held, :cancel_reruns, :same_failure_streak, :fix_failures, :landing_timed_out, :head_origin]
 
   @doc """
   The attempts after this tick's `read` of the PR (nil when the ticket has none), before deciding.
@@ -213,6 +218,7 @@ defmodule SymphonyElixir.PrWatch.Attempts do
     |> break_streak(read)
     |> keep_head_failure(read)
     |> keep_head_reruns(read)
+    |> keep_base_held(read)
     |> keep_head_cancels(read)
     |> head_origin(read, ticket)
   end
@@ -305,6 +311,12 @@ defmodule SymphonyElixir.PrWatch.Attempts do
   defp keep_head_reruns(attempts, %{head_sha: head}) when is_binary(head), do: %{attempts | reruns: Map.take(attempts.reruns, [head])}
   defp keep_head_reruns(attempts, _read), do: %{attempts | reruns: %{}}
 
+  # A head read red on the base too (R23) is marked, and the mark stays on that head until its branch
+  # moves on, or GitHub can't update its branch from the base (`base_taken/1`).
+  defp keep_base_held(attempts, %{head_sha: head, ci: :red, red_kind: :also_red_on_base}) when is_binary(head), do: %{attempts | base_held: head}
+  defp keep_base_held(%{base_held: head} = attempts, %{head_sha: head}) when is_binary(head), do: attempts
+  defp keep_base_held(attempts, _read), do: %{attempts | base_held: nil}
+
   defp keep_head_cancels(%{cancels: %{head_sha: head}} = attempts, %{head_sha: head}) when is_binary(head), do: attempts
   defp keep_head_cancels(attempts, _read), do: %{attempts | cancels: nil}
 
@@ -322,6 +334,7 @@ defmodule SymphonyElixir.PrWatch.Attempts do
       red_attempts: attempts.red,
       conflict_attempts: attempts.conflict,
       rerun_done: not settings.flaky_retry or rerun_done?(attempts, read),
+      base_held: base_held?(attempts, read),
       cancel_reruns: cancel_reruns(attempts, read),
       same_failure_streak: same_failure_streak(attempts, read),
       fix_failures: attempts.fix_failures,
@@ -332,6 +345,9 @@ defmodule SymphonyElixir.PrWatch.Attempts do
 
   defp rerun_done?(attempts, %{head_sha: head}) when is_binary(head), do: Map.has_key?(attempts.reruns, head)
   defp rerun_done?(_attempts, _read), do: false
+
+  defp base_held?(%{base_held: head}, %{head_sha: head}) when is_binary(head), do: true
+  defp base_held?(_attempts, _read), do: false
 
   defp timed_out?(%{since: since}, now, timeout_ms), do: DateTime.diff(now, since, :millisecond) >= timeout_ms
   defp timed_out?(nil, _now, _timeout_ms), do: false
@@ -633,6 +649,14 @@ defmodule SymphonyElixir.PrWatch.Attempts do
   @doc "Restarts the conflict count, once a wait that stepped behind competing PRs (R15) is over."
   @spec restart_conflict(t()) :: t()
   def restart_conflict(attempts), do: %{normalize(attempts) | conflict: 0}
+
+  @doc """
+  Clears the mark of a head read red on the base too: GitHub could not update its branch from the
+  base (R20a), so the head's red is read as a plain failure from here on (R22, R21). An update GitHub
+  took keeps the mark until the head moves on, so the old head is never rerun meanwhile.
+  """
+  @spec base_taken(t()) :: t()
+  def base_taken(attempts), do: %{normalize(attempts) | base_held: nil}
 
   @doc "Records the head an update-branch moved past, or clears it (nil)."
   @spec updated_from(t(), String.t() | nil) :: t()
