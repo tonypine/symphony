@@ -332,6 +332,15 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
              ]
     end
 
+    test "a check marked after the merge is read with its marker; any other value reads as unmarked" do
+      merged = %{"kind" => "outcome", "statement" => "The release run on main is green.", "proof" => "test", "after_merge" => true}
+      loose = %{"kind" => "outcome", "statement" => "The page loads.", "proof" => "test", "after_merge" => "yes"}
+
+      assert {:ok, %{plan: %{checks: [read_merged, read_loose | _rest]}}} = plan(%{"checks" => [merged, loose | @plan["checks"]]})
+      assert read_merged == %{kind: "outcome", statement: "The release run on main is green.", proof: "test", after_merge: true}
+      refute Map.has_key?(read_loose, :after_merge)
+    end
+
     test "is not read at another turn, which answers as before" do
       assert {:ok, %{plan: nil}} = Answer.parse(json(%{"instructions" => "x", "plan" => @plan}))
       assert Answer.parse(json(%{"plan" => @plan})) == {:error, "`instructions` must be a string"}

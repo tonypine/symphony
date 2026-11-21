@@ -604,7 +604,10 @@ it touches (none or more of `screen`, `gallery`, `api`, `logic`, `config`, `test
 `docs`; a name outside them is dropped and never refuses the plan), a `summary` for a person, the plan's `text` for agents, its `checks`, each with an `id`
 that is its alone across versions (a new check gets an id no version used, and a check whose
 statement a version changed counts only the proofs and waivers recorded after that version), a `kind`, `outcome`, `qa` or `evidence`, a `statement` and its
-`proof`, `test`, `qa`, `design` or `attached`, its `size` and, for a split, its `sub_tickets`; the
+`proof`, `test`, `qa`, `design` or `attached`, and an optional `after_merge` marker on a check that
+can only be seen once the ticket's own pull request has merged, which no gate before the merge (the
+checks step, the handoff, QA, the question to waive it) waits on and a split ticket's final check
+reads; its `size` and, for a split, its `sub_tickets`; the
 newest one is the ticket's plan, and a ticket is groomed exactly when it holds one), `check.proved`
 (any run's, or the machine's: a check of the current plan proved by a test, QA, the design or
 something attached, recorded once per check and head and refused for an id the plan does not hold),

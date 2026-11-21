@@ -384,6 +384,22 @@ defmodule SymphonyElixir.PhaseStepsTest do
 
       assert {:turn, %Step{id: "handoff"}, nil} = run_guard(ctx)
     end
+
+    test "a check marked after the merge never fails it: the step passes once the other checks are proved", ctx do
+      merged = %{id: "c4", kind: "outcome", statement: "The release run on main is green.", proof: "test", after_merge: true}
+      {:ok, _plan} = SymphonyElixir.TicketPlan.write(@repo_key, @issue_id, %{@guarded_plan | checks: @guarded_plan.checks ++ [merged]})
+
+      assert {:turn, %Step{id: "code"}, %{output: output}} = run_guard(ctx)
+      refute output =~ "[c4]"
+
+      proof = %{check_id: "c1", by: "test", test: "test/guard_test.exs"}
+      {:ok, _proved} = SymphonyElixir.TicketChecks.prove(@repo_key, @issue_id, proof, actor: {:agent, "run-steps", "implementation"})
+      attached = %{check_id: "c3", by: "attached", evidence: "evt-1"}
+      {:ok, _proved} = SymphonyElixir.TicketChecks.prove(@repo_key, @issue_id, attached, actor: {:agent, "run-steps", "implementation"})
+
+      assert {:turn, %Step{id: "handoff"}, nil} = run_guard(ctx)
+      assert [%{id: "c4", state: :open}] = Enum.filter(SymphonyElixir.TicketChecks.open(@issue_id), &SymphonyElixir.TicketChecks.after_merge?/1)
+    end
   end
 
   describe "the findings step of a rework" do

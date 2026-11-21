@@ -53,6 +53,11 @@ How to groom, in order:
    - `design`: a screen is compared with its design; name the Gallery `story` when you know it.
    - `attached`: something attached to the ticket shows it (a measurement, a document, a
      screenshot), for a result no test and no QA step can show.
+   A check that can only be seen once this ticket's own pull request has merged (a green run on
+   main, a release, a deploy) is never a plain check: everything before the merge (the coding run's
+   proofs, the handoff, QA) would wait on it for good. Mark it `"after_merge": true`, and Symphony
+   leaves it out of everything before the merge: it stays open on the ticket, and a split ticket's
+   final check reads it. Leave it out entirely when it only restates that the change merges.
 6. Write QA checks (kind `qa`) only for what must be seen in the running app: something on a
    screen, or a flow from end to end that no test covers. Each one says the app `state` it needs
    (the data, the screen, the setting), the `action` a person takes, and what they `expect` to see.
@@ -102,7 +107,8 @@ Write your answer as one JSON object and nothing else:
     "summary": "<for a person: what will be built, at most 600 characters>",
     "text": "<the plan for the agents, labelled sections, at most 12000 characters>",
     "checks": [
-      {"kind": "outcome" or "evidence", "statement": "<at most 600 characters>", "proof": "test" or "qa" or "design" or "attached"},
+      {"kind": "outcome" or "evidence", "statement": "<at most 600 characters>", "proof": "test" or "qa" or "design" or "attached",
+       "after_merge": true only when it can be seen only after this ticket's own merge, else leave it out},
       {"kind": "qa", "statement": "<what is checked>", "proof": "qa" or "design", "state": "<the app state it needs>",
        "action": "<what the person does>", "expect": "<what they see>", "size": "normal" or "wide", "story": "<optional Gallery story id>"}
     ],
