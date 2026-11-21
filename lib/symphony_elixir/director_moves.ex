@@ -84,7 +84,11 @@ defmodule SymphonyElixir.DirectorMoves do
     with no such Question whose pause waits on the Question `question_id` that Unblock answers
     (`SymphonyElixir.Questions.held/1`: a dispatch loop's, a quiet handoff's, a park's, a block
     report's) is answered with the first pick, as `answer_held_question/4` says; any other is
-    refused. A pick's `:option` is the option it picked when its `:answer` is the person's own
+    refused. A Question a step asked (a machine step's, such as the Window tests step's "Run it
+    again" or "Send it back to the code") is never one Unblock answers, whatever its options are
+    called (`SymphonyElixir.Questions.held_question?/1`): Decide answers it as any Question, which
+    ends its pause reason and writes no other, so the run waiting on it resumes as the answer says
+    (`SymphonyElixir.PhaseSteps.machine_resume/1`) with no separate Unblock (TP-1569). A pick's `:option` is the option it picked when its `:answer` is the person's own
     words given with it: the option decides what the answer does, the words are its text. A
     Decide naming a Question already answered is a no-op that says so: `already_decided: true`
     with the recorded `answer` and `option`, never a second outcome (a replayed request, a second

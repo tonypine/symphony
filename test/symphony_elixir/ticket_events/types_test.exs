@@ -565,8 +565,20 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
 
       assert {:ok, %{reason: "gave no answer"}} = completed.(%{outcome: "failed", returns_to: "review", reason: "gave no answer"})
       assert {:ok, %{returns_to: "review"}} = completed.(%{outcome: "failed", returns_to: "review"})
-      assert {:error, {:invalid_payload, [:reason]}} = completed.(%{outcome: "paused", question_id: "q", reason: "why"})
+      assert {:ok, %{reason: "why"}} = completed.(%{outcome: "paused", question_id: "q", reason: "why"})
+      assert {:error, {:invalid_payload, [:reason]}} = completed.(%{outcome: "passed", reason: "why"})
       assert %{required_when: %{field: "outcome", equals: "skipped"}} = Enum.find(Types.schema("step.completed").optional, &(&1.name == "reason"))
+    end
+
+    test "the Window tests step's failing tests ride on its step.completed, bounded (TP-1569)" do
+      completed = fn attrs -> Types.validate("step.completed", Map.merge(%{step_id: "window_tests", title: "Window tests", mode: "machine"}, attrs), :machine, nil) end
+      failure = %{script: "macos/Tests/a.sh", title: "a test", exit_status: 3, printed: "it broke", base: %{exit_status: 0, printed: "fine"}}
+      paused = %{outcome: "paused", question_id: "q", reason: "Failed in the QA VM: the a test"}
+
+      assert {:ok, %{failures: [^failure]}} = completed.(Map.put(paused, :failures, [failure]))
+      assert {:ok, %{failures: [%{exit_status: 1}]}} = completed.(Map.put(paused, :failures, [%{script: "s", title: "t", exit_status: 1}]))
+      assert {:error, {:invalid_payload, [:failures]}} = completed.(Map.put(paused, :failures, [%{failure | printed: String.duplicate("a", 1_201)}]))
+      assert {:error, {:invalid_payload, [:failures]}} = completed.(Map.put(paused, :failures, List.duplicate(failure, 11)))
     end
 
     test "a QA step's answer rides on its step.completed: result, plan, recheck and verdict_summary" do

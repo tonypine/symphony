@@ -4264,16 +4264,22 @@ It builds the workspace's commit with the QA build a QA pass uses (cached by tre
 the same commit reuses it), takes the QA VM, copies the commit to a run directory of its own there
 and runs each test from `macos/` with the Mac CI build's environment: the pinned Xcode as
 `DEVELOPER_DIR` (the VM's own Xcode, said in the output, when it lacks it) and the built app's path
-as `SYMPHONY_QA_APP`. Every test's output is the step's output. A test that fails is run again on
-the merge-base with the base branch: when it passes there, the change broke it, and the run goes
-back to `code` with the output; when every failing test fails there too, the fault is the VM's or
-main's. The step never passes by default: when it could not run (no QA VM, the VM unreachable or
+as `SYMPHONY_QA_APP`. Every test's output is the step's output. A failing test that main does not
+run in the QA VM (the manifest at the merge-base with the base branch has it `off`, or lacks it) is
+the change's own: the change turned it on, or changed it while it is `off` on main, so the run goes
+back to `code` with what each failing test printed, never asking whether main fails it too (TP-1569).
+Any other test that fails is run again on the merge-base: when it passes there, the change broke
+it, and the run goes back to `code` with the output; when every failing test fails there too, the
+fault is the VM's or main's. When tests failed, the output ends with the last lines each one printed
+(and printed on main, when it ran there), and the step's result on the ticket, failed or paused,
+names each failed test in its reason and keeps that list. The step never passes by default: when it could not run (no QA VM, the VM unreachable or
 refused, the build could not run there, a tool missing, a test failing on main too, or a covering test
 that is `off`), it pauses on
 a Question in the Inbox naming its cause as it is (the QA VM, main failing or not building there
 too, or a test that is `off`, which recommends sending it to `code`, since running again stops
 again while the test stays `off`), so the run stops before Hand off and nothing is pushed; the
-answer runs it again, or sends the person's words to `code`. The QA VM is one machine:
+answer runs it again, or sends the person's words to `code`, and starts the run by itself: no
+separate Unblock is needed, whatever option the person picks. The QA VM is one machine:
 a `macos_app` QA pass holds it for its whole pass and the step while its tests run, so they never
 overlap; a step that waits says on the ticket's timeline which ticket holds it, and a QA pass that
 waits is listed as waiting for the QA VM.

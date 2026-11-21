@@ -27,7 +27,13 @@ defmodule SymphonyElixir.PhaseSteps do
   - a step whose `when`, or every command's, does not match the changed files is `skipped`, with
     the reason;
   - a step that ends `failed` says why on its `step.completed` (`reason`, `failure_reason/1`): the
-    command that ended it, how it ended and the last line it printed.
+    command that ended it, how it ended and the last line it printed. A command of Symphony's own
+    may say more: the Window tests step's `step.completed`, failed or paused, names the tests that
+    failed in the QA VM in its `reason` and keeps them, with what each printed, in `failures`
+    (`SymphonyElixir.PhaseSteps.WindowTests.details/1`);
+  - a Question a step paused on is the step's, never one the Director's Unblock answers
+    (`SymphonyElixir.Questions.held_question?/1`), even when an option shares a label with one: any
+    answer ends its pause and resumes the step as `machine_resume/1` says.
 
   One command is Symphony's own and runs in this process, not in a shell: the findings command
   (`Phases.findings_command/0`, `SymphonyElixir.PhaseSteps.Findings`) keeps the open findings by class
@@ -143,7 +149,7 @@ defmodule SymphonyElixir.PhaseSteps do
           optional(:on_step) => (notice() -> term()),
           optional(:transcript_lines) => [Transcript.line()],
           optional(:builtins) => %{String.t() => (map() -> runner_result())},
-          optional(:window_tests) => (map(), pos_integer() -> runner_result() | {:ask, String.t(), map()}),
+          optional(:window_tests) => (map(), pos_integer() -> WindowTests.run_result()),
           optional(:answer_dir) => Path.t() | nil,
           optional(:ci_failure) => map() | nil,
           optional(:pr_conflict) => map() | nil,
@@ -396,20 +402,27 @@ defmodule SymphonyElixir.PhaseSteps do
     complete(result, step, context, attempt, duration_ms)
   end
 
-  defp run_commands([], _context, _env, _deadline_ms, output), do: {:passed, output}
+  defp run_commands([], _context, _env, _deadline_ms, output), do: {:passed, output, %{}}
 
   defp run_commands([command | rest], context, env, deadline_ms, output) do
     output = [output, "$ ", command, "\n"]
     remaining_ms = max(deadline_ms - System.monotonic_time(:millisecond), 1)
+    {result, details} = details(run_command(command, context, env, remaining_ms))
 
-    case run_command(command, context, env, remaining_ms) do
+    case result do
       {:ok, {text, 0}} -> run_commands(rest, context, env, deadline_ms, [output, text])
-      {:ask, text, request} -> {{:ask, request}, [output, text]}
-      {:ok, {text, status}} -> {:failed, [output, text, "\n(exit status #{status})\n"]}
-      {:timeout, text} -> {:no_result, [output, text, "\n(stopped: no result before the step's timeout)\n"]}
-      {:error, reason} -> {:failed, [output, "(could not run: #{inspect(reason)})\n"]}
+      {:ask, text, request} -> {{:ask, request}, [output, text], details}
+      {:ok, {text, status}} -> {:failed, [output, text, "\n(exit status #{status})\n"], details}
+      {:timeout, text} -> {:no_result, [output, text, "\n(stopped: no result before the step's timeout)\n"], %{}}
+      {:error, reason} -> {:failed, [output, "(could not run: #{inspect(reason)})\n"], %{}}
     end
   end
+
+  # A command of Symphony's own may say more of how it ended than its output (the Window tests
+  # step's failing tests, `WindowTests.details/1`): fields its `step.completed` carries.
+  defp details({:ok, done, %{} = details}), do: {{:ok, done}, details}
+  defp details({:ask, text, request, %{} = details}), do: {{:ask, text, request}, details}
+  defp details(result), do: {result, %{}}
 
   defp run_command(command, context, env, timeout_ms) do
     cond do
@@ -451,7 +464,7 @@ defmodule SymphonyElixir.PhaseSteps do
     end
   end
 
-  defp complete({outcome, output}, step, context, attempt, duration_ms) do
+  defp complete({outcome, output, details}, step, context, attempt, duration_ms) do
     output = output |> IO.iodata_to_binary() |> String.replace_invalid() |> tail(@output_max_bytes)
     artifacts = output_artifact(output, step, context)
     timed = Map.put(step_payload(step), :duration_ms, duration_ms)
@@ -462,7 +475,7 @@ defmodule SymphonyElixir.PhaseSteps do
         :passed
 
       :failed ->
-        record(context, "step.completed", timed |> Map.merge(failed_to(context, step)) |> Map.put(:reason, failure_reason(output)), artifacts)
+        record(context, "step.completed", failed_payload(timed, context, step, output, details), artifacts)
         {:failed, output}
 
       :no_result when attempt < step.no_result_limit ->
@@ -471,11 +484,17 @@ defmodule SymphonyElixir.PhaseSteps do
         {:again, output}
 
       :no_result ->
-        pause(question(step, context, output), step, context, output, timed, artifacts)
+        pause(question(step, context, output), step, context, {output, %{}}, timed, artifacts)
 
       {:ask, request} ->
-        pause(request, step, context, output, timed, artifacts)
+        pause(request, step, context, {output, details}, timed, artifacts)
     end
+  end
+
+  # A failed step's `step.completed`: where it returns to and why, from its output, or as the command
+  # said it (`details`, which may carry more, such as the Window tests step's failing tests).
+  defp failed_payload(timed, context, step, output, details) do
+    timed |> Map.merge(failed_to(context, step)) |> Map.put(:reason, failure_reason(output)) |> Map.merge(details)
   end
 
   @doc """
@@ -521,7 +540,7 @@ defmodule SymphonyElixir.PhaseSteps do
   # At the no-result cap, or on a failure that came back, the step asks the person; a Question the
   # store refuses fails the step to its `on_fail` instead, so the run never runs it a third time on
   # its own.
-  defp pause(request, step, context, output, timed, artifacts) do
+  defp pause(request, step, context, {output, details}, timed, artifacts) do
     ticket = {:ticket, context.repo_key, context.issue_id}
 
     case Questions.ask(ticket, request,
@@ -530,12 +549,12 @@ defmodule SymphonyElixir.PhaseSteps do
            asked_in: Map.get(context, :phase)
          ) do
       {:ok, %{id: question_id}} ->
-        record(context, "step.completed", Map.merge(timed, %{outcome: "paused", question_id: question_id}), artifacts)
+        record(context, "step.completed", timed |> Map.merge(%{outcome: "paused", question_id: question_id}) |> Map.merge(details), artifacts)
         {:paused, question_id}
 
       {:error, reason} ->
         Logger.warning("Step runner could not ask about step #{step.id} of #{ticket_name(context)}: #{inspect(reason)}")
-        record(context, "step.completed", timed |> Map.merge(failed_to(context, step)) |> Map.put(:reason, failure_reason(output)), artifacts)
+        record(context, "step.completed", failed_payload(timed, context, step, output, details), artifacts)
         {:failed, output}
     end
   end

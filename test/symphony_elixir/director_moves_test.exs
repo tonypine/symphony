@@ -8,6 +8,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
   alias SymphonyElixir.Inbox.{FromRecord, Item}
   alias SymphonyElixir.Linear.Client
   alias SymphonyElixir.{Pauses, PlanComments, Questions, RunStore, SelfHeal, SubIssueWait}
+  alias SymphonyElixir.PhaseSteps.WindowTests
   alias SymphonyElixir.PrWatch.Competitors
   alias SymphonyElixir.{StateMachine, TicketSignals, TicketState, TicketStateReconciler, TokenBudget}
 
@@ -1115,6 +1116,34 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert {:error, :linear_down} = DirectorMoves.project_answer("repo-director", "pr", id, "comment-1")
       # A question no longer answered has nothing to project.
       assert :ok = DirectorMoves.project_answer("repo-director", "pr", "q-none", "comment-1")
+    end
+
+    test "any answer to the Window tests step's question ends its pause and writes no other, so the run resumes without an Unblock (TP-1569)",
+         %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      ticket = {:ticket, "repo-director", "pr"}
+      request = WindowTests.question(%{identifier: "MOT-40"}, :base, "the scroll test also fails in the QA VM on the base branch")
+
+      answers = [
+        {"Send it back to the code", "Send it back to the code", :words},
+        {"Run it again", "Run it again", :again},
+        {"Look at the scroll offset first", nil, :words}
+      ]
+
+      for {answer, option, resume} <- answers do
+        {:ok, question} = Questions.ask(ticket, request, asked_by: %{kind: :symphony, name: "Symphony"}, step: "window_tests", asked_in: "In Progress")
+        assert Pauses.paused?(ticket)
+        refute Questions.held_question?(question)
+        assert Questions.held(ticket) == nil
+
+        picks = [%{question: question.question, answer: answer, option: option}]
+        assert {:ok, %{moved: false}} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks, question_id: question.id}, opts)
+
+        assert {:ok, nil} = Pauses.get(ticket), "#{answer} left a pause"
+        assert %{state: :answered} = answered = Questions.find(ticket, question.id)
+        assert Questions.open(ticket) == []
+        assert SymphonyElixir.PhaseSteps.machine_resume(answered) == resume
+      end
     end
 
     test "with Linear down and no request known, the refused comment is marked pending with no request", %{opts: opts} do
