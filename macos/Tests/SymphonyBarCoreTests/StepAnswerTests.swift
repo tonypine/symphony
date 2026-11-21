@@ -60,6 +60,7 @@ final class StepAnswerTests: XCTestCase {
         XCTAssertEqual(StepAnswer(result: .init(status: "blocked")).judgement, .blocked)
     }
 
+    @MainActor
     func testTheGroupedWalkFixtureListsEachCheckWithItsOwnResult() throws {
         let feed = TicketEventsTests.director("ticket-grouped-walk").appendingPathComponent("api/v1/repos/web-shop/tickets/SHOP-410/events.json")
         let history = try XCTUnwrap(TicketEventsPayload.decode(Data(contentsOf: feed)))
