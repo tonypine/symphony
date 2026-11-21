@@ -3171,7 +3171,7 @@ question to the person (send it back, waive the checks and pass it on, cancel). 
 window-driving tests whose script or covered path the change touches, as the manifest beside them
 declares, and is skipped otherwise; a test that fails there and passes on the base branch returns
 the run to `code`, and a step that could not run (the VM unreachable, a build the VM could not run,
-a test failing on the base branch too, a test that is off in the QA VM whose script or covered path changed; every test ships off until a run sees it pass on main in the QA VM) pauses on a Question, so it never passes by default and
+a test failing on the base branch too, a test that is off in the QA VM whose script or covered path changed; a test is on only once a run saw it pass in the QA VM) pauses on a Question, so it never passes by default and
 nothing is pushed. It and a `macos_app` QA pass never use the QA VM at the same time. The rework default puts `findings` (machine) before them: it
 keeps the open findings by class as its output and, when the same class failed QA in two QA runs,
 ends `paused` on a Question listing both findings before any code is written. The `ci_fix` default
