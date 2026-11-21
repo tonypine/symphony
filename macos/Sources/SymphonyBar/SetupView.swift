@@ -825,7 +825,7 @@ struct DispatchShadowLineView: View {
                         Label(DispatchShadowLine.disclosureTitle, systemImage: expanded ? "chevron.down" : "chevron.right")
                             .font(DesignTokens.TypeStyle.secondary.font)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.plainPointer)
                     .foregroundStyle(.secondary)
                     .accessibilityLabel(expanded ? "Hide the last dispatch differences" : "Show the last dispatch differences")
                     if expanded {
@@ -934,7 +934,7 @@ struct ReconcileLineView: View {
                         Label(ReconcileLine.disclosureTitle, systemImage: expanded ? "chevron.down" : "chevron.right")
                             .font(DesignTokens.TypeStyle.secondary.font)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.plainPointer)
                     .foregroundStyle(.secondary)
                     .accessibilityLabel(expanded ? "Hide the last drift" : "Show the last drift")
                     if expanded {
@@ -1127,7 +1127,7 @@ struct SetupRowView: View {
                         Label(SetupPage.detailsTitle, systemImage: expanded ? "chevron.down" : "chevron.right")
                             .font(DesignTokens.TypeStyle.secondary.font)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.plainPointer)
                     .foregroundStyle(.secondary)
                     .accessibilityLabel(expanded ? "Hide details" : "Show details")
                     if expanded { details }
@@ -1189,7 +1189,7 @@ struct SetupRowView: View {
         Button { actions.openTicket(identifier) } label: {
             Text(identifier).foregroundStyle(Color.accentColor)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.plainPointer)
         .help("Open \(identifier)'s page")
         .accessibilityAddTraits(.isLink)
     }
@@ -1323,7 +1323,7 @@ struct SetupBannerView: View {
             Button(action: close) {
                 Image(systemName: "xmark").foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.plainPointer)
             .accessibilityLabel("Close")
         }
         .padding(.horizontal, DesignTokens.Space.s4)

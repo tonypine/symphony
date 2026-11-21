@@ -82,6 +82,7 @@ public struct CollapsibleHead<Title: View>: View {
             .focusEffectDisabled()
             .focused($focused)
             .onHover { hovered = $0 }
+            .buttonPointer(enabled: enabled)
             // One gesture presses and clicks: a press released where it began toggles. A separate tap here lost the click
             // to the timeline row's own select tap around it, so a click selected the run and never folded it (TP-1480's QA).
             .simultaneousGesture(

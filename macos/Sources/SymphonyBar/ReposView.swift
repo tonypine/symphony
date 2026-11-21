@@ -173,7 +173,7 @@ struct ReposChipView: View {
             Button { showsPopover.toggle() } label: {
                 capsule(title: restart.title, dot: .orange)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.plainPointer)
             .help(restart.line ?? restart.title)
             .popover(isPresented: $showsPopover, arrowEdge: .bottom) {
                 ReposRestartPopover(chip: restart, model: model)
@@ -229,9 +229,11 @@ struct ReposRestartPopover: View {
                     Spacer()
                     if chip.showsCancel {
                         Button(chip.cancelTitle) { model.onCancelRestart() }
+                            .buttonPointer()
                     }
                     if chip.showsRestartNow {
                         Button(chip.restartNowTitle) { model.onRestartNow() }
+                            .buttonPointer()
                             .disabled(!chip.restartNowEnabled)
                             .help(chip.restartNowEnabled ? chip.restartNowTitle : ReposRestartChip.restartNowHelp)
                     }
@@ -369,6 +371,7 @@ struct RepoDetailView: View {
             Text(section.rawValue)
             Spacer()
             Button(EditRepo.buttonTitle) { model.onEdit(repo.key, section) }
+                .buttonPointer()
                 .controlSize(.small)
                 .disabled(repo.actions.editProblem != nil)
                 .help(repo.actions.editProblem ?? section.help)
@@ -683,9 +686,11 @@ struct ReposEmptyView: View {
             switch state {
             case .noRepos:
                 Button(AddRepo.buttonTitle) { model.onAddRepo() }
+                    .buttonPointer()
                     .keyboardShortcut(.defaultAction)
             case .noConfig:
                 Button(ReposList.openSettingsTitle) { model.onOpenSettings() }
+                    .buttonPointer()
                     .keyboardShortcut(.defaultAction)
             case let .unreadable(path, message):
                 Text(message)
@@ -697,7 +702,9 @@ struct ReposEmptyView: View {
                     .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.1)))
                 HStack {
                     Button(ReposList.revealTitle) { reveal(path) }
+                        .buttonPointer()
                     Button(ReposList.tryAgainTitle) { model.onTryAgain() }
+                        .buttonPointer()
                         .keyboardShortcut(.defaultAction)
                 }
             }
@@ -772,6 +779,7 @@ struct RepoPauseView: View {
                 ProgressView().controlSize(.small)
             }
             Button(control.buttonTitle, action: perform)
+                .buttonPointer()
                 .disabled(working)
                 .help(control.buttonHelp)
                 .accessibilityLabel(control.buttonAccessibilityLabel)

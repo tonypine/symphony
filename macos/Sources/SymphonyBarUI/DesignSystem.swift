@@ -708,6 +708,7 @@ public struct SelectableCard<Content: View>: View {
             .focusEffectDisabled()
             .focused($focused)
             .onTapGesture { select() }
+            .buttonPointer()
             .simultaneousGesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { _ in pressed = true }

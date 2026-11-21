@@ -271,6 +271,7 @@ private struct RowActions: ViewModifier {
             content
         } else {
             clicks(content)
+                .buttonPointer()
                 .onKeyPress(.return) {
                     guard let open else { return .ignored }
                     open()
@@ -470,6 +471,7 @@ private struct TreeMore: View {
         .contentShape(Capsule())
         .onHover { hovered = $0 }
         .onTapGesture(perform: action)
+        .buttonPointer()
         .help(DesignTokens.Tree.More.help(hidden))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(DesignTokens.Tree.More.help(hidden))

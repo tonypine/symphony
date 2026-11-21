@@ -100,6 +100,7 @@ struct SettingsView: View {
                             Text(note).foregroundStyle(.secondary)
                             Spacer()
                             Button("Open Login Items") { MainAppLoginItem.openSystemSettings() }
+                                .buttonPointer()
                         }
                     }
                 }
@@ -546,6 +547,7 @@ struct SettingsView: View {
                 Button("Save") {
                     model.save(onSaved: close)
                 }
+                .buttonPointer()
                 .keyboardShortcut(.defaultAction)
                 .disabled(!model.canSave)
             }
@@ -1074,6 +1076,7 @@ private struct PathField: View {
                 TextField(title, text: $path, prompt: Text("/path/to/…"))
                     .labelsHidden()
                 Button("Choose…", action: choose)
+                    .buttonPointer()
             }
         }
     }

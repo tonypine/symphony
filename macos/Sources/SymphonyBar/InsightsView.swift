@@ -188,6 +188,7 @@ private struct InsightsRangeEditor: View {
             HStack {
                 Spacer()
                 Button("Show Range") { apply(.range(from: Insights.today(from), to: Insights.today(to))) }
+                    .buttonPointer()
                     .keyboardShortcut(.defaultAction)
             }
         }

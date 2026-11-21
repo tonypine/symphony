@@ -910,7 +910,9 @@ struct AddRepoView: View {
         case let .warning(message):
             AddRepoWarningBox(message: message) {
                 Button(AddRepoFlow.retryTitle, action: model.loadLinear)
+                    .buttonPointer()
                 Button(AddRepoFlow.openSettingsTitle) { model.openSettings() }
+                    .buttonPointer()
             }
         }
     }
@@ -1107,12 +1109,15 @@ struct AddRepoCheckFooter: View {
             }
             if check.offersCheckAgain {
                 Button(AddRepoSetupCheck.checkAgainTitle, action: checkAgain)
+                    .buttonPointer()
             }
             if check.offersStart {
                 Button(AddRepoSetupCheck.startTitle, action: start)
+                    .buttonPointer()
                     .disabled(!canStart)
             }
             Button(doneTitle, action: finish)
+                .buttonPointer()
                 .keyboardShortcut(.defaultAction)
                 .disabled(!check.canFinish)
                 .help(check.doneProblem ?? "")
@@ -1276,6 +1281,7 @@ struct AddRepoInstantUpdatesFooter: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Button(AddRepoInstantUpdates.doneTitle, action: finish)
+                .buttonPointer()
                 .keyboardShortcut(.defaultAction)
                 .disabled(!step.canFinish)
                 .help(step.doneProblem ?? "")

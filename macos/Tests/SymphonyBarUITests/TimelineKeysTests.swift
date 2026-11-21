@@ -25,6 +25,22 @@ final class TimelineKeysTests: XCTestCase {
         XCTAssertEqual(TimelineKeys.keys, [.upArrow, .downArrow, .return, .space, .escape])
     }
 
+    /// TP-1572: a click on an entry or a run leaves nothing selected, whatever the arrows selected before, so no row
+    /// carries the accent tint and ring after a click and there is nothing to dismiss with Escape.
+    func testAClickLeavesNoRowSelectedAndSoNoOutline() {
+        for before in [nil, "entry-1", "run-1"] {
+            let after = TimelineSection.selection(afterClicking: before)
+            XCTAssertNil(after)
+            for id in ["entry-1", "run-1"] {
+                let face = DesignTokens.Interaction(hovered: true, selected: after == id)
+                XCTAssertFalse(face.showsSelectionRing, "\(id) after a click from \(before ?? "nothing")")
+                XCTAssertNotEqual(face.surface, DesignTokens.Interaction(selected: true).surface)
+            }
+        }
+        // Escape has nothing left to clear after a click: the arrows are still what selects.
+        XCTAssertEqual(TimelineKeys.action(.downArrow, modifiers: []), .move(1))
+    }
+
     func testEachEntrySaysWhatItsGlyphMeansAndItsToneIsItsClasssColour() {
         XCTAssertEqual(TimelineEntryRow.glyphHelp(.phase), "Phase move")
         XCTAssertEqual(TimelineEntryRow.glyphHelp(.questionAsked), "Question asked")

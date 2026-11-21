@@ -240,9 +240,41 @@ extension View {
     public func buttonPointer(enabled: Bool) -> some View {
         pointerStyle(ButtonPointer.style(enabled: enabled))
     }
+
+    /// The pointing hand while the control is enabled, as the environment says (`isEnabled`): what a button style's
+    /// body sets, so a disabled button keeps the arrow (TP-1572).
+    public func buttonPointer() -> some View {
+        modifier(EnabledButtonPointer())
+    }
 }
 
-/// The pointer over a shared button, icon button or menu control, set once in their styles (TP-1517).
+private struct EnabledButtonPointer: ViewModifier {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func body(content: Content) -> some View {
+        content.buttonPointer(enabled: isEnabled)
+    }
+}
+
+/// A plain button (`.plain`) with the pointing hand while it is enabled (TP-1572): the button every bare text or glyph
+/// button in the app uses, so none of them is left with the arrow.
+public struct PlainPointerButtonStyle: PrimitiveButtonStyle {
+    public init() {}
+
+    public func makeBody(configuration: Configuration) -> some View {
+        Button(configuration)
+            .buttonStyle(.plain)
+            .buttonPointer()
+    }
+}
+
+extension PrimitiveButtonStyle where Self == PlainPointerButtonStyle {
+    /// `.plain` with the pointing hand while the button is enabled.
+    public static var plainPointer: PlainPointerButtonStyle { PlainPointerButtonStyle() }
+}
+
+/// The pointer over a control: the pointing hand while it can be pressed, set once in each button style and clickable
+/// component (TP-1517, TP-1572).
 public enum ButtonPointer {
     /// Whether the pointer turns into the pointing hand: only over a control that can be pressed.
     public static func hand(enabled: Bool) -> Bool { enabled }
@@ -688,7 +720,7 @@ public struct Refusal: View {
                 .fixedSize(horizontal: false, vertical: true)
             if let fix, let perform {
                 Button(fix, action: perform)
-                    .buttonStyle(.plain)
+                    .buttonStyle(.plainPointer)
                     .font(DesignTokens.TypeStyle.secondary.font.weight(.medium))
                     .foregroundStyle(DesignTokens.ColorToken.accentText.color)
                     .fixedSize()
