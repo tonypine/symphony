@@ -335,4 +335,66 @@ defmodule SymphonyElixir.TicketJourneyTest do
       assert TicketJourney.plan_text(issue()) =~ "- [c5] outcome, proof: test, open: The release shows."
     end
   end
+
+  describe "what the merge waits on (TP-1589)" do
+    defp started!(kind), do: put_dispatch(@repo_key, @issue_id, kind: kind)
+
+    defp held! do
+      {:ok, _event} = TicketEvents.record(@repo_key, @issue_id, "conductor.instructions", %{junction: "before_merge", text: "Hold it.", route: "hold"})
+    end
+
+    test "owed_before_merge/1 lists every open check whatever proves it" do
+      assert TicketJourney.owed_before_merge(issue()) == []
+      assert TicketJourney.owed_before_merge(nil) == []
+
+      plan!()
+      assert Enum.map(TicketJourney.owed_before_merge(issue()), & &1.id) == ["c1", "c2", "c3", "c4"]
+
+      prove!(%{check_id: "c1", by: "test", test: "plan_test.exs"})
+      {:ok, _waived} = TicketChecks.waive(@repo_key, @issue_id, "c3", "Nothing to attach.")
+      assert Enum.map(TicketJourney.owed_before_merge(@issue_id), & &1.id) == ["c2", "c4"]
+    end
+
+    test "outdated/1: a plan version or a Conductor hold after the newest coding run started outdates the code" do
+      assert TicketJourney.outdated(issue()) == nil
+      assert TicketJourney.outdated(nil) == nil
+
+      # The plan the code is written from: grooming writes it before the first run starts.
+      plan!()
+      assert TicketJourney.outdated(@issue_id) == nil
+      started!(:implementation)
+      assert TicketJourney.outdated(@issue_id) == nil
+
+      # A review or a CI Fix run writes no code against the plan.
+      plan!()
+      started!(:code_review)
+      started!(:ci_fix)
+      assert TicketJourney.outdated(issue()) == :rewritten
+
+      # A rework run codes the new plan.
+      started!(:rework)
+      assert TicketJourney.outdated(@issue_id) == nil
+
+      held!()
+      plan!()
+      assert TicketJourney.outdated(@issue_id) == :held
+
+      started!(:rework)
+      assert TicketJourney.outdated(@issue_id) == nil
+    end
+
+    test "outdated/1: a hold counts with no coding run, a plan version does not" do
+      plan!()
+      assert TicketJourney.outdated(@issue_id) == nil
+      held!()
+      assert TicketJourney.outdated(@issue_id) == :held
+
+      # Instructions routed elsewhere, events with no sequence and other events hold nothing.
+      routed = %TicketEvents.Event{type: "conductor.instructions", payload: %{"route" => "rework"}, seq: 9}
+      unsequenced = %TicketEvents.Event{type: "plan.written", payload: %{}, seq: nil}
+      started = %TicketEvents.Event{type: "run.started", payload: %{"run_kind" => "rework"}, seq: 1}
+      note = %TicketEvents.Event{type: "note", payload: %{}, seq: 5}
+      assert TicketJourney.outdated([started, routed, unsequenced, note]) == nil
+    end
+  end
 end

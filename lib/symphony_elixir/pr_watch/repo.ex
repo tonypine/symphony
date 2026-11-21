@@ -118,6 +118,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
     QaBuild,
     Questions,
     RunStore,
+    TicketJourney,
     TicketObservation,
     TicketPullRequest,
     TicketSignals,
@@ -137,6 +138,8 @@ defmodule SymphonyElixir.PrWatch.Repo do
   @in_progress_state "In Progress"
   @rework_state "Rework"
   @merging_state "Merging"
+  # The phases whose plan may hold the merge (`merge_guard/1`).
+  @guarded_phases [:code_review, :qa, :ci_fix, :merging]
   @required_checks_ttl_ms 10 * 60_000
   @stale_check_grace_ms 2 * 60_000
   @max_backoff_ms 5 * 60_000
@@ -1272,7 +1275,9 @@ defmodule SymphonyElixir.PrWatch.Repo do
       |> restart_conflicts(entry)
 
     head = read[:head_sha]
-    carried? = approval_carried?(entry, ticket, prior, head, state)
+    ticket = Map.put(ticket, :merge_guard, merge_guard(entry))
+    # An approval carries to a new head only while the plan still stands behind the code it approved.
+    carried? = ticket.merge_guard == :clear and approval_carried?(entry, ticket, prior, head, state)
     ticket = Map.merge(ticket, %{review_comments: review_comments(entry, read, settings, now), review: review(entry, head, carried?)})
     applied = if new_stay?, do: [], else: Enum.filter(previous.applied, &(&1.head_sha == head))
     {read, applied} = base_answer(read, applied, entry)
@@ -1422,6 +1427,24 @@ defmodule SymphonyElixir.PrWatch.Repo do
   end
 
   defp approval_carried?(_entry, _ticket, _prior, _head, _state), do: false
+
+  # What the ticket's plan says of the merge (`Facts`' `merge_guard`), read where the merge is next or
+  # a step carries the ticket on to it: the code is behind the plan (a version written after the newest
+  # coding run started) or the Conductor held it, else whether a check the next step owes is open. In
+  # Merging, and in CI Fix on the way back to it, that is every check but one seen only after the merge;
+  # before it, a check a test or an attachment proves, as at the handoff (QA proves its own).
+  defp merge_guard(%{phase: phase, issue: %{id: issue_id}, ticket: ticket}) when phase in @guarded_phases do
+    case TicketJourney.outdated(issue_id) do
+      nil -> if owed(issue_id, phase, ticket.origin) == [], do: :clear, else: :open_checks
+      outdated -> outdated
+    end
+  end
+
+  defp merge_guard(_entry), do: :clear
+
+  defp owed(issue_id, :merging, _origin), do: TicketJourney.owed_before_merge(issue_id)
+  defp owed(issue_id, :ci_fix, :merging), do: TicketJourney.owed_before_merge(issue_id)
+  defp owed(issue_id, _phase, _origin), do: TicketJourney.unproved(issue_id)
 
   defp approval_held?(%{phase: :code_review}), do: true
   defp approval_held?(%{phase: :ci_fix, origin: :code_review}), do: true

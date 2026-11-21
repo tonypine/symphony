@@ -687,7 +687,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
       writers: [:machine],
       run_kinds: [],
       required: [junction: {:enum, @conductor_junctions}, text: {:string, 3_000}],
-      optional: [route: {:enum, ~w(rerun rework ticket)}] ++ @signal,
+      optional: [route: {:enum, ~w(rerun rework ticket hold)}] ++ @signal,
       idempotency: :writer
     },
     "conductor.steer" => %{

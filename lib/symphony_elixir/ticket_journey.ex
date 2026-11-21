@@ -23,13 +23,19 @@ defmodule SymphonyElixir.TicketJourney do
   hands in: nothing changes for it.
   """
 
-  alias SymphonyElixir.{PromptSafety, TicketChecks, TicketPlan, Walkthrough}
+  alias SymphonyElixir.{PromptSafety, RunStore, TicketChecks, TicketPlan, Walkthrough}
+  alias SymphonyElixir.TicketEvents.Event
 
   @screen_layers ["screen", "gallery"]
   # The proofs an implementation run owes before it hands the ticket off (`unproved/1`).
   @handoff_proofs ["test", "attached"]
   # The proofs QA gives: a test of the PR never stands in for them.
   @qa_proofs ["qa", "design"]
+  # The runs that write the code a pull request carries.
+  @coding_kinds ["implementation", "rework"]
+  # What can leave the code on a pull request behind its plan: a run that writes it, a plan version,
+  # and the Conductor's hold (its instructions routed `hold`).
+  @outdating_types ["run.started", "plan.written", "conductor.instructions"]
   # Room left for the section headings and for what escaping untrusted text adds.
   @plan_text_margin 2_000
   @cut "\n\n[Cut here to fit the prompt. The `ticket_plan` tool reads it whole.]"
@@ -327,6 +333,57 @@ defmodule SymphonyElixir.TicketJourney do
       id -> TicketChecks.open(id, proof: @qa_proofs)
     end
   end
+
+  @doc """
+  The checks of a groomed ticket its merge waits on: every open one of its current plan, whatever
+  proves it. While there is one, the ticket does not enter
+  `Merging`, its pull request is not merged and it does not reach `Done`
+  (`SymphonyElixir.TransitionGuard`, `SymphonyElixir.PrDecision`). None for a ticket that is not groomed.
+  """
+  @spec owed_before_merge(ticket()) :: [TicketChecks.check()]
+  def owed_before_merge(ticket) do
+    case id(ticket) do
+      nil -> []
+      id -> TicketChecks.open(id)
+    end
+  end
+
+  @doc """
+  Whether the code on the ticket's pull request no longer stands for what is asked, so no approval
+  of it carries it to the merge: `:held` when the Conductor held its merge (a
+  `conductor.instructions` routed `hold`) since the newest implementation or rework run started,
+  `:rewritten` when a plan version was written since then, nil otherwise. A plan written before any
+  coding run started is the one the code was written from; a hold counts with no coding run too.
+  Read from the ticket's events, in their order (`seq`).
+  """
+  @spec outdated(ticket() | [Event.t()]) :: :held | :rewritten | nil
+  def outdated(events) when is_list(events) do
+    since = events |> Enum.filter(&coding_start?/1) |> Enum.map(& &1.seq) |> Enum.filter(&is_integer/1) |> Enum.max(fn -> -1 end)
+
+    cond do
+      Enum.any?(events, &(hold?(&1) and later?(&1, since))) -> :held
+      since >= 0 and Enum.any?(events, &(&1.type == "plan.written" and later?(&1, since))) -> :rewritten
+      true -> nil
+    end
+  end
+
+  def outdated(ticket) do
+    case id(ticket) do
+      nil -> nil
+      # A store that can't be read holds no event, so it outdates nothing.
+      id -> id |> RunStore.list_ticket_events(types: @outdating_types) |> List.wrap() |> Enum.filter(&is_struct(&1, Event)) |> outdated()
+    end
+  end
+
+  defp coding_start?(%Event{type: "run.started", payload: payload}), do: field(payload, :run_kind) in @coding_kinds
+  defp coding_start?(_event), do: false
+
+  defp hold?(%Event{type: "conductor.instructions", payload: payload}), do: field(payload, :route) == "hold"
+  defp hold?(_event), do: false
+
+  defp later?(%Event{seq: seq}, since), do: is_integer(seq) and seq > since
+
+  defp field(payload, key), do: Map.get(payload, key, Map.get(payload, Atom.to_string(key)))
 
   @doc "Why a ticket with the `unproved/1` checks `checks` is not handed off, naming each and what proves it."
   @spec unproved_message([TicketChecks.check()]) :: String.t()
