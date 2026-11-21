@@ -17,6 +17,8 @@ defmodule SymphonyElixir.PrDecision.Facts do
     the PRs in them.
 
   A red head is a plain failure (`red_kind: :failure`) unless the facts classify it otherwise.
+  `base_held` says that this head was read red on the base branch too (R23 held it) and its branch
+  has not been updated from the base since: a failure on it now is the base's fix still to take in.
   Limits and timeouts arrive as facts (`max_red_attempts`, `landing_timed_out`), so deciding reads
   no config and no clock.
 
@@ -83,6 +85,7 @@ defmodule SymphonyElixir.PrDecision.Facts do
           failing_check: String.t() | nil,
           set_aside: [String.t()],
           rerun_done: boolean(),
+          base_held: boolean(),
           cancel_reruns: non_neg_integer(),
           red_attempts: non_neg_integer(),
           max_red_attempts: pos_integer(),
@@ -124,6 +127,7 @@ defmodule SymphonyElixir.PrDecision.Facts do
             failing_check: nil,
             set_aside: [],
             rerun_done: false,
+            base_held: false,
             cancel_reruns: 0,
             red_attempts: 0,
             max_red_attempts: 10,
@@ -159,6 +163,7 @@ defmodule SymphonyElixir.PrDecision.Facts do
     {:ci, [:pending, :green, :none, :red, :required_missing], @with_pr},
     {:red_kind, [:failure, :cancelled, :human_only, :also_red_on_base, :run_in_progress], [ci: [:red]]},
     {:cancel_reruns, [1, 2], [ci: [:red], red_kind: [:cancelled]]},
+    {:base_held, [false, true], @red_failure},
     {:rerun_done, [false, true], @red_failure},
     {:red_attempts, [9, 10], @red_failure},
     {:same_failure_streak, [2, 3], @red_failure},

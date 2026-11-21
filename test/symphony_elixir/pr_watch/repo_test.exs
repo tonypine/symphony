@@ -101,6 +101,18 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     def squash_merge(pr_url, request, _opts), do: send(Application.fetch_env!(:symphony_elixir, :pr_watch_test_pid), {:merged, pr_url, request.head_sha}) && :ok
   end
 
+  # GitHub for a PR whose branch is updated from the base: FakeGitHub's reads, and each update,
+  # rerun and cancel reported to the test.
+  defmodule BaseFixGitHub do
+    alias SymphonyElixir.PrWatch.RepoTest.FakeGitHub
+
+    defdelegate list_open_pull_requests(pr_url, opts), to: FakeGitHub
+
+    def update_branch(pr_url, head, _opts), do: send(Application.fetch_env!(:symphony_elixir, :pr_watch_test_pid), {:update_branch, pr_url, head}) && :ok
+    def rerun_failed(run_id, _opts), do: send(Application.fetch_env!(:symphony_elixir, :pr_watch_test_pid), {:rerun_failed, run_id}) && :ok
+    def cancel_stale_runs(_pr_url, head, _opts), do: send(Application.fetch_env!(:symphony_elixir, :pr_watch_test_pid), {:cancel_stale_runs, head}) && {:ok, []}
+  end
+
   # The self-heal lane: the ticket it is given is reported to the test, and it files nothing.
   defmodule FakeSelfHeal do
     def heal(issue, _opts), do: send(Application.fetch_env!(:symphony_elixir, :pr_watch_test_pid), {:heal, issue}) && :held
@@ -1158,6 +1170,46 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       assert %{actions: actions} = watch(repo_key, "1")
       assert Enum.map(actions, & &1.head_sha) == ["sha-6", "sha-5", "sha-4", "sha-3", "sha-2"]
       assert [%{rule: "R22", kind: :rerun_failed, source: :poll, at: %DateTime{}} | _older] = actions
+    end
+  end
+
+  describe "a check red on the base too, once the base is green (TP-1587)" do
+    test "the branch is updated from the base with no rerun and no CI Fix; the new head's checks decide", %{repo_key: repo_key} do
+      write_workflow_file!(Workflow.workflow_file_path(), ci: %{enabled: true})
+      issues!([repo_key |> with_pr(issue("1", "QA"), 1)])
+      pid = start_repo!(repo_key, github: BaseFixGitHub)
+      url = pr_url(1)
+      red = fn head, kind -> reads!(%{url => {:ok, read_of(url, %{head_sha: head, ci: :red, red_kind: kind, failing_check: "audit", failed_checks: [], check_names: ["audit"]})}}) end
+
+      # The base is red on the same check: the head waits.
+      red.("sha-held", :also_red_on_base)
+      assert {:ok, _summary} = Repo.poll(pid)
+      assert %{decision: %{rule: "R23", owner: :ci}} = watch(repo_key, "1")
+
+      # The base went green; the head, without its fix, still fails: Symphony updates the branch itself.
+      red.("sha-held", :failure)
+      assert {:ok, _summary} = Repo.poll(pid)
+      assert_received {:update_branch, ^url, "sha-held"}
+      assert %{decision: %{rule: "R20a", kind: :update_branch}, facts: %Facts{base_held: true}} = watch(repo_key, "1")
+
+      # GitHub has not moved the head yet: nothing is updated again, nothing reruns, nothing moves.
+      assert {:ok, _summary} = Repo.poll(pid)
+      refute_received {:update_branch, _url, _head}
+      refute_received {:rerun_failed, _run_id}
+      refute_received {:moved, "1", _state}
+      assert %{decision: %{rule: "R20a"}} = watch(repo_key, "1")
+
+      # The updated head is green: QA goes on in its phase, with no CI Fix.
+      reads!(%{url => {:ok, read_of(url, %{head_sha: "sha-updated", ci: :green})}})
+      assert {:ok, _summary} = Repo.poll(pid)
+      assert %{decision: %{rule: "R27", kind: :dispatch}, facts: %Facts{base_held: false}} = watch(repo_key, "1")
+      refute_received {:moved, "1", _state}
+
+      # A head still red after the update is a plain failure: the rerun first, then CI Fix.
+      red.("sha-red-again", :failure)
+      assert {:ok, _summary} = Repo.poll(pid)
+      assert %{decision: %{rule: "R22", kind: :rerun_failed}, facts: %Facts{base_held: false}} = watch(repo_key, "1")
+      refute_received {:update_branch, _url, _head}
     end
   end
 

@@ -303,6 +303,18 @@ defmodule SymphonyElixir.PrDecision do
         build: &wait_for_failed_run/1
       },
       %{
+        id: "R20a",
+        phases: @pr_phases,
+        when:
+          "Red on a failure, on a head that was red on the base branch too (R23) and whose branch was not updated from the base since: " <>
+            "the check is no longer red on the base, and the head lacks the base's fix",
+        then:
+          "`update_branch` from the base, once per head, with no rerun and no CI Fix: CI runs on the new head and the rules read it; " <>
+            "a conflict goes to the conflict rules, and a head GitHub can't update gets R22 and R21",
+        guard: &red_base_fixed?/1,
+        build: &take_base_fix/1
+      },
+      %{
         id: "R20",
         phases: @pr_phases,
         when: "Red, and the same failure #{@max_same_failures} fix runs in a row or `red_attempts` at `max_red_attempts`",
@@ -323,7 +335,7 @@ defmodule SymphonyElixir.PrDecision do
         id: "R23",
         phases: @pr_phases,
         when: "Red, and the same check is red on the base branch",
-        then: "`wait` on `ci` until the base goes green",
+        then: "`wait` on `ci` until the base goes green; then R20a updates the branch from the base",
         guard: &red_on_base?/1,
         build: &wait_for_base/1
       },
@@ -436,6 +448,7 @@ defmodule SymphonyElixir.PrDecision do
     red?(facts, :failure) and (repeating? or facts.red_attempts >= facts.max_red_attempts)
   end
 
+  defp red_base_fixed?(facts), do: red?(facts, :failure) and facts.base_held == true
   defp red_after_rerun?(facts), do: red?(facts, :failure) and facts.rerun_done == true
   defp red_first?(facts), do: red?(facts, :failure) and facts.rerun_done == false
   defp red_on_base?(facts), do: red?(facts, :also_red_on_base)
@@ -672,6 +685,14 @@ defmodule SymphonyElixir.PrDecision do
     Action.new!("R21", :ci_fix,
       args: %{origin: origin(facts), cause: :red},
       reason: "#{subject(check(facts))} failed on #{pr(facts)}: CI Fix run #{facts.red_attempts + 1} of #{facts.max_red_attempts}"
+    )
+  end
+
+  defp take_base_fix(facts) do
+    Action.new!("R20a", :update_branch,
+      reason:
+        "#{subject(check(facts))} is no longer red on #{facts.base_ref || "the base branch"}, which held #{pr(facts)}: " <>
+          "Symphony updates the branch from it instead of rerunning the check or sending it to CI Fix"
     )
   end
 

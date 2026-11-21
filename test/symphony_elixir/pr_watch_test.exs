@@ -115,6 +115,10 @@ defmodule SymphonyElixir.PrWatchTest do
       PrWatchSupport.put_watch!(@repo_key, "3", decision: %{rule: "R22", kind: :rerun_failed, reason: "specs failed: rerunning it once"})
       assert PrWatch.dispatch_reason(ci_fix, settings) == "the PR watcher (R22): specs failed: rerunning it once"
 
+      # TP-1587: the branch updated from the base whose fix the head lacked: CI runs on the new head.
+      PrWatchSupport.put_watch!(@repo_key, "3", decision: %{rule: "R20a", kind: :update_branch, reason: "specs is no longer red on main"})
+      assert PrWatch.dispatch_reason(ci_fix, settings) == "the PR watcher (R20a): specs is no longer red on main"
+
       for decision <- [%{rule: "R21", kind: :ci_fix, reason: "specs failed"}, %{rule: "R1", kind: :wait, owner: :github, reason: "GitHub's limit"}] do
         PrWatchSupport.put_watch!(@repo_key, "3", decision: decision)
         assert PrWatch.dispatch_reason(ci_fix, settings) == nil
