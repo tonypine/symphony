@@ -64,9 +64,9 @@ defmodule SymphonyElixir.ConfigPhasesTest do
       assert [%Command{run: "cd macos && make build", when: "macos_changed"}, %Command{run: "mix compile --warnings-as-errors", when: "elixir_changed"}] =
                build.command
 
-      assert [%Command{run: "mix format --check-formatted && mix specs.check && mix credo --strict" <> _, when: "always"}] = checks.command
-      assert checks.when == "elixir_changed"
-      assert [%Command{run: "mix test " <> elixir_tests}, %Command{run: "cd macos && swift test --filter" <> _, when: "macos_changed"}] = tests.command
+      assert [%Command{run: "mix format --check-formatted && mix specs.check && (test -z" <> _, when: "always"}] = checks.command
+      assert checks.when == "elixir_source_changed"
+      assert [%Command{run: "(test -z \"$SYMPHONY_CHANGED_TEST_FILES\" || mix test " <> elixir_tests}, %Command{run: "cd macos && swift test --filter" <> _, when: "macos_changed"}] = tests.command
       assert elixir_tests =~ "mix cover.changed"
       assert Enum.all?(steps, &(&1.no_result_limit == 2))
     end
@@ -239,7 +239,7 @@ defmodule SymphonyElixir.ConfigPhasesTest do
 
     test "a bad when, timeout or no-result limit" do
       assert refused_steps([machine("build", %{"when" => "sometimes"})]) =~
-               "steps.when of step `build` must be one of: always, macos_changed, elixir_changed"
+               "steps.when of step `build` must be one of: always, macos_changed, elixir_changed, elixir_source_changed"
 
       assert refused_steps([machine("build", %{"timeout_ms" => 0})]) =~ "steps.timeout_ms of step `build` must be greater than 0"
       assert refused_steps([machine("build", %{"no_result_limit" => 0})]) =~ "steps.no_result_limit of step `build` must be greater than 0"
@@ -250,7 +250,7 @@ defmodule SymphonyElixir.ConfigPhasesTest do
                "steps.command.run of step `build` has an entry with no command"
 
       assert refused_steps([machine("build", %{"command" => [%{"run" => "make", "when" => "never"}]})]) =~
-               "steps.command.when of step `build` must be one of: always, macos_changed, elixir_changed"
+               "steps.command.when of step `build` must be one of: always, macos_changed, elixir_changed, elixir_source_changed"
     end
 
     test "an unknown key on a step or a command entry" do
@@ -406,7 +406,7 @@ defmodule SymphonyElixir.ConfigPhasesTest do
 
   test "the step model's modes and conditions" do
     assert Step.modes() == ~w(machine orchestrated delegated)
-    assert Step.conditions() == ~w(always macos_changed elixir_changed)
+    assert Step.conditions() == ~w(always macos_changed elixir_changed elixir_source_changed)
     assert Step.answer_types() == ~w(string number boolean list object)
     assert %Phase{steps: []} = %Phase{}
   end

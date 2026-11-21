@@ -457,6 +457,12 @@ defmodule SymphonyElixir.Conductor.FactsTest do
 
       assert {:ok, _json} = Jason.encode(facts)
       assert %{junction: "sub_ticket_ended", sub_tickets: [_tracked, _untracked]} = Facts.build(parent, "sub_ticket_ended", token_cap: nil)
+
+      # A check marked after the merge reaches the final check with its marker, still open.
+      merged = %{id: "c2", kind: "outcome", statement: "The release run on main is green.", proof: "test", after_merge: true}
+      {:ok, _marked} = TicketPlan.write(ctx.repo, parent_id, %{plan() | reason: "The release is checked after the merge.", by: "recalibration", checks: plan().checks ++ [merged]})
+
+      assert [_c1, %{id: "c2", state: "open", after_merge: true}] = Facts.build(parent, "final_check", token_cap: nil).checks
       # A ticket with no plan reads as at any other junction.
       assert %{ticket: %{problem: _problem}} = Facts.build(ctx.record, "final_check", token_cap: nil)
     end
@@ -508,6 +514,18 @@ defmodule SymphonyElixir.Conductor.FactsTest do
       assert open == [%{id: "c2", kind: "qa", statement: "The login works.", proof: "qa"}]
       {:ok, _proved} = SymphonyElixir.TicketChecks.prove(ctx.repo, ctx.issue_id, %{check_id: "c2", by: "qa"})
       refute Map.has_key?(Facts.build(ctx.record, "before_merge", token_cap: nil), :open_checks)
+    end
+
+    test "a check marked after the merge is carried with its marker, and is not among the checks still open before the merge", ctx do
+      merged = %{id: "c4", kind: "outcome", statement: "The release run on main is green.", proof: "test", after_merge: true}
+      [plan] = TicketPlan.versions(ctx.issue_id)
+      plan = plan |> Map.take([:shape, :layers, :summary, :text, :size]) |> Map.merge(%{reason: "Grooming", by: "grooming", checks: plan.checks ++ [merged]})
+      {:ok, _plan} = TicketPlan.write(ctx.repo, ctx.issue_id, plan)
+      {:ok, _proved} = SymphonyElixir.TicketChecks.prove(ctx.repo, ctx.issue_id, %{check_id: "c2", by: "qa"})
+
+      facts = Facts.build(ctx.record, "before_merge", token_cap: nil)
+      assert List.last(facts.checks) == %{id: "c4", kind: "outcome", statement: "The release run on main is green.", proof: "test", state: "open", after_merge: true}
+      assert Enum.map(facts.open_checks.checks, & &1.id) == ["c1", "c3"]
     end
 
     test "a ticket with no plan holds none of it", ctx do

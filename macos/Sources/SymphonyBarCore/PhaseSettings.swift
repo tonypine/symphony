@@ -176,6 +176,7 @@ public enum StepCondition: String, CaseIterable, Identifiable {
     case always
     case macosChanged = "macos_changed"
     case elixirChanged = "elixir_changed"
+    case elixirSourceChanged = "elixir_source_changed"
 
     public var id: String { rawValue }
 
@@ -184,6 +185,7 @@ public enum StepCondition: String, CaseIterable, Identifiable {
         case .always: return "Always"
         case .macosChanged: return "When macos/ changed"
         case .elixirChanged: return "When Elixir files changed"
+        case .elixirSourceChanged: return "When Elixir source files changed"
         }
     }
 
@@ -193,6 +195,7 @@ public enum StepCondition: String, CaseIterable, Identifiable {
         case .always: return nil
         case .macosChanged: return "when macos/ changed"
         case .elixirChanged: return "when Elixir files changed"
+        case .elixirSourceChanged: return "when Elixir source files changed"
         }
     }
 }
@@ -572,19 +575,19 @@ public enum PhaseDefaults {
                 mode: .machine,
                 commands: [
                     StepCommand(
-                        run: "mix format --check-formatted && mix specs.check && mix credo --strict $SYMPHONY_CHANGED_ELIXIR_FILES"
+                        run: "mix format --check-formatted && mix specs.check && (test -z \"$SYMPHONY_CHANGED_ELIXIR_FILES\" || mix credo --strict $SYMPHONY_CHANGED_ELIXIR_FILES)"
                     ),
                 ],
                 timeoutMs: 600_000,
                 onFail: agentStep,
-                when: .elixirChanged
+                when: .elixirSourceChanged
             ),
             PhaseStep(
                 stepID: "tests",
                 title: "Tests and coverage",
                 mode: .machine,
                 commands: [
-                    StepCommand(run: "mix test $SYMPHONY_CHANGED_TEST_FILES && mix cover.changed", when: .elixirChanged),
+                    StepCommand(run: "(test -z \"$SYMPHONY_CHANGED_TEST_FILES\" || mix test $SYMPHONY_CHANGED_TEST_FILES) && mix cover.changed", when: .elixirSourceChanged),
                     StepCommand(run: "cd macos && swift test --filter \"$SYMPHONY_CHANGED_SWIFT_TEST_FILTER\"", when: .macosChanged),
                 ],
                 timeoutMs: 1_800_000,
@@ -1375,7 +1378,7 @@ struct StepsReader {
     private func condition(_ value: String?, line: Int) throws -> StepCondition {
         guard let value else { return .always }
         guard let condition = StepCondition(rawValue: value) else {
-            throw unsupported(line, "`when: \(value)` is not always, macos_changed or elixir_changed")
+            throw unsupported(line, "`when: \(value)` is not always, macos_changed, elixir_changed or elixir_source_changed")
         }
         return condition
     }

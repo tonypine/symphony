@@ -32,7 +32,10 @@ is done, or miss a piece nobody holds.
 
 At `final_check`: the last sub-ticket ended. Check the whole ticket against its plan: go through
 each `outcome` check and decide, from the sub-tickets' checks, notes and merged pull requests,
-whether it now holds. A sub-ticket that was Canceled built nothing. Then answer one of:
+whether it now holds. A sub-ticket that was Canceled built nothing. Read the checks marked
+`after_merge: true` here too, this ticket's and its sub-tickets': they could only be seen once a
+pull request merged, so nothing before the merge proved them. Judge each from what the merged pull
+requests and the notes show, as you judge an outcome. Then answer one of:
 - `"done": true` with an empty `tree`: every outcome holds. Symphony moves the ticket to Done.
 - `"done": false` with `add` operations: an outcome does not hold yet, and each new sub-ticket
   builds what is missing. This is a round. Rounds are limited: when `rounds.left` is 0 you may not

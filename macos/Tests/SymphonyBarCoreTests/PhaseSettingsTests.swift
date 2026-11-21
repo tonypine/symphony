@@ -294,7 +294,7 @@ final class PhaseSettingsTests: XCTestCase {
         XCTAssertEqual(error("    steps:\n      - {id: code, mode: robot}\n"), .unsupported(line: 4, reason: "`mode: robot` is not machine, orchestrated or delegated"))
         XCTAssertEqual(
             error("    steps:\n      - {id: code, mode: machine, command: x, when: monday}\n"),
-            .unsupported(line: 4, reason: "`when: monday` is not always, macos_changed or elixir_changed")
+            .unsupported(line: 4, reason: "`when: monday` is not always, macos_changed, elixir_changed or elixir_source_changed")
         )
         XCTAssertEqual(error("    steps:\n      - {id: code, mode: delegated, timeout_ms: soon}\n"), .unsupported(line: 4, reason: "`timeout_ms: soon` is not a whole number"))
         XCTAssertEqual(error("    steps:\n      - {id: code, mode: delegated\n"), .unsupported(line: 4, reason: "a `{...}` step doesn't close on its line"))
