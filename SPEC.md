@@ -5893,7 +5893,10 @@ Minimum endpoints:
     MT-1 to land (shares 2 files)`.
   - `red_bases` lists each check that is red on a base branch and holds watched PRs (rule R23 of
     `docs/pr-ci-decisions.md`), once per base and check: `base`, `check` and the
-    `issue_identifiers` waiting for it to go green. A row leaves once the base is green.
+    `issue_identifiers` waiting for it to go green. A row leaves once the base is green. A repo whose
+    release gate is red on `main` (`SymphonyElixir.ReleaseGate`) has a row too: `base` `main`,
+    `check` the gate's job (`release gate`) and the `issue_identifiers` its hold keeps from
+    dispatch; it leaves once the gate is green.
   - `issues` lists the tickets the PR and CI watcher watches, each with `issue_id`, `identifier`,
     `repo_key` and `watch`: `facts`, the facts the decision table reads (`docs/pr-ci-decisions.md`)
     plus `pr_url`, `head_sha`, `source` (`poll`), `read_at`, `github` (`ok` or `rate_limited`, with
