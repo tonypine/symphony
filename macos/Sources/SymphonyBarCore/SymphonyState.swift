@@ -56,6 +56,9 @@ public struct StateSnapshot: Equatable {
     public var pauseReasons: [PauseReason]?
     /// The update the app told Symphony is ready (`update_window`, TP-1590), nil when none is or Symphony predates it.
     public var updateWindow: UpdateWindow?
+    /// The Conductor runs mid-run (`conductor_runs`, TP-1590), which a restart's stop waits for; 0 when Symphony
+    /// predates it.
+    public var conductorRuns = 0
     /// Each ticket's situation by identifier (`Situation.byTicket(state:)`): the one line every row that names the
     /// ticket shows.
     public var situations: [String: Situation] = [:]
@@ -993,6 +996,7 @@ public enum SymphonyState {
                 version: version?.isEmpty == false ? version : nil
             )
         }
+        snapshot.conductorRuns = max(payload.conductorRuns ?? 0, 0)
         if let window = payload.updateWindow, let version = window.version?.trimmingWhitespace(), !version.isEmpty {
             snapshot.updateWindow = StateSnapshot.UpdateWindow(
                 version: version,
@@ -1304,6 +1308,8 @@ public enum SymphonyState {
         let pause: Pause?
         /// Missing before Symphony took an update ready (TP-1590).
         let updateWindow: UpdateWindow?
+        /// Missing before Symphony waited for Conductor runs at a restart (TP-1590).
+        let conductorRuns: Int?
         let budget: Budget?
         let usageLimits: [UsageLimit]?
         let appUpdate: AppUpdate?

@@ -152,6 +152,7 @@ final class UpdateDrainStartTests: XCTestCase {
             XCTAssertEqual(machine.handle(.polled(stateFails), now: began), [.checkRuns])
             effects = machine.handle(.runsChecked(read), now: began)
         }
+        if effects == [.send(.handover)] { effects = machine.handle(.controlFinished(.handover, .done), now: began) }
         guard effects == [.stop] else { return (machine, false) }
         let stopped = machine.handle(.exited(.signaled(15)), now: began) == [.stopped]
         if stopped { log.append(UpdateDrainStart.doneLog, at: began) }

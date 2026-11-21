@@ -35,6 +35,12 @@ defmodule SymphonyElixirWeb.ControlApiController do
   update as the state payload's `update_window` gives it, and 422 `invalid_update` without a
   version or with one that isn't a release's.
 
+  `handover` is the menu bar app's ask, once dispatch is paused and no agent run is active, whether
+  it may stop Symphony for an update or a restart (`SymphonyElixir.ConductorGate`): 200 with
+  `handover: true` when no Conductor turn is running, and from then on none starts until Symphony
+  is up again; 409 `conductor_running` with `handover: false` and `conductor_runs` while some are,
+  and the app asks again at its next poll.
+
   `repos/:repo_key/pause` (with an optional `reason`) and `repos/:repo_key/resume` pause and resume
   dispatch for one configured repository (`SymphonyElixir.Orchestrator.pause_repository/3`): each
   answers 200 with the repository and its pause (null once resumed), writes a `repository_paused`
@@ -129,7 +135,7 @@ defmodule SymphonyElixirWeb.ControlApiController do
   alias Plug.Conn
   alias SymphonyElixir.{AuditLog, DirectorBlockers, DirectorLabels, DirectorMoves, DirectorPriority, DirectorRulings}
   alias SymphonyElixir.Conductor.Message, as: ConductorMessage
-  alias SymphonyElixir.{Marks, Messages, Orchestrator, TicketMoves, TicketSignals, UpdateWindow}
+  alias SymphonyElixir.{ConductorGate, Marks, Messages, Orchestrator, TicketMoves, TicketSignals, UpdateWindow}
   alias SymphonyElixir.TicketEvents.Types
   alias SymphonyElixirWeb.{Endpoint, Presenter, TicketEventsController}
 
@@ -205,6 +211,21 @@ defmodule SymphonyElixirWeb.ControlApiController do
 
       nil ->
         error_response(conn, 422, "invalid_update", "An update names the version it installs")
+    end
+  end
+
+  @spec handover(Conn.t(), map()) :: Conn.t()
+  def handover(conn, _params) do
+    case ConductorGate.handover(Map.get(conn.assigns, :conductor_gate, ConductorGate)) do
+      :ok ->
+        json(conn, %{handover: true, conductor_runs: 0})
+
+      {:wait, count} ->
+        runs = if count == 1, do: "1 Conductor run is", else: "#{count} Conductor runs are"
+
+        conn
+        |> put_status(409)
+        |> json(%{handover: false, conductor_runs: count, error: %{code: "conductor_running", message: "#{runs} still running"}})
     end
   end
 

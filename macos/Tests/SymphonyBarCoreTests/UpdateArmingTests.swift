@@ -234,7 +234,8 @@ final class UpdateArmingTests: XCTestCase {
 
         XCTAssertEqual(machine.handle(.polled(held(running: 1)), now: began), [])
         XCTAssertEqual(machine.menuLine(updatingTo: "0.0.1.1053", now: began), "Updating to v0.0.1.1053: waiting for 1 agent run…")
-        XCTAssertEqual(machine.handle(.polled(held(running: 0)), now: began), [.stop])
+        XCTAssertEqual(machine.handle(.polled(held(running: 0)), now: began), [.send(.handover)])
+        XCTAssertEqual(machine.handle(.controlFinished(.handover, .done), now: began), [.stop])
         XCTAssertEqual(machine.handle(.exited(.signaled(15)), now: began), [.stopped])
     }
 

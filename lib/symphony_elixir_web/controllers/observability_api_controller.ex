@@ -6,7 +6,7 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   use Phoenix.Controller, formats: [:json]
 
   alias Plug.Conn
-  alias SymphonyElixir.{Config, History, Inbox, Orchestrator, PullRequestPage, Quality, Shipped, StatusDashboard}
+  alias SymphonyElixir.{ConductorGate, Config, History, Inbox, Orchestrator, PullRequestPage, Quality, Shipped, StatusDashboard}
   alias SymphonyElixir.Inbox.FromRecord
   alias SymphonyElixir.Learnings.Feed
   alias SymphonyElixirWeb.{ConditionalJSON, Endpoint, Presenter}
@@ -32,6 +32,8 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
         json(conn, %{
           running: length(running),
           between_turns: Enum.count(running, &Presenter.between_turns?/1),
+          # The Conductor turns running, which the stop waits for (`SymphonyElixir.ConductorGate`).
+          conductor_runs: ConductorGate.status().running,
           paused: match?(%{paused: true}, Map.get(snapshot, :pause))
         })
 

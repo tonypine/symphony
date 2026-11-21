@@ -18,6 +18,7 @@ defmodule SymphonyElixir.Orchestrator do
     CiPoller,
     CiWait,
     Conductor,
+    ConductorGate,
     Config,
     Connected,
     DispatchLoop,
@@ -8485,6 +8486,8 @@ defmodule SymphonyElixir.Orchestrator do
   defp resume_dispatch_reasons(%State{} = state, lifted?) do
     case Pauses.clear_reasons(:symphony, lifted?, by: @director_setter) do
       {:ok, _pause} ->
+        # A Resume calls off a restart's or an update's handover: Conductor turns may start again.
+        ConductorGate.reopen()
         pause = symphony_pause_status()
         log_resume(pause)
         notify_dashboard()

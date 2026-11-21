@@ -231,6 +231,7 @@ final class ReposChangeTests: XCTestCase {
 
         var machine = waiting(running: 1)
         _ = machine.handle(.polled(paused(running: 0)), now: began)
+        _ = machine.handle(.controlFinished(.handover, .done), now: began)
         XCTAssertEqual(machine.phase, .stopping)
         XCTAssertEqual(ReposRestartChip(machine: machine, window: window)?.title, "Restarting Symphony…")
         XCTAssertEqual(ReposRestartChip(machine: machine, window: window)?.showsCancel, false)
@@ -254,6 +255,7 @@ final class ReposChangeTests: XCTestCase {
 
         var machine = waiting(purpose: .update, running: 1)
         _ = machine.handle(.polled(paused(running: 0)), now: began)
+        _ = machine.handle(.controlFinished(.handover, .done), now: began)
         XCTAssertEqual(ReposRestartChip(machine: machine, window: window)?.title, "Updating Symphony…")
     }
 }

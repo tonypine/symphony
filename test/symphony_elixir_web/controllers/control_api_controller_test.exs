@@ -138,6 +138,44 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
     assert calls(pid) == []
   end
 
+  # c9 (TP-1590): the app stops Symphony only once it is handed over, never with a Conductor turn mid-run.
+  test "POST /control/handover waits while a Conductor turn runs and is given once none does" do
+    gate = start_supervised!({SymphonyElixir.ConductorGate, name: :"handover-gate-#{System.unique_integer([:positive])}"})
+    handover = fn -> build_conn(:post, "/api/v1/control/handover") |> Plug.Conn.assign(:conductor_gate, gate) |> send_to(:handover, self(), %{}) end
+
+    test = self()
+    turn = spawn(fn -> SymphonyElixir.ConductorGate.run(gate, fn -> send(test, :entered) && receive(do: (:end -> :ok)) end) && send(test, :left) end)
+    assert_receive :entered
+
+    conn = handover.()
+    assert conn.status == 409
+    assert %{"handover" => false, "conductor_runs" => 1, "error" => %{"code" => "conductor_running", "message" => "1 Conductor run is still running"}} = json_body(conn)
+
+    send(turn, :end)
+    assert_receive :left
+    conn = handover.()
+    assert conn.status == 200
+    assert json_body(conn) == %{"handover" => true, "conductor_runs" => 0}
+    assert SymphonyElixir.ConductorGate.enter(gate) == :closed
+  end
+
+  test "POST /control/handover names several Conductor runs" do
+    gate = start_supervised!({SymphonyElixir.ConductorGate, name: :"handover-gate-#{System.unique_integer([:positive])}"})
+    test = self()
+
+    turns =
+      for _n <- 1..2 do
+        spawn(fn -> SymphonyElixir.ConductorGate.run(gate, fn -> send(test, :entered) && receive(do: (:end -> :ok)) end) end)
+      end
+
+    assert_receive :entered
+    assert_receive :entered
+
+    conn = build_conn(:post, "/api/v1/control/handover") |> Plug.Conn.assign(:conductor_gate, gate) |> send_to(:handover, self(), %{})
+    assert json_body(conn)["error"]["message"] == "2 Conductor runs are still running"
+    Enum.each(turns, &send(&1, :end))
+  end
+
   test "POST /control/resume with kind person lifts only the Director's pause" do
     pid = start_stub([{:ok, %{paused: false}}])
     params = %{"kind" => "person"}

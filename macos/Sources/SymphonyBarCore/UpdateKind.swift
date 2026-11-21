@@ -93,7 +93,7 @@ public struct UpdateStartNotifier: Equatable {
         switch phase {
         case let .waitingForRuns(running: count?):
             runs = count
-        case .stopping:
+        case .handingOver, .stopping:
             runs = 0
         default:
             return nil
@@ -160,6 +160,8 @@ public struct UpdateHold: Equatable {
         case preparing
         /// Waiting for agent runs; `runs` is nil until a poll shows dispatch paused.
         case waiting(runs: Int?)
+        /// No agent run is active, and Symphony's stop waits for `runs` Conductor runs mid-run to end (TP-1590).
+        case waitingForConductor(runs: Int)
         /// Symphony stops for the swap: nothing to press.
         case stopping
     }
@@ -200,7 +202,10 @@ public struct UpdateHold: Equatable {
         case let .waitingForRuns(running):
             step = .waiting(runs: running)
             offersUpdateNow = drain.offersRestartNow
-        case .stopping:
+        case let .handingOver(conductorRuns) where conductorRuns > 0:
+            step = .waitingForConductor(runs: conductorRuns)
+            offersUpdateNow = drain.offersRestartNow
+        case .handingOver, .stopping:
             step = .stopping
         case .idle, .starting, .waitingForAnswer, .resuming:
             return nil
@@ -210,7 +215,7 @@ public struct UpdateHold: Equatable {
     /// Cancel Update shows while the update waits for agent runs, or for its moment, as in the menu.
     public var canCancel: Bool {
         switch step {
-        case .waiting, .ready: return true
+        case .waiting, .waitingForConductor, .ready: return true
         case .preparing, .stopping: return false
         }
     }
@@ -224,6 +229,9 @@ public struct UpdateHold: Equatable {
     /// What the update waits for: "Waiting for 2 agent runs", nil while it waits for nothing.
     public var waitingLine: String? {
         if isReady { return UpdateMenu.readyWaitLine }
+        if case let .waitingForConductor(runs) = step {
+            return runs == 1 ? "Waiting for a Conductor run to end" : "Waiting for \(runs) Conductor runs to end"
+        }
         guard case let .waiting(runs) = step else { return nil }
         switch runs {
         case nil: return "Waiting for dispatch to pause"

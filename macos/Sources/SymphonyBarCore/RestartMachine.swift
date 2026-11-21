@@ -37,6 +37,9 @@ public struct RestartMachine: Equatable {
         /// Waiting until no agent run is active. `running` is nil until a poll shows dispatch paused. A poll that
         /// shows it isn't paused sends the restart back to `pausing`.
         case waitingForRuns(running: Int?)
+        /// Dispatch is paused and no agent run is active: asking Symphony for the handover (`ControlAction.handover`),
+        /// which waits while `conductorRuns` Conductor runs are mid-run, so the stop never cuts one off (TP-1590).
+        case handingOver(conductorRuns: Int)
         case stopping
         case starting
         /// Symphony was started and hasn't answered on its control URL yet.
@@ -105,6 +108,8 @@ public struct RestartMachine: Equatable {
     private var runsTimeout: TimeInterval = 0
     private var logPath = ""
     private var phaseStart = Date.distantPast
+    /// True while a handover ask is out, so a poll doesn't send another before Symphony answers.
+    private var handoverAsked = false
 
     public init() {}
 
@@ -112,8 +117,10 @@ public struct RestartMachine: Equatable {
 
     /// Cancel Restart is offered while the restart waits for agent runs.
     public var canCancel: Bool {
-        if case .waitingForRuns = phase { return true }
-        return false
+        switch phase {
+        case .waitingForRuns, .handingOver: return true
+        default: return false
+        }
     }
 
     /// Starts a restart, which checks symphony.yml first. `alreadyPaused` is whether dispatch is paused now, as the app's last poll saw it; the next
@@ -160,18 +167,34 @@ public struct RestartMachine: Equatable {
             enter(.waitingForRuns(running: nil), now: now)
             return [.pollNow]
 
-        case let (.waitingForRuns, .polled(poll)):
+        case let (.waitingForRuns, .polled(poll)), let (.handingOver, .polled(poll)):
             return waitedForRuns(poll, now: now)
 
-        case let (.waitingForRuns, .runsChecked(drain)):
+        case let (.waitingForRuns, .runsChecked(drain)), let (.handingOver, .runsChecked(drain)):
             // Asked for after a poll in this phase, so after the restart's own pause.
-            return waited(drain.map { (paused: $0.paused, activeRuns: $0.activeRuns) }, mayPredatePause: false, now: now)
+            let runs = drain.map { (paused: $0.paused, activeRuns: $0.activeRuns, conductorRuns: $0.conductorRuns) }
+            return waited(runs, mayPredatePause: false, now: now)
 
-        case (.waitingForRuns, .restartNow) where offersRestartNow:
+        case (.handingOver, .controlFinished(.handover, .done)):
             enter(.stopping, now: now)
             return [.stop]
 
-        case (.waitingForRuns, .cancel):
+        case let (.handingOver(count), .controlFinished(.handover, .failed(message))):
+            handoverAsked = false
+            // A Conductor run is mid-run: the next poll asks again. Any other failure (a Symphony that predates the
+            // handover) stops as before.
+            guard message == ControlAPI.conductorRunning else {
+                enter(.stopping, now: now)
+                return [.stop]
+            }
+            phase = .handingOver(conductorRuns: max(count, 1))
+            return []
+
+        case (.waitingForRuns, .restartNow) where offersRestartNow, (.handingOver, .restartNow) where offersRestartNow:
+            enter(.stopping, now: now)
+            return [.stop]
+
+        case (.waitingForRuns, .cancel), (.handingOver, .cancel):
             guard pausedByRestart || purpose == .armedUpdate else {
                 enter(.idle, now: now)
                 return []
@@ -219,7 +242,8 @@ public struct RestartMachine: Equatable {
             if case let .failed(message) = result { error = message }
             return []
 
-        case let (.checkingConfig, .exited(exit)), let (.pausing, .exited(exit)), let (.waitingForRuns, .exited(exit)):
+        case let (.checkingConfig, .exited(exit)), let (.pausing, .exited(exit)), let (.waitingForRuns, .exited(exit)),
+             let (.handingOver, .exited(exit)):
             // Symphony went away on its own; there is nothing left to restart gracefully.
             enter(.idle, now: now)
             error = "\(purpose.isUpdate ? "Update" : "Restart") cancelled: Symphony \(exit.summary)"
@@ -244,6 +268,8 @@ public struct RestartMachine: Equatable {
             return "\(doing): waiting for dispatch to pause…"
         case let .waitingForRuns(running: count?):
             return count == 1 ? "Waiting for 1 agent run…" : "Waiting for \(count) agent runs…"
+        case let .handingOver(conductorRuns: count):
+            return Self.handoverLine(doing: doing, conductorRuns: count)
         case .stopping:
             return "\(doing): stopping Symphony…"
         case .starting, .waitingForAnswer:
@@ -279,7 +305,7 @@ public struct RestartMachine: Equatable {
         pollMayPredatePause = false
         switch poll {
         case let .state(snapshot):
-            let runs = (paused: snapshot.pause != nil, activeRuns: snapshot.activeRuns)
+            let runs = (paused: snapshot.pause != nil, activeRuns: snapshot.activeRuns, conductorRuns: snapshot.conductorRuns)
             return waited(runs, mayPredatePause: mayPredatePause, now: now)
         case .failed:
             // Symphony answers but its state doesn't load: the drain waits on its drain read instead (TP-1550).
@@ -291,17 +317,20 @@ public struct RestartMachine: Equatable {
 
     /// Goes on from what Symphony said about its agent runs and pause; nil when it said nothing.
     private mutating func waited(
-        _ runs: (paused: Bool, activeRuns: Int)?,
+        _ runs: (paused: Bool, activeRuns: Int, conductorRuns: Int)?,
         mayPredatePause: Bool,
         now: Date
     ) -> [Effect] {
         if let runs {
             if runs.paused {
-                // A read that shows dispatch paused was taken after the pause, so its count can't grow any more.
+                // A read that shows dispatch paused was taken after the pause, so its count can't grow any more. With
+                // no agent run active, Symphony is asked for the handover, which waits for Conductor runs (TP-1590).
                 guard runs.activeRuns > 0 else {
-                    enter(.stopping, now: now)
-                    return [.stop]
+                    let effects = askHandover(conductorRuns: runs.conductorRuns, now: now)
+                    if purpose != .automaticUpdate, now.timeIntervalSince(phaseStart) >= runsTimeout { offersRestartNow = true }
+                    return effects
                 }
+                if case .handingOver = phase { handoverAsked = false }
                 phase = .waitingForRuns(running: runs.activeRuns)
                 if purpose == .automaticUpdate, now.timeIntervalSince(phaseStart) >= runsTimeout {
                     return postpone(now: now)
@@ -320,6 +349,27 @@ public struct RestartMachine: Equatable {
         }
         if purpose != .automaticUpdate, now.timeIntervalSince(phaseStart) >= runsTimeout { offersRestartNow = true }
         return []
+    }
+
+    /// Asks Symphony for the handover once per answer; the phase shows the Conductor runs it waits for meanwhile.
+    private mutating func askHandover(conductorRuns: Int, now: Date) -> [Effect] {
+        if case .handingOver = phase {
+            phase = .handingOver(conductorRuns: conductorRuns)
+        } else {
+            enter(.handingOver(conductorRuns: conductorRuns), now: now)
+        }
+        guard !handoverAsked else { return [] }
+        handoverAsked = true
+        return [.send(.handover)]
+    }
+
+    /// The line for the handover: what the stop waits for while a Conductor run is mid-run (TP-1590).
+    public static func handoverLine(doing: String, conductorRuns: Int) -> String {
+        switch conductorRuns {
+        case ...0: return "\(doing): stopping Symphony…"
+        case 1: return "Waiting for a Conductor run to end…"
+        default: return "Waiting for \(conductorRuns) Conductor runs to end…"
+        }
     }
 
     /// An automatic update gives up on agent runs that are still active: it resumes the dispatch it paused and leaves
@@ -349,6 +399,7 @@ public struct RestartMachine: Equatable {
         self.phase = phase
         phaseStart = now
         offersRestartNow = false
+        handoverAsked = false
     }
 
     /// Whether a swap that stopped Symphony and then failed should lift the update's pause: the drain paused
