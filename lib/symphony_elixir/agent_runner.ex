@@ -2118,12 +2118,16 @@ defmodule SymphonyElixir.AgentRunner do
   # unchanged head or called the PR tool. A Rework with no finding, a finding left open or a new head
   # keeps the rules below.
   defp rework_answered?(%Issue{id: issue_id} = issue, %{progress: %{head: head} = progress} = run_context) do
-    rework_state?(issue.state) and is_binary(head) and head == progress.rework_base and clean_tree?(progress) and
-      attached_pr?(issue, run_context.opts) and findings_answered?(issue_id) and
+    unchanged_clean_rework_head?(issue, head, progress) and attached_pr?(issue, run_context.opts) and
+      findings_answered?(issue_id) and
       qa_failed_approved_head?(run_repo_key(issue, run_context.opts), issue_id, head) and
       TicketJourney.unproved(issue_id) == [] and
       no_pending_rework_signal?(issue, run_context.opts) and
       pr_head?(issue, head, run_context)
+  end
+
+  defp unchanged_clean_rework_head?(%Issue{state: state}, head, progress) do
+    rework_state?(state) and is_binary(head) and head == progress.rework_base and clean_tree?(progress)
   end
 
   # The Rework came from QA failing `head` after Code Review approved it: QA's newest verdict is a
