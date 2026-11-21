@@ -637,22 +637,22 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     # A list whose code step a failing check sends back once, so the code step takes two turns that
     # change nothing, then the handoff step. `unpushed` is what the workspace's unpushed-head read
     # gives; `states` the ticket after each turn, as `run_issue!/2` takes it.
+    defp unpushed_step_command(command, checks) do
+      cond do
+        command =~ "git merge-base" -> {:ok, {"M\tlib/app.ex\n", 0}}
+        command == "make check" -> first_check_fails(checks)
+        true -> {:ok, {"", 0}}
+      end
+    end
+
+    defp first_check_fails(checks) do
+      :counters.add(checks, 1, 1)
+      if :counters.get(checks, 1) == 1, do: {:ok, {"1 failure", 1}}, else: {:ok, {"ok", 0}}
+    end
+
     defp run_unpushed!(unpushed, opts \\ []) do
       checks = :counters.new(1, [])
-
-      runner = fn command, _env, _timeout_ms ->
-        cond do
-          command =~ "git merge-base" ->
-            {:ok, {"M\tlib/app.ex\n", 0}}
-
-          command == "make check" ->
-            :counters.add(checks, 1, 1)
-            if :counters.get(checks, 1) == 1, do: {:ok, {"1 failure", 1}}, else: {:ok, {"ok", 0}}
-
-          true ->
-            {:ok, {"", 0}}
-        end
-      end
+      runner = fn command, _env, _timeout_ms -> unpushed_step_command(command, checks) end
 
       steps = """
       phases:
@@ -758,7 +758,14 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
 
       log =
         capture_log(fn ->
-          run_issue!("In Progress", heads: ["sha-same"], pr_url: nil, max_turns: 5, repos: designed_repos(), symphony_steps: steps, runner_opts: runner_opts)
+          run_issue!("In Progress",
+            heads: ["sha-same"],
+            pr_url: nil,
+            max_turns: 5,
+            repos: designed_repos(),
+            symphony_steps: steps,
+            runner_opts: runner_opts
+          )
         end)
 
       assert turns() == 2
