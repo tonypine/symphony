@@ -19,7 +19,9 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
   the schema refuses (`invalid_payload`, naming the fields), a `finding.resolved` naming no finding
   of the ticket (`unknown_finding`) or one already resolved (`already_resolved`, naming the
   resolution), or carrying no head that fixes it (`no_head`), a `check.proved` naming no check of the
-  current plan (`unknown_check`, with the ids it `known`s), a `parent` that is no event of the ticket (`unknown_parent`)
+  current plan (`unknown_check`, with the ids it `known`s), a proof naming a test the run's checkout
+  lacks (`test_not_found`, a `check.proved` with `by: test` or an `evidence` whose `proof` has a
+  `test`, found as the QA pre-check finds it: `SymphonyElixir.QaPreCheck.missing_test/3`), a `parent` that is no event of the ticket (`unknown_parent`)
   and an artifact that is not a regular file under the workspace or the run's `$TMPDIR`
   (`invalid_artifact`). Every check runs before anything is written: a refused call ingests no file
   and records no event.
@@ -30,6 +32,7 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
     PathSafety,
     PhaseSteps,
     PromptSafety,
+    QaPreCheck,
     RunStore,
     TicketChecks,
     TicketEvents,
@@ -211,6 +214,7 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
          stored when is_list(stored) <- RunStore.list_ticket_events(ticket.issue_id, []),
          :ok <- finding(type, payload, stored, head),
          :ok <- check(type, payload, stored),
+         :ok <- proof_test(type, payload, context),
          {:ok, parent} <- parent(type, Map.get(args, "parent"), stored),
          {:ok, sources} <- sources(type, Map.get(args, "artifacts"), context),
          {:ok, artifact_ids} <- ingest(type, sources, ticket, context),
@@ -359,6 +363,35 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
   end
 
   defp check(_type, _payload, _stored), do: :ok
+
+  defp proof_test("check.proved" = type, %{by: "test", test: test}, context), do: find_test(context, test, type)
+  defp proof_test("evidence" = type, %{proof: %{test: test}}, context), do: find_test(context, test, type)
+  defp proof_test(_type, _payload, _context), do: :ok
+
+  @doc """
+  Whether the test a proof names is in the run's checkout (the session's workspace), found as the
+  QA pre-check finds it (`SymphonyElixir.QaPreCheck.missing_test/3`), so a proof accepted when it
+  is recorded is found by QA too. A refusal (`test_not_found`) says what is missing and the forms
+  of test name the lookup takes. A session with no checkout (no workspace, or one that is not a git
+  checkout) has nothing to search, and its proof is taken as it is. `opts[:git]` runs git.
+  """
+  @spec find_test(context(), String.t(), String.t() | nil, keyword()) :: :ok | {:error, error()}
+  def find_test(context, test, type \\ nil, opts \\ []) do
+    workspace = Map.get(context, :workspace)
+
+    with true <- is_binary(workspace) and File.exists?(Path.join(workspace, ".git")),
+         missing when is_binary(missing) <- QaPreCheck.missing_test(test, workspace, opts) do
+      refusal(
+        "test_not_found",
+        "The test this proof names is not in the checkout: #{missing}. Name it so QA finds it: #{QaPreCheck.test_name_forms()}.",
+        type,
+        nil,
+        %{"test" => test}
+      )
+    else
+      _found_or_no_checkout -> :ok
+    end
+  end
 
   defp parent(_type, nil, _stored), do: {:ok, nil}
 

@@ -4303,7 +4303,13 @@ only be proved by CI" with the check's name and why, and the push goes ahead. Th
 in Symphony (`Phases.ci_only_checks/0`), short, and shown in the Director's Settings › Phases with the
 CI fix list: `dialyzer` (its full run), `protected paths` and `validate-pr-description` (they read the
 pull request on GitHub), the `macos` gate (it sums up the Mac checks), and the Mac checks' QA signing
-identity and update tests (they change the machine they run on). Any other check the step has no way
+identity and update tests (they change the machine they run on). A check that only adds up the
+results of other jobs, as make-all's "Summarize gate results" does, is not run either: Symphony reads
+the workspace's workflow files (`.github/workflows`), and a job that `needs` other jobs and whose
+steps are all `run` lines, with no `uses` (nothing checks the repository out or runs an action),
+reports on its `needs`. It counts as proved by them, and the step's output names them. The ones of
+them that failed are failed checks of the run too and run again as above: one that fails again sends
+the run back to `fix`, and one the step has no way to run still asks. Any other check the step has no way
 to run, or can't read, stops the run on a Question before the push: the person lets CI prove it ("Go
 on past it"), runs it again, or sends their words to `fix`. A CI Fix run sent for a merge conflict, with
 no failed check, skips the step. A CI Fix run with neither a failed check nor a merge conflict (a

@@ -1550,6 +1550,25 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       assert first.run_id == "run-1"
     end
 
+    test "a step's test the run's checkout lacks is refused before any step's proof is recorded" do
+      :ok = RunStore.clear()
+
+      client = fn query, _variables, _opts ->
+        if query =~ "SymphonyAgentIssueDescription",
+          do: {:ok, %{"data" => %{"issue" => %{"id" => "issue-current", "description" => @walkthrough}}}},
+          else: flunk("the proofs must not edit the description")
+      end
+
+      args = %{"proofs" => [%{"step" => 1, "test" => "TimelineKeysTests testItWorks"}, %{"step" => 2, "test" => "Tests/Gone.swift"}]}
+      issue = %Issue{id: "issue-current", identifier: "TP-7", repo_key: "repo-a"}
+      opts = [issue: issue, workspace: proof_checkout!(), linear_client: client, run_id: "run-1", run_kind: "implementation"]
+
+      response = DynamicTool.execute("linear_record_walkthrough_proofs", args, opts)
+      assert %{"error" => %{"reason" => "test_not_found", "message" => message}} = Jason.decode!(response["output"])
+      assert message =~ "`Tests/Gone.swift` is not in the checkout"
+      assert TicketEvents.query("issue-current", types: ["evidence"]) == []
+    end
+
     test "a refused event is the tool's error, after the proofs passed the walkthrough" do
       client = fn query, _variables, _opts ->
         if query =~ "SymphonyAgentIssueDescription",
@@ -1637,6 +1656,34 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       assert %{"error" => _refused} = record_check_proofs([%{"step" => "c1", "test" => String.duplicate("x", 501)}])
       assert TicketEvents.query("issue-current", types: ["check.proved"]) == []
     end
+
+    test "a test the run's checkout lacks is refused before any proof is recorded, naming the forms a test name takes" do
+      workspace = proof_checkout!()
+      opts = [issue: %Issue{id: "issue-current", identifier: "TP-7", repo_key: "repo-a"}, workspace: workspace, run_id: "run-1", run_kind: "implementation"]
+      found = %{"step" => "c1", "test" => "TimelineKeysTests testItWorks"}
+      missing = %{"step" => "c1", "test" => "TimelineKeysTests testNothing"}
+
+      response = DynamicTool.execute("linear_record_walkthrough_proofs", %{"proofs" => [found, missing]}, opts)
+      assert %{"error" => %{"reason" => "test_not_found", "message" => message}} = Jason.decode!(response["output"])
+      assert message =~ "a Swift class plus method"
+      assert TicketEvents.query("issue-current", types: ["check.proved"]) == []
+
+      response = DynamicTool.execute("linear_record_walkthrough_proofs", %{"proofs" => [found]}, opts)
+      assert %{"checks" => ["c1"]} = Jason.decode!(response["output"])
+    end
+  end
+
+  # A git checkout holding a Swift test whose class and method sit on different lines.
+  defp proof_checkout! do
+    dir = Path.join(System.tmp_dir!(), "proof-checkout-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(Path.join(dir, "Tests"))
+    File.write!(Path.join(dir, "Tests/TimelineKeysTests.swift"), "final class TimelineKeysTests: XCTestCase {\n    func testItWorks() {}\n}\n")
+    git = &System.cmd("git", ["-c", "user.name=T", "-c", "user.email=t@x" | &1], cd: dir, stderr_to_stdout: true)
+    {_out, 0} = git.(["init", "-q"])
+    {_out, 0} = git.(["add", "."])
+    {_out, 0} = git.(["commit", "-q", "-m", "first"])
+    on_exit(fn -> File.rm_rf(dir) end)
+    dir
   end
 
   describe "linear document tools" do
