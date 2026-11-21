@@ -298,6 +298,25 @@ defmodule SymphonyElixir.ReleaseBuildTest do
       refute_received {:gate_passed, _build}
     end
 
+    test "a rerun that passes on the commit whose gate failed tells the release gate (TP-1583)", %{github: github, opts: opts} do
+      Process.put(:release_gate_test, self())
+      opts = Keyword.put(opts, :release_gate, __MODULE__.Gate)
+      set(github, :started, [%{"name" => "release gate", "conclusion" => "failure", "steps" => [%{"name" => "Test the update", "conclusion" => "failure"}]}])
+      runs(github, [run(1, "completed", "failure")])
+      assert {:ok, %{state: :failed, fix: %{attempt: 1}}} = check(opts)
+      assert_received {:gate_failed, %{attempt: 1}}
+
+      # The same run, run again on the same commit, passes: the record goes from failed to built.
+      runs(github, [run(2, "completed", "success")])
+      assert {:ok, %{state: :built, attempt: 2}} = check(opts)
+      assert_received {:gate_passed, %{sha: @sha, state: :built, number: 750, attempt: 2}}
+
+      # The newest merge's record is what the gate reads on a poll.
+      assert ReleaseBuild.latest() == nil
+      :ok = RunStore.put_github_updates({:release_build, :latest}, %{sha: @sha, number: 750})
+      assert %{sha: @sha, state: :built, attempt: 2} = ReleaseBuild.latest()
+    end
+
     test "a commit whose build failed its gate waits on the later build that carries it, never the failed one (TP-1528)" do
       failed = String.duplicate("a", 40)
       later = String.duplicate("b", 40)
