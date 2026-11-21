@@ -121,11 +121,45 @@ check "and drops the states saves put aside" "" "$(ls -A "$SYMPHONY_CI_CACHE"/wo
 check "and another Xcode's folders" no "$([ -d "$SYMPHONY_CI_CACHE/work/Xcode-1.0-Build-old" ] && echo yes || echo no)"
 unset SYMPHONY_CI_IN_USE_MINUTES
 
+# A disk short of room: prune drops idle pieces and branch states past the count limits, oldest
+# first, until the floor is met. A made-up disk: its free space is a capacity less the cache's size,
+# so what prune removes frees room as it would on the runner.
+export SYMPHONY_CI_CACHE="$tmp/room" SYMPHONY_CI_MIN_FREE_GB=1
+mb() { head -c 1048576 /dev/zero > "$1"; }
+for n in 1 2 3 4; do mb "$tmp/piece"; $store put app "p$n" "$tmp/piece" incremental 2>/dev/null; done
+for ref in main pr-x pr-y; do mb "$($store work "$ref" release --fresh 2>/dev/null)/state"; $store save "$ref" release 2>/dev/null; done
+rstore="$SYMPHONY_CI_CACHE/store/app"; rrefs=$(echo "$SYMPHONY_CI_CACHE"/work/*/refs)
+# main is the oldest but is always kept; p4 was used 10 minutes ago, so a job may be copying it.
+age "$rrefs/main" 39600; age "$rstore/p1" 36000; age "$rstore/p2" 32400; age "$rrefs/pr-x" 28800
+age "$rstore/p3" 25200; age "$rrefs/pr-y" 18000; age "$rstore/p4" 600
+used_kb() { du -sk "$SYMPHONY_CI_CACHE" | awk '{ print $1 }'; }
+roomy() { # capacity in KB: free = capacity - the cache's size
+  export SYMPHONY_CI_FREE_KB_COMMAND="echo \$(( $1 - \$(du -sk '$SYMPHONY_CI_CACHE' | awk '{ print \$1 }') ))"
+}
+left() { echo "$(ls "$rstore" | tr '\n' ' ')| $(ls "$rrefs" | tr '\n' ' ' | sed 's/ $//')"; }
+roomy $(( 1048576 + $(used_kb) + 10240 ))
+$store prune 2>/dev/null
+check "with room, prune keeps what the count limits allow" "p1 p2 p3 p4 | main pr-x pr-y" "$(left)"
+# Two megabytes and a half short: the three oldest idle ones go, and no more.
+roomy $(( 1048576 + $(used_kb) - 2560 ))
+$store prune 2>/dev/null
+check "short of room, prune drops the oldest idle ones until the floor is met" "p3 p4 | main pr-y" "$(left)"
+check "and the disk is back over the floor" ok "$($store room >/dev/null 2>&1 && echo ok || echo short)"
+check "the report names the free space and the floor" "the floor is 1 GB" "$($store space | grep -o 'the floor is 1 GB')"
+# Room that no prune can make: every idle one goes, never main's state, the active folder or a piece in use.
+roomy $(( $(used_kb) + 1024 ))
+check "when nothing idle is left, room fails" 1 "$($store room >/dev/null 2>&1; echo $?)"
+check "having kept what is in use and main's state" "p4 | main" "$(left)"
+check "and the active folder" yes "$([ -f "$(dirname "$rrefs")/active/release/state" ] && echo yes || echo no)"
+check "its error names the free space and the floor" yes "$(out=$($store room 2>/dev/null || true); echo "$out" | grep -q '::error::.*GB free.*under the 1 GB' && echo yes || echo no)"
+unset SYMPHONY_CI_FREE_KB_COMMAND SYMPHONY_CI_MIN_FREE_GB
+
 # With no cache (GitHub's own runners) nothing is kept and nothing fails.
 unset SYMPHONY_CI_CACHE
 check "no cache: no working folder" "" "$($store work main release)"
 check "no cache: get misses" miss "$($store get app k1 "$tmp/out" 2>/dev/null && echo hit || echo miss)"
 check "no cache: put, save, stamp and prune do nothing" ok "$($store put app k9 "$tmp/piece" clean && $store save main release && $store stamp && $store prune && echo ok)"
+check "no cache: space reports the checkout's disk" yes "$($store space | grep -q '^disk: .* GB free' && echo yes || echo no)"
 check "an unknown command is refused" 2 "$($store nonsense >/dev/null 2>&1; echo $?)"
 
 # The groups of checks a pull request needs.
