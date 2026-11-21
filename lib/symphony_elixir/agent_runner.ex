@@ -6,7 +6,7 @@ defmodule SymphonyElixir.AgentRunner do
   require Logger
 
   alias SymphonyElixir.ClaudeCode.AppServer, as: ClaudeAppServer
-  alias SymphonyElixir.Harnesses.Launcher
+  alias SymphonyElixir.Harnesses.{EventStream, Launcher}
 
   alias SymphonyElixir.{
     AgentLabels,
@@ -54,6 +54,7 @@ defmodule SymphonyElixir.AgentRunner do
     SetupBlock,
     StateMachine,
     SubIssueWait,
+    TicketEvents,
     TicketJourney,
     TicketPullRequest,
     TicketSignals,
@@ -906,7 +907,7 @@ defmodule SymphonyElixir.AgentRunner do
 
       {:ok, turn_session} ->
         Logger.info("Completed agent run for #{issue_context(issue)} session_id=#{turn_session[:session_id]} workspace=#{workspace} turn=#{turn_number}/#{max_turns}")
-        run_context = remember_turn_session(run_context, turn_session)
+        run_context = run_context |> remember_turn_session(turn_session) |> remember_background_wait(issue, turn_session)
 
         case maybe_hold_for_dependency_approval(workspace, issue, turn_session, run_context) do
           :ok ->
@@ -1182,6 +1183,29 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp remember_turn_session(%{walk: %{} = walk} = run_context, turn_session), do: %{run_context | walk: %{walk | session_id: turn_session[:session_id]}}
   defp remember_turn_session(run_context, _turn_session), do: run_context
+
+  # A turn whose agent ended its message while a background command of its own still ran, and
+  # whose harness waited for it, is not idle (TP-1570): `track_turn_progress/2` does not count it,
+  # unless the wait reached its bound, which the ticket's history says.
+  defp remember_background_wait(run_context, issue, turn_session) do
+    wait = Map.get(turn_session, :background_wait)
+    if match?(%{outcome: :bound}, wait), do: record_background_wait_bound(issue, run_context, wait)
+    Map.put(run_context, :background_wait, wait)
+  end
+
+  defp record_background_wait_bound(%Issue{id: issue_id} = issue, %{opts: opts}, wait) when is_binary(issue_id) do
+    minutes = div(EventStream.background_wait_ms(), 60_000)
+    Logger.warning("Stopped a background command of #{issue_context(issue)} at the wait's bound waited_ms=#{wait.waited_ms}")
+
+    text =
+      "The agent ended its turn while a background command it started was still running. Symphony waited #{minutes} minutes for it, " <>
+        "the wait's limit, then stopped it; the run goes on, and that turn counts as one that changed nothing if it did."
+
+    _ = TicketEvents.record(run_repo_key(issue, opts), issue_id, "note", %{text: text}, run_id: Keyword.get(opts, :run_id))
+    :ok
+  end
+
+  defp record_background_wait_bound(_issue, _run_context, _wait), do: :ok
 
   # How the walk's agent step ended picks what comes next: the step the agent recorded for a
   # delegated one (`PhaseSteps.agent_outcome/3`), the answer of an orchestrated one
@@ -2005,7 +2029,13 @@ defmodule SymphonyElixir.AgentRunner do
     head = read_workspace_head(run_context.workspace, run_context.worker_host, run_context.opts)
     tree = read_workspace_tree(run_context.workspace, run_context.worker_host, run_context.opts)
     fingerprint = progress_fingerprint(head, tree, refreshed_issue, run_context.opts)
-    empty_turns = if is_nil(head) or fingerprint != progress.fingerprint, do: 0, else: progress.empty_turns + 1
+
+    empty_turns =
+      cond do
+        is_nil(head) or fingerprint != progress.fingerprint -> 0
+        match?(%{outcome: :ended}, Map.get(run_context, :background_wait)) -> progress.empty_turns
+        true -> progress.empty_turns + 1
+      end
 
     %{run_context | progress: %{progress | head: head, fingerprint: fingerprint, empty_turns: empty_turns}}
   end

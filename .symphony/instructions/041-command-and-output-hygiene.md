@@ -45,6 +45,13 @@
     `run_in_background`, which the harness tracks and stops.
   - Bound every probe loop, for example `for i in $(seq 60)`; never
     `while true`.
+- Run a long proof in the foreground, in pieces. A proof that takes longer
+  than the ten-minute command limit (a flaky test repeated 50 times, say) runs
+  as several foreground commands, each ending well inside the limit (10
+  repetitions per command), and you read each piece's result before starting
+  the next. Don't start it in the background and end the turn expecting to be
+  notified: Symphony waits on a background command still running at the end of
+  a turn for 30 minutes at most, then stops it.
   - If a process you started can't be stopped (the sandbox refuses `kill`),
     record its pid and full command in the workpad `Notes`, then ask the
     operator with `linear_request_human_action` to kill it. Never move on

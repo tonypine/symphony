@@ -250,6 +250,8 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
            | {:usage_window, String.t(), usage_window()}
            | {:rate_limit_info, map()}
            | {:tool_progress, String.t() | nil}
+           | {:background_command_started, String.t()}
+           | {:background_command_ended, String.t()}
            | {:malformed, String.t()}
 
   @typedoc "A Claude usage-limit hit: a plan window (five-hour or weekly) is used up."
@@ -303,6 +305,14 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   # floods the transcript with duplicate "session started" entries.
   defp parse_decoded_event(%{"type" => "system", "subtype" => "init", "session_id" => session_id}, _line),
     do: {:session_started, session_id}
+
+  # A command the agent runs in the background is a `local_bash` task: `task_started` when it starts
+  # and `task_notification` when it ends, however it ended. `EventStream` waits on it (TP-1570).
+  defp parse_decoded_event(%{"type" => "system", "subtype" => "task_started", "task_type" => "local_bash", "task_id" => id}, _line) when is_binary(id),
+    do: {:multi, [{:notification, "system task_started"}, {:background_command_started, id}]}
+
+  defp parse_decoded_event(%{"type" => "system", "subtype" => "task_notification", "task_id" => id}, _line) when is_binary(id),
+    do: {:multi, [{:notification, "system task_notification"}, {:background_command_ended, id}]}
 
   defp parse_decoded_event(%{"type" => "system", "subtype" => subtype}, _line) when is_binary(subtype),
     do: {:notification, "system #{subtype}"}
@@ -855,7 +865,9 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
       base_args = command_args ++ claude_settings_args(session)
       args = base_args ++ claude_stream_json_args(base_args) ++ run_profile_args(session) ++ resume_args(session)
 
-      case open_local_prompt_port(executable, args, prompt_path, workspace, Map.merge(Map.get(session, :extra_env, %{}), provider_env)) do
+      env = background_wait_env() |> Map.merge(Map.get(session, :extra_env, %{})) |> Map.merge(provider_env)
+
+      case open_local_prompt_port(executable, args, prompt_path, workspace, env) do
         {:ok, port, priority} ->
           :ok = AgentProcesses.track(port, workspace: workspace)
           :ok = AgentPriority.log_started(port, command, Map.get(session, :run_id), priority)
@@ -891,6 +903,16 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
       end
     end
   end
+
+  # `claude -p` holds a background command still running after the turn's result, and goes on with
+  # the conversation when it ends, but stops it after 10 minutes by default. Symphony's own wait
+  # (`EventStream.background_wait_ms/0`) bounds it instead, so the CLI's ceiling sits a minute past
+  # it (TP-1570).
+  @background_wait_ceiling_env "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"
+
+  defp background_wait_ceiling_ms, do: Integer.to_string(EventStream.background_wait_ms() + 60_000)
+  defp background_wait_env, do: %{@background_wait_ceiling_env => background_wait_ceiling_ms()}
+  defp background_wait_assignment, do: "#{@background_wait_ceiling_env}=#{background_wait_ceiling_ms()}"
 
   defp open_local_prompt_port(executable, args, prompt_path, workspace, env) do
     case System.find_executable("sh") do
@@ -1173,7 +1195,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
       "cat > \"$prompt_file\"",
       "chmod 0600 \"$prompt_file\"",
       "cd #{shell_escape(workspace)}",
-      "#{@agent_runtime_env}=#{@agent_runtime_env_value} #{command} < \"$prompt_file\""
+      "#{@agent_runtime_env}=#{@agent_runtime_env_value} #{background_wait_assignment()} #{command} < \"$prompt_file\""
     ]
     |> Enum.join(" && ")
   end

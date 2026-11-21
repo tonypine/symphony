@@ -63,6 +63,16 @@ defmodule SymphonyElixir.WorkflowPreviewSnapshotTest do
     assert flat =~ "If the prompt has a `## Checks` section, record the proof for the check instead"
   end
 
+  # TP-1570: a proof longer than a foreground command's limit survives only in foreground pieces.
+  test "the preview tells a run to run a long proof in the foreground, in pieces inside the ten-minute command limit" do
+    assert {:ok, prompt} = WorkflowPreview.render(file: @repo_workflow, agent_kind: "claude", repo_key: "app")
+    flat = String.replace(prompt, ~r/\s+/, " ")
+
+    assert flat =~ "Run a long proof in the foreground, in pieces."
+    assert flat =~ "runs as several foreground commands, each ending well inside the limit (10 repetitions per command)"
+    assert flat =~ "Don't start it in the background and end the turn expecting to be notified"
+  end
+
   test "the preview names none of the retired states, checks or tickets" do
     assert {:ok, prompt} = WorkflowPreview.render(file: @repo_workflow, agent_kind: "claude", repo_key: "app")
 

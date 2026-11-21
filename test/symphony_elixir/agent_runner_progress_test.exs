@@ -25,7 +25,8 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     # `:progress_api_unreachable` set, ends as Claude's turn does when it can't reach the model API.
     # `:progress_turn_hook` runs with the turn's options, as a tool the agent calls would. A turn on
     # a delegated step of the run's step list records the step passed, as the prompt asks
-    # (`SymphonyElixir.PhaseSteps`).
+    # (`SymphonyElixir.PhaseSteps`). `:progress_turn_extra` adds its fields to every turn's result,
+    # as the harness's `background_wait` (TP-1570).
     def start_session(_workspace, opts) do
       send(Application.fetch_env!(:symphony_elixir, :progress_agent_recipient), {:progress_session_started, opts})
       {:ok, %{}}
@@ -40,7 +41,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
 
       case Application.get_env(:symphony_elixir, :progress_api_unreachable) do
         %{} = info -> {:error, {:model_api_unreachable, info}}
-        nil -> {:ok, %{session_id: "sess-#{count}"}}
+        nil -> {:ok, Map.merge(%{session_id: "sess-#{count}"}, Application.get_env(:symphony_elixir, :progress_turn_extra, %{}))}
       end
     end
 
@@ -84,6 +85,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
             :progress_pr_head_result,
             :progress_api_unreachable,
             :progress_turn_hook,
+            :progress_turn_extra,
             :memory_tracker_update_issue_state_result,
             :memory_tracker_create_comment_result
           ] do
@@ -988,6 +990,31 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
 
       assert [%{kind: :action, ask: ^title}] =
                RunStore.list_all_ticket_states() |> FromRecord.items(snapshot) |> Enum.filter(&(&1.issue_id == "issue-progress"))
+    end
+  end
+
+  describe "a turn that waited on its own background command (TP-1570)" do
+    test "does not count toward the turns that changed nothing, so the run is not parked for it" do
+      Application.put_env(:symphony_elixir, :progress_turn_extra, %{background_wait: %{outcome: :ended, waited_ms: 720_000}})
+      tree = fn _workspace, nil -> "tree-dirty" end
+
+      run_issue!("In Progress", heads: ["sha-same"], pr_url: nil, max_turns: 3, runner_opts: [workspace_tree_reader: tree])
+
+      assert turns() == 3
+      refute_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+      assert Questions.open({:ticket, "default", "issue-progress"}) == []
+    end
+
+    test "counts as usual once the wait reached its bound, and the ticket's history says the command was stopped" do
+      Application.put_env(:symphony_elixir, :progress_turn_extra, %{background_wait: %{outcome: :bound, waited_ms: 1_800_000}})
+      tree = fn _workspace, nil -> "tree-dirty" end
+
+      log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-same"], pr_url: nil, max_turns: 5, runner_opts: [workspace_tree_reader: tree]) end)
+
+      assert turns() == 2
+      assert log =~ "Stopped a background command of"
+      notes = SymphonyElixir.TicketEvents.query("issue-progress", types: ["note"], limit: :all)
+      assert Enum.any?(notes, &(inspect(&1.payload) =~ "the wait's limit, then stopped it"))
     end
   end
 

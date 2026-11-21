@@ -3776,6 +3776,8 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
         assert traced_command =~ "cat >"
         assert traced_command =~ "chmod 0600"
         assert traced_command =~ "cleanup_prompt"
+        # `claude -p` holds a background command a minute past Symphony's own wait (TP-1570).
+        assert traced_command =~ "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=#{EventStream.background_wait_ms() + 60_000}"
         refute traced_command =~ "remote task"
         refute traced_argv =~ "remote task"
         assert File.read!(stdin_trace_file) == "remote task"
@@ -4301,6 +4303,182 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
 
     issue = %{id: "issue-#{Path.basename(workspace)}", identifier: Path.basename(workspace)}
     AppServer.run_turn(local_session(workspace, test_root), "do the thing", issue, [])
+  end
+
+  # TP-1570: a turn whose result arrives while a command the agent started in the background still
+  # runs waits on the command instead of closing it, and goes on when it ends.
+  describe "a background command still running at the turn's result" do
+    setup do
+      Application.put_env(:symphony_elixir, :post_completion_grace_ms, 50)
+      Application.put_env(:symphony_elixir, :background_heartbeat_ms, 50)
+
+      on_exit(fn ->
+        Enum.each([:post_completion_grace_ms, :background_heartbeat_ms, :background_wait_ms], &Application.delete_env(:symphony_elixir, &1))
+      end)
+
+      test_root = Path.join(System.tmp_dir!(), "symphony-elixir-claude-background-#{System.unique_integer([:positive])}")
+      workspace_root = Path.join(test_root, "workspaces")
+      workspace = Path.join(workspace_root, "ACME-BG")
+      File.mkdir_p!(workspace)
+      on_exit(fn -> File.rm_rf(test_root) end)
+
+      {:ok, test_root: test_root, workspace_root: workspace_root, workspace: workspace}
+    end
+
+    test "keeps the command alive past the result, and the run goes on with its result when it ends", context do
+      marker = Path.join(context.test_root, "command.done")
+      env_file = Path.join(context.test_root, "ceiling.env")
+
+      background_cli!(
+        context,
+        "printf '%s' \"$CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS\" > '#{env_file}'\n" <>
+          init_line() <>
+          task_started("b1") <>
+          result_line(11) <>
+          "(sleep 0.4; printf done > '#{marker}') &\nwait $!\n" <>
+          line(%{type: "system", subtype: "task_progress", task_id: "b1"}) <>
+          task_ended("b1") <>
+          text_line("the loop passed; starting the next piece") <>
+          task_started("b2") <>
+          result_line(22) <>
+          "sleep 0.2\n" <>
+          task_ended("b2") <>
+          text_line("both pieces passed") <>
+          result_line(33)
+      )
+
+      test_pid = self()
+      session = local_session(context.workspace, context.test_root)
+
+      assert {:ok, result} = AppServer.run_turn(session, "prove it", %{}, on_message: &send(test_pid, {:bg_message, &1}))
+
+      # The command was not stopped by the turn's first result: it ran to its end.
+      assert File.read!(marker) == "done"
+      # The run went on: the continuations after each command ended were read in the same turn.
+      assert result.input_tokens == 33
+      assert %{outcome: :ended, waited_ms: waited_ms} = result.background_wait
+      assert waited_ms >= 400
+      assert File.read!(env_file) == Integer.to_string(EventStream.background_wait_ms() + 60_000)
+
+      messages = collect_messages()
+      assert {:notification, "Waiting on a background command"} in messages
+      assert {:tool_progress, "background command"} in messages
+      assert {:agent_text, "both pieces passed"} in messages
+    end
+
+    test "stops a command still running at the wait's bound and ends the turn on what it captured", context do
+      Application.put_env(:symphony_elixir, :background_wait_ms, 300)
+      pid_file = Path.join(context.test_root, "command.pid")
+
+      on_exit(fn ->
+        if File.exists?(pid_file), do: System.cmd("kill", ["-KILL", String.trim(File.read!(pid_file))], stderr_to_stdout: true)
+      end)
+
+      background_cli!(
+        context,
+        init_line() <>
+          task_started("b1") <>
+          result_line(11) <>
+          "sleep 30 &\nprintf '%s' \"$!\" > '#{pid_file}'\nwait $!\n" <>
+          result_line(99)
+      )
+
+      session = local_session(context.workspace, context.test_root)
+      start = System.monotonic_time(:millisecond)
+
+      log =
+        capture_log(fn ->
+          assert {:ok, result} = AppServer.run_turn(session, "prove it", %{}, [])
+          assert result.input_tokens == 11
+          assert %{outcome: :bound} = result.background_wait
+        end)
+
+      assert System.monotonic_time(:millisecond) - start < 10_000
+      assert log =~ "background command still running at the wait's bound; stopping it"
+
+      command_pid = pid_file |> File.read!() |> String.trim()
+      assert Enum.any?(1..100, fn _probe -> stopped?(command_pid) end), "the background command #{command_pid} kept running"
+    end
+
+    test "a process that exits while it waits ends the turn, with the wait marked as cut short", context do
+      background_cli!(context, init_line() <> task_started("b1") <> result_line(11) <> "exit 0\n")
+
+      session = local_session(context.workspace, context.test_root)
+
+      assert {:ok, result} = AppServer.run_turn(session, "prove it", %{}, [])
+      assert %{outcome: :exited} = result.background_wait
+    end
+
+    test "a turn that failed does not wait on its background command", context do
+      background_cli!(
+        context,
+        init_line() <> task_started("b1") <> line(%{type: "result", subtype: "error", is_error: true, error: "boom"}) <> "sleep 30 &\nwait $!\n"
+      )
+
+      session = local_session(context.workspace, context.test_root)
+      start = System.monotonic_time(:millisecond)
+
+      capture_log(fn -> assert {:error, {:turn_failed, "boom"}} = AppServer.run_turn(session, "prove it", %{}, []) end)
+      assert System.monotonic_time(:millisecond) - start < 10_000
+    end
+
+    test "a command that ended before the result is no wait", context do
+      background_cli!(context, init_line() <> task_started("b1") <> task_ended("b1") <> result_line(11) <> "exit 3\n")
+
+      session = local_session(context.workspace, context.test_root)
+
+      assert {:ok, result} = AppServer.run_turn(session, "prove it", %{}, [])
+      refute Map.has_key?(result, :background_wait)
+    end
+
+    test "parses a background command's start and its end, and leaves other tasks as notifications" do
+      started = Jason.encode!(%{type: "system", subtype: "task_started", task_id: "b1", task_type: "local_bash"})
+      agent = Jason.encode!(%{type: "system", subtype: "task_started", task_id: "a1", task_type: "local_agent"})
+      ended = Jason.encode!(%{type: "system", subtype: "task_notification", task_id: "b1", status: "killed"})
+
+      assert AppServer.parse_event(started) == {:multi, [{:notification, "system task_started"}, {:background_command_started, "b1"}]}
+      assert AppServer.parse_event(agent) == {:notification, "system task_started"}
+      assert AppServer.parse_event(ended) == {:multi, [{:notification, "system task_notification"}, {:background_command_ended, "b1"}]}
+    end
+  end
+
+  defp background_cli!(%{test_root: test_root, workspace_root: workspace_root}, body) do
+    fake_claude = Path.join(test_root, "fake-claude")
+    File.write!(fake_claude, "#!/bin/sh\n" <> body)
+    File.chmod!(fake_claude, 0o755)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      workspace_root: workspace_root,
+      agent_kind: "claude",
+      agent_command: fake_claude,
+      agent_turn_timeout_ms: 20_000
+    )
+  end
+
+  defp line(json), do: "printf '%s\\n' '#{Jason.encode!(json)}'\n"
+  defp init_line, do: line(%{type: "system", subtype: "init", session_id: "sess-bg"})
+  defp task_started(id), do: line(%{type: "system", subtype: "task_started", task_id: id, task_type: "local_bash", is_backgrounded: true})
+  defp task_ended(id), do: line(%{type: "system", subtype: "task_notification", task_id: id, status: "completed", output_file: "/tmp/#{id}.out"})
+  defp result_line(tokens), do: line(%{type: "result", subtype: "success", is_error: false, result: "done", session_id: "sess-bg", usage: %{input_tokens: tokens, output_tokens: 1}})
+  defp text_line(text), do: line(%{type: "assistant", message: %{content: [%{type: "text", text: text}]}})
+
+  defp collect_messages(acc \\ []) do
+    receive do
+      {:bg_message, message} -> collect_messages([message | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
+  end
+
+  defp stopped?(pid) do
+    case System.cmd("kill", ["-0", pid], stderr_to_stdout: true) do
+      {_output, 0} ->
+        Process.sleep(20)
+        false
+
+      {_output, _status} ->
+        true
+    end
   end
 
   defp local_session(workspace, test_root) do

@@ -12,12 +12,23 @@ defmodule SymphonyElixir.Harnesses.EventStream do
     * `{:turn_completed, result}` and `{:turn_failed, reason}`, which end the turn, as do
       `{:usage_limited, info}`, `{:api_unreachable, info}` and `{:rate_limited, info, reason}`;
     * `{:usage_window, message, window}` and `{:rate_limit_info, info}`;
+    * `{:background_command_started, id}` and `{:background_command_ended, id}`: a command
+      the agent started in the background, and the notice that it ended;
     * `{:multi, events}` for a line that holds several, and `{:malformed, line}` for a line
       that is no event, kept as the process's diagnostic output.
 
   It keeps the turn's deadlines (the turn's own, and a command's while a tool call is open),
   finishes a turn whose process lingers after its terminal event, and returns the turn's
   result or the reason it has none.
+
+  A terminal event that arrives while a background command of the turn is still running does
+  not finish the turn (TP-1570): the agent is waiting on its command, and the harness hands the
+  command's result to it in the same process once the command ends. The stream keeps reading,
+  sends a `{:tool_progress, "background command"}` heartbeat so the run reads as active, and
+  goes on with the conversation when the command ends. The wait has its own bound
+  (`background_wait_ms/0`, counted once per turn from the first wait): a command still running
+  then is stopped with the process's tree, and the turn ends on what it captured. A turn that
+  waited carries `background_wait: %{outcome: :ended | :bound | :exited, waited_ms: ms}`.
   """
 
   require Logger
@@ -29,6 +40,24 @@ defmodule SymphonyElixir.Harnesses.EventStream do
   @diagnostic_output_line_count 5
   @diagnostic_output_line_max_bytes 4_096
   @post_completion_grace_default_ms 1_500
+  @background_wait_default_ms 30 * 60 * 1_000
+  @background_heartbeat_default_ms 30_000
+
+  defp background_heartbeat_ms do
+    case Application.get_env(:symphony_elixir, :background_heartbeat_ms) do
+      ms when is_integer(ms) and ms > 0 -> ms
+      _ -> @background_heartbeat_default_ms
+    end
+  end
+
+  @doc "How long a turn waits on background commands still running after its terminal event."
+  @spec background_wait_ms() :: pos_integer()
+  def background_wait_ms do
+    case Application.get_env(:symphony_elixir, :background_wait_ms) do
+      ms when is_integer(ms) and ms > 0 -> ms
+      _ -> @background_wait_default_ms
+    end
+  end
 
   @doc """
   Reads the port until the turn ends: a terminal event and the process's exit, a timeout, or
@@ -71,7 +100,11 @@ defmodule SymphonyElixir.Harnesses.EventStream do
       parse: Keyword.fetch!(opts, :parse),
       after_line: Keyword.get(opts, :after_line, fn _line, acc -> acc end),
       label: Keyword.get(opts, :label, "Agent"),
-      run_id: Keyword.get(opts, :run_id)
+      run_id: Keyword.get(opts, :run_id),
+      turn_timeout_ms: turn_timeout_ms,
+      background_commands: MapSet.new(),
+      background_wait: nil,
+      awaiting_continuation: false
     }
 
     read_loop(port, on_message, acc, loop_state)
@@ -97,13 +130,13 @@ defmodule SymphonyElixir.Harnesses.EventStream do
         read_loop(port, on_message, acc, %{loop_state | pending_line: loop_state.pending_line <> partial})
 
       {^port, {:exit_status, 0}} ->
-        finalize_read_result(acc)
+        acc |> exited_while_waiting(loop_state) |> finalize_read_result()
 
       {^port, {:exit_status, status}} ->
-        handle_nonzero_exit(acc, loop_state, status)
+        handle_nonzero_exit(exited_while_waiting(acc, loop_state), loop_state, status)
     after
       timeout ->
-        handle_read_loop_timeout(acc, loop_state)
+        handle_read_loop_timeout(port, on_message, acc, loop_state)
     end
   end
 
@@ -111,6 +144,12 @@ defmodule SymphonyElixir.Harnesses.EventStream do
     Logger.info("#{loop_state.label} turn interrupted by the Conductor run_id=#{loop_state.run_id} session_id=#{inspect(acc.session_id)}")
     close(port)
     {:error, {:conductor_interrupted, acc.session_id}}
+  end
+
+  # While the turn waits on a background command only the wait's bound and its heartbeat count.
+  defp compute_read_timeout(%{background_wait: %{waiting: true} = wait}) do
+    now = System.monotonic_time(:millisecond)
+    max(1, min(wait.deadline, wait.heartbeat_at) - now)
   end
 
   defp compute_read_timeout(%{turn_deadline: turn_deadline, command_deadline: command_deadline, post_completion_deadline: post_completion_deadline}) do
@@ -129,21 +168,111 @@ defmodule SymphonyElixir.Harnesses.EventStream do
     full_line = loop_state.pending_line <> line
     event = loop_state.parse.(full_line)
 
-    tracked_loop_state = update_command_tracking(loop_state, event)
+    tracked_loop_state =
+      loop_state
+      |> update_command_tracking(event)
+      |> track_background_commands(event)
 
     new_acc =
       event
       |> apply_event(on_message, acc)
       |> then(&loop_state.after_line.(full_line, &1))
 
-    new_loop_state = %{
-      tracked_loop_state
-      | pending_line: "",
-        post_completion_deadline: maybe_start_post_completion_grace(new_acc, loop_state.post_completion_deadline)
-    }
+    {new_acc, new_loop_state} =
+      %{tracked_loop_state | pending_line: ""}
+      |> note_continuation(event)
+      |> wait_or_finish(new_acc, on_message)
 
     read_loop(port, on_message, new_acc, new_loop_state)
   end
+
+  defp track_background_commands(loop_state, {:multi, events}) when is_list(events),
+    do: Enum.reduce(events, loop_state, &track_background_commands(&2, &1))
+
+  defp track_background_commands(loop_state, {:background_command_started, id}),
+    do: %{loop_state | background_commands: MapSet.put(loop_state.background_commands, id)}
+
+  defp track_background_commands(loop_state, {:background_command_ended, id}),
+    do: %{loop_state | background_commands: MapSet.delete(loop_state.background_commands, id)}
+
+  defp track_background_commands(loop_state, _event), do: loop_state
+
+  # A terminal event after a wait is the continuation the command's end started.
+  defp note_continuation(%{awaiting_continuation: true} = loop_state, event) do
+    if terminal_event?(event), do: %{loop_state | awaiting_continuation: false}, else: loop_state
+  end
+
+  defp note_continuation(loop_state, _event), do: loop_state
+
+  @terminal_events [:turn_completed, :turn_failed, :usage_limited, :api_unreachable, :rate_limited]
+
+  defp terminal_event?({:multi, events}) when is_list(events), do: Enum.any?(events, &terminal_event?/1)
+  defp terminal_event?(event), do: is_tuple(event) and tuple_size(event) > 0 and elem(event, 0) in @terminal_events
+
+  # After the terminal event: wait while a background command runs, else start the grace window.
+  # Once the last command ended the harness goes on with the conversation, so the grace waits for
+  # the continuation's own terminal event.
+  defp wait_or_finish(loop_state, acc, on_message) do
+    waiting? = match?(%{waiting: true}, loop_state.background_wait)
+    running? = MapSet.size(loop_state.background_commands) > 0
+
+    cond do
+      not terminal_event_observed?(acc) ->
+        {acc, loop_state}
+
+      # Only a turn that completed waits: a failed one (a usage limit, an unreachable API) ends now.
+      running? and not waiting? and not loop_state.awaiting_continuation and is_nil(acc.turn_failed) ->
+        {acc, start_background_wait(loop_state, acc, on_message)}
+
+      waiting? and not running? ->
+        {put_background_wait(acc, loop_state, :ended), end_background_wait(loop_state)}
+
+      waiting? or loop_state.awaiting_continuation ->
+        {acc, loop_state}
+
+      true ->
+        {acc, %{loop_state | post_completion_deadline: maybe_start_post_completion_grace(acc, loop_state.post_completion_deadline)}}
+    end
+  end
+
+  defp start_background_wait(loop_state, acc, on_message) do
+    now = System.monotonic_time(:millisecond)
+    # The bound counts from the turn's first wait: a continuation that waits again shares it.
+    {started_at, deadline} =
+      case loop_state.background_wait do
+        %{started_at: started_at, deadline: deadline} -> {started_at, deadline}
+        nil -> {now, now + background_wait_ms()}
+      end
+
+    Logger.info("#{loop_state.label} turn waits on #{MapSet.size(loop_state.background_commands)} background command(s) session_id=#{inspect(acc.session_id)} bound_ms=#{deadline - now}")
+
+    on_message.({:notification, "Waiting on a background command"})
+
+    %{
+      loop_state
+      | background_wait: %{waiting: true, started_at: started_at, deadline: deadline, heartbeat_at: now + background_heartbeat_ms()},
+        post_completion_deadline: nil
+    }
+  end
+
+  defp end_background_wait(%{background_wait: wait} = loop_state) do
+    now = System.monotonic_time(:millisecond)
+    # The continuation is a model turn of its own, with a turn's time to finish.
+    %{
+      loop_state
+      | background_wait: %{wait | waiting: false},
+        awaiting_continuation: true,
+        post_completion_deadline: nil,
+        turn_deadline: max(loop_state.turn_deadline, now + loop_state.turn_timeout_ms)
+    }
+  end
+
+  defp put_background_wait(acc, %{background_wait: %{started_at: started_at}}, outcome) do
+    Map.put(acc, :background_wait, %{outcome: outcome, waited_ms: max(0, System.monotonic_time(:millisecond) - started_at)})
+  end
+
+  defp waiting_on_background?(%{background_wait: %{waiting: true}}), do: true
+  defp waiting_on_background?(_loop_state), do: false
 
   defp handle_nonzero_exit(acc, loop_state, status) do
     if terminal_event_observed?(acc) do
@@ -157,6 +286,28 @@ defmodule SymphonyElixir.Harnesses.EventStream do
       end
     end
   end
+
+  defp exited_while_waiting(acc, loop_state) do
+    if waiting_on_background?(loop_state), do: put_background_wait(acc, loop_state, :exited), else: acc
+  end
+
+  defp handle_read_loop_timeout(port, on_message, acc, %{background_wait: %{waiting: true} = wait} = loop_state) do
+    now = System.monotonic_time(:millisecond)
+
+    if now >= wait.deadline do
+      Logger.warning(
+        "#{loop_state.label} background command still running at the wait's bound; stopping it session_id=#{inspect(acc.session_id)} commands=#{inspect(MapSet.to_list(loop_state.background_commands))}"
+      )
+
+      close(port)
+      acc |> put_background_wait(loop_state, :bound) |> finalize_read_result()
+    else
+      on_message.({:tool_progress, "background command"})
+      read_loop(port, on_message, acc, %{loop_state | background_wait: %{wait | heartbeat_at: now + background_heartbeat_ms()}})
+    end
+  end
+
+  defp handle_read_loop_timeout(_port, _on_message, acc, loop_state), do: handle_read_loop_timeout(acc, loop_state)
 
   defp handle_read_loop_timeout(acc, %{turn_deadline: turn_deadline, post_completion_deadline: post_completion_deadline, label: label}) do
     now = System.monotonic_time(:millisecond)
@@ -383,6 +534,8 @@ defmodule SymphonyElixir.Harnesses.EventStream do
     on_message.(event)
     acc
   end
+
+  defp apply_event({kind, _id}, _on_message, acc) when kind in [:background_command_started, :background_command_ended], do: acc
 
   defp apply_event({:malformed, raw}, _on_message, acc) do
     Logger.debug("Unparseable agent output line: #{inspect(raw)}")

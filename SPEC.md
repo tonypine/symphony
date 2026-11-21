@@ -3086,6 +3086,16 @@ Important nuance:
   own retry and `execution.limits.max_turns` still bound it. A run on its last step, with no step
   list, with a pushed `HEAD` or on an SSH worker (whose unpushed commits are not read) is parked as
   above.
+  Nor does a turn count toward the two when the agent ended its message while a background command
+  it started was still running and the turn waited for that command to end: the agent was waiting,
+  not idle. A Claude turn whose `result` arrives while a background command of its own runs (a
+  `task_started` of type `local_bash` with no `task_notification` yet) MUST NOT be finished by the
+  post-result grace window and MUST NOT have its process tree killed: the turn keeps reading, sends
+  a `tool_progress` heartbeat so the no-progress watchdog sees it active, and goes on with the
+  conversation the CLI continues once the command ends, at that moment. The wait has its own bound
+  of 30 minutes per turn, separate from the turn and command timeouts (`claude -p`'s own ceiling is
+  set a minute past it): a command still running at the bound MUST be stopped with the turn's
+  process tree, a `note` event on the ticket MUST say so, and that turn is judged by the rule above.
 - Before the park, the workspace's uncommitted changes MUST be committed on its branch
   (`git add -A`, a `WIP: parked by Symphony` commit that skips the repo's hooks), then commits in
   the workspace that no remote has MUST be pushed to the workspace's branch on `origin` (only when every push URL of the workspace's `origin` is the source repo's),
