@@ -2309,7 +2309,7 @@ The QA agent:
   app is the active app. `qa_click` moves the pointer to the point before it clicks, sends the click
   as a mouse does (through the system's event route, so the app takes it as a click and not as the
   click that activates its window) and MAY press the element through accessibility when the click
-  changed nothing, saying so in its result; `qa_hover` moves the pointer over an element or point and waits for the app to settle,
+  changed nothing, saying so in its result; `qa_hover` moves the pointer over an element or point, waits for the app to settle and reports the cursor shown there by name, or that it cannot be read (never a default shape),
   and `qa_context_menu` right-clicks one and lists the menu that opens; `qa_scroll` scrolls the
   scroll area at an element or point by a delta or to an edge with scroll-wheel events, and MAY
   post them again at the pointer, over the app's own window, when the app took none of them. They

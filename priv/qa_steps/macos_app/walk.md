@@ -15,7 +15,8 @@ How to drive the app:
 - Find elements with `qa_ax_tree` (narrow it with `role` or `text`) and act with `qa_ax_press`. When
   an element answers `unsupported`: select a table or outline row with `qa_ax_select`; press a key
   or shortcut with `qa_key` (`key`, `modifiers`); click any other control with `qa_click`; hover or
-  right-click with `qa_hover` or `qa_context_menu`; reach rows below the fold with `qa_scroll`
+  right-click with `qa_hover` or `qa_context_menu` (judge a cursor step by `qa_hover`'s `cursor`,
+  never by hover tint; `cursor_unreadable` blocks it); reach rows below the fold with `qa_scroll`
   (`edge: "bottom"`). Type into fields with `qa_ax_set_value`, with made-up values, never real
   credentials. Open the status-bar menu only with `qa_open_status_menu`, never by pressing its item.
 - A file the app must open: write it under `qa-evidence/` or `$TMPDIR`, call `qa_put_file`, and
