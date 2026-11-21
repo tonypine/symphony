@@ -115,10 +115,12 @@ public struct RestartMachine: Equatable {
 
     public var isRestarting: Bool { phase != .idle }
 
-    /// Cancel Restart is offered while the restart waits for agent runs.
+    /// Cancel Restart is offered while the restart waits for agent runs, or for a Conductor run mid-run. A handover
+    /// with no Conductor run left is the stop itself, shown as stopping: nothing to call off (TP-1590).
     public var canCancel: Bool {
         switch phase {
-        case .waitingForRuns, .handingOver: return true
+        case .waitingForRuns: return true
+        case let .handingOver(conductorRuns): return conductorRuns > 0
         default: return false
         }
     }

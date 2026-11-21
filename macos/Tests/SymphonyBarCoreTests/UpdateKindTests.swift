@@ -122,8 +122,12 @@ final class UpdateKindTests: XCTestCase {
 
     func testCancelUpdateDoesNothingOnceTheUpdateReachedTheSwapOrEnded() {
         let stopping = drain(.onRelease, stopping: true)
-        XCTAssertEqual(stopping.phase, .stopping)
+        XCTAssertEqual(stopping.phase, .handingOver(conductorRuns: 0), "no run left: Symphony is asked to stop")
         XCTAssertNil(UpdateCancel(downloading: false, drain: stopping, kind: .onRelease, release: release), "the swap")
+        var stopped = stopping
+        _ = stopped.handle(.controlFinished(.handover, .done))
+        XCTAssertEqual(stopped.phase, .stopping)
+        XCTAssertNil(UpdateCancel(downloading: false, drain: stopped, kind: .onRelease, release: release), "the stop")
         XCTAssertNil(UpdateCancel(downloading: false, drain: RestartMachine(), kind: .onRelease, release: release), "ended")
 
         var restart = RestartMachine()
