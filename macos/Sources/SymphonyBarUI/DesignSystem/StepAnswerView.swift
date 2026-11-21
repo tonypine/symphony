@@ -34,6 +34,15 @@ struct StepAnswerView: View {
             if let result = answer.result, result.expected != nil || result.actual != nil {
                 ExpectedAndActual(expected: result.expected, actual: result.actual, lineLimit: Self.resultLines)
             }
+            // A grouped walk: each walkthrough step's expected and actual under its own name.
+            ForEach(Array(answer.results.enumerated()), id: \.offset) { _, check in
+                if check.result.expected != nil || check.result.actual != nil {
+                    VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+                        Self.heading(check.title)
+                        ExpectedAndActual(expected: check.result.expected, actual: check.result.actual, lineLimit: Self.resultLines)
+                    }
+                }
+            }
             if let plan = answer.plan { PlanView(plan: plan) }
             ForEach(Array(answer.rechecks.enumerated()), id: \.offset) { _, recheck in
                 RecheckView(recheck: recheck)

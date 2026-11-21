@@ -17,6 +17,9 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
   # The Director's step-history fixture (TP-1413): the `?group=run` answer for the step ticket and
   # its outputs, which the app's timeline and its QA pass read.
   @steps_api Path.expand("../../../macos/Tests/Fixtures/director-app/ticket-steps/api/v1", __DIR__)
+  # A QA pass whose plan walked three checks of one Settings page in one session (TP-1594): the
+  # grouped walk step's `results`, one failed and two passed, as the Director's timeline reads them.
+  @grouped_walk_api Path.expand("../../../macos/Tests/Fixtures/director-app/ticket-grouped-walk/api/v1", __DIR__)
   @test_output "1 test, 1 failure\n\n  1) test the timeline shows the failed step (TimelineTest)\n     Assertion with == failed\n     left:  :done\n     right: :failed\n"
 
   setup do
@@ -218,6 +221,25 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
       assert "building passed in 2 min" in titles
       assert "tests failed: back to writing the code" in titles
       assert "Paused on your answer" in titles
+    end
+
+    test "the checked-in grouped walk fixture equals the answer for a QA pass that walked three checks in one session" do
+      grouped_walk_ticket!()
+
+      body = json_response(get(build_conn(), @path <> "?group=run"), 200)
+      events = Path.join(@grouped_walk_api, "repos/web-shop/tickets/SHOP-410/events.json")
+
+      if System.get_env("SYMPHONY_WRITE_FIXTURES") == "1" do
+        File.mkdir_p!(Path.dirname(events))
+        File.write!(events, [Jason.encode_to_iodata!(body, pretty: true), "\n"])
+      end
+
+      assert body == events |> File.read!() |> Jason.decode!()
+
+      %{"events" => run_events} = run(body["timeline"], "run-qa-1")
+      walk = Enum.find(run_events, &(&1["type"] == "step.completed" and &1["payload"]["step_id"] == "walk_1_2_3"))
+      assert Enum.map(walk["payload"]["results"], &{&1["step"], &1["status"]}) == [{1, "pass"}, {2, "fail"}, {3, "pass"}]
+      assert walk["summary"]["detail"] =~ "Step 2: fail"
     end
 
     test "a ticket with 10,000 events answers one page in under 200 ms" do
@@ -429,6 +451,58 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
 
     {:ok, _events} = RunStore.append_ticket_events(events)
     {kept, gone}
+  end
+
+  # The grouped walk ticket: a QA pass that planned four checks, walked steps 1 to 3 (one Settings
+  # page, one state) in one session with step 2 failed, walked step 4 (a smaller window) alone, and
+  # gave its verdict.
+  defp grouped_walk_ticket! do
+    run = [run_id: "run-qa-1"]
+    plan = %{step_id: "plan", title: "Plan the pass", mode: "orchestrated"}
+    launch = %{step_id: "launch", title: "Launch the app", mode: "machine"}
+    group = %{step_id: "walk_1_2_3", title: "Walk a step 1, 2, 3", mode: "orchestrated"}
+    alone = %{step_id: "walk_4", title: "Walk a step 4", mode: "orchestrated"}
+    review = %{step_id: "review", title: "Review and verdict", mode: "orchestrated"}
+
+    checks = [
+      %{title: "Step 1: Settings", expect: "The side list shows General first"},
+      %{title: "Step 2: Settings", expect: "Agents shows its three rows"},
+      %{title: "Step 3: Settings", expect: "Repos lists web-shop"},
+      %{title: "Step 4: Settings, small window", expect: "The side list collapses to icons"}
+    ]
+
+    summary = "QA plan. Needs the app: yes. Steps 1 to 3 share the Settings page and are walked in one session; step 4 needs a smaller window."
+
+    results = [
+      %{step: 1, status: "pass", expected: "The side list shows General first", actual: "General is first and selected"},
+      %{step: 2, status: "fail", expected: "Agents shows its three rows", actual: "Agents shows two rows; Codex is missing"},
+      %{step: 3, status: "pass", expected: "Repos lists web-shop", actual: "web-shop is listed with its path"}
+    ]
+
+    events =
+      for {id, minute, type, payload, opts} <- [
+            {"gw-01", 1, "phase.entered", %{to: "QA", from: "Code Review"}, phase: "QA"},
+            {"gw-02", 2, "run.started", %{run_id: "run-qa-1", run_kind: "qa", run_number: 1, head: "bbb2222"}, run},
+            {"gw-03", 2, "step.started", Map.merge(plan, %{model: "claude-opus-5-5", session: "lead", prompt_ref: "phases.qa.playbooks.macos_app.steps.plan"}), run},
+            {"gw-04", 4, "step.completed", Map.merge(plan, %{outcome: "passed", duration_ms: 120_000, plan: %{checks: checks, skips: [], summary: summary}}), run},
+            {"gw-05", 4, "step.started", Map.put(launch, :command, "symphony:qa_launch"), run},
+            {"gw-06", 5, "step.completed", Map.merge(launch, %{outcome: "passed", duration_ms: 60_000}), run},
+            {"gw-07", 5, "step.started", Map.merge(group, %{model: "claude-sonnet-5-5", session: "fresh", prompt_ref: "phases.qa.playbooks.macos_app.steps.walk_1_2_3"}), run},
+            {"gw-08", 9, "step.completed", Map.merge(group, %{outcome: "passed", duration_ms: 240_000, results: results}), run},
+            {"gw-09", 9, "step.started", Map.merge(alone, %{model: "claude-sonnet-5-5", session: "fresh", prompt_ref: "phases.qa.playbooks.macos_app.steps.walk_4"}), run},
+            {"gw-10", 12, "step.completed",
+             Map.merge(alone, %{outcome: "passed", duration_ms: 180_000, result: %{status: "pass", expected: "The side list collapses to icons", actual: "It collapses to icons"}}), run},
+            {"gw-11", 12, "step.started", Map.merge(review, %{model: "claude-opus-5-5", session: "lead", prompt_ref: "phases.qa.playbooks.macos_app.steps.review"}), run},
+            {"gw-12", 14, "step.completed", Map.merge(review, %{outcome: "passed", duration_ms: 120_000, verdict_summary: "Step 2 fails: the Agents section shows two of its three rows."}), run},
+            {"gw-13", 14, "verdict.recorded", %{kind: "qa", outcome: "fail", head: "bbb2222"}, run},
+            {"gw-14", 15, "run.ended", %{run_id: "run-qa-1", run_kind: "qa", run_number: 1, exit: "normal", duration_ms: 780_000}, run}
+          ] do
+        {:ok, event} = TicketEvents.build(@repo_key, @issue_id, type, payload, Keyword.put(opts, :at, at(minute)))
+        %{event | id: id}
+      end
+
+    {:ok, _events} = RunStore.append_ticket_events(events)
+    :ok
   end
 
   defp at(minute), do: DateTime.add(@base, minute * 60, :second)

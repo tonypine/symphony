@@ -1,0 +1,511 @@
+{
+  "next_since": "2026-10-18T10:15:00.000000Z",
+  "timeline": [
+    {
+      "actor": {
+        "kind": "machine"
+      },
+      "artifacts": [],
+      "at": "2026-10-18T10:01:00.000000Z",
+      "bookkeeping": false,
+      "children": [],
+      "head_sha": null,
+      "id": "gw-01",
+      "idempotency": null,
+      "new": true,
+      "parent": null,
+      "payload": {
+        "from": "Code Review",
+        "to": "QA"
+      },
+      "phase": "QA",
+      "rule": null,
+      "run_id": null,
+      "seq": 1,
+      "summary": {
+        "detail": null,
+        "title": "Entered QA from Code Review"
+      },
+      "supersedes": null,
+      "type": "phase.entered"
+    },
+    {
+      "effort": null,
+      "ended_at": "2026-10-18T10:15:00.000000Z",
+      "events": [
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:02:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "gw-02",
+          "idempotency": "run.started:run-qa-1",
+          "new": true,
+          "parent": null,
+          "payload": {
+            "head": "bbb2222",
+            "run_id": "run-qa-1",
+            "run_kind": "qa",
+            "run_number": 1
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-qa-1",
+          "seq": 2,
+          "summary": {
+            "detail": "at bbb2222",
+            "title": "QA run 1 started"
+          },
+          "supersedes": null,
+          "type": "run.started"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:02:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "gw-03",
+          "idempotency": null,
+          "new": true,
+          "parent": null,
+          "payload": {
+            "mode": "orchestrated",
+            "model": "claude-opus-5-5",
+            "prompt_ref": "phases.qa.playbooks.macos_app.steps.plan",
+            "session": "lead",
+            "step_id": "plan",
+            "title": "Plan the pass"
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-qa-1",
+          "seq": 3,
+          "summary": {
+            "detail": null,
+            "title": "Plan the pass started"
+          },
+          "supersedes": null,
+          "type": "step.started"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:04:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "gw-04",
+          "idempotency": null,
+          "new": true,
+          "parent": null,
+          "payload": {
+            "duration_ms": 120000,
+            "mode": "orchestrated",
+            "outcome": "passed",
+            "plan": {
+              "checks": [
+                {
+                  "expect": "The side list shows General first",
+                  "title": "Step 1: Settings"
+                },
+                {
+                  "expect": "Agents shows its three rows",
+                  "title": "Step 2: Settings"
+                },
+                {
+                  "expect": "Repos lists web-shop",
+                  "title": "Step 3: Settings"
+                },
+                {
+                  "expect": "The side list collapses to icons",
+                  "title": "Step 4: Settings, small window"
+                }
+              ],
+              "skips": [],
+              "summary": "QA plan. Needs the app: yes. Steps 1 to 3 share the Settings page and are walked in one session; step 4 needs a smaller window."
+            },
+            "step_id": "plan",
+            "title": "Plan the pass"
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-qa-1",
+          "seq": 4,
+          "summary": {
+            "detail": null,
+            "title": "Plan the pass passed in 2 min"
+          },
+          "supersedes": null,
+          "type": "step.completed"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:04:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "gw-05",
+          "idempotency": null,
+          "new": true,
+          "parent": null,
+          "payload": {
+            "command": "symphony:qa_launch",
+            "mode": "machine",
+            "step_id": "launch",
+            "title": "Launch the app"
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-qa-1",
+          "seq": 5,
+          "summary": {
+            "detail": null,
+            "title": "Launch the app started"
+          },
+          "supersedes": null,
+          "type": "step.started"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:05:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "gw-06",
+          "idempotency": null,
+          "new": true,
+          "parent": null,
+          "payload": {
+            "duration_ms": 60000,
+            "mode": "machine",
+            "outcome": "passed",
+            "step_id": "launch",
+            "title": "Launch the app"
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-qa-1",
+          "seq": 6,
+          "summary": {
+            "detail": null,
+            "title": "Launch the app passed in 1 min"
+          },
+          "supersedes": null,
+          "type": "step.completed"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:05:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "gw-07",
+          "idempotency": null,
+          "new": true,
+          "parent": null,
+          "payload": {
+            "mode": "orchestrated",
+            "model": "claude-sonnet-5-5",
+            "prompt_ref": "phases.qa.playbooks.macos_app.steps.walk_1_2_3",
+            "session": "fresh",
+            "step_id": "walk_1_2_3",
+            "title": "Walk a step 1, 2, 3"
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-qa-1",
+          "seq": 7,
+          "summary": {
+            "detail": null,
+            "title": "Walk a step 1, 2, 3 started"
+          },
+          "supersedes": null,
+          "type": "step.started"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:09:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "gw-08",
+          "idempotency": null,
+          "new": true,
+          "parent": null,
+          "payload": {
+            "duration_ms": 240000,
+            "mode": "orchestrated",
+            "outcome": "passed",
+            "results": [
+              {
+                "actual": "General is first and selected",
+                "expected": "The side list shows General first",
+                "status": "pass",
+                "step": 1
+              },
+              {
+                "actual": "Agents shows two rows; Codex is missing",
+                "expected": "Agents shows its three rows",
+                "status": "fail",
+                "step": 2
+              },
+              {
+                "actual": "web-shop is listed with its path",
+                "expected": "Repos lists web-shop",
+                "status": "pass",
+                "step": 3
+              }
+            ],
+            "step_id": "walk_1_2_3",
+            "title": "Walk a step 1, 2, 3"
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-qa-1",
+          "seq": 8,
+          "summary": {
+            "detail": "Step 1: pass · General is first and selected · Step 2: fail · Agents shows two rows; Codex is missing · Step 3: pass · web-shop is listed with its path",
+            "title": "Walk a step 1, 2, 3 passed in 4 min"
+          },
+          "supersedes": null,
+          "type": "step.completed"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:09:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "gw-09",
+          "idempotency": null,
+          "new": true,
+          "parent": null,
+          "payload": {
+            "mode": "orchestrated",
+            "model": "claude-sonnet-5-5",
+            "prompt_ref": "phases.qa.playbooks.macos_app.steps.walk_4",
+            "session": "fresh",
+            "step_id": "walk_4",
+            "title": "Walk a step 4"
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-qa-1",
+          "seq": 9,
+          "summary": {
+            "detail": null,
+            "title": "Walk a step 4 started"
+          },
+          "supersedes": null,
+          "type": "step.started"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:12:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "gw-10",
+          "idempotency": null,
+          "new": true,
+          "parent": null,
+          "payload": {
+            "duration_ms": 180000,
+            "mode": "orchestrated",
+            "outcome": "passed",
+            "result": {
+              "actual": "It collapses to icons",
+              "expected": "The side list collapses to icons",
+              "status": "pass"
+            },
+            "step_id": "walk_4",
+            "title": "Walk a step 4"
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-qa-1",
+          "seq": 10,
+          "summary": {
+            "detail": "pass · It collapses to icons",
+            "title": "Walk a step 4 passed in 3 min"
+          },
+          "supersedes": null,
+          "type": "step.completed"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:12:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "gw-11",
+          "idempotency": null,
+          "new": true,
+          "parent": null,
+          "payload": {
+            "mode": "orchestrated",
+            "model": "claude-opus-5-5",
+            "prompt_ref": "phases.qa.playbooks.macos_app.steps.review",
+            "session": "lead",
+            "step_id": "review",
+            "title": "Review and verdict"
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-qa-1",
+          "seq": 11,
+          "summary": {
+            "detail": null,
+            "title": "Review and verdict started"
+          },
+          "supersedes": null,
+          "type": "step.started"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:14:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "gw-12",
+          "idempotency": null,
+          "new": true,
+          "parent": null,
+          "payload": {
+            "duration_ms": 120000,
+            "mode": "orchestrated",
+            "outcome": "passed",
+            "step_id": "review",
+            "title": "Review and verdict",
+            "verdict_summary": "Step 2 fails: the Agents section shows two of its three rows."
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-qa-1",
+          "seq": 12,
+          "summary": {
+            "detail": "Step 2 fails: the Agents section shows two of its three rows.",
+            "title": "Review and verdict passed in 2 min"
+          },
+          "supersedes": null,
+          "type": "step.completed"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:14:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "gw-13",
+          "idempotency": null,
+          "new": true,
+          "parent": null,
+          "payload": {
+            "head": "bbb2222",
+            "kind": "qa",
+            "outcome": "fail"
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-qa-1",
+          "seq": 13,
+          "summary": {
+            "detail": "on bbb2222",
+            "title": "QA verdict: fail"
+          },
+          "supersedes": null,
+          "type": "verdict.recorded"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:15:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "gw-14",
+          "idempotency": "run.ended:run-qa-1",
+          "new": true,
+          "parent": null,
+          "payload": {
+            "duration_ms": 780000,
+            "exit": "normal",
+            "run_id": "run-qa-1",
+            "run_kind": "qa",
+            "run_number": 1
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-qa-1",
+          "seq": 14,
+          "summary": {
+            "detail": "13 min",
+            "title": "QA run 1 ended: normal"
+          },
+          "supersedes": null,
+          "type": "run.ended"
+        }
+      ],
+      "exit": "normal",
+      "head": "bbb2222",
+      "kind": "run",
+      "model": null,
+      "model_name": null,
+      "outcome": "Sent back to Rework",
+      "run_id": "run-qa-1",
+      "run_kind": "qa",
+      "run_number": 1,
+      "started_at": "2026-10-18T10:02:00.000000Z",
+      "status": "ended",
+      "summary": {
+        "detail": "13 min",
+        "title": "QA run 1 ended: normal"
+      },
+      "verdict": {
+        "at": "2026-10-18T10:14:00.000000Z",
+        "head": "bbb2222",
+        "kind": "qa",
+        "outcome": "fail"
+      }
+    }
+  ]
+}

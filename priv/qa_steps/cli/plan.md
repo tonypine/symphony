@@ -13,6 +13,10 @@ worktree, not in the app. Give every brief in `walk` a `surface`:
 - `"app"` for every other step, briefed as above. A step that needs both a command and a screen is
   `"app"`: its brief names the command in `do`.
 
+Command-line briefs may share a `group` too, when they run in the same throwaway location one after
+the other. Symphony never walks a `"cli"` brief and an `"app"` brief in one session, even when they
+name the same `group`.
+
 A command-line step needs no app, no fixture and no stand-in from the screen rules. Never give one
 a real key or a real config: the turn that walks it has the playbook's rules for throwaway
 locations and the OpenRouter stub.

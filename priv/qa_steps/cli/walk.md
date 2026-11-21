@@ -34,3 +34,8 @@ Answer with:
 - `actual`: what the commands did, with each exit status.
 - `details`: the commands you ran and the output that bears on it.
 - `evidence`: `qa-evidence/cli-transcript.md`.
+
+When you walk several steps in one session, run each step's commands in turn and answer with
+`results` in place of the fields above: one object per step, each with `step` (its number) and that
+step's own `status`, `expected`, `actual`, `details` and `evidence`. Symphony refuses an answer that
+misses a step and asks once more; a step still without a result is not judged, never passed.

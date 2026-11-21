@@ -35,6 +35,46 @@ final class StepAnswerTests: XCTestCase {
         XCTAssertNil(StepAnswer.Result(status: "Passed", expected: nil, actual: nil).extraWord)
     }
 
+    func testAGroupedWalkReadsOneResultPerWalkthroughStep() throws {
+        let read = try XCTUnwrap(answer(#"{"results":[{"step":1,"status":"pass","expected":"A","actual":"A"},{"step":2,"status":"fail","expected":"B","actual":"C"},{"step":3,"status":"plan_mismatch"},{"expected":"no status"},7]}"#))
+        XCTAssertNil(read.result)
+        XCTAssertEqual(read.results.map(\.step), [1, 2, 3])
+        XCTAssertEqual(read.results.map(\.title), ["Step 1", "Step 2", "Step 3"])
+        XCTAssertEqual(read.results.map(\.state), [.done, .failed, .done])
+        XCTAssertEqual(read.results.map(\.word), ["Done", "Failed", "Done · plan_mismatch"])
+        XCTAssertEqual(read.results[1].accessibilityLabel, "Step 2, failed, C")
+        XCTAssertEqual(StepAnswer.CheckResult(step: nil, result: .init(status: "blocked")).title, "Check")
+        XCTAssertEqual(read.judgement, .failed, "the step reads its worst check")
+        XCTAssertFalse(read.isEmpty)
+    }
+
+    func testAGroupedWalksStateIsItsWorstCheck() {
+        func judged(_ statuses: [String]) -> RunStep.State? {
+            StepAnswer(results: statuses.enumerated().map { .init(step: $0.offset + 1, result: .init(status: $0.element)) }).judgement
+        }
+        XCTAssertEqual(judged(["pass", "blocked", "pass"]), .blocked)
+        XCTAssertEqual(judged(["blocked", "fail"]), .failed)
+        XCTAssertEqual(judged(["pass", "pass"]), .done)
+        XCTAssertNil(judged(["pass", "plan_mismatch"]))
+        XCTAssertNil(StepAnswer().judgement)
+        XCTAssertEqual(StepAnswer(result: .init(status: "blocked")).judgement, .blocked)
+    }
+
+    func testTheGroupedWalkFixtureListsEachCheckWithItsOwnResult() throws {
+        let feed = TicketEventsTests.director("ticket-grouped-walk").appendingPathComponent("api/v1/repos/web-shop/tickets/SHOP-410/events.json")
+        let history = try XCTUnwrap(TicketEventsPayload.decode(Data(contentsOf: feed)))
+        let run = try XCTUnwrap(RunGroupModel.groups(history, reference: reference).first { $0.id == "run-qa-1" })
+        let walk = try XCTUnwrap(run.steps.first { $0.stepID == "walk_1_2_3" })
+        XCTAssertEqual(walk.title, "Walk a step 1, 2, 3")
+        XCTAssertEqual(walk.state, .failed, "the group reads its failed check")
+        XCTAssertFalse(walk.stopsTheRun, "a check that judged the change failed did not stop the run")
+        let checks = try XCTUnwrap(walk.answer?.results)
+        XCTAssertEqual(checks.map(\.title), ["Step 1", "Step 2", "Step 3"])
+        XCTAssertEqual(checks.map(\.state), [.done, .failed, .done])
+        XCTAssertEqual(checks[1].result.actual, "Agents shows two rows; Codex is missing")
+        XCTAssertEqual(run.steps.first { $0.stepID == "walk_4" }?.state, .done)
+    }
+
     func testAPlanReadsItsSummaryChecksAndSkips() throws {
         let read = try XCTUnwrap(answer(#"{"plan":{"summary":"Three checks.","checks":[{"title":"A","expect":"a"},{"title":"B"},{"expect":"no title"}],"skips":[{"title":"C","why":"Not here"},{"why":"no title"}]}}"#)).plan
         XCTAssertEqual(read?.summary, "Three checks.")

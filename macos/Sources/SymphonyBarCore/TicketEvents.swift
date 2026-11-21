@@ -444,7 +444,7 @@ public struct TicketEventsPayload: Equatable {
         let picked = Array(ended.suffix(steps.steps.count))
         guard picked.count == steps.steps.count else { return block }
         for index in steps.steps.indices where steps.steps[index].outcome == .passed && steps.steps[index].stepID == picked[index].payload.stepID {
-            switch picked[index].payload.answer?.result?.judgement {
+            switch picked[index].payload.answer?.judgement {
             case .failed: steps.steps[index].outcome = .failed
             case .blocked: steps.steps[index].outcome = .blocked
             default: break

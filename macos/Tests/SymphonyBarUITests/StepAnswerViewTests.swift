@@ -46,6 +46,18 @@ final class StepAnswerViewTests: XCTestCase {
         XCTAssertEqual(two.height, size(answer(StepAnswer(rechecks: [one]))).height * 2 + 12, accuracy: 24)
     }
 
+    func testAGroupedWalkDrawsEachChecksExpectedAndActualAndOneLinePerCheck() {
+        let one = StepAnswer.CheckResult(step: 1, result: .init(status: "pass", expected: "A", actual: "A"))
+        let two = StepAnswer.CheckResult(step: 2, result: .init(status: "fail", expected: "B", actual: "C"))
+        let bare = StepAnswer.CheckResult(step: 3, result: .init(status: "blocked"))
+        XCTAssertGreaterThan(size(answer(StepAnswer(results: [one, two]))).height, size(answer(StepAnswer(results: [one]))).height + 20)
+        XCTAssertEqual(size(answer(StepAnswer(results: [one, bare]))).height, size(answer(StepAnswer(results: [one]))).height, accuracy: 1)
+
+        let rows = size(CheckResultRows(results: [one, two, bare]))
+        XCTAssertGreaterThan(rows.height, size(CheckResultRows(results: [one])).height * 2.5)
+        XCTAssertEqual(CheckResultRows.accessibilityLabel, "Checks of the step")
+    }
+
     func testAStepsRowSaysItsResultsStatusWhenItAddsInformation() {
         var step = RunStep(id: "c", stepID: "c", title: "Check", state: .failed)
         step.answer = StepAnswer(result: .init(status: "plan_mismatch", expected: "x", actual: "y"))

@@ -396,6 +396,9 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
       assert completed.(%{outcome: "passed", result: result, verdict_summary: "Blocked."}) == %{title: "Build passed", detail: "blocked · Empty state · Blocked."}
       assert completed.(%{outcome: "passed", result: %{status: "pass"}}) == %{title: "Build passed", detail: "pass"}
 
+      results = [%{step: 1, status: "pass", expected: "Rows", actual: "Rows show"}, %{step: 2, status: "fail", expected: "A", actual: "B"}]
+      assert completed.(%{outcome: "passed", results: results}) == %{title: "Build passed", detail: "Step 1: pass · Rows show · Step 2: fail · B"}
+
       assert completed.(%{outcome: "failed", returns_to: "code", reason: "refused twice"}) ==
                %{title: "Build failed: back to step code", detail: "refused twice"}
 
