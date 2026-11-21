@@ -31,7 +31,12 @@ defmodule SymphonyElixir.QaDriver.Gallery do
   @output_limit 2_000_000
 
   @type tool_error :: {:error, {:qa_tool, String.t(), String.t()}}
-  @type arguments :: %{entry: String.t() | nil, variation: String.t() | nil, width: String.t() | nil, appearance: String.t() | nil}
+  @type arguments :: %{
+          entry: String.t() | nil,
+          variation: String.t() | nil,
+          width: String.t() | nil,
+          appearance: String.t() | nil
+        }
 
   @doc "The fixture folder, relative to the checkout, on which the app starts the gallery in its place."
   @spec fixtures() :: String.t()

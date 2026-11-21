@@ -865,8 +865,8 @@ defmodule SymphonyElixir.QaDriver do
   defp run_tool("qa_resize_window", driver, config, args) do
     with {:ok, pid} <- running_pid(driver, args),
          {:ok, path} <- optional_element_path(Map.get(args, "path")),
-         {:ok, width} <- optional_integer(args, "width", PlaybookSettings.min_window_size(), PlaybookSettings.max_window_size()),
-         {:ok, height} <- optional_integer(args, "height", PlaybookSettings.min_window_size(), PlaybookSettings.max_window_size()),
+         {:ok, width} <- optional_window_size(args, "width"),
+         {:ok, height} <- optional_window_size(args, "height"),
          {:ok, helper} <- helper(driver, config),
          {default_width, default_height} = config.window_size,
          target = {width || default_width, height || default_height},
@@ -1703,6 +1703,9 @@ defmodule SymphonyElixir.QaDriver do
       _value -> tool_error("invalid_arguments", "`#{key}` must be a string of at most #{limit} bytes.")
     end
   end
+
+  defp optional_window_size(args, key),
+    do: optional_integer(args, key, PlaybookSettings.min_window_size(), PlaybookSettings.max_window_size())
 
   defp optional_integer(args, key, min, max) do
     case Map.get(args, key) do
