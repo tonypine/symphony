@@ -439,10 +439,10 @@ defmodule SymphonyElixir.TicketEvents.Brief do
   defp files([]), do: ""
   defp files(ids), do: " (files: #{Enum.join(ids, ", ")})"
 
-  # A multi-line text keeps its lines, each continuation indented under its bullet.
   defp layers([]), do: "none"
   defp layers(layers), do: Enum.join(layers, ", ")
 
+  # A multi-line text keeps its lines, each continuation indented under its bullet.
   defp indent(line, prefix), do: line |> String.split(~r/\r?\n/) |> Enum.join("\n" <> prefix)
 
   defp time(%DateTime{} = at), do: at |> DateTime.truncate(:second) |> DateTime.to_iso8601()
