@@ -12,4 +12,3 @@
 ## Distribution exists only for local remote-console / observer access (the
 ## control plane is HTTP), so bind the distribution listener to loopback.
 -kernel inet_dist_use_interface {127,0,0,1}
-## TP-1591 measurement only (reverted): a new release input, so the store misses as on a merge.
