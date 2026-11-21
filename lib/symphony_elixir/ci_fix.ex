@@ -67,13 +67,15 @@ defmodule SymphonyElixir.CiFix do
 
   @doc """
   Whether the watcher's `decision` on a ticket in the lane leaves nothing to repair yet: it waits on
-  CI (R23, R24) or reruns a check (R19, R22, U2). No run starts on it
+  CI (R23, R24), reruns a check (R19, R22, U2) or updates the branch from the base, whose fix a head
+  red on the base too lacks (R20a): CI runs on the new head. No run starts on it
   (`SymphonyElixir.PrWatch.dispatch_reason/2`), and the Inbox lists the ticket as waiting on CI
   (`SymphonyElixir.Inbox.Item.from_ci_wait/1`).
   """
   @spec waits_on_ci?(map() | nil) :: boolean()
   def waits_on_ci?(%{kind: :wait, owner: :ci}), do: true
   def waits_on_ci?(%{kind: :rerun_failed}), do: true
+  def waits_on_ci?(%{kind: :update_branch}), do: true
   def waits_on_ci?(_decision), do: false
 
   @doc """

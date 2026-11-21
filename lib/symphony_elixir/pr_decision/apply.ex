@@ -52,6 +52,8 @@ defmodule SymphonyElixir.PrDecision.Apply do
       review poller keeps. In `Merging` only with auto-merge on, as the landing rows.
     * `update_branch` – the upkeep's U1 merges the base into the PR's branch, in any phase and
       whatever `pull_requests.auto_merge` says; a conflict GitHub reports shows on the next read.
+      R20a does the same for a head that was red on the base too once the base is green, instead of
+      a rerun and CI Fix; a head GitHub can't update loses that mark, so R22 and R21 follow.
     * `merge_now`, `arm`, `disarm` – the GitHub calls of a landing. A `merge_now` that merged closes
       the ticket out in the same step, as `close_ticket` does: Symphony made the merge, so the record
       holds Done before Linear's GitHub automation moves the ticket there, and the observation reads
@@ -127,7 +129,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
   @in_progress_state "In Progress"
 
   # The CI rows (`pull_requests.checks`).
-  @ci_rules ["R17", "R19", "R19a", "R19b", "R20", "R21", "R22", "U2"]
+  @ci_rules ["R17", "R19", "R19a", "R19b", "R20a", "R20", "R21", "R22", "U2"]
   # The landing rows, and a conflict in `Merging` (`pull_requests.auto_merge`).
   @landing_rules ["R3", "R29", "R30", "R31"]
   @conflict_rules ["R14", "R14a", "R15", "R15a"]
@@ -391,6 +393,24 @@ defmodule SymphonyElixir.PrDecision.Apply do
       comment(ctx, "Symphony moved this ticket back to #{@in_progress_state}: #{action.reason}. The run addresses them on the same pull request.")
       TicketSignals.record(ctx.repo_key, ctx.issue.id, "review verdict", %{outcome: "review_comments", to: @in_progress_state})
       {:ok, %{moved_to: :in_progress}}
+    end
+  end
+
+  # The base's fix taken in on a head held red on the base too (R20a): CI runs on the head the update
+  # makes. A head GitHub can't update (up to date already, or refused) loses its mark, so the next
+  # read reruns its red checks and sends it to CI Fix as for any failure.
+  defp perform(%Action{kind: :update_branch, rule: "R20a"} = action, ctx) do
+    case AutoMerge.update_branch(ctx.read, github_opts(ctx)) do
+      :ok ->
+        {:ok, %{attempts: Attempts.updated_from(ctx.attempts, head(ctx))}}
+
+      {:error, :conflict} ->
+        {:ok, %{}}
+
+      {:error, reason} ->
+        Logger.info("PR watch could not update #{label(ctx)} from the base; its red checks follow R22 rule=#{action.rule} pr_url=#{pr_url(ctx)} reason=#{inspect(reason)}")
+        reason = "GitHub did not update #{pr_name(ctx)} from the base branch: its failed checks are rerun once before CI Fix"
+        {:ok, %{attempts: Attempts.base_taken(ctx.attempts), rule_action: nil, action: Action.new!("R20a", :wait, reason: reason, owner: :ci, clears_when: "the rerun reports")}}
     end
   end
 
