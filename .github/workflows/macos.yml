@@ -2,8 +2,9 @@ name: macos
 
 # The Mac checks of a pull request. `macos` is a required check, so the workflow runs on every
 # pull request; the `changes` job reads what the pull request changed and turns on only the groups
-# of checks those paths feed (mac-checks.yml, one job on the self-hosted runner). A pull request
-# that changes none of them runs no Mac job at all.
+# of checks those paths feed (mac-checks.yml: a job on each self-hosted runner and one on Linux, each
+# run only when one of its groups is on). A pull request that changes none of them runs no Mac job
+# at all.
 #
 # What a pull request skips is not skipped for good: every group runs on main, from a clean build,
 # as the release gate (release.yml), before anything is published. While that gate is red on main,
