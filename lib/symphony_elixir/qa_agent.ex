@@ -25,10 +25,10 @@ defmodule SymphonyElixir.QaAgent do
   same run, as the same attempt, logged as `qa_verdict_missing`. A pass that runs the `macos_app`
   playbook also gets the host-side `qa_*` tools of a `SymphonyElixir.QaDriver`,
   stopped (quitting every app it launched) when the pass ends, and its `pass` is
-  `inconclusive` when no `qa_resize_window` call ran the playbook's wide pass (in an epic review it
-  is `blocked`, and only when the pass launched an app). A `pass` with `scope: none` (the change has
-  nothing to judge on screen, by the agent's answer or by `SymphonyElixir.QaPolicy`, which marks the
-  playbook `scope: :none`) owes no wide pass: it carries `app_check`, whether the pass built,
+  `inconclusive` when no `qa_resize_window` call set the app's window to the playbook's QA target
+  (in an epic review it is `blocked`, and only when the pass launched an app). A `pass` with
+  `scope: none` (the change has nothing to judge on screen, by the agent's answer or by
+  `SymphonyElixir.QaPolicy`, which marks the playbook `scope: :none`) owes no target resize: it carries `app_check`, whether the pass built,
   launched and checked the app (`SymphonyElixir.QaDriver.app_check/1`), for
   `SymphonyElixir.QaVerification` to accept it on. A pass whose QA host Symphony refused or could not
   reach is `blocked` with the cause `{:qa_worker, code}`. It also gets its host ports
@@ -111,8 +111,8 @@ defmodule SymphonyElixir.QaAgent do
   @missing_verdict [:no_verdict_object, :empty_response]
   @browser_mcp_name "browser"
   @localhost_domains ["localhost", "127.0.0.1"]
-  @wide_pass_missing_reason "the wide pass did not run: no `qa_resize_window` call resized the app's window for it, " <>
-                              "so layouts at the wide pass size were not checked"
+  @target_missing_reason "the app was not judged at the QA target: no `qa_resize_window` call set its window to the " <>
+                           "target size, so the screens were not checked at the size QA judges them"
   # The default browser MCP server runs on the Symphony host, outside the agent sandbox, so it
   # is pinned to an exact version and never fetched during a pass (`npx --no`). To bump it,
   # change this version, check the flags in `default_browser_mcp/2` against that release, and
@@ -451,7 +451,8 @@ defmodule SymphonyElixir.QaAgent do
     end
   end
 
-  # The sizes a `macos_app` pass judges the app at (TP-1561), from the playbook's settings.
+  # The one appearance and window size a `macos_app` pass judges the app at (TP-1595), from the
+  # playbook's settings; another only when the ticket is about it.
   defp window_sizes_section(job) do
     case Enum.find(job.playbooks, &(Map.get(&1, :kind) == "macos_app")) do
       nil ->
@@ -459,27 +460,34 @@ defmodule SymphonyElixir.QaAgent do
 
       playbook ->
         {ww, wh} = Map.get(playbook, :window_size) || PlaybookSettings.default_window_size()
-        {pw, ph} = Map.get(playbook, :wide_pass_size) || PlaybookSettings.default_wide_pass_size()
+        appearance = Map.get(playbook, :appearance) || PlaybookSettings.default_appearance()
 
         """
 
-        Window sizes:
-        - Walkthrough: #{ww}×#{wh} pt. After each `qa_launch_app`, once the window shows and before the
-          first step, call `qa_resize_window` with `pass: "walkthrough"`. Every walkthrough step,
-          screenshot and design check runs at that size unless the step itself names another; name
-          the size in each step's `viewport`, and the report names it.
-        - Wide pass: #{pw}×#{ph} pt, the screen the window fills. Call `qa_resize_window` with
-          `pass: "wide"` and no size; the `Wide pass` step names the window size it reached and the
-          screen size.
+        The QA target: #{appearance} appearance, a #{ww}×#{wh} pt window.
+        - `qa_launch_app` and `qa_gallery` draw the app #{appearance} when you name no
+          `appearance`. After each `qa_launch_app`, once the window shows and before the first step,
+          call `qa_resize_window` with no size: it sets the window to #{ww}×#{wh} pt. Every
+          walkthrough step, screenshot and design check runs there; name the size in each step's
+          `viewport`, and the report names it.
+        - Judge nothing else unless the ticket is about it: only when its ask or plan names
+          #{other_appearance(appearance)} mode, a small window or a specific size, or the change is to
+          how the app adapts to its appearance or window size, launch in that appearance too
+          (`appearance`) or resize to that size too (`width` and `height`), and say so in the step.
+        - On every page the walkthrough visits, call `qa_check_app` with the page's name: a hang (a
+          layout loop) or a crash at this size is a `fail` naming the page and the window size.
         """
     end
   end
 
+  defp other_appearance("dark"), do: "light"
+  defp other_appearance(_light), do: "dark"
+
   # A change with nothing to judge on screen (TP-1119): the agent may answer `pass` with
-  # `scope: none` once it built, launched and checked the app, and owes no wide pass. When
+  # `scope: none` once it built, launched and checked the app, and owes no target resize. When
   # `SymphonyElixir.QaPolicy` already found nothing on screen it marks the `macos_app` playbook
   # `scope: :none`, and the agent is told up front that build and launch are the whole check. The
-  # epic review judges the merged result and keeps its own wide-pass rule.
+  # epic review judges the merged result and keeps its own target rule.
   defp scope_section(%{epic_review: true}), do: ""
 
   defp scope_section(job) do
@@ -491,7 +499,7 @@ defmodule SymphonyElixir.QaAgent do
         Symphony's QA policy found that this PR changes none of the paths of the playbooks below and
         the ticket has no `## User walkthrough`, so build and launch are the whole check. Build the
         app with `qa_build`, launch it with `qa_launch_app`, call `qa_check_app` once it has started,
-        then `qa_quit_app`. Skip the design check and the wide pass. Answer `pass` with
+        then `qa_quit_app`. Skip the design check. Answer `pass` with
         `"scope": "none"` when the app built, launched and `qa_check_app` found it healthy, with a
         `reason` saying so; `fail` when it did not build or start, with what happened in `findings`.
         """
@@ -506,8 +514,8 @@ defmodule SymphonyElixir.QaAgent do
         has started, then `qa_quit_app`, and answer `pass` with `"scope": "none"` and a `reason` such
         as "the change touches no screen; the app built and launched; nothing to judge by sight".
         Symphony accepts that pass only when the build, the launch and a healthy `qa_check_app` all
-        ran; without them it reports the pass `inconclusive`. A pass that judged any screen owes the
-        wide pass, and one without it is `inconclusive` too.
+        ran; without them it reports the pass `inconclusive`. A pass that judged any screen judged it
+        at the QA target, after `qa_resize_window` set it, and one without that is `inconclusive` too.
         """
 
       true ->
@@ -966,28 +974,29 @@ defmodule SymphonyElixir.QaAgent do
   end
 
   # QA keeps the job no test can do (ADR 0003): the steps no test drives, a judgment by sight of
-  # every UI deliverable against its design, then the playbooks' checks of the running app. The
-  # playbooks say how each one switches between light and dark.
+  # every UI deliverable against its design, then the playbooks' checks of the running app, at the
+  # QA target unless the ticket is about another appearance or size (TP-1595).
   defp qa_jobs_section do
     """
     QA's three jobs, in this order:
     1. Walk the walkthrough steps marked `Proved by: QA`, or naming no proof: no test can drive them.
     2. Judge every UI deliverable by sight. A UI deliverable is each window, page, screen, panel or
-       menu the change adds or changes. Screenshot it in the real app in light and in dark, at the
-       sizes the design names (at the walkthrough size when the design names none), and compare both
-       with its design above: layout, spacing, alignment, truncation, contrast, symbols, wording,
-       and whether it looks finished. Report one step per UI deliverable named
-       `Design check: <deliverable>`, with both screenshots in `evidence`, and in `details` the
+       menu the change adds or changes. Screenshot it in the real app at the QA target (its appearance
+       and window size, for the Mac app), and in another appearance or size only when the ticket is
+       about it, and compare it with its design above: layout, spacing, alignment, truncation,
+       contrast, symbols, wording, and whether it looks finished. Report one step per UI deliverable
+       named
+       `Design check: <deliverable>`, with its screenshots in `evidence`, and in `details` the
        design it compared with (the Screens document or file and the screen in it). When no Screens
        cover the deliverable, judge it against `docs/design/design-system.md` alone and say so in
        `details`. When the playbook says an appearance cannot be switched, say so in `details`.
        `pass` when the screenshots match the design. A visible mismatch is `fail`, even when every
        structural check passes: name in `details` and `findings` what differs from which design,
        with the screenshot that shows it. A change with no UI deliverable has no `Design check` step.
-    3. The wide pass and the other checks of the running app the playbooks ask for. One pass per
-       viewport the repo names (today: the wide pass). A defect is content clipped with no way to
-       reach it, or a mechanism (scroll, collapse, resize) that doesn't work. Horizontal scroll or a
-       collapsed pane at a `functional` viewport is not a defect. A finding names the viewport, the
+    3. The other checks of the running app the playbooks ask for (for the Mac app, at its QA target:
+       `qa_check_app` on every page the walkthrough visits, for a hang or a crash). A defect is
+       content clipped with no way to reach it, or a mechanism (scroll, collapse, resize) that
+       doesn't work. Horizontal scroll or a collapsed pane at a `functional` viewport is not a defect. A finding names the viewport, the
        screen, the mechanism expected, the actual, and the evidence file.
     """
   end
@@ -1151,7 +1160,7 @@ defmodule SymphonyElixir.QaAgent do
             |> run_pass(job, worktree, qa_settings, parent, opts)
             |> unavailable_host(driver)
             |> environment_fault(driver)
-            |> limit_wide_pass(driver, QaDriver.wide_pass(driver), job)
+            |> limit_target(driver, QaDriver.target_resize(driver), job)
           else
             {:error, cause} -> {:error, cause, empty_tokens()}
           end
@@ -1299,45 +1308,45 @@ defmodule SymphonyElixir.QaAgent do
 
   defp environment_fault(run, _driver), do: run
 
-  # The `macos_app` playbook's wide pass catches layout crashes that only happen in wide
-  # windows (TP-701). A `pass` whose wide pass never resized a window checked none of them, so it
-  # is not a pass. In the QA state that is the QA run's omission, not its environment's, so it is
-  # `inconclusive`: Symphony reruns it once, then asks a person (TP-1119). The epic review keeps it
-  # `blocked`, and gets every enabled playbook whatever the epic shipped, so one that launched no
-  # app (a backend-only epic) owes no wide pass (TP-1014). A `pass` with `scope: none` has nothing
-  # on screen to judge and owes none either: it carries what the pass did with the app, which is
-  # its whole check. On a QA screen too small for the wide pass the pass proves nothing about wide
-  # layouts either, so a `pass` there is `blocked`, and that or the `blocked` the playbook asks for
-  # goes to a person, since only one can enlarge the screen.
-  defp limit_wide_pass(run, nil = _driver, _wide_pass, _job), do: run
+  # A `macos_app` pass judges the app at its QA target (TP-1595), whose window size also catches
+  # the layout crashes that only happen in wide windows (TP-701). A `pass` that never set a window
+  # to the target judged nothing there, so it is not a pass. In the QA state that is the QA run's
+  # omission, not its environment's, so it is `inconclusive`: Symphony reruns it once, then asks a
+  # person (TP-1119). The epic review keeps it `blocked`, and gets every enabled playbook whatever
+  # the epic shipped, so one that launched no app (a backend-only epic) owes none (TP-1014). A `pass`
+  # with `scope: none` has nothing on screen to judge and owes none either: it carries what the pass
+  # did with the app, which is its whole check. On a QA screen too small for the target the pass
+  # proves nothing about the target, so a `pass` there is `blocked`, and that or the `blocked` the
+  # playbook asks for goes to a person, since only one can enlarge the screen.
+  defp limit_target(run, nil = _driver, _target, _job), do: run
 
-  defp limit_wide_pass({:ok, %{result: %{verdict: :pass} = result} = run} = outcome, driver, wide_pass, job) do
+  defp limit_target({:ok, %{result: %{verdict: :pass} = result} = run} = outcome, driver, target, job) do
     cond do
       scope_none?(result, job) ->
         {:ok, %{run | result: scope_none(result, job, driver)}}
 
-      is_nil(wide_pass) and wide_pass_owed?(job, driver) ->
-        {:ok, %{run | result: Map.merge(result, %{verdict: missing_wide_pass_verdict(job), reason: @wide_pass_missing_reason})}}
+      is_nil(target) and target_owed?(job, driver) ->
+        {:ok, %{run | result: Map.merge(result, %{verdict: missing_target_verdict(job), reason: @target_missing_reason})}}
 
-      match?(%{limited: true}, wide_pass) ->
-        {:ok, %{run | result: Map.merge(result, %{verdict: :blocked, reason: limited_reason(wide_pass), needs_person: true})}}
+      match?(%{limited: true}, target) ->
+        {:ok, %{run | result: Map.merge(result, %{verdict: :blocked, reason: limited_reason(target), needs_person: true})}}
 
       true ->
         outcome
     end
   end
 
-  defp limit_wide_pass({:ok, %{result: %{verdict: :blocked, reason: reason} = result} = run}, _driver, %{limited: true} = wide_pass, _job) do
-    {:ok, %{run | result: Map.merge(result, %{reason: reason <> "; " <> limited_reason(wide_pass), needs_person: true})}}
+  defp limit_target({:ok, %{result: %{verdict: :blocked, reason: reason} = result} = run}, _driver, %{limited: true} = target, _job) do
+    {:ok, %{run | result: Map.merge(result, %{reason: reason <> "; " <> limited_reason(target), needs_person: true})}}
   end
 
-  defp limit_wide_pass(run, _driver, _wide_pass, _job), do: run
+  defp limit_target(run, _driver, _target, _job), do: run
 
-  defp wide_pass_owed?(%{epic_review: true}, driver), do: QaDriver.launched_app?(driver)
-  defp wide_pass_owed?(_job, _driver), do: true
+  defp target_owed?(%{epic_review: true}, driver), do: QaDriver.launched_app?(driver)
+  defp target_owed?(_job, _driver), do: true
 
-  defp missing_wide_pass_verdict(%{epic_review: true}), do: :blocked
-  defp missing_wide_pass_verdict(_job), do: :inconclusive
+  defp missing_target_verdict(%{epic_review: true}), do: :blocked
+  defp missing_target_verdict(_job), do: :inconclusive
 
   defp scope_none?(_result, %{epic_review: true}), do: false
   defp scope_none?(result, job), do: Map.get(result, :scope) == :none or policy_scope_none?(job)
@@ -1354,14 +1363,14 @@ defmodule SymphonyElixir.QaAgent do
       else: "the QA agent found nothing on screen to judge"
   end
 
-  defp limited_reason(wide_pass) do
-    {sw, sh} = wide_pass.screen
-    {vw, vh} = wide_pass.visible
-    {ww, wh} = wide_pass.window
-    {nw, nh} = wide_pass.needed
+  defp limited_reason(target) do
+    {sw, sh} = target.screen
+    {vw, vh} = target.visible
+    {ww, wh} = target.window
+    {nw, nh} = target.needed
 
-    "the wide pass was limited: the QA screen is #{sw}×#{sh} pt (#{vw}×#{vh} pt usable), under the #{nw}×#{nh} pt screen the " <>
-      "wide pass needs, so the app's window reached only #{ww}×#{wh} pt and layouts wider than that were not checked. " <>
+    "the pass was limited: the QA screen is #{sw}×#{sh} pt (#{vw}×#{vh} pt usable), under the #{nw}×#{nh} pt QA target " <>
+      "window, so the app's window reached only #{ww}×#{wh} pt and layouts wider than that were not checked. " <>
       "An operator enlarges the QA machine's display (for the tart VM, `tart set <vm> --display #{nw}x#{nh}pt`, then restart it) " <>
       "and QA runs again"
   end

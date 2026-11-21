@@ -24,22 +24,23 @@ defmodule SymphonyElixir.PlaybookSettings do
     and `health_timeout_ms` (default 600000) check it, `paths` (globs) and `walkthrough_mentions`
     (words) say which changes make a pass live. A playbook with `dev_server: true` takes no `live`:
     both would listen on its one port.
-  - `window_width` and `window_height` (a `macos_app` playbook, points, default 1366×768): the
-    size QA sets the app's main window to before the first walkthrough step, where every step,
-    screenshot and design check runs unless the step names another;
-  - `wide_pass_width` and `wide_pass_height` (a `macos_app` playbook, points, default 2560×1440):
-    the screen the wide pass fills. A QA screen under it marks the wide pass limited.
+  - the QA target of a `macos_app` playbook, what every Mac app QA pass checks unless the ticket
+    is about another appearance or size: `appearance` (`light` or `dark`, default `dark`), the
+    appearance QA launches the app in, and `window_width` and `window_height` (points, default
+    2560×1440), the size QA sets the app's main window to before the first walkthrough step, where
+    every step, screenshot and design check runs. A QA screen under the target size limits the
+    pass.
 
-  Each size is a whole number of points from #{@min_window_size} to #{@max_window_size}, and the
-  wide pass is at least as large as the walkthrough window.
+  Each size is a whole number of points from #{@min_window_size} to #{@max_window_size}.
   """
 
   alias SymphonyElixir.Verification
 
   @default_port 8090
-  @default_window {1366, 768}
-  @default_wide_pass {2560, 1440}
-  @size_keys ~w(window_width window_height wide_pass_width wide_pass_height)
+  @default_window {2560, 1440}
+  @default_appearance "dark"
+  @appearances ~w(light dark)
+  @size_keys ~w(window_width window_height)
   @env_name ~r/\A[A-Z][A-Z0-9_]*\z/
 
   # The variables `SymphonyElixir.QaDriver` sets on the app itself: QA mode, the OpenRouter stub,
@@ -79,13 +80,13 @@ defmodule SymphonyElixir.PlaybookSettings do
   @spec default_port() :: pos_integer()
   def default_port, do: @default_port
 
-  @doc "The size, in points, QA sets the app's main window to for the walkthrough when the playbook names none."
+  @doc "The QA target's window size, in points, when the playbook names none."
   @spec default_window_size() :: {pos_integer(), pos_integer()}
   def default_window_size, do: @default_window
 
-  @doc "The screen, in points, the wide pass fills when the playbook names none."
-  @spec default_wide_pass_size() :: {pos_integer(), pos_integer()}
-  def default_wide_pass_size, do: @default_wide_pass
+  @doc "The QA target's appearance when the playbook names none."
+  @spec default_appearance() :: String.t()
+  def default_appearance, do: @default_appearance
 
   @doc "The most points a window size setting, and a `qa_resize_window` size, takes."
   @spec max_window_size() :: pos_integer()
@@ -96,18 +97,20 @@ defmodule SymphonyElixir.PlaybookSettings do
   def min_window_size, do: @min_window_size
 
   @doc """
-  The walkthrough window size of a playbook (atom or string keys), with the default for a size it
+  The QA target's window size of a playbook (atom or string keys), with the default for a size it
   does not name.
   """
   @spec window_size(map()) :: {pos_integer(), pos_integer()}
   def window_size(playbook) when is_map(playbook), do: size(playbook, "window", @default_window)
 
-  @doc """
-  The wide pass size of a playbook (atom or string keys), with the default for a size it does not
-  name.
-  """
-  @spec wide_pass_size(map()) :: {pos_integer(), pos_integer()}
-  def wide_pass_size(playbook) when is_map(playbook), do: size(playbook, "wide_pass", @default_wide_pass)
+  @doc "The QA target's appearance of a playbook (atom or string keys), `dark` when it names none."
+  @spec appearance(map()) :: String.t()
+  def appearance(playbook) when is_map(playbook) do
+    case playbook |> stringify_keys() |> Map.get("appearance") do
+      appearance when appearance in @appearances -> appearance
+      _other -> @default_appearance
+    end
+  end
 
   defp size(playbook, prefix, {default_width, default_height}) do
     playbook = stringify_keys(playbook)
@@ -151,7 +154,8 @@ defmodule SymphonyElixir.PlaybookSettings do
     with :ok <- validate_dev_server(path, Map.get(playbook, "dev_server")),
          :ok <- validate_port(path, Map.get(playbook, "dev_server_port")),
          :ok <- validate_launch_env(path, Map.get(playbook, "launch_env")),
-         :ok <- validate_sizes(path, playbook) do
+         :ok <- validate_sizes(path, playbook),
+         :ok <- validate_appearance(path, Map.get(playbook, "appearance")) do
       validate_live(path, playbook)
     end
   end
@@ -220,24 +224,15 @@ defmodule SymphonyElixir.PlaybookSettings do
 
   defp validate_sizes(path, playbook) do
     case Enum.find(@size_keys, &(not optional_size?(Map.get(playbook, &1)))) do
-      nil -> validate_wide_pass_fits(path, playbook)
+      nil -> :ok
       key -> {:error, "#{path}.#{key} must be a whole number of points from #{@min_window_size} to #{@max_window_size}"}
     end
   end
 
   defp optional_size?(value), do: is_nil(value) or (is_integer(value) and value >= @min_window_size and value <= @max_window_size)
 
-  defp validate_wide_pass_fits(path, playbook) do
-    {window_width, window_height} = window_size(playbook)
-    {wide_width, wide_height} = wide_pass_size(playbook)
-
-    if wide_width >= window_width and wide_height >= window_height,
-      do: :ok,
-      else:
-        {:error,
-         "#{path}.wide_pass_width and wide_pass_height (#{wide_width}×#{wide_height}) must be at least the walkthrough window " <>
-           "(window_width and window_height, #{window_width}×#{window_height})"}
-  end
+  defp validate_appearance(_path, appearance) when is_nil(appearance) or appearance in @appearances, do: :ok
+  defp validate_appearance(path, _appearance), do: {:error, "#{path}.appearance must be light or dark"}
 
   defp validate_launch_env(_path, nil), do: :ok
 

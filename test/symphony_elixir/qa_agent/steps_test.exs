@@ -239,7 +239,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       assert tokens.total_tokens == 15
 
       turns = turns()
-      assert Enum.map(turns, & &1.id) == ["plan", "walk_1", "walk_2", "design_check", "wide_pass", "review"]
+      assert Enum.map(turns, & &1.id) == ["plan", "walk_1", "walk_2", "design_check", "review"]
 
       completed = events("step.completed")
 
@@ -251,7 +251,6 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
                {"walk_1", "passed"},
                {"walk_2", "passed"},
                {"design_check", "passed"},
-               {"wide_pass", "passed"},
                {"quit", "passed"},
                {"attach", "passed"},
                {"review", "passed"}
@@ -278,7 +277,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       assert by_step["review"].verdict_summary == "Every step behaved."
       refute Map.has_key?(by_step["build"], :result)
 
-      [plan_turn, walk_1, _walk_2, design, _wide, review] = turns
+      [plan_turn, walk_1, _walk_2, design, review] = turns
       assert plan_turn.prompt =~ "You plan this QA pass"
       assert plan_turn.prompt =~ "Screen rules here."
       assert plan_turn.prompt =~ "- Step 2: Step 2: open page 2."
@@ -296,7 +295,9 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       assert review.turn[:resume_session_id] == "session-plan"
       refute Keyword.has_key?(walk_1.turn, :resume_session_id)
 
+      # Launched in the QA target's appearance (the driver's default) and sized to its window.
       assert_received {:tool, _driver, "qa_launch_app", %{}}
+      assert_received {:tool, _driver, "qa_resize_window", %{"pid" => 4242}}
       assert_received {:tool, _driver, "qa_check_app", %{"pid" => 4242, "page" => "launch"}}
       assert_received {:tool, _driver, "qa_quit_app", %{"pid" => 4242}}
     end
@@ -311,7 +312,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       assert second.turn[:resume_session_id] == "session-plan"
     end
 
-    test "with nothing on screen to judge still launches and checks the app, skips the design check and wide pass, and passes with scope none",
+    test "with nothing on screen to judge still launches and checks the app, skips the design check, and passes with scope none",
          ctx do
       answers(%{"plan" => [{:write, plan([], %{needs_app: false, gallery: []})}], "review" => [{:verdict, @pass}]})
 
@@ -323,7 +324,6 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       outcomes = Map.new(events("step.completed"), &{&1.payload.step_id, &1.payload})
       assert %{outcome: "passed"} = outcomes["launch"]
       assert outcomes["design_check"].reason =~ "the plan found nothing on screen to judge"
-      assert outcomes["wide_pass"].reason =~ "the plan found nothing on screen to judge"
 
       # A fail stays a fail, with no scope.
       answers(%{"plan" => [{:write, plan([], %{needs_app: false, gallery: []})}], "review" => [{:verdict, @fail}]})

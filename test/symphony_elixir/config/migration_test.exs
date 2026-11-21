@@ -135,6 +135,19 @@ defmodule SymphonyElixir.Config.MigrationTest do
       assert migrated == "ledger:\n  # Symphony: #{note} (TP-1201). The file as it was: #{@backup}.\n\n  # keep this\n  other: 1\n"
     end
 
+    test "removes the retired wide pass sizes of the macos_app playbook, keeping its target" do
+      text =
+        "auto_review:\n  playbooks:\n    macos_app:\n      build: make app\n      wide_pass_width: 3008\n" <>
+          "      wide_pass_height: 1692\n      window_width: 1440\n"
+
+      assert {:ok, migrated, [width_note, height_note]} = Migration.plan(text, @backup)
+      assert width_note =~ "removed `auto_review.playbooks.macos_app.wide_pass_width` from your settings: QA checks the app at its target window"
+      assert height_note =~ "`auto_review.playbooks.macos_app.wide_pass_height`"
+
+      assert {:ok, %{"auto_review" => %{"playbooks" => %{"macos_app" => playbook}}}} = YamlElixir.read_from_string(migrated)
+      assert playbook == %{"build" => "make app", "window_width" => 1440}
+    end
+
     test "a block whose only key is removed stays as an empty map, its comment kept" do
       text = "issues:\n  provider: memory\nledger: # retention\n  artifact_retention_days: 30\n"
 

@@ -1792,10 +1792,10 @@ run store, which the dashboard's run history shows. The `QA` state applies the v
 
 | Verdict | What it means | What happens |
 | --- | --- | --- |
-| `pass` | every step behaved as the ticket describes, the wide pass included | `Merging` |
+| `pass` | every step behaved as the ticket describes, at the QA target | `Merging` |
 | `pass` with `scope: none` | the change has nothing on screen to judge: neither the diff nor the ticket names a walkthrough step or a screen, by the agent's answer or by the QA policy (below) | `Merging` with the reason in the report, but only when the pass ran `qa_build`, `qa_launch_app` and a `qa_check_app` that found the app healthy, so the merge still waits on the app starting; without them it is `inconclusive` |
 | `fail` | a step shows a defect in the change | `Rework` |
-| `inconclusive` | the QA run itself fell short: a `macos_app` pass that judged screens but never ran the wide pass, or a `scope: none` pass that never started the app | QA runs once more on the same change, then the ticket pauses in `QA` on a Needs Decision hold. Nothing in the environment is broken, so no fix ticket is filed. With the Conductor's `after_qa_blocked` junction on, its turn routes the pass first (below) |
+| `inconclusive` | the QA run itself fell short: a `macos_app` pass that judged screens but never sized the window to the QA target, or a `scope: none` pass that never started the app | QA runs once more on the same change, then the ticket pauses in `QA` on a Needs Decision hold. Nothing in the environment is broken, so no fix ticket is filed. With the Conductor's `after_qa_blocked` junction on, its turn routes the pass first (below) |
 | `blocked` | the pass could not test the change | retried once on the same change, then: the self-heal lane when the QA tools raised the block themselves (`qa_worker_*`, `qa_host_missing_tool`, `qa_host_tool_check_failed`, `qa_host_tunnel_failed`, `qa_dev_server_failed`), when only a person can clear it (`needs_person`, an access hold), or when the agent named the open ticket that covers it (`covered_by`) or the project's missing dev server (`needs_dev_server`, unless the repository rules a dev server out: below); a block whose only open steps are `unprovable` (below) asks a person at once; any other block (the agent's own account, a crash, the token limit, a check that never finished) pauses the ticket in `QA` on a Needs Decision hold instead of filing a fix ticket for a problem nothing names; with the Conductor's `after_qa_blocked` junction on, such a block takes the Conductor's turn first (below) |
 
 **Steps QA cannot prove here.** A step can need what no playbook of the pass gives: the running app
@@ -1811,7 +1811,7 @@ is then decided by the other steps, the pre-checks and CI:
 
 | The other steps | The pass |
 | --- | --- |
-| one is `blocked`, or the block names its own cause (`needs_person`, `covered_by`, `needs_dev_server`, a QA tool's own failure, a wide pass a small QA screen limited) | `blocked`, as before |
+| one is `blocked`, or the block names its own cause (`needs_person`, `covered_by`, `needs_dev_server`, a QA tool's own failure, a pass a QA screen too small for the target window limited) | `blocked`, as before |
 | one fails | `fail` → `Rework` |
 | one passes, or a pre-check passed | `pass` → `Merging`, the report naming each unprovable step and its reason |
 | none is left | `blocked` with no retry and no fix ticket: the ticket pauses in `QA` on the "QA could not finish" Needs Decision hold at once, with its three options and **Merge without a QA result** recommended |
@@ -2101,15 +2101,17 @@ auto_review:
 | `dev_server` | `false` | the pass starts `verification.dev_server` on the QA VM, beside the app (see [Running QA in a QA VM](#running-qa-in-a-qa-vm)), never on the Symphony host: without a `worker_host` no server starts and the `qa_*` tools say to set up the QA VM |
 | `dev_server_port` | `8090` | the port the QA-host dev server listens on, as `SYMPHONY_VERIFICATION_PORT` |
 | `live` | none | the project's own server for a live pass: see [Two environments: fixtures and a live server](#two-environments-fixtures-and-a-live-server). Not with `dev_server: true`, which would listen on the same port |
-| `window_width`, `window_height` | `1366`, `768` | the walkthrough size, in points: QA sets the app's main window to it before the first walkthrough step and judges every step, screenshot and design check there |
-| `wide_pass_width`, `wide_pass_height` | `2560`, `1440` | the wide pass size, in points: the screen the wide pass fills. A QA screen under it limits the wide pass, and Setup reports the QA VM. Each size is 320 to 8192 pt, and the wide pass is at least the walkthrough size |
+| `appearance` | `dark` | the QA target's appearance, `light` or `dark`: QA launches the app in it and judges every step, screenshot and design check in it, and another appearance only when the ticket is about it |
+| `window_width`, `window_height` | `2560`, `1440` | the QA target's window size, in points (320 to 8192 each): QA sets the app's main window to it before the first walkthrough step and judges every step, screenshot and design check there, and another size only when the ticket is about it. A QA screen under it limits the pass, and Setup reports the QA VM |
 | `launch_env` | `{}` | extra variables `qa_launch_app` sets on the app, after Symphony's own, with `$SYMPHONY_VERIFICATION_PORT` replaced by `dev_server_port`. Names match `^[A-Z][A-Z0-9_]*$`; the variables Symphony sets itself (`SYMPHONY_BAR_QA_ROOT`, `SYMPHONY_QA_OPENROUTER_URL`, `SYMPHONY_BAR_QA_API_FIXTURES` and the stand-ins below), `PATH`, `HOME` and `DYLD_*` fail the config check, naming the key |
 
 `launch_env` values are written in plain text, in `symphony.yml` or a repository's `WORKFLOW.md`,
 which is often public: put only documented QA values there (a QA owner token such as the Job
 Search Hub's `HUB_OWNER_TOKEN`), never a secret. The Director's **Settings → macOS app QA** edits
-`window_width`, `window_height`, `wide_pass_width`, `wide_pass_height`, `dev_server`,
-`dev_server_port` and `launch_env` in `symphony.yml`.
+`appearance`, `window_width`, `window_height`, `dev_server`, `dev_server_port` and `launch_env` in
+`symphony.yml`. `wide_pass_width` and `wide_pass_height`, the sizes of the separate wide pass QA ran
+before TP-1595, are removed from a `symphony.yml` that still sets them (see
+[Renamed keys are migrated](#renamed-keys-are-migrated)).
 
 ##### The QA-mode contract in agent prompts
 
@@ -2242,7 +2244,7 @@ tools for it on the QA VM, outside the sandbox, and checks every argument:
 | `qa_context_menu` | right-clicks an element's centre or a point after the same checks and returns the menu that opened (each item's path, title, enabled state and shortcut) and its pop-up `window_id`, for rows and controls whose `AXShowMenu` is unsupported | what `qa_hover` refuses; no menu opening within 2 seconds (`no_menu`) |
 | `qa_scroll` | scrolls the `AXScrollArea` at an element (`path`, the area or anything inside it) or a point (`x`, `y`) as a trackpad does, after the same checks: moves the pointer to the middle of the area and posts scroll-wheel events to the app alone, aimed at its window there (when those move nothing, posts them again where the pointer is, over the app's own window: `via: "hid"`). By `dx`/`dy` in `unit` `pixel` (default) or `line`, positive `dy` down, or to an `edge` (`top`, `bottom`, `left`, `right`): rounds of 3000 pt until two in a row move nothing (`at_edge`), so rows a page load adds at the end are reached too, for at most 40 seconds (a round takes seconds on a loaded runner, and the helper stops a command at 60). Returns the rows on screen (`visible`: `count`, `first`, `last`, and a table's `visible_rows`/`rows`), the `scroll_bars` values and, for a delta, how far the content `moved`. A SwiftUI `ScrollView` or `List` answers no scrolling key and its overlay scroll bar takes no `AXValue` | what `qa_hover` refuses, both or neither of `edge` and `dx`/`dy`, a zero delta, more than 20000 pt or 2000 lines; nothing scrolling there (`no_scroll_area`) |
 | `qa_key` | presses a named key (`return`, `escape`, arrows, …) or one character key, with `command`, `shift`, `option` or `control`, in the app's focused window, with key events sent to the app alone; a `command` shortcut goes as a keyboard sends it (each modifier's key down, the key, the modifiers up, through the HID tap) once the app owns the keyboard, since AppKit's menus take key equivalents from no other route; returns the focused window and element, and `via` (`pid` or `hid`) | a PID it did not launch, a key or modifier outside that list, an app with no focused window, a `command` shortcut while another app owns the keyboard (`not_frontmost`) |
-| `qa_resize_window` | sizes the app's main window (or the `AXWindow` at `path`): moves it to the top left of the screen and resizes it to `width`×`height` points, or the screen's usable area when that is smaller, with `AXSize` or else the window's zoom button. `pass: "walkthrough"` defaults to the playbook's walkthrough size (1366×768); `pass: "wide"`, the default, runs the wide pass at the wide pass size (2560×1440). Returns the window frame it reached, the screen and its usable area, and for the wide pass `limited` when the screen is under the wide pass size | a PID it did not launch, a `pass` other than `walkthrough` or `wide`, a wide pass size under the playbook's, a size under 320 or over 8192 pt, a `path` that is not a window |
+| `qa_resize_window` | sizes the app's main window (or the `AXWindow` at `path`): moves it to the top left of the screen and resizes it to `width`×`height` points, or the screen's usable area when that is smaller, with `AXSize` or else the window's zoom button. Without a size it sets the playbook's QA target window (2560×1440 by default). Returns the window frame it reached, the screen and its usable area, `target`, and for the target `limited` when the screen is under it | a PID it did not launch, a size under 320 or over 8192 pt, a `path` that is not a window |
 | `qa_open_status_menu` | opens a launched app's status-bar menu on screen, as a click on its menu bar item would, and returns the menu's `window_id` and `frame` once it shows, for `qa_screenshot`; `qa_key` with `escape` closes it. It writes an empty `status-menu/open-<pid>` under the app's QA root on the QA VM, which the app takes in [QA mode](../macos/README.md#qa-mode) only, then waits up to 10 seconds for a pop-up menu window (layer 101) in the app's window list. It goes around Accessibility because `AXPress` on the status item blocks until the menu closes (AXError -25204) and a click on it is refused as covered | a PID it did not launch; a menu that does not show within 10 seconds (`qa_status_menu_not_opened`), after which it removes the request so the menu does not open later |
 | `qa_check_app` | says whether a launched app still runs (also after it exited), answers an accessibility request within 10 seconds (else it is hung), and has written a new `~/Library/Logs/DiagnosticReports/<executable>*` crash report since launch (read on the QA VM), with each problem naming the `page` the agent passes and the window size `qa_resize_window` set, and names the app's QA `root` | a PID it did not launch |
 | `qa_sample` | samples a launched app's threads on the QA VM with `/usr/bin/sample <pid> <seconds> -mayDie -file <path>` for `seconds` (1 to 10, default 3), copies the report into `qa-evidence/<name>.txt` (by default `sample-<pid>-<time>`; a new file, never one replaced) and returns the main thread's heaviest path in the report's call graph as `stack`, outermost frame first, each with its sample count, with the thread's header line as `thread` and the `page` the agent passes. QA takes one when an accessibility, scroll or key call times out on an app `qa_check_app` calls healthy, or one it calls hung, and quotes the stack in the finding | a PID it did not launch, an app that exited or a process `sample` cannot find (`qa_no_app`); `seconds` outside 1 to 10; a name that exists (`qa_sample_exists`) |
@@ -2265,46 +2267,48 @@ seconds later fails, with the AX tree quoted and a screenshot attached.
 
 QA does three things, in this order, in every app playbook (`macos_app`, `web`, `android_app`):
 the walkthrough steps marked `Proved by: QA`, a **Design check** of every UI deliverable, then the
-playbook's other checks of the running app (on macOS the wide pass below). The Design check judges
-each window, page, screen or menu the change adds or changes by sight: screenshots of the real app
-in light and in dark, at the sizes the design names, compared with the ticket's or the parent's
-Screens and with `docs/design/design-system.md` (the design system alone when no Screens cover it)
-for layout, spacing, alignment, truncation, contrast, symbols, wording and whether it looks
-finished. The report has one `Design check: <deliverable>` step per UI deliverable, with both
-screenshots and the design it compared with; a visible mismatch fails it, even when every
-structural check passes. On macOS the app is launched once per appearance with `qa_launch_app`'s
-`appearance`, and a status-bar menu is opened on screen with `qa_open_status_menu` and judged from
-its screenshot. Android switches with `qa_android_dark_mode`; the web playbook uses the page's theme
-control or the browser's emulated `prefers-color-scheme`, and says when dark is not applicable.
+playbook's other checks of the running app (on macOS a health check on every page the walkthrough
+visits, below). The Design check judges each window, page, screen or menu the change adds or
+changes by sight: screenshots of the real app, compared with the ticket's or the parent's Screens
+and with `docs/design/design-system.md` (the design system alone when no Screens cover it) for
+layout, spacing, alignment, truncation, contrast, symbols, wording and whether it looks finished.
+The report has one `Design check: <deliverable>` step per UI deliverable, with its screenshots and
+the design it compared with; a visible mismatch fails it, even when every structural check
+passes. On macOS a status-bar menu is opened on screen with `qa_open_status_menu` and judged from
+its screenshot. Android switches appearance with `qa_android_dark_mode`; the web playbook uses the
+page's theme control or the browser's emulated `prefers-color-scheme`, and says when dark is not
+applicable.
 
-QA judges the app at two sizes, both settings of the `macos_app` playbook. Before the first
-walkthrough step, and after each launch, `qa_resize_window` with `pass: "walkthrough"` sets the
-main window to the **walkthrough size**, `window_width`×`window_height` (1366×768 pt by default):
-every walkthrough step, screenshot and design check runs there unless the step itself names another
-size, and the report names it. The app's own opening size and minimum (1200×760 and 960×600 for the
+On macOS, QA judges the app at one **QA target**, settings of the `macos_app` playbook: its
+`appearance` (dark by default) and its window size, `window_width`×`window_height` (2560×1440 pt by
+default). `qa_launch_app` and the Component Gallery draw the app in the target's appearance when the
+call names none, and the stepped pass's launch step sizes the main window to the target with
+`qa_resize_window` and no size; the agent does the same after each launch it makes. Every
+walkthrough step, screenshot and design check runs there, and the report names the size. The
+Gallery saves a component's board in the target's appearance and a screen at the target window's
+width. Another appearance or size is judged only when the ticket is about it: its ask or plan names
+light mode (or the other appearance), a small window or a specific size, or the change is to how
+the app adapts to its appearance or window size. The QA plan decides, and its briefs name the
+other appearance or size. The app's own opening size and minimum (1200×760 and 960×600 for the
 Director) do not count.
 
-After the walkthrough, the playbook runs a **wide pass**, because some layout crashes only happen in
-wide windows: `qa_resize_window` with `pass: "wide"` makes the main window fill a screen of the
-**wide pass size**, `wide_pass_width`×`wide_pass_height` (2560×1440 pt by default), then on each
-page the PR changes, and on its inspector or side panel, the agent waits 30
-seconds with the app running and calls `qa_check_app`. The pass fails when the app exits, hangs (no
-accessibility answer for 10 seconds) or writes a new crash report, and the report names the page and
-the window size. The report's `Wide pass` step gives the window size, the screen size and the
-pages it covered. A QA screen under the wide pass size (a VM with a 1920×1200 pt display, or a
-2560×1440 display in a Retina mode, which is 1280×720 pt) cannot run it at full size: the step says
-the wide pass was limited, and Symphony reports a `pass` from that screen as `blocked` for a person
-instead of passing it, with a reason that names the screen's size and the size it needs. A `pass` with no `qa_resize_window`
-call at all is `inconclusive`, with the reason that the wide pass did not run: QA runs once more,
-then a person decides. A `pass` with `scope: none` owes no wide pass, since it has nothing on screen
-to judge. An epic review gets every enabled playbook whatever the epic shipped, so it owes the wide
-pass only when it launched an app: an epic review of a backend-only epic that launched none keeps
-its `pass`, and one that launched an app without the wide pass is `blocked`. Give the QA VM a display of the wide pass size in points:
-stop it, run `tart set symphony-qa --display 2560x1440pt` on the Mac that runs it, and start it
-again. Setup measures the QA VM's screen in points (`system_profiler SPDisplaysDataType` over SSH,
-the size the display looks like) and lists a screen under the wide pass size as a problem, naming
-both sizes and that command. The resize needs no grant beyond the
-helper's Accessibility.
+Some layout crashes only happen in wide windows, so on every page the walkthrough visits, at the
+target size, the agent calls `qa_check_app` with the page's name. The step fails when the app exits,
+hangs (no accessibility answer for 10 seconds) or writes a new crash report, and the report names
+the page and the window size. A QA screen under the target size (a VM with a 1920×1200 pt display,
+or a 2560×1440 display in a Retina mode, which is 1280×720 pt) cannot hold the target window: the
+resize says it was limited, and Symphony reports a `pass` from that screen as `blocked` for a person
+instead of passing it, with a reason that names the screen's size and the size it needs. A `pass`
+that never sized a window to the target is `inconclusive`, with the reason that the app was not
+judged at the QA target: QA runs once more, then a person decides. A `pass` with `scope: none` owes
+no target resize, since it has nothing on screen to judge. An epic review gets every enabled
+playbook whatever the epic shipped, so it owes the target resize only when it launched an app: an
+epic review of a backend-only epic that launched none keeps its `pass`, and one that launched an
+app without it is `blocked`. Give the QA VM a display of the target size in points: stop it, run
+`tart set symphony-qa --display 2560x1440pt` on the Mac that runs it, and start it again. Setup
+measures the QA VM's screen in points (`system_profiler SPDisplaysDataType` over SSH, the size the
+display looks like) and lists a screen under the target size as a problem, naming both sizes and
+that command. The resize needs no grant beyond the helper's Accessibility.
 
 The screenshot and accessibility tools run Symphony's Swift helper on the QA VM, under the Screen
 Recording and Accessibility grants on its `sshd-keygen-wrapper` (step 4 below), so neither grant
@@ -2338,7 +2342,7 @@ Symphony never builds or runs the PR's app on its own Mac, as you or as another 
 
 Setup reports both: a repo whose playbooks include `macos_app` while no `worker_host` is set, and a
 `worker_host` that is this Mac, each with a button that opens this section. It also reports a QA VM
-whose screen, in points, is under the wide pass size, with the `tart set` command that fixes it.
+whose screen, in points, is under the QA target window, with the `tart set` command that fixes it.
 
 ##### The QA pre-build
 
@@ -4422,11 +4426,12 @@ model, through the QA driver the pass holds:
 - `symphony:qa_pre_checks`: the pre-checks' results (the steps a named test proves);
 - `symphony:qa_build`: the app Symphony built for the commit (`qa_build`); a failed build fails
   the step;
-- `symphony:qa_launch`: `qa_launch_app` on the default fixtures, then `qa_check_app`; an app that is
+- `symphony:qa_launch`: `qa_launch_app` on the default fixtures, in the QA target's appearance, and
+  `qa_resize_window` to its window size, then `qa_check_app`; an app that is
   not healthy fails the step, and the agent steps between it and the quit are skipped. It always
   runs: a pass with nothing on screen to judge rests on the app building, starting and checking
   healthy. When the plan answered `needs_app: false` and no walkthrough step is walked, the agent
-  steps between the launch and the quit (the design check and the wide pass) are skipped, saying the
+  steps between the launch and the quit (the design check) are skipped, saying the
   plan found nothing on screen to judge, and the review's `pass` is a `pass` with `scope: none`,
   accepted on the app check like any such pass;
 - `symphony:qa_quit`: `qa_quit_app` for every app the pass launched;
@@ -4444,7 +4449,7 @@ recheck, `{"recheck": [brief, ...]}`, at most three: each runs as a fresh turn o
 review runs again. Past two rounds the pass is `inconclusive`. A walk-style answer's `status` is
 `pass`, `fail`, `blocked` or `plan_mismatch`.
 
-The mechanical rules are the pass's as before: the wide pass audit, the QA host and tunnel checks,
+The mechanical rules are the pass's as before: the QA target audit, the QA host and tunnel checks,
 each turn's timeout (`auto_review.timeout_ms`), `execution.limits.tokens_per_issue` (counted across
 every turn of the pass), and the cleanup of the worktree and its processes. A stepped pass does not
 count its turns against `auto_review.max_turns`: its list bounds them.
@@ -4476,7 +4481,6 @@ phases:
             model: small
             answer: {status: string, expected: string, actual: string, details: string, evidence: list}
           - {id: design_check, title: Design check, mode: orchestrated, session: fresh, model: small, answer: {status: string, expected: string, actual: string, details: string, evidence: list}}
-          - {id: wide_pass, title: Wide pass, mode: orchestrated, session: fresh, model: small, answer: {status: string, expected: string, actual: string, details: string, evidence: list}}
           - {id: quit, title: Quit the app, mode: machine, command: "symphony:qa_quit", timeout_ms: 60000}
           - {id: attach, title: Attach the evidence, mode: machine, command: "symphony:qa_attach", timeout_ms: 60000}
           - {id: review, title: Review and verdict, mode: orchestrated, session: lead, effort: high}

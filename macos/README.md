@@ -225,7 +225,9 @@ under the form whichever section is shown; a section holding a refused value car
   the pass looks for when it starts, **Start the project's dev server on the QA host** is `dev_server`
   (off by default), **Dev server port** is `dev_server_port` (8090), and **App environment** is `launch_env`, a
   table of variables the app under test gets after Symphony's own, with **Add Variable** and a remove button per
-  row. Values are saved in plain text, so they hold documented QA values only, never a secret. Save runs
+  row. **QA target window width** and **height in points** are `window_width` and `window_height` (2560 × 1440),
+  and **QA target appearance** (Light or Dark) is `appearance` (dark): the one window size and appearance QA
+  launches the app in and judges it at. Values are saved in plain text, so they hold documented QA values only, never a secret. Save runs
   `symphony check` first, which refuses a name Symphony sets itself, `PATH`, `HOME` or `DYLD_*`, and writes only
   the changed lines.
 - Settings has no Models or Harnesses section: what each kind of run starts with, its fallbacks, each
@@ -1311,6 +1313,7 @@ reached with Tab.
   git diff --name-only origin/main | build/SymphonyGallery --affected   # the entries a change is a reason to look at
   build/SymphonyGallery --shot button --out /tmp/shots # a component's board, light and dark
   build/SymphonyGallery --shot ticket-page --variation ticket-page-waiting --width desktop --out /tmp/shots
+  build/SymphonyGallery --shot button --appearance dark --out /tmp/shots   # only the dark pictures
   build/SymphonyGallery --open home --variation home-lists --width laptop --dark
   ```
 
@@ -1475,8 +1478,8 @@ Ten more variables, read only in QA mode:
 - `SYMPHONY_BAR_QA_OPEN_PANEL_DIR` makes the Add Repo sheet's folder picker open in that absolute folder, so a
   QA pass, which can't type a path into the panel, picks a prepared checkout with the panel's Choose button.
 - `SYMPHONY_BAR_QA_APPEARANCE=light` or `dark` makes the app draw in that appearance (`NSApp.appearance`
-  set to Aqua or Dark Aqua at launch) whatever the Mac's own setting, so QA judges both on one Mac without
-  switching the Mac's appearance. Any other value, or none, follows the Mac.
+  set to Aqua or Dark Aqua at launch) whatever the Mac's own setting, so QA launches the app in the playbook's
+  `appearance` (dark by default) without switching the Mac's appearance. Any other value, or none, follows the Mac.
 - `SYMPHONY_BAR_QA_OPEN_TICKET=TP-123` opens the Symphony window on that ticket's page at launch.
 - `SYMPHONY_BAR_QA_OPEN_VIEW=audit` opens the Symphony window on that page at launch (a page's name: `audit`,
   `usage`, `tickets`…).

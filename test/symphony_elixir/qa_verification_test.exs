@@ -1467,10 +1467,10 @@ defmodule SymphonyElixir.QaVerificationTest do
     test "a block that names its own cause stays blocked, whatever its unprovable steps" do
       steps = [step("Start a run", "pass"), step("Watch the run on Android", "unprovable", "the Android playbook is not in this pass")]
 
-      # A wide pass a small QA screen limited, the ticket that already covers the gap, a QA tool's own
+      # A pass a small QA screen limited, the ticket that already covers the gap, a QA tool's own
       # failure, and the project's server on a repo that has not ruled it out.
       causes = [
-        %{needs_person: true, reason: "the QA screen is too small for the wide pass"},
+        %{needs_person: true, reason: "the QA screen is too small for the QA target window"},
         %{covered_by: "TP-716"},
         %{cause: {:qa_worker, "qa_worker_unsafe"}},
         %{needs_dev_server: true}
@@ -1662,27 +1662,27 @@ defmodule SymphonyElixir.QaVerificationTest do
   end
 
   describe "inconclusive runs" do
-    defp wide_pass_missing do
-      reason = "the wide pass did not run: no `qa_resize_window` call resized the app's window, so layouts at 1400×900 pt were not checked"
+    defp target_missing do
+      reason = "the app was not judged at the QA target: no `qa_resize_window` call set its window to the target size, so the screens were not checked at the size QA judges them"
       result = %{verdict: :inconclusive, summary: "Every journey worked.", steps: [], findings: [], reason: reason}
       {:ok, %{result: result, tokens: %{}}}
     end
 
-    test "a missing wide pass reruns once, then asks a person, and never reaches the self-heal lane" do
+    test "a missing target resize reruns once, then asks a person, and never reaches the self-heal lane" do
       {workspace, head} = git_workspace!()
-      Process.put(:qa_agent_result, wide_pass_missing())
+      Process.put(:qa_agent_result, target_missing())
 
       log = capture_log(fn -> assert :ok = run(workspace, []) end)
 
-      assert log =~ "QA inconclusive for TP-816 head=#{head} model=claude-test playbooks=cli (attempt 1/2); rerunning: the wide pass did not run"
+      assert log =~ "QA inconclusive for TP-816 head=#{head} model=claude-test playbooks=cli (attempt 1/2); rerunning: the app was not judged at the QA target"
       refute deciding()
       assert_received {:memory_tracker_comment, @issue_id, rerunning}
       assert rerunning =~ "**Verdict:** inconclusive → QA (inconclusive, rerunning)"
-      assert rerunning =~ "Reason: the wide pass did not run"
+      assert rerunning =~ "Reason: the app was not judged at the QA target"
 
       log = capture_log(fn -> assert :ok = run(workspace, []) end)
 
-      assert log =~ "(attempt 2/2); asking a person: the wide pass did not run"
+      assert log =~ "(attempt 2/2); asking a person: the app was not judged at the QA target"
       assert_received {:memory_tracker_comment, @issue_id, report}
       assert report =~ "**Verdict:** inconclusive → QA (inconclusive; a person decides)"
 
@@ -1695,7 +1695,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       refute_received {:memory_tracker_state_update, _, _}
 
       assert %{} = decision = deciding()
-      assert decision.why =~ "The last run ended with: the wide pass did not run: no qa_resize_window call resized"
+      assert decision.why =~ "The last run ended with: the app was not judged at the QA target: no qa_resize_window call set its window"
       assert_received {:memory_tracker_comment, @issue_id, request}
       assert request =~ "QA could not finish its check of TP-816"
       assert Enum.map(verdicts(), & &1.outcome) == ["inconclusive", "inconclusive"]
@@ -1705,7 +1705,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       {workspace, head} = git_workspace!()
       watch = [phase: :qa, head_sha: head, facts: %{ci: :red}, decision: :wait]
       SymphonyElixir.PrWatchSupport.put_watch!(@repo_key, @issue_id, watch)
-      Process.put(:qa_agent_result, wide_pass_missing())
+      Process.put(:qa_agent_result, target_missing())
 
       capture_log(fn -> assert :ok = run(workspace, []) end)
 
@@ -1849,7 +1849,7 @@ defmodule SymphonyElixir.QaVerificationTest do
 
     test "an inconclusive pass takes the Conductor's turn too" do
       {workspace, _head} = git_workspace!()
-      Process.put(:qa_agent_result, wide_pass_missing())
+      Process.put(:qa_agent_result, target_missing())
 
       capture_log(fn -> assert :ok = run(workspace, conductor: conductor({:rework, @finding})) end)
 
@@ -1951,7 +1951,7 @@ defmodule SymphonyElixir.QaVerificationTest do
         {"the token limit", [], {:error, {:qa_token_limit, 900, 800}, %{}}},
         {"an unreadable answer", [], {:error, {:malformed_qa_response, :no_verdict_object}, %{}}},
         {"a worktree that would not check out", [], {:error, {:qa_worktree_failed, 128, "fatal: bad object"}, %{}}},
-        {"a missing wide pass", [], wide_pass_missing()},
+        {"a missing target resize", [], target_missing()},
         {"a change no playbook applies to", [qa_policy: NoPlaybookPolicy], nil},
         {"a remote worker", [worker_host: "worker-1"], nil}
       ]

@@ -635,7 +635,7 @@ that step's while one is open, else the lines since the run's last step complete
 stream's for a run that walks no steps (a QA or Code Review run). There is no `step.skipped`: a skip is `step.completed` with `outcome:
 skipped`. A `question.answered` naming the question a paused step waits on resumes that step.
 
-A step is drawn with one word. A stepped QA pass's check step (a walk, a design check, the wide pass,
+A step is drawn with one word. A stepped QA pass's check step (a walk, a design check or
 a recheck) records `outcome: passed` once it ran to an answer Symphony takes, and what it judged in
 `result.status` (`pass`, `fail`, `blocked`); such a step is drawn, on the ticket page, in the
 Conductor's `steps` and `attempts` blocks and in the Conductor's facts, with what it judged: `passed`,
@@ -2314,30 +2314,34 @@ The QA agent:
   scroll area at an element or point by a delta or to an edge with scroll-wheel events, and MAY
   post them again at the pointer, over the app's own window, when the app took none of them. They
   MUST refuse the same points as `qa_click` before the pointer moves.
-  `qa_resize_window` sizes a launched app's window, through the Accessibility grant alone: for the
-  walkthrough to the playbook's walkthrough size (1366×768 points by default), where every walkthrough
-  step, screenshot and design check runs unless the step names another size, and for the playbook's
-  wide pass to fill a screen of its wide pass size (2560×1440 points by default), or the screen's
-  usable area when that is smaller, and
+  A `macos_app` pass judges the app at the playbook's QA target, one appearance (`appearance`, dark
+  by default) and one window size (`window_width`×`window_height`, 2560×1440 points by default), and
+  MUST judge another appearance or size only when the ticket is about it (its ask or plan names that
+  appearance, a small window or a specific size, or the change is to how the app adapts to them).
+  `qa_launch_app` and the Component Gallery MUST draw the app in the target's appearance when the
+  call names none. `qa_resize_window` sizes a launched app's window, through the Accessibility grant
+  alone: without a size to the QA target, where every walkthrough step, screenshot and design check
+  runs, or the screen's usable area when that is smaller, and to another size for a ticket about one;
+  the walkthrough calls `qa_check_app` on every page it visits at the target size, and
   `qa_check_app` reports whether the app still runs, answers an accessibility request within 10
   seconds, and has written a crash report since launch, naming the page the agent passes and that
   window size. `qa_sample` runs `/usr/bin/sample` on the QA host against a running app the driver
   launched, for 1 to 10 seconds, saves the whole report as evidence and returns the main thread's
   heaviest stack from its call graph, so a hang finding names its cause; it MUST answer `qa_no_app`
-  when that app is not running. A pass whose wide pass met a screen under the wide pass size MUST NOT be
-  reported `pass`: its `pass` becomes `blocked`, and that pass's `blocked` goes to a person. A pass
-  with no `qa_resize_window` call MUST NOT be reported `pass` either: its wide pass did not run, so
-  its `pass` becomes `inconclusive` with that reason (an epic review's becomes `blocked`). A missing
-  wide pass is the QA run's omission, never an environment fault: an `inconclusive` pass MUST be
+  when that app is not running. A pass whose target resize met a screen under the target size MUST NOT
+  be reported `pass`: its `pass` becomes `blocked`, and that pass's `blocked` goes to a person. A pass
+  with no `qa_resize_window` call to the target MUST NOT be reported `pass` either: it judged nothing
+  at the QA target, so its `pass` becomes `inconclusive` with that reason (an epic review's becomes
+  `blocked`). A missing target resize is the QA run's omission, never an environment fault: an `inconclusive` pass MUST be
   rerun once on the same change (the passes in a row without a result since the ticket's last
   implementation or rework run ended, on any head) and then pause the ticket on a Needs Decision
   hold, and MUST NOT reach the self-heal lane. With the Conductor's `after_qa_blocked` junction on,
   its turn runs first and its route or question takes the place of the rerun and the hold. A `pass` with `scope: none` (the change has nothing on screen to judge, by the
   agent's answer or because the QA policy found no changed path matching any selected playbook's
-  `paths` and no `## User walkthrough`) owes no wide pass, but MUST be recorded `pass` only when the
+  `paths` and no `## User walkthrough`) owes no target resize, but MUST be recorded `pass` only when the
   pass built the app (`qa_build`), launched it (`qa_launch_app`) and a `qa_check_app` found it
   healthy; otherwise it is `inconclusive`. An epic review gets every enabled playbook whatever
-  the epic shipped, so the wide pass applies to it only when the pass launched an app: an epic review
+  the epic shipped, so the target resize applies to it only when the pass launched an app: an epic review
   that launched none (a backend-only epic) keeps its `pass`. Every tool that
   takes a PID MUST refuse a PID
   the pass did not launch. Apps still running when the pass ends MUST be quit. A missing Screen
@@ -3227,7 +3231,8 @@ A QA pass walks a step list instead of being one agent session when `phases.qa.s
 the pass (not an epic review) runs one playbook with a list, alone or beside the `cli` playbook, whose
 walkthrough steps the plan MAY give to the command line (`surface: "cli"`) (`phases.qa.playbooks.<kind>.steps`, or
 the `macos_app` default: pre-checks, build, plan, launch, one walk per walkthrough step, design
-check, wide pass, quit, attach, review). Off, it MUST run as one agent session as before
+check, quit, attach, review; a list that still names the retired `wide_pass` step with no prompt of
+its own loads without it). Off, it MUST run as one agent session as before
 (`SymphonyElixir.QaAgent.Steps`, `docs/configuration.md#stepped-qa-passes`). Every step MUST be
 recorded under the QA run's `run_id`. Its machine steps run the QA pass's own commands
 (`symphony:qa_pre_checks`, `symphony:qa_build`, `symphony:qa_launch`, `symphony:qa_quit`,
@@ -3236,7 +3241,7 @@ them. Its agent steps are turns with the QA tool scope, each ending with its ans
 MUST brief every walkthrough step the pass walks, else it is refused and asked again. The `review`
 step, which every QA playbook's list MUST have, gives the verdict in the `qa_verdict` contract, or
 asks for at most three rechecks, each a fresh walk turn between the launch and the quit run again;
-past two rounds the pass is `inconclusive`. The wide pass audit, the QA host checks, turn timeouts,
+past two rounds the pass is `inconclusive`. The QA target audit, the QA host checks, turn timeouts,
 `tokens_per_issue` (across every turn of the pass) and the cleanup stay the pass's.
 
 When a machine step will run a command, the agent's session ends first and the run holds no slot:

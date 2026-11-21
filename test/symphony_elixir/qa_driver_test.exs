@@ -2074,14 +2074,15 @@ defmodule SymphonyElixir.QaDriverTest do
   end
 
   describe "qa_launch_app appearance" do
-    test "launches the app light or dark, and follows the host without it", %{worktree: worktree} do
+    test "launches the app light or dark, and in the QA target appearance without one", %{worktree: worktree} do
       driver = start_driver(worktree)
       assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
 
       for {args, expected, app_args, library} <- [
             {%{"appearance" => "dark"}, "dark", [], @appearance_library},
             {%{"appearance" => "light"}, "light", ["-NSRequiresAquaSystemAppearance", "YES"], @appearance_library},
-            {%{}, nil, [], nil}
+            # The playbook's QA target appearance, dark by default, when the call names none.
+            {%{}, "dark", [], @appearance_library}
           ] do
         {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", args) end)
         assert {:ok, %{"pid" => pid}} = result
@@ -2090,7 +2091,7 @@ defmodule SymphonyElixir.QaDriverTest do
         assert env["SYMPHONY_BAR_QA_APPEARANCE"] == expected
         # The library sets any AppKit app's appearance from SYMPHONY_BAR_QA_APPEARANCE.
         assert env["DYLD_INSERT_LIBRARIES"] == library
-        if library, do: assert_received(:appearance_library), else: refute_received(:appearance_library)
+        assert_received(:appearance_library)
         assert launch_opts[:args] == app_args
         assert {:ok, _quit} = QaDriver.call_tool(driver, "qa_quit_app", %{"pid" => pid})
       end
@@ -3793,8 +3794,14 @@ defmodule SymphonyElixir.QaDriverTest do
       out = List.last(rest)
       File.mkdir_p!(out)
 
+      appearances =
+        case Enum.drop_while(rest, &(&1 != "--appearance")) do
+          ["--appearance", appearance | _rest] -> [appearance]
+          [] -> ~w(light dark)
+        end
+
       pictures =
-        for appearance <- ~w(light dark) do
+        for appearance <- appearances do
           picture = Path.join(out, "#{entry}-1-#{appearance}.png")
           File.write!(picture, "png #{appearance}")
           picture
@@ -3848,13 +3855,18 @@ defmodule SymphonyElixir.QaDriverTest do
       driver = built_gallery(worktree)
       %{host_dir: host_dir} = GenServer.call(driver, :config)
 
-      assert {:ok, %{"files" => [%{"path" => "qa-evidence/button-1-light.png"}, %{"path" => "qa-evidence/button-1-dark.png"}]}} =
-               QaDriver.call_tool(driver, "qa_gallery", %{"entry" => "button", "width" => "laptop"})
-
+      # The QA target by default: dark, at its window's width; light only on request.
+      assert {:ok, %{"files" => [%{"path" => "qa-evidence/button-1-dark.png"}]}} = QaDriver.call_tool(driver, "qa_gallery", %{"entry" => "button"})
       assert File.read!(Path.join(worktree, "qa-evidence/button-1-dark.png")) == "png dark"
-      assert_received {:cmd, _gallery, ["--shot", "button", "--width", "laptop", "--out", out], _opts}
+      assert_received {:cmd, _gallery, ["--shot", "button", "--width", "2560", "--appearance", "dark", "--out", out], _opts}
       assert Path.dirname(out) == host_dir
       assert File.ls!(out) == []
+      refute File.exists?(Path.join(worktree, "qa-evidence/button-1-light.png"))
+
+      assert {:ok, %{"files" => [%{"path" => "qa-evidence/button-1-light.png"}]}} =
+               QaDriver.call_tool(driver, "qa_gallery", %{"entry" => "button", "width" => "laptop", "appearance" => "light"})
+
+      assert_received {:cmd, _gallery, ["--shot", "button", "--width", "laptop", "--appearance", "light", "--out", _out], _opts}
 
       assert {:error, {:qa_tool, "invalid_arguments", message}} = QaDriver.call_tool(driver, "qa_gallery", %{"entry" => "home"})
       assert message =~ "home-empty, home-busy"
@@ -3872,7 +3884,7 @@ defmodule SymphonyElixir.QaDriverTest do
       for {args, app_args} <- [
             {%{"entry" => "home", "variation" => "home-busy", "width" => "desktop", "appearance" => "dark"}, ["--open", "home", "--variation", "home-busy", "--width", "desktop", "--dark"]},
             {%{"entry" => "button", "appearance" => "light"}, ["-NSRequiresAquaSystemAppearance", "YES", "--open", "button"]},
-            {%{"entry" => "button"}, ["--open", "button"]}
+            {%{"entry" => "button"}, ["--open", "button", "--dark"]}
           ] do
         {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_gallery_open", args) end)
         assert {:ok, %{"pid" => pid, "root" => 1, "api_fixtures" => copy}} = result
@@ -3880,7 +3892,8 @@ defmodule SymphonyElixir.QaDriverTest do
         assert_received {:launched, executable, launch_opts, _port, ^pid}
         assert String.ends_with?(executable, "Demo.app/Contents/MacOS/Demo")
         assert launch_opts[:args] == app_args
-        assert Map.new(launch_opts[:env])["SYMPHONY_BAR_QA_APPEARANCE"] == args["appearance"]
+        # The QA target's appearance, dark, when the call names none.
+        assert Map.new(launch_opts[:env])["SYMPHONY_BAR_QA_APPEARANCE"] == Map.get(args, "appearance", "dark")
         assert {:ok, _quit} = QaDriver.call_tool(driver, "qa_quit_app", %{"pid" => pid})
       end
 
@@ -3930,7 +3943,7 @@ defmodule SymphonyElixir.QaDriverTest do
     end
   end
 
-  describe "wide pass" do
+  describe "the QA target window" do
     defp resized(window, screen, visible) do
       {Jason.encode!(%{ok: true, method: "AXSize", window: window, screen: screen, visible: visible, requested: %{w: 2560, h: 1440}}), 0}
     end
@@ -3938,22 +3951,22 @@ defmodule SymphonyElixir.QaDriverTest do
     @wide_screen %{w: 2560, h: 1440}
     @wide_visible %{x: 0, y: 25, w: 2560, h: 1415}
 
-    test "resizes the main window or a given one and remembers the size it reached", %{worktree: worktree} do
+    test "resizes the main window or a given one to the target and remembers the size it reached", %{worktree: worktree} do
       reply = resized(%{x: 0, y: 25, w: 2560, h: 1415}, @wide_screen, @wide_visible)
       assert QaDriver.launched_app?(start_driver(worktree)) == false
       {driver, pid} = launched_app(worktree, host: host(%{helper_replies: %{"ax-resize" => reply}}))
-      assert QaDriver.wide_pass(driver) == nil
+      assert QaDriver.target_resize(driver) == nil
       assert QaDriver.launched_app?(driver)
       assert QaDriver.launched_pids(driver) == [pid]
 
-      assert {:ok, %{"window" => %{"w" => 2560, "h" => 1415}, "screen" => %{"w" => 2560}, "pass" => "wide", "limited" => false, "note" => note}} =
+      assert {:ok, %{"window" => %{"w" => 2560, "h" => 1415}, "screen" => %{"w" => 2560}, "target" => true, "limited" => false, "note" => note}} =
                QaDriver.call_tool(driver, "qa_resize_window", %{"pid" => pid})
 
-      assert note == "The window is 2560×1415 pt on a 2560×1440 pt screen."
+      assert note == "The window is 2560×1415 pt on a 2560×1440 pt screen. Run every step at this size unless the step names another."
       assert_received {:cmd, @helper, ["ax-resize", pid_arg, "", "2560", "1440"], _opts}
       assert pid_arg == Integer.to_string(pid)
 
-      assert QaDriver.wide_pass(driver) == %{
+      assert QaDriver.target_resize(driver) == %{
                window: {2560, 1415},
                screen: {2560, 1440},
                visible: {2560, 1415},
@@ -3962,36 +3975,39 @@ defmodule SymphonyElixir.QaDriverTest do
                limited: false
              }
 
-      assert {:ok, %{"limited" => false}} =
-               QaDriver.call_tool(driver, "qa_resize_window", %{"pid" => pid, "path" => "1", "pass" => "wide", "width" => 3000, "height" => 1600})
+      # Another size, for a ticket about one, is not the target resize.
+      assert {:ok, %{"target" => false} = other} =
+               QaDriver.call_tool(driver, "qa_resize_window", %{"pid" => pid, "path" => "1", "width" => 1366, "height" => 768})
 
-      assert_received {:cmd, @helper, ["ax-resize", _pid, "1", "3000", "1600"], _opts}
+      refute Map.has_key?(other, "limited")
+      assert_received {:cmd, @helper, ["ax-resize", _pid, "1", "1366", "768"], _opts}
+      assert %{target: {2560, 1440}} = QaDriver.target_resize(driver)
 
-      for args <- [%{"width" => 1400}, %{"height" => 900}, %{"width" => 9000}, %{"path" => "window"}, %{"width" => "2560"}, %{"pass" => "tall"}] do
+      for args <- [%{"width" => 300}, %{"height" => 9000}, %{"path" => "window"}, %{"width" => "2560"}] do
         assert error_code(QaDriver.call_tool(driver, "qa_resize_window", Map.put(args, "pid", pid))) == "invalid_arguments"
       end
 
       assert error_code(QaDriver.call_tool(driver, "qa_resize_window", %{"pid" => pid + 1})) == "qa_pid_not_launched"
 
-      # The wide pass outlives the app it resized.
+      # The target resize outlives the app it resized.
       assert {:ok, %{"quit" => true}} = QaDriver.call_tool(driver, "qa_quit_app", %{"pid" => pid})
-      assert %{limited: false} = QaDriver.wide_pass(driver)
+      assert %{limited: false} = QaDriver.target_resize(driver)
       assert QaDriver.launched_app?(driver)
       assert QaDriver.launched_pids(driver) == []
       QaDriver.stop(driver)
       assert QaDriver.launched_pids(driver) == []
       assert QaDriver.launched_pids(nil) == []
-      assert QaDriver.wide_pass(driver) == nil
-      assert QaDriver.wide_pass(nil) == nil
+      assert QaDriver.target_resize(driver) == nil
+      assert QaDriver.target_resize(nil) == nil
       assert QaDriver.launched_app?(driver) == false
       assert QaDriver.launched_app?(nil) == false
       assert QaDriver.app_check(driver) == %{built: false, launched: false, checked: false}
       assert QaDriver.app_check(nil) == %{built: false, launched: false, checked: false}
     end
 
-    test "sets the walkthrough size without running the wide pass, and the launch says to", %{worktree: worktree} do
+    test "launches dark and says to resize to the target", %{worktree: worktree} do
       replies = %{
-        "ax-resize" => resized(%{x: 0, y: 25, w: 1366, h: 768}, @wide_screen, @wide_visible),
+        "ax-resize" => resized(%{x: 0, y: 25, w: 2560, h: 1415}, @wide_screen, @wide_visible),
         "ax-ping" => {~s({"ok":true,"responding":true,"ms":3}), 0}
       }
 
@@ -3999,49 +4015,36 @@ defmodule SymphonyElixir.QaDriverTest do
       assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
       {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
       assert {:ok, %{"pid" => pid, "note" => launch_note}} = result
-      assert launch_note =~ ~s(call `qa_resize_window` with `pass: "walkthrough"`: it sets the main window to 1366×768 pt)
+      assert launch_note =~ "call `qa_resize_window` with no size: it sets the main window to the QA target, 2560×1440 pt"
+      assert_received {:launched, _executable, launch_opts, _port, ^pid}
+      assert env(launch_opts, "SYMPHONY_BAR_QA_APPEARANCE") == "dark"
 
-      assert {:ok, %{"pass" => "walkthrough", "note" => note} = reply} =
-               QaDriver.call_tool(driver, "qa_resize_window", %{"pid" => pid, "pass" => "walkthrough"})
-
-      refute Map.has_key?(reply, "limited")
-      assert note == "The window is 1366×768 pt for the walkthrough. Run every step at this size unless the step names another."
-      assert_received {:cmd, @helper, ["ax-resize", _pid, "", "1366", "768"], _opts}
-      assert QaDriver.wide_pass(driver) == nil
-
-      assert {:ok, %{"window" => %{"w" => 1366, "h" => 768}}} = QaDriver.call_tool(driver, "qa_check_app", %{"pid" => pid, "page" => "Home"})
-
-      # A step may name a smaller size than the wide pass.
-      assert {:ok, %{"pass" => "walkthrough"}} =
-               QaDriver.call_tool(driver, "qa_resize_window", %{"pid" => pid, "pass" => "walkthrough", "width" => 960, "height" => 600})
-
-      assert_received {:cmd, @helper, ["ax-resize", _pid, "", "960", "600"], _opts}
+      assert {:ok, %{"target" => true}} = QaDriver.call_tool(driver, "qa_resize_window", %{"pid" => pid})
+      assert {:ok, %{"window" => %{"w" => 2560, "h" => 1415}}} = QaDriver.call_tool(driver, "qa_check_app", %{"pid" => pid, "page" => "Home"})
     end
 
-    test "takes the playbook's sizes and says when the walkthrough window fell short", %{worktree: worktree} do
+    test "takes the playbook's target and says when the window fell short of it", %{worktree: worktree} do
       reply = resized(%{x: 0, y: 25, w: 1280, h: 695}, %{w: 1280, h: 720}, %{x: 0, y: 25, w: 1280, h: 695})
-      playbook = %{window_size: {1440, 900}, wide_pass_size: {1920, 1080}}
+      playbook = %{window_size: {1440, 900}, appearance: "light"}
       {driver, pid} = launched_app(worktree, playbook: playbook, host: host(%{helper_replies: %{"ax-resize" => reply}}))
-
-      assert {:ok, %{"note" => note}} = QaDriver.call_tool(driver, "qa_resize_window", %{"pid" => pid, "pass" => "walkthrough"})
-      assert_received {:cmd, @helper, ["ax-resize", _pid, "", "1440", "900"], _opts}
-      assert note =~ "The window is 1280×695 pt, not the 1440×900 pt asked for, on a 1280×720 pt screen with 1280×695 pt usable"
+      assert_received {:launched, _executable, launch_opts, _port, ^pid}
+      assert env(launch_opts, "SYMPHONY_BAR_QA_APPEARANCE") == "light"
 
       assert {:ok, %{"limited" => true, "note" => note}} = QaDriver.call_tool(driver, "qa_resize_window", %{"pid" => pid})
-      assert_received {:cmd, @helper, ["ax-resize", _pid, "", "1920", "1080"], _opts}
-      assert note =~ "under the 1920×1080 pt the wide pass needs"
-      assert %{needed: {1920, 1080}, limited: true} = QaDriver.wide_pass(driver)
+      assert_received {:cmd, @helper, ["ax-resize", _pid, "", "1440", "900"], _opts}
+      assert note =~ "under the 1440×900 pt QA target"
+      assert %{needed: {1440, 900}, limited: true} = QaDriver.target_resize(driver)
     end
 
-    test "says the wide pass is limited on a screen under 2560×1440 pt", %{worktree: worktree} do
+    test "says the pass is limited on a screen under 2560×1440 pt", %{worktree: worktree} do
       reply = resized(%{x: 0, y: 25, w: 1920, h: 1175}, %{w: 1920, h: 1200}, %{x: 0, y: 25, w: 1920, h: 1175})
       {driver, pid} = launched_app(worktree, host: host(%{helper_replies: %{"ax-resize" => reply}}))
 
       assert {:ok, %{"limited" => true, "note" => note}} = QaDriver.call_tool(driver, "qa_resize_window", %{"pid" => pid})
-      assert note =~ "The QA screen is 1920×1200 pt with 1920×1175 pt usable, under the 2560×1440 pt the wide pass needs"
-      assert note =~ "mark the Wide pass step `blocked`"
-      wide_pass = QaDriver.wide_pass(driver)
-      assert %{limited: true, screen: {1920, 1200}, window: {1920, 1175}, needed: {2560, 1440}} = wide_pass
+      assert note =~ "The QA screen is 1920×1200 pt with 1920×1175 pt usable, under the 2560×1440 pt QA target"
+      assert note =~ "mark it `blocked` as limited"
+      target = QaDriver.target_resize(driver)
+      assert %{limited: true, screen: {1920, 1200}, window: {1920, 1175}, needed: {2560, 1440}} = target
     end
 
     test "tells an app that keeps its window small from a small screen", %{worktree: worktree} do
@@ -4053,7 +4056,7 @@ defmodule SymphonyElixir.QaDriverTest do
       {driver, pid} = launched_app(worktree, host: host(%{helper_replies: replies}))
 
       assert {:ok, %{"limited" => false, "note" => note}} = QaDriver.call_tool(driver, "qa_resize_window", %{"pid" => pid})
-      assert note =~ "The app kept its window at 548×420 pt on a 2560×1440 pt screen"
+      assert note =~ "The app kept its window at 548×420 pt, not the 2560×1440 pt asked for, on a 2560×1440 pt screen"
 
       assert {:ok, %{"healthy" => true, "window" => %{"w" => 548, "h" => 420}, "page" => "Settings", "problems" => []}} =
                QaDriver.call_tool(driver, "qa_check_app", %{"pid" => pid, "page" => "Settings"})
@@ -4064,11 +4067,11 @@ defmodule SymphonyElixir.QaDriverTest do
 
       assert {:error, {:qa_tool, "qa_helper_failed", message}} = QaDriver.call_tool(driver, "qa_resize_window", %{"pid" => pid})
       assert message =~ "no window size"
-      assert QaDriver.wide_pass(driver) == nil
+      assert QaDriver.target_resize(driver) == nil
     end
 
     # The QA playbook fixture: a build whose layout crashes once its window is wider than
-    # 1200 pt passes at its default size and fails the wide pass, named by page and size.
+    # 1200 pt passes at its opening size and fails at the target, named by page and size.
     test "fails a build that crashes in a window wider than 1200 pt, naming the page and size", %{root: root, worktree: worktree} do
       trigger = Path.join(root, "crash-trigger")
       listing = Path.join(root, "crash-reports")

@@ -24,12 +24,13 @@ defmodule SymphonyElixir.QaAgent.Steps do
     before the pass started: the steps a named test proves;
   - `symphony:qa_build`: `qa_build`, the app Symphony built for the commit; a build that failed
     fails the step;
-  - `symphony:qa_launch`: `qa_launch_app` on the default fixtures, then `qa_check_app` once the app
-    had a moment to start; an app that is not healthy fails the step, and the agent steps between it
+  - `symphony:qa_launch`: `qa_launch_app` on the default fixtures, in the QA target's appearance,
+    and `qa_resize_window` to its window size, then `qa_check_app` once the app had a moment to
+    start; an app that is not healthy fails the step, and the agent steps between it
     and the quit step are skipped. It always runs: a pass with nothing on screen to judge rests on
     the app building, starting and checking healthy (`QaDriver.app_check/1`). When the plan answered
     `needs_app: false` and no walkthrough step is walked, the agent steps between the launch and the
-    quit (the design check and the wide pass) are skipped, saying the plan found nothing on screen to
+    quit (the design check) are skipped, saying the plan found nothing on screen to
     judge, and the review's `pass` is a pass with `scope: none`, which `SymphonyElixir.QaVerification`
     accepts on the app check;
   - `symphony:qa_quit`: `qa_quit_app` for every app the pass launched;
@@ -67,7 +68,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
   - the `repeat: walkthrough` step, whose prompt and model the rechecks take.
 
   The mechanical rules stay `SymphonyElixir.QaAgent`'s and `SymphonyElixir.QaVerification`'s: the
-  wide pass audit, the QA host and tunnel checks, each turn's timeout, the per-issue token limit
+  QA target audit, the QA host and tunnel checks, each turn's timeout, the per-issue token limit
   (counted across every turn of the pass), and the cleanup of the worktree and its processes.
   """
 
@@ -349,13 +350,15 @@ defmodule SymphonyElixir.QaAgent.Steps do
     end
   end
 
-  # The app the walk's steps drive, on the default fixtures, checked once it had a moment to start.
+  # The app the walk's steps drive, on the default fixtures, in the QA target's appearance (the
+  # driver's default) and sized to its window, checked once it had a moment to start.
   defp launch(state) do
     with {:ok, %{"pid" => pid} = launched} <- tool(state, "qa_launch_app", %{}),
          :ok <- Process.sleep(Keyword.get(state.opts, :qa_launch_settle_ms, @launch_settle_ms)),
+         {:ok, resized} <- tool(state, "qa_resize_window", %{"pid" => pid}),
          {:ok, health} <- tool(state, "qa_check_app", %{"pid" => pid, "page" => "launch"}) do
       Process.put(@app_key, Map.take(launched, ["pid", "root", "environment"]))
-      output = "Launched: #{Jason.encode!(launched)}\nqa_check_app: #{Jason.encode!(health)}\n"
+      output = "Launched: #{Jason.encode!(launched)}\nqa_resize_window: #{Jason.encode!(resized)}\nqa_check_app: #{Jason.encode!(health)}\n"
       {:ok, {output, if(health["healthy"] == true, do: 0, else: 1)}}
     else
       {:error, error} -> {:ok, {tool_error(error), 1}}
@@ -901,7 +904,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
 
   defp context_for(state, %Step{id: @plan}) do
     [
-      QaAgent.prompt_parts(state.job, parent(state), [:issue, :design, :servers, :unprovable]),
+      QaAgent.prompt_parts(state.job, parent(state), [:issue, :design, :servers, :qa_mode, :unprovable]),
       plan_facts(state),
       command_line_plan(state),
       screen_rules(state)
@@ -992,7 +995,9 @@ defmodule SymphonyElixir.QaAgent.Steps do
   end
 
   defp app_line(%{launch: {:launched, %{"pid" => pid} = app}}),
-    do: "The app: Symphony launched it as PID #{pid} (QA root #{Map.get(app, "root", 1)}), on the default fixtures."
+    do:
+      "The app: Symphony launched it as PID #{pid} (QA root #{Map.get(app, "root", 1)}), on the default fixtures, at the QA target: " <>
+        "its appearance, with its window sized to the target."
 
   defp app_line(_state), do: "The app: Symphony has not launched it for this step; launch it with `qa_launch_app` when the step needs it."
 

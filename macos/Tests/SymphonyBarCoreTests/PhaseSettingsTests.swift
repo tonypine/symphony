@@ -774,7 +774,7 @@ final class PhaseSettingsTests: XCTestCase {
         let steps = PhaseDefaults.qaSteps(for: .macosApp)
         XCTAssertEqual(
             steps.map(\.stepID),
-            ["pre_checks", "build", "plan", "launch", "walk", "design_check", "wide_pass", "quit", "attach", "review"]
+            ["pre_checks", "build", "plan", "launch", "walk", "design_check", "quit", "attach", "review"]
         )
         XCTAssertEqual(steps.filter { $0.mode == .machine }.map { $0.commands.map(\.run) }, PhaseDefaults.qaCommands.map { [$0] })
         XCTAssertEqual(steps[1], PhaseStep(

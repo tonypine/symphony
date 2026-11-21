@@ -59,6 +59,20 @@ defmodule SymphonyElixir.Config.Migration do
       move_to: "execution.providers.anthropic.reserve",
       ticket: "TP-1535",
       release: "0.0.1.998"
+    }),
+    Map.merge(@rename_defaults, %{
+      key: "auto_review.playbooks.macos_app.wide_pass_width",
+      to: nil,
+      ticket: "TP-1595",
+      release: "0.0.1.1061",
+      why: "QA checks the app at its target window (window_width and window_height), with no separate wide pass"
+    }),
+    Map.merge(@rename_defaults, %{
+      key: "auto_review.playbooks.macos_app.wide_pass_height",
+      to: nil,
+      ticket: "TP-1595",
+      release: "0.0.1.1061",
+      why: "QA checks the app at its target window (window_width and window_height), with no separate wide pass"
     })
   ]
 

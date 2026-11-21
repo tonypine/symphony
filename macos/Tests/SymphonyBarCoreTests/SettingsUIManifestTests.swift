@@ -145,8 +145,7 @@ final class SettingsUIManifestTests: XCTestCase {
             launchEnv: [LaunchVariable(name: "HUB_OWNER_TOKEN", value: "abc")],
             windowWidth: 1440,
             windowHeight: 900,
-            widePassWidth: 3008,
-            widePassHeight: 1692
+            appearance: "light"
         )
         yaml = try record("setting the macOS app QA dev server", {
             try MacAppQAPlaybook.updating($0, from: MacAppQAPlaybook(), to: macAppQA)

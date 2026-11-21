@@ -633,7 +633,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
             "type" => "string",
             "enum" => ~w(light dark),
             "description" =>
-              "Launch the app light or dark whatever the host's appearance, which QA never changes: any AppKit app, through a library Symphony injects that sets the app's appearance and prints `symphony-qa-appearance: <light|dark>` to its output, and Symphony's own app also through SYMPHONY_BAR_QA_APPEARANCE. Omit it to follow the host. For both, launch once per appearance."
+              "Launch the app light or dark whatever the host's appearance, which QA never changes: any AppKit app, through a library Symphony injects that sets the app's appearance and prints `symphony-qa-appearance: <light|dark>` to its output, and Symphony's own app also through SYMPHONY_BAR_QA_APPEARANCE. Omit it for the playbook's QA target appearance (dark by default). Launch light only when the ticket is about light mode."
           },
           "environment" => %{
             "type" => "string",
@@ -693,7 +693,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "Symphony.app only: the Component Gallery in the bundle the last qa_build produced, which draws the app's shared components and screens from made-up inputs. " <>
           "Without arguments it lists the entries (id, title, kind, variations, the files each shows), the named widths, and `affected`: the entries this PR's changed files are a reason to look at " <>
           "(`all: true` means every entry). Call it first when the PR changes shared views. " <>
-          "With entry it draws that entry without opening a window and saves the pictures in qa-evidence/ under the gallery's own file names, light and dark: " <>
+          "With entry it draws that entry without opening a window and saves the pictures in qa-evidence/ under the gallery's own file names, in the QA target's appearance and, for a screen, its window's width: " <>
           "use it for a step that judges how a component or a screen looks. A component is drawn whole; a screen needs variation. To press, hover or type in an entry, use qa_gallery_open.",
       "inputSchema" => %{
         "type" => "object",
@@ -706,7 +706,13 @@ defmodule SymphonyElixir.Codex.DynamicTool do
           },
           "width" => %{
             "type" => "string",
-            "description" => "The window width a screen is drawn for: laptop (1440 points), desktop (2560) or a number of points, e.g. 1100. Omit it for both laptop and desktop."
+            "description" =>
+              "The window width a screen is drawn for: laptop (1440 points), desktop (2560) or a number of points, e.g. 1100. Omit it for the QA target window's width; name another only when the ticket is about that size."
+          },
+          "appearance" => %{
+            "type" => "string",
+            "enum" => ~w(light dark),
+            "description" => "Draw it light or dark. Omit it for the QA target appearance (dark by default); name light only when the ticket is about light mode."
           }
         }
       }
@@ -728,7 +734,11 @@ defmodule SymphonyElixir.Codex.DynamicTool do
             "type" => "string",
             "description" => "For a screen: draw it as a window this wide draws it: laptop (1440 points), desktop (2560) or a number of points. As wide as the stage when omitted."
           },
-          "appearance" => %{"type" => "string", "enum" => ~w(light dark), "description" => "Draw the gallery light or dark whatever the host's appearance. Omit it to follow the host."}
+          "appearance" => %{
+            "type" => "string",
+            "enum" => ~w(light dark),
+            "description" => "Draw the gallery light or dark whatever the host's appearance. Omit it for the QA target appearance (dark by default)."
+          }
         }
       }
     },
@@ -901,7 +911,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "qa_resize_window",
       "description" =>
-        "Size the launched app's main window (or the AXWindow at `path`): move it to the top left of the screen and resize it to width x height points, or the screen's usable area when that is smaller. `pass: \"walkthrough\"` sets the size the walkthrough, its screenshots and the design check run at (the playbook's walkthrough size, 1366 x 768 by default). `pass: \"wide\"` (the default) runs the wide pass: the window fills a screen of the playbook's wide pass size (2560 x 1440 by default) and never asks for less. Returns the window frame it reached, the screen and its usable area, and for the wide pass `limited` when the screen is under the wide pass size.",
+        "Size the launched app's main window (or the AXWindow at `path`): move it to the top left of the screen and resize it to width x height points, or the screen's usable area when that is smaller. Without a size it sets the QA target window (the playbook's window_width x window_height, 2560 x 1440 by default), where the walkthrough, its screenshots and the design check run. Name a width and height only when the ticket is about another size. Returns the window frame it reached, the screen and its usable area, `target` (whether it was the target size) and, for the target, `limited` when the screen is under the target size.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -909,23 +919,17 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "properties" => %{
           "pid" => @pid_property,
           "path" => %{"type" => "string", "description" => "The AXWindow's element path from qa_ax_tree, like `0`. Defaults to the app's main window."},
-          "pass" => %{
-            "type" => "string",
-            "enum" => ["walkthrough", "wide"],
-            "default" => "wide",
-            "description" => "`walkthrough` for the size every step runs at, `wide` for the wide pass."
-          },
           "width" => %{
             "type" => "integer",
             "minimum" => 320,
             "maximum" => 8192,
-            "description" => "Points. Defaults to the pass's width; the wide pass takes no less than its own."
+            "description" => "Points. Defaults to the QA target's width."
           },
           "height" => %{
             "type" => "integer",
             "minimum" => 320,
             "maximum" => 8192,
-            "description" => "Points. Defaults to the pass's height; the wide pass takes no less than its own."
+            "description" => "Points. Defaults to the QA target's height."
           }
         }
       }
@@ -1242,7 +1246,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_build_release_pair" => [],
     "qa_relaunched_app" => ["wait_seconds"],
     "qa_update_feed" => ["mode"],
-    "qa_gallery" => ["entry", "variation", "width"],
+    "qa_gallery" => ["entry", "variation", "width", "appearance"],
     "qa_gallery_open" => ["entry", "variation", "width", "appearance"],
     "qa_quit_app" => ["pid"],
     "qa_screenshot" => ["pid", "name", "window_id"],
@@ -1255,7 +1259,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_context_menu" => ["pid", "path", "x", "y"],
     "qa_scroll" => ["pid", "path", "x", "y", "edge", "dx", "dy", "unit"],
     "qa_key" => ["pid", "key", "modifiers"],
-    "qa_resize_window" => ["pid", "path", "pass", "width", "height"],
+    "qa_resize_window" => ["pid", "path", "width", "height"],
     "qa_check_app" => ["pid", "page"],
     "qa_sample" => ["pid", "page", "seconds", "name"],
     "qa_open_status_menu" => ["pid"],

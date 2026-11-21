@@ -2568,6 +2568,7 @@ defmodule SymphonyElixir.Config.Schema do
 
       @primary_key false
       @kind_format ~r/^[a-z][a-z0-9_]*$/
+      @retired_qa_steps %{{"macos_app", "wide_pass"} => "TP-1595"}
 
       embedded_schema do
         embeds_many(:steps, Step, on_replace: :delete)
@@ -2601,7 +2602,7 @@ defmodule SymphonyElixir.Config.Schema do
             add_error(changeset, :playbooks, "#{path}.steps must be a list of steps, each an object")
 
           true ->
-            entry = Map.update!(entry, "steps", fn steps -> Enum.map(steps, &own_prompt(&1, kind)) end)
+            entry = Map.update!(entry, "steps", fn steps -> steps |> Enum.reject(&retired_step?(&1, kind)) |> Enum.map(&own_prompt(&1, kind)) end)
             playbook = Phase.changeset(%Phase{}, entry, :qa_playbook)
 
             if playbook.valid?,
@@ -2609,6 +2610,11 @@ defmodule SymphonyElixir.Config.Schema do
               else: Enum.reduce(errors(playbook, path), changeset, &add_error(&2, :playbooks, &1))
         end
       end
+
+      # A step Symphony retired, which a list written before then still names without a prompt of its
+      # own, is dropped: the `macos_app` wide pass, whose checks the walk runs at the QA target (TP-1595).
+      defp retired_step?(%{"id" => id} = step, kind) when is_map_key(@retired_qa_steps, {kind, id}), do: is_nil(Map.get(step, "prompt"))
+      defp retired_step?(_step, _kind), do: false
 
       # An orchestrated step that names no prompt takes Symphony's own for its id, when there is one.
       defp own_prompt(%{"mode" => "orchestrated", "id" => id} = step, kind) when is_binary(id) do
@@ -2774,7 +2780,7 @@ defmodule SymphonyElixir.Config.Schema do
     `symphony.yml` doesn't set `phases.qa.playbooks.<kind>`. Only `macos_app` has one: the
     pre-checks, the build (before the plan, since the gallery's listing reads the built app), a plan
     in the lead session on the run's model, the launch, one fresh turn on the small model for each
-    walkthrough step QA walks, the design check and the wide pass, quitting the app and keeping the
+    walkthrough step QA walks and the design check, quitting the app and keeping the
     evidence, and the review in the lead session, which gives the verdict. Its orchestrated steps'
     prompts are `priv/qa_steps/macos_app/<id>.md` (`SymphonyElixir.QaAgent.StepPrompts`). Every
     other playbook has none: its pass is one agent session.
@@ -2811,7 +2817,6 @@ defmodule SymphonyElixir.Config.Schema do
           "answer" => judged
         },
         %{"id" => "design_check", "title" => "Design check", "mode" => "orchestrated", "session" => "fresh", "model" => "small", "prompt" => prompt.("design_check"), "answer" => judged},
-        %{"id" => "wide_pass", "title" => "Wide pass", "mode" => "orchestrated", "session" => "fresh", "model" => "small", "prompt" => prompt.("wide_pass"), "answer" => judged},
         %{"id" => "quit", "title" => "Quit the app", "mode" => "machine", "command" => "symphony:qa_quit", "timeout_ms" => 60_000},
         %{"id" => "attach", "title" => "Attach the evidence", "mode" => "machine", "command" => "symphony:qa_attach", "timeout_ms" => 60_000},
         %{"id" => "review", "title" => "Review and verdict", "mode" => "orchestrated", "session" => "lead", "effort" => "high", "prompt" => prompt.("review")}
