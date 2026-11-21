@@ -676,11 +676,47 @@ func ownerPID(_ window: [String: Any]) -> pid_t? { (window[kCGWindowOwnerPID as 
 // The process that would take a click at the point, as the accessibility hit
 // test sees it: the window server skips a window that lets clicks through.
 func processUnder(_ point: CGPoint) -> pid_t? {
-    var hit: AXUIElement?
-    guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit) == .success,
-          let hit else { return nil }
+    guard let hit = systemHit(point) else { return nil }
     var owner: pid_t = 0
     return AXUIElementGetPid(hit, &owner) == .success ? owner : nil
+}
+
+func systemHit(_ point: CGPoint) -> AXUIElement? {
+    var hit: AXUIElement?
+    guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &hit) == .success else { return nil }
+    return hit
+}
+
+// What a `covered` refusal saw at the point, so its reader can tell which window
+// took the click: the element the hit test found, with its window, and every
+// on-screen window there, front-most first, transparent ones included.
+func coverEvidence(at point: CGPoint) -> [String: Any] {
+    var seen: [String: Any] = ["point": ["x": Int(point.x), "y": Int(point.y)]]
+    if let hit = systemHit(point) {
+        var node = describe(hit, path: "")
+        node.removeValue(forKey: "path")
+        if let window = element(attribute(hit, kAXWindowAttribute as String)) {
+            var top = describe(window, path: "")
+            top.removeValue(forKey: "path")
+            node["window"] = top
+        }
+        seen["hit"] = node
+    }
+
+    let list = (CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]]) ?? []
+    seen["windows"] = list.compactMap { info -> [String: Any]? in
+        guard let bounds = info[kCGWindowBounds as String] as? [String: Any],
+              let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary), rect.contains(point) else { return nil }
+        return [
+            "owner": info[kCGWindowOwnerName as String] as? String ?? "",
+            "pid": info[kCGWindowOwnerPID as String] as? Int ?? 0,
+            "title": info[kCGWindowName as String] as? String ?? "",
+            "layer": info[kCGWindowLayer as String] as? Int ?? 0,
+            "alpha": info[kCGWindowAlpha as String] as? Double ?? 1,
+            "frame": ["x": Int(rect.minX), "y": Int(rect.minY), "w": Int(rect.width), "h": Int(rect.height)]
+        ]
+    }
+    return seen
 }
 
 // What covers the app at the point, or nil when the click would reach it. The
@@ -755,7 +791,12 @@ func reach(_ app: AXUIElement, _ pid: pid_t, _ target: PointerTarget) -> Int {
         fail("not_on_screen", "\(capitalized(target.label)) is not on screen; scroll it into view or raise its window.")
     }
     if let blocker = coverer(at: target.point, pid: pid, windows: windows) {
-        fail("covered", "\(blocker) covers \(target.label); QA points and clicks only inside the app's own windows.")
+        emit(["error": [
+            "code": "covered",
+            "message": "\(blocker) covers \(target.label); QA points and clicks only inside the app's own windows.",
+            "seen": coverEvidence(at: target.point)
+        ]])
+        exit(1)
     }
 
     return number
