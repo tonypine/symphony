@@ -138,6 +138,9 @@ defmodule SymphonyElixir.PhaseSteps.FailedCheckTest do
     test "a check's name is the job's own, without a matrix's part, and the declared checks are CI's" do
       assert FailedCheck.normalize("coverage (2/4)") == "coverage"
       assert FailedCheck.normalize("checks / Mac Checks") == "mac checks"
+      # The Mac checks' jobs, one per runner and one on Linux (TP-1591), keep the check's commands.
+      for job <- ["checks / mac checks (app)", "checks / mac checks (tests)", "checks / mac checks (scripts)"],
+        do: assert(FailedCheck.normalize(job) == "mac checks")
       assert %{why: why} = FailedCheck.ci_only("dialyzer")
       assert why =~ "takes longer than a run's step allows"
       assert FailedCheck.ci_only("checks / mac checks", "Test update, restart and rollback")
