@@ -137,7 +137,7 @@ defmodule SymphonyElixir.ReleaseGateTest do
     end
 
     assert RunStore.get_github_updates({:release_gate_fix, "symphony"}) ==
-             %{identifier: "TP-1520", sha: @sha, step: "Test the update", number: 950, red: true}
+             %{identifier: "TP-1520", sha: @sha, step: "Test the update", number: 950, attempt: 1, red: true}
   end
 
   test "while that ticket is open, the next failure is added to it; once it is closed, a new one is filed", %{opts: opts} do
