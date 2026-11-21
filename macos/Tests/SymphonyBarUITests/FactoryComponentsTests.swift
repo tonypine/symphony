@@ -228,6 +228,17 @@ final class FactoryComponentsTests: XCTestCase {
         XCTAssertEqual(SaveBar(changes: -1, onRevert: {}, onSave: {}).changes, 0)
     }
 
+    /// TP-1576: Save waits, with its reason, while a value keeps it from saving (a number out of range); Revert stays.
+    func testSaveWaitsWhileAReasonKeepsItFromSaving() {
+        let reason = "The stop timeout must be between 1 and 600 seconds."
+        let waits = SaveBar(changes: 2, saveDisabledReason: reason, onRevert: {}, onSave: {})
+        XCTAssertFalse(waits.canSave)
+        XCTAssertTrue(waits.showsRevert, "the changes can still be reverted")
+        XCTAssertTrue(SaveBar(changes: 2, saveDisabledReason: nil, onRevert: {}, onSave: {}).canSave)
+        let height = DesignTokens.Control.small.height + 2 * DesignTokens.SaveBar.verticalPadding
+        XCTAssertEqual(fittingSize(waits.frame(width: 900)).height, height, accuracy: 0.5)
+    }
+
     func testTheBarIsASmallControlTallInEveryState() {
         let height = DesignTokens.Control.small.height + 2 * DesignTokens.SaveBar.verticalPadding
         let states: [(Int, SaveBarState)] = [(0, .editing), (2, .editing), (2, .saving), (0, .saved), (2, .refused("runs.qa resolves no model"))]

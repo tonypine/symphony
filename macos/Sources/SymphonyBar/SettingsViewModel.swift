@@ -190,6 +190,42 @@ final class SettingsViewModel: ObservableObject {
             .eraseToAnyPublisher()
     }
 
+    /// The values Save stores, one per setting: the ones `edits` watches, the secrets apart. The Save bar counts the
+    /// settings that differ from `readValues` (TP-1576), so three edits in one group are three changes and an edit put
+    /// back by hand is none.
+    private var formValues: FormValues {
+        let fields: [(String, Any)] = [
+            ("settings", settings), ("launchAtLogin", launchAtLogin),
+            ("maxConcurrentAgents", maxConcurrentAgents), ("dailyTokenLimit", dailyTokenLimit),
+            ("issueTokenLimit", issueTokenLimit), ("ticketPriorities", ticketPriorities), ("qaHostToolsText", qaHostToolsText),
+            ("workflowStates", workflowStates), ("ticketPatternsBuiltIn", ticketPatternsBuiltIn), ("riskRules", riskRules),
+            ("phases", phases), ("gitNetworkTimeoutMinutes", gitNetworkTimeoutMinutes),
+            ("mcpToolTimeoutMinutes", mcpToolTimeoutMinutes), ("pendingToolReportMinutes", pendingToolReportMinutes),
+            ("signInAskAfterMinutes", signInAskAfterMinutes), ("safetyNetCheckMinutes", safetyNetCheckMinutes),
+            ("silenceAlertMinutes", silenceAlertMinutes), ("dispatchLoopRuns", dispatchLoopRuns),
+            ("dispatchLoopWindowMinutes", dispatchLoopWindowMinutes), ("dispatchLoopLongRuns", dispatchLoopLongRuns),
+            ("dispatchLoopLongWindowMinutes", dispatchLoopLongWindowMinutes), ("dispatchSource", dispatchSource),
+            ("dispatchShadowWindow", dispatchShadowWindow), ("dispatchReconcileMinutes", dispatchReconcileMinutes),
+            ("linearWebhooksEnabled", linearWebhooksEnabled), ("linearWebhookSecretSource", linearWebhookSecretSource),
+            ("linearWebhookSecretName", linearWebhookSecretName), ("linearWebhookSecretLiteral", linearWebhookSecretLiteral),
+            ("artifactMaxMegabytes", artifactMaxMegabytes), ("promptBriefEnabled", promptBriefEnabled),
+            ("promptBriefMaxTokens", promptBriefMaxTokens), ("reportModel", reportModel), ("reportCadence", reportCadence),
+            ("reportTriggers", reportTriggers), ("conductor", conductor), ("macAppQA", macAppQA),
+        ]
+        return FormValues(fields + secretValues)
+    }
+
+    /// The secrets the form edits, which the secrets read fills after the form opened.
+    private var secretValues: [(String, Any)] {
+        [("linearAPIKey", linearAPIKey), ("extraRows", extraRows.map { [$0.name, $0.value] })]
+    }
+
+    /// The values as read: when the form opened, with the secrets as the read filled them.
+    private var readValues = FormValues([])
+
+    /// How many settings differ from the values read: the Save bar's count.
+    var changeCount: Int { readValues.changes(to: formValues) }
+
     /// The value read from symphony.yml, or nil when it couldn't be read. The file is written only when the
     /// stepper moved away from it, so an untouched form never edits symphony.yml.
     private var loadedMaxConcurrentAgents: Int?
@@ -311,6 +347,7 @@ final class SettingsViewModel: ObservableObject {
         loadReportSettings()
         loadConductor()
         loadMacAppQA()
+        readValues = formValues
         // Off the main thread, so a Keychain prompt can't freeze the app while Settings opens.
         self.secrets.read { [weak self] result in self?.showSecrets(result) }
     }
@@ -327,6 +364,7 @@ final class SettingsViewModel: ObservableObject {
             extraRows = secrets.extraEnvironment.map { EnvironmentRow(name: $0.name, value: $0.value) }
             storedNames = Self.storedNames(secrets)
             loadedSecrets = secrets.trimmed()
+            readValues.take(FormValues(secretValues))
         case .failure(let error):
             secretsError = "Could not read the secrets: \(error)"
         }
@@ -678,6 +716,17 @@ final class SettingsViewModel: ObservableObject {
     /// or are being checked.
     var canSave: Bool {
         !isSaving && !isLoadingSecrets && formTokenLimits != nil && tokenLimitsError == nil && !isCheckingTokenLimits
+    }
+
+    /// Why Save can't save yet, while it isn't saving: the secrets still being read, or token limits that aren't valid
+    /// or are being checked. Nil when `canSave`, or while Save runs.
+    var saveBlockedReason: String? {
+        if isSaving { return nil }
+        if isLoadingSecrets { return StatusMenu.keychainWaitingLine }
+        if isCheckingTokenLimits { return "Checking the token limits with symphony check…" }
+        if formTokenLimits == nil { return "A token limit isn't a whole number; see \(SettingsBlock.agents.pointer)." }
+        if tokenLimitsError != nil { return "symphony check rejected these token limits; the reason shows above Save." }
+        return nil
     }
 
     /// The secrets as entered in the form, with the GitHub webhook secret as loaded: the form never shows or edits it.

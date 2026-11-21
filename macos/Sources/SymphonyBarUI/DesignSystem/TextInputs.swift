@@ -90,10 +90,14 @@ private struct Shake: ViewModifier {
 
 /// What sits under a field: the reason it is off (the inline refusal), the error in the problem colour, which rises in,
 /// or the help in the secondary colour.
-struct FieldFootnote: View {
+public struct FieldFootnote: View {
     let footnote: DesignTokens.Field.Footnote
 
-    var body: some View {
+    public init(footnote: DesignTokens.Field.Footnote) {
+        self.footnote = footnote
+    }
+
+    public var body: some View {
         switch footnote {
         case let .reason(reason):
             Refusal(reason: reason)
@@ -296,6 +300,7 @@ public struct DirectorTextField: View {
     @State private var shakes = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.offscreenSnapshot) private var offscreenSnapshot
+    @Environment(\.settingsRowLabel) private var rowLabel
 
     public init(
         _ label: String?, text: Binding<String>, placeholder: String = "", help: String? = nil, error: String? = nil,
@@ -314,6 +319,11 @@ public struct DirectorTextField: View {
         self.mono = mono
         self.secure = secure
         self.onSubmit = onSubmit
+    }
+
+    /// What VoiceOver reads the field as: its label, else its `SettingsRow`'s (or `controlLabel`), else its placeholder.
+    nonisolated static func spokenLabel(_ label: String?, row: String?, placeholder: String) -> String {
+        label ?? row ?? placeholder
     }
 
     /// What a still field draws: the placeholder while empty, the text masked in the secure form.
@@ -368,7 +378,7 @@ public struct DirectorTextField: View {
                     .focused(focusBinding)
                     .disabled(disabled)
                     .onSubmit { onSubmit?() }
-                    .accessibilityLabel(label ?? placeholder)
+                    .accessibilityLabel(Self.spokenLabel(label, row: rowLabel, placeholder: placeholder))
                     .accessibilityHint(help ?? "")
             }
         }
