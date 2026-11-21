@@ -35,8 +35,11 @@ final class SettingsPage: ObservableObject {
     @Published private(set) var model: SettingsViewModel?
     /// The section the page shows.
     @Published var section: SettingsSection = .first
-    /// The last Save stored everything; Revert and the window's close clear it.
+    /// The last Save stored everything and nothing was edited since: shown as "Saved.". The next Save (and so a
+    /// refused one), an edit, Revert and the window's close clear it.
     @Published private(set) var saved = false
+    /// Clears `saved` on the shown form's next edit.
+    private var editsWatch: AnyCancellable?
 
     /// The page shows: the form is read once, and kept with its edits after that.
     func enter() {
@@ -55,6 +58,7 @@ final class SettingsPage: ObservableObject {
     /// window still reads fresh values.
     func save() {
         guard let model else { return }
+        saved = false
         model.save { [weak self, weak model] in
             guard let self, let model, self.model === model else { return }
             load()
@@ -66,6 +70,7 @@ final class SettingsPage: ObservableObject {
     /// opens on the first section.
     func leave() {
         model = nil
+        editsWatch = nil
         saved = false
         section = .first
     }
@@ -75,6 +80,9 @@ final class SettingsPage: ObservableObject {
         model.onSettingsSaved = { [weak self] settings in self?.onSettingsSaved(settings) }
         model.budget = budget
         model.updateBlocker = updateBlocker
+        editsWatch = model.edits.sink { [weak self] in
+            if self?.saved == true { self?.saved = false }
+        }
         self.model = model
     }
 }

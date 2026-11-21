@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import SymphonyBarCore
 
@@ -157,6 +158,38 @@ final class SettingsViewModel: ObservableObject {
     /// True while Save waits for `symphony check`.
     @Published private(set) var isSaving = false
 
+    /// True while the secrets read fills the form after it opened, so filling it is no edit.
+    private var isFillingSecrets = false
+
+    /// Fires on each change to a value Save stores, made after the form was read: an edit. Reading the form (its
+    /// values in `init` and the secrets read that follows) fires nothing, and neither do the Phases group's choice of
+    /// list, the budget or the notes. The Settings page clears its "Saved." on it (TP-1575).
+    var edits: AnyPublisher<Void, Never> {
+        func edit<Value>(_ publisher: Published<Value>.Publisher) -> AnyPublisher<Void, Never> {
+            publisher.dropFirst().map { _ in () }.eraseToAnyPublisher()
+        }
+        let values = [
+            edit($settings), edit($linearAPIKey), edit($extraRows), edit($launchAtLogin),
+            edit($maxConcurrentAgents), edit($dailyTokenLimit), edit($issueTokenLimit),
+            edit($ticketPriorities), edit($qaHostToolsText), edit($workflowStates), edit($ticketPatternsBuiltIn),
+            edit($riskRules), edit($phases),
+            edit($gitNetworkTimeoutMinutes), edit($mcpToolTimeoutMinutes), edit($pendingToolReportMinutes),
+            edit($signInAskAfterMinutes),
+            edit($safetyNetCheckMinutes), edit($silenceAlertMinutes),
+            edit($dispatchLoopRuns), edit($dispatchLoopWindowMinutes), edit($dispatchLoopLongRuns),
+            edit($dispatchLoopLongWindowMinutes),
+            edit($dispatchSource), edit($dispatchShadowWindow), edit($dispatchReconcileMinutes),
+            edit($linearWebhooksEnabled), edit($linearWebhookSecretSource), edit($linearWebhookSecretName),
+            edit($linearWebhookSecretLiteral),
+            edit($artifactMaxMegabytes), edit($promptBriefEnabled), edit($promptBriefMaxTokens),
+            edit($reportModel), edit($reportCadence), edit($reportTriggers),
+            edit($conductor), edit($macAppQA),
+        ]
+        return Publishers.MergeMany(values)
+            .filter { [weak self] in self?.isFillingSecrets == false }
+            .eraseToAnyPublisher()
+    }
+
     /// The value read from symphony.yml, or nil when it couldn't be read. The file is written only when the
     /// stepper moved away from it, so an untouched form never edits symphony.yml.
     private var loadedMaxConcurrentAgents: Int?
@@ -285,6 +318,8 @@ final class SettingsViewModel: ObservableObject {
     /// Fills the secret fields from the read. A failed read leaves `storedNames` empty, so Save can't delete
     /// anything stored.
     private func showSecrets(_ result: Result<SecretSettings, Error>) {
+        isFillingSecrets = true
+        defer { isFillingSecrets = false }
         isLoadingSecrets = false
         switch result {
         case .success(let secrets):
