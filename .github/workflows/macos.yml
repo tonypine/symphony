@@ -65,8 +65,8 @@ jobs:
     if: ${{ needs.changes.outputs.any == 'true' }}
     uses: ./.github/workflows/mac-checks.yml
     with:
-      ref: ${{ github.head_ref }}
-      # TP-1591 measurement only, reverted before review: build clean, as the release gate does.
+      # TP-1591 measurement only, reverted before review: build clean on main's folders, as the release gate does.
+      ref: main
       clean: true
       fail_fast: true
       build: ${{ needs.changes.outputs.build == 'true' }}
