@@ -1621,8 +1621,10 @@ defmodule SymphonyElixirWeb.Presenter do
 
   # The update the menu bar app has ready (`SymphonyElixir.UpdateWindow`): `waiting` while dispatch
   # goes on, `holding` once Symphony paused for it.
-  defp normalize_update_window(%{version: version, phase: phase} = window),
-    do: %{version: version, phase: phase, ready_at: iso8601(window.ready_at), holding_since: iso8601(window.holding_since)}
+  defp normalize_update_window(%{version: version, phase: phase} = window) do
+    holding_since = iso8601(window.holding_since)
+    %{version: version, phase: phase, ready_at: iso8601(window.ready_at), holding_since: holding_since}
+  end
 
   defp normalize_update_window(_none), do: nil
 

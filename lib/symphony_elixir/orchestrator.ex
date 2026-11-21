@@ -8536,13 +8536,16 @@ defmodule SymphonyElixir.Orchestrator do
 
   # The start of each active agent run; one between turns is not active (`GET /api/v1/drain`).
   defp active_run_starts(running, now) do
-    for {_issue_id, entry} <- running, not match?(%{step: %{waiting: waiting}} when waiting in [:slot, :pause, :answer], entry) do
+    for {_issue_id, entry} <- running, not between_turns?(entry) do
       case Map.get(entry, :started_at) do
         %DateTime{} = started_at -> started_at
         _unknown -> now
       end
     end
   end
+
+  defp between_turns?(%{step: %{waiting: waiting}}) when waiting in [:slot, :pause, :answer], do: true
+  defp between_turns?(_entry), do: false
 
   # The reason the app's own update pause gives (`Pauses.dispatch_reason/1` of `updating to v<version>`).
   defp update_reason(version), do: %{kind: :build, waits_on: %{version: version}, text: "updating to v" <> version}

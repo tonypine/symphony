@@ -36,6 +36,11 @@ defmodule SymphonyElixir.OrchestratorUpdateWindowTest do
   end
 
   # What Symphony does when a run ends or a ticket's pause changes: the update decides before any slot is refilled.
+  defp resume(state, reason), do: Orchestrator.handle_call({:resume_dispatch, reason}, {self(), make_ref()}, state)
+
+  defp between_turns_step,
+    do: %{id: "code", title: "Write the code", mode: "delegated", waiting: :slot, waiter: self(), started_at: at(-1)}
+
   defp run_ended(state, issue_id) do
     state = %{state | running: Map.delete(state.running, issue_id)}
     {:noreply, state} = Orchestrator.handle_info({:ticket_record, "default", issue_id, :changed, [:pause]}, state)
@@ -128,7 +133,7 @@ defmodule SymphonyElixir.OrchestratorUpdateWindowTest do
   test "a run between agent turns does not count: the update holds at once" do
     state =
       orchestrator_state()
-      |> run(issue("run-1", "TP-1", "In Progress"), at(-5), step: %{id: "code", title: "Write the code", mode: "delegated", waiting: :slot, waiter: self(), started_at: at(-1)})
+      |> run(issue("run-1", "TP-1", "In Progress"), at(-5), step: between_turns_step())
       |> clock(0)
 
     {{:ok, %{phase: :holding}}, _state} = ready(state, "0.0.1.1053")
@@ -223,7 +228,7 @@ defmodule SymphonyElixir.OrchestratorUpdateWindowTest do
 
   test "Resume of the update's own reason calls it off; the Director's Resume during a hold sends it back to waiting" do
     {_reply, state} = orchestrator_state() |> clock(0) |> ready("0.0.1.1053")
-    {:reply, {:ok, _pause}, state} = Orchestrator.handle_call({:resume_dispatch, {:build, "0.0.1.1053"}}, {self(), make_ref()}, state)
+    {:reply, {:ok, _pause}, state} = resume(state, {:build, "0.0.1.1053"})
     assert window(state) == nil
     assert update_reasons() == []
 
@@ -237,7 +242,7 @@ defmodule SymphonyElixir.OrchestratorUpdateWindowTest do
     assert %{phase: :waiting} = window(state)
 
     # Resume of another version's reason leaves the update ready.
-    {:reply, {:ok, _pause}, state} = Orchestrator.handle_call({:resume_dispatch, {:build, "0.0.1.1"}}, {self(), make_ref()}, state)
+    {:reply, {:ok, _pause}, state} = resume(state, {:build, "0.0.1.1"})
     assert %{version: "0.0.1.1053"} = window(state)
   end
 
