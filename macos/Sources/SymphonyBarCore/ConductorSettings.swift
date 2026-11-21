@@ -101,10 +101,11 @@ public struct ConductorSettings: Equatable {
     public var timeoutSeconds: Int { Int((Double(timeoutMs) / Double(Self.msPerSecond)).rounded()) }
 
     /// These settings with the field's time limit. When the field didn't change the limit keeps its exact value, so one
-    /// that isn't a whole number of seconds is never rewritten by an untouched field.
+    /// that isn't a whole number of seconds is never rewritten by an untouched field. Symphony refuses a limit that is
+    /// not above zero, so 0 or a negative number keeps the limit as it is.
     public func setting(timeoutSeconds seconds: Int) -> ConductorSettings {
         var settings = self
-        if seconds != timeoutSeconds { settings.timeoutMs = seconds * Self.msPerSecond }
+        if seconds > 0, seconds != timeoutSeconds { settings.timeoutMs = seconds * Self.msPerSecond }
         return settings
     }
 
@@ -141,7 +142,8 @@ public struct ConductorSettings: Equatable {
     }
 
     /// The same text with the settings that differ between `old` and `new` set to their `new` values. A missing key is
-    /// inserted at the top of `conductor:`, so they are written last to first and read in order.
+    /// inserted at the top of `conductor:`, so they are written last to first and read in order. `junctions` is always
+    /// written inline, so a block list under it is removed first.
     public static func updating(_ yaml: String, from old: ConductorSettings, to new: ConductorSettings) throws -> String {
         let (w, o) = (new.watch, old.watch)
         let changes: [(path: [String], changed: Bool, value: String)] = [
@@ -157,7 +159,7 @@ public struct ConductorSettings: Equatable {
             (junctionsPath, new.junctions != old.junctions, inline(new.junctions)),
             (enabledPath, new.enabled != old.enabled, new.enabled ? "true" : "false"),
         ]
-        var yaml = yaml
+        var yaml = new.junctions != old.junctions ? try droppingBlockList(in: yaml) : yaml
         for change in changes where change.changed {
             yaml = try blockSection { try ConfigSetting.setting(at: change.path, to: change.value, in: yaml) }
         }
@@ -205,6 +207,22 @@ public struct ConductorSettings: Equatable {
             range = try blockSection { try document.block(of: child) }
         }
         return []
+    }
+
+    /// The same text without the lines of a block list under `conductor.junctions`: from the key's line up to its last
+    /// nested line, so blank lines and comments after the list stay. Unchanged when the key holds a value or is missing.
+    private static func droppingBlockList(in yaml: String) throws -> String {
+        var document = Document(yaml)
+        var range = document.all
+        for name in junctionsPath.dropLast() {
+            guard let section = document.child(name, in: range) else { return yaml }
+            range = try blockSection { try document.block(of: section) }
+        }
+        guard let key = junctionsPath.last.flatMap({ document.child($0, in: range) }), ValueLine(key.rest).value.isEmpty,
+            let last = document.lastStructural(in: document.children(of: key))
+        else { return yaml }
+        document.lines.removeSubrange((key.index + 1)...last)
+        return document.text
     }
 
     private static func unquoted(_ value: String) -> String {

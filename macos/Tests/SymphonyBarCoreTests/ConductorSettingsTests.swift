@@ -127,6 +127,13 @@ final class ConductorSettingsTests: XCTestCase {
         XCTAssertEqual(ConductorSettings().timeoutSeconds, 180)
     }
 
+    func testATimeLimitOfZeroOrLessKeepsTheEarlierLimit() throws {
+        XCTAssertEqual(configSettings.setting(timeoutSeconds: 0), configSettings)
+        XCTAssertEqual(configSettings.setting(timeoutSeconds: -5), configSettings)
+        let typed = configSettings.setting(timeoutSeconds: 0).setting(timeoutSeconds: -5)
+        XCTAssertEqual(try ConductorSettings.updating(config, from: configSettings, to: typed), config)
+    }
+
     // MARK: The file
 
     func testReadsAndWritesTheFileOnceTheCheckPasses() async throws {
@@ -146,6 +153,64 @@ final class ConductorSettingsTests: XCTestCase {
         let passed = try await file.writeConductorSettings(on, from: configSettings) { _ in .passed }
         XCTAssertEqual(passed, .passed)
         XCTAssertEqual(try file.readConductorSettings(), on)
+    }
+
+    func testTurningAJunctionOffReplacesABlockListLeavingNoStrayLines() async throws {
+        let blockList = """
+            conductor:
+              enabled: true
+              junctions:
+                - after_coding
+                # the QA junctions
+                - after_qa_fail
+                - after_qa_blocked
+                - after_rework
+                - before_merge
+
+              # one turn's limit
+              timeout_ms: 120000
+            repositories:
+              - key: web
+
+            """
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("conductor-block-list-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("symphony.yml")
+        try blockList.write(to: url, atomically: true, encoding: .utf8)
+        let file = SymphonyConfigFile(path: url.path)
+
+        let before = try file.readConductorSettings()
+        XCTAssertEqual(before.junctions, Set(ConductorJunction.allCases))
+        let after = before.setting(.afterRework, on: false)
+        let passed = try await file.writeConductorSettings(after, from: before) { _ in .passed }
+        XCTAssertEqual(passed, .passed)
+
+        XCTAssertEqual(
+            try String(contentsOf: url, encoding: .utf8),
+            """
+            conductor:
+              enabled: true
+              junctions: [after_coding, after_qa_fail, after_qa_blocked, before_merge]
+
+              # one turn's limit
+              timeout_ms: 120000
+            repositories:
+              - key: web
+
+            """
+        )
+        XCTAssertEqual(try file.readConductorSettings().junctions, [.afterCoding, .afterQAFail, .afterQABlocked, .beforeMerge])
+        XCTAssertEqual(try file.readConductorSettings().timeoutMs, 120_000)
+    }
+
+    func testAJunctionsKeyWithNothingUnderItIsWrittenInPlace() throws {
+        let empty = "conductor:\n  junctions:\ntracker: linear\n"
+        let defaults = try ConductorSettings.values(in: empty)
+        XCTAssertEqual(
+            try ConductorSettings.updating(empty, from: defaults, to: defaults.setting(.beforeMerge, on: false)),
+            "conductor:\n  junctions: [after_coding, after_qa_fail, after_qa_blocked, after_rework]\ntracker: linear\n"
+        )
     }
 
     private func changedLines(_ before: String, _ after: String) -> [String] {
