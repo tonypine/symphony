@@ -126,7 +126,7 @@ let galleryEntries: [GalleryEntry] = [
             "SymphonyBarUI/DesignSystem/TextInputs.swift", "SymphonyBarCore/UpdateMode.swift",
         ]),
     GalleryEntry(
-        id: "settings-row", title: "Settings row and group", kind: .component, prefixes: ["settings-row-", "settings-group-"],
+        id: "settings-row", title: "Settings row and group", kind: .component, prefixes: ["settings-row-", "settings-group-", "settings-line-"],
         files: ["SymphonyBarUI/DesignSystem/SettingsRow.swift"]),
     GalleryEntry(
         id: "section-list", title: "Section list", kind: .component, prefixes: ["section-list-"],

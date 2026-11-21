@@ -123,6 +123,48 @@ final class SettingsControlsTokensTests: XCTestCase {
         XCTAssertNil(Number.parse("12a99999999999999999999", in: 1...60))
     }
 
+    /// TP-1576: a page that says why a typed value is out of range widens what typed text may set; the stepper keeps to
+    /// the range.
+    func testAFieldThatAcceptsMoreReadsTypedTextIntoTheWiderRange() {
+        XCTAssertEqual(Number.typedRange(1...600, accepts: nil), 1...600)
+        XCTAssertEqual(Number.typedRange(1...600, accepts: Int.min...Int.max), Int.min...Int.max)
+        XCTAssertEqual(Number.typedRange(1...600, accepts: 100...200), 1...600, "it always holds the range")
+        XCTAssertEqual(Number.typedRange(10...600, accepts: 0...20), 0...600)
+        XCTAssertEqual(Number.parse("900", in: Number.typedRange(1...600, accepts: Int.min...Int.max)), 900)
+        XCTAssertEqual(Number.step(900, by: -1, in: 1...600), 599, "the stepper steps back inside the range")
+    }
+
+    /// TP-1576: a value longer than the field's least room widens it by a digit's advance per character, so 50000
+    /// tokens (the summary size limit) shows whole; a short value keeps the least room, and the room stops growing
+    /// at a whole number's longest text.
+    func testTheNumberFieldWidensForALongValue() {
+        let padding = DesignTokens.Control.medium.padding * DesignTokens.Field.paddingScale
+        let fontSize = DesignTokens.Control.medium.fontSize
+        XCTAssertEqual(Number.width(for: "10", fontSize: fontSize, padding: padding), Number.width)
+        let five = Number.width(for: "50000", fontSize: fontSize, padding: padding)
+        XCTAssertGreaterThanOrEqual(five, 2 * padding + 5 * fontSize * Number.digitAdvance + Number.cursorRoom)
+        XCTAssertGreaterThan(five, Number.width, "five digits do not fit the least room")
+        XCTAssertGreaterThan(Number.width(for: "123456789", fontSize: fontSize, padding: padding), five)
+        let longest = Number.width(for: "\(Int.min)", fontSize: fontSize, padding: padding)
+        XCTAssertEqual(Number.width(for: String(repeating: "9", count: 40), fontSize: fontSize, padding: padding), longest)
+        XCTAssertEqual("\(Int.min)".count, Number.maxCharacters)
+    }
+
+    func testTheNumberFieldDrawsAndMeasuresTheSamePlainDigits() {
+        let padding = DesignTokens.Control.medium.padding * DesignTokens.Field.paddingScale
+        let fontSize = DesignTokens.Control.medium.fontSize
+        for value in [50000, 65535, 1_000_000, -12345] {
+            let drawn = Number.digits(value)
+            XCTAssertEqual(drawn, String(value))
+            XCTAssertFalse(drawn.contains { ",. \u{00A0}\u{202F}'".contains($0) }, "\(drawn) has a grouping separator")
+            XCTAssertEqual(drawn.filter(\.isNumber).count, String(value.magnitude).count)
+            XCTAssertGreaterThanOrEqual(
+                Number.width(for: drawn, fontSize: fontSize, padding: padding),
+                2 * padding + Double(drawn.count) * fontSize * Number.digitAdvance + Number.cursorRoom)
+        }
+        XCTAssertEqual(Number.digits(50000), "50000")
+    }
+
     func testTheNumberFieldSaysItsValueAndRange() {
         XCTAssertEqual(Number.spoken(30, unit: "minutes"), "30 minutes")
         XCTAssertEqual(Number.spoken(30, unit: nil), "30")
@@ -239,10 +281,14 @@ final class SettingsControlsTokensTests: XCTestCase {
         let variations = CatalogCounterparts.variations(try CatalogCounterpartsTests.read("macos/Gallery/component-variations.txt"))
         let expected: [String: [String]] = [
             "toggle": ["on", "off", "hover", "pressed", "focused", "disabled-with-reason"],
-            "number-field": ["rest", "hover", "focused", "disabled-with-reason", "error", "at-its-minimum", "at-its-maximum"],
+            "number-field": [
+                "rest", "hover", "focused", "disabled-with-reason", "error", "at-its-minimum", "at-its-maximum", "typed-out-of-range",
+                "long-value",
+            ],
             "time-field": ["rest", "hover", "focused", "disabled-with-reason", "error"],
             "settings-row": ["with-help", "error", "disabled-with-reason", "label-alone"],
             "settings-group": ["updates", "with-an-error"],
+            "settings-line": ["text", "error", "with-fields"],
             "section-list": ["rest", "row-hover", "row-pressed", "row-focused", "window-not-focused"],
         ]
         for (component, stories) in expected {
@@ -250,5 +296,27 @@ final class SettingsControlsTokensTests: XCTestCase {
                 XCTAssertTrue(variations.contains("\(component)-\(story)"), "\(component)-\(story) is not in the gallery")
             }
         }
+    }
+
+    /// TP-1576: every design-system component the Settings page draws its sections, rows and Save bar with has its
+    /// stories in the Component Gallery, so the page is the Gallery's components used as their stories show them.
+    func testEveryComponentTheSettingsPageUsesHasItsStories() throws {
+        let variations = CatalogCounterparts.variations(try CatalogCounterpartsTests.read("macos/Gallery/component-variations.txt"))
+        let components = [
+            "section-list", "settings-group", "settings-row", "settings-line", "toggle", "number-field", "time-field", "pop-up",
+            "segmented-control", "text-field", "text-area", "button", "icon-button", "menu-button", "save-bar", "collapsible-card",
+        ]
+        for component in components {
+            XCTAssertTrue(variations.contains { $0.hasPrefix(component + "-") }, "\(component) has no story in the gallery")
+        }
+        XCTAssertTrue(variations.contains("save-bar-save-waits"), "the Save bar waiting on a value out of range")
+    }
+
+    func testTheSettingsPagesMeasures() {
+        let row = DesignTokens.SettingsRow.self
+        XCTAssertEqual(row.pageInset, DesignTokens.Space.s6)
+        XCTAssertGreaterThan(row.pageMaxWidth, row.toggleWidth)
+        XCTAssertLessThan(row.fieldWidth, row.pageMaxWidth / 2)
+        XCTAssertLessThan(row.previewMinHeight, row.previewMaxHeight)
     }
 }
