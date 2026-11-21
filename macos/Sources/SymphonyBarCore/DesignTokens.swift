@@ -2144,6 +2144,258 @@ public enum DesignTokens {
         }
     }
 
+    /// The catalog's Toggle (`.switch` in `components.css`, TP-1574): a 40 pt capsule track of the small control's
+    /// height with a white knob 2 pt inside it. Off, the track is sunk (the sunken surface with 8 % of the primary
+    /// text over it) behind a separator edge; on, it is the accent with a darker edge and the knob at the far end.
+    /// Hover strengthens the off edge and brightens the on track; pressed, the knob stretches toward where it will
+    /// go; disabled, the whole switch is at 45 %. The knob travels on the `slide` spring, the track's colour eases
+    /// on `standard`.
+    public enum Switch {
+        public static let width: Double = 40
+        public static let height = Control.small.height
+        /// The knob's room inside the track (`top: 2px; left: 2px`).
+        public static let knobInset: Double = 2
+        /// The knob's width while pressed (`.is-pressed::after { width: 25px }`).
+        public static let pressedKnobWidth: Double = 25
+        /// The primary text over the sunken surface of the off track (`color-mix(… var(--text-primary) 8%)`).
+        public static let offTrackTint: Double = 0.08
+        public static let edgeWidth = Control.edgeWidth
+        /// The disabled switch's opacity.
+        public static let disabledOpacity: Double = 0.45
+        public static let knob = ColorToken.textOnAccent
+        public static let knobElevation = Elevation.level1
+        public static let travel = Motion.Curve.slide
+        public static let trackChange = Motion.Curve.standard
+
+        /// The knob's diameter at rest: the track's height less its inset on both sides.
+        public static var knobSize: Double { height - 2 * knobInset }
+
+        /// The knob's width: stretched while pressed.
+        public static func knobWidth(pressed: Bool) -> Double { pressed ? pressedKnobWidth : knobSize }
+
+        /// How far the knob sits from its off place: at the far end while on, less its stretch while pressed so its
+        /// trailing edge stays put.
+        public static func knobOffset(on: Bool, pressed: Bool) -> Double {
+            on ? width - 2 * knobInset - knobWidth(pressed: pressed) : 0
+        }
+
+        /// The track's fill: the accent while on (its hover colour under the pointer), the sunken surface while off.
+        public static func track(on: Bool, hovered: Bool) -> ColorToken {
+            on ? (hovered ? .accentHover : .accent) : .surfaceSunken
+        }
+
+        /// The track's edge: the pressed accent while on; the separator while off, the strong stroke under the pointer.
+        public static func edge(on: Bool, hovered: Bool) -> ColorToken {
+            on ? .accentPressed : (hovered ? .strokeStrong : .strokeSeparator)
+        }
+
+        /// What VoiceOver reads as the switch's value.
+        public static func spoken(on: Bool) -> String { on ? "on" : "off" }
+    }
+
+    /// A setting's row and the group that holds them (the catalog's `.toggle-row`, TP-1574): the label in 13 pt at 500
+    /// over one line under it (the help, the error or the reason the setting is off, never two), and the control at
+    /// the trailing end, centred on them. A group is one content card of rows (the row radius, the first elevation)
+    /// with a hairline between two rows, under its title in small capitals and over its footer.
+    public enum SettingsRow {
+        public static let verticalPadding = Space.s3
+        public static let horizontalPadding = Space.s4
+        /// Between the words and the control (`gap: … var(--space-4)`).
+        public static let columnGap = Space.s4
+        /// Between the label and the line under it (`gap: 2px …`).
+        public static let lineGap: Double = 2
+        public static let labelSize: Double = 13
+        public static let labelWeight = 500
+        public static let radius = Radius.row
+        public static let elevation = Elevation.level1
+        public static let surface = Surface.content
+        /// The catalog's toggle row is 400 pt wide.
+        public static let toggleWidth: Double = 400
+        /// Between a group's title, its card and its footer.
+        public static let groupGap = Space.s2
+        /// Between two groups on a page.
+        public static let groupsGap = Space.s6
+        /// The group title's letter spacing, as a fraction of its size: the key-value list's group heading's.
+        public static let titleTracking = KeyValue.groupHeadingTracking
+
+        /// What shows under the label: the reason while the row is off, else the error, else the help; one at most.
+        public static func footnote(help: String?, error: String?, disabledReason: String?) -> Field.Footnote? {
+            Field.footnote(help: help, error: error, disabledReason: disabledReason)
+        }
+
+        /// The label's colour: tertiary while the row is off.
+        public static func label(disabled: Bool) -> ColorToken { disabled ? .textTertiary : .textPrimary }
+    }
+
+    /// A number field with its stepper (TP-1574): a whole number typed in a text field's surface, with the stepper's
+    /// two halves at its trailing end and the unit after it in secondary text. The value never leaves its range:
+    /// typed text is read as a whole number and brought inside it, text that is no number puts the value back, and a
+    /// half of the stepper that would leave the range is off.
+    public enum NumberField {
+        /// The number's room, before the stepper.
+        public static let width: Double = 56
+        /// The stepper's width inside the field's trailing end, and its glyphs.
+        public static let stepperWidth: Double = 16
+        public static let stepperGlyph: Double = 7
+        public static let upSymbol = "chevron.up"
+        public static let downSymbol = "chevron.down"
+        /// Between the field and its unit.
+        public static let unitGap = Space.s2
+
+        /// `value` inside `range`.
+        public static func clamp(_ value: Int, to range: ClosedRange<Int>) -> Int {
+            min(max(value, range.lowerBound), range.upperBound)
+        }
+
+        /// The value one step of `by` away, inside `range`.
+        public static func step(_ value: Int, by: Int, in range: ClosedRange<Int>) -> Int {
+            let (sum, overflow) = clamp(value, to: range).addingReportingOverflow(by)
+            if overflow { return by > 0 ? range.upperBound : range.lowerBound }
+            return clamp(sum, to: range)
+        }
+
+        /// Whether a step of `by` changes the value: false at the end of the range it moves toward.
+        public static func canStep(_ value: Int, by: Int, in range: ClosedRange<Int>) -> Bool {
+            step(value, by: by, in: range) != clamp(value, to: range)
+        }
+
+        /// The separators a typed number may group its digits with: "1,000", "1’000".
+        public static let groupingSeparators: Set<Character> = [",", "'", "\u{2019}", "_"]
+
+        /// Typed text as the value it sets: a whole number (spaces and grouping separators ignored) brought inside
+        /// `range`; nil when the text is no whole number, and the value stays as it was.
+        public static func parse(_ text: String, in range: ClosedRange<Int>) -> Int? {
+            let digits = text.filter { !$0.isWhitespace && !groupingSeparators.contains($0) }
+            guard !digits.isEmpty else { return nil }
+            if let value = Int(digits) { return clamp(value, to: range) }
+            // A number too long for an Int still says which end it is past.
+            let sign = digits.first == "-" ? -1 : 1
+            let rest = sign < 0 ? digits.dropFirst() : Substring(digits)
+            guard !rest.isEmpty, rest.allSatisfy { $0.isASCII && $0.isNumber } else { return nil }
+            return sign < 0 ? range.lowerBound : range.upperBound
+        }
+
+        /// What VoiceOver reads as the value: "30 minutes".
+        public static func spoken(_ value: Int, unit: String?) -> String {
+            guard let unit, !unit.isEmpty else { return "\(value)" }
+            return "\(value) \(unit)"
+        }
+
+        /// The field's help when it has none of its own: its range, "From 1 to 60".
+        public static func rangeHint(_ range: ClosedRange<Int>) -> String { "From \(range.lowerBound) to \(range.upperBound)" }
+    }
+
+    /// A time-of-day field (TP-1574): an hour and a minute on the 24-hour clock, each a part the keyboard steps or
+    /// types into, in a text field's surface with the number field's stepper. A step wraps around its part (23 to 0,
+    /// 59 to 0) and never carries into the other, as the Mac's own time fields do.
+    public enum TimeField {
+        /// The hour and minute's room, before the stepper.
+        public static let width: Double = 52
+        /// A focused part's tint and its corner.
+        public static let partTint = StateSurface.selected
+        public static let partRadius = Radius.mark
+        /// The room on each side of a part's digits.
+        public static let partPadding: Double = 2
+        public static let separator = ":"
+
+        public enum Part: String, CaseIterable, Equatable {
+            case hour, minute
+
+            /// The part's largest value.
+            public var maximum: Int { self == .hour ? 23 : 59 }
+            public var spoken: String { self == .hour ? "hour" : "minute" }
+        }
+
+        /// The part's value in `time`.
+        public static func value(_ time: TimeOfDay, _ part: Part) -> Int { part == .hour ? time.hour : time.minute }
+
+        /// The part's two digits: "03".
+        public static func digits(_ time: TimeOfDay, _ part: Part) -> String {
+            let value = value(time, part)
+            return value < 10 ? "0\(value)" : "\(value)"
+        }
+
+        /// `time` with `part` set to `value`, brought inside the part.
+        public static func setting(_ time: TimeOfDay, _ part: Part, to value: Int) -> TimeOfDay {
+            let value = min(max(value, 0), part.maximum)
+            return part == .hour ? TimeOfDay(hour: value, minute: time.minute) : TimeOfDay(hour: time.hour, minute: value)
+        }
+
+        /// `time` with `part` stepped by `by`, wrapping around the part without carrying into the other.
+        public static func step(_ time: TimeOfDay, _ part: Part, by: Int) -> TimeOfDay {
+            let count = part.maximum + 1
+            let next = ((value(time, part) + by) % count + count) % count
+            return setting(time, part, to: next)
+        }
+
+        /// A digit typed into a part: its new value, the digit kept while a second may follow, and whether the part
+        /// is done (the keyboard moves on to the next part).
+        public struct Typed: Equatable {
+            public var value: Int
+            public var pending: Int?
+            public var done: Bool
+
+            public init(value: Int, pending: Int?, done: Bool) {
+                self.value = value
+                self.pending = pending
+                self.done = done
+            }
+        }
+
+        /// `digit` typed into `part` after `pending`, the first digit typed into it, if any. A first digit that can
+        /// start no two-digit value of the part (3 for an hour, 6 for a minute) is the value alone; the second makes
+        /// the two-digit value, brought inside the part.
+        public static func type(_ digit: Int, into part: Part, after pending: Int?) -> Typed {
+            let digit = min(max(digit, 0), 9)
+            if let pending {
+                return Typed(value: min(pending * 10 + digit, part.maximum), pending: nil, done: true)
+            }
+            if digit * 10 > part.maximum { return Typed(value: digit, pending: nil, done: true) }
+            return Typed(value: digit, pending: digit, done: false)
+        }
+
+        /// The part the keyboard moves to: the other one, or none past either end.
+        public static func neighbour(of part: Part, forward: Bool) -> Part? {
+            switch (part, forward) {
+            case (.hour, true): .minute
+            case (.minute, false): .hour
+            default: nil
+            }
+        }
+    }
+
+    /// An in-page section list (TP-1574): a page's sections down its side, one current, drawn with the window
+    /// sidebar's rows (`Sidebar`'s row height, radius, fills and colours) without the window's chrome. A click on a
+    /// section makes it the current one; the arrow keys move the keyboard through them.
+    public enum SectionList {
+        public static let width: Double = 200
+        public static let rowGap = Sidebar.rowGap
+        public static let inset = Sidebar.inset
+        public static let label = "Sections"
+
+        /// The section shown as current: `current` when the list holds it, else the first.
+        public static func current<ID: Equatable>(_ ids: [ID], current: ID?) -> ID? {
+            if let current, ids.contains(current) { return current }
+            return ids.first
+        }
+
+        /// What a click on `clicked` makes current: the clicked section, or the current one when the list does not
+        /// hold it.
+        public static func picking<ID: Equatable>(_ clicked: ID, in ids: [ID], current: ID?) -> ID? {
+            ids.contains(clicked) ? clicked : Self.current(ids, current: current)
+        }
+
+        /// The section the keyboard moves to from `from` (or the current one): the one above or under, stopping at
+        /// the ends.
+        public static func moved<ID: Equatable>(_ ids: [ID], from: ID?, down: Bool) -> ID? {
+            guard let from, let index = ids.firstIndex(of: from) else { return ids.first }
+            return ids[down ? min(index + 1, ids.count - 1) : max(index - 1, 0)]
+        }
+
+        /// The list's value for VoiceOver: the current section.
+        public static func spoken(current: String?) -> String { current.map { "\($0), current" } ?? "" }
+    }
+
     /// The main window's layout (§3.5).
     public enum Layout {
         public static let windowWidth: Double = 1200

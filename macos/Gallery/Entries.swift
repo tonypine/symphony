@@ -114,6 +114,24 @@ let galleryEntries: [GalleryEntry] = [
         id: "sidebar", title: "Sidebar", kind: .component, prefixes: ["sidebar-"],
         files: ["SymphonyBarUI/DesignSystem/Sidebar.swift", "SymphonyBar/SymphonyWindowView.swift", "SymphonyBarCore/SymphonyWindow.swift"]),
     GalleryEntry(
+        id: "toggle", title: "Toggle", kind: .component, prefixes: ["toggle-"],
+        files: ["SymphonyBarUI/DesignSystem/Toggle.swift", "SymphonyBarUI/DesignSystem/SettingsRow.swift"]),
+    GalleryEntry(
+        id: "number-field", title: "Number field", kind: .component, prefixes: ["number-field-"],
+        files: ["SymphonyBarUI/DesignSystem/NumberField.swift", "SymphonyBarUI/DesignSystem/TextInputs.swift"]),
+    GalleryEntry(
+        id: "time-field", title: "Time field", kind: .component, prefixes: ["time-field-"],
+        files: [
+            "SymphonyBarUI/DesignSystem/TimeField.swift", "SymphonyBarUI/DesignSystem/NumberField.swift",
+            "SymphonyBarUI/DesignSystem/TextInputs.swift", "SymphonyBarCore/UpdateMode.swift",
+        ]),
+    GalleryEntry(
+        id: "settings-row", title: "Settings row and group", kind: .component, prefixes: ["settings-row-", "settings-group-"],
+        files: ["SymphonyBarUI/DesignSystem/SettingsRow.swift"]),
+    GalleryEntry(
+        id: "section-list", title: "Section list", kind: .component, prefixes: ["section-list-"],
+        files: ["SymphonyBarUI/DesignSystem/SectionList.swift", "SymphonyBarUI/DesignSystem/Sidebar.swift"]),
+    GalleryEntry(
         id: "status-line", title: "Status line", kind: .component, prefixes: ["status-line-"],
         files: [
             "SymphonyBarUI/DesignSystem/StatusLine.swift", "SymphonyBarUI/DesignSystem/WindowBar.swift", "SymphonyBar/HomeInboxView.swift",
