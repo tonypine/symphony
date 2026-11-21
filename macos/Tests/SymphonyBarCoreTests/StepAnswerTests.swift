@@ -77,6 +77,7 @@ final class StepAnswerTests: XCTestCase {
     }
 
     /// QA opens SHOP-410 from Work › Tickets: every list the app reads on the way is answered, and Tickets lists it.
+    @MainActor
     func testTheGroupedWalkFixtureReachesItsTicketFromTickets() throws {
         let api = TicketEventsTests.director("ticket-grouped-walk")
         func read(_ path: String) throws -> Data { try Data(contentsOf: api.appendingPathComponent(path + ".json")) }
