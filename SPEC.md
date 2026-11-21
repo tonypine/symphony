@@ -604,10 +604,7 @@ it touches (none or more of `screen`, `gallery`, `api`, `logic`, `config`, `test
 `docs`; a name outside them is dropped and never refuses the plan), a `summary` for a person, the plan's `text` for agents, its `checks`, each with an `id`
 that is its alone across versions (a new check gets an id no version used, and a check whose
 statement a version changed counts only the proofs and waivers recorded after that version), a `kind`, `outcome`, `qa` or `evidence`, a `statement` and its
-`proof`, `test`, `qa`, `design` or `attached`, and an optional `after_merge` marker on a check that
-can only be seen once the ticket's own pull request has merged, which no gate before the merge (the
-checks step, the handoff, QA, the question to waive it) waits on and a split ticket's final check
-reads; its `size` and, for a split, its `sub_tickets`; the
+`proof`, `test`, `qa`, `design` or `attached`, its `size` and, for a split, its `sub_tickets`; the
 newest one is the ticket's plan, and a ticket is groomed exactly when it holds one), `check.proved`
 (any run's, or the machine's: a check of the current plan proved by a test, QA, the design or
 something attached, recorded once per check and head and refused for an id the plan does not hold),
@@ -3073,7 +3070,9 @@ Important nuance:
   CI-caused one follows the exception above. In `CI Fix`, the first idle turn with checks pending
   on that head MUST end the run in a wait on CI (`{:ci_pending, info}`), which counts towards no
   dispatch loop, and while the watcher's decision waits on those checks or reruns one no CI Fix run
-  MAY start. Nor does it apply, outside `Rework`, to a run started by
+  MAY start. So MUST the first idle turn of a `CI Fix` run whose `HEAD` moved past the one it started
+  on only by merging the base branch in, with nothing left uncommitted, whatever GitHub lists on that
+  head yet: its head is pushed first, and the watcher reads the checks on it. Nor does it apply, outside `Rework`, to a run started by
   a CI failure once the PR head is the workspace `HEAD` and all its checks have passed: the red
   check was a flake, so green CI is that run's outcome. Such a run MUST end and move the issue back
   to `Merging` (with a comment saying why, and the CI-fix auto-merge hold dropped so auto-merge
@@ -3467,6 +3466,11 @@ the Needs Decision hold and the self-heal lane, GitHub calls through `AutoMerge`
   the next read. U2: a head red only because every run of a workflow was cancelled gets that run
   rerun once per cancellation, at most twice per head, with no attempt spent. Each upkeep applied
   or failed logs one `pr_watch.upkeep` line.
+- A head held because its check was red on the base branch too (R23) is marked on the attempts.
+  Once the base is green and the same head reads as a plain failure, R20a updates its branch from
+  the base (the same update-branch call, no agent run) instead of rerunning the check (R22) or
+  sending it to `CI Fix` (R21); the next rules read the new head, so only a head still red after the
+  update goes to `CI Fix`. A head GitHub can't update loses the mark and follows R22 and R21.
 - An action is applied at most once per head and rule in a stay in the phase (the phase a move of
   the watcher put the ticket in starts a new stay), so a repeated poll never repeats a move, a
   rerun, an update-branch or a fix-ticket filing. An action that fails is not recorded, and the

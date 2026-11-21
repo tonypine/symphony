@@ -355,33 +355,6 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       refute_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
     end
 
-    test "a check marked after the merge never refuses the handoff nor asks the person, however many coding runs" do
-      checks = [
-        %{id: "c1", kind: "outcome", statement: "The handoff waits.", proof: "test"},
-        %{id: "c2", kind: "outcome", statement: "The release run on main is green.", proof: "test", after_merge: true}
-      ]
-
-      plan = %{reason: "Grooming", by: "grooming", shape: "single", layers: ["engine"], summary: "s", text: "t", checks: checks}
-      {:ok, _plan} = SymphonyElixir.TicketPlan.write("default", "issue-progress", Map.put(plan, :size, %{tokens: 1, runs: 1}))
-      proof = %{check_id: "c1", by: "test", test: "test/handoff_test.exs"}
-      {:ok, _proved} = SymphonyElixir.TicketChecks.prove("default", "issue-progress", proof, actor: {:agent, "run-1", "rework"})
-      ticket = {:ticket, "default", "issue-progress"}
-
-      for run_id <- ["run-a", "run-b", "run-c"] do
-        started = %{run_id: run_id, run_kind: "rework"}
-        {:ok, _started} = SymphonyElixir.TicketEvents.record("default", "issue-progress", "run.started", started, run_id: run_id)
-        next_run()
-        assert :ok = SymphonyElixir.Handoff.emit("default", "issue-progress", %{head: "sha-rework", branch: "auto/TP-337"})
-
-        assert :ok = run_issue!("Rework", heads: ["sha-old", "sha-rework"], repos: designed_repos(), runner_opts: [run_id: run_id])
-        assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
-      end
-
-      assert SymphonyElixir.Questions.open(ticket) == []
-      assert SymphonyElixir.TicketEvents.query("issue-progress", types: ["note"]) == []
-      assert [%{id: "c2", state: :open}] = SymphonyElixir.TicketChecks.open("issue-progress")
-    end
-
     test "the explicit handoff signal moves the ticket to Code Review" do
       assert :ok = SymphonyElixir.Handoff.emit("default", "issue-progress", %{head: "sha-rework", branch: "auto/TP-337"})
 
@@ -1002,6 +975,81 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       refute_received {:memory_tracker_comment, "issue-progress", "Symphony parked this issue" <> _note}
       assert {:ok, nil} = Pauses.get({:ticket, "default", "issue-progress"})
       assert Questions.open({:ticket, "default", "issue-progress"}) == []
+    end
+  end
+
+  describe "a CI Fix run whose work was taking the base branch in (TP-1587)" do
+    test "ends in a wait on CI for its head after its first idle turn: no park, no question" do
+      test_pid = self()
+      :ok = put_pending_ci_failure(approved: false)
+      # GitHub lists no check on the merged head yet.
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-merged", checks: []}})
+
+      reader = fn _workspace, nil, start_head, base_ref ->
+        send(test_pid, {:base_read, start_head, base_ref}) && true
+      end
+
+      pusher = fn _workspace, nil, _source_repo -> send(test_pid, :pushed) && :nothing end
+
+      log =
+        capture_log(fn ->
+          assert {:ci_pending, %{sha: "sha-merged", run: "the CI Fix run", runs: [%{workflow_name: "CI on the head that took the base branch in", url: nil}]}} =
+                   catch_exit(
+                     run_issue!("CI Fix",
+                       heads: ["sha-start", "sha-merged"],
+                       max_turns: 5,
+                       repos: designed_repos(),
+                       runner_opts: [workspace_base_reader: reader, workspace_pusher: pusher]
+                     )
+                   )
+        end)
+
+      assert turns() == 2
+      assert_received {:base_read, "sha-start", "origin/main"}
+      assert_received :pushed
+      assert log =~ "its work took the base branch in, waiting for CI on its head sha-merged"
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+      refute_received {:memory_tracker_comment, "issue-progress", "Symphony parked this issue" <> _note}
+      assert {:ok, nil} = Pauses.get({:ticket, "default", "issue-progress"})
+      assert Questions.open({:ticket, "default", "issue-progress"}) == []
+    end
+
+    test "a run with work of its own, or whose head never moved, idles out as before" do
+      :ok = put_pending_ci_failure(approved: false)
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-merged", checks: []}})
+      reader = fn _workspace, nil, _start_head, _base_ref -> false end
+
+      capture_log(fn ->
+        run_issue!("CI Fix",
+          heads: ["sha-start", "sha-merged"],
+          max_turns: 5,
+          repos: designed_repos(),
+          runner_opts: [workspace_base_reader: reader]
+        )
+      end)
+
+      assert_received {:memory_tracker_comment, "issue-progress", "Symphony parked this issue where it is" <> _note}
+    end
+
+    test "a head it can't push is left to the idle rules" do
+      test_pid = self()
+      :ok = put_pending_ci_failure(approved: false)
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-merged", checks: []}})
+      reader = fn _workspace, nil, _start_head, _base_ref -> true end
+      pusher = fn _workspace, nil, _source_repo -> send(test_pid, :push_refused) && {:error, :origin_mismatch} end
+
+      capture_log(fn ->
+        run_issue!("CI Fix",
+          heads: ["sha-start", "sha-merged"],
+          max_turns: 5,
+          repos: designed_repos(),
+          runner_opts: [workspace_base_reader: reader, workspace_pusher: pusher]
+        )
+      end)
+
+      assert turns() == 3
+      assert_received :push_refused
+      assert_received {:memory_tracker_comment, "issue-progress", "Symphony parked this issue where it is" <> _note}
     end
   end
 

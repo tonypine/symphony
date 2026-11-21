@@ -183,17 +183,4 @@ defmodule SymphonyElixir.TicketChecksTest do
 
     assert [%{id: "c1", state: :proved, proved_by: %{by: "test", event_id: "evt-old"}} | _rest] = TicketChecks.list([plan, stored, {:error, :junk}])
   end
-
-  test "a check marked after the merge keeps its marker on the ticket's check and is left out of what gates before the merge" do
-    merged = %{id: "c4", kind: "outcome", statement: "The release run on main is green.", proof: "test", after_merge: true}
-    plan!(%{@plan | checks: [@outcome, @walk, @attached, merged]})
-
-    assert [_c1, _c2, _c3, %{id: "c4", state: :open, after_merge: true} = check] = TicketChecks.list(@issue_id)
-    assert TicketChecks.after_merge?(check)
-    refute TicketChecks.after_merge?(@outcome)
-    assert TicketChecks.after_merge?(%{"after_merge" => true})
-
-    assert Enum.map(TicketChecks.open(@issue_id), & &1.id) == ["c1", "c2", "c3", "c4"]
-    assert Enum.map(TicketChecks.open(@issue_id, proof: "test", after_merge: false), & &1.id) == ["c1"]
-  end
 end

@@ -31,7 +31,10 @@ How to groom, in order:
    - keep the sub-tickets few;
    - write each `ask` as a complete request, for someone who has read nothing else: it gets its
      own Grooming;
-   - use `after` only where a sub-ticket builds on another's merged code;
+   - use `after` only where a sub-ticket builds on another's merged code. That is also the only
+     way to plan a product outcome that needs an earlier merge to exist: split it into
+     sub-tickets in sequence, so the following one uses what the previous one merged and proves
+     the outcome as its own check;
    - arrange them so that sub-tickets that can run at the same time do not touch the same files;
    - when `sub_tickets` in the facts lists sub-tickets the ticket already has (someone made them
      by hand, or an earlier split stopped half way), your split must list every one of them that
@@ -53,11 +56,12 @@ How to groom, in order:
    - `design`: a screen is compared with its design; name the Gallery `story` when you know it.
    - `attached`: something attached to the ticket shows it (a measurement, a document, a
      screenshot), for a result no test and no QA step can show.
-   A check that can only be seen once this ticket's own pull request has merged (a green run on
-   main, a release, a deploy) is never a plain check: everything before the merge (the coding run's
-   proofs, the handoff, QA) would wait on it for good. Mark it `"after_merge": true`, and Symphony
-   leaves it out of everything before the merge: it stays open on the ticket, and a split ticket's
-   final check reads it. Leave it out entirely when it only restates that the change merges.
+   Every check in a plan can be proved before this ticket's own pull request merges. Facts about
+   the pipeline itself (main is green, the release gate passed, a build was published, a check
+   turned green after a merge) are never a ticket's concern: Symphony sees them from GitHub
+   webhooks and its own events, and holds, releases and reacts by itself. Never write a check for
+   one, and never ask a run or a person to prove one. An outcome that only exists once an earlier
+   change has merged is a split in sequence (step 3), never a check on this ticket.
 6. Write QA checks (kind `qa`) only for what must be seen in the running app: something on a
    screen, or a flow from end to end that no test covers. Each one says the app `state` it needs
    (the data, the screen, the setting), the `action` a person takes, and what they `expect` to see.
@@ -107,8 +111,7 @@ Write your answer as one JSON object and nothing else:
     "summary": "<for a person: what will be built, at most 600 characters>",
     "text": "<the plan for the agents, labelled sections, at most 12000 characters>",
     "checks": [
-      {"kind": "outcome" or "evidence", "statement": "<at most 600 characters>", "proof": "test" or "qa" or "design" or "attached",
-       "after_merge": true only when it can be seen only after this ticket's own merge, else leave it out},
+      {"kind": "outcome" or "evidence", "statement": "<at most 600 characters>", "proof": "test" or "qa" or "design" or "attached"},
       {"kind": "qa", "statement": "<what is checked>", "proof": "qa" or "design", "state": "<the app state it needs>",
        "action": "<what the person does>", "expect": "<what they see>", "size": "normal" or "wide", "story": "<optional Gallery story id>"}
     ],

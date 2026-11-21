@@ -99,7 +99,7 @@ The app has no Dock icon or window of its own; look for its icon in the menu bar
 A release app needs only two things: a `symphony.yml` and a Linear personal API key. You don't need to
 export `LINEAR_API_KEY`; the app keeps it in a file only you can read.
 
-1. Open the app. The Settings window opens because no `symphony.yml` is set yet.
+1. Open the app. The Symphony window opens on its Settings page because no `symphony.yml` is set yet.
 2. **symphony.yml:** choose the operator config to run with. To make one, see the
    [Quickstart](../README.md#quickstart); `~/Applications/Symphony.app/Contents/Resources/symphony init` writes a starter
    `symphony.yml` in the current folder.
@@ -157,8 +157,13 @@ The sections below describe each in detail.
 
 ## Settings
 
-Settings… (⌘,) opens the Settings window. It also opens on first launch, while no `symphony.yml` is
-set (or, in Development mode, no checkout folder).
+Settings… (⌘,) opens the Symphony window on its Settings page, as do Factory › Settings in its sidebar and every Open
+Settings… button. It also opens on first launch, while no `symphony.yml` is set (or, in Development mode, no checkout
+folder). The page lists its sections down its side (Symphony, Notifications, Updates, Agents, Tickets, GitHub and
+Linear, Review and QA, Records, Environment) and shows one at a time; unsaved edits stay while you move between
+sections and pages, until the window closes. **Save** checks and stores every section at once, and its errors show
+under the form whichever section is shown; a section holding a refused value carries a red count in the list.
+**Revert** puts back the saved values.
 
 - **Development mode** (off by default) runs the checkout's `bin/symphony` instead of the embedded
   Symphony. The checkout folder and command prefix show only while it is on. With it off, Save needs only
@@ -1071,7 +1076,7 @@ The sidebar has five destinations, on ⌘1 to ⌘5:
 **Home** (its badge counts what waits on you, in orange), **Journal** (its name and a line saying what it will hold,
 for now), **Work** (**Initiatives** and **Tickets** as two tabs), **Insights** (**Quality**, **Usage**, **Shipped** and
 **Audit** as tabs) and **Factory** (its badge counts the setup problems, in red), with its pages listed under it:
-**Setup**, **Repos** (which opens the Repos window), **Diagnostics** and **Settings** (which opens the Settings window).
+**Setup**, **Repos** (which opens the Repos window), **Diagnostics** and **Settings** (a page of this window).
 The sidebar and the page sit on one background with a faint glow at its top. The destination shown is tinted in the
 accent (grey while the window is not in front), and stays so while a ticket's page opened from it is shown. The bar's
 sidebar button, or ⌃⌘S, folds the sidebar to its glyphs, each count a dot and each name the glyph's help; ↑ and ↓

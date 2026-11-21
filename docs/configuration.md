@@ -4228,10 +4228,7 @@ words, goes to the `code` step, in its prompt. A later QA failure of the same cl
 `symphony:checks` is a command Symphony runs itself, not in a shell, while the run keeps its slot.
 It guards the handoff of a ticket with a plan: it fails back to the step's `on_fail`, naming them,
 while a check of the plan that a test or an attachment proves (`proof: test`, `proof: attached`) is
-open, and passes at once when none is, or when the ticket has no plan. A check the plan marks
-`after_merge` (it can only be seen once the ticket's own pull request has merged: a green run on
-main, a release) is never one of them: it stays open on the ticket, holds neither this step, the
-handoff nor QA, and is never asked about; a split ticket's final check reads it. The failure says how each
+open, and passes at once when none is, or when the ticket has no plan. The failure says how each
 check is proved, and that a check nothing can prove this way is the Conductor's to waive: its
 answer's `waive` (each a `check_id` and a `reason`) is read at the junctions `conductor.junctions`
 names for it, above, and on a watch turn (a `plan_checks` step that fails again wakes one,

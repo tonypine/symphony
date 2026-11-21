@@ -101,6 +101,34 @@ defmodule SymphonyElixir.WorkspaceHeadTest do
     assert output =~ "refused"
   end
 
+  test "took_base_only?/4 is true when HEAD moved past the start only by merging the base in (TP-1587)", %{root: root, source: source, workspace: workspace} do
+    commit!(workspace, "work.txt")
+    start = WorkspaceHead.read(workspace, nil)
+
+    # Nothing new on HEAD yet.
+    refute WorkspaceHead.took_base_only?(workspace, nil, start, "origin/main")
+
+    # The base moves on, and the workspace merges it in.
+    commit!(source, "fix.txt")
+    git!(source, ["push", "origin", "main"])
+    git!(workspace, ["fetch", "origin"])
+    git!(workspace, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "merge", "--no-edit", "origin/main"])
+    assert WorkspaceHead.took_base_only?(workspace, nil, start, "origin/main")
+
+    # A file left changed, or a commit of its own, is more than taking the base in.
+    File.write!(Path.join(workspace, "work.txt"), "changed")
+    refute WorkspaceHead.took_base_only?(workspace, nil, start, "origin/main")
+    git!(workspace, ["checkout", "--", "work.txt"])
+    commit!(workspace, "own.txt")
+    refute WorkspaceHead.took_base_only?(workspace, nil, start, "origin/main")
+
+    # A base HEAD doesn't hold, a workspace that is not a checkout, an SSH worker's, or no start head.
+    refute WorkspaceHead.took_base_only?(workspace, nil, start, "origin/missing")
+    refute WorkspaceHead.took_base_only?(Path.join(root, "missing"), nil, start, "origin/main")
+    refute WorkspaceHead.took_base_only?(workspace, "worker-1", start, "origin/main")
+    refute WorkspaceHead.took_base_only?(workspace, nil, nil, "origin/main")
+  end
+
   describe "a parked workspace's uncommitted changes (TP-1351)" do
     test "are committed on its branch and pushed, so origin shows the branch", %{remote: remote, source: source, workspace: workspace} do
       assert WorkspaceHead.commit_worktree(workspace, nil) == :nothing

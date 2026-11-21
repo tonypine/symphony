@@ -1071,6 +1071,9 @@ defmodule SymphonyElixir.AgentRunner do
         Logger.info("Ending the CI Fix run for #{issue_context(issue)}; waiting for CI on its PR head #{ci_wait.sha}")
         {:error, {:ci_pending, ci_wait}}
 
+      ci_fix_took_base?(issue, run_context) ->
+        end_after_taking_base(issue, run_context)
+
       idle_turn_limit_reached?(issue, run_context) ->
         end_idle_turns(issue, run_context)
 
@@ -2396,6 +2399,37 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp ci_fix_ci_wait(_issue, _run_context), do: nil
+
+  # A CI Fix run whose work was taking the base branch in (TP-1587): its head moved past the one it
+  # started on only by merging the base, nothing is left uncommitted, and its next turn changed
+  # nothing. The checks on that head are CI's to read, not another turn's, and GitHub may not list
+  # them yet, so `ci_fix_ci_wait/2` can't see them running. Read once a turn was idle, as that one.
+  defp ci_fix_took_base?(%Issue{} = issue, %{progress: %{empty_turns: empty_turns, head: head, start_head: start_head}} = run_context)
+       when empty_turns > 0 and is_binary(head) and head != start_head do
+    ci_fix_state?(issue, run_context) and took_base_only?(issue, start_head, run_context)
+  end
+
+  defp ci_fix_took_base?(_issue, _run_context), do: false
+
+  defp took_base_only?(%Issue{} = issue, start_head, %{workspace: workspace, worker_host: worker_host, opts: opts}) do
+    base_ref = "origin/" <> Config.base_branch(run_repo_key(issue, opts))
+    reader = Keyword.get(opts, :workspace_base_reader, &WorkspaceHead.took_base_only?/4)
+    reader.(workspace, worker_host, start_head, base_ref)
+  end
+
+  # Its head is pushed first, as a park would (`push_parked_work/2`), then the run ends in a wait on
+  # CI for it: the PR and CI watcher reads that head's checks, returns the ticket on green (R25) and
+  # sends a fix run on red. No park, no question. A push that fails leaves the run to the idle rules.
+  defp end_after_taking_base(%Issue{} = issue, %{progress: %{head: head}} = run_context) do
+    case push_parked_work(issue, run_context) do
+      {:error, _reason} ->
+        if idle_turn_limit_reached?(issue, run_context), do: end_idle_turns(issue, run_context), else: :continue
+
+      _pushed ->
+        Logger.info("Ending the CI Fix run for #{issue_context(issue)}; its work took the base branch in, waiting for CI on its head #{head}")
+        {:error, {:ci_pending, %{sha: head, runs: [%{workflow_name: "CI on the head that took the base branch in", url: nil}], run: "the CI Fix run"}}}
+    end
+  end
 
   # A landing run waits on CI through `merging_ci_pending?/2`, and parking it would drop the
   # human's merge approval.

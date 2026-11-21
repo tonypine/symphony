@@ -3,11 +3,20 @@ import SwiftUI
 import SymphonyBarCore
 import SymphonyBarUI
 
+/// The Settings page of the Symphony window (TP-1575): its sections down its side, drawn with the design system's
+/// section list, and the current section's blocks beside them, in a grouped form that scrolls by itself. Save, its
+/// check and every error line stay under the form whichever section shows, since Save checks and stores them all; a
+/// section holding a value Save refused carries its count in the list.
 struct SettingsView: View {
     @ObservedObject var model: SettingsViewModel
     /// Runs Check Now and gives the last update check.
     @ObservedObject var updates: UpdatePoller
-    let close: () -> Void
+    let section: SettingsSection
+    let select: (SettingsSection) -> Void
+    /// The last Save stored everything.
+    var saved = false
+    let revert: () -> Void
+    let save: () -> Void
 
     /// The check interval, moved into range as the field commits, with a note saying so (S1d).
     private var releaseCheckMinutes: Binding<Int> {
@@ -34,527 +43,641 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Form {
-                Section("Symphony") {
-                    PathField(title: "symphony.yml", path: $model.settings.configPath, choosesDirectories: false)
-                    LabeledContent("Stop timeout") {
-                        HStack {
-                            TextField("Seconds", value: $model.settings.stopTimeoutSeconds, format: .number)
-                                .labelsHidden()
-                                .frame(width: 60)
-                            Stepper(
-                                "Seconds",
-                                value: $model.settings.stopTimeoutSeconds,
-                                in: AppSettings.stopTimeoutRange
-                            )
-                            .labelsHidden()
-                            Text("seconds")
-                        }
-                    }
-                    LabeledContent("Restart timeout") {
-                        HStack {
-                            TextField("Minutes", value: $model.settings.restartTimeoutMinutes, format: .number)
-                                .labelsHidden()
-                                .frame(width: 60)
-                            Stepper(
-                                "Minutes",
-                                value: $model.settings.restartTimeoutMinutes,
-                                in: AppSettings.restartTimeoutRange
-                            )
-                            .labelsHidden()
-                            Text("minutes")
-                        }
-                    }
-                    .help(
-                        "How long Restart Symphony waits for agent runs before it also offers Restart Now Anyway, "
-                            + "and how long an update at a set time waits for them before it tries the next day."
-                    )
-                    LabeledContent("Not answering alert") {
-                        // Laid out as Stop timeout's row: the number in its field's column, in the primary colour,
-                        // its edge beside the stepper, the stepper in the same column, then the unit. No field to type in: the stepper keeps
-                        // the limit to steps of 10.
-                        HStack {
-                            Text("\(model.settings.notAnsweringAlertSeconds)")
-                                .monospacedDigit()
-                                .foregroundStyle(DesignTokens.TextColor.primary.color)
-                                .frame(width: 60, alignment: .trailing)
-                            Stepper(
-                                "Seconds",
-                                value: notAnsweringAlertSeconds,
-                                in: AppSettings.notAnsweringAlertRange,
-                                step: 10
-                            )
-                            .labelsHidden()
-                            Text("seconds")
-                        }
-                    }
-                    .help(
-                        "How long Symphony may not answer before the menu bar shows the problem and the app sends "
-                            + "one notification. The Director keeps its pages meanwhile."
-                    )
-                    Toggle("Start Symphony when the app opens", isOn: $model.settings.startOnLaunch)
-                    Toggle(LoginItem.toggleTitle, isOn: $model.launchAtLogin)
-                    if let note = model.loginItemNote {
-                        HStack {
-                            Text(note).foregroundStyle(.secondary)
-                            Spacer()
-                            Button("Open Login Items") { MainAppLoginItem.openSystemSettings() }
-                        }
-                    }
+        HStack(alignment: .top, spacing: 0) {
+            SectionList(Self.entries(failing: Self.failing(model)), current: section, select: select)
+            VStack(alignment: .leading, spacing: 0) {
+                Form {
+                    ForEach(section.blocks, id: \.self) { block in self.block(block) }
                 }
-
-                NotificationsSection()
-
-                Section {
-                    Toggle("Development mode", isOn: $model.settings.developmentMode)
-                    if model.settings.developmentMode {
-                        PathField(title: "Checkout folder", path: $model.settings.checkoutPath, choosesDirectories: true)
-                        TextField(
-                            "Command prefix",
-                            text: $model.settings.commandPrefix,
-                            prompt: Text("Optional, e.g. mise exec --")
-                        )
-                    }
-                } footer: {
-                    SectionFooter(
-                        model.settings.developmentMode
-                            ? "Runs bin/symphony from the checkout through a login shell, for working on Symphony itself."
-                            : "Runs the Symphony built into this app. Turn on to run bin/symphony from a checkout."
-                    )
-                }
-
-                Section {
-                    Picker("Update mode", selection: $model.settings.updateMode) {
-                        ForEach(UpdateMode.allCases) { mode in
-                            Text(mode.title).tag(mode)
-                        }
-                    }
-                    .onChange(of: model.settings.updateMode) { old, new in
-                        // Shows straight away what the mode would find; Save then re-arms the checks.
-                        if new == .onRelease && old != .onRelease { updates.check(manual: false) }
-                    }
-                    if model.settings.updateMode == .atTime {
-                        DatePicker(
-                            "Time",
-                            selection: Binding(
-                                get: { model.settings.updateTime.date(on: Date(), calendar: .current) },
-                                set: { model.settings.updateTime = TimeOfDay(date: $0, calendar: .current) }
-                            ),
-                            displayedComponents: .hourAndMinute
-                        )
-                    }
-                    if model.settings.updateMode == .onRelease {
-                        LabeledContent("Check for releases every") {
-                            HStack {
-                                TextField("Minutes", value: releaseCheckMinutes, format: .number)
-                                    .labelsHidden()
-                                    .frame(width: 60)
-                                Stepper("Minutes", value: releaseCheckMinutes, in: AppSettings.releaseCheckMinutesRange)
-                                    .labelsHidden()
-                                Text("minutes")
-                            }
-                        }
-                        ReleaseCheckLine(schedule: updates.schedule, note: model.releaseCheckNote) {
-                            updates.check(manual: true)
-                        }
-                        .onChange(of: updates.isChecking) { _, checking in
-                            if checking { model.releaseCheckNote = nil }
-                        }
-                    }
-                } header: {
-                    Text("Updates")
-                } footer: {
-                    VStack(alignment: .leading, spacing: 6) {
-                        SectionFooter(model.settings.updateMode.explanation)
-                        if model.settings.updateMode == .onRelease {
-                            SectionFooter(UpdateCheckSchedule.rateLimitNote)
-                        }
-                        if let line = model.settings.updateMode.blockerLine(
-                            model.updateBlocker(model.settings.developmentMode)
-                        ) {
-                            SectionFooter(line)
-                        }
-                    }
-                }
-
-                Section {
-                    LabeledContent("Max concurrent agents") {
-                        HStack {
-                            Text("\(model.maxConcurrentAgents)")
-                                .monospacedDigit()
-                            Stepper(
-                                "Max concurrent agents",
-                                value: $model.maxConcurrentAgents,
-                                in: MaxConcurrentAgents.range
-                            )
-                            .labelsHidden()
-                        }
-                    }
-                    .disabled(!model.canEditMaxConcurrentAgents)
-                    TokenLimitRow(toggleTitle: "Limit tokens per day", fieldTitle: "Tokens per day", field: $model.dailyTokenLimit)
-                        .disabled(!model.canEditTokenLimits)
-                    TokenLimitRow(
-                        toggleTitle: "Limit tokens per ticket",
-                        fieldTitle: "Tokens per ticket",
-                        field: $model.issueTokenLimit
-                    )
-                    .disabled(!model.canEditTokenLimits)
-                    if model.isCheckingTokenLimits {
-                        HStack {
-                            ProgressView().controlSize(.small)
-                            Text("Checking the token limits with symphony check…").foregroundStyle(.secondary)
-                        }
-                    }
-                    if model.tokenLimitsError != nil {
-                        CheckErrorPointer(subject: "these token limits")
-                    }
-                    ForEach(TokenUsage.lines(model.budget, now: Date(), timeZone: .current), id: \.self) { line in
-                        Text(line).foregroundStyle(.secondary)
-                    }
-                } header: {
-                    Text("Agents (saved in symphony.yml)")
-                } footer: {
-                    SectionFooter(
-                        "Each epic under way keeps one of these agents for its sub-tickets; the rest take "
-                            + "other work. Merges and QA runs don't count here: up to 2 more run on top. More "
-                            + "agents use the Linear and GitHub API budgets faster. 2–3 is a safe range on a "
-                            + "personal Linear key. The daily token cap pauses new runs once today's tokens (UTC) "
-                            + "reach it; the per-ticket cap stops a ticket that goes over it. Applies within a "
-                            + "minute, no restart needed."
-                    )
-                }
-
-                Section {
-                    Text("Only the chosen priorities start new work. With none chosen, every priority may.")
-                        .foregroundStyle(.secondary)
-                    ForEach(TicketPriority.allCases, id: \.self) { priority in
-                        Toggle(priority.title, isOn: Binding(
-                            get: { model.ticketPriorities.priorities.contains(priority) },
-                            set: { on in
-                                if on {
-                                    model.ticketPriorities.priorities.insert(priority)
-                                } else {
-                                    model.ticketPriorities.priorities.remove(priority)
-                                }
-                            }
-                        ))
-                    }
-                    if model.ticketPrioritiesError != nil {
-                        CheckErrorPointer(subject: "these ticket priorities")
-                    }
-                } header: {
-                    Text("Tickets (saved in symphony.yml)")
-                } footer: {
-                    SectionFooter(
-                        "An issue whose priority is not chosen is not dispatched: Symphony waits with free "
-                            + "lanes even when it sits in Todo. Use it to focus limited API spend, for example "
-                            + "on urgent and high tickets only. A forced ticket, and a run already under way, "
-                            + "still go. Save checks symphony.yml with symphony check first; Symphony reads it "
-                            + "on its next poll, no restart needed."
-                    )
-                }
-                .disabled(!model.canEditTicketPriorities)
-
-                Section {
-                    Text("The Linear workflow states Symphony creates for the board's phases. Nothing moves tickets into them yet.")
-                        .foregroundStyle(.secondary)
-                    WorkflowStateRow(title: "Code review", name: $model.workflowStates.codeReview)
-                    WorkflowStateRow(title: "QA", name: $model.workflowStates.qa)
-                    WorkflowStateRow(title: "Plan review", name: $model.workflowStates.planReview)
-                    WorkflowStateRow(title: "Epic review", name: $model.workflowStates.epicReview)
-                    WorkflowStateRow(title: "CI fix", name: $model.workflowStates.ciFix)
-                    if model.workflowStatesError != nil {
-                        CheckErrorPointer(subject: "these board states")
-                    }
-                } header: {
-                    Text("Board states (saved in symphony.yml)")
-                } footer: {
-                    SectionFooter(
-                        "issues.states.code_review, .qa, .plan_review, .epic_review and .ci_fix. At startup Symphony "
-                            + "creates a Linear state with each name in your team, and reports the exact name loudly "
-                            + "when one is missing or renamed instead of creating a duplicate. Renamed a state in "
-                            + "Linear? Point its field here at the new name. Save checks symphony.yml with symphony "
-                            + "check first; Symphony reads it when it next starts."
-                    )
-                }
-                .disabled(!model.canEditWorkflowStates)
-
-                Section {
-                    Toggle(BuiltInTicketPatterns.toggleTitle, isOn: $model.ticketPatternsBuiltIn)
-                    Text(
-                        model.ticketPatternsBuiltIn
-                            ? BuiltInTicketPatternsChoice.on.explanation
-                            : BuiltInTicketPatternsChoice.off.explanation
-                    )
-                    .foregroundStyle(.secondary)
-                    if model.ticketPatternsBuiltInError != nil {
-                        CheckErrorPointer(subject: "this setting")
-                    }
-                } header: {
-                    Text("Code Review (saved in symphony.yml)")
-                } footer: {
-                    SectionFooter(
-                        "auto_review.acceptance_gate.escalate.ticket_patterns_builtin. The built-in ticket patterns "
-                            + "match a title or description asking for a human or manual review, saying it must not be "
-                            + "auto-approved, or that it needs a human. Turn them off when they misfire on your tickets; "
-                            + "a repo can override this in its Review sheet in Repos. Save checks symphony.yml with symphony check "
-                            + "first; Symphony reads it on its next poll, no restart needed."
-                    )
-                }
-                .disabled(!model.canEditTicketPatternsBuiltIn)
-
-                RiskRulesSection(model: model)
-
-                PhasesSection(model: model)
-
-                Section {
-                    TimeoutRow(title: "Git network timeout", minutes: $model.gitNetworkTimeoutMinutes)
-                    Text("Stops a git fetch, pull, push or ls-remote that runs longer, so a remote that stops answering can't hold the repo.")
-                        .foregroundStyle(.secondary)
-                    TimeoutRow(title: "MCP tool timeout", minutes: $model.mcpToolTimeoutMinutes)
-                    Text("Stops one call of Symphony's Linear and GitHub tools that runs longer and answers the agent with an error.")
-                        .foregroundStyle(.secondary)
-                    TimeoutRow(title: "Show a pending tool call after", minutes: $model.pendingToolReportMinutes)
-                    Text("Shows a run as waiting on one of those calls once the call has run this long.")
-                        .foregroundStyle(.secondary)
-                    TimeoutRow(title: "Ask me to sign in again after", minutes: $model.signInAskAfterMinutes)
-                    Text("Asks you in the Inbox once agents have been unable to sign in to their model this long.")
-                        .foregroundStyle(DesignTokens.TextColor.secondary.color)
-                    if let error = model.timeoutsError {
-                        Text(error).foregroundStyle(.red)
-                    }
-                } header: {
-                    Text("Timeouts (saved in symphony.yml)")
-                } footer: {
-                    SectionFooter(
-                        "workspaces.git_network_timeout_ms (default 5 minutes), execution.timeouts.mcp_tool_ms (default "
-                            + "10 minutes), watchdog.pending_tool_report_after_ms (default 1 minute) and "
-                            + "execution.usage_limit.sign_in_ask_after_seconds (default 30 minutes). Save checks "
-                            + "symphony.yml with symphony check first; Symphony reads them on the next call, no restart "
-                            + "needed."
-                    )
-                }
-                .disabled(!model.canEditTimeouts)
-
-                Section {
-                    MinutesRow(title: "Safety-net check every", minutes: $model.safetyNetCheckMinutes)
-                    Text(
-                        "While GitHub's webhook deliveries arrive, Symphony also checks every PR this often, to catch "
-                            + "one a delivery missed. Without deliveries it checks at the poll interval."
-                    )
-                    .foregroundStyle(.secondary)
-                    MinutesRow(title: "Warn me after no updates for", minutes: $model.silenceAlertMinutes)
-                    Text("Shows a warning when no delivery has arrived from GitHub for this long.")
-                        .foregroundStyle(.secondary)
-                    if let error = model.gitHubUpdatesError {
-                        Text(error).foregroundStyle(.red)
-                    }
-                } header: {
-                    Text("GitHub updates (saved in symphony.yml)")
-                } footer: {
-                    SectionFooter(
-                        "github.webhooks.fallback_poll_interval_ms (default 5 minutes) and "
-                            + "github.webhooks.silence_alert_minutes (default 10 minutes). Save checks symphony.yml with "
-                            + "symphony check first; Symphony reads them on its next check, no restart needed."
-                    )
-                }
-                .disabled(!model.canEditGitHubUpdates)
-
-                LinearWebhooksSection(model: model)
-
-                Section {
-                    DispatchLoopRow(title: "Hold a ticket after", runs: $model.dispatchLoopRuns, minutes: $model.dispatchLoopWindowMinutes)
-                    DispatchLoopRow(title: "Or after", runs: $model.dispatchLoopLongRuns, minutes: $model.dispatchLoopLongWindowMinutes)
-                    Text(
-                        "Once a ticket got this many runs of one kind in that time with no state change, new PR head or "
-                            + "decision, Symphony starts no more and puts it on a Blocked hold that says why. Unblock it "
-                            + "from the Inbox."
-                    )
-                    .foregroundStyle(.secondary)
-                    if let error = model.dispatchLoopError {
-                        Text(error).foregroundStyle(.red)
-                    }
-                } header: {
-                    Text("Dispatch loops (saved in symphony.yml)")
-                } footer: {
-                    SectionFooter(
-                        "watchdog.dispatch_loop_runs in watchdog.dispatch_loop_window_ms (default 4 runs in 10 minutes) "
-                            + "and watchdog.dispatch_loop_long_runs in watchdog.dispatch_loop_long_window_ms (default 8 "
-                            + "runs in 60 minutes). Save checks symphony.yml with symphony check first; Symphony reads "
-                            + "them on its next dispatch, no restart needed."
-                    )
-                }
-                .disabled(!model.canEditDispatchLoop)
-
-                DispatchSection(model: model)
-
-                Section {
-                    LabeledContent("Largest artifact") {
-                        HStack {
-                            Text("\(model.artifactMaxMegabytes) MB")
-                                .monospacedDigit()
-                            Stepper("Largest artifact in MB", value: $model.artifactMaxMegabytes, in: LedgerSettings.megabyteRange)
-                                .labelsHidden()
-                        }
-                    }
-                    Text(
-                        "Symphony keeps every artifact file (screenshots, transcripts) for good, so a ticket's history "
-                            + "stays whole. It refuses to store a file larger than the cap."
-                    )
-                    .foregroundStyle(.secondary)
-                    Toggle("Give agents the ticket's history summary", isOn: $model.promptBriefEnabled)
-                    LabeledContent("Summary size limit") {
-                        HStack {
-                            TextField("Summary size limit in tokens", value: $model.promptBriefMaxTokens, format: .number)
-                                .labelsHidden()
-                                .monospacedDigit()
-                                .frame(width: 90)
-                                .accessibilityLabel("Summary size limit in tokens")
-                            Text("tokens")
-                        }
-                    }
-                    .disabled(!model.promptBriefEnabled)
-                    Text(
-                        "Every agent starts from a summary of the ticket's whole history: every decision, open finding "
-                            + "and note in full. Nothing is left out: a ticket whose summary is over the limit waits for you "
-                            + "to choose in the Inbox whether it goes on with the whole summary or is canceled."
-                    )
-                    .foregroundStyle(.secondary)
-                    if let error = model.ledgerError {
-                        Text(error).foregroundStyle(.red)
-                    }
-                } header: {
-                    Text("Ledger (saved in symphony.yml)")
-                } footer: {
-                    SectionFooter(
-                        "ledger.artifact_max_bytes (default 25 MB), ledger.prompt_brief_enabled (default on) and "
-                            + "ledger.prompt_brief_max_tokens (default 50,000 tokens). Save checks symphony.yml with symphony "
-                            + "check first; Symphony reads them on its next stored file and agent prompt, no restart needed."
-                    )
-                }
-                .disabled(!model.canEditLedger)
-
-                ReportsSection(model: model)
-
-                ConductorSection(settings: $model.conductor, error: model.conductorError, editable: model.canEditConductor)
-
-                MacAppQASection(model: model)
-
-                Section {
-                    if model.isLoadingSecrets {
-                        HStack {
-                            ProgressView().controlSize(.small)
-                            Text(StatusMenu.keychainWaitingLine).foregroundStyle(.secondary)
-                        }
-                    }
-                    // Off until the read fills them in, so nothing typed is overwritten.
-                    SecureField(SecretSettings.linearAPIKeyName, text: $model.linearAPIKey, prompt: Text("lin_api_…"))
-                        .disabled(model.isLoadingSecrets)
-                    ForEach($model.extraRows) { $row in
-                        HStack {
-                            TextField("Name", text: $row.name, prompt: Text("NAME"))
-                                .labelsHidden()
-                            SecureField("Value", text: $row.value, prompt: Text("Value"))
-                                .labelsHidden()
-                            IconButton("minus.circle", help: "Remove this variable", size: .small) {
-                                model.removeRow(id: row.id)
-                            }
-                        }
-                    }
-                    Button("Add Variable") { model.addRow() }
-                        .disabled(model.isLoadingSecrets)
-                } header: {
-                    Text("Environment (stored in a file only you can read)")
-                }
+                .formStyle(.grouped)
+                // The window's backdrop behind the groups, as on the window's other pages.
+                .scrollContentBackground(.hidden)
+                // Another section opens at its top.
+                .id(section)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                errors
+                buttons
             }
-            .formStyle(.grouped)
-            // A grouped Form is scroll-backed with no height of its own (ideal height 0), so without this it collapses.
-            .frame(minHeight: 460, idealHeight: 640, maxHeight: 900)
-
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(model.issues.map(\.message), id: \.self) { message in
-                    Text(message).foregroundStyle(.red)
-                }
-                if let secretsError = model.secretsError {
-                    Text(secretsError).foregroundStyle(.red)
-                }
-                if let configFileError = model.configFileError {
-                    Text(configFileError).foregroundStyle(.red)
-                }
-                // In full here, below the Form: a grouped Form row is laid out shorter than wrapped text draws, so
-                // a long reason there lost its last line and covered the row above.
-                if let error = model.tokenLimitsError {
-                    CheckErrorText(message: error)
-                }
-                if model.timeoutsError != nil {
-                    Text("symphony check rejected the timeouts; see Timeouts.").foregroundStyle(.red)
-                }
-                if model.gitHubUpdatesError != nil {
-                    Text("symphony check rejected the GitHub update settings; see GitHub updates.").foregroundStyle(.red)
-                }
-                if model.linearWebhooksError != nil {
-                    Text("The Linear webhook settings weren't saved; see Linear webhooks.").foregroundStyle(.red)
-                }
-                if model.dispatchLoopError != nil {
-                    Text("symphony check rejected the dispatch-loop limits; see Dispatch loops.").foregroundStyle(.red)
-                }
-                if model.dispatchError != nil {
-                    Text("The dispatch settings weren't saved; see Dispatch.").foregroundStyle(.red)
-                }
-                if model.ledgerError != nil {
-                    Text("symphony check rejected the ledger settings; see Ledger.").foregroundStyle(.red)
-                }
-                if model.reportsError != nil {
-                    Text("symphony check rejected the report settings; see Reports.").foregroundStyle(.red)
-                }
-                if model.conductorError != nil {
-                    Text("symphony check rejected the Conductor settings; see Conductor.").foregroundStyle(DesignTokens.Status.problem.tint)
-                }
-                if model.macAppQAError != nil {
-                    Text("symphony check rejected the macOS app QA settings; see macOS app QA.").foregroundStyle(.red)
-                }
-                if model.ticketPrioritiesError != nil {
-                    Text("symphony check rejected the ticket priorities; see Tickets.").foregroundStyle(.red)
-                }
-                if let error = model.qaHostToolsError {
-                    CheckErrorText(message: error)
-                }
-                if let error = model.ticketPatternsBuiltInError {
-                    CheckErrorText(message: error)
-                }
-                if let error = model.riskRulesError {
-                    CheckErrorText(message: error)
-                }
-                if let error = model.phasesError {
-                    CheckErrorText(message: error)
-                }
-                if let loginItemError = model.loginItemError {
-                    Text(loginItemError).foregroundStyle(.red)
-                }
-            }
-            .padding(.horizontal, 20)
-
-            HStack {
-                Spacer()
-                Button("Cancel", action: close)
-                    .keyboardShortcut(.cancelAction)
-                if model.isSaving {
-                    ProgressView().controlSize(.small)
-                    Text("Checking symphony.yml…").foregroundStyle(.secondary)
-                }
-                Button("Save") {
-                    model.save(onSaved: close)
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(!model.canSave)
-            }
-            .padding(20)
         }
-        .frame(width: SettingsView.width)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    static let width: CGFloat = 840
+    /// The section list's rows: each section with its glyph, and the count of its blocks Save refused.
+    static func entries(failing: Set<SettingsBlock>) -> [SidebarEntry<SettingsSection>] {
+        SettingsSection.allCases.map { section in
+            let failures = section.failures(failing)
+            return SidebarEntry(
+                id: section, title: section.title, symbol: section.symbol, count: failures, countRole: .problem,
+                spoken: failures == 0 ? nil : "\(failures) to fix"
+            )
+        }
+    }
+
+    /// The blocks holding a value Save refused or couldn't store.
+    static func failing(_ model: SettingsViewModel) -> Set<SettingsBlock> {
+        var failing = Set(model.issues.map(\.block))
+        let errors: [(String?, SettingsBlock)] = [
+            (model.loginItemError, .symphony), (model.secretsError, .environment), (model.tokenLimitsError, .agents),
+            (model.timeoutsError, .timeouts), (model.conductorError, .conductor), (model.ticketPrioritiesError, .tickets),
+            (model.workflowStatesError, .boardStates), (model.dispatchError, .dispatch),
+            (model.dispatchLoopError, .dispatchLoops), (model.gitHubUpdatesError, .gitHubUpdates),
+            (model.linearWebhooksError, .linearWebhooks), (model.ticketPatternsBuiltInError, .codeReview),
+            (model.riskRulesError, .riskRules), (model.phasesError, .phases), (model.macAppQAError, .macAppQA),
+            (model.qaHostToolsError, .macAppQA), (model.ledgerError, .ledger), (model.reportsError, .reports),
+        ]
+        for (error, block) in errors where error != nil { failing.insert(block) }
+        return failing
+    }
+
+    /// Every error line, whichever section shows; a line about a block names the section that holds it.
+    private var errors: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(model.issues.map { "\($0.message) See \($0.block.pointer)." }, id: \.self) { message in
+                Text(message).foregroundStyle(.red)
+            }
+            if let secretsError = model.secretsError {
+                Text(secretsError).foregroundStyle(.red)
+            }
+            if let configFileError = model.configFileError {
+                Text(configFileError).foregroundStyle(.red)
+            }
+            // In full here, below the Form: a grouped Form row is laid out shorter than wrapped text draws, so
+            // a long reason there lost its last line and covered the row above.
+            if let error = model.tokenLimitsError {
+                CheckErrorText(message: error)
+            }
+            if model.timeoutsError != nil {
+                Text("symphony check rejected the timeouts; see \(SettingsBlock.timeouts.pointer).").foregroundStyle(.red)
+            }
+            if model.gitHubUpdatesError != nil {
+                Text("symphony check rejected the GitHub update settings; see \(SettingsBlock.gitHubUpdates.pointer).")
+                    .foregroundStyle(.red)
+            }
+            if model.linearWebhooksError != nil {
+                Text("The Linear webhook settings weren't saved; see \(SettingsBlock.linearWebhooks.pointer).").foregroundStyle(.red)
+            }
+            if model.dispatchLoopError != nil {
+                Text("symphony check rejected the dispatch-loop limits; see \(SettingsBlock.dispatchLoops.pointer).")
+                    .foregroundStyle(.red)
+            }
+            if model.dispatchError != nil {
+                Text("The dispatch settings weren't saved; see \(SettingsBlock.dispatch.pointer).").foregroundStyle(.red)
+            }
+            if model.ledgerError != nil {
+                Text("symphony check rejected the ledger settings; see \(SettingsBlock.ledger.pointer).").foregroundStyle(.red)
+            }
+            if model.reportsError != nil {
+                Text("symphony check rejected the report settings; see \(SettingsBlock.reports.pointer).").foregroundStyle(.red)
+            }
+            if model.conductorError != nil {
+                Text("symphony check rejected the Conductor settings; see \(SettingsBlock.conductor.pointer).")
+                    .foregroundStyle(DesignTokens.Status.problem.tint)
+            }
+            if model.macAppQAError != nil {
+                Text("symphony check rejected the macOS app QA settings; see \(SettingsBlock.macAppQA.pointer).")
+                    .foregroundStyle(.red)
+            }
+            if model.ticketPrioritiesError != nil {
+                Text("symphony check rejected the ticket priorities; see \(SettingsBlock.tickets.pointer).").foregroundStyle(.red)
+            }
+            if let error = model.qaHostToolsError {
+                CheckErrorText(message: error)
+            }
+            if let error = model.workflowStatesError {
+                CheckErrorText(message: error)
+            }
+            if let error = model.ticketPatternsBuiltInError {
+                CheckErrorText(message: error)
+            }
+            if let error = model.riskRulesError {
+                CheckErrorText(message: error)
+            }
+            if let error = model.phasesError {
+                CheckErrorText(message: error)
+            }
+            if let loginItemError = model.loginItemError {
+                Text(loginItemError).foregroundStyle(.red)
+            }
+        }
+        .padding(.horizontal, 20)
+    }
+
+    /// Revert puts back the saved values (the page has no window to close, as the old Settings window's Cancel did);
+    /// Save checks and stores every section's values at once.
+    private var buttons: some View {
+        HStack {
+            if saved && !model.isSaving {
+                Text("Saved.").foregroundStyle(DesignTokens.TextColor.secondary.color)
+            }
+            Spacer()
+            Button("Revert", action: revert)
+            if model.isSaving {
+                ProgressView().controlSize(.small)
+                Text("Checking symphony.yml…").foregroundStyle(.secondary)
+            }
+            Button("Save", action: save)
+                .keyboardShortcut(.defaultAction)
+                .disabled(!model.canSave)
+        }
+        .padding(20)
+    }
+
+    @ViewBuilder private func block(_ block: SettingsBlock) -> some View {
+        switch block {
+        case .symphony: symphonyBlock
+        case .notifications: notificationsBlock
+        case .developmentMode: developmentModeBlock
+        case .updates: updatesBlock
+        case .agents: agentsBlock
+        case .tickets: ticketsBlock
+        case .boardStates: boardStatesBlock
+        case .codeReview: codeReviewBlock
+        case .riskRules: riskRulesBlock
+        case .phases: phasesBlock
+        case .timeouts: timeoutsBlock
+        case .gitHubUpdates: gitHubUpdatesBlock
+        case .linearWebhooks: linearWebhooksBlock
+        case .dispatchLoops: dispatchLoopsBlock
+        case .dispatch: dispatchBlock
+        case .ledger: ledgerBlock
+        case .reports: reportsBlock
+        case .conductor: conductorBlock
+        case .macAppQA: macAppQABlock
+        case .environment: environmentBlock
+        }
+    }
+
+    private var symphonyBlock: some View {
+        Section("Symphony") {
+            PathField(title: "symphony.yml", path: $model.settings.configPath, choosesDirectories: false)
+            LabeledContent("Stop timeout") {
+                HStack {
+                    TextField("Seconds", value: $model.settings.stopTimeoutSeconds, format: .number)
+                        .labelsHidden()
+                        .frame(width: 60)
+                    Stepper(
+                        "Seconds",
+                        value: $model.settings.stopTimeoutSeconds,
+                        in: AppSettings.stopTimeoutRange
+                    )
+                    .labelsHidden()
+                    Text("seconds")
+                }
+            }
+            LabeledContent("Restart timeout") {
+                HStack {
+                    TextField("Minutes", value: $model.settings.restartTimeoutMinutes, format: .number)
+                        .labelsHidden()
+                        .frame(width: 60)
+                    Stepper(
+                        "Minutes",
+                        value: $model.settings.restartTimeoutMinutes,
+                        in: AppSettings.restartTimeoutRange
+                    )
+                    .labelsHidden()
+                    Text("minutes")
+                }
+            }
+            .help(
+                "How long Restart Symphony waits for agent runs before it also offers Restart Now Anyway, "
+                    + "and how long an update at a set time waits for them before it tries the next day."
+            )
+            LabeledContent("Not answering alert") {
+                // Laid out as Stop timeout's row: the number in its field's column, in the primary colour,
+                // its edge beside the stepper, the stepper in the same column, then the unit. No field to type in: the stepper keeps
+                // the limit to steps of 10.
+                HStack {
+                    Text("\(model.settings.notAnsweringAlertSeconds)")
+                        .monospacedDigit()
+                        .foregroundStyle(DesignTokens.TextColor.primary.color)
+                        .frame(width: 60, alignment: .trailing)
+                    Stepper(
+                        "Seconds",
+                        value: notAnsweringAlertSeconds,
+                        in: AppSettings.notAnsweringAlertRange,
+                        step: 10
+                    )
+                    .labelsHidden()
+                    Text("seconds")
+                }
+            }
+            .help(
+                "How long Symphony may not answer before the menu bar shows the problem and the app sends "
+                    + "one notification. The Director keeps its pages meanwhile."
+            )
+            Toggle("Start Symphony when the app opens", isOn: $model.settings.startOnLaunch)
+            Toggle(LoginItem.toggleTitle, isOn: $model.launchAtLogin)
+            if let note = model.loginItemNote {
+                HStack {
+                    Text(note).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Open Login Items") { MainAppLoginItem.openSystemSettings() }
+                }
+            }
+        }
+    }
+
+    private var notificationsBlock: some View {
+        NotificationsSection()
+    }
+
+    private var developmentModeBlock: some View {
+        Section {
+            Toggle("Development mode", isOn: $model.settings.developmentMode)
+            if model.settings.developmentMode {
+                PathField(title: "Checkout folder", path: $model.settings.checkoutPath, choosesDirectories: true)
+                TextField(
+                    "Command prefix",
+                    text: $model.settings.commandPrefix,
+                    prompt: Text("Optional, e.g. mise exec --")
+                )
+            }
+        } footer: {
+            SectionFooter(
+                model.settings.developmentMode
+                    ? "Runs bin/symphony from the checkout through a login shell, for working on Symphony itself."
+                    : "Runs the Symphony built into this app. Turn on to run bin/symphony from a checkout."
+            )
+        }
+    }
+
+    private var updatesBlock: some View {
+        Section {
+            Picker("Update mode", selection: $model.settings.updateMode) {
+                ForEach(UpdateMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .onChange(of: model.settings.updateMode) { old, new in
+                // Shows straight away what the mode would find; Save then re-arms the checks.
+                if new == .onRelease && old != .onRelease { updates.check(manual: false) }
+            }
+            if model.settings.updateMode == .atTime {
+                DatePicker(
+                    "Time",
+                    selection: Binding(
+                        get: { model.settings.updateTime.date(on: Date(), calendar: .current) },
+                        set: { model.settings.updateTime = TimeOfDay(date: $0, calendar: .current) }
+                    ),
+                    displayedComponents: .hourAndMinute
+                )
+            }
+            if model.settings.updateMode == .onRelease {
+                LabeledContent("Check for releases every") {
+                    HStack {
+                        TextField("Minutes", value: releaseCheckMinutes, format: .number)
+                            .labelsHidden()
+                            .frame(width: 60)
+                        Stepper("Minutes", value: releaseCheckMinutes, in: AppSettings.releaseCheckMinutesRange)
+                            .labelsHidden()
+                        Text("minutes")
+                    }
+                }
+                ReleaseCheckLine(schedule: updates.schedule, note: model.releaseCheckNote) {
+                    updates.check(manual: true)
+                }
+                .onChange(of: updates.isChecking) { _, checking in
+                    if checking { model.releaseCheckNote = nil }
+                }
+            }
+        } header: {
+            Text("Updates")
+        } footer: {
+            VStack(alignment: .leading, spacing: 6) {
+                SectionFooter(model.settings.updateMode.explanation)
+                if model.settings.updateMode == .onRelease {
+                    SectionFooter(UpdateCheckSchedule.rateLimitNote)
+                }
+                if let line = model.settings.updateMode.blockerLine(
+                    model.updateBlocker(model.settings.developmentMode)
+                ) {
+                    SectionFooter(line)
+                }
+            }
+        }
+    }
+
+    private var agentsBlock: some View {
+        Section {
+            LabeledContent("Max concurrent agents") {
+                HStack {
+                    Text("\(model.maxConcurrentAgents)")
+                        .monospacedDigit()
+                    Stepper(
+                        "Max concurrent agents",
+                        value: $model.maxConcurrentAgents,
+                        in: MaxConcurrentAgents.range
+                    )
+                    .labelsHidden()
+                }
+            }
+            .disabled(!model.canEditMaxConcurrentAgents)
+            TokenLimitRow(toggleTitle: "Limit tokens per day", fieldTitle: "Tokens per day", field: $model.dailyTokenLimit)
+                .disabled(!model.canEditTokenLimits)
+            TokenLimitRow(
+                toggleTitle: "Limit tokens per ticket",
+                fieldTitle: "Tokens per ticket",
+                field: $model.issueTokenLimit
+            )
+            .disabled(!model.canEditTokenLimits)
+            if model.isCheckingTokenLimits {
+                HStack {
+                    ProgressView().controlSize(.small)
+                    Text("Checking the token limits with symphony check…").foregroundStyle(.secondary)
+                }
+            }
+            if model.tokenLimitsError != nil {
+                CheckErrorPointer(subject: "these token limits")
+            }
+            ForEach(TokenUsage.lines(model.budget, now: Date(), timeZone: .current), id: \.self) { line in
+                Text(line).foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Agents (saved in symphony.yml)")
+        } footer: {
+            SectionFooter(
+                "Each epic under way keeps one of these agents for its sub-tickets; the rest take "
+                    + "other work. Merges and QA runs don't count here: up to 2 more run on top. More "
+                    + "agents use the Linear and GitHub API budgets faster. 2–3 is a safe range on a "
+                    + "personal Linear key. The daily token cap pauses new runs once today's tokens (UTC) "
+                    + "reach it; the per-ticket cap stops a ticket that goes over it. Applies within a "
+                    + "minute, no restart needed."
+            )
+        }
+    }
+
+    private var ticketsBlock: some View {
+        Section {
+            Text("Only the chosen priorities start new work. With none chosen, every priority may.")
+                .foregroundStyle(.secondary)
+            ForEach(TicketPriority.allCases, id: \.self) { priority in
+                Toggle(priority.title, isOn: Binding(
+                    get: { model.ticketPriorities.priorities.contains(priority) },
+                    set: { on in
+                        if on {
+                            model.ticketPriorities.priorities.insert(priority)
+                        } else {
+                            model.ticketPriorities.priorities.remove(priority)
+                        }
+                    }
+                ))
+            }
+            if model.ticketPrioritiesError != nil {
+                CheckErrorPointer(subject: "these ticket priorities")
+            }
+        } header: {
+            Text("Tickets (saved in symphony.yml)")
+        } footer: {
+            SectionFooter(
+                "An issue whose priority is not chosen is not dispatched: Symphony waits with free "
+                    + "lanes even when it sits in Todo. Use it to focus limited API spend, for example "
+                    + "on urgent and high tickets only. A forced ticket, and a run already under way, "
+                    + "still go. Save checks symphony.yml with symphony check first; Symphony reads it "
+                    + "on its next poll, no restart needed."
+            )
+        }
+        .disabled(!model.canEditTicketPriorities)
+    }
+
+    private var boardStatesBlock: some View {
+        Section {
+            Text("The Linear workflow states Symphony creates for the board's phases. Nothing moves tickets into them yet.")
+                .foregroundStyle(.secondary)
+            WorkflowStateRow(title: "Code review", name: $model.workflowStates.codeReview)
+            WorkflowStateRow(title: "QA", name: $model.workflowStates.qa)
+            WorkflowStateRow(title: "Plan review", name: $model.workflowStates.planReview)
+            WorkflowStateRow(title: "Epic review", name: $model.workflowStates.epicReview)
+            WorkflowStateRow(title: "CI fix", name: $model.workflowStates.ciFix)
+            if model.workflowStatesError != nil {
+                CheckErrorPointer(subject: "these board states")
+            }
+        } header: {
+            Text("Board states (saved in symphony.yml)")
+        } footer: {
+            SectionFooter(
+                "issues.states.code_review, .qa, .plan_review, .epic_review and .ci_fix. At startup Symphony "
+                    + "creates a Linear state with each name in your team, and reports the exact name loudly "
+                    + "when one is missing or renamed instead of creating a duplicate. Renamed a state in "
+                    + "Linear? Point its field here at the new name. Save checks symphony.yml with symphony "
+                    + "check first; Symphony reads it when it next starts."
+            )
+        }
+        .disabled(!model.canEditWorkflowStates)
+    }
+
+    private var codeReviewBlock: some View {
+        Section {
+            Toggle(BuiltInTicketPatterns.toggleTitle, isOn: $model.ticketPatternsBuiltIn)
+            Text(
+                model.ticketPatternsBuiltIn
+                    ? BuiltInTicketPatternsChoice.on.explanation
+                    : BuiltInTicketPatternsChoice.off.explanation
+            )
+            .foregroundStyle(.secondary)
+            if model.ticketPatternsBuiltInError != nil {
+                CheckErrorPointer(subject: "this setting")
+            }
+        } header: {
+            Text("Code Review (saved in symphony.yml)")
+        } footer: {
+            SectionFooter(
+                "auto_review.acceptance_gate.escalate.ticket_patterns_builtin. The built-in ticket patterns "
+                    + "match a title or description asking for a human or manual review, saying it must not be "
+                    + "auto-approved, or that it needs a human. Turn them off when they misfire on your tickets; "
+                    + "a repo can override this in its Review sheet in Repos. Save checks symphony.yml with symphony check "
+                    + "first; Symphony reads it on its next poll, no restart needed."
+            )
+        }
+        .disabled(!model.canEditTicketPatternsBuiltIn)
+    }
+
+    private var riskRulesBlock: some View {
+        RiskRulesSection(model: model)
+    }
+
+    private var phasesBlock: some View {
+        PhasesSection(model: model)
+    }
+
+    private var timeoutsBlock: some View {
+        Section {
+            TimeoutRow(title: "Git network timeout", minutes: $model.gitNetworkTimeoutMinutes)
+            Text("Stops a git fetch, pull, push or ls-remote that runs longer, so a remote that stops answering can't hold the repo.")
+                .foregroundStyle(.secondary)
+            TimeoutRow(title: "MCP tool timeout", minutes: $model.mcpToolTimeoutMinutes)
+            Text("Stops one call of Symphony's Linear and GitHub tools that runs longer and answers the agent with an error.")
+                .foregroundStyle(.secondary)
+            TimeoutRow(title: "Show a pending tool call after", minutes: $model.pendingToolReportMinutes)
+            Text("Shows a run as waiting on one of those calls once the call has run this long.")
+                .foregroundStyle(.secondary)
+            TimeoutRow(title: "Ask me to sign in again after", minutes: $model.signInAskAfterMinutes)
+            Text("Asks you in the Inbox once agents have been unable to sign in to their model this long.")
+                .foregroundStyle(DesignTokens.TextColor.secondary.color)
+            if let error = model.timeoutsError {
+                Text(error).foregroundStyle(.red)
+            }
+        } header: {
+            Text("Timeouts (saved in symphony.yml)")
+        } footer: {
+            SectionFooter(
+                "workspaces.git_network_timeout_ms (default 5 minutes), execution.timeouts.mcp_tool_ms (default "
+                    + "10 minutes), watchdog.pending_tool_report_after_ms (default 1 minute) and "
+                    + "execution.usage_limit.sign_in_ask_after_seconds (default 30 minutes). Save checks "
+                    + "symphony.yml with symphony check first; Symphony reads them on the next call, no restart "
+                    + "needed."
+            )
+        }
+        .disabled(!model.canEditTimeouts)
+    }
+
+    private var gitHubUpdatesBlock: some View {
+        Section {
+            MinutesRow(title: "Safety-net check every", minutes: $model.safetyNetCheckMinutes)
+            Text(
+                "While GitHub's webhook deliveries arrive, Symphony also checks every PR this often, to catch "
+                    + "one a delivery missed. Without deliveries it checks at the poll interval."
+            )
+            .foregroundStyle(.secondary)
+            MinutesRow(title: "Warn me after no updates for", minutes: $model.silenceAlertMinutes)
+            Text("Shows a warning when no delivery has arrived from GitHub for this long.")
+                .foregroundStyle(.secondary)
+            if let error = model.gitHubUpdatesError {
+                Text(error).foregroundStyle(.red)
+            }
+        } header: {
+            Text("GitHub updates (saved in symphony.yml)")
+        } footer: {
+            SectionFooter(
+                "github.webhooks.fallback_poll_interval_ms (default 5 minutes) and "
+                    + "github.webhooks.silence_alert_minutes (default 10 minutes). Save checks symphony.yml with "
+                    + "symphony check first; Symphony reads them on its next check, no restart needed."
+            )
+        }
+        .disabled(!model.canEditGitHubUpdates)
+    }
+
+    private var linearWebhooksBlock: some View {
+        LinearWebhooksSection(model: model)
+    }
+
+    private var dispatchLoopsBlock: some View {
+        Section {
+            DispatchLoopRow(title: "Hold a ticket after", runs: $model.dispatchLoopRuns, minutes: $model.dispatchLoopWindowMinutes)
+            DispatchLoopRow(title: "Or after", runs: $model.dispatchLoopLongRuns, minutes: $model.dispatchLoopLongWindowMinutes)
+            Text(
+                "Once a ticket got this many runs of one kind in that time with no state change, new PR head or "
+                    + "decision, Symphony starts no more and puts it on a Blocked hold that says why. Unblock it "
+                    + "from the Inbox."
+            )
+            .foregroundStyle(.secondary)
+            if let error = model.dispatchLoopError {
+                Text(error).foregroundStyle(.red)
+            }
+        } header: {
+            Text("Dispatch loops (saved in symphony.yml)")
+        } footer: {
+            SectionFooter(
+                "watchdog.dispatch_loop_runs in watchdog.dispatch_loop_window_ms (default 4 runs in 10 minutes) "
+                    + "and watchdog.dispatch_loop_long_runs in watchdog.dispatch_loop_long_window_ms (default 8 "
+                    + "runs in 60 minutes). Save checks symphony.yml with symphony check first; Symphony reads "
+                    + "them on its next dispatch, no restart needed."
+            )
+        }
+        .disabled(!model.canEditDispatchLoop)
+    }
+
+    private var dispatchBlock: some View {
+        DispatchSection(model: model)
+    }
+
+    private var ledgerBlock: some View {
+        Section {
+            LabeledContent("Largest artifact") {
+                HStack {
+                    Text("\(model.artifactMaxMegabytes) MB")
+                        .monospacedDigit()
+                    Stepper("Largest artifact in MB", value: $model.artifactMaxMegabytes, in: LedgerSettings.megabyteRange)
+                        .labelsHidden()
+                }
+            }
+            Text(
+                "Symphony keeps every artifact file (screenshots, transcripts) for good, so a ticket's history "
+                    + "stays whole. It refuses to store a file larger than the cap."
+            )
+            .foregroundStyle(.secondary)
+            Toggle("Give agents the ticket's history summary", isOn: $model.promptBriefEnabled)
+            LabeledContent("Summary size limit") {
+                HStack {
+                    TextField("Summary size limit in tokens", value: $model.promptBriefMaxTokens, format: .number)
+                        .labelsHidden()
+                        .monospacedDigit()
+                        .frame(width: 90)
+                        .accessibilityLabel("Summary size limit in tokens")
+                    Text("tokens")
+                }
+            }
+            .disabled(!model.promptBriefEnabled)
+            Text(
+                "Every agent starts from a summary of the ticket's whole history: every decision, open finding "
+                    + "and note in full. Nothing is left out: a ticket whose summary is over the limit waits for you "
+                    + "to choose in the Inbox whether it goes on with the whole summary or is canceled."
+            )
+            .foregroundStyle(.secondary)
+            if let error = model.ledgerError {
+                Text(error).foregroundStyle(.red)
+            }
+        } header: {
+            Text("Ledger (saved in symphony.yml)")
+        } footer: {
+            SectionFooter(
+                "ledger.artifact_max_bytes (default 25 MB), ledger.prompt_brief_enabled (default on) and "
+                    + "ledger.prompt_brief_max_tokens (default 50,000 tokens). Save checks symphony.yml with symphony "
+                    + "check first; Symphony reads them on its next stored file and agent prompt, no restart needed."
+            )
+        }
+        .disabled(!model.canEditLedger)
+    }
+
+    private var reportsBlock: some View {
+        ReportsSection(model: model)
+    }
+
+    private var conductorBlock: some View {
+        ConductorSection(settings: $model.conductor, error: model.conductorError, editable: model.canEditConductor)
+    }
+
+    private var macAppQABlock: some View {
+        MacAppQASection(model: model)
+    }
+
+    private var environmentBlock: some View {
+        Section {
+            if model.isLoadingSecrets {
+                HStack {
+                    ProgressView().controlSize(.small)
+                    Text(StatusMenu.keychainWaitingLine).foregroundStyle(.secondary)
+                }
+            }
+            // Off until the read fills them in, so nothing typed is overwritten.
+            SecureField(SecretSettings.linearAPIKeyName, text: $model.linearAPIKey, prompt: Text("lin_api_…"))
+                .disabled(model.isLoadingSecrets)
+            ForEach($model.extraRows) { $row in
+                HStack {
+                    TextField("Name", text: $row.name, prompt: Text("NAME"))
+                        .labelsHidden()
+                    SecureField("Value", text: $row.value, prompt: Text("Value"))
+                        .labelsHidden()
+                    IconButton("minus.circle", help: "Remove this variable", size: .small) {
+                        model.removeRow(id: row.id)
+                    }
+                }
+            }
+            Button("Add Variable") { model.addRow() }
+                .disabled(model.isLoadingSecrets)
+        } header: {
+            Text("Environment (stored in a file only you can read)")
+        }
+    }
 }
 
 /// Code Review's risk rules (`auto_review.acceptance_gate.escalate.on_match` and `.size_counts`): per rule, whether

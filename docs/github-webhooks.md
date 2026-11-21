@@ -231,7 +231,7 @@ github:
     # silence_alert_minutes: 10           # warn after this long without a delivery
 ```
 
-The app's Settings window has both intervals under **GitHub updates**.
+The app's Settings page has both intervals under **GitHub updates**, in its **GitHub and Linear** section.
 
 Restart Symphony. The app's **GitHub updates** card in Setup reads **Instant** once a delivery verified.
 
