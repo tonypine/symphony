@@ -152,7 +152,7 @@ defmodule SymphonyElixir.QaDriverTest do
         "ax-set-value" => {~s({"ok":true,"element":{"path":"0.2","role":"AXTextField"}}), 0},
         "ax-select" => {~s({"ok":true,"selected":true,"element":{"path":"0.3.1","role":"AXRow","selected":true}}), 0},
         "click" => {~s({"ok":true,"clicked":{"x":120,"y":200},"clicks":1,"element":{"path":"0.4","role":"AXButton"}}), 0},
-        "hover" => {~s({"ok":true,"hovered":{"x":120,"y":200},"settled":true,"under_pointer":{"role":"AXRow"}}), 0},
+        "hover" => {~s({"ok":true,"hovered":{"x":120,"y":200},"settled":true,"under_pointer":{"role":"AXRow"},"cursor":"pointing_hand"}), 0},
         "context-menu" => {~s({"ok":true,"clicked":{"x":120,"y":200},"menu":{"path":"2","role":"AXMenu","items":[{"path":"2.0","role":"AXMenuItem","title":"Pause"}]},"window_id":31}), 0},
         "scroll" => {~s({"ok":true,"scrolled":{"x":300,"y":200},"via":"pid","edge":"bottom","at_edge":true,"visible":{"count":16,"last":{"role":"AXRow","text":"Run 120"}}}), 0},
         "key" => {~s({"ok":true,"key":"return","modifiers":[],"window":{"role":"AXWindow"},"focused":{"role":"AXOutline"}}), 0}
@@ -1131,7 +1131,7 @@ defmodule SymphonyElixir.QaDriverTest do
       {driver, pid} = launched_app(worktree)
       pid_arg = Integer.to_string(pid)
 
-      assert {:ok, %{"settled" => true, "under_pointer" => %{"role" => "AXRow"}}} =
+      assert {:ok, %{"settled" => true, "under_pointer" => %{"role" => "AXRow"}, "cursor" => "pointing_hand"}} =
                QaDriver.call_tool(driver, "qa_hover", %{"pid" => pid, "path" => "0.3.1"})
 
       assert_received {:cmd, @helper, ["hover", ^pid_arg, "0.3.1"], _opts}
@@ -1220,6 +1220,15 @@ defmodule SymphonyElixir.QaDriverTest do
       end
 
       refute_received {:cmd, @helper, ["scroll" | _rest], _opts}
+    end
+
+    test "passes an unreadable cursor on to the agent with its reason and no shape", %{worktree: worktree} do
+      reason = "The current cursor matches none of the system's named cursors: the app draws its own image there."
+      reply = Jason.encode!(%{"ok" => true, "hovered" => %{"x" => 120, "y" => 200}, "settled" => true, "cursor" => nil, "cursor_unreadable" => reason})
+      {driver, pid} = launched_app(worktree, host: host(%{helper_replies: %{"hover" => {reply, 0}}}))
+
+      assert {:ok, %{"cursor" => nil, "cursor_unreadable" => ^reason}} =
+               QaDriver.call_tool(driver, "qa_hover", %{"pid" => pid, "path" => "0.3.1"})
     end
 
     test "passes the helper's row, click and key errors on to the agent", %{worktree: worktree} do

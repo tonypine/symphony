@@ -836,7 +836,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "qa_hover",
       "description" =>
-        "Move the pointer over an element's centre (`path`) or a point on screen (`x`, `y`, in the points of qa_ax_tree's frames) of the launched app and wait for the app to settle, so a hover state (a button that shows on hover, a highlight) can be judged with qa_ax_tree and qa_screenshot. The pointer stays there. Fails like qa_click when the target is off screen or covered.",
+        "Move the pointer over an element's centre (`path`) or a point on screen (`x`, `y`, in the points of qa_ax_tree's frames) of the launched app and wait for the app to settle, so a hover state (a button that shows on hover, a highlight) can be judged with qa_ax_tree and qa_screenshot. The pointer stays there. The result's `cursor` names the cursor shown there once it settled (`arrow`, `pointing_hand`, `i_beam`, `open_hand`, `closed_hand`, `crosshair`, `operation_not_allowed`, `resize_left_right`, `resize_up_down` and a few other system cursors); judge a cursor step by it, never by hover tint, `under_pointer` or a screenshot, which does not draw the pointer. A `cursor` of null with `cursor_unreadable` means the shape could not be read or is the app's own image: the step is blocked, not passed. Fails like qa_click when the target is off screen or covered.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
