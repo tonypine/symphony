@@ -34,6 +34,7 @@
     "base_ref": null,
     "cancel_reruns": 0,
     "ci": "green",
+    "ci_proof": "none",
     "competing": [],
     "conflict_attempts": 0,
     "failing_check": null,
