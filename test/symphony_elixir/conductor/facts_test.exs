@@ -1,8 +1,8 @@
 defmodule SymphonyElixir.Conductor.FactsTest do
   use ExUnit.Case, async: true
 
-  alias SymphonyElixir.Conductor.Facts
-  alias SymphonyElixir.{RunStore, TicketEvents}
+  alias SymphonyElixir.Conductor.{Answer, Facts}
+  alias SymphonyElixir.{RunStore, TicketEvents, TicketPlan}
 
   @description """
   Intro line.
@@ -257,7 +257,11 @@ defmodule SymphonyElixir.Conductor.FactsTest do
     assert identifier == ctx.identifier
     assert {:ok, %{junction: nil}} = Facts.read(ctx.issue_id, "", diff_stat: fn _ -> nil end, token_cap: 1)
     assert Facts.read("NOPE-1", nil) == {:error, :not_found}
-    assert {:error, {:invalid, "junction must be one of: after_coding, after_qa_fail, after_qa_blocked, after_rework, before_merge, during_run"}} = Facts.read(ctx.identifier, "whenever")
+
+    assert {:error,
+            {:invalid,
+             "junction must be one of: grooming, after_coding, after_qa_fail, after_qa_blocked, after_rework, before_merge, message, sub_ticket_ended, final_check, child_message, during_run"}} =
+             Facts.read(ctx.identifier, "whenever")
   end
 
   describe "fit/2" do
@@ -282,6 +286,224 @@ defmodule SymphonyElixir.Conductor.FactsTest do
       for max <- [25, 40, 100], text <- ["a. b. c. d. e. f. g. h. i. j. k. l. m. n.", String.duplicate("é ", 80)] do
         assert String.length(Facts.fit(text, max)) <= max
       end
+    end
+  end
+
+  describe "at grooming" do
+    defp family!(ctx) do
+      n = System.unique_integer([:positive])
+      parent = %{repo_key: ctx.repo, issue_id: "parent-#{n}", issue_identifier: "PAR-#{n}", phase: "Waiting on sub-tickets", title: "Filters"}
+      child_of = %{identifier: parent.issue_identifier}
+      sibling = %{repo_key: ctx.repo, issue_id: "sibling-#{n}", issue_identifier: "SIB-#{n}", phase: "Done", title: "The API filter", parent: child_of}
+      quiet = %{sibling | issue_id: "quiet-#{n}", issue_identifier: "QUIET-#{n}"}
+      for record <- [parent, sibling, quiet], do: :ok = RunStore.put_ticket_state(record)
+      child = Map.put(ctx.record, :parent, child_of)
+      :ok = RunStore.put_ticket_state(child)
+      %{parent: parent, sibling: sibling, child: child}
+    end
+
+    defp plan do
+      %{
+        reason: "Grooming",
+        by: "grooming",
+        shape: "split",
+        layers: ["api", "screen"],
+        summary: "Two sub-tickets: the API, then the list.",
+        text: "Approach: the API first.",
+        checks: [%{id: "c1", kind: "outcome", statement: "The list is filtered.", proof: "test"}],
+        size: %{tokens: 1, runs: 1},
+        sub_tickets: [%{key: "s1", title: "The API filter", ask: "Add it."}]
+      }
+    end
+
+    test "the document is what was asked and the layer vocabulary, with no run facts", ctx do
+      {:ok, ask} = TicketPlan.record_ask(ctx.repo, ctx.issue_id, "Keep the filter after a reload.")
+      note = record!(ctx, "note", %{text: "Only the list."}, actor: {:person, "Director"})
+
+      facts = Facts.build(ctx.record, "grooming", token_cap: 10)
+
+      assert %{schema: "symphony.conductor.facts/1", junction: "grooming", parent: nil, siblings: [], sub_tickets: [], conductor: []} = facts
+      assert %{tokens_used: 0, tokens_cap: 10} = facts.budget
+      assert facts.focus =~ "you write its plan"
+      assert facts.ticket == %{identifier: ctx.identifier, title: "Fix login", url: ctx.record.url, repo: ctx.repo, labels: []}
+      assert facts.asks == [%{event_id: ask.id, source: "linear", text: "Keep the filter after a reload."}]
+      assert [%{event_id: id, text: "Only the list."}] = facts.notes
+      assert id == note.id
+      assert facts.decisions == [%{title: "Scope", answer: "Only the button."}]
+      assert facts.answers == []
+      assert Enum.map(facts.layers, & &1.name) == Answer.layers()
+      assert Enum.all?(facts.layers, &is_binary(&1.means))
+      refute Map.has_key?(facts, :last_run)
+      assert {:ok, _json} = Jason.encode(facts)
+    end
+
+    test "a sub-ticket reads its parent's plan and notes, and its siblings' tagged notes", ctx do
+      family = family!(ctx)
+      {:ok, written} = TicketPlan.write(ctx.repo, family.parent.issue_id, plan())
+      {:ok, base} = TicketEvents.record(ctx.repo, family.parent.issue_id, "note", %{text: "main fails to build.", tag: "base_fault"}, actor: agent("run-p", "implementation"))
+      {:ok, found} = TicketEvents.record(ctx.repo, family.sibling.issue_id, "note", %{text: "The endpoint pages by 50.", tag: "discovery"}, actor: agent("run-s", "implementation"))
+      {:ok, _plain} = TicketEvents.record(ctx.repo, family.sibling.issue_id, "note", %{text: "No tag."}, actor: agent("run-s", "implementation"))
+
+      facts = Facts.build(family.child, "grooming", token_cap: nil)
+
+      assert facts.parent == %{
+               identifier: family.parent.issue_identifier,
+               title: "Filters",
+               plan: %{
+                 event_id: written.id,
+                 version: 1,
+                 shape: "split",
+                 layers: ["api", "screen"],
+                 summary: "Two sub-tickets: the API, then the list.",
+                 text: "Approach: the API first.",
+                 sub_tickets: [%{key: "s1", title: "The API filter"}]
+               },
+               notes: [%{event_id: base.id, tag: "base_fault", text: "main fails to build."}]
+             }
+
+      assert facts.siblings == [
+               %{identifier: family.sibling.issue_identifier, title: "The API filter", phase: "Done", notes: [%{event_id: found.id, tag: "discovery", text: "The endpoint pages by 50."}]}
+             ]
+    end
+
+    test "a ticket that already has sub-tickets lists them, for a split to adopt", ctx do
+      family = family!(ctx)
+      known = %{id: family.sibling.issue_id, identifier: family.sibling.issue_identifier, state: "Done"}
+      parent = Map.put(family.parent, :sub_issues, [known, %{id: "untracked", identifier: "NEW-1", state: "Backlog"}])
+
+      assert Facts.build(parent, "grooming", token_cap: nil).sub_tickets == [
+               %{identifier: family.sibling.issue_identifier, title: "The API filter", state: "Done"},
+               %{identifier: "NEW-1", title: nil, state: "Backlog"}
+             ]
+
+      assert Facts.build(Map.put(family.parent, :sub_issues, :unknown), "grooming", token_cap: nil).sub_tickets == []
+    end
+
+    test "a parent Symphony does not track, or one with no plan yet, gives what there is", ctx do
+      orphan = Map.put(ctx.record, :parent, %{identifier: "GONE-1"})
+      assert %{parent: nil, siblings: []} = Facts.build(orphan, "grooming", token_cap: nil, records: [])
+
+      family = family!(ctx)
+      assert %{parent: %{plan: nil, notes: []}, siblings: []} = Facts.build(family.child, "grooming", token_cap: nil)
+      assert {:ok, %{junction: "grooming"}} = Facts.read(ctx.identifier, "grooming", token_cap: nil)
+    end
+  end
+
+  describe "at a turn on a ticket with sub-tickets" do
+    test "the document is the tree: the plan, each sub-ticket's standing, what merged and the rounds", ctx do
+      family = family!(ctx)
+      parent_id = family.parent.issue_id
+      {:ok, ask} = TicketPlan.record_ask(ctx.repo, parent_id, "Filter the list.")
+      {:ok, written} = TicketPlan.write(ctx.repo, parent_id, plan())
+      {:ok, _round} = TicketPlan.write(ctx.repo, parent_id, %{plan() | reason: "Final check: the docs are missing.", by: "recalibration"})
+      {:ok, _plan} = TicketPlan.write(ctx.repo, family.sibling.issue_id, %{plan() | shape: "single", summary: "The API takes a filter."})
+      {:ok, child_ask} = TicketPlan.record_ask(ctx.repo, family.sibling.issue_id, "Add it.", source: "parent", from: family.parent.issue_identifier)
+      agent = agent("run-s", "implementation")
+      {:ok, found} = TicketEvents.record(ctx.repo, family.sibling.issue_id, "note", %{text: "The endpoint pages by 50.", tag: "discovery"}, actor: agent)
+      url = "https://github.com/acme/app/pull/77"
+      :ok = SymphonyElixir.TicketPullRequest.put(ctx.repo, family.sibling.issue_id, %{pr_url: url})
+      :ok = SymphonyElixir.TicketPullRequest.mark_finished(ctx.repo, url, "merged")
+      known = %{id: family.sibling.issue_id, identifier: family.sibling.issue_identifier, state: "Done"}
+      parent = Map.put(family.parent, :sub_issues, [known, %{id: "untracked", identifier: "NEW-1", state: "Canceled"}])
+
+      facts = Facts.build(parent, "final_check", token_cap: nil)
+
+      assert %{schema: "symphony.conductor.facts/1", junction: "final_check", conductor: [], decisions: [], notes: [], answers: []} = facts
+      assert facts.focus =~ "The last sub-ticket ended"
+      assert facts.ticket == %{identifier: family.parent.issue_identifier, title: "Filters", url: nil, repo: ctx.repo, phase: "Waiting on sub-tickets", pull_request: "none"}
+      assert facts.asks == [%{event_id: ask.id, source: "linear", text: "Filter the list."}]
+      assert %{version: 2, shape: "split", summary: "Two sub-tickets: the API, then the list."} = facts.plan
+      assert facts.plan.event_id != written.id
+      assert facts.checks == [%{id: "c1", kind: "outcome", statement: "The list is filtered.", proof: "test", state: "open"}]
+      assert facts.rounds == %{made: 1, limit: 3, left: 2}
+
+      assert facts.sub_tickets == [
+               %{
+                 identifier: family.sibling.issue_identifier,
+                 title: "The API filter",
+                 phase: "Done",
+                 state: "Done",
+                 pull_request: "merged",
+                 plan: "The API takes a filter.",
+                 checks: [%{id: "c1", kind: "outcome", statement: "The list is filtered.", proof: "test", state: "open"}],
+                 notes: [%{event_id: found.id, tag: "discovery", text: "The endpoint pages by 50."}],
+                 asks: [%{event_id: child_ask.id, source: "parent", from: family.parent.issue_identifier, text: "Add it."}]
+               },
+               %{identifier: "NEW-1", state: "Canceled"}
+             ]
+
+      assert {:ok, _json} = Jason.encode(facts)
+      assert %{junction: "sub_ticket_ended", sub_tickets: [_tracked, _untracked]} = Facts.build(parent, "sub_ticket_ended", token_cap: nil)
+      # A ticket with no plan reads as at any other junction.
+      assert %{ticket: %{problem: _problem}} = Facts.build(ctx.record, "final_check", token_cap: nil)
+    end
+  end
+
+  describe "a groomed ticket at the other junctions" do
+    setup ctx do
+      checks = [
+        %{id: "c1", kind: "outcome", statement: "The button signs in.", proof: "test"},
+        %{id: "c2", kind: "qa", statement: "The login works.", proof: "qa", state: "Signed out", action: "Click Login", expect: "The home screen"},
+        %{id: "c3", kind: "outcome", statement: "The export matches.", proof: "attached"}
+      ]
+
+      plan = %{shape: "single", layers: ["screen"], summary: "s", text: "t", checks: checks, size: %{tokens: 1, runs: 1}}
+      plan = Map.merge(plan, %{reason: "Grooming", by: "grooming"})
+      {:ok, _ask} = TicketPlan.record_ask(ctx.repo, ctx.issue_id, "Make the login button work.")
+      {:ok, _plan} = TicketPlan.write(ctx.repo, ctx.issue_id, plan)
+      :ok
+    end
+
+    test "the ticket is read through its ask and its checks, never its description", ctx do
+      {:ok, proof} = SymphonyElixir.TicketChecks.prove(ctx.repo, ctx.issue_id, %{check_id: "c1", by: "test", test: "login_test › signs in"})
+      {:ok, _waived} = SymphonyElixir.TicketChecks.waive(ctx.repo, ctx.issue_id, "c3", "No export exists to attach.", by: :person)
+      {:ok, note} = TicketEvents.record(ctx.repo, ctx.issue_id, "note", %{text: "c3 cannot be proved: there is no export."}, actor: {:agent, "run-1", "implementation"}, run_id: "run-1")
+      {:ok, _own} = TicketEvents.record(ctx.repo, ctx.issue_id, "note", %{text: "Symphony's own note.", status: true})
+
+      facts = Facts.build(ctx.record, "after_coding", token_cap: nil)
+
+      assert %{problem: "Make the login button work.", acceptance: "[c1] The button signs in.", walkthrough: walkthrough} = facts.ticket
+      assert walkthrough =~ "[c2] The login works.\nState: Signed out\nAction: Click Login\nExpect: The home screen"
+      assert facts.ticket.proved_steps == [%{step: 1, test: "login_test › signs in", event_id: proof.id}]
+      assert facts.ticket.decisions == [%{title: "Scope", answer: "Only the button."}]
+
+      assert facts.checks == [
+               %{id: "c1", kind: "outcome", statement: "The button signs in.", proof: "test", state: "proved"},
+               %{id: "c2", kind: "qa", statement: "The login works.", proof: "qa", state: "open"},
+               %{id: "c3", kind: "outcome", statement: "The export matches.", proof: "attached", state: "waived", waived: "No export exists to attach."}
+             ]
+
+      assert [%{event_id: id, run_id: "run-1", text: "c3 cannot be proved: there is no export."}] = facts.check_notes
+      assert id == note.id
+      assert facts.waive =~ "waive it"
+      assert facts.waive =~ "only the person can waive it"
+      refute Map.has_key?(facts, :open_checks)
+
+      # Before the merge, a check that is still open is said plainly; with none open, nothing is.
+      assert %{open_checks: %{rule: rule, checks: open}} = Facts.build(ctx.record, "before_merge", token_cap: nil)
+      assert rule =~ "still open, and the pull request merges next"
+      assert open == [%{id: "c2", kind: "qa", statement: "The login works.", proof: "qa"}]
+      {:ok, _proved} = SymphonyElixir.TicketChecks.prove(ctx.repo, ctx.issue_id, %{check_id: "c2", by: "qa"})
+      refute Map.has_key?(Facts.build(ctx.record, "before_merge", token_cap: nil), :open_checks)
+    end
+
+    test "a ticket with no plan holds none of it", ctx do
+      ungroomed = %{ctx.record | issue_id: ctx.issue_id <> "-plain"}
+      :ok = RunStore.put_ticket_state(ungroomed)
+      facts = Facts.build(ungroomed, "after_coding", token_cap: nil)
+      assert facts.ticket.problem == "The login button does nothing."
+      refute Map.has_key?(facts, :checks)
+      refute Map.has_key?(facts, :waive)
+      refute Map.has_key?(Facts.build(ungroomed, "before_merge", token_cap: nil), :open_checks)
+    end
+
+    test "at message the document is the conversation's, and a ticket with no plan reads as at any other junction", ctx do
+      assert %{conversation: [%{kind: "ask", text: "Make the login button work."}], plan: %{summary: "s"}, ticket: ticket} = Facts.build(ctx.record, "message", token_cap: nil, records: [])
+      refute Map.has_key?(ticket, :parent)
+      assert %{ticket: %{parent: "FACT-1"}} = Facts.build(Map.put(ctx.record, :parent, %{identifier: "FACT-1"}), "child_message", token_cap: nil, records: [])
+
+      ungroomed = %{ctx.record | issue_id: ctx.issue_id <> "-plain"}
+      assert %{ticket: %{problem: _problem}} = Facts.build(ungroomed, "message", token_cap: nil)
     end
   end
 end

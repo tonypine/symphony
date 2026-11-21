@@ -13,10 +13,14 @@ defmodule SymphonyElixir.DecisionMove do
   A move may carry a verdict recorded before it, bound to the head the question was asked on: a
   merge without a QA result records the `qa` verdict `skip` with the reason `skipped by decision`.
   It may also carry a finding recorded before it, as the run that asked's (`finding`, the
-  Conductor's "Send it to Rework" option): the rework run reads it as it reads QA's findings.
+  Conductor's "Send it to Rework" option): the rework run reads it as it reads QA's findings. And
+  it may carry waivers (`waive`): checks of the ticket's plan recorded as waived before the move,
+  each with its reason (`SymphonyElixir.ChecksHold`'s "Waive them and pass it on").
   """
 
-  alias SymphonyElixir.{MergeConfirmation, TicketSignals, TransitionGuard}
+  require Logger
+
+  alias SymphonyElixir.{MergeConfirmation, TicketChecks, TicketSignals, TransitionGuard}
 
   @canceled_spellings ["Canceled", "Cancelled"]
 
@@ -26,8 +30,16 @@ defmodule SymphonyElixir.DecisionMove do
   @typedoc "A finding a move records first: what must change, and the run (its id and kind) it is recorded as."
   @type finding :: %{description: String.t(), run_id: String.t(), run_kind: String.t()}
 
-  @typedoc "The state a picked option moves the ticket to, and the verdict and finding it records first, if any."
-  @type t :: %{required(:to) => String.t(), optional(:verdict) => verdict(), optional(:finding) => finding()}
+  @typedoc "A check of the ticket's plan a move waives first, and why."
+  @type waiver :: %{check_id: String.t(), reason: String.t()}
+
+  @typedoc "The state a picked option moves the ticket to, and the verdict, the finding and the waivers it records first, if any."
+  @type t :: %{
+          required(:to) => String.t(),
+          optional(:verdict) => verdict(),
+          optional(:finding) => finding(),
+          optional(:waive) => [waiver()]
+        }
 
   @doc "`option` carrying `move`: picking it makes the move."
   @spec option(map(), t()) :: map()
@@ -49,7 +61,7 @@ defmodule SymphonyElixir.DecisionMove do
   end
 
   @doc """
-  Records the move's finding and verdict, then moves the ticket `issue_id` of `repo_key` to the move's state
+  Records the move's finding, verdict and waivers, then moves the ticket `issue_id` of `repo_key` to the move's state
   through the guard (`SymphonyElixir.TransitionGuard.perform/4`, which writes the record first). A
   move to Canceled tries the team's other spelling when the first is not one of its states.
   Answers `{:ok, state}` with the state it moved to, or the guard's error. `opts[:issue_identifier]`
@@ -59,6 +71,7 @@ defmodule SymphonyElixir.DecisionMove do
   def perform(repo_key, issue_id, %{to: to} = move, opts \\ []) do
     record_finding(repo_key, issue_id, Map.get(move, :finding))
     record_verdict(repo_key, issue_id, Map.get(move, :verdict))
+    record_waivers(repo_key, issue_id, Map.get(move, :waive))
     ctx = %{repo_key: repo_key, issue_identifier: Keyword.get(opts, :issue_identifier)}
 
     Enum.reduce_while(spellings(to), {:error, :state_not_found}, fn state, _result ->
@@ -83,6 +96,17 @@ defmodule SymphonyElixir.DecisionMove do
   end
 
   defp record_finding(_repo_key, _issue_id, _none), do: :ok
+
+  # A check the plan no longer holds is skipped: the move still stands. The move is the person's
+  # pick, so it may waive an outcome too.
+  defp record_waivers(repo_key, issue_id, [_ | _] = waivers) do
+    for %{check_id: check_id, reason: reason} <- waivers do
+      with {:error, why} <- TicketChecks.waive(repo_key, issue_id, check_id, reason, by: :person),
+           do: Logger.warning("Could not waive check #{check_id} on issue_id=#{issue_id} repo_key=#{repo_key}: #{inspect(why)}")
+    end
+  end
+
+  defp record_waivers(_repo_key, _issue_id, _none), do: :ok
 
   defp spellings(to), do: if(to in @canceled_spellings, do: [to | @canceled_spellings -- [to]], else: [to])
 

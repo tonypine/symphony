@@ -145,6 +145,10 @@ defmodule SymphonyElixir.TransitionGuard do
     %{signal: :plan_revise, from: ["Plan Review"], to: "Rework"},
     # A plan parent whose approved sub-issues are open waits on them (`SubIssueWait.park?/3`).
     %{signal: :plan_approve, from: ["In Progress"], to: :waiting_on_sub_issues},
+    # Grooming split a ticket into sub-tickets: it waits on them and gets no run (`Conductor.Tree`).
+    %{signal: :groomed_split, from: ["Todo", "In Progress"], to: :waiting_on_sub_issues},
+    # The final check of a groomed ticket whose sub-tickets all ended passed: Done.
+    %{signal: :final_check_pass, from: ["Waiting on sub-tickets"], to: "Done"},
     # A red head outside the CI Fix lane's phases: dispatch a CI fix run in In Progress.
     %{signal: :ci_fix_dispatch, from: :any, to: "In Progress"},
     # A landing run's PR merged: Done.

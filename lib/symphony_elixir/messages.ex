@@ -13,6 +13,11 @@ defmodule SymphonyElixir.Messages do
   only the messages written before it started, however many prompts it builds, so a message sent
   while it works waits for the next run. Sending never starts, stops or reorders a run.
 
+  A groomed ticket's messages go to its Conductor instead, while the Conductor and its `message`
+  junction are on (`SymphonyElixir.Conductor.Message`): the Conductor answers each one and passes
+  on what a run needs, so no run is given a person's message there and no `message.read` is
+  written (`prepend_unread/4`).
+
   Symphony's own notes (`note`) are not messages: they keep their type and are never given to a
   run as the person's words.
 
@@ -23,6 +28,7 @@ defmodule SymphonyElixir.Messages do
 
   require Logger
 
+  alias SymphonyElixir.Conductor.Message, as: ConductorMessage
   alias SymphonyElixir.{RunStore, TicketEvents}
   alias SymphonyElixir.TicketEvents.{Event, Summary}
 
@@ -157,10 +163,17 @@ defmodule SymphonyElixir.Messages do
   prompt with no run records no read; a store that can't be read gives no message, so the run still
   starts and they wait for the next. Every run's prompt goes through it: `SymphonyElixir.PromptBuilder`
   for the runs it builds, `SymphonyElixir.ReviewAgent` for Code Review, `SymphonyElixir.QaAgent` and
-  `SymphonyElixir.QaAgent.Steps` for QA.
+  `SymphonyElixir.QaAgent.Steps` for QA. On a ticket whose messages the Conductor answers
+  (`SymphonyElixir.Conductor.Message.due?/2`) the prompt is left as it is and no read is recorded.
   """
   @spec prepend_unread(String.t(), String.t() | nil, String.t() | nil, String.t() | nil) :: String.t()
   def prepend_unread(prompt, repo_key, issue_id, run_id) when is_binary(repo_key) and is_binary(issue_id) do
+    if ConductorMessage.due?(issue_id), do: prompt, else: prepend_for_run(prompt, repo_key, issue_id, run_id)
+  end
+
+  def prepend_unread(prompt, _repo_key, _issue_id, _run_id), do: prompt
+
+  defp prepend_for_run(prompt, repo_key, issue_id, run_id) do
     events = issue_id |> RunStore.list_ticket_events(types: ["run.started" | @types]) |> List.wrap() |> Enum.filter(&is_struct(&1, Event))
 
     case for_run(events, run_id) do
@@ -172,8 +185,6 @@ defmodule SymphonyElixir.Messages do
         prepend(prompt, messages)
     end
   end
-
-  def prepend_unread(prompt, _repo_key, _issue_id, _run_id), do: prompt
 
   @doc "`prompt` with `messages` at its top under `prompt_section/1`; `prompt` itself when there are none."
   @spec prepend(String.t(), [Event.t()]) :: String.t()

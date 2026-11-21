@@ -965,6 +965,11 @@ defmodule SymphonyElixir.QaAgent.Steps do
 
   defp target_text(nil), do: ""
 
+  defp target_text(%{check_id: check_id} = target) do
+    "The check you walk (check #{check_id} of the ticket's plan):\n" <>
+      PromptSafety.linear_block(target.text, "walkthrough_step", @fact_bytes)
+  end
+
   defp target_text(target) do
     "The walkthrough step you walk (step #{target.number} of the ticket's `## User walkthrough`):\n" <>
       PromptSafety.linear_block(target.text, "walkthrough_step", @fact_bytes)

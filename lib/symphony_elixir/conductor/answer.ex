@@ -34,7 +34,47 @@ defmodule SymphonyElixir.Conductor.Answer do
       each text trimmed (a blank or non-string one reads as nil) and the lists kept to their
       non-blank strings; `Filing` refuses one missing a section or naming a repo Symphony does not
       manage, and the turn records its message without it, so a malformed ticket route never
-      refuses the answer.
+      refuses the answer;
+    * `plan` (the Grooming turn's, `plan: true`): the ticket's plan, as `plan.written` holds it
+      (`SymphonyElixir.TicketPlan`) but for what Symphony fills in (`version`, `reason`, `by`):
+      `shape` (`single` or `split`), `layers` (at least one of `layers/0`), `summary` (for a person,
+      cut to 600 characters), `text` (for agents, cut to 12,000), `checks` (at least one, at most 30,
+      and at least one of kind `outcome`), `size` (`tokens` and `runs`, whole numbers) and, for a
+      split, `sub_tickets` (at least one, at most 12). A check holds a `kind` (`outcome`, `qa`, `evidence`), a
+      `statement` (cut to 600) and its `proof` (`test`, `qa`, `design`, `attached`); a `qa` check
+      also the `action` and what to `expect`, and any check may say the app `state` it needs (each
+      cut to 400), the `size` it is walked at (`normal`, `wide`) and a Gallery `story`. A sub-ticket
+      holds a `title` (cut to 120) and an `ask` (cut to 4,000), the sibling keys it waits `after`,
+      a `repo`, and the `identifier` of a sub-ticket the ticket already has, which is adopted
+      instead of created. A check keeps the `id` it gives and is left without one otherwise:
+      `SymphonyElixir.TicketPlan.write/4` names the checks. A sub-ticket with no `key` gets
+      `s<its place>`. With a question (`ask_person`) the plan is left unread: the person answers
+      first. A Grooming answer holds a plan or a question; one with neither is refused, and so is
+      a plan that misses this shape. Its `instructions` may be null.
+
+    * `done` and `tree` (a turn's on a ticket with sub-tickets, `tree: true`: `sub_ticket_ended` and
+      `final_check`, `SymphonyElixir.Conductor.Tree`): `done` is `true` when the final check found
+      the whole ticket done, anything else reads as `false`; `tree` lists at most 10 operations on
+      the sub-tickets, each `{"op": ...}` with the `reason` it is made for (required, cut to 1,000
+      characters): `add` (a new sub-ticket: `title`, `ask`, the identifiers of the sub-tickets it
+      waits `after`, a `repo`), `cancel` (`ticket`, a sub-ticket's identifier), `rewrite`
+      (`ticket`, its new `ask`, and `stop: true` to stop its run first) and `stop` (`ticket`). An
+      operation that misses its shape is dropped and logged, and never fails the answer. Such a
+      turn's `instructions` may be null.
+
+    * a turn's that answers a person's message (`message: true`, the `message` junction): `update`
+      is the reply and must be there; `ask` is `true` when the message changes what is asked
+      (anything else reads as `false`, and so does `true` beside a question), and then the new
+      `plan` must come in the same answer, with the `reason` it changed for (cut to 1,000
+      characters); `ask: true` with no plan is refused. `message: :reply` (a finished ticket's) reads the reply
+      and no `ask`. `plan: :optional` reads a plan when the
+      answer holds one (`child_message`). Its `instructions` may be null;
+    * `new_ticket` (`new_ticket: true`, a message on a finished ticket): null, or the ticket to
+      create for what the message asks: a `title` (cut to 120), an `ask` (cut to 4,000) and
+      optionally a `repo`. One that misses its shape is dropped and logged;
+    * `waive` (`waive: true`): the checks of the plan nobody can prove the way the plan says, each
+      `{"check_id": ..., "reason": ...}` (the reason cut to 1,000 characters); an entry that misses
+      its shape is dropped and logged.
 
   A text longer than its limit is cut to it at a sentence or word boundary (`Facts.fit/2`) and
   logged, never refused; only an answer that is not readable (not JSON, a wrong type, a blank
@@ -48,6 +88,7 @@ defmodule SymphonyElixir.Conductor.Answer do
 
   alias SymphonyElixir.Conductor.Facts
   alias SymphonyElixir.ReviewAgent
+  alias SymphonyElixir.TicketPlan
 
   @instructions_max 3_000
   @update_max 1_200
@@ -63,6 +104,21 @@ defmodule SymphonyElixir.Conductor.Answer do
   @ticket_text_max 2_000
   @ticket_items_max 12
   @ticket_item_max 500
+  @plan_shapes ~w(single split)
+  @plan_layers ~w(screen gallery api engine config tooling docs)
+  @plan_summary_max 600
+  @plan_text_max 12_000
+  @check_kinds ~w(outcome qa evidence)
+  @check_proofs ~w(test qa design attached)
+  @check_sizes ~w(normal wide)
+  @check_statement_max 600
+  @check_walk_max 400
+  @sub_ticket_ask_max 4_000
+  @id_max 20
+  @operations ~w(add cancel rewrite stop)
+  @operations_max 10
+  @reason_max 1_000
+  @waivers_max 20
 
   @type t :: %{
           instructions: String.t() | nil,
@@ -72,7 +128,37 @@ defmodule SymphonyElixir.Conductor.Answer do
           steer: %{message: String.t(), when: String.t()} | nil,
           stop: %{reason: String.t()} | nil,
           blocks: [map()],
-          route: %{to: String.t()} | %{to: String.t(), finding: String.t()} | ticket_route() | nil
+          route: %{to: String.t()} | %{to: String.t(), finding: String.t()} | ticket_route() | nil,
+          plan: plan() | nil,
+          done: boolean(),
+          tree: [operation()],
+          ask: boolean(),
+          new_ticket: new_ticket() | nil,
+          waive: [%{check_id: String.t(), reason: String.t()}]
+        }
+
+  @typedoc "The ticket a message on a finished ticket asks for: its title, its ask and, optionally, its repo."
+  @type new_ticket :: %{required(:title) => String.t(), required(:ask) => String.t(), optional(:repo) => String.t()}
+
+  @typedoc """
+  One operation on a ticket's sub-tickets (see the module doc): its `op`, its `reason`, and what the
+  op takes (`title`, `ask`, `after` and `repo`; or `ticket`, and for a `rewrite` its `ask` and `stop`).
+  """
+  @type operation :: %{required(:op) => String.t(), required(:reason) => String.t(), optional(atom()) => term()}
+
+  @typedoc """
+  A plan as the answer gave it (see the module doc), its keys as `plan.written` names them;
+  `SymphonyElixir.TicketPlan.write/4` records it.
+  """
+  @type plan :: %{
+          required(:shape) => String.t(),
+          required(:layers) => [String.t()],
+          required(:summary) => String.t(),
+          required(:text) => String.t(),
+          required(:checks) => [map()],
+          required(:size) => %{tokens: non_neg_integer(), runs: non_neg_integer()},
+          optional(:sub_tickets) => [map()],
+          optional(:reason) => String.t()
         }
 
   @typedoc "A `ticket` route as the answer gave it (see the module doc); `SymphonyElixir.Conductor.Filing` checks it."
@@ -100,6 +186,10 @@ defmodule SymphonyElixir.Conductor.Answer do
   @doc "The actions a question's option may name, the closed list Symphony acts on."
   @spec actions() :: [action()]
   def actions, do: @actions
+
+  @doc "The layers a plan may name, the closed list validation follows."
+  @spec layers() :: [String.t()]
+  def layers, do: @plan_layers
 
   @doc "The most characters `instructions` may hold."
   @spec instructions_max() :: pos_integer()
@@ -130,23 +220,278 @@ defmodule SymphonyElixir.Conductor.Answer do
 
   @doc """
   Checks one JSON object's text against the schema; `watch: true` for a watch turn's, `route: true`
-  for a turn's at `after_qa_blocked`, whose every route is read, and `route: :ticket` for a turn's
-  at a junction whose `ticket` route only is read.
+  for a turn's at `after_qa_blocked`, whose every route is read, `route: :ticket` for a turn's
+  at a junction whose `ticket` route only is read, `plan: true` for the Grooming turn's, whose
+  `plan` is read, and `tree: true` for a turn's on a ticket with sub-tickets, whose `done` and
+  `tree` are read; `message: true` for a turn's that answers a person's message, `plan: :optional`,
+  `new_ticket: true` and `waive: true` as the module doc says.
   """
   @spec parse(String.t(), keyword()) :: {:ok, t()} | {:error, String.t()}
   def parse(text, opts \\ []) when is_binary(text) do
+    message = Keyword.get(opts, :message, false)
+    plan_opt = Keyword.get(opts, :plan, false)
+
     with {:ok, %{} = answer} <- decode(text),
-         {:ok, instructions} <- instructions(Map.get(answer, "instructions"), Keyword.get(opts, :watch, false)),
-         {:ok, update} <- update(Map.get(answer, "update")),
+         {:ok, instructions} <- instructions(Map.get(answer, "instructions"), nullable?(opts)),
+         {:ok, update} <- update(Map.get(answer, "update"), message != false),
          {:ok, refs} <- refs(Map.get(answer, "refs")),
          {:ok, ask_person} <- ask_person(Map.get(answer, "ask_person")),
          {:ok, steer} <- steer(Map.get(answer, "steer")),
          {:ok, stop} <- stop(Map.get(answer, "stop")),
-         {:ok, route} <- route(Map.get(answer, "route"), Keyword.get(opts, :route, false)) do
-      answer = %{instructions: instructions, update: update, refs: refs, ask_person: ask_person, steer: steer, stop: stop, blocks: blocks(Map.get(answer, "blocks"))}
-      {:ok, Map.put(answer, :route, route)}
+         {:ok, route} <- route(Map.get(answer, "route"), Keyword.get(opts, :route, false)),
+         asks? = message == true and Map.get(answer, "ask") == true and is_nil(ask_person),
+         {:ok, plan} <- plan(Map.get(answer, "plan"), plan_read(plan_opt, asks?, answer), ask_person) do
+      read = %{instructions: instructions, update: update, refs: refs, ask_person: ask_person, steer: steer, stop: stop, blocks: blocks(Map.get(answer, "blocks"))}
+      {:ok, read |> Map.merge(%{route: route, plan: plan, ask: asks?}) |> Map.merge(extras(answer, opts))}
     end
   end
+
+  # A turn whose answer is about something else than the next run may leave `instructions` null.
+  defp nullable?(opts), do: Enum.any?([:plan, :tree, :message, :watch], &(Keyword.get(opts, &1, false) != false))
+
+  # What only some turns' answers are read for: the tree, a new ticket, the waivers.
+  defp extras(answer, opts) do
+    tree? = Keyword.get(opts, :tree, false)
+
+    %{
+      done: tree? and Map.get(answer, "done") == true,
+      tree: if(tree?, do: operations(Map.get(answer, "tree")), else: []),
+      new_ticket: if(Keyword.get(opts, :new_ticket, false), do: new_ticket(Map.get(answer, "new_ticket"))),
+      waive: if(Keyword.get(opts, :waive, false), do: waivers(Map.get(answer, "waive")), else: [])
+    }
+  end
+
+  # How the plan is read: the Grooming turn's must be there (`true`), a message that changes the ask
+  # must bring one (`:ask`), and where one is optional it is read when the answer holds one.
+  defp plan_read(true, _asks?, _answer), do: true
+  defp plan_read(_opt, true, _answer), do: :ask
+  defp plan_read(:optional, _asks?, %{"plan" => %{}}), do: true
+  defp plan_read(_opt, _asks?, _answer), do: false
+
+  # The ticket a message on a finished ticket asks for; one that misses its shape is dropped.
+  defp new_ticket(nil), do: nil
+
+  defp new_ticket(%{} = ticket) do
+    with title when is_binary(title) <- optional_text(ticket, "title", @ticket_title_max, "new_ticket"),
+         ask when is_binary(ask) <- optional_text(ticket, "ask", @sub_ticket_ask_max, "new_ticket") do
+      put_text(%{title: title, ask: ask}, :repo, ticket, 200, "new_ticket")
+    else
+      _malformed -> dropped_new_ticket()
+    end
+  end
+
+  defp new_ticket(_ticket), do: dropped_new_ticket()
+
+  defp dropped_new_ticket do
+    Logger.warning("Conductor answer's `new_ticket` was dropped: it needs a `title` and an `ask`")
+    nil
+  end
+
+  # The waivers that are well formed, one per check; the rest are dropped one by one and logged.
+  defp waivers(waivers) when is_list(waivers) do
+    waivers
+    |> Enum.with_index(1)
+    |> Enum.flat_map(fn {waiver, place} -> waiver |> waiver("waive[#{place}]") |> kept("waive[#{place}]") end)
+    |> Enum.uniq_by(& &1.check_id)
+    |> Enum.take(@waivers_max)
+  end
+
+  defp waivers(_waivers), do: []
+
+  defp waiver(%{} = waiver, where) do
+    with check_id when is_binary(check_id) <- optional_text(waiver, "check_id", @id_max, where),
+         reason when is_binary(reason) <- optional_text(waiver, "reason", @reason_max, where) do
+      %{check_id: check_id, reason: reason}
+    end
+  end
+
+  defp waiver(_waiver, _where), do: nil
+
+  # The operations that are well formed, the first ten; the rest are dropped one by one and logged.
+  defp operations(operations) when is_list(operations) do
+    operations
+    |> Enum.with_index(1)
+    |> Enum.flat_map(fn {operation, place} -> operation |> operation("tree[#{place}]") |> kept("tree[#{place}]") end)
+    |> Enum.take(@operations_max)
+  end
+
+  defp operations(_operations), do: []
+
+  defp kept(nil, where) do
+    Logger.warning("Conductor answer's `#{where}` was dropped: it misses its shape or its reason")
+    []
+  end
+
+  defp kept(operation, _where), do: [operation]
+
+  defp operation(%{"op" => op} = operation, where) when op in @operations do
+    with reason when is_binary(reason) <- optional_text(operation, "reason", @reason_max, where),
+         %{} = read <- operation(op, operation, where) do
+      Map.merge(read, %{op: op, reason: reason})
+    else
+      _malformed -> nil
+    end
+  end
+
+  defp operation(_operation, _where), do: nil
+
+  defp operation("add", operation, where) do
+    with title when is_binary(title) <- optional_text(operation, "title", @ticket_title_max, where),
+         ask when is_binary(ask) <- optional_text(operation, "ask", @sub_ticket_ask_max, where) do
+      waits = for id <- List.wrap(Map.get(operation, "after")), is_binary(id), String.trim(id) != "", uniq: true, do: String.trim(id)
+      put_text(%{title: title, ask: ask, after: waits}, :repo, operation, 200, where)
+    end
+  end
+
+  defp operation("rewrite", operation, where) do
+    with ticket when is_binary(ticket) <- optional_text(operation, "ticket", 50, where),
+         ask when is_binary(ask) <- optional_text(operation, "ask", @sub_ticket_ask_max, where) do
+      %{ticket: ticket, ask: ask, stop: Map.get(operation, "stop") == true}
+    end
+  end
+
+  defp operation(_cancel_or_stop, operation, where) do
+    with ticket when is_binary(ticket) <- optional_text(operation, "ticket", 50, where), do: %{ticket: ticket}
+  end
+
+  # Read only for the Grooming turn, and only when it asked nothing: a question leaves the plan to
+  # the turn that reads the person's answer.
+  defp plan(_plan, false = _read?, _ask_person), do: {:ok, nil}
+  defp plan(_plan, true, %{} = _ask_person), do: {:ok, nil}
+  defp plan(nil, true, nil), do: {:error, "the answer holds neither a `plan` nor a question (`ask_person`)"}
+  defp plan(plan, :ask, nil) when not is_map(plan), do: {:error, "`ask` is true, so the answer must hold the new `plan`"}
+
+  defp plan(%{} = plan, _read, nil) do
+    with {:ok, shape} <- one_of(plan, "shape", @plan_shapes, "plan"),
+         {:ok, layers} <- plan_layers(Map.get(plan, "layers")),
+         {:ok, summary} <- required_text(plan, "summary", @plan_summary_max, "plan"),
+         {:ok, text} <- required_text(plan, "text", @plan_text_max, "plan"),
+         {:ok, checks} <- entries(Map.get(plan, "checks"), "plan.checks", TicketPlan.max_checks(), &check/2),
+         :ok <- with_outcome(checks),
+         {:ok, size} <- plan_size(Map.get(plan, "size")),
+         {:ok, sub_tickets} <- sub_tickets(Map.get(plan, "sub_tickets"), shape) do
+      read = %{shape: shape, layers: layers, summary: summary, text: text, checks: checks, size: size}
+      plan = put_text(read, :reason, plan, @reason_max, "plan")
+      {:ok, if(sub_tickets, do: Map.put(plan, :sub_tickets, sub_tickets), else: plan)}
+    end
+  end
+
+  defp plan(_plan, true, nil), do: {:error, "`plan` must be an object"}
+
+  defp plan_layers([_ | _] = layers) do
+    if Enum.all?(layers, &(&1 in @plan_layers)),
+      do: {:ok, Enum.uniq(layers)},
+      else: {:error, "`plan.layers` must name only #{Enum.join(@plan_layers, ", ")}"}
+  end
+
+  defp plan_layers(_layers), do: {:error, "`plan.layers` must name at least one of #{Enum.join(@plan_layers, ", ")}"}
+
+  defp with_outcome(checks) do
+    if Enum.any?(checks, &(&1.kind == "outcome")), do: :ok, else: {:error, "`plan.checks` holds no check of kind `outcome`"}
+  end
+
+  defp plan_size(%{"tokens" => tokens, "runs" => runs}) when is_integer(tokens) and tokens >= 0 and is_integer(runs) and runs >= 0,
+    do: {:ok, %{tokens: tokens, runs: runs}}
+
+  defp plan_size(_size), do: {:error, "`plan.size` must hold `tokens` and `runs`, both whole numbers"}
+
+  defp check(%{} = check, place) do
+    where = "plan.checks[#{place}]"
+
+    with {:ok, kind} <- one_of(check, "kind", @check_kinds, where),
+         {:ok, statement} <- required_text(check, "statement", @check_statement_max, where),
+         {:ok, proof} <- one_of(check, "proof", @check_proofs, where),
+         :ok <- walkable(check, kind, where) do
+      %{kind: kind, statement: statement, proof: proof}
+      |> put_text(:id, check, @id_max, where)
+      |> put_text(:state, check, @check_walk_max, where)
+      |> put_text(:action, check, @check_walk_max, where)
+      |> put_text(:expect, check, @check_walk_max, where)
+      |> put_text(:story, check, 200, where)
+      |> put_present(:size, if(Map.get(check, "size") in @check_sizes, do: Map.get(check, "size")))
+      |> then(&{:ok, &1})
+    end
+  end
+
+  defp check(_check, place), do: {:error, "`plan.checks[#{place}]` must be an object"}
+
+  # A QA check is walked: it says what to do and what to expect.
+  defp walkable(check, "qa", where) do
+    case Enum.find(["action", "expect"], &is_nil(optional_text(check, &1, @check_walk_max, where))) do
+      nil -> :ok
+      field -> {:error, "`#{where}.#{field}` must be a non-blank string: a `qa` check says what to do and what to expect"}
+    end
+  end
+
+  defp walkable(_check, _kind, _where), do: :ok
+
+  defp sub_tickets(_entries, "single"), do: {:ok, nil}
+  defp sub_tickets(entries, "split"), do: entries(entries, "plan.sub_tickets", TicketPlan.max_sub_tickets(), &sub_ticket/2)
+
+  defp sub_ticket(%{} = entry, place) do
+    where = "plan.sub_tickets[#{place}]"
+
+    with {:ok, title} <- required_text(entry, "title", @ticket_title_max, where),
+         {:ok, ask} <- required_text(entry, "ask", @sub_ticket_ask_max, where) do
+      waits = for key <- List.wrap(Map.get(entry, "after")), is_binary(key), String.trim(key) != "", uniq: true, do: String.trim(key)
+
+      %{key: key(entry, place), title: title, ask: ask, after: waits}
+      |> put_text(:repo, entry, 200, where)
+      |> put_text(:identifier, entry, 50, where)
+      |> then(&{:ok, &1})
+    end
+  end
+
+  defp sub_ticket(_entry, place), do: {:error, "`plan.sub_tickets[#{place}]` must be an object"}
+
+  # A list of 1 to `max` entries whose every entry reads (`read.(entry, its place)`), else the first refusal.
+  defp entries([_ | _] = entries, where, max, _read) when length(entries) > max,
+    do: {:error, "`#{where}` lists #{length(entries)} entries, and a plan holds at most #{max}"}
+
+  defp entries([_ | _] = entries, _where, _max, read) do
+    entries
+    |> Enum.with_index(1)
+    |> Enum.reduce_while({:ok, []}, fn {entry, place}, {:ok, acc} ->
+      case read.(entry, place) do
+        {:ok, entry} -> {:cont, {:ok, acc ++ [entry]}}
+        {:error, _why} = refused -> {:halt, refused}
+      end
+    end)
+  end
+
+  defp entries(_entries, where, _max, _read), do: {:error, "`#{where}` must list at least one entry"}
+
+  # The key the sub-ticket entry gives, else its place's (`s2`).
+  defp key(entry, place) do
+    case Map.get(entry, "key") do
+      key when is_binary(key) -> if String.trim(key) == "", do: "s#{place}", else: key |> String.trim() |> String.slice(0, @id_max)
+      _missing -> "s#{place}"
+    end
+  end
+
+  defp one_of(map, field, allowed, where) do
+    value = Map.get(map, field)
+    if value in allowed, do: {:ok, value}, else: {:error, "`#{where}.#{field}` must be one of #{Enum.join(allowed, ", ")}"}
+  end
+
+  defp required_text(map, field, max, where) do
+    case optional_text(map, field, max, where) do
+      nil -> {:error, "`#{where}.#{field}` must be a non-blank string"}
+      text -> {:ok, text}
+    end
+  end
+
+  defp optional_text(map, field, max, where) do
+    case Map.get(map, field) do
+      text when is_binary(text) -> if String.trim(text) == "", do: nil, else: fit(String.trim(text), max, "#{where}.#{field}")
+      _missing -> nil
+    end
+  end
+
+  defp put_text(entry, key, source, max, where), do: put_present(entry, key, optional_text(source, Atom.to_string(key), max, where))
+
+  defp put_present(map, _key, nil), do: map
+  defp put_present(map, key, value), do: Map.put(map, key, value)
 
   defp decode(text) do
     case Jason.decode(text) do
@@ -235,6 +580,16 @@ defmodule SymphonyElixir.Conductor.Answer do
         []
     end
   end
+
+  # A reply to a person's message must be there.
+  defp update(text, true = _required?) do
+    case update(text) do
+      {:ok, nil} -> {:error, "`update` must hold the reply to the person's message"}
+      read -> read
+    end
+  end
+
+  defp update(text, false), do: update(text)
 
   defp update(nil), do: {:ok, nil}
 

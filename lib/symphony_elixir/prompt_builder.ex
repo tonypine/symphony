@@ -17,6 +17,7 @@ defmodule SymphonyElixir.PromptBuilder do
     QaModeContract,
     QaPolicy,
     RunStore,
+    TicketJourney,
     TicketSignals,
     TicketState,
     Workflow
@@ -103,6 +104,8 @@ defmodule SymphonyElixir.PromptBuilder do
 
   @spec build_prompt(SymphonyElixir.Linear.Issue.t(), keyword()) :: String.t()
   def build_prompt(issue, opts \\ []) do
+    plan_text = TicketJourney.plan_text(issue)
+    issue = planned(issue, plan_text)
     raw_reviewer_comments = normalize_reviewer_comments(Keyword.get(opts, :reviewer_comments, []))
     reviewer_comments = sanitize_reviewer_comments(raw_reviewer_comments)
     raw_ci_failure = Keyword.get(opts, :ci_failure)
@@ -129,7 +132,7 @@ defmodule SymphonyElixir.PromptBuilder do
       "repo_key" => repo_key,
       "run" => to_solid_map(run),
       "state_machine" => @state_machine,
-      "issue" => issue |> strip_decisions(opts) |> prompt_issue_map(repo_key) |> to_solid_map(),
+      "issue" => issue |> strip_decisions(opts) |> prompt_issue_map(repo_key) |> put_plan_body(plan_text) |> to_solid_map(),
       "pr" => issue |> prompt_pr_map(opts) |> to_solid_map(),
       "reviewer_comments" => to_solid_value(reviewer_comments),
       "ci_failure" => to_solid_value(ci_failure),
@@ -180,6 +183,7 @@ defmodule SymphonyElixir.PromptBuilder do
     {repo_key, workflow_source} = repo_context_for_prompt(issue, opts)
     agent_context = agent_context_for_prompt(opts, workflow_source)
     issue_map = prompt_issue_map(issue, repo_key)
+    groomed? = TicketJourney.groomed?(issue)
 
     [
       "You are working on Linear ticket `#{compact_value(issue_map, :identifier, "unknown")}`.",
@@ -197,8 +201,7 @@ defmodule SymphonyElixir.PromptBuilder do
       "",
       "Required startup sequence:",
       "",
-      "- Use the scoped `linear_get_current_issue` tool to load the issue description and current metadata.",
-      "- Use `linear_get_comments` with `{\"limit\": #{@compact_comment_limit}}` first; request more only if needed for acceptance criteria or reviewer context.",
+      compact_ticket_lines(groomed?),
       "- Use scoped `github_*` tools for current-issue PR operations instead of raw GitHub/Linear commands.",
       "- If detailed workflow rules are needed, read `WORKFLOW.md` in small sections instead of dumping the entire file.",
       "- Reconcile and update the single `## #{agent_context.display_name} Workpad` comment before new implementation work.",
@@ -235,6 +238,31 @@ defmodule SymphonyElixir.PromptBuilder do
     |> append_codex_transport_output_guard(agent_context)
     |> prepend_messages(opts)
   end
+
+  # A groomed ticket's run works from its ask, plan and checks (`SymphonyElixir.TicketJourney`), which
+  # the `ticket_plan` tool reads; any other run loads the description as it always did.
+  defp compact_ticket_lines(true) do
+    [
+      "- Use the `ticket_plan` tool to load the ticket's ask, its plan and its checks: work from them, not from the Linear description.",
+      "- Use the scoped `linear_get_current_issue` tool for the issue's current metadata only.",
+      "- Use `linear_get_comments` with `{\"limit\": #{@compact_comment_limit}}` first; request more only if needed for reviewer context."
+    ]
+  end
+
+  defp compact_ticket_lines(false) do
+    [
+      "- Use the scoped `linear_get_current_issue` tool to load the issue description and current metadata.",
+      "- Use `linear_get_comments` with `{\"limit\": #{@compact_comment_limit}}` first; request more only if needed for acceptance criteria or reviewer context."
+    ]
+  end
+
+  # A groomed ticket's prompt carries its ask, plan and checks where the description stood, so the
+  # template, the warnings and the instruction files read them as the ticket.
+  defp planned(issue, nil), do: issue
+  defp planned(issue, plan_text), do: Map.put(issue, :description, plan_text)
+
+  defp put_plan_body(issue_map, nil), do: issue_map
+  defp put_plan_body(issue_map, plan_text), do: Map.put(issue_map, :description, PromptSafety.ticket_plan_body(plan_text))
 
   defp prompt_template!({:ok, workflow}, prompt_mode) do
     Workflow.prompt_template(workflow, prompt_mode)
@@ -492,9 +520,10 @@ defmodule SymphonyElixir.PromptBuilder do
   end
 
   @doc """
-  The managed context's paragraph on the two ticket tools every issue run is offered
-  (`SymphonyElixir.AgentTools.TicketLedger`): `ticket_events` reads the ticket's history and
-  `ticket_record` adds to it, and what a run of `run`'s kind records there. A run that walks a step
+  The managed context's paragraph on the ticket tools every issue run is offered
+  (`SymphonyElixir.AgentTools.TicketLedger`): `ticket_events` reads the ticket's history,
+  `ticket_record` adds to it and `ticket_plan` reads the ask, the plan and its checks, and what a
+  run of `run`'s kind records there. A run that walks a step
   list (`run.step_runner`) is told the step list runs the checks and the handoff step pushes.
   """
   @spec ticket_tools_paragraph(%{kind: String.t() | nil, step_runner: boolean()}) :: String.t()
@@ -504,6 +533,8 @@ defmodule SymphonyElixir.PromptBuilder do
       "",
       "- `ticket_events` reads this ticket's history (Symphony's ledger) and `ticket_record` adds an event to it. Symphony fills the run, phase and head; " <>
         "verdicts, moves, pauses and questions are Symphony's, and `ticket_record` refuses them.",
+      "- `ticket_plan` reads what the ticket works from when it has a plan: the ask, the plan and its checks, each with its state. A run records a check it proves as `check.proved`, " <>
+        "and something it finds that is not this ticket's to solve as a `note` with the `tag` `discovery` (`base_fault` for a fault of the base branch).",
       "- " <> records_line(kind),
       step_runner_line(step_runner)
     ]

@@ -69,11 +69,12 @@ defmodule SymphonyElixir.PhaseSteps do
 
   require Logger
 
-  alias SymphonyElixir.{Artifacts, PromptSafety, Questions, RunStore, TicketEvents, Workspace}
+  alias SymphonyElixir.{Artifacts, ChecksHold, Config, PromptSafety, Questions, RunStore, TicketEvents, TicketJourney}
   alias SymphonyElixir.Config.Schema.Phases
   alias SymphonyElixir.Config.Schema.Phases.Step
   alias SymphonyElixir.HumanActions.PlainWords
   alias SymphonyElixir.PhaseSteps.{FailedCheck, Findings, StepAnswer, Transcript, WindowTests}
+  alias SymphonyElixir.{TransitionGuard, Workspace}
   alias SymphonyElixir.Workpad.Projection
 
   @output_max_bytes 512 * 1024
@@ -297,7 +298,17 @@ defmodule SymphonyElixir.PhaseSteps do
     |> Enum.any?(&(skip_reason(&1, changes) == nil and shell_command?(&1, changes)))
   end
 
-  defp shell_command?(step, changes), do: Enum.any?(commands(step, changes), &(&1 != Phases.findings_command()))
+  defp shell_command?(step, changes),
+    do: Enum.any?(commands(step, changes), &(&1 not in [Phases.findings_command(), Phases.checks_command()]))
+
+  @doc """
+  The built-in command of the step that guards the handoff of a groomed ticket (`symphony:checks`):
+  it fails, naming them, while a check of the plan that a test or an attachment proves is open
+  (`SymphonyElixir.TicketJourney.unproved/1`), and passes at once for a ticket with no plan.
+  Symphony runs it itself, not in a shell.
+  """
+  @spec checks_command() :: String.t()
+  def checks_command, do: Phases.checks_command()
 
   @doc """
   Runs the machine steps of `steps` from `step` on (see the moduledoc) and returns where the run
@@ -403,12 +414,31 @@ defmodule SymphonyElixir.PhaseSteps do
   defp run_command(command, context, env, timeout_ms) do
     cond do
       command == Phases.findings_command() -> read_findings(context)
+      command == Phases.checks_command() -> read_checks(context)
       command == Phases.window_tests_command() -> Map.get(context, :window_tests, &WindowTests.run/2).(context, timeout_ms)
       command == Phases.failed_check_command() -> FailedCheck.run(context, timeout_ms, &runner(context).(&1, env, &2))
       builtin = Map.get(Map.get(context, :builtins, %{}), command) -> builtin.(context)
       true -> runner(context).(command, env, timeout_ms)
     end
   end
+
+  # A refusal is recorded, and the second run in a row that meets one asks the person
+  # (`SymphonyElixir.ChecksHold`): a check nobody can prove must not send the ticket around for good.
+  defp read_checks(context) do
+    case TicketJourney.unproved(context.issue_id) do
+      [] -> {:ok, {"No check of the plan waits on a test or an attachment.\n", 0}}
+      checks -> refused_checks(checks, context, TicketJourney.unproved_message(checks) <> "\n")
+    end
+  end
+
+  defp refused_checks(checks, context, output) do
+    case ChecksHold.refused(context.repo_key, context.issue_id, checks, %{run_id: Map.get(context, :run_id)}) do
+      :retry -> {:ok, {output, 1}}
+      :ask -> {:ask, output, ChecksHold.question(ticket_name(context), checks, handoff_state(context.repo_key))}
+    end
+  end
+
+  defp handoff_state(repo_key), do: TransitionGuard.target(:handoff, %{settings: Config.settings_for_repo!(repo_key)})
 
   defp read_findings(context) do
     with events when is_list(events) <- RunStore.list_ticket_events(context.issue_id, []) do

@@ -1,6 +1,8 @@
 defmodule SymphonyElixir.Conductor.AnswerTest do
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
+
   alias SymphonyElixir.Conductor.Answer
 
   @question %{
@@ -265,5 +267,294 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
     assert Answer.read(["{\"instructions\": \"\"}", "{\"update\": 1}"]) == {:error, "`instructions` is blank"}
     assert Answer.read(["no json here", ""]) == {:error, "the answer holds no JSON object"}
     assert Answer.read([]) == {:error, "the answer holds no JSON object"}
+  end
+
+  describe "the Grooming turn's plan" do
+    @plan %{
+      "shape" => "single",
+      "layers" => ["screen", "api", "screen"],
+      "summary" => " The ticket list keeps its filter. ",
+      "text" => "Approach: store the filter in the view state.\n\nOut of scope: sorting.",
+      "checks" => [
+        %{"kind" => "outcome", "statement" => "The filter is kept after a reload.", "proof" => "test"},
+        %{
+          "kind" => "qa",
+          "statement" => "The list shows the filtered tickets.",
+          "proof" => "qa",
+          "state" => "3 tickets, 1 Done",
+          "action" => "Pick Done in the filter, then reload",
+          "expect" => "1 ticket",
+          "size" => "wide",
+          "story" => "ticket-list/filtered"
+        },
+        %{"id" => " proof ", "kind" => "evidence", "statement" => "A screenshot of the list.", "proof" => "attached", "size" => "huge"}
+      ],
+      "size" => %{"tokens" => 2_000_000, "runs" => 2}
+    }
+
+    defp grooming(attrs), do: Answer.parse(json(attrs), plan: true)
+    defp plan(attrs), do: grooming(%{"plan" => Map.merge(@plan, attrs)})
+
+    test "a plan with more checks or sub-tickets than a person reads is refused, naming the limit" do
+      check = %{"kind" => "outcome", "statement" => "It works.", "proof" => "test"}
+      sub = %{"title" => "A part", "ask" => "Build it."}
+      assert {:ok, %{plan: %{checks: checks}}} = plan(%{"checks" => List.duplicate(check, 30)})
+      assert length(checks) == 30
+      assert plan(%{"checks" => List.duplicate(check, 31)}) == {:error, "`plan.checks` lists 31 entries, and a plan holds at most 30"}
+
+      assert {:ok, %{plan: %{sub_tickets: subs}}} = plan(%{"shape" => "split", "sub_tickets" => List.duplicate(sub, 12)})
+      assert length(subs) == 12
+
+      assert plan(%{"shape" => "split", "sub_tickets" => List.duplicate(sub, 13)}) ==
+               {:error, "`plan.sub_tickets` lists 13 entries, and a plan holds at most 12"}
+    end
+
+    test "is read as plan.written holds it, each check with the id it gave or none, and the instructions may be null" do
+      assert {:ok, %{instructions: nil, plan: plan}} = grooming(%{"plan" => @plan, "update" => "I wrote the plan."})
+      assert %{shape: "single", layers: ["screen", "api"], summary: "The ticket list keeps its filter.", size: %{tokens: 2_000_000, runs: 2}} = plan
+      assert plan.text =~ "Out of scope: sorting."
+      refute Map.has_key?(plan, :sub_tickets)
+
+      # A check that names no id has none here: `TicketPlan.write/4` names it.
+      assert plan.checks == [
+               %{kind: "outcome", statement: "The filter is kept after a reload.", proof: "test"},
+               %{
+                 kind: "qa",
+                 statement: "The list shows the filtered tickets.",
+                 proof: "qa",
+                 state: "3 tickets, 1 Done",
+                 action: "Pick Done in the filter, then reload",
+                 expect: "1 ticket",
+                 size: "wide",
+                 story: "ticket-list/filtered"
+               },
+               %{id: "proof", kind: "evidence", statement: "A screenshot of the list.", proof: "attached"}
+             ]
+    end
+
+    test "is not read at another turn, which answers as before" do
+      assert {:ok, %{plan: nil}} = Answer.parse(json(%{"instructions" => "x", "plan" => @plan}))
+      assert Answer.parse(json(%{"plan" => @plan})) == {:error, "`instructions` must be a string"}
+    end
+
+    test "a split names its sub-tickets, each with a key; a single plan keeps none" do
+      subs = [
+        %{"title" => "The API returns the filter", "ask" => "Add the filter to the list endpoint.", "repo" => "web"},
+        %{"key" => "screen", "title" => "The list keeps it", "ask" => "Read the filter.", "after" => ["s1", " ", 3, "s1"]},
+        %{"title" => "The docs", "ask" => "Describe it.", "identifier" => " TP-12 "}
+      ]
+
+      assert {:ok, %{plan: %{shape: "split", sub_tickets: sub_tickets}}} = plan(%{"shape" => "split", "sub_tickets" => subs})
+
+      assert sub_tickets == [
+               %{key: "s1", title: "The API returns the filter", ask: "Add the filter to the list endpoint.", after: [], repo: "web"},
+               %{key: "screen", title: "The list keeps it", ask: "Read the filter.", after: ["s1"]},
+               %{key: "s3", title: "The docs", ask: "Describe it.", after: [], identifier: "TP-12"}
+             ]
+
+      assert {:ok, %{plan: plan}} = plan(%{"sub_tickets" => subs})
+      refute Map.has_key?(plan, :sub_tickets)
+    end
+
+    test "an over-long text is cut, never refused" do
+      long = String.duplicate("word ", 3_000)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, %{plan: plan}} = plan(%{"summary" => long, "text" => long, "checks" => [%{"kind" => "outcome", "statement" => long, "proof" => "test"}]})
+          assert String.length(plan.summary) <= 600
+          assert String.length(plan.text) <= 12_000
+          assert [%{statement: statement}] = plan.checks
+          assert String.length(statement) <= 600
+        end)
+
+      assert log =~ "`plan.summary` was 14999 characters; cut to 600"
+    end
+
+    test "a question leaves the plan unread, and an answer with neither is refused" do
+      assert {:ok, %{plan: nil, ask_person: %{title: _title}}} = grooming(%{"plan" => %{"shape" => "nonsense"}, "ask_person" => @question})
+      assert grooming(%{"update" => "Nothing to plan."}) == {:error, "the answer holds neither a `plan` nor a question (`ask_person`)"}
+    end
+
+    test "a plan that misses its shape is refused, with what is wrong" do
+      check = %{"kind" => "outcome", "statement" => "It works.", "proof" => "test"}
+
+      for {attrs, why} <- [
+            {%{"shape" => "epic"}, "`plan.shape` must be one of single, split"},
+            {%{"layers" => []}, "`plan.layers` must name at least one of screen, gallery, api, engine, config, tooling, docs"},
+            {%{"layers" => ["backend"]}, "`plan.layers` must name only screen, gallery, api, engine, config, tooling, docs"},
+            {%{"summary" => " "}, "`plan.summary` must be a non-blank string"},
+            {%{"text" => 3}, "`plan.text` must be a non-blank string"},
+            {%{"checks" => []}, "`plan.checks` must list at least one entry"},
+            {%{"checks" => ["it works"]}, "`plan.checks[1]` must be an object"},
+            {%{"checks" => [check, %{check | "kind" => "wish"}]}, "`plan.checks[2].kind` must be one of outcome, qa, evidence"},
+            {%{"checks" => [%{check | "proof" => "trust"}]}, "`plan.checks[1].proof` must be one of test, qa, design, attached"},
+            {%{"checks" => [%{check | "statement" => ""}]}, "`plan.checks[1].statement` must be a non-blank string"},
+            {%{"checks" => [%{check | "kind" => "evidence"}]}, "`plan.checks` holds no check of kind `outcome`"},
+            {%{"checks" => [check, %{"kind" => "qa", "statement" => "Seen.", "proof" => "qa", "action" => "Open it"}]},
+             "`plan.checks[2].expect` must be a non-blank string: a `qa` check says what to do and what to expect"},
+            {%{"size" => %{"tokens" => "many", "runs" => 1}}, "`plan.size` must hold `tokens` and `runs`, both whole numbers"},
+            {%{"shape" => "split"}, "`plan.sub_tickets` must list at least one entry"},
+            {%{"shape" => "split", "sub_tickets" => ["one"]}, "`plan.sub_tickets[1]` must be an object"},
+            {%{"shape" => "split", "sub_tickets" => [%{"title" => "One"}]}, "`plan.sub_tickets[1].ask` must be a non-blank string"},
+            {%{"shape" => "split", "sub_tickets" => [%{"ask" => "One"}]}, "`plan.sub_tickets[1].title` must be a non-blank string"}
+          ] do
+        assert plan(attrs) == {:error, why}
+      end
+
+      assert grooming(%{"plan" => "single"}) == {:error, "`plan` must be an object"}
+      assert Answer.layers() == ~w(screen gallery api engine config tooling docs)
+    end
+  end
+
+  describe "a turn's answer on a ticket with sub-tickets" do
+    defp tree(attrs), do: Answer.parse(Jason.encode!(attrs), tree: true)
+
+    test "holds done and the operations, each with its reason; the instructions may be null" do
+      operations = [
+        %{"op" => "add", "title" => "The docs", "ask" => "Write them.", "after" => ["TP-2", " ", 3, "TP-2"], "repo" => "web", "reason" => "Nobody holds them."},
+        %{"op" => "cancel", "ticket" => " TP-3 ", "reason" => "The API covers it."},
+        %{"op" => "rewrite", "ticket" => "TP-4", "ask" => "Read the new field.", "stop" => true, "reason" => "The field was renamed."},
+        %{"op" => "rewrite", "ticket" => "TP-5", "ask" => "Read it.", "reason" => "Same."},
+        %{"op" => "stop", "ticket" => "TP-6", "reason" => "It builds on TP-3."}
+      ]
+
+      assert {:ok, %{instructions: nil, done: true, tree: tree}} = tree(%{"done" => true, "tree" => operations})
+
+      assert tree == [
+               %{op: "add", title: "The docs", ask: "Write them.", after: ["TP-2"], repo: "web", reason: "Nobody holds them."},
+               %{op: "cancel", ticket: "TP-3", reason: "The API covers it."},
+               %{op: "rewrite", ticket: "TP-4", ask: "Read the new field.", stop: true, reason: "The field was renamed."},
+               %{op: "rewrite", ticket: "TP-5", ask: "Read it.", stop: false, reason: "Same."},
+               %{op: "stop", ticket: "TP-6", reason: "It builds on TP-3."}
+             ]
+
+      assert {:ok, %{done: false, tree: []}} = tree(%{"done" => "yes", "tree" => "none"})
+      assert {:ok, %{done: false, tree: []}} = tree(%{})
+    end
+
+    test "an operation that misses its shape or its reason is dropped and logged, and at most ten are kept" do
+      malformed = [
+        "cancel TP-3",
+        %{"op" => "merge", "ticket" => "TP-3", "reason" => "Why not."},
+        %{"op" => "cancel", "ticket" => "TP-3"},
+        %{"op" => "cancel", "reason" => "No ticket."},
+        %{"op" => "add", "title" => "The docs", "reason" => "No ask."},
+        %{"op" => "add", "ask" => "Write them.", "reason" => "No title."},
+        %{"op" => "rewrite", "ticket" => "TP-4", "reason" => "No ask."},
+        %{"op" => "rewrite", "ask" => "Read it.", "reason" => "No ticket."},
+        %{"op" => "stop", "ticket" => "TP-6", "reason" => "It is kept."}
+      ]
+
+      log = capture_log(fn -> assert {:ok, %{tree: [%{op: "stop", ticket: "TP-6"}]}} = tree(%{"tree" => malformed}) end)
+      assert log =~ "`tree[1]` was dropped"
+      assert log =~ "`tree[8]` was dropped"
+      refute log =~ "`tree[9]`"
+
+      many = for n <- 1..12, do: %{"op" => "stop", "ticket" => "TP-#{n}", "reason" => "Stop."}
+      assert {:ok, %{tree: kept}} = tree(%{"tree" => many})
+      assert length(kept) == 10
+    end
+
+    test "any other turn's answer holds neither" do
+      assert {:ok, %{done: false, tree: []}} = Answer.parse(Jason.encode!(%{"instructions" => "Go on.", "done" => true, "tree" => [%{"op" => "stop"}]}))
+    end
+  end
+
+  describe "a turn that answers a message" do
+    @plan %{
+      "shape" => "single",
+      "layers" => ["engine"],
+      "summary" => "It keeps the filter.",
+      "text" => "Approach: store it.",
+      "checks" => [%{"kind" => "outcome", "statement" => "The filter survives.", "proof" => "test"}],
+      "size" => %{"tokens" => 1, "runs" => 1}
+    }
+
+    defp said(attrs, opts \\ [message: true]), do: Answer.parse(Jason.encode!(attrs), opts)
+
+    test "the reply must be there, and nothing else has to be" do
+      assert {:ok, read} = said(%{"update" => "Done."})
+      assert %{update: "Done.", instructions: nil, ask: false, plan: nil, new_ticket: nil, waive: []} = read
+      assert said(%{"update" => " "}) == {:error, "`update` must hold the reply to the person's message"}
+      assert said(%{}) == {:error, "`update` must hold the reply to the person's message"}
+      assert said(%{"update" => 7}) == {:error, "`update` must be a string or null"}
+    end
+
+    test "a changed ask must bring its plan, with the reason it changed for" do
+      assert {:ok, %{ask: true, plan: %{reason: "More was asked.", checks: [%{kind: "outcome"}]}}} =
+               said(%{"update" => "Ok.", "ask" => true, "plan" => Map.put(@plan, "reason", "More was asked.")})
+
+      assert said(%{"update" => "Ok.", "ask" => true}) == {:error, "`ask` is true, so the answer must hold the new `plan`"}
+      assert said(%{"update" => "Ok.", "ask" => true, "plan" => "later"}) == {:error, "`ask` is true, so the answer must hold the new `plan`"}
+      assert {:error, "`plan.shape` must be one of single, split"} = said(%{"update" => "Ok.", "ask" => true, "plan" => %{}})
+      # No changed ask, or a finished ticket's answer: the plan is left unread.
+      assert {:ok, %{ask: false, plan: nil}} = said(%{"update" => "Ok.", "plan" => @plan})
+      assert {:ok, %{ask: false, plan: nil}} = said(%{"update" => "Ok.", "ask" => true, "plan" => @plan}, message: :reply)
+      assert said(%{"ask" => true}, message: :reply) == {:error, "`update` must hold the reply to the person's message"}
+    end
+
+    test "a question leaves the changed ask and its plan unread" do
+      question = %{
+        "title" => "Which list?",
+        "question" => "Which list is meant?",
+        "why" => "There are two.",
+        "if_unanswered" => "It waits.",
+        "recommendation_reason" => "The first is the usual one.",
+        "options" => [%{"label" => "The first", "effect" => "It goes on.", "recommended" => true, "action" => "continue"}, %{"label" => "Cancel", "effect" => "It ends.", "action" => "cancel"}]
+      }
+
+      assert {:ok, %{ask: false, plan: nil, ask_person: %{title: "Which list?"}}} = said(%{"update" => "I need to know.", "ask" => true, "ask_person" => question})
+    end
+
+    test "an optional plan is read when the answer holds one" do
+      assert {:ok, %{plan: nil, update: nil}} = said(%{"tree" => []}, plan: :optional, tree: true)
+      assert {:ok, %{plan: %{summary: "It keeps the filter."}}} = said(%{"plan" => @plan}, plan: :optional)
+      assert {:error, "`plan.shape` must be one of single, split"} = said(%{"plan" => %{}}, plan: :optional)
+      assert {:ok, %{plan: nil}} = said(%{"plan" => "later"}, plan: :optional)
+    end
+
+    test "a new ticket is read only where one may be created, and one that misses its shape is dropped" do
+      new = %{"title" => "Keep the search text", "ask" => "Also keep the search text.", "repo" => "default"}
+
+      assert {:ok, %{new_ticket: %{title: "Keep the search text", ask: "Also keep the search text.", repo: "default"}}} =
+               said(%{"update" => "Ok.", "new_ticket" => new}, message: :reply, new_ticket: true)
+
+      assert {:ok, %{new_ticket: nil}} = said(%{"update" => "Ok.", "new_ticket" => new})
+      assert {:ok, %{new_ticket: nil}} = said(%{"update" => "Ok."}, message: :reply, new_ticket: true)
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{new_ticket: nil}} = said(%{"update" => "Ok.", "new_ticket" => %{"title" => "No ask"}}, message: :reply, new_ticket: true)
+          assert {:ok, %{new_ticket: nil}} = said(%{"update" => "Ok.", "new_ticket" => "one"}, message: :reply, new_ticket: true)
+        end)
+
+      assert log =~ "`new_ticket` was dropped"
+    end
+  end
+
+  describe "waivers" do
+    defp waiving(waive, opts \\ [waive: true]), do: Answer.parse(Jason.encode!(%{"instructions" => "Go on.", "waive" => waive}), opts)
+
+    test "are read where a turn may waive, one per check, and a malformed one is dropped" do
+      assert {:ok, %{waive: [%{check_id: "c2", reason: "No test can reach it."}]}} = waiving([%{"check_id" => " c2 ", "reason" => "No test can reach it."}])
+      assert {:ok, %{waive: []}} = waiving([%{"check_id" => "c2", "reason" => "No test can reach it."}], [])
+      assert {:ok, %{waive: []}} = waiving("c2")
+      assert {:ok, %{waive: []}} = waiving(nil)
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{waive: [%{check_id: "c1", reason: "First."}]}} =
+                   waiving([%{"check_id" => "c1", "reason" => "First."}, %{"check_id" => "c1", "reason" => "Again."}, %{"check_id" => "c3"}, %{"reason" => "No check."}, "c4"])
+        end)
+
+      assert log =~ "`waive[3]` was dropped"
+      assert log =~ "`waive[4]` was dropped"
+      assert log =~ "`waive[5]` was dropped"
+
+      many = for n <- 1..25, do: %{"check_id" => "c#{n}", "reason" => "Why."}
+      assert {:ok, %{waive: kept}} = waiving(many)
+      assert length(kept) == 20
+    end
   end
 end

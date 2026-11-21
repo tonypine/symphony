@@ -94,6 +94,7 @@ defmodule SymphonyElixir.QaAgent do
   alias SymphonyElixir.QaAndroid.Driver, as: AndroidDriver
   alias SymphonyElixir.QaPreCheck
   alias SymphonyElixir.Repo.Fetcher
+  alias SymphonyElixir.TicketJourney
   alias SymphonyElixir.Verification
   alias SymphonyElixir.Walkthrough
   alias SymphonyElixir.Workspace
@@ -163,7 +164,12 @@ defmodule SymphonyElixir.QaAgent do
           optional(:host_ports) => [pos_integer()],
           optional(:epic_review) => boolean(),
           optional(:base_ref) => String.t(),
-          optional(:journey) => %{required(:source) => String.t(), required(:text) => String.t() | nil, optional(:steps) => [Walkthrough.step()]},
+          optional(:journey) => %{
+            required(:source) => String.t(),
+            required(:text) => String.t() | nil,
+            optional(:steps) => [Walkthrough.step()],
+            optional(:groomed) => true
+          },
           optional(:proofs) => [QaPreCheck.result()],
           optional(:design_files) => [Design.file()],
           optional(:unprovable) => unprovable()
@@ -299,8 +305,7 @@ defmodule SymphonyElixir.QaAgent do
     Issue:
     Identifier: #{issue.identifier}
     Title: #{PromptSafety.linear_issue_title(issue.title || "")}
-    Description (walkthrough and acceptance criteria):
-    #{PromptSafety.linear_issue_body(Decisions.strip(issue.description) || "")}#{SymphonyElixir.Conductor.prompt_section(Map.get(issue, :id))}
+    #{issue_text(issue)}#{SymphonyElixir.Conductor.prompt_section(Map.get(issue, :id))}
     #{decisions_rule(issue, job)}#{parent_section(parent)}#{design_section(job, parent)}#{epic_section(job)}#{dev_server_section(job)}#{host_ports_section(Map.get(job, :host_ports, []))}#{android_section(job)}
     #{qa_jobs_section()}#{scope_section(job)}#{qa_mode_section(job)}
     Playbooks to follow:
@@ -426,8 +431,7 @@ defmodule SymphonyElixir.QaAgent do
     Issue:
     Identifier: #{issue.identifier}
     Title: #{PromptSafety.linear_issue_title(issue.title || "")}
-    Description (walkthrough and acceptance criteria):
-    #{PromptSafety.linear_issue_body(Decisions.strip(issue.description) || "")}#{SymphonyElixir.Conductor.prompt_section(Map.get(issue, :id))}
+    #{issue_text(issue)}#{SymphonyElixir.Conductor.prompt_section(Map.get(issue, :id))}
     #{decisions_rule(issue, job)}#{parent_section(parent)}
     """
   end
@@ -610,6 +614,12 @@ defmodule SymphonyElixir.QaAgent do
     """
   end
 
+  # What the pass reads as the ticket: a groomed ticket's ask, plan and checks, else its description.
+  defp issue_text(issue) do
+    label = if TicketJourney.groomed?(issue), do: "Ask, plan and checks:", else: "Description (walkthrough and acceptance criteria):"
+    label <> "\n" <> TicketJourney.body(issue, fn -> PromptSafety.linear_issue_body(Decisions.strip(issue.description) || "") end)
+  end
+
   # The QA state is journey-driven (see docs/design/state-machine.md): it verifies the user
   # stories and journeys the change delivers or updates, from the epic plan where one exists and
   # otherwise from the ticket's walkthrough and acceptance criteria. Only a run carrying a `journey`
@@ -642,13 +652,26 @@ defmodule SymphonyElixir.QaAgent do
     journeys come from the epic plan — this ticket is a sub-ticket —
     read the parent issue and its plan documents with your Linear tools and verify against the
     journeys they define.
-    #{journey_text(source, text)}
+    #{journey_text(source, text)}#{plan_scope(journey)}
     #{proof_routing(job, journey)}
     #{operator_only_steps()}
     """
   end
 
   defp journey_section(_job), do: ""
+
+  # A groomed ticket's QA judges its plan's QA checks and nothing else (`SymphonyElixir.TicketJourney`).
+  defp plan_scope(%{groomed: true}) do
+    """
+
+    This ticket has a plan, and the steps above are its QA checks: judge them and nothing else.
+    Anything else you notice is a `note` you record with `ticket_record`, never a finding and never a
+    reason to fail. Name each step you report after its check, opening with the check's id in
+    brackets (`[c2]`): Symphony records a check as proved from the step that passes under its id.
+    """
+  end
+
+  defp plan_scope(_journey), do: ""
 
   # A walkthrough is written for a machine to reproduce; a check only the operator can make once
   # the change is live is theirs, never a QA step, and never fails or blocks the ticket.

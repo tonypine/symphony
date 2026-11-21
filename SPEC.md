@@ -582,11 +582,37 @@ came before, and each of its options names the action a pick makes from a closed
 `rerun`, `rework` with a finding, `accept_without_qa`, which records the `qa` verdict `skip` and moves
 to Merging, and `cancel`), which the decision path performs; a ticket waits on one open question
 about its stage at a time, the Conductor's or QA's own "could not finish its check", and answering
-one withdraws any other open in the same phase as `superseded`; `docs/configuration.md#conductor`),
+one withdraws any other open in the same phase as `superseded`; `docs/configuration.md#conductor`;
+at `grooming`, before the first run of a ticket with no plan and no run of its own, the turn runs
+in the ticket's workspace with read-only tools and its answer holds the ticket's plan, which
+Symphony records as `plan.written` after recording the ask as `ask.recorded`: a try that writes
+neither a plan nor a question is counted in a status note, the ticket is groomed again at its next
+dispatch, and after 2 such tries it starts without a plan; a plan of shape `split` is carried out
+instead of a first run: its sub-tickets are created under the ticket, which then waits on them; on
+such a ticket the junctions `sub_ticket_ended` and `final_check` run outside any dispatch, and
+their answer's `tree` operations and `done` are carried out by Symphony: `docs/configuration.md`,
+The tree),
 `conductor.steer` (machine only: guidance the Conductor's watch gave a running run, under that run's
 `run_id`, with its `text`, `when` it asked for it, `next_turn`, `now` or `stop`, the `trigger` that
-made it look and how and when it was `delivered`; `conductor.watch` in `docs/configuration.md`) and
-`note`. `GET /api/v1/events` reads every ticket's events, and
+made it look and how and when it was `delivered`; `conductor.watch` in `docs/configuration.md`),
+`ask.recorded` (the machine's or a person's: what a person asked for, word for word and never
+rewritten, with its `source`, `linear`, `message` or `parent`, and the parent ticket or message it
+came `from`), `plan.written` (machine only: one version of a groomed ticket's plan, with its
+`version`, the `reason` it was written and `by` what, its `shape`, `single` or `split`, the `layers`
+it touches, a `summary` for a person, the plan's `text` for agents, its `checks`, each with an `id`
+that is its alone across versions (a new check gets an id no version used, and a check whose
+statement a version changed counts only the proofs and waivers recorded after that version), a `kind`, `outcome`, `qa` or `evidence`, a `statement` and its
+`proof`, `test`, `qa`, `design` or `attached`, its `size` and, for a split, its `sub_tickets`; the
+newest one is the ticket's plan, and a ticket is groomed exactly when it holds one), `check.proved`
+(any run's, or the machine's: a check of the current plan proved by a test, QA, the design or
+something attached, recorded once per check and head and refused for an id the plan does not hold),
+`check.waived` (machine only: a check nobody has to prove any more, and why; an `outcome` check is
+waived only by the person's own decision, and a plan version may remove or reword one only after a
+new ask),
+`conductor.intervention` (machine only: what the Conductor of another ticket did to this one,
+`stopped`, `replanned`, `canceled`, `replaced` or `added`, and why) and
+`note` (which may carry a `tag` its writer gives it: `discovery`, something a run found that is not its
+own to solve, or `base_fault`, a fault of the base branch). `GET /api/v1/events` reads every ticket's events, and
 Symphony's own stream, newest first, with the notable rule set (`docs/control-api.md`).
 
 A run's steps are `step.started` and `step.completed`, each naming the step (`step_id`, `title`)
@@ -2182,6 +2208,21 @@ when that is unset (`repositories[].manual_review`). Its `escalate` rules (and a
 
 The QA agent:
 
+- **A ticket with a plan.** A run of a ticket whose history holds a `plan.written` reads its ask,
+  its plan and its checks where a run of any other ticket reads the description: the implementation,
+  rework, review and QA prompts carry `## Ask`, `## Plan` and `## Checks`; QA walks the plan's `qa`
+  checks, and every other check the plan proves by QA or against a design, and judges nothing
+  else, and QA MUST NOT be skipped while one of those is open; before the merge the Conductor's
+  facts name every check still open; the `outcome` checks are the acceptance criteria; a
+  `check.proved` with `by: test` is confirmed on the PR head by the QA pre-check, and QA records a
+  `check.proved` (`by: qa` or `design`) for each check it saw pass. The ticket MUST NOT be handed
+  off to Code Review while a check a test or an attachment proves is open. A plan whose layers
+  hold `screen` or `gallery` MUST NOT be scoped to "nothing on screen". The Linear description of
+  such a ticket is a projection Symphony writes and no run reads: `## Ask` (every ask, word for
+  word, oldest first), `## Plan` (the plan's summary) and `## Checks` (one line per check with its
+  state), above Symphony's own blocks, written again when an ask, a plan version, a proof or a
+  waiver is recorded, in the same pass as the Decisions section; the walkthrough's `Proved by:`
+  block below is not written there. A ticket with no plan keeps the behaviour below.
 - **Walkthrough proofs.** The person writing a ticket describes the user's flow in plain steps and
   names no test and no check. The implementer, who writes the tests, ends each step a test of its PR
   covers with `Proved by: <test>` through `linear_record_walkthrough_proofs`, which records each
@@ -3103,8 +3144,12 @@ commands Symphony runs, `orchestrated` steps agent turns Symphony starts from a 
 `delegated` steps work the agent does in its session and records itself. A failed step returns the
 run to the step its `on_fail` names, with its output; a step that ends with no result
 `no_result_limit` times in a row (default 2) pauses the run on a Question. The implementation
-default is `code` (delegated), `build`, `checks`, `tests` and `window_tests` (machine, each
-returning to `code` on failure) and `handoff` (delegated). `window_tests` runs, in the QA VM, the
+default is `code` (delegated), `build`, `checks`, `tests`, `window_tests` and `plan_checks` (machine, each
+returning to `code` on failure) and `handoff` (delegated). `plan_checks` (`symphony:checks`) runs no
+shell: it fails, naming them, while a check of the ticket's plan that a test or an attachment proves
+is open, and passes at once for a ticket with no plan; the second coding run in a row it (or the
+handoff itself) refuses, with no new plan version and no waiver in between, pauses the ticket on a
+question to the person (send it back, waive the checks and pass it on, cancel). `window_tests` runs, in the QA VM, the
 window-driving tests whose script or covered path the change touches, as the manifest beside them
 declares, and is skipped otherwise; a test that fails there and passes on the base branch returns
 the run to `code`, and a step that could not run (the VM unreachable, a build the VM could not run,
@@ -3848,7 +3893,9 @@ An issue is dispatch-eligible only if all are true:
     default branch yet. One exception: a non-plan blocker its PR's merge put in the waiting state
     (default `Waiting on sub-tickets`) counts as resolved, since its change is on the default
     branch; a sub-ticket blocked by its own merged parent would otherwise deadlock with it. A plan
-    parent in the waiting state still blocks. A blocker without a known state counts as open.
+    parent in the waiting state still blocks. A groomed blocker (one that holds a `plan.written`)
+    counts as resolved once its record says its pull request merged, whatever its state. A blocker
+    without a known state counts as open.
   - A blocker linked while a run is under way never stops the worker once its agent session
     started: the turn in flight finishes, the run starts no further turn, and the next dispatch is
     held. A blocker that reaches the ticket's record while the run is still starting (dispatched, no
@@ -3935,6 +3982,15 @@ An issue is dispatch-eligible only if all are true:
     parent with at least one sub-issue, every one terminal, moves to `Epic Review`, where the epic
     review runs. Any other issue in that state is never dispatched, and waits for a human unless the
     merge of its pull request put it there (below).
+  - A groomed issue (one that holds a `plan.written`) follows its own rule there, whatever its
+    labels: it is never dispatched, and it closes once its own pull request merged or it never had
+    one and none of its sub-issues is outside `terminal_states` (one in `Backlog` holds it), after
+    the Conductor's final check when that junction is on. A final check that ran and did not
+    conclude MUST NOT close the issue: the service asks the person and the issue stays in the
+    waiting state until they answer. A groomed issue whose pull request merges
+    waits there on every sub-issue it has. The move that closes it updates Symphony's record of the
+    issue with Linear, for a groomed issue and any other, under the issue's repo key; an issue read
+    with no repo key MUST NOT be moved, and its close is tried again on the next poll.
   - When a pull request of an issue that is not a plan parent merges while the issue has a
     sub-issue that is neither terminal nor in `Backlog`, the service moves the issue to the waiting
     state instead of `Done`, whoever merged it and even when Linear's GitHub integration or a
@@ -5053,7 +5109,10 @@ Scoped Linear tool extension contract:
   apart from the issue's own); `linear_update_document` still MUST refuse them.
 - `linear_update_issue_summary` is the only tool that writes the current issue's description (the
   Decisions section is Symphony's own write, outside any tool).
-  `linear_record_walkthrough_proofs` accepts only `proofs`, a list of a step number and a test; it
+  On a ticket with a plan, `linear_record_walkthrough_proofs` takes the id of a check of the plan as
+  each proof's `step`, reads nothing from Linear, and MUST record one `check.proved` (`by: test`) per
+  proof; it MUST refuse a check the plan lacks or proves by QA (`proof: qa`, `proof: design`).
+  Otherwise `linear_record_walkthrough_proofs` accepts only `proofs`, a list of a step number and a test; it
   MUST read the description, check each proof against its `## User walkthrough`, and record one
   `evidence` event per step on the ticket's history with `proof` (the step and the test), leaving the
   description unchanged. It MUST refuse, with nothing recorded, a test holding a ` › ` or ` > `
@@ -5195,11 +5254,14 @@ Scoped GitHub tool extension contract:
   (`gh run view --job <id> --log-failed`), bounded: at most 400 lines per job, each line clipped,
   and at most 10 jobs, counting the rest. It is a read tool, so every run kind has it, the reviewer
   and QA included; it gives no other `gh` access.
-- `ticket_events` and `ticket_record`, if exposed, MUST act only on the session's current ticket
-  and take no ticket argument; every run kind gets both. `ticket_record` MUST take only the types the
+- `ticket_events`, `ticket_record` and `ticket_plan`, if exposed, MUST act only on the session's current ticket
+  and take no ticket argument; every run kind gets all three. `ticket_plan` MUST only read: every ask, the
+  current plan, its checks with the state of each and the tagged notes of the ticket and its parent,
+  and for a ticket with no plan a null plan and no checks. `ticket_record` MUST take only the types the
   event catalog allows the run's kind (`finding.recorded` in a QA run; `finding.resolved`, `step.*`,
-  `evidence`, `checklist.answered` and `note` in any run; `brief.written` in an implementation, rework
-  or review-feedback run), MUST fill the event's actor, run, phase
+  `evidence`, `checklist.answered`, `check.proved` and `note` in any run; `brief.written` in an implementation, rework
+  or review-feedback run), MUST refuse a `check.proved` naming no check of the current plan, naming
+  the ids the plan holds, MUST fill the event's actor, run, phase
   and head itself, MUST take artifacts only from regular files under the workspace or the run's
   temp folder, and MUST write nothing when it refuses a call, returning the reason and the type's
   schema.
@@ -6771,12 +6833,17 @@ Minimum endpoints:
     hold. One still active stays skipped until a person acts: `unblock` runs it again in place and
     `restart` starts it over, each clearing the reason and the hold.
 
-- `POST /api/v1/control/note` (OPTIONAL)
+- `POST /api/v1/control/message`, and its alias `POST /api/v1/control/note` (OPTIONAL)
   - Writes the Director's message to a ticket: `repo_key`, `issue_identifier` and `text`. The ticket
     resolves as the events feed resolves it. The message is a `message.sent` event (Section 4.1.11)
     whose actor is the person "the Director", since the control API authenticates one shared token.
     Each message is its own event; none replaces or hides another. Sending one never starts, stops or
-    reorders a run.
+    reorders a run, but on a groomed ticket whose Conductor answers messages (`conductor.enabled`
+    and the `message` junction): there no run is given the message, the Conductor's turn starts at
+    once, and its reply is a `conductor.update` (`junction: "message"`) whose `parent` is the
+    message. That turn may record a new plan version and the message as an ask, steer or stop the
+    working run, change the ticket's sub-tickets or waive a check; on a finished ticket it may only
+    reply or have a new, related ticket created. A turn that fails leaves Symphony's own reply.
   - Answers `200` `{"event": ...}` with the event as the feed shows it (`summary.title` "You wrote",
     and `read`, null until a run read it), and writes a `director_note` audit record (`event_id`, the
     text's first 500 characters). Text that is blank, or longer than the `message.sent` type's 4,000

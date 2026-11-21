@@ -48,9 +48,10 @@ public enum ControlAction: Equatable {
     case unblock(String)
     /// Takes back the last move on the ticket, within 10 s of it.
     case undo(String)
-    /// Writes the Director's note on the ticket of repo `repoKey`: it shows in the ticket's timeline, and the next
-    /// agent run reads it in the ticket's summary.
-    case note(repoKey: String, identifier: String, text: String)
+    /// Writes the Director's message on the ticket of repo `repoKey` (`POST /api/v1/control/message`): it shows in the
+    /// ticket's timeline. On a groomed ticket the ticket's Conductor answers it; on any other the next agent run reads it
+    /// in the ticket's summary.
+    case message(repoKey: String, identifier: String, text: String)
     /// Links (`add`) or unlinks the ticket `blocker` as a blocker of the ticket (TP-1354): Symphony writes the link to
     /// Linear, and the ticket waits for its blocker at once.
     case blocker(String, blocker: String, add: Bool)
@@ -165,8 +166,8 @@ public enum ControlAction: Equatable {
             return "api/v1/control/unblock"
         case .undo:
             return "api/v1/control/undo"
-        case .note:
-            return "api/v1/control/note"
+        case .message:
+            return "api/v1/control/message"
         case .blocker:
             return "api/v1/control/blocker"
         case .priority:
@@ -192,6 +193,13 @@ public enum ControlAction: Equatable {
         }
     }
 
+    /// The route a Symphony older than this app serves the action on, with the same body and the same answer, nil when
+    /// the action has none: a message was a note (`POST /api/v1/control/note`).
+    var olderPath: String? {
+        if case .message = self { return "api/v1/control/note" }
+        return nil
+    }
+
     /// The HTTP method: DELETE for a view's deletion, POST for the rest.
     var method: String {
         if case .deleteView = self { return "DELETE" }
@@ -208,7 +216,7 @@ public enum ControlAction: Equatable {
              let .move(identifier, _, _),
              let .decide(identifier, _, _, _), let .unblock(identifier), let .undo(identifier):
             return identifier
-        case .pause, .pauseWithReason, .pauseForUpdate, .resume, .resumeUpdate, .tryNow, .force, .stopForcing, .stop, .start, .note, .blocker,
+        case .pause, .pauseWithReason, .pauseForUpdate, .resume, .resumeUpdate, .tryNow, .force, .stopForcing, .stop, .start, .message, .blocker,
              .priority, .label, .decision, .pauseRepository, .resumeRepository, .pauseProvider, .resumeProvider, .looked, .saveView,
              .deleteView:
             return nil
@@ -263,7 +271,7 @@ public enum ControlAction: Equatable {
             if !identifier.isEmpty { body["issue_identifier"] = identifier }
             if let move { body["move"] = move }
             return body
-        case let .note(repoKey, identifier, text):
+        case let .message(repoKey, identifier, text):
             return ["repo_key": repoKey, "issue_identifier": identifier, "text": text]
         case let .blocker(identifier, blocker, add):
             return ["issue_identifier": identifier, "blocker": blocker, "action": add ? "add" : "remove"]
@@ -317,7 +325,7 @@ public enum ControlAction: Equatable {
             return "Couldn't unblock \(identifier)"
         case let .undo(identifier):
             return "Couldn't undo the move on \(identifier)"
-        case let .note(_, identifier, _):
+        case let .message(_, identifier, _):
             return "Couldn't send the message to \(identifier)"
         case let .blocker(identifier, blocker, add):
             return add ? "Couldn't add \(blocker) as a blocker of \(identifier)" : "Couldn't remove \(blocker) as a blocker of \(identifier)"
@@ -379,7 +387,9 @@ public enum ControlAPI {
 
     /// Sends `action` to the control URL in `stateRoot`, with the bearer token from the same directory.
     /// `fallback` is the control URL used while Symphony hasn't written one, and `token`, when given, is sent instead
-    /// of the state directory's (the live Symphony's or the API fixtures' in QA mode).
+    /// of the state directory's (the live Symphony's or the API fixtures' in QA mode). A 404 for an action an older
+    /// Symphony serves on another route (`ControlAction.olderPath`) is sent once more there, and that answer is the
+    /// result: during an update the app can be newer than the Symphony it talks to.
     public static func send(
         _ action: ControlAction,
         stateRoot: URL,
@@ -393,16 +403,23 @@ public enum ControlAPI {
         guard let token = token ?? StateRoot.controlToken(in: stateRoot) else {
             return missingToken(action, tokenFile: StateRoot.controlTokenFile(in: stateRoot))
         }
-        guard let (data, response) = try? await transport(request(action, base: base, token: token)) else {
+        guard var (data, response) = try? await transport(request(action, base: base, token: token)) else {
             return unreachable(action, base: base)
+        }
+        if (response as? HTTPURLResponse)?.statusCode == 404, let olderPath = action.olderPath {
+            guard let older = try? await transport(request(action, base: base, token: token, path: olderPath)) else {
+                return unreachable(action, base: base)
+            }
+            (data, response) = older
         }
         return result(action, statusCode: (response as? HTTPURLResponse)?.statusCode ?? 0, data: data)
     }
 
-    /// The request for `action`, authenticated with the bearer token from the state directory.
-    public static func request(_ action: ControlAction, base: URL, token: String) -> URLRequest {
+    /// The request for `action`, authenticated with the bearer token from the state directory; on `path` when given,
+    /// else on the action's own.
+    public static func request(_ action: ControlAction, base: URL, token: String, path: String? = nil) -> URLRequest {
         var request = URLRequest(
-            url: base.appendingPathComponent(action.path),
+            url: base.appendingPathComponent(path ?? action.path),
             cachePolicy: .reloadIgnoringLocalCacheData,
             timeoutInterval: timeout
         )

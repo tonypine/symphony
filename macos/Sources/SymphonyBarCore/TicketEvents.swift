@@ -187,11 +187,13 @@ public struct TicketEventsPayload: Equatable {
         public var answer: StepAnswer?
         /// The message a `message.read` says a run read.
         public var messageID: String?
+        /// A plan's version (`plan.written`): 1 for the one Grooming wrote, higher for each change.
+        public var version: Int?
 
         enum CodingKeys: String, CodingKey {
             case kind, outcome, exit, stepId, title, reason, returnsTo, returnsToTitle, questionId, model, effort, tokens, durationMs
             case to, from, action, rule, setBy, by, askedBy, description, text, signal, status, findingId, junction, watch, blocks
-            case messageId
+            case messageId, version
         }
 
         public init(
@@ -200,7 +202,7 @@ public struct TicketEventsPayload: Equatable {
             model: String? = nil, effort: String? = nil, tokens: Int? = nil, durationMs: Int? = nil, to: String? = nil,
             from: String? = nil, action: String? = nil, rule: String? = nil, setter: Setter? = nil, description: String? = nil,
             text: String? = nil, signal: String? = nil, isStatus: Bool = false, findingID: String? = nil, junction: String? = nil, watch: ConductorWatch? = nil,
-            blocks: [ConductorBlock] = [], answer: StepAnswer? = nil, messageID: String? = nil
+            blocks: [ConductorBlock] = [], answer: StepAnswer? = nil, messageID: String? = nil, version: Int? = nil
         ) {
             self.kind = kind
             self.outcome = outcome
@@ -230,6 +232,7 @@ public struct TicketEventsPayload: Equatable {
             self.blocks = blocks
             self.answer = answer
             self.messageID = messageID
+            self.version = version
         }
 
         public init(from decoder: Decoder) throws {
@@ -254,7 +257,8 @@ public struct TicketEventsPayload: Equatable {
                 watch: (try? container?.decodeIfPresent(ConductorWatch.self, forKey: .watch)) ?? nil,
                 blocks: ((try? container?.decodeIfPresent([LossyConductorBlock].self, forKey: .blocks)) ?? nil)?.compactMap(\.block) ?? [],
                 answer: BlockFields(decoder).flatMap(StepAnswer.init(fields:)),
-                messageID: text(.messageId)
+                messageID: text(.messageId),
+                version: number(.version)
             )
         }
     }

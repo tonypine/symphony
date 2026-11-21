@@ -100,7 +100,7 @@ ticket's to solve, instead of Rework, a rerun or a question. Prefer it to Rework
   tool), doubling what Code Review and QA must judge.
 Its shape, every field required but `existing` and `evidence`:
 
-{"to": "ticket", "relation": "blocks" or "follow_up", "repo": "<a repo key from filings.repos>",
+{"to": "ticket", "relation": "<one of filings.relations>", "repo": "<a repo key from filings.repos>",
  "title": "<at most 120 characters>", "problem": "<what is wrong and where, from the facts>",
  "wanted": "<the behaviour wanted>", "acceptance": ["<one criterion>", ...],
  "walkthrough": ["<a step a person takes, with what they see>", ...],
@@ -110,6 +110,11 @@ Its shape, every field required but `existing` and `evidence`:
   Use it when this ticket cannot get a real result until the problem is fixed.
 - `follow_up`: the new ticket is linked and this ticket goes on at once. Use it when this ticket
   can finish without it.
+- When `filings.relations` lists `before` and `after` instead, this ticket has a plan and the new
+  ticket becomes a sub-ticket of it, which must end before this ticket closes. `before`: this
+  ticket waits for it to be Done, then continues from where it stopped. `after`: this ticket goes
+  on at once, and the sub-ticket starts once this ticket's pull request has merged; use it for work
+  that builds on this ticket's code.
 - `repo` may be any repo Symphony manages (`filings.repos`): a ticket of one repo may file against
   Symphony's own.
 - `existing`: an open ticket you know already covers the problem; Symphony links that one instead
@@ -174,6 +179,17 @@ answers, so first decide what you can from the facts. At the other junctions, as
 class of finding came back on this ticket (its count is 2 or more) or the budget is going wrong
 (tokens used near or past the cap, or many QA passes or rework runs). Give two to four options,
 exactly one recommended. Otherwise null.
+
+The plan's checks (only when the facts hold `checks`). The ticket has a plan, and each of its checks
+is `open`, `proved` or `waived`. An open check that a test or an attachment proves (`proof`:
+`test` or `attached`) keeps the ticket from being handed off: the run's step `plan_checks` fails
+while one is open. `check_notes` holds the newest notes the runs wrote, which is where a run says
+that a check cannot be proved that way. At `after_coding`
+and `after_rework`, when a run says so and you agree that nobody can prove the check the way the
+plan says, waive it: add `"waive": [{"check_id": "<the check's id>", "reason": "<why nobody can
+prove it this way, in plain words>"}]` to your answer. Symphony records it with your reason, and the
+handoff no longer waits on it. Do not waive a check because it is hard or still to do: then say in
+`instructions` how to prove it. At any other junction `waive` is ignored.
 
 The facts (JSON; each fact from an event carries that event's id):
 

@@ -243,6 +243,29 @@ struct ConductorVoice: View {
     }
 }
 
+/// The Conductor's reply to a person's message, drawn directly under that message in its entry: the small mark, then
+/// the Conductor speaking, with its blocks.
+struct ConductorReply: View {
+    let message: ConductorMessage
+
+    /// Under the message it answers, the junction's words would only repeat where it is.
+    private var said: ConductorMessage {
+        var said = message
+        said.junction = nil
+        return said
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: DesignTokens.Space.s2) {
+            ConductorMark(size: .small)
+                .padding(.top, 1)
+            ConductorVoice(message: said)
+        }
+        .padding(.vertical, DesignTokens.Space.s1)
+        .frame(maxWidth: ConductorVoice.measure, alignment: .leading)
+    }
+}
+
 /// The Conductor inside a run's group. When it acted on the run (steered or stopped it) the message is drawn whole,
 /// under a line that says what it did and when it reaches the run; when it only watched, one quiet line.
 struct ConductorRunNote: View {

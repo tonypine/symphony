@@ -23,7 +23,7 @@ final class ConductorSettingsTests: XCTestCase {
     }
 
     func testAMissingOrNullKeyReadsAsSymphonysDefault() throws {
-        let defaults = ConductorSettings(enabled: false, junctions: Set(ConductorJunction.allCases), timeoutMs: 180_000)
+        let defaults = ConductorSettings(enabled: false, junctions: Set(ConductorJunction.settable), timeoutMs: 180_000)
         XCTAssertEqual(ConductorSettings(), defaults)
         XCTAssertEqual(try ConductorSettings.values(in: ""), defaults)
         XCTAssertEqual(try ConductorSettings.values(in: "conductor:\n"), defaults)
@@ -92,6 +92,46 @@ final class ConductorSettingsTests: XCTestCase {
         XCTAssertEqual(changedLines(config, try ConductorSettings.updating(config, from: configSettings, to: slower)), ["  timeout_ms: 240000"])
     }
 
+    /// A missing `junctions` runs it at every junction, the ones a later release adds too; a list freezes it.
+    func testEveryJunctionOnWritesNoListAndOneOffWritesTheList() throws {
+        let all = Set(ConductorJunction.settable)
+        var everyOn = configSettings
+        everyOn.junctions = all
+        let withoutKey = try ConductorSettings.updating(config, from: configSettings, to: everyOn)
+        XCTAssertEqual(withoutKey, config.replacingOccurrences(of: "  junctions: [after_coding, before_merge]\n", with: ""))
+        XCTAssertEqual(try ConductorSettings.values(in: withoutKey), everyOn)
+
+        // A block list goes with its items.
+        let block = "conductor:\n  enabled: true\n  junctions:\n    - after_coding\n    # the last one\n  timeout_ms: 120000\n"
+        XCTAssertEqual(
+            try ConductorSettings.updating(block, from: ConductorSettings.values(in: block), to: everyOn),
+            "conductor:\n  enabled: true\n  timeout_ms: 120000\n"
+        )
+
+        // No key and one junction off: the list of the rest.
+        let oneOff = everyOn.setting(.grooming, on: false)
+        XCTAssertEqual(
+            changedLines(withoutKey, try ConductorSettings.updating(withoutKey, from: everyOn, to: oneOff)),
+            ["  junctions: " + ConductorSettings.inline(oneOff.junctions)]
+        )
+        // No key and nothing off: nothing to write.
+        var slower = everyOn
+        slower.timeoutMs = 240_000
+        XCTAssertFalse(try ConductorSettings.updating(withoutKey, from: everyOn, to: slower).contains("junctions:"))
+    }
+
+    /// A list written before a release added junctions shows them off: the file says so.
+    func testAListReadsAsItSaysWithNoNewerJunctionOn() throws {
+        let older = "conductor:\n  junctions: [after_coding, after_qa_fail, after_qa_blocked, after_rework, before_merge]\n"
+        let read = try ConductorSettings.values(in: older)
+        XCTAssertEqual(read.junctions, [.afterCoding, .afterQAFail, .afterQABlocked, .afterRework, .beforeMerge])
+        XCTAssertFalse(read.runs(at: .grooming))
+        // Turning the rest on drops the list.
+        var everyOn = read
+        everyOn.junctions = Set(ConductorJunction.settable)
+        XCTAssertFalse(try ConductorSettings.updating(older, from: read, to: everyOn).contains("junctions"))
+    }
+
     func testInsertsTheConductorSectionWhenMissing() throws {
         XCTAssertEqual(
             try ConductorSettings.updating(
@@ -109,11 +149,69 @@ final class ConductorSettingsTests: XCTestCase {
         }
     }
 
+    // MARK: Grooming and the final check
+
+    func testReadsAndWritesGroomingsTimeLimitAndTheFinalCheckRounds() throws {
+        XCTAssertEqual(ConductorSettings().groomingTimeoutMs, 600_000)
+        XCTAssertEqual(ConductorSettings().groomingTimeoutSeconds, 600)
+        XCTAssertEqual(ConductorSettings().finalCheckRounds, 3)
+        XCTAssertEqual(try ConductorSettings.values(in: config).groomingTimeoutMs, 600_000)
+
+        let read = try ConductorSettings.values(in: "conductor:\n  grooming_timeout_ms: 300_500\n  final_check_rounds: 5\n")
+        XCTAssertEqual([read.groomingTimeoutMs, read.finalCheckRounds], [300_500, 5])
+        // An untouched field keeps a limit that is no whole number of seconds.
+        XCTAssertEqual(read.groomingTimeoutSeconds, 301)
+        XCTAssertEqual(read.setting(groomingTimeoutSeconds: 301), read)
+        XCTAssertEqual(read.setting(groomingTimeoutSeconds: 900).groomingTimeoutMs, 900_000)
+        XCTAssertThrowsError(try ConductorSettings.values(in: "conductor:\n  final_check_rounds: many\n")) { error in
+            XCTAssertEqual(error as? ConductorSettingsError, .unreadable(key: "conductor.final_check_rounds", value: "many"))
+        }
+
+        var changed = configSettings
+        changed.groomingTimeoutMs = 900_000
+        changed.finalCheckRounds = 1
+        let written = try ConductorSettings.updating(config, from: configSettings, to: changed)
+        XCTAssertEqual(try ConductorSettings.values(in: written), changed)
+        XCTAssertEqual(
+            Set(written.components(separatedBy: "\n")).subtracting(config.components(separatedBy: "\n")),
+            ["  grooming_timeout_ms: 900000", "  final_check_rounds: 1"]
+        )
+    }
+
+    /// Symphony refuses a `grooming_timeout_ms` or a `final_check_rounds` that is not above zero.
+    func testGroomingsTimeLimitAndTheFinalCheckRoundsStayAboveZero() {
+        let settings = ConductorSettings(groomingTimeoutMs: 300_000, finalCheckRounds: 4)
+        for refused in [0, -1] {
+            XCTAssertEqual(settings.setting(groomingTimeoutSeconds: refused), settings)
+            XCTAssertEqual(settings.setting(finalCheckRounds: refused), settings)
+        }
+        XCTAssertEqual(settings.setting(groomingTimeoutSeconds: 1).groomingTimeoutMs, 1_000)
+        XCTAssertEqual(settings.setting(finalCheckRounds: 1).finalCheckRounds, 1)
+    }
+
     // MARK: Controls
 
     func testTheJunctionRowsAndTheirTitles() {
-        XCTAssertEqual(ConductorJunction.allCases.map(\.rawValue), ["after_coding", "after_qa_fail", "after_qa_blocked", "after_rework", "before_merge"])
-        XCTAssertEqual(ConductorJunction.allCases.map(\.title), ["After coding", "After a QA fail", "After a blocked QA", "After rework", "Before merge"])
+        XCTAssertEqual(
+            ConductorJunction.settable.map(\.rawValue),
+            [
+                "grooming", "after_coding", "after_qa_fail", "after_qa_blocked", "after_rework", "before_merge", "message", "sub_ticket_ended",
+                "final_check", "child_message",
+            ]
+        )
+        XCTAssertEqual(
+            ConductorJunction.settable.map(\.title),
+            [
+                "Grooming a new ticket", "After coding", "After a QA fail", "After a blocked QA", "After rework", "Before merge",
+                "On a message from you", "After a sub-ticket ends", "At the final check", "On a message to a sub-ticket",
+            ]
+        )
+        // While it watches a run the Conductor names `during_run`, which is no setting.
+        XCTAssertEqual(ConductorJunction.allCases.filter { !ConductorJunction.settable.contains($0) }, [.duringRun])
+        XCTAssertThrowsError(try ConductorSettings.values(in: "conductor:\n  junctions: [during_run]\n")) { error in
+            XCTAssertEqual(error as? ConductorSettingsError, .unknownJunction("during_run"))
+        }
+        XCTAssertEqual(ConductorSettings.inline(Set(ConductorJunction.allCases)).contains("during_run"), false)
         XCTAssertTrue(configSettings.runs(at: .afterCoding))
         XCTAssertFalse(configSettings.runs(at: .afterRework))
         XCTAssertEqual(configSettings.setting(.afterCoding, on: true), configSettings)
@@ -139,7 +237,7 @@ final class ConductorSettingsTests: XCTestCase {
 
         XCTAssertEqual(try file.readConductorSettings(), configSettings)
         var on = configSettings
-        on.junctions = Set(ConductorJunction.allCases)
+        on.junctions = Set(ConductorJunction.settable)
         let refused = try await file.writeConductorSettings(on, from: configSettings) { _ in .failed("conductor.junctions: no") }
         XCTAssertEqual(refused, .failed("conductor.junctions: no"))
         XCTAssertEqual(try file.readConductorSettings(), configSettings)

@@ -10,10 +10,28 @@ defmodule SymphonyElixir.ConductorConfigTest do
     "runs" => %{"default" => %{"harness" => "codex", "provider" => "openai", "model" => "gpt-test"}}
   }
 
+  @junctions ~w(grooming after_coding after_qa_fail after_qa_blocked after_rework before_merge message sub_ticket_ended final_check child_message)
+
   test "is off, at every junction, for three minutes, when the section is missing" do
     assert {:ok, %{conductor: conductor}} = SystemSchema.parse(@base)
-    assert conductor == %Schema.Conductor{enabled: false, junctions: ~w(after_coding after_qa_fail after_qa_blocked after_rework before_merge), timeout_ms: 180_000}
-    assert Schema.Conductor.junctions() == ~w(after_coding after_qa_fail after_qa_blocked after_rework before_merge)
+    assert %Schema.Conductor{enabled: false, junctions: @junctions, timeout_ms: 180_000} = conductor
+    assert %{grooming_timeout_ms: 600_000, final_check_rounds: 3} = conductor
+    assert Schema.Conductor.junctions() == @junctions
+  end
+
+  test "Grooming gets ten minutes and the final check 3 rounds by default, and neither may be 0" do
+    assert {:ok, %{conductor: %{grooming_timeout_ms: 900_000, final_check_rounds: 1}}} =
+             SystemSchema.parse(Map.put(@base, "conductor", %{"grooming_timeout_ms" => 900_000, "final_check_rounds" => 1}))
+
+    assert {:error, {:invalid_symphony_config, "conductor.grooming_timeout_ms must be greater than 0"}} =
+             SystemSchema.parse(Map.put(@base, "conductor", %{"grooming_timeout_ms" => 0}))
+
+    assert {:error, {:invalid_symphony_config, "conductor.final_check_rounds must be greater than 0"}} =
+             SystemSchema.parse(Map.put(@base, "conductor", %{"final_check_rounds" => 0}))
+  end
+
+  test "a file that lists its junctions runs the Conductor only at those, the new ones too" do
+    assert {:ok, %{conductor: %{junctions: ["grooming", "message"]}}} = SystemSchema.parse(Map.put(@base, "conductor", %{"junctions" => ["grooming", "message"]}))
   end
 
   test "reads the section, and refuses an unknown key, an unknown junction or a timeout of 0" do
@@ -26,7 +44,7 @@ defmodule SymphonyElixir.ConductorConfigTest do
              SystemSchema.parse(Map.put(@base, "conductor", %{"model" => "x"}))
 
     assert {:error, {:invalid_symphony_config, message}} = SystemSchema.parse(Map.put(@base, "conductor", %{"junctions" => ["whenever"]}))
-    assert message =~ "conductor.junctions must name only after_coding"
+    assert message =~ "conductor.junctions must name only grooming, after_coding"
 
     assert {:error, {:invalid_symphony_config, "conductor.timeout_ms must be greater than 0"}} =
              SystemSchema.parse(Map.put(@base, "conductor", %{"timeout_ms" => 0}))
@@ -68,7 +86,10 @@ defmodule SymphonyElixir.ConductorConfigTest do
     keys = SystemSchema.operator_key_paths()
 
     watch = ~w(enabled run_minutes run_tokens min_interval_minutes max_turns_per_run allow_stop) |> Enum.map(&("conductor.watch." <> &1))
-    for key <- ~w(conductor.enabled conductor.junctions conductor.timeout_ms conductor.file_tickets conductor.max_filed_tickets) ++ watch, do: assert(key in keys)
+
+    for key <- ~w(conductor.enabled conductor.junctions conductor.timeout_ms conductor.grooming_timeout_ms conductor.final_check_rounds conductor.file_tickets conductor.max_filed_tickets) ++ watch,
+        do: assert(key in keys)
+
     refute "phases.conductor.steps" in keys
   end
 

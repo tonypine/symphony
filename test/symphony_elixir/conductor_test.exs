@@ -648,6 +648,54 @@ defmodule SymphonyElixir.ConductorTest do
     assert Conductor.plan_after_run(ctx.issue, :qa, "default") == nil
   end
 
+  describe "waiving a check" do
+    setup ctx do
+      checks = [%{id: "c1", kind: "evidence", statement: "The export matches.", proof: "test"}, %{id: "c2", kind: "evidence", statement: "It signs in.", proof: "test"}]
+      plan = %{shape: "single", layers: ["engine"], summary: "s", text: "t", checks: checks, size: %{tokens: 1, runs: 1}}
+      {:ok, _plan} = SymphonyElixir.TicketPlan.write("default", ctx.issue_id, Map.merge(plan, %{reason: "Grooming", by: "grooming"}))
+      :ok
+    end
+
+    test "a turn after coding waives a check nobody can prove, and drops one the plan does not hold", ctx do
+      waive = [%{"check_id" => "c1", "reason" => "No test can reach the export."}, %{"check_id" => "c7", "reason" => "x"}]
+      test = self()
+
+      turn = fn _plan, _issue, _run_id, prompt ->
+        send(test, {:prompt, prompt})
+        {:ok, [answer(%{"waive" => waive})], 10}
+      end
+
+      log = capture_log(fn -> assert Conductor.run(plan(ctx), ctx.issue, turn: turn) == :ok end)
+
+      assert log =~ "Conductor's waiver of c7 was dropped"
+      assert [%{id: "c1", state: :waived, waived: %{reason: "No test can reach the export."}}, %{id: "c2", state: :open}] = SymphonyElixir.TicketChecks.list(ctx.issue_id)
+      assert_received {:prompt, prompt}
+      assert prompt =~ ~s("check_notes": [)
+      assert prompt =~ "waive it"
+
+      # A junction that may not waive reads none.
+      no_waiver = plan(ctx, %{junction: "after_qa_fail"})
+      assert Conductor.run(no_waiver, ctx.issue, turn: turn([answer(%{"waive" => [%{"check_id" => "c2", "reason" => "x"}]})] |> then(&{:ok, &1, 10}))) == :ok
+      assert [_waived, %{id: "c2", state: :open}] = SymphonyElixir.TicketChecks.list(ctx.issue_id)
+    end
+
+    test "a watch turn may waive one too, and its prompt says so", ctx do
+      run = %{issue_id: ctx.issue_id, run_id: "run-w-#{System.unique_integer([:positive])}", repo_key: "default", started_at: DateTime.utc_now()}
+      test = self()
+
+      turn = fn _plan, _issue, _run_id, prompt ->
+        send(test, {:prompt, prompt})
+        {:ok, [Jason.encode!(%{"instructions" => nil, "waive" => [%{"check_id" => "c2", "reason" => "The sign-in needs a live account."}]})], 5}
+      end
+
+      assert Conductor.watch(run, "step_failed_twice", turn: turn, settings: %{@on | watch: %{@on.watch | enabled: true}}) == :ok
+      assert_received {:prompt, prompt}
+      assert prompt =~ "`plan_checks`"
+      assert prompt =~ ~s("waive": )
+      assert [%{state: :open}, %{id: "c2", state: :waived}] = SymphonyElixir.TicketChecks.list(ctx.issue_id)
+    end
+  end
+
   describe "watch/3" do
     setup ctx do
       Steer.create_table()

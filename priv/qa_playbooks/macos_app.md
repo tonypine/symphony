@@ -519,7 +519,7 @@ GitHub or Linear in QA:
   `ticket-page` fixtures with `api/v1/state.late.json` (`{"after": 60, "for": 60}`): from 60 s
   after the app's first read until 120 s, every state read waits until 120 s, while the health
   read and every other read answer at once. Before 60 s, open Work › Tickets (TP-1244, TP-1245,
-  TP-1246) with the status line reading the connection as answering. About 10 s into the late
+  TP-1246, TP-1247) with the status line reading the connection as answering. About 10 s into the late
   window the Tickets page stays, with the same tickets, and the status line says "Symphony isn't
   answering · N s" with Open Logs and Restart Symphony; its counts and the sidebar's badges keep
   their last values in grey. Open TP-1244 from the list: its page opens from the data the
