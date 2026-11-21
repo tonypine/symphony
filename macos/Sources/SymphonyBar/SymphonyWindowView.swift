@@ -1452,7 +1452,7 @@ struct SettingsPageContent: View {
             if let model = page.model {
                 SettingsView(
                     model: model, updates: page.updates, section: page.section, select: { page.section = $0 },
-                    saved: page.saved, changes: page.changeCount, revert: page.revert, save: page.save
+                    saved: page.saved, revert: page.revert, save: page.save
                 )
             } else {
                 Color.clear

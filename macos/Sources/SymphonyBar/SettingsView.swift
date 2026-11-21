@@ -15,8 +15,6 @@ struct SettingsView: View {
     let select: (SettingsSection) -> Void
     /// The last Save stored everything.
     var saved = false
-    /// How many values were edited and not saved: the Save bar's count.
-    var changes = 0
     let revert: () -> Void
     let save: () -> Void
 
@@ -155,12 +153,12 @@ struct SettingsView: View {
         .padding(.horizontal, DesignTokens.SettingsRow.pageInset)
     }
 
-    /// The Save bar: the count of values edited, Revert, which puts back the saved values (the page has no window to
+    /// The Save bar: the count of settings that differ from the saved values, Revert, which puts back the saved values (the page has no window to
     /// close, as the old Settings window's Cancel did), and Save, which checks and stores every section's values at
     /// once. Save waits while nothing changed, while a value is out of range and while the form can't save yet.
     private var saveBar: some View {
         SaveBar(
-            changes: changes, state: model.isSaving ? .saving : saved ? .saved : .editing,
+            changes: model.changeCount, state: model.isSaving ? .saving : saved ? .saved : .editing,
             saveDisabledReason: stopTimeoutError ?? restartTimeoutError ?? model.saveBlockedReason, onRevert: revert, onSave: save
         )
         .padding(DesignTokens.SettingsRow.pageInset)
