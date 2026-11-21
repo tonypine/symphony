@@ -35,7 +35,7 @@ final class SettingsPage: ObservableObject {
     @Published private(set) var model: SettingsViewModel?
     /// The section the page shows.
     @Published var section: SettingsSection = .first
-    /// The last Save stored everything and nothing was edited since: shown as "Saved.". The next Save (and so a
+    /// The last Save stored everything and nothing was edited since: shown as "Saved" on the Save bar. The next Save (and so a
     /// refused one), an edit, Revert and the window's close clear it.
     @Published private(set) var saved = false
     /// Clears `saved` on the shown form's next edit.

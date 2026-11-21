@@ -162,6 +162,37 @@ final class SettingsControlsTests: XCTestCase {
         XCTAssertNil(SettingsGroup<EmptyView>.shown(nil))
     }
 
+    /// TP-1576: a line of a group is padded as a row, so the group draws its hairlines around it as around one.
+    func testALineIsPaddedAsARow() {
+        let width: CGFloat = 520
+        let words = "Only the chosen priorities start new work."
+        let line = size(SettingsLine(words), width: width).height
+        let text = size(FieldFootnote(footnote: .help(words)), width: width - 2 * DesignTokens.SettingsRow.horizontalPadding).height
+        XCTAssertEqual(line, text + 2 * DesignTokens.SettingsRow.verticalPadding, accuracy: 0.5)
+        XCTAssertEqual(size(SettingsLine(words, error: true), width: width).height, line, accuracy: 0.5, "an error line is as tall")
+        let fields = size(SettingsLine { DirectorTextField(nil, text: .constant("NAME"), drawnAs: .rest) }, width: width).height
+        XCTAssertEqual(fields, DesignTokens.Control.medium.height + 2 * DesignTokens.SettingsRow.verticalPadding, accuracy: 0.5)
+        let one = size(SettingsGroup { SettingsLine(words) }, width: width).height
+        let two = size(SettingsGroup { SettingsLine(words); SettingsLine(words) }, width: width).height
+        XCTAssertEqual(two, 2 * one + HairlineDivider.thickness, accuracy: 0.5, "a hairline between two lines")
+    }
+
+    /// TP-1576: a number field that accepts more shows a typed value past its range as it is, for its page to say why.
+    func testAFieldThatAcceptsMoreShowsTheValueTyped() {
+        XCTAssertEqual(NumberField(value: .constant(900), in: 1...600).typedRange, 1...600)
+        XCTAssertEqual(NumberField(value: .constant(900), in: 1...600, accepts: Int.min...Int.max).typedRange, Int.min...Int.max)
+        let kept = size(NumberField(value: .constant(9000), in: 1...600, accepts: Int.min...Int.max, drawnAs: .rest)).height
+        XCTAssertEqual(kept, DesignTokens.Control.medium.height, accuracy: 0.5)
+    }
+
+    /// TP-1576: a text field in a settings row reads as its row (or the label `controlLabel` gives it), else its
+    /// placeholder.
+    func testATextFieldReadsAsItsLabelItsRowOrItsPlaceholder() {
+        XCTAssertEqual(DirectorTextField.spokenLabel("Title", row: "Step", placeholder: "lowercase"), "Title")
+        XCTAssertEqual(DirectorTextField.spokenLabel(nil, row: "Report model", placeholder: "claude-haiku"), "Report model")
+        XCTAssertEqual(DirectorTextField.spokenLabel(nil, row: nil, placeholder: "State name"), "State name")
+    }
+
     // MARK: - Section list
 
     func testTheSectionListIsItsWidthAndOneRowASection() {

@@ -12,6 +12,14 @@ extension EnvironmentValues {
     @Entry var settingsRowInvalid = false
 }
 
+extension View {
+    /// What VoiceOver reads for the design-system control inside (a switch, a number, time or text field), in place of
+    /// its row's label: "Summary size limit in tokens" for the row Summary size limit.
+    public func controlLabel(_ label: String) -> some View {
+        environment(\.settingsRowLabel, label)
+    }
+}
+
 /// One setting: its label over the one line under it, and its control at the trailing end, centred on them. The line
 /// is the reason the setting is off when `disabledReason` is set (the control is off too, with the not-allowed pointer
 /// and the reason as its help), else the error in the problem colour (the control's edge turns red too), else the
@@ -136,5 +144,31 @@ public struct SettingsGroup<Content: View>: View {
     static func shown(_ text: String?) -> String? {
         guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         return text
+    }
+}
+
+/// A line of a group that is no one setting: the words that explain the rows around it, a status beside its action, an
+/// error that names where its reason shows, or a row of fields such as a variable's name and value. It is padded as a
+/// row, so the group draws its hairlines around it as around a row.
+public struct SettingsLine<Content: View>: View {
+    let content: Content
+
+    public init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    public var body: some View {
+        let tokens = DesignTokens.SettingsRow.self
+        content
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, tokens.verticalPadding)
+            .padding(.horizontal, tokens.horizontalPadding)
+    }
+}
+
+extension SettingsLine where Content == FieldFootnote {
+    /// The words of a line: the help in the secondary colour, or an error in the problem colour.
+    public init(_ text: String, error: Bool = false) {
+        self.init { FieldFootnote(footnote: error ? .error(text) : .help(text)) }
     }
 }
