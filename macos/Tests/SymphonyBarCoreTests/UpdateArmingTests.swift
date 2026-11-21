@@ -296,6 +296,14 @@ final class UpdateArmingTests: XCTestCase {
         )
     }
 
+    /// c6: while an update waits ready, the menu's cancel item calls it off, so it reads Cancel Update.
+    func testTheMenusCancelItemReadsCancelUpdateWhileAnUpdateWaitsReady() {
+        XCTAssertEqual(UpdateMenu.cancelTitle(restartIsUpdate: false, downloading: false, ready: true), "Cancel Update")
+        XCTAssertEqual(UpdateMenu.cancelTitle(restartIsUpdate: true, downloading: false, ready: false), "Cancel Update")
+        XCTAssertEqual(UpdateMenu.cancelTitle(restartIsUpdate: false, downloading: true, ready: false), "Cancel Update")
+        XCTAssertEqual(UpdateMenu.cancelTitle(restartIsUpdate: false, downloading: false, ready: false), "Cancel Restart")
+    }
+
     func testCancelUpdateOnAnUpdateReadyHoldsItsRelease() {
         let cancel = UpdateCancel(downloading: true, drain: RestartMachine(), kind: .onRelease, release: release(1056), ready: release(1054))
 

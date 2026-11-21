@@ -105,19 +105,21 @@ func settingsRowStory(help: String? = nil, error: String? = nil, reason: String?
 
 /// The Updates group: a pop-up, the time field, a switch and a number field, under its title and over its footer.
 @MainActor
-func settingsGroupStory(minutes: Int = 30) -> AnyView {
+func settingsGroupStory(minutes: Int = 30, mode: UpdateMode = .atTime) -> AnyView {
     struct UpdatesGroup: View {
-        @State var mode = "At a set time"
+        @State var mode: UpdateMode
         @State var time = TimeOfDay.defaultUpdateTime
         @State var notify = true
         @State var minutes: Int
 
         var body: some View {
-            SettingsGroup("Updates", footer: "Symphony installs a new release by itself at the time you set.") {
+            SettingsGroup("Updates", footer: mode == .atTime ? "Symphony installs a new release by itself at the time you set." : mode.explanation) {
                 SettingsRow("Update mode") {
-                    PopUp(nil, selection: $mode, choices: ["Manually", "At a set time", "On release"].map { PopUpChoice($0, $0) })
+                    PopUp(nil, selection: $mode, choices: UpdateMode.allCases.map { PopUpChoice($0, $0.title) })
                 }
-                SettingsRow("Time", help: "On the Mac's clock, every day.") { TimeField(time: $time) }
+                if mode == .atTime {
+                    SettingsRow("Time", help: "On the Mac's clock, every day.") { TimeField(time: $time) }
+                }
                 SettingsRow("Notify me when it installs", help: "A notification after each update.") { DirectorSwitch(isOn: $notify) }
                 SettingsRow("Check for releases every", error: minutes < 15 ? "GitHub allows a check every 15 minutes at most." : nil) {
                     NumberField(value: $minutes, in: 5...1440, step: 5, unit: "minutes")
@@ -125,7 +127,7 @@ func settingsGroupStory(minutes: Int = 30) -> AnyView {
             }
         }
     }
-    return AnyView(UpdatesGroup(minutes: minutes).frame(width: settingsStoryWidth))
+    return AnyView(UpdatesGroup(mode: mode, minutes: minutes).frame(width: settingsStoryWidth))
 }
 
 // MARK: - Settings line
@@ -266,6 +268,7 @@ let settingsStories: [ComponentStory] = {
         row("label-alone", height: 56) { settingsRowStory() },
         group("updates") { settingsGroupStory() },
         group("with-an-error") { settingsGroupStory(minutes: 10) },
+        group("updates-when-released", height: 340) { settingsGroupStory(mode: .onRelease) },
         line("text") { settingsLineStory("text") },
         line("error") { settingsLineStory("error") },
         line("with-fields") { settingsLineStory("with-fields") },

@@ -123,10 +123,10 @@ let statusLineStoryWidth = windowBarStoryWidth
 @MainActor
 func statusLineStory(
     window: WindowState = .connected, paused: Bool = false, face: DesignTokens.Interaction? = nil, open: Bool = false,
-    counts: HealthLine.Counts? = HealthLine.Counts(inProgress: 7, queued: 18, needYou: 2)
+    counts: HealthLine.Counts? = HealthLine.Counts(inProgress: 7, queued: 18, needYou: 2), update: UpdateHold? = nil
 ) -> AnyView {
     let now = Date(timeIntervalSince1970: 1_794_000_000)
-    let control = DispatchControl(window: window, paused: paused, state: nil, now: now)
+    let control = DispatchControl(window: window, paused: paused, state: nil, update: update, now: now)
     let line = HealthLine(
         window: window, dispatch: control, build: DiagnosticsPayload.Build(version: "0.0.1.926", sha: "a0be0aa5c1d2e3f4"),
         appVersion: "0.0.1.926", lastUpdate: now, counts: window.countsKnown ? counts : nil, timeZone: TimeZone(identifier: "UTC")!
@@ -137,6 +137,17 @@ func statusLineStory(
             .windowBackdrop()
     )
 }
+
+/// The status line's dispatch popover while an update is under way (TP-1590): ready and waiting for its moment with
+/// dispatch on, or with dispatch paused for the restart while a Conductor run ends.
+@MainActor
+func dispatchPopoverStory(_ update: UpdateHold, paused: Bool = false) -> AnyView {
+    let control = DispatchControl(window: .connected, paused: paused, state: nil, update: update, now: Date(timeIntervalSince1970: 1_794_000_000))
+    return AnyView(DispatchPopover(control: control, working: false, error: nil, actions: DispatchPopover.Actions()).windowBackdrop())
+}
+
+/// An update Symphony has ready, with dispatch going on (TP-1590).
+let galleryReadyUpdate = UpdateHold(version: "0.0.1.1056", step: .ready)
 
 /// Every story of the sidebar and the status line.
 @MainActor
@@ -152,6 +163,9 @@ let sidebarStatusStories: [ComponentStory] = {
             component: "status-line", id: id, title: "Status line", width: statusLineStoryWidth, height: CGFloat(DesignTokens.StatusLine.height),
             draw: draw
         )
+    }
+    func popover(_ id: String, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
+        ComponentStory(component: "status-line", id: id, title: "Status line", width: 340, height: 300, draw: draw)
     }
     return [
         side("expanded") { sidebarStory() },
@@ -169,6 +183,11 @@ let sidebarStatusStories: [ComponentStory] = {
         line("dispatch-on-menu-open") { statusLineStory(open: true) },
         line("dispatch-on-keyboard-focus") { statusLineStory(face: .focus) },
         line("dispatch-paused") { statusLineStory(paused: true) },
+        line("dispatch-on-update-ready") { statusLineStory(update: galleryReadyUpdate) },
+        popover("update-ready-popover") { dispatchPopoverStory(galleryReadyUpdate) },
+        popover("update-waiting-for-a-conductor-run-popover") {
+            dispatchPopoverStory(UpdateHold(version: "0.0.1.1056", step: .waitingForConductor(runs: 1)), paused: true)
+        },
         line("without-home-read") { statusLineStory(counts: nil) },
         line("symphony-stopped") { statusLineStory(window: .stopped) },
         line("symphony-late") { statusLineStory(window: .lagging("\(StatusMachine.notAnsweringTitle) · 25 s")) },

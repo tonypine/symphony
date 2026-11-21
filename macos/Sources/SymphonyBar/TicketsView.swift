@@ -944,12 +944,12 @@ struct DispatchPopover: View {
                 Spacer(minLength: 0)
                 Button(DispatchControl.forceTitle, action: actions.force)
                     .directorButton(disabledReason: working ? TicketList.waitReason : control.canForce ? nil : TicketList.stoppedReason)
-                // While an update is under way, Pause and Resume Dispatch wait until it ends.
+                // While an update holds dispatch, Pause and Resume Dispatch wait until it ends; one ready holds nothing.
                 if control.canResume {
                     Button(DispatchControl.resumeTitle, action: actions.resume)
                         .keyboardShortcut(.defaultAction)
                         .directorButton(.primary, disabledReason: working ? TicketList.waitReason : nil)
-                } else if control.update == nil {
+                } else if control.offersPause {
                     Button(DispatchControl.pauseTitle, action: actions.pause)
                         .directorButton(disabledReason: working ? TicketList.waitReason : control.canPause ? nil : TicketList.stoppedReason)
                 }

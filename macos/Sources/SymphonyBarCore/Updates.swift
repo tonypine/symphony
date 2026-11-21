@@ -332,6 +332,12 @@ public enum UpdateMenu {
     /// Shown while an update waits for agent runs, in place of the restart's items.
     public static let updateNowTitle = "Update Now Anyway"
     public static let cancelUpdateTitle = "Cancel Update"
+
+    /// The menu's cancel item: Cancel Update while an update restarts Symphony, downloads, or waits ready for its
+    /// moment (TP-1590), as its action calls the update off; Cancel Restart otherwise.
+    public static func cancelTitle(restartIsUpdate: Bool, downloading: Bool, ready: Bool) -> String {
+        restartIsUpdate || downloading || ready ? cancelUpdateTitle : StatusMenu.cancelRestartTitle
+    }
     public static let failedTitle = "Symphony wasn't updated"
 
     /// For example "Update to v0.0.1.42".

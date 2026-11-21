@@ -1340,7 +1340,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         detailItems.forEach(menu.removeItem)
         let updating = restarter.machine.purpose.isUpdate || updater.preparing != nil
         restartNowItem.title = updating ? UpdateMenu.updateNowTitle : StatusMenu.restartNowTitle
-        cancelRestartItem.title = updating ? UpdateMenu.cancelUpdateTitle : StatusMenu.cancelRestartTitle
+        cancelRestartItem.title = UpdateMenu.cancelTitle(
+            restartIsUpdate: restarter.machine.purpose.isUpdate, downloading: updater.preparing != nil, ready: arming.waitingVersion != nil
+        )
         restartNowItem.isHidden = !restarter.machine.offersRestartNow
         cancelRestartItem.isHidden = !offersCancel
         tryNowItem.isHidden = StatusMenu.tryNowLimit(status) == nil

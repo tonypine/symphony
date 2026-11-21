@@ -50,7 +50,9 @@ public struct DispatchControl: Equatable {
     public static let updateNowTitle = UpdateMenu.updateNowTitle
 
     /// An update Symphony has ready holds nothing (TP-1590), so Pause and Resume Dispatch stay beside it.
-    public var canPause: Bool { update?.isReady != false && (mode == .on || mode == .holding) }
+    public var canPause: Bool { offersPause && (mode == .on || mode == .holding) }
+    /// Pause Dispatch shows, enabled when `canPause`, unless an update under way holds dispatch, as in the menu.
+    public var offersPause: Bool { update?.isReady != false }
     public var canResume: Bool { update?.isReady != false && mode == .paused }
     /// Try Now sits beside the limits it checks; a stopped Symphony has none.
     public var canTryNow: Bool { mode != .stopped && tryNow != nil }

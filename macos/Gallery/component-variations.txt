@@ -172,6 +172,7 @@ segmented-control-segment-hover
 segmented-control-small
 segmented-control-two-segments
 settings-group-updates
+settings-group-updates-when-released
 settings-group-with-an-error
 settings-line-error
 settings-line-text
@@ -201,10 +202,13 @@ status-line-dispatch-on
 status-line-dispatch-on-hover
 status-line-dispatch-on-keyboard-focus
 status-line-dispatch-on-menu-open
+status-line-dispatch-on-update-ready
 status-line-dispatch-paused
 status-line-symphony-late
 status-line-symphony-late-paused
 status-line-symphony-stopped
+status-line-update-ready-popover
+status-line-update-waiting-for-a-conductor-run-popover
 status-line-without-home-read
 table-header-and-row-default
 table-header-and-row-empty
