@@ -138,6 +138,8 @@ defmodule SymphonyElixir.Conductor do
   @grooming "grooming"
   @final_check "final_check"
   @tree_junctions ["sub_ticket_ended", "final_check"]
+  # Not a junction: what `tend/4` does for a waiting ticket with a sub-ticket left in Backlog.
+  @start "start"
   @message "message"
   @child_message "child_message"
   @message_junctions [@message, @child_message]
@@ -430,23 +432,37 @@ defmodule SymphonyElixir.Conductor do
   @doc """
   The turn a groomed ticket with sub-tickets is owed outside any dispatch (`Tree.due/3`), run now:
   `sub_ticket_ended` when one of them ended and others are open, `final_check` once the last one
-  ended. Nothing runs while the Conductor or the junction is
+  ended. With `start` in place of a junction no turn runs: a sub-ticket Symphony created and left
+  in `Backlog` is linked and started (`Tree.start_left/3`). Nothing runs while the Conductor or the junction is
   off, or no provider of `runs.conductor` can take a run now: the next poll asks again. The turn's
   answer is carried out as it is recorded (`Tree.apply/3`). A final check that did not conclude
   never closes the ticket: one that did not finish is counted and tried once more, then the person
   is asked (`Tree.checked/3`). Always `:ok`. `opts`: `plan/4`'s and `run/3`'s.
   """
   @spec tend(Issue.t(), String.t(), String.t() | nil, keyword()) :: :ok
-  def tend(%Issue{id: issue_id} = issue, junction, repo_key, opts \\ []) when junction in @tree_junctions do
+  def tend(%Issue{id: issue_id} = issue, junction, repo_key, opts \\ []) when junction in [@start | @tree_junctions] do
+    if junction == @start, do: start_left(issue, repo_key, opts), else: tend_junction(issue, junction, repo_key, opts)
+  rescue
+    error ->
+      Logger.warning("Conductor turn failed issue_id=#{issue_id} issue_identifier=#{issue.identifier} repo_key=#{repo_key} junction=#{junction}: #{Exception.message(error)}")
+      :ok
+  end
+
+  # No turn: a sub-ticket Symphony left in Backlog is linked and started (`Tree.start_left/3`), and
+  # after a few failed tries the person is asked.
+  defp start_left(%Issue{id: issue_id} = issue, repo_key, opts) do
+    plan = %{junction: @start, issue_id: issue_id, repo_key: repo_key}
+    start = fn -> ask_about(Tree.start_left(repo_key, issue, Keyword.take(opts, [:tracker])), plan, issue) end
+    _started_or_busy = exclusive(issue_id, :skip, start)
+    :ok
+  end
+
+  defp tend_junction(%Issue{id: issue_id} = issue, junction, repo_key, opts) do
     case plan_with(issue_id, repo_key, opts, fn _events -> junction end) do
       nil -> :ok
       %{unavailable: _provider} -> :ok
       plan -> tend_alone(plan, issue, opts)
     end
-  rescue
-    error ->
-      Logger.warning("Conductor turn failed issue_id=#{issue_id} issue_identifier=#{issue.identifier} repo_key=#{repo_key} junction=#{junction}: #{Exception.message(error)}")
-      :ok
   end
 
   # While another turn works on the ticket (a message's), nothing runs: the next poll asks again.

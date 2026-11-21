@@ -32,6 +32,15 @@ defmodule SymphonyElixir.Conductor.Tree do
   A split that fails is counted (`failed/3`, a status note under `grooming.split_try:<n>`): it is
   tried again at the next dispatch, and from the third failure on the person is asked each time.
 
+  ## A sub-ticket left in Backlog
+
+  A sub-ticket Symphony created in `Backlog` whose link or move to `Todo` failed (`start/5`) would
+  hold its parent for good. While the parent waits, each poll owes it one more try (`due/3` answers
+  `:start`, `start_left/3`): the sub-ticket is read again, the links it lacks are made and it is
+  moved to `Todo`. A try that fails is counted (a status note under
+  `tree.start_try:<its id>:<n>`), and after 3 in a row the person is asked ("Try again" or
+  cancel). One a person moved out of `Backlog` meanwhile is left alone.
+
   ## The bounds
 
   What the Conductor may create under a ticket is bounded (`room/1`), whatever asks for it (a
@@ -110,7 +119,14 @@ defmodule SymphonyElixir.Conductor.Tree do
   @max_depth 3
   @limit_key "tree.limit:"
   @start_failed_key "tree.start_failed:"
+  @start_try_key "tree.start_try:"
+  @start_asked_key "tree.start_asked:"
+  @started_key "tree.started:"
+  @start_tries 3
   @limit_asked_key "tree.limit_asked"
+
+  @typedoc "What a waiting groomed ticket is owed (`due/3`)."
+  @type owed :: :close | :final_check | :sub_ticket_ended | :start | nil
 
   @typedoc "A sub-ticket Symphony created: its id, its identifier and the repo it belongs to."
   @type child :: %{id: String.t(), identifier: String.t(), repo: String.t()}
@@ -579,12 +595,13 @@ defmodule SymphonyElixir.Conductor.Tree do
   What the groomed ticket `issue`, in the waiting state, is owed now (see the module doc): `:close`
   (Symphony moves it to `Done` itself), `:final_check` (the Conductor's turn),
   `:sub_ticket_ended` (the Conductor's turn too: sub-tickets are still open, and one ended that no
-  such turn looked at yet, `seen/3`), or nil while it waits: a sub-ticket is open, its sub-tickets
+  such turn looked at yet, `seen/3`), `:start` (no turn: a sub-ticket Symphony left in `Backlog` is
+  linked and started, `start_left/3`), or nil while it waits: a sub-ticket is open, its sub-tickets
   were not read (`:unknown`), or it has a pull request that did not merge, which is a person's to
   settle. `opts`: `conductor` (the `conductor`
   settings, default `Config.conductor_settings/0`) and `events` (the ticket's, default its record's).
   """
-  @spec due(Issue.t() | term(), Enumerable.t(String.t()), keyword()) :: :close | :final_check | :sub_ticket_ended | nil
+  @spec due(Issue.t() | term(), Enumerable.t(String.t()), keyword()) :: owed()
   def due(%Issue{id: issue_id, sub_issues: sub_issues} = issue, terminal_states, opts)
       when is_binary(issue_id) and is_list(sub_issues) do
     settings = Keyword.get_lazy(opts, :conductor, &Config.conductor_settings/0)
@@ -598,7 +615,7 @@ defmodule SymphonyElixir.Conductor.Tree do
   def due(_issue, _terminal_states, _opts), do: nil
 
   @doc "`due/3` with the `conductor` settings and the ticket's events as they are now."
-  @spec due(Issue.t() | term(), Enumerable.t(String.t())) :: :close | :final_check | :sub_ticket_ended | nil
+  @spec due(Issue.t() | term(), Enumerable.t(String.t())) :: owed()
   def due(issue, terminal_states), do: due(issue, terminal_states, [])
 
   # Every sub-ticket ended (or none is left): the ticket closes, after its final check when one is owed.
@@ -613,7 +630,98 @@ defmodule SymphonyElixir.Conductor.Tree do
   end
 
   defp due_open(issue, terminal_states, settings, events) do
-    if turn?(settings, "sub_ticket_ended") and unseen(issue, terminal_states, events) != [], do: :sub_ticket_ended
+    cond do
+      turn?(settings, "sub_ticket_ended") and unseen(issue, terminal_states, events) != [] -> :sub_ticket_ended
+      left(issue, events) != [] -> :start
+      true -> nil
+    end
+  end
+
+  # The sub-tickets Symphony created and could not start, which the tracker still shows in Backlog.
+  defp left(%Issue{sub_issues: sub_issues}, events) do
+    failed = for %{type: "note", idempotency: @start_failed_key <> id} <- events, into: MapSet.new(), do: id
+    started = for %{type: "note", idempotency: @started_key <> id} <- events, into: MapSet.new(), do: id
+
+    for %{id: id, state: state} = sub <- sub_issues,
+        MapSet.member?(failed, id) and not MapSet.member?(started, id),
+        is_binary(state) and normalize(state) == "backlog",
+        do: sub
+  end
+
+  @doc """
+  Tries once more to start each sub-ticket of `issue` that Symphony created and left in `Backlog`
+  (see the module doc): it is read again, linked to what it waits on where the link is missing
+  (the sub-tickets its plan entry waits `after`; its parent, for one a run's turn filed to do
+  after it) and moved to `Todo`. `:ok`, or `{:ask, {:start, id}, question}` once the same
+  sub-ticket failed #{@start_tries} times in a row: the person decides. `opts`: `tracker`.
+  """
+  @spec start_left(String.t() | nil, Issue.t(), keyword()) :: :ok | {:ask, {:start, String.t()}, map()}
+  def start_left(repo_key, %Issue{id: issue_id} = issue, opts \\ []) do
+    events = Facts.events(issue_id)
+    entries = Map.get(TicketPlan.current(events) || %{}, :sub_tickets, [])
+
+    issue
+    |> left(events)
+    |> Enum.map(&retry(&1, blockers(&1, entries, issue), {repo_key, issue, events}, opts))
+    |> Enum.find(:ok, &(&1 != :ok))
+  end
+
+  defp blockers(%{identifier: identifier}, entries, %Issue{} = parent) do
+    by_key = for %{key: key, identifier: named} <- entries, into: %{}, do: {key, named}
+
+    case Enum.find(entries, &(Map.get(&1, :identifier) == identifier)) do
+      %{after: waits} -> for key <- waits, blocker = by_key[key], do: blocker
+      nil -> [parent.identifier]
+    end
+  end
+
+  defp retry(%{id: id, identifier: identifier}, blockers, {repo_key, %Issue{id: parent_id}, events}, opts) do
+    child = %{id: id, identifier: identifier, repo: recorded_repo(id) || repo_key}
+
+    case start_again(child, blockers, opts) do
+      :ok ->
+        note(repo_key, parent_id, "Symphony linked and started #{identifier}, which it had left in #{@backlog}.", @started_key <> id)
+
+      :moved ->
+        :ok
+
+      {:error, why} ->
+        prefix = "#{@start_try_key}#{id}:"
+        tries = events |> Enum.reverse() |> Enum.take_while(&(not keyed?(&1, @start_asked_key <> id))) |> Enum.count(&keyed?(&1, prefix))
+        note(repo_key, parent_id, "Symphony could not start #{identifier} again: #{why}.", "#{prefix}#{keyed(events, prefix) + 1}")
+        if tries + 1 < @start_tries, do: :ok, else: {:ask, {:start, id}, start_question(identifier, why)}
+    end
+  end
+
+  # A link the tracker already holds is kept; a sub-ticket no longer in Backlog is a person's now.
+  defp start_again(child, blockers, opts) do
+    case tracker(opts).fetch_issue_states_by_ids([child.id]) do
+      {:ok, [%Issue{state: state} = fresh | _rest]} ->
+        if is_binary(state) and normalize(state) == "backlog",
+          do: link_and_promote(child, Enum.reject(blockers, &blocked_by?(fresh, &1)), opts),
+          else: :moved
+
+      {:ok, []} ->
+        {:error, "the tracker does not return it"}
+
+      {:error, reason} ->
+        {:error, "it could not be read (#{inspect(reason)})"}
+    end
+  end
+
+  defp start_question(identifier, why) do
+    %{
+      title: "A sub-ticket could not be started",
+      question:
+        "Symphony created #{identifier} under this ticket and could not start it, #{@start_tries} times: #{Facts.fit(why, 400)}. It waits in #{@backlog}, and this ticket waits for it. Try again?",
+      why: "A sub-ticket is linked to what it waits on before it may start, and that step keeps failing.",
+      if_unanswered: "The sub-ticket stays in #{@backlog} and this ticket stays open.",
+      recommendation_reason: "The step may go through now, and nothing else is wrong with the ticket.",
+      options: [
+        %{label: "Try again", effect: "Symphony links the sub-ticket and moves it to #{@todo} once more.", recommended: true, action: "continue"},
+        %{label: "Cancel this ticket", effect: "This ticket is cancelled.", recommended: false, action: "cancel"}
+      ]
+    }
   end
 
   defp turn?(settings, junction), do: settings.enabled == true and junction in settings.junctions
@@ -969,12 +1077,19 @@ defmodule SymphonyElixir.Conductor.Tree do
   Records that the person was asked about the final check, once the question holds the ticket:
   `:rounds`, whether it may add one more round, which lets one through once they answer; `:stuck`,
   what to do with a check that did not conclude, after which its failed tries count from zero. Or
-  about a sub-ticket the ticket may not get (`:limit`), which is asked once per ticket.
+  about a sub-ticket the ticket may not get (`:limit`), which is asked once per ticket, or one that
+  could not be started (`{:start, its id}`), after which its failed tries count from zero.
   """
-  @spec asked(String.t(), String.t(), :rounds | :stuck | :limit) :: :ok
+  @spec asked(String.t(), String.t(), :rounds | :stuck | :limit | {:start, String.t()}) :: :ok
   def asked(repo_key, issue_id, :rounds) do
     made = rounds(Facts.events(issue_id))
     note(repo_key, issue_id, "After #{made} rounds the final check still wanted to add sub-tickets, so Symphony asked the person.", "#{@asked_key}#{made}")
+  end
+
+  def asked(repo_key, issue_id, {:start, child_id}) do
+    prefix = @start_asked_key <> child_id
+    asked = keyed(Facts.events(issue_id), prefix) + 1
+    note(repo_key, issue_id, "A sub-ticket could not be started, #{@start_tries} times, so Symphony asked the person.", "#{prefix}:#{asked}")
   end
 
   def asked(repo_key, issue_id, :limit) do

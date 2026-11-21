@@ -3696,6 +3696,10 @@ exactly as before.
   wanted could be created, when the move to `Done` failed, and when the turn failed or could not be
   read 2 times in a row (each counted in a status note). While no provider of `runs.conductor` can
   take a run, the next poll asks again.
+- **A sub-ticket left in Backlog.** A sub-ticket Symphony created in `Backlog` whose link or move
+  to `Todo` failed is said on its parent in a status note. While the parent waits, each poll tries
+  the link and the move again; after 3 failed tries in a row the person is asked ("Try again" or
+  cancel). One a person keeps in `Backlog`, or moved out of it, is left alone.
 - **The bounds.** They are fixed, not settings. A ticket gets at most 20 sub-tickets over its whole
   life, counted from every source (a split, a tree operation, a ticket a run's turn files), and a
   ticket 3 levels below its root gets none: its Grooming plan of shape `split` is recorded as

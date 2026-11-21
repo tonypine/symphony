@@ -652,6 +652,83 @@ defmodule SymphonyElixir.Conductor.TreeTest do
     end
   end
 
+  describe "a sub-ticket Symphony left in Backlog" do
+    @left %{id: "c3", identifier: "MT-3", state: "Backlog"}
+
+    setup ctx do
+      parent = waiting!(ctx, [hd(ended()), @left])
+      Application.put_env(:symphony_elixir, :memory_tracker_add_blocked_by_result, {:error, :refused})
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_add_blocked_by_result) end)
+      child = %{id: "c3", identifier: "MT-3", repo: "default"}
+      assert {:error, "the link to MT-1 (:refused)"} = Tree.start(child, ["MT-1"], parent, "default", [])
+      mailbox()
+      %{parent: parent}
+    end
+
+    test "is tried again while its parent waits, and after 3 failed tries the person is asked", ctx do
+      assert Tree.due(ctx.parent, @terminal, conductor: @off) == :start
+      # One a person keeps in Backlog, which Symphony never failed to start, owes nothing.
+      by_hand = %{ctx.parent | sub_issues: [hd(ended()), %{id: "c4", identifier: "MT-4", state: "Backlog"}]}
+      assert Tree.due(by_hand, @terminal, conductor: @off) == nil
+
+      for _try <- 1..2, do: assert(Conductor.tend(ctx.parent, "start", "default") == :ok)
+      assert Questions.open({:ticket, "default", ctx.issue_id}) == []
+      refute_received {:memory_tracker_state_update, "c3", "Todo"}
+
+      # The tracker's read fails too: it is a try like any other, the third.
+      script(:fetch_issue_states_by_ids, [{:error, :timeout}])
+      assert Conductor.tend(ctx.parent, "start", "default", tracker: Scripted) == :ok
+
+      assert [_failed, first, _second, third, asked] = status_notes(ctx.issue_id)
+      # Its plan names nothing it waits after, so it waits on its parent, as one a run's turn filed does.
+      assert first == "Symphony could not start MT-3 again: the link to #{ctx.issue.identifier} (:refused)."
+      assert third == "Symphony could not start MT-3 again: it could not be read (:timeout)."
+      assert asked == "A sub-ticket could not be started, 3 times, so Symphony asked the person."
+      assert [%{title: "A sub-ticket could not be started", question: question, options: options}] = Questions.open({:ticket, "default", ctx.issue_id})
+      assert [%{label: "Try again"}, %{label: "Cancel this ticket"}] = options
+      assert question =~ "Symphony created MT-3 under this ticket and could not start it, 3 times"
+
+      # Asked to try again, it counts from zero.
+      script(:fetch_issue_states_by_ids, [{:ok, []}])
+      assert Tree.start_left("default", ctx.parent, tracker: Scripted) == :ok
+      assert List.last(status_notes(ctx.issue_id)) == "Symphony could not start MT-3 again: the tracker does not return it."
+    end
+
+    test "is linked and started once the step goes through, by the poll, and then owes nothing", ctx do
+      Application.delete_env(:symphony_elixir, :memory_tracker_add_blocked_by_result)
+      state = %Orchestrator.State{max_concurrent_agents: 1, running: %{}, claimed: MapSet.new(), retry_attempts: %{}}
+
+      Orchestrator.tend_groomed_parents_for_test([ctx.parent], state)
+
+      parent = ctx.issue.identifier
+      assert_received {:memory_tracker_blocked_by_added, ^parent, "c3"}
+      assert_received {:memory_tracker_state_update, "c3", "Todo"}
+      assert List.last(status_notes(ctx.issue_id)) == "Symphony linked and started MT-3, which it had left in Backlog."
+      assert Tree.due(ctx.parent, @terminal, conductor: @off) == nil
+      assert Tree.start_left("default", ctx.parent) == :ok
+    end
+
+    test "takes its blockers from the plan, keeps a link it has, and leaves one a person moved", ctx do
+      Application.delete_env(:symphony_elixir, :memory_tracker_add_blocked_by_result)
+      first = %{key: "s1", title: "The API filter", ask: "a", after: [], identifier: "MT-1"}
+      entries = [first, %{key: "s2", title: "The list", ask: "b", after: ["s1"], identifier: "MT-3"}]
+      {:ok, _event} = TicketPlan.write("default", ctx.issue_id, Map.merge(plan(entries), %{reason: "Sub-tickets created", by: "grooming"}))
+
+      linked = %Issue{id: "c3", identifier: "MT-3", state: "Backlog", blocked_by: [%{identifier: "MT-1"}]}
+      script(:fetch_issue_states_by_ids, [{:ok, [%{linked | state: "Todo"}]}, {:ok, [linked]}])
+
+      # A person moved it on: nothing is done, and nothing is said.
+      notes = status_notes(ctx.issue_id)
+      assert Tree.start_left("default", ctx.parent, tracker: Scripted) == :ok
+      assert status_notes(ctx.issue_id) == notes
+      refute_received {:memory_tracker_state_update, "c3", _state}
+
+      assert Tree.start_left("default", ctx.parent, tracker: Scripted) == :ok
+      refute_received {:memory_tracker_blocked_by_added, _blocker, "c3"}
+      assert_received {:memory_tracker_state_update, "c3", "Todo"}
+    end
+  end
+
   describe "the bounds" do
     setup ctx do
       %{parent: waiting!(ctx, ended())}
