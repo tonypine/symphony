@@ -572,7 +572,7 @@ public enum PhaseDefaults {
                 mode: .machine,
                 commands: [
                     StepCommand(
-                        run: "mix format --check-formatted && mix specs.check && mix credo --strict $SYMPHONY_CHANGED_ELIXIR_FILES"
+                        run: "mix format --check-formatted && mix specs.check && (test -z \"$SYMPHONY_CHANGED_ELIXIR_FILES\" || mix credo --strict $SYMPHONY_CHANGED_ELIXIR_FILES)"
                     ),
                 ],
                 timeoutMs: 600_000,
@@ -584,7 +584,7 @@ public enum PhaseDefaults {
                 title: "Tests and coverage",
                 mode: .machine,
                 commands: [
-                    StepCommand(run: "mix test $SYMPHONY_CHANGED_TEST_FILES && mix cover.changed", when: .elixirChanged),
+                    StepCommand(run: "(test -z \"$SYMPHONY_CHANGED_TEST_FILES\" || mix test $SYMPHONY_CHANGED_TEST_FILES) && mix cover.changed", when: .elixirChanged),
                     StepCommand(run: "cd macos && swift test --filter \"$SYMPHONY_CHANGED_SWIFT_TEST_FILTER\"", when: .macosChanged),
                 ],
                 timeoutMs: 1_800_000,

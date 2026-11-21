@@ -2737,7 +2737,8 @@ defmodule SymphonyElixir.Config.Schema do
     A kind's default step list, for a `symphony.yml` that doesn't set `phases.<kind>` (decision 2 of
     TP-1085): `implementation` writes the code (delegated), builds it (`make build` when
     `macos/` changed; `mix compile --warnings-as-errors` when Elixir files did), checks it (format, specs and
-    credo on the changed files), tests it (the changed test files and `mix cover.changed`, plus
+    credo on the changed source files, no credo when there are none), tests it (the changed test files,
+    no `mix test` when there are none, and `mix cover.changed`, plus
     `swift test` for the changed targets when `macos/` changed), runs the window tests the change
     selects in the QA VM (`window_tests`, Symphony's own `window_tests_command/0`; skipped when the
     change touches nothing a declared window test covers), each returning to `code` on failure, then
@@ -2886,7 +2887,7 @@ defmodule SymphonyElixir.Config.Schema do
           "title" => "Format, specs and credo",
           "mode" => "machine",
           "when" => "elixir_changed",
-          "command" => "mix format --check-formatted && mix specs.check && mix credo --strict $SYMPHONY_CHANGED_ELIXIR_FILES",
+          "command" => "mix format --check-formatted && mix specs.check && (test -z \"$SYMPHONY_CHANGED_ELIXIR_FILES\" || mix credo --strict $SYMPHONY_CHANGED_ELIXIR_FILES)",
           "timeout_ms" => 600_000,
           "on_fail" => agent_step
         },
@@ -2895,7 +2896,7 @@ defmodule SymphonyElixir.Config.Schema do
           "title" => "Tests and coverage",
           "mode" => "machine",
           "command" => [
-            %{"run" => "mix test $SYMPHONY_CHANGED_TEST_FILES && mix cover.changed", "when" => "elixir_changed"},
+            %{"run" => "(test -z \"$SYMPHONY_CHANGED_TEST_FILES\" || mix test $SYMPHONY_CHANGED_TEST_FILES) && mix cover.changed", "when" => "elixir_changed"},
             %{"run" => "cd macos && swift test --filter \"$SYMPHONY_CHANGED_SWIFT_TEST_FILTER\"", "when" => "macos_changed"}
           ],
           "timeout_ms" => 1_800_000,

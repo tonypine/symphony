@@ -64,9 +64,9 @@ defmodule SymphonyElixir.ConfigPhasesTest do
       assert [%Command{run: "cd macos && make build", when: "macos_changed"}, %Command{run: "mix compile --warnings-as-errors", when: "elixir_changed"}] =
                build.command
 
-      assert [%Command{run: "mix format --check-formatted && mix specs.check && mix credo --strict" <> _, when: "always"}] = checks.command
+      assert [%Command{run: "mix format --check-formatted && mix specs.check && (test -z" <> _, when: "always"}] = checks.command
       assert checks.when == "elixir_changed"
-      assert [%Command{run: "mix test " <> elixir_tests}, %Command{run: "cd macos && swift test --filter" <> _, when: "macos_changed"}] = tests.command
+      assert [%Command{run: "(test -z \"$SYMPHONY_CHANGED_TEST_FILES\" || mix test " <> elixir_tests}, %Command{run: "cd macos && swift test --filter" <> _, when: "macos_changed"}] = tests.command
       assert elixir_tests =~ "mix cover.changed"
       assert Enum.all?(steps, &(&1.no_result_limit == 2))
     end

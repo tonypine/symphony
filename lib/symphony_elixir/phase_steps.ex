@@ -7,8 +7,8 @@ defmodule SymphonyElixir.PhaseSteps do
   through the workspace command runner (`SymphonyElixir.Workspace.run_step_command/5`): a login
   shell with the step's `timeout_ms` for the whole step and the environment an agent child gets
   (`SymphonyElixir.AgentEnv`'s allow-list), plus the changed files of the workspace
-  (`SYMPHONY_CHANGED_ELIXIR_FILES`, `SYMPHONY_CHANGED_TEST_FILES`,
-  `SYMPHONY_CHANGED_SWIFT_TEST_FILTER`). It records `step.started` and `step.completed` on the
+  (`SYMPHONY_CHANGED_ELIXIR_FILES`, the Elixir source files and never `mix.lock`,
+  `SYMPHONY_CHANGED_TEST_FILES`, `SYMPHONY_CHANGED_SWIFT_TEST_FILTER`). It records `step.started` and `step.completed` on the
   ticket's ledger (`SymphonyElixir.TicketEvents`), the output kept as a `step_output` artifact, and
   each step event it records is projected into the workpad's Plan and Validation
   (`SymphonyElixir.Workpad.Projection`). A machine step has no agent session, so its output is all of
@@ -26,6 +26,11 @@ defmodule SymphonyElixir.PhaseSteps do
     answer is what lets it run again;
   - a step whose `when`, or every command's, does not match the changed files is `skipped`, with
     the reason;
+  - a step whose last run of the same commands passed on the head the workspace holds now, with
+    nothing uncommitted then and now (`changes/1`'s `head` and `clean`), is `skipped` naming that
+    pass: a run restarted on the same head goes on past it. A pass records the head it ran on
+    (`head_sha`) only from a clean workspace; a failure or pause since, another head or other
+    commands run it again, and a step of Symphony's own commands below always runs;
   - a step that ends `failed` says why on its `step.completed` (`reason`, `failure_reason/1`): the
     command that ended it, how it ended and the last line it printed. A command of Symphony's own
     may say more: the Window tests step's `step.completed`, failed or paused, names the tests that
@@ -96,12 +101,15 @@ defmodule SymphonyElixir.PhaseSteps do
   @go_on "Go on past it"
   @run_again "Run it again"
   @answer_max_bytes 64 * 1024
+  # The changed-files script's lines that are not a changed file.
+  @listing_statuses ["T", "W", "Y", "H", "C"]
   @skip_reasons %{"macos_changed" => "nothing in the Mac app changed", "elixir_changed" => "no Elixir changed"}
   @back_to_code "Send it back to the code"
   # What the changed-files script prints: one `<status>\t<path>` line a change (`D` a deletion),
   # then `T\t<path>` for each test file the workspace tracks, and `W\t<manifest>` with the window
   # tests' manifest on one line when the workspace has one (JSON holds no raw newline in a string),
-  # and `Y\t<base64>` with each of its GitHub workflow files, which the failed-check step reads.
+  # `Y\t<base64>` with each of its GitHub workflow files, which the failed-check step reads,
+  # `H\t<sha>` with the head commit and `C\tclean` when nothing is uncommitted (`git status`).
   @changes_script """
   base=$(git merge-base HEAD "origin/$SYMPHONY_BASE_BRANCH" 2>/dev/null || git rev-parse HEAD 2>/dev/null)
   if [ -n "$base" ]; then git diff --name-status --no-renames "$base" 2>/dev/null; fi
@@ -111,17 +119,23 @@ defmodule SymphonyElixir.PhaseSteps do
   for f in .github/workflows/*.yml .github/workflows/*.yaml; do
     if [ -f "$f" ]; then printf 'Y\t'; base64 < "$f" | tr -d '\r\n'; printf '\n'; fi
   done
+  head=$(git rev-parse HEAD 2>/dev/null) && printf 'H\t%s\n' "$head"
+  status=$(git status --porcelain 2>/dev/null) && [ -z "$status" ] && printf 'C\tclean\n'
+  true
   """
 
   @typedoc """
   The files a workspace changed against its base branch, and its tracked test files; with the window
   tests its manifest declares (`window_tests`, `SymphonyElixir.PhaseSteps.WindowTests`) when it has one,
-  and its GitHub workflow files as YAML reads them (`workflows`) when it has any.
+  its GitHub workflow files as YAML reads them (`workflows`) when it has any, its head commit
+  (`head`) when git reads one, and `clean: true` when nothing is uncommitted.
   """
   @type changes :: %{
           required(:changed) => [String.t()],
           required(:existing) => [String.t()],
           required(:tests) => [String.t()],
+          optional(:head) => String.t(),
+          optional(:clean) => boolean(),
           optional(:window_tests) => WindowTests.manifest(),
           optional(:workflows) => [map()]
         }
@@ -240,11 +254,18 @@ defmodule SymphonyElixir.PhaseSteps do
 
   defp parse_changes(output) do
     lines = for line <- String.split(output, "\n", trim: true), [status, path] <- [String.split(line, "\t", parts: 2)], do: {status, path}
-    changed = for {status, path} <- lines, status not in ["T", "W", "Y"], uniq: true, do: path
-    existing = for {status, path} <- lines, status not in ["T", "D", "W", "Y"], uniq: true, do: path
+    changed = for {status, path} <- lines, status not in @listing_statuses, uniq: true, do: path
+    existing = for {status, path} <- lines, status not in ["D" | @listing_statuses], uniq: true, do: path
     changes = %{changed: changed, existing: existing, tests: for({"T", path} <- lines, do: path)}
 
-    changes |> put_window_tests(lines) |> put_workflows(lines)
+    changes |> put_window_tests(lines) |> put_workflows(lines) |> put_head(lines)
+  end
+
+  defp put_head(changes, lines) do
+    case for({"H", head} <- lines, do: head) do
+      [head | _rest] -> Map.merge(changes, %{head: head, clean: {"C", "clean"} in lines})
+      [] -> changes
+    end
   end
 
   defp put_window_tests(changes, lines) do
@@ -276,17 +297,22 @@ defmodule SymphonyElixir.PhaseSteps do
   def holds?("macos_changed", %{changed: changed}), do: Enum.any?(changed, &String.starts_with?(&1, "macos/"))
   def holds?("elixir_changed", %{changed: changed}), do: Enum.any?(changed, &elixir_file?/1)
 
-  defp elixir_file?(path), do: Path.extname(path) in [".ex", ".exs"] or path == "mix.lock"
+  # `mix.lock` changes what the Elixir steps build and test, so it makes them run; it is generated,
+  # not source, so no step is given it to lint (`elixir_source?/1`).
+  defp elixir_file?(path), do: elixir_source?(path) or path == "mix.lock"
+
+  defp elixir_source?(path), do: Path.extname(path) in [".ex", ".exs"]
 
   @doc """
   The environment a machine step gets on top of the agent allow-list, from `changes`: the Elixir
-  files that changed and still exist, the test files to run (the changed ones and those of the
+  source files (`.ex`, `.exs`; never a generated file such as `mix.lock`) that changed and still
+  exist, the test files to run (the changed ones and those of the
   changed `lib/` files), and the Swift test filter (the test targets of what changed under `macos/`,
   `.` for all of them).
   """
   @spec step_env(changes()) :: %{String.t() => String.t()}
   def step_env(%{existing: existing, tests: tests}) do
-    elixir = Enum.filter(existing, &elixir_file?/1)
+    elixir = Enum.filter(existing, &elixir_source?/1)
     tracked = MapSet.new(tests)
 
     module_tests =
@@ -387,7 +413,7 @@ defmodule SymphonyElixir.PhaseSteps do
   # One attempt of a machine step: `:passed`, `:skipped`, `{:failed, output}`, `{:again, output}`
   # (no result, under the cap) or `{:paused, question_id}` (no result at the cap).
   defp run_machine(%Step{} = step, context, attempt) do
-    case skip_reason(step, context.changes) || builtin_skip_reason(step, context) do
+    case skip_reason(step, context.changes) || builtin_skip_reason(step, context) || passed_reason(step, context) do
       nil ->
         execute(step, context, attempt)
 
@@ -396,6 +422,51 @@ defmodule SymphonyElixir.PhaseSteps do
         :skipped
     end
   end
+
+  # A step whose last run, of the same commands, passed on the head the workspace holds now, with
+  # nothing uncommitted then and now, would only pass again: a run restarted on that head goes on
+  # past it. A pass carries its head only from a clean workspace (`clean_head/1`), and a later end
+  # that ran the commands (failed, paused) is the step's last result. A skip ran nothing, so it
+  # never counts. Symphony's own commands read the ticket's state, which a head does not hold.
+  defp passed_reason(step, context) do
+    commands = commands(step, context.changes)
+    head = clean_head(context)
+
+    if head && Enum.all?(commands, &reusable_command?(&1, context)) do
+      events = Enum.sort_by(step_events(context), &{DateTime.to_unix(&1.at, :microsecond), &1.seq})
+
+      case Enum.filter(events, &(&1.type == "step.completed" and &1.payload.step_id == step.id and &1.payload.outcome != "skipped")) do
+        [_ | _] = ends -> ends |> List.last() |> reused(events, head, command_line(commands))
+        [] -> nil
+      end
+    end
+  end
+
+  defp reused(%{payload: %{outcome: "passed"}, head_sha: head} = pass, events, head, command) do
+    if started_command(events, pass) == command,
+      do: "passed on #{String.slice(head, 0, 8)} at #{Calendar.strftime(pass.at, "%Y-%m-%d %H:%M")} UTC, with nothing changed since"
+  end
+
+  defp reused(_last, _events, _head, _command), do: nil
+
+  # The command the step's `step.started` of the run that recorded `pass` names.
+  defp started_command(events, %{run_id: run_id, payload: %{step_id: id}} = pass) do
+    started = events |> Enum.take_while(&(&1.id != pass.id)) |> Enum.reverse() |> Enum.find(&(&1.type == "step.started" and &1.run_id == run_id and &1.payload.step_id == id))
+    started && Map.get(started.payload, :command)
+  end
+
+  defp command_line(commands), do: String.slice(Enum.join(commands, " && "), 0, @command_max)
+
+  defp step_events(context) do
+    events = with {:error, _reason} <- RunStore.list_ticket_events(context.issue_id, []), do: []
+    Enum.filter(events, &(&1.type in ["step.started", "step.completed"] and &1.actor.kind == :machine))
+  end
+
+  defp reusable_command?(command, context),
+    do: command not in [Phases.findings_command(), Phases.checks_command(), Phases.failed_check_command()] and not is_map_key(Map.get(context, :builtins, %{}), command)
+
+  defp clean_head(%{changes: %{head: head, clean: true}}) when is_binary(head), do: head
+  defp clean_head(_context), do: nil
 
   defp skip_reason(%Step{when: condition} = step, changes) do
     cond do
@@ -419,7 +490,7 @@ defmodule SymphonyElixir.PhaseSteps do
     started_ms = System.monotonic_time(:millisecond)
     deadline = DateTime.add(DateTime.utc_now(), step.timeout_ms, :millisecond)
 
-    record(context, "step.started", Map.put(step_payload(step), :command, String.slice(Enum.join(commands, " && "), 0, @command_max)), [])
+    record(context, "step.started", Map.put(step_payload(step), :command, command_line(commands)), [])
     if shell_command?(step, context.changes), do: notify(context, {:started, step, deadline})
 
     result = run_commands(commands, context, step_env(context.changes), started_ms + step.timeout_ms, [])
@@ -498,7 +569,7 @@ defmodule SymphonyElixir.PhaseSteps do
 
     case outcome do
       :passed ->
-        record(context, "step.completed", Map.put(timed, :outcome, "passed"), artifacts)
+        record(context, "step.completed", Map.put(timed, :outcome, "passed"), artifacts, head_sha: clean_head(context))
         :passed
 
       :failed ->
@@ -952,8 +1023,8 @@ defmodule SymphonyElixir.PhaseSteps do
 
   # A step event changes the workpad's Plan and Validation, which are rendered from them
   # (`SymphonyElixir.Workpad.Projection`), in a task of their own.
-  defp record(context, type, payload, artifacts) do
-    case TicketEvents.record(context.repo_key, context.issue_id, type, payload, run_id: Map.get(context, :run_id), artifacts: artifacts) do
+  defp record(context, type, payload, artifacts, opts \\ []) do
+    case TicketEvents.record(context.repo_key, context.issue_id, type, payload, [run_id: Map.get(context, :run_id), artifacts: artifacts] ++ opts) do
       {:ok, _event} -> if type in ["step.started", "step.completed"], do: Projection.project_later({:ticket, context.repo_key, context.issue_id}, steps: Map.get(context, :steps))
       {:error, reason} -> Logger.warning("Step runner could not record #{type} for #{ticket_name(context)}: #{inspect(reason)}")
     end
