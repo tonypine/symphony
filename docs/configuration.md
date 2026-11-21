@@ -2238,7 +2238,7 @@ tools for it on the QA VM, outside the sandbox, and checks every argument:
 | `qa_ax_press`, `qa_ax_set_value` | press an element (or `AXRaise` a window) and set a field's value: a text field gets it typed in with key events sent to the app alone (brought to the front, focused, text selected, then Tab), so the app sees the edit; other controls get `AXValue` set | a PID it did not launch, a tab or line break for a single-line field |
 | `qa_ax_select` | selects a table or outline row (an `AXRow`, or a cell inside one), which answers no `AXPress`: sets the table's `AXSelectedRows` to that row, or the row's `AXSelected`, checks the row reports itself selected, then brings the app forward and focuses the table so `qa_key` acts on the selection | a PID it did not launch, a `path` that is not a row or inside one |
 | `qa_click` | clicks the centre of an element's frame (`path`) or a point on screen (`x`, `y`), `clicks: 2` for a double click, after bringing the app and the element's window forward and moving the pointer there; the click goes as a mouse sends it (button down, button up, through the HID tap, `via: "hid"`) once the app is the active app, since a click posted to the app's process never activates it and an inactive window takes it as the click that activates it. Returns the element under the pointer and whether the tree or windows changed, and when a single click on an element changed nothing and the element answers `AXPress`, presses it that way (`fallback: "AXPress"`), which QA files as a finding against the harness. SwiftUI buttons and links check where the pointer is when the mouse goes up, so a click away from it does nothing | a PID it did not launch, an element with no frame, off screen, or under another app's window (`covered`, naming the app), another app staying the active app (`not_frontmost`, naming it), both or neither of `path` and `x`/`y` |
-| `qa_hover` | moves the pointer over an element's centre (`path`) or a point on screen (`x`, `y`) after the same checks, and waits up to 2 seconds for the app's accessibility tree to settle, so a hover state can be screenshotted; the pointer stays there | what `qa_click` refuses, a point outside the app's windows, both or neither of `path` and `x`/`y` |
+| `qa_hover` | moves the pointer over an element's centre (`path`) or a point on screen (`x`, `y`) after the same checks, and waits up to 2 seconds for the app's accessibility tree to settle, so a hover state can be screenshotted; the pointer stays there. Reports the cursor shown there once it settled (read until two reads 100 ms apart agree, for at most a second) as `cursor`, a system cursor by name (`arrow`, `pointing_hand`, `i_beam`, `open_hand`, `closed_hand`, `crosshair`, `operation_not_allowed`, `resize_left_right`, `resize_up_down`, …), or `cursor: null` with `cursor_unreadable` saying why (no cursor read, the app's own image, a cursor that never settled), never a default shape | what `qa_click` refuses, a point outside the app's windows, both or neither of `path` and `x`/`y` |
 | `qa_context_menu` | right-clicks an element's centre or a point after the same checks and returns the menu that opened (each item's path, title, enabled state and shortcut) and its pop-up `window_id`, for rows and controls whose `AXShowMenu` is unsupported | what `qa_hover` refuses; no menu opening within 2 seconds (`no_menu`) |
 | `qa_scroll` | scrolls the `AXScrollArea` at an element (`path`, the area or anything inside it) or a point (`x`, `y`) as a trackpad does, after the same checks: moves the pointer to the middle of the area and posts scroll-wheel events to the app alone, aimed at its window there (when those move nothing, posts them again where the pointer is, over the app's own window: `via: "hid"`). By `dx`/`dy` in `unit` `pixel` (default) or `line`, positive `dy` down, or to an `edge` (`top`, `bottom`, `left`, `right`): rounds of 3000 pt until two in a row move nothing (`at_edge`), so rows a page load adds at the end are reached too, for at most 40 seconds (a round takes seconds on a loaded runner, and the helper stops a command at 60). Returns the rows on screen (`visible`: `count`, `first`, `last`, and a table's `visible_rows`/`rows`), the `scroll_bars` values and, for a delta, how far the content `moved`. A SwiftUI `ScrollView` or `List` answers no scrolling key and its overlay scroll bar takes no `AXValue` | what `qa_hover` refuses, both or neither of `edge` and `dx`/`dy`, a zero delta, more than 20000 pt or 2000 lines; nothing scrolling there (`no_scroll_area`) |
 | `qa_key` | presses a named key (`return`, `escape`, arrows, …) or one character key, with `command`, `shift`, `option` or `control`, in the app's focused window, with key events sent to the app alone; a `command` shortcut goes as a keyboard sends it (each modifier's key down, the key, the modifiers up, through the HID tap) once the app owns the keyboard, since AppKit's menus take key equivalents from no other route; returns the focused window and element, and `via` (`pid` or `hid`) | a PID it did not launch, a key or modifier outside that list, an app with no focused window, a `command` shortcut while another app owns the keyboard (`not_frontmost`) |
@@ -4150,15 +4150,15 @@ phases:
       - id: checks
         title: Format, specs and credo
         mode: machine
-        when: elixir_changed
-        command: mix format --check-formatted && mix specs.check && mix credo --strict $SYMPHONY_CHANGED_ELIXIR_FILES
+        when: elixir_source_changed
+        command: mix format --check-formatted && mix specs.check && (test -z "$SYMPHONY_CHANGED_ELIXIR_FILES" || mix credo --strict $SYMPHONY_CHANGED_ELIXIR_FILES)
         timeout_ms: 600000
         on_fail: code
       - id: tests
         title: Tests and coverage
         mode: machine
         command:
-          - {run: mix test $SYMPHONY_CHANGED_TEST_FILES && mix cover.changed, when: elixir_changed}
+          - {run: (test -z "$SYMPHONY_CHANGED_TEST_FILES" || mix test $SYMPHONY_CHANGED_TEST_FILES) && mix cover.changed, when: elixir_source_changed}
           - {run: cd macos && swift test --filter "$SYMPHONY_CHANGED_SWIFT_TEST_FILTER", when: macos_changed}
         timeout_ms: 1800000
         on_fail: code
@@ -4334,9 +4334,16 @@ Each step has:
 - `command` (required for a `machine` step, refused on any other): one shell line, or a list of
   entries run in order, each a `run` line with an optional `when` (`always`, the default;
   `macos_changed`, when the change touches `macos/`; `elixir_changed`, when it touches Elixir
-  files). The step runner gives a machine step `SYMPHONY_CHANGED_ELIXIR_FILES` (the Elixir files the
-  change touches that still exist), `SYMPHONY_CHANGED_TEST_FILES` (the changed test files and the
-  tests of the changed `lib/` files) and `SYMPHONY_CHANGED_SWIFT_TEST_FILTER` (the Swift test
+  files, `mix.lock` included; `elixir_source_changed`, when it touches an Elixir source or test
+  file, `.ex` or `.exs`, and not for `mix.lock` alone). A step whose `when`, or every command's,
+  does not hold is skipped with a plain reason that says what did not change ("no Elixir source or
+  test file changed"): the default list compiles a lock-only change and runs no credo, no
+  `mix test` and no `mix cover.changed` for it, nor for a change to docs or workflow files only. A
+  dependency update is proved by CI's full suite; no local step runs the whole suite. The step runner gives a machine step `SYMPHONY_CHANGED_ELIXIR_FILES`
+  (the Elixir source files, `.ex` and `.exs`, the change touches that still exist; never a
+  generated file such as `mix.lock`), `SYMPHONY_CHANGED_TEST_FILES` (the changed test files and the
+  tests of the changed `lib/` files; either may be empty, and the default steps then run no credo
+  and no `mix test`, which would lint or test the whole project) and `SYMPHONY_CHANGED_SWIFT_TEST_FILTER` (the Swift test
   targets of what changed under `macos/`, `.` for all), read against the merge-base with the
   repository's base branch, uncommitted and untracked files included. The command runs in the
   ticket's workspace in a login shell with the environment an agent gets (its allow-list; Symphony's
@@ -4352,6 +4359,13 @@ Each step has:
   timeout for the others): how long the step may run before it ends with no result.
 - `on_fail` (a step id in the list; none ends the run): the step a failure returns to, with the
   failed step's output.
+
+A machine step whose last run of the same commands passed on the commit the workspace holds now,
+with nothing uncommitted then and now, is not run again: a run restarted on that commit (an app
+update, say) records it `skipped`, naming the earlier pass, and goes on to the next step. A step
+that failed since, passed on another commit or with uncommitted changes, or whose commands changed
+runs as before; so does a step of Symphony's own commands (the findings, the plan's checks, the
+failed check), which read the ticket rather than the commit.
 - `no_result_limit` (above 0; default `2`, decision 3 of TP-1085): how many times in a row the step
   may end with no result (its timeout) before the run pauses on a Question carrying the output and
   the ways forward; it never runs again on its own past it.
