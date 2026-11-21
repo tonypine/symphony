@@ -773,6 +773,7 @@ struct AddRepoView: View {
                 }
                 .sheet(item: fixSheet) { sheet in
                     SetupFixSheetView(sheet: sheet, cancel: model.cancelFix, confirm: { model.confirmFix(sheet) }, open: model.openDestination)
+                    .pointerButtons()
                 }
             }
         }

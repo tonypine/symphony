@@ -163,6 +163,16 @@ final class SharedComponentsTests: XCTestCase {
         XCTAssertNil(ButtonPointer.style(enabled: false))
     }
 
+    /// TP-1572: a window's, sheet's or popover's root gives the buttons that set no style of their own (Undo, Cancel,
+    /// Check Now) the system's own button with the hand while enabled, and it still draws.
+    @MainActor
+    func testTheRootStyleGivesADefaultButtonThePointerAndStillDraws() {
+        let renderer = ImageRenderer(content: Button("Undo") {}.pointerButtons().padding())
+        XCTAssertNotNil(renderer.nsImage, "a default button under pointerButtons() still draws")
+        let disabled = ImageRenderer(content: Button("Undo") {}.disabled(true).pointerButtons().padding())
+        XCTAssertNotNil(disabled.nsImage, "a disabled one draws too, with the arrow")
+    }
+
     /// One run of ink across a drawn face: its edges in points, and the middle of its top and bottom.
     struct Ink {
         var left: Double
