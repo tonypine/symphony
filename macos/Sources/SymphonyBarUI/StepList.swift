@@ -358,7 +358,7 @@ private struct CheckResultRow: View {
                 if let actual = check.result.actual {
                     Text(actual)
                         .font(DesignTokens.TypeStyle.secondary.font)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DesignTokens.TextColor.secondary.color)
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
@@ -366,7 +366,7 @@ private struct CheckResultRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             Text(check.word)
                 .font(DesignTokens.TypeStyle.secondary.font.weight(.medium))
-                .foregroundStyle(check.state == .done ? AnyShapeStyle(.secondary) : AnyShapeStyle(check.state.status.text))
+                .foregroundStyle(check.state == .done ? DesignTokens.TextColor.secondary.color : check.state.status.text)
                 .lineLimit(1)
                 .fixedSize()
                 .frame(minWidth: StepHeaderLabel.stateColumn, alignment: .trailing)
