@@ -400,8 +400,8 @@ defmodule SymphonyElixir.Conductor.Tree do
     end
   end
 
-  defp sub_issue_ids(%Issue{sub_issues: sub_issues}) when is_list(sub_issues), do: for(%{id: id} <- sub_issues, is_binary(id), do: id)
-  defp sub_issue_ids(_issue), do: []
+  # Sub-tickets a read did not carry (`:unknown`) are none to take.
+  defp sub_issue_ids(%Issue{sub_issues: sub_issues}), do: for(%{id: id} <- List.wrap(is_list(sub_issues) && sub_issues), is_binary(id), do: id)
 
   # The title each sub-ticket Symphony filed from the ticket was filed under, by its identifier.
   defp filed_titles(issue_id) do

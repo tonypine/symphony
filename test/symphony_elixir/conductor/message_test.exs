@@ -293,6 +293,9 @@ defmodule SymphonyElixir.Conductor.MessageTest do
       # With no orchestrator to take it, starting what is owed is still fine.
       assert Message.start(ctx.record, say!(ctx.issue_id), settings: @on) == :ok
       assert Message.tend("no-such-ticket", settings: @on) == :done
+      # With the Conductor off, as the settings file has it here, nothing is owed and nothing starts.
+      assert Message.tend(ctx.issue_id) == :done
+      assert Message.plan_written(ctx.issue_id) == :ok
     end
 
     test "nothing runs for a ticket with no plan, and a crash before any plan is only logged", ctx do
@@ -505,7 +508,7 @@ defmodule SymphonyElixir.Conductor.MessageTest do
   end
 
   describe "the orchestrator" do
-    defp state(attrs \\ %{}) do
+    defp state(attrs) do
       struct!(%Orchestrator.State{max_concurrent_agents: 1, running: %{}, claimed: MapSet.new(), retry_attempts: %{}}, attrs)
     end
 

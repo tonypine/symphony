@@ -346,7 +346,7 @@ defmodule SymphonyElixir.Conductor.Filing do
     ]
 
     for {what, attempt} <- attempts, {:error, reason} <- [attempt.()] do
-      Logger.warning("Conductor filed the sub-ticket #{identifier} of #{from} but could not #{what}: #{text(reason)}")
+      Logger.warning("Conductor filed the sub-ticket #{identifier} of #{from} but could not #{what}: #{if is_binary(reason), do: reason, else: inspect(reason)}")
     end
 
     filed
@@ -428,9 +428,6 @@ defmodule SymphonyElixir.Conductor.Filing do
   end
 
   defp fit(text, max), do: Facts.fit(text, max)
-
-  defp text(reason) when is_binary(reason), do: reason
-  defp text(reason), do: inspect(reason)
 
   defp field(%Event{payload: payload}, key), do: Map.get(payload, key, Map.get(payload, Atom.to_string(key)))
 

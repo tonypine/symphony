@@ -370,14 +370,13 @@ defmodule SymphonyElixir.Conductor.Message do
   defp record_asks(false, _repo_key, _issue_id, _messages, _run_id), do: :ok
 
   defp record_asks(true, repo_key, issue_id, messages, run_id) do
-    Enum.reduce_while(messages, :ok, fn %Event{id: id} = message, :ok ->
-      opts = [source: "message", from: id, run_id: run_id, idempotency: "ask.recorded:#{id}"]
-
-      case TicketPlan.record_ask(repo_key, issue_id, field(message, :text), opts) do
-        {:ok, _ask} -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, reason}}
+    asked =
+      for %Event{id: id} = message <- messages do
+        opts = [source: "message", from: id, run_id: run_id, idempotency: "ask.recorded:#{id}"]
+        TicketPlan.record_ask(repo_key, issue_id, field(message, :text), opts)
       end
-    end)
+
+    Enum.find(asked, :ok, &match?({:error, _reason}, &1))
   end
 
   @doc """
