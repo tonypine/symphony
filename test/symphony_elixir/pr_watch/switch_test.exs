@@ -729,7 +729,10 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       log = capture_log(fn -> tick!(pid) end)
       assert log =~ "no PR waits on the `specs` check of main any more"
       assert PrWatch.red_bases() == []
-      assert %{rule: "R22"} = decision(first)
+      # TP-1587: the held head takes main's fix by a branch update, not a rerun or CI Fix.
+      assert %{rule: "R20a", kind: :update_branch} = decision(first)
+      assert World.calls(:rerun) == []
+      assert moves(first) == []
     end
 
     test "a workflow whose every run was cancelled is rerun once per cancellation, with no attempt spent (R19)" do

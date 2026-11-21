@@ -94,10 +94,11 @@ The flow decision: the first rule that matches decides what happens to the ticke
 | R19 | Code Review, QA, Rework, CI Fix, Merging | Red only because every run of a workflow was cancelled, its newest attempt with nothing queued or running, and that run was rerun fewer than 2 times on the head | `wait` on `ci`: the upkeep (U2) reruns each new cancellation, no attempt spent |
 | R19a | Code Review, QA, Rework, CI Fix, Merging | Red only because a workflow run was cancelled again after 2 reruns on the head | `decision`: keep retrying it, or wait |
 | R19b | Code Review, QA, Rework, CI Fix, Merging | Red, and a workflow run with a failed check still has a check queued or running | `wait` on `ci` until the run finishes: GitHub refuses a rerun before that |
+| R20a | Code Review, QA, Rework, CI Fix, Merging | Red on a failure, on a head that was red on the base branch too (R23) and whose branch was not updated from the base since: the check is no longer red on the base, and the head lacks the base's fix | `update_branch` from the base, once per head, with no rerun and no CI Fix: CI runs on the new head and the rules read it; a conflict goes to the conflict rules, and a head GitHub can't update gets R22 and R21 |
 | R20 | Code Review, QA, Rework, CI Fix, Merging | Red, and the same failure 3 fix runs in a row or `red_attempts` at `max_red_attempts` | `file_fix_ticket` for the failing check, waiting on `symphony` until it is terminal |
 | R21 | Code Review, QA, Rework, CI Fix, Merging | Red after a rerun | `ci_fix` for the red head, back to the phase it came from |
 | R22 | Code Review, QA, Rework, CI Fix, Merging | Red, not rerun yet | `rerun_failed` once |
-| R23 | Code Review, QA, Rework, CI Fix, Merging | Red, and the same check is red on the base branch | `wait` on `ci` until the base goes green |
+| R23 | Code Review, QA, Rework, CI Fix, Merging | Red, and the same check is red on the base branch | `wait` on `ci` until the base goes green; then R20a updates the branch from the base |
 | R24 | Code Review, QA, CI Fix | Checks are running on the head | `wait` on `ci` |
 | R25 | CI Fix | Green (or no CI) and conflict-free | `return_to_origin`, approvals carried forward |
 | R26 | Rework | Not red, or a changes verdict stands on the head whatever CI says (R17 to R23 stand back); not conflicting, no run | `dispatch` the rework run |
@@ -129,6 +130,7 @@ Each fact a rule decides on, the values the table test enumerates, and when the 
 | `ci` | `pending`, `green`, `none`, `red`, `required_missing` | `pr` is `open` or `draft` |
 | `red_kind` | `failure`, `cancelled`, `human_only`, `also_red_on_base`, `run_in_progress` | `ci` is `red` |
 | `cancel_reruns` | `1`, `2` | `ci` is `red` and `red_kind` is `cancelled` |
+| `base_held` | `false`, `true` | `ci` is `red` and `red_kind` is `failure` |
 | `rerun_done` | `false`, `true` | `ci` is `red` and `red_kind` is `failure` |
 | `red_attempts` | `9`, `10` | `ci` is `red` and `red_kind` is `failure` |
 | `same_failure_streak` | `2`, `3` | `ci` is `red` and `red_kind` is `failure` |
@@ -168,7 +170,8 @@ nothing follows, or one past its bound, is reported as a silent wait (see
 R18 and R19a ask a question. A conflict never does, and a check that keeps failing gets a fix ticket
 instead (see [When CI keeps failing](#when-ci-keeps-failing)).
 
-While a `CI Fix` ticket's decision waits on CI (R23, R24) or reruns a check (R19, R22, U2), no CI Fix
+While a `CI Fix` ticket's decision waits on CI (R23, R24), reruns a check (R19, R22, U2) or updates
+the branch from the base (R20a), no CI Fix
 run starts: there is nothing to repair yet, and the next decision returns the ticket (R25) or sends
 a fix run (R14, R21). Nor while GitHub has yet to say whether the PR can merge (R16), unless a fix is
 pending on the head: a mergeability GitHub hasn't computed is never read as conflict-free, in any
@@ -267,6 +270,18 @@ head's failed log names failing tests (ExUnit, XCTest or pytest), only when the 
 every one of them too. A head log that names no test, or a log that can't be read, leaves the
 comparison by name only. The wait's reason and its log line name the base run and commit compared
 and whether by tests or by name only.
+
+When the base goes green, the head held there still lacks the base's fix, so a rerun on it would
+fail again. The watcher marks the head it read red on the base too (`base_held`), and once the same
+head reads as a plain failure, R20a updates the branch from the base itself (GitHub's update-branch,
+no agent run) instead of R22's rerun and R21's CI Fix: CI runs on the new head and the rules read it,
+so a green head goes on in its phase and only a head still red goes to CI Fix. The update is made
+once per head; until GitHub moves the head, nothing reruns. A conflict GitHub reports goes to the
+conflict rules on the next read. A head GitHub can't update (already up to date with the base, or a
+refusal) loses its mark, and R22 and R21 follow as for any failure. U1 does not cover this case:
+GitHub reports a PR with a failing required check as `BLOCKED`, never `BEHIND`, so a red PR is never
+read as behind. The update is made whatever PRs ahead in the landing order share its files, since a
+rerun on the old head cannot pass.
 
 ### Cancelled checks
 
