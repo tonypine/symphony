@@ -3016,8 +3016,9 @@ Important nuance:
   the repair was already unnecessary, so another run would have nothing to fix. A `Rework` whose
   ticket has at least one finding and none left open or reopened in its events, whose workspace
   `HEAD` is still the head the `Rework` started from with no uncommitted change, is the attached
-  PR's head, with no pending reviewer comment, CI failure or conflict and no open plan check a test
-  proves, MUST instead end the run and move to the QA state on that head, even when the run pushed
+  PR's head, that QA failed after Code Review approved it (the newest QA verdict a fail on that head,
+  newer than Code Review's newest verdict, an approve on that head), with no pending reviewer
+  comment, CI failure or conflict and no open plan check a test proves, MUST instead end the run and move to the QA state on that head, even when the run pushed
   it: with no new commit there is nothing for Code Review to read, so it is neither handed to Code
   Review nor parked as idle.
 
@@ -3593,7 +3594,7 @@ States and owners:
 | `Code Review` | Agent (reviewer) | The handoff (from `In Progress` or `Rework`); a `CI Fix` return | Approve → `QA`, or `Merging` when QA is skipped; rework → `Rework`; block → `Needs Decision` hold; red head → `CI Fix` |
 | `QA` | Agent (QA) | A Code Review approve; a `Rework` that answered every finding without a code change | Pass → `Merging`; fail → `Rework`; red head → `CI Fix` |
 | `Merging` | Machine | QA pass, or an approve that skipped QA (with manual review on, after its confirmation) | Merged → `Done`, or `Waiting on sub-tickets` while started sub-tickets are open; red head or conflict → `CI Fix` |
-| `Rework` | Agent | A rework verdict; a QA fail; a substantive CI Fix; a plan change | The handoff → `Code Review` (an epic parent → `Plan Review`); every finding answered on the unchanged head → `QA` |
+| `Rework` | Agent | A rework verdict; a QA fail; a substantive CI Fix; a plan change | The handoff → `Code Review` (an epic parent → `Plan Review`); every finding of a QA fail answered on the unchanged head → `QA` |
 | `CI Fix` | Agent (mechanical lane) | A red head or a conflict in `Code Review`, `QA`, `Merging` or `Rework` | A green head → the recorded origin, approvals carried; substantive → `Rework`; access needed → `Needs Decision` hold |
 | `Plan Review` | Person | A plan parent's handoff | Approve → `Waiting on sub-tickets` (sub-tickets promoted); a comment or a rejection → `Rework` |
 | `Waiting on sub-tickets` | Machine | Plan approval; a merge with started sub-tickets open | Every sub-ticket terminal → `Epic Review` (a non-plan ticket → `Done`) |

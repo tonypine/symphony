@@ -590,6 +590,13 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
   end
 
   describe "a Rework that answers every finding without a code change (TP-1579)" do
+    # The Rework came from QA failing the head Code Review approved.
+    setup do
+      :ok = put_verdict("default", "issue-progress", "code_review", "sha-rework", "approve", %{}, ~U[2026-11-21 03:00:00Z])
+      :ok = put_verdict("default", "issue-progress", "qa", "sha-rework", "fail", %{}, ~U[2026-11-21 03:10:00Z])
+      :ok
+    end
+
     # A finding QA recorded, and `resolved` when the rework recorded its fix (`:confirmed` once a
     # QA pass confirmed it too).
     defp found!(state) do
@@ -670,6 +677,27 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
 
     # Today a HEAD the PR does not show yet is waited on (`await_pr_head/2`), not parked, so the run
     # keeps turning: what matters is that it does not move to QA.
+    test "after Code Review requested changes on that head, ends as it does today" do
+      found!(:resolved)
+      :ok = put_verdict("default", "issue-progress", "code_review", "sha-rework", "request_changes", %{}, ~U[2026-11-21 03:20:00Z])
+
+      assert_ends_as_today()
+    end
+
+    test "when Code Review approved the head again after QA's fail, ends as it does today" do
+      found!(:resolved)
+      :ok = put_verdict("default", "issue-progress", "code_review", "sha-rework", "approve", %{}, ~U[2026-11-21 03:20:00Z])
+
+      assert_ends_as_today()
+    end
+
+    test "when QA's newest fail is on another head, ends as it does today" do
+      found!(:resolved)
+      :ok = put_verdict("default", "issue-progress", "qa", "sha-other", "fail", %{}, ~U[2026-11-21 03:30:00Z])
+
+      assert_ends_as_today()
+    end
+
     test "with the PR on another head, does not move to QA" do
       found!(:resolved)
       Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-other", checks: []}})

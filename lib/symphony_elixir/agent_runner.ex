@@ -2110,7 +2110,8 @@ defmodule SymphonyElixir.AgentRunner do
   # A Rework whose findings are all answered without a code change (a proof recorded again, TP-1579)
   # has nothing for Code Review to read: the head it leaves is the one QA judged. So once the
   # workspace HEAD is still the head the Rework started from, with a clean tree, and that HEAD is the
-  # attached PR's head, the ticket has at least one finding and none still open or reopened, no plan
+  # attached PR's head, QA failed that head after Code Review approved it, the ticket has at least
+  # one finding and none still open or reopened, no plan
   # check a test proves is open (`TicketJourney.unproved/1`) and no reviewer comment, CI failure or
   # conflict is pending, the run moves the ticket to QA, which runs again on that head (only a pass
   # carries over a head). This wins over the Code Review handoff even when the run pushed the
@@ -2119,9 +2120,24 @@ defmodule SymphonyElixir.AgentRunner do
   defp rework_answered?(%Issue{id: issue_id} = issue, %{progress: %{head: head} = progress} = run_context) do
     rework_state?(issue.state) and is_binary(head) and head == progress.rework_base and clean_tree?(progress) and
       attached_pr?(issue, run_context.opts) and findings_answered?(issue_id) and
+      qa_failed_approved_head?(run_repo_key(issue, run_context.opts), issue_id, head) and
       TicketJourney.unproved(issue_id) == [] and
       no_pending_rework_signal?(issue, run_context.opts) and
       pr_head?(issue, head, run_context)
+  end
+
+  # The Rework came from QA failing `head` after Code Review approved it: QA's newest verdict is a
+  # fail on `head`, Code Review's newest is an approve on `head`, and the fail is the newer. A
+  # Rework Code Review sent back (its request-changes posts no finding) or any other order keeps the
+  # rules below, so the shortcut never skips the review that rejected the head.
+  defp qa_failed_approved_head?(repo_key, issue_id, head) do
+    with %{outcome: "fail", head_sha: ^head, recorded_at: %DateTime{} = failed_at} <- List.first(Handoff.verdicts(repo_key, issue_id, "qa")),
+         %{outcome: "approve", head_sha: ^head, recorded_at: %DateTime{} = approved_at} <-
+           List.first(Handoff.verdicts(repo_key, issue_id, "code_review")) do
+      DateTime.compare(failed_at, approved_at) == :gt
+    else
+      _other -> false
+    end
   end
 
   defp clean_tree?(%{fingerprint: {_head, tree, _state, _pr_url}}), do: is_nil(tree)
