@@ -154,6 +154,23 @@ defmodule SymphonyElixir.PhaseStepsTest do
              }
     end
 
+    test "the changes carry the workspace's workflow files as YAML reads them, and leave out one it can't", ctx do
+      System.cmd("git", ["-C", ctx.workspace, "init", "-q", "-b", "main"], stderr_to_stdout: true)
+      dir = Path.join(ctx.workspace, ".github/workflows")
+      File.mkdir_p!(dir)
+      File.write!(Path.join(dir, "gate.yml"), "jobs:\n  gate:\n    needs: [lint]\n    steps:\n      - run: echo done\n")
+      File.write!(Path.join(dir, "list.yaml"), "- not a workflow\n")
+      File.write!(Path.join(dir, "broken.yml"), "jobs: [unclosed\n")
+
+      changes = PhaseSteps.changes(%{workspace: ctx.workspace, base_branch: "main"})
+
+      assert changes.workflows == [%{"jobs" => %{"gate" => %{"needs" => ["lint"], "steps" => [%{"run" => "echo done"}]}}}]
+      assert Enum.sort(changes.changed) == [".github/workflows/broken.yml", ".github/workflows/gate.yml", ".github/workflows/list.yaml"]
+
+      runner = fn _command, _env, _ms -> {:ok, {"Y\t%%%\n", 0}} end
+      refute Map.has_key?(PhaseSteps.changes(%{workspace: ctx.workspace, runner: runner}), :workflows)
+    end
+
     test "the environment names the changed test files and Swift test targets, and every Swift test when none", _ctx do
       changes = %{
         changed: [],

@@ -599,4 +599,68 @@ defmodule SymphonyElixir.AgentTools.TicketLedgerTest do
       nothing_written()
     end
   end
+
+  describe "a proof naming a test the checkout lacks" do
+    @pr_url "https://github.com/o/r/pull/1"
+
+    # A checkout with a Swift test whose class and method sit on different lines.
+    setup ctx do
+      write!(ctx.workspace, "macos/Tests/TimelineKeysTests.swift", "final class TimelineKeysTests: XCTestCase {\n    func testAClickLeavesNoRowSelected() {}\n}\n")
+      write!(ctx.workspace, "test/plan_test.exs", ~s(test "shows it" do\nend\n))
+      git = &System.cmd("git", ["-c", "user.name=T", "-c", "user.email=t@x" | &1], cd: ctx.workspace, stderr_to_stdout: true)
+      {_out, 0} = git.(["init", "-q"])
+      {_out, 0} = git.(["add", "."])
+      {_out, 0} = git.(["commit", "-q", "-m", "first"])
+      {head, 0} = git.(["rev-parse", "HEAD"])
+      {:ok, _plan} = TicketPlan.write(@repo_key, @issue_id, @plan)
+      %{head: String.trim(head)}
+    end
+
+    test "is refused, naming the forms a test name takes, and nothing is written", ctx do
+      before = RunStore.list_ticket_events(@issue_id, [])
+
+      for {type, payload} <- [
+            {"check.proved", %{"check_id" => "c1", "by" => "test", "test" => "TimelineKeysTests testNothing"}},
+            {"evidence", %{"caption" => "Step 1 proved", "proof" => %{"step" => 1, "test" => "test/gone_test.exs: shows it"}}}
+          ] do
+        assert {false, %{"error" => error}} = call("ticket_record", %{"type" => type, "payload" => payload}, session(ctx))
+        assert %{"reason" => "test_not_found", "test" => _test, "message" => message} = error
+        assert message =~ "is not in the checkout"
+        assert message =~ "a file path plus the test name"
+        assert message =~ "a Swift class plus method"
+      end
+
+      assert RunStore.list_ticket_events(@issue_id, []) == before
+    end
+
+    test "a proof accepted when recorded is found by the QA pre-check on the same checkout", ctx do
+      test = "TimelineKeysTests testAClickLeavesNoRowSelected"
+
+      assert {true, %{"event" => %{"type" => "check.proved"}}} =
+               call("ticket_record", %{"type" => "check.proved", "payload" => %{"check_id" => "c1", "by" => "test", "test" => test}}, session(ctx))
+
+      assert {true, %{"event" => %{"type" => "evidence"}}} =
+               call("ticket_record", %{"type" => "evidence", "payload" => %{"caption" => "Proved", "proof" => %{"step" => 1, "test" => "test/plan_test.exs: shows it"}}}, session(ctx))
+
+      gh = fn
+        ["pr", "view", @pr_url, "--json", _fields], _opts ->
+          checks = [%{"name" => "make-all", "workflowName" => "make-all", "status" => "COMPLETED", "conclusion" => "SUCCESS"}]
+          {Jason.encode!(%{"url" => @pr_url, "headRefOid" => ctx.head, "statusCheckRollup" => checks}), 0}
+
+        ["api" | _endpoint], _opts ->
+          {Jason.encode!(%{"workflow_runs" => []}), 0}
+      end
+
+      assert [%{proof: %{test: ^test}}] = steps = SymphonyElixir.TicketJourney.proof_steps(@issue_id, "make-all")
+      assert {:pass, [_result]} = SymphonyElixir.QaPreCheck.run(steps, @pr_url, ctx.head, ctx.workspace, gh_runner: gh, proof_check: "make-all")
+    end
+
+    test "a session with no checkout takes the proof as it is", ctx do
+      File.rm_rf!(Path.join(ctx.workspace, ".git"))
+      payload = %{"check_id" => "c1", "by" => "test", "test" => "nowhere_test.exs"}
+
+      assert {true, _event} = call("ticket_record", %{"type" => "check.proved", "payload" => payload}, session(ctx))
+      assert {true, _event} = call("ticket_record", %{"type" => "check.proved", "payload" => payload}, session(ctx, workspace: nil))
+    end
+  end
 end

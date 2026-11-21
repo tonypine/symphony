@@ -77,6 +77,7 @@ defmodule SymphonyElixir.TransitionGuardTest do
                %{signal: :breakdown_cancel, from: ["Backlog"], to: :requested},
                %{signal: :restart, from: :any, to: "In Progress"},
                %{signal: :handoff, from: ["In Progress", "Rework"], to: :code_review_state},
+               %{signal: :rework_answered, from: ["Rework"], to: :qa_state},
                %{signal: :code_review_approve, from: ["Code Review"], to: :qa_state},
                %{signal: :code_review_approve_skip, from: ["Code Review"], to: "Merging", confirm: true},
                %{signal: :code_review_rework, from: ["Code Review"], to: "Rework"},
@@ -135,6 +136,15 @@ defmodule SymphonyElixir.TransitionGuardTest do
       refute TransitionGuard.legal?(:handoff, "Todo", nil)
 
       assert TransitionGuard.target(:handoff, %{settings: designed}) == "Code Review"
+    end
+
+    test "a rework that answered every finding moves Rework to the configured QA state only" do
+      assert TransitionGuard.legal?(:rework_answered, "Rework", nil)
+      refute TransitionGuard.legal?(:rework_answered, "In Progress", nil)
+      refute TransitionGuard.legal?(:rework_answered, "Code Review", nil)
+
+      assert TransitionGuard.target(:rework_answered, %{settings: designed_settings()}) == "QA"
+      refute TransitionGuard.confirmation_required?(:rework_answered, %{settings: designed_settings(%{"manual_review" => "on"})})
     end
 
     test "the handoff target is the repo's configured Code Review state" do

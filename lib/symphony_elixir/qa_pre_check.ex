@@ -15,7 +15,9 @@ defmodule SymphonyElixir.QaPreCheck do
       file the name is not in is also read as one name, so a test named
       `WORKFLOW.md front matter …` is found. A name is found as text (a test name or a describe
       alone) or as ExUnit's full test name, the describe and the test joined by a space, as
-      `mix test` prints it;
+      `mix test` prints it, or as a Swift test's class plus method (`Class method`, `Class.method` or
+      `Class/method`, as XCTest prints it), found when one tracked `.swift` file declares both the
+      type (`class`, `struct`, `extension`, `enum` or `actor`) and the `func`;
     * the check ran on the PR head and passed: `<check>` names a check run, a workflow, or
       `workflow / job`, read from the head's status checks (`SymphonyElixir.GitHub.PullRequest`).
 
@@ -47,7 +49,18 @@ defmodule SymphonyElixir.QaPreCheck do
   @test_declaration ~r/^(\s*)(describe|test)\s+"((?:[^"\\]|\\.)*)"/u
   @mix_test_suffix ~r/(?:\s+\([A-Z][\w.]*\)|\s+\(\d+(?:\.\d+)?ms\)|\s+\[L#\d+\])+$/
   @quoted ~r/^"(.*)"$|^“(.*)”$/su
-  @tried_forms "tried as a describe plus a test name, a test name and a describe name"
+  @swift_test ~r/^([A-Za-z_]\w*)(?:\s+|\.|\/)([A-Za-z_]\w*)(?:\(\))?$/u
+  @tried_forms "tried as a describe plus a test name, a test name, a describe name and a Swift class plus method"
+
+  @doc """
+  The test names a proof may give, as a refusal of one names them.
+  """
+  @spec test_name_forms() :: String.t()
+  def test_name_forms,
+    do:
+      "a file path plus the test name (`test/x_test.exs: the test`), a describe plus a test name as `mix test` prints it, " <>
+        "or a Swift class plus method (`TimelineKeysTests testItWorks`)"
+
   @passing_conclusions ["SUCCESS", "NEUTRAL"]
 
   @type status :: :pass | :fail | :pending
@@ -74,8 +87,7 @@ defmodule SymphonyElixir.QaPreCheck do
   defp confirm(steps, pr_url, head, workspace, opts) do
     git = Keyword.get(opts, :git, &git/2)
     proof_check = Keyword.get(opts, :proof_check)
-    files = tracked_files(git, workspace)
-    tested = Enum.map(steps, &{&1, missing_test(&1, files, git, workspace)})
+    tested = Enum.map(steps, &{&1, missing_test(&1.proof.test, workspace, git: git)})
 
     with {:ok, checks} <- head_checks(tested, proof_check, pr_url, head, workspace, opts) do
       results = Enum.map(tested, &result(&1, checks, head, proof_check))
@@ -180,11 +192,21 @@ defmodule SymphonyElixir.QaPreCheck do
     wanted in [name, workflow] or (is_binary(workflow) and is_binary(name) and wanted == "#{workflow} / #{name}")
   end
 
-  # What the checkout lacks of the step's `<test>`, or nil when every part is in it (or the step
-  # names no test). A path part narrows the search of the name parts after it.
-  defp missing_test(%{proof: %{test: nil}}, _files, _git, _workspace), do: nil
+  @doc """
+  What the checkout at `workspace` lacks of the named `test`, or nil when every part of it is
+  there (or there is no test). A path part narrows the search of the name parts after it. This is
+  the lookup the pre-check runs on each step and the ticket ledger runs when a proof is recorded
+  (`SymphonyElixir.AgentTools.TicketLedger`), so a proof accepted when recorded is found here too.
+  `opts[:git]` runs git (`fn args, dir -> {output, status} end`).
+  """
+  @spec missing_test(String.t() | nil, Path.t(), keyword()) :: String.t() | nil
+  def missing_test(test, workspace, opts \\ []) do
+    if is_binary(test), do: find_test(test, workspace, Keyword.get(opts, :git, &git/2))
+  end
 
-  defp missing_test(%{proof: %{test: test}}, files, git, workspace) do
+  defp find_test(test, workspace, git) do
+    files = tracked_files(git, workspace)
+
     test
     |> String.split(@separator, trim: true)
     |> Enum.reject(&(unquote_part(&1) == ""))
@@ -264,11 +286,39 @@ defmodule SymphonyElixir.QaPreCheck do
     path? = Regex.match?(@path_part, path)
     matched = if path?, do: Enum.filter(files, &path_match?(&1, path)), else: []
 
+    swift? = fn -> swift_test_found?(git, workspace, part, scope) end
+
     cond do
       matched != [] -> {:ok, {path, matched}}
-      path? and String.contains?(path, "/") -> {:missing, "#{code(part)} is not in the checkout"}
-      name_found?(git, workspace, part, scope) -> {:ok, scope}
+      path? and String.contains?(path, "/") -> if swift?.(), do: {:ok, scope}, else: {:missing, "#{code(part)} is not in the checkout"}
+      name_found?(git, workspace, part, scope) or swift?.() -> {:ok, scope}
       true -> {:missing, "#{code(part)} is not in #{scope_name(scope)} (#{@tried_forms})"}
+    end
+  end
+
+  # A Swift test named as its class plus method (`TimelineKeysTests testIt`, `.` or `/` between
+  # them, `()` after), as XCTest prints it: the type and the `func` are declared on different lines,
+  # so a search of the whole name misses it. Found when one tracked `.swift` file in the scope
+  # declares both, not merely each somewhere in the checkout.
+  defp swift_test_found?(git, workspace, part, scope) do
+    with [_part, type, method] <- Regex.run(@swift_test, part),
+         [_ | _] = swift <- swift_files(scope) do
+      declaring = &declaring_files(git, workspace, &1, swift)
+      types = declaring.("(class|struct|extension|enum|actor)[[:space:]]+#{type}")
+      types != [] and Enum.any?(declaring.("func[[:space:]]+#{method}"), &(&1 in types))
+    else
+      _no_swift_test -> false
+    end
+  end
+
+  defp swift_files(nil), do: ["*.swift"]
+  defp swift_files({_path, files}), do: Enum.filter(files, &String.ends_with?(&1, ".swift"))
+
+  # The files of `swift` that declare `pattern` followed by a character no identifier holds.
+  defp declaring_files(git, workspace, pattern, swift) do
+    case git.(["grep", "-l", "-I", "-E", "-e", pattern <> "([^[:alnum:]_]|$)", "--" | swift], workspace) do
+      {output, 0} -> String.split(output, "\n", trim: true)
+      _none -> []
     end
   end
 

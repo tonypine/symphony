@@ -5,7 +5,7 @@ defmodule SymphonyElixir.QaPreCheckTest do
   alias SymphonyElixir.TestSupport.ProofSteps
 
   @pr_url "https://github.com/acme/repo/pull/1040"
-  @tried "tried as a describe plus a test name, a test name and a describe name"
+  @tried "tried as a describe plus a test name, a test name, a describe name and a Swift class plus method"
   @run_url "https://github.com/acme/repo/actions/runs/555/job/1"
 
   # Laid out as TP-1217's and TP-1273's test files are: a test inside a describe, its name on its own line.
@@ -55,6 +55,16 @@ defmodule SymphonyElixir.QaPreCheckTest do
   end
   """
 
+  @timeline_keys_tests """
+  import XCTest
+
+  final class TimelineKeysTests: XCTestCase {
+      func testAClickLeavesNoRowSelectedAndSoNoOutline() {
+          XCTAssertTrue(true)
+      }
+  }
+  """
+
   # A real checkout, so the named test is looked up the way a QA pass looks it up.
   setup do
     dir = Path.join(System.tmp_dir!(), "qa-pre-check-#{System.unique_integer([:positive])}")
@@ -77,6 +87,13 @@ defmodule SymphonyElixir.QaPreCheckTest do
       Path.join(dir, "test/symphony_elixir/playbook_catalog_test.exs"),
       ~s(test "docs/x.md matches the partials" do\nend\ntest "symphony.yml is required before children are built" do\nend\n)
     )
+
+    # A Swift test whose class and method are declared on different lines, as XCTest writes them,
+    # and a class and a method of the same names split across two files.
+    File.mkdir_p!(Path.join(dir, "macos/Tests"))
+    File.write!(Path.join(dir, "macos/Tests/TimelineKeysTests.swift"), @timeline_keys_tests)
+    File.write!(Path.join(dir, "macos/Tests/SplitTests.swift"), "final class SplitTests: XCTestCase {}\n")
+    File.write!(Path.join(dir, "macos/Tests/Other.swift"), "struct Other {\n    func testSplit() {}\n}\n")
 
     git!(dir, ["init", "-q"])
     git!(dir, ["add", "."])
@@ -379,6 +396,41 @@ defmodule SymphonyElixir.QaPreCheckTest do
 
       assert {:fail, [result]} = run("1. One. Proved by: `make-all` › `check_test.exs`", context, unused_gh(), git: git)
       assert result.detail == "`check_test.exs` is not in the checkout (#{@tried})"
+    end
+  end
+
+  describe "a Swift test named as class plus method" do
+    test "the pre-check finds it when the class and the method are on different lines of one Swift file", context do
+      text = "1. Click a row → no outline. Proved by: `TimelineKeysTests testAClickLeavesNoRowSelectedAndSoNoOutline`"
+
+      assert {:pass, [result]} = run(text, context, gh(context.head, [check("make-all", "COMPLETED", "SUCCESS")]))
+      assert result.detail =~ "`TimelineKeysTests testAClickLeavesNoRowSelectedAndSoNoOutline` is in the checkout"
+    end
+
+    test "it is found as XCTest prints it too, and within the Swift file a path names", context do
+      for test <- [
+            "TimelineKeysTests.testAClickLeavesNoRowSelectedAndSoNoOutline",
+            "TimelineKeysTests/testAClickLeavesNoRowSelectedAndSoNoOutline",
+            "TimelineKeysTests testAClickLeavesNoRowSelectedAndSoNoOutline()",
+            "macos/Tests/TimelineKeysTests.swift: TimelineKeysTests testAClickLeavesNoRowSelectedAndSoNoOutline"
+          ] do
+        assert QaPreCheck.missing_test(test, context.workspace) == nil, test
+      end
+    end
+
+    test "the class and the method must be declared in the same file, within the scope a path names", context do
+      assert QaPreCheck.missing_test("SplitTests testSplit", context.workspace) ==
+               "`SplitTests testSplit` is not in the checkout (#{@tried})"
+
+      assert QaPreCheck.missing_test("SplitTests/testSplit", context.workspace) == "`SplitTests/testSplit` is not in the checkout"
+      assert QaPreCheck.missing_test("TimelineKeysTests testNothing", context.workspace) =~ "is not in the checkout"
+
+      assert QaPreCheck.missing_test("test/symphony_elixir/check_test.exs: TimelineKeysTests testAClickLeavesNoRowSelectedAndSoNoOutline", context.workspace) =~
+               "is not in `test/symphony_elixir/check_test.exs`"
+    end
+
+    test "a proof with no test names nothing missing", context do
+      assert QaPreCheck.missing_test(nil, context.workspace) == nil
     end
   end
 end
