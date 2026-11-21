@@ -189,7 +189,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
         steps: expanded,
         answer_dir: tmp_dir
       }
-      |> maybe_put(:runner, Keyword.get(opts, :qa_step_runner))
+      |> Map.merge(for {:qa_step_runner, runner} <- opts, into: %{}, do: {:runner, runner})
 
     %{
       agent_module: agent_module,
@@ -219,9 +219,6 @@ defmodule SymphonyElixir.QaAgent.Steps do
       error: nil
     }
   end
-
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   # The walkthrough steps this pass walks: those no named test proves (the pre-checks confirmed those).
   defp walked_steps(job) do
