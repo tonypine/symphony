@@ -31,6 +31,9 @@ defmodule SymphonyElixir.TicketJourney do
   @handoff_proofs ["test", "attached"]
   # The proofs QA gives: a test of the PR never stands in for them.
   @qa_proofs ["qa", "design"]
+  # The proof the pull request's own CI run gives, once the pull request exists: owed before the
+  # merge, never at the handoff and never by QA (`owed_by_ci/1`).
+  @ci_proofs ["ci"]
   # The runs that write the code a pull request carries.
   @coding_kinds ["implementation", "rework"]
   # What can leave the code on a pull request behind its plan: a run that writes it, a plan version,
@@ -311,7 +314,9 @@ defmodule SymphonyElixir.TicketJourney do
 
   @doc """
   The checks of a groomed ticket an implementation run still owes before the handoff: the open
-  ones a test or an attachment proves. None for a ticket that is not groomed.
+  ones a test or an attachment proves. A check the pull request's own CI run proves (`proof: ci`)
+  is not one of them: it can only be proved once the pull request exists, so it holds the merge
+  (`owed_by_ci/1`), never the handoff. None for a ticket that is not groomed.
   """
   @spec unproved(ticket()) :: [TicketChecks.check()]
   def unproved(ticket) do
@@ -335,6 +340,20 @@ defmodule SymphonyElixir.TicketJourney do
   end
 
   @doc """
+  The open checks of a groomed ticket that the pull request's own CI run proves (`proof: ci`).
+  They hold the merge (`owed_before_merge/1`) and nothing before it: once the pull request's
+  checks finish on its head, the PR watcher proves them (`SymphonyElixir.PrWatch.CiProof`). None
+  for a ticket that is not groomed.
+  """
+  @spec owed_by_ci(ticket()) :: [TicketChecks.check()]
+  def owed_by_ci(ticket) do
+    case id(ticket) do
+      nil -> []
+      id -> TicketChecks.open(id, proof: @ci_proofs)
+    end
+  end
+
+  @doc """
   The checks of a groomed ticket its merge waits on: every open one of its current plan, whatever
   proves it. While there is one, the ticket does not enter
   `Merging`, its pull request is not merged and it does not reach `Done`
@@ -347,6 +366,14 @@ defmodule SymphonyElixir.TicketJourney do
       id -> TicketChecks.open(id)
     end
   end
+
+  @doc """
+  The checks of a groomed ticket the move into `Merging` waits on: every open one but those the
+  pull request's own CI run proves (`owed_by_ci/1`), which are proved in `Merging` before the merge.
+  None for a ticket that is not groomed.
+  """
+  @spec owed_into_merging(ticket()) :: [TicketChecks.check()]
+  def owed_into_merging(ticket), do: Enum.reject(owed_before_merge(ticket), &(&1.proof in @ci_proofs))
 
   @doc """
   Whether the code on the ticket's pull request no longer stands for what is asked, so no approval
@@ -384,6 +411,32 @@ defmodule SymphonyElixir.TicketJourney do
   defp later?(%Event{seq: seq}, since), do: is_integer(seq) and seq > since
 
   defp field(payload, key), do: Map.get(payload, key, Map.get(payload, Atom.to_string(key)))
+
+  @doc """
+  The section a landing run in `Merging` reads while the plan still has open checks the pull
+  request's own CI run proves (`owed_by_ci/1`): that run has the turn to read the PR's checks and
+  record the proof of each (`SymphonyElixir.PrWatch.CiProof`), not to merge. Nil when none is open.
+  """
+  @spec ci_proof_text(ticket()) :: String.t() | nil
+  def ci_proof_text(ticket) do
+    case owed_by_ci(ticket) do
+      [] ->
+        nil
+
+      checks ->
+        listed = Enum.map_join(checks, "\n", &"- [#{&1.id}] #{one_line(&1.statement)}#{ci_check(&1)}")
+
+        """
+        ## Checks the pull request's CI run proves
+
+        This run has the one turn on the pull request's current head to prove these checks of the plan from its own CI run. It does not merge: Symphony merges once they are proved.
+
+        #{PromptSafety.ticket_plan_body(listed)}
+
+        Read the pull request's checks with `github_get_pr_checks`, and a job's log with `github_ci_log`. For each check the results show to be true, record `ticket_record` `check.proved` with its `check_id`, `by: ci` and `details` naming the CI checks and the head they ran on. For a check the results show to be false, or cannot show, record a `note` that says why, then end the turn: the ticket goes to Rework with that note, and the turn is not given again on this head. Ask nobody about these checks.\
+        """
+    end
+  end
 
   @doc "Why a ticket with the `unproved/1` checks `checks` is not handed off, naming each and what proves it."
   @spec unproved_message([TicketChecks.check()]) :: String.t()
@@ -456,8 +509,11 @@ defmodule SymphonyElixir.TicketJourney do
 
   defp check_line(check) do
     parts = for {label, key} <- [{"State", :needs}, {"Action", :action}, {"Expect", :expect}], value = Map.get(check, key), do: "  #{label}: #{one_line(value)}"
-    Enum.join(["- [#{check.id}] #{check.kind}, proof: #{check.proof}, #{standing(check)}: #{one_line(check.statement)}" | parts], "\n")
+    Enum.join(["- [#{check.id}] #{check.kind}, proof: #{check.proof}#{ci_check(check)}, #{standing(check)}: #{one_line(check.statement)}" | parts], "\n")
   end
+
+  defp ci_check(%{ci_check: name}) when is_binary(name), do: " (CI check `#{one_line(name)}`)"
+  defp ci_check(_check), do: ""
 
   defp standing(%{state: :proved, proved_by: %{by: by, test: test}}) when is_binary(test), do: "proved by #{by} (#{one_line(test)})"
   defp standing(%{state: :proved, proved_by: %{by: by}}), do: "proved by #{by}"

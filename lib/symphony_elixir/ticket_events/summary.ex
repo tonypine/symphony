@@ -42,7 +42,7 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   @bookkeeping_signals ["qa_head_not_green", "code_review_head_not_green", "stale_check"]
 
   # How a check was proved, and what the Conductor of a ticket did to this one, as a line says them.
-  @proved_by %{"test" => " by a test", "qa" => " by QA", "design" => " against the design", "attached" => " by an attachment"}
+  @proved_by %{"test" => " by a test", "qa" => " by QA", "design" => " against the design", "attached" => " by an attachment", "ci" => " by the pull request's CI"}
   @intervened %{"stopped" => "Run stopped", "replanned" => "Plan changed", "canceled" => "Canceled", "replaced" => "Replaced", "added" => "Added"}
 
   @doc """

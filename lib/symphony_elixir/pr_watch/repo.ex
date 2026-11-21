@@ -130,7 +130,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   alias SymphonyElixir.GitHub.{PullRequest, RelaySupervisor}
   alias SymphonyElixir.Linear.{Client, Issue}
   alias SymphonyElixir.PrDecision.{Action, Apply, Facts}
-  alias SymphonyElixir.PrWatch.{Attempts, Competitors, Fetch, Health, Ingest, Release, SilentWait, StalledRun}
+  alias SymphonyElixir.PrWatch.{Attempts, CiProof, Competitors, Fetch, Health, Ingest, Release, SilentWait, StalledRun}
   alias SymphonyElixir.Situation.Recorder, as: SituationRecorder
   alias SymphonyElixirWeb.ObservabilityPubSub
 
@@ -1276,8 +1276,9 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
     head = read[:head_sha]
     ticket = Map.put(ticket, :merge_guard, merge_guard(entry))
+    ticket = Map.put(ticket, :ci_proof, ci_proof(ticket.merge_guard, entry, read))
     # An approval carries to a new head only while the plan still stands behind the code it approved.
-    carried? = ticket.merge_guard == :clear and approval_carried?(entry, ticket, prior, head, state)
+    carried? = ticket.merge_guard in [:clear, :ci_checks] and approval_carried?(entry, ticket, prior, head, state)
     ticket = Map.merge(ticket, %{review_comments: review_comments(entry, read, settings, now), review: review(entry, head, carried?)})
     applied = if new_stay?, do: [], else: Enum.filter(previous.applied, &(&1.head_sha == head))
     {read, applied} = base_answer(read, applied, entry)
@@ -1431,16 +1432,24 @@ defmodule SymphonyElixir.PrWatch.Repo do
   # What the ticket's plan says of the merge (`Facts`' `merge_guard`), read where the merge is next or
   # a step carries the ticket on to it: the code is behind the plan (a version written after the newest
   # coding run started) or the Conductor held it, else whether a check the next step owes is open. In
-  # Merging, and in CI Fix on the way back to it, that is every check but one seen only after the merge;
-  # before it, a check a test or an attachment proves, as at the handoff (QA proves its own).
+  # Merging, and in CI Fix on the way back to it, that is every open check; before it, a check a test or
+  # an attachment proves, as at the handoff (QA proves its own). When every open one is a check the PR's
+  # own CI run proves, the merge waits on that proof (`:ci_checks`) instead of going back to Rework.
   defp merge_guard(%{phase: phase, issue: %{id: issue_id}, ticket: ticket}) when phase in @guarded_phases do
     case TicketJourney.outdated(issue_id) do
-      nil -> if owed(issue_id, phase, ticket.origin) == [], do: :clear, else: :open_checks
+      nil -> owed_guard(owed(issue_id, phase, ticket.origin))
       outdated -> outdated
     end
   end
 
   defp merge_guard(_entry), do: :clear
+
+  defp owed_guard([]), do: :clear
+  defp owed_guard(checks), do: if(Enum.all?(checks, &(&1.proof == "ci")), do: :ci_checks, else: :open_checks)
+
+  # Where the proof of the plan's CI checks stands on the head, read only while they are all that holds the merge.
+  defp ci_proof(:ci_checks, %{issue: %{id: issue_id}}, read), do: CiProof.fact(issue_id, read)
+  defp ci_proof(_guard, _entry, _read), do: :none
 
   defp owed(issue_id, :merging, _origin), do: TicketJourney.owed_before_merge(issue_id)
   defp owed(issue_id, :ci_fix, :merging), do: TicketJourney.owed_before_merge(issue_id)

@@ -604,10 +604,11 @@ it touches (none or more of `screen`, `gallery`, `api`, `logic`, `config`, `test
 `docs`; a name outside them is dropped and never refuses the plan), a `summary` for a person, the plan's `text` for agents, its `checks`, each with an `id`
 that is its alone across versions (a new check gets an id no version used, and a check whose
 statement a version changed counts only the proofs and waivers recorded after that version), a `kind`, `outcome`, `qa` or `evidence`, a `statement` and its
-`proof`, `test`, `qa`, `design` or `attached`, its `size` and, for a split, its `sub_tickets`; the
+`proof`, `test`, `qa`, `design`, `attached` or `ci` (the pull request's own CI run, with an optional
+`ci_check` naming the one CI check that proves it), its `size` and, for a split, its `sub_tickets`; the
 newest one is the ticket's plan, and a ticket is groomed exactly when it holds one), `check.proved`
-(any run's, or the machine's: a check of the current plan proved by a test, QA, the design or
-something attached, recorded once per check and head and refused for an id the plan does not hold),
+(any run's, or the machine's: a check of the current plan proved by a test, QA, the design,
+something attached or the pull request's CI run, recorded once per check and head and refused for an id the plan does not hold),
 `check.waived` (machine only: a check nobody has to prove any more, and why; an `outcome` check is
 waived only by the person's own decision, and a plan version may remove or reword one only after a
 new ask),
@@ -3621,7 +3622,12 @@ Rules:
   `In Progress` from `Rework`, `Code Review`, `QA` or `Merging` MUST be refused as a `Restart`.
 - **The plan holds the merge.** A move into `Merging`, and a move to `Done` that closes a ticket on
   its own pull request (a merge, a person's move), MUST be refused while a check of the ticket's
-  current plan is open, unwaived and not marked `after_merge`. A plan version written after the
+  current plan is open and unwaived. A check the pull request's own CI run proves (`proof: ci`)
+  holds the move to `Done` but neither the handoff nor the move into `Merging`: in `Merging` the PR
+  and CI watcher MUST NOT merge or arm auto-merge while it is open, MUST record it as proved when it
+  names a CI check that passed on the head, and otherwise gives one run per head the turn to read the
+  PR's checks and prove it, sending the ticket to `Rework` when that run leaves it open; no person is
+  asked about it (R28a to R28e). A plan version written after the
   newest implementation or rework run started cancels every approval of the code: from `Code Review`,
   `QA`, `CI Fix` and `Merging` the ticket goes to `Rework` and no approval carries it on. So does a
   Conductor turn's `hold` at `before_merge`, at `message` or on a watch. The PR and CI watcher turns

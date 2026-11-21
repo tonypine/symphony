@@ -2888,6 +2888,37 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     end
   end
 
+  test "github_merge_pull_request refuses while a check of the ticket's plan is open (TP-1592)" do
+    workspace = tmp_workspace!("github-merge-pull-request-plan-checks")
+
+    plan = %{
+      reason: "Grooming",
+      by: "grooming",
+      shape: "single",
+      layers: ["tooling"],
+      summary: "CI runs faster.",
+      text: "Run the steps in parallel.",
+      checks: [%{id: "c1", kind: "outcome", statement: "The tests run faster than on main.", proof: "ci"}],
+      size: %{tokens: 1_000, runs: 1}
+    }
+
+    try do
+      {:ok, _plan} = SymphonyElixir.TicketPlan.write("default", "issue-3051", plan)
+      passing = [%{"name" => "mix test", "status" => "COMPLETED", "conclusion" => "SUCCESS"}]
+
+      response = DynamicTool.execute("github_merge_pull_request", %{}, merge_tool_opts(workspace, "Merging", passing))
+      assert %{"error" => %{"code" => "plan_checks_open", "message" => message}} = Jason.decode!(response["output"])
+      assert message =~ "Checks of the ticket's plan are still open (c1), so the pull request does not merge yet."
+      assert message =~ "Symphony merges it once they are proved."
+
+      {:ok, _proof} = SymphonyElixir.TicketChecks.prove("default", "issue-3051", %{check_id: "c1", by: "ci", details: "Faster."})
+      merged = DynamicTool.execute("github_merge_pull_request", %{}, merge_tool_opts(workspace, "Merging", passing))
+      assert %{"merged" => true} = Jason.decode!(merged["output"])
+    after
+      File.rm_rf(workspace)
+    end
+  end
+
   test "github_merge_pull_request explains each refusal to the agent" do
     workspace = tmp_workspace!("github-merge-pull-request-refusals")
 

@@ -71,7 +71,8 @@ says (a `test` check for something no test can reach), you may waive it:
 `"waive": [{"check_id": "c2", "reason": "<why nobody can prove it this way>"}]`. An open `test` or
 `attached` check holds the ticket's handoff, so a check nobody can prove holds it for good. Never
 waive a check only because it is hard, or because the person is in a hurry: then it is a change to
-the ask, and the plan changes.
+the ask, and the plan changes. A check the pull request's own CI run proves (`proof`: `ci`) never holds the handoff and is
+never waived for it: Symphony proves it in Merging from the pull request's checks, before the merge.
 
 When the message changes what is asked while the ticket is in review, QA or Merging, the pull
 request would merge the old work. Write the new `plan`, and hold the merge: `"hold": {"reason":
@@ -115,7 +116,7 @@ Write your answer as one JSON object and nothing else:
     "text": "<the plan for the agents, labelled sections, at most 12000 characters>",
     "checks": [
       {"id": "<the id of a check that stands, omitted for a new one>", "kind": "outcome" or "evidence",
-       "statement": "<at most 600 characters>", "proof": "test" or "qa" or "design" or "attached"},
+       "statement": "<at most 600 characters>", "proof": "test" or "qa" or "design" or "attached" or "ci", "ci_check": "<only for proof ci: the one CI check that proves it, when one does>"},
       {"id": "<as above>", "kind": "qa", "statement": "<what is checked>", "proof": "qa" or "design",
        "state": "<the app state it needs>", "action": "<what the person does>", "expect": "<what they see>", "size": "normal" or "wide"}
     ],

@@ -613,6 +613,27 @@ defmodule SymphonyElixir.TransitionGuardTest do
       assert :ok = TransitionGuard.perform("guarded-1", :director_move, Map.put(ctx, :target, "Done"), tracker: FakeTracker, on_moved: @quiet)
       assert_received {:moved, "guarded-1", "Done"}
     end
+
+    test "a check the pull request's own CI run proves lets the ticket into Merging, where it is proved, but not into Done (TP-1592)", %{ctx: ctx} do
+      ci = %{id: "c2", kind: "outcome", statement: "The make-all check passes on the pull request.", proof: "ci", ci_check: "make-all"}
+      {:ok, _plan} = SymphonyElixir.TicketPlan.write("repo-guard", "guarded-1", %{@guarded_plan | checks: @guarded_plan.checks ++ [ci]}, new_ask: true)
+      {:ok, _proof} = TicketChecks.prove("repo-guard", "guarded-1", %{check_id: "c1", by: "test", test: "guard_test.exs"})
+
+      assert :ok = TransitionGuard.perform("guarded-1", :qa_pass, ctx, tracker: FakeTracker, on_merging: fn -> :ok end)
+      assert_received {:moved, "guarded-1", "Merging"}
+
+      capture_log(fn ->
+        for {signal, extra} <- [landing_done: %{}, pr_merged: %{}, director_move: %{target: "Done"}] do
+          assert {:error, {:open_checks, ["c2"]}} = TransitionGuard.perform("guarded-1", signal, Map.merge(ctx, extra), tracker: FakeTracker), inspect(signal)
+        end
+      end)
+
+      refute_received {:moved, _issue_id, _state}
+
+      {:ok, _proof} = TicketChecks.prove("repo-guard", "guarded-1", %{check_id: "c2", by: "ci", details: "make-all passed."})
+      assert :ok = TransitionGuard.perform("guarded-1", :landing_done, ctx, tracker: FakeTracker, on_moved: @quiet)
+      assert_received {:moved, "guarded-1", "Done"}
+    end
   end
 
   describe "resolve_request/2" do

@@ -107,6 +107,25 @@ defmodule SymphonyElixir.GroomedPromptsTest do
     end
   end
 
+  describe "the landing run's turn to prove checks the PR's own CI run proves (TP-1592)" do
+    test "a run in Merging reads the open ones and that it proves them, not merges; other runs and proved checks do not" do
+      ci = %{id: "c4", kind: "outcome", statement: "The tests run faster than on main.", proof: "ci"}
+      groom!(%{@plan | checks: @plan.checks ++ [ci]})
+      merging = %{issue() | state: "Merging"}
+
+      for prompt <- [PromptBuilder.build_prompt(merging, run_kind: :landing), PromptBuilder.build_compact_prompt(merging)] do
+        assert prompt =~ "## Checks the pull request's CI run proves"
+        assert prompt =~ "- [c4] The tests run faster than on main."
+        assert prompt =~ "It does not merge: Symphony merges once they are proved."
+      end
+
+      refute PromptBuilder.build_prompt(issue()) =~ "## Checks the pull request's CI run proves"
+
+      {:ok, _proved} = TicketChecks.prove(@repo_key, @issue_id, %{check_id: "c4", by: "ci", details: "Faster."})
+      refute PromptBuilder.build_prompt(merging, run_kind: :landing) =~ "## Checks the pull request's CI run proves"
+    end
+  end
+
   describe "the Code Review context" do
     defp git_fun, do: fn _args -> {:ok, ""} end
 

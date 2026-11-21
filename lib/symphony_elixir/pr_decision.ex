@@ -202,7 +202,7 @@ defmodule SymphonyElixir.PrDecision do
         phases: @guarded,
         when:
           "The ticket's plan holds the merge: a plan version written after the newest coding run started, a Conductor hold, " <>
-            "or an open check the next step owes (in Merging: any check but one seen only after the merge)",
+            "or an open check the next step owes (in Merging: any check, unless all open ones are proved by the PR's own CI run, R28a to R28e)",
         then: "`hold_merge`: auto-merge off when armed, then Rework, where a run codes the plan as it is now",
         guard: &merge_held?/1,
         build: &hold_merge/1
@@ -393,6 +393,46 @@ defmodule SymphonyElixir.PrDecision do
         guard: &behind_waiting?/1,
         build: &behind/1
       },
+      %{
+        id: "R28a",
+        phases: [:merging],
+        when: "The plan's only open checks are ones the PR's own CI run proves, the head is not red, and auto-merge is armed",
+        then: "`disarm`: the PR does not merge before they are proved",
+        guard: &ci_proof_armed?/1,
+        build: &disarm_for_ci_proof/1
+      },
+      %{
+        id: "R28b",
+        phases: [:merging],
+        when: "The plan's only open checks are ones the PR's own CI run proves, and one names a CI check that passed on the head",
+        then: "`prove_checks`: Symphony records each such check as proved by CI, with no run",
+        guard: &ci_provable?/1,
+        build: &prove_checks/1
+      },
+      %{
+        id: "R28c",
+        phases: [:merging],
+        when: "The plan's only open checks are ones the PR's own CI run proves, none provable yet, and checks still run on the head",
+        then: "`wait` on `ci` until the checks finish: no Rework, no question",
+        guard: &ci_proof_running?/1,
+        build: &wait_for_ci_proof/1
+      },
+      %{
+        id: "R28d",
+        phases: [:merging],
+        when: "The plan's only open checks are ones the PR's own CI run proves, the checks finished on the head, and no run had the turn to read them there",
+        then: "`land_agent`: one run reads the PR's checks and records the proof of each check they show true",
+        guard: &ci_proof_turn?/1,
+        build: &ci_proof_run/1
+      },
+      %{
+        id: "R28e",
+        phases: [:merging],
+        when: "The plan's only open checks are ones the PR's own CI run proves, and the run that had the turn on the head left one open",
+        then: "`to_rework` with the run's reason; the turn is not given again on the same head",
+        guard: &ci_proof_spent?/1,
+        build: &ci_proof_to_rework/1
+      },
       %{id: "R29", phases: [:merging], when: "Green (or no CI) and mergeable now", then: "`merge_now`, the ticket closed out in the same step", guard: &mergeable_now?/1, build: &merge_now/1},
       %{
         id: "R30",
@@ -473,6 +513,16 @@ defmodule SymphonyElixir.PrDecision do
   defp behind?(facts), do: not_red?(facts) and facts.mergeable == :behind
   defp behind_waiting?(facts), do: update_first?(facts) or (behind?(facts) and (facts.phase == :merging or facts.ahead == []))
   defp mergeable_now?(facts), do: green?(facts) and facts.mergeable in @mergeable_now
+
+  # Merging with only checks the PR's own CI run proves left open, on a head that is not red: the
+  # merge waits on their proof (`ci_proof`), never on Rework or a person.
+  defp ci_proof_due?(facts), do: clean_pr?(facts) and facts.merge_guard == :ci_checks and facts.ci in [:pending | @green]
+  defp ci_proof_armed?(facts), do: ci_proof_due?(facts) and facts.auto_merge == :armed
+  defp ci_proof?(facts, state), do: ci_proof_due?(facts) and facts.auto_merge == :off and facts.ci_proof == state
+  defp ci_provable?(facts), do: ci_proof?(facts, :provable)
+  defp ci_proof_running?(facts), do: ci_proof?(facts, :running) or ci_proof?(facts, :none)
+  defp ci_proof_turn?(facts), do: ci_proof?(facts, :turn)
+  defp ci_proof_spent?(facts), do: ci_proof?(facts, :spent)
 
   defp armable?(facts) do
     facts.auto_merge == :off and (pending_mergeable?(facts) or blocked_in_time?(facts))
@@ -740,6 +790,27 @@ defmodule SymphonyElixir.PrDecision do
       owner: :symphony,
       clears_when: "every PR ahead lands or leaves the race"
     )
+  end
+
+  defp disarm_for_ci_proof(facts) do
+    Action.new!("R28a", :disarm, reason: "#{subject(pr(facts))} waits on checks of its plan that its own CI run proves: auto-merge is off until they are proved")
+  end
+
+  defp prove_checks(facts), do: Action.new!("R28b", :prove_checks, reason: "A check of the plan names a CI check that passed on #{pr(facts)}: Symphony records it as proved")
+
+  defp wait_for_ci_proof(facts) do
+    wait("R28c", "#{subject(pr(facts))} merges once its own CI run proves the open checks of its plan: the checks are still running", :ci, "the checks finish on the head")
+  end
+
+  defp ci_proof_run(facts) do
+    Action.new!("R28d", :land_agent,
+      args: %{ci_proof: true},
+      reason: "The checks finished on #{pr(facts)}: a run reads them and records the proof of the checks of the plan its CI run proves"
+    )
+  end
+
+  defp ci_proof_to_rework(facts) do
+    Action.new!("R28e", :to_rework, reason: "The run that read the checks on #{pr(facts)}'s head left checks of the plan its CI run proves unproved")
   end
 
   defp merge_now(facts), do: Action.new!("R29", :merge_now, reason: "#{subject(pr(facts))} is green and can merge")

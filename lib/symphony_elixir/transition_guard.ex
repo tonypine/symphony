@@ -283,7 +283,9 @@ defmodule SymphonyElixir.TransitionGuard do
   a move to `Done` that closes the ticket on its own pull request (`:landing_done`, `:pr_merged`, a
   person's `:director_move`), while the ticket's current plan has an open check the merge waits on
   (`SymphonyElixir.TicketJourney.owed_before_merge/1`): `{:error, {:open_checks, ids}}`. A check
-  seen only after the merge holds neither, and a person waives a check to close such a ticket.
+  the pull request's own CI run proves (`proof: ci`) holds the move to `Done` but not the move into
+  `Merging`: it is proved there, from the PR's checks, before the PR watcher merges
+  (`SymphonyElixir.PrWatch.CiProof`). A person waives a check to close such a ticket.
   A move into `Merging` asks the PR and CI watcher to read now (`opts[:on_merging]` overrides it), so
   a PR that is already green merges at once instead of on the next timer, by when its head may be
   behind. Any other move asks it to read that ticket's PR now (`opts[:on_moved]` overrides it): no
@@ -331,19 +333,20 @@ defmodule SymphonyElixir.TransitionGuard do
 
   # The ids of the open checks of the ticket's plan that hold this move: a move into `Merging`, or a
   # move to `Done` that closes the ticket on its own pull request (a merge, a person's move), waits on
-  # every open check of the current plan but those seen only after the merge
-  # (`SymphonyElixir.TicketJourney.owed_before_merge/1`). A ticket whose work is its sub-tickets
-  # closes on them (`:final_check_pass`, `:sub_issues_done`, `:epic_review_pass`), not on its checks.
+  # every open check of the current plan (`SymphonyElixir.TicketJourney.owed_before_merge/1`); the
+  # move into `Merging` on every one but those the PR's own CI run proves, which are proved in
+  # `Merging` (`SymphonyElixir.TicketJourney.owed_into_merging/1`). A ticket whose work is its
+  # sub-tickets closes on them (`:final_check_pass`, `:sub_issues_done`, `:epic_review_pass`), not on
+  # its checks.
   defp owed_checks(issue_id, signal, target) do
-    if merge_gated?(signal, target),
-      do: issue_id |> TicketJourney.owed_before_merge() |> Enum.map(& &1.id),
-      else: []
+    cond do
+      state_name_matches?(target, @merging_state) -> issue_id |> TicketJourney.owed_into_merging() |> Enum.map(& &1.id)
+      closes_on_own_pr?(signal, target) -> issue_id |> TicketJourney.owed_before_merge() |> Enum.map(& &1.id)
+      true -> []
+    end
   end
 
-  defp merge_gated?(signal, target) do
-    closes_on_own_pr? = state_name_matches?(target, @done_state) and signal in @done_on_own_pr
-    state_name_matches?(target, @merging_state) or closes_on_own_pr?
-  end
+  defp closes_on_own_pr?(signal, target), do: state_name_matches?(target, @done_state) and signal in @done_on_own_pr
 
   # A move with no repo key has no record to write: Linear moves while Symphony's record, its events
   # and its Inbox see nothing. That is an error, logged with the key it tried.
