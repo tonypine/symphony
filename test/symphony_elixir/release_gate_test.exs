@@ -102,6 +102,10 @@ defmodule SymphonyElixir.ReleaseGateTest do
     assert ReleaseGate.job() == "release gate"
     assert ReleaseGate.gate_failure?(build())
     assert ReleaseGate.gate_failure?(build(%{failure: %{job: "release gate / mac checks", step: "Run tests"}}))
+    # The gate's jobs (TP-1591): the scripts on Linux and the two Mac jobs, one per runner.
+    for job <- ["release gate / mac checks (scripts)", "release gate / mac checks (app)", "release gate / mac checks (tests)"],
+        do: assert(ReleaseGate.gate_failure?(build(%{failure: %{job: job, step: "Run tests"}})))
+
     refute ReleaseGate.gate_failure?(build(%{failure: %{job: "release", step: "Build Symphony.app"}}))
     refute ReleaseGate.gate_failure?(build(%{failure: nil}))
     refute ReleaseGate.gate_failure?(nil)
