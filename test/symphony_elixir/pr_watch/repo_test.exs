@@ -2001,7 +2001,9 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       assert %{facts: %Facts{merge_guard: :ci_checks, ci_proof: :spent}, decision: %{rule: "R28e"}} = watch(repo_key, "4")
 
       assert_received {:moved, "4", "Rework"}
-      refute_received {:moved, id, _state} when id in ["1", "2", "3"]
+      refute_received {:moved, "1", _state}
+      refute_received {:moved, "2", _state}
+      refute_received {:moved, "3", _state}
       refute_received {:merged, _pr_url, _head}
       refute_received {:comment, _id, "## Decision needed" <> _rest}
     end
