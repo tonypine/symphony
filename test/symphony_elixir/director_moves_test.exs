@@ -8,6 +8,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
   alias SymphonyElixir.Inbox.{FromRecord, Item}
   alias SymphonyElixir.Linear.Client
   alias SymphonyElixir.{Pauses, PlanComments, Questions, RunStore, SelfHeal, SubIssueWait}
+  alias SymphonyElixir.PhaseSteps.WindowTests
   alias SymphonyElixir.PrWatch.Competitors
   alias SymphonyElixir.{StateMachine, TicketSignals, TicketState, TicketStateReconciler, TokenBudget}
 
@@ -1121,7 +1122,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
          %{opts: opts} do
       put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
       ticket = {:ticket, "repo-director", "pr"}
-      request = SymphonyElixir.PhaseSteps.WindowTests.question(%{identifier: "MOT-40"}, :base, "the scroll test also fails in the QA VM on the base branch")
+      request = WindowTests.question(%{identifier: "MOT-40"}, :base, "the scroll test also fails in the QA VM on the base branch")
 
       answers = [
         {"Send it back to the code", "Send it back to the code", :words},

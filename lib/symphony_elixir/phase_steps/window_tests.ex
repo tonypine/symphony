@@ -455,15 +455,17 @@ defmodule SymphonyElixir.PhaseSteps.WindowTests do
   defp judge_failing(context, plan, failing, output, opts, deadline) do
     git = Keyword.get(opts, :git, &default_git/2)
 
-    with {:ok, base} <- base(context, git) do
-      on_base = base_entries(context.workspace, base, git)
+    case base(context, git) do
+      {:ok, base} ->
+        on_base = base_entries(context.workspace, base, git)
 
-      case Enum.filter(failing, &own?(&1.test, on_base)) do
-        [] -> on_base(context, plan, base, failing, output, opts, deadline)
-        own -> {:own, output <> own_line(own)}
-      end
-    else
-      {:could_not_run, why, more} -> {:could_not_run, why, output <> more}
+        case Enum.filter(failing, &own?(&1.test, on_base)) do
+          [] -> on_base(context, plan, base, failing, output, opts, deadline)
+          own -> {:own, output <> own_line(own)}
+        end
+
+      {:could_not_run, why, more} ->
+        {:could_not_run, why, output <> more}
     end
   end
 

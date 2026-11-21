@@ -270,7 +270,15 @@ defmodule SymphonyElixir.PhaseSteps.WindowTestsTest do
       assert output =~ "Broken by this change: macos/Tests/flaky-test.sh passes on the base branch."
       assert [%{outcome: "failed", returns_to: "code", reason: reason, failures: [failure]}] = completed()
       assert reason == "Failed in the QA VM: the breakable test (macos/Tests/flaky-test.sh) exited 3: it broke"
-      assert %{script: "macos/Tests/flaky-test.sh", title: "breakable test", exit_status: 3, printed: printed, base: %{exit_status: 0, printed: base_printed}} = failure
+
+      assert %{
+               script: "macos/Tests/flaky-test.sh",
+               title: "breakable test",
+               exit_status: 3,
+               printed: printed,
+               base: %{exit_status: 0, printed: base_printed}
+             } = failure
+
       assert printed =~ ~r/\nit broke\z/
       assert base_printed =~ ~r/flaky fine\z/
 
@@ -337,7 +345,16 @@ defmodule SymphonyElixir.PhaseSteps.WindowTestsTest do
 
       # The paused step names the failing test and keeps what it printed, here and on the base.
       assert paused.reason == "Failed in the QA VM: the breakable test (macos/Tests/flaky-test.sh) exited 1: broken everywhere"
-      assert [%{script: "macos/Tests/flaky-test.sh", exit_status: 1, printed: printed, base: %{exit_status: 1, printed: base_printed}}] = paused.failures
+
+      assert [
+               %{
+                 script: "macos/Tests/flaky-test.sh",
+                 exit_status: 1,
+                 printed: printed,
+                 base: %{exit_status: 1, printed: base_printed}
+               }
+             ] = paused.failures
+
       assert printed =~ "broken everywhere"
       assert base_printed =~ "broken everywhere"
 
