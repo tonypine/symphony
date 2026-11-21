@@ -46,7 +46,8 @@ defmodule SymphonyElixirWeb.RedBasesStateTest do
   end
 
   defp put_fix(repo_key, red) do
-    :ok = RunStore.put_github_updates({:release_gate_fix, repo_key}, %{identifier: "TP-1520", sha: "9f54098b", number: 950, attempt: 1, red: red})
+    fix = %{identifier: "TP-1520", sha: "9f54098b", number: 950, attempt: 1, red: red}
+    :ok = RunStore.put_github_updates({:release_gate_fix, repo_key}, fix)
   end
 
   test "the state payload lists a red release gate with the tickets it holds, until it is green (TP-1583)", %{repo_key: repo_key} do
