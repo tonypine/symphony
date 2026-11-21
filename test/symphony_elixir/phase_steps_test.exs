@@ -108,7 +108,15 @@ defmodule SymphonyElixir.PhaseStepsTest do
 
   defp run_record(run_id, attrs) do
     Map.merge(
-      %{run_id: run_id, repo_key: @repo_key, issue_id: @issue_id, issue_identifier: "TP-77", state: "In Progress", status: "running", session_id: "sess-gone"},
+      %{
+        run_id: run_id,
+        repo_key: @repo_key,
+        issue_id: @issue_id,
+        issue_identifier: "TP-77",
+        state: "In Progress",
+        status: "running",
+        session_id: "sess-gone"
+      },
       attrs
     )
   end
@@ -1004,7 +1012,8 @@ defmodule SymphonyElixir.PhaseStepsTest do
       assert PhaseSteps.resume_point(steps, context) == nil
     end
 
-    # c7 (TP-1590): a run Symphony's restart interrupted goes on from where it stopped, and no step that ended runs again.
+    # c7 (TP-1590): a run Symphony's restart interrupted goes on from where it stopped, and no
+    # step that ended runs again.
     test "after a restart mid-run, the next run goes on at the step that run stopped at", ctx do
       steps = steps()
       gone = context(ctx, %{}, %{run_id: "run-gone"})
@@ -1020,10 +1029,12 @@ defmodule SymphonyElixir.PhaseStepsTest do
 
       # Between steps (the code passed, the run waited for the pause to lift): the next step, no session.
       :ok = PhaseSteps.record_turn_passed(step(steps, "code"), gone, 5)
-      assert %{step: %Step{id: "build"}, carry: nil, session_id: nil, mid_step: false} = PhaseSteps.restart_point(steps, gone)
+
+      assert %{step: %Step{id: "build"}, carry: nil, session_id: nil, mid_step: false} =
+               PhaseSteps.restart_point(steps, gone)
 
       # A machine step stopped mid-run runs again.
-      record_step!(gone, "step.started", %{step_id: "tests", title: "Tests", mode: "machine"})
+      record_step!(gone, "step.started", %{step_id: "tests", title: "Tests", mode: "machine", command: "make test"})
       assert %{step: %Step{id: "tests"}, session_id: nil, mid_step: true} = PhaseSteps.restart_point(steps, gone)
 
       record_step!(gone, "step.completed", %{step_id: "tests", title: "Tests", mode: "machine", outcome: "skipped", reason: "nothing changed"})
@@ -1042,7 +1053,10 @@ defmodule SymphonyElixir.PhaseStepsTest do
       interrupted_run!("run-gone")
 
       assert {:turn, %Step{id: "code"}, _carry} = PhaseSteps.run_machine_steps(steps, step(steps, "build"), gone)
-      assert %{step: %Step{id: "code"}, carry: %{step: %Step{id: "build"}, output: output}, mid_step: false} = PhaseSteps.restart_point(steps, gone)
+
+      assert %{step: %Step{id: "code"}, carry: %{step: %Step{id: "build"}, output: output}, mid_step: false} =
+               PhaseSteps.restart_point(steps, gone)
+
       assert output =~ "error: boom"
 
       # An output that is gone carries nothing, and a failed agent step goes on at the step it returns to.

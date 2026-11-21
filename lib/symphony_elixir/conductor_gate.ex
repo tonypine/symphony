@@ -164,7 +164,9 @@ defmodule SymphonyElixir.ConductorGate do
     now = state.clock.()
 
     state
-    |> then(&if(is_integer(&1.closed_at) and now - &1.closed_at >= @closed_ms, do: %{&1 | closed_at: nil}, else: &1))
-    |> then(&if(is_integer(&1.last_ask) and now - &1.last_ask >= @ask_ms, do: %{&1 | asked_at: nil, last_ask: nil}, else: &1))
+    |> then(&if(lapsed?(&1.closed_at, now, @closed_ms), do: %{&1 | closed_at: nil}, else: &1))
+    |> then(&if(lapsed?(&1.last_ask, now, @ask_ms), do: %{&1 | asked_at: nil, last_ask: nil}, else: &1))
   end
+
+  defp lapsed?(at, now, limit_ms), do: is_integer(at) and now - at >= limit_ms
 end

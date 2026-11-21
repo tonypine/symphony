@@ -96,8 +96,8 @@ defmodule SymphonyElixir.Conductor do
   alias SymphonyElixir.{
     AgentTelemetry,
     CiPoller,
-    Config,
     ConductorGate,
+    Config,
     DecisionMove,
     DecisionRequest,
     Orchestrator,

@@ -69,6 +69,14 @@ defmodule SymphonyElixir.ConductorGateTest do
     {first, :ok} = turn(ctx.gate)
     assert ConductorGate.handover(ctx.gate) == {:wait, 1}
 
+    # The app asks again at each poll, well inside `ask_ms/0`.
+    poll = div(ConductorGate.ask_ms(), 2)
+
+    for now <- Enum.take_every(poll..(ConductorGate.wait_ms() - 1)//1, poll) do
+      at(ctx, now)
+      assert ConductorGate.handover(ctx.gate) == {:wait, 1}
+    end
+
     at(ctx, ConductorGate.wait_ms() - 1)
     {second, :ok} = turn(ctx.gate)
     end_turn(first)

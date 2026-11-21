@@ -1042,12 +1042,13 @@ defmodule SymphonyElixir.PhaseSteps do
   end
 
   defp point_after(steps, step, %{payload: %{outcome: outcome}}, _run) when outcome in ["passed", "skipped"] do
-    with {:ok, next_step} <- next(steps, step, :passed), do: {:ok, %{step: next_step, carry: nil, session_id: nil, mid_step: false}}
+    with {:ok, next_step} <- next(steps, step, :passed),
+         do: {:ok, %{step: next_step, carry: nil, session_id: nil, mid_step: false}}
   end
 
   defp point_after(steps, %Step{mode: "machine"} = step, %{payload: %{outcome: "failed"}} = completed, _run) do
     with {:ok, next_step} <- next(steps, step, :failed),
-         do: {:ok, %{step: next_step, carry: %{step: step, output: kept_output(completed)}, session_id: nil, mid_step: false}}
+         do: {:ok, %{step: next_step, carry: carried(step, completed), session_id: nil, mid_step: false}}
   end
 
   # An agent step that failed goes back to the step it names, as `return_walk` takes it.
@@ -1057,6 +1058,8 @@ defmodule SymphonyElixir.PhaseSteps do
   end
 
   defp point_after(_steps, _step, _completed, _run), do: nil
+
+  defp carried(step, completed), do: %{step: step, output: kept_output(completed)}
 
   # What a failed machine step printed, from the output its `step.completed` kept; nothing when it
   # is gone.

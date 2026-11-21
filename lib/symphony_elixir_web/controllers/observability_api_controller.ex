@@ -6,7 +6,19 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   use Phoenix.Controller, formats: [:json]
 
   alias Plug.Conn
-  alias SymphonyElixir.{ConductorGate, Config, History, Inbox, Orchestrator, PullRequestPage, Quality, Shipped, StatusDashboard}
+
+  alias SymphonyElixir.{
+    ConductorGate,
+    Config,
+    History,
+    Inbox,
+    Orchestrator,
+    PullRequestPage,
+    Quality,
+    Shipped,
+    StatusDashboard
+  }
+
   alias SymphonyElixir.Inbox.FromRecord
   alias SymphonyElixir.Learnings.Feed
   alias SymphonyElixirWeb.{ConditionalJSON, Endpoint, Presenter}

@@ -857,20 +857,26 @@ defmodule SymphonyElixir.AgentRunner do
         resume_walk(agent_module, run_context, paused, question, 0, max_turns)
 
       nil ->
-        case PhaseSteps.restart_point(steps, context) do
-          %{} = point ->
-            Logger.info("Going on at step #{point.step.id} of #{issue_context(run_context.issue)} after Symphony restarted mid-run resumed_session=#{is_binary(point.session_id)}")
-            go_on_after_restart(agent_module, run_context, point, max_turns)
-
-          nil ->
-            if PhaseSteps.machine?(step),
-              do: run_machine_steps(agent_module, nil, run_context, step, 0, max_turns),
-              else: start_turn_session(agent_module, run_context, 1, max_turns)
-        end
+        start_walk_at(agent_module, run_context, PhaseSteps.restart_point(steps, context), step, max_turns)
     end
   end
 
   defp start_walk(agent_module, run_context, max_turns), do: start_turn_session(agent_module, run_context, 1, max_turns)
+
+  defp start_walk_at(agent_module, run_context, %{} = point, _step, max_turns) do
+    Logger.info(
+      "Going on at step #{point.step.id} of #{issue_context(run_context.issue)} after Symphony restarted mid-run " <>
+        "resumed_session=#{is_binary(point.session_id)}"
+    )
+
+    go_on_after_restart(agent_module, run_context, point, max_turns)
+  end
+
+  defp start_walk_at(agent_module, run_context, nil, step, max_turns) do
+    if PhaseSteps.machine?(step),
+      do: run_machine_steps(agent_module, nil, run_context, step, 0, max_turns),
+      else: start_turn_session(agent_module, run_context, 1, max_turns)
+  end
 
   # A machine step runs (again, when the restart stopped it); an agent step gets its turn with a
   # note of the restart, in the interrupted turn's session when it was stopped mid-turn. A session
@@ -963,17 +969,30 @@ defmodule SymphonyElixir.AgentRunner do
             {:error, reason}
         end
 
-      # The session a restart interrupted could not be resumed (its store is gone, or the agent
-      # refused it): a new session takes the same step once, with the ticket's history of what is
-      # done. A usage limit is the run's, as for any turn.
-      {:error, reason} when is_binary(restart_session) and (not is_tuple(reason) or elem(reason, 0) not in [:usage_limited, :model_api_unreachable]) ->
-        Logger.warning("Could not resume session #{restart_session} of #{issue_context(issue)} after the restart: #{inspect(reason)}; a new session takes the step")
-        stop_current_session(agent_module)
-        start_turn_session(agent_module, run_context, turn_number, max_turns)
-
-      {:error, _reason} = error ->
-        error
+      {:error, reason} = error ->
+        if fresh_session_after_restart?(restart_session, reason),
+          do: fresh_session_after_restart(agent_module, run_context, restart_session, reason, turn_number, max_turns),
+          else: error
     end
+  end
+
+  # The session a restart interrupted could not be resumed (its store is gone, or the agent
+  # refused it): a new session takes the same step once, with the ticket's history of what is
+  # done. A usage limit is the run's, as for any turn.
+  defp fresh_session_after_restart?(_restart_session, reason)
+       when is_tuple(reason) and elem(reason, 0) in [:usage_limited, :model_api_unreachable],
+       do: false
+
+  defp fresh_session_after_restart?(restart_session, _reason), do: is_binary(restart_session)
+
+  defp fresh_session_after_restart(agent_module, run_context, restart_session, reason, turn_number, max_turns) do
+    Logger.warning(
+      "Could not resume session #{restart_session} of #{issue_context(run_context.issue)} after the restart: " <>
+        "#{inspect(reason)}; a new session takes the step"
+    )
+
+    stop_current_session(agent_module)
+    start_turn_session(agent_module, run_context, turn_number, max_turns)
   end
 
   # A person's decision may unlock a protected path for the ticket's runs (`SymphonyElixir.PathUnlock`):

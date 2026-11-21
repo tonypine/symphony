@@ -152,7 +152,9 @@ defmodule SymphonyElixir.OrchestratorUpdateWindowTest do
     assert update_reasons() == ["0.0.1.1053"]
     assert SymphonyElixir.ConductorGate.handover() == {:wait, 1}
 
+    ref = Process.monitor(turn)
     send(turn, :end)
+    assert_receive {:DOWN, ^ref, :process, ^turn, _reason}
     assert SymphonyElixir.ConductorGate.handover() == :ok
     assert SymphonyElixir.ConductorGate.enter() == :closed
 

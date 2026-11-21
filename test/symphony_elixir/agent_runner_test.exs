@@ -508,7 +508,16 @@ defmodule SymphonyElixir.AgentRunnerTest do
 
   # The run `run-gone`, which Symphony's start ended because Symphony stopped while it worked (an update's restart).
   defp interrupted_by_restart!(step_events) do
-    :ok = RunStore.put_run(%{run_id: "run-gone", repo_key: "default", issue_id: @issue_id, issue_identifier: "TP-900", state: "In Progress", status: "running", session_id: "sess-gone"})
+    :ok =
+      RunStore.put_run(%{
+        run_id: "run-gone",
+        repo_key: "default",
+        issue_id: @issue_id,
+        issue_identifier: "TP-900",
+        state: "In Progress",
+        status: "running",
+        session_id: "sess-gone"
+      })
 
     for {type, payload} <- step_events do
       {:ok, _event} = TicketEvents.record("default", @issue_id, type, payload, run_id: "run-gone")
@@ -560,7 +569,7 @@ defmodule SymphonyElixir.AgentRunnerTest do
   test "a run the restart stopped before an agent step goes on there with a note of the restart, in a new session", ctx do
     ctx = Map.put(ctx, :orchestrator, self())
     completed = {"step.completed", %{step_id: "build", title: "Build", mode: "machine", outcome: "failed", returns_to: "code"}}
-    interrupted_by_restart!([{"step.started", %{step_id: "build", title: "Build", mode: "machine"}}, completed])
+    interrupted_by_restart!([{"step.started", %{step_id: "build", title: "Build", mode: "machine", command: "make build"}}, completed])
 
     task = start_run(ctx, [], in_progress_for(5))
     assert_receive {:turn, 1, 1, prompt}, 5_000
@@ -607,11 +616,13 @@ defmodule SymphonyElixir.AgentRunnerTest do
     ctx = Map.put(ctx, :orchestrator, self())
     interrupted_by_restart!([@code_started])
     limited = {:usage_limited, %{provider: "anthropic"}}
-    Application.put_env(:symphony_elixir, :walk_agent_script, fn _count, _prompt, _opts -> {:return, {:error, limited}} end)
+    script = fn _count, _prompt, _opts -> {:return, {:error, limited}} end
+    Application.put_env(:symphony_elixir, :walk_agent_script, script)
 
+    Process.flag(:trap_exit, true)
     task = start_run(ctx, [], in_progress_for(5))
     assert_receive {:turn_resumes, 1, "sess-gone"}, 5_000
-    Task.await(task, 10_000)
+    assert {{:usage_limited, %{provider: "anthropic"}}, _call} = catch_exit(Task.await(task, 10_000))
     refute_received {:session_started, 2}
   end
 
