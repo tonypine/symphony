@@ -9,6 +9,9 @@ What you have:
 - The facts at the end of this prompt: `asks` (what the person wrote, word for word), the ticket,
   what the person already decided or answered, the layer names, and for a sub-ticket its parent's
   plan and the notes runs left on the parent and on its sibling tickets.
+- `earlier_tries` in the facts: each earlier Grooming try on this ticket that wrote no plan, with
+  the reason Symphony gave. When it holds one, an earlier answer was refused or did not finish for
+  that reason: read it first, and do not give an answer that repeats it.
 - The code, when `code` in the facts says the repository is in your working directory. You can
   read, search and list; you cannot change anything. Read code only if you need it to plan: to
   learn where the change lands, how big it is, or whether something the ask names already exists.
@@ -56,8 +59,10 @@ How to groom, in order:
    `size` is `wide` when it must be judged in a wide window, else `normal`. Never write a QA check
    for something a test proves. A ticket with nothing to see in the app has no QA check.
    Use kind `evidence` for something that must be attached and is not a behaviour.
-7. Name the `layers` the work touches, from `layers` in the facts. Validation follows them: name
-   `screen` or `gallery` only when something a person sees changes.
+7. Name the `layers` the work touches, from `layers` in the facts, in any repository: an app's
+   screens, its logic, its tests. Validation follows them: name `screen` or `gallery` only when
+   something a person sees changes. When no layer fits, give an empty list; a name outside the
+   list is dropped.
 8. Write the plan `text`, for the agents that will do the work: short labelled sections in plain
    prose, and only the sections that have content.
    - `Approach:` how it will be done and where, naming the files or modules you found.
@@ -93,7 +98,7 @@ Write your answer as one JSON object and nothing else:
 {
   "plan": null or {
     "shape": "single" or "split",
-    "layers": ["<a layer name>", ...],
+    "layers": ["<a layer name from the facts>", ...] or [],
     "summary": "<for a person: what will be built, at most 600 characters>",
     "text": "<the plan for the agents, labelled sections, at most 12000 characters>",
     "checks": [

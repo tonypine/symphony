@@ -3625,9 +3625,11 @@ exactly as before.
   empty folder and plans from the facts alone. Its prompt is `priv/conductor/grooming_prompt.md`.
 - Its facts (`GET /api/v1/tickets/<identifier>/facts?junction=grooming`) are every ask, the
   ticket's title, identifier, repo and labels, the person's decisions, notes and answers, the layer
-  names a plan may use, and, for a sub-ticket, the parent's current plan and tagged notes and the
-  tagged notes of its sibling tickets.
-- Its answer holds a `plan`: `shape` (`single` or `split`), `layers`, `summary`, `text`, `checks`,
+  names a plan may use (`screen`, `gallery`, `api`, `logic`, `config`, `tests`, `tooling`, `docs`),
+  the reason of each earlier try that wrote no plan, and, for a sub-ticket, the parent's current
+  plan and tagged notes and the tagged notes of its sibling tickets.
+- Its answer holds a `plan`: `shape` (`single` or `split`), `layers` (any of the names, or none:
+  Symphony drops a name it does not know, so layers never refuse a plan), `summary`, `text`, `checks`,
   `size` (`tokens`, `runs`) and, for a split, `sub_tickets`. A plan holds at most 30 checks and 12
   sub-tickets: one with more is an answer Symphony refuses. Symphony names the checks `c1`, `c2`
   and so on (a later version's new check gets an id no version used), cuts a text that is too
@@ -3649,7 +3651,8 @@ exactly as before.
   turn ran past its time limit, failed, answered outside the schema, wrote a plan Symphony refuses
   (two checks with one id, a QA check with no action), or no provider of `runs.conductor` could
   take a run (a paused provider, a usage limit). After the first such try the run does not start
-  and the ticket is groomed again at its next dispatch, which Symphony starts at once. After the second the
+  and the ticket is groomed again at its next dispatch, which Symphony starts at once, with the note's
+  reason in its facts (`earlier_tries`) so the turn does not repeat it. After the second the
   run starts without a plan, as it did before plans, and the note says so. A ticket never waits on
   Grooming.
 - Once a ticket has a plan, its description in Linear is Symphony's to write, and no run reads it:

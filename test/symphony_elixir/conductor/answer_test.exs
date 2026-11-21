@@ -381,8 +381,6 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
 
       for {attrs, why} <- [
             {%{"shape" => "epic"}, "`plan.shape` must be one of single, split"},
-            {%{"layers" => []}, "`plan.layers` must name at least one of screen, gallery, api, engine, config, tooling, docs"},
-            {%{"layers" => ["backend"]}, "`plan.layers` must name only screen, gallery, api, engine, config, tooling, docs"},
             {%{"summary" => " "}, "`plan.summary` must be a non-blank string"},
             {%{"text" => 3}, "`plan.text` must be a non-blank string"},
             {%{"checks" => []}, "`plan.checks` must list at least one entry"},
@@ -403,7 +401,16 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
       end
 
       assert grooming(%{"plan" => "single"}) == {:error, "`plan` must be an object"}
-      assert Answer.layers() == ~w(screen gallery api engine config tooling docs)
+      assert Answer.layers() == ~w(screen gallery api logic config tests tooling docs)
+    end
+
+    test "layers never refuse a plan: unknown names are dropped, an empty or missing list reads as none" do
+      assert {:ok, %{plan: %{layers: ["screen", "tests"], checks: [_ | _]}}} = plan(%{"layers" => ["backend", "screen", "tests", 3, "android", "tests"]})
+      assert {:ok, %{plan: %{layers: [], checks: [_ | _]}}} = plan(%{"layers" => []})
+      assert {:ok, %{plan: %{layers: [], checks: [_ | _]}}} = plan(%{"layers" => "screen"})
+      assert {:ok, %{plan: %{layers: []}}} = grooming(%{"plan" => Map.delete(@plan, "layers")})
+      # `engine` is `logic`'s older name, and plans already recorded hold it.
+      assert {:ok, %{plan: %{layers: ["logic", "docs"]}}} = plan(%{"layers" => ["engine", "docs", "logic"]})
     end
   end
 

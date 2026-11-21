@@ -178,6 +178,10 @@ defmodule SymphonyElixir.TicketEvents.BriefTest do
              """
 
       refute text =~ "Brief (written"
+
+      # A plan that names no layer says so, rather than leaving the line empty.
+      unlayered = Brief.build(nil, [event(0, "plan.written", Map.merge(plan, %{version: 1, layers: []}))]).text
+      assert unlayered =~ "- Layers: none\n"
       refute text =~ "Brief:"
 
       # The plan's versions stay in the history; the asks, proofs and waivers are not repeated.
