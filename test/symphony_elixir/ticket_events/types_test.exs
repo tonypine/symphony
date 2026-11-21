@@ -11,7 +11,8 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
     pause.set pause.reason_added pause.reason_cleared pause.cleared
     question.asked question.answered question.withdrawn question.reopened question.not_asked park.backfilled workspace.synced workspace.rebuilt workspace.removed situation.changed rule.action ticket.filed ticket.filed_from note.read brief.written report.published note
     message.sent message.read
-    conductor.update conductor.instructions conductor.steer
+    conductor.update conductor.instructions conductor.steer conductor.intervention
+    ask.recorded plan.written check.proved check.waived
   )
 
   describe "catalog/0" do
@@ -329,7 +330,7 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
 
   describe "agent_types/1" do
     test "a QA run and a Conductor turn also record findings, the runs that write the code a brief; every other run kind the same agent types; nothing else is an agent's" do
-      every = ~w(checklist.answered evidence finding.resolved note step.completed step.started)
+      every = ~w(check.proved checklist.answered evidence finding.resolved note step.completed step.started)
       briefing = ~w(implementation rework review_feedback)
 
       assert Types.agent_types("qa") == Enum.sort(["finding.recorded" | every])
@@ -349,6 +350,8 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
 
   describe "schema/1" do
     test "describes each field a tool's caller may send, leaving out the machinery's signal" do
+      assert %{type: "list", max_items: 30} = Enum.find(Types.schema("plan.written").required, &(&1.name == "checks"))
+      assert %{type: "list", max_items: 12} = Enum.find(Types.schema("plan.written").optional, &(&1.name == "sub_tickets"))
       modes = ~w(machine orchestrated delegated)
 
       assert %{required: [%{name: "step_id", max: 200}, %{name: "title", max: 200}, %{name: "mode", type: "enum", values: ^modes}]} = Types.schema("step.started")
@@ -373,7 +376,7 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       assert proof == [%{name: "step", type: "non_neg_integer"}, %{name: "test", type: "string", max: 500}]
       assert %{optional: [_head, %{name: "evidence", type: "any_of", of: [%{type: "string"}, %{type: "list"}]}]} = Types.schema("finding.resolved")
       refute Enum.any?(Types.schema("phase.entered").optional, &(&1.name in ["signal", "signal_details"]))
-      assert Types.schema("note").optional == []
+      assert Types.schema("note").optional == [%{name: "tag", type: "enum", values: ["discovery", "base_fault"]}]
       assert Types.schema("brief.written").required == [%{name: "text", type: "string", max: 1_200, forbids: "`"}, %{name: "walkthrough", type: "string", max: 4_000, forbids: "`"}]
       assert Types.schema("nope") == nil
     end
@@ -403,6 +406,101 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
 
       assert {:error, {:not_allowed, _reason}} = Types.validate("brief.written", brief, :machine, nil)
       assert {:error, {:not_allowed, _reason}} = Types.validate("brief.written", brief, :person, nil)
+    end
+  end
+
+  describe "a groomed ticket's shapes" do
+    @check %{id: "c1", kind: "outcome", statement: "The page shows the plan.", proof: "test"}
+    @plan %{
+      version: 1,
+      reason: "Grooming",
+      by: "grooming",
+      shape: "single",
+      layers: ["screen", "api"],
+      summary: "The ticket page shows the plan.",
+      text: "Read the plan from the ledger and draw it.",
+      checks: [@check],
+      size: %{tokens: 200_000, runs: 2}
+    }
+
+    test "an ask is the machine's or a person's, word for word, from Linear, a message or the parent" do
+      assert {:ok, %{text: "Show the plan.", source: "linear"}} = Types.validate("ask.recorded", %{text: "Show the plan.", source: :linear}, :machine, nil)
+      assert {:ok, %{source: "message", from: "evt-1"}} = Types.validate("ask.recorded", %{text: "Keep it.", source: "message", from: "evt-1"}, :person, nil)
+      longest = %{text: String.duplicate("a", 100_000), source: "parent", from: "TP-1"}
+      assert {:ok, _ask} = Types.validate("ask.recorded", longest, :machine, nil)
+      assert {:error, {:invalid_payload, [:text]}} = Types.validate("ask.recorded", %{longest | text: longest.text <> "a"}, :machine, nil)
+      assert {:error, {:invalid_payload, [:source]}} = Types.validate("ask.recorded", %{text: "x", source: "comment"}, :machine, nil)
+      assert {:error, {:not_allowed, _why}} = Types.validate("ask.recorded", %{text: "x", source: "linear"}, :agent, "implementation")
+    end
+
+    test "a plan is the machine's: its version, reason, shape, layers, summary, text, checks and size" do
+      assert {:ok, plan} = Types.validate("plan.written", @plan, :machine, nil)
+      assert plan == @plan
+
+      qa = %{"id" => "c2", "kind" => "qa", "statement" => "The panel folds.", "proof" => "design", "state" => "A groomed ticket", "action" => "Fold it", "expect" => "One line"}
+      wide = Map.merge(qa, %{"size" => "wide", "story" => "plan-panel/folded"})
+
+      assert {:ok, %{checks: [%{id: "c2", kind: "qa", size: "wide", story: "plan-panel/folded", action: "Fold it"}]}} =
+               Types.validate("plan.written", %{@plan | checks: [wide]}, :machine, nil)
+
+      sub_ticket = %{key: "s1", title: "The model", ask: "Build the model.", after: [], repo: "symphony", identifier: "TP-2"}
+      split = @plan |> Map.merge(%{shape: "split", by: "recalibration"}) |> Map.put(:sub_tickets, [sub_ticket, %{key: "s2", title: "The view", ask: "Draw it.", after: ["s1"]}])
+      assert {:ok, %{sub_tickets: [^sub_ticket, %{key: "s2", after: ["s1"]}]}} = Types.validate("plan.written", split, :machine, nil)
+
+      for {field, value} <- [
+            version: -1,
+            reason: String.duplicate("a", 1_001),
+            by: "person",
+            shape: "tree",
+            layers: ["screen", "database"],
+            summary: String.duplicate("a", 601),
+            text: String.duplicate("a", 12_001),
+            checks: [Map.put(@check, :proof, "trust")],
+            checks: [Map.put(@check, :statement, String.duplicate("a", 601))],
+            checks: [Map.delete(@check, :id)],
+            checks: [Map.put(@check, :owner, "qa")],
+            size: %{tokens: 1},
+            sub_tickets: [%{key: "s1", title: String.duplicate("a", 121), ask: "x"}]
+          ] do
+        assert {:error, {:invalid_payload, [^field]}} = Types.validate("plan.written", Map.put(@plan, field, value), :machine, nil), "#{field}"
+      end
+
+      assert {:error, {:invalid_payload, [:size]}} = Types.validate("plan.written", Map.delete(@plan, :size), :machine, nil)
+      assert {:error, {:not_allowed, _why}} = Types.validate("plan.written", @plan, :agent, "implementation")
+    end
+
+    test "every run kind records a proved check; only the machine waives one" do
+      proof = %{"check_id" => "c1", "by" => "test", "test" => "plan_test.exs › shows the plan", "evidence" => "evt-1", "details" => "Green."}
+
+      for run_kind <- Types.agent_run_kinds() do
+        assert {:ok, %{check_id: "c1", by: "test", evidence: "evt-1"}} = Types.validate("check.proved", proof, :agent, run_kind), run_kind
+      end
+
+      assert {:ok, %{by: "qa"}} = Types.validate("check.proved", %{check_id: "c1", by: :qa}, :machine, nil)
+      assert {:error, {:invalid_payload, [:by]}} = Types.validate("check.proved", %{check_id: "c1", by: "trust"}, :machine, nil)
+      long_test = %{check_id: "c1", by: "test", test: String.duplicate("a", 501)}
+      assert {:error, {:invalid_payload, [:test]}} = Types.validate("check.proved", long_test, :machine, nil)
+      signalled = %{check_id: "c1", by: "test", signal: "x"}
+      assert {:error, {:invalid_payload, [:signal]}} = Types.validate("check.proved", signalled, :agent, "qa")
+
+      assert {:ok, %{check_id: "c1", reason: "Nothing can test it."}} = Types.validate("check.waived", %{check_id: "c1", reason: "Nothing can test it."}, :machine, nil)
+      assert {:error, {:invalid_payload, [:reason]}} = Types.validate("check.waived", %{check_id: "c1"}, :machine, nil)
+      assert {:error, {:not_allowed, _why}} = Types.validate("check.waived", %{check_id: "c1", reason: "x"}, :agent, "implementation")
+    end
+
+    test "an intervention names what the Conductor of a ticket did, and why" do
+      assert {:ok, %{action: "stopped", by: "TP-1", target: "TP-2"}} =
+               Types.validate("conductor.intervention", %{action: "stopped", reason: "The plan changed.", by: "TP-1", target: "TP-2"}, :machine, nil)
+
+      paused = %{action: "paused", reason: "x", by: "TP-1"}
+      assert {:error, {:invalid_payload, [:action]}} = Types.validate("conductor.intervention", paused, :machine, nil)
+      assert {:error, {:invalid_payload, [:reason, :by]}} = Types.validate("conductor.intervention", %{action: "added"}, :machine, nil)
+    end
+
+    test "a note takes a tag an agent writes: a discovery or a fault of the base" do
+      assert {:ok, %{text: "The base build is red.", tag: "base_fault"}} = Types.validate("note", %{"text" => "The base build is red.", "tag" => "base_fault"}, :agent, "qa")
+      assert {:ok, %{tag: "discovery"}} = Types.validate("note", %{text: "The export has no test.", tag: :discovery}, :machine, nil)
+      assert {:error, {:invalid_payload, [:tag]}} = Types.validate("note", %{text: "x", tag: "todo"}, :agent, "implementation")
     end
   end
 

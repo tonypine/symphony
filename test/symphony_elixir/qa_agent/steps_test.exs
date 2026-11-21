@@ -537,6 +537,20 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
     end
   end
 
+  describe "a groomed ticket" do
+    test "a walk turn is given the check it walks, by its id", ctx do
+      checks = for {number, id} <- [{1, "c1"}, {2, "c4"}], do: %{number: number, text: "[#{id}] Page #{number} opens.", proof: %{by: :qa}, check_id: id}
+      answers(%{"plan" => [{:write, plan([1, 2])}], "review" => [{:verdict, @pass}]})
+
+      assert {:ok, _run} = run(ctx, %{journey: %{source: "the QA checks of the ticket's plan", text: "1. [c1]", steps: checks, groomed: true}})
+
+      walk_2 = Enum.find(turns(), &(&1.id == "walk_2"))
+      assert walk_2.prompt =~ "The check you walk (check c4 of the ticket's plan):"
+      assert walk_2.prompt =~ "[c4] Page 2 opens."
+      refute walk_2.prompt =~ "`## User walkthrough`"
+    end
+  end
+
   describe "the review" do
     test "may ask for a recheck: the launch again, a fresh walk per brief, the quit and evidence, then the review again", ctx do
       recheck = %{recheck: [%{step: 2, where: "Page 2, scrolled", do: "Scroll", expect: "Row 9 shows"}]}

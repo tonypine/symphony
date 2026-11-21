@@ -1,0 +1,432 @@
+{
+  "issue_id": "i-1247",
+  "issue_identifier": "TP-1247",
+  "repo_key": "symphony",
+  "last_error": null,
+  "ticket": {
+    "title": "The paused line names who paused the ticket",
+    "phase": "Done",
+    "priority": 1,
+    "labels": [],
+    "description": "## Ask\n\nThe paused line should say who paused the ticket, after why and since when.\n\nKeep the button word Release.\n\n## Plan\n\nAdd who paused the ticket to the paused line, after the reason and the time."
+  },
+  "workspace": {
+    "path": "/Users/director/symphony-workspaces/symphony/TP-1247",
+    "host": null
+  },
+  "brief": null,
+  "connected": {
+    "epic": null,
+    "parent": null,
+    "sub_tickets": [],
+    "blocked_by": [],
+    "blocks": [],
+    "related": []
+  },
+  "open_questions": [],
+  "pause": null,
+  "status": "done",
+  "situation": {
+    "kind": "done",
+    "word": "Done",
+    "cause": "You moved it to Done at 10:27.",
+    "next": null,
+    "since": "2026-10-08T10:27:00Z",
+    "waits_on": null,
+    "and_more": 0,
+    "step": null,
+    "run": null,
+    "retry": null
+  },
+  "moves": {
+    "answer": {
+      "allowed": false,
+      "reason": "TP-1 is not waiting on a decision"
+    },
+    "start": {
+      "allowed": false,
+      "reason": "The ticket is done."
+    },
+    "stop": {
+      "allowed": false,
+      "reason": "No run is working."
+    },
+    "restart": {
+      "allowed": false,
+      "reason": "The ticket is done."
+    },
+    "cancel": {
+      "allowed": false,
+      "reason": "The ticket is done."
+    },
+    "move_to": {
+      "allowed": true,
+      "reason": null,
+      "states": [
+        "Backlog",
+        "Todo",
+        "In Progress",
+        "Code Review",
+        "Rework"
+      ]
+    },
+    "force": {
+      "allowed": false,
+      "reason": "The ticket is done."
+    },
+    "unforce": {
+      "allowed": false,
+      "reason": "It isn't forced."
+    },
+    "unblock": {
+      "allowed": false,
+      "reason": "TP-1 has nothing a person can unblock"
+    },
+    "note": {
+      "allowed": true,
+      "reason": null
+    }
+  },
+  "pull_request": {
+    "number": 744,
+    "url": "https://github.com/acme/symphony/pull/744",
+    "title": "TP-1247 The paused line names who paused the ticket",
+    "state": "open",
+    "draft": false,
+    "head_sha": "8b03e51c0ffee0123456789abcdef0123456789a",
+    "head_short": "8b03e51",
+    "base": "main",
+    "mergeable": "clean",
+    "behind_base": false,
+    "review_state": null,
+    "review_rounds": 0,
+    "files_changed": 4,
+    "additions": 120,
+    "deletions": 8,
+    "checks": [
+      {
+        "workflow": "Mac app",
+        "checks": [
+          {
+            "name": "What changed",
+            "state": "passed",
+            "started_at": "2026-11-10T10:00:00Z",
+            "duration_ms": 8000,
+            "url": "https://github.com/acme/symphony/actions/runs/101/job/1",
+            "required": null
+          },
+          {
+            "name": "App build",
+            "state": "running",
+            "started_at": "2026-11-10T10:01:00Z",
+            "duration_ms": null,
+            "url": "https://github.com/acme/symphony/actions/runs/101/job/2",
+            "required": null
+          }
+        ]
+      },
+      {
+        "workflow": "Elixir checks",
+        "checks": [
+          {
+            "name": "Format",
+            "state": "passed",
+            "started_at": "2026-11-10T10:00:00Z",
+            "duration_ms": 42000,
+            "url": "https://github.com/acme/symphony/actions/runs/100/job/1",
+            "required": true
+          },
+          {
+            "name": "Dialyzer",
+            "state": "passed",
+            "started_at": "2026-11-10T10:00:00Z",
+            "duration_ms": 100000,
+            "url": "https://github.com/acme/symphony/actions/runs/100/job/2",
+            "required": true
+          },
+          {
+            "name": "Tests, part 1 of 4",
+            "state": "failed",
+            "started_at": "2026-11-10T10:00:00Z",
+            "duration_ms": 372000,
+            "url": "https://github.com/acme/symphony/actions/runs/100/job/3",
+            "required": true
+          },
+          {
+            "name": "Coverage report",
+            "state": "skipped",
+            "started_at": null,
+            "duration_ms": null,
+            "url": "https://github.com/acme/symphony/actions/runs/100/job/4",
+            "required": true
+          }
+        ]
+      },
+      {
+        "workflow": "Docs",
+        "checks": [
+          {
+            "name": "Links",
+            "state": "waiting",
+            "started_at": null,
+            "duration_ms": null,
+            "url": "https://github.com/acme/symphony/actions/runs/102/job/1",
+            "required": null
+          }
+        ]
+      }
+    ],
+    "red_kind": "failure",
+    "next_action": {
+      "rule": "R22",
+      "action": "rerun_failed",
+      "reason": "Tests failed on PR #741: rerunning it once before CI Fix",
+      "owner": "symphony",
+      "clears_when": "the failed checks run again",
+      "since": "2026-11-10T10:06:30Z",
+      "outcome": "applied"
+    },
+    "read_at": "2026-10-08T10:27:00Z"
+  },
+  "lifecycle": {
+    "current": null,
+    "stages": [
+      {
+        "id": "coding",
+        "name": "Coding",
+        "state": "passed",
+        "visits": 1,
+        "time_ms": 2220000,
+        "agent_time_ms": 2220000,
+        "tokens": 1200000,
+        "runs": 1
+      },
+      {
+        "id": "code_review",
+        "name": "Code Review",
+        "state": "passed",
+        "visits": 1,
+        "time_ms": 2820000,
+        "agent_time_ms": 0,
+        "tokens": 0,
+        "runs": 0
+      },
+      {
+        "id": "qa",
+        "name": "QA",
+        "state": "not_yet",
+        "visits": 0,
+        "time_ms": 0,
+        "agent_time_ms": 0,
+        "tokens": 0,
+        "runs": 0
+      },
+      {
+        "id": "merging",
+        "name": "Merging",
+        "state": "not_yet",
+        "visits": 0,
+        "time_ms": 0,
+        "agent_time_ms": 0,
+        "tokens": 0,
+        "runs": 0
+      },
+      {
+        "id": "done",
+        "name": "Done",
+        "state": "passed",
+        "visits": 1,
+        "time_ms": 0,
+        "agent_time_ms": 0,
+        "tokens": 0,
+        "runs": 0
+      }
+    ],
+    "tokens": {
+      "total": 1245000,
+      "cap": 8000000
+    }
+  },
+  "phase_path": {
+    "current": "Done",
+    "phases": [
+      {
+        "phase": "Todo",
+        "count": 1,
+        "time_ms": 180000,
+        "first_entered_at": "2026-10-08T08:59:00Z"
+      },
+      {
+        "phase": "In Progress",
+        "count": 1,
+        "time_ms": 2220000,
+        "first_entered_at": "2026-10-08T09:03:00Z"
+      },
+      {
+        "phase": "Code Review",
+        "count": 1,
+        "time_ms": 2820000,
+        "first_entered_at": "2026-10-08T09:40:02Z"
+      },
+      {
+        "phase": "Done",
+        "count": 1,
+        "time_ms": 0,
+        "first_entered_at": "2026-10-08T10:27:00Z"
+      }
+    ],
+    "moves": [
+      {
+        "from": "Backlog",
+        "to": "Todo",
+        "at": "2026-10-08T08:59:00Z"
+      },
+      {
+        "from": "Todo",
+        "to": "In Progress",
+        "at": "2026-10-08T09:03:00Z"
+      },
+      {
+        "from": "In Progress",
+        "to": "Code Review",
+        "at": "2026-10-08T09:40:02Z"
+      },
+      {
+        "from": "Code Review",
+        "to": "Done",
+        "at": "2026-10-08T10:27:00Z"
+      }
+    ]
+  },
+  "plan": {
+    "version": 2,
+    "at": "2026-10-08T09:45:40Z",
+    "reason": "The button keeps the word Release",
+    "by": "recalibration",
+    "shape": "single",
+    "layers": [
+      "screen",
+      "engine"
+    ],
+    "summary": "Add who paused the ticket to the paused line, after the reason and the time. A rule's pause names the rule. The button keeps the word Release.",
+    "text": "## Approach\n\nRead who set the pause from the ticket read's `pause.set_by` and say it after the reason and the time, in `PausedLine.swift`.\n\n## Design references\n\nThe catalog's paused line: one row, the reason first.\n\n## Assumptions\n\nA pause a rule set names the rule, not a person.\n\n## Out of scope\n\nThe Tickets table's paused column.",
+    "size": {
+      "tokens": 4000000,
+      "runs": 2
+    },
+    "sub_tickets": []
+  },
+  "checks": [
+    {
+      "id": "c1",
+      "kind": "outcome",
+      "statement": "The paused line says who paused the ticket, after why and since when",
+      "proof": "test",
+      "state": "proved",
+      "proved_by": {
+        "by": "test",
+        "test": "PausedLineTests › says who paused it",
+        "evidence": null,
+        "details": null,
+        "event_id": "k1",
+        "at": "2026-10-08T09:30:00Z",
+        "head": "8f3e2a1c9d",
+        "run_id": "run-1"
+      },
+      "waived": null
+    },
+    {
+      "id": "c2",
+      "kind": "outcome",
+      "statement": "A pause a rule set names the rule",
+      "proof": "test",
+      "state": "proved",
+      "proved_by": {
+        "by": "test",
+        "test": "PausedLineTests › names the rule",
+        "evidence": null,
+        "details": null,
+        "event_id": "k2",
+        "at": "2026-10-08T09:31:00Z",
+        "head": "8f3e2a1c9d",
+        "run_id": "run-1"
+      },
+      "waived": null
+    },
+    {
+      "id": "c3",
+      "kind": "outcome",
+      "statement": "The button on the paused line reads Release",
+      "proof": "test",
+      "state": "open",
+      "proved_by": null,
+      "waived": null
+    },
+    {
+      "id": "c4",
+      "kind": "qa",
+      "statement": "On a paused ticket's page the line under the title reads the reason, the time and who paused it, on one line at 1366 pt",
+      "proof": "qa",
+      "state": "open",
+      "proved_by": null,
+      "waived": null,
+      "needs": "A ticket paused by a person",
+      "action": "Open the paused ticket",
+      "expect": "One line: why, since when, who",
+      "size": "normal",
+      "story": null
+    },
+    {
+      "id": "c5",
+      "kind": "qa",
+      "statement": "The paused line matches the catalog at the wide size",
+      "proof": "design",
+      "state": "proved",
+      "proved_by": {
+        "by": "design",
+        "test": null,
+        "evidence": null,
+        "details": "Matches the Gallery story at 2560 pt.",
+        "event_id": "k5",
+        "at": "2026-10-08T09:35:00Z",
+        "head": "8f3e2a1c9d",
+        "run_id": "run-1"
+      },
+      "waived": null,
+      "needs": "A ticket paused by a person",
+      "action": "Open the paused ticket in a wide window",
+      "expect": "The line as the Gallery draws it",
+      "size": "wide",
+      "story": "paused-line"
+    },
+    {
+      "id": "c6",
+      "kind": "evidence",
+      "statement": "A recording of a real pause being released",
+      "proof": "attached",
+      "state": "waived",
+      "proved_by": null,
+      "waived": {
+        "reason": "No test can hold a real pause open, and QA walks the same line.",
+        "event_id": "k6",
+        "at": "2026-10-08T09:41:00Z"
+      }
+    }
+  ],
+  "asks": [
+    {
+      "text": "The paused line should say who paused the ticket, after why and since when.",
+      "source": "linear",
+      "from": null,
+      "at": "2026-10-08T08:59:00Z",
+      "event_id": "a1"
+    },
+    {
+      "text": "Keep the button word Release.",
+      "source": "message",
+      "from": "m1",
+      "at": "2026-10-08T09:45:40Z",
+      "event_id": "a2"
+    }
+  ]
+}

@@ -30,6 +30,8 @@ public enum SettingsUIManifest {
         "auto_review.playbooks.macos_app.window_width",
         "conductor.enabled",
         "conductor.file_tickets",
+        "conductor.final_check_rounds",
+        "conductor.grooming_timeout_ms",
         "conductor.junctions",
         "conductor.max_filed_tickets",
         "conductor.timeout_ms",

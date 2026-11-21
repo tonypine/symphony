@@ -31,9 +31,11 @@ defmodule SymphonyElixirWeb.Presenter do
     StateMachine,
     StrayProcesses,
     TicketBrief,
+    TicketChecks,
     TicketEvents,
     TicketMoves,
     TicketObservation,
+    TicketPlan,
     TicketState,
     URLUtils,
     UsageLimit
@@ -458,8 +460,8 @@ defmodule SymphonyElixirWeb.Presenter do
   # (`SymphonyElixir.Situation`), where it has been (`SymphonyElixir.Lifecycle`) and its pull request
   # (`SymphonyElixirWeb.PullRequestPayload`), where it sits among the others
   # (`SymphonyElixir.Connected.Read`), its marks: since the person last looked and the note for
-  # the next run (`SymphonyElixir.Marks`), its brief (`SymphonyElixir.TicketBrief`) and the ticket
-  # itself (`ticket_payload/1`).
+  # the next run (`SymphonyElixir.Marks`), its brief (`SymphonyElixir.TicketBrief`), its plan, checks
+  # and asks (`plan_payload/1`) and the ticket itself (`ticket_payload/1`).
   defp record_payload(payload, record, running?, snapshot) do
     repository_pause = if is_binary(payload.repo_key), do: repository_pause_reason(payload.repo_key), else: nil
     events = ticket_events(payload.issue_id)
@@ -473,10 +475,27 @@ defmodule SymphonyElixirWeb.Presenter do
     |> Map.merge(Lifecycle.read(payload.issue_id, DateTime.utc_now(), running_entry(snapshot, payload.issue_id), paused?(record)))
     |> Map.merge(Marks.read(record, events))
     |> Map.put(:brief, TicketBrief.read(events))
+    |> Map.merge(plan_payload(events))
     |> Map.put(:pull_request, PullRequestPayload.read(record))
     |> complete_connected(record, snapshot)
     |> Map.merge(ticket_status(record, %{identifier: payload.issue_identifier, repo_key: payload.repo_key, repository_pause: repository_pause, running?: running?}))
   end
+
+  # What a groomed ticket works from (`SymphonyElixir.TicketPlan`): its current plan without the
+  # checks, the checks with where each stands (`SymphonyElixir.TicketChecks`) and every ask. A ticket
+  # with no plan has a null `plan` and no checks.
+  defp plan_payload(events) do
+    plan = TicketPlan.current(events)
+
+    %{
+      plan: plan && plan |> Map.delete(:checks) |> stamped(),
+      checks: for(check <- TicketChecks.list(events), do: %{check | state: Atom.to_string(check.state), proved_by: stamped(check.proved_by), waived: stamped(check.waived)}),
+      asks: events |> TicketPlan.ask() |> Enum.map(&stamped/1)
+    }
+  end
+
+  defp stamped(nil), do: nil
+  defp stamped(%{at: at} = entry), do: %{entry | at: at && DateTime.to_iso8601(at)}
 
   # The ticket as its record holds it: the title, the phase, Linear's priority and the labels, the
   # values the ticket list's columns of the same names serve, and the description as runs receive

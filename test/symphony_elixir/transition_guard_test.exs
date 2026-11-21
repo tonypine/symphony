@@ -64,6 +64,8 @@ defmodule SymphonyElixir.TransitionGuardTest do
                %{signal: :claim, from: ["Todo"], to: "In Progress"},
                %{signal: :plan_revise, from: ["Plan Review"], to: "Rework"},
                %{signal: :plan_approve, from: ["In Progress"], to: :waiting_on_sub_issues},
+               %{signal: :groomed_split, from: ["Todo", "In Progress"], to: :waiting_on_sub_issues},
+               %{signal: :final_check_pass, from: ["Waiting on sub-tickets"], to: "Done"},
                %{signal: :ci_fix_dispatch, from: :any, to: "In Progress"},
                %{signal: :landing_done, from: ["Merging"], to: "Done"},
                %{signal: :review_rework, from: :any, to: "In Progress"},

@@ -535,6 +535,9 @@ struct TimelineEntryRow: View {
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                    if let reply = entry.reply {
+                        ConductorReply(message: reply)
+                    }
                     if let finding = entry.finding {
                         TimelineFindingCard(finding: finding)
                             .padding(.vertical, DesignTokens.Space.s1)

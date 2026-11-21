@@ -39,7 +39,7 @@ defmodule SymphonyElixir.RunKind do
   """
 
   alias SymphonyElixir.Linear.Issue
-  alias SymphonyElixir.SubIssueWait
+  alias SymphonyElixir.{SubIssueWait, TicketPlan}
 
   @type t ::
           :implementation
@@ -122,7 +122,7 @@ defmodule SymphonyElixir.RunKind do
     settings = Keyword.get(signals, :settings)
 
     cond do
-      Issue.breakdown?(issue) -> parent_kind(issue, terminal_states, settings)
+      Issue.breakdown?(issue) and not groomed?(issue) -> parent_kind(issue, terminal_states, settings)
       in_state?(issue, @landing_state) -> :landing
       in_state?(issue, @rework_state) -> :rework
       (kind = phase_kind(issue, settings)) != nil -> kind
@@ -131,6 +131,11 @@ defmodule SymphonyElixir.RunKind do
       true -> :implementation
     end
   end
+
+  # A groomed ticket (`SymphonyElixir.TicketPlan`) is out of the old plan flow even when its `plan`
+  # label survived: it never gets a breakdown run or an epic review. Only a labelled ticket is looked up.
+  defp groomed?(%Issue{id: issue_id}) when is_binary(issue_id), do: TicketPlan.groomed?(issue_id)
+  defp groomed?(_issue), do: false
 
   # An epic parent is closed by reviewing the epic: the parent's epic review is started from
   # `Waiting on sub-tickets` once every sub-issue is terminal, or none is left

@@ -37,6 +37,12 @@ phases:
         command: symphony:window_tests
         timeout_ms: 7200000
         on_fail: code
+      - id: plan_checks
+        title: The plan's checks are proved
+        mode: machine
+        command: symphony:checks
+        timeout_ms: 60000
+        on_fail: code
       - id: handoff
         title: "Hand off: push and open the pull request"
         mode: delegated

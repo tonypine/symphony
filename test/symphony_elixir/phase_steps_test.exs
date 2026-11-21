@@ -181,6 +181,96 @@ defmodule SymphonyElixir.PhaseStepsTest do
     end
   end
 
+  describe "the plan's checks step (symphony:checks)" do
+    @guard [
+      %{"id" => "code", "title" => "Write the code", "mode" => "delegated"},
+      %{"id" => "plan_checks", "title" => "The plan's checks", "mode" => "machine", "command" => "symphony:checks", "on_fail" => "code", "timeout_ms" => 60_000},
+      %{"id" => "handoff", "title" => "Hand off", "mode" => "delegated"}
+    ]
+
+    @guarded_plan %{
+      reason: "Grooming",
+      by: "grooming",
+      shape: "single",
+      layers: ["engine"],
+      summary: "The guard holds the handoff.",
+      text: "Refuse the handoff while a check is open.",
+      checks: [
+        %{id: "c1", kind: "outcome", statement: "The guard fails.", proof: "test"},
+        %{id: "c2", kind: "qa", statement: "The page shows it.", proof: "qa", action: "Open it", expect: "It shows"},
+        %{id: "c3", kind: "evidence", statement: "The design is attached.", proof: "attached"}
+      ],
+      size: %{tokens: 100_000, runs: 1}
+    }
+
+    defp run_guard(ctx) do
+      steps = steps(@guard)
+      PhaseSteps.run_machine_steps(steps, step(steps, "plan_checks"), context(ctx, %{}))
+    end
+
+    test "passes at once for a ticket with no plan, without a shell or giving up the slot", ctx do
+      steps = steps(@guard)
+      assert PhaseSteps.checks_command() == "symphony:checks"
+
+      assert {:turn, %Step{id: "handoff"}, nil} = run_guard(ctx)
+
+      refute_received {:ran, _command, _env, _timeout}
+      refute_received {:notice, _notice}
+      refute PhaseSteps.runs_anything?(steps, step(steps, "plan_checks"), @changed)
+      assert [%{payload: %{step_id: "plan_checks", outcome: "passed"}}] = TicketEvents.query(@issue_id, types: ["step.completed"])
+    end
+
+    test "fails back to the code step, naming the open checks a test or an attachment proves", ctx do
+      {:ok, _plan} = SymphonyElixir.TicketPlan.write(@repo_key, @issue_id, @guarded_plan)
+
+      assert {:turn, %Step{id: "code"}, %{step: %Step{id: "plan_checks"}, output: output}} = run_guard(ctx)
+
+      assert output =~ "The plan has 2 open check(s) that a test or an attachment proves, so the ticket is not handed off yet:"
+      assert output =~ "- [c1] The guard fails. (proof: test)"
+      assert output =~ "- [c3] The design is attached. (proof: attached)"
+      refute output =~ "[c2]"
+      assert output =~ "is waived by the Conductor after coding"
+      refute_received {:ran, _command, _env, _timeout}
+
+      # The failure is a failed machine step of the run, which is what wakes the Conductor's watch
+      # (`step_failed`, and `step_failed_twice` when the run meets it again).
+      assert [%{run_id: "run-steps", payload: %{step_id: "plan_checks", outcome: "failed", returns_to: "code"}} = failed] = events("step.completed")
+      watch = %SymphonyElixir.Config.Schema.Conductor.Watch{}
+      run = %{run_id: "run-steps", total_tokens: 0}
+      assert {"step_failed", seen} = SymphonyElixir.Conductor.Watch.trigger([failed], run, watch, MapSet.new())
+      assert {:turn, %Step{id: "code"}, _again} = run_guard(ctx)
+      assert {"step_failed_twice", _seen} = SymphonyElixir.Conductor.Watch.trigger(events("step.completed"), run, watch, seen)
+    end
+
+    test "the second run in a row that meets open checks pauses on a question to the person", ctx do
+      {:ok, _plan} = SymphonyElixir.TicketPlan.write(@repo_key, @issue_id, @guarded_plan)
+      steps = steps(@guard)
+
+      for run_id <- ["run-a", "run-b"] do
+        {:ok, _started} = TicketEvents.record(@repo_key, @issue_id, "run.started", %{run_id: run_id, run_kind: "implementation"}, run_id: run_id)
+      end
+
+      first = context(ctx, %{}, %{run_id: "run-a"})
+      assert {:turn, %Step{id: "code"}, _failed} = PhaseSteps.run_machine_steps(steps, step(steps, "plan_checks"), first)
+
+      assert {:paused, %Step{id: "plan_checks"}, question_id} =
+               PhaseSteps.run_machine_steps(steps, step(steps, "plan_checks"), context(ctx, %{}, %{run_id: "run-b"}))
+
+      assert [%{id: ^question_id, title: "TP-77: checks of its plan are still not proved", options: options}] = Questions.open({:ticket, @repo_key, @issue_id})
+      assert [%{label: "Send it back for the checks"}, %{label: "Waive them and pass it on", move: move}, _cancel] = options
+      assert %{to: "Code Review", waive: [%{check_id: "c1"}, %{check_id: "c3"}]} = move
+    end
+
+    test "passes once each of them is proved or waived, whatever QA still owes", ctx do
+      {:ok, _plan} = SymphonyElixir.TicketPlan.write(@repo_key, @issue_id, @guarded_plan)
+      proof = %{check_id: "c1", by: "test", test: "test/guard_test.exs"}
+      {:ok, _proved} = SymphonyElixir.TicketChecks.prove(@repo_key, @issue_id, proof, actor: {:agent, "run-steps", "implementation"})
+      {:ok, _waived} = SymphonyElixir.TicketChecks.waive(@repo_key, @issue_id, "c3", "Nothing can be attached.")
+
+      assert {:turn, %Step{id: "handoff"}, nil} = run_guard(ctx)
+    end
+  end
+
   describe "the findings step of a rework" do
     defp fail_qa!(run_id, class, description, extra \\ %{}, opts \\ []) do
       payload = Map.merge(%{class: class, severity: "major", description: description}, extra)

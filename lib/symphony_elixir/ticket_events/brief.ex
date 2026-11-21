@@ -9,7 +9,12 @@ defmodule SymphonyElixir.TicketEvents.Brief do
     * **Phase and pauses**, from the ticket's record: its phase and each reason its pause
       (`SymphonyElixir.Pauses`) waits on.
     * **Brief**: the ticket's brief (`SymphonyElixir.TicketBrief`), the newest `brief.written`, in
-      full with who wrote it and when; `none` until a run wrote one.
+      full with who wrote it and when; `none` until a run wrote one. A groomed ticket
+      (`SymphonyElixir.TicketPlan`) has three sections in its place: **Ask**, every ask word for
+      word with where it came from; **Plan**, the current plan's version, when and why it was
+      written, its shape, layers and summary (its whole text is `ticket_plan`'s); and **Checks**,
+      each check of the plan with its kind, where it stands (`SymphonyElixir.TicketChecks`) and
+      its statement.
     * **Decisions**: every request (a `decision.requested`, or a Question's `question.asked`) with
       its answer or withdrawal, every open request, and every ruling a person recorded without a
       request.
@@ -27,7 +32,8 @@ defmodule SymphonyElixir.TicketEvents.Brief do
       run's events in full under it. An earlier run's steps are summed up in its line.
     * **Other events**: every event outside a run, one line each from its summary, newest first.
       Findings, notes, briefs and the decision events Decisions shows are not repeated there; a withdrawal
-      or a later answer naming no request it shows is.
+      or a later answer naming no request it shows is. Nor are a groomed ticket's asks, proofs
+      and waivers, which its Ask and Checks sections show.
 
   Nothing is left out to fit a size: the size the prompt builder checks
   (`ledger.prompt_brief_max_tokens`) is a guard against something absurd, not a budget. The text
@@ -35,7 +41,7 @@ defmodule SymphonyElixir.TicketEvents.Brief do
   same bytes.
   """
 
-  alias SymphonyElixir.{Messages, RunStore, TicketBrief, TicketEvents, TicketState}
+  alias SymphonyElixir.{Messages, RunStore, TicketBrief, TicketChecks, TicketEvents, TicketPlan, TicketState}
   alias SymphonyElixir.TicketEvents.{Event, Summary}
 
   @type t :: %{
@@ -51,6 +57,8 @@ defmodule SymphonyElixir.TicketEvents.Brief do
   # it only when Decisions renders it: a withdrawal or a second answer naming no request it shows is
   # one of the other events.
   @section_types ["note", "message.sent", "brief.written", "finding.recorded", "finding.resolved"]
+  # What a groomed ticket's Ask and Checks sections render.
+  @groomed_types ["ask.recorded", "check.proved", "check.waived"]
   @run_types ["run.started", "run.ended"]
   # The payload fields that hold an event's whole free text, which a summary's detail cuts.
   @full_fields %{
@@ -95,17 +103,18 @@ defmodule SymphonyElixir.TicketEvents.Brief do
     decisions = decisions(events)
     findings = open_findings(events, runs)
     notes = Enum.filter(events, &(&1.type == "note"))
+    plan = TicketPlan.current(events)
 
     text =
       [
         phase_section(state),
-        brief_section(TicketBrief.current(events)),
+        if(plan, do: plan_sections(plan, events), else: brief_section(TicketBrief.current(events))),
         decisions_section(decisions),
         findings_section(findings),
         notes_section(notes),
         messages_section(events, Keyword.get(opts, :run_id)),
         runs_section(runs),
-        other_section(events, decisions)
+        other_section(events, decisions, if(plan, do: @groomed_types, else: []))
       ]
       |> Enum.join("\n\n")
 
@@ -141,6 +150,40 @@ defmodule SymphonyElixir.TicketEvents.Brief do
       "\n"
     )
   end
+
+  # A groomed ticket: what was asked, the plan it works from and where each check stands.
+
+  defp plan_sections(plan, events) do
+    asks = section("Ask", TicketPlan.ask(events), fn ask -> [indent("- #{time(ask.at)}, #{ask_source(ask.source, ask.from)}: " <> (ask.text || ""), "  ")] end)
+
+    written =
+      Enum.join(
+        [
+          "Plan (version #{plan.version}, written #{time(plan.at)}: #{plan.reason}):",
+          "- Shape: #{plan.shape}",
+          "- Layers: #{Enum.join(plan.layers, ", ")}",
+          indent("- Summary: " <> plan.summary, "  ")
+        ],
+        "\n"
+      )
+
+    checks =
+      section("Checks", TicketChecks.list(events), fn check ->
+        [indent("- #{check.id}, #{check.kind}, #{check_state(check)}: " <> check.statement, "  ")]
+      end)
+
+    Enum.join([asks, written, checks], "\n\n")
+  end
+
+  defp ask_source("message", _from), do: "from a message"
+  defp ask_source("parent", from), do: "from the parent ticket" <> suffix(" ", from)
+  defp ask_source(_linear, _from), do: "from the ticket's description"
+
+  @proofs %{"test" => "a test", "qa" => "QA", "design" => "the design", "attached" => "an attachment"}
+
+  defp check_state(%{state: :proved, proved_by: %{by: by}}), do: "proved by #{Map.get(@proofs, by, by)}"
+  defp check_state(%{state: :waived, waived: %{reason: reason}}), do: "waived (#{reason})"
+  defp check_state(%{state: :open, proof: proof}), do: "open, to be proved by #{Map.get(@proofs, proof, proof)}"
 
   # Decisions: each request with the event that ended it (nil while open), and each ruling, in the
   # order they were made.
@@ -351,9 +394,10 @@ defmodule SymphonyElixir.TicketEvents.Brief do
 
   # Other events
 
-  defp other_section(events, decisions) do
+  defp other_section(events, decisions, sectioned) do
     shown = for decision <- decisions, %Event{id: id} <- Tuple.to_list(decision), into: MapSet.new(), do: id
-    other = events |> Enum.filter(&(is_nil(&1.run_id) and &1.type not in @section_types and not MapSet.member?(shown, &1.id))) |> Enum.reverse()
+    sectioned = @section_types ++ sectioned
+    other = events |> Enum.filter(&(is_nil(&1.run_id) and &1.type not in sectioned and not MapSet.member?(shown, &1.id))) |> Enum.reverse()
     section("Other events, newest first", other, fn event -> ["- #{time(event.at)} " <> summary_line(event)] end)
   end
 

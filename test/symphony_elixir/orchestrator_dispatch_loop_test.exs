@@ -365,6 +365,27 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
     end
   end
 
+  describe "a run Grooming left to the ticket's next dispatch" do
+    setup do
+      :ok = RunStore.clear()
+    end
+
+    test "never started: no continuation follows it, its claim is released and it records no end" do
+      pid = start_orchestrator(:GroomAgain)
+
+      log = send_down(pid, "run-groomed", "Todo", {:shutdown, :groom_again}, conductor_turn: true)
+      state = :sys.get_state(pid)
+
+      assert log =~ "no continuation is scheduled"
+      refute log =~ "Agent task exited"
+      refute Map.has_key?(state.retry_attempts, @issue_id)
+      refute MapSet.member?(state.claimed, @issue_id)
+      assert RunStore.list_retries(@repo_key) == []
+      assert ticket_events(@repo_key, @issue_id, "run.ended") == []
+      assert ticket_dispatches(@issue_id) == []
+    end
+  end
+
   describe "a run's transcript" do
     @session "5f0c6a52-0e4b-4c4f-9d8e-2a1b3c4d5e6f"
     @workspace "/Users/tonypine/symphony-workspaces/symphony/TP-1082"

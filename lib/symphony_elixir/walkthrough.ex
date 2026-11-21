@@ -47,7 +47,13 @@ defmodule SymphonyElixir.Walkthrough do
   @test_max 300
 
   @type proof :: %{by: :test, check: String.t(), test: String.t() | nil} | %{by: :qa}
-  @type step :: %{number: pos_integer(), text: String.t(), proof: proof()}
+  # A groomed ticket's step names the check of its plan (`SymphonyElixir.TicketJourney`).
+  @type step :: %{
+          required(:number) => pos_integer(),
+          required(:text) => String.t(),
+          required(:proof) => proof(),
+          optional(:check_id) => String.t()
+        }
   @type recorded :: %{step: pos_integer(), test: String.t()}
 
   @doc "The marker that opens the projected `Proved by:` block."

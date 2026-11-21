@@ -65,7 +65,12 @@ defmodule SymphonyElixir.TicketEvents.Journal do
     "brief.written" => "note",
     "conductor.update" => "note",
     "conductor.instructions" => "note",
-    "conductor.steer" => "run"
+    "conductor.steer" => "run",
+    "conductor.intervention" => "note",
+    "ask.recorded" => "note",
+    "plan.written" => "note",
+    "check.proved" => "finding",
+    "check.waived" => "finding"
   }
 
   @typedoc """

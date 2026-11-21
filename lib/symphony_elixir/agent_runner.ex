@@ -14,6 +14,7 @@ defmodule SymphonyElixir.AgentRunner do
     AgentTools,
     AgentTools.Linear.CommentRegistry,
     AuditLog,
+    ChecksHold,
     CiFix,
     CiPoller,
     ClosedPullRequest,
@@ -53,6 +54,7 @@ defmodule SymphonyElixir.AgentRunner do
     SetupBlock,
     StateMachine,
     SubIssueWait,
+    TicketJourney,
     TicketPullRequest,
     TicketSignals,
     Tracker,
@@ -2152,7 +2154,35 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp request_qa_build(_issue, _run_context), do: :ok
 
+  # A groomed ticket is not handed off while a check of its plan that a test or an attachment
+  # proves is open (`SymphonyElixir.TicketJourney.unproved/1`): a push is not gated by the step the
+  # run is on, so the step list's `symphony:checks` guard alone would not hold it.
   defp hand_off_to_state(%Issue{id: issue_id} = issue, post_pr_state, reason, run_context) do
+    case TicketJourney.unproved(issue_id) do
+      [] -> hand_off_proved(issue, post_pr_state, reason, run_context)
+      checks -> refuse_unproved(issue, checks, post_pr_state, reason, run_context)
+    end
+  end
+
+  # The refusal is a note on the ticket, once per run and head, so the next run reads which checks
+  # it owes. The second run in a row that is refused asks the person (`SymphonyElixir.ChecksHold`),
+  # which pauses the ticket: a check nobody can prove must not send it around for good.
+  defp refuse_unproved(%Issue{id: issue_id} = issue, checks, post_pr_state, reason, run_context) do
+    ids = Enum.map(checks, & &1.id)
+    Logger.warning("Not moving #{issue_context(issue)} to #{post_pr_state} #{reason}: its plan's checks #{Enum.join(ids, ", ")} are open")
+    repo_key = Keyword.get(run_context.opts, :repo_key) || issue_repo_key(issue)
+    run = %{run_id: Keyword.get(run_context.opts, :run_id), head: run_context.progress.head}
+
+    with :ask <- ChecksHold.refused(repo_key, issue_id, checks, run) do
+      request = ChecksHold.question(issue.identifier || issue_id, checks, post_pr_state)
+      asked = DecisionRequest.ask(issue, request, [repo_key: repo_key] ++ Keyword.take(run_context.opts, [:tracker]))
+      Logger.info("Asked the person about the open checks of #{issue_context(issue)}: #{inspect(asked)}")
+    end
+
+    {:error, {:checks_unproved, ids}}
+  end
+
+  defp hand_off_proved(%Issue{id: issue_id} = issue, post_pr_state, reason, run_context) do
     settings = Keyword.fetch!(run_context.opts, :settings)
 
     if Handoff.origin?(issue.state) and not handoff_emitted?(issue, run_context) do

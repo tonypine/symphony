@@ -13,6 +13,7 @@ defmodule SymphonyElixir.ReviewAgent do
   alias SymphonyElixir.Harnesses.Launcher
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.ReviewAgent.{Context, Verdict}
+  alias SymphonyElixir.TicketJourney
 
   @max_diff_prompt_bytes 120_000
   @self_check_max_iterations 4
@@ -777,7 +778,7 @@ defmodule SymphonyElixir.ReviewAgent do
     Identifier: #{issue.identifier}
     Title: #{PromptSafety.linear_issue_title(issue.title)}
     Description:
-    #{PromptSafety.linear_issue_body(Decisions.strip(issue.description))}
+    #{TicketJourney.body(issue, fn -> PromptSafety.linear_issue_body(Decisions.strip(issue.description)) end)}
     """
   end
 

@@ -8,7 +8,7 @@ public enum ConductorSettingsError: LocalizedError, Equatable {
     case notOnOrOff(key: String, value: String)
     /// The time limit holds something other than a whole number or `null`.
     case unreadable(key: String, value: String)
-    /// A junction that is not one of the five Symphony knows.
+    /// A junction that is not one Symphony runs the Conductor at by a setting.
     case unknownJunction(String)
 
     public var errorDescription: String? {
@@ -25,8 +25,11 @@ public enum ConductorSettingsError: LocalizedError, Equatable {
     }
 }
 
-/// A moment in a ticket's life at which Symphony runs the Conductor: one item of `conductor.junctions`.
+/// A moment in a ticket's life at which Symphony runs the Conductor, as a `conductor.update` names it. Each but
+/// `duringRun` is one item of `conductor.junctions` (`settable`).
 public enum ConductorJunction: String, CaseIterable, Identifiable {
+    /// Before the first run of a ticket that has no plan: the Conductor writes the plan.
+    case grooming
     /// An implementation run handed off, before Code Review or QA.
     case afterCoding = "after_coding"
     /// QA failed the change, before rework.
@@ -37,12 +40,31 @@ public enum ConductorJunction: String, CaseIterable, Identifiable {
     case afterRework = "after_rework"
     /// QA passed or was skipped, before Merging.
     case beforeMerge = "before_merge"
+    /// A person wrote to the ticket: the Conductor answers.
+    case message
+    /// A sub-ticket reached Done or Canceled while others remain; it runs on the parent.
+    case subTicketEnded = "sub_ticket_ended"
+    /// The last sub-ticket ended; it runs on the parent.
+    case finalCheck = "final_check"
+    /// A person wrote to a sub-ticket; it runs on the parent.
+    case childMessage = "child_message"
+    /// While it watched a running run (`conductor.watch`). Never an item of `conductor.junctions`.
+    case duringRun = "during_run"
 
     public var id: String { rawValue }
+
+    /// The junctions `conductor.junctions` may name, in the order Settings lists them.
+    public static let settable: [ConductorJunction] = allCases.filter { $0 != .duringRun }
 
     /// The junction's row title in Settings.
     public var title: String {
         switch self {
+        case .grooming: return "Grooming a new ticket"
+        case .message: return "On a message from you"
+        case .subTicketEnded: return "After a sub-ticket ends"
+        case .finalCheck: return "At the final check"
+        case .childMessage: return "On a message to a sub-ticket"
+        case .duringRun: return "During a run"
         case .afterCoding: return "After coding"
         case .afterQAFail: return "After a QA fail"
         case .afterQABlocked: return "After a blocked QA"
@@ -55,7 +77,9 @@ public enum ConductorJunction: String, CaseIterable, Identifiable {
 /// The Conductor's settings in the text of a `symphony.yml`: `conductor.enabled`, whether Symphony runs the Conductor
 /// at all; `conductor.junctions`, the moments it runs at; `conductor.timeout_ms`, how long one turn may take before
 /// the next run starts without it; `conductor.file_tickets`, whether it may file a linked ticket for a problem that is
-/// not the current ticket's to solve; and `conductor.max_filed_tickets`, how many one ticket may file. Only the lines of the settings that change are rewritten, or inserted with
+/// not the current ticket's to solve; `conductor.max_filed_tickets`, how many one ticket may file;
+/// `conductor.grooming_timeout_ms`, how long the Grooming turn that writes a ticket's plan may take; and
+/// `conductor.final_check_rounds`, how many rounds of new sub-tickets a parent's final check may add before it asks. Only the lines of the settings that change are rewritten, or inserted with
 /// `conductor:` when missing, so the rest of the file stays as it is.
 public struct ConductorSettings: Equatable {
     public var enabled: Bool
@@ -67,13 +91,19 @@ public struct ConductorSettings: Equatable {
     public var maxFiledTickets: Int
     /// `conductor.watch`: whether it watches running runs and may steer them, and its limits.
     public var watch: ConductorWatchSettings
+    /// `conductor.grooming_timeout_ms`: how long the Grooming turn may take.
+    public var groomingTimeoutMs: Int
+    /// `conductor.final_check_rounds`: how many rounds of sub-tickets a final check may add before it asks the person.
+    public var finalCheckRounds: Int
 
     /// What Symphony uses when a key is missing or null.
     public static let defaultEnabled = false
-    public static let defaultJunctions = Set(ConductorJunction.allCases)
+    public static let defaultJunctions = Set(ConductorJunction.settable)
     public static let defaultTimeoutMs = 180_000
     public static let defaultFileTickets = true
     public static let defaultMaxFiledTickets = 2
+    public static let defaultGroomingTimeoutMs = 600_000
+    public static let defaultFinalCheckRounds = 3
 
     /// Milliseconds in one second, the unit Settings shows the time limit in.
     public static let msPerSecond = 1_000
@@ -83,11 +113,14 @@ public struct ConductorSettings: Equatable {
     static let timeoutPath = ["conductor", "timeout_ms"]
     static let fileTicketsPath = ["conductor", "file_tickets"]
     static let maxFiledTicketsPath = ["conductor", "max_filed_tickets"]
+    static let groomingTimeoutPath = ["conductor", "grooming_timeout_ms"]
+    static let finalCheckRoundsPath = ["conductor", "final_check_rounds"]
 
     public init(
         enabled: Bool = defaultEnabled, junctions: Set<ConductorJunction> = defaultJunctions, timeoutMs: Int = defaultTimeoutMs,
         fileTickets: Bool = defaultFileTickets, maxFiledTickets: Int = defaultMaxFiledTickets,
-        watch: ConductorWatchSettings = ConductorWatchSettings()
+        watch: ConductorWatchSettings = ConductorWatchSettings(), groomingTimeoutMs: Int = defaultGroomingTimeoutMs,
+        finalCheckRounds: Int = defaultFinalCheckRounds
     ) {
         self.enabled = enabled
         self.junctions = junctions
@@ -95,6 +128,27 @@ public struct ConductorSettings: Equatable {
         self.fileTickets = fileTickets
         self.maxFiledTickets = maxFiledTickets
         self.watch = watch
+        self.groomingTimeoutMs = groomingTimeoutMs
+        self.finalCheckRounds = finalCheckRounds
+    }
+
+    /// Grooming's time limit in whole seconds, for the field.
+    public var groomingTimeoutSeconds: Int { Int((Double(groomingTimeoutMs) / Double(Self.msPerSecond)).rounded()) }
+
+    /// These settings with the field's time limit for Grooming; an untouched field keeps the exact value, and so does
+    /// one under a second, which Symphony refuses (`grooming_timeout_ms` is above zero).
+    public func setting(groomingTimeoutSeconds seconds: Int) -> ConductorSettings {
+        var settings = self
+        if seconds > 0, seconds != groomingTimeoutSeconds { settings.groomingTimeoutMs = seconds * Self.msPerSecond }
+        return settings
+    }
+
+    /// These settings with the field's final check rounds; fewer than one, which Symphony refuses
+    /// (`final_check_rounds` is above zero), keeps the value.
+    public func setting(finalCheckRounds rounds: Int) -> ConductorSettings {
+        var settings = self
+        if rounds > 0 { settings.finalCheckRounds = rounds }
+        return settings
     }
 
     /// The time limit in whole seconds, for the field.
@@ -120,7 +174,8 @@ public struct ConductorSettings: Equatable {
     }
 
     /// The settings, with Symphony's default for a missing or null key. `junctions` reads an inline list
-    /// (`[after_coding, before_merge]`) or a block list; `[]` runs it at none.
+    /// (`[after_coding, before_merge]`) or a block list; `[]` runs it at none. A list reads as it says: a junction it
+    /// does not name is off.
     public static func values(in yaml: String) throws -> ConductorSettings {
         ConductorSettings(
             enabled: try onOff(enabledPath, default: defaultEnabled, in: yaml),
@@ -137,38 +192,55 @@ public struct ConductorSettings: Equatable {
                 maxTurnsPerRun: try number(
                     ConductorWatchSettings.path("max_turns_per_run"), default: ConductorWatchSettings.defaultMaxTurnsPerRun, in: yaml),
                 allowStop: try onOff(ConductorWatchSettings.path("allow_stop"), default: false, in: yaml)
-            )
+            ),
+            groomingTimeoutMs: try number(groomingTimeoutPath, default: defaultGroomingTimeoutMs, in: yaml),
+            finalCheckRounds: try number(finalCheckRoundsPath, default: defaultFinalCheckRounds, in: yaml)
         )
     }
 
     /// The same text with the settings that differ between `old` and `new` set to their `new` values. A missing key is
-    /// inserted at the top of `conductor:`, so they are written last to first and read in order. `junctions` is always
-    /// written inline, so a block list under it is removed first.
+    /// inserted at the top of `conductor:`, so they are written last to first and read in order. `junctions` is written
+    /// only while one is off: with every junction on the key is removed, since Symphony reads a list as exactly that
+    /// list and a missing key as every junction, the ones a later release adds too. A written list is always inline, so
+    /// a block list under the key is removed first.
     public static func updating(_ yaml: String, from old: ConductorSettings, to new: ConductorSettings) throws -> String {
         let (w, o) = (new.watch, old.watch)
-        let changes: [(path: [String], changed: Bool, value: String)] = [
+        let changes: [(path: [String], changed: Bool, value: String?)] = [
             (ConductorWatchSettings.path("allow_stop"), w.allowStop != o.allowStop, w.allowStop ? "true" : "false"),
             (ConductorWatchSettings.path("max_turns_per_run"), w.maxTurnsPerRun != o.maxTurnsPerRun, String(w.maxTurnsPerRun)),
             (ConductorWatchSettings.path("min_interval_minutes"), w.minIntervalMinutes != o.minIntervalMinutes, String(w.minIntervalMinutes)),
             (ConductorWatchSettings.path("run_tokens"), w.runTokens != o.runTokens, String(w.runTokens)),
             (ConductorWatchSettings.path("run_minutes"), w.runMinutes != o.runMinutes, String(w.runMinutes)),
             (ConductorWatchSettings.path("enabled"), w.enabled != o.enabled, w.enabled ? "true" : "false"),
+            (finalCheckRoundsPath, new.finalCheckRounds != old.finalCheckRounds, String(new.finalCheckRounds)),
+            (groomingTimeoutPath, new.groomingTimeoutMs != old.groomingTimeoutMs, String(new.groomingTimeoutMs)),
             (maxFiledTicketsPath, new.maxFiledTickets != old.maxFiledTickets, String(new.maxFiledTickets)),
             (fileTicketsPath, new.fileTickets != old.fileTickets, new.fileTickets ? "true" : "false"),
             (timeoutPath, new.timeoutMs != old.timeoutMs, String(new.timeoutMs)),
-            (junctionsPath, new.junctions != old.junctions, inline(new.junctions)),
+            (junctionsPath, new.junctions != old.junctions, new.junctions == defaultJunctions ? nil : inline(new.junctions)),
             (enabledPath, new.enabled != old.enabled, new.enabled ? "true" : "false"),
         ]
         var yaml = new.junctions != old.junctions ? try droppingBlockList(in: yaml) : yaml
         for change in changes where change.changed {
-            yaml = try blockSection { try ConfigSetting.setting(at: change.path, to: change.value, in: yaml) }
+            if let value = change.value {
+                yaml = try blockSection { try ConfigSetting.setting(at: change.path, to: value, in: yaml) }
+            } else {
+                yaml = try removing(change.path, in: yaml)
+            }
         }
         return yaml
     }
 
+    /// The same text without the key at `path`, its block list and a `conductor:` the removal leaves empty; the same
+    /// text when the key is missing.
+    private static func removing(_ path: [String], in yaml: String) throws -> String {
+        guard try blockSection({ try ConfigSetting.value(at: path, of: yaml) }) != nil else { return yaml }
+        return try PhaseSettings.removing(path, in: yaml)
+    }
+
     /// `[after_coding, before_merge]`, in the junctions' order.
     static func inline(_ junctions: Set<ConductorJunction>) -> String {
-        "[" + ConductorJunction.allCases.filter(junctions.contains).map(\.rawValue).joined(separator: ", ") + "]"
+        "[" + ConductorJunction.settable.filter(junctions.contains).map(\.rawValue).joined(separator: ", ") + "]"
     }
 
     private static func junctions(in yaml: String) throws -> Set<ConductorJunction> {
@@ -185,7 +257,9 @@ public struct ConductorSettings: Equatable {
             items = inlineItems(raw)
         }
         return try items.reduce(into: Set<ConductorJunction>()) { result, item in
-            guard let junction = ConductorJunction(rawValue: unquoted(item)) else { throw ConductorSettingsError.unknownJunction(item) }
+            guard let junction = ConductorJunction(rawValue: unquoted(item)), ConductorJunction.settable.contains(junction) else {
+                throw ConductorSettingsError.unknownJunction(item)
+            }
             result.insert(junction)
         }
     }

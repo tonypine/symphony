@@ -1,0 +1,23 @@
+{
+  "event": {
+    "id": "m9",
+    "seq": 20,
+    "at": "2026-10-08T10:27:00Z",
+    "type": "message.sent",
+    "actor": {
+      "kind": "person",
+      "name": "Tony"
+    },
+    "payload": {
+      "text": "And keep the times at 11 pt."
+    },
+    "summary": {
+      "title": "You wrote",
+      "detail": "And keep the times at 11 pt."
+    },
+    "artifacts": [],
+    "children": [],
+    "new": false,
+    "read": null
+  }
+}

@@ -85,7 +85,12 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
     {"rule.action", %{rule: "PR watcher R22", action: "rerun", text: "A check failed on PR #741: Symphony reran it once"}, [],
      %{title: "Reran the failed checks", detail: "A check failed on PR #741: Symphony reran it once"}},
     {"ticket.filed", %{identifier: "TP-1500", kind: "split_off", title: "Split the parser"}, [], %{title: "Split off TP-1500", detail: "Split the parser"}},
-    {"ticket.filed_from", %{from: "MOT-93", by: "conductor"}, [], %{title: "Filed by the Conductor from MOT-93", detail: nil}}
+    {"ticket.filed_from", %{from: "MOT-93", by: "conductor"}, [], %{title: "Filed by the Conductor from MOT-93", detail: nil}},
+    {"ask.recorded", %{text: "Show the plan on the ticket page.", source: "linear"}, [], %{title: "Ask recorded", detail: "Show the plan on the ticket page."}},
+    {"plan.written", %{version: 1, reason: "Grooming", summary: "The ticket page shows the plan."}, [], %{title: "Plan written", detail: "The ticket page shows the plan."}},
+    {"check.proved", %{check_id: "c1", by: "test", test: "plan_test.exs › shows the plan"}, [], %{title: "Check proved by a test", detail: "c1 · plan_test.exs › shows the plan"}},
+    {"check.waived", %{check_id: "c2", reason: "Nothing can test it."}, [], %{title: "Check waived", detail: "c2 · Nothing can test it."}},
+    {"conductor.intervention", %{action: "stopped", reason: "The plan changed.", by: "TP-1"}, [], %{title: "Run stopped by the Conductor of TP-1", detail: "The plan changed."}}
   ]
 
   defp event(type, payload, artifacts \\ []), do: %Event{type: type, payload: payload, artifacts: artifacts}
@@ -134,6 +139,24 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
 
     assert Summary.render(message) == %{title: "You wrote", detail: "Ship it."}
     assert Summary.render(%{message | actor: %{kind: :person, name: "Sam"}}) == %{title: "Sam wrote", detail: "Ship it."}
+  end
+
+  test "an ask says where it came from, a plan whether it is the first, a proof how, an intervention what was done" do
+    assert render("ask.recorded", %{text: "Keep it.", source: "message", from: "evt-1"}).title == "Ask changed by a message"
+    assert render("ask.recorded", %{text: "Do part one.", source: "parent", from: "TP-1"}).title == "Ask given by TP-1"
+    assert render("ask.recorded", %{text: "Do part one.", source: "parent"}).title == "Ask given by the parent ticket"
+
+    assert render("plan.written", %{version: 2, reason: "A sub-ticket ended.", summary: "Two parts."}) == %{title: "Plan changed", detail: "A sub-ticket ended."}
+
+    for {by, title} <- [{"qa", "Check proved by QA"}, {"design", "Check proved against the design"}, {"attached", "Check proved by an attachment"}] do
+      assert render("check.proved", %{check_id: "c1", by: by, details: "Seen."}) == %{title: title, detail: "c1 · Seen."}
+    end
+
+    for {action, title} <- [{"replanned", "Plan changed"}, {"canceled", "Canceled"}, {"replaced", "Replaced"}, {"added", "Added"}] do
+      assert render("conductor.intervention", %{action: action, reason: "Why.", by: "TP-1"}).title == title <> " by the Conductor of TP-1"
+    end
+
+    assert render("conductor.intervention", %{}) == %{title: "Changed by the Conductor", detail: nil}
   end
 
   test "an event of an unknown type renders its type and no detail" do
@@ -553,7 +576,12 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
       {"note.read", %{note_id: "evt_1", run_id: "run_4"}},
       {"message.sent", %{text: "Keep the button."}},
       {"message.read", %{message_id: "evt_1", run_id: "run_4"}},
-      {"note", %{text: @old_note}}
+      {"note", %{text: @old_note}},
+      {"ask.recorded", %{text: "Show the plan.", source: "parent", from: "TP-1"}},
+      {"plan.written", %{version: 2, reason: "A sub-ticket ended.", by: "recalibration", shape: "split", summary: "Two parts."}},
+      {"check.proved", %{check_id: "c1", by: "attached", evidence: "evt_1"}},
+      {"check.waived", %{check_id: "c1", reason: "Nothing can test it."}},
+      {"conductor.intervention", %{action: "replanned", reason: "The ask changed.", by: "TP-1", target: "TP-2"}}
     ]
 
     @log_words [~r/\bR\d+[a-z]?\b/, ~r/\b[a-z0-9]+_[a-z0-9_]+\b/, ~r/\b[0-9a-f]{40}\b/, ~r/claude-/]

@@ -47,7 +47,7 @@ defmodule SymphonyElixir.QaAgent.Selection do
 
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.PlaybookSettings
-  alias SymphonyElixir.Walkthrough
+  alias SymphonyElixir.TicketJourney
 
   @skip_label "qa:skip"
   @live_label "qa:live"
@@ -199,41 +199,51 @@ defmodule SymphonyElixir.QaAgent.Selection do
   test, recorded as an `evidence` event and run by the repo's `proof_check`, is not QA's to walk,
   so it never asks for the server; the proofs are read from the ticket's events, never from the
   description. A `qa:live` label makes it run and a `qa:fixture` label never does, whatever the
-  diff; `qa:fixture` wins over `qa:live`.
+  diff; `qa:fixture` wins over `qa:live`. A groomed ticket's steps are its plan's QA checks, and the
+  reason names them instead of the walkthrough.
   """
   @spec live(Issue.t(), PlaybookSettings.live_server(), [String.t()], String.t() | nil) :: {boolean(), String.t()}
   def live(%Issue{} = issue, live_server, changed_paths, proof_check \\ nil) when is_list(changed_paths) do
     labels = issue |> Issue.label_names() |> Enum.map(&normalize_label/1)
     section = walked_section(issue, proof_check)
+    words = live_words(TicketJourney.groomed?(issue))
 
     cond do
       @fixture_label in labels -> {false, "the issue has the `#{@fixture_label}` label"}
       @live_label in labels -> {true, "the issue has the `#{@live_label}` label"}
       not server_change?(live_server, changed_paths) -> {false, "the PR changes none of the server's paths"}
-      is_nil(section) -> {false, "the ticket has no `## User walkthrough`"}
-      section == "" -> {false, "a test recorded on the ticket proves every `## User walkthrough` step"}
-      not mentions?(section, live_server.walkthrough_mentions) -> {false, "no `## User walkthrough` step names #{words(live_server)}"}
-      true -> {true, "the PR changes the server and " <> walkthrough_note(live_server)}
+      is_nil(section) -> {false, words.none}
+      section == "" -> {false, words.proved}
+      not mentions?(section, live_server.walkthrough_mentions) -> {false, "#{words.unnamed} names #{words(live_server)}"}
+      true -> {true, "the PR changes the server and " <> walkthrough_note(live_server, words)}
     end
   end
 
-  # The walkthrough's text QA walks: its steps no recorded proof covers (all of it when it has no
-  # numbered step); "" when a proof covers every step, nil without a walkthrough.
-  defp walked_section(issue, proof_check) do
-    case Walkthrough.section(issue.description) do
-      nil -> nil
-      section -> walked_steps(section, Walkthrough.steps(section), issue, proof_check)
-    end
+  # What the reason calls the steps: a groomed ticket's are its plan's QA checks.
+  defp live_words(true) do
+    %{
+      none: "the ticket's plan has no QA check",
+      proved: "a test recorded on the ticket proves every QA check of the plan",
+      unnamed: "no QA check of the plan",
+      any: "the plan has a QA check",
+      named: "a QA check of the plan"
+    }
   end
 
-  defp walked_steps(section, [], _issue, _proof_check), do: section
-
-  defp walked_steps(_section, steps, issue, proof_check) do
-    steps
-    |> Walkthrough.with_recorded_proofs(Walkthrough.recorded_proofs(issue.id), proof_check)
-    |> Enum.reject(&Walkthrough.named_test?/1)
-    |> Enum.map_join("\n", & &1.text)
+  defp live_words(false) do
+    %{
+      none: "the ticket has no `## User walkthrough`",
+      proved: "a test recorded on the ticket proves every `## User walkthrough` step",
+      unnamed: "no `## User walkthrough` step",
+      any: "the ticket has a `## User walkthrough`",
+      named: "the `## User walkthrough`"
+    }
   end
+
+  # The text QA walks: the steps no recorded proof covers (all of a walkthrough with no numbered
+  # step); "" when a proof covers every step, nil for a ticket with no step. A groomed ticket's
+  # steps are its plan's QA checks (`SymphonyElixir.TicketJourney`).
+  defp walked_section(issue, proof_check), do: TicketJourney.walked_text(issue, proof_check)
 
   defp server_change?(live_server, paths),
     do: Enum.any?(paths, fn path -> Enum.any?(live_server.paths, &glob_match?(path, &1)) end)
@@ -243,15 +253,14 @@ defmodule SymphonyElixir.QaAgent.Selection do
 
   defp words(%{walkthrough_mentions: words}), do: Enum.map_join(words, " or ", &"`#{&1}`")
 
-  defp walkthrough_note(%{walkthrough_mentions: []}), do: "the ticket has a `## User walkthrough`"
-  defp walkthrough_note(live_server), do: "the `## User walkthrough` names #{words(live_server)}"
+  defp walkthrough_note(%{walkthrough_mentions: []}, words), do: words.any
+  defp walkthrough_note(live_server, words), do: "#{words.named} names #{words(live_server)}"
 
-  @doc "Whether the issue body has a `## User walkthrough` section."
+  @doc "Whether the issue body has a `## User walkthrough` section, or its plan a QA check (`SymphonyElixir.TicketJourney`)."
   @spec user_walkthrough?(Issue.t()) :: boolean()
-  def user_walkthrough?(%Issue{description: description}) when is_binary(description),
-    do: Regex.match?(@walkthrough_heading, description)
+  def user_walkthrough?(issue), do: TicketJourney.walkthrough?(issue, &walkthrough_heading?/1)
 
-  def user_walkthrough?(_issue), do: false
+  defp walkthrough_heading?(description), do: is_binary(description) and Regex.match?(@walkthrough_heading, description)
 
   @doc "Whether `path` is a docs or test file, by the globs that skip QA for docs/test-only diffs."
   @spec docs_or_test?(String.t()) :: boolean()

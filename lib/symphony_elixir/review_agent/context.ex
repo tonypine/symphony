@@ -6,7 +6,7 @@ defmodule SymphonyElixir.ReviewAgent.Context do
 
   require Logger
 
-  alias SymphonyElixir.{AgentLabels, PromptSafety}
+  alias SymphonyElixir.{AgentLabels, PromptSafety, TicketJourney}
   alias SymphonyElixir.Linear.Issue
 
   @context_radius 6
@@ -47,7 +47,8 @@ defmodule SymphonyElixir.ReviewAgent.Context do
          {:ok, numstat} <- git_fun.(["diff", "--numstat", git_range]),
          {:ok, zero_context_diff} <- git_fun.(["diff", "--unified=0", git_range]),
          {:ok, commit_messages} <- git_fun.(["log", "--reverse", "--format=%s%n%b%x1e", git_range]) do
-      raw_acceptance_criteria = acceptance_criteria(issue.description)
+      issue = TicketJourney.planned(issue)
+      raw_acceptance_criteria = acceptance_text(issue)
       acceptance_items = acceptance_criteria_items(raw_acceptance_criteria)
       inventory = changed_file_inventory(name_status, numstat, diff, zero_context_diff)
       changed_paths = Enum.map(inventory, & &1.path)
@@ -65,7 +66,7 @@ defmodule SymphonyElixir.ReviewAgent.Context do
       context_pack = %{
         issue: %{
           title: present_linear(issue.title, &PromptSafety.linear_issue_title/1),
-          description: present_linear(issue.description, &PromptSafety.linear_issue_body/1),
+          description: TicketJourney.body(issue, fn -> present_linear(issue.description, &PromptSafety.linear_issue_body/1) end),
           acceptance_criteria: sanitized_acceptance,
           acceptance_criteria_items: acceptance_items,
           acceptance_matrix: Enum.map(acceptance_items, &%{criterion: &1, evidence: [], missing_evidence: true})
@@ -1007,6 +1008,13 @@ defmodule SymphonyElixir.ReviewAgent.Context do
 
   defp validation_evidence_count(workpad) do
     length(workpad.checklist_items) + length(workpad.commands)
+  end
+
+  # A groomed ticket's acceptance criteria are its plan's `outcome` checks (`SymphonyElixir.TicketJourney`).
+  defp acceptance_text(issue) do
+    if TicketJourney.groomed?(issue),
+      do: issue |> TicketJourney.acceptance() |> Enum.map_join("\n", &"- #{&1}"),
+      else: acceptance_criteria(issue.description)
   end
 
   defp acceptance_criteria(description) when is_binary(description) do

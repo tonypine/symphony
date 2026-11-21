@@ -148,7 +148,8 @@ defmodule SymphonyElixir.Linear.Issue do
   blocker whose PR merged and that waits on its own sub-tickets
   (`SymphonyElixir.SubIssueWait.merged_blocker?/1`), whose code is on the default branch; a
   sub-ticket blocked by such a parent would otherwise wait on it while it waits on the sub-ticket.
-  A blocker without a known state counts as open.
+  So does a groomed blocker whose pull request merged, whatever its state. A blocker without a
+  known state counts as open.
   """
   @spec open_blockers(t(), Enumerable.t(String.t())) :: [map()]
   def open_blockers(%__MODULE__{blocked_by: blockers}, terminal_states) when is_list(blockers) do

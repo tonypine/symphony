@@ -47,7 +47,8 @@ public struct BriefPanel: View {
 /// `.brief-part`: under a hairline, its small upper-case label in the secondary colour, then its text in the reading
 /// style; `secondary` sets the text in the secondary colour (What was asked).
 struct BriefPart: View {
-    let title: String
+    /// The part's small upper-case label; nil for a part that follows its panel's own title.
+    let title: String?
     let text: String
     let secondary: Bool
 
@@ -55,12 +56,14 @@ struct BriefPart: View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
             HairlineDivider()
                 .padding(.bottom, DesignTokens.Space.s2)
-            Text(title)
-                .textCase(.uppercase)
-                .font(DesignTokens.TypeStyle.caption.font)
-                .tracking(CGFloat(ZoneTitle.tracking * DesignTokens.TypeStyle.caption.scaledSize(by: DesignTokens.TypeStyle.textScale)))
-                .foregroundStyle(DesignTokens.TextColor.secondary.color)
-                .accessibilityAddTraits(.isHeader)
+            if let title {
+                Text(title)
+                    .textCase(.uppercase)
+                    .font(DesignTokens.TypeStyle.caption.font)
+                    .tracking(CGFloat(ZoneTitle.tracking * DesignTokens.TypeStyle.caption.scaledSize(by: DesignTokens.TypeStyle.textScale)))
+                    .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                    .accessibilityAddTraits(.isHeader)
+            }
             ReadingText(text, color: secondary ? DesignTokens.TextColor.secondary : DesignTokens.TextColor.primary)
                 .fixedSize(horizontal: false, vertical: true)
         }

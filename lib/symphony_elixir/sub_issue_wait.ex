@@ -29,9 +29,12 @@ defmodule SymphonyElixir.SubIssueWait do
 
   require Logger
 
-  alias SymphonyElixir.{Config, RunStore, TicketPullRequest, TicketSignals, Tracker, TransitionGuard}
+  alias SymphonyElixir.Conductor.Tree
+  alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.{RunStore, TicketPlan, TicketPullRequest}
+  alias SymphonyElixir.{TicketSignals, TicketState, Tracker, TransitionGuard}
 
   @parked_from_state "In Progress"
   @backlog_state "Backlog"
@@ -112,15 +115,22 @@ defmodule SymphonyElixir.SubIssueWait do
   True when a `breakdown` parent is ready for its epic's close, the epic review: its sub-issues are
   all terminal (`Issue.close_out_ready?/2`), or it sits in the waiting state with none left, as when
   every child was re-parented to another epic or deleted. A parent with no sub-issues anywhere else
-  (`Todo`, `In Progress`) has no plan yet: it gets a plan run, not the close.
+  (`Todo`, `In Progress`) has no plan yet: it gets a plan run, not the close. A groomed ticket
+  (`SymphonyElixir.TicketPlan`) is never ready for it, even when its `plan` label survived: its
+  close is the Conductor's final check.
   """
   @spec close_out_ready?(Issue.t() | term(), Enumerable.t(String.t()), Schema.t() | term()) :: boolean()
   def close_out_ready?(%Issue{} = issue, terminal_states, settings) do
-    Issue.close_out_ready?(issue, terminal_states) or
-      (Issue.breakdown?(issue) and issue.sub_issues == [] and in_state?(issue, settings))
+    (Issue.close_out_ready?(issue, terminal_states) or
+       (Issue.breakdown?(issue) and issue.sub_issues == [] and in_state?(issue, settings))) and not groomed?(issue)
   end
 
   def close_out_ready?(_issue, _terminal_states, _settings), do: false
+
+  @doc "Whether `issue` is groomed: its record holds a plan (`SymphonyElixir.TicketPlan.groomed?/1`)."
+  @spec groomed?(Issue.t() | term()) :: boolean()
+  def groomed?(%Issue{id: issue_id}) when is_binary(issue_id), do: TicketPlan.groomed?(issue_id)
+  def groomed?(_issue), do: false
 
   @doc """
   True when an issue in the waiting state must not run: anything but a `breakdown`
@@ -157,10 +167,14 @@ defmodule SymphonyElixir.SubIssueWait do
   state is on, the issue is not a `breakdown` parent (those wait from their plan's approval) and it
   has a sub-issue outside `terminal_states` and outside `Backlog`. A `Backlog` sub-issue waits for a
   person to promote it, so it does not hold the issue open.
+
+  A groomed ticket (`groomed?/1`) waits on every sub-ticket it has: one in `Backlog` holds it too,
+  and with all of them ended it still waits there, for the Conductor's final check of the whole
+  ticket (`SymphonyElixir.Conductor.Tree`), which closes it.
   """
   @spec wait_on_merge?(Issue.t() | term(), Enumerable.t(String.t()), Schema.t() | term()) :: boolean()
   def wait_on_merge?(%Issue{} = issue, terminal_states, settings) do
-    enabled?(settings) and not Issue.breakdown?(issue) and started_sub_issues(issue, terminal_states) != []
+    enabled?(settings) and holding_sub_issues(issue, terminal_states) != []
   end
 
   def wait_on_merge?(_issue, _terminal_states, _settings), do: false
@@ -192,14 +206,59 @@ defmodule SymphonyElixir.SubIssueWait do
   ticket whose mark an earlier close deleted without moving the record, which the drift check then
   moved back (MOT-93, TP-1565). One a person moved there with its pull request open waits for them.
   Sub-issues a read did not carry (`:unknown`) never close it.
+
+  A groomed ticket (`groomed?/1`) follows its own rule (`SymphonyElixir.Conductor.Tree.due/3`):
+  its pull request merged or it never had one, no sub-ticket is left outside `terminal_states` (one
+  in `Backlog` holds it), and the Conductor's final check is not owed: that check closes the
+  ticket itself, and Symphony closes it here only when the check is off or could not be made.
   """
   @spec close?(Issue.t() | term(), Enumerable.t(String.t()), Schema.t() | term()) :: boolean()
   def close?(%Issue{sub_issues: sub_issues} = issue, terminal_states, settings) when is_list(sub_issues) do
-    in_state?(issue, settings) and not Issue.breakdown?(issue) and
-      started_sub_issues(issue, terminal_states) == [] and merged?(issue)
+    in_state?(issue, settings) and closes?(issue, terminal_states)
   end
 
   def close?(_issue, _terminal_states, _settings), do: false
+
+  defp closes?(issue, terminal_states) do
+    if groomed?(issue) do
+      Tree.due(issue, terminal_states) == :close
+    else
+      not Issue.breakdown?(issue) and started_sub_issues(issue, terminal_states) == [] and merged?(issue)
+    end
+  end
+
+  @doc "Whether Symphony's record of the ticket `issue_id` says its pull request merged (`pull_request/1`)."
+  @spec pr_merged?(String.t() | term()) :: boolean()
+  def pr_merged?(issue_id), do: pull_request(issue_id) == :merged
+
+  @doc """
+  What Symphony's record of the ticket `issue_id` says of its pull request: `:merged`, `:unmerged`
+  (it has one, open or closed) or `:none` (it never had one, or Symphony holds no record of the
+  ticket). The ticket's pull request record comes first (`SymphonyElixir.TicketPullRequest`), then
+  the PR and CI watcher's last read of it (`pull_request`, kept once the watch ends, and
+  `pr_watch`'s facts).
+  """
+  @spec pull_request(String.t() | term()) :: :merged | :unmerged | :none
+  def pull_request(issue_id) when is_binary(issue_id) do
+    case RunStore.get_ticket_state(issue_id) do
+      %{} = record -> record |> TicketState.normalize() |> recorded_pull_request()
+      _none -> :none
+    end
+  end
+
+  def pull_request(_issue_id), do: :none
+
+  defp recorded_pull_request(record) do
+    case TicketPullRequest.get(record.repo_key, record.issue_id) do
+      %{state: "merged"} -> :merged
+      %{state: "open"} -> :unmerged
+      own -> watched_pull_request(record, is_map(own))
+    end
+  end
+
+  defp watched_pull_request(%{pull_request: %{state: "merged"}}, _recorded?), do: :merged
+  defp watched_pull_request(%{pr_watch: %{facts: %{pr: :merged}}}, _recorded?), do: :merged
+  defp watched_pull_request(%{pull_request: pull_request}, recorded?), do: if(recorded? or is_map(pull_request), do: :unmerged, else: :none)
 
   @doc """
   True when `blocker` (a blocked-by link's `%{id, state}`) no longer blocks although it is not
@@ -207,9 +266,21 @@ defmodule SymphonyElixir.SubIssueWait do
   recorded it), so its code is on the default branch. A sub-ticket blocked by its own parent would
   otherwise wait on the parent while the parent waits on it (MOT-85 and MOT-100). A plan parent in
   the waiting state still blocks: its work is its sub-tickets, and nothing recorded a merge for it.
+
+  A groomed blocker (`groomed?/1`) no longer blocks once its record says its pull request merged
+  (`pr_merged?/1`), whatever state it is in: merged is not Done, and a ticket that builds on its
+  code waits on the merge only.
   """
   @spec merged_blocker?(map() | term()) :: boolean()
   def merged_blocker?(%{id: blocker_id, state: blocker_state}) when is_binary(blocker_id) and is_binary(blocker_state) do
+    # Whether it is groomed comes first: one read rules out every blocker with no plan, which then
+    # costs no read of its pull request.
+    merged_waiting?(blocker_id, blocker_state) or (TicketPlan.groomed?(blocker_id) and pr_merged?(blocker_id))
+  end
+
+  def merged_blocker?(_blocker), do: false
+
+  defp merged_waiting?(blocker_id, blocker_state) do
     # The store read comes first: it rules out nearly every blocker for less than a config read.
     with true <- RunStore.merged_wait?(blocker_id),
          {:ok, settings} <- Config.settings(),
@@ -220,14 +291,12 @@ defmodule SymphonyElixir.SubIssueWait do
     end
   end
 
-  def merged_blocker?(_blocker), do: false
-
   @doc """
   Moves `issue` to `Done`, Symphony's record first and then Linear, and comments how each of its
   sub-issues ended or waits. The merge's mark (`wait_on_merge/3`) is deleted only once the move went
-  through. An issue with no repo key has no record to move, so it is not moved at all and comes back
-  `{:error, :no_repo_key}` with its mark kept: a move of Linear alone would be drift, which the drift
-  check moves back (MOT-93, TP-1565).
+  through and the record holds `Done`. An issue with no repo key has no record to move, so it is not
+  moved at all and comes back `{:error, :no_repo_key}` with its mark kept: a move of Linear alone
+  would be drift, which the drift check moves back (MOT-93, TP-1565).
   """
   @spec close(Issue.t(), module()) :: :ok | {:error, term()}
   def close(%Issue{id: issue_id, repo_key: repo_key} = issue, tracker) when is_binary(repo_key) and repo_key != "" do
@@ -235,12 +304,16 @@ defmodule SymphonyElixir.SubIssueWait do
 
     with :ok <- TransitionGuard.perform(issue_id, :sub_issues_done, ctx, tracker: tracker) do
       Logger.info("Moved issue to #{@done_state}: every sub-issue is finished #{issue_fields(issue)}")
-      _ = RunStore.delete_merged_wait(issue_id)
+      forget_merge(repo_key, issue_id)
       comment(issue, close_comment(issue), tracker)
     end
   end
 
   def close(%Issue{}, _tracker), do: {:error, :no_repo_key}
+
+  defp forget_merge(repo_key, issue_id) do
+    if TicketSignals.recorded_phase(repo_key, issue_id) == {:ok, @done_state}, do: RunStore.delete_merged_wait(issue_id)
+  end
 
   @doc false
   @spec reset_for_test(String.t()) :: :ok
@@ -259,6 +332,16 @@ defmodule SymphonyElixir.SubIssueWait do
     end
   end
 
+  # The sub-issues that keep a merged issue from closing: a groomed ticket's, every one; any other
+  # issue's, the open ones a person or a plan's approval started, and none for a `breakdown` parent.
+  defp holding_sub_issues(%Issue{sub_issues: sub_issues} = issue, terminal_states) do
+    cond do
+      groomed?(issue) -> List.wrap(if(is_list(sub_issues), do: sub_issues))
+      Issue.breakdown?(issue) -> []
+      true -> started_sub_issues(issue, terminal_states)
+    end
+  end
+
   defp merged?(%Issue{id: issue_id} = issue), do: RunStore.merged_wait?(issue_id) == true or merged_pull_request?(issue)
 
   defp merged_pull_request?(%Issue{id: issue_id, repo_key: repo_key}) when is_binary(issue_id) and is_binary(repo_key),
@@ -273,6 +356,25 @@ defmodule SymphonyElixir.SubIssueWait do
   defp backlog_sub_issue?(_sub_issue), do: false
 
   defp wait_comment(issue, waiting_state, terminal_states) do
+    if groomed?(issue),
+      do: groomed_wait_comment(issue, waiting_state, terminal_states),
+      else: started_wait_comment(issue, waiting_state, terminal_states)
+  end
+
+  defp groomed_wait_comment(issue, waiting_state, terminal_states) do
+    check = "the Conductor checks the whole ticket against its plan, and it moves to #{@done_state}"
+
+    case issue |> Issue.open_sub_issues(terminal_states) |> Enum.map_join(", ", &sub_issue_label/1) do
+      "" ->
+        "#{waiting_state}: the PR merged and every sub-ticket has ended. Next, #{check}."
+
+      open ->
+        "#{waiting_state}: the PR merged with sub-tickets still open (#{open}). Once each one is #{@done_state} or " <>
+          "canceled, one in #{@backlog_state} included, #{check}."
+    end
+  end
+
+  defp started_wait_comment(issue, waiting_state, terminal_states) do
     open = issue |> started_sub_issues(terminal_states) |> Enum.map_join(", ", &sub_issue_label/1)
 
     "#{waiting_state}: the PR merged with sub-tickets still open (#{open}), so this ticket moves to " <>

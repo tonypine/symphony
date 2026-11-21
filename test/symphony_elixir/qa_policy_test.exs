@@ -209,6 +209,79 @@ defmodule SymphonyElixir.QaPolicyTest do
       end
     end
 
+    test "a groomed ticket whose plan's layers hold the screen or the Gallery always has something on screen" do
+      :ok = RunStore.clear()
+      settings = settings!(%{"auto_review" => %{"playbooks" => %{"macos_app" => %{"build" => "make app", "app" => "build/App.app"}}}})
+      backend = ["lib/symphony_elixir/orchestrator.ex"]
+      ticket = issue(%{labels: ["qa:macos_app"]})
+      :ok = RunStore.put_ticket_state(%{repo_key: "repo-a", issue_id: ticket.id, issue_identifier: ticket.identifier})
+
+      plan = fn layers, checks ->
+        %{
+          reason: "Grooming",
+          by: "grooming",
+          shape: "single",
+          layers: layers,
+          summary: "The Director shows the decision.",
+          text: "Draw the decision in the Director.",
+          checks: checks,
+          size: %{tokens: 100_000, runs: 1}
+        }
+      end
+
+      outcome = %{id: "c1", kind: "outcome", statement: "The decision is stored.", proof: "test"}
+      walk = %{id: "c2", kind: "qa", statement: "The Director shows it.", proof: "qa", action: "Open it", expect: "It shows"}
+
+      # Layers that are not on screen, and no QA check: today's diff-based policy decides.
+      {:ok, _plan} = SymphonyElixir.TicketPlan.write("repo-a", ticket.id, plan.(["engine"], [outcome]))
+      assert {:run, [%{kind: "macos_app", scope: :none}], _reason} = QaPolicy.decision(ticket, settings, backend)
+
+      for layers <- [["screen"], ["engine", "gallery"]] do
+        {:ok, _plan} = SymphonyElixir.TicketPlan.write("repo-a", ticket.id, plan.(layers, [outcome]))
+        assert {:run, [playbook], "the change delivers or updates a user journey"} = QaPolicy.decision(ticket, settings, backend)
+        refute Map.has_key?(playbook, :scope)
+      end
+
+      # A QA check is something to walk, as a `## User walkthrough` is.
+      {:ok, _plan} = SymphonyElixir.TicketPlan.write("repo-a", ticket.id, plan.(["engine"], [outcome, walk]))
+      assert {:run, [playbook], "the change delivers or updates a user journey"} = QaPolicy.decision(ticket, settings, backend)
+      refute Map.has_key?(playbook, :scope)
+    end
+
+    test "a groomed ticket with an open check only QA proves is never skipped, by a label or by a docs-only diff" do
+      :ok = RunStore.clear()
+      settings = settings!(%{"auto_review" => %{"playbooks" => %{"macos_app" => %{"build" => "make app", "app" => "build/App.app"}}}})
+      docs = ["docs/configuration.md"]
+      ticket = issue(%{labels: ["qa:skip"]})
+      :ok = RunStore.put_ticket_state(%{repo_key: "repo-a", issue_id: ticket.id, issue_identifier: ticket.identifier})
+
+      plan = fn checks ->
+        size = %{tokens: 1, runs: 1}
+        %{reason: "Grooming", by: "grooming", shape: "single", layers: ["docs"], summary: "s", text: "t", checks: checks, size: size}
+      end
+
+      outcome = %{kind: "outcome", statement: "The page reads well.", proof: "test"}
+      seen = %{kind: "outcome", statement: "The Director shows the decision.", proof: "qa"}
+      designed = %{kind: "evidence", statement: "It matches the design.", proof: "design"}
+
+      # Nothing QA owes: the label and the diff skip it as they did.
+      {:ok, _plan} = SymphonyElixir.TicketPlan.write("repo-a", ticket.id, plan.([outcome]))
+      assert {:skip, "the issue has the `qa:skip` label"} = QaPolicy.decision(ticket, settings, docs)
+
+      {:ok, _plan} = SymphonyElixir.TicketPlan.write("repo-a", ticket.id, plan.([Map.put(outcome, :id, "c1"), seen, designed]))
+      assert {:run, playbooks, reason} = QaPolicy.decision(ticket, settings, docs)
+      assert "macos_app" in Enum.map(playbooks, & &1.kind)
+      assert reason =~ "the plan has open checks only QA proves (c2, c3), so QA is not skipped though the issue has the `qa:skip` label"
+      assert {:run, [_ | _], docs_reason} = QaPolicy.decision(%{ticket | labels: []}, settings, docs)
+      assert docs_reason =~ "though the PR only changes docs, tests"
+
+      # With no playbook on nothing can run it, and once QA proved them the skip stands again.
+      none = settings!(%{"auto_review" => %{"playbooks" => %{"cli" => %{"enabled" => false}}}})
+      assert {:skip, _reason} = QaPolicy.decision(ticket, none, docs)
+      for id <- ["c2", "c3"], do: {:ok, _proved} = SymphonyElixir.TicketChecks.prove("repo-a", ticket.id, %{check_id: id, by: "qa"})
+      assert {:skip, "the issue has the `qa:skip` label"} = QaPolicy.decision(ticket, settings, docs)
+    end
+
     test "marks a macos_app pass live when the PR changes the server and the walkthrough names the Director" do
       live = %{"start_cmd" => "scripts/qa-server-start.sh", "paths" => ["lib/**", "config/**"], "walkthrough_mentions" => ["Director"]}
       settings = live_settings!(live)
