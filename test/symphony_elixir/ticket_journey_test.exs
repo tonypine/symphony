@@ -319,9 +319,14 @@ defmodule SymphonyElixir.TicketJourneyTest do
     end
 
     test "a stored check that still carries after_merge is an open check like any other" do
-      marked = %{id: "c5", kind: "outcome", statement: "The release shows.", proof: "test", after_merge: true}
-      walked = %{id: "c6", kind: "qa", statement: "The release opens.", proof: "qa", action: "Open it", expect: "It opens", after_merge: true}
-      plan!(%{@plan | checks: @plan.checks ++ [marked, walked]})
+      marked = %{id: "c5", kind: "outcome", statement: "The release shows.", proof: "test"}
+      walked = %{id: "c6", kind: "qa", statement: "The release opens.", proof: "qa", action: "Open it", expect: "It opens"}
+      assert {:ok, written} = TicketPlan.write(@repo_key, @issue_id, %{@plan | checks: @plan.checks ++ [marked, walked]}, new_ask: true)
+
+      # A plan stored while the marker existed still carries it on its checks.
+      checks = Enum.map(written.payload.checks, &if(&1.id in ["c5", "c6"], do: Map.put(&1, :after_merge, true), else: &1))
+      stored = %{written | id: "evt-marked", seq: nil, idempotency: nil, payload: %{written.payload | checks: checks}}
+      assert {:ok, _stored} = RunStore.append_ticket_event(stored)
 
       assert Enum.map(TicketJourney.unproved(issue()), & &1.id) == ["c1", "c3", "c5"]
       assert Enum.map(TicketJourney.owed_by_qa(issue()), & &1.id) == ["c2", "c4", "c6"]
