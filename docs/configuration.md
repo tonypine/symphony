@@ -3694,8 +3694,12 @@ exactly as before.
   again" or "Close it as it is"), and the ticket stays in the waiting state until they answer. That
   is so when the check answered `done: false` and added nothing, when none of the sub-tickets it
   wanted could be created, when the move to `Done` failed, and when the turn failed or could not be
-  read 2 times in a row (each counted in a status note). While no provider of `runs.conductor` can
-  take a run, the next poll asks again.
+  read 2 times in a row (each counted in a status note).
+- **Waiting for the Conductor.** While no provider of `runs.conductor` can take a run (paused, or
+  at its usage limit), a turn the ticket is owed waits, and the ticket says so in one status note
+  per wait ("Waiting for the Conductor: …"). Symphony does not read the ticket from the tracker
+  while it waits. A final check that has waited more than 30 minutes asks the person, once per
+  wait: "Keep waiting" or "Close it on its sub-tickets".
 - **A sub-ticket left in Backlog.** A sub-ticket Symphony created in `Backlog` whose link or move
   to `Todo` failed is said on its parent in a status note. While the parent waits, each poll tries
   the link and the move again; after 3 failed tries in a row the person is asked ("Try again" or

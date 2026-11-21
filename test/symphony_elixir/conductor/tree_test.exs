@@ -632,6 +632,51 @@ defmodule SymphonyElixir.Conductor.TreeTest do
       assert Tree.rounds(Facts.events(bare.id)) == 0
     end
 
+    test "while no provider can take it, the ticket says that it waits, once, and after 30 minutes asks the person once", ctx do
+      no_turn = fn _plan, _issue, _run_id, _prompt -> flunk("no turn runs") end
+      held = [settings: @on, turn: no_turn, available?: fn _profile -> false end]
+      [%{provider: provider} | _fallbacks] = Config.runs(Config.settings!(), :conductor)
+
+      assert Conductor.unavailable("default", fn _profile -> false end, settings: @on) == to_string(provider)
+      assert Conductor.unavailable("default", fn _profile -> true end, settings: @on) == nil
+      assert Conductor.unavailable("default", fn _profile -> false end, settings: @off) == nil
+      assert Conductor.unavailable(nil, fn _profile -> false end, settings: @on) == nil
+      assert Conductor.unavailable("no-such-repo", fn _profile -> false end, settings: @on) == nil
+
+      for _poll <- 1..2, do: assert(Conductor.tend(ctx.parent, "final_check", "default", held) == :ok)
+      assert ["Waiting for the Conductor: #{provider} is paused or at its usage limit."] == status_notes(ctx.issue_id)
+      assert Questions.open({:ticket, "default", ctx.issue_id}) == []
+
+      # A look at the plan waits as long as it must, and asks nothing.
+      later = DateTime.add(DateTime.utc_now(), 31, :minute)
+      assert Conductor.wait(ctx.parent, "sub_ticket_ended", "default", "openai", now: later) == :ok
+      assert Questions.open({:ticket, "default", ctx.issue_id}) == []
+
+      assert Conductor.wait(ctx.parent, "final_check", "default", "openai", now: later) == :ok
+      assert [%{title: "The final check waits for the Conductor", options: options}] = Questions.open({:ticket, "default", ctx.issue_id})
+      assert [%{label: "Keep waiting"}, %{label: "Close it on its sub-tickets", move: %{to: "Done"}}] = options
+      assert [_waiting, "The final check still waits for the Conductor, so Symphony asked the person."] = status_notes(ctx.issue_id)
+      assert Tree.waiting("default", ctx.issue_id, "final_check", "openai", later) == :ok
+
+      # A turn ran: the next time the provider is away is a wait of its own.
+      capture_log(fn -> assert final(ctx, {:error, :boom, 1}) == :ok end)
+      assert Tree.waiting("default", ctx.issue_id, "final_check", "openai") == :ok
+      assert List.last(status_notes(ctx.issue_id)) == "Waiting for the Conductor: openai is paused or at its usage limit."
+      assert {:ask, {:waiting, 2}, _question} = Tree.waiting("default", ctx.issue_id, "final_check", "openai", DateTime.add(later, 31, :minute))
+    end
+
+    test "the poll reads no waiting ticket from the tracker for a turn no provider can take", ctx do
+      append_symphony_yml!("conductor:\n  enabled: true\n")
+      providers = for profile <- Config.runs(Config.settings!(), :conductor), into: MapSet.new(), do: profile.provider
+      state = %Orchestrator.State{max_concurrent_agents: 1, running: %{}, claimed: MapSet.new(), retry_attempts: %{}, paused_providers: providers}
+      mailbox()
+
+      Orchestrator.tend_groomed_parents_for_test([ctx.parent], state)
+
+      assert mailbox() == []
+      assert ["Waiting for the Conductor: " <> _provider] = status_notes(ctx.issue_id)
+    end
+
     test "a sub-ticket that can't be linked is not started, and one that can't be started is said on the parent too", ctx do
       Application.put_env(:symphony_elixir, :memory_tracker_add_blocked_by_result, {:error, :refused})
       on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_add_blocked_by_result) end)

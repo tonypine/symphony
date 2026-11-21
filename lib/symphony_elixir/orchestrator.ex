@@ -4028,7 +4028,9 @@ defmodule SymphonyElixir.Orchestrator do
          false <- parent_busy?(state, :tree_turn, issue_id) or hold?(issue),
          junction when is_binary(junction) <- tree_junction(issue, terminal_states) do
       available? = conductor_available?(state, issue)
-      turn = fn -> tend_fresh(issue, junction, hold_repo_key(issue), terminal_states, available?) end
+      repo_key = hold_repo_key(issue)
+
+      turn = tree_turn(issue, junction, repo_key, terminal_states, available?)
       start_tracker_task(state, %{kind: :tree_turn, issue_ids: [issue_id]}, turn)
     else
       _not_owed -> state
@@ -4064,6 +4066,14 @@ defmodule SymphonyElixir.Orchestrator do
       MapSet.member?(state.conductor_owed, issue_id) -> tend_owed_turn(state, issue_id)
       result == {:ok, :owed} -> %{state | conductor_owed: MapSet.put(state.conductor_owed, issue_id)}
       true -> state
+    end
+  end
+
+  # A turn no provider can take now is not worth a read of the ticket: it says that it waits.
+  defp tree_turn(issue, junction, repo_key, terminal_states, available?) do
+    case junction != "start" && Conductor.unavailable(repo_key, available?) do
+      provider when is_binary(provider) -> fn -> Conductor.wait(issue, junction, repo_key, provider) end
+      _can_run -> fn -> tend_fresh(issue, junction, repo_key, terminal_states, available?) end
     end
   end
 

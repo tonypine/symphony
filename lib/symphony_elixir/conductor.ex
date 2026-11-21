@@ -432,7 +432,8 @@ defmodule SymphonyElixir.Conductor do
   @doc """
   The turn a groomed ticket with sub-tickets is owed outside any dispatch (`Tree.due/3`), run now:
   `sub_ticket_ended` when one of them ended and others are open, `final_check` once the last one
-  ended. With `start` in place of a junction no turn runs: a sub-ticket Symphony created and left
+  ended. While no provider of `runs.conductor` can take the turn, the ticket says that it waits
+  (`wait/5`). With `start` in place of a junction no turn runs: a sub-ticket Symphony created and left
   in `Backlog` is linked and started (`Tree.start_left/3`). Nothing runs while the Conductor or the junction is
   off, or no provider of `runs.conductor` can take a run now: the next poll asks again. The turn's
   answer is carried out as it is recorded (`Tree.apply/3`). A final check that did not conclude
@@ -460,9 +461,40 @@ defmodule SymphonyElixir.Conductor do
   defp tend_junction(%Issue{id: issue_id} = issue, junction, repo_key, opts) do
     case plan_with(issue_id, repo_key, opts, fn _events -> junction end) do
       nil -> :ok
-      %{unavailable: _provider} -> :ok
+      %{unavailable: provider} -> wait(issue, junction, repo_key, provider, opts)
       plan -> tend_alone(plan, issue, opts)
     end
+  end
+
+  @doc """
+  The provider that keeps the Conductor's turns on `repo_key`'s tickets waiting now, or nil: the
+  Conductor is on and no profile of `runs.conductor` can take a run (`available?`, as `plan/4`'s).
+  The orchestrator asks before it reads a waiting ticket from the tracker for a turn that cannot run.
+  """
+  @spec unavailable(String.t() | nil, (Run.t() -> boolean()), keyword()) :: String.t() | nil
+  def unavailable(repo_key, available?, opts \\ []) do
+    with true <- is_binary(repo_key) and enabled?(Keyword.get_lazy(opts, :settings, &Config.conductor_settings/0)),
+         {:held, provider} <- profile(repo_key, available?) do
+      to_string(provider)
+    else
+      _available_or_off -> nil
+    end
+  rescue
+    _error -> nil
+  end
+
+  @doc """
+  The turn `issue` is owed at `junction` cannot run because `provider` takes no run now: the ticket
+  says that it waits (`Tree.waiting/5`, once per wait), and a final check that has waited more than
+  30 minutes asks the person once. Always `:ok`. `opts[:now]` is the time.
+  """
+  @spec wait(Issue.t(), String.t(), String.t() | nil, String.t(), keyword()) :: :ok
+  def wait(%Issue{id: issue_id} = issue, junction, repo_key, provider, opts \\ []) do
+    plan = %{junction: junction, issue_id: issue_id, repo_key: repo_key}
+    now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
+    say = fn -> ask_about(Tree.waiting(repo_key, issue_id, junction, provider, now), plan, issue) end
+    _said_or_busy = exclusive(issue_id, :skip, say)
+    :ok
   end
 
   # While another turn works on the ticket (a message's), nothing runs: the next poll asks again.

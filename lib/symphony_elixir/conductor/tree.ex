@@ -32,6 +32,14 @@ defmodule SymphonyElixir.Conductor.Tree do
   A split that fails is counted (`failed/3`, a status note under `grooming.split_try:<n>`): it is
   tried again at the next dispatch, and from the third failure on the person is asked each time.
 
+  ## Waiting for the Conductor
+
+  A turn the ticket is owed while no provider of `runs.conductor` can take a run (it is paused, or
+  at its usage limit) waits, and the ticket says why (`waiting/4`): one status note per wait,
+  "Waiting for the Conductor: ...". A wait ends when a Conductor turn runs on the ticket. A final
+  check that has waited more than 30 minutes asks the person, once per wait: close the ticket on
+  its sub-tickets, or keep waiting.
+
   ## A sub-ticket left in Backlog
 
   A sub-ticket Symphony created in `Backlog` whose link or move to `Todo` failed (`start/5`) would
@@ -123,10 +131,17 @@ defmodule SymphonyElixir.Conductor.Tree do
   @start_asked_key "tree.start_asked:"
   @started_key "tree.started:"
   @start_tries 3
+  @wait_key "conductor.wait:"
+  @wait_asked_key "conductor.wait_asked:"
+  # How long a final check may wait on a provider before the person is asked, once per wait.
+  @wait_ask_after_minutes 30
   @limit_asked_key "tree.limit_asked"
 
   @typedoc "What a waiting groomed ticket is owed (`due/3`)."
   @type owed :: :close | :final_check | :sub_ticket_ended | :start | nil
+
+  @typedoc "What Symphony asked the person about a ticket's tree (`asked/3`)."
+  @type asked :: :rounds | :stuck | :limit | {:start, String.t()} | {:waiting, pos_integer()}
 
   @typedoc "A sub-ticket Symphony created: its id, its identifier and the repo it belongs to."
   @type child :: %{id: String.t(), identifier: String.t(), repo: String.t()}
@@ -1080,10 +1095,14 @@ defmodule SymphonyElixir.Conductor.Tree do
   about a sub-ticket the ticket may not get (`:limit`), which is asked once per ticket, or one that
   could not be started (`{:start, its id}`), after which its failed tries count from zero.
   """
-  @spec asked(String.t(), String.t(), :rounds | :stuck | :limit | {:start, String.t()}) :: :ok
+  @spec asked(String.t(), String.t(), asked()) :: :ok
   def asked(repo_key, issue_id, :rounds) do
     made = rounds(Facts.events(issue_id))
     note(repo_key, issue_id, "After #{made} rounds the final check still wanted to add sub-tickets, so Symphony asked the person.", "#{@asked_key}#{made}")
+  end
+
+  def asked(repo_key, issue_id, {:waiting, wait}) do
+    note(repo_key, issue_id, "The final check still waits for the Conductor, so Symphony asked the person.", "#{@wait_asked_key}#{wait}")
   end
 
   def asked(repo_key, issue_id, {:start, child_id}) do
@@ -1099,6 +1118,49 @@ defmodule SymphonyElixir.Conductor.Tree do
   def asked(repo_key, issue_id, :stuck) do
     asked = keyed(Facts.events(issue_id), @stuck_key) + 1
     note(repo_key, issue_id, "The final check could not close this ticket, so Symphony asked the person.", "#{@stuck_key}#{asked}")
+  end
+
+  @doc """
+  Says on the ticket `issue_id` that the turn it is owed at `junction` waits, because `provider`
+  cannot take a run now: a status note, written once per wait (see the module doc). `:ok`, or
+  `{:ask, {:waiting, n}, question}` once a final check has waited more than
+  #{@wait_ask_after_minutes} minutes and the person was not asked in this wait. `now` is the time.
+  """
+  @spec waiting(String.t() | nil, String.t(), String.t(), String.t(), DateTime.t()) :: :ok | {:ask, asked(), map()}
+  def waiting(repo_key, issue_id, junction, provider, now \\ DateTime.utc_now()) do
+    events = Facts.events(issue_id)
+    # The wait in progress: its note, unless a Conductor turn ran on the ticket since.
+    since = events |> Enum.reverse() |> Enum.take_while(&(not conductor_run?(&1))) |> Enum.find(&keyed?(&1, @wait_key))
+    waits = keyed(events, @wait_key)
+
+    cond do
+      is_nil(since) ->
+        note(repo_key, issue_id, "Waiting for the Conductor: #{provider} is paused or at its usage limit.", "#{@wait_key}#{waits + 1}")
+
+      junction == "final_check" and DateTime.diff(now, since.at, :minute) > @wait_ask_after_minutes and keyed(events, "#{@wait_asked_key}#{waits}") == 0 ->
+        {:ask, {:waiting, waits}, waiting_question(provider)}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp conductor_run?(%{type: "run.started", payload: payload}), do: Map.get(payload, :run_kind) == "conductor"
+  defp conductor_run?(_event), do: false
+
+  defp waiting_question(provider) do
+    %{
+      title: "The final check waits for the Conductor",
+      question:
+        "Every sub-ticket of this ticket ended, and its final check has waited more than #{@wait_ask_after_minutes} minutes: #{provider} is paused or at its usage limit. Close the ticket on its sub-tickets, or keep waiting?",
+      why: "The final check needs the Conductor, and nothing says when its provider takes runs again.",
+      if_unanswered: "The ticket stays in the waiting state until the provider takes runs again.",
+      recommendation_reason: "The final check is what says the ticket does what was asked.",
+      options: [
+        %{label: "Keep waiting", effect: "The final check runs once the provider takes runs again.", recommended: true, action: "continue"},
+        %{label: "Close it on its sub-tickets", effect: "The ticket moves to #{@done} without a final check.", recommended: false, action: "close"}
+      ]
+    }
   end
 
   @doc """
