@@ -355,6 +355,32 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       refute_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
     end
 
+    test "a check marked after the merge never refuses the handoff nor asks the person, however many coding runs" do
+      checks = [
+        %{id: "c1", kind: "outcome", statement: "The handoff waits.", proof: "test"},
+        %{id: "c2", kind: "outcome", statement: "The release run on main is green.", proof: "test", after_merge: true}
+      ]
+
+      plan = %{reason: "Grooming", by: "grooming", shape: "single", layers: ["engine"], summary: "s", text: "t", checks: checks}
+      {:ok, _plan} = SymphonyElixir.TicketPlan.write("default", "issue-progress", Map.put(plan, :size, %{tokens: 1, runs: 1}))
+      proof = %{check_id: "c1", by: "test", test: "test/handoff_test.exs"}
+      {:ok, _proved} = SymphonyElixir.TicketChecks.prove("default", "issue-progress", proof, actor: {:agent, "run-1", "rework"})
+      ticket = {:ticket, "default", "issue-progress"}
+
+      for run_id <- ["run-a", "run-b", "run-c"] do
+        started = %{run_id: run_id, run_kind: "rework"}
+        {:ok, _started} = SymphonyElixir.TicketEvents.record("default", "issue-progress", "run.started", started, run_id: run_id)
+        assert :ok = SymphonyElixir.Handoff.emit("default", "issue-progress", %{head: "sha-rework", branch: "auto/TP-337"})
+
+        assert :ok = run_issue!("Rework", heads: ["sha-old", "sha-rework"], repos: designed_repos(), runner_opts: [run_id: run_id])
+        assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+      end
+
+      assert SymphonyElixir.Questions.open(ticket) == []
+      assert SymphonyElixir.TicketEvents.query("issue-progress", types: ["note"]) == []
+      assert [%{id: "c2", state: :open}] = SymphonyElixir.TicketChecks.open("issue-progress")
+    end
+
     test "the explicit handoff signal moves the ticket to Code Review" do
       assert :ok = SymphonyElixir.Handoff.emit("default", "issue-progress", %{head: "sha-rework", branch: "auto/TP-337"})
 

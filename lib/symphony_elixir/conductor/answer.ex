@@ -45,8 +45,10 @@ defmodule SymphonyElixir.Conductor.Answer do
       split, `sub_tickets` (at least one, at most 12). A check holds a `kind` (`outcome`, `qa`, `evidence`), a
       `statement` (cut to 600) and its `proof` (`test`, `qa`, `design`, `attached`); a `qa` check
       also the `action` and what to `expect`, and any check may say the app `state` it needs (each
-      cut to 400), the `size` it is walked at (`normal`, `wide`) and a Gallery `story`. A sub-ticket
-      holds a `title` (cut to 120) and an `ask` (cut to 4,000), the sibling keys it waits `after`,
+      cut to 400), the `size` it is walked at (`normal`, `wide`) and a Gallery `story`, and be
+      marked `after_merge: true` when it can only be seen once the ticket's own pull request has
+      merged (any other value reads as unmarked; `SymphonyElixir.TicketChecks.after_merge?/1`). A
+      sub-ticket holds a `title` (cut to 120) and an `ask` (cut to 4,000), the sibling keys it waits `after`,
       a `repo`, and the `identifier` of a sub-ticket the ticket already has, which is adopted
       instead of created. A check keeps the `id` it gives and is left without one otherwise:
       `SymphonyElixir.TicketPlan.write/4` names the checks. A sub-ticket with no `key` gets
@@ -415,6 +417,7 @@ defmodule SymphonyElixir.Conductor.Answer do
       |> put_text(:expect, check, @check_walk_max, where)
       |> put_text(:story, check, 200, where)
       |> put_present(:size, if(Map.get(check, "size") in @check_sizes, do: Map.get(check, "size")))
+      |> put_present(:after_merge, if(Map.get(check, "after_merge") == true, do: true))
       |> then(&{:ok, &1})
     end
   end

@@ -115,7 +115,7 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
         "name" => "ticket_plan",
         "description" =>
           "Read what the current ticket works from: `ask` (what a person asked for, word for word, oldest first), `plan` (the current plan: its version, summary, text, shape, layers and size; null when the ticket has none), " <>
-            "`checks` (the plan's checks, each with its id, kind, statement, how it is proved and its `state`: `open`, `proved` or `waived`) and `notes` (the tagged notes of this ticket and of its parent). " <>
+            "`checks` (the plan's checks, each with its id, kind, statement, how it is proved and its `state`: `open`, `proved` or `waived`; `after_merge: true` on a check that can only be seen once the ticket's own pull request has merged, which no run proves before the merge) and `notes` (the tagged notes of this ticket and of its parent). " <>
             "It takes no argument.",
         "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
       }
