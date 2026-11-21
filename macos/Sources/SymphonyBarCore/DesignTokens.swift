@@ -2217,6 +2217,15 @@ public enum DesignTokens {
         public static let groupsGap = Space.s6
         /// The group title's letter spacing, as a fraction of its size: the key-value list's group heading's.
         public static let titleTracking = KeyValue.groupHeadingTracking
+        /// A text field's width at a row's trailing end (a path, a name, a model), and a pair's (a variable's name
+        /// and value) on a line of its own (TP-1576).
+        public static let fieldWidth: Double = 280
+        /// A page of settings: its groups at most this wide, this far from the page's edges (TP-1576).
+        public static let pageMaxWidth: Double = 760
+        public static let pageInset = Space.s6
+        /// A preview inside a group (the step list as `symphony workflow preview` prints it): its least and most height.
+        public static let previewMinHeight: Double = 80
+        public static let previewMaxHeight: Double = 260
 
         /// What shows under the label: the reason while the row is off, else the error, else the help; one at most.
         public static func footnote(help: String?, error: String?, disabledReason: String?) -> Field.Footnote? {
@@ -2252,6 +2261,12 @@ public enum DesignTokens {
             let (sum, overflow) = clamp(value, to: range).addingReportingOverflow(by)
             if overflow { return by > 0 ? range.upperBound : range.lowerBound }
             return clamp(sum, to: range)
+        }
+
+        /// The values a field's typed text may set: `accepts` widened to hold `range`, or `range` alone.
+        public static func typedRange(_ range: ClosedRange<Int>, accepts: ClosedRange<Int>?) -> ClosedRange<Int> {
+            guard let accepts else { return range }
+            return min(accepts.lowerBound, range.lowerBound)...max(accepts.upperBound, range.upperBound)
         }
 
         /// Whether a step of `by` changes the value: false at the end of the range it moves toward.

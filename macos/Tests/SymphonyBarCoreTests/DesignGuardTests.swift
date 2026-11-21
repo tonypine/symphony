@@ -356,6 +356,60 @@ final class DesignGuardTests: XCTestCase {
         XCTAssertTrue(failures[0].hasPrefix("View.swift draws with 1 raw table value(s) and is not in the baseline"), failures[0])
     }
 
+    // MARK: - Stock forms and controls (TP-1576)
+
+    func testAStockFormToggleStepperOrDatePickerCounts() {
+        let found = scan("""
+        Form {
+        Toggle("Start on launch", isOn: $start)
+        Stepper("Minutes", value: $minutes, in: 1...60)
+        DatePicker("Time", selection: $date, displayedComponents: .hourAndMinute)
+        SwiftUI.Toggle(isOn: $on) { Text("On") }
+        Form(content: { rows })
+        """).filter { $0.kind == .control }
+        XCTAssertEqual(found.map(\.line), [1, 2, 3, 4, 5, 6])
+        XCTAssertEqual(found.map(\.value), ["Form", "Toggle", "Stepper", "DatePicker", "SwiftUI.Toggle", "Form"])
+        XCTAssertEqual(found[1].message, "View.swift:2: control bypass Toggle: use `DirectorSwitch` in a `SettingsRow`, or `DirectorToggle`")
+        XCTAssertEqual(found[0].use, "`SettingsGroup`s of `SettingsRow`s in a scroll view")
+        XCTAssertEqual(found[2].use, "`NumberField`, whose stepper is the catalog's")
+        XCTAssertEqual(found[3].use, "`TimeField` for a time of day")
+    }
+
+    func testTheSharedControlsAndLongerNamesDoNotCountAsControls() {
+        XCTAssertEqual(scan("""
+        DirectorToggle("Notify me", isOn: $on)
+        DirectorSwitch(isOn: $on)
+        NumberField(value: $minutes, in: 1...60)
+        TimeField(time: $time)
+        SettingsGroup("Updates") {
+        FormRow(title: "Name") {
+        .toggleStyle(.switch)
+        .formStyle(.grouped)
+        // Toggle("in a comment", isOn: $x)
+        Text("Form {")
+        """).filter { $0.kind == .control }, [])
+    }
+
+    func testTheControlKindIsABaselineKind() throws {
+        let counts: DesignGuard.Counts = ["SymphonyBar/A.swift": [.table: 1, .control: 2]]
+        XCTAssertEqual(try DesignGuard.parseBaseline(DesignGuard.formatBaseline(counts)), counts)
+        XCTAssertTrue(DesignGuard.Kind.guarded.contains(.control))
+        XCTAssertTrue(DesignGuard.formatBaseline(counts).hasSuffix("SymphonyBar/A.swift table 1\nSymphonyBar/A.swift control 2\n"))
+        let failures = DesignGuard.failures(bypasses: scan("Stepper(\"Minutes\", value: $minutes)"), baseline: [:])
+        XCTAssertEqual(failures.count, 1)
+        XCTAssertTrue(failures[0].hasPrefix("View.swift draws with 1 raw control value(s) and is not in the baseline"), failures[0])
+    }
+
+    /// The Settings page and the sections it draws are built of the design system's components alone: the guard counts
+    /// nothing in them, of any kind, so a stock form, control, field, picker or unstyled button there fails it.
+    func testTheSettingsPageHoldsNoStockControl() throws {
+        let files = ["SymphonyBar/SettingsView.swift", "SymphonyBar/ConductorSection.swift", "SymphonyBar/PhasesSection.swift"]
+        let bypasses = try DesignGuard.scan(sources: Self.sources).filter { files.contains($0.file) && $0.kind != .frame }
+        XCTAssertEqual(bypasses.map(\.message), [])
+        let baseline = try DesignGuard.parseBaseline(String(contentsOf: Self.baselineFile, encoding: .utf8))
+        for file in files { XCTAssertNil(baseline[file], "\(file) is in the baseline") }
+    }
+
     // MARK: - What does not count
 
     func testTokensAndComponentsDoNotCount() {

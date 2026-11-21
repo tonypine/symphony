@@ -35,9 +35,13 @@ final class SettingsPage: ObservableObject {
     @Published private(set) var model: SettingsViewModel?
     /// The section the page shows.
     @Published var section: SettingsSection = .first
-    /// The last Save stored everything and nothing was edited since: shown as "Saved.". The next Save (and so a
+    /// The last Save stored everything and nothing was edited since: shown as "Saved" on the Save bar. The next Save (and so a
     /// refused one), an edit, Revert and the window's close clear it.
     @Published private(set) var saved = false
+    /// The values edited since the form was read, by their place in the form's edits: the Save bar's count.
+    @Published private(set) var edited: Set<Int> = []
+    /// How many values were edited and not saved.
+    var changeCount: Int { edited.count }
     /// Clears `saved` on the shown form's next edit.
     private var editsWatch: AnyCancellable?
 
@@ -72,6 +76,7 @@ final class SettingsPage: ObservableObject {
         model = nil
         editsWatch = nil
         saved = false
+        edited = []
         section = .first
     }
 
@@ -80,8 +85,10 @@ final class SettingsPage: ObservableObject {
         model.onSettingsSaved = { [weak self] settings in self?.onSettingsSaved(settings) }
         model.budget = budget
         model.updateBlocker = updateBlocker
-        editsWatch = model.edits.sink { [weak self] in
+        edited = []
+        editsWatch = model.edits.sink { [weak self] place in
             if self?.saved == true { self?.saved = false }
+            self?.edited.insert(place)
         }
         self.model = model
     }

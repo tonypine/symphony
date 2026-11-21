@@ -52,11 +52,15 @@ struct FieldStepper: View {
 /// stepper and the Up and Down keys step by `step`; the half that would leave the range is off. VoiceOver reads the
 /// label and "30 minutes", and adjusts it by a step.
 ///
+/// `accepts` widens what typed text may set, for a page that says why a typed value is out of range or brings it in
+/// range itself with a note: the field then shows the typed value as it is, and the stepper still keeps to `range`.
+///
 /// `drawnAs` draws the field still in a state, for the Component Gallery; it is live otherwise.
 public struct NumberField: View {
     let label: String?
     @Binding var value: Int
     let range: ClosedRange<Int>
+    var accepts: ClosedRange<Int>?
     var step: Int
     var unit: String?
     var help: String?
@@ -77,13 +81,14 @@ public struct NumberField: View {
 
     /// `drawnStepperHover` draws a half of the stepper under the pointer, for the gallery: 1 for up, -1 for down.
     public init(
-        _ label: String? = nil, value: Binding<Int>, in range: ClosedRange<Int>, step: Int = 1, unit: String? = nil,
-        help: String? = nil, error: String? = nil, disabledReason: String? = nil, size: DesignTokens.Control = .medium,
-        drawnAs: DesignTokens.Field.State? = nil, drawnStepperHover: Int? = nil
+        _ label: String? = nil, value: Binding<Int>, in range: ClosedRange<Int>, accepts: ClosedRange<Int>? = nil, step: Int = 1,
+        unit: String? = nil, help: String? = nil, error: String? = nil, disabledReason: String? = nil,
+        size: DesignTokens.Control = .medium, drawnAs: DesignTokens.Field.State? = nil, drawnStepperHover: Int? = nil
     ) {
         self.label = label
         _value = value
         self.range = range
+        self.accepts = accepts
         self.step = max(step, 1)
         self.unit = unit
         self.help = help
@@ -108,7 +113,9 @@ public struct NumberField: View {
         return focused ? .focused : hovering ? .hover : .rest
     }
     private var still: Bool { drawnAs != nil || offscreenSnapshot }
-    private var shown: Int { DesignTokens.NumberField.clamp(value, to: range) }
+    /// The values typed text may set and the field shows: `accepts` when given, else the range.
+    var typedRange: ClosedRange<Int> { DesignTokens.NumberField.typedRange(range, accepts: accepts) }
+    private var shown: Int { DesignTokens.NumberField.clamp(value, to: typedRange) }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Field.gap) {
@@ -199,8 +206,8 @@ public struct NumberField: View {
 
     /// Reads the typed text: a whole number sets the value inside the range; anything else puts the value back.
     private func commit() {
-        if let typed = DesignTokens.NumberField.parse(text, in: range), typed != value { value = typed }
-        text = "\(DesignTokens.NumberField.clamp(value, to: range))"
+        if let typed = DesignTokens.NumberField.parse(text, in: typedRange), typed != value { value = typed }
+        text = "\(DesignTokens.NumberField.clamp(value, to: typedRange))"
     }
 
     private func stepBy(_ by: Int) {

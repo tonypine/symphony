@@ -1,6 +1,6 @@
 // The design-system components a Settings page is built of (TP-1574): the catalog's Toggle (its stories by the
 // catalog's names, `docs/design/catalog/stories.js`), and the number field, the time field, the settings row and its
-// group, and the in-page section list, which the catalog has no entry for. Each story is a variation of its own
+// group, the settings line (TP-1576) and the in-page section list, which the catalog has no entry for. Each story is a variation of its own
 // (`toggle-on`), so the gallery's board shows them together under their names. The resting stories are live: in the
 // gallery they can be clicked, typed in, stepped, hovered and focused; the hover, pressed, focus and error ones are
 // drawn in that state.
@@ -43,6 +43,18 @@ func numberFieldStory(
         NumberField(
             "Stop timeout", value: value, in: 1...120, unit: "seconds", help: "How long Symphony gets to stop before it is ended.",
             error: error, disabledReason: reason, drawnAs: state, drawnStepperHover: stepperHover
+        )
+    }
+    return AnyView(field.frame(width: fieldStoryWidth, alignment: .leading))
+}
+
+/// The stop timeout typed past its range on a page that says so: the field keeps 900, and the error says the range.
+@MainActor
+func numberFieldOutOfRangeStory() -> AnyView {
+    let field = LiveValue(value: 900) { value in
+        NumberField(
+            "Stop timeout", value: value, in: 1...600, accepts: Int.min...Int.max, unit: "seconds",
+            error: value.wrappedValue > 600 ? "The stop timeout must be between 1 and 600 seconds." : nil, drawnAs: .focused
         )
     }
     return AnyView(field.frame(width: fieldStoryWidth, alignment: .leading))
@@ -107,6 +119,45 @@ func settingsGroupStory(minutes: Int = 30) -> AnyView {
     return AnyView(UpdatesGroup(minutes: minutes).frame(width: settingsStoryWidth))
 }
 
+// MARK: - Settings line
+
+/// A group with a line that is no one setting: the words over its rows, an error line naming where its reason shows,
+/// and a variable's name and value with the button that removes it.
+@MainActor
+func settingsLineStory(_ kind: String) -> AnyView {
+    struct Lines: View {
+        let kind: String
+        @State var on = true
+        @State var name = "API_BASE_URL"
+        @State var value = "http://localhost:8090"
+
+        var body: some View {
+            SettingsGroup("Tickets") {
+                switch kind {
+                case "error":
+                    SettingsRow("Urgent") { DirectorSwitch(isOn: $on) }
+                    SettingsLine("symphony check rejected these ticket priorities; the reason shows above Save.", error: true)
+                case "with-fields":
+                    SettingsLine {
+                        HStack(spacing: DesignTokens.Space.s2) {
+                            DirectorTextField(nil, text: $name, placeholder: "NAME", mono: true).controlLabel("Name")
+                            DirectorTextField(nil, text: $value, placeholder: "Value").controlLabel("Value")
+                            IconButton("minus.circle", help: "Remove this variable", size: .small) {}
+                        }
+                    }
+                    SettingsLine {
+                        Button("Add Variable") {}.directorButton(.quiet, size: .small, glyph: "plus")
+                    }
+                default:
+                    SettingsLine("Only the chosen priorities start new work. With none chosen, every priority may.")
+                    SettingsRow("Urgent") { DirectorSwitch(isOn: $on) }
+                }
+            }
+        }
+    }
+    return AnyView(Lines(kind: kind).frame(width: settingsStoryWidth))
+}
+
 // MARK: - Section list
 
 /// Settings' sections, as the page will list them.
@@ -150,7 +201,7 @@ func sectionListStory(drawn: [SettingsSectionStory: DesignTokens.Interaction] = 
 
 // MARK: - Stories
 
-/// Every story of the five entries.
+/// Every story of the entries.
 @MainActor
 let settingsStories: [ComponentStory] = {
     func toggle(_ id: String, height: CGFloat = 72, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
@@ -169,6 +220,9 @@ let settingsStories: [ComponentStory] = {
     }
     func group(_ id: String, height: CGFloat = 300, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
         ComponentStory(component: "settings-group", id: id, title: "Settings group", width: settingsStoryWidth, height: height, draw: draw)
+    }
+    func line(_ id: String, height: CGFloat = 140, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
+        ComponentStory(component: "settings-line", id: id, title: "Settings line", width: settingsStoryWidth, height: height, draw: draw)
     }
     func sections(_ id: String, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
         ComponentStory(
@@ -190,6 +244,7 @@ let settingsStories: [ComponentStory] = {
         number("at-its-maximum") { numberFieldStory(120) },
         number("error") { numberFieldStory(1, state: .focused, error: "Give Symphony 5 seconds at least to stop.") },
         number("disabled-with-reason") { numberFieldStory(reason: "Symphony is stopping: the timeout is in use.") },
+        number("typed-out-of-range") { numberFieldOutOfRangeStory() },
         time("rest") { timeFieldStory() },
         time("hover") { timeFieldStory(state: .hover) },
         time("focused") { timeFieldStory(state: .focused, part: .hour) },
@@ -201,6 +256,9 @@ let settingsStories: [ComponentStory] = {
         row("label-alone", height: 56) { settingsRowStory() },
         group("updates") { settingsGroupStory() },
         group("with-an-error") { settingsGroupStory(minutes: 10) },
+        line("text") { settingsLineStory("text") },
+        line("error") { settingsLineStory("error") },
+        line("with-fields") { settingsLineStory("with-fields") },
         sections("rest") { sectionListStory() },
         sections("row-hover") { sectionListStory(drawn: [.notifications: .hover]) },
         sections("row-pressed") { sectionListStory(drawn: [.notifications: .press]) },

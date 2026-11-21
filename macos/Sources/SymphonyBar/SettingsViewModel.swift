@@ -161,10 +161,11 @@ final class SettingsViewModel: ObservableObject {
     /// True while the secrets read fills the form after it opened, so filling it is no edit.
     private var isFillingSecrets = false
 
-    /// Fires on each change to a value Save stores, made after the form was read: an edit. Reading the form (its
-    /// values in `init` and the secrets read that follows) fires nothing, and neither do the Phases group's choice of
-    /// list, the budget or the notes. The Settings page clears its "Saved." on it (TP-1575).
-    var edits: AnyPublisher<Void, Never> {
+    /// Fires on each change to a value Save stores, made after the form was read: an edit, with the place of the value
+    /// it changed, so the page counts the values edited. Reading the form (its values in `init` and the secrets read
+    /// that follows) fires nothing, and neither do the Phases group's choice of list, the budget or the notes. The
+    /// Settings page clears its "Saved." on it (TP-1575) and counts it on the Save bar (TP-1576).
+    var edits: AnyPublisher<Int, Never> {
         func edit<Value>(_ publisher: Published<Value>.Publisher) -> AnyPublisher<Void, Never> {
             publisher.dropFirst().map { _ in () }.eraseToAnyPublisher()
         }
@@ -185,8 +186,8 @@ final class SettingsViewModel: ObservableObject {
             edit($reportModel), edit($reportCadence), edit($reportTriggers),
             edit($conductor), edit($macAppQA),
         ]
-        return Publishers.MergeMany(values)
-            .filter { [weak self] in self?.isFillingSecrets == false }
+        return Publishers.MergeMany(values.enumerated().map { entry in entry.element.map { _ in entry.offset }.eraseToAnyPublisher() })
+            .filter { [weak self] _ in self?.isFillingSecrets == false }
             .eraseToAnyPublisher()
     }
 
@@ -678,6 +679,17 @@ final class SettingsViewModel: ObservableObject {
     /// or are being checked.
     var canSave: Bool {
         !isSaving && !isLoadingSecrets && formTokenLimits != nil && tokenLimitsError == nil && !isCheckingTokenLimits
+    }
+
+    /// Why Save can't save yet, while it isn't saving: the secrets still being read, or token limits that aren't valid
+    /// or are being checked. Nil when `canSave`, or while Save runs.
+    var saveBlockedReason: String? {
+        if isSaving { return nil }
+        if isLoadingSecrets { return StatusMenu.keychainWaitingLine }
+        if isCheckingTokenLimits { return "Checking the token limits with symphony check…" }
+        if formTokenLimits == nil { return "A token limit isn't a whole number; see \(SettingsBlock.agents.pointer)." }
+        if tokenLimitsError != nil { return "symphony check rejected these token limits; the reason shows above Save." }
+        return nil
     }
 
     /// The secrets as entered in the form, with the GitHub webhook secret as loaded: the form never shows or edits it.

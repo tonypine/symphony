@@ -19,11 +19,13 @@ public enum SaveBarState: Equatable {
 
 /// The catalog's Save bar: glass at the top of a page edited whole, what is edited on the left (`leading`, such as
 /// the For pop-up), then how much is not saved, Revert and Save on the right, with ⌘S beside it. Nothing the page
-/// shows is applied until Save; Save is off while nothing has changed or a save is under way. A refused save keeps
-/// every change and says why in the bar. The count is announced when it changes.
+/// shows is applied until Save; Save is off while nothing has changed or a save is under way, and while
+/// `saveDisabledReason` says why it can't save yet (a value out of range), with the reason as its help. A refused save
+/// keeps every change and says why in the bar. The count is announced when it changes.
 public struct SaveBar<Leading: View>: View {
     let changes: Int
     let state: SaveBarState
+    let saveDisabledReason: String?
     let onRevert: () -> Void
     let onSave: () -> Void
     let leading: Leading
@@ -32,18 +34,19 @@ public struct SaveBar<Leading: View>: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     public init(
-        changes: Int, state: SaveBarState = .editing, onRevert: @escaping () -> Void, onSave: @escaping () -> Void,
-        @ViewBuilder leading: () -> Leading
+        changes: Int, state: SaveBarState = .editing, saveDisabledReason: String? = nil, onRevert: @escaping () -> Void,
+        onSave: @escaping () -> Void, @ViewBuilder leading: () -> Leading
     ) {
         self.changes = max(0, changes)
         self.state = state
+        self.saveDisabledReason = saveDisabledReason
         self.onRevert = onRevert
         self.onSave = onSave
         self.leading = leading()
     }
 
-    /// Whether Save can be pressed: something changed and no save is under way.
-    var canSave: Bool { changes > 0 && state != .saving }
+    /// Whether Save can be pressed: something changed, no save is under way and nothing keeps it from saving.
+    var canSave: Bool { changes > 0 && state != .saving && saveDisabledReason == nil }
     /// Whether Revert shows: something changed and no save is under way.
     var showsRevert: Bool { changes > 0 && state != .saving }
 
@@ -63,6 +66,9 @@ public struct SaveBar<Leading: View>: View {
                 .buttonStyle(DirectorButtonStyle(kind: .primary, size: .small))
                 .keyboardShortcut("s", modifiers: .command)
                 .disabled(!canSave)
+                .notAllowedPointer(saveDisabledReason != nil)
+                .help(saveDisabledReason ?? "")
+                .accessibilityHint(saveDisabledReason ?? "")
             KeyboardHint(bar.shortcut, plain: true)
         }
         .padding(.vertical, bar.verticalPadding)
@@ -126,7 +132,12 @@ public struct SaveBar<Leading: View>: View {
 
 extension SaveBar where Leading == EmptyView {
     /// A Save bar with nothing on its left.
-    public init(changes: Int, state: SaveBarState = .editing, onRevert: @escaping () -> Void, onSave: @escaping () -> Void) {
-        self.init(changes: changes, state: state, onRevert: onRevert, onSave: onSave) { EmptyView() }
+    public init(
+        changes: Int, state: SaveBarState = .editing, saveDisabledReason: String? = nil, onRevert: @escaping () -> Void,
+        onSave: @escaping () -> Void
+    ) {
+        self.init(changes: changes, state: state, saveDisabledReason: saveDisabledReason, onRevert: onRevert, onSave: onSave) {
+            EmptyView()
+        }
     }
 }

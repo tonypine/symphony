@@ -280,3 +280,20 @@ struct GitHubUpdatesSheetView: View {
         })
     }
 }
+
+/// A number of minutes, shown as "5 min", with a stepper over `GitHubUpdates.minuteRange`: Setup's GitHub updates card.
+struct MinutesRow: View {
+    let title: String
+    @Binding var minutes: Int
+
+    var body: some View {
+        LabeledContent(title) {
+            HStack {
+                Text("\(minutes) min")
+                    .monospacedDigit()
+                Stepper(title, value: $minutes, in: GitHubUpdates.minuteRange)
+                    .labelsHidden()
+            }
+        }
+    }
+}

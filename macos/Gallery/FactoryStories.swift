@@ -167,9 +167,13 @@ private struct LiveSaveBar: View {
 
 /// The catalog's Save bar story: 900 pt, the For pop-up on its left (`scope`), in a shown state.
 @MainActor
-func saveBarStory(changes: Int = 2, state: SaveBarState = .editing, scope: Bool = true, live: Bool = false) -> AnyView {
+func saveBarStory(
+    changes: Int = 2, state: SaveBarState = .editing, scope: Bool = true, live: Bool = false, waits: String? = nil
+) -> AnyView {
     let bar: AnyView
-    if live {
+    if let waits {
+        bar = AnyView(SaveBar(changes: changes, state: state, saveDisabledReason: waits, onRevert: {}, onSave: {}))
+    } else if live {
         bar = AnyView(LiveSaveBar(changes: changes))
     } else if scope {
         bar = AnyView(SaveBar(changes: changes, state: state, onRevert: {}, onSave: {}) { saveBarScope })
@@ -256,6 +260,7 @@ let factoryStories: [ComponentStory] = {
         saveBar("saved") { saveBarStory(changes: 0, state: .saved) },
         saveBar("refused") { saveBarStory(state: .refused("runs.qa resolves no model; set one there or in Default")) },
         saveBar("no-scope") { saveBarStory(scope: false) },
+        saveBar("save-waits") { saveBarStory(scope: false, waits: "The stop timeout must be between 1 and 600 seconds.") },
         listCard("resting") { listCardStory() },
         listCard("hover") { listCardStory(state: .hover) },
         listCard("selected") { listCardStory(state: .selection) },
