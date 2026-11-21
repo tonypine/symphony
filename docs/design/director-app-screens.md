@@ -20,8 +20,9 @@
 > and Tickets pages, are designed in [The window, Home, Work and the ticket page's top](director-window-and-home.md),
 > which wins where the two differ. The Director draws its own toolbar and sidebar; the system's are not used.
 
-One main window, **Symphony**, next to the menu bar item that exists today. Settings (⌘,) and Repos stay their own
-windows; Repos is also reachable from the sidebar.
+One main window, **Symphony**, next to the menu bar item that exists today. Repos stays its own window, reachable from
+the sidebar. Settings is a page of the Symphony window (TP-1575), Factory › Settings, with its own list of sections
+down its side; ⌘,, the menu bar item's Settings… and every Open Settings… open the window on it.
 
 | Part | What it is |
 | --- | --- |

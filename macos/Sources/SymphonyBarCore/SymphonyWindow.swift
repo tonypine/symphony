@@ -82,8 +82,8 @@ public enum SymphonyView: String, CaseIterable, Equatable, Hashable, Identifiabl
         }
     }
 
-    /// Repos and Settings open their own windows rather than showing in this one.
-    public var opensOwnWindow: Bool { self == .repos || self == .settings }
+    /// Repos opens its own window rather than showing in this one; Settings is a page of this one (TP-1575).
+    public var opensOwnWindow: Bool { self == .repos }
 
     /// Where the window is, as the window bar's breadcrumb names it (TP-1496): a tabbed destination's name, as its tabs
     /// name the page; else the page's.

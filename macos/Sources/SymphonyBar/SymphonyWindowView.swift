@@ -9,7 +9,7 @@ final class SymphonyWindowModel: ObservableObject {
     let sidebar = SidebarRows()
     let client: LiveAPIClient
 
-    /// The page shown; Repos and Settings never are, as they open their own windows.
+    /// The page shown; Repos never is, as it opens its own window.
     @Published var selection: SymphonyView {
         didSet {
             guard selection != oldValue else { return }
@@ -396,6 +396,8 @@ final class SymphonyWindowModel: ObservableObject {
     var canOpenLogs: () -> Bool = { false }
 
     var onSelect: (SymphonyView) -> Void = { _ in }
+    /// The Settings page's form and section (TP-1575), kept while the window is open.
+    var settingsPage: SettingsPage?
     var onAction: (WindowState.Action) -> Void = { _ in }
     /// Opens the Repos window; with a repo key, on that repo's Review sheet.
     var onOpenRepos: (String?) -> Void = { _ in }
@@ -1009,13 +1011,11 @@ final class SymphonyWindowModel: ObservableObject {
         }
     }
 
-    /// Shows `view`: Repos and Settings open their windows and the selection stays where it was.
+    /// Shows `view`: Repos opens its window and the selection stays where it was.
     func show(_ view: SymphonyView) {
         switch view {
         case .repos:
             onOpenRepos(nil)
-        case .settings:
-            onAction(.openSettings)
         default:
             selection = view
             history.visit(.view(view))
@@ -1143,7 +1143,7 @@ struct SymphonyWindowView: View {
 
 /// The sidebar (TP-1455, TP-1498): the five destinations, Factory with its pages under it, each with its count. The
 /// destination shown stays current while a ticket's page opened from it is shown; picking it goes back to it. Repos
-/// and Settings open their windows. Symphony's version and state are in the status line (TP-1454).
+/// opens its window. Symphony's version and state are in the status line (TP-1454).
 struct SymphonySidebar: View {
     @ObservedObject var model: SymphonyWindowModel
     @ObservedObject var client: LiveAPIClient
@@ -1187,7 +1187,11 @@ struct SymphonyDetail: View {
     @ObservedObject var client: LiveAPIClient
 
     var body: some View {
-        if let placeholder = model.state.placeholder {
+        if model.selection == .settings, !model.showsPage, let page = model.settingsPage {
+            // The app's own settings, which the placeholder's Open Settings… leads to: shown whether Symphony answers
+            // or not.
+            SettingsPageContent(page: page)
+        } else if let placeholder = model.state.placeholder {
             EmptyState(
                 title: placeholder.title,
                 symbol: placeholder.symbol,
@@ -1436,5 +1440,24 @@ private struct DiagnosticsRow: View {
             valueWidth: DesignTokens.Row.wideValueWidth
         )
         .accessibilityLabel([row.label, row.status?.word, row.value, row.detail].compactMap { $0 }.joined(separator: ", "))
+    }
+}
+
+/// Factory › Settings (TP-1575): the Settings form, read when the page first shows in this window.
+struct SettingsPageContent: View {
+    @ObservedObject var page: SettingsPage
+
+    var body: some View {
+        Group {
+            if let model = page.model {
+                SettingsView(
+                    model: model, updates: page.updates, section: page.section, select: { page.section = $0 },
+                    saved: page.saved, revert: page.revert, save: page.save
+                )
+            } else {
+                Color.clear
+            }
+        }
+        .onAppear { page.enter() }
     }
 }

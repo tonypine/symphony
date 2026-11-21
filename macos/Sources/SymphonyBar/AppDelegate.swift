@@ -7,7 +7,8 @@ import SymphonyBarUI
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemValidation {
     private var statusItem: NSStatusItem?
     private let runner = SymphonyRunner()
-    private lazy var settingsWindow = SettingsWindowController(secrets: runner.secrets, updates: updates)
+    /// The Settings page of the Symphony window (TP-1575), which every Settings… and Open Settings… opens.
+    private lazy var settingsPage = SettingsPage(secrets: runner.secrets, updates: updates)
     private lazy var reposWindow = ReposWindowController(secrets: runner.secrets)
     private let poller = StatusPoller()
     /// The one client the Symphony window's views read Symphony's local API through.
@@ -210,9 +211,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             startNotice(startNotifier.drained(restarter.machine.phase))
         }
         // Symphony reads its secrets only at start; restart() does nothing while it isn't running.
-        settingsWindow.onSecretsChanged = { [weak self] in self?.restart() }
-        settingsWindow.updateBlocker = { [weak self] developmentMode in self?.updater.blocker(developmentMode: developmentMode) }
-        settingsWindow.onSettingsSaved = { [weak self] settings in self?.updates.configure(settings) }
+        settingsPage.onSecretsChanged = { [weak self] in self?.restart() }
+        settingsPage.updateBlocker = { [weak self] developmentMode in self?.updater.blocker(developmentMode: developmentMode) }
+        settingsPage.onSettingsSaved = { [weak self] settings in self?.updates.configure(settings) }
         updater.checkSettings = { [runner] binary in await runner.updateCheck(binary: binary) }
         updater.onChange = { [weak self] in
             guard let self else { return }
@@ -232,7 +233,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             guard let self else { return false }
             return !runner.isRunning && !runner.isStarting && machine.canStart && !restarting
         }
-        reposWindow.openSettings = { [weak self] in self?.settingsWindow.show() }
+        reposWindow.openSettings = { [weak self] in self?.openSettings(nil) }
         reposWindow.restartMachine = { [weak self] in self?.restarter.machine ?? RestartMachine() }
         reposWindow.restartNow = { [weak self] in self?.restartNow(nil) }
         reposWindow.cancelRestart = { [weak self] in self?.cancelRestart(nil) }
@@ -243,6 +244,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         symphonyWindow.appVersion = updates.current.version ?? ""
         symphonyWindow.appBuild = updates.current
         symphonyWindow.secrets = runner.secrets
+        symphonyWindow.settingsPage = settingsPage
         symphonyWindow.restartSymphony = { [weak self] in self?.restart() }
         symphonyWindow.stateRoot = poller.stateRoot
         symphonyWindow.onAction = { [weak self] action in self?.perform(action) }
@@ -300,7 +302,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         store.migrateDevelopmentMode(embeddedSymphonyAvailable: SymphonyRunner.hasEmbeddedSymphony)
         let settings = store.loadSettings()
         if settings.needsSetup {
-            settingsWindow.show()
+            openSettings(nil)
         } else if let checkedUpdate {
             // Check the new build before Symphony starts on it; the check starts it once symphony.yml passes.
             performHealth(
@@ -602,7 +604,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             handleHealth(.notStarted)
             SymphonyRunner.showAlert(title: "Couldn't start Symphony", body: error.localizedDescription)
             if (error as? LaunchProblem)?.isFixedInSettings == true {
-                settingsWindow.show()
+                openSettings(nil)
             }
         }
     }
@@ -768,8 +770,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         reposWindow.show(status: machine.status)
     }
 
+    /// ⌘,, Settings… and every Open Settings…: the Symphony window on its Settings page, opened when it is closed.
     @objc private func openSettings(_ sender: Any?) {
-        settingsWindow.show()
+        symphonyWindow.show(view: .settings)
     }
 
     @objc private func openSymphony(_ sender: Any?) {
@@ -800,7 +803,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                 break
             }
         case .openSettings:
-            settingsWindow.show()
+            openSettings(nil)
         case .checkForUpdates:
             checkForUpdates(nil)
         case .cancelUpdate:
@@ -1131,9 +1134,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         machine.handle(event)
         switch machine.status {
         case let .running(snapshot, _), let .paused(snapshot, _):
-            settingsWindow.budget = snapshot.budget
+            settingsPage.budget = snapshot.budget
         default:
-            settingsWindow.budget = nil
+            settingsPage.budget = nil
         }
         // An open Repos window refreshes with each poll.
         reposWindow.update(status: machine.status)

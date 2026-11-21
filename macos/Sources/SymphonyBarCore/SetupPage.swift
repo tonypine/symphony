@@ -221,7 +221,7 @@ public struct SetupPage: Equatable {
 
 /// Where an `open` fix, or the build warning's update, goes (SU3).
 public enum SetupDestination: Equatable {
-    /// Open Settings…: the app's Settings window, where the keys are.
+    /// Open Settings…: the Settings page of the Symphony window, where the keys are.
     case settings
     /// Open symphony.yml: the file in the operator's editor.
     case symphonyYML

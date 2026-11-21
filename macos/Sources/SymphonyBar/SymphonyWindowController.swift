@@ -30,6 +30,8 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
     var secrets: SecretsReader?
     /// The app's graceful restart of Symphony, for the guided setup's Restart Symphony.
     var restartSymphony: () -> Void = {}
+    /// The Settings page's form (TP-1575): its unsaved edits stay while the window is open and go when it closes.
+    var settingsPage: SettingsPage?
 
     private var window: NSWindow?
     private var model: SymphonyWindowModel?
@@ -147,6 +149,7 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
             model.onSelect = { view in AppStores.current.defaults.set(view.rawValue, forKey: Self.viewKey) }
             model.onAction = { [weak self] action in self?.onAction(action) }
             model.onOpenRepos = { [weak self] key in self?.openRepos(key) }
+            model.settingsPage = settingsPage
             model.scope = OverviewScope.load(from: AppStores.current.defaults)
             model.onScopeChange = { scope in scope.save(to: AppStores.current.defaults) }
             model.insightsSlice = InsightsSlice.load(from: AppStores.current.defaults)
@@ -421,6 +424,8 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
         model?.leaveTicketPage()
         // The live channel closes with the window; the next window opens its own.
         model?.eventStream.stop()
+        // The Settings page's unsaved edits close with the window, as the old Settings window's did.
+        settingsPage?.leave()
         window = nil
         model = nil
         client.isVisible = false

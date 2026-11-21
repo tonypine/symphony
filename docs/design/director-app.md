@@ -357,7 +357,8 @@ D10); see the build plan in [Screens](director-app-screens.md#5-build-plan).
 
 - Writing or editing tickets in the app: the Director writes them in Linear, from the templates in
   `docs/ticket-templates/`.
-- Settings and Repos: their windows stay; the Repos redesign is TP-695 ([repos.md](repos.md)). The sidebar links to
-  Repos.
+- Repos: its window stays; the Repos redesign is TP-695 ([repos.md](repos.md)). The sidebar links to Repos.
+  Settings is no longer its own window: it is a page of the Symphony window (TP-1575), Factory › Settings, with a
+  list of its sections beside the form, and ⌘,, Settings… and every Open Settings… open the window on it.
 - A remote or iOS client. The saved Linear view "Waiting on me" (ADR 0001) covers being away from the Mac.
 - Code review inside the app: the PR diff stays on GitHub; the app links to it.
