@@ -53,7 +53,7 @@ public struct PageControls: Equatable {
     ///   search.
     /// - Setup: Check Again at the right; Setup is Symphony's own, so no scope.
     /// - Diagnostics, Runs (its Save bar holds its own For chooser, TP-1538), Providers (Symphony's own, TP-1534), and
-    ///   Repos and Settings (their own windows): none.
+    ///   Settings (its own section list and Save, TP-1575) and Repos (its own window): none.
     public static func of(_ view: SymphonyView, shippedTab: Shipped.Tab = .shipped) -> PageControls {
         switch view {
         case .inbox, .overview, .diagnostics, .repos, .runs, .providers, .settings:
