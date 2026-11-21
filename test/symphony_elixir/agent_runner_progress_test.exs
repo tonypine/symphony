@@ -978,6 +978,81 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     end
   end
 
+  describe "a CI Fix run whose work was taking the base branch in (TP-1587)" do
+    test "ends in a wait on CI for its head after its first idle turn: no park, no question" do
+      test_pid = self()
+      :ok = put_pending_ci_failure(approved: false)
+      # GitHub lists no check on the merged head yet.
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-merged", checks: []}})
+
+      reader = fn _workspace, nil, start_head, base_ref ->
+        send(test_pid, {:base_read, start_head, base_ref}) && true
+      end
+
+      pusher = fn _workspace, nil, _source_repo -> send(test_pid, :pushed) && :nothing end
+
+      log =
+        capture_log(fn ->
+          assert {:ci_pending, %{sha: "sha-merged", run: "the CI Fix run", runs: [%{workflow_name: "CI on the head that took the base branch in", url: nil}]}} =
+                   catch_exit(
+                     run_issue!("CI Fix",
+                       heads: ["sha-start", "sha-merged"],
+                       max_turns: 5,
+                       repos: designed_repos(),
+                       runner_opts: [workspace_base_reader: reader, workspace_pusher: pusher]
+                     )
+                   )
+        end)
+
+      assert turns() == 2
+      assert_received {:base_read, "sha-start", "origin/main"}
+      assert_received :pushed
+      assert log =~ "its work took the base branch in, waiting for CI on its head sha-merged"
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+      refute_received {:memory_tracker_comment, "issue-progress", "Symphony parked this issue" <> _note}
+      assert {:ok, nil} = Pauses.get({:ticket, "default", "issue-progress"})
+      assert Questions.open({:ticket, "default", "issue-progress"}) == []
+    end
+
+    test "a run with work of its own, or whose head never moved, idles out as before" do
+      :ok = put_pending_ci_failure(approved: false)
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-merged", checks: []}})
+      reader = fn _workspace, nil, _start_head, _base_ref -> false end
+
+      capture_log(fn ->
+        run_issue!("CI Fix",
+          heads: ["sha-start", "sha-merged"],
+          max_turns: 5,
+          repos: designed_repos(),
+          runner_opts: [workspace_base_reader: reader]
+        )
+      end)
+
+      assert_received {:memory_tracker_comment, "issue-progress", "Symphony parked this issue where it is" <> _note}
+    end
+
+    test "a head it can't push is left to the idle rules" do
+      test_pid = self()
+      :ok = put_pending_ci_failure(approved: false)
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-merged", checks: []}})
+      reader = fn _workspace, nil, _start_head, _base_ref -> true end
+      pusher = fn _workspace, nil, _source_repo -> send(test_pid, :push_refused) && {:error, :origin_mismatch} end
+
+      capture_log(fn ->
+        run_issue!("CI Fix",
+          heads: ["sha-start", "sha-merged"],
+          max_turns: 5,
+          repos: designed_repos(),
+          runner_opts: [workspace_base_reader: reader, workspace_pusher: pusher]
+        )
+      end)
+
+      assert turns() == 3
+      assert_received :push_refused
+      assert_received {:memory_tracker_comment, "issue-progress", "Symphony parked this issue where it is" <> _note}
+    end
+  end
+
   describe "a parked ticket (TP-1326)" do
     test "asks its question in its phase, held until a person answers it or its PR changes" do
       run_issue!("Rework", heads: ["sha-same"], pr_url: nil, max_turns: 5)

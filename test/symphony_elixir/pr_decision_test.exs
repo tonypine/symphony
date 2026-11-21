@@ -240,7 +240,7 @@ defmodule SymphonyElixir.PrDecisionTest do
 
     test "rule ids are unique and each rule names its phases and a line for the docs" do
       assert Enum.uniq(@ids) == @ids
-      assert length(@ids) == 37
+      assert length(@ids) == 38
 
       for rule <- PrDecision.rules() do
         assert rule.phases != [] and rule.phases -- Facts.phases() == []
@@ -298,7 +298,7 @@ defmodule SymphonyElixir.PrDecisionTest do
     end
 
     test "no rule written for a clean PR matches an unknown reading: a return from CI Fix, a review, QA, a rework run, a merge" do
-      clean_rules = ["R17", "R18", "R19", "R19a", "R19b", "R20", "R21", "R22", "R23", "R24", "R25", "R26", "R27", "R28", "R29", "R30", "R31", "R32", "R33"]
+      clean_rules = ["R17", "R18", "R19", "R19a", "R19b", "R20a", "R20", "R21", "R22", "R23", "R24", "R25", "R26", "R27", "R28", "R29", "R30", "R31", "R32", "R33"]
 
       for %Facts{mergeable: :unknown} = facts <- Facts.combinations(), rule <- PrDecision.rules(), rule.id in clean_rules do
         refute PrDecision.matches?(rule, facts), "#{rule.id} matched #{inspect(Map.take(facts, [:phase, :ci, :review, :run, :pr]))}"
@@ -530,6 +530,38 @@ defmodule SymphonyElixir.PrDecisionTest do
       assert %Action{rule: "R19", kind: :wait, owner: :ci} = red(red_kind: :cancelled)
       assert [%Action{rule: "U2", kind: :rerun_failed}] = upkeep(phase: :code_review, ci: :red, red_kind: :cancelled)
       assert %Action{rule: "R23", kind: :wait, owner: :ci} = red(red_kind: :also_red_on_base)
+    end
+
+    test "TP-1587: a head held red on the base too takes the base's fix by a branch update once the base is green (R20a)" do
+      for phase <- [:qa, :rework, :ci_fix, :merging], rerun_done <- [false, true], attempts <- [0, 10] do
+        facts = [phase: phase, origin: :qa, ci: :red, red_kind: :failure, base_held: true]
+        facts = facts ++ [rerun_done: rerun_done, red_attempts: attempts, failing_check: "audit", base_ref: "main"]
+
+        assert %Action{rule: "R20a", kind: :update_branch, reason: reason} = decide(facts), inspect(facts)
+        assert reason == "The `audit` check is no longer red on main, which held PR #42: Symphony updates the branch from it instead of rerunning the check or sending it to CI Fix"
+      end
+
+      # Approved in Code Review, with no base branch named.
+      assert %Action{rule: "R20a", reason: "The `test` check is no longer red on the base branch, which held PR #42: " <> _rest} = red(base_held: true, rerun_done: false)
+    end
+
+    test "TP-1587: without the mark, or while the base is still red, the rules stay as they were" do
+      assert %Action{rule: "R22", kind: :rerun_failed} = red(rerun_done: false)
+      assert %Action{rule: "R21", kind: :ci_fix} = red([])
+      assert %Action{rule: "R23", kind: :wait} = red(red_kind: :also_red_on_base, base_held: true)
+
+      # Code Review yet to judge the head, and a changes verdict in Rework, stand back as for every CI rule.
+      assert %Action{rule: "R27", kind: :dispatch} = decide(phase: :code_review, ci: :red, base_held: true)
+
+      assert %Action{rule: "R26", kind: :dispatch} =
+               decide(phase: :rework, review: :changes_requested, ci: :red, base_held: true)
+
+      # The updated head: green continues in its phase, still red goes to CI Fix (no mark on a new head).
+      assert %Action{rule: "R25", kind: :return_to_origin, args: %{origin: :qa}} =
+               decide(phase: :ci_fix, origin: :qa, ci: :green)
+
+      assert %Action{rule: "R29", kind: :merge_now} = decide(phase: :merging, ci: :green)
+      assert %Action{rule: "R21", kind: :ci_fix, args: %{origin: :qa}} = decide(phase: :qa, ci: :red, rerun_done: true)
     end
 
     test "TP-1196: a failed check in a run still going waits on CI in every phase with a PR, naming the check (R19b)" do
