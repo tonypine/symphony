@@ -508,6 +508,29 @@ defmodule SymphonyElixir.PhaseSteps.WindowTestsTest do
       assert output(first) =~ "(failed: exit status 1)"
       assert output(first) =~ "gave no result before the step's timeout"
     end
+
+    test "a failing test whose rerun on the base branch the QA VM can't run could not run, and keeps the change's output", ctx do
+      change_flaky!(ctx, "echo broke here\nexit 1\n")
+
+      # The change's run runs for real and fails; the VM drops the base's rerun.
+      dropped_base = %{
+        cmd: fn _args, run ->
+          if Process.get(:ran_once) do
+            {:error, :closed}
+          else
+            Process.put(:ran_once, true)
+            run.()
+          end
+        end
+      }
+
+      context = context(ctx, ["macos/Tests/flaky-test.sh"], opts(ctx, %{host: dropped_base}))
+      assert {:paused, %{id: "window_tests"}, question_id} = walk(context)
+      assert [%{outcome: "paused", question_id: ^question_id} = paused] = completed()
+      assert output(paused) =~ "broke here"
+      assert output(paused) =~ "(could not run: the QA VM could not run the breakable test: :closed"
+      assert paused.reason =~ "Failed in the QA VM: the breakable test (macos/Tests/flaky-test.sh) exited 1"
+    end
   end
 
   describe "the QA VM is one machine" do
