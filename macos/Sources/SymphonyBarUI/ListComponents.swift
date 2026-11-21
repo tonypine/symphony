@@ -400,6 +400,7 @@ public struct TreeList<ID: Hashable, RowContent: View>: View {
             case let .row(id):
                 row(id, TreeRowState(selected: picked, focused: picked && focused))
                     .simultaneousGesture(TapGesture().onEnded { selection = line.key })
+                    .buttonPointer()
             case .more:
                 TreeMore(hidden: line.hidden, focused: picked && focused) {
                     opened.insert(line.root)

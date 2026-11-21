@@ -25,20 +25,42 @@ final class TimelineKeysTests: XCTestCase {
         XCTAssertEqual(TimelineKeys.keys, [.upArrow, .downArrow, .return, .space, .escape])
     }
 
-    /// TP-1572: a click on an entry or a run leaves nothing selected, whatever the arrows selected before, so no row
-    /// carries the accent tint and ring after a click and there is nothing to dismiss with Escape.
+    /// TP-1572: a click on an entry or a run, through the closure the timeline gives the row it draws, takes the
+    /// keyboard and leaves nothing selected, whatever the arrows selected before: no row carries the accent tint and
+    /// ring after a click, so there is nothing to dismiss with Escape.
+    @MainActor
     func testAClickLeavesNoRowSelectedAndSoNoOutline() {
-        for before in [nil, "entry-1", "run-1"] {
-            let after = TimelineSection.selection(afterClicking: before)
-            XCTAssertNil(after)
-            for id in ["entry-1", "run-1"] {
-                let face = DesignTokens.Interaction(hovered: true, selected: after == id)
-                XCTAssertFalse(face.showsSelectionRing, "\(id) after a click from \(before ?? "nothing")")
-                XCTAssertNotEqual(face.surface, DesignTokens.Interaction(selected: true).surface)
+        let entry = TimelineItem.entry(TimelineEntry(id: "a1", kind: .phase, at: .now, title: "Moved to Todo", actor: "Tony"))
+        let run = TimelineItem.run(RunGroupModel(id: "r1", title: "Implementation run 1", state: .failed, word: "Failed", steps: []), at: .now)
+        let transcripts = StepTranscripts { _ in .unreachable }
+        func row(_ item: TimelineItem, selection: String?, click: TimelineClick) -> TimelineRow {
+            TimelineSection.makeRow(
+                item, selection: selection, connects: false, clock: { _ in "09:00" }, transcripts: transcripts,
+                fold: { _ in .constant(true) }, click: click
+            )
+        }
+        func selected(_ row: TimelineRow) -> Bool {
+            switch row {
+            case let .entry(row): row.selected
+            case let .run(row): row.selected
             }
         }
-        // Escape has nothing left to clear after a click: the arrows are still what selects.
-        XCTAssertEqual(TimelineKeys.action(.downArrow, modifiers: []), .move(1))
+        for item in [entry, run] {
+            for before in [nil, item.id, "entry-other"] {
+                var selection = before
+                var keyboard = false
+                let click = TimelineClick(takeKeyboard: { keyboard = true }) { selection = $0 }
+                XCTAssertEqual(selected(row(item, selection: before, click: click)), before == item.id, "the arrows' selection draws")
+
+                row(item, selection: before, click: click).click()
+
+                XCTAssertTrue(keyboard, "\(item.id): the click gives the timeline the keyboard")
+                XCTAssertNil(selection, "\(item.id) clicked with \(before ?? "nothing") selected")
+                let after = row(item, selection: selection, click: click)
+                XCTAssertFalse(selected(after))
+                XCTAssertFalse(DesignTokens.Interaction(hovered: true, selected: selected(after)).showsSelectionRing)
+            }
+        }
     }
 
     func testEachEntrySaysWhatItsGlyphMeansAndItsToneIsItsClasssColour() {

@@ -774,6 +774,7 @@ struct TicketViewSheetsPresenter: ViewModifier {
             .sheet(item: $model.ticketViewSheet) { sheet in
                 TicketViewNameSheetView(sheet: sheet, working: model.ticketViewInFlight, error: model.ticketViewError,
                                         cancel: model.cancelTicketViewSheet, confirm: model.confirmTicketViewName)
+                    .pointerButtons()
             }
             .confirmationDialog(
                 TicketViewsMenu.deleteQuestion(model.currentTicketView?.name ?? ""),

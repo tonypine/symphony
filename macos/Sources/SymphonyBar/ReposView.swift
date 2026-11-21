@@ -28,16 +28,20 @@ struct ReposView: View {
         .frame(minWidth: Self.minWidth, minHeight: Self.minHeight)
         .sheet(isPresented: Binding(get: { model.addRepo != nil }, set: { if !$0 { model.addRepo = nil } })) {
             if let addRepo = model.addRepo {
-                if addRepo.editing == nil {
-                    AddRepoView(model: addRepo) { model.addRepo = nil }
-                } else {
-                    EditRepoSheet(model: addRepo) { model.addRepo = nil }
+                Group {
+                    if addRepo.editing == nil {
+                        AddRepoView(model: addRepo) { model.addRepo = nil }
+                    } else {
+                        EditRepoSheet(model: addRepo) { model.addRepo = nil }
+                    }
                 }
+                .pointerButtons()
             }
         }
         .sheet(isPresented: Binding(get: { model.workflowSetup != nil }, set: { if !$0 { model.workflowSetup = nil } })) {
             if let workflowSetup = model.workflowSetup {
                 WorkflowSetupSheet(model: workflowSetup) { model.workflowSetup = nil }
+                    .pointerButtons()
             }
         }
         .sheet(item: $model.disconnect) { sheet in
@@ -47,6 +51,7 @@ struct ReposView: View {
                 cancel: { model.disconnect = nil },
                 confirm: { model.onConfirmDisconnect(sheet) }
             )
+            .pointerButtons()
         }
     }
 
@@ -177,6 +182,7 @@ struct ReposChipView: View {
             .help(restart.line ?? restart.title)
             .popover(isPresented: $showsPopover, arrowEdge: .bottom) {
                 ReposRestartPopover(chip: restart, model: model)
+                    .pointerButtons()
             }
         } else {
             capsule(title: model.window.chip.title, dot: model.window.chip.dot)

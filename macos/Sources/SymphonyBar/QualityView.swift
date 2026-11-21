@@ -95,6 +95,7 @@ struct QualityCards: View {
         .padding(DesignTokens.Space.s6)
         .sheet(isPresented: $showsRuns) {
             AllRunsSheet(quality: quality) { showsRuns = false }
+                .pointerButtons()
         }
     }
 }
@@ -194,6 +195,7 @@ private struct AgreementChart: View {
         }
         .sheet(isPresented: $showsData) {
             ShowDataSheet(title: Quality.agreementTitle, rows: quality.agreementTable) { showsData = false }
+                .pointerButtons()
         }
     }
 }

@@ -544,11 +544,13 @@ struct SetupContent: View {
                             cancel: model.cancelGitHubUpdatesSheet,
                             confirm: { model.confirm(sheet) }
                         )
+                        .pointerButtons()
                     }
                 }
                 .sheet(item: githubSetup) { setup in
                     GitHubUpdatesSetupView(setup: setup, actions: githubSetupActions)
                         .interactiveDismissDisabled()
+                        .pointerButtons()
                 }
                 // Back from Terminal after Grant Permission…: the row checks at once.
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -564,6 +566,7 @@ struct SetupContent: View {
                 .animation(.standard, value: model.setupBanner)
                 .sheet(item: sheet) { sheet in
                     SetupFixSheetView(sheet: sheet, cancel: model.cancelSetupSheet, confirm: { model.confirm(sheet) }, open: model.open)
+                        .pointerButtons()
                 }
             }
         }

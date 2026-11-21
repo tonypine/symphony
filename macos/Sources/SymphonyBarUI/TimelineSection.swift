@@ -235,29 +235,31 @@ public struct TimelineSection: View {
 
     public static let title = "Timeline"
 
-    @ViewBuilder
-    private func row(_ item: TimelineItem, connects: Bool) -> some View {
-        let selected = selection == item.id
-        switch item {
-        // Each row draws again only when what it shows changed: a new event draws its own row (TP-1480).
-        case let .entry(entry):
-            TimelineEntryRow(entry: entry, time: clock(entry.at), selected: selected, connects: connects, select: click)
-                .equatable()
-        case let .run(run, at):
-            TimelineRunRow(run: run, time: clock(at), selected: selected, transcripts: transcripts, fold: fold(run), select: click)
-                .equatable()
-        }
+    private func row(_ item: TimelineItem, connects: Bool) -> TimelineRow {
+        Self.makeRow(
+            item, selection: selection, connects: connects, clock: clock, transcripts: transcripts, fold: { fold($0) },
+            // The live selection, read when the click lands: an equatable row keeps the closure it was first drawn with.
+            click: TimelineClick(takeKeyboard: { focused = true }) { next in
+                guard selection != next else { return }
+                withAnimation(.motion(.standard, reduceMotion: reduceMotion)) { selection = next }
+            }
+        )
     }
 
-    /// What a click on a row leaves selected: nothing. The selection's tint and ring are the arrow keys' alone, so a
-    /// click never leaves an outline to dismiss with Escape (TP-1572).
-    static func selection(afterClicking _: String?) -> String? { nil }
-
-    /// A click on a row: the timeline takes the keyboard, so the arrows move from here, and no row is left selected.
-    private func click() {
-        focused = true
-        guard selection != nil else { return }
-        withAnimation(.motion(.standard, reduceMotion: reduceMotion)) { selection = Self.selection(afterClicking: selection) }
+    /// The row `item` draws as, and what a click on it does: `click`, which never selects the row (TP-1572).
+    static func makeRow(
+        _ item: TimelineItem, selection: String?, connects: Bool, clock: (Date) -> String, transcripts: StepTranscripts,
+        fold: (RunGroupModel) -> Binding<Bool>, click: TimelineClick
+    ) -> TimelineRow {
+        let selected = selection == item.id
+        switch item {
+        case let .entry(entry):
+            return .entry(TimelineEntryRow(entry: entry, time: clock(entry.at), selected: selected, connects: connects, select: click.perform))
+        case let .run(run, at):
+            return .run(TimelineRunRow(
+                run: run, time: clock(at), selected: selected, transcripts: transcripts, fold: fold(run), select: click.perform
+            ))
+        }
     }
 
     private func handle(_ action: TimelineKeys.Action, proxy: ScrollViewProxy) -> KeyPress.Result {
@@ -712,6 +714,40 @@ struct TimelineTicketChipView: View {
         .padding(.vertical, 1)
         .background(DesignTokens.Surface.separator.color.opacity(0.5), in: Capsule())
         .help(chip.hint ?? "")
+    }
+}
+
+/// What a click on a timeline row does (TP-1572): the timeline takes the keyboard, so the arrows move from there, and a
+/// selection the arrows left is cleared. It never selects the row: the accent tint and ring are the arrow keys' alone,
+/// so a click leaves no outline to dismiss with Escape. A click on a run's line folds it through the run's own header.
+struct TimelineClick {
+    let takeKeyboard: () -> Void
+    let select: (String?) -> Void
+
+    func perform() {
+        takeKeyboard()
+        select(nil)
+    }
+}
+
+/// A timeline row, an entry or a run, each drawing again only when what it shows changed (TP-1480).
+enum TimelineRow: View {
+    case entry(TimelineEntryRow)
+    case run(TimelineRunRow)
+
+    /// What a click on the row does.
+    var click: () -> Void {
+        switch self {
+        case let .entry(row): row.select
+        case let .run(row): row.select
+        }
+    }
+
+    var body: some View {
+        switch self {
+        case let .entry(row): row.equatable()
+        case let .run(row): row.equatable()
+        }
     }
 }
 

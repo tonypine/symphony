@@ -273,6 +273,32 @@ extension PrimitiveButtonStyle where Self == PlainPointerButtonStyle {
     public static var plainPointer: PlainPointerButtonStyle { PlainPointerButtonStyle() }
 }
 
+/// The system's own button (`.automatic`) with the pointing hand while it is enabled (TP-1572): what every button that
+/// sets no style of its own draws as, once `pointerButtons()` is on the window, sheet or popover it is in.
+public struct SystemPointerButtonStyle: PrimitiveButtonStyle {
+    public init() {}
+
+    public func makeBody(configuration: Configuration) -> some View {
+        Button(configuration)
+            .buttonStyle(.automatic)
+            .buttonPointer()
+    }
+}
+
+extension PrimitiveButtonStyle where Self == SystemPointerButtonStyle {
+    /// `.automatic` with the pointing hand while the button is enabled.
+    public static var systemPointer: SystemPointerButtonStyle { SystemPointerButtonStyle() }
+}
+
+extension View {
+    /// Every button under this view that sets no style of its own (a default system button: Cancel, Undo, Check Now)
+    /// shows the pointing hand while it is enabled (TP-1572). Set once on each window's, sheet's and popover's root, so
+    /// no such button is left with the arrow; a button with its own style sets the pointer in that style.
+    public func pointerButtons() -> some View {
+        buttonStyle(.systemPointer)
+    }
+}
+
 /// The pointer over a control: the pointing hand while it can be pressed, set once in each button style and clickable
 /// component (TP-1517, TP-1572).
 public enum ButtonPointer {

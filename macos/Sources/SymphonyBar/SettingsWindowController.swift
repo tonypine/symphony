@@ -43,7 +43,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             model.updateBlocker = updateBlocker
             self.model = model
             let view = SettingsView(model: model, updates: updates) { [weak self] in self?.window?.close() }
-            let hostingController = NSHostingController(rootView: view)
+            let hostingController = NSHostingController(rootView: view.pointerButtons())
             // The default (.preferredContentSize) keeps resizing the window to SwiftUI's ideal size, which
             // collapses the scroll-backed Form after the first layout pass. Let SwiftUI set only the bounds.
             hostingController.sizingOptions = [.minSize, .maxSize]
