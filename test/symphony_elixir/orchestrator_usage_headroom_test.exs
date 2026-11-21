@@ -487,15 +487,17 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
     name = Module.concat(__MODULE__, :WalkthroughOrchestrator)
     runs_for = fn issue_id -> Enum.filter(RunStore.list_runs(:all), &(&1.issue_id == issue_id)) end
 
+    # The snapshot waits up to 15 s: under the full suite the orchestrator can be busy for over a
+    # second starting a run, and a timed-out snapshot has no usage_limits key.
     capture_log(fn ->
       pid = start_orchestrator(ctx, :WalkthroughOrchestrator)
 
       # 1. The warning puts the hold in place and the running issue finishes normally.
-      wait_until(fn -> SymphonyElixirWeb.Presenter.state_payload(name, 1_000).usage_limits != [] end)
+      wait_until(fn -> SymphonyElixirWeb.Presenter.state_payload(name, 15_000).usage_limits != [] end)
       Application.put_env(:symphony_elixir, :memory_tracker_issues, [first, queued])
 
       # 2. The state API carries the banner; the issue's continuation runs while new work waits.
-      payload = SymphonyElixirWeb.Presenter.state_payload(name, 1_000)
+      payload = SymphonyElixirWeb.Presenter.state_payload(name, 15_000)
       assert [%{phase: "headroom", reason: "claude_usage_headroom", utilization: 0.92, reserve: 0.9} = hold] = payload.usage_limits
       assert UsageLimit.banner(hold, ctx.now, to_local: & &1) == "Holding new runs: Anthropic at its 90% reserve, resets ~13:00"
       assert payload.dispatch_state.active? == true
@@ -508,7 +510,7 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
       # 3. Past the reset the hold clears and the queued issue dispatches.
       set_clock(ctx, resets_at)
       send(pid, {:usage_limit_resume, @anthropic})
-      wait_until(fn -> SymphonyElixirWeb.Presenter.state_payload(name, 1_000).usage_limits == [] end)
+      wait_until(fn -> SymphonyElixirWeb.Presenter.state_payload(name, 15_000).usage_limits == [] end)
       wait_until(fn -> runs_for.(queued.id) != [] end)
     end)
   end
