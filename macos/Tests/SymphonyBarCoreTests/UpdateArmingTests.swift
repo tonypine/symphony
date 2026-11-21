@@ -160,6 +160,52 @@ final class UpdateArmingTests: XCTestCase {
         XCTAssertNil(arming.target)
     }
 
+    func testLeavingAutomaticallyWhenReleasedCallsOffTheUpdateSymphonyHasReady() {
+        let skips = SkippedReleaseStore(defaults: MemoryKeyValueStore())
+        var arming = UpdateArming()
+        _ = arming.verified(update(1053))
+        _ = arming.armed("0.0.1.1053", result: .done)
+        XCTAssertEqual(arming.reconsider(mode: .onRelease, blocked: false, skips: skips), [])
+
+        for mode in UpdateMode.allCases where mode != .onRelease {
+            var other = arming
+            XCTAssertEqual(other.reconsider(mode: mode, blocked: false, skips: skips), [.disarm(version: "0.0.1.1053")])
+            XCTAssertNil(other.target)
+            // Symphony's pause for that build is no longer the update's moment: nothing swaps in by itself.
+            let polled = other.polled(window: window(1053, .holding), pauseVersion: "0.0.1.1053", activity: .running(activeRuns: 0))
+            XCTAssertEqual(polled, [], "\(mode)")
+        }
+
+        var blocked = arming
+        XCTAssertEqual(blocked.reconsider(mode: .onRelease, blocked: true, skips: skips), [.disarm(version: "0.0.1.1053")])
+    }
+
+    func testSkippingTheReleaseSymphonyHasReadyCallsItOffAndItNeverSwaps() {
+        let skips = SkippedReleaseStore(defaults: MemoryKeyValueStore())
+        var arming = UpdateArming()
+        _ = arming.verified(update(1053))
+        _ = arming.armed("0.0.1.1053", result: .done)
+
+        // Skipping another build leaves it waiting.
+        skips.record(SkippedRelease(release(1054), reason: .skipped))
+        XCTAssertEqual(arming.reconsider(mode: .onRelease, blocked: false, skips: skips), [])
+
+        skips.record(SkippedRelease(release(1053), reason: .skipped))
+        XCTAssertEqual(arming.reconsider(mode: .onRelease, blocked: false, skips: skips), [.disarm(version: "0.0.1.1053")])
+        XCTAssertNil(arming.waitingVersion)
+        XCTAssertEqual(arming.polled(window: nil, pauseVersion: "0.0.1.1053", activity: .running(activeRuns: 0)), [])
+    }
+
+    func testOnceTheSwapStartedOnlyItsDrainCallsItOff() {
+        let skips = SkippedReleaseStore(defaults: MemoryKeyValueStore())
+        var arming = UpdateArming()
+        _ = arming.verified(update(1053))
+        _ = arming.polled(window: nil, pauseVersion: "0.0.1.1053", activity: .running(activeRuns: 0))
+
+        XCTAssertEqual(arming.reconsider(mode: .manual, blocked: false, skips: skips), [])
+        XCTAssertTrue(arming.swapping)
+    }
+
     // MARK: The swap's drain
 
     private func swapDrain(running: Int = 1) -> (RestartMachine, [RestartMachine.Effect]) {

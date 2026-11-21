@@ -215,7 +215,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         // Symphony reads its secrets only at start; restart() does nothing while it isn't running.
         settingsWindow.onSecretsChanged = { [weak self] in self?.restart() }
         settingsWindow.updateBlocker = { [weak self] developmentMode in self?.updater.blocker(developmentMode: developmentMode) }
-        settingsWindow.onSettingsSaved = { [weak self] settings in self?.updates.configure(settings) }
+        settingsWindow.onSettingsSaved = { [weak self] settings in
+            self?.updates.configure(settings)
+            // Leaving Automatically when released calls off an update Symphony has ready.
+            self?.reconsiderArming()
+        }
         updater.checkSettings = { [runner] binary in await runner.updateCheck(binary: binary) }
         updater.onChange = { [weak self] in
             guard let self else { return }
@@ -895,6 +899,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         guard let release = availableRelease, !updater.isUpdating else { return }
         updater.skips.record(SkippedRelease(release, reason: .skipped))
         autoUpdater.clearHold()
+        // A skipped release Symphony has ready is called off, so it never swaps in by itself.
+        reconsiderArming()
         showUpdateItems()
     }
 
@@ -1115,6 +1121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     /// Lets the update Symphony has ready act on each status poll: arm it again with a Symphony that forgot it, or
     /// swap once Symphony paused for it (TP-1590). A newer release downloading meanwhile doesn't hold the swap up.
     private func armingTick() {
+        reconsiderArming()
         guard arming.target != nil else { return }
         let snapshot: StateSnapshot?
         switch machine.status {
@@ -1127,6 +1134,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             || resumeWhenAnswering || health.isChecking
         let activity = SymphonyActivity(status: machine.status, symphonyRunning: runner.isRunning, busy: busy, drain: drainReadForFailedState)
         performArming(arming.polled(window: snapshot?.updateWindow, pauseVersion: snapshot?.updatePauseVersion, activity: activity))
+    }
+
+    /// Calls off the update Symphony has ready once the update mode left Automatically when released, updates are
+    /// blocked, or its release was skipped (TP-1590).
+    private func reconsiderArming() {
+        guard arming.target != nil else { return }
+        let settings = AppStores.current.settingsStore().loadSettings()
+        let effects = arming.reconsider(
+            mode: settings.updateMode,
+            blocked: updater.blocker(developmentMode: settings.developmentMode) != nil,
+            skips: updater.skips
+        )
+        guard !effects.isEmpty else { return }
+        updater.dropParked()
+        performArming(effects)
     }
 
     private func performArming(_ effects: [UpdateArming.Effect]) {

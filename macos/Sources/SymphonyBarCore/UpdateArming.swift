@@ -97,6 +97,17 @@ public struct UpdateArming: Equatable {
         if !waitsAgain { self = UpdateArming() }
     }
 
+    /// The update waiting may install by itself only while the mode is still Automatically when released, nothing
+    /// blocks updates and its build isn't skipped. Otherwise it is called off on Symphony's side and nothing of it
+    /// stays, so a mode change or Skip This Version never lets the armed release swap in by itself. Checked before
+    /// each poll's `polled` and at once on a skip or a settings change. Once the swap started it is the drain's,
+    /// whose Cancel stays the way to stop it.
+    public mutating func reconsider(mode: UpdateMode, blocked: Bool, skips: SkippedReleaseStore) -> [Effect] {
+        guard let target, !swapping else { return [] }
+        let wanted = mode == .onRelease && !blocked && skips.entry(forBuild: target.release.build) == nil
+        return wanted ? [] : cancel()
+    }
+
     /// Cancel Update while the update waits: it is called off on Symphony's side. During the swap the drain's own
     /// Cancel lifts Symphony's pause, so nothing more is sent.
     public mutating func cancel() -> [Effect] {
