@@ -89,10 +89,9 @@ options, exactly one recommended, each with the `action` Symphony takes when it 
 `continue` (the pause clears) or `cancel` (the ticket is cancelled). When you ask, `ask` and `plan`
 are not read: the person answers first.
 
-A check that can only be seen once this ticket's own pull request has merged (a green run on main,
-a release, a deploy) is never a plain check in a plan you write: mark it `"after_merge": true`, and
-nothing before the merge waits on it, or leave it out when it only restates that the change merges.
-Keep the marker on a check that stands with it.
+Every check in a plan you write can be proved before this ticket's own pull request merges. Never
+write a check for a fact about the pipeline itself (main is green, the release gate passed, a build
+was published): Symphony watches those by itself.
 
 Write your answer as one JSON object and nothing else:
 
@@ -108,8 +107,7 @@ Write your answer as one JSON object and nothing else:
     "text": "<the plan for the agents, labelled sections, at most 12000 characters>",
     "checks": [
       {"id": "<the id of a check that stands, omitted for a new one>", "kind": "outcome" or "evidence",
-       "statement": "<at most 600 characters>", "proof": "test" or "qa" or "design" or "attached",
-       "after_merge": true only when it can be seen only after this ticket's own merge, else leave it out},
+       "statement": "<at most 600 characters>", "proof": "test" or "qa" or "design" or "attached"},
       {"id": "<as above>", "kind": "qa", "statement": "<what is checked>", "proof": "qa" or "design",
        "state": "<the app state it needs>", "action": "<what the person does>", "expect": "<what they see>", "size": "normal" or "wide"}
     ],

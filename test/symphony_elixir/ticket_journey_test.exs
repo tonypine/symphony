@@ -318,25 +318,16 @@ defmodule SymphonyElixir.TicketJourneyTest do
       assert TicketJourney.unproved(@issue_id) == []
     end
 
-    test "a check marked after the merge is owed by nobody before the merge, and the prompt says so" do
-      merged = %{id: "c5", kind: "outcome", statement: "The release run on main is green.", proof: "test", after_merge: true}
-      seen = %{id: "c6", kind: "qa", statement: "The release shows.", proof: "qa", action: "Open it", expect: "It shows", after_merge: true}
-      plan!(%{@plan | checks: @plan.checks ++ [merged, seen]})
+    test "a stored check that still carries after_merge is an open check like any other" do
+      marked = %{id: "c5", kind: "outcome", statement: "The release shows.", proof: "test", after_merge: true}
+      walked = %{id: "c6", kind: "qa", statement: "The release opens.", proof: "qa", action: "Open it", expect: "It opens", after_merge: true}
+      plan!(%{@plan | checks: @plan.checks ++ [marked, walked]})
 
-      assert Enum.map(TicketJourney.unproved(issue()), & &1.id) == ["c1", "c3"]
-      assert Enum.map(TicketJourney.owed_by_qa(issue()), & &1.id) == ["c2", "c4"]
-      assert Enum.map(TicketJourney.steps(issue()), & &1.check_id) == ["c2", "c4"]
-
-      text = TicketJourney.plan_text(issue())
-      assert text =~ "- [c5] outcome, proof: test, open, after the merge (nothing before the merge proves it: leave it): The release run on main is green."
-      assert text =~ "- [c1] outcome, proof: test, open: The page shows the plan."
-      assert TicketJourney.acceptance(issue()) == ["[c1] The page shows the plan.", "[c5] The release run on main is green. (after the merge: nothing before it proves this)"]
-
-      # Once the others are proved, nothing before the merge waits, and the marked check stays open.
-      prove!(%{check_id: "c1", by: "test", test: "plan_test.exs"})
-      prove!(%{check_id: "c3", by: "attached", evidence: "evt-1"})
-      assert TicketJourney.unproved(@issue_id) == []
-      assert [%{id: "c5", state: :open}, %{id: "c6", state: :open}] = TicketChecks.open(@issue_id) |> Enum.filter(&TicketChecks.after_merge?/1)
+      assert Enum.map(TicketJourney.unproved(issue()), & &1.id) == ["c1", "c3", "c5"]
+      assert Enum.map(TicketJourney.owed_by_qa(issue()), & &1.id) == ["c2", "c4", "c6"]
+      assert Enum.map(TicketJourney.steps(issue()), & &1.check_id) == ["c2", "c4", "c6"]
+      assert Enum.map(TicketChecks.open(@issue_id), & &1.id) == ["c1", "c2", "c3", "c4", "c5", "c6"]
+      assert TicketJourney.plan_text(issue()) =~ "- [c5] outcome, proof: test, open: The release shows."
     end
   end
 end

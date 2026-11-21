@@ -135,16 +135,13 @@ defmodule SymphonyElixir.TicketJourney do
   defp unproved_text(steps), do: steps |> Enum.reject(&Walkthrough.named_test?/1) |> Enum.map_join("\n", & &1.text)
 
   @doc """
-  The acceptance list: a groomed ticket's `outcome` checks, one line each under its id (one marked
-  as seen only after the merge says so, so a review before the merge does not wait on it), else what
+  The acceptance list: a groomed ticket's `outcome` checks, one line each under its id, else what
   `ungroomed` reads from the description.
   """
   @spec acceptance(ticket(), (String.t() | nil -> [String.t()])) :: [String.t()]
   def acceptance(ticket, ungroomed \\ fn _description -> [] end) do
     if groomed?(ticket) do
-      for {%{kind: "outcome", state: state} = check, _number} <- numbered(ticket),
-          state != :waived,
-          do: "[#{check.id}] #{one_line(check.statement)}#{after_merge_suffix(check)}"
+      for {%{kind: "outcome", state: state} = check, _number} <- numbered(ticket), state != :waived, do: "[#{check.id}] #{one_line(check.statement)}"
     else
       ungroomed.(description(ticket))
     end
@@ -308,28 +305,26 @@ defmodule SymphonyElixir.TicketJourney do
 
   @doc """
   The checks of a groomed ticket an implementation run still owes before the handoff: the open
-  ones a test or an attachment proves, but for one marked as seen only after the ticket's own merge
-  (`SymphonyElixir.TicketChecks.after_merge?/1`), which nothing before the merge can prove. None
-  for a ticket that is not groomed.
+  ones a test or an attachment proves. None for a ticket that is not groomed.
   """
   @spec unproved(ticket()) :: [TicketChecks.check()]
   def unproved(ticket) do
     case id(ticket) do
       nil -> []
-      id -> TicketChecks.open(id, proof: @handoff_proofs, after_merge: false)
+      id -> TicketChecks.open(id, proof: @handoff_proofs)
     end
   end
 
   @doc """
   The checks of a groomed ticket that only a QA pass proves and that are still open (`proof: qa`
-  or `design`, of any kind), but for one marked as seen only after the merge. While there is one,
-  the plan asks for QA, whatever a label or the diff says (`SymphonyElixir.QaPolicy`). None for a ticket that is not groomed.
+  or `design`, of any kind). While there is one, the plan asks for QA, whatever a label or the
+  diff says (`SymphonyElixir.QaPolicy`). None for a ticket that is not groomed.
   """
   @spec owed_by_qa(ticket()) :: [TicketChecks.check()]
   def owed_by_qa(ticket) do
     case id(ticket) do
       nil -> []
-      id -> TicketChecks.open(id, proof: @qa_proofs, after_merge: false)
+      id -> TicketChecks.open(id, proof: @qa_proofs)
     end
   end
 
@@ -359,18 +354,7 @@ defmodule SymphonyElixir.TicketJourney do
 
   # The checks QA walks: a `qa` check, and a check of any kind the plan proves by QA or against a
   # design, which nothing else would ever prove. One with no action is walked from its statement.
-  # A check marked as seen only after the merge is no step: QA judges the pull request before it.
-  defp walked(numbered) do
-    for {%{state: state} = check, _number} = entry <- numbered,
-        state != :waived,
-        qa_walks?(check),
-        not TicketChecks.after_merge?(check),
-        do: step(entry)
-  end
-
-  defp after_merge_suffix(check) do
-    if TicketChecks.after_merge?(check), do: " (after the merge: nothing before it proves this)", else: ""
-  end
+  defp walked(numbered), do: for({%{state: state} = check, _number} = entry <- numbered, state != :waived, qa_walks?(check), do: step(entry))
 
   defp qa_walks?(%{kind: kind, proof: proof}), do: kind == "qa" or proof in @qa_proofs
 
@@ -415,10 +399,8 @@ defmodule SymphonyElixir.TicketJourney do
 
   defp check_line(check) do
     parts = for {label, key} <- [{"State", :needs}, {"Action", :action}, {"Expect", :expect}], value = Map.get(check, key), do: "  #{label}: #{one_line(value)}"
-    Enum.join(["- [#{check.id}] #{check.kind}, proof: #{check.proof}, #{standing(check)}#{after_merge(check)}: #{one_line(check.statement)}" | parts], "\n")
+    Enum.join(["- [#{check.id}] #{check.kind}, proof: #{check.proof}, #{standing(check)}: #{one_line(check.statement)}" | parts], "\n")
   end
-
-  defp after_merge(check), do: if(TicketChecks.after_merge?(check), do: ", after the merge (nothing before the merge proves it: leave it)", else: "")
 
   defp standing(%{state: :proved, proved_by: %{by: by, test: test}}) when is_binary(test), do: "proved by #{by} (#{one_line(test)})"
   defp standing(%{state: :proved, proved_by: %{by: by}}), do: "proved by #{by}"
