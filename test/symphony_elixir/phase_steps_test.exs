@@ -166,7 +166,9 @@ defmodule SymphonyElixir.PhaseStepsTest do
 
       assert changes.workflows == [%{"jobs" => %{"gate" => %{"needs" => ["lint"], "steps" => [%{"run" => "echo done"}]}}}]
       assert Enum.sort(changes.changed) == [".github/workflows/broken.yml", ".github/workflows/gate.yml", ".github/workflows/list.yaml"]
-      refute Map.has_key?(PhaseSteps.changes(%{workspace: ctx.workspace, runner: fn _command, _env, _ms -> {:ok, {"Y\t%%%\n", 0}} end}), :workflows)
+
+      runner = fn _command, _env, _ms -> {:ok, {"Y\t%%%\n", 0}} end
+      refute Map.has_key?(PhaseSteps.changes(%{workspace: ctx.workspace, runner: runner}), :workflows)
     end
 
     test "the environment names the changed test files and Swift test targets, and every Swift test when none", _ctx do

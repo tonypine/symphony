@@ -244,12 +244,17 @@ defmodule SymphonyElixir.PhaseSteps do
     existing = for {status, path} <- lines, status not in ["T", "D", "W", "Y"], uniq: true, do: path
     changes = %{changed: changed, existing: existing, tests: for({"T", path} <- lines, do: path)}
 
-    changes =
-      case for({"W", manifest} <- lines, do: manifest) do
-        [manifest | _rest] -> Map.put(changes, :window_tests, WindowTests.parse(manifest))
-        [] -> changes
-      end
+    changes |> put_window_tests(lines) |> put_workflows(lines)
+  end
 
+  defp put_window_tests(changes, lines) do
+    case for({"W", manifest} <- lines, do: manifest) do
+      [manifest | _rest] -> Map.put(changes, :window_tests, WindowTests.parse(manifest))
+      [] -> changes
+    end
+  end
+
+  defp put_workflows(changes, lines) do
     case for({"Y", encoded} <- lines, {:ok, workflow} <- [workflow(encoded)], do: workflow) do
       [] -> changes
       workflows -> Map.put(changes, :workflows, workflows)

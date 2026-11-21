@@ -154,10 +154,12 @@ defmodule SymphonyElixir.PhaseSteps.FailedCheck do
   def summary(check, workflows) do
     name = normalize(check)
 
-    Enum.find_value(List.wrap(workflows), fn workflow ->
-      jobs = jobs(workflow)
-      Enum.find_value(jobs, fn {id, job} -> if normalize(job_name(id, job)) == name, do: reported(job, jobs) end)
-    end)
+    Enum.find_value(List.wrap(workflows), &summary_in(&1, name))
+  end
+
+  defp summary_in(workflow, name) do
+    jobs = jobs(workflow)
+    Enum.find_value(jobs, fn {id, job} -> normalize(job_name(id, job)) == name and reported(job, jobs) end)
   end
 
   defp jobs(%{"jobs" => %{} = jobs}), do: for({id, %{} = job} <- jobs, do: {to_string(id), job})
