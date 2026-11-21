@@ -1508,8 +1508,7 @@ defmodule SymphonyElixir.QaDriver do
       panel_env = if panel_dir, do: [{"SYMPHONY_BAR_QA_OPEN_PANEL_DIR", panel_dir}], else: []
       feed_env = if feed_port, do: [{"SYMPHONY_BAR_UPDATE_URL", "http://localhost:#{feed_port}/releases/latest"}], else: []
       interval_env = if interval, do: [{"SYMPHONY_BAR_UPDATE_CHECK_INTERVAL", Integer.to_string(interval)}], else: []
-      appearance_env = if appearance, do: [{@appearance_env, appearance}], else: []
-      {:ok, gh_env ++ linear_env ++ panel_env ++ feed_env ++ interval_env ++ appearance_env}
+      {:ok, gh_env ++ linear_env ++ panel_env ++ feed_env ++ interval_env ++ [{@appearance_env, appearance}]}
     end
   end
 
@@ -1538,7 +1537,6 @@ defmodule SymphonyElixir.QaDriver do
   defp update_check_interval(_other),
     do: tool_error("invalid_arguments", "`update_check_interval_seconds` must be a positive whole number of seconds.")
 
-  defp appearance(nil), do: {:ok, nil}
   defp appearance(appearance) when appearance in @appearances, do: {:ok, appearance}
   defp appearance(_other), do: tool_error("invalid_arguments", "`appearance` must be `light` or `dark`.")
 
@@ -1549,8 +1547,6 @@ defmodule SymphonyElixir.QaDriver do
   defp environment(_other), do: tool_error("invalid_arguments", "`environment` must be `live` or `fixture`.")
 
   # The environment that injects the appearance library, built in the run directory on the QA host.
-  defp appearance_library(_config, nil), do: {:ok, []}
-
   defp appearance_library(config, appearance) do
     case config.host.appearance_library.(config.host_dir) do
       {:ok, path} ->
