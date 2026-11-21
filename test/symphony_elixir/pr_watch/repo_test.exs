@@ -6,8 +6,10 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     Pauses,
     PrWatch,
     Questions,
+    TicketChecks,
     TicketEvents,
     TicketObservation,
+    TicketPlan,
     TicketPullRequest,
     TicketState
   }
@@ -99,6 +101,17 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     defdelegate list_open_pull_requests(pr_url, opts), to: FakeGitHub
 
     def squash_merge(pr_url, request, _opts), do: send(Application.fetch_env!(:symphony_elixir, :pr_watch_test_pid), {:merged, pr_url, request.head_sha}) && :ok
+  end
+
+  # GitHub for a PR whose merge is held: FakeGitHub's reads, and auto-merge turned off reported to the test.
+  defmodule DisarmingGitHub do
+    alias SymphonyElixir.PrWatch.RepoTest.FakeGitHub
+
+    defdelegate list_open_pull_requests(pr_url, opts), to: FakeGitHub
+
+    defdelegate squash_merge(pr_url, request, opts), to: SymphonyElixir.PrWatch.RepoTest.LandingGitHub
+
+    def disable_auto_merge(pr_url, _node_id, _opts), do: send(Application.fetch_env!(:symphony_elixir, :pr_watch_test_pid), {:disarmed, pr_url}) && :ok
   end
 
   # GitHub for a PR whose branch is updated from the base: FakeGitHub's reads, and each update,
@@ -1842,5 +1855,114 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     ticket = {:ticket, repo_key, issue_id}
     for question <- Questions.open(ticket), do: {:ok, _withdrawn} = Questions.withdraw(ticket, question.id, "The test asks again.")
     :ok
+  end
+
+  describe "TP-1589: the plan holds the merge" do
+    @plan_v1 %{
+      reason: "Grooming",
+      by: "grooming",
+      shape: "single",
+      layers: ["logic"],
+      summary: "An after-merge marker.",
+      text: "Mark the check.",
+      checks: [%{id: "c1", kind: "outcome", statement: "A check can be marked after-merge.", proof: "test"}],
+      size: %{tokens: 1_000, runs: 1}
+    }
+
+    # The plan, the coding run and the approval of its head, with the plan's one check proved.
+    defp approved!(repo_key, id, head) do
+      {:ok, _plan} = TicketPlan.write(repo_key, id, @plan_v1)
+      put_dispatch(repo_key, id, kind: :implementation)
+      {:ok, _proof} = TicketChecks.prove(repo_key, id, %{check_id: "c1", by: "test", test: "marker_test.exs"})
+      :ok = put_verdict(repo_key, id, "code_review", head, "approve")
+    end
+
+    # The person changed the ask: the plan's version 2, with a check of its own, open.
+    defp rewritten!(repo_key, id) do
+      v2 = %{@plan_v1 | reason: "The person changed the ask", checks: @plan_v1.checks ++ [%{kind: "outcome", statement: "No marker is written.", proof: "test"}]}
+      {:ok, _plan} = TicketPlan.write(repo_key, id, v2, new_ask: true)
+    end
+
+    test "TP-1584's order: an approved head, CI Fix, a new plan version, a green head: Rework, from every phase, no merge", %{repo_key: repo_key} do
+      tickets = [{"1", "CI Fix"}, {"2", "Code Review"}, {"3", "QA"}, {"4", "Merging"}]
+
+      for {id, _state} <- tickets do
+        approved!(repo_key, id, "sha-0")
+        put_dispatch(repo_key, id, kind: :ci_fix)
+        rewritten!(repo_key, id)
+      end
+
+      :ok = RunStore.update_ticket_state("1", %{ci_fix_origin: "Code Review"})
+      issues!(for {id, state} <- tickets, do: with_pr(repo_key, issue(id, state), String.to_integer(id)))
+      reads!(%{pr_url(4) => {:ok, read_of(pr_url(4), %{auto_merge: :armed, pr_node_id: "PR_node"})}})
+
+      assert {:ok, _summary} = repo_key |> start_repo!(tracker: AskingTracker, github: DisarmingGitHub) |> Repo.poll()
+
+      for {id, _state} <- tickets do
+        assert %{facts: %Facts{merge_guard: :rewritten}, decision: %{rule: "R9a", kind: :hold_merge}} = watch(repo_key, id)
+        assert_received {:moved, ^id, "Rework"}
+        assert_received {:comment, ^id, "Symphony moved this ticket to Rework: PR #" <> _rest}
+      end
+
+      assert_received {:disarmed, "https://github.com/acme/app/pull/4"}
+      refute_received {:disarmed, _pr_url}
+      # The approval of the old plan's head was carried nowhere.
+      assert for(%{kind: "code_review", head_sha: head} <- TicketState.verdicts(RunStore.get_ticket_state("1")), do: head) == ["sha-0"]
+    end
+
+    test "in Merging an open check holds the merge, and so does a Conductor hold; a proved plan merges", %{repo_key: repo_key} do
+      approved!(repo_key, "1", "sha-0")
+      {:ok, _plan} = TicketPlan.write(repo_key, "2", @plan_v1)
+      put_dispatch(repo_key, "2", kind: :implementation)
+
+      approved!(repo_key, "3", "sha-0")
+      {:ok, _hold} = TicketEvents.record(repo_key, "3", "conductor.instructions", %{junction: "before_merge", text: "It merges the marker.", route: "hold"})
+
+      issues!(for id <- ["1", "2", "3"], do: with_pr(repo_key, issue(id, "Merging"), String.to_integer(id)))
+      armed = %{auto_merge: :armed, pr_node_id: "PR_node", ci: :pending}
+      reads!(for id <- [2, 3], into: %{}, do: {pr_url(id), {:ok, read_of(pr_url(id), armed)}})
+
+      assert {:ok, _summary} = repo_key |> start_repo!(tracker: AskingTracker, github: DisarmingGitHub) |> Repo.poll()
+
+      # The proved plan goes on to the merge (auto-merge off in this repo: the decision alone).
+      assert %{facts: %Facts{merge_guard: :clear}, decision: %{rule: "R29", kind: :merge_now}} = watch(repo_key, "1")
+
+      assert %{facts: %Facts{merge_guard: :open_checks}, decision: %{rule: "R9a"}} = watch(repo_key, "2")
+      assert %{facts: %Facts{merge_guard: :held}, decision: %{rule: "R9a"}} = watch(repo_key, "3")
+      assert_received {:disarmed, "https://github.com/acme/app/pull/2"}
+      assert_received {:disarmed, "https://github.com/acme/app/pull/3"}
+      refute_received {:merged, _pr_url, _head}
+    end
+
+    test "a hold or an open check disarms auto-merge on the read that sees it", %{repo_key: repo_key} do
+      {:ok, _plan} = TicketPlan.write(repo_key, "1", @plan_v1)
+      put_dispatch(repo_key, "1", kind: :implementation)
+      issues!([with_pr(repo_key, issue("1", "Merging"), 1)])
+      reads!(%{pr_url(1) => {:ok, read_of(pr_url(1), %{auto_merge: :armed, pr_node_id: "PR_node", ci: :pending})}})
+
+      assert {:ok, _summary} = repo_key |> start_repo!(tracker: AskingTracker, github: DisarmingGitHub) |> Repo.poll()
+
+      assert_received {:disarmed, "https://github.com/acme/app/pull/1"}
+      assert_received {:moved, "1", "Rework"}
+      refute_received {:merged, _pr_url, _head}
+    end
+
+    test "CI Fix on its way back to Merging owes every check; on its way to review only the ones a test proves", %{repo_key: repo_key} do
+      qa_check = %{kind: "qa", statement: "The page folds.", proof: "qa", action: "Fold it", expect: "One line"}
+
+      for id <- ["1", "2"] do
+        {:ok, _plan} = TicketPlan.write(repo_key, id, %{@plan_v1 | checks: [qa_check]})
+        put_dispatch(repo_key, id, kind: :implementation)
+      end
+
+      :ok = RunStore.update_ticket_state("1", %{ci_fix_origin: "Merging"})
+      :ok = RunStore.update_ticket_state("2", %{ci_fix_origin: "Code Review"})
+      issues!(for id <- ["1", "2"], do: with_pr(repo_key, issue(id, "CI Fix"), String.to_integer(id)))
+
+      assert {:ok, _summary} = repo_key |> start_repo!(tracker: AskingTracker) |> Repo.poll()
+
+      assert %{facts: %Facts{merge_guard: :open_checks}, decision: %{rule: "R9a"}} = watch(repo_key, "1")
+      assert %{facts: %Facts{merge_guard: :clear}, decision: %{rule: "R25"}} = watch(repo_key, "2")
+    end
   end
 end

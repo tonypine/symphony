@@ -696,6 +696,54 @@ defmodule SymphonyElixir.ConductorTest do
     end
   end
 
+  describe "holding the merge (TP-1589)" do
+    setup ctx do
+      checks = [%{id: "c1", kind: "outcome", statement: "No marker is written.", proof: "test"}]
+      plan = %{shape: "single", layers: ["logic"], summary: "s", text: "t", checks: checks, size: %{tokens: 1, runs: 1}}
+      {:ok, _plan} = SymphonyElixir.TicketPlan.write("default", ctx.issue_id, Map.merge(plan, %{reason: "Grooming", by: "grooming"}))
+      ran!(ctx.issue_id, "implementation")
+      :ok
+    end
+
+    test "a turn before the merge holds it: the reason is the next run's instructions, and the code no longer stands for the ask", ctx do
+      test = self()
+      hold = %{"reason" => "The pull request merges the after-merge marker the person asked to remove."}
+
+      turn = fn _plan, _issue, _run_id, prompt ->
+        send(test, {:prompt, prompt})
+        {:ok, [answer(%{"hold" => hold})], 10}
+      end
+
+      log = capture_log(fn -> assert Conductor.run(plan(ctx, %{junction: "before_merge"}), ctx.issue, turn: turn) == :ok end)
+
+      assert log =~ "Conductor held the merge issue_id=#{ctx.issue_id}"
+      assert SymphonyElixir.TicketJourney.outdated(ctx.issue_id) == :held
+      assert [%{payload: %{route: "hold", junction: "before_merge", text: text}}] = events(ctx.issue_id, "conductor.instructions")
+      assert text == "The pull request merges the after-merge marker the person asked to remove.\n\nCheck the empty list first."
+      assert Conductor.prompt_section(ctx.issue_id, settings: @on) =~ "asked to remove"
+      assert_received {:prompt, prompt}
+      assert prompt =~ "The merge hold."
+      assert prompt =~ ~s("hold": null or)
+    end
+
+    test "a hold alone is the instructions; a junction that may not hold reads none, and a failed turn holds nothing", ctx do
+      hold = %{"reason" => "The plan changed under it."}
+
+      capture_log(fn ->
+        assert Conductor.run(plan(ctx, %{junction: "before_merge"}), ctx.issue, turn: turn({:ok, [Jason.encode!(%{"instructions" => nil, "hold" => hold})], 5})) == :ok
+      end)
+
+      assert [%{payload: %{route: "hold", text: "The plan changed under it."}}] = events(ctx.issue_id, "conductor.instructions")
+
+      ran!(ctx.issue_id, "rework")
+      assert Conductor.run(plan(ctx), ctx.issue, turn: turn({:ok, [answer(%{"hold" => hold})], 5})) == :ok
+      assert SymphonyElixir.TicketJourney.outdated(ctx.issue_id) == nil
+
+      capture_log(fn -> assert Conductor.run(plan(ctx, %{junction: "before_merge"}), ctx.issue, turn: turn({:error, :boom, 0})) == :ok end)
+      assert SymphonyElixir.TicketJourney.outdated(ctx.issue_id) == nil
+    end
+  end
+
   describe "watch/3" do
     setup ctx do
       Steer.create_table()
