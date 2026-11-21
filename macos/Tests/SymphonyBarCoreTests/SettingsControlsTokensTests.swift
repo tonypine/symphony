@@ -150,6 +150,21 @@ final class SettingsControlsTokensTests: XCTestCase {
         XCTAssertEqual("\(Int.min)".count, Number.maxCharacters)
     }
 
+    func testTheNumberFieldDrawsAndMeasuresTheSamePlainDigits() {
+        let padding = DesignTokens.Control.medium.padding * DesignTokens.Field.paddingScale
+        let fontSize = DesignTokens.Control.medium.fontSize
+        for value in [50000, 65535, 1_000_000, -12345] {
+            let drawn = Number.digits(value)
+            XCTAssertEqual(drawn, String(value))
+            XCTAssertFalse(drawn.contains { ",. \u{00A0}\u{202F}'".contains($0) }, "\(drawn) has a grouping separator")
+            XCTAssertEqual(drawn.filter(\.isNumber).count, String(value.magnitude).count)
+            XCTAssertGreaterThanOrEqual(
+                Number.width(for: drawn, fontSize: fontSize, padding: padding),
+                2 * padding + Double(drawn.count) * fontSize * Number.digitAdvance + Number.cursorRoom)
+        }
+        XCTAssertEqual(Number.digits(50000), "50000")
+    }
+
     func testTheNumberFieldSaysItsValueAndRange() {
         XCTAssertEqual(Number.spoken(30, unit: "minutes"), "30 minutes")
         XCTAssertEqual(Number.spoken(30, unit: nil), "30")

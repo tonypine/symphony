@@ -118,7 +118,7 @@ public struct NumberField: View {
     private var shown: Int { DesignTokens.NumberField.clamp(value, to: typedRange) }
     /// The number's room: wide enough for the value shown and for the text being typed, whichever is longer.
     private var numberWidth: Double {
-        let digits = "\(shown)"
+        let digits = DesignTokens.NumberField.digits(shown)
         let longest = !still && text.count > digits.count ? text : digits
         return DesignTokens.NumberField.width(
             for: longest, fontSize: size.fontSize, padding: size.padding * DesignTokens.Field.paddingScale)
@@ -146,7 +146,7 @@ public struct NumberField: View {
             if let footnote { FieldFootnote(footnote: footnote) }
         }
         .animation(.motion(.standard, reduceMotion: reduceMotion), value: footnote)
-        .onChange(of: value, initial: true) { _, _ in if !focused { text = "\(shown)" } }
+        .onChange(of: value, initial: true) { _, _ in if !focused { text = DesignTokens.NumberField.digits(shown) } }
         .onChange(of: focused) { _, now in if !now { commit() } }
     }
 
@@ -176,7 +176,7 @@ public struct NumberField: View {
     @ViewBuilder private var number: some View {
         let color = (disabled ? DesignTokens.TextColor.tertiary : DesignTokens.TextColor.primary).color
         if still {
-            Text("\(shown)")
+            Text(verbatim: DesignTokens.NumberField.digits(shown))
                 .foregroundStyle(color)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .trailing)
@@ -214,13 +214,13 @@ public struct NumberField: View {
     /// Reads the typed text: a whole number sets the value inside the range; anything else puts the value back.
     private func commit() {
         if let typed = DesignTokens.NumberField.parse(text, in: typedRange), typed != value { value = typed }
-        text = "\(DesignTokens.NumberField.clamp(value, to: typedRange))"
+        text = DesignTokens.NumberField.digits(DesignTokens.NumberField.clamp(value, to: typedRange))
     }
 
     private func stepBy(_ by: Int) {
         guard !disabled else { return }
         let next = DesignTokens.NumberField.step(value, by: by, in: range)
         if next != value { value = next }
-        text = "\(next)"
+        text = DesignTokens.NumberField.digits(next)
     }
 }

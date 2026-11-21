@@ -2257,6 +2257,9 @@ public enum DesignTokens {
             let needed = 2 * padding + Double(min(text.count, maxCharacters)) * fontSize * digitAdvance + cursorRoom
             return max(width, needed.rounded(.up))
         }
+        /// The digits a value is drawn with, in the still drawing and the live field alike, and measured for by
+        /// `width(for:)`: plain digits with no grouping separator, so 50000 reads "50000", never "50,000" (TP-1576).
+        public static func digits(_ value: Int) -> String { String(value) }
         /// The stepper's width inside the field's trailing end, and its glyphs.
         public static let stepperWidth: Double = 16
         public static let stepperGlyph: Double = 7
