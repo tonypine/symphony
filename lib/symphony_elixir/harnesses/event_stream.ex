@@ -213,15 +213,19 @@ defmodule SymphonyElixir.Harnesses.EventStream do
   # Once the last command ended the harness goes on with the conversation, so the grace waits for
   # the continuation's own terminal event.
   defp wait_or_finish(loop_state, acc, on_message) do
-    waiting? = match?(%{waiting: true}, loop_state.background_wait)
+    if terminal_event_observed?(acc) do
+      wait_or_finish_after_terminal(loop_state, acc, on_message)
+    else
+      {acc, loop_state}
+    end
+  end
+
+  defp wait_or_finish_after_terminal(loop_state, acc, on_message) do
+    waiting? = waiting_on_background?(loop_state)
     running? = MapSet.size(loop_state.background_commands) > 0
 
     cond do
-      not terminal_event_observed?(acc) ->
-        {acc, loop_state}
-
-      # Only a turn that completed waits: a failed one (a usage limit, an unreachable API) ends now.
-      running? and not waiting? and not loop_state.awaiting_continuation and is_nil(acc.turn_failed) ->
+      starts_background_wait?(loop_state, acc, running?, waiting?) ->
         {acc, start_background_wait(loop_state, acc, on_message)}
 
       waiting? and not running? ->
@@ -231,8 +235,14 @@ defmodule SymphonyElixir.Harnesses.EventStream do
         {acc, loop_state}
 
       true ->
-        {acc, %{loop_state | post_completion_deadline: maybe_start_post_completion_grace(acc, loop_state.post_completion_deadline)}}
+        grace = maybe_start_post_completion_grace(acc, loop_state.post_completion_deadline)
+        {acc, %{loop_state | post_completion_deadline: grace}}
     end
+  end
+
+  # Only a turn that completed waits: a failed one (a usage limit, an unreachable API) ends now.
+  defp starts_background_wait?(loop_state, acc, running?, waiting?) do
+    running? and not waiting? and not loop_state.awaiting_continuation and is_nil(acc.turn_failed)
   end
 
   defp start_background_wait(loop_state, acc, on_message) do
@@ -244,13 +254,21 @@ defmodule SymphonyElixir.Harnesses.EventStream do
         nil -> {now, now + background_wait_ms()}
       end
 
-    Logger.info("#{loop_state.label} turn waits on #{MapSet.size(loop_state.background_commands)} background command(s) session_id=#{inspect(acc.session_id)} bound_ms=#{deadline - now}")
+    commands = MapSet.size(loop_state.background_commands)
+    session = inspect(acc.session_id)
+
+    Logger.info("#{loop_state.label} turn waits on #{commands} background command(s) session_id=#{session} bound_ms=#{deadline - now}")
 
     on_message.({:notification, "Waiting on a background command"})
 
     %{
       loop_state
-      | background_wait: %{waiting: true, started_at: started_at, deadline: deadline, heartbeat_at: now + background_heartbeat_ms()},
+      | background_wait: %{
+          waiting: true,
+          started_at: started_at,
+          deadline: deadline,
+          heartbeat_at: now + background_heartbeat_ms()
+        },
         post_completion_deadline: nil
     }
   end
@@ -295,15 +313,19 @@ defmodule SymphonyElixir.Harnesses.EventStream do
     now = System.monotonic_time(:millisecond)
 
     if now >= wait.deadline do
+      commands = inspect(MapSet.to_list(loop_state.background_commands))
+
       Logger.warning(
-        "#{loop_state.label} background command still running at the wait's bound; stopping it session_id=#{inspect(acc.session_id)} commands=#{inspect(MapSet.to_list(loop_state.background_commands))}"
+        "#{loop_state.label} background command still running at the wait's bound; stopping it " <>
+          "session_id=#{inspect(acc.session_id)} commands=#{commands}"
       )
 
       close(port)
       acc |> put_background_wait(loop_state, :bound) |> finalize_read_result()
     else
       on_message.({:tool_progress, "background command"})
-      read_loop(port, on_message, acc, %{loop_state | background_wait: %{wait | heartbeat_at: now + background_heartbeat_ms()}})
+      wait = %{wait | heartbeat_at: now + background_heartbeat_ms()}
+      read_loop(port, on_message, acc, %{loop_state | background_wait: wait})
     end
   end
 

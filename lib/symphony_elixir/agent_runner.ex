@@ -907,7 +907,11 @@ defmodule SymphonyElixir.AgentRunner do
 
       {:ok, turn_session} ->
         Logger.info("Completed agent run for #{issue_context(issue)} session_id=#{turn_session[:session_id]} workspace=#{workspace} turn=#{turn_number}/#{max_turns}")
-        run_context = run_context |> remember_turn_session(turn_session) |> remember_background_wait(issue, turn_session)
+
+        run_context =
+          run_context
+          |> remember_turn_session(turn_session)
+          |> remember_background_wait(issue, turn_session)
 
         case maybe_hold_for_dependency_approval(workspace, issue, turn_session, run_context) do
           :ok ->

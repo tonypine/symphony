@@ -995,7 +995,8 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
 
   describe "a turn that waited on its own background command (TP-1570)" do
     test "does not count toward the turns that changed nothing, so the run is not parked for it" do
-      Application.put_env(:symphony_elixir, :progress_turn_extra, %{background_wait: %{outcome: :ended, waited_ms: 720_000}})
+      wait = %{outcome: :ended, waited_ms: 720_000}
+      Application.put_env(:symphony_elixir, :progress_turn_extra, %{background_wait: wait})
       tree = fn _workspace, nil -> "tree-dirty" end
 
       run_issue!("In Progress", heads: ["sha-same"], pr_url: nil, max_turns: 3, runner_opts: [workspace_tree_reader: tree])
@@ -1006,10 +1007,14 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     end
 
     test "counts as usual once the wait reached its bound, and the ticket's history says the command was stopped" do
-      Application.put_env(:symphony_elixir, :progress_turn_extra, %{background_wait: %{outcome: :bound, waited_ms: 1_800_000}})
+      wait = %{outcome: :bound, waited_ms: 1_800_000}
+      Application.put_env(:symphony_elixir, :progress_turn_extra, %{background_wait: wait})
       tree = fn _workspace, nil -> "tree-dirty" end
 
-      log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-same"], pr_url: nil, max_turns: 5, runner_opts: [workspace_tree_reader: tree]) end)
+      log =
+        capture_log(fn ->
+          run_issue!("In Progress", heads: ["sha-same"], pr_url: nil, max_turns: 5, runner_opts: [workspace_tree_reader: tree])
+        end)
 
       assert turns() == 2
       assert log =~ "Stopped a background command of"
