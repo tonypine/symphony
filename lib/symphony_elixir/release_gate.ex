@@ -276,8 +276,7 @@ defmodule SymphonyElixir.ReleaseGate do
   defp held(skipped, repo_key) do
     skipped
     |> List.wrap()
-    |> Enum.filter(&match?(%{rule: :release_gate}, &1))
-    |> Enum.filter(&(Map.get(&1, :repo_key) in [repo_key, nil]))
+    |> Enum.filter(&(match?(%{rule: :release_gate}, &1) and Map.get(&1, :repo_key) in [repo_key, nil]))
     |> Enum.map(&(Map.get(&1, :identifier) || Map.get(&1, :issue_id)))
     |> Enum.uniq()
     |> Enum.sort()

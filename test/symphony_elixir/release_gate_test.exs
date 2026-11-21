@@ -51,7 +51,8 @@ defmodule SymphonyElixir.ReleaseGateTest do
     on_exit(fn -> :ok = RunStore.clear() end)
     Process.put(:release_gate_test, self())
     refresh = fn repo_key -> send(Process.get(:release_gate_test), {:refresh, repo_key}) end
-    {:ok, opts: [fixer: Fixer, tracker: Tracker, gh_runner: gh(), repos: {:ok, repos()}, terminal_states: ["Done", "Canceled"], refresh: refresh]}
+    opts = [fixer: Fixer, tracker: Tracker, gh_runner: gh(), repos: {:ok, repos()}, terminal_states: ["Done", "Canceled"]]
+    {:ok, opts: opts ++ [refresh: refresh]}
   end
 
   # A config whose primary repo is Cycle, with Symphony's own repository configured beside it.
