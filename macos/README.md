@@ -982,6 +982,11 @@ With one of the automatic modes, the app installs a newer release by itself thro
   it holds, the line reads "Updating to vX: waiting for N agent runs…", and after the **Restart timeout**
   **Update Now Anyway** stops Symphony without waiting more. A newer release found while an update waits is
   downloaded in the background and replaces it, so several releases in a row cost one restart, onto the newest.
+  Leaving Automatically when released, or Skip This Version on the release that waits, calls it off.
+  Conductor runs (replies to your messages) keep answering while an update waits or holds dispatch. In every
+  update mode and for a restart, the app stops Symphony only once no Conductor run is mid-run: the line reads
+  "Waiting for a Conductor run to end…" meanwhile, and a run Symphony's restart stopped goes on afterwards from
+  the step it was on.
   Release Notes… shows the release under way.
   - Once Symphony has paused dispatch for it, it posts a notification, "Updating Symphony to vX", saying how many agent
     runs it waits for, with **Cancel Update**. It makes no sound, and nothing shows in its place when

@@ -8920,7 +8920,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp mark_interrupted_runs(repo_key) do
-    case RunStore.interrupt_running_runs(repo_key, "orchestrator restarted before worker exit") do
+    case RunStore.interrupt_running_runs(repo_key, RunStore.restart_error()) do
       {:ok, 0} ->
         :ok
 

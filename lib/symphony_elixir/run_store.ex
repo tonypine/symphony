@@ -67,6 +67,7 @@ defmodule SymphonyElixir.RunStore do
   @quality_gate_cache_key :quality_gate_cache
   @quality_gate_comment_keys_key :quality_gate_comment_keys
   @mnesia_core_dir "core_dumps"
+  @restart_error "orchestrator restarted before worker exit"
   # A run's row keeps only the newest events of its transcript buffer. The live run keeps its whole
   # buffer in memory for the dashboard; the row only feeds a finished run's transcript after a
   # restart, and every event it holds is rewritten with the table on each Mnesia log dump.
@@ -294,6 +295,22 @@ defmodule SymphonyElixir.RunStore do
   """
   @spec memoize_runs(term(), String.t(), (-> {:ok, term()} | {:error, term()})) :: {:ok, term()} | {:error, term()}
   def memoize_runs(key, kind, fun) when is_function(fun, 0), do: RunIndex.memoize(key, kind, fun)
+
+  @doc """
+  The error a run still running when Symphony starts again is ended with
+  (`interrupt_running_runs/2`): Symphony stopped (an update's restart, a plain Restart) before its
+  worker ended.
+  """
+  @spec restart_error() :: String.t()
+  def restart_error, do: @restart_error
+
+  @doc """
+  Whether the run `record` was ended because Symphony restarted while it was under way, so a new run
+  of its ticket may go on from where it stopped (`SymphonyElixir.PhaseSteps.restart_point/2`).
+  """
+  @spec restart_interrupted?(map()) :: boolean()
+  def restart_interrupted?(%{status: "failure", error: @restart_error}), do: true
+  def restart_interrupted?(_record), do: false
 
   @spec interrupt_running_runs(String.t(), String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
   def interrupt_running_runs(repo_key, error) when is_binary(error) do

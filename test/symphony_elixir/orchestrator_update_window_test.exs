@@ -140,6 +140,28 @@ defmodule SymphonyElixir.OrchestratorUpdateWindowTest do
     assert update_reasons() == ["0.0.1.1053"]
   end
 
+  # c8 (TP-1590): Conductor runs are not agent runs here; they go on under the hold and never postpone it.
+  test "a Conductor run does not count as an agent run: the update holds while one runs, and a Resume opens the gate again" do
+    test = self()
+    turn = spawn(fn -> SymphonyElixir.ConductorGate.run(fn -> send(test, :entered) && receive(do: (:end -> :ok)) end) end)
+    assert_receive :entered
+    on_exit(fn -> SymphonyElixir.ConductorGate.reopen() end)
+
+    state = orchestrator_state() |> clock(0)
+    {{:ok, %{phase: :holding}}, state} = ready(state, "0.0.1.1053")
+    assert update_reasons() == ["0.0.1.1053"]
+    assert SymphonyElixir.ConductorGate.handover() == {:wait, 1}
+
+    send(turn, :end)
+    assert SymphonyElixir.ConductorGate.handover() == :ok
+    assert SymphonyElixir.ConductorGate.enter() == :closed
+
+    # Cancel Update lifts the update's pause: the handover is called off, and Conductor runs start again.
+    {:reply, {:ok, _pause}, _state} = resume(state, {:build, "0.0.1.1053"})
+    assert SymphonyElixir.ConductorGate.enter() == :ok
+    SymphonyElixir.ConductorGate.leave()
+  end
+
   test "an update never starts holding behind a run that just began, and once it holds no run gets a new turn" do
     state = orchestrator_state() |> run(issue("run-1", "TP-1", "In Progress"), at(-30)) |> clock(0)
     {_reply, state} = ready(state, "0.0.1.1053")

@@ -846,21 +846,50 @@ defmodule SymphonyElixir.AgentRunner do
 
   # A list that opens on machine steps runs them before the first turn. A ticket whose last step
   # paused on a Question that is answered now, by a run that is gone (Symphony restarted while it
-  # waited), resumes on that step.
+  # waited), resumes on that step. A ticket whose last run Symphony's restart interrupted goes on
+  # from where that run stopped (`PhaseSteps.restart_point/2`, TP-1590).
   defp start_walk(agent_module, %{walk: %{steps: steps, step: step}} = run_context, max_turns) do
-    case PhaseSteps.resume_point(steps, step_context(run_context)) do
+    context = step_context(run_context)
+
+    case PhaseSteps.resume_point(steps, context) do
       {paused, question} ->
         Logger.info("Resuming step #{paused.id} of #{issue_context(run_context.issue)} on the answer to question #{question.id}")
         resume_walk(agent_module, run_context, paused, question, 0, max_turns)
 
       nil ->
-        if PhaseSteps.machine?(step),
-          do: run_machine_steps(agent_module, nil, run_context, step, 0, max_turns),
-          else: start_turn_session(agent_module, run_context, 1, max_turns)
+        case PhaseSteps.restart_point(steps, context) do
+          %{} = point ->
+            Logger.info("Going on at step #{point.step.id} of #{issue_context(run_context.issue)} after Symphony restarted mid-run resumed_session=#{is_binary(point.session_id)}")
+            go_on_after_restart(agent_module, run_context, point, max_turns)
+
+          nil ->
+            if PhaseSteps.machine?(step),
+              do: run_machine_steps(agent_module, nil, run_context, step, 0, max_turns),
+              else: start_turn_session(agent_module, run_context, 1, max_turns)
+        end
     end
   end
 
   defp start_walk(agent_module, run_context, max_turns), do: start_turn_session(agent_module, run_context, 1, max_turns)
+
+  # A machine step runs (again, when the restart stopped it); an agent step gets its turn with a
+  # note of the restart, in the interrupted turn's session when it was stopped mid-turn. A session
+  # that can't be resumed is replaced by a new one at the same step (`do_run_codex_turns/5`).
+  defp go_on_after_restart(agent_module, %{walk: walk} = run_context, %{step: step} = point, max_turns) do
+    if PhaseSteps.machine?(step) do
+      run_machine_steps(agent_module, nil, run_context, step, 0, max_turns)
+    else
+      notes = %{restarted: if(point.mid_step, do: :mid_step, else: :between_steps)}
+      run_context = %{run_context | walk: %{walk | step: step, carry: point.carry, notes: notes}}
+
+      run_context =
+        if is_binary(point.session_id),
+          do: Map.merge(run_context, %{resume_session_id: point.session_id, restart_session: point.session_id}),
+          else: run_context
+
+      start_turn_session(agent_module, run_context, 1, max_turns)
+    end
+  end
 
   defp start_turn_session(agent_module, run_context, turn_number, max_turns) do
     %{workspace: workspace, worker_host: worker_host, issue: issue, opts: opts} = run_context
@@ -896,7 +925,8 @@ defmodule SymphonyElixir.AgentRunner do
 
     turn_result = Steer.during_turn(run_id, fn -> run_agent_turn(agent_module, app_session, prompt, run_context) end)
     # A resumed step's conversation is resumed once, by its first turn.
-    run_context = run_context |> Map.drop([:resume_session_id, :steer_now]) |> keep_turn_transcript(turn_result)
+    restart_session = Map.get(run_context, :restart_session)
+    run_context = run_context |> Map.drop([:resume_session_id, :steer_now, :restart_session]) |> keep_turn_transcript(turn_result)
 
     case turn_result do
       # The Conductor steered the run now: the same session goes on with its steer as a new turn,
@@ -932,6 +962,14 @@ defmodule SymphonyElixir.AgentRunner do
           {:error, reason} ->
             {:error, reason}
         end
+
+      # The session a restart interrupted could not be resumed (its store is gone, or the agent
+      # refused it): a new session takes the same step once, with the ticket's history of what is
+      # done. A usage limit is the run's, as for any turn.
+      {:error, reason} when is_binary(restart_session) and (not is_tuple(reason) or elem(reason, 0) not in [:usage_limited, :model_api_unreachable]) ->
+        Logger.warning("Could not resume session #{restart_session} of #{issue_context(issue)} after the restart: #{inspect(reason)}; a new session takes the step")
+        stop_current_session(agent_module)
+        start_turn_session(agent_module, run_context, turn_number, max_turns)
 
       {:error, _reason} = error ->
         error
@@ -1567,7 +1605,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   # A walk's turn records its step's start, and an orchestrated step's earlier answer is removed;
   # a retry of the step (a reminder, a refused answer) is the same step, started once.
-  defp start_walk_turn(%{walk: %{notes: notes} = walk} = run_context) when notes == %{} or is_map_key(notes, :resume) do
+  defp start_walk_turn(%{walk: %{notes: notes} = walk} = run_context) when notes == %{} or is_map_key(notes, :resume) or is_map_key(notes, :restarted) do
     context = step_context(run_context)
     PhaseSteps.record_turn_started(walk.step, context)
     if walk.step.mode == "orchestrated", do: PhaseSteps.clear_answer(walk.step, context)

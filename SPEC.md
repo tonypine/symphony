@@ -757,6 +757,37 @@ joined by `; `. The log line names the kind too (`Dispatch pause active kind=bui
   `holding_since`). Resume with `kind` `build` for its version calls it off; the Director's plain
   Resume during a hold sends it back to waiting. A Director's Pause still holds dispatch, and an
   update ready under it swaps as soon as no run is active.
+- An update's `build` reason holds ticket runs alone: Conductor turns (replies to a person's
+  messages, the turns on a ticket's sub-tickets and at the end of a review) keep starting and
+  answering under it, in the update's hold as in its pause, and they never count as agent runs when
+  Symphony looks for a moment with none active. Any other reason (the Director's Pause, a
+  repository's) still holds them.
+- Symphony is never stopped for an update or a restart while a Conductor turn is mid-run
+  (`SymphonyElixir.ConductorGate`). Once dispatch is paused and no agent run is active, the menu
+  bar app asks for the handover (`POST /api/v1/control/handover`) and stops Symphony only once it
+  is given, in every update mode and for a plain Restart. The check and the close are one step of
+  the gate, which every Conductor turn enters as it starts: with no turn running the handover is
+  given and from then on no turn starts (one due waits, still owed, and runs first thing after the
+  restart); with turns running the app is told how many (`409` `conductor_running`, and
+  `conductor_runs` in the state payload and the drain) and asks again at its next poll. Turns keep
+  starting for 2 minutes from the first ask that finds one; after that none starts, so the turns
+  running end and a gap forms even when they overlap, and the wait is bounded by 2 minutes plus a
+  turn's own time limit. A gate given the handover opens again when dispatch is resumed, and after
+  5 minutes with Symphony still up; a wait no one asked about for 1 minute is dropped. Update Now
+  Anyway stays the person's choice and stops Symphony at once.
+- A run Symphony's restart stopped goes on after it from where it stopped
+  (`SymphonyElixir.PhaseSteps.restart_point/2`), for an update's restart in every mode, a plain
+  Restart and Update Now Anyway alike. Symphony's start ends each run still running with the
+  restart's error (`SymphonyElixir.RunStore.restart_error/0`); the ticket's next run of the same
+  phase reads the ticket's newest step event, with no move of the ticket since, and when it is that
+  run's, goes on: at a step that started and did not end (an agent step in the interrupted turn's
+  session, resumed by its id kept on the run's record, so its conversation goes on; a machine step
+  runs again), or at the step after one that ended (the step a failed machine step fails to, with
+  its kept output; the step a failed agent step returns to). The turn's prompt says Symphony
+  restarted. What is kept: the workspace and its changes, every step that ended (none runs again),
+  and the session's conversation when the agent can resume it (Claude, opencode); a session that
+  can't be resumed is replaced, once, by a new session at the same step with the ticket's history.
+  A turn stopped mid-way by Update Now Anyway goes on the same way from its last step event.
 - Each usage-limit hold (Sections 8.4.1 and 8.4.2) is an `environment` reason waiting on condition
   `usage_limit:<provider>:<scope>`, its line the hold's (`Claude's 5-hour limit until 14:30 UTC-3`,
   its local time naming its zone): set with the hold, its line refreshed when the hold changes,
@@ -5716,6 +5747,8 @@ SHOULD return:
 - `update_window`: the update the menu bar app has ready (Section 4.1.11's `update_ready`), null when
   none is: `version`, `phase` (`waiting` while dispatch goes on, `holding` once Symphony paused for
   it), `ready_at` and `holding_since`.
+- `conductor_runs`: the Conductor turns mid-run, which a restart's stop waits for (Section 4.1.11's
+  handover).
 - `pause`, `budget`, `dispatch_state`, and `workspace_lifecycle` when those extensions are enabled.
   `pause` is Symphony's own pause (Section 4.1.11): `paused` while a `person` or `build` reason
   stops all dispatch, with the first such reason's line as `reason` (an update's is
@@ -6208,8 +6241,9 @@ Minimum endpoints:
     which gives each request 250 ms. `/api/v1/state` stays the app's poll.
 
 - `GET /api/v1/drain`
-  - Answers `200` `{"running": 2, "between_turns": 1, "paused": true}`: the agent runs, how many
-    of them wait between turns (as `counts.between_turns`), and whether dispatch is paused. Read
+  - Answers `200` `{"running": 2, "between_turns": 1, "conductor_runs": 0, "paused": true}`: the
+    agent runs, how many of them wait between turns (as `counts.between_turns`), the Conductor turns
+    mid-run, which the stop waits for (Section 4.1.11's handover), and whether dispatch is paused. Read
     from the orchestrator's snapshot alone, with no page presenter, so it answers when
     `/api/v1/state` fails. `503` with `snapshot_timeout` or `snapshot_unavailable` when the
     orchestrator doesn't answer.
