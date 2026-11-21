@@ -38,7 +38,7 @@ story of a mapped entry has no variation of its name, naming the story.
 | `components/text-field` | `DirectorTextField` |
 | `components/search-field` | `SearchField` |
 | `components/pop-up` | `PopUp` |
-| `components/toggle` | not built |
+| `components/toggle` | `DirectorToggle` |
 | `components/tooltip` | not built |
 | `components/row` | `Row` |
 | `components/table-header-and-row` | `DataTable` |

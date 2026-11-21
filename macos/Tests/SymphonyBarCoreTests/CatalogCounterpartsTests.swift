@@ -26,7 +26,8 @@ final class CatalogCounterpartsTests: XCTestCase {
         let lines = Dictionary(uniqueKeysWithValues: CatalogCounterparts.table(try Self.read("docs/design/catalog-counterparts.md")).map { ($0.address, $0) })
         XCTAssertEqual(lines["components/key-value-list"]?.type, "KeyValueList")
         XCTAssertEqual(lines["components/collapsible-card"]?.type, "CollapsibleCard")
-        for address in ["tooltip", "toggle", "toast", "sheet-header", "empty-state", "attachment-thumbnail", "step-strip"] {
+        XCTAssertEqual(lines["components/toggle"]?.type, "DirectorToggle")
+        for address in ["tooltip", "toast", "sheet-header", "empty-state", "attachment-thumbnail", "step-strip"] {
             XCTAssertEqual(lines["components/\(address)"]?.words, CatalogCounterparts.notBuilt, address)
         }
     }

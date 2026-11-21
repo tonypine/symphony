@@ -133,8 +133,9 @@ public struct Sidebar<ID: Hashable>: View {
     }
 }
 
-/// A row of the sidebar (`.nav-row`): a button whose style draws its states.
-private struct SidebarRow<ID: Hashable>: View {
+/// A row of the sidebar (`.nav-row`): a button whose style draws its states. The in-page section list draws its rows
+/// with it too.
+struct SidebarRow<ID: Hashable>: View {
     let entry: SidebarEntry<ID>
     let current: Bool
     let collapsed: Bool
@@ -164,7 +165,7 @@ private struct SidebarRow<ID: Hashable>: View {
 }
 
 /// The row's face in each of its states.
-private struct SidebarRowStyle<ID: Hashable>: ButtonStyle {
+struct SidebarRowStyle<ID: Hashable>: ButtonStyle {
     let entry: SidebarEntry<ID>
     let current: Bool
     let collapsed: Bool
