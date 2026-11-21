@@ -1991,8 +1991,13 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
 
       assert %{facts: %Facts{merge_guard: :ci_checks, ci_proof: :provable}, decision: %{rule: "R28b"}} = watch(repo_key, "1")
       assert [%{state: :proved, proved_by: %{by: "ci", head: "sha-1"}}] = TicketChecks.list("1")
-      assert %{facts: %Facts{merge_guard: :ci_checks, ci_proof: :turn}, decision: %{rule: "R28d", kind: :land_agent}} = watch(repo_key, "2")
-      assert %{facts: %Facts{merge_guard: :ci_checks, ci_proof: :running}, decision: %{rule: "R28c", kind: :wait}} = watch(repo_key, "3")
+
+      assert %{facts: %Facts{merge_guard: :ci_checks, ci_proof: :turn}, decision: %{rule: "R28d", kind: :land_agent}} =
+               watch(repo_key, "2")
+
+      assert %{facts: %Facts{merge_guard: :ci_checks, ci_proof: :running}, decision: %{rule: "R28c", kind: :wait}} =
+               watch(repo_key, "3")
+
       assert %{facts: %Facts{merge_guard: :ci_checks, ci_proof: :spent}, decision: %{rule: "R28e"}} = watch(repo_key, "4")
 
       assert_received {:moved, "4", "Rework"}

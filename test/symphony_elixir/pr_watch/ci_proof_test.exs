@@ -1,8 +1,8 @@
 defmodule SymphonyElixir.PrWatch.CiProofTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{TicketChecks, TicketEvents, TicketPlan}
   alias SymphonyElixir.PrWatch.CiProof
+  alias SymphonyElixir.{TicketChecks, TicketEvents, TicketPlan}
 
   @repo_key "ci-proof-repo"
   @issue_id "ci-proof-issue"

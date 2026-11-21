@@ -113,7 +113,9 @@ defmodule SymphonyElixir.GroomedPromptsTest do
       groom!(%{@plan | checks: @plan.checks ++ [ci]})
       merging = %{issue() | state: "Merging"}
 
-      for prompt <- [PromptBuilder.build_prompt(merging, run_kind: :landing), PromptBuilder.build_compact_prompt(merging)] do
+      prompts = [PromptBuilder.build_prompt(merging, run_kind: :landing), PromptBuilder.build_compact_prompt(merging)]
+
+      for prompt <- prompts do
         assert prompt =~ "## Checks the pull request's CI run proves"
         assert prompt =~ "- [c4] The tests run faster than on main."
         assert prompt =~ "It does not merge: Symphony merges once they are proved."

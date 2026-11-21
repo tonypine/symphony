@@ -256,7 +256,9 @@ defmodule SymphonyElixir.PrDecisionTest do
     end
 
     test "auto-merge goes off first when it is armed" do
-      assert %Action{rule: "R28a", kind: :disarm, reason: reason} = decide(@ci_merging ++ [auto_merge: :armed, ci_proof: :running])
+      assert %Action{rule: "R28a", kind: :disarm, reason: reason} =
+               decide(@ci_merging ++ [auto_merge: :armed, ci_proof: :running])
+
       assert reason == "PR #42 waits on checks of its plan that its own CI run proves: auto-merge is off until they are proved"
       assert %Action{rule: "R28a"} = decide(@ci_merging ++ [auto_merge: :armed, ci: :pending, ci_proof: :turn])
     end
@@ -269,7 +271,8 @@ defmodule SymphonyElixir.PrDecisionTest do
 
     test "while checks still run the ticket waits on CI, with no question" do
       for ci <- [:pending, :green] do
-        assert %Action{rule: "R28c", kind: :wait, owner: :ci, clears_when: "the checks finish on the head"} = decide(@ci_merging ++ [ci: ci, ci_proof: :running])
+        assert %Action{rule: "R28c", kind: :wait, owner: :ci, clears_when: "the checks finish on the head"} =
+                 decide(@ci_merging ++ [ci: ci, ci_proof: :running])
       end
 
       assert %Action{rule: "R28c"} = decide(@ci_merging ++ [ci_proof: :none])

@@ -590,10 +590,12 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
 
       assert_received {:disable_auto_merge, @pr_url, "PR_node", _opts}
       assert_received {:move, @issue_id, "Rework"}
-      assert_received {:comment, @issue_id, "Symphony moved this ticket to Rework: The run that read the pull request's checks on the head head-1 did not prove" <> rest}
+      assert_received {:comment, @issue_id, "Symphony moved this ticket to Rework: " <> rest}
+      assert rest =~ "The run that read the pull request's checks on the head head-1 did not prove"
       assert rest =~ "[c1] The make-all check passes.; [c2] The tests run faster than on main."
       assert rest =~ "The run said: The tests took as long as on main. A rework run works on it on the same pull request."
-      assert [%{name: "review verdict", details: %{outcome: "ci_checks_unproved"}} | _] = TicketState.recent_signals(RunStore.get_ticket_state(@issue_id))
+      signals = TicketState.recent_signals(RunStore.get_ticket_state(@issue_id))
+      assert [%{name: "review verdict", details: %{outcome: "ci_checks_unproved"}} | _] = signals
       refute deciding()
 
       # Once per head: the ledger holds it.

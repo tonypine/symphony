@@ -67,7 +67,8 @@ defmodule SymphonyElixir.PrWatch.CiProof do
   @spec turn_run(String.t(), String.t() | nil) :: String.t() | nil
   def turn_run(issue_id, head) when is_binary(head) do
     Enum.find_value(events(issue_id, "run.started"), fn %Event{payload: payload} = event ->
-      if field(payload, :run_kind) == "landing" and (field(payload, :head) || event.head_sha) == head, do: field(payload, :run_id)
+      if field(payload, :run_kind) == "landing" and (field(payload, :head) || event.head_sha) == head,
+        do: field(payload, :run_id)
     end)
   end
 
