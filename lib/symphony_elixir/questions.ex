@@ -585,8 +585,15 @@ defmodule SymphonyElixir.Questions do
   @spec held(ticket()) :: question() | nil
   def held(ticket), do: ticket |> open() |> Enum.filter(&held_question?/1) |> List.last()
 
-  @doc "Whether the Director's Unblock answers `question`, known by its Unblock option."
+  @doc """
+  Whether the Director's Unblock answers `question`, known by its Unblock option. A question a
+  step asked (`step`, `SymphonyElixir.PhaseSteps`) never is, whatever its options are called: its
+  answer resumes that step (TP-1569), so the Window tests step's "Run it again" is not a dispatch
+  loop's.
+  """
   @spec held_question?(question()) :: boolean()
+  def held_question?(%{step: step}) when is_binary(step), do: false
+
   def held_question?(question) do
     labels = [TransitionGuard.unblock_option() | DispatchLoop.unblock_labels()]
     Enum.any?(question.options, &(&1.label in labels))

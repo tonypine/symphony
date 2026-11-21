@@ -27,12 +27,21 @@ defmodule SymphonyElixir.PhaseSteps.WindowTests do
      build's environment: the pinned Xcode as `DEVELOPER_DIR` (the VM's selected Xcode, said in the
      output, when it lacks it) and the built app's path as `SYMPHONY_QA_APP`.
 
-  Every script's output is the step's output. All passing passes the step. A failing script is run
-  again on the change's merge-base with the base branch: when one of the failing scripts passes
-  there, the change broke it, and the step fails back to its `on_fail` (`code`) with the output, as a
-  failing `swift test` does. When every failing script fails on the base too, the fault is the VM's
-  or the base's, not the change's, which is how the step rechecks that a script passes on main in
-  the VM before it ever blames a change for it.
+  Every script's output is the step's output. All passing passes the step. A failing test the base
+  branch does not run in the QA VM is the change's own (TP-1569): the manifest at the change's
+  merge-base with the base branch (read with `git show`) lacks it or has it off, so the change turned
+  it on, or changed its script while it is off there. Making it pass is the change's job and the base
+  can't judge it, so the step fails back to its `on_fail` (`code`) without asking; when such a test
+  fails beside others, it decides. Any other failing script is run again on the merge-base: when one
+  of the failing scripts passes there, the change broke it, and the step fails back to its `on_fail`
+  with the output, as a failing `swift test` does. When every failing script fails on the base too,
+  the fault is the VM's or the base's, not the change's, which is how the step rechecks that a script
+  passes on main in the VM before it ever blames a change for it.
+
+  When tests failed, the output ends with what each printed in the QA VM (its last lines, and the
+  same on the base when it ran there), which the code step's prompt carries, and the step's
+  `step.completed`, failed or paused, names each failing test in its `reason` and keeps them in
+  `failures` (`details/1`).
 
   The step never passes by default. When it could not run (no QA VM is set up, the VM is unreachable
   or refused, the build could not run there, a tool is missing, the scripts fail on the base too, or
@@ -46,6 +55,7 @@ defmodule SymphonyElixir.PhaseSteps.WindowTests do
   require Logger
 
   alias SymphonyElixir.HumanActions.PlainWords
+  alias SymphonyElixir.PhaseSteps.StepAnswer
   alias SymphonyElixir.QaAgent.Selection
   alias SymphonyElixir.{QaBuild, TicketEvents, Workspace}
   alias SymphonyElixir.QaDriver.{Checks, DevServerLease, Remote, SafeHost}
@@ -53,6 +63,9 @@ defmodule SymphonyElixir.PhaseSteps.WindowTests do
   @manifest_path "macos/Tests/window-tests.json"
   @output_limit 400_000
   @use "window tests"
+  @printed_lines 12
+  @printed_chars 1_200
+  @failures_max 10
   @title "Window tests"
   @run_again "Run it again"
   @why_chars 600
@@ -82,8 +95,27 @@ defmodule SymphonyElixir.PhaseSteps.WindowTests do
   @typedoc "A workspace's manifest, read (`parse/1`): its entries, or why it can't be read."
   @type manifest :: {:ok, [entry()]} | {:error, String.t()}
 
-  @typedoc "What `run/2` answers the step runner, as a command's result or a Question to pause on."
+  @typedoc "What `run_entries/4` answers, as a command's result or a Question to pause on."
   @type result :: {:ok, {String.t(), integer()}} | {:timeout, String.t()} | {:ask, String.t(), map()}
+
+  @typedoc """
+  One test that failed in the QA VM, as the step's `step.completed` keeps it (`failures`): its
+  script and title, its exit status and the last lines it printed, and the same on the base branch
+  when it ran there (`base`).
+  """
+  @type failure :: %{
+          required(:script) => String.t(),
+          required(:title) => String.t(),
+          required(:exit_status) => non_neg_integer(),
+          optional(:printed) => String.t(),
+          optional(:base) => %{required(:exit_status) => non_neg_integer(), optional(:printed) => String.t()}
+        }
+
+  @typedoc """
+  What `run/2` answers the step runner: `run_entries/4`'s result, and when tests failed, with what
+  the step's `step.completed` says of them (`details/1`: `reason` and `failures`).
+  """
+  @type run_result :: result() | {:ok, {String.t(), integer()}, map()} | {:ask, String.t(), map(), map()}
 
   @doc "Where a workspace declares its window tests."
   @spec manifest_path() :: String.t()
@@ -164,10 +196,17 @@ defmodule SymphonyElixir.PhaseSteps.WindowTests do
   (`worker_host -> host`, default `SymphonyElixir.QaDriver.Remote.host/1`), `:local_uuid` (as
   `SafeHost.open/3`) and `:git` (`fn args, cwd -> {output, status}`).
   """
-  @spec run(map(), pos_integer()) :: result()
+  @spec run(map(), pos_integer()) :: run_result()
   def run(%{changes: %{window_tests: {:error, why}}}, _timeout_ms), do: {:ok, {"The window tests could not be read: #{why}.\n", 1}}
 
-  def run(context, timeout_ms), do: run_entries(context, selected(context.changes), off_covering(context.changes), timeout_ms)
+  def run(context, timeout_ms) do
+    case run_judged(context, selected(context.changes), off_covering(context.changes), timeout_ms) do
+      {result, []} -> result
+      {{:ok, done}, failures} -> {:ok, done, details(failures)}
+      {{:ask, output, question}, failures} -> {:ask, output, question, details(failures)}
+      {result, _failures} -> result
+    end
+  end
 
   @doc """
   Runs `tests` in the QA VM as `run/2` does, and ends could not run, naming them, when `off` (tests
@@ -175,11 +214,23 @@ defmodule SymphonyElixir.PhaseSteps.WindowTests do
   failed-check step (`SymphonyElixir.PhaseSteps.FailedCheck`) runs the ones that failed on GitHub.
   """
   @spec run_entries(map(), [entry()], [entry()], pos_integer()) :: result()
-  def run_entries(context, tests, off, timeout_ms) do
+  def run_entries(context, tests, off, timeout_ms), do: context |> run_judged(tests, off, timeout_ms) |> elem(0)
+
+  # The result, with the tests that failed in the QA VM (`t:failure/0`), none when none did.
+  defp run_judged(context, tests, off, timeout_ms) do
     opts = Map.get(context, :window_tests_opts, [])
     deadline = System.monotonic_time(:millisecond) + timeout_ms
-    result = if tests == [], do: {:done, "", 0}, else: run_tests(context, tests, opts, deadline)
 
+    {result, failures} =
+      case if(tests == [], do: {:done, "", 0}, else: run_tests(context, tests, opts, deadline)) do
+        {:judged, result, failures} -> {result, failures}
+        result -> {result, []}
+      end
+
+    {answer(context, result, off), failures}
+  end
+
+  defp answer(context, result, off) do
     case {result, off} do
       {{:done, output, 0}, [_ | _]} ->
         ask(context, output, :off, off_why(off))
@@ -349,7 +400,7 @@ defmodule SymphonyElixir.PhaseSteps.WindowTests do
       {:ok, {text, 0}} ->
         case ended(text) do
           {:exit, status, printed} ->
-            run_each(host, job, rest, [{test, status} | results], output <> printed <> status_line(status))
+            run_each(host, job, rest, [{test, status, printed} | results], output <> printed <> status_line(status))
 
           {:setup, why} ->
             {:could_not_run, why, output <> text}
@@ -389,27 +440,83 @@ defmodule SymphonyElixir.PhaseSteps.WindowTests do
   defp status_line(0), do: "(passed)\n"
   defp status_line(status), do: "(failed: exit status #{status})\n"
 
-  # Every test passed: the step passes. A failing test is run again on the base: one that passes
-  # there was broken by the change (back to the code); all failing there too is the VM's or the
-  # base's fault, so the step could not run.
+  # Every test passed: the step passes. A failing test that is the change's own (`own?/2`) fails the
+  # step back to the code without asking the base. Any other failing test is run again on the base:
+  # one that passes there was broken by the change (back to the code); all failing there too is the
+  # VM's or the base's fault, so the step could not run. Whatever it ends in, it carries the failing
+  # tests and what each printed (`{:judged, result, failures}`).
   defp judge(context, plan, results, output, opts, deadline) do
-    case for({test, status} <- results, status != 0, do: test) do
-      [] ->
-        {:done, output, 0}
-
-      failing ->
-        on_base(context, plan, failing, output, opts, deadline)
+    case for({test, status, printed} <- results, status != 0, do: failure(test, status, printed)) do
+      [] -> {:done, output, 0}
+      failing -> judged(failing, judge_failing(context, plan, failing, output, opts, deadline))
     end
   end
 
-  defp on_base(context, plan, failing, output, opts, deadline) do
+  defp judge_failing(context, plan, failing, output, opts, deadline) do
     git = Keyword.get(opts, :git, &default_git/2)
 
-    with {:ok, base} <- base(context, git),
-         {:ok, app} <- base_build(context, base, opts),
-         job = %{sha: base, app: app, tests: failing, deadline: deadline},
+    case base(context, git) do
+      {:ok, base} ->
+        on_base = base_entries(context.workspace, base, git)
+
+        case Enum.filter(failing, &own?(&1.test, on_base)) do
+          [] -> on_base(context, plan, base, failing, output, opts, deadline)
+          own -> {:own, output <> own_line(own)}
+        end
+
+      {:could_not_run, why, more} ->
+        {:could_not_run, why, output <> more}
+    end
+  end
+
+  # The step's result with the failing tests, their summary at the end of its output, where the
+  # code step's prompt (which carries the output's last lines) and the person both read it.
+  defp judged(failing, {:own, output}), do: {:judged, {:done, output <> summary(failing), 1}, failures(failing)}
+  defp judged(_failing, {:verdict, failing, {:done, output, status}}), do: {:judged, {:done, output <> summary(failing), status}, failures(failing)}
+  defp judged(_failing, {:verdict, failing, {:base_fault, why, output}}), do: {:judged, {:base_fault, why, output <> summary(failing)}, failures(failing)}
+  defp judged(failing, {:could_not_run, why, more}), do: {:judged, {:could_not_run, why, more}, failures(failing)}
+  defp judged(failing, {:base_fault, why, more}), do: {:judged, {:base_fault, why, more <> summary(failing)}, failures(failing)}
+  defp judged(failing, {:timeout, more}), do: {:judged, {:timeout, more}, failures(failing)}
+
+  defp failure(test, status, printed), do: %{test: test, status: status, printed: printed}
+
+  # A failing test is the change's own when the base branch does not run it in the QA VM: its
+  # manifest there lacks it or has it off, and the change turned it on or changed its script while
+  # it is off. The base can't judge a test it doesn't run, and making it pass is the change's job.
+  defp own?(test, on_base) do
+    case Enum.find(on_base, &(&1.script == test.script)) do
+      nil -> true
+      base -> is_binary(base.off)
+    end
+  end
+
+  # The base branch's manifest: none when it has none, or one it can't read (a test it can't name
+  # is not one it runs).
+  defp base_entries(workspace, base, git) do
+    with {text, 0} <- git.(["show", "#{base}:#{@manifest_path}"], workspace),
+         {:ok, entries} <- parse(to_string(text)) do
+      entries
+    else
+      _none -> []
+    end
+  end
+
+  defp own_line(own) do
+    names = Enum.map_join(own, ", ", & &1.test.script)
+    them = if length(own) == 1, do: "it", else: "them"
+
+    "\nFailed: #{names}. The base branch does not run #{them} in the QA VM (off or not in its list of window tests), " <>
+      "so making #{them} pass is this change's own work.\n"
+  end
+
+  defp on_base(context, plan, base, failing, output, opts, deadline) do
+    tests = Enum.map(failing, & &1.test)
+
+    with {:ok, app} <- base_build(context, base, opts),
+         job = %{sha: base, app: app, tests: tests, deadline: deadline},
          {:ok, base_results, base_output} <- on_vm(plan, context, opts, fn -> scripts(plan, context, job, opts) end) do
-      verdict(failing, base_results, output <> "\n-- The failing tests again, on the base branch (#{short(base)}):\n" <> base_output)
+      failing = with_base(failing, base_results)
+      {:verdict, failing, verdict(failing, base_results, output <> "\n-- The failing tests again, on the base branch (#{short(base)}):\n" <> base_output)}
     else
       {:could_not_run, why, more} -> {:could_not_run, why, output <> more}
       {:base_fault, why, more} -> {:base_fault, why, output <> more}
@@ -417,16 +524,90 @@ defmodule SymphonyElixir.PhaseSteps.WindowTests do
     end
   end
 
+  defp with_base(failing, base_results) do
+    for failure <- failing do
+      # The base ran every failing test, or the step could not run.
+      {_test, status, printed} = Enum.find(base_results, fn {test, _status, _printed} -> test.script == failure.test.script end)
+      Map.put(failure, :base, %{status: status, printed: printed})
+    end
+  end
+
   defp verdict(failing, base_results, output) do
-    case for({test, 0} <- base_results, do: test.script) do
+    case for({test, 0, _printed} <- base_results, do: test.script) do
       [] ->
-        titles = Enum.map_join(failing, ", ", & &1.title)
+        titles = Enum.map_join(failing, ", ", & &1.test.title)
         {:base_fault, "the #{titles} also fails in the QA VM on the base branch, so the fault is the VM's or the base's, not this change's", output}
 
       passing ->
-        names = Enum.map_join(failing, ", ", & &1.script)
+        names = Enum.map_join(failing, ", ", & &1.test.script)
         {:done, output <> "\nFailed: #{names}. Broken by this change: #{Enum.join(passing, ", ")} passes on the base branch.\n", 1}
     end
+  end
+
+  # What each failing test printed, its last lines, for the code step and the person.
+  defp summary(failing) do
+    tests =
+      Enum.map_join(Enum.take(failing, @failures_max), "", fn failure ->
+        "- the #{failure.test.title} (#{failure.test.script}), exit status #{failure.status}:\n" <>
+          indent(last_lines(failure.printed)) <> base_summary(Map.get(failure, :base))
+      end)
+
+    "\nWhat each failing test printed in the QA VM:\n" <> tests
+  end
+
+  defp base_summary(nil), do: ""
+  defp base_summary(%{status: status, printed: printed}), do: "  on the base branch, exit status #{status}:\n" <> indent(last_lines(printed))
+
+  defp indent(""), do: "    (it printed nothing)\n"
+  defp indent(text), do: text |> String.split("\n") |> Enum.map_join("", &"    #{&1}\n")
+
+  # The last lines a test printed, bounded.
+  defp last_lines(printed) do
+    printed
+    |> String.split(["\r\n", "\n"])
+    |> Enum.reject(&(String.trim(&1) == ""))
+    |> Enum.take(-@printed_lines)
+    |> Enum.join("\n")
+    |> String.slice(-@printed_chars, @printed_chars)
+  end
+
+  defp failures(failing) do
+    for failure <- Enum.take(failing, @failures_max) do
+      %{script: String.slice(failure.test.script, 0, 500), title: String.slice(failure.test.title, 0, 500), exit_status: failure.status}
+      |> put_printed(failure.printed)
+      |> put_base(Map.get(failure, :base))
+    end
+  end
+
+  # A test that printed nothing has no `printed`: the ledger keeps no blank text.
+  defp put_printed(failure, printed) do
+    case last_lines(printed) do
+      "" -> failure
+      lines -> Map.put(failure, :printed, lines)
+    end
+  end
+
+  defp put_base(failure, nil), do: failure
+  defp put_base(failure, %{status: status, printed: printed}), do: Map.put(failure, :base, put_printed(%{exit_status: status}, printed))
+
+  @doc """
+  What the step's `step.completed` says of the tests that failed in the QA VM, whether it ended
+  failed or paused on its Question: `reason`, one line naming each test (its title and script) and
+  how it ended, and `failures` (`t:failure/0`), each with the last lines it printed.
+  """
+  @spec details([failure()]) :: %{reason: String.t(), failures: [failure()]}
+  def details(failures) do
+    named =
+      Enum.map_join(failures, "; ", fn failure ->
+        ended = "the #{failure.title} (#{failure.script}) exited #{failure.exit_status}"
+
+        case Map.get(failure, :printed) do
+          nil -> ended
+          printed -> ended <> ": " <> (printed |> String.split("\n") |> List.last())
+        end
+      end)
+
+    %{reason: StepAnswer.reason("Failed in the QA VM: " <> named), failures: failures}
   end
 
   # The base branch that does not build in the QA VM can't tell whose fault the failure is.
@@ -445,9 +626,10 @@ defmodule SymphonyElixir.PhaseSteps.WindowTests do
 
   - `:vm`: the QA VM could not run the tests (unreachable, refused, no builder, a tool missing).
     Running them again, once the VM works, is recommended.
-  - `:base`: the failing tests also fail on the base branch, or the base does not build there, so
-    the QA VM or the base branch itself is at fault, not the change. Running them again, once
-    either is fixed, is recommended.
+  - `:base`: the failing tests, each one the base branch runs in the QA VM, also fail there, or the
+    base does not build there, so the QA VM or the base branch itself is at fault, not the change.
+    Running them again, once either is fixed, is recommended. A failing test the base does not run
+    is the change's own and never asks it.
   - `:off`: the change touches what a test covers that is off in the QA VM until it passes on main
     there. The VM is not at fault and running again stops again while the test stays off in the
     change's manifest, so sending it to the code step is recommended.

@@ -46,7 +46,9 @@ defmodule SymphonyElixir.PhaseSteps.WindowTestsTest do
     start_supervised!({DevServerLease, name: lease})
 
     git!(repo, ["init", "--quiet", "-b", "main"])
-    base = commit!(repo, %{"macos/Tests/pass-test.sh" => "echo all good\n", "macos/Tests/flaky-test.sh" => "echo flaky fine\n", "README.md" => "x\n"})
+    files = %{"macos/Tests/pass-test.sh" => "echo all good\n", "macos/Tests/flaky-test.sh" => "echo flaky fine\n", "README.md" => "x\n"}
+    # Main's own list of window tests: it runs the passing and the breakable test, the third is off.
+    base = commit!(repo, Map.put(files, WindowTests.manifest_path(), Jason.encode!(@manifest)))
     git!(repo, ["update-ref", "refs/remotes/origin/main", "HEAD"])
     %{home: home, repo: repo, bin: bin, lease: lease, base: base}
   end
@@ -266,8 +268,69 @@ defmodule SymphonyElixir.PhaseSteps.WindowTestsTest do
       assert output =~ "The failing tests again, on the base branch (#{String.slice(base, 0, 8)})"
       assert output =~ "flaky fine\n(passed)"
       assert output =~ "Broken by this change: macos/Tests/flaky-test.sh passes on the base branch."
-      assert [%{outcome: "failed", returns_to: "code", reason: reason}] = completed()
-      assert reason =~ "`symphony:window_tests` exited 1: Failed: macos/Tests/flaky-test.sh."
+      assert [%{outcome: "failed", returns_to: "code", reason: reason, failures: [failure]}] = completed()
+      assert reason == "Failed in the QA VM: the breakable test (macos/Tests/flaky-test.sh) exited 3: it broke"
+
+      assert %{
+               script: "macos/Tests/flaky-test.sh",
+               title: "breakable test",
+               exit_status: 3,
+               printed: printed,
+               base: %{exit_status: 0, printed: base_printed}
+             } = failure
+
+      assert printed =~ ~r/\nit broke\z/
+      assert base_printed =~ ~r/flaky fine\z/
+
+      # The code step's prompt carries what each failing test printed.
+      assert output =~ "What each failing test printed in the QA VM:\n- the breakable test (macos/Tests/flaky-test.sh), exit status 3:\n"
+      assert output =~ "    it broke\n  on the base branch, exit status 0:\n"
+    end
+
+    test "a test this change turns on that is off on main fails back to the code with what it printed, never asking whether main fails it (TP-1569)",
+         ctx do
+      # Main has the breakable test off; the change turns it on, and it fails in the QA VM. The
+      # passing test, on on main, fails beside it: the change's own test decides.
+      off_on_main = put_in(@manifest, ["tests", Access.at(1), "off"], "it fails on main there")
+      commit!(ctx.repo, %{WindowTests.manifest_path() => Jason.encode!(off_on_main)})
+      git!(ctx.repo, ["update-ref", "refs/remotes/origin/main", "HEAD"])
+      base = git!(ctx.repo, ["rev-parse", "HEAD"])
+      commit!(ctx.repo, %{WindowTests.manifest_path() => Jason.encode!(@manifest), "macos/Tests/flaky-test.sh" => "echo turned on\nexit 3\n", "macos/Tests/pass-test.sh" => "echo not today\nexit 2\n"})
+
+      assert {:turn, %{id: "code"}, %{output: output}} = walk(context(ctx, [WindowTests.manifest_path(), "macos/Tests/flaky-test.sh"], opts(ctx)))
+
+      refute_received {:built, ^base}
+      assert Questions.open({:ticket, @repo_key, @issue_id}) == []
+      refute output =~ "on the base branch ("
+      assert output =~ "Failed: macos/Tests/flaky-test.sh. The base branch does not run it in the QA VM (off or not in its list of window tests)"
+      assert output =~ "- the passing test (macos/Tests/pass-test.sh), exit status 2:\n"
+      assert output =~ "- the breakable test (macos/Tests/flaky-test.sh), exit status 3:\n"
+      assert output =~ "    turned on\n"
+
+      assert [%{outcome: "failed", returns_to: "code", reason: reason, failures: [pass, flaky]}] = completed()
+      assert reason =~ "Failed in the QA VM: the passing test (macos/Tests/pass-test.sh) exited 2: not today; the breakable test (macos/Tests/flaky-test.sh) exited 3: turned on"
+      assert %{exit_status: 2} = pass
+      assert %{exit_status: 3, printed: printed} = flaky
+      assert printed =~ "turned on"
+      refute Map.has_key?(flaky, :base)
+    end
+
+    test "a test main's list lacks, or main has no list, is the change's own too; one that printed nothing says so", ctx do
+      # Main pins the Xcode, so the test's own output is all it printed.
+      commit!(ctx.repo, %{"scripts/ci/xcode-developer-dir.sh" => "echo /Applications/Xcode.app\n"})
+      git!(ctx.repo, ["rm", "--quiet", WindowTests.manifest_path()])
+      git!(ctx.repo, ["commit", "--quiet", "-m", "no list"])
+      git!(ctx.repo, ["update-ref", "refs/remotes/origin/main", "HEAD"])
+      base = git!(ctx.repo, ["rev-parse", "HEAD"])
+      commit!(ctx.repo, %{WindowTests.manifest_path() => Jason.encode!(@manifest), "macos/Tests/flaky-test.sh" => "exit 1\n"})
+
+      assert {:turn, %{id: "code"}, %{output: output}} = walk(context(ctx, ["macos/Tests/flaky-test.sh"], opts(ctx)))
+
+      refute_received {:built, ^base}
+      assert output =~ "- the breakable test (macos/Tests/flaky-test.sh), exit status 1:\n    (it printed nothing)\n"
+      assert [%{outcome: "failed", reason: reason, failures: [failure]}] = completed()
+      assert reason == "Failed in the QA VM: the breakable test (macos/Tests/flaky-test.sh) exited 1"
+      assert failure == %{script: "macos/Tests/flaky-test.sh", title: "breakable test", exit_status: 1}
     end
 
     test "a test that fails on the base branch too stops the run on a question naming the VM problem, and never passes", ctx do
@@ -278,6 +341,22 @@ defmodule SymphonyElixir.PhaseSteps.WindowTestsTest do
       assert {:paused, %{id: "window_tests"}, question_id} = walk(context(ctx, ["macos/Sources/Window/View.swift"], opts(ctx)))
       assert [%{outcome: "paused", question_id: ^question_id} = paused] = completed()
       assert output(paused) =~ "(could not run: the breakable test also fails in the QA VM on the base branch"
+      assert output(paused) =~ "    broken everywhere\n  on the base branch, exit status 1:\n"
+
+      # The paused step names the failing test and keeps what it printed, here and on the base.
+      assert paused.reason == "Failed in the QA VM: the breakable test (macos/Tests/flaky-test.sh) exited 1: broken everywhere"
+
+      assert [
+               %{
+                 script: "macos/Tests/flaky-test.sh",
+                 exit_status: 1,
+                 printed: printed,
+                 base: %{exit_status: 1, printed: base_printed}
+               }
+             ] = paused.failures
+
+      assert printed =~ "broken everywhere"
+      assert base_printed =~ "broken everywhere"
 
       question = Questions.find({:ticket, @repo_key, @issue_id}, question_id)
       assert question.title == "TP-77: the window tests fail without this change too"
@@ -428,6 +507,29 @@ defmodule SymphonyElixir.PhaseSteps.WindowTestsTest do
       assert [%{outcome: "failed", returns_to: "window_tests"} = first | _rest] = completed()
       assert output(first) =~ "(failed: exit status 1)"
       assert output(first) =~ "gave no result before the step's timeout"
+    end
+
+    test "a failing test whose rerun on the base branch the QA VM can't run could not run, and keeps the change's output", ctx do
+      change_flaky!(ctx, "echo broke here\nexit 1\n")
+
+      # The change's run runs for real and fails; the VM drops the base's rerun.
+      dropped_base = %{
+        cmd: fn _args, run ->
+          if Process.get(:ran_once) do
+            {:error, :closed}
+          else
+            Process.put(:ran_once, true)
+            run.()
+          end
+        end
+      }
+
+      context = context(ctx, ["macos/Tests/flaky-test.sh"], opts(ctx, %{host: dropped_base}))
+      assert {:paused, %{id: "window_tests"}, question_id} = walk(context)
+      assert [%{outcome: "paused", question_id: ^question_id} = paused] = completed()
+      assert output(paused) =~ "broke here"
+      assert output(paused) =~ "(could not run: the QA VM could not run the breakable test: :closed"
+      assert paused.reason =~ "Failed in the QA VM: the breakable test (macos/Tests/flaky-test.sh) exited 1"
     end
   end
 

@@ -80,7 +80,11 @@ defmodule SymphonyElixir.TicketEvents.Types do
   In every other run kind a step's structured answer is its `answer` (`SymphonyElixir.PhaseSteps.StepAnswer`):
   a list of at most 12 `label` (up to 60 characters) and `value` (up to 1,500, as text) entries in
   the answer's key order. Symphony never writes a machine `note` to carry a step's output: what a
-  step answered and why it failed live on its `step.completed`.
+  step answered and why it failed live on its `step.completed`. A `paused` step may say why too
+  (`reason`). The Window tests step's (`SymphonyElixir.PhaseSteps.WindowTests.details/1`), failed
+  or paused, names in `failures` each test that failed in the QA VM, at most 10: its `script` and
+  `title` (up to 500), its `exit_status`, the last lines it `printed` (up to 1,200) and, when it ran
+  again on the base branch, the same there (`base`).
   A skipped step is a `step.completed` with
   `outcome: skipped`: there is no `step.skipped` type. A `question.answered` naming the question a
   paused step waits on is what resumes that step.
@@ -503,9 +507,19 @@ defmodule SymphonyElixir.TicketEvents.Types do
                 design: {:optional, {:string, 600}}
               ]}},
           verdict_summary: {:string, 600},
-          answer: {:list, {:map, [label: {:string, 60}, value: {:string, 1_500}]}}
+          answer: {:list, {:map, [label: {:string, 60}, value: {:string, 1_500}]}},
+          failures:
+            {:list,
+             {:map,
+              [
+                script: {:string, 500},
+                title: {:string, 500},
+                exit_status: :non_neg_integer,
+                printed: {:optional, {:string, 1_200}},
+                base: {:optional, {:map, [exit_status: :non_neg_integer, printed: {:optional, {:string, 1_200}}]}}
+              ]}, 10}
         ] ++ @signal,
-      conditional: [returns_to: {:outcome, "failed"}, question_id: {:outcome, "paused"}, reason: {:outcome, "skipped", ["failed"]}],
+      conditional: [returns_to: {:outcome, "failed"}, question_id: {:outcome, "paused"}, reason: {:outcome, "skipped", ["failed", "paused"]}],
       agent_values: @agent_steps,
       idempotency: :writer
     },
