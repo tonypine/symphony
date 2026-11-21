@@ -788,6 +788,27 @@ joined by `; `. The log line names the kind too (`Dispatch pause active kind=bui
   and the session's conversation when the agent can resume it (Claude, opencode); a session that
   can't be resumed is replaced, once, by a new session at the same step with the ticket's history.
   A turn stopped mid-way by Update Now Anyway goes on the same way from its last step event.
+- A stepped QA pass (`SymphonyElixir.QaAgent.Steps`: Plan the pass, Walk a step N, Design check,
+  Wide pass, Review and verdict, with machine steps between them) is active for an update only while
+  a step is in flight. At each boundary between two steps it asks the orchestrator to begin the next
+  one: while it waits there it counts as a run between turns, so an update waiting for its moment
+  may take it, and it begins its next step at once unless an update's `build` reason holds dispatch
+  (its pause, or the hold above); then the next step waits until that reason lifts, and Symphony
+  restarts at the boundary. While the update still waits behind other runs, the pass goes on; a
+  person's own Pause does not stop a pass between its steps. The age rule judges a pass by the start
+  of its step in flight, not of the pass, so a long pass never keeps the hold from starting; the
+  update waits behind a pass at most for the step in flight. A recheck round (the launch again, its
+  rechecks, the quit and the evidence) is one piece, with a boundary before and after it.
+- At each boundary the pass keeps where it stands in the run store: its list as walked so far, the
+  step it goes on at, each finished step's result and answer (the plan, the walk results, the design
+  check), its sessions and tokens, and a copy of the evidence under `qa-evidence/`, kept beside the
+  worktree. A new pass of the ticket on the same commit and list, whose last run Symphony's restart
+  ended (an update's restart in every mode, a plain Restart, Update Now Anyway), goes on at that
+  step with those results and evidence, and its findings ledger is the ticket's as before; no step
+  that ended is walked again. The app under test was gone with its QA session, so when the next step
+  drives it the build and launch steps run again first. A step a person interrupted mid-way with
+  Update Now Anyway was not finished, so it alone runs again. A pass that ends forgets what it kept,
+  and one that finds no such record starts its list from the top.
 - Each usage-limit hold (Sections 8.4.1 and 8.4.2) is an `environment` reason waiting on condition
   `usage_limit:<provider>:<scope>`, its line the hold's (`Claude's 5-hour limit until 14:30 UTC-3`,
   its local time naming its zone): set with the hold, its line refreshed when the hold changes,

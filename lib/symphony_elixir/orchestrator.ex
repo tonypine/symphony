@@ -795,6 +795,30 @@ defmodule SymphonyElixir.Orchestrator do
   # step, or on a step paused on a Question, its session ended and it holds no slot, so a cycle runs
   # at once for the slot it freed; once the step list reaches an agent turn again (or the Question is
   # answered), the run waits for a slot (`grant_step_turns/1`).
+  # A stepped QA pass between two of its steps (`SymphonyElixir.QaAgent.Steps`, TP-1590): it counts
+  # as no active run while it is there, so an update waiting for its moment may take it; it begins
+  # its next step at once unless an update holds dispatch, and then once the update's pause lifts.
+  # It keeps its slot.
+  defp handle_info_message({:run_step, issue_id, {:qa_boundary, pid, step}}, %{running: running} = state) when is_binary(issue_id) do
+    case Map.get(running, issue_id) do
+      nil ->
+        send(pid, {:run_step_turn, issue_id})
+        {:noreply, state}
+
+      running_entry ->
+        step = Map.merge(step, %{qa: true, waiting: :slot, waiter: pid, started_at: state.clock.()})
+
+        state =
+          state
+          |> put_running_entry(issue_id, Map.put(running_entry, :step, step))
+          |> check_update_window()
+          |> grant_qa_step(issue_id, state.running[issue_id])
+
+        notify_dashboard()
+        {:noreply, state}
+    end
+  end
+
   defp handle_info_message({:run_step, issue_id, notice}, %{running: running} = state) when is_binary(issue_id) do
     case Map.get(running, issue_id) do
       nil ->
@@ -5734,6 +5758,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   # A run on a machine step, or waiting for the slot of its next agent turn, holds no slot: its
   # session ended at the step, and Symphony runs the step (`SymphonyElixir.PhaseSteps`).
+  defp slot_free_entry?(%{step: %{qa: true}}), do: false
   defp slot_free_entry?(%{step: %{mode: "machine"}}), do: true
   defp slot_free_entry?(%{step: %{waiting: waiting}}) when not is_nil(waiting), do: true
   defp slot_free_entry?(_running_entry), do: false
@@ -5768,9 +5793,30 @@ defmodule SymphonyElixir.Orchestrator do
     |> Enum.reduce(state, fn
       {issue_id, %{step: %{waiting: :answer}} = entry}, acc -> await_step_answer(acc, issue_id, entry, paused?)
       {_issue_id, %{step: %{waiting: :ended}}}, acc -> acc
+      {issue_id, %{step: %{qa: true}} = entry}, acc -> grant_qa_step(acc, issue_id, entry)
       {issue_id, entry}, acc -> grant_step_turn(acc, issue_id, entry, paused?)
     end)
   end
+
+  # A QA pass at a step boundary waits only while an update holds dispatch (the update's `:build`
+  # reason, its pause or the hold of `SymphonyElixir.UpdateWindow`); a person's own Pause does not
+  # stop a pass between its steps. Its next step's start is its time as an active run, so the age
+  # rule judges the step in flight and not the whole pass.
+  defp grant_qa_step(state, issue_id, entry) do
+    entry = Map.get(state.running, issue_id, entry)
+
+    if update_holding?() do
+      record_update_wait(state, issue_id, entry)
+      put_running_entry(state, issue_id, put_in(entry, [:step, :waiting], :pause))
+    else
+      now = state.clock.()
+      send(entry.step.waiter, {:run_step_turn, issue_id})
+      step = entry.step |> Map.delete(:waiter) |> Map.merge(%{waiting: nil, started_at: now})
+      put_running_entry(state, issue_id, Map.merge(entry, %{step: step, last_event_at: now}))
+    end
+  end
+
+  defp update_holding?, do: Enum.any?(Pauses.dispatch_reasons(symphony_pause()), &match?(%{kind: :build}, &1))
 
   defp await_step_answer(state, issue_id, %{step: step} = entry, paused?) do
     case Questions.find({:ticket, running_entry_repo_key(entry) || state.repo_key, issue_id}, step.question_id) do
@@ -8539,11 +8585,16 @@ defmodule SymphonyElixir.Orchestrator do
 
   # The start of each active agent run; one between turns is not active (`GET /api/v1/drain`).
   defp active_run_starts(running, now) do
-    for {_issue_id, entry} <- running, not between_turns?(entry) do
-      case Map.get(entry, :started_at) do
-        %DateTime{} = started_at -> started_at
-        _unknown -> now
-      end
+    for {_issue_id, entry} <- running, not between_turns?(entry), do: active_since(entry, now)
+  end
+
+  # A QA pass is judged by its step in flight, not by the whole pass.
+  defp active_since(%{step: %{qa: true, started_at: %DateTime{} = started_at}}, _now), do: started_at
+
+  defp active_since(entry, now) do
+    case Map.get(entry, :started_at) do
+      %DateTime{} = started_at -> started_at
+      _unknown -> now
     end
   end
 

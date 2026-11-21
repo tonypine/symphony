@@ -48,7 +48,7 @@ defmodule SymphonyElixir.ConductorGate do
 
   @doc "Starts the gate. `clock` (a function giving monotonic milliseconds) is for tests."
   @spec start_link(keyword()) :: GenServer.on_start()
-  def start_link(opts \\ []) do
+  def start_link(opts) do
     {name, opts} = Keyword.pop(opts, :name, __MODULE__)
     GenServer.start_link(__MODULE__, opts, name: name)
   end

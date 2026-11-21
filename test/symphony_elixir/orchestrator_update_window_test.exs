@@ -215,7 +215,7 @@ defmodule SymphonyElixir.OrchestratorUpdateWindowTest do
     assert update_reasons() == []
     assert %{phase: :waiting} = window(state)
 
-    state = state |> clock(40) |> check()
+    _state = state |> clock(40) |> check()
     assert update_reasons() == ["0.0.1.1053"]
   end
 
@@ -283,6 +283,79 @@ defmodule SymphonyElixir.OrchestratorUpdateWindowTest do
     state = state |> clock(15) |> check()
     assert {{:error, _reason}, state} = state |> clock(16) |> ready(long)
     assert %{version: "0.0.1.1053", phase: :holding} = window(state)
+  end
+
+  defp qa_boundary(state, issue_id, step_id) do
+    step = %{id: step_id, title: step_id, mode: "orchestrated"}
+    {:noreply, state} = Orchestrator.handle_info({:run_step, issue_id, {:qa_boundary, self(), step}}, state)
+    state
+  end
+
+  test "an update waits only for a QA pass's step in flight: at the boundary after it the next step does not begin and Symphony can restart" do
+    # The pass began 40 minutes ago; another ticket's run is active too.
+    state =
+      orchestrator_state()
+      |> run(issue("qa-1", "TP-9", "QA"), at(-40), run_profile: %{kind: :qa, model: nil, effort: nil, provider: "anthropic"})
+      |> run(issue("run-1", "TP-1", "In Progress"), at(-5))
+      |> clock(0)
+
+    {{:ok, %{phase: :waiting}}, state} = ready(state, "0.0.1.1060")
+
+    # A step ends while the update still waits behind the other run: the pass is not stalled.
+    state = qa_boundary(state, "qa-1", "walk_1")
+    assert_received {:run_step_turn, "qa-1"}
+    assert update_reasons() == []
+    assert %{qa: true, waiting: nil, started_at: started} = state.running["qa-1"].step
+    assert started == at(0)
+
+    # The other run ends while the pass's step is in flight: the pass is active, so no hold yet.
+    state = state |> clock(3) |> run_ended("run-1")
+    assert update_reasons() == []
+
+    # That step ends: the pass is between steps, the update holds at once, and the next step waits.
+    state = state |> clock(4) |> qa_boundary("qa-1", "design_check")
+    assert update_reasons() == ["0.0.1.1060"]
+    refute_received {:run_step_turn, "qa-1"}
+    assert %{qa: true, waiting: :pause, id: "design_check"} = state.running["qa-1"].step
+
+    # The drain counts the pass between turns, so the app hands over now, not after the pass.
+    {:reply, snapshot, state} = Orchestrator.handle_call(:snapshot, {self(), make_ref()}, state)
+    assert [entry] = snapshot.running
+    assert SymphonyElixirWeb.Presenter.between_turns?(entry)
+
+    # The update called off (the app's Cancel Update): the pass begins its next step.
+    {:reply, {:ok, _pause}, state} = resume(state, {:build, "0.0.1.1060"})
+    _state = check(state)
+    assert_received {:run_step_turn, "qa-1"}
+  end
+
+  test "the age rule judges a QA pass by its step in flight, not by the whole pass" do
+    state =
+      orchestrator_state()
+      |> run(issue("qa-1", "TP-9", "QA"), at(-40))
+      |> run(issue("run-1", "TP-1", "In Progress"), at(-30))
+      |> clock(0)
+
+    {{:ok, %{phase: :waiting}}, state} = ready(state, "0.0.1.1060")
+
+    # Its step began at minute 14: past the wait the update does not hold behind that young step...
+    state = state |> clock(14) |> qa_boundary("qa-1", "walk_2")
+    assert_received {:run_step_turn, "qa-1"}
+    state = state |> clock(16) |> check()
+    assert update_reasons() == []
+
+    # ...and holds once it is 3 minutes old, though the pass began long before.
+    state = state |> clock(17) |> check()
+    assert update_reasons() == ["0.0.1.1060"]
+
+    # Under the hold its next step waits at the boundary.
+    _state = state |> clock(19) |> qa_boundary("qa-1", "review")
+    refute_received {:run_step_turn, "qa-1"}
+  end
+
+  test "a QA pass whose run Symphony no longer has goes on at its boundary" do
+    _state = qa_boundary(orchestrator_state(), "gone", "walk_1")
+    assert_received {:run_step_turn, "gone"}
   end
 
   defmodule SnapshotOrchestrator do

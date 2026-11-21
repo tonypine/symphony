@@ -7,6 +7,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   alias SymphonyElixir.ClaudeCode.AppServer, as: ClaudeAppServer
   alias SymphonyElixir.Harnesses.{EventStream, Launcher}
+  alias SymphonyElixir.QaAgent.Steps, as: QaSteps
 
   alias SymphonyElixir.{
     AgentLabels,
@@ -686,6 +687,7 @@ defmodule SymphonyElixir.AgentRunner do
       opts
       |> Keyword.put(:worker_host, worker_host)
       |> Keyword.put(:on_message, codex_message_handler(codex_update_recipient, issue))
+      |> Keyword.put(:qa_boundary, QaSteps.boundary(codex_update_recipient, issue.id))
 
     case Keyword.get(opts, :code_review, CodeReview).run(issue, workspace, walkthrough_opts) do
       :skip -> run_non_review_issue(workspace, issue, codex_update_recipient, opts, walkthrough_opts, worker_host)

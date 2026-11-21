@@ -484,6 +484,42 @@ defmodule SymphonyElixir.RunStore do
 
   def delete_rework_base(_repo_key, _issue_id), do: {:error, :invalid_issue_id}
 
+  @doc """
+  Keeps where a stepped QA pass of `issue_id` stands (`SymphonyElixir.QaAgent.Steps`): written at
+  each step's end, so a pass Symphony's restart stopped goes on at its next step (TP-1590).
+  """
+  @spec put_qa_pass(String.t(), String.t(), map()) :: :ok | {:error, term()}
+  def put_qa_pass(repo_key, issue_id, %{} = pass) when is_binary(issue_id) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      durable_transaction(fn ->
+        :mnesia.write({@totals_table, qa_pass_key(repo_key, issue_id), pass})
+        :ok
+      end)
+    end
+  end
+
+  @doc "Where `issue_id`'s stepped QA pass stood at its last step's end (`put_qa_pass/3`), or nil."
+  @spec get_qa_pass(String.t(), String.t()) :: map() | nil | {:error, term()}
+  def get_qa_pass(repo_key, issue_id) when is_binary(issue_id) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      transaction(fn -> read_qa_pass(repo_key, issue_id) end)
+    end
+  end
+
+  @doc "Forgets `issue_id`'s stepped QA pass: it ended."
+  @spec delete_qa_pass(String.t(), String.t()) :: :ok | {:error, term()}
+  def delete_qa_pass(repo_key, issue_id) when is_binary(issue_id) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      durable_transaction(fn ->
+        :mnesia.delete({@totals_table, qa_pass_key(repo_key, issue_id)})
+        :ok
+      end)
+    end
+  end
+
   # When Symphony itself last moved an issue's state in Linear. Symphony and the person reviewing
   # can share one Linear user, so the issue's history alone cannot tell their moves apart.
   @spec put_own_state_move(String.t(), DateTime.t()) :: :ok | {:error, term()}
@@ -2933,6 +2969,14 @@ defmodule SymphonyElixir.RunStore do
   defp scoped_key(repo_key, id), do: {repo_key, id}
 
   defp rework_base_key(repo_key, issue_id), do: {:rework_base, repo_key, issue_id}
+  defp qa_pass_key(repo_key, issue_id), do: {:qa_pass, repo_key, issue_id}
+
+  defp read_qa_pass(repo_key, issue_id) do
+    case :mnesia.read(@totals_table, qa_pass_key(repo_key, issue_id)) do
+      [{@totals_table, _key, %{} = pass}] -> pass
+      _none -> nil
+    end
+  end
 
   defp read_rework_base(repo_key, issue_id) do
     case :mnesia.read(@totals_table, rework_base_key(repo_key, issue_id)) do
