@@ -585,7 +585,7 @@ private struct ImageViewerFilmstrip: View {
                 ))
                 .contentShape(shape)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.plainPointer)
         .animation(.motion(.fast, reduceMotion: reduceMotion), value: current)
         .help(shot.label)
         .id(index)

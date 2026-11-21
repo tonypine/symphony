@@ -774,6 +774,7 @@ struct TicketViewSheetsPresenter: ViewModifier {
             .sheet(item: $model.ticketViewSheet) { sheet in
                 TicketViewNameSheetView(sheet: sheet, working: model.ticketViewInFlight, error: model.ticketViewError,
                                         cancel: model.cancelTicketViewSheet, confirm: model.confirmTicketViewName)
+                    .pointerButtons()
             }
             .confirmationDialog(
                 TicketViewsMenu.deleteQuestion(model.currentTicketView?.name ?? ""),
@@ -861,6 +862,7 @@ struct DispatchControlButton: View {
                     updateNow: { model.performUpdateAction(.updateNow) }
                 )
             )
+            .pointerButtons()
         }
     }
 }
@@ -1104,10 +1106,12 @@ struct DispatchSheetsPresenter: ViewModifier {
             .sheet(isPresented: $model.pauseSheetShown) {
                 PauseSheetView(working: model.dispatchInFlight, error: model.dispatchError, cancel: model.cancelDispatchSheet,
                                confirm: { model.confirmPause(reason: $0) })
+                .pointerButtons()
             }
             .sheet(item: $model.forceSheet) { request in
                 ForceSheetView(list: model.allTickets, input: request.input, working: model.dispatchInFlight,
                                error: model.dispatchError, cancel: model.cancelDispatchSheet, confirm: { model.confirmForce(input: $0) })
+                .pointerButtons()
             }
     }
 }

@@ -210,6 +210,7 @@ public struct SegmentedControl<Value: Hashable>: View {
                                 }
                             }
                     )
+                    .buttonPointer(enabled: !disabled)
             }
         }
         .padding(DesignTokens.Segmented.inset)

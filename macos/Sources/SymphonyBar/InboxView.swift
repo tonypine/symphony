@@ -148,7 +148,7 @@ private struct ReviewHeader: View {
                     .foregroundStyle(.primary)
                     .multilineTextAlignment(.leading)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.plainPointer)
             .help("Open the ticket page")
             .accessibilityAddTraits(.isHeader)
             .accessibilityHint("Opens the ticket page")
