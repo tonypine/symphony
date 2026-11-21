@@ -200,7 +200,7 @@ defmodule SymphonyElixir.PrWatch.Fetch do
       end
 
     ticket
-    |> Map.take([:phase, :hold, :run, :max_red_attempts, :ahead, :competing, :review_comments, :review | PrWatch.Attempts.fact_keys()])
+    |> Map.take([:phase, :hold, :run, :max_red_attempts, :ahead, :competing, :review_comments, :review, :merge_guard | PrWatch.Attempts.fact_keys()])
     |> Map.put(:origin, if(ticket.phase == :ci_fix, do: ticket.origin))
     |> Map.merge(pr_facts)
     |> Facts.new()

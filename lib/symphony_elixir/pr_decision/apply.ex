@@ -94,6 +94,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
   alias SymphonyElixir.{
     AuditLog,
     AutoMerge,
+    ChecksHold,
     CiFix,
     DecisionMove,
     DecisionRequest,
@@ -106,6 +107,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
     RunStore,
     SelfHeal,
     SubIssueWait,
+    TicketJourney,
     TicketPullRequest,
     TicketSignals,
     TicketState,
@@ -385,6 +387,17 @@ defmodule SymphonyElixir.PrDecision.Apply do
     end
   end
 
+  # The plan holds the merge (R9a): auto-merge goes off first, so GitHub cannot land the head while
+  # the ticket moves, then Rework, where a run codes the plan as it is now on the same pull request.
+  defp perform(%Action{kind: :hold_merge} = action, ctx) do
+    with :ok <- disarm_if_armed(ctx, :merge_held),
+         :ok <- move(:merge_held, %{}, ctx) do
+      comment(ctx, "Symphony moved this ticket to #{@rework_state}: #{action.reason}. A rework run works from the plan as it is now, on the same pull request.")
+      TicketSignals.record(ctx.repo_key, ctx.issue.id, "review verdict", %{outcome: "merge_held", to: @rework_state, reason: action.reason})
+      {:ok, %{moved_to: :rework}}
+    end
+  end
+
   defp perform(%Action{kind: :to_in_progress} = action, ctx) do
     with :ok <- disarm_if_armed(ctx, :review_comments),
          :ok <- move(:review_rework, %{target: @in_progress_state}, ctx) do
@@ -452,9 +465,19 @@ defmodule SymphonyElixir.PrDecision.Apply do
   end
 
   defp perform(%Action{kind: :close_ticket}, ctx) do
-    with :ok <- close_ticket(ctx) do
-      TicketPullRequest.mark_finished(ctx.repo_key, pr_url(ctx), "merged")
-      {:ok, %{}}
+    case close_ticket(ctx) do
+      :ok ->
+        TicketPullRequest.mark_finished(ctx.repo_key, pr_url(ctx), "merged")
+        {:ok, %{}}
+
+      # The pull request merged anyway (by hand on GitHub) while the plan has open checks: the ticket
+      # stays out of Done, and the person decides through the one decision path.
+      {:error, {:move_failed, _signal, {:open_checks, ids}}} ->
+        TicketPullRequest.mark_finished(ctx.repo_key, pr_url(ctx), "merged")
+        ask_merged_open(ids, ctx)
+
+      {:error, _reason} = error ->
+        error
     end
   end
 
@@ -813,6 +836,11 @@ defmodule SymphonyElixir.PrDecision.Apply do
       "The change they ask for goes back through review; moving this ticket to Merging again turns auto-merge back on."
   end
 
+  defp disarm_comment(:merge_held, ctx) do
+    "Symphony turned off GitHub auto-merge on #{pr_url(ctx) || "this PR"} because the ticket's plan holds the merge. " <>
+      "The change goes back through Rework and review; moving this ticket to Merging again turns auto-merge back on."
+  end
+
   defp disarm_comment(_why, ctx), do: AutoMerge.ci_fix_comment(pr_url(ctx))
 
   # A decision pauses the ticket in its phase on a Needs Decision hold; the option that moves it to
@@ -823,6 +851,17 @@ defmodule SymphonyElixir.PrDecision.Apply do
 
     with :ok <- DecisionRequest.ask(held, request, [tracker: tracker(ctx)] ++ store_opts(ctx), confirm) do
       TicketSignals.record(ctx.repo_key, ctx.issue.id, "decision requested", %{to: ctx.issue.state, reason: reason})
+    end
+  end
+
+  defp ask_merged_open(ids, ctx) do
+    checks = Enum.filter(TicketJourney.owed_before_merge(ctx.issue.id), &(&1.id in ids))
+    request = ChecksHold.merged_question(ctx.issue.identifier || ctx.issue.id, Request.pull_request(pr_url(ctx)), checks)
+    held = %{id: ctx.issue.id, state: ctx.issue.state, repo_key: ctx.repo_key}
+
+    with :ok <- DecisionRequest.ask(held, request, [tracker: tracker(ctx)] ++ store_opts(ctx)) do
+      TicketSignals.record(ctx.repo_key, ctx.issue.id, "decision requested", %{to: ctx.issue.state, reason: request.title})
+      {:ok, %{}}
     end
   end
 

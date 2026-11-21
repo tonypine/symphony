@@ -471,6 +471,63 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
     assert moved =~ "A person pushed to PR #7 while it was in Merging: Symphony moved this ticket back to Code Review"
   end
 
+  describe "the plan holds the merge (TP-1589)" do
+    @held_plan %{
+      reason: "Grooming",
+      by: "grooming",
+      shape: "single",
+      layers: ["logic"],
+      summary: "The merge waits on the plan.",
+      text: "Guard the merge.",
+      checks: [%{id: "c1", kind: "outcome", statement: "The merge waits on open checks.", proof: "test"}],
+      size: %{tokens: 1_000, runs: 1}
+    }
+
+    test "hold_merge turns auto-merge off before it moves the ticket to Rework, and a ticket already in Merging leaves it" do
+      action = action("R9a", :hold_merge, args: %{why: :rewritten}, reason: "PR #7 does not merge: the plan was rewritten")
+
+      assert %{outcome: :applied, moved_to: :rework} = Apply.apply(action, ctx(:merging, facts: %{auto_merge: :armed}))
+
+      assert_received {:disable_auto_merge, @pr_url, "PR_node", _opts}
+      assert_received {:comment, @issue_id, disarmed}
+      assert disarmed =~ "because the ticket's plan holds the merge"
+      assert_received {:move, @issue_id, "Rework"}
+      assert_received {:comment, @issue_id, "Symphony moved this ticket to Rework: PR #7 does not merge: the plan was rewritten." <> _rest}
+      refute_received {:squash_merge, _url, _request, _opts}
+      signals = TicketState.recent_signals(RunStore.get_ticket_state(@issue_id))
+      assert [%{name: "review verdict", details: %{outcome: "merge_held"}} | _] = signals
+
+      # Auto-merge off already: only the move. One GitHub refuses to turn off keeps the ticket where it is.
+      assert %{outcome: :applied} = Apply.apply(action, ctx(:ci_fix))
+      refute_received {:disable_auto_merge, _url, _node, _opts}
+      assert_received {:move, @issue_id, "Rework"}
+
+      Process.put(:disable_auto_merge, {:error, :forbidden})
+      capture_log(fn -> assert %{outcome: {:error, {:disable_auto_merge_failed, :forbidden}}} = Apply.apply(action, ctx(:merging, facts: %{auto_merge: :armed})) end)
+      refute_received {:move, @issue_id, "Rework"}
+    end
+
+    test "a pull request merged while the plan has open checks leaves the ticket out of Done and asks the person" do
+      {:ok, _plan} = SymphonyElixir.TicketPlan.write(@repo_key, @issue_id, @held_plan)
+
+      capture_log(fn -> assert %{outcome: :applied} = Apply.apply(action("R2", :close_ticket), ctx(:merging)) end)
+
+      refute_received {:move, @issue_id, "Done"}
+      assert %{state: "merged"} = TicketPullRequest.get(@repo_key, @issue_id)
+      assert_received {:comment, @issue_id, "## Decision needed: TP-7: merged with checks of its plan still open" <> _rest}
+      assert %{question: question, options: options} = deciding()
+      assert question =~ "PR #7 of TP-7 merged, but these checks of its plan are still not proved: [c1] The merge waits on open checks. (proof: test)."
+      assert [%{label: "Waive them and close it"}, %{label: "Cancel the ticket"}] = options
+
+      # A question that can't be posted is the error.
+      :ok = RunStore.clear()
+      {:ok, _plan} = SymphonyElixir.TicketPlan.write(@repo_key, @issue_id, @held_plan)
+      :ok = TicketPullRequest.record_created(@repo_key, @issue_id, @pr_url, "auto/TP-7")
+      Process.put(:comment_result, {:error, :linear_down})
+      capture_log(fn -> assert %{outcome: {:error, {:decision_request_failed, :linear_down}}} = Apply.apply(action("R2", :close_ticket), ctx(:merging)) end)
+    end
+  end
+
   test "to_rework sends a conflict back after its fix runs, with nobody competing, to Rework (D16)" do
     reason = "The conflict with main came back after 3 fix runs and no open PR competes"
 

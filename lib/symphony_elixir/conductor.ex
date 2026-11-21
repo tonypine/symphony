@@ -36,13 +36,20 @@ defmodule SymphonyElixir.Conductor do
   which pauses the ticket on the Question as any other: a turn that asked holds the run it came
   before (`run/3` answers `:held`), which does not start.
 
-  It never holds a ticket up: a turn that times out (`conductor.timeout_ms`), fails, answers
-  outside the schema, or whose provider a usage limit holds with no free fallback is logged, records
-  nothing for the person, and the next run starts as if the Conductor were off. It never changes the
-  ticket's plan; its instructions are advice added to the next run's prompt. It moves the ticket at
-  one junction only: at `after_qa_blocked` its answer may route the ticket (`route`), back to
-  Rework with a finding or to one more QA pass, within bounds Symphony keeps from the ticket's
-  events (`open_routes/1`); it never routes it past QA. At `after_qa_blocked`, `after_qa_fail`,
+  A turn that fails never holds a ticket up: one that times out (`conductor.timeout_ms`), fails,
+  answers outside the schema, or whose provider a usage limit holds with no free fallback is logged,
+  records nothing for the person, and the next run starts as if the Conductor were off; the
+  mechanical guard on the merge (the plan's open checks and a plan version written after the code,
+  `SymphonyElixir.PrDecision`'s R9a) holds without it. It never changes the ticket's plan; its
+  instructions are advice added to the next run's prompt. It routes the ticket in two ways only. At
+  `after_qa_blocked` its answer may route the ticket (`route`), back to Rework with a finding or to
+  one more QA pass, within bounds Symphony keeps from the ticket's events (`open_routes/1`); it never
+  routes it past QA. At `before_merge`, at `message` and on a watch turn its answer may hold the
+  ticket's merge (`hold`, with a reason) when the pull request is about to merge work that is not
+  what is asked now: Symphony records the reason as the next run's instructions routed `hold`, and
+  the PR and CI watcher, asked to read the ticket at once, turns auto-merge off and moves the ticket
+  to Rework (R9a), from Merging too, since the `before_merge` turn can run after the ticket entered
+  it (`plan_after_run/4`). At `after_qa_blocked`, `after_qa_fail`,
   `after_rework` and `during_run` its route may file a ticket for a problem that is not this
   ticket's to solve (`SymphonyElixir.Conductor.Filing`): one that `blocks` holds the ticket on it, as
   a question does (the run the turn came before does not start, and the QA pass asks nothing of
@@ -102,6 +109,7 @@ defmodule SymphonyElixir.Conductor do
     Orchestrator,
     Pauses,
     PromptSafety,
+    PrWatch,
     Questions,
     ReviewAgent,
     RunStore,
@@ -145,6 +153,8 @@ defmodule SymphonyElixir.Conductor do
   @message_junctions [@message, @child_message]
   # The junctions whose answer may waive a check of the plan.
   @waive_junctions ["message", "after_coding", "after_rework", "before_merge", "sub_ticket_ended", "final_check", "during_run"]
+  # The junctions whose answer may hold the ticket's merge.
+  @hold_junctions ["before_merge", "message", "during_run"]
   @junction_words %{
     "grooming" => "the ticket is new; you write its plan before any work starts",
     "message" => "a person sent a message on the ticket; you answer it",
@@ -808,7 +818,8 @@ defmodule SymphonyElixir.Conductor do
       tree: junction in @tree_junctions or junction in @message_junctions,
       message: reply_read(plan),
       new_ticket: match?(%{message: %{finished: true}}, plan),
-      waive: junction in @waive_junctions
+      waive: junction in @waive_junctions,
+      hold: junction in @hold_junctions
     ]
   end
 
@@ -842,7 +853,7 @@ defmodule SymphonyElixir.Conductor do
   # only logs why.
   defp record_outcome({:ok, answer, _tokens}, plan, issue, run_id, {facts, record, opts}) do
     {route, filed} = answer |> route_taken(plan, issue) |> ticket_route(plan, issue, run_id, opts)
-    if answer.instructions, do: record_event(plan, "conductor.instructions", instructions_payload(plan, answer, route), run_id)
+    record_instructions(answer, plan, issue, route, run_id)
     waive(answer.waive, plan, issue)
     # The question goes first: the update's `question` block names the decision it opened.
     asked = ask_person(answer.ask_person, plan, issue, run_id)
@@ -970,6 +981,22 @@ defmodule SymphonyElixir.Conductor do
       _other -> Enum.join(paragraphs ++ [line], "\n\n")
     end
   end
+
+  # The instructions for the next run. A hold is recorded as instructions routed `hold`, its reason
+  # first: the PR and CI watcher reads it (`SymphonyElixir.TicketJourney.outdated/1`) and holds the
+  # merge (R9a: auto-merge off, then Rework), on a read it asks for now, so a turn that ran after the
+  # ticket entered Merging still stops the merge; the rework run reads the reason as its instructions.
+  defp record_instructions(%{hold: %{reason: reason}} = answer, plan, issue, _route, run_id) do
+    text = [reason, answer.instructions] |> Enum.reject(&is_nil/1) |> Enum.join("\n\n") |> Facts.fit(Answer.instructions_max())
+    record_event(plan, "conductor.instructions", %{junction: plan.junction, text: text, route: "hold"}, run_id)
+    Logger.info("Conductor held the merge #{context(issue, plan)} run_id=#{run_id} junction=#{plan.junction}")
+    PrWatch.read_ticket(plan.repo_key, plan.issue_id)
+  end
+
+  defp record_instructions(%{instructions: text} = answer, plan, _issue, route, run_id) when is_binary(text),
+    do: record_event(plan, "conductor.instructions", instructions_payload(plan, answer, route), run_id)
+
+  defp record_instructions(_answer, _plan, _issue, _route, _run_id), do: :ok
 
   defp instructions_payload(plan, answer, nil), do: %{junction: plan.junction, text: answer.instructions}
   defp instructions_payload(plan, answer, route), do: %{junction: plan.junction, text: answer.instructions, route: route.to}

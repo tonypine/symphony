@@ -2,7 +2,7 @@ defmodule SymphonyElixir.TransitionGuardTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.{Pauses, Questions, TicketState, TransitionGuard}
+  alias SymphonyElixir.{Pauses, Questions, TicketChecks, TicketState, TransitionGuard}
 
   defmodule FakeTracker do
     def update_issue_state(issue_id, state) do
@@ -92,6 +92,7 @@ defmodule SymphonyElixir.TransitionGuardTest do
                %{signal: :ci_fix_mechanical, from: ["CI Fix"], to: :requested},
                %{signal: :person_push, from: ["Merging"], to: :code_review_state},
                %{signal: :conflict_rework, from: ["Code Review", "QA", "CI Fix", "Merging"], to: "Rework"},
+               %{signal: :merge_held, from: ["Code Review", "QA", "CI Fix", "Merging"], to: "Rework"},
                %{signal: :pr_closed, from: ["Code Review", "QA", "CI Fix", "Merging"], to: "Rework"},
                %{signal: :pr_merged, from: ["In Progress", "Code Review", "QA", "Rework", "CI Fix"], to: "Done"},
                %{signal: :epic_review_enter, from: ["Waiting on sub-tickets"], to: :epic_review_state},
@@ -532,6 +533,86 @@ defmodule SymphonyElixir.TransitionGuardTest do
 
       assert :ok = TransitionGuard.perform("issue-3", :claim)
       assert_received {:memory_tracker_state_update, "issue-3", "In Progress"}
+    end
+  end
+
+  @doc false
+  def no_read(_repo_key, _issue_id), do: :ok
+
+  describe "the merge guard (TP-1589)" do
+    @guarded_plan %{
+      reason: "Grooming",
+      by: "grooming",
+      shape: "single",
+      layers: ["logic"],
+      summary: "The merge waits on the plan.",
+      text: "Guard the merge.",
+      checks: [
+        %{id: "c1", kind: "outcome", statement: "The merge waits on open checks.", proof: "test"},
+        %{id: "c2", kind: "outcome", statement: "Main is green after the merge.", proof: "test", after_merge: true}
+      ],
+      size: %{tokens: 1_000, runs: 1}
+    }
+
+    @quiet &__MODULE__.no_read/2
+
+    setup do
+      :ok = RunStore.clear()
+      {:ok, _plan} = SymphonyElixir.TicketPlan.write("repo-guard", "guarded-1", @guarded_plan)
+      %{ctx: %{repo_key: "repo-guard", settings: memory_settings(), issue_identifier: "TP-1"}}
+    end
+
+    test "no move enters Merging while a check of the plan is open: from Code Review, QA, a skipped QA, CI Fix's return or a person", %{ctx: ctx} do
+      moves = [
+        {:code_review_approve_skip, %{}},
+        {:qa_pass, %{}},
+        {:qa_skip, %{}},
+        {:ci_fix_mechanical, %{target: "Merging"}},
+        {:merge_ready, %{}},
+        {:director_move, %{target: "Merging"}}
+      ]
+
+      log =
+        capture_log(fn ->
+          for {signal, extra} <- moves do
+            assert {:error, {:open_checks, ["c1"]}} = TransitionGuard.perform("guarded-1", signal, Map.merge(ctx, extra), tracker: FakeTracker), inspect(signal)
+          end
+        end)
+
+      refute_received {:moved, _issue_id, _state}
+      assert log =~ "Refused a move whose plan has open checks issue_id=guarded-1 issue_identifier=TP-1 signal=qa_pass to=Merging checks=c1"
+      assert %{phase: nil} = RunStore.get_ticket_state("guarded-1")
+
+      # Proved, it moves: the check seen only after the merge holds nothing.
+      {:ok, _proof} = TicketChecks.prove("repo-guard", "guarded-1", %{check_id: "c1", by: "test", test: "guard_test.exs"})
+      assert :ok = TransitionGuard.perform("guarded-1", :qa_pass, ctx, tracker: FakeTracker, on_merging: fn -> :ok end)
+      assert_received {:moved, "guarded-1", "Merging"}
+    end
+
+    test "no merge or person's move closes the ticket in Done while a check is open; a ticket that closes on its sub-tickets does", %{ctx: ctx} do
+      capture_log(fn ->
+        for {signal, extra} <- [landing_done: %{}, pr_merged: %{}, director_move: %{target: "Done"}] do
+          assert {:error, {:open_checks, ["c1"]}} = TransitionGuard.perform("guarded-1", signal, Map.merge(ctx, extra), tracker: FakeTracker), inspect(signal)
+        end
+      end)
+
+      refute_received {:moved, _issue_id, _state}
+
+      for signal <- [:final_check_pass, :sub_issues_done, :epic_review_pass] do
+        assert :ok = TransitionGuard.perform("guarded-1", signal, ctx, tracker: FakeTracker, on_moved: @quiet)
+        assert_received {:moved, "guarded-1", "Done"}
+      end
+
+      # Any other move, and a ticket with no plan, are not held.
+      assert :ok = TransitionGuard.perform("guarded-1", :merge_held, ctx, tracker: FakeTracker, on_moved: @quiet)
+      assert_received {:moved, "guarded-1", "Rework"}
+      assert :ok = TransitionGuard.perform("unplanned-1", :landing_done, ctx, tracker: FakeTracker, on_moved: @quiet)
+      assert_received {:moved, "unplanned-1", "Done"}
+
+      # The person waives the check: the ticket closes.
+      {:ok, _waiver} = TicketChecks.waive("repo-guard", "guarded-1", "c1", "Merged by hand.", by: :person)
+      assert :ok = TransitionGuard.perform("guarded-1", :director_move, Map.put(ctx, :target, "Done"), tracker: FakeTracker, on_moved: @quiet)
+      assert_received {:moved, "guarded-1", "Done"}
     end
   end
 

@@ -549,6 +549,29 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
     end
   end
 
+  describe "the merge hold (TP-1589)" do
+    defp holding(hold, opts \\ [hold: true]), do: Answer.parse(Jason.encode!(%{"instructions" => "Go on.", "hold" => hold}), opts)
+
+    test "is read where a turn may hold the merge, with its reason, and a malformed one is dropped" do
+      assert {:ok, %{hold: %{reason: "It merges the marker the person asked to remove."}}} = holding(%{"reason" => " It merges the marker the person asked to remove. "})
+      assert {:ok, %{hold: nil}} = holding(%{"reason" => "It merges the marker."}, [])
+      assert {:ok, %{hold: nil}} = holding(nil)
+
+      long = String.duplicate("It merges the old work. ", 60)
+      capture_log(fn -> send(self(), holding(%{"reason" => long})) end)
+      assert_received {:ok, %{hold: %{reason: reason}}}
+      assert String.length(reason) <= 1_000
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{hold: nil}} = holding(%{"reason" => " "})
+          assert {:ok, %{hold: nil}} = holding("hold it")
+        end)
+
+      assert log =~ "`hold` was dropped: it needs a `reason`"
+    end
+  end
+
   describe "waivers" do
     defp waiving(waive, opts \\ [waive: true]), do: Answer.parse(Jason.encode!(%{"instructions" => "Go on.", "waive" => waive}), opts)
 

@@ -73,6 +73,14 @@ says (a `test` check for something no test can reach), you may waive it:
 waive a check only because it is hard, or because the person is in a hurry: then it is a change to
 the ask, and the plan changes.
 
+When the message changes what is asked while the ticket is in review, QA or Merging, the pull
+request would merge the old work. Write the new `plan`, and hold the merge: `"hold": {"reason":
+"<what the pull request would merge that is not asked now, and what the next run must change, at
+most 1000 characters>"}`. Symphony turns auto-merge off and moves the ticket to Rework, even when it
+already entered Merging, and the reason becomes the next run's instructions. Saying in the `update`
+that the pull request is about to merge the wrong thing changes nothing: only `hold` stops it. Never
+hold for a check marked `after_merge: true`. Otherwise leave `hold` null.
+
 Always reply. The `update` is your reply to the person, and it must be there: say what you took the
 message to be and what you did about it, in the first person, as markdown of at most 1200
 characters. Its first paragraph is one sentence. When something happens next, its last paragraph
@@ -119,6 +127,7 @@ Write your answer as one JSON object and nothing else:
   "stop": null or {"reason": "<why the run's work is wrong now>"},
   "tree": [<operations, only when the ticket has sub-tickets>],
   "waive": [{"check_id": "<a check's id>", "reason": "<why nobody can prove it this way>"}],
+  "hold": null or {"reason": "<why the ticket's merge must not happen, at most 1000 characters>"},
   "new_ticket": null or {"title": "<at most 120 characters>", "ask": "<the request, in the person's own words>", "repo": "<optional repo key>"},
   "ask_person": null or {"title": "<at most 120 characters>", "question": "<one question>", "why": "<why it needs a person>",
     "if_unanswered": "<what happens if nobody answers>", "recommendation_reason": "<why the recommended option>",

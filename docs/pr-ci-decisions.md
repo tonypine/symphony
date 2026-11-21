@@ -26,6 +26,22 @@ in Code Review with the approval recorded, so the CI rules act: R22's rerun, the
 back through R25 with the approval carried. R27 then carries the approval on with no second review.
 A head that turned red after the watcher's last read goes to QA, and QA's own rules send it to CI Fix.
 
+A plan holds the merge (R9a, TP-1589). Where the merge is next or a step carries a ticket on to it
+(Code Review, QA, CI Fix and Merging), the watcher reads the ticket's plan on every read
+(`merge_guard`). When a plan version was written after the newest implementation or rework run
+started, the code on the PR is for an older plan, so no approval of it counts: R9a ranks above CI
+Fix's return with its approvals (R25), the approved head's carry-on (R27) and every merge and
+auto-merge rule (R29 to R33), turns auto-merge off when it is armed, and moves the ticket to Rework,
+where a run codes the plan as it is now on the same PR. The same holds when the Conductor held the
+merge (its instructions routed `hold`), and when a check of the current plan the next step owes is
+open: in Merging, and in CI Fix on its way back there, every check but one seen only after the merge;
+before it, a check a test or an attachment proves. A plan version written asks the watcher to read
+the ticket at once, so a ticket already in Merging has its auto-merge turned off on that read.
+`TransitionGuard` refuses a move into Merging while such a check is open (a QA pass it refuses goes to
+Rework with the checks named), and a move to Done that closes a ticket on its own PR. A PR merged by
+hand meanwhile leaves the ticket out of Done: R2 asks the person to waive the open checks and close
+it, or cancel it.
+
 A changes verdict means the code is about to change, so no CI work is spent on that head. While the
 verdict stands on the head (`review` is `changes_requested`, read in Rework), the CI rules (R17 to R23)
 and the upkeep (U1, U2) stand back and R26 dispatches the rework run whatever CI says: no rerun, no CI
@@ -80,6 +96,7 @@ The flow decision: the first rule that matches decides what happens to the ticke
 | R7 | all | The PR's base is not the repo's base branch, and no run | `decision`: put the base back, or accept the new base |
 | R8 | all | The PR was closed without merging (or its branch deleted) | run active: `wait` on `agent`; In Progress or Rework: `dispatch`; otherwise `to_rework` |
 | R9 | all | A run is active | `wait` on `agent` until the run ends |
+| R9a | Code Review, QA, CI Fix, Merging | The ticket's plan holds the merge: a plan version written after the newest coding run started, a Conductor hold, or an open check the next step owes (in Merging: any check but one seen only after the merge) | `hold_merge`: auto-merge off when armed, then Rework, where a run codes the plan as it is now |
 | R10 | Code Review, QA, Merging | The PR is a draft | `wait` on `person` until it is marked ready for review |
 | R11 | Merging | A person pushed the PR's head | `to_code_review` (auto-merge goes off by R3) |
 | R12 | In Progress | The PR is open and no run | `dispatch` the agent |
@@ -137,6 +154,7 @@ Each fact a rule decides on, the values the table test enumerates, and when the 
 | `conflict_attempts` | `2`, `3` | `mergeable` is `dirty` |
 | `competing` | empty, not empty | `mergeable` is `dirty` |
 | `landing_timed_out` | `false`, `true` | `mergeable` is `blocked` |
+| `merge_guard` | `clear`, `open_checks`, `rewritten`, `held` | `phase` is `code_review` or `qa` or `ci_fix` or `merging` and `hold` is `none` and `run` is `none` and `pr` is `open` and `ci` is `green` and `mergeable` is `clean` or `dirty` |
 
 ## Waits
 

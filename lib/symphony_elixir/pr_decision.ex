@@ -63,6 +63,8 @@ defmodule SymphonyElixir.PrDecision do
   @all Facts.phases()
   @pr_phases [:code_review, :qa, :rework, :ci_fix, :merging]
   @reviewed [:code_review, :qa, :merging]
+  # Where the merge is next, or a step that carries a ticket on to it.
+  @guarded [:code_review, :qa, :ci_fix, :merging]
   @with_pr [:open, :draft]
   @green [:green, :none]
   @ci_states [:pending, :red, :required_missing | @green]
@@ -195,6 +197,16 @@ defmodule SymphonyElixir.PrDecision do
         build: &closed_pr/1
       },
       %{id: "R9", phases: @all, when: "A run is active", then: "`wait` on `agent` until the run ends", guard: &run_active?/1, build: &wait_for_run/1},
+      %{
+        id: "R9a",
+        phases: @guarded,
+        when:
+          "The ticket's plan holds the merge: a plan version written after the newest coding run started, a Conductor hold, " <>
+            "or an open check the next step owes (in Merging: any check but one seen only after the merge)",
+        then: "`hold_merge`: auto-merge off when armed, then Rework, where a run codes the plan as it is now",
+        guard: &merge_held?/1,
+        build: &hold_merge/1
+      },
       %{
         id: "R10",
         phases: @reviewed,
@@ -416,6 +428,7 @@ defmodule SymphonyElixir.PrDecision do
   defp base_changed_idle?(facts), do: with_pr?(facts) and facts.base == :changed and facts.run == :none
   defp closed?(facts), do: free?(facts) and facts.pr == :closed and facts.run in [:none, :active]
   defp run_active?(facts), do: free?(facts) and facts.run == :active
+  defp merge_held?(facts), do: idle_pr?(facts) and facts.merge_guard in [:open_checks, :rewritten, :held]
   defp draft?(facts), do: idle_pr?(facts) and facts.pr == :draft
   defp person_head?(facts), do: idle_pr?(facts) and facts.head_origin == :person
   defp with_pr?(facts), do: idle_pr?(facts) and facts.base in [:ok, :changed]
@@ -548,6 +561,15 @@ defmodule SymphonyElixir.PrDecision do
   end
 
   defp wait_for_run(_facts), do: wait("R9", "A run is working on the ticket", :agent, "the run ends")
+
+  defp hold_merge(facts) do
+    Action.new!("R9a", :hold_merge, args: %{why: facts.merge_guard}, reason: "#{subject(pr(facts))} #{held_because(facts.merge_guard)}")
+  end
+
+  defp held_because(:open_checks), do: "does not merge: its plan has open checks"
+  defp held_because(:rewritten), do: "does not merge: the plan was rewritten after its code was written, so no approval of it counts"
+  defp held_because(:held), do: "does not merge: the Conductor held it"
+
   defp wait_for_ready(facts), do: wait("R10", "A person marked #{pr(facts)} as a draft", :person, "the PR is marked ready for review")
   defp back_to_code_review(facts), do: Action.new!("R11", :to_code_review, reason: "A person pushed to #{pr(facts)} while it was in Merging")
   defp to_in_progress(facts), do: Action.new!("R13", :to_in_progress, reason: "#{subject(pr(facts))} has review comments to address")

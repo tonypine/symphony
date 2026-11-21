@@ -25,6 +25,13 @@ defmodule SymphonyElixir.PrDecision.Facts do
   Code Review only once the head is approved. In Rework it says whether Code Review's changes verdict
   stands on the head (`:changes_requested`): that code is about to change, so CI's state decides nothing
   there either.
+
+  `merge_guard` says whether the ticket's plan lets its pull request go on to the merge (`:clear`,
+  the default). `:open_checks`: a check of the current plan the next step owes is open (in Merging,
+  or in CI Fix on the way back to it, every check but one seen only after the merge; before it, a
+  check a test or an attachment proves). `:rewritten`: a plan version was written after the newest
+  coding run started, so the code and any approval of it are for an older plan. `:held`: the
+  Conductor held the merge since that run (`SymphonyElixir.TicketJourney.outdated/1`).
   """
 
   @typedoc "The ticket's phase: one of the watched Linear states."
@@ -74,6 +81,7 @@ defmodule SymphonyElixir.PrDecision.Facts do
           head_origin: :symphony | :person,
           review_comments: :none | :unaddressed,
           review: :pending | :approved | :changes_requested,
+          merge_guard: :clear | :open_checks | :rewritten | :held,
           ci: :pending | :green | :none | :red | :required_missing,
           no_ci: :not_configured | :not_reported,
           missing_checks: [String.t()],
@@ -115,6 +123,7 @@ defmodule SymphonyElixir.PrDecision.Facts do
             head_origin: :symphony,
             review_comments: :none,
             review: :pending,
+            merge_guard: :clear,
             ci: :pending,
             no_ci: :not_configured,
             missing_checks: [],
@@ -138,6 +147,8 @@ defmodule SymphonyElixir.PrDecision.Facts do
   @phases [:in_progress, :code_review, :qa, :rework, :ci_fix, :merging]
   @with_pr [pr: [:open, :draft]]
   @red_failure [ci: [:red], red_kind: [:failure]]
+  @guarded_phases [:code_review, :qa, :ci_fix, :merging]
+  @guarded [phase: @guarded_phases, hold: [:none], run: [:none], pr: [:open], ci: [:green], mergeable: [:clean, :dirty]]
   # A placeholder competitor: a rule reads `ahead` and `competing` only as empty or not.
   @competitor %{issue_identifier: "TP-0", pr_number: 1, files: ["SPEC.md"]}
 
@@ -166,7 +177,10 @@ defmodule SymphonyElixir.PrDecision.Facts do
     {:ahead, [[], [@competitor]], [mergeable: [:dirty, :behind]]},
     {:conflict_attempts, [2, 3], [mergeable: [:dirty]]},
     {:competing, [[], [@competitor]], [mergeable: [:dirty]]},
-    {:landing_timed_out, [false, true], [mergeable: [:blocked]]}
+    {:landing_timed_out, [false, true], [mergeable: [:blocked]]},
+    # Read only where the merge is next or carried on to, and enumerated on one clean and one
+    # conflicting green PR with no hold and no run: the rule that guards it reads nothing else.
+    {:merge_guard, [:clear, :open_checks, :rewritten, :held], @guarded}
   ]
 
   @doc "Builds facts from a map or keyword list; an unknown key raises."

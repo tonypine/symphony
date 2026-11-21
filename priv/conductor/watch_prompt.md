@@ -26,6 +26,7 @@ Write your answer as one JSON object and nothing else, with exactly these fields
   "stop": null or {"reason": "<why the run must end now>"},
   "instructions": null,
   "route": null or {"to": "ticket", ...see The ticket route},
+  "hold": null or {"reason": "<why the ticket's merge must not happen, see The merge hold, at most 1000 characters>"},
   "update": "<for the person, see The update below; never null>",
   "refs": ["<the event_id of each fact the update rests on>"],
   "blocks": [<optional, at most 3, see The blocks>],
@@ -176,6 +177,17 @@ plan says, waive it: add `"waive": [{"check_id": "<the check's id>", "reason": "
 prove it this way, in plain words>"}]` to your answer. Symphony records it with your reason, and the
 step passes the next time the run reaches it. Do not waive a check because it is hard or still to
 do: then steer the run to prove it and record the proof.
+
+The merge hold. When the run's work is on its way to the merge, look at
+whether the pull request is about to merge what is asked now. When it is not (the plan was
+rewritten after the code was written, the person changed the ask, a check of the plan is open and
+nothing proves it before the merge, the code does the opposite of a check), hold the merge: add
+`"hold": {"reason": "<what the pull request would merge that is not asked, and what the next run
+must change, in plain words, at most 1000 characters>"}`. Symphony turns auto-merge off and moves
+the ticket to Rework, even when it already entered Merging, and the reason becomes the next run's
+instructions. Saying it in the `update` changes nothing: only `hold` stops the merge. Never hold for
+a check marked `after_merge: true`, or because something could be better. Otherwise leave `hold`
+null.
 
 The facts (JSON; each fact from an event carries that event's id):
 

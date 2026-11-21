@@ -20,7 +20,7 @@ defmodule SymphonyElixir.TicketPlan do
   reads the store no more.
   """
 
-  alias SymphonyElixir.{RunStore, TicketEvents, TicketProjection}
+  alias SymphonyElixir.{PrWatch, RunStore, TicketEvents, TicketProjection}
   alias SymphonyElixir.TicketEvents.{Event, Types}
 
   @machine_fields [:signal, :signal_details]
@@ -81,6 +81,10 @@ defmodule SymphonyElixir.TicketPlan do
   its statement, is refused the same way, unless an `ask.recorded` was written after that version.
   A new ask is what permits changing what the ticket must reach. The first version is free. A
   caller that records the new ask right after the version it permits says so with `new_ask: true`.
+
+  A version written asks the PR and CI watcher to read the ticket now
+  (`SymphonyElixir.PrWatch.read_ticket/2`): the code on its pull request is behind the new plan,
+  so a merge GitHub would make on its own is held on that read, not on the next timer.
   """
   @spec write(String.t() | nil, String.t(), map(), keyword()) :: {:ok, Event.t()} | {:error, term()}
   def write(repo_key, issue_id, plan, opts \\ []) when is_binary(issue_id) and is_map(plan) do
@@ -96,6 +100,9 @@ defmodule SymphonyElixir.TicketPlan do
          :ok <- coherent(valid, changed_outcomes(valid, binding)),
          {:ok, event} <- TicketEvents.record(repo_key, issue_id, "plan.written", valid, opts) do
       TicketProjection.changed(repo_key, issue_id)
+      # A new version holds a merge the code is behind (`SymphonyElixir.PrDecision`'s R9a): the
+      # watcher reads the ticket at once, so auto-merge goes off before GitHub can land the old code.
+      :ok = PrWatch.read_ticket(repo_key, issue_id)
       {:ok, event}
     end
   end
