@@ -465,7 +465,7 @@ struct TicketsView: View {
     }
 }
 
-/// A row's context menu: Open Ticket, Start Now when it can, and Move to….
+/// A row's context menu: the items `TicketRowMenuItem.items` lists, in its order.
 struct TicketRowMenu: View {
     let row: TicketsRow
     let columns: [TicketColumn]
@@ -476,12 +476,16 @@ struct TicketRowMenu: View {
     var body: some View {
         let identifier = row.identifier
         let tracked = list?.row(identifier) ?? TicketList.Row(row, columns: columns, reference: reference)
-        Button(TicketList.openTitle) { actions.open(identifier) }
-        if let start = actions.starts[identifier] {
-            StartNowMenuItem(identifier: identifier, start: start) { actions.start(identifier) }
-        }
-        if let menu = actions.moveMenu(tracked) {
-            Menu(TicketMoveMenu.title) { MoveToMenuItems(menu: menu, move: actions.move) }
+        let items = TicketRowMenuItem.items(start: actions.starts[identifier], move: actions.moveMenu(tracked))
+        ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+            switch item {
+            case .open:
+                Button(item.title) { actions.open(identifier) }
+            case let .start(start):
+                StartNowMenuItem(identifier: identifier, start: start) { actions.start(identifier) }
+            case let .move(menu):
+                Menu(item.title) { MoveToMenuItems(menu: menu, move: actions.move) }
+            }
         }
     }
 }
