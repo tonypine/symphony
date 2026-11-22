@@ -26,8 +26,7 @@ defmodule SymphonyElixir.Home do
   Each ticket of either list carries `in_progress`: true exactly when it holds a slot.
   """
 
-  alias SymphonyElixir.{Situation, TicketState}
-  alias SymphonyElixir.Dispatch.Slots
+  alias SymphonyElixir.{Dispatch.Slots, Situation, TicketState}
 
   @not_started ["backlog", "todo", "triage"]
   @needs_fix ["rework", "ci fix"]

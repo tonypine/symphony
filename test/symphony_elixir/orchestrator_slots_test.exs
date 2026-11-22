@@ -125,7 +125,8 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
       write_slots_workflow!(ctx, max_concurrent_agents: 1)
       backlog = issue("h", "MT-H", "Backlog")
 
-      assert Orchestrator.release_slots_for_test(holding(orchestrator_state(1), backlog), [backlog], true).slot_holders == %{}
+      state = holding(orchestrator_state(1), backlog)
+      assert Orchestrator.release_slots_for_test(state, [backlog], true).slot_holders == %{}
     end
 
     test "when it waits on a blocker, or a person stopped it", ctx do
@@ -174,7 +175,11 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
       todo = issue("t", "MT-T", "Todo")
       tracked([todo])
 
-      state = orchestrator_state(1) |> holding(first) |> holding(second) |> Orchestrator.release_slots_for_test([first, second, todo], true)
+      state =
+        orchestrator_state(1)
+        |> holding(first)
+        |> holding(second)
+        |> Orchestrator.release_slots_for_test([first, second, todo], true)
 
       assert Enum.sort(Map.keys(state.slot_holders)) == ["a", "b"]
       assert Orchestrator.available_slots_for_test(state) == 0
@@ -183,9 +188,18 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
     end
 
     test "finishing_max, the per-state limits and the epic lanes still load and change nothing", ctx do
-      write_slots_workflow!(ctx, max_concurrent_agents: 2, finishing_max: 1, max_concurrent_agents_by_state: %{"todo" => 1}, epic_lanes: 1)
+      write_slots_workflow!(ctx,
+        max_concurrent_agents: 2,
+        finishing_max: 1,
+        max_concurrent_agents_by_state: %{"todo" => 1},
+        epic_lanes: 1
+      )
+
       settings = Config.settings!()
-      assert {settings.execution.finishing_max, settings.execution.max_concurrent_agents_by_state, settings.execution.epic_lanes} == {1, %{"todo" => 1}, 1}
+      execution = settings.execution
+      assert execution.finishing_max == 1
+      assert execution.max_concurrent_agents_by_state == %{"todo" => 1}
+      assert execution.epic_lanes == 1
 
       todos = for n <- 1..3, do: recorded(issue("t#{n}", "MT-#{n}", "Todo"))
       tracked(todos)
@@ -238,7 +252,8 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
       pr = %{pid: self(), ref: make_ref(), identifier: "MT-PR", repo_key: "default", started_at: @since, run_kind: :pr}
       state = %{orchestrator_state(1) | running: %{"pr" => pr}}
 
-      assert %{used: 1, free: 0, holders: [%{issue_id: "pr", identifier: "MT-PR", state: nil, running: true}]} = Orchestrator.dispatch_order_slots_for_test(state)
+      assert %{used: 1, free: 0, holders: [holder]} = Orchestrator.dispatch_order_slots_for_test(state)
+      assert %{issue_id: "pr", identifier: "MT-PR", state: nil, running: true} = holder
     end
   end
 

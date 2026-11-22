@@ -99,7 +99,8 @@ defmodule SymphonyElixir.Dispatch.SlotsTest do
 
   defp issue(id, identifier, opts \\ []) do
     parent = Keyword.get(opts, :parent)
-    %Issue{id: id, identifier: identifier, state: "Todo", parent: parent && %{identifier: parent, title: nil, done: 0, total: 1, children: []}}
+    parent = parent && %{identifier: parent, title: nil, done: 0, total: 1, children: []}
+    %Issue{id: id, identifier: identifier, state: "Todo", parent: parent}
   end
 
   defp id(%Issue{id: id}), do: id

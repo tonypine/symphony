@@ -22,8 +22,7 @@ defmodule SymphonyElixir.Dispatch.Order do
   reason; `read/3` adds the open tickets that are not candidates and groups them all.
   """
 
-  alias SymphonyElixir.{Situation, TicketState}
-  alias SymphonyElixir.Dispatch.Slots
+  alias SymphonyElixir.{Dispatch.Slots, Situation, TicketState}
 
   @in_line [:starts, :waits, :paused]
 

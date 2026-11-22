@@ -98,7 +98,8 @@ defmodule SymphonyElixirWeb.DispatchOrderReadTest do
     waiting = ticket("a", "MT-A", 2)
     holder = %{identifier: "MT-H", state: "In Progress", repo_key: @repo, since: ~U[2026-11-22 07:00:00Z]}
 
-    state = Orchestrator.put_dispatch_order_for_test(%{orchestrator_state() | slot_holders: %{"h" => holder}}, [held, waiting])
+    state = %{orchestrator_state() | slot_holders: %{"h" => holder}}
+    state = Orchestrator.put_dispatch_order_for_test(state, [held, waiting])
     {:reply, snapshot, _state} = Orchestrator.handle_call(:snapshot, {self(), make_ref()}, state)
     :ok = GenServer.call(orchestrator, {:put, snapshot})
 

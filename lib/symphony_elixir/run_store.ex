@@ -1814,12 +1814,31 @@ defmodule SymphonyElixir.RunStore do
   @spec slot_holders() :: %{String.t() => map()} | {:error, term()}
   def slot_holders do
     with :ok <- ensure_started() do
-      transaction(fn ->
-        for %{slot_held_since: %DateTime{} = since, issue_id: issue_id} = record <- listed_ticket_records(:all), into: %{} do
-          {issue_id, %{identifier: Map.get(record, :issue_identifier), state: Map.get(record, :phase), repo_key: Map.get(record, :repo_key), since: since}}
-        end
-      end)
+      transaction(fn -> slot_holder_map(listed_ticket_records(:all)) end)
     end
+  end
+
+  defp slot_holder_map(records) do
+    records
+    |> Enum.filter(&match?(%{slot_held_since: %DateTime{}, issue_id: _id}, &1))
+    |> Map.new(&{&1.issue_id, slot_holder(&1)})
+  end
+
+  defp parent_map(records) do
+    for %{issue_id: id, parent: %{identifier: parent}} <- records, is_binary(parent), into: %{}, do: {id, parent}
+  end
+
+  defp phase_map(records) do
+    for %{issue_identifier: id, phase: phase} <- records, is_binary(id), into: %{}, do: {id, phase}
+  end
+
+  defp slot_holder(record) do
+    %{
+      identifier: Map.get(record, :issue_identifier),
+      state: Map.get(record, :phase),
+      repo_key: Map.get(record, :repo_key),
+      since: record.slot_held_since
+    }
   end
 
   @doc """
@@ -1836,8 +1855,8 @@ defmodule SymphonyElixir.RunStore do
 
         %{
           positions: queue_position_map(records),
-          parents: for(%{issue_id: id, parent: %{identifier: parent}} <- records, is_binary(parent), into: %{}, do: {id, parent}),
-          phases: for(%{issue_identifier: identifier, phase: phase} <- records, is_binary(identifier), into: %{}, do: {identifier, phase})
+          parents: parent_map(records),
+          phases: phase_map(records)
         }
       end)
     end

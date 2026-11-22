@@ -48,7 +48,9 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
 
     assert Enum.sort(Map.keys(state.running)) == ["impl-1", "impl-2"]
     assert %{reason: "work slots full", state: "Merging"} = state.slot_waiting["land-1"]
-    assert %{finishing: %{slots: 0, used: 0, running: []}, concurrency: %{max_total: 2, finishing_max: 0}} = snapshot_of(state)
+    snapshot = snapshot_of(state)
+    assert %{finishing: %{slots: 0, used: 0, running: []}} = snapshot
+    assert %{concurrency: %{max_total: 2, finishing_max: 0}} = snapshot
   end
 
   test "TP-1615: a Merging ticket that holds its slot lands on it, and finishing_max 1 holds no Todo back", ctx do
@@ -64,7 +66,8 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
 
     log =
       capture_log(fn ->
-        send(self(), {:state, Orchestrator.dispatch_chosen_issues_for_test([todo, second_landing, :not_an_issue], state)})
+        dispatched = Orchestrator.dispatch_chosen_issues_for_test([todo, second_landing, :not_an_issue], state)
+        send(self(), {:state, dispatched})
       end)
 
     assert_received {:state, state}
@@ -269,7 +272,7 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     order = state |> Orchestrator.put_dispatch_order_for_test([standalone, other, child]) |> Map.fetch!(:dispatch_order)
     assert [%{identifier: "MT-C1", outcome: :starts}, %{identifier: "MT-S1", outcome: :waits}, %{identifier: "MT-O1", outcome: :waits}] = Enum.filter(order.entries, & &1.position)
 
-    log = capture_log(fn -> send(self(), {:state, Orchestrator.dispatch_chosen_issues_for_test([standalone, other, child], state)}) end)
+    log = capture_log(fn -> send(self(), {:state, dispatch(state, [standalone, other, child])}) end)
     assert_received {:state, state}
 
     assert dispatch_order(log) == ["c1"]
@@ -277,7 +280,7 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
 
     # With no started parent, the stored queue order alone decides.
     alone = %{orchestrator_state(2) | slot_holders: %{"x1" => holder("MT-X1", "In Progress")}}
-    log = capture_log(fn -> send(self(), {:state, Orchestrator.dispatch_chosen_issues_for_test([standalone, other, child], alone)}) end)
+    log = capture_log(fn -> send(self(), {:state, dispatch(alone, [standalone, other, child])}) end)
     assert_received {:state, _state}
     assert dispatch_order(log) == ["s1"]
   end
@@ -286,7 +289,9 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     state = run(orchestrator_state(1), issue("land-1", "MT-LAND", "Merging"), :landing)
 
     refute Orchestrator.should_dispatch_issue_for_test(issue("todo-1", "MT-TODO", "Todo"), state)
-    assert %{epic_lanes: %{lanes: [], queued_epics: [], shared: %{used: 1}}, finishing: %{slots: 0, used: 0}} = snapshot_of(state)
+    snapshot = snapshot_of(state)
+    assert %{epic_lanes: %{lanes: [], queued_epics: [], shared: %{used: 1}}} = snapshot
+    assert %{finishing: %{slots: 0, used: 0}} = snapshot
   end
 
   test "finishing_max must be at least 1", ctx do
@@ -324,7 +329,8 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
 
   describe "a run ending with nothing waiting for a slot" do
     test "TP-1615: leaves the next poll where it is, and its ticket keeps its slot with no live run", ctx do
-      {pid, ref} = start_with_waiting_run(ctx, poll_check_in_progress: false, slot_waiting: %{}, slot_holders: %{"land-1" => holder("MT-LAND", "Merging")})
+      holders = %{"land-1" => holder("MT-LAND", "Merging")}
+      {pid, ref} = start_with_waiting_run(ctx, poll_check_in_progress: false, slot_waiting: %{}, slot_holders: holders)
 
       send(pid, {:DOWN, ref, :process, self(), :normal})
       state = :sys.get_state(pid)
@@ -401,6 +407,8 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     |> Regex.scan(log, capture: :all_but_first)
     |> List.flatten()
   end
+
+  defp dispatch(state, issues), do: Orchestrator.dispatch_chosen_issues_for_test(issues, state)
 
   defp snapshot_of(state) do
     {:reply, snapshot, _state} = Orchestrator.handle_call(:snapshot, {self(), make_ref()}, state)

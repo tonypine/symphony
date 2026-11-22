@@ -4442,9 +4442,9 @@ defmodule SymphonyElixir.Orchestrator do
   # Candidates go out in the stored queue order, the sub-tickets of a ticket that has started first
   # (`order_for_dispatch/2`); a gate skips a ticket and the walk goes on to the next place. A ticket
   # that holds a slot always starts its next run; any other starts only on a free slot
-  # (`slot_decision/2`). `slot_waiting` is rebuilt from the pass, keeping the attempt of any retry that was waiting for a
-  # slot. `dispatch_skipped` is rebuilt the same way: every candidate the pass neither starts nor
-  # leaves waiting for a slot gets the reason.
+  # (`slot_decision/2`). `slot_waiting` is rebuilt from the pass, keeping the attempt of any retry
+  # that was waiting for a slot. `dispatch_skipped` is rebuilt the same way: every candidate the
+  # pass neither starts nor leaves waiting for a slot gets the reason.
   defp dispatch_chosen_issues(issues, state) do
     issues = Enum.map(issues, &with_record_repo_key/1)
     active_states = active_state_set()
@@ -5240,21 +5240,27 @@ defmodule SymphonyElixir.Orchestrator do
     |> Enum.reject(fn {issue_id, _holder} -> Map.has_key?(state.running, issue_id) end)
     |> Enum.reduce(state, fn {issue_id, holder}, state ->
       case Map.get(by_id, issue_id) do
-        nil when warm? ->
-          if in_plan_review?(issue_id), do: state, else: release_slot(state, issue_id, "it is no longer a dispatch candidate")
-
-        nil ->
-          state
-
-        %Issue{} = issue ->
-          gate = dispatch_gate_closed(issue, state, active_states, terminal_states)
-          reasons = pause_reasons({:ticket, hold_repo_key(issue), issue_id})
-
-          if Slots.releases?(gate, reasons),
-            do: release_slot(state, issue_id, elem(gate, 0)),
-            else: %{state | slot_holders: Map.put(state.slot_holders, issue_id, %{holder | state: issue.state, identifier: issue.identifier})}
+        nil when warm? -> release_absent_slot(state, issue_id)
+        nil -> state
+        %Issue{} = issue -> judge_slot(state, issue, holder, active_states, terminal_states)
       end
     end)
+  end
+
+  defp release_absent_slot(state, issue_id) do
+    if in_plan_review?(issue_id), do: state, else: release_slot(state, issue_id, "it is no longer a dispatch candidate")
+  end
+
+  defp judge_slot(state, %Issue{id: issue_id} = issue, holder, active_states, terminal_states) do
+    gate = dispatch_gate_closed(issue, state, active_states, terminal_states)
+    reasons = pause_reasons({:ticket, hold_repo_key(issue), issue_id})
+
+    if Slots.releases?(gate, reasons) do
+      release_slot(state, issue_id, elem(gate, 0))
+    else
+      holder = %{holder | state: issue.state, identifier: issue.identifier}
+      %{state | slot_holders: Map.put(state.slot_holders, issue_id, holder)}
+    end
   end
 
   # A plan handed to its review is out of the active states but waits on the person: it keeps its
