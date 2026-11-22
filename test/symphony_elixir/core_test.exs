@@ -647,6 +647,45 @@ defmodule SymphonyElixir.CoreTest do
     assert SymphonyElixir.QaAndroid.Emulator in test_children
   end
 
+  test "only the running app watches config folders: the one holding symphony.yml, never in tests or a one-shot command" do
+    system_config = Config.system!()
+    # The suite's own setting: no test boots a watcher.
+    assert SymphonyElixir.Application.config_watch(system_config, %{}) == [watch: [], watch_files: []]
+
+    original_symphony_path = Workflow.symphony_file_path()
+    dir = Path.join(System.tmp_dir!(), "symphony-config-watch-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    symphony_file = Path.join(dir, "symphony.yml")
+    Application.put_env(:symphony_elixir, :config_watch, true)
+
+    # A one-shot command boots with the orchestrator disabled: the cache gets no watcher, even with
+    # config_watch on. Booting reads symphony.yml, so this runs before the path moves to the temp folder.
+    disabled = %{"SYMPHONY_DISABLE_ORCHESTRATOR" => "true"}
+    disabled_specs = SymphonyElixir.Application.child_specs_for_runtime(disabled)
+    assert {SymphonyElixir.Config.Cache, [watch: [], watch_files: []]} in disabled_specs
+
+    Workflow.set_symphony_file_path(symphony_file)
+
+    on_exit(fn ->
+      Application.put_env(:symphony_elixir, :config_watch, false)
+      Workflow.set_symphony_file_path(original_symphony_path)
+      File.rm_rf(dir)
+    end)
+
+    # The test repo reads its WORKFLOW.md from a folder outside any checkout, which is never watched.
+    assert SymphonyElixir.Application.config_watch(system_config, %{}) == [watch: [dir], watch_files: []]
+    assert SymphonyElixir.Application.config_watch(system_config, disabled) == [watch: [], watch_files: []]
+
+    # A folder that holds the workspace root would be watched with every workspace below it: only
+    # symphony.yml itself is checked.
+    holding_workspaces = %{system_config | workspace: %{system_config.workspace | root: Path.join(dir, "workspaces")}}
+    assert SymphonyElixir.Application.config_watch(holding_workspaces, %{}) == [watch: [], watch_files: [symphony_file]]
+
+    # So is a repository root, the layout `symphony init` makes in an operator repo.
+    File.mkdir_p!(Path.join(dir, ".git"))
+    assert SymphonyElixir.Application.config_watch(system_config, %{}) == [watch: [], watch_files: [symphony_file]]
+  end
+
   test "application loads a QA seed between the run store and the orchestrator only when one is given" do
     refute Enum.any?(SymphonyElixir.Application.child_specs_for_runtime(%{}), &match?({SymphonyElixir.QaSeed, _opts}, &1))
 

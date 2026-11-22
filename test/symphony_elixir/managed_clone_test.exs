@@ -25,14 +25,13 @@ defmodule SymphonyElixir.ManagedCloneTest do
   setup do
     original_env =
       Map.new(
-        [:symphony_file_path, :state_root_override, :config_cache_watch, :workflow_file_path, :managed_clone_url_base],
+        [:symphony_file_path, :state_root_override, :workflow_file_path, :managed_clone_url_base],
         &{&1, Application.get_env(:symphony_elixir, &1)}
       )
 
     root = Path.join(System.tmp_dir!(), "symphony-managed-clone-#{System.unique_integer([:positive])}")
     File.mkdir_p!(root)
     Paths.set_state_root(Path.join(root, "state"))
-    Application.put_env(:symphony_elixir, :config_cache_watch, false)
     Application.put_env(:symphony_elixir, :managed_clone_url_base, Path.join(root, "remotes") <> "/")
     Cache.clear()
 

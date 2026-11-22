@@ -15,18 +15,15 @@ defmodule SymphonyElixir.CLICheckTest do
 
   setup do
     original_symphony_path = Application.get_env(:symphony_elixir, :symphony_file_path)
-    original_cache_watch = Application.get_env(:symphony_elixir, :config_cache_watch)
     root = Path.join(System.tmp_dir!(), "symphony-cli-check-#{System.unique_integer([:positive])}")
 
     File.mkdir_p!(Path.join(root, "app"))
     File.write!(Path.join([root, "app", "WORKFLOW.md"]), "Repo prompt\n")
-    Application.put_env(:symphony_elixir, :config_cache_watch, false)
     Cache.clear()
 
     on_exit(fn ->
       Cache.clear()
       restore_app_env(:symphony_file_path, original_symphony_path)
-      restore_app_env(:config_cache_watch, original_cache_watch)
       File.rm_rf(root)
     end)
 
