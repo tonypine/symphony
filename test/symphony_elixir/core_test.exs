@@ -656,9 +656,11 @@ defmodule SymphonyElixir.CoreTest do
     on_exit(fn -> Application.put_env(:symphony_elixir, :config_watch, false) end)
 
     # The test repo reads its WORKFLOW.md from a folder outside any checkout, which is never watched.
-    assert SymphonyElixir.Application.config_watch_dirs(system_config, %{}) == [Path.dirname(Workflow.symphony_file_path())]
+    symphony_dir = Path.dirname(Workflow.symphony_file_path())
+    assert SymphonyElixir.Application.config_watch_dirs(system_config, %{}) == [symphony_dir]
     assert SymphonyElixir.Application.config_watch_dirs(system_config, %{"SYMPHONY_DISABLE_ORCHESTRATOR" => "true"}) == []
-    assert {SymphonyElixir.Config.Cache, watch: []} in SymphonyElixir.Application.child_specs_for_runtime(%{"SYMPHONY_DISABLE_ORCHESTRATOR" => "true"})
+    one_shot_specs = SymphonyElixir.Application.child_specs_for_runtime(%{"SYMPHONY_DISABLE_ORCHESTRATOR" => "true"})
+    assert {SymphonyElixir.Config.Cache, watch: []} in one_shot_specs
   end
 
   test "application loads a QA seed between the run store and the orchestrator only when one is given" do

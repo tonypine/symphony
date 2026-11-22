@@ -324,15 +324,9 @@ defmodule SymphonyElixir.Config.Cache do
     generation = generation()
 
     :persistent_term.get(@index_key, MapSet.new())
-    |> Enum.each(fn key ->
-      case :persistent_term.get(key, nil) do
-        %Entry{kind: kind} = entry ->
-          if event_path?(entry.path, path, dir), do: refresh_entry(entry, loader_for(kind), generation)
-
-        _entry ->
-          :ok
-      end
-    end)
+    |> Enum.map(&:persistent_term.get(&1, nil))
+    |> Enum.filter(&(match?(%Entry{}, &1) and event_path?(&1.path, path, dir)))
+    |> Enum.each(&refresh_entry(&1, loader_for(&1.kind), generation))
   end
 
   defp event_path?(path, path, _dir), do: true
