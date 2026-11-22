@@ -300,7 +300,7 @@ defmodule SymphonyElixir.TicketObservation do
     # Oldest first, then by identifier: the tickets this read shows Symphony for the first time join
     # the dispatch queue in that order (`SymphonyElixir.Dispatch.Queue`).
     issues
-    |> Enum.sort_by(&{created_order(&1), &1.identifier || ""})
+    |> Enum.sort_by(&created_order/1)
     |> Enum.reduce(empty_summary(), fn issue, acc ->
       case observe_issue(repo_key, issue, opts) do
         {:ok, outcome} ->
@@ -1121,8 +1121,9 @@ defmodule SymphonyElixir.TicketObservation do
     Issue.open_blockers(issue, terminal_states)
   end
 
-  defp created_order(%Issue{created_at: %DateTime{} = at}), do: {0, DateTime.to_unix(at, :microsecond)}
-  defp created_order(_issue), do: {1, 0}
+  defp created_order(%Issue{created_at: %DateTime{} = at} = issue), do: {0, DateTime.to_unix(at, :microsecond), issue.identifier || ""}
+  defp created_order(%Issue{} = issue), do: {1, 0, issue.identifier || ""}
+  defp created_order(_other), do: {2, 0, ""}
 
   defp terminal_states(repo_key) do
     case Config.settings_for_repo(repo_key) do

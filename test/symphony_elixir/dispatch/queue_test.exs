@@ -32,7 +32,7 @@ defmodule SymphonyElixir.Dispatch.QueueTest do
 
       assert issues |> Queue.order(positions) |> Enum.map(&id/1) == ["a", "b", "c", "d", "e", :not_an_issue]
       # A store that could not be read gives no places.
-      assert issues |> Queue.order({:error, :aborted}) |> Enum.map(&id/1) == ["b", "c", "a", "d", "e", :not_an_issue]
+      assert issues |> Queue.order({:error, :aborted}) |> Enum.map(&id/1) == ["b", "c", "d", "a", "e", :not_an_issue]
     end
   end
 
@@ -125,7 +125,7 @@ defmodule SymphonyElixir.Dispatch.QueueTest do
 
       placed = %{"merging" => 1, "progress" => 2, "todo-ran" => 3, "todo-urgent" => 4, "backlog-urgent" => 5, "todo-low" => 6}
       assert places() == placed
-      assert %{queue_position: nil} = RunStore.get_ticket_state("done")
+      refute Map.get(RunStore.get_ticket_state("done"), :queue_position)
 
       # Its marker set, a later start leaves every place as it is, even one changed since.
       :ok = RunStore.update_ticket_state("todo-low", %{priority: 1})

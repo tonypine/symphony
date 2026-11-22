@@ -210,6 +210,7 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     # Moved to Todo, it goes before the tickets behind it.
     :ok = RunStore.update_ticket_state("parked-1", %{phase: "Todo"})
     issues = [last, next, low, %{parked | state: "Todo"}]
+    tracked(issues)
     state = Orchestrator.dispatch_chosen_issues_for_test(issues, orchestrator_state(1))
 
     assert Map.keys(state.running) == ["parked-1"]
