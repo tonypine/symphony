@@ -21,7 +21,8 @@ defmodule SymphonyElixir.Dispatch.SlotsTest do
       fix = Pauses.ticket_reason(:fix_ticket, "MT-8")
       stop = Pauses.stop_reason(~U[2026-11-22 07:00:00Z])
       question = %{kind: :question, waits_on: %{question_id: "q-1"}, text: "Which layout?"}
-      decision = %{kind: :person, waits_on: %{action: "unblock"}, text: "Needs a decision"}
+      # A wait on the person that is not a stop (a stop is the one `unblock` reason a ticket carries).
+      restart = %{kind: :person, waits_on: %{action: "restart"}, text: "Restart starts it over from main"}
       paused = {"paused", nil, :paused}
 
       assert Slots.releases?(paused, [blocker])
@@ -31,7 +32,7 @@ defmodule SymphonyElixir.Dispatch.SlotsTest do
       # The Conductor stops a run whose ticket it asked the person about: it waits on the person.
       refute Slots.releases?(paused, [question, stop])
       refute Slots.releases?(paused, [question])
-      refute Slots.releases?(paused, [decision])
+      refute Slots.releases?(paused, [restart])
       refute Slots.releases?(paused, :unreadable)
 
       for gate <- [:watch, :merging_ci, :qa_build, :claimed, :instructions_hold, :replan] do

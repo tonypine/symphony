@@ -53,6 +53,7 @@ defmodule SymphonyElixir.TicketStateTest do
                plan_brief_error: nil,
                looked: %{},
                queue_position: nil,
+               slot_held_since: nil,
                legacy_history: nil,
                updated_at: nil
              }
@@ -222,6 +223,7 @@ defmodule SymphonyElixir.TicketStateTest do
                plan_brief_error: nil,
                looked: %{},
                queue_position: nil,
+               slot_held_since: nil,
                legacy_history: nil,
                updated_at: nil
              }
