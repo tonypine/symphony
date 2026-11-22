@@ -4378,7 +4378,7 @@ failed check), which read the ticket rather than the commit.
   name continue one agent session, resumed by its id (Claude resumes it; another harness starts a
   new one). `fresh` starts a session for that step alone.
 - `repeat` (an agent step only): `walkthrough`, the step runs once per walkthrough step a QA pass
-  walks (below), as `<id>_<n>`.
+  walks (below), as `<id>_<n>`, or once per group of them the plan made, as `<id>_<n>_<m>…`.
 
 `model`, `effort`, `session` and `repeat` are refused on a machine step. Today only a stepped QA
 pass (below) acts on them; an implementation or rework run takes them and runs as before.
@@ -4413,7 +4413,7 @@ Symphony's prompt for its id, `priv/qa_steps/<kind>/<id>.md`, when there is one.
 
 Each step is recorded on the ticket's history under the QA run's `run_id`, so the Director's
 timeline shows the pass live. A step's answer rides on its own `step.completed` as structured fields
-(`result`, `plan`, `recheck`, `verdict_summary`; a step whose answer Symphony could not take ends
+(`result`, `results`, `plan`, `recheck`, `verdict_summary`; a step whose answer Symphony could not take ends
 `failed` with its `reason`), never as a `note`. A step answers `pass` only when every check in its
 brief was seen and judged; a part that could not be reached, seen or judged makes it `blocked`.
 Machine steps run without a
@@ -4439,10 +4439,26 @@ one that misses it is asked once more, then fails on to its `on_fail`, else to t
 review sees it. Three steps are read by id: `plan` must brief every walkthrough step the pass walks
 (a `walk` entry whose `step` is its number), or it is refused and asked again; `review` records the
 verdict with `qa_verdict` in today's contract (or writes it to its answer file), or asks for a
-recheck, `{"recheck": [brief, ...]}`, at most three: each runs as a fresh turn of the list's
-`repeat: walkthrough` step between the launch and the quit and attach steps run again, then the
-review runs again. Past two rounds the pass is `inconclusive`. A walk-style answer's `status` is
-`pass`, `fail`, `blocked` or `plan_mismatch`.
+recheck, `{"recheck": [brief, ...]}`, at most three sessions of at most twelve briefs: each brief
+runs as a fresh turn of the list's `repeat: walkthrough` step, or one fresh turn for the briefs that
+share a `group`, between the launch and the quit and attach steps run again, then the review runs
+again. Past two rounds the pass is `inconclusive`. A walk-style answer's `status` is `pass`,
+`fail`, `blocked` or `plan_mismatch`.
+
+The plan groups the walk. A walk session costs minutes before it checks anything (reading its
+brief, finding the window, reaching the screen), so the plan gives the same `group` to the briefs
+that sit on the same screen or need the same app state (the same `where`, `launch` and window size,
+and no fresh app start between them). Once Symphony takes the plan it expands the
+`repeat: walkthrough` step into one walk step per group, in the order of each group's first
+walkthrough step, and one per brief with no `group`, as before. A `cli` brief is never grouped with
+an app brief. A grouped walk reaches the place once and judges each step in turn, and answers
+`results`, one object per walkthrough step (`step`, `status`, `expected`, `actual`, `details`,
+`evidence`) in place of the single step's fields. An answer that misses a step, or gives one a status
+other than the four above, is asked once more; a step still without a result is then not judged
+(`blocked`), never passed, and the others keep theirs. The review reads one answer per walkthrough
+step, the evidence step reads each step's `evidence`, and the step's `step.completed` holds
+`results` (at most 20 `{step, status, expected, actual}`), which the Director's timeline lists one
+line per walkthrough step.
 
 The mechanical rules are the pass's as before: the wide pass audit, the QA host and tunnel checks,
 each turn's timeout (`auto_review.timeout_ms`), `execution.limits.tokens_per_issue` (counted across

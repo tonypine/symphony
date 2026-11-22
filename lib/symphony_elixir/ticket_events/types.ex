@@ -493,6 +493,15 @@ defmodule SymphonyElixir.TicketEvents.Types do
           reason: {:string, 300},
           duration_ms: :non_neg_integer,
           result: {:map, [status: {:enum, @qa_answer_statuses}, expected: {:string, 1_500}, actual: {:string, 1_500}]},
+          results:
+            {:list,
+             {:map,
+              [
+                step: :non_neg_integer,
+                status: {:enum, @qa_answer_statuses},
+                expected: {:string, 1_500},
+                actual: {:string, 1_500}
+              ]}, 20},
           plan:
             {:map,
              [

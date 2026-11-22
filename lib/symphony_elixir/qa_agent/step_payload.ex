@@ -7,6 +7,8 @@ defmodule SymphonyElixir.QaAgent.StepPayload do
 
     * `result/1`: `%{status, expected, actual}` of a check step (walk, design check, wide pass,
       recheck);
+    * `results/1`: one `%{step, status, expected, actual}` per walkthrough step of a walk or recheck
+      step that judged several in one session;
     * `plan/2`: `%{checks, skips, summary}` of the plan step: a check per walkthrough brief and per
       gallery entry the plan names, and the steps the plan leaves unrun;
     * `recheck/1`: the briefs the review asks to walk again, each `%{title, do, expect}` and an
@@ -25,6 +27,7 @@ defmodule SymphonyElixir.QaAgent.StepPayload do
   @recheck_bytes 6_000
   @max_instructions 12
   @max_checks 40
+  @max_results 20
   @missing "not given"
 
   @doc "`%{status, expected, actual}` of a check step's `answer`, or nil when it names no status."
@@ -34,6 +37,15 @@ defmodule SymphonyElixir.QaAgent.StepPayload do
   end
 
   def result(_answer), do: nil
+
+  @doc """
+  One `%{step, status, expected, actual}` per walkthrough step a grouped walk judged (its checked
+  `results`, each with its `step` number and a status Symphony takes), at most #{20}.
+  """
+  @spec results([map()]) :: [map()]
+  def results(results) do
+    for %{"step" => step} = answer <- Enum.take(results, @max_results), do: Map.put(result(answer), :step, step)
+  end
 
   @doc "The plan `answer` as `%{checks, skips, summary}`; `skips` are the `%{title, why}` Symphony leaves unrun because of it."
   @spec plan(map(), [%{title: String.t(), why: String.t()}]) :: map()
