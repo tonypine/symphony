@@ -13,7 +13,8 @@ struct ComponentStory {
     /// `collapsible-card` (TP-1511), `hairline-divider` or `priority-mark` (TP-1485), or `searchable-pop-up`,
     /// `save-bar`, `list-card` or `progress-meter` (TP-1530), `reorderable-list` (TP-1531), `window-bar` or
     /// `breadcrumb` (TP-1496), or `control-bar` (TP-1497), or `sidebar` or `status-line` (TP-1498), or `toggle`,
-    /// `number-field`, `time-field`, `settings-row`, `settings-group` or `section-list` (TP-1574).
+    /// `number-field`, `time-field`, `settings-row`, `settings-group` or `section-list` (TP-1574), or `slot-card`,
+    /// `slot-strip-line`, `checks-bar`, `token-line`, `slot-count` or `queue-row` (TP-1608).
     let component: String
     let id: String
     /// The catalog's component title, for the sheet.
@@ -31,7 +32,7 @@ struct ComponentStory {
 @MainActor
 var allComponentStories: [ComponentStory] {
     componentStories + badgeStories + rowStories + menuStories + fieldStories + tableStories + foldStories + markStories
-        + factoryStories + windowStories + sidebarStatusStories + controlBarStories + settingsStories
+        + factoryStories + windowStories + sidebarStatusStories + controlBarStories + settingsStories + homeQueueStories
 }
 
 /// The component stories' variation names, as `Gallery/component-variations.txt` lists them.

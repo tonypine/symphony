@@ -205,6 +205,27 @@ let galleryEntries: [GalleryEntry] = [
     GalleryEntry(
         id: "thumbnail-row", title: "Thumbnail row", kind: .component, prefixes: ["thumbnail-row-"],
         files: ["SymphonyBarUI/DesignSystem/TimelineParts.swift", "SymphonyBarCore/ThumbnailRowPlan.swift"]),
+    GalleryEntry(
+        id: "slot-card", title: "Slot card", kind: .component, prefixes: ["slot-card-"],
+        files: [
+            "SymphonyBarUI/DesignSystem/SlotCard.swift", "SymphonyBarUI/DesignSystem/ChecksBar.swift", "SymphonyBarUI/DesignSystem/TokenLine.swift",
+            "SymphonyBarUI/LifecycleSection.swift", "SymphonyBarCore/Lifecycle.swift",
+        ]),
+    GalleryEntry(
+        id: "slot-strip-line", title: "Slot strip line", kind: .component, prefixes: ["slot-strip-line-"],
+        files: ["SymphonyBarUI/DesignSystem/SlotCard.swift", "SymphonyBarUI/DesignSystem/QueueRow.swift"]),
+    GalleryEntry(
+        id: "checks-bar", title: "Checks bar", kind: .component, prefixes: ["checks-bar-"],
+        files: ["SymphonyBarUI/DesignSystem/ChecksBar.swift"]),
+    GalleryEntry(
+        id: "token-line", title: "Token line", kind: .component, prefixes: ["token-line-"],
+        files: ["SymphonyBarUI/DesignSystem/TokenLine.swift"]),
+    GalleryEntry(
+        id: "slot-count", title: "Slot count", kind: .component, prefixes: ["slot-count-"],
+        files: ["SymphonyBarUI/DesignSystem/SlotCountControl.swift"]),
+    GalleryEntry(
+        id: "queue-row", title: "Queue row", kind: .component, prefixes: ["queue-row-"],
+        files: ["SymphonyBarUI/DesignSystem/QueueRow.swift", "SymphonyBarUI/DesignSystem/ReorderableList.swift", "SymphonyBarUI/ListComponents.swift"]),
     GalleryEntry(id: "type-styles", title: "Type styles", kind: .component, prefixes: ["type-styles-"], files: []),
     // Screens.
     GalleryEntry(

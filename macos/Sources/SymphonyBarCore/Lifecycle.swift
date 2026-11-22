@@ -205,6 +205,21 @@ public struct LifecycleModel: Equatable {
         public var line: String
         public var status: DesignTokens.Status
         public var accessibilityLabel: String
+
+        /// A stage as said elsewhere than the ticket page: the Home queue's slot card says its stages with their word
+        /// alone, without visits and time (TP-1608).
+        public init(
+            id: String, title: String, state: TicketLifecycle.StageState, word: String, line: String, status: DesignTokens.Status,
+            accessibilityLabel: String
+        ) {
+            self.id = id
+            self.title = title
+            self.state = state
+            self.word = word
+            self.line = line
+            self.status = status
+            self.accessibilityLabel = accessibilityLabel
+        }
     }
 
     public struct Segment: Equatable, Identifiable {

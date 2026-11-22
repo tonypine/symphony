@@ -38,6 +38,9 @@ button-secondary-pressed
 button-sizes-side-by-side
 button-small
 button-with-a-glyph
+checks-bar-all-proved
+checks-bar-five-of-nine
+checks-bar-none-proved
 collapsible-card-empty
 collapsible-card-folded
 collapsible-card-header-focused
@@ -125,6 +128,9 @@ progress-meter-one-line-at-the-cap
 progress-meter-one-line-at-the-stop-mark
 progress-meter-one-line-with-a-stop-mark
 progress-meter-ticket-cap
+queue-row-at-rest
+queue-row-dragged
+queue-row-hovered
 reorderable-list-a-line-that-can-t-be-used-now
 reorderable-list-dragging
 reorderable-list-handle-focused
@@ -191,6 +197,15 @@ sidebar-expanded-row-keyboard-focus
 sidebar-expanded-row-pressed
 sidebar-expanded-symphony-late
 sidebar-expanded-window-not-focused
+slot-card-empty
+slot-card-needs-attention
+slot-card-now
+slot-card-waiting-on-you
+slot-count-one-slot
+slot-count-six-slots
+slot-count-three-slots
+slot-strip-line-hover
+slot-strip-line-lines
 status-dot-done
 status-dot-forced
 status-dot-needs-attention
@@ -238,6 +253,8 @@ toggle-hover
 toggle-off
 toggle-on
 toggle-pressed
+token-line-three-stages
+token-line-two-stages
 window-bar-home
 window-bar-home-find-focused
 window-bar-ticket-page

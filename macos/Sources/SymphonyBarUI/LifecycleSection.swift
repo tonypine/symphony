@@ -61,10 +61,16 @@ private struct LifecycleHead: View {
 /// The five stages left to right, sharing the width equally: a bar, the name with its visits, the state and time.
 /// A stage's name never breaks: when the column is too narrow for every name on one line (a desktop's main column just
 /// past the breakpoint, beside the rail and the decisions), the stages stack as rows, each name with its line beside it.
-private struct StageStrip: View {
-    let stages: [LifecycleModel.Stage]
+/// The ticket page's Lifecycle draws it, and so does the Home queue's slot card, with stages whose line is their word
+/// alone (TP-1608).
+public struct StageStrip: View {
+    public let stages: [LifecycleModel.Stage]
 
-    var body: some View {
+    public init(stages: [LifecycleModel.Stage]) {
+        self.stages = stages
+    }
+
+    public var body: some View {
         ViewThatFits(in: .horizontal) {
             HStack(alignment: .top, spacing: LifecycleSection.stageSpacing) {
                 ForEach(Array(stages.enumerated()), id: \.element.id) { index, stage in
