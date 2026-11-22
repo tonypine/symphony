@@ -77,7 +77,7 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
 
     # The dispatch order read holds the Todo ticket for the landing too.
     order = state |> Orchestrator.put_dispatch_order_for_test([todo, second_landing]) |> Map.fetch!(:dispatch_order)
-    assert [%{issue_id: "todo-1", outcome: :waits, reason: ^hold_reason}, %{issue_id: "land-2", outcome: :waits}] = order.entries
+    assert [%{issue_id: "todo-1", outcome: :waits, wait: ^hold_reason}, %{issue_id: "land-2", outcome: :waits}] = order.entries
 
     # The landing run ends: a slot is free for the second landing, so nothing holds the Todo ticket.
     state = %{state | running: Map.delete(state.running, "land-1")}
