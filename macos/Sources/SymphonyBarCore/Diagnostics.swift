@@ -15,13 +15,11 @@ public struct DiagnosticsPayload: Decodable, Equatable {
 
     public struct Counts: Decodable, Equatable {
         public var running: Int?
-        public var forced: Int?
     }
 
     public struct Concurrency: Decodable, Equatable {
         public var maxTotal: Int?
         public var finishingMax: Int?
-        public var forcedMax: Int?
     }
 
     public struct Finishing: Decodable, Equatable {
@@ -215,9 +213,6 @@ public struct DiagnosticsReport: Equatable {
         rows.append(Row("Agent slots", inUse(running, of: payload.concurrency?.maxTotal, noun: "running")))
         if let finishing = payload.finishing, let slots = finishing.slots ?? payload.concurrency?.finishingMax {
             rows.append(Row("Landing slots", inUse(finishing.used ?? 0, of: slots, noun: "landing")))
-        }
-        if let forcedMax = payload.concurrency?.forcedMax {
-            rows.append(Row("Forced allowance", inUse(payload.counts?.forced ?? 0, of: forcedMax, noun: "forced")))
         }
         if let lanes = payload.epicLanes {
             rows.append(Row("Initiative slots", initiativeSlots(lanes)))

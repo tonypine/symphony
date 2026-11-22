@@ -35,15 +35,15 @@ final class QAScriptTests: XCTestCase {
         let file = root.appendingPathComponent("001")
 
         XCTAssertEqual(
-            QAScript.Command(file: file, contents: "Force a ticket…\n TP-123 \n"),
-            QAScript.Command(file: file, title: "Force a ticket…", input: "TP-123")
+            QAScript.Command(file: file, contents: "Pause Dispatch…\n Deploy freeze \n"),
+            QAScript.Command(file: file, title: "Pause Dispatch…", input: "Deploy freeze")
         )
         XCTAssertEqual(
-            QAScript.Command(file: file, contents: "Force a ticket…\r\nTP-123\r\n"),
-            QAScript.Command(file: file, title: "Force a ticket…", input: "TP-123")
+            QAScript.Command(file: file, contents: "Pause Dispatch…\r\nDeploy freeze\r\n"),
+            QAScript.Command(file: file, title: "Pause Dispatch…", input: "Deploy freeze")
         )
         XCTAssertEqual(QAScript.Command(file: file, contents: " Start Symphony \n"), QAScript.Command(file: file, title: "Start Symphony"))
-        XCTAssertEqual(QAScript.Command(file: file, contents: "Force a ticket…\n  \n"), QAScript.Command(file: file, title: "Force a ticket…"))
+        XCTAssertEqual(QAScript.Command(file: file, contents: "Pause Dispatch…\n  \n"), QAScript.Command(file: file, title: "Pause Dispatch…"))
         XCTAssertEqual(QAScript.Command(file: file, contents: ""), QAScript.Command(file: file, title: ""))
     }
 

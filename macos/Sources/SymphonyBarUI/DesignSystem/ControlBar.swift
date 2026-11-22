@@ -5,7 +5,7 @@ import SymphonyBarCore
 // bar a page holds its own controls in. Every page's bar is this one; no page draws a bar of its own making.
 
 /// The catalog's Control bar: glass at the top of a page, what narrows the page (the scope, the search, the filters) at
-/// the left and what acts on it (Export…, Force a Ticket…, Check Again) at the right, its controls small (24 pt). With
+/// the left and what acts on it (Export…, Check Again) at the right, its controls small (24 pt). With
 /// a `summary`, the one line of what the page shows: on its own line under the controls on a laptop, right aligned
 /// beside them from `DesignTokens.ControlBar.summaryBesideWidth` (a desktop) when the line holds both.
 public struct ControlBar<Narrow: View, Act: View>: View {
@@ -56,7 +56,7 @@ public struct ControlBar<Narrow: View, Act: View>: View {
         .accessibilityLabel(label)
     }
 
-    /// What acts keeps its whole width (a title is never cut to "Force a Ti…"); what narrows takes the rest before the
+    /// What acts keeps its whole width (a title is never cut to "Check Ag…"); what narrows takes the rest before the
     /// gap between the sides does, its controls wrapping onto the next line when they don't fit on one, so no page's
     /// bar is wider than the page (Audit beside its inspector) and a control that wraps itself (Insights' groups) wraps
     /// within the line.

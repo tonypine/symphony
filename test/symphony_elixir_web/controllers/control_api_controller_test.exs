@@ -258,6 +258,12 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
     assert calls(pid) == [{:try_usage_limit_now, "usage_limit:openai:all"}, {:try_usage_limit_now, "usage_limit:anthropic:all"}]
   end
 
+  test "POST /control/force is no longer a route, and the controller has no force action" do
+    assert Phoenix.Router.route_info(SymphonyElixirWeb.Router, "POST", "/api/v1/control/force", "localhost") == :error
+    Code.ensure_loaded!(SymphonyElixirWeb.ControlApiController)
+    refute function_exported?(SymphonyElixirWeb.ControlApiController, :force, 2)
+  end
+
   test "POST /control/stop requires issue_identifier" do
     pid = start_stub([])
 

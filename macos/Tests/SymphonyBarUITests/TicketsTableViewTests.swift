@@ -37,20 +37,20 @@ final class TicketsTableViewTests: XCTestCase {
         let rows = try rows()
         let page = window - DesignTokens.Layout.sidebarWidth
         let shown = TicketsQuery().drawnColumns(catalog: TicketColumn.catalog, scope: .all, width: page)
-        let columns = TicketsTableColumns.columns(shown, rows: rows, situations: try situations(), forced: ["SHOP-311"], reference: Self.reference)
+        let columns = TicketsTableColumns.columns(shown, rows: rows, situations: try situations(), reference: Self.reference)
         let measured = DataTableCache<TicketsRow>().layout(rows: rows, columns: columns, sort: nil).measured
         return (columns, DesignTokens.Table.widths(available: available, columns: columns.map(\.width), measured: measured))
     }
 
-    /// The glyph, the word and the Forced badge of a row's situation as drawn, alone.
-    private func leadWidth(_ text: SituationText, forced: Bool) -> Double {
-        let host = NSHostingView(rootView: TicketSituationLead(text: text, forced: forced).fixedSize())
+    /// The glyph and the word of a row's situation as drawn, alone.
+    private func leadWidth(_ text: SituationText) -> Double {
+        let host = NSHostingView(rootView: TicketSituationLead(text: text).fixedSize())
         return Double(host.fittingSize.width)
     }
 
     func testNoSituationWordIsCutAtTheWindowsMinimumWidth() throws {
         let rows = try rows()
-        let state = TicketsTableState(situations: try situations(), forced: ["SHOP-311"], reference: Self.reference)
+        let state = TicketsTableState(situations: try situations(), reference: Self.reference)
         for details in [false, true] {
             let available = tableWidth(window: DesignTokens.Layout.minWindowWidth, details: details)
             let (columns, widths) = try layout(window: DesignTokens.Layout.minWindowWidth, available: available)
@@ -58,20 +58,17 @@ final class TicketsTableViewTests: XCTestCase {
             let room = widths[index] - 2 * DesignTokens.Table.cellPadding
             for row in rows {
                 let shown = state.situation(row)
-                let drawn = leadWidth(shown.text, forced: shown.forced)
-                XCTAssertLessThanOrEqual(drawn, room, "\(row.identifier)'s “\(shown.text.word)” is cut (details \(details))")
+                let drawn = leadWidth(shown)
+                XCTAssertLessThanOrEqual(drawn, room, "\(row.identifier)'s “\(shown.word)” is cut (details \(details))")
             }
         }
     }
 
     func testTheSituationsLeastWidthHoldsTheWidestWordAsDrawn() throws {
-        let state = TicketsTableState(situations: try situations(), forced: ["SHOP-311"], reference: Self.reference)
+        let state = TicketsTableState(situations: try situations(), reference: Self.reference)
         for row in try rows() {
             let shown = state.situation(row)
-            XCTAssertGreaterThanOrEqual(
-                TicketSituationCell.leadWidth(word: shown.text.word, forced: shown.forced), leadWidth(shown.text, forced: shown.forced),
-                row.identifier
-            )
+            XCTAssertGreaterThanOrEqual(TicketSituationCell.leadWidth(word: shown.word), leadWidth(shown), row.identifier)
         }
     }
 
@@ -114,9 +111,8 @@ final class TicketsTableViewTests: XCTestCase {
     }
 
     func testARowWithoutASituationReadsAsUnknown() {
-        let state = TicketsTableState(situations: [:], forced: [], reference: Self.reference)
+        let state = TicketsTableState(situations: [:], reference: Self.reference)
         let shown = state.situation(TicketsRow(identifier: "TP-9", values: [:]))
-        XCTAssertEqual(shown.text.kind, .unknown)
-        XCTAssertFalse(shown.forced)
+        XCTAssertEqual(shown.kind, .unknown)
     }
 }

@@ -12,8 +12,8 @@ defmodule SymphonyElixirWeb.TicketMovesReadTest do
   @id "ticket"
   @identifier "MOT-1"
 
-  # What goes through the control API here; `start`, `stop`, `force` and `unforce` need a running
-  # orchestrator, and their words are proved in `start_issue_test.exs` and `force_issue_test.exs`.
+  # What goes through the control API here; `start` and `stop` need a running orchestrator, and
+  # their words are proved in `start_issue_test.exs`.
   @called_moves [
     :answer,
     :restart,
@@ -206,7 +206,7 @@ defmodule SymphonyElixirWeb.TicketMovesReadTest do
 
       moves = read_moves()
 
-      for move <- [:start, :restart, :cancel, :force, :backlog] do
+      for move <- [:start, :restart, :cancel, :backlog] do
         assert moves[move] == %{allowed: false, reason: "The ticket is done."}
       end
     end

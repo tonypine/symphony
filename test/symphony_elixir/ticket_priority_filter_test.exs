@@ -69,11 +69,11 @@ defmodule SymphonyElixir.TicketPriorityFilterTest do
       refute Orchestrator.should_dispatch_issue_for_test(issue("unset", nil), state)
     end
 
-    test "the filter does not gate a forced ticket" do
+    test "the filter gates a ticket labelled expedite like any other" do
       filter(["urgent"])
-      forced = %{issue("forced", 4) | labels: ["expedite"]}
+      labelled = %{issue("labelled", 4) | labels: ["expedite"]}
 
-      assert Orchestrator.should_dispatch_issue_for_test(forced, orchestrator_state())
+      refute Orchestrator.should_dispatch_issue_for_test(labelled, orchestrator_state())
     end
 
     test "the filter does not gate a retry waiting for a slot" do

@@ -544,6 +544,20 @@ defmodule SymphonyElixir.RunStoreTest do
     restart_run_store()
   end
 
+  test "TP-1611: the forced queue a previous release kept loads and is deleted, the other repo's too only by its own key" do
+    entries = %{"issue-forced" => %{issue_id: "issue-forced", identifier: "MT-1", forced_since: ~U[2026-11-01 00:00:00Z]}}
+    {:atomic, :ok} = :mnesia.transaction(fn -> :mnesia.write({:symphony_run_store_totals, {:forced, @repo_key}, entries}) end)
+    {:atomic, :ok} = :mnesia.transaction(fn -> :mnesia.write({:symphony_run_store_totals, {:forced, @other_repo_key}, entries}) end)
+
+    restart_run_store()
+
+    assert :ok = RunStore.delete_forced_queue(@repo_key)
+    assert :mnesia.dirty_read(:symphony_run_store_totals, {:forced, @repo_key}) == []
+    assert [_row] = :mnesia.dirty_read(:symphony_run_store_totals, {:forced, @other_repo_key})
+    assert :ok = RunStore.delete_forced_queue(@repo_key)
+    assert {:error, :invalid_repo_key} = RunStore.delete_forced_queue(" ")
+  end
+
   test "persists the issues a merge moved to the waiting state across run store restart" do
     refute RunStore.merged_wait?("issue-merged")
     assert :ok = RunStore.put_merged_wait("issue-merged")

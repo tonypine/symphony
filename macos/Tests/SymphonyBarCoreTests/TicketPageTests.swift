@@ -18,8 +18,7 @@ final class TicketPageTests: XCTestCase {
         XCTAssertEqual(page.url, URL(string: "https://linear.app/acme/issue/SHOP-305"))
         // No activity for 14 min: the page no longer calls it stuck, only Symphony says why a ticket doesn't move.
         XCTAssertEqual(page.phase, .working)
-        XCTAssertEqual(page.badges, [TicketPage.Badge(status: .working, word: "Working"), TicketPage.Badge(status: .forced, word: "Forced")])
-        XCTAssertTrue(page.isForced)
+        XCTAssertEqual(page.badges, [TicketPage.Badge(status: .working, word: "Working")])
         XCTAssertTrue(page.isRunning)
         XCTAssertTrue(page.isTracked)
         XCTAssertEqual(page.sessionID, "session-SHOP-305")
@@ -53,7 +52,6 @@ final class TicketPageTests: XCTestCase {
         XCTAssertEqual(page.facts, [
             TicketPage.Fact(label: "State", value: "In Progress"),
             TicketPage.Fact(label: "Type", value: "Ticket"),
-            TicketPage.Fact(label: "Forced", value: "Yes"),
         ])
         XCTAssertEqual(page.apiPath, "api/v1/SHOP-305")
     }
@@ -76,9 +74,7 @@ final class TicketPageTests: XCTestCase {
             TicketPage.Fact(label: "Type", value: "Ticket"),
             TicketPage.Fact(label: "Pull request", value: "acme/web-shop#406", url: pullRequest),
             TicketPage.Fact(label: "Merged", value: "13:40"),
-            TicketPage.Fact(label: "Forced", value: "No"),
         ])
-        XCTAssertFalse(page.isForced)
         // The approve move shows once although both audit queries returned it.
         XCTAssertEqual(page.timeline.map(\.title), ["Implementation run 1", "Rework run 1", "Moved to Merging by you", "Merged"])
         XCTAssertEqual(page.timeline.map(\.timeText), ["10:02", "12:10", "13:12", "13:40"])
@@ -297,7 +293,7 @@ final class TicketPageTests: XCTestCase {
         let state = json([
             "generated_at": "2026-10-07T14:20:00Z",
             "watching": [["issue_identifier": "T-1", "state": "Code Review", "title": "Final verification: billing"]],
-            "retrying": [["issue_identifier": "T-1", "attempt": 3, "forced": true, "error": "boom", "workspace_path": "/w/T-1"]],
+            "retrying": [["issue_identifier": "T-1", "attempt": 3, "error": "boom", "workspace_path": "/w/T-1"]],
             "epic_lanes": ["lanes": [["identifier": "T-0", "title": "Billing", "sub_issue": ["identifier": "T-1"]]]],
         ])
         let issue = json(["last_error": "x"])
@@ -305,9 +301,9 @@ final class TicketPageTests: XCTestCase {
 
         XCTAssertEqual(page.phase, .inReview(qa: nil))
         XCTAssertEqual(page.phaseSentence, "In review")
-        XCTAssertEqual(page.badges.map(\.word), ["In review", "Failed 3 times", "Forced"])
+        XCTAssertEqual(page.badges.map(\.word), ["In review", "Failed 3 times"])
         XCTAssertEqual(page.initiative, "T-0 Billing")
-        XCTAssertEqual(page.facts.map(\.label), ["State", "Type", "Initiative", "Forced"])
+        XCTAssertEqual(page.facts.map(\.label), ["State", "Type", "Initiative"])
         XCTAssertEqual(page.facts[1].value, "Ticket")
         XCTAssertEqual(page.timeline.map(\.title), [])
         XCTAssertNil(page.runTokens)
@@ -362,7 +358,7 @@ final class TicketPageTests: XCTestCase {
         XCTAssertNil(now?.tokens.fraction)
         XCTAssertEqual(now?.tokens.note, "No per-ticket cap")
         XCTAssertEqual(page.phaseSentence, "Working")
-        XCTAssertEqual(page.facts.map(\.label), ["Type", "Pull request", "Forced"])
+        XCTAssertEqual(page.facts.map(\.label), ["Type", "Pull request"])
         XCTAssertEqual(page.facts[0].value, "Plan")
         XCTAssertEqual(page.facts.first { $0.label == "Pull request" }?.value, "https://example.com/pr")
         XCTAssertEqual(page.timeline.map(\.title), ["Agent run 1", "Agent run 2", "QA pass run 1", "Agent run 3"])

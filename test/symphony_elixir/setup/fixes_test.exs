@@ -17,7 +17,7 @@ defmodule SymphonyElixir.Setup.FixesTest do
     path = Workflow.workflow_file_path()
     write_workflow_file!(path, repos: [%{key: "app", team: "TP", workflow: path}])
 
-    labels = for %{names: [name | _]} <- StateProvisioning.machine_labels("expedite", ["needs-human"]), name != "Needs Decision", do: name
+    labels = for %{names: [name | _]} <- StateProvisioning.machine_labels(["needs-human"]), name != "Needs Decision", do: name
     Application.put_env(:symphony_elixir, :memory_tracker_labels_list, Enum.map(labels, &%{id: &1, name: &1, team_id: "TP", team_key: "TP"}))
 
     server = Module.concat(__MODULE__, "Setup#{System.unique_integer([:positive])}")

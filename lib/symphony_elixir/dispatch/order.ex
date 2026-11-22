@@ -43,7 +43,6 @@ defmodule SymphonyElixir.Dispatch.Order do
 
   - the next one: `next: a slot is free`, or `next: ` and why it waits;
   - a later one: `2nd: a slot is free` when a pass run now starts it too, else `2nd: behind TP-n`;
-  - a forced one that starts: `forced`;
   - a paused one: the pause's reason;
   - one out of line keeps the reason it came with.
   """
@@ -72,7 +71,6 @@ defmodule SymphonyElixir.Dispatch.Order do
   end
 
   defp reason(%{outcome: :paused, reason: reason}, _position, _previous), do: reason
-  defp reason(%{outcome: :starts, forced: true}, _position, _previous), do: "forced"
   defp reason(%{outcome: :starts}, position, _previous), do: "#{ordinal(position)}: a slot is free"
   defp reason(%{outcome: :waits, reason: reason}, 1, _previous), do: "next: #{reason}"
   defp reason(%{outcome: :waits}, position, previous), do: "#{ordinal(position)}: behind #{previous}"
@@ -146,7 +144,7 @@ defmodule SymphonyElixir.Dispatch.Order do
     entry = entry || not_a_candidate(record, situation)
 
     entry
-    |> Map.take([:issue_id, :identifier, :title, :state, :repo_key, :position, :reason, :wait, :slot, :forced, :starts_now])
+    |> Map.take([:issue_id, :identifier, :title, :state, :repo_key, :position, :reason, :wait, :slot, :starts_now])
     |> Map.merge(%{outcome: Atom.to_string(entry.outcome), rule: entry |> Map.get(:rule) |> rule_name(), situation: situation})
   end
 
@@ -164,7 +162,6 @@ defmodule SymphonyElixir.Dispatch.Order do
       starts_now: false,
       wait: nil,
       slot: nil,
-      forced: false,
       rule: nil
     }
   end

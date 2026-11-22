@@ -22,10 +22,6 @@ public enum ControlAction: Equatable {
     /// Try Now: the Director says a usage limit is back, so Symphony checks the hold waiting on `condition`
     /// (`usage_limit:anthropic:all`) at once, with one held run as the canary, instead of at its recorded reset.
     case tryNow(condition: String)
-    /// Adds the force label to the ticket, so it skips the dispatch limits.
-    case force(String)
-    /// Removes the force label from the ticket.
-    case stopForcing(String)
     /// Stops the agent running on the ticket.
     case stop(String)
     /// The Director's moves from the Inbox (DD4): each names the ticket; Symphony checks its state.
@@ -150,8 +146,6 @@ public enum ControlAction: Equatable {
             return "api/v1/control/update_ready"
         case .handover:
             return "api/v1/control/handover"
-        case .force, .stopForcing:
-            return "api/v1/control/force"
         case .stop:
             return "api/v1/control/stop"
         case .approvePlan:
@@ -228,7 +222,7 @@ public enum ControlAction: Equatable {
              let .move(identifier, _, _),
              let .decide(identifier, _, _, _), let .unblock(identifier), let .undo(identifier):
             return identifier
-        case .pause, .pauseWithReason, .pauseForUpdate, .resume, .resumeUpdate, .updateReady, .handover, .tryNow, .force, .stopForcing, .stop, .start, .message, .blocker,
+        case .pause, .pauseWithReason, .pauseForUpdate, .resume, .resumeUpdate, .updateReady, .handover, .tryNow, .stop, .start, .message, .blocker,
              .priority, .label, .decision, .pauseRepository, .resumeRepository, .pauseProvider, .resumeProvider, .looked, .saveView,
              .deleteView:
             return nil
@@ -258,10 +252,6 @@ public enum ControlAction: Equatable {
             // Without one, Symphony gives the pause its own line.
             let reason = reason.trimmingWhitespace()
             return reason.isEmpty ? [:] : ["reason": reason]
-        case let .force(identifier):
-            return ["identifier": identifier]
-        case let .stopForcing(identifier):
-            return ["identifier": identifier, "clear": "true"]
         case let .stop(identifier), let .approvePlan(identifier), let .unblock(identifier), let .undo(identifier):
             return ["issue_identifier": identifier]
         case let .rework(identifier, reason):
@@ -300,7 +290,7 @@ public enum ControlAction: Equatable {
         }
     }
 
-    /// Start of error messages, for example "Couldn't pause Symphony" or "Couldn't force TP-123".
+    /// Start of error messages, for example "Couldn't pause Symphony" or "Couldn't stop TP-123".
     var failurePrefix: String {
         switch self {
         case .pause, .pauseWithReason, .pauseForUpdate:
@@ -313,10 +303,6 @@ public enum ControlAction: Equatable {
             return "Symphony can't stop yet"
         case .tryNow:
             return "Couldn't check the usage limit"
-        case let .force(identifier):
-            return "Couldn't force \(identifier)"
-        case let .stopForcing(identifier):
-            return "Couldn't stop forcing \(identifier)"
         case let .stop(identifier):
             return "Couldn't stop \(identifier)"
         case let .approvePlan(identifier):

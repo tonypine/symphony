@@ -45,7 +45,6 @@ defmodule SymphonyElixir.CLI do
   @check_switches [config: :string, migrate: :boolean]
   @config_migrate_switches [config: :string]
   @dashboard_switches [url: :string]
-  @force_switches [clear: :boolean]
   @report_switches [from: :string, to: :string]
   @openrouter_stub_switches [port: :integer]
   @default_symphony_file "symphony.yml"
@@ -75,7 +74,6 @@ defmodule SymphonyElixir.CLI do
           control_url: (-> String.t()),
           run_dashboard: ((-> String.t()) -> :ok),
           start_openrouter_stub: (non_neg_integer() -> {:ok, :inet.port_number()} | {:error, term()}),
-          force_issue: (String.t(), boolean() -> ControlClient.control_result()),
           start_report: (DateTime.t(), DateTime.t() -> ControlClient.control_result())
         }
 
@@ -118,7 +116,6 @@ defmodule SymphonyElixir.CLI do
   defp dispatch(["check" | check_args], deps), do: evaluate_check(check_args, deps)
   defp dispatch(["config" | config_args], deps), do: evaluate_config(config_args, deps)
   defp dispatch(["dashboard" | dashboard_args], deps), do: evaluate_dashboard(dashboard_args, deps)
-  defp dispatch(["force" | force_args], deps), do: evaluate_force(force_args, deps)
   defp dispatch(["init" | init_args], deps), do: evaluate_init(init_args, deps)
   defp dispatch(["pr" | pr_args], _deps), do: dispatch_pr(pr_args)
   defp dispatch(["report" | report_args], deps), do: evaluate_report(report_args, deps)
@@ -308,57 +305,6 @@ defmodule SymphonyElixir.CLI do
     end
   end
 
-  # Adds or clears the force label through the running Symphony's control API; no config needed.
-  defp evaluate_force(args, deps) do
-    with {opts, [identifier], []} <- OptionParser.parse(args, strict: @force_switches),
-         identifier when identifier != "" <- String.trim(identifier) do
-      identifier
-      |> deps.force_issue.(Keyword.get(opts, :clear, false))
-      |> force_result(identifier, deps)
-    else
-      _ -> {:error, force_usage_message()}
-    end
-  end
-
-  defp force_result({:ok, result}, identifier, _deps) do
-    IO.puts(force_message(Map.get(result, :issue_identifier) || identifier, result))
-    {:halt, 0}
-  end
-
-  defp force_result(:unavailable, _identifier, _deps),
-    do: {:error, "Symphony's orchestrator is unavailable; try again once it has started"}
-
-  defp force_result({:error, reason}, identifier, deps), do: {:error, force_error_message(reason, identifier, deps)}
-
-  defp force_message(identifier, %{forced: false}), do: "#{identifier} no longer forced"
-  defp force_message(identifier, %{position: nil, state: state}), do: "#{identifier} forced (it is in #{state}; forcing doesn't promote it)"
-  defp force_message(identifier, %{position: position, forced_max: forced_max}) when position <= forced_max, do: "#{identifier} forced (slot #{position} of #{forced_max})"
-  defp force_message(identifier, %{position: position, holders: holders}), do: "#{identifier} forced (queued ##{position}; #{holders_phrase(holders)})"
-
-  defp holders_phrase([holder]), do: "#{holder} holds the forced slot"
-
-  defp holders_phrase(holders) do
-    {others, [last]} = Enum.split(holders, -1)
-    "#{Enum.join(others, ", ")} and #{last} hold the forced slots"
-  end
-
-  defp force_error_message(:control_token_unavailable, _identifier, _deps),
-    do: "No control token: start Symphony first, or set SYMPHONY_CONTROL_TOKEN to the token in <state-root>/control_token"
-
-  defp force_error_message({:unauthorized, _payload}, _identifier, _deps),
-    do: "The running Symphony rejected the control token; check SYMPHONY_CONTROL_TOKEN"
-
-  defp force_error_message({:connection_failed, _reason}, _identifier, deps),
-    do: "Could not reach Symphony at #{deps.control_url.()}; is it running?"
-
-  defp force_error_message({:invalid_request, %{"error" => %{"message" => message}}}, _identifier, _deps) when is_binary(message),
-    do: message
-
-  defp force_error_message({:http_status, _status, %{"error" => %{"message" => message}}}, _identifier, _deps) when is_binary(message),
-    do: message
-
-  defp force_error_message(reason, identifier, _deps), do: "Could not force #{identifier}: #{inspect(reason)}"
-
   # A report run on the period, started through the running Symphony: the times are read on this
   # host's clock (`SymphonyElixir.Reports.Period`), so `yesterday 18:00` is the operator's.
   defp evaluate_report(args, deps) do
@@ -385,7 +331,23 @@ defmodule SymphonyElixir.CLI do
   defp report_result({:error, reason}, deps), do: {:error, report_error_message(reason, deps)}
 
   defp report_error_message(:no_events, _deps), do: "No notable event happened in that period, so there is nothing to report."
-  defp report_error_message(reason, deps), do: force_error_message(reason, "a report", deps) |> String.replace("Could not force a report", "Could not start a report")
+
+  defp report_error_message(:control_token_unavailable, _deps),
+    do: "No control token: start Symphony first, or set SYMPHONY_CONTROL_TOKEN to the token in <state-root>/control_token"
+
+  defp report_error_message({:unauthorized, _payload}, _deps),
+    do: "The running Symphony rejected the control token; check SYMPHONY_CONTROL_TOKEN"
+
+  defp report_error_message({:connection_failed, _reason}, deps),
+    do: "Could not reach Symphony at #{deps.control_url.()}; is it running?"
+
+  defp report_error_message({:invalid_request, %{"error" => %{"message" => message}}}, _deps) when is_binary(message),
+    do: message
+
+  defp report_error_message({:http_status, _status, %{"error" => %{"message" => message}}}, _deps) when is_binary(message),
+    do: message
+
+  defp report_error_message(reason, _deps), do: "Could not start a report: #{inspect(reason)}"
 
   defp report_usage_message do
     "Usage: symphony report --from <time> [--to <time>] (an ISO 8601 time, now, today or yesterday with an hour such as 18:00, or 2 hours ago)"
@@ -483,7 +445,7 @@ defmodule SymphonyElixir.CLI do
       :not_packaged ->
         :ok
 
-      [command | _args] = args when command in ["check", "config", "dashboard", "force", "report"] ->
+      [command | _args] = args when command in ["check", "config", "dashboard", "report"] ->
         args |> evaluate() |> halt()
 
       args ->
@@ -493,7 +455,7 @@ defmodule SymphonyElixir.CLI do
     end
   end
 
-  # Only the service takes the node name; `check`, `config`, `dashboard`, `force` and `report` above run
+  # Only the service takes the node name; `check`, `config`, `dashboard` and `report` above run
   # undistributed so they work next to a running Symphony.
   defp configure_service(args) do
     with :ok <- configure(args), do: ReleaseNode.start(ReleaseNode.runtime_deps())
@@ -634,7 +596,6 @@ defmodule SymphonyElixir.CLI do
       "       symphony config migrate [--config <path-to-symphony.yml>]\n" <>
       "       symphony config migrations\n" <>
       "       symphony dashboard [--url <control-url>]\n" <>
-      "       symphony force [--clear] <issue-identifier>\n" <>
       "       symphony openrouter-stub [--port <port>]\n" <>
       "       symphony [--config <path-to-symphony.yml>] [--state-root <path>] [--logs-root <path>] [--host <host>|unix:<socket>] [--port <port>] [--qa-seed <dir>]\n" <>
       "       symphony pr <url-or-number> [--intent \"address review comments\"]\n" <>
@@ -658,10 +619,6 @@ defmodule SymphonyElixir.CLI do
 
   defp openrouter_stub_usage_message do
     "Usage: symphony openrouter-stub [--port <port>]"
-  end
-
-  defp force_usage_message do
-    "Usage: symphony force [--clear] <issue-identifier>"
   end
 
   @spec run_usage_message() :: String.t()
@@ -688,7 +645,6 @@ defmodule SymphonyElixir.CLI do
       run_one_shot: &SymphonyElixir.OneShot.run/2,
       control_url: fn -> ControlClient.control_url() end,
       run_dashboard: &run_dashboard/1,
-      force_issue: &ControlClient.force_issue/2,
       start_report: &ControlClient.start_report/2,
       start_openrouter_stub: &start_openrouter_stub/1
     }

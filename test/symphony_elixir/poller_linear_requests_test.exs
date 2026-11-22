@@ -168,14 +168,14 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
   describe "the orchestrator's tick" do
     # The repo poll's own requests (the poll, and the reads it makes once per interval) are left
     # out: the tick's by-id reads are the difference between the sources.
-    test "under dispatch.source: poll reads its running, watched, forced and stopped tickets by id" do
+    test "under dispatch.source: poll reads its running, watched and stopped tickets by id" do
       start_linear!(4)
       dispatch_from!("poll")
       observe_records()
 
       {result, _state} = Orchestrator.run_repo_poll_task_for_test(tick_state(), repos(), 0)
 
-      assert %{"SymphonyLinearPoll" => _polls, "SymphonyLinearIssuesById" => 4} = linear_requests()
+      assert %{"SymphonyLinearPoll" => _polls, "SymphonyLinearIssuesById" => 3} = linear_requests()
       assert {:ok, [%Issue{id: "issue-1", state: "Code Review"}]} = result.running_result
     end
 
@@ -264,8 +264,7 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
     %Orchestrator.State{
       repo_key: @repo_key,
       running: %{running.id => %{issue: running, identifier: running.identifier}},
-      watching: %{"issue-2" => %{}},
-      forced: %{"issue-3" => %{}}
+      watching: %{"issue-2" => %{}}
     }
   end
 

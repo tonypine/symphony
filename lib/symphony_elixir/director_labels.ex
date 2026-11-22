@@ -16,8 +16,7 @@ defmodule SymphonyElixir.DirectorLabels do
     * each of the repository's `escalate.labels` (`SymphonyElixir.EscalationRules`), read from its
       settings, so a configured one counts: Code Review asks a person before approving.
 
-  The machine labels (`SymphonyElixir.MachineLabels`) and the force label
-  (`agent.force_label`, which Force sets) are never one of them, even when
+  The machine labels (`SymphonyElixir.MachineLabels`) are never one of them, even when
   `escalate.labels` names one. The ticket is one Symphony tracks: it has a record
   (`SymphonyElixir.TicketState`) that is not removed, found by identifier or id in every configured
   repository's records. A change is refused (`{:error, {:conflict, message}}`, the reason the app
@@ -71,9 +70,9 @@ defmodule SymphonyElixir.DirectorLabels do
   @type action :: :add | :remove
 
   @doc """
-  The toggles for a repository's settings (`:escalate_labels` and `:force_label` from them when not
-  given): each `%{label, aliases, title, effect}`, the labels Symphony reads first, then each
-  `escalate.labels` entry they don't name. A machine label or the force label is never one.
+  The toggles for a repository's settings (`:escalate_labels` from them when not given): each
+  `%{label, aliases, title, effect}`, the labels Symphony reads first, then each `escalate.labels`
+  entry they don't name. A machine label is never one.
   """
   @spec toggles(keyword()) :: [map()]
   def toggles(opts \\ []) do
@@ -89,8 +88,7 @@ defmodule SymphonyElixir.DirectorLabels do
       |> Enum.reject(&MapSet.member?(named, normalize(&1)))
       |> Enum.map(&%{label: &1, aliases: [], title: &1, effect: @escalate_effect})
 
-    force = normalize(Keyword.get(opts, :force_label))
-    Enum.reject(known ++ escalate, &(MachineLabels.owned?(&1.label) or normalize(&1.label) == force))
+    Enum.reject(known ++ escalate, &MachineLabels.owned?(&1.label))
   end
 
   @doc """
@@ -99,8 +97,8 @@ defmodule SymphonyElixir.DirectorLabels do
 
   Options: `:tracker` (default `SymphonyElixir.Tracker`), `:orchestrator` (asked to poll again,
   default `SymphonyElixir.Orchestrator`), `:audit_log` (the audit log's options), `:records` (the
-  tracked records, default every record in the run store), `:escalate_labels` and `:force_label`
-  (default the ticket's repository's settings, read with `:settings_for_repo`, default
+  tracked records, default every record in the run store) and `:escalate_labels` (default the
+  ticket's repository's settings, read with `:settings_for_repo`, default
   `SymphonyElixir.Config.settings_for_repo/1`).
   """
   @spec set(String.t(), String.t(), action(), keyword()) :: {:ok, map()} | {:error, error()}
@@ -108,7 +106,7 @@ defmodule SymphonyElixir.DirectorLabels do
     with {:ok, ticket} <- find(records(opts), identifier),
          settings = settings_opts(ticket, opts),
          toggles = toggles(settings),
-         {:ok, toggle} <- toggle(toggles, ticket, label, settings[:force_label]),
+         {:ok, toggle} <- toggle(toggles, ticket, label),
          {:ok, names} <- changes(ticket, toggle, action),
          :ok <- write_tracker(ticket, toggle, names, action, opts) do
       record = write_record(ticket, toggle, names, action)
@@ -149,10 +147,10 @@ defmodule SymphonyElixir.DirectorLabels do
   defp same_identifier?(identifier, name) when is_binary(identifier), do: String.upcase(identifier) == String.upcase(name)
   defp same_identifier?(_identifier, _name), do: false
 
-  # The repository's escalate labels and force label, unless the caller gave them; without its
-  # settings, the built-in escalate labels and `expedite`.
+  # The repository's escalate labels, unless the caller gave them; without its settings, the
+  # built-in escalate labels.
   defp settings_opts(ticket, opts) do
-    if Keyword.has_key?(opts, :escalate_labels) and Keyword.has_key?(opts, :force_label) do
+    if Keyword.has_key?(opts, :escalate_labels) do
       opts
     else
       settings =
@@ -161,38 +159,26 @@ defmodule SymphonyElixir.DirectorLabels do
           {:error, _reason} -> nil
         end
 
-      opts
-      |> Keyword.put_new_lazy(:escalate_labels, fn -> escalate_labels(settings) end)
-      |> Keyword.put_new_lazy(:force_label, fn -> force_label(settings) end)
+      Keyword.put(opts, :escalate_labels, escalate_labels(settings))
     end
   end
 
   defp escalate_labels(%{auto_review: %{acceptance_gate: %{escalate: %{labels: labels}}}}) when is_list(labels), do: labels
   defp escalate_labels(_settings), do: Escalate.built_in().labels
 
-  defp force_label(%{execution: %{force_label: label}}) when is_binary(label), do: label
-  defp force_label(_settings), do: "expedite"
-
-  defp toggle(toggles, ticket, label, force_label) do
+  defp toggle(toggles, ticket, label) do
     wanted = normalize(label)
 
     case Enum.find(toggles, &(wanted in Enum.map([&1.label | &1.aliases], fn name -> normalize(name) end))) do
-      nil -> {:error, {:conflict, refusal(ticket, String.trim(label), force_label)}}
+      nil -> {:error, {:conflict, refusal(ticket, String.trim(label))}}
       toggle -> {:ok, toggle}
     end
   end
 
-  defp refusal(ticket, label, force_label) do
-    cond do
-      MachineLabels.owned?(label) ->
-        "#{label} is Symphony's own label: it sets and clears it itself, so it can't be changed on #{ticket.issue_identifier}."
-
-      normalize(label) == normalize(force_label) ->
-        "#{label} is the force label: Force (or Stop Forcing) on #{ticket.issue_identifier} sets it."
-
-      true ->
-        "#{inspect(label)} isn't a label Symphony reads, so it can't be changed on #{ticket.issue_identifier} from here."
-    end
+  defp refusal(ticket, label) do
+    if MachineLabels.owned?(label),
+      do: "#{label} is Symphony's own label: it sets and clears it itself, so it can't be changed on #{ticket.issue_identifier}.",
+      else: "#{inspect(label)} isn't a label Symphony reads, so it can't be changed on #{ticket.issue_identifier} from here."
   end
 
   # The names to write: the label to add, or every name of the toggle the ticket carries to remove.

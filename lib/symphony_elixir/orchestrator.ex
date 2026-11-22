@@ -23,8 +23,6 @@ defmodule SymphonyElixir.Orchestrator do
     Connected,
     DispatchLoop,
     EpicLanes,
-    ForcedQueue,
-    ForcedStatus,
     Handoff,
     Harnesses,
     IdlePark,
@@ -201,11 +199,6 @@ defmodule SymphonyElixir.Orchestrator do
       epic_lanes: nil,
       blocked: [],
       update_hold_cache: %{blockers: %{}, included: %{}},
-      forced: %{},
-      forced_waiting_noted: MapSet.new(),
-      forced_parts: %{},
-      forced_touched: %{},
-      forced_issues: %{},
       slot_waiting: %{},
       dispatch_skipped: %{},
       dispatch_order: nil,
@@ -266,7 +259,7 @@ defmodule SymphonyElixir.Orchestrator do
     {retry_attempts, claimed} = hydrate_retry_attempts()
     codex_totals = persisted_codex_totals()
     usage_limits = persisted_usage_limits() |> Map.new(fn {key, entry} -> {key, UsageLimit.paused(entry)} end)
-    forced = persisted_forced(repo_key)
+    repo_key |> RunStore.delete_forced_queue() |> log_run_store_error("delete the retired forced queue")
     quality_gate_cache = hydrate_quality_gate_cache()
     quality_gate_comment_keys = hydrate_quality_gate_comment_keys()
     budget_day_started_on = Date.utc_today()
@@ -306,7 +299,6 @@ defmodule SymphonyElixir.Orchestrator do
       quality_gate_comment_keys: quality_gate_comment_keys,
       usage_limits: usage_limits,
       paused_providers: persisted_paused_providers(),
-      forced: forced,
       self_heal_opts: Keyword.get(opts, :self_heal_opts, []),
       clock: Keyword.get(opts, :clock, &DateTime.utc_now/0),
       dispatch_settings: Settings.read(),
@@ -1631,7 +1623,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp repo_poll_task_input(%State{} = state, repos, now_ms) do
     state = sync_repo_poll_state(state, repos, now_ms)
     {due_repo, state} = take_due_repo(state, repos, now_ms)
-    ids = %{running: Map.keys(state.running), watching: watching_issue_ids(state), forced: Map.keys(state.forced), stopped: stopped_issue_ids()}
+    ids = %{running: Map.keys(state.running), watching: watching_issue_ids(state), stopped: stopped_issue_ids()}
 
     input = %{
       repos: repos,
@@ -1658,7 +1650,6 @@ defmodule SymphonyElixir.Orchestrator do
     read = tick_reader(input.by_id, list_records)
     {running_ids, running_result} = read.(ids.running)
     {watching_ids, watching_result} = read.(ids.watching)
-    {forced_ids, forced_result} = read.(ids.forced)
     {stopped_ids, stopped_result} = read.(ids.stopped)
 
     %{
@@ -1669,8 +1660,6 @@ defmodule SymphonyElixir.Orchestrator do
       running_result: running_result,
       watching_ids: watching_ids,
       watching_result: watching_result,
-      forced_ids: forced_ids,
-      forced_result: forced_result,
       stopped_ids: stopped_ids,
       stopped_result: stopped_result,
       repo_result: repo_result,
@@ -1697,7 +1686,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp sync_recorded_dependencies(_by_id, _list_records, _repo_result), do: 0
 
-  # Where the tick reads its running, watched, forced and operator-stopped tickets: from Linear by id
+  # Where the tick reads its running, watched and operator-stopped tickets: from Linear by id
   # under `dispatch.source: poll`, from the ticket records under `record`. The record path takes the
   # text Symphony already holds for each ticket (`with_held_text/2`), read here in the orchestrator.
   defp tick_read_source(%State{} = state, ids) do
@@ -1712,18 +1701,18 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # The issue Symphony already holds for each ticket, with the text only a Linear read gives: the
-  # repo poll's, else the one a run or `symphony force` holds.
+  # repo poll's, else the one a run holds.
   defp held_issues(%State{} = state) do
     running = for {issue_id, %{issue: %Issue{} = issue}} <- state.running, into: %{}, do: {issue_id, issue}
     polled = for {_repo, entry} <- state.repo_poll_cache, %Issue{id: issue_id} = issue <- Map.get(entry, :issues, []), into: %{}, do: {issue_id, issue}
-    running |> Map.merge(state.forced_issues) |> Map.merge(polled)
+    Map.merge(running, polled)
   end
 
   defp tick_reader(:poll, _list_records), do: &{&1, fetch_issue_states_if_needed(&1)}
   defp tick_reader({:record, held}, list_records), do: recorded_tick_reader(list_records.(), held)
 
   # Each ticket read from its record: one Linear no longer has (a webhook said it was removed) is
-  # left out, as a by-id read leaves it out, so its run stops and its watch, force or stop ends. One
+  # left out, as a by-id read leaves it out, so its run stops and its watch or stop ends. One
   # with no observed record is not judged this tick, as a failed read judges none.
   defp recorded_tick_reader(records, held) when is_list(records) do
     recorded = recorded_issues(records)
@@ -1825,8 +1814,6 @@ defmodule SymphonyElixir.Orchestrator do
            running_result: running_result,
            watching_ids: watching_ids,
            watching_result: watching_result,
-           forced_ids: forced_ids,
-           forced_result: forced_result,
            repo_result: repo_result
          } = result
        ) do
@@ -1834,7 +1821,6 @@ defmodule SymphonyElixir.Orchestrator do
       %{state | update_hold_cache: Map.get(result, :update_hold_cache, state.update_hold_cache)}
       |> apply_running_issue_states_result(running_ids, running_result)
       |> apply_watching_issue_states_result(watching_ids, watching_result)
-      |> apply_forced_poll_result(repo_result, forced_ids, forced_result, now_ms)
       |> apply_operator_stops_result(Map.get(result, :stopped_ids, []), Map.get(result, :stopped_result, {:ok, []}), read_at)
 
     case apply_repo_poll_result(state, repos, repo_result, now_ms, read_at) do
@@ -1844,8 +1830,6 @@ defmodule SymphonyElixir.Orchestrator do
           |> prune_quality_gate_cache_to_active(issues)
           |> clear_running_quality_gate_cache_entries()
           |> put_epic_lanes(issues)
-          |> put_forced_parts(issues)
-          |> remember_forced_issues(issues)
           |> put_blocked(issues)
           |> release_merging_ci_waits(issues)
           |> grant_step_turns()
@@ -1853,7 +1837,7 @@ defmodule SymphonyElixir.Orchestrator do
           |> tend_groomed_parents(issues)
           |> tend_owed_turns()
 
-        if available_slots(state) > 0 or available_finishing_slots(state) > 0 or forced_pass_needed?(state, issues) do
+        if available_slots(state) > 0 or available_finishing_slots(state) > 0 do
           issues
           |> reject_running_quality_gate_candidates(state)
           |> start_quality_gate_or_dispatch(state, :poll)
@@ -2603,17 +2587,8 @@ defmodule SymphonyElixir.Orchestrator do
   def put_epic_lanes_for_test(%State{} = state, issues) when is_list(issues), do: put_epic_lanes(state, issues)
 
   @doc false
-  @spec put_forced_parts_for_test(State.t(), [Issue.t()]) :: State.t()
-  def put_forced_parts_for_test(%State{} = state, issues) when is_list(issues), do: put_forced_parts(state, issues)
-
-  @doc false
   @spec quality_gate_input_for_test(State.t(), [Issue.t()], term()) :: [Issue.t()]
   def quality_gate_input_for_test(%State{} = state, issues, context \\ :poll) when is_list(issues), do: with_text_read(issues, state, context)
-
-  @doc false
-  @spec apply_forced_poll_result_for_test(State.t(), term(), [String.t()], term(), integer()) :: State.t()
-  def apply_forced_poll_result_for_test(%State{} = state, repo_result, forced_ids, forced_result, poll_started_ms \\ System.monotonic_time(:millisecond)),
-    do: apply_forced_poll_result(state, repo_result, forced_ids, forced_result, poll_started_ms)
 
   @doc false
   @spec put_blocked_for_test(State.t(), [Issue.t()]) :: State.t()
@@ -3937,7 +3912,6 @@ defmodule SymphonyElixir.Orchestrator do
           state
           |> log_daily_budget_pause()
           |> skip_paused_pass(issues, reason, :daily_budget)
-          |> dispatch_forced_over_daily_budget(issues)
 
         nil ->
           dispatch_chosen_issues(issues, state)
@@ -3951,7 +3925,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # What stops a whole dispatch pass, as `{reason, rule}`, or nil when the pass runs: Symphony's
-  # pause, the workspace quota, then the daily token budget, which still lets forced tickets go out.
+  # pause, the workspace quota, then the daily token budget.
   defp dispatch_pass_pause(%State{} = state) do
     cond do
       operator_paused?(state) -> {Pauses.dispatch_skip_reason(symphony_pause()), :symphony_pause}
@@ -4456,25 +4430,18 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # Candidates go out forced first, then closest-to-done, each epic lane's tickets nearest the epic
-  # first. Once a Merging issue is left waiting for a slot, no Todo issue starts in this pass,
-  # except on the forced allowance; its `slot_waiting` reason names the issue it waits for.
-  # `slot_waiting` is rebuilt from the pass,
-  # keeping the attempt of any retry that was waiting for a slot; with `keep_waiting: true` the
-  # entries of issues outside this pass stay as they were. `dispatch_skipped` is rebuilt the same
-  # way: every candidate the pass neither starts nor leaves waiting for a slot gets the reason.
-  defp dispatch_chosen_issues(issues, state, opts \\ []) do
+  # Candidates go out closest-to-done first, each epic lane's tickets nearest the epic first. Once a
+  # Merging issue is left waiting for a slot, no Todo issue starts in this pass; its `slot_waiting`
+  # reason names the issue it waits for.
+  # `slot_waiting` is rebuilt from the pass, keeping the attempt of any retry that was waiting for a
+  # slot. `dispatch_skipped` is rebuilt the same way: every candidate the pass neither starts nor
+  # leaves waiting for a slot gets the reason.
+  defp dispatch_chosen_issues(issues, state) do
     issues = Enum.map(issues, &with_record_repo_key/1)
     active_states = active_state_set()
     terminal_states = terminal_state_set()
     previous_waiting = state.slot_waiting || %{}
     previous_skipped = state.dispatch_skipped || %{}
-    pass_ids = for %Issue{id: issue_id} <- issues, do: issue_id
-
-    {slot_waiting, dispatch_skipped} =
-      if Keyword.get(opts, :keep_waiting, false),
-        do: {Map.drop(previous_waiting, pass_ids), Map.drop(previous_skipped, pass_ids)},
-        else: {%{}, %{}}
 
     state = ask_spent_budgets(state, issues)
     :ok = resolve_qa_builds(issues, state)
@@ -4482,7 +4449,7 @@ defmodule SymphonyElixir.Orchestrator do
     {state, _hold} =
       issues
       |> order_for_dispatch(state)
-      |> Enum.reduce({%{state | slot_waiting: slot_waiting, dispatch_skipped: dispatch_skipped}, nil}, fn issue, acc ->
+      |> Enum.reduce({%{state | slot_waiting: %{}, dispatch_skipped: %{}}, nil}, fn issue, acc ->
         maybe_dispatch_chosen_issue(issue, acc, previous_waiting, active_states, terminal_states)
       end)
 
@@ -4543,7 +4510,6 @@ defmodule SymphonyElixir.Orchestrator do
     issues
     |> sort_issues_for_dispatch()
     |> then(&EpicLanes.order(state.epic_lanes, &1, fn issue -> stage_rank(issue.state) end))
-    |> forced_first(state)
   end
 
   # The dispatch order read (`SymphonyElixir.Dispatch.Order`), kept on the state for the snapshot: the
@@ -4571,8 +4537,8 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp dispatch_order_outcome(%Issue{} = issue, %State{} = pass, hold, pause, {active_states, terminal_states}) do
     cond do
-      running = Map.get(pass.running, issue.id) ->
-        {%{outcome: :running, reason: running_reason(issue.id), slot: dispatch_slot_label(pass, issue, forced_entry?(running))}, pass, hold}
+      Map.has_key?(pass.running, issue.id) ->
+        {%{outcome: :running, reason: running_reason(issue.id), slot: dispatch_slot_label(pass, issue)}, pass, hold}
 
       gate = dispatch_gate_closed(issue, pass, active_states, terminal_states) ->
         {reason, rule, _gate} = gate
@@ -4584,7 +4550,7 @@ defmodule SymphonyElixir.Orchestrator do
       limit = usage_limit_hold(pass, issue) ->
         {%{outcome: :held, reason: UsageLimit.hold_label(limit), rule: :usage_limit}, pass, hold}
 
-      pass_paused?(pause, issue, pass) ->
+      pause ->
         {reason, rule} = pause
         {%{outcome: :paused, reason: reason, rule: rule}, pass, hold}
 
@@ -4596,25 +4562,19 @@ defmodule SymphonyElixir.Orchestrator do
   defp dispatch_order_slot(%Issue{} = issue, %State{} = pass, hold) do
     case slot_decision(pass, issue, hold) do
       {:start, hold} ->
-        forced? = forced_slot_available?(issue, pass)
-        outcome = %{outcome: :starts, forced: forced?, slot: dispatch_slot_label(pass, issue, forced?)}
-        {outcome, take_order_slot(pass, issue, forced?), hold}
+        outcome = %{outcome: :starts, slot: dispatch_slot_label(pass, issue)}
+        {outcome, take_order_slot(pass, issue), hold}
 
       {{:wait, reason}, hold} ->
         {%{outcome: :waits, reason: reason}, %{pass | slot_waiting: Map.put(pass.slot_waiting, issue.id, %{})}, hold}
     end
   end
 
-  # The daily token budget lets forced tickets out (`dispatch_forced_over_daily_budget/2`).
-  defp pass_paused?(nil, _issue, _state), do: false
-  defp pass_paused?({_reason, :daily_budget}, %Issue{} = issue, %State{} = state), do: not forced_candidate?(issue, state)
-  defp pass_paused?(_pause, _issue, _state), do: true
-
   # The run a started ticket would be, as far as the slot counts read it.
-  defp take_order_slot(%State{} = pass, %Issue{} = issue, forced?) do
+  defp take_order_slot(%State{} = pass, %Issue{} = issue) do
     host = pass |> select_worker_host(nil) |> then(&if(is_binary(&1), do: &1))
     kind = if finishing_issue?(issue), do: :landing, else: :work
-    put_running_entry(pass, issue.id, %{issue: issue, identifier: issue.identifier, forced: forced?, run_profile: %{kind: kind}, worker_host: host})
+    put_running_entry(pass, issue.id, %{issue: issue, identifier: issue.identifier, run_profile: %{kind: kind}, worker_host: host})
   end
 
   defp dispatch_order_ticket(%Issue{} = issue, %State{} = state) do
@@ -4624,7 +4584,6 @@ defmodule SymphonyElixir.Orchestrator do
       title: issue.title,
       state: issue.state,
       repo_key: issue_repo_key(issue) || state.repo_key,
-      forced: forced_candidate?(issue, state),
       rule: nil,
       slot: nil
     }
@@ -4636,26 +4595,8 @@ defmodule SymphonyElixir.Orchestrator do
       work_used: length(work_running_ids(state.running)),
       work_free: available_slots(state),
       finishing: finishing_snapshot(state.running),
-      forced_used: Enum.count(state.running, fn {_issue_id, entry} -> forced_entry?(entry) end),
       epic_lanes: EpicLanes.snapshot(state.epic_lanes, epic_lane_running(state.running))
     }
-  end
-
-  # The daily token budget pauses new dispatch, but not a forced ticket's: the forced candidates
-  # still go out, and every other issue waiting for a slot keeps its place.
-  defp dispatch_forced_over_daily_budget(%State{} = state, issues) do
-    forced = Enum.filter(issues, &forced_candidate?(&1, state))
-    next_state = dispatch_chosen_issues(forced, state, keep_waiting: true)
-
-    for %Issue{id: issue_id} = issue <- forced,
-        Map.has_key?(next_state.running, issue_id),
-        not Map.has_key?(state.running, issue_id) do
-      Logger.warning(
-        "Daily token budget exhausted daily_used=#{state.budget_daily_used} daily_limit=#{Config.settings!().execution.max_tokens_per_day}; dispatched forced ticket anyway: #{issue_context(issue)} forced=true"
-      )
-    end
-
-    next_state
   end
 
   defp maybe_dispatch_chosen_issue(%Issue{} = issue, {state, hold}, previous_waiting, active_states, terminal_states) do
@@ -4683,9 +4624,7 @@ defmodule SymphonyElixir.Orchestrator do
 
       true ->
         {state, hold} =
-          state
-          |> note_forced_allowance_full(issue)
-          |> dispatch_or_wait_for_slot(issue, waiting, hold)
+          dispatch_or_wait_for_slot(state, issue, waiting, hold)
 
         {note_dropped_at_dispatch(state, issue), hold}
     end
@@ -4797,52 +4736,9 @@ defmodule SymphonyElixir.Orchestrator do
   # finish that keeps fresh work from starting for the rest of the pass, once one waits.
   defp slot_decision(%State{} = state, %Issue{} = issue, hold) do
     cond do
-      is_binary(hold) and fresh_issue?(issue) and not forced_slot_available?(issue, state) -> {{:wait, hold}, hold}
+      is_binary(hold) and fresh_issue?(issue) -> {{:wait, hold}, hold}
       issue_dispatch_slots_available?(issue, state) -> {:start, hold}
       true -> {{:wait, slot_wait_reason(issue, state)}, hold || finishing_hold(issue)}
-    end
-  end
-
-  # A forced ticket that finds the forced allowance taken gets no extra slot; it still goes first
-  # for a normal one. It is logged and notified once per wait, naming the forced runs holding it.
-  defp note_forced_allowance_full(%State{} = state, %Issue{id: issue_id} = issue) do
-    if forced_issue?(issue, state) and not forced_slot_available?(issue, state) and not MapSet.member?(state.forced_waiting_noted, issue_id) do
-      reason = forced_wait_reason(issue, state)
-
-      Logger.warning(
-        "Forced ticket waiting: #{issue_context(issue)} forced=true forced_max=#{Config.settings!().execution.forced_max} held_by=#{Enum.join(forced_running_identifiers(state), ",")}; #{reason}"
-      )
-
-      Notifications.emit_issue_event(:forced_waiting, issue, %{reason: reason})
-      %{state | forced_waiting_noted: MapSet.put(state.forced_waiting_noted, issue_id)}
-    else
-      state
-    end
-  end
-
-  defp forced_wait_reason(%Issue{id: issue_id}, %State{} = state) do
-    queue_id = forced_queue_id(issue_id, state)
-    position = Enum.find_value(ForcedQueue.snapshot(state.forced), &(&1.issue_id == queue_id && &1.position))
-    queued = if position, do: "queued ##{position}; ", else: ""
-    "#{queued}forced slot taken by #{Enum.join(forced_running_identifiers(state), ", ")}"
-  end
-
-  defp forced_running_identifiers(%State{running: running}) do
-    Enum.sort(for({_issue_id, entry} <- running, forced_entry?(entry), do: entry.identifier))
-  end
-
-  # Forced tickets go first, in `forced_since` order; one the queue has not recorded yet follows
-  # the queued ones, and a forced parent's sub-ticket takes its parent's place. The rest keep
-  # their order.
-  defp forced_first(issues, %State{} = state) do
-    {forced_issues, rest} = Enum.split_with(issues, &forced_candidate?(&1, state))
-    Enum.sort_by(forced_issues, &forced_sort_key(&1, state)) ++ rest
-  end
-
-  defp forced_sort_key(%Issue{id: issue_id}, %State{forced: forced} = state) do
-    case Map.get(forced, forced_queue_id(issue_id, state)) do
-      %{forced_since: %DateTime{} = forced_since} -> {0, DateTime.to_unix(forced_since, :microsecond)}
-      _not_queued -> {1, 0}
     end
   end
 
@@ -4867,7 +4763,6 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp slot_wait_reason(%Issue{} = issue, %State{} = state) do
     cond do
-      forced_issue?(issue, state) and not forced_slot_available?(issue, state) -> forced_wait_reason(issue, state)
       finishing_issue?(issue) -> "finishing slots full"
       true -> "work slots full"
     end
@@ -5114,17 +5009,16 @@ defmodule SymphonyElixir.Orchestrator do
     "priority #{Enum.at(names, priority || 0, priority)} is not in tickets.priorities (#{allowed})"
   end
 
-  # `tickets.priorities` narrows which priorities may start new work. A forced ticket, and a retry
-  # that is waiting for a slot (its claim is released while it waits), bypass it, so the filter only
-  # gates fresh picks and never stalls work already under way.
-  defp priority_allowed?(%Issue{id: issue_id, priority: priority} = issue, %State{} = state) do
+  # `tickets.priorities` narrows which priorities may start new work. A retry that is waiting for a
+  # slot (its claim is released while it waits) bypasses it, so the filter only gates fresh picks and
+  # never stalls work already under way.
+  defp priority_allowed?(%Issue{id: issue_id, priority: priority}, %State{} = state) do
     case Config.ticket_priority_filter() do
       nil ->
         true
 
       allowed ->
-        forced_issue?(issue, state) or
-          Map.has_key?(state.slot_waiting, issue_id) or
+        Map.has_key?(state.slot_waiting, issue_id) or
           MapSet.member?(allowed, priority || 0)
     end
   end
@@ -5233,133 +5127,8 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # Forced tickets are found in the repo this poll fetched, which only holds active states. Each one
-  # already queued is refreshed by id on every poll, so it stays queued while it sits outside the
-  # active states (Plan Review, ...) and leaves only when its label goes, it is terminal, or Linear no
-  # longer returns it. A ticket `symphony force` changed after this poll started keeps what it
-  # recorded: the poll's view of that ticket is older.
-  defp apply_forced_poll_result(%State{} = state, repo_result, forced_ids, forced_result, poll_started_ms) do
-    touched = Map.filter(state.forced_touched, fn {_issue_id, touched_ms} -> touched_ms >= poll_started_ms end)
-
-    discovered =
-      case repo_result do
-        {_repo_name, {:ok, issues}} when is_list(issues) -> issues
-        _not_polled -> []
-      end
-
-    {refreshed, gone_ids} =
-      case forced_result do
-        {:ok, issues} when is_list(issues) ->
-          {issues, forced_ids -- for(%Issue{id: issue_id} <- issues, do: issue_id)}
-
-        {:error, reason} ->
-          Logger.warning("Failed to refresh forced tickets; keeping them queued: #{inspect(reason)}")
-          {[], []}
-      end
-
-    observed = Enum.reject(discovered ++ refreshed, &match?(%Issue{id: issue_id} when is_map_key(touched, issue_id), &1))
-    gone_ids = Enum.reject(gone_ids, &is_map_key(touched, &1))
-    {forced, changes} = ForcedQueue.reconcile(state.forced, observed, gone_ids, Config.settings!(), state.clock.())
-
-    %{put_forced(state, forced, changes) | forced_touched: touched}
-    |> remember_forced_issues(observed)
-    |> note_forced_milestones()
-  end
-
-  # The latest issue seen for each forced ticket and forced parent's part, from the poll's
-  # candidates, the by-id refresh and `symphony force`, so the snapshot can work out its phase.
-  defp remember_forced_issues(%State{} = state, issues) do
-    seen = for %Issue{id: issue_id} = issue <- issues, forced_queued?(issue_id, state), into: %{}, do: {issue_id, issue}
-    known = Map.merge(state.forced_issues, seen)
-    %{state | forced_issues: Map.filter(known, fn {issue_id, _issue} -> forced_queued?(issue_id, state) end)}
-  end
-
-  # Once per forced ticket, a warning and a `forced_stale` notice when it has been forced past
-  # `forced_stale_after_hours`; and a `forced_human_gate` notice each time it enters `Plan Review`.
-  # When each was sent is kept in the queue entry, so a restart does not send it again.
-  defp note_forced_milestones(%State{forced: forced} = state) do
-    now = state.clock.()
-    stale_after_hours = Config.settings!().execution.forced_stale_after_hours
-
-    noted =
-      Map.new(forced, fn {issue_id, entry} ->
-        issue = forced_notice_issue(issue_id, entry, state)
-        {issue_id, entry |> note_forced_stale(issue, now, stale_after_hours) |> note_forced_human_gate(issue, now)}
-      end)
-
-    if noted != forced do
-      state.repo_key |> RunStore.put_forced(noted) |> log_run_store_error("persist forced tickets")
-    end
-
-    %{state | forced: noted}
-  end
-
-  defp note_forced_stale(entry, %Issue{} = issue, now, stale_after_hours) do
-    forced_for = ForcedStatus.forced_for_seconds(entry.forced_since, now)
-
-    if ForcedStatus.stale?(forced_for, stale_after_hours) and is_nil(Map.get(entry, :stale_notified_at)) do
-      reason = "forced for #{ForcedStatus.duration_label(forced_for)}, past forced_stale_after_hours=#{stale_after_hours}"
-      Logger.warning("Forced ticket stale: #{issue_context(issue)} forced_since=#{DateTime.to_iso8601(entry.forced_since)}; #{reason}")
-      Notifications.emit_issue_event(:forced_stale, issue, %{reason: reason})
-      Map.put(entry, :stale_notified_at, now)
-    else
-      entry
-    end
-  end
-
-  defp note_forced_human_gate(entry, %Issue{} = issue, now) do
-    in_review? = PlanReview.in_state?(entry.state)
-    notified? = not is_nil(Map.get(entry, :human_gate_notified_at))
-
-    cond do
-      in_review? and not notified? ->
-        reason = if Issue.breakdown?(issue), do: "#{issue.identifier}'s plan is waiting for your review", else: "#{issue.identifier} is waiting for your review"
-        Logger.info("Forced ticket at a human gate: #{issue_context(issue)}; #{reason}")
-        Notifications.emit_issue_event(:forced_human_gate, issue, %{reason: reason})
-        Map.put(entry, :human_gate_notified_at, now)
-
-      not in_review? and notified? ->
-        Map.delete(entry, :human_gate_notified_at)
-
-      true ->
-        entry
-    end
-  end
-
-  defp forced_notice_issue(issue_id, entry, %State{forced_issues: issues}) do
-    case Map.get(issues, issue_id) do
-      %Issue{} = issue -> %{issue | state: entry.state}
-      nil -> %Issue{id: issue_id, identifier: entry.identifier, title: entry.title, state: entry.state, repo_key: entry.repo_key}
-    end
-  end
-
-  defp put_forced(%State{} = state, forced, changes) do
-    if changes != [] do
-      state.repo_key |> RunStore.put_forced(forced) |> log_run_store_error("persist forced tickets")
-      Enum.each(changes, &record_forced_change(&1, state.repo_key))
-    end
-
-    state = %{state | forced: forced}
-
-    %{state | forced_waiting_noted: MapSet.filter(state.forced_waiting_noted, &forced_queued?(&1, state))}
-    |> release_unforced_runs()
-  end
-
-  # A run on the forced allowance gives it back once its ticket is no longer forced (its label was
-  # removed, or its forced parent's was): it goes on as a normal run, and a ticket still forced can
-  # take the allowance.
-  defp release_unforced_runs(%State{running: running} = state) do
-    released =
-      for {issue_id, entry} <- running, forced_entry?(entry), not forced_queued?(issue_id, state), into: %{} do
-        Logger.info("Forced run released the forced allowance: issue_id=#{issue_id} issue_identifier=#{entry.identifier}; no longer forced, running on as a normal run")
-        {issue_id, %{entry | forced: false}}
-      end
-
-    %{state | running: Map.merge(running, released)}
-  end
-
   # Linear answers an unknown identifier with an "Entity not found" GraphQL error rather than a null issue.
-  defp fetch_issue_to_force(identifier) do
+  defp fetch_issue_by_identifier(identifier) do
     case Tracker.fetch_issue_by_identifier(identifier) do
       {:error, {:linear_graphql_errors, errors}} = error ->
         if Enum.any?(List.wrap(errors), &entity_not_found?/1), do: {:error, :issue_not_found}, else: error
@@ -5374,7 +5143,7 @@ defmodule SymphonyElixir.Orchestrator do
   # with no repository on its record keeps none, and `refute_no_repository/1` refuses it after the
   # Start refusals, in `TicketMoves.check(:start)`'s order.
   defp fetch_issue_to_start(identifier) do
-    with {:ok, %Issue{} = issue} <- fetch_issue_to_force(identifier) do
+    with {:ok, %Issue{} = issue} <- fetch_issue_by_identifier(identifier) do
       {:ok, %{issue | repo_key: issue_repo_key(issue) || RunStore.ticket_repo_key(issue.id)}}
     end
   end
@@ -5385,46 +5154,6 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp entity_not_found?(%{"message" => message}) when is_binary(message), do: message =~ ~r/not found/i
   defp entity_not_found?(_error), do: false
-
-  defp put_force_label(%Issue{labels: labels} = issue, false = _clear?, settings) do
-    label = settings.execution.force_label
-
-    cond do
-      terminal_issue_state?(issue.state, terminal_state_set()) -> {:error, {:issue_terminal, issue.state}}
-      Issue.forced?(issue, settings) -> {:ok, issue}
-      true -> with :ok <- Tracker.add_issue_label(issue.id, label), do: {:ok, %{issue | labels: labels ++ [label]}}
-    end
-  end
-
-  defp put_force_label(%Issue{labels: labels} = issue, true = _clear?, settings) do
-    label = settings.execution.force_label
-    {removed, kept} = Enum.split_with(labels, &(normalize_issue_state(&1) == normalize_issue_state(label)))
-
-    if removed == [] do
-      {:ok, issue}
-    else
-      with :ok <- Tracker.remove_issue_label(issue.id, label), do: {:ok, %{issue | labels: kept}}
-    end
-  end
-
-  # The force label is on: the Director's force is recorded on the ticket, best effort, in its repo
-  # (the record's, as the read by identifier carries none), else the primary one. A clear records
-  # nothing.
-  defp record_force_action(_issue, true = _clear?), do: :ok
-
-  defp record_force_action(%Issue{id: issue_id} = issue, false = _clear?) do
-    case force_repo_key(issue) do
-      {:ok, repo_key} -> TicketSignals.record_event(repo_key, issue_id, "person.action", %{action: "force"}, actor: {:person, "the Director"})
-      {:error, _reason} -> :ok
-    end
-  end
-
-  defp force_repo_key(issue) do
-    case issue_repo_key(issue) || RunStore.ticket_repo_key(issue.id) do
-      nil -> Config.repo_key()
-      repo_key -> {:ok, repo_key}
-    end
-  end
 
   # Start now (`start_issue/3`) answers with the same reason the state payload's `start` field
   # shows (`SymphonyElixir.StartNow`): checked in the caller, before the claim, so a refusal
@@ -5472,80 +5201,6 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # What `symphony force` reports: whether the ticket is forced now, its place in the queue (nil
-  # until it joins), and the tickets holding the `forced_max` slots.
-  defp force_result(%Issue{} = issue, forced, settings) do
-    queue = ForcedQueue.snapshot(forced)
-    forced_max = settings.execution.forced_max
-
-    %{
-      issue_id: issue.id,
-      issue_identifier: issue.identifier,
-      state: issue.state,
-      forced: Issue.forced?(issue, settings),
-      position: Enum.find_value(queue, &(&1.issue_id == issue.id and &1.position)),
-      forced_max: forced_max,
-      holders: for(%{position: position, identifier: identifier} <- queue, position <= forced_max, do: identifier)
-    }
-  end
-
-  defp record_forced_change({:start, issue_id, entry}, repo_key) do
-    Logger.info("Forced ticket queued: issue_id=#{issue_id} issue_identifier=#{entry.identifier} state=#{entry.state}")
-    record_forced_audit("forced_start", issue_id, entry, repo_key, %{})
-  end
-
-  defp record_forced_change({:end, issue_id, entry, reason}, repo_key) do
-    Logger.info("Forced ticket left the queue: issue_id=#{issue_id} issue_identifier=#{entry.identifier} reason=#{reason}")
-    record_forced_audit("forced_end", issue_id, entry, repo_key, %{reason: Atom.to_string(reason)})
-    if reason == :done, do: remove_force_label(issue_id, entry)
-  end
-
-  # A ticket forced through to a terminal state is done with: its force label comes off, so it
-  # doesn't read as forced on the board. The Linear call runs outside the orchestrator.
-  defp remove_force_label(issue_id, entry) do
-    label = Config.settings!().execution.force_label
-
-    remove = fn ->
-      case Tracker.remove_issue_label(issue_id, label) do
-        :ok -> Logger.info("Removed the force label from a done ticket: issue_id=#{issue_id} issue_identifier=#{entry.identifier} label=#{label}")
-        {:error, reason} -> Logger.warning("Failed to remove the force label from a done ticket: issue_id=#{issue_id} issue_identifier=#{entry.identifier} reason=#{inspect(reason)}")
-      end
-    end
-
-    case start_task_supervisor_child(remove) do
-      {:ok, _pid} -> :ok
-      {:error, reason} -> Logger.warning("Failed to start removing the force label: issue_id=#{issue_id} issue_identifier=#{entry.identifier} reason=#{inspect(reason)}")
-    end
-  end
-
-  defp record_forced_audit(event_type, issue_id, entry, repo_key, attrs) do
-    %{
-      event_type: event_type,
-      repo_key: entry.repo_key || repo_key,
-      issue_id: issue_id,
-      issue_identifier: entry.identifier,
-      state: entry.state,
-      forced_since: DateTime.to_iso8601(entry.forced_since)
-    }
-    |> Map.merge(attrs)
-    |> AuditLog.record()
-    |> case do
-      :ok -> :ok
-      {:error, reason} -> Logger.warning("Failed to record #{event_type} audit event: issue_id=#{issue_id} reason=#{inspect(reason)}")
-    end
-  end
-
-  defp persisted_forced(repo_key) do
-    case RunStore.get_forced(repo_key) do
-      %{} = forced ->
-        forced
-
-      {:error, reason} ->
-        Logger.warning("Failed to restore forced tickets from run store: #{inspect(reason)}")
-        %{}
-    end
-  end
-
   defp blocker_snapshot(%{} = blocker), do: %{identifier: Map.get(blocker, :identifier), state: Map.get(blocker, :state)}
   defp blocker_snapshot(_blocker), do: %{identifier: nil, state: nil}
 
@@ -5560,194 +5215,12 @@ defmodule SymphonyElixir.Orchestrator do
     RunKind.classify(issue, terminal_states: settings.tracker.terminal_states, settings: settings) == :landing
   end
 
-  defp finishing_entry?(%{forced: true}), do: false
   defp finishing_entry?(%{run_profile: %{kind: :landing}}), do: true
   defp finishing_entry?(_running_entry), do: false
-
-  # Forced tickets (`execution.concurrency.force_label`) dispatch on their own `forced_max` allowance,
-  # past `max_total`, the epic lanes, `finishing_max` and the per-state caps. A run on it carries
-  # `forced: true` and takes none of those slots. A forced ticket past `forced_max` competes for a
-  # normal slot and runs as a normal run.
-  defp forced_issue?(%Issue{} = issue, %State{} = state), do: Issue.forced?(issue, Config.settings!()) or forced_part?(issue.id, state)
-
-  defp forced_candidate?(issue, state), do: match?(%Issue{}, issue) and forced_issue?(issue, state)
-
-  defp forced_entry?(%{forced: true}), do: true
-  defp forced_entry?(_running_entry), do: false
-
-  defp forced_slot_available?(%Issue{} = issue, %State{} = state), do: forced_issue?(issue, state) and forced_slot_free?(state)
-
-  defp forced_slot_free?(%State{running: running}) do
-    forced_runs = Enum.count(running, fn {_issue_id, entry} -> forced_entry?(entry) end)
-    forced_runs < Config.settings!().execution.forced_max
-  end
-
-  # With the normal slots full, a poll still runs the dispatch pass for a forced candidate the
-  # forced allowance can take, or to note once that one has to wait.
-  defp forced_pass_needed?(%State{} = state, issues) do
-    Enum.any?(issues, fn issue ->
-      forced_candidate?(issue, state) and not issue_taken?(issue, state) and
-        (forced_slot_free?(state) or not MapSet.member?(state.forced_waiting_noted, issue.id))
-    end)
-  end
-
-  # A forced `breakdown` parent waiting on its sub-tickets is one forced unit: its current part, the
-  # first ticket on its epic path that can run, counts as forced without the label being written on
-  # it. Parts are picked in EpicLanes order (stage, then nearest the epic, then dispatch order), so a
-  # blocked sub-ticket waits for its blocker. A part stays the parent's while it runs or waits on a
-  # retry, so no second one takes the forced allowance meanwhile. Rebuilt from every poll's
-  # candidates.
-  defp put_forced_parts(%State{} = state, issues) do
-    settings = Config.settings!()
-    active_states = active_state_set()
-    terminal_states = terminal_state_set()
-    states = {active_states, terminal_states}
-    ordered = issues |> sort_issues_for_dispatch() |> Enum.with_index()
-
-    parts =
-      issues
-      |> Enum.filter(&forced_waiting_parent?(&1, settings, terminal_states))
-      |> Enum.flat_map(fn %Issue{id: parent_id} = parent ->
-        members = EpicLanes.members(state.epic_lanes, parent_id)
-
-        case kept_forced_part(parent, members, state) || next_forced_part(parent, members, ordered, state, states) do
-          nil -> []
-          part -> [{parent_id, part}]
-        end
-      end)
-      |> Map.new()
-
-    state = %{state | forced_parts: parts}
-
-    %{state | forced_waiting_noted: MapSet.filter(state.forced_waiting_noted, &forced_queued?(&1, state))}
-    |> release_unforced_runs()
-  end
-
-  defp forced_waiting_parent?(%Issue{} = issue, settings, terminal_states) do
-    Issue.forced?(issue, settings) and Issue.waiting_on_sub_issues?(issue, terminal_states) and not Issue.replanning?(issue)
-  end
-
-  defp forced_waiting_parent?(_issue, _settings, _terminal_states), do: false
-
-  defp kept_forced_part(%Issue{id: parent_id}, members, %State{} = state) do
-    with %{issue_id: issue_id} <- Map.get(state.forced_parts, parent_id),
-         %{} = member <- Map.get(members, issue_id),
-         true <- issue_taken?(%Issue{id: issue_id}, state) do
-      forced_part_entry(issue_id, member)
-    else
-      _no_part -> nil
-    end
-  end
-
-  defp next_forced_part(%Issue{id: parent_id}, members, ordered, %State{} = state, {active_states, terminal_states}) do
-    for {%Issue{id: issue_id} = issue, index} <- ordered, is_map_key(members, issue_id) do
-      member = Map.fetch!(members, issue_id)
-      {{stage_rank(issue.state), member.depth, index}, issue, member}
-    end
-    |> Enum.sort_by(&elem(&1, 0))
-    |> Enum.find_value(fn {_rank, issue, member} ->
-      # Judged as the parent's part, so a usage-limit headroom hold does not rule it out.
-      as_part = %{state | forced_parts: Map.put(state.forced_parts, parent_id, %{issue_id: issue.id})}
-
-      if dispatch_eligible?(issue, as_part, active_states, terminal_states),
-        do: forced_part_entry(issue.id, member)
-    end)
-  end
-
-  defp forced_part_entry(issue_id, member), do: %{issue_id: issue_id, identifier: member.identifier, state: member.state}
-
-  defp forced_part?(issue_id, %State{forced_parts: parts}), do: Enum.any?(parts, fn {_parent_id, part} -> part.issue_id == issue_id end)
-
-  # Forced on its own, or as a forced parent's part.
-  defp forced_queued?(issue_id, %State{} = state), do: Map.has_key?(state.forced, issue_id) or forced_part?(issue_id, state)
-
-  # The forced queue entry an issue waits under: its own, else its forced parent's.
-  defp forced_queue_id(issue_id, %State{forced: forced, forced_parts: parts}) do
-    if Map.has_key?(forced, issue_id),
-      do: issue_id,
-      else: Enum.find_value(parts, issue_id, fn {parent_id, part} -> part.issue_id == issue_id && parent_id end)
-  end
-
-  # The forced queue for the snapshot: each forced parent with its current part, whether the
-  # ticket waits for a person (not yet approved, or in Plan Review) rather than for Symphony, its phase
-  # and what it waits on (worked out on the part when a forced parent has one), and how long it has
-  # been forced.
-  defp forced_snapshot(%State{forced: forced}, _auto_merge) when map_size(forced) == 0, do: []
-
-  defp forced_snapshot(%State{} = state, auto_merge) do
-    now = state.clock.()
-    stale_after_hours = Config.settings!().execution.forced_stale_after_hours
-    context = %{auto_merge_ids: MapSet.new(auto_merge, & &1.issue_id)}
-
-    for entry <- ForcedQueue.snapshot(state.forced) do
-      part = Map.get(state.forced_parts, entry.issue_id)
-      forced_for = ForcedStatus.forced_for_seconds(entry.forced_since, now)
-
-      entry
-      |> Map.merge(%{
-        sub_issue: part,
-        waiting_on_human: EpicLanes.human_gated_state?(entry.state),
-        forced_for_seconds: forced_for,
-        stale: ForcedStatus.stale?(forced_for, stale_after_hours)
-      })
-      |> Map.merge(ForcedStatus.describe(forced_signals(forced_subject(entry, part, state), state, context)))
-    end
-  end
-
-  # The issue a forced entry's phase is worked out on: its part, else the ticket itself; the latest
-  # one a poll saw, else what the queue recorded.
-  defp forced_subject(entry, part, %State{forced_issues: issues}) do
-    {issue_id, identifier, issue_state} =
-      case part do
-        %{issue_id: part_id} -> {part_id, part.identifier, part.state}
-        nil -> {entry.issue_id, entry.identifier, entry.state}
-      end
-
-    Map.get(issues, issue_id) || %Issue{id: issue_id, identifier: identifier, title: entry.title, state: issue_state}
-  end
-
-  defp running_kind(%{run_profile: %{kind: kind}}) when not is_nil(kind), do: kind
-  defp running_kind(_running_entry), do: :implementation
-
-  defp forced_signals(%Issue{id: issue_id} = issue, %State{} = state, context) do
-    case Map.get(state.running, issue_id) do
-      %{} = running_entry ->
-        %{running_kind: running_kind(running_entry)}
-
-      nil ->
-        settings = Config.settings!()
-        terminal_states = settings.tracker.terminal_states
-        repo_key = dispatch_repo_key(state, issue)
-
-        %{
-          state: issue.state,
-          plan_review_state: PlanReview.state(settings),
-          kind: AgentRunner.run_profile(issue, Config.settings_for_repo!(repo_key), repo_key: repo_key).kind,
-          merging_ci_wait?: Map.has_key?(state.merging_ci_waits, issue_id),
-          auto_merge?: merging_state?(issue.state) and MapSet.member?(context.auto_merge_ids, issue_id),
-          blockers: forced_blockers(issue, state, terminal_states),
-          paused?: operator_paused?(state) or not is_nil(provider_pause_hold(state, issue)),
-          usage_limit?: not is_nil(usage_limit_hold(state, issue)),
-          slot_waiting?: Map.has_key?(state.slot_waiting, issue_id)
-        }
-    end
-  end
-
-  # Its open blockers, else the merged blockers whose fix the running app does not include yet.
-  defp forced_blockers(%Issue{} = issue, %State{} = state, terminal_states) do
-    if Issue.blocked?(issue, terminal_states) do
-      issue |> Issue.open_blockers(terminal_states) |> Enum.map(&blocker_label/1)
-    else
-      for %{kind: :app_update, issue_id: issue_id, blockers: blockers} <- state.blocked, issue_id == issue.id, blocker <- blockers, do: blocker_label(blocker)
-    end
-  end
-
-  defp blocker_label(blocker), do: Map.get(blocker, :identifier) || "an unknown issue"
 
   defp work_running_ids(running) when is_map(running) do
     for {issue_id, entry} <- running,
         not finishing_entry?(entry),
-        not forced_entry?(entry),
         not slot_free_entry?(entry),
         do: issue_id
   end
@@ -5779,10 +5252,10 @@ defmodule SymphonyElixir.Orchestrator do
 
   # The runs waiting for the slot of their next agent turn get one, the longest waiting first, before
   # any ticket is dispatched: one while Symphony is paused waits for the pause to lift (decision 1 of
-  # TP-1085; its machine steps still ran), one with no free slot for one to free. A forced run takes
-  # no slot, so only the pause holds it back. A run whose step paused on a Question waits for its
-  # answer first, read from the ticket's record (`SymphonyElixir.Questions`): once it is answered the
-  # run waits for a slot like any other; a Question withdrawn (Cancel) or gone ends the run.
+  # TP-1085; its machine steps still ran), one with no free slot for one to free. A run whose step
+  # paused on a Question waits for its answer first, read from the ticket's record
+  # (`SymphonyElixir.Questions`): once it is answered the run waits for a slot like any other; a
+  # Question withdrawn (Cancel) or gone ends the run.
   defp grant_step_turns(%State{} = state) do
     state = check_update_window(state)
     paused? = operator_paused?(state)
@@ -5838,7 +5311,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp grant_step_turn(state, issue_id, entry, false) do
-    if forced_entry?(entry) or (available_slots(state) > 0 and state_slots_available?(entry.issue, state.running)) do
+    if available_slots(state) > 0 and state_slots_available?(entry.issue, state.running) do
       send(entry.step.waiter, {:run_step_turn, issue_id})
       step = Map.drop(entry.step, [:waiter, :started_at]) |> Map.put(:waiting, nil)
       notify_dashboard()
@@ -5874,9 +5347,6 @@ defmodule SymphonyElixir.Orchestrator do
     normalized_state = normalize_issue_state(issue_state)
 
     Enum.count(running, fn
-      {_id, %{forced: true}} ->
-        false
-
       {_id, %{issue: %Issue{state: state_name}} = entry} ->
         not slot_free_entry?(entry) and normalize_issue_state(state_name) == normalized_state
 
@@ -6451,7 +5921,6 @@ defmodule SymphonyElixir.Orchestrator do
     # The run kind's own choice, or the first fallback whose provider can take the run now.
     run_profile = run_profile_for_issue(state, issue, state.continuation_dispatch == issue.id)
     reviewer_run_profile = if run_profile.kind == :code_review and review_agent_enabled?(settings), do: Config.run(settings, :code_review)
-    forced? = forced_slot_available?(issue, state)
     conductor = conductor_plan(state, issue, run_profile, repo_key, running_attrs)
     record_started = fn -> record_dispatch(issue, repo_key, run_id, run_profile, running_attrs) end
 
@@ -6478,10 +5947,10 @@ defmodule SymphonyElixir.Orchestrator do
         ref = Process.monitor(pid)
         started_at = DateTime.utc_now()
 
-        slot = dispatch_slot_label(state, issue, forced?)
+        slot = dispatch_slot_label(state, issue)
 
         Logger.info(
-          "Dispatching issue to agent: #{issue_context(issue)} pid=#{inspect(pid)} attempt=#{inspect(attempt)} worker_host=#{worker_host || "local"} slot=#{slot} forced=#{forced?} #{run_profile_log_fields(run_profile)}#{trigger_comment_log_fields(issue, run_profile, repo_key)}"
+          "Dispatching issue to agent: #{issue_context(issue)} pid=#{inspect(pid)} attempt=#{inspect(attempt)} worker_host=#{worker_host || "local"} slot=#{slot} #{run_profile_log_fields(run_profile)}#{trigger_comment_log_fields(issue, run_profile, repo_key)}"
         )
 
         if is_nil(conductor), do: record_started.()
@@ -6540,7 +6009,6 @@ defmodule SymphonyElixir.Orchestrator do
             codex_last_reported_total_tokens: 0,
             turn_count: 0,
             retry_attempt: normalize_retry_attempt(attempt),
-            forced: forced?,
             started_at: started_at
           }
           |> Map.merge(running_attrs)
@@ -6557,8 +6025,7 @@ defmodule SymphonyElixir.Orchestrator do
           | running: running,
             watching: Map.delete(state.watching, issue.id),
             claimed: MapSet.put(state.claimed, issue.id),
-            retry_attempts: Map.delete(state.retry_attempts, issue.id),
-            forced_waiting_noted: MapSet.delete(state.forced_waiting_noted, issue.id)
+            retry_attempts: Map.delete(state.retry_attempts, issue.id)
         }
 
       {:error, reason} ->
@@ -9662,35 +9129,11 @@ defmodule SymphonyElixir.Orchestrator do
   def dispatch_pr(_server, _target, _opts), do: {:error, :invalid_pr_target}
 
   @doc """
-  Adds `execution.concurrency.force_label` to the ticket, or removes it with `clear?`, and puts the change
-  into the forced queue at once, so a ticket forced before the next poll queues behind the one
-  forced first. The Linear calls run in the caller, not in the orchestrator.
-  """
-  @spec force_issue(String.t(), boolean()) :: {:ok, map()} | :unavailable | {:error, term()}
-  def force_issue(identifier, clear?), do: force_issue(__MODULE__, identifier, clear?)
-
-  @spec force_issue(GenServer.server(), String.t(), boolean()) :: {:ok, map()} | :unavailable | {:error, term()}
-  def force_issue(server, identifier, clear?) when is_binary(identifier) and is_boolean(clear?) do
-    if server_available?(server) do
-      settings = Config.settings!()
-
-      with {:ok, issue} <- fetch_issue_to_force(identifier),
-           {:ok, issue} <- put_force_label(issue, clear?, settings),
-           :ok <- record_force_action(issue, clear?) do
-        GenServer.call(server, {:force_issue, issue})
-      end
-    else
-      :unavailable
-    end
-  end
-
-  @doc """
   Starts the ticket's run for its current phase at once (`POST /api/v1/control/start`), ahead of
   the dispatch queue and outside its order: dispatched in this call, not queued, ignoring queue
   order, the per-repo and global concurrency limits (it may run one over the limit; the next cycle
-  simply has one slot fewer) and the forced queue. A ticket in `Todo` is claimed (`In Progress`)
-  first. Refused, starting nothing, while Symphony is paused, while the ticket's repository is
-  paused, while the ticket has an open Question, or while a run is already working on it — the
+  simply has one slot fewer). A ticket in `Todo` is claimed (`In Progress`) first. Refused, starting
+  nothing, while Symphony is paused, while the ticket's repository is paused, while the ticket has an open Question, or while a run is already working on it — the
   error names which (`SymphonyElixir.StartNow`), and a ticket in Backlog is refused with "move it
   first". The run is the one the PR watcher decided: a ticket whose PR needs a CI Fix run (a
   conflict, a red head) is sent to CI Fix by the watcher first and gets that run, and a review or QA
@@ -10028,31 +9471,6 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp handle_call_message({:force_issue, %Issue{} = issue}, _from, state) do
-    settings = Config.settings!()
-
-    # As in a poll, a ticket joins the queue only in an active state; one already queued is updated.
-    {forced, changes} =
-      if Map.has_key?(state.forced, issue.id) or active_issue_state?(issue.state) do
-        ForcedQueue.reconcile(state.forced, [issue], [], settings, state.clock.())
-      else
-        {state.forced, []}
-      end
-
-    state = state |> put_forced(forced, changes) |> remember_forced_issues([issue])
-    state = %{state | forced_touched: Map.put(state.forced_touched, issue.id, System.monotonic_time(:millisecond))}
-    {_coalesced, state} = request_poll(state)
-    result = force_result(issue, forced, settings)
-
-    Logger.info(
-      "Operator #{if result.forced, do: "forced", else: "cleared the force label on"} issue_id=#{issue.id} " <>
-        "issue_identifier=#{issue.identifier} state=#{issue.state} position=#{inspect(result.position)}"
-    )
-
-    notify_dashboard()
-    {:reply, {:ok, result}, state}
-  end
-
   # Start now (`start_issue/3`): the run for the ticket's current phase is dispatched in this call,
   # not queued. The orchestrator checks the same refusals the caller checked — a run already
   # working on the ticket only it knows — so a click that races a change still refuses.
@@ -10148,11 +9566,11 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # The Start now dispatch itself, outside the dispatch pass: no slot check, no queue order, no
-  # forced queue. A worker host is used when one has a slot, else the run starts locally, since a
-  # start never waits for capacity. Its failures are the caller's answer, never a silently
-  # scheduled retry — only the agent spawn's own failure schedules one, the answer says so, and
-  # the state it returns keeps that retry.
+  # The Start now dispatch itself, outside the dispatch pass: no slot check, no queue order. A worker
+  # host is used when one has a slot, else the run starts locally, since a start never waits for
+  # capacity. Its failures are the caller's answer, never a silently scheduled retry — only the
+  # agent spawn's own failure schedules one, the answer says so, and the state it returns keeps that
+  # retry.
   defp start_run(%State{} = state, %Issue{} = issue, repo_key, note) do
     worker_host = start_worker_host(state)
     run_id = new_run_id(issue.id)
@@ -10275,7 +9693,6 @@ defmodule SymphonyElixir.Orchestrator do
           last_event_at: Map.get(metadata, :last_event_at) || Map.get(metadata, :last_codex_timestamp),
           transcript_buffer: transcript_buffer_list(metadata),
           transcript_buffer_size: Map.get(metadata, :transcript_buffer_size, 0),
-          forced: forced_entry?(metadata),
           linear_wait_until: active_linear_wait_until(metadata, now),
           pending_tool: pending_tool(metadata, now, pending_tool_report_after_ms),
           step: snapshot_step(Map.get(metadata, :step)),
@@ -10303,8 +9720,7 @@ defmodule SymphonyElixir.Orchestrator do
           reason: Map.get(retry, :reason),
           elapsed_ms: Map.get(retry, :elapsed_ms),
           delay_type: retry_delay_type(retry),
-          sign_in: retry_sign_in_facts(state, retry),
-          forced: forced_queued?(issue_id, state)
+          sign_in: retry_sign_in_facts(state, retry)
         }
       end)
 
@@ -10409,12 +9825,11 @@ defmodule SymphonyElixir.Orchestrator do
       dispatch_state: dispatch_state_snapshot(state),
       epic_lanes: EpicLanes.snapshot(state.epic_lanes, epic_lane_running(state.running)),
       blocked: state.blocked || [],
-      forced: forced_snapshot(state, auto_merge),
       concurrency: concurrency_snapshot(state),
       finishing: finishing_snapshot(state.running),
       auto_merge: auto_merge,
       landing_waits: landing_waits,
-      slot_waiting: slot_waiting_snapshot(state.slot_waiting, state) ++ merging_ci_waiting_snapshot(state),
+      slot_waiting: slot_waiting_snapshot(state.slot_waiting) ++ merging_ci_waiting_snapshot(state),
       dispatch_skipped: dispatch_skipped_snapshot(state.dispatch_skipped),
       dispatch_order: state.dispatch_order,
       shipped_today: ShippedToday.today(state.shipped, now),
@@ -10436,8 +9851,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     %{
       max_total: state.max_concurrent_agents || agent.max_concurrent_agents,
-      finishing_max: agent.finishing_max,
-      forced_max: agent.forced_max
+      finishing_max: agent.finishing_max
     }
   end
 
@@ -10454,15 +9868,14 @@ defmodule SymphonyElixir.Orchestrator do
     }
   end
 
-  defp slot_waiting_snapshot(slot_waiting, %State{} = state) do
+  defp slot_waiting_snapshot(slot_waiting) do
     slot_waiting
     |> Enum.map(fn {issue_id, entry} ->
       entry
       |> Map.take([:identifier, :title, :state, :reason, :attempt, :since, :connected])
       |> Map.merge(%{
         issue_id: issue_id,
-        repo_key: Map.get(entry, :repo_key) || Map.get(entry, :issue_repo_key),
-        forced: forced_queued?(issue_id, state)
+        repo_key: Map.get(entry, :repo_key) || Map.get(entry, :issue_repo_key)
       })
     end)
     |> Enum.sort_by(& &1.since, DateTime)
@@ -10488,16 +9901,13 @@ defmodule SymphonyElixir.Orchestrator do
         reason: "waiting for CI on #{wait.commit_sha}",
         ci_wait: true,
         attempt: nil,
-        since: wait.since,
-        forced: forced_queued?(issue_id, state)
+        since: wait.since
       }
     end)
     |> Enum.sort_by(& &1.since, DateTime)
   end
 
-  defp dispatch_slot_label(_state, _issue, true = _forced?), do: "forced"
-
-  defp dispatch_slot_label(%State{} = state, %Issue{} = issue, false = _forced?) do
+  defp dispatch_slot_label(%State{} = state, %Issue{} = issue) do
     if finishing_issue?(issue), do: "finishing", else: EpicLanes.slot_label(state.epic_lanes, issue.id, work_running_ids(state.running))
   end
 
@@ -11406,7 +10816,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp usage_limit_waiting_for_canary?(%State{}, _entry), do: false
 
   defp dispatch_usage_limit_canary(%State{} = state, key, entry, held, result) do
-    {issue_id, retry} = pick_usage_limit_canary(held, result, state)
+    {issue_id, retry} = pick_usage_limit_canary(held, result)
     Logger.warning("Usage limit canary provider=#{entry.provider} scope=#{UsageLimit.scope_label(entry.scope)} issue_identifier=#{retry[:identifier]}")
 
     state
@@ -11439,14 +10849,14 @@ defmodule SymphonyElixir.Orchestrator do
     Enum.filter(state.retry_attempts, fn {_issue_id, retry} -> Map.get(retry, :usage_limit_key) == key end)
   end
 
-  # Issues the tracker no longer returns sort last, by id. A forced ticket goes first.
-  defp pick_usage_limit_canary(held, result, %State{} = state) do
+  # Issues the tracker no longer returns sort last, by id.
+  defp pick_usage_limit_canary(held, result) do
     held_by_id = Map.new(held)
     issue_ids = held_by_id |> Map.keys() |> Enum.sort()
 
     ordered_ids =
       case result do
-        {:ok, issues} -> issues |> sort_issues_for_dispatch() |> forced_first(state) |> Enum.map(& &1.id)
+        {:ok, issues} -> issues |> sort_issues_for_dispatch() |> Enum.map(& &1.id)
         {:error, _reason} -> []
       end
 
@@ -11580,7 +10990,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # The run's provider and model come from its run profile, resolved as at dispatch. A
-  # continuation of a run that just ended, or a forced ticket's run, is not held by a headroom hold.
+  # continuation of a run that just ended is not held by a headroom hold.
   defp usage_limit_hold(state, issue, continuation? \\ false)
 
   defp usage_limit_hold(%State{usage_limits: usage_limits}, _issue, _continuation?) when map_size(usage_limits) == 0, do: nil
@@ -11591,8 +11001,8 @@ defmodule SymphonyElixir.Orchestrator do
 
   # The paused provider the issue's next run waits on: its run profile, resolved as at dispatch, is
   # on a provider the Director paused, so none of its run kind's candidates can take it. A pause holds
-  # every new run on the provider, as a reached usage limit does: a landing run, a continuation and a
-  # forced ticket's run too. Nil when none.
+  # every new run on the provider, as a reached usage limit does: a landing run and a continuation
+  # too. Nil when none.
   defp provider_pause_hold(state, issue, continuation? \\ false)
 
   defp provider_pause_hold(%State{paused_providers: paused} = state, %Issue{} = issue, continuation?) do
@@ -11606,8 +11016,8 @@ defmodule SymphonyElixir.Orchestrator do
   # issue's next run would start on.
   defp paused_provider_of(%State{} = state, %Issue{} = issue), do: held_provider(state, issue.id) || provider_pause_hold(state, issue)
 
-  defp usage_limit_holding(%State{usage_limits: usage_limits} = state, %Issue{} = issue, profile, continuation?) do
-    UsageLimit.holding(usage_limits, Map.merge(profile, %{continuation: continuation?, forced: forced_issue?(issue, state)}), issue.id)
+  defp usage_limit_holding(%State{usage_limits: usage_limits}, %Issue{} = issue, profile, continuation?) do
+    UsageLimit.holding(usage_limits, Map.put(profile, :continuation, continuation?), issue.id)
   end
 
   # The run's provider and model, resolved as at dispatch: the run kind's own choice, or the
@@ -12128,10 +11538,6 @@ defmodule SymphonyElixir.Orchestrator do
   defp merging_state?(_state_name), do: false
 
   defp dispatch_slots_available?(%Issue{} = issue, %State{} = state) do
-    forced_slot_available?(issue, state) or normal_slots_available?(issue, state)
-  end
-
-  defp normal_slots_available?(%Issue{} = issue, %State{} = state) do
     if finishing_issue?(issue) do
       available_finishing_slots(state) > 0 and state_slots_available?(issue, state.running)
     else

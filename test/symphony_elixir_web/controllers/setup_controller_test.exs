@@ -419,7 +419,7 @@ defmodule SymphonyElixirWeb.SetupControllerTest do
       end)
 
       write_workflow_file!(Workflow.workflow_file_path(), tracker_team: "TP")
-      wanted = for %{names: [name | _]} <- StateProvisioning.machine_labels("expedite", ["needs-human"]), name != "Needs Decision", do: name
+      wanted = for %{names: [name | _]} <- StateProvisioning.machine_labels(["needs-human"]), name != "Needs Decision", do: name
       Application.put_env(:symphony_elixir, :memory_tracker_labels_list, Enum.map(wanted, &%{id: &1, name: &1, team_id: "id-TP", team_key: "TP"}))
       :ok
     end

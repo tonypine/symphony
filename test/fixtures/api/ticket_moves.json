@@ -41,14 +41,6 @@
             "Done"
           ]
         },
-        "force": {
-          "allowed": true,
-          "reason": null
-        },
-        "unforce": {
-          "allowed": false,
-          "reason": "It isn't forced."
-        },
         "unblock": {
           "allowed": false,
           "reason": "TP-1 has nothing a person can unblock"
@@ -98,14 +90,6 @@
             "Rework",
             "Done"
           ]
-        },
-        "force": {
-          "allowed": true,
-          "reason": null
-        },
-        "unforce": {
-          "allowed": false,
-          "reason": "It isn't forced."
         },
         "unblock": {
           "allowed": false,
@@ -157,14 +141,6 @@
             "Done"
           ]
         },
-        "force": {
-          "allowed": true,
-          "reason": null
-        },
-        "unforce": {
-          "allowed": false,
-          "reason": "It isn't forced."
-        },
         "unblock": {
           "allowed": true,
           "reason": null
@@ -215,14 +191,6 @@
             "Done"
           ]
         },
-        "force": {
-          "allowed": true,
-          "reason": null
-        },
-        "unforce": {
-          "allowed": false,
-          "reason": "It isn't forced."
-        },
         "unblock": {
           "allowed": false,
           "reason": "TP-1 has nothing a person can unblock"
@@ -272,14 +240,6 @@
             "Code Review",
             "Rework"
           ]
-        },
-        "force": {
-          "allowed": false,
-          "reason": "The ticket is done."
-        },
-        "unforce": {
-          "allowed": false,
-          "reason": "It isn't forced."
         },
         "unblock": {
           "allowed": false,

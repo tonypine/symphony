@@ -10,7 +10,7 @@ defmodule SymphonyElixir.Home do
     under its epic's node, which counts the epic's tickets by state; tickets with no epic are entries
     of their own. An epic is a node only while one of its tickets is in progress.
   - `queue`: every ticket Symphony would dispatch that has not started (in Todo, walked by the
-    dispatch pass, at a dispatched priority or forced), as the tree of what waits on what. A ticket
+    dispatch pass, at a dispatched priority), as the tree of what waits on what. A ticket
     blocked by queued tickets sits under the one that lands last (the deepest, then the latest in the
     dispatch order) and names its other open blockers in `also_waits_on`. A root waits on nothing in
     the queue: when it waits on a ticket in progress it names the one that lands last in `after`, else
@@ -216,10 +216,7 @@ defmodule SymphonyElixir.Home do
 
   defp priority_allowed?(_record, %{priority_filter: nil}), do: true
 
-  defp priority_allowed?(record, ctx) do
-    {_index, entry} = Map.fetch!(ctx.walk, record.issue_id)
-    Map.get(entry, :forced) == true or MapSet.member?(ctx.priority_filter, record.priority || 0)
-  end
+  defp priority_allowed?(record, ctx), do: MapSet.member?(ctx.priority_filter, record.priority || 0)
 
   # The queued tickets a blocker outside both lists holds back, directly or behind another: they are
   # outside too. Each pass moves at least one, so it ends.

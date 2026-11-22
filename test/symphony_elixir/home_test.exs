@@ -154,18 +154,18 @@ defmodule SymphonyElixir.HomeTest do
       assert [%{identifier: "MT-1", situation: %{}, children: [%{identifier: "MT-2", children: []}]}] = read.queue.roots
     end
 
-    test "a root behind a Backlog ticket is outside, and so is the ticket behind it; a ticket below the dispatched priority is outside unless forced" do
+    test "a root behind a Backlog ticket is outside, and so is the ticket behind it; a ticket below the dispatched priority is outside" do
       backlog = record("MT-1", "Backlog")
       root = record("MT-2", "Todo", blockers: [link("MT-1", "Backlog")])
       next = record("MT-3", "Todo", blockers: [link("MT-2", "Todo")])
       unknown = record("MT-4", "Todo", blockers: [%{id: nil, identifier: "OTHER-1", state: nil}])
       low = record("MT-5", "Todo", priority: 4)
-      forced = record("MT-6", "Todo", priority: 4)
+      queued = record("MT-6", "Todo")
       unassigned = record("MT-7", "Todo")
       removed = record("MT-8", "Todo", removed_at: DateTime.utc_now())
 
-      order = %{entries: [entry("MT-2"), entry("MT-3"), entry("MT-4"), entry("MT-5"), Map.put(entry("MT-6"), :forced, true)]}
-      read = Home.read(order, [backlog, root, next, unknown, low, forced, unassigned, removed], live(), priority_filter: MapSet.new([1]))
+      order = %{entries: [entry("MT-2"), entry("MT-3"), entry("MT-4"), entry("MT-5"), entry("MT-6")]}
+      read = Home.read(order, [backlog, root, next, unknown, low, queued, unassigned, removed], live(), priority_filter: MapSet.new([1]))
 
       assert [%{identifier: "MT-6"}] = read.queue.roots
       assert read.in_progress == []
@@ -196,7 +196,7 @@ defmodule SymphonyElixir.HomeTest do
 
   defp walk(identifiers), do: %{entries: Enum.map(identifiers, &entry/1)}
 
-  defp entry(identifier), do: %{issue_id: "id-#{identifier}", identifier: identifier, outcome: :held, reason: nil, forced: false}
+  defp entry(identifier), do: %{issue_id: "id-#{identifier}", identifier: identifier, outcome: :held, reason: nil}
 
   defp live(snapshot \\ %{}), do: Situation.live_facts(snapshot)
 end

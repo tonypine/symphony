@@ -354,8 +354,8 @@ struct SettingsView: View {
             "Tickets (saved in symphony.yml)",
             footer: "An issue whose priority is not chosen is not dispatched: Symphony waits with free "
                 + "lanes even when it sits in Todo. Use it to focus limited API spend, for example "
-                + "on urgent and high tickets only. A forced ticket, and a run already under way, "
-                + "still go. Save checks symphony.yml with symphony check first; Symphony reads it "
+                + "on urgent and high tickets only. A run already under way still goes. "
+                + "Save checks symphony.yml with symphony check first; Symphony reads it "
                 + "on its next poll, no restart needed."
         ) {
             SettingsLine("Only the chosen priorities start new work. With none chosen, every priority may.")

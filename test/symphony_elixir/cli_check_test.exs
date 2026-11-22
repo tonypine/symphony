@@ -63,17 +63,22 @@ defmodule SymphonyElixir.CLICheckTest do
     assert output == "Config OK: #{path}\n"
   end
 
-  test "accepts the forced-ticket concurrency keys and rejects forced_max below 1", %{root: root} do
+  test "refuses the removed forced-ticket concurrency keys until they are migrated away", %{root: root} do
     forced = "command: codex app-server\n  concurrency:\n    force_label: Rush\n    forced_max: 2\n    forced_stale_after_hours: 24"
     path = write_symphony!(root, String.replace(valid_symphony(root), "command: codex app-server", forced))
 
-    assert check(["--config", path]) == {{:halt, 0}, "Config OK: #{path}\n"}
-    assert %{force_label: "Rush", forced_max: 2, forced_stale_after_hours: 24} = Config.settings!().execution
-
-    path = write_symphony!(root, String.replace(valid_symphony(root), "command: codex app-server", "command: codex app-server\n  concurrency:\n    forced_max: 0"))
-
     assert {{:error, message}, ""} = check(["--config", path])
-    assert message =~ "forced_max"
+    assert message =~ "execution.concurrency.force"
+
+    assert {{:halt, 0}, output} = check(["--migrate", "--config", path])
+    assert output =~ "removed `execution.concurrency.force_label`"
+    assert output =~ "removed `execution.concurrency.forced_max`"
+    assert output =~ "removed `execution.concurrency.forced_stale_after_hours`"
+
+    assert {{:halt, 0}, _output, _stderr} = evaluate_io(["config", "migrate", "--config", path])
+    refute File.read!(path) =~ ~r/^\s*force/m
+    assert check(["--config", path]) == {{:halt, 0}, "Config OK: #{path}\n"}
+    refute Map.has_key?(Config.settings!().execution, :force_label)
   end
 
   test "loads linear.webhooks turned on, its secret resolved from the environment, and refuses it without a secret", %{root: root} do

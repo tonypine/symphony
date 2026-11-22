@@ -60,8 +60,7 @@ public struct TicketList: Equatable {
         public var since: Date?
         /// "3 h", from Symphony's clock.
         public var sinceText: String = ""
-        public var forced: Bool
-        /// Stuck, failing, routed to more than one repo, or forced for too long.
+        /// Stuck, failing, routed to more than one repo.
         public var needsAttention: Bool
         public var url: URL?
         /// The inspector's facts, in order.
@@ -81,7 +80,7 @@ public struct TicketList: Equatable {
 
         /// One element for VoiceOver: "SHOP-301, Checkout total, Waiting for CI: Checks are running on PR #741."
         public func accessibilityLabel(reference: Date) -> String {
-            [identifier, title, needsAttention ? "needs attention" : nil, SituationText(line, reference: reference).spoken(forced: forced)]
+            [identifier, title, needsAttention ? "needs attention" : nil, SituationText(line, reference: reference).spoken()]
                 .compactMap { $0 }
                 .joined(separator: ", ")
         }
@@ -100,11 +99,9 @@ public struct TicketList: Equatable {
 
     public static let emptyTitle = "No tickets here."
     public static let noMatchTitle = "No tickets match."
-    public static let forceTitle = "Force…"
-    public static let stopForcingTitle = "Stop Forcing"
     /// Why a button is off while its call is on its way.
     public static let waitReason = "Wait until Symphony answers."
-    /// Why Force… and Pause Dispatch… are off while Symphony is stopped.
+    /// Why Pause Dispatch… is off while Symphony is stopped.
     public static let stoppedReason = "Symphony is stopped. Start it first."
     public static let openTitle = "Open Ticket"
 
@@ -124,14 +121,13 @@ public struct TicketList: Equatable {
         let reference = state.generatedAt ?? now
         self.reference = reference
         var builder = Builder(reference: reference, timeZone: timeZone)
-        let forcedByID = Dictionary(state.snapshot.forced.map { ($0.identifier, $0) }, uniquingKeysWith: { first, _ in first })
         let landingIDs = Set(state.landing)
         let qaIDs = Set(state.qaRunning + state.qaQueued)
 
         for conflict in state.conflicts {
             builder.add(Row(
                 identifier: conflict.identifier, title: conflict.title, repoKey: conflict.repoKeys.first, stage: .queued,
-                waitsOn: "one repo label", since: nil, forced: false, needsAttention: true, url: conflict.url,
+                waitsOn: "one repo label", since: nil, needsAttention: true, url: conflict.url,
                 facts: [Fact(label: "Problem", value: "Routed to \(conflict.repoKeys.joined(separator: ", ")), so it runs in none")]
             ))
         }
@@ -147,14 +143,14 @@ public struct TicketList: Equatable {
             builder.add(Row(
                 identifier: run.identifier, issueID: run.issueID, title: run.title, repoKey: run.repoKey, state: run.state,
                 stage: landing ? .merging : .working, waitsOn: landing ? "landing" : stuck ? "a stuck run" : "the agent",
-                since: run.startedAt, forced: false, needsAttention: stuck, url: run.url, facts: facts
+                since: run.startedAt, needsAttention: stuck, url: run.url, facts: facts
             ))
         }
         for item in state.snapshot.waitingOnYou {
             builder.add(Row(
                 identifier: item.identifier, issueID: item.issueID, title: item.title, repoKey: item.repoKey, state: nil,
                 stage: .waitingOnYou, waitsOn: "you", since: item.waitingSeconds.map { reference.addingTimeInterval(-Double($0)) },
-                forced: false, needsAttention: false, url: item.url,
+                needsAttention: false, url: item.url,
                 facts: item.headline.map { [Fact(label: "Asks", value: $0)] } ?? []
             ))
         }
@@ -171,14 +167,14 @@ public struct TicketList: Equatable {
                 identifier: ticket.identifier, issueID: ticket.issueID, title: ticket.title, repoKey: ticket.repoKey,
                 state: ticket.state, stage: stage, waitsOn: waitsOn,
                 since: ticket.secondsSinceLastRun.map { reference.addingTimeInterval(-Double($0)) },
-                forced: false, needsAttention: false, url: ticket.url, facts: []
+                needsAttention: false, url: ticket.url, facts: []
             ))
         }
         for entry in state.autoMerge {
             builder.add(Row(
                 identifier: entry.identifier, issueID: entry.issueID, title: nil, repoKey: nil, state: nil, stage: .merging,
                 waitsOn: entry.state == "enabled" || entry.state == nil ? "CI" : entry.state.map(Self.words) ?? "CI",
-                since: entry.updatedAt, forced: false, needsAttention: entry.state == "conflict" || entry.state == "ci_failure",
+                since: entry.updatedAt, needsAttention: entry.state == "conflict" || entry.state == "ci_failure",
                 url: nil, facts: entry.status.map { [Fact(label: "Auto-merge", value: $0)] } ?? []
             ))
         }
@@ -187,7 +183,7 @@ public struct TicketList: Equatable {
             builder.add(Row(
                 identifier: waiting.identifier, issueID: waiting.issueID, title: waiting.title, repoKey: waiting.repoKey,
                 state: waiting.state, stage: merging ? .merging : .queued, waitsOn: merging ? "CI" : "a slot",
-                since: waiting.since, forced: false, needsAttention: false, url: nil,
+                since: waiting.since, needsAttention: false, url: nil,
                 facts: waiting.reason.map { [Fact(label: "Why", value: $0)] } ?? []
             ))
         }
@@ -197,7 +193,7 @@ public struct TicketList: Equatable {
             if let error = retry.error { facts.append(Fact(label: "Last error", value: error)) }
             builder.add(Row(
                 identifier: retry.identifier, issueID: retry.issueID, title: retry.title, repoKey: retry.repoKey, state: nil,
-                stage: .queued, waitsOn: when ?? "a retry", since: nil, forced: false,
+                stage: .queued, waitsOn: when ?? "a retry", since: nil,
                 needsAttention: retry.attempt >= Overview.failedAttemptsLimit, url: nil, facts: facts
             ))
         }
@@ -205,7 +201,7 @@ public struct TicketList: Equatable {
             let waitsOn = blocked.blockers.isEmpty ? (blocked.reason.map { _ in "an app update" } ?? "its blockers") : blocked.blockers.joined(separator: ", ")
             builder.add(Row(
                 identifier: blocked.identifier, issueID: blocked.issueID, title: blocked.title, repoKey: nil, state: blocked.state,
-                stage: .queued, waitsOn: waitsOn, since: nil, forced: false, needsAttention: false, url: nil,
+                stage: .queued, waitsOn: waitsOn, since: nil, needsAttention: false, url: nil,
                 facts: blocked.reason.map { [Fact(label: "Why", value: $0)] } ?? []
             ))
         }
@@ -214,36 +210,20 @@ public struct TicketList: Equatable {
             builder.add(Row(
                 identifier: skipped.identifier, issueID: skipped.issueID, title: skipped.title, repoKey: skipped.repoKey,
                 state: skipped.state, stage: .queued, waitsOn: skipped.reason ?? "a dispatch gate",
-                since: skipped.since, forced: false, needsAttention: false, url: nil, facts: []
-            ))
-        }
-        for forced in state.snapshot.forced {
-            let running = forced.summary?.contains("running") == true
-            builder.add(Row(
-                identifier: forced.identifier, issueID: forced.issueID, title: forced.title, repoKey: forced.repoKey, state: forced.state,
-                stage: running ? .working : .queued, waitsOn: forced.summary.map(Self.forcedWaitsOn) ?? "a forced slot",
-                since: forced.forcedForSeconds.map { reference.addingTimeInterval(-Double($0)) }, forced: true,
-                needsAttention: forced.stale, url: nil, facts: []
+                since: skipped.since, needsAttention: false, url: nil, facts: []
             ))
         }
         for ticket in state.shippedToday {
             builder.add(Row(
                 identifier: ticket.identifier, issueID: ticket.issueID, title: ticket.title, repoKey: ticket.repoKey, state: "Done",
-                stage: .shipped, waitsOn: "nothing", since: ticket.completedAt, forced: false, needsAttention: false,
+                stage: .shipped, waitsOn: "nothing", since: ticket.completedAt, needsAttention: false,
                 url: ticket.url, facts: []
             ))
         }
 
-        // Each ticket's forced facts, whichever list it came from.
         rows = builder.rows
             .map { row in
                 var row = row
-                if let forced = forcedByID[row.identifier] {
-                    row.forced = true
-                    row.needsAttention = row.needsAttention || forced.stale
-                    if let summary = forced.summary { row.facts.append(Fact(label: "Forced status", value: summary)) }
-                    if let part = forced.part { row.facts.append(Fact(label: "Working through", value: part)) }
-                }
                 row.situation = state.snapshot.situation(row.identifier)
                 row.sinceText = row.since.map { Overview.duration(Int(reference.timeIntervalSince($0))) } ?? ""
                 row.facts = Self.facts(row) + row.facts
@@ -306,7 +286,6 @@ public struct TicketList: Equatable {
     private static func facts(_ row: Row) -> [Fact] {
         var facts: [Fact] = []
         if let repo = row.repoKey { facts.append(Fact(label: "Repo", value: repo)) }
-        facts.append(Fact(label: "Forced", value: row.forced ? "Yes" : "No"))
         return facts
     }
 
@@ -315,15 +294,6 @@ public struct TicketList: Equatable {
         if lhs.kind != rhs.kind { return lhs.kindSort < rhs.kindSort }
         if lhs.sinceSort != rhs.sinceSort { return lhs.sinceSort < rhs.sinceSort }
         return lhs.identifier.localizedStandardCompare(rhs.identifier) == .orderedAscending
-    }
-
-    /// "implementation · waiting on blocker TP-1" → "blocker TP-1"; "waiting for a human" → "a human".
-    static func forcedWaitsOn(_ summary: String) -> String {
-        let last = summary.components(separatedBy: " · ").last ?? summary
-        for prefix in ["waiting on ", "waiting for "] where last.hasPrefix(prefix) {
-            return String(last.dropFirst(prefix.count))
-        }
-        return last == "running" ? "the agent" : last
     }
 
     /// "ci_failure" → "ci failure".

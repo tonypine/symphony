@@ -310,8 +310,6 @@ public struct TicketPage: Equatable {
         return repoKey.map { "The repository \($0) is paused: Symphony doesn't dispatch its tickets." }
             ?? "The repository is paused: Symphony doesn't dispatch its tickets."
     }
-    /// Whether the ticket is forced past the dispatch limits, so its ⋯ menu offers Stop Forcing instead of Force.
-    public var isForced: Bool { badges.contains { $0.status == .forced } }
 
     /// The line under the header: "Working", "Waiting on a retry at 14:32", "Done, merged 13:40".
     public var phaseSentence: String {
@@ -381,7 +379,6 @@ public struct TicketPage: Equatable {
         let skipped = state?.dispatchSkipped?.first(where: matches)
         let blocked = state?.blocked?.first(where: matches)
         let shipped = state?.shippedToday?.first(where: matches)
-        let forced = state?.forced?.first(where: matches)
         // The watcher's newest word on the ticket's pull request: Check Now's, the ticket's own, or the state's.
         let watchState = sources.state.map(WatchState.decode)
         let watchCard = PRWatchCard(
@@ -397,7 +394,7 @@ public struct TicketPage: Equatable {
         )
         let history = (state?.runHistory ?? []).filter(matches)
         let records = runs.filter { $0.issueIdentifier == identifier }
-        let entries: [Entry?] = [running, retry, watching, waitingOnYou, slot, skipped, blocked, shipped, forced] + history.map { $0 }
+        let entries: [Entry?] = [running, retry, watching, waitingOnYou, slot, skipped, blocked, shipped] + history.map { $0 }
 
         self.identifier = identifier
         watch = watchCard
@@ -496,9 +493,6 @@ public struct TicketPage: Equatable {
         }
         if let retry, retry.attempt ?? 0 >= Overview.failedAttemptsLimit {
             badges.append(Badge(status: .problem, word: "Failed \(retry.attempt ?? 0) times"))
-        }
-        if forced != nil || running?.forced == true || retry?.forced == true {
-            badges.append(Badge(status: .forced, word: "Forced"))
         }
         self.badges = badges
 
@@ -610,7 +604,6 @@ public struct TicketPage: Equatable {
         } else {
             mergedText = nil
         }
-        facts.append(Fact(label: "Forced", value: badges.contains { $0.status == .forced } ? "Yes" : "No"))
         self.facts = facts
     }
 
@@ -905,7 +898,6 @@ public struct TicketPage: Equatable {
         let startedAt: DecodedTime?
         let lastEventAt: DecodedTime?
         let pendingTool: PendingTool?
-        let forced: Bool?
         let tokens: Tokens?
         let attempt: Int?
         let dueAt: DecodedTime?
@@ -961,7 +953,6 @@ public struct TicketPage: Equatable {
         let dispatchSkipped: [Entry]?
         let blocked: [Entry]?
         let shippedToday: [Entry]?
-        let forced: [Entry]?
         let runHistory: [Entry]?
         let budget: Budget?
         let qa: Passes?
