@@ -76,6 +76,21 @@ defmodule SymphonyElixirWeb.DispatchOrderReadTest do
     assert %{"order" => %{"next" => "MT-A", "queue" => [_first, _second]}} = build_conn() |> get("/api/v1/state") |> json_response(200)
   end
 
+  test "the queue lists the tickets in line in the stored order, not by priority or age", %{orchestrator: orchestrator} do
+    # MT-Z joined the queue first; MT-Y, urgent and older, joined after it.
+    joined_first = ticket("z", "MT-Z", 4)
+    urgent_older = %{ticket("y", "MT-Y", 1) | created_at: ~U[2025-01-01 00:00:00Z]}
+
+    state = Orchestrator.put_dispatch_order_for_test(orchestrator_state(), [urgent_older, joined_first])
+    {:reply, snapshot, _state} = Orchestrator.handle_call(:snapshot, {self(), make_ref()}, state)
+    :ok = GenServer.call(orchestrator, {:put, snapshot})
+
+    read = build_conn() |> get("/api/v1/dispatch/order") |> json_response(200)
+
+    assert %{"next" => "MT-Z"} = read
+    assert [%{"identifier" => "MT-Z", "position" => 1, "starts_now" => true}, %{"identifier" => "MT-Y", "position" => 2, "starts_now" => false}] = read["queue"]
+  end
+
   test "an unreadable orchestrator reads as an error", %{orchestrator: _orchestrator} do
     assert %{"error" => %{"code" => "snapshot_unavailable"}} = build_conn() |> get("/api/v1/dispatch/order") |> json_response(200)
   end

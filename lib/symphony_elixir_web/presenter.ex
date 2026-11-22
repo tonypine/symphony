@@ -165,7 +165,7 @@ defmodule SymphonyElixirWeb.Presenter do
   @doc """
   The dispatch order (`GET /api/v1/dispatch/order`, `SymphonyElixir.Dispatch.Order.read/3`): every open
   ticket Symphony works, grouped by situation kind, and the candidates in the order the dispatcher
-  starts them, each with its reason. Read from what the orchestrator walked at its last poll cycle and
+  starts them (the stored queue order, `SymphonyElixir.Dispatch.Queue`), each with its reason. Read from what the orchestrator walked at its last poll cycle and
   the ticket records: it makes no Linear request.
   """
   @spec dispatch_order_payload(GenServer.name(), timeout()) :: map()

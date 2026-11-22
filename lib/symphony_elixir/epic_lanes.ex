@@ -21,7 +21,7 @@ defmodule SymphonyElixir.EpicLanes do
   under `tickets.priorities`: it is never given a lane, and the reason says so. Lanes are planned
   again on every poll, so the epic takes a lane back once a ticket on its path can run.
 
-  The slots left over form the shared pool, dispatched by priority then age as before; it also takes
+  The slots left over form the shared pool, dispatched in the queue order; it also takes
   an epic's extra parallel tickets and the tickets of epics still waiting for a lane.
   """
 
@@ -140,55 +140,6 @@ defmodule SymphonyElixir.EpicLanes do
       _no_lane -> Enum.find(lanes, &(Map.has_key?(&1.members, issue_id) and not Map.has_key?(occupancy, &1.id)))
     end
   end
-
-  @doc """
-  Reorders `issues`, already in dispatch order, so each lane's tickets go nearest first: they swap
-  places among the positions they already hold, so the rest of the order is unchanged. Only tickets
-  of the same lane and the same `group_by` value (the dispatch stage) swap. A ticket on two paths
-  counts for the lane it is nearest to.
-  """
-  @spec order(t() | nil, [Issue.t() | term()], (Issue.t() -> term())) :: [Issue.t() | term()]
-  def order(nil, issues, _group_by), do: issues
-
-  def order(%{lanes: lanes}, issues, group_by) when is_list(issues) and is_function(group_by, 1) do
-    indexed = Enum.with_index(issues)
-
-    placed =
-      indexed
-      |> Enum.flat_map(fn {issue, index} ->
-        case home_lane(lanes, issue) do
-          {lane_id, depth} -> [{{lane_id, group_by.(issue)}, {depth, index}, index, issue}]
-          nil -> []
-        end
-      end)
-      |> Enum.group_by(&elem(&1, 0))
-      |> Enum.flat_map(fn {_lane_and_group, entries} ->
-        positions = entries |> Enum.map(&elem(&1, 2)) |> Enum.sort()
-        nearest_first = entries |> Enum.sort_by(&elem(&1, 1)) |> Enum.map(&elem(&1, 3))
-        Enum.zip(positions, nearest_first)
-      end)
-      |> Map.new()
-
-    Enum.map(indexed, fn {issue, index} -> Map.get(placed, index, issue) end)
-  end
-
-  defp home_lane(lanes, %Issue{id: id}) when is_binary(id) do
-    lanes
-    |> Enum.with_index()
-    |> Enum.flat_map(fn {lane, lane_index} ->
-      case lane.members do
-        %{^id => %{depth: depth}} -> [{depth, lane_index, lane.id}]
-        _members -> []
-      end
-    end)
-    |> Enum.min(fn -> nil end)
-    |> case do
-      {depth, _lane_index, lane_id} -> {lane_id, depth}
-      nil -> nil
-    end
-  end
-
-  defp home_lane(_lanes, _issue), do: nil
 
   @doc """
   The tickets on the path of the active epic `epic_id`, whether it holds a lane, is queued for one or

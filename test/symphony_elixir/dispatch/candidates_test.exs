@@ -2,7 +2,7 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.Config.SystemSchema
-  alias SymphonyElixir.Dispatch.Candidates
+  alias SymphonyElixir.Dispatch.{Candidates, Queue}
   alias SymphonyElixir.EpicLanes
   alias SymphonyElixir.Linear.Client
   alias SymphonyElixir.{TicketObservation, TicketState}
@@ -99,7 +99,8 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
     end
 
     test "on the dispatch order of tickets that differ only by age" do
-      # MT-99 is the older, so it runs first, though its identifier sorts after MT-100's.
+      # The poll observes them oldest first, so each joins the queue in that order: MT-99 is the
+      # older, so it runs first, though its identifier sorts after MT-100's.
       issues = [
         issue("newer", "MT-100", "Todo", created_at: ~U[2026-10-02 09:00:00Z]),
         issue("older", "MT-99", "Todo", created_at: ~U[2026-10-01 09:00:00Z]),
@@ -396,7 +397,7 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
 
   defp identifiers(issues), do: Enum.map(issues, & &1.identifier)
 
-  defp dispatch_order(issues), do: issues |> Orchestrator.sort_issues_for_dispatch_for_test() |> identifiers()
+  defp dispatch_order(issues), do: issues |> Queue.order(RunStore.queue_positions()) |> identifiers()
 
   # What the poll writes into a ticket's record (`TicketObservation.observe/3`): the open blockers only.
   defp observed(%Issue{} = issue) do

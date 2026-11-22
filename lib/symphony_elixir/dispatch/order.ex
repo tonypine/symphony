@@ -6,7 +6,8 @@ defmodule SymphonyElixir.Dispatch.Order do
   not next.
 
   The orchestrator walks its candidates at the end of each poll cycle, after the cycle's dispatch
-  pass, in the order the pass walks them and through the pass's own gates and slot decision: no copy
+  pass, in the order the pass walks them (the stored queue order, `SymphonyElixir.Dispatch.Queue`)
+  and through the pass's own gates and slot decision: no copy
   of either lives here. Each walked ticket comes out with an `outcome`:
 
   - `running`: a run works on it;

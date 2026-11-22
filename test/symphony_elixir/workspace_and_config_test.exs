@@ -2865,44 +2865,6 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert log =~ "[REDACTED]"
   end
 
-  test "orchestrator sorts dispatch by priority then oldest created_at" do
-    issue_same_priority_older = %Issue{
-      id: "issue-old-high",
-      identifier: "MT-200",
-      title: "Old high priority",
-      state: "Todo",
-      priority: 1,
-      created_at: ~U[2026-01-01 00:00:00Z]
-    }
-
-    issue_same_priority_newer = %Issue{
-      id: "issue-new-high",
-      identifier: "MT-201",
-      title: "New high priority",
-      state: "Todo",
-      priority: 1,
-      created_at: ~U[2026-01-02 00:00:00Z]
-    }
-
-    issue_lower_priority_older = %Issue{
-      id: "issue-old-low",
-      identifier: "MT-199",
-      title: "Old lower priority",
-      state: "Todo",
-      priority: 2,
-      created_at: ~U[2025-12-01 00:00:00Z]
-    }
-
-    sorted =
-      Orchestrator.sort_issues_for_dispatch_for_test([
-        issue_lower_priority_older,
-        issue_same_priority_newer,
-        issue_same_priority_older
-      ])
-
-    assert Enum.map(sorted, & &1.identifier) == ["MT-200", "MT-201", "MT-199"]
-  end
-
   test "todo issue with non-terminal blocker is not dispatch-eligible" do
     state = %Orchestrator.State{
       max_concurrent_agents: 3,

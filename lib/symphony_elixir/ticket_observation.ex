@@ -289,15 +289,19 @@ defmodule SymphonyElixir.TicketObservation do
   end
 
   @doc """
-  Observes every issue of `issues` for `repo_key` (see `observe/3`), and returns how many had each
-  outcome. A store error is logged with the issue it was for and counted under `errors`; it never
+  Observes every issue of `issues` for `repo_key` (see `observe/3`), oldest first, and returns how
+  many had each outcome. A store error is logged with the issue it was for and counted under `errors`; it never
   stops the others.
   """
   @spec observe_all(String.t(), [Issue.t()], keyword()) :: counts()
   def observe_all(repo_key, issues, opts) when is_list(issues) do
     opts = Keyword.put_new_lazy(opts, :terminal_states, fn -> terminal_states(repo_key) end)
 
-    Enum.reduce(issues, empty_summary(), fn issue, acc ->
+    # Oldest first, then by identifier: the tickets this read shows Symphony for the first time join
+    # the dispatch queue in that order (`SymphonyElixir.Dispatch.Queue`).
+    issues
+    |> Enum.sort_by(&created_order/1)
+    |> Enum.reduce(empty_summary(), fn issue, acc ->
       case observe_issue(repo_key, issue, opts) do
         {:ok, outcome} ->
           Map.update!(acc, outcome, &(&1 + 1))
@@ -1116,6 +1120,10 @@ defmodule SymphonyElixir.TicketObservation do
     terminal_states = Keyword.get_lazy(opts, :terminal_states, fn -> terminal_states(repo_key) end)
     Issue.open_blockers(issue, terminal_states)
   end
+
+  defp created_order(%Issue{created_at: %DateTime{} = at} = issue), do: {0, DateTime.to_unix(at, :microsecond), issue.identifier || ""}
+  defp created_order(%Issue{} = issue), do: {1, 0, issue.identifier || ""}
+  defp created_order(_other), do: {2, 0, ""}
 
   defp terminal_states(repo_key) do
     case Config.settings_for_repo(repo_key) do
