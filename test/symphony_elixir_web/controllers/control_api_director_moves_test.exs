@@ -444,7 +444,12 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
     assert error(post(:backlog, %{"issue_identifier" => "MOT-40"}, moves)) == {502, "linear_error", "Linear request failed: :boom"}
 
     retry_ms = DateTime.to_unix(~U[2026-10-04 06:05:00.123Z], :millisecond)
-    Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, {:error, {:linear_rate_limited, retry_ms}})
+
+    Application.put_env(
+      :symphony_elixir,
+      :memory_tracker_update_issue_state_result,
+      {:error, {:linear_rate_limited, retry_ms}}
+    )
 
     assert error(post(:backlog, %{"issue_identifier" => "MOT-40"}, moves)) ==
              {502, "linear_error", "Linear is rate-limiting Symphony until 2026-10-04T06:05:00Z; try again then"}

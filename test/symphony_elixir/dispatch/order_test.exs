@@ -1,7 +1,8 @@
 defmodule SymphonyElixir.Dispatch.OrderTest do
-  # The dispatch order read against what the dispatcher dispatches: a fixture with slots, a blocker, a
-  # ticket carrying the old force label and a pause, walked by the orchestrator (`put_dispatch_order_for_test/2`) and then
-  # dispatched by its own pass (`dispatch_chosen_issues_for_test/2`).
+  # The dispatch order read against what the dispatcher dispatches: a fixture with slots, a
+  # blocker, a ticket carrying the old force label and a pause, walked by the orchestrator
+  # (`put_dispatch_order_for_test/2`) and then dispatched by its own pass
+  # (`dispatch_chosen_issues_for_test/2`).
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.Dispatch.Order
