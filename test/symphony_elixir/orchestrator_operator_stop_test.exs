@@ -311,7 +311,6 @@ defmodule SymphonyElixir.OrchestratorOperatorStopTest do
       last_codex_message: nil,
       last_codex_timestamp: nil,
       last_codex_event: nil,
-      forced: false,
       started_at: DateTime.utc_now()
     }
 

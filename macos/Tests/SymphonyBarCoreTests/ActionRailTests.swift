@@ -42,9 +42,9 @@ final class ActionRailTests: XCTestCase {
         XCTAssertNil(TicketMoves.of(issue: nil))
         XCTAssertNil(TicketMoves.of(issue: Data(#"{"identifier":"TP-1"}"#.utf8)))
         let moves = try XCTUnwrap(TicketMoves.of(issue: Data(#"""
-        {"moves": {"start": {"allowed": true}, "stop": {"reason": "no allowed"}, "force": {"allowed": false, "reason": "  "}}}
+        {"moves": {"start": {"allowed": true}, "stop": {"reason": "no allowed"}, "restart": {"allowed": false, "reason": "  "}}}
         """#.utf8)))
-        XCTAssertEqual(moves.entries, ["start": TicketMoveRead(allowed: true), "force": TicketMoveRead(allowed: false)])
+        XCTAssertEqual(moves.entries, ["start": TicketMoveRead(allowed: true), "restart": TicketMoveRead(allowed: false)])
     }
 
     // MARK: - The set, the order and the primary follow the read
@@ -58,7 +58,7 @@ final class ActionRailTests: XCTestCase {
     func testAWorkingRun_StartRefusedInMore_StopRunLastInMoreOnALaptop() throws {
         let rail = try rail("working")
         XCTAssertNil(rail.primary)
-        XCTAssertEqual(moves(rail.secondary), [.force])
+        XCTAssertEqual(moves(rail.secondary), [])
         XCTAssertEqual(moves(rail.more), [.moveTo, .restart, .answer, .unblock, .start, .cancel, .note])
         XCTAssertEqual(rail.more.first { $0.move == .start }?.reason, "A run is already working on it.")
         XCTAssertEqual(rail.stop?.allowed, true)
@@ -67,11 +67,11 @@ final class ActionRailTests: XCTestCase {
         XCTAssertEqual(rail.items.last?.move, .stop)
     }
 
-    func testTheRailIsThePrototypes_OpenPullRequestForceThenStopRunOnADesktop() throws {
+    func testTheRailIsThePrototypes_OpenPullRequestThenStopRunOnADesktop() throws {
         let moves = try XCTUnwrap(try fixture()["waiting_on_you"])
         let laptop = TicketActionRail(identifier: "TP-1", moves: moves, links: Self.links)
         XCTAssertEqual(self.moves(laptop.items), [
-            .answer, .openPullRequest, .force, .moveTo, .restart, .unblock, .start, .cancel, .note,
+            .answer, .openPullRequest, .moveTo, .restart, .unblock, .start, .cancel, .note,
             .copyLink, .copyWorkspacePath, .openInLinear, .stop,
         ])
         XCTAssertEqual(laptop.moreGroups.map(self.moves), [
@@ -79,7 +79,7 @@ final class ActionRailTests: XCTestCase {
         ])
         let desktop = TicketActionRail(identifier: "TP-1", moves: moves, links: Self.links, omitting: [.answer], stopOnRail: true)
         XCTAssertEqual(self.moves(desktop.items), [
-            .openPullRequest, .force, .stop, .moveTo, .restart, .unblock, .start, .cancel, .note,
+            .openPullRequest, .stop, .moveTo, .restart, .unblock, .start, .cancel, .note,
             .copyLink, .copyWorkspacePath, .openInLinear,
         ])
         XCTAssertEqual(desktop.moreGroups.count, 2)
@@ -112,7 +112,7 @@ final class ActionRailTests: XCTestCase {
         let rail = try rail("waiting_on_you")
         XCTAssertEqual(rail.primary?.move, .answer)
         XCTAssertEqual(rail.primary?.title, "Answer")
-        XCTAssertEqual(moves(rail.secondary), [.force])
+        XCTAssertEqual(moves(rail.secondary), [])
         XCTAssertEqual(rail.more.first { $0.move == .start }?.reason, "It waits on your answer first.")
         XCTAssertEqual(moves(rail.more), [.moveTo, .restart, .unblock, .start, .cancel, .note])
         XCTAssertEqual(rail.stop?.reason, "No run is working.")
@@ -121,21 +121,21 @@ final class ActionRailTests: XCTestCase {
     func testAHeldTicket_UnblockIsThePrimary() throws {
         let rail = try rail("held")
         XCTAssertEqual(rail.primary?.move, .unblock)
-        XCTAssertEqual(moves(rail.secondary), [.force])
+        XCTAssertEqual(moves(rail.secondary), [])
         XCTAssertEqual(moves(rail.more), [.moveTo, .restart, .answer, .start, .cancel, .note])
     }
 
     func testNothingRunning_StartNowIsThePrimary() throws {
         let rail = try rail("nothing_running")
         XCTAssertEqual(rail.primary?.move, .start)
-        XCTAssertEqual(moves(rail.secondary), [.force])
+        XCTAssertEqual(moves(rail.secondary), [])
         XCTAssertFalse(rail.more.contains { $0.move == .start })
     }
 
     func testADoneTicket_EveryRefusalSaysWhy() throws {
         let rail = try rail("done")
         XCTAssertNil(rail.primary)
-        XCTAssertEqual(rail.secondary.map(\.reason), ["The ticket is done."])
+        XCTAssertEqual(moves(rail.secondary), [])
         XCTAssertEqual(rail.more.first { $0.move == .restart }?.reason, "The ticket is done.")
         XCTAssertNil(rail.more.first { $0.move == .moveTo }?.reason)
     }
@@ -156,31 +156,24 @@ final class ActionRailTests: XCTestCase {
 
     func testOnlyTheMovesTheReadJudgedAreOffered_AndARefusalWithoutAReasonStillSaysOne() {
         let rail = TicketActionRail(identifier: "TP-1", moves: TicketMoves([
-            "stop": TicketMoveRead(allowed: false), "unforce": TicketMoveRead(allowed: false, reason: "It isn't forced."),
+            "stop": TicketMoveRead(allowed: false), "restart": TicketMoveRead(allowed: false, reason: "The ticket is done."),
         ]))
         XCTAssertNil(rail.primary)
-        XCTAssertEqual(moves(rail.secondary), [.unforce])
-        XCTAssertEqual(moves(rail.more), [])
+        XCTAssertEqual(moves(rail.secondary), [])
+        XCTAssertEqual(moves(rail.more), [.restart])
+        XCTAssertEqual(rail.more.first?.reason, "The ticket is done.")
         XCTAssertEqual(rail.stop?.reason, TicketActionRail.unknownReason)
         XCTAssertEqual(moves(TicketActionRail(identifier: "TP-1", moves: TicketMoves([:])).items), [])
         XCTAssertEqual(TicketActionRail(identifier: "TP-1", moves: TicketMoves([:])).moreGroups, [])
     }
 
-    func testAForcedTicketOffersStopForcingInForcesPlace() {
-        let rail = TicketActionRail(identifier: "TP-1", moves: TicketMoves([
-            "force": TicketMoveRead(allowed: false, reason: "It is already forced."), "unforce": TicketMoveRead(allowed: true),
-        ]))
-        XCTAssertEqual(moves(rail.secondary), [.unforce])
-        XCTAssertEqual(rail.secondary.first?.title, TicketList.stopForcingTitle)
-    }
-
     func testEveryMoveAllowed_AnswerFirst_EachMoveOnce() {
         let rail = TicketActionRail(identifier: "TP-1", moves: Self.everyMoveAllowed, links: Self.links)
         XCTAssertEqual(rail.primary?.move, .answer)
-        XCTAssertEqual(moves(rail.secondary), [.openPullRequest, .unforce])
+        XCTAssertEqual(moves(rail.secondary), [.openPullRequest])
         XCTAssertEqual(moves(rail.more), [.moveTo, .restart, .unblock, .start, .cancel, .note])
         XCTAssertEqual(Set(moves(rail.items)).count, rail.items.count)
-        XCTAssertEqual(Set(moves(rail.items)), Set(TicketActionRail.Move.allCases).subtracting([.force]))
+        XCTAssertEqual(Set(moves(rail.items)), Set(TicketActionRail.Move.allCases))
     }
 
     // MARK: - Pressing a move
@@ -192,18 +185,14 @@ final class ActionRailTests: XCTestCase {
         XCTAssertEqual(rail.request(.stop), .sheet(.stopRun))
         XCTAssertEqual(rail.request(.moveTo, state: "Done"), .sheet(.moveTo("Done")))
         XCTAssertNil(rail.request(.moveTo))
-        XCTAssertEqual(rail.request(.unforce), .send(.stopForcing("TP-1")))
         XCTAssertEqual(rail.request(.restart), .sheet(.restart))
         XCTAssertEqual(rail.request(.unblock), .send(.unblock("TP-1")))
         XCTAssertEqual(rail.request(.note), .sheet(.note))
         XCTAssertEqual(rail.request(.cancel), .sheet(.cancel))
-        // Force is not on a rail that offers Stop Forcing.
-        XCTAssertNil(rail.request(.force))
     }
 
-    func testForceOpensItsSheet_AndARefusedMoveAsksForNothing() throws {
+    func testARefusedMoveAsksForNothing() throws {
         let rail = try rail("working")
-        XCTAssertEqual(rail.request(.force), .sheet(.force))
         XCTAssertNil(rail.request(.start))
         XCTAssertNil(rail.request(.answer))
     }
@@ -212,7 +201,7 @@ final class ActionRailTests: XCTestCase {
         let rail = try rail("working")
         let start = try XCTUnwrap(rail.more.first { $0.move == .start })
         XCTAssertEqual(TicketActionRail.accessibilityLabel(start), "Start Now, unavailable: A run is already working on it.")
-        XCTAssertEqual(TicketActionRail.accessibilityLabel(rail.secondary[0]), "Force…")
+        XCTAssertEqual(TicketActionRail.accessibilityLabel(try XCTUnwrap(rail.stop)), StopRunSheet.buttonTitle)
     }
 
     func testTheCancelCallGoesToItsEndpointWithTheNote() {

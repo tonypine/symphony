@@ -24,14 +24,12 @@
   },
   "concurrency": {
     "finishing_max": 2,
-    "forced_max": 1,
     "max_total": 3
   },
   "conflicts": [],
   "counts": {
     "claimed": 3,
     "conflicts": 0,
-    "forced": 0,
     "retrying": 0,
     "running": 3,
     "shipped_today": 3,
@@ -88,7 +86,6 @@
     "slots": 2,
     "used": 1
   },
-  "forced": [],
   "generated_at": "2026-10-07T14:20:00Z",
   "linear_usage": {
     "callers": [
@@ -211,7 +208,6 @@
     "queued": [],
     "running": [
       {
-        "forced": false,
         "identifier": "SHOP-301",
         "issue_id": "i-301",
         "sha": "4be1c0d9"
@@ -228,7 +224,6 @@
   "run_history": [],
   "running": [
     {
-      "forced": false,
       "issue_id": "i-305",
       "issue_identifier": "SHOP-305",
       "last_event": "notification",
@@ -267,7 +262,6 @@
       "workspace_path": "/Users/director/symphony-workspaces/web-shop/SHOP-305"
     },
     {
-      "forced": false,
       "issue_id": "i-131",
       "issue_identifier": "API-131",
       "last_event": "notification",
@@ -306,7 +300,6 @@
       "workspace_path": "/Users/director/symphony-workspaces/api/API-131"
     },
     {
-      "forced": false,
       "issue_id": "i-298",
       "issue_identifier": "SHOP-298",
       "last_event": "notification",
@@ -372,7 +365,6 @@
   "slot_waiting": [
     {
       "attempt": null,
-      "forced": false,
       "issue_id": "i-320",
       "issue_identifier": "SHOP-320",
       "open_questions": [],
@@ -390,7 +382,6 @@
     },
     {
       "attempt": null,
-      "forced": false,
       "issue_id": "i-133",
       "issue_identifier": "API-133",
       "open_questions": [],

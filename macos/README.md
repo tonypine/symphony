@@ -1,8 +1,8 @@
 # Symphony menu bar app
 
 Symphony for macOS is a menu bar app, `Symphony.app`. Its menu shows Symphony's status, and has Open
-Symphony, Start Symphony, Stop Symphony, Restart Symphony, Pause Dispatch, Resume Dispatch, Force a Ticket…,
-Check for Updates…, Repos…, Settings…, a Developer submenu (Open Dashboard in Terminal, Open Logs) and Quit.
+Symphony, Start Symphony, Stop Symphony, Restart Symphony, Pause Dispatch, Resume Dispatch, Check for
+Updates…, Repos…, Settings…, a Developer submenu (Open Dashboard in Terminal, Open Logs) and Quit.
 Open Symphony opens the [Symphony window](#the-symphony-window).
 
 The app runs Symphony with your `symphony.yml`, the same as running it from a terminal. A release carries a
@@ -130,10 +130,6 @@ app opens" in Settings (see [Launch at Login](#launch-at-login)).
   new dispatch: Symphony picks up no new issues, but agent runs already under way continue. The pause is kept
   across restarts.
 - **Resume Dispatch** lets Symphony pick up new issues again.
-- **Force a Ticket…** opens the Symphony window's Force a Ticket sheet (also ⇧⌘F in the window), which finds
-  the ticket as you type its identifier and shows its title and state, and forces that ticket past the dispatch limits, like
-  `symphony force`. The forced tickets are listed above it, each with **Stop forcing**. See
-  [Forced tickets](#forced-tickets).
 - **Open Symphony** (⌘O) opens the [Symphony window](#the-symphony-window), or brings it to the front.
 - **Developer** holds the items for looking under the hood: **Open Logs** opens Symphony's output log, and
   **Open Dashboard in Terminal**
@@ -409,26 +405,6 @@ The state root is found as Symphony finds it:
 - Otherwise `~/Library/Application Support/symphony` or, for the release Symphony.app runs, its `release/`
   subdirectory. The app can't tell which build runs, so it uses the one whose `control_url` was written
   last, then the one holding a `control_token`.
-
-## Forced tickets
-
-Force a Ticket… opens a sheet that asks for a Linear identifier, for example `TP-123`, and calls `POST /api/v1/control/force`
-with `{"identifier":"TP-123"}`, like `symphony force TP-123`. Symphony adds its force label
-(`execution.concurrency.force_label`, `expedite` by default) to the ticket, which then skips the slot limits but
-still waits for its blockers, a pause, usage limits and its reviews. It is offered while Symphony answers,
-including while dispatch is paused. If Symphony refuses (the ticket isn't in Linear or is already done, the
-label doesn't exist in Linear, the control token is wrong), an alert says why.
-
-While any ticket is forced, a **Forced** heading lists them under Pause and Resume, in queue order, as
-`/api/v1/state` reports them under `forced`:
-
-- `⚡ TP-123 · implementation · running · forced 5m`: the identifier, what the ticket does and waits on,
-  as the dashboards word it, and how long it has been forced.
-- `⚡ TP-100 → TP-101 · waiting for a human · forced 3d 2h · stale`: a forced parent with the sub-ticket it
-  is on, forced for longer than `execution.concurrency.forced_stale_after_hours`.
-
-Each row's submenu has **Stop forcing TP-123**, which removes the force label (`symphony force --clear`).
-The menu follows within one poll. A Symphony too old to report forced tickets shows no Forced heading.
 
 ## Repos
 
@@ -1074,14 +1050,14 @@ was opened from, its epic and its identifier, each part but the last a link), on
 **Tickets** switch, then **Find a ticket** (⌘F), the **Inbox** with the count of what needs you (its drawer on Home and
 a ticket's page) and **Refresh** (⌘R). A page's own controls sit in its control bar, one glass bar at the top of the
 page: what narrows the page (the scope pop-up, the page's search, its filters) at the left, what acts on it (Audit's
-**Export…**, Tickets' **Force a Ticket…**, Setup's **Check Again**) at the right. The scope pop-up shows only on the
+**Export…**, Setup's **Check Again**) at the right. The scope pop-up shows only on the
 pages that read it (Journal, Initiatives, Tickets, Learnings, Audit; Insights' own Repo pop-up reads it), always with
 its value; on Journal and Learnings it is the bar's one repo chooser. Home and Diagnostics have no bar: Home shows every repo.
 Insights keeps its one bar under its tabs, and on Shipped the **Shipped** and **Learnings** switch is in it. A bar whose
 controls don't fit on one line wraps them onto the next; its actions at the right always keep their whole titles.
 On Tickets the bar holds the saved view (a dot beside its name while the filters, columns or sort differ from it), a
 chip per filter with its own remove button, **Filter**, **Save View** while there is something to save, the count,
-**Columns**, **Force a Ticket…** and the details toggle (Space). The table under it shows Repo and Labels from 1600 pt
+**Columns** and the details toggle (Space). The table under it shows Repo and Labels from 1600 pt
 of page at the default columns; titles and causes shorten with an ellipsis, a situation's word never does. The
 details panel beside it shows the picked ticket's facts, with **Open Ticket** (Return or a double click).
 The sidebar has five destinations, on ⌘1 to ⌘5:
@@ -1168,7 +1144,7 @@ Home the first time, and on the page it showed last after that.
   turn, last activity, the tool call it waits on, its workspace with **Reveal**, and its tokens against the
   per-ticket cap), the **Timeline** of every run with its result, duration and tokens, and
   your moves ("Stopped by you, moved to Backlog", from the audit records), and the ticket's facts (state,
-  type, initiative, pull request, forced, and for a done ticket when it merged) and the agent's
+  type, initiative, pull request, and for a done ticket when it merged) and the agent's
   last message. It reads `/api/v1/:issue_identifier`, `/api/v1/runs` and `/api/v1/audit` besides the state;
   a done ticket, which Symphony no longer tracks, shows what the state and the run records still say. Its
   actions: **View Transcript**, **Open in Linear**, **Stop Run…**, and under ⋯ **Copy API URL**, **Show Audit
@@ -1240,7 +1216,7 @@ Home the first time, and on the page it showed last after that.
   left on polling. Finish Setup… ticks the steps already done. The QA fixture `github-updates-setup` answers the
   walkthrough request by request, and `github-updates-add-repo` Add Repo's Instant updates step.
 - **Diagnostics** shows Symphony's own health in plain words: the connection (version, API URL, uptime, last
-  update), capacity (agent slots, landing slots, forced allowance, initiative slots), Linear requests by
+  update), capacity (agent slots, landing slots, initiative slots), Linear requests by
   caller over the last hour, the CI and review pollers and GitHub webhooks, and stray processes. **Copy State
   JSON** copies `/api/v1/state` as Symphony served it, and **Open Logs** does what
   the menu item does.
@@ -1427,7 +1403,7 @@ Ten more variables, read only in QA mode:
 - `SYMPHONY_BAR_QA_API_FIXTURES=<dir>` makes the app read Symphony's local API from files instead of
   Symphony, so QA walks every view with fixed data and no Linear or model calls: each GET reads
   `<dir>/<path>.json` (for example `<dir>/api/v1/state.json` for `/api/v1/state`) and answers 404 when the
-  file is missing, and each control POST (Pause, Resume, Force, Stop Run, and the Inbox's moves and Undo) is
+  file is missing, and each control POST (Pause, Resume, Stop Run, and the Inbox's moves and Undo) is
   appended as one JSON line to `api-requests.jsonl` under the QA root and answered 200, with
   `<dir>/<path>.json` as the body when there is one (the `inbox` fixtures answer each move from
   `api/v1/control/`). Each GET is logged too, to `api-reads.jsonl` beside it, with its time, path,
@@ -1435,7 +1411,7 @@ Ten more variables, read only in QA mode:
   (`SYMPHONY_BAR_CONTROL_URL`) gets both logs the same way. The menu, the Repos window and the Symphony window
   all read through it, so the app shows Symphony as running (external). The fixtures of a running Symphony
   are in [`Tests/Fixtures/director-app/running`](Tests/Fixtures/director-app/running), and those of the
-  Overview's four states next to it: `flowing`, `attention` (a stuck forced ticket and a Codex usage-limit
+  Overview's four states next to it: `flowing`, `attention` (a stuck ticket and a Codex usage-limit
   hold; the stuck ticket, SHOP-305, has a failed run 1, its own endpoint and its transcript, SHOP-288 is a done
   ticket, the Inbox holds two pull requests, and Stop Run's requests are answered from `api/v1/control/`),
   `paused` (paused for "Deploy freeze") and `idle`, of Home: `home` (its Home read holds the catalog's two lists,
@@ -1447,7 +1423,7 @@ Ten more variables, read only in QA mode:
   blocks; the plan TP-923, whose brief mentions TP-947; TP-895's pull request, TP-896's clarify and TP-897's
   block, whose texts mention tickets and pull requests for their chips), of the pull request page: `pull-request`
   (`inbox-decision`'s content plus PR #448's page: two Code Review verdicts, four areas and TP-891's PR #446
-  overlapping it), of Tickets: `tickets` (tickets in every stage, a forced ticket, SHOP-325, a blocked one, a
+  overlapping it), of Tickets: `tickets` (tickets in every stage, a blocked one, a
   conflict, and API-140, which a `tickets.priorities` filter passes over) and `tickets-designed` (the design catalog's
   ten tickets, `TICKET_ROWS`, as the Tickets page is drawn from them), of the dispatch control's limit hold: `holding` (a Claude 5-hour limit), and of Shipped: `shipped` (14 days of
   merges in `web-shop` and `api` across the Gift cards and Rate limits initiatives, 14 of them in the last 7 days and 3
@@ -1495,7 +1471,7 @@ Ten more variables, read only in QA mode:
 - `SYMPHONY_BAR_QA_SCRIPTED=1` lets a script drive the app without Accessibility access. The app presses the
   menu item whose title the first line of a file in `commands/` holds (files are taken in name order and
   deleted; a name starting with `.` is skipped, so write one and rename it). As a click would, it presses
-  only a visible, enabled item; an item in a visible item's submenu, such as Stop forcing TP-123, counts.
+  only a visible, enabled item; an item in a visible item's submenu, such as Developer's Open Logs, counts.
   It keeps `status.json` current: its pid, version, build and bundle path, the pid of the Symphony it runs,
   every visible menu item (submenu items right after the item they open from) with whether it is enabled,
   the presses it handled (`pressed`, `disabled` or `missing`) and the alerts it would have shown. It shows
@@ -1503,10 +1479,9 @@ Ten more variables, read only in QA mode:
   release notes window are recorded the same way, the window as its heading ("Symphony 0.0.1.43") and the
   text above the notes, then the notes. A recorded notification the app withdraws, such as "Updating Symphony
   to vX" once its update ends or is cancelled, is listed by its title under `withdrawn`. A prompt is answered
-  with the rest of the command file and cancelled when there is none. Pause Dispatch… and Force a Ticket…,
-  which open the Symphony window's sheets otherwise, are answered the same way: `Force a Ticket…` on the
-  first line and `TP-123` on the second forces TP-123; `Pause Dispatch…` with a second line pauses with that
-  reason, and without one pauses with the menu's.
+  with the rest of the command file and cancelled when there is none. Pause Dispatch…, which opens the
+  Symphony window's sheet otherwise, is answered the same way: `Pause Dispatch…` with a second line pauses
+  with that reason, and without one pauses with the menu's.
 
 In QA mode the app also opens its status-bar menu on screen when asked, so QA can screenshot it: an empty
 file `status-menu/open-<pid>` under the QA root, named after the app's own process ID, makes the app delete it

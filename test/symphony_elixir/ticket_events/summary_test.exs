@@ -328,6 +328,7 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
       assert render("person.action", %{action: "move", to: "Rework", from: "QA"}) == %{title: "The Director moved the ticket to Rework", detail: "from QA"}
       assert render("person.action", %{action: "move", move: "backlog"}).title == "The Director moved the ticket to backlog"
       assert render("person.action", %{action: "move"}).title == "The Director moved the ticket"
+      # A force recorded before forcing was removed (TP-1611) still reads as it did.
       assert render("person.action", %{action: "force"}).title == "The Director forced a dispatch"
       assert render("person.action", %{action: "unblock"}).title == "The Director unblocked the ticket"
       assert render("person.action", %{action: "restart"}).title == "The Director restarted the ticket"

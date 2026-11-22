@@ -1,10 +1,10 @@
 import Foundation
 
 /// What the Overview reads from one `GET /api/v1/state` payload: the menu's `StateSnapshot` (pause, usage limits,
-/// budget, forced tickets) and the lists of tickets by stage. Every field of an entry is optional, so an entry
+/// budget) and the lists of tickets by stage. Every field of an entry is optional, so an entry
 /// missing one never fails the whole state.
 public struct OverviewState: Equatable {
-    /// The pause, usage limits, budget and forced tickets, read as the menu reads them.
+    /// The pause, usage limits and budget, read as the menu reads them.
     public var snapshot: StateSnapshot
     /// Symphony's clock when it took the state; ages are measured against it.
     public var generatedAt: Date?

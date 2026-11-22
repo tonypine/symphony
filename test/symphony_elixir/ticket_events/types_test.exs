@@ -128,6 +128,10 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       assert {:ok, %{action: "unblock"}} = Types.validate("person.action", %{action: :unblock}, :person, nil)
     end
 
+    test "a new force is no person's action: forcing is gone (TP-1611)" do
+      assert Types.validate("person.action", %{action: "force"}, :person, nil) == {:error, {:invalid_payload, [:action]}}
+    end
+
     test "rejects an agent outside the type's writers or run kinds" do
       assert {:error, {:not_allowed, reason}} =
                Types.validate("finding.recorded", finding(), :agent, "implementation")

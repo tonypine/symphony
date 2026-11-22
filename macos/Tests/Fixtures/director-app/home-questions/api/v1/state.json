@@ -50,7 +50,6 @@
   },
   "concurrency": {
     "finishing_max": 2,
-    "forced_max": 1,
     "max_total": 10
   },
   "conflicts": [
@@ -68,7 +67,6 @@
   "counts": {
     "claimed": 3,
     "conflicts": 1,
-    "forced": 1,
     "retrying": 2,
     "running": 3,
     "shipped_today": 3,
@@ -183,25 +181,6 @@
     "slots": 2,
     "used": 1
   },
-  "forced": [
-    {
-      "blockers": [],
-      "forced_for_seconds": 240,
-      "forced_since": "2026-10-07T14:16:00Z",
-      "issue_id": "i-325",
-      "issue_identifier": "SHOP-325",
-      "phase": "implementation",
-      "position": 1,
-      "running": false,
-      "stale": false,
-      "state": "Todo",
-      "sub_issue": null,
-      "summary": "implementation \u00b7 waiting for a forced slot",
-      "title": "Express checkout",
-      "waiting_on": "a forced slot",
-      "waiting_on_human": false
-    }
-  ],
   "generated_at": "2026-10-07T14:20:00Z",
   "linear_usage": {
     "callers": [
@@ -245,7 +224,6 @@
         "kind": "waiting_on_you",
         "tickets": [
           {
-            "forced": false,
             "identifier": "DOCS-40",
             "issue_id": "i-40",
             "outcome": "not_a_candidate",
@@ -272,7 +250,6 @@
             "wait": null
           },
           {
-            "forced": false,
             "identifier": "SHOP-290",
             "issue_id": "i-290",
             "outcome": "not_a_candidate",
@@ -305,7 +282,6 @@
         "kind": "retrying",
         "tickets": [
           {
-            "forced": false,
             "identifier": "SHOP-311",
             "issue_id": "i-311",
             "outcome": "held",
@@ -336,7 +312,6 @@
             "wait": null
           },
           {
-            "forced": false,
             "identifier": "API-134",
             "issue_id": "i-134",
             "outcome": "held",
@@ -373,7 +348,6 @@
         "kind": "blocked_by_ticket",
         "tickets": [
           {
-            "forced": false,
             "identifier": "SHOP-322",
             "issue_id": "i-322",
             "outcome": "held",
@@ -406,7 +380,6 @@
         "kind": "paused_by_rule",
         "tickets": [
           {
-            "forced": false,
             "identifier": "API-140",
             "issue_id": "i-140",
             "outcome": "held",
@@ -439,7 +412,6 @@
         "kind": "waiting_for_ci",
         "tickets": [
           {
-            "forced": false,
             "identifier": "SHOP-301",
             "issue_id": "i-301",
             "outcome": "not_a_candidate",
@@ -466,7 +438,6 @@
             "wait": null
           },
           {
-            "forced": false,
             "identifier": "API-119",
             "issue_id": "i-119",
             "outcome": "not_a_candidate",
@@ -499,7 +470,6 @@
         "kind": "waiting_for_build",
         "tickets": [
           {
-            "forced": false,
             "identifier": "DOCS-44",
             "issue_id": "i-44",
             "outcome": "not_a_candidate",
@@ -532,19 +502,18 @@
         "kind": "waiting_for_slot",
         "tickets": [
           {
-            "forced": true,
             "identifier": "SHOP-325",
             "issue_id": "i-325",
             "outcome": "waits",
             "position": 1,
-            "reason": "next: the forced slot is taken",
+            "reason": "next: work slots full",
             "repo_key": "web-shop",
             "rule": null,
             "situation": {
               "and_more": 0,
-              "cause": "The forced slot is taken.",
+              "cause": "Both work slots are taken.",
               "kind": "waiting_for_slot",
-              "next": "It starts when the forced run ends.",
+              "next": "It starts when a run ends.",
               "retry": null,
               "run": null,
               "since": "2026-10-07T14:08:00Z",
@@ -559,7 +528,6 @@
             "wait": "work slots full"
           },
           {
-            "forced": false,
             "identifier": "SHOP-320",
             "issue_id": "i-320",
             "outcome": "waits",
@@ -586,7 +554,6 @@
             "wait": "work slots full"
           },
           {
-            "forced": false,
             "identifier": "API-133",
             "issue_id": "i-133",
             "outcome": "waits",
@@ -619,7 +586,6 @@
         "kind": "working",
         "tickets": [
           {
-            "forced": false,
             "identifier": "SHOP-305",
             "issue_id": "i-305",
             "outcome": "running",
@@ -653,7 +619,6 @@
             "wait": null
           },
           {
-            "forced": false,
             "identifier": "API-131",
             "issue_id": "i-131",
             "outcome": "running",
@@ -684,7 +649,6 @@
             "wait": null
           },
           {
-            "forced": false,
             "identifier": "SHOP-298",
             "issue_id": "i-298",
             "outcome": "running",
@@ -711,7 +675,6 @@
             "wait": null
           },
           {
-            "forced": false,
             "identifier": "API-127",
             "issue_id": "i-127",
             "outcome": "running",
@@ -743,19 +706,18 @@
     "next": "SHOP-325",
     "queue": [
       {
-        "forced": true,
         "identifier": "SHOP-325",
         "issue_id": "i-325",
         "outcome": "waits",
         "position": 1,
-        "reason": "next: the forced slot is taken",
+        "reason": "next: work slots full",
         "repo_key": "web-shop",
         "rule": null,
         "situation": {
           "and_more": 0,
-          "cause": "The forced slot is taken.",
+          "cause": "Both work slots are taken.",
           "kind": "waiting_for_slot",
-          "next": "It starts when the forced run ends.",
+          "next": "It starts when a run ends.",
           "retry": null,
           "run": null,
           "since": "2026-10-07T14:08:00Z",
@@ -770,7 +732,6 @@
         "wait": "work slots full"
       },
       {
-        "forced": false,
         "identifier": "SHOP-320",
         "issue_id": "i-320",
         "outcome": "waits",
@@ -797,7 +758,6 @@
         "wait": "work slots full"
       },
       {
-        "forced": false,
         "identifier": "API-133",
         "issue_id": "i-133",
         "outcome": "waits",
@@ -858,7 +818,6 @@
     "queued": [],
     "running": [
       {
-        "forced": false,
         "identifier": "SHOP-301",
         "issue_id": "i-301",
         "sha": "4be1c0d9"
@@ -894,7 +853,6 @@
   "run_history": [],
   "running": [
     {
-      "forced": false,
       "issue_id": "i-305",
       "issue_identifier": "SHOP-305",
       "last_event": "notification",
@@ -926,7 +884,6 @@
       "workspace_path": "/Users/director/symphony-workspaces/web-shop/SHOP-305"
     },
     {
-      "forced": false,
       "issue_id": "i-131",
       "issue_identifier": "API-131",
       "last_event": "notification",
@@ -958,7 +915,6 @@
       "workspace_path": "/Users/director/symphony-workspaces/api/API-131"
     },
     {
-      "forced": false,
       "issue_id": "i-298",
       "issue_identifier": "SHOP-298",
       "last_event": "notification",
@@ -1017,7 +973,6 @@
   "slot_waiting": [
     {
       "attempt": null,
-      "forced": false,
       "issue_id": "i-320",
       "issue_identifier": "SHOP-320",
       "reason": "work slots full",
@@ -1028,7 +983,6 @@
     },
     {
       "attempt": null,
-      "forced": false,
       "issue_id": "i-133",
       "issue_identifier": "API-133",
       "reason": "work slots full",
@@ -1039,10 +993,9 @@
     },
     {
       "attempt": null,
-      "forced": true,
       "issue_id": "i-325",
       "issue_identifier": "SHOP-325",
-      "reason": "forced allowance full",
+      "reason": "work slots full",
       "repo_key": "web-shop",
       "since": "2026-10-07T14:16:00Z",
       "state": "Todo",

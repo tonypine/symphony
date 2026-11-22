@@ -1,12 +1,6 @@
 import SwiftUI
 import SymphonyBarCore
 
-/// The Force a Ticket sheet asked for, with what its field starts with.
-struct ForceSheetRequest: Identifiable, Equatable {
-    let id = UUID()
-    var input: String
-}
-
 // MARK: - The window model's Tickets and dispatch controls
 
 extension SymphonyWindowModel {
@@ -75,28 +69,14 @@ extension SymphonyWindowModel {
         pauseSheetShown = true
     }
 
-    /// Force a Ticket…, from the popover, the toolbar, the inspector, ⇧⌘F or the menu.
-    func openForceSheet(_ identifier: String? = nil) {
-        guard !dispatchInFlight else { return }
-        dispatchPopoverShown = false
-        dispatchError = nil
-        forceSheet = ForceSheetRequest(input: identifier ?? "")
-    }
-
     func cancelDispatchSheet() {
         guard !dispatchInFlight else { return }
         pauseSheetShown = false
-        forceSheet = nil
         dispatchError = nil
     }
 
     func confirmPause(reason: String) {
         sendDispatch(PauseSheet.action(reason: reason)) { $0.pauseSheetShown = false }
-    }
-
-    func confirmForce(input: String) {
-        guard let identifier = ForceSheet.identifier(input) else { return }
-        sendDispatch(.force(identifier)) { $0.forceSheet = nil }
     }
 
     /// Resume Dispatch needs no sheet: it changes nothing already running (P5).
@@ -114,11 +94,6 @@ extension SymphonyWindowModel {
     func performUpdateAction(_ action: WindowState.Action) {
         dispatchPopoverShown = false
         onAction(action)
-    }
-
-    /// Stop Forcing, from the inspector, a row's menu, the ticket page or Needs attention.
-    func stopForcing(_ identifier: String) {
-        send(.stopForcing(identifier))
     }
 
     /// Sends `action`; on success `done` closes what sent it, on failure the sheet or popover says why.
@@ -346,8 +321,7 @@ struct TicketsContent: View {
                     viewsMenu: model.ticketViewsMenu,
                     viewActions: viewActions,
                     controls: TicketsBarControls(
-                        page: model.pageBar, search: $model.ticketSearch, searchRequested: $model.searchRequested,
-                        force: { model.openForceSheet() }, canForce: model.dispatchControl.canForce
+                        page: model.pageBar, search: $model.ticketSearch, searchRequested: $model.searchRequested
                     ),
                     situations: model.overviewState?.snapshot.situations ?? [:],
                     pullRequests: client.watchState.watches.compactMapValues(\.facts.prNumber)
@@ -381,9 +355,6 @@ struct TicketsContent: View {
     private var actions: TicketsActions {
         TicketsActions(
             open: model.openTicket,
-            force: { model.openForceSheet($0) },
-            stopForcing: model.stopForcing,
-            canForce: model.dispatchControl.canForce,
             phases: TicketMoveMenu.phases(inState: client.stateJSON),
             move: model.openMove,
             starts: TicketStart.byIdentifier(inState: client.stateJSON),
@@ -395,11 +366,6 @@ struct TicketsContent: View {
 /// What Tickets' rows and inspector do.
 struct TicketsActions {
     var open: (String) -> Void = { _ in }
-    var force: (String) -> Void = { _ in }
-    var stopForcing: (String) -> Void = { _ in }
-    var canForce = true
-    /// Why Force… is off: Symphony is stopped. Nil when it can force.
-    var forceReason: String? { canForce ? nil : TicketList.stoppedReason }
     /// The state payload's phases, for a row's Move to….
     var phases: [MachinePhase] = []
     /// A Move to… pick: its sheet.
@@ -425,7 +391,7 @@ struct TicketsView: View {
     let payload: TicketsPayload
     /// The payload's rows the search finds, worked out by the model once per change of either, never in `body`.
     let rows: [TicketsRow]
-    /// The state's tickets: the forced marks, the situations' causes and the details' facts.
+    /// The state's tickets: the situations' causes and the details' facts.
     var list: TicketList?
     var catalog = TicketColumn.catalog
     var scope = OverviewScope.all
@@ -439,7 +405,7 @@ struct TicketsView: View {
     /// The views menu at the bar's left, nil before the views were read.
     var viewsMenu: TicketViewsMenu?
     var viewActions = TicketViewActions()
-    /// The window's part of the bar: the scope, the search and Force a Ticket….
+    /// The window's part of the bar: the scope and the search.
     var controls = TicketsBarControls()
     /// Each ticket's situation as the state words it, for the tickets the state's lists leave out.
     var situations: [String: Situation] = [:]
@@ -474,7 +440,7 @@ struct TicketsView: View {
 
     private func table(columns: [TicketColumn]) -> some View {
         TicketsTable(
-            rows: rows, columns: columns, situations: situations, forced: Set(list?.rows.filter(\.forced).map(\.identifier) ?? []),
+            rows: rows, columns: columns, situations: situations,
             reference: reference, sort: $query.sort, selection: $selection,
             empty: DataTableEmpty(
                 search.isEmpty && query.chips.isEmpty ? TicketList.emptyTitle : TicketList.noMatchTitle,
@@ -499,7 +465,7 @@ struct TicketsView: View {
     }
 }
 
-/// A row's context menu: Open Ticket, Force… or Stop Forcing, Start Now when it can, and Move to….
+/// A row's context menu: the items `TicketRowMenuItem.items` lists, in its order.
 struct TicketRowMenu: View {
     let row: TicketsRow
     let columns: [TicketColumn]
@@ -510,41 +476,31 @@ struct TicketRowMenu: View {
     var body: some View {
         let identifier = row.identifier
         let tracked = list?.row(identifier) ?? TicketList.Row(row, columns: columns, reference: reference)
-        Button(TicketList.openTitle) { actions.open(identifier) }
-        if tracked.forced {
-            Button(TicketList.stopForcingTitle) { actions.stopForcing(identifier) }
-        } else {
-            Button {
-                actions.force(identifier)
-            } label: {
-                Text(TicketList.forceTitle)
-                if let reason = actions.forceReason { Text(reason) }
+        let items = TicketRowMenuItem.items(start: actions.starts[identifier], move: actions.moveMenu(tracked))
+        ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+            switch item {
+            case .open:
+                Button(item.title) { actions.open(identifier) }
+            case let .start(start):
+                StartNowMenuItem(identifier: identifier, start: start) { actions.start(identifier) }
+            case let .move(menu):
+                Menu(item.title) { MoveToMenuItems(menu: menu, move: actions.move) }
             }
-            .disabled(actions.forceReason != nil)
-        }
-        if let start = actions.starts[identifier] {
-            StartNowMenuItem(identifier: identifier, start: start) { actions.start(identifier) }
-        }
-        if let menu = actions.moveMenu(tracked) {
-            Menu(TicketMoveMenu.title) { MoveToMenuItems(menu: menu, move: actions.move) }
         }
     }
 }
 
-/// The window's part of Tickets' control bar (TP-1497): the scope, the search and Force a Ticket….
+/// The window's part of Tickets' control bar (TP-1497): the scope and the search.
 struct TicketsBarControls {
     var page = PageBar()
     var search: Binding<String> = .constant("")
     /// Set by ⌘F to put the keyboard in the search.
     var searchRequested: Binding<Bool> = .constant(false)
-    var force: () -> Void = {}
-    var canForce = true
 }
 
 /// Tickets' control bar (the catalog's `.tk-bar`, glass at the card's radius): at the left the saved view with its dot
 /// while the bar differs from it, a hairline, a chip per filter set with its remove button, Filter, Save View while
-/// there are changes to save, then the scope and the search; at the right the count, Columns, Force a Ticket… and the
-/// details toggle.
+/// there are changes to save, then the scope and the search; at the right the count, Columns and the details toggle.
 struct TicketsFilterBar: View {
     /// Why the Ticket column can't be hidden.
     static let identifierStays = "Every table shows the ticket."
@@ -611,10 +567,6 @@ struct TicketsFilterBar: View {
                     }
                 }
             }
-            Button(DispatchControl.forceTitle, action: controls.force)
-                .directorButton(.secondary, size: .small, glyph: DesignTokens.Status.forced.symbol,
-                                disabledReason: controls.canForce ? nil : TicketList.stoppedReason)
-                .help("Force a ticket (⇧⌘F)")
             IconButton(
                 "sidebar.trailing", help: detailsShown ? "Hide the details (Space)" : "Show the details (Space)", size: .small,
                 isOn: $detailsShown
@@ -789,7 +741,7 @@ struct TicketViewSheetsPresenter: ViewModifier {
 }
 
 /// The details panel (`.tk-inspector`): the picked ticket's identifier with its repo and epic chips, its title, its
-/// situation, its facts as a two-column list, then Open Ticket and Force… (or Stop Forcing) beside it.
+/// situation, its facts as a two-column list, then Open Ticket.
 struct TicketDetailsPanel: View {
     let details: TicketDetails
     var reference = Date()
@@ -808,7 +760,7 @@ struct TicketDetailsPanel: View {
             Text(details.title)
                 .textStyle(.heading)
                 .fixedSize(horizontal: false, vertical: true)
-            SituationLine(details.situation, reference: reference, size: .compact, forced: details.forced)
+            SituationLine(details.situation, reference: reference, size: .compact)
             if !details.facts.isEmpty {
                 // The catalog's details list (`.facts`): the shared Key-value list in the secondary style.
                 KeyValueList(style: .secondary, rowGap: DesignTokens.KeyValue.compactRowGap) {
@@ -820,14 +772,6 @@ struct TicketDetailsPanel: View {
             HStack(alignment: .top, spacing: DesignTokens.Space.s2) {
                 Button(TicketList.openTitle) { actions.open(details.identifier) }
                     .directorButton(.primary)
-                // Force… or Stop Forcing, whichever the ticket can take.
-                if details.forced {
-                    Button(TicketList.stopForcingTitle) { actions.stopForcing(details.identifier) }
-                        .directorButton()
-                } else {
-                    Button(TicketList.forceTitle) { actions.force(details.identifier) }
-                        .directorButton(glyph: DesignTokens.Status.forced.symbol, disabledReason: actions.forceReason)
-                }
             }
             .padding(.top, DesignTokens.Tickets.movesTopPadding)
         }
@@ -857,7 +801,6 @@ struct DispatchControlButton: View {
                     pause: model.openPauseSheet,
                     resume: model.resumeDispatch,
                     tryNow: model.tryUsageLimitNow,
-                    force: { model.openForceSheet() },
                     cancelUpdate: { model.performUpdateAction(.cancelUpdate) },
                     updateNow: { model.performUpdateAction(.updateNow) }
                 )
@@ -873,7 +816,6 @@ struct DispatchPopover: View {
         var pause: () -> Void = {}
         var resume: () -> Void = {}
         var tryNow: (StateSnapshot.UsageLimit) -> Void = { _ in }
-        var force: () -> Void = {}
         var cancelUpdate: () -> Void = {}
         var updateNow: () -> Void = {}
     }
@@ -900,7 +842,7 @@ struct DispatchPopover: View {
                     }
                 }
                 .font(DesignTokens.TypeStyle.secondary.font)
-                Text(control.update == nil ? "No new run starts until you resume, forced tickets included." : "No new run starts until the update ends, forced tickets included.")
+                Text(control.update == nil ? "No new run starts until you resume." : "No new run starts until the update ends.")
                     .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -942,8 +884,6 @@ struct DispatchPopover: View {
             HStack(alignment: .top, spacing: DesignTokens.Space.s2) {
                 if working { ProgressView().controlSize(.small).accessibilityLabel("Working") }
                 Spacer(minLength: 0)
-                Button(DispatchControl.forceTitle, action: actions.force)
-                    .directorButton(disabledReason: working ? TicketList.waitReason : control.canForce ? nil : TicketList.stoppedReason)
                 // While an update holds dispatch, Pause and Resume Dispatch wait until it ends; one ready holds nothing.
                 if control.canResume {
                     Button(DispatchControl.resumeTitle, action: actions.resume)
@@ -975,7 +915,7 @@ struct DispatchPopover: View {
     }
 }
 
-// MARK: - D12a and D12b: the sheets
+// MARK: - D12a: the sheet
 
 /// C17: Pause Dispatch. What happens, what stays, an optional reason, Cancel and Pause Dispatch.
 struct PauseSheetView: View {
@@ -995,65 +935,13 @@ struct PauseSheetView: View {
 
     var body: some View {
         DispatchSheet(title: PauseSheet.title, happens: PauseSheet.happens, stays: PauseSheet.stays, error: error,
-                      working: working, verb: PauseSheet.buttonTitle, sendReason: nil, cancel: cancel, confirm: { confirm(reason) }) {
+                      working: working, verb: PauseSheet.buttonTitle, cancel: cancel, confirm: { confirm(reason) }) {
             DirectorTextField(PauseSheet.reasonLabel, text: $reason, placeholder: PauseSheet.reasonPrompt, help: PauseSheet.reasonHelp)
         }
     }
 }
 
-/// C17: Force a Ticket. A field that finds the ticket as it is typed, its title and state, what forcing skips and
-/// what it doesn't, Cancel and Force.
-struct ForceSheetView: View {
-    let list: TicketList?
-    let working: Bool
-    let error: String?
-    let cancel: () -> Void
-    let confirm: (_ input: String) -> Void
-    @State private var input: String
-
-    init(list: TicketList?, input: String, working: Bool, error: String?, cancel: @escaping () -> Void, confirm: @escaping (String) -> Void) {
-        self.list = list
-        self.working = working
-        self.error = error
-        self.cancel = cancel
-        self.confirm = confirm
-        _input = State(initialValue: input)
-    }
-
-    var body: some View {
-        DispatchSheet(title: ForceSheet.title, happens: ForceSheet.skips, stays: ForceSheet.keeps, error: error, working: working,
-                      verb: ForceSheet.buttonTitle,
-                      sendReason: ForceSheet.canForce(input, in: list) ? nil : "Name a ticket that isn't forced yet, such as SHOP-301.",
-                      cancel: cancel, confirm: { confirm(input) }) {
-            VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-                DirectorTextField(ForceSheet.fieldLabel, text: $input, placeholder: ForceSheet.fieldPrompt)
-                let matches = ForceSheet.matches(input, in: list)
-                if ForceSheet.ticket(input, in: list) == nil, !matches.isEmpty {
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(matches) { row in
-                            Button { input = row.identifier } label: {
-                                Text("\(row.identifier)  \(row.titleText)").lineLimit(1)
-                            }
-                            .directorButton(.quiet, size: .small)
-                        }
-                    }
-                    .font(DesignTokens.TypeStyle.secondary.font)
-                }
-                if let summary = ForceSheet.summary(input, in: list) {
-                    Text(summary)
-                        .font(DesignTokens.TypeStyle.secondary.font)
-                        .padding(DesignTokens.Space.s2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(DesignTokens.Surface.raised.color, in: RoundedRectangle(cornerRadius: DesignTokens.Radius.row))
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityLabel(summary.replacingOccurrences(of: "\n", with: ", "))
-                }
-            }
-        }
-    }
-}
-
-/// P5's layout, shared by both sheets.
+/// P5's layout, for the Pause Dispatch sheet.
 private struct DispatchSheet<Options: View>: View {
     let title: String
     let happens: String
@@ -1061,8 +949,6 @@ private struct DispatchSheet<Options: View>: View {
     let error: String?
     let working: Bool
     let verb: String
-    /// Why the verb is off, nil when it can send.
-    let sendReason: String?
     let cancel: () -> Void
     let confirm: () -> Void
     @ViewBuilder var options: Options
@@ -1089,7 +975,7 @@ private struct DispatchSheet<Options: View>: View {
                     .directorButton(disabledReason: working ? TicketList.waitReason : nil)
                 Button(verb, action: confirm)
                     .keyboardShortcut(.defaultAction)
-                    .directorButton(.primary, disabledReason: working ? TicketList.waitReason : sendReason)
+                    .directorButton(.primary, disabledReason: working ? TicketList.waitReason : nil)
             }
         }
         .padding(DesignTokens.Space.s5)
@@ -1097,7 +983,7 @@ private struct DispatchSheet<Options: View>: View {
     }
 }
 
-/// Presents the window model's Pause Dispatch and Force a Ticket sheets.
+/// Presents the window model's Pause Dispatch sheet.
 struct DispatchSheetsPresenter: ViewModifier {
     @ObservedObject var model: SymphonyWindowModel
 
@@ -1106,11 +992,6 @@ struct DispatchSheetsPresenter: ViewModifier {
             .sheet(isPresented: $model.pauseSheetShown) {
                 PauseSheetView(working: model.dispatchInFlight, error: model.dispatchError, cancel: model.cancelDispatchSheet,
                                confirm: { model.confirmPause(reason: $0) })
-                .pointerButtons()
-            }
-            .sheet(item: $model.forceSheet) { request in
-                ForceSheetView(list: model.allTickets, input: request.input, working: model.dispatchInFlight,
-                               error: model.dispatchError, cancel: model.cancelDispatchSheet, confirm: { model.confirmForce(input: $0) })
                 .pointerButtons()
             }
     }

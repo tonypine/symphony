@@ -12,10 +12,9 @@ defmodule SymphonyElixir.Dispatch.Candidates do
 
   The rebuilt issue carries the record's priority, labels, open blockers and sub-issues (each with its
   id and state), parent and creation time, so the dispatch gates (`Issue.blocked?/2`, a plan parent's
-  wait on its sub-tickets, the priority filter, a forced ticket's label), the epic lanes
-  (`SymphonyElixir.EpicLanes.plan/4`) and the dispatch order (priority, then age) read it as they read
-  a polled issue: the priority filter stays a gate because a forced ticket and a retry waiting for a
-  slot bypass it. It also carries the record's description, team and project, equal to the polled
+  wait on its sub-tickets, the priority filter), the epic lanes (`SymphonyElixir.EpicLanes.plan/4`)
+  and the dispatch order (priority, then age) read it as they read a polled issue: the priority filter
+  stays a gate because a retry waiting for a slot bypasses it. It also carries the record's description, team and project, equal to the polled
   issue's, for the readers that rebuild a ticket from its record.
 
   `from_records/4` and `issue_from_record/1` are pure: no store read, no Linear read, no process. The

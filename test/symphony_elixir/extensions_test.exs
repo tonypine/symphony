@@ -704,7 +704,6 @@ defmodule SymphonyElixir.ExtensionsTest do
         "conflicts" => 0,
         "retrying" => 1,
         "claimed" => 2,
-        "forced" => 2,
         "shipped_today" => 1,
         "waiting_on_you" => 0,
         "review_inconclusive" => %{"invalid_verdict" => 1}
@@ -739,7 +738,6 @@ defmodule SymphonyElixir.ExtensionsTest do
           "step" => nil,
           "started_at" => state_payload["running"] |> List.first() |> Map.fetch!("started_at"),
           "last_event_at" => nil,
-          "forced" => false,
           "tokens" => %{
             "input_tokens" => 4,
             "uncached_input_tokens" => 4,
@@ -796,8 +794,7 @@ defmodule SymphonyElixir.ExtensionsTest do
           "due_at" => state_payload["retrying"] |> List.first() |> Map.fetch!("due_at"),
           "error" => "boom",
           "worker_host" => nil,
-          "workspace_path" => nil,
-          "forced" => false
+          "workspace_path" => nil
         }
       ],
       "drain_report" => state_payload["drain_report"],
@@ -940,8 +937,7 @@ defmodule SymphonyElixir.ExtensionsTest do
           "state" => "Todo",
           "reason" => "a Merging issue is waiting for a slot",
           "attempt" => nil,
-          "since" => "2026-10-03T06:00:00Z",
-          "forced" => false
+          "since" => "2026-10-03T06:00:00Z"
         }
       ],
       "dispatch_skipped" => [
@@ -995,45 +991,7 @@ defmodule SymphonyElixir.ExtensionsTest do
         }
       ],
       "app_update" => %{"unblocks" => 1, "issue_identifiers" => ["MT-UPDATE"], "latest_release" => nil, "build_line" => nil, "latest_build" => nil},
-      "forced" => [
-        %{
-          "issue_id" => "forced-http",
-          "issue_identifier" => "MT-FORCED",
-          "title" => "Fix the release",
-          "repo_key" => "web",
-          "state" => "In Review",
-          "forced_since" => "2026-10-03T05:00:00Z",
-          "forced_for_seconds" => 3_600,
-          "stale" => false,
-          "position" => 1,
-          "waiting_on_human" => true,
-          "sub_issue" => nil,
-          "phase" => "waiting_for_human",
-          "running" => false,
-          "waiting_on" => "human",
-          "blockers" => [],
-          "summary" => "waiting for a human"
-        },
-        %{
-          "issue_id" => "forced-parent-http",
-          "issue_identifier" => "MT-EPIC",
-          "title" => "Export",
-          "repo_key" => nil,
-          "state" => "Waiting on sub-tickets",
-          "forced_since" => "2026-10-03T06:00:00Z",
-          "forced_for_seconds" => 300_000,
-          "stale" => true,
-          "position" => 2,
-          "waiting_on_human" => false,
-          "sub_issue" => %{"issue_id" => "part-http", "issue_identifier" => "MT-PART", "state" => "Todo"},
-          "phase" => "implementation",
-          "running" => false,
-          "waiting_on" => "blocker",
-          "blockers" => ["MT-GAP"],
-          "summary" => "implementation · waiting on blocker MT-GAP"
-        }
-      ],
-      "concurrency" => %{"max_total" => 10, "finishing_max" => 2, "forced_max" => 1},
+      "concurrency" => %{"max_total" => 10, "finishing_max" => 2},
       "claimed" => ["issue-http", "retry-http"],
       "rate_limits" => %{"primary" => %{"remaining" => 11}},
       "linear_usage" => %{"window_ms" => 3_600_000, "total" => 0, "callers" => [], "queries" => []},
@@ -1348,7 +1306,8 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     state_payload = json_response(get(build_conn(), "/api/v1/state"), 200)
     assert state_payload["counts"]["shipped_today"] == 1
-    assert state_payload["counts"]["forced"] == 2
+    refute Map.has_key?(state_payload["counts"], "forced")
+    refute Map.has_key?(state_payload, "forced")
   end
 
   test "phoenix observability api allows configured origins to refresh" do
@@ -2813,7 +2772,6 @@ defmodule SymphonyElixir.ExtensionsTest do
              "conflicts" => 0,
              "retrying" => 1,
              "claimed" => 2,
-             "forced" => 2,
              "shipped_today" => 1,
              "waiting_on_you" => 0,
              "review_inconclusive" => %{"invalid_verdict" => 1}
@@ -3105,42 +3063,7 @@ defmodule SymphonyElixir.ExtensionsTest do
           blockers: [%{identifier: "MT-FIX", state: "merged in 9f54098"}]
         }
       ],
-      forced: [
-        %{
-          issue_id: "forced-http",
-          identifier: "MT-FORCED",
-          title: "Fix the release",
-          repo_key: "web",
-          state: "In Review",
-          forced_since: ~U[2026-10-03 05:00:00.123456Z],
-          forced_for_seconds: 3_600,
-          stale: false,
-          position: 1,
-          waiting_on_human: true,
-          sub_issue: nil,
-          phase: :waiting_for_human,
-          running: false,
-          waiting_on: :human,
-          blockers: []
-        },
-        %{
-          issue_id: "forced-parent-http",
-          identifier: "MT-EPIC",
-          title: "Export",
-          state: "Waiting on sub-tickets",
-          forced_since: ~U[2026-10-03 06:00:00Z],
-          forced_for_seconds: 300_000,
-          stale: true,
-          position: 2,
-          waiting_on_human: false,
-          sub_issue: %{issue_id: "part-http", identifier: "MT-PART", state: "Todo"},
-          phase: :implementation,
-          running: false,
-          waiting_on: :blocker,
-          blockers: ["MT-GAP"]
-        }
-      ],
-      concurrency: %{max_total: 10, finishing_max: 2, forced_max: 1},
+      concurrency: %{max_total: 10, finishing_max: 2},
       rate_limits: %{"primary" => %{"remaining" => 11}}
     }
   end

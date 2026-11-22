@@ -27,7 +27,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   A tick reads each watched PR once (`SymphonyElixir.PrWatch.Fetch.read/2`) and, when two or more
   watched PRs are open, or one conflicts or waits on its competitors, the repository's open PRs and
   their files once, for the landing order: `ahead` is the PR `SymphonyElixir.LandingOrder.waits/2`
-  makes the ticket wait for (none for a forced ticket), and `competing` every open PR that shares a
+  makes the ticket wait for, and `competing` every open PR that shares a
   file with it (`SymphonyElixir.PrWatch.Competitors`). Neither names a PR whose wait would close a
   cycle of blocked-by links, or one a person released the ticket from. The checks a base branch
   requires, and whether it has workflow files, are kept 10 minutes.
@@ -814,7 +814,6 @@ defmodule SymphonyElixir.PrWatch.Repo do
           rank: LandingOrder.rank(landing_state(entry), settings),
           conflicting: match?({:ok, %{mergeable: :dirty}}, Map.get(reads, entry.issue.id)),
           held: entry.ticket.hold != :none,
-          forced: Issue.forced?(entry.issue, settings),
           behind: Competitors.behind(entry.links)
         })
       end
@@ -893,12 +892,11 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
   # The ticket's `ahead` and `competing`, without a PR whose wait closes a cycle or that a person
   # released it from. With the open PRs unread, `competing` stays as it was.
-  defp waits(entry, read, {landing, ahead}, pulls, race, settings) do
+  defp waits(entry, read, {landing, ahead}, pulls, race) do
     own = %{
       issue_id: entry.issue.id,
       pr_number: pr_number(read),
       files: (landing && Map.get(landing, :files)) || [],
-      forced: Issue.forced?(entry.issue, settings),
       links: entry.links
     }
 
@@ -983,7 +981,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
     {_blockers, watches, health} =
       Enum.reduce(watched, {race.blockers, [], state.health}, fn entry, {blockers, watches, health} ->
         read = Map.get(reads, entry.issue.id)
-        waits = waits(entry, read, Map.get(landings, entry.issue.id), pulls, %{race | blockers: blockers}, settings)
+        waits = waits(entry, read, Map.get(landings, entry.issue.id), pulls, %{race | blockers: blockers})
         watch = write(entry, read, waits, seen, state, settings)
         health = observe(health, read, {entry, previous_watch(entry), watch}, seen, state, settings)
         {add_waits(watch, blockers, entry.issue.id), [watch | watches], health}

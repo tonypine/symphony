@@ -22,14 +22,12 @@
   },
   "concurrency": {
     "finishing_max": 2,
-    "forced_max": 1,
     "max_total": 10
   },
   "conflicts": [],
   "counts": {
     "claimed": 1,
     "conflicts": 0,
-    "forced": 1,
     "retrying": 0,
     "running": 1,
     "watching": 4
@@ -84,16 +82,6 @@
     "slots": 2,
     "used": 1
   },
-  "forced": [
-    {
-      "forced_for_seconds": 1520,
-      "identifier": "SHOP-311",
-      "part": null,
-      "stale": false,
-      "state": "In Progress",
-      "summary": "implementation \u00b7 running"
-    }
-  ],
   "generated_at": "2026-10-07T14:03:12Z",
   "linear_usage": {
     "callers": [

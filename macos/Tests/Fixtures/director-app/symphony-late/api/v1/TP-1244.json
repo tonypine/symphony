@@ -180,14 +180,6 @@
         "Done"
       ]
     },
-    "force": {
-      "allowed": true,
-      "reason": null
-    },
-    "unforce": {
-      "allowed": false,
-      "reason": "It isn't forced."
-    },
     "unblock": {
       "allowed": false,
       "reason": "TP-1 has nothing a person can unblock"

@@ -59,6 +59,27 @@ defmodule SymphonyElixir.Config.Migration do
       move_to: "execution.providers.anthropic.reserve",
       ticket: "TP-1535",
       release: "0.0.1.998"
+    }),
+    Map.merge(@rename_defaults, %{
+      key: "execution.concurrency.force_label",
+      to: nil,
+      ticket: "TP-1611",
+      release: "0.0.1.1068",
+      why: "a ticket with that label is dispatched like any other now"
+    }),
+    Map.merge(@rename_defaults, %{
+      key: "execution.concurrency.forced_max",
+      to: nil,
+      ticket: "TP-1611",
+      release: "0.0.1.1068",
+      why: "Symphony no longer forces tickets ahead of the queue"
+    }),
+    Map.merge(@rename_defaults, %{
+      key: "execution.concurrency.forced_stale_after_hours",
+      to: nil,
+      ticket: "TP-1611",
+      release: "0.0.1.1068",
+      why: "Symphony no longer forces tickets ahead of the queue"
     })
   ]
 

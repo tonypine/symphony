@@ -52,9 +52,9 @@ public struct TicketMoves: Equatable {
 }
 
 /// The Action rail (C31, TP-1440, TP-1485): a ticket's moves in one row, in the prototype's order. The expected move
-/// first and primary, then Open Pull Request when the ticket has one and Force (or Stop Forcing); on a desktop Stop
-/// Run… after a separator; then More: the rarer moves, a separator, Copy Link, Copy Workspace Path and Open in Linear,
-/// and on a laptop Stop Run… last under a separator, in the destructive style. Every move Symphony judges comes from
+/// first and primary, then Open Pull Request when the ticket has one; on a desktop Stop Run… after a separator; then
+/// More: the rarer moves, a separator, Copy Link, Copy Workspace Path and Open in Linear, and on a laptop Stop Run…
+/// last under a separator, in the destructive style. Every move Symphony judges comes from
 /// the read's `moves`; a move the read refuses stays in its place, disabled, with the read's reason, but for Cancel
 /// Ticket…, which a closed ticket doesn't offer. The links come from
 /// the ticket read too (its pull request, its Linear link, its workspace) and are left out when it has none.
@@ -62,7 +62,7 @@ public struct TicketActionRail: Equatable {
     /// The moves the rail offers, by their name in the read; the last four are links the read carries, not moves it
     /// judges.
     public enum Move: String, CaseIterable, Equatable {
-        case answer, start, stop, moveTo = "move_to", force, unforce, restart, unblock, cancel, note
+        case answer, start, stop, moveTo = "move_to", restart, unblock, cancel, note
         case openPullRequest = "open_pull_request", copyLink = "copy_link", copyWorkspacePath = "copy_workspace_path"
         case openInLinear = "open_in_linear"
 
@@ -72,8 +72,6 @@ public struct TicketActionRail: Equatable {
             case .start: TicketStart.title
             case .stop: StopRunSheet.buttonTitle
             case .moveTo: TicketMoveMenu.title
-            case .force: TicketList.forceTitle
-            case .unforce: TicketList.stopForcingTitle
             case .restart: "Restart…"
             case .unblock: "Unblock"
             case .cancel: "Cancel Ticket…"
@@ -86,7 +84,7 @@ public struct TicketActionRail: Equatable {
         }
 
         /// The moves Symphony judges in the read's `moves`; the others are links.
-        public static let judged: [Move] = [.answer, .start, .stop, .moveTo, .force, .unforce, .restart, .unblock, .cancel, .note]
+        public static let judged: [Move] = [.answer, .start, .stop, .moveTo, .restart, .unblock, .cancel, .note]
     }
 
     /// What the ticket read links to, for the rail's links: each is left out when the read has none.
@@ -126,8 +124,6 @@ public struct TicketActionRail: Equatable {
         case answer
         case stopRun
         case moveTo(String)
-        /// The Force a Ticket sheet.
-        case force
         /// Restart's reason.
         case restart
         /// The box above the timeline, to write to the ticket.
@@ -160,7 +156,7 @@ public struct TicketActionRail: Equatable {
     public var links: Links
     /// The expected move: the first of `expectedOrder` the read allows; nil when none.
     public var primary: Item?
-    /// The common moves after it: Open Pull Request when the ticket has one, then Force or Stop Forcing.
+    /// The common moves after it: Open Pull Request when the ticket has one.
     public var secondary: [Item]
     /// Stop Run…: on the rail after a separator when `stopOnRail` (a desktop), else last in More.
     public var stop: Item?
@@ -197,8 +193,7 @@ public struct TicketActionRail: Equatable {
         }
         let primary = Self.expectedOrder.lazy.compactMap(item).first { $0.allowed }
         self.primary = primary
-        let forcing = item(.unforce).flatMap { $0.allowed ? $0 : nil } ?? item(.force) ?? item(.unforce)
-        secondary = [item(.openPullRequest), forcing].compactMap { $0 }
+        secondary = [item(.openPullRequest)].compactMap { $0 }
         stop = item(.stop)
         more = Self.moreOrder.compactMap(item).filter { $0.move != primary?.move }
         moreLinks = [Move.copyLink, .copyWorkspacePath, .openInLinear].compactMap(item)
@@ -223,8 +218,6 @@ public struct TicketActionRail: Equatable {
         case .start: return .send(TicketStart.action(identifier))
         case .stop: return .sheet(.stopRun)
         case .moveTo: return state.map { .sheet(.moveTo($0)) }
-        case .force: return .sheet(.force)
-        case .unforce: return .send(.stopForcing(identifier))
         case .restart: return .sheet(.restart)
         case .unblock: return .send(.unblock(identifier))
         case .note: return .sheet(.note)

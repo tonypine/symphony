@@ -302,8 +302,8 @@ defmodule SymphonyElixir.StateProvisioningTest do
       assert StateProvisioning.labels() == ["Blocked", "Needs Decision", "CI green", "CI red", "CI running"]
     end
 
-    test "machine_labels/2 lists every label Symphony applies or reads, once each, without human-action" do
-      labels = StateProvisioning.machine_labels("Rush ", ["needs-human", "plan", "Human-Action", "security", "SECURITY", nil, " "])
+    test "machine_labels/1 lists every label Symphony applies or reads, once each, without human-action or a force label" do
+      labels = StateProvisioning.machine_labels(["needs-human", "plan", "Human-Action", "security", "SECURITY", nil, " "])
 
       assert Enum.map(labels, & &1.names) == [
                ["Blocked"],
@@ -315,14 +315,15 @@ defmodule SymphonyElixir.StateProvisioningTest do
                ["qa:skip"],
                ["protected-paths-approved"],
                ["skip-update-hold"],
-               ["Rush"],
                ["needs-human"],
                ["security"]
              ]
 
       assert %{severity: :error, exact?: true, shows: "Decisions you are asked for can't be marked on the ticket."} = Enum.at(labels, 1)
       assert %{severity: :warning, exact?: false} = List.last(labels)
-      assert length(StateProvisioning.machine_labels(nil, [])) == 9
+      assert length(StateProvisioning.machine_labels([])) == 9
+      refute Enum.any?(StateProvisioning.machine_labels(["needs-human"]), &("expedite" in &1.names))
+      refute Enum.any?(labels, &(&1.shows =~ "expedite"))
       assert StateProvisioning.deprecated_labels() == ["human-action"]
     end
 

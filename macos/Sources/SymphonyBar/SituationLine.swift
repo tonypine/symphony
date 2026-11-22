@@ -5,21 +5,19 @@ import SymphonyBarCore
 /// its status color with its glyph, the cause, what moves it next and since when. The full line heads a ticket page,
 /// its word and age in one status pill; the compact one sits in a row, the word and the cause with the age trailing.
 /// The cause wraps at the reading measure and the word is never cut. Color never says it alone: the glyph and the word
-/// always come with it, and VoiceOver reads the word, the age and the cause as one sentence. A forced ticket shows the
-/// Forced chip beside the line; the phase is not part of it. On a selected row (the background's prominence raised, as a
-/// table draws its selection) the word and glyph take the row's text color, so they never vanish on the highlight.
+/// always come with it, and VoiceOver reads the word, the age and the cause as one sentence; the phase is not part of
+/// it. On a selected row (the background's prominence raised, as a table draws its selection) the word and glyph take
+/// the row's text color, so they never vanish on the highlight.
 struct SituationLine: View {
     enum Size { case full, compact }
 
     let text: SituationText
     var size: Size = .full
-    var forced = false
     @Environment(\.backgroundProminence) private var prominence
 
-    init(_ situation: Situation, reference: Date = Date(), size: Size = .full, forced: Bool = false) {
+    init(_ situation: Situation, reference: Date = Date(), size: Size = .full) {
         text = SituationText(situation, reference: reference)
         self.size = size
-        self.forced = forced
     }
 
     private var kind: DesignTokens.SituationKind { text.kind }
@@ -42,7 +40,7 @@ struct SituationLine: View {
         }
         .help(text.sentence)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(text.spoken(forced: forced))
+        .accessibilityLabel(text.spoken())
         .accessibilityHint(size == .full ? text.next ?? "" : "")
     }
 
@@ -50,11 +48,8 @@ struct SituationLine: View {
 
     private var full: some View {
         SituationFlow(spacing: DesignTokens.Space.s3) {
-            HStack(spacing: DesignTokens.Space.s2) {
-                pill
-                if forced { Badge(status: .forced) }
-            }
-            .fixedSize()
+            pill
+                .fixedSize()
             reading
                 .font(DesignTokens.TypeStyle.body.font)
                 .frame(maxWidth: DesignTokens.Measure.reading, alignment: .leading)
@@ -107,7 +102,6 @@ struct SituationLine: View {
                 .fontWeight(.semibold)
                 .foregroundStyle(wordStyle)
                 .fixedSize()
-            if forced { Badge(status: .forced).fixedSize() }
             Text(text.cause)
                 .frame(maxWidth: DesignTokens.Measure.reading, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)

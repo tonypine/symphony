@@ -35,7 +35,6 @@ final class DiagnosticsTests: XCTestCase {
         XCTAssertEqual(rows(report, "Capacity"), [
             "Agent slots": "1 of 10 in use",
             "Landing slots": "1 of 2 in use",
-            "Forced allowance": "1 of 1 in use",
             "Initiative slots": "2 held: 1 working, 1 waiting · 1 initiative queued",
             "Slots for other work": "2 of 8 in use",
         ])

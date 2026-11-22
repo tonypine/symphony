@@ -156,10 +156,9 @@ defmodule SymphonyElixir.PrWatch.CompetitorsTest do
   end
 
   describe "competing/3 and excluded?/3" do
-    test "a forced ticket has none; a released PR without a ticket is matched by number" do
-      own = %{issue_id: "issue-2", pr_number: 2, files: ["SPEC.md"], forced: false, links: [link(12, issue_id: nil, released: true)]}
+    test "a released PR without a ticket is matched by number" do
+      own = %{issue_id: "issue-2", pr_number: 2, files: ["SPEC.md"], links: [link(12, issue_id: nil, released: true)]}
 
-      assert Competitors.competing(%{own | forced: true}, [pull(1)], race([])) == []
       assert [%{pr_number: 1}] = Competitors.competing(own, [pull(1), pull(2), pull(12), pull(14, ["README.md"])], race([]))
       assert %Facts{competing: [%{pr_number: 1}]} = Facts.new(competing: Competitors.competing(own, [pull(1)], race([])))
     end

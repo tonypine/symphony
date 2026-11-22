@@ -249,8 +249,8 @@ defmodule SymphonyElixir.Config do
   @doc """
   The Linear priority numbers `tickets.priorities` allows to start new work, or nil when the key is
   empty and every priority may. An issue outside the set is not dispatched as new work: Symphony
-  waits with free lanes even when such an issue sits in an active state. A forced ticket and a retry
-  waiting for a slot are exempt, so the filter only gates fresh picks.
+  waits with free lanes even when such an issue sits in an active state. A retry waiting for a
+  slot is exempt, so the filter only gates fresh picks.
   """
   @spec ticket_priority_filter() :: MapSet.t(0..4) | nil
   def ticket_priority_filter, do: ticket_priority_filter(settings!())

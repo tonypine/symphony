@@ -8,7 +8,6 @@ defmodule SymphonyElixir.Config.RequiredFieldsTest do
   # Every required string field must still reject a blank string (TP-404). A
   # field whose inclusion check runs first reports that error instead.
   @blank_required_fields [
-    {Schema.Execution, %{}, :force_label, "can't be blank"},
     {Schema.Execution.NetworkAccess, %{}, :mode, "can't be blank"},
     {Schema.Execution.SandboxRuntime, %{}, :kind, "can't be blank"},
     {Schema.Execution.SandboxRuntime, %{"kind" => "srt"}, :command, "can't be blank"},

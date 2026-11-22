@@ -21,8 +21,6 @@ public struct StateSnapshot: Equatable {
     /// The newest published release of the repository the app updates from, as Symphony last heard of it; nil when
     /// Symphony knows none, or predates `app_update.latest_release`.
     public var latestRelease: ReportedRelease?
-    /// Tickets forced past the dispatch limits, in queue order; empty when none is, or when Symphony predates them.
-    public var forced: [ForcedTicket]
     /// The running agents, in Symphony's order; empty when none runs.
     public var runs: [Run]
     /// The tickets only the operator can move on, oldest first; empty when none does, or when Symphony predates them.
@@ -451,46 +449,6 @@ public struct StateSnapshot: Equatable {
         }
     }
 
-    /// A ticket forced past the dispatch limits (`symphony force`, or its force label in Linear).
-    public struct ForcedTicket: Equatable {
-        public var identifier: String
-        public var issueID: String?
-        public var title: String?
-        public var repoKey: String?
-        /// What it is doing and what it waits on, as Symphony words it: "implementation · running",
-        /// "implementation · waiting on blocker TP-1", "waiting for a human". Nil when Symphony didn't say.
-        public var summary: String?
-        /// Its Linear state, for example "Todo".
-        public var state: String?
-        public var forcedForSeconds: Int?
-        /// Forced for longer than `execution.concurrency.forced_stale_after_hours`.
-        public var stale: Bool
-        /// For a forced parent, the sub-ticket it is working through now.
-        public var part: String?
-
-        public init(
-            identifier: String,
-            issueID: String? = nil,
-            title: String? = nil,
-            repoKey: String? = nil,
-            summary: String? = nil,
-            state: String? = nil,
-            forcedForSeconds: Int? = nil,
-            stale: Bool = false,
-            part: String? = nil
-        ) {
-            self.identifier = identifier
-            self.issueID = issueID
-            self.title = title
-            self.repoKey = repoKey
-            self.summary = summary
-            self.state = state
-            self.forcedForSeconds = forcedForSeconds
-            self.stale = stale
-            self.part = part
-        }
-    }
-
     /// Symphony's token counts for the UTC day and its token caps; a nil limit is a cap turned off.
     public struct Budget: Equatable {
         public var dailyLimit: Int?
@@ -529,7 +487,6 @@ public struct StateSnapshot: Equatable {
         updateUnblocks: Int = 0,
         updateBuildLine: String? = nil,
         latestRelease: ReportedRelease? = nil,
-        forced: [ForcedTicket] = [],
         runs: [Run] = [],
         waitingOnYou: [WaitingTicket] = [],
         inboxRead: Bool = true,
@@ -552,7 +509,6 @@ public struct StateSnapshot: Equatable {
         self.updateUnblocks = updateUnblocks
         self.updateBuildLine = updateBuildLine
         self.latestRelease = latestRelease
-        self.forced = forced
         self.runs = runs
         self.waitingOnYou = waitingOnYou
         self.inboxRead = inboxRead
@@ -1029,20 +985,6 @@ public enum SymphonyState {
                 perIssueLimit: budget.perIssueLimit
             )
         }
-        snapshot.forced = (payload.forced ?? []).compactMap { ticket in
-            guard let identifier = ticket.issueIdentifier ?? ticket.issueId else { return nil }
-            return StateSnapshot.ForcedTicket(
-                identifier: identifier,
-                issueID: ticket.issueId,
-                title: ticket.title,
-                repoKey: ticket.repoKey,
-                summary: ticket.summary,
-                state: ticket.state,
-                forcedForSeconds: ticket.forcedForSeconds,
-                stale: ticket.stale ?? false,
-                part: ticket.subIssue?.issueIdentifier
-            )
-        }
         snapshot.sessionKinds = payload.sessions?.map { $0.kind ?? "agent" }
         snapshot.runs = (payload.running ?? []).compactMap { run in
             guard let identifier = run.issueIdentifier ?? run.issueId else { return nil }
@@ -1215,22 +1157,6 @@ public enum SymphonyState {
             let buildLine: String?
         }
 
-        struct Forced: Decodable {
-            struct Part: Decodable {
-                let issueIdentifier: String?
-            }
-
-            let issueId: String?
-            let issueIdentifier: String?
-            let title: String?
-            let repoKey: String?
-            let summary: String?
-            let state: String?
-            let forcedForSeconds: Int?
-            let stale: Bool?
-            let subIssue: Part?
-        }
-
         struct Running: Decodable {
             let issueId: String?
             let issueIdentifier: String?
@@ -1313,8 +1239,6 @@ public enum SymphonyState {
         let budget: Budget?
         let usageLimits: [UsageLimit]?
         let appUpdate: AppUpdate?
-        /// Missing before Symphony reported forced tickets.
-        let forced: [Forced]?
         /// Missing before Symphony listed what waits on the operator.
         let waitingOnYou: [Waiting]?
         /// Missing before Symphony said whether it had read the Inbox.

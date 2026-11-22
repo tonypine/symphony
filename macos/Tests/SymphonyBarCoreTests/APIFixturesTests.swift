@@ -349,19 +349,19 @@ final class APIFixturesTests: XCTestCase {
             guard case .repos = repos else { return XCTFail("\(name)'s repos fixture doesn't read as repos: \(repos)") }
         }
 
-        // Resume Dispatch and Stop Forcing, as the Overview sends them.
+        // Stop Run and Resume Dispatch, as the Overview sends them.
         let shipped = APIFixtures(
             directory: Self.shippedRunning.deletingLastPathComponent().appendingPathComponent("attention", isDirectory: true),
             requestLog: root.appendingPathComponent("api-requests.jsonl")
         )
-        for action in [ControlAction.stopForcing("SHOP-305"), .resume] {
+        for action in [ControlAction.stop("SHOP-305"), .resume] {
             let result = await ControlAPI.send(action, stateRoot: root, fallback: APIFixtures.baseURL, token: APIFixtures.token, transport: shipped.transport)
             XCTAssertEqual(result, .done)
         }
         let lines = try String(contentsOf: shipped.requestLog, encoding: .utf8).split(separator: "\n")
         let entries = try lines.map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]) }
-        XCTAssertEqual(entries.map { $0["path"] as? String }, ["/api/v1/control/force", "/api/v1/control/resume"])
-        XCTAssertEqual(entries[0]["body"] as? [String: String], ["identifier": "SHOP-305", "clear": "true"])
+        XCTAssertEqual(entries.map { $0["path"] as? String }, ["/api/v1/control/stop", "/api/v1/control/resume"])
+        XCTAssertEqual(entries[0]["body"] as? [String: String], ["issue_identifier": "SHOP-305"])
     }
 
     /// Every shipped fixture directory, so one added later is decoded too.

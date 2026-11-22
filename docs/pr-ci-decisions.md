@@ -247,8 +247,7 @@ when two or more watched PRs are open or one conflicts or waits on its competito
 repository's open PRs and their files once: the landing order fills `ahead`, and `competing` lists
 every open PR that shares a file with the ticket's, with its ticket when the watcher watches it,
 leaving out one on a hold or idle two hours. Neither names a PR whose wait would close a cycle of
-blocked-by links, nor one a person's `Unblock` released the ticket from, and a forced ticket has
-neither.
+blocked-by links, nor one a person's `Unblock` released the ticket from.
 
 The facts are kept on the ticket's state record and listed under each ticket's `watch.facts` in
 `/api/v1/state`. A GitHub error doubles the wait between reads, up to 5 minutes; GitHub's rate
@@ -547,8 +546,7 @@ that leaves the race (its PR closed, on a hold, idle two hours, or no longer sha
 unlinked when Symphony added the link, which logs `pr_watch.competitors_unlinked`. The hold clears
 once no competitor is left, and the same read decides on the conflict: CI Fix, with the approvals
 carried forward. The R15 wait restarts the conflict count. A person's `Unblock` clears the hold and
-removes Symphony's links, and the ticket no longer waits on those PRs while they stay open; a
-forced ticket waits on none.
+removes Symphony's links, and the ticket no longer waits on those PRs while they stay open.
 
 ## Replayed incidents and the skip-reason sweep
 

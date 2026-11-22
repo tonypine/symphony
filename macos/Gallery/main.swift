@@ -844,17 +844,13 @@ func situationLines(_ size: SituationLine.Size) -> some View {
     )
 }
 
-/// A forced ticket's line in both sizes, a pause with two more reasons, and both sizes in a narrow column, where the
-/// cause wraps and the word stays whole.
+/// A pause with two more reasons, and both sizes in a narrow column, where the cause wraps and the word stays whole.
 @MainActor
 func situationLineExtras() -> some View {
-    let ci = situationSample.lines.first { $0.kind == .ci }!
     var paused = situationSample.lines.first { $0.kind == .paused }!
     paused.andMore = 2
     return styleStage(
         VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
-            SituationLine(ci, reference: situationSample.now, size: .full, forced: true)
-            SituationLine(ci, reference: situationSample.now, size: .compact, forced: true)
             SituationLine(paused, reference: situationSample.now, size: .full)
             SituationLine(paused, reference: situationSample.now, size: .compact)
             VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
@@ -879,7 +875,7 @@ func situationsState(_ name: String) -> OverviewState {
 }
 
 /// Tickets: the Situation column of each row, as the table draws it (a `Table` doesn't render offscreen), and the
-/// inspector of a forced ticket beside it.
+/// inspector of SHOP-325 beside it.
 @MainActor
 func ticketsSituations() -> some View {
     let list = TicketList(state: situationsState("tickets"), now: situationsNow, timeZone: TimeZone(identifier: "UTC")!)
@@ -1798,7 +1794,7 @@ enum TicketPageBrief: String, CaseIterable {
 
 // MARK: - Work › Tickets as the table with filters (TP-1456)
 
-/// The `tickets` fixture's answer to `GET /api/v1/tickets`, and its state for the forced marks and the drawer.
+/// The `tickets` fixture's answer to `GET /api/v1/tickets`, and its state for the situations and the drawer.
 let ticketsPayload: TicketsPayload = {
     guard let payload = TicketsPayload.decode(try! Data(contentsOf: situationsAPI.appendingPathComponent("tickets/api/v1/tickets.json"))) else {
         fatalError("The tickets fixture's tickets read doesn't read")
@@ -2053,7 +2049,7 @@ MainActor.assumeIsolated {
         render(homeTree(selected: .more("TP-1483")), scheme, to: "tree-home-\(suffix).png")
         render(homeTree(opened: ["TP-1481"], selected: .row("TP-1484")), scheme, to: "tree-home-chain-open-\(suffix).png")
         render(progressStrips(), scheme, to: "progress-strip-initiatives-\(suffix).png")
-        // The Situation line (TP-1439): every kind in the full and the compact size, and forced, "and n more", narrow.
+        // The Situation line (TP-1439): every kind in the full and the compact size, "and n more", narrow.
         render(situationLines(.full), scheme, to: "situation-line-full-\(suffix).png")
         render(situationLines(.compact), scheme, to: "situation-line-compact-\(suffix).png")
         render(situationLineExtras(), scheme, to: "situation-line-extras-\(suffix).png")

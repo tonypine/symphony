@@ -563,6 +563,7 @@ defmodule SymphonyElixir.TicketEvents.Summary do
 
   defp person_action("stop", _to), do: "The Director stopped the run"
   defp person_action("move", to), do: "The Director moved the ticket" <> suffix(" to ", to)
+  # Forcing is gone (TP-1611); a ticket's history still holds the forces it was given before.
   defp person_action("force", _to), do: "The Director forced a dispatch"
   defp person_action("unblock", _to), do: "The Director unblocked the ticket"
   defp person_action("restart", _to), do: "The Director restarted the ticket"

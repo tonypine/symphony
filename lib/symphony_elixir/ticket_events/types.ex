@@ -236,7 +236,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
   @type error :: {:unknown_type, term()} | {:invalid_payload, [atom() | String.t()]} | {:not_allowed, String.t()}
 
   @verdict_kinds ~w(code_review qa ci_fix plan_review epic_review)
-  @person_actions ~w(stop move force unblock restart add_blocker remove_blocker set_priority add_label remove_label)
+  @person_actions ~w(stop move unblock restart add_blocker remove_blocker set_priority add_label remove_label)
   @step_modes ~w(machine orchestrated delegated)
   @evidence {:any_of, [:string, {:list, :string}]}
   # A QA step's result and the environment it was proved in (`fixture`: the committed state

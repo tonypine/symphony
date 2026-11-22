@@ -54,18 +54,18 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
       assert gate(record, waiting)["MT-4"]
     end
 
-    test "on a forced ticket" do
+    test "TP-1611: on a ticket carrying the old force label, which is let through no more" do
       workflow!(tickets: %{priorities: ["urgent"]})
 
       issues = [
-        issue("forced", "MT-1", "Todo", priority: 4, labels: ["expedite"]),
+        issue("labelled", "MT-1", "Todo", priority: 4, labels: ["expedite"]),
         issue("low", "MT-2", "Todo", priority: 4),
         issue("urgent", "MT-3", "Rework", priority: 1)
       ]
 
       {cache, record} = assert_same_candidates!(issues)
 
-      assert gate(cache) == %{"MT-1" => true, "MT-2" => false, "MT-3" => true}
+      assert gate(cache) == %{"MT-1" => false, "MT-2" => false, "MT-3" => true}
       assert gate(record) == gate(cache)
     end
 

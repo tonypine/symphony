@@ -84,8 +84,8 @@ defmodule SymphonyElixir.LandingOrderTest do
       assert waits["stepped"].issue_id == "ahead"
     end
 
-    test "a forced ticket never waits" do
-      assert LandingOrder.waits([member("a", 5, ["x"]), member("b", 3, ["x"], forced: true)], @now) == %{}
+    test "TP-1611: a member that says it is forced waits like any other" do
+      assert %{"b" => %{issue_id: "a"}} = LandingOrder.waits([member("a", 5, ["x"]), member("b", 3, ["x"], forced: true)], @now)
     end
   end
 

@@ -418,7 +418,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     end
   end
 
-  test "ahead: the QA PR waits for the Merging PR that shares SPEC.md; the Merging PR and a forced PR wait for none", %{repo_key: repo_key} do
+  test "ahead: the QA PR and a PR carrying the old force label wait for the Merging PR that shares SPEC.md; the Merging PR waits for none", %{repo_key: repo_key} do
     issues!([
       repo_key |> with_pr(issue("1", "QA"), 1),
       repo_key |> with_pr(issue("2", "Merging"), 2),
@@ -445,7 +445,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     assert %{facts: %Facts{ahead: []}} = watch(repo_key, "2")
     leader = %{issue_id: "2", issue_identifier: "TP-2", pr_number: 2, pr_url: "https://github.com/acme/app/pull/2", title: nil, head_sha: "sha-2", files: ["SPEC.md"]}
     assert %{facts: %Facts{ahead: [^leader]}} = watch(repo_key, "1")
-    assert %{facts: %Facts{ahead: [], competing: []}} = watch(repo_key, "3")
+    assert %{facts: %Facts{ahead: [%{issue_identifier: "TP-2"}], competing: [_ | _]}} = watch(repo_key, "3")
     assert %{facts: %Facts{ahead: []}} = watch(repo_key, "4")
 
     # Waiting for its leader counts as moving.

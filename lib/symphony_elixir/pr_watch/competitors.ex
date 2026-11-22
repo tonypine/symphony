@@ -10,7 +10,7 @@ defmodule SymphonyElixir.PrWatch.Competitors do
       a file with the ticket's, with its ticket when Symphony watches it. It leaves out a pull
       request out of the race (on a hold, or idle two hours by `SymphonyElixir.LandingOrder`'s
       rule), one whose link would close a cycle (`closes_cycle?/3`), and one a person released the
-      ticket from (`Unblock`). A forced ticket never waits, so it has none.
+      ticket from (`Unblock`).
     * `wait/4` applies the wait: the reasons, then a link from each competitor's ticket that Linear
       doesn't have yet. A competitor with no ticket (a person's pull request) gets no link; its
       reason names it by number and title. The links Symphony added are recorded on the ticket's
@@ -63,14 +63,13 @@ defmodule SymphonyElixir.PrWatch.Competitors do
         }
 
   @typedoc """
-  The ticket a fact is computed for: its issue id, its pull request's number and files, whether it
-  is forced, and the competitors it recorded.
+  The ticket a fact is computed for: its issue id, its pull request's number and files, and the
+  competitors it recorded.
   """
   @type own :: %{
           issue_id: String.t(),
           pr_number: pos_integer() | nil,
           files: [String.t()],
-          forced: boolean(),
           links: [link()]
         }
 
@@ -181,8 +180,6 @@ defmodule SymphonyElixir.PrWatch.Competitors do
 
   @doc "The fact `competing` for `own` (see the moduledoc), ordered by pull request number."
   @spec competing(own(), [map()], race()) :: [map()]
-  def competing(%{forced: true}, _pulls, _race), do: []
-
   def competing(own, pulls, race) do
     pulls
     |> Enum.filter(&(is_integer(&1.number) and &1.number != own.pr_number))

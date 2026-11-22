@@ -50,7 +50,7 @@ extension TicketPage {
     /// The state's lists the page reads, cut to the ticket's own entries.
     static let sliceLists = [
         "running", "retrying", "watching", "waiting_on_you", "slot_waiting", "dispatch_skipped", "blocked",
-        "shipped_today", "forced", "run_history", "issues",
+        "shipped_today", "run_history", "issues",
     ]
     /// The state's blocks the page reads whole: the budget, the QA passes, the epic lanes, the phases and the
     /// watcher's rate limit.

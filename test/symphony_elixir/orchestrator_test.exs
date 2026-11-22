@@ -74,11 +74,6 @@ defmodule SymphonyElixir.OrchestratorTest do
     refute_received {:run_step_turn, "walk-1"}
     assert %{step: %{waiting: "slot"}} = running_of(waiting, "walk-1")
 
-    # A forced run takes no slot, so it waits for no one.
-    forced = state |> run(issue("other-1", "TP-3", "In Progress")) |> put_in([Access.key(:running), "walk-1", :forced], true) |> step(turn_wanted())
-    assert_received {:run_step_turn, "walk-1"}
-    assert %{step: %{waiting: nil}} = forced.running["walk-1"]
-
     # The slot frees: the waiting turn gets it before any dispatch.
     freed = %{waiting | running: Map.delete(waiting.running, "other-1")} |> step(turn_wanted())
     assert_received {:run_step_turn, "walk-1"}

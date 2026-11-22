@@ -3,7 +3,7 @@ import SwiftUI
 import SymphonyBarCore
 
 /// C31, the Action rail (TP-1440, TP-1485): a ticket's moves in one row of medium buttons, in the prototype's order.
-/// The expected move first and primary, then Open Pull Request and Force; on a desktop a separator and Stop Run… in red;
+/// The expected move first and primary, then Open Pull Request; on a desktop a separator and Stop Run… in red;
 /// then More. A move the read refuses stays in its place, faint, with a not-allowed pointer, and shows the read's
 /// reason under it without a press. The rail keeps no state of its own: it changes when the read does.
 ///
@@ -50,11 +50,10 @@ struct ActionRail: View {
             )
     }
 
-    /// The catalog's glyph before a move's title: `pr` before Open Pull Request, `forced` before Force.
+    /// The catalog's glyph before a move's title: `pr` before Open Pull Request.
     static func glyph(_ move: TicketActionRail.Move) -> String? {
         switch move {
         case .openPullRequest: pullRequestGlyph
-        case .force, .unforce: DesignTokens.Status.forced.symbol
         default: nil
         }
     }

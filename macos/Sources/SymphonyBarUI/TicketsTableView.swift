@@ -8,13 +8,12 @@ import SymphonyBarCore
 // three; a title and a situation's cause cut with an ellipsis, the situation's glyph and word never; Urgent at 650.
 
 /// The Tickets table: `columns` over `rows`, sorted by `sort` (the server's), `selection` the picked row; each
-/// ticket's situation as the state words it (`situations`), and the forced ones (`forced`) with the Forced badge. Return or a
-/// double click calls `open`, Space `toggleDetails`, and a row's context menu is `rowMenu`'s.
+/// ticket's situation as the state words it (`situations`). Return or a double click calls `open`, Space
+/// `toggleDetails`, and a row's context menu is `rowMenu`'s.
 public struct TicketsTable: View {
     let rows: [TicketsRow]
     let columns: [TicketColumn]
     var situations: [String: Situation]
-    var forced: Set<String>
     var reference: Date
     @Binding var sort: TicketSort
     @Binding var selection: String?
@@ -25,8 +24,8 @@ public struct TicketsTable: View {
     let rowMenu: ((TicketsRow) -> AnyView)?
 
     public init(
-        rows: [TicketsRow], columns: [TicketColumn], situations: [String: Situation] = [:], forced: Set<String> = [],
-        reference: Date = Date(), sort: Binding<TicketSort>,
+        rows: [TicketsRow], columns: [TicketColumn], situations: [String: Situation] = [:], reference: Date = Date(),
+        sort: Binding<TicketSort>,
         selection: Binding<String?>, empty: DataTableEmpty = DataTableEmpty(TicketList.noMatchTitle), drawnAs: DataTableShown? = nil,
         open: @escaping (String) -> Void = { _ in }, toggleDetails: @escaping (String) -> Void = { _ in },
         rowMenu: ((TicketsRow) -> AnyView)? = nil
@@ -34,7 +33,6 @@ public struct TicketsTable: View {
         self.rows = rows
         self.columns = columns
         self.situations = situations
-        self.forced = forced
         self.reference = reference
         _sort = sort
         _selection = selection
@@ -47,7 +45,7 @@ public struct TicketsTable: View {
 
     public var body: some View {
         DataTable(
-            "Tickets", columns: TicketsTableColumns.columns(columns, rows: rows, situations: situations, forced: forced, reference: reference),
+            "Tickets", columns: TicketsTableColumns.columns(columns, rows: rows, situations: situations, reference: reference),
             rows: rows,
             selection: $selection, sort: tableSort, presorted: true, empty: empty, drawnAs: drawnAs,
             open: { open($0.identifier) }, secondary: { toggleDetails($0.identifier) }, rowMenu: rowMenu
@@ -71,13 +69,12 @@ public enum TicketsTableColumns {
     /// The word a cell without a value shows.
     public static let none = "None"
 
-    /// Each of `shown` as the table draws it over `rows`, with the state's `situations` and `forced` tickets, ages
-    /// against `reference`.
+    /// Each of `shown` as the table draws it over `rows`, with the state's `situations`, ages against `reference`.
     @MainActor
     public static func columns(
-        _ shown: [TicketColumn], rows: [TicketsRow], situations: [String: Situation] = [:], forced: Set<String> = [], reference: Date
+        _ shown: [TicketColumn], rows: [TicketsRow], situations: [String: Situation] = [:], reference: Date
     ) -> [DataTableColumn<TicketsRow>] {
-        let state = TicketsTableState(situations: situations, forced: forced, reference: reference)
+        let state = TicketsTableState(situations: situations, reference: reference)
         return shown.map { column(for: $0, rows: rows, state: state) }
     }
 
@@ -116,14 +113,13 @@ public enum TicketsTableColumns {
                 TicketLabelChips(labels: row.labels)
             }
         case "situation":
-            let lead = rows.map { state.situation($0) }.map { TicketSituationCell.leadWidth(word: $0.text.word, forced: $0.forced) }
+            let lead = rows.map { TicketSituationCell.leadWidth(word: state.situation($0).word) }
             return DataTableColumn(
                 title, id: id,
                 width: .share(DesignTokens.Tickets.situationShare, minimum: situationMinimum(leads: lead)),
-                text: { state.situation($0).text.spoken() }
+                text: { state.situation($0).spoken() }
             ) { row in
-                let shown = state.situation(row)
-                TicketSituationCell(text: shown.text, forced: shown.forced)
+                TicketSituationCell(text: state.situation(row))
             }
         case "priority":
             return DataTableColumn(
@@ -153,7 +149,7 @@ public enum TicketsTableColumns {
         return Double(most) * chip + Double(most - 1) * DesignTokens.Space.s1
     }
 
-    /// The Situation column's least width: the widest glyph and word (with the Forced badge) of `leads`, never cut,
+    /// The Situation column's least width: the widest glyph and word of `leads`, never cut,
     /// and the cell's padding; the table's least share when that is wider.
     public static func situationMinimum(leads: [Double]) -> Double {
         let widest = leads.max() ?? 0
@@ -164,14 +160,13 @@ public enum TicketsTableColumns {
 /// What the table knows of each ticket from the state.
 struct TicketsTableState {
     let situations: [String: Situation]
-    let forced: Set<String>
     let reference: Date
 
     /// A row's situation as the table draws it: the state's own when it holds one of the server's kind, or the
-    /// server's kind; and whether the ticket is forced. A row without either reads as unknown.
-    func situation(_ row: TicketsRow) -> (text: SituationText, forced: Bool) {
+    /// server's kind. A row without either reads as unknown.
+    func situation(_ row: TicketsRow) -> SituationText {
         let line = row.situation(tracked: situations[row.identifier]) ?? Situation(kind: .unknown, cause: "")
-        return (SituationText(line, reference: reference), forced.contains(row.identifier))
+        return SituationText(line, reference: reference)
     }
 }
 
@@ -219,16 +214,13 @@ struct TicketLabelChips: View {
 }
 
 /// The compact situation in a table's cell (`td.tk-sit .situation`): the kind's glyph and its word at 650 in its
-/// colour, never cut, with the Forced badge on a forced ticket, then the cause, cut with an ellipsis. On the picked row
-/// every part is on-accent.
+/// colour, never cut, then the cause, cut with an ellipsis. On the picked row every part is on-accent.
 public struct TicketSituationCell: View {
     let text: SituationText
-    let forced: Bool
     @Environment(\.rowOnAccent) private var onAccent
 
-    public init(text: SituationText, forced: Bool = false) {
+    public init(text: SituationText) {
         self.text = text
-        self.forced = forced
     }
 
     /// The word's CSS weight (`.situation .word { font-weight: 650 }`).
@@ -236,7 +228,7 @@ public struct TicketSituationCell: View {
 
     public var body: some View {
         HStack(alignment: .center, spacing: DesignTokens.Space.s2) {
-            TicketSituationLead(text: text, forced: forced)
+            TicketSituationLead(text: text)
                 .dataTableNeverCut()
             if !text.cause.isEmpty {
                 Text(text.cause)
@@ -248,27 +240,21 @@ public struct TicketSituationCell: View {
         }
         .help(text.sentence)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(text.spoken(forced: forced))
+        .accessibilityLabel(text.spoken())
     }
 
-    /// The width the glyph, the word and, on a forced ticket, the Forced badge take, as drawn.
+    /// The width the glyph and the word take, as drawn.
     @MainActor
-    public static func leadWidth(word: String, forced: Bool) -> Double {
+    public static func leadWidth(word: String) -> Double {
         let body = DesignTokens.TypeStyle.body
         let scale = DesignTokens.TypeStyle.textScale
         let wordFont = NSFont.systemFont(
             ofSize: CGFloat(body.size * scale), weight: NSFont.Weight(rawValue: CGFloat(DesignTokens.TypeStyle.systemWeight(css: wordWeight)))
         )
         // Each text is laid out on whole points, as SwiftUI draws it, so each is rounded up on its own.
-        var width = glyphWidth + DesignTokens.Space.s2 + DataTableCache<TicketsRow>.width(word, font: wordFont).rounded(.up)
-        if forced { width += DesignTokens.Space.s2 + forcedBadgeWidth }
+        let width = glyphWidth + DesignTokens.Space.s2 + DataTableCache<TicketsRow>.width(word, font: wordFont).rounded(.up)
         return width.rounded(.up)
     }
-
-    /// The small Forced badge's width as drawn, measured once: its word never changes.
-    @MainActor static let forcedBadgeWidth: Double = {
-        Double(NSHostingView(rootView: Badge(status: .forced, size: .small).fixedSize()).fittingSize.width).rounded(.up)
-    }()
 
     /// The widest of the kinds' glyphs in the body's size, measured once.
     static let glyphWidth: Double = {
@@ -284,7 +270,6 @@ public struct TicketSituationCell: View {
 /// The part of the situation that is never cut.
 struct TicketSituationLead: View {
     let text: SituationText
-    let forced: Bool
     @Environment(\.rowOnAccent) private var onAccent
 
     var body: some View {
@@ -298,7 +283,6 @@ struct TicketSituationLead: View {
                 .font(DesignTokens.TypeStyle.font(size: DesignTokens.TypeStyle.body.size, weight: TicketSituationCell.wordWeight))
                 .foregroundStyle(onAccent ? DesignTokens.TextColor.onAccent.color : text.kind.status.text)
                 .lineLimit(1)
-            if forced { Badge(status: .forced, size: .small, selected: onAccent) }
         }
     }
 }
