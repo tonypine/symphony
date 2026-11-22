@@ -143,6 +143,7 @@ defmodule SymphonyElixirWeb.Presenter do
           blocked: Enum.map(blocked, &blocked_payload/1),
           app_update: WatchPayload.app_update(blocked, PrWatch.Release.latest(), ReleaseBuild.latest_build()),
           concurrency: Map.get(snapshot, :concurrency),
+          slots: Map.get(snapshot, :slots),
           claimed: Map.get(snapshot, :claimed, []),
           rate_limits: snapshot.rate_limits,
           linear_usage: normalize_linear_usage(get_in(snapshot, [:polling, :linear, :usage])),

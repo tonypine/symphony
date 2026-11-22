@@ -113,6 +113,10 @@ defmodule SymphonyElixirWeb.DispatchOrderReadTest do
     assert %{"free" => 0, "holders" => [%{"identifier" => "MT-H"}]} = home["slots"]
     assert [%{"identifier" => "MT-H", "in_progress" => true}] = home["in_progress"]
     assert [%{"identifier" => "MT-A", "in_progress" => false}] = home["queue"]["roots"]
+
+    status = build_conn() |> get("/api/v1/state") |> json_response(200)
+
+    assert status["slots"] == order["slots"]
   end
 
   test "an unreadable orchestrator reads as an error", %{orchestrator: _orchestrator} do

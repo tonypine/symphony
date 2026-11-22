@@ -2763,13 +2763,21 @@ defmodule SymphonyElixir.Orchestrator do
 
         state
         |> terminate_running_issue(issue.id, false, track_completed_run: true)
-        |> release_slot(issue.id, "it moved to #{issue.state}, which is not an active state")
+        |> release_non_active_slot(issue)
         |> put_watching_issue(issue)
         |> maybe_emit_awaiting_review(issue, running_entry)
     end
   end
 
   defp reconcile_issue_state(_issue, state, _active_states, _terminal_states), do: state
+
+  # A plan handed to its review waits on the person, so it keeps its slot whether or not a run
+  # was live when the poll saw the move (`release_absent_slot/2` keeps it when none was).
+  defp release_non_active_slot(state, %Issue{} = issue) do
+    if PlanReview.in_state?(issue.state),
+      do: state,
+      else: release_slot(state, issue.id, "it moved to #{issue.state}, which is not an active state")
+  end
 
   defp merging_terminal_grace?(%State{} = state, %Issue{id: issue_id}) do
     case Map.get(state.running, issue_id) do

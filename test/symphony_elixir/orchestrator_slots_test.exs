@@ -79,6 +79,25 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
       assert Map.has_key?(state.slot_holders, "p")
     end
 
+    test "a holder whose live run sees its plan moved to Plan Review keeps its slot; a move to Backlog frees it", ctx do
+      write_slots_workflow!(ctx, max_concurrent_agents: 2)
+      plan = issue("p", "MT-P", "In Progress")
+      other = issue("o", "MT-O", "In Progress")
+
+      state =
+        orchestrator_state(2)
+        |> holding(plan)
+        |> holding(other)
+        |> live_run(plan)
+        |> live_run(other)
+
+      reconciled = Orchestrator.reconcile_issue_states_for_test([%{plan | state: "Plan Review"}, %{other | state: "Backlog"}], state)
+
+      refute Map.has_key?(reconciled.running, "p")
+      assert Map.has_key?(reconciled.slot_holders, "p")
+      refute Map.has_key?(reconciled.slot_holders, "o")
+    end
+
     test "a ticket's first run takes the slot as it is dispatched, before the run's Grooming turn, and the record keeps it", ctx do
       write_slots_workflow!(ctx, max_concurrent_agents: 1)
       first = recorded(issue("a", "MT-A", "Todo"))
@@ -321,6 +340,13 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
     }
 
     %{state | running: Map.put(state.running, issue.id, entry), claimed: MapSet.put(state.claimed, issue.id)}
+  end
+
+  defp live_run(state, %Issue{} = issue) do
+    pid = spawn(fn -> receive do: (:stop -> :ok) end)
+    on_exit(fn -> Process.exit(pid, :kill) end)
+    state = run(state, issue)
+    %{state | running: Map.update!(state.running, issue.id, &%{&1 | pid: pid, ref: nil})}
   end
 
   defp orchestrator_state(max_total) do
