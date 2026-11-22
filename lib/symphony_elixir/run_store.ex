@@ -1797,6 +1797,52 @@ defmodule SymphonyElixir.RunStore do
     end
   end
 
+  @doc """
+  Marks the ticket `issue_id` as holding a dispatch slot since `since`, or as holding none when
+  `since` is nil (`slot_held_since` on `SymphonyElixir.TicketState`, `SymphonyElixir.Dispatch.Slots`);
+  `{:error, :ticket_state_not_found}` when the ticket has no record.
+  """
+  @spec put_slot_holder(String.t(), DateTime.t() | nil) :: :ok | {:error, term()}
+  def put_slot_holder(issue_id, since) when is_binary(issue_id) and (is_nil(since) or is_struct(since, DateTime)),
+    do: update_ticket_state(issue_id, %{slot_held_since: since})
+
+  @doc """
+  The tickets that hold a dispatch slot, across every repository, by issue id: each one's
+  identifier, phase, repository and since when it holds its slot; when the store can't be read,
+  its error.
+  """
+  @spec slot_holders() :: %{String.t() => map()} | {:error, term()}
+  def slot_holders do
+    with :ok <- ensure_started() do
+      transaction(fn ->
+        for %{slot_held_since: %DateTime{} = since, issue_id: issue_id} = record <- listed_ticket_records(:all), into: %{} do
+          {issue_id, %{identifier: Map.get(record, :issue_identifier), state: Map.get(record, :phase), repo_key: Map.get(record, :repo_key), since: since}}
+        end
+      end)
+    end
+  end
+
+  @doc """
+  What the dispatch pass orders its candidates by, from every repository's records in one read:
+  each queued ticket's place (`positions`, as `queue_positions/0`), the identifier of each ticket's
+  parent (`parents`, by issue id) and each ticket's phase (`phases`, by identifier); when the store
+  can't be read, its error.
+  """
+  @spec queue_facts() :: %{positions: map(), parents: map(), phases: map()} | {:error, term()}
+  def queue_facts do
+    with :ok <- ensure_started() do
+      transaction(fn ->
+        records = listed_ticket_records(:all)
+
+        %{
+          positions: queue_position_map(records),
+          parents: for(%{issue_id: id, parent: %{identifier: parent}} <- records, is_binary(parent), into: %{}, do: {id, parent}),
+          phases: for(%{issue_identifier: identifier, phase: phase} <- records, is_binary(identifier), into: %{}, do: {identifier, phase})
+        }
+      end)
+    end
+  end
+
   defp queue_position_map(records) do
     for %{queue_position: position, issue_id: issue_id} <- records, is_integer(position), into: %{} do
       {issue_id, position}

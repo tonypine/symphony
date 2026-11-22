@@ -4095,7 +4095,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert config.workspace.root == "env:#{workspace_env_var}"
   end
 
-  test "config supports per-state max concurrent agent overrides" do
+  test "config still loads per-state max concurrent agent overrides, which the engine no longer reads" do
     write_workflow_file!(Workflow.workflow_file_path(),
       max_concurrent_agents: 10,
       max_concurrent_agents_by_state: %{
@@ -4106,11 +4106,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     )
 
     assert Config.settings!().execution.max_concurrent_agents == 10
-    assert Config.max_concurrent_agents_for_state("Todo") == 1
-    assert Config.max_concurrent_agents_for_state("In Progress") == 4
-    assert Config.max_concurrent_agents_for_state("In Review") == 2
-    assert Config.max_concurrent_agents_for_state("Closed") == 10
-    assert Config.max_concurrent_agents_for_state(:not_a_string) == 10
+    assert Config.settings!().execution.max_concurrent_agents_by_state == %{"todo" => 1, "in progress" => 4, "in review" => 2}
 
     write_workflow_file!(Workflow.workflow_file_path(), worker_max_concurrent_agents_per_host: 2)
     assert :ok = Config.validate!()

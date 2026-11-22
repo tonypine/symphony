@@ -638,9 +638,15 @@ with an `ETag` and `304` as the ticket read does.
       { "identifier": "MOT-93", "epic": null, "after": null, "also_waits_on": [], "situation": { "kind": "waiting_for_slot", "...": "..." }, "children": [], "...": "..." }
     ]
   },
-  "outside": { "backlog": 12, "below_priority": 3, "epic": 2, "behind": 4 }
+  "outside": { "backlog": 12, "below_priority": 3, "epic": 2, "behind": 4 },
+  "slots": { "total": 2, "used": 2, "free": 0, "holders": [{ "issue_id": "t5", "identifier": "SHOP-305", "state": "In Progress", "running": true, "...": "..." }], "...": "..." }
 }
 ```
+
+`slots` is the dispatch order's `slots` (below): the slot count, how many are used and free, and the
+ticket that holds each slot; null before the orchestrator's first walk. Every entry of `in_progress`
+and of `queue.roots`, children included, carries `in_progress`: true exactly when the ticket holds a
+slot, which is the only meaning of in progress (SPEC.md Section 8.3).
 
 `in_progress` is every ticket that has started and has not landed or been cancelled: its phase is past
 Todo (and Backlog) and not terminal, or a run works on it, whatever it is doing now. Its entries come in
@@ -690,8 +696,8 @@ grouped by the kind of its `situation`, and the dispatch candidates in the order
 them, each with the reason it is or is not next (`SymphonyElixir.Dispatch.Order`).
 
 The orchestrator walks the poll's candidates at the end of each poll cycle, after the cycle's dispatch
-pass, in the order the pass walks them (closest to done first, each epic lane's tickets
-nearest the epic, then priority and age) and through the pass's own gates and slot decision. A ticket a
+pass, in the order the pass walks them (the stored queue order, the sub-tickets of a ticket that has
+started first) and through the pass's own gates and slot decision. A ticket a
 pass run now would start takes its slot for the tickets after it. The read is recomputed on the
 triggers a poll cycle runs on and never on a timer of its own; it
 makes no Linear request.
@@ -702,11 +708,15 @@ makes no Linear request.
   "computed_at": "2026-11-09T21:59:58.120Z",
   "next": "TP-1401",
   "slots": {
-    "concurrency": { "max_total": 2, "finishing_max": 1 },
+    "total": 2,
+    "used": 1,
+    "free": 1,
+    "holders": [{ "issue_id": "t9", "identifier": "TP-1399", "state": "Code Review", "repo_key": "symphony", "since": "2026-11-09T20:10:00Z", "running": false }],
+    "concurrency": { "max_total": 2, "finishing_max": 0 },
     "work_used": 1,
     "work_free": 1,
-    "finishing": { "slots": 1, "used": 0, "running": [] },
-    "epic_lanes": { "max_total": 2, "lanes": [], "queued_epics": [], "shared": { "slots": 2, "used": 1 } }
+    "finishing": { "slots": 0, "used": 0, "running": [] },
+    "epic_lanes": { "max_total": null, "lanes": [], "queued_epics": [], "shared": { "slots": null, "used": 1 } }
   },
   "queue": [
     { "identifier": "TP-1401", "position": 1, "outcome": "starts", "reason": "next: a slot is free", "slot": "shared", "starts_now": true, "...": "..." },
@@ -723,7 +733,7 @@ makes no Linear request.
 | --- | --- |
 | `computed_at` | When the orchestrator walked the candidates; null before its first poll cycle. |
 | `next` | The identifier of the ticket first in line; null when none is. |
-| `slots` | The slot and lane facts the walk read: `concurrency` (the limits), `work_used` and `work_free` (of `max_total`), `finishing` and `epic_lanes` as the state gives them. |
+| `slots` | The slots the walk read (SPEC.md Section 8.3): `total` (`max_total`), `used`, `free` and `holders`, each slot's ticket (`issue_id`, `identifier`, `state`, `repo_key`, `since` it holds the slot, `running` whether a run works on it now), the longest held first; a PR run with no ticket counts as a holder while it runs. `concurrency`, `work_used` and `work_free` repeat them as before; `finishing` and `epic_lanes` stay, empty: those settings have no effect. |
 | `queue` | The tickets in line, by `position`. |
 | `groups` | Every open ticket exactly once: each walked candidate, and every ticket record neither removed nor in a terminal state. The groups follow the situation kinds' precedence and hold only kinds some ticket has; within one, tickets in line come first by `position`, then the rest by identifier. |
 
@@ -735,9 +745,10 @@ Each ticket, in `queue` and in `groups`:
 | `outcome` | `starts` (a pass run now starts it), `waits` (it waits for a slot), `paused` (its gates are open but the whole pass is paused), `held` (a gate keeps it out of the pass), `running` (a run works on it) or `not_a_candidate` (an open ticket the poll does not offer for dispatch: Backlog, a plan in review, a parent waiting on its sub-tickets). |
 | `position` | Its place in line, 1 for the next one; null for `held`, `running` and `not_a_candidate`. |
 | `reason` | `next: a slot is free`; `next: ` and why it waits (`next: work slots full`); `2nd: a slot is free` for a later one a pass run now starts too; `2nd: behind TP-n` for a later one that waits; the pause's line for a paused one (`dispatch is paused: updating to v0.0.1.825`); the gate's reason for a held one (`Waiting for TP-1399 to finish`); `already running` for a running one; the situation's `cause` for one that is not a candidate. |
-| `wait` | For `waits`: why it waits (`work slots full`, `finishing slots full`, `TP-n (Merging) is waiting for a finishing slot`). |
+| `wait` | For `waits`: why it waits (`work slots full`, or `no worker host is free` for a ticket that holds its slot). |
 | `rule` | The rule behind a `held` or `paused` ticket (`priority`, `usage_limit`, `symphony_pause`, `daily_budget`...), as `dispatch_skipped` names it; null when no rule is. |
-| `slot` | For `starts` and `running`: the slot it takes (`finishing`, `shared` or its epic lane). |
+| `slot` | For `starts` and `running`: `shared`, the one kind of slot. |
+| `in_progress` | Whether the ticket holds a slot: true exactly for the `holders` of `slots`. |
 | `starts_now` | `true` for `starts`. |
 | `situation` | The ticket's `situation`, as the ticket read gives it. |
 

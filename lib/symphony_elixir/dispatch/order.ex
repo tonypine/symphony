@@ -15,7 +15,7 @@ defmodule SymphonyElixir.Dispatch.Order do
     filter, the usage limit, a spent budget...), with the gate's reason and the `rule` behind it;
   - `paused`: its gates are open but the whole pass is paused (Symphony's pause, the workspace quota,
     the daily token budget);
-  - `starts`: a pass run now starts it, on the `slot` it names;
+  - `starts`: a pass run now starts it: it holds a slot, or takes a free one;
   - `waits`: a pass run now leaves it waiting for a slot.
 
   `place/1` numbers the tickets that are in line (`starts`, `waits`, `paused`) and words each one's
@@ -23,6 +23,7 @@ defmodule SymphonyElixir.Dispatch.Order do
   """
 
   alias SymphonyElixir.{Situation, TicketState}
+  alias SymphonyElixir.Dispatch.Slots
 
   @in_line [:starts, :waits, :paused]
 
@@ -102,7 +103,10 @@ defmodule SymphonyElixir.Dispatch.Order do
   - `groups`: every open ticket exactly once (a walked candidate, and every record neither removed nor
     in a terminal state), under the kind of its situation, the kinds in the situation's precedence
     and the tickets of a kind by place in line, then identifier;
-  - `slots`: the slot and lane facts the walk read.
+  - `slots`: the slots the walk read (`SymphonyElixir.Dispatch.Slots.read/3`): the slot count, how
+    many are used and free, and the tickets that hold them.
+
+  Each ticket carries `in_progress`: true exactly when it holds a slot.
 
   A ticket that is not a candidate has `outcome` `not_a_candidate` and its situation's cause as its
   reason.
@@ -118,9 +122,12 @@ defmodule SymphonyElixir.Dispatch.Order do
     open_ids =
       for record <- records, open?(record, terminal), not Map.has_key?(walked, record.issue_id), do: record.issue_id
 
+    holders = Slots.holder_ids(order.slots)
+
     tickets =
       (Enum.map(order.entries, & &1.issue_id) ++ open_ids)
       |> Enum.map(&ticket(Map.get(walked, &1), Map.get(by_id, &1), &1, live, records))
+      |> Enum.map(&Map.put(&1, :in_progress, MapSet.member?(holders, &1.issue_id)))
       |> Enum.sort_by(&{is_nil(&1.position), &1.position || 0, &1.identifier || &1.issue_id})
 
     queue = Enum.filter(tickets, & &1.position)

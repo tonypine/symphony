@@ -22,7 +22,6 @@ defmodule SymphonyElixir.Orchestrator do
     Config,
     Connected,
     DispatchLoop,
-    EpicLanes,
     Handoff,
     Harnesses,
     IdlePark,
@@ -80,7 +79,7 @@ defmodule SymphonyElixir.Orchestrator do
   alias SymphonyElixir.Conductor.Message, as: ConductorMessage
   alias SymphonyElixir.Conductor.Tree, as: ConductorTree
   alias SymphonyElixir.Config.{Cache, Schema}
-  alias SymphonyElixir.Dispatch.{Candidates, Order, Queue, Settings, Settle, Shadow}
+  alias SymphonyElixir.Dispatch.{Candidates, Order, Queue, Settings, Settle, Shadow, Slots}
   alias SymphonyElixir.EpicReview.MainCi
   alias SymphonyElixir.Linear.{Client, Issue, RateLimit, TransientRetry, Usage}
   alias SymphonyElixir.Pauses.Dependencies
@@ -122,6 +121,9 @@ defmodule SymphonyElixir.Orchestrator do
   @merging_state "merging"
   # The dispatch-skipped reason of a ticket Linear created a moment ago (`Dispatch.Settle`).
   @settle_reason "waiting for its relations: Linear created it a moment ago"
+  # A ticket's slot as the dispatch order and the log name it: there is one kind of slot.
+  @slot_label "shared"
+  @slots_full_reason "work slots full"
   # The reviewer state, as the fallback when a repo's settings are unavailable.
   @code_review_state "Code Review"
   # The QA state, the fallback when a repo's settings are unavailable.
@@ -196,7 +198,10 @@ defmodule SymphonyElixir.Orchestrator do
       plan_comment_checks: %{},
       plan_comments_since: nil,
       merging_ci_waits: %{},
-      epic_lanes: nil,
+      # The tickets that hold a dispatch slot, by issue id (`SymphonyElixir.Dispatch.Slots`), with a
+      # live run or without one: each one's identifier, state, repository and since when it holds it.
+      # Kept on the ticket records, so a restart keeps them; read from there at start.
+      slot_holders: %{},
       blocked: [],
       update_hold_cache: %{blockers: %{}, included: %{}},
       slot_waiting: %{},
@@ -299,6 +304,7 @@ defmodule SymphonyElixir.Orchestrator do
       quality_gate_comment_keys: quality_gate_comment_keys,
       usage_limits: usage_limits,
       paused_providers: persisted_paused_providers(),
+      slot_holders: hydrate_slot_holders(),
       self_heal_opts: Keyword.get(opts, :self_heal_opts, []),
       clock: Keyword.get(opts, :clock, &DateTime.utc_now/0),
       dispatch_settings: Settings.read(),
@@ -919,11 +925,10 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # A slot just freed: run dispatch now rather than at the next poll when an issue is waiting for one.
-  # A run on a lane's path also plans the lanes again now: the run may have been the last thing on the
-  # epic's path Symphony could dispatch, and then the lane goes to the next epic on this event.
-  defp cycle_after_run_end(%State{} = state, issue_id) do
-    if map_size(state.slot_waiting) > 0 or EpicLanes.on_lane?(state.epic_lanes, issue_id) do
+  # A run ended: its ticket keeps its slot unless it gave it up (`release_slot/3`), so dispatch runs
+  # now rather than at the next poll when an issue is waiting for a slot.
+  defp cycle_after_run_end(%State{} = state, _issue_id) do
+    if map_size(state.slot_waiting) > 0 do
       schedule_immediate_tick(state)
     else
       state
@@ -1824,12 +1829,12 @@ defmodule SymphonyElixir.Orchestrator do
       |> apply_operator_stops_result(Map.get(result, :stopped_ids, []), Map.get(result, :stopped_result, {:ok, []}), read_at)
 
     case apply_repo_poll_result(state, repos, repo_result, now_ms, read_at) do
-      {:ok, %{dispatchable: issues}, state} ->
+      {:ok, %{dispatchable: issues} = buckets, state} ->
         state =
           state
           |> prune_quality_gate_cache_to_active(issues)
           |> clear_running_quality_gate_cache_entries()
-          |> put_epic_lanes(issues)
+          |> release_slots(issues ++ Map.get(buckets, :conflicts, []), repo_poll_cache_warmed?(state, repos))
           |> put_blocked(issues)
           |> release_merging_ci_waits(issues)
           |> grant_step_turns()
@@ -1837,7 +1842,7 @@ defmodule SymphonyElixir.Orchestrator do
           |> tend_groomed_parents(issues)
           |> tend_owed_turns()
 
-        if available_slots(state) > 0 or available_finishing_slots(state) > 0 do
+        if available_slots(state) > 0 or idle_slot_holders?(state) do
           issues
           |> reject_running_quality_gate_candidates(state)
           |> start_quality_gate_or_dispatch(state, :poll)
@@ -2583,8 +2588,16 @@ defmodule SymphonyElixir.Orchestrator do
   def release_merging_ci_waits_for_test(%State{} = state, issues) when is_list(issues), do: release_merging_ci_waits(state, issues)
 
   @doc false
-  @spec put_epic_lanes_for_test(State.t(), [Issue.t()]) :: State.t()
-  def put_epic_lanes_for_test(%State{} = state, issues) when is_list(issues), do: put_epic_lanes(state, issues)
+  @spec release_slots_for_test(State.t(), [Issue.t()], boolean()) :: State.t()
+  def release_slots_for_test(%State{} = state, issues, warm?) when is_list(issues), do: release_slots(state, issues, warm?)
+
+  @doc false
+  @spec dispatch_order_slots_for_test(State.t()) :: map()
+  def dispatch_order_slots_for_test(%State{} = state), do: dispatch_order_slots(state)
+
+  @doc false
+  @spec available_slots_for_test(State.t()) :: non_neg_integer()
+  def available_slots_for_test(%State{} = state), do: available_slots(state)
 
   @doc false
   @spec quality_gate_input_for_test(State.t(), [Issue.t()], term()) :: [Issue.t()]
@@ -2731,6 +2744,7 @@ defmodule SymphonyElixir.Orchestrator do
 
         state
         |> terminate_running_issue(issue.id, true, remove_reason: :terminal, issue_state: issue.state)
+        |> release_slot(issue.id, "it moved to #{issue.state}")
         |> maybe_emit_issue_completed(issue, running_entry)
 
       active_issue_state?(issue.state, active_states) ->
@@ -2749,6 +2763,7 @@ defmodule SymphonyElixir.Orchestrator do
 
         state
         |> terminate_running_issue(issue.id, false, track_completed_run: true)
+        |> release_slot(issue.id, "it moved to #{issue.state}, which is not an active state")
         |> put_watching_issue(issue)
         |> maybe_emit_awaiting_review(issue, running_entry)
     end
@@ -4424,11 +4439,10 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # Candidates go out in the stored queue order (`order_for_dispatch/1`); a gate skips a ticket and
-  # the walk goes on to the next place. While a Merging issue waits for a slot, no Todo issue starts
-  # in this pass, wherever it stands in the queue (`finishing_hold_before_walk/4`); its `slot_waiting`
-  # reason names the issue it waits for.
-  # `slot_waiting` is rebuilt from the pass, keeping the attempt of any retry that was waiting for a
+  # Candidates go out in the stored queue order, the sub-tickets of a ticket that has started first
+  # (`order_for_dispatch/2`); a gate skips a ticket and the walk goes on to the next place. A ticket
+  # that holds a slot always starts its next run; any other starts only on a free slot
+  # (`slot_decision/2`). `slot_waiting` is rebuilt from the pass, keeping the attempt of any retry that was waiting for a
   # slot. `dispatch_skipped` is rebuilt the same way: every candidate the pass neither starts nor
   # leaves waiting for a slot gets the reason.
   defp dispatch_chosen_issues(issues, state) do
@@ -4441,12 +4455,10 @@ defmodule SymphonyElixir.Orchestrator do
     state = ask_spent_budgets(state, issues)
     :ok = resolve_qa_builds(issues, state)
 
-    ordered = order_for_dispatch(issues)
-    hold = finishing_hold_before_walk(ordered, state, active_states, terminal_states)
-
-    {state, _hold} =
-      ordered
-      |> Enum.reduce({%{state | slot_waiting: %{}, dispatch_skipped: %{}}, hold}, fn issue, acc ->
+    state =
+      issues
+      |> order_for_dispatch(state)
+      |> Enum.reduce(%{state | slot_waiting: %{}, dispatch_skipped: %{}}, fn issue, acc ->
         maybe_dispatch_chosen_issue(issue, acc, previous_waiting, active_states, terminal_states)
       end)
 
@@ -4478,7 +4490,8 @@ defmodule SymphonyElixir.Orchestrator do
   # Before the pass reads its gates, each QA ticket that is not running is brought in line with the
   # build of its head (`SymphonyElixir.QaBuildHold`): held while the app is built, sent to Rework
   # when the build failed, free otherwise. The gate then only reads the hold (`hold_reason/3`). A
-  # ticket that left QA while it was held loses the hold here.
+  # ticket that left QA while it was held loses the hold here. A build is asked for only for a ticket
+  # that holds a slot, or could take one now: no machine step runs for a ticket without a slot.
   defp resolve_qa_builds(issues, %State{} = state) do
     for %Issue{id: issue_id} = issue when is_binary(issue_id) <- issues,
         repo_key = hold_repo_key(issue),
@@ -4486,6 +4499,7 @@ defmodule SymphonyElixir.Orchestrator do
       cond do
         not qa_issue?(issue) -> QaBuildHold.release(repo_key, issue_id, issue.identifier)
         issue_claimed_or_running?(state, issue_id) -> :ok
+        not holds_slot?(state, issue_id) and available_slots(state) == 0 -> :ok
         true -> QaBuildHold.resolve(repo_key, issue, qa_head(issue_id, repo_key))
       end
     end
@@ -4502,12 +4516,25 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # The order a dispatch pass walks its candidates in, and the dispatch order read
-  # (`put_dispatch_order/2`) with it: the stored queue order (`SymphonyElixir.Dispatch.Queue`).
-  defp order_for_dispatch(issues), do: Queue.order(issues, RunStore.queue_positions())
+  # (`put_dispatch_order/2`) with it: the stored queue order (`SymphonyElixir.Dispatch.Queue`), the
+  # sub-tickets of a ticket that has started (it holds a slot, or its phase is past Todo) first
+  # (`SymphonyElixir.Dispatch.Slots.first_ids/3`).
+  # A store that can't be read gives no places and no parents: the walk is by creation time alone.
+  defp order_for_dispatch(issues, %State{} = state) do
+    facts = RunStore.queue_facts() |> then(&if(is_map(&1), do: &1, else: %{positions: %{}, parents: %{}, phases: %{}}))
+    Queue.order(issues, facts.positions, Slots.first_ids(issues, facts, holder_identifiers(state)))
+  end
+
+  defp holder_identifiers(%State{} = state) do
+    MapSet.new(
+      for({_id, %{identifier: identifier}} <- state.running, is_binary(identifier), do: identifier) ++
+        for({_id, %{identifier: identifier}} <- state.slot_holders, is_binary(identifier), do: identifier)
+    )
+  end
 
   # The dispatch order read (`SymphonyElixir.Dispatch.Order`), kept on the state for the snapshot: the
   # poll's candidates in the order a pass walks them (`order_for_dispatch/1`), each with what a pass run
-  # now would do with it, through the pass's own gates and slot decision (`slot_decision/3`). A ticket
+  # now would do with it, through the pass's own gates and slot decision (`slot_decision/2`). A ticket
   # the pass would start takes its slot in a copy of the state, so the next one sees the slots left.
   # It is recomputed at the end of each poll cycle, after its pass, and never on a timer of its own.
   defp put_dispatch_order(%State{} = state, issues) do
@@ -4515,61 +4542,58 @@ defmodule SymphonyElixir.Orchestrator do
     gates = {active_state_set(), terminal_state_set()}
     pass = %{state | slot_waiting: %{}}
 
-    ordered = issues |> Enum.filter(&match?(%Issue{}, &1)) |> order_for_dispatch()
-    {active_states, terminal_states} = gates
-    hold = finishing_hold_before_walk(ordered, pass, active_states, terminal_states)
-
-    {walked, _pass, _hold} =
-      ordered
-      |> Enum.reduce({[], pass, hold}, fn issue, {walked, pass, hold} ->
-        {outcome, pass, hold} = dispatch_order_outcome(issue, pass, hold, pause, gates)
-        {[Map.merge(dispatch_order_ticket(issue, state), outcome) | walked], pass, hold}
+    {walked, _pass} =
+      issues
+      |> Enum.filter(&match?(%Issue{}, &1))
+      |> order_for_dispatch(state)
+      |> Enum.reduce({[], pass}, fn issue, {walked, pass} ->
+        {outcome, pass} = dispatch_order_outcome(issue, pass, pause, gates)
+        {[Map.merge(dispatch_order_ticket(issue, state), outcome) | walked], pass}
       end)
 
     order = %{computed_at: DateTime.utc_now(), entries: Order.place(Enum.reverse(walked)), slots: dispatch_order_slots(state)}
     %{state | dispatch_order: order}
   end
 
-  defp dispatch_order_outcome(%Issue{} = issue, %State{} = pass, hold, pause, {active_states, terminal_states}) do
+  defp dispatch_order_outcome(%Issue{} = issue, %State{} = pass, pause, {active_states, terminal_states}) do
     cond do
       Map.has_key?(pass.running, issue.id) ->
-        {%{outcome: :running, reason: running_reason(issue.id), slot: dispatch_slot_label(pass, issue)}, pass, hold}
+        {%{outcome: :running, reason: running_reason(issue.id), slot: @slot_label}, pass}
 
       gate = dispatch_gate_closed(issue, pass, active_states, terminal_states) ->
         {reason, rule, _gate} = gate
-        {%{outcome: :held, reason: reason, rule: rule}, pass, hold}
+        {%{outcome: :held, reason: reason, rule: rule}, pass}
 
       provider = provider_pause_hold(pass, issue) ->
-        {%{outcome: :held, reason: Pauses.provider_skip_reason(provider), rule: :provider_pause}, pass, hold}
+        {%{outcome: :held, reason: Pauses.provider_skip_reason(provider), rule: :provider_pause}, pass}
 
       limit = usage_limit_hold(pass, issue) ->
-        {%{outcome: :held, reason: UsageLimit.hold_label(limit), rule: :usage_limit}, pass, hold}
+        {%{outcome: :held, reason: UsageLimit.hold_label(limit), rule: :usage_limit}, pass}
 
       pause ->
         {reason, rule} = pause
-        {%{outcome: :paused, reason: reason, rule: rule}, pass, hold}
+        {%{outcome: :paused, reason: reason, rule: rule}, pass}
 
       true ->
-        dispatch_order_slot(issue, pass, hold)
+        dispatch_order_slot(issue, pass)
     end
   end
 
-  defp dispatch_order_slot(%Issue{} = issue, %State{} = pass, hold) do
-    case slot_decision(pass, issue, hold) do
-      {:start, hold} ->
-        outcome = %{outcome: :starts, slot: dispatch_slot_label(pass, issue)}
-        {outcome, take_order_slot(pass, issue), hold}
+  defp dispatch_order_slot(%Issue{} = issue, %State{} = pass) do
+    case slot_decision(pass, issue) do
+      :start ->
+        {%{outcome: :starts, slot: @slot_label}, take_order_slot(pass, issue)}
 
-      {{:wait, reason}, hold} ->
-        {%{outcome: :waits, reason: reason}, %{pass | slot_waiting: Map.put(pass.slot_waiting, issue.id, %{})}, hold}
+      {:wait, reason} ->
+        {%{outcome: :waits, reason: reason}, %{pass | slot_waiting: Map.put(pass.slot_waiting, issue.id, %{})}}
     end
   end
 
-  # The run a started ticket would be, as far as the slot counts read it.
+  # The run a started ticket would be, as far as the slot counts read it: its ticket holds a slot,
+  # and the worker host it would run on is taken.
   defp take_order_slot(%State{} = pass, %Issue{} = issue) do
     host = pass |> select_worker_host(nil) |> then(&if(is_binary(&1), do: &1))
-    kind = if finishing_issue?(issue), do: :landing, else: :work
-    put_running_entry(pass, issue.id, %{issue: issue, identifier: issue.identifier, run_profile: %{kind: kind}, worker_host: host})
+    put_running_entry(pass, issue.id, %{issue: issue, identifier: issue.identifier, run_profile: %{kind: :work}, worker_host: host})
   end
 
   defp dispatch_order_ticket(%Issue{} = issue, %State{} = state) do
@@ -4584,44 +4608,61 @@ defmodule SymphonyElixir.Orchestrator do
     }
   end
 
+  # The slots the reads report (`SymphonyElixir.Dispatch.Slots.read/3`): the slot count and the
+  # tickets that hold a slot, with a live run or without one.
   defp dispatch_order_slots(%State{} = state) do
-    %{
-      concurrency: concurrency_snapshot(state),
-      work_used: length(work_running_ids(state.running)),
-      work_free: available_slots(state),
-      finishing: finishing_snapshot(state.running),
-      epic_lanes: EpicLanes.snapshot(state.epic_lanes, epic_lane_running(state.running))
-    }
+    Slots.read(max_total(state), slot_holder_list(state), concurrency_snapshot(state))
   end
 
-  defp maybe_dispatch_chosen_issue(%Issue{} = issue, {state, hold}, previous_waiting, active_states, terminal_states) do
+  # Every slot taken: each holder, and each other run under way (a PR run), as `Slots.read/3` takes them.
+  defp slot_holder_list(%State{} = state) do
+    holders =
+      for {issue_id, holder} <- state.slot_holders do
+        Map.merge(holder, %{issue_id: issue_id, state: running_state(state, issue_id) || holder.state, running: Map.has_key?(state.running, issue_id)})
+      end
+
+    others =
+      for {issue_id, entry} <- state.running, not Map.has_key?(state.slot_holders, issue_id) do
+        %{issue_id: issue_id, identifier: Map.get(entry, :identifier), state: running_state(state, issue_id), repo_key: Map.get(entry, :repo_key), since: Map.get(entry, :started_at), running: true}
+      end
+
+    holders ++ others
+  end
+
+  defp running_state(%State{} = state, issue_id) do
+    case Map.get(state.running, issue_id) do
+      %{issue: %Issue{state: issue_state}} -> issue_state
+      _none -> nil
+    end
+  end
+
+  defp maybe_dispatch_chosen_issue(%Issue{} = issue, state, previous_waiting, active_states, terminal_states) do
     waiting = Map.get(previous_waiting, issue.id, %{})
 
     cond do
       gate = dispatch_gate_closed(issue, state, active_states, terminal_states) ->
         {reason, rule, closed} = gate
-        {state |> note_blocked_flow_head(issue) |> put_dispatch_skipped(issue, reason, rule, closed), hold}
+        state |> note_blocked_flow_head(issue) |> put_dispatch_skipped(issue, reason, rule, closed)
 
       # A retry that started waiting for a slot while a dispatch readiness task ran is held again
       # with its attempt, as a retry that comes due during the hold is: on a paused provider, as on
       # a usage limit.
       provider = waiting_retry_provider_pause(waiting, issue, state) ->
-        {hold_waiting_retry_for_provider_pause(state, issue, waiting, provider), hold}
+        hold_waiting_retry_for_provider_pause(state, issue, waiting, provider)
 
       waiting_retry_held?(waiting, issue, state) ->
-        {hold_waiting_retry_for_usage_limit(state, issue, waiting), hold}
+        hold_waiting_retry_for_usage_limit(state, issue, waiting)
 
       provider = provider_pause_hold(state, issue) ->
-        {put_dispatch_skipped(state, issue, Pauses.provider_skip_reason(provider), :provider_pause), hold}
+        put_dispatch_skipped(state, issue, Pauses.provider_skip_reason(provider), :provider_pause)
 
       usage_limit_held?(issue, state) ->
-        {put_dispatch_skipped(state, issue, UsageLimit.hold_label(usage_limit_hold(state, issue)), :usage_limit), hold}
+        put_dispatch_skipped(state, issue, UsageLimit.hold_label(usage_limit_hold(state, issue)), :usage_limit)
 
       true ->
-        {state, hold} =
-          dispatch_or_wait_for_slot(state, issue, waiting, hold)
-
-        {note_dropped_at_dispatch(state, issue), hold}
+        state
+        |> dispatch_or_wait_for_slot(issue, waiting)
+        |> note_dropped_at_dispatch(issue)
     end
   end
 
@@ -4720,22 +4761,20 @@ defmodule SymphonyElixir.Orchestrator do
     %{state | dispatch_skipped: settled}
   end
 
-  defp dispatch_or_wait_for_slot(%State{} = state, %Issue{} = issue, waiting, hold) do
-    case slot_decision(state, issue, hold) do
-      {:start, hold} -> {dispatch_waiting_issue(state, issue, waiting), hold}
-      {{:wait, reason}, hold} -> {put_slot_waiting(state, issue, waiting, reason), hold}
+  defp dispatch_or_wait_for_slot(%State{} = state, %Issue{} = issue, waiting) do
+    case slot_decision(state, issue) do
+      :start -> dispatch_waiting_issue(state, issue, waiting)
+      {:wait, reason} -> put_slot_waiting(state, issue, waiting, reason)
     end
   end
 
-  # Whether a candidate whose gates are open starts now or waits for a slot, and why; `hold` names the
-  # finish that keeps fresh work from starting for the rest of the pass, once one waits.
-  defp slot_decision(%State{} = state, %Issue{} = issue, hold) do
-    cond do
-      is_binary(hold) and fresh_issue?(issue) -> {{:wait, hold}, hold}
-      issue_dispatch_slots_available?(issue, state) -> {:start, hold}
-      true -> {{:wait, slot_wait_reason(issue)}, hold || finishing_hold(issue)}
-    end
+  # Whether a candidate whose gates are open starts now or waits, and why: a ticket that holds a slot
+  # starts whenever a worker host is free; any other needs a free slot too.
+  defp slot_decision(%State{} = state, %Issue{} = issue) do
+    if issue_dispatch_slots_available?(issue, state), do: :start, else: {:wait, slot_wait_reason(issue, state)}
   end
+
+  defp slot_wait_reason(%Issue{} = issue, %State{} = state), do: if(dispatch_slots_available?(issue, state), do: "no worker host is free", else: @slots_full_reason)
 
   defp dispatch_waiting_issue(%State{} = state, %Issue{} = issue, waiting) do
     dispatch_issue(state, freeze_issue_repo_key(issue, Map.get(waiting, :repo_key)), Map.get(waiting, :attempt), Map.get(waiting, :worker_host))
@@ -4754,48 +4793,6 @@ defmodule SymphonyElixir.Orchestrator do
       })
 
     %{state | slot_waiting: Map.put(state.slot_waiting, issue.id, entry)}
-  end
-
-  defp slot_wait_reason(%Issue{} = issue) do
-    if finishing_issue?(issue), do: "finishing slots full", else: "work slots full"
-  end
-
-  # The stage of a ticket's state: Merging, Rework, other active states (resumes), then Todo.
-  defp stage_rank(state_name) when is_binary(state_name) do
-    case normalize_issue_state(state_name) do
-      @merging_state -> 0
-      "rework" -> 2
-      "todo" -> 4
-      _resume -> 3
-    end
-  end
-
-  defp stage_rank(_state_name), do: 4
-
-  defp fresh_issue?(%Issue{state: state_name}), do: stage_rank(state_name) == 4
-
-  # The finish that holds fresh work for the whole pass, worked out before the walk: the first Merging
-  # candidate in the queue whose gates are open and that finds no slot free. The walk goes in the
-  # stored queue order, so a Todo ticket placed ahead of a waiting Merging ticket is held too.
-  defp finishing_hold_before_walk(issues, %State{} = state, active_states, terminal_states) do
-    Enum.find_value(issues, fn
-      %Issue{} = issue ->
-        stage_rank(issue.state) == 0 and not Map.has_key?(state.running, issue.id) and
-          is_nil(dispatch_gate_closed(issue, state, active_states, terminal_states)) and
-          is_nil(provider_pause_hold(state, issue)) and is_nil(usage_limit_hold(state, issue)) and
-          not issue_dispatch_slots_available?(issue, state) and finishing_hold(issue)
-
-      _not_an_issue ->
-        nil
-    end)
-  end
-
-  # Merging: the issues "never start fresh work while a finish waits" protects.
-  defp finishing_hold(%Issue{state: state_name} = issue) do
-    if stage_rank(state_name) == 0 do
-      slot = if finishing_issue?(issue), do: "finishing", else: "work"
-      "#{issue.identifier} (#{state_name}) is waiting for a #{slot} slot"
-    end
   end
 
   defp should_dispatch_issue?(%Issue{} = issue, %State{} = state, active_states, terminal_states) do
@@ -5006,27 +5003,13 @@ defmodule SymphonyElixir.Orchestrator do
         true
 
       allowed ->
-        Map.has_key?(state.slot_waiting, issue_id) or
+        Map.has_key?(state.slot_waiting, issue_id) or holds_slot?(state, issue_id) or
           MapSet.member?(allowed, priority || 0)
     end
   end
 
   defp issue_dispatch_slots_available?(%Issue{} = issue, %State{} = state) do
     dispatch_slots_available?(issue, state) and worker_slots_available?(state)
-  end
-
-  # Each active epic reserves a lane out of max_total, recomputed from the candidates every poll.
-  defp put_epic_lanes(%State{} = state, issues) do
-    settings = Config.settings!()
-    max_total = state.max_concurrent_agents || settings.execution.max_concurrent_agents
-    priority_gate = %{names: settings.tickets.priorities, allowed?: &lane_priority_allowed?(&1, state)}
-    %{state | epic_lanes: EpicLanes.plan(issues, max_total, settings.execution.epic_lanes, terminal_state_set(), priority_gate)}
-  end
-
-  # A lane is for an epic Symphony can work on: the dispatch filter decides, and a ticket with a run
-  # or a retry under way holds the lane however its priority reads, until that ends.
-  defp lane_priority_allowed?(%Issue{id: issue_id} = issue, %State{} = state) do
-    priority_allowed?(issue, state) or Map.has_key?(state.running, issue_id) or MapSet.member?(state.claimed, issue_id)
   end
 
   # Candidates held in any active phase by open blockers, held by self-heal on a fix ticket, or
@@ -5188,37 +5171,95 @@ defmodule SymphonyElixir.Orchestrator do
   defp blocker_snapshot(%{} = blocker), do: %{identifier: Map.get(blocker, :identifier), state: Map.get(blocker, :state)}
   defp blocker_snapshot(_blocker), do: %{identifier: nil, state: nil}
 
-  defp epic_lane_slot_available?(%Issue{id: issue_id}, %State{} = state) do
-    EpicLanes.slot_for(state.epic_lanes, issue_id, work_running_ids(state.running)) != :none
+  # The slots taken (`SymphonyElixir.Dispatch.Slots`): every ticket that holds one (`slot_holders`),
+  # with a run under way (on a machine step and between its turns too) or with none, and every other
+  # run under way (a PR run takes a slot while it runs).
+  defp occupied_slot_ids(%State{} = state) do
+    state.running |> Map.keys() |> MapSet.new() |> MapSet.union(state.slot_holders |> Map.keys() |> MapSet.new())
   end
 
-  # Landing runs finish approved work, so they use their own `finishing_max` allowance instead of
-  # `max_total` and the epic lanes.
-  defp finishing_issue?(%Issue{} = issue) do
-    settings = Config.settings!()
-    RunKind.classify(issue, terminal_states: settings.tracker.terminal_states, settings: settings) == :landing
+  defp holds_slot?(%State{} = state, issue_id), do: Map.has_key?(state.running, issue_id) or Map.has_key?(state.slot_holders, issue_id)
+
+  # A ticket that holds a slot with no run: the pass runs even with no slot free, so its next run starts.
+  defp idle_slot_holders?(%State{} = state), do: Enum.any?(Map.keys(state.slot_holders), &(not Map.has_key?(state.running, &1)))
+
+  defp max_total(%State{} = state), do: state.max_concurrent_agents || Config.settings!().execution.max_concurrent_agents
+
+  # A store that can't be read starts with no holder: its error is the store's, logged where it fails.
+  defp hydrate_slot_holders, do: RunStore.slot_holders() |> then(&if(is_map(&1), do: &1, else: %{}))
+
+  # A ticket takes a slot as its run is dispatched; one that holds it already keeps it, with the time
+  # it took it. Its run's end leaves it there: only `release_slot/3` takes it away.
+  defp take_slot(%State{} = state, %Issue{id: issue_id} = issue, repo_key) do
+    holder = %{identifier: issue.identifier, state: issue.state, repo_key: repo_key}
+
+    case Map.get(state.slot_holders, issue_id) do
+      %{since: since} = held ->
+        %{state | slot_holders: Map.put(state.slot_holders, issue_id, Map.merge(held, Map.put(holder, :since, since)))}
+
+      nil ->
+        since = DateTime.utc_now()
+        persist_slot_holder(issue_id, since)
+        Logger.info("Ticket takes a dispatch slot: #{issue_context(issue)} repo_key=#{repo_key}")
+        %{state | slot_holders: Map.put(state.slot_holders, issue_id, Map.put(holder, :since, since))}
+    end
   end
 
-  defp finishing_entry?(%{run_profile: %{kind: :landing}}), do: true
-  defp finishing_entry?(_running_entry), do: false
-
-  defp work_running_ids(running) when is_map(running) do
-    for {issue_id, entry} <- running,
-        not finishing_entry?(entry),
-        not slot_free_entry?(entry),
-        do: issue_id
+  # A ticket gives up its slot (`SymphonyElixir.Dispatch.Slots`), and a cycle runs at once so the next
+  # ticket takes it without waiting for a poll.
+  defp release_slot(%State{} = state, issue_id, why) do
+    if Map.has_key?(state.slot_holders, issue_id) do
+      %{identifier: identifier} = Map.fetch!(state.slot_holders, issue_id)
+      persist_slot_holder(issue_id, nil)
+      Logger.info("Ticket gives up its dispatch slot: issue_id=#{issue_id} issue_identifier=#{identifier}; #{why}")
+      request_cycle(%{state | slot_holders: Map.delete(state.slot_holders, issue_id)})
+    else
+      state
+    end
   end
 
-  defp available_finishing_slots(%State{running: running}) do
-    max(Config.settings!().execution.finishing_max - Enum.count(running, fn {_issue_id, entry} -> finishing_entry?(entry) and not slot_free_entry?(entry) end), 0)
+  defp persist_slot_holder(issue_id, since) do
+    case RunStore.put_slot_holder(issue_id, since) do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("Failed to record a dispatch slot on the ticket's record: issue_id=#{issue_id} reason=#{inspect(reason)}")
+    end
   end
 
-  # A run on a machine step, or waiting for the slot of its next agent turn, holds no slot: its
-  # session ended at the step, and Symphony runs the step (`SymphonyElixir.PhaseSteps`).
-  defp slot_free_entry?(%{step: %{qa: true}}), do: false
-  defp slot_free_entry?(%{step: %{mode: "machine"}}), do: true
-  defp slot_free_entry?(%{step: %{waiting: waiting}}) when not is_nil(waiting), do: true
-  defp slot_free_entry?(_running_entry), do: false
+  # Each cycle, every ticket that holds a slot with no run is judged from the cycle's candidates: one
+  # no longer among them (done, moved out of the active states, removed; a plan in its review waits
+  # on the person and keeps it) gives its slot up, and so
+  # does one whose closed dispatch gate says it waits on a dependency, on its sub-tickets or on a
+  # person's stop (`Slots.releases?/2`). A ticket that waits on the person keeps it. Only a warm read
+  # judges absence: a cold one offers no candidates at all.
+  defp release_slots(%State{} = state, issues, warm?) do
+    by_id = for %Issue{id: issue_id} = issue <- issues, into: %{}, do: {issue_id, issue}
+    active_states = active_state_set()
+    terminal_states = terminal_state_set()
+
+    state.slot_holders
+    |> Enum.reject(fn {issue_id, _holder} -> Map.has_key?(state.running, issue_id) end)
+    |> Enum.reduce(state, fn {issue_id, holder}, state ->
+      case Map.get(by_id, issue_id) do
+        nil when warm? ->
+          if in_plan_review?(issue_id), do: state, else: release_slot(state, issue_id, "it is no longer a dispatch candidate")
+
+        nil ->
+          state
+
+        %Issue{} = issue ->
+          gate = dispatch_gate_closed(issue, state, active_states, terminal_states)
+          reasons = pause_reasons({:ticket, hold_repo_key(issue), issue_id})
+
+          if Slots.releases?(gate, reasons),
+            do: release_slot(state, issue_id, elem(gate, 0)),
+            else: %{state | slot_holders: Map.put(state.slot_holders, issue_id, %{holder | state: issue.state, identifier: issue.identifier})}
+      end
+    end)
+  end
+
+  # A plan handed to its review is out of the active states but waits on the person: it keeps its
+  # slot. Its phase is its record's, since the poll does not read the plan review state.
+  defp in_plan_review?(issue_id), do: issue_id |> RunStore.get_ticket_state() |> then(&(is_map(&1) and PlanReview.in_state?(Map.get(&1, :phase))))
 
   defp put_step(running_entry, {:machine, step}) do
     Map.merge(running_entry, %{step: Map.put(step, :waiting, nil), session_id: nil, agent_session: nil, last_event_at: DateTime.utc_now()})
@@ -5294,15 +5335,13 @@ defmodule SymphonyElixir.Orchestrator do
     put_running_entry(state, issue_id, put_in(entry, [:step, :waiting], :pause))
   end
 
+  # The run's ticket holds its slot through every step, so its next turn waits on nothing but a pause
+  # or an answer.
   defp grant_step_turn(state, issue_id, entry, false) do
-    if available_slots(state) > 0 and state_slots_available?(entry.issue, state.running) do
-      send(entry.step.waiter, {:run_step_turn, issue_id})
-      step = Map.drop(entry.step, [:waiter, :started_at]) |> Map.put(:waiting, nil)
-      notify_dashboard()
-      put_running_entry(state, issue_id, Map.merge(entry, %{step: step, last_event_at: DateTime.utc_now()}))
-    else
-      put_running_entry(state, issue_id, put_in(entry, [:step, :waiting], :slot))
-    end
+    send(entry.step.waiter, {:run_step_turn, issue_id})
+    step = Map.drop(entry.step, [:waiter, :started_at]) |> Map.put(:waiting, nil)
+    notify_dashboard()
+    put_running_entry(state, issue_id, Map.merge(entry, %{step: step, last_event_at: DateTime.utc_now()}))
   end
 
   # A run an update's pause starts holding says so on its ticket, once per hold: it has no session
@@ -5317,26 +5356,6 @@ defmodule SymphonyElixir.Orchestrator do
       [version | _rest] -> record_signal(running_entry_repo_key(entry) || state.repo_key, issue_id, "update_wait", %{version: version, step: step.id})
       [] -> :ok
     end
-  end
-
-  defp state_slots_available?(%Issue{state: issue_state}, running) when is_map(running) do
-    limit = Config.max_concurrent_agents_for_state(issue_state)
-    used = running_issue_count_for_state(running, issue_state)
-    limit > used
-  end
-
-  defp state_slots_available?(_issue, _running), do: false
-
-  defp running_issue_count_for_state(running, issue_state) when is_map(running) do
-    normalized_state = normalize_issue_state(issue_state)
-
-    Enum.count(running, fn
-      {_id, %{issue: %Issue{state: state_name}} = entry} ->
-        not slot_free_entry?(entry) and normalize_issue_state(state_name) == normalized_state
-
-      _ ->
-        false
-    end)
   end
 
   defp candidate_issue?(
@@ -5931,10 +5950,8 @@ defmodule SymphonyElixir.Orchestrator do
         ref = Process.monitor(pid)
         started_at = DateTime.utc_now()
 
-        slot = dispatch_slot_label(state, issue)
-
         Logger.info(
-          "Dispatching issue to agent: #{issue_context(issue)} pid=#{inspect(pid)} attempt=#{inspect(attempt)} worker_host=#{worker_host || "local"} slot=#{slot} #{run_profile_log_fields(run_profile)}#{trigger_comment_log_fields(issue, run_profile, repo_key)}"
+          "Dispatching issue to agent: #{issue_context(issue)} pid=#{inspect(pid)} attempt=#{inspect(attempt)} worker_host=#{worker_host || "local"} slot=#{@slot_label} #{run_profile_log_fields(run_profile)}#{trigger_comment_log_fields(issue, run_profile, repo_key)}"
         )
 
         if is_nil(conductor), do: record_started.()
@@ -6002,6 +6019,7 @@ defmodule SymphonyElixir.Orchestrator do
         state = delete_persisted_retry(state, issue.id, repo_key)
 
         state = clear_quality_gate_blocking_cache_entry(state, issue.id)
+        state = if Map.get(running_attrs, :run_kind) == :pr, do: state, else: take_slot(state, issue, repo_key)
         running = Map.put(state.running, issue.id, running_entry)
 
         %{
@@ -7936,13 +7954,9 @@ defmodule SymphonyElixir.Orchestrator do
     "issue_id=#{issue_id} issue_identifier=#{identifier}"
   end
 
-  defp available_slots(%State{} = state) do
-    max(
-      (state.max_concurrent_agents || Config.settings!().execution.max_concurrent_agents) -
-        length(work_running_ids(state.running)),
-      0
-    )
-  end
+  # The free slots: the slot count less the slots taken. A count lowered below the holders evicts
+  # nobody; no new ticket starts until fewer hold one.
+  defp available_slots(%State{} = state), do: max(max_total(state) - MapSet.size(occupied_slot_ids(state)), 0)
 
   defp ensure_run_store_started do
     case RunStore.ensure_started() do
@@ -9807,10 +9821,13 @@ defmodule SymphonyElixir.Orchestrator do
       workspace_lifecycle: workspace_lifecycle_snapshot(state),
       budget: budget_snapshot(state),
       dispatch_state: dispatch_state_snapshot(state),
-      epic_lanes: EpicLanes.snapshot(state.epic_lanes, epic_lane_running(state.running)),
+      # The epic lanes and the finishing slots decide nothing (`SymphonyElixir.Dispatch.Slots`): their
+      # keys stay, empty, for the clients that read them.
+      epic_lanes: %{max_total: nil, lanes: [], queued_epics: [], shared: %{slots: nil, used: map_size(state.running)}},
       blocked: state.blocked || [],
       concurrency: concurrency_snapshot(state),
-      finishing: finishing_snapshot(state.running),
+      finishing: %{slots: 0, used: 0, running: []},
+      slots: dispatch_order_slots(state),
       auto_merge: auto_merge,
       landing_waits: landing_waits,
       slot_waiting: slot_waiting_snapshot(state.slot_waiting) ++ merging_ci_waiting_snapshot(state),
@@ -9830,27 +9847,8 @@ defmodule SymphonyElixir.Orchestrator do
     {snapshot, %{run_history: run_history_ms, auto_merge: auto_merge_ms, landing_waits: landing_waits_ms}}
   end
 
-  defp concurrency_snapshot(%State{} = state) do
-    agent = Config.settings!().execution
-
-    %{
-      max_total: state.max_concurrent_agents || agent.max_concurrent_agents,
-      finishing_max: agent.finishing_max
-    }
-  end
-
-  defp finishing_snapshot(running) do
-    landing_runs =
-      for {issue_id, entry} <- running, finishing_entry?(entry) do
-        %{issue_id: issue_id, identifier: entry.identifier, state: entry.issue.state}
-      end
-
-    %{
-      slots: Config.settings!().execution.finishing_max,
-      used: length(landing_runs),
-      running: Enum.sort_by(landing_runs, & &1.identifier)
-    }
-  end
+  # `finishing_max` stays, 0, for the clients that read it: Merging takes no allowance of its own.
+  defp concurrency_snapshot(%State{} = state), do: %{max_total: max_total(state), finishing_max: 0}
 
   defp slot_waiting_snapshot(slot_waiting) do
     slot_waiting
@@ -9889,18 +9887,6 @@ defmodule SymphonyElixir.Orchestrator do
       }
     end)
     |> Enum.sort_by(& &1.since, DateTime)
-  end
-
-  defp dispatch_slot_label(%State{} = state, %Issue{} = issue) do
-    if finishing_issue?(issue), do: "finishing", else: EpicLanes.slot_label(state.epic_lanes, issue.id, work_running_ids(state.running))
-  end
-
-  defp epic_lane_running(running) do
-    running
-    |> Map.take(work_running_ids(running))
-    |> Map.new(fn {issue_id, entry} ->
-      {issue_id, %{identifier: entry.identifier, state: entry.issue.state}}
-    end)
   end
 
   defp linear_rate_limit_snapshot(%State{} = state) do
@@ -10800,7 +10786,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp usage_limit_waiting_for_canary?(%State{}, _entry), do: false
 
   defp dispatch_usage_limit_canary(%State{} = state, key, entry, held, result) do
-    {issue_id, retry} = pick_usage_limit_canary(held, result)
+    {issue_id, retry} = pick_usage_limit_canary(state, held, result)
     Logger.warning("Usage limit canary provider=#{entry.provider} scope=#{UsageLimit.scope_label(entry.scope)} issue_identifier=#{retry[:identifier]}")
 
     state
@@ -10834,13 +10820,13 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # Issues the tracker no longer returns sort last, by id.
-  defp pick_usage_limit_canary(held, result) do
+  defp pick_usage_limit_canary(%State{} = state, held, result) do
     held_by_id = Map.new(held)
     issue_ids = held_by_id |> Map.keys() |> Enum.sort()
 
     ordered_ids =
       case result do
-        {:ok, issues} -> issues |> order_for_dispatch() |> Enum.map(& &1.id)
+        {:ok, issues} -> issues |> order_for_dispatch(state) |> Enum.map(& &1.id)
         {:error, _reason} -> []
       end
 
@@ -11521,15 +11507,8 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp merging_state?(_state_name), do: false
 
-  defp dispatch_slots_available?(%Issue{} = issue, %State{} = state) do
-    if finishing_issue?(issue) do
-      available_finishing_slots(state) > 0 and state_slots_available?(issue, state.running)
-    else
-      available_slots(state) > 0 and
-        epic_lane_slot_available?(issue, state) and
-        state_slots_available?(issue, state.running)
-    end
-  end
+  # A ticket that holds a slot may always run; any other needs a free one.
+  defp dispatch_slots_available?(%Issue{id: issue_id}, %State{} = state), do: holds_slot?(state, issue_id) or available_slots(state) > 0
 
   defp put_running_entry(%State{} = state, issue_id, running_entry)
        when is_binary(issue_id) and is_map(running_entry) do
