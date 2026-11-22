@@ -878,7 +878,8 @@ defmodule SymphonyElixir.TicketState do
   """
   @spec queued?(t() | map()) :: boolean()
   def queued?(record) do
-    %{issue_identifier: identifier, phase: phase, removed_at: removed_at, not_found_at: not_found_at} = normalize(record)
+    %{issue_identifier: identifier, phase: phase, removed_at: removed_at, not_found_at: not_found_at} =
+      normalize(record)
 
     is_binary(identifier) and is_binary(phase) and is_nil(removed_at) and is_nil(not_found_at) and
       not MapSet.member?(@queue_terminal_phases, phase |> String.trim() |> String.downcase())

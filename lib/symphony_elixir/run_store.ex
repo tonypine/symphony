@@ -1759,27 +1759,30 @@ defmodule SymphonyElixir.RunStore do
   @spec place_queue() :: :ok | {:error, term()}
   def place_queue do
     durable_transaction(fn ->
-      if is_nil(read_marker(@queue_placed_marker)) do
-        started = MapSet.new(:mnesia.index_read(@ticket_events_table, "run.started", :type), &elem(&1, 3))
-
-        placed =
-          :all
-          |> listed_ticket_records()
-          |> Enum.map(&TicketState.normalize/1)
-          |> Enum.filter(&TicketState.queued?/1)
-          |> Queue.placement(started)
-          |> Enum.with_index(1)
-
-        Enum.each(placed, fn {record, position} ->
-          :mnesia.write({@ticket_index_table, record.issue_id, record.repo_key, %{record | queue_position: position}})
-        end)
-
-        :mnesia.write({@totals_table, @queue_tail_key, max(length(placed), queue_tail(:write))})
-        :mnesia.write({@totals_table, {:marker, @queue_placed_marker}, DateTime.utc_now()})
-      end
-
+      if is_nil(read_marker(@queue_placed_marker)), do: place_queue_once()
       :ok
     end)
+  end
+
+  defp place_queue_once do
+    started = MapSet.new(:mnesia.index_read(@ticket_events_table, "run.started", :type), &elem(&1, 3))
+
+    placed =
+      :all
+      |> listed_ticket_records()
+      |> Enum.map(&TicketState.normalize/1)
+      |> Enum.filter(&TicketState.queued?/1)
+      |> Queue.placement(started)
+      |> Enum.with_index(1)
+
+    Enum.each(placed, &write_queue_place/1)
+
+    :mnesia.write({@totals_table, @queue_tail_key, max(length(placed), queue_tail(:write))})
+    :mnesia.write({@totals_table, {:marker, @queue_placed_marker}, DateTime.utc_now()})
+  end
+
+  defp write_queue_place({record, position}) do
+    :mnesia.write({@ticket_index_table, record.issue_id, record.repo_key, %{record | queue_position: position}})
   end
 
   @doc """
@@ -1790,9 +1793,13 @@ defmodule SymphonyElixir.RunStore do
   @spec queue_positions() :: %{String.t() => pos_integer()} | {:error, term()}
   def queue_positions do
     with :ok <- ensure_started() do
-      transaction(fn ->
-        for %{queue_position: position, issue_id: issue_id} <- listed_ticket_records(:all), is_integer(position), into: %{}, do: {issue_id, position}
-      end)
+      transaction(fn -> :all |> listed_ticket_records() |> queue_position_map() end)
+    end
+  end
+
+  defp queue_position_map(records) do
+    for %{queue_position: position, issue_id: issue_id} <- records, is_integer(position), into: %{} do
+      {issue_id, position}
     end
   end
 
