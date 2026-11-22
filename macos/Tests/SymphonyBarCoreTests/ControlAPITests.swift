@@ -8,6 +8,21 @@ final class ControlAPITests: XCTestCase {
         try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: String])
     }
 
+    /// TP-1611: force is gone from the engine, so no action the app sends calls `POST /api/v1/control/force`.
+    func testNoActionCallsTheRemovedForceRoute() {
+        let actions: [ControlAction] = [
+            .pause, .resume, .handover, .stop("TP-1"), .approvePlan("TP-1"), .rework("TP-1", reason: "r"),
+            .restart("TP-1", reason: "r"), .changes("TP-1", reason: "r"), .backlog("TP-1", note: nil),
+            .cancel("TP-1", note: nil), .move("TP-1", to: "Todo", note: nil), .start("TP-1", note: nil),
+            .unblock("TP-1"), .undo("TP-1"), .label("TP-1", label: "expedite", title: "Expedite", on: true),
+            .decision("TP-1", text: "t"),
+        ]
+        for action in actions {
+            let path = ControlAPI.request(action, base: base, token: "secret").url?.path ?? ""
+            XCTAssertFalse(path.hasSuffix("/control/force"), "\(action) calls \(path)")
+        }
+    }
+
     func testPauseRequest() throws {
         let request = ControlAPI.request(.pause, base: base, token: "secret")
 
@@ -73,38 +88,6 @@ final class ControlAPITests: XCTestCase {
         XCTAssertEqual(
             ControlAPI.result(.resume, statusCode: 409, data: Data(body.utf8)),
             .failed("Couldn't resume Symphony: Nothing to resume: no pause of yours or an update's holds Symphony. (HTTP 409)")
-        )
-    }
-
-    func testForceRequests() throws {
-        let force = ControlAPI.request(.force("TP-123"), base: base, token: "secret")
-        XCTAssertEqual(force.httpMethod, "POST")
-        XCTAssertEqual(force.url?.absoluteString, "http://127.0.0.1:4010/api/v1/control/force")
-        XCTAssertEqual(force.value(forHTTPHeaderField: "Authorization"), "Bearer secret")
-        XCTAssertEqual(try json(force), ["identifier": "TP-123"])
-
-        let stop = ControlAPI.request(.stopForcing("TP-123"), base: base, token: "secret")
-        XCTAssertEqual(stop.url?.absoluteString, "http://127.0.0.1:4010/api/v1/control/force")
-        XCTAssertEqual(try json(stop), ["identifier": "TP-123", "clear": "true"])
-    }
-
-    func testForceResponsesNameTheTicket() {
-        XCTAssertEqual(ControlAPI.result(.force("TP-123"), statusCode: 200, data: Data("{}".utf8)), .done)
-        XCTAssertEqual(
-            ControlAPI.result(
-                .force("TP-999"),
-                statusCode: 404,
-                data: Data(#"{"error":{"code":"issue_not_found","message":"TP-999 was not found in Linear"}}"#.utf8)
-            ),
-            .failed("Couldn't force TP-999: TP-999 was not found in Linear (HTTP 404)")
-        )
-        XCTAssertEqual(
-            ControlAPI.result(.stopForcing("TP-123"), statusCode: 401, data: Data()),
-            .failed("Couldn't stop forcing TP-123: it rejected the control token (HTTP 401)")
-        )
-        XCTAssertEqual(
-            ControlAPI.unreachable(.force("TP-123"), base: base),
-            .failed("Couldn't force TP-123: nothing answered at http://127.0.0.1:4010")
         )
     }
 

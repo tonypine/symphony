@@ -32,8 +32,7 @@ defmodule SymphonyElixir.DirectorLabelsTest do
       orchestrator: self(),
       audit_log: [dir: tmp_dir],
       records: records,
-      escalate_labels: ["needs-human", "plan", "breakdown", "security"],
-      force_label: "expedite"
+      escalate_labels: ["needs-human", "plan", "breakdown", "security"]
     ]
 
     %{repo: repo, ticket: ticket, opts: opts}
@@ -48,7 +47,7 @@ defmodule SymphonyElixir.DirectorLabelsTest do
   defp on(payload), do: for(%{on: true, label: label} <- payload.labels, do: label)
 
   test "lists the toggles: the labels Symphony reads, then the escalate labels they don't name" do
-    toggles = DirectorLabels.toggles(escalate_labels: ["needs-human", "Plan", " security ", "Security", "Blocked", "expedite", "", nil], force_label: "Expedite")
+    toggles = DirectorLabels.toggles(escalate_labels: ["needs-human", "Plan", " security ", "Security", "Blocked", "", nil])
 
     assert Enum.map(toggles, & &1.label) ==
              ~w(plan type:bug type:feature qa:skip skip-update-hold qa:live qa:fixture needs-human security)
@@ -116,7 +115,7 @@ defmodule SymphonyElixir.DirectorLabelsTest do
           {"Blocked", "Blocked is Symphony's own label: it sets and clears it itself, so it can't be changed on #{id}."},
           {"Needs Decision", "Needs Decision is Symphony's own label: it sets and clears it itself, so it can't be changed on #{id}."},
           {"CI red", "CI red is Symphony's own label: it sets and clears it itself, so it can't be changed on #{id}."},
-          {"expedite", "expedite is the force label: Force (or Stop Forcing) on #{id} sets it."}
+          {"expedite", ~s("expedite" isn't a label Symphony reads, so it can't be changed on #{id} from here.)}
         ] do
       assert {:error, {:conflict, ^message}} = DirectorLabels.set(id, label, :add, opts)
       assert {:error, {:conflict, ^message}} = DirectorLabels.set(id, label, :remove, opts)
@@ -177,10 +176,10 @@ defmodule SymphonyElixir.DirectorLabelsTest do
     assert {:error, {:conflict, _message}} = DirectorLabels.labels("LAB-none", Keyword.put(opts, :records, [nameless]))
   end
 
-  test "takes the escalate labels and the force label from the ticket's repository's settings", ctx do
-    settings = %{auto_review: %{acceptance_gate: %{escalate: %{labels: ["needs-human", "security"]}}}, execution: %{force_label: "rush"}}
+  test "takes the escalate labels from the ticket's repository's settings, and names no force label", ctx do
+    settings = %{auto_review: %{acceptance_gate: %{escalate: %{labels: ["needs-human", "security"]}}}}
     repo = ctx.repo
-    opts = Keyword.drop(ctx.opts, [:escalate_labels, :force_label])
+    opts = Keyword.drop(ctx.opts, [:escalate_labels])
 
     found = fn
       ^repo -> {:ok, settings}
@@ -190,14 +189,13 @@ defmodule SymphonyElixir.DirectorLabelsTest do
     assert {:ok, %{labels: labels}} = DirectorLabels.labels(ctx.ticket.issue_id, Keyword.put(opts, :settings_for_repo, found))
     assert Enum.map(Enum.take(labels, -2), & &1.label) == ["needs-human", "security"]
 
-    assert {:error, {:conflict, "rush is the force label" <> _}} =
-             DirectorLabels.set(ctx.ticket.issue_id, "rush", :add, Keyword.put(opts, :settings_for_repo, found))
+    refute Enum.any?(labels, &(&1.label == "expedite"))
 
-    # Without its settings: the built-in escalate labels and `expedite`.
+    # Without its settings: the built-in escalate labels.
     missing = Keyword.put(opts, :settings_for_repo, fn _repo -> {:error, :unknown_repo} end)
     assert {:ok, %{labels: labels}} = DirectorLabels.labels(ctx.ticket.issue_id, missing)
     refute Enum.any?(labels, &(&1.label == "security"))
-    assert {:error, {:conflict, "expedite is the force label" <> _}} = DirectorLabels.set(ctx.ticket.issue_id, "expedite", :add, missing)
+    assert {:error, {:conflict, ~s("expedite" isn't a label Symphony reads) <> _}} = DirectorLabels.set(ctx.ticket.issue_id, "expedite", :add, missing)
   end
 
   test "reads the run store's records and the repository's settings by default" do
@@ -208,6 +206,6 @@ defmodule SymphonyElixir.DirectorLabelsTest do
     # The built-in escalate labels, as the settings give them.
     assert Enum.any?(labels, &(&1.label == "needs-human"))
     assert {:error, {:conflict, _message}} = DirectorLabels.labels("LBD-none-#{n}")
-    assert {:error, {:conflict, "expedite is the force label" <> _}} = DirectorLabels.set("LBD-#{n}", "expedite", :add)
+    assert {:error, {:conflict, ~s("expedite" isn't a label Symphony reads) <> _}} = DirectorLabels.set("LBD-#{n}", "expedite", :add)
   end
 end

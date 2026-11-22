@@ -175,7 +175,6 @@ final class TicketsTableTests: XCTestCase {
         XCTAssertEqual(details.repo, "symphony")
         XCTAssertEqual(details.epic, "Phase 3b")
         XCTAssertEqual(details.situation, situation)
-        XCTAssertFalse(details.forced)
         XCTAssertEqual(details.facts, [
             TicketList.Fact(label: "Since", value: "25 min"), TicketList.Fact(label: "Phase", value: "In Progress"),
             TicketList.Fact(label: "Pull request", value: "PR #812"), TicketList.Fact(label: "Priority", value: "Urgent"),
@@ -352,7 +351,6 @@ final class TicketsTableTests: XCTestCase {
         XCTAssertEqual(row.repoKey, "api")
         XCTAssertEqual(row.kind, .paused)
         XCTAssertEqual(row.stage, .queued)
-        XCTAssertFalse(row.forced)
         XCTAssertEqual(row.facts.first, TicketList.Fact(label: "Repo", value: "api"))
         XCTAssertFalse(row.facts.contains { $0.label == "Title" || $0.label == "Ticket" })
         XCTAssertEqual(

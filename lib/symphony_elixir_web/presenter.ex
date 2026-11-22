@@ -9,7 +9,6 @@ defmodule SymphonyElixirWeb.Presenter do
     BuildInfo,
     ConductorGate,
     Config,
-    ForcedStatus,
     Home,
     Inbox,
     Initiatives,
@@ -95,7 +94,6 @@ defmodule SymphonyElixirWeb.Presenter do
             conflicts: length(Map.get(snapshot, :conflicts, [])),
             retrying: length(snapshot.retrying),
             claimed: length(Map.get(snapshot, :claimed, [])),
-            forced: length(Map.get(snapshot, :forced, [])),
             shipped_today: length(shipped_today),
             waiting_on_you: length(waiting_on_you),
             review_inconclusive: review_inconclusive_counts(run_history)
@@ -144,7 +142,6 @@ defmodule SymphonyElixirWeb.Presenter do
           shipped_today: Enum.map(shipped_today, &shipped_payload/1),
           blocked: Enum.map(blocked, &blocked_payload/1),
           app_update: WatchPayload.app_update(blocked, PrWatch.Release.latest(), ReleaseBuild.latest_build()),
-          forced: snapshot |> Map.get(:forced, []) |> Enum.map(&forced_payload/1),
           concurrency: Map.get(snapshot, :concurrency),
           claimed: Map.get(snapshot, :claimed, []),
           rate_limits: snapshot.rate_limits,
@@ -1331,7 +1328,6 @@ defmodule SymphonyElixirWeb.Presenter do
       between_turns: between_turns?(entry),
       started_at: iso8601(entry.started_at),
       last_event_at: iso8601(Map.get(entry, :last_event_at) || entry.last_codex_timestamp),
-      forced: Map.get(entry, :forced, false),
       tokens: %{
         input_tokens: entry_input_tokens(entry),
         uncached_input_tokens: entry_uncached_input_tokens(entry),
@@ -1426,8 +1422,7 @@ defmodule SymphonyElixirWeb.Presenter do
       due_at: due_at_iso8601(entry.due_in_ms),
       error: entry.error,
       worker_host: Map.get(entry, :worker_host),
-      workspace_path: Map.get(entry, :workspace_path),
-      forced: Map.get(entry, :forced, false)
+      workspace_path: Map.get(entry, :workspace_path)
     }
   end
 
@@ -1741,8 +1736,7 @@ defmodule SymphonyElixirWeb.Presenter do
       state: entry.state,
       reason: entry.reason,
       attempt: Map.get(entry, :attempt),
-      since: iso8601(Map.get(entry, :since)),
-      forced: Map.get(entry, :forced, false)
+      since: iso8601(Map.get(entry, :since))
     }
   end
 
@@ -1776,37 +1770,6 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp blocked_summary(identifier, reason, _blockers) when is_binary(reason), do: "#{identifier} #{reason}"
   defp blocked_summary(identifier, nil, blockers), do: "#{identifier} waiting on " <> Enum.map_join(blockers, ", ", &blocker_label/1)
-
-  # Tickets an app update would release: each one waits only for the running app to include a fix.
-  defp forced_payload(entry) do
-    status = %{
-      phase: Map.get(entry, :phase),
-      running: Map.get(entry, :running, false),
-      waiting_on: Map.get(entry, :waiting_on),
-      blockers: Map.get(entry, :blockers, [])
-    }
-
-    %{
-      issue_id: entry.issue_id,
-      issue_identifier: entry.identifier,
-      title: entry.title,
-      repo_key: Map.get(entry, :repo_key),
-      state: entry.state,
-      forced_since: iso8601(entry.forced_since),
-      forced_for_seconds: Map.get(entry, :forced_for_seconds),
-      stale: Map.get(entry, :stale, false),
-      position: entry.position,
-      waiting_on_human: Map.get(entry, :waiting_on_human, false),
-      sub_issue: forced_sub_issue_payload(Map.get(entry, :sub_issue))
-    }
-    |> Map.merge(status)
-    |> Map.put(:summary, if(status.phase, do: ForcedStatus.summary(status)))
-  end
-
-  defp forced_sub_issue_payload(%{issue_id: issue_id} = part),
-    do: %{issue_id: issue_id, issue_identifier: Map.get(part, :identifier), state: Map.get(part, :state)}
-
-  defp forced_sub_issue_payload(_no_part), do: nil
 
   defp blocker_label(%{issue_identifier: identifier, state: state}) do
     "#{identifier || "an unknown issue"} (#{state || "unknown state"})"

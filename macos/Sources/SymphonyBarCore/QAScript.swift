@@ -6,7 +6,7 @@ import Foundation
 /// - a test presses a menu item by writing its title to a file in `<QA root>/commands/`. The app takes the files in
 ///   name order, deletes each one, and presses the visible item with that title the way a click would: only when it
 ///   is enabled. An item in a visible item's submenu counts as visible. The lines after the title answer a text
-///   prompt the press shows, such as Force a ticket…;
+///   prompt the press shows, such as Pause Dispatch…;
 /// - the app keeps `<QA root>/status.json` current: its process, build, the Symphony it runs, every visible menu item
 ///   (submenu items after the item they open from) with whether it is enabled, the alerts it would have shown and the
 ///   presses it handled;

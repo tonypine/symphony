@@ -24,14 +24,12 @@
   },
   "concurrency": {
     "finishing_max": 2,
-    "forced_max": 1,
     "max_total": 10
   },
   "conflicts": [],
   "counts": {
     "claimed": 1,
     "conflicts": 0,
-    "forced": 0,
     "retrying": 0,
     "running": 1,
     "shipped_today": 0,
@@ -88,7 +86,6 @@
     "slots": 2,
     "used": 1
   },
-  "forced": [],
   "generated_at": "2026-11-12T03:30:00Z",
   "linear_usage": {
     "callers": [
@@ -157,7 +154,6 @@
     "queued": [],
     "running": [
       {
-        "forced": false,
         "identifier": "SHOP-301",
         "issue_id": "i-301",
         "sha": "4be1c0d9"
@@ -221,7 +217,6 @@
             "outcome": "not_a_candidate",
             "position": null,
             "reason": null,
-            "forced": false,
             "situation": {
               "kind": "retrying",
               "word": "Retrying",
@@ -253,7 +248,6 @@
             "outcome": "held",
             "position": null,
             "reason": "waits for TP-1441",
-            "forced": false,
             "situation": {
               "kind": "blocked_by_ticket",
               "word": "Blocked by TP-1441",
@@ -276,7 +270,6 @@
             "outcome": "held",
             "position": null,
             "reason": "waits for TP-1442",
-            "forced": false,
             "situation": {
               "kind": "blocked_by_ticket",
               "word": "Blocked by TP-1442",
@@ -299,7 +292,6 @@
             "outcome": "held",
             "position": null,
             "reason": "waits for TP-1443",
-            "forced": false,
             "situation": {
               "kind": "blocked_by_ticket",
               "word": "Blocked by TP-1443",
@@ -322,7 +314,6 @@
             "outcome": "held",
             "position": null,
             "reason": "waits for TP-1444",
-            "forced": false,
             "situation": {
               "kind": "blocked_by_ticket",
               "word": "Blocked by TP-1444",
@@ -345,7 +336,6 @@
             "outcome": "held",
             "position": null,
             "reason": "waits for TP-1445",
-            "forced": false,
             "situation": {
               "kind": "blocked_by_ticket",
               "word": "Blocked by TP-1445",
@@ -368,7 +358,6 @@
             "outcome": "held",
             "position": null,
             "reason": "waits for TP-1446",
-            "forced": false,
             "situation": {
               "kind": "blocked_by_ticket",
               "word": "Blocked by TP-1446",
@@ -391,7 +380,6 @@
             "outcome": "held",
             "position": null,
             "reason": "waits for TP-1447",
-            "forced": false,
             "situation": {
               "kind": "blocked_by_ticket",
               "word": "Blocked by TP-1447",
@@ -414,7 +402,6 @@
             "outcome": "held",
             "position": null,
             "reason": "waits for TP-1448",
-            "forced": false,
             "situation": {
               "kind": "blocked_by_ticket",
               "word": "Blocked by TP-1448",
@@ -437,7 +424,6 @@
             "outcome": "held",
             "position": null,
             "reason": "waits for TP-1449",
-            "forced": false,
             "situation": {
               "kind": "blocked_by_ticket",
               "word": "Blocked by TP-1449",
@@ -460,7 +446,6 @@
             "outcome": "held",
             "position": null,
             "reason": "waits for TP-1450",
-            "forced": false,
             "situation": {
               "kind": "blocked_by_ticket",
               "word": "Blocked by TP-1450",
@@ -483,7 +468,6 @@
             "outcome": "held",
             "position": null,
             "reason": "waits for TP-1451",
-            "forced": false,
             "situation": {
               "kind": "blocked_by_ticket",
               "word": "Blocked by TP-1451",
@@ -506,7 +490,6 @@
             "outcome": "held",
             "position": null,
             "reason": "waits for TP-1452",
-            "forced": false,
             "situation": {
               "kind": "blocked_by_ticket",
               "word": "Blocked by TP-1452",
@@ -529,7 +512,6 @@
             "outcome": "held",
             "position": null,
             "reason": "waits for TP-1453",
-            "forced": false,
             "situation": {
               "kind": "blocked_by_ticket",
               "word": "Blocked by TP-1453",
@@ -552,7 +534,6 @@
             "outcome": "held",
             "position": null,
             "reason": "waits for TP-1454",
-            "forced": false,
             "situation": {
               "kind": "blocked_by_ticket",
               "word": "Blocked by TP-1454",
@@ -575,7 +556,6 @@
             "outcome": "held",
             "position": null,
             "reason": "waits for TP-1455",
-            "forced": false,
             "situation": {
               "kind": "blocked_by_ticket",
               "word": "Blocked by TP-1455",
@@ -598,7 +578,6 @@
             "outcome": "held",
             "position": null,
             "reason": "waits for TP-1456",
-            "forced": false,
             "situation": {
               "kind": "blocked_by_ticket",
               "word": "Blocked by TP-1456",
@@ -621,7 +600,6 @@
             "outcome": "held",
             "position": null,
             "reason": "waits for TP-1457",
-            "forced": false,
             "situation": {
               "kind": "blocked_by_ticket",
               "word": "Blocked by TP-1457",
@@ -644,7 +622,6 @@
             "outcome": "held",
             "position": null,
             "reason": "waits for TP-1458",
-            "forced": false,
             "situation": {
               "kind": "blocked_by_ticket",
               "word": "Blocked by TP-1458",
@@ -667,7 +644,6 @@
             "outcome": "held",
             "position": null,
             "reason": "waits for TP-1459",
-            "forced": false,
             "situation": {
               "kind": "blocked_by_ticket",
               "word": "Blocked by TP-1459",
@@ -690,7 +666,6 @@
             "outcome": "held",
             "position": null,
             "reason": "waits for TP-1460",
-            "forced": false,
             "situation": {
               "kind": "blocked_by_ticket",
               "word": "Blocked by TP-1460",
@@ -713,7 +688,6 @@
             "outcome": "held",
             "position": null,
             "reason": "waits for TP-1461",
-            "forced": false,
             "situation": {
               "kind": "blocked_by_ticket",
               "word": "Blocked by TP-1461",
@@ -736,7 +710,6 @@
             "outcome": "held",
             "position": null,
             "reason": "waits for TP-1462",
-            "forced": false,
             "situation": {
               "kind": "blocked_by_ticket",
               "word": "Blocked by TP-1462",
@@ -759,7 +732,6 @@
             "outcome": "held",
             "position": null,
             "reason": "waits for BIL-302",
-            "forced": false,
             "situation": {
               "kind": "blocked_by_ticket",
               "word": "Blocked by BIL-302",
@@ -791,7 +763,6 @@
             "outcome": "not_a_candidate",
             "position": null,
             "reason": null,
-            "forced": false,
             "situation": {
               "kind": "waiting_for_ci",
               "word": "Waiting for CI",
@@ -814,7 +785,6 @@
             "outcome": "not_a_candidate",
             "position": null,
             "reason": null,
-            "forced": false,
             "situation": {
               "kind": "waiting_for_ci",
               "word": "Waiting for CI",
@@ -846,7 +816,6 @@
             "outcome": "waits",
             "position": 1,
             "reason": "next: work slots full",
-            "forced": false,
             "situation": {
               "kind": "waiting_for_slot",
               "word": "Waiting for a slot",
@@ -874,7 +843,6 @@
             "outcome": "running",
             "position": null,
             "reason": null,
-            "forced": false,
             "situation": {
               "kind": "working",
               "word": "Working",

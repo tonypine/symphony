@@ -596,7 +596,7 @@ extension TicketList.Row {
         self.init(
             identifier: row.identifier, issueID: row.issueID, title: row.text("title"), repoKey: row.repoKey, state: row.phase,
             stage: TicketList.Stage(kind: row.situationKind), situation: row.situation(tracked: nil), waitsOn: "nothing",
-            since: row.time("situation_since"), forced: false, needsAttention: false, url: row.url,
+            since: row.time("situation_since"), needsAttention: false, url: row.url,
             facts: row.facts(columns: columns, reference: reference)
         )
     }
@@ -623,7 +623,6 @@ public struct TicketDetails: Equatable {
     public var repo: String?
     public var epic: String?
     public var situation: Situation
-    public var forced: Bool
     public var facts: [TicketList.Fact]
 
     /// Nil when neither the state nor the table has the ticket. `situation` is the state's for it.
@@ -636,7 +635,6 @@ public struct TicketDetails: Equatable {
         repo = tracked?.repoKey ?? row?.repoKey
         epic = row?.epic
         self.situation = situation ?? tracked?.line ?? row?.situation(tracked: nil) ?? Situation(kind: .unknown, cause: "")
-        forced = tracked?.forced ?? false
         let since = tracked.flatMap { $0.sinceText.isEmpty ? nil : $0.sinceText }
             ?? row?.time("situation_since").map { Overview.duration(Int(reference.timeIntervalSince($0))) }
         let facts: [(String, String?)] = [

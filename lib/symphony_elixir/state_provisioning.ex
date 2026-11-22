@@ -73,17 +73,14 @@ defmodule SymphonyElixir.StateProvisioning do
   @doc """
   Every label Symphony applies or reads, the one list the Setup labels check reads: the
   machine-owned labels (errors, exact spelling), then the labels people add for Symphony to read
-  (warnings, any case), the `force_label` (`execution.concurrency.force_label`) and each
-  `escalate_labels` entry. The deprecated `human-action` is left out: it is reported on its own.
+  (warnings, any case) and each `escalate_labels` entry. The deprecated `human-action` is left out: it is reported on its own.
   """
-  @spec machine_labels(String.t() | nil, [String.t()]) :: [machine_label()]
-  def machine_labels(force_label, escalate_labels) when is_list(escalate_labels) do
+  @spec machine_labels([String.t() | nil]) :: [machine_label()]
+  def machine_labels(escalate_labels) when is_list(escalate_labels) do
     owned = for name <- @labels, do: %{names: [name], severity: :error, exact?: true, shows: Map.fetch!(@label_shows, name)}
     read = for {names, shows} <- @read_labels, do: %{names: names, severity: :warning, exact?: false, shows: shows}
 
-    configured =
-      [{force_label, "No ticket can be expedited past the queue."}] ++
-        Enum.map(escalate_labels, &{&1, "Code Review can't be told to ask you before approving a ticket."})
+    configured = Enum.map(escalate_labels, &{&1, "Code Review can't be told to ask you before approving a ticket."})
 
     taken = (owned ++ read) |> Enum.flat_map(& &1.names) |> Enum.concat(@deprecated_labels) |> MapSet.new(&normalize/1)
 

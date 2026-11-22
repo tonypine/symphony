@@ -579,24 +579,14 @@ defmodule SymphonyElixir.RunStore do
   def delete_merged_wait(_issue_id), do: {:error, :invalid_issue_id}
 
   @doc """
-  Replaces the forced-ticket queue (`SymphonyElixir.ForcedQueue` entries keyed by issue id), so a
-  restart keeps each ticket's `forced_since` and its place in the queue.
+  Deletes the forced-ticket queue a release before TP-1611 kept for the repo, so a store written by
+  that release carries no row nothing reads. Run once at start.
   """
-  @spec put_forced(String.t(), map()) :: :ok | {:error, term()}
-  def put_forced(repo_key, entries) when is_map(entries) do
+  @spec delete_forced_queue(String.t()) :: :ok | {:error, term()}
+  def delete_forced_queue(repo_key) do
     with {:ok, repo_key} <- normalize_repo_key(repo_key),
          :ok <- ensure_started() do
-      durable_transaction(fn -> write_forced(repo_key, entries) end)
-    end
-  end
-
-  def put_forced(_repo_key, _entries), do: {:error, :invalid_forced_entries}
-
-  @spec get_forced(String.t()) :: map() | {:error, term()}
-  def get_forced(repo_key) do
-    with {:ok, repo_key} <- normalize_repo_key(repo_key),
-         :ok <- ensure_started() do
-      transaction(fn -> read_forced(repo_key) end)
+      durable_transaction(fn -> :mnesia.delete({@totals_table, {:forced, repo_key}}) end)
     end
   end
 
@@ -2982,25 +2972,6 @@ defmodule SymphonyElixir.RunStore do
     case :mnesia.read(@totals_table, rework_base_key(repo_key, issue_id)) do
       [{@totals_table, _key, head}] when is_binary(head) -> head
       _ -> nil
-    end
-  end
-
-  defp forced_key(repo_key), do: {:forced, repo_key}
-
-  defp write_forced(repo_key, entries) when map_size(entries) == 0 do
-    :mnesia.delete({@totals_table, forced_key(repo_key)})
-    :ok
-  end
-
-  defp write_forced(repo_key, entries) do
-    :mnesia.write({@totals_table, forced_key(repo_key), entries})
-    :ok
-  end
-
-  defp read_forced(repo_key) do
-    case :mnesia.read(@totals_table, forced_key(repo_key)) do
-      [{@totals_table, _key, entries}] when is_map(entries) -> entries
-      _ -> %{}
     end
   end
 

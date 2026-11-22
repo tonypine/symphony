@@ -92,7 +92,7 @@ defmodule SymphonyElixir.OrchestratorEpicLanesTest do
       assert %{identifier: "MT-10", status: "yielded", reason: ^reason} = yielded
     end
 
-    test "a High ticket with a run or a claim under way, or forced, keeps its epic's lane until that ends" do
+    test "a High ticket with a run or a claim under way keeps its epic's lane until that ends; the old force label keeps none" do
       high = %Issue{id: "h1", identifier: "MT-11", title: "High", state: "In Progress", priority: 2}
       parked = epic("e1", "MT-10", [high])
 
@@ -106,9 +106,9 @@ defmodule SymphonyElixir.OrchestratorEpicLanesTest do
       assert state.epic_lanes.lanes == []
       assert [%{identifier: "MT-10"}] = state.epic_lanes.yielded
 
-      forced = %{high | labels: ["expedite"]}
-      state = Orchestrator.put_epic_lanes_for_test(state, [parked, forced])
-      assert [%{identifier: "MT-10"}] = state.epic_lanes.lanes
+      labelled = %{high | labels: ["expedite"]}
+      state = Orchestrator.put_epic_lanes_for_test(state, [parked, labelled])
+      assert state.epic_lanes.lanes == []
     end
   end
 

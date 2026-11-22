@@ -1,8 +1,7 @@
 defmodule SymphonyElixirWeb.ControlApiController do
   @moduledoc """
-  HTTP control plane for the Symphony daemon: pause, resume, stop, PR
-  dispatch, and forcing a ticket. Used by `bin/symphony pr`,
-  `bin/symphony force` and the `mix symphony.*` tasks via
+  HTTP control plane for the Symphony daemon: pause, resume, stop and PR
+  dispatch. Used by `bin/symphony pr` and the `mix symphony.*` tasks via
   `SymphonyElixir.ControlClient`. A stop that ends a run writes a `run_stopped`
   audit record and a `person.action` event (`stop`) on the ticket.
 
@@ -116,8 +115,8 @@ defmodule SymphonyElixirWeb.ControlApiController do
   `label` turns one of the labels a person adds for Symphony to read on or off from the ticket page
   (`SymphonyElixir.DirectorLabels`): it takes `issue_identifier`, `label` and `action` (`add` or
   `remove`), and answers 200 with the ticket's label toggles after the change, 409 with the reason
-  the app shows when the change is refused (a label Symphony doesn't read, a machine label, the
-  force label, a ticket Symphony doesn't track, a label already on or off), 422 for a missing or
+  the app shows when the change is refused (a label Symphony doesn't read, a machine label, a
+  ticket Symphony doesn't track, a label already on or off), 422 for a missing or
   unknown parameter and 502, with why, when the tracker refuses the write.
 
   `decision` records the Director's ruling on a ticket from its page, a decision no Question asked
@@ -282,18 +281,6 @@ defmodule SymphonyElixirWeb.ControlApiController do
 
   def dispatch_pr(conn, _params) do
     error_response(conn, 422, "invalid_request", "target is required")
-  end
-
-  @spec force(Conn.t(), map()) :: Conn.t()
-  def force(conn, params) do
-    case string_param(params["identifier"]) do
-      nil ->
-        error_response(conn, 422, "invalid_request", "identifier is required")
-
-      identifier ->
-        result = Orchestrator.force_issue(orchestrator(conn), identifier, params["clear"] in [true, "true"])
-        respond_force(conn, identifier, result)
-    end
   end
 
   # Start now: the run for the ticket's current phase starts in this call, not queued. The
@@ -651,27 +638,16 @@ defmodule SymphonyElixirWeb.ControlApiController do
   defp respond_move(conn, identifier, {:error, :issue_not_found}),
     do: error_response(conn, 404, "issue_not_found", "#{identifier} was not found in Linear")
 
-  defp respond_move(conn, identifier, {:error, {:linear, reason}}),
-    do: respond_force(conn, identifier, {:error, reason})
+  defp respond_move(conn, _identifier, {:error, {:linear, reason}}), do: respond_linear_error(conn, reason)
 
-  defp respond_force(conn, identifier, {:error, :issue_not_found}),
-    do: error_response(conn, 404, "issue_not_found", "#{identifier} was not found in Linear")
-
-  defp respond_force(conn, _identifier, {:error, {:issue_terminal, state}}),
-    do: error_response(conn, 422, "issue_terminal", TicketMoves.closed_reason(state))
-
-  defp respond_force(conn, _identifier, {:error, {:label_not_found, label}}),
-    do: error_response(conn, 422, "label_not_found", "Linear has no #{label} label; create it in Linear, then force again")
-
-  defp respond_force(conn, _identifier, {:error, {:linear_rate_limited, retry_ms}}) do
+  # A Linear request a move or a start needed and Linear refused: 502, with why.
+  defp respond_linear_error(conn, {:linear_rate_limited, retry_ms}) do
     until = retry_ms |> DateTime.from_unix!(:millisecond) |> DateTime.truncate(:second) |> DateTime.to_iso8601()
     error_response(conn, 502, "linear_error", "Linear is rate-limiting Symphony until #{until}; try again then")
   end
 
-  defp respond_force(conn, _identifier, {:error, reason}),
+  defp respond_linear_error(conn, reason),
     do: error_response(conn, 502, "linear_error", "Linear request failed: #{inspect(reason)}")
-
-  defp respond_force(conn, _identifier, result), do: respond(conn, result)
 
   # A present, trimmed parameter, else the request error naming it.
   defp required_param(value, name) do
@@ -695,7 +671,7 @@ defmodule SymphonyElixirWeb.ControlApiController do
   end
 
   # The start's own answers: 409 with the reason it was refused, 502 when the run could not be
-  # started, and the force's mappings for a ticket Linear can't give or won't move.
+  # started, and the Linear mappings for a ticket Linear can't give or won't move.
   defp respond_start(conn, _identifier, {:ok, payload}), do: json(conn, payload)
 
   defp respond_start(conn, _identifier, {:error, {:start_refused, reason}}),
@@ -710,8 +686,8 @@ defmodule SymphonyElixirWeb.ControlApiController do
   defp respond_start(conn, identifier, {:error, :issue_not_found}),
     do: error_response(conn, 404, "issue_not_found", "#{identifier} was not found in Linear")
 
-  defp respond_start(conn, identifier, {:error, {:linear, reason}}),
-    do: respond_force(conn, identifier, {:error, {:linear, reason}})
+  defp respond_start(conn, _identifier, {:error, {:linear, reason}}),
+    do: respond_linear_error(conn, {:linear, reason})
 
   defp respond_start(conn, _identifier, :unavailable),
     do: error_response(conn, 503, "orchestrator_unavailable", "Orchestrator is unavailable")

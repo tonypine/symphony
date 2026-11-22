@@ -18,8 +18,6 @@ defmodule SymphonyElixir.Dispatch.Settings do
     :max_concurrent_agents_by_state,
     :epic_lanes,
     :finishing_max,
-    :force_label,
-    :forced_max,
     :max_tokens_per_issue,
     :max_tokens_per_day
   ]

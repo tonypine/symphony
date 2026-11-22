@@ -19,7 +19,6 @@ final class DispatchTests: XCTestCase {
         XCTAssertEqual(control.accessibilityLabel, "Dispatch on, 2 working")
         XCTAssertTrue(control.canPause)
         XCTAssertFalse(control.canResume)
-        XCTAssertTrue(control.canForce)
         XCTAssertFalse(control.canStart)
         XCTAssertTrue(control.pauseFacts.isEmpty)
         XCTAssertTrue(control.limits.isEmpty)
@@ -54,7 +53,6 @@ final class DispatchTests: XCTestCase {
         ])
         XCTAssertTrue(control.canResume)
         XCTAssertFalse(control.canPause)
-        XCTAssertTrue(control.canForce)
     }
 
     func testAPauseFromTheMenuOrWithoutAStateSaysSo() {
@@ -108,14 +106,13 @@ final class DispatchTests: XCTestCase {
         XCTAssertTrue(stopped.canStart)
         XCTAssertFalse(stopped.canPause)
         XCTAssertFalse(stopped.canResume)
-        XCTAssertFalse(stopped.canForce)
         XCTAssertEqual(DispatchControl(window: .starting, paused: false, state: nil, now: Date()).word, "Symphony starting")
         XCTAssertEqual(DispatchControl(window: .notAnswering, paused: false, state: nil, now: Date()).word, "Symphony not answering")
         XCTAssertEqual(DispatchControl(window: .firstLaunch, paused: false, state: nil, now: Date()).word, "Symphony not set up")
         XCTAssertFalse(DispatchControl(window: .starting, paused: false, state: nil, now: Date()).canStart)
     }
 
-    // MARK: - D12a and D12b: the sheets
+    // MARK: - D12a: the sheet
 
     func testPauseSheetSendsItsReasonOrTheMenusOne() throws {
         XCTAssertEqual(PauseSheet.action(reason: "  Deploy freeze \n"), .pauseWithReason("Deploy freeze"))
@@ -125,31 +122,8 @@ final class DispatchTests: XCTestCase {
         XCTAssertEqual(request.url?.path, "/api/v1/control/pause")
         XCTAssertNil(ControlAction.pauseWithReason("x").moveIdentifier)
         XCTAssertEqual(ControlAPI.result(.pauseWithReason("x"), statusCode: 500, data: Data()), .failed("Couldn't pause Symphony: HTTP 500"))
-        XCTAssertTrue(PauseSheet.happens.contains("forced tickets included"))
+        XCTAssertTrue(PauseSheet.happens.contains("until you resume"))
         XCTAssertTrue(PauseSheet.stays.contains("go on to their end"))
-    }
-
-    func testForceSheetFindsTheTicketAsItIsTyped() throws {
-        let list = TicketList(state: try state("tickets"), now: Date(), timeZone: utc)
-        XCTAssertNil(ForceSheet.identifier("   "))
-        XCTAssertEqual(ForceSheet.identifier(" shop-320 "), "SHOP-320")
-        XCTAssertEqual(ForceSheet.matches("shop-3", in: list).count, ForceSheet.suggestionLimit)
-        XCTAssertEqual(ForceSheet.matches("SHOP-32", in: list).map(\.identifier), ["SHOP-322", "SHOP-320", "SHOP-325"])
-        XCTAssertEqual(ForceSheet.matches("API-131", in: list).map(\.identifier), ["API-131"])
-        XCTAssertTrue(ForceSheet.matches("", in: list).isEmpty)
-        XCTAssertTrue(ForceSheet.matches("SHOP", in: nil).isEmpty)
-
-        XCTAssertEqual(ForceSheet.summary("shop-320", in: list), "Order history filters\nTodo · Queued")
-        XCTAssertEqual(ForceSheet.summary("SHOP-325", in: list), "Express checkout\nTodo · Queued · already forced")
-        XCTAssertEqual(ForceSheet.summary("TP-9", in: list), "Symphony doesn't track TP-9 yet. It looks it up in Linear when you force it.")
-        XCTAssertNil(ForceSheet.summary("", in: list))
-
-        XCTAssertTrue(ForceSheet.canForce("SHOP-320", in: list))
-        XCTAssertTrue(ForceSheet.canForce("TP-9", in: list))
-        XCTAssertFalse(ForceSheet.canForce("SHOP-325", in: list))
-        XCTAssertFalse(ForceSheet.canForce(" ", in: list))
-        XCTAssertTrue(ForceSheet.keeps.contains("never moves a ticket"))
-        XCTAssertTrue(ForceSheet.skips.contains("forced allowance"))
     }
 
     // MARK: - Helpers
@@ -202,7 +176,6 @@ final class DispatchTests: XCTestCase {
         XCTAssertFalse(control.canResume)
         XCTAssertFalse(control.canPause)
         XCTAssertFalse(control.offersPause)
-        XCTAssertTrue(control.canForce)
         XCTAssertEqual(DispatchControl.cancelUpdateTitle, "Cancel Update")
         XCTAssertEqual(DispatchControl.updateNowTitle, "Update Now Anyway")
     }

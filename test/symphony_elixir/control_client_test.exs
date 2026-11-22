@@ -90,17 +90,10 @@ defmodule SymphonyElixir.ControlClientTest do
     assert_received {:posted, _url, %{target: "https://example/pr/1", intent: "fix CI"}, _token}
   end
 
-  test "force_issue POSTs the identifier and whether to clear" do
-    parent = self()
-    payload = %{"issue_identifier" => "ACME-1", "forced" => true, "position" => 2, "holders" => ["ACME-9"]}
-
-    assert {:ok, %{issue_identifier: "ACME-1", forced: true, position: 2, holders: ["ACME-9"]}} =
-             ControlClient.force_issue("ACME-1", false, default_opts(parent, 200, payload))
-
-    assert_received {:posted, "http://127.0.0.1:9999/api/v1/control/force", %{identifier: "ACME-1", clear: false}, "test-token"}
-
-    assert {:ok, _} = ControlClient.force_issue("ACME-1", true, default_opts(parent))
-    assert_received {:posted, _url, %{identifier: "ACME-1", clear: true}, _token}
+  test "has no call to force a ticket" do
+    Code.ensure_loaded!(ControlClient)
+    refute function_exported?(ControlClient, :force_issue, 2)
+    refute function_exported?(ControlClient, :force_issue, 3)
   end
 
   test "dispatch_pr omits intent when blank" do

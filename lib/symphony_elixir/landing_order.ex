@@ -26,8 +26,7 @@ defmodule SymphonyElixir.LandingOrder do
 
     * a PR on a hold (`Blocked`, `Needs Decision`) leads no one;
     * a PR whose state and head haven't moved for two hours leads no one, but waiting
-      for its own leader counts as moving, so it doesn't lose its place the moment that one lands;
-    * a forced ticket (the force label, `symphony force`) never waits.
+      for its own leader counts as moving, so it doesn't lose its place the moment that one lands.
 
   The watcher keeps the result under `:landing` on each ticket's record (`TicketState.pr_watch`);
   the state API lists the waits under `landing_waits`, and the agent's first prompt names the open
@@ -62,7 +61,6 @@ defmodule SymphonyElixir.LandingOrder do
           optional(:state) => String.t() | nil,
           optional(:held) => boolean(),
           optional(:conflicting) => boolean(),
-          optional(:forced) => boolean(),
           optional(:behind) => [String.t()]
         }
 
@@ -127,8 +125,6 @@ defmodule SymphonyElixir.LandingOrder do
   end
 
   def rank(_state, _settings), do: 0
-
-  defp wait_for(%{forced: true}, _above, _now), do: nil
 
   defp wait_for(member, above, now) do
     Enum.find_value(above, fn leader ->
