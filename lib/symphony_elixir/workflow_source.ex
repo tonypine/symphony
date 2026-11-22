@@ -6,7 +6,7 @@ defmodule SymphonyElixir.WorkflowSource do
   remote base branch (`origin/<base_branch>`) of the git checkout that holds the
   configured workflow file, so uncommitted or unpulled edits in that checkout never
   reach a run. The committed content is copied into a snapshot under the Symphony
-  state root, and the config cache and workflow stores watch that snapshot.
+  state root, and the running app watches that snapshot's folder (`watch_dir/1`).
 
   A workflow whose body has a `{% render "playbook" %}` line takes its instruction
   files from the same ref, and the snapshot holds the expanded text (see
@@ -56,6 +56,26 @@ defmodule SymphonyElixir.WorkflowSource do
       snapshot
     else
       _ -> local_path
+    end
+  end
+
+  @doc """
+  The folder in Symphony's state that holds `repo`'s workflow snapshot, made when missing so a
+  watcher can start before the first snapshot lands; nil for a repo read from its local file, whose
+  folder is a checkout's and is never watched.
+  """
+  @spec watch_dir(SystemSchema.Repo.t()) :: Path.t() | nil
+  def watch_dir(%SystemSchema.Repo{} = repo) do
+    local_path = SystemSchema.repo_workflow_path(repo)
+
+    case ref_checkout(repo, local_path) do
+      {:ok, _checkout} ->
+        dir = Path.dirname(snapshot_path(repo, local_path))
+        File.mkdir_p!(dir)
+        dir
+
+      :local ->
+        nil
     end
   end
 
