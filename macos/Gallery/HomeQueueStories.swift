@@ -139,6 +139,12 @@ private func padded(_ view: some View, width: CGFloat) -> AnyView {
     AnyView(view.frame(width: width, alignment: .leading).padding(DesignTokens.Space.s4))
 }
 
+/// The slot count control on a live value, so its steppers move it.
+@MainActor
+private func slotCountStory(_ value: Int) -> AnyView {
+    padded(HomeQueueLiveValue(value: value) { SlotCountControl(count: $0) }, width: 120)
+}
+
 @MainActor
 let homeQueueStories: [ComponentStory] = {
     func card(_ id: String, height: CGFloat = slotCardStoryHeight, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
@@ -159,9 +165,6 @@ let homeQueueStories: [ComponentStory] = {
     func row(_ id: String, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
         ComponentStory(component: "queue-row", id: id, title: "Queue row", width: queueRowStoryWidth, height: 220, draw: draw)
     }
-    func slotCount(_ value: Int) -> AnyView {
-        padded(HomeQueueLiveValue(value: value) { SlotCountControl(count: $0) }, width: 120)
-    }
     return [
         card("now") { slotCardStory(slotNow, slot: 1) },
         card("waiting-on-you") { slotCardStory(slotWaiting, slot: 2) },
@@ -174,9 +177,9 @@ let homeQueueStories: [ComponentStory] = {
         checks("all-proved") { padded(ChecksBar(proved: 9, total: 9), width: 280) },
         tokens("three-stages") { padded(TokenLine(stages: slotNow.tokens, total: slotNow.tokenTotal, cap: slotNow.tokenCap), width: 520) },
         tokens("two-stages") { padded(TokenLine(stages: slotWaiting.tokens, total: slotWaiting.tokenTotal, cap: slotWaiting.tokenCap), width: 520) },
-        count("three-slots") { slotCount(3) },
-        count("one-slot") { slotCount(1) },
-        count("six-slots") { slotCount(6) },
+        count("three-slots") { slotCountStory(3) },
+        count("one-slot") { slotCountStory(1) },
+        count("six-slots") { slotCountStory(6) },
         row("at-rest") { queueRowStory(.rest, index: 4) },
         row("hovered") { queueRowStory(.hover, index: 4) },
         row("dragged") { queueRowStory(.dragged, index: 4) },
