@@ -7,7 +7,6 @@ defmodule SymphonyElixir.Config.CacheTest do
   setup do
     original_symphony_path = Workflow.symphony_file_path()
     original_reader = Application.get_env(:symphony_elixir, :config_cache_file_reader)
-    original_watch = Application.get_env(:symphony_elixir, :config_cache_watch)
     original_watcher = Application.get_env(:symphony_elixir, :config_cache_watcher)
 
     root =
@@ -17,8 +16,6 @@ defmodule SymphonyElixir.Config.CacheTest do
       )
 
     File.mkdir_p!(root)
-    # Enable watch so file_event tests exercise the real GenServer plumbing.
-    Application.put_env(:symphony_elixir, :config_cache_watch, true)
     # An earlier test in the shard may have stopped the app; these tests talk to
     # the supervised Cache process directly.
     SymphonyElixir.TestSupport.ensure_config_cache_started!()
@@ -36,7 +33,6 @@ defmodule SymphonyElixir.Config.CacheTest do
       Cache.clear()
       Workflow.set_symphony_file_path(original_symphony_path)
       restore_env(:config_cache_file_reader, original_reader)
-      restore_env(:config_cache_watch, original_watch)
       restore_env(:config_cache_watcher, original_watcher)
       File.rm_rf(root)
     end)
@@ -90,8 +86,6 @@ defmodule SymphonyElixir.Config.CacheTest do
 
   describe "a rejected reload that a clear overtakes" do
     test "returns the last good config but leaves the cleared cache empty", %{root: root} do
-      # No watcher: only this test's reads may read the file.
-      Application.put_env(:symphony_elixir, :config_cache_watch, false)
       symphony_path = Path.join(root, "symphony.yml")
       File.write!(symphony_path, config(1))
       assert {:ok, %{"repositories" => [%{"key" => "r1"}]}} = Cache.get_symphony(symphony_path)
@@ -118,8 +112,6 @@ defmodule SymphonyElixir.Config.CacheTest do
 
   describe "a good load that a clear overtakes" do
     test "returns what it read but leaves the cleared cache empty", %{root: root} do
-      # No watcher: only this test's reads may read the file.
-      Application.put_env(:symphony_elixir, :config_cache_watch, false)
       on_exit(fn -> Application.delete_env(:symphony_elixir, :config_cache_file_reader) end)
       symphony_path = Path.join(root, "symphony.yml")
       File.write!(symphony_path, config(1))
@@ -155,17 +147,13 @@ defmodule SymphonyElixir.Config.CacheTest do
 
   describe "a symphony.yml edit the schema rejects" do
     test "keeps the last good config, says since when, and reads the rejected file only once", %{root: root} do
-      # No watcher: only this test's reads may read the file.
-      Application.put_env(:symphony_elixir, :config_cache_watch, false)
       symphony_path = Path.join(root, "symphony.yml")
       File.write!(symphony_path, config(1))
       assert {:ok, %{"repositories" => [%{"key" => "r1"}]}} = Cache.get_symphony(symphony_path)
 
       test_pid = self()
 
-      # The reader is global to the node: a refresh the Cache process runs on a file event (a
-      # watcher an earlier test of the shard left running) may read the rejected file too. The read
-      # that finds it rejected marks its stamp, so the next call of this test reads nothing.
+      # The read that finds the file rejected marks its stamp, so the next call reads nothing.
       Application.put_env(:symphony_elixir, :config_cache_file_reader, fn path ->
         send(test_pid, {:read, path, self()})
         File.read(path)
@@ -291,19 +279,12 @@ defmodule SymphonyElixir.Config.CacheTest do
 
   describe "reload event without a watcher" do
     test "a read that finds an edit emits the reload once per change", %{root: root} do
-      # As under the escript, which can't start the file watcher.
-      Application.put_env(:symphony_elixir, :config_cache_watcher, fn _dir -> :ignore end)
+      # As for any folder the app does not watch, and under the escript, which can't start one.
       symphony_path = Path.expand(Path.join(root, "symphony.yml"))
       write_stamped!(symphony_path, config(1), 1)
       attach_reloaded!()
 
-      log =
-        ExUnit.CaptureLog.capture_log(fn ->
-          assert {:ok, %{"repositories" => [%{"key" => "r1"}]}} = Cache.get_symphony(symphony_path)
-          :sys.get_state(Cache)
-        end)
-
-      assert log =~ "falling back to stat-based polling"
+      assert {:ok, %{"repositories" => [%{"key" => "r1"}]}} = Cache.get_symphony(symphony_path)
       # The first load is not a reload.
       refute_received {:reloaded, ^symphony_path}
 
@@ -354,111 +335,111 @@ defmodule SymphonyElixir.Config.CacheTest do
     end
   end
 
-  describe ":stop watcher cleanup" do
-    test "does not retry unavailable watcher backend on every cache read", %{root: root} do
-      # Not set as the node's config path: any process reading config would
-      # then send the app's Cache to watch `dir` too, and that attempt could
-      # reach the stub before this instance marks `dir` as stat-only.
+  describe "watchers" do
+    test "a read starts no watcher", %{root: root} do
+      stub_watcher!()
       symphony_path = Path.join(root, "symphony.yml")
       File.write!(symphony_path, config(0))
 
-      test_pid = self()
-      symphony_path = Path.expand(symphony_path)
-      dir = Path.dirname(symphony_path)
+      assert {:ok, _value} = Cache.get_symphony(symphony_path)
+      assert {:ok, _value} = Cache.get_symphony(symphony_path)
 
-      # Accept every dir: the app's Cache also calls this for any config read
-      # on the node, and a stub that only matches `dir` would crash it. Tag
-      # each attempt with the cache that made it, so only this instance's count.
-      Application.put_env(:symphony_elixir, :config_cache_watcher, fn watched_dir ->
-        send(test_pid, {:watch_attempt, self(), watched_dir})
-        :ignore
+      assert Cache.watched_dirs() == []
+      refute_received {:watch_attempt, _cache, _dir}
+    end
+
+    test "starts one watcher per folder it is given, never on a repository root", %{root: root} do
+      stub_watcher!()
+      dir = Path.join(root, "config")
+      repo = Path.join(root, "repo")
+      File.mkdir_p!(dir)
+      File.mkdir_p!(Path.join(repo, ".git"))
+
+      cache = start_supervised!({Cache, name: nil, watch: [dir, dir <> "/", repo, Path.join(root, "missing")]})
+      assert Cache.watched_dirs(cache) == [Path.expand(dir)]
+      assert_received {:watch_attempt, ^cache, _dir}
+      refute_received {:watch_attempt, ^cache, _dir}
+
+      assert Cache.watch(cache, dir) == :ok
+      assert Cache.watch(cache, repo) == {:error, :repository_root}
+      assert Cache.watch(cache, Path.join(root, "missing")) == {:error, :enoent}
+      refute_received {:watch_attempt, ^cache, _dir}
+    end
+
+    test "a folder the backend can't watch is checked by stamp", %{root: root} do
+      ignored = Path.join(root, "ignored")
+      File.mkdir_p!(ignored)
+
+      Application.put_env(:symphony_elixir, :config_cache_watcher, fn dir ->
+        if Path.basename(dir) == "ignored", do: :ignore, else: {:error, {:failed, dir}}
       end)
-
-      # A config file in another dir stands in for any other process that reads
-      # config while this test runs.
-      other_path = Path.join([root, "other", "symphony.yml"])
-      File.mkdir_p!(Path.dirname(other_path))
-      File.write!(other_path, config(0))
-      other_dir = Path.dirname(other_path)
 
       cache = start_private_cache!()
 
-      # Cast the watch requests a cache read sends, so each one reaches this
-      # instance even after the first marked `dir` as stat-only.
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert Cache.watch(cache, root) == {:error, {:failed, Path.expand(root)}}
+          assert Cache.watch(cache, ignored) == {:error, :unavailable}
+        end)
+
+      assert log =~ "Failed to watch config directory"
+      assert log =~ "Config watcher unavailable"
+      assert Cache.watched_dirs(cache) == []
+    end
+
+    test "a watcher that stops or exits is dropped", %{root: root} do
+      stub_watcher!()
+      first = Path.join(root, "first")
+      second = Path.join(root, "second")
+      File.mkdir_p!(first)
+      File.mkdir_p!(second)
+      cache = start_supervised!({Cache, name: nil, watch: [first, second]})
+      %{watchers: %{^first => first_watcher, ^second => second_watcher}} = :sys.get_state(cache)
+
       ExUnit.CaptureLog.capture_log(fn ->
-        GenServer.cast(cache, {:watch, symphony_path})
-        :sys.get_state(cache)
-
-        GenServer.cast(cache, {:watch, other_path})
-        :sys.get_state(cache)
-
-        GenServer.cast(cache, {:watch, symphony_path})
+        send(cache, {:file_event, first_watcher, :stop})
+        Process.exit(second_watcher, :kill)
+        send(cache, {:file_event, self(), :stop})
         :sys.get_state(cache)
       end)
 
-      # `:sys.get_state` above drains each cast, so every watch attempt has
-      # already been delivered.
-      assert_received {:watch_attempt, ^cache, ^dir}
-      assert_received {:watch_attempt, ^cache, ^other_dir}
-      refute_received {:watch_attempt, ^cache, ^dir}
-
-      state = :sys.get_state(cache)
-      refute Map.has_key?(state.watchers, dir)
+      assert Cache.watched_dirs(cache) == []
     end
 
-    test "drops watcher entry from state so the next access re-watches", %{root: root} do
-      symphony_path = Path.join(root, "symphony.yml")
-      File.write!(symphony_path, config(0))
-      Workflow.set_symphony_file_path(symphony_path)
+    test "the watchers stop with the cache", %{root: root} do
+      stub_watcher!()
+      cache = start_supervised!({Cache, name: nil, watch: [root]})
+      %{watchers: %{} = watchers} = :sys.get_state(cache)
+      [watcher] = Map.values(watchers)
+      ref = Process.monitor(watcher)
 
-      cache = start_private_cache!()
-      GenServer.cast(cache, {:watch, Path.expand(symphony_path)})
-
-      state = :sys.get_state(cache)
-      dir = Path.dirname(Path.expand(symphony_path))
-
-      case Map.get(state.watchers, dir) do
-        nil ->
-          # FileSystem may not be available in this environment; nothing to assert.
-          :ok
-
-        watcher when is_pid(watcher) ->
-          # Simulate the watcher sending its terminal :stop event.
-          ExUnit.CaptureLog.capture_log(fn ->
-            send(cache, {:file_event, watcher, :stop})
-            :sys.get_state(cache)
-          end)
-
-          new_state = :sys.get_state(cache)
-          refute Map.has_key?(new_state.watchers, dir)
-      end
+      stop_supervised!(Cache)
+      assert_receive {:DOWN, ^ref, :process, ^watcher, :shutdown}
     end
-  end
 
-  describe "EXIT handler" do
-    test "drops watcher when its process exits", %{root: root} do
-      symphony_path = Path.join(root, "symphony.yml")
-      File.write!(symphony_path, config(0))
-      Workflow.set_symphony_file_path(symphony_path)
+    # The one test that starts the real file watcher: on its own small folder, stopped with the
+    # cache when the test ends. An edit there reloads the cached file without a read.
+    test "an edit in a watched folder reloads the file", %{root: root} do
+      dir = Path.join(root, "watched")
+      File.mkdir_p!(dir)
+      symphony_path = Path.expand(Path.join(dir, "symphony.yml"))
+      File.write!(symphony_path, config(1))
+      assert {:ok, %{"repositories" => [%{"key" => "r1"}]}} = Cache.get_symphony(symphony_path)
 
       cache = start_private_cache!()
-      GenServer.cast(cache, {:watch, Path.expand(symphony_path)})
 
-      state = :sys.get_state(cache)
-      dir = Path.dirname(Path.expand(symphony_path))
+      {result, _log} = ExUnit.CaptureLog.with_log(fn -> Cache.watch(cache, dir) end)
 
-      case Map.get(state.watchers, dir) do
-        nil ->
+      case result do
+        :ok ->
+          attach_reloaded!()
+          File.write!(symphony_path, config(2))
+          bump_mtime!(symphony_path)
+          assert_receive {:reloaded, ^symphony_path}, 10_000
+
+        # No file events backend on this host (no inotify-tools on Linux): nothing to watch with.
+        {:error, _reason} ->
           :ok
-
-        watcher when is_pid(watcher) ->
-          ExUnit.CaptureLog.capture_log(fn ->
-            Process.exit(watcher, :kill)
-            :sys.get_state(cache)
-          end)
-
-          new_state = :sys.get_state(cache)
-          refute Map.has_key?(new_state.watchers, dir)
       end
     end
   end
@@ -517,7 +498,7 @@ defmodule SymphonyElixir.Config.CacheTest do
   end
 
   describe "clear/0" do
-    test "removes entries and watched-dir tracking", %{root: root, bystander: bystander} do
+    test "removes entries", %{root: root, bystander: bystander} do
       symphony_path = Path.join(root, "symphony.yml")
       # Not set as the node's config path: another config reader would load it
       # again right after the clear.
@@ -556,6 +537,19 @@ defmodule SymphonyElixir.Config.CacheTest do
     test_pid = self()
     :telemetry.attach(handler_id, Cache.reloaded_event(), fn _event, _measurements, metadata, _config -> send(test_pid, {:reloaded, metadata.path}) end, nil)
     on_exit(fn -> :telemetry.detach(handler_id) end)
+  end
+
+  # Every watcher this test starts is a process of its own, linked as the real one is; each attempt is
+  # reported with the cache that made it.
+  defp stub_watcher! do
+    test_pid = self()
+
+    Application.put_env(:symphony_elixir, :config_cache_watcher, fn dir ->
+      send(test_pid, {:watch_attempt, self(), dir})
+      {:ok, spawn_link(fn -> Process.sleep(:infinity) end)}
+    end)
+
+    test_pid
   end
 
   defp start_private_cache! do

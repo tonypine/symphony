@@ -12,6 +12,10 @@ defmodule SymphonyElixir.Config.Cache do
   newly rejected or missing file, or a different rejected file. It does not matter how the edit was
   found: a file event, or the stat check on a config read when the directory has no watcher. A
   dropped entry (`invalidate/1`) emits it too, since the next read loads the file again.
+
+  A read never starts a file watcher. The running app names the folders a settings change arrives
+  in when it starts the cache (`start_link/1`'s `:watch`): one watcher per folder, never a
+  repository root (TP-1603). A file in any other folder is still checked by its stamp on each read.
   """
 
   use GenServer
@@ -20,7 +24,6 @@ defmodule SymphonyElixir.Config.Cache do
   alias SymphonyElixir.{Config, Workflow}
 
   @index_key {__MODULE__, :index}
-  @watched_dirs_key {__MODULE__, :watched_dirs}
   # Bumped by every `clear/0` and `invalidate/1`: a load that began before one doesn't cache what it read.
   @generation_key {__MODULE__, :generation}
   @stale_option [stale: true]
@@ -60,6 +63,10 @@ defmodule SymphonyElixir.Config.Cache do
           stale_since: integer() | nil
         }
 
+  @doc """
+  Starts the cache. `:watch` lists the folders to start a file watcher on, one each; `:name`
+  defaults to the module (nil for an unnamed instance).
+  """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
@@ -130,6 +137,21 @@ defmodule SymphonyElixir.Config.Cache do
     :ok
   end
 
+  @doc """
+  Starts a file watcher on `dir` unless one runs there: `:ok`, or why it could not. A folder that
+  holds a git checkout (`.git`) is refused: a repository root is far too many files to watch.
+  """
+  @spec watch(GenServer.server(), Path.t()) :: :ok | {:error, term()}
+  def watch(server \\ __MODULE__, dir) when is_binary(dir) do
+    GenServer.call(server, {:watch, Path.expand(dir)})
+  end
+
+  @doc "The folders the cache runs a file watcher on, sorted."
+  @spec watched_dirs(GenServer.server()) :: [Path.t()]
+  def watched_dirs(server \\ __MODULE__) do
+    GenServer.call(server, :watched_dirs)
+  end
+
   @spec clear() :: :ok
   def clear do
     case GenServer.whereis(__MODULE__) do
@@ -139,30 +161,35 @@ defmodule SymphonyElixir.Config.Cache do
   end
 
   @impl true
-  def init(_opts) do
+  def init(opts) do
     Process.flag(:trap_exit, true)
-    {:ok, %{watchers: %{}}}
+
+    state =
+      opts
+      |> Keyword.get(:watch, [])
+      |> Enum.reduce(%{watchers: %{}}, fn dir, state -> state |> watch_dir(Path.expand(dir)) |> elem(1) end)
+
+    {:ok, state}
   end
 
   @impl true
   def handle_call(:clear, _from, state) do
-    Enum.each(state.watchers, fn {_dir, watcher} -> safe_stop_watcher(watcher) end)
     do_clear()
-    {:reply, :ok, %{state | watchers: %{}}}
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:watch, dir}, _from, state) do
+    {reply, state} = watch_dir(state, dir)
+    {:reply, reply, state}
+  end
+
+  def handle_call(:watched_dirs, _from, state) do
+    {:reply, state.watchers |> Map.keys() |> Enum.sort(), state}
   end
 
   @impl true
-  def handle_cast({:watch, path}, state) do
-    {:noreply, watch_path(state, path)}
-  end
-
-  @impl true
-  def handle_info({:file_event, _watcher, {path, events}}, state) when is_binary(path) and is_list(events) do
-    if reload_event?(events) do
-      path
-      |> Path.expand()
-      |> reload_path()
-    end
+  def handle_info({:file_event, watcher, {path, events}}, state) when is_binary(path) and is_list(events) do
+    if reload_event?(events), do: reload_path(Path.expand(path), watched_dir(state, watcher))
 
     {:noreply, state}
   end
@@ -177,11 +204,16 @@ defmodule SymphonyElixir.Config.Cache do
 
   def handle_info(_message, state), do: {:noreply, state}
 
+  # The watchers stop with the cache, so none outlives the app or a test's instance.
+  @impl true
+  def terminate(_reason, state) do
+    Enum.each(state.watchers, fn {_dir, watcher} -> stop_watcher(watcher) end)
+  end
+
   defp cached(kind, path) do
     generation = generation()
     path = Path.expand(path)
     key = cache_key(kind, path)
-    ensure_watch(path)
 
     case :persistent_term.get(key, nil) do
       %Entry{} = entry -> refresh_entry(entry, loader_for(kind), generation)
@@ -286,16 +318,28 @@ defmodule SymphonyElixir.Config.Cache do
   end
 
   # A file event refreshes the entries that read `path`; the refresh emits the reload when it finds one.
-  defp reload_path(path) do
+  # The backend may name the file by its resolved path (`/private/tmp` for `/tmp` on macOS), so a
+  # file of the same name in the folder the event's watcher was given matches too.
+  defp reload_path(path, dir) do
     generation = generation()
 
     :persistent_term.get(@index_key, MapSet.new())
     |> Enum.each(fn key ->
       case :persistent_term.get(key, nil) do
-        %Entry{path: ^path, kind: kind} = entry -> refresh_entry(entry, loader_for(kind), generation)
-        _entry -> :ok
+        %Entry{kind: kind} = entry ->
+          if event_path?(entry.path, path, dir), do: refresh_entry(entry, loader_for(kind), generation)
+
+        _entry ->
+          :ok
       end
     end)
+  end
+
+  defp event_path?(path, path, _dir), do: true
+  defp event_path?(entry_path, path, dir), do: Path.dirname(entry_path) == dir and Path.basename(entry_path) == Path.basename(path)
+
+  defp watched_dir(state, watcher) do
+    Enum.find_value(state.watchers, fn {dir, pid} -> if pid == watcher, do: dir end)
   end
 
   defp generation, do: :persistent_term.get(@generation_key, 0)
@@ -350,69 +394,27 @@ defmodule SymphonyElixir.Config.Cache do
 
   defp normalize_missing_reason(reason, _missing_reason), do: reason
 
-  defp ensure_watch(path) do
-    if watch_enabled?() and not already_watched?(path) do
-      cast_watch(path)
-    end
-
-    :ok
-  end
-
-  defp watch_enabled?, do: Application.get_env(:symphony_elixir, :config_cache_watch, true)
-
-  defp already_watched?(path) do
-    dir_already_watched?(Path.dirname(path))
-  end
-
-  defp dir_already_watched?(dir) do
-    set = :persistent_term.get(@watched_dirs_key, MapSet.new())
-    MapSet.member?(set, dir)
-  end
-
-  defp cast_watch(path) do
-    case GenServer.whereis(__MODULE__) do
-      pid when is_pid(pid) -> GenServer.cast(pid, {:watch, path})
-      _pid -> :ok
-    end
-  end
-
-  defp watch_path(state, path) do
-    dir = Path.dirname(path)
-
+  defp watch_dir(state, dir) do
     cond do
-      Map.has_key?(state.watchers, dir) ->
-        # Make sure the persistent_term mirror reflects state in case clear/0
-        # ran without restarting the GenServer.
-        mark_dir_watched(dir)
-        state
+      Map.has_key?(state.watchers, dir) -> {:ok, state}
+      not File.dir?(dir) -> {{:error, :enoent}, state}
+      File.exists?(Path.join(dir, ".git")) -> {{:error, :repository_root}, state}
+      true -> start_dir_watcher(state, dir)
+    end
+  end
 
-      dir_already_watched?(dir) ->
-        # Stat-only fallback was recorded for this dir by an earlier cast.
-        # Subsequent casts queued before that completed would otherwise
-        # re-enter start_watcher and flood the logs with bootstrap failures.
-        state
+  defp start_dir_watcher(state, dir) do
+    case start_watcher(dir) do
+      {:ok, watcher} ->
+        {:ok, %{state | watchers: Map.put(state.watchers, dir, watcher)}}
 
-      File.dir?(dir) ->
-        case start_watcher(dir) do
-          {:ok, watcher} ->
-            mark_dir_watched(dir)
-            %{state | watchers: Map.put(state.watchers, dir, watcher)}
+      {:error, reason} ->
+        Logger.warning("Failed to watch config directory=#{dir} reason=#{inspect(reason)}; reads check its files by their stamp")
+        {{:error, reason}, state}
 
-          {:error, reason} ->
-            Logger.warning("Failed to watch config directory=#{dir} reason=#{inspect(reason)}; falling back to stat-based polling for this dir until node restart")
-
-            mark_dir_stat_only(dir)
-            state
-
-          :ignore ->
-            Logger.warning("Config watcher unavailable for directory=#{dir}; falling back to stat-based polling for this dir until node restart")
-
-            mark_dir_stat_only(dir)
-            state
-        end
-
-      true ->
-        state
+      :ignore ->
+        Logger.warning("Config watcher unavailable for directory=#{dir}; reads check its files by their stamp")
+        {{:error, :unavailable}, state}
     end
   end
 
@@ -447,9 +449,8 @@ defmodule SymphonyElixir.Config.Cache do
   defp drop_watcher(state, watcher_pid, reason_tag) do
     case Enum.find(state.watchers, fn {_dir, pid} -> pid == watcher_pid end) do
       {dir, _pid} ->
-        Logger.warning("Config watcher #{inspect(reason_tag)} dir=#{dir}; auto-reload disabled for this dir until next access")
+        Logger.warning("Config watcher #{inspect(reason_tag)} dir=#{dir}; reads check its files by their stamp until restart")
 
-        unmark_dir_watched(dir)
         %{state | watchers: Map.delete(state.watchers, dir)}
 
       nil ->
@@ -457,36 +458,10 @@ defmodule SymphonyElixir.Config.Cache do
     end
   end
 
-  defp mark_dir_watched(dir) do
-    set = :persistent_term.get(@watched_dirs_key, MapSet.new())
-    :persistent_term.put(@watched_dirs_key, MapSet.put(set, dir))
+  defp stop_watcher(pid) do
+    Process.unlink(pid)
+    Process.exit(pid, :shutdown)
   end
-
-  defp mark_dir_stat_only(dir) do
-    # Track stat-only fallback dirs in the same persistent_term set used for live watchers so
-    # cast_watch/1 short-circuits instead of retrying FileSystem.start_link on every config read
-    # and flooding logs during active agent sessions.
-    #
-    # NOTE: this is sticky for the BEAM lifetime. unmark_dir_watched/1 only runs from
-    # drop_watcher/3 when a live watcher pid exits — stat-only entries have no pid in
-    # state.watchers, so they never get cleared. A transient watcher backend failure therefore
-    # pins that dir to stat-based polling until the node restarts. Stat polling still gives us
-    # eventual consistency, but if a future requirement demands in-process recovery, move
-    # stat-only entries into a separate persistent_term key with an explicit retry path.
-    mark_dir_watched(dir)
-  end
-
-  defp unmark_dir_watched(dir) do
-    set = :persistent_term.get(@watched_dirs_key, MapSet.new())
-    :persistent_term.put(@watched_dirs_key, MapSet.delete(set, dir))
-  end
-
-  defp safe_stop_watcher(pid) when is_pid(pid) do
-    if Process.alive?(pid), do: Process.exit(pid, :shutdown)
-    :ok
-  end
-
-  defp safe_stop_watcher(_), do: :ok
 
   # Every entry, not only the indexed ones: two reads that load different files at once each put
   # the index back from the copy they read, so one key can drop out of it, and an entry the index
@@ -499,7 +474,6 @@ defmodule SymphonyElixir.Config.Cache do
     end
 
     :persistent_term.erase(@index_key)
-    :persistent_term.erase(@watched_dirs_key)
     :ok
   end
 

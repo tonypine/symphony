@@ -80,7 +80,7 @@ defmodule SymphonyElixir.Application do
           SymphonyElixir.ConductorGate,
           {Task.Supervisor, name: SymphonyElixir.TaskSupervisor},
           SymphonyElixir.WorkspaceCleanup,
-          SymphonyElixir.Config.Cache,
+          {SymphonyElixir.Config.Cache, watch: config_watch_dirs(system_config, env)},
           SymphonyElixir.AuditLog.Writer,
           SymphonyElixir.DirectorMoves,
           SymphonyElixir.Linear.Usage,
@@ -169,6 +169,22 @@ defmodule SymphonyElixir.Application do
     end)
 
     :ok
+  end
+
+  @doc """
+  The folders the running app watches for a settings change: the one that holds `symphony.yml`, and
+  each repo's workflow folder in Symphony's state (`SymphonyElixir.WorkflowSource.watch_dir/1`).
+  None for a one-shot `symphony` command (`SYMPHONY_DISABLE_ORCHESTRATOR`), or with `:config_watch`
+  off, as in the test suite: a file there is checked by its stamp on each read (TP-1603).
+  """
+  @spec config_watch_dirs(SystemSchema.t(), map()) :: [Path.t()]
+  def config_watch_dirs(%SystemSchema{repos: repos}, env) when is_map(env) do
+    if Application.get_env(:symphony_elixir, :config_watch, true) and not orchestrator_runtime_disabled?(env) do
+      symphony_dir = SymphonyElixir.Workflow.symphony_file_path() |> Path.expand() |> Path.dirname()
+      Enum.uniq([symphony_dir | Enum.flat_map(repos, &List.wrap(SymphonyElixir.WorkflowSource.watch_dir(&1)))])
+    else
+      []
+    end
   end
 
   defp refresh_workflows!(system_config) do

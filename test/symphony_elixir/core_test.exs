@@ -647,6 +647,20 @@ defmodule SymphonyElixir.CoreTest do
     assert SymphonyElixir.QaAndroid.Emulator in test_children
   end
 
+  test "only the running app watches config folders: the one holding symphony.yml, never in tests or a one-shot command" do
+    system_config = Config.system!()
+    # The suite's own setting: no test boots a watcher.
+    assert SymphonyElixir.Application.config_watch_dirs(system_config, %{}) == []
+
+    Application.put_env(:symphony_elixir, :config_watch, true)
+    on_exit(fn -> Application.put_env(:symphony_elixir, :config_watch, false) end)
+
+    # The test repo reads its WORKFLOW.md from a folder outside any checkout, which is never watched.
+    assert SymphonyElixir.Application.config_watch_dirs(system_config, %{}) == [Path.dirname(Workflow.symphony_file_path())]
+    assert SymphonyElixir.Application.config_watch_dirs(system_config, %{"SYMPHONY_DISABLE_ORCHESTRATOR" => "true"}) == []
+    assert {SymphonyElixir.Config.Cache, watch: []} in SymphonyElixir.Application.child_specs_for_runtime(%{"SYMPHONY_DISABLE_ORCHESTRATOR" => "true"})
+  end
+
   test "application loads a QA seed between the run store and the orchestrator only when one is given" do
     refute Enum.any?(SymphonyElixir.Application.child_specs_for_runtime(%{}), &match?({SymphonyElixir.QaSeed, _opts}, &1))
 

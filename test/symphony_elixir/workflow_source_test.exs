@@ -21,27 +21,42 @@ defmodule SymphonyElixir.WorkflowSourceTest do
   setup do
     original_symphony_path = Application.get_env(:symphony_elixir, :symphony_file_path)
     original_state_root = Application.get_env(:symphony_elixir, :state_root_override)
-    original_watch = Application.get_env(:symphony_elixir, :config_cache_watch)
     original_workflow_path = Application.get_env(:symphony_elixir, :workflow_file_path)
     original_primary_repo = Application.get_env(:symphony_elixir, :primary_repo_name)
 
     root = Path.join(System.tmp_dir!(), "symphony-workflow-source-#{System.unique_integer([:positive])}")
     File.mkdir_p!(root)
     Paths.set_state_root(Path.join(root, "state"))
-    Application.put_env(:symphony_elixir, :config_cache_watch, false)
     Cache.clear()
 
     on_exit(fn ->
       Cache.clear()
       restore_app_env(:symphony_file_path, original_symphony_path)
       restore_app_env(:state_root_override, original_state_root)
-      restore_app_env(:config_cache_watch, original_watch)
       restore_app_env(:workflow_file_path, original_workflow_path)
       restore_app_env(:primary_repo_name, original_primary_repo)
       File.rm_rf(root)
     end)
 
     {:ok, root: root}
+  end
+
+  describe "watch_dir/1" do
+    test "is the snapshot folder in Symphony's state for the ref source, made before the first snapshot", %{root: root} do
+      %{checkout: checkout} = git_repos!(root, "Committed prompt")
+      dir = Path.join([root, "state", "workflows", "app"])
+      refute File.exists?(dir)
+
+      assert WorkflowSource.watch_dir(repo(checkout)) == dir
+      assert File.dir?(dir)
+    end
+
+    test "is none for a repo read from its local file", %{root: root} do
+      %{checkout: checkout} = git_repos!(root, "Committed prompt")
+
+      assert WorkflowSource.watch_dir(repo(checkout, workflow_source: "local")) == nil
+      assert WorkflowSource.watch_dir(repo(Path.join(root, "plain"))) == nil
+    end
   end
 
   describe "read_path/1" do
