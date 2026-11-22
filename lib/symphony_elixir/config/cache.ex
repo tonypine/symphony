@@ -15,7 +15,10 @@ defmodule SymphonyElixir.Config.Cache do
 
   A read never starts a file watcher. The running app names the folders a settings change arrives
   in when it starts the cache (`start_link/1`'s `:watch`): one watcher per folder, never a
-  repository root (TP-1603). A file in any other folder is still checked by its stamp on each read.
+  repository root (TP-1603). A file whose folder is too large to watch is named in `:watch_files`
+  instead: the cache checks that one file's stamp every `:config_poll_interval_ms` (a second by
+  default) and reloads it on a change, without a read. A file anywhere else is still checked by its
+  stamp on each read.
   """
 
   use GenServer
@@ -64,8 +67,9 @@ defmodule SymphonyElixir.Config.Cache do
         }
 
   @doc """
-  Starts the cache. `:watch` lists the folders to start a file watcher on, one each; `:name`
-  defaults to the module (nil for an unnamed instance).
+  Starts the cache. `:watch` lists the folders to start a file watcher on, one each, and
+  `:watch_files` the files whose stamp it checks on a timer instead; `:name` defaults to the module
+  (nil for an unnamed instance). Each folder it refuses is logged with the reason.
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
@@ -146,6 +150,12 @@ defmodule SymphonyElixir.Config.Cache do
     GenServer.call(server, {:watch, Path.expand(dir)})
   end
 
+  @doc "The files the cache checks by their stamp on a timer, sorted."
+  @spec watched_files(GenServer.server()) :: [Path.t()]
+  def watched_files(server \\ __MODULE__) do
+    GenServer.call(server, :watched_files)
+  end
+
   @doc "The folders the cache runs a file watcher on, sorted."
   @spec watched_dirs(GenServer.server()) :: [Path.t()]
   def watched_dirs(server \\ __MODULE__) do
@@ -164,11 +174,11 @@ defmodule SymphonyElixir.Config.Cache do
   def init(opts) do
     Process.flag(:trap_exit, true)
 
-    state =
-      opts
-      |> Keyword.get(:watch, [])
-      |> Enum.reduce(%{watchers: %{}}, fn dir, state -> state |> watch_dir(Path.expand(dir)) |> elem(1) end)
+    files = opts |> Keyword.get(:watch_files, []) |> Enum.map(&Path.expand/1) |> Enum.uniq() |> Enum.sort()
+    state = opts |> Keyword.get(:watch, []) |> Enum.reduce(%{watchers: %{}, files: files}, &boot_watch/2)
 
+    Enum.each(files, &Logger.info("Checking config file=#{&1} by its stamp every #{poll_interval_ms()}ms; its folder is too large to watch"))
+    schedule_poll(state)
     {:ok, state}
   end
 
@@ -181,6 +191,10 @@ defmodule SymphonyElixir.Config.Cache do
   def handle_call({:watch, dir}, _from, state) do
     {reply, state} = watch_dir(state, dir)
     {:reply, reply, state}
+  end
+
+  def handle_call(:watched_files, _from, state) do
+    {:reply, state.files, state}
   end
 
   def handle_call(:watched_dirs, _from, state) do
@@ -196,6 +210,12 @@ defmodule SymphonyElixir.Config.Cache do
 
   def handle_info({:file_event, watcher, :stop}, state) do
     {:noreply, drop_watcher(state, watcher, :stop)}
+  end
+
+  def handle_info(:poll, state) do
+    Enum.each(state.files, &poll_file/1)
+    schedule_poll(state)
+    {:noreply, state}
   end
 
   def handle_info({:EXIT, pid, reason}, state) do
@@ -329,6 +349,26 @@ defmodule SymphonyElixir.Config.Cache do
     |> Enum.each(&refresh_entry(&1, loader_for(&1.kind), generation))
   end
 
+  # A polled file is refreshed only when its stamp moved, or when it went missing: a file that stays
+  # missing is not reported again on every tick.
+  defp poll_file(path) do
+    generation = generation()
+    stamp = current_stamp(path)
+
+    for kind <- [:symphony, :workflow],
+        %Entry{} = entry <- [:persistent_term.get(cache_key(kind, path), nil)],
+        changed?(entry, stamp),
+        do: refresh_entry(entry, loader_for(kind), generation)
+  end
+
+  defp changed?(%Entry{} = entry, {:ok, stamp}), do: not (current?(entry, stamp) and instructions_current?(entry.instructions))
+  defp changed?(%Entry{stale?: stale?}, {:error, _reason}), do: not stale?
+
+  defp schedule_poll(%{files: []}), do: :ok
+  defp schedule_poll(_state), do: Process.send_after(self(), :poll, poll_interval_ms())
+
+  defp poll_interval_ms, do: Application.get_env(:symphony_elixir, :config_poll_interval_ms, 1_000)
+
   defp event_path?(path, path, _dir), do: true
   defp event_path?(entry_path, path, dir), do: Path.dirname(entry_path) == dir and Path.basename(entry_path) == Path.basename(path)
 
@@ -387,6 +427,21 @@ defmodule SymphonyElixir.Config.Cache do
     do: missing_reason
 
   defp normalize_missing_reason(reason, _missing_reason), do: reason
+
+  # The boot log lists every folder: watched, or refused and why.
+  defp boot_watch(dir, state) do
+    dir = Path.expand(dir)
+
+    case watch_dir(state, dir) do
+      {:ok, state} ->
+        Logger.info("Watching config directory=#{dir}")
+        state
+
+      {{:error, reason}, state} ->
+        Logger.warning("Not watching config directory=#{dir} reason=#{inspect(reason)}; reads check its files by their stamp")
+        state
+    end
+  end
 
   defp watch_dir(state, dir) do
     cond do

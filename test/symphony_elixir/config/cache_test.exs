@@ -8,6 +8,7 @@ defmodule SymphonyElixir.Config.CacheTest do
     original_symphony_path = Workflow.symphony_file_path()
     original_reader = Application.get_env(:symphony_elixir, :config_cache_file_reader)
     original_watcher = Application.get_env(:symphony_elixir, :config_cache_watcher)
+    original_poll_interval = Application.get_env(:symphony_elixir, :config_poll_interval_ms)
 
     root =
       Path.join(
@@ -34,6 +35,7 @@ defmodule SymphonyElixir.Config.CacheTest do
       Workflow.set_symphony_file_path(original_symphony_path)
       restore_env(:config_cache_file_reader, original_reader)
       restore_env(:config_cache_watcher, original_watcher)
+      restore_env(:config_poll_interval_ms, original_poll_interval)
       File.rm_rf(root)
     end)
 
@@ -364,6 +366,44 @@ defmodule SymphonyElixir.Config.CacheTest do
       assert Cache.watch(cache, repo) == {:error, :repository_root}
       assert Cache.watch(cache, Path.join(root, "missing")) == {:error, :enoent}
       refute_received {:watch_attempt, ^cache, _dir}
+    end
+
+    test "a symphony.yml at a repository root is checked by its own stamp: an edit reloads it without a read", %{root: root} do
+      stub_watcher!()
+      Application.put_env(:symphony_elixir, :config_poll_interval_ms, 10)
+      File.mkdir_p!(Path.join(root, ".git"))
+      symphony_path = Path.expand(Path.join(root, "symphony.yml"))
+      write_stamped!(symphony_path, config(1), 1)
+      assert {:ok, %{"repositories" => [%{"key" => "r1"}]}} = Cache.get_symphony(symphony_path)
+      attach_reloaded!()
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          cache = start_supervised!({Cache, name: nil, watch: [root], watch_files: [symphony_path, symphony_path]})
+          assert Cache.watched_dirs(cache) == []
+          assert Cache.watched_files(cache) == [symphony_path]
+        end)
+
+      assert log =~ "Not watching config directory=#{Path.expand(root)} reason=:repository_root"
+      assert log =~ "Checking config file=#{symphony_path}"
+      refute_received {:watch_attempt, _cache, _dir}
+
+      # Nothing changed: no reload.
+      refute_receive {:reloaded, ^symphony_path}, 50
+
+      write_stamped!(symphony_path, config(2), 2)
+      assert_receive {:reloaded, ^symphony_path}, 1_000
+      assert %{stale?: false} = status_entry(symphony_path)
+      assert {:ok, %{"repositories" => [%{"key" => "r2"}]}} = Cache.get_symphony(symphony_path)
+
+      # A removed file is reported once, not on every tick.
+      ExUnit.CaptureLog.capture_log(fn ->
+        File.rm!(symphony_path)
+        assert_receive {:reloaded, ^symphony_path}, 1_000
+        refute_receive {:reloaded, ^symphony_path}, 50
+      end)
+
+      assert %{stale?: true} = status_entry(symphony_path)
     end
 
     test "a folder the backend can't watch is checked by stamp", %{root: root} do
