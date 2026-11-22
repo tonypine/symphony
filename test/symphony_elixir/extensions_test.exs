@@ -992,6 +992,7 @@ defmodule SymphonyElixir.ExtensionsTest do
       ],
       "app_update" => %{"unblocks" => 1, "issue_identifiers" => ["MT-UPDATE"], "latest_release" => nil, "build_line" => nil, "latest_build" => nil},
       "concurrency" => %{"max_total" => 10, "finishing_max" => 2},
+      "slots" => nil,
       "claimed" => ["issue-http", "retry-http"],
       "rate_limits" => %{"primary" => %{"remaining" => 11}},
       "linear_usage" => %{"window_ms" => 3_600_000, "total" => 0, "callers" => [], "queries" => []},
