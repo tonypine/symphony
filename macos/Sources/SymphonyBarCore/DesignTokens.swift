@@ -1739,6 +1739,144 @@ public enum DesignTokens {
         public static func pitch(_ height: Double) -> Double { max(height, lineHeight) + gap }
     }
 
+    /// The Home queue's components (TP-1608, `docs/design/prototypes/home-queue/page.css`): the slot card, its empty
+    /// outline and its folded strip line, the checks bar, the token line, the slot count control and the queue row.
+    public enum HomeQueue {
+        /// The slots a person may set: at least one, at most six.
+        public static let slots = 1...6
+
+        // The slot card.
+        public static let cardTopPadding = Space.s4
+        public static let cardSidePadding = Space.s5
+        public static let cardBottomPadding = Space.s5
+        /// Between the header and the columns.
+        public static let cardGap = Space.s4
+        public static let cardElevation = Elevation.level1
+        public static let headerHeight: Double = 24
+        public static let headerGap = Space.s2
+        /// The room the header keeps between the title (and its chip) and the time in the slot.
+        public static let headerSpring = Space.s4
+        /// The three columns' shares of the card: Status about half, Plan and Pull request the rest.
+        public static let columnShares: [Double] = [1.9, 1, 1]
+        /// Each column's room inside its separator.
+        public static let columnInset = Space.s5
+        /// Between two rows of the columns.
+        public static let rowGap: Double = 10
+        /// A row's least height: a line of secondary text with its room.
+        public static let lineHeight: Double = 20
+        /// The status pill's least height and its room.
+        public static let pillHeight: Double = 28
+        public static let pillLeading: Double = 9
+        public static let pillTrailing = Space.s3
+        public static let pillGap: Double = 7
+        public static let pillGlyph: Double = 14
+        /// The plan's summary: at most three lines.
+        public static let planLines = 3
+        public static let nextGap = Space.s2
+        /// The pull request's lines: its name, its size and its branch, 4 pt apart.
+        public static let pullRequestGap = Space.s1
+        public static let pullRequestGlyph: Double = 14
+        public static let pullRequestSymbol = "arrow.triangle.pull"
+        /// A pull request fact (CI, review): a 6 pt dot, then its words.
+        public static let factDot: Double = 6
+        public static let factGap: Double = 9
+        public static let stopSymbol = "stop.fill"
+        /// The empty slot: an outline 56 pt tall.
+        public static let emptyHeight: Double = 56
+
+        // The strip line.
+        public static let stripHeight: Double = 30
+        public static let stripSinceWidth: Double = 68
+
+        // The checks bar.
+        public static let checksTrackWidth: Double = 132
+        public static let checksTrackHeight: Double = 3
+        public static let checksGap: Double = 10
+
+        // The token line.
+        public static let tokenDot: Double = 8
+        public static let tokenDotGap: Double = 6
+        public static let tokenStageGap = Space.s3
+        public static let tokenTotalGap = Space.s4
+
+        // The slot count control.
+        public static let countButtonWidth: Double = 22
+        public static let countButtonHeight: Double = 20
+        public static let countGlyph: Double = 10
+        public static let countValueWidth: Double = 50
+        public static let countInset: Double = 2
+        public static let countOffOpacity: Double = 0.35
+
+        // The queue row.
+        public static let rowHeight = Row.oneLineHeight
+        /// The room inside a row at both ends.
+        public static let rowInset = Space.s2
+        public static let rowPartGap: Double = 6
+        /// Between the identifier and the title, and between the items of the trail.
+        public static let rowMainGap = Space.s3
+        /// The lead's room on each side.
+        public static let leadMargin: Double = 2
+        /// The number's cell: as wide as the widest number on screen, never less than two digits.
+        public static let numberMinDigits = 2
+        public static let numberHeight: Double = 18
+        /// The grip that takes the number's place under the pointer: 10 by 14.
+        public static let gripWidth: Double = 10
+        public static let gripHeight: Double = 14
+        /// The identifier's column: as wide as eight digits, so every title starts at one place.
+        public static let identifierCharacters = 8
+        /// The last cell: the repo, and Start in its place under the pointer.
+        public static let endWidth: Double = 68
+        public static let endHeight = Control.small.height
+        public static let afterGlyph: Double = 11
+        public static let afterSymbol = "arrow.right"
+        /// A dragged row: lifted on the content surface.
+        public static let dragElevation = Elevation.level3
+
+        /// The number as a row shows it: with a comma between thousands ("1,243").
+        public static func number(_ value: Int) -> String {
+            let formatter = NumberFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.numberStyle = .decimal
+            formatter.groupingSeparator = ","
+            formatter.usesGroupingSeparator = true
+            return formatter.string(from: NSNumber(value: value)) ?? String(value)
+        }
+
+        /// The characters the number cell is measured on for `widest`, each digit a "0" (the figures are tabular): at
+        /// least two digits.
+        public static func numberTemplate(widest: Int) -> String {
+            let digits = number(max(widest, 0)).map { $0.isNumber ? "0" : $0 }
+            let pad = max(numberMinDigits - digits.filter { $0 == "0" }.count, 0)
+            return String(repeating: "0", count: pad) + String(digits)
+        }
+
+        /// "5 of 9 checks proved", "1 of 1 check proved".
+        public static func checks(proved: Int, total: Int) -> String {
+            "\(proved) of \(total) " + (total == 1 ? "check" : "checks") + " proved"
+        }
+
+        /// The share of the checks proved, from 0 to 1.
+        public static func checksFraction(proved: Int, total: Int) -> Double {
+            guard total > 0 else { return 0 }
+            return min(max(Double(proved) / Double(total), 0), 1)
+        }
+
+        /// The token line's total: "21.4M of 100M tokens · 21 %"; "21.4M tokens" without a cap.
+        public static func tokens(_ total: Int, cap: Int?) -> String {
+            guard let cap, cap > 0 else { return Overview.tokens(total) + " tokens" }
+            let percent = Int((Double(total) / Double(cap) * 100).rounded())
+            return "\(Overview.tokens(total)) of \(Overview.tokens(cap)) tokens · \(percent) %"
+        }
+
+        /// "1 slot", "3 slots".
+        public static func slotsWord(_ count: Int) -> String { count == 1 ? "1 slot" : "\(count) slots" }
+
+        /// `count` moved by `step`, kept inside `slots`.
+        public static func slots(_ count: Int, step: Int) -> Int {
+            min(max(count + step, slots.lowerBound), slots.upperBound)
+        }
+    }
+
     /// The catalog's Progress meter (`.meter`, `.meter-line`, TP-1530): how much of a cap is used. The full form is
     /// 320 pt: its label and value, an 8 pt track and a note; the one-line form is its label, a 6 pt track, the
     /// percent and when it resets, with a stop mark where new work stops.
