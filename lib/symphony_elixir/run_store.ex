@@ -7,6 +7,7 @@ defmodule SymphonyElixir.RunStore do
   require Logger
 
   alias SymphonyElixir.{Config, Paths, Pauses, TicketMerge, TicketState}
+  alias SymphonyElixir.Dispatch.Queue
   alias SymphonyElixir.RunStore.RunIndex
   alias SymphonyElixir.TicketEvents.Event
 
@@ -61,6 +62,11 @@ defmodule SymphonyElixir.RunStore do
   # (`SymphonyElixir.Pauses.Backfill`).
   @pause_key :dispatch_pause
   @pause_backfill_marker "pause_backfill_symphony_v1"
+  # The dispatch queue (`SymphonyElixir.Dispatch.Queue`): the highest place a ticket's record was
+  # ever given, and the marker of the one-time placement of the records a release before kept
+  # without a place (`place_queue/0`).
+  @queue_tail_key :queue_tail
+  @queue_placed_marker "queue_placed_v1"
   @director %{kind: :person, name: "Director"}
   @usage_limits_key :usage_limits
   @unpaused %{paused: false, reason: nil, paused_at: nil}
@@ -1743,6 +1749,61 @@ defmodule SymphonyElixir.RunStore do
   end
 
   @doc """
+  The one-time placement of the dispatch queue, run by every start before the store answers, after
+  `contract_ticket_key/0`: a store whose placement marker (`queue_placed_v1`) is not set gives every
+  queued record (`TicketState.queued?/1`) its place from the order the dispatch pass computed before
+  the queue was stored (`SymphonyElixir.Dispatch.Queue.placement/2`): the tickets already started
+  (past Todo, or with a run in their ledger) in front. The queue's tail is set to the last place and
+  the marker set, in one durable transaction, so a later start keeps every place as it is.
+  """
+  @spec place_queue() :: :ok | {:error, term()}
+  def place_queue do
+    durable_transaction(fn ->
+      if is_nil(read_marker(@queue_placed_marker)), do: place_queue_once()
+      :ok
+    end)
+  end
+
+  defp place_queue_once do
+    started = MapSet.new(:mnesia.index_read(@ticket_events_table, "run.started", :type), &elem(&1, 3))
+
+    placed =
+      :all
+      |> listed_ticket_records()
+      |> Enum.map(&TicketState.normalize/1)
+      |> Enum.filter(&TicketState.queued?/1)
+      |> Queue.placement(started)
+      |> Enum.with_index(1)
+
+    Enum.each(placed, &write_queue_place/1)
+
+    :mnesia.write({@totals_table, @queue_tail_key, max(length(placed), queue_tail(:write))})
+    :mnesia.write({@totals_table, {:marker, @queue_placed_marker}, DateTime.utc_now()})
+  end
+
+  defp write_queue_place({record, position}) do
+    :mnesia.write({@ticket_index_table, record.issue_id, record.repo_key, %{record | queue_position: position}})
+  end
+
+  @doc """
+  Each queued ticket's place in the dispatch queue, by issue id, across every repository: the order
+  the dispatch pass walks its candidates in (`SymphonyElixir.Dispatch.Queue.order/2`); when the
+  store can't be read, its error.
+  """
+  @spec queue_positions() :: %{String.t() => pos_integer()} | {:error, term()}
+  def queue_positions do
+    with :ok <- ensure_started() do
+      transaction(fn -> :all |> listed_ticket_records() |> queue_position_map() end)
+    end
+  end
+
+  defp queue_position_map(records) do
+    for %{queue_position: position, issue_id: issue_id} <- records, is_integer(position), into: %{} do
+      {issue_id, position}
+    end
+  end
+
+  @doc """
   The one-time step that moves a ticket's record off the (repository, ticket) key for good
   (`ticket_index_marker/0`), run by every start before the store answers, from whichever release
   wrote the store. A store with no (repository, ticket) table (a new one, or one this step already
@@ -1926,11 +1987,11 @@ defmodule SymphonyElixir.RunStore do
       :ok ->
         build_run_index()
 
-        case contract_ticket_key() do
-          :ok ->
-            :persistent_term.put({__MODULE__, :ready}, self())
-            {:ok, %State{dir: dir}}
-
+        with :ok <- contract_ticket_key(),
+             :ok <- place_queue() do
+          :persistent_term.put({__MODULE__, :ready}, self())
+          {:ok, %State{dir: dir}}
+        else
           {:error, reason} ->
             {:stop, reason}
         end
@@ -2404,11 +2465,46 @@ defmodule SymphonyElixir.RunStore do
   # Writes the record under its ticket in the caller's transaction. Its repository is its own field
   # (`repo_key`, routed by observation), else `repo_key` for a new record; a ticket pause names the
   # record's repository, so a re-routed record carries its pause with it.
+  # Every write of a ticket's record goes through here, so it is where the record takes its place in
+  # the dispatch queue (`place_in_queue/2`).
   defp write_ticket_record(repo_key, issue_id, record) do
     record_repo_key = Map.get(record, :repo_key) || repo_key
-    record = record |> Map.put(:repo_key, record_repo_key) |> reroute_pause(record_repo_key, issue_id)
+    record = record |> Map.put(:repo_key, record_repo_key) |> reroute_pause(record_repo_key, issue_id) |> place_in_queue(issue_id)
     :mnesia.write({@ticket_index_table, issue_id, record_repo_key, record})
     :ok
+  end
+
+  # A record in the queue (`TicketState.queued?/1`) keeps the place it holds, the one it is written
+  # with or else the stored one, and joins at the end when it holds none: one past the highest place
+  # ever given (`queue_tail`), read under a write lock so two new tickets never share a place. A record
+  # out of the queue (terminal, removed) holds none, so a ticket reopened joins at the end again.
+  defp place_in_queue(record, issue_id) do
+    cond do
+      not TicketState.queued?(record) -> Map.put(record, :queue_position, nil)
+      is_integer(Map.get(record, :queue_position)) -> record
+      position = stored_queue_position(issue_id) -> Map.put(record, :queue_position, position)
+      true -> Map.put(record, :queue_position, next_queue_position())
+    end
+  end
+
+  defp stored_queue_position(issue_id) do
+    case :mnesia.read(@ticket_index_table, issue_id, :write) do
+      [{@ticket_index_table, ^issue_id, _repo_key, %{queue_position: position}}] when is_integer(position) -> position
+      _none -> nil
+    end
+  end
+
+  defp next_queue_position do
+    position = queue_tail(:write) + 1
+    :mnesia.write({@totals_table, @queue_tail_key, position})
+    position
+  end
+
+  defp queue_tail(lock) do
+    case :mnesia.read(@totals_table, @queue_tail_key, lock) do
+      [{@totals_table, @queue_tail_key, tail}] when is_integer(tail) -> tail
+      _none -> 0
+    end
   end
 
   defp reroute_pause(%{pause: %{subject: {:ticket, repo_key, _id}}} = record, repo_key, _issue_id), do: record

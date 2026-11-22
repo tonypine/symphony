@@ -51,11 +51,11 @@ defmodule SymphonyElixir.Dispatch.OrderTest do
       state = orchestrator_state(1)
       %{dispatch_order: order} = Orchestrator.put_dispatch_order_for_test(state, issues)
 
-      # The pass walks the blocked ticket first, for its priority, and passes over it.
+      # The pass walks the blocked ticket at its place in the queue, and passes over it.
       assert [
-               %{identifier: "MT-C", position: nil, outcome: :held, reason: "Waiting for MT-9 to finish" = blocked_reason},
                %{identifier: "MT-A", position: 1, outcome: :starts, starts_now: true, reason: "next: a slot is free", slot: "shared"},
-               %{identifier: "MT-B", position: 2, outcome: :waits, starts_now: false, reason: "2nd: behind MT-A", wait: "work slots full"}
+               %{identifier: "MT-B", position: 2, outcome: :waits, starts_now: false, reason: "2nd: behind MT-A", wait: "work slots full"},
+               %{identifier: "MT-C", position: nil, outcome: :held, reason: "Waiting for MT-9 to finish" = blocked_reason}
              ] = order.entries
 
       assert %{work_used: 0, work_free: 1, concurrency: %{max_total: 1}} = order.slots

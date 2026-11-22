@@ -2,7 +2,7 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.EpicLanes
+  alias SymphonyElixir.{EpicLanes, TicketState}
 
   @active_states ["Todo", "In Progress", "Merging", "Rework", "Waiting on sub-tickets"]
 
@@ -54,11 +54,14 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     assert %{finishing: %{slots: 2, used: 1, running: [%{identifier: "MT-LAND", state: "Merging"}]}} = snapshot_of(state)
   end
 
-  test "with finishing_max 1 a second Merging ticket waits and no Todo starts until it does", ctx do
+  test "with finishing_max 1 a second Merging ticket waits and no Todo starts until it does, though the Todo is ahead in the queue",
+       ctx do
     write_finishing_workflow!(ctx, max_concurrent_agents: 2, finishing_max: 1)
     second_landing = issue("land-2", "MT-LAND-2", "Merging")
     todo = issue("todo-1", "MT-TODO", "Todo", priority: 1)
     tracked([second_landing, todo])
+    # The Todo ticket holds the earlier place, so the walk reaches it before the waiting landing.
+    queued!([todo, second_landing])
 
     state = run(orchestrator_state(2), issue("land-1", "MT-LAND-1", "Merging"), :landing)
 
@@ -72,7 +75,11 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     assert [%{issue_id: "land-2", reason: "finishing slots full"}, %{issue_id: "todo-1", reason: ^hold_reason}] =
              state |> snapshot_of() |> Map.fetch!(:slot_waiting) |> Enum.sort_by(& &1.issue_id)
 
-    # The landing run ends: the second landing starts, and only then the Todo ticket.
+    # The dispatch order read holds the Todo ticket for the landing too.
+    order = state |> Orchestrator.put_dispatch_order_for_test([todo, second_landing]) |> Map.fetch!(:dispatch_order)
+    assert [%{issue_id: "todo-1", outcome: :waits, wait: ^hold_reason}, %{issue_id: "land-2", outcome: :waits}] = order.entries
+
+    # The landing run ends: a slot is free for the second landing, so nothing holds the Todo ticket.
     state = %{state | running: Map.delete(state.running, "land-1")}
 
     log =
@@ -84,7 +91,7 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
 
     assert Enum.sort(Map.keys(state.running)) == ["land-2", "todo-1"]
     assert state.slot_waiting == %{}
-    assert dispatch_order(log) == ["land-2", "todo-1"]
+    assert dispatch_order(log) == ["todo-1", "land-2"]
   end
 
   test "a Merging ticket held for CI neither lands nor waits for a slot, and a Todo still starts", ctx do
@@ -173,29 +180,48 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     refute Orchestrator.should_dispatch_issue_for_test(landing, orchestrator_state(2))
   end
 
-  test "a resume of Medium priority goes before an Urgent Todo when a slot frees", ctx do
+  test "a free slot goes to the first ticket of the stored queue, though the ones behind it are urgent, older or further on", ctx do
     write_finishing_workflow!(ctx, max_concurrent_agents: 1)
-    resume = issue("resume-1", "MT-RESUME", "In Progress", priority: 3)
-    urgent = issue("todo-1", "MT-URGENT", "Todo", priority: 1)
-    tracked([resume, urgent])
+    first = issue("low-1", "MT-LOW", "Todo", priority: 4, created_at: ~U[2026-03-01 00:00:00Z])
+    urgent = issue("urgent-1", "MT-URGENT", "Todo", priority: 1, created_at: ~U[2026-02-01 00:00:00Z])
+    resume = issue("resume-1", "MT-RESUME", "In Progress", priority: 1, created_at: ~U[2026-01-01 00:00:00Z])
+    tracked([first, urgent, resume])
+    queued!([first, urgent, resume])
 
-    state = Orchestrator.dispatch_chosen_issues_for_test([urgent, resume], orchestrator_state(1))
+    state = Orchestrator.dispatch_chosen_issues_for_test([resume, urgent, first], orchestrator_state(1))
 
-    assert Map.keys(state.running) == ["resume-1"]
-    assert %{reason: "work slots full"} = state.slot_waiting["todo-1"]
+    assert Map.keys(state.running) == ["low-1"]
+    assert %{reason: "work slots full"} = state.slot_waiting["urgent-1"]
+    assert %{reason: "work slots full"} = state.slot_waiting["resume-1"]
   end
 
-  test "candidates sort by stage before priority and age" do
-    issues = [
-      issue("todo", "MT-1", "Todo", priority: 1),
-      issue("progress", "MT-2", "In Progress", priority: 4),
-      issue("rework", "MT-3", "Rework", priority: 4),
-      issue("merging", "MT-5", "Merging", priority: 4),
-      issue("merging-urgent", "MT-6", "Merging", priority: 1)
-    ]
+  test "a ticket the gates hold keeps its place in the queue, and is taken before the ones behind it once it can start", ctx do
+    write_finishing_workflow!(ctx, max_concurrent_agents: 1, tickets: %{priorities: ["urgent", "high"]})
+    parked = issue("parked-1", "MT-PARKED", "Backlog", priority: 1)
+    low = issue("low-1", "MT-LOW", "Todo", priority: 4)
+    next = issue("next-1", "MT-NEXT", "Todo", priority: 2)
+    last = issue("last-1", "MT-LAST", "Todo", priority: 2)
+    tracked([parked, low, next, last])
+    queued!([parked, low, next, last])
+    places = Map.take(RunStore.queue_positions(), ["parked-1", "low-1", "next-1", "last-1"])
 
-    assert issues |> Orchestrator.sort_issues_for_dispatch_for_test() |> Enum.map(& &1.id) ==
-             ["merging-urgent", "merging", "rework", "progress", "todo"]
+    # In Backlog, the first ticket cannot start; below the priority filter, the second is never started.
+    state = Orchestrator.dispatch_chosen_issues_for_test([last, next, low, parked], orchestrator_state(1))
+
+    assert Map.keys(state.running) == ["next-1"]
+    assert %{reason: "work slots full"} = state.slot_waiting["last-1"]
+    refute Map.has_key?(state.slot_waiting, "low-1")
+    refute Map.has_key?(state.slot_waiting, "parked-1")
+    assert Map.take(RunStore.queue_positions(), Map.keys(places)) == places
+
+    # Moved to Todo, it goes before the tickets behind it.
+    :ok = RunStore.update_ticket_state("parked-1", %{phase: "Todo"})
+    issues = [last, next, low, %{parked | state: "Todo"}]
+    tracked(issues)
+    state = Orchestrator.dispatch_chosen_issues_for_test(issues, orchestrator_state(1))
+
+    assert Map.keys(state.running) == ["parked-1"]
+    assert Map.take(RunStore.queue_positions(), Map.keys(places)) == places
   end
 
   test "a retry waiting for a slot keeps attempt 1 and starts on the first poll after a slot frees", ctx do
@@ -260,7 +286,7 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     assert Orchestrator.should_dispatch_issue_for_test(landing, state)
   end
 
-  test "an epic's lane starts its next part before a higher-priority grandchild", ctx do
+  test "an epic's lane gives its slot to the first ticket of its path in the queue, not the nearest one", ctx do
     write_finishing_workflow!(ctx, max_concurrent_agents: 2, epic_lanes: 1)
     part = issue("c1", "MT-C1", "Todo", priority: 3)
     parent = issue("p2", "MT-P2", "In Progress", sub_issues: [%{id: "g1", identifier: "MT-G1", state: "Todo"}])
@@ -268,15 +294,16 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     standalone = issue("s1", "MT-S1", "Todo", priority: 2)
     epic = epic("e1", "MT-E1", [%{id: "c1", identifier: "MT-C1", state: "Todo"}, %{id: "p2", identifier: "MT-P2", state: "In Progress"}])
     tracked([part, grandchild, standalone])
+    queued!([grandchild, standalone, part])
 
     state = Orchestrator.put_epic_lanes_for_test(orchestrator_state(2), [epic, part, parent, grandchild, standalone])
-    candidates = [grandchild, standalone, part]
+    candidates = [part, standalone, grandchild]
     log = capture_log(fn -> send(self(), {:state, Orchestrator.dispatch_chosen_issues_for_test(candidates, state)}) end)
     assert_received {:state, state}
 
-    assert dispatch_order(log) == ["c1", "s1"]
-    assert log =~ ~r/issue_id=c1 .* slot=lane:MT-E1/
-    assert %{reason: "work slots full"} = state.slot_waiting["g1"]
+    assert dispatch_order(log) == ["g1", "s1"]
+    assert log =~ ~r/issue_id=g1 .* slot=lane:MT-E1/
+    assert %{reason: "work slots full"} = state.slot_waiting["c1"]
   end
 
   test "landing runs leave the work slots and lane snapshot to implementation work" do
@@ -402,6 +429,16 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
   end
 
   defp tracked(issues), do: Application.put_env(:symphony_elixir, :memory_tracker_issues, issues)
+
+  # Each ticket's record, written in the order given: each joins the dispatch queue at its end.
+  defp queued!(issues) do
+    for issue <- issues do
+      attrs = %{issue_identifier: issue.identifier, phase: issue.state, priority: issue.priority, created_at: issue.created_at}
+      :ok = RunStore.put_ticket_state(TicketState.new(Config.repo_key!(), issue.id, attrs))
+    end
+
+    :ok
+  end
 
   defp dispatch_order(log) do
     ~r/Dispatching issue to agent: issue_id=(\S+)/

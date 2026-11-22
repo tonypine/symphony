@@ -14,7 +14,8 @@ defmodule SymphonyElixir.Home do
     blocked by queued tickets sits under the one that lands last (the deepest, then the latest in the
     dispatch order) and names its other open blockers in `also_waits_on`. A root waits on nothing in
     the queue: when it waits on a ticket in progress it names the one that lands last in `after`, else
-    it carries its situation. Ready roots come in the dispatcher's order, then the roots that wait,
+    it carries its situation. Ready roots come in the dispatcher's order (the stored queue order,
+    `SymphonyElixir.Dispatch.Queue`), then the roots that wait,
     in the order of the ticket they wait on.
   - `outside`: how many open tickets neither list holds, by reason: `backlog`, `below_priority`,
     `epic` (an epic with no ticket in progress) and `behind` (a queued ticket whose blocker is one of

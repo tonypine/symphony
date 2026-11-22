@@ -282,27 +282,6 @@ defmodule SymphonyElixir.EpicLanesTest do
     end
   end
 
-  describe "order/3" do
-    test "each lane's tickets go nearest first, within their own positions and stage" do
-      candidates = [
-        epic("E1", [{"p1", "Todo"}, {"p2", "In Progress"}, {"r1", "Rework"}]),
-        epic("E2", [{"q1", "Todo"}]),
-        ticket("p2", "In Progress", sub_issues: [link("g1", "Todo"), link("g2", "Rework"), link("q1", "Todo")])
-      ]
-
-      plan = EpicLanes.plan(candidates, 3, nil, @terminal)
-      stage = fn issue -> issue.state end
-
-      # Dispatch order by priority: the grandchildren rank above the next part.
-      issues =
-        [ticket("g2", "Rework"), ticket("r1", "Rework"), ticket("g1", "Todo"), standalone("S1")] ++
-          [:not_an_issue, ticket("q1", "Todo"), ticket("p1", "Todo")]
-
-      assert plan |> EpicLanes.order(issues, stage) |> Enum.map(&ids/1) == ["r1", "g2", "p1", "S1", :not_an_issue, "q1", "g1"]
-      assert EpicLanes.order(nil, issues, stage) == issues
-    end
-  end
-
   describe "slot_for/3" do
     test "a lane stays reserved for its epic while a standalone takes the shared slot, then runs the next part" do
       # max_total 2: part 1 in review, part 2 blocked by it, one standalone ready.
@@ -461,9 +440,6 @@ defmodule SymphonyElixir.EpicLanesTest do
   defp link(id, state), do: %{id: id, identifier: id, state: state}
 
   defp urgent_only, do: %{names: ["urgent"], allowed?: &(&1.priority == 1)}
-
-  defp ids(%Issue{id: id}), do: id
-  defp ids(other), do: other
 
   defp standalone(identifier) do
     %Issue{id: identifier, identifier: identifier, title: identifier, state: "Todo", priority: 2, labels: []}

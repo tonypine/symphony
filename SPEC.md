@@ -4161,22 +4161,34 @@ An issue is dispatch-eligible only if all are true:
     missing, it logs a warning and stops moving parents there until restart; parents then wait in
     `In Progress` as before. When the check itself fails, the state stays on.
 
-Sorting order (stable intent), closest to done first:
+Dispatch order: the stored queue. Every open issue has a place in one queue across all repositories
+(`queue_position`, stored on the issue's record and kept across a restart); the order is never
+computed at a pass.
 
-1. stage: `Merging`, then `Rework`, then any other active state
-   (a resume, such as `In Progress`), then `Todo`
-2. `priority` ascending (1..4 are preferred; null/unknown sorts last)
-3. `created_at` oldest first
-4. `identifier` lexicographic tie-breaker
+1. A new issue joins at the end: the first time its record is written open, it takes one place past
+   the highest given. Issues one read shows for the first time join oldest `created_at` first,
+   then by `identifier`.
+2. An issue keeps its place until it leaves the queue: a terminal state, or a removal. Reopened, it
+   joins at the end again.
+3. `priority` decides no place. A change of priority moves no issue; `tickets.priorities` stays a
+   gate on which issues may start.
+4. The dispatch pass walks its candidates by place: a free slot goes to the first one that can start.
+   An issue a gate holds (a blocker, `Backlog`, the priority filter, a pause...) keeps its place and
+   is skipped. A candidate with no record yet goes last, by `created_at`, then `identifier`.
+5. The first start of the release that stored the queue places the issues already there once, in the
+   order the pass computed before: the issues already started (past `Todo`, or with a started run in
+   their ledger) in front, then the rest; inside each group stage (`Merging`, `Rework`, other active
+   states, then `Todo` and `Backlog`), then `priority` ascending (null last), then `created_at`
+   oldest first, then `identifier`. A later start keeps every place.
 
 While an issue in `Merging` is waiting for a slot, no `Todo` issue is dispatched. `Rework` and
 resumes still are. The held `Todo` issue's
 `slot_waiting` reason names the issue it waits for (`MT-2 (Merging) is waiting for a finishing
 slot`).
 
-Priority: `priority` means importance and only orders issues waiting for slots, after the
-stage. Raising it never gets an issue past `max_total`, a per-state cap, the epic lanes or
-`finishing_max`. These transitions stay with a person:
+Priority: `priority` means importance; it orders nothing in the queue and only gates through
+`tickets.priorities`. Raising it never moves an issue in the queue, nor gets it past `max_total`, a
+per-state cap, the epic lanes or `finishing_max`. These transitions stay with a person:
 
 | Transition | Who |
 | --- | --- |
@@ -4226,9 +4238,8 @@ Epic lanes:
 - An issue on the path of an epic with a lane runs in that lane when nothing else holds it;
   otherwise it, and every other issue, needs a free shared slot. An issue on the path of two epics
   runs in whichever lane is free first and holds only one lane.
-- Within a dispatch stage, a lane's issues go nearest the epic first: the epic's next part, then a
-  blocker or sub-issue of it, and so on. They swap only among the places they already hold in the
-  dispatch order, so priority and age only break ties between them.
+- Lanes decide which slot an issue may take, not when it goes: a lane's issues are walked in the
+  queue order like every other issue.
 - A lane with nothing running stays reserved while an issue on its path can run, for example a
   blocker that is landing, so the next issue on the epic's path starts there as soon as its blocker
   merges, even when the shared slots are full.
@@ -4318,8 +4329,8 @@ reached (for Claude, a used-up five-hour or weekly window; for Codex, an error w
   no hold covers. With no such fallback, every dispatch path skips the candidate: the poll,
   retries and operator PR runs. A continuation of a run in progress is judged on the run kind's
   own choice only. Other providers keep dispatching. Epic lanes stay reserved.
-- At `resume_at` the hold moves to `phase: canary` and exactly one held retry, the first in normal
-  dispatch order, is released as the canary; an immediate poll tick runs. The hold keeps covering
+- At `resume_at` the hold moves to `phase: canary` and exactly one held retry, the first in the
+  queue order, is released as the canary; an immediate poll tick runs. The hold keeps covering
   every other run of that provider, so slots freed by held runs are not filled with other work on
   it. With nothing held, the hold is cleared and no canary runs. The held issues are read from the
   tracker to order them; until that read answers the hold stays as it was, and a held retry that
@@ -7641,8 +7652,9 @@ infrastructure.
 
 ### 17.4 Orchestrator Dispatch, Reconciliation, and Retry
 
-- Dispatch sort order is stage (`Merging`, `Rework`, resume, `Todo`), then priority,
-  then oldest creation time
+- Dispatch order is the stored queue order: a new issue joins at the end, a change of priority moves
+  no issue, an issue a gate holds keeps its place, and the places survive a restart
+- The first start on a store without places places its open issues once, started ones in front
 - A landing run starts while every `max_total` slot and epic lane is busy, up to `finishing_max`
 - No `Todo` issue is dispatched while a `Merging` issue waits for a finishing slot
 - A retry that finds no slot keeps its attempt, gets no backoff, and starts on the first poll after
