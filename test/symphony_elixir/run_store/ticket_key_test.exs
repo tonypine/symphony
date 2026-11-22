@@ -143,12 +143,17 @@ defmodule SymphonyElixir.RunStore.TicketKeyTest do
       assert %DateTime{} = RunStore.get_marker("ticket_pair_key_dropped_v1")
       assert %DateTime{} = RunStore.get_marker(RunStore.ticket_index_marker())
       assert RunStore.ticket_index_marker() == "ticket_index_v2"
-      assert reads(["issue-1074", "issue-indexed", "issue-unindexed"], %{}) == before
+      # The same start gives the open tickets their queue places once; apart from those, every
+      # ticket reads as before.
+      after_move = reads(["issue-1074", "issue-indexed", "issue-unindexed"], %{})
+      assert without_queue_positions(after_move) == without_queue_positions(before)
+      assert %{queue_position: position} = RunStore.get_ticket_state("issue-1074")
+      assert is_integer(position)
       assert :mnesia.dirty_match_object({@events_table, {:_, :_}, :_, :_, :_, :_, :_, :_}) == []
 
       # A start after it has nothing to move.
       restart_run_store()
-      assert reads(["issue-1074", "issue-indexed", "issue-unindexed"], %{}) == before
+      assert reads(["issue-1074", "issue-indexed", "issue-unindexed"], %{}) == after_move
     end
 
     test "an event only another repository's key held is kept once, numbered after the ticket's last" do
@@ -307,6 +312,10 @@ defmodule SymphonyElixir.RunStore.TicketKeyTest do
       record = Map.get(pair, issue_id) || RunStore.get_ticket_state(issue_id)
       {issue_id, {TicketState.normalize(record), old_or_new_events(record.repo_key, issue_id)}}
     end)
+  end
+
+  defp without_queue_positions(reads) do
+    Map.new(reads, fn {issue_id, {record, events}} -> {issue_id, {%{record | queue_position: nil}, events}} end)
   end
 
   defp old_or_new_events(repo_key, issue_id) do
