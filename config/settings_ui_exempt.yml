@@ -13,13 +13,10 @@
 
 exemptions:
   # execution.concurrency
-  - reason: Epic lanes, finishing and forced-run slots, beyond the app's max concurrent agents control. No control in the app yet.
+  - reason: Epic lanes and finishing slots, beyond the app's max concurrent agents control. No control in the app yet.
     keys:
       - execution.concurrency.epic_lanes
       - execution.concurrency.finishing_max
-      - execution.concurrency.force_label
-      - execution.concurrency.forced_max
-      - execution.concurrency.forced_stale_after_hours
       - execution.concurrency.max_by_issue_state
 
   # execution.limits and execution.timeouts
