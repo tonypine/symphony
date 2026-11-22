@@ -97,9 +97,8 @@ SymphonyBar/TicketPageView.swift disabled 2
 SymphonyBar/TicketPageView.swift field 2
 SymphonyBar/TicketPageView.swift control 2
 SymphonyBar/TicketsView.swift color 7
-SymphonyBar/TicketsView.swift number 1
-SymphonyBar/TicketsView.swift button 8
-SymphonyBar/TicketsView.swift disabled 2
+SymphonyBar/TicketsView.swift button 6
+SymphonyBar/TicketsView.swift disabled 1
 SymphonyBar/TicketsView.swift menu 1
 SymphonyBar/UpdatePoller.swift font 1
 SymphonyBar/UsageView.swift color 1
