@@ -370,12 +370,19 @@ QA-mode Symphony or app at it, and runs until stopped (see
 ./bin/symphony openrouter-stub --port 4100
 ```
 
-### Priority
+### Dispatch order and priority
 
-A ticket's Linear priority means how important it is. Symphony uses it only to order work that waits
-for the same kind of slot: after the stage (`Merging`, `Rework`, a resume,
-`Todo`) and before age. Raising a ticket to Urgent does not get it a slot any sooner when the slots
-are full, and a board full of Urgents stops saying which work matters.
+Symphony keeps one queue of every open ticket, across all repositories, and stores each ticket's
+place in it with the ticket's record, so the order survives a restart. A new ticket joins at the
+end. When a slot frees, it goes to the first ticket in the queue that can start; a ticket that
+cannot start yet (blocked, in `Backlog`, below the priority filter) keeps its place and is passed
+over until it can. A ticket that is done or removed leaves the queue, and joins at the end again if
+it is reopened.
+
+A ticket's Linear priority means how important it is, not its place in the queue: changing it moves
+no ticket. Priority acts only through the `tickets.priorities` filter, which decides which tickets
+may start at all. Raising a ticket to Urgent does not get it a slot any sooner, and a board full of
+Urgents stops saying which work matters.
 
 These transitions stay with a person:
 

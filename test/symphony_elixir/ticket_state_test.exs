@@ -52,6 +52,7 @@ defmodule SymphonyElixir.TicketStateTest do
                plan_brief: nil,
                plan_brief_error: nil,
                looked: %{},
+               queue_position: nil,
                legacy_history: nil,
                updated_at: nil
              }
@@ -68,6 +69,34 @@ defmodule SymphonyElixir.TicketStateTest do
       assert record.issue_identifier == "ACME-1"
       assert record.phase == "In Progress"
       assert [%{head_sha: "abc", status: "green", updated_at: @at}] = record.ci_states
+    end
+  end
+
+  describe "the queue position" do
+    test "is a positive integer or nil, set only by put_queue_position/2, and no observation writes it" do
+      record = TicketState.new("repo-a", "issue-1", %{queue_position: 3})
+      assert record.queue_position == 3
+      assert TicketState.normalize(%{queue_position: 0}).queue_position == nil
+      assert TicketState.normalize(%{queue_position: "3"}).queue_position == nil
+
+      assert TicketState.put_queue_position(record, 7).queue_position == 7
+      assert TicketState.put_queue_position(record, nil).queue_position == nil
+
+      issue = %Issue{id: "issue-1", identifier: "ACME-1", title: "Queued", state: "Todo", priority: 1, updated_at: @at}
+      assert {%{queue_position: 3, priority: 1}, _changed} = TicketState.observe(record, issue, @at)
+      refute Map.has_key?(TicketState.observation(record), :queue_position)
+    end
+
+    test "a record is queued while it is open: known, not removed, found and not terminal" do
+      open = TicketState.new("repo-a", "issue-1", %{issue_identifier: "ACME-1", phase: "Backlog"})
+      assert TicketState.queued?(open)
+
+      refute TicketState.queued?(%{open | phase: " Done "})
+      refute TicketState.queued?(%{open | phase: "Canceled"})
+      refute TicketState.queued?(%{open | phase: nil})
+      refute TicketState.queued?(%{open | issue_identifier: nil})
+      refute TicketState.queued?(%{open | removed_at: @at})
+      refute TicketState.queued?(%{open | not_found_at: @at})
     end
   end
 
@@ -192,6 +221,7 @@ defmodule SymphonyElixir.TicketStateTest do
                plan_brief: nil,
                plan_brief_error: nil,
                looked: %{},
+               queue_position: nil,
                legacy_history: nil,
                updated_at: nil
              }

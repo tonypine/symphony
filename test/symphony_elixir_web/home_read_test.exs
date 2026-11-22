@@ -83,6 +83,20 @@ defmodule SymphonyElixirWeb.HomeReadTest do
     assert %{"error" => %{"code" => "method_not_allowed"}} = build_conn() |> post("/api/v1/home") |> json_response(405)
   end
 
+  test "the queue lists its tickets in the stored order, not by priority or age", %{orchestrator: orchestrator} do
+    # MT-Z joined the queue first; MT-A, urgent and older, joined after it.
+    joined_first = ticket("z", "MT-Z", "Todo")
+    urgent_older = %{ticket("a", "MT-A", "Todo") | priority: 1, created_at: ~U[2025-01-01 00:00:00Z]}
+
+    state = Orchestrator.put_dispatch_order_for_test(orchestrator_state(), [urgent_older, joined_first])
+    {:reply, snapshot, _state} = Orchestrator.handle_call(:snapshot, {self(), make_ref()}, state)
+    :ok = GenServer.call(orchestrator, {:put, snapshot, 0})
+
+    read = build_conn() |> get("/api/v1/home") |> json_response(200)
+
+    assert read["queue"]["roots"] |> Enum.map(& &1["identifier"]) == ["MT-Z", "MT-A"]
+  end
+
   test "an unreadable or slow orchestrator reads the records alone, with an error", %{orchestrator: orchestrator} do
     ticket("w", "MT-W", "In Progress")
 

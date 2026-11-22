@@ -80,7 +80,7 @@ defmodule SymphonyElixir.Orchestrator do
   alias SymphonyElixir.Conductor.Message, as: ConductorMessage
   alias SymphonyElixir.Conductor.Tree, as: ConductorTree
   alias SymphonyElixir.Config.{Cache, Schema}
-  alias SymphonyElixir.Dispatch.{Candidates, Order, Settings, Settle, Shadow}
+  alias SymphonyElixir.Dispatch.{Candidates, Order, Queue, Settings, Settle, Shadow}
   alias SymphonyElixir.EpicReview.MainCi
   alias SymphonyElixir.Linear.{Client, Issue, RateLimit, TransientRetry, Usage}
   alias SymphonyElixir.Pauses.Dependencies
@@ -2687,12 +2687,6 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   @doc false
-  @spec sort_issues_for_dispatch_for_test([Issue.t()]) :: [Issue.t()]
-  def sort_issues_for_dispatch_for_test(issues) when is_list(issues) do
-    sort_issues_for_dispatch(issues)
-  end
-
-  @doc false
   @spec active_state_set_for_test() :: MapSet.t(String.t())
   def active_state_set_for_test, do: active_state_set()
 
@@ -4430,7 +4424,8 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # Candidates go out closest-to-done first, each epic lane's tickets nearest the epic first. Once a
+  # Candidates go out in the stored queue order (`order_for_dispatch/1`); a gate skips a ticket and
+  # the walk goes on to the next place. Once a
   # Merging issue is left waiting for a slot, no Todo issue starts in this pass; its `slot_waiting`
   # reason names the issue it waits for.
   # `slot_waiting` is rebuilt from the pass, keeping the attempt of any retry that was waiting for a
@@ -4448,7 +4443,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     {state, _hold} =
       issues
-      |> order_for_dispatch(state)
+      |> order_for_dispatch()
       |> Enum.reduce({%{state | slot_waiting: %{}, dispatch_skipped: %{}}, nil}, fn issue, acc ->
         maybe_dispatch_chosen_issue(issue, acc, previous_waiting, active_states, terminal_states)
       end)
@@ -4505,15 +4500,11 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # The order a dispatch pass walks its candidates in, and the dispatch order read
-  # (`put_dispatch_order/2`) with it.
-  defp order_for_dispatch(issues, %State{} = state) do
-    issues
-    |> sort_issues_for_dispatch()
-    |> then(&EpicLanes.order(state.epic_lanes, &1, fn issue -> stage_rank(issue.state) end))
-  end
+  # (`put_dispatch_order/2`) with it: the stored queue order (`SymphonyElixir.Dispatch.Queue`).
+  defp order_for_dispatch(issues), do: Queue.order(issues, RunStore.queue_positions())
 
   # The dispatch order read (`SymphonyElixir.Dispatch.Order`), kept on the state for the snapshot: the
-  # poll's candidates in the order a pass walks them (`order_for_dispatch/2`), each with what a pass run
+  # poll's candidates in the order a pass walks them (`order_for_dispatch/1`), each with what a pass run
   # now would do with it, through the pass's own gates and slot decision (`slot_decision/3`). A ticket
   # the pass would start takes its slot in a copy of the state, so the next one sees the slots left.
   # It is recomputed at the end of each poll cycle, after its pass, and never on a timer of its own.
@@ -4525,7 +4516,7 @@ defmodule SymphonyElixir.Orchestrator do
     {walked, _pass, _hold} =
       issues
       |> Enum.filter(&match?(%Issue{}, &1))
-      |> order_for_dispatch(state)
+      |> order_for_dispatch()
       |> Enum.reduce({[], pass, nil}, fn issue, {walked, pass, hold} ->
         {outcome, pass, hold} = dispatch_order_outcome(issue, pass, hold, pause, gates)
         {[Map.merge(dispatch_order_ticket(issue, state), outcome) | walked], pass, hold}
@@ -4765,17 +4756,7 @@ defmodule SymphonyElixir.Orchestrator do
     if finishing_issue?(issue), do: "finishing slots full", else: "work slots full"
   end
 
-  defp sort_issues_for_dispatch(issues) when is_list(issues) do
-    Enum.sort_by(issues, fn
-      %Issue{} = issue ->
-        {stage_rank(issue.state), priority_rank(issue.priority), issue_created_at_sort_key(issue), issue.identifier || issue.id || ""}
-
-      _ ->
-        {stage_rank(nil), priority_rank(nil), issue_created_at_sort_key(nil), ""}
-    end)
-  end
-
-  # Closest to done first: Merging, Rework, other active states (resumes), then Todo.
+  # The stage of a ticket's state: Merging, Rework, other active states (resumes), then Todo.
   defp stage_rank(state_name) when is_binary(state_name) do
     case normalize_issue_state(state_name) do
       @merging_state -> 0
@@ -4796,16 +4777,6 @@ defmodule SymphonyElixir.Orchestrator do
       "#{issue.identifier} (#{state_name}) is waiting for a #{slot} slot"
     end
   end
-
-  defp priority_rank(priority) when is_integer(priority) and priority in 1..4, do: priority
-  defp priority_rank(_priority), do: 5
-
-  defp issue_created_at_sort_key(%Issue{created_at: %DateTime{} = created_at}) do
-    DateTime.to_unix(created_at, :microsecond)
-  end
-
-  defp issue_created_at_sort_key(%Issue{}), do: 9_223_372_036_854_775_807
-  defp issue_created_at_sort_key(_issue), do: 9_223_372_036_854_775_807
 
   defp should_dispatch_issue?(%Issue{} = issue, %State{} = state, active_states, terminal_states) do
     dispatch_eligible?(issue, state, active_states, terminal_states) and
@@ -10849,7 +10820,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     ordered_ids =
       case result do
-        {:ok, issues} -> issues |> sort_issues_for_dispatch() |> Enum.map(& &1.id)
+        {:ok, issues} -> issues |> order_for_dispatch() |> Enum.map(& &1.id)
         {:error, _reason} -> []
       end
 

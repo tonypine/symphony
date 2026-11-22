@@ -30,6 +30,10 @@ defmodule SymphonyElixir.TicketState do
   questions' request comments and replies; and the plan's brief as it entered `Plan Review`
   (`plan_brief`, `SymphonyElixir.PlanBrief`): the review brief, the sub-tickets and the open choices,
   with when they were read, and why the last capture failed (`plan_brief_error`, nil when it didn't);
+  and the ticket's place in the dispatch queue (`queue_position`, `SymphonyElixir.Dispatch.Queue`):
+  a positive integer, lower first, unique across every repository's records, given by
+  `SymphonyElixir.RunStore` when an open ticket's record is first written and kept until the ticket
+  leaves the queue (`queued?/1`); no observation writes it, so a change of priority never moves it;
   and, on a record from before the event stream existed, the `signals`, `verdicts` and `dispatches`
   it kept then (`legacy_history`), until the ledger's backfill converts them into events
   (`SymphonyElixir.TicketEvents.Backfill`) and drops them.
@@ -312,6 +316,7 @@ defmodule SymphonyElixir.TicketState do
           plan_brief_error: String.t() | nil,
           legacy_history: legacy_history() | nil,
           looked: looked(),
+          queue_position: pos_integer() | nil,
           updated_at: DateTime.t() | nil
         }
 
@@ -337,6 +342,8 @@ defmodule SymphonyElixir.TicketState do
   @type phase_owner :: :symphony | :external
 
   @observation_sources [:poll, :by_id, :watcher, :webhook]
+
+  @queue_terminal_phases %SymphonyElixir.Config.Schema.Tracker{}.terminal_states |> MapSet.new(&String.downcase/1)
 
   # The observed fields a read that doesn't carry them (nil) leaves as the record has them.
   @kept_when_missing [:issue_identifier, :phase, :parent, :created_at, :linear_updated_at]
@@ -409,6 +416,7 @@ defmodule SymphonyElixir.TicketState do
       plan_brief_error: map_string(record, :plan_brief_error),
       legacy_history: carried_history(record),
       looked: normalize_looked(Map.get(record, :looked)),
+      queue_position: queue_position(Map.get(record, :queue_position)),
       updated_at: map_datetime(record, :updated_at)
     }
   end
@@ -456,6 +464,7 @@ defmodule SymphonyElixir.TicketState do
       plan_brief_error: nil,
       legacy_history: nil,
       looked: %{},
+      queue_position: nil,
       updated_at: nil
     }
   end
@@ -850,6 +859,29 @@ defmodule SymphonyElixir.TicketState do
     |> Map.put(:phase_at, at)
     |> Map.put(:phase_owner, owner)
     |> Map.put(:updated_at, at)
+  end
+
+  @doc """
+  Sets the ticket's place in the dispatch queue (`queue_position`): a positive integer, or nil when
+  the ticket is out of the queue. `SymphonyElixir.RunStore` gives it; nothing else should.
+  """
+  @spec put_queue_position(t() | map(), pos_integer() | nil) :: t()
+  def put_queue_position(record, position) when is_nil(position) or (is_integer(position) and position > 0) do
+    record |> normalize() |> Map.put(:queue_position, position)
+  end
+
+  @doc """
+  Whether the ticket's record belongs in the dispatch queue: Symphony knows its identifier and phase,
+  no webhook said it was removed, the by-id read found it, and its phase is not one of the terminal
+  states (the tracker's default ones, `SymphonyElixir.Config.Schema.Tracker`: a write cannot read
+  each repository's settings). A record that is not queued holds no position; one that is gets one.
+  """
+  @spec queued?(t() | map()) :: boolean()
+  def queued?(record) do
+    %{issue_identifier: identifier, phase: phase, removed_at: removed_at, not_found_at: not_found_at} = normalize(record)
+
+    is_binary(identifier) and is_binary(phase) and is_nil(removed_at) and is_nil(not_found_at) and
+      not MapSet.member?(@queue_terminal_phases, phase |> String.trim() |> String.downcase())
   end
 
   @doc """
@@ -1488,6 +1520,9 @@ defmodule SymphonyElixir.TicketState do
 
   defp integer_or_nil(value) when is_integer(value), do: value
   defp integer_or_nil(_value), do: nil
+
+  defp queue_position(position) when is_integer(position) and position > 0, do: position
+  defp queue_position(_position), do: nil
 
   defp normalize_string(value) when is_binary(value) do
     case String.trim(value) do
