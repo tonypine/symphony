@@ -4738,7 +4738,7 @@ defmodule SymphonyElixir.Orchestrator do
     cond do
       is_binary(hold) and fresh_issue?(issue) -> {{:wait, hold}, hold}
       issue_dispatch_slots_available?(issue, state) -> {:start, hold}
-      true -> {{:wait, slot_wait_reason(issue, state)}, hold || finishing_hold(issue)}
+      true -> {{:wait, slot_wait_reason(issue)}, hold || finishing_hold(issue)}
     end
   end
 
@@ -4761,11 +4761,8 @@ defmodule SymphonyElixir.Orchestrator do
     %{state | slot_waiting: Map.put(state.slot_waiting, issue.id, entry)}
   end
 
-  defp slot_wait_reason(%Issue{} = issue, %State{} = state) do
-    cond do
-      finishing_issue?(issue) -> "finishing slots full"
-      true -> "work slots full"
-    end
+  defp slot_wait_reason(%Issue{} = issue) do
+    if finishing_issue?(issue), do: "finishing slots full", else: "work slots full"
   end
 
   defp sort_issues_for_dispatch(issues) when is_list(issues) do
@@ -5021,10 +5018,6 @@ defmodule SymphonyElixir.Orchestrator do
         Map.has_key?(state.slot_waiting, issue_id) or
           MapSet.member?(allowed, priority || 0)
     end
-  end
-
-  defp issue_taken?(%Issue{id: issue_id}, %State{} = state) do
-    MapSet.member?(state.claimed, issue_id) or MapSet.member?(state.budget_exhausted, issue_id) or Map.has_key?(state.running, issue_id)
   end
 
   defp issue_dispatch_slots_available?(%Issue{} = issue, %State{} = state) do
