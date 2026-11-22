@@ -669,7 +669,8 @@ defmodule SymphonyElixir.CoreTest do
     assert SymphonyElixir.Application.config_watch(system_config, %{}) == [watch: [dir], watch_files: []]
     disabled = %{"SYMPHONY_DISABLE_ORCHESTRATOR" => "true"}
     assert SymphonyElixir.Application.config_watch(system_config, disabled) == [watch: [], watch_files: []]
-    assert {SymphonyElixir.Config.Cache, [watch: [], watch_files: []]} in SymphonyElixir.Application.child_specs_for_runtime(disabled)
+    disabled_specs = SymphonyElixir.Application.child_specs_for_runtime(disabled)
+    assert {SymphonyElixir.Config.Cache, [watch: [], watch_files: []]} in disabled_specs
 
     # A folder that holds the workspace root would be watched with every workspace below it: only
     # symphony.yml itself is checked.
