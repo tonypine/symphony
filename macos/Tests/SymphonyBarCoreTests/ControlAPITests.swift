@@ -8,6 +8,21 @@ final class ControlAPITests: XCTestCase {
         try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: String])
     }
 
+    /// TP-1611: force is gone from the engine, so no action the app sends calls `POST /api/v1/control/force`.
+    func testNoActionCallsTheRemovedForceRoute() {
+        let actions: [ControlAction] = [
+            .pause, .resume, .handover, .stop("TP-1"), .approvePlan("TP-1"), .rework("TP-1", reason: "r"),
+            .restart("TP-1", reason: "r"), .changes("TP-1", reason: "r"), .backlog("TP-1", note: nil),
+            .cancel("TP-1", note: nil), .move("TP-1", to: "Todo", note: nil), .start("TP-1", note: nil),
+            .unblock("TP-1"), .undo("TP-1"), .label("TP-1", label: "expedite", title: "Expedite", on: true),
+            .decision("TP-1", text: "t"),
+        ]
+        for action in actions {
+            let path = ControlAPI.request(action, base: base, token: "secret").url?.path ?? ""
+            XCTAssertFalse(path.hasSuffix("/control/force"), "\(action) calls \(path)")
+        }
+    }
+
     func testPauseRequest() throws {
         let request = ControlAPI.request(.pause, base: base, token: "secret")
 

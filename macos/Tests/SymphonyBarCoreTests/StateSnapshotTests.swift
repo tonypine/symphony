@@ -62,6 +62,15 @@ final class StateSnapshotTests: XCTestCase {
         XCTAssertEqual(snapshot.activeRuns, 2)
     }
 
+    /// TP-1611: the app reads no forced status; a state that still carries an old `forced` list decodes as without it.
+    func testAStateThatStillCarriesAForcedListDecodesWithoutIt() throws {
+        let data = try recordedState(replacing: "forced", with: [["issue_identifier": "TP-9", "state": "Todo"]])
+        let expected = StateSnapshot(running: 1, retrying: 0, pause: nil, budget: recordedBudget, runs: recordedRuns)
+        XCTAssertEqual(SymphonyState.poll(data: data, statusCode: 200), .state(expected))
+        let labels = Mirror(reflecting: expected).children.compactMap(\.label)
+        XCTAssertFalse(labels.contains { $0.lowercased().contains("forced") }, "\(labels)")
+    }
+
     func testDecodesTheRecordedState() throws {
         XCTAssertEqual(
             SymphonyState.poll(data: try recordedState(), statusCode: 200),
