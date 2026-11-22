@@ -259,7 +259,9 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
   end
 
   test "POST /control/force is no longer a route, and the controller has no force action" do
-    assert Phoenix.Router.route_info(SymphonyElixirWeb.Router, "POST", "/api/v1/control/force", "localhost") == :error
+    assert %{route: "/*path", plug_opts: :not_found} =
+             Phoenix.Router.route_info(SymphonyElixirWeb.Router, "POST", "/api/v1/control/force", "localhost")
+
     Code.ensure_loaded!(SymphonyElixirWeb.ControlApiController)
     refute function_exported?(SymphonyElixirWeb.ControlApiController, :force, 2)
   end
