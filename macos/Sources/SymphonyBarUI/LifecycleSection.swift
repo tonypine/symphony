@@ -142,22 +142,25 @@ extension LifecycleSection {
     /// The stage's symbol and the gap after it, before the name.
     static let stageSymbolWidth: CGFloat = 14
     static let stageSymbolGap: CGFloat = 5
+    /// The stage name's font, as AppKit measures it.
+    static let stageNameFont = NSFont.systemFont(ofSize: stageTitleSize, weight: .semibold)
 
     /// The width the stages need side by side with every name whole on one line: as many equal cells as `titles`,
     /// each as wide as the widest name with its symbol and padding.
     public static func stripWidth(titles: [String]) -> CGFloat {
         guard !titles.isEmpty else { return 0 }
-        let font = NSFont.systemFont(ofSize: stageTitleSize, weight: .semibold)
-        let widest = titles.map { ceil(($0 as NSString).size(withAttributes: [.font: font]).width) }.max() ?? 0
+        let widest = titles.map { ceil(($0 as NSString).size(withAttributes: [.font: stageNameFont]).width) }.max() ?? 0
         let cell = stageLeading + stageSymbolWidth + stageSymbolGap + widest + stageTrailing
         return cell * CGFloat(titles.count) + stageSpacing * CGFloat(titles.count - 1)
     }
 
     /// One cell's least width with its name (and symbol) and its line each whole on one line.
     public static func cellWidth(title: String, line: String) -> CGFloat {
-        let nameFont = NSFont.systemFont(ofSize: stageTitleSize, weight: .semibold)
-        let lineFont = NSFont.systemFont(ofSize: DesignTokens.TypeStyle.caption.size, weight: .semibold)
-        let name = stageSymbolWidth + stageSymbolGap + ceil((title as NSString).size(withAttributes: [.font: nameFont]).width)
+        // The caption style at the weight an emphasized line takes, so its widest form fits.
+        let caption = DesignTokens.TypeStyle.caption.nsFont
+        let semibold = caption.fontDescriptor.addingAttributes([.traits: [NSFontDescriptor.TraitKey.weight: NSFont.Weight.semibold]])
+        let lineFont = NSFont(descriptor: semibold, size: caption.pointSize) ?? caption
+        let name = stageSymbolWidth + stageSymbolGap + ceil((title as NSString).size(withAttributes: [.font: stageNameFont]).width)
         let words = ceil((line as NSString).size(withAttributes: [.font: lineFont]).width)
         return stageLeading + max(name, words) + stageTrailing
     }
