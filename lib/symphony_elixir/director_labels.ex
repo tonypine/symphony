@@ -278,6 +278,5 @@ defmodule SymphonyElixir.DirectorLabels do
     }
   end
 
-  defp normalize(name) when is_binary(name), do: name |> String.trim() |> String.downcase()
-  defp normalize(_name), do: ""
+  defp normalize(name), do: name |> String.trim() |> String.downcase()
 end
