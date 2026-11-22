@@ -97,20 +97,6 @@ defmodule SymphonyElixir.TicketMovesTest do
     assert %{allowed: false, states: []} = TicketMoves.read(facts(%{phase: nil})).move_to
   end
 
-  test "force needs an open ticket that isn't forced; unforce one that is" do
-    force_label = Config.settings!().execution.force_label
-
-    allowed(:force, %{})
-    refused(:force, %{labels: [String.upcase(force_label)]}, "It is already forced.")
-    refused(:force, %{phase: "Done"}, "The ticket is done.")
-    refused(:force, %{phase: nil, recorded?: false}, "The ticket is not one Symphony tracks.")
-    allowed(:force, %{phase: nil})
-
-    allowed(:unforce, %{labels: [force_label]})
-    refused(:unforce, %{}, "It isn't forced.")
-    refused(:unforce, %{phase: nil}, "The ticket is not one Symphony tracks.")
-  end
-
   test "unblock needs something to release" do
     allowed(:unblock, %{unblockable?: true})
     refused(:unblock, %{}, "MT-1 has nothing a person can unblock")

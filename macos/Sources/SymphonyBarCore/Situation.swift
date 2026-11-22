@@ -216,10 +216,9 @@ public struct SituationText: Equatable {
     }
 
     /// What VoiceOver reads: the word, the age and the cause as one sentence ("Waiting for CI, for 6 minutes: Checks are
-    /// running on PR #741."), then Forced when the ticket is.
-    public func spoken(forced: Bool = false) -> String {
+    /// running on PR #741.").
+    public func spoken() -> String {
         let head = [word, spokenAge].compactMap { $0 }.joined(separator: ", ")
-        let line = cause.isEmpty ? "\(head)." : "\(head): \(cause)"
-        return forced ? "\(line) Forced." : line
+        return cause.isEmpty ? "\(head)." : "\(head): \(cause)"
     }
 }

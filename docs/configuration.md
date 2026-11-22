@@ -92,8 +92,7 @@ id to `route.projects`), a route value Linear has no project or team for, two re
 tickets, and a route that has matched nothing for 24 hours. It flags each repository with no Linear
 team (an error), and one whose team is found only through its projects or tickets (a warning,
 with a fix that sets `route.team`). In each routed Linear team it checks the labels Symphony
-applies or reads (`Blocked`, `Needs Decision`, the CI labels, `plan`, `qa:skip`, the
-`execution.concurrency.force_label`, each `escalate.labels` entry and the others), with a fix that
+applies or reads (`Blocked`, `Needs Decision`, the CI labels, `plan`, `qa:skip`, each `escalate.labels` entry and the others), with a fix that
 creates a missing one; a label one typo away from one of them; the deprecated `human-action`
 label in `escalate.labels` (a fix removes it) or on open tickets; and tickets whose `Blocked` or
 `Needs Decision` label disagrees with the hold Symphony keeps, with a fix that re-syncs the label.
@@ -144,7 +143,10 @@ A release that renames or removes a key rewrites your file for you. `SymphonyEli
 holds the table: each old key, the sibling it became or nothing, the ticket and the release. A row may
 also move a key's value to a key in another section: `execution.usage_limit.headroom_utilization`
 becomes `execution.providers.anthropic.reserve`, written where it belongs, unless that key is already
-set (TP-1535).
+set (TP-1535). A row with nothing in its place drops a key that no longer does anything:
+`execution.concurrency.force_label`, `execution.concurrency.forced_max` and
+`execution.concurrency.forced_stale_after_hours` are removed with the force feature (TP-1611), so a
+ticket carrying the old label is dispatched like any other.
 
 - Symphony migrates the file once when it starts (`symphony` and `symphony run`), and logs a note.
   `symphony config migrate --config <file>` does the same by hand.
@@ -348,8 +350,8 @@ tickets:
   `no priority` are accepted too, and an issue Linear reports with no priority reads as `none`.
   An issue whose priority is not listed is not dispatched: Symphony waits with free lanes even
   when it sits in an active state such as `Todo`. Use it to focus a limited API budget, for
-  example on `[urgent, high]` only. It never stops a forced ticket (`execution.concurrency.force_label`)
-  or a run already under way (a retry waiting for a slot), so it only gates fresh picks. Empty or
+  example on `[urgent, high]` only. It never stops a run already under way (a retry waiting for a
+  slot), so it only gates fresh picks. Empty or
   `null` turns the filter off. `/api/v1/state` lists each ticket it holds back under
   `dispatch_skipped` (`priority medium is not in tickets.priorities (urgent, high)`).
 
@@ -617,9 +619,6 @@ execution:
     max_total: 10
     epic_lanes:
     finishing_max: 2
-    force_label: expedite
-    forced_max: 1
-    forced_stale_after_hours: 72
     max_by_issue_state:
       rework: 2
   limits:
@@ -737,69 +736,15 @@ execution:
   the API), and each yielded epic with why (`status: "yielded"` and `reason` in the API;
   `No sub-ticket Symphony can dispatch: priorities below Urgent. ...` when a priority holds it, so you
   can raise a priority or park the plan). The Director's Overview shows the same line on the
-  initiative's card. The dispatch log line carries `slot=lane:<epic>`, `slot=shared`, `slot=finishing` or `slot=forced`, and `forced=true|false`.
+  initiative's card. The dispatch log line carries `slot=lane:<epic>`, `slot=shared`, or `slot=finishing`.
 - `concurrency.finishing_max` (default: `2`) caps landing runs (tickets in `Merging`; with
   `pull_requests.auto_merge` on, only the ones that fell back to the landing agent). They only
   finish approved work, so they don't use `max_total` slots or epic lanes and start as soon as one
   of these is free. Values below `1` fail `symphony check`.
-- `concurrency.force_label` (default: `expedite`) is the label a human puts on a ticket to have it
-  worked now, through to Done (matched case-insensitively). Symphony records when a poll first
-  sees a ticket in an active state (`tracker.active_states`) carry it (`forced_since`, kept across
-  restarts); a ticket labelled in another state, such as `Backlog` or `Plan Review`, joins once it
-  moves into an active state. Once queued it stays listed in any non-terminal state (`Plan Review`,
-  `Merging`, ...). `/api/v1/state` lists the forced tickets (`forced`), earliest first with their
-  `title`, `repo_key`, queue `position`, `forced_for_seconds`, `stale`, a `phase` (`implementation`, `rework`,
-  `review_feedback`, `ci_fix`, `waiting_on_ci`, `waiting_for_human`, `landing`, `code_review`, `qa`,
-  `breakdown`, `epic_review`), whether an agent is `running` for it,
-  what it `waiting_on` (`slot`, `human`, `ci`, `blocker` with the open `blockers`' identifiers,
-  `usage_limit`, `paused`, `backlog`, or null) and a one-line `summary` such as
-  `implementation · running` or `implementation · waiting on blocker TP-12`. A forced plan
-  ticket's phase is its current part's. The terminal dashboard and the Mac app show a "Forced" section
-  above the running agents (identifier, phase, waiting on, forced for), a ⚡ on forced rows elsewhere,
-  and the forced count over `forced_max` in the header. When a forced plan ticket enters
-  `Plan Review`, Symphony sends a `forced_human_gate` notification saying it
-  is waiting for your review, again each time it comes back to `Plan Review`. A ticket leaves the list
-  at the next poll after the label is removed, it reaches a terminal state, or Linear no longer
-  returns it; one that reaches a terminal state has the label removed by Symphony. The audit log
-  records `forced_start` and `forced_end` (with `reason`: `label_removed`, `done` or `missing`).
-  `symphony force TP-123` adds the label through the running Symphony and `symphony force --clear TP-123`
-  removes it; either way the queue changes at once, without waiting for a poll (see the README).
-- `concurrency.forced_max` (default: `1`) is how many forced runs may run at once on their own
-  allowance; `/api/v1/state` reports it under `concurrency`. Values below `1` fail
-  `symphony check`. A forced ticket goes out first, in `forced_since` order, and while fewer than
-  `forced_max` forced runs are going it starts even when `max_total`, the epic lanes,
-  `finishing_max`, `max_by_issue_state` are full or a finish is waiting, at the next poll. This
-  covers every phase: implementation, `Rework`, CI-fix and review-feedback continuations and
-  landing, and the `Code Review`, `QA` and epic review runs. Its run is marked `forced` (`/api/v1/state` `running[].forced`) and takes none of the
-  normal slots; a run already going when the label is added stays a normal run, and no running
-  agent is stopped. Once the label is removed (or a forced parent's is), a forced run already
-  going gives the allowance back and goes on as a normal run, so a ticket still forced can take it.
-  A forced ticket past `forced_max` gets no extra slot: it still goes first for a
-  normal one, waits as `queued #2; forced slot taken by MT-1` in `slot_waiting`, and Symphony logs a
-  warning and sends one `forced_waiting` notification naming the forced run holding the allowance.
-  The daily token budget and a usage-limit headroom hold don't stop a forced ticket (a warning is
-  logged when the budget would have); the per-issue token cap still does. The operator Pause, the
-  Linear rate-limit pause, the workspace quota pause, `max_concurrent_agents_per_host`, blocked-by
-  links, a failed setup, retry backoff, auto-merge and `Merging` CI waits, and a usage-limit pause
-  still hold it; when a usage-limit pause resumes, a held forced ticket goes out first.
-  A forced plan ticket is one forced unit. Its plan, re-plan and epic review runs use the
-  allowance like any forced ticket. While it waits on its sub-tickets, one ticket on its epic path
-  at a time (its sub-tickets at any depth and their open blockers, picked in epic-lane order, so
-  blocked-by links keep their order) counts as
-  forced in the parent's place in the queue, without the label being written on it. It keeps that
-  until it leaves the path or stops running or waiting on a retry. The other sub-tickets use normal slots and the epic lane.
-  `/api/v1/state` shows it as the parent's `forced[].sub_issue`. Forcing never approves a plan: a
-  forced parent in `Plan Review` stays there, shown with
-  `forced[].waiting_on_human: true` (as is any forced ticket in `Backlog`, `Triage` or `Plan Review`).
-  Forcing a sub-ticket itself forces only that sub-ticket.
-- `concurrency.forced_stale_after_hours` (default: `72`) is how long a ticket may stay forced before
-  it counts as stale: `/api/v1/state` marks it `stale: true`, the dashboards flag it, and Symphony
-  logs a warning and sends one `forced_stale` notification (once per forced ticket, also across
-  restarts). Values below `1` fail `symphony check`.
-- Dispatch goes forced tickets first, then closest to done: `Merging`, `Rework`,
+- Dispatch goes closest to done first: `Merging`, `Rework`,
   resumes such as `In Progress`, then `Todo`; priority and age only break ties within a stage.
-  While a `Merging` ticket waits for a finishing slot no `Todo` ticket starts; `Rework`,
-  resumes and a forced ticket on the forced allowance still do, and the held ticket's reason names
+  While a `Merging` ticket waits for a finishing slot no `Todo` ticket starts; `Rework`
+  and resumes still do, and the held ticket's reason names
   what it waits for (`MT-2 (Merging) is waiting for a finishing slot`). A ticket that finds no free slot
   is not retried with backoff: it keeps its
   attempt and starts on the first poll after a slot frees (a run ending triggers that poll). The
@@ -835,8 +780,7 @@ execution:
   now in the Inbox: "Give it another budget" starts one more run with the same limit at once (no
   restart, no settings change), "Start it over from main" restarts it, and "Keep it paused" (or an
   answer in words) leaves it paused on "Its token budget is spent". The daily cap pauses new
-  dispatch for the day while already-running agents continue. Forced tickets
-  (`concurrency.force_label`) still dispatch past the daily cap, with a warning in the log.
+  dispatch for the day while already-running agents continue.
 - Codex app-server and Claude stream-json usage events are normalized into uncached input, cached
   input, cache-creation input, and output buckets. Symphony warns if a budget is active with a
   command that may not report token usage.
@@ -903,8 +847,7 @@ execution:
     reserve until that window resets (plus `resume_margin_seconds`). It is unavailable for new runs
     the way a paused provider is: a new run starts on the first fallback of its kind of run that can
     take it, and a ticket with no free fallback reads `Waiting: Anthropic is at its 90% reserve`.
-  - Runs in flight and their continuations keep going, and landing runs (`Merging`) and forced
-    tickets still start.
+  - Runs in flight and their continuations keep going, and landing runs (`Merging`) still start.
   - The hold is kept across restarts, logs
     `Usage limit headroom hold provider=… utilization=… reserve=…`, shows on the dashboards as
     `Holding new runs: Anthropic at its 90% reserve, resets ~14:05`, is listed under `usage_limits`
@@ -1450,7 +1393,7 @@ pull_requests:
     keeps the place of the state it returns to), then the one longest in its state. The others keep working, but get no conflict fix and no
     "Update branch" until the PR ahead of them lands; then each merges the base branch once, with
     its changes. A PR on a hold, or one whose state and head haven't moved for two hours, holds no
-    one up, and a forced ticket never waits. A PR that conflicts while one ahead shares its files,
+    one up. A PR that conflicts while one ahead shares its files,
     or whose conflict came back after its 3 fix runs while other open PRs share them, waits on them
     as a Linear blocked-by link and a `Blocked` hold ("Waiting on MT-1 to land: they change the
     same files (SPEC.md)"), which clears by itself once they land or leave the race; Symphony
@@ -2880,7 +2823,7 @@ provider is not stopped. A new run whose first choice is on the paused provider 
 fallback (`runs.<kind>.fallbacks`) whose provider can take it, exactly as when a usage limit holds
 the provider; a continuation stays on its own choice and waits. A ticket with no free fallback is
 listed under `dispatch_skipped` with rule `provider_pause` and its `provider`, and reads "Waiting:
-you paused Anthropic". Landing runs and forced tickets wait too, as under a reached usage limit,
+you paused Anthropic". Landing runs wait too, as under a reached usage limit,
 and a PR run (`POST /api/v1/control/dispatch_pr`) on the paused provider is refused with 409
 `provider_paused`, naming it. Resume sends the waiting runs on without waiting for a poll. The pause is kept in the run store, so
 it survives a restart; each call writes a `provider_paused` or `provider_resumed` audit record and
@@ -2903,7 +2846,7 @@ ticket's run at once, ahead of the dispatch queue and outside its order: the run
 current phase is dispatched in the same call, not queued — implementation for Todo (claimed to
 In Progress first) or In Progress, the reviewer for Code Review, QA for QA, the CI fixer for CI
 Fix, the rework run for Rework. It ignores queue order, the per-repo and global concurrency limits
-(it may run one over the limit; the next cycle simply has one slot fewer) and the forced queue.
+(it may run one over the limit; the next cycle simply has one slot fewer).
 It does not override what a person or Symphony chose to stop: it is refused while Symphony is
 paused, while the ticket's repository is paused, while the ticket has an open Question, or while
 a run is already working on it — the answer names which — and a ticket in Backlog is refused with
@@ -3288,10 +3231,9 @@ Symphony or the Director makes there always does, so a ticket the change frees s
 seconds instead of at the next timed poll. Under `poll` the change waits for the repository's poll.
 
 **The poll cycle's own reads under `record`.** Each cycle also refreshes the tickets Symphony is
-running, watching after a run, forcing and holding for an operator's stop. Under `record` it takes
+running, watching after a run and holding for an operator's stop. Under `record` it takes
 them from their records in one store read instead of reading each group from Linear by id: a running
-ticket whose record left the active states stops its run, a forced ticket keeps its place outside
-them, and a stopped ticket stays skipped while its record is a candidate. A record a webhook marked
+ticket whose record left the active states stops its run and a stopped ticket stays skipped while its record is a candidate. A record a webhook marked
 removed reads as a ticket Linear no longer returns; a ticket with no observed record is not judged
 that cycle, as when a read fails. Each keeps the text Symphony already holds for it (the poll's, else
 its run's). A watched plan parent in Plan Review is taken from its record too: no poll reads that

@@ -24,8 +24,6 @@ defmodule SymphonyElixir.TicketMoves do
     :restart,
     :cancel,
     :move_to,
-    :force,
-    :unforce,
     :unblock,
     :note,
     :blocker,
@@ -50,8 +48,6 @@ defmodule SymphonyElixir.TicketMoves do
           | :restart
           | :cancel
           | :move_to
-          | :force
-          | :unforce
           | :unblock
           | :note
           | :blocker
@@ -167,18 +163,6 @@ defmodule SymphonyElixir.TicketMoves do
   def check(:move_to, %{repo_key: nil} = facts), do: {:error, no_repository_reason(facts.identifier)}
   def check(:move_to, facts), do: require_phase(facts)
 
-  def check(:force, facts) do
-    with :ok <- require_open(facts) do
-      if forced_label?(facts), do: {:error, "It is already forced."}, else: :ok
-    end
-  end
-
-  def check(:unforce, facts) do
-    with :ok <- require_phase(facts) do
-      if forced_label?(facts), do: :ok, else: {:error, "It isn't forced."}
-    end
-  end
-
   def check(:unblock, %{unblockable?: true}), do: :ok
   def check(:unblock, facts), do: {:error, "#{facts.identifier} has nothing a person can unblock"}
 
@@ -278,11 +262,6 @@ defmodule SymphonyElixir.TicketMoves do
           do: :ok,
           else: {:error, "#{facts.identifier} is #{facts.phase || "in no state"}; the Director answers it only from #{plan_review}"}
     end
-  end
-
-  defp forced_label?(facts) do
-    force_label = normalize(Config.settings!().execution.force_label)
-    Enum.any?(facts.labels, &(normalize(&1) == force_label))
   end
 
   defp record_unblockable?(record, questions) do

@@ -18,22 +18,19 @@ final class OverviewTests: XCTestCase {
         XCTAssertTrue(try problems("idle").isEmpty)
     }
 
-    func testAttentionListsAStuckForcedTicketAndAUsageLimitHoldWithTheirFixes() throws {
+    func testAttentionListsAStuckTicketAndAUsageLimitHoldWithTheirFixes() throws {
         let problems = try problems("attention")
 
         XCTAssertEqual(problems.count, 2)
         let stuck = problems[0]
         XCTAssertEqual(stuck.id, "SHOP-305")
-        XCTAssertEqual(stuck.kinds, [.stuck, .staleForced])
+        XCTAssertEqual(stuck.kinds, [.stuck])
         XCTAssertEqual(stuck.severity, .problem)
-        XCTAssertEqual(
-            stuck.sentence,
-            "SHOP-305 shows no agent activity for 14 min. It has been forced for 3 days and is still not done."
-        )
-        XCTAssertEqual(stuck.age, "3 days")
+        XCTAssertEqual(stuck.sentence, "SHOP-305 shows no agent activity for 14 min.")
+        XCTAssertEqual(stuck.age, "14 min")
         // J3: the stuck row's first fix is Stop Run…, then Open (the ticket page).
-        XCTAssertEqual(stuck.fixes, [.stopRun("SHOP-305"), .open("SHOP-305"), .stopForcing("SHOP-305")])
-        XCTAssertEqual(stuck.fixes.map(\.title), ["Stop Run…", "Open", "Stop Forcing"])
+        XCTAssertEqual(stuck.fixes, [.stopRun("SHOP-305"), .open("SHOP-305")])
+        XCTAssertEqual(stuck.fixes.map(\.title), ["Stop Run…", "Open"])
 
         let hold = problems[1]
         XCTAssertEqual(hold.kinds, [.usageLimit])
@@ -124,10 +121,6 @@ final class OverviewTests: XCTestCase {
     func testProblemsSortBySeverityThenAge() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         var snapshot = StateSnapshot()
-        snapshot.forced = [
-            StateSnapshot.ForcedTicket(identifier: "A-1", forcedForSeconds: 100_000, stale: true),
-            StateSnapshot.ForcedTicket(identifier: "A-2", forcedForSeconds: 300_000, stale: true),
-        ]
         snapshot.usageLimits = [StateSnapshot.UsageLimit(provider: "anthropic", phase: .headroom)]
         let state = OverviewState(
             snapshot: snapshot,
@@ -138,10 +131,9 @@ final class OverviewTests: XCTestCase {
             ]
         )
         let problems = Overview.problems(state, now: now, timeZone: utc)
-        XCTAssertEqual(problems.map(\.id), ["B-2", "B-1", "A-2", "A-1", "usage-limit-anthropic-all"])
+        XCTAssertEqual(problems.map(\.id), ["B-2", "B-1", "usage-limit-anthropic-all"])
         XCTAssertEqual(problems.last?.sentence, "The Claude usage limit holds new runs.")
-        // A forced ticket that isn't stale and a canary aren't problems.
-        snapshot.forced = [StateSnapshot.ForcedTicket(identifier: "A-3", stale: false)]
+        // A canary isn't a problem.
         snapshot.usageLimits = [StateSnapshot.UsageLimit(phase: .canary)]
         XCTAssertTrue(Overview.problems(OverviewState(snapshot: snapshot, generatedAt: now), now: now, timeZone: utc).isEmpty)
     }
@@ -185,14 +177,6 @@ final class OverviewTests: XCTestCase {
         // The hold is on every repo; the stuck ticket is web-shop's. Every repo's scope counts both.
         XCTAssertEqual(try problems("attention", scope: .repo("api")).map(\.kinds), [[.usageLimit]])
         XCTAssertEqual(Overview.problems(try state("attention"), now: wallClock).count, 2)
-    }
-
-    func testAStaleForcedTicketWithNoKnownRepoShowsUnderEveryScope() {
-        let now = Date(timeIntervalSince1970: 1_000_000)
-        var snapshot = StateSnapshot()
-        snapshot.forced = [StateSnapshot.ForcedTicket(identifier: "A-1", forcedForSeconds: 300_000, stale: true)]
-        let state = OverviewState(snapshot: snapshot, generatedAt: now)
-        XCTAssertEqual(Overview.problems(state, scope: .repo("api"), now: now, timeZone: utc).map(\.kinds), [[.staleForced]])
     }
 
     func testTheScopeIsRememberedAsItsRepoKey() {

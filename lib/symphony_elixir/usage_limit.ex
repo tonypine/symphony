@@ -21,8 +21,8 @@ defmodule SymphonyElixir.UsageLimit do
   With a reserve set for the provider (`execution.providers.<provider>.reserve`), a window at or
   above it puts a hold in `phase: :headroom` on new runs of the provider until the window resets,
   so the rest of the limit is left for interactive sessions: the provider is at its reserve. The
-  hold keeps the `reserve` it was set at. It holds no landing run, no continuation and no forced
-  ticket's run, and clears at `resume_at` without a canary.
+  hold keeps the `reserve` it was set at. It holds no landing run and no continuation, and clears
+  at `resume_at` without a canary.
 
   A run whose agent could not reach the model API at all (`source: :api_unreachable`, reason
   `model_api_unreachable`) holds the provider the same way, with a canary as the probe: the
@@ -349,8 +349,7 @@ defmodule SymphonyElixir.UsageLimit do
 
   @doc """
   Whether `entry` holds a run with `profile`. A headroom hold only holds new runs: a landing
-  run (`kind`), a continuation (`continuation: true`) and a forced ticket's run (`forced: true`)
-  still go out.
+  run (`kind`) and a continuation (`continuation: true`) still go out.
   """
   @spec holds?(entry(), map()) :: boolean()
   def holds?(entry, profile) when is_map(entry) and is_map(profile) do
@@ -358,7 +357,7 @@ defmodule SymphonyElixir.UsageLimit do
   end
 
   defp headroom_exempt?(profile) do
-    to_string(Map.get(profile, :kind)) == "landing" or Map.get(profile, :continuation) == true or Map.get(profile, :forced) == true
+    to_string(Map.get(profile, :kind)) == "landing" or Map.get(profile, :continuation) == true
   end
 
   @doc "Moves `entry` to the canary phase with `issue_id` as the one run let through."

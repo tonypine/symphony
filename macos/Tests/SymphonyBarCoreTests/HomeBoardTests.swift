@@ -27,8 +27,7 @@ final class HomeBoardTests: XCTestCase {
 
         let slot = try XCTUnwrap(board.groups.first { $0.kind == .slot })
         XCTAssertEqual(slot.rows.map(\.identifier), ["SHOP-325", "SHOP-320", "API-133"])
-        XCTAssertEqual(slot.rows.map(\.reason), ["Next: the forced slot is taken", "2nd: behind SHOP-325", "3rd: behind SHOP-320"])
-        XCTAssertEqual(slot.rows.map(\.forced), [true, false, false])
+        XCTAssertEqual(slot.rows.map(\.reason), ["Next: work slots full", "2nd: behind SHOP-325", "3rd: behind SHOP-320"])
         XCTAssertEqual(slot.hint, "oldest 30 min")
 
         let first = slot.rows[1]
@@ -131,12 +130,11 @@ final class HomeBoardTests: XCTestCase {
     // MARK: - Reasons
 
     func testWhyACandidateIsOrIsNotNext() {
-        func reason(_ outcome: DispatchOrder.Outcome?, _ reason: String?, forced: Bool = false, cause: String = "") -> String? {
-            HomeBoard.reasonLine(DispatchOrder.Ticket(identifier: "T-1", outcome: outcome, reason: reason, forced: forced), cause: cause)
+        func reason(_ outcome: DispatchOrder.Outcome?, _ reason: String?, cause: String = "") -> String? {
+            HomeBoard.reasonLine(DispatchOrder.Ticket(identifier: "T-1", outcome: outcome, reason: reason), cause: cause)
         }
         XCTAssertEqual(reason(.starts, "next: a slot is free"), "Next: a slot is free")
         XCTAssertEqual(reason(.starts, "2nd: a slot is free"), "2nd: a slot is free")
-        XCTAssertEqual(reason(.starts, "forced", forced: true), "Next: forced, it starts on its own allowance")
         XCTAssertEqual(reason(.waits, "next: work slots full"), "Next: work slots full")
         XCTAssertEqual(reason(.paused, "dispatch is paused: updating to v0.0.1.825"), "Not next: dispatch is paused: updating to v0.0.1.825")
         XCTAssertEqual(reason(.held, "Waiting for TP-1399 to finish", cause: "TP-1399 is in QA."), "Not next: Waiting for TP-1399 to finish")
@@ -165,7 +163,6 @@ final class HomeBoardTests: XCTestCase {
         XCTAssertEqual(shp325.position, 1)
         XCTAssertEqual(shp325.issueID, "i-325")
         XCTAssertEqual(shp325.state, "Todo")
-        XCTAssertTrue(shp325.forced)
         XCTAssertNil(DispatchOrder.decode(Data("nope".utf8)))
         XCTAssertNil(DispatchOrder.decode(Data(#"{"generated_at":"2026-10-07T14:20:00Z"}"#.utf8)))
     }

@@ -7,7 +7,7 @@ import Foundation
 public struct DispatchOrder: Equatable {
     /// What a pass run now would do with the ticket.
     public enum Outcome: String, Equatable {
-        /// It starts: a slot is free, or it is forced.
+        /// It starts: a slot is free.
         case starts
         /// It waits for a slot.
         case waits
@@ -30,14 +30,13 @@ public struct DispatchOrder: Equatable {
         public var outcome: Outcome?
         /// Its place in line, 1 for the next one; nil for one that is not in line.
         public var position: Int?
-        /// "next: a slot is free", "2nd: behind TP-1401", "forced", the pause's line, the gate's reason.
+        /// "next: a slot is free", "2nd: behind TP-1401", the pause's line, the gate's reason.
         public var reason: String?
-        public var forced: Bool
         public var situation: Situation?
 
         public init(
             issueID: String? = nil, identifier: String, title: String? = nil, state: String? = nil, repoKey: String? = nil,
-            outcome: Outcome? = nil, position: Int? = nil, reason: String? = nil, forced: Bool = false, situation: Situation? = nil
+            outcome: Outcome? = nil, position: Int? = nil, reason: String? = nil, situation: Situation? = nil
         ) {
             self.issueID = issueID
             self.identifier = identifier
@@ -47,7 +46,6 @@ public struct DispatchOrder: Equatable {
             self.outcome = outcome
             self.position = position
             self.reason = reason
-            self.forced = forced
             self.situation = situation
         }
     }
@@ -103,7 +101,6 @@ public struct DispatchOrder: Equatable {
             outcome: (entry["outcome"] as? String).flatMap(Outcome.init(rawValue:)),
             position: entry["position"] as? Int,
             reason: entry["reason"] as? String,
-            forced: entry["forced"] as? Bool ?? false,
             situation: Situation.decode(object: entry["situation"])
         )
     }
@@ -113,33 +110,31 @@ public struct DispatchOrder: Equatable {
 /// `director-ticket-page.md` §3, each group's tickets in the order the dispatcher would start them, from the dispatch
 /// order alone. Every count on it is a count of the rows it shows, so a count never disagrees with the board.
 public struct HomeBoard: Equatable {
-    /// A ticket's row: its compact situation line and age, the Forced chip, and for a ticket in line or held out of
+    /// A ticket's row: its compact situation line and age, and for a ticket in line or held out of
     /// it, why it is or is not next.
     public struct Row: Equatable, Identifiable {
         public var identifier: String
         public var title: String?
         public var repoKey: String?
         public var situation: Situation
-        public var forced: Bool
         /// The secondary line: "Next: a slot is free", "2nd: behind TP-1401", "Not next: dispatch is paused."; nil for
         /// a ticket that is not a candidate, a running one, or one whose reason is its situation's cause.
         public var reason: String?
 
         public var id: String { identifier }
 
-        public init(identifier: String, title: String? = nil, repoKey: String? = nil, situation: Situation, forced: Bool = false, reason: String? = nil) {
+        public init(identifier: String, title: String? = nil, repoKey: String? = nil, situation: Situation, reason: String? = nil) {
             self.identifier = identifier
             self.title = title
             self.repoKey = repoKey
             self.situation = situation
-            self.forced = forced
             self.reason = reason
         }
 
         /// What VoiceOver reads for the row: "SHOP-301, Checkout total, web-shop, Waiting for a slot, for 6 minutes:
         /// Both work slots are taken. Next: work slots full".
         public func accessibilityLabel(reference: Date) -> String {
-            let line = SituationText(situation, reference: reference).spoken(forced: forced)
+            let line = SituationText(situation, reference: reference).spoken()
             return ([identifier, title, repoKey].compactMap { $0 } + [line] + [reason].compactMap { $0 }).joined(separator: ", ")
         }
     }
@@ -236,7 +231,7 @@ public struct HomeBoard: Equatable {
                 let situation = ticket.situation ?? Situation(kind: group.kind, cause: ticket.reason ?? "")
                 byKind[group.kind, default: []].append(Row(
                     identifier: ticket.identifier, title: ticket.title, repoKey: ticket.repoKey, situation: situation,
-                    forced: ticket.forced, reason: reasonLine(ticket, cause: situation.cause)
+                    reason: reasonLine(ticket, cause: situation.cause)
                 ))
             }
         }
@@ -271,8 +266,6 @@ public struct HomeBoard: Equatable {
         switch outcome {
         case .running, .notACandidate:
             return nil
-        case .starts where ticket.forced && reason == "forced":
-            return "Next: forced, it starts on its own allowance"
         case .starts, .waits:
             return capitalized(reason)
         case .paused, .held:

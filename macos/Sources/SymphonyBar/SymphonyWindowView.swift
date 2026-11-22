@@ -56,7 +56,7 @@ final class SymphonyWindowModel: ObservableObject {
     @Published private(set) var overviewState: OverviewState? {
         didSet { ticketListsChanged() }
     }
-    /// Every tracked ticket under the window's scope, and in every repo for the Force sheet's lookup: built once per
+    /// Every tracked ticket under the window's scope, and in every repo for the ticket finder's lookup: built once per
     /// state or scope, nil until the first state payload.
     var ticketList: TicketList?
     var allTickets: TicketList?
@@ -328,9 +328,8 @@ final class SymphonyWindowModel: ObservableObject {
     private(set) var destinationMemory = DestinationMemory()
     /// The dispatch control's popover (D12a).
     @Published var dispatchPopoverShown = false
-    /// The Pause Dispatch sheet (D12a) and the Force a Ticket sheet (D12b); nothing is sent until their button is pressed.
+    /// The Pause Dispatch sheet (D12a); nothing is sent until its button is pressed.
     @Published var pauseSheetShown = false
-    @Published var forceSheet: ForceSheetRequest?
     /// True while the sheets' or the popover's request is on its way to Symphony.
     @Published var dispatchInFlight = false
     /// What went wrong with it, shown in the sheet or the popover.
@@ -858,8 +857,6 @@ final class SymphonyWindowModel: ObservableObject {
             show(.diagnostics)
         case .openUsage:
             showUsage()
-        case let .stopForcing(identifier):
-            stopForcing(identifier)
         case let .checkNow(identifier):
             checkNow(identifier)
         case let .openTicket(identifier):

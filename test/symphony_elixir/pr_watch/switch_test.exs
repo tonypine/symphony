@@ -1422,17 +1422,14 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       refute paused?(stepping)
     end
 
-    test "a forced ticket with a conflict and a competitor ahead goes to CI Fix, with no link" do
+    test "a ticket labelled expedite with a conflict and a competitor ahead waits like any other" do
       ticket!("1", "QA", ci: :pending, mergeable: :blocked)
-      forced = ticket!("2", "Merging", dirty())
-      World.update(:issues, &Map.update!(&1, forced, fn issue -> %{issue | labels: ["expedite"]} end))
+      labelled = ticket!("2", "Merging", dirty())
+      World.update(:issues, &Map.update!(&1, labelled, fn issue -> %{issue | labels: ["expedite"]} end))
       open_pulls!([open_pull(1, ["SPEC.md"]), open_pull(2, ["SPEC.md"])])
       tick!(start!())
 
-      assert %{rule: "R14"} = decision(forced)
-      assert moves(forced) == ["CI Fix"]
-      assert World.calls(:link) == []
-      refute paused?(forced)
+      assert_waits!(labelled, "Waiting on TP-1 to land: they change the same files (SPEC.md)", ["TP-1"])
     end
   end
 

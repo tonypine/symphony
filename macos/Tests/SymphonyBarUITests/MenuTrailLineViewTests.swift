@@ -21,7 +21,7 @@ final class MenuTrailLineViewTests: XCTestCase {
 
     func testTheLeadingInsetIsWhereTheSystemStartsAnOrdinaryItem() {
         // A plain item's menu is its title plus two even margins, rounded up to a whole point.
-        for title in ["Force a Ticket…", "Open Symphony Director", "Resume Anthropic and some longer words"] {
+        for title in ["Pause Dispatch…", "Open Symphony Director", "Resume Anthropic and some longer words"] {
             let menu = NSMenu()
             menu.addItem(NSMenuItem(title: title, action: nil, keyEquivalent: ""))
             let titleWidth = (title as NSString).size(withAttributes: [.font: NSFont.menuFont(ofSize: 0)]).width

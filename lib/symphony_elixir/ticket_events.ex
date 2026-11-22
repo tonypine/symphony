@@ -25,7 +25,7 @@ defmodule SymphonyElixir.TicketEvents do
   The machinery writes events next to the snapshot fields of `SymphonyElixir.TicketState`
   (`SymphonyElixir.TicketSignals`, `SymphonyElixir.Pauses`, `SymphonyElixir.Questions`, and the
   orchestrator's `run.started` and `run.ended` next to its dispatches) and next to the audit records
-  of the Director's stop, force and Inbox moves (`person.action`). The ticket's signals, verdicts
+  of the Director's stop and Inbox moves (`person.action`). The ticket's signals, verdicts
   and dispatched runs are read from the events (`SymphonyElixir.TicketState.signals/1`,
   `verdicts/1`, `dispatches/1`); the snapshot's `signals`, `verdicts` and `dispatches` are still
   written, and no reader reads them.

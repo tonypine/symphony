@@ -544,7 +544,7 @@ defmodule SymphonyElixir.SubIssueWaitTest do
       state = orchestrator_state()
       # MOT-30: the run filed 7 of 9 sub-tickets, hit Linear's usage limit, and a person moved it back.
       backlog = for n <- 31..37, do: %{id: "child-#{n}", identifier: "MOT-#{n}", state: "Backlog"}
-      parent = %Issue{id: "parent-resume", identifier: "MOT-30", title: "Plan the MVP", state: "In Progress", labels: ["breakdown", "expedite"], sub_issues: backlog}
+      parent = %Issue{id: "parent-resume", identifier: "MOT-30", title: "Plan the MVP", state: "In Progress", labels: ["breakdown"], sub_issues: backlog}
       Application.put_env(:symphony_elixir, :memory_tracker_issues, [parent])
 
       assert Orchestrator.park_breakdown_parents_for_test([parent], state).parked_parents == MapSet.new()

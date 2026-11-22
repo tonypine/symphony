@@ -60,7 +60,6 @@ defmodule SymphonyElixir.Linear.IssueTest do
       refute Issue.waiting_on_sub_issues?(nil, @terminal)
       refute Issue.unapproved_plan?(nil, @terminal)
       refute Issue.close_out_ready?(nil, @terminal)
-      refute Issue.forced?(nil, nil)
       assert Issue.open_blockers(nil, @terminal) == []
       assert Issue.open_sub_issues(nil, @terminal) == []
     end

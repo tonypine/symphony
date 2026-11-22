@@ -29,7 +29,7 @@ When logging Codex execution lifecycle events, include:
 ## Scope Guidance
 
 - `AgentRunner`: log start/completion/failure with issue context, plus `session_id` when known.
-- `Orchestrator`: log dispatch, retry, terminal/non-active transitions, and worker exits with issue context. Include `session_id` whenever running-entry data has it. Dispatch lines carry `slot=` and `forced=true|false` (whether the run uses the forced allowance).
+- `Orchestrator`: log dispatch, retry, terminal/non-active transitions, and worker exits with issue context. Include `session_id` whenever running-entry data has it. Dispatch lines carry `slot=`.
   A callback that takes 1 s or more logs `Orchestrator slow handle_call|handle_info duration_ms= message=` (the message inspected with limits), and a snapshot build that does logs `Orchestrator snapshot build slow build_ms=` with `<part>_ms=` for its parts.
   A run that failed in its own setup before the first turn logs `Setup block for <issue_identifier>: <component> — <cause>; self-heal holds it on <fix ticket> issue_id=` (or `self-heal asks a person to decide`, or `self-heal answered <result>, scheduling retry` when it falls back to the crash retry).
   The Linear calls the orchestrator needs an answer from run in tasks; one that dies logs `Async Linear task <kind> exited before replying:`, and one that cannot start logs `Failed to start async Linear task <kind>:`.

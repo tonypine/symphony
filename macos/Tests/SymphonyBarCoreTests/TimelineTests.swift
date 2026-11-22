@@ -207,7 +207,7 @@ final class TimelineTests: XCTestCase {
             event("d1", "09:00:00", "note", title: "Note added"),
             event("d2", "09:00:00", "note", title: "Note added"),
             event("d3", "09:00:05", "note", title: "Note added"),
-            event("x", "09:01:00", "person.action", title: "Forced ahead of the queue", payload: #"{"action": "force"}"#),
+            event("x", "09:01:00", "person.action", title: "Unblocked", payload: #"{"action": "unblock"}"#),
             event("d4", "09:02:00", "note", title: "Note added"),
         ])
         let folded = self.entries(TimelineModel.build(history, reference: reference, calendar: utc))

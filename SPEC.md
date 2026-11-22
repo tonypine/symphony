@@ -172,8 +172,7 @@ Fields:
 - `priority` (integer or null)
   - Lower numbers are higher priority in dispatch sorting.
   - Priority means importance, not queue position: it only orders issues within a dispatch stage
-    (Section 8.2) and never gets an issue a slot past a limit. Forcing (`concurrency.force_label`,
-    Section 8.3) is the way to have an issue worked ahead of the queue.
+    (Section 8.2) and never gets an issue a slot past a limit.
 - `state` (string)
   - Current tracker state name.
 - `team` (object or null)
@@ -368,7 +367,7 @@ and otherwise at most every 5 s; the run's completion writes the final record.
 
 Each ticket also has a state record per `repo_key` and issue ID (`TicketState`), which learns from
 these Linear reads of its issues: the repo poll, the by-id reads each poll tick makes of the running,
-watched, forced and operator-stopped tickets, the dispatch prefetch and the revalidation before a
+watched and operator-stopped tickets, the dispatch prefetch and the revalidation before a
 start, and each PR watcher's read of the watched states, for every repo that read returns. A by-id
 read carries no repo key, so each issue it returns is written under the repo that already holds the
 ticket's record: the poll filters each repo in Linear (a project by its slug,
@@ -541,8 +540,8 @@ kinds may, its payload schema and its idempotency rule; a payload outside its sc
 type does not allow, is refused. The types: `phase.entered`, `hold.set` and `hold.cleared` (kind
 `blocked` only, legacy), `run.started` and `run.ended` (keyed by run id), `attempt.pushed`,
 `verdict.recorded` (machine only: an agent never records a verdict), `decision.requested`,
-`decision.recorded`, `decision.withdrawn` (legacy), `person.action` (`stop`, `move`, `force`, `unblock`,
-`restart`), `ticket.cancelled` (the Director's cancel, with its note), `ticket.moved` (the
+`decision.recorded`, `decision.withdrawn` (legacy), `person.action` (`stop`, `move`, `unblock`,
+`restart`; `force` is legacy), `ticket.cancelled` (the Director's cancel, with its note), `ticket.moved` (the
 Director's free move into any phase, with its note), `step.started` and `step.completed` (the step
 model below), `evidence`, `finding.recorded` (QA
 runs), `finding.resolved`, `finding.confirmed` (machine only: a QA pass confirmed a resolution),
@@ -709,8 +708,8 @@ runs on that provider alone. The Director's Pause of a provider
 404 `provider_not_found`, naming it. While it holds, a paused provider is one more reason a run's
 candidate cannot take a run, as a usage limit that holds the provider is: a new run starts on the
 first fallback of its run kind whose provider can take it, and a continuation stays on its own
-choice. A run with no such candidate waits, as under a reached usage limit (landing runs and forced
-tickets' runs included): a candidate is skipped with rule `provider_pause`, naming the `provider`
+choice. A run with no such candidate waits, as under a reached usage limit (landing runs
+included): a candidate is skipped with rule `provider_pause`, naming the `provider`
 (`you paused Anthropic, and no fallback of its run can take it`), and a retry or continuation keeps
 its claim and attempt with no timer. Its situation is `waiting_for_provider` ("Waiting: you paused
 Anthropic"). A retry that waits for a slot keeps its attempt and claim the same way when its provider
@@ -1680,30 +1679,10 @@ Fields:
   - Default: `2`.
   - Landing runs (issues in `Merging`) that may run at once outside `max_total` and the epic lanes
     (Section 8.3). Values below `1` fail configuration validation.
-- `concurrency.force_label` (string)
-  - Default: `expedite`.
-  - An issue carrying this label (case-insensitive) joins the forced queue when a poll's candidate
-    fetch, which only returns active states, first sees it with the label. The orchestrator records
-    that time (`forced_since`, persisted across restarts), refreshes the queued issues by id on
-    every poll so they stay queued in any non-terminal state (Plan Review, Merging, ...), and drops
-    one when the label is removed, the issue is terminal, or the tracker no longer returns it. Forced issues are reported in the status snapshot
-    (`forced`) and the audit log (`forced_start`, `forced_end` with `reason` `label_removed`,
-    `done` or `missing`), and dispatch on their own allowance (Section 8.3).
-  - When a forced issue reaches a terminal state the service SHOULD remove the label from it.
-  - When a forced issue enters `Plan Review` the service SHOULD emit a `forced_human_gate`
-    notification, once per entry into `Plan Review`.
-  - Implementations MAY offer an operator control that adds or removes the label (this one has
-    `symphony force [--clear] <identifier>` over `POST /api/v1/control/force`). Such a control
-    SHOULD put the change into the queue at once rather than wait for the next poll, so tickets
-    forced in quick succession keep their order, and MUST NOT move the issue to another state.
-- `concurrency.forced_max` (positive integer)
-  - Default: `1`.
-  - Forced runs that may run at once outside `max_total`, the epic lanes, `finishing_max` and
-    `max_by_issue_state` (Section 8.3). Values below `1` fail configuration validation.
 - Implementations MAY offer an operator control that starts a ticket's run at once (this one has
   `POST /api/v1/control/start` with `issue_identifier` and an optional `note`). Such a control
   dispatches the run for the ticket's current phase in the same call, not queued: it ignores
-  queue order, the concurrency limits and the forced queue. It MUST NOT override what a person
+  queue order and the concurrency limits. It MUST NOT override what a person
   or Symphony chose to stop: it refuses while dispatch is paused, while the ticket's repository
   is paused, while the ticket has an open question, or while a run is already working on it, and
   the answer names which; a ticket in the backlog is refused with "move it first". A ticket in
@@ -1718,12 +1697,6 @@ Fields:
 - Implementations MAY carry the ticket's pull request and its checks on the ticket read (this one has
   `pull_request`, `docs/control-api.md`). That read MUST come from what the PR watcher already read,
   and MUST NOT add a read of GitHub.
-- `concurrency.forced_stale_after_hours` (positive integer)
-  - Default: `72`.
-  - How long an issue may stay forced before it counts as stale. A stale issue is reported as
-    `stale` in the snapshot's `forced` rows, and the service SHOULD log a warning and emit one
-    `forced_stale` notification per forced issue, kept across restarts. Values below `1` fail
-    configuration validation.
 - `concurrency.max_by_issue_state` (map `state_name -> positive integer`)
   - Default: empty map.
   - State keys are normalized (`lowercase`) for lookup.
@@ -2545,7 +2518,7 @@ Fields:
   - `events` is an OPTIONAL list drawn from: `pr_opened`, `awaiting_review`, `run_failed`,
     `issue_completed`, `budget_exceeded`, `reviewer_commented`, `rework_pushed`, `ci_failed`,
     `ci_escalated`, `qa_passed`, `qa_failed`, `usage_limit_paused`, `usage_limit_headroom`,
-    `usage_limit_resumed`, `forced_waiting`, `forced_human_gate`, `forced_stale`.
+    `usage_limit_resumed`.
   - `headers` is an OPTIONAL map of webhook headers.
 
 ### 5.5 Prompt Template Contract
@@ -2869,9 +2842,6 @@ not require recognizing or validating extension fields unless that extension is 
 - `execution.concurrency.max_by_issue_state`: map of positive integers, default `{}`
 - `execution.concurrency.epic_lanes`: integer between `0` and `max_total`, default `max_total`
 - `execution.concurrency.finishing_max`: integer `>= 1`, default `2`
-- `execution.concurrency.force_label`: string, default `expedite`
-- `execution.concurrency.forced_max`: integer `>= 1`, default `1`
-- `execution.concurrency.forced_stale_after_hours`: integer `>= 1`, default `72`
 - `execution.limits.max_turns`: integer, default `20`
 - `execution.limits.retry_backoff_max_ms`: integer, default `300000` (5m)
 - `execution.limits.max_consecutive_identical_tool_failures`: integer, default `5`; `0` disables
@@ -3315,8 +3285,7 @@ step's own timeout replaces the stall and no-progress clocks while it runs. Once
 agent step again, the run asks the orchestrator for a turn and waits; the orchestrator gives it a
 free slot before any dispatch, at once and on every cycle, and starts its new session with the whole
 prompt. While Symphony is paused (dispatch only), a run between steps still runs its machine steps,
-and its next agent turn waits for the pause to lift (decision 1 of TP-1085). A forced run waits only
-for the pause. A run held by an update's pause records an `update_wait` signal on its ticket, with the
+and its next agent turn waits for the pause to lift (decision 1 of TP-1085). A run held by an update's pause records an `update_wait` signal on its ticket, with the
 version and the step. A drain waits for no run between turns (`between_turns` in Section 13.4's
 state): the pause holds its next turn, so the wait would never end, and it has no session to lose.
 Symphony stops with it there. After the restart the ticket's next run starts the list again in the
@@ -3604,7 +3573,7 @@ Landing order of PRs that change the same files:
   then the lower PR number.
 - A PR waits for the first PR above it in that order that shares a path with it and leads: a PR
   on a hold (any kind) or whose state and head haven't moved for two hours doesn't lead, and a
-  PR that waits counts as moving on every poll it waits. A forced ticket never waits. The order is
+  PR that waits counts as moving on every poll it waits. The order is
   total, so a group of overlapping PRs never deadlocks.
 - A waiting PR keeps working (review, QA, rework); only its sync with the base branch waits: no
   conflict-fix run and no update-branch.
@@ -3990,8 +3959,8 @@ An issue is dispatch-eligible only if all are true:
 - Its state is in `active_states` and not in `terminal_states`.
 - It is not already in `running`.
 - It is not already in `claimed`.
-- Its priority is among `tickets.priorities` when that key is set, unless it is a forced ticket or
-  a retry waiting for a slot (see 5.4).
+- Its priority is among `tickets.priorities` when that key is set, unless it is a retry waiting
+  for a slot (see 5.4).
 - Global concurrency slots are available.
 - Per-state concurrency slots are available.
 - Blocker rule passes, in every active phase:
@@ -4192,84 +4161,38 @@ An issue is dispatch-eligible only if all are true:
     missing, it logs a warning and stops moving parents there until restart; parents then wait in
     `In Progress` as before. When the check itself fails, the state stays on.
 
-Sorting order (stable intent), forced first, then closest to done first:
+Sorting order (stable intent), closest to done first:
 
-1. forced issues (Section 8.3), earliest `forced_since` first; a forced issue the queue has not
-   recorded yet follows the queued ones. This applies after the epic-lane ordering.
-2. stage: `Merging`, then `Rework`, then any other active state
+1. stage: `Merging`, then `Rework`, then any other active state
    (a resume, such as `In Progress`), then `Todo`
-3. `priority` ascending (1..4 are preferred; null/unknown sorts last)
-4. `created_at` oldest first
-5. `identifier` lexicographic tie-breaker
+2. `priority` ascending (1..4 are preferred; null/unknown sorts last)
+3. `created_at` oldest first
+4. `identifier` lexicographic tie-breaker
 
 While an issue in `Merging` is waiting for a slot, no `Todo` issue is dispatched. `Rework` and
-resumes still are, and so is a forced `Todo` on the forced allowance. The held `Todo` issue's
+resumes still are. The held `Todo` issue's
 `slot_waiting` reason names the issue it waits for (`MT-2 (Merging) is waiting for a finishing
 slot`).
 
-Priority vs expedite: `priority` means importance and only orders issues waiting for normal slots,
-after the stage. Raising it never gets an issue past `max_total`, a per-state cap, the epic lanes
-or `finishing_max`. To have an issue worked now, a person forces it with the
-`concurrency.force_label` label (default `expedite`, or `symphony force <identifier>`); Section 8.3
-lists what forcing bypasses and what it respects. Forcing only removes the wait for a slot. These
-transitions stay with a person, forced or not:
+Priority: `priority` means importance and only orders issues waiting for slots, after the
+stage. Raising it never gets an issue past `max_total`, a per-state cap, the epic lanes or
+`finishing_max`. These transitions stay with a person:
 
 | Transition | Who |
 | --- | --- |
-| `Backlog` -> `Todo` | a person promotes the issue; forcing does not |
+| `Backlog` -> `Todo` | a person promotes the issue |
 | `Plan Review` -> the waiting state (default `Waiting on sub-tickets`) | a person approves a plan |
 | a `Needs Decision` hold | a person records the decision |
 | any state -> `Restart` | a person resets the approach |
 
-The Code Review and QA verdicts are still required for a forced issue.
+The Code Review and QA verdicts are required for every issue.
 
 ### 8.3 Concurrency Control
 
 Global limit:
 
 - `available_slots = max(max_concurrent_agents - running_count, 0)`, where `running_count`
-  leaves out landing runs and forced runs.
-
-Forced allowance:
-
-- An issue carrying `concurrency.force_label` outside a terminal state is forced. While fewer than
-  `forced_max` forced runs are running, a forced issue dispatches as a forced run: it skips
-  `max_total`, the epic lanes, `finishing_max`, `max_by_issue_state` and the "no `Todo` while a
-  finish waits" rule. The poll and the retry path (continuations such as `ci_fix` and
-  `review_feedback`, and landing runs) both apply it.
-- A forced run is marked `forced: true` and is counted by none of `running_count`, the finishing
-  count, the per-state counts or the epic lanes, so it never takes a normal slot. A run already
-  going when the label is added stays a normal run, and a running agent is never pre-empted.
-  When an issue leaves the forced queue (or stops being a forced parent's part) while its forced
-  run is going, that run is no longer `forced`: it gives the forced allowance back, so an issue
-  still forced can take it, and goes on as a normal run.
-- A forced issue that finds `forced_max` forced runs running gets no extra slot. It still sorts
-  first for a normal slot (and runs as a normal run if it gets one), shows its queue position in
-  the `forced` snapshot and as its `slot_waiting` reason (`queued #2; forced slot taken by MT-1`),
-  and the service logs a warning and emits one `forced_waiting` notification naming the forced
-  runs holding the allowance, once per wait.
-- When every normal and finishing slot is full, a poll still runs its dispatch pass for a forced
-  candidate the allowance can take, or that has not been noted as waiting yet.
-- The daily token budget (`max_tokens_per_day`) does not stop a forced dispatch: when it is
-  exhausted only forced candidates dispatch, with a warning, and other waiting issues keep their
-  place. The per-issue cap (`max_tokens_per_issue`) still applies.
-- A usage-limit headroom hold (Section 8.4.2) does not hold a forced issue's run. A `paused` or
-  `canary` hold still does, and when a hold resumes a held forced retry is chosen as the canary.
-- Still respected: the operator pause, the Linear rate-limit pause, the workspace quota pause, the
-  per-host worker cap, blocked-by links, setup-failure suppression, retry backoff,
-  and the auto-merge / `Merging` CI waits.
-- A forced plan parent is one forced unit; its plan, re-plan and epic review runs are
-  forced runs. While it waits on its sub-issues (and is not re-planning), its current part is
-  forced too, without the service writing the label on it: the first issue on its epic path
-  (see Epic lanes below) that is dispatch-eligible, in epic-lane order
-  (stage, then nearest the epic, then dispatch order), so a blocked sub-issue waits for its
-  blocker. The part keeps its
-  parent's place in the forced queue, and stays the parent's while it is on the path and running,
-  claimed or waiting on a retry, so at most one of the parent's issues runs on the
-  forced allowance at a time. The parent's other
-  sub-issues use normal slots and the epic lane. Forcing a sub-issue forces only that sub-issue.
-- Forcing never moves an issue or approves a plan: a forced parent in `Plan Review` stays there
-  until a human moves it.
+  leaves out landing runs.
 
 Finishing limit:
 
@@ -4290,7 +4213,7 @@ Epic lanes:
 - An active epic yields while nothing on its path can run: every open issue on the path is in
   `Plan Review`, `Backlog` or `Triage`, has no known state, is a plan parent waiting on its
   sub-issues (outside `Rework`), has open blockers in any active phase, or has a priority
-  `tickets.priorities` keeps from dispatching (unless the issue is forced, waits for a slot on a retry,
+  `tickets.priorities` keeps from dispatching (unless the issue waits for a slot on a retry,
   or has a run or a claim under way). A yielded epic takes no lane.
 - The other active epics are ordered by the parent's priority, then the parent's creation time. The
   first `min(epic_lanes, max_concurrent_agents)` of them each reserve one slot (a lane); the rest
@@ -4396,7 +4319,7 @@ reached (for Claude, a used-up five-hour or weekly window; for Codex, an error w
   retries and operator PR runs. A continuation of a run in progress is judged on the run kind's
   own choice only. Other providers keep dispatching. Epic lanes stay reserved.
 - At `resume_at` the hold moves to `phase: canary` and exactly one held retry, the first in normal
-  dispatch order (a forced issue first), is released as the canary; an immediate poll tick runs. The hold keeps covering
+  dispatch order, is released as the canary; an immediate poll tick runs. The hold keeps covering
   every other run of that provider, so slots freed by held runs are not filled with other work on
   it. With nothing held, the hold is cleared and no canary runs. The held issues are read from the
   tracker to order them; until that read answers the hold stays as it was, and a held retry that
@@ -4435,8 +4358,7 @@ operator's own sessions: the provider is at its reserve.
   (reported as a new pause).
 - The hold skips new dispatches on every path, as a pause does, and holds a retry that comes due
   with its attempt. It does not hold runs in flight, their continuation turns, the continuation
-  run scheduled when a run ends with the issue still active, landing runs (`kind: landing`), or a
-  forced issue's run (Section 8.3).
+  run scheduled when a run ends with the issue still active, or landing runs (`kind: landing`).
   `dispatch_state.active?` stays true while landing runs can still dispatch.
 - The provider is unavailable for new runs the way a paused one is: a new run resolves to the first
   fallback of its run kind whose provider is neither paused nor held. A ticket whose run has no
@@ -5720,20 +5642,6 @@ SHOULD return:
   final transcript replay metadata while the watch remains open
 - `retrying` (list of retry queue rows)
 - each retry row SHOULD include `repo_key`
-- running, retry and `slot_waiting` rows SHOULD include `forced`: for a running row, whether it
-  runs on the forced allowance; for the others, whether the issue is in the forced queue or is a
-  forced parent's current part
-- `forced` rows SHOULD include `title`, `repo_key` (null when Symphony hasn't routed the issue yet),
-  `sub_issue` (a forced plan parent's current part, or null)
-  and `waiting_on_human` (the issue is in `Backlog`, `Triage` or `Plan Review`)
-- `forced` rows SHOULD include `forced_for_seconds`, `stale` (forced for at least
-  `concurrency.forced_stale_after_hours`), `phase` (one of `implementation`, `rework`,
-  `review_feedback`, `ci_fix`, `waiting_on_ci`, `waiting_for_human`, `landing`, `code_review`,
-  `qa`, `breakdown`, `epic_review`), `running` (an agent run is
-  going for it), `waiting_on` (one of `slot`, `human`, `ci`, `blocker`, `usage_limit`, `paused`, `backlog`,
-  or null), `blockers` (the open blockers' identifiers when `waiting_on` is `blocker`) and a
-  one-line `summary`; for a forced plan parent with a current part, the phase and what it
-  waits on are the part's
 - `sessions`: every live session, of any kind, in one list: the agent runs (`kind` is the run's
   profile kind, such as `implementation` or `code_review`);
   each row has `kind`,
@@ -5882,7 +5790,6 @@ The Elixir implementation supports token budget limits under `agent` in `symphon
   - Default: `5000000`.
   - Explicit `null` disables the daily cap.
   - When configured, new dispatch SHOULD pause once the UTC-day token total reaches the limit.
-    Forced issues (Section 8.3) still dispatch, with a warning.
   - Already-running agents SHOULD continue; the daily guardrail only gates new dispatch.
   - Daily usage SHOULD reset at the UTC day boundary.
   - The Elixir implementation rehydrates the current UTC day usage from durable runs across every
@@ -6023,7 +5930,6 @@ Minimum endpoints:
         "watching": 1,
         "conflicts": 0,
         "retrying": 1,
-        "forced": 1,
         "shipped_today": 1,
         "waiting_on_you": 1,
         "review_inconclusive": {"invalid_verdict": 1}
@@ -6043,7 +5949,6 @@ Minimum endpoints:
           "pending_tool": null,
           "started_at": "2026-02-24T20:10:12Z",
           "last_event_at": "2026-02-24T20:14:59Z",
-          "forced": false,
           "tokens": {
             "input_tokens": 1200,
             "uncached_input_tokens": 900,
@@ -6061,8 +5966,7 @@ Minimum endpoints:
           "issue_identifier": "MT-650",
           "attempt": 3,
           "due_at": "2026-02-24T20:16:00Z",
-          "error": "agent exited: turn timeout",
-          "forced": false
+          "error": "agent exited: turn timeout"
         }
       ],
       "finishing": {
@@ -6071,7 +5975,7 @@ Minimum endpoints:
         "running": [{"issue_id": "jkl012", "identifier": "MT-652", "state": "Merging"}]
       },
       "qa": {
-        "running": [{"issue_id": "mno345", "identifier": "MT-653", "sha": "abc1234def", "forced": true}],
+        "running": [{"issue_id": "mno345", "identifier": "MT-653", "sha": "abc1234def"}],
         "queued": []
       },
       "auto_merge": [
@@ -6103,8 +6007,7 @@ Minimum endpoints:
           "state": "Todo",
           "reason": "MT-655 (Merging) is waiting for a finishing slot",
           "attempt": null,
-          "since": "2026-02-24T20:15:30Z",
-          "forced": false
+          "since": "2026-02-24T20:15:30Z"
         }
       ],
       "blocked": [
@@ -6134,27 +6037,7 @@ Minimum endpoints:
         "issue_identifiers": ["MT-658"],
         "latest_release": {"repo": "tonypine/symphony", "tag": "v0.0.1.583", "published_at": "2026-02-24T18:00:00Z", "source": "webhook"}
       },
-      "forced": [
-        {
-          "issue_id": "vwx234",
-          "issue_identifier": "MT-657",
-          "title": "Fix the release build",
-          "repo_key": "web",
-          "state": "In Progress",
-          "forced_since": "2026-02-24T19:00:00Z",
-          "forced_for_seconds": 7380,
-          "stale": false,
-          "position": 1,
-          "waiting_on_human": false,
-          "sub_issue": null,
-          "phase": "implementation",
-          "running": true,
-          "waiting_on": null,
-          "blockers": [],
-          "summary": "implementation · running"
-        }
-      ],
-      "concurrency": {"max_total": 10, "finishing_max": 2, "forced_max": 1},
+      "concurrency": {"max_total": 10, "finishing_max": 2},
       "watching": [
         {
           "repo_key": "web",
@@ -6416,8 +6299,8 @@ Minimum endpoints:
     `repositories[<key>].route.team` when that is exactly one team); the labels Symphony applies
     or reads, in each routed team, from one labels read per team: one missing (an `error` for
     `Blocked`, `Needs Decision` and the CI labels, which count only spelled exactly; a `warning`
-    for `plan` or `breakdown`, `qa:skip`, `protected-paths-approved`, `skip-update-hold`, the
-    `execution.concurrency.force_label` and each `escalate.labels` entry, which count in any case),
+    for `plan` or `breakdown`, `qa:skip`, `protected-paths-approved`, `skip-update-hold` and
+    each `escalate.labels` entry, which count in any case),
     with a `create_label` fix for the exact name; a label close to one of them (only case or
     spaces apart, or a short edit distance) or one that is both a team and a workspace label (a
     `warning` naming both, `open` `linear`); the deprecated `human-action` label in an
@@ -7761,20 +7644,6 @@ infrastructure.
 - Dispatch sort order is stage (`Merging`, `Rework`, resume, `Todo`), then priority,
   then oldest creation time
 - A landing run starts while every `max_total` slot and epic lane is busy, up to `finishing_max`
-- A forced issue dispatches first, on its own `forced_max` allowance, while `max_total`, the epic
-  lanes, `finishing_max` and the per-state caps are full, on the poll and the retry path; its run
-  takes no normal slot, and a second forced issue past `forced_max` waits and is noted once
-- A forced run whose issue is no longer forced gives the forced allowance back and goes on as a
-  normal run
-- The daily token budget and a usage-limit headroom hold do not stop a forced dispatch; the
-  operator pause, blocked-by links and a `paused` usage-limit hold do
-- A forced plan parent waiting on its sub-issues forces one issue on its epic path at a
-  time, in blocked-by order and without labelling it, then its epic review; a forced parent in
-  `Plan Review` is not moved
-- The snapshot's `forced` rows report each forced issue's phase and what it waits on (an open
-  blocker by identifier); a forced issue past `forced_stale_after_hours` is `stale` and notified
-  once; a forced plan entering `Plan Review` is notified; a forced issue that reaches a terminal
-  state leaves the queue with reason `done` and loses its label
 - No `Todo` issue is dispatched while a `Merging` issue waits for a finishing slot
 - A retry that finds no slot keeps its attempt, gets no backoff, and starts on the first poll after
   a slot frees

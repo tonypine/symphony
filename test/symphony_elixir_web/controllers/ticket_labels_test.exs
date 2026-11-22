@@ -23,7 +23,7 @@ defmodule SymphonyElixirWeb.TicketLabelsTest do
     %{repo: repo, ticket: ticket}
   end
 
-  defp settings, do: [escalate_labels: ["needs-human"], force_label: "expedite"]
+  defp settings, do: [escalate_labels: ["needs-human"]]
 
   defp post_label(params, ctx) do
     conn(:post, "/api/v1/control/label", Jason.encode!(params))

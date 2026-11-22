@@ -56,7 +56,7 @@ func menuWithHints() -> AnyView {
     }
     return AnyView(
         VStack(alignment: .leading, spacing: 0) {
-            item("Force a Ticket…", "⌘ ⇧ F", highlighted: false)
+            item("Find a Ticket…", "⌥ ⌘ F", highlighted: false)
             item("Open in Linear", "⌘ L", highlighted: true)
         }
         .padding(DesignTokens.Space.s1)
