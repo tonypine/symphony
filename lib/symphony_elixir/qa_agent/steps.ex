@@ -48,7 +48,14 @@ defmodule SymphonyElixir.QaAgent.Steps do
   `session` continue one conversation (resumed by its id, which Claude supports; another harness
   starts a new one), `fresh` starts one for the step alone, and no `session` is the pass's one
   session. A step with `repeat: walkthrough` runs once per walkthrough step this pass walks (the
-  steps no named test proves), as `<id>_<n>`, each with that step's text and the plan's brief for it.
+  steps no named test proves), as `<id>_<n>`, each with that step's text and the plan's brief for it,
+  or once per group of them: the plan's briefs that name the same `group` (and the same `surface`)
+  sit on one screen in one app state, and are walked in one session, as `<id>_<n>_<m>…`, with every
+  step's text and brief. Such a step answers `results`, one per walkthrough step with its own
+  `status`; an answer that misses one is asked once more, and a step still without one is then not
+  judged (`blocked`), never passed. The review, the evidence and the step's `step.completed`
+  (`results`) read one answer per walkthrough step. The groups are the plan's: Symphony expands the
+  walk steps once it takes the plan, and a brief with no `group` is walked alone.
   Every agent step reads the Conductor's newest instructions
   (`SymphonyElixir.Conductor.prompt_section/2`), as the one session's prompt does, so a pass the
   Conductor sent back to QA reads what it must do differently.
@@ -61,9 +68,10 @@ defmodule SymphonyElixir.QaAgent.Steps do
     launch its `needs_app`;
   - `review` (required in every QA playbook's list): the verdict. It records it with `qa_verdict`
     in today's contract (`SymphonyElixir.QaAgent.Verdict`), or writes it to its answer file, or asks
-    for a recheck there (`{"recheck": [brief, ...]}`, at most #{3}): each brief runs as a fresh turn
-    of the list's `repeat` step, between the launch and the quit and attach steps run again, and the
-    review runs once more. Past two rounds of recheck the pass is `inconclusive`;
+    for a recheck there (`{"recheck": [brief, ...]}`, at most #{3} sessions of at most #{12} briefs):
+    each brief runs as a fresh turn of the list's `repeat` step, or, for the briefs that share a
+    `group`, one fresh turn for them all, between the launch and the quit and attach steps run again,
+    and the review runs once more. Past two rounds of recheck the pass is `inconclusive`;
   - the `repeat: walkthrough` step, whose prompt and model the rechecks take.
 
   The mechanical rules stay `SymphonyElixir.QaAgent`'s and `SymphonyElixir.QaVerification`'s: the
@@ -90,6 +98,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
   @attach "symphony:qa_attach"
   @statuses ~w(pass fail blocked plan_mismatch)
   @max_rechecks 3
+  @max_recheck_briefs 12
   @max_recheck_rounds 2
   @small_model "small"
   # The playbooks a walk turn can run without the app, from a shell in the worktree. A pass that
@@ -194,7 +203,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
   defp new_state(agent_module, job, worktree, qa_settings, steps, opts) do
     tmp_dir = Keyword.fetch!(opts, :qa_tmp_dir)
     targets = walked_steps(job)
-    {expanded, walk_targets} = expand(steps, targets)
+    {expanded, checks} = expand(steps, targets, &{:alone, &1.number})
 
     context =
       %{
@@ -208,7 +217,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
         steps: expanded,
         answer_dir: tmp_dir
       }
-      |> maybe_put(:runner, Keyword.get(opts, :qa_step_runner))
+      |> Map.merge(for {:qa_step_runner, runner} <- opts, into: %{}, do: {:runner, runner})
 
     %{
       agent_module: agent_module,
@@ -221,8 +230,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
       listed: steps,
       template: Enum.find(steps, &(&1.repeat == "walkthrough")),
       targets: targets,
-      walk_targets: walk_targets,
-      briefs: %{},
+      checks: checks,
       app_steps: app_steps(expanded),
       context: Map.put(context, :changes, PhaseSteps.changes(context)),
       results: [],
@@ -240,26 +248,68 @@ defmodule SymphonyElixir.QaAgent.Steps do
     }
   end
 
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
-
   # The walkthrough steps this pass walks: those no named test proves (the pre-checks confirmed those).
   defp walked_steps(job) do
     job |> Map.get(:journey, %{}) |> Map.get(:steps, []) |> Enum.reject(&Walkthrough.named_test?/1)
   end
 
-  defp expand(steps, targets) do
+  # The list with its `repeat: walkthrough` step as one walk step per group of walkthrough steps
+  # (`key` names each target's group), in the order of each group's first step, and what each walk
+  # step checks: `%{step id => [%{target, brief}]}`.
+  defp expand(steps, targets, key) do
     Enum.reduce(steps, {[], %{}}, fn
-      %Step{repeat: "walkthrough"} = step, {list, walk_targets} ->
-        repeated = for target <- targets, do: {repeated(step, "#{step.id}_#{target.number}", "#{step.title} #{target.number}"), target}
-        {list ++ Enum.map(repeated, &elem(&1, 0)), Map.merge(walk_targets, Map.new(repeated, fn {step, target} -> {step.id, target} end))}
+      %Step{repeat: "walkthrough"} = step, {list, checks} ->
+        walks = for group <- in_groups(targets, key), do: {walk_step(step, Enum.map(group, & &1.number)), group}
+        {list ++ Enum.map(walks, &elem(&1, 0)), Map.merge(checks, Map.new(walks, fn {walk, group} -> {walk.id, Enum.map(group, &%{number: &1.number, target: &1, brief: nil})} end))}
 
-      step, {list, walk_targets} ->
-        {list ++ [step], walk_targets}
+      step, {list, checks} ->
+        {list ++ [step], checks}
     end)
   end
 
+  # `items` in groups by `key`, each group in its items' order, the groups in the order of their first item.
+  defp in_groups(items, key) do
+    by_key = Enum.group_by(items, key)
+    items |> Enum.map(key) |> Enum.uniq() |> Enum.map(&Map.fetch!(by_key, &1))
+  end
+
+  defp walk_step(step, [number]), do: repeated(step, "#{step.id}_#{number}", "#{step.title} #{number}")
+  defp walk_step(step, numbers), do: grouped(repeated(step, "#{step.id}_#{Enum.join(numbers, "_")}", "#{step.title} #{Enum.join(numbers, ", ")}"))
+
   defp repeated(%Step{} = step, id, title), do: %Step{step | id: id, title: title, repeat: nil}
+
+  # A walk step of several checks answers one result per check (`check_group/3`).
+  defp grouped(%Step{} = step), do: %Step{step | answer: %{"results" => "list"}}
+
+  # Once the plan is taken, the walk steps follow its groups: the briefs that share a `group` (and a
+  # surface) are walked in one session; a brief with none is walked alone.
+  defp regroup(%{template: nil} = state), do: state
+
+  defp regroup(state) do
+    {steps, checks} = expand(state.listed, state.targets, &plan_group(state, &1))
+    checks = Map.new(checks, fn {id, walked} -> {id, Enum.map(walked, &%{&1 | brief: plan_brief(state, &1.target)})} end)
+    %{state | steps: steps, context: %{state.context | steps: steps}, checks: checks, app_steps: app_steps(steps)}
+  end
+
+  defp plan_group(state, target) do
+    brief = plan_brief(state, target)
+
+    case group_name(brief) do
+      nil -> {:alone, target.number}
+      name -> {:group, command_line?(state, brief), name}
+    end
+  end
+
+  defp group_name(%{"group" => name}) when is_integer(name), do: Integer.to_string(name)
+
+  defp group_name(%{"group" => name}) when is_binary(name) do
+    case String.trim(name) do
+      "" -> nil
+      name -> name
+    end
+  end
+
+  defp group_name(_brief), do: nil
 
   # The agent steps that drive the app Symphony launched: those after the launch, up to the quit.
   defp app_steps(steps) do
@@ -338,8 +388,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
       results: state.results,
       answers: state.answers,
       plan: state.plan,
-      briefs: state.briefs,
-      walk_targets: state.walk_targets,
+      checks: state.checks,
       app_steps: state.app_steps,
       sessions: state.sessions,
       tokens: state.tokens,
@@ -421,8 +470,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
         results: pass.results,
         answers: pass.answers,
         plan: pass.plan,
-        briefs: pass.briefs,
-        walk_targets: pass.walk_targets,
+        checks: pass.checks,
         app_steps: pass.app_steps,
         sessions: pass.sessions,
         tokens: pass.tokens,
@@ -670,6 +718,15 @@ defmodule SymphonyElixir.QaAgent.Steps do
   defp after_turn({:verdict, result}, state, step, run, _notes, _attempt), do: give_verdict(state, step, run, result)
   defp after_turn({:recheck, briefs}, state, step, run, _notes, _attempt), do: asked_recheck(state, step, run, briefs)
 
+  # A group's answer that misses a check, or gives one a status Symphony does not take, is asked
+  # once more; the second time the others keep their results and that check is not judged (`blocked`).
+  defp after_turn({:partial, _answer, why}, state, step, run, notes, 1), do: after_turn({:error, why}, state, step, run, notes, 1)
+
+  defp after_turn({:partial, answer, why}, state, step, run, _notes, _attempt) do
+    Logger.info("QA step #{step.id} of #{state.job.issue.identifier} answered its group in part (#{why}); the checks with no result are blocked")
+    passed(state, step, run, answer)
+  end
+
   defp after_turn({:error, why}, state, step, run, notes, 1) do
     Logger.info("QA step #{step.id} of #{state.job.issue.identifier} answered nothing Symphony takes (#{why}); asking once more")
     turn(state, step, run, retry_notes(step, notes, why), 2)
@@ -681,17 +738,38 @@ defmodule SymphonyElixir.QaAgent.Steps do
   defp retry_notes(_step, notes, why), do: Map.put(notes, :answer_error, why)
 
   defp passed(state, step, run, answer) do
-    state = %{state | answers: state.answers ++ [{step, answer}]}
-    state = if step.id == @plan, do: %{state | plan: answer}, else: state
+    state = %{state | answers: state.answers ++ answer_entries(state, step, answer)}
+    state = if step.id == @plan, do: regroup(%{state | plan: answer}), else: state
     PhaseSteps.record_turn_completed(step, step_context(state, run), answer_fields(state, step, answer), duration(run))
-    {add_result(state, step, "passed", nil), :passed}
+    {add_result(state, step, "passed", group_detail(state, step, answer)), :passed}
   end
+
+  # What the review reads of an answer: a group's is one answer per check, named after its step.
+  defp answer_entries(state, step, answer) do
+    if group?(state, step),
+      do: for(result <- answer["results"], do: {%{step | title: "walkthrough step #{result["step"]}"}, result}),
+      else: [{step, answer}]
+  end
+
+  defp group_detail(state, step, answer) do
+    if group?(state, step),
+      do: Enum.map_join(answer["results"], "; ", &"walkthrough step #{&1["step"]}: #{&1["status"]}"),
+      else: nil
+  end
+
+  defp group?(state, step), do: match?([_, _ | _], Map.get(state.checks, step.id))
 
   # The step's answer rides on its own `step.completed` (`SymphonyElixir.QaAgent.StepPayload`), where
   # the Director reads it as fields, never as a note.
   defp answer_fields(state, %Step{id: @plan}, answer), do: %{outcome: "passed", plan: StepPayload.plan(answer, plan_skips(state))}
 
-  defp answer_fields(_state, _step, answer) do
+  defp answer_fields(state, step, answer) do
+    if group?(state, step),
+      do: %{outcome: "passed", results: StepPayload.results(answer["results"])},
+      else: single_fields(answer)
+  end
+
+  defp single_fields(answer) do
     case StepPayload.result(answer) do
       nil -> %{outcome: "passed"}
       result -> %{outcome: "passed", result: result}
@@ -746,31 +824,54 @@ defmodule SymphonyElixir.QaAgent.Steps do
     }
   end
 
-  # One round of recheck: the launch again, a fresh turn of the list's `repeat` step per brief, the
-  # quit and the evidence, then the review again (`walk/2`).
+  # One round of recheck: the launch again, a fresh turn of the list's `repeat` step per session
+  # (the briefs that share a `group`, or one brief alone), the quit and the evidence, then the review
+  # again (`walk/2`).
   defp recheck_round(state, briefs) do
     round = state.rounds + 1
 
-    checks =
-      for {_brief, index} <- Enum.with_index(briefs, 1),
-          do: %Step{repeated(state.template, "recheck_#{round}_#{index}", "Recheck #{round}.#{index}") | session: Step.fresh_session(), on_fail: nil}
+    sessions =
+      for {group, index} <- state |> recheck_sessions(briefs) |> Enum.with_index(1) do
+        check = %Step{repeated(state.template, "recheck_#{round}_#{index}", "Recheck #{round}.#{index}") | session: Step.fresh_session(), on_fail: nil}
+        {if(match?([_, _ | _], group), do: grouped(check), else: check), Enum.map(group, &%{number: brief_number(&1), target: brief_target(state, &1), brief: &1})}
+      end
 
-    recheck_targets = for {brief, check} <- Enum.zip(briefs, checks), target = brief_target(state, brief), into: %{}, do: {check.id, target}
+    rechecks = Enum.map(sessions, &elem(&1, 0))
     launches = Enum.filter(state.listed, &runs?(&1, @launch))
     after_checks = Enum.filter(state.listed, &(runs?(&1, @quit) or runs?(&1, @attach)))
-    app_steps = if launches == [], do: state.app_steps, else: Enum.reduce(checks, state.app_steps, &MapSet.put(&2, &1.id))
+    app_steps = if launches == [], do: state.app_steps, else: Enum.reduce(rechecks, state.app_steps, &MapSet.put(&2, &1.id))
 
     state = %{
       state
       | rounds: round,
-        steps: state.steps ++ checks,
-        context: %{state.context | steps: state.steps ++ checks},
-        briefs: Map.merge(state.briefs, Map.new(Enum.zip(checks, briefs), fn {check, brief} -> {check.id, brief} end)),
-        walk_targets: Map.merge(state.walk_targets, recheck_targets),
+        steps: state.steps ++ rechecks,
+        context: %{state.context | steps: state.steps ++ rechecks},
+        checks: Map.merge(state.checks, Map.new(sessions, fn {check, walked} -> {check.id, walked} end)),
         app_steps: app_steps
     }
 
-    Enum.reduce(launches ++ checks ++ after_checks, state, fn step, state -> state |> run_step(step) |> elem(0) end)
+    Enum.reduce(launches ++ rechecks ++ after_checks, state, fn step, state -> state |> run_step(step) |> elem(0) end)
+  end
+
+  # The recheck briefs by session: a brief that names a walkthrough step this pass walks and a
+  # `group` is rechecked with the others of its group (on the same surface); any other is rechecked
+  # alone.
+  defp recheck_sessions(state, briefs) do
+    briefs
+    |> Enum.with_index()
+    |> in_groups(fn {brief, index} ->
+      case {brief_number(brief), group_name(brief)} do
+        {number, name} when is_binary(name) and is_integer(number) -> recheck_group(state, brief, number, name, index)
+        _alone -> {:alone, index}
+      end
+    end)
+    |> Enum.map(fn group -> Enum.map(group, &elem(&1, 0)) end)
+  end
+
+  defp recheck_group(state, brief, number, name, index) do
+    if Enum.any?(state.targets, &(&1.number == number)),
+      do: {:group, command_line?(state, brief), name},
+      else: {:alone, index}
   end
 
   defp brief_target(state, brief), do: Enum.find(state.targets, &(&1.number == brief_number(brief)))
@@ -834,10 +935,15 @@ defmodule SymphonyElixir.QaAgent.Steps do
 
   defp check_recheck(%{template: nil}, _briefs), do: {:error, "this pass's list has no `repeat: walkthrough` step to recheck with: give the verdict"}
 
-  defp check_recheck(_state, briefs) do
-    if is_list(briefs) and briefs != [] and length(briefs) <= @max_rechecks and Enum.all?(briefs, &is_map/1),
-      do: {:recheck, briefs},
-      else: {:error, "`recheck` must be a list of one to #{@max_rechecks} briefs, each an object"}
+  # At most `@max_rechecks` sessions: the briefs that share a `group` are one session.
+  defp check_recheck(state, briefs) do
+    with true <- is_list(briefs) and briefs != [] and length(briefs) <= @max_recheck_briefs and Enum.all?(briefs, &is_map/1),
+         true <- length(recheck_sessions(state, briefs)) <= @max_rechecks do
+      {:recheck, briefs}
+    else
+      false ->
+        {:error, "`recheck` must be a list of one to #{@max_recheck_briefs} briefs, each an object, in at most #{@max_rechecks} sessions (the briefs that share a `group` are one session)"}
+    end
   end
 
   # The plan must brief every walkthrough step the pass walks; a judged step names its status.
@@ -850,13 +956,59 @@ defmodule SymphonyElixir.QaAgent.Steps do
     end
   end
 
-  defp check(_state, _step, %{"status" => status} = answer) do
+  defp check(state, step, answer) do
+    case Map.get(state.checks, step.id) do
+      [_, _ | _] = walked -> check_group(Enum.map(walked, & &1.number), answer)
+      _one -> check_one(answer)
+    end
+  end
+
+  defp check_one(%{"status" => status} = answer) do
     if status in @statuses,
       do: {:ok, answer},
       else: {:error, "`status` must be one of #{Enum.join(@statuses, ", ")}"}
   end
 
-  defp check(_state, _step, answer), do: {:ok, answer}
+  defp check_one(answer), do: {:ok, answer}
+
+  # A group's answer holds one result per check, each with a status Symphony takes. A check with no
+  # such result is asked again, then counts as not judged (`blocked`), never as passed.
+  defp check_group(numbers, %{"results" => results} = answer) do
+    # The first result of each check counts.
+    given =
+      for %{} = result <- Enum.reverse(results), number = brief_number(result), number in numbers, into: %{} do
+        {number, result}
+      end
+
+    judged =
+      for {number, %{"status" => status} = result} <- given, status in @statuses, into: %{} do
+        {number, Map.put(result, "step", number)}
+      end
+
+    unjudged = Enum.reject(numbers, &Map.has_key?(judged, &1))
+    answer = Map.put(answer, "results", Enum.map(numbers, &Map.get_lazy(judged, &1, fn -> not_judged(&1) end)))
+
+    case unjudged do
+      [] ->
+        {:ok, answer}
+
+      missing ->
+        {:partial, answer,
+         "`results` has no result with a `status` of #{Enum.join(@statuses, ", ")} for walkthrough step #{Enum.join(missing, ", ")} of this group: " <>
+           "give one result per step, each with its `step`"}
+    end
+  end
+
+  defp not_judged(number) do
+    %{
+      "step" => number,
+      "status" => "blocked",
+      "expected" => "a result for walkthrough step #{number}",
+      "actual" => "the walk gave no result Symphony takes for this step, so it was not judged",
+      "details" => "",
+      "evidence" => []
+    }
+  end
 
   defp brief_number(%{"step" => number}) when is_integer(number), do: number
 
@@ -1061,7 +1213,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
 
   # A walk turn the plan gave to the command line reads that playbook's walk prompt, not the app's.
   defp surface_step(state, %Step{} = step) do
-    with true <- Map.has_key?(state.walk_targets, step.id) or Map.has_key?(state.briefs, step.id),
+    with true <- Map.has_key?(state.checks, step.id),
          true <- command_line?(state, walk_brief(state, step)),
          prompt when is_binary(prompt) <- StepPrompts.prompt(@command_line, "walk") do
       %Step{step | prompt: prompt}
@@ -1101,18 +1253,46 @@ defmodule SymphonyElixir.QaAgent.Steps do
   end
 
   defp context_for(state, step) do
-    if Map.has_key?(state.walk_targets, step.id) or Map.has_key?(state.briefs, step.id),
-      do: walk_context(state, step),
-      else: check_context(state)
+    case Map.get(state.checks, step.id) do
+      [_, _ | _] = walked -> group_context(state, walked)
+      [walked] -> walk_context(state, walked)
+      nil -> check_context(state)
+    end
   end
 
-  defp walk_context(state, step) do
-    target = Map.get(state.walk_targets, step.id)
-    brief = walk_brief(state, step)
-
+  defp walk_context(state, %{target: target, brief: brief}) do
     [
       target_text(target),
       if(brief, do: "Your brief, from the lead QA agent:\n" <> json(brief), else: "The plan gave no brief for this step: walk it from its text and the ticket."),
+      surface_lines(state, brief)
+    ]
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\n\n")
+  end
+
+  # Several checks that share a screen and an app state, walked in one session: each step's text and
+  # brief, and the answer that holds one result per check.
+  defp group_context(state, walked) do
+    numbers = Enum.map_join(walked, ", ", & &1.number)
+
+    [
+      "You walk #{length(walked)} walkthrough steps in this one session (steps #{numbers}): the lead QA agent grouped them because they share a " <>
+        "screen and an app state. Reach the place once, then judge each step in turn, with its own screenshots and its own `evidence` " <>
+        "events, each naming its step.",
+      Enum.map_join(walked, "\n\n", &target_text(&1.target)),
+      "Your briefs, from the lead QA agent, one per step:\n" <> json(Enum.map(walked, & &1.brief)),
+      surface_lines(state, hd(walked).brief),
+      "Answer with `results`: one object per step above, each with `step` (its number), `status`, `expected`, `actual`, `details` and " <>
+        "`evidence`, judged on its own: one step's failure never changes another's status. Symphony refuses an answer that misses a step or " <>
+        "gives one a status other than #{Enum.join(@statuses, ", ")}, and asks once more; a step still without a result is then not judged " <>
+        "(`blocked`), never passed."
+    ]
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\n\n")
+  end
+
+  defp surface_lines(state, brief) do
+    [
       if(command_line?(state, brief), do: command_line_rules(state), else: app_line(state)),
       QaAgent.prompt_parts(state.job, nil, [:servers, :qa_mode, :conductor])
     ]
@@ -1120,7 +1300,12 @@ defmodule SymphonyElixir.QaAgent.Steps do
     |> Enum.join("\n\n")
   end
 
-  defp walk_brief(state, step), do: Map.get(state.briefs, step.id) || plan_brief(state, Map.get(state.walk_targets, step.id))
+  defp walk_brief(state, step) do
+    case Map.get(state.checks, step.id) do
+      [%{brief: brief} | _] -> brief
+      _none -> nil
+    end
+  end
 
   # A brief the plan gave to the command line, on a pass that selected a command-line playbook.
   defp command_line?(state, %{"surface" => @command_line}), do: command_line_playbook(state) != nil
@@ -1156,8 +1341,6 @@ defmodule SymphonyElixir.QaAgent.Steps do
       PromptSafety.linear_block(target.text, "walkthrough_step", @fact_bytes)
   end
 
-  defp plan_brief(%{plan: nil}, _target), do: nil
-  defp plan_brief(_state, nil), do: nil
   defp plan_brief(%{plan: plan}, target), do: Enum.find(List.wrap(plan["walk"]), &(brief_number(&1) == target.number))
 
   defp check_context(state) do

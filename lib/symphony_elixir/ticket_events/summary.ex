@@ -427,12 +427,17 @@ defmodule SymphonyElixir.TicketEvents.Summary do
         _none -> []
       end
 
+    results =
+      for %{} = result <- List.wrap(field(payload, :results)) do
+        cut_line(join(["Step #{field(result, :step)}: #{text(result, :status)}", text(result, :actual)]))
+      end
+
     entries =
       for %{} = entry <- List.wrap(field(payload, :answer)), label = text(entry, :label), value = text(entry, :value) do
         cut_line("#{label}: #{value}")
       end
 
-    result ++ entries ++ [text(payload, :verdict_summary)]
+    result ++ results ++ entries ++ [text(payload, :verdict_summary)]
   end
 
   defp cut_line(line), do: if(String.length(line) > 300, do: String.slice(line, 0, 299) <> "…", else: line)

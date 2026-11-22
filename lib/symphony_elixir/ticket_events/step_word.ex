@@ -7,7 +7,9 @@ defmodule SymphonyElixir.TicketEvents.StepWord do
   facts: `outcome`, whether the step ran to an answer Symphony takes, and `result.status`, what the
   step judged. A step that ran to an answer is drawn with its judgement, so a check that judged
   `fail` reads `failed` and one that judged `blocked` reads `blocked`; "the step ran" is not what a
-  reader is shown. Any other step (a machine step, a step without a result, one that ended
+  reader is shown. A walk that judged several walkthrough steps in one session records `results`, one
+  per step: it reads `failed` when one of them failed, else `blocked` when one was blocked, else
+  `passed` when every one passed. Any other step (a machine step, a step without a result, one that ended
   `failed`, `paused` or `skipped`) keeps its outcome. It reads the payload as recorded, so events
   written before the word existed draw the same way without a migration.
   """
@@ -17,7 +19,7 @@ defmodule SymphonyElixir.TicketEvents.StepWord do
   @doc "The word `payload` (a `step.completed`'s, atom or string keys) is drawn with, or nil when it has no outcome."
   @spec word(map()) :: String.t() | nil
   def word(payload) when is_map(payload) do
-    case {field(payload, :outcome), status(field(payload, :result))} do
+    case {field(payload, :outcome), status(field(payload, :result)) || worst(field(payload, :results))} do
       {"passed", status} when is_map_key(@judged, status) -> Map.fetch!(@judged, status)
       {outcome, _status} -> outcome
     end
@@ -25,6 +27,14 @@ defmodule SymphonyElixir.TicketEvents.StepWord do
 
   defp status(%{} = result), do: field(result, :status)
   defp status(_none), do: nil
+
+  # A grouped walk's word: its worst judgement.
+  defp worst([_ | _] = results) do
+    statuses = Enum.map(results, &status/1)
+    Enum.find(["fail", "blocked"], &(&1 in statuses)) || if(Enum.all?(statuses, &(&1 == "pass")), do: "pass")
+  end
+
+  defp worst(_none), do: nil
 
   defp field(map, key), do: Map.get(map, key, Map.get(map, Atom.to_string(key)))
 end
