@@ -418,7 +418,33 @@ defmodule SymphonyElixir.Config.CacheTest do
     end
 
     # The one test that starts the real file watcher: on its own small folder, stopped with the
-    # cache when the test ends. An edit there reloads the cached file without a read.
+    # cache. File events from the host's backend are not asserted: a sandbox can keep them from
+    # arriving (macOS FSEvents), so the edit below is found by a polling watcher instead.
+    test "the real file watcher runs on its own folder and stops with the cache", %{root: root} do
+      dir = Path.join(root, "real")
+      File.mkdir_p!(dir)
+      cache = start_private_cache!()
+
+      {result, _log} = ExUnit.CaptureLog.with_log(fn -> Cache.watch(cache, dir) end)
+
+      case result do
+        :ok ->
+          assert Cache.watched_dirs(cache) == [Path.expand(dir)]
+          %{watchers: %{} = watchers} = :sys.get_state(cache)
+          [watcher] = Map.values(watchers)
+          ref = Process.monitor(watcher)
+
+          stop_supervised!(Cache)
+          assert_receive {:DOWN, ^ref, :process, ^watcher, :shutdown}
+
+        # No file events backend on this host (no inotify-tools on Linux): nothing to watch with.
+        {:error, _reason} ->
+          assert Cache.watched_dirs(cache) == []
+      end
+    end
+
+    # A real FileSystem watcher, on its polling backend: its events reach the cache as the host's
+    # backend's do, and an edit reloads the cached file without a read.
     test "an edit in a watched folder reloads the file", %{root: root} do
       dir = Path.join(root, "watched")
       File.mkdir_p!(dir)
@@ -426,21 +452,25 @@ defmodule SymphonyElixir.Config.CacheTest do
       File.write!(symphony_path, config(1))
       assert {:ok, %{"repositories" => [%{"key" => "r1"}]}} = Cache.get_symphony(symphony_path)
 
+      Application.put_env(:symphony_elixir, :config_cache_watcher, fn watched ->
+        {:ok, watcher} = FileSystem.start_link(dirs: [watched], backend: :fs_poll, interval: 20)
+        :ok = FileSystem.subscribe(watcher)
+        {:ok, watcher}
+      end)
+
       cache = start_private_cache!()
+      ExUnit.CaptureLog.capture_log(fn -> assert Cache.watch(cache, dir) == :ok end)
+      attach_reloaded!()
 
-      {result, _log} = ExUnit.CaptureLog.with_log(fn -> Cache.watch(cache, dir) end)
+      # The poller takes its first snapshot after it starts, so an edit made before it is not an
+      # event: edit again, with a later stamp each time, until one is seen.
+      assert Enum.any?(2..40, fn n ->
+               File.write!(symphony_path, config(n))
+               File.touch!(symphony_path, System.system_time(:second) + n)
+               assert_reloaded?(symphony_path)
+             end)
 
-      case result do
-        :ok ->
-          attach_reloaded!()
-          File.write!(symphony_path, config(2))
-          bump_mtime!(symphony_path)
-          assert_receive {:reloaded, ^symphony_path}, 10_000
-
-        # No file events backend on this host (no inotify-tools on Linux): nothing to watch with.
-        {:error, _reason} ->
-          :ok
-      end
+      assert {:ok, %{"repositories" => [%{"key" => "r" <> _n}]}} = Cache.get_symphony(symphony_path)
     end
   end
 
@@ -550,6 +580,14 @@ defmodule SymphonyElixir.Config.CacheTest do
     end)
 
     test_pid
+  end
+
+  defp assert_reloaded?(path) do
+    receive do
+      {:reloaded, ^path} -> true
+    after
+      250 -> false
+    end
   end
 
   defp start_private_cache! do
