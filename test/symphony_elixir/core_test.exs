@@ -656,8 +656,15 @@ defmodule SymphonyElixir.CoreTest do
     dir = Path.join(System.tmp_dir!(), "symphony-config-watch-#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
     symphony_file = Path.join(dir, "symphony.yml")
-    Workflow.set_symphony_file_path(symphony_file)
     Application.put_env(:symphony_elixir, :config_watch, true)
+
+    # A one-shot command boots with the orchestrator disabled: the cache gets no watcher, even with
+    # config_watch on. Booting reads symphony.yml, so this runs before the path moves to the temp folder.
+    disabled = %{"SYMPHONY_DISABLE_ORCHESTRATOR" => "true"}
+    disabled_specs = SymphonyElixir.Application.child_specs_for_runtime(disabled)
+    assert {SymphonyElixir.Config.Cache, [watch: [], watch_files: []]} in disabled_specs
+
+    Workflow.set_symphony_file_path(symphony_file)
 
     on_exit(fn ->
       Application.put_env(:symphony_elixir, :config_watch, false)
@@ -667,10 +674,7 @@ defmodule SymphonyElixir.CoreTest do
 
     # The test repo reads its WORKFLOW.md from a folder outside any checkout, which is never watched.
     assert SymphonyElixir.Application.config_watch(system_config, %{}) == [watch: [dir], watch_files: []]
-    disabled = %{"SYMPHONY_DISABLE_ORCHESTRATOR" => "true"}
     assert SymphonyElixir.Application.config_watch(system_config, disabled) == [watch: [], watch_files: []]
-    disabled_specs = SymphonyElixir.Application.child_specs_for_runtime(disabled)
-    assert {SymphonyElixir.Config.Cache, [watch: [], watch_files: []]} in disabled_specs
 
     # A folder that holds the workspace root would be watched with every workspace below it: only
     # symphony.yml itself is checked.
