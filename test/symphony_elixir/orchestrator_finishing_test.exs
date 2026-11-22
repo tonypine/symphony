@@ -54,11 +54,14 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     assert %{finishing: %{slots: 2, used: 1, running: [%{identifier: "MT-LAND", state: "Merging"}]}} = snapshot_of(state)
   end
 
-  test "with finishing_max 1 a second Merging ticket waits and no Todo starts until it does", ctx do
+  test "with finishing_max 1 a second Merging ticket waits and no Todo starts until it does, though the Todo is ahead in the queue",
+       ctx do
     write_finishing_workflow!(ctx, max_concurrent_agents: 2, finishing_max: 1)
     second_landing = issue("land-2", "MT-LAND-2", "Merging")
     todo = issue("todo-1", "MT-TODO", "Todo", priority: 1)
     tracked([second_landing, todo])
+    # The Todo ticket holds the earlier place, so the walk reaches it before the waiting landing.
+    queued!([todo, second_landing])
 
     state = run(orchestrator_state(2), issue("land-1", "MT-LAND-1", "Merging"), :landing)
 
@@ -72,7 +75,11 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     assert [%{issue_id: "land-2", reason: "finishing slots full"}, %{issue_id: "todo-1", reason: ^hold_reason}] =
              state |> snapshot_of() |> Map.fetch!(:slot_waiting) |> Enum.sort_by(& &1.issue_id)
 
-    # The landing run ends: the second landing starts, and only then the Todo ticket.
+    # The dispatch order read holds the Todo ticket for the landing too.
+    order = state |> Orchestrator.put_dispatch_order_for_test([todo, second_landing]) |> Map.fetch!(:dispatch_order)
+    assert [%{issue_id: "todo-1", outcome: :waits, reason: ^hold_reason}, %{issue_id: "land-2", outcome: :waits}] = order.entries
+
+    # The landing run ends: a slot is free for the second landing, so nothing holds the Todo ticket.
     state = %{state | running: Map.delete(state.running, "land-1")}
 
     log =
@@ -84,7 +91,7 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
 
     assert Enum.sort(Map.keys(state.running)) == ["land-2", "todo-1"]
     assert state.slot_waiting == %{}
-    assert dispatch_order(log) == ["land-2", "todo-1"]
+    assert dispatch_order(log) == ["todo-1", "land-2"]
   end
 
   test "a Merging ticket held for CI neither lands nor waits for a slot, and a Todo still starts", ctx do

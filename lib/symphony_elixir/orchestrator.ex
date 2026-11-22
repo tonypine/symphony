@@ -4425,8 +4425,8 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # Candidates go out in the stored queue order (`order_for_dispatch/1`); a gate skips a ticket and
-  # the walk goes on to the next place. Once a
-  # Merging issue is left waiting for a slot, no Todo issue starts in this pass; its `slot_waiting`
+  # the walk goes on to the next place. While a Merging issue waits for a slot, no Todo issue starts
+  # in this pass, wherever it stands in the queue (`finishing_hold_before_walk/4`); its `slot_waiting`
   # reason names the issue it waits for.
   # `slot_waiting` is rebuilt from the pass, keeping the attempt of any retry that was waiting for a
   # slot. `dispatch_skipped` is rebuilt the same way: every candidate the pass neither starts nor
@@ -4441,10 +4441,12 @@ defmodule SymphonyElixir.Orchestrator do
     state = ask_spent_budgets(state, issues)
     :ok = resolve_qa_builds(issues, state)
 
+    ordered = order_for_dispatch(issues)
+    hold = finishing_hold_before_walk(ordered, state, active_states, terminal_states)
+
     {state, _hold} =
-      issues
-      |> order_for_dispatch()
-      |> Enum.reduce({%{state | slot_waiting: %{}, dispatch_skipped: %{}}, nil}, fn issue, acc ->
+      ordered
+      |> Enum.reduce({%{state | slot_waiting: %{}, dispatch_skipped: %{}}, hold}, fn issue, acc ->
         maybe_dispatch_chosen_issue(issue, acc, previous_waiting, active_states, terminal_states)
       end)
 
@@ -4513,11 +4515,13 @@ defmodule SymphonyElixir.Orchestrator do
     gates = {active_state_set(), terminal_state_set()}
     pass = %{state | slot_waiting: %{}}
 
+    ordered = issues |> Enum.filter(&match?(%Issue{}, &1)) |> order_for_dispatch()
+    {active_states, terminal_states} = gates
+    hold = finishing_hold_before_walk(ordered, pass, active_states, terminal_states)
+
     {walked, _pass, _hold} =
-      issues
-      |> Enum.filter(&match?(%Issue{}, &1))
-      |> order_for_dispatch()
-      |> Enum.reduce({[], pass, nil}, fn issue, {walked, pass, hold} ->
+      ordered
+      |> Enum.reduce({[], pass, hold}, fn issue, {walked, pass, hold} ->
         {outcome, pass, hold} = dispatch_order_outcome(issue, pass, hold, pause, gates)
         {[Map.merge(dispatch_order_ticket(issue, state), outcome) | walked], pass, hold}
       end)
@@ -4769,6 +4773,22 @@ defmodule SymphonyElixir.Orchestrator do
   defp stage_rank(_state_name), do: 4
 
   defp fresh_issue?(%Issue{state: state_name}), do: stage_rank(state_name) == 4
+
+  # The finish that holds fresh work for the whole pass, worked out before the walk: the first Merging
+  # candidate in the queue whose gates are open and that finds no slot free. The walk goes in the
+  # stored queue order, so a Todo ticket placed ahead of a waiting Merging ticket is held too.
+  defp finishing_hold_before_walk(issues, %State{} = state, active_states, terminal_states) do
+    Enum.find_value(issues, fn
+      %Issue{} = issue ->
+        stage_rank(issue.state) == 0 and not Map.has_key?(state.running, issue.id) and
+          is_nil(dispatch_gate_closed(issue, state, active_states, terminal_states)) and
+          is_nil(provider_pause_hold(state, issue)) and is_nil(usage_limit_hold(state, issue)) and
+          not issue_dispatch_slots_available?(issue, state) and finishing_hold(issue)
+
+      _not_an_issue ->
+        nil
+    end)
+  end
 
   # Merging: the issues "never start fresh work while a finish waits" protects.
   defp finishing_hold(%Issue{state: state_name} = issue) do
