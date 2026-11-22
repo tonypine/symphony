@@ -123,6 +123,26 @@ final class HomeQueueComponentsTests: XCTestCase {
         XCTAssertEqual(stepper.stages, working.stages)
     }
 
+    /// The card's five stages stand side by side in its Status column, on a laptop's 1120 pt card, as the prototype
+    /// draws them; the ticket page's equal cells would stack there.
+    func testTheCardsStagesStandSideBySideInTheStatusColumn() {
+        let body = 1120 - 2 * CGFloat(DesignTokens.HomeQueue.cardSidePadding)
+        let status = SlotColumnsLayout.columns(width: body)[0].width
+        let wide = fittingSize(SlotCard.stepper(slot(.working)).frame(width: 1600)).height
+        for ticket in [slot(.working), slot(.you, stage: 1), slot(.problem, stage: 0)] {
+            let stepper = SlotCard.stepper(ticket)
+            XCTAssertEqual(stepper.fit, .content)
+            XCTAssertLessThanOrEqual(stepper.sideBySideWidth, status)
+            XCTAssertEqual(fittingSize(stepper.frame(width: status)).height, wide, accuracy: 0.5, "one row of tiles")
+        }
+        // The ticket page's strip keeps its equal cells and its stacked fallback.
+        let page = StageStrip(stages: slot(.working).stages)
+        XCTAssertEqual(page.fit, .equal)
+        XCTAssertEqual(page.sideBySideWidth, LifecycleSection.stripWidth(titles: SlotCardModel.stageNames.map(\.name)))
+        XCTAssertGreaterThan(fittingSize(page.frame(width: 300)).height, wide)
+        XCTAssertEqual(LifecycleSection.contentStripWidth(stages: []), 0)
+    }
+
     func testTheTicketPagesStepperStillSaysItsVisitsAndTime() {
         let lifecycle = TicketLifecycle(
             current: "coding",

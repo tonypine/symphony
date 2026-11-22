@@ -154,8 +154,9 @@ public struct SlotCard: View {
         }
     }
 
-    /// The ticket page's stepper, with the card's stages.
-    static func stepper(_ ticket: SlotCardModel) -> StageStrip { StageStrip(stages: ticket.stages) }
+    /// The ticket page's stepper, with the card's stages: each tile as wide as its own name and word, so the five
+    /// stand side by side in the Status column, about half the card.
+    static func stepper(_ ticket: SlotCardModel) -> StageStrip { StageStrip(stages: ticket.stages, fit: .content) }
 
     private func card(_ ticket: SlotCardModel) -> some View {
         let queue = DesignTokens.HomeQueue.self
