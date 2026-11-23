@@ -4205,6 +4205,28 @@ computed at a pass. No position number is stored: the 1, 2, 3 a read shows are c
    keys once, in the same order: the top-level issues evenly spaced, and each parent's sub-issues
    among their siblings in their previous relative order. A later start changes no key.
 
+Stored dependencies: an issue's record holds the issues it depends on (`depends_on`), a field of
+its own apart from the `blockers` a read of the tracker fills. Each entry names the other issue (its
+id, and its identifier for the lines that show it) and what this one needs of it: `done` (merged:
+the other record's phase is `Done`) or `released` (done, and the running build includes its merge,
+as the app-update hold knows it; merged in another repository, opted out with `skip-update-hold`,
+or with a running build that has no sha, it is released at `Done`).
+
+1. Only the engine's add and remove operations write the field; no read of the tracker, and no other
+   write of the record, fills, changes or clears it. Adding the same pair again replaces its kind; a
+   dependency of an issue on itself, or one that closes a cycle, is refused; removing one not
+   stored is fine.
+2. A dependency points upward in the queue: added on an issue that sits lower, it moves the
+   depending issue to just below it, where their scopes meet (the depending issue's ancestor and
+   the other's that share a parent, or are both top-level), in the same transaction. On an issue
+   already above, on its own parent or sub-issue, or on an issue out of the queue, no place changes.
+   A remove changes no place.
+3. A candidate with an unmet dependency is not dispatched: the gate (`depends_on`) is decided on every
+   pass from the stored records alone, with no read of the tracker and no pause written, and names
+   each issue waited on. An issue with no record, or cancelled, meets no dependency. The first pass
+   that finds every dependency met lets the issue start. The tracker's blocker hold is independent:
+   an issue either holds is not dispatched.
+
 An issue in `Merging` gets no precedence and no allowance of its own: it keeps the slot it took at
 its first run, and a ticket in `Merging` without one waits for a free slot like any other.
 
@@ -7681,6 +7703,9 @@ infrastructure.
   survive a restart
 - A move writes the moved issue's key only, unless the spot is too crowded: then only the issues
   around it are rewritten, evenly spaced and in the same order
+- A stored dependency is kept apart from the tracker's blockers and no read of the tracker changes
+  it; added on an issue that sits lower, it moves the depending issue to just below it; an unmet one
+  holds the issue from dispatch, and the first pass that finds it met lets the issue start
 - The first start on a store without places places its open issues once, started ones in front; the
   first start on a store with integer places turns them into sort keys in the same order
 - A ticket holds its slot from its first run until it is done, through every phase, machine step,

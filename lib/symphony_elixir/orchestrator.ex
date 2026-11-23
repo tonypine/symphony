@@ -79,7 +79,7 @@ defmodule SymphonyElixir.Orchestrator do
   alias SymphonyElixir.Conductor.Message, as: ConductorMessage
   alias SymphonyElixir.Conductor.Tree, as: ConductorTree
   alias SymphonyElixir.Config.{Cache, Schema}
-  alias SymphonyElixir.Dispatch.{Candidates, Order, Queue, Settings, Settle, Shadow, Slots}
+  alias SymphonyElixir.Dispatch.{Candidates, DependsOn, Order, Queue, Settings, Settle, Shadow, Slots}
   alias SymphonyElixir.EpicReview.MainCi
   alias SymphonyElixir.Linear.{Client, Issue, RateLimit, TransientRetry, Usage}
   alias SymphonyElixir.Pauses.Dependencies
@@ -1789,10 +1789,15 @@ defmodule SymphonyElixir.Orchestrator do
     :ok = ReleaseGate.reconcile(issues, repo_name)
     # The release build of each fix a held ticket waits on: rerun when GitHub had no machine for it.
     :ok = ReleaseBuild.watch(issues, build, cache, repo_name, [])
-    cache
+    resolve_released_dependencies(build, cache)
   end
 
   defp resolve_update_holds(_repo_result, cache), do: cache
+
+  # Whether the running build includes the merge of each Done ticket a stored `:released` dependency
+  # names, looked up into the update hold's cache (`SymphonyElixir.Dispatch.DependsOn.resolve/4`), so
+  # the dispatch gate only reads it.
+  defp resolve_released_dependencies(build, cache), do: DependsOn.resolve(RunStore.list_all_ticket_states(), build, cache)
 
   # Runs in the poll task: brings each polled ticket's pause in line with what it waits on
   # (`SymphonyElixir.Pauses.Dependencies`) — a ticket in any active phase with an open blocker pauses
@@ -4920,6 +4925,7 @@ defmodule SymphonyElixir.Orchestrator do
     cond do
       paused?(repo_key, issue) -> open_gate(pause_reason(repo_key, issue), :paused)
       waiting_on_sub_issues?(issue, terminal_states) -> open_gate("waiting on its sub-tickets", :sub_tickets)
+      reason = depends_on_reason(issue, state.update_hold_cache) -> open_gate(reason, :depends_on)
       reason = instructions_hold_reason(repo_key, issue) -> open_gate(reason, :instructions_hold)
       reason = update_hold_reason(repo_key, issue, state.update_hold_cache) -> open_gate(reason, :update_hold)
       reason = qa_build_hold_reason(repo_key, issue) -> open_gate(reason, :qa_build)
@@ -4944,6 +4950,19 @@ defmodule SymphonyElixir.Orchestrator do
     case Pauses.get(ticket) do
       {:ok, %{reasons: reasons}} -> reasons
       _none -> []
+    end
+  end
+
+  # A ticket whose stored dependencies are not all met (`SymphonyElixir.Dispatch.DependsOn`), decided
+  # on every pass from the records alone, with what the update hold's cache knows of the running
+  # build: the gate writes nothing, and the first pass that finds them met lets the ticket start.
+  defp depends_on_reason(%Issue{id: issue_id}, cache) do
+    with [_ | _] = dependencies <- RunStore.dependencies(issue_id),
+         records = for({entry, %{} = record} <- dependencies, into: %{}, do: {entry.issue_id, record}),
+         [_ | _] = unmet <- DependsOn.unmet(Enum.map(dependencies, &elem(&1, 0)), records, BuildInfo.current(), cache) do
+      DependsOn.reason(unmet)
+    else
+      _met -> nil
     end
   end
 

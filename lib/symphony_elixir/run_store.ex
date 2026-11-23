@@ -1922,6 +1922,108 @@ defmodule SymphonyElixir.RunStore do
   defp lock_queue, do: :mnesia.lock({:record, @totals_table, @queue_lock_key}, :write)
 
   @doc """
+  Stores that the ticket `issue_id` depends on the ticket `on_issue_id` (`depends_on` on
+  `SymphonyElixir.TicketState`, `SymphonyElixir.Dispatch.DependsOn`), with what it needs of it,
+  `:done` or `:released`. Adding the same pair again replaces its kind. A dependency points upward
+  in the queue: when the ticket sits above the one it depends on, the same durable transaction moves
+  it to just below it, where their scopes meet (`SymphonyElixir.Dispatch.Queue.dependency_move/3`),
+  under the queue's write lock as `move_in_queue/2` does; otherwise no key changes. The identifier
+  stored with it is the record's of `on_issue_id`, nil when Symphony holds none.
+
+  `{:error, :ticket_state_not_found}` when `issue_id` has no record, `{:error, :self_dependency}`
+  for a ticket on itself and `{:error, :dependency_cycle}` when `on_issue_id` already depends on
+  `issue_id`, directly or through others: such a ticket could never start.
+  """
+  @spec add_dependency(String.t(), String.t(), TicketState.dependency_kind()) :: :ok | {:error, term()}
+  def add_dependency(issue_id, on_issue_id, kind) when is_binary(issue_id) and is_binary(on_issue_id) and kind in [:done, :released] do
+    with :ok <- ensure_started() do
+      durable_transaction(fn -> store_dependency(issue_id, on_issue_id, kind) end)
+    end
+  end
+
+  defp store_dependency(issue_id, issue_id, _kind), do: {:error, :self_dependency}
+
+  defp store_dependency(issue_id, on_issue_id, kind) do
+    lock_queue()
+    records = :all |> listed_ticket_records() |> Enum.map(&TicketState.normalize/1)
+    by_id = Map.new(records, &{&1.issue_id, &1})
+
+    cond do
+      not Map.has_key?(by_id, issue_id) ->
+        {:error, :ticket_state_not_found}
+
+      depends_on?(by_id, on_issue_id, issue_id, MapSet.new()) ->
+        {:error, :dependency_cycle}
+
+      true ->
+        identifier = by_id |> Map.get(on_issue_id, %{}) |> Map.get(:issue_identifier)
+        record = Map.fetch!(by_id, issue_id)
+        entry = %{issue_id: on_issue_id, identifier: identifier, kind: kind}
+        write_dependencies(issue_id, record.depends_on ++ [entry])
+        raise_dependent(records, issue_id, on_issue_id)
+    end
+  end
+
+  # Whether the ticket `from` depends on `target`, directly or through the tickets it depends on.
+  defp depends_on?(by_id, from, target, seen) do
+    on = for %{issue_id: id} <- by_id |> Map.get(from, %{}) |> Map.get(:depends_on, []), not MapSet.member?(seen, id), do: id
+    target in on or Enum.any?(on, &depends_on?(by_id, &1, target, MapSet.put(seen, from)))
+  end
+
+  defp raise_dependent(records, issue_id, on_issue_id) do
+    case Queue.dependency_move(records, issue_id, on_issue_id) do
+      {:below, moved, index, siblings} ->
+        rekey(moved, insertion_key(siblings, index))
+
+      :stay ->
+        :ok
+    end
+  end
+
+  @doc """
+  Removes the dependency of the ticket `issue_id` on the ticket `on_issue_id`; no key changes. `:ok`
+  when none is stored, `{:error, :ticket_state_not_found}` when `issue_id` has no record.
+  """
+  @spec remove_dependency(String.t(), String.t()) :: :ok | {:error, term()}
+  def remove_dependency(issue_id, on_issue_id) when is_binary(issue_id) and is_binary(on_issue_id) do
+    with :ok <- ensure_started() do
+      durable_transaction(fn ->
+        case read_ticket_record(nil, issue_id, :write) do
+          nil -> {:error, :ticket_state_not_found}
+          record -> write_dependencies(issue_id, record |> TicketState.normalize() |> Map.fetch!(:depends_on) |> Enum.reject(&(&1.issue_id == on_issue_id)))
+        end
+      end)
+    end
+  end
+
+  # Writes `dependencies` as the record `issue_id`'s `depends_on`, and nothing else of it: the one
+  # write of the field (`write_ticket_record/3` keeps the stored one).
+  defp write_dependencies(issue_id, dependencies) do
+    [{@ticket_index_table, ^issue_id, repo_key, stored}] = :mnesia.read(@ticket_index_table, issue_id, :write)
+    :mnesia.write({@ticket_index_table, issue_id, repo_key, stored |> TicketState.put_dependencies(dependencies) |> Map.delete(:queue_position)})
+    :ok
+  end
+
+  @doc """
+  The ticket `issue_id`'s stored dependencies, each with the record of the ticket it depends on (nil
+  when Symphony holds none), in one read; `[]` when it has no record (or no id), and the store's error when it
+  can't be read. What the dispatch gate decides from (`SymphonyElixir.Dispatch.DependsOn.unmet/4`).
+  """
+  @spec dependencies(String.t()) :: [{TicketState.dependency(), map() | nil}] | {:error, term()}
+  def dependencies(issue_id) when is_binary(issue_id) do
+    with :ok <- ensure_started() do
+      transaction(fn ->
+        case read_ticket_record(nil, issue_id) do
+          nil -> []
+          record -> for entry <- TicketState.normalize(record).depends_on, do: {entry, read_ticket_record(nil, entry.issue_id)}
+        end
+      end)
+    end
+  end
+
+  def dependencies(_issue_id), do: []
+
+  @doc """
   Marks the ticket `issue_id` as holding a dispatch slot since `since`, or as holding none when
   `since` is nil (`slot_held_since` on `SymphonyElixir.TicketState`, `SymphonyElixir.Dispatch.Slots`);
   `{:error, :ticket_state_not_found}` when the ticket has no record.
@@ -2655,9 +2757,24 @@ defmodule SymphonyElixir.RunStore do
   # the dispatch queue (`place_in_queue/2`).
   defp write_ticket_record(repo_key, issue_id, record) do
     record_repo_key = Map.get(record, :repo_key) || repo_key
-    record = record |> Map.put(:repo_key, record_repo_key) |> reroute_pause(record_repo_key, issue_id) |> place_in_queue(issue_id)
+
+    record =
+      record
+      |> Map.put(:repo_key, record_repo_key)
+      |> reroute_pause(record_repo_key, issue_id)
+      |> keep_dependencies(issue_id)
+      |> place_in_queue(issue_id)
+
     :mnesia.write({@ticket_index_table, issue_id, record_repo_key, record})
     :ok
+  end
+
+  # A ticket's dependencies are written by `add_dependency/3` and `remove_dependency/2` alone: any
+  # other write of its record keeps the stored ones, so a read of Linear, or a caller writing back a
+  # record it read before, never changes them.
+  defp keep_dependencies(record, issue_id) do
+    stored = read_ticket_record(nil, issue_id, :write) || %{}
+    Map.put(record, :depends_on, stored |> Map.get(:depends_on) |> List.wrap())
   end
 
   # A record in the queue (`TicketState.queued?/1`) keeps the sort key it holds in its scope (the
