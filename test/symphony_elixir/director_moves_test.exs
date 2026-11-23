@@ -3,9 +3,9 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
   alias SymphonyElixir.{AuditLog, CiWait, Conductor}
   alias SymphonyElixir.Conductor.Answer
-  alias SymphonyElixir.Dispatch.Slots
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.{DecisionMove, DecisionRequest, DirectorMoves, DispatchLoop, IdlePark}
+  alias SymphonyElixir.Dispatch.Slots
   alias SymphonyElixir.Inbox.{FromRecord, Item}
   alias SymphonyElixir.Linear.Client
   alias SymphonyElixir.{Pauses, PlanComments, Questions, RunStore, SelfHeal, SubIssueWait}
