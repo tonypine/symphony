@@ -1125,11 +1125,8 @@ defmodule SymphonyElixir.Config.Schema do
       # `execution.harnesses`, parsed by `SymphonyElixir.Config.Runs.parse_harnesses/1`.
       field(:harnesses, :map, default: %{})
       field(:max_concurrent_agents, :integer, default: 10)
-      field(:epic_lanes, :integer)
-      field(:finishing_max, :integer, default: 2)
       field(:max_turns, :integer, default: 20)
       field(:max_retry_backoff_ms, :integer, default: 300_000)
-      field(:max_concurrent_agents_by_state, :map, default: %{})
       field(:max_tokens_per_issue, :integer, default: @default_max_tokens_per_issue)
       field(:max_tokens_per_day, :integer, default: @default_max_tokens_per_day)
       field(:max_consecutive_identical_tool_failures, :integer, default: 5)
@@ -1166,11 +1163,8 @@ defmodule SymphonyElixir.Config.Schema do
         [
           :harnesses,
           :max_concurrent_agents,
-          :epic_lanes,
-          :finishing_max,
           :max_turns,
           :max_retry_backoff_ms,
-          :max_concurrent_agents_by_state,
           :max_tokens_per_issue,
           :max_tokens_per_day,
           :max_consecutive_identical_tool_failures,
@@ -1190,8 +1184,6 @@ defmodule SymphonyElixir.Config.Schema do
         empty_values: []
       )
       |> validate_number(:max_concurrent_agents, greater_than: 0)
-      |> validate_epic_lanes()
-      |> validate_number(:finishing_max, greater_than: 0)
       |> validate_number(:max_turns, greater_than: 0)
       |> validate_number(:max_retry_backoff_ms, greater_than: 0)
       |> validate_number(:max_tokens_per_issue, greater_than: 0)
@@ -1204,27 +1196,10 @@ defmodule SymphonyElixir.Config.Schema do
       |> validate_number(:mcp_tool_timeout_ms, greater_than: 0)
       |> validate_number(:codex_stdio_prompt_soft_limit, greater_than: 0)
       |> validate_project_guide_files()
-      |> update_change(:max_concurrent_agents_by_state, &Schema.normalize_state_limits/1)
-      |> Schema.validate_state_limits(:max_concurrent_agents_by_state)
       |> cast_embed(:mcp, with: &Mcp.changeset/2)
       |> cast_embed(:network_access, with: &NetworkAccess.changeset/2)
       |> cast_embed(:sandbox_runtime, with: &SandboxRuntime.changeset/2)
       |> cast_embed(:usage_limit, with: &UsageLimit.changeset/2)
-    end
-
-    # Lanes come out of `max_total`, so there can be at most that many; unset means every slot can be a lane.
-    defp validate_epic_lanes(changeset) do
-      case get_field(changeset, :max_concurrent_agents) do
-        max_total when is_integer(max_total) and max_total > 0 ->
-          validate_number(changeset, :epic_lanes,
-            greater_than_or_equal_to: 0,
-            less_than_or_equal_to: max_total,
-            message: "must be between 0 and execution.concurrency.max_total (#{max_total})"
-          )
-
-        _max_total ->
-          validate_number(changeset, :epic_lanes, greater_than_or_equal_to: 0)
-      end
     end
 
     defp validate_project_guide_files(changeset) do
@@ -3291,16 +3266,6 @@ defmodule SymphonyElixir.Config.Schema do
     String.downcase(state_name)
   end
 
-  @doc false
-  @spec normalize_state_limits(nil | map()) :: map()
-  def normalize_state_limits(nil), do: %{}
-
-  def normalize_state_limits(limits) when is_map(limits) do
-    Enum.reduce(limits, %{}, fn {state_name, limit}, acc ->
-      Map.put(acc, normalize_issue_state(to_string(state_name)), limit)
-    end)
-  end
-
   # Config changesets cast with `empty_values: []` so a blank string reaches the
   # validators as itself. Since Ecto 3.14, `validate_required/3` only counts the
   # changeset's `empty_values` as missing, so it is run with `""` empty here to
@@ -3311,25 +3276,6 @@ defmodule SymphonyElixir.Config.Schema do
     %{changeset | empty_values: [""]}
     |> validate_required(fields, opts)
     |> Map.put(:empty_values, empty_values)
-  end
-
-  @doc false
-  @spec validate_state_limits(Ecto.Changeset.t(), atom()) :: Ecto.Changeset.t()
-  def validate_state_limits(changeset, field) do
-    validate_change(changeset, field, fn ^field, limits ->
-      Enum.flat_map(limits, fn {state_name, limit} ->
-        cond do
-          to_string(state_name) == "" ->
-            [{field, "state names must not be blank"}]
-
-          not is_integer(limit) or limit <= 0 ->
-            [{field, "limits must be positive integers"}]
-
-          true ->
-            []
-        end
-      end)
-    end)
   end
 
   defp changeset(attrs) do

@@ -312,7 +312,6 @@ defmodule SymphonyElixir.Config.MigrationTest do
           force_label: expedite
           forced_max: 1
           forced_stale_after_hours: 72
-          finishing_max: 2
       runs:
         default: { harness: codex, provider: openai, model: gpt-test }
       repositories:
@@ -338,7 +337,84 @@ defmodule SymphonyElixir.Config.MigrationTest do
       refute migrated =~ ~r/^\s*force/m
 
       document = YamlElixir.read_from_file!(path)
-      assert document["execution"]["concurrency"] == %{"max_total" => 4, "finishing_max" => 2}
+      assert document["execution"]["concurrency"] == %{"max_total" => 4}
+      assert {:ok, _config} = SystemSchema.parse(document)
+    end
+
+    test "a previous release's file setting the finishing, state and epic lane limits loses them and then loads",
+         %{root: root} do
+      path = Path.join(root, "symphony.yml")
+
+      File.write!(path, """
+      issues:
+        provider: memory
+      execution:
+        harnesses:
+          codex:
+            command: codex app-server
+        concurrency:
+          max_total: 4
+          finishing_max: 2
+          max_by_issue_state:
+            todo: 1
+            "In Progress": 3
+          epic_lanes: 2
+        limits:
+          max_turns: 7
+      runs:
+        default: { harness: codex, provider: openai, model: gpt-test }
+      repositories:
+        - key: web
+          workflow: WORKFLOW.md
+      """)
+
+      old = YamlElixir.read_from_file!(path)
+
+      assert {:error, {:invalid_symphony_config, refused}} = SystemSchema.parse(old)
+      assert refused =~ "execution.concurrency"
+
+      assert {:ok, notes, _backup} = Migration.migrate_file(path)
+
+      assert notes == [
+               "v0.0.1.1072 removed `execution.concurrency.finishing_max` from your settings: a ticket keeps its slot through Merging, so landing takes no allowance of its own",
+               "v0.0.1.1072 removed `execution.concurrency.max_by_issue_state` from your settings: a slot belongs to one ticket until it is done, whatever its state",
+               "v0.0.1.1072 removed `execution.concurrency.epic_lanes` from your settings: spare slots go to the sub-tickets of started tickets first, with no lanes reserved"
+             ]
+
+      migrated = File.read!(path)
+      assert migrated =~ "(TP-1616)"
+      refute migrated =~ ~r/^\s*(finishing_max|max_by_issue_state|epic_lanes|todo|"In Progress"):/m
+
+      document = YamlElixir.read_from_file!(path)
+      assert document["execution"]["concurrency"] == %{"max_total" => 4}
+      assert document["execution"]["limits"] == %{"max_turns" => 7}
+      assert {:ok, _config} = SystemSchema.parse(document)
+    end
+
+    test "a concurrency block holding only the removed limits is left empty and loads", %{root: root} do
+      path = Path.join(root, "symphony.yml")
+
+      File.write!(path, """
+      issues:
+        provider: memory
+      execution:
+        harnesses:
+          codex:
+            command: codex app-server
+        concurrency:
+          finishing_max: 2
+          epic_lanes: 1
+      runs:
+        default: { harness: codex, provider: openai, model: gpt-test }
+      repositories:
+        - key: web
+          workflow: WORKFLOW.md
+      """)
+
+      assert {:ok, [_finishing, _lanes], _backup} = Migration.migrate_file(path)
+
+      document = YamlElixir.read_from_file!(path)
+      assert document["execution"]["concurrency"] == %{}
       assert {:ok, _config} = SystemSchema.parse(document)
     end
 

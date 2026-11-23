@@ -34,8 +34,8 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
   end
 
   test "with free slots and queued epics that cannot run, a standalone Todo ticket dispatches on the next poll", ctx do
-    # The epics TP-912 reported: max_total 5 with one epic lane set, which no longer reserves anything.
-    write_skipped_workflow!(ctx, max_concurrent_agents: 5, epic_lanes: 1)
+    # The epics TP-912 reported: max_total 5, with no slot reserved for epics.
+    write_skipped_workflow!(ctx, max_concurrent_agents: 5)
     blocked_by = [%{id: "fix", identifier: "MT-99", state: "In Progress"}]
     parts = for n <- 1..6, do: issue("p#{n}", "MT-#{n}1", "Todo", blocked_by: blocked_by)
     epics = for {part, n} <- Enum.with_index(parts, 1), do: epic("e#{n}", "MT-#{n}0", [part])

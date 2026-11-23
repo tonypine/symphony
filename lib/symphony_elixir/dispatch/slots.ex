@@ -15,9 +15,8 @@ defmodule SymphonyElixir.Dispatch.Slots do
     starts only when a slot is free; one that holds a slot always starts its next run.
   - A free slot goes first to a sub-ticket of a ticket that has started (`first_ids/3`), then to the
     first ticket in the stored queue order (`SymphonyElixir.Dispatch.Queue`) that can start.
-  - The finishing allowance (`execution.concurrency.finishing_max`), the per-state limits
-    (`max_by_issue_state`) and the epic lanes (`execution.concurrency.epic_lanes`) decide nothing:
-    the keys still load and have no effect.
+  - Nothing else limits the slots: landing has no allowance of its own, no phase has a limit of its
+    own, and no slot is reserved for epics.
 
   The holders are kept on the ticket records (`slot_held_since`, `SymphonyElixir.RunStore`), so a
   restart keeps them; the orchestrator holds its copy and decides with it.

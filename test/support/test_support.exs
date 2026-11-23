@@ -841,11 +841,8 @@ defmodule SymphonyElixir.TestSupport do
           worker_max_concurrent_agents_per_host: nil,
           github: nil,
           max_concurrent_agents: 10,
-          epic_lanes: nil,
-          finishing_max: nil,
           max_turns: 20,
           max_retry_backoff_ms: 300_000,
-          max_concurrent_agents_by_state: %{},
           max_consecutive_identical_tool_failures: 5,
           max_tokens_per_issue: nil,
           max_tokens_per_day: nil,
@@ -926,11 +923,8 @@ defmodule SymphonyElixir.TestSupport do
     worker_max_concurrent_agents_per_host = Keyword.get(config, :worker_max_concurrent_agents_per_host)
     github = Keyword.get(config, :github)
     max_concurrent_agents = Keyword.get(config, :max_concurrent_agents)
-    epic_lanes = Keyword.get(config, :epic_lanes)
-    finishing_max = Keyword.get(config, :finishing_max)
     max_turns = Keyword.get(config, :max_turns)
     max_retry_backoff_ms = Keyword.get(config, :max_retry_backoff_ms)
-    max_concurrent_agents_by_state = Keyword.get(config, :max_concurrent_agents_by_state)
     max_consecutive_identical_tool_failures = Keyword.get(config, :max_consecutive_identical_tool_failures)
     max_tokens_per_issue = Keyword.get(config, :max_tokens_per_issue)
     max_tokens_per_day = Keyword.get(config, :max_tokens_per_day)
@@ -1013,9 +1007,6 @@ defmodule SymphonyElixir.TestSupport do
           code_review: section_run(review_agent, agent_kind),
           qa: section_run(auto_review, agent_kind),
           max_concurrent_agents: max_concurrent_agents,
-          epic_lanes: epic_lanes,
-          finishing_max: finishing_max,
-          max_concurrent_agents_by_state: max_concurrent_agents_by_state,
           max_turns: max_turns,
           max_retry_backoff_ms: max_retry_backoff_ms,
           max_consecutive_identical_tool_failures: max_consecutive_identical_tool_failures,
@@ -1291,9 +1282,6 @@ defmodule SymphonyElixir.TestSupport do
       "  harnesses: #{yaml_value(test_harnesses(config))}",
       "  concurrency:",
       "    max_total: #{yaml_value(config.max_concurrent_agents)}",
-      "    max_by_issue_state: #{yaml_value(config.max_concurrent_agents_by_state)}",
-      optional_yaml_line("    epic_lanes", config.epic_lanes),
-      optional_yaml_line("    finishing_max", config.finishing_max),
       "  limits:",
       "    max_turns: #{yaml_value(config.max_turns)}",
       "    retry_backoff_max_ms: #{yaml_value(config.max_retry_backoff_ms)}",
