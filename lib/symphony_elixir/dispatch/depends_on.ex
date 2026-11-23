@@ -20,8 +20,8 @@ defmodule SymphonyElixir.Dispatch.DependsOn do
   of Linear. A ticket held so starts by itself on the first pass that finds the dependency met.
   """
 
-  alias SymphonyElixir.{TicketState, UpdateHold}
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.{TicketState, UpdateHold}
 
   @done "done"
 
@@ -63,9 +63,9 @@ defmodule SymphonyElixir.Dispatch.DependsOn do
   request is read under.
   """
   @spec resolve([map()] | {:error, term()}, map(), UpdateHold.cache(), keyword()) :: UpdateHold.cache()
-  def resolve(records, build, cache, opts \\ [])
+  def resolve(records, build, cache, opts \\ []), do: resolve_records(records, build, cache, opts)
 
-  def resolve(records, build, cache, opts) when is_list(records) do
+  defp resolve_records(records, build, cache, opts) when is_list(records) do
     by_id = for %{issue_id: id} = record when is_binary(id) <- records, into: %{}, do: {id, record}
 
     released =
@@ -82,7 +82,7 @@ defmodule SymphonyElixir.Dispatch.DependsOn do
     end)
   end
 
-  def resolve(_unreadable, _build, cache, _opts), do: cache
+  defp resolve_records(_unreadable, _build, cache, _opts), do: cache
 
   defp issue(record) do
     %Issue{id: record.issue_id, identifier: record.issue_identifier, state: record.phase, labels: record.labels, repo_key: record.repo_key}
