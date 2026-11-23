@@ -80,6 +80,27 @@ defmodule SymphonyElixir.Config.Migration do
       ticket: "TP-1611",
       release: "0.0.1.1068",
       why: "Symphony no longer forces tickets ahead of the queue"
+    }),
+    Map.merge(@rename_defaults, %{
+      key: "execution.concurrency.finishing_max",
+      to: nil,
+      ticket: "TP-1616",
+      release: "0.0.1.1072",
+      why: "a ticket keeps its slot through Merging, so landing takes no allowance of its own"
+    }),
+    Map.merge(@rename_defaults, %{
+      key: "execution.concurrency.max_by_issue_state",
+      to: nil,
+      ticket: "TP-1616",
+      release: "0.0.1.1072",
+      why: "a slot belongs to one ticket until it is done, whatever its state"
+    }),
+    Map.merge(@rename_defaults, %{
+      key: "execution.concurrency.epic_lanes",
+      to: nil,
+      ticket: "TP-1616",
+      release: "0.0.1.1072",
+      why: "spare slots go to the sub-tickets of started tickets first, with no lanes reserved"
     })
   ]
 

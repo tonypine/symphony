@@ -1674,16 +1674,6 @@ Fields:
     this many times consecutively within one turn. The signature MUST include execution kind,
     command/tool name, and a stable hash of arguments. Any successful execution or different
     execution signature resets the count.
-- `concurrency.epic_lanes` (integer)
-  - Default: `concurrency.max_total`.
-  - Has no effect: a free slot goes to the sub-tickets of a started ticket first (Section 8.3).
-    The key still loads and is still validated (between `0` and `concurrency.max_total`); a later
-    release removes it.
-- `concurrency.finishing_max` (positive integer)
-  - Default: `2`.
-  - Has no effect: a ticket in `Merging` keeps the slot it holds and gets no allowance of its own
-    (Section 8.3). The key still loads and is still validated (at least `1`); a later release
-    removes it.
 - Implementations MAY offer an operator control that starts a ticket's run at once (this one has
   `POST /api/v1/control/start` with `issue_identifier` and an optional `note`). Such a control
   dispatches the run for the ticket's current phase in the same call, not queued: it ignores
@@ -1702,11 +1692,6 @@ Fields:
 - Implementations MAY carry the ticket's pull request and its checks on the ticket read (this one has
   `pull_request`, `docs/control-api.md`). That read MUST come from what the PR watcher already read,
   and MUST NOT add a read of GitHub.
-- `concurrency.max_by_issue_state` (map `state_name -> positive integer`)
-  - Default: empty map.
-  - Has no effect: only `concurrency.max_total` limits how many tickets hold a slot (Section 8.3).
-    The key still loads; invalid entries (blank state names, non-positive, or non-integer values)
-    still fail configuration validation. A later release removes it.
 - `limits.tokens_per_issue` (integer or null)
   - Default: `500000`.
   - Explicit `null` disables the per-issue cap.
@@ -2844,10 +2829,6 @@ not require recognizing or validating extension fields unless that extension is 
 - `hooks.after_create_timeout_ms`: integer or null, default `null` (the larger of `hooks.timeout_ms`
   and `600000`)
 - `execution.concurrency.max_total`: integer, default `10`
-- `execution.concurrency.max_by_issue_state`: map of positive integers, default `{}` (no effect)
-- `execution.concurrency.epic_lanes`: integer between `0` and `max_total`, default `max_total` (no
-  effect)
-- `execution.concurrency.finishing_max`: integer `>= 1`, default `2` (no effect)
 - `execution.limits.max_turns`: integer, default `20`
 - `execution.limits.retry_backoff_max_ms`: integer, default `300000` (5m)
 - `execution.limits.max_consecutive_identical_tool_failures`: integer, default `5`; `0` disables
@@ -4252,12 +4233,9 @@ Which ticket a free slot goes to:
   `Todo`), so a big chain is finished before unrelated work starts; then to the first ticket in the
   stored queue order (Section 8.2) that can start. Each group keeps the stored order.
 
-Settings with no effect:
-
-- The finishing slots (`concurrency.finishing_max`), the per-state limits
-  (`concurrency.max_by_issue_state`) and the epic lanes (`concurrency.epic_lanes`) decide nothing.
-  Their keys still load; `/api/v1/state` keeps `finishing`, `epic_lanes` and
-  `concurrency.finishing_max` with empty values for the clients that read them.
+Nothing else limits the slots: landing has no allowance of its own, no phase has a limit of its
+own, and no slot is reserved for epics. `/api/v1/state` keeps `finishing`, `epic_lanes` and
+`concurrency.finishing_max` with empty values for the clients that read them.
 
 ### 8.4 Retry and Backoff
 
@@ -7663,8 +7641,7 @@ infrastructure.
 - A ticket gives its slot up when it is done, leaves the active states, waits on a dependency or
   its sub-tickets, or a person stops it; the freed slot goes to the next ticket
 - A free slot goes to a sub-ticket of a started ticket first, then to the first ticket in the queue
-- A `Merging` ticket keeps its slot and gets no allowance of its own; `finishing_max`,
-  `max_by_issue_state` and `epic_lanes` change nothing
+- A `Merging` ticket keeps its slot and gets no allowance of its own
 - A retry that finds no slot keeps its attempt, gets no backoff, and starts on the first poll after
   a slot frees
 - `Todo` issue with non-terminal blockers is not eligible

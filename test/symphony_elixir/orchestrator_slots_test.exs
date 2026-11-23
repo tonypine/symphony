@@ -206,28 +206,17 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
       refute Map.has_key?(dispatched.running, "t")
     end
 
-    test "finishing_max, the per-state limits and the epic lanes still load and change nothing", ctx do
-      write_slots_workflow!(ctx,
-        max_concurrent_agents: 2,
-        finishing_max: 1,
-        max_concurrent_agents_by_state: %{"todo" => 1},
-        epic_lanes: 1
-      )
-
-      settings = Config.settings!()
-      execution = settings.execution
-      assert execution.finishing_max == 1
-      assert execution.max_concurrent_agents_by_state == %{"todo" => 1}
-      assert execution.epic_lanes == 1
+    test "two slots start two Todo tickets, and a Merging ticket waits for a slot like any other", ctx do
+      write_slots_workflow!(ctx, max_concurrent_agents: 2)
 
       todos = for n <- 1..3, do: recorded(issue("t#{n}", "MT-#{n}", "Todo"))
       tracked(todos)
 
-      # The per-state limit of 1 Todo would have started one; two slots start two.
+      # No limit per state: two slots start two Todo tickets.
       dispatched = Orchestrator.dispatch_chosen_issues_for_test(todos, orchestrator_state(2))
       assert Enum.sort(Map.keys(dispatched.running)) == ["t1", "t2"]
 
-      # A Merging ticket waits for a slot like any other: finishing_max gives it none.
+      # A Merging ticket waits for a slot like any other: landing has no allowance of its own.
       landing = issue("m", "MT-M", "Merging")
       tracked([landing])
       waits = Orchestrator.dispatch_chosen_issues_for_test([landing], dispatched)

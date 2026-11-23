@@ -146,7 +146,9 @@ becomes `execution.providers.anthropic.reserve`, written where it belongs, unles
 set (TP-1535). A row with nothing in its place drops a key that no longer does anything:
 `execution.concurrency.force_label`, `execution.concurrency.forced_max` and
 `execution.concurrency.forced_stale_after_hours` are removed with the force feature (TP-1611), so a
-ticket carrying the old label is dispatched like any other.
+ticket carrying the old label is dispatched like any other; `execution.concurrency.finishing_max`,
+`execution.concurrency.max_by_issue_state` and `execution.concurrency.epic_lanes` are removed once a
+slot belongs to one ticket until it is done (TP-1616).
 
 - Symphony migrates the file once when it starts (`symphony` and `symphony run`), and logs a note.
   `symphony config migrate --config <file>` does the same by hand.
@@ -617,10 +619,6 @@ execution:
         anthropic: claude-haiku-4-5
   concurrency:
     max_total: 10
-    epic_lanes:
-    finishing_max: 2
-    max_by_issue_state:
-      rework: 2
   limits:
     max_turns: 20
     retry_backoff_max_ms: 300000
@@ -719,11 +717,11 @@ execution:
   given up only when the ticket is done, waits on another ticket or its sub-tickets, or you stop it,
   move it to Backlog or cancel it. A free slot goes first to a sub-ticket of a ticket that has
   started, then to the first ticket in the queue that can start (SPEC.md Section 8.3).
-- `concurrency.epic_lanes` and `concurrency.finishing_max` have no effect: the sub-tickets-first
-  rule replaces the epic lanes, and a ticket in `Merging` keeps its slot with no allowance of its
-  own. Both still load and are still validated (`epic_lanes` within `0..max_total`, `finishing_max`
-  at least `1`); a later release removes them. `/api/v1/state` keeps `epic_lanes` and `finishing`,
-  empty. The dispatch log line carries `slot=shared`.
+- Nothing else limits the slots: a ticket in `Merging` keeps its slot with no allowance of its own,
+  no phase has a limit of its own, and no slot is reserved for epics. The former
+  `concurrency.finishing_max`, `concurrency.max_by_issue_state` and `concurrency.epic_lanes` are
+  removed from `symphony.yml` on load (see "Renamed keys are migrated"). `/api/v1/state` keeps
+  `epic_lanes` and `finishing`, empty. The dispatch log line carries `slot=shared`.
 - Dispatch goes in the stored queue order (the README's "Dispatch order and priority"). A ticket
   that finds no free slot is not retried with backoff: it keeps its attempt and starts on the first
   poll after a slot frees (a ticket giving its slot up triggers that poll). `/api/v1/state` shows
@@ -735,8 +733,6 @@ execution:
   the last poll passed over is listed under `dispatch_skipped` with the gate that held it (`blocked
   by MT-2`, `on a Needs Decision hold`, a usage limit, the `tickets.priorities` filter, ...) and
   since when.
-- `concurrency.max_by_issue_state` has no effect: only `max_total` limits how many tickets hold a
-  slot. It still loads; a later release removes it.
 - `limits.max_turns` caps how many back-to-back turns Symphony will run in a single worker
   invocation when a turn completes but the issue is still active. Codex reuses one `threadId`
   across these turns; Claude relaunches per turn (workspace + prompt provide continuation).

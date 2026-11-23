@@ -386,10 +386,8 @@ sub-tickets, or when you stop it, move it to `Backlog` or cancel it. Waiting on 
 slot goes first to a sub-ticket of a ticket that has started, so a big chain finishes before
 unrelated work starts, then to the first ticket in the queue that can start.
 
-`execution.concurrency.finishing_max`, `execution.concurrency.max_by_issue_state` and
-`execution.concurrency.epic_lanes` have no effect any more: a ticket keeps its slot through
-`Merging`, and the sub-tickets-first rule replaces the epic lanes. The keys still load; a later
-release removes them.
+Nothing else limits the slots: a ticket keeps its slot through `Merging`, no phase has a limit of
+its own, and no slot is reserved for epics.
 
 ### Dispatch order and priority
 

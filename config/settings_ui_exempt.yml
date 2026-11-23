@@ -12,13 +12,6 @@
 # keys one by one unless the whole section stays out of the app.
 
 exemptions:
-  # execution.concurrency
-  - reason: Epic lanes and finishing slots, beyond the app's max concurrent agents control. No control in the app yet.
-    keys:
-      - execution.concurrency.epic_lanes
-      - execution.concurrency.finishing_max
-      - execution.concurrency.max_by_issue_state
-
   # execution.limits and execution.timeouts
   - reason: Turn, retry, tool-failure and timeout tuning, beyond the app's token limits. No control in the app yet.
     keys:

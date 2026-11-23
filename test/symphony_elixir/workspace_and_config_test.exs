@@ -3820,7 +3820,6 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       poll_interval_ms: %{bad: true},
       workspace_root: 123,
       max_retry_backoff_ms: 0,
-      max_concurrent_agents_by_state: %{"Todo" => "1", "Review" => 0, "Done" => "bad"},
       hook_timeout_ms: 0,
       observability_enabled: "maybe",
       observability_refresh_ms: %{bad: true},
@@ -4095,25 +4094,42 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert config.workspace.root == "env:#{workspace_env_var}"
   end
 
-  test "config still loads per-state max concurrent agent overrides, which the engine no longer reads" do
-    write_workflow_file!(Workflow.workflow_file_path(),
-      max_concurrent_agents: 10,
-      max_concurrent_agents_by_state: %{
-        "todo" => 1,
-        "In Progress" => 4,
-        "In Review" => 2
-      }
-    )
+  test "symphony.yml no longer takes the finishing allowance, the per-state limits or the epic lanes" do
+    base = %{
+      "execution" => %{"harnesses" => %{"codex" => %{"command" => "codex app-server"}}},
+      "runs" => %{"default" => %{"harness" => "codex", "provider" => "openai", "model" => "gpt-test"}},
+      "repositories" => [%{"key" => "default", "workflow" => "WORKFLOW.md"}]
+    }
 
+    assert {:ok, system_config} = SystemSchema.parse(put_in(base, ["execution", "concurrency"], %{"max_total" => 3}))
+    assert system_config.execution.max_concurrent_agents == 3
+
+    for {key, value} <- [{"finishing_max", 2}, {"max_by_issue_state", %{"todo" => 1}}, {"epic_lanes", 1}] do
+      config = put_in(base, ["execution", "concurrency"], %{"max_total" => 3, key => value})
+
+      assert {:error, {:invalid_symphony_config, message}} = SystemSchema.parse(config)
+      assert message =~ "execution.concurrency.#{key}"
+    end
+
+    # The old name of the per-state limits is no longer known either.
+    assert {:error, {:invalid_symphony_config, message}} =
+             SystemSchema.parse(put_in(base, ["execution", "max_concurrent_agents_by_state"], %{"todo" => 1}))
+
+    assert message =~ "max_concurrent_agents_by_state"
+
+    for field <- [:finishing_max, :max_concurrent_agents_by_state, :epic_lanes] do
+      refute field in Execution.__schema__(:fields)
+    end
+
+    write_workflow_file!(Workflow.workflow_file_path(), max_concurrent_agents: 10)
     assert Config.settings!().execution.max_concurrent_agents == 10
-    assert Config.settings!().execution.max_concurrent_agents_by_state == %{"todo" => 1, "in progress" => 4, "in review" => 2}
 
     write_workflow_file!(Workflow.workflow_file_path(), worker_max_concurrent_agents_per_host: 2)
     assert :ok = Config.validate!()
     assert Config.settings!().worker.max_concurrent_agents_per_host == 2
   end
 
-  test "schema helpers cover custom type and state limit validation" do
+  test "schema helpers cover the custom type" do
     assert StringOrMap.type() == :map
     assert StringOrMap.embed_as(:json) == :self
     assert StringOrMap.equal?(%{"a" => 1}, %{"a" => 1})
@@ -4128,23 +4144,6 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     assert {:ok, %{"a" => 1}} = StringOrMap.dump(%{"a" => 1})
     assert :error = StringOrMap.dump(123)
-
-    assert Schema.normalize_state_limits(nil) == %{}
-
-    assert Schema.normalize_state_limits(%{"In Progress" => 2, todo: 1}) == %{
-             "todo" => 1,
-             "in progress" => 2
-           }
-
-    changeset =
-      {%{}, %{limits: :map}}
-      |> Changeset.cast(%{limits: %{"" => 1, "todo" => 0}}, [:limits])
-      |> Schema.validate_state_limits(:limits)
-
-    assert changeset.errors == [
-             limits: {"state names must not be blank", []},
-             limits: {"limits must be positive integers", []}
-           ]
   end
 
   test "schema parse normalizes policy keys and env-backed fallbacks" do
