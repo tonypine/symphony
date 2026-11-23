@@ -554,7 +554,15 @@ defmodule SymphonyElixir.PrWatch.LifecycleTest do
 
     test "its PR is read and recorded and nothing is done on it, when main moves too; once it takes a slot it catches up" do
       behind = ticket!("40", "Code Review", mergeable: :behind)
-      red = ticket!("41", "QA", ci: :red, red_kind: :failure, failing_check: "specs", failed_checks: [%{name: "specs", run_id: "77", workflow_name: "ci", conclusion: "FAILURE"}])
+
+      red =
+        ticket!("41", "QA",
+          ci: :red,
+          red_kind: :failure,
+          failing_check: "specs",
+          failed_checks: [%{name: "specs", run_id: "77", workflow_name: "ci", conclusion: "FAILURE"}]
+        )
+
       conflict = ticket!("42", "QA", mergeable: :dirty)
       green = ticket!("43", "QA")
       running = ticket!("49", "QA", ci: :pending)
