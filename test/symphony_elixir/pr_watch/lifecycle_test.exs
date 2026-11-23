@@ -630,7 +630,8 @@ defmodule SymphonyElixir.PrWatch.LifecycleTest do
       assert World.calls(:move) == []
       assert {:ok, %{reasons: [%{kind: :ticket, waits_on: %{identifier: "TP-9"}}]}} = Pauses.get({:ticket, @repo_key, blocked})
       assert {:ok, %{reasons: [%{kind: :ticket, waits_on: %{identifier: "TP-9"}}]}} = Pauses.get({:ticket, @repo_key, behind})
-      assert {:ok, %{reasons: [_idle_hold]}} = Pauses.get({:ticket, @repo_key, idle})
+      assert {:ok, %{reasons: idle_reasons}} = Pauses.get({:ticket, @repo_key, idle})
+      assert [%{waits_on: %{condition: "idle_park"}}] = Enum.filter(idle_reasons, &(&1.kind == :environment))
       assert [_question] = Questions.open({:ticket, @repo_key, idle})
     end
 
