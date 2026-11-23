@@ -327,7 +327,8 @@ defmodule SymphonyElixir.QaDispatchTest do
 
     # The ticket holds a slot: a build is asked for only for a ticket that holds one.
     defp slot_state(state \\ %Orchestrator.State{}) do
-      %{state | slot_holders: %{@issue_id => %{identifier: "TP-816", state: "QA", repo_key: @designed_repo, since: DateTime.utc_now()}}}
+      holder = %{identifier: "TP-816", state: "QA", repo_key: @designed_repo, since: DateTime.utc_now()}
+      %{state | slot_holders: %{@issue_id => holder}}
     end
 
     test "a QA ticket on a green head waits for its app's build, and dispatches when the build is ready" do
@@ -431,11 +432,19 @@ defmodule SymphonyElixir.QaDispatchTest do
       qa_ticket = issue(@designed_repo, "QA")
 
       # Its decision to run QA is held back for a slot, as the watcher records it for a ticket without one.
-      decision = %{rule: "R27", kind: :wait, reason: "Waits for a slot before R27 acts (a run starts on the ticket): QA", args: %{withheld: :dispatch}}
-      SymphonyElixir.PrWatchSupport.put_watch!(@designed_repo, @issue_id, phase: :qa, head_sha: head, decision: decision)
+      decision = %{
+        rule: "R27",
+        kind: :wait,
+        reason: "Waits for a slot before R27 acts (a run starts on the ticket): QA",
+        args: %{withheld: :dispatch}
+      }
+
+      watch = [phase: :qa, head_sha: head, decision: decision]
+      SymphonyElixir.PrWatchSupport.put_watch!(@designed_repo, @issue_id, watch)
 
       # Every slot taken: no build, no slot, no run.
-      full = %Orchestrator.State{max_concurrent_agents: 1, slot_holders: %{"other" => %{identifier: "TP-1", state: "QA", repo_key: @designed_repo, since: DateTime.utc_now()}}}
+      other = %{identifier: "TP-1", state: "QA", repo_key: @designed_repo, since: DateTime.utc_now()}
+      full = %Orchestrator.State{max_concurrent_agents: 1, slot_holders: %{"other" => other}}
       next = Orchestrator.dispatch_chosen_issues_for_test([qa_ticket], full)
       refute Map.has_key?(next.slot_holders, @issue_id)
       refute Map.has_key?(next.running, @issue_id)

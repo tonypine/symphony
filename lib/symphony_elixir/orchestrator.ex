@@ -4651,7 +4651,11 @@ defmodule SymphonyElixir.Orchestrator do
     cond do
       gate = dispatch_gate_closed(issue, state, active_states, terminal_states) ->
         {reason, rule, closed} = gate
-        state |> catch_up(issue, gate) |> note_blocked_flow_head(issue) |> put_dispatch_skipped(issue, reason, rule, closed)
+
+        state
+        |> catch_up(issue, gate)
+        |> note_blocked_flow_head(issue)
+        |> put_dispatch_skipped(issue, reason, rule, closed)
 
       # A retry that started waiting for a slot while a dispatch readiness task ran is held again
       # with its attempt, as a retry that comes due during the hold is: on a paused provider, as on
