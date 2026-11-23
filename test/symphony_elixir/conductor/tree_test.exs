@@ -839,6 +839,18 @@ defmodule SymphonyElixir.Conductor.TreeTest do
       assert [%{issue_id: "c1", kind: :done}] = depends_on("c3")
       assert_received {:memory_tracker_state_update, "c3", "Todo"}
     end
+
+    test "with no record of its own, is put on Symphony's records, given its dependency and started", ctx do
+      :ok = RunStore.remove_dependency("c1", "c3")
+      :ok = RunStore.remove_dependency(ctx.issue_id, "c3")
+      :ok = RunStore.delete_ticket_state("c3")
+      script(:fetch_issue_states_by_ids, [{:ok, [%Issue{id: "c3", identifier: "MT-3", state: "Backlog"}]}])
+
+      assert Tree.start_left("default", ctx.parent, tracker: Scripted) == :ok
+      parent_id = ctx.issue_id
+      assert [%{issue_id: ^parent_id, kind: :done}] = depends_on("c3")
+      assert_received {:memory_tracker_state_update, "c3", "Todo"}
+    end
   end
 
   describe "the bounds" do

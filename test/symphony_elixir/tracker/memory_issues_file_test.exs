@@ -101,6 +101,26 @@ defmodule SymphonyElixir.Tracker.MemoryIssuesFileTest do
     Application.delete_env(:symphony_elixir, :memory_tracker_update_issue_priority_result)
   end
 
+  test "the tracker boundary reads labels, a team's states and labels, and the projects and teams from the adapter" do
+    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+    workspace = %{name: "plan"}
+    own = %{name: "qa", team_key: "QA"}
+    other = %{name: "ops", team_key: "OPS"}
+    Application.put_env(:symphony_elixir, :memory_tracker_labels_list, [workspace, own, other])
+
+    assert Tracker.labels() == {:ok, [workspace, own, other]}
+    assert Tracker.team_labels("QA") == {:ok, [workspace, own]}
+    assert_received {:memory_tracker_team_labels, "QA"}
+    assert {:ok, states} = Tracker.team_workflow_states("QA")
+    assert is_list(states)
+    assert_received {:memory_tracker_team_workflow_states, "QA"}
+    assert {:ok, %{projects: projects, teams: teams}} = Tracker.projects_and_teams()
+    assert is_list(projects) and is_list(teams)
+    assert_received {:memory_tracker_projects_and_teams}
+  after
+    Application.delete_env(:symphony_elixir, :memory_tracker_labels_list)
+  end
+
   test "a scripted plan-comments error is answered as it is" do
     Application.put_env(:symphony_elixir, :memory_tracker_plan_comments, {:error, :boom})
     assert Memory.fetch_plan_comments("issue-1") == {:error, :boom}
