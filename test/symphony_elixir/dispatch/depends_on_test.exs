@@ -155,6 +155,8 @@ defmodule SymphonyElixir.Dispatch.DependsOnTest do
       before = places()
       # On its own parent, or a parent on its sub-ticket: a parent always sits above its sub-tickets.
       assert :ok = RunStore.add_dependency("s2", "epic", :done)
+      # (s1 already depends on s2: keeping s2 on the epic would close a cycle.)
+      assert :ok = RunStore.remove_dependency("s2", "epic")
       assert :ok = RunStore.add_dependency("epic", "s1", :done)
       # On a ticket out of the queue, or one Symphony holds no record of.
       assert :ok = RunStore.add_dependency("y", "done", :done)
