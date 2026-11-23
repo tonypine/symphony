@@ -307,7 +307,7 @@ defmodule SymphonyElixir.SelfHeal do
   # failure (one fix ticket per break, however many tickets hit it), else file it.
   defp open(ctx) do
     case fix_ticket(ctx) do
-      {:ok, %{identifier: identifier} = ticket} ->
+      {:ok, %{identifier: identifier}} ->
         record(ctx, %{
           component: ctx.component,
           scope: ctx.scope,
