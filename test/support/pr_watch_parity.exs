@@ -37,8 +37,9 @@ defmodule SymphonyElixir.PrWatchParity do
   Linear and GitHub, in order, for each GitHub step the fake time from it to the watcher's last
   read of it, and how each ticket ended (`ending/1`).
 
-  The fakes are `World` (the issues, PRs, fix tickets and calls), `Tracker`, `Linker` (Linear's
-  blocked-by links), `GitHub`, `Fetch` and `Fixer`; a test using this module writes a workflow
+  The fakes are `World` (the issues, PRs, fix tickets and calls), `Tracker`, `GitHub`, `Fetch` and
+  `Fixer`; the watcher writes no Linear blocker link, so the issues' `blocked_by` change only by a
+  test's hand; a test using this module writes a workflow
   with `pr_review_mode: "polling"` first.
   """
 
@@ -100,23 +101,6 @@ defmodule SymphonyElixir.PrWatchParity do
     end
   end
 
-  defmodule Linker do
-    @moduledoc false
-    alias SymphonyElixir.PrWatchParity.World
-
-    # Linear's blocked-by links: recorded, and shown on the blocked issue as Linear would.
-    def add_blocked_by(blocker, issue_id) do
-      World.call(:link, {blocker, issue_id})
-      %{id: id, state: state} = World.get(:issues) |> Map.values() |> Enum.find(&(&1.identifier == blocker))
-      World.update(:issues, &Map.update!(&1, issue_id, fn issue -> %{issue | blocked_by: issue.blocked_by ++ [%{id: id, identifier: blocker, state: state}]} end))
-    end
-
-    def remove_blocked_by(blocker, issue_id) do
-      World.call(:unlink, {blocker, issue_id})
-      World.update(:issues, &Map.update!(&1, issue_id, fn issue -> %{issue | blocked_by: Enum.reject(issue.blocked_by, fn b -> b.identifier == blocker end)} end))
-    end
-  end
-
   defmodule GitHub do
     @moduledoc false
     alias SymphonyElixir.PrWatchParity.World
@@ -163,7 +147,6 @@ defmodule SymphonyElixir.PrWatchParity do
     end
 
     def attach(identifier, body, _opts), do: World.call(:evidence, {identifier, body})
-    def block(issue, ticket, _opts), do: World.call(:blocked_by, {issue.id, ticket.identifier})
   end
 
   @doc "The repository's URL, as deliveries name it."
@@ -282,7 +265,6 @@ defmodule SymphonyElixir.PrWatchParity do
       github: GitHub,
       fetch: Fetch,
       fixer: Fixer,
-      linker: Linker,
       interval_ms: @interval_ms,
       now: fn -> World.get(:now) end,
       # Every ticket holds a slot, so the watcher acts on it; the tests of a ticket without one

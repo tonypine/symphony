@@ -218,8 +218,9 @@ defmodule SymphonyElixir.PrWatch.IncidentsTest do
 
   defp expect(:tp_903, %{actions: actions, tickets: tickets}) do
     assert %{"1" => %{state: "Done"}, "2" => %{state: "Done"}} = tickets
-    # The conflicting PR waits on the one ahead instead of spending a CI Fix run, then gets one.
-    assert calls(actions, :link) == [{"TP-1", Parity.issue_id("2")}]
+    # The conflicting PR waits on the one ahead instead of spending a CI Fix run, then gets one; no
+    # Linear blocker link is written for the wait.
+    assert calls(actions, :link) == []
     assert moves(actions, "2") == ["CI Fix", "Done"]
     assert index(actions, {:move, {Parity.issue_id("2"), "CI Fix"}}) > index(actions, {:move, {Parity.issue_id("1"), "Done"}})
   end
@@ -236,16 +237,15 @@ defmodule SymphonyElixir.PrWatch.IncidentsTest do
     assert %{"1" => %{state: "Done"}, "2" => %{state: "Done"}} = tickets
     a_lands = index(actions, {:move, {Parity.issue_id("1"), "Done"}})
 
-    # B waits on A as a blocked-by link and a pause on it (its `Blocked` label is the pause
-    # projector's), with auto-merge off, until A lands.
-    assert calls(actions, :link) == [{"TP-1", Parity.issue_id("2")}]
-    assert index(actions, {:link, {"TP-1", Parity.issue_id("2")}}) < a_lands
+    # B waits on A as a pause on it (its `Blocked` label is the pause projector's), with no Linear
+    # blocker link and with auto-merge off, until A lands.
+    assert calls(actions, :link) == []
 
     assert [%{payload: %{waits_on: %{identifier: "TP-1"}, text: "Waiting for TP-1 to land: it changes the same files"}}] =
              SymphonyElixir.RunStore.list_ticket_events(Parity.issue_id("2"), types: ["pause.set"])
 
     assert calls(actions, :disarm) == [Parity.pr_url("2")]
-    assert Parity.blockers("2") == ["TP-1"]
+    assert Parity.blockers("2") == []
 
     # No CI Fix run while A is open, then exactly one.
     assert moves(actions, "2") == ["CI Fix", "Done"]
@@ -255,9 +255,9 @@ defmodule SymphonyElixir.PrWatch.IncidentsTest do
   defp expect(:failing_check, %{actions: actions, tickets: tickets}) do
     assert %{"1" => %{state: "QA", decision: %{rule: "R27", kind: :dispatch}, holds: []}} = tickets
 
-    # One fix ticket for `test`, linked as C's blocker, and C held on it until it landed.
+    # One fix ticket for `test`, and C held on it (through its pause, no Linear link) until it landed.
     assert [%{component: "ci:test"}] = calls(actions, :fix_ticket)
-    assert calls(actions, :blocked_by) == [{Parity.issue_id("1"), "TP-901"}]
+    assert calls(actions, :blocked_by) == []
     assert Parity.fix_tickets() == %{"TP-901" => "Done"}
     refute {:label, {Parity.issue_id("1"), "Needs Decision"}} in actions
 

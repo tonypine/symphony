@@ -163,6 +163,25 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
       assert Orchestrator.available_slots_for_test(released) == 2
     end
 
+    test "when it waits on a stored dependency, exactly as when it waits on a blocker", ctx do
+      write_slots_workflow!(ctx, max_concurrent_agents: 2)
+      upstream = recorded(issue("u", "MT-9", "In Progress"))
+      depending = recorded(issue("d", "MT-D", "In Progress"))
+      blocked = recorded(issue("b", "MT-B", "In Progress", blocked_by: [%{id: "u", identifier: "MT-9", state: "In Progress"}]))
+      :ok = RunStore.add_dependency("d", "u", :done)
+      assert Orchestrator.sweep_dependencies_for_test("default", [blocked], ["Done", "Canceled"]) == 1
+
+      state = orchestrator_state(2) |> holding(depending) |> holding(blocked)
+      released = Orchestrator.release_slots_for_test(state, [depending, blocked], true)
+      assert released.slot_holders == %{}
+      assert Orchestrator.available_slots_for_test(released) == 2
+
+      # Once the ticket it depends on is done, nothing holds it, and it keeps its slot.
+      :ok = RunStore.update_ticket_state(upstream.id, %{phase: "Done"})
+      met = holding(orchestrator_state(2), depending)
+      assert Orchestrator.release_slots_for_test(met, [depending], true).slot_holders == met.slot_holders
+    end
+
     test "a ticket with a live run is judged by its run's end, not by the cycle", ctx do
       write_slots_workflow!(ctx, max_concurrent_agents: 1)
       working = issue("w", "MT-W", "In Progress")
@@ -254,6 +273,33 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
 
       # Before the first walk there are no slots to read, and nothing is in progress.
       assert %{slots: nil} = Home.read(nil, records, live)
+    end
+
+    test "a ticket the dependency gate holds reads, in the dispatch order and Home, as blocked by the ticket it depends on", ctx do
+      write_slots_workflow!(ctx, max_concurrent_agents: 1)
+      upstream = recorded(issue("u", "MT-U", "Code Review"))
+      next = recorded(issue("n", "MT-N", "Todo"))
+      :ok = RunStore.add_dependency("n", "u", :done)
+      tracked([next])
+
+      dispatched = Orchestrator.dispatch_chosen_issues_for_test([next], orchestrator_state(1))
+      assert dispatched.running == %{}
+      assert %{gate: :depends_on} = dispatched.dispatch_skipped["n"]
+
+      %{dispatch_order: order} = Orchestrator.put_dispatch_order_for_test(dispatched, [upstream, next])
+      skipped = for {issue_id, skip} <- dispatched.dispatch_skipped, do: Map.put(skip, :issue_id, issue_id)
+      live = Situation.live_facts(%{running: [], retrying: [], dispatch_skipped: skipped})
+      records = RunStore.list_all_ticket_states()
+
+      blocked = %{kind: "blocked_by_ticket", word: "Blocked by MT-U", cause: "It is in Code Review.", next: "Starts when MT-U lands.", waits_on: %{ticket: "MT-U"}}
+
+      read = Order.read(order, records, live)
+      assert %{situation: situation} = read.groups |> Enum.flat_map(& &1.tickets) |> Enum.find(&(&1.identifier == "MT-N"))
+      assert Map.take(situation, Map.keys(blocked)) == blocked
+
+      home = Home.read(order, records, live)
+      assert %{situation: situation} = Enum.find(home.queue.roots, &(&1.identifier == "MT-N"))
+      assert Map.take(situation, Map.keys(blocked)) == blocked
     end
 
     test "a PR run takes a slot while it runs, without holding one for a ticket" do

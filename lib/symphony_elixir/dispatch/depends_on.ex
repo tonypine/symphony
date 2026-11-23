@@ -6,8 +6,12 @@ defmodule SymphonyElixir.Dispatch.DependsOn do
 
   A dependency names another ticket and what this one needs of it:
 
-  - `:done`: the ticket depended on is merged, its record's phase is Done. A cancelled ticket meets
-    no dependency, and neither does a ticket Symphony holds no record of.
+  - `:done`: the ticket depended on is merged: its record's phase is Done, or its pull request merged
+    and it waits on its own sub-tickets, or it is groomed and its pull request merged, as the
+    tracker's blocker hold counts a blocker resolved (`SymphonyElixir.SubIssueWait.merged_blocker?/1`,
+    read from Symphony's stores), so a sub-ticket that depends on its merged parent never waits on
+    it while the parent waits on the sub-ticket. A cancelled ticket meets no dependency, and neither
+    does a ticket Symphony holds no record of.
   - `:released`: it is Done and the running build includes its merge. What the build includes is
     what `SymphonyElixir.UpdateHold` knows, in the same cache: `resolve/4`, in the poll task, looks
     each one up (`SymphonyElixir.UpdateHold.awaiting_update/4`), and `unmet/4` only reads the cache.
@@ -21,7 +25,7 @@ defmodule SymphonyElixir.Dispatch.DependsOn do
   """
 
   alias SymphonyElixir.Linear.Issue
-  alias SymphonyElixir.{TicketState, UpdateHold}
+  alias SymphonyElixir.{SubIssueWait, TicketState, UpdateHold}
 
   @done "done"
 
@@ -36,11 +40,14 @@ defmodule SymphonyElixir.Dispatch.DependsOn do
     Enum.reject(dependencies, &met?(&1, Map.get(records, &1.issue_id), build, cache))
   end
 
-  defp met?(%{kind: :done}, record, _build, _cache), do: done?(record)
+  defp met?(%{kind: :done, issue_id: id}, record, _build, _cache), do: done?(record) or merged?(id, record)
   defp met?(%{kind: :released, issue_id: id}, record, build, cache), do: done?(record) and released?(id, build, cache)
 
   defp done?(%{phase: phase}) when is_binary(phase), do: phase |> String.trim() |> String.downcase() == @done
   defp done?(_record), do: false
+
+  defp merged?(id, %{phase: phase}) when is_binary(phase), do: SubIssueWait.merged_blocker?(%{id: id, state: phase})
+  defp merged?(_id, _record), do: false
 
   # Whether the running build includes the merge of the ticket `id`, as the update hold's cache
   # knows it.

@@ -7,6 +7,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
   alias SymphonyElixir.HumanActions.Collector, as: HumanActionsCollector
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.PromptSafety
+  alias SymphonyElixir.TicketState
 
   # A spy for the writer `TransitionGuard.perform/4` moves through: it records every move it is
   # asked to make and answers with the result a test sets (`:ok` by default).
@@ -24,6 +25,15 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     def clear_machine_label(issue_id, name) do
       send(self(), {:machine_label_cleared, issue_id, name})
       :ok
+    end
+  end
+
+  # The tracker a new sub-issue is read back from to go on Symphony's records: each id is the issue
+  # `Process.get(:observed)` names (its identifier), in Todo.
+  defmodule ObservedTracker do
+    def fetch_issue_states_by_ids(ids) do
+      named = Process.get(:observed, %{})
+      {:ok, for(id <- ids, Map.has_key?(named, id), do: %SymphonyElixir.Linear.Issue{id: id, identifier: Map.fetch!(named, id), state: "Todo"})}
     end
   end
 
@@ -1310,21 +1320,23 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     test "a ticket that is not a plan files its sub-issue in Todo and waits for it" do
       {:ok, registry} = Linear.CommentRegistry.start_link()
       scope = Map.put(split_scope(), "children", %{"nodes" => [%{"id" => "issue-old", "identifier" => "TP-50"}]})
+      tracked!(%{"issue-old" => "TP-50", "issue-parent-uuid" => "TP-500"})
 
       assert {:ok, response} =
                Linear.create_subissue(
-                 %{issue: %Issue{id: "issue-parent"}, comment_registry: registry},
+                 %{issue: %Issue{id: "issue-parent", repo_key: "repo-a"}, comment_registry: registry},
                  %{"title" => "Split: the server side first", "description" => "body", "blocked_by" => ["TP-50"]},
-                 linear_client: subissue_client(self(), scope)
+                 [linear_client: subissue_client(self(), scope)] ++ observing(%{"issue-new" => "TP-999"})
                )
 
       assert_received {:linear_called, scope_query, %{id: "issue-parent"}}
       assert scope_query =~ "labels { nodes { name } }"
       assert_received {:linear_called, _mutation, %{input: %{"stateId" => "state-todo", "parentId" => "issue-parent-uuid"}}}
 
-      # The new issue is blocked by its sibling first, then marked as blocking the issue that split it off.
-      assert_received {:linear_called, _relation, %{input: %{"issueId" => "issue-old", "relatedIssueId" => "issue-new", "type" => "blocks"}}}
-      assert_received {:linear_called, _relation, %{input: %{"issueId" => "issue-new", "relatedIssueId" => "issue-parent-uuid", "type" => "blocks"}}}
+      # The new issue goes on Symphony's records and depends on its sibling; the issue that split it
+      # off depends on it. No Linear relation is written.
+      assert depends_on("issue-new") == [{"issue-old", "TP-50"}]
+      assert depends_on("issue-parent-uuid") == [{"issue-new", "TP-999"}]
 
       assert %{"identifier" => "TP-999", "blockedBy" => ["TP-50"], "blocks" => ["TP-500"]} = get_in(response, ["data", "issueCreate", "issue"])
       assert Linear.CommentRegistry.created_subissues(registry) == %{"TP-999" => "issue-new"}
@@ -1352,21 +1364,16 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       refute_received {:linear_called, "mutation SymphonyAgentCreateIssueRelation" <> _rest, _variables}
     end
 
-    test "names the created issue when the issue that split it off cannot be marked blocked by it" do
+    test "names the created issue when the issue that split it off cannot be made to depend on it" do
       {:ok, registry} = Linear.CommentRegistry.start_link()
       scope = Map.delete(split_scope(), "identifier")
 
-      client = fn query, variables, opts ->
-        if query =~ "SymphonyAgentCreateIssueRelation",
-          do: {:ok, %{"data" => %{"issueRelationCreate" => %{"success" => false}}}},
-          else: subissue_client(self(), scope).(query, variables, opts)
-      end
-
-      assert {:error, {:split_link_failed, "TP-999", "issue-parent-uuid", {:linear_mutation_failed, "issueRelationCreate", _body}}} =
+      # The issue that split it off has no record, so its dependency can't be stored.
+      assert {:error, {:split_link_failed, "TP-999", "issue-parent-uuid", :ticket_state_not_found}} =
                Linear.create_subissue(
                  %{issue_id: "issue-parent", comment_registry: registry},
                  %{"title" => "Split", "description" => "body"},
-                 linear_client: client
+                 linear_client: subissue_client(self(), scope)
                )
 
       assert Linear.CommentRegistry.created_subissues(registry) == %{"TP-999" => "issue-new"}
@@ -1544,11 +1551,12 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       end
     end
 
-    test "a breakdown run links each sub-issue to the earlier ones it depends on" do
+    test "a breakdown run makes each sub-issue depend on the earlier ones it follows" do
       {:ok, registry} = Linear.CommentRegistry.start_link()
       {:ok, linear} = Agent.start_link(fn -> %{children: [%{"id" => "issue-old", "identifier" => "TP-50"}], relations: []} end)
-      context = %{issue_id: "issue-parent", comment_registry: registry}
-      opts = [linear_client: in_memory_linear(linear)]
+      context = %{issue: %Issue{id: "issue-parent", repo_key: "repo-a"}, comment_registry: registry}
+      tracked!(%{"issue-old" => "TP-50"})
+      opts = [linear_client: in_memory_linear(linear)] ++ observing(%{"issue-101" => "TP-101", "issue-102" => "TP-102", "issue-103" => "TP-103"})
 
       create = fn title, blocked_by ->
         attrs = %{"title" => title, "description" => "Depends on: #{Enum.join(blocked_by, ", ")}", "blocked_by" => blocked_by}
@@ -1562,12 +1570,10 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
 
       assert {a["blockedBy"], b["blockedBy"], final["blockedBy"]} == {[], ["TP-101", "TP-50"], ["TP-101", "TP-102"]}
 
-      assert Agent.get(linear, &Enum.reverse(&1.relations)) == [
-               %{"issueId" => "issue-101", "relatedIssueId" => "issue-102", "type" => "blocks"},
-               %{"issueId" => "issue-old", "relatedIssueId" => "issue-102", "type" => "blocks"},
-               %{"issueId" => "issue-101", "relatedIssueId" => "issue-103", "type" => "blocks"},
-               %{"issueId" => "issue-102", "relatedIssueId" => "issue-103", "type" => "blocks"}
-             ]
+      assert depends_on("issue-101") == []
+      assert depends_on("issue-102") == [{"issue-101", "TP-101"}, {"issue-old", "TP-50"}]
+      assert depends_on("issue-103") == [{"issue-101", "TP-101"}, {"issue-102", "TP-102"}]
+      assert Agent.get(linear, & &1.relations) == []
 
       assert Linear.CommentRegistry.created_subissues(registry) == %{"TP-101" => "issue-101", "TP-102" => "issue-102", "TP-103" => "issue-103"}
     end
@@ -1577,15 +1583,15 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       Linear.CommentRegistry.record_subissue(registry, "issue-parent", "Earlier", "TP-7", "issue-7")
       test_pid = self()
 
+      # Neither is on Symphony's records yet: both are read back and put there first.
       assert {:ok, _response} =
                Linear.create_subissue(
-                 %{issue_id: "issue-parent", comment_registry: registry},
+                 %{issue: %Issue{id: "issue-parent", repo_key: "repo-a"}, comment_registry: registry},
                  %{"title" => "Next", "description" => "body", "blocked_by" => ["TP-7"]},
-                 linear_client: subissue_client(test_pid, subissue_scope())
+                 [linear_client: subissue_client(test_pid, subissue_scope())] ++ observing(%{"issue-new" => "TP-999", "issue-7" => "TP-7"})
                )
 
-      assert_received {:linear_called, relation_mutation, %{input: %{"issueId" => "issue-7", "relatedIssueId" => "issue-new", "type" => "blocks"}}}
-      assert relation_mutation =~ "SymphonyAgentCreateIssueRelation"
+      assert depends_on("issue-new") == [{"issue-7", "TP-7"}]
     end
 
     test "refuses a blocked_by outside the parent's sub-issues before creating anything" do
@@ -1603,21 +1609,18 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       assert Linear.CommentRegistry.created_subissues(registry) == %{}
     end
 
-    test "records the title and names the created issue when a blocked-by link fails" do
+    test "records the title and names the created issue when its dependency can't be stored" do
       {:ok, registry} = Linear.CommentRegistry.start_link()
       scope = Map.put(subissue_scope(), "children", %{"nodes" => [%{"id" => "issue-old", "identifier" => "TP-50"}]})
+      # TP-50 already depends on the new issue, so the new issue can't depend on it.
+      tracked!(%{"issue-old" => "TP-50", "issue-new" => "TP-999"})
+      :ok = RunStore.add_dependency("issue-old", "issue-new", :done)
 
-      client = fn query, variables, opts ->
-        if query =~ "SymphonyAgentCreateIssueRelation",
-          do: {:ok, %{"data" => %{"issueRelationCreate" => %{"success" => false}}}},
-          else: subissue_client(self(), scope).(query, variables, opts)
-      end
-
-      assert {:error, {:blocked_by_relation_failed, "TP-999", "TP-50", {:linear_mutation_failed, "issueRelationCreate", _body}}} =
+      assert {:error, {:blocked_by_relation_failed, "TP-999", "TP-50", :dependency_cycle}} =
                Linear.create_subissue(
                  %{issue_id: "issue-parent", comment_registry: registry},
                  %{"title" => "B", "description" => "body", "blocked_by" => ["TP-50"]},
-                 linear_client: client
+                 linear_client: subissue_client(self(), scope)
                )
 
       assert {:error, {:duplicate_subissue, "TP-999"}} = Linear.CommentRegistry.check_subissue_title(registry, "issue-parent", "B")
@@ -1664,65 +1667,106 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
   end
 
   describe "add_blocked_by/3" do
-    # Looks issues up by identifier (TP-404 is unknown) and records the relations it creates.
-    defp blocked_by_client(relation_result \\ {:ok, %{"data" => %{"issueRelationCreate" => %{"success" => true}}}}) do
-      test_pid = self()
-
-      fn query, variables, _opts ->
-        send(test_pid, {:linear_called, query, variables})
-
-        cond do
-          query =~ "SymphonyAgentIssueByIdentifier" and variables.id == "TP-404" -> {:ok, %{"data" => %{"issue" => nil}}}
-          query =~ "SymphonyAgentIssueByIdentifier" -> {:ok, %{"data" => %{"issue" => %{"id" => "id-" <> variables.id, "identifier" => variables.id}}}}
-          query =~ "SymphonyAgentCreateIssueRelation" -> relation_result
-        end
-      end
-    end
-
-    test "marks the current issue blocked by each issue, after looking every one up" do
-      context = %{issue: %Issue{id: "issue-verify"}}
-
-      assert {:ok, %{"blockedBy" => ["TP-323", "TP-324"]}} =
-               Linear.add_blocked_by(context, %{"blocked_by" => [" tp-323 ", "TP-324", "TP-323"]}, linear_client: blocked_by_client())
-
-      assert_received {:linear_called, _lookup, %{id: "TP-323"}}
-      assert_received {:linear_called, _lookup, %{id: "TP-324"}}
-      assert_received {:linear_called, _mutation, %{input: %{"issueId" => "id-TP-323", "relatedIssueId" => "issue-verify", "type" => "blocks"}}}
-      assert_received {:linear_called, _mutation, %{input: %{"issueId" => "id-TP-324", "relatedIssueId" => "issue-verify", "type" => "blocks"}}}
-    end
-
-    test "links nothing for invalid input, an unknown issue, the current issue or a failed lookup" do
+    test "stores a dependency on each ticket Symphony tracks, with no Linear call" do
+      tracked!(%{"issue-verify" => "TP-VERIFY", "id-TP-323" => "TP-323", "id-TP-324" => "TP-324"})
       context = %{issue: %Issue{id: "issue-verify"}}
       no_linear = fn _query, _variables, _opts -> flunk("Linear should not be called") end
 
-      for blocked_by <- [nil, [], "TP-1", [" "], [1]] do
-        assert {:error, :invalid_add_blocked_by} =
-                 Linear.add_blocked_by(context, %{"blocked_by" => blocked_by}, linear_client: no_linear)
-      end
+      assert {:ok, %{"blockedBy" => ["TP-323", "TP-324"]}} =
+               Linear.add_blocked_by(context, %{"blocked_by" => [" tp-323 ", "TP-324", "TP-323"]}, linear_client: no_linear)
 
-      assert {:error, :missing_current_issue} = Linear.add_blocked_by(%{}, %{"blocked_by" => ["TP-1"]}, linear_client: no_linear)
-
-      assert {:error, {:blocked_by_not_found, ["TP-404"]}} =
-               Linear.add_blocked_by(context, %{"blocked_by" => ["TP-1", "TP-404"]}, linear_client: blocked_by_client())
-
-      assert {:error, {:blocked_by_self, "TP-SELF"}} =
-               Linear.add_blocked_by(%{issue_id: "id-TP-SELF"}, %{"blocked_by" => ["TP-SELF"]}, linear_client: blocked_by_client())
-
-      refute_received {:linear_called, "mutation" <> _rest, _variables}
-
-      down = fn _query, _variables, _opts -> {:error, :linear_down} end
-      assert {:error, :linear_down} = Linear.add_blocked_by(context, %{"blocked_by" => ["TP-1"]}, linear_client: down)
+      assert depends_on("issue-verify") == [{"id-TP-323", "TP-323"}, {"id-TP-324", "TP-324"}]
     end
 
-    test "stops at the first relation Linear refuses" do
+    test "stores nothing for invalid input, a ticket Symphony doesn't track or the current issue" do
+      tracked!(%{"issue-verify" => "TP-VERIFY", "id-TP-1" => "TP-1", "id-TP-SELF" => "TP-SELF"})
       context = %{issue: %Issue{id: "issue-verify"}}
-      refused = blocked_by_client({:ok, %{"data" => %{"issueRelationCreate" => %{"success" => false}}}})
 
-      assert {:error, {:add_blocked_by_failed, "TP-1", {:linear_mutation_failed, "issueRelationCreate", _body}}} =
-               Linear.add_blocked_by(context, %{"blocked_by" => ["TP-1", "TP-2"]}, linear_client: refused)
+      for blocked_by <- [nil, [], "TP-1", [" "], [1]] do
+        assert {:error, :invalid_add_blocked_by} = Linear.add_blocked_by(context, %{"blocked_by" => blocked_by})
+      end
 
-      assert {:error, {:add_blocked_by_failed, "TP-1", :linear_down}} =
-               Linear.add_blocked_by(context, %{"blocked_by" => ["TP-1"]}, linear_client: blocked_by_client({:error, :linear_down}))
+      assert {:error, :missing_current_issue} = Linear.add_blocked_by(%{}, %{"blocked_by" => ["TP-1"]})
+      assert {:error, {:blocked_by_not_found, ["TP-404"]}} = Linear.add_blocked_by(context, %{"blocked_by" => ["TP-1", "TP-404"]})
+      assert {:error, {:blocked_by_self, "TP-SELF"}} = Linear.add_blocked_by(%{issue_id: "id-TP-SELF"}, %{"blocked_by" => ["TP-SELF"]})
+
+      assert depends_on("issue-verify") == []
+      assert depends_on("id-TP-SELF") == []
+    end
+
+    test "stops at the first dependency the store refuses" do
+      tracked!(%{"issue-verify" => "TP-VERIFY", "id-TP-1" => "TP-1", "id-TP-2" => "TP-2"})
+      :ok = RunStore.add_dependency("id-TP-1", "issue-verify", :done)
+
+      assert {:error, {:add_blocked_by_failed, "TP-1", :dependency_cycle}} =
+               Linear.add_blocked_by(%{issue: %Issue{id: "issue-verify"}}, %{"blocked_by" => ["TP-1", "TP-2"]})
+
+      assert depends_on("issue-verify") == []
+    end
+  end
+
+  describe "blocker tools" do
+    test "the blocker tools store dependencies instead of Linear blocked-by links" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      tracked!(%{"issue-parent-uuid" => "TP-500", "issue-old" => "TP-50", "issue-other" => "TP-60", "issue-x" => "OPS-1"})
+      context = %{issue: %Issue{id: "issue-parent-uuid", repo_key: "repo-a"}, comment_registry: registry}
+
+      # A Linear stand-in that refuses every relation write: only issue reads and creates answer.
+      client = fn query, variables, _opts ->
+        refute query =~ "IssueRelation"
+
+        cond do
+          query =~ "SymphonyAgentSubissueScope" ->
+            {:ok, %{"data" => %{"issue" => Map.put(split_scope(), "children", %{"nodes" => [%{"id" => "issue-old", "identifier" => "TP-50"}]})}}}
+
+          query =~ "SymphonyAgentCreateSubissue" ->
+            {:ok, %{"data" => %{"issueCreate" => %{"success" => true, "issue" => %{"id" => "issue-new", "identifier" => "TP-999"}}}}}
+
+          query =~ "SymphonyAgentSubissueUpdateScope" ->
+            children = [
+              %{"id" => "issue-old", "identifier" => "TP-50", "state" => %{"name" => "Backlog"}},
+              %{"id" => "issue-other", "identifier" => "TP-60", "state" => %{"name" => "Backlog"}},
+              %{"id" => "issue-new", "identifier" => "TP-999", "state" => %{"name" => "Backlog"}}
+            ]
+
+            {:ok, %{"data" => %{"issue" => %{"id" => variables.id, "team" => %{"states" => %{"nodes" => []}}, "children" => %{"nodes" => children}}}}}
+        end
+      end
+
+      opts = [linear_client: client] ++ observing(%{"issue-new" => "TP-999"})
+
+      # linear_add_blocked_by: the current issue depends on a ticket Symphony tracks.
+      assert {:ok, %{"blockedBy" => ["OPS-1"]}} = Linear.add_blocked_by(context, %{"blocked_by" => ["OPS-1"]}, opts)
+
+      # linear_create_subissue: the new issue depends on its sibling, and the issue that split it off on it.
+      assert {:ok, _response} = Linear.create_subissue(context, %{"title" => "Server first", "description" => "body", "blocked_by" => ["TP-50"]}, opts)
+      assert depends_on("issue-new") == [{"issue-old", "TP-50"}]
+      assert depends_on("issue-parent-uuid") == [{"issue-x", "OPS-1"}, {"issue-new", "TP-999"}]
+
+      # linear_update_subissue: the complete list of siblings; a dependency on another ticket stays.
+      :ok = RunStore.add_dependency("issue-new", "issue-x", :done)
+
+      assert {:ok, %{"blockedBy" => ["TP-60"]}} = Linear.update_subissue(context, %{"identifier" => "TP-999", "blocked_by" => ["TP-60"]}, opts)
+      assert depends_on("issue-new") == [{"issue-x", "OPS-1"}, {"issue-other", "TP-60"}]
+    end
+
+    test "update_subissue names the sibling whose dependency the store refuses" do
+      tracked!(%{"issue-parent" => "TP-500", "issue-a" => "TP-1", "issue-b" => "TP-2"})
+      :ok = RunStore.add_dependency("issue-b", "issue-a", :done)
+
+      children = [
+        %{"id" => "issue-a", "identifier" => "TP-1", "state" => %{"name" => "Backlog"}},
+        %{"id" => "issue-b", "identifier" => "TP-2", "state" => %{"name" => "Backlog"}}
+      ]
+
+      client = fn _query, _variables, _opts ->
+        {:ok, %{"data" => %{"issue" => %{"id" => "issue-parent", "team" => %{"states" => %{"nodes" => []}}, "children" => %{"nodes" => children}}}}}
+      end
+
+      assert {:error, {:subissue_blocked_by_failed, "TP-1", "TP-2", :dependency_cycle}} =
+               Linear.update_subissue(%{issue_id: "issue-parent"}, %{"identifier" => "TP-1", "blocked_by" => ["TP-2"]}, linear_client: client)
+
+      assert depends_on("issue-a") == []
     end
   end
 
@@ -2873,6 +2917,42 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     end
   end
 
+  # Puts the tickets (id => identifier) on Symphony's records.
+  defp tracked!(tickets) do
+    for {id, identifier} <- tickets do
+      :ok = RunStore.put_ticket_state(%{repo_key: "repo-a", issue_id: id, issue_identifier: identifier, phase: "Backlog"})
+    end
+
+    :ok
+  end
+
+  # The tickets the record of `issue_id` depends on being done, each by id and identifier, in order.
+  defp depends_on(issue_id) do
+    case RunStore.get_ticket_state(issue_id) do
+      %{} = record ->
+        for %{issue_id: id, identifier: identifier, kind: :done} <- TicketState.normalize(record).depends_on do
+          {id, identifier}
+        end
+
+      _none ->
+        []
+    end
+  end
+
+  # The options that put a new issue (id => identifier) on Symphony's records when a tool reads it
+  # back, as an observation does.
+  defp observing(issues) do
+    Process.put(:observed, issues)
+
+    observe = fn repo_key, %Issue{} = issue ->
+      if is_nil(RunStore.get_ticket_state(issue.id)),
+        do: RunStore.put_ticket_state(%{repo_key: repo_key, issue_id: issue.id, issue_identifier: issue.identifier, phase: issue.state}),
+        else: :ok
+    end
+
+    [tracker: ObservedTracker, observe: observe]
+  end
+
   # A plan parent's scope: `create_subissue/3` files its sub-issues in Backlog.
   defp subissue_scope(states \\ [%{"id" => "state-backlog", "name" => "Backlog", "type" => "backlog"}]) do
     states |> split_scope() |> Map.put("labels", %{"nodes" => [%{"name" => "Plan"}]})
@@ -2893,28 +2973,23 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     fn query, variables, _opts ->
       send(test_pid, {:linear_called, query, variables})
 
-      cond do
-        query =~ "SymphonyAgentSubissueScope" ->
-          {:ok, %{"data" => %{"issue" => scope}}}
-
-        query =~ "SymphonyAgentCreateIssueRelation" ->
-          {:ok, %{"data" => %{"issueRelationCreate" => %{"success" => true}}}}
-
-        true ->
-          {:ok,
-           %{
-             "data" => %{
-               "issueCreate" => %{
-                 "success" => true,
-                 "issue" => %{"id" => "issue-new", "identifier" => "TP-999", "url" => "https://linear.app/x/TP-999", "state" => %{"name" => "Backlog"}}
-               }
+      if query =~ "SymphonyAgentSubissueScope" do
+        {:ok, %{"data" => %{"issue" => scope}}}
+      else
+        {:ok,
+         %{
+           "data" => %{
+             "issueCreate" => %{
+               "success" => true,
+               "issue" => %{"id" => "issue-new", "identifier" => "TP-999", "url" => "https://linear.app/x/TP-999", "state" => %{"name" => "Backlog"}}
              }
-           }}
+           }
+         }}
       end
     end
   end
 
-  # A stateful stand-in for Linear: children of the parent and the relations created between them.
+  # A stateful stand-in for Linear: children of the parent (it answers no relation write).
   defp in_memory_linear(linear) do
     fn query, variables, _opts ->
       cond do
@@ -2925,10 +3000,6 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
         query =~ "SymphonyAgentCreateSubissue" ->
           issue = Agent.get_and_update(linear, &add_in_memory_child(&1, variables.input))
           {:ok, %{"data" => %{"issueCreate" => %{"success" => true, "issue" => issue}}}}
-
-        query =~ "SymphonyAgentCreateIssueRelation" ->
-          Agent.update(linear, &%{&1 | relations: [variables.input | &1.relations]})
-          {:ok, %{"data" => %{"issueRelationCreate" => %{"success" => true}}}}
       end
     end
   end

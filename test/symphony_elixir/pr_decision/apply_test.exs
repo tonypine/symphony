@@ -60,14 +60,6 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
     end
   end
 
-  # Linear's blocked-by links: every call is reported; each answers what the process dictionary says.
-  defmodule Linker do
-    def add_blocked_by(blocker, issue_id) do
-      send(self(), {:add_blocked_by, blocker, issue_id})
-      Process.get(:add_blocked_by, :ok)
-    end
-  end
-
   # A store that refuses to set a hold.
   defmodule FailingOriginStore do
     def set_ci_fix_origin(_repo_key, _issue_id, _origin), do: {:error, :store_down}
@@ -126,7 +118,7 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       fix: %{ci_failure: nil, pr_conflict: nil},
       now: @now,
       links: Keyword.get(attrs, :links, []),
-      opts: [tracker: Tracker, github: GitHub, self_heal: SelfHeal, linker: Linker] ++ Keyword.get(attrs, :opts, [])
+      opts: [tracker: Tracker, github: GitHub, self_heal: SelfHeal] ++ Keyword.get(attrs, :opts, [])
     }
   end
 
@@ -969,14 +961,14 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
   describe "wait_for_competitors" do
     @leader %{issue_id: "issue-1", issue_identifier: "TP-1", pr_number: 1, pr_url: "https://github.com/acme/app/pull/1", title: "Lead", head_sha: "h1", files: ["SPEC.md"]}
 
-    test "turns auto-merge off on a Merging PR only, then links each competitor and holds the ticket in place (R14a)" do
+    test "turns auto-merge off on a Merging PR only, then records each competitor and holds the ticket in place (R14a)" do
       action = action("R14a", :wait_for_competitors, args: %{prs: [@leader], step_behind: false})
 
       assert %{outcome: :applied, links: [link]} = Apply.apply(action, ctx(:qa, facts: %{auto_merge: :armed}))
       refute_received {:disable_auto_merge, _url, _node, _opts}
-      assert_received {:add_blocked_by, "TP-1", @issue_id}
       assert %{issue_identifier: "TP-1", pr_number: 1, files: ["SPEC.md"], progress_at: @now} = link
-      assert %{linked: true, step_behind: false, released: false} = link
+      # No Linear blocker link is written for a competitor.
+      assert %{linked: false, step_behind: false, released: false} = link
 
       assert SymphonyElixir.Pauses.why({:ticket, @repo_key, @issue_id}) == ["Waiting for TP-1 to land: it changes the same files"]
       refute_received {:move, _id, _state}
@@ -987,7 +979,7 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       assert comment =~ "because it conflicts with the base branch"
     end
 
-    test "skips a link Linear already has, makes none for a PR without a ticket, and keeps the links a person released" do
+    test "links no competitor, names a PR without a ticket, and keeps the competitors a person released" do
       person = %{pr_number: 12, pr_url: "https://github.com/acme/app/pull/12", title: "Docs pass", files: ["SPEC.md", "README.md"]}
 
       released = %{
@@ -1004,7 +996,6 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       ctx = ctx(:code_review, blocked_by: [%{id: "issue-1", identifier: "TP-1", state: "QA"}], links: [released])
 
       assert %{outcome: :applied, links: [^released, leader, other]} = Apply.apply(action, ctx)
-      refute_received {:add_blocked_by, _blocker, _issue_id}
       assert %{linked: false, step_behind: true} = leader
       assert %{pr_number: 12, linked: false, title: "Docs pass"} = other
 
@@ -1014,16 +1005,13 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
              ]
     end
 
-    test "a link Symphony recorded is still its own; one Linear refuses is logged and the ticket waits without it" do
+    test "a competitor an earlier wait recorded as linked stays so, as history; the ticket waits through its pause" do
       recorded = Map.merge(@leader, %{linked: true, step_behind: false, released: false, progress_at: @now})
       ctx = ctx(:qa, blocked_by: [%{id: "issue-1", identifier: "TP-1", state: "QA"}], links: [recorded])
       action = action("R14a", :wait_for_competitors, args: %{prs: [@leader], step_behind: false})
       assert %{links: [%{linked: true}]} = Apply.apply(action, ctx)
-      refute_received {:add_blocked_by, _blocker, _issue_id}
 
-      Process.put(:add_blocked_by, {:error, :linear_down})
-      log = capture_log(fn -> assert %{outcome: :applied, links: [%{linked: false}]} = Apply.apply(action, ctx(:qa)) end)
-      assert log =~ "could not link TP-1 as a blocker"
+      assert %{outcome: :applied, links: [%{linked: false}]} = Apply.apply(action, ctx(:qa))
       assert SymphonyElixir.Pauses.paused?({:ticket, @repo_key, @issue_id})
     end
 

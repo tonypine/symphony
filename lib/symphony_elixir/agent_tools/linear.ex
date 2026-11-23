@@ -14,6 +14,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.AgentTools.SecretScanner
   alias SymphonyElixir.AgentTools.TicketLedger
   alias SymphonyElixir.CiFix
+  alias SymphonyElixir.Conductor.Tree
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Workspace.Attachments
@@ -36,6 +37,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.TicketEvents
   alias SymphonyElixir.TicketJourney
   alias SymphonyElixir.TicketSignals
+  alias SymphonyElixir.TicketState
   alias SymphonyElixir.Tracker
   alias SymphonyElixir.TransitionGuard
   alias SymphonyElixir.Walkthrough
@@ -412,15 +414,6 @@ defmodule SymphonyElixir.AgentTools.Linear do
   }
   """
 
-  @create_issue_relation_mutation """
-  mutation SymphonyAgentCreateIssueRelation($input: IssueRelationCreateInput!) {
-    issueRelationCreate(input: $input) {
-      success
-    }
-  }
-  """
-
-  # A sub-issue's blocked-by links are its inverse `blocks` relations.
   @subissue_update_scope_query """
   query SymphonyAgentSubissueUpdateScope($id: String!, $first: Int!) {
     issue(id: $id) {
@@ -439,13 +432,6 @@ defmodule SymphonyElixir.AgentTools.Linear do
           id
           identifier
           state { name type }
-          inverseRelations(first: $first) {
-            nodes {
-              id
-              type
-              issue { id identifier }
-            }
-          }
         }
       }
     }
@@ -462,23 +448,6 @@ defmodule SymphonyElixir.AgentTools.Linear do
         url
         state { name }
       }
-    }
-  }
-  """
-
-  @delete_issue_relation_mutation """
-  mutation SymphonyAgentDeleteIssueRelation($id: String!) {
-    issueRelationDelete(id: $id) {
-      success
-    }
-  }
-  """
-
-  @issue_by_identifier_query """
-  query SymphonyAgentIssueByIdentifier($id: String!) {
-    issue(id: $id) {
-      id
-      identifier
     }
   }
   """
@@ -982,9 +951,10 @@ defmodule SymphonyElixir.AgentTools.Linear do
 
     * a `plan` (or `breakdown`) parent's sub-issue lands in `Backlog`, where it waits for the plan's
       approval, which promotes it (`SymphonyElixir.BreakdownReview`);
-    * any other issue's sub-issue lands in `Todo`, and the current issue is marked blocked by it, so
-      the split-off work lands first and the current issue continues once it is terminal, with no
-      person promoting or linking anything. A link Linear refuses is reported as
+    * any other issue's sub-issue lands in `Todo`, and the current issue gets a stored dependency on
+      it (`:done`, `SymphonyElixir.RunStore.add_dependency/3`), so the split-off work lands first
+      and the current issue continues once it is done, with no person promoting or linking
+      anything. A dependency the store refuses is reported as
       `{:split_link_failed, identifier, current, reason}` after the child exists, so the run can
       retry it with `add_blocked_by/3`.
 
@@ -996,7 +966,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
 
   `blocked_by` lists identifiers of sibling sub-issues (the current issue's existing children, or
   sub-issues this run created) that block the new one. Unknown identifiers are refused before
-  anything is created; the `blocks` relations are created right after the issue.
+  anything is created; right after the issue, Symphony's records take the new one (and a sibling it
+  holds no record of yet) and the new one gets a stored `:done` dependency on each. No Linear
+  blocker link is written.
   """
   @spec create_subissue(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def create_subissue(context, attrs, opts \\ []) when is_map(attrs) do
@@ -1036,7 +1008,12 @@ defmodule SymphonyElixir.AgentTools.Linear do
            ),
          :ok <- CommentRegistry.check_subissue_title(registry, issue_id, title) do
       issue_id
-      |> create_child_issue({title, description, priority, blocked_by}, placement, registry, opts)
+      |> create_child_issue(
+        {title, description, priority, blocked_by},
+        placement,
+        {registry, issue_repo_key(context)},
+        opts
+      )
       |> record_filed(context, issue_id, title, placement)
     end
   end
@@ -1055,8 +1032,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @doc """
   Changes a `Backlog` child of the current issue, so a breakdown run can bring its plan in line
   with review comments. `identifier` names the sub-issue; then either `title` and/or `description`
-  replace its fields and `blocked_by` sets the complete list of sibling sub-issues that block it
-  (links to siblings left out are removed, links to other issues stay), or `cancel_reason` cancels
+  replace its fields and `blocked_by` sets the complete list of sibling sub-issues that block it, as
+  its stored `:done` dependencies (dependencies on siblings left out are removed, those on other
+  tickets stay; no Linear blocker link is written), or `cancel_reason` cancels
   it after posting the reason on it. A sub-issue outside `Backlog` (promoted by the plan's
   approval, or filed in `Todo` by a run of a ticket that is not a plan) is refused, as is any
   issue that is not a child of the current one.
@@ -1142,11 +1120,11 @@ defmodule SymphonyElixir.AgentTools.Linear do
     end
   end
 
-  defp apply_subissue_change(_parent, children, child, change, _repo_key, opts) do
+  defp apply_subissue_change(parent, children, child, change, repo_key, opts) do
     input = change |> Map.take([:title, :description]) |> Map.new(fn {key, value} -> {Atom.to_string(key), value} end)
 
     with :ok <- update_subissue_fields(child, input, opts),
-         :ok <- set_sibling_blockers(children, child, Map.get(change, :blocked_by), opts) do
+         :ok <- set_sibling_blockers({parent["id"], repo_key}, children, child, Map.get(change, :blocked_by), opts) do
       {:ok, Map.merge(%{"identifier" => child["identifier"], "updated" => Map.keys(input) |> Enum.sort()}, blocked_by_result(change))}
     end
   end
@@ -1163,20 +1141,20 @@ defmodule SymphonyElixir.AgentTools.Linear do
     end
   end
 
-  defp set_sibling_blockers(_children, _child, nil, _opts), do: :ok
+  defp set_sibling_blockers(_scope, _children, _child, nil, _opts), do: :ok
 
-  defp set_sibling_blockers(children, child, blocked_by, opts) do
+  defp set_sibling_blockers({parent_id, repo_key}, children, child, blocked_by, opts) do
     siblings = children |> Enum.reject(&(&1["id"] == child["id"])) |> Map.new(&{&1["identifier"], &1["id"]})
 
     case Enum.reject(blocked_by, &Map.has_key?(siblings, &1)) do
       [] ->
-        current = sibling_blocker_relations(child, siblings)
-        add = Enum.reject(blocked_by, &Map.has_key?(current, &1))
-        remove = current |> Map.drop(blocked_by) |> Map.values()
+        current = stored_sibling_blockers(child["id"], siblings)
+        add = blocked_by |> Enum.reject(&Map.has_key?(current, &1)) |> Enum.map(&{&1, Map.fetch!(siblings, &1)})
+        on_records(repo_key, parent_id, [{child["identifier"], child["id"]} | add], opts)
 
-        case link_blockers_to(child["id"], Enum.map(add, &{&1, Map.fetch!(siblings, &1)}), opts) do
+        case depend_on(child["id"], add) do
           :ok ->
-            unlink_blockers(remove, opts)
+            current |> Map.drop(blocked_by) |> Map.values() |> Enum.each(&RunStore.remove_dependency(child["id"], &1))
 
           {:error, {:add_blocked_by_failed, blocker, reason}} ->
             {:error, {:subissue_blocked_by_failed, child["identifier"], blocker, reason}}
@@ -1187,24 +1165,39 @@ defmodule SymphonyElixir.AgentTools.Linear do
     end
   end
 
-  # The child's `blocks` relations from its siblings, by the blocking sibling's identifier.
-  defp sibling_blocker_relations(child, siblings) do
-    sibling_ids = siblings |> Map.values() |> MapSet.new()
-
-    child
-    |> get_in(["inverseRelations", "nodes"])
-    |> List.wrap()
-    |> Enum.filter(&(&1["type"] == "blocks" and MapSet.member?(sibling_ids, get_in(&1, ["issue", "id"]))))
-    |> Map.new(&{get_in(&1, ["issue", "identifier"]), &1["id"]})
+  # The child's stored dependencies on its siblings, by the sibling's identifier.
+  defp stored_sibling_blockers(child_id, siblings) do
+    by_id = Map.new(siblings, fn {identifier, id} -> {id, identifier} end)
+    on = for %{issue_id: id} <- stored_dependencies(child_id), Map.has_key?(by_id, id), do: id
+    Map.new(on, &{Map.fetch!(by_id, &1), &1})
   end
 
-  defp unlink_blockers(relation_ids, opts) do
-    Enum.reduce_while(relation_ids, :ok, fn relation_id, :ok ->
-      with {:ok, body} <- graphql(@delete_issue_relation_mutation, %{id: relation_id}, opts),
-           {:ok, _body} <- check_mutation_success(body, "issueRelationDelete") do
-        {:cont, :ok}
-      else
-        {:error, reason} -> {:halt, {:error, {:remove_blocked_by_failed, reason}}}
+  defp stored_dependencies(issue_id) do
+    case RunStore.get_ticket_state(issue_id) do
+      %{} = record -> TicketState.normalize(record).depends_on
+      _none -> []
+    end
+  end
+
+  # The tickets among `tickets` (identifier and id) Symphony holds no record of yet are read and put
+  # on its records under `repo_key`, so a dependency between them is stored and names each. A read
+  # that fails leaves them off, and the dependency the store then refuses says so.
+  defp on_records(repo_key, parent_id, tickets, opts) do
+    with [_ | _] = missing <- Enum.reject(tickets, fn {_identifier, id} -> is_map(RunStore.get_ticket_state(id)) end),
+         true <- is_binary(repo_key) do
+      missing = for {identifier, id} <- missing, do: %{id: id, identifier: identifier}
+      Tree.observed(repo_key, parent_id, missing, Keyword.take(opts, [:tracker, :observe]))
+    end
+
+    :ok
+  end
+
+  # Stores that the ticket `issue_id` depends on each of `blockers` (identifier and id) being done.
+  defp depend_on(issue_id, blockers) do
+    Enum.reduce_while(blockers, :ok, fn {blocker, blocker_id}, :ok ->
+      case RunStore.add_dependency(issue_id, blocker_id, :done) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, {:add_blocked_by_failed, blocker, reason}}}
       end
     end)
   end
@@ -1223,18 +1216,19 @@ defmodule SymphonyElixir.AgentTools.Linear do
   end
 
   @doc """
-  Marks the current issue blocked by existing issues: each identifier in `blocked_by` gets a
-  `blocks` relation to the current issue, so Symphony holds it in `Todo` until every blocker is
-  terminal. Every identifier is looked
-  up before any relation is created; unknown identifiers and the current issue itself are refused.
+  Marks the current issue blocked by existing tickets: it gets a stored `:done` dependency on each
+  identifier in `blocked_by` (`SymphonyElixir.RunStore.add_dependency/3`), so the `:depends_on`
+  dispatch gate holds it until every one is done. No Linear blocker link is written. Every
+  identifier is looked up among the tickets Symphony tracks before any dependency is stored; one it
+  doesn't track, and the current issue itself, are refused.
   """
   @spec add_blocked_by(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
-  def add_blocked_by(context, attrs, opts \\ []) when is_map(attrs) do
+  def add_blocked_by(context, attrs, _opts \\ []) when is_map(attrs) do
     with {:ok, issue_id} <- current_issue_id(context),
          {:ok, identifiers} <- validate_add_blocked_by(Map.get(attrs, "blocked_by")),
-         {:ok, blockers} <- resolve_issues_by_identifier(identifiers, opts),
+         {:ok, blockers} <- resolve_tracked(identifiers),
          :ok <- reject_self_blocker(blockers, issue_id),
-         :ok <- link_blockers_to(issue_id, blockers, opts) do
+         :ok <- depend_on(issue_id, blockers) do
       {:ok, %{"blockedBy" => identifiers}}
     end
   end
@@ -1245,36 +1239,16 @@ defmodule SymphonyElixir.AgentTools.Linear do
       else: {:error, :invalid_add_blocked_by}
   end
 
-  defp resolve_issues_by_identifier(identifiers, opts) do
-    with {:ok, resolved} <- lookup_identifiers(identifiers, opts),
-         [] <- for({identifier, nil} <- resolved, do: identifier) do
-      {:ok, resolved}
-    else
-      unknown when is_list(unknown) -> {:error, {:blocked_by_not_found, unknown}}
-      {:error, _reason} = error -> error
-    end
-  end
+  # Each identifier with the issue id of the ticket Symphony tracks under it.
+  defp resolve_tracked(identifiers) do
+    ids =
+      for %{issue_identifier: identifier, issue_id: id} when is_binary(identifier) <- List.wrap(with({:error, _reason} <- RunStore.list_all_ticket_states(), do: [])),
+          into: %{},
+          do: {String.upcase(identifier), id}
 
-  defp lookup_identifiers(identifiers, opts) do
-    identifiers
-    |> Enum.reduce_while({:ok, []}, fn identifier, {:ok, acc} ->
-      case issue_id_for_identifier(identifier, opts) do
-        {:ok, id} -> {:cont, {:ok, [{identifier, id} | acc]}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, resolved} -> {:ok, Enum.reverse(resolved)}
-      error -> error
-    end
-  end
-
-  # `{:ok, nil}` when Linear has no such issue.
-  defp issue_id_for_identifier(identifier, opts) do
-    case graphql(@issue_by_identifier_query, %{id: identifier}, opts) do
-      {:ok, %{"data" => %{"issue" => %{"id" => id}}}} when is_binary(id) -> {:ok, id}
-      {:ok, _body} -> {:ok, nil}
-      {:error, reason} -> {:error, reason}
+    case Enum.reject(identifiers, &Map.has_key?(ids, &1)) do
+      [] -> {:ok, Enum.map(identifiers, &{&1, Map.fetch!(ids, &1)})}
+      unknown -> {:error, {:blocked_by_not_found, unknown}}
     end
   end
 
@@ -1283,19 +1257,6 @@ defmodule SymphonyElixir.AgentTools.Linear do
       nil -> :ok
       {identifier, _id} -> {:error, {:blocked_by_self, identifier}}
     end
-  end
-
-  defp link_blockers_to(issue_id, blockers, opts) do
-    Enum.reduce_while(blockers, :ok, fn {blocker, blocker_id}, :ok ->
-      input = %{"issueId" => blocker_id, "relatedIssueId" => issue_id, "type" => "blocks"}
-
-      with {:ok, body} <- graphql(@create_issue_relation_mutation, %{input: input}, opts),
-           {:ok, _body} <- check_mutation_success(body, "issueRelationCreate") do
-        {:cont, :ok}
-      else
-        {:error, reason} -> {:halt, {:error, {:add_blocked_by_failed, blocker, reason}}}
-      end
-    end)
   end
 
   @doc """
@@ -2156,7 +2117,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
     identifiers |> Enum.map(&(&1 |> String.trim() |> String.upcase())) |> Enum.uniq()
   end
 
-  defp create_child_issue(issue_id, {title, description, priority, blocked_by}, placement, registry, opts) do
+  defp create_child_issue(issue_id, {title, description, priority, blocked_by}, placement, {registry, repo_key}, opts) do
     with {:ok, body} <- graphql(@subissue_scope_query, %{id: issue_id, first: @related_issue_first}, opts),
          {:ok, parent} <- fetch_path(body, ["data", "issue"], :issue_not_found),
          {:ok, states} <- fetch_path(parent, ["team", "states", "nodes"], []),
@@ -2169,8 +2130,10 @@ defmodule SymphonyElixir.AgentTools.Linear do
          {:ok, identifier, new_id} <- created_subissue(response) do
       CommentRegistry.record_subissue(registry, issue_id, title, identifier, new_id)
 
-      with {:ok, response} <- link_blockers(response, {identifier, new_id}, blockers, opts) do
-        block_current_issue(response, placement, state_name, {identifier, new_id}, parent, opts)
+      on_records(repo_key, issue_id, [{identifier, new_id} | blockers], opts)
+
+      with {:ok, response} <- link_blockers(response, {identifier, new_id}, blockers) do
+        block_current_issue(response, placement, state_name, {identifier, new_id}, parent)
       end
     end
   end
@@ -2183,18 +2146,18 @@ defmodule SymphonyElixir.AgentTools.Linear do
 
   defp child_state_name(state_name, _parent) when is_binary(state_name), do: state_name
 
-  # A split-off `Todo` child holds the issue that filed it: the issue is marked blocked by the child,
-  # so Symphony's dependency gate holds it until the child is terminal and then lets it continue.
-  defp block_current_issue(response, :by_current_issue, @todo_state, {identifier, new_id}, parent, opts) do
+  # A split-off `Todo` child holds the issue that filed it: the issue depends on the child, so the
+  # `:depends_on` dispatch gate holds it until the child is done and then lets it continue.
+  defp block_current_issue(response, :by_current_issue, @todo_state, {identifier, new_id}, parent) do
     current = parent["identifier"] || parent["id"]
 
-    case link_blockers_to(parent["id"], [{identifier, new_id}], opts) do
+    case depend_on(parent["id"], [{identifier, new_id}]) do
       :ok -> {:ok, put_in(response, ["data", "issueCreate", "issue", "blocks"], [current])}
       {:error, {:add_blocked_by_failed, _blocker, why}} -> {:error, {:split_link_failed, identifier, current, why}}
     end
   end
 
-  defp block_current_issue(response, _placement, _state_name, _created, _parent, _opts), do: {:ok, response}
+  defp block_current_issue(response, _placement, _state_name, _created, _parent), do: {:ok, response}
 
   defp created_subissue(response) do
     case get_in(response, ["data", "issueCreate", "issue"]) do
@@ -2221,21 +2184,13 @@ defmodule SymphonyElixir.AgentTools.Linear do
     end
   end
 
-  defp link_blockers(response, {identifier, new_id}, blockers, opts) do
-    linked =
-      Enum.reduce_while(blockers, :ok, fn {blocker, blocker_id}, :ok ->
-        input = %{"issueId" => blocker_id, "relatedIssueId" => new_id, "type" => "blocks"}
+  defp link_blockers(response, {identifier, new_id}, blockers) do
+    case depend_on(new_id, blockers) do
+      :ok ->
+        {:ok, put_in(response, ["data", "issueCreate", "issue", "blockedBy"], Enum.map(blockers, &elem(&1, 0)))}
 
-        with {:ok, body} <- graphql(@create_issue_relation_mutation, %{input: input}, opts),
-             {:ok, _body} <- check_mutation_success(body, "issueRelationCreate") do
-          {:cont, :ok}
-        else
-          {:error, reason} -> {:halt, {:error, {:blocked_by_relation_failed, identifier, blocker, reason}}}
-        end
-      end)
-
-    with :ok <- linked do
-      {:ok, put_in(response, ["data", "issueCreate", "issue", "blockedBy"], Enum.map(blockers, &elem(&1, 0)))}
+      {:error, {:add_blocked_by_failed, blocker, reason}} ->
+        {:error, {:blocked_by_relation_failed, identifier, blocker, reason}}
     end
   end
 

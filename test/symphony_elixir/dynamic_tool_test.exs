@@ -8,6 +8,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
   alias SymphonyElixir.PromptSafety
   alias SymphonyElixir.QaAndroid.Driver, as: QaAndroidDriver
   alias SymphonyElixir.TicketEvents
+  alias SymphonyElixir.TicketState
 
   # A spy for the writer `TransitionGuard.perform/4` moves through: it records every move it is
   # asked to make and answers with the result a test sets (`:ok` by default).
@@ -636,8 +637,11 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       refute "linear_update_subissue" in Enum.map(DynamicTool.tool_specs(:read_only), & &1["name"])
     end
 
-    test "edits a Backlog sub-issue and sets its sibling blockers" do
+    test "edits a Backlog sub-issue and sets its sibling blockers as stored dependencies" do
       opts = update_subissue_opts()
+      track_subissues!()
+      # TP-3 depends on TP-2 and TP-4, siblings, and on OPS-1, which is not one.
+      for on <- ["issue-2", "issue-4", "issue-ops"], do: :ok = RunStore.add_dependency("issue-3", on, :done)
 
       response =
         DynamicTool.execute(
@@ -650,12 +654,8 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       assert %{"identifier" => "TP-3", "updated" => ["description", "title"], "blockedBy" => ["TP-2", "TP-5"]} = Jason.decode!(response["output"])
       assert_received {:linear_client_called, _query, %{id: "issue-3", input: %{"title" => "History", "description" => "New scope"}}}
       # TP-2 already blocks it; TP-5 is added; TP-4 is no longer listed and is removed;
-      # OPS-1 is not a sibling and stays.
-      assert_received {:linear_client_called, _query, %{input: %{"issueId" => "issue-5", "relatedIssueId" => "issue-3", "type" => "blocks"}}}
-      assert_received {:linear_client_called, query, %{id: "rel-4"}}
-      assert query =~ "SymphonyAgentDeleteIssueRelation"
-      refute_received {:linear_client_called, _query, %{input: %{"issueId" => "issue-2"}}}
-      refute_received {:linear_client_called, _query, %{id: "rel-ops"}}
+      # OPS-1 is not a sibling and stays. No Linear relation is written (the client knows none).
+      assert depends_on("issue-3") == ["issue-2", "issue-ops", "issue-5"]
 
       response = DynamicTool.execute("linear_update_subissue", %{"identifier" => "TP-3", "description" => "Only this"}, opts)
       assert %{"identifier" => "TP-3", "updated" => ["description"]} = decoded = Jason.decode!(response["output"])
@@ -664,6 +664,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       response = DynamicTool.execute("linear_update_subissue", %{"identifier" => "TP-3", "blocked_by" => []}, opts)
       assert %{"updated" => [], "blockedBy" => []} = Jason.decode!(response["output"])
       refute_received {:linear_client_called, _query, %{input: %{"title" => _title}}}
+      assert depends_on("issue-3") == ["issue-ops"]
     end
 
     test "cancels a Backlog sub-issue after posting the reason on it" do
@@ -742,14 +743,15 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       assert %{"error" => %{"code" => "blocked_by_not_sibling", "unknown" => ["TP-3", "OPS-1"], "message" => message}} = Jason.decode!(response["output"])
       assert message =~ "Nothing was changed."
 
-      failing = update_subissue_opts(fail: "SymphonyAgentCreateIssueRelation")
-      response = DynamicTool.execute("linear_update_subissue", %{"identifier" => "TP-3", "blocked_by" => ["TP-2", "TP-5"]}, failing)
-      assert %{"error" => %{"code" => "blocked_by_relation_failed", "identifier" => "TP-3", "blocker" => "TP-5"}} = Jason.decode!(response["output"])
+      # TP-5 already depends on TP-3, so TP-3 can't depend on it: the store refuses the cycle.
+      track_subissues!()
+      :ok = RunStore.add_dependency("issue-5", "issue-3", :done)
+      response = DynamicTool.execute("linear_update_subissue", %{"identifier" => "TP-3", "blocked_by" => ["TP-2", "TP-5"]}, opts)
 
-      failing = update_subissue_opts(fail: "SymphonyAgentDeleteIssueRelation")
-      response = DynamicTool.execute("linear_update_subissue", %{"identifier" => "TP-3", "blocked_by" => ["TP-2"]}, failing)
-      assert %{"error" => %{"code" => "remove_blocked_by_failed", "message" => message}} = Jason.decode!(response["output"])
-      assert message =~ "a person removes a blocker from the ticket page in the Director"
+      assert %{"error" => %{"code" => "blocked_by_relation_failed", "identifier" => "TP-3", "blocker" => "TP-5", "message" => message}} =
+               Jason.decode!(response["output"])
+
+      assert message =~ "Could not store that TP-3 depends on TP-5"
 
       failing = update_subissue_opts(fail: "SymphonyAgentUpdateSubissue")
       response = DynamicTool.execute("linear_update_subissue", %{"identifier" => "TP-3", "title" => "x"}, failing)
@@ -770,13 +772,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
         %{"id" => "state-canceled", "name" => "Canceled", "type" => "canceled"}
       ])
 
-    child = fn id, identifier, state, relations ->
-      %{"id" => id, "identifier" => identifier, "state" => state, "inverseRelations" => %{"nodes" => relations}}
-    end
-
-    blocker = fn id, type, issue_id, identifier ->
-      %{"id" => id, "type" => type, "issue" => %{"id" => issue_id, "identifier" => identifier}}
-    end
+    child = fn id, identifier, state -> %{"id" => id, "identifier" => identifier, "state" => state} end
 
     scope =
       Keyword.get(overrides, :scope, %{
@@ -786,15 +782,10 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
             "team" => %{"states" => %{"nodes" => states}},
             "children" => %{
               "nodes" => [
-                child.("issue-2", "TP-2", %{"name" => "Backlog"}, []),
-                child.("issue-3", "TP-3", %{"name" => "Backlog"}, [
-                  blocker.("rel-2", "blocks", "issue-2", "TP-2"),
-                  blocker.("rel-4", "blocks", "issue-4", "TP-4"),
-                  blocker.("rel-ops", "blocks", "issue-ops", "OPS-1"),
-                  blocker.("rel-dup", "duplicate", "issue-5", "TP-5")
-                ]),
-                child.("issue-4", "TP-4", %{"name" => "In Progress"}, []),
-                child.("issue-5", "TP-5", %{"name" => "Backlog"}, []),
+                child.("issue-2", "TP-2", %{"name" => "Backlog"}),
+                child.("issue-3", "TP-3", %{"name" => "Backlog"}),
+                child.("issue-4", "TP-4", %{"name" => "In Progress"}),
+                child.("issue-5", "TP-5", %{"name" => "Backlog"}),
                 %{"id" => "issue-6", "identifier" => "TP-6", "state" => nil}
               ]
             }
@@ -811,8 +802,6 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
         cond do
           query =~ "SymphonyAgentSubissueUpdateScope" -> {nil, nil}
           query =~ "SymphonyAgentUpdateSubissue" -> {"issueUpdate", "SymphonyAgentUpdateSubissue"}
-          query =~ "SymphonyAgentDeleteIssueRelation" -> {"issueRelationDelete", "SymphonyAgentDeleteIssueRelation"}
-          query =~ "SymphonyAgentCreateIssueRelation" -> {"issueRelationCreate", "SymphonyAgentCreateIssueRelation"}
           query =~ "SymphonyAgentAddComment" -> {"commentCreate", "SymphonyAgentAddComment"}
         end
 
@@ -820,6 +809,23 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     end
 
     [issue: %Issue{id: "issue-current"}, linear_client: client, tracker: FakeTracker]
+  end
+
+  # The sub-issues of `update_subissue_opts/1`'s scope, and a ticket outside it, on Symphony's records.
+  defp track_subissues! do
+    for {id, identifier} <- [{"issue-current", "TP-1"}, {"issue-2", "TP-2"}, {"issue-3", "TP-3"}, {"issue-4", "TP-4"}, {"issue-5", "TP-5"}, {"issue-ops", "OPS-1"}] do
+      :ok = RunStore.put_ticket_state(%{repo_key: "repo-a", issue_id: id, issue_identifier: identifier, phase: "Backlog"})
+    end
+
+    :ok
+  end
+
+  # The ids of the tickets the record of `issue_id` depends on, in their order.
+  defp depends_on(issue_id) do
+    case RunStore.get_ticket_state(issue_id) do
+      %{} = record -> for %{issue_id: id, kind: :done} <- TicketState.normalize(record).depends_on, do: id
+      _none -> []
+    end
   end
 
   describe "linear_create_subissue" do
@@ -1182,9 +1188,14 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       opts = [issue: %Issue{id: "issue-current"}, comment_registry: registry, linear_client: client.(created, %{"success" => true})]
       args = %{"title" => "Slice", "description" => "body", "blocked_by" => ["tp-2"]}
 
+      for {id, identifier} <- [{"issue-a", "TP-2"}, {"issue-new", "TP-3"}] do
+        :ok = RunStore.put_ticket_state(%{repo_key: "repo-a", issue_id: id, issue_identifier: identifier, phase: "Backlog"})
+      end
+
       response = DynamicTool.execute("linear_create_subissue", args, opts)
       assert response["success"] == true
       assert %{"data" => %{"issueCreate" => %{"issue" => %{"blockedBy" => ["TP-2"]}}}} = Jason.decode!(response["output"])
+      assert depends_on("issue-new") == ["issue-a"]
 
       response = DynamicTool.execute("linear_create_subissue", %{args | "title" => "Slice 2", "blocked_by" => ["TP-2", "OPS-9"]}, opts)
 
@@ -1193,13 +1204,14 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
       assert message =~ "Not a sub-issue: OPS-9. Nothing was created."
 
-      response =
-        DynamicTool.execute("linear_create_subissue", %{args | "title" => "Slice 2"}, Keyword.put(opts, :linear_client, client.(created, %{"success" => false})))
+      # The new issue has no record, so its dependency can't be stored.
+      :ok = RunStore.delete_ticket_state("issue-new")
+      response = DynamicTool.execute("linear_create_subissue", %{args | "title" => "Slice 2"}, opts)
 
       assert %{"error" => %{"code" => "blocked_by_relation_failed", "identifier" => "TP-3", "blocker" => "TP-2", "message" => message}} =
                Jason.decode!(response["output"])
 
-      assert message =~ "Created TP-3, but could not mark it blocked by TP-2"
+      assert message =~ "Created TP-3, but could not store that it depends on TP-2"
       assert message =~ "a person adds a blocker from the ticket page in the Director"
       refute message =~ "for a human"
 
@@ -1230,6 +1242,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
       states = [%{"id" => "state-backlog", "name" => "Backlog"}, %{"id" => "state-todo", "name" => "Todo"}]
       :ok = RunStore.clear()
+      :ok = RunStore.put_ticket_state(%{repo_key: "repo-a", issue_id: "issue-current", issue_identifier: "TP-40", phase: "In Progress"})
 
       opts = [
         issue: %Issue{id: "issue-current", repo_key: "repo-a"},
@@ -1247,13 +1260,15 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       assert filed.run_id == "run-1"
       assert %{"data" => %{"issueCreate" => %{"issue" => %{"identifier" => "TP-41", "blocks" => ["TP-40"]}}}} = Jason.decode!(response["output"])
       assert_received {:linear_called, _mutation, %{input: %{"stateId" => "state-todo"}}}
-      assert_received {:linear_called, _relation, %{input: %{"issueId" => "issue-new", "relatedIssueId" => "issue-current", "type" => "blocks"}}}
+      # The issue that split it off depends on it, in Symphony's records: no Linear relation.
+      assert depends_on("issue-current") == ["issue-new"]
 
-      response =
-        DynamicTool.execute("linear_create_subissue", %{"title" => "Server second", "description" => "body"}, Keyword.put(opts, :linear_client, client.(states, %{"success" => false})))
+      # Without the current issue's record, its dependency can't be stored.
+      :ok = RunStore.delete_ticket_state("issue-current")
+      response = DynamicTool.execute("linear_create_subissue", %{"title" => "Server second", "description" => "body"}, opts)
 
       assert %{"error" => %{"code" => "split_link_failed", "identifier" => "TP-41", "blocked" => "TP-40", "message" => message}} = Jason.decode!(response["output"])
-      assert message =~ "Created TP-41 in Todo, but could not mark TP-40 blocked by it"
+      assert message =~ "Created TP-41 in Todo, but could not store that TP-40 depends on it"
       assert message =~ "linear_add_blocked_by"
 
       no_todo = client.([%{"id" => "state-backlog", "name" => "Backlog"}], %{"success" => true})
@@ -1266,46 +1281,41 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
   end
 
   describe "linear_add_blocked_by" do
-    test "is advertised with only blocked_by, hidden from the read-only scope, and links through the legacy alias" do
+    test "is advertised with only blocked_by, hidden from the read-only scope, and stores through the legacy alias" do
       assert %{"inputSchema" => %{"properties" => properties, "required" => ["blocked_by"]}} =
                Enum.find(DynamicTool.tool_specs(), &(&1["name"] == "linear_add_blocked_by"))
 
       assert Map.keys(properties) == ["blocked_by"]
       refute "linear_add_blocked_by" in Enum.map(DynamicTool.tool_specs(:read_only), & &1["name"])
 
-      client = fn query, variables, _opts ->
-        if query =~ "SymphonyAgentIssueByIdentifier",
-          do: {:ok, %{"data" => %{"issue" => %{"id" => "id-" <> variables.id, "identifier" => variables.id}}}},
-          else: {:ok, %{"data" => %{"issueRelationCreate" => %{"success" => true}}}}
-      end
-
-      response = DynamicTool.execute("linear.add_blocked_by", %{blocked_by: ["TP-2"]}, issue: %Issue{id: "issue-current"}, linear_client: client)
+      track_subissues!()
+      no_linear = fn _query, _variables, _opts -> flunk("Linear should not be called") end
+      response = DynamicTool.execute("linear.add_blocked_by", %{blocked_by: ["TP-2"]}, issue: %Issue{id: "issue-current"}, linear_client: no_linear)
       assert response["success"] == true
       assert %{"blockedBy" => ["TP-2"]} = Jason.decode!(response["output"])
+      assert depends_on("issue-current") == ["issue-2"]
     end
 
     test "returns explicit error payloads" do
       issue = %Issue{id: "issue-current"}
+      no_linear = fn _query, _variables, _opts -> flunk("Linear should not be called") end
+      track_subissues!()
+      # TP-3 already depends on the current issue, so the current issue can't depend on it.
+      :ok = RunStore.add_dependency("issue-3", "issue-current", :done)
 
-      lookup = fn issue_node ->
-        fn query, _variables, _opts ->
-          if query =~ "SymphonyAgentIssueByIdentifier",
-            do: {:ok, %{"data" => %{"issue" => issue_node}}},
-            else: {:error, :linear_down}
-        end
-      end
-
-      for {args, client, code} <- [
-            {%{"blocked_by" => []}, lookup.(nil), "invalid_add_blocked_by"},
-            {%{"blocked_by" => ["TP-404"]}, lookup.(nil), "blocked_by_not_found"},
-            {%{"blocked_by" => ["TP-1"]}, lookup.(%{"id" => "issue-current"}), "blocked_by_self"},
-            {%{"blocked_by" => ["TP-2"]}, lookup.(%{"id" => "issue-2"}), "add_blocked_by_failed"}
+      for {args, code, words} <- [
+            {%{"blocked_by" => []}, "invalid_add_blocked_by", "linear_add_blocked_by requires"},
+            {%{"blocked_by" => ["TP-404"]}, "blocked_by_not_found", "could not find TP-404 among the tickets Symphony tracks"},
+            {%{"blocked_by" => ["TP-1"]}, "blocked_by_self", "cannot mark TP-1, the current issue, as its own blocker"},
+            {%{"blocked_by" => ["TP-3"]}, "add_blocked_by_failed", "Could not store that the current issue depends on TP-3"}
           ] do
-        response = DynamicTool.execute("linear_add_blocked_by", args, issue: issue, linear_client: client)
+        response = DynamicTool.execute("linear_add_blocked_by", args, issue: issue, linear_client: no_linear)
         assert %{"error" => %{"code" => ^code, "message" => message}} = Jason.decode!(response["output"])
-        assert message =~ "linear_add_blocked_by" or message =~ "Could not mark the current issue blocked by TP-2"
+        assert message =~ words
         if code == "add_blocked_by_failed", do: assert(message =~ "a person adds a blocker from the ticket page in the Director")
       end
+
+      assert depends_on("issue-current") == []
     end
   end
 

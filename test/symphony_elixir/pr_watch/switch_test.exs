@@ -80,22 +80,6 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
     end
   end
 
-  # Linear's blocked-by links: recorded, and shown on the blocked issue as Linear would.
-  defmodule Linker do
-    alias SymphonyElixir.PrWatch.SwitchTest.World
-
-    def add_blocked_by(blocker, issue_id) do
-      World.call(:link, {blocker, issue_id})
-      %{id: id, state: state} = World.get(:issues) |> Map.values() |> Enum.find(&(&1.identifier == blocker))
-      World.update(:issues, &Map.update!(&1, issue_id, fn issue -> %{issue | blocked_by: issue.blocked_by ++ [%{id: id, identifier: blocker, state: state}]} end))
-    end
-
-    def remove_blocked_by(blocker, issue_id) do
-      World.call(:unlink, {blocker, issue_id})
-      World.update(:issues, &Map.update!(&1, issue_id, fn issue -> %{issue | blocked_by: Enum.reject(issue.blocked_by, fn b -> b.identifier == blocker end)} end))
-    end
-  end
-
   defmodule GitHub do
     alias SymphonyElixir.PrWatch.SwitchTest.World
 
@@ -158,7 +142,6 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
     end
 
     def attach(identifier, body, _opts), do: World.call(:evidence, {identifier, body})
-    def block(issue, ticket, _opts), do: World.call(:blocked_by, {issue.id, ticket.identifier})
   end
 
   setup do
@@ -235,7 +218,6 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       github: GitHub,
       fetch: Fetch,
       fixer: Fixer,
-      linker: Linker,
       interval_ms: 30_000,
       now: fn -> now() end,
       # Every ticket holds a slot, so the watcher acts on it; the tests of a ticket without one
@@ -417,7 +399,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert length(World.calls(:rerun)) == 10
       assert moves(issue_id) == List.duplicate("CI Fix", 10)
 
-      # The backstop: one fix ticket for the failing check, linked as a blocker, and a Blocked hold. The
+      # The backstop: one fix ticket for the failing check and a Blocked hold, with no Linear blocker link. The
       # read after the 10th run ended spent its count.
       tick!(pid)
       assert %{red: 10, fix_failures: failures} = attempts(issue_id)
@@ -426,7 +408,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert [{"TP-901", %{component: "ci:specs", scope: @repo_key, title: "Self-heal: CI keeps failing the specs check", description: description}}] = World.calls(:fix_ticket)
       assert description =~ "The failure may be that pull request's own rather than this repo's CI"
       assert description =~ "https://github.com/acme/app/pull/1"
-      assert World.calls(:blocked_by) == [{issue_id, "TP-901"}]
+      assert World.calls(:blocked_by) == []
       assert fix_waits(issue_id) == ["TP-901"]
       refute deciding(issue_id)
 
@@ -458,7 +440,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       tick!(pid)
 
       assert [{"TP-901", _attrs}] = World.calls(:fix_ticket)
-      assert World.calls(:blocked_by) == [{first, "TP-901"}, {second, "TP-901"}]
+      assert World.calls(:blocked_by) == []
 
       for issue_id <- [first, second] do
         assert fix_waits(issue_id) == ["TP-901"]
@@ -963,7 +945,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
         assert description =~ "specs at #{String.slice(head, 0, 7)}: ERROR: specs failed at stub_test.exs:21"
       end
 
-      assert World.calls(:blocked_by) == [{issue_id, "TP-901"}]
+      assert World.calls(:blocked_by) == []
       assert fix_waits(issue_id) == ["TP-901"]
       refute deciding(issue_id)
       assert state(issue_id) == "QA"
@@ -1065,7 +1047,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert decision(follower).waits_on == %{type: "pull_request", keys: ["TP-1"]}
       assert moves(follower) == []
       assert World.calls(:disarm) == ["https://github.com/acme/app/pull/2"]
-      assert World.calls(:link) == [{"TP-1", follower}]
+      assert World.calls(:link) == []
       assert [%{issue_identifier: "TP-2", waits_for: %{issue_identifier: "TP-1"}, reason: ^reason}] = PrWatch.landing_waits()
 
       # The leader merged and left the open PRs: the follower's conflict gets one fix run.
@@ -1079,7 +1061,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert World.calls(:unlink) == []
     end
 
-    test "a Merging PR that conflicts while a QA PR sharing SPEC.md is ahead waits on it as a blocked-by link and a pause (TP-989)" do
+    test "a Merging PR that conflicts while a QA PR sharing SPEC.md is ahead waits on it as a pause, with no Linear link (TP-989)" do
       leader = ticket!("1", "QA", ci: :pending, mergeable: :blocked)
       follower = ticket!("2", "Merging", dirty() ++ [auto_merge: :armed])
       World.update(:open_pulls, fn _ -> [open_pull(1, ["SPEC.md"]), open_pull(2, ["SPEC.md", "lib/b.ex"])] end)
@@ -1091,24 +1073,24 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert %{rule: "R14a", kind: :wait_for_competitors, outcome: :applied} = decision(follower)
       assert decision(leader).rule != "R14a"
       assert_waits!(follower, "Waiting on TP-1 to land: they change the same files (SPEC.md)", ["TP-1"])
-      assert World.calls(:link) == [{"TP-1", follower}]
-      assert %{blocked_by: [%{identifier: "TP-1"}]} = World.get(:issues)[follower]
+      assert World.calls(:link) == []
+      assert %{blocked_by: []} = World.get(:issues)[follower]
       assert World.calls(:disarm) == ["https://github.com/acme/app/pull/2"]
-      assert [%{issue_identifier: "TP-1", linked: true, step_behind: false, files: ["SPEC.md"]}] = watch(follower).links
+      assert [%{issue_identifier: "TP-1", linked: false, step_behind: false, files: ["SPEC.md"]}] = watch(follower).links
 
       tick!(pid, 2)
       assert moves(follower) == []
       assert state(follower) == "Merging"
-      assert World.calls(:link) == [{"TP-1", follower}]
+      assert World.calls(:link) == []
 
-      # The leader lands: on the next tick the hold clears, the link stays, and one CI Fix runs for the conflict.
+      # The leader lands: on the next tick the hold clears and one CI Fix runs for the conflict.
       pr!("1", pr: :merged)
       World.update(:open_pulls, fn _ -> [open_pull(2, ["SPEC.md", "lib/b.ex"])] end)
       tick!(pid)
 
       refute paused?(follower)
       assert World.calls(:unlink) == []
-      assert %{blocked_by: [%{identifier: "TP-1"}]} = World.get(:issues)[follower]
+      assert %{blocked_by: []} = World.get(:issues)[follower]
       assert moves(follower) == ["CI Fix"]
       assert %{rule: "R14"} = decision(follower)
       assert CiFix.origin(follower) == "Merging"
@@ -1221,7 +1203,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
     end
   end
 
-  describe "competing PRs wait as blocked-by links (TP-989, D14)" do
+  describe "competing PRs wait as pauses, with no Linear link (TP-989, D14)" do
     # TP-2 (Merging) conflicts while TP-1 (QA), sharing SPEC.md, is ahead: it waits on TP-1.
     defp waiting!(attrs \\ []) do
       leader = ticket!("1", "QA", ci: :pending, mergeable: :blocked)
@@ -1236,14 +1218,14 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
 
     defp left_race!(pid, follower) do
       tick!(pid)
-      assert World.calls(:unlink) == [{"TP-1", follower}]
+      assert World.calls(:unlink) == []
       assert World.get(:issues)[follower].blocked_by == []
       refute paused?(follower)
       assert moves(follower) == ["CI Fix"]
       assert watch(follower).links == []
     end
 
-    test "the leader's PR closed without merging: Symphony removes the link it added and the hold clears" do
+    test "the leader's PR closed without merging: the competitor is dropped and the hold clears" do
       {pid, _leader, follower} = waiting!()
       pr!("1", pr: :closed)
       open_pulls!([open_pull(2, ["SPEC.md"])])
@@ -1282,11 +1264,11 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       refute paused?(follower)
     end
 
-    test "a restart keeps the hold and the record of Symphony's links" do
+    test "a restart keeps the hold and the record of the competitors" do
       {_pid, _leader, follower} = waiting!()
       stop_supervised!({Repo, @repo_key})
 
-      assert [%{issue_identifier: "TP-1", linked: true}] = RunStore.get_ticket_state(follower) |> TicketState.pr_watch() |> Map.fetch!(:links)
+      assert [%{issue_identifier: "TP-1", linked: false}] = RunStore.get_ticket_state(follower) |> TicketState.pr_watch() |> Map.fetch!(:links)
       assert paused?(follower)
 
       pid = start!()
@@ -1304,7 +1286,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       capture_log(fn -> tick!(pid) end)
 
       assert paused?(follower)
-      assert [%{linked: true}] = watch(follower).links
+      assert [%{linked: false}] = watch(follower).links
       assert World.calls(:unlink) == []
     end
 
@@ -1314,18 +1296,18 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       tick!(pid)
 
       refute paused?(follower)
-      assert World.calls(:unlink) == [{"TP-1", follower}]
+      assert World.calls(:unlink) == []
     end
 
-    test "a person's Unblock removes Symphony's links and the ticket no longer waits on those PRs" do
+    test "a person's Unblock releases the competitors and the ticket no longer waits on those PRs" do
       {pid, _leader, follower} = waiting!()
       assert :ok = Repo.release(pid, follower)
-      assert World.calls(:unlink) == [{"TP-1", follower}]
+      assert World.calls(:unlink) == []
       assert [%{released: true, linked: false}] = watch(follower).links
 
       tick!(pid)
       assert moves(follower) == ["CI Fix"]
-      assert World.calls(:link) == [{"TP-1", follower}]
+      assert World.calls(:link) == []
       assert [%{released: true}] = watch(follower).links
 
       # The released PR merged: nothing is left to remember.
@@ -1354,7 +1336,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
 
       assert %{rule: "R15", kind: :wait_for_competitors, outcome: :applied} = decision(stepping)
       assert_waits!(stepping, "Waiting on TP-1 and TP-3 to land: they change the same files (SPEC.md)", ["TP-1", "TP-3"])
-      assert World.calls(:link) == [{"TP-1", stepping}, {"TP-3", stepping}]
+      assert World.calls(:link) == []
       assert Enum.all?(watch(stepping).links, & &1.step_behind)
       assert moves(stepping) == ["CI Fix"]
       refute Enum.any?(watch(behind).facts.ahead, &(&1.issue_identifier == "TP-2"))
@@ -1376,7 +1358,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert moves(stepping) == ["CI Fix", "CI Fix"]
     end
 
-    test "a link that would close a cycle is not added: TP-1 is blocked by TP-2, so TP-2 doesn't wait on TP-1" do
+    test "a wait that would close a cycle is not made: TP-1 is blocked by TP-2, so TP-2 doesn't wait on TP-1" do
       {pid, stepping} = exhausted!("2")
       blocked = ticket!("1", "In Progress", dirty())
       World.update(:issues, &Map.update!(&1, blocked, fn issue -> %{issue | blocked_by: [%{id: stepping, identifier: "TP-2", state: "Merging"}]} end))

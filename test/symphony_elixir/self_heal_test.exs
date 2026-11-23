@@ -320,14 +320,14 @@ defmodule SymphonyElixir.SelfHealTest do
   end
 
   describe "heal/2" do
-    test "files one fix ticket, records the bookkeeping, links and holds the ticket on it" do
+    test "files one fix ticket, records the bookkeeping and holds the ticket on it, with no Linear blocker link" do
       assert :filed = SelfHeal.heal(issue(), heal_opts(outcome(:environment_unreachable)))
 
       assert %{component: "qa_environment", scope: @symphony_repo_key, fix_ticket: @fix_ticket, signature: ":environment_unreachable"} =
                Process.get(:recorded_self_heal)
 
       assert %{scope: @symphony_repo_key, component: "qa_environment", title: "Self-heal: repair the qa_environment block"} = Process.get(:fixer_create)
-      assert Process.get(:fixer_block) == {@issue_id, @fix_ticket}
+      assert Process.get(:fixer_block) == nil
 
       assert @fix_ticket in fix_tickets()
 
@@ -495,7 +495,7 @@ defmodule SymphonyElixir.SelfHealTest do
       assert Process.get(:fixer_create) == nil
       assert {@fix_ticket, evidence} = Process.get(:fixer_attach)
       assert evidence =~ ":environment_unreachable"
-      assert Process.get(:fixer_block) == {@issue_id, @fix_ticket}
+      assert Process.get(:fixer_block) == nil
       assert @fix_ticket in fix_tickets()
 
       # Reusing another ticket's fix ticket files nothing, so the self-heal rule records no filing.
@@ -519,7 +519,7 @@ defmodule SymphonyElixir.SelfHealTest do
 
         assert %{component: "qa_environment", scope: @symphony_repo_key} = Process.get(:fixer_create)
         assert Process.get(:fixer_attach) == nil
-        assert Process.get(:fixer_block) == {@issue_id, "TP-1001"}
+        assert Process.get(:fixer_block) == nil
         assert "TP-1001" in fix_tickets()
         assert %{fix_ticket: "TP-1001"} = Process.get(:recorded_self_heal)
         if fix_state == {:error, :not_found}, do: assert(log =~ "cannot reuse fix ticket TP-919")
@@ -549,7 +549,7 @@ defmodule SymphonyElixir.SelfHealTest do
       assert :filed = SelfHeal.heal(issue(), heal_opts(outcome, terminal_states: ["Done", "Canceled"]))
 
       assert Process.get(:fixer_create) == nil
-      assert Process.get(:fixer_block) == {@issue_id, "TP-716"}
+      assert Process.get(:fixer_block) == nil
       assert {"TP-716", evidence} = Process.get(:fixer_attach)
       assert evidence =~ "a fake gh and a git checkout are missing"
 
@@ -759,7 +759,7 @@ defmodule SymphonyElixir.SelfHealTest do
         assert :filed = SelfHeal.heal(issue(), heal_opts(outcome, attempts: 9, terminal_states: ["Done", "Canceled"]))
 
         assert Process.get(:fixer_create) == nil
-        assert Process.get(:fixer_block) == {@issue_id, "TP-1000"}
+        assert Process.get(:fixer_block) == nil
         assert "TP-1000" in fix_tickets()
         assert %{fix_ticket: "TP-1000"} = Process.get(:recorded_self_heal)
       end
@@ -872,11 +872,7 @@ defmodule SymphonyElixir.SelfHealTest do
       assert fix_tickets() == [@fix_ticket]
     end
 
-    test "a link or an evidence comment that fails does not stop the hold" do
-      Process.put(:block_result, {:error, :linear_down})
-      assert :filed = SelfHeal.heal(issue(), heal_opts(outcome(:environment_unreachable)))
-
-      Process.put(:block_result, :ok)
+    test "an evidence comment that fails does not stop the hold" do
       Process.put(:attach_result, {:error, :linear_down})
 
       Process.put(:ticket_states, [fix_record(":environment_unreachable")])

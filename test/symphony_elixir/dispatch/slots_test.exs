@@ -23,8 +23,9 @@ defmodule SymphonyElixir.Dispatch.SlotsTest do
   end
 
   describe "releases?/2" do
-    test "a ticket gives its slot up when it is no longer a candidate, waits on its sub-tickets or on an app update" do
+    test "a ticket gives its slot up when it is no longer a candidate, waits on its sub-tickets, a stored dependency or an app update" do
       refute Slots.releases?(nil, [])
+      assert Slots.releases?({"waiting for MT-9 to be done", nil, :depends_on}, [])
       assert Slots.releases?({"Done is a terminal state", nil, :not_candidate}, [])
       assert Slots.releases?({"not assigned to this Symphony's worker", :not_assigned, nil}, [])
       assert Slots.releases?({"waiting on its sub-tickets", nil, :sub_tickets}, [])

@@ -30,7 +30,11 @@ defmodule SymphonyElixir.Situation do
   (`SymphonyElixir.Inbox.FromRecord`). A plan in `Plan Review` reads `waiting_on_you`, a parent the
   dispatch pass held for its sub-tickets, or one in `Waiting on sub-tickets` with one still open,
   `waiting_on_sub_tickets` ("2 of 5 done", `waits_on` the open ones), and a ticket in `Backlog`
-  `paused_by_rule`. A ticket that is no plan, which its PR's merge put in `Waiting on sub-tickets`
+  `paused_by_rule`. A ticket the dispatch pass held on a stored dependency that is not met (the
+  `:depends_on` gate, `SymphonyElixir.Dispatch.DependsOn`) reads `blocked_by_ticket` exactly as one
+  paused on a blocker does: "Blocked by TP-1", `waits_on` that ticket, its phase as the cause; the
+  ticket named is the first dependency whose ticket is not Done, else the first that needs a
+  Symphony update including it, whose cause says so. A ticket that is no plan, which its PR's merge put in `Waiting on sub-tickets`
   and whose sub-tickets all ended, reads `waiting_for_ci` "Closing": Symphony moves it to `Done` on
   its next poll. Only a plan there has "The epic review" next.
 
@@ -62,6 +66,7 @@ defmodule SymphonyElixir.Situation do
   alias SymphonyElixir.AgentProviders
   alias SymphonyElixir.{CiWait, Config, PrDecision, RunStore, TicketEvents, TicketPullRequest, TicketState}
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.Dispatch.DependsOn
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.PrWatch.{SilentWait, StalledRun}
   alias SymphonyElixir.TicketEvents.{Event, Summary}
@@ -430,7 +435,7 @@ defmodule SymphonyElixir.Situation do
 
   defp holds?("waiting_on_you", ctx), do: open_questions(ctx) != [] or reason(ctx, :question) != nil or ctx.phase == "plan review"
   defp holds?("retrying", ctx), do: ctx.retry != nil
-  defp holds?("blocked_by_ticket", ctx), do: reason(ctx, :ticket) != nil
+  defp holds?("blocked_by_ticket", ctx), do: reason(ctx, :ticket) != nil or depends_on_skip?(ctx)
   defp holds?("waiting_on_sub_tickets", ctx), do: waits_on_sub_tickets?(ctx)
   defp holds?("waiting_for_provider", ctx), do: ctx.provider_skip != nil
   defp holds?("paused_by_rule", ctx), do: rule_reason(ctx) != nil or ctx.phase == "backlog" or ctx.skipped != nil or pause_holds_slot?(ctx)
@@ -519,9 +524,14 @@ defmodule SymphonyElixir.Situation do
   end
 
   defp situation("blocked_by_ticket", ctx) do
-    reason = reason(ctx, :ticket)
-    identifier = Map.get(reason.waits_on, :identifier, "another ticket")
-    blocked(identifier, phase_of_ticket(identifier, ctx), reason.text, reason.set_at)
+    case reason(ctx, :ticket) do
+      %{} = reason ->
+        identifier = Map.get(reason.waits_on, :identifier, "another ticket")
+        blocked(identifier, phase_of_ticket(identifier, ctx), reason.text, reason.set_at)
+
+      nil ->
+        depends_on_blocked(ctx)
+    end
   end
 
   defp situation("waiting_on_sub_tickets", ctx) do
@@ -942,6 +952,36 @@ defmodule SymphonyElixir.Situation do
     cause = if is_binary(phase), do: "It is in #{phase}.", else: sentence(fallback)
     base("blocked_by_ticket", "Blocked by #{identifier}", cause, "Starts when #{identifier} lands.", since, %{ticket: identifier})
   end
+
+  # A ticket the dispatch pass held on its stored dependencies (the `:depends_on` gate).
+  defp depends_on_skip?(%{gate_skip: %{gate: :depends_on}}), do: true
+  defp depends_on_skip?(_ctx), do: false
+
+  # The dependency it waits on, named as a blocker is: the first whose ticket is not Done, else the
+  # first that waits for a Symphony update including its Done ticket.
+  defp depends_on_blocked(ctx) do
+    since = ctx.gate_skip[:since] || ctx.record.phase_at
+    dependencies = Enum.map(ctx.record.depends_on, &{&1, &1.identifier && ctx.phase_of.(&1.identifier)})
+
+    cond do
+      waited = Enum.find(dependencies, fn {_dependency, phase} -> normalized(phase) != "done" end) ->
+        {dependency, phase} = waited
+        blocked(dependency_name(dependency), phase, skip_cause(ctx.gate_skip), since)
+
+      released = Enum.find(dependencies, &match?({%{kind: :released}, _phase}, &1)) ->
+        {dependency, _done} = released
+        identifier = dependency_name(dependency)
+        cause = [dependency] |> DependsOn.reason() |> capitalized() |> sentence()
+        base("blocked_by_ticket", "Blocked by #{identifier}", cause, "Starts when a Symphony update includes #{identifier}.", since, %{ticket: identifier})
+
+      # A skip the records no longer bear out names what the pass said.
+      true ->
+        blocked(dependency_name(List.first(ctx.record.depends_on)), nil, skip_cause(ctx.gate_skip), since)
+    end
+  end
+
+  defp dependency_name(%{identifier: identifier}) when is_binary(identifier), do: identifier
+  defp dependency_name(_dependency), do: "another ticket"
 
   # The ticket's own record says its phase; the link Linear's last read saw is older.
   defp phase_of_ticket(identifier, ctx) do

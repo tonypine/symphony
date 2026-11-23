@@ -379,6 +379,78 @@ defmodule SymphonyElixir.SituationTest do
     end
   end
 
+  describe "blocked_by_ticket from a stored dependency" do
+    @held %{since: @later, reason: "waiting for TP-7 to be done", rule: nil, gate: :depends_on}
+
+    defp depending(dependencies), do: record(%{phase: "Todo", depends_on: dependencies})
+
+    test "a ticket the dependency gate holds reads as blocked by the ticket it depends on, as a blocker does, never Not started" do
+      held = live(%{skipped: %{@id => @held}})
+      dependencies = [%{issue_id: "i-6", identifier: "TP-6", kind: :done}, %{issue_id: "i-7", identifier: "TP-7", kind: :done}]
+      phases = %{"TP-6" => "Done", "TP-7" => "Code Review"}
+
+      assert %{
+               kind: "blocked_by_ticket",
+               word: "Blocked by TP-7",
+               cause: "It is in Code Review.",
+               next: "Starts when TP-7 lands.",
+               since: @later,
+               waits_on: %{ticket: "TP-7"}
+             } = Situation.compute(depending(dependencies), [], held, &Map.get(phases, &1))
+
+      # The same shape as a ticket paused on a blocker.
+      paused = record(%{pause: pause([%{kind: :ticket, waits_on: %{identifier: "TP-7"}, text: "Waiting for TP-7 to finish"}])})
+      blocker = Situation.compute(paused, [], live(), &Map.get(phases, &1))
+
+      assert Map.take(blocker, [:kind, :word, :cause, :next, :waits_on]) ==
+               Map.take(Situation.compute(depending(dependencies), [], held, &Map.get(phases, &1)), [:kind, :word, :cause, :next, :waits_on])
+
+      refute Situation.not_known?(depending(dependencies), held)
+    end
+
+    test "a ticket depended on that Symphony holds no record of reads as the gate's line" do
+      held = live(%{skipped: %{@id => @held}})
+
+      assert %{word: "Blocked by TP-7", cause: "Waiting for TP-7 to be done.", waits_on: %{ticket: "TP-7"}} =
+               compute(depending([%{issue_id: "i-7", identifier: "TP-7", kind: :done}]), [], held)
+    end
+
+    test "a released dependency whose ticket is Done waits for a Symphony update that includes it" do
+      held = live(%{skipped: %{@id => %{@held | reason: "waiting for a Symphony update that includes TP-7"}}})
+
+      assert %{
+               kind: "blocked_by_ticket",
+               word: "Blocked by TP-7",
+               cause: "Waiting for a Symphony update that includes TP-7.",
+               next: "Starts when a Symphony update includes TP-7.",
+               waits_on: %{ticket: "TP-7"}
+             } =
+               [%{issue_id: "i-7", identifier: "TP-7", kind: :released}]
+               |> depending()
+               |> Situation.compute([], held, fn "TP-7" -> "Done" end)
+    end
+
+    test "a hold the records no longer bear out names the first dependency, or another ticket" do
+      held = live(%{skipped: %{@id => @held}})
+      met = depending([%{issue_id: "i-7", identifier: "TP-7", kind: :done}])
+
+      assert %{word: "Blocked by TP-7", cause: "Waiting for TP-7 to be done.", waits_on: %{ticket: "TP-7"}} = Situation.compute(met, [], held, fn "TP-7" -> "Done" end)
+      assert %{word: "Blocked by another ticket", waits_on: %{ticket: "another ticket"}} = compute(depending([]), [], held)
+      assert %{word: "Blocked by another ticket"} = compute(depending([%{issue_id: "i-8", identifier: nil, kind: :done}]), [], held)
+    end
+
+    test "Home and the dispatch order read a held ticket as blocked by the ticket it depends on" do
+      dependency = record(%{issue_id: "i-7", issue_identifier: "TP-7", phase: "In Progress"})
+      held = depending([%{issue_id: "i-7", identifier: "TP-7", kind: :done}])
+      :ok = RunStore.put_ticket_state(dependency)
+      :ok = RunStore.put_ticket_state(held)
+      live = live(%{skipped: %{@id => @held}})
+
+      assert %{kind: "blocked_by_ticket", word: "Blocked by TP-7", cause: "It is in In Progress.", waits_on: %{ticket: "TP-7"}} =
+               Situation.read(held, live, [held, dependency])
+    end
+  end
+
   describe "waiting_on_sub_tickets" do
     @subs [
       %{id: "a", identifier: "TP-2", state: "Done"},

@@ -275,27 +275,6 @@ defmodule SymphonyElixir.SelfHeal.FixerTest do
     end
   end
 
-  describe "block/3" do
-    test "records that the fix ticket blocks the affected ticket" do
-      assert :ok = Fixer.block(%Issue{id: "affected-id"}, %{identifier: "TP-900"}, [])
-
-      {_query, %{input: input}} = Enum.find(Process.get(:graphql_calls), &(elem(&1, 0) =~ "SymphonyCreateIssueRelation"))
-      assert input == %{"issueId" => "blocker-id", "relatedIssueId" => "affected-id", "type" => "blocks"}
-    end
-
-    test "reports a relation that could not be recorded, and refuses invalid arguments" do
-      Process.put(:relation_result, {:error, :rate_limited})
-      assert {:error, :rate_limited} = Fixer.block(%Issue{id: "affected-id"}, %{identifier: "TP-900"}, [])
-
-      Process.delete(:relation_result)
-      Process.put(:issue_id_result, {:ok, %{"data" => %{"issue" => nil}}})
-      assert {:error, {:issue_not_found, "TP-900"}} = Fixer.block(%Issue{id: "affected-id"}, %{identifier: "TP-900"}, [])
-
-      assert {:error, :invalid_blocked_by} = Fixer.block(%Issue{id: nil}, %{identifier: "TP-900"}, [])
-      assert {:error, :invalid_blocked_by} = Fixer.block(%Issue{id: "affected-id"}, %{identifier: nil}, [])
-    end
-  end
-
   describe "a ticket the Conductor files" do
     import ExUnit.CaptureLog
 

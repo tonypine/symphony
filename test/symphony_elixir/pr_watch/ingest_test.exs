@@ -376,7 +376,8 @@ defmodule SymphonyElixir.PrWatch.IngestTest do
       assert %{read_at: read_at} = Parity.watch("1")
       assert read_at == Parity.now()
       assert Parity.state("2") == "Merging"
-      assert Parity.blockers("2") == ["TP-1"]
+      # The wait is a pause, with no Linear blocker link.
+      assert Parity.blockers("2") == []
 
       # PR 1 merges: PR 2's reread sees it gone from the open PRs, its hold clears and it gets its CI Fix run.
       Parity.change!([{"1", pr: :merged}])
