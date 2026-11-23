@@ -1998,7 +1998,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "error" => %{
         "code" => "split_link_failed",
-        "message" => "Created #{identifier} in Todo, but could not store that #{current} depends on it, so #{current} would not wait for it. Call linear_add_blocked_by with #{identifier} to store it.",
+        "message" =>
+          "Created #{identifier} in Todo, but could not store that #{current} depends on it, so #{current} would not wait for it. Call linear_add_blocked_by with #{identifier} to store it.",
         "identifier" => identifier,
         "blocked" => current,
         "reason" => inspect(reason)

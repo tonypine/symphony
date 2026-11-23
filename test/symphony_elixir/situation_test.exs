@@ -401,7 +401,10 @@ defmodule SymphonyElixir.SituationTest do
       # The same shape as a ticket paused on a blocker.
       paused = record(%{pause: pause([%{kind: :ticket, waits_on: %{identifier: "TP-7"}, text: "Waiting for TP-7 to finish"}])})
       blocker = Situation.compute(paused, [], live(), &Map.get(phases, &1))
-      assert Map.take(blocker, [:kind, :word, :cause, :next, :waits_on]) == Map.take(Situation.compute(depending(dependencies), [], held, &Map.get(phases, &1)), [:kind, :word, :cause, :next, :waits_on])
+
+      assert Map.take(blocker, [:kind, :word, :cause, :next, :waits_on]) ==
+               Map.take(Situation.compute(depending(dependencies), [], held, &Map.get(phases, &1)), [:kind, :word, :cause, :next, :waits_on])
+
       refute Situation.not_known?(depending(dependencies), held)
     end
 

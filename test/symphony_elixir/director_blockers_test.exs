@@ -147,7 +147,13 @@ defmodule SymphonyElixir.DirectorBlockersTest do
     assert {:error, {:store, message}} = DirectorBlockers.change(:add, ticket.issue_identifier, blocker.issue_identifier, opts)
     assert message == "Symphony couldn't add #{blocker.issue_identifier} as a blocker of #{ticket.issue_identifier}, so nothing changed. Try again in a moment."
 
-    ghost = %{repo_key: ctx.repo, issue_id: "#{ticket.issue_id}-ghost", issue_identifier: "#{ticket.issue_identifier}9", depends_on: [%{issue_id: blocker.issue_id, identifier: blocker.issue_identifier, kind: :done}]}
+    ghost = %{
+      repo_key: ctx.repo,
+      issue_id: "#{ticket.issue_id}-ghost",
+      issue_identifier: "#{ticket.issue_identifier}9",
+      depends_on: [%{issue_id: blocker.issue_id, identifier: blocker.issue_identifier, kind: :done}]
+    }
+
     records = [ghost | Keyword.fetch!(opts, :records)]
 
     assert {:error, {:store, removed}} = DirectorBlockers.change(:remove, ghost.issue_identifier, blocker.issue_identifier, Keyword.put(opts, :records, records))
