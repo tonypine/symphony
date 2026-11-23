@@ -18,11 +18,13 @@ defmodule SymphonyElixir.Conductor.Filing do
   current one, and the relation says where it points:
 
     * `before`: the current ticket is held on it, as `blocks` holds it;
-    * `after`: the current ticket goes on at once, and the sub-ticket is linked as blocked by the
-      current ticket, so it starts once the current ticket's pull request has merged. It is created
-      in `Backlog`, linked, and only then moved to `Todo` (`SymphonyElixir.Conductor.Tree.start/5`),
-      so no dispatch finds it before its link; when the link fails it stays in `Backlog`, which is
-      said on the current ticket, and Symphony tries the link and the move again.
+    * `after`: the current ticket goes on at once, and the sub-ticket gets a stored dependency on
+      the current ticket (`:done`, `SymphonyElixir.RunStore.add_dependency/3`; no Linear blocker
+      link), so it starts once the current ticket is done. It is created in `Backlog`, put on
+      Symphony's records, given the dependency, and only then moved to `Todo`
+      (`SymphonyElixir.Conductor.Tree.start/5`), so no dispatch finds it before its dependency; when
+      the dependency can't be stored it stays in `Backlog`, which is said on the current ticket, and
+      Symphony tries the dependency and the move again.
 
   A sub-ticket holds the current ticket's close (`SymphonyElixir.Conductor.Tree`). Its description
   is recorded on it as its ask (`ask.recorded`, `source: parent`), and Symphony's records take it
@@ -316,7 +318,7 @@ defmodule SymphonyElixir.Conductor.Filing do
       labels: [@label],
       existing: existing && existing.identifier,
       parent_id: if(relation not in @plain, do: issue.id),
-      # One that comes after waits in Backlog until its blocker is linked, as a split's does.
+      # One that comes after waits in Backlog until its dependency is stored, as a split's does.
       state: if(relation == "after", do: @backlog)
     }
 
@@ -331,8 +333,9 @@ defmodule SymphonyElixir.Conductor.Filing do
 
   defp with_url(filed, existing), do: Map.merge(%{url: existing && existing.url}, filed)
 
-  # A sub-ticket just created under a groomed ticket: its ask is recorded on it from its parent, one
-  # that comes after waits on its parent's merge, and Symphony's records take it now, not at a poll.
+  # A sub-ticket just created under a groomed ticket: its ask is recorded on it from its parent,
+  # Symphony's records take it now, not at a poll, and one that comes after gets a stored dependency
+  # on its parent (`SymphonyElixir.Conductor.Tree.start/5`), so it waits on its parent's merge.
   defp sub_ticket(%{existing: false, id: id, identifier: identifier} = filed, relation, description, route, context, opts)
        when relation not in @plain and is_binary(id) do
     %{issue: issue, repo_key: repo_key} = context
@@ -341,8 +344,8 @@ defmodule SymphonyElixir.Conductor.Filing do
 
     attempts = [
       {"record its ask", fn -> TicketPlan.record_ask(route.repo, id, String.slice(description, 0, 20_000), source: "parent", from: from, idempotency: "ask.recorded:parent") end},
-      {"start it", fn -> if(relation == "after", do: Tree.start(child, [from], issue, repo_key, Keyword.take(opts, [:tracker])), else: :ok) end},
-      {"put it on Symphony's records", fn -> Tree.observed(repo_key, issue.id, [child], Keyword.take(opts, [:tracker, :observe])) end}
+      {"put it on Symphony's records", fn -> Tree.observed(repo_key, issue.id, [child], Keyword.take(opts, [:tracker, :observe])) end},
+      {"start it", fn -> if(relation == "after", do: Tree.start(child, [%{id: issue.id, identifier: from}], issue, repo_key, Keyword.take(opts, [:tracker, :observe])), else: :ok) end}
     ]
 
     for {what, attempt} <- attempts, {:error, reason} <- [attempt.()] do

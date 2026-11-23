@@ -71,31 +71,15 @@ defmodule SymphonyElixir.Tracker.MemoryIssuesFileTest do
     assert Memory.issue_nodes(%{name: "all"}) == []
   end
 
-  test "a blocked-by link is written into the issues file and read back with the blocker's state", %{issues_file: issues_file} do
-    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+  test "an entry's blockers in the issues file are read back with each blocker's state", %{issues_file: issues_file} do
+    issues = Jason.decode!(File.read!(issues_file))
+    File.write!(issues_file, Jason.encode!(List.update_at(issues, 0, &Map.put(&1, "blockedBy", ["issue-2"]))))
 
-    # Through the tracker boundary, as the Director's move writes it; by id or by identifier.
-    assert Tracker.add_blocked_by("issue-2", "issue-1") == :ok
-    assert Memory.add_blocked_by("QA-2", "issue-1") == :ok
-    assert_received {:memory_tracker_blocked_by_added, "issue-2", "issue-1"}
-    assert [%{"blockedBy" => ["issue-2"]}, _other] = Jason.decode!(File.read!(issues_file))
     assert {:ok, %Issue{blocked_by: [%{id: "issue-2", identifier: "QA-2", state: "Todo"}]}} = Memory.fetch_issue_by_identifier("QA-1")
 
     # The blocker's state is read again each time, so a finished blocker reads as finished.
     assert Memory.update_issue_state("issue-2", "Done") == :ok
     assert {:ok, %Issue{blocked_by: [%{state: "Done"}]}} = Memory.fetch_issue_by_identifier("QA-1")
-
-    assert Tracker.remove_blocked_by("issue-2", "issue-1") == :ok
-    assert_received {:memory_tracker_blocked_by_removed, "issue-2", "issue-1"}
-    assert {:ok, %Issue{blocked_by: []}} = Memory.fetch_issue_by_identifier("QA-1")
-
-    # An unknown blocker, or a scripted failure, writes nothing.
-    assert Memory.add_blocked_by("QA-404", "issue-1") == {:error, {:issue_not_found, "QA-404"}}
-    Application.put_env(:symphony_elixir, :memory_tracker_add_blocked_by_result, [{:error, :boom}])
-    assert Memory.add_blocked_by("issue-2", "issue-1") == {:error, :boom}
-    assert {:ok, %Issue{blocked_by: []}} = Memory.fetch_issue_by_identifier("QA-1")
-  after
-    Application.delete_env(:symphony_elixir, :memory_tracker_add_blocked_by_result)
   end
 
   test "a priority is written into the issues file and read back as the issue's priority", %{issues_file: issues_file} do
@@ -133,28 +117,6 @@ defmodule SymphonyElixir.Tracker.MemoryIssuesFileTest do
     assert Memory.update_issue_priority("issue-1", 1) == :ok
     assert {:ok, %Issue{priority: 1}} = Memory.fetch_issue_by_identifier("QA-1")
     assert {:ok, %Issue{priority: 3}} = Memory.fetch_issue_by_identifier("QA-2")
-  end
-
-  test "with issues set in the environment, a blocked-by link edits the issue's blockers there" do
-    issues = [
-      %Issue{id: "issue-1", identifier: "QA-1", state: "Todo", blocked_by: [%{id: "issue-3", identifier: "QA-3", state: "Done"}]},
-      %Issue{id: "issue-2", identifier: "QA-2", state: "In Progress", blocked_by: :unknown}
-    ]
-
-    Application.put_env(:symphony_elixir, :memory_tracker_issues, issues)
-
-    assert Memory.add_blocked_by("QA-2", "issue-1") == :ok
-    assert {:ok, %Issue{blocked_by: [%{id: "issue-3", state: "Done"}, added]}} = Memory.fetch_issue_by_identifier("QA-1")
-    assert added == %{id: "issue-2", identifier: "QA-2", state: "In Progress"}
-    assert Memory.add_blocked_by("QA-2", "issue-1") == :ok
-    assert {:ok, %Issue{blocked_by: [_three, _two]}} = Memory.fetch_issue_by_identifier("QA-1")
-
-    assert Memory.remove_blocked_by("issue-2", "issue-1") == :ok
-    assert {:ok, %Issue{blocked_by: [%{id: "issue-3"}]}} = Memory.fetch_issue_by_identifier("QA-1")
-
-    # A blocker added to an issue whose blockers were never read.
-    assert Memory.add_blocked_by("QA-1", "issue-2") == :ok
-    assert {:ok, %Issue{blocked_by: [%{id: "issue-1"}]}} = Memory.fetch_issue_by_identifier("QA-2")
   end
 
   describe "create_issue/1 and add_related/2" do

@@ -123,6 +123,11 @@ branch name Linear suggests for the ticket; a PR on a branch with any other name
   once every such sub-ticket is `Done`, `Canceled` or `Duplicate`, with a comment listing how each
   ended. Its `Backlog` sub-tickets (ones an agent filed) stay
   there for a person to promote and never hold it: with only those open it goes to `Done` on merge.
+  The order between sub-tickets is Symphony's own: a sub-ticket that comes after another (a split's
+  `after`, one a run files to do after its ticket, a blocker you add on the ticket page or an agent's
+  `blocked_by`) gets a dependency stored on its record, and Symphony holds it, shows it as
+  "Blocked by" that ticket and frees its slot until that ticket is done. Symphony writes no
+  blocker link into Linear.
   The design this flow
   is moving to (bug, feature and `plan` ticket types, one review of a whole plan, artifacts in
   Linear documents) is recorded in
@@ -380,9 +385,9 @@ one slot, one ticket moves at a time and nothing new starts until it lands. A ti
 slot is the one in progress; the dispatch order and Home reads name the ticket that holds each slot
 and how many are free.
 
-A ticket gives its slot up only when it is done, when it waits on another ticket (a blocker, a fix
-ticket, a competing pull request, an app update that carries a blocker's fix) or on its own
-sub-tickets, or when you stop it, move it to `Backlog` or cancel it. Waiting on you keeps it. A free
+A ticket gives its slot up only when it is done, when it waits on another ticket (a dependency
+Symphony stores, a blocker, a fix ticket, a competing pull request, an app update that carries a
+blocker's fix) or on its own sub-tickets, or when you stop it, move it to `Backlog` or cancel it. Waiting on you keeps it. A free
 slot goes first to a sub-ticket of a ticket that has started, so a big chain finishes before
 unrelated work starts, then to the first ticket in the queue that can start.
 

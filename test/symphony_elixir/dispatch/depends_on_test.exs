@@ -320,6 +320,22 @@ defmodule SymphonyElixir.Dispatch.DependsOnTest do
     end
   end
 
+  describe "a done dependency on a merged ticket" do
+    test "is met by a ticket its merge put in the waiting state, as the blocker hold counts it, so a sub-ticket never deadlocks with its parent" do
+      SymphonyElixir.SubIssueWait.reset_for_test("Waiting on sub-tickets")
+      done = %{issue_id: "p", identifier: "MT-P", kind: :done}
+      records = %{"p" => %{phase: "Waiting on sub-tickets"}}
+
+      # A parent a person moved there waits for them: not merged.
+      assert DependsOn.unmet([done], records, %{sha: nil, repo: nil}, UpdateHold.empty_cache()) == [done]
+
+      :ok = RunStore.put_merged_wait("p")
+      assert DependsOn.unmet([done], records, %{sha: nil, repo: nil}, UpdateHold.empty_cache()) == []
+      # A released dependency still waits for Done.
+      assert DependsOn.unmet([%{done | kind: :released}], records, %{sha: nil, repo: nil}, UpdateHold.empty_cache()) == [%{done | kind: :released}]
+    end
+  end
+
   defp put!(issue_id, identifier, phase, parent \\ nil) do
     attrs = %{issue_identifier: identifier, title: "Ticket #{identifier}", phase: phase, parent: parent && %{identifier: parent}}
     :ok = RunStore.put_ticket_state(TicketState.new(@repo, issue_id, attrs))

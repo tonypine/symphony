@@ -326,6 +326,9 @@ defmodule SymphonyElixir.Orchestrator do
     # Once, before the first tick: each ticket's note for the next run becomes a message, so the
     # first run dispatched is given it (`SymphonyElixir.Messages.migrate/1`).
     _ = SymphonyElixir.Messages.migrate()
+    # Once, before the first tick: the order Symphony recorded for open sub-tickets becomes stored
+    # dependencies, so the dispatch gate holds them (`SymphonyElixir.Dispatch.DependsOn.Backfill`).
+    _ = DependsOn.Backfill.run()
     # The ledger's one-time history backfill runs in a task: startup never waits for it. The pause
     # backfill runs in the same task right after it: it reads the events the ledger's backfill writes.
     TicketEvents.Backfill.start(run: &SymphonyElixir.Pauses.Backfill.run_after_ledger/1)

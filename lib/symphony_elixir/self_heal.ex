@@ -19,8 +19,8 @@ defmodule SymphonyElixir.SelfHeal do
       ticket (`SymphonyElixir.SelfHeal.Fixer`) — deduplicated: an open fix ticket for the same
       component and the same failure is reused, not filed again, keeping its priority, and the new
       failure is attached to it as evidence; a terminal one, or one for another failure, is not;
-    * links the affected ticket to the fix ticket as blocked-by and pauses it on a reason that
-      waits on that ticket (`SymphonyElixir.Pauses`), which lifts on its own when the fix goes
+    * pauses the affected ticket on a reason that waits on the fix ticket (no Linear blocker link
+      is written) (`SymphonyElixir.Pauses`), which lifts on its own when the fix goes
       terminal (`SymphonyElixir.Pauses.Dependencies`), or, for a fix merged into the repo the
       running Symphony was built from, once the running build includes it — no decision request and
       no check for a person;
@@ -193,7 +193,7 @@ defmodule SymphonyElixir.SelfHeal do
 
   An outcome whose `covered_by` names an open ticket (one that already tracks the missing
   capability) holds the ticket on that ticket instead, even when an earlier failure was recorded:
-  it is linked as the blocker and gets the evidence, and no fix ticket is filed.
+  it is the ticket waited on and gets the evidence, and no fix ticket is filed.
 
   A changed failure retries only while the change has fewer than #{@max_blocked_runs} blocked runs
   in a row (`:attempts`); past that it escalates like an unchanged one.
@@ -315,8 +315,6 @@ defmodule SymphonyElixir.SelfHeal do
           fix_ticket: identifier,
           attempts: ctx.attempts
         })
-
-        link(ctx, ticket)
 
         case fix_ticket_hold(ctx, identifier) do
           :ok -> :filed
@@ -491,19 +489,6 @@ defmodule SymphonyElixir.SelfHeal do
     end
   end
 
-  # Best-effort: a missing blocked-by link never stops the pause, which is what actually holds the
-  # ticket and clears when the fix lands.
-  defp link(ctx, ticket) do
-    case fixer(ctx.opts).block(ctx.issue, ticket, ctx.opts) do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning("Self-heal could not link #{label(ctx.issue)} to fix ticket #{ticket.identifier}: #{inspect(reason)}")
-        :ok
-    end
-  end
-
   defp attach(%{fix_ticket: identifier}, issue, signature, outcome, opts) when is_binary(identifier) do
     case fixer(opts).attach(identifier, evidence(issue, signature, outcome), opts) do
       :ok ->
@@ -547,12 +532,12 @@ defmodule SymphonyElixir.SelfHeal do
   the `description`, the `relation` (`blocks` or `follow_up`) and, optionally, the open ticket that
   already covers it (`existing`, an identifier), the `labels` to set, the id of the ticket it
   is filed under as a sub-ticket (`parent_id`), and the `state` it is created in when that is not
-  Todo (`Backlog`, for a sub-ticket whose blocker must be linked before it may start).
+  Todo (`Backlog`, for a sub-ticket whose dependency must be stored before it may start).
 
   With `existing`, nothing is created; otherwise the ticket is created in Todo, at `opts[:priority]`
   (default as a fix ticket's), in the scope repo's team and project, assigned as a fix ticket is
-  (`SymphonyElixir.SelfHeal.Fixer`). Then `blocks` links `issue` as blocked by it and holds it on it
-  (`hold/3`), and `follow_up` links the two as related and leaves `issue` as it is. A link that
+  (`SymphonyElixir.SelfHeal.Fixer`). Then `blocks` holds `issue` on it (`hold/3`, with no Linear
+  blocker link), and `follow_up` links the two as related and leaves `issue` as it is. A link that
   fails is logged and never undoes the filing. A hold that fails once the ticket exists is
   `{:error, {:hold_failed, reason}, filed}`: the ticket is handed back with the error, so the caller
   still records what it filed. `opts` takes `:repo_key` (`issue`'s repo), and the injectable `:fixer`
@@ -598,7 +583,6 @@ defmodule SymphonyElixir.SelfHeal do
   end
 
   defp linked("blocks", issue, repo_key, filed, opts) do
-    link(%{issue: issue, opts: opts}, filed)
     Keyword.get(opts, :hold, &hold/3).(repo_key, issue, filed.identifier)
   end
 

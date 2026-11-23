@@ -20,11 +20,6 @@ defmodule SymphonyElixir.OrchestratorSetupBlockTest do
       :ok
     end
 
-    def block(issue, ticket, _opts) do
-      notify({:fake_fixer_block, issue.id, ticket.identifier})
-      :ok
-    end
-
     defp notify(message), do: send(Application.fetch_env!(:symphony_elixir, :memory_tracker_recipient), message)
   end
 
@@ -45,7 +40,6 @@ defmodule SymphonyElixir.OrchestratorSetupBlockTest do
 
         assert_receive {:fake_fixer_create, %{scope: scope, component: "dev_server", title: "Self-heal: repair the dev_server block"}}, @min_wait_ms
         assert scope == Config.repo_key!()
-        assert_receive {:fake_fixer_block, "issue-setup-build", "MT-901"}, @min_wait_ms
 
         state = wait_for_orchestrator_state(pid, &(map_size(&1.running) == 0 and &1.tracker_tasks == %{}))
         refute Map.has_key?(state.retry_attempts, issue.id)

@@ -22,8 +22,6 @@ defmodule SymphonyElixir.Linear.AdapterProvisioningTest do
       {"SymphonyCreateIssueRelation", :create_issue_relation},
       {"SymphonyCreateIssue", :create_issue},
       {"SymphonyIssueId", :issue_id},
-      {"SymphonyBlockerRelations", :blocker_relations},
-      {"SymphonyDeleteIssueRelation", :delete_issue_relation},
       {"SymphonyUpdateIssuePriority", :update_issue_priority}
     ]
 
@@ -31,7 +29,6 @@ defmodule SymphonyElixir.Linear.AdapterProvisioningTest do
       case Enum.find(@operations, fn {operation, _key} -> String.contains?(query, operation) end) do
         {_operation, :create_workflow_state} -> create_workflow_state(query, variables)
         {_operation, :create_issue} -> create_issue(variables)
-        {_operation, :delete_issue_relation} -> delete_issue_relation(variables)
         {_operation, :update_issue_priority} -> update_issue_priority(variables)
         {_operation, key} when key in [:team_workflow_states, :team_labels] -> team_read(key, query, variables)
         {_operation, key} -> result(key, default(key))
@@ -42,11 +39,6 @@ defmodule SymphonyElixir.Linear.AdapterProvisioningTest do
     defp team_read(key, query, variables) do
       send(self(), {key, query, variables})
       result(key, {:error, :unscripted})
-    end
-
-    defp delete_issue_relation(variables) do
-      send(self(), {:deleted_relation, variables.id})
-      result(:delete_issue_relation, default(:delete_issue_relation))
     end
 
     defp create_issue(variables) do
@@ -86,18 +78,7 @@ defmodule SymphonyElixir.Linear.AdapterProvisioningTest do
     defp default(:create_issue_relation), do: %{"data" => %{"issueRelationCreate" => %{"success" => true}}}
     defp default(:create_issue), do: created_issue()
     defp default(:issue_id), do: %{"data" => %{"issue" => %{"id" => "blocker-id"}}}
-    defp default(:delete_issue_relation), do: %{"data" => %{"issueRelationDelete" => %{"success" => true}}}
     defp default(:update_issue_priority), do: %{"data" => %{"issueUpdate" => %{"success" => true}}}
-
-    defp default(:blocker_relations) do
-      nodes = [
-        %{"id" => "rel-1", "type" => "blocks", "issue" => %{"id" => "blocker-id", "identifier" => "TP-900"}},
-        %{"id" => "rel-2", "type" => "related", "issue" => %{"id" => "blocker-id", "identifier" => "TP-900"}},
-        %{"id" => "rel-3", "type" => "blocks", "issue" => %{"id" => "other-id", "identifier" => "TP-901"}}
-      ]
-
-      %{"data" => %{"issue" => %{"inverseRelations" => %{"nodes" => nodes}}}}
-    end
 
     defp team_scope do
       %{
@@ -533,26 +514,26 @@ defmodule SymphonyElixir.Linear.AdapterProvisioningTest do
     end
   end
 
-  describe "add_blocked_by/2" do
-    test "resolves the blocker's id and records that it blocks the affected issue" do
-      assert :ok = Adapter.add_blocked_by("TP-900", "affected-id")
+  describe "add_related/2" do
+    test "resolves the related issue's id and records that the two are related" do
+      assert :ok = Adapter.add_related("TP-900", "affected-id")
     end
 
-    test "reports a relation that did not succeed, an unknown blocker and invalid arguments" do
+    test "reports a relation that did not succeed, an unknown issue and invalid arguments" do
       put(:create_issue_relation, {:ok, %{"data" => %{"issueRelationCreate" => %{"success" => false}}}})
-      assert {:error, :issue_relation_failed} = Adapter.add_blocked_by("TP-900", "affected-id")
+      assert {:error, :issue_relation_failed} = Adapter.add_related("TP-900", "affected-id")
 
       put(:create_issue_relation, {:error, :rate_limited})
-      assert {:error, :rate_limited} = Adapter.add_blocked_by("TP-900", "affected-id")
+      assert {:error, :rate_limited} = Adapter.add_related("TP-900", "affected-id")
 
       put(:issue_id, {:error, :rate_limited})
-      assert {:error, :rate_limited} = Adapter.add_blocked_by("TP-900", "affected-id")
+      assert {:error, :rate_limited} = Adapter.add_related("TP-900", "affected-id")
 
       put(:issue_id, {:ok, %{"data" => %{"issue" => nil}}})
-      assert {:error, {:issue_not_found, "TP-900"}} = Adapter.add_blocked_by("TP-900", "affected-id")
+      assert {:error, {:issue_not_found, "TP-900"}} = Adapter.add_related("TP-900", "affected-id")
 
-      assert {:error, :invalid_blocked_by} = Adapter.add_blocked_by(nil, "affected-id")
-      assert {:error, :invalid_blocked_by} = Adapter.add_blocked_by("TP-900", nil)
+      assert {:error, :invalid_related} = Adapter.add_related(nil, "affected-id")
+      assert {:error, :invalid_related} = Adapter.add_related("TP-900", nil)
     end
   end
 
@@ -571,36 +552,6 @@ defmodule SymphonyElixir.Linear.AdapterProvisioningTest do
 
       assert {:error, :invalid_issue_priority} = Adapter.update_issue_priority("issue-id", 5)
       assert {:error, :invalid_issue_priority} = Adapter.update_issue_priority(nil, 1)
-    end
-  end
-
-  describe "remove_blocked_by/2" do
-    test "deletes only the blocker's `blocks` relations to the issue, found by identifier or id" do
-      assert :ok = Adapter.remove_blocked_by("TP-900", "affected-id")
-      assert_received {:deleted_relation, "rel-1"}
-      refute_received {:deleted_relation, _other}
-
-      assert :ok = Adapter.remove_blocked_by("other-id", "affected-id")
-      assert_received {:deleted_relation, "rel-3"}
-
-      assert :ok = Adapter.remove_blocked_by("TP-999", "affected-id")
-      refute_received {:deleted_relation, _none}
-    end
-
-    test "reports a delete that did not succeed, an unreadable issue and invalid arguments" do
-      put(:delete_issue_relation, {:ok, %{"data" => %{"issueRelationDelete" => %{"success" => false}}}})
-      assert {:error, :issue_relation_failed} = Adapter.remove_blocked_by("TP-900", "affected-id")
-
-      put(:delete_issue_relation, {:error, :rate_limited})
-      assert {:error, :rate_limited} = Adapter.remove_blocked_by("TP-900", "affected-id")
-
-      put(:blocker_relations, {:error, :rate_limited})
-      assert {:error, :rate_limited} = Adapter.remove_blocked_by("TP-900", "affected-id")
-
-      put(:blocker_relations, {:ok, %{"data" => %{"issue" => nil}}})
-      assert {:error, {:issue_not_found, "affected-id"}} = Adapter.remove_blocked_by("TP-900", "affected-id")
-
-      assert {:error, :invalid_blocked_by} = Adapter.remove_blocked_by(nil, "affected-id")
     end
   end
 

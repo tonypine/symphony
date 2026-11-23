@@ -25,9 +25,8 @@ defmodule SymphonyElixir.Tracker.Memory do
   `issue_nodes/1` reads its issues as the Inbox reads Linear's (a QA server's seed, TP-1311). With
   `:memory_tracker_issues` set, a state move or a comment only reports its event.
 
-  A blocked-by link (`add_blocked_by/2`, `remove_blocked_by/2`) is kept as the blocker's id in the
-  issue's `"blockedBy"` list, read back as the issue's `blocked_by` with the blocker's identifier and
-  current state; with `:memory_tracker_issues` set, it edits the issue's `blocked_by` there.
+  An entry's `"blockedBy"` list (the blockers' ids) is read back as the issue's `blocked_by`, with
+  each blocker's identifier and current state. Symphony writes no blocker link, so nothing edits it.
 
   An entry's optional `"parentId"` names its parent's id: the parent reads it back among its
   `sub_issues` (with its identifier and current state), and the child reads its `parent` as Linear's
@@ -254,12 +253,6 @@ defmodule SymphonyElixir.Tracker.Memory do
       Enum.reject(labels, &same_label?(&1, label_name))
     end)
   end
-
-  @spec add_blocked_by(String.t(), String.t()) :: :ok | {:error, term()}
-  def add_blocked_by(blocker, blocked_issue_id), do: update_blocked_by(:add, blocker, blocked_issue_id)
-
-  @spec remove_blocked_by(String.t(), String.t()) :: :ok | {:error, term()}
-  def remove_blocked_by(blocker, blocked_issue_id), do: update_blocked_by(:remove, blocker, blocked_issue_id)
 
   @spec create_issue(map()) :: {:ok, Tracker.created_issue()} | {:error, term()}
   def create_issue(%{title: title} = attrs) when is_binary(title) do
@@ -532,50 +525,6 @@ defmodule SymphonyElixir.Tracker.Memory do
   defp put_env_list(key, value) do
     Application.put_env(:symphony_elixir, key, List.wrap(Application.get_env(:symphony_elixir, key)) ++ [value])
   end
-
-  # Edits the blockers' ids of `blocked_issue_id` where the issues come from, the blocker named by
-  # its id or its identifier; an unknown blocker is `{:issue_not_found, blocker}`.
-  defp update_blocked_by(:add, blocker, blocked_issue_id) do
-    update = fn ids, id -> if id in ids, do: ids, else: ids ++ [id] end
-    event = {:memory_tracker_blocked_by_added, blocker, blocked_issue_id}
-    update_blocked_by(:memory_tracker_add_blocked_by_result, event, blocker, blocked_issue_id, update)
-  end
-
-  defp update_blocked_by(:remove, blocker, blocked_issue_id) do
-    event = {:memory_tracker_blocked_by_removed, blocker, blocked_issue_id}
-    update_blocked_by(:memory_tracker_remove_blocked_by_result, event, blocker, blocked_issue_id, &List.delete/2)
-  end
-
-  defp update_blocked_by(result_key, event, blocker, blocked_issue_id, update) do
-    with :ok <- next_result(result_key),
-         %Issue{} = blocking <- Enum.find(issue_entries(), &(blocker in [&1.id, &1.identifier])) || {:error, {:issue_not_found, blocker}} do
-      put_blocked_by(blocked_issue_id, blocking, update)
-      send_event(event)
-      :ok
-    end
-  end
-
-  defp put_blocked_by(issue_id, blocking, update) do
-    case Application.fetch_env(:symphony_elixir, :memory_tracker_issues) do
-      {:ok, issues} ->
-        issues = Enum.map(issues, &update_issue_blocked_by(&1, issue_id, blocking, update))
-        Application.put_env(:symphony_elixir, :memory_tracker_issues, issues)
-
-      :error ->
-        update_file_issue(issue_id, fn entry -> Map.put(entry, "blockedBy", update.(Enum.filter(List.wrap(entry["blockedBy"]), &is_binary/1), blocking.id)) end)
-    end
-  end
-
-  defp update_issue_blocked_by(%Issue{id: issue_id, blocked_by: blockers} = issue, issue_id, blocking, update) do
-    blockers = Enum.filter(List.wrap(blockers), &is_map/1)
-    by_id = Map.new(blockers, &{&1.id, &1})
-    ids = update.(Enum.map(blockers, & &1.id), blocking.id)
-    %{issue | blocked_by: Enum.map(ids, &Map.get(by_id, &1, blocker_of(blocking)))}
-  end
-
-  defp update_issue_blocked_by(issue, _issue_id, _blocking, _update), do: issue
-
-  defp blocker_of(%Issue{} = issue), do: %{id: issue.id, identifier: issue.identifier, state: issue.state}
 
   # Edits the labels where the issues come from, `:memory_tracker_issues` or the issues file, so the
   # next fetch sees them.

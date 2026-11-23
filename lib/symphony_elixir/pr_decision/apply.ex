@@ -163,7 +163,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
   context, the clock, the ticket's recorded decisions (`decisions`, optional: R17 counts the earlier
   answers to its question), the competitors it recorded (`links`, `SymphonyElixir.PrWatch.Competitors`),
   and the injectable `opts` (`:tracker`, `:github`, `:run_store`, `:self_heal`, `:fixer`,
-  `:gh_runner`, `:linker`).
+  `:gh_runner`).
   """
   @type ctx :: %{
           required(:repo_key) => String.t(),
@@ -508,7 +508,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
   end
 
   defp perform(%Action{kind: :wait_for_competitors, args: %{prs: prs, step_behind: step_behind}}, ctx) do
-    opts = [repo_key: ctx.repo_key, now: ctx.now, links: links(ctx), tracker: tracker(ctx), store: store(ctx)] ++ Keyword.take(ctx.opts, [:linker])
+    opts = [repo_key: ctx.repo_key, now: ctx.now, links: links(ctx), tracker: tracker(ctx), store: store(ctx)]
 
     with :ok <- disarm_in_merging(ctx, :conflict),
          {:ok, links} <- Competitors.wait(ctx.issue, prs, step_behind, opts) do

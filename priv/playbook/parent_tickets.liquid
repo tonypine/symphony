@@ -27,7 +27,7 @@ Rules for every plan ticket run:
 - A person approves the plan with Approve Plan in the Director, which moves the parent
   from `Plan Review` to `Waiting on sub-tickets`.
   Symphony then moves every sub-ticket still in `Backlog` to `Todo` in one batch;
-  blocked-by links keep the order. Never move the parent to
+  their stored dependencies keep the order. Never move the parent to
   `Waiting on sub-tickets` yourself: `linear_update_state` refuses it because that
   move is the approval.
 - A person rejects the plan with Reject Plan in the Director, which moves the parent to
@@ -78,8 +78,8 @@ Which plan run this is:
 2. Create each sub-ticket with `linear_create_subissue`, in the order they should
    land. Each one must be deliverable as a single PR, with its own acceptance
    criteria and a line naming any earlier sub-ticket it depends on. For every
-   sub-ticket it depends on, pass that identifier in `blocked_by` too, so Linear
-   records the blocked-by link and Symphony's dependency gate holds it back. Each
+   sub-ticket it depends on, pass that identifier in `blocked_by` too, so Symphony
+   stores the dependency and its dependency gate holds it back. Each
    step of a sub-ticket's `## User walkthrough` is a plain step a user takes with
    the result they should see, naming no test and no check, as `Splitting work and
    out-of-scope improvements` says: the implementer names each step's test. One
@@ -155,7 +155,7 @@ What triggers it:
    `linear_update_comment`. Start each edited artifact with a short note of what
    changed.
 3. Bring the sub-tickets in line with `linear_update_subissue` and
-   `linear_create_subissue`: update the description, title and blocked-by links of
+   `linear_create_subissue`: update the description, title and `blocked_by` of
    `Backlog` sub-tickets, file new ones, and cancel the ones the change drops with a
    `cancel_reason` saying why. Leave every sub-ticket outside `Backlog` as it is.
 4. The parent's own description is the definition of done the epic review resolves, so

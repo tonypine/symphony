@@ -1375,7 +1375,7 @@ defmodule SymphonyElixir.EpicReviewTest do
       assert SymphonyElixir.Pauses.why({:ticket, @repo_key, @issue_id}) == ["Waiting for TP-900 to finish: it fixes what stopped this ticket"]
       assert_received {:fixer_create, attrs}
       assert attrs.scope == @symphony_repo_key
-      assert_received {:fixer_block, @fix_ticket}
+      refute_received {:fixer_block, _identifier}
 
       assert Enum.map(verdicts(), & &1.outcome) == ["blocked", "blocked"]
       assert Enum.all?(verdicts(), &(&1.head_sha == @sha))

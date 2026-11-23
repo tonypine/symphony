@@ -98,12 +98,13 @@ defmodule SymphonyElixirWeb.ControlApiController do
   which is 0 from then on until a newer event. A ticket with no record is 404 and a request without
   `issue_identifier` is 422.
 
-  `blocker` adds or removes a blocked-by link from the ticket page (`SymphonyElixir.DirectorBlockers`):
-  it takes `issue_identifier`, `blocker` (the ticket that blocks it) and `action` (`add` or
-  `remove`), and answers 200 with the ticket's blockers after the change, 409 with the reason the
-  app shows when the change is refused (a ticket blocking itself, a cycle, a ticket Symphony doesn't
-  track, a finished blocker, a link already there or not there), 422 for a missing or unknown
-  parameter and 502, with why, when the tracker refuses the write.
+  `blocker` adds or removes a blocker from the ticket page (`SymphonyElixir.DirectorBlockers`): a
+  stored dependency of the ticket on the blocker, with no Linear link. It takes `issue_identifier`,
+  `blocker` (the ticket that blocks it) and `action` (`add` or `remove`), and answers 200 with the
+  ticket's blockers after the change, 409 with the reason the app shows when the change is refused
+  (a ticket blocking itself, a cycle, a ticket Symphony doesn't track, a finished blocker, a
+  blocker already there or not there), 422 for a missing or unknown parameter and 502, with why,
+  when the store refuses the write.
 
   `priority` sets a ticket's Linear priority from the ticket page (`SymphonyElixir.DirectorPriority`):
   it takes `issue_identifier` and `priority` (`none`, `urgent`, `high`, `medium` or `low`, or
@@ -413,7 +414,7 @@ defmodule SymphonyElixirWeb.ControlApiController do
       opts = [orchestrator: orchestrator(conn), audit_log: Map.get(conn.assigns, :audit_log, [])] ++ Map.get(conn.assigns, :director_blockers, [])
 
       case DirectorBlockers.change(action, identifier, blocker, opts) do
-        {:error, {:linear, message}} -> error_response(conn, 502, "linear_error", message)
+        {:error, {:store, message}} -> error_response(conn, 502, "store_error", message)
         result -> respond_move(conn, identifier, result)
       end
     else

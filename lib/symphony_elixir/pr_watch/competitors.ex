@@ -3,26 +3,23 @@ defmodule SymphonyElixir.PrWatch.Competitors do
   A conflicting pull request that waits on the open pull requests changing the same files (rules
   R14a and R15, the action `wait_for_competitors`) waits as a visible dependency, not in Symphony's
   memory: its ticket's pause (`SymphonyElixir.Pauses`, the one writer) has one landing reason per
-  competitor it waits on (`landing_reasons/1`), and each competitor's ticket gets a Linear
-  blocked-by link.
+  competitor it waits on (`landing_reasons/1`). Symphony writes no Linear blocker link for it.
 
     * `competing/3` is the fact `competing`: every open pull request of the repository that shares
       a file with the ticket's, with its ticket when Symphony watches it. It leaves out a pull
       request out of the race (on a hold, or idle two hours by `SymphonyElixir.LandingOrder`'s
       rule), one whose link would close a cycle (`closes_cycle?/3`), and one a person released the
       ticket from (`Unblock`).
-    * `wait/4` applies the wait: the reasons, then a link from each competitor's ticket that Linear
-      doesn't have yet. A competitor with no ticket (a person's pull request) gets no link; its
-      reason names it by number and title. The links Symphony added are recorded on the ticket's
-      watch record (`links`), so it only ever removes its own.
+    * `wait/4` applies the wait: the reasons, and each competitor recorded on the ticket's watch
+      record (`links`). A competitor with no ticket (a person's pull request) has its reason name it
+      by number and title.
     * `settle/5` judges the wait on each read of the watcher. A competitor that landed (its ticket
-      terminal, its pull request merged) stays linked, as history. One that left the race (its pull
-      request closed, on a hold, idle two hours, or no longer sharing a file) is unlinked when
-      Symphony added the link. The wait ends once no competitor is left; a wait that stepped
-      behind its competitors (R15) then restarts the conflict count.
-    * `release/3` is a person's `Unblock`: Symphony's links are removed and the ticket no longer
-      waits on those pull requests while they stay open. `leave/3` ends the wait of a ticket the
-      watcher stops watching.
+      terminal, its pull request merged) stays recorded, as history. One that left the race (its
+      pull request closed, on a hold, idle two hours, or no longer sharing a file) is dropped. The
+      wait ends once no competitor is left; a wait that stepped behind its competitors (R15) then
+      restarts the conflict count.
+    * `release/3` is a person's `Unblock`: the ticket no longer waits on those pull requests while
+      they stay open. `leave/3` ends the wait of a ticket the watcher stops watching.
 
   A landing reason reads "Waiting for TP-1 to land: it changes the same files" for a competitor with
   a ticket, and "Waiting for PR #12 (Title) to land: it changes the same files" for one without;
@@ -33,8 +30,9 @@ defmodule SymphonyElixir.PrWatch.Competitors do
 
   The fields of a link record: the competitor's `issue_id`, `issue_identifier`, `pr_number`,
   `pr_url`, `title` and shared `files`; its `head_sha` and `progress_at` (since when it hasn't
-  moved, for a pull request the landing order doesn't rank); `linked` (Symphony added the Linear
-  link), `step_behind` (R15) and `released` (a person's `Unblock`).
+  moved, for a pull request the landing order doesn't rank); `linked` (an earlier Symphony added a
+  Linear link for it; none is added any more), `step_behind` (R15) and `released` (a person's
+  `Unblock`).
   """
 
   require Logger
@@ -236,9 +234,7 @@ defmodule SymphonyElixir.PrWatch.Competitors do
 
   @doc """
   Applies a wait on `competitors` (see the moduledoc). `opts`: `:repo_key`, `:now`, `:links` (the
-  ones recorded so far), and `:tracker`, `:store` and `:linker` (the Linear blocked-by links,
-  `SymphonyElixir.Linear.Adapter` by default). A link Linear refuses is logged and the wait holds
-  without it; a reason the store refuses is the error.
+  ones recorded so far), and `:tracker` and `:store`. A reason the store refuses is the error.
   """
   @spec wait(Issue.t(), [map(), ...], boolean(), keyword()) :: {:ok, [link()]} | {:error, term()}
   def wait(%Issue{} = issue, [_ | _] = competitors, step_behind, opts) do
@@ -246,51 +242,30 @@ defmodule SymphonyElixir.PrWatch.Competitors do
 
     with :ok <- sync_pause(repo_key, issue.id, competitors) do
       recorded = Keyword.get(opts, :links, [])
-      existing = existing_blockers(issue)
-      links = Enum.map(competitors, &link(&1, issue, {existing, recorded}, step_behind, opts))
-      linked = for %{linked: true} = link <- links, not Enum.any?(recorded, &(&1.linked and same?(&1, link))), do: link.issue_identifier
+      links = Enum.map(competitors, &link(&1, recorded, step_behind, opts))
 
       Logger.info(
         "pr_watch.competitors_linked issue_id=#{issue.id} issue_identifier=#{issue.identifier} " <>
-          "linked=#{Enum.join(linked, ",")} waits_on=#{Enum.map_join(links, ",", &name/1)} step_behind=#{step_behind}"
+          "waits_on=#{Enum.map_join(links, ",", &name/1)} step_behind=#{step_behind}"
       )
 
       {:ok, Enum.filter(recorded, & &1.released) ++ links}
     end
   end
 
-  defp link(competitor, issue, {existing, recorded}, step_behind, opts) do
-    identifier = Map.get(competitor, :issue_identifier)
-
-    linked =
-      cond do
-        not is_binary(identifier) -> false
-        Enum.any?(recorded, &(&1.linked and same?(&1, competitor))) -> true
-        MapSet.member?(existing, identifier) or MapSet.member?(existing, Map.get(competitor, :issue_id)) -> false
-        true -> add_link(identifier, issue, opts)
-      end
+  # A competitor an earlier wait linked in Linear stays marked so, as history; none is linked now.
+  defp link(competitor, recorded, step_behind, opts) do
+    linked = Enum.any?(recorded, &(&1.linked and same?(&1, competitor)))
 
     competitor
     |> record()
     |> Map.merge(%{progress_at: Keyword.fetch!(opts, :now), linked: linked, step_behind: step_behind, released: false})
   end
 
-  defp add_link(identifier, issue, opts) do
-    case linker(opts).add_blocked_by(identifier, issue.id) do
-      :ok ->
-        true
-
-      {:error, reason} ->
-        Logger.warning("PR watch could not link #{identifier} as a blocker of issue_id=#{issue.id} issue_identifier=#{issue.identifier}: #{inspect(reason)}")
-        false
-    end
-  end
-
   @doc """
   Judges the ticket's wait on one read (see the moduledoc). `wait` is the ticket's wait on its
-  competitors (`waiting/1`, nil without one); with none, every competitor left is unlinked.
-  `opts`: `:repo_key`, `:terminal_states`, `:tracker`, `:store` and `:linker`. A link Linear
-  refuses to remove keeps its competitor waited on, and the next read tries again.
+  competitors (`waiting/1`, nil without one); with none, every competitor left is dropped.
+  `opts`: `:repo_key`, `:terminal_states`, `:tracker` and `:store`.
   """
   @spec settle(Issue.t(), wait() | nil, [link()], race(), keyword()) :: settled()
   def settle(%Issue{} = issue, wait, links, race, opts) do
@@ -298,10 +273,8 @@ defmodule SymphonyElixir.PrWatch.Competitors do
     released = Enum.filter(released, &Map.has_key?(race.pulls, &1.pr_number))
     waiting? = wait != nil
     judged = Enum.map(waiting, &judge(&1, waiting?, issue, race, opts))
-    left = for {:left, link} <- judged, do: link
-    {unlinked, stuck} = Enum.split_with(left, &unlink(&1, issue, opts))
-    remaining = for({:racing, link} <- judged, do: link) ++ stuck
-    log_unlinked(issue, unlinked)
+    remaining = for {:racing, link} <- judged, do: link
+    log_unlinked(issue, for({:left, link} <- judged, do: link))
 
     cond do
       not waiting? ->
@@ -351,20 +324,6 @@ defmodule SymphonyElixir.PrWatch.Competitors do
   end
 
   defp landed?(_link, _issue, _race, _opts), do: false
-
-  # Symphony removes only the links it added; true once the link is gone.
-  defp unlink(%{linked: true} = link, issue, opts) do
-    case linker(opts).remove_blocked_by(link.issue_identifier, issue.id) do
-      :ok ->
-        true
-
-      {:error, reason} ->
-        Logger.warning("PR watch could not unlink #{link.issue_identifier} from issue_id=#{issue.id} issue_identifier=#{issue.identifier}: #{inspect(reason)}")
-        false
-    end
-  end
-
-  defp unlink(_link, _issue, _opts), do: true
 
   # Reasons the store won't clear keep every competitor recorded, so the next read judges them again.
   defp clear(issue, wait, released, links, step_behind?, opts) do
@@ -419,9 +378,9 @@ defmodule SymphonyElixir.PrWatch.Competitors do
   end
 
   @doc """
-  A person's `Unblock` of a landing wait (see the moduledoc): removes the links Symphony added and
-  marks every competitor released, on the ticket's watch record, and clears every landing reason of
-  its pause, by the Director. `opts`: `:store` (or `:run_store`) and `:linker`.
+  A person's `Unblock` of a landing wait (see the moduledoc): marks every competitor released, on
+  the ticket's watch record, and clears every landing reason of its pause, by the Director. `opts`:
+  `:store` (or `:run_store`).
   """
   @spec release(String.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def release(repo_key, issue_id, opts \\ []) do
@@ -431,7 +390,7 @@ defmodule SymphonyElixir.PrWatch.Competitors do
     with %{} = record <- store.get_ticket_state(issue_id),
          %{links: [_ | _] = links} = watch <- TicketState.pr_watch(record) do
       issue = %Issue{id: issue_id, identifier: record.issue_identifier}
-      log_unlinked(issue, for(%{linked: true, released: false} = link <- links, unlink(link, issue, opts), do: link))
+      log_unlinked(issue, for(%{linked: true, released: false} = link <- links, do: link))
       links = Enum.map(links, &%{&1 | released: true, linked: false})
       store.put_ticket_pr_watch(repo_key, issue_id, record.issue_identifier, %{watch | links: links})
     else
@@ -441,16 +400,16 @@ defmodule SymphonyElixir.PrWatch.Competitors do
   end
 
   @doc """
-  Ends the wait of a ticket the watcher no longer watches: its landing reasons clear and the links
-  Symphony added are removed. `record` is its normalised state record.
+  Ends the wait of a ticket the watcher no longer watches: its landing reasons clear and its
+  competitors are dropped. `record` is its normalised state record.
   """
   @spec leave(String.t(), TicketState.t(), keyword()) :: :ok
-  def leave(repo_key, record, opts) do
+  def leave(repo_key, record, _opts) do
     issue = %Issue{id: record.issue_id, identifier: record.issue_identifier}
     _ = sync_pause(repo_key, record.issue_id, [])
 
     links = (record.pr_watch && record.pr_watch.links) || []
-    log_unlinked(issue, for(%{released: false} = link <- links, unlink(link, issue, opts), do: link))
+    log_unlinked(issue, for(%{released: false} = link <- links, do: link))
     :ok
   end
 
@@ -482,10 +441,6 @@ defmodule SymphonyElixir.PrWatch.Competitors do
   defp same?(%{issue_id: id}, %{issue_id: id}) when is_binary(id), do: true
   defp same?(left, right), do: is_integer(Map.get(left, :pr_number)) and Map.get(left, :pr_number) == Map.get(right, :pr_number)
 
-  defp existing_blockers(%Issue{blocked_by: blockers}) do
-    for blocker <- List.wrap(blockers), key <- [Map.get(blocker, :id), Map.get(blocker, :identifier)], is_binary(key), into: MapSet.new(), do: key
-  end
-
   defp name(%{issue_identifier: identifier}) when is_binary(identifier), do: identifier
   defp name(%{pr_number: number}), do: "PR ##{number}"
 
@@ -493,5 +448,4 @@ defmodule SymphonyElixir.PrWatch.Competitors do
   defp normalize(_value), do: ""
 
   defp store(opts), do: Keyword.get(opts, :store) || Keyword.get(opts, :run_store, RunStore)
-  defp linker(opts), do: Keyword.get(opts, :linker, SymphonyElixir.Linear.Adapter)
 end

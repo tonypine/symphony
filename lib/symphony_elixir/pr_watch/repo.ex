@@ -177,7 +177,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
   @doc """
   Starts the watcher of `opts[:repo_key]`. Other `opts`, for tests: `:tracker`, `:fetch`,
-  `:github`, `:run_store`, `:self_heal`, `:fixer`, `:linker`, `:git` and `:settings` (the modules
+  `:github`, `:run_store`, `:self_heal`, `:fixer`, `:git` and `:settings` (the modules
   and settings it reads and acts through), `:now` (a clock function), `:timer`
   (`fn message, delay_ms -> ref`, in place of `Process.send_after/3` for the confirm reads),
   `:interval_ms`, `:relay_status` (`fn repo_key -> relay status or nil`, in place of
@@ -275,7 +275,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   end
 
   def handle_call({:release, issue_id}, _from, state) do
-    {:reply, Competitors.release(state.repo_key, issue_id, Keyword.take(state.opts, [:run_store, :linker])), state}
+    {:reply, Competitors.release(state.repo_key, issue_id, Keyword.take(state.opts, [:run_store])), state}
   end
 
   @impl true
@@ -890,7 +890,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   # the wait stays as it was.
   defp settle(entry, {:ok, _pulls}, {landing, _ahead}, race, state, settings) do
     if entry.links != [] or entry.waiting != nil do
-      opts = [repo_key: state.repo_key, terminal_states: settings.tracker.terminal_states, store: store(state)] ++ Keyword.take(state.opts, [:tracker, :linker])
+      opts = [repo_key: state.repo_key, terminal_states: settings.tracker.terminal_states, store: store(state)] ++ Keyword.take(state.opts, [:tracker])
       settled = Competitors.settle(entry.issue, entry.waiting, entry.links, Map.put(race, :files, landing && Map.get(landing, :files)), opts)
       cleared? = entry.waiting != nil and is_nil(settled.wait)
       hold = if cleared? and entry.ticket.hold == :blocked, do: hold(entry.record, &(not Competitors.landing_reason?(&1))), else: entry.ticket.hold
@@ -1826,7 +1826,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   defp outcome_error({:error, reason}), do: inspect(reason)
   defp outcome_error(_outcome), do: nil
 
-  defp apply_opts(state), do: Keyword.take(state.opts, [:tracker, :github, :run_store, :self_heal, :fixer, :gh_runner, :symphony_repo_key, :terminal_states, :linker])
+  defp apply_opts(state), do: Keyword.take(state.opts, [:tracker, :github, :run_store, :self_heal, :fixer, :gh_runner, :symphony_repo_key, :terminal_states])
 
   # What the ticket's record held.
   defp previous_watch(%{record: %{pr_watch: %{} = watch}}), do: watch
@@ -1836,7 +1836,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
     watched_ids = MapSet.new(watched, & &1.issue.id)
 
     for {issue_id, %{pr_watch: %{}} = record} <- records, not MapSet.member?(watched_ids, issue_id) do
-      Competitors.leave(state.repo_key, record, [store: store(state)] ++ Keyword.take(state.opts, [:tracker, :linker]))
+      Competitors.leave(state.repo_key, record, [store: store(state)] ++ Keyword.take(state.opts, [:tracker]))
       result = store(state).put_ticket_pr_watch(state.repo_key, issue_id, record.issue_identifier, nil)
       log_write(result, %{issue: %{id: issue_id, identifier: record.issue_identifier}})
       SituationRecorder.ticket_changed(issue_id)
