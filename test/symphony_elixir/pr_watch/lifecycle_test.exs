@@ -70,6 +70,7 @@ defmodule SymphonyElixir.PrWatch.LifecycleTest do
     def squash_merge(pr_url, request, _opts), do: World.call(:merge, {pr_url, request.head_sha})
     def update_branch(pr_url, head, _opts), do: World.call(:update_branch, {pr_url, head})
     def rerun_failed(run_id, _opts), do: World.call(:rerun, run_id)
+    def fetch_failed_log(_run_id, _opts), do: {:ok, "Error: the check failed\n"}
     def cancel_stale_runs(_pr_url, _head, _opts), do: {:ok, []}
 
     defp set_pr(pr_url, attrs), do: World.update(:prs, &Map.update!(&1, pr_url, fn pr -> Map.merge(pr, Map.new(attrs)) end))
