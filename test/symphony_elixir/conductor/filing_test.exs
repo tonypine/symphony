@@ -46,6 +46,9 @@ defmodule SymphonyElixir.Conductor.FilingTest do
     identifier = "MOT-#{n}"
     state = %{repo_key: "default", issue_id: issue_id, issue_identifier: identifier, phase: "QA", title: "Translate Cycle"}
     :ok = RunStore.put_ticket_state(state)
+    # Every test's sub-ticket is `new-id`: none starts on another test's record of it.
+    RunStore.delete_ticket_state("new-id")
+    on_exit(fn -> RunStore.delete_ticket_state("new-id") end)
     issue = %Issue{id: issue_id, identifier: identifier, title: "Translate Cycle", state: "QA", repo_key: "default"}
     %{issue: issue, issue_id: issue_id, identifier: identifier}
   end
@@ -392,8 +395,10 @@ defmodule SymphonyElixir.Conductor.FilingTest do
     end
 
     test "what can't be done around the sub-ticket is logged, and the sub-ticket stays filed", ctx do
-      # Symphony's records can't take it, so its dependency can't be stored.
+      # The read-back fails, and the ticket already depends on the sub-ticket, so the sub-ticket's
+      # dependency on it would loop and the store refuses it.
       Process.put(:read_result, {:error, :timeout})
+      assert :ok = RunStore.add_dependency(ctx.issue_id, "new-id", :done)
 
       log = capture_log(fn -> assert {:ok, %{identifier: "TP-2000"}} = file(ctx, route(%{relation: "after"})) end)
 
@@ -402,7 +407,7 @@ defmodule SymphonyElixir.Conductor.FilingTest do
       # It never starts without its dependency: it stays in Backlog, and that is said on this ticket.
       refute Process.get(:moved)
       assert [%{idempotency: "tree.start_failed:new-id", payload: %{status: true, text: text}}] = events(ctx.issue_id, "note")
-      assert text =~ "Symphony created TP-2000 but could not make its dependency on #{ctx.identifier} ("
+      assert text =~ "Symphony created TP-2000 but could not make its dependency on #{ctx.identifier} (:dependency_cycle)"
       assert text =~ "It stays in Backlog"
 
       # One whose hold could not be set is still a sub-ticket with its ask.

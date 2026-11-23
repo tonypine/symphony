@@ -18,7 +18,6 @@ defmodule SymphonyElixir.EpicReviewTest do
   @issue_id "issue-epic-review"
   @other_issue_id "issue-epic-review-other"
   @symphony_repo_key "repo-symphony"
-  @fix_ticket "TP-900"
   @sha "c0ffee00112233445566778899aabbccddeeff00"
   @workspace "/tmp/workspaces/TP-823"
   # The epic's checklist row, checked by the review.
@@ -57,11 +56,6 @@ defmodule SymphonyElixir.EpicReviewTest do
 
     def attach(identifier, body, _opts) do
       send(self(), {:fixer_attach, identifier, body})
-      :ok
-    end
-
-    def block(_issue, ticket, _opts) do
-      send(self(), {:fixer_block, ticket.identifier})
       :ok
     end
   end
@@ -127,7 +121,6 @@ defmodule SymphonyElixir.EpicReviewTest do
     create_result = Keyword.get(opts, :create)
     states = Keyword.get(opts, :states, [%{"id" => "state-todo", "name" => "Todo", "type" => "unstarted"}])
     children = Keyword.get(opts, :children, [])
-    relation = Keyword.get(opts, :relation, {:ok, %{"data" => %{"issueRelationCreate" => %{"success" => true}}}})
 
     fn query, variables, _opts ->
       send(recipient, {:linear, query, variables})
@@ -154,9 +147,6 @@ defmodule SymphonyElixir.EpicReviewTest do
 
         query =~ "SymphonyAgentCreateSubissue" ->
           create_answer(create_result, variables.input)
-
-        query =~ "SymphonyAgentCreateIssueRelation" ->
-          relation
       end
     end
   end
@@ -249,9 +239,26 @@ defmodule SymphonyElixir.EpicReviewTest do
     for {:memory_tracker_comment, issue_id, body} <- messages, do: {issue_id, body}
   end
 
-  # The blocked-by relations filed, as `{blocker id, blocked id}`.
-  defp relations(messages \\ peek()) do
-    for {:linear, query, %{input: %{"type" => "blocks"} = input}} <- messages, query =~ "SymphonyAgentCreateIssueRelation", do: {input["issueId"], input["relatedIssueId"]}
+  # The stored dependencies the follow-ups got, as `{blocker id, blocked id}`, among the tickets
+  # `on_records/1` put on Symphony's records. No Linear blocker link is ever written.
+  defp relations do
+    refute Enum.any?(peek(), &match?({:linear, _query, %{input: %{"type" => "blocks"}}}, &1))
+
+    for id <- Process.get(:on_records, []),
+        %{} = record <- [RunStore.get_ticket_state(id)],
+        %{issue_id: blocker} <- SymphonyElixir.TicketState.normalize(record).depends_on,
+        do: {blocker, id}
+  end
+
+  # Puts the tickets `ids` on Symphony's records, as the review's read-back does in production, so a
+  # follow-up's dependency between them can be stored.
+  defp on_records(ids) do
+    for id <- ids do
+      RunStore.put_ticket_state(%{repo_key: @repo_key, issue_id: id, issue_identifier: id, phase: "Todo"})
+      on_exit(fn -> RunStore.delete_ticket_state(id) end)
+    end
+
+    Process.put(:on_records, ids)
   end
 
   # Files each follow-up named in `tickets` (title => `{id, identifier}` or an error) as that
@@ -690,6 +697,7 @@ defmodule SymphonyElixir.EpicReviewTest do
             })
         )
 
+      on_records(["tool-id", "walk-id", "check-id"])
       assert :ok = run(epic(), linear_client: client)
 
       assert Enum.map(created_subissues(), & &1["title"]) == [
@@ -720,6 +728,7 @@ defmodule SymphonyElixir.EpicReviewTest do
             })
         )
 
+      on_records(["tool-id", "walk-id"])
       assert :ok = run(epic(), linear_client: client)
 
       # The blocker is filed first, whatever order the answer listed them in.
@@ -743,14 +752,18 @@ defmodule SymphonyElixir.EpicReviewTest do
         steps: [%{name: "Record the walkthrough", status: "fail", details: "Not yet.", evidence: [], blocked_by: ["tp-824"]}]
       })
 
-      client = linear_client(children: [%{"id" => "child-1", "identifier" => "TP-824"}])
+      client =
+        linear_client(
+          children: [%{"id" => "child-1", "identifier" => "TP-824"}],
+          create: create_by_title(%{"Epic review fails: Record the walkthrough" => {"walk-id", "TP-951"}})
+        )
 
+      on_records(["child-1", "walk-id"])
       assert :ok = run(epic(), linear_client: client)
 
       assert [input] = created_subissues()
       assert input["title"] == "Epic review fails: Record the walkthrough"
-      assert [{"child-1", new_id}] = relations()
-      assert new_id =~ "new-"
+      assert [{"child-1", "walk-id"}] = relations()
     end
 
     test "a gap whose blocker is neither in the epic nor in the answer is filed without it, and logged" do
@@ -782,6 +795,7 @@ defmodule SymphonyElixir.EpicReviewTest do
 
       client = linear_client(create: create_by_title(%{"Epic review fails: First" => {"first-id", "TP-950"}, "Epic review fails: Second" => {"second-id", "TP-951"}}))
 
+      on_records(["first-id", "second-id"])
       log = capture_log(fn -> assert :ok = run(epic(), linear_client: client) end)
 
       assert Enum.map(created_subissues(), & &1["title"]) == ["Epic review fails: First", "Epic review fails: Second"]
@@ -823,7 +837,7 @@ defmodule SymphonyElixir.EpicReviewTest do
       assert [%{name: "epic_review", details: %{signal: "epic_review_gaps", filed: 1}} | _] = signals()
     end
 
-    test "a follow-up whose relation Linear refused still counts as filed" do
+    test "a follow-up whose dependency could not be stored still counts as filed" do
       agent_result(:fail, %{
         summary: "Missing.",
         steps: [%{name: "Record the walkthrough", status: "fail", details: "", evidence: [], blocked_by: ["TP-824"]}]
@@ -832,8 +846,8 @@ defmodule SymphonyElixir.EpicReviewTest do
       client =
         linear_client(
           children: [%{"id" => "child-1", "identifier" => "TP-824"}],
-          create: create_by_title(%{"Epic review fails: Record the walkthrough" => {"walk-id", "TP-951"}}),
-          relation: {:error, :linear_down}
+          # Neither ticket is on Symphony's records, so the store refuses the dependency.
+          create: create_by_title(%{"Epic review fails: Record the walkthrough" => {"walk-id", "TP-951"}})
         )
 
       log = capture_log(fn -> assert :ok = run(epic(), linear_client: client) end)
@@ -1375,7 +1389,6 @@ defmodule SymphonyElixir.EpicReviewTest do
       assert SymphonyElixir.Pauses.why({:ticket, @repo_key, @issue_id}) == ["Waiting for TP-900 to finish: it fixes what stopped this ticket"]
       assert_received {:fixer_create, attrs}
       assert attrs.scope == @symphony_repo_key
-      refute_received {:fixer_block, _identifier}
 
       assert Enum.map(verdicts(), & &1.outcome) == ["blocked", "blocked"]
       assert Enum.all?(verdicts(), &(&1.head_sha == @sha))
