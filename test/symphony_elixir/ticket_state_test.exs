@@ -53,6 +53,7 @@ defmodule SymphonyElixir.TicketStateTest do
                plan_brief_error: nil,
                looked: %{},
                sort_key: nil,
+               depends_on: [],
                slot_held_since: nil,
                legacy_history: nil,
                updated_at: nil
@@ -88,6 +89,40 @@ defmodule SymphonyElixir.TicketStateTest do
       issue = %Issue{id: "issue-1", identifier: "ACME-1", title: "Queued", state: "Todo", priority: 1, updated_at: @at}
       assert {%{sort_key: "a0V", priority: 1}, _changed} = TicketState.observe(record, issue, @at)
       refute Map.has_key?(TicketState.observation(record), :sort_key)
+    end
+
+    test "a ticket's dependencies are a field of their own, apart from its blockers, and no read of Linear changes them" do
+      done = %{issue_id: "dep-1", identifier: "ACME-2", kind: :done}
+      released = %{issue_id: "dep-2", identifier: "ACME-3", kind: :released}
+      record = TicketState.new("repo-a", "issue-1", %{issue_identifier: "ACME-1", phase: "Todo", depends_on: [done, released]})
+
+      assert record.depends_on == [done, released]
+      assert record.blockers == []
+
+      # One entry per ticket depended on: a later one replaces the earlier in its place; an entry
+      # without an id or a known kind is dropped.
+      assert TicketState.put_dependencies(record, [done, released, %{done | kind: :released}]).depends_on ==
+               [%{done | kind: :released}, released]
+
+      junk = [%{issue_id: " ", kind: :done}, %{issue_id: "x", kind: :merged}, :junk, %{identifier: "ACME-9"}]
+      assert TicketState.put_dependencies(record, junk).depends_on == []
+      assert TicketState.normalize(%{depends_on: :junk}).depends_on == []
+      normalized = TicketState.normalize(%{depends_on: [%{issue_id: " dep-1 ", kind: :done}]})
+      assert [%{issue_id: "dep-1", identifier: nil}] = normalized.depends_on
+
+      # A read of Linear rewrites the record's blockers and leaves its dependencies as they are.
+      issue = %Issue{
+        id: "issue-1",
+        identifier: "ACME-1",
+        title: "Depends",
+        state: "Todo",
+        blocked_by: [%{id: "b-1", identifier: "ACME-7", state: "Todo"}],
+        updated_at: @at
+      }
+
+      observed = TicketState.observe(record, issue, @at)
+      assert {%{depends_on: [^done, ^released], blockers: [%{identifier: "ACME-7"}]}, :changed} = observed
+      refute Map.has_key?(TicketState.observation(record), :depends_on)
     end
 
     test "a record is queued while it is open: known, not removed, found and not terminal" do
@@ -225,6 +260,7 @@ defmodule SymphonyElixir.TicketStateTest do
                plan_brief_error: nil,
                looked: %{},
                sort_key: nil,
+               depends_on: [],
                slot_held_since: nil,
                legacy_history: nil,
                updated_at: nil

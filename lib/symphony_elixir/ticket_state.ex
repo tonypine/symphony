@@ -36,6 +36,10 @@ defmodule SymphonyElixir.TicketState do
   `SymphonyElixir.RunStore` when an open ticket's record is first written (or its parent changes)
   and kept until the ticket leaves the queue (`queued?/1`) or a move rewrites it; no observation
   writes it, so a change of priority never moves it. No position number is stored;
+  the tickets it depends on (`depends_on`, `SymphonyElixir.Dispatch.DependsOn`): each by its issue
+  id and identifier, with what it needs of it, `:done` (merged) or `:released` (merged and in the
+  running build). Only `SymphonyElixir.RunStore.add_dependency/3` and `remove_dependency/2` write
+  it: no read of Linear fills, changes or clears it, and it is not the observed `blockers`;
   since when the ticket holds a dispatch slot (`slot_held_since`, `SymphonyElixir.Dispatch.Slots`):
   set by the orchestrator when the ticket takes a slot and cleared when it gives the slot up, nil
   while it holds none, so a restart keeps every holder;
@@ -88,6 +92,16 @@ defmodule SymphonyElixir.TicketState do
   identifier and state, each nil when the read didn't carry it.
   """
   @type link :: %{id: String.t() | nil, identifier: String.t() | nil, state: String.t() | nil}
+
+  @typedoc """
+  A ticket this one depends on, as Symphony stores it: its issue id, its identifier (for the lines
+  that name it) and what this ticket needs of it, `:done` (merged) or `:released` (in the running
+  build).
+  """
+  @type dependency :: %{issue_id: String.t(), identifier: String.t() | nil, kind: dependency_kind()}
+
+  @typedoc "What a dependency needs of the ticket depended on: `:done` (merged) or `:released` (in the running build)."
+  @type dependency_kind :: :done | :released
 
   @typedoc "The ticket's team as the read saw it: its key and name."
   @type team :: %{key: String.t() | nil, name: String.t() | nil}
@@ -323,6 +337,7 @@ defmodule SymphonyElixir.TicketState do
           legacy_history: legacy_history() | nil,
           looked: looked(),
           sort_key: String.t() | nil,
+          depends_on: [dependency()],
           slot_held_since: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
         }
@@ -424,6 +439,7 @@ defmodule SymphonyElixir.TicketState do
       legacy_history: carried_history(record),
       looked: normalize_looked(Map.get(record, :looked)),
       sort_key: sort_key(Map.get(record, :sort_key)),
+      depends_on: normalize_dependencies(Map.get(record, :depends_on)),
       slot_held_since: map_datetime(record, :slot_held_since),
       updated_at: map_datetime(record, :updated_at)
     }
@@ -473,6 +489,7 @@ defmodule SymphonyElixir.TicketState do
       legacy_history: nil,
       looked: %{},
       sort_key: nil,
+      depends_on: [],
       slot_held_since: nil,
       updated_at: nil
     }
@@ -877,6 +894,16 @@ defmodule SymphonyElixir.TicketState do
   @spec put_sort_key(t() | map(), String.t() | nil) :: t()
   def put_sort_key(record, key) when is_nil(key) or is_binary(key) do
     record |> normalize() |> Map.put(:sort_key, sort_key(key))
+  end
+
+  @doc """
+  Sets the tickets the ticket depends on (`depends_on`, `t:dependency/0`), one entry per ticket
+  depended on: a later entry for the same ticket replaces the earlier one. `SymphonyElixir.RunStore`
+  writes it; nothing else should.
+  """
+  @spec put_dependencies(t() | map(), [dependency()]) :: t()
+  def put_dependencies(record, dependencies) when is_list(dependencies) do
+    record |> normalize() |> Map.put(:depends_on, normalize_dependencies(dependencies))
   end
 
   @doc """
@@ -1534,6 +1561,36 @@ defmodule SymphonyElixir.TicketState do
   defp sort_key(key) do
     if SortKey.valid?(key), do: key
   end
+
+  @dependency_kinds [:done, :released]
+
+  # One entry per ticket depended on, in the order they were added; a later entry for the same
+  # ticket replaces the earlier one in its place. An entry without an id or a known kind is dropped.
+  defp normalize_dependencies(entries) when is_list(entries) do
+    entries
+    |> Enum.flat_map(&dependency/1)
+    |> Enum.reduce([], &put_dependency_entry/2)
+  end
+
+  defp normalize_dependencies(_entries), do: []
+
+  defp put_dependency_entry(%{issue_id: id} = entry, acc) do
+    if Enum.any?(acc, &(&1.issue_id == id)),
+      do: Enum.map(acc, &replace_dependency_entry(&1, entry)),
+      else: acc ++ [entry]
+  end
+
+  defp replace_dependency_entry(%{issue_id: id}, %{issue_id: id} = entry), do: entry
+  defp replace_dependency_entry(existing, _entry), do: existing
+
+  defp dependency(%{issue_id: id, kind: kind} = entry) when kind in @dependency_kinds do
+    case normalize_string(id) do
+      nil -> []
+      id -> [%{issue_id: id, identifier: map_string(entry, :identifier), kind: kind}]
+    end
+  end
+
+  defp dependency(_entry), do: []
 
   defp normalize_string(value) when is_binary(value) do
     case String.trim(value) do
