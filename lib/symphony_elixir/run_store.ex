@@ -1952,7 +1952,7 @@ defmodule SymphonyElixir.RunStore do
       not Map.has_key?(by_id, issue_id) ->
         {:error, :ticket_state_not_found}
 
-      depends_on?(by_id, on_issue_id, issue_id, MapSet.new()) ->
+      depends_on?(by_id, on_issue_id, issue_id, []) ->
         {:error, :dependency_cycle}
 
       true ->
@@ -1966,8 +1966,8 @@ defmodule SymphonyElixir.RunStore do
 
   # Whether the ticket `from` depends on `target`, directly or through the tickets it depends on.
   defp depends_on?(by_id, from, target, seen) do
-    on = for %{issue_id: id} <- by_id |> Map.get(from, %{}) |> Map.get(:depends_on, []), not MapSet.member?(seen, id), do: id
-    target in on or Enum.any?(on, &depends_on?(by_id, &1, target, MapSet.put(seen, from)))
+    on = for %{issue_id: id} <- by_id |> Map.get(from, %{}) |> Map.get(:depends_on, []), id not in seen, do: id
+    target in on or Enum.any?(on, &depends_on?(by_id, &1, target, [from | seen]))
   end
 
   defp raise_dependent(records, issue_id, on_issue_id) do
