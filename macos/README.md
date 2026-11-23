@@ -198,10 +198,8 @@ under the form whichever section is shown; a section holding a refused value car
   only that line and keeps comments and indentation, adding the key when it is missing. Symphony
   reloads `symphony.yml` while it runs, so the new limit applies within a minute without a restart. More
   agents use the Linear and GitHub API budgets faster; 2–3 is a safe range on a personal Linear key.
-  Each epic under way keeps one agent for its sub-tickets and the tickets blocking them
-  (`execution.concurrency.epic_lanes`, default every slot), so 3 agents can mean 3 epics at once, or 2 epics plus 1 for other work. Merge (landing) runs and
-  QA passes don't use these agents; up to `execution.concurrency.finishing_max` (default 2) of them
-  run on top.
+  A ticket keeps its slot from its first run until it is done, through review, QA and `Merging`, and
+  a free slot goes first to a sub-ticket of a ticket that has started.
 - **Limit tokens per day** and **Limit tokens per ticket** are `execution.limits.tokens_per_day` and
   `execution.limits.tokens_per_issue`, also in the `symphony.yml` itself. A switch turned off writes `null`, which
   turns that cap off; turned on, it shows the number of tokens, with a hint such as `1,000,000,000 = 1B`. A

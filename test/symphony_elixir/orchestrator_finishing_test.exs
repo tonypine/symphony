@@ -1,7 +1,6 @@
 defmodule SymphonyElixir.OrchestratorFinishingTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.TicketState
 
   @active_states ["Todo", "In Progress", "Merging", "Rework", "Waiting on sub-tickets"]
@@ -33,7 +32,7 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
   end
 
   test "TP-1615: a ticket moved to Merging gets no allowance of its own: with both slots taken by implementation work it waits", ctx do
-    write_finishing_workflow!(ctx, max_concurrent_agents: 2, finishing_max: 3)
+    write_finishing_workflow!(ctx, max_concurrent_agents: 2)
     landing = issue("land-1", "MT-LAND", "Merging")
     tracked([landing])
 
@@ -53,8 +52,8 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     assert %{concurrency: %{max_total: 2, finishing_max: 0}} = snapshot
   end
 
-  test "TP-1615: a Merging ticket that holds its slot lands on it, and finishing_max 1 holds no Todo back", ctx do
-    write_finishing_workflow!(ctx, max_concurrent_agents: 2, finishing_max: 1)
+  test "TP-1615: a Merging ticket that holds its slot lands on it, and holds no Todo back", ctx do
+    write_finishing_workflow!(ctx, max_concurrent_agents: 2)
     second_landing = issue("land-2", "MT-LAND-2", "Merging")
     todo = issue("todo-1", "MT-TODO", "Todo", priority: 1)
     tracked([second_landing, todo])
@@ -258,8 +257,8 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     refute MapSet.member?(state.claimed, "wait-1")
   end
 
-  test "TP-1615: a free slot goes to a sub-ticket of a started ticket before an unrelated one ahead of it in the queue; epic_lanes changes nothing", ctx do
-    write_finishing_workflow!(ctx, max_concurrent_agents: 2, epic_lanes: 1)
+  test "TP-1615: a free slot goes to a sub-ticket of a started ticket before an unrelated one ahead of it in the queue", ctx do
+    write_finishing_workflow!(ctx, max_concurrent_agents: 2)
     standalone = issue("s1", "MT-S1", "Todo", priority: 1)
     other = issue("o1", "MT-O1", "Todo", priority: 1)
     child = issue("c1", "MT-C1", "Todo", priority: 4, parent: %{identifier: "MT-P1", title: "Epic", done: 0, total: 2, children: []})
@@ -292,18 +291,6 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     snapshot = snapshot_of(state)
     assert %{epic_lanes: %{lanes: [], queued_epics: [], shared: %{used: 1}}} = snapshot
     assert %{finishing: %{slots: 0, used: 0}} = snapshot
-  end
-
-  test "finishing_max must be at least 1", ctx do
-    write_finishing_workflow!(ctx, finishing_max: 0)
-    assert {:error, {:invalid_workflow_config, message}} = Config.settings()
-    assert message =~ "finishing_max"
-
-    write_finishing_workflow!(ctx)
-    assert Config.settings!().execution.finishing_max == 2
-
-    changeset = Schema.Execution.changeset(%Schema.Execution{}, %{"kind" => "codex", "command" => "codex", "finishing_max" => 0})
-    assert {"must be greater than %{number}", _} = changeset.errors[:finishing_max]
   end
 
   describe "a run ending while issues wait for a slot" do
