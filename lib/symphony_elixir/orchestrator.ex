@@ -4530,8 +4530,8 @@ defmodule SymphonyElixir.Orchestrator do
   # (`SymphonyElixir.Dispatch.Slots.first_ids/3`).
   # A store that can't be read gives no places and no parents: the walk is by creation time alone.
   defp order_for_dispatch(issues, %State{} = state) do
-    facts = RunStore.queue_facts() |> then(&if(is_map(&1), do: &1, else: %{positions: %{}, parents: %{}, phases: %{}}))
-    Queue.order(issues, facts.positions, Slots.first_ids(issues, facts, holder_identifiers(state)))
+    facts = RunStore.queue_facts() |> then(&if(is_map(&1), do: &1, else: %{places: %{}, parents: %{}, phases: %{}}))
+    Queue.order(issues, facts.places, Slots.first_ids(issues, facts, holder_identifiers(state)))
   end
 
   defp holder_identifiers(%State{} = state) do

@@ -146,9 +146,9 @@ defmodule SymphonyElixir.RunStore.TicketKeyTest do
       # The same start gives the open tickets their queue places once; apart from those, every
       # ticket reads as before.
       after_move = reads(["issue-1074", "issue-indexed", "issue-unindexed"], %{})
-      assert without_queue_positions(after_move) == without_queue_positions(before)
-      assert %{queue_position: position} = RunStore.get_ticket_state("issue-1074")
-      assert is_integer(position)
+      assert without_sort_keys(after_move) == without_sort_keys(before)
+      assert %{sort_key: key} = RunStore.get_ticket_state("issue-1074")
+      assert is_binary(key)
       assert :mnesia.dirty_match_object({@events_table, {:_, :_}, :_, :_, :_, :_, :_, :_}) == []
 
       # A start after it has nothing to move.
@@ -314,8 +314,8 @@ defmodule SymphonyElixir.RunStore.TicketKeyTest do
     end)
   end
 
-  defp without_queue_positions(reads) do
-    Map.new(reads, fn {issue_id, {record, events}} -> {issue_id, {%{record | queue_position: nil}, events}} end)
+  defp without_sort_keys(reads) do
+    Map.new(reads, fn {issue_id, {record, events}} -> {issue_id, {%{record | sort_key: nil}, events}} end)
   end
 
   defp old_or_new_events(repo_key, issue_id) do

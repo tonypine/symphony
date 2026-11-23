@@ -391,12 +391,15 @@ its own, and no slot is reserved for epics.
 
 ### Dispatch order and priority
 
-Symphony keeps one queue of every open ticket, across all repositories, and stores each ticket's
-place in it with the ticket's record, so the order survives a restart. A new ticket joins at the
-end. When a slot frees, it goes to the first ticket in the queue that can start; a ticket that
-cannot start yet (blocked, in `Backlog`, below the priority filter) keeps its place and is passed
-over until it can. A ticket that is done or removed leaves the queue, and joins at the end again if
-it is reopened.
+Symphony keeps one queue of the open top-level tickets, across all repositories, and stores each
+ticket's place in it with the ticket's record as a sort key, so the order survives a restart and a
+move rewrites only the ticket moved. A ticket's sub-tickets sit inside its place, in their own order;
+a finished sub-ticket keeps its link to its parent. A new ticket joins at the end of the queue, or of
+its parent's sub-tickets. When a slot frees, it goes to the first ticket in the queue that can start;
+a ticket that cannot start yet (blocked, in `Backlog`, below the priority filter) keeps its place and
+is passed over until it can. A ticket that is done or removed leaves the queue, and joins at the end
+again if it is reopened. The numbers the queue shows (1, 2, 3) are counted when it is read, never
+stored.
 
 A ticket's Linear priority means how important it is, not its place in the queue: changing it moves
 no ticket. Priority acts only through the `tickets.priorities` filter, which decides which tickets

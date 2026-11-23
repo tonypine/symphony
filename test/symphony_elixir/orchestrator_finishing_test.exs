@@ -186,7 +186,7 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     last = issue("last-1", "MT-LAST", "Todo", priority: 2)
     tracked([parked, low, next, last])
     queued!([parked, low, next, last])
-    places = Map.take(RunStore.queue_positions(), ["parked-1", "low-1", "next-1", "last-1"])
+    places = Map.take(RunStore.queue_places(), ["parked-1", "low-1", "next-1", "last-1"])
 
     # In Backlog, the first ticket cannot start; below the priority filter, the second is never started.
     state = Orchestrator.dispatch_chosen_issues_for_test([last, next, low, parked], orchestrator_state(1))
@@ -195,7 +195,7 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     assert %{reason: "work slots full"} = state.slot_waiting["last-1"]
     refute Map.has_key?(state.slot_waiting, "low-1")
     refute Map.has_key?(state.slot_waiting, "parked-1")
-    assert Map.take(RunStore.queue_positions(), Map.keys(places)) == places
+    assert Map.take(RunStore.queue_places(), Map.keys(places)) == places
 
     # Moved to Todo, it goes before the tickets behind it.
     :ok = RunStore.update_ticket_state("parked-1", %{phase: "Todo"})
@@ -204,7 +204,7 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     state = Orchestrator.dispatch_chosen_issues_for_test(issues, orchestrator_state(1))
 
     assert Map.keys(state.running) == ["parked-1"]
-    assert Map.take(RunStore.queue_positions(), Map.keys(places)) == places
+    assert Map.take(RunStore.queue_places(), Map.keys(places)) == places
   end
 
   test "a retry waiting for a slot keeps attempt 1 and starts on the first poll after a slot frees", ctx do
@@ -282,6 +282,36 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     log = capture_log(fn -> send(self(), {:state, dispatch(alone, [standalone, other, child])}) end)
     assert_received {:state, _state}
     assert dispatch_order(log) == ["s1"]
+  end
+
+  test "TP-1622: the pass walks an epic's sub-tickets inside its place, in their own key order, before a later top-level ticket", ctx do
+    write_finishing_workflow!(ctx, max_concurrent_agents: 1)
+    epic = %{identifier: "MT-E", title: "Epic", done: 0, total: 2, children: []}
+    later = issue("later-1", "MT-LATER", "Todo", priority: 1)
+    sub_1 = issue("sub-1", "MT-S1", "Todo", priority: 4, parent: epic)
+    sub_2 = issue("sub-2", "MT-S2", "Todo", priority: 4, parent: epic)
+    tracked([later, sub_1, sub_2])
+
+    # The epic (not started) joined first, the later ticket next, its sub-tickets last; then the
+    # second sub-ticket is moved before the first among its siblings.
+    :ok = RunStore.put_ticket_state(TicketState.new(Config.repo_key!(), "epic-1", %{issue_identifier: "MT-E", phase: "Backlog"}))
+    queued!([later])
+
+    for sub <- [sub_1, sub_2] do
+      attrs = %{issue_identifier: sub.identifier, phase: sub.state, priority: sub.priority, parent: sub.parent}
+      :ok = RunStore.put_ticket_state(TicketState.new(Config.repo_key!(), sub.id, attrs))
+    end
+
+    :ok = RunStore.move_in_queue("sub-2", :top)
+
+    state = orchestrator_state(1)
+    order = state |> Orchestrator.put_dispatch_order_for_test([later, sub_1, sub_2]) |> Map.fetch!(:dispatch_order)
+    assert [%{identifier: "MT-S2", outcome: :starts}, %{identifier: "MT-S1", outcome: :waits}, %{identifier: "MT-LATER", outcome: :waits}] = Enum.filter(order.entries, & &1.position)
+
+    log = capture_log(fn -> send(self(), {:state, dispatch(state, [later, sub_1, sub_2])}) end)
+    assert_received {:state, state}
+    assert dispatch_order(log) == ["sub-2"]
+    assert %{reason: "work slots full"} = state.slot_waiting["later-1"]
   end
 
   test "TP-1615: a landing run takes a plain slot, and the lane and finishing snapshot keys stay, empty" do

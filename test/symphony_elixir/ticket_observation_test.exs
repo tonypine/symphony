@@ -614,8 +614,8 @@ defmodule SymphonyElixir.TicketObservationTest do
       record = RunStore.get_ticket_state("issue-observed")
       assert {record.removed_at, record.updated_at} == {removed_at, removed_at}
       # Removed, the ticket leaves the dispatch queue.
-      assert {stored.queue_position, record.queue_position} == {1, nil}
-      assert Map.drop(record, [:removed_at, :updated_at, :queue_position]) == Map.drop(stored, [:removed_at, :updated_at, :queue_position])
+      assert {stored.sort_key, record.sort_key} == {"a0", nil}
+      assert Map.drop(record, [:removed_at, :updated_at, :sort_key]) == Map.drop(stored, [:removed_at, :updated_at, :sort_key])
     end
 
     test "a removal of a ticket without a record writes nothing; a store refusal is an error" do
