@@ -248,3 +248,121 @@ body { background: var(--surface-sunken); color: var(--text-primary); font: var(
 @container (max-width: 900px) { .lsteps { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); } }
 .lstep { min-width: min-content; }
 .lstep .nm, .lstep .nm span { min-width: auto; overflow: visible; }
+
+/* ---- 2026-11-23: epics and dependencies ---- */
+/* Epic slot card: the epic wraps the sub-ticket in work. The band is the epic; the card inside is the usual slot card. */
+.eslot { display: grid; min-width: 0; padding: 0 4px 4px; border-radius: calc(var(--radius-card) + 4px); background: color-mix(in oklab, var(--surface-content) 50%, transparent); box-shadow: inset 0 0 0 1px var(--stroke-separator); cursor: pointer; }
+.eslot.arrive { animation: arrive var(--motion-spring) var(--ease-spring); }
+.eslot:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: var(--focus-ring-offset); }
+.eslot.drop { box-shadow: 0 0 0 2px var(--accent), var(--accent-glow); background: var(--accent-tint); }
+.epic-band { display: flex; align-items: center; gap: var(--space-2); height: 36px; min-width: 0; padding: 0 calc(var(--space-5) - 4px); }
+.eslot > .slot { padding-inline: calc(var(--space-5) - 4px); }
+.epic-band .lead { display: grid; place-items: center; flex: none; width: 8px; margin-right: 2px; color: var(--text-secondary); }
+.epic-band .lead .glyph { width: 13px; height: 13px; margin: 0 -2.5px; }
+.epic-band .ident { flex: none; font: var(--type-row-title); color: var(--text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.epic-band .title { flex: 0 1 auto; min-width: 0; font: 500 13px/18px var(--font-text); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.epic-band .grow { flex: 1 1 var(--space-4); }
+.epic-band .cbar { flex: none; grid-template-columns: 96px auto; }
+.epic-band .since { flex: none; margin-left: var(--space-3); font: var(--type-secondary); color: var(--text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+@container (max-width: 900px) {
+  .epic-band { flex-wrap: wrap; height: auto; padding-block: var(--space-2); row-gap: 2px; }
+  .epic-band .title { flex: 1 1 60%; white-space: normal; }
+  .epic-band .since { display: none; }
+}
+.mslot .q-epic { display: inline-flex; align-items: center; gap: 4px; flex: none; margin-left: var(--space-1); font: var(--type-secondary); color: var(--text-tertiary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mslot .q-epic .glyph { width: 11px; height: 11px; }
+
+/* Queue numbers: the place among the top-level tickets, and a sub-ticket's place inside its epic after the point.
+   The whole numbers stay in one column; the part after the point hangs to its right. */
+.row .pos .n { display: grid; grid-template-columns: var(--int-w, 2ch) var(--frac-w, 0ch); width: 100%; }
+.row .pos .n b { font-weight: inherit; text-align: center; }
+.row .pos .n i { font-style: normal; text-align: left; margin-left: calc((var(--d, 1) * 1ch - var(--int-w, 2ch)) / 2); }
+/* A sub-ticket sits one step in: its lead cell starts where its epic's identifier starts. */
+.row.sub .lead { margin-left: 0; }
+.row.epic { cursor: pointer; }
+.twist { display: grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--text-secondary); cursor: pointer; }
+.twist:hover { background: var(--surface-pressed); color: var(--text-primary); }
+.twist .glyph { width: 12px; height: 12px; }
+.row .q-done { font: var(--type-secondary); color: var(--text-tertiary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.row .q-after { white-space: nowrap; }
+.drop-line.sub { left: calc(var(--row-pad) + var(--pos-w, 5ch) + 34px); }
+/* Forced states for renders */
+.vlist .row.hov { background: var(--surface-hover); }
+.vlist:not(.filtered) .row.hov .pos .n { visibility: hidden; }
+.vlist:not(.filtered) .row.hov .pos .grip { opacity: 1; }
+.row.hov .end .start { display: inline-flex; }
+.row.hov .end .repo { visibility: hidden; }
+.mslot .title { margin-left: 6px; }
+
+/* ---- Round 2: elbows, done rows, Recently done ---- */
+/* A sub-row's elbow fills the indent step, under its epic's chevron. */
+.row .elbow { display: grid; place-items: center; flex: none; width: 18px; height: 18px; margin: 0 2px; color: var(--text-tertiary); }
+.row .elbow .glyph { width: 14px; height: 14px; }
+/* Done row: the queue row's height, type and 8px inner padding. */
+.drow { box-sizing: border-box; height: 34px; min-height: 34px; margin-bottom: 2px; padding: 0 var(--row-pad); gap: 6px; cursor: pointer; }
+.drow:hover { background: var(--surface-hover); }
+.drow .lead { margin: 0 2px; color: var(--status-done); }
+.drow .lead .glyph { width: 14px; height: 14px; }
+.drow .ident { flex: none; min-width: 8ch; }
+.drow .line1 { gap: var(--space-3); }
+.drow .trail { gap: var(--space-3); }
+.drow .q-epic, .drow .q-pr { display: inline-flex; align-items: center; gap: 4px; flex: none; font: var(--type-secondary); color: var(--text-tertiary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.drow .q-pr { width: 58px; color: var(--text-secondary); }
+.drow .q-epic .glyph, .drow .q-pr .glyph { width: 11px; height: 11px; color: var(--text-tertiary); }
+.drow .repo-c { flex: none; width: 68px; text-align: right; font: var(--type-secondary); color: var(--text-tertiary); white-space: nowrap; }
+.drow .when { flex: none; width: 76px; text-align: right; font: var(--type-secondary); color: var(--text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.drow.arrive { animation: arrive var(--motion-spring) var(--ease-spring); }
+/* In the queue, an epic's done rows are quiet and hold no number and no grip. */
+.vlist .drow { margin: 0; cursor: default; }
+.vlist .drow .pos { flex: none; width: var(--pos-w, 5ch); }
+.vlist .drow .title { color: var(--text-secondary); font-weight: 400; }
+.row .q-done { padding: 2px 6px; margin: 0 -6px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; }
+.row .q-done:hover, .row .q-done[aria-expanded="true"] { background: var(--surface-pressed); color: var(--text-secondary); }
+/* Epic band as a control, and its done list between the band and the card. */
+.epic-band { cursor: pointer; border-radius: var(--radius-card) var(--radius-card) 6px 6px; }
+.epic-band .twist { flex: none; width: 8px; margin-right: 2px; }
+.epic-band .twist .glyph { margin: 0 -2px; }
+.epic-band:hover .twist { color: var(--text-primary); }
+.dlist { max-height: 216px; overflow: auto; margin: 0 0 4px; padding: 0; }
+.eslot .drow .lead { margin: 0 0 0 2px; }
+.eslot .drow .when { margin-right: calc(var(--space-5) - 4px - var(--row-pad)); }
+/* Recently done: a section like the others, above In progress; it folds to its head. */
+.pq-recent { padding: var(--space-6) var(--gutter) 0; }
+.pq-recent .pq-head { cursor: pointer; }
+.pq-recent.shut .pq-head { margin-bottom: 0; }
+.pq-recent .twist { color: var(--text-secondary); }
+.pq-recent .pq-head:hover .twist { background: var(--surface-pressed); color: var(--text-primary); }
+.rlist { max-height: 216px; overflow: auto; }
+.rlist .drow .lead { margin: 0 4px 0 2px; }
+.rlist .drow:last-child { margin-bottom: 0; }
+.pq-recent:not([hidden]) + .pq-top { padding-top: var(--space-8); }
+@media (max-width: 820px) { .drow .q-epic, .drow .q-pr, .drow .repo-c { display: none; } }
+
+/* ---- Round 2b: range toggle, and the epic's whole run around its card ---- */
+.pq-recent .segmented { margin-left: var(--space-2); }
+.rlist[hidden] { display: none; }
+/* Inside the wrapper the epic's rows share one column set: a number cell, the lead, the identifier under the band's. */
+.eslot { --int-w: 2ch; --frac-w: 0ch; --pos-w: 2ch; }
+.eslot .drow .pos { flex: none; width: var(--pos-w); }
+.eslot .drow .lead { margin: 0 2px; }
+.ulist { position: relative; max-height: 216px; overflow: auto; margin: 4px 0 0; }
+.ulist .row { position: relative; box-sizing: border-box; height: 34px; min-height: 34px; margin-bottom: 2px; padding: 0 var(--row-pad); gap: 6px; border-radius: var(--radius-row); background: transparent; color: var(--text-primary); text-align: left; cursor: grab; }
+.ulist .row:last-of-type { margin-bottom: 0; }
+.ulist .row:hover, .ulist .row.hov { background: var(--surface-hover); }
+.ulist .row.dragging { opacity: 0.35; }
+.ulist .row .ident { flex: none; min-width: 8ch; }
+.ulist .row .line1 { gap: var(--space-3); }
+.ulist .row:hover .pos .n, .ulist .row.hov .pos .n { visibility: hidden; }
+.ulist .row:hover .pos .grip, .ulist .row.hov .pos .grip { opacity: 1; }
+.ulist .row .end { margin-right: calc(var(--space-5) - 4px - var(--row-pad)); }
+.ulist .drop-line { left: var(--row-pad); right: var(--row-pad); }
+.epic-band .lead { margin: 0 2px 0 5px; }
+.ulist { padding-top: 2px; }
+.ulist .drop-line { margin-top: -1px; transform: translateY(2px); }
+
+/* ---- Round 3: the band's two controls ---- */
+/* The done count (with its bar) opens the done list; the band opens what is still to come. */
+.epic-band .b-done { height: 24px; padding: 0 8px; margin: 0 -8px; border: 0; border-radius: 7px; background: transparent; color: var(--text-secondary); cursor: pointer; }
+.epic-band .b-done:hover, .epic-band .b-done[aria-expanded="true"] { background: var(--surface-pressed); color: var(--text-primary); }
+.epic-band .b-done:hover i, .epic-band .b-done[aria-expanded="true"] i { background: var(--stroke-strong); }
+#rcount:empty { display: none; }
