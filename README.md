@@ -370,6 +370,27 @@ QA-mode Symphony or app at it, and runs until stopped (see
 ./bin/symphony openrouter-stub --port 4100
 ```
 
+### Slots: one ticket per slot until it is done
+
+`execution.concurrency.max_total` is the number of slots: how many tickets Symphony works at once.
+A slot belongs to a ticket, not to one agent turn. A ticket takes a slot when its first run starts
+and keeps it until it is done, whatever it is doing: coding, review, QA, CI, waiting for a build,
+`Merging`, a machine step between its agent turns, a question waiting on you, or no run at all. With
+one slot, one ticket moves at a time and nothing new starts until it lands. A ticket that holds a
+slot is the one in progress; the dispatch order and Home reads name the ticket that holds each slot
+and how many are free.
+
+A ticket gives its slot up only when it is done, when it waits on another ticket (a blocker, a fix
+ticket, a competing pull request, an app update that carries a blocker's fix) or on its own
+sub-tickets, or when you stop it, move it to `Backlog` or cancel it. Waiting on you keeps it. A free
+slot goes first to a sub-ticket of a ticket that has started, so a big chain finishes before
+unrelated work starts, then to the first ticket in the queue that can start.
+
+`execution.concurrency.finishing_max`, `execution.concurrency.max_by_issue_state` and
+`execution.concurrency.epic_lanes` have no effect any more: a ticket keeps its slot through
+`Merging`, and the sub-tickets-first rule replaces the epic lanes. The keys still load; a later
+release removes them.
+
 ### Dispatch order and priority
 
 Symphony keeps one queue of every open ticket, across all repositories, and stores each ticket's
@@ -457,7 +478,7 @@ is down.
 or `breakdown`) to done: the active ones, those in review and those done in the last 7 days, each
 with its sub-tickets in landing order (blocked-by order, then creation order), what each waits on
 (you, a blocker, CI, a slot), when each landed and its pull request, counts by stage, the plan's
-start and its tokens, and its lane in `epic_lanes`. Symphony reads the plan tickets on its poll and serves them from that read, so a GET
+start and its tokens. Symphony reads the plan tickets on its poll and serves them from that read, so a GET
 makes no Linear request; the reads show as `initiatives` in the Linear usage table.
 
 You answer from the Inbox too. A plan offers **Approve Plan…** and **Send Decisions** (once a pick

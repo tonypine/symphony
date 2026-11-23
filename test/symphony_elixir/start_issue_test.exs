@@ -90,9 +90,15 @@ defmodule SymphonyElixir.StartIssueTest do
       assert Enum.sort(Map.keys(after_first.running)) == ["queued-1", "start-1"]
       assert Enum.sort(Map.keys(after_first.slot_waiting)) == ["queued-2", "queued-3"]
 
-      # The started run ends: the next slot goes to the second, then the third.
-      after_second =
-        Orchestrator.dispatch_chosen_issues_for_test(tl(queued), %{after_first | running: Map.take(after_first.running, ["queued-1"])})
+      # The started ticket is done and gives up its slot (TP-1615: a run ending alone keeps it): the next
+      # slot goes to the second, then the third.
+      done = %{
+        after_first
+        | running: Map.take(after_first.running, ["queued-1"]),
+          slot_holders: Map.delete(after_first.slot_holders, "start-1")
+      }
+
+      after_second = Orchestrator.dispatch_chosen_issues_for_test(tl(queued), done)
 
       assert Enum.sort(Map.keys(after_second.running)) == ["queued-1", "queued-2"]
       assert Map.keys(after_second.slot_waiting) == ["queued-3"]

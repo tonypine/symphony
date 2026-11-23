@@ -45,7 +45,7 @@ defmodule SymphonyElixir.OrchestratorTest do
 
   defp running_of(state, issue_id), do: state |> snapshot_of() |> Map.fetch!(:running) |> Enum.find(&(&1.issue_id == issue_id))
 
-  test "while a machine step runs the ticket is on that step with no session and its slot is free for another ticket" do
+  test "TP-1615: while a machine step runs the ticket is on that step with no session and keeps its slot: no other ticket starts" do
     walking = issue("walk-1", "TP-1", "In Progress")
     todo = issue("todo-1", "TP-2", "Todo")
     state = run(orchestrator_state(1), walking, session_id: "sess-1", agent_session: %{session: 1})
@@ -54,30 +54,28 @@ defmodule SymphonyElixir.OrchestratorTest do
 
     state = step(state, machine_notice())
 
-    assert Orchestrator.should_dispatch_issue_for_test(todo, state)
+    refute Orchestrator.should_dispatch_issue_for_test(todo, state)
+    assert Orchestrator.available_slots_for_test(state) == 0
     assert %{session_id: nil, agent_session: nil, step: %{id: "build", mode: "machine", waiting: nil}} = state.running["walk-1"]
     assert %{session_id: nil, step: snapshot_step} = running_of(state, "walk-1")
     assert %{id: "build", title: "Build", mode: "machine", started_at: %DateTime{}, waiting: nil} = snapshot_step
     assert state.cycle_requested or is_reference(state.tick_timer_ref)
   end
 
-  test "the next agent turn gets a slot at once when one is free, and waits for one when none is" do
+  test "TP-1615: the next agent turn of a run comes at once, between its turns its ticket keeps its slot, and nothing else starts" do
     state = orchestrator_state(1) |> run(issue("walk-1", "TP-1", "In Progress")) |> step(machine_notice())
+    todo = issue("todo-1", "TP-2", "Todo")
 
     granted = step(state, turn_wanted())
     assert_received {:run_step_turn, "walk-1"}
     assert %{step: %{id: "code", waiting: nil}} = granted.running["walk-1"]
-    refute Orchestrator.should_dispatch_issue_for_test(issue("todo-1", "TP-2", "Todo"), granted)
+    refute Orchestrator.should_dispatch_issue_for_test(todo, granted)
 
-    # Another ticket took the freed slot: the turn waits for it, and its watchdogs hold off.
-    waiting = state |> run(issue("other-1", "TP-3", "In Progress")) |> step(turn_wanted())
-    refute_received {:run_step_turn, "walk-1"}
-    assert %{step: %{waiting: "slot"}} = running_of(waiting, "walk-1")
-
-    # The slot frees: the waiting turn gets it before any dispatch.
-    freed = %{waiting | running: Map.delete(waiting.running, "other-1")} |> step(turn_wanted())
+    # Even with more runs than slots (the count lowered under them), the turn waits on no slot.
+    crowded = state |> run(issue("other-1", "TP-3", "In Progress")) |> step(turn_wanted())
     assert_received {:run_step_turn, "walk-1"}
-    assert %{step: %{waiting: nil}} = freed.running["walk-1"]
+    assert %{step: %{waiting: nil}} = crowded.running["walk-1"]
+    assert Orchestrator.available_slots_for_test(crowded) == 0
   end
 
   test "while Symphony is paused a run's next agent turn waits for the pause to lift" do
@@ -179,13 +177,13 @@ defmodule SymphonyElixir.OrchestratorTest do
 
     defp answer_wanted(question), do: {:answer_wanted, self(), %{id: "code", title: "Write the code", mode: "delegated"}, question.id}
 
-    test "holds no session and no slot, shows on its step as paused on the answer, and the answer gives it its turn at once" do
+    test "TP-1615: holds no session but keeps its slot, shows on its step as paused on the answer, and the answer gives it its turn at once" do
       question = ask!("walk-1")
       state = orchestrator_state(1) |> run(issue("walk-1", "TP-1", "In Progress"), session_id: "sess-1", agent_session: %{session: 1})
 
       state = step(state, answer_wanted(question))
       refute_received {:run_step_turn, "walk-1"}
-      assert Orchestrator.should_dispatch_issue_for_test(issue("todo-1", "TP-2", "Todo"), state)
+      refute Orchestrator.should_dispatch_issue_for_test(issue("todo-1", "TP-2", "Todo"), state)
       assert %{session_id: nil, agent_session: nil} = state.running["walk-1"]
       assert %{session_id: nil, step: %{id: "code", waiting: "answer", question_id: question_id}} = running_of(state, "walk-1")
       assert question_id == question.id

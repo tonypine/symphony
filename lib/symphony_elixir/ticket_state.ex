@@ -34,6 +34,9 @@ defmodule SymphonyElixir.TicketState do
   a positive integer, lower first, unique across every repository's records, given by
   `SymphonyElixir.RunStore` when an open ticket's record is first written and kept until the ticket
   leaves the queue (`queued?/1`); no observation writes it, so a change of priority never moves it;
+  since when the ticket holds a dispatch slot (`slot_held_since`, `SymphonyElixir.Dispatch.Slots`):
+  set by the orchestrator when the ticket takes a slot and cleared when it gives the slot up, nil
+  while it holds none, so a restart keeps every holder;
   and, on a record from before the event stream existed, the `signals`, `verdicts` and `dispatches`
   it kept then (`legacy_history`), until the ledger's backfill converts them into events
   (`SymphonyElixir.TicketEvents.Backfill`) and drops them.
@@ -317,6 +320,7 @@ defmodule SymphonyElixir.TicketState do
           legacy_history: legacy_history() | nil,
           looked: looked(),
           queue_position: pos_integer() | nil,
+          slot_held_since: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
         }
 
@@ -417,6 +421,7 @@ defmodule SymphonyElixir.TicketState do
       legacy_history: carried_history(record),
       looked: normalize_looked(Map.get(record, :looked)),
       queue_position: queue_position(Map.get(record, :queue_position)),
+      slot_held_since: map_datetime(record, :slot_held_since),
       updated_at: map_datetime(record, :updated_at)
     }
   end
@@ -465,6 +470,7 @@ defmodule SymphonyElixir.TicketState do
       legacy_history: nil,
       looked: %{},
       queue_position: nil,
+      slot_held_since: nil,
       updated_at: nil
     }
   end

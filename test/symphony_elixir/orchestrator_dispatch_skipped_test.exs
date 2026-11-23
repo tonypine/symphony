@@ -34,8 +34,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
   end
 
   test "with free slots and queued epics that cannot run, a standalone Todo ticket dispatches on the next poll", ctx do
-    # The lanes TP-912 reported: max_total 5 with one epic lane, so one epic holds the lane, five
-    # wait for it, one has yielded, and four slots are shared.
+    # The epics TP-912 reported: max_total 5 with one epic lane set, which no longer reserves anything.
     write_skipped_workflow!(ctx, max_concurrent_agents: 5, epic_lanes: 1)
     blocked_by = [%{id: "fix", identifier: "MT-99", state: "In Progress"}]
     parts = for n <- 1..6, do: issue("p#{n}", "MT-#{n}1", "Todo", blocked_by: blocked_by)
@@ -49,10 +48,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
     # The poll pauses each part on its open blocker before the dispatch gate reads it.
     assert Orchestrator.sweep_dependencies_for_test("default", parts, ["Done", "Canceled"]) == 6
 
-    state = Orchestrator.put_epic_lanes_for_test(%{orchestrator_state() | max_concurrent_agents: nil}, candidates)
-    assert {length(state.epic_lanes.lanes), length(state.epic_lanes.queued), length(state.epic_lanes.yielded)} == {1, 5, 1}
-    assert state.epic_lanes.shared == 4
-
+    state = %{orchestrator_state() | max_concurrent_agents: nil}
     state = Orchestrator.dispatch_chosen_issues_for_test(candidates, run(state, fix))
 
     assert Map.has_key?(state.running, "standalone")

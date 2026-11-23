@@ -20,9 +20,13 @@ defmodule SymphonyElixir.Home do
   - `outside`: how many open tickets neither list holds, by reason: `backlog`, `below_priority`,
     `epic` (an epic with no ticket in progress) and `behind` (a queued ticket whose blocker is one of
     those, or behind one).
+  - `slots`: the slots the dispatch pass read (`SymphonyElixir.Dispatch.Slots.read/3`): the slot
+    count, how many are used and free, and the tickets that hold them; nil before the first walk.
+
+  Each ticket of either list carries `in_progress`: true exactly when it holds a slot.
   """
 
-  alias SymphonyElixir.{Situation, TicketState}
+  alias SymphonyElixir.{Dispatch.Slots, Situation, TicketState}
 
   @not_started ["backlog", "todo", "triage"]
   @needs_fix ["rework", "ci fix"]
@@ -56,7 +60,8 @@ defmodule SymphonyElixir.Home do
       terminal: MapSet.new(live.terminal_states, &normalize/1),
       priority_filter: Keyword.get(opts, :priority_filter),
       moves: Keyword.get(opts, :moves),
-      children: children(records)
+      children: children(records),
+      holders: Slots.holder_ids(order && Map.get(order, :slots))
     }
 
     started = Enum.filter(records, &started?(&1, ctx))
@@ -72,7 +77,8 @@ defmodule SymphonyElixir.Home do
     %{
       in_progress: in_progress,
       queue: %{roots: queue(queued, in_progress_ids, ctx)},
-      outside: Map.put(outside, :behind, length(behind))
+      outside: Map.put(outside, :behind, length(behind)),
+      slots: order && Map.get(order, :slots)
     }
   end
 
@@ -113,6 +119,7 @@ defmodule SymphonyElixir.Home do
       situation: situation,
       since: situation.since,
       working: Map.has_key?(ctx.live.running, record.issue_id),
+      in_progress: Map.has_key?(ctx.holders, record.issue_id),
       move: move(record, situation, ctx)
     }
   end
@@ -373,6 +380,7 @@ defmodule SymphonyElixir.Home do
       after: after_ticket && after_ticket.identifier,
       also_waits_on: also,
       situation: situation,
+      in_progress: Map.has_key?(ctx.holders, record.issue_id),
       children: children
     }
 
