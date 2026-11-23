@@ -90,6 +90,12 @@ defmodule SymphonyElixir.Dispatch.Queue do
   """
   @spec places([map()]) :: %{String.t() => place()}
   def places(records) when is_list(records) do
+    {keys, parents} = links(records)
+    Map.new(keys, fn {id, _key} -> {id, id |> lineage(parents) |> Enum.map(&Map.fetch!(keys, &1))} end)
+  end
+
+  # The keyed tickets' keys and the parent each one is ordered under (one that holds a key), by id.
+  defp links(records) do
     keyed = for %{issue_id: id, sort_key: key} = record <- records, is_binary(id), is_binary(key), do: record
     keys = Map.new(keyed, &{&1.issue_id, &1.sort_key})
 
@@ -99,18 +105,51 @@ defmodule SymphonyElixir.Dispatch.Queue do
       end
 
     parents = for record <- keyed, parent_id = Map.get(ids, scope(record)), into: %{}, do: {record.issue_id, parent_id}
-
-    Map.new(keyed, &{&1.issue_id, place(&1.issue_id, keys, parents, [])})
+    {keys, parents}
   end
 
-  defp place(id, keys, parents, seen) do
-    key = Map.fetch!(keys, id)
+  # The ids from the ticket's top-level ancestor down to it; a parent cycle is cut where it closes.
+  defp lineage(id, parents, seen \\ []) do
     parent = Map.get(parents, id)
 
     if is_nil(parent) or parent in seen,
-      do: [key],
-      else: place(parent, keys, parents, [id | seen]) ++ [key]
+      do: [id],
+      else: lineage(parent, parents, [id | seen]) ++ [id]
   end
+
+  @doc """
+  Where adding a dependency of the ticket `issue_id` on the ticket `on_id` moves a ticket, from
+  `records` (ticket records): a dependency points upward, so when `issue_id` sits above `on_id`,
+  `{:below, moved, index, siblings}` puts `moved` at `index` among `siblings` (the other tickets
+  ordered where it is, in key order, as `{issue_id, key}`, as `insertion/2` takes them): right after
+  `anchor`. The two are compared
+  where their scopes meet: `moved` and `anchor` are `issue_id` and `on_id`, or the ancestors of
+  each that are sub-tickets of the same parent (or both top-level). `:stay` when `issue_id` already
+  sits below, when either holds no place, or when one is the other's ancestor (a parent always sits
+  above its sub-tickets).
+  """
+  @spec dependency_move([map()], String.t(), String.t()) ::
+          {:below, String.t(), non_neg_integer(), [{String.t(), SortKey.t()}]} | :stay
+  def dependency_move(records, issue_id, on_id) when is_list(records) do
+    {keys, parents} = links(records)
+
+    with true <- Map.has_key?(keys, issue_id) and Map.has_key?(keys, on_id),
+         {[moved | _], [anchor | _]} <- diverge(lineage(issue_id, parents), lineage(on_id, parents)),
+         true <- Map.fetch!(keys, moved) < Map.fetch!(keys, anchor) do
+      siblings =
+        for {id, key} <- keys, id != moved, Map.get(parents, id) == Map.get(parents, moved) do
+          {id, key}
+        end
+        |> Enum.sort_by(&elem(&1, 1))
+
+      {:below, moved, Enum.find_index(siblings, &(elem(&1, 0) == anchor)) + 1, siblings}
+    else
+      _stay -> :stay
+    end
+  end
+
+  defp diverge([same | rest], [same | other]), do: diverge(rest, other)
+  defp diverge(lineage, other), do: {lineage, other}
 
   @doc """
   The scope a ticket's record is ordered in: its parent's identifier, nil for the top level.
