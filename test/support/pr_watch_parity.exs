@@ -285,6 +285,9 @@ defmodule SymphonyElixir.PrWatchParity do
       linker: Linker,
       interval_ms: @interval_ms,
       now: fn -> World.get(:now) end,
+      # Every ticket holds a slot, so the watcher acts on it; the tests of a ticket without one
+      # pass `holds_slot: &SymphonyElixir.Dispatch.Slots.held?/1`, the record's answer.
+      holds_slot: fn _record -> true end,
       timer: fn message, delay_ms -> send(test, {:pr_watch_timer, message, delay_ms}) && make_ref() end
     ]
 

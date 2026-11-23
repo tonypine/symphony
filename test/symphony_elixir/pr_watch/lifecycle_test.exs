@@ -8,7 +8,8 @@ defmodule SymphonyElixir.PrWatch.LifecycleTest do
 
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{ClosedPullRequest, Questions, TicketPullRequest, TicketState}
+  alias SymphonyElixir.{ClosedPullRequest, IdlePark, Pauses, PrWatch, Questions, TicketPullRequest, TicketState}
+  alias SymphonyElixir.Dispatch.Slots
   alias SymphonyElixir.PrDecision.{Action, Facts}
   alias SymphonyElixir.PrWatch.Repo
 
@@ -67,6 +68,9 @@ defmodule SymphonyElixir.PrWatch.LifecycleTest do
     end
 
     def squash_merge(pr_url, request, _opts), do: World.call(:merge, {pr_url, request.head_sha})
+    def update_branch(pr_url, head, _opts), do: World.call(:update_branch, {pr_url, head})
+    def rerun_failed(run_id, _opts), do: World.call(:rerun, run_id)
+    def cancel_stale_runs(_pr_url, _head, _opts), do: {:ok, []}
 
     defp set_pr(pr_url, attrs), do: World.update(:prs, &Map.update!(&1, pr_url, fn pr -> Map.merge(pr, Map.new(attrs)) end))
   end
@@ -145,7 +149,7 @@ defmodule SymphonyElixir.PrWatch.LifecycleTest do
   defp issue(issue_id), do: %{Map.fetch!(World.get(:issues), issue_id) | repo_key: @repo_key}
 
   defp start!(opts \\ []) do
-    defaults = [repo_key: @repo_key, name: nil, auto: false, tracker: Tracker, github: GitHub, fetch: Fetch, interval_ms: 30_000, now: fn -> World.get(:now) end, follow_records: false]
+    defaults = [repo_key: @repo_key, name: nil, auto: false, tracker: Tracker, github: GitHub, fetch: Fetch, interval_ms: 30_000, now: fn -> World.get(:now) end, follow_records: false, holds_slot: fn _record -> true end]
     start_supervised!({Repo, Keyword.merge(defaults, opts)})
   end
 
@@ -521,6 +525,118 @@ defmodule SymphonyElixir.PrWatch.LifecycleTest do
     entry = %{key: "comment-#{issue_id}", date: "2026-10-16", title: title, question: "", answer: answer, scope: ""}
     :ok = RunStore.put_ticket_state(TicketState.put_decisions(record, [entry]))
     withdraw!(issue_id)
+  end
+
+  describe "a ticket without a slot (TP-1606)" do
+    # The watcher reads each ticket's slot from its record, as Symphony runs it.
+    defp start_by_record!, do: start!(holds_slot: &Slots.held?/1)
+
+    defp take_slot!(issue_id), do: :ok = RunStore.put_slot_holder(issue_id, World.get(:now))
+
+    defp withheld(issue_id) do
+      case decision(issue_id) do
+        %{kind: :wait, owner: :symphony, clears_when: "the ticket takes a slot", args: %{withheld: kind}} -> kind
+        _other -> nil
+      end
+    end
+
+    test "its PR is read and recorded and nothing is done on it, when main moves too; once it takes a slot it catches up" do
+      behind = ticket!("40", "Code Review", mergeable: :behind)
+      red = ticket!("41", "QA", ci: :red, red_kind: :failure, failing_check: "specs")
+      conflict = ticket!("42", "QA", mergeable: :dirty)
+      green = ticket!("43", "QA")
+      running = ticket!("49", "QA", ci: :pending)
+      no_pr = bare_ticket!("50", "Code Review")
+      pid = start_by_record!()
+      tick!(pid)
+
+      # What the reads found is recorded, so the ticket's status stays true.
+      assert %{facts: %Facts{mergeable: :behind}, head_sha: "head-40-1"} = watch(behind)
+      assert %{facts: %Facts{ci: :red, failing_check: "specs"}} = watch(red)
+      assert %{facts: %Facts{mergeable: :dirty}} = watch(conflict)
+      assert %{facts: %Facts{ci: :green, mergeable: :clean}} = watch(green)
+
+      # No branch update, no rerun, no CI Fix, no move: each step waits for a slot, naming its rule.
+      assert withheld(behind) == :update_branch
+      assert %{rule: "U1", reason: "Waits for a slot before U1 acts (the branch is updated with the base): " <> _rest} = decision(behind)
+      assert withheld(red) in [:rerun_failed, :ci_fix]
+      assert withheld(conflict) == :ci_fix
+      # QA's run needs its app built first: it waits for the slot too, and holds its run back.
+      assert withheld(green) == :dispatch
+      assert PrWatch.waits_for_slot?(watch(green))
+      assert PrWatch.dispatch_reason(issue(green), Config.settings!()) =~ "the PR watcher (R27): Waits for a slot"
+      # A question is held back too, with what it would ask; a plain wait is the decision as it is.
+      assert withheld(no_pr) == :decision
+      assert %{rule: "R6", reason: "Waits for a slot before R6 acts (" <> _rest} = decision(no_pr)
+      refute deciding(no_pr)
+      assert %{rule: "R24", kind: :wait, owner: :ci} = decision(running)
+      for issue_id <- [behind, red, conflict, green, running, no_pr], do: accounted!(issue_id)
+      assert World.calls(:update_branch) == []
+      assert World.calls(:rerun) == []
+      assert World.calls(:move) == []
+      assert %{silent: nil} = watch(behind)
+
+      # Main moves: the PRs are read again, and left as they are.
+      pr!("40", base_sha: "base-2")
+      pr!("42", base_sha: "base-2")
+      tick!(pid, 2)
+      assert World.calls(:update_branch) == []
+      assert World.calls(:move) == []
+      assert withheld(behind) == :update_branch
+
+      # The tickets take their slots: the next read updates the branch and sends the conflict to CI
+      # Fix, and QA's run is no longer held back.
+      for issue_id <- [behind, red, conflict, green], do: take_slot!(issue_id)
+      tick!(pid)
+      assert World.calls(:update_branch) == [{url(40), "head-40-1"}]
+      assert moves(conflict) == ["CI Fix"]
+      assert %{rule: "R27", kind: :dispatch} = decision(green)
+      refute PrWatch.waits_for_slot?(watch(green))
+      assert PrWatch.dispatch_reason(issue(green), Config.settings!()) == nil
+      for issue_id <- [behind, red, conflict, green], do: assert(withheld(issue_id) == nil)
+    end
+
+    test "a hold is never dropped: a blocker's pause stays on a held conflict behind main, and an idle run's hold stays on a new head" do
+      # The incident of 2026-11-21: a held ticket's conflict was fixed and its blocker's hold dropped.
+      blocked = ticket!("44", "QA", mergeable: :dirty)
+      blocker = Pauses.ticket_reason(:dependency, "TP-9")
+      {:ok, _pause} = Pauses.set({:ticket, @repo_key, blocked}, blocker)
+      behind = ticket!("45", "QA", mergeable: :behind)
+      {:ok, _pause} = Pauses.set({:ticket, @repo_key, behind}, blocker)
+      idle = ticket!("46", "In Progress", ci: :pending)
+      pid = start_by_record!()
+      tick!(pid)
+
+      :ok = IdlePark.hold({:ticket, @repo_key, idle}, "TP-46", "In Progress", 2, watch(idle))
+      pr!("46", head_sha: "head-46-2", ci: :green)
+      tick!(pid, 2)
+
+      assert %{rule: "R4", kind: :wait} = decision(blocked)
+      assert %{rule: "R4", kind: :wait} = decision(behind)
+      assert %{rule: "R4", kind: :wait} = decision(idle)
+      assert World.calls(:update_branch) == []
+      assert World.calls(:move) == []
+      assert {:ok, %{reasons: [%{kind: :ticket, waits_on: %{identifier: "TP-9"}}]}} = Pauses.get({:ticket, @repo_key, blocked})
+      assert {:ok, %{reasons: [%{kind: :ticket, waits_on: %{identifier: "TP-9"}}]}} = Pauses.get({:ticket, @repo_key, behind})
+      assert {:ok, %{reasons: [_idle_hold]}} = Pauses.get({:ticket, @repo_key, idle})
+      assert [_question] = Questions.open({:ticket, @repo_key, idle})
+    end
+
+    test "a merge or a close by a person still moves it: Done, and Rework" do
+      merged = ticket!("47", "Code Review")
+      closed = ticket!("48", "Code Review")
+      pid = start_by_record!()
+      tick!(pid)
+
+      pr!("47", pr: :merged)
+      pr!("48", pr: :closed)
+      tick!(pid)
+
+      assert state(merged) == "Done"
+      assert %{rule: "R2", kind: :close_ticket, outcome: :applied} = decision(merged)
+      assert state(closed) == "Rework"
+      assert %{rule: "R8", kind: :to_rework, outcome: :applied} = decision(closed)
+    end
   end
 
   # The decision request's question the ticket waits on, or nil.

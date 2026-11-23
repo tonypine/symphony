@@ -3479,9 +3479,25 @@ facts and applies it on the same read; upkeep never changes that decision. Both 
 `PrDecision.Apply`, the only writer: Linear moves go through the transition guard, holds through
 the Needs Decision hold and the self-heal lane, GitHub calls through `AutoMerge`.
 
-- Branch upkeep runs in every watched phase, whatever `pull_requests.auto_merge` says and whatever
-  the flow decides (a hold, a question, a CI or competitor wait), and only while no run is active
-  on the ticket: an upkeep due during a run is deferred, and the orchestrator asks the watcher to
+- The watcher acts only for a ticket that holds a slot (Section 8.3, `Slots.held?/1` on its
+  record). A ticket without one has its PR read and its facts, decision and CI label written as for
+  any other, and nothing done on it: no branch upkeep (U1, U2), no rerun of a failed or cancelled
+  check, no move to `CI Fix` (a red head, a conflict) or back from it, no fix ticket, no question,
+  no wait on its competitors, no landing step and no QA build; and no hold an idle or stalled run
+  set is lifted by its reads. When `main` moves, its PR is read again and left as it is. The step
+  held back is recorded as a `wait` on `symphony` until "the ticket takes a slot", naming the rule
+  and what it would do (`args.withheld`); the orchestrator's dispatch gate holds a Code Review, QA,
+  `CI Fix` or landing run back on it, and the silent-wait detector reads it as a wait with an owner,
+  never a stall. A hold's wait (R4) stays the decision, since the hold is what the ticket waits on.
+  What a person did on GitHub still applies: a merge closes the ticket out (R2) and a close sends it
+  to `Rework` (R8). A run's dispatch outside QA is the orchestrator's and takes a slot as it starts;
+  a QA run waits for the slot, since its app is built for its head first. The landing wait on
+  competing PRs still ends when they land or leave the race. A person's answers, moves and cancels
+  go through the control API and apply as for any ticket; the app repository's release read is no
+  ticket and is not gated.
+- Branch upkeep runs in every watched phase, for a ticket that holds a slot, whatever
+  `pull_requests.auto_merge` says and whatever the flow decides (a hold, a question, a CI or
+  competitor wait), and only while no run is active on the ticket: an upkeep due during a run is deferred, and the orchestrator asks the watcher to
   read when a run ends, so it fires at once. U1: a `BEHIND` PR with no PR ahead of it in the
   landing order sharing its files, on a head not red on a failure or a cancelled run, gets one
   update-branch per head (`PUT .../update-branch` with `expected_head_sha`), and the CI runs left
@@ -3711,7 +3727,10 @@ Rules:
   conflicting is recorded `blocked` with the component `ci` and leaves the ticket in `QA` for the
   watcher to route; it MUST NOT go to `Rework`. A red head in `Code Review` once approved, in
   `QA`, `Merging` or `Rework`, or a PR that conflicts with its base, MUST enter `CI Fix` with its
-  origin recorded, whether or not the PR also conflicts. The exception is a `Rework` head Code
+  origin recorded, whether or not the PR also conflicts, once its ticket holds a slot: a ticket
+  without one MUST NOT have its branch updated, its checks rerun, a conflict fixed or a QA build
+  asked for, and MUST keep every hold it has; it does all of that when it takes a slot
+  (Section 8.3). The exception is a `Rework` head Code
   Review's changes verdict stands on: its code is about to change, so the watcher MUST NOT rerun its
   checks, update its branch or send it to `CI Fix` for a red check, and the rework run goes ahead
   whatever CI says. An approval held in `Code Review`, or through `CI Fix` back to it, MUST be carried
@@ -4203,7 +4222,17 @@ Slots:
   applies). Any other ticket starts only when a slot is free, and takes it at dispatch. No agent
   turn and no machine step runs for a ticket that holds no slot; its Grooming turn runs inside its
   first dispatched run, after it took the slot. A QA build is asked for only for a ticket that holds
-  a slot or could take one now.
+  a slot.
+- The pull request upkeep acts only for a ticket that holds a slot (Section 10, the PR and CI
+  watcher): for a ticket without one the watcher reads and records its PR (its checks, its
+  conflicts, a merge or a close by a person) and takes no action on it. Whether a ticket holds a
+  slot is read from its record (`Slots.held?/1`), the one answer every caller outside the
+  orchestrator uses. A step the watcher holds back is recorded as a wait for a slot; when a slot is
+  free, such a ticket takes it in its place in the dispatch walk with no run (only the watcher's gate
+  may hold it back, none of the gates a fresh pick passes), and the orchestrator asks the watcher to
+  read its PR at once, so the ticket catches up with its base then: its branch is updated, its
+  conflict fixed, its checks rerun and its QA build asked for, and its run starts once the watcher
+  lets it.
 - When the pass finds no free slot it still runs while a holder has no run, so that ticket's next run
   starts.
 - Lowering the slot count below the holders evicts nobody: no new ticket starts until fewer hold a

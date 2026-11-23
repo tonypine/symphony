@@ -4499,7 +4499,8 @@ defmodule SymphonyElixir.Orchestrator do
   # build of its head (`SymphonyElixir.QaBuildHold`): held while the app is built, sent to Rework
   # when the build failed, free otherwise. The gate then only reads the hold (`hold_reason/3`). A
   # ticket that left QA while it was held loses the hold here. A build is asked for only for a ticket
-  # that holds a slot, or could take one now: no machine step runs for a ticket without a slot.
+  # that holds a slot: no machine step runs for a ticket without one. A QA ticket without one waits
+  # for it on the watcher's decision (`catch_up/3`), and its build is asked for on the pass after.
   defp resolve_qa_builds(issues, %State{} = state) do
     for %Issue{id: issue_id} = issue when is_binary(issue_id) <- issues,
         repo_key = hold_repo_key(issue),
@@ -4507,7 +4508,7 @@ defmodule SymphonyElixir.Orchestrator do
       cond do
         not qa_issue?(issue) -> QaBuildHold.release(repo_key, issue_id, issue.identifier)
         issue_claimed_or_running?(state, issue_id) -> :ok
-        not holds_slot?(state, issue_id) and available_slots(state) == 0 -> :ok
+        not holds_slot?(state, issue_id) -> :ok
         true -> QaBuildHold.resolve(repo_key, issue, qa_head(issue_id, repo_key))
       end
     end
@@ -4650,7 +4651,7 @@ defmodule SymphonyElixir.Orchestrator do
     cond do
       gate = dispatch_gate_closed(issue, state, active_states, terminal_states) ->
         {reason, rule, closed} = gate
-        state |> note_blocked_flow_head(issue) |> put_dispatch_skipped(issue, reason, rule, closed)
+        state |> catch_up(issue, gate) |> note_blocked_flow_head(issue) |> put_dispatch_skipped(issue, reason, rule, closed)
 
       # A retry that started waiting for a slot while a dispatch readiness task ran is held again
       # with its attempt, as a retry that comes due during the hold is: on a paused provider, as on
@@ -4675,6 +4676,31 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp maybe_dispatch_chosen_issue(_issue, acc, _previous_waiting, _active_states, _terminal_states), do: acc
+
+  # A ticket without a slot whose PR watcher decision waits for one (`PrWatch.waits_for_slot?/1`: the
+  # upkeep or the step its PR needs next is held back until it holds a slot) takes a free slot in its
+  # place in the walk, with no run, and the watcher reads its PR at once: it catches up with its base
+  # then (an update-branch, a conflict fix, a rerun, a QA build), and its run starts once the watcher
+  # lets it. Only the watcher's gate may hold it back, and none of the gates a fresh pick passes
+  # (a run of its own, a claim, a spent budget, the priority filter).
+  defp catch_up(%State{} = state, %Issue{id: issue_id} = issue, {_reason, nil, :watch}) do
+    repo_key = hold_repo_key(issue)
+
+    if catches_up?(state, issue, repo_key) do
+      state = take_slot(state, issue, repo_key)
+      :ok = PrWatch.read_ticket(repo_key, issue_id)
+      state
+    else
+      state
+    end
+  end
+
+  defp catch_up(%State{} = state, _issue, _gate), do: state
+
+  defp catches_up?(%State{} = state, %Issue{id: issue_id} = issue, repo_key) do
+    available_slots(state) > 0 and not holds_slot?(state, issue_id) and is_nil(taken_gate(issue, state)) and
+      PrWatch.waits_for_slot?(PrWatch.watch(issue_id, repo_key: repo_key))
+  end
 
   # Dispatch read the issue again from Linear and found it no longer dispatchable, or found no
   # worker free; each case is logged where it happens.

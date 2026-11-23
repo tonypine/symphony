@@ -325,6 +325,11 @@ defmodule SymphonyElixir.QaDispatchTest do
 
     defp held, do: SymphonyElixir.QaBuildHold.reasons(@designed_repo, @issue_id)
 
+    # The ticket holds a slot: a build is asked for only for a ticket that holds one.
+    defp slot_state(state \\ %Orchestrator.State{}) do
+      %{state | slot_holders: %{@issue_id => %{identifier: "TP-816", state: "QA", repo_key: @designed_repo, since: DateTime.utc_now()}}}
+    end
+
     test "a QA ticket on a green head waits for its app's build, and dispatches when the build is ready" do
       {workspace, head} = start_builder!()
       record_ci!(@designed_repo, head, "green")
@@ -333,7 +338,7 @@ defmodule SymphonyElixir.QaDispatchTest do
       waiting = "Waiting for the QA build of #{String.slice(head, 0, 7)}"
 
       # The pass asks for the build and holds the ticket: nothing runs.
-      next = Orchestrator.dispatch_chosen_issues_for_test([qa_ticket], state())
+      next = Orchestrator.dispatch_chosen_issues_for_test([qa_ticket], slot_state())
       refute Map.has_key?(next.running, @issue_id)
       assert %{reason: ^waiting} = next.dispatch_skipped[@issue_id]
       assert_receive {:building, %{sha: ^head, tree: @tree, workspace: ^workspace}, builder}
@@ -343,7 +348,7 @@ defmodule SymphonyElixir.QaDispatchTest do
       assert Orchestrator.dispatch_refusal_for_test(qa_ticket) == "flow_gated?: " <> waiting
 
       # A pass while it builds starts no second build.
-      next = Orchestrator.dispatch_chosen_issues_for_test([qa_ticket], state())
+      next = Orchestrator.dispatch_chosen_issues_for_test([qa_ticket], slot_state())
       refute Map.has_key?(next.running, @issue_id)
       refute_receive {:building, _job, _builder}, 20
 
@@ -360,7 +365,7 @@ defmodule SymphonyElixir.QaDispatchTest do
       qa_ticket = issue(@designed_repo, "QA")
       :ok = SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_records()
 
-      capture_log(fn -> Orchestrator.dispatch_chosen_issues_for_test([qa_ticket], state()) end)
+      capture_log(fn -> Orchestrator.dispatch_chosen_issues_for_test([qa_ticket], slot_state()) end)
       assert_receive {:building, _job, builder}
       # The pass's own hold, while it builds.
       assert_receive {:ticket_record, @designed_repo, @issue_id, :changed, [:pause]}
@@ -371,7 +376,7 @@ defmodule SymphonyElixir.QaDispatchTest do
       assert_receive {:ticket_record, @designed_repo, @issue_id, :changed, [:pause]}
       assert held() == []
 
-      next = Orchestrator.dispatch_chosen_issues_for_test([qa_ticket], state())
+      next = Orchestrator.dispatch_chosen_issues_for_test([qa_ticket], slot_state())
       refute Map.has_key?(next.running, @issue_id)
       assert %{reason: "The QA build could not run: qa_worker_unreachable: ssh: timeout"} = next.dispatch_skipped[@issue_id]
       assert [%{kind: :environment, releasable: true}] = held()
@@ -386,7 +391,7 @@ defmodule SymphonyElixir.QaDispatchTest do
 
       # The builder has not read the head yet: the pass holds the ticket while it reads, off the
       # orchestrator, and it lets go as soon as it finds the pass selects no Mac app.
-      capture_log(fn -> Orchestrator.dispatch_chosen_issues_for_test([qa_ticket], state()) end)
+      capture_log(fn -> Orchestrator.dispatch_chosen_issues_for_test([qa_ticket], slot_state()) end)
       assert_receive {:paths_read, ^head}
       assert_receive {:ticket_record, @designed_repo, @issue_id, :changed, [:pause]}
       assert_receive {:ticket_record, @designed_repo, @issue_id, :changed, [:pause]}
@@ -406,18 +411,48 @@ defmodule SymphonyElixir.QaDispatchTest do
       record_ci!(@designed_repo, head, "green")
       qa_ticket = issue(@designed_repo, "QA")
 
-      claimed = %Orchestrator.State{claimed: MapSet.new([@issue_id])}
+      claimed = slot_state(%Orchestrator.State{claimed: MapSet.new([@issue_id])})
       Orchestrator.dispatch_chosen_issues_for_test([qa_ticket], claimed)
       assert held() == []
       refute_receive {:building, _job, _builder}, 20
 
-      Orchestrator.dispatch_chosen_issues_for_test([qa_ticket], state())
+      Orchestrator.dispatch_chosen_issues_for_test([qa_ticket], slot_state())
       assert [_reason] = held()
       assert Orchestrator.dispatch_refusal_for_test(%{qa_ticket | state: "In Progress"}) == "unmoved_since?"
 
       # The next pass finds it out of QA and drops the hold.
-      capture_log(fn -> Orchestrator.dispatch_chosen_issues_for_test([%{qa_ticket | state: "Backlog"}], state()) end)
+      capture_log(fn -> Orchestrator.dispatch_chosen_issues_for_test([%{qa_ticket | state: "Backlog"}], slot_state()) end)
       assert held() == []
+    end
+
+    test "a QA ticket without a slot asks for no build, and takes a free slot when the watcher waits for one" do
+      {_workspace, head} = start_builder!()
+      record_ci!(@designed_repo, head, "green")
+      qa_ticket = issue(@designed_repo, "QA")
+
+      # Its decision to run QA is held back for a slot, as the watcher records it for a ticket without one.
+      decision = %{rule: "R27", kind: :wait, reason: "Waits for a slot before R27 acts (a run starts on the ticket): QA", args: %{withheld: :dispatch}}
+      SymphonyElixir.PrWatchSupport.put_watch!(@designed_repo, @issue_id, phase: :qa, head_sha: head, decision: decision)
+
+      # Every slot taken: no build, no slot, no run.
+      full = %Orchestrator.State{max_concurrent_agents: 1, slot_holders: %{"other" => %{identifier: "TP-1", state: "QA", repo_key: @designed_repo, since: DateTime.utc_now()}}}
+      next = Orchestrator.dispatch_chosen_issues_for_test([qa_ticket], full)
+      refute Map.has_key?(next.slot_holders, @issue_id)
+      refute Map.has_key?(next.running, @issue_id)
+      assert held() == []
+      refute_receive {:building, _job, _builder}, 20
+
+      # A free slot: the ticket takes it with no run, and its build waits for the next pass.
+      next = Orchestrator.dispatch_chosen_issues_for_test([qa_ticket], %Orchestrator.State{max_concurrent_agents: 1})
+      assert %{identifier: "TP-816"} = next.slot_holders[@issue_id]
+      refute Map.has_key?(next.running, @issue_id)
+      assert %DateTime{} = RunStore.get_ticket_state(@issue_id).slot_held_since
+      assert held() == []
+      refute_receive {:building, _job, _builder}, 20
+
+      # The pass after, holding it, asks for the build.
+      Orchestrator.dispatch_chosen_issues_for_test([qa_ticket], next)
+      assert_receive {:building, %{sha: ^head}, _builder}
     end
 
     test "a QA ticket whose run is missing is dispatched exactly once" do

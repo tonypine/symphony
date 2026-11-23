@@ -238,6 +238,9 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       linker: Linker,
       interval_ms: 30_000,
       now: fn -> now() end,
+      # Every ticket holds a slot, so the watcher acts on it; the tests of a ticket without one
+      # pass `holds_slot: &SymphonyElixir.Dispatch.Slots.held?/1`, the record's answer.
+      holds_slot: fn _record -> true end,
       # Each test reads by its own `tick!`: a hold the watcher itself clears would have it read again,
       # racing the test's assertions on the decision.
       follow_records: false

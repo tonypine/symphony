@@ -7,6 +7,21 @@ defmodule SymphonyElixir.Dispatch.SlotsTest do
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Pauses
 
+  describe "held?/1" do
+    test "a ticket holds a slot when its record says since when, and a record without it or no record holds none" do
+      assert Slots.held?(%{issue_id: "i-1", slot_held_since: ~U[2026-11-23 10:00:00Z]})
+      refute Slots.held?(%{issue_id: "i-1", slot_held_since: nil})
+      refute Slots.held?(%{issue_id: "i-1"})
+      refute Slots.held?(nil)
+    end
+
+    test "it reads the record the orchestrator writes when it gives the slot and takes it back" do
+      record = SymphonyElixir.TicketState.new("default", "i-1", %{slot_held_since: ~U[2026-11-23 10:00:00Z]})
+      assert Slots.held?(record)
+      refute Slots.held?(%{record | slot_held_since: nil})
+    end
+  end
+
   describe "releases?/2" do
     test "a ticket gives its slot up when it is no longer a candidate, waits on its sub-tickets or on an app update" do
       refute Slots.releases?(nil, [])

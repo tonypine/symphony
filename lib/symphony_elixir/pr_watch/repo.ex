@@ -38,6 +38,16 @@ defmodule SymphonyElixir.PrWatch.Repo do
   held in its phase stays watched, and a read that shows a new head or checks that reported lifts
   the hold (`SymphonyElixir.IdlePark.settle/3`).
 
+  The watcher acts only for a ticket that holds a slot (`SymphonyElixir.Dispatch.Slots.held?/1`,
+  read from its record). A ticket without one has its PR read, its facts, decision and CI label
+  written as for any other, and nothing done: no upkeep (update-branch, a cancelled run's rerun), no
+  rerun, no move to CI Fix or back from it, no fix ticket, no question, no wait on its competitors,
+  no landing step and no QA build, and no hold an idle or stalled run set is lifted. The decision
+  then reads as a wait for a slot naming the rule it holds back (`args.withheld`), which the
+  orchestrator ends by giving the ticket a slot and asking for a read of it at once. A merge or a
+  close by a person still applies (R2, R8), and so does a run's dispatch outside QA, which takes a
+  slot as it starts.
+
   Before deciding, the read is completed with what Symphony knows: the attempts
   (`SymphonyElixir.PrWatch.Attempts`), a rerun whose checks haven't reported yet (the head reads as
   running), a failed `protected paths` check (before `Merging` the head reads as its other checks; in
@@ -126,7 +136,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
     Tracker
   }
 
-  alias SymphonyElixir.Dispatch.Candidates
+  alias SymphonyElixir.Dispatch.{Candidates, Slots}
   alias SymphonyElixir.GitHub.{PullRequest, RelaySupervisor}
   alias SymphonyElixir.Linear.{Client, Issue}
   alias SymphonyElixir.PrDecision.{Action, Apply, Facts}
@@ -151,6 +161,9 @@ defmodule SymphonyElixir.PrWatch.Repo do
   # and one GitHub hasn't computed yet is read again, up to 5 times.
   @reread_gap_ms 1_000
   @max_rereads 5
+  # The flow actions applied for a ticket without a slot (`withhold/3`): a wait, a run's dispatch,
+  # and the close-out of a merged PR.
+  @free_kinds [:wait, :dispatch, :land_agent, :close_ticket]
   # The record's fields a decision reads: a change of one re-decides the ticket.
   @decided_fields [:phase, :blockers, :pause]
 
@@ -169,8 +182,9 @@ defmodule SymphonyElixir.PrWatch.Repo do
   (`fn message, delay_ms -> ref`, in place of `Process.send_after/3` for the confirm reads),
   `:interval_ms`, `:relay_status` (`fn repo_key -> relay status or nil`, in place of
   `SymphonyElixir.GitHub.RelaySupervisor.status/2`), `app_release: true` to read the app repository's newest release on each timed
-  tick, `auto: false` to tick only on `poll/2`, and `follow_records: false` to re-decide nothing on a
-  record's change.
+  tick, `auto: false` to tick only on `poll/2`, `follow_records: false` to re-decide nothing on a
+  record's change, and `:holds_slot` (`fn record -> boolean`, in place of
+  `SymphonyElixir.Dispatch.Slots.held?/1`).
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -665,6 +679,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
           waiting: Competitors.waiting(record),
           landing_wait: nil,
           restart_conflicts: false,
+          slot: holds_slot?(state, record),
           ticket: %{
             phase: phase,
             origin: origin(record, settings),
@@ -1044,15 +1059,23 @@ defmodule SymphonyElixir.PrWatch.Repo do
     if watch do
       watch = silence(watch, entry, previous, now, state, settings)
       store(state).put_ticket_pr_watch(state.repo_key, entry.issue.id, entry.issue.identifier, watch) |> log_write(entry)
-      # A hold an idle run set lifts on this read; the pause's change re-decides the ticket at once.
-      _ = IdlePark.settle({:ticket, state.repo_key, entry.issue.id}, entry.record, watch)
-      # So does a pause a run that never started set, once the PR has a new head.
-      _ = StalledRun.settle({:ticket, state.repo_key, entry.issue.id}, entry.record, watch)
+      settle_holds(entry, watch, state)
       announce_dispatch(watch, previous, entry, state)
       announce_situation(watch, previous, entry)
       request_qa_build(watch, previous, entry, state)
       watch
     end
+  end
+
+  # A hold an idle run set lifts on this read; the pause's change re-decides the ticket at once. So
+  # does a pause a run that never started set, once the PR has a new head. A ticket without a slot
+  # keeps every hold: the read records, and lifts nothing.
+  defp settle_holds(%{slot: false}, _watch, _state), do: :ok
+
+  defp settle_holds(entry, watch, state) do
+    _ = IdlePark.settle({:ticket, state.repo_key, entry.issue.id}, entry.record, watch)
+    _ = StalledRun.settle({:ticket, state.repo_key, entry.issue.id}, entry.record, watch)
+    :ok
   end
 
   # What the ticket read serves of the PR, stamped with when it was read. The record keeps it past
@@ -1091,15 +1114,19 @@ defmodule SymphonyElixir.PrWatch.Repo do
   # cycle at once rather than at its next tick. So is one that still stands with no run while the
   # silent-wait detector finds it quiet: each poll interval that finds it so starts the run (an extra
   # tick inside one adds nothing), and once it is listed the dispatch pass pauses a ticket no run can
-  # start (`SymphonyElixir.PrWatch.StalledRun`).
+  # start (`SymphonyElixir.PrWatch.StalledRun`). A new wait for a slot is announced too, so a free
+  # slot goes to that ticket on the cycle it runs.
   defp announce_dispatch(%{decision: %{kind: kind} = decision} = watch, previous, entry, state) do
     new_or_quieter? = not same_decision?(decision, previous && previous.decision) or quieter?(watch, previous)
 
-    if kind in StalledRun.run_kinds() and new_or_quieter?,
+    if (kind in StalledRun.run_kinds() or withheld?(decision)) and new_or_quieter?,
       do: ObservabilityPubSub.broadcast_ticket_record_changed(state.repo_key, entry.issue.id, [:pr_watch])
   end
 
   defp announce_dispatch(_watch, _previous, _entry, _state), do: :ok
+
+  defp withheld?(%{args: %{withheld: _kind}}), do: true
+  defp withheld?(_decision), do: false
 
   # The ticket went quiet on this tick, or stayed quiet into another poll interval.
   defp quieter?(%{silent: %{ticks: ticks}}, %{silent: %{ticks: ticks}}), do: false
@@ -1110,8 +1137,9 @@ defmodule SymphonyElixir.PrWatch.Repo do
   # ticket comes back to one of them with (a CI Fix return), is built for QA at once
   # (`SymphonyElixir.QaBuild`), so its build runs beside the review and CI, when its QA pass selects
   # the app: the builder reads that from the head with the ticket's issue. Asking again for a head
-  # already asked for changes nothing.
-  defp request_qa_build(%{head_sha: head}, previous, %{phase: phase, issue: %{identifier: identifier} = issue}, state)
+  # already asked for changes nothing. A ticket without a slot asks for none: the orchestrator asks
+  # for its build once it holds one (`QaBuildHold`).
+  defp request_qa_build(%{head_sha: head}, previous, %{phase: phase, slot: true, issue: %{identifier: identifier} = issue}, state)
        when is_binary(head) and is_binary(identifier) and phase in [:code_review, :qa] do
     new_head? = carried(previous, :head_sha, nil) != head
 
@@ -1301,6 +1329,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
     case decide(facts, entry) do
       {:ok, action} ->
+        action = withhold(action, entry, facts)
         read = with_protected_entries(read, action, entry, state)
         result = Apply.apply(action, Map.merge(ctx, %{read: read, attempts: attempts, applied: applied}))
         attempts = result.attempts
@@ -1340,6 +1369,8 @@ defmodule SymphonyElixir.PrWatch.Repo do
   # the next and into the flow decision's. Returns what was applied, as `actions` keeps it, and the
   # last action GitHub refused on this read, which the record keeps until a read has none
   # (`upkeep_failure`): the silent-wait detector lists a ticket whose upkeep keeps failing.
+  defp upkeep(_ctx, attempts, applied, %{slot: false}, _state), do: {[], nil, attempts, applied}
+
   defp upkeep(ctx, attempts, applied, entry, state) do
     ctx.facts
     |> PrDecision.upkeep()
@@ -1367,6 +1398,61 @@ defmodule SymphonyElixir.PrWatch.Repo do
         "outcome=#{outcome_name(outcome)} reason=#{inspect(action.reason)}"
     )
   end
+
+  # A ticket without a slot (`SymphonyElixir.Dispatch.Slots.held?/1`) has its PR read and recorded,
+  # and nothing done on it: a flow action that would act on the PR or the ticket, and the upkeep the
+  # facts call for, are recorded as a wait for a slot instead, which names the rule and what it
+  # would do (`args.withheld`). What a person did on GitHub still applies: a merge closes the ticket
+  # out (R2) and a close sends it to Rework (R8). A wait applies as it is, and a run's dispatch is the
+  # orchestrator's, which starts it only on a slot; but in QA the run needs the app built for its
+  # head first, a machine step, so it waits for the slot too. A hold's wait (R4) stays the decision:
+  # the hold is what the ticket waits on. The orchestrator gives a ticket whose decision waits for a
+  # slot one when one is free, and has the watcher read it at once, so it catches up then.
+  defp withhold(%Action{} = action, %{slot: false} = entry, %Facts{} = facts) do
+    withheld =
+      cond do
+        needs_slot?(action, facts) -> wait_for_slot(action)
+        action.kind == :wait and facts.hold == :none -> upkeep_wait(action, PrDecision.upkeep(facts))
+        true -> action
+      end
+
+    log_withheld(withheld, entry)
+    withheld
+  end
+
+  defp withhold(action, _entry, _facts), do: action
+
+  # A wait with upkeep due waits for the slot the upkeep needs; with none due, it is the decision.
+  defp upkeep_wait(action, []), do: action
+  defp upkeep_wait(_action, [upkeep | _rest]), do: wait_for_slot(upkeep)
+
+  defp needs_slot?(%Action{rule: "R8"}, _facts), do: false
+  defp needs_slot?(%Action{kind: :dispatch}, %Facts{phase: :qa}), do: true
+  defp needs_slot?(%Action{kind: kind}, _facts), do: kind not in @free_kinds
+
+  defp wait_for_slot(%Action{} = action) do
+    what =
+      case Action.next_step(action.kind) do
+        {_owner, step} -> step
+        nil -> action.reason
+      end
+
+    Action.new!(action.rule, :wait,
+      reason: "Waits for a slot before #{action.rule} acts (#{what}): #{action.reason}",
+      owner: :symphony,
+      clears_when: "the ticket takes a slot",
+      args: %{withheld: action.kind}
+    )
+  end
+
+  defp log_withheld(%Action{args: %{withheld: kind}} = action, entry) do
+    Logger.debug(
+      "pr_watch.withheld issue_id=#{entry.issue.id} issue_identifier=#{entry.issue.identifier} " <>
+        "rule=#{action.rule} action=#{kind}: the ticket holds no slot"
+    )
+  end
+
+  defp log_withheld(_action, _entry), do: :ok
 
   # The wait on competing PRs that stepped behind them (R15) is over: the conflict gets its fix runs
   # again.
@@ -1756,6 +1842,9 @@ defmodule SymphonyElixir.PrWatch.Repo do
       SituationRecorder.ticket_changed(issue_id)
     end
   end
+
+  # Whether the ticket holds a slot, from its record (`Slots.held?/1`); `opts[:holds_slot]` in tests.
+  defp holds_slot?(state, record), do: Keyword.get(state.opts, :holds_slot, &Slots.held?/1).(record)
 
   defp log_write(:ok, _entry), do: :ok
 
