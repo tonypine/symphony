@@ -713,51 +713,30 @@ execution:
 
 **Concurrency and turns:**
 
-- `concurrency.max_total` is the global dispatch cap.
-- `concurrency.epic_lanes` (default: `max_total`) is how many of those slots in-progress epics may
-  reserve. An epic is a plan ticket in `Waiting on sub-tickets` with at least one
-  sub-ticket approved and not finished (anything but Backlog, Triage or a terminal state). Each
-  one, in parent priority then age order, holds one lane: its sub-tickets run there one after
-  another, and the lane stays reserved while the current part is landing, so the next part starts
-  as soon as it is unblocked. An epic whose path only waits on people (every open ticket on it is in
-  review, in Backlog or Triage, a parent waiting on its sub-tickets, a ticket held by blockers, or a
-  ticket whose priority `tickets.priorities` keeps from starting) yields its lane to the next epic or
-  the shared pool, the moment a ticket moves or a run on its path ends, and takes one again once a
-  ticket on its path can run. The lane also runs whatever is in the way of the next
-  part: sub-tickets of sub-tickets at any depth, and tickets blocking any of those (transitively,
-  until Done), even when they belong to another parent. The nearest one goes first, so the epic's
-  next part beats a blocker of it, and priority and age only break ties. A ticket in the way of two
-  epics runs once, in whichever lane is free first. Epics beyond the lane count wait their turn.
-  The slots left over are shared, in dispatch order, for standalone tickets and for an epic's extra
-  parallel tickets. Set it to `max_total - 1` to always keep a slot for standalone work, or `0` to
-  turn lanes off. Values outside `0..max_total` fail `symphony check`. The dashboard and
-  `/api/v1/state` (`epic_lanes`) show each lane and the shared pool, with the ticket a lane runs
-  and why when it is not the epic's own sub-ticket (`MT-30 (In Progress), blocks MT-12`; `via` in
-  the API), and each yielded epic with why (`status: "yielded"` and `reason` in the API;
-  `No sub-ticket Symphony can dispatch: priorities below Urgent. ...` when a priority holds it, so you
-  can raise a priority or park the plan). The Director's Overview shows the same line on the
-  initiative's card. The dispatch log line carries `slot=lane:<epic>`, `slot=shared`, or `slot=finishing`.
-- `concurrency.finishing_max` (default: `2`) caps landing runs (tickets in `Merging`; with
-  `pull_requests.auto_merge` on, only the ones that fell back to the landing agent). They only
-  finish approved work, so they don't use `max_total` slots or epic lanes and start as soon as one
-  of these is free. Values below `1` fail `symphony check`.
-- Dispatch goes closest to done first: `Merging`, `Rework`,
-  resumes such as `In Progress`, then `Todo`; priority and age only break ties within a stage.
-  While a `Merging` ticket waits for a finishing slot no `Todo` ticket starts; `Rework`
-  and resumes still do, and the held ticket's reason names
-  what it waits for (`MT-2 (Merging) is waiting for a finishing slot`). A ticket that finds no free slot
-  is not retried with backoff: it keeps its
-  attempt and starts on the first poll after a slot frees (a run ending triggers that poll). The
-  dashboard and `/api/v1/state` show the landing runs (`finishing`) and what is waiting for a slot
-  and why (`slot_waiting`). A `Merging` ticket held while CI runs on its head is listed there as
-  `waiting for CI on <sha>`; it doesn't count as waiting for a slot, so it doesn't hold back `Todo`.
+- `concurrency.max_total` is the number of slots: how many tickets Symphony works at once. A slot
+  belongs to a ticket from its first run until it is done, through every phase (coding, review, QA,
+  CI, a build, `Merging`), its machine steps, a question to you and any time with no run; it is
+  given up only when the ticket is done, waits on another ticket or its sub-tickets, or you stop it,
+  move it to Backlog or cancel it. A free slot goes first to a sub-ticket of a ticket that has
+  started, then to the first ticket in the queue that can start (SPEC.md Section 8.3).
+- `concurrency.epic_lanes` and `concurrency.finishing_max` have no effect: the sub-tickets-first
+  rule replaces the epic lanes, and a ticket in `Merging` keeps its slot with no allowance of its
+  own. Both still load and are still validated (`epic_lanes` within `0..max_total`, `finishing_max`
+  at least `1`); a later release removes them. `/api/v1/state` keeps `epic_lanes` and `finishing`,
+  empty. The dispatch log line carries `slot=shared`.
+- Dispatch goes in the stored queue order (the README's "Dispatch order and priority"). A ticket
+  that finds no free slot is not retried with backoff: it keeps its attempt and starts on the first
+  poll after a slot frees (a ticket giving its slot up triggers that poll). `/api/v1/state` shows
+  the slots and their holders (`slots`) and what is waiting for a slot and why (`slot_waiting`).
+  A `Merging` ticket held while CI runs on its head is listed there as `waiting for CI on <sha>`; it
+  keeps the slot it holds.
   `/api/v1/state` also lists the issue ids Symphony holds a claim on (`claimed`); a claim with no
   running agent, retry or slot wait is released at the end of the next poll. Every other candidate
   the last poll passed over is listed under `dispatch_skipped` with the gate that held it (`blocked
   by MT-2`, `on a Needs Decision hold`, a usage limit, the `tickets.priorities` filter, ...) and
   since when.
-- `concurrency.max_by_issue_state` can cap work independently for specific issue states such as
-  `rework`.
+- `concurrency.max_by_issue_state` has no effect: only `max_total` limits how many tickets hold a
+  slot. It still loads; a later release removes it.
 - `limits.max_turns` caps how many back-to-back turns Symphony will run in a single worker
   invocation when a turn completes but the issue is still active. Codex reuses one `threadId`
   across these turns; Claude relaunches per turn (workspace + prompt provide continuation).

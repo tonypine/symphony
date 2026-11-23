@@ -91,6 +91,34 @@ defmodule SymphonyElixirWeb.DispatchOrderReadTest do
     assert [%{"identifier" => "MT-Z", "position" => 1, "starts_now" => true}, %{"identifier" => "MT-Y", "position" => 2, "starts_now" => false}] = read["queue"]
   end
 
+  test "TP-1615: the dispatch order and Home name the ticket that holds the slot and the free ones, and mark it alone in progress", %{orchestrator: orchestrator} do
+    # MT-H holds the one slot with no run (it waits for CI, say); MT-A waits behind it.
+    held = %{ticket("h", "MT-H", 3) | state: "In Progress"}
+    :ok = RunStore.update_ticket_state("h", %{phase: "In Progress"})
+    waiting = ticket("a", "MT-A", 2)
+    holder = %{identifier: "MT-H", state: "In Progress", repo_key: @repo, since: ~U[2026-11-22 07:00:00Z]}
+
+    state = %{orchestrator_state() | slot_holders: %{"h" => holder}}
+    state = Orchestrator.put_dispatch_order_for_test(state, [held, waiting])
+    {:reply, snapshot, _state} = Orchestrator.handle_call(:snapshot, {self(), make_ref()}, state)
+    :ok = GenServer.call(orchestrator, {:put, snapshot})
+
+    order = build_conn() |> get("/api/v1/dispatch/order") |> json_response(200)
+
+    assert %{"total" => 1, "used" => 1, "free" => 0, "holders" => [%{"identifier" => "MT-H", "state" => "In Progress", "running" => false}]} = order["slots"]
+    assert [%{"identifier" => "MT-H", "in_progress" => true, "starts_now" => true}, %{"identifier" => "MT-A", "in_progress" => false, "wait" => "work slots full"}] = order["queue"]
+
+    home = build_conn() |> get("/api/v1/home") |> json_response(200)
+
+    assert %{"free" => 0, "holders" => [%{"identifier" => "MT-H"}]} = home["slots"]
+    assert [%{"identifier" => "MT-H", "in_progress" => true}] = home["in_progress"]
+    assert [%{"identifier" => "MT-A", "in_progress" => false}] = home["queue"]["roots"]
+
+    status = build_conn() |> get("/api/v1/state") |> json_response(200)
+
+    assert status["slots"] == order["slots"]
+  end
+
   test "an unreadable orchestrator reads as an error", %{orchestrator: _orchestrator} do
     assert %{"error" => %{"code" => "snapshot_unavailable"}} = build_conn() |> get("/api/v1/dispatch/order") |> json_response(200)
   end

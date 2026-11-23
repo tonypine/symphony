@@ -2097,6 +2097,7 @@ defmodule SymphonyElixir.CoreTest do
       initial_state
       |> Map.put(:max_concurrent_agents, 0)
       |> Map.put(:claimed, MapSet.new([issue_id]))
+      |> Map.put(:slot_holders, %{issue_id => %{identifier: "MT-232", state: "Merging", repo_key: nil, since: last_ran_at}})
       |> Map.put(:completed_run_metadata, %{issue_id => %{identifier: "MT-232", pull_request_url: pr_url, last_ran_at: last_ran_at}})
       |> Map.put(:retry_attempts, %{
         issue_id => %{
@@ -2111,7 +2112,7 @@ defmodule SymphonyElixir.CoreTest do
 
     send(pid, {:retry_issue, issue_id, retry_token})
 
-    # A landing run uses a finishing slot, so it starts even with no work slots free.
+    # The ticket holds its slot from its earlier runs, so its landing run starts even with no slot free.
     state =
       wait_for_orchestrator_state(pid, fn state ->
         Map.has_key?(state.running, issue_id) or match?(%{attempt: 2}, state.retry_attempts[issue_id])

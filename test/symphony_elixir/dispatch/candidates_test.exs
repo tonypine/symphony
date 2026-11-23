@@ -3,7 +3,6 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
 
   alias SymphonyElixir.Config.SystemSchema
   alias SymphonyElixir.Dispatch.{Candidates, Queue}
-  alias SymphonyElixir.EpicLanes
   alias SymphonyElixir.Linear.Client
   alias SymphonyElixir.{TicketObservation, TicketState}
 
@@ -69,12 +68,12 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
       assert gate(record) == gate(cache)
     end
 
-    test "on an epic and its lanes' parts" do
+    test "on an epic and its parts" do
       part_1 = issue("part-1", "MT-11", "In Progress", priority: 2)
       part_2 = issue("part-2", "MT-12", "Todo", blocked_by: [%{id: "part-1", identifier: "MT-11", state: "In Progress"}])
       part_3 = issue("part-3", "MT-31", "Todo")
 
-      # Two epics of the same priority: MT-30 is the older, so it takes the one lane.
+      # Two epics of the same priority.
       epic = issue("epic", "MT-10", @waiting, labels: ["plan"], sub_issues: [link(part_1), link(part_2)], created_at: ~U[2026-10-02 09:00:00Z])
       older = issue("older-epic", "MT-30", @waiting, labels: ["plan"], sub_issues: [link(part_3)], created_at: ~U[2026-10-01 09:00:00Z])
 
@@ -88,13 +87,6 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
       # Each parent waits on its sub-tickets on both paths.
       for issues <- [cache, record], parent <- ["MT-10", "MT-30"] do
         assert issues |> Enum.find(&(&1.identifier == parent)) |> Issue.waiting_on_sub_issues?(terminal_states())
-      end
-
-      for {epic_lanes, expected} <- [{nil, {["MT-30", "MT-10"], []}}, {1, {["MT-30"], ["MT-10"]}}] do
-        plan = EpicLanes.plan(record, 10, epic_lanes, terminal_states())
-        assert plan == EpicLanes.plan(cache, 10, epic_lanes, terminal_states())
-        assert {identifiers(plan.lanes), identifiers(plan.queued)} == expected
-        assert plan.yielded == []
       end
     end
 

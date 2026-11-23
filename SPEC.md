@@ -1657,6 +1657,8 @@ Fields:
   - A harness needs an entry only when some run resolves to it.
 - `concurrency.max_total` (integer)
   - Default: `10`
+  - The number of slots: how many tickets Symphony works at once (Section 8.3). A slot belongs to a
+    ticket until it is done, not to one agent turn.
   - Changes SHOULD be re-applied at runtime and affect subsequent dispatch decisions.
 - `limits.max_turns` (positive integer)
   - Default: `20`
@@ -1674,12 +1676,14 @@ Fields:
     execution signature resets the count.
 - `concurrency.epic_lanes` (integer)
   - Default: `concurrency.max_total`.
-  - How many slots active epics may reserve as lanes (Section 8.3). Must be between `0` and
-    `concurrency.max_total`; other values fail configuration validation.
+  - Has no effect: a free slot goes to the sub-tickets of a started ticket first (Section 8.3).
+    The key still loads and is still validated (between `0` and `concurrency.max_total`); a later
+    release removes it.
 - `concurrency.finishing_max` (positive integer)
   - Default: `2`.
-  - Landing runs (issues in `Merging`) that may run at once outside `max_total` and the epic lanes
-    (Section 8.3). Values below `1` fail configuration validation.
+  - Has no effect: a ticket in `Merging` keeps the slot it holds and gets no allowance of its own
+    (Section 8.3). The key still loads and is still validated (at least `1`); a later release
+    removes it.
 - Implementations MAY offer an operator control that starts a ticket's run at once (this one has
   `POST /api/v1/control/start` with `issue_identifier` and an optional `note`). Such a control
   dispatches the run for the ticket's current phase in the same call, not queued: it ignores
@@ -1700,9 +1704,9 @@ Fields:
   and MUST NOT add a read of GitHub.
 - `concurrency.max_by_issue_state` (map `state_name -> positive integer`)
   - Default: empty map.
-  - State keys are normalized (`lowercase`) for lookup.
-  - Invalid entries (blank state names, non-positive, or non-integer values) fail configuration
-    validation.
+  - Has no effect: only `concurrency.max_total` limits how many tickets hold a slot (Section 8.3).
+    The key still loads; invalid entries (blank state names, non-positive, or non-integer values)
+    still fail configuration validation. A later release removes it.
 - `limits.tokens_per_issue` (integer or null)
   - Default: `500000`.
   - Explicit `null` disables the per-issue cap.
@@ -2840,9 +2844,10 @@ not require recognizing or validating extension fields unless that extension is 
 - `hooks.after_create_timeout_ms`: integer or null, default `null` (the larger of `hooks.timeout_ms`
   and `600000`)
 - `execution.concurrency.max_total`: integer, default `10`
-- `execution.concurrency.max_by_issue_state`: map of positive integers, default `{}`
-- `execution.concurrency.epic_lanes`: integer between `0` and `max_total`, default `max_total`
-- `execution.concurrency.finishing_max`: integer `>= 1`, default `2`
+- `execution.concurrency.max_by_issue_state`: map of positive integers, default `{}` (no effect)
+- `execution.concurrency.epic_lanes`: integer between `0` and `max_total`, default `max_total` (no
+  effect)
+- `execution.concurrency.finishing_max`: integer `>= 1`, default `2` (no effect)
 - `execution.limits.max_turns`: integer, default `20`
 - `execution.limits.retry_backoff_max_ms`: integer, default `300000` (5m)
 - `execution.limits.max_consecutive_identical_tool_failures`: integer, default `5`; `0` disables
@@ -3279,13 +3284,12 @@ asks for at most three rechecks, each a fresh walk turn between the launch and t
 past two rounds the pass is `inconclusive`. The wide pass audit, the QA host checks, turn timeouts,
 `tokens_per_issue` (across every turn of the pass) and the cleanup stay the pass's.
 
-When a machine step will run a command, the agent's session ends first and the run holds no slot:
-the orchestrator marks its running entry on the step (`session_id: nil`), counts it in no work,
-state or finishing slot and runs a cycle at once, so another ticket may dispatch. The machine
-step's own timeout replaces the stall and no-progress clocks while it runs. Once the list reaches an
-agent step again, the run asks the orchestrator for a turn and waits; the orchestrator gives it a
-free slot before any dispatch, at once and on every cycle, and starts its new session with the whole
-prompt. While Symphony is paused (dispatch only), a run between steps still runs its machine steps,
+When a machine step will run a command, the agent's session ends first and the ticket keeps its
+slot (Section 8.3): the orchestrator marks its running entry on the step (`session_id: nil`), and no
+other ticket takes the slot meanwhile. The machine step's own timeout replaces the stall and
+no-progress clocks while it runs. Once the list reaches an agent step again, the run asks the
+orchestrator for a turn and waits; the orchestrator gives it the turn at once, since its ticket holds
+its slot, and starts its new session with the whole prompt. While Symphony is paused (dispatch only), a run between steps still runs its machine steps,
 and its next agent turn waits for the pause to lift (decision 1 of TP-1085). A run held by an update's pause records an `update_wait` signal on its ticket, with the
 version and the step. A drain waits for no run between turns (`between_turns` in Section 13.4's
 state): the pause holds its next turn, so the wait would never end, and it has no session to lose.
@@ -3298,11 +3302,11 @@ Any step may pause on a Question. A delegated or orchestrated step whose agent a
 question tool during its turn (an open Question a run asked since the step started) ends `paused`
 with the Question's id before any other rule reads the turn; so does a machine step at its
 no-result limit. The run stops its agent session and tells the orchestrator, which marks its running
-entry on the step waiting for the `answer` (`question_id`), with no session and no slot, and with
-neither watchdog's clock. The ticket's pause is the Question's own `question` reason, so the
+entry on the step waiting for the `answer` (`question_id`), with no session, and with neither
+watchdog's clock; the ticket keeps its slot, since it waits on the person. The ticket's pause is the Question's own `question` reason, so the
 Director shows it waiting on the person and the Inbox lists the Question. The answer is the
 trigger: the change of the ticket's pause it makes reaches the orchestrator at once, which gives the
-run a slot as for any next turn (Symphony's pause still holds it back). Before resuming, the run
+run its next turn (Symphony's pause still holds it back). Before resuming, the run
 reads the ticket's record, never Linear: the Question answered, the record's phase still the run's,
 and no other pause reason; otherwise the run ends. An agent step resumes on the same step in a new
 session, resuming the paused turn's conversation when the agent can (Claude's `--resume`), with the
@@ -3967,8 +3971,7 @@ An issue is dispatch-eligible only if all are true:
 - It is not already in `claimed`.
 - Its priority is among `tickets.priorities` when that key is set, unless it is a retry waiting
   for a slot (see 5.4).
-- Global concurrency slots are available.
-- Per-state concurrency slots are available.
+- It holds a slot, or a slot is free (Section 8.3).
 - Blocker rule passes, in every active phase:
   - In any active state (`Todo`, `In Progress`, `Rework`, `CI Fix`, `Code Review`, `QA`, `Merging`
     and the other states dispatch picks work up from), do not dispatch when any blocker is
@@ -4178,23 +4181,22 @@ computed at a pass.
    joins at the end again.
 3. `priority` decides no place. A change of priority moves no issue; `tickets.priorities` stays a
    gate on which issues may start.
-4. The dispatch pass walks its candidates by place: a free slot goes to the first one that can start.
-   An issue a gate holds (a blocker, `Backlog`, the priority filter, a pause...) keeps its place and
-   is skipped. A candidate with no record yet goes last, by `created_at`, then `identifier`.
+4. The dispatch pass walks its candidates by place, the sub-tickets of a ticket that has started
+   first (Section 8.3): a free slot goes to the first one that can start. An issue a gate holds (a
+   blocker, `Backlog`, the priority filter, a pause...) keeps its place and is skipped. A candidate
+   with no record yet goes last, by `created_at`, then `identifier`.
 5. The first start of the release that stored the queue places the issues already there once, in the
    order the pass computed before: the issues already started (past `Todo`, or with a started run in
    their ledger) in front, then the rest; inside each group stage (`Merging`, `Rework`, other active
    states, then `Todo` and `Backlog`), then `priority` ascending (null last), then `created_at`
    oldest first, then `identifier`. A later start keeps every place.
 
-While an issue in `Merging` is waiting for a slot, no `Todo` issue is dispatched. `Rework` and
-resumes still are. The held `Todo` issue's
-`slot_waiting` reason names the issue it waits for (`MT-2 (Merging) is waiting for a finishing
-slot`).
+An issue in `Merging` gets no precedence and no allowance of its own: it keeps the slot it took at
+its first run, and a ticket in `Merging` without one waits for a free slot like any other.
 
 Priority: `priority` means importance; it orders nothing in the queue and only gates through
-`tickets.priorities`. Raising it never moves an issue in the queue, nor gets it past `max_total`, a
-per-state cap, the epic lanes or `finishing_max`. These transitions stay with a person:
+`tickets.priorities`. Raising it never moves an issue in the queue, nor gets it past `max_total`.
+These transitions stay with a person:
 
 | Transition | Who |
 | --- | --- |
@@ -4207,56 +4209,55 @@ The Code Review and QA verdicts are required for every issue.
 
 ### 8.3 Concurrency Control
 
-Global limit:
+Slots:
 
-- `available_slots = max(max_concurrent_agents - running_count, 0)`, where `running_count`
-  leaves out landing runs.
+- `max_concurrent_agents` (`concurrency.max_total`) is the number of slots: 1 slot means one
+  ticket is worked at a time, 2 slots two tickets.
+- A slot belongs to a ticket, never to one agent turn. A ticket takes a slot when its first run is
+  dispatched and holds it until it is done, whatever its phase: coding, review, QA, CI, a build,
+  `Merging`. It holds it on a machine step, between its agent turns, between its runs, in retry
+  backoff, while it waits for CI or a build with no live run, and while it waits on the person (a
+  Question, a decision, a plan in `Plan Review`).
+- A ticket that holds a slot is in progress; that is the only meaning of in progress. The dispatch
+  order read and the Home read (Section 13.4) say which ticket holds each slot, how many are free,
+  and carry `in_progress` on each ticket, true exactly when it holds a slot.
+- The holders are stored on the ticket records (`slot_held_since`), so a restart keeps them.
+- `available_slots = max(max_concurrent_agents - taken, 0)`, where `taken` counts the tickets that
+  hold a slot and every other run under way (a PR run with no ticket takes a slot while it runs).
+- A ticket that holds a slot always starts its next run (the worker hosts' own capacity still
+  applies). Any other ticket starts only when a slot is free, and takes it at dispatch. No agent
+  turn and no machine step runs for a ticket that holds no slot; its Grooming turn runs inside its
+  first dispatched run, after it took the slot. A QA build is asked for only for a ticket that holds
+  a slot or could take one now.
+- When the pass finds no free slot it still runs while a holder has no run, so that ticket's next run
+  starts.
+- Lowering the slot count below the holders evicts nobody: no new ticket starts until fewer hold a
+  slot.
 
-Finishing limit:
+Giving a slot up:
 
-- A landing run (an issue in `Merging` that is not a parent ticket) does not use `available_slots`
-  or an epic lane. It needs `landing_running_count < finishing_max` instead.
+- A ticket gives up its slot only when it is done (a terminal state), when it leaves the active
+  states (a person moved it to `Backlog`, it was removed, or unassigned from this worker), when it
+  waits on a dependency (a blocker, a fix ticket, a competing pull request, an app update that
+  carries a blocker's fix) or on its own sub-tickets, or when a person stops it. A stop that comes
+  with a Question waits on the person and keeps the slot.
+- A ticket with no live run is judged on every cycle against the cycle's candidates and its closed
+  dispatch gate; one with a live run gives it up when the run is ended for a terminal or inactive
+  state. The cycle that frees a slot asks for another at once, so the next ticket takes it without
+  waiting for a poll.
 
-Per-state limit:
+Which ticket a free slot goes to:
 
-- `max_concurrent_agents_by_state[state]` if present (state key normalized)
-- otherwise fallback to global limit
+- First to a sub-ticket of a ticket that has started (it holds a slot, or its phase is past
+  `Todo`), so a big chain is finished before unrelated work starts; then to the first ticket in the
+  stored queue order (Section 8.2) that can start. Each group keeps the stored order.
 
-The runtime counts issues by their current tracked state in the `running` map.
+Settings with no effect:
 
-Epic lanes:
-
-- An active epic is a plan parent waiting on its sub-issues with at least one sub-issue
-  approved and not finished (any state other than `Backlog`, `Triage` or a terminal state).
-- An active epic yields while nothing on its path can run: every open issue on the path is in
-  `Plan Review`, `Backlog` or `Triage`, has no known state, is a plan parent waiting on its
-  sub-issues (outside `Rework`), has open blockers in any active phase, or has a priority
-  `tickets.priorities` keeps from dispatching (unless the issue waits for a slot on a retry,
-  or has a run or a claim under way). A yielded epic takes no lane.
-- The other active epics are ordered by the parent's priority, then the parent's creation time. The
-  first `min(epic_lanes, max_concurrent_agents)` of them each reserve one slot (a lane); the rest
-  wait for a lane. `epic_lanes` defaults to `max_concurrent_agents`.
-- `shared_slots = max_concurrent_agents - lane_count`.
-- An epic's path is its non-terminal sub-issues, their sub-issues at any depth, and the
-  non-terminal blockers (`blocked_by`) of any of those, transitively. The walk follows the
-  candidate issues; an issue that is not a candidate ends its branch. Each issue on the path keeps
-  its shortest distance from the epic and the issue it blocks or is a sub-issue of.
-- An issue on the path of an epic with a lane runs in that lane when nothing else holds it;
-  otherwise it, and every other issue, needs a free shared slot. An issue on the path of two epics
-  runs in whichever lane is free first and holds only one lane.
-- Lanes decide which slot an issue may take, not when it goes: a lane's issues are walked in the
-  queue order like every other issue.
-- A lane with nothing running stays reserved while an issue on its path can run, for example a
-  blocker that is landing, so the next issue on the epic's path starts there as soon as its blocker
-  merges, even when the shared slots are full.
-- The `epic_lanes` snapshot shows, for a running lane, the issue it runs and, when that is not one
-  of the epic's own sub-issues, the issue it blocks or is a sub-issue of (`via`). Yielded epics
-  follow the lanes with `status: "yielded"` and a `reason` naming each open issue on the path and
-  what it waits on; when a priority holds one of them, the reason opens with
-  `No sub-ticket Symphony can dispatch: priorities below <lowest allowed>.`
-- Lanes are recomputed from the candidate issues on every poll tick, so a yielded epic takes a lane
-  again once an issue on its path can run. A move of an issue and the end of a run on a lane's path
-  each run a tick at once, so a lane whose epic has nothing left to dispatch is released on that event.
+- The finishing slots (`concurrency.finishing_max`), the per-state limits
+  (`concurrency.max_by_issue_state`) and the epic lanes (`concurrency.epic_lanes`) decide nothing.
+  Their keys still load; `/api/v1/state` keeps `finishing`, `epic_lanes` and
+  `concurrency.finishing_max` with empty values for the clients that read them.
 
 ### 8.4 Retry and Backoff
 
@@ -5986,11 +5987,7 @@ Minimum endpoints:
           "error": "agent exited: turn timeout"
         }
       ],
-      "finishing": {
-        "slots": 2,
-        "used": 1,
-        "running": [{"issue_id": "jkl012", "identifier": "MT-652", "state": "Merging"}]
-      },
+      "finishing": {"slots": 0, "used": 0, "running": []},
       "qa": {
         "running": [{"issue_id": "mno345", "identifier": "MT-653", "sha": "abc1234def"}],
         "queued": []
@@ -6022,7 +6019,7 @@ Minimum endpoints:
           "repo_key": "web",
           "title": "Add the export button",
           "state": "Todo",
-          "reason": "MT-655 (Merging) is waiting for a finishing slot",
+          "reason": "work slots full",
           "attempt": null,
           "since": "2026-02-24T20:15:30Z"
         }
@@ -6054,7 +6051,7 @@ Minimum endpoints:
         "issue_identifiers": ["MT-658"],
         "latest_release": {"repo": "tonypine/symphony", "tag": "v0.0.1.583", "published_at": "2026-02-24T18:00:00Z", "source": "webhook"}
       },
-      "concurrency": {"max_total": 10, "finishing_max": 2},
+      "concurrency": {"max_total": 10, "finishing_max": 0},
       "watching": [
         {
           "repo_key": "web",
@@ -6550,9 +6547,8 @@ Minimum endpoints:
     for a free slot).
   - `counts` has `total` and the sub-tickets in each stage: `done`, `working` (`working` and `ci`),
     `you`, `queued` (`slot`) and `blocked` (`blocker`).
-  - `slot` is the initiative's line in `epic_lanes`: `status` (`running`, `waiting`, `yielded`),
-    the `identifier` of the part it runs or waits on and the `reason` it yielded; or `status`
-    `queued` with its `position` among the epics waiting for a lane; null when it has no lane.
+  - `slot` is the initiative's line in `epic_lanes`, which the epic lanes no longer fill (Section
+    8.3): null.
   - The response has `generated_at`, `read` (false while the server has not read Linear yet),
     `counts` (`active`, `in_review`, `done`) and `initiatives`. When the orchestrator snapshot times
     out or is unavailable, return `200` with an `error` object in place of the list, as
@@ -7661,14 +7657,16 @@ infrastructure.
 - Dispatch order is the stored queue order: a new issue joins at the end, a change of priority moves
   no issue, an issue a gate holds keeps its place, and the places survive a restart
 - The first start on a store without places places its open issues once, started ones in front
-- A landing run starts while every `max_total` slot and epic lane is busy, up to `finishing_max`
-- No `Todo` issue is dispatched while a `Merging` issue waits for a finishing slot
+- A ticket holds its slot from its first run until it is done, through every phase, machine step,
+  agent turn and question to the person, and with no live run; with 1 slot no other ticket starts
+  meanwhile
+- A ticket gives its slot up when it is done, leaves the active states, waits on a dependency or
+  its sub-tickets, or a person stops it; the freed slot goes to the next ticket
+- A free slot goes to a sub-ticket of a started ticket first, then to the first ticket in the queue
+- A `Merging` ticket keeps its slot and gets no allowance of its own; `finishing_max`,
+  `max_by_issue_state` and `epic_lanes` change nothing
 - A retry that finds no slot keeps its attempt, gets no backoff, and starts on the first poll after
   a slot frees
-- Each active epic reserves one lane out of `max_total`; a standalone issue cannot take a reserved
-  lane while the epic's current sub-issue is in review, and the next sub-issue starts in it
-- An epic's lane runs a blocker of its next part from outside the epic, and a sub-issue of a
-  sub-issue; a blocker shared by two epics runs once and holds one lane
 - `Todo` issue with non-terminal blockers is not eligible
 - `Todo` issue with terminal blockers is eligible
 - plan parent with an approved non-terminal sub-issue is not eligible; once every sub-issue

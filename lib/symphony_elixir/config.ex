@@ -233,19 +233,6 @@ defmodule SymphonyElixir.Config do
     end
   end
 
-  @spec max_concurrent_agents_for_state(term()) :: pos_integer()
-  def max_concurrent_agents_for_state(state_name) when is_binary(state_name) do
-    config = settings!()
-
-    Map.get(
-      config.execution.max_concurrent_agents_by_state,
-      Schema.normalize_issue_state(state_name),
-      config.execution.max_concurrent_agents
-    )
-  end
-
-  def max_concurrent_agents_for_state(_state_name), do: settings!().execution.max_concurrent_agents
-
   @doc """
   The Linear priority numbers `tickets.priorities` allows to start new work, or nil when the key is
   empty and every priority may. An issue outside the set is not dispatched as new work: Symphony
