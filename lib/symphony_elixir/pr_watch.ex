@@ -197,7 +197,8 @@ defmodule SymphonyElixir.PrWatch do
   there is nothing to repair yet, and the next decision returns the ticket (R25) or sends a fix run
   (R14, R21). Nor while GitHub has yet to say whether the PR can merge (R16) with no fix pending on
   it: the next read says whether there is a conflict to fix. A fix pending on the head (decided, its
-  run not ended) still starts its run. With no decision on it, a CI Fix run still starts.
+  run not ended) still starts its run. With no decision on it, a CI Fix run still starts. In every
+  one of these phases a decision that waits for a slot (`waits_for_slot?/1`) holds the run back.
   """
   @spec dispatch_reason(Issue.t(), map()) :: String.t() | nil
   def dispatch_reason(%Issue{} = issue, settings) do
@@ -219,6 +220,10 @@ defmodule SymphonyElixir.PrWatch do
 
   defp gated_phase(_state, _settings), do: nil
 
+  # A decision the watcher holds back for a slot holds the run back in every gated phase: the
+  # orchestrator gives the ticket its slot first, and the watcher acts on its next read.
+  defp gate(_phase, %{decision: %{args: %{withheld: _kind}, reason: reason, rule: rule}}), do: "the PR watcher (#{rule}): #{reason}"
+
   defp gate(:ci_fix, %{decision: %{reason: reason, rule: rule} = decision} = watch) do
     if CiFix.waits_on_ci?(decision) or (rule == "R16" and is_nil(Attempts.normalize(watch[:attempts]).pending)), do: "the PR watcher (#{rule}): #{reason}"
   end
@@ -229,6 +234,15 @@ defmodule SymphonyElixir.PrWatch do
   defp gate(:review, %{decision: %{kind: :dispatch}}), do: nil
   defp gate(:landing, %{decision: %{kind: :land_agent}}), do: nil
   defp gate(_phase, %{decision: %{reason: reason, rule: rule}}), do: "the PR watcher (#{rule}): #{reason}"
+
+  @doc """
+  Whether the watcher's decision on a ticket (`watch/2`) waits for the ticket to take a slot: the
+  ticket holds none, and the decision holds back what the watcher would do on its PR
+  (`SymphonyElixir.PrWatch.Repo`).
+  """
+  @spec waits_for_slot?(map() | nil) :: boolean()
+  def waits_for_slot?(%{decision: %{args: %{withheld: _kind}}}), do: true
+  def waits_for_slot?(_watch), do: false
 
   @doc """
   Whether the watcher's newest read of the issue's PR found `head` red. A record of another head, or

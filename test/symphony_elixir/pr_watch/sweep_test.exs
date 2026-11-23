@@ -69,7 +69,8 @@ defmodule SymphonyElixir.PrWatch.SweepTest do
         "Anthropic at its 90% reserve: holding new runs" => "gate: usage limit",
         "Anthropic at its reserve: holding new runs" => "gate: usage limit",
         "OpenRouter API unreachable" => "gate: usage limit",
-        "the PR watcher hasn't decided on its PR yet" => "watcher: first read"
+        "the PR watcher hasn't decided on its PR yet" => "watcher: first read",
+        "the PR watcher (R14): Waits for a slot before R14 acts (a CI Fix run starts): PR #1 conflicts with main" => "gate: waits for a slot"
       }
 
       for {reason, label} <- gates, do: assert(Sweep.classify(skipped(reason)) == {:skipped, label}, reason)

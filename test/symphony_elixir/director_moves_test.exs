@@ -5,6 +5,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
   alias SymphonyElixir.Conductor.Answer
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.{DecisionMove, DecisionRequest, DirectorMoves, DispatchLoop, IdlePark}
+  alias SymphonyElixir.Dispatch.Slots
   alias SymphonyElixir.Inbox.{FromRecord, Item}
   alias SymphonyElixir.Linear.Client
   alias SymphonyElixir.{Pauses, PlanComments, Questions, RunStore, SelfHeal, SubIssueWait}
@@ -676,6 +677,27 @@ defmodule SymphonyElixir.DirectorMovesTest do
       put_issues([pr("In Progress")])
       assert {:ok, _result} = DirectorMoves.move(:backlog, "MOT-40", %{note: "Later"}, opts)
       assert_received {:memory_tracker_comment, "pr", "Moved to Backlog by the Director:\n\nLater"}
+    end
+  end
+
+  describe "a ticket without a slot (TP-1606)" do
+    test "a person's answer, move and cancel still apply: the pull request upkeep's slot gate is not theirs", %{opts: opts} do
+      put_issues([plan("Plan Review")])
+      # Symphony's own state says the ticket holds no slot.
+      refute Slots.held?(RunStore.get_ticket_state("plan"))
+      picks = [%{question: "Who pays?", answer: "A. The buyer"}]
+      assert {:ok, %{moved: true, to_state: "Rework"}} = DirectorMoves.move(:decisions, "MOT-30", %{picks: picks}, opts)
+      assert_received {:memory_tracker_state_update, "plan", "Rework"}
+
+      put_issues([pr("In Progress")])
+      refute Slots.held?(RunStore.get_ticket_state("pr"))
+      assert {:ok, %{to_state: "Backlog"}} = DirectorMoves.move(:backlog, "MOT-40", %{}, opts)
+      assert_received {:memory_tracker_state_update, "pr", "Backlog"}
+
+      put_issues([%{pr("Code Review") | id: "other", identifier: "MOT-41", repo_key: "repo-cancel"}])
+      refute Slots.held?(RunStore.get_ticket_state("other"))
+      assert {:ok, %{to_state: "Canceled"}} = DirectorMoves.move(:cancel, "MOT-41", %{}, opts)
+      assert_received {:memory_tracker_state_update, "other", "Canceled"}
     end
   end
 

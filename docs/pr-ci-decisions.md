@@ -17,6 +17,23 @@ takes the usual red paths. An approval still in Code Review, or held for it thro
 to the head the update made, so that head is not reviewed again. A GitHub merge queue may later do
 the final update for `Merging`; the between-runs upkeep of the earlier phases stays useful under one.
 
+The watcher acts only for a ticket that holds a slot (TP-1606). Symphony works as many tickets at
+once as it has slots, and the CI runners' time belongs to them and to the release run. For a ticket
+without a slot the watcher reads its PR and records what it finds (the checks, a conflict, the CI
+label), but neither the upkeep nor a flow action that acts on the PR or the ticket is applied: no
+update-branch, no rerun, no CI Fix in or out, no fix ticket, no question, no competitor wait, no
+landing step. The decision is recorded as a `wait` on `symphony` until the ticket takes a slot,
+naming the rule it holds back and what that rule would do (`args.withheld`), so the Director and the
+silent-wait detector read it as a wait for a slot, never a stall, and `mix pr_watch.sweep` counts it
+as `gate: waits for a slot`. A hold's wait (R4) stays the decision, and the reads of a ticket without
+a slot lift no hold, with one exception: the landing wait on competing PRs still ends when they land
+or leave the race. That wait gave the slot up, so nothing else would clear it; it clears only its own
+landing reasons and links, never a blocker's or a person's hold. A merge or a close by a person still applies (R2, R8), and a run's dispatch
+outside QA stays the orchestrator's, which takes a slot as it starts it; a QA run waits for the slot,
+since the app is built for its head first. When a slot is free, the orchestrator gives it to such a
+ticket in its place in the queue, with no run, and asks the watcher to read it at once: the held-back
+rule then acts on that read.
+
 A green CI gates the merge, not the review. In Code Review the CI rules (R17 to R24) stand back until
 the head is approved (`review` is `approved`), so R27 dispatches the reviewer on any clean PR, with
 checks running or red, and a head that turns red during the review only records the fact (R9). The

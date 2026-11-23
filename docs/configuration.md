@@ -1344,7 +1344,8 @@ pull_requests:
     replaced are cancelled. A PR that waits for another to land first (see the landing order below)
     is updated once that one has landed. This branch upkeep is not a landing step: it runs for an
     open PR in every phase, whatever this setting says, whenever no run is working on the ticket
-    (U1 in `docs/pr-ci-decisions.md`).
+    and the ticket holds a slot (U1 in `docs/pr-ci-decisions.md`). A ticket without a slot is
+    updated, rerun and fixed once it takes one.
   - A red head first gets one rerun of its failed jobs, with auto-merge left on. A `CI Fix` run
     after that, or one for a merge conflict, turns auto-merge off before it starts: the fix goes
     back through review, and the ticket's return to `Merging` turns auto-merge back on. Auto-merge
@@ -2266,7 +2267,8 @@ agent, before QA starts. There is no setting for it: it is on exactly when the p
 - **When.** The build of a head is asked for when its ticket enters `Code Review`, so it runs beside
   the review and CI, when the PR watcher records a new head for a ticket in `Code Review` or `QA`
   (branch upkeep, a CI Fix return, a person's push), and at QA dispatch for a head nobody asked for
-  yet. Builds left running when Symphony stopped are asked for again when it starts.
+  yet, always for a ticket that holds a slot: a ticket without one has its build asked for once it
+  takes one. Builds left running when Symphony stopped are asked for again when it starts.
 - **Which heads.** Only a head whose QA pass selects the `macos_app` playbook is built: the same
   selection the pass makes from the paths the head changes, the `qa:<kind>` labels and the
   walkthrough. A head whose pass selects only another playbook (an Android-only repository, a change
