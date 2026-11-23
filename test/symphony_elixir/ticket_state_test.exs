@@ -52,7 +52,7 @@ defmodule SymphonyElixir.TicketStateTest do
                plan_brief: nil,
                plan_brief_error: nil,
                looked: %{},
-               queue_position: nil,
+               sort_key: nil,
                slot_held_since: nil,
                legacy_history: nil,
                updated_at: nil
@@ -73,19 +73,21 @@ defmodule SymphonyElixir.TicketStateTest do
     end
   end
 
-  describe "the queue position" do
-    test "is a positive integer or nil, set only by put_queue_position/2, and no observation writes it" do
-      record = TicketState.new("repo-a", "issue-1", %{queue_position: 3})
-      assert record.queue_position == 3
-      assert TicketState.normalize(%{queue_position: 0}).queue_position == nil
-      assert TicketState.normalize(%{queue_position: "3"}).queue_position == nil
+  describe "the queue's sort key" do
+    test "is a fractional sort key or nil, set only by put_sort_key/2, no observation writes it, and no integer place is kept" do
+      record = TicketState.new("repo-a", "issue-1", %{sort_key: "a0V", queue_position: 3})
+      assert record.sort_key == "a0V"
+      refute Map.has_key?(record, :queue_position)
+      assert TicketState.normalize(%{sort_key: "a00"}).sort_key == nil
+      assert TicketState.normalize(%{sort_key: 3}).sort_key == nil
 
-      assert TicketState.put_queue_position(record, 7).queue_position == 7
-      assert TicketState.put_queue_position(record, nil).queue_position == nil
+      assert TicketState.put_sort_key(record, "a1").sort_key == "a1"
+      assert TicketState.put_sort_key(record, "not a key").sort_key == nil
+      assert TicketState.put_sort_key(record, nil).sort_key == nil
 
       issue = %Issue{id: "issue-1", identifier: "ACME-1", title: "Queued", state: "Todo", priority: 1, updated_at: @at}
-      assert {%{queue_position: 3, priority: 1}, _changed} = TicketState.observe(record, issue, @at)
-      refute Map.has_key?(TicketState.observation(record), :queue_position)
+      assert {%{sort_key: "a0V", priority: 1}, _changed} = TicketState.observe(record, issue, @at)
+      refute Map.has_key?(TicketState.observation(record), :sort_key)
     end
 
     test "a record is queued while it is open: known, not removed, found and not terminal" do
@@ -222,7 +224,7 @@ defmodule SymphonyElixir.TicketStateTest do
                plan_brief: nil,
                plan_brief_error: nil,
                looked: %{},
-               queue_position: nil,
+               sort_key: nil,
                slot_held_since: nil,
                legacy_history: nil,
                updated_at: nil

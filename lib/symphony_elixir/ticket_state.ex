@@ -30,10 +30,12 @@ defmodule SymphonyElixir.TicketState do
   questions' request comments and replies; and the plan's brief as it entered `Plan Review`
   (`plan_brief`, `SymphonyElixir.PlanBrief`): the review brief, the sub-tickets and the open choices,
   with when they were read, and why the last capture failed (`plan_brief_error`, nil when it didn't);
-  and the ticket's place in the dispatch queue (`queue_position`, `SymphonyElixir.Dispatch.Queue`):
-  a positive integer, lower first, unique across every repository's records, given by
-  `SymphonyElixir.RunStore` when an open ticket's record is first written and kept until the ticket
-  leaves the queue (`queued?/1`); no observation writes it, so a change of priority never moves it;
+  and the ticket's place in the dispatch queue (`sort_key`, `SymphonyElixir.Dispatch.Queue`): a
+  fractional sort key (`SymphonyElixir.Dispatch.SortKey`) ordering a top-level ticket in the one
+  queue, and a sub-ticket among the sub-tickets of the same parent, given by
+  `SymphonyElixir.RunStore` when an open ticket's record is first written (or its parent changes)
+  and kept until the ticket leaves the queue (`queued?/1`) or a move rewrites it; no observation
+  writes it, so a change of priority never moves it. No position number is stored;
   since when the ticket holds a dispatch slot (`slot_held_since`, `SymphonyElixir.Dispatch.Slots`):
   set by the orchestrator when the ticket takes a slot and cleared when it gives the slot up, nil
   while it holds none, so a restart keeps every holder;
@@ -51,6 +53,7 @@ defmodule SymphonyElixir.TicketState do
   place, and so the signals can be injected into run prompts (see `SymphonyElixir.PromptBuilder`).
   """
 
+  alias SymphonyElixir.Dispatch.SortKey
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Pauses
   alias SymphonyElixir.PlanBrief
@@ -319,7 +322,7 @@ defmodule SymphonyElixir.TicketState do
           plan_brief_error: String.t() | nil,
           legacy_history: legacy_history() | nil,
           looked: looked(),
-          queue_position: pos_integer() | nil,
+          sort_key: String.t() | nil,
           slot_held_since: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
         }
@@ -420,7 +423,7 @@ defmodule SymphonyElixir.TicketState do
       plan_brief_error: map_string(record, :plan_brief_error),
       legacy_history: carried_history(record),
       looked: normalize_looked(Map.get(record, :looked)),
-      queue_position: queue_position(Map.get(record, :queue_position)),
+      sort_key: sort_key(Map.get(record, :sort_key)),
       slot_held_since: map_datetime(record, :slot_held_since),
       updated_at: map_datetime(record, :updated_at)
     }
@@ -469,7 +472,7 @@ defmodule SymphonyElixir.TicketState do
       plan_brief_error: nil,
       legacy_history: nil,
       looked: %{},
-      queue_position: nil,
+      sort_key: nil,
       slot_held_since: nil,
       updated_at: nil
     }
@@ -868,19 +871,19 @@ defmodule SymphonyElixir.TicketState do
   end
 
   @doc """
-  Sets the ticket's place in the dispatch queue (`queue_position`): a positive integer, or nil when
+  Sets the ticket's place in the dispatch queue (`sort_key`): a fractional sort key, or nil when
   the ticket is out of the queue. `SymphonyElixir.RunStore` gives it; nothing else should.
   """
-  @spec put_queue_position(t() | map(), pos_integer() | nil) :: t()
-  def put_queue_position(record, position) when is_nil(position) or (is_integer(position) and position > 0) do
-    record |> normalize() |> Map.put(:queue_position, position)
+  @spec put_sort_key(t() | map(), String.t() | nil) :: t()
+  def put_sort_key(record, key) when is_nil(key) or is_binary(key) do
+    record |> normalize() |> Map.put(:sort_key, sort_key(key))
   end
 
   @doc """
   Whether the ticket's record belongs in the dispatch queue: Symphony knows its identifier and phase,
   no webhook said it was removed, the by-id read found it, and its phase is not one of the terminal
   states (the tracker's default ones, `SymphonyElixir.Config.Schema.Tracker`: a write cannot read
-  each repository's settings). A record that is not queued holds no position; one that is gets one.
+  each repository's settings). A record that is not queued holds no sort key; one that is gets one.
   """
   @spec queued?(t() | map()) :: boolean()
   def queued?(record) do
@@ -1528,8 +1531,9 @@ defmodule SymphonyElixir.TicketState do
   defp integer_or_nil(value) when is_integer(value), do: value
   defp integer_or_nil(_value), do: nil
 
-  defp queue_position(position) when is_integer(position) and position > 0, do: position
-  defp queue_position(_position), do: nil
+  defp sort_key(key) do
+    if SortKey.valid?(key), do: key
+  end
 
   defp normalize_string(value) when is_binary(value) do
     case String.trim(value) do

@@ -4166,26 +4166,44 @@ An issue is dispatch-eligible only if all are true:
     missing, it logs a warning and stops moving parents there until restart; parents then wait in
     `In Progress` as before. When the check itself fails, the state stays on.
 
-Dispatch order: the stored queue. Every open issue has a place in one queue across all repositories
-(`queue_position`, stored on the issue's record and kept across a restart); the order is never
-computed at a pass.
+Dispatch order: the stored queue. The open top-level issues form one queue across all repositories,
+and each issue's sub-issues are ordered among themselves inside its place. The order is stored on
+each issue's record as a fractional sort key (`sort_key`, kept across a restart) and is never
+computed at a pass. No position number is stored: the 1, 2, 3 a read shows are counted from the walk.
 
-1. A new issue joins at the end: the first time its record is written open, it takes one place past
-   the highest given. Issues one read shows for the first time join oldest `created_at` first,
-   then by `identifier`.
-2. An issue keeps its place until it leaves the queue: a terminal state, or a removal. Reopened, it
-   joins at the end again.
-3. `priority` decides no place. A change of priority moves no issue; `tickets.priorities` stays a
+1. Keys are the reference fractional indexing algorithm's: a 62-character alphabet (`0-9A-Za-z`),
+   compared as plain bytes, an integer part whose head counts its length followed by a fraction, and
+   a key between two neighbours taken at their midpoint.
+2. Nesting means "part of", and only that. An issue with a parent is ordered by its key among the
+   issues of the same parent (its scope), and the parent holds the place in the queue. The parent
+   link is permanent: a done sub-issue keeps it, so finished work traces back to its epic. A
+   sub-issue whose parent holds no place (out of the queue, or unknown) is ordered at the top level
+   by its own key. The queue is rebuilt at any moment from the open issues, their parent and their
+   key.
+3. A new issue joins at the end of its scope: the first time its record is written open, or when its
+   parent changes, it takes a key after the last one of its scope. Issues one read shows for the
+   first time join oldest `created_at` first, then by `identifier`.
+4. An issue keeps its key until it leaves the queue: a terminal state, or a removal. Reopened, it
+   joins at the end of its scope again.
+5. A move puts an issue at the top or the end of its scope, or between two neighbours next to each
+   other in it, by writing that one issue's key. When the new key would pass the length limit, only
+   a window of issues around the spot is rewritten, with evenly spaced keys in the same order; the
+   window grows only while its keys are still too long, and the rest of the queue keeps its keys.
+6. `priority` decides no place. A change of priority moves no issue; `tickets.priorities` stays a
    gate on which issues may start.
-4. The dispatch pass walks its candidates by place, the sub-tickets of a ticket that has started
+7. The dispatch pass walks its candidates by place: the top-level issues in key order, each parent's
+   sub-issues in their own key order right after it, the sub-tickets of a ticket that has started
    first (Section 8.3): a free slot goes to the first one that can start. An issue a gate holds (a
    blocker, `Backlog`, the priority filter, a pause...) keeps its place and is skipped. A candidate
    with no record yet goes last, by `created_at`, then `identifier`.
-5. The first start of the release that stored the queue places the issues already there once, in the
+8. The first start of the release that stored the queue places the issues already there once, in the
    order the pass computed before: the issues already started (past `Todo`, or with a started run in
    their ledger) in front, then the rest; inside each group stage (`Merging`, `Rework`, other active
    states, then `Todo` and `Backlog`), then `priority` ascending (null last), then `created_at`
    oldest first, then `identifier`. A later start keeps every place.
+9. The first start of the release that stored sort keys turns the integer places stored before into
+   keys once, in the same order: the top-level issues evenly spaced, and each parent's sub-issues
+   among their siblings in their previous relative order. A later start changes no key.
 
 An issue in `Merging` gets no precedence and no allowance of its own: it keeps the slot it took at
 its first run, and a ticket in `Merging` without one waits for a free slot like any other.
@@ -7657,9 +7675,14 @@ infrastructure.
 
 ### 17.4 Orchestrator Dispatch, Reconciliation, and Retry
 
-- Dispatch order is the stored queue order: a new issue joins at the end, a change of priority moves
-  no issue, an issue a gate holds keeps its place, and the places survive a restart
-- The first start on a store without places places its open issues once, started ones in front
+- Dispatch order is the stored queue order: each issue's sort key orders it at the top level or
+  among its parent's sub-issues, inside the parent's place; a new issue joins at the end of its
+  scope, a change of priority moves no issue, an issue a gate holds keeps its place, and the keys
+  survive a restart
+- A move writes the moved issue's key only, unless the spot is too crowded: then only the issues
+  around it are rewritten, evenly spaced and in the same order
+- The first start on a store without places places its open issues once, started ones in front; the
+  first start on a store with integer places turns them into sort keys in the same order
 - A ticket holds its slot from its first run until it is done, through every phase, machine step,
   agent turn and question to the person, and with no live run; with 1 slot no other ticket starts
   meanwhile

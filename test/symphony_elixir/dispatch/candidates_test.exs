@@ -389,7 +389,7 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
 
   defp identifiers(issues), do: Enum.map(issues, & &1.identifier)
 
-  defp dispatch_order(issues), do: issues |> Queue.order(RunStore.queue_positions()) |> identifiers()
+  defp dispatch_order(issues), do: issues |> Queue.order(RunStore.queue_places()) |> identifiers()
 
   # What the poll writes into a ticket's record (`TicketObservation.observe/3`): the open blockers only.
   defp observed(%Issue{} = issue) do
