@@ -16,7 +16,13 @@ defmodule SymphonyElixir.Dispatch.DependsOnTest do
   @fix_pr "https://github.com/acme/symphony/pull/77"
 
   setup do
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_active_states: @active_states, tracker_terminal_states: ["Done", "Canceled"])
+    terminal = ["Done", "Canceled"]
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_active_states: @active_states,
+      tracker_terminal_states: terminal
+    )
+
     previous = Application.fetch_env(:symphony_elixir, :build)
     :ok = RunStore.clear()
     :ok = RunStore.place_queue()
@@ -78,7 +84,9 @@ defmodule SymphonyElixir.Dispatch.DependsOnTest do
       # A ticket Symphony holds no record of: stored, without an identifier.
       assert :ok = RunStore.add_dependency("s2", "ghost", :done)
 
-      assert [%{issue_id: "s2", identifier: "MT-S2", kind: :done}, %{issue_id: "s1", identifier: "MT-S1", kind: :released}] = record("s3").depends_on
+      assert [%{issue_id: "s2", identifier: "MT-S2", kind: :done}, %{issue_id: "s1", identifier: "MT-S1", kind: :released}] =
+               record("s3").depends_on
+
       assert [%{issue_id: "top", kind: :done}, %{issue_id: "ghost", identifier: nil}] = record("s2").depends_on
 
       # The same pair again replaces its kind, in its place.
@@ -172,7 +180,8 @@ defmodule SymphonyElixir.Dispatch.DependsOnTest do
       assert Orchestrator.should_dispatch_issue_for_test(s2, state)
       refute Orchestrator.should_dispatch_issue_for_test(s3, state)
       assert %{reason: "waiting for MT-S2 to be done", gate: :depends_on, rule: nil} = skipped(s3, state)
-      assert [%{identifier: "MT-S3", outcome: :held, reason: "waiting for MT-S2 to be done"}] = Orchestrator.put_dispatch_order_for_test(state, [s3]).dispatch_order.entries |> held()
+      entries = Orchestrator.put_dispatch_order_for_test(state, [s3]).dispatch_order.entries
+      assert [%{identifier: "MT-S3", outcome: :held, reason: "waiting for MT-S2 to be done"}] = held(entries)
 
       # Cancelled is not done.
       :ok = RunStore.update_ticket_state("s2", %{phase: "Canceled"})
@@ -207,7 +216,9 @@ defmodule SymphonyElixir.Dispatch.DependsOnTest do
       refute Orchestrator.should_dispatch_issue_for_test(next, held)
       assert %{reason: "waiting for a Symphony update that includes MT-F", gate: :depends_on} = skipped(next, held)
       # The same build again: the cache answers, nothing is looked up.
-      assert DependsOn.resolve(RunStore.list_all_ticket_states(), SymphonyElixir.BuildInfo.current(), held.update_hold_cache, lookups(:no_lookup)) == held.update_hold_cache
+      records = RunStore.list_all_ticket_states()
+      build = SymphonyElixir.BuildInfo.current()
+      assert DependsOn.resolve(records, build, held.update_hold_cache, lookups(:no_lookup)) == held.update_hold_cache
 
       # The app updates to a build that includes it: the next pass lets the ticket start.
       run_build(@new_build)
@@ -231,7 +242,9 @@ defmodule SymphonyElixir.Dispatch.DependsOnTest do
       :ok = RunStore.update_ticket_state("skip", %{labels: [UpdateHold.skip_label()]})
       merged!("web", "https://github.com/acme/web-app/pull/5")
 
-      cache = DependsOn.resolve(RunStore.list_all_ticket_states(), SymphonyElixir.BuildInfo.current(), UpdateHold.empty_cache(), lookups(:no_lookup))
+      records = RunStore.list_all_ticket_states()
+      build = SymphonyElixir.BuildInfo.current()
+      cache = DependsOn.resolve(records, build, UpdateHold.empty_cache(), lookups(:no_lookup))
       assert cache.blockers == %{"web" => :none, "skip" => :skip}
       assert Orchestrator.should_dispatch_issue_for_test(issue("next", "MT-N"), orchestrator_state(cache))
 
@@ -316,7 +329,18 @@ defmodule SymphonyElixir.Dispatch.DependsOnTest do
   defp walk, do: places() |> Enum.sort_by(&elem(&1, 1)) |> Enum.map(&elem(&1, 0))
 
   defp issue(id, identifier) do
-    %Issue{id: id, identifier: identifier, title: "Ticket #{identifier}", state: "Todo", priority: 1, labels: [], repo_key: @repo, blocked_by: []}
+    title = "Ticket #{identifier}"
+
+    %Issue{
+      id: id,
+      identifier: identifier,
+      title: title,
+      state: "Todo",
+      priority: 1,
+      labels: [],
+      repo_key: @repo,
+      blocked_by: []
+    }
   end
 
   defp held(tickets), do: Enum.filter(tickets, &(&1.outcome == :held))
@@ -335,7 +359,8 @@ defmodule SymphonyElixir.Dispatch.DependsOnTest do
 
   # What the poll task looks up into the update hold's cache for the stored released dependencies.
   defp resolve(lookup) do
-    DependsOn.resolve(RunStore.list_all_ticket_states(), SymphonyElixir.BuildInfo.current(), UpdateHold.empty_cache(), lookups(lookup))
+    records = RunStore.list_all_ticket_states()
+    DependsOn.resolve(records, SymphonyElixir.BuildInfo.current(), UpdateHold.empty_cache(), lookups(lookup))
   end
 
   defp lookups(:no_lookup) do
@@ -343,7 +368,10 @@ defmodule SymphonyElixir.Dispatch.DependsOnTest do
   end
 
   defp lookups(:merged) do
-    [merge_commit_sha: fn @fix_pr -> {:ok, @merge_sha} end, commit_included?: fn @fix_pr, @merge_sha, build_sha -> {:ok, build_sha == @new_build} end]
+    [
+      merge_commit_sha: fn @fix_pr -> {:ok, @merge_sha} end,
+      commit_included?: fn @fix_pr, @merge_sha, build_sha -> {:ok, build_sha == @new_build} end
+    ]
   end
 
   defp lookups(:lookup_down), do: [merge_commit_sha: fn _url -> {:error, :github_down} end]

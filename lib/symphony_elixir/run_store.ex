@@ -1988,19 +1988,28 @@ defmodule SymphonyElixir.RunStore do
   def remove_dependency(issue_id, on_issue_id) when is_binary(issue_id) and is_binary(on_issue_id) do
     with :ok <- ensure_started() do
       durable_transaction(fn ->
-        case read_ticket_record(nil, issue_id, :write) do
-          nil -> {:error, :ticket_state_not_found}
-          record -> write_dependencies(issue_id, record |> TicketState.normalize() |> Map.fetch!(:depends_on) |> Enum.reject(&(&1.issue_id == on_issue_id)))
-        end
+        issue_id
+        |> read_ticket_record_for_write()
+        |> drop_dependency(issue_id, on_issue_id)
       end)
     end
+  end
+
+  defp read_ticket_record_for_write(issue_id), do: read_ticket_record(nil, issue_id, :write)
+
+  defp drop_dependency(nil, _issue_id, _on_issue_id), do: {:error, :ticket_state_not_found}
+
+  defp drop_dependency(record, issue_id, on_issue_id) do
+    kept = Enum.reject(TicketState.normalize(record).depends_on, &(&1.issue_id == on_issue_id))
+    write_dependencies(issue_id, kept)
   end
 
   # Writes `dependencies` as the record `issue_id`'s `depends_on`, and nothing else of it: the one
   # write of the field (`write_ticket_record/3` keeps the stored one).
   defp write_dependencies(issue_id, dependencies) do
     [{@ticket_index_table, ^issue_id, repo_key, stored}] = :mnesia.read(@ticket_index_table, issue_id, :write)
-    :mnesia.write({@ticket_index_table, issue_id, repo_key, stored |> TicketState.put_dependencies(dependencies) |> Map.delete(:queue_position)})
+    updated = stored |> TicketState.put_dependencies(dependencies) |> Map.delete(:queue_position)
+    :mnesia.write({@ticket_index_table, issue_id, repo_key, updated})
     :ok
   end
 
@@ -2012,16 +2021,17 @@ defmodule SymphonyElixir.RunStore do
   @spec dependencies(String.t()) :: [{TicketState.dependency(), map() | nil}] | {:error, term()}
   def dependencies(issue_id) when is_binary(issue_id) do
     with :ok <- ensure_started() do
-      transaction(fn ->
-        case read_ticket_record(nil, issue_id) do
-          nil -> []
-          record -> for entry <- TicketState.normalize(record).depends_on, do: {entry, read_ticket_record(nil, entry.issue_id)}
-        end
-      end)
+      transaction(fn -> nil |> read_ticket_record(issue_id) |> with_depended_records() end)
     end
   end
 
   def dependencies(_issue_id), do: []
+
+  defp with_depended_records(nil), do: []
+
+  defp with_depended_records(record) do
+    for entry <- TicketState.normalize(record).depends_on, do: {entry, read_ticket_record(nil, entry.issue_id)}
+  end
 
   @doc """
   Marks the ticket `issue_id` as holding a dispatch slot since `since`, or as holding none when

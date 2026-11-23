@@ -104,9 +104,11 @@ defmodule SymphonyElixir.TicketStateTest do
       assert TicketState.put_dependencies(record, [done, released, %{done | kind: :released}]).depends_on ==
                [%{done | kind: :released}, released]
 
-      assert TicketState.put_dependencies(record, [%{issue_id: " ", kind: :done}, %{issue_id: "x", kind: :merged}, :junk, %{identifier: "ACME-9"}]).depends_on == []
+      junk = [%{issue_id: " ", kind: :done}, %{issue_id: "x", kind: :merged}, :junk, %{identifier: "ACME-9"}]
+      assert TicketState.put_dependencies(record, junk).depends_on == []
       assert TicketState.normalize(%{depends_on: :junk}).depends_on == []
-      assert [%{issue_id: "dep-1", identifier: nil}] = TicketState.normalize(%{depends_on: [%{issue_id: " dep-1 ", kind: :done}]}).depends_on
+      normalized = TicketState.normalize(%{depends_on: [%{issue_id: " dep-1 ", kind: :done}]})
+      assert [%{issue_id: "dep-1", identifier: nil}] = normalized.depends_on
 
       # A read of Linear rewrites the record's blockers and leaves its dependencies as they are.
       issue = %Issue{
@@ -118,7 +120,8 @@ defmodule SymphonyElixir.TicketStateTest do
         updated_at: @at
       }
 
-      assert {%{depends_on: [^done, ^released], blockers: [%{identifier: "ACME-7"}]}, :changed} = TicketState.observe(record, issue, @at)
+      observed = TicketState.observe(record, issue, @at)
+      assert {%{depends_on: [^done, ^released], blockers: [%{identifier: "ACME-7"}]}, :changed} = observed
       refute Map.has_key?(TicketState.observation(record), :depends_on)
     end
 

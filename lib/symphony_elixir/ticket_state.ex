@@ -1569,14 +1569,19 @@ defmodule SymphonyElixir.TicketState do
   defp normalize_dependencies(entries) when is_list(entries) do
     entries
     |> Enum.flat_map(&dependency/1)
-    |> Enum.reduce([], fn %{issue_id: id} = entry, acc ->
-      if Enum.any?(acc, &(&1.issue_id == id)),
-        do: Enum.map(acc, &if(&1.issue_id == id, do: entry, else: &1)),
-        else: acc ++ [entry]
-    end)
+    |> Enum.reduce([], &put_dependency_entry/2)
   end
 
   defp normalize_dependencies(_entries), do: []
+
+  defp put_dependency_entry(%{issue_id: id} = entry, acc) do
+    if Enum.any?(acc, &(&1.issue_id == id)),
+      do: Enum.map(acc, &replace_dependency_entry(&1, entry)),
+      else: acc ++ [entry]
+  end
+
+  defp replace_dependency_entry(%{issue_id: id}, %{issue_id: id} = entry), do: entry
+  defp replace_dependency_entry(existing, _entry), do: existing
 
   defp dependency(%{issue_id: id, kind: kind} = entry) when kind in @dependency_kinds do
     case normalize_string(id) do

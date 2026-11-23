@@ -128,7 +128,8 @@ defmodule SymphonyElixir.Dispatch.Queue do
   sits below, when either holds no place, or when one is the other's ancestor (a parent always sits
   above its sub-tickets).
   """
-  @spec dependency_move([map()], String.t(), String.t()) :: {:below, String.t(), non_neg_integer(), [{String.t(), SortKey.t()}]} | :stay
+  @spec dependency_move([map()], String.t(), String.t()) ::
+          {:below, String.t(), non_neg_integer(), [{String.t(), SortKey.t()}]} | :stay
   def dependency_move(records, issue_id, on_id) when is_list(records) do
     {keys, parents} = links(records)
 
