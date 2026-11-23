@@ -3,8 +3,8 @@ defmodule SymphonyElixir.Conductor.FilingTest do
 
   alias SymphonyElixir.Conductor.{Facts, Filing}
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.{TicketEvents, TicketPlan, TicketState}
   alias SymphonyElixir.Dispatch.DependsOn
+  alias SymphonyElixir.{TicketEvents, TicketPlan, TicketState}
 
   @settings %Schema.Conductor{enabled: true}
 

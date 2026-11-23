@@ -30,7 +30,11 @@ defmodule SymphonyElixir.Dispatch.DependsOn.BackfillTest do
   # An epic with five sub-tickets: MT-1 done, MT-2 after MT-1, MT-3 after MT-1 and MT-2, MT-4 (done)
   # after MT-2, MT-6 (no record) after MT-1; MT-5 was filed from a run to do after the epic.
   defp epic! do
-    subs = for {id, identifier} <- [a: "MT-1", b: "MT-2", c: "MT-3", d: "MT-4", e: "MT-5", g: "MT-6"], do: %{id: Atom.to_string(id), identifier: identifier, state: "Todo"}
+    subs =
+      for {id, identifier} <- [a: "MT-1", b: "MT-2", c: "MT-3", d: "MT-4", e: "MT-5", g: "MT-6"] do
+        %{id: Atom.to_string(id), identifier: identifier, state: "Todo"}
+      end
+
     put!("p", "MT-0", "Waiting on sub-tickets", sub_issues: subs)
     put!("a", "MT-1", "Done")
     put!("b", "MT-2", "Todo")

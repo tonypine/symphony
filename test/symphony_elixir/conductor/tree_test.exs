@@ -1,10 +1,13 @@
 defmodule SymphonyElixir.Conductor.TreeTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Conductor, Questions, SubIssueWait, TicketEvents, TicketPlan, TicketPullRequest, TicketSignals, TicketState}
-  alias SymphonyElixir.Dispatch.DependsOn
+  alias SymphonyElixir.{Conductor, Questions, SubIssueWait, TicketEvents, TicketPlan}
   alias SymphonyElixir.Conductor.{Facts, Filing, Grooming, Tree}
   alias SymphonyElixir.Config.{Cache, Schema}
+  alias SymphonyElixir.Dispatch.DependsOn
+  alias SymphonyElixir.TicketPullRequest
+  alias SymphonyElixir.TicketSignals
+  alias SymphonyElixir.TicketState
   alias SymphonyElixir.Tracker.Memory
 
   @waiting "Waiting on sub-tickets"

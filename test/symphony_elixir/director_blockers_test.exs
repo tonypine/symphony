@@ -87,8 +87,9 @@ defmodule SymphonyElixir.DirectorBlockersTest do
 
   test "a blocker Linear's links name is neither listed nor counted", ctx do
     %{ticket: ticket, blocker: blocker} = ctx
-    :ok = RunStore.update_ticket_state(blocker.issue_id, %{blockers: [%{id: ticket.issue_id, identifier: ticket.issue_identifier, state: "Todo"}]})
-    :ok = RunStore.update_ticket_state(ticket.issue_id, %{blockers: [%{id: blocker.issue_id, identifier: blocker.issue_identifier, state: "In Progress"}]})
+    linked = fn by, state -> %{blockers: [%{id: by.issue_id, identifier: by.issue_identifier, state: state}]} end
+    :ok = RunStore.update_ticket_state(blocker.issue_id, linked.(ticket, "Todo"))
+    :ok = RunStore.update_ticket_state(ticket.issue_id, linked.(blocker, "In Progress"))
 
     assert {:ok, %{blockers: []}} = DirectorBlockers.blockers(ticket.issue_identifier, scoped(ctx.opts))
     assert {:error, {:conflict, _missing}} = change(:remove, ticket, blocker, ctx.opts)

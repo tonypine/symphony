@@ -7,6 +7,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
   alias SymphonyElixir.HumanActions.Collector, as: HumanActionsCollector
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.PromptSafety
+  alias SymphonyElixir.TicketState
 
   # A spy for the writer `TransitionGuard.perform/4` moves through: it records every move it is
   # asked to make and answers with the result a test sets (`:ok` by default).
@@ -2928,8 +2929,13 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
   # The tickets the record of `issue_id` depends on being done, each by id and identifier, in order.
   defp depends_on(issue_id) do
     case RunStore.get_ticket_state(issue_id) do
-      %{} = record -> for %{issue_id: id, identifier: identifier, kind: :done} <- SymphonyElixir.TicketState.normalize(record).depends_on, do: {id, identifier}
-      _none -> []
+      %{} = record ->
+        for %{issue_id: id, identifier: identifier, kind: :done} <- TicketState.normalize(record).depends_on do
+          {id, identifier}
+        end
+
+      _none ->
+        []
     end
   end
 
@@ -2967,20 +2973,18 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     fn query, variables, _opts ->
       send(test_pid, {:linear_called, query, variables})
 
-      cond do
-        query =~ "SymphonyAgentSubissueScope" ->
-          {:ok, %{"data" => %{"issue" => scope}}}
-
-        true ->
-          {:ok,
-           %{
-             "data" => %{
-               "issueCreate" => %{
-                 "success" => true,
-                 "issue" => %{"id" => "issue-new", "identifier" => "TP-999", "url" => "https://linear.app/x/TP-999", "state" => %{"name" => "Backlog"}}
-               }
+      if query =~ "SymphonyAgentSubissueScope" do
+        {:ok, %{"data" => %{"issue" => scope}}}
+      else
+        {:ok,
+         %{
+           "data" => %{
+             "issueCreate" => %{
+               "success" => true,
+               "issue" => %{"id" => "issue-new", "identifier" => "TP-999", "url" => "https://linear.app/x/TP-999", "state" => %{"name" => "Backlog"}}
              }
-           }}
+           }
+         }}
       end
     end
   end

@@ -13,8 +13,8 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
   alias SymphonyElixir.AgentTools.SecretScanner
   alias SymphonyElixir.AgentTools.TicketLedger
-  alias SymphonyElixir.Conductor.Tree
   alias SymphonyElixir.CiFix
+  alias SymphonyElixir.Conductor.Tree
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Workspace.Attachments
@@ -1008,7 +1008,12 @@ defmodule SymphonyElixir.AgentTools.Linear do
            ),
          :ok <- CommentRegistry.check_subissue_title(registry, issue_id, title) do
       issue_id
-      |> create_child_issue({title, description, priority, blocked_by}, placement, {registry, issue_repo_key(context)}, opts)
+      |> create_child_issue(
+        {title, description, priority, blocked_by},
+        placement,
+        {registry, issue_repo_key(context)},
+        opts
+      )
       |> record_filed(context, issue_id, title, placement)
     end
   end
@@ -1178,8 +1183,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
   # on its records under `repo_key`, so a dependency between them is stored and names each. A read
   # that fails leaves them off, and the dependency the store then refuses says so.
   defp on_records(repo_key, parent_id, tickets, opts) do
-    with [_ | _] = missing <- for({identifier, id} <- tickets, not is_map(RunStore.get_ticket_state(id)), do: %{id: id, identifier: identifier}),
+    with [_ | _] = missing <- Enum.reject(tickets, fn {_identifier, id} -> is_map(RunStore.get_ticket_state(id)) end),
          true <- is_binary(repo_key) do
+      missing = for {identifier, id} <- missing, do: %{id: id, identifier: identifier}
       Tree.observed(repo_key, parent_id, missing, Keyword.take(opts, [:tracker, :observe]))
     end
 
@@ -2180,8 +2186,11 @@ defmodule SymphonyElixir.AgentTools.Linear do
 
   defp link_blockers(response, {identifier, new_id}, blockers) do
     case depend_on(new_id, blockers) do
-      :ok -> {:ok, put_in(response, ["data", "issueCreate", "issue", "blockedBy"], Enum.map(blockers, &elem(&1, 0)))}
-      {:error, {:add_blocked_by_failed, blocker, reason}} -> {:error, {:blocked_by_relation_failed, identifier, blocker, reason}}
+      :ok ->
+        {:ok, put_in(response, ["data", "issueCreate", "issue", "blockedBy"], Enum.map(blockers, &elem(&1, 0)))}
+
+      {:error, {:add_blocked_by_failed, blocker, reason}} ->
+        {:error, {:blocked_by_relation_failed, identifier, blocker, reason}}
     end
   end
 

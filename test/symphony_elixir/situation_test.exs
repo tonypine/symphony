@@ -424,7 +424,10 @@ defmodule SymphonyElixir.SituationTest do
                cause: "Waiting for a Symphony update that includes TP-7.",
                next: "Starts when a Symphony update includes TP-7.",
                waits_on: %{ticket: "TP-7"}
-             } = Situation.compute(depending([%{issue_id: "i-7", identifier: "TP-7", kind: :released}]), [], held, fn "TP-7" -> "Done" end)
+             } =
+               [%{issue_id: "i-7", identifier: "TP-7", kind: :released}]
+               |> depending()
+               |> Situation.compute([], held, fn "TP-7" -> "Done" end)
     end
 
     test "a hold the records no longer bear out names the first dependency, or another ticket" do

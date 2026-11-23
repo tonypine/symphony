@@ -22,8 +22,8 @@ defmodule SymphonyElixir.Dispatch.DependsOn.Backfill do
 
   require Logger
 
-  alias SymphonyElixir.{Config, RunStore, TicketPlan, TicketState}
   alias SymphonyElixir.Conductor.Facts
+  alias SymphonyElixir.{Config, RunStore, TicketPlan, TicketState}
 
   @marker "depends_on_backfill_v1"
 
@@ -52,7 +52,11 @@ defmodule SymphonyElixir.Dispatch.DependsOn.Backfill do
   defp convert(terminal_states) do
     terminal = MapSet.new(terminal_states, &normalize/1)
     records = List.wrap(with({:error, _reason} <- RunStore.list_all_ticket_states(), do: []))
-    by_id = for record <- records, record = TicketState.normalize(record), is_binary(record.issue_id), into: %{}, do: {record.issue_id, record}
+
+    by_id =
+      for record <- records, record = TicketState.normalize(record), is_binary(record.issue_id), into: %{} do
+        {record.issue_id, record}
+      end
 
     by_id
     |> Map.values()
@@ -64,7 +68,11 @@ defmodule SymphonyElixir.Dispatch.DependsOn.Backfill do
 
   # The pairs `{sub-ticket id, id it depends on}` the parent's events name.
   defp wanted(%{sub_issues: [_ | _] = sub_issues} = parent) do
-    ids = for %{id: id, identifier: identifier} when is_binary(id) and is_binary(identifier) <- sub_issues, into: %{}, do: {identifier, id}
+    ids =
+      for %{id: id, identifier: identifier} when is_binary(id) and is_binary(identifier) <- sub_issues, into: %{} do
+        {identifier, id}
+      end
+
     events = Facts.events(parent.issue_id)
     planned(TicketPlan.current(events), ids) ++ filed_after(events, parent.issue_id, ids)
   end
@@ -72,7 +80,10 @@ defmodule SymphonyElixir.Dispatch.DependsOn.Backfill do
   defp wanted(_parent), do: []
 
   defp planned(%{sub_tickets: [_ | _] = entries}, ids) do
-    by_key = for %{key: key, identifier: identifier} when is_binary(identifier) <- entries, into: %{}, do: {key, identifier}
+    by_key =
+      for %{key: key, identifier: identifier} when is_binary(identifier) <- entries, into: %{} do
+        {key, identifier}
+      end
 
     for %{identifier: identifier, after: [_ | _] = waits} <- entries,
         id = Map.get(ids, identifier),

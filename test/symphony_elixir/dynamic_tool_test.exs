@@ -8,6 +8,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
   alias SymphonyElixir.PromptSafety
   alias SymphonyElixir.QaAndroid.Driver, as: QaAndroidDriver
   alias SymphonyElixir.TicketEvents
+  alias SymphonyElixir.TicketState
 
   # A spy for the writer `TransitionGuard.perform/4` moves through: it records every move it is
   # asked to make and answers with the result a test sets (`:ok` by default).
@@ -822,7 +823,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
   # The ids of the tickets the record of `issue_id` depends on, in their order.
   defp depends_on(issue_id) do
     case RunStore.get_ticket_state(issue_id) do
-      %{} = record -> for %{issue_id: id, kind: :done} <- SymphonyElixir.TicketState.normalize(record).depends_on, do: id
+      %{} = record -> for %{issue_id: id, kind: :done} <- TicketState.normalize(record).depends_on, do: id
       _none -> []
     end
   end

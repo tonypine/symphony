@@ -106,7 +106,8 @@ defmodule SymphonyElixir.Conductor.Tree do
   alias SymphonyElixir.Conductor.{Facts, Message}
   alias SymphonyElixir.{Config, DirectorMoves, Orchestrator, RepoTeams, RunStore, SubIssueWait}
   alias SymphonyElixir.Linear.Issue
-  alias SymphonyElixir.{TicketChecks, TicketEvents, TicketObservation, TicketPlan, TicketState, Tracker, TransitionGuard}
+  alias SymphonyElixir.{TicketChecks, TicketEvents, TicketObservation, TicketPlan, TicketState}
+  alias SymphonyElixir.{Tracker, TransitionGuard}
 
   @urgent 1
   @todo "Todo"
@@ -375,7 +376,8 @@ defmodule SymphonyElixir.Conductor.Tree do
     case Enum.find(left, &(&1.title == entry.title)) do
       %{identifier: identifier} = adopted ->
         Logger.info("Took the sub-ticket #{identifier} an earlier split left for #{entry.key} #{context(issue, repo_key)}")
-        # One the split created and never recorded is Symphony's all the same: it is asked, given its dependencies and started.
+        # One the split created and never recorded is Symphony's all the same: it is asked, given its
+        # dependencies and started.
         if TicketPlan.ask(adopted.id) == [], do: asked(Map.get(entry, :repo) || repo_key, adopted, entry.ask, issue, opts)
         {done ++ [Map.put(entry, :identifier, identifier)], nil, left -- [adopted]}
 
@@ -1044,7 +1046,8 @@ defmodule SymphonyElixir.Conductor.Tree do
   words, when a step failed, which is also said on the parent (a status note under
   `tree.start_failed:<the sub-ticket's id>`). `opts`: `tracker` and `observe`, as `split/3`'s.
   """
-  @spec start(child(), [%{id: String.t(), identifier: String.t()}], Issue.t(), String.t() | nil, keyword()) :: :ok | {:error, String.t()}
+  @spec start(child(), [%{id: String.t(), identifier: String.t()}], Issue.t(), String.t() | nil, keyword()) ::
+          :ok | {:error, String.t()}
   def start(child, blockers, %Issue{id: parent_id}, repo_key, opts) do
     case link_and_promote(child, blockers, opts) do
       :ok ->
