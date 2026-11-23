@@ -126,7 +126,7 @@ defmodule SymphonyElixir.Dispatch.Order do
     tickets =
       (Enum.map(order.entries, & &1.issue_id) ++ open_ids)
       |> Enum.map(&ticket(Map.get(walked, &1), Map.get(by_id, &1), &1, live, records))
-      |> Enum.map(&Map.put(&1, :in_progress, MapSet.member?(holders, &1.issue_id)))
+      |> Enum.map(&Map.put(&1, :in_progress, Map.has_key?(holders, &1.issue_id)))
       |> Enum.sort_by(&{is_nil(&1.position), &1.position || 0, &1.identifier || &1.issue_id})
 
     queue = Enum.filter(tickets, & &1.position)

@@ -119,7 +119,7 @@ defmodule SymphonyElixir.Home do
       situation: situation,
       since: situation.since,
       working: Map.has_key?(ctx.live.running, record.issue_id),
-      in_progress: MapSet.member?(ctx.holders, record.issue_id),
+      in_progress: Map.has_key?(ctx.holders, record.issue_id),
       move: move(record, situation, ctx)
     }
   end
@@ -380,7 +380,7 @@ defmodule SymphonyElixir.Home do
       after: after_ticket && after_ticket.identifier,
       also_waits_on: also,
       situation: situation,
-      in_progress: MapSet.member?(ctx.holders, record.issue_id),
+      in_progress: Map.has_key?(ctx.holders, record.issue_id),
       children: children
     }
 

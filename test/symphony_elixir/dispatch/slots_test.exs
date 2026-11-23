@@ -90,9 +90,9 @@ defmodule SymphonyElixir.Dispatch.SlotsTest do
       assert read.finishing == %{slots: 0, used: 0, running: []}
       assert %{lanes: [], queued_epics: [], shared: %{used: 3}} = read.epic_lanes
 
-      assert Slots.holder_ids(read) == MapSet.new(["a", "b", "c"])
-      assert Slots.holder_ids(nil) == MapSet.new()
-      assert Slots.holder_ids(%{work_free: 1}) == MapSet.new()
+      assert Slots.holder_ids(read) == %{"a" => true, "b" => true, "c" => true}
+      assert Slots.holder_ids(nil) == %{}
+      assert Slots.holder_ids(%{work_free: 1}) == %{}
 
       assert %{used: 0, free: 1, holders: []} = Slots.read(1, [], %{})
     end

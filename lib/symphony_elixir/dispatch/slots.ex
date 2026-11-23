@@ -111,8 +111,8 @@ defmodule SymphonyElixir.Dispatch.Slots do
   defp since_key(%DateTime{} = at), do: {0, DateTime.to_unix(at, :microsecond)}
   defp since_key(_none), do: {1, 0}
 
-  @doc "The issue ids of the holders in a `read/3` (nil before the first walk): the tickets in progress."
-  @spec holder_ids(map() | nil) :: MapSet.t()
-  def holder_ids(%{holders: holders}) when is_list(holders), do: MapSet.new(holders, & &1.issue_id)
-  def holder_ids(_slots), do: MapSet.new()
+  @doc "The issue ids of the holders in a `read/3` (nil before the first walk), as a map of id to true: the tickets in progress."
+  @spec holder_ids(map() | nil) :: %{optional(term()) => true}
+  def holder_ids(%{holders: holders}) when is_list(holders), do: Map.new(holders, &{&1.issue_id, true})
+  def holder_ids(_slots), do: %{}
 end
