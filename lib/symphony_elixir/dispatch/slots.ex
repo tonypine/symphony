@@ -19,7 +19,10 @@ defmodule SymphonyElixir.Dispatch.Slots do
     own, and no slot is reserved for epics.
 
   The holders are kept on the ticket records (`slot_held_since`, `SymphonyElixir.RunStore`), so a
-  restart keeps them; the orchestrator holds its copy and decides with it.
+  restart keeps them; the orchestrator holds its copy and decides with it. Everything else asks
+  `held?/1` of the record: the pull request upkeep acts only for a ticket that holds a slot
+  (`SymphonyElixir.PrWatch.Repo`), and a ticket without one has its upkeep recorded as a wait for
+  a slot, which the orchestrator ends by giving it one when one is free.
   """
 
   # The phases of a ticket that has not started.
@@ -34,6 +37,15 @@ defmodule SymphonyElixir.Dispatch.Slots do
           since: DateTime.t() | nil,
           running: boolean()
         }
+
+  @doc """
+  Whether the ticket of `record` holds a slot: its record says since when it holds one
+  (`slot_held_since`), as the orchestrator writes it when it gives the slot and when it takes it
+  back. The one answer every caller outside the orchestrator reads; no record holds none.
+  """
+  @spec held?(map() | nil) :: boolean()
+  def held?(%{slot_held_since: %DateTime{}}), do: true
+  def held?(_record), do: false
 
   @doc """
   Whether a dispatch gate closed on a ticket that holds a slot gives the slot up: the gate's
