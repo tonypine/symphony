@@ -100,16 +100,16 @@ defmodule SymphonyElixir.Dispatch.Queue do
 
     parents = for record <- keyed, parent_id = Map.get(ids, scope(record)), into: %{}, do: {record.issue_id, parent_id}
 
-    Map.new(keyed, &{&1.issue_id, place(&1.issue_id, keys, parents, MapSet.new())})
+    Map.new(keyed, &{&1.issue_id, place(&1.issue_id, keys, parents, [])})
   end
 
   defp place(id, keys, parents, seen) do
     key = Map.fetch!(keys, id)
     parent = Map.get(parents, id)
 
-    if is_nil(parent) or MapSet.member?(seen, parent),
+    if is_nil(parent) or parent in seen,
       do: [key],
-      else: place(parent, keys, parents, MapSet.put(seen, id)) ++ [key]
+      else: place(parent, keys, parents, [id | seen]) ++ [key]
   end
 
   @doc """
