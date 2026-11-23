@@ -554,7 +554,7 @@ defmodule SymphonyElixir.PrWatch.LifecycleTest do
 
     test "its PR is read and recorded and nothing is done on it, when main moves too; once it takes a slot it catches up" do
       behind = ticket!("40", "Code Review", mergeable: :behind)
-      red = ticket!("41", "QA", ci: :red, red_kind: :failure, failing_check: "specs")
+      red = ticket!("41", "QA", ci: :red, red_kind: :failure, failing_check: "specs", failed_checks: [%{name: "specs", run_id: "77", workflow_name: "ci", conclusion: "FAILURE"}])
       conflict = ticket!("42", "QA", mergeable: :dirty)
       green = ticket!("43", "QA")
       running = ticket!("49", "QA", ci: :pending)
@@ -571,7 +571,7 @@ defmodule SymphonyElixir.PrWatch.LifecycleTest do
       # No branch update, no rerun, no CI Fix, no move: each step waits for a slot, naming its rule.
       assert withheld(behind) == :update_branch
       assert %{rule: "U1", reason: "Waits for a slot before U1 acts (the branch is updated with the base): " <> _rest} = decision(behind)
-      assert withheld(red) in [:rerun_failed, :ci_fix]
+      assert withheld(red) == :rerun_failed
       assert withheld(conflict) == :ci_fix
       # QA's run needs its app built first: it waits for the slot too, and holds its run back.
       assert withheld(green) == :dispatch
@@ -596,11 +596,13 @@ defmodule SymphonyElixir.PrWatch.LifecycleTest do
       assert World.calls(:move) == []
       assert withheld(behind) == :update_branch
 
-      # The tickets take their slots: the next read updates the branch and sends the conflict to CI
-      # Fix, and QA's run is no longer held back.
+      # The tickets take their slots: the next read updates the branch, reruns the red head's failed
+      # check, sends the conflict to CI Fix, and QA's run is no longer held back.
       for issue_id <- [behind, red, conflict, green], do: take_slot!(issue_id)
       tick!(pid)
       assert World.calls(:update_branch) == [{url(40), "head-40-1"}]
+      assert World.calls(:rerun) == ["77"]
+      assert %{rule: "R22", kind: :rerun_failed} = decision(red)
       assert moves(conflict) == ["CI Fix"]
       assert %{rule: "R27", kind: :dispatch} = decision(green)
       refute PrWatch.waits_for_slot?(watch(green))

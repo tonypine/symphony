@@ -26,7 +26,9 @@ landing step. The decision is recorded as a `wait` on `symphony` until the ticke
 naming the rule it holds back and what that rule would do (`args.withheld`), so the Director and the
 silent-wait detector read it as a wait for a slot, never a stall, and `mix pr_watch.sweep` counts it
 as `gate: waits for a slot`. A hold's wait (R4) stays the decision, and the reads of a ticket without
-a slot lift no hold. A merge or a close by a person still applies (R2, R8), and a run's dispatch
+a slot lift no hold, with one exception: the landing wait on competing PRs still ends when they land
+or leave the race. That wait gave the slot up, so nothing else would clear it; it clears only its own
+landing reasons and links, never a blocker's or a person's hold. A merge or a close by a person still applies (R2, R8), and a run's dispatch
 outside QA stays the orchestrator's, which takes a slot as it starts it; a QA run waits for the slot,
 since the app is built for its head first. When a slot is free, the orchestrator gives it to such a
 ticket in its place in the queue, with no run, and asks the watcher to read it at once: the held-back

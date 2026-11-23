@@ -3492,7 +3492,9 @@ the Needs Decision hold and the self-heal lane, GitHub calls through `AutoMerge`
   What a person did on GitHub still applies: a merge closes the ticket out (R2) and a close sends it
   to `Rework` (R8). A run's dispatch outside QA is the orchestrator's and takes a slot as it starts;
   a QA run waits for the slot, since its app is built for its head first. The landing wait on
-  competing PRs still ends when they land or leave the race. A person's answers, moves and cancels
+  competing PRs still ends when they land or leave the race: that wait gave the slot up, so nothing
+  else would clear it, and it clears only its own landing reasons and links, never a blocker's or a
+  person's hold. A person's answers, moves and cancels
   go through the control API and apply as for any ticket; the app repository's release read is no
   ticket and is not gated.
 - Branch upkeep runs in every watched phase, for a ticket that holds a slot, whatever
