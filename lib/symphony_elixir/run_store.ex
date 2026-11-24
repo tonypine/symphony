@@ -2064,9 +2064,24 @@ defmodule SymphonyElixir.RunStore do
     |> Map.new(&{&1.issue_id, slot_holder(&1)})
   end
 
-  defp parent_map(records) do
+  # A ticket's parent as its own record names it, else as its parent's record lists it among its
+  # sub-issues: every poll reads a ticket's sub-issues, but its parent only when a run starts, so a
+  # sub-ticket that never ran is known by its parent's record alone.
+  defp parent_map(records), do: records |> listed_parents() |> Map.merge(named_parents(records))
+
+  defp listed_parents(records) do
+    records
+    |> Enum.filter(&is_binary(Map.get(&1, :issue_identifier)))
+    |> Enum.flat_map(fn record -> for child <- sub_ids(Map.get(record, :sub_issues)), do: {child, record.issue_identifier} end)
+    |> Map.new()
+  end
+
+  defp named_parents(records) do
     for %{issue_id: id, parent: %{identifier: parent}} <- records, is_binary(parent), into: %{}, do: {id, parent}
   end
+
+  defp sub_ids(subs) when is_list(subs), do: for(%{id: child} <- subs, is_binary(child), do: child)
+  defp sub_ids(_subs), do: []
 
   defp id_map(records) do
     for %{issue_identifier: identifier, issue_id: id} <- records, is_binary(identifier), is_binary(id), into: %{} do
@@ -2087,7 +2102,8 @@ defmodule SymphonyElixir.RunStore do
   @doc """
   What the dispatch pass orders its candidates by, from every repository's records in one read:
   each queued ticket's place (`places`, as `queue_places/0`), the identifier of each ticket's
-  parent (`parents`, by issue id) and each ticket's issue id (`ids`, by identifier), from which the
+  parent (`parents`, by issue id: as the ticket's record names it, else as its parent's record lists
+  it among its sub-issues) and each ticket's issue id (`ids`, by identifier), from which the
   slots tell which ticket a sub-ticket runs through (`SymphonyElixir.Dispatch.Slots`); when the
   store can't be read, its error.
   """

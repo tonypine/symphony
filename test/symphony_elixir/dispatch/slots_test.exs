@@ -103,6 +103,19 @@ defmodule SymphonyElixir.Dispatch.SlotsTest do
       assert Slots.cost("t", ["e"], @parents) == 1
       assert Slots.cost("a", [], @parents) == 1
     end
+
+    test "a leaf two levels down runs through the top ticket's slot when the parent between them holds none (TP-1632)" do
+      # Epic E, its split sub-ticket M (holds no slot), M's leaves L1 and L2.
+      parents = %{"m" => "e", "l1" => "m", "l2" => "m"}
+
+      assert Slots.through("l1", MapSet.new(["e"]), parents) == "e"
+      assert Slots.cost("l1", ["e"], parents) == 0
+      assert Slots.used(["e", "l1"], parents) == 1
+      assert Slots.cost("l2", ["e", "l1"], parents) == 1
+      assert Slots.used(["e", "l1", "l2"], parents) == 2
+      assert Slots.owner("l1", ["e", "l1"], parents) == "e"
+      assert Slots.working_through("e", ["e", "l1", "l2"], parents) == ["e", "l1", "l2"]
+    end
   end
 
   describe "read/4 and holder_ids/1" do

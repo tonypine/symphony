@@ -532,6 +532,78 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
     end
   end
 
+  describe "a ticket at any depth runs through the slot of the ticket at the top of its tree (TP-1632)" do
+    test "with 1 slot held by the epic, each leaf under a split sub-ticket starts by itself after the one before it", ctx do
+      write_slots_workflow!(ctx, max_concurrent_agents: 1)
+      {epic, middle, [a, b]} = three_levels([{"a", "MT-A", "Todo"}, {"b", "MT-B", "Todo"}])
+      other = recorded(issue("t", "MT-T", "Todo"))
+      :ok = RunStore.add_dependency("b", "a", :done)
+      tracked([epic, middle, a, b, other])
+
+      state = holding(orchestrator_state(1), epic)
+      first = Orchestrator.dispatch_chosen_issues_for_test([epic, middle, a, b, other], state)
+      assert Map.keys(first.running) == ["a"]
+      assert Map.keys(first.slot_holders) |> Enum.sort() == ["a", "e"]
+      assert %{gate: :sub_tickets} = first.dispatch_skipped["m"]
+      assert %{gate: :depends_on} = first.dispatch_skipped["b"]
+      assert %{reason: "work slots full"} = first.slot_waiting["t"]
+      refute Map.has_key?(first.slot_waiting, "a")
+      assert Orchestrator.available_slots_for_test(first) == 0
+
+      stop_orchestrator_agent_tasks()
+      :ok = RunStore.update_ticket_state("a", %{phase: "Done"})
+      middle = %{middle | sub_issues: [%{id: "a", identifier: "MT-A", state: "Done"}, %{id: "b", identifier: "MT-B", state: "Todo"}]}
+      gap = orchestrator_state(1) |> holding(epic) |> holding(a)
+      gap = Orchestrator.release_slots_for_test(gap, [epic, middle, b, other], true)
+      assert Map.keys(gap.slot_holders) == ["e"]
+      refute Map.has_key?(gap.slot_holders, "m")
+
+      second = Orchestrator.dispatch_chosen_issues_for_test([epic, middle, b, other], gap)
+      assert Map.keys(second.running) == ["b"]
+      refute Map.has_key?(second.slot_holders, "m")
+      assert %{reason: "work slots full"} = second.slot_waiting["t"]
+    end
+
+    test "with 2 slots, an independent leaf of the same tree takes the second slot while the first runs through the epic's", ctx do
+      write_slots_workflow!(ctx, max_concurrent_agents: 2)
+      {epic, middle, [a, b, c]} = three_levels([{"a", "MT-A", "Todo"}, {"b", "MT-B", "Todo"}, {"c", "MT-C", "Todo"}])
+      other = recorded(issue("t", "MT-T", "Todo"))
+      :ok = RunStore.add_dependency("c", "a", :done)
+      tracked([epic, middle, a, b, c, other])
+
+      state = holding(orchestrator_state(2), epic)
+      dispatched = Orchestrator.dispatch_chosen_issues_for_test([epic, middle, a, b, c, other], state)
+      assert Enum.sort(Map.keys(dispatched.running)) == ["a", "b"]
+      refute Map.has_key?(dispatched.slot_holders, "m")
+      assert %{gate: :depends_on} = dispatched.dispatch_skipped["c"]
+      assert %{reason: "work slots full"} = dispatched.slot_waiting["t"]
+      assert Orchestrator.available_slots_for_test(dispatched) == 0
+    end
+
+    test "the middle parent takes no free slot, and the leaf under it starts in the same pass", ctx do
+      write_slots_workflow!(ctx, max_concurrent_agents: 1)
+      {epic, middle, [a]} = three_levels([{"a", "MT-A", "Todo"}])
+      tracked([epic, middle, a])
+
+      dispatched = Orchestrator.dispatch_chosen_issues_for_test([epic, middle, a], orchestrator_state(1))
+      assert Map.keys(dispatched.running) == ["a"]
+      assert Enum.sort(Map.keys(dispatched.slot_holders)) == ["a", "e"]
+      assert Orchestrator.available_slots_for_test(dispatched) == 0
+    end
+
+    test "the order read counts the epic and the leaf running two levels under it as one used slot", ctx do
+      write_slots_workflow!(ctx, max_concurrent_agents: 1)
+      {epic, middle, [a, b]} = three_levels([{"a", "MT-A", "In Progress"}, {"b", "MT-B", "Todo"}])
+      :ok = RunStore.add_dependency("b", "a", :done)
+      tracked([epic, middle, a, b])
+
+      state = orchestrator_state(1) |> holding(epic) |> holding(a) |> run(a)
+      %{dispatch_order: order} = Orchestrator.put_dispatch_order_for_test(state, [epic, middle, a, b])
+      assert %{total: 1, used: 1, free: 0, holders: holders} = order.slots
+      assert holders |> Enum.map(& &1.identifier) |> Enum.sort() == ["MT-A", "MT-E"]
+    end
+  end
+
   describe "the reads" do
     test "the dispatch order and Home name each slot's holder and the free slots, and mark in progress exactly the holders", ctx do
       write_slots_workflow!(ctx, max_concurrent_agents: 3)
@@ -712,7 +784,7 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
   # The ticket's record, which joins the dispatch queue at its end (or at the end of its parent's
   # sub-tickets), in the order written.
   defp recorded(%Issue{} = issue) do
-    attrs = %{issue_identifier: issue.identifier, title: issue.title, phase: issue.state, linear_updated_at: DateTime.utc_now(), parent: issue.parent}
+    attrs = %{issue_identifier: issue.identifier, title: issue.title, phase: issue.state, linear_updated_at: DateTime.utc_now(), parent: issue.parent, sub_issues: issue.sub_issues}
     :ok = RunStore.put_ticket_state(TicketState.new("default", issue.id, attrs))
     issue
   end
@@ -726,6 +798,15 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
   end
 
   defp sub(id, identifier, state, parent), do: issue(id, identifier, state, parent: %{identifier: parent, title: nil, done: 0, total: 1, children: []})
+
+  # An epic, a sub-ticket of it that was split and waits on its own sub-tickets, and its leaves. A
+  # leaf that never ran names no parent on its record (Linear's parent is read when a run starts):
+  # only its parent's record lists it, among its sub-issues, as every poll reads them.
+  defp three_levels(leaves) do
+    epic = recorded(epic("e", "MT-E", [{"m", "MT-M", "In Progress"}]))
+    middle = recorded(%{epic("m", "MT-M", leaves) | parent: sub("m", "MT-M", "In Progress", "MT-E").parent})
+    {epic, middle, for({id, identifier, state} <- leaves, do: recorded(issue(id, identifier, state)))}
+  end
 
   defp holding(state, %Issue{} = issue) do
     %{state | slot_holders: Map.put(state.slot_holders, issue.id, %{identifier: issue.identifier, state: issue.state, repo_key: "default", since: @since})}

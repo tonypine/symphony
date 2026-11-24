@@ -401,7 +401,9 @@ can start, which for the parent at the top is its next sub-ticket whose dependen
 sub-tickets that don't depend on each other run at the same time. Such an extra slot comes back when
 that sub-ticket is done; the parent keeps one through its waits. When the parent has nothing ready,
 the free slot goes to the next ticket down the queue. A parent and the one sub-ticket running
-through its slot count as one used slot.
+through its slot count as one used slot. This holds at any depth: a sub-ticket of a sub-ticket runs
+through the slot of the ticket at the top of its tree, and a parent in the middle that waits on its
+own sub-tickets takes no slot of its own.
 
 A ticket that holds a slot and waits on a ticket outside its own tree (one a run's block report
 names, a fix ticket reused from another ticket, a dependency added mid-work, a competing pull
