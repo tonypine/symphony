@@ -1352,7 +1352,7 @@ Fields:
   - Extensions are trimmed, lowercased, normalized to include a leading `.`, deduplicated, and
     rejected if they contain path separators or control characters.
   - Elixir evidence: `lib/symphony_elixir/config/schema.ex` and
-    `test/symphony_elixir/workspace_and_config_test.exs`.
+    `test/symphony_elixir/config_settings_test.exs`.
 
 #### 5.4.4 `execution.permissions.filesystem.allow_read_paths` (list)
 
@@ -1902,7 +1902,7 @@ fields locally if they want stricter startup checks.
     `execution.permissions.approval_policy="never"` is rejected for Codex. Use `auto_approve_all` for unattended
     auto-approval.
   - Elixir evidence: `lib/symphony_elixir/config/schema.ex` and
-    `test/symphony_elixir/workspace_and_config_test.exs`.
+    `test/symphony_elixir/config_settings_test.exs`.
 - `filesystem.sandbox` (Codex `SandboxMode` value)
   - Default: `workspace-write`.
 - `filesystem.turn_policy` (Codex `SandboxPolicy` value)
@@ -1960,7 +1960,7 @@ fields locally if they want stricter startup checks.
     enforced outside Codex while keeping shell command execution available.
   - Elixir evidence: `lib/symphony_elixir/config/schema.ex`,
     `lib/symphony_elixir/agent_sandbox_config.ex`,
-    `test/symphony_elixir/workspace_and_config_test.exs`, and
+    `test/symphony_elixir/config_settings_test.exs`, and
     `test/symphony_elixir/agent_sandbox_config_test.exs`.
 - `turn_timeout_ms` (integer)
   - Default: `3600000` (1 hour)

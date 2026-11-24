@@ -1,5 +1,5 @@
 defmodule SymphonyElixir.Learnings.ReflectionTest do
-  use SymphonyElixir.TestSupport
+  use ExUnit.Case, async: true
 
   alias SymphonyElixir.Learnings.Reflection
 
