@@ -1414,8 +1414,10 @@ Ten more variables, read only in QA mode:
   ticket, the Inbox holds two pull requests, and Stop Run's requests are answered from `api/v1/control/`),
   `paused` (paused for "Deploy freeze") and `idle`, of Home: `home` (its Home read holds the catalog's two lists,
   two epics in progress and four queued chains, and its state every situation group populated), `home-quiet` (one ticket working, every other group
-  empty, dispatch paused for "Deploy freeze"), `home-queue` (three slots, two taken, and a generated queue of 1,245
-  tickets) and `home-queue-drag` (TP-1610's drag and drop: two slots, both taken, a queue of 1,246 tickets whose fourth
+  empty, dispatch paused for "Deploy freeze"), `home-queue` (three slots, two taken, a generated queue of 1,245
+  tickets, and Recently done with ten tickets done in the week, five of them today, some with an epic and a pull
+  request), `home-queue-done-week` (`home-queue` with none of them done today, so Recently done on Today keeps its head
+  alone) and `home-queue-drag` (no Recently done, so the section is not drawn; TP-1610's drag and drop: two slots, both taken, a queue of 1,246 tickets whose fourth
   waits on you, and every `queue/move` and slot `start` changing the queue as Symphony does, except a move of TP-1596,
   which is refused with its reason), of the Inbox: `inbox` (one item of each kind, plus the Initiatives: two active, BIL-200 with BIL-206 waiting on you, one in review and one done),
   `inbox-empty`, `inbox-unasked-choices` (`inbox` with four choices SHOP-330's plan run could not ask, so its page and its Approve sheet carry the warning), `inbox-lane-yielded` (`inbox` with DOCS-20 holding no lane because its open sub-tickets are below the priority filter, so Initiatives says why) and `inbox-decision` (TP-892's decision, with three options, with every ticket and pull request it mentions resolved

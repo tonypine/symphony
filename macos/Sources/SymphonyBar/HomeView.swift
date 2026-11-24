@@ -22,11 +22,17 @@ struct HomeActions {
     var openTicket: (String) -> Void = { _ in }
     /// Dismisses the line that says why a move didn't go through.
     var dismissNotice: () -> Void = {}
+    /// Recently done's range control (TP-1644).
+    var pickDoneRange: (HomeRead.DoneRange) -> Void = { _ in }
+    /// Recently done's head: folds the section or opens it.
+    var toggleRecentlyDone: () -> Void = {}
+    /// The last done row came into view: the next page of the range is read.
+    var showMoreDone: () -> Void = {}
 }
 
-/// Home, the window to Symphony's queue (TP-1609, `docs/design/prototypes/home-queue/`): two sections on one 32 pt
-/// gutter. In progress, one card per slot (an empty slot an outline reading "Slot N") with the slot count control beside
-/// its title; then Queue, the saved views of the Tickets page as pills and every ticket that holds no slot in its stored
+/// Home, the window to Symphony's queue (TP-1609, `docs/design/prototypes/home-queue/`): three sections on one 32 pt
+/// gutter. Recently done (TP-1644), the tickets that finished today or this week, folding to its head; In progress,
+/// one card per slot (an empty slot an outline reading "Slot N") with the slot count control beside its title; then Queue, the saved views of the Tickets page as pills and every ticket that holds no slot in its stored
 /// order with its position number. The list is virtual: it is as tall as all its rows, and only the rows on screen are
 /// drawn, their pages read as they come on screen. Once the cards scroll out of view, a strip with one line per slot
 /// stays on top, its columns over the queue's columns.
@@ -227,7 +233,7 @@ extension HomeQueueDrag.Target {
     }
 }
 
-/// Home's two sections, outside the scroll view so they also render offscreen: the rows of `range` drawn, the cards'
+/// Home's three sections, outside the scroll view so they also render offscreen: the rows of `range` drawn, the cards'
 /// bottom and the list's top reported in the coordinate space `space`.
 struct HomePageContent: View {
     @ObservedObject var model: HomeQueueModel
@@ -249,6 +255,10 @@ struct HomePageContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(notices, id: \.self) { HomeNoticeLine(text: $0) }
+            HomeRecentlyDone(
+                list: model.recentlyDone, reference: reference, pick: actions.pickDoneRange, toggle: actions.toggleRecentlyDone,
+                more: actions.showMoreDone
+            )
             progress
                 .onGeometryChange(for: Double.self) { $0.frame(in: .named(space)).maxY } action: { cardsBottom($0) }
             queueHead

@@ -9,12 +9,101 @@ public struct HomeRead: Equatable {
     /// The rows a page asks for.
     public static let pageSize = 100
 
-    /// The read of the page from `offset`, kept to the saved view `view` (a Tickets page's view id) when one is picked:
-    /// `api/v1/home?offset=0&limit=100&view=view-a1`.
-    public static func path(offset: Int, limit: Int = pageSize, view: String? = nil) -> String {
+    /// The read of the page from `offset`, kept to the saved view `view` (a Tickets page's view id) when one is picked,
+    /// with the Recently done entries `done` asks for (TP-1644):
+    /// `api/v1/home?offset=0&limit=100&view=view-a1&done_range=week&done_offset=0&done_limit=50`. Without `done` the read
+    /// gives today's first entries.
+    public static func path(offset: Int, limit: Int = pageSize, view: String? = nil, done: DonePage? = nil) -> String {
         var query = "offset=\(max(offset, 0))&limit=\(max(limit, 1))"
         if let view, let escaped = view.addingPercentEncoding(withAllowedCharacters: .urlQueryValue) { query += "&view=\(escaped)" }
+        if let done { query += "&done_range=\(done.range.rawValue)&done_offset=\(max(done.offset, 0))&done_limit=\(max(done.limit, 1))" }
         return "\(path)?\(query)"
+    }
+
+    // MARK: - Recently done (TP-1644)
+
+    /// The ranges Recently done reads: what finished since local midnight, or in the last 7 days.
+    public enum DoneRange: String, CaseIterable, Equatable {
+        case today, week
+
+        /// The word the range control shows.
+        public var title: String { self == .today ? "Today" : "Week" }
+    }
+
+    /// Which Recently done entries a read asks for: the `range`'s, from `offset`, at most `limit`.
+    public struct DonePage: Equatable {
+        public var range: DoneRange
+        public var offset: Int
+        public var limit: Int
+
+        public init(range: DoneRange, offset: Int = 0, limit: Int) {
+            self.range = range
+            self.offset = offset
+            self.limit = limit
+        }
+    }
+
+    /// A ticket's epic, as a done entry names it.
+    public struct EpicRef: Equatable {
+        public var identifier: String
+        public var title: String?
+
+        public init(identifier: String, title: String? = nil) {
+            self.identifier = identifier
+            self.title = title
+        }
+    }
+
+    /// A ticket Symphony saw reach done.
+    public struct DoneEntry: Equatable, Identifiable {
+        public var issueID: String?
+        public var identifier: String
+        public var title: String?
+        public var repoKey: String?
+        public var doneAt: Date?
+        public var pullRequestNumber: Int?
+        public var epic: EpicRef?
+
+        public var id: String { identifier }
+
+        public init(
+            issueID: String? = nil, identifier: String, title: String? = nil, repoKey: String? = nil, doneAt: Date? = nil,
+            pullRequestNumber: Int? = nil, epic: EpicRef? = nil
+        ) {
+            self.issueID = issueID
+            self.identifier = identifier
+            self.title = title
+            self.repoKey = repoKey
+            self.doneAt = doneAt
+            self.pullRequestNumber = pullRequestNumber
+            self.epic = epic
+        }
+    }
+
+    /// The read's Recently done: the range it gives, how many finished today and in the week, and one page of the
+    /// range's entries, most recent first.
+    public struct RecentlyDone: Equatable {
+        public var range: DoneRange
+        public var today: Int
+        public var week: Int
+        public var entries: [DoneEntry]
+        public var offset: Int
+        public var limit: Int
+        /// The next page's offset, nil on the last.
+        public var nextOffset: Int?
+
+        public init(
+            range: DoneRange = .today, today: Int = 0, week: Int = 0, entries: [DoneEntry] = [], offset: Int = 0, limit: Int = 50,
+            nextOffset: Int? = nil
+        ) {
+            self.range = range
+            self.today = today
+            self.week = week
+            self.entries = entries
+            self.offset = offset
+            self.limit = limit
+            self.nextOffset = nextOffset
+        }
     }
 
     /// The move a ticket that waits on the Director offers: `answer` or `unblock`, as the ticket's `moves` judge it.
@@ -223,11 +312,14 @@ public struct HomeRead: Equatable {
     /// One entry per slot, in number order.
     public var slots: [Slot]
     public var queue: QueuePage
+    /// Recently done, nil from a read without it.
+    public var recentlyDone: RecentlyDone?
 
-    public init(slotCount: Int? = nil, slots: [Slot] = [], queue: QueuePage = QueuePage()) {
+    public init(slotCount: Int? = nil, slots: [Slot] = [], queue: QueuePage = QueuePage(), recentlyDone: RecentlyDone? = nil) {
         self.slotCount = slotCount ?? slots.count
         self.slots = slots
         self.queue = queue
+        self.recentlyDone = recentlyDone
     }
 
     /// The tickets that hold a slot.
@@ -247,7 +339,8 @@ public struct HomeRead: Equatable {
             queue: QueuePage(
                 rows: rows, count: queue.count, total: queue.total, offset: queue.offset ?? 0, limit: queue.limit ?? pageSize,
                 nextOffset: queue.nextOffset, view: queue.view
-            )
+            ),
+            recentlyDone: wire.recentlyDone?.model
         )
     }
 }
@@ -262,6 +355,61 @@ extension CharacterSet {
 private struct Wire: Decodable {
     var slots: WireSlots?
     var queue: WireQueue?
+    var recentlyDone: WireRecentlyDone?
+
+    enum CodingKeys: String, CodingKey { case slots, queue, recentlyDone = "recently_done" }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        slots = try container.decodeIfPresent(WireSlots.self, forKey: .slots)
+        queue = try container.decodeIfPresent(WireQueue.self, forKey: .queue)
+        // A block that doesn't read leaves the rest of Home to show.
+        recentlyDone = (try? container.decodeIfPresent(WireRecentlyDone.self, forKey: .recentlyDone)) ?? nil
+    }
+}
+
+private struct WireRecentlyDone: Decodable {
+    struct Counts: Decodable {
+        var today: Int?
+        var week: Int?
+    }
+
+    struct Entry: Decodable {
+        var issueID: String?
+        var identifier: String
+        var title: String?
+        var repoKey: String?
+        var doneAt: String?
+        var pullRequestNumber: Int?
+        var epic: WireEpicRef?
+
+        enum CodingKeys: String, CodingKey {
+            case issueID = "issue_id", identifier, title, repoKey = "repo_key", doneAt = "done_at", pullRequestNumber = "pull_request_number", epic
+        }
+
+        var entry: HomeRead.DoneEntry {
+            HomeRead.DoneEntry(
+                issueID: issueID, identifier: identifier, title: title, repoKey: repoKey, doneAt: doneAt.flatMap(SymphonyState.parseDate),
+                pullRequestNumber: pullRequestNumber, epic: epic?.identifier.map { HomeRead.EpicRef(identifier: $0, title: epic?.title) }
+            )
+        }
+    }
+
+    var range: String?
+    var counts: Counts?
+    var entries: [Entry]?
+    var offset: Int?
+    var limit: Int?
+    var nextOffset: Int?
+
+    enum CodingKeys: String, CodingKey { case range, counts, entries, offset, limit, nextOffset = "next_offset" }
+
+    var model: HomeRead.RecentlyDone {
+        HomeRead.RecentlyDone(
+            range: range.flatMap(HomeRead.DoneRange.init(rawValue:)) ?? .today, today: counts?.today ?? 0, week: counts?.week ?? 0,
+            entries: (entries ?? []).map(\.entry), offset: offset ?? 0, limit: limit ?? 50, nextOffset: nextOffset
+        )
+    }
 }
 
 private struct WireSlots: Decodable {

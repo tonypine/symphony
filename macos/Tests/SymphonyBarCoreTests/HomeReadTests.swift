@@ -31,6 +31,9 @@ final class HomeReadTests: XCTestCase {
 
     private var fixtures: APIFixtures { APIFixtures(directory: Self.directory("home-queue"), requestLog: log) }
 
+    /// What Home's first page asks of Recently done (TP-1644) on Today, the default range.
+    private static let doneToday = "&done_range=today&done_offset=0&done_limit=50"
+
     /// The fixtures' answer to a read of `path`, as the window's client gives it.
     private func get(_ path: String) -> ConditionalResult {
         let url = LiveAPIClient.url(path, base: APIFixtures.baseURL)!
@@ -209,7 +212,7 @@ final class HomeReadTests: XCTestCase {
         let model = makeModel(calls)
         await model.refresh()
         await model.pick(view: "view-hub")
-        XCTAssertEqual(calls.reads.last, "api/v1/home?offset=0&limit=100&view=view-hub")
+        XCTAssertEqual(calls.reads.last, "api/v1/home?offset=0&limit=100&view=view-hub" + Self.doneToday)
         XCTAssertEqual(model.view, "view-hub")
         XCTAssertEqual(model.pager.total, 1245)
         XCTAssertLessThan(model.pager.count, 1245)
@@ -237,7 +240,7 @@ final class HomeReadTests: XCTestCase {
         let calls = Calls()
         let model = makeModel(calls)
         await model.refresh()
-        XCTAssertEqual(calls.reads, ["api/v1/home?offset=0&limit=100"])
+        XCTAssertEqual(calls.reads, ["api/v1/home?offset=0&limit=100" + Self.doneToday])
         XCTAssertEqual(model.pager.height, 1245 * 36)
 
         // The list starts 900 pt down the page, the view is 800 pt tall, scrolled to row 1,000.
@@ -272,7 +275,7 @@ final class HomeReadTests: XCTestCase {
         XCTAssertEqual(range, 0..<(Int(HomeQueuePager.assumedViewport / HomeQueuePager.pitch) + HomeQueuePager.overscan))
         XCTAssertLessThan(range.count, 100, "a screenful of rows, not 1,245")
         await model.show(range)
-        XCTAssertEqual(calls.reads, ["api/v1/home?offset=0&limit=100"], "page 0, read once")
+        XCTAssertEqual(calls.reads, ["api/v1/home?offset=0&limit=100" + Self.doneToday], "page 0, read once")
         XCTAssertEqual(model.pager.row(at: 0)?.identifier, "TP-1590")
         XCTAssertEqual(model.pager.row(at: 0)?.number, "1")
         XCTAssertNotNil(model.pager.row(at: range.upperBound - 1))
@@ -334,7 +337,7 @@ final class HomeReadTests: XCTestCase {
         // Another client changed the slots: the engine tells, Home reads at once.
         _ = fixtures.answer(ControlAPI.request(.slots(2), base: APIFixtures.baseURL, token: APIFixtures.token))
         await model.queueChanged()
-        XCTAssertEqual(calls.reads, ["api/v1/home?offset=0&limit=100", "api/v1/home?offset=100&limit=100"])
+        XCTAssertEqual(calls.reads, ["api/v1/home?offset=0&limit=100" + Self.doneToday, "api/v1/home?offset=100&limit=100"])
         XCTAssertEqual(model.slotCount, 2, "the count is the engine's")
         XCTAssertEqual(model.cards.map(\.number), [1, 2])
     }

@@ -4,7 +4,9 @@
 // and dragged. Drag and drop (TP-1610) adds the row left behind while it is dragged with the drop line in a gap, and
 // the slot card, the empty slot and the strip line as the target under a dragged row. Each story is a variation of its
 // own (`slot-card-now`). The slot count control is live: in the gallery
-// it steps between 1 and 6.
+// it steps between 1 and 6. Recently done (TP-1644) adds the done row with every cell, with the pull request and when,
+// with when alone, without an epic, with a long title and hovered, and the section's head with a count, without one, on
+// Week and folded; the head's range control and fold are live.
 import SwiftUI
 import SymphonyBarCore
 import SymphonyBarUI
@@ -168,6 +170,67 @@ private func slotCountStory(_ value: Int) -> AnyView {
     padded(HomeQueueLiveValue(value: value) { SlotCountControl(count: $0) }, width: 120)
 }
 
+/// A store kept in memory, for the screens drawn with Recently done's choices.
+final class GalleryChoices: KeyValueStore {
+    private var values: [String: Any] = [:]
+
+    func object(forKey defaultName: String) -> Any? { values[defaultName] }
+    func set(_ value: Any?, forKey defaultName: String) { values[defaultName] = value }
+}
+
+/// The prototype's Recently done (`docs/design/prototypes/home-queue/page.js`): its first rows, and one with no epic and
+/// one with a long title.
+let doneStoryRows: [DoneRowModel] = [
+    DoneRowModel(
+        identifier: "TP-1622", title: "Engine: the queue's order is stored as one sort key per ticket", epic: "TP-1597", pullRequest: "#1053",
+        repo: "symphony", when: "20 min ago"
+    ),
+    DoneRowModel(
+        identifier: "MOT-104", title: "Record a ride's track while the screen is off", epic: "MOT-105", pullRequest: "#88", repo: "cycle",
+        when: "1 h ago"
+    ),
+    DoneRowModel(
+        identifier: "TP-1606", title: "Engine: a ticket without a slot does not react to anything", epic: "TP-1597", pullRequest: "#1052",
+        repo: "symphony", when: "3 h ago"
+    ),
+    DoneRowModel(identifier: "HUB-208", title: "Show a company's open invoices on its page", pullRequest: "#412", repo: "hub", when: "yesterday"),
+    DoneRowModel(
+        identifier: "TP-983",
+        title: "Read the list of protected paths from one place, for every repo, in the Director's words, beside its ticket and its pull request",
+        epic: "TP-975", pullRequest: "#611", repo: "symphony", when: "Sat"
+    ),
+]
+
+/// Done rows with `cells`, every one of `rows` at rest but the one at `hovered`.
+@MainActor
+private func doneRowStory(_ rows: [DoneRowModel], cells: DoneRow.Cells, hovered: Int? = nil) -> AnyView {
+    AnyView(
+        VStack(spacing: DesignTokens.HomeQueue.doneRowGap) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { offset, row in
+                DoneRow(row, cells: cells, hovered: offset == hovered)
+            }
+        }
+        .frame(width: queueRowStoryWidth)
+        .padding(DesignTokens.Space.s4)
+        .background(DesignTokens.Surface.window.color)
+    )
+}
+
+/// Recently done's head on `range`, with `count` (nil for none), open or folded; its control and fold are live.
+@MainActor
+private func recentlyDoneHeadStory(_ range: HomeRead.DoneRange, count: String?, open: Bool = true, hovered: Bool? = nil) -> AnyView {
+    AnyView(
+        HomeQueueLiveValue(value: RecentlyDoneChoices(range: range, open: open)) { choices in
+            RecentlyDoneHead(range: choices.range, count: count, open: choices.wrappedValue.open, hovered: hovered) {
+                choices.wrappedValue.open.toggle()
+            }
+        }
+        .frame(width: queueRowStoryWidth)
+        .padding(DesignTokens.Space.s4)
+        .background(DesignTokens.Surface.window.color)
+    )
+}
+
 @MainActor
 let homeQueueStories: [ComponentStory] = {
     func card(_ id: String, height: CGFloat = slotCardStoryHeight, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
@@ -187,6 +250,12 @@ let homeQueueStories: [ComponentStory] = {
     }
     func row(_ id: String, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
         ComponentStory(component: "queue-row", id: id, title: "Queue row", width: queueRowStoryWidth, height: 220, draw: draw)
+    }
+    func done(_ id: String, height: CGFloat = 220, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
+        ComponentStory(component: "done-row", id: id, title: "Done row", width: queueRowStoryWidth, height: height, draw: draw)
+    }
+    func head(_ id: String, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
+        ComponentStory(component: "recently-done-head", id: id, title: "Recently done head", width: queueRowStoryWidth, height: 60, draw: draw)
     }
     return [
         card("now") { slotCardStory(slotNow, slot: 1) },
@@ -211,5 +280,16 @@ let homeQueueStories: [ComponentStory] = {
         row("hovered") { queueRowStory(.hover, index: 4) },
         row("dragged") { queueRowStory(.dragged, index: 4) },
         row("drop-line") { queueDropStory(picked: 4, gap: 1) },
+        done("all-cells") { doneRowStory(doneStoryRows, cells: .all) },
+        done("pull-request-and-when") { doneRowStory(doneStoryRows, cells: .slotCard) },
+        done("when-only") { doneRowStory(doneStoryRows, cells: .queue) },
+        done("without-an-epic", height: 80) { doneRowStory([doneStoryRows[3]], cells: .all) },
+        done("long-title", height: 80) { doneRowStory([doneStoryRows[4]], cells: .all) },
+        done("hovered") { doneRowStory(doneStoryRows, cells: .all, hovered: 1) },
+        head("with-a-count") { recentlyDoneHeadStory(.today, count: "5") },
+        head("without-a-count") { recentlyDoneHeadStory(.today, count: nil) },
+        head("week") { recentlyDoneHeadStory(.week, count: "10") },
+        head("folded") { recentlyDoneHeadStory(.week, count: "10", open: false) },
+        head("hovered") { recentlyDoneHeadStory(.today, count: "5", hovered: true) },
     ]
 }()

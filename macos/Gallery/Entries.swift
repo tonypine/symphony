@@ -226,6 +226,12 @@ let galleryEntries: [GalleryEntry] = [
     GalleryEntry(
         id: "queue-row", title: "Queue row", kind: .component, prefixes: ["queue-row-"],
         files: ["SymphonyBarUI/DesignSystem/QueueRow.swift", "SymphonyBarUI/DesignSystem/ReorderableList.swift", "SymphonyBarUI/ListComponents.swift"]),
+    GalleryEntry(
+        id: "done-row", title: "Done row", kind: .component, prefixes: ["done-row-"],
+        files: ["SymphonyBarUI/DesignSystem/DoneRow.swift"]),
+    GalleryEntry(
+        id: "recently-done-head", title: "Recently done head", kind: .component, prefixes: ["recently-done-head-"],
+        files: ["SymphonyBarUI/DesignSystem/RecentlyDoneHead.swift", "SymphonyBarUI/DesignSystem/SegmentedControl.swift"]),
     GalleryEntry(id: "type-styles", title: "Type styles", kind: .component, prefixes: ["type-styles-"], files: []),
     // Screens.
     GalleryEntry(
@@ -237,7 +243,10 @@ let galleryEntries: [GalleryEntry] = [
         ]),
     GalleryEntry(
         id: "home", title: "Home", kind: .screen, prefixes: ["home-queue", "home-unavailable"],
-        files: ["SymphonyBar/HomeView.swift", "SymphonyBarCore/Home", "SymphonyBarUI/HomeQueueCards.swift"]),
+        files: [
+            "SymphonyBar/HomeView.swift", "SymphonyBarCore/Home", "SymphonyBarCore/RecentlyDone.swift", "SymphonyBarUI/HomeQueueCards.swift",
+            "SymphonyBarUI/HomeRecentlyDone.swift", "SymphonyBarUI/DesignSystem/DoneRow.swift", "SymphonyBarUI/DesignSystem/RecentlyDoneHead.swift",
+        ]),
     GalleryEntry(
         id: "inbox", title: "Inbox, its reviews and the peek", kind: .screen,
         prefixes: ["inbox-drawer", "inbox-blocked-", "plan-questions", "plan-unapplied", "plan-unasked", "watcher-decision", "peek-"],

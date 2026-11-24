@@ -92,6 +92,16 @@ public enum HomeQueueCards {
         )
     }
 
+    /// A Recently done entry as a done row (TP-1644): its epic, its pull request as "#1053", its repo, and when it was
+    /// done against `reference` in `timeZone`.
+    public static func done(_ entry: HomeRead.DoneEntry, reference: Date, timeZone: TimeZone = .current) -> DoneRowModel {
+        DoneRowModel(
+            identifier: entry.identifier, title: entry.title ?? entry.identifier, epic: entry.epic?.identifier,
+            pullRequest: entry.pullRequestNumber.map { "#\($0)" }, repo: entry.repoKey ?? "",
+            when: DoneWhen.text(entry.doneAt, now: reference, timeZone: timeZone)
+        )
+    }
+
     /// What a card's move does for `ticket`.
     public static func move(_ action: SlotCardModel.Action, _ ticket: HomeRead.SlotTicket) -> HomeSlotMove {
         switch action {
