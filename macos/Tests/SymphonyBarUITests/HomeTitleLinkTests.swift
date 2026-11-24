@@ -56,13 +56,17 @@ final class HomeTitleLinkTests: XCTestCase {
         return bytes
     }
 
-    /// The rows of pixels (from the top) where two drawings `width` wide differ.
-    private func differingRows(_ one: [UInt8], _ two: [UInt8], width: Int) -> Set<Int> {
-        var rows = Set<Int>()
-        for index in stride(from: 0, to: min(one.count, two.count), by: 4) where one[index..<index + 4] != two[index..<index + 4] {
-            rows.insert(index / 4 / width)
+    /// The rows of pixels (from the top) where two drawings `width` wide differ: where at least `pixels` pixels of the
+    /// row differ by more than `tolerance` in a channel. An underline changes a whole run of the row at full strength;
+    /// an offscreen drawing made under load can shift the anti-aliasing of a few edge pixels here and there by a little,
+    /// which is not a change of the drawing (TP-1647: the tests step once saw such pixels on 14 scattered rows).
+    private func differingRows(_ one: [UInt8], _ two: [UInt8], width: Int, tolerance: Int = 48, pixels: Int = 6) -> Set<Int> {
+        var counts: [Int: Int] = [:]
+        for index in stride(from: 0, to: min(one.count, two.count), by: 4)
+        where (0..<4).contains(where: { abs(Int(one[index + $0]) - Int(two[index + $0])) > tolerance }) {
+            counts[index / 4 / width, default: 0] += 1
         }
-        return rows
+        return Set(counts.filter { $0.value >= pixels }.keys)
     }
 
     // MARK: - c5: the pointing hand; the underline only under the pointer
@@ -115,7 +119,7 @@ final class HomeTitleLinkTests: XCTestCase {
         XCTAssertTrue(rows.allSatisfy { header.contains($0) }, "only the header's line changes: \(rows.sorted())")
         let link = try pixels(SlotCard(slot: 2, ticket: ticket, onOpen: { _ in }), size: size)
         let plain = try pixels(SlotCard(slot: 2, ticket: ticket), size: size)
-        XCTAssertEqual(link, plain, "at rest a clickable title looks as the title always did")
+        XCTAssertEqual(differingRows(link, plain, width: Int(size.width)), [], "at rest a clickable title looks as the title always did")
     }
 
     func testAHoveredTitleOnEachKindOfRowIsUnderlinedWithinTheRow() throws {
@@ -138,7 +142,7 @@ final class HomeTitleLinkTests: XCTestCase {
         }
         let link = try pixels(QueueRow(row, numberWidth: numberWidth, look: .rest, onOpen: { _ in }), size: size)
         let plain = try pixels(QueueRow(row, numberWidth: numberWidth, look: .rest), size: size)
-        XCTAssertEqual(link, plain, "at rest a row's clickable title looks as it always did")
+        XCTAssertEqual(differingRows(link, plain, width: width), [], "at rest a row's clickable title looks as it always did")
     }
 
     func testTheGalleryShowsTheSlotCardsTitleUnderThePointer() throws {
