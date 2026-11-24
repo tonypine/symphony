@@ -22,7 +22,9 @@ test/symphony_elixir/agent_processes_test.exs	1.5
 test/symphony_elixir/agent_providers_test.exs	0.0
 test/symphony_elixir/agent_runner_leftover_processes_test.exs	0.4
 test/symphony_elixir/agent_runner_path_unlock_test.exs	0.6
-test/symphony_elixir/agent_runner_progress_test.exs	26.3
+test/symphony_elixir/agent_runner_progress_handoff_test.exs	7.6
+test/symphony_elixir/agent_runner_progress_park_test.exs	7.9
+test/symphony_elixir/agent_runner_progress_pr_test.exs	10.7
 test/symphony_elixir/agent_runner_test.exs	4.1
 test/symphony_elixir/agent_runner_ticket_summary_test.exs	0.3
 test/symphony_elixir/agent_runner_tmp_dir_test.exs	0.3
