@@ -7,8 +7,8 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
 
   alias SymphonyElixir.Dispatch.Order
   alias SymphonyElixir.{Home, Pauses, Situation, TicketState}
-  alias SymphonyElixir.Pauses.Dependencies
   alias SymphonyElixir.Linear.Client
+  alias SymphonyElixir.Pauses.Dependencies
 
   @active_states ["Todo", "In Progress", "Code Review", "QA", "CI Fix", "Merging", "Rework"]
   @since ~U[2026-11-22 07:00:00Z]
