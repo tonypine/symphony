@@ -4,9 +4,11 @@ defmodule SymphonyElixir.Home.QueueTest do
   # left out, a sub-ticket that never ran placed under its parent, pages and a saved filter.
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Situation, TicketList, TicketState}
   alias SymphonyElixir.Dispatch.Queue, as: DispatchQueue
   alias SymphonyElixir.Home.Queue
+  alias SymphonyElixir.Situation
+  alias SymphonyElixir.TicketList
+  alias SymphonyElixir.TicketState
 
   @all %{offset: 0, limit: 100, matching: nil}
 
@@ -38,7 +40,8 @@ defmodule SymphonyElixir.Home.QueueTest do
     assert %{count: 3, total: 3, offset: 0, limit: 100, next_offset: nil} = read
 
     [first, _second, third] = read.rows
-    assert %{issue_id: "id-MT-1", title: "Ticket MT-1", phase: "Backlog", repo_key: "shop", path: [1], parent: nil, waits_on: [], sub_tickets: nil} = first
+    assert %{issue_id: "id-MT-1", title: "Ticket MT-1", phase: "Backlog", repo_key: "shop", path: [1]} = first
+    assert %{parent: nil, waits_on: [], sub_tickets: nil} = first
     assert %{situation: %{kind: _kind}, waits_on_you: false, move: nil} = first
 
     # MT-0 is done: met. MT-9 is done but needs a release: met for a build from a checkout, as the
@@ -128,7 +131,15 @@ defmodule SymphonyElixir.Home.QueueTest do
 
   defp record(identifier, phase, sort_key, attrs \\ []) do
     Map.merge(
-      %{repo_key: "default", issue_id: "id-#{identifier}", issue_identifier: identifier, title: "Ticket #{identifier}", phase: phase, priority: 1, sort_key: sort_key},
+      %{
+        repo_key: "default",
+        issue_id: "id-#{identifier}",
+        issue_identifier: identifier,
+        title: "Ticket #{identifier}",
+        phase: phase,
+        priority: 1,
+        sort_key: sort_key
+      },
       Map.new(attrs)
     )
     |> TicketState.normalize()

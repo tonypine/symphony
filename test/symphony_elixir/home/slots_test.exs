@@ -5,9 +5,14 @@ defmodule SymphonyElixir.Home.SlotsTest do
   # holder stored before slots had numbers and a count lowered under a number still held.
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Situation, TicketChecks, TicketEvents, TicketPlan, TicketPullRequest, TicketState}
   alias SymphonyElixir.Dispatch.Queue
   alias SymphonyElixir.Home.Slots
+  alias SymphonyElixir.Situation
+  alias SymphonyElixir.TicketChecks
+  alias SymphonyElixir.TicketEvents
+  alias SymphonyElixir.TicketPlan
+  alias SymphonyElixir.TicketPullRequest
+  alias SymphonyElixir.TicketState
 
   @repo "default"
   @t0 ~U[2026-11-24 08:00:00.000000Z]
@@ -34,8 +39,11 @@ defmodule SymphonyElixir.Home.SlotsTest do
   test "a holder stored before slots had numbers gets the lowest free one, and a number held above a lowered count is still an entry" do
     records = [holder("MT-1", "In Progress", 3, 0), holder("MT-2", "Code Review", nil, 1), holder("MT-3", "QA", nil, 2)]
 
-    assert [%{slot: 1, ticket: %{identifier: "MT-2"}}, %{slot: 2, ticket: %{identifier: "MT-3"}}, %{slot: 3, ticket: %{identifier: "MT-1"}}] =
-             entries(records, total: 2)
+    assert [
+             %{slot: 1, ticket: %{identifier: "MT-2"}},
+             %{slot: 2, ticket: %{identifier: "MT-3"}},
+             %{slot: 3, ticket: %{identifier: "MT-1"}}
+           ] = entries(records, total: 2)
   end
 
   test "a filled entry carries the card: status and situation, stages with tokens, tokens against the budget, the plan, the checks and the pull request" do
@@ -65,10 +73,13 @@ defmodule SymphonyElixir.Home.SlotsTest do
     live = live(%{running: [%{issue_id: "id-MT-1", run_kind: "implementation", started_at: started}]})
     runs = [%{issue_id: "id-MT-1", started_at: started, total_tokens: 1_500}]
 
-    assert [%{slot: 1, epic: nil, ticket: card}] = Slots.entries([working], live, total: 1, runs: runs, pull_request: pull_request)
+    assert [%{slot: 1, epic: nil, ticket: card}] =
+             Slots.entries([working], live, total: 1, runs: runs, pull_request: pull_request)
+
     assert_received {:pull_request, "MT-1"}
 
-    assert %{issue_id: "id-MT-1", identifier: "MT-1", title: "Ticket MT-1", repo_key: @repo, phase: "In Progress", working: true, waits_on_you: false, move: nil} = card
+    assert %{issue_id: "id-MT-1", identifier: "MT-1", title: "Ticket MT-1", repo_key: @repo, phase: "In Progress"} = card
+    assert %{working: true, waits_on_you: false, move: nil} = card
     assert card.since == at(0)
     assert card.situation.kind == "working"
     assert card.current_stage == "coding"
@@ -112,14 +123,17 @@ defmodule SymphonyElixir.Home.SlotsTest do
     asking = holder("MT-1", "Plan Review", 1, 0)
     moves = fn _record -> %{answer: %{allowed: false, reason: "no question"}, unblock: %{allowed: true, reason: nil}} end
 
-    assert [%{ticket: %{waits_on_you: true, move: %{name: "unblock", allowed: true}} = card}] = entries([asking], total: 1, moves: moves)
+    assert [%{ticket: %{waits_on_you: true, move: %{name: "unblock", allowed: true}} = card}] =
+             entries([asking], total: 1, moves: moves)
+
     assert card.situation.kind == "waiting_on_you"
   end
 
   test "an epic's slot shows the sub-ticket worked on under it, one and two levels down, and names the epic; never more filled entries than slots" do
     # Slot 1: the epic MT-E took it, its sub-epic MT-M waits on its own sub-ticket MT-L, which a run
     # works on; MT-M's record names no parent (it never ran), MT-E's record lists it.
-    epic = holder("MT-E", "Waiting on sub-tickets", 1, 0, sub_issues: [link("MT-M", "Waiting on sub-tickets"), link("MT-D", "Done"), link("MT-X", "Canceled"), link("MT-U", "Todo")])
+    subs = [link("MT-M", "Waiting on sub-tickets"), link("MT-D", "Done"), link("MT-X", "Canceled"), link("MT-U", "Todo")]
+    epic = holder("MT-E", "Waiting on sub-tickets", 1, 0, sub_issues: subs)
     mid = holder("MT-M", "Waiting on sub-tickets", 1, 1, sub_issues: [link("MT-L", "In Progress")])
     leaf = holder("MT-L", "In Progress", 1, 2, parent: %{identifier: "MT-M"})
     done = record("MT-D", "Done", parent: %{identifier: "MT-E"})
@@ -131,7 +145,8 @@ defmodule SymphonyElixir.Home.SlotsTest do
     live = live(%{running: [%{issue_id: "id-MT-L", run_kind: "implementation", started_at: DateTime.utc_now()}]})
     assert [first, second] = Slots.entries(records, live, total: 2, parents: Queue.parents(records))
 
-    assert %{slot: 1, since: since, ticket: %{identifier: "MT-L", working: true}, epic: %{identifier: "MT-E", title: "Ticket MT-E", repo_key: @repo} = named} = first
+    assert %{slot: 1, since: since, ticket: %{identifier: "MT-L", working: true}, epic: named} = first
+    assert %{identifier: "MT-E", title: "Ticket MT-E", repo_key: @repo} = named
     assert since == at(0) and named.since == at(0)
     assert first.ticket.since == at(2)
     # MT-M and MT-D under MT-E, and MT-U its record lists: the cancelled one counts in neither.

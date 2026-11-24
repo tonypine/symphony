@@ -74,16 +74,18 @@ defmodule SymphonyElixir.Home.Queue do
   `page` which rows to give. Answers the rows of the page, `count` (the rows the filter keeps),
   `total` (the rows of the whole queue), `offset`, `limit` and `next_offset` (nil on the last page).
   """
-  @spec read([map()], MapSet.t(String.t()), %{String.t() => String.t()}, Situation.live_facts(), page(), keyword()) :: map()
+  @spec read([map()], MapSet.t(String.t()), %{String.t() => String.t()}, Situation.live_facts(), page(), keyword()) ::
+          map()
   def read(records, in_work, parents, live, page, opts \\ []) do
     rows = rows(records, in_work, parents, live)
     kept = keep(rows, page.matching)
     taken = kept |> Enum.drop(page.offset) |> Enum.take(page.limit)
     next = page.offset + length(taken)
     by_id = Map.new(records, &{&1.issue_id, &1})
+    moves = Keyword.get(opts, :moves)
 
     %{
-      rows: Enum.map(taken, &with_situation(&1, Map.fetch!(by_id, &1.issue_id), records, live, Keyword.get(opts, :moves))),
+      rows: Enum.map(taken, &with_situation(&1, Map.fetch!(by_id, &1.issue_id), records, live, moves)),
       count: length(kept),
       total: length(rows),
       offset: page.offset,
@@ -97,7 +99,9 @@ defmodule SymphonyElixir.Home.Queue do
   def rows(records, in_work, parents, live) do
     terminal = MapSet.new(live.terminal_states, &normalize/1)
     by_id = Map.new(records, &{&1.issue_id, &1})
-    ids = for record <- records, is_binary(record.issue_identifier), into: %{}, do: {record.issue_identifier, record.issue_id}
+
+    ids = for %{issue_identifier: key} = record <- records, is_binary(key), into: %{}, do: {key, record.issue_id}
+
     parent_ids = for {id, parent} <- parents, parent_id = Map.get(ids, parent), into: %{}, do: {id, parent_id}
 
     open = Enum.reject(records, &MapSet.member?(terminal, normalize(&1.phase)))

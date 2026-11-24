@@ -64,14 +64,24 @@ defmodule SymphonyElixir.Home.Slots do
   # Every record that holds a slot, with its number: the stored one, else one given in the order the
   # holders took their slots.
   defp holders(records) do
-    held = for %{slot_held_since: %DateTime{} = since} = record <- records, do: %{record: record, since: since, slot: record.slot_number}
+    held =
+      for %{slot_held_since: %DateTime{} = since} = record <- records,
+          do: %{record: record, since: since, slot: record.slot_number}
+
     numbers = held |> Map.new(&{&1.record.issue_id, &1}) |> Dispatch.Slots.number_holders()
     Enum.map(held, &%{&1 | slot: &1.slot || Map.fetch!(numbers, &1.record.issue_id)})
   end
 
   defp entry(number, group, records, live, opts) do
-    [owner | through] = Enum.sort_by(group, &{DateTime.to_unix(&1.since, :microsecond), &1.record.issue_identifier || ""})
-    card = Enum.max_by(through, &{Map.has_key?(live.running, &1.record.issue_id), DateTime.to_unix(&1.since, :microsecond)}, fn -> nil end)
+    [owner | through] =
+      Enum.sort_by(group, &{DateTime.to_unix(&1.since, :microsecond), &1.record.issue_identifier || ""})
+
+    card =
+      Enum.max_by(
+        through,
+        &{Map.has_key?(live.running, &1.record.issue_id), DateTime.to_unix(&1.since, :microsecond)},
+        fn -> nil end
+      )
 
     %{
       slot: number,
