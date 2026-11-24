@@ -8,6 +8,7 @@ defmodule SymphonyElixirWeb.HomeReadTest do
   import Phoenix.ConnTest, only: [build_conn: 0, get: 2, post: 2, json_response: 2, response: 2]
   import Plug.Conn, only: [put_req_header: 3, get_resp_header: 2]
 
+  alias SymphonyElixir.Views
   alias SymphonyElixirWeb.Presenter
 
   @endpoint SymphonyElixirWeb.Endpoint
@@ -171,11 +172,92 @@ defmodule SymphonyElixirWeb.HomeReadTest do
     assert read["queue"]["roots"] |> Enum.map(& &1["identifier"]) == ["MT-Z", "MT-A"]
   end
 
+  test "the slot entries and a page of the queue rows, numbered in the stored order; a saved filter keeps the real numbers",
+       %{orchestrator: orchestrator} do
+    working = ticket("w", "MT-W", "In Progress")
+    first = ticket("a", "MT-A", "Todo")
+    _backlog = ticket("b", "MT-B", "Backlog")
+    third = ticket("c", "MT-C", "Todo")
+    :ok = RunStore.put_slot_holder("w", ~U[2026-11-24 08:00:00Z], 1)
+    put_snapshot(orchestrator, [working, first, third])
+
+    read = build_conn() |> get("/api/v1/home") |> json_response(200)
+
+    assert [%{"slot" => 1, "empty" => false, "since" => "2026-11-24T08:00:00Z", "epic" => nil, "ticket" => card}] = read["slots"]["entries"]
+    assert %{"identifier" => "MT-W", "phase" => "In Progress", "waits_on_you" => false, "plan" => nil, "checks" => nil, "pull_request" => nil} = card
+    assert [_coding, _review, _qa, _merging, _done] = card["stages"]
+    assert %{"used" => 0} = card["tokens"]
+
+    queue = read["queue"]
+    assert Enum.map(queue["rows"], &{&1["number"], &1["identifier"], &1["phase"]}) == [{"1", "MT-A", "Todo"}, {"2", "MT-B", "Backlog"}, {"3", "MT-C", "Todo"}]
+    assert %{"count" => 3, "total" => 3, "offset" => 0, "limit" => 100, "next_offset" => nil, "view" => nil, "filters" => []} = queue
+    assert [%{"repo_key" => @repo, "waits_on" => [], "parent" => nil, "situation" => %{"kind" => _kind}}, _second, _third] = queue["rows"]
+    # The tree the present Home draws is still there.
+    assert [_root | _roots] = queue["roots"]
+
+    page = build_conn() |> get("/api/v1/home?limit=2") |> json_response(200)
+    assert {Enum.map(page["queue"]["rows"], & &1["identifier"]), page["queue"]["next_offset"]} == {["MT-A", "MT-B"], 2}
+    page = build_conn() |> get("/api/v1/home?limit=2&offset=2") |> json_response(200)
+    assert {Enum.map(page["queue"]["rows"], & &1["identifier"]), page["queue"]["next_offset"]} == {["MT-C"], nil}
+
+    {:ok, view} = Views.save(%{"name" => "To do", "filters" => [%{"column" => "phase", "value" => ["Todo"]}]})
+    filtered = build_conn() |> get("/api/v1/home?view=#{view.id}") |> json_response(200)
+    assert Enum.map(filtered["queue"]["rows"], &{&1["number"], &1["identifier"]}) == [{"1", "MT-A"}, {"3", "MT-C"}]
+    assert %{"count" => 2, "total" => 3, "view" => %{"id" => id, "name" => "To do"}} = filtered["queue"]
+    assert id == view.id
+
+    inline = build_conn() |> get("/api/v1/home?phase=Backlog") |> json_response(200)
+    assert Enum.map(inline["queue"]["rows"], &{&1["number"], &1["identifier"]}) == [{"2", "MT-B"}]
+    assert [%{"column" => "phase", "value" => ["Backlog"]}] = inline["queue"]["filters"]
+
+    assert %{"error" => %{"code" => "view_not_found"}} = build_conn() |> get("/api/v1/home?view=nope") |> json_response(404)
+    assert %{"error" => %{"code" => "invalid_query"}} = build_conn() |> get("/api/v1/home?view=#{view.id}&phase=Todo") |> json_response(400)
+    assert %{"error" => %{"code" => "invalid_query", "message" => "offset must be a whole number from 0"}} = build_conn() |> get("/api/v1/home?offset=x") |> json_response(400)
+    assert %{"error" => %{"code" => "invalid_query"}} = build_conn() |> get("/api/v1/home?sort=nope") |> json_response(400)
+  end
+
+  test "a read after a queue move, a slot count change, a Start or a Stop shows it, with no poll between", %{orchestrator: orchestrator} do
+    working = ticket("w", "MT-W", "In Progress")
+    first = ticket("a", "MT-A", "Todo")
+    second = ticket("b", "MT-B", "Todo")
+    :ok = RunStore.put_slot_holder("w", ~U[2026-11-24 08:00:00Z], 1)
+    snapshot = put_snapshot(orchestrator, [working, first, second])
+
+    home = fn -> build_conn() |> get("/api/v1/home") |> json_response(200) end
+    rows = fn read -> Enum.map(read["queue"]["rows"], &{&1["number"], &1["identifier"]}) end
+    slots = fn read -> Enum.map(read["slots"]["entries"], &{&1["slot"], get_in(&1, ["ticket", "identifier"])}) end
+
+    assert rows.(home.()) == [{"1", "MT-A"}, {"2", "MT-B"}]
+
+    # A queue move (`RunStore.move_in_queue/2`, then the stream's notice): the snapshot is the same.
+    :ok = RunStore.move_in_queue("b", :top)
+    assert rows.(home.()) == [{"1", "MT-B"}, {"2", "MT-A"}]
+
+    # The slot count raised to 3: the snapshot the orchestrator publishes in the call (`slots_changed/1`).
+    :ok = GenServer.call(orchestrator, {:put, put_in(snapshot, [:slots, :total], 3), 0})
+    assert slots.(home.()) == [{1, "MT-W"}, {2, nil}, {3, nil}]
+
+    # A Start on slot 2 (the holder's record written in the call), then a Stop of MT-W.
+    :ok = RunStore.put_slot_holder("a", ~U[2026-11-24 09:00:00Z], 2)
+    read = home.()
+    assert slots.(read) == [{1, "MT-W"}, {2, "MT-A"}, {3, nil}]
+    assert rows.(read) == [{"1", "MT-B"}]
+
+    :ok = RunStore.put_slot_holder("w", nil)
+    read = home.()
+    # MT-W comes back to the queue at its stored place, behind MT-B, which the move put on top.
+    assert slots.(read) == [{1, nil}, {2, "MT-A"}, {3, nil}]
+    assert rows.(read) == [{"1", "MT-B"}, {"2", "MT-W"}]
+  end
+
   test "an unreadable or slow orchestrator reads the records alone, with an error", %{orchestrator: orchestrator} do
     ticket("w", "MT-W", "In Progress")
 
-    assert %{"error" => %{"code" => "snapshot_unavailable"}, "in_progress" => [%{"identifier" => "MT-W"}], "queue" => %{"roots" => []}} =
-             build_conn() |> get("/api/v1/home") |> json_response(200)
+    read = build_conn() |> get("/api/v1/home") |> json_response(200)
+    assert %{"error" => %{"code" => "snapshot_unavailable"}, "in_progress" => [%{"identifier" => "MT-W"}], "queue" => %{"roots" => []}} = read
+
+    # The slots numbered to the configured count, from the records alone.
+    assert [%{"slot" => 1, "empty" => true}] = read["slots"]["entries"]
 
     :ok = GenServer.call(orchestrator, {:put, %{running: []}, 200})
     assert %{error: %{code: "snapshot_timeout"}, in_progress: [%{identifier: "MT-W"}]} = Presenter.home_payload(orchestrator, 10)
@@ -213,6 +295,14 @@ defmodule SymphonyElixirWeb.HomeReadTest do
       repo_key: @repo,
       url: "https://example.org/issues/#{identifier}"
     }
+  end
+
+  # The snapshot the orchestrator publishes after walking `issues`, served by the test's orchestrator.
+  defp put_snapshot(orchestrator, issues) do
+    state = Orchestrator.put_dispatch_order_for_test(orchestrator_state(), issues)
+    {:reply, snapshot, _state} = Orchestrator.handle_call(:snapshot, {self(), make_ref()}, state)
+    :ok = GenServer.call(orchestrator, {:put, snapshot, 0})
+    snapshot
   end
 
   defp orchestrator_state do

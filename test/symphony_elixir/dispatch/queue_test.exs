@@ -82,6 +82,20 @@ defmodule SymphonyElixir.Dispatch.QueueTest do
     end
   end
 
+  describe "parents/1" do
+    test "the record's own parent wins, else the parent whose sub-issues list the ticket" do
+      records = [
+        Map.put(keyed("epic", "a1"), :sub_issues, [%{id: "never-ran"}, %{id: "ran"}, %{id: nil}]),
+        Map.put(keyed("other", "a2"), :sub_issues, nil),
+        keyed("ran", "a0", "OTHER"),
+        keyed("never-ran", "a1"),
+        %{issue_id: "no-identifier", sub_issues: [%{id: "lost"}]}
+      ]
+
+      assert Queue.parents(records) == %{"never-ran" => "EPIC", "ran" => "OTHER"}
+    end
+  end
+
   describe "insertion/2" do
     test "one key between the two neighbours, at the top or at the end" do
       siblings = [{"a", "a0"}, {"b", "a1"}, {"c", "a2"}]

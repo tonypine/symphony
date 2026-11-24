@@ -192,8 +192,16 @@ defmodule SymphonyElixir.HomeTest do
     end
 
     test "an empty queue reads as no roots" do
-      assert Home.read(nil, [], live()) == %{in_progress: [], slots: nil, queue: %{roots: []}, outside: %{backlog: 0, below_priority: 0, epic: 0, behind: 0}}
-      assert Home.read(%{entries: []}, [record("MT-1", "Done")], live()).queue == %{roots: []}
+      empty_rows = %{rows: [], count: 0, total: 0, offset: 0, limit: 100, next_offset: nil}
+
+      assert Home.read(nil, [], live()) == %{
+               in_progress: [],
+               slots: %{entries: []},
+               queue: Map.put(empty_rows, :roots, []),
+               outside: %{backlog: 0, below_priority: 0, epic: 0, behind: 0}
+             }
+
+      assert Home.read(%{entries: []}, [record("MT-1", "Done")], live()).queue == Map.put(empty_rows, :roots, [])
     end
   end
 

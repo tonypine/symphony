@@ -644,7 +644,8 @@ with an `ETag` and `304` as the ticket read does.
 ```
 
 `slots` is the dispatch order's `slots` (below): the slot count, how many are used and free, and the
-ticket that holds each slot; null before the orchestrator's first walk. Every entry of `in_progress`
+ticket that holds each slot, none of these before the orchestrator's first walk; with `entries`, the slot
+cards (below). Every entry of `in_progress`
 and of `queue.roots`, children included, carries `in_progress`: true exactly when the ticket holds a
 slot, which is the only meaning of in progress (SPEC.md Section 8.3).
 
@@ -686,8 +687,71 @@ epic (`identifier`, `title`), null when it has none. An empty queue is `"roots":
 whose tickets is in progress) and `behind` (a queued ticket whose open blocker is outside both lists, or
 behind one). A ticket in Todo the dispatch walk does not reach counts in none.
 
-When the orchestrator can't be read the situations are the records' alone, the queue is empty (no walk
-to read) and the answer carries `error` (`snapshot_timeout`, `snapshot_unavailable`).
+When the orchestrator can't be read the situations are the records' alone, the queue tree is empty (no
+walk to read), the slot entries are numbered to the configured slot count and the answer carries `error`
+(`snapshot_timeout`, `snapshot_unavailable`).
+
+## Slot entries and queue rows
+
+The new Home (`docs/design/prototypes/home-queue/README.md`) reads two more parts, built from the
+ticket records at the read (`SymphonyElixir.Home.Slots`, `SymphonyElixir.Home.Queue`): a read made
+after a queue move, a slot count change, a Start or a Stop (and the stream's `queue` notice) shows it.
+
+    GET /api/v1/home?offset=0&limit=100
+    GET /api/v1/home?view=<id>&offset=100
+    GET /api/v1/home?phase=Todo,Backlog&epic=TP-1400
+
+`slots.entries` is one entry per slot, from 1 to the slot count (and any higher number a ticket still
+holds after the count was lowered), in number order: `slot`, `empty`, `since` (when the slot's owner
+took it), `epic` and `ticket`, both null for an empty slot. A sub-ticket that runs through its
+ancestor's slot, at any depth, shares that slot's number: the card is then that ticket's (the one a run
+works on, else the one that joined the slot last) and `epic` is the slot's owner (`issue_id`,
+`identifier`, `title`, `repo_key`, `since`, and its sub-tickets `done` and `total`); otherwise `ticket`
+is the owner's own and `epic` is null.
+
+```json
+{ "slot": 1, "empty": false, "since": "2026-11-21T09:00:00Z",
+  "epic": { "identifier": "TP-1607", "title": "Home: the queue", "since": "2026-11-21T09:00:00Z", "done": 7, "total": 14, "...": "..." },
+  "ticket": {
+    "issue_id": "t5", "identifier": "TP-1631", "title": "The Home read", "repo_key": "symphony", "phase": "In Progress",
+    "situation": { "kind": "working", "...": "..." }, "since": "2026-11-24T07:16:00Z", "working": true, "waits_on_you": false, "move": null,
+    "current_stage": "coding",
+    "stages": [{ "id": "coding", "name": "Coding", "state": "current", "tokens": 1200000, "runs": 1 }, { "id": "code_review", "state": "not_yet", "...": "..." }],
+    "tokens": { "used": 1200000, "budget": 100000000 },
+    "plan": { "summary": "GET /api/v1/home gains what the new Home screen needs." },
+    "checks": { "proved": 5, "waived": 0, "total": 9, "next": { "id": "c6", "statement": "The queue is read in pages." } },
+    "pull_request": { "number": 1062, "url": "...", "state": "open", "draft": false, "files_changed": 12, "additions": 840, "deletions": 60,
+                      "branch": "auto/TP-1631", "ci": "running", "review_state": "..." }
+  } }
+```
+
+`stages` are the ticket read's `lifecycle` stages without their times; `tokens.budget` is the token cap
+(null with none). `plan`, `checks` (null for a ticket with no plan) and `pull_request` (null before one
+is read; `ci` is `failed`, `running`, `passed`, or null with no check) are null when the ticket has none
+yet.
+
+`queue.rows` is one page of the queue: every open ticket with a place in the stored queue that is not in
+work (it holds no slot, no run works on it, and no ancestor of it holds a slot or has a run), Backlog
+included, flat, in the stored order. A ticket's parent is its record's, else the ticket whose record
+lists it among its sub-issues, so a sub-ticket that never ran sits under its parent.
+
+| Field | What it holds |
+| --- | --- |
+| `issue_id`, `identifier`, `title`, `phase`, `repo_key` | The ticket. |
+| `number`, `path` | Its position: the top-level number, then its number inside each parent (`"6.1"`, `[6, 1]`), counted over the whole queue before the filter and the page. |
+| `parent` | The identifier of the row it sits under; null at the top level. |
+| `waits_on` | Its open stored dependencies: `issue_id`, `identifier` and `kind` (`done`, or `released`: it needs a release). |
+| `sub_tickets` | An epic's sub-tickets, `done` and `total` (a cancelled one counts in neither); null for a ticket with none. |
+| `situation`, `waits_on_you`, `move` | Its `situation`, whether it waits on the Director, and the move that answers it, as in `in_progress`. |
+
+Beside the rows: `count` (the rows the filter keeps), `total` (the rows of the whole queue), `offset`,
+`limit` (default 100, at most 500), `next_offset` (the `offset` of the next page, null on the last),
+`view` (the saved view asked for, null without one) and `filters`. `offset` and `limit` are whole numbers
+(from 0 and from 1). The filter is a saved view of the Tickets page (`view=<id>`) or its inline filters,
+read as `GET /api/v1/tickets` reads them, with the same errors: `404` `view_not_found`, `400`
+`invalid_query` (also for a malformed `offset` or `limit`). It keeps the rows it matches and the rows above
+them, so an epic's row stays while one of its sub-tickets matches, with only the matching sub-rows under
+it; the order stays the stored order, and the view's sort and columns do not apply.
 
 # The dispatch order
 
