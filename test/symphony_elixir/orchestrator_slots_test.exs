@@ -360,6 +360,8 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
       assert Orchestrator.available_slots_for_test(first) == 0
 
       # The gap: MT-A is done and the next sub-ticket is not ready yet. The epic keeps its slot, idle.
+      # The run it started has ended: its phase writes come before this one.
+      stop_orchestrator_agent_tasks()
       :ok = RunStore.update_ticket_state("a", %{phase: "Done"})
       epic = %{epic | sub_issues: [%{id: "a", identifier: "MT-A", state: "Done"}, %{id: "b", identifier: "MT-B", state: "Todo"}]}
       gap = holding(orchestrator_state(1), epic) |> Orchestrator.release_slots_for_test([epic, other], true)
@@ -374,6 +376,8 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
       assert %{reason: "work slots full"} = second.slot_waiting["t"]
 
       # The epic done, its slot goes to the next ticket.
+      # The run it started has ended: its phase writes come before this one.
+      stop_orchestrator_agent_tasks()
       :ok = RunStore.update_ticket_state("b", %{phase: "Done"})
 
       done =
@@ -452,10 +456,10 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
     test "a fix ticket filed for a ticket in the middle of its work runs through its slot, and the ticket then continues in its phase", ctx do
       write_slots_workflow!(ctx, max_concurrent_agents: 1)
       working = recorded(issue("p", "MT-P", "In Progress"))
-      fix = recorded(sub("f", "MT-F", "Todo", "MT-P"))
+      fix = recorded(sub("f", "MT-9", "Todo", "MT-P"))
       other = recorded(issue("t", "MT-T", "Todo"))
       ticket = {:ticket, "default", "p"}
-      {:ok, _pause} = Pauses.set(ticket, Pauses.ticket_reason(:fix_ticket, "MT-F"), set_by: Dependencies.setter(:fix_ticket))
+      {:ok, _pause} = Pauses.set(ticket, Pauses.ticket_reason(:fix_ticket, "MT-9"), set_by: Dependencies.setter(:fix_ticket))
       tracked([working, fix, other])
 
       # The ticket keeps its slot while it waits on the fix, and the fix starts through it.
@@ -471,6 +475,8 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
       assert %{reason: "work slots full"} = fixing.slot_waiting["t"]
 
       # The fix done, the pause lifts and the ticket's next run starts in the phase it stopped in, on its slot.
+      # The run it started has ended: its phase writes come before this one.
+      stop_orchestrator_agent_tasks()
       :ok = RunStore.update_ticket_state("f", %{phase: "Done"})
       Pauses.clear(ticket)
       refute Pauses.paused?(ticket)
