@@ -9,9 +9,10 @@ defmodule SymphonyElixir.Conductor.Filing do
   the `evidence` event ids it rests on), the repo it belongs to (`repo`, any repo Symphony
   manages) and how it relates to the current ticket (`relation`):
 
-    * `blocks`: the ticket is linked as blocking the current one, which is held on it until it is
-      terminal (`SymphonyElixir.SelfHeal.hold/3`), and then continues from the stage it was held
-      in;
+    * `blocks`: the ticket is filed as a **sub-ticket** of the current one and holds it until it is
+      terminal (`SymphonyElixir.SelfHeal.hold/3`): it runs through the current ticket's slot
+      (`SymphonyElixir.Dispatch.Slots`), and the current ticket then continues from the stage it
+      was held in;
     * `follow_up`: the two are linked as related, and the current ticket goes on at once.
 
   On a groomed ticket (`SymphonyElixir.TicketPlan`) the ticket is filed as a **sub-ticket** of the
@@ -29,7 +30,8 @@ defmodule SymphonyElixir.Conductor.Filing do
   A sub-ticket holds the current ticket's close (`SymphonyElixir.Conductor.Tree`). Its description
   is recorded on it as its ask (`ask.recorded`, `source: parent`), and Symphony's records take it
   at once. `blocks` and `follow_up` read as `before` and `after` there, and on a ticket with no
-  plan `before` and `after` are refused, so such a ticket keeps what it had.
+  plan `before` and `after` are refused, so such a ticket keeps what it had. A follow-up on a ticket
+  with no plan is the one ticket filed with no parent.
 
   Symphony assembles the description in the house format (Problem, Wanted behaviour, Acceptance
   criteria, User walkthrough, and the evidence from the current ticket's events, naming the ticket
@@ -73,6 +75,8 @@ defmodule SymphonyElixir.Conductor.Filing do
     "after" => {"follow_up", "follow_up"}
   }
   @plain ["blocks", "follow_up"]
+  # The one relation filed with no parent: a follow-up on a ticket with no plan holds nothing.
+  @unparented "follow_up"
   @child %{"blocks" => "before", "follow_up" => "after", "before" => "before", "after" => "after"}
   @sections [
     title: "a title",
@@ -217,7 +221,8 @@ defmodule SymphonyElixir.Conductor.Filing do
   defp relation(_route, false), do: "the ticket route's relation must be blocks or follow_up"
 
   # A sub-ticket counts against what its parent may get (`Tree.room/3`), from whatever source.
-  # A link to a ticket that exists creates nothing.
+  # A link to a ticket that exists creates nothing. A blocking ticket on a ticket with no plan is
+  # its sub-ticket too, but never refused for the tree's bounds: the ticket waits on it to go on.
   defp room(relation, existing, _context, _route) when relation in @plain or existing != nil, do: :ok
 
   defp room(_relation, nil, %{issue: issue, repo_key: repo_key}, route) do
@@ -318,7 +323,7 @@ defmodule SymphonyElixir.Conductor.Filing do
       description: description,
       labels: [@label],
       existing: existing && existing.identifier,
-      parent_id: if(relation not in @plain, do: issue.id),
+      parent_id: if(relation != @unparented, do: issue.id),
       # One that comes after waits in Backlog until its dependency is stored, as a split's does.
       state: if(relation == "after", do: @backlog)
     }
@@ -338,7 +343,7 @@ defmodule SymphonyElixir.Conductor.Filing do
   # Symphony's records take it now, not at a poll, and one that comes after gets a stored dependency
   # on its parent (`SymphonyElixir.Conductor.Tree.start/5`), so it waits on its parent's merge.
   defp sub_ticket(%{existing: false, id: id, identifier: identifier} = filed, relation, description, route, context, opts)
-       when relation not in @plain and is_binary(id) do
+       when relation != @unparented and is_binary(id) do
     %{issue: issue, repo_key: repo_key} = context
     from = issue.identifier || issue.id
     child = %{id: id, identifier: identifier, repo: route.repo}

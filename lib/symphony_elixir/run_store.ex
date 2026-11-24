@@ -2064,8 +2064,8 @@ defmodule SymphonyElixir.RunStore do
     for %{issue_id: id, parent: %{identifier: parent}} <- records, is_binary(parent), into: %{}, do: {id, parent}
   end
 
-  defp phase_map(records) do
-    for %{issue_identifier: id, phase: phase} <- records, is_binary(id), into: %{}, do: {id, phase}
+  defp id_map(records) do
+    for %{issue_identifier: identifier, issue_id: id} <- records, is_binary(identifier), is_binary(id), into: %{}, do: {identifier, id}
   end
 
   defp slot_holder(record) do
@@ -2080,10 +2080,11 @@ defmodule SymphonyElixir.RunStore do
   @doc """
   What the dispatch pass orders its candidates by, from every repository's records in one read:
   each queued ticket's place (`places`, as `queue_places/0`), the identifier of each ticket's
-  parent (`parents`, by issue id) and each ticket's phase (`phases`, by identifier); when the store
-  can't be read, its error.
+  parent (`parents`, by issue id) and each ticket's issue id (`ids`, by identifier), from which the
+  slots tell which ticket a sub-ticket runs through (`SymphonyElixir.Dispatch.Slots`); when the
+  store can't be read, its error.
   """
-  @spec queue_facts() :: %{places: map(), parents: map(), phases: map()} | {:error, term()}
+  @spec queue_facts() :: %{places: map(), parents: map(), ids: map()} | {:error, term()}
   def queue_facts do
     with :ok <- ensure_started() do
       transaction(fn ->
@@ -2092,7 +2093,7 @@ defmodule SymphonyElixir.RunStore do
         %{
           places: queue_place_map(records),
           parents: parent_map(records),
-          phases: phase_map(records)
+          ids: id_map(records)
         }
       end)
     end

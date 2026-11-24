@@ -20,9 +20,9 @@ defmodule SymphonyElixir.Dispatch.Queue do
     around the spot is rewritten with evenly spaced keys, in the same order; the rest keep theirs.
   - Priority decides no place: the `tickets.priorities` filter stays a gate on which tickets may
     start, as blockers, pauses and the other gates do.
-  - The dispatch pass walks its candidates in the stored order (`order/3`), the sub-tickets of a
-    ticket that has started first (`SymphonyElixir.Dispatch.Slots`): a free slot goes to the first one
-    that can start, and a ticket a gate holds keeps its place and is skipped.
+  - The dispatch pass walks its candidates in the stored order alone (`order/2`): a free slot goes
+    to the first one that can start, and a ticket a gate holds keeps its place and is skipped
+    (`SymphonyElixir.Dispatch.Slots` says how a ticket's sub-tickets run through its slot).
   - The first start of the release that stored the queue placed the tickets already there in the
     order the pass computed before (`placement/2`): the tickets already started in front, then the
     rest, each group closest to done first (Merging, Rework, the other active states, then Todo and
@@ -56,21 +56,8 @@ defmodule SymphonyElixir.Dispatch.Queue do
   (the store could not be read) count as no places.
   """
   @spec order([Issue.t() | term()], %{String.t() => place()} | term()) :: [Issue.t() | term()]
-  def order(issues, places) when is_list(issues), do: order(issues, places, MapSet.new())
-
-  @doc """
-  `issues` in the stored order (`order/2`), the ones whose id is in `first` (the sub-tickets of a
-  ticket that has started, `SymphonyElixir.Dispatch.Slots.first_ids/3`) ahead of the rest, each
-  group in the stored order: a free slot goes to them first.
-  """
-  @spec order([Issue.t() | term()], %{String.t() => place()} | term(), MapSet.t()) :: [Issue.t() | term()]
-  def order(issues, places, %MapSet{} = first) when is_list(issues) and is_map(places),
-    do: Enum.sort_by(issues, &{group(&1, first), order_key(&1, places)})
-
-  def order(issues, _places, first) when is_list(issues), do: order(issues, %{}, first)
-
-  defp group(%Issue{id: id}, first), do: if(MapSet.member?(first, id), do: 0, else: 1)
-  defp group(_other, _first), do: 1
+  def order(issues, places) when is_list(issues) and is_map(places), do: Enum.sort_by(issues, &order_key(&1, places))
+  def order(issues, _places) when is_list(issues), do: order(issues, %{})
 
   defp order_key(%Issue{id: id} = issue, places) do
     case Map.get(places, id) do
