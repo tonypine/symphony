@@ -54,6 +54,7 @@ defmodule SymphonyElixir.TicketStateTest do
                sort_key: nil,
                depends_on: [],
                slot_held_since: nil,
+               slot_number: nil,
                legacy_history: nil,
                updated_at: nil
              }
@@ -254,6 +255,7 @@ defmodule SymphonyElixir.TicketStateTest do
                sort_key: nil,
                depends_on: [],
                slot_held_since: nil,
+               slot_number: nil,
                legacy_history: nil,
                updated_at: nil
              }

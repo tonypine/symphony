@@ -43,7 +43,8 @@ defmodule SymphonyElixir.TicketState do
   record stored with the `blockers` an older build observed loads without them);
   since when the ticket holds a dispatch slot (`slot_held_since`, `SymphonyElixir.Dispatch.Slots`):
   set by the orchestrator when the ticket takes a slot and cleared when it gives the slot up, nil
-  while it holds none, so a restart keeps every holder;
+  while it holds none, so a restart keeps every holder; and the number of that slot
+  (`slot_number`, from 1), written and cleared with it, so a restart keeps each holder's number;
   and, on a record from before the event stream existed, the `signals`, `verdicts` and `dispatches`
   it kept then (`legacy_history`), until the ledger's backfill converts them into events
   (`SymphonyElixir.TicketEvents.Backfill`) and drops them.
@@ -339,6 +340,7 @@ defmodule SymphonyElixir.TicketState do
           sort_key: String.t() | nil,
           depends_on: [dependency()],
           slot_held_since: DateTime.t() | nil,
+          slot_number: pos_integer() | nil,
           updated_at: DateTime.t() | nil
         }
 
@@ -440,6 +442,7 @@ defmodule SymphonyElixir.TicketState do
       sort_key: sort_key(Map.get(record, :sort_key)),
       depends_on: normalize_dependencies(Map.get(record, :depends_on)),
       slot_held_since: map_datetime(record, :slot_held_since),
+      slot_number: slot_number(Map.get(record, :slot_number)),
       updated_at: map_datetime(record, :updated_at)
     }
   end
@@ -489,6 +492,7 @@ defmodule SymphonyElixir.TicketState do
       sort_key: nil,
       depends_on: [],
       slot_held_since: nil,
+      slot_number: nil,
       updated_at: nil
     }
   end
@@ -1557,6 +1561,9 @@ defmodule SymphonyElixir.TicketState do
   defp sort_key(key) do
     if SortKey.valid?(key), do: key
   end
+
+  defp slot_number(number) when is_integer(number) and number > 0, do: number
+  defp slot_number(_number), do: nil
 
   @dependency_kinds [:done, :released]
 

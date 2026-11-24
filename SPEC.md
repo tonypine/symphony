@@ -1670,9 +1670,10 @@ Fields:
     command/tool name, and a stable hash of arguments. Any successful execution or different
     execution signature resets the count.
 - Implementations MAY offer an operator control that starts a ticket's run at once (this one has
-  `POST /api/v1/control/start` with `issue_identifier` and an optional `note`). Such a control
-  dispatches the run for the ticket's current phase in the same call, not queued: it ignores
-  queue order and the concurrency limits. It MUST NOT override what a person
+  `POST /api/v1/control/start` with `issue_identifier`, an optional `note` and an optional `slot`).
+  Such a control dispatches the run for the ticket's current phase in the same call as a queue move:
+  the ticket goes to the head of the queue and takes a slot, never one over the slot count
+  (Section 8.3). It MUST NOT override what a person
   or Symphony chose to stop: it refuses while dispatch is paused, while the ticket's repository
   is paused, while the ticket has an open question, or while a run is already working on it, and
   the answer names which; a ticket in the backlog is refused with "move it first". A ticket in
@@ -4271,7 +4272,18 @@ Slots:
 - A ticket that holds a slot is in progress; that is the only meaning of in progress. The dispatch
   order read and the Home read (Section 13.4) say which ticket holds each slot, how many are free,
   and carry `in_progress` on each ticket, true exactly when it holds a slot.
-- The holders are stored on the ticket records (`slot_held_since`), so a restart keeps them.
+- The holders are stored on the ticket records (`slot_held_since`), so a restart keeps them. Each
+  slot has a number from 1, stored with its holder (`slot_number`), so a restart keeps it: a new
+  holder gets the lowest number no holder uses, and a sub-ticket running through its ancestor's slot
+  shares its number.
+- A person's Start takes a slot: the one it names, else a free one, else the one taken most
+  recently. A slot that is held is taken over: the runs working through it stop (the pull request
+  stays open), and its holder gives it up and goes to the head of the queue, not paused. A ticket
+  that holds a slot, or runs through its ancestor's slot at no cost, starts in it; a sub-ticket whose
+  ancestor's slot another sub-ticket works through swaps with it, which becomes the next to come.
+- A person's Stop frees the ticket's slot in the same call. A stopped sub-ticket goes back to the
+  head of its epic, and the epic to the head of the queue. A Start or a Stop that changes a slot or
+  the order sends the queue notice (`order`, `slots`) on the stream at once.
 - A ticket's sub-tickets run through its slot, whether or not it has work of its own: a split
   epic's sub-tickets, and a fix ticket filed for a ticket in the middle of its work, which is filed
   as its sub-ticket (the self-heal lane's fix tickets and the Conductor's blocking tickets). A
@@ -6925,8 +6937,9 @@ Minimum endpoints:
 
 - `POST /api/v1/control/stop` (OPTIONAL)
   - Ends the running agent of `issue_identifier` (the identifier or the Linear id) and records the
-    run as `stopped`, without changing the ticket's Linear state; answers `{"stopped": false}` when
-    nothing runs on it.
+    run as `stopped`, without changing the ticket's Linear state, and frees its slot in the call; a
+    ticket that holds a slot with no live run is stopped the same way. The answer names the freed
+    slot (`slot`). It answers `{"stopped": false}` when nothing runs on it and it holds no slot.
   - A stop is not a restart. Symphony's copy of the ticket still reads the state it had until a poll
     reads Linear again, so the stop pauses the ticket on a `person` reason that waits on the
     Director's Unblock: the dispatcher skips it (listed under `dispatch_skipped` with the reason's

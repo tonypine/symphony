@@ -2816,14 +2816,25 @@ store (it survives a restart); beside it the stop sets a `Blocked` hold of type 
 Linear label, shown in the Inbox as "Stopped by you". A poll that finds the ticket closed or out of
 the active states clears both; otherwise the ticket waits for a person: **Unblock** runs it again in
 place, **Restart** starts it over from main, and moving it to another state on the board clears the
-stop too.
+stop too. The stop frees the ticket's slot in the same call (the answer names it, `slot`), and a
+ticket that holds a slot between its runs or while it waits is stopped the same way. The free slot
+goes in the queue's order: first to the next sub-ticket of a ticket in progress, then to the first
+ticket that can start. A stopped sub-ticket goes back to the head of its epic, and the epic to the
+head of the queue. The open streams (`GET /api/v1/stream`) get a queue notice at once.
 
-**Start** (`POST /api/v1/control/start` with `issue_identifier` and an optional `note`) starts a
-ticket's run at once, ahead of the dispatch queue and outside its order: the run for the ticket's
-current phase is dispatched in the same call, not queued — implementation for Todo (claimed to
-In Progress first) or In Progress, the reviewer for Code Review, QA for QA, the CI fixer for CI
-Fix, the rework run for Rework. It ignores queue order, the per-repo and global concurrency limits
-(it may run one over the limit; the next cycle simply has one slot fewer).
+**Start** (`POST /api/v1/control/start` with `issue_identifier`, an optional `note` and an optional
+`slot`) starts a ticket's run at once as a queue move: the run for the ticket's current phase is
+dispatched in the same call — implementation for Todo (claimed to In Progress first) or In
+Progress, the reviewer for Code Review, QA for QA, the CI fixer for CI Fix, the rework run for
+Rework. The ticket goes to the head of the queue and takes a slot, never one over the slot count:
+the slot `slot` names (a whole number from 1 to the slot count, 422 otherwise), else a free one,
+else the one taken most recently. Slots have numbers that survive a restart. A slot that is held is
+taken over: the runs working through it stop (the pull request stays open), and the ticket that held
+it goes to the head of the queue, number 1, not paused, so it takes the next free slot. A ticket
+that holds a slot already, or a sub-ticket whose epic's slot is idle, starts in it; a sub-ticket
+started while a sibling works through its epic's slot swaps with it, and the sibling comes next. The
+answer adds the slot's number (`slot`) and, when it took one over, the ticket that held it
+(`displaced_issue_identifier`); the open streams get a queue notice at once.
 It does not override what a person or Symphony chose to stop: it is refused while Symphony is
 paused, while the ticket's repository is paused, while the ticket has an open Question, or while
 a run is already working on it — the answer names which — and a ticket in Backlog is refused with
