@@ -460,10 +460,12 @@ defmodule SymphonyElixir.Conductor.FilingTest do
     assert [%{kind: :ticket, waits_on: %{identifier: "TP-2000"}}] = pause_reasons(ctx.issue_id)
 
     # A follow-up holds nothing and is filed on its own.
-    RunStore.delete_ticket_state("new-id")
+    Process.put(:create_result, {:ok, %{id: "follow-id", identifier: "TP-2001", url: "https://linear.app/t/TP-2001"}})
+    Process.put(:read_result, {:ok, [%Issue{id: "follow-id", identifier: "TP-2001"}]})
+    on_exit(fn -> RunStore.delete_ticket_state("follow-id") end)
     assert {:ok, %{relation: "follow_up"}} = file(ctx, route(%{relation: "follow_up", title: "A follow-up"}))
     {attrs, _opts} = Process.get(:created)
     assert attrs.parent_id == nil
-    assert TicketPlan.ask("new-id") == []
+    assert TicketPlan.ask("follow-id") == []
   end
 end

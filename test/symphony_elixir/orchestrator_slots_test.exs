@@ -7,6 +7,7 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
 
   alias SymphonyElixir.Dispatch.Order
   alias SymphonyElixir.{Home, Pauses, Situation, TicketState}
+  alias SymphonyElixir.Pauses.Dependencies
   alias SymphonyElixir.Linear.Client
 
   @active_states ["Todo", "In Progress", "Code Review", "QA", "CI Fix", "Merging", "Rework"]
@@ -454,7 +455,7 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
       fix = recorded(sub("f", "MT-F", "Todo", "MT-P"))
       other = recorded(issue("t", "MT-T", "Todo"))
       ticket = {:ticket, "default", "p"}
-      {:ok, _pause} = Pauses.set(ticket, Pauses.ticket_reason(:fix_ticket, "MT-F"), set_by: %{kind: :rule, name: "Self-heal"})
+      {:ok, _pause} = Pauses.set(ticket, Pauses.ticket_reason(:fix_ticket, "MT-F"), set_by: Dependencies.setter(:fix_ticket))
       tracked([working, fix, other])
 
       # The ticket keeps its slot while it waits on the fix, and the fix starts through it.
