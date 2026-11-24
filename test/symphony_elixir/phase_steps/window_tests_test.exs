@@ -180,7 +180,14 @@ defmodule SymphonyElixir.PhaseSteps.WindowTestsTest do
 
     test "the repository's own manifest declares every script the Mac CI build's driver checks run, each with a command" do
       assert {:ok, tests} = File.read!(WindowTests.manifest_path()) |> WindowTests.parse()
-      assert Enum.map(tests, & &1.script) |> Enum.sort() == ["macos/Tests/qa-appearance-test.sh", "macos/Tests/qa-key-test.py", "macos/Tests/qa-scroll-test.py"]
+
+      assert Enum.map(tests, & &1.script) |> Enum.sort() == [
+               "macos/Tests/home-drag-test.py",
+               "macos/Tests/qa-appearance-test.sh",
+               "macos/Tests/qa-key-test.py",
+               "macos/Tests/qa-scroll-test.py"
+             ]
+
       assert Enum.all?(tests, &File.exists?(&1.script))
       assert Enum.all?(tests, &is_nil(&1.off)), "TP-1563 turned every window test on once its Window tests step saw it pass in the QA VM"
     end

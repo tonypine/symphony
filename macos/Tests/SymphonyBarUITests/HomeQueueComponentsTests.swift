@@ -291,6 +291,51 @@ final class HomeQueueComponentsTests: XCTestCase {
         XCTAssertFalse(QueueRow.starts(.dragged))
     }
 
+    /// TP-1610 c3: under a saved filter the row keeps its number under the pointer, and Start still stands in the repo's
+    /// place; the drop targets draw at the size they have at rest.
+    func testUnderASavedFilterTheHandleNeverTakesTheNumbersPlace() {
+        XCTAssertFalse(QueueRow.handles(.hover, reorderable: false))
+        XCTAssertFalse(QueueRow.handles(.dragged, reorderable: false))
+        XCTAssertTrue(QueueRow.handles(.hover, reorderable: true))
+        XCTAssertTrue(QueueRow.starts(.hover))
+
+        let row = QueueRowModel(number: 3, identifier: "TP-1596", title: "A row", lead: .glyph("clock", .textSecondary), repo: "symphony")
+        let width = QueueRow.numberWidth(widest: 3)
+        XCTAssertEqual(
+            fittingSize(QueueRow(row, numberWidth: width, picked: true).frame(width: 900)).height,
+            fittingSize(QueueRow(row, numberWidth: width).frame(width: 900)).height
+        )
+        XCTAssertEqual(
+            fittingSize(SlotCard(slot: 3, ticket: nil, dropTarget: true).frame(width: 600)),
+            fittingSize(SlotCard(slot: 3, ticket: nil).frame(width: 600))
+        )
+        XCTAssertEqual(
+            fittingSize(SlotStripLine(slot: 1, ticket: slot(.working), numberWidth: 20, dropTarget: true).frame(width: 900)),
+            fittingSize(SlotStripLine(slot: 1, ticket: slot(.working), numberWidth: 20).frame(width: 900))
+        )
+        XCTAssertEqual(fittingSize(QueueDropLine().frame(width: 900)).height, DesignTokens.HomeQueue.dropLineHeight)
+    }
+
+    func testTheAccessibilityTreeSaysWhichRowIsDraggedAndWhichSlotIsTheTarget() {
+        XCTAssertEqual(QueueRow.accessibilityState(.rest, reorderable: true, picked: false), "")
+        XCTAssertEqual(QueueRow.accessibilityState(.hover, reorderable: true, picked: false), QueueRow.handleValue)
+        XCTAssertEqual(QueueRow.accessibilityState(.hover, reorderable: false, picked: false), "", "no handle under a saved view")
+        XCTAssertEqual(QueueRow.accessibilityState(.hover, reorderable: true, picked: true), QueueRow.draggedValue)
+        XCTAssertEqual(QueueRow.accessibilityIdentifier("TP-1596"), "queue-row-TP-1596")
+        XCTAssertEqual(SlotDropTarget.cardIdentifier(1), "slot-card-1")
+        XCTAssertEqual(SlotDropTarget.lineIdentifier(2), "slot-line-2")
+        XCTAssertEqual(QueueDropLine.accessibilityIdentifier, "queue-drop-line")
+        XCTAssertEqual(SlotCard.accessibilityLabel(1, ticket: "TP-1619", dropTarget: false), "\(SlotCard.emptyLabel(1)): TP-1619")
+        XCTAssertEqual(SlotCard.accessibilityLabel(1, ticket: "TP-1619", dropTarget: true), "\(SlotCard.emptyLabel(1)): TP-1619, Drop target")
+        let line = slot(.working)
+        let said = "\(line.identifier), \(line.title), \(line.word), \(line.since)"
+        XCTAssertEqual(SlotStripLine.accessibilityLabel(line, dropTarget: false), said)
+        XCTAssertEqual(SlotStripLine.accessibilityLabel(line, dropTarget: true), "\(said), Drop target")
+        let row = QueueRowModel(number: 4, identifier: "TP-1605", title: "Sort the queue", lead: .glyph("clock", .textSecondary), repo: "symphony")
+        XCTAssertEqual(QueueRow.accessibilityLabel(row, picked: false), "Number \(row.numberText), TP-1605, Sort the queue")
+        XCTAssertEqual(QueueRow.accessibilityLabel(row, picked: true), "Number \(row.numberText), TP-1605, Sort the queue, Dragged")
+    }
+
     func testTheNumberCellIsAsWideAsTheWidestNumberOnScreen() {
         XCTAssertEqual(DesignTokens.HomeQueue.number(1_243), "1,243")
         XCTAssertEqual(DesignTokens.HomeQueue.numberTemplate(widest: 1_243), "0,000")

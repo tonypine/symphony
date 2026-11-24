@@ -67,16 +67,25 @@ public struct QueueRow: View {
     let row: QueueRowModel
     let numberWidth: CGFloat
     let look: Look?
+    let reorderable: Bool
+    let picked: Bool
     let onStart: () -> Void
     @State private var hovered = false
     @Environment(\.queueRowProbes) private var probes
 
     /// The row of `row`, its number centred in a cell `numberWidth` wide (`numberWidth(widest:)` of the numbers on
-    /// screen). `look` draws one look still, for a story; nil follows the pointer.
-    public init(_ row: QueueRowModel, numberWidth: CGFloat, look: Look? = nil, onStart: @escaping () -> Void = {}) {
+    /// screen). `look` draws one look still, for a story; nil follows the pointer. A row that may not be `reorderable`
+    /// (a saved view is picked) keeps its number under the pointer and shows no handle. A `picked` row is the one being
+    /// dragged, left behind in its place and dimmed (`.row.dragging`).
+    public init(
+        _ row: QueueRowModel, numberWidth: CGFloat, look: Look? = nil, reorderable: Bool = true, picked: Bool = false,
+        onStart: @escaping () -> Void = {}
+    ) {
         self.row = row
         self.numberWidth = numberWidth
         self.look = look
+        self.reorderable = reorderable
+        self.picked = picked
         self.onStart = onStart
     }
 
@@ -104,8 +113,9 @@ public struct QueueRow: View {
     /// The look drawn: the one asked for, or the pointer's.
     private var shown: Look { look ?? (hovered ? .hover : .rest) }
 
-    /// Whether the handle and Start are shown in place of the number and the repo.
-    public static func handles(_ look: Look) -> Bool { look != .rest }
+    /// Whether the handle is shown in place of the number: under the pointer and while dragged, in a row that may be
+    /// reordered.
+    public static func handles(_ look: Look, reorderable: Bool = true) -> Bool { reorderable && look != .rest }
     /// Whether Start stands in the repo's place: under the pointer only (a dragged row keeps its repo).
     public static func starts(_ look: Look) -> Bool { look == .hover }
 
@@ -143,11 +153,34 @@ public struct QueueRow: View {
         .frame(height: queue.rowHeight)
         .background { face(look, shape) }
         .contentShape(shape)
+        .opacity(picked ? DesignTokens.HomeQueue.draggedOpacity : 1)
         .onHover { hovered = $0 }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Number \(row.numberText), \(row.identifier), \(row.title)")
+        // The label also says it is dragged: a combined element's value does not always reach the tree mid-drag.
+        .accessibilityLabel(Self.accessibilityLabel(row, picked: picked))
+        .accessibilityValue(Self.accessibilityState(look, reorderable: reorderable, picked: picked))
+        .accessibilityIdentifier(Self.accessibilityIdentifier(row.identifier))
         .accessibilityAction(named: "Start") { onStart() }
     }
+
+    /// The row's label: its number, identifier and title, and, while it is the row left behind under a drag, `Dragged`.
+    public static func accessibilityLabel(_ row: QueueRowModel, picked: Bool) -> String {
+        let label = "Number \(row.numberText), \(row.identifier), \(row.title)"
+        return picked ? "\(label), \(draggedValue)" : label
+    }
+
+    /// The row's identifier in the accessibility tree, which a window test finds it by.
+    public static func accessibilityIdentifier(_ ticket: String) -> String { "queue-row-\(ticket)" }
+
+    /// The row's state as the accessibility tree says it (TP-1610): `Dragged` while it is the row left behind under a
+    /// drag, `Drag handle` while the handle stands in the number's place, nothing at rest.
+    public static func accessibilityState(_ look: Look, reorderable: Bool, picked: Bool) -> String {
+        if picked { return draggedValue }
+        return handles(look, reorderable: reorderable) ? handleValue : ""
+    }
+
+    public static let draggedValue = "Dragged"
+    public static let handleValue = "Drag handle"
 
     @ViewBuilder private func face(_ look: Look, _ shape: RoundedRectangle) -> some View {
         switch look {
@@ -162,7 +195,7 @@ public struct QueueRow: View {
     /// The number, and the handle in the same cell under the pointer.
     private func numberCell(_ look: Look) -> some View {
         let queue = DesignTokens.HomeQueue.self
-        let handle = Self.handles(look)
+        let handle = Self.handles(look, reorderable: reorderable)
         return ZStack {
             Text(row.numberText)
                 .textStyle(.secondary)
@@ -230,6 +263,85 @@ public struct QueueRow: View {
     }
 }
 
+/// The line in the gap a dragged row lands in (`.drop-line`): 2 pt of the accent with its glow, inset by the row's room at
+/// both ends, in the 2 pt between the row above and the one below.
+public struct QueueDropLine: View {
+    public init() {}
+
+    public var body: some View {
+        let queue = DesignTokens.HomeQueue.self
+        let shape = RoundedRectangle(cornerRadius: queue.dropLineRadius, style: .continuous)
+        shape.fill(queue.dropColor.color)
+            .frame(height: queue.dropLineHeight)
+            .background { AccentGlow(shape: shape) }
+            .padding(.horizontal, queue.rowInset)
+            .allowsHitTesting(false)
+            .accessibilityElement()
+            .accessibilityLabel(Self.accessibilityLabel)
+            .accessibilityIdentifier(Self.accessibilityIdentifier)
+    }
+
+    /// The line in the accessibility tree (TP-1610): where a drop would land, which a window test reads mid-drag.
+    public static let accessibilityLabel = "Drop here"
+    public static let accessibilityIdentifier = "queue-drop-line"
+}
+
+/// `--accent-glow` around `shape`, outside it only, as a CSS box-shadow draws.
+struct AccentGlow<S: Shape>: View {
+    let shape: S
+
+    var body: some View {
+        let queue = DesignTokens.HomeQueue.self
+        ZStack {
+            ForEach(Array(queue.dropGlow.enumerated()), id: \.offset) { index, glow in
+                // CSS blurs a shadow over its blur radius; SwiftUI's radius is about half of it.
+                shape.fill(Color.black)
+                    .padding(max(-glow.spread, 0))
+                    .shadow(color: glow.color.color.opacity(queue.dropGlowOpacity[index]), radius: glow.blur / 2, x: glow.x, y: glow.y)
+            }
+            shape.fill(Color.black).blendMode(.destinationOut)
+        }
+        .compositingGroup()
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+extension View {
+    /// Draws this view as the target under a dragged row while `on` (`.slot.drop`, `.mslot.drop`): a 2 pt accent ring
+    /// outside `shape` with the accent's glow, on the accent's tint.
+    public func dropTarget<S: InsettableShape>(_ on: Bool, in shape: S) -> some View {
+        dropTargetLook(on, in: shape)
+    }
+
+    /// The accessibility tree's word for a slot under a dragged row (TP-1610), and the element's `identifier`, which a
+    /// window test finds the card or the strip line by. Call it after the element is made.
+    public func dropTargetAccessibility(_ on: Bool, identifier: String) -> some View {
+        accessibilityValue(on ? SlotDropTarget.accessibilityValue : "")
+            .accessibilityIdentifier(identifier)
+    }
+
+    private func dropTargetLook<S: InsettableShape>(_ on: Bool, in shape: S) -> some View {
+        let queue = DesignTokens.HomeQueue.self
+        return background {
+            if on {
+                ZStack {
+                    AccentGlow(shape: shape)
+                    shape.fill(queue.dropTint.color)
+                }
+            }
+        }
+        .overlay {
+            if on {
+                shape.inset(by: -queue.dropRing / 2)
+                    .stroke(queue.dropColor.color, lineWidth: queue.dropRing)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+}
+
 // MARK: - Probes, for the tests that read where a part stands
 
 extension EnvironmentValues {
@@ -252,4 +364,15 @@ extension View {
             self
         }
     }
+}
+
+/// A slot drawn as the target under a dragged row: what the accessibility tree says of it.
+public enum SlotDropTarget {
+    public static let accessibilityValue = "Drop target"
+    /// A slot's label `label`, which also says it is the target while `on`: a card holds its parts and a strip line
+    /// combines them, and neither element's value reaches the tree mid-drag.
+    public static func accessibilityLabel(_ label: String, on: Bool) -> String { on ? "\(label), \(accessibilityValue)" : label }
+    /// The identifier of slot `slot`'s card, or of its line in the strip.
+    public static func cardIdentifier(_ slot: Int) -> String { "slot-card-\(slot)" }
+    public static func lineIdentifier(_ slot: Int) -> String { "slot-line-\(slot)" }
 }

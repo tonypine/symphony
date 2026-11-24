@@ -135,11 +135,14 @@ public struct SlotCard: View {
 
     let slot: Int
     let ticket: SlotCardModel?
+    let dropTarget: Bool
     let onAction: (SlotCardModel.Action) -> Void
 
-    public init(slot: Int, ticket: SlotCardModel?, onAction: @escaping (SlotCardModel.Action) -> Void = { _ in }) {
+    /// The card, drawn as the target under a dragged row while `dropTarget` (TP-1610).
+    public init(slot: Int, ticket: SlotCardModel?, dropTarget: Bool = false, onAction: @escaping (SlotCardModel.Action) -> Void = { _ in }) {
         self.slot = slot
         self.ticket = ticket
+        self.dropTarget = dropTarget
         self.onAction = onAction
     }
 
@@ -150,7 +153,10 @@ public struct SlotCard: View {
         if let ticket {
             card(ticket)
         } else {
-            EmptySlot(slot: slot, height: DesignTokens.HomeQueue.emptyHeight, radius: DesignTokens.Radius.card)
+            EmptySlot(
+                slot: slot, height: DesignTokens.HomeQueue.emptyHeight, radius: DesignTokens.Radius.card, dropTarget: dropTarget,
+                identifier: SlotDropTarget.cardIdentifier(slot)
+            )
         }
     }
 
@@ -187,11 +193,19 @@ public struct SlotCard: View {
         .padding(.horizontal, queue.cardSidePadding)
         .padding(.bottom, queue.cardBottomPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .dropTarget(dropTarget, in: shape)
         .background(DesignTokens.Surface.content.color, in: shape)
         .elevation(queue.cardElevation, in: shape)
         .edgeHighlight(shape)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(Self.emptyLabel(slot)): \(ticket.identifier)")
+        // A card holds its parts (`.contain`), and such an element's value does not reach the tree: its label says it.
+        .accessibilityLabel(Self.accessibilityLabel(slot, ticket: ticket.identifier, dropTarget: dropTarget))
+        .dropTargetAccessibility(dropTarget, identifier: SlotDropTarget.cardIdentifier(slot))
+    }
+
+    /// The card's label: its slot and its ticket, and, under a dragged row, that it is the drop target (TP-1610).
+    public static func accessibilityLabel(_ slot: Int, ticket: String, dropTarget: Bool) -> String {
+        SlotDropTarget.accessibilityLabel("\(emptyLabel(slot)): \(ticket)", on: dropTarget)
     }
 
     private func header(_ ticket: SlotCardModel) -> some View {
@@ -315,6 +329,9 @@ struct EmptySlot: View {
     let slot: Int
     let height: Double
     let radius: Double
+    var dropTarget = false
+    /// Its identifier in the accessibility tree: the card's or the strip line's.
+    var identifier: String
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
@@ -324,8 +341,10 @@ struct EmptySlot: View {
             .frame(maxWidth: .infinity)
             .frame(height: height)
             .overlay(shape.strokeBorder(DesignTokens.Surface.separator.color))
+            .dropTarget(dropTarget, in: shape)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(SlotCard.emptyLabel(slot)), empty")
+            .accessibilityLabel(SlotDropTarget.accessibilityLabel("\(SlotCard.emptyLabel(slot)), empty", on: dropTarget))
+            .dropTargetAccessibility(dropTarget, identifier: identifier)
     }
 }
 
@@ -466,15 +485,24 @@ public struct SlotStripLine: View {
     let ticket: SlotCardModel?
     let numberWidth: CGFloat
     let state: DesignTokens.Interaction?
+    let dropTarget: Bool
     @State private var hovered = false
     /// The queue row's probes: the strip line carries them on the same parts, so a test reads both rows' columns.
     @Environment(\.queueRowProbes) private var probes
 
-    public init(slot: Int, ticket: SlotCardModel?, numberWidth: CGFloat, state: DesignTokens.Interaction? = nil) {
+    /// The line, drawn as the target under a dragged row while `dropTarget` (TP-1610).
+    public init(slot: Int, ticket: SlotCardModel?, numberWidth: CGFloat, state: DesignTokens.Interaction? = nil, dropTarget: Bool = false) {
         self.slot = slot
         self.ticket = ticket
         self.numberWidth = numberWidth
         self.state = state
+        self.dropTarget = dropTarget
+    }
+
+    /// The line's label: what its parts say (the identifier, the title, the state and the time in the slot), and,
+    /// under a dragged row, that it is the drop target (TP-1610).
+    public static func accessibilityLabel(_ ticket: SlotCardModel, dropTarget: Bool) -> String {
+        SlotDropTarget.accessibilityLabel("\(ticket.identifier), \(ticket.title), \(ticket.word), \(ticket.since)", on: dropTarget)
     }
 
     public var body: some View {
@@ -523,12 +551,18 @@ public struct SlotStripLine: View {
             .padding(.horizontal, queue.rowInset)
             .frame(height: queue.stripHeight)
             .frame(maxWidth: .infinity)
-            .background { if let fill = shown.surface { shape.fill(fill.fill) } }
+            .background { if !dropTarget, let fill = shown.surface { shape.fill(fill.fill) } }
+            .dropTarget(dropTarget, in: shape)
             .contentShape(shape)
             .onHover { hovered = $0 }
             .accessibilityElement(children: .combine)
+            .accessibilityLabel(Self.accessibilityLabel(ticket, dropTarget: dropTarget))
+            .dropTargetAccessibility(dropTarget, identifier: SlotDropTarget.lineIdentifier(slot))
         } else {
-            EmptySlot(slot: slot, height: queue.stripHeight, radius: DesignTokens.Radius.row)
+            EmptySlot(
+                slot: slot, height: queue.stripHeight, radius: DesignTokens.Radius.row, dropTarget: dropTarget,
+                identifier: SlotDropTarget.lineIdentifier(slot)
+            )
         }
     }
 }

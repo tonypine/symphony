@@ -18,6 +18,21 @@
       "title": "QA appearance library test",
       "run": "sh Tests/qa-appearance-test.sh",
       "covers": ["priv/qa_driver/**"]
+    },
+    {
+      "script": "macos/Tests/home-drag-test.py",
+      "title": "Home's drag and drop, with the mouse",
+      "run": "python3 -I Tests/home-drag-test.py",
+      "covers": [
+        "macos/Sources/SymphonyBar/HomeView.swift",
+        "macos/Sources/SymphonyBarCore/HomeQueue.swift",
+        "macos/Sources/SymphonyBarCore/HomeQueueDrag.swift",
+        "macos/Sources/SymphonyBarCore/HomeQueueFixture.swift",
+        "macos/Sources/SymphonyBarUI/DesignSystem/QueueRow.swift",
+        "macos/Sources/SymphonyBarUI/DesignSystem/SlotCard.swift",
+        "macos/Tests/Fixtures/director-app/home-queue-drag/**",
+        "priv/qa_driver/**"
+      ]
     }
   ]
 }
