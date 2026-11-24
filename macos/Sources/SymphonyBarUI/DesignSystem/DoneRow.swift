@@ -56,15 +56,23 @@ public struct DoneRow: View {
     }
 
     /// Where a done row stands inside an epic's block in the queue (TP-1645): an empty number cell as wide as the
-    /// queue's, then the elbow one step in, so its check stands where its sub-rows' state glyphs do.
+    /// queue's, then the elbow one step in, so its check stands where its sub-rows' state glyphs do. At `depth` 0 it
+    /// stands on the queue's columns without a step (an epic slot card's done list, TP-1646): the empty number cell,
+    /// then its check where a row's state glyph stands, its title at the row's weight; `end` is the room it keeps at its
+    /// end beyond the row's own.
     public struct Nesting: Equatable {
         public var numberCell: CGFloat
         public var depth: Int
+        public var end: CGFloat
 
-        public init(numberCell: CGFloat, depth: Int = 1) {
+        public init(numberCell: CGFloat, depth: Int = 1, end: CGFloat = 0) {
             self.numberCell = numberCell
             self.depth = depth
+            self.end = end
         }
+
+        /// Whether the row is quiet (its title secondary, at the regular weight): one step in, inside an epic's block.
+        public var quiet: Bool { depth > 0 }
     }
 
     let row: DoneRowModel
@@ -103,7 +111,7 @@ public struct DoneRow: View {
             if let nesting {
                 Color.clear.frame(width: nesting.numberCell, height: queue.numberHeight)
                 if nesting.depth > 1 { Color.clear.frame(width: queue.subRowStep * Double(nesting.depth - 1) - queue.rowPartGap) }
-                QueueElbow()
+                if nesting.depth > 0 { QueueElbow() }
             }
             Image(systemName: queue.doneStatus.symbol)
                 .font(DesignTokens.TypeStyle.font(size: DesignTokens.Row.leadGlyph, weight: DesignTokens.Row.titleWeight))
@@ -121,14 +129,15 @@ public struct DoneRow: View {
                     .frame(minWidth: QueueRow.identifierWidth, alignment: .leading)
                 Text(row.title)
                     .font(DesignTokens.TypeStyle.font(
-                        size: DesignTokens.TypeStyle.rowTitle.size, weight: nesting == nil ? DesignTokens.Row.titleWeight : queue.quietTitleWeight
+                        size: DesignTokens.TypeStyle.rowTitle.size, weight: nesting?.quiet == true ? queue.quietTitleWeight : DesignTokens.Row.titleWeight
                     ))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .foregroundStyle((nesting == nil ? DesignTokens.TextColor.primary : DesignTokens.TextColor.secondary).color)
+                    .foregroundStyle((nesting?.quiet == true ? DesignTokens.TextColor.secondary : DesignTokens.TextColor.primary).color)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             trail
+                .padding(.trailing, nesting?.end ?? 0)
         }
         .padding(.horizontal, queue.rowInset)
         .frame(maxWidth: .infinity)

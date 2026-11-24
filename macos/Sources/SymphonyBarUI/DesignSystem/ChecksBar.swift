@@ -19,18 +19,8 @@ public struct ChecksBar: View {
     public var body: some View {
         let queue = DesignTokens.HomeQueue.self
         HStack(spacing: queue.checksGap) {
-            Capsule()
-                .fill(DesignTokens.StateSurface.pressed.fill)
-                .overlay(alignment: .leading) {
-                    GeometryReader { proxy in
-                        Capsule()
-                            .fill(DesignTokens.Status.done.tint)
-                            .frame(width: proxy.size.width * queue.checksFraction(proved: proved, total: total))
-                    }
-                }
-                .clipShape(Capsule())
+            DoneTrack(fraction: queue.checksFraction(proved: proved, total: total))
                 .frame(maxWidth: queue.checksTrackWidth)
-                .frame(height: queue.checksTrackHeight)
             Text(text)
                 .textStyle(.secondary)
                 .monospacedDigit()
@@ -40,5 +30,27 @@ public struct ChecksBar: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(text)
+    }
+}
+
+/// The bar of a share done (`.cbar i`): a 3 pt track on the pressed surface, filled in the done colour to `fraction`.
+/// `track` draws the track in another surface (the epic band's done count, lifted).
+struct DoneTrack: View {
+    let fraction: Double
+    var track: Color = DesignTokens.StateSurface.pressed.fill
+
+    var body: some View {
+        Capsule()
+            .fill(track)
+            .overlay(alignment: .leading) {
+                GeometryReader { proxy in
+                    Capsule()
+                        .fill(DesignTokens.Status.done.tint)
+                        .frame(width: proxy.size.width * min(max(fraction, 0), 1))
+                }
+            }
+            .clipShape(Capsule())
+            .frame(height: DesignTokens.HomeQueue.checksTrackHeight)
+            .accessibilityHidden(true)
     }
 }

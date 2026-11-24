@@ -34,6 +34,8 @@
         "macos/Tests/Fixtures/director-app/home-queue-epics/**",
         "macos/Sources/SymphonyBarUI/DesignSystem/QueueEpicParts.swift",
         "macos/Sources/SymphonyBarUI/DesignSystem/DoneRow.swift",
+        "macos/Sources/SymphonyBarUI/DesignSystem/EpicSlotCard.swift",
+        "macos/Tests/Fixtures/director-app/home-queue-epic-slot/**",
         "priv/qa_driver/**"
       ]
     }

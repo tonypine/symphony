@@ -230,18 +230,52 @@ public struct HomeRead: Equatable {
         }
     }
 
+    /// The epic that holds a slot (TP-1646): its sub-tickets run through the slot one after another. Since when it holds
+    /// the slot, its sub-tickets done and in all, its done ones oldest first, and its open ones in queue order but the one
+    /// in work, each with its dependencies.
+    public struct SlotEpic: Equatable {
+        public var issueID: String?
+        public var identifier: String
+        public var title: String?
+        public var repoKey: String?
+        public var since: Date?
+        public var done: Int
+        public var total: Int
+        public var doneSubTickets: [DoneSubTicket]
+        public var openSubTickets: [Row]
+
+        public init(
+            issueID: String? = nil, identifier: String, title: String? = nil, repoKey: String? = nil, since: Date? = nil, done: Int = 0,
+            total: Int = 0, doneSubTickets: [DoneSubTicket] = [], openSubTickets: [Row] = []
+        ) {
+            self.issueID = issueID
+            self.identifier = identifier
+            self.title = title
+            self.repoKey = repoKey
+            self.since = since
+            self.done = done
+            self.total = total
+            self.doneSubTickets = doneSubTickets
+            self.openSubTickets = openSubTickets
+        }
+
+        /// The number of the open sub-ticket at `index`: the epic's count goes on past the done ones and the one in work,
+        /// so with 7 done the first to come is 9.
+        public func number(at index: Int) -> Int { done + 2 + index }
+    }
+
     /// One slot: its number from 1, and its ticket; an empty slot holds none.
     public struct Slot: Equatable, Identifiable {
         public var number: Int
         public var since: Date?
         /// The epic whose slot it is, when the ticket runs through its epic's slot.
-        public var epic: String?
+        public var epic: SlotEpic?
         public var ticket: SlotTicket?
 
         public var id: Int { number }
         public var isEmpty: Bool { ticket == nil }
 
-        public init(number: Int, since: Date? = nil, epic: String? = nil, ticket: SlotTicket? = nil) {
+        public init(number: Int, since: Date? = nil, epic: SlotEpic? = nil, ticket: SlotTicket? = nil) {
             self.number = number
             self.since = since
             self.epic = epic
@@ -489,11 +523,63 @@ private struct WireEpicRef: Decodable {
 private struct WireSlot: Decodable {
     var slot: Int
     var since: String?
-    var epic: WireEpicRef?
+    var epic: WireSlotEpic?
     var ticket: WireSlotTicket?
 
+    enum CodingKeys: String, CodingKey { case slot, since, epic, ticket }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        slot = try container.decode(Int.self, forKey: .slot)
+        since = try container.decodeIfPresent(String.self, forKey: .since)
+        // An epic that doesn't read leaves the slot's card to show without it.
+        epic = (try? container.decodeIfPresent(WireSlotEpic.self, forKey: .epic)) ?? nil
+        ticket = try container.decodeIfPresent(WireSlotTicket.self, forKey: .ticket)
+    }
+
     var model: HomeRead.Slot {
-        HomeRead.Slot(number: slot, since: since.flatMap(SymphonyState.parseDate), epic: epic?.identifier, ticket: ticket?.ticket)
+        HomeRead.Slot(number: slot, since: since.flatMap(SymphonyState.parseDate), epic: epic?.epic, ticket: ticket?.ticket)
+    }
+}
+
+/// A slot's epic (TP-1646, `SymphonyElixir.Home.Slots`): its done sub-tickets oldest first, its open ones in queue order.
+private struct WireSlotEpic: Decodable {
+    var issueID: String?
+    var identifier: String?
+    var title: String?
+    var repoKey: String?
+    var since: String?
+    var done: Int?
+    var total: Int?
+    var doneSubTickets: [WireDoneSubTicket]?
+    var openSubTickets: [WireRow]?
+
+    enum CodingKeys: String, CodingKey {
+        case issueID = "issue_id", identifier, title, repoKey = "repo_key", since, done, total, doneSubTickets = "done_sub_tickets",
+             openSubTickets = "open_sub_tickets"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        issueID = try container.decodeIfPresent(String.self, forKey: .issueID)
+        identifier = try container.decodeIfPresent(String.self, forKey: .identifier)
+        title = try container.decodeIfPresent(String.self, forKey: .title)
+        repoKey = try container.decodeIfPresent(String.self, forKey: .repoKey)
+        since = try container.decodeIfPresent(String.self, forKey: .since)
+        done = try container.decodeIfPresent(Int.self, forKey: .done)
+        total = try container.decodeIfPresent(Int.self, forKey: .total)
+        // A list that doesn't read leaves the band to show without it.
+        doneSubTickets = (try? container.decodeIfPresent([WireDoneSubTicket].self, forKey: .doneSubTickets)) ?? nil
+        openSubTickets = (try? container.decodeIfPresent([WireRow].self, forKey: .openSubTickets)) ?? nil
+    }
+
+    /// The epic, nil for one that names no ticket.
+    var epic: HomeRead.SlotEpic? {
+        guard let name = identifier ?? issueID else { return nil }
+        return HomeRead.SlotEpic(
+            issueID: issueID, identifier: name, title: title, repoKey: repoKey, since: since.flatMap(SymphonyState.parseDate), done: done ?? 0,
+            total: total ?? 0, doneSubTickets: (doneSubTickets ?? []).compactMap(\.ticket), openSubTickets: (openSubTickets ?? []).map(\.row)
+        )
     }
 }
 

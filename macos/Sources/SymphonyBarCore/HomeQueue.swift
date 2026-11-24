@@ -50,6 +50,34 @@ public struct HomeQueueFold: Equatable {
     }
 }
 
+/// Which lists of the epic slot cards are open (TP-1646), by epic: what is still to come (the band's chevron) and what is
+/// done (the band's done count). The two are independent and both closed at first; client state over the read, kept
+/// while the app runs and never stored.
+public struct HomeEpicSlotFold: Equatable {
+    public var upcoming: Set<String>
+    public var done: Set<String>
+
+    public init(upcoming: Set<String> = [], done: Set<String> = []) {
+        self.upcoming = upcoming
+        self.done = done
+    }
+
+    /// Whether the epic `identifier`'s card shows its open sub-tickets below the card.
+    public func showsUpcoming(_ identifier: String) -> Bool { upcoming.contains(identifier) }
+    /// Whether the epic `identifier`'s card shows its done sub-tickets above the card.
+    public func showsDone(_ identifier: String) -> Bool { done.contains(identifier) }
+
+    /// The band: opens or closes what is to come, and only that.
+    public mutating func toggleUpcoming(_ identifier: String) {
+        if upcoming.contains(identifier) { upcoming.remove(identifier) } else { upcoming.insert(identifier) }
+    }
+
+    /// The done count: opens or closes what is done, and only that.
+    public mutating func toggleDone(_ identifier: String) {
+        if done.contains(identifier) { done.remove(identifier) } else { done.insert(identifier) }
+    }
+}
+
 /// The queue's rows as Home has read them so far (TP-1609): the pages of `GET /api/v1/home` by index, for the saved view
 /// in force, with how many rows the filter keeps. Home's list is virtual: it is as tall as the rows it shows on a fixed
 /// pitch, and only the rows on screen are drawn (`visibleRange`); the pages they fall in are read as they come on
@@ -374,6 +402,8 @@ public final class HomeQueueModel: ObservableObject {
     @Published public var notice: String?
     /// Recently done (TP-1644): the range and the fold picked, both ranges' counts and the entries read.
     @Published public private(set) var recentlyDone: RecentlyDoneList
+    /// The epic slot cards' lists open (TP-1646).
+    @Published public private(set) var epicSlots = HomeEpicSlotFold()
 
     private let fetch: Fetch
     private let send: Send
@@ -458,6 +488,36 @@ public final class HomeQueueModel: ObservableObject {
     public func toggleDone(epic identifier: String) async {
         pager.toggleDone(identifier)
         await show(shown)
+    }
+
+    /// An epic slot card's band (TP-1646): opens or closes the epic's open sub-tickets below the card.
+    public func toggleUpcoming(epic identifier: String) {
+        epicSlots.toggleUpcoming(identifier)
+    }
+
+    /// An epic slot card's done count: opens or closes the epic's done sub-tickets above the card.
+    public func toggleSlotDone(epic identifier: String) {
+        epicSlots.toggleDone(identifier)
+    }
+
+    /// An open sub-ticket of the epic in slot `slot`, at `from` of the card's list of what is to come, dropped into `gap`
+    /// of that list (TP-1646): the list shows it there at once, Symphony is asked to move it among its epic's
+    /// sub-tickets, and Home is read again. A refusal puts the list back as it was and says Symphony's reason. A drop at
+    /// its own place sends nothing.
+    public func moveUpcoming(inSlot slot: Int, from: Int, to gap: Int) async {
+        guard let index = slots.firstIndex(where: { $0.number == slot }), let epic = slots[index].epic,
+              let place = HomeQueueDrag.place(in: epic.openSubTickets, from: from, gap: gap)
+        else { return }
+        let before = slots
+        let identifier = epic.openSubTickets[from].identifier
+        slots[index].epic?.openSubTickets = HomeQueueDrag.moved(epic.openSubTickets, from: from, gap: gap)
+        notice = nil
+        let action = ControlAction.queueMove(identifier, place: place)
+        if case let .failed(message) = await send(action) {
+            slots = before
+            notice = ControlAPI.reason(message, for: action)
+        }
+        await refresh()
     }
 
     /// The slot count control: the cards follow at once, and the engine is told; a refusal puts the engine's count back.

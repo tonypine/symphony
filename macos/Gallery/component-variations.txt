@@ -74,6 +74,11 @@ done-row-long-title
 done-row-pull-request-and-when
 done-row-when-only
 done-row-without-an-epic
+epic-slot-card-both
+epic-slot-card-closed
+epic-slot-card-done
+epic-slot-card-done-count-hovered
+epic-slot-card-upcoming
 hairline-divider-horizontal
 hairline-divider-vertical-14
 hairline-divider-vertical-20

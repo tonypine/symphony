@@ -1424,7 +1424,10 @@ Ten more variables, read only in QA mode:
   waiting for TP-1590 to be released, the epic MOT-105 with three open and one done, HUB-213 waiting on HUB-212, TP-1700
   whose dependency is met, and the saved view "Rework" that matches TP-1596 and two of TP-975's sub-tickets; a move
   keeps its ticket's sub-tickets with it and inside its epic, and a move above a ticket it waits for and a Start of a
-  ticket that waits are refused in the engine's words), of the Inbox: `inbox` (one item of each kind, plus the Initiatives: two active, BIL-200 with BIL-206 waiting on you, one in review and one done),
+  ticket that waits are refused in the engine's words), `home-queue-epic-slot` (TP-1646: `home-queue-epics` with slot 1
+  held by the epic TP-1597, 7 of its 16 sub-tickets done, TP-1619 in work and eight to come, TP-1624 waiting on TP-1623
+  and four more each waiting on the one before; a `queue/move` or a slot `start` of one of them moves it among them or
+  swaps it with the one in work, and is refused in the engine's words as in the queue), of the Inbox: `inbox` (one item of each kind, plus the Initiatives: two active, BIL-200 with BIL-206 waiting on you, one in review and one done),
   `inbox-empty`, `inbox-unasked-choices` (`inbox` with four choices SHOP-330's plan run could not ask, so its page and its Approve sheet carry the warning), `inbox-lane-yielded` (`inbox` with DOCS-20 holding no lane because its open sub-tickets are below the priority filter, so Initiatives says why) and `inbox-decision` (TP-892's decision, with three options, with every ticket and pull request it mentions resolved
   and where TP-892 sits: 4 of its parent's 7 sub-tickets done, its pull request, two connected tickets and one
   earlier decision; TP-891's endpoint, watched in Code Review with its parent, a blocker, TP-892, and a ticket it
