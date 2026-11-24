@@ -2065,7 +2065,9 @@ defmodule SymphonyElixir.RunStore do
   end
 
   defp id_map(records) do
-    for %{issue_identifier: identifier, issue_id: id} <- records, is_binary(identifier), is_binary(id), into: %{}, do: {identifier, id}
+    for %{issue_identifier: identifier, issue_id: id} <- records, is_binary(identifier), is_binary(id), into: %{} do
+      {identifier, id}
+    end
   end
 
   defp slot_holder(record) do

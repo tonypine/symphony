@@ -4542,7 +4542,11 @@ defmodule SymphonyElixir.Orchestrator do
   defp queue_head(ordered, %State{} = state, active_states, terminal_states) do
     Enum.find_value(ordered, fn
       %Issue{id: issue_id} = issue ->
-        if slot_cost(state, issue_id) == 0, do: issue_id, else: head_id(issue, dispatch_gate_closed(issue, state, active_states, terminal_states), state)
+        if slot_cost(state, issue_id) == 0 do
+          issue_id
+        else
+          head_id(issue, dispatch_gate_closed(issue, state, active_states, terminal_states), state)
+        end
 
       _other ->
         nil
@@ -4736,8 +4740,8 @@ defmodule SymphonyElixir.Orchestrator do
   defp catch_up(%State{} = state, _issue, _gate), do: state
 
   defp catches_up?(%State{} = state, %Issue{id: issue_id} = issue, repo_key) do
-    not holds_slot?(state, issue_id) and dispatch_slots_available?(issue, state) and is_nil(taken_gate(issue, state)) and
-      PrWatch.waits_for_slot?(PrWatch.watch(issue_id, repo_key: repo_key))
+    not holds_slot?(state, issue_id) and dispatch_slots_available?(issue, state) and
+      is_nil(taken_gate(issue, state)) and PrWatch.waits_for_slot?(PrWatch.watch(issue_id, repo_key: repo_key))
   end
 
   # Dispatch read the issue again from Linear and found it no longer dispatchable, or found no

@@ -374,7 +374,12 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
 
       # The epic done, its slot goes to the next ticket.
       :ok = RunStore.update_ticket_state("b", %{phase: "Done"})
-      done = Orchestrator.release_slots_for_test(holding(orchestrator_state(1), epic), [%{epic | state: "Done"}, other], true)
+
+      done =
+        orchestrator_state(1)
+        |> holding(epic)
+        |> Orchestrator.release_slots_for_test([%{epic | state: "Done"}, other], true)
+
       assert done.slot_holders == %{}
       assert Map.keys(Orchestrator.dispatch_chosen_issues_for_test([other], done).running) == ["t"]
     end
@@ -389,7 +394,8 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
       :ok = RunStore.add_dependency("c", "a", :released)
       tracked([epic, a, b, c, other])
 
-      dispatched = Orchestrator.dispatch_chosen_issues_for_test([epic, a, b, c, other], holding(orchestrator_state(2), epic))
+      state = holding(orchestrator_state(2), epic)
+      dispatched = Orchestrator.dispatch_chosen_issues_for_test([epic, a, b, c, other], state)
       assert Enum.sort(Map.keys(dispatched.running)) == ["a", "b"]
       assert %{gate: :depends_on} = dispatched.dispatch_skipped["c"]
       assert %{reason: "work slots full"} = dispatched.slot_waiting["t"]
@@ -452,7 +458,11 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
       tracked([working, fix, other])
 
       # The ticket keeps its slot while it waits on the fix, and the fix starts through it.
-      state = holding(orchestrator_state(1), working) |> Orchestrator.release_slots_for_test([working, fix, other], true)
+      state =
+        orchestrator_state(1)
+        |> holding(working)
+        |> Orchestrator.release_slots_for_test([working, fix, other], true)
+
       assert Map.keys(state.slot_holders) == ["p"]
       fixing = Orchestrator.dispatch_chosen_issues_for_test([working, fix, other], state)
       assert Map.keys(fixing.running) == ["f"]
@@ -596,7 +606,9 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
 
   # A plan parent whose approved sub-tickets are open waits on them (the `:sub_tickets` gate).
   defp epic(id, identifier, subs) do
-    sub_issues = for {sub_id, sub_identifier, state} <- subs, do: %{id: sub_id, identifier: sub_identifier, state: state}
+    sub_issues =
+      for {sub_id, sub_identifier, state} <- subs, do: %{id: sub_id, identifier: sub_identifier, state: state}
+
     issue(id, identifier, "In Progress", labels: ["plan"], sub_issues: sub_issues)
   end
 
