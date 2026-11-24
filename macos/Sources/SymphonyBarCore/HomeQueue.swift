@@ -66,13 +66,17 @@ public struct HomeQueuePager: Equatable {
         fresh = []
     }
 
-    /// Drops the stale pages outside `range`: they would show rows that may have moved.
-    public mutating func dropStale(outside range: Range<Int>) {
+    /// Drops the stale pages outside `range`: they would show rows that may have moved. Returns the offsets of the
+    /// pages dropped, whose conditional-read tags the caller forgets, so their next read comes back in full.
+    @discardableResult
+    public mutating func dropStale(outside range: Range<Int>) -> [Int] {
         let keep = Set(pages(covering: range))
-        for offset in stale where !keep.contains(offset) {
+        let dropped = stale.subtracting(keep).sorted()
+        for offset in dropped {
             for index in offset..<(offset + pageSize) { rows[index] = nil }
         }
         stale = stale.intersection(keep)
+        return dropped
     }
 
     /// The offsets of the pages that hold the rows of `range`.
@@ -182,7 +186,8 @@ public final class HomeQueueModel: ObservableObject {
         var offsets = [0] + pager.pagesToRead(for: visible)
         offsets = offsets.reduce(into: [Int]()) { if !$0.contains($1) { $0.append($1) } }
         for offset in offsets { await read(offset) }
-        pager.dropStale(outside: visible)
+        // A dropped page holds no rows, so a `304` to its next read would leave it blank: its tag goes with it.
+        for offset in pager.dropStale(outside: visible) { reads.forget(HomeRead.path(offset: offset, view: view)) }
         if refreshAgain {
             refreshAgain = false
             await refresh()

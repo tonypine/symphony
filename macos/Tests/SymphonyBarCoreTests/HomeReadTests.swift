@@ -330,7 +330,7 @@ final class HomeReadTests: XCTestCase {
         pager.invalidate()
         XCTAssertEqual(pager.pagesToRead(for: 0..<4), [0, 2])
         XCTAssertEqual(pager.row(at: 2)?.identifier, "C", "a stale page is drawn until it is read again")
-        pager.dropStale(outside: 0..<2)
+        XCTAssertEqual(pager.dropStale(outside: 0..<2), [2])
         XCTAssertNil(pager.row(at: 2))
         XCTAssertEqual(pager.row(at: 0)?.identifier, "A")
         // A queue that shrank leaves no row past its end.
@@ -352,6 +352,36 @@ final class HomeReadTests: XCTestCase {
         XCTAssertEqual(tags, [nil, "v1"])
         XCTAssertEqual(model.pager.row(at: 0)?.identifier, "A")
         XCTAssertEqual(model.slotCount, 1)
+    }
+
+    func testAPageDroppedOffScreenIsReadInFullWhenItComesBack() async {
+        // Symphony answers 304 to every read that sends a tag: the queue never changes.
+        func page(_ offset: Int) -> Data {
+            let rows = (offset..<(offset + 100)).map { #"{"identifier": "T-\#($0)", "number": "\#($0 + 1)"}"# }.joined(separator: ",")
+            return Data(#"{"slots": {"total": 1, "entries": []}, "queue": {"rows": [\#(rows)], "count": 300, "total": 300}}"#.utf8)
+        }
+        var reads: [(path: String, tag: String?)] = []
+        let model = HomeQueueModel(fetch: { path, tag in
+            reads.append((path, tag))
+            if tag != nil { return .unchanged }
+            let offset = path.contains("offset=100") ? 100 : 0
+            return .changed(.loaded(page(offset)), etag: "v-\(offset)")
+        }, send: { _ in .done })
+        await model.refresh()
+        await model.show(100..<130)
+        XCTAssertEqual(model.pager.row(at: 100)?.identifier, "T-100")
+
+        // Back to the top, then a poll's refresh drops page 100, which is off screen.
+        await model.show(0..<30)
+        await model.refresh()
+        XCTAssertNil(model.pager.row(at: 100))
+
+        // Scrolling back reads page 100 without its old tag, so its rows are drawn again.
+        reads = []
+        await model.show(100..<130)
+        XCTAssertEqual(reads.map(\.path), ["api/v1/home?offset=100&limit=100"])
+        XCTAssertNil(reads.first?.tag)
+        XCTAssertEqual(model.pager.row(at: 100)?.identifier, "T-100")
     }
 
     // MARK: - No read to show
