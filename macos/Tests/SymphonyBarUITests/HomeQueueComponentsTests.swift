@@ -236,6 +236,35 @@ final class HomeQueueComponentsTests: XCTestCase {
         return probes.mapValues { $0.convert($0.bounds, to: host) }
     }
 
+    /// Where each part of a strip line stands, in a line 900 wide on the same number cell as `parts`.
+    private func stripParts() -> [QueueRow.Part: CGRect] {
+        let probes = Dictionary(uniqueKeysWithValues: QueueRow.Part.allCases.map { ($0, NSView()) })
+        let host = NSHostingView(
+            rootView: SlotStripLine(slot: 1, ticket: slot(.working), numberWidth: QueueRow.numberWidth(widest: row.number))
+                .frame(width: 900)
+                .environment(\.queueRowProbes, probes)
+                .environment(\.offscreenSnapshot, true)
+        )
+        host.frame = CGRect(x: 0, y: 0, width: 900, height: DesignTokens.HomeQueue.stripHeight)
+        host.layoutSubtreeIfNeeded()
+        return probes.mapValues { $0.convert($0.bounds, to: host) }
+    }
+
+    /// TP-1609 QA (steps 8 and 10): the strip's dot, identifier and title start where the queue row's do, its state
+    /// badge ends where the row's badges end and its time ends where the row's repo ends, so the strip stands over the
+    /// queue's columns. A gap or a cell width changed in one of them and not the other fails here.
+    func testTheStripLinesColumnsStandOverTheQueueRowsColumns() {
+        let row = parts(.rest)
+        let strip = stripParts()
+        for part in [QueueRow.Part.lead, .identifier, .title] {
+            let line = strip[part] ?? .null, under = row[part] ?? .null
+            XCTAssertGreaterThan(line.width, 0, "the strip draws its \(part)")
+            XCTAssertEqual(line.minX, under.minX, accuracy: 0.5, "the strip's \(part) starts over the row's")
+        }
+        XCTAssertEqual((strip[.marks] ?? .null).maxX, (row[.marks] ?? .null).maxX, accuracy: 0.5, "the state badge ends over the row's badges")
+        XCTAssertEqual((strip[.repo] ?? .null).maxX, (row[.repo] ?? .null).maxX, accuracy: 0.5, "the time ends over the row's repo")
+    }
+
     func testOnHoverTheHandleAndStartTakeTheNumbersAndTheReposPlacesAndNothingShifts() {
         let rest = parts(.rest)
         let hover = parts(.hover)

@@ -2,6 +2,7 @@ import AppKit
 import Charts
 import SwiftUI
 import SymphonyBarCore
+import SymphonyBarUI
 
 /// D8: Usage over the Insights slice (TP-1463), from `/api/v1/aggregate` and `/api/v1/state`.
 struct UsageContent: View {
@@ -105,5 +106,65 @@ private struct HeavyTicketRow: View {
         case .near: DesignTokens.Status.you.tint
         case .atLimit: DesignTokens.Status.problem.tint
         }
+    }
+}
+
+// MARK: - C11: meters
+
+struct MeterView: View {
+    let meter: Overview.Meter
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(meter.label).font(DesignTokens.TypeStyle.body.font)
+                Spacer(minLength: DesignTokens.Space.s2)
+                Text(meter.value)
+                    .font(DesignTokens.TypeStyle.secondary.font)
+                    .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                    .monospacedDigit()
+                    .contentTransition(.numericText())
+            }
+            if let fraction = meter.fraction {
+                MeterBar(fraction: fraction, tint: tint)
+            }
+            if let note = meter.note {
+                Text(note)
+                    .font(DesignTokens.TypeStyle.caption.font)
+                    .foregroundStyle(DesignTokens.TextColor.secondary.color)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(meter.accessibilityLabel + (meter.note.map { ", \($0)" } ?? ""))
+    }
+
+    private var tint: Color {
+        switch meter.level {
+        case .normal: DesignTokens.ColorToken.accent.color
+        case .near: DesignTokens.Status.you.tint
+        case .atLimit: DesignTokens.Status.problem.tint
+        }
+    }
+}
+
+/// A meter's bar: the fill carries the level, on a track that is a light step of the same hue (design system §3.3).
+/// Drawn rather than a `Gauge`, whose AppKit control doesn't render offscreen.
+struct MeterBar: View {
+    let fraction: Double
+    let tint: Color
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                Capsule().fill(tint.opacity(0.2))
+                Capsule()
+                    .fill(tint)
+                    .frame(width: max(proxy.size.width * fraction, fraction > 0 ? proxy.size.height : 0))
+            }
+        }
+        .frame(height: 6)
+        .animation(reduceMotion ? nil : .standard, value: fraction)
+        .accessibilityHidden(true)
     }
 }

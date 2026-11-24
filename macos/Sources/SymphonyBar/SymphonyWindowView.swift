@@ -117,13 +117,12 @@ final class SymphonyWindowModel: ObservableObject {
     @Published private(set) var inboxMoveError: String?
     /// The banner after a move, with Undo for 10 s (C18).
     @Published private(set) var inboxBanner: InboxBanner?
-    /// Home's read (`GET /api/v1/home`, TP-1499), read again after each state poll while Home shows.
-    @Published private(set) var home: HomeRead?
-    /// What the last Home read got when it got none (an older Symphony answers 404), nil after one that did.
-    @Published private(set) var homeResult: EndpointResult?
-    /// The tag of the Home read the page shows: an unchanged read comes back `304` with no body.
-    var homeReads = ConditionalReads()
-    var readingHome = false
+    /// Home's slots and paged queue (`GET /api/v1/home`, TP-1609), read again after each state poll while Home shows and
+    /// at once on each `event: queue` of the live channel.
+    lazy var homeQueue = HomeQueueModel(
+        fetch: { [client] path, tag in await client.get(path, ifNoneMatch: tag) },
+        send: { [weak self] action in await self?.onControl(action) ?? .done }
+    )
     /// The last Initiatives Symphony served, read again after each state poll.
     @Published private(set) var initiatives: InitiativesPayload?
     /// What the last Initiatives read got when it got none, nil after one that did.
@@ -473,6 +472,10 @@ final class SymphonyWindowModel: ObservableObject {
         artifactImages = ArtifactImages(get: { [client] path in await client.answer(path) })
         history = NavigationHistory(current: .view(selection))
         ticketFeed.listen(to: eventStream)
+        // A queue move, a slot count change, a Start or a Stop: Home reads the slots and the rows on screen again at once.
+        eventStream.queueNotices
+            .sink { [weak self] _ in self?.homeQueueChanged() }
+            .store(in: &cancellables)
         ticketFeed.onChange = { [weak self] events in self?.ticketEventsChanged(events) }
         // The client decodes the state off the main actor and publishes each part only when it changed (TP-1480).
         client.$overviewState
@@ -1255,23 +1258,35 @@ struct SymphonyDetail: View {
     }
 }
 
-/// D1: Home (TP-1499), from `GET /api/v1/home`: what is in progress, under its epics, and the queue as a tree, in every
-/// repo (Home has no controls of its own, so no scope, TP-1497). A row's Answer opens its question in the Inbox's drawer,
-/// whose moves ask with the Inbox's consequence sheets; the banner after one sits under the page. A Symphony that
-/// predates the read gets the Empty state that asks for an update, never the old board.
+/// D1: Home (TP-1609), from `GET /api/v1/home`: the slots and the whole queue, in every repo. A card's Answer… opens
+/// its question in the Inbox's drawer, whose moves ask with the Inbox's consequence sheets; the banner after one sits
+/// under the page. A Symphony that predates the read gets the Empty state that asks for an update.
 struct OverviewContent: View {
     @ObservedObject var model: SymphonyWindowModel
     @ObservedObject var client: LiveAPIClient
+    @ObservedObject var home: HomeQueueModel
+
+    init(model: SymphonyWindowModel, client: LiveAPIClient) {
+        self.model = model
+        self.client = client
+        home = model.homeQueue
+    }
 
     var body: some View {
         content
-            .onAppear { model.readHome() }
+            .onAppear {
+                model.readHome()
+                Task { await model.readTicketViews() }
+            }
     }
 
     @ViewBuilder private var content: some View {
-        if let lists = model.homeLists {
+        if home.loaded {
             VStack(spacing: 0) {
-                HomeView(lists: lists, actions: model.homeActions)
+                HomeView(
+                    model: home, views: model.ticketViews, notices: model.homeNotices, reference: model.overviewState?.generatedAt ?? Date(),
+                    actions: model.homeActions
+                )
                 if let banner = model.inboxBanner {
                     InboxBannerView(banner: banner, undo: { model.undo(banner) }, close: model.dismissBanner)
                         .padding(DesignTokens.Space.s3)
@@ -1281,70 +1296,62 @@ struct OverviewContent: View {
             .animation(.default, value: model.inboxBanner)
             .modifier(InboxDrawerPresenter(model: model))
             .modifier(InboxSheetPresenter(model: model))
-        } else if model.homeResult == .unsupported || client.stateResult == .unsupported {
+        } else if home.failure == .unsupported || client.stateResult == .unsupported {
             EmptyState(title: EndpointPlaceholder.updateSymphony, symbol: EndpointPlaceholder.updateSymbol)
-        } else if case let .failed(message)? = model.homeResult {
-            EmptyState(title: message, symbol: HomeLists.failureSymbol)
+        } else if case let .failed(message)? = home.failure {
+            EmptyState(title: message, symbol: HomeQueueModel.failureSymbol)
         } else {
-            EmptyState(title: HomeLists.reading, symbol: SymphonyView.overview.symbol, showsSpinner: true)
+            EmptyState(title: HomeQueueModel.reading, symbol: SymphonyView.overview.symbol, showsSpinner: true)
         }
     }
 }
 
 extension SymphonyWindowModel {
-    /// Home's two lists, their ages on Symphony's clock, under the line of a provider that refuses the agents' sign-in.
-    var homeLists: HomeLists? {
-        let reference = overviewState?.generatedAt ?? Date()
-        let notices = overviewState.map { HomeLists.notices($0.snapshot, reference: reference) } ?? []
-        return home.map { HomeLists(read: $0, reference: reference, notices: notices) }
+    /// The lines of a provider that refuses the agents' sign-in, above Home's sections.
+    var homeNotices: [String] {
+        guard let state = overviewState else { return [] }
+        return HomeQueueModel.notices(state.snapshot, reference: state.generatedAt ?? Date())
     }
 
-    /// What Home's rows do: open the ticket's page or the epic in Initiatives, and the row's move as the ticket page
-    /// makes it. Answer opens the ticket's question in the Inbox's drawer, as the ticket page's decisions line does;
-    /// Unblock sends the control call the Action rail sends.
+    /// What Home's controls do. Answer… opens the ticket's question in the Inbox's drawer, as the ticket page's
+    /// decisions line does; Message… opens the ticket's page, whose box writes to it; Stop, Start and the slot count are
+    /// control calls, after which Home reads again.
     var homeActions: HomeActions {
         HomeActions(
+            slotMove: { [weak self] move in self?.performHomeMove(move) },
+            start: { [weak self] identifier in self?.homeQueueTask { await $0.perform(TicketStart.action(identifier)) } },
+            setSlots: { [weak self] count in self?.homeQueueTask { await $0.setSlots(count) } },
+            pick: { [weak self] id in self?.homeQueueTask { await $0.pick(view: id) } },
+            show: { [weak self] range in self?.homeQueueTask { await $0.show(range) } },
             openTicket: { [weak self] in self?.openTicket($0) },
-            openEpic: { [weak self] in self?.showInitiative($0) },
-            perform: { [weak self] row in self?.performHomeMove(row) }
+            dismissNotice: { [weak self] in self?.homeQueue.notice = nil }
         )
     }
 
-    func performHomeMove(_ row: HomeLists.Row) {
-        guard let name = row.move?.name else { return }
-        switch TicketActionRail.Move(rawValue: name) {
-        case .answer?:
-            if let issueID = row.issueID { reviewInDrawer(issueID) } else { openTicket(row.identifier) }
-        case .unblock?:
-            send(.unblock(row.identifier))
-        default:
-            openTicket(row.identifier)
+    func performHomeMove(_ move: HomeSlotMove) {
+        switch move {
+        case let .answer(issueID): reviewInDrawer(issueID)
+        case let .openTicket(identifier): openTicket(identifier)
+        case let .control(action): homeQueueTask { await $0.perform(action) }
         }
     }
 
-    /// Reads Home while it shows, after each state poll: the read sends the tag of the one the page shows, so while
+    private func homeQueueTask(_ work: @escaping (HomeQueueModel) async -> Void) {
+        let home = homeQueue
+        Task { await work(home) }
+    }
+
+    /// Reads Home while it shows, after each state poll: each page sends the tag of the one the page shows, so while
     /// nothing changed Symphony answers `304` and the page stays as it is.
     func readHome() {
-        guard selection == .overview, !showsPage, !readingHome, state.countsKnown else { return }
-        readingHome = true
-        Task {
-            let result = await client.get(HomeRead.path, ifNoneMatch: homeReads.tag(for: HomeRead.path))
-            readingHome = false
-            guard case let .changed(data) = homeReads.take(result, for: HomeRead.path) else { return }
-            let decoded = await Task.detached(priority: .userInitiated) { data.flatMap(HomeRead.decode) }.value
-            if let decoded {
-                if home != decoded { home = decoded }
-                if homeResult != nil { homeResult = nil }
-                return
-            }
-            // No read to show: an older Symphony's 404 drops the lists for the Empty state that asks for an update; a
-            // failure keeps the lists the page shows, or says what went wrong when it shows none. A body that came but
-            // doesn't decode keeps its tag, so it is forgotten here: the next read is whole, never a 304 for good.
-            homeReads.forget(HomeRead.path)
-            let failure = HomeLists.failure(after: result)
-            if failure == .unsupported { home = nil }
-            if homeResult != failure { homeResult = failure }
-        }
+        guard selection == .overview, !showsPage, state.countsKnown else { return }
+        homeQueueTask { await $0.refresh() }
+    }
+
+    /// The live channel's `event: queue`: Home reads again at once while it shows; otherwise it reads when it opens.
+    func homeQueueChanged() {
+        guard selection == .overview, !showsPage else { return }
+        homeQueueTask { await $0.queueChanged() }
     }
 }
 

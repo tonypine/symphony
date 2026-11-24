@@ -2,98 +2,258 @@ import SwiftUI
 import SymphonyBarCore
 import SymphonyBarUI
 
-/// What Home's rows do.
+/// What Home's controls do (TP-1609).
 struct HomeActions {
-    /// A click on a ticket's row, or Return on it, opens the ticket's page, by identifier.
+    /// A slot card's move: Answer…, Message… or Stop.
+    var slotMove: (HomeSlotMove) -> Void = { _ in }
+    /// Start on a queue row, by identifier.
+    var start: (String) -> Void = { _ in }
+    /// The slot count control.
+    var setSlots: (Int) -> Void = { _ in }
+    /// A saved view picked above the queue, nil for every ticket.
+    var pick: (String?) -> Void = { _ in }
+    /// The rows on screen changed: their pages are read.
+    var show: (Range<Int>) -> Void = { _ in }
+    /// A click on a row opens the ticket's page.
     var openTicket: (String) -> Void = { _ in }
-    /// A click on an epic's row, or Return on it, opens Initiatives on the epic, by issue id.
-    var openEpic: (String) -> Void = { _ in }
-    /// A row's button, or Space on its row: the move the read names (Answer, Unblock), through the ticket page's path.
-    var perform: (HomeLists.Row) -> Void = { _ in }
+    /// Dismisses the line that says why a move didn't go through.
+    var dismissNotice: () -> Void = {}
 }
 
-/// Home in a scroll view, laid out for the width it gets (TP-1499).
+/// Home, the window to Symphony's queue (TP-1609, `docs/design/prototypes/home-queue/`): two sections on one 32 pt
+/// gutter. In progress, one card per slot (an empty slot an outline reading "Slot N") with the slot count control beside
+/// its title; then Queue, the saved views of the Tickets page as pills and every ticket that holds no slot in its stored
+/// order with its position number. The list is virtual: it is as tall as all its rows, and only the rows on screen are
+/// drawn, their pages read as they come on screen. Once the cards scroll out of view, a strip with one line per slot
+/// stays on top, its columns over the queue's columns.
 struct HomeView: View {
-    let lists: HomeLists
+    @ObservedObject var model: HomeQueueModel
+    /// The Tickets page's saved views.
+    let views: [TicketView]
+    /// What holds the whole factory, one line each above the sections (TP-1515).
+    let notices: [String]
+    /// Symphony's clock, which the cards' times are measured against.
+    let reference: Date
     let actions: HomeActions
+
+    @State private var scrollTop: Double = 0
+    @State private var viewport: Double = 0
+    @State private var listTop: Double = 0
+    @State private var cardsBottom: Double = 0
+    /// The scroll view's content width: its own width less a shown scroller, so the strip spans what the rows span.
+    @State private var contentWidth: Double = 0
+
+    private static let space = "home-content"
 
     var body: some View {
+        let range = HomeQueuePager.visibleRange(scrollTop: scrollTop, listTop: listTop, viewport: viewport, count: model.pager.count)
+        let numberWidth = QueueRow.numberWidth(widest: model.pager.widestNumber(in: range))
         ScrollView {
-            HomeBody(lists: lists, actions: actions)
+            HomePageContent(
+                model: model, views: views, notices: notices, reference: reference, actions: actions, range: range, numberWidth: numberWidth,
+                space: Self.space, cardsBottom: { cardsBottom = $0 }, listTop: { listTop = $0 }
+            )
+            .onGeometryChange(for: Double.self) { $0.size.width } action: { contentWidth = $0 }
         }
+        .onScrollGeometryChange(for: [Double].self) { [$0.contentOffset.y + $0.contentInsets.top, $0.containerSize.height] } action: { _, value in
+            scrollTop = value[0]
+            viewport = value[1]
+        }
+        // The scroll geometry reports only a change, never its first value: the view's own height, reported from the
+        // first layout, gives the rows on screen before any scroll.
+        .onGeometryChange(for: Double.self) { $0.size.height } action: { viewport = $0 }
+        .overlay(alignment: .topLeading) {
+            if HomeStrip.pinned(scrollTop: scrollTop, cardsBottom: cardsBottom), !model.cards.isEmpty {
+                // On the content's width, not the scroll view's: a shown scroller takes its width from the content's
+                // right, and the strip's lines end where the rows and the cards end.
+                HomeStrip(cards: model.cards, reference: reference, numberWidth: numberWidth)
+                    .frame(width: contentWidth > 0 ? contentWidth : nil)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if let notice = model.notice {
+                HomeNotice(text: notice, dismiss: actions.dismissNotice)
+                    .padding(DesignTokens.Space.s3)
+            }
+        }
+        .onChange(of: range, initial: true) { _, range in actions.show(range) }
     }
 }
 
-/// Home (TP-1499, `docs/design/director-window-and-home.md` § Home): two tree lists and nothing else, "In progress"
-/// (an epic's tickets one step in under its row) and "Queue" (a ticket one step in under the ticket it waits on, past
-/// two steps folded into a pill), each with its title in the sentence style and left out when it has no entry. The
-/// arrow keys walk the rows of both lists in order, Return opens the row, Space presses its button, Right and Left
-/// open and fold a branch. Outside the scroll view, so it also renders offscreen.
-struct HomeBody: View {
-    let lists: HomeLists
+/// Home's two sections, outside the scroll view so they also render offscreen: the rows of `range` drawn, the cards'
+/// bottom and the list's top reported in the coordinate space `space`.
+struct HomePageContent: View {
+    @ObservedObject var model: HomeQueueModel
+    let views: [TicketView]
+    let notices: [String]
+    let reference: Date
     let actions: HomeActions
-    /// The queue's chains opened by their pill, kept while the page is open.
-    @State private var opened: Set<String>
-    @State private var progressSelection: TreeKey<String>?
-    @State private var queueSelection: TreeKey<String>?
-    @State private var progressFocused = false
-    @State private var queueFocused = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    /// `opened` and `selection` draw a chain open and a row picked at first, for a snapshot.
-    init(lists: HomeLists, actions: HomeActions = HomeActions(), opened: Set<String> = [], selection: TreeKey<String>? = nil) {
-        self.lists = lists
-        self.actions = actions
-        _opened = State(initialValue: opened)
-        let inProgress = selection.map { key in TreeLines.lines(lists.progress).contains { $0.key == key } } ?? false
-        _progressSelection = State(initialValue: inProgress ? selection : nil)
-        _queueSelection = State(initialValue: inProgress ? nil : selection)
-    }
+    let range: Range<Int>
+    let numberWidth: CGFloat
+    var space = "home-content"
+    var cardsBottom: (Double) -> Void = { _ in }
+    var listTop: (Double) -> Void = { _ in }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(lists.notices, id: \.self) { notice in
-                noticeLine(notice)
-            }
-            if !lists.progress.isEmpty {
-                title(HomeLists.progressTitle)
-                    .padding(.top, lists.notices.isEmpty ? 0 : DesignTokens.Space.s6)
-                TreeList(
-                    lists.progress, foldDepth: nil, opened: .constant([]), selection: $progressSelection, open: open,
-                    leave: { offset in if offset > 0 { enterQueue(last: false) } }, focus: $progressFocused
-                ) { id, state in
-                    rowView(id, state: state)
-                }
-                .onKeyPress(.space) { press(progressSelection) }
-            }
-            if !lists.queue.isEmpty {
-                title(HomeLists.queueTitle)
-                    .padding(.top, lists.progress.isEmpty ? (lists.notices.isEmpty ? 0 : DesignTokens.Space.s6) : DesignTokens.Space.s8)
-                TreeList(
-                    lists.queue, opened: $opened, selection: $queueSelection, open: open,
-                    leave: { offset in if offset < 0 { enterProgress() } }, focus: $queueFocused
-                ) { id, state in
-                    rowView(id, state: state)
-                }
-                .onKeyPress(.space) { press(queueSelection) }
-            }
+            ForEach(notices, id: \.self) { HomeNoticeLine(text: $0) }
+            progress
+                .onGeometryChange(for: Double.self) { $0.frame(in: .named(space)).maxY } action: { cardsBottom($0) }
+            queueHead
+            HomeQueueList(pager: model.pager, range: range, numberWidth: numberWidth, start: actions.start, open: actions.openTicket)
+                .onGeometryChange(for: Double.self) { $0.frame(in: .named(space)).minY } action: { listTop($0) }
         }
-        .padding(DesignTokens.Space.s6)
+        .padding(.horizontal, DesignTokens.HomeQueue.gutter)
+        .padding(.top, DesignTokens.HomeQueue.pageTop)
+        .padding(.bottom, DesignTokens.HomeQueue.pageBottom)
         .frame(maxWidth: DesignTokens.Layout.homeMaxWidth, alignment: .topLeading)
         .frame(maxWidth: .infinity, alignment: .top)
-        // A row the read moves goes to its new place with the catalog's enter motion; the rows around it stay put.
-        .animation(DesignTokens.Motion.entering(reduceMotion: reduceMotion).map(Self.animation), value: lists)
+        .coordinateSpace(.named(space))
     }
 
-    private static func animation(_ timing: DesignTokens.Motion.Timing) -> Animation {
-        switch timing {
-        case let .spring(duration, bounce): .spring(duration: duration, bounce: bounce)
-        case let .eased(duration): .easeInOut(duration: duration)
+    private var progress: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: DesignTokens.HomeQueue.headGap) {
+                HomeSectionTitle(text: HomeQueueModel.progressTitle)
+                Spacer(minLength: 0)
+                SlotCountControl(count: Binding(get: { model.slotCount }, set: { actions.setSlots($0) }))
+            }
+            .frame(height: DesignTokens.HomeQueue.headHeight)
+            .padding(.bottom, DesignTokens.HomeQueue.headBottom)
+            VStack(spacing: DesignTokens.HomeQueue.cardsGap) {
+                ForEach(model.cards) { slot in
+                    SlotCard(slot: slot.number, ticket: slot.ticket.map { HomeQueueCards.card($0, epic: slot.epic, reference: reference) }) { action in
+                        if let ticket = slot.ticket { actions.slotMove(HomeQueueCards.move(action, ticket)) }
+                    }
+                }
+            }
         }
     }
 
-    /// A line of what holds the whole factory (TP-1515), in the Waiting for provider kind's glyph and tint, at the reading measure.
-    private func noticeLine(_ text: String) -> some View {
+    private var queueHead: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: DesignTokens.HomeQueue.headGap) {
+                HomeSectionTitle(text: HomeQueueModel.queueTitle)
+                Spacer(minLength: 0)
+            }
+            .frame(height: DesignTokens.HomeQueue.headHeight)
+            .padding(.bottom, DesignTokens.HomeQueue.headBottom)
+            HomeViewPills(views: views, picked: model.view, count: model.pager.count, total: model.pager.total, pick: actions.pick)
+                .padding(.bottom, DesignTokens.HomeQueue.viewsBottom)
+        }
+        .padding(.top, DesignTokens.HomeQueue.queueTop)
+    }
+}
+
+/// A section's title, in the sentence style.
+struct HomeSectionTitle: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .textStyle(.sentence)
+            .foregroundStyle(DesignTokens.TextColor.primary.color)
+            .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// The virtual list (`.vlist`): as tall as every row the filter keeps, drawing only `range`, each row at its index
+/// times the pitch. A row whose page is not read yet is left blank until it is.
+struct HomeQueueList: View {
+    let pager: HomeQueuePager
+    let range: Range<Int>
+    let numberWidth: CGFloat
+    var start: (String) -> Void = { _ in }
+    var open: (String) -> Void = { _ in }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            Color.clear
+            ForEach(Array(range), id: \.self) { index in
+                if let row = pager.row(at: index) {
+                    QueueRow(HomeQueueCards.row(row), numberWidth: numberWidth) { start(row.identifier) }
+                        .offset(y: Double(index) * HomeQueuePager.pitch)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .frame(height: pager.height, alignment: .top)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(HomeQueueModel.queueTitle)
+    }
+}
+
+/// The saved views above the queue (`.pq-filters`, `.fview`): "All tickets" and each saved view of the Tickets page,
+/// the picked one pressed on the accent's tint; a pill's count is its rows, known for All tickets and the one picked.
+struct HomeViewPills: View {
+    let views: [TicketView]
+    let picked: String?
+    let count: Int
+    let total: Int
+    let pick: (String?) -> Void
+
+    var body: some View {
+        HStack(spacing: DesignTokens.HomeQueue.viewsGap) {
+            pill(HomeQueueModel.allTitle, id: nil, count: total)
+            ForEach(views) { view in
+                pill(view.name, id: view.id, count: picked == view.id ? count : nil)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Saved views")
+    }
+
+    private func pill(_ title: String, id: String?, count: Int?) -> some View {
+        Button { pick(id) } label: {
+            HStack(spacing: DesignTokens.HomeQueue.viewPillGap) {
+                Text(title)
+                if let count {
+                    Text(DesignTokens.HomeQueue.number(count))
+                        .monospacedDigit()
+                        .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                }
+            }
+        }
+        .directorButton(.quiet, size: .small, selected: picked == id)
+    }
+}
+
+/// The strip that stays on top once the cards scroll away (`.pq-mini`): one line per slot on thick glass, the empty
+/// ones included, each line's columns over the queue's.
+struct HomeStrip: View {
+    let cards: [HomeRead.Slot]
+    let reference: Date
+    let numberWidth: CGFloat
+
+    /// Whether the strip shows: once the cards' bottom has scrolled above the top of the view.
+    static func pinned(scrollTop: Double, cardsBottom: Double) -> Bool { cardsBottom > 0 && scrollTop > cardsBottom }
+
+    var body: some View {
+        VStack(spacing: DesignTokens.HomeQueue.stripGap) {
+            ForEach(cards) { slot in
+                SlotStripLine(
+                    slot: slot.number, ticket: slot.ticket.map { HomeQueueCards.card($0, epic: slot.epic, reference: reference) },
+                    numberWidth: numberWidth
+                )
+            }
+        }
+        .padding(.vertical, DesignTokens.HomeQueue.stripInset)
+        .padding(.horizontal, DesignTokens.HomeQueue.gutter)
+        .frame(maxWidth: DesignTokens.Layout.homeMaxWidth)
+        .frame(maxWidth: .infinity)
+        .glassBackground(.thick, in: Rectangle())
+        .overlay(alignment: .bottom) { HairlineDivider(.horizontal) }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Slots")
+    }
+}
+
+/// A line of what holds the whole factory (TP-1515), in the Waiting for provider kind's glyph and tint.
+struct HomeNoticeLine: View {
+    let text: String
+
+    var body: some View {
         Label {
             Text(text)
                 .textStyle(.body)
@@ -102,163 +262,30 @@ struct HomeBody: View {
         } icon: {
             DesignTokens.SituationKind.provider.glyph
         }
-        .padding(.leading, DesignTokens.Space.s3)
-        .padding(.bottom, DesignTokens.Space.s2)
+        .padding(.bottom, DesignTokens.Space.s4)
         .accessibilityElement(children: .combine)
     }
-
-    private func title(_ text: String) -> some View {
-        Text(text)
-            .textStyle(.sentence)
-            .foregroundStyle(DesignTokens.TextColor.primary.color)
-            .padding(.leading, DesignTokens.Space.s3)
-            .padding(.bottom, DesignTokens.Space.s3)
-            .accessibilityAddTraits(.isHeader)
-    }
-
-    @ViewBuilder private func rowView(_ id: String, state: TreeRowState) -> some View {
-        if let row = lists.row(id) {
-            HomeRow(row: row, state: state, open: { open(id) }, perform: { actions.perform(row) })
-        }
-    }
-
-    /// A row opens its ticket's page, or an epic's row Initiatives on the epic.
-    private func open(_ id: String) {
-        guard let row = lists.row(id) else { return }
-        if row.isEpic {
-            if let issueID = row.issueID { actions.openEpic(issueID) }
-        } else {
-            actions.openTicket(row.identifier)
-        }
-    }
-
-    /// Space on a row with a button presses it.
-    private func press(_ key: TreeKey<String>?) -> KeyPress.Result {
-        guard case let .row(id)? = key, let row = lists.row(id), let move = row.move, move.reason == nil else { return .ignored }
-        actions.perform(row)
-        return .handled
-    }
-
-    /// Down past In progress's last row: the queue's first line, with the keyboard.
-    private func enterQueue(last: Bool) {
-        guard !lists.queue.isEmpty else { return }
-        queueSelection = TreeLines.end(TreeLines.lines(lists.queue, foldDepth: DesignTokens.Tree.foldDepth, opened: opened), last: last)
-        progressSelection = nil
-        queueFocused = true
-    }
-
-    /// Up past the queue's first line: In progress's last row, with the keyboard.
-    private func enterProgress() {
-        guard !lists.progress.isEmpty else { return }
-        progressSelection = TreeLines.end(TreeLines.lines(lists.progress), last: true)
-        queueSelection = nil
-        progressFocused = true
-    }
 }
 
-/// One row of Home (the catalog's `homeRow`, `epicRow`): one line, 34 pt. The state glyph (the live dot while a run
-/// works), the identifier, the title cut with an ellipsis; at the right the ticket a queue root comes after, its epic as
-/// a chip, the situation as a small badge, the move when the ticket needs the Director, and how long, in one column.
-/// An epic's row carries its progress strip and "4 of 9" instead.
-struct HomeRow: View {
-    let row: HomeLists.Row
-    var state = TreeRowState(selected: false, focused: false)
-    var open: () -> Void = {}
-    var perform: () -> Void = {}
+/// Why a move from Home didn't go through (`.ptoast`): Symphony's words on thick glass, with × to dismiss it.
+struct HomeNotice: View {
+    let text: String
+    let dismiss: () -> Void
 
     var body: some View {
-        Row(
-            row.title, identifier: row.identifier, lead: lead, value: row.value, valueWidth: DesignTokens.Row.homeValueWidth,
-            selected: state.selected, focused: state.focused, open: open, opensOnClick: true
-        ) {
-            if let after = row.after {
-                HStack(spacing: DesignTokens.Space.s1) {
-                    Image(systemName: "arrow.right")
-                        .font(DesignTokens.TypeStyle.caption.font)
-                        .foregroundStyle(DesignTokens.TextColor.tertiary.color)
-                    RowValue(after)
-                }
-                .help(HomeLists.Row.afterHelp(after))
-            }
-            if let epic = row.epic { Chip(epic, kind: .epic) }
-            if let strip = row.strip {
-                ProgressStrip(strip, label: row.value).frame(width: DesignTokens.ProgressStrip.compactWidth)
-            }
-            if let badge = row.badge { Badge(status: badge.status, word: badge.word, size: .small) }
-            if let move = row.move {
-                Button(move.title, action: perform)
-                    .directorButton(.primary, size: .small, disabledReason: move.reason)
-            }
+        let shape = RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous)
+        HStack(spacing: DesignTokens.Space.s2) {
+            Text(text)
+                .textStyle(.secondary)
+                .foregroundStyle(DesignTokens.TextColor.primary.color)
+                .fixedSize(horizontal: false, vertical: true)
+            IconButton("xmark", help: "Dismiss", size: .small, action: dismiss)
         }
-        .help(row.isEpic ? "Open \(row.identifier) in Initiatives" : "Open \(row.identifier)")
-    }
-
-    private var lead: RowLead {
-        switch row.lead {
-        case .live: .dot(.working, live: true)
-        case let .status(status): .status(status)
-        case .waiting: .glyph("clock", DesignTokens.TextColor.secondary)
-        case .epic: .glyph(SymphonyView.initiatives.symbol, DesignTokens.TextColor.secondary)
-        }
-    }
-}
-
-// MARK: - C11: meters
-
-struct MeterView: View {
-    let meter: Overview.Meter
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(meter.label).font(DesignTokens.TypeStyle.body.font)
-                Spacer(minLength: DesignTokens.Space.s2)
-                Text(meter.value)
-                    .font(DesignTokens.TypeStyle.secondary.font)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                    .contentTransition(.numericText())
-            }
-            if let fraction = meter.fraction {
-                MeterBar(fraction: fraction, tint: tint)
-            }
-            if let note = meter.note {
-                Text(note)
-                    .font(DesignTokens.TypeStyle.caption.font)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(meter.accessibilityLabel + (meter.note.map { ", \($0)" } ?? ""))
-    }
-
-    private var tint: Color {
-        switch meter.level {
-        case .normal: DesignTokens.ColorToken.accent.color
-        case .near: DesignTokens.Status.you.tint
-        case .atLimit: DesignTokens.Status.problem.tint
-        }
-    }
-}
-
-/// A meter's bar: the fill carries the level, on a track that is a light step of the same hue (design system §3.3).
-/// Drawn rather than a `Gauge`, whose AppKit control doesn't render offscreen.
-struct MeterBar: View {
-    let fraction: Double
-    let tint: Color
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        GeometryReader { proxy in
-            ZStack(alignment: .leading) {
-                Capsule().fill(tint.opacity(0.2))
-                Capsule()
-                    .fill(tint)
-                    .frame(width: max(proxy.size.width * fraction, fraction > 0 ? proxy.size.height : 0))
-            }
-        }
-        .frame(height: 6)
-        .animation(reduceMotion ? nil : .standard, value: fraction)
-        .accessibilityHidden(true)
+        .padding(.horizontal, DesignTokens.Space.s3)
+        .padding(.vertical, DesignTokens.Space.s2)
+        .frame(maxWidth: DesignTokens.Measure.reading)
+        .glassBackground(.thick, in: shape)
+        .elevation(DesignTokens.Elevation.level3, in: shape)
+        .accessibilityElement(children: .combine)
     }
 }

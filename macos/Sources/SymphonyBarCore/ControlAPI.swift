@@ -45,6 +45,9 @@ public enum ControlAction: Equatable {
     /// Start now (TP-1330): Symphony starts the ticket's run at once, ahead of the dispatch queue and outside its
     /// order; it refuses, naming why, while Symphony or the repository is paused, a Question is open or a run works on it.
     case start(String, note: String?)
+    /// Sets how many slots the factory runs, from 1 to 6 (`POST /api/v1/control/slots`, TP-1609): Home's slot count
+    /// control. A free slot goes to the queue at once; a lowered count stops no ticket.
+    case slots(Int)
     /// Answers a decision request: the picks, the request they answer, and the state the decision directs (`rework`,
     /// `done`) when it directs one.
     case decide(String, request: AnsweredRequest, picks: [DecisionPick], move: String?)
@@ -166,6 +169,8 @@ public enum ControlAction: Equatable {
             return "api/v1/control/move"
         case .start:
             return "api/v1/control/start"
+        case .slots:
+            return "api/v1/control/slots"
         case .decide:
             return "api/v1/control/decide"
         case .unblock:
@@ -222,7 +227,7 @@ public enum ControlAction: Equatable {
              let .move(identifier, _, _),
              let .decide(identifier, _, _, _), let .unblock(identifier), let .undo(identifier):
             return identifier
-        case .pause, .pauseWithReason, .pauseForUpdate, .resume, .resumeUpdate, .updateReady, .handover, .tryNow, .stop, .start, .message, .blocker,
+        case .pause, .pauseWithReason, .pauseForUpdate, .resume, .resumeUpdate, .updateReady, .handover, .tryNow, .stop, .start, .slots, .message, .blocker,
              .priority, .label, .decision, .pauseRepository, .resumeRepository, .pauseProvider, .resumeProvider, .looked, .saveView,
              .deleteView:
             return nil
@@ -244,6 +249,8 @@ public enum ControlAction: Equatable {
             return ["kind": "build", "version": version]
         case let .updateReady(version):
             return ["version": version]
+        case let .slots(count):
+            return ["count": count]
         case let .saveView(draft):
             return draft.body
         case let .tryNow(condition):
@@ -323,6 +330,8 @@ public enum ControlAction: Equatable {
             return "Couldn't move \(identifier) to \(to)"
         case let .start(identifier, _):
             return "Couldn't start \(identifier) now"
+        case let .slots(count):
+            return "Couldn't set the slots to \(count)"
         case let .decide(identifier, _, _, _):
             return identifier.isEmpty ? "Couldn't send the decision" : "Couldn't send the decision on \(identifier)"
         case let .unblock(identifier):

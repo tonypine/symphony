@@ -32,10 +32,17 @@ public struct QueueRowModel: Equatable, Identifiable {
     /// Its badges: what waits on the person, its state ("Code Review", "Stopped in Coding").
     public var marks: [Mark]
     public var repo: String
+    /// The number as the read writes it when it is not a whole one: a sub-ticket's "6.1"; nil draws `number`.
+    public var label: String?
+
+    /// The number the row shows: "1,243", or a sub-ticket's "6.1".
+    public var numberText: String { label ?? DesignTokens.HomeQueue.number(number) }
 
     public init(
-        number: Int, identifier: String, title: String, lead: RowLead, after: String? = nil, marks: [Mark] = [], repo: String
+        number: Int, identifier: String, title: String, lead: RowLead, after: String? = nil, marks: [Mark] = [], repo: String,
+        label: String? = nil
     ) {
+        self.label = label
         self.number = number
         self.identifier = identifier
         self.title = title
@@ -138,7 +145,7 @@ public struct QueueRow: View {
         .contentShape(shape)
         .onHover { hovered = $0 }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Number \(DesignTokens.HomeQueue.number(row.number)), \(row.identifier), \(row.title)")
+        .accessibilityLabel("Number \(row.numberText), \(row.identifier), \(row.title)")
         .accessibilityAction(named: "Start") { onStart() }
     }
 
@@ -157,7 +164,7 @@ public struct QueueRow: View {
         let queue = DesignTokens.HomeQueue.self
         let handle = Self.handles(look)
         return ZStack {
-            Text(DesignTokens.HomeQueue.number(row.number))
+            Text(row.numberText)
                 .textStyle(.secondary)
                 .monospacedDigit()
                 .lineLimit(1)
@@ -238,7 +245,7 @@ private struct QueueRowProbe: NSViewRepresentable {
 }
 
 extension View {
-    @ViewBuilder fileprivate func probe(_ part: QueueRow.Part, _ probes: [QueueRow.Part: NSView]) -> some View {
+    @ViewBuilder func probe(_ part: QueueRow.Part, _ probes: [QueueRow.Part: NSView]) -> some View {
         if let view = probes[part] {
             background(QueueRowProbe(view: view))
         } else {
