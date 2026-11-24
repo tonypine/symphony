@@ -299,6 +299,9 @@ final class HomeQueueDragTests: XCTestCase {
         // Over the strip's lines the list holds still, so the strip stays.
         XCTAssertEqual(HomeQueueDrag.scrollDirection(y: 30, top: 72, viewport: 900), 0)
         XCTAssertEqual(HomeQueueDrag.scrollDirection(y: 10, top: 0, viewport: 900), -1)
+        // Above the scroll view the list keeps scrolling up, with the strip pinned or not.
+        XCTAssertEqual(HomeQueueDrag.scrollDirection(y: -20, top: 72, viewport: 900), -1)
+        XCTAssertEqual(HomeQueueDrag.scrollDirection(y: -20, top: 0, viewport: 900), -1)
         XCTAssertEqual(HomeQueueDrag.scrollDirection(y: 400, top: 0, viewport: 0), 0)
     }
 
