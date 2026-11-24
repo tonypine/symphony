@@ -109,6 +109,25 @@ public enum HomeQueueDrag {
         return nil
     }
 
+    /// Where the row at `from` of `rows`, a list of one scope (an epic slot card's sub-tickets to come, TP-1646), goes
+    /// when dropped into `gap` (0 before the first row, `rows.count` after the last): before the row below the gap, or
+    /// after the last. Nil for a drop at its own place or outside the list, which sends nothing.
+    public static func place(in rows: [HomeRead.Row], from: Int, gap: Int) -> QueuePlace? {
+        guard rows.indices.contains(from), gap >= 0, gap <= rows.count, gap != from, gap != from + 1 else { return nil }
+        if gap < rows.count { return .before(rows[gap].identifier) }
+        return rows.last.map { .after($0.identifier) }
+    }
+
+    /// `rows` once the row at `from` is dropped into `gap`, the rows between sliding up or down; as they were for a drop
+    /// at its own place or outside the list.
+    public static func moved<Row>(_ rows: [Row], from: Int, gap: Int) -> [Row] {
+        guard rows.indices.contains(from), gap >= 0, gap <= rows.count, gap != from, gap != from + 1 else { return rows }
+        var rows = rows
+        let row = rows.remove(at: from)
+        rows.insert(row, at: destination(from: from, gap: gap))
+        return rows
+    }
+
     /// What a drop at `point` lands on: a strip line first (the strip is pinned over the list, so its lines win over
     /// the rows beneath), then a slot card, then the list's nearest gap while the point is over the list or just above
     /// it. Each frame is in the same space as `point`; `list` is the list's frame, `count` its rows. Nil outside them.

@@ -24,6 +24,12 @@ struct HomeActions {
     var toggleEpic: (String) -> Void = { _ in }
     /// An epic's done count shows or hides its done sub-tickets.
     var toggleEpicDone: (String) -> Void = { _ in }
+    /// An epic slot card's band shows or hides what is still to come (TP-1646), by epic.
+    var toggleSlotUpcoming: (String) -> Void = { _ in }
+    /// An epic slot card's done count shows or hides what is done, by epic.
+    var toggleSlotDone: (String) -> Void = { _ in }
+    /// A row to come of the epic slot card of a slot dropped into a gap of its list: the slot, the row's index and the gap.
+    var moveInSlot: (Int, Int, Int) -> Void = { _, _, _ in }
     /// Dismisses the line that says why a move didn't go through.
     var dismissNotice: () -> Void = {}
     /// Recently done's range control (TP-1644).
@@ -263,6 +269,7 @@ struct HomePageContent: View {
     var cardFrame: (Int, CGRect) -> Void = { _, _ in }
     /// The list's frame in the scroll view's space.
     var listFrame: (CGRect) -> Void = { _ in }
+    @Environment(\.timeZone) private var timeZone
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -300,15 +307,33 @@ struct HomePageContent: View {
             .padding(.bottom, DesignTokens.HomeQueue.headBottom)
             VStack(spacing: DesignTokens.HomeQueue.cardsGap) {
                 ForEach(model.cards) { slot in
-                    SlotCard(
-                        slot: slot.number, ticket: slot.ticket.map { HomeQueueCards.card($0, epic: slot.epic, reference: reference) },
-                        dropTarget: dragging.target?.slot == slot.number
-                    ) { action in
-                        if let ticket = slot.ticket { actions.slotMove(HomeQueueCards.move(action, ticket)) }
-                    }
-                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(HomeView.viewportSpace)) } action: { cardFrame(slot.number, $0) }
+                    card(slot)
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(HomeView.viewportSpace)) } action: { cardFrame(slot.number, $0) }
                 }
             }
+        }
+    }
+
+    /// A slot's card: the epic slot card when an epic holds the slot (TP-1646), around the card of its sub-ticket in work;
+    /// otherwise the slot card, or the empty slot.
+    @ViewBuilder private func card(_ slot: HomeRead.Slot) -> some View {
+        let dropTarget = dragging.target?.slot == slot.number
+        let move: (SlotCardModel.Action) -> Void = { action in
+            if let ticket = slot.ticket { actions.slotMove(HomeQueueCards.move(action, ticket)) }
+        }
+        if let epic = slot.epic, let ticket = slot.ticket {
+            EpicSlotCard(
+                slot: slot.number, epic: HomeQueueCards.epicCard(epic, reference: reference, timeZone: timeZone),
+                ticket: HomeQueueCards.card(ticket, reference: reference), showsUpcoming: model.epicSlots.showsUpcoming(epic.identifier),
+                showsDone: model.epicSlots.showsDone(epic.identifier), dropTarget: dropTarget, onAction: move,
+                onToggleUpcoming: { actions.toggleSlotUpcoming(epic.identifier) }, onToggleDone: { actions.toggleSlotDone(epic.identifier) },
+                onStart: { actions.startOnSlot($0, slot.number) }, onMove: { actions.moveInSlot(slot.number, $0, $1) }
+            )
+        } else {
+            SlotCard(
+                slot: slot.number, ticket: slot.ticket.map { HomeQueueCards.card($0, reference: reference) }, dropTarget: dropTarget,
+                onAction: move
+            )
         }
     }
 
@@ -469,7 +494,7 @@ struct HomeStrip: View {
         VStack(spacing: DesignTokens.HomeQueue.stripGap) {
             ForEach(cards) { slot in
                 SlotStripLine(
-                    slot: slot.number, ticket: slot.ticket.map { HomeQueueCards.card($0, epic: slot.epic, reference: reference) },
+                    slot: slot.number, ticket: slot.ticket.map { HomeQueueCards.card($0, epic: slot.epic?.identifier, reference: reference) },
                     numberWidth: numberWidth, dropTarget: dropSlot == slot.number
                 )
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(HomeView.viewportSpace)) } action: { lineFrame(slot.number, $0) }

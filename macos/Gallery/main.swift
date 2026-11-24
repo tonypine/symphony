@@ -2140,6 +2140,8 @@ MainActor.assumeIsolated {
             renderScreen(scheme, to: "home-queue-epics-filtered") { window in
                 homeQueue(window: window, view: "view-rework", fixture: "home-queue-epics")
             }
+            // The epic slot card (TP-1646): slot 1 held by an epic, its lists closed.
+            renderScreen(scheme, to: "home-queue-epic-slot") { window in homeQueue(window: window, rows: 24, fixture: "home-queue-epic-slot") }
             renderScreen(scheme, to: "home-unavailable") { window in homeUnavailable(window: window) }
         }
         render(inboxDrawer(), scheme, to: "inbox-drawer-\(suffix).png")
