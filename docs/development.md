@@ -113,6 +113,15 @@ merge-base with `origin/main` (`--base <ref>` for another branch), uncommitted a
 included. Modules in `mix.exs`'s `test_coverage` `ignore_modules` are skipped, as in CI. When the
 tests that cover a module don't name it, pass them: `mix cover.changed <test files>`.
 
+A test file names a module when the module's full name stands in its source as a whole token
+(`SymphonyElixir.Foo`, `SymphonyElixir.Foo.run()`, `alias SymphonyElixir.Foo`), or as a member of
+a multi-alias (`alias SymphonyElixir.{Bar, Foo}`). A longer name that starts with it
+(`SymphonyElixir.Foo.Helper`, `SymphonyElixir.FooBar`) does not name it, and neither does the head
+of a multi-alias: `alias SymphonyElixir.{Bar, Foo}` names `SymphonyElixir.Bar` and
+`SymphonyElixir.Foo`, not `SymphonyElixir`. The source is read as text, so a name in a string or
+a comment counts. `mix.exs`'s `cover_changed` `covering_tests` lists, for a `lib/` file, the test
+files that cover its modules without naming them; they run whenever that file changes.
+
 That one run is both the test run and the coverage run, so no `mix test` of the changed test files
 goes before it (the run's `Tests and coverage` step is `mix cover.changed $SYMPHONY_CHANGED_TEST_FILES`):
 

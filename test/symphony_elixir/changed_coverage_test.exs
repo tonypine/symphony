@@ -538,6 +538,47 @@ defmodule SymphonyElixir.ChangedCoverageTest do
       assert ChangedCoverage.names?("Foo.run()", "Foo")
       refute ChangedCoverage.names?("Bar.Foo.run()", "Foo")
     end
+
+    test "does not match the head of a multi-alias, which names its members only" do
+      refute ChangedCoverage.names?("alias SymphonyElixir.{Bar, Foo}\n", "SymphonyElixir")
+      refute ChangedCoverage.names?("alias SymphonyElixir.Foo.{Helper, Other}\n", "SymphonyElixir.Foo")
+      refute ChangedCoverage.names?("alias SymphonyElixir.{\n  Bar,\n  Foo\n}\n", "SymphonyElixir")
+      assert ChangedCoverage.names?("alias SymphonyElixir.Foo.{Helper, Other}\n", "SymphonyElixir.Foo.Helper")
+      # The module itself among the members of its parent's group still names it.
+      assert ChangedCoverage.names?("alias SymphonyElixir.{Foo, Foo.Helper}\n", "SymphonyElixir.Foo")
+    end
+
+    test "matches an alias of the module itself, and a mention in a string, an atom or a comment" do
+      assert ChangedCoverage.names?("alias SymphonyElixir\n", "SymphonyElixir")
+      assert ChangedCoverage.names?("alias SymphonyElixir.Foo, as: F\n", "SymphonyElixir.Foo")
+      assert ChangedCoverage.names?("assert SymphonyElixir.start(:normal, []) == :ok\n", "SymphonyElixir")
+      assert ChangedCoverage.names?("@moduletag capture_log: SymphonyElixir\n", "SymphonyElixir")
+      # The source is read as text: a name in a string or a comment counts, as it always did.
+      assert ChangedCoverage.names?(~s(assert message =~ "SymphonyElixir.Foo is down"\n), "SymphonyElixir.Foo")
+      assert ChangedCoverage.names?("# covers SymphonyElixir.Foo through the web layer\n", "SymphonyElixir.Foo")
+      assert ChangedCoverage.names?("# see SymphonyElixir.\n", "SymphonyElixir")
+      refute ChangedCoverage.names?(~s("SymphonyElixir.Foo.Helper is down"), "SymphonyElixir.Foo")
+      refute ChangedCoverage.names?("# covers SymphonyElixir.Foo\n", "SymphonyElixir")
+    end
+
+    test "selects for the top-level module only the test files that name it" do
+      tests = %{
+        "test/exact_test.exs" => "assert SymphonyElixir.version() =~ \".\"\n",
+        "test/alias_test.exs" => "alias SymphonyElixir\n",
+        "test/comment_test.exs" => "# SymphonyElixir starts the app\n",
+        "test/longer_test.exs" => "alias SymphonyElixir.Foo\nSymphonyElixirWeb.Endpoint.url()\n",
+        "test/group_test.exs" => "alias SymphonyElixir.{Bar, Foo}\n"
+      }
+
+      modules = fn -> [{SymphonyElixir, Path.expand("lib/symphony_elixir.ex")}, {SymphonyElixir.Foo, Path.expand("lib/symphony_elixir/foo.ex")}] end
+      deps = deps(%{modules: modules, test_files: fn -> Map.keys(tests) end, read_file: &Map.fetch!(tests, &1)})
+
+      assert :ok = ChangedCoverage.run([files: ["lib/symphony_elixir.ex"]], deps)
+      assert_received {:run_parts, [{"part-1", ["test/alias_test.exs", "test/comment_test.exs", "test/exact_test.exs"]}], [SymphonyElixir]}
+
+      assert :ok = ChangedCoverage.run([files: ["lib/symphony_elixir/foo.ex"]], deps)
+      assert_received {:run_parts, [{"part-1", ["test/group_test.exs", "test/longer_test.exs"]}], [SymphonyElixir.Foo]}
+    end
   end
 
   test "summarize/1 counts each line once and skips line 0" do

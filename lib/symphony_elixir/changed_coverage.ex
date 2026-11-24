@@ -399,8 +399,11 @@ defmodule SymphonyElixir.ChangedCoverage do
   end
 
   @doc """
-  Whether test `source` names `module` (`"Mix.Tasks.Foo"`): in full, not as the prefix of a longer
-  module name, or as a member of a multi-alias such as `alias Mix.Tasks.{Bar, Foo}`.
+  Whether test `source` names `module` (`"Mix.Tasks.Foo"`): in full, as a whole token, or as a
+  member of a multi-alias such as `alias Mix.Tasks.{Bar, Foo}`. The prefix of a longer module name
+  (`Mix.Tasks.Foo.Bar`) doesn't name it, nor does the head of a multi-alias (`alias Mix.Tasks.Foo.{A, B}`
+  names `Mix.Tasks.Foo.A` and `Mix.Tasks.Foo.B`, not `Mix.Tasks.Foo`). The source is read as
+  text, so a name in a string or a comment counts.
   """
   @spec names?(String.t(), String.t()) :: boolean()
   def names?(source, module) do
@@ -410,7 +413,7 @@ defmodule SymphonyElixir.ChangedCoverage do
         parts -> {parts |> Enum.drop(-1) |> Enum.join("."), List.last(parts)}
       end
 
-    full = ~r/(?<![\w.])#{Regex.escape(module)}(?![\w]|\.[A-Z])/
+    full = ~r/(?<![\w.])#{Regex.escape(module)}(?![\w]|\.[A-Z{])/
     multi = parent && ~r/(?<![\w.])#{Regex.escape(parent)}\.\{[^}]*(?<![\w.])#{Regex.escape(last)}(?![\w.])[^}]*\}/
 
     Regex.match?(full, source) or (multi != nil and Regex.match?(multi, source))
