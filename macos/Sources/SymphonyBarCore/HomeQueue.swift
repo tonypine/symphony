@@ -248,7 +248,10 @@ public final class HomeQueueModel: ObservableObject {
     /// following, Symphony is asked to move it, and Home is read again. A refusal puts the list back as it was and says
     /// Symphony's reason. A drop at the row's own place, or a row that may not be dragged, sends nothing.
     public func move(_ row: HomeRead.Row, from: Int, to gap: Int) async {
-        guard HomeQueueDrag.canDrag(row, view: view), let place = HomeQueueDrag.place(from: from, gap: gap, in: pager) else { return }
+        let gap = HomeQueueDrag.snap(gap, in: pager)
+        guard HomeQueueDrag.canDrag(row, at: from, in: pager), let place = HomeQueueDrag.place(from: from, gap: gap, in: pager) else {
+            return
+        }
         let before = pager
         pager.move(row, from: from, to: gap)
         notice = nil

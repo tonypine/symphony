@@ -128,7 +128,10 @@ struct HomeView: View {
         let slots = Set(model.cards.map(\.number))
         let strip = pinned ? stripFrames.filter { slots.contains($0.key) } : [:]
         let cards = cardFrames.filter { slots.contains($0.key) }
-        return HomeQueueDrag.target(at: point, strip: strip, cards: cards, list: listFrame, count: model.pager.count)
+        let target = HomeQueueDrag.target(at: point, strip: strip, cards: cards, list: listFrame, count: model.pager.count)
+        // A gap inside an epic's sub-tickets is not a top-level row's place: the line and the drop go past them.
+        if case let .gap(gap)? = target { return .gap(HomeQueueDrag.snap(gap, in: model.pager)) }
+        return target
     }
 
     /// The pointer moved during the drag of `row`, at `index`, that started at `start`: the first move picks the row up,
@@ -329,9 +332,9 @@ struct HomeQueueList: View {
             ForEach(Self.drawn(range, dragged: dragging.drag?.index), id: \.self) { index in
                 let dragged = dragging.drag?.index == index ? dragging.drag?.row : nil
                 if let row = dragged ?? pager.row(at: index) {
-                    let movable = HomeQueueDrag.canDrag(row, view: pager.view)
+                    let movable = HomeQueueDrag.canDrag(row, at: index, in: pager)
                     QueueRow(
-                        HomeQueueCards.row(row), numberWidth: numberWidth, reorderable: pager.view == nil, picked: dragged != nil
+                        HomeQueueCards.row(row), numberWidth: numberWidth, reorderable: movable, picked: dragged != nil
                     ) { start(row.identifier) }
                     .gesture(dragGesture(row, index: index), including: movable ? .all : .subviews)
                     .offset(y: Double(index) * HomeQueuePager.pitch)

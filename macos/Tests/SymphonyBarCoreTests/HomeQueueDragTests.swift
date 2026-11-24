@@ -128,6 +128,74 @@ final class HomeQueueDragTests: XCTestCase {
         XCTAssertNil(HomeQueueDrag.place(from: 2, gap: 3, in: pager))
     }
 
+    /// A queue with an epic and its open sub-tickets as the live Home read nests them: "1 A", "2 E", "2.1 E-1",
+    /// "2.2 E-2", "3 B", "4 C".
+    private static func nested() -> HomeQueuePager {
+        var pager = HomeQueuePager(pageSize: 10)
+        let rows = [
+            HomeRead.Row(identifier: "A", number: "1"),
+            HomeRead.Row(identifier: "E", number: "2"),
+            HomeRead.Row(identifier: "E-1", number: "2.1", parent: "E"),
+            HomeRead.Row(identifier: "E-2", number: "2.2", parent: "E"),
+            HomeRead.Row(identifier: "B", number: "3"),
+            HomeRead.Row(identifier: "C", number: "4"),
+        ]
+        pager.take(HomeRead.QueuePage(rows: rows, count: 6, total: 6, offset: 0, limit: 10), view: nil)
+        return pager
+    }
+
+    private static func shown(_ pager: HomeQueuePager) -> [String] { shown(pager, count: pager.count) }
+
+    func testAnEpicRowWithItsSubTicketsBelowItCannotBeDragged() {
+        let pager = Self.nested()
+        XCTAssertFalse(HomeQueueDrag.canDrag(pager.row(at: 1), at: 1, in: pager), "the epic would leave its sub-tickets behind")
+        XCTAssertFalse(HomeQueueDrag.canDrag(pager.row(at: 2), at: 2, in: pager), "a sub-ticket is not a queue row to move")
+        XCTAssertTrue(HomeQueueDrag.canDrag(pager.row(at: 0), at: 0, in: pager))
+        XCTAssertTrue(HomeQueueDrag.canDrag(pager.row(at: 5), at: 5, in: pager), "the last row has nothing below it")
+        var filtered = HomeQueuePager(view: "view-hub", pageSize: 10)
+        let page = HomeRead.QueuePage(rows: [HomeRead.Row(identifier: "A", number: "1")], count: 1, total: 6, offset: 0, limit: 10)
+        filtered.take(page, view: "view-hub")
+        XCTAssertFalse(HomeQueueDrag.canDrag(filtered.row(at: 0), at: 0, in: filtered))
+    }
+
+    func testAGapInsideAnEpicsSubTicketsSnapsToTheGapAfterTheEpic() {
+        let pager = Self.nested()
+        XCTAssertEqual(HomeQueueDrag.snap(2, in: pager), 4, "between the epic and its first sub-ticket")
+        XCTAssertEqual(HomeQueueDrag.snap(3, in: pager), 4, "between two sub-tickets")
+        XCTAssertEqual(HomeQueueDrag.snap(1, in: pager), 1, "before the epic stays")
+        XCTAssertEqual(HomeQueueDrag.snap(6, in: pager), 6)
+    }
+
+    func testARowMovedAcrossAnEpicKeepsTheEpicTogetherAndEveryNumberRight() {
+        var up = Self.nested()
+        up.move(up.row(at: 5)!, from: 5, to: 1)
+        XCTAssertEqual(Self.shown(up), ["1 A", "2 C", "3 E", "3.1 E-1", "3.2 E-2", "4 B"])
+
+        var down = Self.nested()
+        down.move(down.row(at: 0)!, from: 0, to: 5)
+        XCTAssertEqual(Self.shown(down), ["1 E", "1.1 E-1", "1.2 E-2", "2 B", "3 A", "4 C"])
+
+        // Dropped between two sub-tickets, it lands after the epic.
+        var inside = Self.nested()
+        inside.move(inside.row(at: 0)!, from: 0, to: 3)
+        XCTAssertEqual(Self.shown(inside), ["1 E", "1.1 E-1", "1.2 E-2", "2 A", "3 B", "4 C"])
+    }
+
+    func testADropBetweenAnEpicsSubTicketsIsSentAsBeforeTheNextTopLevelRow() async throws {
+        let calls = Calls()
+        let model = HomeQueueModel(fetch: { _, _ in .unchanged }, send: { calls.moves.append($0); return .done })
+        let nested = Self.nested()
+        let page = HomeRead.QueuePage(rows: (0..<nested.count).compactMap { nested.row(at: $0) }, count: 6, total: 6, offset: 0, limit: 10)
+        model.load(HomeRead(queue: page))
+        try await model.move(XCTUnwrap(model.pager.row(at: 0)), from: 0, to: 3)
+        XCTAssertEqual(calls.moves, [.queueMove("A", place: .before("B"))])
+        XCTAssertEqual(Self.shown(model.pager), ["1 E", "1.1 E-1", "1.2 E-2", "2 A", "3 B", "4 C"])
+
+        // The epic itself is not moved.
+        try await model.move(XCTUnwrap(model.pager.row(at: 0)), from: 0, to: 6)
+        XCTAssertEqual(calls.moves.count, 1)
+    }
+
     func testARowWhosePageWasDroppedStillLands() {
         var pager = HomeQueuePager(pageSize: 4)
         let rows = (0..<4).map { HomeRead.Row(identifier: "T-\($0)", number: String($0 + 1)) }

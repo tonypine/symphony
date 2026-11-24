@@ -30,6 +30,23 @@ public enum HomeQueueDrag {
         return row.parent == nil
     }
 
+    /// Whether the row at `index` of `pager` may be dragged: as `canDrag(_:view:)`, and not an epic's row whose open
+    /// sub-tickets follow it in the list. An epic moves with its sub-tickets, which a drag here does not carry, so its
+    /// row stays where it is (moving an epic is not part of TP-1610).
+    public static func canDrag(_ row: HomeRead.Row?, at index: Int, in pager: HomeQueuePager) -> Bool {
+        guard canDrag(row, view: pager.view), let row else { return false }
+        return pager.row(at: index + 1)?.parent != row.identifier
+    }
+
+    /// The gap a top-level row lands in for `gap`: a gap between an epic's sub-ticket rows, or between an epic and its
+    /// first sub-ticket, is not a top-level ticket's place, so it moves down past the sub-tickets to the gap after the
+    /// epic's block.
+    public static func snap(_ gap: Int, in pager: HomeQueuePager) -> Int {
+        var gap = gap
+        while gap < pager.count, pager.row(at: gap)?.parent != nil { gap += 1 }
+        return gap
+    }
+
     /// The gap nearest `y`, the pointer's height below the list's top, in a list of `count` rows: from 0, before the
     /// first row, to `count`, after the last.
     public static func gap(y: Double, count: Int) -> Int {
@@ -81,24 +98,34 @@ public enum HomeQueueDrag {
 }
 
 extension HomeQueuePager {
-    /// Moves `row`, at `from`, into `gap` (`HomeQueueDrag`) among the rows read: the rows between slide up or down a
-    /// place, and every place keeps its number, so the numbers follow the rows at once. `row` is the dragged one as it
-    /// was picked up, so a row whose page was dropped from memory during the drag still lands.
+    /// Moves the top-level `row`, at `from`, into `gap` (`HomeQueueDrag`, snapped past any epic's sub-tickets) among
+    /// the rows read: the rows between slide up or down a place, an epic's sub-ticket rows with it, and the numbers
+    /// follow at once. The top-level numbers stay in their order and go to the top-level rows in their new order; a
+    /// sub-ticket's number is its epic's new number and its own place among the epic's ("7.2"). `row` is the dragged one
+    /// as it was picked up, so a row whose page was dropped from memory during the drag still lands.
     public mutating func move(_ row: HomeRead.Row, from: Int, to gap: Int) {
-        let to = HomeQueueDrag.destination(from: from, gap: gap)
+        let to = HomeQueueDrag.destination(from: from, gap: HomeQueueDrag.snap(gap, in: self))
         guard from != to, from >= 0, from < count, to >= 0, to < count else { return }
         let range = min(from, to)...max(from, to)
         var slice = range.map { $0 == from ? row : rows[$0] }
-        let numbers = range.map { $0 == from ? row.number : rows[$0]?.number ?? String($0 + 1) }
+        var numbers = slice.compactMap { $0 }.filter { $0.parent == nil }.map(\.number).makeIterator()
         let moved = slice.remove(at: from - range.lowerBound)
         slice.insert(moved, at: to - range.lowerBound)
+        var renumbered: [String: String] = [:]
         for (offset, index) in range.enumerated() {
-            if var placed = slice[offset] {
-                placed.number = numbers[offset]
-                setRow(placed, at: index)
-            } else {
+            guard var placed = slice[offset] else {
                 setRow(nil, at: index)
+                continue
             }
+            if let parent = placed.parent {
+                if let epic = renumbered[parent], let dot = placed.number.firstIndex(of: ".") {
+                    placed.number = epic + placed.number[dot...]
+                }
+            } else if let number = numbers.next() {
+                placed.number = number
+                renumbered[placed.identifier] = number
+            }
+            setRow(placed, at: index)
         }
     }
 }
