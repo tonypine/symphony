@@ -142,8 +142,11 @@ defmodule SymphonyElixirWeb.ObservabilityPubSub do
   Tells the subscribers of `subscribe_queue/0` that the queue or its slots changed, sent by the write
   path itself right after its write: `change` names what changed (`order` for a move in the queue,
   `slots` for a new slot count, a slot taken or freed) and `fields` what the write knows of it (the
-  moved ticket's `issue_id` and `issue_identifier`, the new `count`; a person's Start or Stop adds
-  `by` (`start`, `stop`), the `slot`'s number and, for a Start, the tickets it `displaced`).
+  moved ticket's `issue_id` and `issue_identifier`, the new `count`; a change of one ticket's slot
+  adds `by`, the `slot`'s number and what `by` needs: a person's `start` (the tickets it
+  `displaced`) or `stop`; the ticket in the slot `done` (`ended` for another terminal state), with
+  `freed` and, when an epic keeps the slot, `held_by`; the dispatch's `pass` of an epic's slot to its
+  next sub-ticket (`through`, the epic) or `take` of a free slot). Fields are only ever added.
   The notice carries `change`, the fields and `at`. Best-effort as `broadcast_ticket_event/1` is.
   """
   @spec broadcast_queue_change(String.t(), map()) :: :ok

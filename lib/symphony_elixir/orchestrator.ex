@@ -2733,8 +2733,7 @@ defmodule SymphonyElixir.Orchestrator do
 
         state
         |> terminate_running_issue(issue.id, true, remove_reason: :terminal, issue_state: issue.state)
-        |> release_slot(issue.id, "it moved to #{issue.state}")
-        |> maybe_emit_issue_completed(issue, running_entry)
+        |> finish_slot(issue, running_entry, "it moved to #{issue.state}")
 
       active_issue_state?(issue.state, active_states) ->
         refresh_running_issue_state(state, issue)
@@ -5403,7 +5402,9 @@ defmodule SymphonyElixir.Orchestrator do
   # it took it and its number. Its run's end leaves it there: only `release_slot/3` takes it away. A
   # new holder takes the number it is given (a person's Start naming a slot), else its ancestor's when
   # it runs through that slot at no cost, else the lowest no holder uses (`slot_number_for/2`).
-  defp take_slot(%State{} = state, %Issue{id: issue_id} = issue, repo_key, number \\ nil) do
+  # A slot taken by the dispatch pass tells the open streams at once (`announce_slot/3`); a person's
+  # Start sends its own notice (`start_reply/5`).
+  defp take_slot(%State{} = state, %Issue{id: issue_id} = issue, repo_key, number \\ nil, announce? \\ true) do
     holder = %{identifier: issue.identifier, state: issue.state, repo_key: repo_key}
 
     case Map.get(state.slot_holders, issue_id) do
@@ -5415,8 +5416,24 @@ defmodule SymphonyElixir.Orchestrator do
         number = number || slot_number_for(state, issue_id)
         persist_slot_holder(issue_id, since, number)
         Logger.info("Ticket takes a dispatch slot: #{issue_context(issue)} repo_key=#{repo_key} slot=#{number}")
+        if announce?, do: announce_slot(state, issue, number)
         %{state | slot_holders: Map.put(state.slot_holders, issue_id, Map.merge(holder, %{since: since, slot: number}))}
     end
+  end
+
+  # The `slots` notice of a slot the dispatch pass gave: `by: pass` when the ticket works through the
+  # slot another holder keeps (an epic's next sub-ticket, `through` naming the epic), `by: take` when
+  # it took a free slot.
+  defp announce_slot(%State{} = state, %Issue{id: issue_id} = issue, number) do
+    notice = %{issue_id: issue_id, issue_identifier: issue.identifier, slot: number}
+
+    notice =
+      case slot_keeper(state, issue_id, number) do
+        nil -> Map.put(notice, :by, "take")
+        keeper -> Map.merge(notice, %{by: "pass", through: keeper})
+      end
+
+    ObservabilityPubSub.broadcast_queue_change("slots", notice)
   end
 
   # The number of the slot `issue_id` takes: its slot owner's when it runs through an ancestor's slot
@@ -5482,25 +5499,81 @@ defmodule SymphonyElixir.Orchestrator do
     end)
   end
 
+  # A ticket the poll no longer offers whose record is in a terminal phase has ended between its
+  # runs: it ends in its slot as one the poll sees done does (`finish_slot/4`).
   defp release_absent_slot(state, issue_id) do
-    if in_plan_review?(issue_id), do: state, else: release_slot(state, issue_id, "it is no longer a dispatch candidate")
+    record = RunStore.get_ticket_state(issue_id)
+    phase = if is_map(record), do: Map.get(record, :phase)
+
+    cond do
+      PlanReview.in_state?(phase) -> state
+      terminal_issue_state?(phase, terminal_state_set()) -> finish_slot(state, record_issue(issue_id, record), %{}, "it moved to #{phase}")
+      true -> release_slot(state, issue_id, "it is no longer a dispatch candidate")
+    end
+  end
+
+  # The issue a ticket record describes, for a ticket the poll no longer offers.
+  defp record_issue(issue_id, record) do
+    %Issue{id: issue_id, identifier: Map.get(record, :issue_identifier), title: Map.get(record, :title), state: Map.get(record, :phase), repo_key: Map.get(record, :repo_key)}
   end
 
   defp judge_slot(state, %Issue{id: issue_id} = issue, holder, active_states, terminal_states) do
     gate = dispatch_gate_closed(issue, state, active_states, terminal_states)
     reasons = pause_reasons({:ticket, hold_repo_key(issue), issue_id})
 
-    if Slots.releases?(gate, reasons) do
-      release_slot(state, issue_id, elem(gate, 0))
-    else
-      holder = %{holder | state: issue.state, identifier: issue.identifier}
-      %{state | slot_holders: Map.put(state.slot_holders, issue_id, holder)}
+    cond do
+      terminal_issue_state?(issue.state, terminal_states) ->
+        finish_slot(state, issue, Map.get(state.completed_run_metadata, issue_id, %{}), "it moved to #{issue.state}")
+
+      Slots.releases?(gate, reasons) ->
+        release_slot(state, issue_id, elem(gate, 0))
+
+      true ->
+        holder = %{holder | state: issue.state, identifier: issue.identifier}
+        %{state | slot_holders: Map.put(state.slot_holders, issue_id, holder)}
     end
   end
 
-  # A plan handed to its review is out of the active states but waits on the person: it keeps its
-  # slot. Its phase is its record's, since the poll does not read the plan review state.
-  defp in_plan_review?(issue_id), do: issue_id |> RunStore.get_ticket_state() |> then(&(is_map(&1) and PlanReview.in_state?(Map.get(&1, :phase))))
+  # A ticket in a slot that reached a terminal state, with a live run or between its runs
+  # (TP-1638). A done one is noted done first (its `issue_completed`), so a Home read made right
+  # after gives it first in Recently done. Its slot is given up and a cycle runs at once
+  # (`release_slot/3`): an epic keeps the slot its sub-ticket worked through, and its next sub-ticket
+  # that can start takes it in that cycle (`take_slot/5` tells the streams, `by: pass`); an ordinary
+  # ticket's slot is free and goes down the queue. The reads are walked again, and the open streams
+  # hear of it at once: a `slots` notice `by: done` (`ended` for another terminal state) with the
+  # slot's number, whether it is `freed`, and the ticket that keeps it (`held_by`) when it is not.
+  defp finish_slot(%State{} = state, %Issue{id: issue_id} = issue, source, why) do
+    state = maybe_emit_issue_completed(state, issue, source)
+
+    case Map.fetch(state.slot_holders, issue_id) do
+      {:ok, holder} ->
+        number = Map.get(holder, :slot)
+        keeper = slot_keeper(state, issue_id, number)
+        state = state |> release_slot(issue_id, why) |> rewalk_dispatch_order()
+        by = if done_state?(issue.state), do: "done", else: "ended"
+
+        notice =
+          %{issue_id: issue_id, issue_identifier: issue.identifier || holder.identifier, by: by, slot: number, freed: is_nil(keeper)}
+          |> put_present(:held_by, keeper)
+
+        ObservabilityPubSub.broadcast_queue_change("slots", notice)
+        state
+
+      :error ->
+        state
+    end
+  end
+
+  # The identifier of the other holder of the slot numbered `number` (the epic a sub-ticket worked
+  # through); nil when no other holder shares it.
+  defp slot_keeper(_state, _issue_id, nil), do: nil
+
+  defp slot_keeper(%State{} = state, issue_id, number) do
+    Enum.find_value(state.slot_holders, fn
+      {id, %{slot: ^number} = holder} when id != issue_id -> holder.identifier || id
+      _other -> nil
+    end)
+  end
 
   defp put_step(running_entry, {:machine, step}) do
     Map.merge(running_entry, %{step: Map.put(step, :waiting, nil), session_id: nil, agent_session: nil, last_event_at: DateTime.utc_now()})
@@ -10078,7 +10151,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     moved? = Enum.reduce(plan.displaced, moved?, &(move_to_head(&1.issue_id) or &2))
     moved? = (plan.swap? and move_to_head(issue.id)) or moved?
-    state = if plan.taken?, do: take_slot(state, issue, repo_key, plan.number), else: state
+    state = if plan.taken?, do: take_slot(state, issue, repo_key, plan.number, false), else: state
     {state, %{plan | moved?: moved?}}
   end
 

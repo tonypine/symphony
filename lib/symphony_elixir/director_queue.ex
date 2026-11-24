@@ -7,7 +7,8 @@ defmodule SymphonyElixir.DirectorQueue do
   A move stays inside the ticket's scope (the top level, or its parent's sub-tickets), as
   `SymphonyElixir.RunStore.move_in_queue/2` keeps it: to the `:top`, to the `:end`, or
   `{:after, ticket}` / `{:before, ticket}` next to another ticket of the same scope, named by
-  identifier or id. It is refused when:
+  identifier or id. An epic's sub-tickets still to come move the same way while the epic holds a
+  slot and one of them is in work: each keeps its place in the epic's scope. It is refused when:
 
     * Symphony doesn't track the ticket or the neighbour (`{:error, {:invalid, message}}`);
     * the ticket holds no place in the queue (done, removed), the neighbour is the ticket itself or
