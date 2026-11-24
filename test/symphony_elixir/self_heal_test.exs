@@ -329,6 +329,9 @@ defmodule SymphonyElixir.SelfHealTest do
       assert %{scope: @symphony_repo_key, component: "qa_environment", title: "Self-heal: repair the qa_environment block"} = Process.get(:fixer_create)
       assert Process.get(:fixer_block) == nil
 
+      # TP-1624: the fix ticket is filed under the ticket it unblocks, so it runs through its slot.
+      assert Process.get(:fixer_create).parent_id == issue().id
+
       assert @fix_ticket in fix_tickets()
 
       # The filing is the self-heal rule's action on the ticket, recorded once.

@@ -126,7 +126,7 @@ branch name Linear suggests for the ticket; a PR on a branch with any other name
   The order between sub-tickets is Symphony's own: a sub-ticket that comes after another (a split's
   `after`, one a run files to do after its ticket, a blocker you add on the ticket page or an agent's
   `blocked_by`) gets a dependency stored on its record, and Symphony holds it, shows it as
-  "Blocked by" that ticket and frees its slot until that ticket is done. Symphony neither reads nor
+  "Blocked by" that ticket until that ticket is done; a ticket that holds a slot keeps it meanwhile. Symphony neither reads nor
   writes Linear's blocker links: a ticket's dependencies are the ones Symphony stores, and a
   blocker link someone adds in Linear has no effect on it. The parent and sub-ticket link is still
   read from Linear.
@@ -387,11 +387,29 @@ one slot, one ticket moves at a time and nothing new starts until it lands. A ti
 slot is the one in progress; the dispatch order and Home reads name the ticket that holds each slot
 and how many are free.
 
-A ticket gives its slot up only when it is done, when it waits on another ticket (a dependency
+A ticket gives its slot up only when it is done, or when you stop it, move it to `Backlog` or
+cancel it. Waiting keeps it: on you, on its own sub-tickets, or on another ticket (a dependency
 Symphony stores, a run's block report, a fix ticket, a competing pull request, an app update that
-carries a dependency's fix) or on its own sub-tickets, or when you stop it, move it to `Backlog` or cancel it. Waiting on you keeps it. A free
-slot goes first to a sub-ticket of a ticket that has started, so a big chain finishes before
-unrelated work starts, then to the first ticket in the queue that can start.
+carries a dependency's fix).
+
+A ticket's sub-tickets run through its slot, whether or not it has work of its own: an epic's
+sub-tickets, and a fix ticket filed for a ticket in the middle of its work, which is filed as its
+sub-ticket, runs through its slot, and then lets it continue where it stopped. Between two
+sub-tickets the slot idles; with one slot nothing else starts until the parent is done. With more
+slots, a parent can use more than one: a free slot goes, in queue order, to the first ticket that
+can start, which for the parent at the top is its next sub-ticket whose dependencies are met, so
+sub-tickets that don't depend on each other run at the same time. Such an extra slot comes back when
+that sub-ticket is done; the parent keeps one through its waits. When the parent has nothing ready,
+the free slot goes to the next ticket down the queue. A parent and the one sub-ticket running
+through its slot count as one used slot.
+
+A ticket that holds a slot and waits on a ticket outside its own tree (one a run's block report
+names, a fix ticket reused from another ticket, a dependency added mid-work, a competing pull
+request) lends its slot to it: that ticket runs through the holder's slot as a sub-ticket would, so
+with one slot the holder never waits on a ticket that can't get a slot.
+
+A ticket that can't start because a dependency is unmet takes the slot when its turn comes (it is
+the first of the queue) and waits there; its run starts once the dependency is met.
 
 Nothing else limits the slots: a ticket keeps its slot through `Merging`, no phase has a limit of
 its own, and no slot is reserved for epics.

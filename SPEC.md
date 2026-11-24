@@ -570,7 +570,7 @@ prompt carries as its own section, marked as advice and wrapped as untrusted dat
 `after_qa_blocked` carries the `route` Symphony took on the turn's answer (`rerun` or `rework`), and
 at `after_qa_blocked`, `after_qa_fail`, `after_rework` and during a watched run `ticket`, a linked ticket
 Symphony filed through the self-heal lane's filer for a problem that is not this ticket's to solve, which
-holds the ticket when it `blocks` it (at most `conductor.max_filed_tickets`, 2, per ticket, never from a
+holds the ticket when it `blocks` it, filed as its sub-ticket so it runs through its slot (at most `conductor.max_filed_tickets`, 2, per ticket, never from a
 ticket the Conductor filed; `docs/configuration.md#conductor`); a
 question the Conductor asks goes through the decision path, pauses the ticket and holds the run it
 came before, and each of its options names the action a pick makes from a closed list (`continue`,
@@ -3488,8 +3488,8 @@ the Needs Decision hold and the self-heal lane, GitHub calls through `AutoMerge`
   What a person did on GitHub still applies: a merge closes the ticket out (R2) and a close sends it
   to `Rework` (R8). A run's dispatch outside QA is the orchestrator's and takes a slot as it starts;
   a QA run waits for the slot, since its app is built for its head first. The landing wait on
-  competing PRs still ends when they land or leave the race: that wait gave the slot up, so nothing
-  else would clear it, and it clears only its own landing reasons, never a blocker's or a person's
+  competing PRs still ends when they land or leave the race: nothing else would clear it, and it
+  clears only its own landing reasons, never a blocker's or a person's
   hold. A person's answers, moves and cancels
   go through the control API and apply as for any ticket; the app repository's release read is no
   ticket and is not gated.
@@ -3867,7 +3867,8 @@ Rules:
   confirming continues into `Merging`. Rework verdicts never wait on a person.
 - **Self-heal.** A QA or epic review blocked by tooling or environment retries boundedly, then files
   (or reuses) one fix ticket per broken component and sets a `Blocked` hold on the affected ticket
-  waiting on it. The PR and CI watcher's red backstop is such a block: a check still failing after
+  waiting on it. A new fix ticket is filed as the affected ticket's sub-ticket, so it runs through
+  the slot the affected ticket keeps while it waits (Section 8.3). The PR and CI watcher's red backstop is such a block: a check still failing after
   `pull_requests.checks.max_fix_attempts` CI Fix runs, or after 3 in a row with the same failure,
   names the component `ci:<check>` (one fix ticket per failing check per repository, filed in the
   repository whose CI fails), and the affected ticket waits on it in place instead of asking. From the `QA` state only these blocks reach it: the ones the QA tools raise
@@ -4184,9 +4185,9 @@ computed at a pass. No position number is stored: the 1, 2, 3 a read shows are c
    window grows only while its keys are still too long, and the rest of the queue keeps its keys.
 6. `priority` decides no place. A change of priority moves no issue; `tickets.priorities` stays a
    gate on which issues may start.
-7. The dispatch pass walks its candidates by place: the top-level issues in key order, each parent's
-   sub-issues in their own key order right after it, the sub-tickets of a ticket that has started
-   first (Section 8.3): a free slot goes to the first one that can start. An issue a gate holds (a
+7. The dispatch pass walks its candidates by place alone: the top-level issues in key order, each
+   parent's sub-issues in their own key order right after it (Section 8.3 says how sub-issues run
+   through their parent's slot): a free slot goes to the first one that can start. An issue a gate holds (a
    blocker, `Backlog`, the priority filter, a pause...) keeps its place and is skipped. A candidate
    with no record yet goes last, by `created_at`, then `identifier`.
 8. The first start of the release that stored the queue places the issues already there once, in the
@@ -4263,16 +4264,36 @@ Slots:
 - A slot belongs to a ticket, never to one agent turn. A ticket takes a slot when its first run is
   dispatched and holds it until it is done, whatever its phase: coding, review, QA, CI, a build,
   `Merging`. It holds it on a machine step, between its agent turns, between its runs, in retry
-  backoff, while it waits for CI or a build with no live run, and while it waits on the person (a
-  Question, a decision, a plan in `Plan Review`).
+  backoff, while it waits for CI or a build with no live run, while it waits on the person (a
+  Question, a decision, a plan in `Plan Review`), and while it waits on another ticket (its own
+  sub-tickets, a stored dependency of either kind, a block report's dependency, a fix ticket, a
+  competing pull request, an app update that carries a dependency's fix).
 - A ticket that holds a slot is in progress; that is the only meaning of in progress. The dispatch
   order read and the Home read (Section 13.4) say which ticket holds each slot, how many are free,
   and carry `in_progress` on each ticket, true exactly when it holds a slot.
 - The holders are stored on the ticket records (`slot_held_since`), so a restart keeps them.
-- `available_slots = max(max_concurrent_agents - taken, 0)`, where `taken` counts the tickets that
-  hold a slot and every other run under way (a PR run with no ticket takes a slot while it runs).
+- A ticket's sub-tickets run through its slot, whether or not it has work of its own: a split
+  epic's sub-tickets, and a fix ticket filed for a ticket in the middle of its work, which is filed
+  as its sub-ticket (the self-heal lane's fix tickets and the Conductor's blocking tickets). A
+  sub-ticket runs through the slot of its nearest ancestor in progress. The ancestor and its first
+  sub-ticket in progress count as one slot; each further sub-ticket in progress at the same time
+  counts as one extra slot, returned when that sub-ticket is done. The ancestor keeps exactly one
+  slot between its sub-tickets and through its waits; between two sub-tickets the slot idles.
+- A ticket that holds a slot lends it to a ticket it waits on outside its own tree, so that ticket
+  runs through the holder's slot as a sub-ticket does: the ticket its pause waits on (a run's block
+  report naming another ticket, a fix ticket reused from another affected ticket, a Conductor
+  blocker that already existed, a competing pull request) and each of its open stored dependencies
+  (one added mid-work). The waited-on ticket borrows only when it has no ancestor in progress and is
+  not in progress on its own slot; it keeps the loan while the holder waits on it. So a holder never
+  waits on a ticket no slot is free for: with one slot, the blocker runs on the holder's slot, and
+  the two count as one used slot.
+- `available_slots = max(max_concurrent_agents - taken, 0)`, where `taken` counts the tickets in
+  progress (those that hold a slot and every other run under way: a PR run with no ticket takes a
+  slot while it runs) less, for each ticket in progress that a sub-ticket (or a ticket it lends its
+  slot to) in progress runs through, that ticket's own slot. The reads' `used` is that count.
 - A ticket that holds a slot always starts its next run (the worker hosts' own capacity still
-  applies). Any other ticket starts only when a slot is free, and takes it at dispatch. No agent
+  applies), and so does a sub-ticket whose nearest ancestor in progress has no other sub-ticket in
+  progress. Any other ticket starts only when a slot is free, and takes it at dispatch. No agent
   turn and no machine step runs for a ticket that holds no slot; its Grooming turn runs inside its
   first dispatched run, after it took the slot. A QA build is asked for only for a ticket that holds
   a slot.
@@ -4294,11 +4315,9 @@ Slots:
 Giving a slot up:
 
 - A ticket gives up its slot only when it is done (a terminal state), when it leaves the active
-  states (a person moved it to `Backlog`, it was removed, or unassigned from this worker), when it
-  waits on a dependency (a stored dependency not met, a block report's dependency, a fix ticket, a
-  competing pull request, an app update that carries a dependency's fix) or on its own sub-tickets,
-  or when a person stops it. A stop that comes with a Question waits on the person and keeps the
-  slot.
+  states (a person moved it to `Backlog`, it was removed, or unassigned from this worker), or when
+  a person stops it. A stop that comes with a Question waits on the person and keeps the slot.
+  Every wait on another ticket keeps it, and the ticket it waits on runs through it (above).
 - A ticket with no live run is judged on every cycle against the cycle's candidates and its closed
   dispatch gate; one with a live run gives it up when the run is ended for a terminal or inactive
   state. The cycle that frees a slot asks for another at once, so the next ticket takes it without
@@ -4306,9 +4325,15 @@ Giving a slot up:
 
 Which ticket a free slot goes to:
 
-- First to a sub-ticket of a ticket that has started (it holds a slot, or its phase is past
-  `Todo`), so a big chain is finished before unrelated work starts; then to the first ticket in the
-  stored queue order (Section 8.2) that can start. Each group keeps the stored order.
+- In the stored queue order alone (Section 8.2), to the first ticket that can start: for the
+  parent at the top that holds a slot, its next sub-ticket whose dependencies are met, so
+  sub-tickets with no dependency between them run at the same time; when it has none ready, the next
+  ticket down. A sub-ticket never jumps ahead of a ticket placed above its parent.
+- The first ticket of the queue (the first candidate in progress, free to start, or held only by a
+  wait on a stored dependency or on its sub-tickets), when it holds no slot and waits on a stored
+  dependency or its sub-tickets, takes the free slot with no run and waits there; its run starts
+  once the wait is over. With one slot nothing below it starts meanwhile. Any other ticket that
+  cannot start takes no slot.
 
 Nothing else limits the slots: landing has no allowance of its own, no phase has a limit of its
 own, and no slot is reserved for epics. `/api/v1/state` keeps `finishing`, `epic_lanes` and
@@ -7718,8 +7743,9 @@ infrastructure.
   around it are rewritten, evenly spaced and in the same order
 - A stored dependency is kept apart from the tracker's blockers and no read of the tracker changes
   it; added on an issue that sits lower, it moves the depending issue to just below it; an unmet one
-  holds the issue from dispatch, reads "Blocked by" the issue it waits on and gives up the slot, and
-  the first pass that finds it met lets the issue start
+  holds the issue from dispatch and reads "Blocked by" the issue it waits on; an issue that holds a
+  slot keeps it, the first of the queue takes the free slot and waits there, and the first pass that
+  finds it met lets the issue start
 - Splits, run-filed sub-issues, the Director's blockers and the agent tools write stored
   dependencies and no tracker blocker link; the first start converts the recorded `after` of open
   sub-issues
@@ -7728,9 +7754,14 @@ infrastructure.
 - A ticket holds its slot from its first run until it is done, through every phase, machine step,
   agent turn and question to the person, and with no live run; with 1 slot no other ticket starts
   meanwhile
-- A ticket gives its slot up when it is done, leaves the active states, waits on a dependency or
-  its sub-tickets, or a person stops it; the freed slot goes to the next ticket
-- A free slot goes to a sub-ticket of a started ticket first, then to the first ticket in the queue
+- A ticket gives its slot up when it is done, leaves the active states or a person stops it; it
+  keeps it while it waits on a dependency or its sub-tickets; the freed slot goes to the next ticket
+- A ticket's sub-tickets run through its slot, one at a time with 1 slot; an extra free slot goes in
+  queue order to the first ticket that can start, the parent's next ready sub-ticket first when the
+  parent is at the top, and comes back when that sub-ticket is done
+- A fix ticket filed for a ticket in the middle of its work is its sub-ticket and runs through its slot
+- With 1 slot, the ticket a holder waits on outside its own tree (a block report's ticket, a stored
+  dependency added mid-work) runs through the holder's slot, and the two count as one used slot
 - A `Merging` ticket keeps its slot and gets no allowance of its own
 - A retry that finds no slot keeps its attempt, gets no backoff, and starts on the first poll after
   a slot frees

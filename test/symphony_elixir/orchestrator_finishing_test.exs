@@ -257,7 +257,7 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     refute MapSet.member?(state.claimed, "wait-1")
   end
 
-  test "TP-1615: a free slot goes to a sub-ticket of a started ticket before an unrelated one ahead of it in the queue", ctx do
+  test "TP-1624: a free slot follows the stored queue order, a started ticket's sub-ticket gets no place in front", ctx do
     write_finishing_workflow!(ctx, max_concurrent_agents: 2)
     standalone = issue("s1", "MT-S1", "Todo", priority: 1)
     other = issue("o1", "MT-O1", "Todo", priority: 1)
@@ -269,19 +269,13 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     # MT-P1 has started: it holds a slot, with no run now.
     state = %{orchestrator_state(2) | slot_holders: %{"p1" => holder("MT-P1", "In Progress")}}
     order = state |> Orchestrator.put_dispatch_order_for_test([standalone, other, child]) |> Map.fetch!(:dispatch_order)
-    assert [%{identifier: "MT-C1", outcome: :starts}, %{identifier: "MT-S1", outcome: :waits}, %{identifier: "MT-O1", outcome: :waits}] = Enum.filter(order.entries, & &1.position)
+    assert [%{identifier: "MT-S1", outcome: :starts}, %{identifier: "MT-O1", outcome: :waits}, %{identifier: "MT-C1", outcome: :waits}] = Enum.filter(order.entries, & &1.position)
 
     log = capture_log(fn -> send(self(), {:state, dispatch(state, [standalone, other, child])}) end)
     assert_received {:state, state}
 
-    assert dispatch_order(log) == ["c1"]
-    assert %{reason: "work slots full"} = state.slot_waiting["s1"]
-
-    # With no started parent, the stored queue order alone decides.
-    alone = %{orchestrator_state(2) | slot_holders: %{"x1" => holder("MT-X1", "In Progress")}}
-    log = capture_log(fn -> send(self(), {:state, dispatch(alone, [standalone, other, child])}) end)
-    assert_received {:state, _state}
     assert dispatch_order(log) == ["s1"]
+    assert %{reason: "work slots full"} = state.slot_waiting["o1"]
   end
 
   test "TP-1622: the pass walks an epic's sub-tickets inside its place, in their own key order, before a later top-level ticket", ctx do
