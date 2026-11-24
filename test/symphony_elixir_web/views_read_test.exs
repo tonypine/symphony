@@ -1,6 +1,6 @@
 defmodule SymphonyElixirWeb.ViewsReadTest do
   # Saved views through the API: one client saves a view with the control token, another lists it
-  # and reads the tickets it selects.
+  # and reads the tickets it selects (SymphonyElixirWeb.TicketsController).
   use SymphonyElixir.TestSupport
 
   import Phoenix.ConnTest, only: [build_conn: 0, get: 2, post: 2, post: 3, delete: 2, json_response: 2]

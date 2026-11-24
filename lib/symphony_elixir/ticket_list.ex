@@ -35,7 +35,7 @@ defmodule SymphonyElixir.TicketList do
   `select/2` matches them, with its `opts`: the Home read's queue keeps only these rows.
   """
   @spec matching([Views.filter()], keyword()) :: MapSet.t(String.t())
-  def matching(filters, opts \\ []) when is_list(filters) do
+  def matching(filters, opts) when is_list(filters) do
     filters |> filtered(false, opts) |> MapSet.new(fn {record, _values} -> record.issue_id end)
   end
 

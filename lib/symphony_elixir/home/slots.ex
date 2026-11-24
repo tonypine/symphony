@@ -192,6 +192,5 @@ defmodule SymphonyElixir.Home.Slots do
     end
   end
 
-  defp normalize(nil), do: ""
-  defp normalize(state), do: state |> String.trim() |> String.downcase()
+  defp normalize(state), do: state |> to_string() |> String.trim() |> String.downcase()
 end

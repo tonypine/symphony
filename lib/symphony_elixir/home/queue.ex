@@ -192,6 +192,5 @@ defmodule SymphonyElixir.Home.Queue do
     Map.merge(row, %{situation: situation, waits_on_you: situation.kind == "waiting_on_you", move: SymphonyElixir.Home.move(record, situation, moves)})
   end
 
-  defp normalize(nil), do: ""
-  defp normalize(state), do: state |> String.trim() |> String.downcase()
+  defp normalize(state), do: state |> to_string() |> String.trim() |> String.downcase()
 end
