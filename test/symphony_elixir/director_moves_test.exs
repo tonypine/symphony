@@ -2780,7 +2780,10 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert_received {:stop_running, "pr"}
 
       assert %{phase: "Done"} = RunStore.get_ticket_state("pr")
-      assert [%{actor: %{kind: :agent, run_kind: "conductor", run_id: run_id}, payload: payload}] = RunStore.list_ticket_events("pr", types: ["ticket.moved"])
+
+      assert [%{actor: %{kind: :agent, run_kind: "conductor", run_id: run_id}, payload: payload}] =
+               RunStore.list_ticket_events("pr", types: ["ticket.moved"])
+
       assert payload == %{from: "Rework", to: "Done", note: @reason, run_stopped: true}
       assert [%{"move" => "move", "to_state" => "Done", "by" => "Conductor", "run_id" => ^run_id}] = audit_records()
       refute Pauses.paused?({:ticket, "repo-director", "pr"})
