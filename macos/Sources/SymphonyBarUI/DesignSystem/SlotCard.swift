@@ -198,8 +198,15 @@ public struct SlotCard: View {
         .elevation(queue.cardElevation, in: shape)
         .edgeHighlight(shape)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(Self.emptyLabel(slot)): \(ticket.identifier)")
+        // A card holds its parts (`.contain`), and such an element's value does not reach the tree: its label says it.
+        .accessibilityLabel(Self.accessibilityLabel(slot, ticket: ticket.identifier, dropTarget: dropTarget))
         .dropTargetAccessibility(dropTarget, identifier: SlotDropTarget.cardIdentifier(slot))
+    }
+
+    /// The card's label: its slot and its ticket, and, under a dragged row, that it is the drop target (TP-1610).
+    public static func accessibilityLabel(_ slot: Int, ticket: String, dropTarget: Bool) -> String {
+        let label = "\(emptyLabel(slot)): \(ticket)"
+        return dropTarget ? "\(label), \(SlotDropTarget.accessibilityValue)" : label
     }
 
     private func header(_ ticket: SlotCardModel) -> some View {

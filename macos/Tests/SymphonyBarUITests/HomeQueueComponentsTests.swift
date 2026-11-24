@@ -325,6 +325,8 @@ final class HomeQueueComponentsTests: XCTestCase {
         XCTAssertEqual(SlotDropTarget.cardIdentifier(1), "slot-card-1")
         XCTAssertEqual(SlotDropTarget.lineIdentifier(2), "slot-line-2")
         XCTAssertEqual(QueueDropLine.accessibilityIdentifier, "queue-drop-line")
+        XCTAssertEqual(SlotCard.accessibilityLabel(1, ticket: "TP-1619", dropTarget: false), "\(SlotCard.emptyLabel(1)): TP-1619")
+        XCTAssertEqual(SlotCard.accessibilityLabel(1, ticket: "TP-1619", dropTarget: true), "\(SlotCard.emptyLabel(1)): TP-1619, Drop target")
     }
 
     func testTheNumberCellIsAsWideAsTheWidestNumberOnScreen() {

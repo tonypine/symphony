@@ -88,10 +88,12 @@ public enum HomeQueueDrag {
     }
 
     /// Which way a drag at `y` scrolls the list, in a scroll view `viewport` tall whose top `top` points are under the
-    /// strip: -1 up near the top, 1 down near the bottom, 0 elsewhere.
+    /// strip: -1 up in the band below the strip (or the top), 1 down near the bottom, 0 elsewhere. Over the strip itself
+    /// the list holds still: its lines are drop targets, and scrolling up would bring the cards back and take it away.
     public static func scrollDirection(y: Double, top: Double, viewport: Double) -> Int {
         guard viewport > 0 else { return 0 }
         if y > viewport - edge { return 1 }
+        if y < top { return 0 }
         if y < top + edge { return -1 }
         return 0
     }

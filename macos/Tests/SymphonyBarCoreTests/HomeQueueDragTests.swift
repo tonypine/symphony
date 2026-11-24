@@ -296,6 +296,9 @@ final class HomeQueueDragTests: XCTestCase {
         XCTAssertEqual(HomeQueueDrag.scrollDirection(y: 880, top: 0, viewport: 900), 1)
         XCTAssertEqual(HomeQueueDrag.scrollDirection(y: 100, top: 72, viewport: 900), -1)
         XCTAssertEqual(HomeQueueDrag.scrollDirection(y: 400, top: 72, viewport: 900), 0)
+        // Over the strip's lines the list holds still, so the strip stays.
+        XCTAssertEqual(HomeQueueDrag.scrollDirection(y: 30, top: 72, viewport: 900), 0)
+        XCTAssertEqual(HomeQueueDrag.scrollDirection(y: 10, top: 0, viewport: 900), -1)
         XCTAssertEqual(HomeQueueDrag.scrollDirection(y: 400, top: 0, viewport: 0), 0)
     }
 

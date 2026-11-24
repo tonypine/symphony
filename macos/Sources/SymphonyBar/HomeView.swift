@@ -106,7 +106,7 @@ struct HomeView: View {
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .overlay(alignment: .topLeading) { lifted(numberWidth: numberWidth) }
+        .overlay(alignment: .topLeading) { lifted(numberWidth: numberWidth, gap: target?.gap) }
         .coordinateSpace(.named(Self.viewportSpace))
         .overlay(alignment: .bottom) {
             if let notice = model.notice {
@@ -157,7 +157,8 @@ struct HomeView: View {
 
     /// Which way the list scrolls under the drag: toward the edge the pointer is near.
     private func scrollDirection(pinned: Bool) -> Int {
-        guard let drag else { return 0 }
+        // Over a slot (a card, or a strip line under the strip's top edge) the list holds still, so the slot stays put.
+        guard let drag, dropTarget(pinned: pinned)?.slot == nil else { return 0 }
         let top = pinned ? (stripFrames.values.map(\.maxY).max() ?? 0) : 0
         return HomeQueueDrag.scrollDirection(y: drag.location.y, top: top, viewport: viewport)
     }
@@ -173,14 +174,22 @@ struct HomeView: View {
         }
     }
 
-    /// The dragged row, lifted under the pointer over the list's column.
-    @ViewBuilder private func lifted(numberWidth: CGFloat) -> some View {
+    /// The dragged row, lifted under the pointer over the list's column, and the line in the `gap` it would land in,
+    /// drawn over the lifted row (`.drop-line` stands above the rows, and the row is lifted right over the gap).
+    @ViewBuilder private func lifted(numberWidth: CGFloat, gap: Int?) -> some View {
         if let drag, let listFrame {
-            QueueRow(HomeQueueCards.row(drag.row), numberWidth: numberWidth, look: .dragged)
-                .frame(width: listFrame.width)
-                .offset(x: listFrame.minX, y: drag.location.y - drag.grab)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
+            ZStack(alignment: .topLeading) {
+                QueueRow(HomeQueueCards.row(drag.row), numberWidth: numberWidth, look: .dragged)
+                    .frame(width: listFrame.width)
+                    .offset(x: listFrame.minX, y: drag.location.y - drag.grab)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+                if let gap {
+                    QueueDropLine()
+                        .frame(width: listFrame.width)
+                        .offset(x: listFrame.minX, y: listFrame.minY + HomeQueueDrag.lineY(gap))
+                }
+            }
         }
     }
 }
@@ -309,8 +318,8 @@ struct HomeSectionTitle: View {
 
 /// The virtual list (`.vlist`): as tall as every row the filter keeps, drawing only `range`, each row at its index
 /// times the pitch. A row whose page is not read yet is left blank until it is. While a row is dragged (TP-1610) it stays
-/// drawn in its place, dimmed, even once it scrolls out of `range` (its gesture lives on it), and a line marks the gap
-/// it would land in. With a saved view picked no row is dragged.
+/// drawn in its place, dimmed, even once it scrolls out of `range` (its gesture lives on it); `HomeView` draws the line
+/// in the gap it would land in, over the lifted row. With a saved view picked no row is dragged.
 struct HomeQueueList: View {
     let pager: HomeQueuePager
     let range: Range<Int>
@@ -336,13 +345,9 @@ struct HomeQueueList: View {
                     QueueRow(
                         HomeQueueCards.row(row), numberWidth: numberWidth, reorderable: movable, picked: dragged != nil
                     ) { start(row.identifier) }
-                    .gesture(dragGesture(row, index: index), including: movable ? .all : .subviews)
+                    .gesture(dragGesture(row, index: index, movable: movable))
                     .offset(y: Double(index) * HomeQueuePager.pitch)
                 }
-            }
-            if let gap = dragging.target?.gap {
-                QueueDropLine()
-                    .offset(y: HomeQueueDrag.lineY(gap))
             }
         }
         .onChange(of: active) { _, active in
@@ -355,12 +360,14 @@ struct HomeQueueList: View {
         .accessibilityLabel(HomeQueueModel.queueTitle)
     }
 
-    /// The drag of `row` at `index`, in the scroll view's space: each move reports the pointer, and the end drops it.
-    private func dragGesture(_ row: HomeRead.Row, index: Int) -> some Gesture {
+    /// The drag of `row` at `index`, in the scroll view's space: each move reports the pointer, and the end drops it. The
+    /// gesture is on every row, and one that may not be `movable` (a saved view is picked, an epic with its sub-tickets)
+    /// reports nothing, so no mask changes when the view does.
+    private func dragGesture(_ row: HomeRead.Row, index: Int, movable: Bool) -> some Gesture {
         DragGesture(minimumDistance: 3, coordinateSpace: .named(HomeView.viewportSpace))
-            .updating($active) { _, active, _ in active = true }
-            .onChanged { value in dragging.moved(row, index, value.startLocation, value.location) }
-            .onEnded { value in dragging.dropped(row, index, value.location) }
+            .updating($active) { _, active, _ in active = movable }
+            .onChanged { value in if movable { dragging.moved(row, index, value.startLocation, value.location) } }
+            .onEnded { value in if movable { dragging.dropped(row, index, value.location) } }
     }
 }
 

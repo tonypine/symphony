@@ -474,8 +474,10 @@ def slot_drop(home, name, identifier, slot, holder, scrolled):
     try:
         over = home.element(identifier)
         shot = home.screenshot("mid-drag")
-        if over is None or over.get("value") != "Drop target":
-            fail(name, f"mid-drag {identifier} says {(over or {}).get('value')!r}, not 'Drop target'")
+        # A strip line says it in its value; a card, which holds its parts, in its label.
+        said = [(over or {}).get(key) or "" for key in ("value", "description", "title")]
+        if over is None or not any("Drop target" in text for text in said):
+            fail(name, f"mid-drag {identifier} says {said!r}, not 'Drop target'")
         if home.element("queue-drop-line") is not None:
             fail(name, "a drop line shows while the pointer is over a slot")
         if shot and home.accent_near(shot, frame["x"] - 1, frame["y"] + frame["h"] / 2) is False:
@@ -538,7 +540,8 @@ def scenario_refused(home):
     moves = wait(lambda: home.requests("/api/v1/control/queue/move"))
     if not moves or moves[-1].get("issue_identifier") != "TP-1596":
         return fail(name, f"the move sent was {moves!r}")
-    said = wait(lambda: home.find(REFUSAL, "AXStaticText"), 10)
+    # The notice combines its text and its × into one element, so any role that holds the words counts.
+    said = wait(lambda: home.find(REFUSAL), 10)
     home.screenshot("after-drop")
     if not said:
         return fail(name, f"Home does not show the engine's reason {REFUSAL!r}")
@@ -607,8 +610,11 @@ def scenario_filter(home):
     helper = home.drag((int(grab[0]), int(grab[1])), (int(grab[0]), target["frame"]["y"] - 1))
     try:
         home.screenshot("mid-drag-all")
-        if (home.row("TP-1605") or {}).get("value") != "Dragged" or home.element("queue-drop-line") is None:
-            fail(name, "with All tickets picked the row does not drag")
+        left = home.row("TP-1605") or {}
+        if left.get("value") != "Dragged":
+            fail(name, f"with All tickets picked the row left behind says {left.get('value')!r}, not 'Dragged'")
+        if home.element("queue-drop-line") is None:
+            fail(name, "with All tickets picked no drop line shows")
     finally:
         home.release(helper)
     if name in failures:
