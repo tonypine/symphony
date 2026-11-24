@@ -4272,7 +4272,10 @@ Each step has:
   one pass: `mix cover.changed` runs the changed test files, the tests of the changed `lib/` files
   and the tests that name a changed module once, in several processes at once, and that one run
   both proves they pass and gives the changed modules' coverage (`docs/development.md`). A
-  dependency update is proved by CI's full suite; no local step runs the whole suite. The step runner gives a machine step `SYMPHONY_CHANGED_ELIXIR_FILES`
+  repository whose change needs every Elixir test puts `mix cover.changed --all $SYMPHONY_CHANGED_TEST_FILES`
+  in that step in place of a later step that runs the suite: one pass runs every test file and
+  checks the changed modules' coverage, and no test runs twice. A
+  dependency update is proved by CI's full suite; no step of the default list runs the whole suite. The step runner gives a machine step `SYMPHONY_CHANGED_ELIXIR_FILES`
   (the Elixir source files, `.ex` and `.exs`, the change touches that still exist; never a
   generated file such as `mix.lock`), `SYMPHONY_CHANGED_TEST_FILES` (the changed test files and the
   tests of the changed `lib/` files; either may be empty, and the default steps then run no credo,
