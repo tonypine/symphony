@@ -114,6 +114,23 @@ defmodule SymphonyElixir.Views do
     spec(%{"filters" => filters, "columns" => params |> Map.get("columns") |> blank_to_nil() |> split_list(), "sort" => sort})
   end
 
+  @doc """
+  What a request's query parameters select: `view=<id>`, a saved view, or the inline query of
+  `query/1`, as `{:ok, view | nil, spec}`. `view` and inline filters, columns or sort don't mix
+  (`{:error, {:invalid, reason}}`); an unknown view is `{:error, :not_found}`. What
+  `GET /api/v1/tickets` and the Home read's queue (`GET /api/v1/home`) both read.
+  """
+  @spec from_params(map()) :: {:ok, t() | nil, spec()} | {:error, :not_found | {:invalid, String.t()}}
+  def from_params(%{"view" => id} = params) when is_binary(id) and id != "" do
+    if Enum.any?(["columns", "sort", "direction" | TicketColumns.filter_names()], &(Map.get(params, &1) not in [nil, ""])) do
+      {:error, {:invalid, "view and inline filters, columns or sort don't mix"}}
+    else
+      with {:ok, view} <- get(id), do: {:ok, view, Map.take(view, [:filters, :columns, :sort])}
+    end
+  end
+
+  def from_params(params) when is_map(params), do: with({:ok, spec} <- query(params), do: {:ok, nil, spec})
+
   @doc "A view as the API serves it: its times in ISO 8601."
   @spec payload(t()) :: map()
   def payload(view) do

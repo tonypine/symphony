@@ -20,11 +20,9 @@ defmodule SymphonyElixirWeb.TicketsController do
   alias SymphonyElixir.{Orchestrator, Situation, TicketColumns, TicketList, Views}
   alias SymphonyElixirWeb.Endpoint
 
-  @inline ["columns", "sort", "direction" | TicketColumns.filter_names()]
-
   @spec index(Conn.t(), map()) :: Conn.t()
   def index(conn, params) do
-    case spec(params) do
+    case Views.from_params(params) do
       {:ok, view, spec} ->
         {live, error} = live()
         columns = Enum.map(spec.columns, fn name -> Enum.find(TicketColumns.columns(), &(&1.name == name)) end)
@@ -48,16 +46,6 @@ defmodule SymphonyElixirWeb.TicketsController do
         error_response(conn, 400, "invalid_query", message)
     end
   end
-
-  defp spec(%{"view" => id} = params) when is_binary(id) and id != "" do
-    if Enum.any?(@inline, &(Map.get(params, &1) not in [nil, ""])) do
-      {:error, {:invalid, "view and inline filters, columns or sort don't mix"}}
-    else
-      with {:ok, view} <- Views.get(id), do: {:ok, view, Map.take(view, [:filters, :columns, :sort])}
-    end
-  end
-
-  defp spec(params), do: with({:ok, spec} <- Views.query(params), do: {:ok, nil, spec})
 
   defp live do
     case Orchestrator.snapshot(Endpoint.config(:orchestrator) || Orchestrator, Endpoint.config(:snapshot_timeout_ms) || 15_000) do

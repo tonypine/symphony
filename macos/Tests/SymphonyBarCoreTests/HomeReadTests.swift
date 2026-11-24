@@ -170,6 +170,35 @@ final class HomeReadTests: XCTestCase {
         XCTAssertEqual(lists.row("Q-1")?.epic, "E-9", "an epic with no title shows its identifier")
     }
 
+    /// The read with the slot entries and the queue rows the new Home reads (TP-1631): the present lists decode as
+    /// before, and the new keys change nothing in them.
+    func testTheReadWithSlotEntriesAndQueueRowsStillDecodesItsLists() throws {
+        let json = #"""
+        {"in_progress": [{"kind": "ticket", "identifier": "T-1", "title": "Working", "phase": "In Progress",
+                          "situation": {"kind": "working", "since": "2026-10-07T14:00:00Z"}, "working": true, "in_progress": true}],
+         "queue": {"roots": [{"identifier": "Q-1", "title": "Next", "children": [{"identifier": "Q-2", "children": []}]}],
+                   "rows": [{"issue_id": "q1", "identifier": "Q-1", "number": "1", "path": [1], "parent": null, "phase": "Todo",
+                             "waits_on": [{"identifier": "T-1", "kind": "released"}], "sub_tickets": {"done": 1, "total": 3}}],
+                   "count": 1, "total": 1, "offset": 0, "limit": 100, "next_offset": null, "view": null, "filters": []},
+         "outside": {"backlog": 0, "below_priority": 0, "epic": 0, "behind": 0},
+         "slots": {"total": 2, "used": 1, "free": 1, "holders": [],
+                   "entries": [{"slot": 1, "empty": false, "since": "2026-10-07T13:00:00Z",
+                                "epic": {"identifier": "E-1", "done": 2, "total": 5},
+                                "ticket": {"identifier": "T-1", "stages": [{"id": "coding", "state": "current", "tokens": 12}],
+                                           "tokens": {"used": 12, "budget": null}, "plan": null, "checks": null, "pull_request": null}},
+                               {"slot": 2, "empty": true, "since": null, "epic": null, "ticket": null}]}}
+        """#
+        let read = try XCTUnwrap(HomeRead.decode(Data(json.utf8)))
+        XCTAssertEqual(read.inProgress.count, 1)
+        XCTAssertEqual(read.queue.count, 1)
+
+        let lists = HomeLists(read: read, reference: reference)
+        XCTAssertEqual(lists.progress.map(\.id), ["T-1"])
+        XCTAssertEqual(lists.queue.map(\.id), ["Q-1"])
+        XCTAssertEqual(lists.queue[0].children.map(\.id), ["Q-2"])
+        XCTAssertEqual(lists.row("T-1")?.lead, .live)
+    }
+
     // MARK: - Two lists walked as one
 
     /// The arrow keys walk the rows of both lists in order: past a list's last line or first line is the other list.

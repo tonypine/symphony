@@ -34,12 +34,14 @@ defmodule SymphonyElixirWeb.Presenter do
     TicketBrief,
     TicketChecks,
     TicketEvents,
+    TicketList,
     TicketMoves,
     TicketObservation,
     TicketPlan,
     TicketState,
     URLUtils,
-    UsageLimit
+    UsageLimit,
+    Views
   }
 
   alias SymphonyElixir.Codex.MessageHumanizer
@@ -189,13 +191,19 @@ defmodule SymphonyElixirWeb.Presenter do
   @doc """
   The Director's Home read (`GET /api/v1/home`, `SymphonyElixir.Home.read/4`): the tickets in
   progress under their epics, the queue as the tree of what waits on what, and how many open
-  tickets neither holds, by reason. Read from the ticket records, their ledgers and what the
-  orchestrator walked at its last poll cycle: it makes no Linear request. It carries no time of its
-  own, so an unchanged read has an unchanged `ETag`. When the snapshot can't be read the situations
-  are the records' alone, the queue is empty and the answer carries an `error`.
+  tickets neither holds, by reason; and the slot entries with their cards and one page of the
+  queue rows (`SymphonyElixir.Home.Slots`, `SymphonyElixir.Home.Queue`). Read from the ticket
+  records, their ledgers and the orchestrator's snapshot (the slot count, the runs and what it
+  walked at its last poll cycle): it makes no Linear request. It carries no time of its own, so an
+  unchanged read has an unchanged `ETag`. When the snapshot can't be read the situations are the
+  records' alone, the queue tree is empty, the slots are numbered to the configured count and the
+  answer carries an `error`.
+
+  `query` takes the queue page (`offset`, `limit`) and the saved filter: `filters` (a view's,
+  `SymphonyElixir.Views`) narrow the queue rows, and `view` is echoed in `queue.view`.
   """
-  @spec home_payload(GenServer.name(), timeout()) :: map()
-  def home_payload(orchestrator, snapshot_timeout_ms) do
+  @spec home_payload(GenServer.name(), timeout(), map()) :: map()
+  def home_payload(orchestrator, snapshot_timeout_ms, query \\ %{}) do
     records = ticket_state_records() |> Map.values()
 
     {snapshot, error} =
@@ -218,7 +226,22 @@ defmodule SymphonyElixirWeb.Presenter do
       })
     end
 
-    payload = Home.read(Map.get(snapshot, :dispatch_order), records, live, priority_filter: Config.ticket_priority_filter(), moves: moves)
+    filters = Map.get(query, :filters, [])
+    matching = if filters != [], do: TicketList.matching(filters, records: records, live: live)
+    page = %{offset: Map.get(query, :offset, 0), limit: Map.get(query, :limit, Home.Queue.default_limit()), matching: matching}
+
+    payload =
+      Home.read(Map.get(snapshot, :dispatch_order), records, live,
+        priority_filter: Config.ticket_priority_filter(),
+        moves: moves,
+        slot_count: get_in(snapshot, [:slots, :total]) || Config.settings!().execution.max_concurrent_agents,
+        page: page,
+        runs: Map.get(snapshot, :running, []),
+        pull_request: &PullRequestPayload.read/1
+      )
+
+    view = Map.get(query, :view)
+    payload = update_in(payload.queue, &Map.merge(&1, %{view: view && Views.payload(view), filters: filters}))
     if error, do: Map.put(payload, :error, error), else: payload
   end
 

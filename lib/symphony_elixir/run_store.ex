@@ -2065,23 +2065,8 @@ defmodule SymphonyElixir.RunStore do
   end
 
   # A ticket's parent as its own record names it, else as its parent's record lists it among its
-  # sub-issues: every poll reads a ticket's sub-issues, but its parent only when a run starts, so a
-  # sub-ticket that never ran is known by its parent's record alone.
-  defp parent_map(records), do: records |> listed_parents() |> Map.merge(named_parents(records))
-
-  defp listed_parents(records) do
-    records
-    |> Enum.filter(&is_binary(Map.get(&1, :issue_identifier)))
-    |> Enum.flat_map(fn record -> for child <- sub_ids(Map.get(record, :sub_issues)), do: {child, record.issue_identifier} end)
-    |> Map.new()
-  end
-
-  defp named_parents(records) do
-    for %{issue_id: id, parent: %{identifier: parent}} <- records, is_binary(parent), into: %{}, do: {id, parent}
-  end
-
-  defp sub_ids(subs) when is_list(subs), do: for(%{id: child} <- subs, is_binary(child), do: child)
-  defp sub_ids(_subs), do: []
+  # sub-issues (`SymphonyElixir.Dispatch.Queue.parents/1`).
+  defp parent_map(records), do: Queue.parents(records)
 
   defp id_map(records) do
     for %{issue_identifier: identifier, issue_id: id} <- records, is_binary(identifier), is_binary(id), into: %{} do

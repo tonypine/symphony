@@ -22,6 +22,26 @@ defmodule SymphonyElixir.TicketList do
   """
   @spec select(Views.spec(), keyword()) :: [%{String.t() => term()}]
   def select(spec, opts \\ []) do
+    needs_situation? = TicketColumns.situation?([spec.sort.column | spec.columns])
+
+    spec.filters
+    |> filtered(needs_situation?, opts)
+    |> sort(spec.sort)
+    |> Enum.map(fn {record, values} -> row(record, values, spec.columns) end)
+  end
+
+  @doc """
+  The issue ids of the tickets `filters` (a view's, `SymphonyElixir.Views`) let through, matched as
+  `select/2` matches them, with its `opts`: the Home read's queue keeps only these rows.
+  """
+  @spec matching([Views.filter()], keyword()) :: MapSet.t(String.t())
+  def matching(filters, opts \\ []) when is_list(filters) do
+    filters |> filtered(false, opts) |> MapSet.new(fn {record, _values} -> record.issue_id end)
+  end
+
+  # Each ticket `filters` let through with its columns' values, the situation's among them when a
+  # filter asks for it or `needs_situation?`.
+  defp filtered(filters, needs_situation?, opts) do
     records =
       opts
       |> Keyword.get_lazy(:records, &RunStore.list_all_ticket_states/0)
@@ -29,8 +49,8 @@ defmodule SymphonyElixir.TicketList do
       |> Enum.map(&TicketState.normalize/1)
 
     tickets = Enum.filter(records, &ticket?/1)
-    {situation_filters, filters} = Enum.split_with(spec.filters, &(&1.column == "situation"))
-    needs_situation? = situation_filters != [] or TicketColumns.situation?([spec.sort.column | spec.columns])
+    {situation_filters, filters} = Enum.split_with(filters, &(&1.column == "situation"))
+    needs_situation? = situation_filters != [] or needs_situation?
     live = Keyword.get_lazy(opts, :live, fn -> Situation.live_facts(%{}) end)
 
     tickets
@@ -38,8 +58,6 @@ defmodule SymphonyElixir.TicketList do
     |> Enum.filter(fn {_record, values} -> Enum.all?(filters, &matches?(&1, values)) end)
     |> Enum.map(fn {record, values} -> {record, with_situation(values, record, needs_situation?, live, records)} end)
     |> Enum.filter(fn {_record, values} -> Enum.all?(situation_filters, &matches?(&1, values)) end)
-    |> sort(spec.sort)
-    |> Enum.map(fn {record, values} -> row(record, values, spec.columns) end)
   end
 
   defp ticket?(record), do: is_binary(record.issue_identifier) and is_nil(record.removed_at) and is_nil(record.not_found_at)

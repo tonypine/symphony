@@ -76,13 +76,47 @@ defmodule SymphonyElixir.Dispatch.Queue do
   level; a parent cycle is cut where it closes.
   """
   @spec places([map()]) :: %{String.t() => place()}
-  def places(records) when is_list(records) do
-    {keys, parents} = links(records)
+  def places(records) when is_list(records), do: places(records, nil)
+
+  @doc """
+  The places of `places/1`, each ticket ordered under the parent `parents` names for it (issue id to
+  the parent's identifier, `parents/1`) instead of its record's own: a sub-ticket that never ran,
+  whose record names no parent, is placed under the parent whose record lists it. `nil` reads each
+  record's own parent, as `places/1` does.
+  """
+  @spec places([map()], %{String.t() => String.t()} | nil) :: %{String.t() => place()}
+  def places(records, parents) when is_list(records) and (is_map(parents) or is_nil(parents)) do
+    {keys, parents} = links(records, parents)
     Map.new(keys, fn {id, _key} -> {id, id |> lineage(parents) |> Enum.map(&Map.fetch!(keys, &1))} end)
   end
 
-  # The keyed tickets' keys and the parent each one is ordered under (one that holds a key), by id.
-  defp links(records) do
+  @doc """
+  Each ticket's parent, by issue id, as its parent's identifier: as its own record names it, else as
+  its parent's record lists it among its sub-issues. Every poll reads a ticket's sub-issues, but its
+  parent only when a run starts, so a sub-ticket that never ran is known by its parent's record
+  alone. What the slots' parents map (`SymphonyElixir.Dispatch.Slots`) and the Home read's queue
+  (`SymphonyElixir.Home.Queue`) both resolve parents with.
+  """
+  @spec parents([map()]) :: %{String.t() => String.t()}
+  def parents(records) when is_list(records), do: records |> listed_parents() |> Map.merge(named_parents(records))
+
+  defp listed_parents(records) do
+    records
+    |> Enum.filter(&is_binary(Map.get(&1, :issue_identifier)))
+    |> Enum.flat_map(fn record -> for child <- sub_ids(Map.get(record, :sub_issues)), do: {child, record.issue_identifier} end)
+    |> Map.new()
+  end
+
+  defp named_parents(records) do
+    for %{issue_id: id, parent: %{identifier: parent}} <- records, is_binary(parent), into: %{}, do: {id, parent}
+  end
+
+  defp sub_ids(subs) when is_list(subs), do: for(%{id: child} <- subs, is_binary(child), do: child)
+  defp sub_ids(_subs), do: []
+
+  # The keyed tickets' keys and the parent each one is ordered under (one that holds a key), by id:
+  # the record's own parent, or the one `named` gives (issue id to the parent's identifier).
+  defp links(records, named \\ nil) do
     keyed = for %{issue_id: id, sort_key: key} = record <- records, is_binary(id), is_binary(key), do: record
     keys = Map.new(keyed, &{&1.issue_id, &1.sort_key})
 
@@ -91,7 +125,8 @@ defmodule SymphonyElixir.Dispatch.Queue do
         {identifier, record.issue_id}
       end
 
-    parents = for record <- keyed, parent_id = Map.get(ids, scope(record)), into: %{}, do: {record.issue_id, parent_id}
+    scope_of = if named, do: &Map.get(named, &1.issue_id), else: &scope/1
+    parents = for record <- keyed, parent_id = Map.get(ids, scope_of.(record)), into: %{}, do: {record.issue_id, parent_id}
     {keys, parents}
   end
 

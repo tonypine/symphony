@@ -23,12 +23,22 @@ defmodule SymphonyElixir.Home do
     `epic` (an epic with no ticket in progress) and `behind` (a queued ticket that depends on one of
     those, or behind one).
   - `slots`: the slots the dispatch pass read (`SymphonyElixir.Dispatch.Slots.read/3`): the slot
-    count, how many are used and free, and the tickets that hold them; nil before the first walk.
+    count, how many are used and free, and the tickets that hold them, none of them before the
+    first walk; and `entries`, one per slot in number order, an empty slot included, each with what
+    its slot card shows (`SymphonyElixir.Home.Slots`), read from the ticket records.
+  - `queue.rows`: the queue Home becomes the window to (`SymphonyElixir.Home.Queue`): every open
+    ticket with a place in the stored queue that is not in work, flat, in the stored order, each
+    with its position number, one page of them, narrowed by a saved filter of the Tickets page; with
+    `count`, `total`, `offset`, `limit` and `next_offset` beside them.
 
-  Each ticket of either list carries `in_progress`: true exactly when it holds a slot.
+  Each ticket of either list carries `in_progress`: true exactly when it holds a slot. The slot
+  entries and the queue rows are built from the records at the read, so a read after a queue move,
+  a slot count change, a Start or a Stop shows it without waiting for a poll.
   """
 
-  alias SymphonyElixir.{Dispatch.DependsOn, Dispatch.Slots, Situation, TicketState}
+  alias SymphonyElixir.{Dispatch.DependsOn, Dispatch.Queue, Dispatch.Slots, Situation, TicketState}
+  alias SymphonyElixir.Home.Queue, as: QueueRows
+  alias SymphonyElixir.Home.Slots, as: SlotEntries
 
   @not_started ["backlog", "todo", "triage"]
   @needs_fix ["rework", "ci fix"]
@@ -47,6 +57,11 @@ defmodule SymphonyElixir.Home do
     nil when every priority is; default nil.
   - `:moves`: a function from a record to its `moves` (`SymphonyElixir.TicketMoves.read/1`), for the
     move of a ticket that waits on a person; without it no entry carries one.
+  - `:slot_count`: the slot count the entries are numbered to; default the walked slots' `total`,
+    else none.
+  - `:page`: the queue rows to give (`t:SymphonyElixir.Home.Queue.page/0`); default the first page,
+    unfiltered.
+  - `:runs`, `:pull_request` and `:now`: as `SymphonyElixir.Home.Slots.entries/3` takes them.
   """
   @spec read(order(), [map()], Situation.live_facts(), keyword()) :: map()
   def read(order, records, live, opts \\ []) when is_list(records) do
@@ -76,11 +91,18 @@ defmodule SymphonyElixir.Home do
     {queued, outside} = classify(records, in_progress_ids, ctx)
     {queued, behind} = behind(queued, in_progress_ids, ctx)
 
+    walked_slots = order && Map.get(order, :slots)
+    parents = Queue.parents(records)
+    slot_count = Keyword.get(opts, :slot_count) || (walked_slots && walked_slots.total) || 0
+    slot_opts = [total: slot_count, parents: parents] ++ Keyword.take(opts, [:moves, :runs, :pull_request, :now])
+    in_work = records |> Enum.filter(&Slots.held?/1) |> MapSet.new(& &1.issue_id) |> MapSet.union(live.running |> Map.keys() |> MapSet.new())
+    page = Keyword.get(opts, :page, %{offset: 0, limit: QueueRows.default_limit(), matching: nil})
+
     %{
       in_progress: in_progress,
-      queue: %{roots: queue(queued, in_progress_ids, ctx)},
+      queue: Map.put(QueueRows.read(records, in_work, parents, live, page, moves: ctx.moves), :roots, queue(queued, in_progress_ids, ctx)),
       outside: Map.put(outside, :behind, length(behind)),
-      slots: order && Map.get(order, :slots)
+      slots: Map.put(walked_slots || %{}, :entries, SlotEntries.entries(records, live, slot_opts))
     }
   end
 
@@ -122,12 +144,17 @@ defmodule SymphonyElixir.Home do
       since: situation.since,
       working: Map.has_key?(ctx.live.running, record.issue_id),
       in_progress: Map.has_key?(ctx.holders, record.issue_id),
-      move: move(record, situation, ctx)
+      move: move(record, situation, ctx.moves)
     }
   end
 
-  # The Director's move on a ticket that waits on them: Answer for an open question, else Unblock.
-  defp move(record, %{kind: "waiting_on_you"}, %{moves: moves}) when is_function(moves, 1) do
+  @doc """
+  The Director's move on a ticket that waits on them, from `moves` (as `read/4` takes it): Answer
+  for an open question, else Unblock; nil when the ticket waits on no one, neither is allowed, or
+  there is no `moves`.
+  """
+  @spec move(map(), map(), (map() -> map()) | nil) :: map() | nil
+  def move(record, %{kind: "waiting_on_you"}, moves) when is_function(moves, 1) do
     read = moves.(record)
 
     Enum.find_value([:answer, :unblock], fn name ->
@@ -138,7 +165,7 @@ defmodule SymphonyElixir.Home do
     end)
   end
 
-  defp move(_record, _situation, _ctx), do: nil
+  def move(_record, _situation, _moves), do: nil
 
   defp epic_node({identifier, title}, kids, situations, ctx) do
     epic = Map.get(ctx.by_identifier, identifier)
