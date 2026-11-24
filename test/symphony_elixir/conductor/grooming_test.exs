@@ -228,7 +228,8 @@ defmodule SymphonyElixir.Conductor.GroomingTest do
       assert_received {:memory_tracker_state_update, issue_id, "In Progress"}
       assert issue_id == ctx.issue_id
       assert %{phase: "In Progress"} = RunStore.get_ticket_state(ctx.issue_id)
-      assert [%{actor: %{kind: :agent, run_kind: "conductor"}, payload: %{from: "Todo", to: "In Progress", note: "The plan is written; the first run starts."}}] = events(ctx.issue_id, "ticket.moved")
+      assert [%{actor: %{kind: :agent, run_kind: "conductor"}, payload: payload}] = events(ctx.issue_id, "ticket.moved")
+      assert %{from: "Todo", to: "In Progress", note: "The plan is written; the first run starts."} = payload
     end
 
     test "a plan with an empty list of layers is recorded with its checks", ctx do

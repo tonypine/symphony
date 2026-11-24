@@ -688,10 +688,15 @@ defmodule SymphonyElixir.Conductor do
 
   defp groom_asked(%{issue_id: issue_id} = plan, issue, opts) do
     case turn(in_workspace(plan, issue, opts), issue, opts) do
-      {_exit, :held, _route} -> :held
-      {exit, :ok, _route} -> after_grooming(TicketPlan.groomed?(issue_id), exit, plan, issue, opts)
+      {_exit, :held, _route} ->
+        :held
+
+      {exit, :ok, _route} ->
+        after_grooming(TicketPlan.groomed?(issue_id), exit, plan, issue, opts)
+
       # The ticket moved: the run it came before does not start, and the new stage is dispatched.
-      {exit, :moved, _route} -> with(:ok <- after_grooming(TicketPlan.groomed?(issue_id), exit, plan, issue, opts), do: :again)
+      {exit, :moved, _route} ->
+        with :ok <- after_grooming(TicketPlan.groomed?(issue_id), exit, plan, issue, opts), do: :again
     end
   end
 

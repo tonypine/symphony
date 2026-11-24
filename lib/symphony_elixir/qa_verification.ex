@@ -820,9 +820,10 @@ defmodule SymphonyElixir.QaVerification do
   end
 
   # What the Conductor's route does. A question it asked holds the ticket, so Symphony asks none of
-  # its own and does not rerun, nor does a move the turn made itself; a rerun leaves the ticket in QA for the next pass, which reads the
-  # turn's instructions; a rework records the turn's finding in this QA run and moves the ticket to
-  # Rework under its own signal, and the rework run reads the finding and the instructions.
+  # its own and does not rerun, nor does a move the turn made itself; a rerun leaves the ticket in QA
+  # for the next pass, which reads the turn's instructions; a rework records the turn's finding in
+  # this QA run and moves the ticket to Rework under its own signal, and the rework run reads the
+  # finding and the instructions.
   defp follow_route(:held, issue, _opts, _settings, _head) do
     Logger.info("QA for #{issue_label(issue)} waits on the Conductor's question; Symphony asks none of its own")
     :ok

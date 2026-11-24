@@ -12,6 +12,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
   alias SymphonyElixir.PhaseSteps.WindowTests
   alias SymphonyElixir.PrWatch.Competitors
   alias SymphonyElixir.{StateMachine, TicketSignals, TicketState, TicketStateReconciler, TokenBudget}
+  alias SymphonyElixir.TicketEvents.Journal
 
   @waiting "Waiting on sub-tickets"
   @conductor_question "How should MOT-40 get past a QA check that cannot set up a failing state request?"
@@ -2668,12 +2669,14 @@ defmodule SymphonyElixir.DirectorMovesTest do
       refute Pauses.paused?({:ticket, "repo-director", "pr"})
 
       # The move is the Conductor turn's, with its reason; its reply hangs under the message.
-      assert [%{actor: %{kind: :agent, run_kind: "conductor", run_id: "conductor-" <> _ = run_id}, run_id: run_id, payload: payload} = moved] =
+      assert [%{actor: %{kind: :agent, run_kind: "conductor", run_id: "conductor-" <> _ = run_id}} = moved] =
                RunStore.list_ticket_events("pr", types: ["ticket.moved"])
+
+      assert %{run_id: ^run_id, payload: payload} = moved
 
       assert payload == %{from: "Rework", to: "QA", note: @reason, run_stopped: false}
       assert moved.summary.title == "Moved to QA from Rework"
-      assert %{kind: "run", name: "conductor", run_id: ^run_id} = SymphonyElixir.TicketEvents.Journal.by(moved)
+      assert %{kind: "run", name: "conductor", run_id: ^run_id} = Journal.by(moved)
       assert [%{run_id: ^run_id, parent: parent}] = RunStore.list_ticket_events("pr", types: ["conductor.update"])
       assert parent == message.id
       assert [%{"move" => "move", "from_state" => "Rework", "to_state" => "QA", "by" => "Conductor", "run_id" => ^run_id}] = audit_records()
