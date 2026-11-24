@@ -71,6 +71,33 @@ defmodule SymphonyElixir.ObservabilityPubSubTest do
     assert log =~ "failed to broadcast ticket record change: :forced_failure"
   end
 
+  test "subscribe_queue and broadcast_queue_change deliver queue notices until unsubscribed" do
+    assert ObservabilityPubSub.queue_topic() == "queue"
+    assert :ok = ObservabilityPubSub.subscribe_queue()
+    assert :ok = ObservabilityPubSub.broadcast_queue_change("slots", %{count: 2})
+    assert_receive {:queue_notice, %{change: "slots", count: 2, at: at}}
+    assert {:ok, _at, 0} = DateTime.from_iso8601(at)
+
+    assert :ok = ObservabilityPubSub.broadcast_queue_change("start")
+    assert_receive {:queue_notice, %{change: "start"} = notice}
+    assert Map.keys(notice) |> Enum.sort() == [:at, :change]
+
+    assert :ok = ObservabilityPubSub.unsubscribe_queue()
+    assert :ok = ObservabilityPubSub.broadcast_queue_change("order")
+    refute_receive {:queue_notice, _notice}, 50
+  end
+
+  test "broadcast_queue_change logs adapter errors without failing the caller" do
+    {:ok, original_pubsub_meta} = Registry.meta(SymphonyElixir.PubSub, :pubsub)
+    on_exit(fn -> :ok = Registry.put_meta(SymphonyElixir.PubSub, :pubsub, original_pubsub_meta) end)
+    failing_pubsub_meta = original_pubsub_meta |> put_elem(0, FailingPubSubAdapter) |> put_elem(1, :failing_adapter)
+    :ok = Registry.put_meta(SymphonyElixir.PubSub, :pubsub, failing_pubsub_meta)
+
+    log = capture_log(fn -> assert :ok = ObservabilityPubSub.broadcast_queue_change("order", %{issue_id: "issue-1"}) end)
+
+    assert log =~ "failed to broadcast queue change: :forced_failure"
+  end
+
   test "broadcast_update is a no-op when pubsub is unavailable" do
     pubsub_child_id = Phoenix.PubSub.Supervisor
 

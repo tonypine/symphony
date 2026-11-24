@@ -13,6 +13,13 @@ defmodule SymphonyElixirWeb.StreamController do
   each keep only the notices that carry them; without them every ticket's notices come. When the
   client goes away a write fails, and the response ends and leaves no subscriber behind. Like the
   other reads of `/api/v1`, it needs no token.
+
+  A change of the dispatch queue or of its slots is its own message, `event: queue`, with no `id:`
+  and its `data:` the notice as JSON (`SymphonyElixirWeb.ObservabilityPubSub.broadcast_queue_change/2`):
+  `change` (`order` after a ticket moved in the queue, with the ticket's `issue_id` and
+  `issue_identifier`; `slots` after the slot count changed, with the new `count`) and `at`. The
+  write path sends it right after its write, so a client reads the queue again at once. The queue
+  is global, so every stream gets it, whatever its `repo_key` and `issue_identifier`.
   """
 
   use Phoenix.Controller, formats: [:json]
@@ -26,6 +33,7 @@ defmodule SymphonyElixirWeb.StreamController do
   def index(conn, params) do
     filter = %{repo_key: blank_to_nil(params["repo_key"]), issue_identifier: blank_to_nil(params["issue_identifier"])}
     :ok = ObservabilityPubSub.subscribe_ticket_events()
+    :ok = ObservabilityPubSub.subscribe_queue()
     interval = keep_alive_ms()
 
     conn
@@ -46,6 +54,9 @@ defmodule SymphonyElixirWeb.StreamController do
           do: write(conn, message(notice), filter, interval, timer),
           else: stream(conn, filter, interval, timer)
 
+      {:queue_notice, notice} ->
+        write(conn, "event: queue\ndata: #{Jason.encode!(notice)}\n\n", filter, interval, timer)
+
       {__MODULE__, :keep_alive} ->
         write(conn, ": keep-alive\n\n", filter, interval, schedule_keep_alive(interval))
     end
@@ -59,6 +70,7 @@ defmodule SymphonyElixirWeb.StreamController do
       {:error, _reason} ->
         Process.cancel_timer(timer)
         ObservabilityPubSub.unsubscribe_ticket_events()
+        ObservabilityPubSub.unsubscribe_queue()
         conn
     end
   end

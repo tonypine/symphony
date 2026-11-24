@@ -113,6 +113,24 @@ defmodule SymphonyElixirWeb.ControlApiController do
   has), 422 for a missing parameter or a priority that isn't one of Linear's, and 502, with why,
   when the tracker refuses the write.
 
+  `queue/move` moves a ticket to another place in the dispatch queue (`SymphonyElixir.DirectorQueue`),
+  inside its scope (the top-level tickets, or its parent's sub-tickets): it takes `issue_identifier`
+  and one of `position` (`top` or `end`), `after` or `before` (a ticket of the same scope), and
+  answers 200 with the ticket, its `scope` and the scope's tickets in their new `order`. Every read
+  of the queue made after the answer shows the new order, and the open streams get an
+  `event: queue` notice (`change: order`). 409 with the reason the app shows when the move is
+  refused (the ticket holds no place in the queue, the neighbour is the ticket itself or in another
+  scope, the queue changed under the move), 422 for a missing or unknown parameter or a ticket
+  Symphony doesn't track, 502, with why, when the store refuses the write.
+
+  `slots` sets how many tickets hold a slot at once: it takes `count`, a whole number from 1 to 6,
+  writes it to `execution.concurrency.max_total` in `symphony.yml` by editing that one line, applies
+  it at once (a raised count fills the new slots in the same moment; a lowered one stops no run, and
+  a freed slot is not given again while the tickets in progress reach the count), and answers 200
+  with `count` and the `slots` the reads now show. The open streams get an `event: queue` notice
+  (`change: slots`). 422 for a count outside 1 to 6, with the file left as it is, and 502, with why,
+  when the file can't be changed one line at a time.
+
   `label` turns one of the labels a person adds for Symphony to read on or off from the ticket page
   (`SymphonyElixir.DirectorLabels`): it takes `issue_identifier`, `label` and `action` (`add` or
   `remove`), and answers 200 with the ticket's label toggles after the change, 409 with the reason
@@ -133,7 +151,7 @@ defmodule SymphonyElixirWeb.ControlApiController do
   require Logger
 
   alias Plug.Conn
-  alias SymphonyElixir.{AuditLog, DirectorBlockers, DirectorLabels, DirectorMoves, DirectorPriority, DirectorRulings}
+  alias SymphonyElixir.{AuditLog, DirectorBlockers, DirectorLabels, DirectorMoves, DirectorPriority, DirectorQueue, DirectorRulings}
   alias SymphonyElixir.Conductor.Message, as: ConductorMessage
   alias SymphonyElixir.{ConductorGate, Marks, Messages, Orchestrator, TicketMoves, TicketSignals, UpdateWindow}
   alias SymphonyElixir.TicketEvents.Types
@@ -434,6 +452,39 @@ defmodule SymphonyElixirWeb.ControlApiController do
       end
     else
       {:error, {:invalid_request, message}} -> error_response(conn, 422, "invalid_request", message)
+    end
+  end
+
+  @spec queue_move(Conn.t(), map()) :: Conn.t()
+  def queue_move(conn, params) do
+    with {:ok, identifier} <- required_param(params["issue_identifier"], "issue_identifier"),
+         {:ok, target} <- queue_target(params) do
+      case DirectorQueue.move(identifier, target, [orchestrator: orchestrator(conn)] ++ Map.get(conn.assigns, :director_queue, [])) do
+        {:error, {:invalid, message}} -> error_response(conn, 422, "invalid_request", message)
+        result -> respond_move(conn, identifier, result)
+      end
+    else
+      {:error, {:invalid_request, message}} -> error_response(conn, 422, "invalid_request", message)
+    end
+  end
+
+  @spec slots(Conn.t(), map()) :: Conn.t()
+  def slots(conn, params) do
+    case DirectorQueue.set_slots(params["count"], [orchestrator: orchestrator(conn)] ++ Map.get(conn.assigns, :director_queue, [])) do
+      {:ok, payload} -> json(conn, payload)
+      {:error, {:invalid, message}} -> error_response(conn, 422, "invalid_request", message)
+      {:error, {:config, message}} -> error_response(conn, 502, "config_error", message)
+    end
+  end
+
+  # Exactly one of `position` (top or end), `after` and `before`.
+  defp queue_target(params) do
+    case {string_param(params["position"]), string_param(params["after"]), string_param(params["before"])} do
+      {"top", nil, nil} -> {:ok, :top}
+      {"end", nil, nil} -> {:ok, :end}
+      {nil, after_ticket, nil} when is_binary(after_ticket) -> {:ok, {:after, after_ticket}}
+      {nil, nil, before_ticket} when is_binary(before_ticket) -> {:ok, {:before, before_ticket}}
+      _other -> {:error, {:invalid_request, "name one place: position (top or end), after or before"}}
     end
   end
 
