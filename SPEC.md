@@ -4240,7 +4240,9 @@ or with a running build that has no sha, it is released at `Done`).
    through the issue's pause.
 5. No operator control breaks a dependency, and each refusal names the issues: a manual start of an
    issue with an unmet dependency ("TP-977 depends on TP-976 and can't start before it is done.",
-   or "… released." for a `released` one, judged as the gate judges it, whatever slot it names), a
+   or "… released." for a `released` one, judged as the gate judges it, whatever slot it names; the
+   ticket reads' Start entry judges it with the same build and the update hold's cache the
+   orchestrator publishes in its snapshot, so the read never offers a Start the call refuses), a
    queue move whose order would put an issue above one it depends on, compared where their scopes
    meet ("TP-978 depends on TP-977 and must stay below it.", decided under the queue's lock; nothing
    moves), and a cancel of an issue that open issues (not ended) depend on ("TP-976 can't be

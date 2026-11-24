@@ -39,6 +39,7 @@ defmodule SymphonyElixirWeb.Presenter do
     TicketObservation,
     TicketPlan,
     TicketState,
+    UpdateHold,
     URLUtils,
     UsageLimit,
     Views
@@ -81,9 +82,9 @@ defmodule SymphonyElixirWeb.Presenter do
         waiting_on_you = Inbox.items(snapshot, inbox)
         repositories = Map.get(snapshot, :repositories, [])
         records = ticket_state_records()
-        dependents = records |> Map.values() |> dependents_index()
-        status = &with_ticket_status(&1, records, repositories, false, dependents)
-        running_status = &with_ticket_status(&1, records, repositories, true, dependents)
+        shared = %{dependents: records |> Map.values() |> dependents_index(), update_hold_cache: update_hold_cache(snapshot)}
+        status = &with_ticket_status(&1, records, repositories, false, shared)
+        running_status = &with_ticket_status(&1, records, repositories, true, shared)
 
         %{
           generated_at: generated_at,
@@ -218,6 +219,7 @@ defmodule SymphonyElixirWeb.Presenter do
     live = Situation.live_facts(snapshot)
     pauses = %{repositories: Map.get(snapshot, :repositories, []), symphony_pause: symphony_pause_reason()}
     dependents = dependents_index(records)
+    cache = update_hold_cache(snapshot)
 
     moves = fn record ->
       moves_payload(record, %{
@@ -226,7 +228,8 @@ defmodule SymphonyElixirWeb.Presenter do
         symphony_pause: pauses.symphony_pause,
         repository_pause: repository_pause_in(pauses.repositories, record.repo_key),
         running?: Map.has_key?(live.running, record.issue_id),
-        dependents: Map.get(dependents, record.issue_id, [])
+        dependents: Map.get(dependents, record.issue_id, []),
+        update_hold_cache: cache
       })
     end
 
@@ -513,7 +516,8 @@ defmodule SymphonyElixirWeb.Presenter do
         repo_key: payload.repo_key,
         repository_pause: repository_pause,
         running?: running?,
-        dependents: ticket_state_records() |> Map.values() |> dependents_index() |> Map.get(payload.issue_id, [])
+        dependents: ticket_state_records() |> Map.values() |> dependents_index() |> Map.get(payload.issue_id, []),
+        update_hold_cache: update_hold_cache(snapshot)
       })
     )
   end
@@ -584,10 +588,15 @@ defmodule SymphonyElixirWeb.Presenter do
     DependsOn.dependents_index(records, MapSet.new(Config.settings!().tracker.terminal_states, &(&1 |> String.trim() |> String.downcase())))
   end
 
+  # The update hold's cache the orchestrator published in its snapshot, which judges a `:released`
+  # dependency in a ticket's Start as the orchestrator's Start judges it; an empty one without it.
+  defp update_hold_cache(%{update_hold_cache: %{} = cache}), do: cache
+  defp update_hold_cache(_snapshot), do: UpdateHold.empty_cache()
+
   # A state payload entry with its ticket's status, read from the records the payload read once and
   # from the repositories' pauses in the snapshot. A ticket the snapshot lists among the running
   # ones has a run already working on it, so its Start now is not allowed.
-  defp with_ticket_status(entry, records, repositories, running?, dependents) do
+  defp with_ticket_status(entry, records, repositories, running?, shared) do
     record = Map.get(records, entry.issue_id)
     entry = with_record_repo_key(entry, record)
     repo_key = entry.repo_key
@@ -595,7 +604,15 @@ defmodule SymphonyElixirWeb.Presenter do
     identifier = Map.get(entry, :issue_identifier) || Map.get(entry, :identifier) || entry.issue_id
     repository_pause = repository_pause_in(repositories, repo_key)
 
-    live = %{identifier: identifier, repo_key: repo_key, repository_pause: repository_pause, running?: running?, dependents: Map.get(dependents, entry.issue_id, [])}
+    live = %{
+      identifier: identifier,
+      repo_key: repo_key,
+      repository_pause: repository_pause,
+      running?: running?,
+      dependents: Map.get(shared.dependents, entry.issue_id, []),
+      update_hold_cache: shared.update_hold_cache
+    }
+
     Map.merge(entry, ticket_status(record, live))
   end
 
@@ -738,7 +755,13 @@ defmodule SymphonyElixirWeb.Presenter do
     watched = for {_issue_id, record} <- records, record.pr_watch, do: record
     live = Situation.live_facts(snapshot)
     all = Map.values(records)
-    pauses = %{repositories: Map.get(snapshot, :repositories, []), symphony_pause: symphony_pause_reason(), dependents: dependents_index(all)}
+
+    pauses = %{
+      repositories: Map.get(snapshot, :repositories, []),
+      symphony_pause: symphony_pause_reason(),
+      dependents: dependents_index(all),
+      update_hold_cache: update_hold_cache(snapshot)
+    }
 
     watched = Enum.sort_by(watched, &{&1.repo_key || "", &1.issue_identifier || &1.issue_id || ""})
     tracked = tracked_connected(snapshot)
@@ -771,7 +794,8 @@ defmodule SymphonyElixirWeb.Presenter do
             symphony_pause: pauses.symphony_pause,
             repository_pause: repository_pause_in(pauses.repositories, record.repo_key),
             running?: Map.has_key?(live.running, record.issue_id),
-            dependents: Map.get(pauses.dependents, record.issue_id, [])
+            dependents: Map.get(pauses.dependents, record.issue_id, []),
+            update_hold_cache: pauses.update_hold_cache
           })
       },
       Lifecycle.read(record.issue_id, DateTime.utc_now(), running_entry(snapshot, record.issue_id), paused?(record))

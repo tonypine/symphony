@@ -5292,18 +5292,29 @@ defmodule SymphonyElixir.Orchestrator do
   # starts nothing, and again in the orchestrator for a click that races a change. A run already
   # working on the ticket only the orchestrator knows, so the caller's check leaves it to the
   # orchestrator's.
-  defp refute_start(%Issue{} = issue) do
-    case StartNow.check(start_facts(issue, false, DependsOn.start_refusal(issue.identifier, issue.id, %{}, UpdateHold.empty_cache()))) do
+  defp refute_start(server, %Issue{} = issue) do
+    unmet = DependsOn.start_refusal(issue.identifier, issue.id, BuildInfo.current(), published_update_hold_cache(server))
+
+    case StartNow.check(start_facts(issue, false, unmet)) do
       :ok -> :ok
       {:error, reason} -> {:error, {:start_refused, reason}}
     end
   end
 
+  # The update hold's cache the orchestrator `server` last published in its snapshot; an empty one
+  # when none is published, so a `:released` dependency of a Done ticket reads unmet until it is.
+  defp published_update_hold_cache(server) do
+    case snapshot_cache_entry(server) do
+      {:ok, %{snapshot: %{update_hold_cache: %{} = cache}}} -> cache
+      _none -> UpdateHold.empty_cache()
+    end
+  end
+
   # The facts `SymphonyElixir.StartNow.check/1` judges a start on: the ticket's phase, the refusal of
   # its first unmet stored dependency, the lines of the pauses that stop it, whether a Question is
-  # open on it and whether a run works on it. The caller's check judges a `:released` dependency met
-  # once its ticket is done; the orchestrator's judges it with the running build and the update
-  # hold's cache, as the dispatch gate does.
+  # open on it and whether a run works on it. Both checks judge a `:released` dependency with the
+  # running build and the update hold's cache, as the dispatch gate does: the caller's with the
+  # cache the orchestrator published, the orchestrator's with its own.
   defp start_facts(%Issue{} = issue, running?, unmet_dependency) do
     %{
       phase: issue.state,
@@ -9412,7 +9423,7 @@ defmodule SymphonyElixir.Orchestrator do
   def start_issue(server, identifier, note, opts) when is_binary(identifier) and (is_binary(note) or is_nil(note)) and is_list(opts) do
     if server_available?(server) do
       with {:ok, %Issue{} = issue} <- fetch_issue_to_start(identifier),
-           :ok <- refute_start(issue),
+           :ok <- refute_start(server, issue),
            :ok <- refute_no_repository(issue),
            {:ok, issue} <- StartNow.follow(issue, fetch: &fetch_issue_to_start/1),
            {:ok, issue} <- claim_for_start(issue) do
@@ -10353,6 +10364,9 @@ defmodule SymphonyElixir.Orchestrator do
       slot_waiting: slot_waiting_snapshot(state.slot_waiting) ++ merging_ci_waiting_snapshot(state),
       dispatch_skipped: dispatch_skipped_snapshot(state.dispatch_skipped),
       dispatch_order: state.dispatch_order,
+      # What the update hold knows of the running build, so a reader judges a `:released`
+      # dependency as the orchestrator's Start does (`SymphonyElixir.TicketMoves`).
+      update_hold_cache: state.update_hold_cache,
       shipped_today: ShippedToday.today(state.shipped, now),
       claimed: state.claimed |> MapSet.to_list() |> Enum.sort(),
       pollers: poller_status_snapshot(),

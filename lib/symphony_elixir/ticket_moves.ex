@@ -14,6 +14,7 @@ defmodule SymphonyElixir.TicketMoves do
   """
 
   alias SymphonyElixir.{
+    BuildInfo,
     Config,
     DirectorMoves,
     IdlePark,
@@ -77,8 +78,10 @@ defmodule SymphonyElixir.TicketMoves do
   the record is not of a ticket removed in Linear, and `unblockable?` that the ticket has something
   the Director's Unblock releases. `unmet_dependency` is the refusal of a Start its first unmet
   stored dependency gives (`SymphonyElixir.Dispatch.DependsOn.start_refusal/4`, nil when it has
-  none), and `dependents` the open tickets that depend on it (`DependsOn.dependents/3`), which
-  refuse its cancel; a caller that doesn't read them gives none.
+  none), judged with the running build and the update hold's cache the caller read from the
+  orchestrator's snapshot (`update_hold_cache`), as the orchestrator's own Start judges it, and
+  `dependents` the open tickets that depend on it (`DependsOn.dependents/3`), which refuse its
+  cancel; a caller that doesn't read them gives none.
   """
   @type facts :: %{
           identifier: String.t() | nil,
@@ -98,10 +101,13 @@ defmodule SymphonyElixir.TicketMoves do
 
   @typedoc """
   What only the caller of `facts/2` knows: which ticket it is, the pauses over it, whether a run
-  works on it and, when the caller reads them, the open tickets that depend on it.
+  works on it and, when the caller reads them, the open tickets that depend on it and the update
+  hold's cache the orchestrator published (an empty one when it gives none: a `:released`
+  dependency of a Done ticket then reads unmet until the build is known to include it).
   """
   @type live :: %{
           optional(:dependents) => [String.t()],
+          optional(:update_hold_cache) => UpdateHold.cache(),
           identifier: String.t() | nil,
           repo_key: String.t() | nil,
           symphony_pause: String.t() | nil,
@@ -124,7 +130,9 @@ defmodule SymphonyElixir.TicketMoves do
   def facts(record, %{} = live) do
     questions = record_field(record, :questions, [])
 
-    Map.merge(live, %{
+    live
+    |> Map.delete(:update_hold_cache)
+    |> Map.merge(%{
       phase: record_field(record, :phase, nil),
       unmet_dependency: unmet_dependency(record, live),
       dependents: Map.get(live, :dependents, []),
@@ -308,9 +316,13 @@ defmodule SymphonyElixir.TicketMoves do
   defp pause_reasons(%{pause: %{reasons: reasons}}), do: reasons
   defp pause_reasons(_record), do: []
 
-  # Only a record that stores a dependency reads the store for the records it names.
-  defp unmet_dependency(%{issue_id: issue_id, depends_on: [_ | _]} = record, live),
-    do: DependsOn.start_refusal(Map.get(live, :identifier) || Map.get(record, :issue_identifier), issue_id, %{}, UpdateHold.empty_cache())
+  # Only a record that stores a dependency reads the store for the records it names. A `:released`
+  # one is judged with the running build and the orchestrator's update-hold cache, as the
+  # orchestrator's Start judges it, so the read never offers a Start the call refuses.
+  defp unmet_dependency(%{issue_id: issue_id, depends_on: [_ | _]} = record, live) do
+    identifier = Map.get(live, :identifier) || Map.get(record, :issue_identifier)
+    DependsOn.start_refusal(identifier, issue_id, BuildInfo.current(), Map.get(live, :update_hold_cache) || UpdateHold.empty_cache())
+  end
 
   defp unmet_dependency(_record, _live), do: nil
 
