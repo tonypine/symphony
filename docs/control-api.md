@@ -374,7 +374,7 @@ check that way (reruns it, spends no fix run), so `cancelled_no_machine` never r
 
 Where the ticket sits among the others, for the Connected panel (facts 15, 16 and 21 of
 `docs/design/director-ticket-page.md`). A ticket with a record, or one the orchestrator tracks, has it;
-it reads the records, the ledgers, what the orchestrator holds and the cached Initiatives, never Linear
+it reads the records, the ledgers, what the orchestrator holds and the Initiatives' read, never Linear
 (`SymphonyElixir.Connected.Read`).
 
 | Field | What it holds |
@@ -395,11 +395,11 @@ link, where each may be null.
 | --- | --- |
 | `identifier`, `title` | The plan ticket. |
 | `done`, `total` | Its progress: sub-tickets completed, of all of them but the canceled ones. It equals the same plan's count on `GET /api/v1/initiatives`, which reads the same records. |
-| `incomplete` | Whether Linear had more sub-tickets than the read returned, as on the Initiatives. |
+| `incomplete` | Always false: the records hold every sub-ticket, as on the Initiatives. |
 | `tickets` | The sub-tickets in chain order: `identifier`, `title`, `state`, `situation` (the kind of its `situation`, null without a record) and `current`, true on this ticket. |
 
-A plan the Initiatives don't hold (done more than 7 days ago, without the `plan` label, or right after a
-start, before their first read) comes from the parent's record: its sub-issues in creation order,
+A plan the Initiatives don't list (done more than 7 days ago, or not split by Symphony) comes from the
+parent's record: its sub-issues in creation order,
 counted by state, where `Done` is done and any other terminal state leaves it out. With no record of the
 parent, `done` and `total` are the parent's own and `tickets` is empty.
 

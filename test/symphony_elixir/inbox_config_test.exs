@@ -12,6 +12,7 @@ defmodule SymphonyElixir.InboxConfigTest do
     refute Enum.any?(specs, &match?(Inbox, &1))
     refute Enum.any?(specs, &match?({Inbox, _opts}, &1))
     refute SymphonyElixir.Initiatives in specs
+    assert Inbox.enabled?(Config.settings!())
   end
 
   test "over a memory tracker's issues file the Inbox reads the memory source" do

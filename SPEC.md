@@ -6742,7 +6742,8 @@ Minimum endpoints:
     `shipped_today` in `/api/v1/state` counts it.
   - `tickets` lists each, newest first: `issue_id`, `identifier`, `title`, `repo_key`,
     `initiative` (the plan ticket's `identifier` and `title`, kept on the run when the completion
-    was noted, else the cached plan that lists it; null when none), `pr_url`, `merged_at`, `date`
+    was noted, else the parent Symphony split that lists it, `GET /api/v1/initiatives`'s read; null
+    when none), `pr_url`, `merged_at`, `date`
     (its local day), `todo_at` and `todo_to_done_seconds`: from Symphony's first claim of the ticket
     (its move out of Todo), else its first run, to the merge.
   - `shipped_per_day` has one entry per day (`date`, `shipped`). The response also has `days`,
@@ -6816,8 +6817,8 @@ Minimum endpoints:
     `repository_paused`. A pause or question change records a ticket event, so the live channel
     (`/api/v1/stream`) sends that ticket's notice once it commits.
   - An issue with a ticket state record or that the orchestrator tracks carries `connected`: where it
-    sits among the others, from the records, the ledgers, what the orchestrator holds and the cached
-    Initiatives (no tracker read per request). `parent` (`identifier`, `title`, `done`, `total`,
+    sits among the others, from the records, the ledgers, what the orchestrator holds and the
+    Initiatives' read (no tracker read per request). `parent` (`identifier`, `title`, `done`, `total`,
     `children` state types in landing order, or null), `epic` (`identifier`, `title`, `done`, `total`,
     `incomplete`, and `tickets` in chain order, each with its `situation` kind and whether it is
     `current`, or null; the same count as `/api/v1/initiatives`), and `sub_tickets`, `blocked_by`,
