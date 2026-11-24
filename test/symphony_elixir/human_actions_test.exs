@@ -389,6 +389,8 @@ defmodule SymphonyElixir.HumanActionsTest do
     assert Process.alive?(pid)
 
     assert :ok = HumanActions.refresh(:"not_running_#{System.unique_integer([:positive])}")
+    # With no name it asks the app's own server, which this test never starts.
+    assert :ok = HumanActions.refresh()
   end
 
   test "lists the open questions on the records, and drops one answered in the Director without a Linear read" do

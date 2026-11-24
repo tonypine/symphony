@@ -78,6 +78,18 @@ defmodule Mix.Tasks.Cover.ChangedTest do
     assert_received {:run_parts, [{"part-1", [_ | _]}, {"part-2", [_ | _]}, {"part-3", [_ | _]}]}
   end
 
+  test "--all runs every test file of the suite, in 8 parts at most, and checks the changed modules" do
+    fake_deps(%{})
+
+    assert :ok = Changed.run(["--all"])
+
+    assert_received {:run_parts, parts}
+    assert length(parts) == min(8, System.schedulers_online())
+    assert parts |> Enum.flat_map(&elem(&1, 1)) |> Enum.sort() == Enum.sort(Path.wildcard("test/**/*_test.exs"))
+    assert_received {:mix_shell, :info, ["cover.changed: running every test file (" <> _count]}
+    assert_received {:mix_shell, :info, ["cover.changed: every changed module is at 100.00%"]}
+  end
+
   test "skips the modules mix.exs ignores" do
     fake_deps(%{
       git: fn
