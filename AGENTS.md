@@ -6,8 +6,8 @@ This repository contains the Elixir agent orchestration service that polls Linea
 
 - Elixir: `1.19.x` (OTP 28) via `mise`.
 - Install deps: `mix setup`.
-- Local pre-push checks: format, compile with warnings as errors, lint, targeted tests, and
-  the coverage of the changed modules (see below).
+- Local pre-push checks: format, compile with warnings as errors, lint, and the tests and
+  coverage of what changed, in one command (see below).
 - CI gate: `make all` (format check, lint, full test suite with 100% coverage, Dialyzer).
 
 
@@ -36,20 +36,20 @@ mix format --check-formatted
 mix compile --warnings-as-errors
 mix specs.check
 mix credo --strict <changed files>
-mix test <new or changed test files, and the test files of changed modules>
 mix cover.changed
 ```
 
 CI fails a push when any module is below 100% line coverage, so check the modules you changed
-before pushing: `mix cover.changed` runs the tests for the `lib/` modules changed since
-`origin/main` once with `--cover` and fails, naming the uncovered lines, when one of them is below
-100%. It skips `mix.exs`'s `ignore_modules`, as CI does. It picks the changed test files, the
+before pushing: `mix cover.changed` runs the changed test files and the tests for the `lib/`
+modules changed since `origin/main` once, in several processes at once, and fails when a test
+fails or, naming the uncovered lines, when one of the modules is below 100%. It is the test run
+and the coverage run in one: don't run `mix test` on the same files before it. It skips `mix.exs`'s `ignore_modules`, as CI does. It picks the changed test files, the
 `test/<path>_test.exs` of each changed `lib/<path>.ex` and the test files that name a changed
 module. When the branch deletes a test file, it also checks every module that test named at the
 merge-base, since the deleted file may have been their only coverage. When the tests that cover a
 module don't name it, pass them:
-`mix cover.changed <test files>`. It cover-compiles every module, so it takes a few seconds more
-than the same `mix test`.
+`mix cover.changed <test files>`. It cover-compiles only the modules it checks, so it costs no more
+than the same `mix test`. A test that failed runs first, alone, on the next run.
 
 Do not run `make all`, `make check`, `make coverage`, the full `mix test`, `mix test --stale` (it
 runs the whole suite in a fresh workspace) or Dialyzer locally;

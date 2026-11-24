@@ -102,11 +102,37 @@ The suite gives the same result on every machine, whatever the shell exports:
   `GITHUB_TOKEN` and the Slack and webhook URLs) before the app boots. A test that needs one sets it.
 
 It runs the changed test files, the `test/<path>_test.exs` of each changed `lib/<path>.ex` and the
-test files that name a changed module, once with `--cover`, then prints each changed module's
-coverage with its uncovered lines and fails when one is below 100%. Changes count from the
+test files that name a changed module, once, then prints each changed module's
+coverage with its uncovered lines and fails when a test fails or a module is below 100%. Changes count from the
 merge-base with `origin/main` (`--base <ref>` for another branch), uncommitted and untracked files
 included. Modules in `mix.exs`'s `test_coverage` `ignore_modules` are skipped, as in CI. When the
 tests that cover a module don't name it, pass them: `mix cover.changed <test files>`.
+
+That one run is both the test run and the coverage run, so no `mix test` of the changed test files
+goes before it (the run's `Tests and coverage` step is `mix cover.changed $SYMPHONY_CHANGED_TEST_FILES`):
+
+- The test files run in several `mix test` processes at once, spread by how long each took
+  (`test/support/test_weights.tsv`, heaviest first onto the lightest part, as `scripts/test-parts.sh`
+  does). A part runs its files one after the other, so the run ends no sooner than its heaviest
+  file: the number of parts is the tests' total time over half the heaviest file's, so the other
+  parts end before it, and over 5 s when no file takes 10 s (a part pays about 3 s for its own
+  start), at most 8 and the number of cores. `--parts N` sets it. With several parts, each runs 2
+  tests at a time (`TEST_MAX_CASES`).
+- Each part cover-compiles only the modules under check, not the whole app (about 8 s a process),
+  and exports their coverage (`cover/cover_changed_<part>.coverdata`); the report reads all the
+  parts' exports together. `mix.exs` picks that coverage tool
+  (`SymphonyElixir.ChangedCoverage.Runner`) for a process that has `SYMPHONY_COVER_MODULES` set;
+  every other `mix test --cover` uses Mix's own.
+- The tests that failed in the last run (`_build/test/cover_changed/failed.txt`) run first, alone
+  and without coverage. While one still fails the run stops there.
+- A test that fails beside the others runs once more, alone. One that passes then is named as
+  unsteady and does not fail the run, and its coverage counts; one that fails twice does, and runs
+  first next time. A part that stopped at 10 failures, or that never ran its tests, is not run
+  again: its failures are printed and the run fails.
+- It prints the failures as ExUnit printed them, one line of counts, then each module's coverage.
+  Each process's whole output is in `_build/test/cover_changed/<part>.log`.
+- With no module to check (a change to test files only, or to ignored modules), the changed test
+  files and the tests of the changed `lib/` files still run, without coverage.
 
 CI's `coverage report` job merges the four test partitions' coverage with `mix coverage.report`.
 It prints every module below 100% with its file and uncovered line numbers, and annotates the

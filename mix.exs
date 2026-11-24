@@ -44,6 +44,7 @@ defmodule SymphonyElixir.MixProject do
         }
       ],
       test_coverage: [
+        tool: cover_tool(),
         summary: [
           threshold: 100
         ],
@@ -138,6 +139,12 @@ defmodule SymphonyElixir.MixProject do
       aliases: aliases(),
       deps: deps()
     ]
+  end
+
+  # A `mix test --cover` process that `mix cover.changed` starts names the modules it checks in
+  # `SYMPHONY_COVER_MODULES`, and cover-compiles only those; any other run uses Mix's own tool.
+  defp cover_tool do
+    if System.get_env("SYMPHONY_COVER_MODULES"), do: SymphonyElixir.ChangedCoverage.Runner, else: Mix.Tasks.Test.Coverage
   end
 
   # `mix cover.changed` runs the tests with --cover, so it needs the test build.

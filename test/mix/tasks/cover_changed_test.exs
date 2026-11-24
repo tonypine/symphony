@@ -31,11 +31,14 @@ defmodule Mix.Tasks.Cover.ChangedTest do
         ["ls-files" | _] ->
           {:ok, ""}
       end,
-      run_tests: fn files ->
-        send(test_pid, {:run_tests, files})
-        :ok
+      weights: fn -> %{} end,
+      failed_tests: fn -> [] end,
+      save_failed: fn _specs -> :ok end,
+      run_parts: fn parts, _modules ->
+        send(test_pid, {:run_parts, parts})
+        Enum.map(parts, fn {name, _tests} -> %{name: name, status: 0, output: "1 test, 0 failures\n"} end)
       end,
-      coverage: fn modules -> Map.new(modules, &{&1, {:ok, [{{&1, 1}, {1, 0}}]}}) end
+      coverage: fn modules, _exports -> Map.new(modules, &{&1, {:ok, [{{&1, 1}, {1, 0}}]}}) end
     }
 
     Application.put_env(:symphony_elixir, :cover_changed_deps, Map.merge(deps, overrides))
@@ -47,7 +50,10 @@ defmodule Mix.Tasks.Cover.ChangedTest do
     assert :ok = Changed.run(["--base", "origin/dev", "test/extra_test.exs"])
 
     assert_received {:base, "origin/dev"}
-    assert_received {:run_tests, ["test/extra_test.exs", "test/symphony_elixir/changed_coverage_test.exs" | _rest]}
+    assert_received {:run_parts, parts}
+    files = Enum.flat_map(parts, &elem(&1, 1))
+    assert "test/extra_test.exs" in files
+    assert "test/symphony_elixir/changed_coverage_test.exs" in files
     assert_received {:mix_shell, :info, ["cover.changed: running " <> _files]}
     assert_received {:mix_shell, :info, ["cover.changed: SymphonyElixir.ChangedCoverage 100.00% (lib/symphony_elixir/changed_coverage.ex)"]}
     assert_received {:mix_shell, :info, ["cover.changed: every changed module is at 100.00%"]}
@@ -58,9 +64,18 @@ defmodule Mix.Tasks.Cover.ChangedTest do
 
     assert :ok = Changed.run(["--file", "lib/symphony_elixir/run_kind.ex"])
 
-    assert_received {:run_tests, files}
+    assert_received {:run_parts, parts}
+    files = Enum.flat_map(parts, &elem(&1, 1))
     assert "test/symphony_elixir/run_kind_test.exs" in files
     refute "test/symphony_elixir/changed_coverage_test.exs" in files
+  end
+
+  test "runs the tests in as many parts as --parts says" do
+    fake_deps(%{})
+
+    assert :ok = Changed.run(["--parts", "3", "--file", "lib/symphony_elixir/run_kind.ex"])
+
+    assert_received {:run_parts, [{"part-1", [_ | _]}, {"part-2", [_ | _]}, {"part-3", [_ | _]}]}
   end
 
   test "skips the modules mix.exs ignores" do
@@ -79,7 +94,7 @@ defmodule Mix.Tasks.Cover.ChangedTest do
   end
 
   test "raises when a changed module is below 100%" do
-    fake_deps(%{coverage: fn modules -> Map.new(modules, &{&1, {:ok, [{{&1, 4}, {0, 1}}]}}) end})
+    fake_deps(%{coverage: fn modules, _exports -> Map.new(modules, &{&1, {:ok, [{{&1, 4}, {0, 1}}]}}) end})
 
     assert_raise Mix.Error, ~r/cover.changed: 1 changed module\(s\) below 100% coverage: SymphonyElixir.ChangedCoverage/, fn ->
       Changed.run([])

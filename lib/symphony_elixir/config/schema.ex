@@ -2704,8 +2704,9 @@ defmodule SymphonyElixir.Config.Schema do
     TP-1085): `implementation` writes the code (delegated), builds it (`make build` when
     `macos/` changed; `mix compile --warnings-as-errors` when Elixir files did, `mix.lock` included), checks it (format,
     specs and credo on the changed source files, only when an Elixir source or test file changed:
-    `elixir_source_changed`), tests it (the changed test files, never `mix test` with no file, and
-    `mix cover.changed`, only when an Elixir source or test file changed, plus
+    `elixir_source_changed`), tests it (`mix cover.changed` with the changed test files: one pass
+    runs them and the tests of the changed modules and checks those modules' coverage, never the
+    whole suite, only when an Elixir source or test file changed, plus
     `swift test` for the changed targets when `macos/` changed), runs the window tests the change
     selects in the QA VM (`window_tests`, Symphony's own `window_tests_command/0`; skipped when the
     change touches nothing a declared window test covers), each returning to `code` on failure, then
@@ -2863,7 +2864,7 @@ defmodule SymphonyElixir.Config.Schema do
           "title" => "Tests and coverage",
           "mode" => "machine",
           "command" => [
-            %{"run" => "(test -z \"$SYMPHONY_CHANGED_TEST_FILES\" || mix test $SYMPHONY_CHANGED_TEST_FILES) && mix cover.changed", "when" => "elixir_source_changed"},
+            %{"run" => "mix cover.changed $SYMPHONY_CHANGED_TEST_FILES", "when" => "elixir_source_changed"},
             %{"run" => "cd macos && swift test --filter \"$SYMPHONY_CHANGED_SWIFT_TEST_FILTER\"", "when" => "macos_changed"}
           ],
           "timeout_ms" => 1_800_000,
