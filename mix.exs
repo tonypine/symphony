@@ -10,9 +10,11 @@ defmodule SymphonyElixir.MixProject do
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       # `mix cover.changed` runs these whenever the file changes: its tests reach the schema's
-      # modules through `Config` without naming them.
+      # modules through `Config` without naming them, and the groomed prompts' tests build a prompt
+      # under the `PromptBuilder` alias of `test/support/test_support.exs`.
       cover_changed: [
         covering_tests: %{
+          "lib/symphony_elixir/prompt_builder.ex" => ["test/symphony_elixir/groomed_prompts_test.exs"],
           "lib/symphony_elixir/config/schema.ex" => [
             "test/symphony_elixir/agent_tools_linear_test.exs",
             "test/symphony_elixir/claude_code/app_server_test.exs",

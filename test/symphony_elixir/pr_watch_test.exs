@@ -389,6 +389,12 @@ defmodule SymphonyElixir.PrWatchTest do
     refute_receive {:"$gen_cast", {:read_ticket, "2"}}, 10
   end
 
+  test "rate_limit/0 reads the app's own store, and is nil before any read reported a limit" do
+    :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, "9", %{issue_identifier: "TP-9", phase: "In Review"}))
+
+    assert PrWatch.rate_limit() == nil
+  end
+
   test "poll_now/0 asks every running watcher to tick, and is a no-op without one" do
     assert PrWatch.poll_now() == :ok
 

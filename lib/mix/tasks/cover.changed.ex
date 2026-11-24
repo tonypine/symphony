@@ -7,7 +7,7 @@ defmodule Mix.Tasks.Cover.Changed do
   Runs the tests of what the branch changes and checks that every `lib/` module it changes is at
   100% line coverage, in one pass, before a push.
 
-      mix cover.changed [--base origin/main] [--file lib/PATH.ex ...] [--parts N] [TEST_FILES...]
+      mix cover.changed [--all] [--base origin/main] [--file lib/PATH.ex ...] [--parts N] [TEST_FILES...]
 
   Runs the changed test files, `test/<path>_test.exs` for each changed `lib/<path>.ex` and every
   test file that names a changed module, once (the test environment), then prints
@@ -31,10 +31,18 @@ defmodule Mix.Tasks.Cover.Changed do
   when it changes, for a file such as the config schema whose modules the tests reach without naming.
   With no module to check (test files only, or ignored modules) the changed test files, the tests
   of the changed `lib/` files and the extra ones still run, without coverage.
+
+  `--all` runs every test file of the suite (`test/**/*_test.exs`, the files `scripts/test-parts.sh`
+  runs) in that one pass, in 8 parts (at most the number of cores; `--parts N` sets it), and checks
+  the changed modules' coverage from it: the run for a change to code many tests depend on, in
+  place of this command followed by the script. With no module to check it runs them without coverage.
+
+  A part that stopped at its 10 failures, or in which a `setup_all` failed, left tests that never
+  ran: the run fails and names the part.
   """
   @shortdoc "Runs the tests of the change; fails when a changed lib/ module is below 100% coverage"
 
-  @switches [base: :string, file: :keep, parts: :integer]
+  @switches [all: :boolean, base: :string, file: :keep, parts: :integer]
   @max_parts 8
 
   @impl Mix.Task

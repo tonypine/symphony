@@ -57,7 +57,10 @@ runs the whole suite in a fresh workspace) or Dialyzer locally;
 core). A coverage gap CI reports is fixed like any other red check.
 
 When a change touches code many tests depend on (the orchestrator, `dispatch/`, the run store,
-the ticket record, `pauses/`), run every Elixir test with `scripts/test-parts.sh`, not `mix test`:
+the ticket record, `pauses/`), run `mix cover.changed --all` in place of `mix cover.changed`: one
+pass runs every Elixir test, in 8 processes at once, and checks the changed modules' coverage from
+it, so no test runs twice. Without the coverage check, every Elixir test runs with
+`scripts/test-parts.sh`, not `mix test`:
 it runs the test files in 8 processes at once (under 2 minutes, against about 9 for one
 `mix test`), runs the tests that failed last time first and stops there while one still fails,
 runs a failed test once more alone before it counts, and prints only the failures and one summary
