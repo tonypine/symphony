@@ -77,7 +77,9 @@ test/symphony_elixir/agent_processes_test.exs	1.5
 test/symphony_elixir/agent_providers_test.exs	0.0
 test/symphony_elixir/agent_runner_leftover_processes_test.exs	0.4
 test/symphony_elixir/agent_runner_path_unlock_test.exs	0.6
-test/symphony_elixir/agent_runner_progress_test.exs	26.3
+test/symphony_elixir/agent_runner_progress_handoff_test.exs	7.8
+test/symphony_elixir/agent_runner_progress_park_test.exs	7.7
+test/symphony_elixir/agent_runner_progress_pr_test.exs	11.4
 test/symphony_elixir/agent_runner_test.exs	4.1
 test/symphony_elixir/agent_runner_ticket_summary_test.exs	0.3
 test/symphony_elixir/agent_runner_tmp_dir_test.exs	0.3
@@ -92,7 +94,9 @@ test/symphony_elixir/agent_tools_secret_scanner_test.exs	0.1
 test/symphony_elixir/agent_tools/protected_paths_test.exs	0.0
 test/symphony_elixir/agent_tools/ticket_ledger_test.exs	2.0
 test/symphony_elixir/aggregate_test.exs	0.1
-test/symphony_elixir/app_server_test.exs	22.0
+test/symphony_elixir/app_server_approvals_test.exs	5.6
+test/symphony_elixir/app_server_launch_test.exs	6.3
+test/symphony_elixir/app_server_transport_test.exs	10.3
 test/symphony_elixir/artifacts_test.exs	0.3
 test/symphony_elixir/artifacts/store_test.exs	0.0
 test/symphony_elixir/artifacts/transcript_test.exs	0.0
@@ -137,6 +141,7 @@ test/symphony_elixir/conductor/steer_test.exs	0.1
 test/symphony_elixir/conductor/tree_test.exs	0.8
 test/symphony_elixir/conductor/watch_test.exs	0.5
 test/symphony_elixir/config_phases_test.exs	0.0
+test/symphony_elixir/config_settings_test.exs	1.3
 test/symphony_elixir/config_split_test.exs	0.3
 test/symphony_elixir/config/cache_test.exs	0.3
 test/symphony_elixir/config/embed_dependencies_test.exs	0.1
@@ -151,7 +156,10 @@ test/symphony_elixir/connected/read_test.exs	0.2
 test/symphony_elixir/control_client_test.exs	0.0
 test/symphony_elixir/control_token_test.exs	0.0
 test/symphony_elixir/control_url_test.exs	0.0
-test/symphony_elixir/core_test.exs	21.9
+test/symphony_elixir/core_agent_runner_turns_test.exs	6.9
+test/symphony_elixir/core_agent_runner_workspace_test.exs	10.5
+test/symphony_elixir/core_orchestrator_test.exs	3.0
+test/symphony_elixir/core_test.exs	1.8
 test/symphony_elixir/coverage_report_test.exs	0.0
 test/symphony_elixir/decision_move_test.exs	0.1
 test/symphony_elixir/decision_request_sources_test.exs	0.3
@@ -240,6 +248,7 @@ test/symphony_elixir/learnings/feed_test.exs	0.0
 test/symphony_elixir/ledger_config_test.exs	0.1
 test/symphony_elixir/leftover_processes_test.exs	0.2
 test/symphony_elixir/lifecycle_test.exs	0.6
+test/symphony_elixir/linear_client_candidates_test.exs	0.4
 test/symphony_elixir/linear_client_state_machine_test.exs	0.0
 test/symphony_elixir/linear_client_ticket_reads_test.exs	0.1
 test/symphony_elixir/linear_query_complexity_test.exs	0.0
@@ -375,7 +384,8 @@ test/symphony_elixir/qa_policy_test.exs	0.2
 test/symphony_elixir/qa_pre_check_test.exs	2.4
 test/symphony_elixir/qa_seed_test.exs	2.9
 test/symphony_elixir/qa_server_scripts_test.exs	0.3
-test/symphony_elixir/qa_verification_test.exs	18.0
+test/symphony_elixir/qa_verification_pass_test.exs	11.6
+test/symphony_elixir/qa_verification_test.exs	6.8
 test/symphony_elixir/quality_gate_config_test.exs	0.1
 test/symphony_elixir/quality_gate_test.exs	0.0
 test/symphony_elixir/quality_gate/anthropic_test.exs	0.0
@@ -508,11 +518,16 @@ test/symphony_elixir/workflow_source_test.exs	7.4
 test/symphony_elixir/workflow_template_fixtures_test.exs	0.0
 test/symphony_elixir/workpad_test.exs	0.6
 test/symphony_elixir/workpad/projection_test.exs	0.3
-test/symphony_elixir/workspace_and_config_test.exs	47.4
 test/symphony_elixir/workspace_cleanup_test.exs	0.5
 test/symphony_elixir/workspace_head_test.exs	8.5
+test/symphony_elixir/workspace_hooks_test.exs	6.9
 test/symphony_elixir/workspace_lifecycle_test.exs	0.4
 test/symphony_elixir/workspace_rebuild_test.exs	10.0
+test/symphony_elixir/workspace_remote_test.exs	2.8
+test/symphony_elixir/workspace_remote_worktree_reuse_test.exs	10.2
+test/symphony_elixir/workspace_remote_worktree_test.exs	12.7
 test/symphony_elixir/workspace_safe_git_test.exs	5.3
 test/symphony_elixir/workspace_sync_test.exs	5.9
 test/symphony_elixir/workspace_test.exs	2.1
+test/symphony_elixir/workspace_worktree_branches_test.exs	4.4
+test/symphony_elixir/workspace_worktree_test.exs	10.7
