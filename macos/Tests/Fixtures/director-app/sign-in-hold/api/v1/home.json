@@ -1,22 +1,16 @@
 {
-  "in_progress": [
-    {
-      "kind": "epic",
-      "issue_id": "epic-shop-280",
-      "identifier": "SHOP-280",
-      "title": "Checkout that survives a reload",
-      "repo_key": "shop",
-      "counts": {
-        "done": 4,
-        "in_progress": 2,
-        "needs_person": 0,
-        "needs_fix": 0,
-        "not_started": 3
-      },
-      "total": 9,
-      "tickets": [
-        {
-          "kind": "ticket",
+  "slots": {
+    "total": 7,
+    "entries": [
+      {
+        "slot": 1,
+        "empty": false,
+        "since": "2026-10-07T14:06:00Z",
+        "epic": {
+          "identifier": "SHOP-280",
+          "title": "Checkout that survives a reload"
+        },
+        "ticket": {
           "issue_id": "issue-shop-305",
           "identifier": "SHOP-305",
           "title": "Checkout total rounding",
@@ -30,10 +24,19 @@
           },
           "since": "2026-10-07T14:06:00Z",
           "working": true,
-          "move": null
+          "move": null,
+          "waits_on_you": false
+        }
+      },
+      {
+        "slot": 2,
+        "empty": false,
+        "since": "2026-10-07T14:02:00Z",
+        "epic": {
+          "identifier": "SHOP-280",
+          "title": "Checkout that survives a reload"
         },
-        {
-          "kind": "ticket",
+        "ticket": {
           "issue_id": "issue-shop-301",
           "identifier": "SHOP-301",
           "title": "Saved carts",
@@ -47,27 +50,19 @@
           },
           "since": "2026-10-07T14:02:00Z",
           "working": false,
-          "move": null
+          "move": null,
+          "waits_on_you": false
         }
-      ]
-    },
-    {
-      "kind": "epic",
-      "issue_id": "epic-bil-300",
-      "identifier": "BIL-300",
-      "title": "Annual plans",
-      "repo_key": "billing",
-      "counts": {
-        "done": 1,
-        "in_progress": 1,
-        "needs_person": 1,
-        "needs_fix": 0,
-        "not_started": 1
       },
-      "total": 4,
-      "tickets": [
-        {
-          "kind": "ticket",
+      {
+        "slot": 3,
+        "empty": false,
+        "since": "2026-10-07T11:08:00Z",
+        "epic": {
+          "identifier": "BIL-300",
+          "title": "Annual plans"
+        },
+        "ticket": {
           "issue_id": "issue-bil-306",
           "identifier": "BIL-306",
           "title": "Proration when a plan changes mid-cycle",
@@ -85,10 +80,19 @@
             "name": "answer",
             "allowed": true,
             "reason": null
-          }
+          },
+          "waits_on_you": true
+        }
+      },
+      {
+        "slot": 4,
+        "empty": false,
+        "since": "2026-10-07T14:16:00Z",
+        "epic": {
+          "identifier": "BIL-300",
+          "title": "Annual plans"
         },
-        {
-          "kind": "ticket",
+        "ticket": {
           "issue_id": "issue-bil-307",
           "identifier": "BIL-307",
           "title": "Invoice PDF shows the plan’s period",
@@ -102,292 +106,301 @@
           },
           "since": "2026-10-07T14:16:00Z",
           "working": true,
-          "move": null
+          "move": null,
+          "waits_on_you": false
         }
-      ]
-    },
-    {
-      "kind": "ticket",
-      "issue_id": "issue-tp-1492",
-      "identifier": "TP-1492",
-      "title": "Symphony tells the Director when a ticket changed",
-      "repo_key": "symphony",
-      "phase": "QA",
-      "situation": {
-        "kind": "working",
-        "word": "QA",
-        "cause": "The QA run walks the change.",
-        "since": "2026-10-07T14:11:00Z"
       },
-      "since": "2026-10-07T14:11:00Z",
-      "working": true,
-      "move": null
-    },
-    {
-      "kind": "ticket",
-      "issue_id": "issue-tp-1480",
-      "identifier": "TP-1480",
-      "title": "A poll that changes nothing redraws nothing",
-      "repo_key": "symphony",
-      "phase": "In Progress",
-      "situation": {
-        "kind": "waiting_on_you",
-        "word": "Stopped by you",
-        "cause": "You stopped its run.",
-        "since": "2026-10-07T14:15:00Z"
+      {
+        "slot": 5,
+        "empty": false,
+        "since": "2026-10-07T14:11:00Z",
+        "epic": null,
+        "ticket": {
+          "issue_id": "issue-tp-1492",
+          "identifier": "TP-1492",
+          "title": "Symphony tells the Director when a ticket changed",
+          "repo_key": "symphony",
+          "phase": "QA",
+          "situation": {
+            "kind": "working",
+            "word": "QA",
+            "cause": "The QA run walks the change.",
+            "since": "2026-10-07T14:11:00Z"
+          },
+          "since": "2026-10-07T14:11:00Z",
+          "working": true,
+          "move": null,
+          "waits_on_you": false
+        }
       },
-      "since": "2026-10-07T14:15:00Z",
-      "working": false,
-      "move": {
-        "name": "unblock",
-        "allowed": true,
-        "reason": null
+      {
+        "slot": 6,
+        "empty": false,
+        "since": "2026-10-07T14:15:00Z",
+        "epic": null,
+        "ticket": {
+          "issue_id": "issue-tp-1480",
+          "identifier": "TP-1480",
+          "title": "A poll that changes nothing redraws nothing",
+          "repo_key": "symphony",
+          "phase": "In Progress",
+          "situation": {
+            "kind": "waiting_on_you",
+            "word": "Stopped by you",
+            "cause": "You stopped its run.",
+            "since": "2026-10-07T14:15:00Z"
+          },
+          "since": "2026-10-07T14:15:00Z",
+          "working": false,
+          "move": {
+            "name": "unblock",
+            "allowed": true,
+            "reason": null
+          },
+          "waits_on_you": true
+        }
+      },
+      {
+        "slot": 7,
+        "empty": false,
+        "since": "2026-10-07T13:40:00Z",
+        "epic": null,
+        "ticket": {
+          "issue_id": "issue-tp-1376",
+          "identifier": "TP-1376",
+          "title": "A CI-wait pause lifts itself when the commit’s CI finishes",
+          "repo_key": "symphony",
+          "phase": "In Progress",
+          "situation": {
+            "kind": "retrying",
+            "word": "Retrying at 16:02",
+            "cause": "The last run failed; it tries again at 16:02.",
+            "since": "2026-10-07T13:40:00Z"
+          },
+          "since": "2026-10-07T13:40:00Z",
+          "working": false,
+          "move": null,
+          "waits_on_you": false
+        }
       }
-    },
-    {
-      "kind": "ticket",
-      "issue_id": "issue-tp-1376",
-      "identifier": "TP-1376",
-      "title": "A CI-wait pause lifts itself when the commit’s CI finishes",
-      "repo_key": "symphony",
-      "phase": "In Progress",
-      "situation": {
-        "kind": "retrying",
-        "word": "Retrying at 16:02",
-        "cause": "The last run failed; it tries again at 16:02.",
-        "since": "2026-10-07T13:40:00Z"
-      },
-      "since": "2026-10-07T13:40:00Z",
-      "working": false,
-      "move": null
-    }
-  ],
+    ]
+  },
   "queue": {
-    "roots": [
+    "rows": [
       {
         "issue_id": "issue-tp-1481",
         "identifier": "TP-1481",
         "title": "A long timeline draws only the rows on screen",
+        "phase": "Todo",
         "repo_key": "symphony",
-        "epic": null,
-        "after": "TP-1480",
-        "also_waits_on": [],
+        "number": "1",
+        "parent": null,
         "situation": null,
-        "children": [
-          {
-            "issue_id": "issue-tp-1482",
-            "identifier": "TP-1482",
-            "title": "A sheet that puts each native snapshot beside the prototype",
-            "repo_key": "symphony",
-            "epic": null,
-            "after": null,
-            "also_waits_on": [],
-            "situation": null,
-            "children": [
-              {
-                "issue_id": "issue-tp-1483",
-                "identifier": "TP-1483",
-                "title": "The catalog’s type scale, surfaces and elevation in Swift",
-                "repo_key": "symphony",
-                "epic": null,
-                "after": null,
-                "also_waits_on": [],
-                "situation": null,
-                "children": [
-                  {
-                    "issue_id": "issue-tp-1493",
-                    "identifier": "TP-1493",
-                    "title": "Design guard: no raw font, colour or spacing number",
-                    "repo_key": "symphony",
-                    "epic": null,
-                    "after": null,
-                    "also_waits_on": [],
-                    "situation": null,
-                    "children": [
-                      {
-                        "issue_id": "issue-tp-1484",
-                        "identifier": "TP-1484",
-                        "title": "The catalog’s panel, zone title and chip as shared components",
-                        "repo_key": "symphony",
-                        "epic": null,
-                        "after": null,
-                        "also_waits_on": [],
-                        "situation": null,
-                        "children": [
-                          {
-                            "issue_id": "issue-tp-1485",
-                            "identifier": "TP-1485",
-                            "title": "Header, moves and window toolbar as designed",
-                            "repo_key": "symphony",
-                            "epic": null,
-                            "after": null,
-                            "also_waits_on": [],
-                            "situation": null,
-                            "children": [
-                              {
-                                "issue_id": "issue-tp-1486",
-                                "identifier": "TP-1486",
-                                "title": "The lifecycle card says where the ticket is in a sentence",
-                                "repo_key": "symphony",
-                                "epic": null,
-                                "after": null,
-                                "also_waits_on": [],
-                                "situation": null,
-                                "children": [
-                                  {
-                                    "issue_id": "issue-tp-1487",
-                                    "identifier": "TP-1487",
-                                    "title": "Timeline rows as designed, in a person’s words",
-                                    "repo_key": "symphony",
-                                    "epic": null,
-                                    "after": null,
-                                    "also_waits_on": [],
-                                    "situation": null,
-                                    "children": [
-                                      {
-                                        "issue_id": "issue-tp-1488",
-                                        "identifier": "TP-1488",
-                                        "title": "The Pull request and Connected cards as designed",
-                                        "repo_key": "symphony",
-                                        "epic": null,
-                                        "after": null,
-                                        "also_waits_on": [],
-                                        "situation": null,
-                                        "children": []
-                                      }
-                                    ]
-                                  }
-                                ]
-                              }
-                            ]
-                          }
-                        ]
-                      }
-                    ]
-                  }
-                ]
-              }
-            ]
-          }
-        ]
+        "waits_on_you": false,
+        "move": null
+      },
+      {
+        "issue_id": "issue-tp-1482",
+        "identifier": "TP-1482",
+        "title": "A sheet that puts each native snapshot beside the prototype",
+        "phase": "Todo",
+        "repo_key": "symphony",
+        "number": "1.1",
+        "parent": "TP-1481",
+        "situation": null,
+        "waits_on_you": false,
+        "move": null
+      },
+      {
+        "issue_id": "issue-tp-1483",
+        "identifier": "TP-1483",
+        "title": "The catalog’s type scale, surfaces and elevation in Swift",
+        "phase": "Todo",
+        "repo_key": "symphony",
+        "number": "1.1.1",
+        "parent": "TP-1482",
+        "situation": null,
+        "waits_on_you": false,
+        "move": null
+      },
+      {
+        "issue_id": "issue-tp-1493",
+        "identifier": "TP-1493",
+        "title": "Design guard: no raw font, colour or spacing number",
+        "phase": "Todo",
+        "repo_key": "symphony",
+        "number": "1.1.1.1",
+        "parent": "TP-1483",
+        "situation": null,
+        "waits_on_you": false,
+        "move": null
+      },
+      {
+        "issue_id": "issue-tp-1484",
+        "identifier": "TP-1484",
+        "title": "The catalog’s panel, zone title and chip as shared components",
+        "phase": "Todo",
+        "repo_key": "symphony",
+        "number": "1.1.1.1.1",
+        "parent": "TP-1493",
+        "situation": null,
+        "waits_on_you": false,
+        "move": null
+      },
+      {
+        "issue_id": "issue-tp-1485",
+        "identifier": "TP-1485",
+        "title": "Header, moves and window toolbar as designed",
+        "phase": "Todo",
+        "repo_key": "symphony",
+        "number": "1.1.1.1.1.1",
+        "parent": "TP-1484",
+        "situation": null,
+        "waits_on_you": false,
+        "move": null
+      },
+      {
+        "issue_id": "issue-tp-1486",
+        "identifier": "TP-1486",
+        "title": "The lifecycle card says where the ticket is in a sentence",
+        "phase": "Todo",
+        "repo_key": "symphony",
+        "number": "1.1.1.1.1.1.1",
+        "parent": "TP-1485",
+        "situation": null,
+        "waits_on_you": false,
+        "move": null
+      },
+      {
+        "issue_id": "issue-tp-1487",
+        "identifier": "TP-1487",
+        "title": "Timeline rows as designed, in a person’s words",
+        "phase": "Todo",
+        "repo_key": "symphony",
+        "number": "1.1.1.1.1.1.1.1",
+        "parent": "TP-1486",
+        "situation": null,
+        "waits_on_you": false,
+        "move": null
+      },
+      {
+        "issue_id": "issue-tp-1488",
+        "identifier": "TP-1488",
+        "title": "The Pull request and Connected cards as designed",
+        "phase": "Todo",
+        "repo_key": "symphony",
+        "number": "1.1.1.1.1.1.1.1.1",
+        "parent": "TP-1487",
+        "situation": null,
+        "waits_on_you": false,
+        "move": null
       },
       {
         "issue_id": "issue-shop-311",
         "identifier": "SHOP-311",
         "title": "Gift card balance on the receipt",
+        "phase": "Todo",
         "repo_key": "shop",
-        "epic": {
-          "identifier": "SHOP-280",
-          "title": "Checkout"
-        },
-        "after": "SHOP-305",
-        "also_waits_on": [],
+        "number": "2",
+        "parent": null,
         "situation": null,
-        "children": [
-          {
-            "issue_id": "issue-shop-312",
-            "identifier": "SHOP-312",
-            "title": "Gift card as a payment method at checkout",
-            "repo_key": "shop",
-            "epic": {
-              "identifier": "SHOP-280",
-              "title": "Checkout"
-            },
-            "after": null,
-            "also_waits_on": [],
-            "situation": null,
-            "children": [
-              {
-                "issue_id": "issue-shop-314",
-                "identifier": "SHOP-314",
-                "title": "Split a payment between a card and a gift card",
-                "repo_key": "shop",
-                "epic": {
-                  "identifier": "SHOP-280",
-                  "title": "Checkout"
-                },
-                "after": null,
-                "also_waits_on": [],
-                "situation": null,
-                "children": []
-              }
-            ]
-          },
-          {
-            "issue_id": "issue-shop-313",
-            "identifier": "SHOP-313",
-            "title": "Gift card balance in the account page",
-            "repo_key": "shop",
-            "epic": {
-              "identifier": "SHOP-280",
-              "title": "Checkout"
-            },
-            "after": null,
-            "also_waits_on": [],
-            "situation": null,
-            "children": []
-          }
-        ]
+        "waits_on_you": false,
+        "move": null
+      },
+      {
+        "issue_id": "issue-shop-312",
+        "identifier": "SHOP-312",
+        "title": "Gift card as a payment method at checkout",
+        "phase": "Todo",
+        "repo_key": "shop",
+        "number": "2.1",
+        "parent": "SHOP-311",
+        "situation": null,
+        "waits_on_you": false,
+        "move": null
+      },
+      {
+        "issue_id": "issue-shop-314",
+        "identifier": "SHOP-314",
+        "title": "Split a payment between a card and a gift card",
+        "phase": "Todo",
+        "repo_key": "shop",
+        "number": "2.1.1",
+        "parent": "SHOP-312",
+        "situation": null,
+        "waits_on_you": false,
+        "move": null
+      },
+      {
+        "issue_id": "issue-shop-313",
+        "identifier": "SHOP-313",
+        "title": "Gift card balance in the account page",
+        "phase": "Todo",
+        "repo_key": "shop",
+        "number": "2.2",
+        "parent": "SHOP-311",
+        "situation": null,
+        "waits_on_you": false,
+        "move": null
       },
       {
         "issue_id": "issue-bil-308",
         "identifier": "BIL-308",
         "title": "A refund follows the plan’s proration",
+        "phase": "Todo",
         "repo_key": "billing",
-        "epic": {
-          "identifier": "BIL-300",
-          "title": "Annual plans"
-        },
-        "after": "BIL-307",
-        "also_waits_on": [],
+        "number": "3",
+        "parent": null,
         "situation": null,
-        "children": []
+        "waits_on_you": false,
+        "move": null
       },
       {
         "issue_id": "issue-mot-93",
         "identifier": "MOT-93",
         "title": "Translate Cycle into Brazilian Portuguese, Spanish and German",
+        "phase": "Todo",
         "repo_key": "cycle",
-        "epic": null,
-        "after": null,
-        "also_waits_on": [],
+        "number": "4",
+        "parent": null,
         "situation": {
           "kind": "waiting_for_slot",
           "word": "Waiting for a slot",
           "cause": "Both work slots are taken."
         },
-        "children": [
-          {
-            "issue_id": "issue-mot-94",
-            "identifier": "MOT-94",
-            "title": "Choose Cycle’s language in Settings",
-            "repo_key": "cycle",
-            "epic": null,
-            "after": null,
-            "also_waits_on": [],
-            "situation": null,
-            "children": [
-              {
-                "issue_id": "issue-mot-95",
-                "identifier": "MOT-95",
-                "title": "Final verification: Language settings",
-                "repo_key": "cycle",
-                "epic": null,
-                "after": null,
-                "also_waits_on": [],
-                "situation": null,
-                "children": []
-              }
-            ]
-          }
-        ]
+        "waits_on_you": false,
+        "move": null
+      },
+      {
+        "issue_id": "issue-mot-94",
+        "identifier": "MOT-94",
+        "title": "Choose Cycle’s language in Settings",
+        "phase": "Todo",
+        "repo_key": "cycle",
+        "number": "4.1",
+        "parent": "MOT-93",
+        "situation": null,
+        "waits_on_you": false,
+        "move": null
+      },
+      {
+        "issue_id": "issue-mot-95",
+        "identifier": "MOT-95",
+        "title": "Final verification: Language settings",
+        "phase": "Todo",
+        "repo_key": "cycle",
+        "number": "4.1.1",
+        "parent": "MOT-94",
+        "situation": null,
+        "waits_on_you": false,
+        "move": null
       }
-    ]
-  },
-  "outside": {
-    "backlog": 12,
-    "below_priority": 3,
-    "epic": 2,
-    "behind": 4
+    ],
+    "count": 17,
+    "total": 17,
+    "offset": 0,
+    "limit": 100,
+    "next_offset": null,
+    "view": null
   }
 }
