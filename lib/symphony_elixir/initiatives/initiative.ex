@@ -3,24 +3,26 @@ defmodule SymphonyElixir.Initiatives.Initiative do
   One plan ticket followed to done, for the Mac app's Initiatives (`GET /api/v1/initiatives`).
 
   `from_node/4` reads what Linear said about the plan ticket on Symphony's poll: its group (`active`,
-  `in_review` or `done`), when it started and finished, and its sub-tickets in landing order, each
-  with when it landed.
-  `live/2` adds what each open sub-ticket waits on from what Symphony knows locally at GET time (the
-  running tickets, the Inbox, the epic lanes), so a GET never reads Linear:
+  `in_review` or `done`), when it started and finished, and its sub-tickets, each with when it landed.
+  `live/2` adds, from what Symphony knows locally at GET time, the tickets each sub-ticket depends on
+  (its stored dependencies, `depends_on`, each open while `SymphonyElixir.Dispatch.DependsOn.open/2`
+  finds it unmet: Linear's blocker links are not read), the landing order and what each open
+  sub-ticket waits on (the running tickets, the Inbox, the epic lanes), so a GET never reads Linear:
 
   - `done`: the sub-ticket is completed;
   - `working`: an agent, QA pass or landing runs it;
   - `you`: it waits on the Director (an Inbox item, `Plan Review`, or Backlog: not promoted yet);
-  - `blocker`: an open sub-ticket or ticket it is blocked by;
+  - `blocker`: an open sub-ticket or ticket it depends on;
   - `ci`: a machine-owned phase (Code Review, QA, Merging, CI Fix) with nothing running yet;
   - `slot`: it can run and waits for a free slot.
 
-  Landing order is blocked-by order between the sub-tickets, then creation order. Canceled
-  sub-tickets are left out. `incomplete` is true when Linear had more sub-tickets, or more blockers on one,
-  than the read returns: the counts and landing order then cover only what was read.
+  Landing order is dependency order between the sub-tickets, then creation order. Canceled
+  sub-tickets are left out. `incomplete` is true when Linear had more sub-tickets than the read
+  returns: the counts and landing order then cover only what was read.
   """
 
-  alias SymphonyElixir.PlanReview
+  alias SymphonyElixir.{PlanReview, RunStore, TicketState}
+  alias SymphonyElixir.Dispatch.DependsOn
 
   @machine_states MapSet.new(["code review", "qa", "merging", "ci fix", "epic review"])
   @stages ~w(done working you queued blocked)
@@ -58,11 +60,16 @@ defmodule SymphonyElixir.Initiatives.Initiative do
           incomplete: boolean()
         }
 
-  @typedoc "What Symphony knows locally at GET time: running and waiting-on-you issue ids, the human-gated states."
+  @typedoc """
+  What Symphony knows locally at GET time: running and waiting-on-you issue ids, the human-gated
+  states, and optionally each ticket's stored dependencies with the record of the ticket each names
+  (`:dependencies`, default `SymphonyElixir.RunStore.dependencies/1`).
+  """
   @type live :: %{
-          running: MapSet.t(String.t()),
-          you: MapSet.t(String.t()),
-          settings: term()
+          required(:running) => MapSet.t(String.t()),
+          required(:you) => MapSet.t(String.t()),
+          required(:settings) => term(),
+          optional(:dependencies) => (String.t() | nil -> [{TicketState.dependency(), map() | nil}])
         }
 
   @doc "The stages counted on each initiative, in the bar's order."
@@ -140,32 +147,46 @@ defmodule SymphonyElixir.Initiatives.Initiative do
       state_type: get_in(node, ["state", "type"]),
       created_at: node["createdAt"],
       completed_at: node["completedAt"],
-      blocked_by: blockers(node)
+      blocked_by: []
     }
   end
 
-  defp blockers(node) do
-    for %{"type" => type, "issue" => %{} = issue} <- node |> get_in(["inverseRelations", "nodes"]) |> List.wrap(),
-        normalize(type) == "blocks" do
-      type = get_in(issue, ["state", "type"])
+  # The tickets the sub-ticket `id` depends on, as Symphony stores them, each with the phase its
+  # record holds, whether it is still open and when it was done.
+  defp blockers(id, dependencies) do
+    entries = dependencies.(id)
+    records = for {entry, %{} = record} <- entries, into: %{}, do: {entry.issue_id, record}
+    open = entries |> Enum.map(&elem(&1, 0)) |> DependsOn.open(records)
+
+    for {entry, record} <- entries do
+      record = if record, do: TicketState.normalize(record)
+      open? = entry in open
 
       %{
-        identifier: issue["identifier"],
-        state: get_in(issue, ["state", "name"]),
-        open: type not in ["completed", "canceled"],
-        completed_at: issue["completedAt"]
+        identifier: entry.identifier || (record && record.issue_identifier),
+        state: record && record.phase,
+        open: open?,
+        completed_at: if(record && not open?, do: iso8601(record.phase_at))
       }
     end
   end
 
-  defp truncated?(node) do
-    more?(node["children"]) or node |> get_in(["children", "nodes"]) |> List.wrap() |> Enum.any?(&more?(&1["inverseRelations"]))
+  defp iso8601(%DateTime{} = at), do: DateTime.to_iso8601(at)
+  defp iso8601(_at), do: nil
+
+  defp stored_dependencies(id) do
+    case RunStore.dependencies(id) do
+      entries when is_list(entries) -> entries
+      {:error, _reason} -> []
+    end
   end
+
+  defp truncated?(node), do: more?(node["children"])
 
   defp more?(%{"pageInfo" => %{"hasNextPage" => true}}), do: true
   defp more?(_connection), do: false
 
-  # Kahn's walk over the blocked-by links between siblings, taking the oldest ready ticket each step.
+  # Kahn's walk over the stored dependencies between siblings, taking the oldest ready ticket each step.
   # A cycle is broken by creation order.
   defp landing_order(parts) do
     parts = Enum.sort_by(parts, &{&1.created_at || "", &1.identifier || ""})
@@ -192,7 +213,13 @@ defmodule SymphonyElixir.Initiatives.Initiative do
   """
   @spec live(t(), live()) :: map()
   def live(initiative, live) do
-    sub_tickets = Enum.map(initiative.sub_tickets, &with_wait(&1, live))
+    dependencies = Map.get(live, :dependencies, &stored_dependencies/1)
+
+    sub_tickets =
+      initiative.sub_tickets
+      |> Enum.map(&Map.put(&1, :blocked_by, blockers(&1.id, dependencies)))
+      |> landing_order()
+      |> Enum.map(&with_wait(&1, live))
 
     counts = Map.new(@stages, &{&1, 0})
     counts = Enum.reduce(sub_tickets, counts, &Map.update!(&2, stage(&1.waits_on), fn count -> count + 1 end))

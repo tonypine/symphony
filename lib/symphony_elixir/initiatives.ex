@@ -6,11 +6,12 @@ defmodule SymphonyElixir.Initiatives do
   The server reads Linear on Symphony's poll (`polling.interval_ms`) and caches what it read, so a
   GET makes no Linear request: one query per repository route lists the plan tickets in its scope
   (label `plan` or `breakdown`) that are not canceled and not done more than 7 days ago, with their
-  sub-tickets, each sub-ticket's state and the tickets it is blocked by. Each becomes an
-  `SymphonyElixir.Initiatives.Initiative`. A failed read keeps the last list.
+  sub-tickets and each sub-ticket's state. Each becomes an `SymphonyElixir.Initiatives.Initiative`. A
+  failed read keeps the last list. Linear's blocker links are not read.
 
-  `list/3` adds, at GET time, what each sub-ticket waits on from the orchestrator snapshot (what
-  runs) and the Inbox (what waits on the Director).
+  `list/3` adds, at GET time, what each sub-ticket depends on (its stored dependencies, from the
+  ticket records) and what it waits on from the orchestrator snapshot (what runs) and the Inbox
+  (what waits on the Director).
 
   The server tags itself `initiatives` in `SymphonyElixir.Linear.Usage`.
   """
@@ -27,11 +28,10 @@ defmodule SymphonyElixir.Initiatives do
   @initial_delay_ms 1_500
   @page_size 10
   @children_first 50
-  @relations_first 10
   @recent_days 7
 
   @query """
-  query SymphonyInitiatives($filter: IssueFilter!, $first: Int!, $after: String, $childrenFirst: Int!, $relationsFirst: Int!) {
+  query SymphonyInitiatives($filter: IssueFilter!, $first: Int!, $after: String, $childrenFirst: Int!) {
     issues(filter: $filter, first: $first, after: $after) {
       nodes {
         id
@@ -50,10 +50,6 @@ defmodule SymphonyElixir.Initiatives do
             createdAt
             completedAt
             state { name type }
-            inverseRelations(first: $relationsFirst) {
-              nodes { type issue { identifier completedAt state { name type } } }
-              pageInfo { hasNextPage }
-            }
           }
           pageInfo { hasNextPage }
         }
@@ -206,8 +202,7 @@ defmodule SymphonyElixir.Initiatives do
       filter: filter,
       first: @page_size,
       after: after_cursor,
-      childrenFirst: @children_first,
-      relationsFirst: @relations_first
+      childrenFirst: @children_first
     }
 
     with {:ok, body} <- graphql(state, @query, variables),

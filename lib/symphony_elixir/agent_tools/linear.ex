@@ -21,6 +21,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.DecisionRequest
   alias SymphonyElixir.Decisions
   alias SymphonyElixir.DescriptionLock
+  alias SymphonyElixir.Dispatch.DependsOn
   alias SymphonyElixir.HumanActions
   alias SymphonyElixir.HumanActions.Collector, as: HumanActionsCollector
   alias SymphonyElixir.HumanActions.Request
@@ -145,33 +146,12 @@ defmodule SymphonyElixir.AgentTools.Linear do
   }
   """
 
-  # The current issue's family: the blockers it lists, plus its parent, siblings and sub-issues.
+  # The current issue's family in Linear: its parent, siblings and sub-issues. The tickets it depends
+  # on and those that depend on it are Symphony's own (`related_issues/1`), never Linear's links.
   @related_issues_query """
   query SymphonyAgentRelatedIssues($id: String!, $first: Int!) {
     issue(id: $id) {
       id
-      relations(first: $first) {
-        nodes {
-          type
-          relatedIssue {
-            id
-            identifier
-            title
-            state { name }
-          }
-        }
-      }
-      inverseRelations(first: $first) {
-        nodes {
-          type
-          issue {
-            id
-            identifier
-            title
-            state { name }
-          }
-        }
-      }
       parent {
         id
         identifier
@@ -231,17 +211,6 @@ defmodule SymphonyElixir.AgentTools.Linear do
       state {
         name
         type
-      }
-      inverseRelations(first: 50) {
-        nodes {
-          type
-          issue {
-            identifier
-            state {
-              name
-            }
-          }
-        }
       }
       team {
         states {
@@ -2273,7 +2242,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
         settings: settings,
         from_state: from_state,
         plan_parent?: plan_parent?(issue),
-        open_blockers: open_blockers(issue, settings.tracker.terminal_states)
+        open_blockers: DependsOn.open_identifiers(current_id(ticket))
       })
 
     case TransitionGuard.resolve_request(state, ctx) do
@@ -2312,20 +2281,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
     end
   end
 
-  # The identifiers of the issue's blocked-by blockers still outside a terminal state, the way
-  # `Issue.open_blockers/2` counts them: a blocker without a known state is open.
-  defp open_blockers(issue, terminal_states) do
-    terminal = MapSet.new(terminal_states, &normalize_state_name/1)
-
-    for %{"type" => "blocks", "issue" => %{"identifier" => identifier} = blocker} <-
-          issue |> get_in(["inverseRelations", "nodes"]) |> List.wrap(),
-        is_binary(identifier),
-        not MapSet.member?(terminal, normalize_state_name(get_in(blocker, ["state", "name"]))),
-        uniq: true,
-        do: identifier
-  end
-
-  defp normalize_state_name(name), do: name |> to_string() |> String.trim() |> String.downcase()
+  defp current_id(%{ticket: {:ticket, _repo_key, issue_id}}), do: issue_id
 
   # A `plan` (or `breakdown`) parent: it is groomed into sub-tickets and never opens a pull
   # request, and it is the ticket whose handoff enters `Plan Review`.
@@ -2468,39 +2424,44 @@ defmodule SymphonyElixir.AgentTools.Linear do
 
   defp content_type(path), do: MIME.from_path(path)
 
-  defp related_issues(issue) do
-    relations =
-      issue
-      |> Map.get("relations", %{})
-      |> Map.get("nodes", [])
-      |> Enum.flat_map(&related_issue_from_relation(&1, "relation"))
+  # The tickets the current issue depends on (`blocked_by`) and those that depend on it (`blocks`),
+  # as Symphony stores them (`depends_on`): Linear's blocker links are not read.
+  defp related_issues(%{"id" => issue_id}) when is_binary(issue_id) do
+    blocked_by =
+      case RunStore.dependencies(issue_id) do
+        entries when is_list(entries) -> for {entry, record} <- entries, do: stored_relation("inverse_relation", entry.issue_id, entry.identifier, record)
+        {:error, _reason} -> []
+      end
 
-    inverse_relations =
-      issue
-      |> Map.get("inverseRelations", %{})
-      |> Map.get("nodes", [])
-      |> Enum.flat_map(&related_issue_from_relation(&1, "inverse_relation"))
+    blocks =
+      case RunStore.list_all_ticket_states() do
+        records when is_list(records) ->
+          for record <- records,
+              record = TicketState.normalize(record),
+              Enum.any?(record.depends_on, &(&1.issue_id == issue_id)),
+              do: stored_relation("relation", record.issue_id, record.issue_identifier, record)
 
-    relations ++ inverse_relations
-  end
-
-  defp related_issue_from_relation(%{"type" => type} = relation, direction) do
-    if block_relation?(type) do
-      issue = Map.get(relation, "relatedIssue") || Map.get(relation, "issue")
-
-      case issue do
-        %{} ->
-          [Map.merge(%{"relation" => direction, "type" => type}, family_summary(issue))]
-
-        _ ->
+        _unreadable ->
           []
       end
-    else
-      []
-    end
+
+    blocks ++ blocked_by
   end
 
-  defp related_issue_from_relation(_relation, _direction), do: []
+  defp related_issues(_issue), do: []
+
+  defp stored_relation(direction, id, identifier, record) do
+    record = record && TicketState.normalize(record)
+
+    %{
+      "relation" => direction,
+      "type" => "blocks",
+      "id" => id,
+      "identifier" => identifier || (record && record.issue_identifier),
+      "title" => record && record.title,
+      "state" => record && record.phase
+    }
+  end
 
   # The parent, the parent's other children, and the current issue's own children.
   defp family_issues(issue) do
@@ -2632,14 +2593,6 @@ defmodule SymphonyElixir.AgentTools.Linear do
       _ -> map
     end
   end
-
-  defp block_relation?(type) when is_binary(type) do
-    type
-    |> String.downcase()
-    |> String.contains?("block")
-  end
-
-  defp block_relation?(_type), do: false
 
   defp verify_comment_owner(context, comment_id) do
     if CommentRegistry.owned?(Map.get(context, :comment_registry), comment_id) do

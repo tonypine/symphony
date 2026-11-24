@@ -18,6 +18,7 @@ defmodule SymphonyElixir.AgentRunner do
     ChecksHold,
     CiFix,
     CiPoller,
+    Dispatch.DependsOn,
     ClosedPullRequest,
     CodeReview,
     Conductor.Steer,
@@ -1905,8 +1906,8 @@ defmodule SymphonyElixir.AgentRunner do
         Logger.info("Stopping agent run for #{issue_context(refreshed_issue)}; waiting for its open sub-issues")
         {:done, refreshed_issue}
 
-      Issue.blocked?(refreshed_issue, Config.settings!().tracker.terminal_states) ->
-        Logger.info("Stopping agent run for #{issue_context(refreshed_issue)}; it waits for its blockers")
+      DependsOn.open_for(refreshed_issue.id) != [] ->
+        Logger.info("Stopping agent run for #{issue_context(refreshed_issue)}; it waits on its dependencies")
         {:done, refreshed_issue}
 
       active_issue_state?(refreshed_issue.state) ->

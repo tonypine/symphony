@@ -29,7 +29,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   their files once, for the landing order: `ahead` is the PR `SymphonyElixir.LandingOrder.waits/2`
   makes the ticket wait for, and `competing` every open PR that shares a
   file with it (`SymphonyElixir.PrWatch.Competitors`). Neither names a PR whose wait would close a
-  cycle of blocked-by links, or one a person released the ticket from. The checks a base branch
+  cycle of stored dependencies and waits, or one a person released the ticket from. The checks a base branch
   requires, and whether it has workflow files, are kept 10 minutes.
 
   A ticket waiting on its competitors (landing reasons on its pause) has its wait judged before
@@ -869,7 +869,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   end
 
   # What the tick knows of the race, for the competitors: the open PRs, the ones the landing order
-  # ranked by number, each watched ticket's blockers (its Linear blocked-by links and the waits it
+  # ranked by number, each watched ticket's blockers (its stored dependencies and the waits it
   # recorded), the tickets whose PR was read merged, and the clock.
   defp race(watched, reads, pulls, members, now) do
     %{
@@ -882,9 +882,12 @@ defmodule SymphonyElixir.PrWatch.Repo do
   end
 
   defp blocker_ids(entry) do
-    linear = for %{id: id} <- List.wrap(entry.issue.blocked_by), is_binary(id), do: id
-    Enum.uniq(linear ++ for(%{issue_id: id, released: false} <- entry.links, is_binary(id), do: id))
+    stored = for %{issue_id: id} <- stored_dependencies(entry.record), is_binary(id), do: id
+    Enum.uniq(stored ++ for(%{issue_id: id, released: false} <- entry.links, is_binary(id), do: id))
   end
+
+  defp stored_dependencies(%{} = record), do: TicketState.normalize(record).depends_on
+  defp stored_dependencies(_record), do: []
 
   # A ticket waiting on its competitors has its wait judged on the open PRs just read; with none read,
   # the wait stays as it was.

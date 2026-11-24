@@ -2,14 +2,13 @@ defmodule SymphonyElixir.Dispatch.Settle do
   @moduledoc """
   The settle of a new ticket's first dispatch, and the start window of a run.
 
-  Linear sends a ticket's create and its blocked-by links as separate webhook deliveries, so the
-  record Symphony files at the create may have no blockers yet, and a by-id read at that instant may
-  miss them too. A ticket Linear created less than `SymphonyElixir.Config.dispatch_settle_ms/0` ago
+  Linear sends a ticket's create and its relations (its parent) as separate webhook deliveries, so
+  the record Symphony files at the create may not have them yet, and a by-id read at that instant may
+  miss them too. Linear's blocker links are not read: a ticket's dependencies are Symphony's own. A ticket Linear created less than `SymphonyElixir.Config.dispatch_settle_ms/0` ago
   is therefore not dispatched at once: the orchestrator sets one timer for the end of the settle, and
   reads the ticket by id with its relations when it fires, or at the ticket's next record change
-  (a webhook delivery), whichever comes first. The read is observed into the record and the
-  ticket's dependency pause synced from it; the ticket is then settled, and the cycle that follows
-  dispatches it only if it is still unblocked. No loop: one timer per new ticket, and a ticket with
+  (a webhook delivery), whichever comes first. The read is observed into the record; the ticket is
+  then settled, and the cycle that follows dispatches it if its gates are open. No loop: one timer per new ticket, and a ticket with
   no `createdAt` or an older one dispatches as before.
 
   This module holds the orchestrator's settle map (`t:t/0`), keyed by issue id: a settling entry
@@ -17,7 +16,7 @@ defmodule SymphonyElixir.Dispatch.Settle do
   settle (`prune/3`), so the map only holds tickets created in the last few seconds.
 
   A run is in its start window (`starting?/1`) from the dispatch decision until its agent session
-  starts: a blocked-by link that reaches the record then stops the start.
+  starts: a stored dependency that reaches the record then stops the start.
   """
 
   alias SymphonyElixir.Linear.Issue

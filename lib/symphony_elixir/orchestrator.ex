@@ -1671,28 +1671,9 @@ defmodule SymphonyElixir.Orchestrator do
       stopped_ids: stopped_ids,
       stopped_result: stopped_result,
       repo_result: repo_result,
-      update_hold_cache: resolve_update_holds(repo_result, input.update_hold_cache),
-      dependencies_synced: sync_recorded_dependencies(input.by_id, list_records, repo_result)
+      update_hold_cache: resolve_update_holds(repo_result, input.update_hold_cache)
     }
   end
-
-  # Under `dispatch.source: record` dispatch reads every repo's records each cycle, not only the one
-  # this cycle polled: each active record of another repo is paused on the open blockers it observed
-  # (`Pauses.Dependencies.sync_records/3`), so the pause holds it before its repo's next poll. The
-  # polled repo's tickets are swept from the poll's own read (`resolve_update_holds/2`).
-  defp sync_recorded_dependencies({:record, _held}, list_records, repo_result) do
-    polled = with {repo_name, _result} <- repo_result, do: repo_name
-
-    case list_records.() do
-      records when is_list(records) ->
-        Dependencies.sync_records(records, terminal_state_set(), skip: polled, active_states: active_state_set())
-
-      _unreadable ->
-        0
-    end
-  end
-
-  defp sync_recorded_dependencies(_by_id, _list_records, _repo_result), do: 0
 
   # Where the tick reads its running, watched and operator-stopped tickets: from Linear by id
   # under `dispatch.source: poll`, from the ticket records under `record`. The record path takes the
@@ -1802,19 +1783,13 @@ defmodule SymphonyElixir.Orchestrator do
   # the dispatch gate only reads it.
   defp resolve_released_dependencies(build, cache), do: DependsOn.resolve(RunStore.list_all_ticket_states(), build, cache)
 
-  # Runs in the poll task: brings each polled ticket's pause in line with what it waits on
-  # (`SymphonyElixir.Pauses.Dependencies`) — a ticket in any active phase with an open blocker pauses
-  # on it, and one whose blockers all went terminal is released and dispatches in its phase, with no
-  # state move and no person involved. A fix ticket merged into Symphony itself also waits for the
-  # running app, through the same cache as `UpdateHold`.
+  # Runs in the poll task: lifts each polled ticket's pause reasons that wait on another ticket once
+  # it no longer holds it (`SymphonyElixir.Pauses.Dependencies`): a fix ticket that landed, a block
+  # report's dependency that is met, and the reasons of the retired hold on Linear's blocker links. A
+  # fix merged into Symphony itself also waits for the running app, through the same cache as
+  # `UpdateHold`. A ticket's stored dependencies need no pause: the dispatch gate reads them.
   defp sweep_dependencies(repo_name, issues, terminal_states, cache) do
-    case Config.settings_for_repo(repo_name) do
-      {:ok, settings} ->
-        Dependencies.sweep(issues, terminal_states, repo_key: repo_name, update_hold_cache: cache, active_states: active_state_set(settings))
-
-      {:error, _reason} ->
-        {0, cache}
-    end
+    Dependencies.sweep(issues, terminal_states, repo_key: repo_name, update_hold_cache: cache)
   end
 
   defp apply_repo_poll_task_result(
@@ -2221,7 +2196,6 @@ defmodule SymphonyElixir.Orchestrator do
     :priority,
     :assignee_id,
     :assigned_to_worker,
-    :blocked_by,
     :sub_issues,
     :parent,
     :url,
@@ -5072,26 +5046,29 @@ defmodule SymphonyElixir.Orchestrator do
     dispatch_slots_available?(issue, state) and worker_slots_available?(state)
   end
 
-  # Candidates held in any active phase by open blockers, held by self-heal on a fix ticket, or
-  # waiting for a blocker's fix the running app does not include yet (the `UpdateHold` reasons on their pauses),
-  # recomputed on every poll tick for the snapshot.
+  # Candidates held in any active phase by their open stored dependencies
+  # (`SymphonyElixir.Dispatch.DependsOn.open_for/1`), held by self-heal on a fix ticket, or waiting
+  # for a blocker's fix the running app does not include yet (the `UpdateHold` reasons on their
+  # pauses), recomputed on every poll tick for the snapshot.
   defp put_blocked(%State{} = state, issues) do
-    terminal_states = Config.settings!().tracker.terminal_states
+    terminal_states = terminal_state_set()
+    open = for %Issue{id: issue_id} = issue <- issues, into: %{}, do: {issue_id, open_dependencies(issue, terminal_states)}
+    blocked? = &(Map.get(open, &1.id, []) != [])
 
     blocked =
-      for %Issue{} = issue <- issues, Issue.blocked?(issue, terminal_states) do
+      for %Issue{} = issue <- issues, blocked?.(issue) do
         %{
           issue_id: issue.id,
           identifier: issue.identifier,
           title: issue.title,
           state: issue.state,
-          blockers: issue |> Issue.open_blockers(terminal_states) |> Enum.map(&blocker_snapshot/1)
+          blockers: open |> Map.fetch!(issue.id) |> Enum.map(&blocker_snapshot/1)
         }
       end
 
     fix_ticket_held =
       for %Issue{} = issue <- issues,
-          not Issue.blocked?(issue, terminal_states),
+          not blocked?.(issue),
           (waits = fix_ticket_waits(issue)) != [] do
         %{
           issue_id: issue.id,
@@ -5106,7 +5083,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     update_blocked =
       for %Issue{} = issue <- issues,
-          not Issue.blocked?(issue, terminal_states),
+          not blocked?.(issue),
           (reasons = UpdateHold.reasons(hold_repo_key(issue), issue.id)) != [] do
         %{
           issue_id: issue.id,
@@ -5124,7 +5101,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     instructions_held =
       for %Issue{} = issue <- issues,
-          not Issue.blocked?(issue, terminal_states),
+          not blocked?.(issue),
           not MapSet.member?(update_held, issue.id),
           (reasons = InstructionsHold.reasons(hold_repo_key(issue), issue.id)) != [] do
         %{
@@ -5228,8 +5205,16 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp blocker_snapshot(%{} = blocker), do: %{identifier: Map.get(blocker, :identifier), state: Map.get(blocker, :state)}
-  defp blocker_snapshot(_blocker), do: %{identifier: nil, state: nil}
+  defp blocker_snapshot({entry, record}), do: %{identifier: entry.identifier || record_value(record, :issue_identifier), state: record_value(record, :phase)}
+
+  defp record_value(%{} = record, key), do: Map.get(record, key)
+  defp record_value(nil, _key), do: nil
+
+  # A ticket outside a terminal state waits on its open stored dependencies, each with the record of
+  # the ticket it names.
+  defp open_dependencies(%Issue{state: state, id: issue_id}, terminal_states) do
+    if terminal_issue_state?(state, terminal_states), do: [], else: DependsOn.open_for(issue_id)
+  end
 
   # The slots taken (`SymphonyElixir.Dispatch.Slots`): every ticket that holds one (`slot_holders`),
   # with a run under way (on a machine step and between its turns too) or with none, and every other
@@ -5589,8 +5574,8 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # Reads a settling ticket by id with its relations (observed into its record), pauses it on any
-  # open blocker the read found, settles it and asks for a cycle. A failed read settles it too: the
+  # Reads a settling ticket by id with its relations (observed into its record), settles it and asks
+  # for a cycle. A failed read settles it too: the
   # dispatch's own revalidation reads it again. A ticket with no settle under way is left alone.
   defp settle_dispatch_read(%State{} = state, issue_id) do
     case Settle.finish(state.dispatch_settle, issue_id) do
@@ -5604,12 +5589,10 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp sync_settle_read({:ok, issues}, issue_id, repo_key) do
+  defp sync_settle_read({:ok, issues}, issue_id, _repo_key) do
     case Enum.find(issues, &match?(%Issue{id: ^issue_id}, &1)) do
-      %Issue{} = read ->
-        read
-        |> freeze_issue_repo_key(issue_repo_key(read) || repo_key)
-        |> sync_read_dependencies(terminal_state_set())
+      %Issue{} ->
+        :ok
 
       nil ->
         Logger.info("Settle read of a new ticket found nothing: issue_id=#{issue_id}")
@@ -5619,19 +5602,17 @@ defmodule SymphonyElixir.Orchestrator do
   defp sync_settle_read({:error, reason}, issue_id, _repo_key),
     do: Logger.warning("Settle read of a new ticket failed: issue_id=#{issue_id}: #{inspect(reason)}")
 
-  # A blocked-by link that reaches a ticket's record while its run is starting (dispatched, no agent
-  # session yet) stops that start: the record's open blocker pauses the ticket
-  # (`Pauses.Dependencies.sync_issue/4`) and the run is stopped before its first turn, so the ticket
-  # holds in its phase as a blocked one does. A run whose session started finishes its turn.
+  # A stored dependency that reaches a ticket's record while its run is starting (dispatched, no
+  # agent session yet) stops that start: the run is stopped before its first turn, and the dependency
+  # gate holds the ticket in its phase. A run whose session started finishes its turn.
   defp stop_blocked_start(%State{} = state, issue_id) do
     with running_entry when is_map(running_entry) <- Map.get(state.running, issue_id),
          true <- Settle.starting?(running_entry) and not pr_run_entry?(running_entry),
          %{} = record <- RunStore.get_ticket_state(issue_id),
          %Issue{} = recorded <- Candidates.issue_from_record(record),
-         terminal_states = terminal_state_set(),
-         true <- Issue.blocked?(recorded, terminal_states) do
-      Logger.info("Stopping the start of #{issue_context(recorded)}; a blocker reached it before its first turn")
-      sync_read_dependencies(recorded, terminal_states)
+         false <- terminal_issue_state?(recorded.state, terminal_state_set()),
+         reason when is_binary(reason) <- depends_on_reason(recorded, state.update_hold_cache) do
+      Logger.info("Stopping the start of #{issue_context(recorded)}; a dependency reached it before its first turn: #{reason}")
       :ok = record_stopped_run_ended(state, running_entry, recorded.state)
       terminate_running_issue(state, issue_id, false, status: "stopped", error: "blocked before its first turn")
     else
@@ -5658,7 +5639,7 @@ defmodule SymphonyElixir.Orchestrator do
 
       {:skip, %Issue{} = refreshed_issue} ->
         Logger.info(
-          "Skipping stale dispatch after issue refresh: #{issue_context(refreshed_issue)} state=#{inspect(refreshed_issue.state)} assigned_to_worker=#{refreshed_issue.assigned_to_worker} blocked_by=#{length(refreshed_issue.blocked_by)} sub_issues=#{length(refreshed_issue.sub_issues)} refused_by=#{inspect(dispatch_refusal(refreshed_issue, terminal_states))}"
+          "Skipping stale dispatch after issue refresh: #{issue_context(refreshed_issue)} state=#{inspect(refreshed_issue.state)} assigned_to_worker=#{refreshed_issue.assigned_to_worker} sub_issues=#{length(refreshed_issue.sub_issues)} refused_by=#{inspect(dispatch_refusal(refreshed_issue, terminal_states))}"
         )
 
         # A Code Review or QA ticket held back on its head records why, as the poll does.
@@ -6401,7 +6382,6 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp judge_revalidated_issue(refreshed_issue, issue, terminal_states, opts) do
     source = Keyword.get(opts, :source, :poll)
-    sync_read_dependencies(refreshed_issue, terminal_states)
 
     if dispatch_revalidated_issue?(refreshed_issue, terminal_states, Keyword.get(opts, :sticky_route?, false)) and
          unmoved_since?(refreshed_issue, issue, source) do
@@ -6409,13 +6389,6 @@ defmodule SymphonyElixir.Orchestrator do
     else
       {:skip, refreshed_issue}
     end
-  end
-
-  # The read right before dispatch may find a blocker the last poll didn't: the ticket is paused on
-  # it (`Pauses.Dependencies.sync_issue/4`) before the gate reads its pause.
-  defp sync_read_dependencies(%Issue{} = issue, terminal_states) do
-    with repo_key when is_binary(repo_key) <- hold_repo_key(issue),
-         do: Dependencies.sync_issue(repo_key, issue, terminal_states, active_states: active_state_set())
   end
 
   # From the record, the issue starts only when its record still says what the candidate said: the

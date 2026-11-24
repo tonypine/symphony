@@ -60,8 +60,8 @@ defmodule SymphonyElixir.DirectorMoves do
     `SymphonyElixir.TransitionGuard.block_report_question/1`; a dispatch loop or a quiet handoff,
     answered "Run it again", `SymphonyElixir.DispatchLoop`) has the question answered and those
     reasons released, and continues in place, with no state move. So does one waiting on its
-    competing pull requests (`SymphonyElixir.PrWatch.Competitors`): the blocked-by links Symphony
-    added go, and it no longer waits on those pull requests. So does a QA ticket held because its
+    competing pull requests (`SymphonyElixir.PrWatch.Competitors`): its landing reasons go, and it no
+    longer waits on those pull requests. So does a QA ticket held because its
     app's QA build could not run (`SymphonyElixir.QaBuildHold`): that build is asked for again first.
     A ticket an idle run parked in Backlog
     (`SymphonyElixir.IdlePark`) goes back to the phase it was parked from first, with its workspace

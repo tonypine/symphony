@@ -5,8 +5,7 @@ defmodule SymphonyElixir.Linear.IssueNormalizer do
   (`from_webhook_data/1`). Both read the same fields the same way, so the same ticket gives the same
   `Issue` from either.
 
-  A delivery carries less than the poll query: no children, no comments, no project slug, and
-  relations only sometimes. A field the delivery doesn't carry is `:unknown` (the project's slug is
+  A delivery carries less than the poll query: no children, no comments and no project slug. A field the delivery doesn't carry is `:unknown` (the project's slug is
   left out of its map), never empty, so a later merge can tell "Linear said none" from "this source
   didn't say" and never erases a known fact with a missing one. A value of the wrong shape in a
   delivery reads as nothing, never a raise.
@@ -51,7 +50,6 @@ defmodule SymphonyElixir.Linear.IssueNormalizer do
       branch_name: issue["branchName"],
       url: issue["url"],
       assignee_id: assignee_field(assignee, "id"),
-      blocked_by: extract_blockers(issue),
       sub_issues: extract_sub_issues(issue),
       labels: extract_labels(issue),
       comments: comments(issue),
@@ -66,8 +64,9 @@ defmodule SymphonyElixir.Linear.IssueNormalizer do
   @doc """
   The `Issue` for the `data` of a Linear `Issue` webhook delivery, or nil for anything else. Linear
   sends it in its REST-like shape: `labels` a list, not a connection. Children, comments (and the
-  rulings and linked issues read from them) are never in a delivery, so they are `:unknown`, as are
-  `blocked_by` and `branch_name` when the delivery lacks them. A delivery's project has no slug, so
+  rulings and linked issues read from them) are never in a delivery, so they are `:unknown`, as is
+  `branch_name` when the delivery lacks it. Linear's blocker links are not read, from a delivery or a
+  node: a ticket's dependencies are Symphony's own (`SymphonyElixir.TicketState`'s `depends_on`). A delivery's project has no slug, so
   its map has no `:slug_id` unless the delivery gives one; it keeps the project's `:url`, which ends
   in the slug (`SymphonyElixir.Routing.PollScope` routes a new ticket by it) and which a record
   drops. `assigned_to_worker` keeps its default: the assignee filter is the poll's, and the record
@@ -87,7 +86,6 @@ defmodule SymphonyElixir.Linear.IssueNormalizer do
       branch_name: Map.get(data, "branchName", :unknown),
       url: data["url"],
       assignee_id: assignee_field(data["assignee"], "id"),
-      blocked_by: if(Map.has_key?(data, "inverseRelations"), do: extract_blockers(data), else: :unknown),
       sub_issues: :unknown,
       labels: extract_labels(data),
       comments: :unknown,
@@ -211,29 +209,6 @@ defmodule SymphonyElixir.Linear.IssueNormalizer do
     |> Enum.flat_map(fn
       %{"name" => name} when is_binary(name) -> [String.downcase(name)]
       _label -> []
-    end)
-  end
-
-  defp extract_blockers(issue) do
-    issue["inverseRelations"]
-    |> nodes()
-    |> Enum.flat_map(fn
-      %{"type" => relation_type, "issue" => blocker_issue}
-      when is_binary(relation_type) and is_map(blocker_issue) ->
-        if String.downcase(String.trim(relation_type)) == "blocks" do
-          [
-            %{
-              id: blocker_issue["id"],
-              identifier: blocker_issue["identifier"],
-              state: name_of(blocker_issue["state"])
-            }
-          ]
-        else
-          []
-        end
-
-      _ ->
-        []
     end)
   end
 

@@ -6,9 +6,11 @@ defmodule SymphonyElixir.Connected do
   (`SymphonyElixir.Inbox.References`).
 
   It is built from what the orchestrator already holds, so serving it reads no Linear: each poll's
-  `blocked_by` and `sub_issues` (identifier and state; the poll reads no titles), and what the
-  run's enrichment read once at dispatch (`linked/1`): the parent and the `blocks` and `related`
-  links, with their titles. `SymphonyElixir.Connected.Read` completes it for the ticket read.
+  `sub_issues` (identifier and state; the poll reads no titles), a record's stored dependencies
+  (`depends_on`) as `blocked_by`, and what the run's enrichment read once at dispatch (`linked/1`):
+  the parent and the `related` links, with their titles. Linear's blocker links are not read, so
+  `blocks` is empty here: `SymphonyElixir.Connected.Read` completes it, and `blocked_by`, from the
+  records for the ticket read.
   """
 
   alias SymphonyElixir.Linear.Issue
@@ -36,8 +38,9 @@ defmodule SymphonyElixir.Connected do
   @type linked :: %{parent: parent() | nil, linked_issues: [map()]}
 
   @doc """
-  The ticket's connections: its blockers and sub-tickets from `issue` (or a ticket's record, which
-  keeps its blockers as `blockers`), its parent and links from `linked` (the issue's own when nil).
+  The ticket's connections: its sub-tickets from `issue` (or a ticket's record, whose stored
+  dependencies are its `blocked_by`), its parent and related links from `linked` (the issue's own
+  when nil).
   """
   @spec build(Issue.t() | map(), linked() | nil) :: t()
   def build(issue, linked) when is_map(issue) do
@@ -46,8 +49,8 @@ defmodule SymphonyElixir.Connected do
     %{
       parent: parent,
       sub_tickets: tickets(Map.get(issue, :sub_issues)),
-      blocked_by: tickets(Map.get(issue, :blocked_by) || Map.get(issue, :blockers)),
-      blocks: links(linked_issues, "blocks"),
+      blocked_by: tickets(Map.get(issue, :depends_on)),
+      blocks: [],
       related: links(linked_issues, "related")
     }
   end

@@ -9,8 +9,8 @@ defmodule SymphonyElixir.Dispatch.Slots do
     holds a slot is in progress; that is the only meaning of in progress.
   - A ticket gives up its slot only when it is done (a terminal state), leaves the active states (a
     person moved it to Backlog, or it was removed or unassigned), waits on a dependency (a stored
-    dependency, a blocker, a fix ticket, a competing pull request, an app update carrying a
-    blocker's fix: `releases?/2`)
+    dependency, a run's block report, a fix ticket, a competing pull request, an app update carrying
+    a dependency's fix: `releases?/2`)
     or on its own sub-tickets, or when a person stops it.
   - No agent turn and no machine step runs for a ticket that holds no slot. A ticket without one
     starts only when a slot is free; one that holds a slot always starts its next run.
@@ -55,7 +55,7 @@ defmodule SymphonyElixir.Dispatch.Slots do
   It does when the ticket is no longer a candidate (terminal, out of the active states,
   unassigned), waits on its sub-tickets, waits on a stored dependency that is not met (the
   `:depends_on` gate, `SymphonyElixir.Dispatch.DependsOn`), waits for an app update that carries a
-  blocker's fix, or is paused on another ticket (a blocker, a fix ticket, a competing pull request) or on a person's
+  dependency's fix, or is paused on another ticket (a run's block report, a fix ticket, a competing pull request) or on a person's
   stop. A stop that comes with a question (the Conductor stops a run whose ticket it asked the
   person about) waits on the person, and keeps the slot. Any other gate (a question, a decision,
   CI, a build, a usage limit, a pause of Symphony or a provider, the priority filter) keeps it too.

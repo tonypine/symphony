@@ -57,7 +57,7 @@ defmodule SymphonyElixir.Pauses do
   (`SymphonyElixir.Questions`) and its reason never disagree.
 
   A `:ticket` reason's line says why the ticket is waited on (`ticket_reason/2`): a blocker it is
-  blocked by (`:dependency`, the blocked-by sync and a run's block report), the fix ticket self-heal
+  blocked by (`:dependency`, a run's block report on its stored dependencies), the fix ticket self-heal
   filed for it (`:fix_ticket`) or a pull request competing for its files (`:landing`).
 
   Once a change to a ticket's pause commits, its labels are projected from it

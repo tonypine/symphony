@@ -31,7 +31,7 @@ defmodule SymphonyElixir.Linear.Client do
   @operation_name_pattern ~r/^\s*(?:query|mutation)\s+([A-Za-z_][A-Za-z0-9_]*)/
 
   @query """
-  query SymphonyLinearPoll($filter: IssueFilter!, $first: Int!, $relationFirst: Int!, $commentLast: Int!, $after: String) {
+  query SymphonyLinearPoll($filter: IssueFilter!, $first: Int!, $commentLast: Int!, $after: String) {
     issues(filter: $filter, first: $first, after: $after) {
       nodes {
         id
@@ -83,18 +83,6 @@ defmodule SymphonyElixir.Linear.Client do
             }
           }
         }
-        inverseRelations(first: $relationFirst) {
-          nodes {
-            type
-            issue {
-              id
-              identifier
-              state {
-                name
-              }
-            }
-          }
-        }
         createdAt
         updatedAt
       }
@@ -107,7 +95,7 @@ defmodule SymphonyElixir.Linear.Client do
   """
 
   @query_by_ids """
-  query SymphonyLinearIssuesById($ids: [ID!]!, $first: Int!, $relationFirst: Int!, $commentLast: Int!) {
+  query SymphonyLinearIssuesById($ids: [ID!]!, $first: Int!, $commentLast: Int!) {
     issues(filter: {id: {in: $ids}}, first: $first) {
       nodes {
         id
@@ -159,18 +147,6 @@ defmodule SymphonyElixir.Linear.Client do
             }
           }
         }
-        inverseRelations(first: $relationFirst) {
-          nodes {
-            type
-            issue {
-              id
-              identifier
-              state {
-                name
-              }
-            }
-          }
-        }
         createdAt
         updatedAt
       }
@@ -179,7 +155,7 @@ defmodule SymphonyElixir.Linear.Client do
   """
 
   @query_by_identifier """
-  query SymphonyLinearIssueByIdentifier($id: String!, $relationFirst: Int!, $commentLast: Int!) {
+  query SymphonyLinearIssueByIdentifier($id: String!, $commentLast: Int!) {
     issue(id: $id) {
       id
       identifier
@@ -227,18 +203,6 @@ defmodule SymphonyElixir.Linear.Client do
           identifier
           state {
             name
-          }
-        }
-      }
-      inverseRelations(first: $relationFirst) {
-        nodes {
-          type
-          issue {
-            id
-            identifier
-            state {
-              name
-            }
           }
         }
       }
@@ -690,7 +654,6 @@ defmodule SymphonyElixir.Linear.Client do
            graphql_fun.(@query, %{
              filter: filter,
              first: @issue_page_size,
-             relationFirst: @issue_page_size,
              commentLast: @enrichment_comment_last,
              after: after_cursor
            }),
@@ -937,7 +900,6 @@ defmodule SymphonyElixir.Linear.Client do
            graphql_fun.(@query_by_ids, %{
              ids: batch_ids,
              first: length(batch_ids),
-             relationFirst: @issue_page_size,
              commentLast: @enrichment_comment_last
            }),
          {:ok, issues} <- decode_linear_response(body, assignee_filter) do
@@ -982,7 +944,6 @@ defmodule SymphonyElixir.Linear.Client do
         with {:ok, body} <-
                graphql_fun.(@query_by_identifier, %{
                  id: id,
-                 relationFirst: @issue_page_size,
                  commentLast: @enrichment_comment_last
                }) do
           decode_linear_issue_response(body, nil)
@@ -1257,7 +1218,7 @@ defmodule SymphonyElixir.Linear.Client do
   defp normalize_linked_issue(%{"type" => relation_type, "relatedIssue" => related_issue})
        when is_binary(relation_type) and is_map(related_issue) do
     case normalize_relation_type(relation_type) do
-      relation when relation in ["related", "blocks"] ->
+      "related" = relation ->
         case related_issue["identifier"] do
           identifier when is_binary(identifier) and identifier != "" ->
             [

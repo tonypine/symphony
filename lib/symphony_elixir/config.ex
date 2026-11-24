@@ -602,9 +602,8 @@ defmodule SymphonyElixir.Config do
   @doc """
   How long after a ticket's creation in Linear its first dispatch waits for its relations
   (`SymphonyElixir.Dispatch.Settle`): five seconds. Linear sends a new ticket's create and its
-  blocked-by links as separate deliveries, so a ticket created with blockers is read once more by id
-  when this settle ends (or at the ticket's next record change, whichever comes first) and dispatches
-  only if it is still unblocked. A constant, not a symphony.yml setting; tests set
+  relations (its parent) as separate deliveries, so a new ticket is read once more by id when this
+  settle ends (or at the ticket's next record change, whichever comes first) before it dispatches. A constant, not a symphony.yml setting; tests set
   `:dispatch_settle_ms` in the application env.
   """
   @spec dispatch_settle_ms() :: non_neg_integer()

@@ -412,13 +412,14 @@ defmodule SymphonyElixir.TransitionGuard do
   An agent asking to park its issue in `Backlog` while it is `In Progress` or `Rework` is not a
   move: the guard pauses the ticket in its phase with a recorded reason instead of moving it (the
   Backlog escape hatch is retired), and returns `{:hold, :blocked, attrs}`, the block it reported:
-  its `reason`, what clears it and what it waits on. When the issue has open blocked-by blockers
-  (`ctx`'s `:open_blockers`), the block waits on them (`dependency`), and
-  `SymphonyElixir.Pauses.Dependencies` lifts it on its own once they are all terminal; without one
-  it waits on a person's `Unblock` (`access`).
+  its `reason`, what clears it and what it waits on. When the issue has open stored dependencies
+  (`ctx`'s `:open_blockers`, `SymphonyElixir.Dispatch.DependsOn.open_identifiers/1`; Linear's
+  blocker links are not read), the block waits on them (`dependency`), and
+  `SymphonyElixir.Pauses.Dependencies` lifts it on its own once each is met; without one it waits on
+  a person's `Unblock` (`access`).
 
   With `ctx`'s `:ticket` (the issue as `SymphonyElixir.Pauses` names it), the block report pauses
-  the ticket through the one writer: one `:ticket` reason per open blocker ("Waiting for TP-12 to
+  the ticket through the one writer: one `:ticket` reason per open dependency ("Waiting for TP-12 to
   finish"), set by the run; with no blocker, the question `block_report_question/1` asks
   (`SymphonyElixir.Questions`), named in `waits_on.question_id`, which the Director's Unblock
   answers "#{@unblock_option}". A question that can't be asked pauses the ticket on an
@@ -427,7 +428,7 @@ defmodule SymphonyElixir.TransitionGuard do
 
   `ctx` carries `:settings`, `:from_state` (the issue's current state), `:plan_parent?` (the
   issue carries the `plan` label, so it is an epic parent), `:open_blockers` (the identifiers of
-  the issue's blockers still outside a terminal state), and optionally `:ticket` and
+  the tickets its open stored dependencies name), and optionally `:ticket` and
   `:issue_identifier`, which names the ticket in the question.
   """
   @spec resolve_request(map(), context()) ::
@@ -465,9 +466,10 @@ defmodule SymphonyElixir.TransitionGuard do
     end
   end
 
-  # A run that marked its issue blocked by other tickets waits on them: the pause lifts on its own
-  # once they are all terminal, in whatever phase the issue is. With no open blocker, what the run
-  # waits on is unknown to the machine, so the pause waits on a person's Unblock.
+  # A run that reported a block while its issue depends on other tickets waits on them: the pause
+  # lifts on its own once each dependency is met, in whatever phase the issue is. With no open
+  # dependency, what the run waits on is unknown to the machine, so the pause waits on a person's
+  # Unblock.
   defp block_report_attrs([_ | _] = keys) do
     %{
       reason: "the run reported a block: waiting on " <> Enum.join(keys, ", "),
