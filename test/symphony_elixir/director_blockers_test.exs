@@ -319,7 +319,8 @@ defmodule SymphonyElixir.DirectorBlockersTest do
       opts = scoped(ctx.opts)
       :ok = RunStore.delete_ticket_state(ticket.issue_id)
 
-      assert {:error, {:store, message}} = DirectorBlockers.dependency(:add, ticket.issue_identifier, blocker.issue_identifier, :done, opts)
+      result = DirectorBlockers.dependency(:add, ticket.issue_identifier, blocker.issue_identifier, :done, opts)
+      assert {:error, {:store, message}} = result
       assert message == "Symphony couldn't add the dependency of #{ticket.issue_identifier} on #{blocker.issue_identifier}, so nothing changed. Try again in a moment."
     end
   end

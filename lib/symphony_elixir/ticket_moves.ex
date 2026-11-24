@@ -13,7 +13,18 @@ defmodule SymphonyElixir.TicketMoves do
   a cycle, a label already on) is not a fact of the ticket, so it stays the call's own.
   """
 
-  alias SymphonyElixir.{Config, DirectorMoves, IdlePark, PlanReview, Questions, StartNow, SubIssueWait, TicketState, UpdateHold}
+  alias SymphonyElixir.{
+    Config,
+    DirectorMoves,
+    IdlePark,
+    PlanReview,
+    Questions,
+    StartNow,
+    SubIssueWait,
+    TicketState,
+    UpdateHold
+  }
+
   alias SymphonyElixir.Dispatch.DependsOn
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.PrWatch.Competitors

@@ -99,12 +99,24 @@ defmodule SymphonyElixir.Dispatch.QueueTest do
   describe "TP-1633: broken_dependency/2" do
     test "names the first dependency a move turns upside down, never one already upside down" do
       record = fn id, key, depends_on, parent ->
-        %{issue_id: id, issue_identifier: "MT-#{id}", sort_key: key, parent: parent && %{identifier: "MT-#{parent}"}, depends_on: depends_on}
+        %{
+          issue_id: id,
+          issue_identifier: "MT-#{id}",
+          sort_key: key,
+          parent: parent && %{identifier: "MT-#{parent}"},
+          depends_on: depends_on
+        }
       end
 
       on = fn id -> [%{issue_id: id, identifier: "MT-#{id}", kind: :done}] end
 
-      records = [record.("a", "a0", [], nil), record.("b", "a1", on.("a"), nil), record.("c", "a2", on.("d"), nil), record.("d", "a3", [], nil)]
+      records = [
+        record.("a", "a0", [], nil),
+        record.("b", "a1", on.("a"), nil),
+        record.("c", "a2", on.("d"), nil),
+        record.("d", "a3", [], nil)
+      ]
+
       # c already sits above d, which it depends on: a move that keeps it there is not refused.
       assert Queue.broken_dependency(records, records) == nil
 

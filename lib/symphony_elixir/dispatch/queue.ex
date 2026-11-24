@@ -184,10 +184,14 @@ defmodule SymphonyElixir.Dispatch.Queue do
 
     Enum.find_value(moved, fn record ->
       Enum.find_value(Map.get(record, :depends_on) || [], fn %{issue_id: on_id} ->
-        pair = {record.issue_id, on_id}
-        if match?({:above, _, _}, above(now, record.issue_id, on_id)) and above(before, record.issue_id, on_id) == :below, do: pair
+        turned_upside_down(before, now, record.issue_id, on_id)
       end)
     end)
+  end
+
+  defp turned_upside_down(before, now, issue_id, on_id) do
+    if match?({:above, _, _}, above(now, issue_id, on_id)) and above(before, issue_id, on_id) == :below,
+      do: {issue_id, on_id}
   end
 
   # Whether the ticket `issue_id` sits above `on_id` where their scopes meet: `{:above, moved,

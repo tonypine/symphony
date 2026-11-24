@@ -1881,18 +1881,21 @@ defmodule SymphonyElixir.RunStore do
          {:ok, index} <- move_index(siblings, to),
          keys = Queue.insertion(siblings, index),
          :ok <- keep_dependency_order(issue_id, keys) do
-      Enum.each(keys, fn {id, key} -> rekey(if(id == :placed, do: issue_id, else: id), key) end)
+      Enum.each(keys, fn {id, key} -> rekey(placed_id(id, issue_id), key) end)
     else
       {:error, _reason} = error -> error
       _none -> {:error, :not_in_queue}
     end
   end
 
+  defp placed_id(:placed, issue_id), do: issue_id
+  defp placed_id(id, _issue_id), do: id
+
   # A move never puts a ticket above one it depends on (`SymphonyElixir.Dispatch.Queue.broken_dependency/2`),
   # decided under the queue's lock, so no dependency added meanwhile slips past it.
   defp keep_dependency_order(issue_id, keys) do
     records = :all |> listed_ticket_records() |> Enum.map(&TicketState.normalize/1)
-    changed = Map.new(keys, fn {id, key} -> {if(id == :placed, do: issue_id, else: id), key} end)
+    changed = Map.new(keys, fn {id, key} -> {placed_id(id, issue_id), key} end)
     moved = Enum.map(records, fn record -> %{record | sort_key: Map.get(changed, record.issue_id, record.sort_key)} end)
 
     case Queue.broken_dependency(records, moved) do

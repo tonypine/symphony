@@ -89,7 +89,8 @@ defmodule SymphonyElixir.DirectorBlockers do
   queue move the add makes (the depending ticket goes just below `on`) announced on the queue's
   stream. Answers the ticket's dependencies after the change, each with its kind.
   """
-  @spec dependency(action(), String.t(), String.t(), TicketState.dependency_kind() | nil, keyword()) :: {:ok, map()} | {:error, error()}
+  @spec dependency(action(), String.t(), String.t(), TicketState.dependency_kind() | nil, keyword()) ::
+          {:ok, map()} | {:error, error()}
   def dependency(:add, identifier, on, kind, opts) when kind in [:done, :released], do: change(:add, identifier, on, Keyword.put(opts, :kind, kind))
   def dependency(:remove, identifier, on, _kind, opts), do: change(:remove, identifier, on, Keyword.put(opts, :kind, :any))
 
@@ -249,7 +250,12 @@ defmodule SymphonyElixir.DirectorBlockers do
   defp move_name(action, _kind), do: "#{action}_dependency"
 
   defp answer(action, record, blocking, nil, records) do
-    %{action: Atom.to_string(action), issue_identifier: record.issue_identifier, blocker: blocking.issue_identifier, blockers: links(record.depends_on, records)}
+    %{
+      action: Atom.to_string(action),
+      issue_identifier: record.issue_identifier,
+      blocker: blocking.issue_identifier,
+      blockers: links(record.depends_on, records)
+    }
   end
 
   defp answer(action, record, blocking, kind, records) do

@@ -456,7 +456,15 @@ defmodule SymphonyElixir.TicketEvents.Types do
       run_kinds: [],
       required: [action: {:enum, @person_actions}],
       optional:
-        [move: :string, from: :string, to: :string, blocker: :string, kind: {:enum, ~w(done released)}, label: :string, run_stopped: :boolean] ++
+        [
+          move: :string,
+          from: :string,
+          to: :string,
+          blocker: :string,
+          kind: {:enum, ~w(done released)},
+          label: :string,
+          run_stopped: :boolean
+        ] ++
           @signal,
       idempotency: :writer
     },
