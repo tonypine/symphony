@@ -570,6 +570,58 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
     end
   end
 
+  describe "the move (TP-1656)" do
+    defp moving(move, opts), do: Answer.parse(Jason.encode!(%{"instructions" => "Go on.", "update" => "I moved it.", "move" => move}), opts)
+
+    # What each junction's answer is read for (`Conductor`'s read opts): the move is read at every one.
+    @every_junction [
+      [plan: true],
+      [message: true, tree: true, waive: true, hold: true],
+      [message: :reply, new_ticket: true, tree: true],
+      [plan: :optional, tree: true],
+      [waive: true],
+      [route: :ticket],
+      [route: true],
+      [hold: true, waive: true],
+      [watch: true, route: :ticket, hold: true, waive: true],
+      [tree: true, waive: true],
+      []
+    ]
+
+    test "is read at every junction, its stage trimmed and its reason cut to 1,000 characters" do
+      move = %{"stage" => " QA ", "reason" => " Nothing is left to code; the person said to go on to QA. "}
+
+      for opts <- @every_junction do
+        answer = %{"instructions" => "Go on.", "update" => "I moved it.", "move" => move}
+        answer = if opts[:plan] == true, do: Map.merge(answer, %{"plan" => nil, "ask_person" => @question}), else: answer
+        assert {:ok, %{move: %{stage: "QA", reason: "Nothing is left to code; the person said to go on to QA."}}} = Answer.parse(Jason.encode!(answer), opts), inspect(opts)
+      end
+
+      assert {:ok, %{move: nil}} = moving(nil, [])
+      assert {:ok, %{move: nil}} = Answer.parse(Jason.encode!(%{"instructions" => "Go on."}))
+
+      long = String.duplicate("It has nothing to code. ", 60)
+      capture_log(fn -> send(self(), moving(%{"stage" => "QA", "reason" => long}, [])) end)
+      assert_received {:ok, %{move: %{reason: reason}}}
+      assert String.length(reason) <= 1_000
+    end
+
+    test "a move that misses its shape refuses the answer, with why" do
+      shape = "`move` must be null or `{\"stage\": ..., \"reason\": ...}`, both strings"
+
+      for {move, why} <- [
+            {%{"stage" => " ", "reason" => "Go on."}, "`move.stage` is blank"},
+            {%{"stage" => "QA", "reason" => ""}, "`move.reason` is blank"},
+            {%{"stage" => "QA"}, shape},
+            {%{"reason" => "Go on."}, shape},
+            {%{"stage" => 3, "reason" => "Go on."}, shape},
+            {"QA", shape}
+          ] do
+        assert moving(move, []) == {:error, why}, inspect(move)
+      end
+    end
+  end
+
   describe "waivers" do
     defp waiving(waive, opts \\ [waive: true]), do: Answer.parse(Jason.encode!(%{"instructions" => "Go on.", "waive" => waive}), opts)
 

@@ -2601,6 +2601,158 @@ defmodule SymphonyElixir.DirectorMovesTest do
     }
   end
 
+  describe "the Conductor's own move of its ticket (TP-1656)" do
+    @reason "Nothing is left to code, and the person said to go on to QA."
+
+    # MOT-40 in `phase`, groomed, in a repository Symphony routes to.
+    defp conducted!(phase) do
+      conductor_repo!()
+      conductor_ticket!(phase)
+      {:ok, _asked} = SymphonyElixir.TicketPlan.record_ask("repo-director", "pr", "Add checkout.")
+
+      plan = %{
+        shape: "single",
+        layers: ["logic"],
+        summary: "Checkout works.",
+        text: "Approach: add checkout.",
+        checks: [%{id: "c1", kind: "outcome", statement: "Checkout works.", proof: "test"}],
+        size: %{tokens: 1, runs: 1},
+        reason: "Grooming",
+        by: "grooming"
+      }
+
+      {:ok, _written} = SymphonyElixir.TicketPlan.write("repo-director", "pr", plan)
+      %{pr(phase) | repo_key: "repo-director"}
+    end
+
+    defp turn_plan(junction) do
+      settings = Config.settings_for_repo!("repo-director")
+      %{junction: junction, issue_id: "pr", repo_key: "repo-director", run_profile: Config.run(settings, :conductor), timeout_ms: 5_000}
+    end
+
+    # A turn that answers with `attrs` and tells the test its prompt.
+    defp moving_turn(attrs) do
+      test = self()
+
+      fn _plan, _issue, _run_id, prompt ->
+        send(test, {:conductor_prompt, prompt})
+        {:ok, [Jason.encode!(Map.merge(%{"instructions" => "Go on.", "update" => "I moved it on."}, attrs))], 10}
+      end
+    end
+
+    defp move_to(stage), do: %{"move" => %{"stage" => stage, "reason" => @reason}}
+
+    test "a person's message on a ticket in Rework that the Conductor answers with a move to QA leaves it in QA, with no question", %{opts: opts} do
+      issue = conducted!("Rework")
+      orchestrator = start_supervised!({FakeOrchestrator, self()})
+      {:ok, message} = SymphonyElixir.Messages.send_message("repo-director", "pr", "Just continue to QA, if there's nothing to code")
+
+      conductor = [
+        settings: %Schema.Conductor{enabled: true},
+        turn: moving_turn(move_to("QA")),
+        running: fn _id -> nil end,
+        moves: Keyword.put(opts, :orchestrator, orchestrator)
+      ]
+
+      assert Conductor.message(issue, message, "repo-director", conductor) == :ok
+
+      # The turn's facts name the stages it may move the ticket to, as a person's move takes them.
+      assert_received {:conductor_prompt, prompt}
+      assert prompt =~ ~s("stages": [)
+      for stage <- DirectorMoves.phases(Config.settings!()), do: assert(prompt =~ ~s("#{stage}"))
+
+      assert_received {:memory_tracker_state_update, "pr", "QA"}
+      assert_receive {:request_refresh, "repo-director", :now}
+      assert %{phase: "QA", phase_owner: :symphony} = RunStore.get_ticket_state("pr")
+      assert Questions.open({:ticket, "repo-director", "pr"}) == []
+      refute Pauses.paused?({:ticket, "repo-director", "pr"})
+
+      # The move is the Conductor turn's, with its reason; its reply hangs under the message.
+      assert [%{actor: %{kind: :agent, run_kind: "conductor", run_id: "conductor-" <> _ = run_id}, run_id: run_id, payload: payload} = moved] =
+               RunStore.list_ticket_events("pr", types: ["ticket.moved"])
+
+      assert payload == %{from: "Rework", to: "QA", note: @reason, run_stopped: false}
+      assert moved.summary.title == "Moved to QA from Rework"
+      assert %{kind: "run", name: "conductor", run_id: ^run_id} = SymphonyElixir.TicketEvents.Journal.by(moved)
+      assert [%{run_id: ^run_id, parent: parent}] = RunStore.list_ticket_events("pr", types: ["conductor.update"])
+      assert parent == message.id
+      assert [%{"move" => "move", "from_state" => "Rework", "to_state" => "QA", "by" => "Conductor", "run_id" => ^run_id}] = audit_records()
+    end
+
+    test "a person's move records as it always did: the Director's, with no Conductor on its audit record", %{opts: opts} do
+      conducted!("Rework")
+
+      assert {:ok, %{to_state: "QA", moved: true}} = DirectorMoves.move(:move, "MOT-40", %{to: "QA", note: "Go on"}, opts)
+      assert [%{actor: %{kind: :person, name: "the Director"}}] = RunStore.list_ticket_events("pr", types: ["ticket.moved"])
+      assert [audit] = audit_records()
+      refute Map.has_key?(audit, "by")
+      refute Map.has_key?(audit, "run_id")
+    end
+
+    test "a move is carried out at every junction the Conductor has a turn at, and the run it came before does not start", %{opts: opts} do
+      issue = conducted!("Rework")
+
+      junctions = ~w(after_coding after_qa_fail after_qa_blocked after_rework before_merge during_run sub_ticket_ended child_message)
+
+      Enum.reduce(junctions, "Rework", fn junction, from ->
+        to = if from == "Rework", do: "QA", else: "Rework"
+        turn = moving_turn(move_to(to))
+        assert Conductor.run(turn_plan(junction), %{issue | state: from}, turn: turn, facts: %{}, moves: opts) == :again, junction
+        assert RunStore.get_ticket_state("pr").phase == to, junction
+        to
+      end)
+
+      assert length(RunStore.list_ticket_events("pr", types: ["ticket.moved"])) == length(junctions)
+      assert Enum.all?(RunStore.list_ticket_events("pr", types: ["ticket.moved"]), &match?(%{actor: %{run_kind: "conductor"}, payload: %{note: @reason}}, &1))
+    end
+
+    test "a stage a person's move refuses is refused for the Conductor: the ticket stays, and the rest of the turn is kept", %{opts: opts} do
+      issue = conducted!("Rework")
+
+      assert {:error, {:conflict, why}} = DirectorMoves.move(:move, "MOT-40", %{to: "Shipping"}, opts)
+      assert why =~ "Shipping is not a phase of MOT-40's workflow"
+
+      log = capture_log(fn -> assert Conductor.run(turn_plan("after_rework"), issue, turn: moving_turn(move_to("Shipping")), facts: %{}, moves: opts) == :ok end)
+
+      assert log =~ "Conductor's move to Shipping was refused"
+      assert log =~ "is not a phase of MOT-40's workflow"
+      refute_received {:memory_tracker_state_update, "pr", _state}
+      assert RunStore.get_ticket_state("pr").phase == "Rework"
+      assert RunStore.list_ticket_events("pr", types: ["ticket.moved"]) == []
+      assert [%{payload: %{text: "Go on."}}] = RunStore.list_ticket_events("pr", types: ["conductor.instructions"])
+      assert [%{payload: %{text: "I moved it on."}}] = RunStore.list_ticket_events("pr", types: ["conductor.update"])
+      assert Questions.open({:ticket, "repo-director", "pr"}) == []
+
+      # A move to the stage the ticket is in moves nothing, and the run starts.
+      log = capture_log(fn -> assert Conductor.run(turn_plan("after_rework"), issue, turn: moving_turn(move_to("rework")), facts: %{}, moves: opts) == :ok end)
+      assert log =~ "Conductor's move to Rework moved nothing"
+      assert RunStore.list_ticket_events("pr", types: ["ticket.moved"]) == []
+    end
+
+    test "a move given with a question is dropped: the person decides", %{opts: opts} do
+      issue = conducted!("Rework")
+
+      question = %{
+        "title" => "Should MOT-40 go on to QA?",
+        "question" => "MOT-40 has nothing left to code. Should it go on to QA?",
+        "why" => "The last rework changed nothing.",
+        "if_unanswered" => "MOT-40 stays in Rework.",
+        "recommendation_reason" => "QA judges the change as it is.",
+        "options" => [
+          %{"label" => "Go on", "effect" => "MOT-40 stays where it is and goes on.", "recommended" => true, "action" => "continue"},
+          %{"label" => "Cancel it", "effect" => "MOT-40 is cancelled.", "action" => "cancel"}
+        ]
+      }
+
+      turn = moving_turn(Map.put(move_to("QA"), "ask_person", question))
+      log = capture_log(fn -> assert Conductor.run(turn_plan("after_rework"), issue, turn: turn, facts: %{}, moves: opts) == :held end)
+
+      assert log =~ "Conductor's move to QA dropped"
+      assert RunStore.get_ticket_state("pr").phase == "Rework"
+      assert RunStore.list_ticket_events("pr", types: ["ticket.moved"]) == []
+    end
+  end
+
   describe "move: a ticket Symphony owns into any phase (TP-1327)" do
     # A ticket whose phase Symphony wrote, as every move of Symphony's or the Director's leaves it.
     defp owned(repo_key, state) do

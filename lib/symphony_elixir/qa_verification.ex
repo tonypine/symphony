@@ -33,7 +33,8 @@ defmodule SymphonyElixir.QaVerification do
       the self-heal lane, not `unprovable`) -> first the Conductor's turn at `after_qa_blocked`
       (`SymphonyElixir.Conductor.route_blocked_qa/3`), once the verdict is recorded and the report
       published: its route sends the ticket to `Rework` with its finding (`qa_blocked_rework`) or to
-      one more pass, and its question holds the ticket so Symphony asks none of its own. A Conductor
+      one more pass, its question holds the ticket so Symphony asks none of its own, and a stage it
+      moved the ticket to itself (its `move`) is left as it is. A Conductor
       that is off, fails or routes nothing leaves the retry and the question as they are
     * a step the pass cannot prove here (`unprovable`: it needs the app on a pass the diff did not
       select the app's playbook for, or the project's own server on a repo whose setup rules a dev
@@ -819,11 +820,18 @@ defmodule SymphonyElixir.QaVerification do
   end
 
   # What the Conductor's route does. A question it asked holds the ticket, so Symphony asks none of
-  # its own and does not rerun; a rerun leaves the ticket in QA for the next pass, which reads the
+  # its own and does not rerun, nor does a move the turn made itself; a rerun leaves the ticket in QA for the next pass, which reads the
   # turn's instructions; a rework records the turn's finding in this QA run and moves the ticket to
   # Rework under its own signal, and the rework run reads the finding and the instructions.
   defp follow_route(:held, issue, _opts, _settings, _head) do
     Logger.info("QA for #{issue_label(issue)} waits on the Conductor's question; Symphony asks none of its own")
+    :ok
+  end
+
+  # The Conductor moved the ticket itself, through the person's free move: the pass moves nothing
+  # and asks nothing of its own.
+  defp follow_route(:moved, issue, _opts, _settings, _head) do
+    Logger.info("QA for #{issue_label(issue)} leaves the ticket where the Conductor moved it; Symphony asks none of its own")
     :ok
   end
 

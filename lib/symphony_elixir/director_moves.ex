@@ -113,6 +113,10 @@ defmodule SymphonyElixir.DirectorMoves do
     events get one `ticket.moved` with the note. A move to the phase the ticket is in answers
     `moved: false` and writes nothing; one to a phase the repo doesn't name, or of a ticket in no
     configured repository, is refused. Undo puts the record and Linear back to the phase before.
+    The Conductor makes its own moves through this one (`SymphonyElixir.Conductor`, TP-1656), with
+    the option `by: {:conductor, run_id}`: everything is the same but who moved, so its
+    `ticket.moved` is the Conductor turn's (an agent of run kind `conductor`, its `run_id`) with its
+    reason as the note, and the audit record names it (`by`, `run_id`).
 
   `answer_held_question/4` answers the question a dispatch loop, a quiet handoff or a block report
   paused the ticket on, and does what the picked option asks: Unblock, Restart, or nothing.
@@ -262,7 +266,8 @@ defmodule SymphonyElixir.DirectorMoves do
   window), `:orchestrator` (asked to poll again after the move, and to stop a cancelled ticket's run,
   default `SymphonyElixir.Orchestrator`), `:store` (the run store read and written, default
   `SymphonyElixir.RunStore`), `:github` (the pull request module a restart or a cancel closes
-  with, default `SymphonyElixir.GitHub.PullRequest`), and Unblock's `:release_competitors` (the PR
+  with, default `SymphonyElixir.GitHub.PullRequest`), the free move's `:by` (the Conductor's turn
+  that makes it, `{:conductor, run_id}`; default the Director), and Unblock's `:release_competitors` (the PR
   watcher's release of a wait on competing pull requests) and `:release` (the release of the
   ticket's question and the reasons the Director may release).
   """
@@ -1093,9 +1098,24 @@ defmodule SymphonyElixir.DirectorMoves do
       release_loop(issue)
       stopped? = stops_run?(to_state, settings) and stop_run(issue, opts)
 
-      TicketSignals.record_event(issue.repo_key, issue.id, "ticket.moved", %{from: issue.state, to: to_state, note: note, run_stopped: stopped?}, actor: @director)
+      TicketSignals.record_event(issue.repo_key, issue.id, "ticket.moved", %{from: issue.state, to: to_state, note: note, run_stopped: stopped?}, actor: mover(opts))
 
-      finish(:move, issue, to_state, nil, opts)
+      finish(:move, issue, to_state, nil, opts, %{}, moved_by(opts))
+    end
+  end
+
+  # Who made a free move: the Director, or the Conductor's turn that ruled it (`by:`).
+  defp mover(opts) do
+    case Keyword.get(opts, :by) do
+      {:conductor, run_id} -> {:agent, run_id, "conductor"}
+      nil -> @director
+    end
+  end
+
+  defp moved_by(opts) do
+    case Keyword.get(opts, :by) do
+      {:conductor, run_id} -> %{by: "Conductor", run_id: run_id}
+      nil -> %{}
     end
   end
 

@@ -6374,7 +6374,8 @@ defmodule SymphonyElixir.Orchestrator do
   # recorded once the turn is done, so the turn sits before the run on the timeline. A turn that asked
   # the person a question paused the ticket: the run ends here, before it starts, and the orchestrator
   # reads its normal end as held. A Grooming turn (`SymphonyElixir.Conductor.Grooming`) that left the
-  # ticket to its next dispatch ends the run here too, with an end of its own (`held_exit/2`): no
+  # ticket to its next dispatch, or a turn that moved the ticket to another stage itself, ends the
+  # run here too, with an end of its own (`held_exit/2`): no
   # continuation follows it, and a cycle dispatches the ticket again at once, as a first run.
   # `opts` say where the run's workspace is made, which Grooming reads.
   defp conduct_before_run(nil, _issue, _record_started, _opts), do: :ok

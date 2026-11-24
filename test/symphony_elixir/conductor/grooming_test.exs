@@ -216,6 +216,21 @@ defmodule SymphonyElixir.Conductor.GroomingTest do
       assert status_notes(ctx.issue_id) == []
     end
 
+    test "a plan written with a move moves the ticket as the Conductor's, and the run it came before does not start (TP-1656)", ctx do
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [ctx.issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+      move = %{"stage" => "In Progress", "reason" => "The plan is written; the first run starts."}
+      reply = {:ok, [answer(%{"plan" => written(), "update" => "I read this as one small change.", "move" => move})], 9_000}
+
+      assert groom(ctx, reply) == :again
+
+      assert %{version: 1} = TicketPlan.current(ctx.issue_id)
+      assert_received {:memory_tracker_state_update, issue_id, "In Progress"}
+      assert issue_id == ctx.issue_id
+      assert %{phase: "In Progress"} = RunStore.get_ticket_state(ctx.issue_id)
+      assert [%{actor: %{kind: :agent, run_kind: "conductor"}, payload: %{from: "Todo", to: "In Progress", note: "The plan is written; the first run starts."}}] = events(ctx.issue_id, "ticket.moved")
+    end
+
     test "a plan with an empty list of layers is recorded with its checks", ctx do
       assert groom(ctx, planned(%{"layers" => []})) == :ok
       assert %{layers: []} = TicketPlan.current(ctx.issue_id)

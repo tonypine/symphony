@@ -279,6 +279,19 @@ defmodule SymphonyElixir.ConductorTest do
       refute Enum.any?(options, &(Map.has_key?(&1, :action) or Map.has_key?(&1, :finding)))
     end
 
+    test "every turn's prompt says it may move its ticket to a stage, and how to write the move (TP-1656)", _ctx do
+      junctions = ~w(grooming message child_message sub_ticket_ended final_check after_coding after_qa_fail after_qa_blocked after_rework before_merge during_run)
+
+      for junction <- junctions do
+        prompt = Conductor.prompt(junction, %{})
+        assert prompt =~ ~s("move": null or {"stage": "<one of the facts' stages), junction
+        assert prompt =~ ~s(add `"move": {"stage": "<a stage>",), junction
+        assert prompt =~ "one of the facts' `stages`", junction
+        assert prompt =~ "same path and checks as a person's move", junction
+        assert prompt =~ "is dropped", junction
+      end
+    end
+
     test "both prompts name the option actions, the one-question rule and the steps proved by a test", _ctx do
       for junction <- ["after_rework", "during_run"] do
         prompt = Conductor.prompt(junction, %{})
@@ -412,6 +425,23 @@ defmodule SymphonyElixir.ConductorTest do
       ran!(ctx.issue_id, "rework")
       blocked!(ctx.issue_id, "ddd")
       assert Conductor.route_blocked_qa(ctx.issue, "default", turn: turn(routed(%{"to" => "rerun"})), settings: @on) == :rerun
+    end
+
+    test "a move decides where the ticket goes: a rerun given beside it is dropped, and the pass is told it moved (TP-1656)", ctx do
+      blocked!(ctx.issue_id)
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [ctx.issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+      move = %{"stage" => "Rework", "reason" => "QA cannot fail the request until a flag exists."}
+
+      log = capture_log(fn -> assert Conductor.route_blocked_qa(ctx.issue, "default", turn: turn(routed(%{"to" => "rerun"}, %{"move" => move})), settings: @on) == :moved end)
+
+      assert log =~ "Conductor's route rerun dropped"
+      assert log =~ "the turn moves the ticket to Rework"
+      assert log =~ "Conductor moved the ticket from Code Review to Rework"
+      assert_received {:memory_tracker_state_update, _id, "Rework"}
+      assert %{phase: "Rework"} = RunStore.get_ticket_state(ctx.issue_id)
+      assert [%{payload: instructions}] = events(ctx.issue_id, "conductor.instructions")
+      refute Map.has_key?(instructions, :route)
     end
 
     test "at most 2 routes to rework per ticket", ctx do

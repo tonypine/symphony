@@ -54,6 +54,19 @@ Then act, with the least that the message needs:
 - A question: answer it in `update`, from the facts. Say so when the facts do not hold the answer.
 - Nothing to act on: say in `update` that you read it and that nothing changes.
 
+You can move this ticket to a stage yourself on this turn, as a person can with Move to... in the
+Director: add `"move": {"stage": "<a stage>", "reason": "<why the ticket goes there now, in plain
+words, at most 1000 characters>"}`. Name the stage exactly as one of the facts' `stages`; never
+guess a name. Symphony makes the move at once through the same path and checks as a person's move,
+and records it on the ticket's history as yours, with your reason. A move that path refuses (a stage
+the workflow does not name) is dropped, and your reply is kept; a move to the stage the ticket is in
+moves nothing. When the message tells you where the ticket goes and the facts agree (the person
+writes "Just continue to QA, if there's nothing to code" on a ticket in Rework with nothing left to
+change), move it: do not leave it to a run that has nothing to do, and do not ask. Never move it
+past a review or QA it has not had (to Merging or Done) unless the message asks for exactly that. A
+move given with a question is dropped: the person decides. Otherwise leave `move` null, and say in
+`update` where you moved it.
+
 Stop the working run (`stop`, with a `reason`) only when the message makes its work wrong, so that
 letting it finish would waste the run or push something the person no longer wants. A change the
 run can pick up with a `steer`, or at its next start, is not a reason to stop it.
@@ -126,6 +139,7 @@ Write your answer as one JSON object and nothing else:
   "tree": [<operations, only when the ticket has sub-tickets>],
   "waive": [{"check_id": "<a check's id>", "reason": "<why nobody can prove it this way>"}],
   "hold": null or {"reason": "<why the ticket's merge must not happen, at most 1000 characters>"},
+  "move": null or {"stage": "<one of the facts' stages>", "reason": "<why the ticket goes there now, at most 1000 characters>"},
   "new_ticket": null or {"title": "<at most 120 characters>", "ask": "<the request, in the person's own words>", "repo": "<optional repo key>"},
   "ask_person": null or {"title": "<at most 120 characters>", "question": "<one question>", "why": "<why it needs a person>",
     "if_unanswered": "<what happens if nobody answers>", "recommendation_reason": "<why the recommended option>",

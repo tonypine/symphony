@@ -85,6 +85,13 @@ defmodule SymphonyElixir.Conductor.Answer do
       that holds may leave `instructions` null. One that misses its shape is dropped and logged,
       and never fails the answer.
 
+    * `move` (every turn's, at every junction): null, or `{"stage": ..., "reason": ...}` to move the
+      ticket to that stage, which `SymphonyElixir.Conductor` makes through a person's free move
+      (`SymphonyElixir.DirectorMoves`), with its guards. The stage is trimmed and the reason, a
+      non-blank string, cut to 1,000 characters. A move that misses its shape (not an object, a
+      blank or missing stage or reason) is refused with why, as a malformed `route` is, since it
+      decides a move.
+
   A text longer than its limit is cut to it at a sentence or word boundary (`Facts.fit/2`) and
   logged, never refused; only an answer that is not readable (not JSON, a wrong type, a blank
   required text) is.
@@ -146,7 +153,8 @@ defmodule SymphonyElixir.Conductor.Answer do
           ask: boolean(),
           new_ticket: new_ticket() | nil,
           waive: [%{check_id: String.t(), reason: String.t()}],
-          hold: %{reason: String.t()} | nil
+          hold: %{reason: String.t()} | nil,
+          move: %{stage: String.t(), reason: String.t()} | nil
         }
 
   @typedoc "The ticket a message on a finished ticket asks for: its title, its ask and, optionally, its repo."
@@ -254,10 +262,11 @@ defmodule SymphonyElixir.Conductor.Answer do
          {:ok, steer} <- steer(Map.get(answer, "steer")),
          {:ok, stop} <- stop(Map.get(answer, "stop")),
          {:ok, route} <- route(Map.get(answer, "route"), Keyword.get(opts, :route, false)),
+         {:ok, move} <- move(Map.get(answer, "move")),
          asks? = message == true and Map.get(answer, "ask") == true and is_nil(ask_person),
          {:ok, plan} <- plan(Map.get(answer, "plan"), plan_read(plan_opt, asks?, answer), ask_person) do
       read = %{instructions: instructions, update: update, refs: refs, ask_person: ask_person, steer: steer, stop: stop, blocks: blocks(Map.get(answer, "blocks"))}
-      {:ok, read |> Map.merge(%{route: route, plan: plan, ask: asks?}) |> Map.merge(extras(answer, opts))}
+      {:ok, read |> Map.merge(%{route: route, move: move, plan: plan, ask: asks?}) |> Map.merge(extras(answer, opts))}
     end
   end
 
@@ -578,6 +587,20 @@ defmodule SymphonyElixir.Conductor.Answer do
 
   defp route(_route, true),
     do: {:error, "`route` must be null, `{\"to\": \"rerun\"}`, `{\"to\": \"rework\", \"finding\": ...}` or `{\"to\": \"ticket\", ...}`"}
+
+  # The stage the turn moves the ticket to, read at every junction: a move decides where the ticket
+  # goes, so one that misses its shape refuses the answer.
+  defp move(nil), do: {:ok, nil}
+
+  defp move(%{"stage" => stage, "reason" => reason}) when is_binary(stage) and is_binary(reason) do
+    cond do
+      String.trim(stage) == "" -> {:error, "`move.stage` is blank"}
+      String.trim(reason) == "" -> {:error, "`move.reason` is blank"}
+      true -> {:ok, %{stage: String.trim(stage), reason: fit(String.trim(reason), @reason_max, "move.reason")}}
+    end
+  end
+
+  defp move(_move), do: {:error, "`move` must be null or `{\"stage\": ..., \"reason\": ...}`, both strings"}
 
   # Read as given: `Filing` names what a ticket route misses, so the turn's message is still kept.
   defp ticket_route(route) do
