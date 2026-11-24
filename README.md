@@ -403,6 +403,11 @@ that sub-ticket is done; the parent keeps one through its waits. When the parent
 the free slot goes to the next ticket down the queue. A parent and the one sub-ticket running
 through its slot count as one used slot.
 
+A ticket that holds a slot and waits on a ticket outside its own tree (one a run's block report
+names, a fix ticket reused from another ticket, a dependency added mid-work, a competing pull
+request) lends its slot to it: that ticket runs through the holder's slot as a sub-ticket would, so
+with one slot the holder never waits on a ticket that can't get a slot.
+
 A ticket that can't start because a dependency is unmet takes the slot when its turn comes (it is
 the first of the queue) and waits there; its run starts once the dependency is met.
 

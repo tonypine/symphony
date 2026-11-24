@@ -4532,7 +4532,40 @@ defmodule SymphonyElixir.Orchestrator do
     ids = Map.merge(facts.ids, for(%Issue{id: id, identifier: identifier} when is_binary(id) and is_binary(identifier) <- issues, into: %{}, do: {identifier, id}))
     named = Map.merge(facts.parents, for(%Issue{id: id, parent: %{identifier: parent}} when is_binary(parent) <- issues, into: %{}, do: {id, parent}))
     parents = for {id, parent} <- named, parent_id = Map.get(ids, parent), is_binary(parent_id), parent_id != id, into: %{}, do: {id, parent_id}
-    %{state | slot_parents: parents}
+    %{state | slot_parents: lend_slots(parents, state, ids)}
+  end
+
+  # A slot holder that waits on a ticket outside its own tree (a run's block report on another
+  # ticket, a fix ticket filed under another ticket and reused, a Conductor blocker that already
+  # existed, a stored dependency added mid-work, a competing pull request) lends its slot to that
+  # ticket: the ticket runs through the holder's slot as a sub-ticket does, so a holder never waits
+  # on a ticket that no slot is free for. A ticket that runs through an ancestor of its own keeps
+  # that one, and a ticket already in progress on its own slot borrows none (only one the holder
+  # lent its slot to before keeps the loan).
+  defp lend_slots(parents, %State{} = state, ids) do
+    in_progress = occupied_slot_ids(state)
+    previous = state.slot_parents || %{}
+
+    Enum.reduce(state.slot_holders, parents, fn {holder_id, holder}, parents ->
+      holder_id
+      |> waited_on(holder, ids)
+      |> Enum.reduce(parents, fn waited, parents ->
+        if lends?(waited, holder_id, in_progress, parents, previous), do: Map.put(parents, waited, holder_id), else: parents
+      end)
+    end)
+  end
+
+  # The issue ids of the tickets a slot holder waits on: its pause's `:ticket` reasons and its open
+  # stored dependencies.
+  defp waited_on(issue_id, holder, ids) do
+    paused = for %{kind: :ticket, waits_on: %{identifier: identifier}} <- pause_reasons({:ticket, holder[:repo_key], issue_id}), id = Map.get(ids, identifier), is_binary(id), do: id
+    depends = for {%{issue_id: id}, _record} <- DependsOn.open_for(issue_id), is_binary(id), do: id
+    Enum.uniq(paused ++ depends)
+  end
+
+  defp lends?(waited, holder_id, in_progress, parents, previous) do
+    waited != holder_id and is_nil(Slots.through(waited, in_progress, parents)) and
+      (not MapSet.member?(in_progress, waited) or Map.get(previous, waited) == holder_id)
   end
 
   # The ticket whose turn it is, by issue id, among the pass's `ordered` candidates: the first one in

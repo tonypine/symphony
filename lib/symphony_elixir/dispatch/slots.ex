@@ -18,6 +18,10 @@ defmodule SymphonyElixir.Dispatch.Slots do
     the same time takes one extra slot, returned when that sub-ticket is done; the ticket keeps
     exactly one slot between its sub-tickets and through its waits (`used/2`, `cost/3`). A fix ticket
     filed for a ticket in the middle of its work is its sub-ticket, so it runs through that slot too.
+  - A ticket that holds a slot lends it to a ticket it waits on outside its own tree (the ticket
+    its pause waits on, an open stored dependency): the orchestrator names the holder as that
+    ticket's parent in the map it gives `through/3`, `used/2` and `cost/3`, so with one slot the
+    holder never waits on a ticket no slot is free for.
   - No agent turn and no machine step runs for a ticket that holds no slot. A ticket without one
     starts only on a free slot or through its ancestor's; one that holds a slot always starts its
     next run.

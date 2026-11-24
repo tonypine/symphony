@@ -4279,10 +4279,18 @@ Slots:
   sub-ticket in progress count as one slot; each further sub-ticket in progress at the same time
   counts as one extra slot, returned when that sub-ticket is done. The ancestor keeps exactly one
   slot between its sub-tickets and through its waits; between two sub-tickets the slot idles.
+- A ticket that holds a slot lends it to a ticket it waits on outside its own tree, so that ticket
+  runs through the holder's slot as a sub-ticket does: the ticket its pause waits on (a run's block
+  report naming another ticket, a fix ticket reused from another affected ticket, a Conductor
+  blocker that already existed, a competing pull request) and each of its open stored dependencies
+  (one added mid-work). The waited-on ticket borrows only when it has no ancestor in progress and is
+  not in progress on its own slot; it keeps the loan while the holder waits on it. So a holder never
+  waits on a ticket no slot is free for: with one slot, the blocker runs on the holder's slot, and
+  the two count as one used slot.
 - `available_slots = max(max_concurrent_agents - taken, 0)`, where `taken` counts the tickets in
   progress (those that hold a slot and every other run under way: a PR run with no ticket takes a
-  slot while it runs) less, for each ticket in progress that a sub-ticket in progress runs through,
-  that ticket's own slot. The reads' `used` is that count.
+  slot while it runs) less, for each ticket in progress that a sub-ticket (or a ticket it lends its
+  slot to) in progress runs through, that ticket's own slot. The reads' `used` is that count.
 - A ticket that holds a slot always starts its next run (the worker hosts' own capacity still
   applies), and so does a sub-ticket whose nearest ancestor in progress has no other sub-ticket in
   progress. Any other ticket starts only when a slot is free, and takes it at dispatch. No agent
@@ -4309,7 +4317,7 @@ Giving a slot up:
 - A ticket gives up its slot only when it is done (a terminal state), when it leaves the active
   states (a person moved it to `Backlog`, it was removed, or unassigned from this worker), or when
   a person stops it. A stop that comes with a Question waits on the person and keeps the slot.
-  Every wait on another ticket keeps it.
+  Every wait on another ticket keeps it, and the ticket it waits on runs through it (above).
 - A ticket with no live run is judged on every cycle against the cycle's candidates and its closed
   dispatch gate; one with a live run gives it up when the run is ended for a terminal or inactive
   state. The cycle that frees a slot asks for another at once, so the next ticket takes it without
@@ -7752,6 +7760,8 @@ infrastructure.
   queue order to the first ticket that can start, the parent's next ready sub-ticket first when the
   parent is at the top, and comes back when that sub-ticket is done
 - A fix ticket filed for a ticket in the middle of its work is its sub-ticket and runs through its slot
+- With 1 slot, the ticket a holder waits on outside its own tree (a block report's ticket, a stored
+  dependency added mid-work) runs through the holder's slot, and the two count as one used slot
 - A `Merging` ticket keeps its slot and gets no allowance of its own
 - A retry that finds no slot keeps its attempt, gets no backoff, and starts on the first poll after
   a slot frees

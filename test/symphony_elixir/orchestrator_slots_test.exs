@@ -485,6 +485,43 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
       assert %{since: @since} = resumed.slot_holders["p"]
       assert %{reason: "work slots full"} = resumed.slot_waiting["t"]
     end
+
+    test "with 1 slot, the ticket a holder waits on outside its own tree runs through the holder's slot, so neither stalls (TP-1624)", ctx do
+      write_slots_workflow!(ctx, max_concurrent_agents: 1)
+      blocked = recorded(issue("h", "MT-H", "In Progress"))
+      blocker = recorded(issue("b", "MT-8", "Todo"))
+      other = recorded(issue("t", "MT-T", "Todo"))
+      block_report!(blocked, "MT-8")
+      tracked([blocked, blocker, other])
+
+      # The holder keeps its slot and lends it: the top-level ticket its block report names starts on it.
+      state = orchestrator_state(1) |> holding(blocked) |> Orchestrator.release_slots_for_test([blocked, blocker, other], true)
+      assert Map.keys(state.slot_holders) == ["h"]
+      assert Orchestrator.available_slots_for_test(state) == 0
+
+      lent = Orchestrator.dispatch_chosen_issues_for_test([blocked, blocker, other], state)
+      assert Map.keys(lent.running) == ["b"]
+      assert %{reason: "work slots full"} = lent.slot_waiting["t"]
+
+      # The loan holds while the blocker is in progress: the two read as one used slot.
+      lent = Orchestrator.release_slots_for_test(lent, [blocked, blocker, other], true)
+      assert Orchestrator.available_slots_for_test(lent) == 0
+      assert %{used: 1, free: 0} = Orchestrator.put_dispatch_order_for_test(lent, [blocked, blocker, other]).dispatch_order.slots
+
+      # A stored dependency on a ticket outside its tree, added mid-work, lends the slot the same way.
+      stop_orchestrator_agent_tasks()
+      :ok = RunStore.update_ticket_state("b", %{phase: "Done"})
+      Pauses.clear({:ticket, "default", "h"})
+      upstream = recorded(issue("u", "MT-U", "Todo"))
+      :ok = RunStore.add_dependency("h", "u", :done)
+      tracked([blocked, upstream, other])
+
+      state = orchestrator_state(1) |> holding(blocked) |> Orchestrator.release_slots_for_test([blocked, upstream, other], true)
+      depended = Orchestrator.dispatch_chosen_issues_for_test([blocked, upstream, other], state)
+      assert Map.keys(depended.running) == ["u"]
+      assert %{gate: :depends_on} = depended.dispatch_skipped["h"]
+      assert %{reason: "work slots full"} = depended.slot_waiting["t"]
+    end
   end
 
   describe "the reads" do
