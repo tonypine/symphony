@@ -34,17 +34,15 @@ defmodule SymphonyElixir.PullRequestPage do
   @table __MODULE__
   @verdict_kinds ["code_review", "qa"]
   @review_outcomes ["approve", "request_changes", "block"]
-  @relations_first 10
   @pull_request_url ~r{/pull/(\d+)(?:[/?#]|$)}
   @identifier ~r/^([A-Z][A-Z0-9]*)-(\d+)$/
 
   @ticket_fields """
   id identifier title url state { name type }
-  inverseRelations(first: $relationsFirst) { nodes { type issue { identifier state { type } } } }
   """
 
   @query """
-  query SymphonyPullRequestPage($url: String!, $filter: IssueFilter!, $withIdentifier: Boolean!, $relationsFirst: Int!) {
+  query SymphonyPullRequestPage($url: String!, $filter: IssueFilter!, $withIdentifier: Boolean!) {
     attachmentsForURL(url: $url) { nodes { issue { #{@ticket_fields} } } }
     issues(filter: $filter, first: 1) @include(if: $withIdentifier) { nodes { #{@ticket_fields} } }
   }
@@ -73,7 +71,7 @@ defmodule SymphonyElixir.PullRequestPage do
 
   @doc false
   @spec query() :: {String.t(), map()}
-  def query, do: {@query, %{relationsFirst: @relations_first}}
+  def query, do: {@query, %{}}
 
   @doc """
   The page of pull request `number` of the repo `repo_key`. Options, each defaulting to the real

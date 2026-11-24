@@ -25,7 +25,6 @@ defmodule Mix.Tasks.Symphony.DoneWithOpenSubticketsTest do
             "title" => "Web parent",
             "state" => %{"name" => "Done"},
             "labels" => %{"nodes" => []},
-            "inverseRelations" => %{"nodes" => []},
             "children" => %{"nodes" => [child]}
           }
 

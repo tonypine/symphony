@@ -1,7 +1,8 @@
 defmodule SymphonyElixirWeb.HomeReadTest do
-  # The Home read through the API: the orchestrator walks two queued tickets, one blocked by the
+  # The Home read through the API: the orchestrator walks two queued tickets, one depending on the
   # other, behind a ticket in progress; the read is the tree, carries an ETag and answers 304 while
-  # nothing changed.
+  # nothing changed. Who waits on whom is the dependencies Symphony stores; Linear's blocker links are
+  # not read.
   use SymphonyElixir.TestSupport
 
   import Phoenix.ConnTest, only: [build_conn: 0, get: 2, post: 2, json_response: 2, response: 2]
@@ -55,9 +56,11 @@ defmodule SymphonyElixirWeb.HomeReadTest do
 
   test "the read is the queue's tree behind the ticket in progress, and an unchanged read answers 304", %{orchestrator: orchestrator} do
     working = ticket("w", "MT-W", "In Progress")
-    first = ticket("a", "MT-A", "Todo", [%{id: "w", identifier: "MT-W", state: "In Progress"}])
-    second = ticket("b", "MT-B", "Todo", [%{id: "a", identifier: "MT-A", state: "Todo"}])
+    first = ticket("a", "MT-A", "Todo")
+    second = ticket("b", "MT-B", "Todo")
     _backlog = ticket("k", "MT-K", "Backlog")
+    :ok = RunStore.add_dependency("a", "w", :done)
+    :ok = RunStore.add_dependency("b", "a", :done)
     issues = [working, first, second]
 
     state = Orchestrator.put_dispatch_order_for_test(orchestrator_state(), issues)
@@ -81,6 +84,77 @@ defmodule SymphonyElixirWeb.HomeReadTest do
     assert get_resp_header(again, "etag") == [etag]
 
     assert %{"error" => %{"code" => "method_not_allowed"}} = build_conn() |> post("/api/v1/home") |> json_response(405)
+  end
+
+  test "an epic's sub-tickets wait on one another by their stored dependencies, of both kinds, in the dispatch order and Home, read in the same shape",
+       %{orchestrator: orchestrator} do
+    previous = Application.fetch_env(:symphony_elixir, :build)
+    # A build from a checkout: a released dependency on a done ticket is met.
+    Application.put_env(:symphony_elixir, :build, sha: nil, repo: nil, number: nil)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, value} -> Application.put_env(:symphony_elixir, :build, value)
+        :error -> Application.delete_env(:symphony_elixir, :build)
+      end
+    end)
+
+    parent = %{identifier: "MT-E", title: "Checkout"}
+    _epic = ticket("e", "MT-E", "Waiting on sub-tickets", labels: ["plan"])
+    _landed = ticket("s1", "MT-S1", "Done", parent: parent)
+    _working = ticket("s2", "MT-S2", "In Progress", parent: parent)
+    next = ticket("s3", "MT-S3", "Todo", parent: parent)
+    after_next = ticket("s4", "MT-S4", "Todo", parent: parent)
+    released = ticket("s5", "MT-S5", "Todo", parent: parent)
+    # Its Linear issue carries a blocker link on MT-S2, which an older build kept in the record: it
+    # holds nothing.
+    linked = ticket("l", "MT-L", "Todo", blockers: [%{id: "s2", identifier: "MT-S2", state: "In Progress"}])
+    issues = [linked, next, after_next, released]
+
+    reads = fn ->
+      state = Orchestrator.put_dispatch_order_for_test(orchestrator_state(), issues)
+      {:reply, snapshot, _state} = Orchestrator.handle_call(:snapshot, {self(), make_ref()}, state)
+      :ok = GenServer.call(orchestrator, {:put, snapshot, 0})
+      {build_conn() |> get("/api/v1/dispatch/order") |> json_response(200), build_conn() |> get("/api/v1/home") |> json_response(200)}
+    end
+
+    {order_before, home_before} = reads.()
+
+    # Met: done on a Done ticket, released on a Done ticket with a build from a checkout. Unmet: done
+    # and released on a ticket in progress, done on a queued ticket.
+    :ok = RunStore.add_dependency("s3", "s1", :done)
+    :ok = RunStore.add_dependency("s3", "s2", :done)
+    :ok = RunStore.add_dependency("s4", "s1", :released)
+    :ok = RunStore.add_dependency("s4", "s3", :done)
+    :ok = RunStore.add_dependency("s5", "s2", :released)
+
+    {order, home} = reads.()
+
+    # The same payload shape as before.
+    assert Map.keys(order) == Map.keys(order_before)
+    assert Map.keys(home) == Map.keys(home_before)
+    assert Enum.map(order["groups"], &Map.keys/1) |> Enum.uniq() == Enum.map(order_before["groups"], &Map.keys/1) |> Enum.uniq()
+    root_keys = home_before["queue"]["roots"] |> hd() |> Map.keys()
+    assert Enum.all?(home["queue"]["roots"], &(Map.keys(&1) == root_keys))
+
+    # The dispatch order: MT-L starts, unaffected by its Linear link; the sub-tickets wait on the
+    # tickets their stored dependencies name.
+    tickets = order["groups"] |> Enum.flat_map(& &1["tickets"]) |> Map.new(&{&1["identifier"], &1})
+    assert %{"next" => "MT-L"} = order
+    assert %{"outcome" => "held", "reason" => "waiting for MT-S2 to be done"} = tickets["MT-S3"]
+    assert %{"outcome" => "held", "reason" => "waiting for MT-S3 to be done"} = tickets["MT-S4"]
+    assert %{"outcome" => "held", "reason" => "waiting for a Symphony update that includes MT-S2"} = tickets["MT-S5"]
+    refute tickets["MT-L"]["outcome"] == "held"
+
+    # Home: the epic holds the ticket in progress; MT-S3 and MT-S5 wait on it, MT-S4 under MT-S3, and
+    # MT-L is a ready root.
+    assert [%{"kind" => "epic", "identifier" => "MT-E", "tickets" => [%{"identifier" => "MT-S2"}]}] = home["in_progress"]
+    roots = Map.new(home["queue"]["roots"], &{&1["identifier"], &1})
+    assert Map.keys(roots) |> Enum.sort() == ["MT-L", "MT-S3", "MT-S5"]
+    assert %{"after" => nil, "also_waits_on" => []} = roots["MT-L"]
+    assert %{"after" => "MT-S2", "children" => [%{"identifier" => "MT-S4", "also_waits_on" => []}]} = roots["MT-S3"]
+    assert %{"after" => "MT-S2", "children" => []} = roots["MT-S5"]
+    assert home["outside"] == %{"backlog" => 0, "below_priority" => 0, "epic" => 0, "behind" => 0}
   end
 
   test "the queue lists its tickets in the stored order, not by priority or age", %{orchestrator: orchestrator} do
@@ -107,18 +181,26 @@ defmodule SymphonyElixirWeb.HomeReadTest do
     assert %{error: %{code: "snapshot_timeout"}, in_progress: [%{identifier: "MT-W"}]} = Presenter.home_payload(orchestrator, 10)
   end
 
-  defp ticket(id, identifier, state, blockers \\ []) do
+  # The ticket's record and its read from Linear, which carries no blocker link. `attrs` may give the
+  # record's `parent`, `labels` and `blockers` (the field an older build observed).
+  defp ticket(id, identifier, state, attrs \\ []) do
+    attrs = Map.new(attrs)
+
     :ok =
-      RunStore.put_ticket_state(%{
-        repo_key: @repo,
-        issue_id: id,
-        issue_identifier: identifier,
-        title: "Ticket #{identifier}",
-        phase: state,
-        priority: 2,
-        blockers: blockers,
-        linear_updated_at: DateTime.utc_now()
-      })
+      RunStore.put_ticket_state(
+        Map.merge(
+          %{
+            repo_key: @repo,
+            issue_id: id,
+            issue_identifier: identifier,
+            title: "Ticket #{identifier}",
+            phase: state,
+            priority: 2,
+            linear_updated_at: DateTime.utc_now()
+          },
+          attrs
+        )
+      )
 
     %Issue{
       id: id,
@@ -126,8 +208,9 @@ defmodule SymphonyElixirWeb.HomeReadTest do
       title: "Ticket #{identifier}",
       state: state,
       priority: 2,
+      labels: Map.get(attrs, :labels, []),
+      parent: Map.get(attrs, :parent),
       repo_key: @repo,
-      blocked_by: blockers,
       url: "https://example.org/issues/#{identifier}"
     }
   end

@@ -94,7 +94,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
 
       # The gates run unchanged on the rebuilt issue: Todo, assigned, Urgent and unblocked dispatches.
       only_record = Enum.find(dispatchable, &(&1.identifier == "ACME-3"))
-      assert %Issue{state: "Todo", priority: 1, assignee_id: "user-2", blocked_by: [], repo_key: repo_key} = only_record
+      assert %Issue{state: "Todo", priority: 1, assignee_id: "user-2", repo_key: repo_key} = only_record
       assert repo_key == ctx.repo_key
       assert Orchestrator.should_dispatch_issue_for_test(only_record, state)
     end
@@ -119,21 +119,23 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
       assert %{recent: [%{identifier: "ACME-2", side: :poll, field: :candidate, poll: "In Progress", record: nil}]} = Shadow.summary()
     end
 
-    test "a blocker a read wrote into the record pauses the ticket before its repo's next poll", ctx do
+    test "a dependency stored on the record holds the ticket before its repo's next poll, with no pause", ctx do
       set_source("record")
-      {_buckets, state} = cycle(orchestrator_state(), ctx.repos, [issue(ctx.repo_key, 1)], 0)
+      upstream = issue(ctx.repo_key, 9, state: "In Progress")
+      {_buckets, state} = cycle(orchestrator_state(), ctx.repos, [issue(ctx.repo_key, 1), upstream], 0)
+      :ok = RunStore.add_dependency("#{ctx.repo_key}-1", upstream.id, :done)
 
-      blocker = %{id: "blocker-1", identifier: "ACME-9", state: "In Progress"}
-      blocked = issue(ctx.repo_key, 1, blocked_by: [blocker], updated_at: DateTime.add(@linear_at, 60))
-      {:ok, :updated} = TicketObservation.observe(ctx.repo_key, blocked, source: :webhook)
-
-      # The next cycle's task syncs the records of the repos it doesn't poll.
-      {%{dependencies_synced: 1}, state} = Orchestrator.run_repo_poll_task_for_test(state, ctx.repos, 50)
-      assert SymphonyElixir.Pauses.why({:ticket, ctx.repo_key, "#{ctx.repo_key}-1"}) == ["Waiting for ACME-9 to finish"]
-
-      {%{dispatchable: [rebuilt]}, state} = capture_cycle(state, ctx.repos, 50)
-      assert [%{identifier: "ACME-9"}] = rebuilt.blocked_by
+      # The next cycle reads the records: the ticket is a candidate, held by the dependency gate
+      # from its record alone, and nothing pauses it.
+      {%{dispatchable: dispatchable}, state} = capture_cycle(state, ctx.repos, 50)
+      rebuilt = Enum.find(dispatchable, &(&1.identifier == "ACME-1"))
+      assert %Issue{} = rebuilt
+      refute SymphonyElixir.Pauses.paused?({:ticket, ctx.repo_key, rebuilt.id})
       refute Orchestrator.should_dispatch_issue_for_test(rebuilt, state)
+
+      # The ticket it depends on is done: the same record starts.
+      :ok = RunStore.update_ticket_state(upstream.id, %{phase: "Done"})
+      assert Orchestrator.should_dispatch_issue_for_test(rebuilt, state)
     end
 
     test "nothing dispatches before every cache is warm, and a repo whose records can't be read gives none", ctx do

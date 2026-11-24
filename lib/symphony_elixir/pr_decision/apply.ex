@@ -69,8 +69,8 @@ defmodule SymphonyElixir.PrDecision.Apply do
       count as evidence.
     * `wait_for_competitors` – the PRs ahead in the landing order (R14a), or every competing PR
       once the conflict came back after its fix runs (R15): in `Merging` auto-merge goes off, then
-      a `Blocked` hold of the landing kind and a Linear blocked-by link from each competitor's
-      ticket (`SymphonyElixir.PrWatch.Competitors`). The ledger doesn't hold it back: a hold that
+      a `Blocked` hold of the landing kind, waiting on each competitor
+      (`SymphonyElixir.PrWatch.Competitors`); no Linear blocker link is written. The ledger doesn't hold it back: a hold that
       cleared on the same head while the conflict stays waits again.
     * `decision` – a Needs Decision hold with its request, the ticket left in its phase: a ticket
       past In Progress with no PR (R6: attach it, Restart, or cancel), a PR on another base than the

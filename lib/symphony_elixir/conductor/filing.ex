@@ -57,7 +57,7 @@ defmodule SymphonyElixir.Conductor.Filing do
   require Logger
 
   alias SymphonyElixir.Conductor.{Facts, Tree}
-  alias SymphonyElixir.{Config, SelfHeal, TicketEvents, TicketPlan}
+  alias SymphonyElixir.{Config, RunStore, SelfHeal, TicketEvents, TicketPlan}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.TicketEvents.{Event, Summary}
@@ -241,9 +241,10 @@ defmodule SymphonyElixir.Conductor.Filing do
   end
 
   # The open ticket that already covers the problem: the one the turn named, else one it already
-  # filed from this ticket in the same repo under the same title, else an open ticket already linked
-  # as blocking this one (by hand, or by the self-heal lane) under the same title. A named ticket that
-  # is terminal, unreadable or the current one covers nothing, and a new ticket is filed.
+  # filed from this ticket in the same repo under the same title, else an open ticket this one
+  # already depends on (stored by Symphony: a split, the Director or the self-heal lane) under the
+  # same title. A named ticket that is terminal, unreadable or the current one covers nothing, and a
+  # new ticket is filed.
   defp existing(route, issue, events, opts) do
     named = route.existing && open_ticket(route.existing, issue, opts)
     named || already_filed(route, issue, events, opts) || linked_blocker(route, issue, opts)
@@ -262,17 +263,17 @@ defmodule SymphonyElixir.Conductor.Filing do
 
   defp covering(nil, _identifier, _route), do: nil
 
-  # The tickets linked as blocking `issue`: the ones it carries, else the tracker's read of it.
-  defp blockers(%Issue{blocked_by: [_ | _] = blockers}, _opts), do: Enum.filter(blockers, &is_binary(&1[:identifier]))
-
-  defp blockers(%Issue{identifier: identifier}, opts) when is_binary(identifier) do
-    case tracker(opts).fetch_issue_by_identifier(identifier) do
-      {:ok, %Issue{blocked_by: [_ | _] = blockers}} -> Enum.filter(blockers, &is_binary(&1[:identifier]))
-      _other -> []
-    end
+  # The tickets `issue` depends on, as Symphony stores them (`SymphonyElixir.RunStore.dependencies/1`),
+  # each with its identifier and the phase its record holds.
+  defp blockers(%Issue{id: issue_id}, _opts) do
+    for {%{} = entry, record} <- List.wrap(RunStore.dependencies(issue_id)),
+        identifier = entry.identifier || record_field(record, :issue_identifier),
+        is_binary(identifier),
+        do: %{identifier: identifier, state: record_field(record, :phase)}
   end
 
-  defp blockers(_issue, _opts), do: []
+  defp record_field(%{} = record, key), do: Map.get(record, key)
+  defp record_field(nil, _key), do: nil
 
   defp already_filed(route, issue, events, opts) do
     events

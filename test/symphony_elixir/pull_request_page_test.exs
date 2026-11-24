@@ -345,8 +345,7 @@ defmodule SymphonyElixir.PullRequestPageTest do
       "id" => "id-" <> identifier,
       "identifier" => identifier,
       "title" => "Title of " <> identifier,
-      "state" => %{"name" => state, "type" => "started"},
-      "inverseRelations" => %{"nodes" => []}
+      "state" => %{"name" => state, "type" => "started"}
     }
   end
 

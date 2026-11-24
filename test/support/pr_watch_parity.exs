@@ -38,8 +38,7 @@ defmodule SymphonyElixir.PrWatchParity do
   read of it, and how each ticket ended (`ending/1`).
 
   The fakes are `World` (the issues, PRs, fix tickets and calls), `Tracker`, `GitHub`, `Fetch` and
-  `Fixer`; the watcher writes no Linear blocker link, so the issues' `blocked_by` change only by a
-  test's hand; a test using this module writes a workflow
+  `Fixer`; the watcher stores no dependency and writes no Linear blocker link; a test using this module writes a workflow
   with `pr_review_mode: "polling"` first.
   """
 
@@ -71,16 +70,9 @@ defmodule SymphonyElixir.PrWatchParity do
     @moduledoc false
     alias SymphonyElixir.PrWatchParity.World
 
-    # Each issue's blockers carry their current state, as Linear reads them.
     def fetch_issues_by_states_with_failures(states) do
       wanted = MapSet.new(states, &String.downcase/1)
-      issues = World.get(:issues)
-
-      watched =
-        for issue <- Map.values(issues), MapSet.member?(wanted, String.downcase(issue.state)) do
-          %{issue | blocked_by: Enum.map(issue.blocked_by, &%{&1 | state: issues |> Map.get(&1.id, &1) |> Map.fetch!(:state)})}
-        end
-
+      watched = for issue <- Map.values(World.get(:issues)), MapSet.member?(wanted, String.downcase(issue.state)), do: issue
       {:ok, watched, []}
     end
 
@@ -328,8 +320,8 @@ defmodule SymphonyElixir.PrWatchParity do
   @doc "The state of ticket `id` in Linear."
   def state(id), do: World.get(:issues) |> Map.fetch!(issue_id(id)) |> Map.fetch!(:state)
 
-  @doc "The identifiers of the tickets Linear shows blocking ticket `id`."
-  def blockers(id), do: World.get(:issues) |> Map.fetch!(issue_id(id)) |> Map.fetch!(:blocked_by) |> Enum.map(& &1.identifier)
+  @doc "The identifiers of the tickets ticket `id` depends on, as Symphony stores them; the watcher adds none."
+  def blockers(id), do: for({%{} = entry, _record} <- List.wrap(RunStore.dependencies(issue_id(id))), do: entry.identifier)
 
   @doc "The fix tickets the self-heal lane filed, by identifier, with their state."
   def fix_tickets, do: World.get(:fix_tickets)

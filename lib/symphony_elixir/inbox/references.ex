@@ -7,7 +7,7 @@ defmodule SymphonyElixir.Inbox.References do
   `resolve/3` reads, for every row together:
 
   1. the tickets' records, for each ticket mentioned (`SymphonyElixir.Inbox.Mentions`) and the row's
-     own ticket: its title, phase, summary, parent, blockers, the answers it was given and its pull
+     own ticket: its title, phase, summary, parent, stored dependencies, the answers it was given and its pull
      request (`pr_watch`);
   2. GitHub, for each pull request mentioned (a bare `#448` or `PR #448` is a pull request of the
      row's repo) and for the pull request of each ticket the row names. A row's reads are kept,
@@ -28,6 +28,7 @@ defmodule SymphonyElixir.Inbox.References do
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.SystemSchema
   alias SymphonyElixir.{Decisions, Handoff, IssueSummary, PlanReview, TicketState}
+  alias SymphonyElixir.Dispatch.DependsOn
   alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Inbox.Mentions
@@ -195,8 +196,9 @@ defmodule SymphonyElixir.Inbox.References do
         }
 
   @doc """
-  What `waiting_on/2` needs of a ticket's Linear node (`id`, `state { name type }` and its
-  `inverseRelations` with each issue's `identifier` and `state { type }`).
+  What `waiting_on/2` needs of a ticket's Linear node (`id` and `state { name type }`), with the
+  identifiers of its open stored dependencies (`SymphonyElixir.Dispatch.DependsOn.open_identifiers/1`):
+  Linear's blocker links are not read.
   """
   @spec facts(map()) :: facts()
   def facts(node) when is_map(node) do
@@ -204,7 +206,7 @@ defmodule SymphonyElixir.Inbox.References do
       issue_id: node["id"],
       state: get_in(node, ["state", "name"]),
       state_type: get_in(node, ["state", "type"]),
-      open_blockers: open_blockers(node)
+      open_blockers: DependsOn.open_identifiers(node["id"])
     }
   end
 
@@ -283,7 +285,7 @@ defmodule SymphonyElixir.Inbox.References do
   end
 
   # What `waiting_on/2` reads of a ticket's record: its phase, read as a terminal state, a backlog
-  # one or a started one, and its blockers not in a terminal state.
+  # one or a started one, and its stored dependencies still open.
   defp record_facts(record, ctx) do
     %{
       issue_id: record.issue_id,
@@ -294,11 +296,21 @@ defmodule SymphonyElixir.Inbox.References do
   end
 
   defp open_record_blockers(record, ctx) do
-    for %{identifier: identifier, state: state} <- record.blockers,
+    for dependency <- DependsOn.open(record.depends_on, ctx.by_id),
+        identifier = dependency_identifier(dependency, ctx),
         is_binary(identifier),
-        not terminal?(state, record.repo_key, ctx),
         do: identifier
   end
+
+  defp blocked_by_links(record, ctx) do
+    for dependency <- record.depends_on,
+        identifier = dependency_identifier(dependency, ctx),
+        is_binary(identifier),
+        do: link(identifier, dependency_phase(dependency, ctx), ctx)
+  end
+
+  defp dependency_identifier(%{identifier: identifier}, _ctx) when is_binary(identifier), do: identifier
+  defp dependency_identifier(%{issue_id: issue_id}, ctx), do: ctx.by_id |> Map.get(issue_id, %{}) |> Map.get(:issue_identifier)
 
   defp state_type(phase, repo_key, ctx) do
     cond do
@@ -341,12 +353,6 @@ defmodule SymphonyElixir.Inbox.References do
       {:ok, pr} -> pr.checks
       _unread -> nil
     end
-  end
-
-  defp open_blockers(node) do
-    for %{"type" => "blocks", "issue" => %{"identifier" => identifier} = issue} <- node |> get_in(["inverseRelations", "nodes"]) |> List.wrap(),
-        get_in(issue, ["state", "type"]) not in @terminal_types,
-        do: identifier
   end
 
   defp pull_request_reference(pr, url, repo_key, ctx) do
@@ -468,7 +474,7 @@ defmodule SymphonyElixir.Inbox.References do
     %{
       parent: record.parent,
       pull_request: own_pull_request(record, item, ctx),
-      blocked_by: for(%{identifier: identifier} = blocker <- record.blockers, is_binary(identifier), do: link(identifier, blocker.state, ctx)),
+      blocked_by: blocked_by_links(record, ctx),
       blocks: for(other <- ctx.records, blocks?(other, record), do: %{identifier: other.issue_identifier, title: other.title, state: other.phase}),
       related: [],
       earlier_decisions: earlier_decisions(record)
@@ -479,9 +485,11 @@ defmodule SymphonyElixir.Inbox.References do
     %{identifier: identifier, title: ctx.by_identifier |> Map.get(identifier, %{}) |> Map.get(:title), state: state}
   end
 
+  defp dependency_phase(%{issue_id: issue_id}, ctx), do: ctx.by_id |> Map.get(issue_id, %{}) |> Map.get(:phase)
+
+  # Whether `other` depends on `record`, as Symphony stores it.
   defp blocks?(other, record) do
-    is_binary(other.issue_identifier) and
-      Enum.any?(other.blockers, &((is_binary(&1.id) and &1.id == record.issue_id) or (is_binary(&1.identifier) and &1.identifier == record.issue_identifier)))
+    is_binary(other.issue_identifier) and Enum.any?(other.depends_on, &(&1.issue_id == record.issue_id))
   end
 
   defp own_pull_request(record, item, ctx) do

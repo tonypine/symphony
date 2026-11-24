@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.OrchestratorOperatorStopTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{DirectorMoves, Pauses, RunStore, Tracker}
+  alias SymphonyElixir.{DirectorMoves, Pauses, RunStore, TicketState, Tracker}
 
   @active_states ["Todo", "In Progress", "Rework"]
 
@@ -199,17 +199,20 @@ defmodule SymphonyElixir.OrchestratorOperatorStopTest do
       %{moves: [server: server]}
     end
 
-    test "lists both reasons; Unblock releases the stop and the dependency stays; the blocker finishing sets it moving", %{moves: moves} do
+    test "lists both reasons; Unblock releases the stop and the dependency stays; the dependency met sets it moving", %{moves: moves} do
       ticket = {:ticket, "default", "stopped"}
       Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
       issue = issue("stopped", "MT-STOP", "Todo")
       tracked([issue])
+      :ok = RunStore.put_ticket_state(TicketState.new("default", "stopped", %{issue_identifier: "MT-STOP", phase: "Todo"}))
+      :ok = RunStore.put_ticket_state(TicketState.new("default", "blocker", %{issue_identifier: "MT-9", phase: "In Progress"}))
+      :ok = RunStore.add_dependency("stopped", "blocker", :done)
 
-      # The operator stops the run, and the ticket is then blocked by another one.
+      # The operator stops the run, and a run's block report then pauses it on the ticket it depends on.
       state = stop(running(orchestrator_state(), issue), issue)
-      blocked = %{tracked_issue("stopped") | blocked_by: [%{id: "blocker", identifier: "MT-9", state: "In Progress"}]}
-      tracked([blocked])
-      assert Orchestrator.sweep_dependencies_for_test("default", [blocked], ["Done", "Canceled", "Duplicate"]) == 1
+      {:ok, _pause} = Pauses.set(ticket, Pauses.ticket_reason(:dependency, "MT-9"), set_by: %{kind: :run, name: "The run"})
+      blocked = tracked_issue("stopped")
+      assert Orchestrator.sweep_dependencies_for_test("default", [blocked], ["Done", "Canceled", "Duplicate"]) == 0
 
       # Its page lists both reasons, and Linear shows `Blocked`.
       assert [stop_text, "Waiting for MT-9 to finish"] = Pauses.why(ticket)
@@ -224,9 +227,9 @@ defmodule SymphonyElixir.OrchestratorOperatorStopTest do
       assert labels("stopped") == ["Blocked"]
       refute Orchestrator.should_dispatch_issue_for_test(blocked, state)
 
-      # The blocker finishes: the pause lifts, the label goes, and the ticket dispatches.
-      done = %{tracked_issue("stopped") | blocked_by: [%{id: "blocker", identifier: "MT-9", state: "Done"}]}
-      tracked([done])
+      # The ticket it depends on is done: the pause lifts, the label goes, and the ticket dispatches.
+      :ok = RunStore.update_ticket_state("blocker", %{phase: "Done"})
+      done = tracked_issue("stopped")
       assert Orchestrator.sweep_dependencies_for_test("default", [done], ["Done", "Canceled", "Duplicate"]) == 1
       refute Pauses.paused?(ticket)
       assert labels("stopped") == []

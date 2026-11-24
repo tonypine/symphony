@@ -6,11 +6,10 @@ defmodule SymphonyElixir.ConnectedTest do
 
   @parent %{identifier: "MT-1", title: "Epic", done: 1, total: 2, children: ["completed", "started"]}
 
-  test "build takes blockers and sub-tickets from the polled issue, the parent and links from what the run read" do
+  test "build takes sub-tickets from the polled issue, the parent and related links from what the run read, and no blocker link" do
     issue = %Issue{
       id: "issue-2",
       identifier: "MT-2",
-      blocked_by: [%{id: "b", identifier: "MT-3", state: "In Progress"}, %{id: "x", identifier: nil, state: "Todo"}],
       sub_issues: [%{id: "s", identifier: "MT-4", state: "Todo"}]
     }
 
@@ -25,8 +24,8 @@ defmodule SymphonyElixir.ConnectedTest do
     assert Connected.build(issue, linked) == %{
              parent: @parent,
              sub_tickets: [%{identifier: "MT-4", title: nil, state: "Todo"}],
-             blocked_by: [%{identifier: "MT-3", title: nil, state: "In Progress"}],
-             blocks: [%{identifier: "MT-5", title: "Next", state: "Todo"}],
+             blocked_by: [],
+             blocks: [],
              related: [%{identifier: "MT-6", title: "Context", state: "Done"}]
            }
   end
@@ -39,8 +38,14 @@ defmodule SymphonyElixir.ConnectedTest do
     assert Connected.build(%{identifier: "MT-2"}, nil) == %{parent: nil, sub_tickets: [], blocked_by: [], blocks: [], related: []}
   end
 
-  test "build reads a ticket's record, which keeps its blockers as blockers" do
-    assert %{blocked_by: [%{identifier: "MT-3", title: nil, state: "Todo"}]} = Connected.build(%{identifier: "MT-2", blockers: [%{id: "b", identifier: "MT-3", state: "Todo"}]}, nil)
+  test "build reads a ticket's record, whose stored dependencies are its blockers, and not the blockers an older build kept" do
+    record = %{
+      identifier: "MT-2",
+      depends_on: [%{issue_id: "b", identifier: "MT-3", kind: :done}, %{issue_id: "x", identifier: nil, kind: :released}],
+      blockers: [%{id: "c", identifier: "MT-9", state: "Todo"}]
+    }
+
+    assert %{blocked_by: [%{identifier: "MT-3", title: nil, state: nil}]} = Connected.build(record, nil)
   end
 
   test "linked keeps an enriched issue's parent and links" do

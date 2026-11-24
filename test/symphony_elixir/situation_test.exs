@@ -361,10 +361,10 @@ defmodule SymphonyElixir.SituationTest do
       assert %{word: "Blocked by TP-1251", cause: "It is in Code Review.", next: "Starts when TP-1251 lands.", since: @at, waits_on: %{ticket: "TP-1251"}, and_more: 0} = situation
     end
 
-    test "falls back on the observed link, then the reason's line" do
+    test "falls back on the reason's line, never on a blocker link an older build observed" do
       linked = record(%{pause: pause(@reasons), blockers: [%{id: "b", identifier: "TP-1251", state: "QA"}]})
 
-      assert compute(linked).cause == "It is in QA."
+      assert compute(linked).cause == "Waiting for TP-1251 to finish."
       assert compute(record(%{pause: pause(@reasons)})).cause == "Waiting for TP-1251 to finish."
     end
 

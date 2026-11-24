@@ -25,8 +25,8 @@ defmodule SymphonyElixir.Tracker.Memory do
   `issue_nodes/1` reads its issues as the Inbox reads Linear's (a QA server's seed, TP-1311). With
   `:memory_tracker_issues` set, a state move or a comment only reports its event.
 
-  An entry's `"blockedBy"` list (the blockers' ids) is read back as the issue's `blocked_by`, with
-  each blocker's identifier and current state. Symphony writes no blocker link, so nothing edits it.
+  An entry's `"blockedBy"` list, a blocker link of Linear's, is not read: Symphony reads no blocker
+  link, and a ticket's dependencies are the ones it stores itself.
 
   An entry's optional `"parentId"` names its parent's id: the parent reads it back among its
   `sub_issues` (with its identifier and current state), and the child reads its `parent` as Linear's
@@ -676,7 +676,6 @@ defmodule SymphonyElixir.Tracker.Memory do
         labels: Enum.filter(List.wrap(Map.get(entry, "labels")), &is_binary/1),
         team: json_map(entry["team"], key: "key", name: "name"),
         project: json_map(entry["project"], id: "id", name: "name", slug_id: "slug_id"),
-        blocked_by: file_blockers(entry, entries),
         sub_issues: file_sub_issues(id, entries),
         parent: file_parent(entry["parentId"], entries),
         priority: file_priority(entry["priority"])
@@ -688,13 +687,6 @@ defmodule SymphonyElixir.Tracker.Memory do
 
   defp file_priority(priority) when priority in 0..4, do: priority
   defp file_priority(_priority), do: nil
-
-  # The issues an entry's `"blockedBy"` names, each with its identifier and its current state.
-  defp file_blockers(entry, entries) do
-    for blocker_id <- List.wrap(entry["blockedBy"]),
-        %{"id" => ^blocker_id} = blocker <- entries,
-        do: %{id: blocker_id, identifier: blocker["identifier"], state: blocker["state"]}
-  end
 
   # The issues whose `"parentId"` names `id`, each with its identifier and its current state.
   defp file_sub_issues(id, entries) do

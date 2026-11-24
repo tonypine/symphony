@@ -23,22 +23,35 @@ defmodule SymphonyElixir.InitiativesTest do
         "title" => "Title of " <> identifier,
         "url" => "https://linear.app/acme/issue/" <> identifier,
         "createdAt" => "2026-10-01T10:00:00Z",
-        "state" => %{"name" => name, "type" => type},
-        "inverseRelations" => %{"nodes" => []}
+        "state" => %{"name" => name, "type" => type}
       },
       attrs
     )
   end
 
-  defp blocked_by(blockers) do
-    %{
-      "inverseRelations" => %{
-        "nodes" =>
-          Enum.map(blockers, fn {identifier, type} ->
-            %{"type" => "blocks", "issue" => %{"identifier" => identifier, "state" => %{"name" => "x", "type" => type}}}
-          end) ++ [%{"type" => "related", "issue" => %{"identifier" => "BIL-999"}}]
-      }
-    }
+  # A Linear blocker link on a node, which Symphony does not read.
+  defp linear_blocked_by(identifier) do
+    %{"inverseRelations" => %{"nodes" => [%{"type" => "blocks", "issue" => %{"identifier" => identifier, "state" => %{"name" => "Todo", "type" => "unstarted"}}}]}}
+  end
+
+  # The stored dependencies `live/2` reads (`:dependencies`): by sub-ticket id, each `{identifier, phase}`
+  # it depends on (`:done`), with a record in that phase (none for a nil phase).
+  defp stored(by_id) do
+    fn id -> for {identifier, phase} <- Map.get(by_id, id, []), do: stored_entry(identifier, phase) end
+  end
+
+  defp stored_entry(identifier, phase) do
+    record = if phase, do: %{issue_id: "id-" <> identifier, issue_identifier: identifier, phase: phase, phase_at: ~U[2026-10-06 09:00:00Z]}
+    {%{issue_id: "id-" <> identifier, identifier: nil, kind: :done}, record}
+  end
+
+  defp live(initiative, settings, dependencies, opts \\ []) do
+    Initiative.live(initiative, %{
+      running: MapSet.new(Keyword.get(opts, :running, [])),
+      you: MapSet.new(Keyword.get(opts, :you, [])),
+      settings: settings,
+      dependencies: stored(dependencies)
+    })
   end
 
   defp plan(identifier, state, children, attrs \\ %{}) do
@@ -89,33 +102,31 @@ defmodule SymphonyElixir.InitiativesTest do
       assert Enum.map(sub_tickets, &{&1.identifier, &1.completed_at}) == [{"BIL-2", "2026-10-06T09:00:00Z"}, {"BIL-3", nil}]
     end
 
-    test "orders sub-tickets by blocked-by, then creation, and lists every open sub-ticket" do
+    test "orders sub-tickets by creation and lists every open sub-ticket; a Linear blocker link is not read" do
       children = [
-        child("BIL-4", @todo, Map.merge(%{"createdAt" => "2026-10-01T09:00:00Z"}, blocked_by([{"BIL-3", "unstarted"}]))),
+        child("BIL-4", @todo, Map.merge(%{"createdAt" => "2026-10-01T09:00:00Z"}, linear_blocked_by("BIL-3"))),
         child("BIL-3", @todo, %{"createdAt" => "2026-10-02T09:00:00Z"}),
         child("BIL-2", @done, %{"createdAt" => "2026-10-03T09:00:00Z"}),
         child("BIL-9", {"Canceled", "canceled"}),
-        child("BIL-6", @todo, Map.merge(%{"createdAt" => "2026-10-04T09:00:00Z"}, blocked_by([{"BIL-7", "unstarted"}]))),
-        child("BIL-7", @todo, Map.merge(%{"createdAt" => "2026-10-05T09:00:00Z"}, blocked_by([{"BIL-6", "unstarted"}]))),
         child("BIL-5", @todo, %{"createdAt" => nil, "title" => nil})
       ]
 
       initiative = Initiative.from_node(plan("BIL-1", @in_progress, children), "billing", settings(), @now)
 
-      # BIL-6 and BIL-7 block each other: creation order breaks the cycle.
-      assert Enum.map(initiative.sub_tickets, & &1.identifier) == ["BIL-5", "BIL-3", "BIL-4", "BIL-2", "BIL-6", "BIL-7"]
-      assert hd(Enum.filter(initiative.sub_tickets, &(&1.identifier == "BIL-4"))).blocked_by == [%{identifier: "BIL-3", state: "x", open: true, completed_at: nil}]
+      assert Enum.map(initiative.sub_tickets, & &1.identifier) == ["BIL-5", "BIL-4", "BIL-3", "BIL-2"]
+      assert Enum.all?(initiative.sub_tickets, &(&1.blocked_by == []))
       assert initiative.repo_key == "billing"
       refute initiative.incomplete
     end
 
-    test "flags a plan whose sub-tickets or blockers run past one read as incomplete" do
+    test "flags a plan whose sub-tickets run past one read as incomplete" do
       more = %{"pageInfo" => %{"hasNextPage" => true}}
       many_children = plan("BIL-1", @in_progress, [child("BIL-2", @todo)], %{"children" => Map.put(more, "nodes", [child("BIL-2", @todo)])})
       assert Initiative.from_node(many_children, "billing", settings(), @now).incomplete
 
-      many_blockers = child("BIL-2", @todo, %{"inverseRelations" => Map.put(more, "nodes", [])})
-      assert Initiative.from_node(plan("BIL-1", @in_progress, [many_blockers]), "billing", settings(), @now).incomplete
+      # A sub-ticket's Linear relations are not read, however many there are.
+      many_relations = child("BIL-2", @todo, %{"inverseRelations" => Map.put(more, "nodes", [])})
+      refute Initiative.from_node(plan("BIL-1", @in_progress, [many_relations]), "billing", settings(), @now).incomplete
     end
   end
 
@@ -134,23 +145,25 @@ defmodule SymphonyElixir.InitiativesTest do
   end
 
   describe "live/2" do
-    test "says what each sub-ticket waits on and counts the stages" do
+    test "says what each sub-ticket waits on and counts the stages, from the stored dependencies" do
       children = [
         child("BIL-2", @done),
         child("BIL-3", {"In Progress", "started"}),
         child("BIL-4", {"QA", "started"}),
-        child("BIL-5", @todo, blocked_by([{"BIL-4", "started"}, {"BIL-2", "completed"}])),
+        child("BIL-5", @todo),
         child("BIL-6", {"Code Review", "started"}),
-        child("BIL-7", @todo),
+        # Its Linear issue carries a blocker link, which holds nothing.
+        child("BIL-7", @todo, linear_blocked_by("BIL-4")),
         child("BIL-8", {"Backlog", "backlog"}),
-        child("BIL-10", @todo, blocked_by([{"BIL-4", "started"}])),
+        child("BIL-10", @todo),
         child("BIL-11", @in_review)
       ]
 
       settings = %Schema{tracker: %{kind: "memory", plan_review_state: "Plan Review"}}
 
       initiative = Initiative.from_node(plan("BIL-1", @in_progress, children), "billing", settings, @now)
-      live = Initiative.live(initiative, %{running: MapSet.new(["id-BIL-3"]), you: MapSet.new(["id-BIL-4"]), settings: settings})
+      dependencies = %{"id-BIL-5" => [{"BIL-4", "QA"}, {"BIL-2", "Done"}], "id-BIL-10" => [{"BIL-4", "QA"}]}
+      live = live(initiative, settings, dependencies, running: ["id-BIL-3"], you: ["id-BIL-4"])
 
       waits = Map.new(live.sub_tickets, &{&1.identifier, &1.waits_on})
 
@@ -166,9 +179,41 @@ defmodule SymphonyElixir.InitiativesTest do
                "BIL-11" => "you"
              }
 
-      assert Enum.find(live.sub_tickets, &(&1.identifier == "BIL-5")).waiting_for == ["BIL-4"]
+      bil_5 = Enum.find(live.sub_tickets, &(&1.identifier == "BIL-5"))
+      assert bil_5.waiting_for == ["BIL-4"]
+
+      assert bil_5.blocked_by == [
+               %{identifier: "BIL-4", state: "QA", open: true, completed_at: nil},
+               %{identifier: "BIL-2", state: "Done", open: false, completed_at: "2026-10-06T09:00:00Z"}
+             ]
+
       assert live.counts == %{"done" => 1, "working" => 2, "you" => 3, "queued" => 1, "blocked" => 2, "total" => 9}
       assert Initiative.stages() == ~w(done working you queued blocked)
+    end
+
+    test "orders the sub-tickets by their stored dependencies, then creation; a cycle breaks by creation" do
+      children = [
+        child("BIL-4", @todo, %{"createdAt" => "2026-10-01T09:00:00Z"}),
+        child("BIL-3", @todo, %{"createdAt" => "2026-10-02T09:00:00Z"}),
+        child("BIL-2", @done, %{"createdAt" => "2026-10-03T09:00:00Z"}),
+        child("BIL-6", @todo, %{"createdAt" => "2026-10-04T09:00:00Z"}),
+        child("BIL-7", @todo, %{"createdAt" => "2026-10-05T09:00:00Z"}),
+        child("BIL-5", @todo, %{"createdAt" => nil, "title" => nil})
+      ]
+
+      initiative = Initiative.from_node(plan("BIL-1", @in_progress, children), "billing", settings(), @now)
+
+      # BIL-4 depends on BIL-3, and on a ticket Symphony holds no record of; BIL-6 and BIL-7 on each other.
+      dependencies = %{"id-BIL-4" => [{"BIL-3", "Todo"}, {"OUT-1", nil}], "id-BIL-6" => [{"BIL-7", "Todo"}], "id-BIL-7" => [{"BIL-6", "Todo"}]}
+      live = live(initiative, settings(), dependencies)
+
+      assert Enum.map(live.sub_tickets, & &1.identifier) == ["BIL-5", "BIL-3", "BIL-4", "BIL-2", "BIL-6", "BIL-7"]
+      bil_4 = Enum.find(live.sub_tickets, &(&1.identifier == "BIL-4"))
+
+      assert [%{identifier: "BIL-3", open: true}, %{identifier: nil, state: nil, open: true, completed_at: nil}] =
+               bil_4.blocked_by
+
+      assert bil_4.waiting_for == ["BIL-3", nil]
     end
   end
 

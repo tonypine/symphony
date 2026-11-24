@@ -126,8 +126,10 @@ branch name Linear suggests for the ticket; a PR on a branch with any other name
   The order between sub-tickets is Symphony's own: a sub-ticket that comes after another (a split's
   `after`, one a run files to do after its ticket, a blocker you add on the ticket page or an agent's
   `blocked_by`) gets a dependency stored on its record, and Symphony holds it, shows it as
-  "Blocked by" that ticket and frees its slot until that ticket is done. Symphony writes no
-  blocker link into Linear.
+  "Blocked by" that ticket and frees its slot until that ticket is done. Symphony neither reads nor
+  writes Linear's blocker links: a ticket's dependencies are the ones Symphony stores, and a
+  blocker link someone adds in Linear has no effect on it. The parent and sub-ticket link is still
+  read from Linear.
   The design this flow
   is moving to (bug, feature and `plan` ticket types, one review of a whole plan, artifacts in
   Linear documents) is recorded in
@@ -386,8 +388,8 @@ slot is the one in progress; the dispatch order and Home reads name the ticket t
 and how many are free.
 
 A ticket gives its slot up only when it is done, when it waits on another ticket (a dependency
-Symphony stores, a blocker, a fix ticket, a competing pull request, an app update that carries a
-blocker's fix) or on its own sub-tickets, or when you stop it, move it to `Backlog` or cancel it. Waiting on you keeps it. A free
+Symphony stores, a run's block report, a fix ticket, a competing pull request, an app update that
+carries a dependency's fix) or on its own sub-tickets, or when you stop it, move it to `Backlog` or cancel it. Waiting on you keeps it. A free
 slot goes first to a sub-ticket of a ticket that has started, so a big chain finishes before
 unrelated work starts, then to the first ticket in the queue that can start.
 
@@ -482,8 +484,8 @@ is down.
 
 **Initiatives.** The Mac app's Initiatives (`/api/v1/initiatives`) follow each plan ticket (`plan`
 or `breakdown`) to done: the active ones, those in review and those done in the last 7 days, each
-with its sub-tickets in landing order (blocked-by order, then creation order), what each waits on
-(you, a blocker, CI, a slot), when each landed and its pull request, counts by stage, the plan's
+with its sub-tickets in landing order (the order of their stored dependencies, then creation order),
+what each waits on (you, a ticket it depends on, CI, a slot), when each landed and its pull request, counts by stage, the plan's
 start and its tokens. Symphony reads the plan tickets on its poll and serves them from that read, so a GET
 makes no Linear request; the reads show as `initiatives` in the Linear usage table.
 

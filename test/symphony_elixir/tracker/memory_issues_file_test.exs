@@ -71,15 +71,15 @@ defmodule SymphonyElixir.Tracker.MemoryIssuesFileTest do
     assert Memory.issue_nodes(%{name: "all"}) == []
   end
 
-  test "an entry's blockers in the issues file are read back with each blocker's state", %{issues_file: issues_file} do
+  test "an entry's blocker link in the issues file is not read: the issue carries no blocker and its node no relation", %{issues_file: issues_file} do
     issues = Jason.decode!(File.read!(issues_file))
     File.write!(issues_file, Jason.encode!(List.update_at(issues, 0, &Map.put(&1, "blockedBy", ["issue-2"]))))
 
-    assert {:ok, %Issue{blocked_by: [%{id: "issue-2", identifier: "QA-2", state: "Todo"}]}} = Memory.fetch_issue_by_identifier("QA-1")
+    assert {:ok, %Issue{identifier: "QA-1"} = issue} = Memory.fetch_issue_by_identifier("QA-1")
+    refute Map.has_key?(issue, :blocked_by)
 
-    # The blocker's state is read again each time, so a finished blocker reads as finished.
-    assert Memory.update_issue_state("issue-2", "Done") == :ok
-    assert {:ok, %Issue{blocked_by: [%{state: "Done"}]}} = Memory.fetch_issue_by_identifier("QA-1")
+    assert [node, _other] = Memory.issue_nodes(%{name: "all"})
+    refute Map.has_key?(node, "inverseRelations")
   end
 
   test "a priority is written into the issues file and read back as the issue's priority", %{issues_file: issues_file} do

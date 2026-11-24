@@ -7,8 +7,6 @@ defmodule SymphonyElixir.Linear.Issue do
   carries its `comments` instead and leaves it nil.
   """
 
-  alias SymphonyElixir.SubIssueWait
-
   # A human puts the `plan` label on a parent ticket to have it groomed into sub-tickets; it stays on
   # while the sub-tickets are worked. `breakdown` is its older name, still accepted.
   @breakdown_labels ["plan", "breakdown"]
@@ -35,7 +33,6 @@ defmodule SymphonyElixir.Linear.Issue do
     :workspace_branch,
     :workspace_base_ref,
     :parent,
-    blocked_by: [],
     sub_issues: [],
     comments: [],
     rulings: [],
@@ -140,43 +137,6 @@ defmodule SymphonyElixir.Linear.Issue do
     do: breakdown?(issue) and normalize_state(state) == @rework_state
 
   def replanning?(_issue), do: false
-
-  @doc """
-  The issue's blockers still outside `terminal_states`. A blocker counts as resolved only once it
-  is terminal (`Done`, `Canceled`, ...): `Merging`, `Code Review`, `QA`, `CI Fix` and `Rework` still
-  block, since the blocker's code is not on the default branch yet. One more counts as resolved: a
-  blocker whose PR merged and that waits on its own sub-tickets
-  (`SymphonyElixir.SubIssueWait.merged_blocker?/1`), whose code is on the default branch; a
-  sub-ticket blocked by such a parent would otherwise wait on it while it waits on the sub-ticket.
-  So does a groomed blocker whose pull request merged, whatever its state. A blocker without a
-  known state counts as open.
-  """
-  @spec open_blockers(t(), Enumerable.t(String.t())) :: [map()]
-  def open_blockers(%__MODULE__{blocked_by: blockers}, terminal_states) when is_list(blockers) do
-    terminal_states = MapSet.new(terminal_states, &normalize_state/1)
-
-    Enum.reject(blockers, fn
-      %{state: state} = blocker when is_binary(state) ->
-        MapSet.member?(terminal_states, normalize_state(state)) or SubIssueWait.merged_blocker?(blocker)
-
-      _blocker ->
-        false
-    end)
-  end
-
-  def open_blockers(_issue, _terminal_states), do: []
-
-  @doc """
-  True when the issue is outside `terminal_states` with at least one open blocker (see
-  `open_blockers/2`); in any active phase, `Todo` or later, Symphony holds it until every blocker is
-  terminal (`SymphonyElixir.Pauses.Dependencies`).
-  """
-  @spec blocked?(t(), Enumerable.t(String.t())) :: boolean()
-  def blocked?(%__MODULE__{state: state} = issue, terminal_states) when is_binary(state) do
-    normalize_state(state) not in Enum.map(terminal_states, &normalize_state/1) and open_blockers(issue, terminal_states) != []
-  end
-
-  def blocked?(_issue, _terminal_states), do: false
 
   @doc "True when the issue carries the `plan` label (or `breakdown`, its older name)."
   @spec breakdown?(t()) :: boolean()

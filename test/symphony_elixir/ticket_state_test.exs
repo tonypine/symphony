@@ -33,7 +33,6 @@ defmodule SymphonyElixir.TicketStateTest do
                labels: [],
                priority: nil,
                assignee: nil,
-               blockers: [],
                sub_issues: [],
                parent: nil,
                url: nil,
@@ -91,13 +90,13 @@ defmodule SymphonyElixir.TicketStateTest do
       refute Map.has_key?(TicketState.observation(record), :sort_key)
     end
 
-    test "a ticket's dependencies are a field of their own, apart from its blockers, and no read of Linear changes them" do
+    test "a ticket's dependencies are a field of their own, the record keeps no blockers, and no read of Linear changes them" do
       done = %{issue_id: "dep-1", identifier: "ACME-2", kind: :done}
       released = %{issue_id: "dep-2", identifier: "ACME-3", kind: :released}
       record = TicketState.new("repo-a", "issue-1", %{issue_identifier: "ACME-1", phase: "Todo", depends_on: [done, released]})
 
       assert record.depends_on == [done, released]
-      assert record.blockers == []
+      refute Map.has_key?(record, :blockers)
 
       # One entry per ticket depended on: a later one replaces the earlier in its place; an entry
       # without an id or a known kind is dropped.
@@ -110,19 +109,13 @@ defmodule SymphonyElixir.TicketStateTest do
       normalized = TicketState.normalize(%{depends_on: [%{issue_id: " dep-1 ", kind: :done}]})
       assert [%{issue_id: "dep-1", identifier: nil}] = normalized.depends_on
 
-      # A read of Linear rewrites the record's blockers and leaves its dependencies as they are.
-      issue = %Issue{
-        id: "issue-1",
-        identifier: "ACME-1",
-        title: "Depends",
-        state: "Todo",
-        blocked_by: [%{id: "b-1", identifier: "ACME-7", state: "Todo"}],
-        updated_at: @at
-      }
+      # A read of Linear leaves its dependencies as they are and writes no blocker.
+      issue = %Issue{id: "issue-1", identifier: "ACME-1", title: "Depends", state: "Todo", updated_at: @at}
 
-      observed = TicketState.observe(record, issue, @at)
-      assert {%{depends_on: [^done, ^released], blockers: [%{identifier: "ACME-7"}]}, :changed} = observed
+      assert {%{depends_on: [^done, ^released]} = observed, :changed} = TicketState.observe(record, issue, @at)
+      refute Map.has_key?(observed, :blockers)
       refute Map.has_key?(TicketState.observation(record), :depends_on)
+      refute Map.has_key?(TicketState.observation(record), :blockers)
     end
 
     test "a record is queued while it is open: known, not removed, found and not terminal" do
@@ -240,7 +233,6 @@ defmodule SymphonyElixir.TicketStateTest do
                labels: [],
                priority: nil,
                assignee: nil,
-               blockers: [],
                sub_issues: [],
                parent: nil,
                url: nil,
@@ -319,7 +311,7 @@ defmodule SymphonyElixir.TicketStateTest do
 
       record = TicketState.normalize(stored)
 
-      assert Map.take(record, [:title, :description, :team, :project, :labels, :priority, :assignee, :blockers, :sub_issues, :parent, :url, :created_at, :linear_updated_at, :observed_at]) == %{
+      assert Map.take(record, [:title, :description, :team, :project, :labels, :priority, :assignee, :sub_issues, :parent, :url, :created_at, :linear_updated_at, :observed_at]) == %{
                title: nil,
                description: nil,
                team: nil,
@@ -327,7 +319,6 @@ defmodule SymphonyElixir.TicketStateTest do
                labels: [],
                priority: nil,
                assignee: nil,
-               blockers: [],
                sub_issues: [],
                parent: nil,
                url: nil,
@@ -349,7 +340,6 @@ defmodule SymphonyElixir.TicketStateTest do
           labels: ["bug", 7, "  ", " ui "],
           priority: "high",
           assignee: :someone,
-          blockers: :x,
           sub_issues: "ACME-2",
           parent: %{title: "No identifier"},
           url: "",
@@ -360,19 +350,45 @@ defmodule SymphonyElixir.TicketStateTest do
 
       assert {record.title, record.labels, record.priority, record.assignee} == {nil, ["bug", "ui"], nil, nil}
       assert {record.description, record.team, record.project} == {nil, nil, nil}
-      assert {record.blockers, record.sub_issues, record.parent} == {[], [], nil}
+      assert {record.sub_issues, record.parent} == {[], nil}
       assert {record.url, record.created_at, record.linear_updated_at, record.observed_at} == {nil, nil, nil, nil}
     end
 
-    test "keeps each link's id, identifier and state, and reads a stored identifier as a link with neither id nor state" do
+    test "keeps each sub-issue's id, identifier and state, and reads a stored identifier as a link with neither id nor state" do
       record =
         TicketState.normalize(%{
-          blockers: ["ACME-5", %{id: "issue-6", identifier: " ACME-6 ", state: "Todo", title: "dropped"}, %{id: nil, identifier: nil}, 7, " "],
-          sub_issues: [%{id: "issue-7", identifier: nil, state: ""}, %{state: "Todo"}]
+          sub_issues: [
+            "ACME-5",
+            %{id: "issue-6", identifier: " ACME-6 ", state: "Todo", title: "dropped"},
+            %{id: "issue-7", identifier: nil, state: ""},
+            %{state: "Todo"},
+            7,
+            " "
+          ]
         })
 
-      assert record.blockers == [%{id: nil, identifier: "ACME-5", state: nil}, %{id: "issue-6", identifier: "ACME-6", state: "Todo"}]
-      assert record.sub_issues == [%{id: "issue-7", identifier: nil, state: nil}]
+      assert record.sub_issues == [
+               %{id: nil, identifier: "ACME-5", state: nil},
+               %{id: "issue-6", identifier: "ACME-6", state: "Todo"},
+               %{id: "issue-7", identifier: nil, state: nil}
+             ]
+    end
+
+    test "a record an older build stored with the blockers it observed from Linear loads without them, and they hold nothing" do
+      stored = %{
+        repo_key: "repo-a",
+        issue_id: "issue-1",
+        issue_identifier: "ACME-1",
+        phase: "Todo",
+        blockers: [%{id: "issue-6", identifier: "ACME-6", state: "Todo"}, "ACME-5"]
+      }
+
+      record = TicketState.normalize(stored)
+
+      refute Map.has_key?(record, :blockers)
+      assert record.depends_on == []
+      assert TicketState.pause_reasons(record) == []
+      assert record.phase == "Todo"
     end
 
     test "keeps a description as written, a team by key and name and a project by id, name and slug id" do
@@ -1055,7 +1071,7 @@ defmodule SymphonyElixir.TicketStateTest do
     @created_at ~U[2026-10-01 08:00:00Z]
     @team %{key: "ACME", name: "Acme"}
     @project %{id: "project-1", name: "Symphony", slug_id: "symphony-1a2b"}
-    @observed_fields ~w(issue_identifier phase title description team project labels priority assignee blockers sub_issues parent url created_at linear_updated_at last_comment_at)a
+    @observed_fields ~w(issue_identifier phase title description team project labels priority assignee sub_issues parent url created_at linear_updated_at last_comment_at)a
 
     defp linear_issue(attrs \\ %{}) do
       struct!(
@@ -1070,7 +1086,6 @@ defmodule SymphonyElixir.TicketStateTest do
           labels: ["backend", "plan"],
           priority: 1,
           assignee_id: "user-1",
-          blocked_by: [%{id: "issue-0", identifier: "ACME-0", state: "Todo"}, %{id: nil, identifier: nil, state: nil}],
           sub_issues: [%{id: "issue-2", identifier: "ACME-2", state: "Todo"}, %{id: "issue-3", identifier: "ACME-3", state: "Done"}],
           url: "https://linear.app/acme/issue/ACME-1",
           created_at: @created_at,
@@ -1094,7 +1109,6 @@ defmodule SymphonyElixir.TicketStateTest do
                  labels: ["backend", "plan"],
                  priority: 1,
                  assignee: "user-1",
-                 blockers: [%{id: "issue-0", identifier: "ACME-0", state: "Todo"}],
                  sub_issues: [%{id: "issue-2", identifier: "ACME-2", state: "Todo"}, %{id: "issue-3", identifier: "ACME-3", state: "Done"}],
                  parent: nil,
                  url: "https://linear.app/acme/issue/ACME-1",
@@ -1153,11 +1167,11 @@ defmodule SymphonyElixir.TicketStateTest do
         |> TicketState.put_ci_fix_origin("QA", @at)
         |> TicketState.observe(linear_issue(), @observed_at)
 
-      newer = linear_issue(%{title: "Renamed", state: "Code Review", labels: [], priority: nil, assignee_id: nil, blocked_by: [], updated_at: DateTime.add(@linear_at, 600)})
+      newer = linear_issue(%{title: "Renamed", state: "Code Review", labels: [], priority: nil, assignee_id: nil, updated_at: DateTime.add(@linear_at, 600)})
       later = DateTime.add(@observed_at, 600)
 
       assert {observed, :changed} = TicketState.observe(record, newer, later)
-      assert {observed.title, observed.phase, observed.labels, observed.priority, observed.assignee, observed.blockers} == {"Renamed", "Code Review", [], nil, nil, []}
+      assert {observed.title, observed.phase, observed.labels, observed.priority, observed.assignee} == {"Renamed", "Code Review", [], nil, nil}
       assert {observed.linear_updated_at, observed.observed_at, observed.phase_at} == {DateTime.add(@linear_at, 600), later, later}
       assert observed.phase_owner == :external
       assert observed.ci_fix_origin == "QA"
@@ -1189,10 +1203,10 @@ defmodule SymphonyElixir.TicketStateTest do
 
     test "an unknown field, a missing state and a missing updatedAt keep the known values" do
       {record, :changed} = TicketState.observe(TicketState.new("repo-a", "issue-1"), linear_issue(), @observed_at)
-      delivery = linear_issue(%{blocked_by: :unknown, state: nil, identifier: nil, updated_at: nil, title: "Renamed"})
+      delivery = linear_issue(%{sub_issues: :unknown, state: nil, identifier: nil, updated_at: nil, title: "Renamed"})
 
       assert {observed, :changed} = TicketState.observe(record, delivery, DateTime.add(@observed_at, 60))
-      assert {observed.blockers, observed.phase, observed.issue_identifier, observed.linear_updated_at} == {record.blockers, "In Progress", "ACME-1", @linear_at}
+      assert {observed.sub_issues, observed.phase, observed.issue_identifier, observed.linear_updated_at} == {record.sub_issues, "In Progress", "ACME-1", @linear_at}
       assert observed.title == "Renamed"
     end
 

@@ -27,7 +27,7 @@
     "nodes": [
       {
         "type": "blocks",
-        "issue": { "id": "9e0f1a2b-3c4d-4e5f-8a6b-7c8d9e0f1a2b", "identifier": "TP-1212", "state": { "name": "Done" } }
+        "issue": { "id": "9e0f1a2b-3c4d-4e5f-8a6b-7c8d9e0f1a2b", "identifier": "TP-1212", "state": { "name": "Todo" } }
       }
     ]
   },

@@ -108,8 +108,7 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
         state: Keyword.get(attrs, :state, phase_name(phase)),
         url: "https://linear.app/i/TP-7",
         description: Keyword.get(attrs, :description),
-        rulings: Keyword.get(attrs, :rulings, []),
-        blocked_by: Keyword.get(attrs, :blocked_by, [])
+        rulings: Keyword.get(attrs, :rulings, [])
       },
       read: Keyword.get(attrs, :read, read()),
       facts: facts,
@@ -993,7 +992,7 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       }
 
       action = action("R15", :wait_for_competitors, args: %{prs: [@leader, person], step_behind: true})
-      ctx = ctx(:code_review, blocked_by: [%{id: "issue-1", identifier: "TP-1", state: "QA"}], links: [released])
+      ctx = ctx(:code_review, links: [released])
 
       assert %{outcome: :applied, links: [^released, leader, other]} = Apply.apply(action, ctx)
       assert %{linked: false, step_behind: true} = leader
@@ -1007,7 +1006,7 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
 
     test "a competitor an earlier wait recorded as linked stays so, as history; the ticket waits through its pause" do
       recorded = Map.merge(@leader, %{linked: true, step_behind: false, released: false, progress_at: @now})
-      ctx = ctx(:qa, blocked_by: [%{id: "issue-1", identifier: "TP-1", state: "QA"}], links: [recorded])
+      ctx = ctx(:qa, links: [recorded])
       action = action("R14a", :wait_for_competitors, args: %{prs: [@leader], step_behind: false})
       assert %{links: [%{linked: true}]} = Apply.apply(action, ctx)
 

@@ -80,7 +80,7 @@ defmodule SymphonyElixir.Routing.PollLog do
   end
 
   # Routing reads only these; the rest (descriptions, comments) would only fill the table.
-  defp slim(%Issue{} = issue), do: %{issue | description: nil, comments: [], sub_issues: [], blocked_by: [], rulings: [], linked_issues: []}
+  defp slim(%Issue{} = issue), do: %{issue | description: nil, comments: [], sub_issues: [], rulings: [], linked_issues: []}
   defp slim(issue), do: issue
 
   defp sorted(nil), do: []

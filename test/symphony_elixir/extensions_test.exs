@@ -1448,7 +1448,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     connected = %{
       parent: %{identifier: "MT-EPIC", title: "Ship the peek", done: 1, total: 3, children: ["completed", "started", "unstarted"]},
       sub_tickets: [%{identifier: "MT-SUB", title: nil, state: "Todo"}],
-      blocked_by: [%{identifier: "MT-BLOCKER", title: nil, state: "In Progress"}],
+      blocked_by: [],
       blocks: [%{identifier: "MT-NEXT", title: "Downstream", state: "Todo"}],
       related: [%{identifier: "MT-REL", title: "Context", state: "Done"}]
     }
@@ -1478,12 +1478,12 @@ defmodule SymphonyElixir.ExtensionsTest do
              },
              "epic" => %{"identifier" => "MT-EPIC", "title" => "Ship the peek", "done" => 1, "total" => 3, "incomplete" => false, "tickets" => []},
              "sub_tickets" => [%{"identifier" => "MT-SUB", "title" => nil, "state" => "Todo"}],
-             "blocked_by" => [%{"identifier" => "MT-BLOCKER", "title" => nil, "state" => "In Progress", "status" => "open", "resolved_at" => nil}],
+             "blocked_by" => [],
              "blocks" => [%{"identifier" => "MT-NEXT", "title" => "Downstream", "state" => "Todo", "situation" => nil}],
              "related" => [%{"identifier" => "MT-REL", "title" => "Context", "state" => "Done"}]
            }
 
-    assert %{"status" => "slot_waiting", "connected" => %{"parent" => nil, "blocked_by" => [%{"identifier" => "MT-BLOCKER"}]}} =
+    assert %{"status" => "slot_waiting", "connected" => %{"parent" => nil, "blocked_by" => []}} =
              json_response(get(build_conn(), "/api/v1/MT-WAIT"), 200)
 
     refute Map.has_key?(json_response(get(build_conn(), "/api/v1/MT-RETRY"), 200), "connected")
@@ -1786,23 +1786,25 @@ defmodule SymphonyElixir.ExtensionsTest do
           "title" => "Part " <> identifier,
           "url" => "https://linear.app/example/issue/" <> identifier,
           "createdAt" => "2026-10-01T10:00:00Z",
-          "state" => %{"name" => state, "type" => type},
-          "inverseRelations" => %{"nodes" => []}
+          "state" => %{"name" => state, "type" => type}
         },
         extra
       )
     end
 
-    blocked_by = fn identifier ->
-      %{
-        "inverseRelations" => %{
-          "nodes" => [
-            %{"type" => "blocks", "issue" => %{"identifier" => identifier, "state" => %{"name" => "Plan Review", "type" => "started"}}},
-            %{"type" => "blocks", "issue" => %{"identifier" => "MT-1", "completedAt" => "2026-10-02T10:00:00Z", "state" => %{"name" => "Done", "type" => "completed"}}}
-          ]
-        }
-      }
+    # MT-3 depends on MT-2 (open) and on MT-1 (done), as Symphony stores it: Linear's blocker links
+    # are not read.
+    for {id, identifier, phase, phase_at} <- [
+          {"issue-MT-3", "MT-3", "Todo", nil},
+          {"issue-MT-2", "MT-2", "Plan Review", nil},
+          {"issue-MT-1", "MT-1", "Done", ~U[2026-10-02 10:00:00Z]}
+        ] do
+      :ok = RunStore.put_ticket_state(TicketState.new("default", id, %{issue_identifier: identifier, phase: phase, phase_at: phase_at}))
+      on_exit(fn -> RunStore.delete_ticket_state(id) end)
     end
+
+    :ok = RunStore.add_dependency("issue-MT-3", "issue-MT-2", :done)
+    :ok = RunStore.add_dependency("issue-MT-3", "issue-MT-1", :done)
 
     plan = fn identifier, state, type, children, extra ->
       Map.merge(
@@ -1827,7 +1829,7 @@ defmodule SymphonyElixir.ExtensionsTest do
         "Waiting on sub-tickets",
         "started",
         [
-          child.("MT-3", "Todo", "unstarted", Map.merge(%{"createdAt" => "2026-10-01T09:00:00Z"}, blocked_by.("MT-2"))),
+          child.("MT-3", "Todo", "unstarted", %{"createdAt" => "2026-10-01T09:00:00Z"}),
           child.("MT-2", "Plan Review", "started", %{}),
           child.("MT-HTTP", "In Progress", "started", %{"id" => "issue-http"})
         ],

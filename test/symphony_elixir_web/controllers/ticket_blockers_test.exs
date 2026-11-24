@@ -56,8 +56,8 @@ defmodule SymphonyElixirWeb.TicketBlockersTest do
     record = ctx.ticket.issue_id |> RunStore.get_ticket_state() |> TicketState.normalize()
     assert [%{issue_id: blocker_id, kind: :done}] = record.depends_on
     assert blocker_id == ctx.blocker.issue_id
-    # No Linear write: the observed blockers and the pause are untouched.
-    assert record.blockers == []
+    # No Linear write and no pause: the record keeps no Linear blocker at all.
+    refute Map.has_key?(record, :blockers)
     assert TicketState.pause_reasons(record) == []
 
     listed = get_blockers(ctx.ticket.issue_identifier, ctx)

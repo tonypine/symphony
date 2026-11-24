@@ -315,15 +315,21 @@ defmodule SymphonyElixir.PrWatch.Competitors do
       else: {:left, link}
   end
 
-  # A competitor lands once its ticket is terminal or its pull request was read merged.
-  defp landed?(%{issue_id: id}, issue, race, opts) when is_binary(id) do
-    terminal = MapSet.new(Keyword.get(opts, :terminal_states, []), &normalize/1)
-
-    MapSet.member?(Map.get(race, :merged, MapSet.new()), id) or
-      Enum.any?(issue.blocked_by || [], &(Map.get(&1, :id) == id and MapSet.member?(terminal, normalize(Map.get(&1, :state)))))
+  # A competitor lands once its pull request was read merged or its ticket's record is terminal.
+  defp landed?(%{issue_id: id}, _issue, race, opts) when is_binary(id) do
+    MapSet.member?(Map.get(race, :merged, MapSet.new()), id) or terminal_record?(id, opts)
   end
 
   defp landed?(_link, _issue, _race, _opts), do: false
+
+  defp terminal_record?(id, opts) do
+    terminal = MapSet.new(Keyword.get(opts, :terminal_states, []), &normalize/1)
+
+    case store(opts).get_ticket_state(id) do
+      %{} = record -> MapSet.member?(terminal, normalize(TicketState.normalize(record).phase))
+      _none -> false
+    end
+  end
 
   # Reasons the store won't clear keep every competitor recorded, so the next read judges them again.
   defp clear(issue, wait, released, links, step_behind?, opts) do

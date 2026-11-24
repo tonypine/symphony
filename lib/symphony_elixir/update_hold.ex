@@ -1,11 +1,16 @@
 defmodule SymphonyElixir.UpdateHold do
   @moduledoc """
-  Holds a `Todo` ticket whose blocker fixed Symphony itself until the running app includes the fix.
+  Holds a `Todo` ticket whose dependency fixed Symphony itself until the running app includes the fix.
+
+  A ticket's blockers are its stored `:done` dependencies (`depends_on` on
+  `SymphonyElixir.TicketState`, read with `SymphonyElixir.RunStore.dependencies/1`), each as its own
+  record describes it: Symphony reads no blocker link of Linear's. A `:released` dependency is the
+  dispatch gate's own (`SymphonyElixir.Dispatch.DependsOn`).
 
   When Symphony works on its own repository, a fix takes effect once the app is updated, not when
   its pull request merges. A blocker counts as such a fix when its merged pull request is in the
   repository the running build was released from (`SymphonyElixir.BuildInfo`). Its dependents stay
-  held after the blocker is terminal, until the blocker's merge commit is in the running build.
+  held after the blocker is done, until the blocker's merge commit is in the running build.
   Blockers merged in any other repository release their dependents at once, as before, and so does
   every blocker when the running build has no sha (a build from a checkout).
 
@@ -18,8 +23,8 @@ defmodule SymphonyElixir.UpdateHold do
   way for a ticket merged in that repository (`awaiting_update/4`, called by
   `SymphonyElixir.Pauses.Dependencies` for a ticket in any phase).
 
-  `resolve/5` does the lookups (Linear for the blockers, Symphony's record of each blocker's pull
-  request, GitHub for the merge commit and whether the build includes it) and keeps their answers
+  `resolve/5` does the lookups (Symphony's record of each blocker and of its pull request, GitHub for
+  the merge commit and whether the build includes it) and keeps their answers
   in a cache; `hold/4` decides from the cache alone. A lookup that fails is left out of the cache,
   so it holds no new ticket.
 
@@ -29,15 +34,17 @@ defmodule SymphonyElixir.UpdateHold do
   in the poll task, holds each polled ticket so and clears each of those reasons once its build has
   arrived: the build includes the merge commit, the ticket is no longer held for a build (the skip
   label, out of `Todo`, an open blocker, the blocker's fix no longer merged there) or the running
-  build has no sha. A reason it can't answer for yet, a lookup having failed, stays. The dispatch
+  build has no sha. A reason it can't answer for yet, a lookup having failed, stays. A ticket with no
+  stored dependency any more (a person removed it) is no longer held for a build. The dispatch
   gate and the snapshot read the pause (`reasons/2`).
   """
 
   require Logger
 
-  alias SymphonyElixir.{BuildInfo, Pauses, ReleaseBuild, ReleaseGate, TicketPullRequest, Tracker}
+  alias SymphonyElixir.{BuildInfo, Pauses, ReleaseBuild, ReleaseGate, RunStore, SubIssueWait}
   alias SymphonyElixir.GitHub.{PullRequest, Repo}
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.{TicketPullRequest, TicketState}
 
   @skip_label "skip-update-hold"
   @todo_state "todo"
@@ -70,13 +77,14 @@ defmodule SymphonyElixir.UpdateHold do
   the answers added. Blockers and merge commits already in the cache are not looked up again.
 
   Options: `:repo_key` (the repo whose record of a blocker's pull request is read, for a blocker
-  read without one), `:fetch_issues` (`[id] -> {:ok, [Issue.t()]}`), `:merge_commit_sha`
-  (`pr_url -> {:ok, sha | nil}`) and `:commit_included?` (`pr_url, sha, build_sha -> {:ok, boolean}`).
+  whose record names none), `:merge_commit_sha` (`pr_url -> {:ok, sha | nil}`) and
+  `:commit_included?` (`pr_url, sha, build_sha -> {:ok, boolean}`).
   """
   @spec resolve([Issue.t()], BuildInfo.t(), cache(), Enumerable.t(String.t()), keyword()) :: cache()
   def resolve(issues, %{sha: build_sha, repo: build_repo} = build, cache, terminal_states, opts)
       when is_binary(build_sha) and is_binary(build_repo) do
-    candidates = Enum.filter(issues, &candidate?(&1, terminal_states))
+    issues = with_dependencies(issues)
+    candidates = Enum.filter(issues, fn {issue, blockers} -> candidate?(issue, blockers, terminal_states) end)
 
     cache =
       cache
@@ -88,9 +96,27 @@ defmodule SymphonyElixir.UpdateHold do
   end
 
   def resolve(issues, build, cache, terminal_states, opts) do
-    sync_pauses(issues, build, cache, terminal_states, opts)
+    sync_pauses(with_dependencies(issues), build, cache, terminal_states, opts)
     cache
   end
+
+  defp with_dependencies(issues), do: for(%Issue{} = issue <- issues, do: {issue, dependencies(issue)})
+
+  # The ticket's stored `:done` dependencies, each as the issue its record describes: its id,
+  # identifier, phase (as its state), labels and repo. One Symphony holds no record of has no state.
+  # A record that can't be read gives none.
+  # An issue with no id has none (`RunStore.dependencies/1`), and the store's error reads as none:
+  # `{:error, _}` matches no entry below.
+  defp dependencies(%Issue{id: issue_id}) do
+    for {%{kind: :done} = entry, record} <- List.wrap(RunStore.dependencies(issue_id)), do: dependency_issue(entry, record)
+  end
+
+  defp dependency_issue(entry, %{} = record) do
+    record = TicketState.normalize(record)
+    %Issue{id: entry.issue_id, identifier: entry.identifier || record.issue_identifier, state: record.phase, labels: record.labels, repo_key: record.repo_key}
+  end
+
+  defp dependency_issue(entry, nil), do: %Issue{id: entry.issue_id, identifier: entry.identifier}
 
   @doc """
   The hold on `issue`, or nil when it may be dispatched as far as app updates go. It is held while a
@@ -100,7 +126,7 @@ defmodule SymphonyElixir.UpdateHold do
   """
   @spec hold(Issue.t(), BuildInfo.t(), cache(), Enumerable.t(String.t())) :: hold() | nil
   def hold(%Issue{} = issue, build, cache, terminal_states) do
-    with %{} = hold <- decide(issue, build, cache, terminal_states) do
+    with %{} = hold <- decide(issue, dependencies(issue), build, cache, terminal_states) do
       put_reasons(issue, hold, owned_reasons(issue))
       hold
     end
@@ -123,13 +149,13 @@ defmodule SymphonyElixir.UpdateHold do
   def reasons(_repo_key, _issue_id), do: []
 
   @doc """
-  The blocker each of `reasons` (`reasons/2`) waits on, found among `issue`'s blockers by the cached
-  pull request: its identifier and merge commit, both nil when the cache doesn't know it (yet).
+  The blocker each of `reasons` (`reasons/2`) waits on, found among `issue`'s stored dependencies by
+  the cached pull request: its identifier and merge commit, both nil when the cache doesn't know it (yet).
   """
   @spec blockers(Issue.t(), [Pauses.reason()], cache()) :: [waiting()]
   def blockers(%Issue{} = issue, reasons, cache) do
     merged =
-      for %{id: blocker_id} = blocker <- issue.blocked_by,
+      for %{id: blocker_id} = blocker <- dependencies(issue),
           {:merged, pr_url, merge_sha} <- [Map.get(cache.blockers, blocker_id)],
           into: %{},
           do: {pr_number(pr_url), %{identifier: Map.get(blocker, :identifier), merge_sha: merge_sha}}
@@ -153,11 +179,11 @@ defmodule SymphonyElixir.UpdateHold do
     |> Enum.map(fn {blocker, reason} -> ReleaseBuild.line(blocker.merge_sha, fix_name(blocker), opts) || reason.text end)
   end
 
-  defp decide(%Issue{} = issue, %{sha: build_sha, repo: build_repo}, cache, terminal_states)
+  defp decide(%Issue{} = issue, blockers, %{sha: build_sha, repo: build_repo}, cache, terminal_states)
        when is_binary(build_sha) and is_binary(build_repo) do
     waiting =
-      if candidate?(issue, terminal_states) do
-        for %{id: blocker_id} = blocker <- issue.blocked_by,
+      if candidate?(issue, blockers, terminal_states) do
+        for %{id: blocker_id} = blocker <- blockers,
             {:merged, pr_url, merge_sha} <- [Map.get(cache.blockers, blocker_id)],
             Map.get(cache.included, {merge_sha, build_sha}) == false do
           %{identifier: Map.get(blocker, :identifier), merge_sha: merge_sha, pull_request: pr_number(pr_url)}
@@ -171,18 +197,18 @@ defmodule SymphonyElixir.UpdateHold do
     end
   end
 
-  defp decide(_issue, _build, _cache, _terminal_states), do: nil
+  defp decide(_issue, _blockers, _build, _cache, _terminal_states), do: nil
 
   # Each polled ticket's pause follows the decision: the reasons it calls for are set, and those of
   # its own whose build arrived are cleared.
   defp sync_pauses(issues, build, cache, terminal_states, opts) do
-    for %Issue{id: issue_id} = issue when is_binary(issue_id) <- issues do
+    for {%Issue{id: issue_id} = issue, blockers} when is_binary(issue_id) <- issues do
       issue = %{issue | repo_key: issue.repo_key || Keyword.get(opts, :repo_key)}
       held = owned_reasons(issue)
-      hold = decide(issue, build, cache, terminal_states)
+      hold = decide(issue, blockers, build, cache, terminal_states)
       if hold, do: put_reasons(issue, hold, held)
       waiting = if hold, do: Enum.map(hold.blockers, & &1.pull_request), else: []
-      clear_arrived(issue, held, &arrived?(&1, issue, build, cache, terminal_states, waiting))
+      clear_arrived(issue, held, &arrived?(&1, {issue, blockers}, build, cache, terminal_states, waiting))
     end
 
     :ok
@@ -215,18 +241,18 @@ defmodule SymphonyElixir.UpdateHold do
 
   # A reason the decision still calls for stays; any other is answered once the running build has no
   # sha, the ticket is no longer held for a build, or the cache says its build arrived.
-  defp arrived?(%{waits_on: %{pull_request: number}}, issue, build, cache, terminal_states, waiting) do
+  defp arrived?(%{waits_on: %{pull_request: number}}, {issue, blockers}, build, cache, terminal_states, waiting) do
     cond do
       number in waiting -> false
       not is_binary(Map.get(build, :sha)) or not is_binary(Map.get(build, :repo)) -> true
-      not candidate?(issue, terminal_states) -> true
-      true -> build_arrived?(issue, number, build.sha, cache)
+      not candidate?(issue, blockers, terminal_states) -> true
+      true -> build_arrived?(blockers, number, build.sha, cache)
     end
   end
 
   # The blocker whose fix it waits on is in the build, or every blocker is known and none of them
   # merged that pull request any more. A blocker the cache doesn't know keeps the reason.
-  defp build_arrived?(%Issue{blocked_by: blockers}, number, build_sha, cache) do
+  defp build_arrived?(blockers, number, build_sha, cache) do
     facts = for %{id: blocker_id} when is_binary(blocker_id) <- blockers, do: Map.fetch(cache.blockers, blocker_id)
 
     merge_sha =
@@ -278,43 +304,39 @@ defmodule SymphonyElixir.UpdateHold do
     end
   end
 
-  # A `Todo` ticket whose blockers are all terminal: the plain blocked-by gate would release it. The
+  # A `Todo` ticket whose stored `:done` dependencies are all met (`SymphonyElixir.Dispatch.DependsOn`:
+  # terminal, or merged and waiting on its own sub-tickets): the dependency gate would release it. The
   # release gate's fix ticket is never one: the build it would wait for publishes only once its own
   # fix lands.
-  defp candidate?(%Issue{state: state, blocked_by: [_ | _]} = issue, terminal_states) when is_binary(state) do
-    normalize(state) == @todo_state and Issue.open_blockers(issue, terminal_states) == [] and
+  defp candidate?(%Issue{state: state} = issue, [_ | _] = blockers, terminal_states) when is_binary(state) do
+    normalize(state) == @todo_state and Enum.all?(blockers, &met?(&1, terminal_states)) and
       not skip_labelled?(issue) and not ReleaseGate.fix_ticket?(issue.repo_key, issue.identifier)
   end
 
-  defp candidate?(_issue, _terminal_states), do: false
+  defp candidate?(_issue, _blockers, _terminal_states), do: false
 
+  defp met?(%Issue{id: id, state: state}, terminal_states) when is_binary(state),
+    do: terminal?(state, terminal_states) or SubIssueWait.merged_blocker?(%{id: id, state: state})
+
+  defp met?(_blocker, _terminal_states), do: false
+
+  # Each done blocker of a candidate not in the cache yet, read from its record: one merged and
+  # waiting on its own sub-tickets is not looked up, its pull request may not be its last.
   defp resolve_blockers(cache, candidates, build, terminal_states, opts) do
-    missing =
-      for %Issue{blocked_by: blockers} <- candidates,
-          %{id: blocker_id} when is_binary(blocker_id) <- blockers,
+    facts =
+      for {_issue, blockers} <- candidates,
+          %Issue{id: blocker_id} = blocker when is_binary(blocker_id) <- blockers,
           not Map.has_key?(cache.blockers, blocker_id),
-          uniq: true,
-          do: blocker_id
+          terminal?(blocker.state, terminal_states),
+          {:ok, fact} <- [blocker_fact(blocker, build, blocker_opts(blocker, opts))],
+          into: %{},
+          do: {blocker_id, fact}
 
-    case fetch_blockers(missing, opts) do
-      {:ok, blockers} ->
-        facts =
-          for %Issue{id: blocker_id} = blocker <- blockers,
-              blocker_id in missing,
-              terminal?(blocker.state, terminal_states),
-              {:ok, fact} <- [blocker_fact(blocker, build, opts)],
-              into: %{},
-              do: {blocker_id, fact}
-
-        %{cache | blockers: Map.merge(cache.blockers, facts)}
-
-      {:error, _reason} ->
-        cache
-    end
+    %{cache | blockers: Map.merge(cache.blockers, facts)}
   end
 
-  defp fetch_blockers([], _opts), do: {:ok, []}
-  defp fetch_blockers(ids, opts), do: Keyword.get(opts, :fetch_issues, &Tracker.fetch_issue_states_by_ids/1).(ids)
+  # A blocker's pull request is read under the repo of its own record, else `opts[:repo_key]`.
+  defp blocker_opts(%Issue{repo_key: repo_key}, opts), do: if(is_binary(repo_key), do: Keyword.put(opts, :repo_key, repo_key), else: opts)
 
   defp blocker_fact(%Issue{} = blocker, build, opts) do
     if skip_labelled?(blocker), do: {:ok, :skip}, else: merged_pull_request(blocker, build, opts)
@@ -342,7 +364,7 @@ defmodule SymphonyElixir.UpdateHold do
 
   defp resolve_included(cache, candidates, %{sha: build_sha}, opts) do
     merged =
-      for %Issue{blocked_by: blockers} <- candidates,
+      for {_issue, blockers} <- candidates,
           %{id: blocker_id} <- blockers,
           {:merged, pr_url, merge_sha} <- [Map.get(cache.blockers, blocker_id)],
           uniq: true,
@@ -374,9 +396,9 @@ defmodule SymphonyElixir.UpdateHold do
     end
   end
 
-  # A blocker reopened since the poll is left out: its pull request may not be its last.
-  defp terminal?(state, terminal_states) when is_binary(state), do: Enum.any?(terminal_states, &(normalize(&1) == normalize(state)))
-  defp terminal?(_state, _terminal_states), do: false
+  # A blocker reopened is left out: its pull request may not be its last.
+  # Only a met dependency's state reaches it, which is a phase name.
+  defp terminal?(state, terminal_states), do: Enum.any?(terminal_states, &(normalize(&1) == normalize(state)))
 
   defp skip_labelled?(%Issue{labels: labels}), do: Enum.any?(labels, &(is_binary(&1) and normalize(&1) == @skip_label))
 

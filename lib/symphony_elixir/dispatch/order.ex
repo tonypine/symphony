@@ -11,7 +11,7 @@ defmodule SymphonyElixir.Dispatch.Order do
   of either lives here. Each walked ticket comes out with an `outcome`:
 
   - `running`: a run works on it;
-  - `held`: a gate keeps it out of the pass (a blocker, a hold, its repository's pause, the priority
+  - `held`: a gate keeps it out of the pass (a stored dependency, a hold, its repository's pause, the priority
     filter, the usage limit, a spent budget...), with the gate's reason and the `rule` behind it;
   - `paused`: its gates are open but the whole pass is paused (Symphony's pause, the workspace quota,
     the daily token budget);

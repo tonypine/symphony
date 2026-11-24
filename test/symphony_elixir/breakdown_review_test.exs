@@ -332,25 +332,25 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       assert review([parent], orchestrator_state()).breakdown_reviews == %{"parent" => ["c1"]}
     end
 
-    test "after promotion only the sub-ticket no blocked-by link holds dispatches first" do
+    test "after promotion only the sub-ticket no stored dependency holds dispatches first" do
       state = orchestrator_state()
-      first = %Issue{id: "c1", identifier: "MT-71", title: "First", state: "Todo", blocked_by: []}
-      blocker = %{id: "c1", identifier: "MT-71", state: "Todo"}
-      second = %Issue{id: "c2", identifier: "MT-72", title: "Second", state: "Todo", blocked_by: [blocker]}
-      blockers = [blocker, %{blocker | id: "c2", identifier: "MT-72"}]
-      verification = %Issue{id: "c3", identifier: "MT-73", title: "Final verification: X", state: "Todo", blocked_by: blockers}
-      sweep([first, second, verification])
+      repo_key = Config.repo_key!()
+      for {id, identifier} <- [{"c1", "MT-71"}, {"c2", "MT-72"}, {"c3", "MT-73"}], do: :ok = RunStore.put_ticket_state(TicketState.new(repo_key, id, %{phase: "Todo", issue_identifier: identifier}))
+      :ok = RunStore.add_dependency("c2", "c1", :done)
+      :ok = RunStore.add_dependency("c3", "c1", :done)
+      :ok = RunStore.add_dependency("c3", "c2", :done)
+      first = %Issue{id: "c1", identifier: "MT-71", title: "First", state: "Todo"}
+      second = %Issue{id: "c2", identifier: "MT-72", title: "Second", state: "Todo"}
+      verification = %Issue{id: "c3", identifier: "MT-73", title: "Final verification: X", state: "Todo"}
 
       assert Orchestrator.should_dispatch_issue_for_test(first, state)
       refute Orchestrator.should_dispatch_issue_for_test(second, state)
       refute Orchestrator.should_dispatch_issue_for_test(verification, state)
 
-      done = %{blocker | state: "Done"}
-      unblocked = %{second | blocked_by: [done]}
-      still_blocked = %{verification | blocked_by: [done, %{done | id: "c2", identifier: "MT-72", state: "In Progress"}]}
-      sweep([unblocked, still_blocked])
-      assert Orchestrator.should_dispatch_issue_for_test(unblocked, state)
-      refute Orchestrator.should_dispatch_issue_for_test(still_blocked, state)
+      :ok = RunStore.update_ticket_state("c1", %{phase: "Done"})
+      :ok = RunStore.update_ticket_state("c2", %{phase: "In Progress"})
+      assert Orchestrator.should_dispatch_issue_for_test(second, state)
+      refute Orchestrator.should_dispatch_issue_for_test(verification, state)
     end
 
     test "rejecting the plan cancels its Backlog sub-tickets before the re-plan dispatches, without touching new ones" do
@@ -564,7 +564,4 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       retry_attempts: %{}
     }
   end
-
-  # The poll's dependency sweep: each Todo ticket is paused on its open blockers, which the gate reads.
-  defp sweep(issues), do: Orchestrator.sweep_dependencies_for_test(Config.repo_key!(), issues, Config.settings!().tracker.terminal_states)
 end

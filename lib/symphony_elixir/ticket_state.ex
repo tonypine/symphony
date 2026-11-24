@@ -12,8 +12,8 @@ defmodule SymphonyElixir.TicketState do
   it last read of the PR for the ticket read (`pull_request`, kept once the watch ends), and
   the sequence number of the last event in its event stream (`event_seq`, `SymphonyElixir.TicketEvents`),
   and what the last observation of the ticket in Linear found (`observe/4`): its title, description,
-  team, project, labels, priority, assignee, open blockers and sub-issues (each by id, identifier and
-  state), parent, URL, creation time and Linear's `updatedAt`, with when it was observed, which read
+  team, project, labels, priority, assignee, sub-issues (each by id, identifier and state), parent,
+  URL, creation time and Linear's `updatedAt`, with when it was observed, which read
   brought the last change (`observed_from`) and when a webhook said the ticket was removed
   (`removed_at`), and when the ticket's newest comment was made (`last_comment_at`, from a `Comment`
   delivery or a read's comments, `observe_comment/3`), and the projections to Linear that failed and wait for the reconciler
@@ -39,7 +39,8 @@ defmodule SymphonyElixir.TicketState do
   the tickets it depends on (`depends_on`, `SymphonyElixir.Dispatch.DependsOn`): each by its issue
   id and identifier, with what it needs of it, `:done` (merged) or `:released` (merged and in the
   running build). Only `SymphonyElixir.RunStore.add_dependency/3` and `remove_dependency/2` write
-  it: no read of Linear fills, changes or clears it, and it is not the observed `blockers`;
+  it: no read of Linear fills, changes or clears it, and Linear's blocker links are never read (a
+  record stored with the `blockers` an older build observed loads without them);
   since when the ticket holds a dispatch slot (`slot_held_since`, `SymphonyElixir.Dispatch.Slots`):
   set by the orchestrator when the ticket takes a slot and cleared when it gives the slot up, nil
   while it holds none, so a restart keeps every holder;
@@ -316,7 +317,6 @@ defmodule SymphonyElixir.TicketState do
           labels: [String.t()],
           priority: integer() | nil,
           assignee: String.t() | nil,
-          blockers: [link()],
           sub_issues: [link()],
           parent: SymphonyElixir.Connected.parent() | nil,
           url: String.t() | nil,
@@ -375,7 +375,7 @@ defmodule SymphonyElixir.TicketState do
   @kept_when_delivery_lacks [:description, :team, :project]
 
   # The fields an observation of the ticket in Linear writes (`observe/4`).
-  @observed_fields ~w(issue_identifier phase title description team project labels priority assignee blockers sub_issues parent url created_at linear_updated_at last_comment_at)a
+  @observed_fields ~w(issue_identifier phase title description team project labels priority assignee sub_issues parent url created_at linear_updated_at last_comment_at)a
 
   @doc """
   A new record for `repo_key`'s `issue_id`, with any `attrs` applied. `attrs` may set `:phase`,
@@ -418,7 +418,6 @@ defmodule SymphonyElixir.TicketState do
       labels: string_list(Map.get(record, :labels)),
       priority: integer_or_nil(Map.get(record, :priority)),
       assignee: map_string(record, :assignee),
-      blockers: links(Map.get(record, :blockers)),
       sub_issues: links(Map.get(record, :sub_issues)),
       parent: normalize_parent(Map.get(record, :parent)),
       url: map_string(record, :url),
@@ -468,7 +467,6 @@ defmodule SymphonyElixir.TicketState do
       labels: [],
       priority: nil,
       assignee: nil,
-      blockers: [],
       sub_issues: [],
       parent: nil,
       url: nil,
@@ -498,8 +496,7 @@ defmodule SymphonyElixir.TicketState do
   @doc """
   Applies what Linear says of the ticket (`issue`, a `SymphonyElixir.Linear.Issue`) to its record:
   its state as the `phase`, its identifier, title, description (as the read gives it, the summary
-  block already stripped), team, project, labels, priority, assignee, blockers (its `blocked_by` by
-  id, identifier and state; the caller keeps only the open ones), sub-issues, parent, URL,
+  block already stripped), team, project, labels, priority, assignee, sub-issues, parent, URL,
   `created_at` and `updated_at` as `linear_updated_at`. Returns the record and what happened:
 
   - `:stale` when the issue's `updated_at` is older than the record's `linear_updated_at`: the fact
@@ -700,7 +697,6 @@ defmodule SymphonyElixir.TicketState do
       labels: issue.labels,
       priority: issue.priority,
       assignee: issue.assignee_id,
-      blockers: issue.blocked_by,
       sub_issues: issue.sub_issues,
       parent: issue.parent,
       url: issue.url,

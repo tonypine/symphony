@@ -983,10 +983,8 @@ defmodule SymphonyElixir.Situation do
   defp dependency_name(%{identifier: identifier}) when is_binary(identifier), do: identifier
   defp dependency_name(_dependency), do: "another ticket"
 
-  # The ticket's own record says its phase; the link Linear's last read saw is older.
-  defp phase_of_ticket(identifier, ctx) do
-    ctx.phase_of.(identifier) || Enum.find_value(ctx.record.blockers, &(&1.identifier == identifier && &1.state))
-  end
+  # The ticket's own record says its phase.
+  defp phase_of_ticket(identifier, ctx), do: ctx.phase_of.(identifier)
 
   defp lifts(%{waits_on: %{action: action}}) when is_binary(action), do: "Starts when you #{action} it."
   defp lifts(_reason), do: "Starts when that clears."
