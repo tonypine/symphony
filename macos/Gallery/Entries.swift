@@ -236,8 +236,8 @@ let galleryEntries: [GalleryEntry] = [
             "SymphonyBarUI/PlanPanelView.swift", "SymphonyBarCore/PlanPanel.swift",
         ]),
     GalleryEntry(
-        id: "home", title: "Home", kind: .screen, prefixes: ["home-lists", "home-unavailable"],
-        files: ["SymphonyBar/HomeView.swift", "SymphonyBarCore/Home"]),
+        id: "home", title: "Home", kind: .screen, prefixes: ["home-queue", "home-unavailable"],
+        files: ["SymphonyBar/HomeView.swift", "SymphonyBarCore/Home", "SymphonyBarUI/HomeQueueCards.swift"]),
     GalleryEntry(
         id: "inbox", title: "Inbox, its reviews and the peek", kind: .screen,
         prefixes: ["inbox-drawer", "inbox-blocked-", "plan-questions", "plan-unapplied", "plan-unasked", "watcher-decision", "peek-"],

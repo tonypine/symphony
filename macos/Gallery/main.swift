@@ -992,17 +992,53 @@ func menuWaitingSituations() -> some View {
     )
 }
 
-/// Home (TP-1499) from the `home` fixture's Home read, which holds the catalog's `PROGRESS` and `QUEUE`
-/// (`docs/design/catalog/stories.js`), on the fixture's clock, in a window `window` wide less its sidebar: the queue's
-/// long chain folded into its pill, or `opened` (`home-a-long-chain-shown-whole`), with `selection` picked.
+/// Home (TP-1609) from the `home-queue` fixture's generated queue, on the fixture's clock, in a window `window` wide less
+/// its sidebar: three slots (one working, one waiting on you, one empty) and the queue's first rows; `view` picks a
+/// saved view above the queue.
 @MainActor
-func homeLists(window: CGFloat, opened: Set<String> = [], selection: TreeKey<String>? = nil) -> some View {
+func homeQueue(window: CGFloat, view: String? = nil, rows: Int = 14) -> some View {
     let width = window - DesignTokens.Layout.sidebarWidth
-    let url = situationsAPI.appendingPathComponent("home/api/v1/home.json")
-    guard let read = HomeRead.decode(try! Data(contentsOf: url)) else { fatalError("The home fixture's Home read doesn't read") }
-    return HomeBody(lists: HomeLists(read: read, reference: situationsNow), opened: opened, selection: selection)
-        .frame(width: width, alignment: .topLeading)
-        .background(DesignTokens.Surface.window.color)
+    let api = situationsAPI.appendingPathComponent("home-queue/api/v1")
+    guard let fixture = HomeQueueFixture(try! Data(contentsOf: api.appendingPathComponent(HomeQueueFixture.fileName))) else {
+        fatalError("The home-queue fixture doesn't read")
+    }
+    let viewsData = try? Data(contentsOf: api.appendingPathComponent("views.json"))
+    let query = "offset=0&limit=100" + (view.map { "&view=\($0)" } ?? "")
+    guard let read = HomeRead.decode(fixture.answer(query: query, views: viewsData, slotCount: nil)) else {
+        fatalError("The home-queue fixture's Home read doesn't read")
+    }
+    let model = HomeQueueModel(fetch: { _, _ in .unchanged }, send: { _ in .done }, view: view)
+    model.load(read)
+    let views = viewsData.flatMap { TicketView.views(fromViews: $0) } ?? []
+    let range = 0..<min(rows, model.pager.count)
+    return HomePageContent(
+        model: model, views: views, notices: [], reference: situationsNow, actions: HomeActions(), range: range,
+        numberWidth: QueueRow.numberWidth(widest: model.pager.widestNumber(in: range))
+    )
+    .frame(width: width, alignment: .topLeading)
+    .background(DesignTokens.Surface.window.color)
+}
+
+/// The strip that stays on top once the cards scroll away, over the queue's first rows.
+@MainActor
+func homeQueueStrip(window: CGFloat) -> some View {
+    let width = window - DesignTokens.Layout.sidebarWidth
+    let api = situationsAPI.appendingPathComponent("home-queue/api/v1")
+    let fixture = HomeQueueFixture(try! Data(contentsOf: api.appendingPathComponent(HomeQueueFixture.fileName)))!
+    let read = HomeRead.decode(fixture.answer(query: "offset=0&limit=100", views: nil, slotCount: nil))!
+    let model = HomeQueueModel(fetch: { _, _ in .unchanged }, send: { _ in .done })
+    model.load(read)
+    let range = 0..<12
+    let numberWidth = QueueRow.numberWidth(widest: model.pager.widestNumber(in: range))
+    return VStack(spacing: 0) {
+        HomeStrip(cards: model.cards, reference: situationsNow, numberWidth: numberWidth)
+        HomeQueueList(pager: model.pager, range: range, numberWidth: numberWidth)
+            .padding(.horizontal, DesignTokens.HomeQueue.gutter)
+            .frame(height: Double(range.count) * HomeQueuePager.pitch, alignment: .top)
+            .clipped()
+    }
+    .frame(width: width, alignment: .topLeading)
+    .background(DesignTokens.Surface.window.color)
 }
 
 /// Home on a Symphony that predates its read: the Empty state that asks for an update, never the old board.
@@ -2072,13 +2108,12 @@ MainActor.assumeIsolated {
         }
         render(inboxContextSituations(), scheme, to: "situations-inbox-context-\(suffix).png")
         render(menuWaitingSituations(), scheme, to: "situations-menu-waiting-\(suffix).png")
-        // Home (TP-1499): the two lists from the catalog's data, the long chain folded and shown whole, and Home on a
-        // Symphony without its read, at the laptop's and the desktop's widths.
+        // Home (TP-1609): the slots and the queue from the generated fixture, a saved view picked, the strip over the
+        // queue, and Home on a Symphony without its read, at the laptop's and the desktop's widths.
         do {
-            renderScreen(scheme, to: "home-lists") { window in homeLists(window: window, selection: .row("BIL-306")) }
-            renderScreen(scheme, to: "home-lists-chain-open") { window in
-                homeLists(window: window, opened: ["TP-1481"], selection: .row("TP-1484"))
-            }
+            renderScreen(scheme, to: "home-queue") { window in homeQueue(window: window) }
+            renderScreen(scheme, to: "home-queue-filtered") { window in homeQueue(window: window, view: "view-hub") }
+            renderScreen(scheme, to: "home-queue-strip") { window in homeQueueStrip(window: window) }
             renderScreen(scheme, to: "home-unavailable") { window in homeUnavailable(window: window) }
         }
         render(inboxDrawer(), scheme, to: "inbox-drawer-\(suffix).png")

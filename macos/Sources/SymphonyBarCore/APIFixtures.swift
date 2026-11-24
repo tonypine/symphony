@@ -84,6 +84,7 @@ public struct APIFixtures: Equatable {
         let file = file(forPath: url.path)
         let method = request.httpMethod?.uppercased() ?? "GET"
         let isPost = Self.isMove(method)
+        if !isPost, let generated = homeQueue(url) { return (generated, response(url, statusCode: 200)) }
         let fixture = (isPost ? nil : file.flatMap(afterFixture(of:)) ?? file.flatMap { queryFixture(of: $0, query: url.query) })
             ?? file.flatMap { try? Data(contentsOf: $0) }
         if isPost {
@@ -102,6 +103,29 @@ public struct APIFixtures: Equatable {
             return (Data(body.utf8), response(url, statusCode: 404))
         }
         return (fixture, response(url, statusCode: 200))
+    }
+
+    /// The Home read from a generated queue (`HomeQueueFixture`) for a GET of `api/v1/home` when the directory holds
+    /// `api/v1/home.queue.json`; nil otherwise.
+    func homeQueue(_ url: URL) -> Data? {
+        guard url.path == "/" + HomeRead.path, let file = file(forPath: url.path) else { return nil }
+        let stem = file.deletingPathExtension()
+        guard let data = try? Data(contentsOf: stem.deletingLastPathComponent().appendingPathComponent(HomeQueueFixture.fileName)),
+              let fixture = HomeQueueFixture(data)
+        else { return nil }
+        let views = try? Data(contentsOf: stem.deletingLastPathComponent().appendingPathComponent("views.json"))
+        return fixture.answer(query: url.query, views: views, slotCount: lastSlotCount())
+    }
+
+    /// The count the last `POST /api/v1/control/slots` in the request log set, nil before one.
+    func lastSlotCount() -> Int? {
+        guard let text = try? String(contentsOf: requestLog, encoding: .utf8) else { return nil }
+        return text.split(separator: "\n").compactMap { line -> Int? in
+            guard let entry = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any],
+                  entry["path"] as? String == "/" + ControlAction.slots(1).path
+            else { return nil }
+            return (entry["body"] as? [String: Any])?["count"] as? Int
+        }.last
     }
 
     /// The GET answer `<path>.png`, `<path>.jpg`, `<path>.txt` or `<path>.410.json` gives next to `file` (`<path>.json`).

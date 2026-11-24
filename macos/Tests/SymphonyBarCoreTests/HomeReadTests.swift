@@ -2,293 +2,399 @@ import Foundation
 import XCTest
 @testable import SymphonyBarCore
 
-/// Home's two lists (TP-1499) from `GET /api/v1/home`: what is in progress under its epics, and the queue as a tree, each
-/// row one line with its glyph, its trail and its move.
+/// Home, the window to the queue (TP-1609), from `GET /api/v1/home`: the slots and the paged queue, read from the
+/// generated `home-queue` fixture as the fixtures serve it to QA (3 slots: one working, one waiting on you, one empty;
+/// a queue of 1,245 tickets; two saved views).
+@MainActor
 final class HomeReadTests: XCTestCase {
-    /// The `home` fixture's clock: its Home read holds the catalog's `PROGRESS` and `QUEUE`.
     private let reference = ISO8601DateFormatter().date(from: "2026-10-07T14:20:00Z")!
+    private var log: URL!
 
-    // MARK: - In progress
-
-    /// Walkthrough step 1: "In progress" lists what has started, tickets of an epic under the epic with its strip.
-    func testInProgressPutsAnEpicsTicketsUnderItsRowAndTheRestAtTheTopLevel() throws {
-        let lists = try lists()
-
-        XCTAssertEqual(lists.progress.map(\.id), ["SHOP-280", "BIL-300", "TP-1492", "TP-1480", "TP-1376"])
-        XCTAssertEqual(lists.progress[0].children.map(\.id), ["SHOP-305", "SHOP-301"])
-        XCTAssertEqual(lists.progress[1].children.map(\.id), ["BIL-306", "BIL-307"])
-        XCTAssertTrue(lists.progress[2...].allSatisfy(\.children.isEmpty))
-
-        let epic = try XCTUnwrap(lists.row("SHOP-280"))
-        XCTAssertTrue(epic.isEpic)
-        XCTAssertEqual(epic.lead, .epic)
-        XCTAssertEqual(epic.title, "Checkout that survives a reload")
-        XCTAssertEqual(epic.value, "4 of 9")
-        XCTAssertEqual(epic.issueID, "epic-shop-280")
-        XCTAssertEqual(epic.strip?.map(\.status), [.done, .done, .done, .done, .working, .working, nil, nil, nil])
-        XCTAssertEqual(epic.strip?.filter(\.live).count, 2, "the tickets in progress breathe")
-        XCTAssertNil(epic.badge)
-        XCTAssertNil(epic.move)
-
-        let plans = try XCTUnwrap(lists.row("BIL-300"))
-        XCTAssertEqual(plans.value, "1 of 4")
-        XCTAssertEqual(plans.strip?.map(\.status), [.done, .you, .working, nil])
+    override func setUp() {
+        log = FileManager.default.temporaryDirectory.appendingPathComponent("home-queue-\(UUID().uuidString).jsonl")
     }
 
-    /// A row is one line: the live dot while a run works, the situation's glyph otherwise, the situation as a badge
-    /// and how long it has held, on Symphony's clock.
-    func testATicketRowCarriesItsGlyphBadgeAndAge() throws {
-        let lists = try lists()
-
-        let coding = try XCTUnwrap(lists.row("SHOP-305"))
-        XCTAssertEqual(coding.lead, .live)
-        XCTAssertEqual(coding.badge, HomeLists.Row.Badge(status: .working, word: "Coding"))
-        XCTAssertEqual(coding.value, "14 min")
-        XCTAssertNil(coding.after)
-        XCTAssertNil(coding.epic, "the epic is a chip in the queue only")
-
-        let ci = try XCTUnwrap(lists.row("SHOP-301"))
-        XCTAssertEqual(ci.lead, .status(.working))
-        XCTAssertEqual(ci.badge?.word, "Waiting for CI")
-        XCTAssertEqual(ci.value, "6 min")
-
-        XCTAssertEqual(lists.row("BIL-306")?.value, "3 h 12 min")
-        XCTAssertEqual(lists.row("TP-1376")?.badge, HomeLists.Row.Badge(status: .problem, word: "Retrying at 16:02"))
+    override func tearDown() {
+        try? FileManager.default.removeItem(at: log)
     }
 
-    /// Walkthrough step 4: a ticket waiting on the Director's answer carries Answer; one stopped by them Unblock; no
-    /// other row has a button.
-    func testOnlyATicketThatNeedsTheDirectorCarriesItsMove() throws {
-        let lists = try lists()
-
-        XCTAssertEqual(lists.row("BIL-306")?.move, HomeLists.Row.Move(name: "answer", title: "Answer", reason: nil))
-        XCTAssertEqual(lists.row("BIL-306")?.lead, .status(.you))
-        XCTAssertEqual(lists.row("TP-1480")?.move, HomeLists.Row.Move(name: "unblock", title: "Unblock", reason: nil))
-        let moving = lists.rows.values.filter { $0.move != nil }.map(\.identifier).sorted()
-        XCTAssertEqual(moving, ["BIL-306", "TP-1480"])
+    private static func directory(_ name: String) -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/director-app/\(name)", isDirectory: true)
     }
 
-    func testAMoveTheReadRefusesKeepsItsReason() {
-        XCTAssertEqual(
-            HomeLists.move(HomeRead.Move(name: "unblock", allowed: false, reason: "A run is starting")),
-            HomeLists.Row.Move(name: "unblock", title: "Unblock", reason: "A run is starting")
+    private static func fixture(_ name: String, in directory: String = "home-queue") -> URL {
+        self.directory(directory).appendingPathComponent("api/v1/\(name)")
+    }
+
+    private var fixtures: APIFixtures { APIFixtures(directory: Self.directory("home-queue"), requestLog: log) }
+
+    /// The fixtures' answer to a read of `path`, as the window's client gives it.
+    private func get(_ path: String) -> ConditionalResult {
+        let url = LiveAPIClient.url(path, base: APIFixtures.baseURL)!
+        let (data, response) = fixtures.answer(URLRequest(url: url))
+        return .changed(EndpointResult(.answered(data, statusCode: response.statusCode)), etag: nil)
+    }
+
+    private func homeRead(_ path: String = HomeRead.path(offset: 0)) throws -> HomeRead {
+        guard case let .changed(.loaded(data), _) = get(path) else { throw XCTSkip("no answer") }
+        return try XCTUnwrap(HomeRead.decode(data))
+    }
+
+    /// A page model on the fixtures: every read and move goes to them, each recorded.
+    private final class Calls {
+        var reads: [String] = []
+        var moves: [ControlAction] = []
+    }
+
+    private func makeModel(_ calls: Calls, refuse: Bool = false) -> HomeQueueModel {
+        let fixtures = self.fixtures
+        return HomeQueueModel(
+            fetch: { [unowned self] path, _ in
+                calls.reads.append(path)
+                return self.get(path)
+            },
+            send: { action in
+                calls.moves.append(action)
+                if refuse { return .failed("Couldn't do it: the engine refused") }
+                _ = fixtures.answer(ControlAPI.request(action, base: APIFixtures.baseURL, token: APIFixtures.token))
+                return .done
+            }
         )
-        XCTAssertEqual(HomeLists.move(HomeRead.Move(name: "unblock", allowed: false)).reason, TicketActionRail.unknownReason)
-        XCTAssertEqual(HomeLists.move(HomeRead.Move(name: "retry")).title, "Retry")
     }
 
-    // MARK: - Queue
+    // MARK: - c1: two sections, one card per slot, an empty slot, no slotted ticket in the queue
 
-    /// Walkthrough step 2: the queue as a tree; a chain of nine shows three rows and "+6".
-    func testTheQueueIsATreeAndALongChainFoldsPastTwoSteps() throws {
-        let lists = try lists()
+    func testInProgressHasOneCardPerSlotAndAnEmptySlotShowsEmpty() async throws {
+        let read = try homeRead()
+        XCTAssertEqual(read.slotCount, 3)
+        XCTAssertEqual(read.slots.map(\.number), [1, 2, 3])
+        XCTAssertEqual(read.slots.map { $0.ticket?.identifier }, ["TP-1619", "TP-1594", nil])
+        XCTAssertTrue(read.slots[2].isEmpty)
 
-        XCTAssertEqual(lists.queue.map(\.id), ["TP-1481", "SHOP-311", "BIL-308", "MOT-93"])
-        XCTAssertEqual(lists.queue[0].descendants, 8)
-        XCTAssertEqual(lists.queue[1].children.map(\.id), ["SHOP-312", "SHOP-313"])
-        XCTAssertEqual(lists.queue[1].children[0].children.map(\.id), ["SHOP-314"])
+        let working = try XCTUnwrap(read.slots[0].ticket)
+        XCTAssertTrue(working.working)
+        XCTAssertFalse(working.waitsOnYou)
+        XCTAssertEqual(working.currentStage, "coding")
+        XCTAssertEqual(working.tokens, 14_200_000)
+        XCTAssertEqual(working.tokenBudget, 100_000_000)
+        XCTAssertEqual(working.checks, HomeRead.Checks(proved: 3, total: 11, next: "Adding a dependency on a lower ticket is refused with the reason."))
+        XCTAssertNil(working.pullRequest)
 
-        let folded = TreeLines.lines(lists.queue, foldDepth: DesignTokens.Tree.foldDepth)
-        let chain = folded.prefix { $0.root == "TP-1481" }
-        XCTAssertEqual(chain.map(\.key), [.row("TP-1481"), .row("TP-1482"), .row("TP-1483"), .more("TP-1483")])
-        XCTAssertEqual(chain.last?.hidden, 6)
-        XCTAssertEqual(DesignTokens.Tree.More.text(6), "+6")
+        let waiting = try XCTUnwrap(read.slots[1].ticket)
+        XCTAssertTrue(waiting.waitsOnYou)
+        XCTAssertEqual(waiting.move, HomeRead.Move(name: "answer"))
+        XCTAssertEqual(waiting.stages.map(\.state), ["passed", "current", "not_yet", "not_yet", "not_yet"])
+        XCTAssertEqual(
+            waiting.pullRequest,
+            HomeRead.PullRequest(number: 1043, filesChanged: 11, additions: 524, deletions: 61, branch: "auto/TP-1594", ci: "passed", reviewState: "REVIEW_REQUIRED")
+        )
 
-        let open = TreeLines.lines(lists.queue, foldDepth: DesignTokens.Tree.foldDepth, opened: ["TP-1481"])
-        XCTAssertEqual(open.filter { $0.root == "TP-1481" }.count, 9, "a click shows the whole branch")
+        let calls = Calls()
+        let model = makeModel(calls)
+        await model.refresh()
+        XCTAssertTrue(model.loaded)
+        XCTAssertEqual(model.cards.map(\.number), [1, 2, 3])
+        XCTAssertEqual(model.cards.map(\.isEmpty), [false, false, true])
+        // A ticket that holds a slot is never a queue row.
+        let rows = (0..<model.pager.count).compactMap { model.pager.row(at: $0)?.identifier }
+        XCTAssertFalse(rows.isEmpty)
+        XCTAssertTrue(read.slotted.isDisjoint(with: rows))
+        XCTAssertEqual(HomeQueueModel.progressTitle, "In progress")
+        XCTAssertEqual(HomeQueueModel.queueTitle, "Queue")
     }
 
-    /// A root that waits on a ticket in progress names it at the right; a queued ticket shows its epic; a root that
-    /// waits on nothing carries its situation; every other queued row starts with the clock and has no badge or age.
-    func testAQueueRowCarriesWhatItComesAfterItsEpicAndItsSituation() throws {
-        let lists = try lists()
-
-        let root = try XCTUnwrap(lists.row("SHOP-311"))
-        XCTAssertEqual(root.after, "SHOP-305")
-        XCTAssertEqual(root.epic, "Checkout")
-        XCTAssertEqual(root.lead, .waiting)
-        XCTAssertNil(root.badge)
-        XCTAssertNil(root.value)
-        XCTAssertEqual(HomeLists.Row.afterHelp("SHOP-305"), "Starts when SHOP-305 lands")
-
-        XCTAssertEqual(lists.row("SHOP-312")?.epic, "Checkout")
-        XCTAssertNil(lists.row("SHOP-312")?.after)
-        XCTAssertEqual(lists.row("TP-1481")?.after, "TP-1480")
-        XCTAssertNil(lists.row("TP-1481")?.epic)
-
-        let ready = try XCTUnwrap(lists.row("MOT-93"))
-        XCTAssertEqual(ready.badge, HomeLists.Row.Badge(status: .idle, word: "Waiting for a slot"))
-        XCTAssertEqual(ready.lead, .status(.idle))
-        XCTAssertNil(ready.value, "no since, no age")
-        XCTAssertNil(ready.move)
+    /// A slot a ticket still holds past a lowered count keeps its card; the free numbers up to the count are empty.
+    func testCardsRunToTheCountAndKeepAHeldSlotPastIt() async {
+        let calls = Calls()
+        let model = makeModel(calls)
+        model.load(HomeRead(slotCount: 2, slots: [HomeRead.Slot(number: 4, ticket: HomeRead.SlotTicket(identifier: "TP-9"))]))
+        XCTAssertEqual(model.cards.map(\.number), [1, 2, 3, 4])
+        XCTAssertEqual(model.cards.map(\.isEmpty), [true, true, true, false])
+        model.load(HomeRead())
+        XCTAssertTrue(model.cards.isEmpty)
     }
 
-    // MARK: - Empty and unreadable
+    // MARK: - c2: the slot count control
 
-    /// Walkthrough step 3: nothing says "None right now": a list with no entries is not drawn.
-    func testAnEmptyReadHasNoList() throws {
-        let read = try XCTUnwrap(HomeRead.decode(Data(#"{"in_progress": [], "queue": {"roots": []}, "outside": {}}"#.utf8)))
-        let lists = HomeLists(read: read, reference: reference)
-        XCTAssertTrue(lists.isEmpty)
-        XCTAssertTrue(lists.rows.isEmpty)
-        XCTAssertFalse(try self.lists().isEmpty)
+    func testChangingTheSlotCountSendsItAndTheCardsFollowAtOnce() async throws {
+        XCTAssertEqual(ControlAction.slots(4).path, "api/v1/control/slots")
+        XCTAssertEqual(ControlAction.slots(4).body as? [String: Int], ["count": 4])
+        XCTAssertEqual(ControlAction.slots(4).failurePrefix, "Couldn't set the slots to 4")
+        XCTAssertNil(ControlAction.slots(4).moveIdentifier)
 
-        let bare = try XCTUnwrap(HomeRead.decode(Data("{}".utf8)))
-        XCTAssertEqual(bare, HomeRead())
+        let calls = Calls()
+        let model = makeModel(calls)
+        await model.refresh()
+        XCTAssertEqual(model.slotCount, 3)
+
+        var seen: [Int] = []
+        let watch = model.$slotCount.sink { seen.append($0) }
+        await model.setSlots(4)
+        watch.cancel()
+        XCTAssertEqual(calls.moves, [.slots(4)])
+        // The control shows 4 before any read, and the engine's answer settles it there.
+        XCTAssertEqual(seen.dropFirst().first, 4)
+        XCTAssertEqual(model.slotCount, 4)
+        XCTAssertEqual(model.cards.map(\.number), [1, 2, 3, 4])
+        XCTAssertTrue(model.cards[3].isEmpty)
+        XCTAssertEqual(fixtures.lastSlotCount(), 4)
+
+        // Kept from 1 to 6; the same count sends nothing.
+        await model.setSlots(9)
+        XCTAssertEqual(calls.moves.last, .slots(6))
+        await model.setSlots(6)
+        XCTAssertEqual(calls.moves.count, 2)
     }
 
-    func testAnAnswerThatIsNotTheReadDecodesToNothing() {
+    func testARefusedSlotCountPutsTheEnginesCountBackAndSaysWhy() async {
+        let calls = Calls()
+        let model = makeModel(calls, refuse: true)
+        await model.refresh()
+        await model.setSlots(2)
+        XCTAssertEqual(model.slotCount, 3)
+        XCTAssertEqual(model.notice, "Couldn't do it: the engine refused")
+        XCTAssertEqual(model.cards.count, 3)
+    }
+
+    // MARK: - c3: Stop frees the slot
+
+    func testStopGoesThroughTheControlRouteAndHomeReadsAgain() async throws {
+        let calls = Calls()
+        let model = makeModel(calls)
+        await model.refresh()
+        let before = calls.reads.count
+        await model.perform(.stop("TP-1619"))
+        XCTAssertEqual(calls.moves, [.stop("TP-1619")])
+        XCTAssertEqual(ControlAction.stop("TP-1619").path, "api/v1/control/stop")
+        XCTAssertGreaterThan(calls.reads.count, before, "Home reads the slots again after Stop")
+        XCTAssertNil(model.notice)
+
+        // After the engine freed the slot, the read shows it empty.
+        model.load(HomeRead(slotCount: 3, slots: [HomeRead.Slot(number: 2, ticket: HomeRead.SlotTicket(identifier: "TP-1594"))]))
+        XCTAssertEqual(model.cards.map(\.isEmpty), [true, false, true])
+    }
+
+    func testARefusedMoveSaysWhyOnThePage() async {
+        let calls = Calls()
+        let model = makeModel(calls, refuse: true)
+        await model.perform(.start("TP-1590", note: nil))
+        XCTAssertEqual(model.notice, "Couldn't do it: the engine refused")
+    }
+
+    // MARK: - c4: every ticket in its stored order with its number; a saved view keeps the real numbers
+
+    func testTheQueueListsEveryTicketInOrderWithItsNumber() async throws {
+        let read = try homeRead()
+        XCTAssertEqual(read.queue.total, 1245)
+        XCTAssertEqual(read.queue.count, 1245)
+        XCTAssertEqual(read.queue.rows.count, 100)
+        XCTAssertEqual(read.queue.nextOffset, 100)
+        XCTAssertEqual(read.queue.rows.map(\.number), (1...100).map(String.init))
+        XCTAssertEqual(read.queue.rows.prefix(4).map(\.identifier), ["TP-1590", "TP-1592", "TP-1596", "HUB-212"])
+        XCTAssertEqual(read.queue.rows[0].phase, "Code Review")
+        XCTAssertEqual(read.queue.rows[0].situation?.kind, .working)
+
+        let last = try homeRead(HomeRead.path(offset: 1200))
+        XCTAssertEqual(last.queue.rows.count, 45)
+        XCTAssertNil(last.queue.nextOffset)
+        XCTAssertEqual(last.queue.rows.last?.number, "1245")
+    }
+
+    func testASavedViewKeepsTheMatchingRowsWithTheirRealNumbers() async throws {
+        XCTAssertEqual(HomeRead.path(offset: 100, view: "view a&b"), "api/v1/home?offset=100&limit=100&view=view%20a%26b")
+        let calls = Calls()
+        let model = makeModel(calls)
+        await model.refresh()
+        await model.pick(view: "view-hub")
+        XCTAssertEqual(calls.reads.last, "api/v1/home?offset=0&limit=100&view=view-hub")
+        XCTAssertEqual(model.view, "view-hub")
+        XCTAssertEqual(model.pager.total, 1245)
+        XCTAssertLessThan(model.pager.count, 1245)
+        let first = try XCTUnwrap(model.pager.row(at: 0))
+        XCTAssertEqual(first.identifier, "HUB-212")
+        XCTAssertEqual(first.number, "4", "a filtered row keeps its number in the whole queue")
+        XCTAssertTrue((0..<min(model.pager.count, 100)).compactMap { model.pager.row(at: $0) }.allSatisfy { $0.repoKey == "hub" })
+
+        // Back to every ticket: the whole queue from its top.
+        await model.pick(view: nil)
+        XCTAssertEqual(model.pager.count, 1245)
+        XCTAssertEqual(model.pager.row(at: 0)?.number, "1")
+    }
+
+    func testAPageReadForAViewNoLongerPickedIsDropped() {
+        var pager = HomeQueuePager(view: "view-hub")
+        pager.take(HomeRead.QueuePage(rows: [HomeRead.Row(identifier: "TP-1", number: "1")], count: 1), view: nil)
+        XCTAssertEqual(pager.count, 0)
+        XCTAssertNil(pager.row(at: 0))
+    }
+
+    // MARK: - c5: read in pages as the person scrolls; only the rows on screen are drawn
+
+    func testOnlyTheRowsOnScreenAreDrawnAndTheirPagesRead() async throws {
+        let calls = Calls()
+        let model = makeModel(calls)
+        await model.refresh()
+        XCTAssertEqual(calls.reads, ["api/v1/home?offset=0&limit=100"])
+        XCTAssertEqual(model.pager.height, 1245 * 36)
+
+        // The list starts 900 pt down the page, the view is 800 pt tall, scrolled to row 1,000.
+        let range = HomeQueuePager.visibleRange(scrollTop: 900 + 1000 * 36, listTop: 900, viewport: 800, count: model.pager.count)
+        XCTAssertEqual(range, (1000 - HomeQueuePager.overscan)..<(1000 + 23 + HomeQueuePager.overscan))
+        XCTAssertLessThan(range.count, 40, "a screenful of rows, not 1,245")
+
+        await model.show(range)
+        XCTAssertEqual(calls.reads.suffix(2), ["api/v1/home?offset=900&limit=100", "api/v1/home?offset=1000&limit=100"])
+        XCTAssertEqual(model.pager.row(at: 1000)?.number, "1001")
+        XCTAssertNil(model.pager.row(at: 500), "a page never on screen is never read")
+        // The same rows again read nothing.
+        let count = calls.reads.count
+        await model.show(range)
+        XCTAssertEqual(calls.reads.count, count)
+
+        // The last rows: the last page, with nothing after it.
+        let end = HomeQueuePager.visibleRange(scrollTop: 900 + 1245 * 36, listTop: 900, viewport: 800, count: model.pager.count)
+        XCTAssertEqual(end.upperBound, 1245)
+        await model.show(end)
+        XCTAssertEqual(model.pager.row(at: 1244)?.number, "1245")
+        XCTAssertEqual(model.pager.widestNumber(in: end), 1245)
+    }
+
+    func testTheVisibleRangeStaysInsideTheList() {
+        // A list below the screen draws only the overscan's first rows.
+        XCTAssertEqual(HomeQueuePager.visibleRange(scrollTop: 0, listTop: 900, viewport: 800, count: 1245), 0..<4)
+        XCTAssertEqual(HomeQueuePager.visibleRange(scrollTop: 0, listTop: 100, viewport: 800, count: 1245), 0..<(20 + HomeQueuePager.overscan))
+        XCTAssertEqual(HomeQueuePager.visibleRange(scrollTop: 0, listTop: 0, viewport: 0, count: 10), 0..<0)
+        XCTAssertEqual(HomeQueuePager.visibleRange(scrollTop: 0, listTop: 0, viewport: 800, count: 0), 0..<0)
+        XCTAssertEqual(HomeQueuePager.visibleRange(scrollTop: 0, listTop: 0, viewport: 800, count: 5), 0..<5)
+
+        let pager = HomeQueuePager(pageSize: 100)
+        XCTAssertEqual(pager.pages(covering: 95..<205), [0, 100, 200])
+        XCTAssertEqual(pager.pages(covering: 0..<0), [])
+        XCTAssertEqual(pager.widestNumber(in: 0..<0), 0)
+    }
+
+    func testASubTicketsNumberCountsAsItsWholeNumberForTheCell() {
+        var pager = HomeQueuePager()
+        pager.take(HomeRead.QueuePage(rows: [HomeRead.Row(identifier: "A", number: "6"), HomeRead.Row(identifier: "B", number: "6.1")], count: 2), view: nil)
+        XCTAssertEqual(pager.widestNumber(in: 0..<2), 6)
+    }
+
+    func testARowsNumberReadsFromAWholeNumberOrItsPath() throws {
+        let json = #"{"queue": {"rows": [{"identifier": "A", "number": 7}, {"identifier": "B", "path": [7, 2]}, {"identifier": "C", "number": "8"}]}}"#
+        let read = try XCTUnwrap(HomeRead.decode(Data(json.utf8)))
+        XCTAssertEqual(read.queue.rows.map(\.number), ["7", "7.2", "8"])
+        XCTAssertEqual(read.queue.count, 3)
+        XCTAssertEqual(read.slotCount, 0)
         XCTAssertNil(HomeRead.decode(Data("[]".utf8)))
-        XCTAssertNil(HomeRead.decode(Data("not json".utf8)))
     }
 
-    /// An entry's missing fields: a ticket with no title reads its identifier, an epic with no total sums its counts,
-    /// a ticket's age falls back on its situation's.
-    func testMissingFieldsReadAsTheirDefaults() throws {
-        let json = #"""
-        {"in_progress": [
-          {"kind": "epic", "identifier": "E-1", "counts": {"done": 2, "needs_fix": 1}, "tickets": [
-            {"kind": "ticket", "identifier": "T-1", "situation": {"kind": "waiting_for_build", "since": "2026-10-07T14:00:00Z"}}
-          ]},
-          {"identifier": "T-2"}
-        ], "queue": {"roots": [{"identifier": "Q-1", "epic": {"identifier": "E-9"}}]}}
-        """#
-        let read = try XCTUnwrap(HomeRead.decode(Data(json.utf8)))
-        guard case let .epic(epic) = read.inProgress[0] else { return XCTFail("an epic") }
-        XCTAssertNil(epic.issueID)
-        XCTAssertEqual(epic.total, 3)
-        XCTAssertEqual(epic.counts, HomeRead.Counts(done: 2, needsFix: 1))
-        XCTAssertEqual(read.inProgress[1], .ticket(HomeRead.Ticket(identifier: "T-2")))
+    // MARK: - c6: Start on a row
 
-        let lists = HomeLists(read: read, reference: reference)
-        XCTAssertEqual(lists.row("E-1")?.title, "E-1")
-        XCTAssertEqual(lists.row("E-1")?.strip?.map(\.status), [.done, .done, .problem])
-        XCTAssertEqual(lists.row("T-1")?.value, "20 min")
-        XCTAssertEqual(lists.row("T-1")?.lead, .status(.working))
-        XCTAssertEqual(lists.row("T-2")?.lead, .waiting)
-        XCTAssertNil(lists.row("T-2")?.value)
-        XCTAssertEqual(lists.row("Q-1")?.epic, "E-9", "an epic with no title shows its identifier")
+    func testStartOnARowStartsTheTicketThroughTheControlAPI() async throws {
+        let calls = Calls()
+        let model = makeModel(calls)
+        await model.refresh()
+        await model.perform(TicketStart.action("TP-1590"))
+        XCTAssertEqual(calls.moves, [.start("TP-1590", note: nil)])
+        XCTAssertEqual(ControlAction.start("TP-1590", note: nil).path, "api/v1/control/start")
+        let logged = try String(contentsOf: log, encoding: .utf8)
+        XCTAssertTrue(logged.contains("/api/v1/control/start"), logged)
     }
 
-    /// The read with the slot entries and the queue rows the new Home reads (TP-1631): the present lists decode as
-    /// before, and the new keys change nothing in them.
-    func testTheReadWithSlotEntriesAndQueueRowsStillDecodesItsLists() throws {
-        let json = #"""
-        {"in_progress": [{"kind": "ticket", "identifier": "T-1", "title": "Working", "phase": "In Progress",
-                          "situation": {"kind": "working", "since": "2026-10-07T14:00:00Z"}, "working": true, "in_progress": true}],
-         "queue": {"roots": [{"identifier": "Q-1", "title": "Next", "children": [{"identifier": "Q-2", "children": []}]}],
-                   "rows": [{"issue_id": "q1", "identifier": "Q-1", "number": "1", "path": [1], "parent": null, "phase": "Todo",
-                             "waits_on": [{"identifier": "T-1", "kind": "released"}], "sub_tickets": {"done": 1, "total": 3}}],
-                   "count": 1, "total": 1, "offset": 0, "limit": 100, "next_offset": null, "view": null, "filters": []},
-         "outside": {"backlog": 0, "below_priority": 0, "epic": 0, "behind": 0},
-         "slots": {"total": 2, "used": 1, "free": 1, "holders": [],
-                   "entries": [{"slot": 1, "empty": false, "since": "2026-10-07T13:00:00Z",
-                                "epic": {"identifier": "E-1", "done": 2, "total": 5},
-                                "ticket": {"identifier": "T-1", "stages": [{"id": "coding", "state": "current", "tokens": 12}],
-                                           "tokens": {"used": 12, "budget": null}, "plan": null, "checks": null, "pull_request": null}},
-                               {"slot": 2, "empty": true, "since": null, "epic": null, "ticket": null}]}}
-        """#
-        let read = try XCTUnwrap(HomeRead.decode(Data(json.utf8)))
-        XCTAssertEqual(read.inProgress.count, 1)
-        XCTAssertEqual(read.queue.count, 1)
+    // MARK: - c7: the page follows the engine at once
 
-        let lists = HomeLists(read: read, reference: reference)
-        XCTAssertEqual(lists.progress.map(\.id), ["T-1"])
-        XCTAssertEqual(lists.queue.map(\.id), ["Q-1"])
-        XCTAssertEqual(lists.queue[0].children.map(\.id), ["Q-2"])
-        XCTAssertEqual(lists.row("T-1")?.lead, .live)
+    func testAQueueNoticeReadsTheSlotsAndTheRowsOnScreenAgain() async throws {
+        let calls = Calls()
+        let model = makeModel(calls)
+        await model.refresh()
+        await model.show(150..<180)
+        calls.reads = []
+        await model.setSlots(4)
+        calls.reads = []
+
+        // Another client changed the slots: the engine tells, Home reads at once.
+        _ = fixtures.answer(ControlAPI.request(.slots(2), base: APIFixtures.baseURL, token: APIFixtures.token))
+        await model.queueChanged()
+        XCTAssertEqual(calls.reads, ["api/v1/home?offset=0&limit=100", "api/v1/home?offset=100&limit=100"])
+        XCTAssertEqual(model.slotCount, 2, "the count is the engine's")
+        XCTAssertEqual(model.cards.map(\.number), [1, 2])
     }
 
-    // MARK: - Two lists walked as one
-
-    /// The arrow keys walk the rows of both lists in order: past a list's last line or first line is the other list.
-    func testTheEdgesOfAListHandTheArrowsToTheNextList() throws {
-        let lists = try lists()
-        let progress = TreeLines.lines(lists.progress)
-        let queue = TreeLines.lines(lists.queue, foldDepth: DesignTokens.Tree.foldDepth)
-
-        XCTAssertTrue(TreeLines.isEdge(.row("TP-1376"), going: 1, in: progress))
-        XCTAssertFalse(TreeLines.isEdge(.row("TP-1376"), going: -1, in: progress))
-        XCTAssertTrue(TreeLines.isEdge(.row("SHOP-280"), going: -1, in: progress))
-        XCTAssertFalse(TreeLines.isEdge(.row("BIL-306"), going: 1, in: progress))
-        XCTAssertFalse(TreeLines.isEdge(.row("NOPE-1"), going: 1, in: progress))
-
-        XCTAssertEqual(TreeLines.end(queue, last: false), .row("TP-1481"))
-        XCTAssertEqual(TreeLines.end(progress, last: true), .row("TP-1376"))
-        XCTAssertNil(TreeLines.end([TreeLine<String>](), last: true))
+    func testStalePagesOffScreenAreDroppedAfterAChange() {
+        var pager = HomeQueuePager(pageSize: 2)
+        pager.take(HomeRead.QueuePage(rows: [.init(identifier: "A", number: "1"), .init(identifier: "B", number: "2")], count: 4, offset: 0), view: nil)
+        pager.take(HomeRead.QueuePage(rows: [.init(identifier: "C", number: "3"), .init(identifier: "D", number: "4")], count: 4, offset: 2), view: nil)
+        pager.invalidate()
+        XCTAssertEqual(pager.pagesToRead(for: 0..<4), [0, 2])
+        XCTAssertEqual(pager.row(at: 2)?.identifier, "C", "a stale page is drawn until it is read again")
+        pager.dropStale(outside: 0..<2)
+        XCTAssertNil(pager.row(at: 2))
+        XCTAssertEqual(pager.row(at: 0)?.identifier, "A")
+        // A queue that shrank leaves no row past its end.
+        pager.take(HomeRead.QueuePage(rows: [.init(identifier: "A", number: "1")], count: 1, offset: 0), view: nil)
+        XCTAssertNil(pager.row(at: 1))
     }
 
-    /// The QA fixture's Inbox holds the question of every row that offers Answer, so Answer opens it in the drawer
-    /// instead of leaving the drawer reading.
-    func testTheFixturesInboxHoldsTheQuestionOfEveryAnswerRow() throws {
-        let answering = try lists().rows.values.filter { $0.move?.name == "answer" }.map(\.identifier).sorted()
-        XCTAssertEqual(answering, ["BIL-306"])
-        let inbox = try XCTUnwrap(InboxPayload.decode(Data(contentsOf: fixture("inbox.json"))))
-        for identifier in answering {
-            let item = try XCTUnwrap(inbox.items.first { $0.identifier == identifier }, identifier)
-            XCTAssertTrue(item.isDecision, identifier)
-        }
+    func testAnUnchangedReadKeepsThePage() async {
+        var answers: [ConditionalResult] = []
+        let data = Data(#"{"slots": {"total": 1, "entries": []}, "queue": {"rows": [{"identifier": "A", "number": "1"}], "count": 1, "total": 1}}"#.utf8)
+        answers = [.changed(.loaded(data), etag: "v1"), .unchanged]
+        var tags: [String?] = []
+        let model = HomeQueueModel(fetch: { _, tag in
+            tags.append(tag)
+            return answers.removeFirst()
+        }, send: { _ in .done })
+        await model.refresh()
+        await model.refresh()
+        XCTAssertEqual(tags, [nil, "v1"])
+        XCTAssertEqual(model.pager.row(at: 0)?.identifier, "A")
+        XCTAssertEqual(model.slotCount, 1)
+    }
+
+    // MARK: - No read to show
+
+    func testAReadWithNothingToShowSaysWhy() async {
+        XCTAssertEqual(HomeQueueModel.failure(after: .changed(.unsupported, etag: nil)), .unsupported)
+        XCTAssertEqual(HomeQueueModel.failure(after: .changed(.failed("Symphony isn't answering"), etag: nil)), .failed("Symphony isn't answering"))
+        XCTAssertEqual(HomeQueueModel.failure(after: .changed(.loaded(Data("not json".utf8)), etag: "v1")), .failed(HomeQueueModel.unreadable))
+        XCTAssertEqual(HomeQueueModel.failure(after: .unchanged), .failed(HomeQueueModel.unreadable))
+
+        let model = HomeQueueModel(fetch: { _, _ in .changed(.unsupported, etag: nil) }, send: { _ in .done })
+        await model.refresh()
+        XCTAssertFalse(model.loaded)
+        XCTAssertEqual(model.failure, .unsupported)
     }
 
     // MARK: - A provider that refuses the agents' sign-in (TP-1515)
 
-    /// Home says once, for the whole factory, that agents can't sign in, with the provider's message and since when,
-    /// from the committed sign-in fixture; the ticket that is due a QA run reads the same wait.
-    func testASignInHoldIsOneLineAboveTheLists() throws {
+    func testASignInHoldIsOneLineAboveTheSections() throws {
         let utc = try XCTUnwrap(TimeZone(identifier: "UTC"))
-        let state = try XCTUnwrap(OverviewState.decode(try Data(contentsOf: fixture("state.json", in: "sign-in-hold"))))
-        let notices = HomeLists.notices(state.snapshot, reference: reference, timeZone: utc)
-        XCTAssertEqual(notices, [
+        let state = try XCTUnwrap(OverviewState.decode(try Data(contentsOf: Self.fixture("state.json", in: "sign-in-hold"))))
+        XCTAssertEqual(HomeQueueModel.notices(state.snapshot, reference: reference, timeZone: utc), [
             "Agents can't sign in to Claude since 14:02 (Failed to authenticate. API Error: 403 Attention Required! | "
                 + "Cloudflare): new runs wait until 14:24.",
         ])
-
-        let read = try XCTUnwrap(HomeRead.decode(try Data(contentsOf: fixture("home.json", in: "sign-in-hold"))))
-        let lists = HomeLists(read: read, reference: reference, notices: notices)
-        XCTAssertEqual(lists.notices, notices)
-        XCTAssertEqual(lists.row("SHOP-301")?.badge?.word, "Waiting: the agent can't sign in to Claude")
-
-        XCTAssertTrue(try self.lists().notices.isEmpty, "Home's own fixture holds nothing")
-        let plain = try XCTUnwrap(OverviewState.decode(try Data(contentsOf: fixture("state.json"))))
-        XCTAssertTrue(HomeLists.notices(plain.snapshot, reference: reference, timeZone: utc).isEmpty)
-    }
-
-    /// The line is gone once the probe checks the sign-in (canary), and a usage limit or an unreachable API has none.
-    func testOnlyAHeldSignInHasALine() {
         func limit(_ reason: String, phase: StateSnapshot.UsageLimit.Phase = .paused) -> StateSnapshot.UsageLimit {
             StateSnapshot.UsageLimit(phase: phase, reason: reason)
         }
         var snapshot = StateSnapshot()
         snapshot.usageLimits = [limit("model_api_sign_in_failed", phase: .canary), limit("usage_limit"), limit("model_api_unreachable")]
-        XCTAssertTrue(HomeLists.notices(snapshot, reference: reference).isEmpty)
-
-        snapshot.usageLimits = [limit("model_api_sign_in_failed")]
-        XCTAssertEqual(HomeLists.notices(snapshot, reference: reference), ["Agents can't sign in to Claude: new runs wait."])
+        XCTAssertTrue(HomeQueueModel.notices(snapshot, reference: reference).isEmpty)
     }
 
-    private func lists() throws -> HomeLists {
-        let read = try XCTUnwrap(HomeRead.decode(try Data(contentsOf: fixture("home.json"))))
-        return HomeLists(read: read, reference: reference)
-    }
+    // MARK: - The fixture
 
-    private func fixture(_ name: String, in directory: String = "home") -> URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("Fixtures/director-app/\(directory)/api/v1/\(name)")
-    }
-
-    // MARK: - No read to show
-
-    /// A read that gives Home nothing to show says why: an older Symphony asks for an update, a failure names itself,
-    /// and a body that doesn't decode says so, never the "Reading Home…" spinner for good.
-    func testAReadWithNothingToShowSaysWhy() {
-        XCTAssertEqual(HomeLists.failure(after: .changed(.unsupported, etag: nil)), .unsupported)
-        XCTAssertEqual(
-            HomeLists.failure(after: .changed(.failed("Symphony isn't answering"), etag: nil)),
-            .failed("Symphony isn't answering")
-        )
-        XCTAssertEqual(HomeLists.failure(after: .changed(.loaded(Data("not json".utf8)), etag: "v1")), .failed(HomeLists.unreadable))
-        XCTAssertEqual(HomeLists.failure(after: .unchanged), .failed(HomeLists.unreadable))
+    func testTheFixtureAnswersOnlyWhenItHoldsAGeneratedQueue() throws {
+        let other = APIFixtures(directory: Self.directory("home"), requestLog: log)
+        XCTAssertNil(other.homeQueue(URL(string: "http://symphony-fixtures.invalid/api/v1/home")!))
+        XCTAssertNil(fixtures.homeQueue(URL(string: "http://symphony-fixtures.invalid/api/v1/state")!))
+        XCTAssertNil(HomeQueueFixture(Data("[]".utf8)))
+        XCTAssertNil(fixtures.lastSlotCount())
+        XCTAssertEqual(HomeQueueFixture.filters(of: "nope", in: nil), [:])
+        let generated = HomeQueueFixture.generate(HomeQueueFixture.Generated(count: 2))
+        XCTAssertEqual(generated.map { $0["identifier"] as? String }, ["TP-1", "TP-2"])
     }
 }

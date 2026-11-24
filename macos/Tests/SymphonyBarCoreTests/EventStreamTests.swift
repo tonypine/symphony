@@ -173,6 +173,32 @@ final class EventStreamTests: XCTestCase {
         XCTAssertEqual(request.timeoutInterval, EventStream.idleTimeout)
     }
 
+    /// TP-1609: a queue move, a slot count change, a Start or a Stop comes as `event: queue`, which Home reads again on.
+    func testPublishesEachQueueNotice() async throws {
+        channel.answers = [200]
+        let stream = stream()
+        var received: [QueueNotice] = []
+        let arrived = expectation(description: "queue notices")
+        arrived.expectedFulfillmentCount = 2
+        stream.queueNotices.sink { received.append($0); arrived.fulfill() }.store(in: &cancellables)
+        var tickets = 0
+        stream.notices.sink { _ in tickets += 1 }.store(in: &cancellables)
+
+        stream.start()
+        for _ in 0..<100 where channel.body == nil { await Task.yield() }
+        let body = try XCTUnwrap(channel.body)
+        body.yield(Data("event: queue\ndata: {\"change\":\"slots\",\"count\":4,\"at\":\"2026-11-24T10:00:00Z\"}\n\n".utf8))
+        body.yield(Data("event: queue\ndata: not json\n\n".utf8))
+        await fulfillment(of: [arrived], timeout: 2)
+
+        XCTAssertEqual(received, [QueueNotice(change: "slots", count: 4, at: "2026-11-24T10:00:00Z"), QueueNotice(change: "unknown")])
+        XCTAssertEqual(tickets, 0, "a queue notice is not a ticket's")
+        XCTAssertEqual(
+            QueueNotice.decode(#"{"change":"order","issue_identifier":"TP-9","by":"start"}"#),
+            QueueNotice(change: "order", issueIdentifier: "TP-9", by: "start")
+        )
+    }
+
     func testReconnectsADroppedConnectionAfterOneSecond() async throws {
         channel.answers = [200]
         let stream = stream()

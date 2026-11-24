@@ -1297,7 +1297,7 @@ reached with Tab.
   git diff --name-only origin/main | build/SymphonyGallery --affected   # the entries a change is a reason to look at
   build/SymphonyGallery --shot button --out /tmp/shots # a component's board, light and dark
   build/SymphonyGallery --shot ticket-page --variation ticket-page-waiting --width desktop --out /tmp/shots
-  build/SymphonyGallery --open home --variation home-lists --width laptop --dark
+  build/SymphonyGallery --open home --variation home-queue --width laptop --dark
   ```
 
 - **It is always built from the checkout it is used on.** A person or an implementation run builds

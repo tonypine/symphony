@@ -1745,6 +1745,28 @@ public enum DesignTokens {
         /// The slots a person may set: at least one, at most six.
         public static let slots = 1...6
 
+        // The page (`.pq-top`, `.pq-queue`, `.pq-head`, `.pq-filters`, `.pq-mini` in page.css).
+        /// The page's gutter, both sides: the cards and the queue's rows share it.
+        public static let gutter = Space.s8
+        public static let pageTop = Space.s6
+        /// Above the Queue's head.
+        public static let queueTop = Space.s8
+        public static let pageBottom = Space.s10
+        /// A section head: its title and what stands beside it, on one line.
+        public static let headHeight: Double = 24
+        public static let headGap = Space.s3
+        public static let headBottom = Space.s4
+        /// Between two slot cards.
+        public static let cardsGap = Space.s3
+        /// The saved views above the queue: pills 4 pt apart, 12 pt above the list.
+        public static let viewsGap = Space.s1
+        public static let viewsBottom = Space.s3
+        public static let viewPillInset: Double = 10
+        public static let viewPillGap: Double = 6
+        /// The strip that stays on top once the cards scroll away: 6 pt around its lines, 2 pt between them.
+        public static let stripInset: Double = 6
+        public static let stripGap: Double = 2
+
         // The slot card.
         public static let cardTopPadding = Space.s4
         public static let cardSidePadding = Space.s5
