@@ -325,7 +325,10 @@ final class HomeQueueDragTests: XCTestCase {
         XCTAssertEqual(Self.shown(model.pager, count: 4), shown, "the rows keep their real numbers")
         XCTAssertTrue(HomeQueueDrag.canDrag(first, view: nil))
         XCTAssertFalse(HomeQueueDrag.canDrag(nil, view: nil))
-        XCTAssertFalse(HomeQueueDrag.canDrag(HomeRead.Row(identifier: "TP-2", number: "6.1", parent: "TP-1"), view: nil))
+        // A sub-row drags among its siblings with no filter (TP-1645), and not under one.
+        let sub = HomeRead.Row(identifier: "TP-2", number: "6.1", parent: "TP-1")
+        XCTAssertTrue(HomeQueueDrag.canDrag(sub, view: nil))
+        XCTAssertFalse(HomeQueueDrag.canDrag(sub, view: model.view))
     }
 
     // MARK: - c4: a ticket that cannot start moves like any other
@@ -358,7 +361,30 @@ final class HomeQueueDragTests: XCTestCase {
 
         XCTAssertEqual(calls.moves, [.queueMove("TP-1596", place: .top)])
         XCTAssertEqual(Self.shown(model.pager, count: 6), Self.before)
-        XCTAssertEqual(model.notice, "Couldn't move TP-1596 in the queue: TP-1596 depends on TP-1590 and must stay below it. (HTTP 409)")
+        XCTAssertEqual(model.notice, "TP-1596 depends on TP-1590 and must stay below it.", "in the engine's words alone (TP-1645)")
+    }
+
+    func testARefusalIsSaidInTheEnginesWordsAndOtherFailuresAsTheyAre() {
+        let move = ControlAction.queueMove("A", place: .top)
+        let start = ControlAction.start("A", note: nil, slot: 2)
+        func failure(_ action: ControlAction, _ status: Int, _ body: String) -> String {
+            guard case let .failed(message) = ControlAPI.result(action, statusCode: status, data: Data(body.utf8)) else { return "" }
+            return message
+        }
+        let refused = failure(move, 409, #"{"error":{"message":"A depends on B and must stay below it."}}"#)
+        XCTAssertEqual(ControlAPI.reason(refused, for: move), "A depends on B and must stay below it.")
+        let startRefused = failure(start, 409, #"{"error":{"message":"A depends on B (C) and can't start before it is done."}}"#)
+        XCTAssertEqual(ControlAPI.reason(startRefused, for: start), "A depends on B (C) and can't start before it is done.")
+        // A failure without Symphony's own reason keeps what it says.
+        for message in [
+            failure(move, 500, "{}"), failure(move, 401, "{}"), failure(move, 503, "{}"),
+            "Couldn't move A in the queue: no control token in /tmp", "something else (HTTP 409)",
+            "Couldn't move A in the queue: (HTTP 409)", "Couldn't move A in the queue: why (HTTP x)",
+        ] {
+            XCTAssertEqual(ControlAPI.reason(message, for: move), message)
+        }
+        // Another action's failure is not this one's.
+        XCTAssertEqual(ControlAPI.reason(refused, for: start), refused)
     }
 
     func testTheFixtureRefusesOnlyTheMovesItNames() throws {

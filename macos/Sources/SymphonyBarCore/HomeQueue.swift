@@ -479,10 +479,11 @@ public final class HomeQueueModel: ObservableObject {
         await refresh()
     }
 
-    /// Start on a queue row, Stop on a slot card: the control call, then Home read again.
+    /// Start on a queue row, Stop on a slot card: the control call, then Home read again. A refusal says Symphony's reason
+    /// in its own words (TP-1645).
     public func perform(_ action: ControlAction) async {
         notice = nil
-        if case let .failed(message) = await send(action) { notice = message }
+        if case let .failed(message) = await send(action) { notice = ControlAPI.reason(message, for: action) }
         await refresh()
     }
 
@@ -498,9 +499,10 @@ public final class HomeQueueModel: ObservableObject {
         let before = pager
         pager.move(row, from: from, to: gap)
         notice = nil
-        if case let .failed(message) = await send(.queueMove(row.identifier, place: place)) {
+        let action = ControlAction.queueMove(row.identifier, place: place)
+        if case let .failed(message) = await send(action) {
             if pager.view == before.view { pager = before }
-            notice = message
+            notice = ControlAPI.reason(message, for: action)
         }
         await refresh()
     }
