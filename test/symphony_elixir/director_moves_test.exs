@@ -54,7 +54,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
     def put_own_state_move(_issue_id, _at), do: {:error, :boom}
   end
 
-  # The orchestrator a cancel stops the run through: a stop answers as `Orchestrator.stop_running/2`
+  # The orchestrator a cancel stops the run through: a stop answers as `Orchestrator.stop_running/3`
   # does, with the pause an operator's stop writes, and every message reaches the test.
   defmodule FakeOrchestrator do
     use GenServer
@@ -65,7 +65,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
     def init(test_pid), do: {:ok, test_pid}
 
     @impl true
-    def handle_call({:stop_running, issue_id}, _from, test_pid) do
+    def handle_call({:stop_running, issue_id, _opts}, _from, test_pid) do
       :ok = Pauses.stop({:ticket, "repo-cancel", issue_id}, DateTime.utc_now())
       send(test_pid, {:stop_running, issue_id})
       {:reply, {:ok, %{stopped: true, issue_id: issue_id}}, test_pid}
