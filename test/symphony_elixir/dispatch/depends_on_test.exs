@@ -366,7 +366,7 @@ defmodule SymphonyElixir.Dispatch.DependsOnTest do
         %{dispatch_order: order} = Orchestrator.put_dispatch_order_for_test(orchestrator_state(), issues)
         order = %{order | computed_at: computed_at}
         records = RunStore.list_all_ticket_states()
-        {order, Order.read(order, records, live), Home.read(order, records, live)}
+        {order, Order.read(order, records, live), without_dependencies(Home.read(order, records, live))}
       end
 
       before = reads.()
@@ -376,6 +376,15 @@ defmodule SymphonyElixir.Dispatch.DependsOnTest do
       assert reads.() == before
     end
   end
+
+  # The Home read lists a row's stored dependencies (a field it gained); the
+  # rest of the read must not change with them.
+  defp without_dependencies(%{} = map) when not is_struct(map) do
+    map |> Map.delete(:dependencies) |> Map.new(fn {k, v} -> {k, without_dependencies(v)} end)
+  end
+
+  defp without_dependencies(list) when is_list(list), do: Enum.map(list, &without_dependencies/1)
+  defp without_dependencies(other), do: other
 
   describe "unmet/4 and reason/1" do
     test "decide from the records and the update hold's cache alone" do
