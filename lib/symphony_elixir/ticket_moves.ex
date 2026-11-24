@@ -96,8 +96,12 @@ defmodule SymphonyElixir.TicketMoves do
           dependents: [String.t()]
         }
 
-  @typedoc "What only the caller of `facts/2` knows: which ticket it is, the pauses over it and whether a run works on it."
+  @typedoc """
+  What only the caller of `facts/2` knows: which ticket it is, the pauses over it, whether a run
+  works on it and, when the caller reads them, the open tickets that depend on it.
+  """
   @type live :: %{
+          optional(:dependents) => [String.t()],
           identifier: String.t() | nil,
           repo_key: String.t() | nil,
           symphony_pause: String.t() | nil,
