@@ -19,12 +19,14 @@ defmodule SymphonyElixir.MixProject do
             "test/symphony_elixir/cli_check_test.exs",
             "test/symphony_elixir/config/embed_dependencies_test.exs",
             "test/symphony_elixir/config/required_fields_test.exs",
+            "test/symphony_elixir/config_settings_test.exs",
             "test/symphony_elixir/config_split_test.exs",
             "test/symphony_elixir/core_test.exs",
             "test/symphony_elixir/dispatch_config_test.exs",
             "test/symphony_elixir/dynamic_tool_test.exs",
             "test/symphony_elixir/learnings_config_test.exs",
             "test/symphony_elixir/ledger_config_test.exs",
+            "test/symphony_elixir/linear_client_candidates_test.exs",
             "test/symphony_elixir/linear_webhooks_config_test.exs",
             "test/symphony_elixir/qa_agent/playbook_settings_test.exs",
             "test/symphony_elixir/qa_agent_test.exs",
@@ -39,7 +41,12 @@ defmodule SymphonyElixir.MixProject do
             "test/symphony_elixir/state_provisioning_test.exs",
             "test/symphony_elixir/sub_issue_wait_test.exs",
             "test/symphony_elixir/ticket_priority_filter_test.exs",
-            "test/symphony_elixir/workspace_and_config_test.exs"
+            "test/symphony_elixir/workspace_hooks_test.exs",
+            "test/symphony_elixir/workspace_remote_test.exs",
+            "test/symphony_elixir/workspace_remote_worktree_reuse_test.exs",
+            "test/symphony_elixir/workspace_remote_worktree_test.exs",
+            "test/symphony_elixir/workspace_worktree_branches_test.exs",
+            "test/symphony_elixir/workspace_worktree_test.exs"
           ]
         }
       ],
@@ -125,7 +132,8 @@ defmodule SymphonyElixir.MixProject do
       test_ignore_filters: [
         "test/support/pr_watch_support.exs",
         "test/support/snapshot_support.exs",
-        "test/support/test_support.exs"
+        "test/support/test_support.exs",
+        "test/support/workspace_test_support.exs"
       ],
       dialyzer: [
         plt_add_apps: [:mix, :mnesia, :tools],
