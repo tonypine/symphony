@@ -51,8 +51,8 @@ defmodule SymphonyElixir.Initiatives do
     for record <- records,
         is_binary(record.issue_id),
         Map.has_key?(index, record.issue_identifier) or record.sub_issues != [],
-        started_at = split_at(events.(record.issue_id)),
-        started_at != :not_split,
+        # A tuple, as a bare nil (a split with no time) would filter the parent out.
+        {:split, started_at} <- [split_at(events.(record.issue_id))],
         context = %{settings: settings.(record.repo_key), now: now, started_at: started_at},
         initiative = Initiative.from_record(record, SubTickets.of(record, index), context),
         initiative != nil,
@@ -60,7 +60,7 @@ defmodule SymphonyElixir.Initiatives do
   end
 
   # When Symphony split the ticket whose events these are: its first split-off filed, else its
-  # split plan's time; `:not_split` when it did not split it.
+  # split plan's time (`{:split, at}`, nil when none is known); `:not_split` when it did not split it.
   defp split_at(events) do
     filed = for %Event{type: "ticket.filed"} = event <- events, field(event.payload, :kind) == "split_off", do: event.at
 
@@ -72,7 +72,7 @@ defmodule SymphonyElixir.Initiatives do
 
     case filed ++ planned do
       [] -> :not_split
-      times -> times |> Enum.filter(&match?(%DateTime{}, &1)) |> Enum.min(DateTime, fn -> nil end)
+      times -> {:split, times |> Enum.filter(&match?(%DateTime{}, &1)) |> Enum.min(DateTime, fn -> nil end)}
     end
   end
 
