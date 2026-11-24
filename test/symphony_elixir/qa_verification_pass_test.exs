@@ -241,6 +241,18 @@ defmodule SymphonyElixir.QaVerificationPassTest do
       assert Conductor.open_routes(Facts.events(@issue_id)) == ["rework"]
     end
 
+    test "a ticket the Conductor moved itself is left where it moved it, and Symphony asks none of its own (TP-1656)" do
+      {workspace, _head} = git_workspace!()
+      own_block()
+
+      assert :ok = run(workspace, conductor: conductor(:none))
+      log = capture_log(fn -> assert :ok = run(workspace, conductor: conductor(:moved)) end)
+
+      assert log =~ "QA for TP-816 leaves the ticket where the Conductor moved it; Symphony asks none of its own"
+      refute deciding()
+      refute_received {:memory_tracker_state_update, _, _}
+    end
+
     test "a question the Conductor asked holds the ticket, and Symphony asks none of its own" do
       {workspace, _head} = git_workspace!()
       own_block()

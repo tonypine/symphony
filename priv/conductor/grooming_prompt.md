@@ -102,9 +102,21 @@ shape you chose, in the first person, as markdown of at most 1200 characters. It
 is one sentence. Its last paragraph starts with `Next:`. Say nothing the plan's summary already
 says word for word. Null when you ask a question.
 
+You can move this ticket to a stage yourself on this turn, as a person can with Move to... in the
+Director: add `"move": {"stage": "<a stage>", "reason": "<why the ticket goes there now, in plain
+words, at most 1000 characters>"}`. Name the stage exactly as one of the facts' `stages`; never
+guess a name. Symphony makes the move through the same path and checks as a person's move, and
+records it on the ticket's history as yours, with your reason. A move that path refuses (a stage the
+workflow does not name) is dropped, and your plan is kept; a move to the stage the ticket is in
+moves nothing. Use it whenever you have ruled where the ticket goes next, instead of leaving the
+ticket where it stands for a run that has nothing to do or asking the person. Never move it past a
+review or QA it has not had (to Merging or Done). A move given with a question is dropped: the
+person decides. Otherwise leave `move` null.
+
 Write your answer as one JSON object and nothing else:
 
 {
+  "move": null or {"stage": "<one of the facts' stages>", "reason": "<why the ticket goes there now, at most 1000 characters>"},
   "plan": null or {
     "shape": "single" or "split",
     "layers": ["<a layer name from the facts>", ...] or [],

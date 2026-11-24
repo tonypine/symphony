@@ -538,7 +538,8 @@ type does not allow, is refused. The types: `phase.entered`, `hold.set` and `hol
 `verdict.recorded` (machine only: an agent never records a verdict), `decision.requested`,
 `decision.recorded`, `decision.withdrawn` (legacy), `person.action` (`stop`, `move`, `unblock`,
 `restart`; `force` is legacy), `ticket.cancelled` (the Director's cancel, with its note), `ticket.moved` (the
-Director's free move into any phase, with its note), `step.started` and `step.completed` (the step
+Director's free move into any phase, with its note, or the Conductor's own move of its ticket made
+through it, whose actor is the Conductor's turn and whose note is its reason), `step.started` and `step.completed` (the step
 model below), `evidence`, `finding.recorded` (QA
 runs), `finding.resolved`, `finding.confirmed` (machine only: a QA pass confirmed a resolution),
 `checklist.answered`, `drift.detected`, `drift.reverted`,
@@ -578,6 +579,9 @@ came before, and each of its options names the action a pick makes from a closed
 to Merging, and `cancel`), which the decision path performs; a ticket waits on one open question
 about its stage at a time, the Conductor's or QA's own "could not finish its check", and answering
 one withdraws any other open in the same phase as `superseded`; `docs/configuration.md#conductor`;
+at every junction the answer may move the ticket to a stage (`move`, with its reason), which
+Symphony makes through the Director's free move and its guards, asking nothing, and a turn before a
+run that moved the ticket keeps that run from starting;
 at `grooming`, before the first run of a ticket with no plan and no run of its own, the turn runs
 in the ticket's workspace with read-only tools and its answer holds the ticket's plan, which
 Symphony records as `plan.written` after recording the ask as `ask.recorded`: a try that writes

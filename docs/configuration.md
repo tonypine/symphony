@@ -3528,7 +3528,8 @@ conductor:
 
 But for Grooming, the turn runs in an empty folder under the workspace root with read-only tools and
 no ticket, so it can neither change nor read the repository. Past Grooming it changes the ticket's plan only when a person's message, or the ticket's parent, changes what is asked (a new plan version, with its reason), and it moves the
-ticket only at `after_qa_blocked`, through Symphony (below); a ticket it files that blocks this one
+ticket through Symphony only: with its `move` at any junction and with its route at
+`after_qa_blocked` (below); a ticket it files that blocks this one
 holds it, as a question does. Its own
 run is recorded on the ticket (`run.started`, `run.ended` with its model and tokens, `counted: false`
 so the dispatch-loop guard ignores it), and its tokens count toward the ticket under the phase it ran
@@ -3685,7 +3686,22 @@ A route past its bound is dropped and logged, and so is a route given with a que
 decides. Then the pass goes on as without the Conductor (the retry, the self-heal lane or the "QA
 could not finish" question). A question the turn asks holds the ticket, and Symphony then asks none
 of its own. The route Symphony took is recorded on the turn's `conductor.instructions` (`route`).
-The Conductor never routes a ticket past QA, and never narrows what QA checks.
+The Conductor never routes a ticket past QA, and never narrows what QA checks. A turn that moved the
+ticket itself (`move`, below) leaves it there: the pass moves nothing and asks nothing of its own.
+
+**Moving its own ticket** (`move`). At every junction, the message turn and the watch included,
+the answer may move the ticket to a stage, as a person's Move to... in the Director does:
+`{"stage": "<a stage>", "reason": "<at most 1000 characters>"}`. Symphony makes it through the
+person's free move (`SymphonyElixir.DirectorMoves`) with the same guards (a phase of the repo's
+workflow, a ticket in a configured repository, the transition guard), once the turn's run has
+ended, and asks nothing. The facts list the stages it may name (`stages`). The ticket's timeline
+gets one `ticket.moved` whose actor is the Conductor's turn and whose note is its reason, and the
+`director_move` audit record names it (`by: Conductor`). A move the path refuses is dropped and
+logged, and the rest of the answer is kept; one to the stage the ticket is in moves nothing; one
+given with a question is dropped, and at `after_qa_blocked` a `rerun` or `rework` route given beside
+a move is dropped, so the move decides. A turn before a run that moved the ticket keeps that run
+from starting, and the ticket is dispatched again at once in its new stage; a move into Backlog or a
+closed stage stops a running run, as a person's does. A malformed `move` refuses the answer.
 
 **Filing a linked ticket** (`file_tickets`). At `after_qa_blocked`, `after_qa_fail`,
 `after_rework` and during a watched run, the answer's `route` may be a ticket for a problem that is

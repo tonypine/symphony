@@ -41,10 +41,24 @@ defmodule SymphonyElixir.Conductor do
   records nothing for the person, and the next run starts as if the Conductor were off; the
   mechanical guard on the merge (the plan's open checks and a plan version written after the code,
   `SymphonyElixir.PrDecision`'s R9a) holds without it. It never changes the ticket's plan; its
-  instructions are advice added to the next run's prompt. It routes the ticket in two ways only. At
-  `after_qa_blocked` its answer may route the ticket (`route`), back to Rework with a finding or to
-  one more QA pass, within bounds Symphony keeps from the ticket's events (`open_routes/1`); it never
-  routes it past QA. At `before_merge`, at `message` and on a watch turn its answer may hold the
+  instructions are advice added to the next run's prompt.
+
+  At every junction its answer may move the ticket to a stage (`move`, with a reason), as a person
+  may: Symphony makes the move through the person's free move (`SymphonyElixir.DirectorMoves`,
+  `move/4` with `:move`), with its guards (a phase of the repo's workflow, a ticket in a configured
+  repository, `SymphonyElixir.TransitionGuard`), once the turn's run has ended, and asks nothing.
+  The move runs in a task of its own: a move into Backlog or a closed stage stops the ticket's
+  running run, which may be the task the turn runs in, and the move is still recorded in full.
+  The ticket's events get one `ticket.moved` whose actor is the turn and whose note is its reason.
+  A move that path refuses is dropped and logged, and the rest of the turn is kept; one to the stage
+  the ticket is in moves nothing; one given with a question is dropped, since the person decides.
+  The stages it may name are in the facts (`stages`). A turn before a run that moved the ticket
+  keeps that run from starting (`run/3` answers `:again`), so the new stage is dispatched instead.
+
+  Its answer also routes the ticket in two ways. At `after_qa_blocked` its answer may route the
+  ticket (`route`), back to Rework with a finding or to one more QA pass, within bounds Symphony
+  keeps from the ticket's events (`open_routes/1`); such a route given beside a `move` is dropped,
+  and the move decides. At `before_merge`, at `message` and on a watch turn its answer may hold the
   ticket's merge (`hold`, with a reason) when the pull request is about to merge work that is not
   what is asked now: Symphony records the reason as the next run's instructions routed `hold`, and
   the PR and CI watcher, asked to read the ticket at once, turns auto-merge off and moves the ticket
@@ -107,6 +121,7 @@ defmodule SymphonyElixir.Conductor do
     Config,
     DecisionMove,
     DecisionRequest,
+    DirectorMoves,
     Orchestrator,
     Pauses,
     PromptSafety,
@@ -212,10 +227,10 @@ defmodule SymphonyElixir.Conductor do
 
   @typedoc """
   What the turn after a QA pass that could not judge the change answered (`route_blocked_qa/3`):
-  the ticket goes to Rework with the finding, QA runs again, the turn asked the person, or none of
-  these, and the pass goes on as if the Conductor were off.
+  the ticket goes to Rework with the finding, QA runs again, the turn asked the person, the turn
+  moved the ticket itself (`move`), or none of these, and the pass goes on as if the Conductor were off.
   """
-  @type blocked_qa_route :: {:rework, String.t()} | :rerun | :held | :none
+  @type blocked_qa_route :: {:rework, String.t()} | :rerun | :held | :moved | :none
 
   @doc """
   Runs `work` while this process holds the lock of the ticket `issue_id`, which one Conductor turn
@@ -369,6 +384,7 @@ defmodule SymphonyElixir.Conductor do
   end
 
   defp blocked_qa_route({:held, _route}), do: :held
+  defp blocked_qa_route({:moved, _route}), do: :moved
   defp blocked_qa_route({:ok, %{to: "rework", finding: finding}}), do: {:rework, finding}
   defp blocked_qa_route({:ok, %{to: "rerun"}}), do: :rerun
   defp blocked_qa_route({:ok, %{to: "ticket"}}), do: :none
@@ -594,7 +610,8 @@ defmodule SymphonyElixir.Conductor do
   person a question, which pauses the ticket, so the run that would follow does not start; `:again`
   when a Grooming turn left the ticket to its next dispatch, which starts at once (a try that
   failed and is made again, or a ticket labelled `plan` whose plan is written,
-  `Grooming.take_over/3`), so the run does not start either; `:ok`
+  `Grooming.take_over/3`), and when the turn moved the ticket to another stage (`move`): the run
+  does not start either, and the ticket is dispatched again at once, in its new stage; `:ok`
   otherwise, whatever happened, so a failed turn never holds the ticket up. Nil plans nothing. `opts`: `turn` (`(plan, issue, run_id, prompt) ->
   {:ok, [String.t()], tokens} | {:error, reason, tokens}`, the turn's text candidates; default a
   harness session, whose launcher `agent_module` overrides), `facts` (the document, default
@@ -617,7 +634,7 @@ defmodule SymphonyElixir.Conductor do
 
   def run(%{} = plan, %Issue{} = issue, opts) do
     {:ok, {held, _route}} = exclusive(plan.issue_id, :wait, fn -> conduct(plan, issue, opts) end)
-    held
+    if held == :moved, do: :again, else: held
   rescue
     error ->
       Logger.warning("Conductor turn failed #{context(issue, plan)}: #{Exception.message(error)}; the next run starts without it")
@@ -673,8 +690,15 @@ defmodule SymphonyElixir.Conductor do
 
   defp groom_asked(%{issue_id: issue_id} = plan, issue, opts) do
     case turn(in_workspace(plan, issue, opts), issue, opts) do
-      {_exit, :held, _route} -> :held
-      {exit, :ok, _route} -> after_grooming(TicketPlan.groomed?(issue_id), exit, plan, issue, opts)
+      {_exit, :held, _route} ->
+        :held
+
+      {exit, :ok, _route} ->
+        after_grooming(TicketPlan.groomed?(issue_id), exit, plan, issue, opts)
+
+      # The ticket moved: the run it came before does not start, and the new stage is dispatched.
+      {exit, :moved, _route} ->
+        with :ok <- after_grooming(TicketPlan.groomed?(issue_id), exit, plan, issue, opts), do: :again
     end
   end
 
@@ -719,8 +743,8 @@ defmodule SymphonyElixir.Conductor do
   defp why_ungroomed("failed"), do: "the turn failed"
   defp why_ungroomed(exit), do: exit
 
-  # The turn, recorded: whether it asked the person (`:held`) and the route Symphony takes from its
-  # answer, nil when none.
+  # The turn, recorded: whether it asked the person (`:held`) or moved the ticket (`:moved`), and the
+  # route Symphony takes from its answer, nil when none.
   defp conduct(plan, issue, opts) do
     {_exit, held, route} = turn(plan, issue, opts)
     {held, route}
@@ -741,7 +765,7 @@ defmodule SymphonyElixir.Conductor do
     started_at = DateTime.utc_now()
     record = record(issue_id, opts)
     phase = record.phase || issue.state
-    facts = Keyword.get_lazy(opts, :facts, fn -> record |> Facts.build(junction) |> with_routes(plan) |> with_code(plan) |> Message.facts(plan) |> Tree.facts(issue_id) end)
+    facts = opts |> Keyword.get_lazy(:facts, fn -> record |> Facts.build(junction) |> with_routes(plan) |> with_code(plan) |> Message.facts(plan) |> Tree.facts(issue_id) end) |> with_stages()
     record_run_started(plan, run_id, phase)
     Logger.info("Conductor turn started #{context(issue, plan)} run_id=#{run_id} junction=#{junction} model=#{plan.run_profile.model}")
 
@@ -750,8 +774,56 @@ defmodule SymphonyElixir.Conductor do
     tokens = elem(outcome, 2)
     {exit, held, route} = record_outcome(outcome, plan, %{issue | state: phase}, run_id, {facts, record, opts})
     record_run_ended(plan, issue, run_id, %{exit: exit, tokens: tokens, started_at: started_at, phase: phase})
-    {exit, held, route}
+    # The move goes last, once the turn is recorded: a move into Backlog or a closed stage stops the
+    # ticket's running run, which may be the one this turn runs in.
+    {exit, moved(outcome, held, plan, issue, run_id, opts), route}
   end
+
+  # The stage the answer moves the ticket to, through the person's free move and its guards
+  # (`SymphonyElixir.DirectorMoves`), made as the turn's (`by: {:conductor, run_id}`). A move beside a
+  # question is dropped (the person decides), and so is one the path refuses; a turn that holds the
+  # ticket stays `:held`. `opts[:moves]` are the free move's options.
+  defp moved({:ok, %{move: %{stage: stage}, ask_person: %{}}, _tokens}, held, plan, issue, _run_id, _opts) do
+    Logger.info("Conductor's move to #{stage} dropped #{context(issue, plan)}: the turn asked the person, who decides")
+    held
+  end
+
+  defp moved({:ok, %{move: %{stage: stage, reason: reason}}, _tokens}, held, plan, issue, run_id, opts) do
+    moves = Keyword.merge(Keyword.get(opts, :moves, []), by: {:conductor, run_id})
+
+    case own_move(issue.identifier || issue.id, %{to: stage, note: reason}, moves) do
+      {:ok, %{moved: true, from_state: from, to_state: to}} ->
+        Logger.info("Conductor moved the ticket from #{from} to #{to} #{context(issue, plan)} run_id=#{run_id} junction=#{plan.junction}")
+        if held == :ok, do: :moved, else: held
+
+      {:ok, %{to_state: to}} ->
+        Logger.info("Conductor's move to #{to} moved nothing #{context(issue, plan)} run_id=#{run_id}: the ticket is there already")
+        held
+
+      {:error, why} ->
+        Logger.warning("Conductor's move to #{stage} was refused #{context(issue, plan)} run_id=#{run_id}: #{inspect(why)}")
+        held
+    end
+  end
+
+  defp moved(_outcome, held, _plan, _issue, _run_id, _opts), do: held
+
+  # The move runs in a task of its own, not linked to the turn: a move into Backlog or a closed stage
+  # stops the ticket's running run, which may be the task this turn runs in (a turn before a run, or
+  # one inside a QA pass). The stop then ends this process, and the move still records its
+  # `ticket.moved`, its audit record and the release of the stop's pause. A move that crashes is a
+  # refused one.
+  defp own_move(target, attrs, moves) do
+    task = Task.Supervisor.async_nolink(SymphonyElixir.TaskSupervisor, fn -> DirectorMoves.move(:move, target, attrs, moves) end)
+
+    case Task.yield(task, :infinity) do
+      {:ok, answer} -> answer
+      {:exit, reason} -> {:error, {:crashed, reason}}
+    end
+  end
+
+  # The stages a move may name, the ones a person's free move takes (`DirectorMoves.phases/1`).
+  defp with_stages(facts), do: Map.put_new_lazy(facts, :stages, fn -> DirectorMoves.phases(Config.settings!()) end)
 
   # The plan a Grooming turn answered, recorded before anything else of the answer: a plan Symphony
   # refuses makes the whole answer unreadable, so nothing of it is recorded.
@@ -934,6 +1006,12 @@ defmodule SymphonyElixir.Conductor do
 
   defp route_taken(%{route: %{to: to}, ask_person: %{}}, plan, issue) do
     Logger.info("Conductor's route #{to} dropped #{context(issue, plan)}: the turn asked the person, who decides")
+    nil
+  end
+
+  # A rerun or a rework decides where the ticket goes, as a move does: the move decides.
+  defp route_taken(%{route: %{to: to}, move: %{stage: stage}}, plan, issue) when to in @routes do
+    Logger.info("Conductor's route #{to} dropped #{context(issue, plan)}: the turn moves the ticket to #{stage}")
     nil
   end
 

@@ -73,12 +73,24 @@ four options, exactly one recommended, each with the `action` Symphony takes whe
 `continue` (the pause clears and this turn runs again with the answer) or `cancel` (the ticket is
 cancelled). When you ask, the operations are not carried out: the person decides first.
 
+You can move this ticket to a stage yourself on this turn, as a person can with Move to... in the
+Director: add `"move": {"stage": "<a stage>", "reason": "<why the ticket goes there now, in plain
+words, at most 1000 characters>"}`. Name the stage exactly as one of the facts' `stages`; never
+guess a name. Symphony makes the move through the same path and checks as a person's move, and
+records it on the ticket's history as yours, with your reason. A move that path refuses (a stage the
+workflow does not name) is dropped, and the rest of your answer is kept; a move to the stage the
+ticket is in moves nothing. Use it whenever you have ruled where the ticket goes next, instead of
+leaving it where it waits or asking the person. Never move it past a review or QA it has not had (to
+Merging or Done). A move given with a question is dropped: the person decides. Otherwise leave
+`move` null.
+
 Write your answer as one JSON object and nothing else:
 
 {
   "done": true or false,
   "tree": [<operations>],
   "update": "<for the person> or null",
+  "move": null or {"stage": "<one of the facts' stages>", "reason": "<why the ticket goes there now, at most 1000 characters>"},
   "ask_person": null or {"title": "<at most 120 characters>", "question": "<one question>", "why": "<why it needs a person>",
     "if_unanswered": "<what happens if nobody answers>", "recommendation_reason": "<why the recommended option>",
     "options": [{"label": "<short>", "effect": "<what picking it does>", "recommended": true, "action": "continue"},

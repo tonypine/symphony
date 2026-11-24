@@ -352,6 +352,17 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
     end
   end
 
+  describe "a Conductor turn's move (TP-1656)" do
+    test "is a ticket.moved Symphony records for the turn: no other agent records one, and no run's tool offers it" do
+      assert {:ok, %{from: "Rework", to: "QA", note: "Nothing is left to code."}} =
+               Types.validate("ticket.moved", %{from: "Rework", to: "QA", note: "Nothing is left to code."}, :agent, "conductor")
+
+      assert {:error, {:not_allowed, _why}} = Types.validate("ticket.moved", %{from: "Rework", to: "QA"}, :agent, "rework")
+      assert {:ok, _payload} = Types.validate("ticket.moved", %{from: "Rework", to: "QA"}, :person, nil)
+      refute "ticket.moved" in Types.agent_types("conductor")
+    end
+  end
+
   describe "schema/1" do
     test "describes each field a tool's caller may send, leaving out the machinery's signal" do
       assert %{type: "list", max_items: 30} = Enum.find(Types.schema("plan.written").required, &(&1.name == "checks"))
