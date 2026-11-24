@@ -30,9 +30,9 @@ defmodule SymphonyElixir.DirectorQueue do
 
   require Logger
 
-  alias SymphonyElixir.{Orchestrator, RunStore, TicketState, Workflow}
   alias SymphonyElixir.Config.{Cache, LineEditor}
   alias SymphonyElixir.Dispatch.Queue
+  alias SymphonyElixir.{Orchestrator, RunStore, TicketState, Workflow}
   alias SymphonyElixirWeb.ObservabilityPubSub
 
   @slot_path ["execution", "concurrency", "max_total"]
@@ -63,11 +63,19 @@ defmodule SymphonyElixir.DirectorQueue do
          {:ok, index, to} <- spot(records, siblings, ticket, target),
          :ok <- write_move(Keyword.get(opts, :store, RunStore), ticket, to) do
       Orchestrator.queue_changed(Keyword.get(opts, :orchestrator, Orchestrator))
-      ObservabilityPubSub.broadcast_queue_change("order", %{issue_id: ticket.issue_id, issue_identifier: ticket.issue_identifier})
+      notice = %{issue_id: ticket.issue_id, issue_identifier: ticket.issue_identifier}
+      ObservabilityPubSub.broadcast_queue_change("order", notice)
       Logger.info("Director move_in_queue issue_identifier=#{ticket.issue_identifier} to=#{inspect(target)}")
       order = siblings |> Enum.map(& &1.issue_identifier) |> List.insert_at(index, ticket.issue_identifier)
 
-      {:ok, %{action: "move_in_queue", issue_id: ticket.issue_id, issue_identifier: ticket.issue_identifier, scope: Queue.scope(ticket), order: order}}
+      {:ok,
+       %{
+         action: "move_in_queue",
+         issue_id: ticket.issue_id,
+         issue_identifier: ticket.issue_identifier,
+         scope: Queue.scope(ticket),
+         order: order
+       }}
     end
   end
 

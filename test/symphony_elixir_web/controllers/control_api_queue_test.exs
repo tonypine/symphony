@@ -259,9 +259,17 @@ defmodule SymphonyElixirWeb.ControlApiQueueTest do
   defp home_queue(orchestrator), do: Presenter.home_payload(orchestrator, 1_000).queue.roots |> Enum.map(& &1.identifier)
 
   defp ticket(id, identifier, attrs \\ []) do
-    record = %{issue_identifier: identifier, title: "Ticket #{identifier}", phase: "Todo", linear_updated_at: DateTime.utc_now(), parent: attrs[:parent]}
+    record = %{
+      issue_identifier: identifier,
+      title: "Ticket #{identifier}",
+      phase: "Todo",
+      linear_updated_at: DateTime.utc_now(),
+      parent: attrs[:parent]
+    }
+
     :ok = RunStore.put_ticket_state(TicketState.new(@repo, id, record))
-    %Issue{id: id, identifier: identifier, title: "Ticket #{identifier}", state: "Todo", priority: 3, repo_key: @repo, url: "https://example.org/issues/#{identifier}"}
+    url = "https://example.org/issues/#{identifier}"
+    %Issue{id: id, identifier: identifier, title: "Ticket #{identifier}", state: "Todo", priority: 3, repo_key: @repo, url: url}
   end
 
   defp orchestrator_state do

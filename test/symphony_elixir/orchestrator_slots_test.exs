@@ -5,8 +5,8 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
   # (`release_slots_for_test/3`) and its dispatch order read (`put_dispatch_order_for_test/2`).
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.Dispatch.Order
   alias SymphonyElixir.{DirectorQueue, Home, Pauses, Situation, TicketState}
+  alias SymphonyElixir.Dispatch.Order
   alias SymphonyElixir.Linear.Client
   alias SymphonyElixir.Pauses.Dependencies
 

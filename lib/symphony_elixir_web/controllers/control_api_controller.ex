@@ -151,7 +151,17 @@ defmodule SymphonyElixirWeb.ControlApiController do
   require Logger
 
   alias Plug.Conn
-  alias SymphonyElixir.{AuditLog, DirectorBlockers, DirectorLabels, DirectorMoves, DirectorPriority, DirectorQueue, DirectorRulings}
+
+  alias SymphonyElixir.{
+    AuditLog,
+    DirectorBlockers,
+    DirectorLabels,
+    DirectorMoves,
+    DirectorPriority,
+    DirectorQueue,
+    DirectorRulings
+  }
+
   alias SymphonyElixir.Conductor.Message, as: ConductorMessage
   alias SymphonyElixir.{ConductorGate, Marks, Messages, Orchestrator, TicketMoves, TicketSignals, UpdateWindow}
   alias SymphonyElixir.TicketEvents.Types
