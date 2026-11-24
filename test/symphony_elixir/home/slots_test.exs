@@ -155,6 +155,91 @@ defmodule SymphonyElixir.Home.SlotsTest do
     assert %{slot: 2, ticket: %{identifier: "MT-S", working: false}, epic: %{identifier: "MT-F", done: 0, total: 1}} = second
   end
 
+  test "an epic's slot lists its done sub-tickets in order of completion and its open ones in their queue order, the card's left out" do
+    # MT-E holds slot 1; MT-W works through it. Done: MT-B (merged PR 12, done first), MT-A (PR 9,
+    # done later), MT-K known by its link alone. Open: MT-2 and MT-1 by their sort keys, MT-U by its
+    # link. MT-X is cancelled.
+    subs = [link("MT-K", "Done"), link("MT-U", "Todo"), link("MT-X", "Canceled")]
+    epic = holder("MT-E", "Waiting on sub-tickets", 1, 0, sub_issues: subs, sort_key: "a1")
+    parent = %{identifier: "MT-E"}
+    working = holder("MT-W", "In Progress", 1, 1, parent: parent, sort_key: "a0")
+    done_late = record("MT-A", "Done", parent: parent, phase_at: at(30))
+    done_early = record("MT-B", "Done", parent: parent, phase_at: at(10))
+
+    second =
+      record("MT-2", "Todo",
+        parent: parent,
+        sort_key: "a2",
+        depends_on: [
+          %{issue_id: "id-MT-A", identifier: "MT-A", kind: :done},
+          %{issue_id: "id-MT-1", identifier: "MT-1", kind: :released}
+        ]
+      )
+
+    first = record("MT-1", "Backlog", parent: parent, sort_key: "a1", repo_key: "shop")
+    cancelled = record("MT-X", "Canceled", parent: parent)
+
+    for {id, number} <- [{"id-MT-A", 9}, {"id-MT-B", 12}] do
+      url = "https://github.com/acme/app/pull/#{number}"
+      :ok = TicketPullRequest.record_created(@repo, id, url, "auto/#{id}")
+      :ok = TicketPullRequest.mark_finished(@repo, url, "merged")
+    end
+
+    records = [epic, working, done_late, done_early, second, first, cancelled]
+    assert [%{slot: 1, ticket: %{identifier: "MT-W"}, epic: named}] = entries(records, total: 1)
+
+    # What the entry gave before stays as it was.
+    assert %{issue_id: "id-MT-E", identifier: "MT-E", title: "Ticket MT-E", repo_key: @repo, done: 3, total: 7} = named
+    assert named.since == at(0)
+
+    assert named.done_sub_tickets == [
+             %{issue_id: "id-MT-K", identifier: "MT-K", title: nil, pull_request_number: nil, done_at: nil},
+             %{issue_id: "id-MT-B", identifier: "MT-B", title: "Ticket MT-B", pull_request_number: 12, done_at: at(10)},
+             %{issue_id: "id-MT-A", identifier: "MT-A", title: "Ticket MT-A", pull_request_number: 9, done_at: at(30)}
+           ]
+
+    assert named.open_sub_tickets == [
+             %{issue_id: "id-MT-1", identifier: "MT-1", title: "Ticket MT-1", phase: "Backlog", repo_key: "shop", parent: "MT-E", dependencies: []},
+             %{
+               issue_id: "id-MT-2",
+               identifier: "MT-2",
+               title: "Ticket MT-2",
+               phase: "Todo",
+               repo_key: @repo,
+               parent: "MT-E",
+               dependencies: [
+                 %{issue_id: "id-MT-A", identifier: "MT-A", kind: "done", met: true},
+                 %{issue_id: "id-MT-1", identifier: "MT-1", kind: "released", met: false}
+               ]
+             },
+             %{issue_id: "id-MT-U", identifier: "MT-U", title: nil, phase: "Todo", repo_key: nil, parent: "MT-E", dependencies: []}
+           ]
+  end
+
+  test "a done sub-ticket with no repo, or whose stored pull request URL names no number, has no pull request number" do
+    epic = holder("MT-E", "Waiting on sub-tickets", 1, 0)
+    working = holder("MT-W", "In Progress", 1, 1, parent: %{identifier: "MT-E"})
+    # MT-D's record names no repo: no stored pull request is looked up for it.
+    done =
+      TicketState.normalize(%{
+        repo_key: nil,
+        issue_id: "id-MT-D",
+        issue_identifier: "MT-D",
+        title: "Ticket MT-D",
+        phase: "Done",
+        parent: %{identifier: "MT-E"}
+      })
+
+    other = record("MT-O", "Done", parent: %{identifier: "MT-E"})
+    :ok = TicketPullRequest.record_created(@repo, "id-MT-O", "https://github.com/acme/app/commits/main", nil)
+
+    assert [%{epic: %{done_sub_tickets: [first, second], open_sub_tickets: []}}] =
+             entries([epic, working, done, other], total: 1)
+
+    assert %{identifier: "MT-D", pull_request_number: nil} = first
+    assert %{identifier: "MT-O", pull_request_number: nil} = second
+  end
+
   defp entries(records, opts) do
     Slots.entries(records, live(), Keyword.put_new(opts, :parents, Queue.parents(records)))
   end
