@@ -79,6 +79,31 @@ defmodule SymphonyElixir.DirectorMovesTest do
     end
   end
 
+  # The orchestrator whose running entry for the ticket is `running`, the task a Conductor turn runs
+  # in: a stop pauses the ticket as an operator stop and kills that task, as `terminate_task/1` does.
+  defmodule KillingOrchestrator do
+    use GenServer
+
+    def start_link({test_pid, running}), do: GenServer.start_link(__MODULE__, {test_pid, running})
+
+    @impl true
+    def init(state), do: {:ok, state}
+
+    @impl true
+    def handle_call({:stop_running, issue_id, _opts}, _from, {test_pid, running} = state) do
+      :ok = Pauses.stop({:ticket, "repo-director", issue_id}, DateTime.utc_now())
+      Process.exit(running, :kill)
+      send(test_pid, {:stop_running, issue_id})
+      {:reply, {:ok, %{stopped: true, issue_id: issue_id}}, state}
+    end
+
+    @impl true
+    def handle_cast(message, {test_pid, _running} = state) do
+      send(test_pid, message)
+      {:noreply, state}
+    end
+  end
+
   # The QA pre-build as an Unblock asks it again: it tells the test, and whether the ticket was
   # still held when it was asked.
   defmodule RetryingBuilder do
@@ -2731,6 +2756,46 @@ defmodule SymphonyElixir.DirectorMovesTest do
       log = capture_log(fn -> assert Conductor.run(turn_plan("after_rework"), %{issue | state: "QA"}, turn: moving_turn(move_to("QA")), facts: %{}, moves: opts) == :ok end)
       assert log =~ "Conductor's move to QA moved nothing"
       assert [_moved] = RunStore.list_ticket_events("pr", types: ["ticket.moved"])
+    end
+
+    test "a move into a closed stage from a turn inside the ticket's own run is recorded, though the stop ends that run", %{opts: opts} do
+      issue = conducted!("Rework")
+      test = self()
+
+      run_task =
+        spawn(fn ->
+          receive do
+            {:go, moves} -> send(test, {:ran, Conductor.run(turn_plan("after_rework"), issue, turn: moving_turn(move_to("Done")), facts: %{}, moves: moves)})
+          end
+        end)
+
+      watch = Process.monitor(run_task)
+      orchestrator = start_supervised!({KillingOrchestrator, {self(), run_task}})
+      send(run_task, {:go, Keyword.put(opts, :orchestrator, orchestrator)})
+
+      # The stop ends the run the turn runs in; the move goes on in its own task and is recorded.
+      assert_receive {:DOWN, ^watch, :process, ^run_task, :killed}, 5_000
+      assert_receive {:request_refresh, "repo-director", :now}, 5_000
+      refute_received {:ran, _answer}
+      assert_received {:stop_running, "pr"}
+
+      assert %{phase: "Done"} = RunStore.get_ticket_state("pr")
+      assert [%{actor: %{kind: :agent, run_kind: "conductor", run_id: run_id}, payload: payload}] = RunStore.list_ticket_events("pr", types: ["ticket.moved"])
+      assert payload == %{from: "Rework", to: "Done", note: @reason, run_stopped: true}
+      assert [%{"move" => "move", "to_state" => "Done", "by" => "Conductor", "run_id" => ^run_id}] = audit_records()
+      refute Pauses.paused?({:ticket, "repo-director", "pr"})
+    end
+
+    test "a move that crashes is a refused one: the ticket stays, and the turn goes on", %{opts: opts} do
+      issue = conducted!("Rework")
+      moves = Keyword.put(opts, :store, :not_a_store)
+
+      log = capture_log(fn -> assert Conductor.run(turn_plan("after_rework"), issue, turn: moving_turn(move_to("QA")), facts: %{}, moves: moves) == :ok end)
+
+      assert log =~ "Conductor's move to QA was refused"
+      assert log =~ ":crashed"
+      assert RunStore.get_ticket_state("pr").phase == "Rework"
+      assert RunStore.list_ticket_events("pr", types: ["ticket.moved"]) == []
     end
 
     test "a move given with a question is dropped: the person decides", %{opts: opts} do

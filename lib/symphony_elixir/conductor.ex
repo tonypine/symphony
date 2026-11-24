@@ -47,6 +47,8 @@ defmodule SymphonyElixir.Conductor do
   may: Symphony makes the move through the person's free move (`SymphonyElixir.DirectorMoves`,
   `move/4` with `:move`), with its guards (a phase of the repo's workflow, a ticket in a configured
   repository, `SymphonyElixir.TransitionGuard`), once the turn's run has ended, and asks nothing.
+  The move runs in a task of its own: a move into Backlog or a closed stage stops the ticket's
+  running run, which may be the task the turn runs in, and the move is still recorded in full.
   The ticket's events get one `ticket.moved` whose actor is the turn and whose note is its reason.
   A move that path refuses is dropped and logged, and the rest of the turn is kept; one to the stage
   the ticket is in moves nothing; one given with a question is dropped, since the person decides.
@@ -789,7 +791,7 @@ defmodule SymphonyElixir.Conductor do
   defp moved({:ok, %{move: %{stage: stage, reason: reason}}, _tokens}, held, plan, issue, run_id, opts) do
     moves = Keyword.merge(Keyword.get(opts, :moves, []), by: {:conductor, run_id})
 
-    case DirectorMoves.move(:move, issue.identifier || issue.id, %{to: stage, note: reason}, moves) do
+    case own_move(issue.identifier || issue.id, %{to: stage, note: reason}, moves) do
       {:ok, %{moved: true, from_state: from, to_state: to}} ->
         Logger.info("Conductor moved the ticket from #{from} to #{to} #{context(issue, plan)} run_id=#{run_id} junction=#{plan.junction}")
         if held == :ok, do: :moved, else: held
@@ -805,6 +807,20 @@ defmodule SymphonyElixir.Conductor do
   end
 
   defp moved(_outcome, held, _plan, _issue, _run_id, _opts), do: held
+
+  # The move runs in a task of its own, not linked to the turn: a move into Backlog or a closed stage
+  # stops the ticket's running run, which may be the task this turn runs in (a turn before a run, or
+  # one inside a QA pass). The stop then ends this process, and the move still records its
+  # `ticket.moved`, its audit record and the release of the stop's pause. A move that crashes is a
+  # refused one.
+  defp own_move(target, attrs, moves) do
+    task = Task.Supervisor.async_nolink(SymphonyElixir.TaskSupervisor, fn -> DirectorMoves.move(:move, target, attrs, moves) end)
+
+    case Task.yield(task, :infinity) do
+      {:ok, answer} -> answer
+      {:exit, reason} -> {:error, {:crashed, reason}}
+    end
+  end
 
   # The stages a move may name, the ones a person's free move takes (`DirectorMoves.phases/1`).
   defp with_stages(facts), do: Map.put_new_lazy(facts, :stages, fn -> DirectorMoves.phases(Config.settings!()) end)
