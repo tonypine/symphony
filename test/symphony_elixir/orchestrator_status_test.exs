@@ -880,12 +880,11 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       identifier: "MT-WATCH-CONN",
       title: "Watch connected",
       state: "In Progress",
-      blocked_by: [%{id: "blocker-1", identifier: "MT-BLOCKER", state: "In Progress"}],
       sub_issues: [%{id: "sub-1", identifier: "MT-SUB", state: "Todo"}]
     }
 
-    # Each poll's issue carries blockers and sub-tickets, never the parent or links.
-    watched_issue = %{running_issue | state: "In Review", blocked_by: [%{id: "blocker-1", identifier: "MT-BLOCKER", state: "Done"}]}
+    # Each poll's issue carries sub-tickets, never the parent, links or blocker links.
+    watched_issue = %{running_issue | state: "In Review"}
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [watched_issue])
 
     orchestrator_name = Module.concat(__MODULE__, :WatchingConnectedOrchestrator)
@@ -935,8 +934,9 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert running_connected == %{
              parent: parent,
              sub_tickets: [%{identifier: "MT-SUB", title: nil, state: "Todo"}],
-             blocked_by: [%{identifier: "MT-BLOCKER", title: nil, state: "In Progress"}],
-             blocks: [%{identifier: "MT-NEXT", title: "Next", state: "Todo"}],
+             # Linear's blocker links are not read, from the poll or the run's enrichment.
+             blocked_by: [],
+             blocks: [],
              related: [%{identifier: "MT-REL", title: "Context", state: "Done"}]
            }
 
@@ -945,7 +945,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     snapshot = wait_for_snapshot(pid, &match?(%{watching: [%{identifier: "MT-WATCH-CONN"}]}, &1), 1_000)
 
     assert [%{connected: watched_connected}] = snapshot.watching
-    assert watched_connected == %{running_connected | blocked_by: [%{identifier: "MT-BLOCKER", title: nil, state: "Done"}]}
+    assert watched_connected == running_connected
   end
 
   test "orchestrator transcript buffer is bounded by observability config" do

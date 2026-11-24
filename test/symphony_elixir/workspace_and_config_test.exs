@@ -2237,7 +2237,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     refute issue.assigned_to_worker
   end
 
-  test "linear client normalizes blockers from inverse relations" do
+  test "linear client reads no blocker link from inverse relations" do
     raw_issue = %{
       "id" => "issue-1",
       "identifier" => "MT-1",
@@ -2293,7 +2293,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     issue = Client.normalize_issue_for_test(raw_issue, "user-1")
 
-    assert issue.blocked_by == [%{id: "issue-2", identifier: "MT-2", state: "In Progress"}]
+    # Linear's blocker links are not read: the issue carries no blocker at all.
+    refute Map.has_key?(Map.from_struct(issue), :blocked_by)
     assert issue.sub_issues == [%{id: "issue-4", identifier: "MT-4", state: "Backlog"}, %{id: "issue-5", identifier: "MT-5", state: nil}]
     assert issue.labels == ["backend"]
     assert issue.comments == [%{author: "Reviewer", body: "Clarifying answer", created_at: ~U[2026-01-01 01:00:00Z]}]
@@ -2732,8 +2733,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
         "title" => "Issue #{suffix}",
         "description" => "Description #{suffix}",
         "state" => %{"name" => "In Progress"},
-        "labels" => %{"nodes" => []},
-        "inverseRelations" => %{"nodes" => []}
+        "labels" => %{"nodes" => []}
       }
     end
 
@@ -2865,7 +2865,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert log =~ "[REDACTED]"
   end
 
-  test "todo issue with non-terminal blocker is not dispatch-eligible" do
+  test "todo issue with an unmet stored dependency is not dispatch-eligible, and no pause holds it" do
     state = %Orchestrator.State{
       max_concurrent_agents: 3,
       running: %{},
@@ -2878,13 +2878,15 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       id: "blocked-1",
       identifier: "MT-1001",
       title: "Blocked work",
-      state: "Todo",
-      blocked_by: [%{id: "blocker-1", identifier: "MT-1002", state: "In Progress"}]
+      state: "Todo"
     }
 
-    # The poll pauses it on its open blocker; the gate reads the pause.
+    depends_on!(issue, %{id: "blocker-1", identifier: "MT-1002", state: "In Progress"})
+
+    # The poll's sweep sets no pause for it; the dependency gate reads the stored dependency.
     terminal_states = Config.settings!().tracker.terminal_states
-    assert Orchestrator.sweep_dependencies_for_test(Config.repo_key!(), [issue], terminal_states) == 1
+    assert Orchestrator.sweep_dependencies_for_test(Config.repo_key!(), [issue], terminal_states) == 0
+    refute SymphonyElixir.Pauses.paused?({:ticket, Config.repo_key!(), issue.id})
     refute Orchestrator.should_dispatch_issue_for_test(issue, state)
   end
 
@@ -2910,7 +2912,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     refute Orchestrator.should_dispatch_issue_for_test(issue, state)
   end
 
-  test "todo issue with terminal blockers remains dispatch-eligible" do
+  test "todo issue whose stored dependency is met remains dispatch-eligible" do
     state = %Orchestrator.State{
       max_concurrent_agents: 3,
       running: %{},
@@ -2923,10 +2925,10 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       id: "ready-1",
       identifier: "MT-1003",
       title: "Ready work",
-      state: "Todo",
-      blocked_by: [%{id: "blocker-2", identifier: "MT-1004", state: "Closed"}]
+      state: "Todo"
     }
 
+    depends_on!(issue, %{id: "blocker-2", identifier: "MT-1004", state: "Done"})
     assert Orchestrator.should_dispatch_issue_for_test(issue, state)
   end
 
@@ -2978,30 +2980,31 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert {:skip, %Issue{identifier: "MT-1105"}} = Orchestrator.revalidate_issue_for_dispatch_for_test(stale_issue, fetcher)
   end
 
-  test "dispatch revalidation skips stale todo issue once a non-terminal blocker appears" do
+  test "dispatch revalidation reads no blocker link: the read right before dispatch pauses nothing" do
     stale_issue = %Issue{
       id: "blocked-2",
       identifier: "MT-1005",
       title: "Stale blocked work",
-      state: "Todo",
-      blocked_by: []
+      state: "Todo"
     }
 
-    refreshed_issue = %Issue{
-      id: "blocked-2",
-      identifier: "MT-1005",
-      title: "Stale blocked work",
-      state: "Todo",
-      blocked_by: [%{id: "blocker-3", identifier: "MT-1006", state: "In Progress"}]
-    }
+    fetcher = fn ["blocked-2"] -> {:ok, [stale_issue]} end
 
-    fetcher = fn ["blocked-2"] -> {:ok, [refreshed_issue]} end
+    assert {:ok, %Issue{identifier: "MT-1005"}} = Orchestrator.revalidate_issue_for_dispatch_for_test(stale_issue, fetcher)
+    refute SymphonyElixir.Pauses.paused?({:ticket, Config.repo_key!(), "blocked-2"})
+  end
 
-    assert {:skip, %Issue{} = skipped_issue} =
-             Orchestrator.revalidate_issue_for_dispatch_for_test(stale_issue, fetcher)
+  # The ticket `issue` depends on `on` (`:done`), as Symphony stores it, with a record of each.
+  defp depends_on!(%Issue{} = issue, %{id: on_id, identifier: on_identifier, state: on_state}) do
+    repo_key = Config.repo_key!()
+    :ok = RunStore.put_ticket_state(SymphonyElixir.TicketState.new(repo_key, issue.id, %{issue_identifier: issue.identifier, phase: issue.state}))
+    :ok = RunStore.put_ticket_state(SymphonyElixir.TicketState.new(repo_key, on_id, %{issue_identifier: on_identifier, phase: on_state}))
+    :ok = RunStore.add_dependency(issue.id, on_id, :done)
 
-    assert skipped_issue.identifier == "MT-1005"
-    assert skipped_issue.blocked_by == [%{id: "blocker-3", identifier: "MT-1006", state: "In Progress"}]
+    on_exit(fn ->
+      RunStore.delete_ticket_state(issue.id)
+      RunStore.delete_ticket_state(on_id)
+    end)
   end
 
   test "workspace remove returns error information for missing directory" do
@@ -6938,8 +6941,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       "title" => identifier,
       "state" => %{"name" => "Todo"},
       "assignee" => assignee_id && %{"id" => assignee_id},
-      "labels" => %{"nodes" => []},
-      "inverseRelations" => %{"nodes" => []}
+      "labels" => %{"nodes" => []}
     }
   end
 

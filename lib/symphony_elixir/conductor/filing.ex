@@ -264,20 +264,12 @@ defmodule SymphonyElixir.Conductor.Filing do
 
   # The tickets `issue` depends on, as Symphony stores them (`SymphonyElixir.RunStore.dependencies/1`),
   # each with its identifier and the phase its record holds.
-  defp blockers(%Issue{id: issue_id}, _opts) when is_binary(issue_id) do
-    case RunStore.dependencies(issue_id) do
-      entries when is_list(entries) ->
-        for {entry, record} <- entries,
-            identifier = entry.identifier || record_field(record, :issue_identifier),
-            is_binary(identifier),
-            do: %{identifier: identifier, state: record_field(record, :phase)}
-
-      _unreadable ->
-        []
-    end
+  defp blockers(%Issue{id: issue_id}, _opts) do
+    for {%{} = entry, record} <- List.wrap(RunStore.dependencies(issue_id)),
+        identifier = entry.identifier || record_field(record, :issue_identifier),
+        is_binary(identifier),
+        do: %{identifier: identifier, state: record_field(record, :phase)}
   end
-
-  defp blockers(_issue, _opts), do: []
 
   defp record_field(%{} = record, key), do: Map.get(record, key)
   defp record_field(nil, _key), do: nil

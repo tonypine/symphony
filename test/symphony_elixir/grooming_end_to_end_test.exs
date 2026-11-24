@@ -207,12 +207,12 @@ defmodule SymphonyElixir.GroomingEndToEndTest do
     # The run's task ended before its agent started, for the ticket's next dispatch.
     assert reason == {:shutdown, :groom_again}
 
-    # Both sub-tickets exist under the ticket in the tracker, with no Linear blocker link between them.
+    # Both sub-tickets exist under the ticket in the tracker.
     assert [parent, first, second] = Application.get_env(:symphony_elixir, :memory_tracker_issues)
     assert parent.id == issue_id
     assert [%{id: first_id}, %{id: second_id}] = parent.sub_issues
-    assert %Issue{id: ^first_id, title: "The API", description: "Add the filter.", blocked_by: []} = first
-    assert %Issue{id: ^second_id, title: "The list", blocked_by: []} = second
+    assert %Issue{id: ^first_id, title: "The API", description: "Add the filter."} = first
+    assert %Issue{id: ^second_id, title: "The list"} = second
     assert %{identifier: parent_identifier} = first.parent
     assert %{identifier: ^parent_identifier} = second.parent
     assert parent_identifier == issue.identifier

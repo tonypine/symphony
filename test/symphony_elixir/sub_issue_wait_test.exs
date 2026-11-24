@@ -5,7 +5,7 @@ defmodule SymphonyElixir.SubIssueWaitTest do
 
   alias SymphonyElixir.Config.{Schema, SystemSchema}
   alias SymphonyElixir.{RunKind, RunStore, SubIssueWait}
-  alias SymphonyElixir.{TicketObservation, TicketPlan, TicketPullRequest, TicketSignals}
+  alias SymphonyElixir.{TicketObservation, TicketPlan, TicketPullRequest, TicketSignals, TicketState}
 
   @waiting "Waiting on sub-tickets"
 
@@ -142,47 +142,63 @@ defmodule SymphonyElixir.SubIssueWaitTest do
       :ok
     end
 
+    defp record!(issue_id, identifier, phase) do
+      :ok = RunStore.put_ticket_state(TicketState.new("default", issue_id, %{issue_identifier: identifier, title: identifier, phase: phase}))
+    end
+
     defp merged!(issue_id) do
       url = "https://github.com/acme/app/pull/#{System.unique_integer([:positive])}"
       :ok = TicketPullRequest.put("default", issue_id, %{pr_url: url})
       :ok = TicketPullRequest.mark_finished("default", url, "merged")
     end
 
-    test "a blocked ticket starts once its groomed blocker's pull request merged, while the blocker is not Done" do
+    test "a ticket that depends on a groomed ticket starts once its pull request merged, while that ticket is not Done" do
       state = orchestrator_state()
-      terminal_states = Config.settings!().tracker.terminal_states
-      for id <- ["blocker-groomed", "blocker-plain"], do: :ok = TicketSignals.record_phase("default", id, "Merging")
+      record!("blocker-groomed", "MT-2101", "Merging")
+      record!("blocker-plain", "MT-2103", "Merging")
+      record!("blocked-by-groomed", "MT-2102", "Todo")
       groomed!("blocker-groomed")
-      blocker = %{id: "blocker-groomed", identifier: "MT-2101", state: "Merging"}
-      blocked = %Issue{id: "blocked-by-groomed", identifier: "MT-2102", title: "Next", state: "Todo", blocked_by: [blocker]}
+      :ok = RunStore.add_dependency("blocked-by-groomed", "blocker-groomed", :done)
+      blocked = %Issue{id: "blocked-by-groomed", identifier: "MT-2102", title: "Next", state: "Todo"}
 
-      # Its pull request is still open: it blocks.
-      assert Issue.blocked?(blocked, terminal_states)
-      assert [%{issue_id: "blocked-by-groomed"}] = Orchestrator.put_blocked_for_test(state, [blocked]).blocked
+      # Its pull request is still open: the stored dependency holds it.
+      assert [%{issue_id: "blocked-by-groomed", blockers: [%{identifier: "MT-2101"}]}] = Orchestrator.put_blocked_for_test(state, [blocked]).blocked
+      refute Orchestrator.should_dispatch_issue_for_test(blocked, state)
 
       merged!("blocker-groomed")
-      assert SubIssueWait.merged_blocker?(blocker)
-      assert Issue.open_blockers(blocked, terminal_states) == []
+      assert SubIssueWait.merged_blocker?(%{id: "blocker-groomed", state: "Merging"})
       assert Orchestrator.put_blocked_for_test(state, [blocked]).blocked == []
       assert Orchestrator.should_dispatch_issue_for_test(blocked, state)
 
-      # A ticket with no plan keeps today's rule: merged, it still blocks until it is Done.
+      # A ticket with no plan keeps today's rule: merged, it still holds until it is Done.
       merged!("blocker-plain")
-      plain = %{id: "blocker-plain", identifier: "MT-2103", state: "Merging"}
-      refute SubIssueWait.merged_blocker?(plain)
-      assert Issue.blocked?(%{blocked | blocked_by: [plain]}, terminal_states)
+      refute SubIssueWait.merged_blocker?(%{id: "blocker-plain", state: "Merging"})
+      :ok = RunStore.add_dependency("blocked-by-groomed", "blocker-plain", :done)
+      assert [%{blockers: [%{identifier: "MT-2103"}]}] = Orchestrator.put_blocked_for_test(state, [blocked]).blocked
     end
 
-    test "MOT-85: a sub-ticket blocked by its own groomed parent dispatches once the parent's pull request merged" do
+    test "MOT-85: a sub-ticket that depends on its own groomed parent dispatches once the parent's pull request merged" do
       state = orchestrator_state()
-      :ok = TicketSignals.record_phase("default", "groomed-parent", @waiting)
+      record!("groomed-parent", "MT-2201", @waiting)
+      record!("child-of-groomed", "MT-2202", "Todo")
       groomed!("groomed-parent")
       merged!("groomed-parent")
-      parent = %{id: "groomed-parent", identifier: "MT-2201", state: @waiting}
-      child = %Issue{id: "child-of-groomed", identifier: "MT-2202", title: "Builds on it", state: "Todo", blocked_by: [parent]}
+      :ok = RunStore.add_dependency("child-of-groomed", "groomed-parent", :done)
+      child = %Issue{id: "child-of-groomed", identifier: "MT-2202", title: "Builds on it", state: "Todo"}
 
       # No merge mark is left for it: the record's merged pull request is enough.
       refute RunStore.merged_wait?("groomed-parent")
+      assert Orchestrator.put_blocked_for_test(state, [child]).blocked == []
+      assert Orchestrator.should_dispatch_issue_for_test(child, state)
+    end
+
+    test "TP-1628: a Linear blocker link on the issue holds nothing; the sub-ticket wait reads stored dependencies only" do
+      state = orchestrator_state()
+      record!("linked-blocker", "MT-2401", "In Progress")
+      record!("linked-child", "MT-2402", "Todo")
+      child = %Issue{id: "linked-child", identifier: "MT-2402", title: "Linked in Linear", state: "Todo"}
+
+      # The issue's Linear link to MT-2401 is never read: with no stored dependency nothing holds it.
       assert Orchestrator.put_blocked_for_test(state, [child]).blocked == []
       assert Orchestrator.should_dispatch_issue_for_test(child, state)
     end
@@ -773,30 +789,28 @@ defmodule SymphonyElixir.SubIssueWaitTest do
       refute Map.has_key?(running, "waiting-poll")
     end
 
-    test "MOT-85: a blocked-by link to a merged ticket waiting on its sub-tickets is met, so its sub-ticket dispatches" do
+    test "MOT-85: a stored dependency on a merged ticket waiting on its sub-tickets is met, so its sub-ticket dispatches" do
       state = orchestrator_state()
-      parent = %{id: "merged-parent", identifier: "MT-1651", state: @waiting}
-      child = %Issue{id: "child-of-merged", identifier: "MT-1652", title: "Follow-up", state: "Todo", blocked_by: [parent]}
+      record!("merged-parent", "MT-1651", @waiting)
+      record!("child-of-merged", "MT-1652", "Todo")
+      :ok = RunStore.add_dependency("child-of-merged", "merged-parent", :done)
+      child = %Issue{id: "child-of-merged", identifier: "MT-1652", title: "Follow-up", state: "Todo"}
       Application.put_env(:symphony_elixir, :memory_tracker_issues, [child])
-      terminal_states = Config.settings!().tracker.terminal_states
 
-      # Before its merge is recorded (a plan parent waits there with nothing recorded), the link holds.
-      refute SubIssueWait.merged_blocker?(parent)
-      assert Issue.blocked?(child, terminal_states)
+      # Before its merge is recorded (a plan parent waits there with nothing recorded), the dependency holds.
+      refute SubIssueWait.merged_blocker?(%{id: "merged-parent", state: @waiting})
       assert [%{issue_id: "child-of-merged"}] = Orchestrator.put_blocked_for_test(state, [child]).blocked
 
       :ok = RunStore.put_merged_wait("merged-parent")
 
-      assert SubIssueWait.merged_blocker?(parent)
-      assert Issue.open_blockers(child, terminal_states) == []
-      refute Issue.blocked?(child, terminal_states)
+      assert SubIssueWait.merged_blocker?(%{id: "merged-parent", state: @waiting})
       assert Orchestrator.put_blocked_for_test(state, [child]).blocked == []
       assert Orchestrator.should_dispatch_issue_for_test(child, state)
 
-      # Once a person moves it out of the waiting state, it blocks again until it is terminal.
-      reopened = %{child | blocked_by: [%{parent | state: "In Progress"}]}
-      refute SubIssueWait.merged_blocker?(%{parent | state: "In Progress"})
-      assert Issue.blocked?(reopened, terminal_states)
+      # Once a person moves it out of the waiting state, it holds again until it is done.
+      :ok = RunStore.update_ticket_state("merged-parent", %{phase: "In Progress"})
+      refute SubIssueWait.merged_blocker?(%{id: "merged-parent", state: "In Progress"})
+      assert [%{issue_id: "child-of-merged"}] = Orchestrator.put_blocked_for_test(state, [child]).blocked
       refute SubIssueWait.merged_blocker?(%{id: nil, state: @waiting})
       refute SubIssueWait.merged_blocker?(:not_a_blocker)
     end

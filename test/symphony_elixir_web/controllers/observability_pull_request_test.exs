@@ -187,8 +187,7 @@ defmodule SymphonyElixirWeb.ObservabilityPullRequestTest do
         "id" => "id-TP-892",
         "identifier" => "TP-892",
         "title" => "Retire two old review steps",
-        "state" => %{"name" => "Rework", "type" => "started"},
-        "inverseRelations" => %{"nodes" => []}
+        "state" => %{"name" => "Rework", "type" => "started"}
       }
 
       {:ok, %{"data" => %{"attachmentsForURL" => %{"nodes" => [%{"issue" => issue}]}, "issues" => %{"nodes" => [issue]}}}}

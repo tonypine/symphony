@@ -175,10 +175,7 @@ defmodule SymphonyElixir.Initiatives.Initiative do
   defp iso8601(_at), do: nil
 
   defp stored_dependencies(id) do
-    case RunStore.dependencies(id) do
-      entries when is_list(entries) -> entries
-      {:error, _reason} -> []
-    end
+    for {%{} = _entry, _record} = dependency <- List.wrap(RunStore.dependencies(id)), do: dependency
   end
 
   defp truncated?(node), do: more?(node["children"])

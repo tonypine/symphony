@@ -50,16 +50,9 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
     alias SymphonyElixir.Linear.Issue
     alias SymphonyElixir.PrWatch.SwitchTest.World
 
-    # Each issue's blockers carry their current state, as Linear reads them.
     def fetch_issues_by_states_with_failures(states) do
       wanted = MapSet.new(states, &String.downcase/1)
-      issues = World.get(:issues)
-
-      watched =
-        for issue <- Map.values(issues), MapSet.member?(wanted, String.downcase(issue.state)) do
-          %{issue | blocked_by: Enum.map(issue.blocked_by, &%{&1 | state: issues |> Map.get(&1.id, %{state: &1.state}) |> Map.fetch!(:state)})}
-        end
-
+      watched = for issue <- Map.values(World.get(:issues)), MapSet.member?(wanted, String.downcase(issue.state)), do: issue
       {:ok, watched, []}
     end
 
@@ -155,6 +148,12 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       pr_review_mode: "polling",
       ci: Map.merge(%{enabled: true, log_excerpt_lines: 20}, ci)
     )
+  end
+
+  # The ticket `issue_id` depends on `on_issue_id` (`:done`), as Symphony stores it; never a Linear link.
+  defp depends!(issue_id, on_issue_id) do
+    for id <- [issue_id, on_issue_id], RunStore.get_ticket_state(id) == nil, do: :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, id))
+    :ok = RunStore.add_dependency(issue_id, on_issue_id, :done)
   end
 
   # A ticket in `state` with an open PR whose read `attrs` override a green, clean one.
@@ -1074,7 +1073,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert decision(leader).rule != "R14a"
       assert_waits!(follower, "Waiting on TP-1 to land: they change the same files (SPEC.md)", ["TP-1"])
       assert World.calls(:link) == []
-      assert %{blocked_by: []} = World.get(:issues)[follower]
+      assert RunStore.dependencies(follower) == []
       assert World.calls(:disarm) == ["https://github.com/acme/app/pull/2"]
       assert [%{issue_identifier: "TP-1", linked: false, step_behind: false, files: ["SPEC.md"]}] = watch(follower).links
 
@@ -1090,7 +1089,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
 
       refute paused?(follower)
       assert World.calls(:unlink) == []
-      assert %{blocked_by: []} = World.get(:issues)[follower]
+      assert RunStore.dependencies(follower) == []
       assert moves(follower) == ["CI Fix"]
       assert %{rule: "R14"} = decision(follower)
       assert CiFix.origin(follower) == "Merging"
@@ -1208,7 +1207,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
     defp waiting!(attrs \\ []) do
       leader = ticket!("1", "QA", ci: :pending, mergeable: :blocked)
       follower = ticket!("2", "Merging", dirty())
-      Enum.each(Keyword.get(attrs, :blocked_by, []), fn blocker -> World.update(:issues, &Map.update!(&1, follower, fn issue -> %{issue | blocked_by: [blocker]} end)) end)
+      if Keyword.get(attrs, :depends_on_leader, false), do: depends!(follower, leader)
       open_pulls!([open_pull(1, ["SPEC.md"]), open_pull(2, ["SPEC.md"])])
       pid = start!()
       tick!(pid)
@@ -1219,7 +1218,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
     defp left_race!(pid, follower) do
       tick!(pid)
       assert World.calls(:unlink) == []
-      assert World.get(:issues)[follower].blocked_by == []
+      assert RunStore.dependencies(follower) == []
       refute paused?(follower)
       assert moves(follower) == ["CI Fix"]
       assert watch(follower).links == []
@@ -1250,8 +1249,8 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       left_race!(pid, follower)
     end
 
-    test "a link a person added is never removed" do
-      {pid, _leader, follower} = waiting!(blocked_by: [%{id: "issue-1", identifier: "TP-1", state: "QA"}])
+    test "a dependency a person stored is never removed" do
+      {pid, _leader, follower} = waiting!(depends_on_leader: true)
       assert World.calls(:link) == []
       assert [%{linked: false}] = watch(follower).links
 
@@ -1260,7 +1259,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       tick!(pid)
 
       assert World.calls(:unlink) == []
-      assert [%{identifier: "TP-1"}] = World.get(:issues)[follower].blocked_by
+      assert [{%{issue_id: "issue-1"}, _record}] = RunStore.dependencies(follower)
       refute paused?(follower)
     end
 
@@ -1358,10 +1357,10 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert moves(stepping) == ["CI Fix", "CI Fix"]
     end
 
-    test "a wait that would close a cycle is not made: TP-1 is blocked by TP-2, so TP-2 doesn't wait on TP-1" do
+    test "a wait that would close a cycle is not made: TP-1 depends on TP-2 (stored), so TP-2 doesn't wait on TP-1" do
       {pid, stepping} = exhausted!("2")
       blocked = ticket!("1", "In Progress", dirty())
-      World.update(:issues, &Map.update!(&1, blocked, fn issue -> %{issue | blocked_by: [%{id: stepping, identifier: "TP-2", state: "Merging"}]} end))
+      depends!(blocked, stepping)
       open_pulls!([open_pull(1, ["SPEC.md"]), open_pull(2, ["SPEC.md"])])
       tick!(pid)
 

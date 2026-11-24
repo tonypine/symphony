@@ -148,11 +148,11 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
       assert Orchestrator.release_slots_for_test(state, [backlog], true).slot_holders == %{}
     end
 
-    test "when it waits on a blocker, or a person stopped it", ctx do
+    test "when a run's block report holds it on another ticket, or a person stopped it", ctx do
       write_slots_workflow!(ctx, max_concurrent_agents: 2)
-      blocked = recorded(issue("b", "MT-B", "In Progress", blocked_by: [%{id: "id-MT-9", identifier: "MT-9", state: "In Progress"}]))
+      blocked = recorded(issue("b", "MT-B", "In Progress"))
       stopped = recorded(issue("s", "MT-S", "In Progress"))
-      assert Orchestrator.sweep_dependencies_for_test("default", [blocked], ["Done", "Canceled"]) == 1
+      block_report!(blocked, "MT-9")
       :ok = Pauses.stop({:ticket, "default", "s"}, DateTime.utc_now())
 
       state = orchestrator_state(2) |> holding(blocked) |> holding(stopped)
@@ -163,13 +163,13 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
       assert Orchestrator.available_slots_for_test(released) == 2
     end
 
-    test "when it waits on a stored dependency, exactly as when it waits on a blocker", ctx do
+    test "when it waits on a stored dependency, exactly as when a block report holds it on a ticket", ctx do
       write_slots_workflow!(ctx, max_concurrent_agents: 2)
       upstream = recorded(issue("u", "MT-9", "In Progress"))
       depending = recorded(issue("d", "MT-D", "In Progress"))
-      blocked = recorded(issue("b", "MT-B", "In Progress", blocked_by: [%{id: "u", identifier: "MT-9", state: "In Progress"}]))
+      blocked = recorded(issue("b", "MT-B", "In Progress"))
       :ok = RunStore.add_dependency("d", "u", :done)
-      assert Orchestrator.sweep_dependencies_for_test("default", [blocked], ["Done", "Canceled"]) == 1
+      block_report!(blocked, "MT-9")
 
       state = orchestrator_state(2) |> holding(depending) |> holding(blocked)
       released = Orchestrator.release_slots_for_test(state, [depending, blocked], true)
@@ -180,6 +180,66 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
       :ok = RunStore.update_ticket_state(upstream.id, %{phase: "Done"})
       met = holding(orchestrator_state(2), depending)
       assert Orchestrator.release_slots_for_test(met, [depending], true).slot_holders == met.slot_holders
+    end
+
+    test "a ticket held on an unmet stored dependency takes no free slot, and takes one by itself once it is met (TP-1628)", ctx do
+      write_slots_workflow!(ctx, max_concurrent_agents: 1)
+      upstream = recorded(issue("u", "MT-U", "Code Review"))
+      next = recorded(issue("n", "MT-N", "Todo"))
+      :ok = RunStore.add_dependency("n", "u", :done)
+      tracked([next])
+
+      # Unmet: the free slot stays free, and the ticket is not waiting for a slot either.
+      held = Orchestrator.dispatch_chosen_issues_for_test([next], orchestrator_state(1))
+      assert held.running == %{} and held.slot_holders == %{}
+      refute Map.has_key?(held.slot_waiting, "n")
+      assert %{gate: :depends_on} = held.dispatch_skipped["n"]
+      assert Orchestrator.available_slots_for_test(held) == 1
+
+      # Met: the next pass gives it the free slot, with no pause to lift and no read of Linear.
+      :ok = RunStore.update_ticket_state(upstream.id, %{phase: "Done"})
+      dispatched = Orchestrator.dispatch_chosen_issues_for_test([next], held)
+      assert Map.has_key?(dispatched.running, "n")
+      assert Map.has_key?(dispatched.slot_holders, "n")
+      refute Pauses.paused?({:ticket, "default", "n"})
+    end
+
+    test "a ticket whose Linear issue has an open blocker link dispatches, and a reason the retired hold left holds it no longer (TP-1628)", ctx do
+      write_slots_workflow!(ctx, max_concurrent_agents: 1)
+
+      # The poll's node of MT-L carries an open blocker link to MT-9: the read drops it.
+      node = %{
+        "id" => "l",
+        "identifier" => "MT-L",
+        "title" => "Ticket MT-L",
+        "description" => "Finish it",
+        "priority" => 3,
+        "state" => %{"name" => "Todo"},
+        "url" => "https://example.org/issues/MT-L",
+        "labels" => %{"nodes" => []},
+        "inverseRelations" => %{"nodes" => [%{"type" => "blocks", "issue" => %{"id" => "u", "identifier" => "MT-9", "state" => %{"name" => "In Progress"}}}]}
+      }
+
+      linked = %{SymphonyElixir.Linear.Client.normalize_issue_for_test(node) | repo_key: "default", team: %{key: "Test"}}
+      refute Map.has_key?(Map.from_struct(linked), :blocked_by)
+      recorded(issue("u", "MT-9", "In Progress"))
+      recorded(linked)
+      tracked([linked])
+
+      # A reason the retired "Blocked-by links" hold set before the change is cleared by the poll's
+      # sweep, and nothing sets one again.
+      ticket = {:ticket, "default", "l"}
+      {:ok, _pause} = Pauses.set(ticket, Pauses.ticket_reason(:dependency, "MT-9"), set_by: %{kind: :rule, name: "Blocked-by links"})
+      assert Orchestrator.sweep_dependencies_for_test("default", [linked], ["Done", "Canceled"]) == 1
+      refute Pauses.paused?(ticket)
+      assert Orchestrator.sweep_dependencies_for_test("default", [linked], ["Done", "Canceled"]) == 0
+      refute Pauses.paused?(ticket)
+
+      # The link has no effect: the ticket takes the free slot, and the dispatch order shows it starting.
+      dispatched = Orchestrator.dispatch_chosen_issues_for_test([linked], orchestrator_state(1))
+      assert Map.has_key?(dispatched.running, "l")
+      refute Map.has_key?(dispatched.dispatch_skipped, "l")
+      refute Pauses.paused?(ticket)
     end
 
     test "a ticket with a live run is judged by its run's end, not by the cycle", ctx do
@@ -330,6 +390,11 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
   end
 
   defp tracked(issues), do: Application.put_env(:symphony_elixir, :memory_tracker_issues, issues)
+
+  # A run's block report pauses its ticket on the ticket it named, as `SymphonyElixir.TransitionGuard` does.
+  defp block_report!(%Issue{id: issue_id}, identifier) do
+    {:ok, _pause} = Pauses.set({:ticket, "default", issue_id}, Pauses.ticket_reason(:dependency, identifier), set_by: %{kind: :run, name: "The run"})
+  end
 
   # The ticket's record, which joins the dispatch queue at its end, in the order written.
   defp recorded(%Issue{} = issue) do

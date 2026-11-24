@@ -794,6 +794,21 @@ defmodule SymphonyElixir.TransitionGuardTest do
       :ok = RunStore.clear()
     end
 
+    # The tracker the sweep reads a met dependency from, to see whether it fixed Symphony itself.
+    defmodule NoTracker do
+      @moduledoc false
+      def fetch_issue_by_identifier(_identifier), do: {:error, :not_found}
+    end
+
+    defp put_record(issue_id, identifier, phase) do
+      :ok = RunStore.put_ticket_state(SymphonyElixir.TicketState.new("repo-guard", issue_id, %{issue_identifier: identifier, phase: phase}))
+    end
+
+    defp sweep_block_report do
+      issue = %SymphonyElixir.Linear.Issue{id: "issue-12", identifier: "MT-12", state: "In Progress", labels: []}
+      SymphonyElixir.Pauses.Dependencies.sweep([issue], ["Done", "Canceled"], repo_key: "repo-guard", tracker: NoTracker, build: %{sha: nil, repo: nil})
+    end
+
     defp report(open_blockers, ctx \\ %{}) do
       TransitionGuard.resolve_request(
         state("Backlog"),
@@ -814,6 +829,30 @@ defmodule SymphonyElixir.TransitionGuardTest do
       assert Enum.map(reasons, & &1.text) == ["Waiting for TP-997 to finish", "Waiting for TP-998 to finish"]
       assert Enum.uniq(Enum.map(reasons, & &1.set_by)) == [%{kind: :run, name: "The run"}]
       assert Questions.open(@ticket) == []
+    end
+
+    test "a report waits on the ticket's unmet stored dependencies, never a Linear blocker link, and its pause lifts once they are met" do
+      put_record("issue-12", "MT-12", "In Progress")
+      put_record("dep-997", "TP-997", "In Progress")
+      put_record("dep-998", "TP-998", "Done")
+      :ok = RunStore.add_dependency("issue-12", "dep-997", :done)
+      :ok = RunStore.add_dependency("issue-12", "dep-998", :done)
+
+      # What the run's caller fills the report with: the open stored dependencies alone. A blocker link
+      # on the Linear issue (say to TP-999) is never read, so it is never named.
+      open = SymphonyElixir.Dispatch.DependsOn.open_identifiers("issue-12")
+      assert open == ["TP-997"]
+
+      assert {:hold, :blocked, %{waits_on: %{type: "dependency", keys: ["TP-997"]}}} = report(open)
+      assert Pauses.why(@ticket) == ["Waiting for TP-997 to finish"]
+
+      # The poll's sweep keeps the pause while the dependency is unmet, and lifts it once it is met.
+      assert {0, _cache} = sweep_block_report()
+      assert Pauses.why(@ticket) == ["Waiting for TP-997 to finish"]
+
+      put_record("dep-997", "TP-997", "Done")
+      assert {1, _cache} = sweep_block_report()
+      assert Pauses.get(@ticket) == {:ok, nil}
     end
 
     test "a report naming no blocker asks one question, which the access hold names" do

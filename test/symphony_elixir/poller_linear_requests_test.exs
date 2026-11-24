@@ -177,6 +177,9 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
 
       assert %{"SymphonyLinearPoll" => _polls, "SymphonyLinearIssuesById" => 3} = linear_requests()
       assert {:ok, [%Issue{id: "issue-1", state: "Code Review"}]} = result.running_result
+      queries = linear_queries()
+      assert {"SymphonyLinearPoll", _query} = List.keyfind(queries, "SymphonyLinearPoll", 0)
+      refute Enum.any?(queries, fn {_operation, query} -> query =~ ~r/inverseRelations|issueRelation/ end)
     end
 
     test "under dispatch.source: record sends no Linear request but the repo poll's" do
@@ -272,6 +275,8 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
     queries = linear_queries()
     assert queries != []
     refute Enum.any?(queries, fn {_operation, query} -> query =~ "attachments" end)
+    # Nor does any read or write touch Linear's blocker links.
+    refute Enum.any?(queries, fn {_operation, query} -> query =~ ~r/inverseRelations|issueRelation/ end)
     recorded = Enum.map(Usage.snapshot().queries, & &1.query)
     assert "SymphonyLinearPoll" in recorded
     refute "SymphonyLinearIssueAttachments" in recorded
@@ -330,8 +335,7 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
       "state" => %{"name" => "Code Review"},
       "url" => "https://linear.test/TEAM-#{index}",
       "assignee" => %{"id" => "viewer-1"},
-      "labels" => %{"nodes" => []},
-      "inverseRelations" => %{"nodes" => []}
+      "labels" => %{"nodes" => []}
     }
   end
 

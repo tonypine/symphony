@@ -6,7 +6,7 @@ defmodule SymphonyElixir.OrchestratorBootTest do
 
   import ExUnit.CaptureLog
 
-  alias SymphonyElixir.{Pauses, UpdateHold}
+  alias SymphonyElixir.{Pauses, TicketState, UpdateHold}
   alias SymphonyElixirWeb.ObservabilityPubSub
 
   @build_sha "d3d301b0123456789abcdef0123456789abcdef0"
@@ -29,9 +29,15 @@ defmodule SymphonyElixir.OrchestratorBootTest do
       identifier: "ACME-1238",
       title: "Pause this repository",
       state: "Todo",
-      repo_key: "web",
-      blocked_by: [%{id: "fix", identifier: "ACME-1235", state: "Done"}]
+      repo_key: "web"
     }
+  end
+
+  # The held ticket depends on its fix, done, as Symphony stores it: no blocker link of Linear's.
+  defp depends_on_fix! do
+    :ok = RunStore.put_ticket_state(TicketState.new("web", "fix", %{issue_identifier: "ACME-1235", phase: "Done"}))
+    :ok = RunStore.put_ticket_state(TicketState.new("web", "held", %{issue_identifier: "ACME-1238", phase: "Todo"}))
+    :ok = RunStore.add_dependency("held", "fix", :done)
   end
 
   defp watched_issue, do: %Issue{id: "watched", identifier: "ACME-7", title: "Green and reviewed", state: "Code Review", repo_key: "api"}
@@ -55,6 +61,7 @@ defmodule SymphonyElixir.OrchestratorBootTest do
   defp installed_cache, do: %{blockers: %{"fix" => {:merged, @fix_pr, @merge_sha}}, included: %{{@merge_sha, @build_sha} => true}}
 
   test "a boot with a held ticket and a watched PR acts on both with no timer advanced" do
+    depends_on_fix!()
     hold_for_update!()
     flush_records()
     state = %Orchestrator.State{poll_interval_ms: 60_000}

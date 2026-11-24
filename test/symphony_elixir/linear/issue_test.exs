@@ -9,6 +9,12 @@ defmodule SymphonyElixir.Linear.IssueTest do
     struct!(%Issue{id: "p", identifier: "MT-1", title: "Parent", state: "In Progress", labels: [label]}, attrs)
   end
 
+  test "an issue carries no blocker: Linear's blocker links are not part of it" do
+    refute Map.has_key?(%Issue{}, :blocked_by)
+    refute function_exported?(Issue, :open_blockers, 2)
+    refute function_exported?(Issue, :blocked?, 2)
+  end
+
   describe "breakdown_label?/1" do
     test "accepts `plan` and `breakdown`, its older name, ignoring case and surrounding spaces" do
       for label <- ["plan", "Plan", " PLAN ", "breakdown", "Breakdown", " BREAKDOWN "] do
@@ -60,7 +66,6 @@ defmodule SymphonyElixir.Linear.IssueTest do
       refute Issue.waiting_on_sub_issues?(nil, @terminal)
       refute Issue.unapproved_plan?(nil, @terminal)
       refute Issue.close_out_ready?(nil, @terminal)
-      assert Issue.open_blockers(nil, @terminal) == []
       assert Issue.open_sub_issues(nil, @terminal) == []
     end
 

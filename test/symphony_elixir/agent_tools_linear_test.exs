@@ -448,6 +448,15 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     end
 
     test "wraps subissue parent and related issue summaries" do
+      # The tickets it depends on and those depending on it are Symphony's stored dependencies; the
+      # blocker links Linear's answer carries are not read.
+      for {id, identifier, title} <- [{"issue-current", "ACME-0", "Current"}, {"related-1", "ACME-1", "Related <title>"}, {"related-2", "ACME-2", "Inverse <title>"}] do
+        :ok = RunStore.put_ticket_state(%{repo_key: "repo-a", issue_id: id, issue_identifier: identifier, title: title, phase: "Todo"})
+      end
+
+      :ok = RunStore.add_dependency("related-1", "issue-current", :done)
+      :ok = RunStore.add_dependency("issue-current", "related-2", :done)
+
       linear_client = fn query, _variables, _opts ->
         cond do
           query =~ "SymphonyAgentSubissues" ->
@@ -479,20 +488,10 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
              %{
                "data" => %{
                  "issue" => %{
-                   "relations" => %{
-                     "nodes" => [
-                       %{
-                         "type" => "blocks",
-                         "relatedIssue" => %{"id" => "related-1", "identifier" => "ACME-1", "title" => "Related <title>"}
-                       }
-                     ]
-                   },
+                   "id" => "issue-current",
                    "inverseRelations" => %{
                      "nodes" => [
-                       %{
-                         "type" => "blocked_by",
-                         "issue" => %{"id" => "related-2", "identifier" => "ACME-2", "title" => "Inverse <title>"}
-                       }
+                       %{"type" => "blocks", "issue" => %{"id" => "linear-only", "identifier" => "ACME-9", "title" => "Linear only"}}
                      ]
                    }
                  }
@@ -519,24 +518,37 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
   end
 
   describe "get_related_issues/2 and get_related_issue/4" do
-    # TP-10 is a final verification: a sub-issue of TP-1, blocked by its siblings TP-2 and TP-3.
-    # TP-4 is its own sub-issue, and it blocks TP-20, which is outside the family.
+    # TP-10 is a final verification: a sub-issue of TP-1 that depends on its siblings TP-2 and TP-3,
+    # as Symphony stores it. TP-4 is its own sub-issue, and TP-20, outside the family, depends on it.
+    # Linear's answer still carries a blocker link to TP-40, which is not read.
+    setup do
+      records = [
+        {"issue-fv", "TP-10", "Final verification: Parent", "In Progress"},
+        {"issue-2", "TP-2", "Slice <two>", "Done"},
+        {"issue-3", "TP-3", "Slice three", "Done"},
+        {"issue-20", "TP-20", "Downstream", "Todo"}
+      ]
+
+      for {id, identifier, title, phase} <- records do
+        :ok = RunStore.put_ticket_state(%{repo_key: "repo-a", issue_id: id, issue_identifier: identifier, title: title, phase: phase})
+      end
+
+      :ok = RunStore.add_dependency("issue-fv", "issue-2", :done)
+      :ok = RunStore.add_dependency("issue-fv", "issue-3", :done)
+      :ok = RunStore.add_dependency("issue-20", "issue-fv", :done)
+      :ok
+    end
+
     defp family_client(test_pid, issues) do
       family = %{
         "data" => %{
           "issue" => %{
             "id" => "issue-fv",
             "relations" => %{
-              "nodes" => [
-                %{"type" => "blocks", "relatedIssue" => %{"id" => "issue-20", "identifier" => "TP-20", "title" => "Downstream", "state" => %{"name" => "Todo"}}},
-                %{"type" => "related", "relatedIssue" => %{"id" => "issue-30", "identifier" => "TP-30", "title" => "Only related"}}
-              ]
+              "nodes" => [%{"type" => "related", "relatedIssue" => %{"id" => "issue-30", "identifier" => "TP-30", "title" => "Only related"}}]
             },
             "inverseRelations" => %{
-              "nodes" => [
-                %{"type" => "blocks", "issue" => %{"id" => "issue-2", "identifier" => "TP-2", "title" => "Slice <two>", "state" => %{"name" => "Done"}}},
-                %{"type" => "blocks", "issue" => %{"id" => "issue-3", "identifier" => "TP-3", "title" => "Slice three", "state" => %{"name" => "Done"}}}
-              ]
+              "nodes" => [%{"type" => "blocks", "issue" => %{"id" => "issue-40", "identifier" => "TP-40", "title" => "Linear only", "state" => %{"name" => "Todo"}}}]
             },
             "parent" => %{
               "id" => "issue-1",
@@ -588,7 +600,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       }
     end
 
-    test "lists the blockers, then the parent, siblings and sub-issues, without the current issue" do
+    test "lists the stored dependencies both ways, then the parent, siblings and sub-issues, without the current issue or a Linear link" do
       assert {:ok, related} = Linear.get_related_issues(%{issue_id: "issue-fv"}, linear_client: family_client(self(), %{}))
 
       assert Enum.map(related, &{&1["relation"], &1["identifier"], &1["state"]}) == [
@@ -666,10 +678,10 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       assert {:ok, %{"relations" => ["blocks"]}} = Linear.get_related_issue(context, "TP-20", 100, linear_client: linear_client)
     end
 
-    test "refuses an issue outside the parent, siblings, sub-issues and blockers" do
+    test "refuses an issue outside the parent, siblings, sub-issues and stored dependencies" do
       linear_client = family_client(self(), %{})
 
-      for identifier <- ["TP-99", "TP-30", "TP-10"] do
+      for identifier <- ["TP-99", "TP-30", "TP-40", "TP-10"] do
         assert {:error, {:issue_outside_family, ^identifier, family}} =
                  Linear.get_related_issue(%{issue_id: "issue-fv"}, identifier, nil, linear_client: linear_client)
 
@@ -3400,20 +3412,27 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       %{"type" => type, "issue" => %{"identifier" => identifier, "state" => state && %{"name" => state}}}
     end
 
-    test "a run that marked its issue blocked by open tickets is paused on them" do
+    # The ticket's stored dependencies, each on a ticket Symphony keeps a record of.
+    defp depends_on!(issue_id, dependencies) do
+      :ok = SymphonyElixir.RunStore.put_ticket_state(%{repo_key: "repo-a", issue_id: issue_id, issue_identifier: "TP-1", phase: "Rework"})
+
+      for {on_id, identifier, phase} <- dependencies do
+        :ok = SymphonyElixir.RunStore.put_ticket_state(%{repo_key: "repo-a", issue_id: on_id, issue_identifier: identifier, phase: phase})
+        :ok = SymphonyElixir.RunStore.add_dependency(issue_id, on_id, :done)
+      end
+    end
+
+    test "a run that reported a block while its issue has open stored dependencies is paused on them, not on Linear's links" do
       :ok = SymphonyElixir.RunStore.clear()
 
       context = %{issue_id: "issue-1", issue: %{repo_key: "repo-a"}}
 
-      # Only the open `blocks` relations count: a terminal blocker, another relation type and a
-      # repeated blocker are left out, and a blocker whose state is unknown counts as open.
-      relations = [
-        relation("blocks", "TP-997", "In Progress"),
-        relation("blocks", "TP-990", " done "),
-        relation("related", "TP-991", "Todo"),
-        relation("blocks", "TP-997", "In Progress"),
-        relation("blocks", "TP-998", nil)
-      ]
+      # Only the open stored dependencies count: a met one is left out, and one on a ticket whose
+      # phase is unknown counts as open.
+      depends_on!("issue-1", [{"issue-997", "TP-997", "In Progress"}, {"issue-990", "TP-990", "Done"}, {"issue-998", "TP-998", nil}])
+
+      # Linear's blocker links, open or not, are not read.
+      relations = [relation("blocks", "TP-995", "Todo"), relation("blocks", "TP-997", "In Progress")]
 
       assert {:ok, response} =
                Linear.update_state(context, "Backlog",
@@ -3449,14 +3468,15 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       refute Map.has_key?(SymphonyElixir.RunStore.get_ticket_state("issue-1"), :holds)
     end
 
-    test "a block report whose blockers are all terminal waits on a person" do
+    test "a block report whose stored dependencies are all met waits on a person, whatever Linear's links say" do
       :ok = SymphonyElixir.RunStore.clear()
 
       context = %{issue_id: "issue-1", issue: %{repo_key: "repo-a"}}
+      depends_on!("issue-1", [{"issue-997", "TP-997", "Done"}])
 
       assert {:ok, %{"held" => true}} =
                Linear.update_state(context, "Backlog",
-                 linear_client: team_client("In Progress", [relation("blocks", "TP-997", "Done")]),
+                 linear_client: team_client("In Progress", [relation("blocks", "TP-996", "Todo")]),
                  settings: designed_settings(),
                  store: SymphonyElixir.RunStore,
                  tracker: HoldTracker

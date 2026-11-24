@@ -1,12 +1,12 @@
 defmodule SymphonyElixir.Dispatch.DependsOnTest do
-  # TP-1625: a ticket's dependencies are stored by Symphony on its record, apart from the blockers a
-  # read of Linear fills. The engine adds and removes them; a dependency points upward in the queue;
-  # dispatch holds a ticket on an unmet one, decided from the stored records alone, and lets it start
-  # by itself once it is met.
+  # TP-1625: a ticket's dependencies are stored by Symphony on its record; no read of Linear fills
+  # them (TP-1628: Linear's blocker links are not read at all). The engine adds and removes them; a
+  # dependency points upward in the queue; dispatch holds a ticket on an unmet one, decided from the
+  # stored records alone, and lets it start by itself once it is met.
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.Dispatch.{DependsOn, Order}
-  alias SymphonyElixir.{Home, Situation, TicketObservation, TicketPullRequest, TicketState, UpdateHold}
+  alias SymphonyElixir.{Home, Pauses, Situation, TicketObservation, TicketPullRequest, TicketState, UpdateHold}
 
   @repo "default"
   @active_states ["Todo", "In Progress", "Code Review", "QA", "Merging", "Rework"]
@@ -41,20 +41,20 @@ defmodule SymphonyElixir.Dispatch.DependsOnTest do
   end
 
   describe "the stored dependency" do
-    test "is a field of its own, apart from the blockers, and no read of Linear or write of the record changes it" do
+    test "is a field of its own, and no read of Linear or write of the record changes it" do
       put!("a", "MT-1", "Todo")
       put!("b", "MT-2", "Todo")
 
       assert :ok = RunStore.add_dependency("b", "a", :done)
-      assert %{depends_on: [%{issue_id: "a", identifier: "MT-1", kind: :done}], blockers: []} = record("b")
+      assert %{depends_on: [%{issue_id: "a", identifier: "MT-1", kind: :done}]} = record("b")
+      refute Map.has_key?(record("b"), :blockers)
 
-      # A read of Linear rewrites the record (its phase, its blockers) and leaves the dependency.
+      # A read of Linear rewrites the record (its phase) and leaves the dependency.
       issue = %Issue{
         id: "b",
         identifier: "MT-2",
         title: "Depends",
         state: "In Progress",
-        blocked_by: [%{id: "z", identifier: "MT-9", state: "Todo"}],
         updated_at: DateTime.utc_now()
       }
 
@@ -254,27 +254,20 @@ defmodule SymphonyElixir.Dispatch.DependsOnTest do
       assert DependsOn.resolve({:error, :aborted}, SymphonyElixir.BuildInfo.current(), cache) == cache
     end
 
-    test "the Linear blocker hold still holds and releases as before, and the stored dependency holds on its own" do
+    test "the stored dependency alone holds and releases the ticket, and the poll's sweep sets no pause for it" do
       put!("a", "MT-1", "Todo")
       put!("b", "MT-2", "Todo")
       state = orchestrator_state()
+      b = issue("b", "MT-2")
 
-      blocked = %Issue{issue("b", "MT-2") | blocked_by: [%{id: "id-MT-9", identifier: "MT-9", state: "In Progress"}]}
-      assert sweep(blocked) == 1
-      refute Orchestrator.should_dispatch_issue_for_test(blocked, state)
-
-      # A stored dependency, met, changes nothing of the Linear hold.
       :ok = RunStore.add_dependency("b", "a", :done)
+      assert sweep(b) == 0
+      assert Pauses.get({:ticket, @repo, "b"}) == {:ok, nil}
+      refute Orchestrator.should_dispatch_issue_for_test(b, state)
+
       :ok = RunStore.update_ticket_state("a", %{phase: "Done"})
-      refute Orchestrator.should_dispatch_issue_for_test(blocked, state)
-
-      released = %Issue{blocked | blocked_by: [%{id: "id-MT-9", identifier: "MT-9", state: "Done"}]}
-      assert sweep(released) == 1
-      assert Orchestrator.should_dispatch_issue_for_test(released, state)
-
-      # Unmet, it holds the ticket Linear releases.
-      :ok = RunStore.update_ticket_state("a", %{phase: "Todo"})
-      refute Orchestrator.should_dispatch_issue_for_test(released, state)
+      assert sweep(b) == 0
+      assert Orchestrator.should_dispatch_issue_for_test(b, state)
     end
 
     test "the dispatch order and Home answer as before with dependencies stored" do
@@ -320,6 +313,53 @@ defmodule SymphonyElixir.Dispatch.DependsOnTest do
     end
   end
 
+  describe "open/2, open_for/1 and open_identifiers/1" do
+    test "a done ticket meets either kind whatever the build holds; an open or unknown ticket meets neither" do
+      run_build(@old_build)
+      done = %{issue_id: "d", identifier: "MT-D", kind: :done}
+      released = %{issue_id: "r", identifier: "MT-R", kind: :released}
+      open = %{issue_id: "o", identifier: "MT-O", kind: :done}
+      ghost = %{issue_id: "g", identifier: nil, kind: :released}
+      records = %{"d" => %{phase: "Done"}, "r" => %{phase: " done "}, "o" => %{phase: "In Progress"}}
+
+      # A released dependency whose ticket is done is no longer open, even with no lookup in the cache.
+      assert DependsOn.open([done, released, open, ghost], records) == [open, ghost]
+      assert DependsOn.open([], records) == []
+    end
+
+    test "read the ticket's stored dependencies from the store and name the open ones once" do
+      put!("a", "MT-1", "Todo")
+      put!("b", "MT-2", "Done")
+      put!("c", "MT-3", "In Progress")
+      put!("x", "MT-X", "Todo")
+      :ok = RunStore.add_dependency("x", "a", :done)
+      :ok = RunStore.add_dependency("x", "b", :released)
+      :ok = RunStore.add_dependency("x", "ghost", :done)
+      # Stored before its ticket had a record: the entry has no identifier, the record names it.
+      :ok = RunStore.add_dependency("x", "later", :done)
+      put!("later", "MT-L", "Todo")
+
+      assert [
+               {%{issue_id: "a", identifier: "MT-1"}, %{issue_identifier: "MT-1"}},
+               {%{issue_id: "ghost", identifier: nil}, nil},
+               {%{issue_id: "later", identifier: nil}, %{issue_identifier: "MT-L"}}
+             ] = DependsOn.open_for("x")
+
+      # A ticket Symphony holds no record of has no name to show.
+      assert DependsOn.open_identifiers("x") == ["MT-1", "MT-L"]
+
+      assert DependsOn.open_for("c") == []
+      assert DependsOn.open_for("missing") == []
+      assert DependsOn.open_for(nil) == []
+      assert DependsOn.open_identifiers(nil) == []
+
+      :ok = RunStore.update_ticket_state("a", %{phase: "Done"})
+      :ok = RunStore.remove_dependency("x", "ghost")
+      :ok = RunStore.remove_dependency("x", "later")
+      assert DependsOn.open_identifiers("x") == []
+    end
+  end
+
   describe "a done dependency on a merged ticket" do
     test "is met by a ticket its merge put in the waiting state, as the blocker hold counts it, so a sub-ticket never deadlocks with its parent" do
       SymphonyElixir.SubIssueWait.reset_for_test("Waiting on sub-tickets")
@@ -356,8 +396,7 @@ defmodule SymphonyElixir.Dispatch.DependsOnTest do
       state: "Todo",
       priority: 1,
       labels: [],
-      repo_key: @repo,
-      blocked_by: []
+      repo_key: @repo
     }
   end
 

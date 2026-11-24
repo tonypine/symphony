@@ -1,6 +1,6 @@
 defmodule SymphonyElixir.Dispatch.OrderTest do
   # The dispatch order read against what the dispatcher dispatches: a fixture with slots, a
-  # blocker, a ticket carrying the old force label and a pause, walked by the orchestrator
+  # stored dependency, a ticket carrying the old force label and a pause, walked by the orchestrator
   # (`put_dispatch_order_for_test/2`) and then dispatched by its own pass
   # (`dispatch_chosen_issues_for_test/2`).
   use SymphonyElixir.TestSupport
@@ -43,10 +43,14 @@ defmodule SymphonyElixir.Dispatch.OrderTest do
       write_order_workflow!(ctx, max_concurrent_agents: 1)
       first = issue("a", "MT-A", "Todo", priority: 2)
       second = issue("b", "MT-B", "Todo", priority: 3)
-      blocked = issue("c", "MT-C", "Todo", priority: 1, blocked_by: [%{id: "id-MT-9", identifier: "MT-9", state: "In Progress"}])
+      blocked = issue("c", "MT-C", "Todo", priority: 1)
+      # Each joins the queue in this order, so the queue reads as before: MT-A, MT-B, MT-C.
+      for %Issue{} = ticket <- [first, second], do: put_record!(ticket)
+      depends_on!(blocked, {"id-MT-9", "MT-9", "In Progress"})
       issues = [blocked, second, first]
       tracked(issues)
-      assert sweep(issues) == 1
+      # The poll's sweep sets no pause for a dependency: the gate decides it from the records.
+      assert sweep(issues) == 0
 
       state = orchestrator_state(1)
       %{dispatch_order: order} = Orchestrator.put_dispatch_order_for_test(state, issues)
@@ -55,7 +59,7 @@ defmodule SymphonyElixir.Dispatch.OrderTest do
       assert [
                %{identifier: "MT-A", position: 1, outcome: :starts, starts_now: true, reason: "next: a slot is free", slot: "shared"},
                %{identifier: "MT-B", position: 2, outcome: :waits, starts_now: false, reason: "2nd: behind MT-A", wait: "work slots full"},
-               %{identifier: "MT-C", position: nil, outcome: :held, reason: "Waiting for MT-9 to finish" = blocked_reason}
+               %{identifier: "MT-C", position: nil, outcome: :held, reason: "waiting for MT-9 to be done" = blocked_reason}
              ] = order.entries
 
       assert %{work_used: 0, work_free: 1, concurrency: %{max_total: 1}} = order.slots
@@ -78,11 +82,11 @@ defmodule SymphonyElixir.Dispatch.OrderTest do
       first = issue("a", "MT-A", "Todo", priority: 1)
       second = issue("b", "MT-B", "Todo", priority: 2)
       third = issue("d", "MT-D", "Todo", priority: 3)
-      blocked = issue("c", "MT-C", "Todo", priority: 1, blocked_by: [%{id: "id-MT-9", identifier: "MT-9", state: "Todo"}])
+      blocked = issue("c", "MT-C", "Todo", priority: 1)
+      depends_on!(blocked, {"id-MT-9", "MT-9", "Todo"})
       working = issue("w", "MT-W", "In Progress")
       issues = [third, blocked, second, first, labelled, working]
       tracked(issues)
-      sweep(issues)
 
       state = run(orchestrator_state(2), working)
       %{dispatch_order: order} = Orchestrator.put_dispatch_order_for_test(state, issues)
@@ -284,6 +288,17 @@ defmodule SymphonyElixir.Dispatch.OrderTest do
   defp tracked(issues), do: Application.put_env(:symphony_elixir, :memory_tracker_issues, issues)
 
   defp sweep(issues), do: Orchestrator.sweep_dependencies_for_test("default", issues, Config.settings!().tracker.terminal_states)
+
+  # Stores that `issue` depends on the ticket `{id, identifier, phase}` (`:done`), with a record of each.
+  defp depends_on!(%Issue{} = issue, {on_id, on_identifier, on_phase}) do
+    put_record!(issue)
+    :ok = RunStore.put_ticket_state(%{repo_key: "default", issue_id: on_id, issue_identifier: on_identifier, title: "Ticket #{on_identifier}", phase: on_phase})
+    :ok = RunStore.add_dependency(issue.id, on_id, :done)
+  end
+
+  defp put_record!(%Issue{} = issue) do
+    :ok = RunStore.put_ticket_state(%{repo_key: "default", issue_id: issue.id, issue_identifier: issue.identifier, title: issue.title, phase: issue.state})
+  end
 
   defp issue(id, identifier, state, attrs) do
     {labelled?, attrs} = Keyword.pop(attrs, :labelled, false)

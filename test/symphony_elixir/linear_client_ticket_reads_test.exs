@@ -47,6 +47,63 @@ defmodule SymphonyElixir.LinearClientTicketReadsTest do
     refute Map.has_key?(read, :pr_urls)
   end
 
+  test "no ticket read asks Linear for blocker links, still reads the parent and sub-tickets, and a link in an answer is ignored" do
+    blocker = %{"type" => "blocks", "issue" => %{"id" => "issue-b", "identifier" => "MOT-41", "state" => %{"name" => "Todo"}}}
+
+    issue =
+      "issue-a"
+      |> raw_issue("MOT-42")
+      |> Map.put("inverseRelations", %{"nodes" => [blocker]})
+      |> Map.put("children", %{"nodes" => [%{"id" => "issue-c", "identifier" => "MOT-43", "state" => %{"name" => "Todo"}}]})
+
+    enrichment = %{
+      "description" => "body",
+      "comments" => %{"nodes" => []},
+      "relations" => %{
+        "nodes" => [
+          %{"type" => "blocks", "relatedIssue" => %{"identifier" => "MOT-41", "title" => "Blocker", "state" => %{"name" => "Todo"}}},
+          %{"type" => "related", "relatedIssue" => %{"identifier" => "MOT-44", "title" => "Related", "state" => %{"name" => "Todo"}}}
+        ]
+      },
+      "parent" => nil
+    }
+
+    graphql_fun =
+      graphql(%{
+        "SymphonyLinearPoll" => %{"data" => %{"issues" => %{"nodes" => [issue], "pageInfo" => %{"hasNextPage" => false, "endCursor" => nil}}}},
+        "SymphonyLinearIssuesById" => %{"data" => %{"issues" => %{"nodes" => [issue]}}},
+        "SymphonyLinearIssueByIdentifier" => %{"data" => %{"issue" => issue}},
+        "SymphonyLinearIssueEnrichment" => %{"data" => %{"issue" => enrichment}}
+      })
+
+    assert {:ok, [polled]} = Client.fetch_candidate_issues_for_test(graphql_fun)
+    assert {:ok, [by_id]} = Client.fetch_issue_states_by_ids_for_test(["issue-a"], graphql_fun)
+    assert {:ok, by_identifier} = Client.fetch_issue_by_identifier_for_test("MOT-42", graphql_fun)
+
+    for read <- [polled, by_id, by_identifier] do
+      refute Map.has_key?(read, :blocked_by)
+      assert [%{identifier: "MOT-43"}] = read.sub_issues
+    end
+
+    assert {:ok, enriched} = Client.fetch_issue_enrichment_for_test(polled, graphql_fun)
+    assert Enum.map(enriched.linked_issues, & &1.identifier) == ["MOT-44"]
+
+    for operation <- ["SymphonyLinearPoll", "SymphonyLinearIssuesById", "SymphonyLinearIssueByIdentifier", "SymphonyLinearIssueEnrichment"] do
+      assert_received {:linear_query, ^operation, query, variables}
+      refute query =~ "inverseRelations"
+      refute query =~ "issueRelation"
+      assert query =~ "children"
+
+      if operation == "SymphonyLinearIssueEnrichment" do
+        # The parent link is read; `relations` stays for the related links, of which blockers are dropped.
+        assert query =~ ~r/\n\s+parent \{\n\s+identifier/
+      else
+        refute query =~ "relations"
+        refute Map.has_key?(variables, :relationFirst)
+      end
+    end
+  end
+
   defp graphql(responses) do
     parent = self()
 
@@ -63,8 +120,7 @@ defmodule SymphonyElixir.LinearClientTicketReadsTest do
       "identifier" => identifier,
       "title" => identifier,
       "state" => %{"name" => "In Progress"},
-      "labels" => %{"nodes" => []},
-      "inverseRelations" => %{"nodes" => []}
+      "labels" => %{"nodes" => []}
     }
   end
 end

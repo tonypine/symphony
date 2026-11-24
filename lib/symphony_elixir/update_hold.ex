@@ -104,14 +104,11 @@ defmodule SymphonyElixir.UpdateHold do
   # The ticket's stored `:done` dependencies, each as the issue its record describes: its id,
   # identifier, phase (as its state), labels and repo. One Symphony holds no record of has no state.
   # A record that can't be read gives none.
-  defp dependencies(%Issue{id: issue_id}) when is_binary(issue_id) do
-    case RunStore.dependencies(issue_id) do
-      entries when is_list(entries) -> for {%{kind: :done} = entry, record} <- entries, do: dependency_issue(entry, record)
-      {:error, _reason} -> []
-    end
+  # An issue with no id has none (`RunStore.dependencies/1`), and the store's error reads as none:
+  # `{:error, _}` matches no entry below.
+  defp dependencies(%Issue{id: issue_id}) do
+    for {%{kind: :done} = entry, record} <- List.wrap(RunStore.dependencies(issue_id)), do: dependency_issue(entry, record)
   end
-
-  defp dependencies(_issue), do: []
 
   defp dependency_issue(entry, %{} = record) do
     record = TicketState.normalize(record)

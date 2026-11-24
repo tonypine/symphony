@@ -240,35 +240,35 @@ defmodule SymphonyElixir.Conductor.FilingTest do
     assert Process.get(:created) == nil
   end
 
-  test "an open ticket already linked as blocking this one under the same title is linked, not filed again", ctx do
+  test "an open ticket this one already depends on under the same title is linked, not filed again", ctx do
     title = route().title
     Process.put({:ticket, "TP-1553"}, {:ok, %Issue{id: "tp-1553", identifier: "TP-1553", title: title, state: "In Progress", url: "https://linear.app/t/TP-1553"}})
     Process.put({:ticket, "TP-1554"}, {:ok, %Issue{id: "tp-1554", identifier: "TP-1554", title: "Something else", state: "Todo"}})
 
-    blockers = [
-      %{id: "done", identifier: "TP-1500", state: "Done"},
-      %{id: nil, identifier: nil, state: "Todo"},
-      %{id: "gone", identifier: "TP-404", state: "Todo"},
-      %{id: "tp-1554", identifier: "TP-1554", state: "Todo"},
-      %{id: "tp-1553", identifier: "TP-1553", state: nil}
-    ]
+    # The dependencies Symphony stores: a done one, one with no record (no identifier to read), one
+    # under another title and the one that covers the problem.
+    dependencies = [{"done", "TP-1500", "Done"}, {"gone", nil, nil}, {"1554", "TP-1554", "Todo"}, {"1553", "TP-1553", "In Progress"}]
 
-    # The blockers the issue carries.
-    issue = %{ctx.issue | blocked_by: blockers}
-    assert {:ok, %{identifier: "TP-1553", existing: true, url: "https://linear.app/t/TP-1553"}} = file(%{ctx | issue: issue}, route())
+    for {suffix, identifier, phase} <- dependencies do
+      on = "#{ctx.issue_id}-#{suffix}"
+      if identifier, do: :ok = RunStore.put_ticket_state(TicketState.new("default", on, %{issue_identifier: identifier, phase: phase}))
+      :ok = RunStore.add_dependency(ctx.issue_id, on, :done)
+      on_exit(fn -> RunStore.delete_ticket_state(on) end)
+    end
+
+    assert {:ok, %{identifier: "TP-1553", existing: true, url: "https://linear.app/t/TP-1553"}} = file(ctx, route())
     assert Process.get(:created) == nil
     # The hold is the pause: no Linear blocker link is written.
     refute Process.get(:blocked)
     assert [%{text: "Waiting for TP-1553 to finish" <> _rest}] = pause_reasons(ctx.issue_id)
     assert [%{payload: %{identifier: "TP-1553", existing: true}}] = events(ctx.issue_id, "ticket.filed")
 
-    # Else the blockers the tracker reads of it.
-    Process.put({:ticket, ctx.identifier}, {:ok, %Issue{id: ctx.issue_id, identifier: ctx.identifier, blocked_by: blockers}})
+    # A follow-up is related to it instead.
     assert {:ok, %{identifier: "TP-1553", existing: true}} = file(ctx, route(%{relation: "follow_up"}))
     assert Process.get(:related) == {ctx.issue_id, "TP-1553"}
     assert Process.get(:created) == nil
 
-    # A linked ticket under another title covers nothing, and an issue without an identifier reads none.
+    # A dependency under another title covers nothing.
     assert {:ok, %{identifier: "TP-2000", existing: false}} = file(ctx, route(%{relation: "follow_up", title: "Another problem"}))
     Process.delete(:created)
     issue = %{ctx.issue | identifier: nil}

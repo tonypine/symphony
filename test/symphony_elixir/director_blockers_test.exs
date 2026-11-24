@@ -63,8 +63,8 @@ defmodule SymphonyElixir.DirectorBlockersTest do
            }
 
     assert dependencies(ticket) == [{blocker.issue_id, blocker.issue_identifier, :done}]
-    # Nothing of Linear's: the observed blockers and the pause stay as they were.
-    assert record(ticket).blockers == []
+    # Nothing of Linear's: the record keeps no Linear blocker, and the pause stays as it was.
+    refute Map.has_key?(record(ticket), :blockers)
     assert TicketState.pause_reasons(record(ticket)) == []
     assert_received {:"$gen_cast", {:request_refresh, ^repo, :now}}
     assert_received {:ticket_record, ^repo, ^ticket_id, :changed, [:depends_on]}
@@ -80,12 +80,12 @@ defmodule SymphonyElixir.DirectorBlockersTest do
 
     assert {:ok, %{action: "remove", blockers: []}} = change(:remove, ticket, blocker, ctx.opts)
     assert dependencies(ticket) == []
-    assert record(ticket).blockers == []
+    refute Map.has_key?(record(ticket), :blockers)
     assert TicketState.pause_reasons(record(ticket)) == []
     assert [%{payload: %{action: "add_blocker"}}, %{payload: %{action: "remove_blocker"}}] = actions(ticket)
   end
 
-  test "a blocker Linear's links name is neither listed nor counted", ctx do
+  test "a blocker Linear's links name, kept on a record an older build stored, is neither listed nor counted", ctx do
     %{ticket: ticket, blocker: blocker} = ctx
     linked = fn by, state -> %{blockers: [%{id: by.issue_id, identifier: by.issue_identifier, state: state}]} end
     :ok = RunStore.update_ticket_state(blocker.issue_id, linked.(ticket, "Todo"))
