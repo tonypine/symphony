@@ -993,28 +993,36 @@ func menuWaitingSituations() -> some View {
 }
 
 /// Home (TP-1609) from the `home-queue` fixture's generated queue, on the fixture's clock, in a window `window` wide less
-/// its sidebar: three slots (one working, one waiting on you, one empty) and the queue's first rows; `view` picks a
-/// saved view above the queue.
+/// its sidebar: Recently done (TP-1644) on `range`, open or `folded`, three slots (one working, one waiting on you, one
+/// empty) and the queue's first rows; `view` picks a saved view above the queue. `fixture` names another fixture of the
+/// same shape (`home-queue-done-week`: nothing done today).
 @MainActor
-func homeQueue(window: CGFloat, view: String? = nil, rows: Int = 14) -> some View {
+func homeQueue(
+    window: CGFloat, view: String? = nil, rows: Int = 14, fixture name: String = "home-queue", range: HomeRead.DoneRange = .today,
+    folded: Bool = false
+) -> some View {
     let width = window - DesignTokens.Layout.sidebarWidth
-    let api = situationsAPI.appendingPathComponent("home-queue/api/v1")
+    let api = situationsAPI.appendingPathComponent("\(name)/api/v1")
     guard let fixture = HomeQueueFixture(try! Data(contentsOf: api.appendingPathComponent(HomeQueueFixture.fileName))) else {
         fatalError("The home-queue fixture doesn't read")
     }
     let viewsData = try? Data(contentsOf: api.appendingPathComponent("views.json"))
-    let query = "offset=0&limit=100" + (view.map { "&view=\($0)" } ?? "")
+    let done = HomeRead.DonePage(range: range, limit: RecentlyDoneList.pageSize)
+    let query = HomeRead.path(offset: 0, view: view, done: done).split(separator: "?").last.map(String.init)
     guard let read = HomeRead.decode(fixture.answer(query: query, views: viewsData, slotCount: nil)) else {
         fatalError("The home-queue fixture's Home read doesn't read")
     }
-    let model = HomeQueueModel(fetch: { _, _ in .unchanged }, send: { _ in .done }, view: view)
+    let choices = GalleryChoices()
+    RecentlyDoneChoices(range: range, open: !folded).save(to: choices)
+    let model = HomeQueueModel(fetch: { _, _ in .unchanged }, send: { _ in .done }, view: view, choices: choices)
     model.load(read)
     let views = viewsData.flatMap { TicketView.views(fromViews: $0) } ?? []
-    let range = 0..<min(rows, model.pager.count)
+    let shown = 0..<min(rows, model.pager.count)
     return HomePageContent(
-        model: model, views: views, notices: [], reference: situationsNow, actions: HomeActions(), range: range,
-        numberWidth: QueueRow.numberWidth(widest: model.pager.widestNumber(in: range))
+        model: model, views: views, notices: [], reference: situationsNow, actions: HomeActions(), range: shown,
+        numberWidth: QueueRow.numberWidth(widest: model.pager.widestNumber(in: shown))
     )
+    .environment(\.timeZone, TimeZone(identifier: "UTC")!)
     .frame(width: width, alignment: .topLeading)
     .background(DesignTokens.Surface.window.color)
 }
@@ -2114,6 +2122,12 @@ MainActor.assumeIsolated {
             renderScreen(scheme, to: "home-queue") { window in homeQueue(window: window) }
             renderScreen(scheme, to: "home-queue-filtered") { window in homeQueue(window: window, view: "view-hub") }
             renderScreen(scheme, to: "home-queue-strip") { window in homeQueueStrip(window: window) }
+            // Recently done (TP-1644): on Week, folded, and on Today with nothing done today.
+            renderScreen(scheme, to: "home-queue-recently-done-week") { window in homeQueue(window: window, range: .week) }
+            renderScreen(scheme, to: "home-queue-recently-done-folded") { window in homeQueue(window: window, folded: true) }
+            renderScreen(scheme, to: "home-queue-recently-done-today-empty") { window in
+                homeQueue(window: window, fixture: "home-queue-done-week")
+            }
             renderScreen(scheme, to: "home-unavailable") { window in homeUnavailable(window: window) }
         }
         render(inboxDrawer(), scheme, to: "inbox-drawer-\(suffix).png")

@@ -65,6 +65,12 @@ count-badge-problems
 count-badge-quiet
 count-badge-waiting-on-you
 count-badge-zero
+done-row-all-cells
+done-row-hovered
+done-row-long-title
+done-row-pull-request-and-when
+done-row-when-only
+done-row-without-an-epic
 hairline-divider-horizontal
 hairline-divider-vertical-14
 hairline-divider-vertical-20
@@ -132,6 +138,11 @@ queue-row-at-rest
 queue-row-dragged
 queue-row-drop-line
 queue-row-hovered
+recently-done-head-folded
+recently-done-head-hovered
+recently-done-head-week
+recently-done-head-with-a-count
+recently-done-head-without-a-count
 reorderable-list-a-line-that-can-t-be-used-now
 reorderable-list-dragging
 reorderable-list-handle-focused

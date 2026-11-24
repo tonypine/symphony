@@ -1,0 +1,385 @@
+{
+ "slots": {
+  "total": 3,
+  "entries": [
+   {
+    "slot": 1,
+    "empty": false,
+    "since": "2026-10-07T13:15:00Z",
+    "epic": null,
+    "ticket": {
+     "issue_id": "issue-tp-1619",
+     "identifier": "TP-1619",
+     "title": "Engine: one queue of top-level tickets with sort keys, sub-tickets inside their parent, explicit dependencies",
+     "repo_key": "symphony",
+     "phase": "In Progress",
+     "situation": {
+      "kind": "working",
+      "word": "Coding",
+      "cause": "tests and coverage, round 2",
+      "since": "2026-10-07T14:02:00Z"
+     },
+     "since": "2026-10-07T13:15:00Z",
+     "working": true,
+     "waits_on_you": false,
+     "move": null,
+     "current_stage": "coding",
+     "stages": [
+      {
+       "id": "coding",
+       "name": "Coding",
+       "state": "current",
+       "tokens": 14200000,
+       "runs": 1
+      },
+      {
+       "id": "code_review",
+       "name": "Code Review",
+       "state": "not_yet",
+       "tokens": 0,
+       "runs": 0
+      },
+      {
+       "id": "qa",
+       "name": "QA",
+       "state": "not_yet",
+       "tokens": 0,
+       "runs": 0
+      },
+      {
+       "id": "merging",
+       "name": "Merging",
+       "state": "not_yet",
+       "tokens": 0,
+       "runs": 0
+      },
+      {
+       "id": "done",
+       "name": "Done",
+       "state": "not_yet",
+       "tokens": 0,
+       "runs": 0
+      }
+     ],
+     "tokens": {
+      "used": 14200000,
+      "budget": 100000000
+     },
+     "plan": {
+      "summary": "The queue's order becomes one sort key per ticket, sub-tickets live inside their parent, and a dependency is a fact Symphony stores and checks before a start."
+     },
+     "checks": {
+      "proved": 3,
+      "waived": 0,
+      "total": 11,
+      "next": {
+       "id": "c4",
+       "statement": "Adding a dependency on a lower ticket is refused with the reason."
+      }
+     },
+     "pull_request": null
+    }
+   },
+   {
+    "slot": 2,
+    "empty": false,
+    "since": "2026-10-07T13:32:00Z",
+    "epic": null,
+    "ticket": {
+     "issue_id": "issue-tp-1594",
+     "identifier": "TP-1594",
+     "title": "A QA pass walks the checks that share a screen and state in one session",
+     "repo_key": "symphony",
+     "phase": "Code Review",
+     "situation": {
+      "kind": "waiting_on_you",
+      "word": "Waiting on you",
+      "cause": "may a grouped step hold more than six checks?",
+      "since": "2026-10-07T14:01:00Z"
+     },
+     "since": "2026-10-07T13:32:00Z",
+     "working": false,
+     "waits_on_you": true,
+     "move": {
+      "name": "answer",
+      "allowed": true,
+      "reason": null
+     },
+     "current_stage": "code_review",
+     "stages": [
+      {
+       "id": "coding",
+       "name": "Coding",
+       "state": "passed",
+       "tokens": 7900000,
+       "runs": 1
+      },
+      {
+       "id": "code_review",
+       "name": "Code Review",
+       "state": "current",
+       "tokens": 1900000,
+       "runs": 1
+      },
+      {
+       "id": "qa",
+       "name": "QA",
+       "state": "not_yet",
+       "tokens": 0,
+       "runs": 0
+      },
+      {
+       "id": "merging",
+       "name": "Merging",
+       "state": "not_yet",
+       "tokens": 0,
+       "runs": 0
+      },
+      {
+       "id": "done",
+       "name": "Done",
+       "state": "not_yet",
+       "tokens": 0,
+       "runs": 0
+      }
+     ],
+     "tokens": {
+      "used": 9800000,
+      "budget": 100000000
+     },
+     "plan": {
+      "summary": "The plan of a pass groups the checks that share a screen and state, and each group is walked in one session. Every check keeps its own verdict."
+     },
+     "checks": {
+      "proved": 8,
+      "waived": 0,
+      "total": 9,
+      "next": {
+       "id": "c9",
+       "statement": "The timeline shows each check of a group under its own line."
+      }
+     },
+     "pull_request": {
+      "number": 1043,
+      "url": "https://github.com/example/symphony/pull/1043",
+      "state": "open",
+      "draft": false,
+      "files_changed": 11,
+      "additions": 524,
+      "deletions": 61,
+      "branch": "auto/TP-1594",
+      "ci": "passed",
+      "review_state": "REVIEW_REQUIRED"
+     }
+    }
+   }
+  ]
+ },
+ "rows": [
+  {
+   "identifier": "TP-1590",
+   "title": "App updates stop the factory for most of an hour when several tickets merge in a row",
+   "phase": "Code Review",
+   "repo_key": "symphony",
+   "situation": {
+    "kind": "working",
+    "word": "Code Review",
+    "cause": "The review run reads the pull request.",
+    "since": "2026-10-07T13:50:00Z"
+   },
+   "issue_id": "issue-tp-1590"
+  },
+  {
+   "identifier": "TP-1592",
+   "title": "A check that needs the pull request's own CI run is proved between handoff and merge",
+   "phase": "Code Review",
+   "repo_key": "symphony",
+   "situation": {
+    "kind": "working",
+    "word": "Code Review",
+    "cause": "The review run reads the pull request.",
+    "since": "2026-10-07T13:40:00Z"
+   },
+   "issue_id": "issue-tp-1592"
+  },
+  {
+   "identifier": "TP-1596",
+   "title": "An answer that says back to Code Review unchanged moves the ticket there",
+   "phase": "Rework",
+   "repo_key": "symphony",
+   "situation": {
+    "kind": "paused_by_rule",
+    "word": "Stopped in Coding",
+    "cause": "You stopped it.",
+    "since": "2026-10-07T12:00:00Z"
+   },
+   "issue_id": "issue-tp-1596"
+  },
+  {
+   "identifier": "HUB-212",
+   "title": "Group follow-ups by company on the outreach page",
+   "phase": "Todo",
+   "repo_key": "hub",
+   "issue_id": "issue-hub-212"
+  },
+  {
+   "identifier": "TP-1700",
+   "title": "Show each repo's last merge in one line",
+   "phase": "Todo",
+   "repo_key": "symphony",
+   "issue_id": "issue-tp-1700"
+  }
+ ],
+ "generated": {
+  "count": 1240,
+  "prefix": "TP",
+  "first": 2000,
+  "repos": [
+   "symphony",
+   "symphony",
+   "hub",
+   "cycle"
+  ],
+  "phases": [
+   "Todo",
+   "Todo",
+   "Todo",
+   "Backlog"
+  ],
+  "titles": [
+   "Keep the status menu's counts from the keyboard",
+   "Let a company's contacts on the first open",
+   "Draw the ticket page's facts rail after a relaunch",
+   "Sort a saved filter when the window is narrow",
+   "Remember the timeline's filters for every repo",
+   "Explain the journal's day headings without a second poll",
+   "Group a run's token use the moment it changes",
+   "Read the release notes beside its ticket"
+  ]
+ },
+ "recently_done": {
+  "entries": [
+   {
+    "issue_id": "issue-tp-1622",
+    "identifier": "TP-1622",
+    "title": "Engine: the queue's order is stored as one sort key per ticket",
+    "repo_key": "symphony",
+    "done_at": "2026-10-07T14:00:00Z",
+    "pull_request_number": 1053,
+    "epic": {
+     "identifier": "TP-1597",
+     "title": "A real queue"
+    },
+    "today": false
+   },
+   {
+    "issue_id": "issue-mot-104",
+    "identifier": "MOT-104",
+    "title": "Record a ride's track while the screen is off",
+    "repo_key": "cycle",
+    "done_at": "2026-10-07T13:10:00Z",
+    "pull_request_number": 88,
+    "epic": {
+     "identifier": "MOT-105",
+     "title": "Ride recording: pause, resume and recover a ride"
+    },
+    "today": false
+   },
+   {
+    "issue_id": "issue-tp-1606",
+    "identifier": "TP-1606",
+    "title": "Engine: a ticket without a slot does not react to anything",
+    "repo_key": "symphony",
+    "done_at": "2026-10-07T11:15:00Z",
+    "pull_request_number": 1052,
+    "epic": {
+     "identifier": "TP-1597",
+     "title": "A real queue"
+    },
+    "today": false
+   },
+   {
+    "issue_id": "issue-tp-1616",
+    "identifier": "TP-1616",
+    "title": "Config: remove finishing_max, max_by_issue_state and epic_lanes from symphony.yml",
+    "repo_key": "symphony",
+    "done_at": "2026-10-07T10:05:00Z",
+    "pull_request_number": 1050,
+    "epic": {
+     "identifier": "TP-1597",
+     "title": "A real queue"
+    },
+    "today": false
+   },
+   {
+    "issue_id": "issue-tp-1615",
+    "identifier": "TP-1615",
+    "title": "Engine: a slot belongs to one ticket until it is done",
+    "repo_key": "symphony",
+    "done_at": "2026-10-07T09:12:00Z",
+    "pull_request_number": 1049,
+    "epic": {
+     "identifier": "TP-1597",
+     "title": "A real queue"
+    },
+    "today": false
+   },
+   {
+    "issue_id": "issue-hub-208",
+    "identifier": "HUB-208",
+    "title": "Show a company's open invoices on its page",
+    "repo_key": "hub",
+    "done_at": "2026-10-06T16:40:00Z",
+    "pull_request_number": 412,
+    "epic": null,
+    "today": false
+   },
+   {
+    "issue_id": "issue-tp-1601",
+    "identifier": "TP-1601",
+    "title": "Home: the slot count is changed beside In progress",
+    "repo_key": "symphony",
+    "done_at": "2026-10-06T11:02:00Z",
+    "pull_request_number": 1044,
+    "epic": null,
+    "today": false
+   },
+   {
+    "issue_id": "issue-tp-983",
+    "identifier": "TP-983",
+    "title": "Read the list of protected paths from one place",
+    "repo_key": "symphony",
+    "done_at": "2026-10-05T15:30:00Z",
+    "pull_request_number": 611,
+    "epic": {
+     "identifier": "TP-975",
+     "title": "Protected-change requests: ask, allow, record"
+    },
+    "today": false
+   },
+   {
+    "issue_id": "issue-mot-99",
+    "identifier": "MOT-99",
+    "title": "Keep a paused ride's distance after a relaunch",
+    "repo_key": "cycle",
+    "done_at": "2026-10-04T12:20:00Z",
+    "pull_request_number": null,
+    "epic": null,
+    "today": false
+   },
+   {
+    "issue_id": "issue-tp-982",
+    "identifier": "TP-982",
+    "title": "Name the files a change may never touch",
+    "repo_key": "symphony",
+    "done_at": "2026-10-03T09:45:00Z",
+    "pull_request_number": 598,
+    "epic": {
+     "identifier": "TP-975",
+     "title": "Protected-change requests: ask, allow, record"
+    },
+    "today": false
+   }
+  ]
+ }
+}

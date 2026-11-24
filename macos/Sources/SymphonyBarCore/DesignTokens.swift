@@ -1871,6 +1871,33 @@ public enum DesignTokens {
         ]
         public static let dropGlowOpacity: [Double] = [0.35, 0.7]
 
+        // Recently done and the done row (TP-1644: `.pq-recent`, `.rlist`, `.drow` in page.css).
+        /// Above the In progress section when Recently done stands over it.
+        public static let recentBottom = Space.s8
+        /// The range control's room after the count, beyond the head's own gap.
+        public static let rangeLead = Space.s2
+        /// The chevron's square at the head's end, its glyph and its corner.
+        public static let twistSize: Double = 18
+        public static let twistGlyph: Double = 12
+        public static let twistRadius: Double = 5
+        /// The rows shown before the list scrolls inside itself, on the queue's pitch: 6 rows, 216 pt.
+        public static let recentRows = 6
+        public static let recentHeight = Double(recentRows) * (rowHeight + doneRowGap)
+        /// Between two done rows: the queue's pitch less a row.
+        public static let doneRowGap: Double = 2
+        /// The check's room: 2 pt before it, 4 pt after it in Recently done.
+        public static let doneLeadLeading: Double = 2
+        public static let doneLeadTrailing: Double = 4
+        /// The check of a passed stage.
+        public static let doneStatus = Status.done
+        /// The trail's cells: the epic's flag and identifier, the pull request (58 pt), the repo (68 pt, the queue's end
+        /// cell) and when it was done (76 pt), their glyphs 11 pt, 4 pt before their words.
+        public static let pullRequestCell: Double = 58
+        public static let repoCell = endWidth
+        public static let whenCell: Double = 76
+        public static let trailGlyph: Double = 11
+        public static let trailGlyphGap = Space.s1
+
         /// The number as a row shows it: with a comma between thousands ("1,243").
         public static func number(_ value: Int) -> String {
             let formatter = NumberFormatter()

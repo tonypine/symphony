@@ -256,5 +256,130 @@
    "Group a run's token use the moment it changes",
    "Read the release notes beside its ticket"
   ]
+ },
+ "recently_done": {
+  "entries": [
+   {
+    "issue_id": "issue-tp-1622",
+    "identifier": "TP-1622",
+    "title": "Engine: the queue's order is stored as one sort key per ticket",
+    "repo_key": "symphony",
+    "done_at": "2026-10-07T14:00:00Z",
+    "pull_request_number": 1053,
+    "epic": {
+     "identifier": "TP-1597",
+     "title": "A real queue"
+    },
+    "today": true
+   },
+   {
+    "issue_id": "issue-mot-104",
+    "identifier": "MOT-104",
+    "title": "Record a ride's track while the screen is off",
+    "repo_key": "cycle",
+    "done_at": "2026-10-07T13:10:00Z",
+    "pull_request_number": 88,
+    "epic": {
+     "identifier": "MOT-105",
+     "title": "Ride recording: pause, resume and recover a ride"
+    },
+    "today": true
+   },
+   {
+    "issue_id": "issue-tp-1606",
+    "identifier": "TP-1606",
+    "title": "Engine: a ticket without a slot does not react to anything",
+    "repo_key": "symphony",
+    "done_at": "2026-10-07T11:15:00Z",
+    "pull_request_number": 1052,
+    "epic": {
+     "identifier": "TP-1597",
+     "title": "A real queue"
+    },
+    "today": true
+   },
+   {
+    "issue_id": "issue-tp-1616",
+    "identifier": "TP-1616",
+    "title": "Config: remove finishing_max, max_by_issue_state and epic_lanes from symphony.yml",
+    "repo_key": "symphony",
+    "done_at": "2026-10-07T10:05:00Z",
+    "pull_request_number": 1050,
+    "epic": {
+     "identifier": "TP-1597",
+     "title": "A real queue"
+    },
+    "today": true
+   },
+   {
+    "issue_id": "issue-tp-1615",
+    "identifier": "TP-1615",
+    "title": "Engine: a slot belongs to one ticket until it is done",
+    "repo_key": "symphony",
+    "done_at": "2026-10-07T09:12:00Z",
+    "pull_request_number": 1049,
+    "epic": {
+     "identifier": "TP-1597",
+     "title": "A real queue"
+    },
+    "today": true
+   },
+   {
+    "issue_id": "issue-hub-208",
+    "identifier": "HUB-208",
+    "title": "Show a company's open invoices on its page",
+    "repo_key": "hub",
+    "done_at": "2026-10-06T16:40:00Z",
+    "pull_request_number": 412,
+    "epic": null,
+    "today": false
+   },
+   {
+    "issue_id": "issue-tp-1601",
+    "identifier": "TP-1601",
+    "title": "Home: the slot count is changed beside In progress",
+    "repo_key": "symphony",
+    "done_at": "2026-10-06T11:02:00Z",
+    "pull_request_number": 1044,
+    "epic": null,
+    "today": false
+   },
+   {
+    "issue_id": "issue-tp-983",
+    "identifier": "TP-983",
+    "title": "Read the list of protected paths from one place",
+    "repo_key": "symphony",
+    "done_at": "2026-10-05T15:30:00Z",
+    "pull_request_number": 611,
+    "epic": {
+     "identifier": "TP-975",
+     "title": "Protected-change requests: ask, allow, record"
+    },
+    "today": false
+   },
+   {
+    "issue_id": "issue-mot-99",
+    "identifier": "MOT-99",
+    "title": "Keep a paused ride's distance after a relaunch",
+    "repo_key": "cycle",
+    "done_at": "2026-10-04T12:20:00Z",
+    "pull_request_number": null,
+    "epic": null,
+    "today": false
+   },
+   {
+    "issue_id": "issue-tp-982",
+    "identifier": "TP-982",
+    "title": "Name the files a change may never touch",
+    "repo_key": "symphony",
+    "done_at": "2026-10-03T09:45:00Z",
+    "pull_request_number": 598,
+    "epic": {
+     "identifier": "TP-975",
+     "title": "Protected-change requests: ask, allow, record"
+    },
+    "today": false
+   }
+  ]
  }
 }

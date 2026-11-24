@@ -7,7 +7,10 @@ import Foundation
 /// slot count the last `POST /api/v1/control/slots` set. Home's drag and drop (TP-1610) changes the queue as Symphony
 /// does: each `POST /api/v1/control/queue/move` the fixtures took moves its ticket, and each `POST /api/v1/control/start`
 /// with a `slot` puts its ticket in that slot and the one that held it at the queue's top. `refuse` names the tickets
-/// whose move Symphony refuses, with its reason: such a move is answered 409 and changes nothing.
+/// whose move Symphony refuses, with its reason: such a move is answered 409 and changes nothing. `recently_done` holds
+/// the tickets done in the last 7 days, most recent first, each marked `today` when it finished today (TP-1644); the
+/// read gives the range `done_range` asks for (today by default) from `done_offset`, at most `done_limit`, with both
+/// counts, as Symphony does.
 ///
 ///     {"slots": {"total": 3, "entries": [{"slot": 1, "ticket": {…}}, …]},
 ///      "rows": [{"identifier": "TP-1590", "title": "…", "phase": "Code Review", "repo_key": "symphony"}, …],
@@ -32,9 +35,11 @@ public struct HomeQueueFixture: Equatable {
     public let rows: [[String: Any]]
     /// The tickets whose queue move Symphony refuses, with its reason.
     public let refuse: [String: String]
+    /// The tickets done in the last 7 days, most recent first, as JSON objects; `today` marks those done today.
+    public let done: [[String: Any]]
 
     public static func == (lhs: HomeQueueFixture, rhs: HomeQueueFixture) -> Bool {
-        lhs.slotsJSON == rhs.slotsJSON && lhs.rows.count == rhs.rows.count && lhs.refuse == rhs.refuse
+        lhs.slotsJSON == rhs.slotsJSON && lhs.rows.count == rhs.rows.count && lhs.refuse == rhs.refuse && lhs.done.count == rhs.done.count
     }
 
     /// The fixture in `data`, nil when it doesn't read.
@@ -52,6 +57,22 @@ public struct HomeQueueFixture: Equatable {
         }
         self.rows = rows
         refuse = (root["refuse"] as? [String: String]) ?? [:]
+        done = ((root["recently_done"] as? [String: Any])?["entries"] as? [[String: Any]]) ?? []
+    }
+
+    /// The read's `recently_done` for the query's `done_range`, `done_offset` and `done_limit`.
+    func recentlyDone(_ value: (String) -> String?) -> [String: Any] {
+        let range = value("done_range") == "week" ? "week" : "today"
+        let offset = max(Int(value("done_offset") ?? "") ?? 0, 0)
+        let limit = min(max(Int(value("done_limit") ?? "") ?? RecentlyDoneList.pageSize, 1), RecentlyDoneList.maxLimit)
+        let today = done.filter { $0["today"] as? Bool == true }
+        let kept = range == "week" ? done : today
+        let page = kept.dropFirst(offset).prefix(limit).map { entry in entry.filter { $0.key != "today" } }
+        let next = offset + page.count < kept.count ? offset + page.count : nil
+        return [
+            "range": range, "counts": ["today": today.count, "week": done.count], "entries": Array(page), "offset": offset, "limit": limit,
+            "next_offset": next.map { $0 as Any } ?? NSNull(),
+        ]
     }
 
     /// A move the request log holds: its path and its body.
@@ -206,7 +227,7 @@ public struct HomeQueueFixture: Equatable {
             "rows": page, "count": kept.count, "total": rows.count, "offset": offset, "limit": limit,
             "next_offset": next.map { $0 as Any } ?? NSNull(), "view": viewID.map { $0 as Any } ?? NSNull(), "roots": [Any](),
         ]
-        let root: [String: Any] = ["slots": slots, "queue": queue, "in_progress": [Any]()]
+        let root: [String: Any] = ["slots": slots, "queue": queue, "in_progress": [Any](), "recently_done": recentlyDone(value)]
         return (try? JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])) ?? Data("{}".utf8)
     }
 

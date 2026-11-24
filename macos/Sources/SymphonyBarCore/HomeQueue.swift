@@ -125,7 +125,8 @@ public struct HomeQueuePager: Equatable {
 /// and the moves made from the page (the slot count, Start on a row, Stop on a card). Every read and move goes through
 /// `fetch` and `send`, the window's client and control path in the app, stubs in the tests. A move reads Home again at
 /// once, and so does each `event: queue` notice on the live channel, so a slot that fills or frees and a queue that
-/// changes show without a reload.
+/// changes show without a reload. The first page's read also gives Recently done (TP-1644), so a ticket that finishes
+/// shows at its top on the same notice.
 @MainActor
 public final class HomeQueueModel: ObservableObject {
     public typealias Fetch = @MainActor (_ path: String, _ tag: String?) async -> ConditionalResult
@@ -153,6 +154,8 @@ public final class HomeQueueModel: ObservableObject {
     @Published public private(set) var failure: EndpointResult?
     /// Why the last move from the page didn't go through, in Symphony's words; nil when it did.
     @Published public var notice: String?
+    /// Recently done (TP-1644): the range and the fold picked, both ranges' counts and the entries read.
+    @Published public private(set) var recentlyDone: RecentlyDoneList
 
     private let fetch: Fetch
     private let send: Send
@@ -166,10 +169,15 @@ public final class HomeQueueModel: ObservableObject {
     /// Reads that arrived while one was on its way: the queue changed again, so it is read again after.
     private var refreshAgain = false
 
-    public init(fetch: @escaping Fetch, send: @escaping Send, view: String? = nil) {
+    /// Where Recently done's range and fold are remembered, nil to remember them only while the model lives.
+    private let choices: KeyValueStore?
+
+    public init(fetch: @escaping Fetch, send: @escaping Send, view: String? = nil, choices: KeyValueStore? = nil) {
         self.fetch = fetch
         self.send = send
+        self.choices = choices
         pager = HomeQueuePager(view: view)
+        recentlyDone = RecentlyDoneList(choices.map(RecentlyDoneChoices.load(from:)) ?? RecentlyDoneChoices())
     }
 
     /// The saved view in force, nil for every ticket.
@@ -187,7 +195,7 @@ public final class HomeQueueModel: ObservableObject {
 
     /// The first read, or a read again of the slots and the rows on screen after the queue changed.
     public func refresh() async {
-        guard !inFlight.contains(HomeRead.path(offset: 0, view: view)) else {
+        guard !inFlight.contains(path(0)) else {
             refreshAgain = true
             return
         }
@@ -196,7 +204,7 @@ public final class HomeQueueModel: ObservableObject {
         offsets = offsets.reduce(into: [Int]()) { if !$0.contains($1) { $0.append($1) } }
         for offset in offsets { await read(offset) }
         // A dropped page holds no rows, so a `304` to its next read would leave it blank: its tag goes with it.
-        for offset in pager.dropStale(outside: visible) { reads.forget(HomeRead.path(offset: offset, view: view)) }
+        for offset in pager.dropStale(outside: visible) { reads.forget(path(offset)) }
         if refreshAgain {
             refreshAgain = false
             await refresh()
@@ -268,7 +276,42 @@ public final class HomeQueueModel: ObservableObject {
         await perform(.start(identifier, note: nil, slot: slot))
     }
 
-    /// The live channel's `event: queue`: the queue or a slot changed in the engine.
+    /// Recently done's range control: the range's entries are read at once, with Home's first page, and the pick is
+    /// remembered.
+    public func pick(doneRange range: HomeRead.DoneRange) async {
+        guard range != recentlyDone.range else { return }
+        recentlyDone.pick(range)
+        remember()
+        // The range's entries were let go: a `304` to a read made before would leave the section without them.
+        reads.forget(path(0))
+        await read(0)
+    }
+
+    /// Recently done's head: folds the section to its head, or opens it, and remembers it.
+    public func toggleRecentlyDone() {
+        recentlyDone.open.toggle()
+        remember()
+    }
+
+    /// Keeps Recently done's range and fold where the app remembers them.
+    private func remember() {
+        if let choices { recentlyDone.choices.save(to: choices) }
+    }
+
+    /// The person scrolled to the end of the entries read: the next page of the range is read, if there is one.
+    public func showMoreDone() async {
+        guard let page = recentlyDone.nextPage else { return }
+        // Only the done entries are wanted: one queue row comes with them.
+        let path = HomeRead.path(offset: 0, limit: 1, done: page)
+        guard !inFlight.contains(path) else { return }
+        inFlight.insert(path)
+        let result = await fetch(path, nil)
+        inFlight.remove(path)
+        guard case let .changed(.loaded(data), _) = result, let done = HomeRead.decode(data)?.recentlyDone else { return }
+        recentlyDone.take(done)
+    }
+
+    /// The live channel's `event: queue`: the queue or a slot changed in the engine, or a ticket finished.
     public func queueChanged() async {
         await refresh()
     }
@@ -281,9 +324,14 @@ public final class HomeQueueModel: ObservableObject {
         apply(read, offset: 0, view: view)
     }
 
+    /// The read of the page at `offset`: the first page also asks for Recently done's first entries of the range picked.
+    private func path(_ offset: Int) -> String {
+        HomeRead.path(offset: offset, view: view, done: offset == 0 ? recentlyDone.firstPage : nil)
+    }
+
     private func read(_ offset: Int) async {
         let view = self.view
-        let path = HomeRead.path(offset: offset, view: view)
+        let path = self.path(offset)
         guard !inFlight.contains(path) else { return }
         inFlight.insert(path)
         let result = await fetch(path, reads.tag(for: path))
@@ -310,6 +358,11 @@ public final class HomeQueueModel: ObservableObject {
         if askedSlots == nil || askedSlots == read.slotCount {
             askedSlots = nil
             if slotCount != read.slotCount { slotCount = read.slotCount }
+        }
+        if offset == 0, let done = read.recentlyDone {
+            var next = recentlyDone
+            next.take(done)
+            if next != recentlyDone { recentlyDone = next }
         }
         var page = read.queue
         page.offset = offset
