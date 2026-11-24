@@ -1880,9 +1880,8 @@ public enum DesignTokens {
         public static let twistSize: Double = 18
         public static let twistGlyph: Double = 12
         public static let twistRadius: Double = 5
-        /// The rows shown before the list scrolls inside itself, on the queue's pitch: 6 rows, 216 pt.
+        /// The rows shown before the list scrolls inside itself, on the queue's pitch.
         public static let recentRows = 6
-        public static let recentHeight = Double(recentRows) * (rowHeight + doneRowGap)
         /// Between two done rows: the queue's pitch less a row.
         public static let doneRowGap: Double = 2
         /// The check's room: 2 pt before it, 4 pt after it in Recently done.

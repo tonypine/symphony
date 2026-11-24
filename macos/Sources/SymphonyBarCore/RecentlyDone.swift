@@ -11,8 +11,6 @@ public struct RecentlyDoneList: Equatable {
     public static let pageSize = 50
     /// The most a read gives at once.
     public static let maxLimit = 500
-    /// The rows the section shows before it scrolls inside itself.
-    public static let visibleRows = 6
 
     /// The range picked.
     public private(set) var range: HomeRead.DoneRange

@@ -118,51 +118,67 @@ public struct DoneRow: View {
 
     /// The row as VoiceOver reads it: done, the identifier and title, then the cells the place shows.
     public static func accessibilityLabel(_ row: DoneRowModel, cells: Cells) -> String {
-        var words = ["Done", row.identifier, row.title]
-        if cells.contains(.epic), let epic = row.epic { words.append("part of \(epic)") }
-        if cells.contains(.pullRequest), let pullRequest = row.pullRequest { words.append("pull request \(pullRequest)") }
-        if cells.contains(.repo) { words.append(row.repo) }
-        if cells.contains(.when) { words.append(row.when) }
-        return words.joined(separator: ", ")
+        parts(cells, epic: row.epic != nil).compactMap { part -> String? in
+            switch part {
+            case .check: "Done"
+            case .identifier: row.identifier
+            case .title: row.title
+            case .epic: row.epic.map { "part of \($0)" }
+            case .pullRequest: row.pullRequest.map { "pull request \($0)" }
+            case .repo: row.repo
+            case .when: row.when
+            }
+        }
+        .joined(separator: ", ")
     }
 
     /// The row's identifier in the accessibility tree, which a window test finds it by.
     public static func accessibilityIdentifier(_ ticket: String) -> String { "done-row-\(ticket)" }
 
+    /// The cells after the title, drawn from `parts(_:epic:)` so the row draws what that function lists.
     private var trail: some View {
         let queue = DesignTokens.HomeQueue.self
+        let lead: Set<Part> = [.check, .identifier, .title]
         return HStack(spacing: queue.rowMainGap) {
-            if cells.contains(.epic), let epic = row.epic {
-                glyphed(SymphonyView.initiatives.symbol, epic)
-                    .foregroundStyle(DesignTokens.TextColor.tertiary.color)
-            }
-            if cells.contains(.pullRequest) {
-                Group {
-                    if let pullRequest = row.pullRequest {
-                        glyphed(queue.pullRequestSymbol, pullRequest)
-                            .foregroundStyle(DesignTokens.TextColor.secondary.color)
-                    }
-                }
-                .frame(width: queue.pullRequestCell, alignment: .leading)
-            }
-            if cells.contains(.repo) {
-                Text(row.repo)
-                    .textStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .foregroundStyle(DesignTokens.TextColor.tertiary.color)
-                    .frame(width: queue.repoCell, alignment: .trailing)
-            }
-            if cells.contains(.when) {
-                Text(row.when)
-                    .textStyle(.secondary)
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .foregroundStyle(DesignTokens.TextColor.secondary.color)
-                    .frame(width: queue.whenCell, alignment: .trailing)
+            ForEach(Self.parts(cells, epic: row.epic != nil).filter { !lead.contains($0) }, id: \.self) { part in
+                cell(part)
             }
         }
         .fixedSize()
+    }
+
+    @ViewBuilder
+    private func cell(_ part: Part) -> some View {
+        let queue = DesignTokens.HomeQueue.self
+        switch part {
+        case .epic:
+            glyphed(SymphonyView.initiatives.symbol, row.epic ?? "")
+                .foregroundStyle(DesignTokens.TextColor.tertiary.color)
+        case .pullRequest:
+            Group {
+                if let pullRequest = row.pullRequest {
+                    glyphed(queue.pullRequestSymbol, pullRequest)
+                        .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                }
+            }
+            .frame(width: queue.pullRequestCell, alignment: .leading)
+        case .repo:
+            Text(row.repo)
+                .textStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .foregroundStyle(DesignTokens.TextColor.tertiary.color)
+                .frame(width: queue.repoCell, alignment: .trailing)
+        case .when:
+            Text(row.when)
+                .textStyle(.secondary)
+                .monospacedDigit()
+                .lineLimit(1)
+                .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                .frame(width: queue.whenCell, alignment: .trailing)
+        case .check, .identifier, .title:
+            EmptyView()
+        }
     }
 
     /// A cell's glyph, tertiary, and its words.

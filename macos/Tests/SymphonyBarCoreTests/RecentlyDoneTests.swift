@@ -114,8 +114,7 @@ final class RecentlyDoneTests: XCTestCase {
         XCTAssertTrue(list.showsRows)
         XCTAssertEqual(list.entries.first?.identifier, "TP-1622", "most recent first")
         XCTAssertEqual(RecentlyDoneList.title, "Recently done")
-        XCTAssertEqual(RecentlyDoneList.visibleRows, 6)
-        XCTAssertEqual(DesignTokens.HomeQueue.recentHeight, 216)
+        XCTAssertEqual(DesignTokens.HomeQueue.recentRows, 6)
     }
 
     func testPickingWeekReadsTheWeekWithItsCount() async throws {
