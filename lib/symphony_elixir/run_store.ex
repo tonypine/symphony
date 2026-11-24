@@ -3126,7 +3126,15 @@ defmodule SymphonyElixir.RunStore do
     end
   end
 
+  # A sync asks the disk to flush (`F_FULLFSYNC` on macOS), which is what makes a write survive a
+  # power cut. The test suite turns it off (`config :symphony_elixir, run_store_sync_log: false`):
+  # its stores live in temp folders that are deleted at exit, and thousands of flushes from
+  # several test processes at once queue on the one disk.
   defp sync_mnesia_log do
+    if Application.get_env(:symphony_elixir, :run_store_sync_log, true), do: sync_log(), else: :ok
+  end
+
+  defp sync_log do
     case :mnesia.sync_log() do
       :ok -> :ok
       {:error, reason} -> {:error, reason}

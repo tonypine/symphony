@@ -15,6 +15,15 @@ defmodule SymphonyElixir.RunStoreTest do
     :ok = RunStore.clear()
   end
 
+  test "a write flushes the Mnesia log to disk unless the test configuration turned the flush off" do
+    assert Application.fetch_env!(:symphony_elixir, :run_store_sync_log) == false
+    Application.put_env(:symphony_elixir, :run_store_sync_log, true)
+    on_exit(fn -> Application.put_env(:symphony_elixir, :run_store_sync_log, false) end)
+
+    assert :ok = RunStore.record_ticket_self_heal(@repo_key, "issue-flushed", %{component: "ci", attempts: 1})
+    assert :ok = RunStore.clear()
+  end
+
   test "rejects partitioned write shims without an explicit repo_key" do
     assert {:error, :missing_repo_key} = RunStore.put_run(%{run_id: "run-missing-repo"})
     assert {:error, :missing_repo_key} = RunStore.update_run("run-missing-repo", %{status: "success"})

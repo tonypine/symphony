@@ -132,7 +132,7 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
 
     send(pid, :run_poll_cycle)
 
-    assert_receive {:memory_tracker_comment, "issue-skip-1", body}, 500
+    assert_receive {:memory_tracker_comment, "issue-skip-1", body}, 5_000
     assert body =~ "skipped"
     assert body =~ "score 3"
     assert body =~ "threshold 6"
@@ -181,7 +181,7 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
 
     send(pid, :run_poll_cycle)
 
-    assert_receive {:memory_tracker_comment, "issue-mid-1", body}, 500
+    assert_receive {:memory_tracker_comment, "issue-mid-1", body}, 5_000
     assert body =~ "clarification requested"
     assert body =~ "round 1/2"
     assert body =~ "Questions:"
@@ -231,7 +231,7 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
 
     send(pid, :run_poll_cycle)
 
-    assert_receive {:memory_tracker_comment, "issue-reply-1", body}, 500
+    assert_receive {:memory_tracker_comment, "issue-reply-1", body}, 5_000
     assert body =~ "clarification requested"
 
     answered_issue = %{
@@ -294,7 +294,7 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
 
     send(pid, :run_poll_cycle)
 
-    assert_receive {:memory_tracker_comment, "issue-inbox-1", body}, 500
+    assert_receive {:memory_tracker_comment, "issue-inbox-1", body}, 5_000
     assert body =~ "Answer in the Symphony Inbox, or reply here"
     wait_for_awaiting_clarification(pid, "issue-inbox-1")
 
@@ -404,7 +404,7 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
     on_exit(fn -> if Process.alive?(pid), do: Process.exit(pid, :normal) end)
 
     send(pid, :run_poll_cycle)
-    assert_receive {:memory_tracker_comment, "issue-linear-reply-1", _body}, 500
+    assert_receive {:memory_tracker_comment, "issue-linear-reply-1", _body}, 5_000
     item = wait_for_inbox_question("issue-linear-reply-1")
     ticket = {:ticket, item.repo_key, "issue-linear-reply-1"}
     assert [%{id: question_id}] = Questions.open(ticket)
@@ -569,7 +569,7 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
 
     send(pid, :run_poll_cycle)
 
-    assert_receive {:memory_tracker_comment, "issue-err-1", body}, 500
+    assert_receive {:memory_tracker_comment, "issue-err-1", body}, 5_000
     assert body =~ "LLM call failed"
 
     snapshot = wait_for_skipped(pid, "issue-err-1")
@@ -587,7 +587,7 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
     force_repo_poll_due(pid)
     send(pid, :run_poll_cycle)
     :sys.get_state(pid)
-    assert_receive {:memory_tracker_comment, "issue-err-1", edited_body}, 500
+    assert_receive {:memory_tracker_comment, "issue-err-1", edited_body}, 5_000
     assert edited_body =~ "LLM call failed"
   end
 
@@ -641,7 +641,7 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
 
     send(pid, {:retry_issue, issue.id, retry_token})
 
-    assert_receive {:memory_tracker_comment, "issue-retry-skip-1", body}, 500
+    assert_receive {:memory_tracker_comment, "issue-retry-skip-1", body}, 5_000
     assert body =~ "score 3"
 
     state =
@@ -720,8 +720,8 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
 
     send(pid, :run_poll_cycle)
 
-    assert_receive {:memory_tracker_comment, "issue-skip-earlier", _}, 500
-    assert_receive {:memory_tracker_comment, "issue-retry-skip-other", _}, 500
+    assert_receive {:memory_tracker_comment, "issue-skip-earlier", _}, 5_000
+    assert_receive {:memory_tracker_comment, "issue-retry-skip-other", _}, 5_000
     wait_for_skipped(pid, "issue-skip-earlier")
 
     send(pid, {:retry_issue, retry_issue.id, retry_token})
@@ -768,7 +768,7 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
     on_exit(fn -> if Process.alive?(pid), do: Process.exit(pid, :normal) end)
 
     send(pid, :run_poll_cycle)
-    assert_receive {:memory_tracker_comment, "issue-skip-leaves", _}, 500
+    assert_receive {:memory_tracker_comment, "issue-skip-leaves", _}, 5_000
     wait_for_skipped(pid, "issue-skip-leaves")
 
     # Issue moves out of scope (Done, reassigned, or label change → candidate fetch no longer returns it).
@@ -815,7 +815,7 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
     {:ok, pid_a} = Orchestrator.start_link(name: name_a)
 
     send(pid_a, :run_poll_cycle)
-    assert_receive {:memory_tracker_comment, "issue-err-restart", body}, 500
+    assert_receive {:memory_tracker_comment, "issue-err-restart", body}, 5_000
     assert body =~ "LLM call failed"
     _snapshot = wait_for_skipped(pid_a, "issue-err-restart")
 
@@ -951,7 +951,7 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
   defp assert_bootstrap_workpad_comment(issue_id) do
     # From the poll to the first comment is four tasks in a row (poll, gate, readiness, the run), so
     # the bound is generous; a passing test does not wait for it.
-    assert_receive {:memory_tracker_comment, ^issue_id, body}, 5_000
+    assert_receive {:memory_tracker_comment, ^issue_id, body}, 15_000
     assert body =~ "## Symphony Workpad"
     refute body =~ "skipped"
     refute body =~ "clarification requested"

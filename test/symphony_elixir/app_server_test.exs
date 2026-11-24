@@ -693,7 +693,7 @@ defmodule SymphonyElixir.AppServerTest do
       assert trace =~ ~s("id":44)
       assert trace =~ ~s("decision":"deny")
 
-      assert_receive {:memory_tracker_label_added, "issue-pr-gate", "Needs Decision"}, 500
+      assert_receive {:memory_tracker_label_added, "issue-pr-gate", "Needs Decision"}, 5_000
       refute_received {:memory_tracker_state_update, "issue-pr-gate", _state}
 
       assert_receive {:notification_event,
@@ -783,7 +783,7 @@ defmodule SymphonyElixir.AppServerTest do
       assert trace =~ ~s("id":44)
       assert trace =~ ~s("decision":"deny")
 
-      assert_receive {:memory_tracker_label_added, "issue-audit-err", "Needs Decision"}, 500
+      assert_receive {:memory_tracker_label_added, "issue-audit-err", "Needs Decision"}, 5_000
       refute_received {:memory_tracker_state_update, "issue-audit-err", _state}
 
       assert_receive {:notification_event,
@@ -892,7 +892,7 @@ defmodule SymphonyElixir.AppServerTest do
                end
              end)
 
-      assert_receive {:memory_tracker_label_added, "issue-dynamic-pr-gate", "Needs Decision"}, 500
+      assert_receive {:memory_tracker_label_added, "issue-dynamic-pr-gate", "Needs Decision"}, 5_000
       refute_received {:memory_tracker_state_update, "issue-dynamic-pr-gate", _state}
 
       assert_receive {:notification_event,
@@ -2671,7 +2671,7 @@ defmodule SymphonyElixir.AppServerTest do
                end
              end)
 
-      assert_receive {:post, "https://slack.test", slack_payload, []}, 500
+      assert_receive {:post, "https://slack.test", slack_payload, []}, 5_000
       assert Jason.encode!(slack_payload) =~ "Awaiting review"
       assert Jason.encode!(slack_payload) =~ "MT-3043"
     after

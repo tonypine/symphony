@@ -911,7 +911,7 @@ defmodule SymphonyElixir.McpServerTest do
       refute_receive {:gh_called, _args, _opts}, 100
 
       # The question pauses it; its Needs Decision label is the pause projector's, off in this suite.
-      assert_receive {:memory_tracker_comment, "issue-mcp-hold", "## Decision needed:" <> _body}, 500
+      assert_receive {:memory_tracker_comment, "issue-mcp-hold", "## Decision needed:" <> _body}, 5_000
       assert %{request: true} = Questions.deciding({:ticket, "default", "issue-mcp-hold"})
       refute_received {:memory_tracker_state_update, "issue-mcp-hold", _state}
 
@@ -1004,7 +1004,7 @@ defmodule SymphonyElixir.McpServerTest do
       refute_receive {:gh_called, _args, _opts}, 100
 
       # The question pauses it; its Needs Decision label is the pause projector's, off in this suite.
-      assert_receive {:memory_tracker_comment, "issue-mcp-audit-error", "## Decision needed:" <> _body}, 500
+      assert_receive {:memory_tracker_comment, "issue-mcp-audit-error", "## Decision needed:" <> _body}, 5_000
       assert %{request: true} = Questions.deciding({:ticket, "default", "issue-mcp-audit-error"})
       refute_received {:memory_tracker_state_update, "issue-mcp-audit-error", _state}
 
@@ -1505,7 +1505,7 @@ defmodule SymphonyElixir.McpServerTest do
         capture_log([level: :error], fn ->
           payload = %{"jsonrpc" => "2.0", "id" => 88, "method" => "tools/list", "params" => %{}}
           :ok = :socket.send(socket, Jason.encode!(payload) <> "\n")
-          assert_receive {:mcp_send_attempt, response_bytes}, 500
+          assert_receive {:mcp_send_attempt, response_bytes}, 5_000
           assert response_bytes > 0
           Process.sleep(25)
         end)

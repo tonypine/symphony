@@ -5246,7 +5246,7 @@ defmodule SymphonyElixir.CoreTest do
 
       assert_receive {:issue_state_fetch, ["issue-dep-hold"]}
       refute_receive {:issue_state_fetch, _ids}, 50
-      assert_receive {:memory_tracker_label_added, "issue-dep-hold", "Needs Decision"}, 500
+      assert_receive {:memory_tracker_label_added, "issue-dep-hold", "Needs Decision"}, 5_000
       refute_received {:memory_tracker_state_update, "issue-dep-hold", _state}
 
       assert [%{name: "decision requested", details: %{question: true, reason: "dependency_source_requires_approval"}}] =
