@@ -30,6 +30,9 @@ defmodule SymphonyElixir.Home do
     ticket with a place in the stored queue that is not in work, flat, in the stored order, each
     with its position number, one page of them, narrowed by a saved filter of the Tickets page; with
     `count`, `total`, `offset`, `limit` and `next_offset` beside them.
+  - `recently_done`: the tickets of every repo Symphony saw reach done today or in the last 7 days,
+    most recent first, one page of the range asked for, with the counts of both ranges
+    (`SymphonyElixir.Home.RecentlyDone`), read from the run records.
 
   Each ticket of either list carries `in_progress`: true exactly when it holds a slot. The slot
   entries and the queue rows are built from the records at the read, so a read after a queue move,
@@ -38,6 +41,7 @@ defmodule SymphonyElixir.Home do
 
   alias SymphonyElixir.{Dispatch.DependsOn, Dispatch.Queue, Dispatch.Slots, Situation, TicketState}
   alias SymphonyElixir.Home.Queue, as: QueueRows
+  alias SymphonyElixir.Home.RecentlyDone
   alias SymphonyElixir.Home.Slots, as: SlotEntries
 
   @not_started ["backlog", "todo", "triage"]
@@ -61,7 +65,10 @@ defmodule SymphonyElixir.Home do
     else none.
   - `:page`: the queue rows to give (`t:SymphonyElixir.Home.Queue.page/0`); default the first page,
     unfiltered.
-  - `:runs`, `:pull_request` and `:now`: as `SymphonyElixir.Home.Slots.entries/3` takes them.
+  - `:done_page`: the Recently done entries to give (`t:SymphonyElixir.Home.RecentlyDone.page/0`);
+    default today's first page.
+  - `:runs`, `:pull_request` and `:now`: as `SymphonyElixir.Home.Slots.entries/3` takes them; `:now`,
+    `:to_local` and `:runs_started_on` as `SymphonyElixir.Home.RecentlyDone.read/4` takes them.
   """
   @spec read(order(), [map()], Situation.live_facts(), keyword()) :: map()
   def read(order, records, live, opts \\ []) when is_list(records) do
@@ -97,12 +104,14 @@ defmodule SymphonyElixir.Home do
     slot_opts = [total: slot_count, parents: parents] ++ Keyword.take(opts, [:moves, :runs, :pull_request, :now])
     in_work = records |> Enum.filter(&Slots.held?/1) |> MapSet.new(& &1.issue_id) |> MapSet.union(live.running |> Map.keys() |> MapSet.new())
     page = Keyword.get(opts, :page, %{offset: 0, limit: QueueRows.default_limit(), matching: nil})
+    done_page = Keyword.get(opts, :done_page, RecentlyDone.default_page())
 
     %{
       in_progress: in_progress,
       queue: Map.put(QueueRows.read(records, in_work, parents, live, page, moves: ctx.moves), :roots, queue(queued, in_progress_ids, ctx)),
       outside: Map.put(outside, :behind, length(behind)),
-      slots: Map.put(walked_slots || %{}, :entries, SlotEntries.entries(records, live, slot_opts))
+      slots: Map.put(walked_slots || %{}, :entries, SlotEntries.entries(records, live, slot_opts)),
+      recently_done: RecentlyDone.read(records, parents, done_page, Keyword.take(opts, [:now, :to_local, :runs_started_on]))
     }
   end
 

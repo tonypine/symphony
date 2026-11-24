@@ -97,8 +97,10 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   @spec home(Conn.t(), map()) :: Conn.t()
   def home(conn, params) do
     with {:ok, page} <- Home.Queue.page(params),
+         {:ok, done} <- Home.RecentlyDone.page(params),
          {:ok, view, spec} <- Views.from_params(params) do
-      ConditionalJSON.json(conn, Presenter.home_payload(orchestrator(), snapshot_timeout_ms(), Map.merge(page, %{view: view, filters: spec.filters})))
+      query = Map.merge(page, %{done: done, view: view, filters: spec.filters})
+      ConditionalJSON.json(conn, Presenter.home_payload(orchestrator(), snapshot_timeout_ms(), query))
     else
       {:error, :not_found} -> error_response(conn, 404, "view_not_found", "No view has the id #{params["view"]}")
       {:error, {:invalid, message}} -> error_response(conn, 400, "invalid_query", message)

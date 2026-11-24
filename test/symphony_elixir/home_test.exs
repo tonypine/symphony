@@ -198,7 +198,15 @@ defmodule SymphonyElixir.HomeTest do
                in_progress: [],
                slots: %{entries: []},
                queue: Map.put(empty_rows, :roots, []),
-               outside: %{backlog: 0, below_priority: 0, epic: 0, behind: 0}
+               outside: %{backlog: 0, below_priority: 0, epic: 0, behind: 0},
+               recently_done: %{
+                 range: "today",
+                 counts: %{today: 0, week: 0},
+                 entries: [],
+                 offset: 0,
+                 limit: 50,
+                 next_offset: nil
+               }
              }
 
       assert Home.read(%{entries: []}, [record("MT-1", "Done")], live()).queue == Map.put(empty_rows, :roots, [])
@@ -239,6 +247,33 @@ defmodule SymphonyElixir.HomeTest do
     end
   end
 
+  describe "recently done" do
+    test "the read gives the page of Recently done asked for, with both counts, beside every list it gave before, with no Linear request" do
+      epic = record("MT-E", "Waiting on sub-tickets")
+      done = record("MT-D", "Done", parent: %{identifier: "MT-E"})
+      alone = record("MT-A", "Done", repo_key: "other")
+
+      runs = [done_run("MT-D", "default", ~U[2026-11-24 10:00:00Z]), done_run("MT-A", "other", ~U[2026-11-20 10:00:00Z])]
+
+      opts = [
+        now: ~U[2026-11-24 12:00:00Z],
+        to_local: & &1,
+        runs_started_on: fn date -> Enum.filter(runs, &(DateTime.to_date(&1.started_at) == date)) end,
+        done_page: %{range: :week, offset: 0, limit: 1}
+      ]
+
+      read = traced_linear(fn -> Home.read(nil, [epic, done, alone], live(), opts) end)
+
+      assert Map.keys(read) |> Enum.sort() == [:in_progress, :outside, :queue, :recently_done, :slots]
+      assert %{range: "week", counts: %{today: 1, week: 2}, offset: 0, limit: 1, next_offset: 1} = read.recently_done
+      assert [%{identifier: "MT-D", repo_key: "default", epic: epic, done_at: "2026-11-24T10:00:00Z"}] = read.recently_done.entries
+      assert epic == %{identifier: "MT-E", title: "Ticket MT-E"}
+
+      second = Home.read(nil, [epic, done, alone], live(), Keyword.put(opts, :done_page, %{range: :week, offset: 1, limit: 1}))
+      assert [%{identifier: "MT-A", repo_key: "other", epic: nil}] = second.recently_done.entries
+    end
+  end
+
   # Runs `fun` with every call of the Linear client from this process traced, and fails if one was made.
   defp traced_linear(fun) do
     {:module, client} = Code.ensure_loaded(SymphonyElixir.Linear.Client)
@@ -269,6 +304,18 @@ defmodule SymphonyElixir.HomeTest do
       },
       Map.new(attrs)
     )
+  end
+
+  # A run of `identifier` that Symphony saw reach done at `done_at`, started an hour before.
+  defp done_run(identifier, repo_key, done_at) do
+    %{
+      issue_id: "id-#{identifier}",
+      issue_identifier: identifier,
+      title: "Ticket #{identifier}",
+      repo_key: repo_key,
+      started_at: DateTime.add(done_at, -3600, :second),
+      issue_completed_notified_at: done_at
+    }
   end
 
   defp link(identifier, state), do: %{id: "id-#{identifier}", identifier: identifier, state: state}

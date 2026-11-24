@@ -5842,6 +5842,16 @@ no Linear or GitHub request, SHOULD give, beside the in-progress list and the qu
   slot entry. An epic's open sub-tickets are the rows under it in their own order; a done one is no
   row. A saved filter keeps the rows it matches and every row above one, so an epic stays when it or
   one of its open sub-tickets matches, with only the matching sub-rows.
+- `recently_done`: the tickets of every repo Symphony saw reach done (it noted their completion, as
+  the shipped read counts them; a cancelled ticket is not one), most recent first, for one of two
+  ranges: `today`, since the host's local midnight, and `week`, the 7 local days ending today. Each
+  entry gives `issue_id`, `identifier`, `title`, `repo_key`, `done_at` (ISO 8601, whole seconds),
+  `pull_request_number` (nil when none is known) and `epic` (the parent's `identifier` and
+  `title`, nil when it has none). Beside the entries come `range`, `counts` (`today` and `week`,
+  both on every read, whichever range is read), `offset`, `limit` and `next_offset` (nil on the
+  last page). The query's `done_range` (`today` by default), `done_offset` (from 0) and
+  `done_limit` (from 1, capped) pick the page, apart from the queue's `offset` and `limit`; a bad
+  value answers `400 invalid_query`.
 
 Elixir implementation note: the current snapshot's `run_history` is read from the primary repo
 partition, while budget hydration reads runs across all repo partitions.
