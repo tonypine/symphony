@@ -4248,7 +4248,10 @@ or with a running build that has no sha, it is released at `Done`).
    moves), and a cancel of an issue that open issues (not ended) depend on ("TP-976 can't be
    cancelled: TP-977 and TP-978 depend on it. Remove those dependencies first.") until those
    dependencies are removed. A move refuses only an order it turns upside down: a dependency already
-   upside down before it doesn't.
+   upside down before it doesn't. The same holds inside an epic that holds a slot: its sub-tickets
+   still to come (Home's `open_sub_tickets`) move among themselves and start as an epic's in the
+   queue do, with the same refusals, and a Start of one swaps it with the sub-ticket in work
+   (Section 8.3).
 6. The first start of the release that writes them turns the order Symphony recorded for open
    sub-issues into stored dependencies, once: each plan entry's `after` (on each sibling it names)
    and each sub-issue the Conductor filed from a run to do after its issue (on that issue), read from
@@ -4300,6 +4303,15 @@ Slots:
 - A person's Stop frees the ticket's slot in the same call. A stopped sub-ticket goes back to the
   head of its epic, and the epic to the head of the queue. A Start or a Stop that changes a slot or
   the order sends the queue notice (`order`, `slots`) on the stream at once.
+- A ticket in a slot that reaches a terminal state, with a live run or between its runs, ends in its
+  slot in that same handling, with no poll: a done one is noted done first, so a Home read made
+  right after gives it first in `recently_done`; it gives its slot up and a dispatch cycle runs at
+  once. A sub-ticket's epic keeps the slot, and the epic's next sub-ticket that can start takes it
+  in that cycle (none starts when none can; the epic waits in its slot). An ordinary ticket's slot
+  is free and goes down the queue in the stored order. The reads are walked again and published,
+  and the stream gets a `slots` notice for the end (`by: done`, `ended` for another terminal state)
+  and one for each slot the dispatch then gives (`by: pass` for an epic's next sub-ticket, `by:
+  take` for a free slot).
 - A ticket's sub-tickets run through its slot, whether or not it has work of its own: a split
   epic's sub-tickets, and a fix ticket filed for a ticket in the middle of its work, which is filed
   as its sub-ticket (the self-heal lane's fix tickets and the Conductor's blocking tickets). A
@@ -5847,7 +5859,8 @@ no Linear or GitHub request, SHOULD give, beside the in-progress list and the qu
   ranges: `today`, since the host's local midnight, and `week`, the 7 local days ending today. Each
   entry gives `issue_id`, `identifier`, `title`, `repo_key`, `done_at` (ISO 8601, whole seconds),
   `pull_request_number` (nil when none is known) and `epic` (the parent's `identifier` and
-  `title`, nil when it has none). Beside the entries come `range`, `counts` (`today` and `week`,
+  `title`, nil when it has none). A ticket that finishes in a slot is noted done in the handling that
+  frees its slot (Section 8.3), so a read made right after gives it first. Beside the entries come `range`, `counts` (`today` and `week`,
   both on every read, whichever range is read), `offset`, `limit` and `next_offset` (nil on the
   last page). The query's `done_range` (`today` by default), `done_offset` (from 0) and
   `done_limit` (from 1, capped) pick the page, apart from the queue's `offset` and `limit`; a bad
@@ -6938,6 +6951,13 @@ Minimum endpoints:
     later writes name their own, such as a Start or a Stop) and `at`. The write path sends it right
     after its write, never on a refused one, so the client reads the queue again at once. The queue is
     global, so every stream gets it, whatever its `repo_key` and `issue_identifier`.
+  - A `slots` notice about one ticket carries its `issue_id`, `issue_identifier`, the slot's number
+    (`slot`) and `by`, what changed it: `start` (a person's Start, with the tickets it `displaced`),
+    `stop` (a person's Stop), `done` (the ticket in the slot is done; `ended` for another terminal
+    state), with `freed` (true when no ticket keeps the slot) and `held_by` (the epic that keeps it,
+    when one does), `pass` (the dispatch gave an epic's next sub-ticket the slot the epic keeps,
+    `through` naming the epic) and `take` (the dispatch gave a ticket a free slot). Fields are only
+    added to a notice, never renamed or removed.
   - When the client goes away a write fails, and the response ends and unsubscribes. Other methods
     are `405`. An older Symphony without the channel answers `404`, and the app keeps polling.
 

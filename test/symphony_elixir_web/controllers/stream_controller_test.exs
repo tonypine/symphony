@@ -174,6 +174,29 @@ defmodule SymphonyElixirWeb.StreamControllerTest do
     assert event_id == event.id
   end
 
+  test "TP-1638: a ticket done in its slot, the slot passed to an epic's next sub-ticket and a slot freed each reach every stream as sent",
+       %{port: port} do
+    client = open!(port, "?issue_identifier=TP-9")
+
+    notices = [
+      %{issue_id: "a", issue_identifier: "MT-A", by: "done", slot: 1, freed: false, held_by: "MT-E"},
+      %{issue_id: "b", issue_identifier: "MT-B", by: "pass", slot: 1, through: "MT-E"},
+      %{issue_id: "h", issue_identifier: "MT-H", by: "done", slot: 2, freed: true},
+      %{issue_id: "t", issue_identifier: "MT-T", by: "take", slot: 2}
+    ]
+
+    for notice <- notices, do: ObservabilityPubSub.broadcast_queue_change("slots", notice)
+
+    buffer = recv_until!(client, "\"issue_identifier\":\"MT-T\"", 1_000)
+
+    assert [
+             %{"change" => "slots", "by" => "done", "issue_identifier" => "MT-A", "freed" => false, "held_by" => "MT-E", "slot" => 1},
+             %{"change" => "slots", "by" => "pass", "issue_identifier" => "MT-B", "through" => "MT-E", "slot" => 1},
+             %{"change" => "slots", "by" => "done", "issue_identifier" => "MT-H", "freed" => true, "slot" => 2},
+             %{"change" => "slots", "by" => "take", "issue_identifier" => "MT-T", "slot" => 2}
+           ] = notices(buffer)
+  end
+
   test "an idle stream stays open with a keep-alive line at the interval", %{port: port} do
     assert StreamController.keep_alive_ms() == 15_000
     Application.put_env(:symphony_elixir, :stream_keep_alive_ms, 200)

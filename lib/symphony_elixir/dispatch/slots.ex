@@ -48,6 +48,11 @@ defmodule SymphonyElixir.Dispatch.Slots do
     taken most recently (`takeover/1`, the least work lost). Taking a slot over stops every run that
     works through it (`working_through/3`) and puts the ticket that held it at the head of the
     queue. A person's Stop frees the ticket's slot at once.
+  - A ticket in a slot that is done gives it up in the handling that sees it done, with a live run
+    or between its runs, and a cycle runs at once: an epic keeps the slot its sub-ticket worked
+    through, and its next sub-ticket that can start takes it; an ordinary ticket's slot is free for
+    the queue. The open streams hear of the end and of each slot given then
+    (`SymphonyElixirWeb.ObservabilityPubSub.broadcast_queue_change/2`).
 
   The holders are kept on the ticket records (`slot_held_since` and `slot_number`,
   `SymphonyElixir.RunStore`), so a restart keeps them and their numbers; the orchestrator holds its

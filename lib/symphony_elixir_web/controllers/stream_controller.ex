@@ -17,9 +17,12 @@ defmodule SymphonyElixirWeb.StreamController do
   A change of the dispatch queue or of its slots is its own message, `event: queue`, with no `id:`
   and its `data:` the notice as JSON (`SymphonyElixirWeb.ObservabilityPubSub.broadcast_queue_change/2`):
   `change` (`order` after a ticket moved in the queue, with the ticket's `issue_id` and
-  `issue_identifier`; `slots` after the slot count changed, with the new `count`) and `at`. The
-  write path sends it right after its write, so a client reads the queue again at once. The queue
-  is global, so every stream gets it, whatever its `repo_key` and `issue_identifier`.
+  `issue_identifier`; `slots` after the slot count changed, with the new `count`, or after one
+  ticket's slot changed, with its `by`: `start`, `stop`, `done` or `ended` (the ticket in the slot
+  finished, with `freed` and the epic that keeps it, `held_by`), `pass` (an epic's next sub-ticket
+  took the slot it keeps, `through`) or `take` (a ticket took a free slot)) and `at`. The write path
+  sends it right after its write, so a client reads the queue again at once. The queue is global,
+  so every stream gets it, whatever its `repo_key` and `issue_identifier`.
   """
 
   use Phoenix.Controller, formats: [:json]
