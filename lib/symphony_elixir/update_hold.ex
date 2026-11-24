@@ -336,8 +336,7 @@ defmodule SymphonyElixir.UpdateHold do
   end
 
   # A blocker's pull request is read under the repo of its own record, else `opts[:repo_key]`.
-  defp blocker_opts(%Issue{repo_key: repo_key}, opts) when is_binary(repo_key), do: Keyword.put(opts, :repo_key, repo_key)
-  defp blocker_opts(_blocker, opts), do: opts
+  defp blocker_opts(%Issue{repo_key: repo_key}, opts), do: if(is_binary(repo_key), do: Keyword.put(opts, :repo_key, repo_key), else: opts)
 
   defp blocker_fact(%Issue{} = blocker, build, opts) do
     if skip_labelled?(blocker), do: {:ok, :skip}, else: merged_pull_request(blocker, build, opts)
@@ -398,8 +397,8 @@ defmodule SymphonyElixir.UpdateHold do
   end
 
   # A blocker reopened is left out: its pull request may not be its last.
-  defp terminal?(state, terminal_states) when is_binary(state), do: Enum.any?(terminal_states, &(normalize(&1) == normalize(state)))
-  defp terminal?(_state, _terminal_states), do: false
+  # Only a met dependency's state reaches it, which is a phase name.
+  defp terminal?(state, terminal_states), do: Enum.any?(terminal_states, &(normalize(&1) == normalize(state)))
 
   defp skip_labelled?(%Issue{labels: labels}), do: Enum.any?(labels, &(is_binary(&1) and normalize(&1) == @skip_label))
 

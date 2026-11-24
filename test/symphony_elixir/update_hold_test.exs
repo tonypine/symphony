@@ -320,8 +320,8 @@ defmodule SymphonyElixir.UpdateHoldTest do
     end
 
     test "a reason whose blocker no longer merged there clears; one the cache can't answer for stays" do
-      set_reason(132, "TP-419")
       unknown = todo_blocked_by(blocker("TP-7", "Done"))
+      set_reason(132, "TP-419")
       fix_issue("TP-7", @other_pr)
       resolve([unknown], merge_commit_sha: fn _url -> {:error, :github_down} end)
       assert [%{waits_on: %{pull_request: 132}}] = UpdateHold.reasons(@repo_key, "issue")
@@ -333,11 +333,12 @@ defmodule SymphonyElixir.UpdateHoldTest do
 
     test "only its own reasons are cleared, and a ticket without a repo key is not written" do
       ticket = {:ticket, @repo_key, "issue"}
+      moved = %Issue{todo_blocked_by(blocker("TP-419", "Done")) | state: "In Progress"}
       {:ok, _pause} = Pauses.set(ticket, Pauses.ticket_reason(:dependency, "TP-9"))
       {:ok, _pause} = Pauses.set(ticket, %{kind: :build, waits_on: %{pull_request: 132}})
       set_reason(132, "TP-419")
 
-      resolve([%Issue{todo_blocked_by(blocker("TP-419", "Done")) | state: "In Progress"}], no_lookups())
+      resolve([moved], no_lookups())
       assert {:ok, %{reasons: [%{kind: :ticket}, %{kind: :build, set_by: %{kind: :symphony}}]}} = Pauses.get(ticket)
       assert UpdateHold.reasons(@repo_key, "issue") == []
 

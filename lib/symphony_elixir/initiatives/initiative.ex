@@ -166,13 +166,11 @@ defmodule SymphonyElixir.Initiatives.Initiative do
         identifier: entry.identifier || (record && record.issue_identifier),
         state: record && record.phase,
         open: open?,
-        completed_at: if(record && not open?, do: iso8601(record.phase_at))
+        # A dependency is open while Symphony holds no record of it, so a met one has a record.
+        completed_at: if(not open?, do: record.phase_at && DateTime.to_iso8601(record.phase_at))
       }
     end
   end
-
-  defp iso8601(%DateTime{} = at), do: DateTime.to_iso8601(at)
-  defp iso8601(_at), do: nil
 
   defp stored_dependencies(id) do
     for {%{} = _entry, _record} = dependency <- List.wrap(RunStore.dependencies(id)), do: dependency

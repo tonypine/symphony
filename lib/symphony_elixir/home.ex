@@ -257,14 +257,7 @@ defmodule SymphonyElixir.Home do
   defp open_blockers(record, ctx) do
     record.depends_on
     |> DependsOn.open(ctx.by_id)
-    |> Enum.map(&%{id: &1.issue_id, identifier: &1.identifier || known_identifier(&1, ctx)})
-  end
-
-  defp known_identifier(dependency, ctx) do
-    case Map.get(ctx.by_id, dependency.issue_id) do
-      %{issue_identifier: identifier} -> identifier
-      nil -> nil
-    end
+    |> Enum.map(&%{id: &1.issue_id, identifier: &1.identifier || Map.get(ctx.by_id, &1.issue_id, %{})[:issue_identifier]})
   end
 
   defp queue(queued, in_progress_ids, ctx) do

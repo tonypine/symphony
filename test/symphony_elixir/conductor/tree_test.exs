@@ -143,7 +143,7 @@ defmodule SymphonyElixir.Conductor.TreeTest do
       assert %{phase: @waiting, phase_owner: :symphony} = parent
       assert [%{identifier: "MT-9002"}, %{identifier: "MT-9003"}] = parent.sub_issues
       assert TicketPlan.parent_id("memory-issue-2") == ctx.issue_id
-      assert %{repo_key: "default", blockers: []} = RunStore.get_ticket_state("memory-issue-3")
+      assert %{repo_key: "default"} = RunStore.get_ticket_state("memory-issue-3")
       assert [%{issue_id: "memory-issue-2", identifier: "MT-9002", kind: :done}] = depends_on("memory-issue-3")
       assert depends_on("memory-issue-2") == []
       assert [note] = status_notes(ctx.issue_id)

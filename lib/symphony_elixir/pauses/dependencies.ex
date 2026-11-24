@@ -66,7 +66,9 @@ defmodule SymphonyElixir.Pauses.Dependencies do
       %Issue{id: issue_id} = issue, {count, cache} when is_binary(issue_id) ->
         case record(issue, opts) do
           {:ok, %{} = record} ->
-            {changes, cache} = lift(%{record | phase: issue.state || record.phase}, {repo_key, terminal}, cache, opts)
+            # The poll's read is newer than the record for the phase and the labels.
+            record = %{record | phase: issue.state || record.phase, labels: Enum.uniq(record.labels ++ List.wrap(issue.labels))}
+            {changes, cache} = lift(record, {repo_key, terminal}, cache, opts)
             {count + changes, cache}
 
           _none ->
@@ -199,6 +201,5 @@ defmodule SymphonyElixir.Pauses.Dependencies do
 
   defp store(opts), do: Keyword.get(opts, :store, RunStore)
 
-  defp normalize(value) when is_binary(value), do: value |> String.trim() |> String.downcase()
-  defp normalize(_value), do: ""
+  defp normalize(value), do: value |> to_string() |> String.trim() |> String.downcase()
 end

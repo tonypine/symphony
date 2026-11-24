@@ -246,8 +246,8 @@ defmodule SymphonyElixir.Conductor.FilingTest do
     Process.put({:ticket, "TP-1554"}, {:ok, %Issue{id: "tp-1554", identifier: "TP-1554", title: "Something else", state: "Todo"}})
 
     # The dependencies Symphony stores: a done one, one with no record (no identifier to read), one
-    # under another title and the one that covers the problem.
-    dependencies = [{"done", "TP-1500", "Done"}, {"gone", nil, nil}, {"1554", "TP-1554", "Todo"}, {"1553", "TP-1553", "In Progress"}]
+    # Linear can't read, one under another title and the one that covers the problem.
+    dependencies = [{"done", "TP-1500", "Done"}, {"gone", nil, nil}, {"unread", "TP-1555", "Todo"}, {"1554", "TP-1554", "Todo"}, {"1553", "TP-1553", "In Progress"}]
 
     for {suffix, identifier, phase} <- dependencies do
       on = "#{ctx.issue_id}-#{suffix}"

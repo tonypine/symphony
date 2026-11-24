@@ -336,7 +336,7 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
       assert %{slots: nil} = Home.read(nil, records, live)
     end
 
-    test "a ticket the dependency gate holds reads, in the dispatch order and Home, as blocked by the ticket it depends on", ctx do
+    test "a ticket the dependency gate holds reads, in the dispatch order and Home, as waiting on the ticket it depends on", ctx do
       write_slots_workflow!(ctx, max_concurrent_agents: 1)
       upstream = recorded(issue("u", "MT-U", "Code Review"))
       next = recorded(issue("n", "MT-N", "Todo"))
@@ -358,9 +358,9 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
       assert %{situation: situation} = read.groups |> Enum.flat_map(& &1.tickets) |> Enum.find(&(&1.identifier == "MT-N"))
       assert Map.take(situation, Map.keys(blocked)) == blocked
 
+      # Home places a root waiting on a ticket in progress after it, from the stored dependency.
       home = Home.read(order, records, live)
-      assert %{situation: situation} = Enum.find(home.queue.roots, &(&1.identifier == "MT-N"))
-      assert Map.take(situation, Map.keys(blocked)) == blocked
+      assert %{after: "MT-U", situation: nil} = Enum.find(home.queue.roots, &(&1.identifier == "MT-N"))
     end
 
     test "a PR run takes a slot while it runs, without holding one for a ticket" do

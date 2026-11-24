@@ -297,8 +297,8 @@ defmodule SymphonyElixir.BlockedByGateTest do
 
   # The Todo ticket `issue_id` with a stored `:done` dependency on each of `on_ids`.
   defp depend!(issue_id, identifier, on_ids) do
-    depends_on = for id <- on_ids, do: %{issue_id: id, identifier: nil, kind: :done}
-    :ok = RunStore.put_ticket_state(TicketState.new(Config.repo_key!(), issue_id, %{issue_identifier: identifier, phase: "Todo", depends_on: depends_on}))
+    :ok = RunStore.put_ticket_state(TicketState.new(Config.repo_key!(), issue_id, %{issue_identifier: identifier, phase: "Todo"}))
+    for id <- on_ids, do: :ok = RunStore.add_dependency(issue_id, id, :done)
   end
 
   defp ticket(%Issue{id: issue_id}), do: {:ticket, Config.repo_key!(), issue_id}

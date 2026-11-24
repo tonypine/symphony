@@ -2819,8 +2819,9 @@ defmodule SymphonyElixir.CoreTest do
 
     assert {:ok, issue} = Client.fetch_issue_by_identifier_for_test("ACME-1", graphql_fun)
 
-    assert_receive {:issue_query, query, %{id: "ACME-1", relationFirst: 50, commentLast: 20} = variables}
+    assert_receive {:issue_query, query, %{id: "ACME-1", commentLast: 20} = variables}
     refute Map.has_key?(variables, :attachmentFirst)
+    refute Map.has_key?(variables, :relationFirst)
 
     assert query =~ "SymphonyLinearIssueByIdentifier"
     assert %Issue{id: "issue-1", identifier: "ACME-1", state: "Todo", labels: ["backend"]} = issue

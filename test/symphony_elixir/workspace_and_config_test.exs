@@ -2358,7 +2358,6 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
                "assignee" => %{"id" => %{"in" => ["user-1"]}}
              },
              first: 50,
-             relationFirst: 50,
              commentLast: 20,
              after: nil
            }
@@ -2756,12 +2755,12 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert Enum.map(issues, & &1.id) == issue_ids
     assert Enum.all?(issues, & &1.assigned_to_worker)
 
-    assert_receive {:fetch_issue_states_page, query, %{ids: ^first_batch_ids, first: 50, relationFirst: 50}}
+    assert_receive {:fetch_issue_states_page, query, %{ids: ^first_batch_ids, first: 50}}
     assert query =~ "SymphonyLinearIssuesById"
     assert query =~ ~r/team\s*\{\s*key\s*name\s*\}/
     assert query =~ ~r/project\s*\{\s*id\s*name\s*slugId\s*\}/
 
-    assert_receive {:fetch_issue_states_page, ^query, %{ids: ^second_batch_ids, first: 5, relationFirst: 50}}
+    assert_receive {:fetch_issue_states_page, ^query, %{ids: ^second_batch_ids, first: 5}}
   end
 
   test "linear client refresh by id marks reassigned and unassigned issues as not routed to worker" do
@@ -2783,7 +2782,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert Enum.map(issues, & &1.identifier) == ["MT-1", "MT-2", "MT-3"]
     assert Enum.map(issues, & &1.assigned_to_worker) == [false, false, true]
 
-    assert_receive {:fetch_issue_states_page, query, %{ids: ["issue-1", "issue-2", "issue-3"], first: 3, relationFirst: 50}}
+    assert_receive {:fetch_issue_states_page, query, %{ids: ["issue-1", "issue-2", "issue-3"], first: 3}}
     assert query =~ "SymphonyLinearIssuesById"
     assert query =~ "issues(filter: {id: {in: $ids}}"
   end
