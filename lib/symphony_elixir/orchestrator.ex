@@ -5553,7 +5553,13 @@ defmodule SymphonyElixir.Orchestrator do
         by = if done_state?(issue.state), do: "done", else: "ended"
 
         notice =
-          %{issue_id: issue_id, issue_identifier: issue.identifier || holder.identifier, by: by, slot: number, freed: is_nil(keeper)}
+          %{
+            issue_id: issue_id,
+            issue_identifier: issue.identifier || holder.identifier,
+            by: by,
+            slot: number,
+            freed: is_nil(keeper)
+          }
           |> put_present(:held_by, keeper)
 
         ObservabilityPubSub.broadcast_queue_change("slots", notice)
