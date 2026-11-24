@@ -245,8 +245,9 @@ defmodule SymphonyElixirWeb.HomeReadTest do
 
     :ok = RunStore.put_slot_holder("w", nil)
     read = home.()
+    # MT-W comes back to the queue at its stored place, behind MT-B, which the move put on top.
     assert slots.(read) == [{1, nil}, {2, "MT-A"}, {3, nil}]
-    assert rows.(read) == [{"1", "MT-W"}, {"2", "MT-B"}]
+    assert rows.(read) == [{"1", "MT-B"}, {"2", "MT-W"}]
   end
 
   test "an unreadable or slow orchestrator reads the records alone, with an error", %{orchestrator: orchestrator} do
