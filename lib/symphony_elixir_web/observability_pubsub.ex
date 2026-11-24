@@ -12,6 +12,7 @@ defmodule SymphonyElixirWeb.ObservabilityPubSub do
   @transcript_topic "observability:transcript"
   @ticket_events_topic "ticket_events"
   @ticket_records_topic "ticket_records"
+  @queue_topic "queue"
   @update_message :observability_updated
 
   @spec subscribe() :: :ok | {:error, term()}
@@ -115,6 +116,42 @@ defmodule SymphonyElixirWeb.ObservabilityPubSub do
     with pid when is_pid(pid) <- Process.whereis(@pubsub),
          {:error, reason} <- Phoenix.PubSub.broadcast(@pubsub, @ticket_records_topic, message) do
       Logger.warning("failed to broadcast ticket record change: #{inspect(reason)}")
+    end
+
+    :ok
+  end
+
+  @doc """
+  Subscribes the caller to the notices of changes of the dispatch queue and its slots: each arrives
+  as `{:queue_notice, notice}`.
+  """
+  @spec subscribe_queue() :: :ok | {:error, term()}
+  def subscribe_queue do
+    Phoenix.PubSub.subscribe(@pubsub, @queue_topic)
+  end
+
+  @spec unsubscribe_queue() :: :ok
+  def unsubscribe_queue do
+    Phoenix.PubSub.unsubscribe(@pubsub, @queue_topic)
+  end
+
+  @spec queue_topic() :: String.t()
+  def queue_topic, do: @queue_topic
+
+  @doc """
+  Tells the subscribers of `subscribe_queue/0` that the queue or its slots changed, sent by the write
+  path itself right after its write: `change` names what changed (`order` for a move in the queue,
+  `slots` for a new slot count; later writes name their own, such as a Start or a Stop) and `fields`
+  what the write knows of it (the moved ticket's `issue_id` and `issue_identifier`, the new `count`).
+  The notice carries `change`, the fields and `at`. Best-effort as `broadcast_ticket_event/1` is.
+  """
+  @spec broadcast_queue_change(String.t(), map()) :: :ok
+  def broadcast_queue_change(change, fields \\ %{}) when is_binary(change) and is_map(fields) do
+    notice = fields |> Map.put(:change, change) |> Map.put(:at, DateTime.utc_now() |> DateTime.truncate(:millisecond) |> DateTime.to_iso8601())
+
+    with pid when is_pid(pid) <- Process.whereis(@pubsub),
+         {:error, reason} <- Phoenix.PubSub.broadcast(@pubsub, @queue_topic, {:queue_notice, notice}) do
+      Logger.warning("failed to broadcast queue change: #{inspect(reason)}")
     end
 
     :ok

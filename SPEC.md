@@ -6874,6 +6874,12 @@ Minimum endpoints:
     client notice a dead one.
   - `repo_key` and `issue_identifier` each keep only the notices that carry them; without either,
     every ticket's notices come.
+  - A change of the dispatch queue or of its slots is its own message, `event: queue`, with no `id:`
+    and `data:` a notice as JSON: `change` (`order` after a ticket moved in the queue, with its
+    `issue_id` and `issue_identifier`; `slots` after the slot count changed, with the new `count`;
+    later writes name their own, such as a Start or a Stop) and `at`. The write path sends it right
+    after its write, never on a refused one, so the client reads the queue again at once. The queue is
+    global, so every stream gets it, whatever its `repo_key` and `issue_identifier`.
   - When the client goes away a write fails, and the response ends and unsubscribes. Other methods
     are `405`. An older Symphony without the channel answers `404`, and the app keeps polling.
 
@@ -6973,6 +6979,34 @@ Minimum endpoints:
   - The ticket read carries `looked_at` and `new_since_looked`, the count of the ticket's events
     later than the mark, and each event of the events feed carries `new`. Before the person ever
     looked, every event is new.
+
+- `POST /api/v1/control/queue/move` (OPTIONAL)
+  - Moves a ticket to another place in the stored dispatch queue, inside its scope (the top-level
+    tickets, or its parent's sub-tickets): `issue_identifier` (identifier or id) and exactly one of
+    `position` (`top` or `end`), `after` or `before` (a ticket of the same scope). It writes the
+    ticket's sort key (a crowded spot rewrites the keys around it), and
+    in the same call the orchestrator walks its candidates again and publishes its reads, so a read of
+    `GET /api/v1/dispatch/order` or `GET /api/v1/home` made after the answer shows the new order, and
+    a dispatch cycle runs at once. The open streams get an `event: queue` notice (`change: order`).
+  - Answers `200` with `issue_id`, `issue_identifier`, `scope` (the parent's identifier, null at the
+    top level) and the scope's tickets in their new `order`. A ticket that holds no place in the
+    queue, a neighbour that is the ticket itself or sits in another scope, or a queue that changed
+    under the move is `409` `move_not_allowed` with the reason; a missing or unknown parameter, or a
+    ticket or neighbour Symphony doesn't track, is `422`; a write the store refuses is `502`
+    `store_error`. Requires the control bearer token.
+
+- `POST /api/v1/control/slots` (OPTIONAL)
+  - Sets the slot count (`execution.max_concurrent_agents`): `count`, a whole number from 1 to 6. It
+    writes `execution.concurrency.max_total` in `symphony.yml` by editing that one line (or inserting
+    the key when it is missing), keeping every other line, comment and the order, as the macOS app's
+    Settings page does. The orchestrator reads it in the same call: a raised count fills the new slots
+    in a dispatch cycle run at once; a lowered one stops no run, the tickets that hold slots keep them
+    until they are done, and a freed slot is not given again while the slots used reach the count.
+    The open streams get an `event: queue` notice (`change: slots`).
+  - Answers `200` with `count` and the `slots` the reads now show (null when no orchestrator runs). A
+    count outside 1 to 6 is `422` and leaves the file as it is; a file the line editor can't change
+    (a section written inline, an unreadable file) is `502` `config_error` with why. Requires the
+    control bearer token.
 
 - `POST /api/v1/control/view` and `DELETE /api/v1/control/view/:id` (OPTIONAL)
   - Create a saved view (`name`, `filters`, `columns`, `sort`), update the one an `id` names (its

@@ -5,8 +5,8 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
   # (`release_slots_for_test/3`) and its dispatch order read (`put_dispatch_order_for_test/2`).
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.{DirectorQueue, Home, Pauses, Situation, TicketState}
   alias SymphonyElixir.Dispatch.Order
-  alias SymphonyElixir.{Home, Pauses, Situation, TicketState}
   alias SymphonyElixir.Linear.Client
   alias SymphonyElixir.Pauses.Dependencies
 
@@ -620,6 +620,67 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
 
       assert %{used: 1, free: 0, holders: [holder]} = Orchestrator.dispatch_order_slots_for_test(state)
       assert %{issue_id: "pr", identifier: "MT-PR", state: nil, running: true} = holder
+    end
+  end
+
+  describe "the Director sets the slot count (TP-1629)" do
+    test "a raised count applies at once: the next dispatch decision uses it, with no poll or timer", ctx do
+      write_slots_workflow!(ctx, max_concurrent_agents: 1)
+      write_symphony_blocks!()
+      held = recorded(issue("h", "MT-H", "In Progress"))
+      next = recorded(issue("t", "MT-T", "Todo"))
+      tracked([next])
+
+      state = orchestrator_state(1) |> holding(held) |> Orchestrator.put_dispatch_order_for_test([held, next])
+      assert Orchestrator.available_slots_for_test(state) == 0
+      assert %{max_total: 1} = state.dispatch_order.slots.concurrency
+
+      # No orchestrator runs under that name: the write answers without one.
+      assert {:ok, %{count: 2, slots: nil}} = DirectorQueue.set_slots(2, orchestrator: :no_orchestrator)
+      assert {:reply, {:ok, slots}, state} = Orchestrator.handle_call(:slots_changed, {self(), make_ref()}, state)
+
+      assert state.max_concurrent_agents == 2
+      assert %{concurrency: %{max_total: 2}, work_free: 1} = slots
+      assert state.dispatch_order.slots == slots
+      assert Orchestrator.available_slots_for_test(state) == 1
+      # The cycle it asks for runs at once, on no timer of the poll's.
+      assert_receive {:tick, token}, 100
+      assert state.tick_token == token
+
+      dispatched = Orchestrator.dispatch_chosen_issues_for_test([next], state)
+      assert Map.keys(dispatched.running) == ["t"]
+    end
+
+    test "a count lowered below the tickets in progress stops none, and a freed slot is not refilled until they are under it", ctx do
+      write_slots_workflow!(ctx, max_concurrent_agents: 3)
+      write_symphony_blocks!()
+      [one, two, three] = for n <- 1..3, do: recorded(issue("h#{n}", "MT-H#{n}", "In Progress"))
+      next = recorded(issue("t", "MT-T", "Todo"))
+      tracked([next])
+
+      state = orchestrator_state(3) |> holding(one) |> holding(two) |> holding(three) |> live_run(one)
+      running = state.running
+
+      assert {:ok, %{count: 1}} = DirectorQueue.set_slots(1, orchestrator: :no_orchestrator)
+      {:reply, {:ok, _slots}, state} = Orchestrator.handle_call(:slots_changed, {self(), make_ref()}, state)
+
+      # Nothing stops: the run goes on and every ticket keeps its slot.
+      assert state.max_concurrent_agents == 1
+      assert state.running == running
+      assert state.slot_holders |> Map.keys() |> Enum.sort() == ["h1", "h2", "h3"]
+      assert Orchestrator.available_slots_for_test(state) == 0
+
+      # MT-H1 is done: two tickets still hold slots, at or above the new count, so MT-T waits.
+      state = Orchestrator.release_slots_for_test(%{state | running: %{}}, [two, three, next], true)
+      assert state.slot_holders |> Map.keys() |> Enum.sort() == ["h2", "h3"]
+      dispatched = Orchestrator.dispatch_chosen_issues_for_test([next], state)
+      assert dispatched.running == %{}
+      assert %{reason: "work slots full"} = dispatched.slot_waiting["t"]
+
+      # Both done: the one slot is free again and goes to MT-T.
+      state = Orchestrator.release_slots_for_test(state, [next], true)
+      assert state.slot_holders == %{}
+      assert Map.keys(Orchestrator.dispatch_chosen_issues_for_test([next], state).running) == ["t"]
     end
   end
 

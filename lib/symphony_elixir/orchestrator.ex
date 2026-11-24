@@ -211,6 +211,9 @@ defmodule SymphonyElixir.Orchestrator do
       slot_waiting: %{},
       dispatch_skipped: %{},
       dispatch_order: nil,
+      # The candidates the last dispatch order read walked, so a queue move or a new slot count
+      # walks them again at once (`queue_changed/1`, `slots_changed/1`) without a poll.
+      dispatch_candidates: [],
       operator_pause_logged: false,
       cycle_requested: false,
       cycle_deferred: false,
@@ -4623,7 +4626,18 @@ defmodule SymphonyElixir.Orchestrator do
       end)
 
     order = %{computed_at: DateTime.utc_now(), entries: Order.place(Enum.reverse(walked)), slots: dispatch_order_slots(state)}
-    %{state | dispatch_order: order}
+    %{state | dispatch_order: order, dispatch_candidates: issues}
+  end
+
+  # The dispatch order read walked again over the last cycle's candidates, after a write that changes
+  # it outside a cycle (a queue move, a new slot count), and published at once, so every read shows
+  # it before the write's answer. Before the first walk there is nothing to walk again.
+  defp rewalk_dispatch_order(%State{dispatch_order: nil} = state), do: state
+
+  defp rewalk_dispatch_order(%State{} = state) do
+    state = put_dispatch_order(state, state.dispatch_candidates)
+    publish_snapshot(state)
+    state
   end
 
   defp dispatch_order_outcome(%Issue{} = issue, %State{} = pass, pause, {active_states, terminal_states, head}) do
@@ -9070,6 +9084,32 @@ defmodule SymphonyElixir.Orchestrator do
   @spec request_refresh(GenServer.server(), String.t() | nil, due: :now) :: :ok
   def request_refresh(server, repo_key, due: :now), do: GenServer.cast(server, {:request_refresh, repo_key, :now})
 
+  @doc """
+  Tells the orchestrator that the stored queue order changed (`SymphonyElixir.RunStore.move_in_queue/2`):
+  in this call it walks its last candidates again in the new order and publishes the snapshot, so
+  every read of the order (`GET /api/v1/dispatch/order`, `GET /api/v1/home`) shows the move once the
+  call returns, and it runs a dispatch cycle at once, so a ticket moved to the front of a free slot
+  starts without waiting for a poll. `:unavailable` when no orchestrator runs.
+  """
+  @spec queue_changed(GenServer.server()) :: :ok | :unavailable
+  def queue_changed(server \\ __MODULE__) do
+    if server_available?(server), do: GenServer.call(server, :queue_changed), else: :unavailable
+  end
+
+  @doc """
+  Tells the orchestrator that the slot count in `symphony.yml` changed: in this call it reads the
+  config again (the new `execution.max_concurrent_agents`), walks its last candidates and publishes the
+  snapshot with the new count, and runs a dispatch cycle at once, so a raised count fills the new
+  slots without waiting for a poll. A lowered count stops nothing: the tickets that hold slots keep
+  them, and a freed slot is not given again while the slots used reach the count
+  (`SymphonyElixir.Dispatch.Slots`). Answers the slots as the reads now show them
+  (`SymphonyElixir.Dispatch.Slots.read/3`); `:unavailable` when no orchestrator runs.
+  """
+  @spec slots_changed(GenServer.server()) :: {:ok, map()} | :unavailable
+  def slots_changed(server \\ __MODULE__) do
+    if server_available?(server), do: GenServer.call(server, :slots_changed), else: :unavailable
+  end
+
   @spec pause_dispatch(String.t() | nil) :: {:ok, map()} | :unavailable | {:error, term()}
   def pause_dispatch(reason) do
     pause_dispatch(__MODULE__, reason)
@@ -9661,6 +9701,17 @@ defmodule SymphonyElixir.Orchestrator do
       nil ->
         {:reply, {:ok, %{stopped: false, issue_id: issue_id_or_identifier}}, state}
     end
+  end
+
+  defp handle_call_message(:queue_changed, _from, state) do
+    {:reply, :ok, state |> rewalk_dispatch_order() |> request_cycle()}
+  end
+
+  # The settings dispatch compares after a reload are taken here too, so the reload the write
+  # announces (`Config.Cache.invalidate/1`) finds them unchanged and asks for no second cycle.
+  defp handle_call_message(:slots_changed, _from, state) do
+    state = rewalk_dispatch_order(%{refresh_runtime_config(state) | dispatch_settings: Settings.read()})
+    {:reply, {:ok, dispatch_order_slots(state)}, request_cycle(state)}
   end
 
   defp handle_call_message(:request_refresh, _from, state) do
