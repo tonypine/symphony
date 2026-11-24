@@ -141,28 +141,31 @@ defmodule SymphonyElixir.Home.QueueTest do
   end
 
   test "a row lists every stored dependency with its kind and whether it is met, and waits on the open ones alone" do
-    depends_on = [dep("MT-D"), dep("MT-T"), %{dep("MT-D") | kind: :released}, %{dep("MT-T") | kind: :released}, dep("MT-Z")]
+    # One stored dependency per ticket: a met and an unmet one of each kind, and one with no record.
+    depends_on = [dep("MT-D"), dep("MT-T"), %{dep("MT-E") | kind: :released}, %{dep("MT-U") | kind: :released}, dep("MT-Z")]
 
     records = [
       record("MT-1", "Todo", "a1", depends_on: depends_on),
       record("MT-T", "Todo", "a2"),
-      record("MT-D", "Done", nil)
+      record("MT-U", "Todo", "a3"),
+      record("MT-D", "Done", nil),
+      record("MT-E", "Done", nil)
     ]
 
-    [row, _other] = Queue.rows(records, MapSet.new(), DispatchQueue.parents(records), live())
+    [row | _others] = Queue.rows(records, MapSet.new(), DispatchQueue.parents(records), live())
 
     # MT-Z has no record: unmet, named by the stored identifier.
     assert row.dependencies == [
              %{issue_id: "id-MT-D", identifier: "MT-D", kind: "done", met: true},
              %{issue_id: "id-MT-T", identifier: "MT-T", kind: "done", met: false},
-             %{issue_id: "id-MT-D", identifier: "MT-D", kind: "released", met: true},
-             %{issue_id: "id-MT-T", identifier: "MT-T", kind: "released", met: false},
+             %{issue_id: "id-MT-E", identifier: "MT-E", kind: "released", met: true},
+             %{issue_id: "id-MT-U", identifier: "MT-U", kind: "released", met: false},
              %{issue_id: "id-MT-Z", identifier: "MT-Z", kind: "done", met: false}
            ]
 
     assert row.waits_on == [
              %{issue_id: "id-MT-T", identifier: "MT-T", kind: "done"},
-             %{issue_id: "id-MT-T", identifier: "MT-T", kind: "released"},
+             %{issue_id: "id-MT-U", identifier: "MT-U", kind: "released"},
              %{issue_id: "id-MT-Z", identifier: "MT-Z", kind: "done"}
            ]
 
