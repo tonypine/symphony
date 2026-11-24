@@ -633,8 +633,9 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
       assert home.in_progress |> Enum.map(&{&1.identifier, &1.in_progress}) |> Enum.sort() == [{"MT-H", true}, {"MT-W", true}]
       assert Enum.map(home.queue.roots, &{&1.identifier, &1.in_progress}) == [{"MT-T", false}, {"MT-L", false}]
 
-      # Before the first walk there are no slots to read, and nothing is in progress.
-      assert %{slots: nil} = Home.read(nil, records, live)
+      # Before the first walk there are no walked slots to read, and no slot count to give entries.
+      assert %{slots: %{entries: []} = unwalked} = Home.read(nil, records, live)
+      assert Map.keys(unwalked) == [:entries]
     end
 
     test "a ticket the dependency gate holds reads, in the dispatch order and Home, as waiting on the ticket it depends on", ctx do
