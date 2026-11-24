@@ -62,8 +62,7 @@ defmodule SymphonyElixirWeb.ConnectedReadTest do
           "identifier" => "MT-#{number}",
           "title" => "Part #{number}",
           "createdAt" => "2026-11-01T10:00:0#{number}Z",
-          "state" => %{"name" => name, "type" => type},
-          "inverseRelations" => %{"nodes" => []}
+          "state" => %{"name" => name, "type" => type}
         }
       end
 
@@ -95,16 +94,18 @@ defmodule SymphonyElixirWeb.ConnectedReadTest do
 
   defp wait_on(id, blocker, at), do: {:ok, _pause} = Pauses.set({:ticket, @repo, id}, Pauses.ticket_reason(:dependency, blocker), at: at)
 
+  # MT-6 depends on MT-5, which landed, and on MT-20, still in progress; MT-7 on MT-6. A run's block
+  # report paused each on the ticket it still waits on.
   defp ticket_in_a_chain do
-    ticket("id-MT-5", "MT-5", "Done", %{title: "Part 5"})
+    ticket("id-MT-5", "MT-5", "Done", %{title: "Part 5", phase_at: @landed})
     ticket("id-MT-20", "MT-20", "In Progress", %{title: "Elsewhere"})
-    ticket("id-MT-6", "MT-6", "Todo", %{title: "Part 6", blockers: [%{id: "id-MT-20", identifier: "MT-20", state: "In Progress"}]})
-    ticket("id-MT-7", "MT-7", "Todo", %{title: "Part 7", blockers: [%{id: "id-MT-6", identifier: "MT-6", state: "Todo"}]})
+    ticket("id-MT-6", "MT-6", "Todo", %{title: "Part 6"})
+    ticket("id-MT-7", "MT-7", "Todo", %{title: "Part 7"})
+    :ok = RunStore.add_dependency("id-MT-6", "id-MT-5", :done)
+    :ok = RunStore.add_dependency("id-MT-6", "id-MT-20", :done)
+    :ok = RunStore.add_dependency("id-MT-7", "id-MT-6", :done)
 
-    wait_on("id-MT-6", "MT-5", ~U[2026-11-01 11:00:00Z])
     wait_on("id-MT-6", "MT-20", ~U[2026-11-02 09:00:00Z])
-    landed = %{kind: :ticket, waits_on: %{identifier: "MT-5"}}
-    {:ok, _pause} = Pauses.clear_reason({:ticket, @repo, "id-MT-6"}, landed, at: @landed)
     wait_on("id-MT-7", "MT-6", ~U[2026-11-01 11:00:00Z])
   end
 

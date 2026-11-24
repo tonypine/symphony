@@ -247,9 +247,6 @@
     "description": "Have a native speaker review the Portuguese copy.\n\nSeeded for the QA server: no repository holds this work.",
     "labels": [],
     "parentId": "qa-seed-114",
-    "blockedBy": [
-      "qa-seed-114"
-    ],
     "team": {
       "key": "QA",
       "name": "QA"
@@ -267,9 +264,6 @@
     "title": "Choose the Director's language in Settings",
     "description": "Choose the Director's language in Settings.\n\nSeeded for the QA server: no repository holds this work.",
     "labels": [],
-    "blockedBy": [
-      "qa-seed-114"
-    ],
     "team": {
       "key": "QA",
       "name": "QA"

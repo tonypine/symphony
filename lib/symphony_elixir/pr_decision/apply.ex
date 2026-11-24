@@ -69,8 +69,8 @@ defmodule SymphonyElixir.PrDecision.Apply do
       count as evidence.
     * `wait_for_competitors` – the PRs ahead in the landing order (R14a), or every competing PR
       once the conflict came back after its fix runs (R15): in `Merging` auto-merge goes off, then
-      a `Blocked` hold of the landing kind and a Linear blocked-by link from each competitor's
-      ticket (`SymphonyElixir.PrWatch.Competitors`). The ledger doesn't hold it back: a hold that
+      a `Blocked` hold of the landing kind, waiting on each competitor
+      (`SymphonyElixir.PrWatch.Competitors`); no Linear blocker link is written. The ledger doesn't hold it back: a hold that
       cleared on the same head while the conflict stays waits again.
     * `decision` – a Needs Decision hold with its request, the ticket left in its phase: a ticket
       past In Progress with no PR (R6: attach it, Restart, or cancel), a PR on another base than the
@@ -163,7 +163,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
   context, the clock, the ticket's recorded decisions (`decisions`, optional: R17 counts the earlier
   answers to its question), the competitors it recorded (`links`, `SymphonyElixir.PrWatch.Competitors`),
   and the injectable `opts` (`:tracker`, `:github`, `:run_store`, `:self_heal`, `:fixer`,
-  `:gh_runner`, `:linker`).
+  `:gh_runner`).
   """
   @type ctx :: %{
           required(:repo_key) => String.t(),
@@ -544,7 +544,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
   end
 
   defp perform(%Action{kind: :wait_for_competitors, args: %{prs: prs, step_behind: step_behind}}, ctx) do
-    opts = [repo_key: ctx.repo_key, now: ctx.now, links: links(ctx), tracker: tracker(ctx), store: store(ctx)] ++ Keyword.take(ctx.opts, [:linker])
+    opts = [repo_key: ctx.repo_key, now: ctx.now, links: links(ctx), tracker: tracker(ctx), store: store(ctx)]
 
     with :ok <- disarm_in_merging(ctx, :conflict),
          {:ok, links} <- Competitors.wait(ctx.issue, prs, step_behind, opts) do

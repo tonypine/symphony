@@ -1,7 +1,8 @@
 defmodule SymphonyElixir.PrWatch.CompetitorsTest do
   @moduledoc """
   The paths of `SymphonyElixir.PrWatch.Competitors` the watcher's tick tests don't reach: a wait
-  whose competitors only partly leave, Linear or the store refusing a write, and a person's release.
+  whose competitors only partly leave, the store refusing a write, and a person's release. No path
+  writes or removes a Linear blocker link.
   """
 
   use SymphonyElixir.TestSupport
@@ -12,14 +13,9 @@ defmodule SymphonyElixir.PrWatch.CompetitorsTest do
   alias SymphonyElixir.PrWatch.Competitors
 
   @repo_key "default"
-  @issue %Issue{id: "issue-2", identifier: "TP-2", state: "Merging", blocked_by: []}
+  @issue %Issue{id: "issue-2", identifier: "TP-2", state: "Merging"}
   @now ~U[2026-10-16 12:00:00Z]
   @ticket {:ticket, "default", "issue-2"}
-
-  defmodule Linker do
-    def add_blocked_by(blocker, issue_id), do: send(self(), {:link, blocker, issue_id}) && Process.get(:link_result, :ok)
-    def remove_blocked_by(blocker, issue_id), do: send(self(), {:unlink, blocker, issue_id}) && Process.get(:unlink_result, :ok)
-  end
 
   defmodule DownStore do
     def get_ticket_state(_issue_id), do: {:error, :store_down}
@@ -50,7 +46,10 @@ defmodule SymphonyElixir.PrWatch.CompetitorsTest do
     Map.merge(%{pulls: Map.new(pulls, &{&1.number, &1}), members: %{}, blockers: %{}, merged: MapSet.new(), files: ["SPEC.md"], now: @now}, Map.new(attrs))
   end
 
-  defp opts(attrs \\ []), do: Keyword.merge([repo_key: @repo_key, terminal_states: ["Done"], linker: Linker], attrs)
+  # The competitor's ticket is Done in Symphony's record: it landed.
+  defp terminal!(issue_id, identifier), do: :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, issue_id, %{issue_identifier: identifier, phase: "Done"}))
+
+  defp opts(attrs \\ []), do: Keyword.merge([repo_key: @repo_key, terminal_states: ["Done"]], attrs)
 
   # The ticket waits on `links`: its pause has their landing reasons.
   defp wait!(links) do
@@ -59,32 +58,33 @@ defmodule SymphonyElixir.PrWatch.CompetitorsTest do
   end
 
   describe "settle/5" do
-    test "a competitor that left is unlinked and the wait names the ones left" do
+    test "a competitor that left is dropped and the wait names the ones left" do
       wait = wait!([link(1), link(3)])
       assert wait.reason == "Waiting for TP-1 to land: it changes the same files; Waiting for TP-3 to land: it changes the same files"
-      settled = Competitors.settle(@issue, wait, [link(1), link(3)], race([pull(3)]), opts())
+      log = capture_log(fn -> send(self(), {:settled, Competitors.settle(@issue, wait, [link(1), link(3)], race([pull(3)]), opts())}) end)
+      assert_received {:settled, settled}
 
-      assert_received {:unlink, "TP-1", "issue-2"}
+      assert log =~ "unlinked=TP-1"
       assert [%{issue_identifier: "TP-3"}] = settled.links
       assert settled.wait == %{reason: "Waiting on TP-3 to land: they change the same files (SPEC.md)", set_at: wait.set_at}
       assert Pauses.why(@ticket) == ["Waiting for TP-3 to land: it changes the same files"]
     end
 
-    test "a blocker whose ticket is terminal landed: its link stays" do
-      issue = %{@issue | blocked_by: [%{id: "issue-1", identifier: "TP-1", state: nil}, %{id: "issue-1", identifier: "TP-1", state: "Done"}]}
+    test "a competitor whose ticket's record is terminal landed: it is not dropped" do
+      terminal!("issue-1", "TP-1")
       wait = wait!([link(1)])
 
-      assert %{wait: nil, links: [], restart_conflicts: false} = Competitors.settle(issue, wait, [link(1)], race([]), opts())
-      refute_received {:unlink, _blocker, _issue_id}
+      log = capture_log(fn -> assert %{wait: nil, links: [], restart_conflicts: false} = Competitors.settle(@issue, wait, [link(1)], race([]), opts()) end)
+      refute log =~ "competitors_unlinked"
     end
 
-    test "a link Linear refuses to remove keeps its competitor waited on, for the next read to try again" do
-      Process.put(:unlink_result, {:error, :linear_down})
-      wait = wait!([link(1)])
+    test "a competitor whose ticket has no record, or a record still open, has not landed" do
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, "issue-3", %{issue_identifier: "TP-3", phase: "QA"}))
+      wait = wait!([link(1), link(3)])
 
-      log = capture_log(fn -> assert %{wait: %{}, links: [%{issue_identifier: "TP-1"}]} = Competitors.settle(@issue, wait, [link(1)], race([]), opts()) end)
-      assert log =~ "could not unlink TP-1"
-      assert Pauses.paused?(@ticket)
+      log = capture_log(fn -> send(self(), {:settled, Competitors.settle(@issue, wait, [link(1), link(3)], race([]), opts())}) end)
+      assert_received {:settled, %{wait: nil, links: []}}
+      assert log =~ "unlinked=TP-1,TP-3"
     end
 
     test "a wait whose reasons the store won't clear stays as it was" do
@@ -96,13 +96,11 @@ defmodule SymphonyElixir.PrWatch.CompetitorsTest do
       assert log =~ "could not end the landing wait"
     end
 
-    test "without a wait every competitor not landed is unlinked" do
+    test "without a wait every competitor not landed is dropped" do
       released = link(12, issue_id: nil, issue_identifier: nil, linked: false, released: true)
 
       assert %{wait: nil, links: [^released], restart_conflicts: false} =
-               Competitors.settle(@issue, nil, [released, link(1)], race([pull(1), pull(12)]), opts())
-
-      assert_received {:unlink, "TP-1", "issue-2"}
+               Competitors.settle(@issue, nil, [released, link(1), link(3, linked: false)], race([pull(1), pull(3), pull(12)]), opts())
     end
   end
 
@@ -173,13 +171,12 @@ defmodule SymphonyElixir.PrWatch.CompetitorsTest do
   end
 
   describe "release/3" do
-    test "removes Symphony's links and marks every competitor released" do
+    test "marks every competitor released, and no longer linked" do
       :ok = RunStore.put_ticket_pr_watch(@repo_key, @issue.id, "TP-2", %{facts: Facts.new(), links: [link(1), link(3, linked: false)]})
-      Process.put(:unlink_result, {:error, :linear_down})
 
-      capture_log(fn -> assert :ok = Competitors.release(@repo_key, @issue.id, linker: Linker) end)
-      assert_received {:unlink, "TP-1", "issue-2"}
-      refute_received {:unlink, "TP-3", _issue_id}
+      log = capture_log(fn -> assert :ok = Competitors.release(@repo_key, @issue.id) end)
+      assert log =~ "unlinked=TP-1"
+      refute log =~ "TP-3"
 
       assert [%{released: true, linked: false}, %{released: true}] = RunStore.get_ticket_state(@issue.id) |> TicketState.pr_watch() |> Map.fetch!(:links)
     end
@@ -213,13 +210,13 @@ defmodule SymphonyElixir.PrWatch.CompetitorsTest do
     test "a competitor that lands loses its reason; the last one clears the pause" do
       {:ok, _links} = Competitors.wait(@issue, [link(1), link(3)], false, opts(now: @now))
       wait = Competitors.waiting(TicketState.normalize(RunStore.get_ticket_state(@issue.id)))
-      issue = %{@issue | blocked_by: [%{id: "issue-1", identifier: "TP-1", state: "Done"}]}
+      terminal!("issue-1", "TP-1")
 
-      settled = Competitors.settle(issue, wait, [link(1), link(3)], race([pull(3)]), opts())
+      settled = Competitors.settle(@issue, wait, [link(1), link(3)], race([pull(3)]), opts())
       assert Pauses.why(@ticket) == ["Waiting for TP-3 to land: it changes the same files"]
 
-      issue = %{issue | blocked_by: issue.blocked_by ++ [%{id: "issue-3", identifier: "TP-3", state: "Done"}]}
-      assert %{wait: nil} = Competitors.settle(issue, settled.wait, settled.links, race([]), opts())
+      terminal!("issue-3", "TP-3")
+      assert %{wait: nil} = Competitors.settle(@issue, settled.wait, settled.links, race([]), opts())
       assert {:ok, nil} = Pauses.get(@ticket)
     end
 
@@ -247,7 +244,7 @@ defmodule SymphonyElixir.PrWatch.CompetitorsTest do
 
       assert "Waiting for PR #12 to land: it changes the same files" in Pauses.why(@ticket)
 
-      capture_log(fn -> assert :ok = Competitors.release(@repo_key, @issue.id, linker: Linker) end)
+      capture_log(fn -> assert :ok = Competitors.release(@repo_key, @issue.id) end)
       assert Pauses.why(@ticket) == ["Waiting for TP-9 to finish"]
 
       assert %{payload: %{by: %{kind: :person, name: "Director"}}} =

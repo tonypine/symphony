@@ -189,11 +189,6 @@ Fields:
   - Repo route names that matched the same issue when routing was ambiguous.
 - `labels` (list of strings)
   - Normalized to lowercase.
-- `blocked_by` (list of blocker refs)
-  - Each blocker ref contains:
-    - `id` (string or null)
-    - `identifier` (string or null)
-    - `state` (string or null)
 - `sub_issues` (list of sub-issue refs)
   - Direct children of the issue, each with `id`, `identifier`, and `state` (string or null).
 - `created_at` (timestamp or null)
@@ -376,7 +371,7 @@ is skipped and counted unrouted, as the poll creates its record (a webhook deliv
 itself, Section 11.4), and so is one held in several repos, as the poll counts it a conflict. Observing adds no request to Linear. For every issue a read returns, the
 observation writes into the record the ticket's
 Linear state as its `phase`, its `issue_identifier`, `title`, `labels`, `priority`, `assignee` (the
-assignee's ID), `blockers` (the identifiers of its blockers outside the repo's terminal states), `url`
+assignee's ID), `url`
 and Linear's `updatedAt` as `linear_updated_at`, with `observed_at`, creating the record when the
 ticket has none. It writes only when one of those fields changed, so an identical poll writes
 nothing, and it writes only those fields, never the record's holds, verdicts or other state:
@@ -427,7 +422,8 @@ nothing, and it writes only those fields, never the record's holds, verdicts or 
   mark; and reads by id the repository's records no read observed yet, marking one Linear does not
   return (`not_found_at`) so it is not read again. It never decides a phase.
 - A record written before these fields existed reads with them at their defaults (`nil`, or an empty
-  list for `labels` and `blockers`); it needs no migration.
+  list for `labels`); it needs no migration. A record an older build stored with `blockers` (the
+  tracker's blocker links it observed then) loads without them, and they hold nothing.
 
 Nothing reads the observed fields yet. The Elixir implementation counts each observation's outcome
 (`updated`, `unchanged`, `stale`, `errors`) since startup (`TicketObservation.summary/0`).
@@ -2567,7 +2563,7 @@ Playbook line:
 Template input variables:
 
 - `issue` (object)
-  - Includes all normalized issue fields, including labels and blockers.
+  - Includes all normalized issue fields, including labels.
 - `pr` (object)
   - Present for PR-mode runs.
   - Includes normalized PR fields such as `number`, `url`, `title`, `body`, `state`, `base_ref`,
@@ -3494,8 +3490,8 @@ the Needs Decision hold and the self-heal lane, GitHub calls through `AutoMerge`
   to `Rework` (R8). A run's dispatch outside QA is the orchestrator's and takes a slot as it starts;
   a QA run waits for the slot, since its app is built for its head first. The landing wait on
   competing PRs still ends when they land or leave the race: that wait gave the slot up, so nothing
-  else would clear it, and it clears only its own landing reasons and links, never a blocker's or a
-  person's hold. A person's answers, moves and cancels
+  else would clear it, and it clears only its own landing reasons, never a blocker's or a person's
+  hold. A person's answers, moves and cancels
   go through the control API and apply as for any ticket; the app repository's release read is no
   ticket and is not gated.
 - Branch upkeep runs in every watched phase, for a ticket that holds a slot, whatever
@@ -3538,7 +3534,7 @@ the Needs Decision hold and the self-heal lane, GitHub calls through `AutoMerge`
   backstop also fires after 3 CI Fix runs in a row met the same failure (the same check and first
   error line), whatever the count. At the backstop the watcher turns auto-merge off and the
   self-heal lane files or reuses one fix ticket for the failing check (component `ci:<check>`) in
-  the repo whose CI fails, links it as a blocker and holds the ticket on it in place, logging
+  the repo whose CI fails and holds the ticket on it in place (no Linear blocker link), logging
   `pr_watch.ci_fix_ticket`; no person is asked, and the count restarts when that hold clears. A
   conflict back after 3 fix runs waits on the open PRs that share its files (below), or goes to
   `Rework` when none does.
@@ -3584,22 +3580,21 @@ Landing order of PRs that change the same files:
 - A PR that conflicts while one ahead of it shares a path (R14a), or whose conflict came back after
   its 3 fix runs while other open PRs share its paths (R15), waits on them as a visible dependency:
   a `Blocked` hold whose `waits_on` type is `landing`, in place, in any watched phase ("Waiting on
-  MT-1 and MT-2 to land: they change the same files (a.ex, b.md)"; auto-merge off in `Merging`),
-  and a Linear blocked-by link from each competitor's ticket that Linear doesn't have yet. A
-  competing PR with no ticket (a person's) gets no link; the hold names it by number and title. The
-  record keeps the competitors under `pr_watch.links`, with whether Symphony added each link.
+  MT-1 and MT-2 to land: they change the same files (a.ex, b.md)"; auto-merge off in `Merging`).
+  Symphony writes no Linear blocker link for it. A competing PR with no ticket (a person's) is named
+  by number and title. The record keeps the competitors under `pr_watch.links` (`linked` says an
+  earlier release added a Linear link for one; none is added now).
   `competing` (R15) is every open PR sharing a path, in any landing order, with its ticket when the
   watcher watches it, except one on a hold or idle two hours, and the wait at R15 steps behind them
   all: the ticket ranks after each, so none of them waits for it.
 - No wait closes a cycle: neither `ahead` nor `competing` names a ticket already blocked, directly
-  or through others, by the waiting one (its Linear blocked-by links and the waits the watcher
+  or through others, by the waiting one (its stored dependencies and the waits the watcher
   recorded).
 - The watcher judges the hold on every read: a competitor that lands (its ticket terminal, its PR
-  merged) stays linked, as history; one that leaves the race (PR closed, on a hold, idle two hours,
-  no longer sharing a path) is unlinked when Symphony added the link, never when a person did. The
-  hold clears once no competitor is left, and the same read decides on the conflict; the R15 wait
-  restarts the conflict count. A person's `Unblock` clears the hold, removes Symphony's links and
-  stops the wait on those PRs while they stay open. A ticket the watcher stops watching ends its
+  merged) stays recorded, as history; one that leaves the race (PR closed, on a hold, idle two
+  hours, no longer sharing a path) is dropped. The hold clears once no competitor is left, and the
+  same read decides on the conflict; the R15 wait restarts the conflict count. A person's `Unblock`
+  clears the hold and stops the wait on those PRs while they stay open. A ticket the watcher stops watching ends its
   wait the same way.
 - `/api/v1/state` lists every waiting PR under `landing_waits`: `issue_id`, `issue_identifier`,
   `pull_request_url`, `state`, `waits_for` (`issue_id`, `issue_identifier`, `pull_request_url`,
@@ -3764,24 +3759,25 @@ Rules:
   with no open pull request recorded.
 - **Holds overlay, never relocate.** `Blocked` and `Needs Decision` are holds persisted in the
   ticket-state store and projected as machine-owned labels, which only the machine writes. A held
-  ticket MUST NOT dispatch and MUST NOT move because of the hold. `Blocked` is set by an open
-  blocked-by dependency on a ticket in any active phase, an agent's request to park in `Backlog` from
-  `In Progress` or `Rework` (its block report), a self-heal fix ticket (including the PR and CI
+  ticket MUST NOT dispatch and MUST NOT move because of the hold. `Blocked` is set by an agent's
+  request to park in `Backlog` from `In Progress` or `Rework` (its block report), a self-heal fix ticket (including the PR and CI
   watcher's fix ticket for a check that keeps failing), or the watcher's wait on competing PRs (its
   `landing` kind), and clears by itself when
-  what it waits on goes terminal (an access hold clears on a person's `Unblock`). A block report
-  from a ticket with open blocked-by blockers MUST record a dependency hold on those blockers, which
-  clears by itself once every one is terminal, in whatever phase the ticket is, and the ticket
-  dispatches again in that phase; outside `Todo`, a blocker whose fix merged into Symphony itself
-  also waits until the running app includes its merge commit. A block report with no open blocker
-  records an access hold. Beside a dependency or fix-ticket hold, the ticket's pause has one `ticket`
+  what it waits on goes terminal (an access hold clears on a person's `Unblock`). The tracker's
+  blocker links set no hold: Symphony does not read them, and a ticket's stored dependencies hold it
+  through the dispatch gate alone (Section 8.2). A block report from a ticket with open stored
+  dependencies MUST record a dependency hold on them, which clears by itself once each is met (or
+  removed), in whatever phase the ticket is, and the ticket dispatches again in that phase; outside
+  `Todo`, a dependency whose fix merged into Symphony itself also waits until the running app
+  includes its merge commit. A block report with no open dependency records an access hold. Beside a dependency or fix-ticket hold, the ticket's pause has one `ticket`
   reason per ticket the hold waits on ("Waiting for TP-12 to finish"), set by the same writer
   whoever paused it, and each poll clears the reason of a ticket the hold no longer waits on, so the
   pause clears with the last. A block report's dependency hold names its blockers until the last is
   terminal, but its pause drops each blocker's reason as soon as that one is terminal (keeping the
-  ones the hold waits on for an app update), and a reason the blocked-by sync, self-heal or a block
-  report set that no hold names any more is cleared on the next poll. A block report with no open
-  blocker asks a question through the
+  ones the hold waits on for an app update), and a reason self-heal or a block report set that no
+  hold names any more is cleared on the next poll, as is any reason the retired hold on the
+  tracker's blocker links (the rule "Blocked-by links") left behind. A block report with no open
+  dependency asks a question through the
   Question service ("The run on <id> cannot continue on its own": "Unblock and run again" or "Keep it
   paused"), which the access hold names; `Unblock` answers it with the first option, and answering
   it with that option unblocks the ticket. Beside a landing hold, the pause has one reason per
@@ -3797,7 +3793,7 @@ Rules:
   and the dispatch that follows reads the base branch again; beside
   self-heal's access hold, on one naming the broken QA component ("The QA machine is not
   reachable"), which clears when a QA pass or an epic review reaches a pass or fail verdict. `Unblock`
-  clears both. A ticket stopped, held back by its blockers or on a hold is listed under
+  clears both. A ticket stopped, held back by its stored dependencies or on a hold is listed under
   `dispatch_skipped` with its pause's text, every reason's line joined by `; ` whatever its kind; a
   ticket with no pause keeps the gate's own words.
   `Needs Decision` is set by an
@@ -3974,48 +3970,45 @@ An issue is dispatch-eligible only if all are true:
 - Its priority is among `tickets.priorities` when that key is set, unless it is a retry waiting
   for a slot (see 5.4).
 - It holds a slot, or a slot is free (Section 8.3).
-- Blocker rule passes, in every active phase:
+- Dependency rule passes, in every active phase (the stored dependencies, below; the tracker's
+  blocker links are not read and hold nothing):
   - In any active state (`Todo`, `In Progress`, `Rework`, `CI Fix`, `Code Review`, `QA`, `Merging`
-    and the other states dispatch picks work up from), do not dispatch when any blocker is
-    non-terminal. The ticket's pause carries one dependency reason per open blocker ("Waiting for
-    TP-12 to finish"), as a `Todo` ticket's does, and lifts on its own once every blocker is
-    terminal; the ticket then dispatches again in its phase, with no state move. Outside `Todo`, a
-    blocker whose fix merged into Symphony itself also waits until the running app includes its
-    merge commit.
-  - A blocker counts as resolved only once its state is in `terminal_states`. `Merging`,
-    `Code Review`, `QA` and `Rework` still block, since the blocker's change is not on the
-    default branch yet. One exception: a non-plan blocker its PR's merge put in the waiting state
-    (default `Waiting on sub-tickets`) counts as resolved, since its change is on the default
-    branch; a sub-ticket blocked by its own merged parent would otherwise deadlock with it. A plan
-    parent in the waiting state still blocks. A groomed blocker (one that holds a `plan.written`)
-    counts as resolved once its record says its pull request merged, whatever its state. A blocker
-    without a known state counts as open.
-  - A blocker linked while a run is under way never stops the worker once its agent session
+    and the other states dispatch picks work up from), do not dispatch while a stored dependency is
+    not met. The gate decides from the records on every pass and writes no pause; the first pass
+    that finds every dependency met dispatches the ticket again in its phase, with no state move.
+  - A `done` dependency is met once the other issue's record says `Done`. `Merging`, `Code Review`,
+    `QA` and `Rework` still hold, since its change is not on the default branch yet. One exception:
+    a non-plan issue its PR's merge put in the waiting state (default `Waiting on sub-tickets`)
+    meets it, since its change is on the default branch; a sub-ticket that depends on its own merged
+    parent would otherwise deadlock with it. A plan parent in the waiting state still holds. A
+    groomed issue (one that holds a `plan.written`) meets it once its record says its pull request
+    merged, whatever its state. An issue Symphony holds no record of meets none.
+  - A dependency added while a run is under way never stops the worker once its agent session
     started: the turn in flight finishes, the run starts no further turn, and the next dispatch is
-    held. A blocker that reaches the ticket's record while the run is still starting (dispatched, no
-    agent session yet) stops that start, and the pause holds the ticket. The issue is dispatched
-    again on the first poll after every blocker is terminal.
-  - Linear sends a new ticket's create and its blocked-by links as separate webhook deliveries. The
-    first dispatch of a ticket Linear created less than a few seconds ago (`Config.dispatch_settle_ms/0`,
-    five seconds) waits: one timer is set for the end of that settle, and the ticket is read by id
-    with its relations when it fires or at the ticket's next record change, whichever comes first.
-    The read pauses the ticket on any open blocker it finds; the ticket then dispatches only if it is
-    still unblocked. The candidate is listed under `dispatch_skipped` meanwhile ("waiting for its
-    relations: Linear created it a moment ago"). An older ticket, or one with no creation time,
-    dispatches at once.
-  - The status snapshot lists each held candidate with its open blockers (`blocked` in
+    held. One that reaches the ticket's record while the run is still starting (dispatched, no
+    agent session yet) stops that start, and the gate holds the ticket.
+  - Linear sends a new ticket's create and its relations (its parent) as separate webhook
+    deliveries. The first dispatch of a ticket Linear created less than a few seconds ago
+    (`Config.dispatch_settle_ms/0`, five seconds) waits: one timer is set for the end of that
+    settle, and the ticket is read by id with its relations when it fires or at the ticket's next
+    record change, whichever comes first, and observed into its record. The candidate is listed
+    under `dispatch_skipped` meanwhile ("waiting for its relations: Linear created it a moment
+    ago"). An older ticket, or one with no creation time, dispatches at once.
+  - The status snapshot lists each held candidate with its open stored dependencies (`blocked` in
     `/api/v1/state`, for example "MT-12 waiting on MT-15 (In Progress)"), and the dashboard shows
     them under "Waiting on blockers".
   - A fix to Symphony itself takes effect when the running app is updated, not when it merges.
     When the running build knows its commit and repository (`SYMPHONY_BUILD_SHA` and
-    `SYMPHONY_BUILD_REPO`, set by the release workflow), a `Todo` issue whose blockers are all
-    terminal stays held while a blocker's merged pull request is in that repository and its merge
-    commit is not in the running build (GitHub compares `<merge sha>...<build sha>` as neither
+    `SYMPHONY_BUILD_REPO`, set by the release workflow), a `Todo` issue whose `done` dependencies
+    are all met stays held while a dependency's merged pull request (read from that issue's record
+    and Symphony's record of its pull request, never from the tracker's links) is in that repository
+    and its merge commit is not in the running build (GitHub compares `<merge sha>...<build sha>` as neither
     `ahead` nor `identical`). The wait lives on the issue's pause: one `build` reason per such
     blocker ("Waiting for a Symphony update that includes MT-15's fix", `waits_on:
     {pull_request: 132}`), written by the poll and kept across a restart, and cleared on the first
     poll after the running build includes the merge commit, the issue leaves `Todo`, gains an open
-    blocker or the `skip-update-hold` label, or the build has no sha. Its `blocked` entry, read from
+    dependency or the `skip-update-hold` label, loses the dependency, or the build has no sha. A
+    `released` dependency is the dependency gate's own wait for the build. Its `blocked` entry, read from
     the pause, has `kind: "app_update"` and the reason's line as its `reason`, the dispatch gate
     gives the same line, and `app_update.unblocks` counts these issues. While the release build of
     the fix's merge commit isn't published, the `reason` and the gate's line say what it is at
@@ -4037,8 +4030,8 @@ An issue is dispatch-eligible only if all are true:
     once published). `app_update.latest_release` reports the newest
     published release of the repository the app updates from (`repo`, `tag`, `published_at`,
     `source`: `webhook` or `poll`; null until Symphony knows one), so the app checks for the update
-    at once instead of waiting for its own timer. Blockers merged in another repository, a build from a
-    checkout (no sha), and the `skip-update-hold` label on the held issue or on the blocker release
+    at once instead of waiting for its own timer. Dependencies merged in another repository, a build from a
+    checkout (no sha), and the `skip-update-hold` label on the held issue or on the dependency release
     the issue at once. A lookup that fails holds no new issue, and leaves a reason already set
     until the lookup answers.
   - Every polled issue of the running build's own repository, in any active phase and whatever
@@ -4147,7 +4140,7 @@ An issue is dispatch-eligible only if all are true:
     `Backlog` that is not running or claimed, the service reads the parent's state history. When
     its latest state change is `Plan Review` to the waiting state, every sub-issue that has been in
     `Backlog` since before that change (created before it, no state change after it) moves to
-    `Todo` in one batch. Blocked-by links keep the order. A parent the service parked from
+    `Todo` in one batch. Their stored dependencies keep the order. A parent the service parked from
     `In Progress` was not approved, so nothing moves. Only a person's move approves: the service
     and the reviewer can share one Linear user, so the service durably records when it moves a
     parent to the waiting state itself (before the move), and a change within 60 seconds of that
@@ -4172,26 +4165,84 @@ An issue is dispatch-eligible only if all are true:
     missing, it logs a warning and stops moving parents there until restart; parents then wait in
     `In Progress` as before. When the check itself fails, the state stays on.
 
-Dispatch order: the stored queue. Every open issue has a place in one queue across all repositories
-(`queue_position`, stored on the issue's record and kept across a restart); the order is never
-computed at a pass.
+Dispatch order: the stored queue. The open top-level issues form one queue across all repositories,
+and each issue's sub-issues are ordered among themselves inside its place. The order is stored on
+each issue's record as a fractional sort key (`sort_key`, kept across a restart) and is never
+computed at a pass. No position number is stored: the 1, 2, 3 a read shows are counted from the walk.
 
-1. A new issue joins at the end: the first time its record is written open, it takes one place past
-   the highest given. Issues one read shows for the first time join oldest `created_at` first,
-   then by `identifier`.
-2. An issue keeps its place until it leaves the queue: a terminal state, or a removal. Reopened, it
-   joins at the end again.
-3. `priority` decides no place. A change of priority moves no issue; `tickets.priorities` stays a
+1. Keys are the reference fractional indexing algorithm's: a 62-character alphabet (`0-9A-Za-z`),
+   compared as plain bytes, an integer part whose head counts its length followed by a fraction, and
+   a key between two neighbours taken at their midpoint.
+2. Nesting means "part of", and only that. An issue with a parent is ordered by its key among the
+   issues of the same parent (its scope), and the parent holds the place in the queue. The parent
+   link is permanent: a done sub-issue keeps it, so finished work traces back to its epic. A
+   sub-issue whose parent holds no place (out of the queue, or unknown) is ordered at the top level
+   by its own key. The queue is rebuilt at any moment from the open issues, their parent and their
+   key.
+3. A new issue joins at the end of its scope: the first time its record is written open, or when its
+   parent changes, it takes a key after the last one of its scope. Issues one read shows for the
+   first time join oldest `created_at` first, then by `identifier`.
+4. An issue keeps its key until it leaves the queue: a terminal state, or a removal. Reopened, it
+   joins at the end of its scope again.
+5. A move puts an issue at the top or the end of its scope, or between two neighbours next to each
+   other in it, by writing that one issue's key. When the new key would pass the length limit, only
+   a window of issues around the spot is rewritten, with evenly spaced keys in the same order; the
+   window grows only while its keys are still too long, and the rest of the queue keeps its keys.
+6. `priority` decides no place. A change of priority moves no issue; `tickets.priorities` stays a
    gate on which issues may start.
-4. The dispatch pass walks its candidates by place, the sub-tickets of a ticket that has started
+7. The dispatch pass walks its candidates by place: the top-level issues in key order, each parent's
+   sub-issues in their own key order right after it, the sub-tickets of a ticket that has started
    first (Section 8.3): a free slot goes to the first one that can start. An issue a gate holds (a
    blocker, `Backlog`, the priority filter, a pause...) keeps its place and is skipped. A candidate
    with no record yet goes last, by `created_at`, then `identifier`.
-5. The first start of the release that stored the queue places the issues already there once, in the
+8. The first start of the release that stored the queue places the issues already there once, in the
    order the pass computed before: the issues already started (past `Todo`, or with a started run in
    their ledger) in front, then the rest; inside each group stage (`Merging`, `Rework`, other active
    states, then `Todo` and `Backlog`), then `priority` ascending (null last), then `created_at`
    oldest first, then `identifier`. A later start keeps every place.
+9. The first start of the release that stored sort keys turns the integer places stored before into
+   keys once, in the same order: the top-level issues evenly spaced, and each parent's sub-issues
+   among their siblings in their previous relative order. A later start changes no key.
+
+Stored dependencies: an issue's record holds the issues it depends on (`depends_on`). They are the
+only dependencies Symphony knows: it reads no blocker link of the tracker's, imports none, and a
+link a person adds in the tracker affects nothing. Each entry names the other issue (its id, and
+its identifier for the lines that show it) and what this one needs of it: `done` (merged: the
+other record's phase is `Done`, or its pull request merged and it waits on its own sub-issues, or
+it is groomed and its pull request merged) or `released` (done, and the running build includes its merge,
+as the app-update hold knows it; merged in another repository, opted out with `skip-update-hold`,
+or with a running build that has no sha, it is released at `Done`).
+
+1. Only the engine's add and remove operations write the field; no read of the tracker, and no other
+   write of the record, fills, changes or clears it. Adding the same pair again replaces its kind; a
+   dependency of an issue on itself, or one that closes a cycle, is refused; removing one not
+   stored is fine.
+2. A dependency points upward in the queue: added on an issue that sits lower, it moves the
+   depending issue to just below it, where their scopes meet (the depending issue's ancestor and
+   the other's that share a parent, or are both top-level), in the same transaction. On an issue
+   already above, on its own parent or sub-issue, or on an issue out of the queue, no place changes.
+   A remove changes no place.
+3. A candidate with an unmet dependency is not dispatched: the gate (`depends_on`) is decided on every
+   pass from the stored records alone, with no read of the tracker and no pause written, and names
+   each issue waited on. An issue with no record, or cancelled, meets no dependency. The first pass
+   that finds every dependency met lets the issue start. An issue the gate holds reads, in its
+   situation (the Home and dispatch order reads), as `blocked_by_ticket` exactly as one paused on a
+   block report's dependency does:
+   "Blocked by MT-1", `waits_on: {ticket: "MT-1"}`, naming the first dependency whose issue is not
+   `Done`, else the first `released` one, whose cause says it waits for a Symphony update that
+   includes it.
+4. Symphony writes its own order as stored dependencies (`done`), never as a tracker blocker link:
+   a split's sub-issue that waits `after` siblings depends on each (it is created in `Backlog`, put
+   on the records, given them, then moved to `Todo`); a sub-issue a run files to do after its issue
+   depends on that issue; the Director's add and remove of a blocker on the ticket page
+   (`POST /api/v1/control/blocker`, whose `GET /api/v1/tickets/:issue_identifier/blockers` lists the
+   stored dependencies) and the agent tools' `blocked_by` write and remove them. No code path writes
+   or removes a tracker blocker link; a competing PR's landing hold and a fix ticket's hold wait
+   through the issue's pause.
+5. The first start of the release that writes them turns the order Symphony recorded for open
+   sub-issues into stored dependencies, once: each plan entry's `after` (on each sibling it names)
+   and each sub-issue the Conductor filed from a run to do after its issue (on that issue), read from
+   Symphony's events and records, never from the tracker.
 
 An issue in `Merging` gets no precedence and no allowance of its own: it keeps the slot it took at
 its first run, and a ticket in `Merging` without one waits for a free slot like any other.
@@ -4250,9 +4301,10 @@ Giving a slot up:
 
 - A ticket gives up its slot only when it is done (a terminal state), when it leaves the active
   states (a person moved it to `Backlog`, it was removed, or unassigned from this worker), when it
-  waits on a dependency (a blocker, a fix ticket, a competing pull request, an app update that
-  carries a blocker's fix) or on its own sub-tickets, or when a person stops it. A stop that comes
-  with a Question waits on the person and keeps the slot.
+  waits on a dependency (a stored dependency not met, a block report's dependency, a fix ticket, a
+  competing pull request, an app update that carries a dependency's fix) or on its own sub-tickets,
+  or when a person stops it. A stop that comes with a Question waits on the person and keeps the
+  slot.
 - A ticket with no live run is judged on every cycle against the cycle's candidates and its closed
   dispatch gate; one with a live run gives it up when the run is ended for a terminal or inactive
   state. The cycle that frees a slot asks for another at once, so the next ticket takes it without
@@ -5114,15 +5166,15 @@ Scoped Linear tool extension contract:
   list of issue identifiers, and MUST reject team, project, parent, assignee, and state arguments.
   Each `blocked_by` identifier MUST name a sub-issue of the current issue (an existing child, or
   one the run created earlier); otherwise the call MUST fail with an explicit error before the
-  issue is created. Accepted identifiers become `blocks` relations on the new issue, created right
-  after it. Without a `priority`, the new issue MUST inherit the current issue's priority. When the
+  issue is created. Accepted identifiers become stored `done` dependencies of the new issue,
+  written right after it (the records take the new issue first); no tracker link is written. Without a `priority`, the new issue MUST inherit the current issue's priority. When the
   current issue is a plan parent (the `plan` or `breakdown` label), the new issue MUST land in the
   team's `Backlog` state (falling back to a `backlog`-type state), where the plan's approval promotes
-  it. Otherwise it MUST land in the team's `Todo` state, and the current issue MUST be marked blocked
-  by it (a `blocks` relation from the new issue, created after the `blocked_by` ones), so the
-  split-off work lands first and the current issue continues once it is terminal, with no person
-  promoting or linking anything; a link Linear refuses MUST fail with an explicit error naming the
-  created issue, so the run can add it with `linear_add_blocked_by`. Title and description
+  it. Otherwise it MUST land in the team's `Todo` state, and the current issue MUST get a stored
+  `done` dependency on it (after the `blocked_by` ones), so the split-off work lands first and the
+  current issue continues once it is done, with no person promoting or linking anything; a
+  dependency the store refuses MUST fail with an explicit error naming the created issue, so the run
+  can add it with `linear_add_blocked_by`. Title and description
   MUST pass the same secret scan as comments before any Linear call. Creation MUST NOT be capped per run; a title matching
   (ignoring case and spacing) one the run already filed under the same parent MUST be refused with an
   explicit error naming the earlier sub-issue's identifier, and creation MUST be refused when the
@@ -5131,14 +5183,15 @@ Scoped Linear tool extension contract:
 - `linear_update_subissue` MUST only change a child of the current issue that is in `Backlog`; a
   sub-issue in any other state, or an issue that is not a child, MUST fail with an explicit error
   and change nothing. It accepts `identifier` and either `title`, `description` and a `blocked_by`
-  list (the complete set of sibling blockers: missing sibling links are created, sibling links
-  left out are removed, links to non-siblings stay), or `cancel_reason` alone, which is posted on
+  list (the complete set of sibling blockers, as stored `done` dependencies: missing ones are
+  stored, ones on siblings left out are removed, ones on non-siblings stay), or `cancel_reason` alone, which is posted on
   the sub-issue before it moves to the team's canceled state. Text fields MUST pass the same
   secret scan as comments. The read-only reviewer scope MUST NOT advertise or execute it.
-- `linear_add_blocked_by` MUST only add relations to the current issue: it accepts only a
-  non-empty `blocked_by` list of issue identifiers and creates one `blocks` relation from each to
-  the current issue. Every identifier MUST be looked up before any relation is created; an unknown
-  identifier or the current issue itself MUST fail with an explicit error and link nothing. A final
+- `linear_add_blocked_by` MUST only add dependencies to the current issue: it accepts only a
+  non-empty `blocked_by` list of issue identifiers and stores one `done` dependency of the current
+  issue on each; it writes no tracker link. Every identifier MUST be looked up among the issues
+  Symphony tracks before any dependency is stored; an unknown identifier or the current issue itself
+  MUST fail with an explicit error and store nothing. A final
   verification uses it to wait on its gaps in `Todo`. The read-only reviewer scope MUST NOT
   advertise or execute it.
 - `linear_create_project_update` MUST only post to the current issue's project, resolved
@@ -7663,9 +7716,21 @@ infrastructure.
 
 ### 17.4 Orchestrator Dispatch, Reconciliation, and Retry
 
-- Dispatch order is the stored queue order: a new issue joins at the end, a change of priority moves
-  no issue, an issue a gate holds keeps its place, and the places survive a restart
-- The first start on a store without places places its open issues once, started ones in front
+- Dispatch order is the stored queue order: each issue's sort key orders it at the top level or
+  among its parent's sub-issues, inside the parent's place; a new issue joins at the end of its
+  scope, a change of priority moves no issue, an issue a gate holds keeps its place, and the keys
+  survive a restart
+- A move writes the moved issue's key only, unless the spot is too crowded: then only the issues
+  around it are rewritten, evenly spaced and in the same order
+- A stored dependency is kept apart from the tracker's blockers and no read of the tracker changes
+  it; added on an issue that sits lower, it moves the depending issue to just below it; an unmet one
+  holds the issue from dispatch, reads "Blocked by" the issue it waits on and gives up the slot, and
+  the first pass that finds it met lets the issue start
+- Splits, run-filed sub-issues, the Director's blockers and the agent tools write stored
+  dependencies and no tracker blocker link; the first start converts the recorded `after` of open
+  sub-issues
+- The first start on a store without places places its open issues once, started ones in front; the
+  first start on a store with integer places turns them into sort keys in the same order
 - A ticket holds its slot from its first run until it is done, through every phase, machine step,
   agent turn and question to the person, and with no live run; with 1 slot no other ticket starts
   meanwhile

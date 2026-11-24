@@ -23,8 +23,9 @@ defmodule SymphonyElixir.Dispatch.SlotsTest do
   end
 
   describe "releases?/2" do
-    test "a ticket gives its slot up when it is no longer a candidate, waits on its sub-tickets or on an app update" do
+    test "a ticket gives its slot up when it is no longer a candidate, waits on its sub-tickets, a stored dependency or an app update" do
       refute Slots.releases?(nil, [])
+      assert Slots.releases?({"waiting for MT-9 to be done", nil, :depends_on}, [])
       assert Slots.releases?({"Done is a terminal state", nil, :not_candidate}, [])
       assert Slots.releases?({"not assigned to this Symphony's worker", :not_assigned, nil}, [])
       assert Slots.releases?({"waiting on its sub-tickets", nil, :sub_tickets}, [])
@@ -75,7 +76,7 @@ defmodule SymphonyElixir.Dispatch.SlotsTest do
       first = Slots.first_ids([held, started, unstarted, unknown, alone, :not_an_issue], facts, MapSet.new(["MT-P1"]))
       assert first == MapSet.new(["c1", "c2"])
 
-      positions = %{"s1" => 1, "c3" => 2, "c2" => 3, "c1" => 4}
+      positions = %{"s1" => ["a1"], "c3" => ["a2"], "c2" => ["a3"], "c1" => ["a4"]}
 
       assert [alone, unstarted, started, held, unknown, :not_an_issue] |> Queue.order(positions, first) |> Enum.map(&id/1) ==
                ["c2", "c1", "s1", "c3", "c4", :not_an_issue]

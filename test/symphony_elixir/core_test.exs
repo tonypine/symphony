@@ -2810,7 +2810,6 @@ defmodule SymphonyElixir.CoreTest do
              "assignee" => %{"id" => "user-1"},
              "labels" => %{"nodes" => [%{"name" => "backend"}]},
              "comments" => %{"nodes" => []},
-             "inverseRelations" => %{"nodes" => []},
              "createdAt" => "2026-05-20T00:00:00Z",
              "updatedAt" => "2026-05-20T01:00:00Z"
            }
@@ -2820,8 +2819,9 @@ defmodule SymphonyElixir.CoreTest do
 
     assert {:ok, issue} = Client.fetch_issue_by_identifier_for_test("ACME-1", graphql_fun)
 
-    assert_receive {:issue_query, query, %{id: "ACME-1", relationFirst: 50, commentLast: 20} = variables}
+    assert_receive {:issue_query, query, %{id: "ACME-1", commentLast: 20} = variables}
     refute Map.has_key?(variables, :attachmentFirst)
+    refute Map.has_key?(variables, :relationFirst)
 
     assert query =~ "SymphonyLinearIssueByIdentifier"
     assert %Issue{id: "issue-1", identifier: "ACME-1", state: "Todo", labels: ["backend"]} = issue
@@ -2927,9 +2927,9 @@ defmodule SymphonyElixir.CoreTest do
     assert String.length(workpad_body) == 800
     assert enriched_issue.description == signed_description
 
+    # Only related links are kept: Linear's blocker links are not read.
     assert enriched_issue.linked_issues == [
-             %{relation: "related", identifier: "MT-2", title: "Related context", state: "Todo"},
-             %{relation: "blocks", identifier: "MT-3", title: "Downstream issue", state: "In Progress"}
+             %{relation: "related", identifier: "MT-2", title: "Related context", state: "Todo"}
            ]
 
     assert enriched_issue.parent == %{identifier: "MT-0", title: "Parent epic", done: 1, total: 1, children: ["completed"]}
@@ -5636,7 +5636,19 @@ defmodule SymphonyElixir.CoreTest do
     assert_agent_runner_stops_after_one_turn("Todo", [], [gap], [gap])
   end
 
-  defp assert_agent_runner_stops_after_one_turn(refreshed_state, labels, sub_issues, blocked_by \\ [], turns \\ 1) do
+  # `depends_on`: the tickets the parent depends on, stored by Symphony (`RunStore.add_dependency/3`).
+  defp assert_agent_runner_stops_after_one_turn(refreshed_state, labels, sub_issues, depends_on \\ [], turns \\ 1) do
+    :ok = RunStore.clear()
+
+    if depends_on != [] do
+      :ok = RunStore.put_ticket_state(SymphonyElixir.TicketState.new("default", "issue-parent-hold", %{issue_identifier: "MT-249", phase: refreshed_state}))
+
+      for %{id: id, identifier: identifier, state: state} <- depends_on do
+        :ok = RunStore.put_ticket_state(SymphonyElixir.TicketState.new("default", id, %{issue_identifier: identifier, phase: state}))
+        :ok = RunStore.add_dependency("issue-parent-hold", id, :done)
+      end
+    end
+
     test_root =
       Path.join(
         System.tmp_dir!(),
@@ -5706,8 +5718,7 @@ defmodule SymphonyElixir.CoreTest do
              description: "Still active",
              state: refreshed_state,
              labels: labels,
-             sub_issues: sub_issues,
-             blocked_by: blocked_by
+             sub_issues: sub_issues
            }
          ]}
       end
@@ -5732,6 +5743,7 @@ defmodule SymphonyElixir.CoreTest do
       assert length(String.split(trace, "RUN", trim: true)) == 1
       assert length(Regex.scan(~r/"method":"turn\/start"/, trace)) == turns
     after
+      RunStore.clear()
       File.rm_rf(test_root)
     end
   end

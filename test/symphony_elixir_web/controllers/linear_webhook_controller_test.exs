@@ -90,6 +90,20 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
       assert %{webhook_first: 1, poll_first: 0, poll_first_recent: []} = TicketObservation.summary().compare
     end
 
+    test "a delivery carrying an open blocker link writes no blocker, no dependency and no pause into the record" do
+      repo_key = Config.repo_key!()
+      {:ok, :updated} = TicketObservation.observe(repo_key, polled_issue(priority: 2))
+      blocker = %{"type" => "blocks", "issue" => %{"id" => "issue-blocker", "identifier" => "ACME-8", "state" => %{"name" => "Todo"}}}
+
+      conn = post_signed(issue_delivery("update", %{"priority" => 1, "inverseRelations" => [blocker], "updatedAt" => "2026-10-29T09:01:00.000Z"}))
+
+      assert json_response(conn, 200) == %{"status" => "accepted"}
+      record = "issue-hook" |> RunStore.get_ticket_state() |> TicketState.normalize()
+      assert %{priority: 1, depends_on: []} = record
+      refute Map.has_key?(record, :blockers)
+      assert TicketState.pause_reasons(record) == []
+    end
+
     test "names each ticket and field a read had to correct before the webhook brought it" do
       repo_key = Config.repo_key!()
       {:ok, :updated} = TicketObservation.observe(repo_key, polled_issue(priority: 2))
@@ -381,7 +395,6 @@ defmodule SymphonyElixirWeb.LinearWebhookControllerTest do
         labels: ["backend"],
         priority: 2,
         assignee_id: "user-1",
-        blocked_by: [],
         url: "https://linear.app/acme/issue/ACME-9",
         updated_at: ~U[2026-10-29 09:00:00.000Z]
       },

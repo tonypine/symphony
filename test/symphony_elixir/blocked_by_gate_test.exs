@@ -1,6 +1,9 @@
 defmodule SymphonyElixir.BlockedByGateTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.Linear.IssueNormalizer
+  alias SymphonyElixir.{Pauses, TicketState}
+
   @states ["Todo", "In Progress", "In Review", "Auto Review", "Merging", "Rework"]
 
   setup do
@@ -13,66 +16,73 @@ defmodule SymphonyElixir.BlockedByGateTest do
     :ok
   end
 
-  describe "a Todo ticket with a blocker" do
-    for blocker_state <- ["Merging", "In Review", "Auto Review", "Rework", "In Progress", "Backlog"] do
-      test "is held while the blocker is #{blocker_state}" do
-        issue = todo_blocked_by(blocker("MT-2", unquote(blocker_state)))
+  describe "a Todo ticket with a stored dependency" do
+    for on_phase <- ["Merging", "In Review", "Auto Review", "Rework", "In Progress", "Backlog", "Canceled"] do
+      test "is held while the ticket it depends on is #{on_phase}, with no pause" do
+        issue = todo_depending_on("MT-2", unquote(on_phase))
 
-        assert Issue.blocked?(issue, terminal_states())
-        # The poll pauses it on its open blocker; the gate reads the pause.
-        assert sweep(issue) == 1
+        # The gate decides from the records alone: the poll's sweep sets no reason.
+        assert sweep(issue) == 0
+        assert Pauses.get(ticket(issue)) == {:ok, nil}
         refute Orchestrator.should_dispatch_issue_for_test(issue, orchestrator_state())
       end
     end
 
-    for blocker_state <- ["Done", "Canceled", "Duplicate", " done "] do
-      test "is dispatched once the blocker is #{inspect(blocker_state)}" do
-        issue = todo_blocked_by(blocker("MT-2", unquote(blocker_state)))
+    for on_phase <- ["Done", " done "] do
+      test "is dispatched once the ticket it depends on is #{inspect(on_phase)}" do
+        issue = todo_depending_on("MT-2", unquote(on_phase))
 
-        refute Issue.blocked?(issue, terminal_states())
         assert sweep(issue) == 0
         assert Orchestrator.should_dispatch_issue_for_test(issue, orchestrator_state())
       end
     end
 
-    test "is held by a blocker without a known state" do
-      assert Issue.blocked?(todo_blocked_by(%{id: "b", identifier: "MT-2", state: nil}), terminal_states())
-      assert Issue.blocked?(todo_blocked_by(:unreadable), terminal_states())
-    end
+    test "is held by a dependency on a ticket Symphony holds no record of" do
+      issue = todo_depending_on("MT-2", nil)
 
-    test "in a later active phase, its next dispatch is held by its blockers too" do
-      issue = %{todo_blocked_by(blocker("MT-2", "Merging")) | state: "In Progress"}
-
-      assert Issue.blocked?(issue, terminal_states())
-      assert sweep(issue) == 1
       refute Orchestrator.should_dispatch_issue_for_test(issue, orchestrator_state())
     end
 
-    test "a terminal ticket is never blocked" do
-      refute Issue.blocked?(%{todo_blocked_by(blocker("MT-2", "Todo")) | state: "Done"}, terminal_states())
-    end
+    test "in a later active phase, its next dispatch is held by its dependency too" do
+      issue = %{todo_depending_on("MT-2", "Merging") | state: "In Progress"}
 
-    test "non-issues are never blocked" do
-      assert Issue.open_blockers(%{blocked_by: [blocker("MT-2", "Todo")]}, terminal_states()) == []
-      refute Issue.blocked?(%Issue{state: nil, blocked_by: [blocker("MT-2", "Todo")]}, terminal_states())
+      assert sweep(issue) == 0
+      refute Orchestrator.should_dispatch_issue_for_test(issue, orchestrator_state())
+    end
+  end
+
+  describe "a ticket whose Linear issue has a blocker link" do
+    test "is not affected by it: no reason, no wait in the snapshot, and it dispatches" do
+      :ok = RunStore.put_ticket_state(TicketState.new(Config.repo_key!(), "id-MT-2", %{issue_identifier: "MT-2", phase: "In Progress"}))
+
+      node = %{
+        "id" => "issue",
+        "identifier" => "MT-1",
+        "title" => "Linked",
+        "state" => %{"name" => "Todo"},
+        "inverseRelations" => %{"nodes" => [%{"type" => "blocks", "issue" => %{"id" => "id-MT-2", "identifier" => "MT-2", "state" => %{"name" => "In Progress"}}}]}
+      }
+
+      issue = IssueNormalizer.from_graphql_node(node, nil)
+      refute Map.has_key?(issue, :blocked_by)
+
+      assert sweep(issue) == 0
+      assert Pauses.get(ticket(issue)) == {:ok, nil}
+      assert Orchestrator.put_blocked_for_test(orchestrator_state(), [issue]).blocked == []
+      assert Orchestrator.should_dispatch_issue_for_test(issue, orchestrator_state())
     end
   end
 
   describe "a final verification waiting on its gaps" do
-    test "stays in Todo, shows in the snapshot with its open blockers, and is dispatched once every gap is Done" do
-      gap = blocker("MT-323", "In Progress")
-      closed_gap = blocker("MT-314", "Done")
+    test "stays in Todo, shows in the snapshot with its open dependencies, and is dispatched once every gap is Done" do
+      record!("id-MT-323", "MT-323", "In Progress")
+      record!("id-MT-314", "MT-314", "Done")
+      depend!("verify", "MT-272", ["id-MT-314", "id-MT-323"])
 
-      verification = %Issue{
-        todo_blocked_by(gap)
-        | id: "verify",
-          identifier: "MT-272",
-          title: "Final verification: Update from the menu bar",
-          blocked_by: [closed_gap, gap]
-      }
-
+      verification = %Issue{id: "verify", identifier: "MT-272", title: "Final verification: Update from the menu bar", state: "Todo"}
       other = %Issue{id: "other", identifier: "MT-1", title: "Other", state: "Todo"}
-      assert sweep(verification) == 1
+
+      assert sweep(verification) == 0
       state = Orchestrator.put_blocked_for_test(orchestrator_state(), [other, verification])
 
       refute Orchestrator.should_dispatch_issue_for_test(verification, state)
@@ -89,21 +99,22 @@ defmodule SymphonyElixir.BlockedByGateTest do
 
       assert snapshot_of(state).blocked == state.blocked
 
-      unreadable = %{verification | blocked_by: [:unreadable]}
+      # A dependency on a ticket Symphony holds no record of is named by nothing it knows.
+      depend!("unknown", "MT-273", ["ghost"])
+      unknown = %Issue{verification | id: "unknown", identifier: "MT-273"}
 
       assert [%{blockers: [%{identifier: nil, state: nil}]}] =
-               Orchestrator.put_blocked_for_test(state, [unreadable]).blocked
+               Orchestrator.put_blocked_for_test(state, [unknown]).blocked
 
-      gap_done = %{verification | blocked_by: [closed_gap, %{gap | state: "Done"}]}
-      assert sweep(gap_done) == 1
-      state = Orchestrator.put_blocked_for_test(state, [other, gap_done])
+      record!("id-MT-323", "MT-323", "Done")
+      state = Orchestrator.put_blocked_for_test(state, [other, verification])
 
       assert state.blocked == []
-      assert Orchestrator.should_dispatch_issue_for_test(gap_done, state)
+      assert Orchestrator.should_dispatch_issue_for_test(verification, state)
     end
   end
 
-  describe "a Todo ticket blocked by a fix to Symphony itself" do
+  describe "a Todo ticket depending on a fix to Symphony itself" do
     @old_build "d3d301b0123456789abcdef0123456789abcdef0"
     @new_build "53b1e370123456789abcdef0123456789abcdef0"
     @merge_sha "9f54098b96666e6e233247d53fc995c3b293c4f2"
@@ -123,14 +134,14 @@ defmodule SymphonyElixir.BlockedByGateTest do
       end)
     end
 
-    test "stays held after the fix merges, until the running app includes its merge commit" do
+    test "stays held after the fix merges, until the running app includes its merge commit, with no read of Linear" do
       run_build(@old_build)
-      issue = %Issue{todo_blocked_by(blocker("TP-419", "Done")) | id: "verify", identifier: "TP-332", title: "Final verification: Pause"}
-      fix = merged_fix("TP-419", @fix_pr)
+      merged_fix("TP-419", @fix_pr)
+      depend!("verify", "TP-332", ["id-TP-419"])
+      issue = %Issue{id: "verify", identifier: "TP-332", title: "Final verification: Pause", state: "Todo"}
 
-      state = poll(orchestrator_state(), [issue], fix)
+      state = poll(orchestrator_state(), [issue], :fix)
 
-      refute Issue.blocked?(issue, terminal_states())
       refute Orchestrator.should_dispatch_issue_for_test(issue, state)
 
       assert state.blocked == [
@@ -151,7 +162,7 @@ defmodule SymphonyElixir.BlockedByGateTest do
 
       # The wait is on the ticket's pause, set by the update hold.
       assert {:ok, %{reasons: [%{kind: :build, waits_on: %{pull_request: 132}, set_by: %{name: "App update hold"}}]}} =
-               SymphonyElixir.Pauses.get({:ticket, "default", "verify"})
+               Pauses.get({:ticket, "default", "verify"})
 
       # The same build on the next poll: nothing new to look up, still held.
       assert poll(state, [issue], :no_lookup).blocked == state.blocked
@@ -172,41 +183,43 @@ defmodule SymphonyElixir.BlockedByGateTest do
       refute Orchestrator.should_dispatch_issue_for_test(issue, restarted)
       assert skip_reason(issue, restarted) == "Waiting for a Symphony update that includes TP-419's fix"
 
-      # Until the lookup answers, the snapshot names the blocker by the pull request the reason waits on.
+      # Until the lookup answers, the snapshot names the fix by the pull request the reason waits on.
       assert [%{kind: :app_update, reason: "Waiting for a Symphony update that includes TP-419's fix", blockers: [%{identifier: nil, state: "merged in PR #132"}]}] =
                restarted.blocked
 
       # The app updates to a build that includes the merge commit: the next poll clears the reason.
       run_build(@new_build)
-      state = poll(restarted, [issue], fix)
+      state = poll(restarted, [issue], :fix)
 
       assert state.blocked == []
-      assert SymphonyElixir.Pauses.get({:ticket, "default", "verify"}) == {:ok, nil}
+      assert Pauses.get({:ticket, "default", "verify"}) == {:ok, nil}
       assert Orchestrator.should_dispatch_issue_for_test(issue, state)
     end
 
     test "the skip-update-hold label clears the wait on the next poll" do
       run_build(@old_build)
-      issue = %Issue{todo_blocked_by(blocker("TP-419", "Done")) | id: "skipping"}
-      fix = merged_fix("TP-419", @fix_pr)
+      merged_fix("TP-419", @fix_pr)
+      depend!("skipping", "TP-333", ["id-TP-419"])
+      issue = %Issue{id: "skipping", identifier: "TP-333", title: "Skipping", state: "Todo"}
 
-      state = poll(orchestrator_state(), [issue], fix)
+      state = poll(orchestrator_state(), [issue], :fix)
       refute Orchestrator.should_dispatch_issue_for_test(issue, state)
 
       labelled = %Issue{issue | labels: [SymphonyElixir.UpdateHold.skip_label()]}
       state = poll(state, [labelled], :no_lookup)
 
       assert state.blocked == []
-      assert SymphonyElixir.Pauses.get({:ticket, "default", "skipping"}) == {:ok, nil}
+      assert Pauses.get({:ticket, "default", "skipping"}) == {:ok, nil}
       assert Orchestrator.should_dispatch_issue_for_test(labelled, state)
     end
 
-    test "a blocker merged in another repository releases its dependent at Done, as before" do
+    test "a dependency merged in another repository releases its dependent at Done, as before" do
       run_build(@old_build)
-      issue = todo_blocked_by(blocker("APP-1", "Done"))
-      fix = merged_fix("APP-1", "https://github.com/acme/web-app/pull/5")
+      merged_fix("APP-1", "https://github.com/acme/web-app/pull/5")
+      depend!("issue", "MT-1", ["id-APP-1"])
+      issue = %Issue{id: "issue", identifier: "MT-1", title: "Waiting", state: "Todo"}
 
-      state = poll(orchestrator_state(), [issue], fix)
+      state = poll(orchestrator_state(), [issue], :fix)
 
       assert state.blocked == []
       assert Orchestrator.should_dispatch_issue_for_test(issue, state)
@@ -214,7 +227,9 @@ defmodule SymphonyElixir.BlockedByGateTest do
 
     test "a build from a checkout holds nothing" do
       Application.put_env(:symphony_elixir, :build, sha: nil, repo: nil, number: nil)
-      issue = todo_blocked_by(blocker("TP-419", "Done"))
+      merged_fix("TP-419", @fix_pr)
+      depend!("issue", "MT-1", ["id-TP-419"])
+      issue = %Issue{id: "issue", identifier: "MT-1", title: "Waiting", state: "Todo"}
 
       state = poll(orchestrator_state(), [issue], :no_lookup)
 
@@ -224,28 +239,32 @@ defmodule SymphonyElixir.BlockedByGateTest do
 
     defp run_build(sha), do: Application.put_env(:symphony_elixir, :build, sha: sha, repo: "https://github.com/acme/symphony", number: "168")
 
-    # What a poll does: the poll task looks blockers up, then the poll result applies the holds.
-    defp poll(state, issues, fix) do
+    # What a poll does: the poll task looks the dependencies' merges up, then the poll result applies
+    # the holds. Linear is never read for them: a read of an issue fails the test.
+    defp poll(state, issues, lookup) do
       build = SymphonyElixir.BuildInfo.current()
+      no_linear = [fetch_issues: fn _ids -> flunk("Linear is not read") end, fetch_issue_by_identifier: fn _id -> flunk("Linear is not read") end]
 
       lookups =
-        case fix do
+        case lookup do
           :no_lookup ->
-            [fetch_issues: fn _ids -> flunk("nothing to look up") end, commit_included?: fn _url, _sha, _build -> flunk("cached") end]
+            [merge_commit_sha: fn _url -> flunk("cached") end, commit_included?: fn _url, _sha, _build -> flunk("cached") end]
 
           :lookup_down ->
-            [fetch_issues: fn _ids -> {:error, :linear_down} end]
+            [merge_commit_sha: fn _url -> {:error, :github_down} end]
 
-          %Issue{} ->
+          :fix ->
             [
-              fetch_issues: fn _ids -> {:ok, [fix]} end,
-              merge_commit_sha: fn @fix_pr -> {:ok, @merge_sha} end,
+              merge_commit_sha: fn
+                @fix_pr -> {:ok, @merge_sha}
+                _other -> {:ok, nil}
+              end,
               commit_included?: fn @fix_pr, @merge_sha, build_sha -> {:ok, build_sha == @new_build} end
             ]
         end
 
       # The orchestrator resolves a repo's tickets under that repo's key.
-      lookups = [repo_key: "default"] ++ lookups
+      lookups = [repo_key: "default"] ++ no_linear ++ lookups
       cache = SymphonyElixir.UpdateHold.resolve(issues, build, state.update_hold_cache, terminal_states(), lookups)
       Orchestrator.put_blocked_for_test(%{state | update_hold_cache: cache}, issues)
     end
@@ -256,23 +275,37 @@ defmodule SymphonyElixir.BlockedByGateTest do
     end
   end
 
-  # A done blocker whose PR Symphony's record shows merged.
+  # A done ticket whose PR Symphony's record shows merged.
   defp merged_fix(identifier, pr_url) do
-    fix = %Issue{id: "id-" <> identifier, identifier: identifier, state: "Done", repo_key: "default"}
-    :ok = SymphonyElixir.TicketPullRequest.record_created("default", fix.id, pr_url, nil)
+    id = "id-" <> identifier
+    record!(id, identifier, "Done")
+    :ok = SymphonyElixir.TicketPullRequest.record_created("default", id, pr_url, nil)
     :ok = SymphonyElixir.TicketPullRequest.mark_finished("default", pr_url, "merged")
-    fix
   end
 
-  defp todo_blocked_by(blocker) do
-    %Issue{id: "issue", identifier: "MT-1", title: "Blocked", state: "Todo", blocked_by: [blocker]}
+  # A Todo ticket `MT-1` depending (`:done`) on `identifier`, whose record is in `phase`, or which has
+  # no record when `phase` is nil.
+  defp todo_depending_on(identifier, phase) do
+    if phase, do: record!("id-" <> identifier, identifier, phase)
+    depend!("issue", "MT-1", ["id-" <> identifier])
+    %Issue{id: "issue", identifier: "MT-1", title: "Waiting", state: "Todo"}
   end
 
-  defp blocker(identifier, state), do: %{id: "id-" <> identifier, identifier: identifier, state: state}
+  defp record!(issue_id, identifier, phase) do
+    :ok = RunStore.put_ticket_state(TicketState.new(Config.repo_key!(), issue_id, %{issue_identifier: identifier, phase: phase}))
+  end
+
+  # The Todo ticket `issue_id` with a stored `:done` dependency on each of `on_ids`.
+  defp depend!(issue_id, identifier, on_ids) do
+    :ok = RunStore.put_ticket_state(TicketState.new(Config.repo_key!(), issue_id, %{issue_identifier: identifier, phase: "Todo"}))
+    for id <- on_ids, do: :ok = RunStore.add_dependency(issue_id, id, :done)
+  end
+
+  defp ticket(%Issue{id: issue_id}), do: {:ticket, Config.repo_key!(), issue_id}
 
   defp terminal_states, do: Config.settings!().tracker.terminal_states
 
-  # The poll's dependency sweep over `issue`, as the orchestrator runs it: how many reasons changed.
+  # The poll's sweep over `issue`, as the orchestrator runs it: how many reasons changed.
   defp sweep(issue), do: Orchestrator.sweep_dependencies_for_test(Config.repo_key!(), [issue], terminal_states())
 
   defp snapshot_of(state) do

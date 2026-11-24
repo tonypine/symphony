@@ -13,7 +13,7 @@ it lands depends on the current issue:
 - Any other ticket's sub-issue lands in `Todo`, and the current issue is marked
   blocked by it: the new ticket lands first, and the current issue waits for it
   and then continues in its phase on its own. The turn in flight finishes; the
-  next run waits. If Linear refuses that link, the tool says so after the new
+  next run waits. If Symphony can't store that dependency, the tool says so after the new
   issue exists: mark the current issue blocked by it with
   `linear_add_blocked_by`.
 

@@ -155,25 +155,6 @@ defmodule SymphonyElixir.Linear.Adapter do
   }
   """
 
-  # The blocked issue's blocked-by links are its inverse `blocks` relations.
-  @blocker_relations_query """
-  query SymphonyBlockerRelations($id: String!) {
-    issue(id: $id) {
-      inverseRelations(first: 100) {
-        nodes { id type issue { id identifier } }
-      }
-    }
-  }
-  """
-
-  @delete_issue_relation_mutation """
-  mutation SymphonyDeleteIssueRelation($id: String!) {
-    issueRelationDelete(id: $id) {
-      success
-    }
-  }
-  """
-
   @issue_id_query """
   query SymphonyIssueId($id: String!) {
     issue(id: $id) {
@@ -541,28 +522,6 @@ defmodule SymphonyElixir.Linear.Adapter do
   def create_issue(_attrs), do: {:error, :invalid_issue_create}
 
   @doc """
-  Records that the issue named `blocker` blocks `blocked_issue_id` (an issue id), so the blocked
-  issue cannot move until the blocker goes terminal. Used to tie an affected ticket to the fix
-  ticket self-heal filed for it.
-  """
-  @spec add_blocked_by(String.t(), String.t()) :: :ok | {:error, term()}
-  def add_blocked_by(blocker, blocked_issue_id) when is_binary(blocker) and is_binary(blocked_issue_id) do
-    with {:ok, blocker_id} <- issue_id(blocker),
-         {:ok, response} <-
-           client_module().graphql(@create_issue_relation_mutation, %{
-             input: %{"issueId" => blocker_id, "relatedIssueId" => blocked_issue_id, "type" => "blocks"}
-           }),
-         true <- get_in(response, ["data", "issueRelationCreate", "success"]) == true do
-      :ok
-    else
-      {:error, reason} -> {:error, reason}
-      _failed -> {:error, :issue_relation_failed}
-    end
-  end
-
-  def add_blocked_by(_blocker, _blocked_issue_id), do: {:error, :invalid_blocked_by}
-
-  @doc """
   Records that the issue named `related` (an identifier or an id) and `issue_id` are related, a link
   that holds neither: a follow-up the Conductor filed from the ticket.
   """
@@ -582,33 +541,6 @@ defmodule SymphonyElixir.Linear.Adapter do
   end
 
   def add_related(_related, _issue_id), do: {:error, :invalid_related}
-
-  @doc """
-  Removes the link `add_blocked_by/2` records: every `blocks` relation from the issue named
-  `blocker` (an identifier or an id) to `blocked_issue_id`. A link already gone is `:ok`.
-  """
-  @spec remove_blocked_by(String.t(), String.t()) :: :ok | {:error, term()}
-  def remove_blocked_by(blocker, blocked_issue_id) when is_binary(blocker) and is_binary(blocked_issue_id) do
-    with {:ok, response} <- client_module().graphql(@blocker_relations_query, %{id: blocked_issue_id}),
-         nodes when is_list(nodes) <- get_in(response, ["data", "issue", "inverseRelations", "nodes"]) do
-      nodes
-      |> Enum.filter(&(is_map(&1) and &1["type"] == "blocks" and blocker in [get_in(&1, ["issue", "id"]), get_in(&1, ["issue", "identifier"])]))
-      |> Enum.reduce_while(:ok, &delete_issue_relation/2)
-    else
-      {:error, reason} -> {:error, reason}
-      _missing -> {:error, {:issue_not_found, blocked_issue_id}}
-    end
-  end
-
-  def remove_blocked_by(_blocker, _blocked_issue_id), do: {:error, :invalid_blocked_by}
-
-  defp delete_issue_relation(%{"id" => relation_id}, :ok) do
-    case client_module().graphql(@delete_issue_relation_mutation, %{id: relation_id}) do
-      {:ok, %{"data" => %{"issueRelationDelete" => %{"success" => true}}}} -> {:cont, :ok}
-      {:ok, _refused} -> {:halt, {:error, :issue_relation_failed}}
-      {:error, reason} -> {:halt, {:error, reason}}
-    end
-  end
 
   defp validate_create_issue(attrs) do
     title = attrs |> Map.get(:title) |> blank_nil()

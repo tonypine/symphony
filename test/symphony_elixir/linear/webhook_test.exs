@@ -171,15 +171,15 @@ defmodule SymphonyElixir.Linear.WebhookTest do
       end
     end
 
-    test "reads a state or a blocker's state of the wrong shape as nothing, without raising" do
+    test "reads a state of the wrong shape as nothing and never reads a blocker link, without raising" do
       blocker = %{"type" => "blocks", "issue" => %{"id" => "b1", "identifier" => "TP-2", "state" => "Done"}}
       data = %{"id" => "i1", "identifier" => "TP-1", "updatedAt" => "2026-10-29T09:00:00Z", "inverseRelations" => [blocker]}
 
       for state <- ["Todo", ["Todo"], 7] do
         delivery = %{"type" => "Issue", "action" => "update", "data" => Map.put(data, "state", state)}
 
-        assert {:issue, :update, %Issue{identifier: "TP-1", state: nil, blocked_by: [%{identifier: "TP-2", state: nil}]}, _at} =
-                 Webhook.parse(delivery)
+        assert {:issue, :update, %Issue{identifier: "TP-1", state: nil} = issue, _at} = Webhook.parse(delivery)
+        refute Map.has_key?(issue, :blocked_by)
       end
     end
 

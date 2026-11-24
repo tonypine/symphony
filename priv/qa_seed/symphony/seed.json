@@ -190,6 +190,10 @@
   "merged_waits": [
     "QA-114"
   ],
+  "dependencies": [
+    {"issue": "QA-115", "on": "QA-114"},
+    {"issue": "QA-116", "on": "QA-114"}
+  ],
   "pull_requests": [
     {
       "issue": "QA-103",

@@ -29,6 +29,9 @@ defmodule SymphonyElixir.QaSeed do
     (`SymphonyElixir.RunStore.put_merged_wait/1`, as `SymphonyElixir.SubIssueWait.wait_on_merge/3`
     records it), so Symphony closes each one once its last sub-ticket ends; a tracker issue's
     `"parentId"` makes it a sub-ticket;
+  - `dependencies`: a ticket's stored dependency on another (`issue`, `on`, and `kind`, `done` by
+    default or `released`), as a split or the Director stores it (`SymphonyElixir.RunStore.add_dependency/3`):
+    the tracker's file holds no blocker link, since Symphony reads none;
   - `pull_requests`: a ticket's open PR (`number`) and what the PR watcher read of its checks (`ci`:
     `green`, `red` with its `failing_check`, or `pending`);
   - `events`: a ticket's ledger history (`SymphonyElixir.TicketEvents.record/5`), oldest first: each
@@ -106,6 +109,7 @@ defmodule SymphonyElixir.QaSeed do
          :ok <- each(Map.get(seed, "questions", []), &question(repo_key, tracker, &1)),
          :ok <- each(Map.get(seed, "runs", []), &run(dir, repo_key, tracker, now, &1)),
          :ok <- each(Map.get(seed, "merged_waits", []), &merged_wait(tracker, &1)),
+         :ok <- each(Map.get(seed, "dependencies", []), &dependency(tracker, &1)),
          :ok <- each(Map.get(seed, "pull_requests", []), &pull_request(repo_key, tracker, now, &1)),
          :ok <- each(Map.get(seed, "events", []), &event(dir, repo_key, tracker, now, &1)) do
       Logger.info("QA seed loaded dir=#{dir} repo_key=#{repo_key} issues=#{length(issues)}")
@@ -331,6 +335,15 @@ defmodule SymphonyElixir.QaSeed do
   defp pr_url(number), do: "https://github.com/symphony-qa/seed/pull/#{number}"
 
   defp head_sha(identifier), do: :sha |> :crypto.hash(identifier) |> Base.encode16(case: :lower)
+
+  defp dependency(tracker, %{"issue" => identifier, "on" => on} = entry) do
+    kind = if entry["kind"] == "released", do: :released, else: :done
+
+    with {:ok, issue} <- issue(tracker, identifier),
+         {:ok, on_issue} <- issue(tracker, on) do
+      tagged(RunStore.add_dependency(issue.id, on_issue.id, kind), {:dependency, identifier})
+    end
+  end
 
   defp issue(tracker, identifier) do
     case tracker.fetch_issue_by_identifier(identifier) do

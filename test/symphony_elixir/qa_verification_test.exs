@@ -903,7 +903,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert attrs.component == "qa_environment"
       assert attrs.title == "Self-heal: repair the qa_environment block"
       assert attrs.description =~ ":qa_host_tunnel_failed"
-      assert_received {:fixer_block, @fix_ticket}
+      refute_received {:fixer_block, _identifier}
 
       refute_received {:memory_tracker_state_update, _, _}
 
@@ -1071,7 +1071,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert :ok = run(workspace, [])
 
       refute_received {:fixer_create, _}
-      assert_received {:fixer_block, "TP-716"}
+      refute_received {:fixer_block, _identifier}
       assert_received {:fixer_attach, "TP-716", evidence}
       assert evidence =~ "the QA host has no fake gh"
 

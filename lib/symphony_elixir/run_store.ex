@@ -7,7 +7,7 @@ defmodule SymphonyElixir.RunStore do
   require Logger
 
   alias SymphonyElixir.{Config, Paths, Pauses, TicketMerge, TicketState}
-  alias SymphonyElixir.Dispatch.Queue
+  alias SymphonyElixir.Dispatch.{Queue, SortKey}
   alias SymphonyElixir.RunStore.RunIndex
   alias SymphonyElixir.TicketEvents.Event
 
@@ -62,11 +62,15 @@ defmodule SymphonyElixir.RunStore do
   # (`SymphonyElixir.Pauses.Backfill`).
   @pause_key :dispatch_pause
   @pause_backfill_marker "pause_backfill_symphony_v1"
-  # The dispatch queue (`SymphonyElixir.Dispatch.Queue`): the highest place a ticket's record was
-  # ever given, and the marker of the one-time placement of the records a release before kept
-  # without a place (`place_queue/0`).
+  # The dispatch queue (`SymphonyElixir.Dispatch.Queue`): the row a write that gives sort keys
+  # locks, so two tickets joining at once never share a key; the row the integer places of a
+  # release before kept their highest place in, deleted by the conversion to sort keys; and the
+  # markers of the one-time placement of the records a release before kept without a place
+  # (`place_queue/0`) and of the conversion of those places to sort keys (`key_queue/0`).
+  @queue_lock_key :queue_order
   @queue_tail_key :queue_tail
   @queue_placed_marker "queue_placed_v1"
+  @queue_keyed_marker "queue_keys_v1"
   @director %{kind: :person, name: "Director"}
   @usage_limits_key :usage_limits
   @unpaused %{paused: false, reason: nil, paused_at: nil}
@@ -1753,8 +1757,9 @@ defmodule SymphonyElixir.RunStore do
   `contract_ticket_key/0`: a store whose placement marker (`queue_placed_v1`) is not set gives every
   queued record (`TicketState.queued?/1`) its place from the order the dispatch pass computed before
   the queue was stored (`SymphonyElixir.Dispatch.Queue.placement/2`): the tickets already started
-  (past Todo, or with a run in their ledger) in front. The queue's tail is set to the last place and
-  the marker set, in one durable transaction, so a later start keeps every place as it is.
+  (past Todo, or with a run in their ledger) in front, as the integer `queue_position` a release
+  before kept, which `key_queue/0` then turns into sort keys. The marker is set in the same durable
+  transaction, so a later start places nothing again.
   """
   @spec place_queue() :: :ok | {:error, term()}
   def place_queue do
@@ -1777,24 +1782,255 @@ defmodule SymphonyElixir.RunStore do
 
     Enum.each(placed, &write_queue_place/1)
 
-    :mnesia.write({@totals_table, @queue_tail_key, max(length(placed), queue_tail(:write))})
     :mnesia.write({@totals_table, {:marker, @queue_placed_marker}, DateTime.utc_now()})
   end
 
   defp write_queue_place({record, position}) do
-    :mnesia.write({@ticket_index_table, record.issue_id, record.repo_key, %{record | queue_position: position}})
+    :mnesia.write({@ticket_index_table, record.issue_id, record.repo_key, Map.put(record, :queue_position, position)})
   end
 
   @doc """
-  Each queued ticket's place in the dispatch queue, by issue id, across every repository: the order
-  the dispatch pass walks its candidates in (`SymphonyElixir.Dispatch.Queue.order/2`); when the
-  store can't be read, its error.
+  The one-time conversion of the dispatch queue's integer places to sort keys, run by every start
+  before the store answers, after `place_queue/0`: a store whose marker (`queue_keys_v1`) is not
+  set gives every queued record (`TicketState.queued?/1`) a sort key in the order of the integer
+  `queue_position` it holds (the ones holding none after, by creation time and identifier), each
+  scope apart: the top-level tickets evenly spaced in one queue, and each parent's sub-tickets among
+  their siblings, in their previous relative order. Every record drops its integer place, the row
+  of the highest place given is deleted and the marker set, in one durable transaction, so a later
+  start changes no key.
   """
-  @spec queue_positions() :: %{String.t() => pos_integer()} | {:error, term()}
-  def queue_positions do
+  @spec key_queue() :: :ok | {:error, term()}
+  def key_queue do
+    durable_transaction(fn ->
+      if is_nil(read_marker(@queue_keyed_marker)), do: key_queue_once()
+      :ok
+    end)
+  end
+
+  defp key_queue_once do
+    {queued, others} =
+      :all
+      |> listed_ticket_records()
+      |> Enum.map(&{&1, TicketState.normalize(&1)})
+      |> Enum.split_with(fn {_raw, record} -> TicketState.queued?(record) end)
+
+    Enum.each(others, fn {raw, record} -> if Map.has_key?(raw, :queue_position), do: write_keyed(record, nil) end)
+
+    queued
+    |> Enum.group_by(fn {_raw, record} -> Queue.scope(record) end)
+    |> Enum.each(fn {_scope, scope_records} ->
+      sorted = Enum.sort_by(scope_records, fn {raw, record} -> converted_order(Map.get(raw, :queue_position), record) end)
+      {:ok, keys} = SortKey.n_keys_between(nil, nil, length(sorted))
+      sorted |> Enum.zip(keys) |> Enum.each(fn {{_raw, record}, key} -> write_keyed(record, key) end)
+    end)
+
+    :mnesia.delete({@totals_table, @queue_tail_key})
+    :mnesia.write({@totals_table, {:marker, @queue_keyed_marker}, DateTime.utc_now()})
+  end
+
+  defp converted_order(position, record) when is_integer(position), do: {0, position, 0, record.issue_id}
+  defp converted_order(_position, record), do: {1, 0, created_order(record.created_at), record.issue_identifier || record.issue_id}
+
+  defp created_order(%DateTime{} = at), do: DateTime.to_unix(at, :microsecond)
+  defp created_order(_none), do: 0
+
+  defp write_keyed(record, key) do
+    :mnesia.write({@ticket_index_table, record.issue_id, record.repo_key, %{record | sort_key: key}})
+  end
+
+  @doc """
+  Each queued ticket's place in the dispatch queue, by issue id, across every repository: the sort
+  keys from its top-level ancestor down to it (`SymphonyElixir.Dispatch.Queue.places/1`), the order
+  the dispatch pass walks its candidates in (`SymphonyElixir.Dispatch.Queue.order/2`); when the
+  store can't be read, its error. No position number is stored: a read counts them from this order.
+  """
+  @spec queue_places() :: %{String.t() => Queue.place()} | {:error, term()}
+  def queue_places do
     with :ok <- ensure_started() do
-      transaction(fn -> :all |> listed_ticket_records() |> queue_position_map() end)
+      transaction(fn -> :all |> listed_ticket_records() |> queue_place_map() end)
     end
+  end
+
+  @typedoc "Where `move_in_queue/2` puts a ticket in its scope."
+  @type queue_move :: :top | :end | {:between, String.t() | nil, String.t() | nil}
+
+  @doc """
+  Moves the queued ticket `issue_id` within its scope (the top level, or its parent's sub-tickets)
+  by writing its sort key: to the `:top`, to the `:end`, or `{:between, previous_id, next_id}`, two
+  neighbours next to each other in that scope (nil for an open end). It writes that ticket's record
+  only, unless the new key would pass `SymphonyElixir.Dispatch.Queue.max_key_length/0`: then the
+  tickets around the spot get evenly spaced keys too, in the same order
+  (`SymphonyElixir.Dispatch.Queue.insertion/2`). `{:error, :not_in_queue}` when the ticket holds no
+  place, `{:error, :not_neighbours}` when the two are not next to each other in its scope.
+  """
+  @spec move_in_queue(String.t(), queue_move()) :: :ok | {:error, term()}
+  def move_in_queue(issue_id, to) when is_binary(issue_id) and (to in [:top, :end] or (is_tuple(to) and tuple_size(to) == 3 and elem(to, 0) == :between)) do
+    with :ok <- ensure_started() do
+      durable_transaction(fn -> move_queued(issue_id, to) end)
+    end
+  end
+
+  defp move_queued(issue_id, to) do
+    lock_queue()
+
+    with %{sort_key: key} = record when is_binary(key) <- read_ticket_record(nil, issue_id, :write),
+         siblings = scope_siblings(issue_id, Queue.scope(record)),
+         {:ok, index} <- move_index(siblings, to) do
+      rekey(issue_id, insertion_key(siblings, index))
+    else
+      {:error, _reason} = error -> error
+      _none -> {:error, :not_in_queue}
+    end
+  end
+
+  defp move_index(_siblings, :top), do: {:ok, 0}
+  defp move_index(siblings, :end), do: {:ok, length(siblings)}
+
+  defp move_index(siblings, {:between, previous, next}) do
+    ids = Enum.map(siblings, &elem(&1, 0))
+    index = if previous, do: (Enum.find_index(ids, &(&1 == previous)) || -2) + 1, else: 0
+
+    if index >= 0 and Enum.at(ids, index) == next, do: {:ok, index}, else: {:error, :not_neighbours}
+  end
+
+  # The other keyed tickets of `scope`, in key order, as `{issue_id, key}`.
+  defp scope_siblings(issue_id, scope) do
+    for {_table, id, _repo, record} <- :mnesia.match_object({@ticket_index_table, :_, :_, :_}),
+        id != issue_id,
+        key = Map.get(record, :sort_key),
+        is_binary(key),
+        Queue.scope(record) == scope do
+      {id, key}
+    end
+    |> Enum.sort_by(&elem(&1, 1))
+  end
+
+  # The key that puts a ticket at `index` among `siblings`, writing the siblings' keys a rebalance
+  # gave when the spot was too crowded; the caller writes the ticket's own key.
+  defp insertion_key(siblings, index) do
+    keys = Queue.insertion(siblings, index)
+    Enum.each(keys, fn {id, key} -> if id != :placed, do: rekey(id, key) end)
+    keys |> List.keyfind(:placed, 0) |> elem(1)
+  end
+
+  # Writes `key` as the sort key of the record `issue_id`, and nothing else of it.
+  defp rekey(issue_id, key) do
+    [{@ticket_index_table, ^issue_id, repo_key, stored}] = :mnesia.read(@ticket_index_table, issue_id, :write)
+    :mnesia.write({@ticket_index_table, issue_id, repo_key, stored |> Map.delete(:queue_position) |> Map.put(:sort_key, key)})
+  end
+
+  defp lock_queue, do: :mnesia.lock({:record, @totals_table, @queue_lock_key}, :write)
+
+  @doc """
+  Stores that the ticket `issue_id` depends on the ticket `on_issue_id` (`depends_on` on
+  `SymphonyElixir.TicketState`, `SymphonyElixir.Dispatch.DependsOn`), with what it needs of it,
+  `:done` or `:released`. Adding the same pair again replaces its kind. A dependency points upward
+  in the queue: when the ticket sits above the one it depends on, the same durable transaction moves
+  it to just below it, where their scopes meet (`SymphonyElixir.Dispatch.Queue.dependency_move/3`),
+  under the queue's write lock as `move_in_queue/2` does; otherwise no key changes. The identifier
+  stored with it is the record's of `on_issue_id`, nil when Symphony holds none.
+
+  `{:error, :ticket_state_not_found}` when `issue_id` has no record, `{:error, :self_dependency}`
+  for a ticket on itself and `{:error, :dependency_cycle}` when `on_issue_id` already depends on
+  `issue_id`, directly or through others: such a ticket could never start.
+  """
+  @spec add_dependency(String.t(), String.t(), TicketState.dependency_kind()) :: :ok | {:error, term()}
+  def add_dependency(issue_id, on_issue_id, kind) when is_binary(issue_id) and is_binary(on_issue_id) and kind in [:done, :released] do
+    with :ok <- ensure_started() do
+      durable_transaction(fn -> store_dependency(issue_id, on_issue_id, kind) end)
+    end
+  end
+
+  defp store_dependency(issue_id, issue_id, _kind), do: {:error, :self_dependency}
+
+  defp store_dependency(issue_id, on_issue_id, kind) do
+    lock_queue()
+    records = :all |> listed_ticket_records() |> Enum.map(&TicketState.normalize/1)
+    by_id = Map.new(records, &{&1.issue_id, &1})
+
+    cond do
+      not Map.has_key?(by_id, issue_id) ->
+        {:error, :ticket_state_not_found}
+
+      depends_on?(by_id, on_issue_id, issue_id, []) ->
+        {:error, :dependency_cycle}
+
+      true ->
+        identifier = by_id |> Map.get(on_issue_id, %{}) |> Map.get(:issue_identifier)
+        record = Map.fetch!(by_id, issue_id)
+        entry = %{issue_id: on_issue_id, identifier: identifier, kind: kind}
+        write_dependencies(issue_id, record.depends_on ++ [entry])
+        raise_dependent(records, issue_id, on_issue_id)
+    end
+  end
+
+  # Whether the ticket `from` depends on `target`, directly or through the tickets it depends on.
+  defp depends_on?(by_id, from, target, seen) do
+    on = for %{issue_id: id} <- by_id |> Map.get(from, %{}) |> Map.get(:depends_on, []), id not in seen, do: id
+    target in on or Enum.any?(on, &depends_on?(by_id, &1, target, [from | seen]))
+  end
+
+  defp raise_dependent(records, issue_id, on_issue_id) do
+    case Queue.dependency_move(records, issue_id, on_issue_id) do
+      {:below, moved, index, siblings} ->
+        rekey(moved, insertion_key(siblings, index))
+
+      :stay ->
+        :ok
+    end
+  end
+
+  @doc """
+  Removes the dependency of the ticket `issue_id` on the ticket `on_issue_id`; no key changes. `:ok`
+  when none is stored, `{:error, :ticket_state_not_found}` when `issue_id` has no record.
+  """
+  @spec remove_dependency(String.t(), String.t()) :: :ok | {:error, term()}
+  def remove_dependency(issue_id, on_issue_id) when is_binary(issue_id) and is_binary(on_issue_id) do
+    with :ok <- ensure_started() do
+      durable_transaction(fn ->
+        issue_id
+        |> read_ticket_record_for_write()
+        |> drop_dependency(issue_id, on_issue_id)
+      end)
+    end
+  end
+
+  defp read_ticket_record_for_write(issue_id), do: read_ticket_record(nil, issue_id, :write)
+
+  defp drop_dependency(nil, _issue_id, _on_issue_id), do: {:error, :ticket_state_not_found}
+
+  defp drop_dependency(record, issue_id, on_issue_id) do
+    kept = Enum.reject(TicketState.normalize(record).depends_on, &(&1.issue_id == on_issue_id))
+    write_dependencies(issue_id, kept)
+  end
+
+  # Writes `dependencies` as the record `issue_id`'s `depends_on`, and nothing else of it: the one
+  # write of the field (`write_ticket_record/3` keeps the stored one).
+  defp write_dependencies(issue_id, dependencies) do
+    [{@ticket_index_table, ^issue_id, repo_key, stored}] = :mnesia.read(@ticket_index_table, issue_id, :write)
+    updated = stored |> TicketState.put_dependencies(dependencies) |> Map.delete(:queue_position)
+    :mnesia.write({@ticket_index_table, issue_id, repo_key, updated})
+    :ok
+  end
+
+  @doc """
+  The ticket `issue_id`'s stored dependencies, each with the record of the ticket it depends on (nil
+  when Symphony holds none), in one read; `[]` when it has no record (or no id), and the store's error when it
+  can't be read. What the dispatch gate decides from (`SymphonyElixir.Dispatch.DependsOn.unmet/4`).
+  """
+  @spec dependencies(String.t()) :: [{TicketState.dependency(), map() | nil}] | {:error, term()}
+  def dependencies(issue_id) when is_binary(issue_id) do
+    with :ok <- ensure_started() do
+      transaction(fn -> nil |> read_ticket_record(issue_id) |> with_depended_records() end)
+    end
+  end
+
+  def dependencies(_issue_id), do: []
+
+  defp with_depended_records(nil), do: []
+
+  defp with_depended_records(record) do
+    for entry <- TicketState.normalize(record).depends_on, do: {entry, read_ticket_record(nil, entry.issue_id)}
   end
 
   @doc """
@@ -1843,18 +2079,18 @@ defmodule SymphonyElixir.RunStore do
 
   @doc """
   What the dispatch pass orders its candidates by, from every repository's records in one read:
-  each queued ticket's place (`positions`, as `queue_positions/0`), the identifier of each ticket's
+  each queued ticket's place (`places`, as `queue_places/0`), the identifier of each ticket's
   parent (`parents`, by issue id) and each ticket's phase (`phases`, by identifier); when the store
   can't be read, its error.
   """
-  @spec queue_facts() :: %{positions: map(), parents: map(), phases: map()} | {:error, term()}
+  @spec queue_facts() :: %{places: map(), parents: map(), phases: map()} | {:error, term()}
   def queue_facts do
     with :ok <- ensure_started() do
       transaction(fn ->
         records = listed_ticket_records(:all)
 
         %{
-          positions: queue_position_map(records),
+          places: queue_place_map(records),
           parents: parent_map(records),
           phases: phase_map(records)
         }
@@ -1862,11 +2098,7 @@ defmodule SymphonyElixir.RunStore do
     end
   end
 
-  defp queue_position_map(records) do
-    for %{queue_position: position, issue_id: issue_id} <- records, is_integer(position), into: %{} do
-      {issue_id, position}
-    end
-  end
+  defp queue_place_map(records), do: records |> Enum.map(&TicketState.normalize/1) |> Queue.places()
 
   @doc """
   The one-time step that moves a ticket's record off the (repository, ticket) key for good
@@ -2053,7 +2285,8 @@ defmodule SymphonyElixir.RunStore do
         build_run_index()
 
         with :ok <- contract_ticket_key(),
-             :ok <- place_queue() do
+             :ok <- place_queue(),
+             :ok <- key_queue() do
           :persistent_term.put({__MODULE__, :ready}, self())
           {:ok, %State{dir: dir}}
         else
@@ -2534,42 +2767,52 @@ defmodule SymphonyElixir.RunStore do
   # the dispatch queue (`place_in_queue/2`).
   defp write_ticket_record(repo_key, issue_id, record) do
     record_repo_key = Map.get(record, :repo_key) || repo_key
-    record = record |> Map.put(:repo_key, record_repo_key) |> reroute_pause(record_repo_key, issue_id) |> place_in_queue(issue_id)
+
+    record =
+      record
+      |> Map.put(:repo_key, record_repo_key)
+      |> reroute_pause(record_repo_key, issue_id)
+      |> keep_dependencies(issue_id)
+      |> place_in_queue(issue_id)
+
     :mnesia.write({@ticket_index_table, issue_id, record_repo_key, record})
     :ok
   end
 
-  # A record in the queue (`TicketState.queued?/1`) keeps the place it holds, the one it is written
-  # with or else the stored one, and joins at the end when it holds none: one past the highest place
-  # ever given (`queue_tail`), read under a write lock so two new tickets never share a place. A record
-  # out of the queue (terminal, removed) holds none, so a ticket reopened joins at the end again.
+  # A ticket's dependencies are written by `add_dependency/3` and `remove_dependency/2` alone: any
+  # other write of its record keeps the stored ones, so a read of Linear, or a caller writing back a
+  # record it read before, never changes them.
+  defp keep_dependencies(record, issue_id) do
+    stored = read_ticket_record(nil, issue_id, :write) || %{}
+    Map.put(record, :depends_on, stored |> Map.get(:depends_on) |> List.wrap())
+  end
+
+  # A record in the queue (`TicketState.queued?/1`) keeps the sort key it holds in its scope (the
+  # top level, or its parent's sub-tickets): the one it is written with or else the stored one, while
+  # its parent is the stored one. It joins at the end of its scope when it holds none or its parent
+  # changed: a key after the scope's last one, under the queue's write lock so two tickets joining at
+  # once never share a key (`write_insertion/3` rebalances the end when that key grows too long). A
+  # record out of the queue (terminal, removed) holds no key and keeps its parent, so a ticket
+  # reopened joins at the end again. No record keeps an integer place.
   defp place_in_queue(record, issue_id) do
+    record = Map.delete(record, :queue_position)
+    stored = read_ticket_record(nil, issue_id, :write) || %{}
+    scope = Queue.scope(record)
+    same_scope = stored == %{} or Queue.scope(stored) == scope
+    stored_key = Map.get(stored, :sort_key)
+
     cond do
-      not TicketState.queued?(record) -> Map.put(record, :queue_position, nil)
-      is_integer(Map.get(record, :queue_position)) -> record
-      position = stored_queue_position(issue_id) -> Map.put(record, :queue_position, position)
-      true -> Map.put(record, :queue_position, next_queue_position())
+      not TicketState.queued?(record) -> Map.put(record, :sort_key, nil)
+      same_scope and SortKey.valid?(Map.get(record, :sort_key)) -> record
+      same_scope and SortKey.valid?(stored_key) -> Map.put(record, :sort_key, stored_key)
+      true -> join_queue(record, issue_id, scope)
     end
   end
 
-  defp stored_queue_position(issue_id) do
-    case :mnesia.read(@ticket_index_table, issue_id, :write) do
-      [{@ticket_index_table, ^issue_id, _repo_key, %{queue_position: position}}] when is_integer(position) -> position
-      _none -> nil
-    end
-  end
-
-  defp next_queue_position do
-    position = queue_tail(:write) + 1
-    :mnesia.write({@totals_table, @queue_tail_key, position})
-    position
-  end
-
-  defp queue_tail(lock) do
-    case :mnesia.read(@totals_table, @queue_tail_key, lock) do
-      [{@totals_table, @queue_tail_key, tail}] when is_integer(tail) -> tail
-      _none -> 0
-    end
+  defp join_queue(record, issue_id, scope) do
+    lock_queue()
+    siblings = scope_siblings(issue_id, scope)
+    Map.put(record, :sort_key, insertion_key(siblings, length(siblings)))
   end
 
   defp reroute_pause(%{pause: %{subject: {:ticket, repo_key, _id}}} = record, repo_key, _issue_id), do: record

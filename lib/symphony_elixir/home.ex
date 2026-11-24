@@ -10,15 +10,17 @@ defmodule SymphonyElixir.Home do
     under its epic's node, which counts the epic's tickets by state; tickets with no epic are entries
     of their own. An epic is a node only while one of its tickets is in progress.
   - `queue`: every ticket Symphony would dispatch that has not started (in Todo, walked by the
-    dispatch pass, at a dispatched priority), as the tree of what waits on what. A ticket
-    blocked by queued tickets sits under the one that lands last (the deepest, then the latest in the
-    dispatch order) and names its other open blockers in `also_waits_on`. A root waits on nothing in
+    dispatch pass, at a dispatched priority), as the tree of what waits on what, from the stored
+    dependencies (`depends_on`, `SymphonyElixir.Dispatch.DependsOn.open/2`; Linear's blocker links
+    are not read). A ticket that depends on queued tickets sits under the one that lands last (the
+    deepest, then the latest in the dispatch order) and names its other open dependencies in
+    `also_waits_on`. A root waits on nothing in
     the queue: when it waits on a ticket in progress it names the one that lands last in `after`, else
     it carries its situation. Ready roots come in the dispatcher's order (the stored queue order,
     `SymphonyElixir.Dispatch.Queue`), then the roots that wait,
     in the order of the ticket they wait on.
   - `outside`: how many open tickets neither list holds, by reason: `backlog`, `below_priority`,
-    `epic` (an epic with no ticket in progress) and `behind` (a queued ticket whose blocker is one of
+    `epic` (an epic with no ticket in progress) and `behind` (a queued ticket that depends on one of
     those, or behind one).
   - `slots`: the slots the dispatch pass read (`SymphonyElixir.Dispatch.Slots.read/3`): the slot
     count, how many are used and free, and the tickets that hold them; nil before the first walk.
@@ -26,7 +28,7 @@ defmodule SymphonyElixir.Home do
   Each ticket of either list carries `in_progress`: true exactly when it holds a slot.
   """
 
-  alias SymphonyElixir.{Dispatch.Slots, Situation, TicketState}
+  alias SymphonyElixir.{Dispatch.DependsOn, Dispatch.Slots, Situation, TicketState}
 
   @not_started ["backlog", "todo", "triage"]
   @needs_fix ["rework", "ci fix"]
@@ -249,27 +251,14 @@ defmodule SymphonyElixir.Home do
     end
   end
 
-  # A record's blockers still open (by the blocker's record when Symphony holds one, else by the
-  # link), each with the id of the ticket it names and its identifier.
+  # A record's stored dependencies still open (`SymphonyElixir.Dispatch.DependsOn.open/2`, decided
+  # from the records), each with the id of the ticket it names and its identifier. Linear's blocker
+  # links are not read.
   defp open_blockers(record, ctx) do
-    record.blockers
-    |> Enum.map(&{&1, known_blocker(&1, ctx)})
-    |> Enum.reject(fn {link, known} -> MapSet.member?(ctx.terminal, normalize(blocker_phase(link, known))) end)
-    |> Enum.map(fn {link, known} -> blocker_ref(link, known) end)
+    record.depends_on
+    |> DependsOn.open(ctx.by_id)
+    |> Enum.map(&%{id: &1.issue_id, identifier: &1.identifier || Map.get(ctx.by_id, &1.issue_id, %{})[:issue_identifier]})
   end
-
-  defp known_blocker(%{id: id} = link, ctx) when is_binary(id),
-    do: Map.get(ctx.by_id, id) || Map.get(ctx.by_identifier, link.identifier)
-
-  defp known_blocker(link, ctx), do: Map.get(ctx.by_identifier, link.identifier)
-
-  defp blocker_phase(link, nil), do: link.state
-  defp blocker_phase(link, known), do: known.phase || link.state
-
-  defp blocker_ref(link, nil), do: %{id: link.id || link.identifier, identifier: link.identifier}
-
-  defp blocker_ref(link, known),
-    do: %{id: known.issue_id || link.id || link.identifier, identifier: known.issue_identifier || link.identifier}
 
   defp queue(queued, in_progress_ids, ctx) do
     queued_ids = MapSet.new(queued, & &1.issue_id)

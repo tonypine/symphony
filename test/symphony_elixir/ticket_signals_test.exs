@@ -144,7 +144,7 @@ defmodule SymphonyElixir.TicketSignalsTest do
 
     fetcher = fn repo ->
       send(test_pid, {:polled, repo.name})
-      {:ok, if(repo.name == @repo_key, do: [%{next | blocked_by: [%{id: "issue-1", identifier: "ACME-1", state: "Done"}]}], else: [])}
+      {:ok, if(repo.name == @repo_key, do: [next], else: [])}
     end
 
     # Both repos polled once, back to back as at boot; the repo's next timed poll is far off.
@@ -159,7 +159,7 @@ defmodule SymphonyElixir.TicketSignalsTest do
     assert {:noreply, state} = Orchestrator.handle_cast(request, state)
     assert_receive {:tick, _tick_token}
 
-    assert {:ok, %{dispatchable: [%{identifier: "ACME-2", blocked_by: [%{state: "Done"}]}]}, _state} =
+    assert {:ok, %{dispatchable: [%{identifier: "ACME-2"}]}, _state} =
              Orchestrator.poll_candidate_issue_buckets_for_test(state, repos, fetcher, 300_010)
 
     assert_received {:polled, @repo_key}

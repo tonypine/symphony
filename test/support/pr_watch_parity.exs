@@ -37,8 +37,8 @@ defmodule SymphonyElixir.PrWatchParity do
   Linear and GitHub, in order, for each GitHub step the fake time from it to the watcher's last
   read of it, and how each ticket ended (`ending/1`).
 
-  The fakes are `World` (the issues, PRs, fix tickets and calls), `Tracker`, `Linker` (Linear's
-  blocked-by links), `GitHub`, `Fetch` and `Fixer`; a test using this module writes a workflow
+  The fakes are `World` (the issues, PRs, fix tickets and calls), `Tracker`, `GitHub`, `Fetch` and
+  `Fixer`; the watcher stores no dependency and writes no Linear blocker link; a test using this module writes a workflow
   with `pr_review_mode: "polling"` first.
   """
 
@@ -70,16 +70,9 @@ defmodule SymphonyElixir.PrWatchParity do
     @moduledoc false
     alias SymphonyElixir.PrWatchParity.World
 
-    # Each issue's blockers carry their current state, as Linear reads them.
     def fetch_issues_by_states_with_failures(states) do
       wanted = MapSet.new(states, &String.downcase/1)
-      issues = World.get(:issues)
-
-      watched =
-        for issue <- Map.values(issues), MapSet.member?(wanted, String.downcase(issue.state)) do
-          %{issue | blocked_by: Enum.map(issue.blocked_by, &%{&1 | state: issues |> Map.get(&1.id, &1) |> Map.fetch!(:state)})}
-        end
-
+      watched = for issue <- Map.values(World.get(:issues)), MapSet.member?(wanted, String.downcase(issue.state)), do: issue
       {:ok, watched, []}
     end
 
@@ -97,23 +90,6 @@ defmodule SymphonyElixir.PrWatchParity do
         {:ok, state} -> {:ok, %Issue{id: "fix-#{identifier}", identifier: identifier, state: state}}
         :error -> {:error, :not_found}
       end
-    end
-  end
-
-  defmodule Linker do
-    @moduledoc false
-    alias SymphonyElixir.PrWatchParity.World
-
-    # Linear's blocked-by links: recorded, and shown on the blocked issue as Linear would.
-    def add_blocked_by(blocker, issue_id) do
-      World.call(:link, {blocker, issue_id})
-      %{id: id, state: state} = World.get(:issues) |> Map.values() |> Enum.find(&(&1.identifier == blocker))
-      World.update(:issues, &Map.update!(&1, issue_id, fn issue -> %{issue | blocked_by: issue.blocked_by ++ [%{id: id, identifier: blocker, state: state}]} end))
-    end
-
-    def remove_blocked_by(blocker, issue_id) do
-      World.call(:unlink, {blocker, issue_id})
-      World.update(:issues, &Map.update!(&1, issue_id, fn issue -> %{issue | blocked_by: Enum.reject(issue.blocked_by, fn b -> b.identifier == blocker end)} end))
     end
   end
 
@@ -163,7 +139,6 @@ defmodule SymphonyElixir.PrWatchParity do
     end
 
     def attach(identifier, body, _opts), do: World.call(:evidence, {identifier, body})
-    def block(issue, ticket, _opts), do: World.call(:blocked_by, {issue.id, ticket.identifier})
   end
 
   @doc "The repository's URL, as deliveries name it."
@@ -282,7 +257,6 @@ defmodule SymphonyElixir.PrWatchParity do
       github: GitHub,
       fetch: Fetch,
       fixer: Fixer,
-      linker: Linker,
       interval_ms: @interval_ms,
       now: fn -> World.get(:now) end,
       # Every ticket holds a slot, so the watcher acts on it; the tests of a ticket without one
@@ -346,8 +320,8 @@ defmodule SymphonyElixir.PrWatchParity do
   @doc "The state of ticket `id` in Linear."
   def state(id), do: World.get(:issues) |> Map.fetch!(issue_id(id)) |> Map.fetch!(:state)
 
-  @doc "The identifiers of the tickets Linear shows blocking ticket `id`."
-  def blockers(id), do: World.get(:issues) |> Map.fetch!(issue_id(id)) |> Map.fetch!(:blocked_by) |> Enum.map(& &1.identifier)
+  @doc "The identifiers of the tickets ticket `id` depends on, as Symphony stores them; the watcher adds none."
+  def blockers(id), do: for({%{} = entry, _record} <- List.wrap(RunStore.dependencies(issue_id(id))), do: entry.identifier)
 
   @doc "The fix tickets the self-heal lane filed, by identifier, with their state."
   def fix_tickets, do: World.get(:fix_tickets)

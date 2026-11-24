@@ -29,7 +29,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   their files once, for the landing order: `ahead` is the PR `SymphonyElixir.LandingOrder.waits/2`
   makes the ticket wait for, and `competing` every open PR that shares a
   file with it (`SymphonyElixir.PrWatch.Competitors`). Neither names a PR whose wait would close a
-  cycle of blocked-by links, or one a person released the ticket from. The checks a base branch
+  cycle of stored dependencies and waits, or one a person released the ticket from. The checks a base branch
   requires, and whether it has workflow files, are kept 10 minutes.
 
   A ticket waiting on its competitors (landing reasons on its pause) has its wait judged before
@@ -177,7 +177,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
   @doc """
   Starts the watcher of `opts[:repo_key]`. Other `opts`, for tests: `:tracker`, `:fetch`,
-  `:github`, `:run_store`, `:self_heal`, `:fixer`, `:linker`, `:git` and `:settings` (the modules
+  `:github`, `:run_store`, `:self_heal`, `:fixer`, `:git` and `:settings` (the modules
   and settings it reads and acts through), `:now` (a clock function), `:timer`
   (`fn message, delay_ms -> ref`, in place of `Process.send_after/3` for the confirm reads),
   `:interval_ms`, `:relay_status` (`fn repo_key -> relay status or nil`, in place of
@@ -275,7 +275,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   end
 
   def handle_call({:release, issue_id}, _from, state) do
-    {:reply, Competitors.release(state.repo_key, issue_id, Keyword.take(state.opts, [:run_store, :linker])), state}
+    {:reply, Competitors.release(state.repo_key, issue_id, Keyword.take(state.opts, [:run_store])), state}
   end
 
   @impl true
@@ -869,7 +869,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   end
 
   # What the tick knows of the race, for the competitors: the open PRs, the ones the landing order
-  # ranked by number, each watched ticket's blockers (its Linear blocked-by links and the waits it
+  # ranked by number, each watched ticket's blockers (its stored dependencies and the waits it
   # recorded), the tickets whose PR was read merged, and the clock.
   defp race(watched, reads, pulls, members, now) do
     %{
@@ -882,15 +882,18 @@ defmodule SymphonyElixir.PrWatch.Repo do
   end
 
   defp blocker_ids(entry) do
-    linear = for %{id: id} <- List.wrap(entry.issue.blocked_by), is_binary(id), do: id
-    Enum.uniq(linear ++ for(%{issue_id: id, released: false} <- entry.links, is_binary(id), do: id))
+    stored = for %{issue_id: id} <- stored_dependencies(entry.record), is_binary(id), do: id
+    Enum.uniq(stored ++ for(%{issue_id: id, released: false} <- entry.links, is_binary(id), do: id))
   end
+
+  defp stored_dependencies(%{} = record), do: TicketState.normalize(record).depends_on
+  defp stored_dependencies(_record), do: []
 
   # A ticket waiting on its competitors has its wait judged on the open PRs just read; with none read,
   # the wait stays as it was.
   defp settle(entry, {:ok, _pulls}, {landing, _ahead}, race, state, settings) do
     if entry.links != [] or entry.waiting != nil do
-      opts = [repo_key: state.repo_key, terminal_states: settings.tracker.terminal_states, store: store(state)] ++ Keyword.take(state.opts, [:tracker, :linker])
+      opts = [repo_key: state.repo_key, terminal_states: settings.tracker.terminal_states, store: store(state)] ++ Keyword.take(state.opts, [:tracker])
       settled = Competitors.settle(entry.issue, entry.waiting, entry.links, Map.put(race, :files, landing && Map.get(landing, :files)), opts)
       cleared? = entry.waiting != nil and is_nil(settled.wait)
       hold = if cleared? and entry.ticket.hold == :blocked, do: hold(entry.record, &(not Competitors.landing_reason?(&1))), else: entry.ticket.hold
@@ -1835,7 +1838,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   defp outcome_error({:error, reason}), do: inspect(reason)
   defp outcome_error(_outcome), do: nil
 
-  defp apply_opts(state), do: Keyword.take(state.opts, [:tracker, :github, :run_store, :self_heal, :fixer, :gh_runner, :symphony_repo_key, :terminal_states, :linker])
+  defp apply_opts(state), do: Keyword.take(state.opts, [:tracker, :github, :run_store, :self_heal, :fixer, :gh_runner, :symphony_repo_key, :terminal_states])
 
   # What the ticket's record held.
   defp previous_watch(%{record: %{pr_watch: %{} = watch}}), do: watch
@@ -1845,7 +1848,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
     watched_ids = MapSet.new(watched, & &1.issue.id)
 
     for {issue_id, %{pr_watch: %{}} = record} <- records, not MapSet.member?(watched_ids, issue_id) do
-      Competitors.leave(state.repo_key, record, [store: store(state)] ++ Keyword.take(state.opts, [:tracker, :linker]))
+      Competitors.leave(state.repo_key, record, [store: store(state)] ++ Keyword.take(state.opts, [:tracker]))
       result = store(state).put_ticket_pr_watch(state.repo_key, issue_id, record.issue_identifier, nil)
       log_write(result, %{issue: %{id: issue_id, identifier: record.issue_identifier}})
       SituationRecorder.ticket_changed(issue_id)

@@ -9,12 +9,6 @@ defmodule SymphonyElixirWeb.TicketBlockersTest do
 
   @moduletag :tmp_dir
 
-  defmodule Linker do
-    @moduledoc false
-    def add_blocked_by(_blocker, _issue_id), do: Process.get(:linker_reply, :ok)
-    def remove_blocked_by(_blocker, _issue_id), do: Process.get(:linker_reply, :ok)
-  end
-
   setup do
     n = System.unique_integer([:positive])
     repo = "blocker-api-#{n}"
@@ -25,12 +19,12 @@ defmodule SymphonyElixirWeb.TicketBlockersTest do
     %{repo: repo, ticket: ticket, blocker: blocker}
   end
 
-  defp post_blocker(params, ctx) do
+  defp post_blocker(params, ctx, records \\ nil) do
     conn(:post, "/api/v1/control/blocker", Jason.encode!(params))
     |> put_req_header("content-type", "application/json")
     |> assign(:orchestrator, self())
     |> assign(:audit_log, dir: ctx.tmp_dir)
-    |> assign(:director_blockers, linker: Linker, records: RunStore.list_ticket_states(ctx.repo))
+    |> assign(:director_blockers, records: records || RunStore.list_ticket_states(ctx.repo))
     |> Map.put(:params, params)
     |> Map.put(:body_params, params)
     |> ControlApiController.blocker(params)
@@ -47,7 +41,7 @@ defmodule SymphonyElixirWeb.TicketBlockersTest do
 
   defp body(conn), do: Jason.decode!(conn.resp_body)
 
-  test "POST /control/blocker adds a blocker and removes it, answering the ticket's blockers each time", ctx do
+  test "POST /control/blocker adds and removes a stored done dependency, with no Linear write, and the list shows it", ctx do
     added = post_blocker(params(ctx, "add"), ctx)
 
     assert added.status == 200
@@ -60,14 +54,20 @@ defmodule SymphonyElixirWeb.TicketBlockersTest do
            }
 
     record = ctx.ticket.issue_id |> RunStore.get_ticket_state() |> TicketState.normalize()
-    assert [%{identifier: identifier}] = record.blockers
-    assert identifier == ctx.blocker.issue_identifier
-    assert [%{waits_on: %{identifier: ^identifier}}] = TicketState.pause_reasons(record)
+    assert [%{issue_id: blocker_id, kind: :done}] = record.depends_on
+    assert blocker_id == ctx.blocker.issue_id
+    # No Linear write and no pause: the record keeps no Linear blocker at all.
+    refute Map.has_key?(record, :blockers)
+    assert TicketState.pause_reasons(record) == []
+
+    listed = get_blockers(ctx.ticket.issue_identifier, ctx)
+    assert body(listed)["blockers"] == [%{"issue_identifier" => ctx.blocker.issue_identifier, "title" => "Fix", "state" => "Todo"}]
 
     removed = post_blocker(params(ctx, "remove"), ctx)
     assert removed.status == 200
     assert body(removed)["blockers"] == []
-    assert TicketState.pause_reasons(ctx.ticket.issue_id |> RunStore.get_ticket_state() |> TicketState.normalize()) == []
+    assert (ctx.ticket.issue_id |> RunStore.get_ticket_state() |> TicketState.normalize()).depends_on == []
+    assert body(get_blockers(ctx.ticket.issue_identifier, ctx))["blockers"] == []
   end
 
   test "POST /control/blocker answers each refusal with a 409 the app shows", ctx do
@@ -99,12 +99,13 @@ defmodule SymphonyElixirWeb.TicketBlockersTest do
   end
 
   @tag :capture_log
-  test "POST /control/blocker answers 502 when Linear refuses the write", ctx do
-    Process.put(:linker_reply, {:error, :issue_relation_failed})
-    conn = post_blocker(params(ctx, "add"), ctx)
+  test "POST /control/blocker answers 502 when the store refuses the write", ctx do
+    records = RunStore.list_ticket_states(ctx.repo)
+    :ok = RunStore.delete_ticket_state(ctx.ticket.issue_id)
+    conn = post_blocker(params(ctx, "add"), ctx, records)
     assert conn.status == 502
-    assert body(conn)["error"]["code"] == "linear_error"
-    assert body(conn)["error"]["message"] =~ ~r/^Linear didn't add the link \S+ blocks \S+, so nothing changed\./
+    assert body(conn)["error"]["code"] == "store_error"
+    assert body(conn)["error"]["message"] =~ ~r/^Symphony couldn't add \S+ as a blocker of \S+, so nothing changed\./
   end
 
   test "POST /control/blocker needs the control token like the other control routes", ctx do

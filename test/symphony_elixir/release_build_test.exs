@@ -606,8 +606,11 @@ defmodule SymphonyElixir.ReleaseBuildTest do
   describe "watch/5, delivered/2 and UpdateHold.lines/4" do
     setup %{github: github} do
       runs(github, [run(1, "queued")])
-      blocker = %{id: "id-TP-1238", identifier: "TP-1238", state: "Done"}
-      issue = %Issue{id: "issue-1251", identifier: "TP-1251", state: "Todo", repo_key: @repo_key, blocked_by: [blocker]}
+      # TP-1251 depends on TP-1238, done: the dependency Symphony stores, never a Linear link.
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, "id-TP-1238", %{issue_identifier: "TP-1238", phase: "Done"}))
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, "issue-1251", %{issue_identifier: "TP-1251", phase: "Todo"}))
+      :ok = RunStore.add_dependency("issue-1251", "id-TP-1238", :done)
+      issue = %Issue{id: "issue-1251", identifier: "TP-1251", state: "Todo", repo_key: @repo_key}
       reason = %{kind: :build, waits_on: %{pull_request: 722}, text: "Waiting for a Symphony update that includes TP-1238's fix"}
       {:ok, _pause} = Pauses.set({:ticket, @repo_key, issue.id}, reason, set_by: %{kind: :rule, name: "App update hold"})
       cache = %{blockers: %{"id-TP-1238" => {:merged, "https://github.com/acme/symphony/pull/722", @sha}}, included: %{}}
@@ -616,7 +619,7 @@ defmodule SymphonyElixir.ReleaseBuildTest do
 
     test "checks the build of each fix a held ticket waits on", %{issue: issue, cache: cache, github: github, opts: opts} do
       build = %{version: "0.0.1.749", sha: "d3d301b0", repo: "https://github.com/acme/symphony"}
-      other = %Issue{id: "issue-9", identifier: "TP-9", state: "Todo", repo_key: @repo_key, blocked_by: []}
+      other = %Issue{id: "issue-9", identifier: "TP-9", state: "Todo", repo_key: @repo_key}
 
       assert :ok = ReleaseBuild.watch([issue, other, %Issue{id: nil}], build, cache, @repo_key, opts)
       assert %{state: :queued, tickets: [@ticket]} = ReleaseBuild.get(@sha)

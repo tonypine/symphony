@@ -10,23 +10,21 @@ defmodule SymphonyElixir.Connected.Read do
       it does not hold (long done, not labelled a plan, or before its first read after a start) comes
       from the parent's record: its sub-issues in creation order, or only the parent's own count when
       Symphony has no record of it. The parent is the one `parent` reads.
-    * `blocked_by`: every blocker ever linked, each `open` or `resolved` with the time it resolved. The
-      record's `blockers` keep only the open ones, for dispatch; the history comes from the ledger,
-      from the pause events of the dependency reasons. A cleared reason whose blocker is still open
-      and no longer linked was unlinked, not resolved, and leaves the list. A reason still set reads
-      `open` even once its blocker landed: the ticket is still held, waiting for an app update.
-    * `blocks`: the links the run read, and the tickets whose records name this one as an open
-      blocker, each with its situation kind. A ticket that ended holds nothing up.
+    * `blocked_by`: every ticket it depends on (its stored dependencies, `depends_on`), each `open`
+      while `SymphonyElixir.Dispatch.DependsOn.open/2` finds it unmet, else `resolved` with the time
+      the ticket it names reached its phase. A dependency removed leaves the list. Linear's blocker
+      links are not read.
+    * `blocks`: the tickets whose records depend on this one and are still open on it, each with its
+      situation kind. A ticket that ended holds nothing up.
 
   It reads the ledgers and the records and never Linear, and a read writes nothing.
   """
 
-  alias SymphonyElixir.{Connected, Initiatives, Pauses, Situation, TicketEvents, TicketState}
+  alias SymphonyElixir.{Connected, Initiatives, Situation, TicketState}
+  alias SymphonyElixir.Dispatch.DependsOn
   alias SymphonyElixir.Initiatives.Initiative
-  alias SymphonyElixir.TicketEvents.Event
 
   @done "done"
-  @set_events ["pause.set", "pause.reason_added"]
 
   @typedoc "What a read needs beside the ticket: every record, the orchestrator's facts and the cached plans."
   @type facts :: %{records: [TicketState.t()], live: Situation.live_facts(), initiatives: [Initiative.t()]}
@@ -79,7 +77,13 @@ defmodule SymphonyElixir.Connected.Read do
   """
   @spec read_all([{map(), Connected.t() | nil}], facts()) :: [t()]
   def read_all(tickets, facts) do
-    context = Map.merge(facts, %{by_identifier: Map.new(facts.records, &{&1.issue_identifier, &1}), terminal: terminal(facts.live)})
+    context =
+      Map.merge(facts, %{
+        by_identifier: Map.new(facts.records, &{&1.issue_identifier, &1}),
+        by_id: Map.new(facts.records, &{&1.issue_id, &1}),
+        terminal: terminal(facts.live)
+      })
+
     connected = Enum.map(tickets, fn {record, tracked} -> shape(TicketState.normalize(record), tracked, context) end)
     kinds = connected |> Enum.flat_map(&situated/1) |> Enum.uniq() |> Map.new(&{&1, kind(&1, context)})
 
@@ -95,7 +99,7 @@ defmodule SymphonyElixir.Connected.Read do
       parent: parent,
       epic: epic(%{record | parent: parent}, context),
       sub_tickets: known(base.sub_tickets, context),
-      blocked_by: blocked_by(record, base.blocked_by ++ own.blocked_by, context),
+      blocked_by: blocked_by(record, context),
       blocks: blocks(record, base.blocks, context),
       related: known(base.related, context)
     }
@@ -181,62 +185,24 @@ defmodule SymphonyElixir.Connected.Read do
 
   ## The blockers
 
-  defp blocked_by(record, links, context) do
-    history = record.issue_id |> ledger() |> Enum.reduce([], &history/2)
-    links = links |> known(context) |> Enum.uniq_by(& &1.identifier)
+  defp blocked_by(record, context) do
+    open = DependsOn.open(record.depends_on, context.by_id)
 
-    (Enum.map(history, &elem(&1, 0)) ++ Enum.map(links, & &1.identifier))
-    |> Enum.uniq()
-    |> Enum.flat_map(fn identifier ->
-      link = Enum.find(links, &(&1.identifier == identifier))
-      ticket = link || hd(known([%{identifier: identifier, title: nil, state: nil}], context))
-      blocker(ticket, link != nil, last_word(history, identifier), context)
-    end)
+    record.depends_on
+    |> Enum.map(fn dependency -> {dependency, Map.get(context.by_id, dependency.issue_id)} end)
+    |> Enum.filter(fn {dependency, on} -> is_binary(dependency.identifier || (on && on.issue_identifier)) end)
+    |> Enum.map(fn {dependency, on} -> blocker(dependency, on, dependency in open) end)
+    |> Enum.uniq_by(& &1.identifier)
   end
 
-  defp last_word(history, identifier) do
-    case List.keyfind(history, identifier, 0) do
-      {^identifier, last} -> last
-      nil -> nil
-    end
-  end
-
-  defp blocker(ticket, linked?, last, context) do
-    ended? = terminal?(ticket.state, context)
-
-    cond do
-      last == :held or (linked? and not ended?) -> [Map.merge(ticket, %{status: "open", resolved_at: nil})]
-      not linked? and is_binary(ticket.state) and not ended? -> []
-      true -> [Map.merge(ticket, %{status: "resolved", resolved_at: iso8601(last)})]
-    end
-  end
-
-  defp ledger(issue_id) do
-    events = TicketEvents.query(issue_id, limit: :all)
-    if is_list(events), do: events, else: []
-  end
-
-  # Each dependency reason's last word, in the order the blockers were first linked: `:held` while it
-  # is set, the time it cleared once it is not.
-  defp history(%Event{type: type, payload: payload}, history) when type in @set_events, do: note([payload], :held, history)
-  defp history(%Event{type: "pause.reason_cleared", payload: payload, at: at}, history), do: note([payload], at, history)
-  defp history(%Event{type: "pause.cleared", payload: payload, at: at}, history), do: note(List.wrap(field(payload, :cleared)), at, history)
-  defp history(_event, history), do: history
-
-  defp note(reasons, last, history) do
-    Enum.reduce(reasons, history, fn reason, history ->
-      case dependency(reason) do
-        nil -> history
-        identifier -> List.keystore(history, identifier, 0, {identifier, last})
-      end
-    end)
-  end
-
-  defp dependency(reason) do
-    identifier = field(field(reason, :waits_on) || %{}, :identifier)
-    source = Pauses.ticket_source(%{kind: :ticket, waits_on: %{identifier: identifier}, text: field(reason, :text)})
-
-    if source == :dependency, do: identifier
+  defp blocker(dependency, on, open?) do
+    %{
+      identifier: dependency.identifier || on.issue_identifier,
+      title: on && on.title,
+      state: on && on.phase,
+      status: if(open?, do: "open", else: "resolved"),
+      resolved_at: if(open? or is_nil(on), do: nil, else: iso8601(on.phase_at))
+    }
   end
 
   ## The tickets it holds up
@@ -244,16 +210,17 @@ defmodule SymphonyElixir.Connected.Read do
   defp blocks(record, links, context) do
     open_links = links |> known(context) |> Enum.reject(&terminal?(&1.state, context))
 
-    Enum.uniq_by(open_links ++ holding(record.issue_identifier, context), & &1.identifier)
+    Enum.uniq_by(open_links ++ holding(record.issue_id, context), & &1.identifier)
   end
 
+  # The open tickets that depend on `issue_id` and whose dependency on it is still open.
   defp holding(nil, _context), do: []
 
-  defp holding(identifier, context) do
+  defp holding(issue_id, context) do
     for other <- context.records,
         is_binary(other.issue_identifier),
         not terminal?(other.phase, context),
-        Enum.any?(other.blockers, &(&1.identifier == identifier and not terminal?(&1.state, context))) do
+        other.depends_on |> DependsOn.open(context.by_id) |> Enum.any?(&(&1.issue_id == issue_id)) do
       %{identifier: other.issue_identifier, title: other.title, state: other.phase}
     end
   end
@@ -289,9 +256,6 @@ defmodule SymphonyElixir.Connected.Read do
 
   defp normalized(value) when is_binary(value), do: value |> String.trim() |> String.downcase()
   defp normalized(_value), do: nil
-
-  # A payload the store read back holds string keys under its first level.
-  defp field(map, key), do: Map.get(map, key, Map.get(map, Atom.to_string(key)))
 
   defp iso8601(%DateTime{} = at), do: at |> DateTime.truncate(:second) |> DateTime.to_iso8601()
   defp iso8601(_at), do: nil
