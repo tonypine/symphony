@@ -515,8 +515,8 @@ public struct SlotStripLine: View {
                         .monospacedDigit()
                         .lineLimit(1)
                         .foregroundStyle(DesignTokens.TextColor.secondary.color)
-                        .frame(width: queue.endWidth, alignment: .trailing)
                         .probe(.repo, probes)
+                        .frame(width: queue.endWidth, alignment: .trailing)
                 }
                 .fixedSize()
             }

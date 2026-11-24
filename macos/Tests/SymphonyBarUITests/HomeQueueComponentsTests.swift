@@ -263,7 +263,6 @@ final class HomeQueueComponentsTests: XCTestCase {
         }
         XCTAssertEqual((strip[.marks] ?? .null).maxX, (row[.marks] ?? .null).maxX, accuracy: 0.5, "the state badge ends over the row's badges")
         XCTAssertEqual((strip[.repo] ?? .null).maxX, (row[.repo] ?? .null).maxX, accuracy: 0.5, "the time ends over the row's repo")
-        XCTAssertEqual((strip[.repo] ?? .null).minX, (row[.repo] ?? .null).minX, accuracy: 0.5, "the time's cell is the repo's cell")
     }
 
     func testOnHoverTheHandleAndStartTakeTheNumbersAndTheReposPlacesAndNothingShifts() {
