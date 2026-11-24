@@ -47,6 +47,14 @@ public struct EpicSlotCardModel: Equatable {
     /// "3 d in the slot".
     public var sinceText: String { "\(since) in the slot" }
 
+    /// The epic's time in the slot in the band's short form (README "An epic slot card": "3 d in the slot"): whole days
+    /// as "3 d", under a day as the design system's durations ("1 h 5 min", "14 min", "14 s"). Home and the Gallery
+    /// both write it here, so the two cannot drift.
+    public static func slotTime(_ seconds: Int) -> String {
+        let seconds = max(seconds, 0)
+        return seconds < 86_400 ? Overview.duration(seconds) : "\(seconds / 86_400) d"
+    }
+
     /// The widest number the card's rows show: the last to come, or the one in work's.
     public var widestNumber: Int { max(done + 1 + upcoming.count, 1) }
 }
@@ -66,6 +74,7 @@ public struct EpicSlotCard: View {
     let onStart: (String) -> Void
     let onMove: (Int, Int) -> Void
 
+    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
     @State private var donePointer = false
     @State private var drag: Drag?
 
@@ -111,6 +120,13 @@ public struct EpicSlotCard: View {
 
     /// Where the done list opens: at its end, its most recent rows next to the card.
     public static let doneAnchor = UnitPoint.bottom
+
+    /// The done rows an offscreen snapshot draws, where no scroll view draws: the six the live list opens at, its most
+    /// recent, oldest at the top.
+    public static func doneShown<Row>(_ rows: [Row]) -> ArraySlice<Row> { rows.suffix(DesignTokens.HomeQueue.epicListRows) }
+
+    /// The rows to come an offscreen snapshot draws: the first six, as the live list opens.
+    public static func upcomingShown<Row>(_ rows: [Row]) -> ArraySlice<Row> { rows.prefix(DesignTokens.HomeQueue.epicListRows) }
 
     /// Whether the done count stands lifted, on the pressed surface: while its list shows, and under the pointer.
     public static func doneLifted(showing: Bool, hovered: Bool) -> Bool { showing || hovered }
@@ -259,14 +275,19 @@ public struct EpicSlotCard: View {
     /// What is done, above the card: done rows with the pull request and when, oldest at the top, opened at the end.
     private func doneList(numberWidth: CGFloat) -> some View {
         let queue = DesignTokens.HomeQueue.self
-        return ScrollView(.vertical) {
-            VStack(spacing: queue.doneRowGap) {
-                ForEach(epic.doneRows) { row in
-                    DoneRow(row, cells: .slotCard, nesting: DoneRow.Nesting(numberCell: numberWidth, depth: 0, end: queue.epicRowEnd))
-                }
+        let rows = VStack(spacing: queue.doneRowGap) {
+            ForEach(offscreenSnapshot ? Array(Self.doneShown(epic.doneRows)) : epic.doneRows) { row in
+                DoneRow(row, cells: .slotCard, nesting: DoneRow.Nesting(numberCell: numberWidth, depth: 0, end: queue.epicRowEnd))
             }
         }
-        .defaultScrollAnchor(Self.doneAnchor)
+        return Group {
+            // `ImageRenderer` draws no scroll view's content: a snapshot draws the rows the live list opens at.
+            if offscreenSnapshot {
+                rows.frame(maxHeight: .infinity, alignment: .bottom).clipped()
+            } else {
+                ScrollView(.vertical) { rows }.defaultScrollAnchor(Self.doneAnchor)
+            }
+        }
         .frame(height: Self.listHeight(rows: epic.doneRows.count))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Done sub-tickets of \(epic.identifier)")
@@ -281,7 +302,22 @@ public struct EpicSlotCard: View {
         let queue = DesignTokens.HomeQueue.self
         let rows = epic.upcoming
         let gap = drag.flatMap { Self.gap(y: $0.y, from: $0.index, count: rows.count) }
-        return ScrollView(.vertical) {
+        if offscreenSnapshot {
+            // `ImageRenderer` draws no scroll view's content: a snapshot draws the rows the live list opens at.
+            return AnyView(
+                VStack(spacing: queue.doneRowGap) {
+                    ForEach(Array(Self.upcomingShown(Array(rows.enumerated()))), id: \.element.id) { index, row in
+                        QueueRow(row, numberWidth: numberWidth, look: hoveredRow == index ? .hover : nil, end: queue.epicRowEnd)
+                    }
+                }
+                .frame(height: Self.listHeight(rows: rows.count), alignment: .top)
+                .clipped()
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Sub-tickets to come of \(epic.identifier)")
+                .accessibilityIdentifier(Self.upcomingIdentifier(slot))
+            )
+        }
+        return AnyView(ScrollView(.vertical) {
             ZStack(alignment: .topLeading) {
                 VStack(spacing: queue.doneRowGap) {
                     ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
@@ -307,7 +343,7 @@ public struct EpicSlotCard: View {
         .frame(height: Self.listHeight(rows: rows.count))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Sub-tickets to come of \(epic.identifier)")
-        .accessibilityIdentifier(Self.upcomingIdentifier(slot))
+        .accessibilityIdentifier(Self.upcomingIdentifier(slot)))
     }
 
     /// The drag of the row at `index` in the list's own space: each move follows the pointer, the end drops it.

@@ -35,7 +35,12 @@ final class EpicSlotCardTests: XCTestCase {
         XCTAssertEqual(epic.title, "A real queue: a slot belongs to one ticket until it is done, and Home is the window to the queue")
         XCTAssertEqual(epic.doneText, "7 of 16 done")
         XCTAssertEqual(epic.fraction, 7.0 / 16.0, accuracy: 0.0001)
-        XCTAssertEqual(epic.sinceText, "\(Overview.duration(3 * 86400 + 20 * 60)) in the slot", "since 2026-10-04 14:00")
+        XCTAssertEqual(epic.sinceText, "3 d in the slot", "since 2026-10-04 14:00, in the band's short form")
+        XCTAssertEqual(EpicSlotCardModel.slotTime(3 * 86400 + 20 * 60), "3 d")
+        XCTAssertEqual(EpicSlotCardModel.slotTime(86400), "1 d")
+        XCTAssertEqual(EpicSlotCardModel.slotTime(3900), "1 h 5 min")
+        XCTAssertEqual(EpicSlotCardModel.slotTime(14 * 60), "14 min")
+        XCTAssertEqual(EpicSlotCardModel.slotTime(-5), "0 s")
         XCTAssertEqual(ticket.identifier, "TP-1619", "the card inside is the sub-ticket in work")
         XCTAssertNil(ticket.epic, "the band names the epic: the card carries no chip")
         XCTAssertEqual(SlotCard.sinceText("1 h 5 min", inEpic: true), "1 h 5 min on this ticket")
@@ -126,6 +131,8 @@ final class EpicSlotCardTests: XCTestCase {
         XCTAssertEqual(EpicSlotCard.listHeight(rows: 2), 72, "a short list is as tall as its rows")
         XCTAssertEqual(EpicSlotCard.listHeight(rows: -1), 0)
         XCTAssertEqual(EpicSlotCard.doneAnchor, .bottom)
+        XCTAssertEqual(Array(EpicSlotCard.doneShown(Array(1...9))), [4, 5, 6, 7, 8, 9], "offscreen: the six most recent, oldest at the top")
+        XCTAssertEqual(Array(EpicSlotCard.upcomingShown(Array(1...9))), [1, 2, 3, 4, 5, 6], "offscreen: the first six to come")
     }
 
     // MARK: - c6: where a drag in the list to come lands
@@ -152,6 +159,46 @@ final class EpicSlotCardTests: XCTestCase {
             host.layoutSubtreeIfNeeded()
             XCTAssertGreaterThan(host.fittingSize.height, 0)
         }
+    }
+
+    /// Offscreen, where `ImageRenderer` draws no scroll view, both lists still draw their rows (TP-1646's QA found the
+    /// Gallery's open stories blank): the done list's band of the snapshot and the list to come's carry ink, not only
+    /// the frame's surface.
+    @MainActor
+    func testAnOffscreenSnapshotDrawsTheRowsOfBothLists() throws {
+        let (epic, ticket) = try models()
+        let card = EpicSlotCard(slot: 1, epic: epic, ticket: ticket, showsUpcoming: true, showsDone: true)
+            .frame(width: 1120)
+            .environment(\.offscreenSnapshot, true)
+            .environment(\.colorScheme, .light)
+        let renderer = ImageRenderer(content: card)
+        renderer.scale = 1
+        let image = try XCTUnwrap(renderer.cgImage)
+        let width = image.width, height = image.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+        pixels.withUnsafeMutableBytes { buffer in
+            let context = CGContext(
+                data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4, space: space,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            )
+            context?.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        }
+        let list = Int(EpicSlotCard.listHeight(rows: 6))
+        let band = Int(DesignTokens.HomeQueue.epicBandHeight)
+        // Rows of pixels from the top of the image (the context's memory runs top down).
+        func inked(_ rows: Range<Int>) -> Int {
+            var colours = Set<UInt32>()
+            for y in rows where y < height {
+                for x in stride(from: 8, to: width - 8, by: 2) {
+                    let i = (y * width + x) * 4
+                    colours.insert(UInt32(pixels[i]) << 16 | UInt32(pixels[i + 1]) << 8 | UInt32(pixels[i + 2]))
+                }
+            }
+            return colours.count
+        }
+        XCTAssertGreaterThan(inked(band + 8 ..< band + list - 8), 8, "the done rows draw above the card")
+        XCTAssertGreaterThan(inked(height - list ..< height - 12), 8, "the rows to come draw below the card")
     }
 
     private func height(_ view: some View, width: CGFloat = 1120) -> CGFloat {

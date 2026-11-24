@@ -267,7 +267,7 @@ let epicSlotStory: EpicSlotCardModel = {
     ]
     return EpicSlotCardModel(
         identifier: "TP-1597", title: "A real queue: a slot belongs to one ticket until it is done, and Home is the window to the queue",
-        done: 7, total: 14, since: "3 d",
+        done: 7, total: 14, since: EpicSlotCardModel.slotTime(3 * 86_400 + 20 * 60),
         doneRows: done.map { DoneRowModel(identifier: $0.0, title: $0.1, epic: "TP-1597", pullRequest: $0.2, repo: "symphony", when: $0.3) },
         upcoming: upcoming.enumerated().map { index, row in
             QueueRowModel(

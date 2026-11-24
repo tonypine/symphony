@@ -107,7 +107,7 @@ public enum HomeQueueCards {
     /// numbered on from the done count (with 7 done the first to come is 9), with a marker for each dependency it still
     /// waits for.
     public static func epicCard(_ epic: HomeRead.SlotEpic, reference: Date, timeZone: TimeZone = .current) -> EpicSlotCardModel {
-        let since = epic.since.map { Overview.duration(max(Int(reference.timeIntervalSince($0)), 0)) } ?? "—"
+        let since = epic.since.map { EpicSlotCardModel.slotTime(Int(reference.timeIntervalSince($0))) } ?? "—"
         return EpicSlotCardModel(
             identifier: epic.identifier, title: epic.title ?? epic.identifier, done: epic.done, total: epic.total, since: since,
             doneRows: epic.doneSubTickets.map { done($0, epic: epic.identifier, reference: reference, timeZone: timeZone) },
