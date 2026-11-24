@@ -153,20 +153,53 @@ defmodule SymphonyElixir.Dispatch.Queue do
   @spec dependency_move([map()], String.t(), String.t()) ::
           {:below, String.t(), non_neg_integer(), [{String.t(), SortKey.t()}]} | :stay
   def dependency_move(records, issue_id, on_id) when is_list(records) do
-    {keys, parents} = links(records)
+    {keys, parents} = links = links(records)
 
+    case above(links, issue_id, on_id) do
+      {:above, moved, anchor} ->
+        siblings =
+          for {id, key} <- keys, id != moved, Map.get(parents, id) == Map.get(parents, moved) do
+            {id, key}
+          end
+          |> Enum.sort_by(&elem(&1, 1))
+
+        {:below, moved, Enum.find_index(siblings, &(elem(&1, 0) == anchor)) + 1, siblings}
+
+      :below ->
+        :stay
+    end
+  end
+
+  @doc """
+  The first stored dependency that the order of `moved` (the ticket records once a move is applied)
+  puts upside down and the order of `records` (the same records before it) did not: `{issue_id,
+  on_id}`, the ticket that would sit above the ticket `on_id` it depends on, compared where their
+  scopes meet as `dependency_move/3` compares them; nil when the move keeps every dependency pointing
+  upward. A dependency already upside down before the move doesn't refuse it.
+  """
+  @spec broken_dependency([map()], [map()]) :: {String.t(), String.t()} | nil
+  def broken_dependency(records, moved) when is_list(records) and is_list(moved) do
+    before = links(records)
+    now = links(moved)
+
+    Enum.find_value(moved, fn record ->
+      Enum.find_value(Map.get(record, :depends_on) || [], fn %{issue_id: on_id} ->
+        pair = {record.issue_id, on_id}
+        if match?({:above, _, _}, above(now, record.issue_id, on_id)) and above(before, record.issue_id, on_id) == :below, do: pair
+      end)
+    end)
+  end
+
+  # Whether the ticket `issue_id` sits above `on_id` where their scopes meet: `{:above, moved,
+  # anchor}` with the two tickets compared there, or `:below` when it sits below, when either holds
+  # no place or when one is the other's ancestor.
+  defp above({keys, parents}, issue_id, on_id) do
     with true <- Map.has_key?(keys, issue_id) and Map.has_key?(keys, on_id),
          {[moved | _], [anchor | _]} <- diverge(lineage(issue_id, parents), lineage(on_id, parents)),
          true <- Map.fetch!(keys, moved) < Map.fetch!(keys, anchor) do
-      siblings =
-        for {id, key} <- keys, id != moved, Map.get(parents, id) == Map.get(parents, moved) do
-          {id, key}
-        end
-        |> Enum.sort_by(&elem(&1, 1))
-
-      {:below, moved, Enum.find_index(siblings, &(elem(&1, 0) == anchor)) + 1, siblings}
+      {:above, moved, anchor}
     else
-      _stay -> :stay
+      _below -> :below
     end
   end
 

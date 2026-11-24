@@ -5293,17 +5293,21 @@ defmodule SymphonyElixir.Orchestrator do
   # working on the ticket only the orchestrator knows, so the caller's check leaves it to the
   # orchestrator's.
   defp refute_start(%Issue{} = issue) do
-    case StartNow.check(start_facts(issue, false)) do
+    case StartNow.check(start_facts(issue, false, DependsOn.start_refusal(issue.identifier, issue.id, %{}, UpdateHold.empty_cache()))) do
       :ok -> :ok
       {:error, reason} -> {:error, {:start_refused, reason}}
     end
   end
 
-  # The facts `SymphonyElixir.StartNow.check/1` judges a start on: the ticket's phase, the lines of
-  # the pauses that stop it, whether a Question is open on it and whether a run works on it.
-  defp start_facts(%Issue{} = issue, running?) do
+  # The facts `SymphonyElixir.StartNow.check/1` judges a start on: the ticket's phase, the refusal of
+  # its first unmet stored dependency, the lines of the pauses that stop it, whether a Question is
+  # open on it and whether a run works on it. The caller's check judges a `:released` dependency met
+  # once its ticket is done; the orchestrator's judges it with the running build and the update
+  # hold's cache, as the dispatch gate does.
+  defp start_facts(%Issue{} = issue, running?, unmet_dependency) do
     %{
       phase: issue.state,
+      unmet_dependency: unmet_dependency,
       symphony_pause: Pauses.dispatch_skip_reason(symphony_pause()),
       repository_pause: repository_pause_reason(issue),
       open_question?: start_open_question?(issue),
@@ -9742,7 +9746,8 @@ defmodule SymphonyElixir.Orchestrator do
     do: handle_call_message({:start_issue, issue, note, nil}, from, state)
 
   defp handle_call_message({:start_issue, %Issue{} = issue, note, slot}, _from, state) do
-    checked = StartNow.check(start_facts(issue, Map.has_key?(state.running, issue.id)))
+    unmet = DependsOn.start_refusal(issue.identifier, issue.id, BuildInfo.current(), state.update_hold_cache)
+    checked = StartNow.check(start_facts(issue, Map.has_key?(state.running, issue.id), unmet))
 
     # The ticket's own repository, or its record's: never the primary one, which would run it in a
     # checkout of another repository (MOT-104, TP-1566).

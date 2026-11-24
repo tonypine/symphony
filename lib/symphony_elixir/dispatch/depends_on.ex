@@ -138,6 +138,67 @@ defmodule SymphonyElixir.Dispatch.DependsOn do
     %Issue{id: record.issue_id, identifier: record.issue_identifier, state: record.phase, labels: record.labels, repo_key: record.repo_key}
   end
 
+  @doc """
+  The refusal of a Start of the ticket `identifier` (`issue_id`) while one of its stored
+  dependencies is unmet (`unmet/4` with `build` and `cache`, as the dispatch gate judges it), naming
+  the first: "TP-977 depends on TP-976 and can't start before it is done." (or "released." for a
+  dependency that needs a release); nil when every one is met, it has none or the store can't be
+  read. With no build (`%{}`) a `:released` dependency counts as met once its ticket is done, as
+  `open/2` reads it.
+  """
+  @spec start_refusal(String.t() | nil, String.t() | nil, map(), UpdateHold.cache()) :: String.t() | nil
+  def start_refusal(identifier, issue_id, build, cache) when is_binary(issue_id) do
+    with [_ | _] = entries <- RunStore.dependencies(issue_id),
+         records = for({entry, %{} = record} <- entries, into: %{}, do: {entry.issue_id, record}),
+         [first | _] <- unmet(Enum.map(entries, &elem(&1, 0)), records, build, cache) do
+      on = name_of(first, Map.get(records, first.issue_id)) || "ticket #{first.issue_id}"
+      "#{identifier || issue_id} depends on #{on} and can't start before it is #{first.kind}."
+    else
+      _met -> nil
+    end
+  end
+
+  def start_refusal(_identifier, _issue_id, _build, _cache), do: nil
+
+  @doc """
+  The identifiers of the tickets among `records` (ticket records) that hold a stored dependency on
+  the ticket `issue_id` and have not ended: not removed, and not in a phase of `terminal` (the
+  terminal states, lowercase). In identifier order.
+  """
+  @spec dependents(String.t(), [map()], MapSet.t(String.t())) :: [String.t()]
+  def dependents(issue_id, records, %MapSet{} = terminal) when is_binary(issue_id) and is_list(records),
+    do: records |> dependents_index(terminal) |> Map.get(issue_id, [])
+
+  @doc "`dependents/3` of every ticket at once, by the issue id depended on; a ticket no open one depends on is absent."
+  @spec dependents_index([map()], MapSet.t(String.t())) :: %{String.t() => [String.t()]}
+  def dependents_index(records, %MapSet{} = terminal) when is_list(records) do
+    for record <- records,
+        record = TicketState.normalize(record),
+        is_nil(record.removed_at),
+        not ended?(record.phase, terminal),
+        %{issue_id: on} <- record.depends_on,
+        reduce: %{} do
+      index -> Map.update(index, on, [record.issue_identifier || record.issue_id], &Enum.uniq([record.issue_identifier || record.issue_id | &1]))
+    end
+    |> Map.new(fn {on, dependents} -> {on, Enum.sort(dependents)} end)
+  end
+
+  defp ended?(phase, terminal) when is_binary(phase), do: MapSet.member?(terminal, phase |> String.trim() |> String.downcase())
+  defp ended?(_phase, _terminal), do: false
+
+  @doc """
+  The refusal of a cancel of the ticket `identifier` that the tickets `dependents` (`dependents/3`)
+  still depend on; nil when none does. Removing those dependencies lets the cancel through.
+  """
+  @spec cancel_refusal(String.t(), [String.t()]) :: String.t() | nil
+  def cancel_refusal(_identifier, []), do: nil
+  def cancel_refusal(identifier, [one]), do: "#{identifier} can't be cancelled: #{one} depends on it. Remove that dependency first."
+
+  def cancel_refusal(identifier, dependents) when is_list(dependents) do
+    {rest, [last]} = Enum.split(dependents, -1)
+    "#{identifier} can't be cancelled: #{Enum.join(rest, ", ")} and #{last} depend on it. Remove those dependencies first."
+  end
+
   @doc "The line a dispatch skip shows for `unmet` (`unmet/4`), naming each ticket waited on."
   @spec reason([TicketState.dependency(), ...]) :: String.t()
   def reason([_ | _] = unmet), do: Enum.map_join(unmet, "; ", &line/1)

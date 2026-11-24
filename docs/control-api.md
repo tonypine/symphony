@@ -249,10 +249,10 @@ and the same words. The older `start` field is `moves.start`, with the same shap
 | Move | Control call | Refused when | Example `reason` |
 | --- | --- | --- | --- |
 | `answer` | `/decide` with the `question_id` of one of `open_questions` | no Question is open | TP-1 is not waiting on a decision |
-| `start` | `/start` | Backlog, closed, its plan waits on a person, it waits on its sub-tickets, Symphony or the repository is paused, a Question is open, a run works on it | A run is already working on it. |
+| `start` | `/start` | Backlog, closed, its plan waits on a person, it waits on its sub-tickets, a stored dependency is unmet, Symphony or the repository is paused, a Question is open, a run works on it | TP-977 depends on TP-976 and can't start before it is done. |
 | `stop` | `/stop` | no run works on it | No run is working. |
 | `restart` | `/restart` | closed, or no record | The ticket is done. |
-| `cancel` | `/cancel` | closed, or no record | The ticket is done. |
+| `cancel` | `/cancel` | closed, no record, or open tickets depend on it | TP-976 can't be cancelled: TP-977 and TP-978 depend on it. Remove those dependencies first. |
 | `move_to` | `/move` | in no repository, or no record | The ticket is not one Symphony tracks. |
 | `unblock` | `/unblock` | nothing a person can release | TP-1 has nothing a person can unblock |
 | `note` | `/note` | no record | No ticket TP-1 in symphony |

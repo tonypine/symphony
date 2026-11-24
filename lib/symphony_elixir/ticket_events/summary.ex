@@ -568,6 +568,8 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   defp person_action("unblock", _to), do: "The Director unblocked the ticket"
   defp person_action("restart", _to), do: "The Director restarted the ticket"
   defp person_action("add_blocker", blocker), do: "The Director added " <> (blocker || "a ticket") <> " as a blocker"
+  defp person_action("add_dependency", on), do: "The Director made the ticket depend on " <> (on || "a ticket")
+  defp person_action("remove_dependency", on), do: "The Director removed the ticket's dependency on " <> (on || "a ticket")
   defp person_action("set_priority", to), do: "The Director set the priority to " <> (to || "another priority")
   defp person_action("add_label", label), do: "The Director added " <> label_name(label)
   defp person_action("remove_label", label), do: "The Director removed " <> label_name(label)

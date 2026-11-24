@@ -50,6 +50,12 @@ defmodule SymphonyElixir.StartNowTest do
       assert {:error, "It waits on your answer first."} = StartNow.check(%{@facts | open_question?: true})
     end
 
+    test "TP-1633: an unmet stored dependency is the refusal, before the pauses" do
+      reason = "MT-977 depends on MT-976 and can't start before it is released."
+      assert {:error, ^reason} = StartNow.check(Map.merge(@facts, %{unmet_dependency: reason, symphony_pause: "dispatch is paused"}))
+      assert :ok = StartNow.check(Map.put(@facts, :unmet_dependency, nil))
+    end
+
     test "a run already working on the ticket is the refusal" do
       assert {:error, "A run is already working on it."} = StartNow.check(%{@facts | running?: true})
     end

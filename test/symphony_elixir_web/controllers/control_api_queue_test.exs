@@ -144,10 +144,33 @@ defmodule SymphonyElixirWeb.ControlApiQueueTest do
       assert stored() == ["a", "s1", "c"]
     end
 
+    test "TP-1633: a move that would put a ticket above one it depends on is a 409 naming both, and the queue stays", %{orchestrator: orchestrator} do
+      :ok = RunStore.add_dependency("c", "b", :done)
+      assert stored() == ["a", "b", "c"]
+
+      for params <- [%{"issue_identifier" => "MT-C", "position" => "top"}, %{"issue_identifier" => "MT-B", "position" => "end"}] do
+        conn = post_move(params, orchestrator)
+        assert conn.status == 409, inspect(params)
+        assert body(conn) == %{"error" => %{"code" => "move_not_allowed", "message" => "MT-C depends on MT-B and must stay below it."}}
+      end
+
+      assert stored() == ["a", "b", "c"]
+
+      # Two sub-tickets of one parent.
+      for {id, identifier} <- [{"s1", "MT-S1"}, {"s2", "MT-S2"}], do: ticket(id, identifier, parent: %{identifier: "MT-A"})
+      :ok = RunStore.add_dependency("s2", "s1", :released)
+      conn = post_move(%{"issue_identifier" => "MT-S2", "before" => "MT-S1"}, orchestrator)
+      assert conn.status == 409
+      assert body(conn)["error"]["message"] == "MT-S2 depends on MT-S1 and must stay below it."
+      assert stored() == ["a", "s1", "s2", "b", "c"]
+    end
+
     test "a store that loses a race or refuses the write answers 409 or 502", %{orchestrator: orchestrator} do
       for {reply, status, code} <- [
             {{:error, :not_neighbours}, 409, "move_not_allowed"},
             {{:error, :not_in_queue}, 409, "move_not_allowed"},
+            # A ticket the store names that the read didn't hold is named by its id.
+            {{:error, {:dependency_order, "c", "ghost"}}, 409, "move_not_allowed"},
             {{:error, :aborted}, 502, "store_error"}
           ] do
         Process.put(:store_reply, reply)

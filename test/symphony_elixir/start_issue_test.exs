@@ -250,6 +250,34 @@ defmodule SymphonyElixir.StartIssueTest do
     end
   end
 
+  describe "TP-1633: the start handler and a released dependency" do
+    setup do
+      previous = Application.fetch_env(:symphony_elixir, :build)
+      Application.put_env(:symphony_elixir, :build, sha: "d3d301b0123456789abcdef0123456789abcdef0", repo: "https://github.com/acme/symphony", number: "1")
+
+      on_exit(fn ->
+        case previous do
+          {:ok, value} -> Application.put_env(:symphony_elixir, :build, value)
+          :error -> Application.delete_env(:symphony_elixir, :build)
+        end
+      end)
+    end
+
+    test "a released dependency the running build doesn't include refuses the start, whatever slot it names" do
+      :ok = RunStore.put_ticket_state(%{repo_key: @repo, issue_id: "rel-base", issue_identifier: "MT-R1", phase: "Done"})
+      :ok = RunStore.put_ticket_state(%{repo_key: @repo, issue_id: "rel-next", issue_identifier: "MT-R2", phase: "In Progress"})
+      :ok = RunStore.add_dependency("rel-next", "rel-base", :released)
+      started = issue("rel-next", "MT-R2", "In Progress")
+
+      for call <- [{:start_issue, started, nil}, {:start_issue, started, nil, 1}] do
+        assert {:reply, {:error, {:start_refused, "MT-R2 depends on MT-R1 and can't start before it is released."}}, state} =
+                 Orchestrator.handle_call(call, {self(), make_ref()}, orchestrator_state(2))
+
+        assert state.running == %{}
+      end
+    end
+  end
+
   describe "Orchestrator.start_issue/3" do
     setup do
       server = start_call_server()
@@ -263,6 +291,17 @@ defmodule SymphonyElixir.StartIssueTest do
       assert {:error, {:start_refused, "The ticket is done."}} = Orchestrator.start_issue(server, "MT-D1", nil)
       assert [] = ticket_events(@repo, "backlog-1", "run.started_by_person")
       assert [] = ticket_events(@repo, "done-1", "run.started_by_person")
+    end
+
+    test "TP-1633: refuses a ticket with an unmet stored dependency in the caller, naming both tickets", %{server: server} do
+      :ok = RunStore.put_ticket_state(%{repo_key: @repo, issue_id: "dep-base", issue_identifier: "MT-976", phase: "In Progress"})
+      :ok = RunStore.put_ticket_state(%{repo_key: @repo, issue_id: "dep-next", issue_identifier: "MT-977", phase: "Todo"})
+      :ok = RunStore.add_dependency("dep-next", "dep-base", :done)
+      tracked([issue("dep-next", "MT-977", "Todo")])
+
+      assert {:error, {:start_refused, "MT-977 depends on MT-976 and can't start before it is done."}} = Orchestrator.start_issue(server, "MT-977", nil)
+      refute_received {:start_issue_call, _issue, _note}
+      assert %{phase: "Todo"} = RunStore.get_ticket_state("dep-next")
     end
 
     test "refuses while Symphony is paused, without claiming a Todo ticket", %{server: server} do

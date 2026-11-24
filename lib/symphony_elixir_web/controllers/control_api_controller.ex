@@ -463,6 +463,35 @@ defmodule SymphonyElixirWeb.ControlApiController do
     end
   end
 
+  # A stored dependency of `issue_identifier` on `on`, with the kind given on an add (`done` or
+  # `released`), through `DirectorBlockers.dependency/5`.
+  @spec dependency(Conn.t(), map()) :: Conn.t()
+  def dependency(conn, params) do
+    with {:ok, identifier} <- required_param(params["issue_identifier"], "issue_identifier"),
+         {:ok, on} <- required_param(params["on"], "on"),
+         {:ok, action} <- blocker_action(params["action"]),
+         {:ok, kind} <- dependency_kind(action, params["kind"]) do
+      opts = [orchestrator: orchestrator(conn), audit_log: Map.get(conn.assigns, :audit_log, [])] ++ Map.get(conn.assigns, :director_blockers, [])
+
+      case DirectorBlockers.dependency(action, identifier, on, kind, opts) do
+        {:error, {:store, message}} -> error_response(conn, 502, "store_error", message)
+        result -> respond_move(conn, identifier, result)
+      end
+    else
+      {:error, {:invalid_request, message}} -> error_response(conn, 422, "invalid_request", message)
+    end
+  end
+
+  defp dependency_kind(:remove, _kind), do: {:ok, nil}
+
+  defp dependency_kind(:add, kind) do
+    case string_param(kind) do
+      "done" -> {:ok, :done}
+      "released" -> {:ok, :released}
+      _other -> {:error, {:invalid_request, "kind must be done or released"}}
+    end
+  end
+
   @spec priority(Conn.t(), map()) :: Conn.t()
   def priority(conn, params) do
     with {:ok, identifier} <- required_param(params["issue_identifier"], "issue_identifier"),

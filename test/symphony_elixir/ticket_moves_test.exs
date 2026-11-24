@@ -70,6 +70,15 @@ defmodule SymphonyElixir.TicketMovesTest do
     refused(:start, %{repo_key: nil}, StartNow.no_repository_reason())
   end
 
+  test "TP-1633: start is refused by an unmet dependency, and cancel by the open tickets that depend on it" do
+    refused(:start, %{unmet_dependency: "MT-1 depends on MT-0 and can't start before it is done."}, "MT-1 depends on MT-0 and can't start before it is done.")
+    allowed(:cancel, %{dependents: []})
+    refused(:cancel, %{dependents: ["MT-2"]}, "MT-1 can't be cancelled: MT-2 depends on it. Remove that dependency first.")
+    refused(:cancel, %{dependents: ["MT-2", "MT-3"]}, "MT-1 can't be cancelled: MT-2 and MT-3 depend on it. Remove those dependencies first.")
+    # A closed ticket answers as closed first.
+    refused(:cancel, %{phase: "Done", dependents: ["MT-2"]}, "The ticket is done.")
+  end
+
   test "stop needs a run" do
     allowed(:stop, %{running?: true})
     refused(:stop, %{}, "No run is working.")
@@ -208,6 +217,23 @@ defmodule SymphonyElixir.TicketMovesTest do
 
       :ok = RunStore.update_ticket_state("one", %{removed_at: DateTime.utc_now()})
       assert %{recorded?: true, tracked?: false} = TicketMoves.facts(record_of("one"), live())
+    end
+
+    test "TP-1633: a record's stored dependencies refuse its start, and the dependents the caller read its cancel" do
+      :ok = RunStore.put_ticket_state(%{repo_key: "default", issue_id: "base", issue_identifier: "MT-0", phase: "In Progress"})
+      :ok = RunStore.put_ticket_state(%{repo_key: "default", issue_id: "one", issue_identifier: "MT-1", phase: "Todo"})
+      :ok = RunStore.add_dependency("one", "base", :done)
+
+      moves = record_of("one") |> TicketMoves.facts(live()) |> TicketMoves.read()
+      assert moves.start == %{allowed: false, reason: "MT-1 depends on MT-0 and can't start before it is done."}
+
+      # The identifier the caller didn't give is the record's.
+      assert %{unmet_dependency: "MT-1 depends on MT-0" <> _rest} = TicketMoves.facts(record_of("one"), %{live() | identifier: nil})
+
+      base = TicketMoves.facts(record_of("base"), %{live() | identifier: "MT-0"} |> Map.put(:dependents, ["MT-1"]))
+      assert %{unmet_dependency: nil, dependents: ["MT-1"]} = base
+      assert TicketMoves.read(base).cancel == %{allowed: false, reason: "MT-0 can't be cancelled: MT-1 depends on it. Remove that dependency first."}
+      assert TicketMoves.read(TicketMoves.facts(record_of("base"), live())).cancel.allowed
     end
 
     test "a record with no phase has nothing to release" do
