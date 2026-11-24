@@ -40,6 +40,8 @@ struct HomeView: View {
     @State private var viewport: Double = 0
     @State private var listTop: Double = 0
     @State private var cardsBottom: Double = 0
+    /// The scroll view's content width: its own width less a shown scroller, so the strip spans what the rows span.
+    @State private var contentWidth: Double = 0
 
     private static let space = "home-content"
 
@@ -51,6 +53,7 @@ struct HomeView: View {
                 model: model, views: views, notices: notices, reference: reference, actions: actions, range: range, numberWidth: numberWidth,
                 space: Self.space, cardsBottom: { cardsBottom = $0 }, listTop: { listTop = $0 }
             )
+            .onGeometryChange(for: Double.self) { $0.size.width } action: { contentWidth = $0 }
         }
         .onScrollGeometryChange(for: [Double].self) { [$0.contentOffset.y + $0.contentInsets.top, $0.containerSize.height] } action: { _, value in
             scrollTop = value[0]
@@ -59,9 +62,12 @@ struct HomeView: View {
         // The scroll geometry reports only a change, never its first value: the view's own height, reported from the
         // first layout, gives the rows on screen before any scroll.
         .onGeometryChange(for: Double.self) { $0.size.height } action: { viewport = $0 }
-        .overlay(alignment: .top) {
+        .overlay(alignment: .topLeading) {
             if HomeStrip.pinned(scrollTop: scrollTop, cardsBottom: cardsBottom), !model.cards.isEmpty {
+                // On the content's width, not the scroll view's: a shown scroller takes its width from the content's
+                // right, and the strip's lines end where the rows and the cards end.
                 HomeStrip(cards: model.cards, reference: reference, numberWidth: numberWidth)
+                    .frame(width: contentWidth > 0 ? contentWidth : nil)
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }

@@ -245,7 +245,7 @@ private struct QueueRowProbe: NSViewRepresentable {
 }
 
 extension View {
-    @ViewBuilder fileprivate func probe(_ part: QueueRow.Part, _ probes: [QueueRow.Part: NSView]) -> some View {
+    @ViewBuilder func probe(_ part: QueueRow.Part, _ probes: [QueueRow.Part: NSView]) -> some View {
         if let view = probes[part] {
             background(QueueRowProbe(view: view))
         } else {

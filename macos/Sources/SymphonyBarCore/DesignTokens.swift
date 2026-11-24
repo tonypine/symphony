@@ -1808,7 +1808,6 @@ public enum DesignTokens {
 
         // The strip line.
         public static let stripHeight: Double = 30
-        public static let stripSinceWidth: Double = 68
 
         // The checks bar.
         public static let checksTrackWidth: Double = 132

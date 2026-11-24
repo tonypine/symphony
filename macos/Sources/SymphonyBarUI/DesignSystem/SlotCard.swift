@@ -467,6 +467,8 @@ public struct SlotStripLine: View {
     let numberWidth: CGFloat
     let state: DesignTokens.Interaction?
     @State private var hovered = false
+    /// The queue row's probes: the strip line carries them on the same parts, so a test reads both rows' columns.
+    @Environment(\.queueRowProbes) private var probes
 
     public init(slot: Int, ticket: SlotCardModel?, numberWidth: CGFloat, state: DesignTokens.Interaction? = nil) {
         self.slot = slot
@@ -480,33 +482,43 @@ public struct SlotStripLine: View {
         if let ticket {
             let shape = RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous)
             let shown = state ?? DesignTokens.Interaction(hovered: hovered)
+            // The queue row's own cells and gaps (`QueueRow`), so each column stands over the row's: the number's cell
+            // left blank, the lead, the identifier and the title one main gap apart, then the trail, whose last cell
+            // (the time here, the repo there) is the row's end cell.
             HStack(spacing: queue.rowPartGap) {
                 Color.clear.frame(width: numberWidth, height: 1)
                 StatusDot(ticket.status, live: ticket.status == .working)
                     .frame(width: DesignTokens.Row.leadSize, height: DesignTokens.Row.leadSize)
                     .padding(.horizontal, queue.leadMargin)
-                Text(ticket.identifier)
-                    .textStyle(.rowTitle)
-                    .monospacedDigit()
-                    .fixedSize()
-                    .foregroundStyle(DesignTokens.TextColor.secondary.color)
-                    .frame(minWidth: QueueRow.identifierWidth, alignment: .leading)
-                Text(ticket.title)
-                    .font(DesignTokens.TypeStyle.font(size: DesignTokens.TypeStyle.rowTitle.size, weight: DesignTokens.Row.titleWeight))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .foregroundStyle(DesignTokens.TextColor.primary.color)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.leading, DesignTokens.Space.s1)
-                Badge(status: ticket.status, word: ticket.word, size: .small)
-                    .padding(.leading, DesignTokens.Space.s1)
-                Text(ticket.since)
-                    .textStyle(.secondary)
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .foregroundStyle(DesignTokens.TextColor.secondary.color)
-                    .frame(width: queue.stripSinceWidth, alignment: .trailing)
-                    .padding(.leading, DesignTokens.Space.s1)
+                    .probe(.lead, probes)
+                HStack(spacing: queue.rowMainGap) {
+                    Text(ticket.identifier)
+                        .textStyle(.rowTitle)
+                        .monospacedDigit()
+                        .fixedSize()
+                        .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                        .frame(minWidth: QueueRow.identifierWidth, alignment: .leading)
+                        .probe(.identifier, probes)
+                    Text(ticket.title)
+                        .font(DesignTokens.TypeStyle.font(size: DesignTokens.TypeStyle.rowTitle.size, weight: DesignTokens.Row.titleWeight))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .foregroundStyle(DesignTokens.TextColor.primary.color)
+                        .probe(.title, probes)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: queue.rowMainGap) {
+                    Badge(status: ticket.status, word: ticket.word, size: .small)
+                        .probe(.marks, probes)
+                    Text(ticket.since)
+                        .textStyle(.secondary)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                        .frame(width: queue.endWidth, alignment: .trailing)
+                        .probe(.repo, probes)
+                }
+                .fixedSize()
             }
             .padding(.horizontal, queue.rowInset)
             .frame(height: queue.stripHeight)
