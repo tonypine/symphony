@@ -67,16 +67,25 @@ public struct QueueRow: View {
     let row: QueueRowModel
     let numberWidth: CGFloat
     let look: Look?
+    let reorderable: Bool
+    let picked: Bool
     let onStart: () -> Void
     @State private var hovered = false
     @Environment(\.queueRowProbes) private var probes
 
     /// The row of `row`, its number centred in a cell `numberWidth` wide (`numberWidth(widest:)` of the numbers on
-    /// screen). `look` draws one look still, for a story; nil follows the pointer.
-    public init(_ row: QueueRowModel, numberWidth: CGFloat, look: Look? = nil, onStart: @escaping () -> Void = {}) {
+    /// screen). `look` draws one look still, for a story; nil follows the pointer. A row that may not be `reorderable`
+    /// (a saved view is picked) keeps its number under the pointer and shows no handle. A `picked` row is the one being
+    /// dragged, left behind in its place and dimmed (`.row.dragging`).
+    public init(
+        _ row: QueueRowModel, numberWidth: CGFloat, look: Look? = nil, reorderable: Bool = true, picked: Bool = false,
+        onStart: @escaping () -> Void = {}
+    ) {
         self.row = row
         self.numberWidth = numberWidth
         self.look = look
+        self.reorderable = reorderable
+        self.picked = picked
         self.onStart = onStart
     }
 
@@ -104,8 +113,9 @@ public struct QueueRow: View {
     /// The look drawn: the one asked for, or the pointer's.
     private var shown: Look { look ?? (hovered ? .hover : .rest) }
 
-    /// Whether the handle and Start are shown in place of the number and the repo.
-    public static func handles(_ look: Look) -> Bool { look != .rest }
+    /// Whether the handle is shown in place of the number: under the pointer and while dragged, in a row that may be
+    /// reordered.
+    public static func handles(_ look: Look, reorderable: Bool = true) -> Bool { reorderable && look != .rest }
     /// Whether Start stands in the repo's place: under the pointer only (a dragged row keeps its repo).
     public static func starts(_ look: Look) -> Bool { look == .hover }
 
@@ -143,6 +153,7 @@ public struct QueueRow: View {
         .frame(height: queue.rowHeight)
         .background { face(look, shape) }
         .contentShape(shape)
+        .opacity(picked ? DesignTokens.HomeQueue.draggedOpacity : 1)
         .onHover { hovered = $0 }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Number \(row.numberText), \(row.identifier), \(row.title)")
@@ -162,7 +173,7 @@ public struct QueueRow: View {
     /// The number, and the handle in the same cell under the pointer.
     private func numberCell(_ look: Look) -> some View {
         let queue = DesignTokens.HomeQueue.self
-        let handle = Self.handles(look)
+        let handle = Self.handles(look, reorderable: reorderable)
         return ZStack {
             Text(row.numberText)
                 .textStyle(.secondary)
@@ -227,6 +238,68 @@ public struct QueueRow: View {
             .frame(width: queue.endWidth, height: queue.endHeight, alignment: .trailing)
         }
         .fixedSize()
+    }
+}
+
+/// The line in the gap a dragged row lands in (`.drop-line`): 2 pt of the accent with its glow, inset by the row's room at
+/// both ends, in the 2 pt between the row above and the one below.
+public struct QueueDropLine: View {
+    public init() {}
+
+    public var body: some View {
+        let queue = DesignTokens.HomeQueue.self
+        let shape = RoundedRectangle(cornerRadius: queue.dropLineRadius, style: .continuous)
+        shape.fill(queue.dropColor.color)
+            .frame(height: queue.dropLineHeight)
+            .background { AccentGlow(shape: shape) }
+            .padding(.horizontal, queue.rowInset)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
+/// `--accent-glow` around `shape`, outside it only, as a CSS box-shadow draws.
+struct AccentGlow<S: Shape>: View {
+    let shape: S
+
+    var body: some View {
+        let queue = DesignTokens.HomeQueue.self
+        ZStack {
+            ForEach(Array(queue.dropGlow.enumerated()), id: \.offset) { index, glow in
+                // CSS blurs a shadow over its blur radius; SwiftUI's radius is about half of it.
+                shape.fill(Color.black)
+                    .padding(max(-glow.spread, 0))
+                    .shadow(color: glow.color.color.opacity(queue.dropGlowOpacity[index]), radius: glow.blur / 2, x: glow.x, y: glow.y)
+            }
+            shape.fill(Color.black).blendMode(.destinationOut)
+        }
+        .compositingGroup()
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+extension View {
+    /// Draws this view as the target under a dragged row while `on` (`.slot.drop`, `.mslot.drop`): a 2 pt accent ring
+    /// outside `shape` with the accent's glow, on the accent's tint.
+    public func dropTarget<S: InsettableShape>(_ on: Bool, in shape: S) -> some View {
+        let queue = DesignTokens.HomeQueue.self
+        return background {
+            if on {
+                ZStack {
+                    AccentGlow(shape: shape)
+                    shape.fill(queue.dropTint.color)
+                }
+            }
+        }
+        .overlay {
+            if on {
+                shape.inset(by: -queue.dropRing / 2)
+                    .stroke(queue.dropColor.color, lineWidth: queue.dropRing)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
     }
 }
 

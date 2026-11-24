@@ -1413,8 +1413,11 @@ Ten more variables, read only in QA mode:
   hold; the stuck ticket, SHOP-305, has a failed run 1, its own endpoint and its transcript, SHOP-288 is a done
   ticket, the Inbox holds two pull requests, and Stop Run's requests are answered from `api/v1/control/`),
   `paused` (paused for "Deploy freeze") and `idle`, of Home: `home` (its Home read holds the catalog's two lists,
-  two epics in progress and four queued chains, and its state every situation group populated) and `home-quiet` (one ticket working, every other group
-  empty, dispatch paused for "Deploy freeze"), of the Inbox: `inbox` (one item of each kind, plus the Initiatives: two active, BIL-200 with BIL-206 waiting on you, one in review and one done),
+  two epics in progress and four queued chains, and its state every situation group populated), `home-quiet` (one ticket working, every other group
+  empty, dispatch paused for "Deploy freeze"), `home-queue` (three slots, two taken, and a generated queue of 1,245
+  tickets) and `home-queue-drag` (TP-1610's drag and drop: two slots, both taken, a queue of 1,246 tickets whose fourth
+  waits on you, and every `queue/move` and slot `start` changing the queue as Symphony does, except a move of TP-1596,
+  which is refused with its reason), of the Inbox: `inbox` (one item of each kind, plus the Initiatives: two active, BIL-200 with BIL-206 waiting on you, one in review and one done),
   `inbox-empty`, `inbox-unasked-choices` (`inbox` with four choices SHOP-330's plan run could not ask, so its page and its Approve sheet carry the warning), `inbox-lane-yielded` (`inbox` with DOCS-20 holding no lane because its open sub-tickets are below the priority filter, so Initiatives says why) and `inbox-decision` (TP-892's decision, with three options, with every ticket and pull request it mentions resolved
   and where TP-892 sits: 4 of its parent's 7 sub-tickets done, its pull request, two connected tickets and one
   earlier decision; TP-891's endpoint, watched in Code Review with its parent, a blocker, TP-892, and a ticket it

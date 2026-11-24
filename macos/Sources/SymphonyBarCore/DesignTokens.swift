@@ -1853,6 +1853,24 @@ public enum DesignTokens {
         /// A dragged row: lifted on the content surface.
         public static let dragElevation = Elevation.level3
 
+        // Drag and drop (TP-1610: `.row.dragging`, `.drop-line`, `.slot.drop`, `.mslot.drop` in page.css).
+        /// The row left behind while it is dragged.
+        public static let draggedOpacity: Double = 0.35
+        /// The line in the gap a dragged row lands in: 2 pt of the accent with its glow, inset by the row's room.
+        public static let dropLineHeight: Double = 2
+        public static let dropLineRadius: Double = 1
+        public static let dropColor = ColorToken.accent
+        /// A slot card, an empty slot or a strip line under a dragged row: a 2 pt accent ring with its glow, on the
+        /// accent's tint.
+        public static let dropRing: Double = 2
+        public static let dropTint = ColorToken.accentTint
+        /// `--accent-glow`: the accent at 35 % one point down with a 2 pt blur, and at 70 % six points down with a
+        /// 16 pt blur drawn 6 pt in.
+        public static let dropGlow: [Elevation.Shadow] = [
+            Elevation.Shadow(y: 1, blur: 2, color: .accent), Elevation.Shadow(y: 6, blur: 16, spread: -6, color: .accent),
+        ]
+        public static let dropGlowOpacity: [Double] = [0.35, 0.7]
+
         /// The number as a row shows it: with a comma between thousands ("1,243").
         public static func number(_ value: Int) -> String {
             let formatter = NumberFormatter()

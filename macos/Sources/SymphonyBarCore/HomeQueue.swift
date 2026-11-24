@@ -41,6 +41,9 @@ public struct HomeQueuePager: Equatable {
     /// The row at `index`, nil while its page is not read.
     public func row(at index: Int) -> HomeRead.Row? { rows[index] }
 
+    /// Puts `row` at `index`, nil to forget it: a drop shown before Symphony's next read.
+    mutating func setRow(_ row: HomeRead.Row?, at index: Int) { rows[index] = row }
+
     /// The offset of the page that holds `index`.
     public func page(of index: Int) -> Int { (max(index, 0) / pageSize) * pageSize }
 
@@ -239,6 +242,27 @@ public final class HomeQueueModel: ObservableObject {
         notice = nil
         if case let .failed(message) = await send(action) { notice = message }
         await refresh()
+    }
+
+    /// A queue row dropped into `gap` of the list (TP-1610): the list shows the ticket there at once with every number
+    /// following, Symphony is asked to move it, and Home is read again. A refusal puts the list back as it was and says
+    /// Symphony's reason. A drop at the row's own place, or a row that may not be dragged, sends nothing.
+    public func move(_ row: HomeRead.Row, from: Int, to gap: Int) async {
+        guard HomeQueueDrag.canDrag(row, view: view), let place = HomeQueueDrag.place(from: from, gap: gap, in: pager) else { return }
+        let before = pager
+        pager.move(row, from: from, to: gap)
+        notice = nil
+        if case let .failed(message) = await send(.queueMove(row.identifier, place: place)) {
+            if pager.view == before.view { pager = before }
+            notice = message
+        }
+        await refresh()
+    }
+
+    /// A queue row dropped on slot `slot` (TP-1610), the shortcut for Start: the ticket takes that slot, and the one
+    /// that held it stops and becomes the queue's first.
+    public func start(_ identifier: String, slot: Int) async {
+        await perform(.start(identifier, note: nil, slot: slot))
     }
 
     /// The live channel's `event: queue`: the queue or a slot changed in the engine.

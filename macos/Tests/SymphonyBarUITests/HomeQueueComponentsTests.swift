@@ -291,6 +291,31 @@ final class HomeQueueComponentsTests: XCTestCase {
         XCTAssertFalse(QueueRow.starts(.dragged))
     }
 
+    /// TP-1610 c3: under a saved filter the row keeps its number under the pointer, and Start still stands in the repo's
+    /// place; the drop targets draw at the size they have at rest.
+    func testUnderASavedFilterTheHandleNeverTakesTheNumbersPlace() {
+        XCTAssertFalse(QueueRow.handles(.hover, reorderable: false))
+        XCTAssertFalse(QueueRow.handles(.dragged, reorderable: false))
+        XCTAssertTrue(QueueRow.handles(.hover, reorderable: true))
+        XCTAssertTrue(QueueRow.starts(.hover))
+
+        let row = QueueRowModel(number: 3, identifier: "TP-1596", title: "A row", lead: .glyph("clock", .textSecondary), repo: "symphony")
+        let width = QueueRow.numberWidth(widest: 3)
+        XCTAssertEqual(
+            fittingSize(QueueRow(row, numberWidth: width, picked: true).frame(width: 900)).height,
+            fittingSize(QueueRow(row, numberWidth: width).frame(width: 900)).height
+        )
+        XCTAssertEqual(
+            fittingSize(SlotCard(slot: 3, ticket: nil, dropTarget: true).frame(width: 600)),
+            fittingSize(SlotCard(slot: 3, ticket: nil).frame(width: 600))
+        )
+        XCTAssertEqual(
+            fittingSize(SlotStripLine(slot: 1, ticket: slot(.working), numberWidth: 20, dropTarget: true).frame(width: 900)),
+            fittingSize(SlotStripLine(slot: 1, ticket: slot(.working), numberWidth: 20).frame(width: 900))
+        )
+        XCTAssertEqual(fittingSize(QueueDropLine().frame(width: 900)).height, DesignTokens.HomeQueue.dropLineHeight)
+    }
+
     func testTheNumberCellIsAsWideAsTheWidestNumberOnScreen() {
         XCTAssertEqual(DesignTokens.HomeQueue.number(1_243), "1,243")
         XCTAssertEqual(DesignTokens.HomeQueue.numberTemplate(widest: 1_243), "0,000")

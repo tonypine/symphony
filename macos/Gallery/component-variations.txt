@@ -130,6 +130,7 @@ progress-meter-one-line-with-a-stop-mark
 progress-meter-ticket-cap
 queue-row-at-rest
 queue-row-dragged
+queue-row-drop-line
 queue-row-hovered
 reorderable-list-a-line-that-can-t-be-used-now
 reorderable-list-dragging
@@ -197,13 +198,17 @@ sidebar-expanded-row-keyboard-focus
 sidebar-expanded-row-pressed
 sidebar-expanded-symphony-late
 sidebar-expanded-window-not-focused
+slot-card-drop-target
 slot-card-empty
+slot-card-empty-drop-target
 slot-card-needs-attention
 slot-card-now
 slot-card-waiting-on-you
 slot-count-one-slot
 slot-count-six-slots
 slot-count-three-slots
+slot-strip-line-drop-target
+slot-strip-line-empty-drop-target
 slot-strip-line-hover
 slot-strip-line-lines
 status-dot-done

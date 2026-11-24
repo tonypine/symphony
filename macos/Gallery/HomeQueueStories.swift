@@ -1,7 +1,9 @@
 // The Home queue's components (TP-1608), drawn from the approved prototype's sample tickets
 // (`docs/design/prototypes/home-queue/page.js`): the slot card now, waiting on the person, needing attention and empty;
 // the folded strip line; the checks bar; the token line; the slot count control; and the queue row at rest, hovered
-// and dragged. Each story is a variation of its own (`slot-card-now`). The slot count control is live: in the gallery
+// and dragged. Drag and drop (TP-1610) adds the row left behind while it is dragged with the drop line in a gap, and
+// the slot card, the empty slot and the strip line as the target under a dragged row. Each story is a variation of its
+// own (`slot-card-now`). The slot count control is live: in the gallery
 // it steps between 1 and 6.
 import SwiftUI
 import SymphonyBarCore
@@ -67,9 +69,9 @@ let slotAttention = SlotCardModel(
 )
 
 @MainActor
-private func slotCardStory(_ ticket: SlotCardModel?, slot: Int) -> AnyView {
+private func slotCardStory(_ ticket: SlotCardModel?, slot: Int, dropTarget: Bool = false) -> AnyView {
     AnyView(
-        SlotCard(slot: slot, ticket: ticket)
+        SlotCard(slot: slot, ticket: ticket, dropTarget: dropTarget)
             .frame(width: slotCardStoryWidth, alignment: .topLeading)
             .padding(DesignTokens.Space.s4)
             .background(DesignTokens.Surface.sunken.color)
@@ -117,15 +119,36 @@ private func queueRowStory(_ look: QueueRow.Look, index: Int) -> AnyView {
     )
 }
 
+/// The queue's rows on the list's pitch while the one at `picked` is dragged: it stays in its place, dimmed, its handle in
+/// the number's place, and the drop line marks the gap before the row at `gap`.
+@MainActor
+private func queueDropStory(picked: Int, gap: Int) -> AnyView {
+    let width = QueueRow.numberWidth(widest: queueStoryRows.map(\.number).max() ?? 0)
+    return AnyView(
+        ZStack(alignment: .topLeading) {
+            ForEach(Array(queueStoryRows.enumerated()), id: \.offset) { offset, row in
+                QueueRow(row, numberWidth: width, look: offset == picked ? .hover : .rest, picked: offset == picked)
+                    .offset(y: Double(offset) * HomeQueuePager.pitch)
+            }
+            QueueDropLine().offset(y: HomeQueueDrag.lineY(gap))
+        }
+        .frame(width: queueRowStoryWidth, height: Double(queueStoryRows.count) * HomeQueuePager.pitch, alignment: .topLeading)
+        .padding(DesignTokens.Space.s4)
+        .background(DesignTokens.Surface.window.color)
+    )
+}
+
 /// The strip: one line per slot, over the queue's columns.
 @MainActor
-private func stripStory(hover: Int? = nil) -> AnyView {
+private func stripStory(hover: Int? = nil, drop: Int? = nil) -> AnyView {
     let width = QueueRow.numberWidth(widest: queueStoryRows.map(\.number).max() ?? 0)
     let slots: [SlotCardModel?] = [slotNow, slotWaiting, slotAttention, nil]
     return AnyView(
         VStack(spacing: DesignTokens.Space.s1 / 2) {
             ForEach(Array(slots.enumerated()), id: \.offset) { offset, ticket in
-                SlotStripLine(slot: offset + 1, ticket: ticket, numberWidth: width, state: offset == hover ? .hover : .rest)
+                SlotStripLine(
+                    slot: offset + 1, ticket: ticket, numberWidth: width, state: offset == hover ? .hover : .rest, dropTarget: offset == drop
+                )
             }
         }
         .frame(width: queueRowStoryWidth)
@@ -170,8 +193,12 @@ let homeQueueStories: [ComponentStory] = {
         card("waiting-on-you") { slotCardStory(slotWaiting, slot: 2) },
         card("needs-attention") { slotCardStory(slotAttention, slot: 3) },
         card("empty", height: 100) { slotCardStory(nil, slot: 4) },
+        card("drop-target") { slotCardStory(slotNow, slot: 1, dropTarget: true) },
+        card("empty-drop-target", height: 100) { slotCardStory(nil, slot: 4, dropTarget: true) },
         strip("lines") { stripStory() },
         strip("hover") { stripStory(hover: 0) },
+        strip("drop-target") { stripStory(drop: 1) },
+        strip("empty-drop-target") { stripStory(drop: 3) },
         checks("five-of-nine") { padded(ChecksBar(proved: 5, total: 9), width: 280) },
         checks("none-proved") { padded(ChecksBar(proved: 0, total: 6), width: 280) },
         checks("all-proved") { padded(ChecksBar(proved: 9, total: 9), width: 280) },
@@ -183,5 +210,6 @@ let homeQueueStories: [ComponentStory] = {
         row("at-rest") { queueRowStory(.rest, index: 4) },
         row("hovered") { queueRowStory(.hover, index: 4) },
         row("dragged") { queueRowStory(.dragged, index: 4) },
+        row("drop-line") { queueDropStory(picked: 4, gap: 1) },
     ]
 }()

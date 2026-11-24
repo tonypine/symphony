@@ -1,0 +1,202 @@
+{
+ "view": null,
+ "filters": [],
+ "columns": [
+  {
+   "name": "identifier",
+   "type": "identifier",
+   "description": "The ticket's identifier."
+  },
+  {
+   "name": "title",
+   "type": "string",
+   "description": "The ticket's title."
+  },
+  {
+   "name": "repo",
+   "type": "string",
+   "description": "The key of the repository the ticket lives in."
+  },
+  {
+   "name": "epic",
+   "type": "identifier",
+   "description": "The identifier of the epic the ticket is a sub-ticket of."
+  },
+  {
+   "name": "phase",
+   "type": "string",
+   "description": "The phase (state) the ticket is in."
+  },
+  {
+   "name": "situation",
+   "type": "situation",
+   "description": "The kind of the ticket's situation."
+  },
+  {
+   "name": "situation_since",
+   "type": "time",
+   "description": "Since when the ticket's situation holds."
+  },
+  {
+   "name": "labels",
+   "type": "list",
+   "description": "The ticket's labels."
+  },
+  {
+   "name": "priority",
+   "type": "integer",
+   "description": "Linear's priority: 0 none, 1 urgent, 2 high, 3 medium, 4 low."
+  },
+  {
+   "name": "assignee",
+   "type": "string",
+   "description": "Who the ticket is assigned to."
+  },
+  {
+   "name": "url",
+   "type": "string",
+   "description": "The ticket's page in Linear."
+  },
+  {
+   "name": "created_at",
+   "type": "time",
+   "description": "When the ticket was created."
+  },
+  {
+   "name": "phase_at",
+   "type": "time",
+   "description": "When the ticket entered its phase."
+  },
+  {
+   "name": "updated_at",
+   "type": "time",
+   "description": "When Symphony last wrote the ticket's record."
+  }
+ ],
+ "sort": {
+  "column": "identifier",
+  "direction": "asc"
+ },
+ "count": 7,
+ "tickets": [
+  {
+   "issue_id": "issue-hub-212",
+   "identifier": "HUB-212",
+   "title": "Group follow-ups by company on the outreach page",
+   "repo": "hub",
+   "epic": null,
+   "phase": "Todo",
+   "situation": null,
+   "situation_since": null,
+   "labels": [],
+   "priority": 1,
+   "assignee": "tonypine",
+   "url": "https://linear.app/example/issue/HUB-212",
+   "created_at": "2026-10-01T09:00:00Z",
+   "phase_at": "2026-10-07T09:00:00Z",
+   "updated_at": "2026-10-07T09:00:00Z"
+  },
+  {
+   "issue_id": "issue-tp-1590",
+   "identifier": "TP-1590",
+   "title": "App updates stop the factory for most of an hour when several tickets merge in a row",
+   "repo": "symphony",
+   "epic": null,
+   "phase": "Code Review",
+   "situation": "working",
+   "situation_since": "2026-10-07T13:50:00Z",
+   "labels": [],
+   "priority": 1,
+   "assignee": "tonypine",
+   "url": "https://linear.app/example/issue/TP-1590",
+   "created_at": "2026-10-01T09:00:00Z",
+   "phase_at": "2026-10-07T13:50:00Z",
+   "updated_at": "2026-10-07T13:50:00Z"
+  },
+  {
+   "issue_id": "issue-tp-1592",
+   "identifier": "TP-1592",
+   "title": "A check that needs the pull request's own CI run is proved between handoff and merge",
+   "repo": "symphony",
+   "epic": null,
+   "phase": "Code Review",
+   "situation": "working",
+   "situation_since": "2026-10-07T13:40:00Z",
+   "labels": [],
+   "priority": 1,
+   "assignee": "tonypine",
+   "url": "https://linear.app/example/issue/TP-1592",
+   "created_at": "2026-10-01T09:00:00Z",
+   "phase_at": "2026-10-07T13:40:00Z",
+   "updated_at": "2026-10-07T13:40:00Z"
+  },
+  {
+   "issue_id": "issue-tp-1594",
+   "identifier": "TP-1594",
+   "title": "A QA pass walks the checks that share a screen and state in one session",
+   "repo": "symphony",
+   "epic": null,
+   "phase": "Code Review",
+   "situation": "waiting_on_you",
+   "situation_since": "2026-10-07T14:01:00Z",
+   "labels": [],
+   "priority": 1,
+   "assignee": "tonypine",
+   "url": "https://linear.app/example/issue/TP-1594",
+   "created_at": "2026-10-01T09:00:00Z",
+   "phase_at": "2026-10-07T14:01:00Z",
+   "updated_at": "2026-10-07T14:01:00Z"
+  },
+  {
+   "issue_id": "issue-tp-1596",
+   "identifier": "TP-1596",
+   "title": "An answer that says back to Code Review unchanged moves the ticket there",
+   "repo": "symphony",
+   "epic": null,
+   "phase": "Rework",
+   "situation": "paused_by_rule",
+   "situation_since": "2026-10-07T12:00:00Z",
+   "labels": [],
+   "priority": 1,
+   "assignee": "tonypine",
+   "url": "https://linear.app/example/issue/TP-1596",
+   "created_at": "2026-10-01T09:00:00Z",
+   "phase_at": "2026-10-07T12:00:00Z",
+   "updated_at": "2026-10-07T12:00:00Z"
+  },
+  {
+   "issue_id": "issue-tp-1619",
+   "identifier": "TP-1619",
+   "title": "Engine: one queue of top-level tickets with sort keys, sub-tickets inside their parent, explicit dependencies",
+   "repo": "symphony",
+   "epic": null,
+   "phase": "In Progress",
+   "situation": "working",
+   "situation_since": "2026-10-07T14:02:00Z",
+   "labels": [],
+   "priority": 1,
+   "assignee": "tonypine",
+   "url": "https://linear.app/example/issue/TP-1619",
+   "created_at": "2026-10-01T09:00:00Z",
+   "phase_at": "2026-10-07T14:02:00Z",
+   "updated_at": "2026-10-07T14:02:00Z"
+  },
+  {
+   "issue_id": "issue-tp-1700",
+   "identifier": "TP-1700",
+   "title": "Show each repo's last merge in one line",
+   "repo": "symphony",
+   "epic": null,
+   "phase": "Todo",
+   "situation": null,
+   "situation_since": null,
+   "labels": [],
+   "priority": 1,
+   "assignee": "tonypine",
+   "url": "https://linear.app/example/issue/TP-1700",
+   "created_at": "2026-10-01T09:00:00Z",
+   "phase_at": "2026-10-07T09:00:00Z",
+   "updated_at": "2026-10-07T09:00:00Z"
+  }
+ ]
+}

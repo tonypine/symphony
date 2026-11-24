@@ -1320,6 +1320,8 @@ extension SymphonyWindowModel {
         HomeActions(
             slotMove: { [weak self] move in self?.performHomeMove(move) },
             start: { [weak self] identifier in self?.homeQueueTask { await $0.perform(TicketStart.action(identifier)) } },
+            move: { [weak self] row, index, gap in self?.homeQueueTask { await $0.move(row, from: index, to: gap) } },
+            startOnSlot: { [weak self] identifier, slot in self?.homeQueueTask { await $0.start(identifier, slot: slot) } },
             setSlots: { [weak self] count in self?.homeQueueTask { await $0.setSlots(count) } },
             pick: { [weak self] id in self?.homeQueueTask { await $0.pick(view: id) } },
             show: { [weak self] range in self?.homeQueueTask { await $0.show(range) } },

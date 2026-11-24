@@ -44,7 +44,11 @@ public enum ControlAction: Equatable {
     case move(String, to: String, note: String?)
     /// Start now (TP-1330): Symphony starts the ticket's run at once, ahead of the dispatch queue and outside its
     /// order; it refuses, naming why, while Symphony or the repository is paused, a Question is open or a run works on it.
-    case start(String, note: String?)
+    /// With `slot` (from 1, TP-1610) it takes that slot: the ticket that held it stops and goes back to the queue's top.
+    case start(String, note: String?, slot: Int? = nil)
+    /// Moves the ticket to another place in the queue (`POST /api/v1/control/queue/move`, TP-1610): Home's drag and
+    /// drop. Symphony refuses, naming why, a place its dependencies forbid.
+    case queueMove(String, place: QueuePlace)
     /// Sets how many slots the factory runs, from 1 to 6 (`POST /api/v1/control/slots`, TP-1609): Home's slot count
     /// control. A free slot goes to the queue at once; a lowered count stops no ticket.
     case slots(Int)
@@ -169,6 +173,8 @@ public enum ControlAction: Equatable {
             return "api/v1/control/move"
         case .start:
             return "api/v1/control/start"
+        case .queueMove:
+            return "api/v1/control/queue/move"
         case .slots:
             return "api/v1/control/slots"
         case .decide:
@@ -227,7 +233,8 @@ public enum ControlAction: Equatable {
              let .move(identifier, _, _),
              let .decide(identifier, _, _, _), let .unblock(identifier), let .undo(identifier):
             return identifier
-        case .pause, .pauseWithReason, .pauseForUpdate, .resume, .resumeUpdate, .updateReady, .handover, .tryNow, .stop, .start, .slots, .message, .blocker,
+        case .pause, .pauseWithReason, .pauseForUpdate, .resume, .resumeUpdate, .updateReady, .handover, .tryNow, .stop, .start, .queueMove, .slots,
+             .message, .blocker,
              .priority, .label, .decision, .pauseRepository, .resumeRepository, .pauseProvider, .resumeProvider, .looked, .saveView,
              .deleteView:
             return nil
@@ -267,8 +274,15 @@ public enum ControlAction: Equatable {
             return ["issue_identifier": identifier, "reason": reason]
         case let .decisions(identifier, picks):
             return ["issue_identifier": identifier, "picks": picks.map(\.body)]
-        case let .backlog(identifier, note), let .cancel(identifier, note), let .start(identifier, note):
+        case let .backlog(identifier, note), let .cancel(identifier, note):
             return note.map { ["issue_identifier": identifier, "note": $0] } ?? ["issue_identifier": identifier]
+        case let .start(identifier, note, slot):
+            var body: [String: Any] = ["issue_identifier": identifier]
+            if let note { body["note"] = note }
+            if let slot { body["slot"] = slot }
+            return body
+        case let .queueMove(identifier, place):
+            return ["issue_identifier": identifier, place.body.key: place.body.value]
         case let .move(identifier, to, note):
             var body = ["issue_identifier": identifier, "to": to]
             if let note { body["note"] = note }
@@ -328,8 +342,10 @@ public enum ControlAction: Equatable {
             return "Couldn't cancel \(identifier)"
         case let .move(identifier, to, _):
             return "Couldn't move \(identifier) to \(to)"
-        case let .start(identifier, _):
-            return "Couldn't start \(identifier) now"
+        case let .start(identifier, _, slot):
+            return slot.map { "Couldn't start \(identifier) in slot \($0)" } ?? "Couldn't start \(identifier) now"
+        case let .queueMove(identifier, _):
+            return "Couldn't move \(identifier) in the queue"
         case let .slots(count):
             return "Couldn't set the slots to \(count)"
         case let .decide(identifier, _, _, _):
@@ -362,6 +378,24 @@ public enum ControlAction: Equatable {
             return draft.id == nil ? "Couldn't save the view “\(draft.name)”" : "Couldn't change the view “\(draft.name)”"
         case let .deleteView(_, name):
             return "Couldn't delete the view “\(name)”"
+        }
+    }
+}
+
+/// Where a queue move puts the ticket: the queue's top or end, or just after or before another ticket of its scope.
+public enum QueuePlace: Equatable {
+    case top
+    case end
+    case after(String)
+    case before(String)
+
+    /// The request's field and its value: `position` (`top`, `end`), `after` or `before`.
+    var body: (key: String, value: String) {
+        switch self {
+        case .top: ("position", "top")
+        case .end: ("position", "end")
+        case let .after(identifier): ("after", identifier)
+        case let .before(identifier): ("before", identifier)
         }
     }
 }
