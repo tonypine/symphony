@@ -55,16 +55,34 @@ public struct DoneRow: View {
         case check, identifier, title, epic, pullRequest, repo, when
     }
 
+    /// Where a done row stands inside an epic's block in the queue (TP-1645): an empty number cell as wide as the
+    /// queue's, then the elbow one step in, so its check stands where its sub-rows' state glyphs do.
+    public struct Nesting: Equatable {
+        public var numberCell: CGFloat
+        public var depth: Int
+
+        public init(numberCell: CGFloat, depth: Int = 1) {
+            self.numberCell = numberCell
+            self.depth = depth
+        }
+    }
+
     let row: DoneRowModel
     let cells: Cells
     let hovered: Bool?
+    let nesting: Nesting?
+    let picked: Bool
     @State private var pointer = false
 
     /// The row of `row` with the trail's `cells`. `hovered` draws the hover still, for a story; nil follows the pointer.
-    public init(_ row: DoneRowModel, cells: Cells = .all, hovered: Bool? = nil) {
+    /// With `nesting` it is an epic's quiet done row in the queue: no number, the elbow, the title secondary; `picked`
+    /// dims it while its epic is dragged.
+    public init(_ row: DoneRowModel, cells: Cells = .all, hovered: Bool? = nil, nesting: Nesting? = nil, picked: Bool = false) {
         self.row = row
         self.cells = cells
         self.hovered = hovered
+        self.nesting = nesting
+        self.picked = picked
     }
 
     /// The parts a row with `cells` draws, in order. The epic's cell is drawn only for a ticket that has one; the pull
@@ -82,12 +100,17 @@ public struct DoneRow: View {
         let queue = DesignTokens.HomeQueue.self
         let shape = RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous)
         HStack(spacing: queue.rowPartGap) {
+            if let nesting {
+                Color.clear.frame(width: nesting.numberCell, height: queue.numberHeight)
+                if nesting.depth > 1 { Color.clear.frame(width: queue.subRowStep * Double(nesting.depth - 1) - queue.rowPartGap) }
+                QueueElbow()
+            }
             Image(systemName: queue.doneStatus.symbol)
                 .font(DesignTokens.TypeStyle.font(size: DesignTokens.Row.leadGlyph, weight: DesignTokens.Row.titleWeight))
                 .foregroundStyle(queue.doneStatus.tint)
                 .frame(width: DesignTokens.Row.leadSize, height: DesignTokens.Row.leadSize)
-                .padding(.leading, queue.doneLeadLeading)
-                .padding(.trailing, queue.doneLeadTrailing)
+                .padding(.leading, nesting == nil ? queue.doneLeadLeading : queue.leadMargin)
+                .padding(.trailing, nesting == nil ? queue.doneLeadTrailing : queue.leadMargin)
                 .accessibilityHidden(true)
             HStack(spacing: queue.rowMainGap) {
                 Text(row.identifier)
@@ -97,10 +120,12 @@ public struct DoneRow: View {
                     .foregroundStyle(DesignTokens.TextColor.secondary.color)
                     .frame(minWidth: QueueRow.identifierWidth, alignment: .leading)
                 Text(row.title)
-                    .font(DesignTokens.TypeStyle.font(size: DesignTokens.TypeStyle.rowTitle.size, weight: DesignTokens.Row.titleWeight))
+                    .font(DesignTokens.TypeStyle.font(
+                        size: DesignTokens.TypeStyle.rowTitle.size, weight: nesting == nil ? DesignTokens.Row.titleWeight : queue.quietTitleWeight
+                    ))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .foregroundStyle(DesignTokens.TextColor.primary.color)
+                    .foregroundStyle((nesting == nil ? DesignTokens.TextColor.primary : DesignTokens.TextColor.secondary).color)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             trail
@@ -110,6 +135,7 @@ public struct DoneRow: View {
         .frame(height: queue.rowHeight)
         .background { if hovered ?? pointer { shape.fill(DesignTokens.StateSurface.hover.fill) } }
         .contentShape(shape)
+        .opacity(picked ? queue.draggedOpacity : 1)
         .onHover { pointer = $0 }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(Self.accessibilityLabel(row, cells: cells))

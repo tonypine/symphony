@@ -1897,6 +1897,26 @@ public enum DesignTokens {
         public static let trailGlyph: Double = 11
         public static let trailGlyphGap = Space.s1
 
+        // Epics and dependencies in the queue (TP-1645: `.row.sub`, `.elbow`, `.q-done`, `.pos .n i` in page.css).
+        /// A sub-row's step in: the lead cell (its glyph and its room) and the gap after it, so a sub-ticket's state glyph
+        /// starts where its epic's identifier starts.
+        public static let subRowStep = Row.leadSize + 2 * leadMargin + rowPartGap
+        /// The elbow that fills the step: a 14 pt glyph, drawn on a 16-unit grid with a 1.5-unit stroke, in the 18 pt
+        /// cell under the epic's chevron, in the tertiary text colour.
+        public static let elbowGlyph: Double = 14
+        public static let elbowGrid: Double = 16
+        public static let elbowStroke: Double = 1.5
+        public static let elbowColor = TextColor.tertiary
+        /// The epic's chevron in the state glyph's cell.
+        public static let chevronGlyph = twistGlyph
+        /// The done count as a control: 2 pt above and below and 6 pt at the sides, inside the trail's columns, on the
+        /// pressed surface under the pointer and while pressed, its corner 6 pt.
+        public static let doneCountInsetX: Double = 6
+        public static let doneCountInsetY: Double = 2
+        public static let doneCountRadius: Double = 6
+        /// An epic's done row in the queue is quiet: its title secondary, at the regular weight.
+        public static let quietTitleWeight = 400
+
         /// The number as a row shows it: with a comma between thousands ("1,243").
         public static func number(_ value: Int) -> String {
             let formatter = NumberFormatter()
@@ -1914,6 +1934,15 @@ public enum DesignTokens {
             let pad = max(numberMinDigits - digits.filter { $0 == "0" }.count, 0)
             return String(repeating: "0", count: pad) + String(digits)
         }
+
+        /// The characters the part after the point of a sub-ticket's number is measured on: `characters` of it, the point
+        /// and each digit a "0" (the figures are tabular); none while no sub-row is on screen.
+        public static func fractionTemplate(characters: Int) -> String {
+            characters > 0 ? "." + String(repeating: "0", count: characters - 1) : ""
+        }
+
+        /// An epic's done count: "2 of 11 done".
+        public static func doneCount(done: Int, total: Int) -> String { "\(done) of \(total) done" }
 
         /// "5 of 9 checks proved", "1 of 1 check proved".
         public static func checks(proved: Int, total: Int) -> String {
