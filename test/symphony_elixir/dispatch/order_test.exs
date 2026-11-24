@@ -292,7 +292,16 @@ defmodule SymphonyElixir.Dispatch.OrderTest do
   # Stores that `issue` depends on the ticket `{id, identifier, phase}` (`:done`), with a record of each.
   defp depends_on!(%Issue{} = issue, {on_id, on_identifier, on_phase}) do
     put_record!(issue)
-    :ok = RunStore.put_ticket_state(%{repo_key: "default", issue_id: on_id, issue_identifier: on_identifier, title: "Ticket #{on_identifier}", phase: on_phase})
+
+    :ok =
+      RunStore.put_ticket_state(%{
+        repo_key: "default",
+        issue_id: on_id,
+        issue_identifier: on_identifier,
+        title: "Ticket #{on_identifier}",
+        phase: on_phase
+      })
+
     :ok = RunStore.add_dependency(issue.id, on_id, :done)
   end
 

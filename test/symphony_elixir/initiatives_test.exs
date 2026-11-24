@@ -37,12 +37,12 @@ defmodule SymphonyElixir.InitiativesTest do
   # The stored dependencies `live/2` reads (`:dependencies`): by sub-ticket id, each `{identifier, phase}`
   # it depends on (`:done`), with a record in that phase (none for a nil phase).
   defp stored(by_id) do
-    fn id ->
-      for {identifier, phase} <- Map.get(by_id, id, []) do
-        record = if phase, do: %{issue_id: "id-" <> identifier, issue_identifier: identifier, phase: phase, phase_at: ~U[2026-10-06 09:00:00Z]}
-        {%{issue_id: "id-" <> identifier, identifier: nil, kind: :done}, record}
-      end
-    end
+    fn id -> for {identifier, phase} <- Map.get(by_id, id, []), do: stored_entry(identifier, phase) end
+  end
+
+  defp stored_entry(identifier, phase) do
+    record = if phase, do: %{issue_id: "id-" <> identifier, issue_identifier: identifier, phase: phase, phase_at: ~U[2026-10-06 09:00:00Z]}
+    {%{issue_id: "id-" <> identifier, identifier: nil, kind: :done}, record}
   end
 
   defp live(initiative, settings, dependencies, opts \\ []) do
@@ -209,7 +209,10 @@ defmodule SymphonyElixir.InitiativesTest do
 
       assert Enum.map(live.sub_tickets, & &1.identifier) == ["BIL-5", "BIL-3", "BIL-4", "BIL-2", "BIL-6", "BIL-7"]
       bil_4 = Enum.find(live.sub_tickets, &(&1.identifier == "BIL-4"))
-      assert [%{identifier: "BIL-3", open: true}, %{identifier: nil, state: nil, open: true, completed_at: nil}] = bil_4.blocked_by
+
+      assert [%{identifier: "BIL-3", open: true}, %{identifier: nil, state: nil, open: true, completed_at: nil}] =
+               bil_4.blocked_by
+
       assert bil_4.waiting_for == ["BIL-3", nil]
     end
   end

@@ -357,7 +357,14 @@ defmodule SymphonyElixir.TicketStateTest do
     test "keeps each sub-issue's id, identifier and state, and reads a stored identifier as a link with neither id nor state" do
       record =
         TicketState.normalize(%{
-          sub_issues: ["ACME-5", %{id: "issue-6", identifier: " ACME-6 ", state: "Todo", title: "dropped"}, %{id: "issue-7", identifier: nil, state: ""}, %{state: "Todo"}, 7, " "]
+          sub_issues: [
+            "ACME-5",
+            %{id: "issue-6", identifier: " ACME-6 ", state: "Todo", title: "dropped"},
+            %{id: "issue-7", identifier: nil, state: ""},
+            %{state: "Todo"},
+            7,
+            " "
+          ]
         })
 
       assert record.sub_issues == [

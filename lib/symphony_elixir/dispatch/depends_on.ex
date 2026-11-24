@@ -72,7 +72,11 @@ defmodule SymphonyElixir.Dispatch.DependsOn do
   @doc "The identifiers of the ticket `issue_id`'s open stored dependencies (`open_for/1`), each once."
   @spec open_identifiers(String.t() | nil) :: [String.t()]
   def open_identifiers(issue_id) do
-    for {%{} = entry, record} <- open_for(issue_id), identifier = name_of(entry, record), is_binary(identifier), uniq: true, do: identifier
+    for {%{} = entry, record} <- open_for(issue_id),
+        identifier = name_of(entry, record),
+        is_binary(identifier),
+        uniq: true,
+        do: identifier
   end
 
   defp name_of(%{identifier: identifier}, _record) when is_binary(identifier), do: identifier

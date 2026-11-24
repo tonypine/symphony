@@ -6,6 +6,7 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
 
   alias SymphonyElixir.Dispatch.Order
   alias SymphonyElixir.{Home, Pauses, Situation, TicketState}
+  alias SymphonyElixir.Linear.Client
 
   @active_states ["Todo", "In Progress", "Code Review", "QA", "CI Fix", "Merging", "Rework"]
   @since ~U[2026-11-22 07:00:00Z]
@@ -220,7 +221,7 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
         "inverseRelations" => %{"nodes" => [%{"type" => "blocks", "issue" => %{"id" => "u", "identifier" => "MT-9", "state" => %{"name" => "In Progress"}}}]}
       }
 
-      linked = %{SymphonyElixir.Linear.Client.normalize_issue_for_test(node) | repo_key: "default", team: %{key: "Test"}}
+      linked = %{Client.normalize_issue_for_test(node) | repo_key: "default", team: %{key: "Test"}}
       refute Map.has_key?(Map.from_struct(linked), :blocked_by)
       recorded(issue("u", "MT-9", "In Progress"))
       recorded(linked)

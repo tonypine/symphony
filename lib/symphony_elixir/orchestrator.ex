@@ -5052,7 +5052,7 @@ defmodule SymphonyElixir.Orchestrator do
   # pauses), recomputed on every poll tick for the snapshot.
   defp put_blocked(%State{} = state, issues) do
     terminal_states = terminal_state_set()
-    open = for %Issue{id: issue_id} = issue <- issues, into: %{}, do: {issue_id, open_dependencies(issue, terminal_states)}
+    open = for %Issue{id: id} = issue <- issues, into: %{}, do: {id, open_dependencies(issue, terminal_states)}
     blocked? = &(Map.get(open, &1.id, []) != [])
 
     blocked =

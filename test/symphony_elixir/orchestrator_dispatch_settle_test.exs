@@ -206,7 +206,15 @@ defmodule SymphonyElixir.OrchestratorDispatchSettleTest do
 
   # The ticket the new one depends on, recorded in Todo: a `:done` dependency on it is unmet.
   defp upstream! do
-    upstream = %Issue{id: "id-MT-6", identifier: "MT-6", title: "Upstream", state: "Todo", repo_key: "default", updated_at: DateTime.truncate(DateTime.utc_now(), :second)}
+    upstream = %Issue{
+      id: "id-MT-6",
+      identifier: "MT-6",
+      title: "Upstream",
+      state: "Todo",
+      repo_key: "default",
+      updated_at: DateTime.truncate(DateTime.utc_now(), :second)
+    }
+
     {:ok, _outcome} = TicketObservation.observe("default", upstream, source: :webhook)
     upstream
   end

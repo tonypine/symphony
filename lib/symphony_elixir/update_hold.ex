@@ -41,9 +41,10 @@ defmodule SymphonyElixir.UpdateHold do
 
   require Logger
 
-  alias SymphonyElixir.{BuildInfo, Pauses, ReleaseBuild, ReleaseGate, RunStore, SubIssueWait, TicketPullRequest, TicketState}
+  alias SymphonyElixir.{BuildInfo, Pauses, ReleaseBuild, ReleaseGate, RunStore, SubIssueWait}
   alias SymphonyElixir.GitHub.{PullRequest, Repo}
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.{TicketPullRequest, TicketState}
 
   @skip_label "skip-update-hold"
   @todo_state "todo"

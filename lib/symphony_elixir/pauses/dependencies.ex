@@ -98,8 +98,7 @@ defmodule SymphonyElixir.Pauses.Dependencies do
     skip? = skip_labelled?(record)
     now? = skip? or normalize(record.phase) == @todo_state
 
-    retired = for reason <- reasons, Pauses.ticket_source(reason) == :dependency, reason.set_by == @retired_setter, do: reason.waits_on.identifier
-    reported = for reason <- reasons, Pauses.ticket_source(reason) == :dependency, reason.set_by != @retired_setter, do: reason.waits_on.identifier
+    {retired, reported} = dependency_reasons(reasons)
 
     {stale, cache} = met_dependencies(reported, record, {now?, cache}, opts)
     {lifted, cache} = landed_fix_tickets(held(reasons, :fix_ticket), {skip?, terminal, cache}, opts)
@@ -109,6 +108,17 @@ defmodule SymphonyElixir.Pauses.Dependencies do
     Enum.each(lifted, &lift_fix_ticket(ticket, &1, opts))
 
     {length(retired) + length(stale) + length(lifted), cache}
+  end
+
+  # The identifiers of the `:dependency` reasons the retired "Blocked-by links" hold set, and of those
+  # a run's block report set.
+  defp dependency_reasons(reasons) do
+    {retired, reported} =
+      reasons
+      |> Enum.filter(&(Pauses.ticket_source(&1) == :dependency))
+      |> Enum.split_with(&(&1.set_by == @retired_setter))
+
+    {Enum.map(retired, & &1.waits_on.identifier), Enum.map(reported, & &1.waits_on.identifier)}
   end
 
   # The identifiers of the `:ticket` reasons of `source`.
@@ -123,15 +133,13 @@ defmodule SymphonyElixir.Pauses.Dependencies do
     open_identifiers = for {entry, on} <- open, identifier = name(entry, on), do: identifier
     met = Enum.reject(identifiers, &(&1 in open_identifiers))
 
-    if now? do
-      {met, cache}
-    else
-      Enum.reduce(met, {[], cache}, fn identifier, {lifted, cache} ->
-        case awaiting_released(identifier, cache, opts) do
-          {nil, cache} -> {lifted ++ [identifier], cache}
-          {_awaiting, cache} -> {lifted, cache}
-        end
-      end)
+    if now?, do: {met, cache}, else: Enum.reduce(met, {[], cache}, &lift_released(&1, &2, opts))
+  end
+
+  defp lift_released(identifier, {lifted, cache}, opts) do
+    case awaiting_released(identifier, cache, opts) do
+      {nil, cache} -> {lifted ++ [identifier], cache}
+      {_awaiting, cache} -> {lifted, cache}
     end
   end
 

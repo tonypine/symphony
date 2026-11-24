@@ -302,6 +302,13 @@ defmodule SymphonyElixir.Inbox.References do
         do: identifier
   end
 
+  defp blocked_by_links(record, ctx) do
+    for dependency <- record.depends_on,
+        identifier = dependency_identifier(dependency, ctx),
+        is_binary(identifier),
+        do: link(identifier, dependency_phase(dependency, ctx), ctx)
+  end
+
   defp dependency_identifier(%{identifier: identifier}, _ctx) when is_binary(identifier), do: identifier
   defp dependency_identifier(%{issue_id: issue_id}, ctx), do: ctx.by_id |> Map.get(issue_id, %{}) |> Map.get(:issue_identifier)
 
@@ -467,7 +474,7 @@ defmodule SymphonyElixir.Inbox.References do
     %{
       parent: record.parent,
       pull_request: own_pull_request(record, item, ctx),
-      blocked_by: for(dependency <- record.depends_on, identifier = dependency_identifier(dependency, ctx), is_binary(identifier), do: link(identifier, dependency_phase(dependency, ctx), ctx)),
+      blocked_by: blocked_by_links(record, ctx),
       blocks: for(other <- ctx.records, blocks?(other, record), do: %{identifier: other.issue_identifier, title: other.title, state: other.phase}),
       related: [],
       earlier_decisions: earlier_decisions(record)

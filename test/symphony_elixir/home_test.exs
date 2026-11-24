@@ -182,8 +182,11 @@ defmodule SymphonyElixir.HomeTest do
 
       read = Home.read(walk(["MT-2", "MT-3", "MT-4", "MT-5"]), [landed, queued, linked, released, waits], live())
 
-      assert [%{identifier: "MT-2", children: [%{identifier: "MT-5"}]}, %{identifier: "MT-3", after: nil}, %{identifier: "MT-4", after: nil}] =
-               read.queue.roots
+      assert [
+               %{identifier: "MT-2", children: [%{identifier: "MT-5"}]},
+               %{identifier: "MT-3", after: nil},
+               %{identifier: "MT-4", after: nil}
+             ] = read.queue.roots
 
       assert read.outside == %{backlog: 0, below_priority: 0, epic: 0, behind: 0}
     end

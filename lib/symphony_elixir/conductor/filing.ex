@@ -241,9 +241,10 @@ defmodule SymphonyElixir.Conductor.Filing do
   end
 
   # The open ticket that already covers the problem: the one the turn named, else one it already
-  # filed from this ticket in the same repo under the same title, else an open ticket this one already
-  # depends on (stored by Symphony: a split, the Director or the self-heal lane) under the same title. A named ticket that
-  # is terminal, unreadable or the current one covers nothing, and a new ticket is filed.
+  # filed from this ticket in the same repo under the same title, else an open ticket this one
+  # already depends on (stored by Symphony: a split, the Director or the self-heal lane) under the
+  # same title. A named ticket that is terminal, unreadable or the current one covers nothing, and a
+  # new ticket is filed.
   defp existing(route, issue, events, opts) do
     named = route.existing && open_ticket(route.existing, issue, opts)
     named || already_filed(route, issue, events, opts) || linked_blocker(route, issue, opts)

@@ -2429,8 +2429,11 @@ defmodule SymphonyElixir.AgentTools.Linear do
   defp related_issues(%{"id" => issue_id}) when is_binary(issue_id) do
     blocked_by =
       case RunStore.dependencies(issue_id) do
-        entries when is_list(entries) -> for {entry, record} <- entries, do: stored_relation("inverse_relation", entry.issue_id, entry.identifier, record)
-        {:error, _reason} -> []
+        entries when is_list(entries) ->
+          for {entry, record} <- entries, do: stored_relation("inverse_relation", entry.issue_id, entry.identifier, record)
+
+        {:error, _reason} ->
+          []
       end
 
     blocks =

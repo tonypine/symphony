@@ -145,7 +145,9 @@ defmodule SymphonyElixir.UpdateHoldTest do
       cache = not_included_cache()
       no_compare = fn _url, _sha, _build -> flunk("cached") end
 
-      assert resolve([issue], cache: cache, merge_commit_sha: fn _url -> flunk("cached") end, commit_included?: no_compare) == cache
+      no_sha = fn _url -> flunk("cached") end
+
+      assert resolve([issue], cache: cache, merge_commit_sha: no_sha, commit_included?: no_compare) == cache
     end
 
     test "a build without a sha or repository holds nothing and looks nothing up" do

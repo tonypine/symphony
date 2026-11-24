@@ -450,8 +450,11 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     test "wraps subissue parent and related issue summaries" do
       # The tickets it depends on and those depending on it are Symphony's stored dependencies; the
       # blocker links Linear's answer carries are not read.
-      for {id, identifier, title} <- [{"issue-current", "ACME-0", "Current"}, {"related-1", "ACME-1", "Related <title>"}, {"related-2", "ACME-2", "Inverse <title>"}] do
-        :ok = RunStore.put_ticket_state(%{repo_key: "repo-a", issue_id: id, issue_identifier: identifier, title: title, phase: "Todo"})
+      records = [{"issue-current", "ACME-0", "Current"}, {"related-1", "ACME-1", "Related <title>"}, {"related-2", "ACME-2", "Inverse <title>"}]
+
+      for {id, identifier, title} <- records do
+        record = %{repo_key: "repo-a", issue_id: id, issue_identifier: identifier, title: title}
+        :ok = RunStore.put_ticket_state(Map.put(record, :phase, "Todo"))
       end
 
       :ok = RunStore.add_dependency("related-1", "issue-current", :done)
@@ -530,7 +533,8 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       ]
 
       for {id, identifier, title, phase} <- records do
-        :ok = RunStore.put_ticket_state(%{repo_key: "repo-a", issue_id: id, issue_identifier: identifier, title: title, phase: phase})
+        record = %{repo_key: "repo-a", issue_id: id, issue_identifier: identifier, title: title}
+        :ok = RunStore.put_ticket_state(Map.put(record, :phase, phase))
       end
 
       :ok = RunStore.add_dependency("issue-fv", "issue-2", :done)
@@ -3412,12 +3416,17 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       %{"type" => type, "issue" => %{"identifier" => identifier, "state" => state && %{"name" => state}}}
     end
 
+    defp put_record(issue_id, identifier, phase) do
+      record = %{repo_key: "repo-a", issue_id: issue_id, issue_identifier: identifier}
+      SymphonyElixir.RunStore.put_ticket_state(Map.put(record, :phase, phase))
+    end
+
     # The ticket's stored dependencies, each on a ticket Symphony keeps a record of.
     defp depends_on!(issue_id, dependencies) do
-      :ok = SymphonyElixir.RunStore.put_ticket_state(%{repo_key: "repo-a", issue_id: issue_id, issue_identifier: "TP-1", phase: "Rework"})
+      :ok = put_record(issue_id, "TP-1", "Rework")
 
       for {on_id, identifier, phase} <- dependencies do
-        :ok = SymphonyElixir.RunStore.put_ticket_state(%{repo_key: "repo-a", issue_id: on_id, issue_identifier: identifier, phase: phase})
+        :ok = put_record(on_id, identifier, phase)
         :ok = SymphonyElixir.RunStore.add_dependency(issue_id, on_id, :done)
       end
     end

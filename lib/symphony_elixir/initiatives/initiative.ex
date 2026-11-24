@@ -21,8 +21,8 @@ defmodule SymphonyElixir.Initiatives.Initiative do
   returns: the counts and landing order then cover only what was read.
   """
 
-  alias SymphonyElixir.{PlanReview, RunStore, TicketState}
   alias SymphonyElixir.Dispatch.DependsOn
+  alias SymphonyElixir.{PlanReview, RunStore, TicketState}
 
   @machine_states MapSet.new(["code review", "qa", "merging", "ci fix", "epic review"])
   @stages ~w(done working you queued blocked)

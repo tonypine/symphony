@@ -1323,7 +1323,8 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     setup do
       # TP-10 depends on its sibling TP-2, as Symphony stores it; the parent and siblings are read from Linear.
       for {id, identifier} <- [{"issue-fv", "TP-10"}, {"issue-2", "TP-2"}] do
-        :ok = RunStore.put_ticket_state(%{repo_key: "repo-a", issue_id: id, issue_identifier: identifier, title: "Slice", phase: "Todo"})
+        :ok =
+          RunStore.put_ticket_state(%{repo_key: "repo-a", issue_id: id, issue_identifier: identifier, title: "Slice", phase: "Todo"})
       end
 
       :ok = RunStore.add_dependency("issue-fv", "issue-2", :done)

@@ -207,7 +207,8 @@ defmodule SymphonyElixir.Pauses.DependenciesTest do
       assert {0, _cache} = sweep(issue(), build(), UpdateHold.empty_cache(), open_dependencies: open)
       assert Pauses.why(@ticket) == ["Waiting for TP-997 to finish", "Waiting for TP-998 to finish"]
 
-      assert {2, _cache} = sweep(issue(), build(), UpdateHold.empty_cache(), open_dependencies: fn @issue_id -> [unnamed] end)
+      open = fn @issue_id -> [unnamed] end
+      assert {2, _cache} = sweep(issue(), build(), UpdateHold.empty_cache(), open_dependencies: open)
       refute Pauses.paused?(@ticket)
     end
   end

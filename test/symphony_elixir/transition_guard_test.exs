@@ -2,7 +2,9 @@ defmodule SymphonyElixir.TransitionGuardTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.Dispatch.DependsOn
   alias SymphonyElixir.{Pauses, Questions, TicketChecks, TicketState, TransitionGuard}
+  alias SymphonyElixir.Pauses.Dependencies
 
   defmodule FakeTracker do
     def update_issue_state(issue_id, state) do
@@ -806,7 +808,7 @@ defmodule SymphonyElixir.TransitionGuardTest do
 
     defp sweep_block_report do
       issue = %SymphonyElixir.Linear.Issue{id: "issue-12", identifier: "MT-12", state: "In Progress", labels: []}
-      SymphonyElixir.Pauses.Dependencies.sweep([issue], ["Done", "Canceled"], repo_key: "repo-guard", tracker: NoTracker, build: %{sha: nil, repo: nil})
+      Dependencies.sweep([issue], ["Done", "Canceled"], repo_key: "repo-guard", tracker: NoTracker, build: %{sha: nil, repo: nil})
     end
 
     defp report(open_blockers, ctx \\ %{}) do
@@ -840,7 +842,7 @@ defmodule SymphonyElixir.TransitionGuardTest do
 
       # What the run's caller fills the report with: the open stored dependencies alone. A blocker link
       # on the Linear issue (say to TP-999) is never read, so it is never named.
-      open = SymphonyElixir.Dispatch.DependsOn.open_identifiers("issue-12")
+      open = DependsOn.open_identifiers("issue-12")
       assert open == ["TP-997"]
 
       assert {:hold, :blocked, %{waits_on: %{type: "dependency", keys: ["TP-997"]}}} = report(open)

@@ -162,7 +162,9 @@ defmodule SymphonyElixir.SubIssueWaitTest do
       blocked = %Issue{id: "blocked-by-groomed", identifier: "MT-2102", title: "Next", state: "Todo"}
 
       # Its pull request is still open: the stored dependency holds it.
-      assert [%{issue_id: "blocked-by-groomed", blockers: [%{identifier: "MT-2101"}]}] = Orchestrator.put_blocked_for_test(state, [blocked]).blocked
+      assert [%{issue_id: "blocked-by-groomed", blockers: [%{identifier: "MT-2101"}]}] =
+               Orchestrator.put_blocked_for_test(state, [blocked]).blocked
+
       refute Orchestrator.should_dispatch_issue_for_test(blocked, state)
 
       merged!("blocker-groomed")
