@@ -6,7 +6,7 @@ defmodule SymphonyElixir.Shipped do
   A ticket counts as merged when Symphony noted its `issue_completed` event, on the host's local
   day, as `shipped_today` in `/api/v1/state` counts it, so today's count matches the Overview's
   Shipped today. Its initiative is the plan ticket kept on its run when the completion was noted,
-  else the cached plan that lists it (`SymphonyElixir.Initiatives`). Its time from Todo to Done
+  else the parent Symphony split that lists it (`SymphonyElixir.Initiatives`). Its time from Todo to Done
   runs from Symphony's first claim of it (the `claim` signal: the move out of Todo), else its first
   run, to the merge.
   """
@@ -36,7 +36,7 @@ defmodule SymphonyElixir.Shipped do
         local_date: local_date,
         issue_runs: Keyword.get(opts, :issue_runs, &RunStore.list_issue_runs/2),
         claims: opts |> Keyword.get_lazy(:ticket_states, &RunStore.list_all_ticket_states/0) |> claims(),
-        initiatives: Keyword.get_lazy(opts, :initiatives, &Initiatives.cached/0)
+        initiatives: Keyword.get_lazy(opts, :initiatives, &Initiatives.read/0)
       }
 
       tickets = Enum.map(runs, &ticket(&1, context))

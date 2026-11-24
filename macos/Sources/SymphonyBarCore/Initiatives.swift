@@ -1,7 +1,7 @@
 import Foundation
 
-/// The plan tickets Symphony follows to done (D5), as `GET /api/v1/initiatives` serves them. Symphony builds the list
-/// on its own poll, so reading it costs no Linear request.
+/// The parents Symphony split, followed to done (D5), as `GET /api/v1/initiatives` serves them. Symphony builds the
+/// list from its own ticket records, so reading it costs no Linear request.
 public struct InitiativesPayload: Equatable {
     public static let path = "api/v1/initiatives"
 

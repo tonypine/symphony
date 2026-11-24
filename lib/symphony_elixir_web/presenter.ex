@@ -258,13 +258,14 @@ defmodule SymphonyElixirWeb.Presenter do
   defp dispatch_order_read(snapshot, records), do: DispatchOrder.read(Map.get(snapshot, :dispatch_order), records, Situation.live_facts(snapshot))
 
   @doc """
-  The plan tickets followed to done (`SymphonyElixir.Initiatives.list/4`): active ones first, then
-  in review, then done in the last 7 days, each with its sub-tickets in landing order, what each
-  waits on, counts by stage and its slot line from `epic_lanes`. Read from
-  what Symphony cached on its last poll: it makes no Linear request.
+  The parents Symphony split, followed to done (`SymphonyElixir.Initiatives.list/4`): active ones
+  first, then in review, then done in the last 7 days, each with its sub-tickets in landing order,
+  what each waits on, counts by stage and its slot line from `epic_lanes`. Read from Symphony's
+  records on each call (`initiatives` are `SymphonyElixir.Initiatives.read/1`'s options, the stored
+  records by default): it makes no Linear request.
   """
-  @spec initiatives_payload(GenServer.name(), timeout(), GenServer.name(), GenServer.name()) :: map()
-  def initiatives_payload(orchestrator, snapshot_timeout_ms, initiatives \\ Initiatives, inbox \\ Inbox) do
+  @spec initiatives_payload(GenServer.name(), timeout(), [Initiatives.opt()], GenServer.name()) :: map()
+  def initiatives_payload(orchestrator, snapshot_timeout_ms, initiatives \\ [], inbox \\ Inbox) do
     generated_at = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
 
     case Orchestrator.snapshot(orchestrator, snapshot_timeout_ms) do
@@ -274,13 +275,12 @@ defmodule SymphonyElixirWeb.Presenter do
 
         listed =
           snapshot
-          |> Initiatives.list(initiatives, inbox)
+          |> Initiatives.list(Keyword.put_new(initiatives, :records, Map.values(records)), inbox)
           |> Enum.sort_by(&{group_rank(&1.group), &1.identifier || ""})
           |> Enum.map(&initiative_payload(&1, lanes, records))
 
         %{
           generated_at: generated_at,
-          read: Initiatives.read?(initiatives),
           counts: Map.new(~w(active in_review done), fn group -> {group, Enum.count(listed, &(&1.group == group))} end),
           initiatives: listed
         }
@@ -297,9 +297,9 @@ defmodule SymphonyElixirWeb.Presenter do
   defp group_rank("in_review"), do: 1
   defp group_rank(_done), do: 2
 
-  # The epic's `started_at` is Linear's and its `tokens` the sum of its sub-tickets' ended runs, from
-  # their ledgers; each sub-ticket's `completed_at` is Linear's and its `pull_request` the number of
-  # the PR its record last read.
+  # The epic's `started_at` is when Symphony split it and its `tokens` the sum of its sub-tickets'
+  # ended runs, from their ledgers; each sub-ticket's `completed_at` is when its record entered a
+  # terminal phase and its `pull_request` the number of the PR its record last read.
   defp initiative_payload(initiative, lanes, records) do
     %{
       issue_id: initiative.id,

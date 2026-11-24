@@ -301,7 +301,7 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   end
 
   defp initiatives do
-    Endpoint.config(:initiatives) || SymphonyElixir.Initiatives
+    Endpoint.config(:initiatives) || []
   end
 
   defp snapshot_timeout_ms do

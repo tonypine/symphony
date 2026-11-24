@@ -404,6 +404,39 @@
         "exit": "success",
         "duration_ms": 480000
       }
+    },
+    {
+      "issue": "QA-117",
+      "minutes_ago": 600,
+      "type": "ticket.filed",
+      "payload": {
+        "identifier": "QA-118",
+        "kind": "split_off",
+        "title": "Store each run's spend by repository",
+        "by": "conductor"
+      }
+    },
+    {
+      "issue": "QA-117",
+      "minutes_ago": 599,
+      "type": "ticket.filed",
+      "payload": {
+        "identifier": "QA-119",
+        "kind": "split_off",
+        "title": "Show the spend row on the Home page",
+        "by": "conductor"
+      }
+    },
+    {
+      "issue": "QA-117",
+      "minutes_ago": 598,
+      "type": "ticket.filed",
+      "payload": {
+        "identifier": "QA-120",
+        "kind": "split_off",
+        "title": "Warn when a repository passes its monthly budget",
+        "by": "conductor"
+      }
     }
   ]
 }

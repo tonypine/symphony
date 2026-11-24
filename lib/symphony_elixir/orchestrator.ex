@@ -7382,7 +7382,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp maybe_emit_issue_completed(state, _issue, _source), do: state
 
   # The plan the ticket belongs to, kept on its run record for `/api/v1/shipped` after the plan
-  # leaves the Initiatives cache.
+  # leaves the Initiatives (7 days after it is done).
   defp completion_attrs(%Issue{id: issue_id}), do: put_present(%{}, :initiative, Initiatives.parent_of(issue_id))
 
   defp maybe_emit_lifecycle_event(state, event, issue, source, opts \\ [])

@@ -273,5 +273,76 @@
       "name": "Symphony QA seed",
       "slug_id": "symphony-qa-seed"
     }
+  },
+  {
+    "id": "qa-seed-117",
+    "identifier": "QA-117",
+    "state": "Waiting on sub-tickets",
+    "title": "Show each repository's spend on the Home page",
+    "description": "Show each repository's spend on the Home page.\n\nSeeded for the QA server: no repository holds this work.",
+    "labels": [],
+    "team": {
+      "key": "QA",
+      "name": "QA"
+    },
+    "project": {
+      "id": "qa-seed-project",
+      "name": "Symphony QA seed",
+      "slug_id": "symphony-qa-seed"
+    }
+  },
+  {
+    "id": "qa-seed-118",
+    "identifier": "QA-118",
+    "state": "Done",
+    "title": "Store each run's spend by repository",
+    "description": "Store each run's spend by repository.\n\nSeeded for the QA server: no repository holds this work.",
+    "labels": [],
+    "parentId": "qa-seed-117",
+    "team": {
+      "key": "QA",
+      "name": "QA"
+    },
+    "project": {
+      "id": "qa-seed-project",
+      "name": "Symphony QA seed",
+      "slug_id": "symphony-qa-seed"
+    }
+  },
+  {
+    "id": "qa-seed-119",
+    "identifier": "QA-119",
+    "state": "Todo",
+    "title": "Show the spend row on the Home page",
+    "description": "Show the spend row on the Home page.\n\nSeeded for the QA server: no repository holds this work.",
+    "labels": [],
+    "parentId": "qa-seed-117",
+    "team": {
+      "key": "QA",
+      "name": "QA"
+    },
+    "project": {
+      "id": "qa-seed-project",
+      "name": "Symphony QA seed",
+      "slug_id": "symphony-qa-seed"
+    }
+  },
+  {
+    "id": "qa-seed-120",
+    "identifier": "QA-120",
+    "state": "Todo",
+    "title": "Warn when a repository passes its monthly budget",
+    "description": "Warn when a repository passes its monthly budget.\n\nSeeded for the QA server: no repository holds this work.",
+    "labels": [],
+    "parentId": "qa-seed-117",
+    "team": {
+      "key": "QA",
+      "name": "QA"
+    },
+    "project": {
+      "id": "qa-seed-project",
+      "name": "Symphony QA seed",
+      "slug_id": "symphony-qa-seed"
+    }
   }
 ]

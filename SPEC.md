@@ -6674,22 +6674,24 @@ Minimum endpoints:
   - A page GitHub answered is kept for one poll interval (`polling.interval_ms`) per pull request.
 
 - `GET /api/v1/initiatives`
-  - Returns the plan tickets (label `plan` or `breakdown`) the operator follows to done, for the Mac
-    app's Initiatives: active ones, then those in review (the Plan Review state or `Epic Review`), then those done in the last 7 days. A canceled plan, one in
-    Backlog or Triage, and one done earlier are left out. Read-only, served like `/api/v1/state`,
-    and it MUST make no tracker request: the implementation reads the tracker on its own poll and
-    serves what it cached.
-  - The Elixir implementation (`SymphonyElixir.Initiatives`) reads Linear every
-    `polling.interval_ms`: one query per repository route lists the plan tickets in its scope with
-    their sub-issues, each sub-issue's state and the issues it is blocked by. A failed read keeps
-    the last list. Its Linear requests count as `initiatives`.
+  - Returns the parents Symphony split (its ticket record holds a `split` plan, or a sub-ticket it
+    filed under the parent, a `ticket.filed` of kind `split_off`) that the operator follows to done,
+    for the Mac app's Initiatives: active ones, then those in review (the Plan Review state or
+    `Epic Review`), then those done in the last 7 days. A tracker label (`plan`, `breakdown`) lists
+    nothing: a labelled ticket Symphony did not split is left out. A canceled parent, one in Backlog
+    or Triage, one with no sub-ticket yet and one done earlier are left out. Read-only, served like
+    `/api/v1/state`, and it MUST make no tracker request: the implementation builds the list from
+    its ticket records and ledgers on each read.
   - Each initiative has `issue_id`, `identifier`, `title`, `state`, `repo_key`, `url`, `group`
-    (`active`, `in_review`, `done`), `started_at` and `completed_at` (when the tracker says the plan
-    started and finished, or null), `tokens` (the sub-tickets' ended runs' tokens, summed from their
+    (`active`, `in_review`, `done`), `started_at` (when Symphony split it: its first split-off
+    filed, else its split plan, or null) and `completed_at` (when its record entered a terminal
+    phase, or null), `tokens` (the sub-tickets' ended runs' tokens, summed from their
     ledgers), `sub_tickets`, `counts` and `slot`.
-  - `sub_tickets` are the sub-issues in landing order (blocked-by order between them, then creation
-    order; a cycle is broken by creation order), canceled ones left out. Each has `issue_id`, `identifier`, `title`, `state`, `url`,
-    `completed_at` (when it landed, or null), `pull_request` (the number of the pull request its
+  - `sub_tickets` are the parent's sub-tickets as Symphony's records link them (the records that
+    name it as their parent and the sub-issues its record lists), a done one kept under its parent,
+    in landing order (the stored dependencies between them, then creation order; a cycle is broken
+    by creation order), canceled ones left out. Each has `issue_id`, `identifier`, `title`, `state`, `url`,
+    `completed_at` (when its record entered a terminal phase, or null), `pull_request` (the number of the pull request its
     record last read, or null), `blocked_by` (identifiers), `blockers` (each blocker's `identifier`, `open` and `completed_at`, when
     Linear says it was completed), `waits_on` and `waiting_for` (the open blockers it waits on when
     `waits_on` is `blocker`). `waits_on` is worked out at GET time from what Symphony knows
@@ -6701,8 +6703,7 @@ Minimum endpoints:
     `you`, `queued` (`slot`) and `blocked` (`blocker`).
   - `slot` is the initiative's line in `epic_lanes`, which the epic lanes no longer fill (Section
     8.3): null.
-  - The response has `generated_at`, `read` (false while the server has not read Linear yet),
-    `counts` (`active`, `in_review`, `done`) and `initiatives`. When the orchestrator snapshot times
+  - The response has `generated_at`, `counts` (`active`, `in_review`, `done`) and `initiatives`. When the orchestrator snapshot times
     out or is unavailable, return `200` with an `error` object in place of the list, as
     `/api/v1/state` does.
 
@@ -6734,14 +6735,15 @@ Minimum endpoints:
 - `GET /api/v1/shipped?days=N`
   - The tickets merged over the last `N` local days of the host ending today (default 7, at most
     90; any other value returns `400` `invalid_days`), for the Mac app's Shipped view. Read from the
-    run records, the tickets' signals (their events) and the cached initiatives; it MUST make no Linear
+    run records, the tickets' signals (their events) and the initiatives; it MUST make no Linear
     request. `/api/v1/history`'s `merged_per_day` only counts merges per UTC day, so the list is its
     own endpoint.
   - A ticket counts as merged when Symphony noted its completion, on the host's local day, as
     `shipped_today` in `/api/v1/state` counts it.
   - `tickets` lists each, newest first: `issue_id`, `identifier`, `title`, `repo_key`,
     `initiative` (the plan ticket's `identifier` and `title`, kept on the run when the completion
-    was noted, else the cached plan that lists it; null when none), `pr_url`, `merged_at`, `date`
+    was noted, else the parent Symphony split that lists it, `GET /api/v1/initiatives`'s read; null
+    when none), `pr_url`, `merged_at`, `date`
     (its local day), `todo_at` and `todo_to_done_seconds`: from Symphony's first claim of the ticket
     (its move out of Todo), else its first run, to the merge.
   - `shipped_per_day` has one entry per day (`date`, `shipped`). The response also has `days`,
@@ -6815,8 +6817,8 @@ Minimum endpoints:
     `repository_paused`. A pause or question change records a ticket event, so the live channel
     (`/api/v1/stream`) sends that ticket's notice once it commits.
   - An issue with a ticket state record or that the orchestrator tracks carries `connected`: where it
-    sits among the others, from the records, the ledgers, what the orchestrator holds and the cached
-    Initiatives (no tracker read per request). `parent` (`identifier`, `title`, `done`, `total`,
+    sits among the others, from the records, the ledgers, what the orchestrator holds and the
+    Initiatives' read (no tracker read per request). `parent` (`identifier`, `title`, `done`, `total`,
     `children` state types in landing order, or null), `epic` (`identifier`, `title`, `done`, `total`,
     `incomplete`, and `tickets` in chain order, each with its `situation` kind and whether it is
     `current`, or null; the same count as `/api/v1/initiatives`), and `sub_tickets`, `blocked_by`,
