@@ -293,7 +293,7 @@ defmodule SymphonyElixir.AgentRunnerTest do
 
   test "a test that hangs twice pauses the run on a Question with no session; going on past it resumes the run at once", ctx do
     ctx = Map.put(ctx, :orchestrator, self())
-    task = start_run(ctx, [{"mix test", [{:timeout, "hanging"}]}], in_progress_for(5))
+    task = start_run(ctx, [{"mix cover.changed", [{:timeout, "hanging"}]}], in_progress_for(5))
 
     assert_receive {:turn, 1, 1, _prompt}, 5_000
     assert_receive {:run_step, @issue_id, {:answer_wanted, runner, %{id: "tests", mode: "machine"}, question_id}}, 5_000
@@ -311,7 +311,7 @@ defmodule SymphonyElixir.AgentRunnerTest do
 
   test "a hung step run again runs once more, and the person's own words go to the agent step it returns to", ctx do
     ctx = Map.put(ctx, :orchestrator, self())
-    task = start_run(ctx, [{"mix test", [{:timeout, "hanging"}, {:timeout, "hanging"}, {:ok, {"ok", 0}}]}], in_progress_for(6))
+    task = start_run(ctx, [{"mix cover.changed", [{:timeout, "hanging"}, {:timeout, "hanging"}, {:ok, {"ok", 0}}]}], in_progress_for(6))
 
     assert_receive {:run_step, @issue_id, {:answer_wanted, runner, %{id: "tests"}, question_id}}, 5_000
     {:ok, _answered} = Questions.answer(@ticket, question_id, "Run it again")
@@ -325,7 +325,7 @@ defmodule SymphonyElixir.AgentRunnerTest do
 
     # Another run: the tests hang twice again, and the person answers in their own words.
     Application.put_env(:symphony_elixir, :walk_agent_turns, 0)
-    task = start_run(ctx, [{"mix test", [{:timeout, "hanging"}]}], in_progress_for(6))
+    task = start_run(ctx, [{"mix cover.changed", [{:timeout, "hanging"}]}], in_progress_for(6))
     assert_receive {:run_step, @issue_id, {:answer_wanted, runner, %{id: "tests"}, question_id}}, 5_000
     {:ok, _answered} = Questions.answer(@ticket, question_id, "Skip the slow suite and say so in the PR")
     send(runner, {:run_step_turn, @issue_id})
