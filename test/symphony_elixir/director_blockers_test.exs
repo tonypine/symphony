@@ -271,7 +271,8 @@ defmodule SymphonyElixir.DirectorBlockersTest do
       assert {:ok, _added} = dependency(:add, ticket, blocker, :released, ctx.opts)
       assert order([ticket, blocker, other]) == [blocker.issue_id, other.issue_id, ticket.issue_id]
       refute_receive :queue_changed, 50
-      refute_received {:queue_notice, _notice}
+      # The queue's topic is shared with the tests running beside this one: hear only this ticket.
+      refute_received {:queue_notice, %{issue_id: ^ticket_id}}
 
       # The blocker route's add moves the same way.
       assert {:ok, _added} = change(:add, blocker, other, ctx.opts)
