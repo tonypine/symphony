@@ -75,12 +75,17 @@ on a 12-core Mac; more than 8 parts is no faster there). It also makes a fix qui
   part, keeps every core so busy that the tests that measure time fail.
 - A test that failed runs once more, alone. One that passes then is named in the summary as
   unsteady and does not fail the run; one that fails twice does, and runs first next time.
+- A part that stopped at its 10 failures, or in which a `setup_all` failed, left tests that never
+  ran. The run then fails and names the part, also when every failed test passes alone.
 - It prints the failures and one summary line; each part's whole output is in
   `_build/test/parts/part-<n>.log`.
 
 `scripts/test-parts.sh --record` rewrites the weights file from a passing run; do that after
 adding or moving slow tests, so the parts stay even. A test file the weights don't list counts as
-an average one.
+an average one. A part holds whole files, so it can't be shorter than its longest file: split a
+test file by subject when its weight passes about 15 s, and move what the new files share to a
+module under `test/support/` (`test/test_helper.exs` loads it, `mix.exs`'s `test_ignore_filters`
+names it).
 
 In the test env the run store asks the disk for no flush after a write
 (`run_store_sync_log: false` in `config/config.exs`): the stores are temp folders, and the flushes

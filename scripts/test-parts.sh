@@ -16,6 +16,8 @@
 #    are printed, then one summary line.
 # 4. Tests that failed run once more, alone. The ones that pass then are named as unsteady and do
 #    not fail the run; the exit status is 0 when nothing failed twice.
+# 5. A part that stopped at its 10 failures, or in which a `setup_all` failed, left tests that never
+#    ran. The run then fails and names the part, also when every failed test passes alone.
 #
 # Each part's whole output stays in _build/test/parts/part-<n>.log.
 set -u
@@ -31,7 +33,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     -n) parts="$2"; shift 2 ;;
     --record) record=1; shift ;;
-    -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "test-parts: unknown argument $1" >&2; exit 64 ;;
   esac
 done
@@ -133,6 +135,8 @@ wait $pids
 
 failed_parts=0
 crashed=0
+# The parts that left tests unrun, one line each.
+stopped_early=""
 tests=0
 failures=0
 : >"$failed.next"
@@ -148,8 +152,22 @@ for part in $(seq 1 "$parts"); do
     failed_parts=$(( failed_parts + 1 ))
     failures_of "$out/part-$part.log" >>"$failed.next"
 
-    # No numbered failure: the part did not get as far as running tests (a compile error, a crash).
-    if [ -z "$(failures_of "$out/part-$part.log")" ]; then
+    if grep -q -e '^--max-failures reached, aborting test suite' "$out/part-$part.log"; then
+      stopped_early="${stopped_early}Part $part of $parts stopped at $max_failures failures after $(echo "$counts" | awk '{ print $1 + 0 }') tests: the rest of its tests did not run ($out/part-$part.log)
+"
+    fi
+
+    invalid=$(echo "$counts" | sed -n 's/.* \([0-9][0-9]*\) invalid.*/\1/p')
+
+    if [ "${invalid:-0}" -gt 0 ]; then
+      stopped_early="${stopped_early}Part $part of $parts did not run $invalid tests, a setup_all failed ($out/part-$part.log):
+$(grep -E '^ +[0-9]+\) .*: failure on setup_all callback' "$out/part-$part.log" | sed 's/^ *[0-9]*) /  /')
+"
+    fi
+
+    # No numbered failure and no failed setup_all: the part did not get as far as running tests
+    # (a compile error, a crash).
+    if [ -z "$(failures_of "$out/part-$part.log")" ] && [ "${invalid:-0}" -eq 0 ]; then
       crashed=$(( crashed + 1 ))
       echo "Part $part of $parts ended without running its tests:"
       tail -n 60 "$out/part-$part.log"
@@ -176,14 +194,26 @@ fi
 sort -u "$failed.next" >"$failed"
 rm -f "$failed.next"
 
+# Says which parts left tests unrun and ends the run as failed.
+fail_stopped_early() {
+  printf '%s' "$stopped_early"
+  echo "test-parts: tests did not run, $1 ($tests tests ran, $(( $(date +%s) - started )) s)"
+  exit 1
+}
+
 # A test that measures time can fail while every core is busy. The failed tests run once more,
 # alone: the ones that pass are named as unsteady and do not fail the run.
 again=$(cat "$failed")
 count=$(wc -l <"$failed" | tr -d ' ')
 
+# Only a setup_all failed: there is no failed test to run again.
+[ -n "$again" ] || [ -z "$stopped_early" ] || [ "$crashed" -ne 0 ] || fail_stopped_early "a setup_all failed"
+
 if [ "$crashed" -eq 0 ] && [ -n "$again" ] && [ "$count" -le 30 ]; then
   # shellcheck disable=SC2086
   if mix test $again >"$out/retry.log" 2>&1; then
+    # The failed tests stay in the list, so they run first next time.
+    [ -z "$stopped_early" ] || fail_stopped_early "though the $count tests that failed passed alone"
     rm -f "$failed"
     echo "test-parts: $tests tests passed in $parts parts, $(( $(date +%s) - started )) s; $count failed beside the others and passed alone:"
     sed 's/^/  /' <<EOF
@@ -202,5 +232,6 @@ else
   done
 fi
 
+printf '%s' "$stopped_early"
 echo "test-parts: $(wc -l <"$failed" | tr -d ' ') tests fail ($failures failures in $failed_parts of $parts parts, $tests tests ran, $(( $(date +%s) - started )) s); they run first next time"
 exit 1
