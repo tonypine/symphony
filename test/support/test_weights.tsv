@@ -39,7 +39,9 @@ test/symphony_elixir/agent_tools_linear_test.exs	1.5
 test/symphony_elixir/agent_tools_push_check_test.exs	3.8
 test/symphony_elixir/agent_tools_secret_scanner_test.exs	0.1
 test/symphony_elixir/aggregate_test.exs	0.1
-test/symphony_elixir/app_server_test.exs	22.0
+test/symphony_elixir/app_server_approvals_test.exs	5.1
+test/symphony_elixir/app_server_launch_test.exs	6.9
+test/symphony_elixir/app_server_transport_test.exs	10.0
 test/symphony_elixir/artifacts/store_test.exs	0.0
 test/symphony_elixir/artifacts/transcript_test.exs	0.0
 test/symphony_elixir/artifacts_test.exs	0.3
