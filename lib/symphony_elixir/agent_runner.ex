@@ -1536,7 +1536,8 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp hand_off_machine_head(%Issue{} = issue, %{opts: opts} = run_context) do
     head = read_workspace_head(run_context.workspace, run_context.worker_host, opts)
-    fingerprint = progress_fingerprint(head, read_workspace_tree(run_context.workspace, run_context.worker_host, opts), issue, opts)
+    tree = read_workspace_tree(run_context.workspace, run_context.worker_host, opts)
+    fingerprint = progress_fingerprint(head, tree, issue, opts)
     run_context = %{run_context | progress: %{run_context.progress | head: head, fingerprint: fingerprint}}
 
     # An answered rework goes back to QA ahead of the Code Review handoff, as after a turn
