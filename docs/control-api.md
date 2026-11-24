@@ -394,7 +394,7 @@ link, where each may be null.
 | Field | What it holds |
 | --- | --- |
 | `identifier`, `title` | The plan ticket. |
-| `done`, `total` | Its progress: sub-tickets completed, of all of them but the canceled ones. It equals the same plan's count on `GET /api/v1/initiatives`, which reads the same cache. |
+| `done`, `total` | Its progress: sub-tickets completed, of all of them but the canceled ones. It equals the same plan's count on `GET /api/v1/initiatives`, which reads the same records. |
 | `incomplete` | Whether Linear had more sub-tickets than the read returned, as on the Initiatives. |
 | `tickets` | The sub-tickets in chain order: `identifier`, `title`, `state`, `situation` (the kind of its `situation`, null without a record) and `current`, true on this ticket. |
 

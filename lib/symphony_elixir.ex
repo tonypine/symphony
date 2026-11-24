@@ -123,7 +123,6 @@ defmodule SymphonyElixir.Application do
              ci_child_spec(system_config),
              human_actions_child_spec(system_config),
              report_scheduler_child_spec(),
-             initiatives_child_spec(system_config),
              SymphonyElixir.Setup,
              SymphonyElixir.HttpServer,
              # After the HTTP server: a relay forwards to the port it listens on.
@@ -276,12 +275,6 @@ defmodule SymphonyElixir.Application do
   defp ci_child_spec(%SystemSchema{repos: repos}) do
     if Enum.any?(repos, &ci_enabled_for_repo?/1) do
       SymphonyElixir.CiPoller
-    end
-  end
-
-  defp initiatives_child_spec(%SystemSchema{repos: repos}) do
-    if Enum.any?(repos, &SymphonyElixir.Inbox.enabled?(Config.settings_for_repo!(&1.name))) do
-      SymphonyElixir.Initiatives
     end
   end
 

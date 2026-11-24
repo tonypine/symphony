@@ -502,12 +502,12 @@ Symphony builds the list on each read from its own records of the tickets, with 
 so an answer, an Unblock or a Stop shows on the very next read, and the list is there while Linear
 is down.
 
-**Initiatives.** The Mac app's Initiatives (`/api/v1/initiatives`) follow each plan ticket (`plan`
-or `breakdown`) to done: the active ones, those in review and those done in the last 7 days, each
+**Initiatives.** The Mac app's Initiatives (`/api/v1/initiatives`) follow each parent Symphony split
+into sub-tickets to done (from Symphony's own record of the split, not a Linear label): the active ones, those in review and those done in the last 7 days, each
 with its sub-tickets in landing order (the order of their stored dependencies, then creation order),
 what each waits on (you, a ticket it depends on, CI, a slot), when each landed and its pull request, counts by stage, the plan's
-start and its tokens. Symphony reads the plan tickets on its poll and serves them from that read, so a GET
-makes no Linear request; the reads show as `initiatives` in the Linear usage table.
+start and its tokens. Symphony builds the list from its own ticket records on each read, so a GET
+makes no Linear request, and a done sub-ticket stays under its parent.
 
 You answer from the Inbox too. A plan offers **Approve Plan…** and **Send Decisions** (once a pick
 differs from the brief's recommendation), and each **Send to Rework…** with a required reason. An action that asks a decision

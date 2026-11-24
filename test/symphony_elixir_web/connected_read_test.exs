@@ -5,10 +5,9 @@ defmodule SymphonyElixirWeb.ConnectedReadTest do
 
   import Phoenix.ConnTest, only: [build_conn: 0, get: 2, json_response: 2]
 
-  alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.Initiatives
   alias SymphonyElixir.Pauses
   alias SymphonyElixir.PrDecision.Facts
+  alias SymphonyElixir.TicketEvents
 
   @endpoint SymphonyElixirWeb.Endpoint
   @repo "default"
@@ -33,8 +32,6 @@ defmodule SymphonyElixirWeb.ConnectedReadTest do
 
     on_exit(fn ->
       RunStore.clear()
-      :persistent_term.erase({Initiatives, :initiatives, Initiatives})
-      :persistent_term.erase({Initiatives, :read, Initiatives})
     end)
 
     write_workflow_file!(Workflow.workflow_file_path())
@@ -51,41 +48,16 @@ defmodule SymphonyElixirWeb.ConnectedReadTest do
     %{orchestrator: orchestrator}
   end
 
-  # Eight sub-tickets in a chain, the first four done and the fifth, MT-6, this ticket.
+  # Eight sub-tickets in a chain, the first four done and the fifth, MT-6, this ticket: the plan
+  # Symphony split, as its record lists them.
   defp read_the_plan do
-    children =
+    sub_issues =
       for number <- 2..9 do
-        {name, type} = if number <= 5, do: {"Done", "completed"}, else: {"Todo", "unstarted"}
-
-        %{
-          "id" => "id-MT-#{number}",
-          "identifier" => "MT-#{number}",
-          "title" => "Part #{number}",
-          "createdAt" => "2026-11-01T10:00:0#{number}Z",
-          "state" => %{"name" => name, "type" => type}
-        }
+        %{id: "id-MT-#{number}", identifier: "MT-#{number}", state: if(number <= 5, do: "Done", else: "Todo")}
       end
 
-    plan = %{
-      "id" => "id-MT-1",
-      "identifier" => "MT-1",
-      "title" => "The plan",
-      "state" => %{"name" => "Waiting on sub-tickets", "type" => "started"},
-      "children" => %{"nodes" => children}
-    }
-
-    issues = %{"nodes" => [plan], "pageInfo" => %{"hasNextPage" => false}}
-
-    Initiatives.run_once(%{
-      opts: [
-        name: Initiatives,
-        repos: fn -> {:ok, [%{name: @repo}]} end,
-        settings_fun: fn _repo -> %Schema{} end,
-        scope_filter: fn _repo -> {:ok, %{}} end,
-        linear_client: fn _query, _variables, _opts -> {:ok, %{"data" => %{"issues" => issues}}} end,
-        now: fn -> ~U[2026-11-06 12:00:00Z] end
-      ]
-    })
+    ticket("id-MT-1", "MT-1", "Waiting on sub-tickets", %{title: "The plan", sub_issues: sub_issues})
+    {:ok, _event} = TicketEvents.record(@repo, "id-MT-1", "ticket.filed", %{identifier: "MT-2", kind: "split_off"})
   end
 
   defp ticket(id, identifier, phase, fields \\ %{}) do

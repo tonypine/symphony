@@ -86,23 +86,13 @@ defmodule SymphonyElixir.Connected.ReadTest do
 
   describe "the epic" do
     defp initiative do
-      children =
-        for {identifier, name, type, created} <- [
-              {"MT-3", "Todo", "unstarted", "2026-11-01T10:00:03Z"},
-              {"MT-2", "Done", "completed", "2026-11-01T10:00:02Z"},
-              {"MT-4", "Canceled", "canceled", "2026-11-01T10:00:04Z"}
-            ] do
-          %{
-            "id" => identifier,
-            "identifier" => identifier,
-            "title" => "Part " <> identifier,
-            "createdAt" => created,
-            "state" => %{"name" => name, "type" => type}
-          }
+      records =
+        for {identifier, phase, created} <- [{"MT-3", "Todo", ~U[2026-11-01 10:00:03Z]}, {"MT-2", "Done", ~U[2026-11-01 10:00:02Z]}] do
+          TicketState.normalize(%{repo_key: @repo, issue_id: identifier, issue_identifier: identifier, title: "Part " <> identifier, phase: phase, created_at: created})
         end
 
-      node = %{"id" => "MT-1", "identifier" => "MT-1", "title" => "The plan", "state" => %{"name" => "In Progress", "type" => "started"}, "children" => %{"nodes" => children}}
-      Initiative.from_node(node, @repo, %Schema{}, @at)
+      parent = TicketState.normalize(%{repo_key: @repo, issue_id: "MT-1", issue_identifier: "MT-1", title: "The plan", phase: "In Progress"})
+      Initiative.from_record(parent, %{records: records, links: []}, %{settings: %Schema{}, now: @at, started_at: nil})
     end
 
     test "the Initiatives' plan answers: its chain, with the same count as the page" do
@@ -220,8 +210,12 @@ defmodule SymphonyElixir.Connected.ReadTest do
     assert second.related == [%{identifier: "MT-3", title: "Known", state: "Todo"}, %{identifier: "MT-9", title: "Not known", state: "Done"}]
   end
 
-  test "facts takes the cached plans by default" do
-    assert %{records: [], initiatives: initiatives} = Read.facts([], Situation.live_facts(%{running: [], retrying: []}))
-    assert is_list(initiatives)
+  test "facts takes the plans the Initiatives read over the same records by default" do
+    ticket("MT-2", "Todo")
+    ticket("MT-1", "Waiting on sub-tickets", %{title: "The plan", sub_issues: [%{id: "MT-2", identifier: "MT-2", state: "Todo"}]})
+    {:ok, _event} = TicketEvents.record(@repo, "MT-1", "ticket.filed", %{identifier: "MT-2", kind: "split_off"})
+
+    assert %{initiatives: [%{identifier: "MT-1"}]} = Read.facts(RunStore.list_all_ticket_states(), Situation.live_facts(%{running: [], retrying: []}))
+    assert %{records: [], initiatives: []} = Read.facts([], Situation.live_facts(%{running: [], retrying: []}))
   end
 end
