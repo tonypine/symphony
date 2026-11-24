@@ -628,7 +628,8 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
       assert read.slots == order.slots
 
       home = Home.read(order, records, live)
-      assert home.slots == order.slots
+      assert Map.delete(home.slots, :entries) == order.slots
+      assert length(home.slots.entries) == 3
       assert home.in_progress |> Enum.map(&{&1.identifier, &1.in_progress}) |> Enum.sort() == [{"MT-H", true}, {"MT-W", true}]
       assert Enum.map(home.queue.roots, &{&1.identifier, &1.in_progress}) == [{"MT-T", false}, {"MT-L", false}]
 
@@ -682,8 +683,9 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
       assert flags == %{"MT-E" => true, "MT-A" => true, "MT-T" => false}
 
       home = Home.read(order, records, live)
-      assert home.slots == order.slots
+      assert Map.delete(home.slots, :entries) == order.slots
       assert %{used: 1, free: 1} = home.slots
+      assert length(home.slots.entries) == 2
     end
 
     test "a PR run takes a slot while it runs, without holding one for a ticket" do
