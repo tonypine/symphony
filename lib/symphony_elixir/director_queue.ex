@@ -11,7 +11,10 @@ defmodule SymphonyElixir.DirectorQueue do
 
     * Symphony doesn't track the ticket or the neighbour (`{:error, {:invalid, message}}`);
     * the ticket holds no place in the queue (done, removed), the neighbour is the ticket itself or
-      sits in another scope, or the queue changed under the move (`{:error, {:conflict, message}}`);
+      sits in another scope, the queue changed under the move, or the new order would put a ticket
+      above one it depends on ("TP-978 depends on TP-977 and must stay below it.", compared where
+      their scopes meet, decided under the store's queue lock; nothing moves)
+      (`{:error, {:conflict, message}}`);
     * the store refuses the write (`{:error, {:store, message}}`).
 
   The slot count is a whole number from 1 to 6 (`{:error, {:invalid, message}}` otherwise, and the
@@ -61,7 +64,7 @@ defmodule SymphonyElixir.DirectorQueue do
          :ok <- queued(ticket),
          siblings = siblings(records, ticket),
          {:ok, index, to} <- spot(records, siblings, ticket, target),
-         :ok <- write_move(Keyword.get(opts, :store, RunStore), ticket, to) do
+         :ok <- write_move(Keyword.get(opts, :store, RunStore), records, ticket, to) do
       Orchestrator.queue_changed(Keyword.get(opts, :orchestrator, Orchestrator))
       notice = %{issue_id: ticket.issue_id, issue_identifier: ticket.issue_identifier}
       ObservabilityPubSub.broadcast_queue_change("order", notice)
@@ -199,12 +202,23 @@ defmodule SymphonyElixir.DirectorQueue do
   defp id_at(_siblings, index) when index < 0, do: nil
   defp id_at(siblings, index), do: siblings |> Enum.at(index) |> then(&(&1 && &1.issue_id))
 
-  defp write_move(store, ticket, to) do
+  defp write_move(store, records, ticket, to) do
     case store.move_in_queue(ticket.issue_id, to) do
       :ok -> :ok
+      {:error, {:dependency_order, dependent, on}} -> {:error, {:conflict, below_reason(records, dependent, on)}}
       {:error, :not_in_queue} -> queued(%{ticket | sort_key: nil})
       {:error, :not_neighbours} -> {:error, {:conflict, "The queue changed while #{label(ticket)} was being moved; try again."}}
       {:error, reason} -> {:error, {:store, "Symphony couldn't store the move: #{inspect(reason)}"}}
+    end
+  end
+
+  # The refusal of a move that would put the ticket `dependent` above the ticket `on` it depends on.
+  defp below_reason(records, dependent, on), do: "#{name_of(records, dependent)} depends on #{name_of(records, on)} and must stay below it."
+
+  defp name_of(records, id) do
+    case Enum.find(records, &(&1.issue_id == id)) do
+      nil -> id
+      record -> label(record)
     end
   end
 

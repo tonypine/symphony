@@ -1674,9 +1674,10 @@ Fields:
   Such a control dispatches the run for the ticket's current phase in the same call as a queue move:
   the ticket goes to the head of the queue and takes a slot, never one over the slot count
   (Section 8.3). It MUST NOT override what a person
-  or Symphony chose to stop: it refuses while dispatch is paused, while the ticket's repository
-  is paused, while the ticket has an open question, or while a run is already working on it, and
-  the answer names which; a ticket in the backlog is refused with "move it first". A ticket in
+  or Symphony chose to stop: it refuses while the ticket has an unmet stored dependency ("TP-977
+  depends on TP-976 and can't start before it is done.", or "… released."), while dispatch is
+  paused, while the ticket's repository is paused, while the ticket has an open question, or while
+  a run is already working on it, and the answer names which; a ticket in the backlog is refused with "move it first". A ticket in
   the todo state is claimed (in progress) first. The run works in the repository the ticket's
   record holds, never a default one; a ticket with no repository on its record is refused. The
   run a person starts this way records one
@@ -4230,12 +4231,25 @@ or with a running build that has no sha, it is released at `Done`).
 4. Symphony writes its own order as stored dependencies (`done`), never as a tracker blocker link:
    a split's sub-issue that waits `after` siblings depends on each (it is created in `Backlog`, put
    on the records, given them, then moved to `Todo`); a sub-issue a run files to do after its issue
-   depends on that issue; the Director's add and remove of a blocker on the ticket page
-   (`POST /api/v1/control/blocker`, whose `GET /api/v1/tickets/:issue_identifier/blockers` lists the
-   stored dependencies) and the agent tools' `blocked_by` write and remove them. No code path writes
+   depends on that issue; the Director's add and remove of a dependency
+   (`POST /api/v1/control/dependency`, with its kind), of a blocker on the ticket page
+   (`POST /api/v1/control/blocker`, a `done` dependency, whose
+   `GET /api/v1/tickets/:issue_identifier/blockers` lists the stored dependencies) and the agent
+   tools' `blocked_by` write and remove them. No code path writes
    or removes a tracker blocker link; a competing PR's landing hold and a fix ticket's hold wait
    through the issue's pause.
-5. The first start of the release that writes them turns the order Symphony recorded for open
+5. No operator control breaks a dependency, and each refusal names the issues: a manual start of an
+   issue with an unmet dependency ("TP-977 depends on TP-976 and can't start before it is done.",
+   or "… released." for a `released` one, judged as the gate judges it, whatever slot it names; the
+   ticket reads' Start entry judges it with the same build and the update hold's cache the
+   orchestrator publishes in its snapshot, so the read never offers a Start the call refuses), a
+   queue move whose order would put an issue above one it depends on, compared where their scopes
+   meet ("TP-978 depends on TP-977 and must stay below it.", decided under the queue's lock; nothing
+   moves), and a cancel of an issue that open issues (not ended) depend on ("TP-976 can't be
+   cancelled: TP-977 and TP-978 depend on it. Remove those dependencies first.") until those
+   dependencies are removed. A move refuses only an order it turns upside down: a dependency already
+   upside down before it doesn't.
+6. The first start of the release that writes them turns the order Symphony recorded for open
    sub-issues into stored dependencies, once: each plan entry's `after` (on each sibling it names)
    and each sub-issue the Conductor filed from a run to do after its issue (on that issue), read from
    Symphony's events and records, never from the tracker.
@@ -6993,6 +7007,24 @@ Minimum endpoints:
     later than the mark, and each event of the events feed carries `new`. Before the person ever
     looked, every event is new.
 
+- `POST /api/v1/control/dependency` (OPTIONAL)
+  - Adds or removes a stored dependency (Stored dependencies, above): `issue_identifier` (the ticket
+    that waits), `on` (the ticket it needs), `action` (`add` or `remove`) and, on an add, `kind`:
+    `done` (it needs `on` merged) or `released` (installed and live). Adding a pair already stored
+    with the other kind changes its kind. An add on a ticket that sits lower moves the waiting
+    ticket to just below it in the same write. `POST /api/v1/control/blocker` (`issue_identifier`,
+    `blocker`, `action`) keeps its request and answer and adds a `done` dependency.
+  - Answers `200` with `action` (`add_dependency`, `remove_dependency`), `issue_identifier`, `on`,
+    `kind` (null on a remove) and the ticket's `dependencies` (each `issue_identifier`, `title`,
+    `state` and `kind`). A ticket Symphony doesn't track, a dependency on itself, one that closes a
+    cycle, one on a finished ticket (a `released` one on a `Done` ticket is allowed), a pair already
+    stored with that kind, or a remove of a pair not stored is `409` `move_not_allowed` with the
+    reason; a missing parameter or a missing or unknown `kind` is `422`; a write the store refuses
+    is `502` `store_error`. The open streams get the ticket's record change (`depends_on`) and, when
+    the add moved a ticket, an `event: queue` notice (`change: order`) naming the moved ticket; the
+    orchestrator walks its candidates again in the same call and polls the ticket's repository.
+    Requires the control bearer token.
+
 - `POST /api/v1/control/queue/move` (OPTIONAL)
   - Moves a ticket to another place in the stored dispatch queue, inside its scope (the top-level
     tickets, or its parent's sub-tickets): `issue_identifier` (identifier or id) and exactly one of
@@ -7003,8 +7035,9 @@ Minimum endpoints:
     a dispatch cycle runs at once. The open streams get an `event: queue` notice (`change: order`).
   - Answers `200` with `issue_id`, `issue_identifier`, `scope` (the parent's identifier, null at the
     top level) and the scope's tickets in their new `order`. A ticket that holds no place in the
-    queue, a neighbour that is the ticket itself or sits in another scope, or a queue that changed
-    under the move is `409` `move_not_allowed` with the reason; a missing or unknown parameter, or a
+    queue, a neighbour that is the ticket itself or sits in another scope, a queue that changed
+    under the move, or an order that would put a ticket above one it depends on ("TP-978 depends on
+    TP-977 and must stay below it.", nothing moves) is `409` `move_not_allowed` with the reason; a missing or unknown parameter, or a
     ticket or neighbour Symphony doesn't track, is `422`; a write the store refuses is `502`
     `store_error`. Requires the control bearer token.
 

@@ -52,7 +52,9 @@ defmodule SymphonyElixir.DirectorMoves do
     reason is cleared. The ticket's events get one `ticket.cancelled` with the note, the stop
     and the pull requests closed; its workspace goes on the usual cleanup of a terminal ticket. A
     record cancelled this way is terminal: a later Linear state is no drift on it
-    (`SymphonyElixir.TicketObservation`). Undo puts the record and Linear back to the phase before;
+    (`SymphonyElixir.TicketObservation`). A ticket other open tickets hold a stored dependency on
+    is refused, naming them ("TP-976 can't be cancelled: TP-977 and TP-978 depend on it. Remove those
+    dependencies first."), until those dependencies are removed. Undo puts the record and Linear back to the phase before;
     the pull request it closed, the run it stopped and the questions it withdrew stay as they are;
   - `:unblock`: a ticket whose pause has a reason the Director may release (an operator's stop, a
     wait for CI, a broken environment, a block nobody named) or a question Unblock answers
@@ -175,6 +177,7 @@ defmodule SymphonyElixir.DirectorMoves do
   }
 
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.Dispatch.DependsOn
   alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Linear.Issue
@@ -901,6 +904,7 @@ defmodule SymphonyElixir.DirectorMoves do
   # goes on: the run is stopped, the pull request closed, the questions, holds and pauses cleared.
   defp cancel(issue, note, opts) do
     with :ok <- guard(:cancel, issue),
+         :ok <- refute_dependents(issue),
          {:ok, to_state} <- cancel_in_linear(issue) do
       stopped? = stop_run(issue, opts)
       closed = close_cancelled_pull_requests(issue, note, opts)
@@ -915,6 +919,19 @@ defmodule SymphonyElixir.DirectorMoves do
       )
 
       finish(:cancel, issue, to_state, nil, opts)
+    end
+  end
+
+  # A ticket other open tickets depend on is not cancelled until those dependencies are removed
+  # (`TicketMoves.check(:cancel)` with its `dependents`, read from every record of the run store).
+  defp refute_dependents(issue) do
+    records = List.wrap(with({:error, _reason} <- RunStore.list_all_ticket_states(), do: []))
+    terminal = MapSet.new(Config.settings!().tracker.terminal_states, &(&1 |> String.trim() |> String.downcase()))
+    facts = issue |> TicketMoves.issue_facts() |> Map.put(:dependents, DependsOn.dependents(issue.id, records, terminal))
+
+    case TicketMoves.check(:cancel, facts) do
+      :ok -> :ok
+      {:error, reason} -> conflict(reason)
     end
   end
 

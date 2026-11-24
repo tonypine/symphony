@@ -8,8 +8,9 @@ defmodule SymphonyElixir.StartNow do
   is never clickable into a refusal — its tooltip shows the reason instead.
 
   The refusals, in the order they answer with: a ticket in Backlog ("move it first"), a closed
-  ticket, one whose plan waits on a person (`Plan Review`), one waiting on its sub-tickets,
-  Symphony's pause, the repository's pause, an open Question, and a run already working on the
+  ticket, one whose plan waits on a person (`Plan Review`), one waiting on its sub-tickets, one with
+  an unmet stored dependency ("TP-977 depends on TP-976 and can't start before it is done.",
+  `SymphonyElixir.Dispatch.DependsOn.start_refusal/4`, whatever slot the Start names), Symphony's pause, the repository's pause, an open Question, and a run already working on the
   ticket. A pause answers with the line the passes that skip candidates already name it by
   (`SymphonyElixir.Pauses.dispatch_skip_reason/1`, `repository_skip_reason/1`).
 
@@ -25,12 +26,13 @@ defmodule SymphonyElixir.StartNow do
   @not_sent "Its PR needs a CI Fix run first, and Symphony could not send it to CI Fix yet; try again in a moment."
 
   @typedoc """
-  The facts a start is judged on: the ticket's phase, the lines of the pauses that stop it (nil
-  when each has none), whether a Question is waiting for an answer, and whether a run is already
+  The facts a start is judged on: the ticket's phase, the refusal its first unmet stored dependency
+  gives (nil when it has none), the lines of the pauses that stop it (nil when each has none), whether a Question is waiting for an answer, and whether a run is already
   working on the ticket.
   """
   @type facts :: %{
           phase: String.t() | nil,
+          unmet_dependency: String.t() | nil,
           symphony_pause: String.t() | nil,
           repository_pause: String.t() | nil,
           open_question?: boolean(),
@@ -127,7 +129,9 @@ defmodule SymphonyElixir.StartNow do
     end
   end
 
-  # What holds the ticket itself: the pauses, then the Question, then a run already on it.
+  # What holds the ticket itself: an unmet dependency, the pauses, then the Question, then a run
+  # already on it.
+  defp fact_refusal(%{unmet_dependency: reason}) when is_binary(reason), do: {:error, reason}
   defp fact_refusal(%{symphony_pause: pause}) when is_binary(pause), do: {:error, pause}
   defp fact_refusal(%{repository_pause: pause}) when is_binary(pause), do: {:error, pause}
   defp fact_refusal(%{open_question?: true}), do: {:error, "It waits on your answer first."}

@@ -829,6 +829,30 @@ defmodule SymphonyElixir.DirectorMovesTest do
       refute_received {:close_pr, _url}
     end
 
+    test "TP-1633: refuses a ticket open tickets depend on, naming them, and cancels it once those dependencies are removed", %{opts: opts} do
+      RunStore.delete_ticket_state("pr")
+      :ok = TicketSignals.record_phase("repo-cancel", "pr", "Todo")
+      put_issues([cancel_issue("Todo")])
+
+      for {id, identifier} <- [{"dep-2", "MOT-42"}, {"dep-1", "MOT-41"}] do
+        :ok = RunStore.put_ticket_state(%{repo_key: "repo-cancel", issue_id: id, issue_identifier: identifier, phase: "Todo"})
+        :ok = RunStore.add_dependency(id, "pr", :done)
+      end
+
+      assert {:error, {:conflict, reason}} = DirectorMoves.move(:cancel, "MOT-40", %{}, opts)
+      assert reason == "MOT-40 can't be cancelled: MOT-41 and MOT-42 depend on it. Remove those dependencies first."
+      refute_received {:memory_tracker_state_update, "pr", _state}
+      assert %{phase: "Todo"} = RunStore.get_ticket_state("pr")
+      assert audit_records() == []
+
+      :ok = RunStore.remove_dependency("dep-1", "pr")
+      assert {:error, {:conflict, "MOT-40 can't be cancelled: MOT-42 depends on it. Remove that dependency first."}} = DirectorMoves.move(:cancel, "MOT-40", %{}, opts)
+
+      :ok = RunStore.remove_dependency("dep-2", "pr")
+      assert {:ok, %{to_state: "Canceled"}} = DirectorMoves.move(:cancel, "MOT-40", %{}, opts)
+      assert_received {:memory_tracker_state_update, "pr", "Canceled"}
+    end
+
     test "refuses a closed ticket, and a team with no canceled state leaves the record where it was", %{opts: opts} do
       put_issues([cancel_issue("Done"), %{cancel_issue("Canceled") | id: "gone", identifier: "MOT-41"}])
       assert {:error, {:conflict, "The ticket is done."}} = DirectorMoves.move(:cancel, "MOT-40", %{}, opts)

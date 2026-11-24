@@ -2,6 +2,7 @@ defmodule SymphonyElixir.TicketMovesTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.{
+    BuildInfo,
     DirectorMoves,
     IdlePark,
     Pauses,
@@ -11,8 +12,11 @@ defmodule SymphonyElixir.TicketMovesTest do
     TicketMoves,
     TicketSignals,
     TicketState,
-    TransitionGuard
+    TransitionGuard,
+    UpdateHold
   }
+
+  alias SymphonyElixir.Dispatch.DependsOn
 
   @waiting "Waiting on sub-tickets"
 
@@ -68,6 +72,15 @@ defmodule SymphonyElixir.TicketMovesTest do
     refused(:start, %{phase: "Done"}, "The ticket is done.")
     refused(:start, %{symphony_pause: "dispatch is paused by the operator"}, "dispatch is paused by the operator")
     refused(:start, %{repo_key: nil}, StartNow.no_repository_reason())
+  end
+
+  test "TP-1633: start is refused by an unmet dependency, and cancel by the open tickets that depend on it" do
+    refused(:start, %{unmet_dependency: "MT-1 depends on MT-0 and can't start before it is done."}, "MT-1 depends on MT-0 and can't start before it is done.")
+    allowed(:cancel, %{dependents: []})
+    refused(:cancel, %{dependents: ["MT-2"]}, "MT-1 can't be cancelled: MT-2 depends on it. Remove that dependency first.")
+    refused(:cancel, %{dependents: ["MT-2", "MT-3"]}, "MT-1 can't be cancelled: MT-2 and MT-3 depend on it. Remove those dependencies first.")
+    # A closed ticket answers as closed first.
+    refused(:cancel, %{phase: "Done", dependents: ["MT-2"]}, "The ticket is done.")
   end
 
   test "stop needs a run" do
@@ -208,6 +221,51 @@ defmodule SymphonyElixir.TicketMovesTest do
 
       :ok = RunStore.update_ticket_state("one", %{removed_at: DateTime.utc_now()})
       assert %{recorded?: true, tracked?: false} = TicketMoves.facts(record_of("one"), live())
+    end
+
+    test "TP-1633: a record's stored dependencies refuse its start, and the dependents the caller read its cancel" do
+      :ok = RunStore.put_ticket_state(%{repo_key: "default", issue_id: "base", issue_identifier: "MT-0", phase: "In Progress"})
+      :ok = RunStore.put_ticket_state(%{repo_key: "default", issue_id: "one", issue_identifier: "MT-1", phase: "Todo"})
+      :ok = RunStore.add_dependency("one", "base", :done)
+
+      moves = record_of("one") |> TicketMoves.facts(live()) |> TicketMoves.read()
+      assert moves.start == %{allowed: false, reason: "MT-1 depends on MT-0 and can't start before it is done."}
+
+      # The identifier the caller didn't give is the record's.
+      assert %{unmet_dependency: "MT-1 depends on MT-0" <> _rest} = TicketMoves.facts(record_of("one"), %{live() | identifier: nil})
+
+      base = TicketMoves.facts(record_of("base"), %{live() | identifier: "MT-0"} |> Map.put(:dependents, ["MT-1"]))
+      assert %{unmet_dependency: nil, dependents: ["MT-1"]} = base
+      assert TicketMoves.read(base).cancel == %{allowed: false, reason: "MT-0 can't be cancelled: MT-1 depends on it. Remove that dependency first."}
+      assert TicketMoves.read(TicketMoves.facts(record_of("base"), live())).cancel.allowed
+    end
+
+    test "TP-1633: a released dependency reads as the orchestrator's Start judges it, with the running build and the published cache" do
+      build_sha = "d3d301b0123456789abcdef0123456789abcdef0"
+      previous = Application.fetch_env(:symphony_elixir, :build)
+      Application.put_env(:symphony_elixir, :build, sha: build_sha, repo: "https://github.com/acme/symphony", number: "1")
+
+      on_exit(fn ->
+        case previous do
+          {:ok, value} -> Application.put_env(:symphony_elixir, :build, value)
+          :error -> Application.delete_env(:symphony_elixir, :build)
+        end
+      end)
+
+      :ok = RunStore.put_ticket_state(%{repo_key: "default", issue_id: "base", issue_identifier: "MT-0", phase: "Done"})
+      :ok = RunStore.put_ticket_state(%{repo_key: "default", issue_id: "one", issue_identifier: "MT-1", phase: "Todo"})
+      :ok = RunStore.add_dependency("one", "base", :released)
+      refusal = "MT-1 depends on MT-0 and can't start before it is released."
+
+      # Done, but the build is not known to include it: refused, word for word as the call refuses.
+      assert (record_of("one") |> TicketMoves.facts(live()) |> TicketMoves.read()).start == %{allowed: false, reason: refusal}
+      assert refusal == DependsOn.start_refusal("MT-1", "one", BuildInfo.current(), UpdateHold.empty_cache())
+
+      cache = %{blockers: %{"base" => {:merged, "https://github.com/acme/symphony/pull/7", "a1b2c3d4"}}, included: %{{"a1b2c3d4", build_sha} => true}}
+      facts = TicketMoves.facts(record_of("one"), Map.put(live(), :update_hold_cache, cache))
+      assert %{unmet_dependency: nil} = facts
+      refute Map.has_key?(facts, :update_hold_cache)
+      assert TicketMoves.read(facts).start.allowed
     end
 
     test "a record with no phase has nothing to release" do

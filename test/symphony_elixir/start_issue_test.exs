@@ -250,6 +250,59 @@ defmodule SymphonyElixir.StartIssueTest do
     end
   end
 
+  describe "TP-1633: the start handler and a released dependency" do
+    setup do
+      previous = Application.fetch_env(:symphony_elixir, :build)
+      Application.put_env(:symphony_elixir, :build, sha: "d3d301b0123456789abcdef0123456789abcdef0", repo: "https://github.com/acme/symphony", number: "1")
+
+      on_exit(fn ->
+        case previous do
+          {:ok, value} -> Application.put_env(:symphony_elixir, :build, value)
+          :error -> Application.delete_env(:symphony_elixir, :build)
+        end
+      end)
+    end
+
+    test "a released dependency the running build doesn't include refuses the start, whatever slot it names" do
+      :ok = RunStore.put_ticket_state(%{repo_key: @repo, issue_id: "rel-base", issue_identifier: "MT-R1", phase: "Done"})
+      :ok = RunStore.put_ticket_state(%{repo_key: @repo, issue_id: "rel-next", issue_identifier: "MT-R2", phase: "In Progress"})
+      :ok = RunStore.add_dependency("rel-next", "rel-base", :released)
+      started = issue("rel-next", "MT-R2", "In Progress")
+
+      for call <- [{:start_issue, started, nil}, {:start_issue, started, nil, 1}] do
+        assert {:reply, {:error, {:start_refused, "MT-R2 depends on MT-R1 and can't start before it is released."}}, state} =
+                 Orchestrator.handle_call(call, {self(), make_ref()}, orchestrator_state(2))
+
+        assert state.running == %{}
+      end
+    end
+
+    test "the caller refuses a Todo ticket on a released dependency the running build doesn't include, before claiming it" do
+      server = start_call_server()
+      :ok = RunStore.put_ticket_state(%{repo_key: @repo, issue_id: "rel-base", issue_identifier: "MT-R1", phase: "Done"})
+      :ok = RunStore.put_ticket_state(%{repo_key: @repo, issue_id: "rel-todo", issue_identifier: "MT-R3", phase: "Todo"})
+      :ok = RunStore.add_dependency("rel-todo", "rel-base", :released)
+      tracked([issue("rel-todo", "MT-R3", "Todo")])
+
+      assert {:error, {:start_refused, "MT-R3 depends on MT-R1 and can't start before it is released."}} = Orchestrator.start_issue(server, "MT-R3", nil)
+      refute_received {:start_issue_call, _issue, _note}
+      assert %{phase: "Todo"} = RunStore.get_ticket_state("rel-todo")
+    end
+
+    test "the caller judges a released dependency with the update hold's cache the orchestrator published" do
+      merged = {:merged, "https://github.com/acme/symphony/pull/7", "a1b2c3d4"}
+      cache = %{blockers: %{"rel-base" => merged}, included: %{{"a1b2c3d4", "d3d301b0123456789abcdef0123456789abcdef0"} => true}}
+      server = start_call_server(%{update_hold_cache: cache})
+      :ok = RunStore.put_ticket_state(%{repo_key: @repo, issue_id: "rel-base", issue_identifier: "MT-R1", phase: "Done"})
+      :ok = RunStore.put_ticket_state(%{repo_key: @repo, issue_id: "rel-next", issue_identifier: "MT-R2", phase: "In Progress"})
+      :ok = RunStore.add_dependency("rel-next", "rel-base", :released)
+      tracked([issue("rel-next", "MT-R2", "In Progress")])
+
+      assert {:ok, %{started: true}} = Orchestrator.start_issue(server, "MT-R2", nil)
+      assert_received {:start_issue_call, %Issue{id: "rel-next"}, nil}
+    end
+  end
+
   describe "Orchestrator.start_issue/3" do
     setup do
       server = start_call_server()
@@ -263,6 +316,17 @@ defmodule SymphonyElixir.StartIssueTest do
       assert {:error, {:start_refused, "The ticket is done."}} = Orchestrator.start_issue(server, "MT-D1", nil)
       assert [] = ticket_events(@repo, "backlog-1", "run.started_by_person")
       assert [] = ticket_events(@repo, "done-1", "run.started_by_person")
+    end
+
+    test "TP-1633: refuses a ticket with an unmet stored dependency in the caller, naming both tickets", %{server: server} do
+      :ok = RunStore.put_ticket_state(%{repo_key: @repo, issue_id: "dep-base", issue_identifier: "MT-976", phase: "In Progress"})
+      :ok = RunStore.put_ticket_state(%{repo_key: @repo, issue_id: "dep-next", issue_identifier: "MT-977", phase: "Todo"})
+      :ok = RunStore.add_dependency("dep-next", "dep-base", :done)
+      tracked([issue("dep-next", "MT-977", "Todo")])
+
+      assert {:error, {:start_refused, "MT-977 depends on MT-976 and can't start before it is done."}} = Orchestrator.start_issue(server, "MT-977", nil)
+      refute_received {:start_issue_call, _issue, _note}
+      assert %{phase: "Todo"} = RunStore.get_ticket_state("dep-next")
     end
 
     test "refuses while Symphony is paused, without claiming a Todo ticket", %{server: server} do
@@ -342,16 +406,31 @@ defmodule SymphonyElixir.StartIssueTest do
   # A process that answers the one call the orchestrator's start makes, telling the test what it got.
   # It tells the test before it replies: messages between two processes keep their order, so the
   # report is in the test's mailbox by the time the call returns (TP-1547).
-  defp start_call_server do
+  # A stand-in orchestrator that answers one Start call. Given a snapshot, it publishes it first in
+  # the snapshot table it then owns, as the orchestrator does.
+  defp start_call_server(snapshot \\ nil) do
     parent = self()
 
-    spawn_link(fn ->
-      receive do
-        {:"$gen_call", from, {:start_issue, %Issue{} = issue, note}} ->
-          send(parent, {:start_issue_call, issue, note})
-          GenServer.reply(from, {:ok, %{started: true, issue_id: issue.id, run_id: "run-1", session_id: nil}})
-      end
-    end)
+    pid =
+      spawn_link(fn ->
+        if snapshot, do: publish_snapshot(snapshot, parent)
+
+        receive do
+          {:"$gen_call", from, {:start_issue, %Issue{} = issue, note}} ->
+            send(parent, {:start_issue_call, issue, note})
+            GenServer.reply(from, {:ok, %{started: true, issue_id: issue.id, run_id: "run-1", session_id: nil}})
+        end
+      end)
+
+    if snapshot, do: assert_receive({:snapshot_published, ^pid})
+    pid
+  end
+
+  defp publish_snapshot(snapshot, parent) do
+    table = :symphony_orchestrator_snapshot
+    if :ets.info(table, :owner) == :undefined, do: :ets.new(table, [:named_table, :public])
+    :ets.insert(table, {:current, snapshot, System.monotonic_time(:millisecond), System.system_time(:millisecond)})
+    send(parent, {:snapshot_published, self()})
   end
 
   defp tracked(issues), do: Application.put_env(:symphony_elixir, :memory_tracker_issues, issues)

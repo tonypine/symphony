@@ -73,6 +73,7 @@ defmodule SymphonyElixirWeb.Router do
     post("/message", ControlApiController, :message)
     post("/looked", ControlApiController, :looked)
     post("/blocker", ControlApiController, :blocker)
+    post("/dependency", ControlApiController, :dependency)
     post("/priority", ControlApiController, :priority)
     post("/queue/move", ControlApiController, :queue_move)
     post("/slots", ControlApiController, :slots)

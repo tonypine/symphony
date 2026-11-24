@@ -1861,7 +1861,10 @@ defmodule SymphonyElixir.RunStore do
   only, unless the new key would pass `SymphonyElixir.Dispatch.Queue.max_key_length/0`: then the
   tickets around the spot get evenly spaced keys too, in the same order
   (`SymphonyElixir.Dispatch.Queue.insertion/2`). `{:error, :not_in_queue}` when the ticket holds no
-  place, `{:error, :not_neighbours}` when the two are not next to each other in its scope.
+  place, `{:error, :not_neighbours}` when the two are not next to each other in its scope, and
+  `{:error, {:dependency_order, issue_id, on_issue_id}}`, writing nothing, when the new order would
+  put the ticket `issue_id` above the ticket `on_issue_id` it depends on
+  (`SymphonyElixir.Dispatch.Queue.broken_dependency/2`).
   """
   @spec move_in_queue(String.t(), queue_move()) :: :ok | {:error, term()}
   def move_in_queue(issue_id, to) when is_binary(issue_id) and (to in [:top, :end] or (is_tuple(to) and tuple_size(to) == 3 and elem(to, 0) == :between)) do
@@ -1875,11 +1878,29 @@ defmodule SymphonyElixir.RunStore do
 
     with %{sort_key: key} = record when is_binary(key) <- read_ticket_record(nil, issue_id, :write),
          siblings = scope_siblings(issue_id, Queue.scope(record)),
-         {:ok, index} <- move_index(siblings, to) do
-      rekey(issue_id, insertion_key(siblings, index))
+         {:ok, index} <- move_index(siblings, to),
+         keys = Queue.insertion(siblings, index),
+         :ok <- keep_dependency_order(issue_id, keys) do
+      Enum.each(keys, fn {id, key} -> rekey(placed_id(id, issue_id), key) end)
     else
       {:error, _reason} = error -> error
       _none -> {:error, :not_in_queue}
+    end
+  end
+
+  defp placed_id(:placed, issue_id), do: issue_id
+  defp placed_id(id, _issue_id), do: id
+
+  # A move never puts a ticket above one it depends on (`SymphonyElixir.Dispatch.Queue.broken_dependency/2`),
+  # decided under the queue's lock, so no dependency added meanwhile slips past it.
+  defp keep_dependency_order(issue_id, keys) do
+    records = :all |> listed_ticket_records() |> Enum.map(&TicketState.normalize/1)
+    changed = Map.new(keys, fn {id, key} -> {placed_id(id, issue_id), key} end)
+    moved = Enum.map(records, fn record -> %{record | sort_key: Map.get(changed, record.issue_id, record.sort_key)} end)
+
+    case Queue.broken_dependency(records, moved) do
+      nil -> :ok
+      {dependent, on} -> {:error, {:dependency_order, dependent, on}}
     end
   end
 
