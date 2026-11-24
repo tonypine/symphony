@@ -216,6 +216,40 @@ defmodule SymphonyElixirWeb.HomeReadTest do
     assert %{"error" => %{"code" => "invalid_query"}} = build_conn() |> get("/api/v1/home?sort=nope") |> json_response(400)
   end
 
+  test "Recently done gives the tickets done today, or in the week, in pages, from the run records; a bad range or number answers 400",
+       %{orchestrator: orchestrator} do
+    done = ticket("d", "MT-D", "Done")
+    put_snapshot(orchestrator, [done])
+    now = DateTime.utc_now()
+
+    :ok =
+      RunStore.put_run(%{
+        repo_key: @repo,
+        run_id: "run-d",
+        issue_id: "d",
+        issue_identifier: "MT-D",
+        title: "Ticket MT-D",
+        started_at: now,
+        issue_completed_notified_at: now,
+        pr_url: "https://github.com/acme/app/pull/7"
+      })
+
+    read = build_conn() |> get("/api/v1/home") |> json_response(200)
+    assert %{"range" => "today", "counts" => %{"today" => 1, "week" => 1}, "offset" => 0, "next_offset" => nil} = read["recently_done"]
+    assert [%{"identifier" => "MT-D", "repo_key" => @repo, "pull_request_number" => 7, "epic" => nil, "done_at" => _at}] = read["recently_done"]["entries"]
+    # Every key the Home read gave before is still there.
+    assert Enum.all?(~w(in_progress queue outside slots), &Map.has_key?(read, &1))
+
+    page = build_conn() |> get("/api/v1/home?done_range=week&done_offset=1&done_limit=1") |> json_response(200)
+    assert %{"range" => "week", "entries" => [], "offset" => 1, "limit" => 1, "counts" => %{"today" => 1, "week" => 1}} = page["recently_done"]
+
+    assert %{"error" => %{"code" => "invalid_query", "message" => "done_range must be today or week"}} =
+             build_conn() |> get("/api/v1/home?done_range=month") |> json_response(400)
+
+    assert %{"error" => %{"code" => "invalid_query"}} = build_conn() |> get("/api/v1/home?done_offset=x") |> json_response(400)
+    assert %{"error" => %{"code" => "invalid_query"}} = build_conn() |> get("/api/v1/home?done_limit=0") |> json_response(400)
+  end
+
   test "a read after a queue move, a slot count change, a Start or a Stop shows it, with no poll between", %{orchestrator: orchestrator} do
     working = ticket("w", "MT-W", "In Progress")
     first = ticket("a", "MT-A", "Todo")

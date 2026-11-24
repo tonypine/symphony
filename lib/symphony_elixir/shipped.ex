@@ -29,12 +29,8 @@ defmodule SymphonyElixir.Shipped do
   @spec payload(map(), keyword()) :: {:ok, payload()} | {:error, :invalid_days}
   def payload(params, opts \\ []) when is_map(params) do
     with {:ok, days} <- parse_days(Map.get(params, "days")) do
-      now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
-      local_date = local_date_fun(Keyword.get(opts, :to_local))
-      today = local_date.(now)
-      from = Date.add(today, 1 - days)
+      %{from: from, today: today, local_date: local_date, runs: runs} = done_runs(days, opts)
       dates = Date.range(from, today)
-      runs_started_on = Keyword.get(opts, :runs_started_on, &RunStore.list_runs_started_on/1)
 
       context = %{
         local_date: local_date,
@@ -43,17 +39,7 @@ defmodule SymphonyElixir.Shipped do
         initiatives: Keyword.get_lazy(opts, :initiatives, &Initiatives.cached/0)
       }
 
-      tickets =
-        from
-        |> Date.add(-@lookback_days)
-        |> Date.range(DateTime.to_date(now))
-        |> Enum.flat_map(&list_or_empty(runs_started_on.(&1)))
-        |> Enum.filter(&completed?/1)
-        |> Enum.group_by(&{Map.get(&1, :repo_key), &1.issue_id})
-        |> Enum.map(fn {_key, runs} -> Enum.max_by(runs, & &1.issue_completed_notified_at, DateTime) end)
-        |> Enum.filter(&(local_date.(&1.issue_completed_notified_at) in dates))
-        |> Enum.sort_by(& &1.issue_completed_notified_at, {:desc, DateTime})
-        |> Enum.map(&ticket(&1, context))
+      tickets = Enum.map(runs, &ticket(&1, context))
 
       counts = Enum.frequencies_by(tickets, & &1.date)
 
@@ -67,6 +53,40 @@ defmodule SymphonyElixir.Shipped do
          tickets: tickets
        }}
     end
+  end
+
+  @doc """
+  The latest run of each ticket, of every repo, whose `issue_completed` event Symphony noted on one
+  of the `days` local days ending today, newest completion first, with `from` and `today` (the first
+  and last of those days) and `local_date`, the function that turns a time into its local day.
+  `opts`: `:now`, `:to_local` and `:runs_started_on`, as `payload/2` takes them.
+  """
+  @spec done_runs(pos_integer(), keyword()) :: %{
+          from: Date.t(),
+          today: Date.t(),
+          local_date: (DateTime.t() -> Date.t()),
+          runs: [map()]
+        }
+  def done_runs(days, opts) when is_integer(days) and days > 0 do
+    now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
+    local_date = local_date_fun(Keyword.get(opts, :to_local))
+    today = local_date.(now)
+    from = Date.add(today, 1 - days)
+    dates = Date.range(from, today)
+    runs_started_on = Keyword.get(opts, :runs_started_on, &RunStore.list_runs_started_on/1)
+
+    runs =
+      from
+      |> Date.add(-@lookback_days)
+      |> Date.range(DateTime.to_date(now))
+      |> Enum.flat_map(&list_or_empty(runs_started_on.(&1)))
+      |> Enum.filter(&completed?/1)
+      |> Enum.group_by(&{Map.get(&1, :repo_key), &1.issue_id})
+      |> Enum.map(fn {_key, runs} -> Enum.max_by(runs, & &1.issue_completed_notified_at, DateTime) end)
+      |> Enum.filter(&(local_date.(&1.issue_completed_notified_at) in dates))
+      |> Enum.sort_by(& &1.issue_completed_notified_at, {:desc, DateTime})
+
+    %{from: from, today: today, local_date: local_date, runs: runs}
   end
 
   defp local_date_fun(nil), do: &ShippedToday.local_date/1

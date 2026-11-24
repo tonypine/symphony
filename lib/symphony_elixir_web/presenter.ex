@@ -194,15 +194,17 @@ defmodule SymphonyElixirWeb.Presenter do
   @doc """
   The Director's Home read (`GET /api/v1/home`, `SymphonyElixir.Home.read/4`): the tickets in
   progress under their epics, the queue as the tree of what waits on what, and how many open
-  tickets neither holds, by reason; and the slot entries with their cards and one page of the
-  queue rows (`SymphonyElixir.Home.Slots`, `SymphonyElixir.Home.Queue`). Read from the ticket
-  records, their ledgers and the orchestrator's snapshot (the slot count, the runs and what it
+  tickets neither holds, by reason; the slot entries with their cards, one page of the queue rows
+  and one page of Recently done (`SymphonyElixir.Home.Slots`, `SymphonyElixir.Home.Queue`,
+  `SymphonyElixir.Home.RecentlyDone`). Read from the ticket records, their ledgers, the run records
+  and the orchestrator's snapshot (the slot count, the runs and what it
   walked at its last poll cycle): it makes no Linear request. It carries no time of its own, so an
   unchanged read has an unchanged `ETag`. When the snapshot can't be read the situations are the
   records' alone, the queue tree is empty, the slots are numbered to the configured count and the
   answer carries an `error`.
 
-  `query` takes the queue page (`offset`, `limit`) and the saved filter: `filters` (a view's,
+  `query` takes the queue page (`offset`, `limit`), the Recently done page (`done`,
+  `SymphonyElixir.Home.RecentlyDone.page/1`) and the saved filter: `filters` (a view's,
   `SymphonyElixir.Views`) narrow the queue rows, and `view` is echoed in `queue.view`.
   """
   @spec home_payload(GenServer.name(), timeout(), map()) :: map()
@@ -243,6 +245,7 @@ defmodule SymphonyElixirWeb.Presenter do
         moves: moves,
         slot_count: get_in(snapshot, [:slots, :total]) || Config.settings!().execution.max_concurrent_agents,
         page: page,
+        done_page: Map.get(query, :done, Home.RecentlyDone.default_page()),
         runs: Map.get(snapshot, :running, []),
         pull_request: &PullRequestPayload.read/1
       )
