@@ -112,7 +112,8 @@ defmodule SymphonyElixir.DirectorMoves do
     pause. The refresh `finish/6` asks for starts a phase that dispatches at once. The ticket's
     events get one `ticket.moved` with the note. A move to the phase the ticket is in answers
     `moved: false` and writes nothing; one to a phase the repo doesn't name, or of a ticket in no
-    configured repository, is refused. Undo puts the record and Linear back to the phase before.
+    configured repository, is refused, and so is one into `Merging` or `Done` that the plan's open
+    checks hold back (`SymphonyElixir.TransitionGuard`): nothing is stopped or recorded. Undo puts the record and Linear back to the phase before.
     The Conductor makes its own moves through this one (`SymphonyElixir.Conductor`, TP-1656), with
     the option `by: {:conductor, run_id}`: everything is the same but who moved, so its
     `ticket.moved` is the Conductor turn's (an agent of run kind `conductor`, its `run_id`) with its
@@ -1120,7 +1121,10 @@ defmodule SymphonyElixir.DirectorMoves do
   end
 
   # The record takes the phase first (`TransitionGuard.perform/4`); a refused Linear write stands on
-  # it, marked for the reconciler. A state the team doesn't have leaves the record where it was.
+  # it, marked for the reconciler. A state the team doesn't have leaves the record where it was, and
+  # so does the guard's refusal of a plan with open checks, made before the record is written: both
+  # are conflicts, and nothing is stopped or recorded. (The guard's other refusals, a retired state
+  # and an unresolved target, can't reach here: `repo_phase/3` takes only the workflow's phases.)
   defp free_move_in_linear(issue, to_state) do
     case update_state(issue, to_state, :move) do
       :ok ->
@@ -1128,6 +1132,9 @@ defmodule SymphonyElixir.DirectorMoves do
 
       {:error, {:linear, :state_not_found}} ->
         conflict("#{issue.identifier}'s team has no #{to_state} state, so it can't move there")
+
+      {:error, {:linear, {:open_checks, ids}}} ->
+        conflict("#{issue.identifier}'s plan has open checks #{Enum.join(ids, ", ")}, so it can't move to #{to_state}")
 
       {:error, {:linear, reason}} ->
         Logger.warning("Moved #{issue.identifier} to #{to_state} on its record; Linear refused the move, projected again by the reconciler: #{inspect(reason)}")

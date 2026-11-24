@@ -2758,14 +2758,14 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert [_moved] = RunStore.list_ticket_events("pr", types: ["ticket.moved"])
     end
 
-    test "a move into Backlog from a turn inside the ticket's own run is recorded, though the stop ends that run", %{opts: opts} do
-      issue = conducted!("Rework")
+    # A turn inside the ticket's own run moves it to `stage`; the stop that move makes kills that run.
+    defp move_from_own_run(issue, stage, opts) do
       test = self()
 
       run_task =
         spawn(fn ->
           receive do
-            {:go, moves} -> send(test, {:ran, Conductor.run(turn_plan("after_rework"), issue, turn: moving_turn(move_to("Backlog")), facts: %{}, moves: moves)})
+            {:go, moves} -> send(test, {:ran, Conductor.run(turn_plan("after_rework"), issue, turn: moving_turn(move_to(stage)), facts: %{}, moves: moves)})
           end
         end)
 
@@ -2779,14 +2779,44 @@ defmodule SymphonyElixir.DirectorMovesTest do
       refute_received {:ran, _answer}
       assert_received {:stop_running, "pr"}
 
-      assert %{phase: "Backlog"} = RunStore.get_ticket_state("pr")
+      assert %{phase: ^stage} = RunStore.get_ticket_state("pr")
 
       assert [%{actor: %{kind: :agent, run_kind: "conductor", run_id: run_id}, payload: payload}] =
                RunStore.list_ticket_events("pr", types: ["ticket.moved"])
 
-      assert payload == %{from: "Rework", to: "Backlog", note: @reason, run_stopped: true}
-      assert [%{"move" => "move", "to_state" => "Backlog", "by" => "Conductor", "run_id" => ^run_id}] = audit_records()
+      assert payload == %{from: "Rework", to: stage, note: @reason, run_stopped: true}
+      assert [%{"move" => "move", "to_state" => ^stage, "by" => "Conductor", "run_id" => ^run_id}] = audit_records()
       refute Pauses.paused?({:ticket, "repo-director", "pr"})
+    end
+
+    test "a move into Backlog from a turn inside the ticket's own run is recorded, though the stop ends that run", %{opts: opts} do
+      move_from_own_run(conducted!("Rework"), "Backlog", opts)
+    end
+
+    test "a move into a closed stage from a turn inside the ticket's own run is recorded, though the stop ends that run", %{opts: opts} do
+      issue = conducted!("Rework")
+      {:ok, _waived} = SymphonyElixir.TicketChecks.waive("repo-director", "pr", "c1", "Nothing is left to prove.", by: :person)
+
+      move_from_own_run(issue, "Done", opts)
+    end
+
+    test "a move into Done the plan's open checks hold back is refused, for a person and the Conductor alike", %{opts: opts} do
+      issue = conducted!("Rework")
+      orchestrator = start_supervised!({FakeOrchestrator, self()})
+      moves = Keyword.put(opts, :orchestrator, orchestrator)
+
+      assert {:error, {:conflict, why}} = DirectorMoves.move(:move, "MOT-40", %{to: "Done"}, moves)
+      assert why == "MOT-40's plan has open checks c1, so it can't move to Done"
+
+      log = capture_log(fn -> assert Conductor.run(turn_plan("after_rework"), issue, turn: moving_turn(move_to("Done")), facts: %{}, moves: moves) == :ok end)
+
+      assert log =~ "Conductor's move to Done was refused"
+      assert log =~ "plan has open checks c1"
+      refute_received {:stop_running, "pr"}
+      refute_received {:memory_tracker_state_update, "pr", _state}
+      assert RunStore.get_ticket_state("pr").phase == "Rework"
+      assert RunStore.list_ticket_events("pr", types: ["ticket.moved"]) == []
+      assert audit_records() == []
     end
 
     test "a move that crashes is a refused one: the ticket stays, and the turn goes on", %{opts: opts} do
