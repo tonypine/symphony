@@ -329,7 +329,8 @@ test/symphony_elixir/qa_policy_test.exs	0.2
 test/symphony_elixir/qa_pre_check_test.exs	2.4
 test/symphony_elixir/qa_seed_test.exs	2.9
 test/symphony_elixir/qa_server_scripts_test.exs	0.3
-test/symphony_elixir/qa_verification_test.exs	18.0
+test/symphony_elixir/qa_verification_pass_test.exs	11.0
+test/symphony_elixir/qa_verification_test.exs	7.0
 test/symphony_elixir/quality_gate/anthropic_test.exs	0.0
 test/symphony_elixir/quality_gate/openai_test.exs	0.0
 test/symphony_elixir/quality_gate/orchestrator_integration_test.exs	2.5

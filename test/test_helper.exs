@@ -8,6 +8,7 @@ Code.require_file("support/test_support.exs", __DIR__)
 Code.require_file("support/workspace_test_support.exs", __DIR__)
 Code.require_file("support/pr_watch_support.exs", __DIR__)
 Code.require_file("support/pr_watch_parity.exs", __DIR__)
+Code.require_file("support/qa_verification_support.exs", __DIR__)
 Code.require_file("support/agent_runner_progress_support.exs", __DIR__)
 
 System.put_env(

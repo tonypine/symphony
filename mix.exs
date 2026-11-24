@@ -135,6 +135,7 @@ defmodule SymphonyElixir.MixProject do
       test_ignore_filters: [
         "test/support/agent_runner_progress_support.exs",
         "test/support/pr_watch_support.exs",
+        "test/support/qa_verification_support.exs",
         "test/support/snapshot_support.exs",
         "test/support/test_support.exs",
         "test/support/workspace_test_support.exs"
