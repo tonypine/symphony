@@ -975,12 +975,13 @@ def scenario_title_drag(home):
     # Past the rows the fixture refuses to move: there every row moves freely.
     if not home.scroll("0,1500"):
         return fail(name, "the queue did not scroll")
-    rows = wait(lambda: len(home.visible()) >= 6 and home.visible(), 10)
+    rows = wait(lambda: len(home.visible()) >= 8 and home.visible(), 10)
     if not rows:
-        return fail(name, "fewer than 6 rows show")
-    picked, below = rows[4], rows[1]
+        return fail(name, "fewer than 8 rows show")
+    # The gap is three rows below the strip: within the list's top edge (48 pt) the list scrolls under the drag.
+    picked, below = rows[6], rows[3]
     expected = {picked["ticket"]: below["number"]}
-    for row in rows[1:4]:
+    for row in rows[3:6]:
         expected[row["ticket"]] = str(number(row["number"]) + 1)
     print(f"  dragging {picked['ticket']} (#{picked['number']}) from its title above {below['ticket']} (#{below['number']})")
     return drag_from_title(home, name, picked, below, expected)
@@ -1028,7 +1029,25 @@ def scenario_title_queue_done(home):
         return fail(name, "TP-975's done count did not show its done rows (no done-row-TP-982)")
     if not home.on_home():
         return fail(name, "the done count opened a page")
+    done = on_screen(home, "done-row-TP-982")
+    if done is None:
+        return fail(name, "TP-982's done row is not on screen")
     return opens(home, name, home.title_point(done["frame"]), "TP-982", "TP-982's done row") and ok(name)
+
+
+def on_screen(home, identifier, tries=4):
+    """The element `identifier`, scrolled up into the window when it shows below its bottom edge; None if it never is."""
+    for _ in range(tries):
+        element = home.element(identifier)
+        if element is None:
+            return None
+        frame = element["frame"]
+        bottom = home.window()["frame"]["y"] + home.window()["frame"]["h"] - 4
+        below = frame["y"] + frame["h"] - bottom
+        if below <= 0:
+            return element
+        home.scroll(f"0,{int(below) + 120}")
+    return None
 
 
 def scenario_title_sub_drag(home):
