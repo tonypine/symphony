@@ -54,7 +54,7 @@ defmodule SymphonyElixir.DirectorQueue do
   module whose `move_in_queue/2` writes it, default `SymphonyElixir.RunStore`).
   """
   @spec move(String.t(), target(), keyword()) :: {:ok, map()} | {:error, error()}
-  def move(identifier, target, opts \\ []) when is_binary(identifier) do
+  def move(identifier, target, opts) when is_binary(identifier) do
     records = records()
 
     with {:ok, ticket} <- find(records, identifier, "it can't move it in the queue"),
@@ -88,7 +88,7 @@ defmodule SymphonyElixir.DirectorQueue do
   (the `symphony.yml` to write, default `SymphonyElixir.Workflow.symphony_file_path/0`).
   """
   @spec set_slots(integer() | String.t(), keyword()) :: {:ok, map()} | {:error, error()}
-  def set_slots(count, opts \\ []) do
+  def set_slots(count, opts) do
     file = Keyword.get_lazy(opts, :file, &Workflow.symphony_file_path/0)
 
     with {:ok, count} <- slot_count(count),
