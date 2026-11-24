@@ -1536,17 +1536,29 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp hand_off_machine_head(%Issue{} = issue, %{opts: opts} = run_context) do
     head = read_workspace_head(run_context.workspace, run_context.worker_host, opts)
-    run_context = put_in(run_context.progress.head, head)
+    fingerprint = progress_fingerprint(head, read_workspace_tree(run_context.workspace, run_context.worker_host, opts), issue, opts)
+    run_context = %{run_context | progress: %{run_context.progress | head: head, fingerprint: fingerprint}}
 
-    if machine_head_handed_off?(issue, run_context) do
-      Handoff.emit(run_repo_key(issue, opts), issue.id, %{head: head, pr_url: ticket_pr_url(issue, opts), source: "machine_handoff"})
+    # An answered rework goes back to QA ahead of the Code Review handoff, as after a turn
+    # (`end_run_after_turn/2`); a hold or a person's move while the steps ran wins over both.
+    cond do
+      not waiting_on_hold?(issue, opts) and rework_answered?(issue, run_context) ->
+        return_answered_rework_to_qa(issue, run_context)
 
-      case move_to_post_pr_state(issue, post_pr_state(run_context), "after its handoff step", run_context) do
-        :ok -> forget_rework_base(issue, opts)
-        {:error, reason} -> {:error, {:machine_handoff_failed, reason}}
-      end
-    else
-      forget_rework_base_outside_rework(issue, opts)
+      machine_head_handed_off?(issue, run_context) ->
+        hand_off_handed_machine_head(issue, head, run_context)
+
+      true ->
+        forget_rework_base_outside_rework(issue, opts)
+    end
+  end
+
+  defp hand_off_handed_machine_head(%Issue{} = issue, head, %{opts: opts} = run_context) do
+    Handoff.emit(run_repo_key(issue, opts), issue.id, %{head: head, pr_url: ticket_pr_url(issue, opts), source: "machine_handoff"})
+
+    case move_to_post_pr_state(issue, post_pr_state(run_context), "after its handoff step", run_context) do
+      :ok -> forget_rework_base(issue, opts)
+      {:error, reason} -> {:error, {:machine_handoff_failed, reason}}
     end
   end
 
@@ -2170,16 +2182,19 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  # A Rework whose findings are all answered without a code change (a proof recorded again, TP-1579)
-  # has nothing for Code Review to read: the head it leaves is the one QA judged. So once the
-  # workspace HEAD is still the head the Rework started from, with a clean tree, and that HEAD is the
-  # attached PR's head, QA failed that head after Code Review approved it, the ticket has at least
-  # one finding and none still open or reopened, no plan
-  # check a test proves is open (`TicketJourney.unproved/1`) and no reviewer comment, CI failure or
-  # conflict is pending, the run moves the ticket to QA, which runs again on that head (only a pass
-  # carries over a head). This wins over the Code Review handoff even when the run pushed the
-  # unchanged head or called the PR tool. A Rework with no finding, a finding left open or a new head
-  # keeps the rules below.
+  # A Rework whose findings are all answered without a code change (a proof recorded again, TP-1579;
+  # a finding the rework run ruled needs no change, such as one a blocked QA pass's Conductor route
+  # filed for a check it waived, TP-1655) has nothing for Code Review to read: the head it leaves is
+  # the one QA judged. So once the workspace HEAD is still the head the Rework started from, with a
+  # clean tree, and that HEAD is the attached PR's head, QA failed or could not judge (`blocked`)
+  # that head after Code Review approved it, the ticket has at least one finding and none still open
+  # or reopened, no plan check a test proves is open (`TicketJourney.unproved/1`) and no reviewer
+  # comment, CI failure or conflict is pending, the run moves the ticket to QA, which runs again on
+  # that head (only a pass carries over a head). This wins over the Code Review handoff even when
+  # the run pushed the unchanged head, called the PR tool or ended on the step list's machine
+  # `handoff` step (`hand_off_machine_head/2`), and over the idle park: such a run is never parked
+  # for no progress, so no hold and no question. A Rework with no finding, a finding left open or a
+  # new head keeps the rules below, and an idle one is parked as before.
   defp rework_answered?(%Issue{id: issue_id} = issue, %{progress: %{head: head} = progress} = run_context) do
     unchanged_clean_rework_head?(issue, head, progress) and attached_pr?(issue, run_context.opts) and
       findings_answered?(issue_id) and
@@ -2193,12 +2208,14 @@ defmodule SymphonyElixir.AgentRunner do
     rework_state?(state) and is_binary(head) and head == progress.rework_base and clean_tree?(progress)
   end
 
-  # The Rework came from QA failing `head` after Code Review approved it: QA's newest verdict is a
-  # fail on `head`, Code Review's newest is an approve on `head`, and the fail is the newer. A
-  # Rework Code Review sent back (its request-changes posts no finding) or any other order keeps the
-  # rules below, so the shortcut never skips the review that rejected the head.
+  # The Rework came from QA on `head` after Code Review approved it: QA's newest verdict is a fail
+  # on `head`, or a `blocked` pass the Conductor routed to Rework with a finding
+  # (`QaVerification`'s `:qa_blocked_rework`), Code Review's newest is an approve on `head`, and
+  # QA's is the newer. A Rework Code Review sent back (its request-changes posts no finding) or any
+  # other order keeps the rules below, so the shortcut never skips the review that rejected the head.
   defp qa_failed_approved_head?(repo_key, issue_id, head) do
-    with %{outcome: "fail", head_sha: ^head, recorded_at: %DateTime{} = failed_at} <- List.first(Handoff.verdicts(repo_key, issue_id, "qa")),
+    with %{outcome: outcome, head_sha: ^head, recorded_at: %DateTime{} = failed_at} when outcome in ["fail", "blocked"] <-
+           List.first(Handoff.verdicts(repo_key, issue_id, "qa")),
          %{outcome: "approve", head_sha: ^head, recorded_at: %DateTime{} = approved_at} <-
            List.first(Handoff.verdicts(repo_key, issue_id, "code_review")) do
       DateTime.compare(failed_at, approved_at) == :gt

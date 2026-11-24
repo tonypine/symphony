@@ -3640,7 +3640,7 @@ States and owners:
 | `Todo` | Machine | Triage; a plan approval's promotion | The claim → `In Progress` |
 | `In Progress` | Agent | The claim; `Restart`; PR review comments (addressed on the same PR) | The handoff → `Code Review` |
 | `Code Review` | Agent (reviewer) | The handoff (from `In Progress` or `Rework`); a `CI Fix` return | Approve → `QA`, or `Merging` when QA is skipped; rework → `Rework`; block → `Needs Decision` hold; red head → `CI Fix` |
-| `QA` | Agent (QA) | A Code Review approve; a `Rework` that answered every finding without a code change | Pass → `Merging`; fail → `Rework`; red head → `CI Fix` |
+| `QA` | Agent (QA) | A Code Review approve; a `Rework` that answered every finding without a code change (after a QA fail, or a blocked QA pass the Conductor routed to `Rework`), which is never parked for no progress | Pass → `Merging`; fail → `Rework`; red head → `CI Fix` |
 | `Merging` | Machine | QA pass, or an approve that skipped QA (with manual review on, after its confirmation), never while a check of the plan the merge waits on is open | Merged → `Done`, or `Waiting on sub-tickets` while started sub-tickets are open; red head or conflict → `CI Fix`; the plan holds the merge → `Rework` |
 | `Rework` | Agent | A rework verdict; a QA fail; a substantive CI Fix; a plan change | The handoff → `Code Review` (an epic parent → `Plan Review`); every finding of a QA fail answered on the unchanged head → `QA` |
 | `CI Fix` | Agent (mechanical lane) | A red head or a conflict in `Code Review`, `QA`, `Merging` or `Rework` | A green head → the recorded origin, approvals carried (none once a plan version was written after the code: → `Rework`); substantive → `Rework`; access needed → `Needs Decision` hold |

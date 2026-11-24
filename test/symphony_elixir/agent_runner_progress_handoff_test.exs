@@ -362,14 +362,7 @@ defmodule SymphonyElixir.AgentRunnerProgressHandoffTest do
     # the step's command is the push.
     defp run_machine_handoff!(runner, opts \\ []) do
       list = Keyword.get(opts, :list, "rework")
-
-      steps = """
-      phases:
-        #{list}:
-          steps:
-            - {id: code, title: Write the code, mode: delegated}
-            - {id: handoff, title: Push, mode: machine, command: make push, on_fail: code}
-      """
+      steps = machine_handoff_steps(list)
 
       run_issue!(
         Keyword.get(opts, :state, "Rework"),
@@ -380,6 +373,16 @@ defmodule SymphonyElixir.AgentRunnerProgressHandoffTest do
           runner_opts: [step_command_runner: runner, run_id: "run-progress"]
         ] ++ Keyword.take(opts, [:issue_state_fetcher])
       )
+    end
+
+    defp machine_handoff_steps(list) do
+      """
+      phases:
+        #{list}:
+          steps:
+            - {id: code, title: Write the code, mode: delegated}
+            - {id: handoff, title: Push, mode: machine, command: make push, on_fail: code}
+      """
     end
 
     # The step commands: the changed-files script reports an Elixir change, `make push` tells the test,
@@ -677,6 +680,122 @@ defmodule SymphonyElixir.AgentRunnerProgressHandoffTest do
       assert_raise RuntimeError, ~r/rework_handoff_failed/, fn ->
         run_issue!("Rework", heads: ["sha-rework"])
       end
+    end
+  end
+
+  describe "a Rework whose findings need no code change, after a blocked QA pass the Conductor routed (TP-1655)" do
+    # QA could not judge the head Code Review approved (its drag steps were blocked), and the
+    # Conductor waived the check and routed the ticket to Rework with a finding.
+    setup do
+      :ok = put_verdict("default", "issue-progress", "code_review", "sha-rework", "approve", %{}, ~U[2026-11-24 03:00:00Z])
+      :ok = put_verdict("default", "issue-progress", "qa", "sha-rework", "blocked", %{}, ~U[2026-11-24 03:10:00Z])
+      :ok
+    end
+
+    # The Conductor's finding, as QA records it for its route; ruled by the rework run to need no
+    # change when `ruled?`.
+    defp routed_finding!(ruled?) do
+      {:ok, finding} =
+        SymphonyElixir.TicketEvents.record("default", "issue-progress", "finding.recorded", %{class: "unclassified", severity: "unrated", description: "The drag check was waived."},
+          actor: {:agent, "run-qa", "qa"}
+        )
+
+      if ruled? do
+        {:ok, _resolution} =
+          SymphonyElixir.TicketEvents.record("default", "issue-progress", "finding.resolved", %{finding_id: finding.id, how: "Needs no change: the Conductor waived the drag check."},
+            actor: {:agent, "run-rw", "rework"},
+            head_sha: "sha-rework"
+          )
+      end
+
+      finding
+    end
+
+    test "goes back to QA on the same head, with no hold and no question" do
+      routed_finding!(true)
+
+      assert :ok = run_issue!("Rework", heads: ["sha-rework"], max_turns: 5)
+
+      assert turns() == 1
+      assert_received {:memory_tracker_state_update, "issue-progress", "QA"}
+      refute_received {:memory_tracker_state_update, _issue_id, "Code Review"}
+      assert_signal("rework answered", %{to: "QA", head: "sha-rework", move: true})
+      refute idle_parked?()
+      assert Questions.open({:ticket, "default", "issue-progress"}) == []
+    end
+
+    # The PR shows the rework's head only once the list's handoff step pushed it, so the answered
+    # rework is first seen there, not at the end of the code turn.
+    test "goes back to QA from the step list's machine handoff step, ahead of Code Review" do
+      routed_finding!(true)
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, pr_status("sha-old"))
+
+      assert :ok = run_machine_handoff!(step_runner(pushes: "sha-rework"), heads: ["sha-rework"])
+
+      assert turns() == 1
+      assert_received {:memory_tracker_state_update, "issue-progress", "QA"}
+      refute_received {:memory_tracker_state_update, _issue_id, "Code Review"}
+      assert_signal("rework answered", %{to: "QA", head: "sha-rework", move: true})
+      refute Handoff.emitted?("default", "issue-progress", "sha-rework")
+      assert RunStore.get_rework_base("default", "issue-progress") == nil
+    end
+
+    test "a hold raised while the machine handoff step ran keeps the ticket in Rework" do
+      routed_finding!(true)
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, pr_status("sha-old"))
+      hold = fn -> {:ok, _pause} = Pauses.set({:ticket, "default", "issue-progress"}, Pauses.ticket_reason(:dependency, "TP-12")) end
+
+      assert :ok = run_machine_handoff!(step_runner(pushes: "sha-rework", on_push: hold), heads: ["sha-rework"])
+
+      refute_received {:memory_tracker_state_update, "issue-progress", _state}
+    end
+
+    test "with uncommitted edits left by the machine steps, hands off to Code Review as before" do
+      routed_finding!(true)
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, pr_status("sha-old"))
+      dirty = :counters.new(1, [])
+
+      # Clean until the handoff step ran, dirty after it.
+      reader = fn _workspace, nil -> if :counters.get(dirty, 1) > 0, do: "uncommitted-digest" end
+
+      assert :ok =
+               run_issue!("Rework",
+                 heads: ["sha-rework"],
+                 repos: designed_repos(),
+                 symphony_steps: machine_handoff_steps("rework"),
+                 runner_opts: [
+                   step_command_runner: step_runner(pushes: "sha-rework", on_push: fn -> :counters.add(dirty, 1, 1) end),
+                   run_id: "run-progress",
+                   workspace_tree_reader: reader
+                 ]
+               )
+
+      assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+
+      refute_received {:memory_tracker_state_update, _issue_id, "QA"}
+    end
+
+    test "with the finding still open, is parked for no progress, with its hold and its question" do
+      routed_finding!(false)
+
+      run_issue!("Rework", heads: ["sha-rework"], max_turns: 5)
+
+      assert turns() == 2
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+      assert idle_parked?()
+
+      assert {:ok, %{reasons: reasons}} = Pauses.get({:ticket, "default", "issue-progress"})
+      assert %{text: "No progress: the last 2 turns in Rework made no new commit and no state change"} = Enum.find(reasons, &(&1.kind == :environment))
+      assert [%{title: "TP-337 is paused in Rework: its last 2 turns changed nothing"}] = Questions.open({:ticket, "default", "issue-progress"})
+    end
+
+    test "after Code Review requested changes on that head, does not move to QA" do
+      routed_finding!(true)
+      :ok = put_verdict("default", "issue-progress", "code_review", "sha-rework", "request_changes", %{}, ~U[2026-11-24 03:20:00Z])
+
+      run_issue!("Rework", heads: ["sha-rework"], states: ["Rework", "Todo"])
+
+      refute_received {:memory_tracker_state_update, _issue_id, "QA"}
     end
   end
 
