@@ -31,7 +31,18 @@ defmodule SymphonyElixirWeb.ControlApiStartTest do
     @impl true
     def handle_call(message, _from, test) do
       send(test, {:orchestrator_call, message})
-      {:reply, {:ok, %{started: true, issue_id: "start-1", issue_identifier: "START-1", repo_key: "default", run_id: "run-1", session_id: nil, slot: 1}}, test}
+
+      reply = %{
+        started: true,
+        issue_id: "start-1",
+        issue_identifier: "START-1",
+        repo_key: "default",
+        run_id: "run-1",
+        session_id: nil,
+        slot: 1
+      }
+
+      {:reply, {:ok, reply}, test}
     end
   end
 

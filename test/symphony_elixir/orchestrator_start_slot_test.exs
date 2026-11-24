@@ -5,8 +5,8 @@ defmodule SymphonyElixir.OrchestratorStartSlotTest do
   # reads them, and walks its dispatch pass (`dispatch_chosen_issues_for_test/2`) for the free slot.
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Pauses, TicketState}
   alias SymphonyElixir.Dispatch.Queue
+  alias SymphonyElixir.{Pauses, TicketState}
   alias SymphonyElixirWeb.ObservabilityPubSub
 
   @active_states ["Todo", "In Progress", "Code Review", "QA", "CI Fix", "Merging", "Rework"]
@@ -186,7 +186,13 @@ defmodule SymphonyElixir.OrchestratorStartSlotTest do
       new = recorded(issue("new", "MT-NEW", "In Progress"))
       started = recorded(issue("s", "MT-S", "In Progress"))
       tracked([old, new, started])
-      state = orchestrator_state(2) |> holding(old, 1, @early) |> holding(new, 2, @late) |> live_run(old) |> live_run(new)
+
+      state =
+        orchestrator_state(2)
+        |> holding(old, 1, @early)
+        |> holding(new, 2, @late)
+        |> live_run(old)
+        |> live_run(new)
 
       {:reply, {:ok, reply}, next} = start(state, started)
       assert %{slot: 2, displaced_issue_identifier: "MT-NEW"} = reply
@@ -316,7 +322,8 @@ defmodule SymphonyElixir.OrchestratorStartSlotTest do
       state = holding(orchestrator_state(1), held, 1, @early)
 
       # A stop that is not a person's (the Conductor's, a Director move's) ends a live run only.
-      assert {:reply, {:ok, %{stopped: false}}, ^state} = Orchestrator.handle_call({:stop_running, "h"}, {self(), make_ref()}, state)
+      assert {:reply, {:ok, %{stopped: false}}, ^state} =
+               Orchestrator.handle_call({:stop_running, "h"}, {self(), make_ref()}, state)
 
       {:reply, {:ok, reply}, state} = stop(state, "h")
       assert %{stopped: true, issue_id: "h", issue_identifier: "MT-H", session_id: nil, slot: 1} = reply
@@ -371,7 +378,9 @@ defmodule SymphonyElixir.OrchestratorStartSlotTest do
   end
 
   defp epic(id, identifier, subs) do
-    sub_issues = for {sub_id, sub_identifier, state} <- subs, do: %{id: sub_id, identifier: sub_identifier, state: state}
+    sub_issues =
+      for {sub_id, sub_identifier, state} <- subs, do: %{id: sub_id, identifier: sub_identifier, state: state}
+
     issue(id, identifier, "In Progress", labels: ["plan"], sub_issues: sub_issues)
   end
 
@@ -434,7 +443,18 @@ defmodule SymphonyElixir.OrchestratorStartSlotTest do
     pid = spawn(fn -> receive do: (:stop -> :ok) end)
     on_exit(fn -> Process.exit(pid, :kill) end)
     pr = %Issue{id: id, identifier: id, title: "PR", state: "In Progress", run_kind: :pr}
-    entry = %{pid: pid, ref: nil, repo_key: "default", identifier: id, issue: pr, run_kind: :pr, run_profile: %{kind: :pr}, started_at: @late}
+
+    entry = %{
+      pid: pid,
+      ref: nil,
+      repo_key: "default",
+      identifier: id,
+      issue: pr,
+      run_kind: :pr,
+      run_profile: %{kind: :pr},
+      started_at: @late
+    }
+
     %{state | running: Map.put(state.running, id, entry)}
   end
 

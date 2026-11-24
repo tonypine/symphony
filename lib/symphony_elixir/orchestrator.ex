@@ -9774,7 +9774,9 @@ defmodule SymphonyElixir.Orchestrator do
           )
           |> mark_operator_stop(issue_id, running_entry, repo_key)
 
-        {state, slot} = if free_slot?, do: free_stopped_slot(state, issue_id, running_entry.identifier), else: {state, %{}}
+        {state, slot} =
+          if free_slot?, do: free_stopped_slot(state, issue_id, running_entry.identifier), else: {state, %{}}
+
         notify_dashboard()
 
         {:reply,
@@ -9832,14 +9834,24 @@ defmodule SymphonyElixir.Orchestrator do
   # it is paused as an operator stop, so it does not start again by itself, and its slot is free in
   # this call (`free_stopped_slot/3`). A ticket that holds no slot and has no run is not stopped.
   defp stop_slot_holder(%State{} = state, issue_id_or_identifier) do
-    case Enum.find(state.slot_holders, fn {issue_id, holder} -> issue_id_or_identifier in [issue_id, holder.identifier] end) do
+    holder? = fn {issue_id, holder} -> issue_id_or_identifier in [issue_id, holder.identifier] end
+
+    case Enum.find(state.slot_holders, holder?) do
       {issue_id, %{identifier: identifier} = holder} ->
         repo_key = Map.get(holder, :repo_key) || state.repo_key
         Logger.warning("Operator stopping slot holder with no live run issue_id=#{issue_id} issue_identifier=#{identifier}")
         {_coalesced, state} = state |> pause_operator_stop(issue_id, identifier, repo_key) |> request_poll()
         {state, slot} = free_stopped_slot(state, issue_id, identifier)
         notify_dashboard()
-        payload = %{stopped: true, issue_id: issue_id, issue_identifier: identifier, repo_key: repo_key, session_id: nil}
+
+        payload = %{
+          stopped: true,
+          issue_id: issue_id,
+          issue_identifier: identifier,
+          repo_key: repo_key,
+          session_id: nil
+        }
+
         {:reply, {:ok, Map.merge(payload, slot)}, state}
 
       nil ->
@@ -9914,7 +9926,6 @@ defmodule SymphonyElixir.Orchestrator do
     occupied = occupied_slot_ids(state)
     parents = state.slot_parents
     via = Slots.through(issue_id, occupied, parents)
-    via_number = via && slot_number(state, Slots.owner(via, occupied, parents))
 
     cond do
       holds_slot?(state, issue_id) ->
@@ -9923,11 +9934,26 @@ defmodule SymphonyElixir.Orchestrator do
       is_integer(named) and (named < 1 or named > max_total(state)) ->
         {:error, "There is no slot #{named}: Symphony works #{max_total(state)} at once."}
 
-      via && slot_cost(state, issue_id) == 0 ->
+      via ->
+        start_through(state, issue_id, named, via, occupied, parents)
+
+      true ->
+        take_any_slot(state, issue_id, named, occupied, parents)
+    end
+  end
+
+  # A sub-ticket whose ancestor holds a slot (`via`): it runs through it at no cost, swaps with the
+  # sub-ticket working through it unless it names another slot, or else takes a slot of its own.
+  defp start_through(%State{} = state, issue_id, named, via, occupied, parents) do
+    via_number = slot_number(state, Slots.owner(via, occupied, parents))
+    victim = (is_nil(named) or named == via_number) && swap_victim(state, issue_id, via, occupied, parents)
+
+    cond do
+      slot_cost(state, issue_id) == 0 ->
         {:ok, start_plan(via_number, [], true), state}
 
-      via && (is_nil(named) or named == via_number) && swap_victim(state, issue_id, via, occupied, parents) ->
-        {:ok, start_plan(via_number, displaced(state, swap_victim(state, issue_id, via, occupied, parents), occupied, parents), true, true), state}
+      victim ->
+        {:ok, start_plan(via_number, displaced(state, victim, occupied, parents), true, true), state}
 
       true ->
         take_any_slot(state, issue_id, named, occupied, parents)
@@ -9935,29 +9961,42 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp take_any_slot(%State{} = state, issue_id, named, occupied, parents) do
-    held = named && Enum.find(owners(state, issue_id, occupied, parents), fn {id, _since} -> slot_number(state, id) == named end)
+    owners = owners(state, issue_id, occupied, parents)
     free? = available_slots(state) > 0
 
-    victim =
-      cond do
-        held -> elem(held, 0)
-        free? -> nil
-        true -> Slots.takeover(owners(state, issue_id, occupied, parents))
-      end
+    case takeover_victim(state, owners, named, free?) do
+      nil when not free? ->
+        {:error, "Every slot is taken by a run that can't be stopped for it; try again once one ends."}
 
-    cond do
-      is_nil(victim) and not free? -> {:error, "Every slot is taken by a run that can't be stopped for it; try again once one ends."}
-      is_nil(victim) -> {:ok, start_plan(named, [], true), state}
-      true -> {:ok, start_plan(named || slot_number(state, victim), displaced(state, victim, occupied, parents), true), state}
+      nil ->
+        {:ok, start_plan(named, [], true), state}
+
+      victim ->
+        number = named || slot_number(state, victim)
+        {:ok, start_plan(number, displaced(state, victim, occupied, parents), true), state}
     end
   end
 
-  defp start_plan(number, displaced, taken?, swap? \\ false), do: %{number: number, displaced: displaced, taken?: taken?, swap?: swap?, moved?: false}
+  # The holder a Start takes the slot of: the named slot's holder, none while a slot is free, else
+  # the one that took its slot most recently.
+  defp takeover_victim(%State{} = state, owners, named, free?) do
+    case named && Enum.find(owners, fn {id, _since} -> slot_number(state, id) == named end) do
+      {id, _since} -> id
+      _none when free? -> nil
+      _none -> Slots.takeover(owners)
+    end
+  end
+
+  defp start_plan(number, displaced, taken?, swap? \\ false),
+    do: %{number: number, displaced: displaced, taken?: taken?, swap?: swap?, moved?: false}
 
   # The tickets whose own slot it is (`Slots.owner/3`) and that a Start may take over, with since when
   # they hold it: not the started ticket, and not a pull request's run, which holds no ticket's slot.
   defp owners(%State{} = state, issue_id, occupied, parents) do
-    for id <- occupied, id != issue_id, Slots.owner(id, occupied, parents) == id, not pr_run_entry?(Map.get(state.running, id)) do
+    for id <- occupied,
+        id != issue_id,
+        Slots.owner(id, occupied, parents) == id,
+        not pr_run_entry?(Map.get(state.running, id)) do
       {id, slot_since(state, id)}
     end
   end

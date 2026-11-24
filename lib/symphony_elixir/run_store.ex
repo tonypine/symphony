@@ -2041,7 +2041,8 @@ defmodule SymphonyElixir.RunStore do
   """
   @spec put_slot_holder(String.t(), DateTime.t() | nil, pos_integer() | nil) :: :ok | {:error, term()}
   def put_slot_holder(issue_id, since, number \\ nil)
-      when is_binary(issue_id) and (is_nil(since) or is_struct(since, DateTime)) and (is_nil(number) or (is_integer(number) and number > 0)) do
+      when is_binary(issue_id) and (is_nil(since) or is_struct(since, DateTime)) and
+             (is_nil(number) or (is_integer(number) and number > 0)) do
     update_ticket_state(issue_id, %{slot_held_since: since, slot_number: if(since, do: number)})
   end
 
