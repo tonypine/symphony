@@ -4549,10 +4549,12 @@ defmodule SymphonyElixir.Orchestrator do
     Enum.reduce(state.slot_holders, parents, fn {holder_id, holder}, parents ->
       holder_id
       |> waited_on(holder, ids)
-      |> Enum.reduce(parents, fn waited, parents ->
-        if lends?(waited, holder_id, in_progress, parents, previous), do: Map.put(parents, waited, holder_id), else: parents
-      end)
+      |> Enum.reduce(parents, &lend_slot(&1, &2, holder_id, in_progress, previous))
     end)
+  end
+
+  defp lend_slot(waited, parents, holder_id, in_progress, previous) do
+    if lends?(waited, holder_id, in_progress, parents, previous), do: Map.put(parents, waited, holder_id), else: parents
   end
 
   # The issue ids of the tickets a slot holder waits on: its pause's `:ticket` reasons and its open

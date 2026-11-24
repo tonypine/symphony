@@ -495,7 +495,11 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
       tracked([blocked, blocker, other])
 
       # The holder keeps its slot and lends it: the top-level ticket its block report names starts on it.
-      state = orchestrator_state(1) |> holding(blocked) |> Orchestrator.release_slots_for_test([blocked, blocker, other], true)
+      state =
+        orchestrator_state(1)
+        |> holding(blocked)
+        |> Orchestrator.release_slots_for_test([blocked, blocker, other], true)
+
       assert Map.keys(state.slot_holders) == ["h"]
       assert Orchestrator.available_slots_for_test(state) == 0
 
@@ -516,7 +520,11 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
       :ok = RunStore.add_dependency("h", "u", :done)
       tracked([blocked, upstream, other])
 
-      state = orchestrator_state(1) |> holding(blocked) |> Orchestrator.release_slots_for_test([blocked, upstream, other], true)
+      state =
+        orchestrator_state(1)
+        |> holding(blocked)
+        |> Orchestrator.release_slots_for_test([blocked, upstream, other], true)
+
       depended = Orchestrator.dispatch_chosen_issues_for_test([blocked, upstream, other], state)
       assert Map.keys(depended.running) == ["u"]
       assert %{gate: :depends_on} = depended.dispatch_skipped["h"]
