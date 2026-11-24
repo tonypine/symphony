@@ -86,8 +86,13 @@ defmodule SymphonyElixir.Initiatives.Initiative do
   `context` gives the repo's `settings` (the review and terminal states), `now` and `started_at`,
   when Symphony split it.
   """
-  @spec from_record(map(), %{records: [map()], links: [map()]}, %{settings: term(), now: DateTime.t(), started_at: DateTime.t() | nil}) :: t() | nil
-  def from_record(%{issue_id: id} = record, %{records: records, links: links}, %{settings: settings, now: %DateTime{} = now} = context) when is_binary(id) do
+  @spec from_record(
+          map(),
+          %{records: [map()], links: [map()]},
+          %{settings: term(), now: DateTime.t(), started_at: DateTime.t() | nil}
+        ) :: t() | nil
+  def from_record(%{issue_id: id} = record, %{records: records, links: links}, %{settings: settings, now: %DateTime{} = now} = context)
+      when is_binary(id) do
     terminal = terminal(settings)
 
     case group(record, terminal, settings, now) do

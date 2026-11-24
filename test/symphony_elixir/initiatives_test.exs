@@ -174,7 +174,11 @@ defmodule SymphonyElixir.InitiativesTest do
     end
 
     test "reads a repo's settings from the configuration by default" do
-      records = [record("BIL-1", "Plan Review", %{sub_issues: [link("BIL-2", "Todo")]}), %{record("BIL-3", "Todo", %{sub_issues: [link("BIL-4", "Todo")]}) | repo_key: nil}]
+      records = [
+        record("BIL-1", "Plan Review", %{sub_issues: [link("BIL-2", "Todo")]}),
+        %{record("BIL-3", "Todo", %{sub_issues: [link("BIL-4", "Todo")]}) | repo_key: nil}
+      ]
+
       by_id = %{"id-BIL-1" => [filed("BIL-2")], "id-BIL-3" => [filed("BIL-4")]}
 
       assert [%{identifier: "BIL-1"}, %{identifier: "BIL-3"}] = Initiatives.read(records: records, events: events(by_id), now: @now)
@@ -269,7 +273,8 @@ defmodule SymphonyElixir.InitiativesTest do
   describe "list/4" do
     test "lists the initiatives with what runs and what waits on the Director" do
       records = [record("BIL-1", "In Progress", %{sub_issues: [link("BIL-2", "Todo"), link("BIL-3", "Todo")]}), record("BIL-2", "Todo"), record("BIL-3", "Todo")]
-      opts = [records: records, events: fn id -> if id == "id-BIL-1", do: [%Event{type: "ticket.filed", at: @now, payload: %{kind: "split_off"}}], else: [] end, now: @now]
+      split_off = [%Event{type: "ticket.filed", at: @now, payload: %{kind: "split_off"}}]
+      opts = [records: records, events: fn id -> if id == "id-BIL-1", do: split_off, else: [] end, now: @now]
       settings_fun = fn "billing" -> settings() end
 
       snapshot = %{running: [%{issue_id: "id-BIL-2"}]}

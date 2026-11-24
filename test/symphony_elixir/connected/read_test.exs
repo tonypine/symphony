@@ -88,7 +88,14 @@ defmodule SymphonyElixir.Connected.ReadTest do
     defp initiative do
       records =
         for {identifier, phase, created} <- [{"MT-3", "Todo", ~U[2026-11-01 10:00:03Z]}, {"MT-2", "Done", ~U[2026-11-01 10:00:02Z]}] do
-          TicketState.normalize(%{repo_key: @repo, issue_id: identifier, issue_identifier: identifier, title: "Part " <> identifier, phase: phase, created_at: created})
+          TicketState.normalize(%{
+            repo_key: @repo,
+            issue_id: identifier,
+            issue_identifier: identifier,
+            title: "Part " <> identifier,
+            phase: phase,
+            created_at: created
+          })
         end
 
       parent = TicketState.normalize(%{repo_key: @repo, issue_id: "MT-1", issue_identifier: "MT-1", title: "The plan", phase: "In Progress"})
