@@ -212,6 +212,9 @@ let galleryEntries: [GalleryEntry] = [
             "SymphonyBarUI/LifecycleSection.swift", "SymphonyBarCore/Lifecycle.swift",
         ]),
     GalleryEntry(
+        id: "epic-slot-card", title: "Epic slot card", kind: .component, prefixes: ["epic-slot-card-"],
+        files: ["SymphonyBarUI/DesignSystem/EpicSlotCard.swift", "SymphonyBarUI/DesignSystem/SlotCard.swift"]),
+    GalleryEntry(
         id: "slot-strip-line", title: "Slot strip line", kind: .component, prefixes: ["slot-strip-line-"],
         files: ["SymphonyBarUI/DesignSystem/SlotCard.swift", "SymphonyBarUI/DesignSystem/QueueRow.swift"]),
     GalleryEntry(
