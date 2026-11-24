@@ -40,6 +40,15 @@ and more tickets after them:
 - dependency: TP-978 dropped above TP-977, which it depends on, is back at its place with its number,
   and Home shows the engine's reason.
 
+The epic slot card (TP-1646) runs on Tests/Fixtures/director-app/home-queue-epic-slot: slot 1 is
+held by the epic TP-1597 (7 of 16 done, TP-1619 in work) and its band opens the sub-tickets to
+come, numbered 9 to 16 (TP-1624 waits on TP-1623, TP-1609 on TP-1607):
+
+- slot-epic: TP-1607 (11) dragged above TP-1623 (9) in the card's list shows the drop line, is
+  sent as a move before TP-1623, and lands at 9, the others following;
+- slot-epic-refused: TP-1624 (10) dropped above TP-1623, which it depends on, is back at its place
+  with its number, and Home shows the engine's reason.
+
 Each scenario prints `ok [name]` or `FAIL [name]: why`, and its screenshots (mid-drag and after the
 drop) go to `HOME_DRAG_TEST_SHOTS` when it is set, otherwise to a folder the test names and keeps.
 
@@ -64,6 +73,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PRIV = os.path.normpath(os.path.join(HERE, "..", "..", "priv", "qa_driver"))
 FIXTURES = os.path.join(HERE, "Fixtures", "director-app", "home-queue-drag")
 EPICS = os.path.join(HERE, "Fixtures", "director-app", "home-queue-epics")
+EPIC_SLOT = os.path.join(HERE, "Fixtures", "director-app", "home-queue-epic-slot")
+SLOT_REFUSAL = "TP-1624 depends on TP-1623 and must stay below it."
 REFUSAL = "TP-1596 depends on TP-1590 and must stay below it."
 DEPENDENCY_REFUSAL = "TP-978 depends on TP-977 and must stay below it."
 # The Mac's laptop viewport (WORKFLOW.md): 1440 × 900 pt.
@@ -767,6 +778,75 @@ def scenario_dependency(home):
     return ok(name)
 
 
+def open_upcoming(home, name):
+    """Clicks slot 1's epic band, which opens the sub-tickets to come below its card; their rows, or None."""
+    band = wait(lambda: home.element("epic-slot-band-1"), 10)
+    if band is None:
+        fail(name, "slot 1 shows no epic band")
+        return None
+    reply = home.pointer("click", band["path"], 1)
+    if "error" in reply:
+        fail(name, f"the click on the band failed: {reply['error']}")
+        return None
+    shown = wait(lambda: (lambda now: now if all(t in now for t in ("TP-1623", "TP-1624", "TP-1607")) else None)(
+        {row["ticket"]: row for row in home.rows()}), 10)
+    if not shown:
+        fail(name, f"the band opened no sub-tickets to come: {sorted(numbers(home))}")
+        return None
+    return shown
+
+
+def scenario_slot_epic(home):
+    name = "slot-epic: a sub-ticket dragged in an epic slot card's list lands among its epic's"
+    shown = open_upcoming(home, name)
+    if not shown:
+        return False
+    if [shown[t]["number"] for t in ("TP-1623", "TP-1624", "TP-1607")] != ["9", "10", "11"]:
+        return fail(name, f"the rows to come are not numbered on from 7 done: {numbers(home)}")
+    home.hover(shown["TP-1607"])
+    grab = home.grab_point(shown["TP-1607"]).split(",")
+    start = (int(grab[0]), int(grab[1]))
+    helper = home.drag(start, (start[0], shown["TP-1623"]["frame"]["y"] - 1))
+    try:
+        if not wait(lambda: home.dragged("TP-1607"), 3):
+            fail(name, "mid-drag TP-1607 is not left behind dimmed")
+        if home.element("queue-drop-line") is None:
+            fail(name, "mid-drag no drop line shows above TP-1623")
+        home.screenshot("mid-drag")
+    finally:
+        home.release(helper)
+    moves = wait(lambda: home.requests("/api/v1/control/queue/move"))
+    if not moves or moves[-1].get("issue_identifier") != "TP-1607" or moves[-1].get("before") != "TP-1623":
+        return fail(name, f"the move sent was {moves!r}, not TP-1607 before TP-1623")
+    expected = {"TP-1607": "9", "TP-1623": "10", "TP-1624": "11", "TP-1609": "12"}
+    result = landed(home, expected)
+    home.screenshot("after-drop")
+    if not result:
+        return fail(name, f"after the drop the numbers are {numbers(home)}, not {expected}")
+    if name in failures:
+        return False
+    return ok(name)
+
+
+def scenario_slot_epic_refused(home):
+    name = "slot-epic-refused: a drop above a sub-ticket it depends on leaves the card's list as it was and says why"
+    shown = open_upcoming(home, name)
+    if not shown:
+        return False
+    before = numbers(home)
+    drop_on_row(home, name, shown["TP-1624"], shown["TP-1623"])
+    moves = wait(lambda: home.requests("/api/v1/control/queue/move"))
+    if not moves or moves[-1].get("issue_identifier") != "TP-1624":
+        return fail(name, f"the move sent was {moves!r}")
+    said = wait(lambda: home.find(SLOT_REFUSAL), 10)
+    home.screenshot("after-drop")
+    if not said:
+        return fail(name, f"Home does not show the engine's reason {SLOT_REFUSAL!r}")
+    if not landed(home, before):
+        return fail(name, f"the list changed: {before} became {numbers(home)}")
+    return ok(name)
+
+
 SCENARIOS = {
     "hover": scenario_hover,
     "reorder": scenario_reorder,
@@ -777,10 +857,14 @@ SCENARIOS = {
     "epic": scenario_epic,
     "sub-row": scenario_sub_row,
     "dependency": scenario_dependency,
+    "slot-epic": scenario_slot_epic,
+    "slot-epic-refused": scenario_slot_epic_refused,
 }
 
 # The scenarios that run on the epics fixture; the others run on FIXTURES.
 ON_EPICS = {"epic", "sub-row", "dependency"}
+# The scenarios that run on the epic slot fixture.
+ON_EPIC_SLOT = {"slot-epic", "slot-epic-refused"}
 
 
 def main():
@@ -812,7 +896,8 @@ def main():
 
         for name in picked:
             print(f"== {name}")
-            home = Home(driver, dragger, executable, shots, name, EPICS if name in ON_EPICS else FIXTURES)
+            fixtures = EPICS if name in ON_EPICS else EPIC_SLOT if name in ON_EPIC_SLOT else FIXTURES
+            home = Home(driver, dragger, executable, shots, name, fixtures)
             try:
                 if home.ready():
                     SCENARIOS[name](home)
