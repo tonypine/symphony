@@ -153,6 +153,9 @@ defmodule SymphonyElixir.ShippedTest do
       assert payload(%{"days" => days}, []) == {:error, :invalid_days}
     end
 
+    # The options default to none: a bad value is refused before any store is read.
+    assert Shipped.payload(%{"days" => "0"}) == {:error, :invalid_days}
+
     failing = fn _date -> {:error, :down} end
     assert {:ok, %{total: 0}} = payload(%{"days" => "1"}, [], runs_started_on: failing, ticket_states: {:error, :down})
   end
