@@ -10920,7 +10920,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # Issues the tracker no longer returns sort last, by id.
-  defp pick_usage_limit_canary(%State{} = state, held, result) do
+  defp pick_usage_limit_canary(%State{}, held, result) do
     held_by_id = Map.new(held)
     issue_ids = held_by_id |> Map.keys() |> Enum.sort()
 
