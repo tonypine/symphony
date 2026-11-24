@@ -153,7 +153,10 @@ public struct SlotCard: View {
         if let ticket {
             card(ticket)
         } else {
-            EmptySlot(slot: slot, height: DesignTokens.HomeQueue.emptyHeight, radius: DesignTokens.Radius.card, dropTarget: dropTarget)
+            EmptySlot(
+                slot: slot, height: DesignTokens.HomeQueue.emptyHeight, radius: DesignTokens.Radius.card, dropTarget: dropTarget,
+                identifier: SlotDropTarget.cardIdentifier(slot)
+            )
         }
     }
 
@@ -196,6 +199,7 @@ public struct SlotCard: View {
         .edgeHighlight(shape)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(Self.emptyLabel(slot)): \(ticket.identifier)")
+        .dropTargetAccessibility(dropTarget, identifier: SlotDropTarget.cardIdentifier(slot))
     }
 
     private func header(_ ticket: SlotCardModel) -> some View {
@@ -320,6 +324,8 @@ struct EmptySlot: View {
     let height: Double
     let radius: Double
     var dropTarget = false
+    /// Its identifier in the accessibility tree: the card's or the strip line's.
+    var identifier: String
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
@@ -332,6 +338,7 @@ struct EmptySlot: View {
             .dropTarget(dropTarget, in: shape)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("\(SlotCard.emptyLabel(slot)), empty")
+            .dropTargetAccessibility(dropTarget, identifier: identifier)
     }
 }
 
@@ -537,8 +544,12 @@ public struct SlotStripLine: View {
             .contentShape(shape)
             .onHover { hovered = $0 }
             .accessibilityElement(children: .combine)
+            .dropTargetAccessibility(dropTarget, identifier: SlotDropTarget.lineIdentifier(slot))
         } else {
-            EmptySlot(slot: slot, height: queue.stripHeight, radius: DesignTokens.Radius.row, dropTarget: dropTarget)
+            EmptySlot(
+                slot: slot, height: queue.stripHeight, radius: DesignTokens.Radius.row, dropTarget: dropTarget,
+                identifier: SlotDropTarget.lineIdentifier(slot)
+            )
         }
     }
 }

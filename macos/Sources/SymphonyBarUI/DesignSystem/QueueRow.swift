@@ -157,8 +157,23 @@ public struct QueueRow: View {
         .onHover { hovered = $0 }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Number \(row.numberText), \(row.identifier), \(row.title)")
+        .accessibilityValue(Self.accessibilityState(look, reorderable: reorderable, picked: picked))
+        .accessibilityIdentifier(Self.accessibilityIdentifier(row.identifier))
         .accessibilityAction(named: "Start") { onStart() }
     }
+
+    /// The row's identifier in the accessibility tree, which a window test finds it by.
+    public static func accessibilityIdentifier(_ ticket: String) -> String { "queue-row-\(ticket)" }
+
+    /// The row's state as the accessibility tree says it (TP-1610): `Dragged` while it is the row left behind under a
+    /// drag, `Drag handle` while the handle stands in the number's place, nothing at rest.
+    public static func accessibilityState(_ look: Look, reorderable: Bool, picked: Bool) -> String {
+        if picked { return draggedValue }
+        return handles(look, reorderable: reorderable) ? handleValue : ""
+    }
+
+    public static let draggedValue = "Dragged"
+    public static let handleValue = "Drag handle"
 
     @ViewBuilder private func face(_ look: Look, _ shape: RoundedRectangle) -> some View {
         switch look {
@@ -254,8 +269,14 @@ public struct QueueDropLine: View {
             .background { AccentGlow(shape: shape) }
             .padding(.horizontal, queue.rowInset)
             .allowsHitTesting(false)
-            .accessibilityHidden(true)
+            .accessibilityElement()
+            .accessibilityLabel(Self.accessibilityLabel)
+            .accessibilityIdentifier(Self.accessibilityIdentifier)
     }
+
+    /// The line in the accessibility tree (TP-1610): where a drop would land, which a window test reads mid-drag.
+    public static let accessibilityLabel = "Drop here"
+    public static let accessibilityIdentifier = "queue-drop-line"
 }
 
 /// `--accent-glow` around `shape`, outside it only, as a CSS box-shadow draws.
@@ -283,6 +304,17 @@ extension View {
     /// Draws this view as the target under a dragged row while `on` (`.slot.drop`, `.mslot.drop`): a 2 pt accent ring
     /// outside `shape` with the accent's glow, on the accent's tint.
     public func dropTarget<S: InsettableShape>(_ on: Bool, in shape: S) -> some View {
+        dropTargetLook(on, in: shape)
+    }
+
+    /// The accessibility tree's word for a slot under a dragged row (TP-1610), and the element's `identifier`, which a
+    /// window test finds the card or the strip line by. Call it after the element is made.
+    public func dropTargetAccessibility(_ on: Bool, identifier: String) -> some View {
+        accessibilityValue(on ? SlotDropTarget.accessibilityValue : "")
+            .accessibilityIdentifier(identifier)
+    }
+
+    private func dropTargetLook<S: InsettableShape>(_ on: Bool, in shape: S) -> some View {
         let queue = DesignTokens.HomeQueue.self
         return background {
             if on {
@@ -325,4 +357,12 @@ extension View {
             self
         }
     }
+}
+
+/// A slot drawn as the target under a dragged row: what the accessibility tree says of it.
+public enum SlotDropTarget {
+    public static let accessibilityValue = "Drop target"
+    /// The identifier of slot `slot`'s card, or of its line in the strip.
+    public static func cardIdentifier(_ slot: Int) -> String { "slot-card-\(slot)" }
+    public static func lineIdentifier(_ slot: Int) -> String { "slot-line-\(slot)" }
 }

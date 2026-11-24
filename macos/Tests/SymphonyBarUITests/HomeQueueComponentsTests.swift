@@ -316,6 +316,17 @@ final class HomeQueueComponentsTests: XCTestCase {
         XCTAssertEqual(fittingSize(QueueDropLine().frame(width: 900)).height, DesignTokens.HomeQueue.dropLineHeight)
     }
 
+    func testTheAccessibilityTreeSaysWhichRowIsDraggedAndWhichSlotIsTheTarget() {
+        XCTAssertEqual(QueueRow.accessibilityState(.rest, reorderable: true, picked: false), "")
+        XCTAssertEqual(QueueRow.accessibilityState(.hover, reorderable: true, picked: false), QueueRow.handleValue)
+        XCTAssertEqual(QueueRow.accessibilityState(.hover, reorderable: false, picked: false), "", "no handle under a saved view")
+        XCTAssertEqual(QueueRow.accessibilityState(.hover, reorderable: true, picked: true), QueueRow.draggedValue)
+        XCTAssertEqual(QueueRow.accessibilityIdentifier("TP-1596"), "queue-row-TP-1596")
+        XCTAssertEqual(SlotDropTarget.cardIdentifier(1), "slot-card-1")
+        XCTAssertEqual(SlotDropTarget.lineIdentifier(2), "slot-line-2")
+        XCTAssertEqual(QueueDropLine.accessibilityIdentifier, "queue-drop-line")
+    }
+
     func testTheNumberCellIsAsWideAsTheWidestNumberOnScreen() {
         XCTAssertEqual(DesignTokens.HomeQueue.number(1_243), "1,243")
         XCTAssertEqual(DesignTokens.HomeQueue.numberTemplate(widest: 1_243), "0,000")
