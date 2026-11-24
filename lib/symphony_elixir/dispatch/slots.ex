@@ -33,9 +33,20 @@ defmodule SymphonyElixir.Dispatch.Slots do
     waits there; its run starts once the wait is over.
   - Nothing else limits the slots: landing has no allowance of its own, no phase has a limit of its
     own, and no slot is reserved for epics.
+  - Each slot has a number, from 1: a ticket that takes a slot gets the lowest number no holder uses
+    (`free_number/1`), and a sub-ticket that runs through its ancestor's slot shares that slot's
+    number. A holder keeps its number until it gives the slot up, a lowered slot count included.
+    Holders stored before slots had numbers get them in the order they took their slots
+    (`number_holders/1`).
+  - A person's Start takes a slot and never runs one over the count
+    (`SymphonyElixir.Orchestrator.start_issue/4`): the slot it names, else a free one, else the one
+    taken most recently (`takeover/1`, the least work lost). Taking a slot over stops every run that
+    works through it (`working_through/3`) and puts the ticket that held it at the head of the
+    queue. A person's Stop frees the ticket's slot at once.
 
-  The holders are kept on the ticket records (`slot_held_since`, `SymphonyElixir.RunStore`), so a
-  restart keeps them; the orchestrator holds its copy and decides with it. Everything else asks
+  The holders are kept on the ticket records (`slot_held_since` and `slot_number`,
+  `SymphonyElixir.RunStore`), so a restart keeps them and their numbers; the orchestrator holds its
+  copy and decides with it. Everything else asks
   `held?/1` of the record: the pull request upkeep acts only for a ticket that holds a slot
   (`SymphonyElixir.PrWatch.Repo`), and a ticket without one has its upkeep recorded as a wait for
   a slot, which the orchestrator ends by giving it one when one is free.
@@ -48,6 +59,7 @@ defmodule SymphonyElixir.Dispatch.Slots do
           state: String.t() | nil,
           repo_key: String.t() | nil,
           since: DateTime.t() | nil,
+          slot: pos_integer() | nil,
           running: boolean()
         }
 
@@ -103,8 +115,9 @@ defmodule SymphonyElixir.Dispatch.Slots do
     issue_id |> ancestors(parents) |> Enum.find(&MapSet.member?(in_progress, &1))
   end
 
-  # The ids from the ticket's parent up to its top-level ancestor; none when the walk meets a cycle.
-  defp ancestors(issue_id, parents), do: ancestors(issue_id, parents, [issue_id], [])
+  @doc "The ids from the ticket's parent up to its top-level ancestor, from `parents`; none when the walk meets a cycle."
+  @spec ancestors(String.t(), %{String.t() => String.t()}) :: [String.t()]
+  def ancestors(issue_id, parents) when is_map(parents), do: ancestors(issue_id, parents, [issue_id], [])
 
   defp ancestors(issue_id, parents, seen, acc) do
     case Map.get(parents, issue_id) do
@@ -140,7 +153,8 @@ defmodule SymphonyElixir.Dispatch.Slots do
   @doc """
   The slots the reads report (`slots` of `GET /api/v1/dispatch/order` and `GET /api/v1/home`):
   `total` (the slot count), `used` (`used/2`: a parent and the sub-ticket running through its slot
-  use one; one per holder when not given), `free` and the `holders`, the longest held first. It
+  use one; one per holder when not given), `free` and the `holders`, the longest held first, each
+  with its slot's number (`slot`, nil for a pull request's run, which holds none). It
   keeps the keys the reads had before (`work_used`, `work_free`, `finishing` and `epic_lanes`, the
   last two empty), so a client that reads them still decodes the payload.
   """
@@ -160,6 +174,77 @@ defmodule SymphonyElixir.Dispatch.Slots do
       finishing: %{slots: 0, used: 0, running: []},
       epic_lanes: %{max_total: nil, lanes: [], queued_epics: [], shared: %{slots: nil, used: used}}
     }
+  end
+
+  @doc "The lowest slot number, from 1, that none of the numbers `taken` uses."
+  @spec free_number(Enumerable.t()) :: pos_integer()
+  def free_number(taken) do
+    set = MapSet.new(taken)
+    Enum.find(Stream.iterate(1, &(&1 + 1)), &(not MapSet.member?(set, &1)))
+  end
+
+  @doc """
+  Numbers for the holders that have none (stored before slots had numbers), by issue id: in the
+  order they took their slots, each gets the lowest number neither a numbered holder nor an earlier
+  one uses. `holders` maps an issue id to a holder with `since` and `slot`.
+  """
+  @spec number_holders(%{String.t() => map()}) :: %{String.t() => pos_integer()}
+  def number_holders(holders) when is_map(holders) do
+    taken = for {_id, %{slot: number}} <- holders, is_integer(number), do: number
+
+    holders
+    |> Enum.reject(fn {_id, holder} -> is_integer(Map.get(holder, :slot)) end)
+    |> Enum.sort_by(fn {id, holder} -> {since_key(Map.get(holder, :since)), id} end)
+    |> Enum.reduce({%{}, taken}, fn {id, _holder}, {numbers, taken} ->
+      number = free_number(taken)
+      {Map.put(numbers, id, number), [number | taken]}
+    end)
+    |> elem(0)
+  end
+
+  @doc """
+  The slot a Start takes over when no slot is free and none is named: of `owners` (`{issue_id,
+  since}`, the tickets whose own slot it is), the one taken most recently, so the least work is lost;
+  nil when there is none. A slot whose time is unknown goes last.
+  """
+  @spec takeover([{String.t(), DateTime.t() | nil}]) :: String.t() | nil
+  def takeover(owners) when is_list(owners) do
+    case Enum.max_by(owners, fn {id, since} -> {recent_key(since), id} end, fn -> nil end) do
+      {id, _since} -> id
+      nil -> nil
+    end
+  end
+
+  defp recent_key(%DateTime{} = at), do: DateTime.to_unix(at, :microsecond)
+  defp recent_key(_none), do: -1
+
+  @doc """
+  The ticket whose own slot `issue_id` works through, of the tickets `in_progress` (`parents` as for
+  `through/3`): its top ancestor in progress, through each nearest one in turn; itself when it runs
+  through none.
+  """
+  @spec owner(String.t(), Enumerable.t(), %{String.t() => String.t()}) :: String.t()
+  def owner(issue_id, in_progress, parents) when is_map(parents) do
+    issue_id |> through_chain(MapSet.new(in_progress), parents) |> List.last() || issue_id
+  end
+
+  @doc """
+  The tickets in progress that work through `holder`'s slot: it and every ticket in progress that
+  runs through it, directly or through another one (`through/3` in turn). A Start that takes the
+  slot over stops each of them.
+  """
+  @spec working_through(String.t(), Enumerable.t(), %{String.t() => String.t()}) :: [String.t()]
+  def working_through(holder, in_progress, parents) when is_map(parents) do
+    set = in_progress |> MapSet.new() |> MapSet.put(holder)
+    set |> Enum.filter(&(&1 == holder or holder in through_chain(&1, set, parents))) |> Enum.sort()
+  end
+
+  # The tickets `issue_id` runs through, nearest first: its nearest ancestor in progress, that one's, and so on.
+  defp through_chain(issue_id, set, parents) do
+    case through(issue_id, set, parents) do
+      nil -> []
+      via -> [via | through_chain(via, set, parents)]
+    end
   end
 
   defp since_key(%DateTime{} = at), do: {0, DateTime.to_unix(at, :microsecond)}

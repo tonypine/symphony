@@ -43,22 +43,22 @@ defmodule SymphonyElixir.StartIssueTest do
   end
 
   describe "the start handler" do
-    test "with every slot busy and three tickets queued ahead, Start starts a fourth at once; the three keep their order" do
+    test "TP-1630: with every slot busy and three tickets queued ahead, Start takes the latest slot over, never one over the count" do
       busy = [issue("impl-1", "MT-1", "In Progress"), issue("impl-2", "MT-2", "In Progress")]
       queued = [issue("queued-1", "MT-Q1", "In Progress"), issue("queued-2", "MT-Q2", "In Progress"), issue("queued-3", "MT-Q3", "In Progress")]
       started = issue("start-1", "MT-S1", "In Progress")
       tracked(busy ++ queued ++ [started])
 
       # Every slot busy: the dispatch pass queues the three, in order, for a slot.
-      state = Enum.reduce(busy, orchestrator_state(2), &running(&2, &1, :implementation))
+      state = Enum.reduce(busy, orchestrator_state(2), &live_running(&2, &1, :implementation))
       queued_state = Orchestrator.dispatch_chosen_issues_for_test(queued, state)
 
       assert Enum.sort(Map.keys(queued_state.running)) == ["impl-1", "impl-2"]
       assert Enum.sort(Map.keys(queued_state.slot_waiting)) == ["queued-1", "queued-2", "queued-3"]
       assert Enum.all?(Map.values(queued_state.slot_waiting), &(&1.reason == "work slots full"))
 
-      {:reply, {:ok, reply}, next_state} =
-        Orchestrator.handle_call({:start_issue, started, "unblock this one"}, {self(), make_ref()}, queued_state)
+      {{:reply, {:ok, reply}, next_state}, _log} =
+        with_log(fn -> Orchestrator.handle_call({:start_issue, started, "unblock this one"}, {self(), make_ref()}, queued_state) end)
 
       assert %{
                started: true,
@@ -66,12 +66,14 @@ defmodule SymphonyElixir.StartIssueTest do
                issue_identifier: "MT-S1",
                repo_key: @repo,
                run_id: run_id,
-               session_id: nil
+               session_id: nil,
+               slot: 1,
+               displaced_issue_identifier: "MT-2"
              } = reply
 
-      # One over the limit: the two busy runs and the started one; the three queued tickets still wait, untouched.
-      assert Enum.sort(Map.keys(next_state.running)) == ["impl-1", "impl-2", "start-1"]
-      assert next_state.slot_waiting == queued_state.slot_waiting
+      # The slot taken most recently (ties go to the later id) stops for the started run: two runs, two slots.
+      assert Enum.sort(Map.keys(next_state.running)) == ["impl-1", "start-1"]
+      assert Orchestrator.available_slots_for_test(next_state) == 0
 
       # The run a person started is one ledger event next to the machine's own run.started.
       assert [{^run_id, :implementation}] = for(entry <- [next_state.running["start-1"]], do: {entry.run_id, entry.run_profile.kind})
@@ -82,26 +84,9 @@ defmodule SymphonyElixir.StartIssueTest do
       assert [_run_started] = ticket_events(@repo, "start-1", "run.started")
       assert [] = ticket_events(@repo, "impl-1", "run.started_by_person")
 
-      # The busy runs end: with the started run holding one of the two slots, the next pass has one slot
-      # fewer and gives it to the first ticket in the queue.
-      freed = %{next_state | running: Map.take(next_state.running, ["start-1"])}
-      after_first = Orchestrator.dispatch_chosen_issues_for_test(queued, freed)
-
-      assert Enum.sort(Map.keys(after_first.running)) == ["queued-1", "start-1"]
-      assert Enum.sort(Map.keys(after_first.slot_waiting)) == ["queued-2", "queued-3"]
-
-      # The started ticket is done and gives up its slot (TP-1615: a run ending alone keeps it): the next
-      # slot goes to the second, then the third.
-      done = %{
-        after_first
-        | running: Map.take(after_first.running, ["queued-1"]),
-          slot_holders: Map.delete(after_first.slot_holders, "start-1")
-      }
-
-      after_second = Orchestrator.dispatch_chosen_issues_for_test(tl(queued), done)
-
-      assert Enum.sort(Map.keys(after_second.running)) == ["queued-1", "queued-2"]
-      assert Map.keys(after_second.slot_waiting) == ["queued-3"]
+      # The three queued tickets still wait: no slot is free.
+      after_start = Orchestrator.dispatch_chosen_issues_for_test(queued, next_state)
+      assert Enum.sort(Map.keys(after_start.running)) == ["impl-1", "start-1"]
     end
 
     test "Start on a Code Review ticket runs the reviewer, with no note" do
@@ -376,6 +361,14 @@ defmodule SymphonyElixir.StartIssueTest do
   # As Linear reads it by identifier: no repo key.
   defp bare_issue(id, identifier, state) do
     %Issue{id: id, identifier: identifier, title: "Ticket #{identifier}", state: state, team: %{key: "Test"}, url: "https://example.org/issues/#{identifier}"}
+  end
+
+  # A run on a process of its own, which a Start that takes its slot over can end.
+  defp live_running(state, %Issue{} = issue, kind) do
+    pid = spawn(fn -> receive do: (:stop -> :ok) end)
+    on_exit(fn -> Process.exit(pid, :kill) end)
+    state = running(state, issue, kind)
+    %{state | running: Map.update!(state.running, issue.id, &%{&1 | pid: pid, ref: nil})}
   end
 
   defp running(state, %Issue{} = issue, kind) do

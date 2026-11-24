@@ -2034,18 +2034,21 @@ defmodule SymphonyElixir.RunStore do
   end
 
   @doc """
-  Marks the ticket `issue_id` as holding a dispatch slot since `since`, or as holding none when
-  `since` is nil (`slot_held_since` on `SymphonyElixir.TicketState`, `SymphonyElixir.Dispatch.Slots`);
+  Marks the ticket `issue_id` as holding the dispatch slot numbered `number` since `since`, or as
+  holding none when `since` is nil, which clears the number too (`slot_held_since` and `slot_number`
+  on `SymphonyElixir.TicketState`, `SymphonyElixir.Dispatch.Slots`);
   `{:error, :ticket_state_not_found}` when the ticket has no record.
   """
-  @spec put_slot_holder(String.t(), DateTime.t() | nil) :: :ok | {:error, term()}
-  def put_slot_holder(issue_id, since) when is_binary(issue_id) and (is_nil(since) or is_struct(since, DateTime)),
-    do: update_ticket_state(issue_id, %{slot_held_since: since})
+  @spec put_slot_holder(String.t(), DateTime.t() | nil, pos_integer() | nil) :: :ok | {:error, term()}
+  def put_slot_holder(issue_id, since, number \\ nil)
+      when is_binary(issue_id) and (is_nil(since) or is_struct(since, DateTime)) and (is_nil(number) or (is_integer(number) and number > 0)) do
+    update_ticket_state(issue_id, %{slot_held_since: since, slot_number: if(since, do: number)})
+  end
 
   @doc """
   The tickets that hold a dispatch slot, across every repository, by issue id: each one's
-  identifier, phase, repository and since when it holds its slot; when the store can't be read,
-  its error.
+  identifier, phase, repository, since when it holds its slot and that slot's number (`slot`, nil
+  for a holder stored before slots had numbers); when the store can't be read, its error.
   """
   @spec slot_holders() :: %{String.t() => map()} | {:error, term()}
   def slot_holders do
@@ -2075,7 +2078,8 @@ defmodule SymphonyElixir.RunStore do
       identifier: Map.get(record, :issue_identifier),
       state: Map.get(record, :phase),
       repo_key: Map.get(record, :repo_key),
-      since: record.slot_held_since
+      since: record.slot_held_since,
+      slot: Map.get(record, :slot_number)
     }
   end
 

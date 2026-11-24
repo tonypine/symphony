@@ -288,7 +288,7 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
       )
 
     assert conn.status == 200
-    assert calls(pid) == [{:stop_running, "ACME-123"}]
+    assert calls(pid) == [{:stop_running, "ACME-123", [free_slot: true]}]
   end
 
   describe "POST /control/stop audit record" do

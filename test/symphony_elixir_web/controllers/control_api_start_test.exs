@@ -21,6 +21,20 @@ defmodule SymphonyElixirWeb.ControlApiStartTest do
     def handle_call(_msg, _from, []), do: {:reply, {:error, :no_canned_reply}, []}
   end
 
+  # Tells the test which call the start made, then answers it as the orchestrator does.
+  defmodule RecordingOrchestrator do
+    use GenServer
+
+    @impl true
+    def init(test), do: {:ok, test}
+
+    @impl true
+    def handle_call(message, _from, test) do
+      send(test, {:orchestrator_call, message})
+      {:reply, {:ok, %{started: true, issue_id: "start-1", issue_identifier: "START-1", repo_key: "default", run_id: "run-1", session_id: nil, slot: 1}}, test}
+    end
+  end
+
   setup do
     issues =
       for {id, state} <- [{"start-1", "In Progress"}, {"backlog-1", "Backlog"}] do
@@ -62,8 +76,43 @@ defmodule SymphonyElixirWeb.ControlApiStartTest do
     assert post_start(%{"issue_identifier" => "START-1"}, [{:ok, %{started: true}}]).status == 200
   end
 
+  test "TP-1630: the app's request, with only the ticket and a note, starts with no slot named and keeps the answer's fields" do
+    conn = post_recorded(%{"issue_identifier" => "START-1", "note" => "go"})
+
+    assert conn.status == 200
+    assert_received {:orchestrator_call, {:start_issue, %Issue{id: "start-1"}, "go"}}
+    body = json_body(conn)
+    assert %{"started" => true, "issue_id" => "start-1", "issue_identifier" => "START-1", "run_id" => "run-1", "session_id" => nil} = body
+  end
+
+  test "TP-1630: a named slot, as a number or its digits, goes to the orchestrator; anything else is 422" do
+    write_workflow_file!(Workflow.workflow_file_path(), max_concurrent_agents: 2)
+
+    assert post_recorded(%{"issue_identifier" => "START-1", "slot" => 2}).status == 200
+    assert_received {:orchestrator_call, {:start_issue, %Issue{id: "start-1"}, nil, 2}}
+    assert post_recorded(%{"issue_identifier" => "START-1", "slot" => " 1 "}).status == 200
+    assert_received {:orchestrator_call, {:start_issue, %Issue{}, nil, 1}}
+
+    for slot <- [0, 3, "two", 1.5] do
+      conn = post_recorded(%{"issue_identifier" => "START-1", "slot" => slot})
+      assert conn.status == 422
+      assert json_body(conn)["error"]["message"] =~ "is not a slot: use a whole number from 1 to 2."
+    end
+
+    refute_received {:orchestrator_call, _message}
+  end
+
+  defp post_recorded(params) do
+    {:ok, orchestrator} = GenServer.start_link(RecordingOrchestrator, self())
+    post_with(params, orchestrator)
+  end
+
   defp post_start(params, replies \\ []) do
     {:ok, orchestrator} = GenServer.start_link(StubOrchestrator, replies)
+    post_with(params, orchestrator)
+  end
+
+  defp post_with(params, orchestrator) do
     body = if params == %{}, do: "", else: Jason.encode!(params)
 
     conn(:post, "/api/v1/control/start", body)

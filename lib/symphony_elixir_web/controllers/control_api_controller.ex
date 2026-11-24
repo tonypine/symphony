@@ -5,12 +5,22 @@ defmodule SymphonyElixirWeb.ControlApiController do
   `SymphonyElixir.ControlClient`. A stop that ends a run writes a `run_stopped`
   audit record and a `person.action` event (`stop`) on the ticket.
 
-  `start` (`SymphonyElixir.Orchestrator.start_issue/3`) starts a ticket's run at once, ahead of
-  the dispatch queue and outside its order: it takes `issue_identifier` and an optional `note`,
-  answers 200 with the run it started (`run_id`; its session id arrives with the run) or 409 with
-  the reason it was refused (Symphony paused, the repository paused, an open Question, a run
-  already working on it, Backlog's "move it first") — the same reason each ticket payload's
-  `start` field shows.
+  `start` (`SymphonyElixir.Orchestrator.start_issue/4`) starts a ticket's run at once as a queue
+  move: the ticket goes to the head of the queue and takes a slot, never one over the slot count.
+  It takes `issue_identifier`, an optional `note` and an optional `slot` (a whole number from 1 to
+  the slot count; 422 `invalid_request` otherwise): the slot to take, taken over when it is held.
+  Without one it takes a free slot, else the one taken most recently. A slot taken over stops the
+  runs working through it, and its holder goes to the head of the queue. It answers 200 with the
+  run it started (`run_id`; its session id arrives with the run), the slot's number (`slot`) and,
+  when it took one over, the ticket that held it (`displaced_issue_identifier`), or 409 with the
+  reason it was refused (Symphony paused, the repository paused, an open Question, a run already
+  working on it, Backlog's "move it first") — the same reason each ticket payload's `start` field
+  shows.
+
+  `stop` stops a ticket's run and frees its slot in the call; a ticket that holds a slot between
+  its runs or while it waits is stopped too (`stopped: true`, its slot freed). The answer names the
+  freed slot (`slot`). A stopped sub-ticket goes back to the head of its epic, and the epic to the
+  head of the queue.
 
   `resume` clears the Director's pause and an update's. A pause held only by reasons Resume can't
   clear (a usage limit's) answers 409 `nothing_to_resume`, naming them in `reasons`, and lifts
@@ -154,6 +164,7 @@ defmodule SymphonyElixirWeb.ControlApiController do
 
   alias SymphonyElixir.{
     AuditLog,
+    Config,
     DirectorBlockers,
     DirectorLabels,
     DirectorMoves,
@@ -288,7 +299,7 @@ defmodule SymphonyElixirWeb.ControlApiController do
 
   @spec stop(Conn.t(), map()) :: Conn.t()
   def stop(conn, %{"issue_identifier" => identifier}) when is_binary(identifier) and identifier != "" do
-    result = Orchestrator.stop_running(orchestrator(conn), identifier)
+    result = Orchestrator.stop_running(orchestrator(conn), identifier, free_slot: true)
     record_stop(conn, result)
     respond(conn, result)
   end
@@ -318,8 +329,10 @@ defmodule SymphonyElixirWeb.ControlApiController do
   @spec start(Conn.t(), map()) :: Conn.t()
   def start(conn, params) do
     with {:ok, identifier} <- required_param(params["issue_identifier"], "issue_identifier"),
-         {:ok, note} <- start_note(params["note"]) do
-      respond_start(conn, identifier, Orchestrator.start_issue(orchestrator(conn), identifier, note))
+         {:ok, note} <- start_note(params["note"]),
+         {:ok, slot} <- start_slot(params["slot"]) do
+      opts = if slot, do: [slot: slot], else: []
+      respond_start(conn, identifier, Orchestrator.start_issue(orchestrator(conn), identifier, note, opts))
     else
       {:error, {:invalid_request, message}} -> error_response(conn, 422, "invalid_request", message)
     end
@@ -720,6 +733,28 @@ defmodule SymphonyElixirWeb.ControlApiController do
   end
 
   # Start now's optional note, bounded by the `run.started_by_person` event's `note` line.
+  # The slot a start names: a whole number from 1 to the slot count, or its digits.
+  defp start_slot(nil), do: {:ok, nil}
+
+  defp start_slot(slot) when is_binary(slot) do
+    case Integer.parse(String.trim(slot)) do
+      {value, ""} -> start_slot(value)
+      _other -> invalid_slot(slot)
+    end
+  end
+
+  defp start_slot(slot) when is_integer(slot) do
+    count = Config.settings!().execution.max_concurrent_agents
+    if slot in 1..count//1, do: {:ok, slot}, else: invalid_slot(slot)
+  end
+
+  defp start_slot(slot), do: invalid_slot(slot)
+
+  defp invalid_slot(slot) do
+    count = Config.settings!().execution.max_concurrent_agents
+    {:error, {:invalid_request, "#{inspect(slot)} is not a slot: use a whole number from 1 to #{count}."}}
+  end
+
   defp start_note(note) do
     case string_param(note) do
       nil ->

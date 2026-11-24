@@ -130,4 +130,51 @@ defmodule SymphonyElixir.Dispatch.SlotsTest do
       assert %{used: 1, free: 1, work_used: 1, work_free: 1, holders: [_, _]} = Slots.read(2, Enum.take(holders, 2), %{}, 1)
     end
   end
+
+  describe "slot numbers (TP-1630)" do
+    test "free_number/1 is the lowest number from 1 that none taken uses" do
+      assert Slots.free_number([]) == 1
+      assert Slots.free_number([1, 2]) == 3
+      assert Slots.free_number([2, 3]) == 1
+      assert Slots.free_number(MapSet.new([1, 3])) == 2
+    end
+
+    test "number_holders/1 numbers the holders stored without one, in the order they took their slots" do
+      holders = %{
+        "late" => %{since: ~U[2026-11-23 12:00:00Z], slot: nil},
+        "numbered" => %{since: ~U[2026-11-23 09:00:00Z], slot: 1},
+        "early" => %{since: ~U[2026-11-23 10:00:00Z]},
+        "unknown" => %{since: nil, slot: nil}
+      }
+
+      assert Slots.number_holders(holders) == %{"early" => 2, "late" => 3, "unknown" => 4}
+      assert Slots.number_holders(%{"numbered" => %{since: nil, slot: 1}}) == %{}
+    end
+
+    test "takeover/1 picks the slot taken most recently, one of unknown time last, and nil for none" do
+      owners = [{"old", ~U[2026-11-23 09:00:00Z]}, {"new", ~U[2026-11-23 11:00:00Z]}, {"unknown", nil}]
+      assert Slots.takeover(owners) == "new"
+      assert Slots.takeover([{"unknown", nil}]) == "unknown"
+      assert Slots.takeover([]) == nil
+    end
+
+    test "owner/3 climbs to the ticket whose own slot it is, and working_through/3 lists everyone in it" do
+      parents = %{"a" => "e", "a1" => "a", "b" => "e"}
+      in_progress = MapSet.new(["e", "a", "a1", "t"])
+
+      assert Slots.owner("a1", in_progress, parents) == "e"
+      assert Slots.owner("b", in_progress, parents) == "e"
+      assert Slots.owner("t", in_progress, parents) == "t"
+      assert Slots.working_through("e", in_progress, parents) == ["a", "a1", "e"]
+      assert Slots.working_through("t", in_progress, parents) == ["t"]
+      assert Slots.working_through("a", in_progress, parents) == ["a", "a1"]
+      assert Slots.ancestors("a1", parents) == ["a", "e"]
+      assert Slots.ancestors("x", %{"x" => "y", "y" => "x"}) == []
+    end
+
+    test "read/4 keeps each holder's slot number" do
+      holder = %{issue_id: "i-1", identifier: "MT-1", state: "In Progress", repo_key: "default", since: nil, slot: 2, running: false}
+      assert %{holders: [%{slot: 2}]} = Slots.read(2, [holder], %{})
+    end
+  end
 end
