@@ -35,6 +35,7 @@ defmodule SymphonyElixir.TestSupport do
         only: [
           write_workflow_file!: 1,
           write_workflow_file!: 2,
+          write_symphony_blocks!: 0,
           restore_env: 2,
           linear_tracker: 0,
           linear_tracker: 1,
@@ -146,6 +147,35 @@ defmodule SymphonyElixir.TestSupport do
 
     settle_config_cache!([path, symphony_path])
   end
+
+  # `write_workflow_file!/2` writes each section of `symphony.yml` as one inline map. A test of a
+  # one-line edit (`Config.LineEditor`) needs the file in indented blocks, as a person writes it:
+  # this rewrites it that way, with the same values.
+  def write_symphony_blocks! do
+    path = SymphonyElixir.Workflow.symphony_file_path()
+    {:ok, document} = YamlElixir.read_from_file(path)
+    write_atomically!(path, Enum.join(yaml_block_lines(document, 0), "\n") <> "\n")
+    Cache.clear()
+    settle_config_cache!([path])
+  end
+
+  defp yaml_block_lines(map, indent) do
+    map
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.flat_map(fn {key, value} ->
+      head = String.duplicate(" ", indent) <> yaml_block_key(key) <> ":"
+
+      if is_map(value) and map_size(value) > 0,
+        do: [head | yaml_block_lines(value, indent + 2)],
+        else: [head <> " " <> Jason.encode!(value)]
+    end)
+  end
+
+  defp yaml_block_key(key) when is_binary(key) do
+    if key =~ ~r/\A[A-Za-z0-9_][A-Za-z0-9_\-]*\z/, do: key, else: Jason.encode!(key)
+  end
+
+  defp yaml_block_key(key), do: Jason.encode!(to_string(key))
 
   # A test may rewrite the workflow while its orchestrator runs. `File.write!` truncates the file
   # first, so a config read in between would see an empty `symphony.yml`; a rename swaps it whole.

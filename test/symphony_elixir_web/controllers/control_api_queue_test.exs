@@ -57,6 +57,8 @@ defmodule SymphonyElixirWeb.ControlApiQueueTest do
       max_concurrent_agents: 1
     )
 
+    write_symphony_blocks!()
+
     issues = [ticket("a", "MT-A"), ticket("b", "MT-B"), ticket("c", "MT-C")]
     state = Orchestrator.put_dispatch_order_for_test(orchestrator_state(), issues)
     {:ok, orchestrator} = StateOrchestrator.start_link(state)

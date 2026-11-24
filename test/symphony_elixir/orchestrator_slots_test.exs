@@ -626,6 +626,7 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
   describe "the Director sets the slot count (TP-1629)" do
     test "a raised count applies at once: the next dispatch decision uses it, with no poll or timer", ctx do
       write_slots_workflow!(ctx, max_concurrent_agents: 1)
+      write_symphony_blocks!()
       held = recorded(issue("h", "MT-H", "In Progress"))
       next = recorded(issue("t", "MT-T", "Todo"))
       tracked([next])
@@ -652,6 +653,7 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
 
     test "a count lowered below the tickets in progress stops none, and a freed slot is not refilled until they are under it", ctx do
       write_slots_workflow!(ctx, max_concurrent_agents: 3)
+      write_symphony_blocks!()
       [one, two, three] = for n <- 1..3, do: recorded(issue("h#{n}", "MT-H#{n}", "In Progress"))
       next = recorded(issue("t", "MT-T", "Todo"))
       tracked([next])
