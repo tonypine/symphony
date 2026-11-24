@@ -9336,9 +9336,9 @@ defmodule SymphonyElixir.Orchestrator do
   streams get a queue notice at once. Without it (a Conductor stop, a Director move's stop) the slot
   is judged at the next cycle (`SymphonyElixir.Dispatch.Slots.releases?/2`).
   """
-  @spec stop_running(GenServer.server(), String.t(), keyword()) :: {:ok, map()} | :unavailable | {:error, term()}
   def stop_running(server, issue_id_or_identifier, opts \\ [])
 
+  @spec stop_running(GenServer.server(), String.t(), keyword()) :: {:ok, map()} | :unavailable | {:error, term()}
   def stop_running(server, issue_id_or_identifier, opts) when is_binary(issue_id_or_identifier) and is_list(opts) do
     if server_available?(server) do
       GenServer.call(server, {:stop_running, issue_id_or_identifier, opts})
@@ -9390,9 +9390,9 @@ defmodule SymphonyElixir.Orchestrator do
   @spec start_issue(String.t(), String.t() | nil) :: {:ok, map()} | :unavailable | {:error, term()}
   def start_issue(identifier, note), do: start_issue(__MODULE__, identifier, note)
 
-  @spec start_issue(GenServer.server(), String.t(), String.t() | nil, keyword()) :: {:ok, map()} | :unavailable | {:error, term()}
   def start_issue(server, identifier, note, opts \\ [])
 
+  @spec start_issue(GenServer.server(), String.t(), String.t() | nil, keyword()) :: {:ok, map()} | :unavailable | {:error, term()}
   def start_issue(server, identifier, note, opts) when is_binary(identifier) and (is_binary(note) or is_nil(note)) and is_list(opts) do
     if server_available?(server) do
       with {:ok, %Issue{} = issue} <- fetch_issue_to_start(identifier),
