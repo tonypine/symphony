@@ -4,7 +4,7 @@ defmodule SymphonyElixir.QaSeedTest do
   import Plug.Conn
   import Plug.Test
 
-  alias SymphonyElixir.{Artifacts, Config, DirectorMoves, Inbox, Orchestrator, Paths, Pauses, PlanBrief, QaSeed}
+  alias SymphonyElixir.{Artifacts, Config, DirectorMoves, Inbox, Initiatives, Orchestrator, Paths, Pauses, PlanBrief, QaSeed}
   alias SymphonyElixir.Dispatch.DependsOn
   alias SymphonyElixir.{Questions, RunStore, Situation, SubIssueWait, TicketEvents, TicketPullRequest, Tracker}
   alias SymphonyElixir.Workflow
@@ -288,6 +288,19 @@ defmodule SymphonyElixir.QaSeedTest do
     assert {:ok, %{state: "Done"}} = Tracker.fetch_issue_by_identifier("QA-114")
     refute RunStore.merged_wait?("qa-seed-114")
     assert RunStore.list_runs(repo_key, :all) |> Enum.filter(&(&1.issue_identifier == "QA-114")) == []
+  end
+
+  test "TP-1620: the seed's Initiatives list QA-117, which Symphony split, and not the labelled QA-109", %{dir: dir} do
+    assert QaSeed.load(dir, now: @now) == :ok
+
+    # QA-117 carries no plan label; the Conductor filed its three sub-tickets, one of them done.
+    assert %{labels: []} = RunStore.get_ticket_state("qa-seed-117")
+    assert [initiative] = Initiatives.read(now: @now)
+    assert %{identifier: "QA-117", group: "active", sub_tickets: subs} = initiative
+    assert subs |> Enum.map(&{&1.identifier, &1.state_type}) |> Enum.sort() == [{"QA-118", "completed"}, {"QA-119", "started"}, {"QA-120", "started"}]
+
+    # QA-109 carries the plan label and QA-114 has a sub-ticket, but Symphony split neither.
+    assert %{labels: ["plan"]} = RunStore.get_ticket_state("qa-seed-109")
   end
 
   defp rows(inbox), do: %{} |> Inbox.items(inbox) |> Enum.map(&{&1.identifier, &1.kind, &1.review}) |> Enum.sort()

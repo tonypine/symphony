@@ -400,6 +400,12 @@ GitHub or Linear in QA:
   is next. QA-115 and QA-116 are blocked by QA-114, yet neither is held by it. Cancel QA-115
   from its page: within a poll QA-114's page shows Done with no run started for it. Look at
   QA-114 at 1440×900, light and dark.
+- **Initiatives from Symphony's split (TP-1620):** on the live server Work › Initiatives lists
+  one parent, QA-117 ("Show each repository's spend on the Home page"), which Symphony split and
+  which carries no plan label: its sub-tickets are QA-118 (Done), QA-119 and QA-120 (Todo), so its
+  progress counts 1 of 3 done and QA-118 still shows under it. QA-109 carries the plan label and
+  QA-114 has a sub-ticket, but Symphony split neither: neither is listed. The page looks as the
+  fixture's Initiatives do. Look at it at 1440×900, light and dark.
 - **Ticket note (TP-1195):** with the same `ticket-ledger` fixture, SHOP-410's page has a
   one-line field pinned under the page, "Add a note for the next run"; it stays on screen
   however far the page scrolls. The fixture's feed already holds the Director's note, "Note by
