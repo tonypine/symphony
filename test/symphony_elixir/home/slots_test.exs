@@ -165,7 +165,17 @@ defmodule SymphonyElixir.Home.SlotsTest do
     working = holder("MT-W", "In Progress", 1, 1, parent: parent, sort_key: "a0")
     done_late = record("MT-A", "Done", parent: parent, phase_at: at(30))
     done_early = record("MT-B", "Done", parent: parent, phase_at: at(10))
-    second = record("MT-2", "Todo", parent: parent, sort_key: "a2", depends_on: [%{issue_id: "id-MT-A", identifier: "MT-A", kind: :done}, %{issue_id: "id-MT-1", identifier: "MT-1", kind: :released}])
+
+    second =
+      record("MT-2", "Todo",
+        parent: parent,
+        sort_key: "a2",
+        depends_on: [
+          %{issue_id: "id-MT-A", identifier: "MT-A", kind: :done},
+          %{issue_id: "id-MT-1", identifier: "MT-1", kind: :released}
+        ]
+      )
+
     first = record("MT-1", "Backlog", parent: parent, sort_key: "a1", repo_key: "shop")
     cancelled = record("MT-X", "Canceled", parent: parent)
 
@@ -210,11 +220,22 @@ defmodule SymphonyElixir.Home.SlotsTest do
     epic = holder("MT-E", "Waiting on sub-tickets", 1, 0)
     working = holder("MT-W", "In Progress", 1, 1, parent: %{identifier: "MT-E"})
     # MT-D's record names no repo: no stored pull request is looked up for it.
-    done = TicketState.normalize(%{repo_key: nil, issue_id: "id-MT-D", issue_identifier: "MT-D", title: "Ticket MT-D", phase: "Done", parent: %{identifier: "MT-E"}})
+    done =
+      TicketState.normalize(%{
+        repo_key: nil,
+        issue_id: "id-MT-D",
+        issue_identifier: "MT-D",
+        title: "Ticket MT-D",
+        phase: "Done",
+        parent: %{identifier: "MT-E"}
+      })
+
     other = record("MT-O", "Done", parent: %{identifier: "MT-E"})
     :ok = TicketPullRequest.record_created(@repo, "id-MT-O", "https://github.com/acme/app/commits/main", nil)
 
-    assert [%{epic: %{done_sub_tickets: [first, second], open_sub_tickets: []}}] = entries([epic, working, done, other], total: 1)
+    assert [%{epic: %{done_sub_tickets: [first, second], open_sub_tickets: []}}] =
+             entries([epic, working, done, other], total: 1)
+
     assert %{identifier: "MT-D", pull_request_number: nil} = first
     assert %{identifier: "MT-O", pull_request_number: nil} = second
   end

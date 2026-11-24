@@ -50,7 +50,22 @@ defmodule SymphonyElixir.Home.QueueTest do
     assert third.waits_on == [%{issue_id: "id-MT-1", identifier: "MT-1", kind: "done"}]
 
     # Every key a row gave before the dependencies and the done sub-tickets were added is still there.
-    old_keys = [:issue_id, :identifier, :title, :phase, :repo_key, :number, :path, :parent, :waits_on, :sub_tickets, :situation, :waits_on_you, :move]
+    old_keys = [
+      :issue_id,
+      :identifier,
+      :title,
+      :phase,
+      :repo_key,
+      :number,
+      :path,
+      :parent,
+      :waits_on,
+      :sub_tickets,
+      :situation,
+      :waits_on_you,
+      :move
+    ]
+
     assert Enum.all?(read.rows, &(old_keys -- Map.keys(&1) == []))
     assert Enum.map(third.dependencies, &{&1.identifier, &1.met}) == [{"MT-1", false}, {"MT-9", true}, {"MT-0", true}]
   end

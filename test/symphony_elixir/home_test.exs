@@ -222,7 +222,15 @@ defmodule SymphonyElixir.HomeTest do
       assert [%{slot: 1, ticket: %{identifier: "MT-W"}, epic: epic}] = read.slots.entries
       assert %{identifier: "MT-E", done: 1, total: 3} = epic
       assert [%{identifier: "MT-D", done_at: ^held}] = epic.done_sub_tickets
-      assert [%{identifier: "MT-N", phase: "Todo", parent: "MT-E", dependencies: [%{identifier: "MT-W", kind: "done", met: false}]}] = epic.open_sub_tickets
+
+      assert [
+               %{
+                 identifier: "MT-N",
+                 phase: "Todo",
+                 parent: "MT-E",
+                 dependencies: [%{identifier: "MT-W", kind: "done", met: false}]
+               }
+             ] = epic.open_sub_tickets
 
       assert [queued, sub] = read.queue.rows
       assert %{identifier: "MT-Q", sub_tickets: %{done: 1, total: 2}, done_sub_tickets: [%{identifier: "MT-QD"}]} = queued
