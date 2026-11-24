@@ -56,6 +56,9 @@ struct HomeView: View {
             scrollTop = value[0]
             viewport = value[1]
         }
+        // The scroll geometry reports only a change, never its first value: the view's own height, reported from the
+        // first layout, gives the rows on screen before any scroll.
+        .onGeometryChange(for: Double.self) { $0.size.height } action: { viewport = $0 }
         .overlay(alignment: .top) {
             if HomeStrip.pinned(scrollTop: scrollTop, cardsBottom: cardsBottom), !model.cards.isEmpty {
                 HomeStrip(cards: model.cards, reference: reference, numberWidth: numberWidth)

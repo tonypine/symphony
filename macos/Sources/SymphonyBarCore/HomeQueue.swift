@@ -90,13 +90,19 @@ public struct HomeQueuePager: Equatable {
         pages(covering: range).filter { !fresh.contains($0) }
     }
 
+    /// The viewport's height taken while the scroll view has not measured its own yet, as tall as the desktop window,
+    /// so Home opened at the top draws its first screen of rows before any scroll (TP-1609).
+    public static let assumedViewport: Double = 1440
+
     /// The rows on screen with `overscan` beyond each edge: the queue list starts `listTop` points below the top of
-    /// the scroll view's content, which is scrolled `scrollTop` down in a viewport `viewport` tall.
+    /// the scroll view's content, which is scrolled `scrollTop` down in a viewport `viewport` tall. Before the
+    /// viewport is measured (0), it is taken as `assumedViewport` tall.
     public static func visibleRange(scrollTop: Double, listTop: Double, viewport: Double, count: Int, overscan: Int = overscan) -> Range<Int> {
-        guard count > 0, viewport > 0 else { return 0..<0 }
+        guard count > 0 else { return 0..<0 }
+        let height = viewport > 0 ? viewport : assumedViewport
         let top = scrollTop - listTop
         let first = Int((top / pitch).rounded(.down)) - overscan
-        let last = Int(((top + viewport) / pitch).rounded(.up)) + overscan
+        let last = Int(((top + height) / pitch).rounded(.up)) + overscan
         let lower = min(max(first, 0), count)
         let upper = min(max(last, lower), count)
         return lower..<upper

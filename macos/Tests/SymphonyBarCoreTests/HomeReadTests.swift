@@ -262,11 +262,27 @@ final class HomeReadTests: XCTestCase {
         XCTAssertEqual(model.pager.widestNumber(in: end), 1245)
     }
 
+    func testHomeOpenedAtTheTopDrawsItsFirstRowsBeforeAnyScroll() async throws {
+        let calls = Calls()
+        let model = makeModel(calls)
+        await model.refresh()
+
+        // Nothing measured yet: no scroll, no viewport, the list's top not reported.
+        let range = HomeQueuePager.visibleRange(scrollTop: 0, listTop: 0, viewport: 0, count: model.pager.count)
+        XCTAssertEqual(range, 0..<(Int(HomeQueuePager.assumedViewport / HomeQueuePager.pitch) + HomeQueuePager.overscan))
+        XCTAssertLessThan(range.count, 100, "a screenful of rows, not 1,245")
+        await model.show(range)
+        XCTAssertEqual(calls.reads, ["api/v1/home?offset=0&limit=100"], "page 0, read once")
+        XCTAssertEqual(model.pager.row(at: 0)?.identifier, "TP-1590")
+        XCTAssertEqual(model.pager.row(at: 0)?.number, "1")
+        XCTAssertNotNil(model.pager.row(at: range.upperBound - 1))
+    }
+
     func testTheVisibleRangeStaysInsideTheList() {
         // A list below the screen draws only the overscan's first rows.
         XCTAssertEqual(HomeQueuePager.visibleRange(scrollTop: 0, listTop: 900, viewport: 800, count: 1245), 0..<4)
         XCTAssertEqual(HomeQueuePager.visibleRange(scrollTop: 0, listTop: 100, viewport: 800, count: 1245), 0..<(20 + HomeQueuePager.overscan))
-        XCTAssertEqual(HomeQueuePager.visibleRange(scrollTop: 0, listTop: 0, viewport: 0, count: 10), 0..<0)
+        XCTAssertEqual(HomeQueuePager.visibleRange(scrollTop: 0, listTop: 0, viewport: 0, count: 10), 0..<10, "an unmeasured viewport still draws")
         XCTAssertEqual(HomeQueuePager.visibleRange(scrollTop: 0, listTop: 0, viewport: 800, count: 0), 0..<0)
         XCTAssertEqual(HomeQueuePager.visibleRange(scrollTop: 0, listTop: 0, viewport: 800, count: 5), 0..<5)
 
@@ -416,6 +432,14 @@ final class HomeReadTests: XCTestCase {
     }
 
     // MARK: - The fixture
+
+    func testTheFixtureServesTheTicketsPageItsSavedViewsComeFrom() throws {
+        guard case let .changed(.loaded(data), _) = get(TicketsPayload.path) else { return XCTFail("no tickets read") }
+        let tickets = try XCTUnwrap(TicketsPayload.decode(data))
+        XCTAssertTrue(tickets.rows.contains { $0.identifier == "TP-1590" })
+        guard case let .changed(.loaded(views), _) = get(TicketsPayload.viewsPath) else { return XCTFail("no views read") }
+        XCTAssertEqual(try XCTUnwrap(TicketView.views(fromViews: views)).map(\.name), ["Hub", "In review"])
+    }
 
     func testTheFixtureAnswersOnlyWhenItHoldsAGeneratedQueue() throws {
         let other = APIFixtures(directory: Self.directory("home"), requestLog: log)
