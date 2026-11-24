@@ -218,7 +218,7 @@ final class HomeQueueComponentsTests: XCTestCase {
 
     private let row = QueueRowModel(
         number: 1_243, identifier: "TP-977", title: "Give agents one tool to request a protected change, and pause the ticket on it",
-        lead: .glyph("clock", .textSecondary), after: "TP-976", marks: [.init(.you, "Needs your approval")], repo: "symphony"
+        lead: .glyph("clock", .textSecondary), dependencies: [DependencyMarkerModel(identifier: "TP-976")], marks: [.init(.you, "Needs your approval")], repo: "symphony"
     )
 
     /// Where each part of the row stands, in a row 900 wide, drawn in `look`.
@@ -269,7 +269,7 @@ final class HomeQueueComponentsTests: XCTestCase {
         let rest = parts(.rest)
         let hover = parts(.hover)
         let dragged = parts(.dragged)
-        for part in [QueueRow.Part.lead, .identifier, .title, .after, .marks] {
+        for part in [QueueRow.Part.lead, .identifier, .title, .dependencies, .marks] {
             let at = rest[part] ?? .null
             XCTAssertGreaterThan(at.width, 0, "\(part) is drawn")
             XCTAssertEqual(hover[part] ?? .null, at, "\(part) keeps its place and width on hover")
@@ -328,7 +328,8 @@ final class HomeQueueComponentsTests: XCTestCase {
         XCTAssertEqual(SlotCard.accessibilityLabel(1, ticket: "TP-1619", dropTarget: false), "\(SlotCard.emptyLabel(1)): TP-1619")
         XCTAssertEqual(SlotCard.accessibilityLabel(1, ticket: "TP-1619", dropTarget: true), "\(SlotCard.emptyLabel(1)): TP-1619, Drop target")
         let line = slot(.working)
-        let said = "\(line.identifier), \(line.title), \(line.word), \(line.since)"
+        // An epic slot's line names its epic after the title (TP-1646).
+        let said = "\(line.identifier), \(line.title), part of \(line.epic ?? ""), \(line.word), \(line.since)"
         XCTAssertEqual(SlotStripLine.accessibilityLabel(line, dropTarget: false), said)
         XCTAssertEqual(SlotStripLine.accessibilityLabel(line, dropTarget: true), "\(said), Drop target")
         let row = QueueRowModel(number: 4, identifier: "TP-1605", title: "Sort the queue", lead: .glyph("clock", .textSecondary), repo: "symphony")

@@ -1871,6 +1871,78 @@ public enum DesignTokens {
         ]
         public static let dropGlowOpacity: [Double] = [0.35, 0.7]
 
+        // Recently done and the done row (TP-1644: `.pq-recent`, `.rlist`, `.drow` in page.css).
+        /// Above the In progress section when Recently done stands over it.
+        public static let recentBottom = Space.s8
+        /// The range control's room after the count, beyond the head's own gap.
+        public static let rangeLead = Space.s2
+        /// The chevron's square at the head's end, its glyph and its corner.
+        public static let twistSize: Double = 18
+        public static let twistGlyph: Double = 12
+        public static let twistRadius: Double = 5
+        /// The rows shown before the list scrolls inside itself, on the queue's pitch.
+        public static let recentRows = 6
+        /// Between two done rows: the queue's pitch less a row.
+        public static let doneRowGap: Double = 2
+        /// The check's room: 2 pt before it, 4 pt after it in Recently done.
+        public static let doneLeadLeading: Double = 2
+        public static let doneLeadTrailing: Double = 4
+        /// The check of a passed stage.
+        public static let doneStatus = Status.done
+        /// The trail's cells: the epic's flag and identifier, the pull request (58 pt), the repo (68 pt, the queue's end
+        /// cell) and when it was done (76 pt), their glyphs 11 pt, 4 pt before their words.
+        public static let pullRequestCell: Double = 58
+        public static let repoCell = endWidth
+        public static let whenCell: Double = 76
+        public static let trailGlyph: Double = 11
+        public static let trailGlyphGap = Space.s1
+
+        // Epics and dependencies in the queue (TP-1645: `.row.sub`, `.elbow`, `.q-done`, `.pos .n i` in page.css).
+        /// A sub-row's step in: the lead cell (its glyph and its room) and the gap after it, so a sub-ticket's state glyph
+        /// starts where its epic's identifier starts.
+        public static let subRowStep = Row.leadSize + 2 * leadMargin + rowPartGap
+        /// The elbow that fills the step: a 14 pt glyph, drawn on a 16-unit grid with a 1.5-unit stroke, in the 18 pt
+        /// cell under the epic's chevron, in the tertiary text colour.
+        public static let elbowGlyph: Double = 14
+        public static let elbowGrid: Double = 16
+        public static let elbowStroke: Double = 1.5
+        public static let elbowColor = TextColor.tertiary
+        /// The epic's chevron in the state glyph's cell.
+        public static let chevronGlyph = twistGlyph
+        /// The done count as a control: 2 pt above and below and 6 pt at the sides, inside the trail's columns, on the
+        /// pressed surface under the pointer and while pressed, its corner 6 pt.
+        public static let doneCountInsetX: Double = 6
+        public static let doneCountInsetY: Double = 2
+        public static let doneCountRadius: Double = 6
+        /// An epic's done row in the queue is quiet: its title secondary, at the regular weight.
+        public static let quietTitleWeight = 400
+
+        // The epic slot card (TP-1646: `.eslot`, `.epic-band`, `.b-done`, `.dlist`, `.ulist` in page.css).
+        /// The frame around the slot card: 4 pt at the left, right and bottom, its corner the card's plus 4 pt, on half
+        /// the card's surface, with a 1 pt separator edge.
+        public static let epicFrameInset: Double = 4
+        public static let epicFrameRadius = Radius.card + epicFrameInset
+        public static let epicFrameOpacity: Double = 0.5
+        public static let epicFrameStroke: Double = 1
+        /// The band: one line, 36 pt.
+        public static let epicBandHeight: Double = 36
+        /// The band's progress bar, 96 pt, before "7 of 14 done".
+        public static let epicBarWidth: Double = 96
+        /// The bar with its count as one button: 24 pt high, 8 pt at the sides (drawn into the gaps around it), its
+        /// corner 7 pt.
+        public static let epicDoneHeight: Double = 24
+        public static let epicDoneInsetX = Space.s2
+        public static let epicDoneRadius: Double = 7
+        /// Before the time the epic has held the slot.
+        public static let epicSinceGap = Space.s3
+        /// The room the band's and the lists' rows keep at their end beyond a row's own, so they end where the card's
+        /// content ends.
+        public static let epicRowEnd = cardSidePadding - epicFrameInset - rowInset
+        /// The rows each list shows before it scrolls inside itself (216 pt on the queue's pitch).
+        public static let epicListRows = recentRows
+        /// The epic's flag, as a done row's epic cell draws it.
+        public static let epicFlagSymbol = SymphonyView.initiatives.symbol
+
         /// The number as a row shows it: with a comma between thousands ("1,243").
         public static func number(_ value: Int) -> String {
             let formatter = NumberFormatter()
@@ -1888,6 +1960,15 @@ public enum DesignTokens {
             let pad = max(numberMinDigits - digits.filter { $0 == "0" }.count, 0)
             return String(repeating: "0", count: pad) + String(digits)
         }
+
+        /// The characters the part after the point of a sub-ticket's number is measured on: `characters` of it, the point
+        /// and each digit a "0" (the figures are tabular); none while no sub-row is on screen.
+        public static func fractionTemplate(characters: Int) -> String {
+            characters > 0 ? "." + String(repeating: "0", count: characters - 1) : ""
+        }
+
+        /// An epic's done count: "2 of 11 done".
+        public static func doneCount(done: Int, total: Int) -> String { "\(done) of \(total) done" }
 
         /// "5 of 9 checks proved", "1 of 1 check proved".
         public static func checks(proved: Int, total: Int) -> String {

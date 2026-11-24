@@ -4088,7 +4088,7 @@ phases:
         title: Tests and coverage
         mode: machine
         command:
-          - {run: (test -z "$SYMPHONY_CHANGED_TEST_FILES" || mix test $SYMPHONY_CHANGED_TEST_FILES) && mix cover.changed, when: elixir_source_changed}
+          - {run: mix cover.changed $SYMPHONY_CHANGED_TEST_FILES, when: elixir_source_changed}
           - {run: cd macos && swift test --filter "$SYMPHONY_CHANGED_SWIFT_TEST_FILTER", when: macos_changed}
         timeout_ms: 1800000
         on_fail: code
@@ -4267,13 +4267,17 @@ Each step has:
   files, `mix.lock` included; `elixir_source_changed`, when it touches an Elixir source or test
   file, `.ex` or `.exs`, and not for `mix.lock` alone). A step whose `when`, or every command's,
   does not hold is skipped with a plain reason that says what did not change ("no Elixir source or
-  test file changed"): the default list compiles a lock-only change and runs no credo, no
-  `mix test` and no `mix cover.changed` for it, nor for a change to docs or workflow files only. A
+  test file changed"): the default list compiles a lock-only change and runs no credo and no
+  `mix cover.changed` for it, nor for a change to docs or workflow files only. The tests step is
+  one pass: `mix cover.changed` runs the changed test files, the tests of the changed `lib/` files
+  and the tests that name a changed module once, in several processes at once, and that one run
+  both proves they pass and gives the changed modules' coverage (`docs/development.md`). A
   dependency update is proved by CI's full suite; no local step runs the whole suite. The step runner gives a machine step `SYMPHONY_CHANGED_ELIXIR_FILES`
   (the Elixir source files, `.ex` and `.exs`, the change touches that still exist; never a
   generated file such as `mix.lock`), `SYMPHONY_CHANGED_TEST_FILES` (the changed test files and the
-  tests of the changed `lib/` files; either may be empty, and the default steps then run no credo
-  and no `mix test`, which would lint or test the whole project) and `SYMPHONY_CHANGED_SWIFT_TEST_FILTER` (the Swift test
+  tests of the changed `lib/` files; either may be empty, and the default steps then run no credo,
+  which would lint the whole project, and `mix cover.changed` runs the tests it selects itself,
+  never the whole suite) and `SYMPHONY_CHANGED_SWIFT_TEST_FILTER` (the Swift test
   targets of what changed under `macos/`, `.` for all), read against the merge-base with the
   repository's base branch, uncommitted and untracked files included. The command runs in the
   ticket's workspace in a login shell with the environment an agent gets (its allow-list; Symphony's

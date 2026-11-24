@@ -116,16 +116,16 @@ final class HomeQueueDragTests: XCTestCase {
         var pager = HomeQueuePager(pageSize: 4)
         let rows = (0..<4).map { HomeRead.Row(identifier: "T-\($0)", number: String($0 + 1)) }
         pager.take(HomeRead.QueuePage(rows: rows, count: 10, total: 10, offset: 0, limit: 4), view: nil)
-        XCTAssertEqual(HomeQueueDrag.place(from: 3, gap: 0, in: pager), .top)
-        XCTAssertEqual(HomeQueueDrag.place(from: 1, gap: 10, in: pager), .end)
-        XCTAssertEqual(HomeQueueDrag.place(from: 0, gap: 2, in: pager), .before("T-2"))
+        XCTAssertEqual(HomeQueueDrag.place(rows[3], from: 3, gap: 0, in: pager), .top)
+        XCTAssertEqual(HomeQueueDrag.place(rows[1], from: 1, gap: 10, in: pager), .end)
+        XCTAssertEqual(HomeQueueDrag.place(rows[0], from: 0, gap: 2, in: pager), .before("T-2"))
         // The row below the gap is not read: the row above it names the place.
-        XCTAssertEqual(HomeQueueDrag.place(from: 0, gap: 4, in: pager), .after("T-3"))
+        XCTAssertEqual(HomeQueueDrag.place(rows[0], from: 0, gap: 4, in: pager), .after("T-3"))
         // Neither side read: nowhere to name.
-        XCTAssertNil(HomeQueueDrag.place(from: 0, gap: 6, in: pager))
+        XCTAssertNil(HomeQueueDrag.place(rows[0], from: 0, gap: 6, in: pager))
         // A drop at its own place sends nothing.
-        XCTAssertNil(HomeQueueDrag.place(from: 2, gap: 2, in: pager))
-        XCTAssertNil(HomeQueueDrag.place(from: 2, gap: 3, in: pager))
+        XCTAssertNil(HomeQueueDrag.place(rows[2], from: 2, gap: 2, in: pager))
+        XCTAssertNil(HomeQueueDrag.place(rows[2], from: 2, gap: 3, in: pager))
     }
 
     /// A queue with an epic and its open sub-tickets as the live Home read nests them: "1 A", "2 E", "2.1 E-1",
@@ -146,12 +146,13 @@ final class HomeQueueDragTests: XCTestCase {
 
     private static func shown(_ pager: HomeQueuePager) -> [String] { shown(pager, count: pager.count) }
 
-    func testAnEpicRowWithItsSubTicketsBelowItCannotBeDragged() {
+    func testEveryQueueRowDragsAnEpicAndASubTicketToo() {
         let pager = Self.nested()
-        XCTAssertFalse(HomeQueueDrag.canDrag(pager.row(at: 1), at: 1, in: pager), "the epic would leave its sub-tickets behind")
-        XCTAssertFalse(HomeQueueDrag.canDrag(pager.row(at: 2), at: 2, in: pager), "a sub-ticket is not a queue row to move")
+        XCTAssertTrue(HomeQueueDrag.canDrag(pager.row(at: 1), at: 1, in: pager), "an epic moves with its sub-tickets (TP-1645)")
+        XCTAssertTrue(HomeQueueDrag.canDrag(pager.row(at: 2), at: 2, in: pager), "a sub-ticket moves among its siblings (TP-1645)")
         XCTAssertTrue(HomeQueueDrag.canDrag(pager.row(at: 0), at: 0, in: pager))
-        XCTAssertTrue(HomeQueueDrag.canDrag(pager.row(at: 5), at: 5, in: pager), "the last row has nothing below it")
+        XCTAssertTrue(HomeQueueDrag.canDrag(pager.row(at: 5), at: 5, in: pager))
+        XCTAssertFalse(HomeQueueDrag.canDrag(nil, at: 0, in: pager))
         var filtered = HomeQueuePager(view: "view-hub", pageSize: 10)
         let page = HomeRead.QueuePage(rows: [HomeRead.Row(identifier: "A", number: "1")], count: 1, total: 6, offset: 0, limit: 10)
         filtered.take(page, view: "view-hub")
@@ -160,10 +161,12 @@ final class HomeQueueDragTests: XCTestCase {
 
     func testAGapInsideAnEpicsSubTicketsSnapsToTheGapAfterTheEpic() {
         let pager = Self.nested()
-        XCTAssertEqual(HomeQueueDrag.snap(2, in: pager), 4, "between the epic and its first sub-ticket")
-        XCTAssertEqual(HomeQueueDrag.snap(3, in: pager), 4, "between two sub-tickets")
-        XCTAssertEqual(HomeQueueDrag.snap(1, in: pager), 1, "before the epic stays")
-        XCTAssertEqual(HomeQueueDrag.snap(6, in: pager), 6)
+        let top = pager.row(at: 0)!
+        XCTAssertEqual(HomeQueueDrag.snap(2, dragging: top, from: 0, in: pager), 4, "between the epic and its first sub-ticket")
+        XCTAssertEqual(HomeQueueDrag.snap(3, dragging: top, from: 0, in: pager), 4, "between two sub-tickets")
+        XCTAssertEqual(HomeQueueDrag.snap(1, dragging: top, from: 0, in: pager), 1, "before the epic stays")
+        XCTAssertEqual(HomeQueueDrag.snap(6, dragging: top, from: 0, in: pager), 6)
+        XCTAssertEqual(HomeQueueDrag.snap(-4, dragging: top, from: 0, in: pager), 0)
     }
 
     func testARowMovedAcrossAnEpicKeepsTheEpicTogetherAndEveryNumberRight() {
@@ -191,9 +194,10 @@ final class HomeQueueDragTests: XCTestCase {
         XCTAssertEqual(calls.moves, [.queueMove("A", place: .before("B"))])
         XCTAssertEqual(Self.shown(model.pager), ["1 E", "1.1 E-1", "1.2 E-2", "2 A", "3 B", "4 C"])
 
-        // The epic itself is not moved.
+        // The epic moves with its sub-tickets (TP-1645).
         try await model.move(XCTUnwrap(model.pager.row(at: 0)), from: 0, to: 6)
-        XCTAssertEqual(calls.moves.count, 1)
+        XCTAssertEqual(calls.moves.last, .queueMove("E", place: .end))
+        XCTAssertEqual(Self.shown(model.pager), ["1 A", "2 B", "3 C", "4 E", "4.1 E-1", "4.2 E-2"])
     }
 
     func testARowWhosePageWasDroppedStillLands() {
@@ -321,7 +325,10 @@ final class HomeQueueDragTests: XCTestCase {
         XCTAssertEqual(Self.shown(model.pager, count: 4), shown, "the rows keep their real numbers")
         XCTAssertTrue(HomeQueueDrag.canDrag(first, view: nil))
         XCTAssertFalse(HomeQueueDrag.canDrag(nil, view: nil))
-        XCTAssertFalse(HomeQueueDrag.canDrag(HomeRead.Row(identifier: "TP-2", number: "6.1", parent: "TP-1"), view: nil))
+        // A sub-row drags among its siblings with no filter (TP-1645), and not under one.
+        let sub = HomeRead.Row(identifier: "TP-2", number: "6.1", parent: "TP-1")
+        XCTAssertTrue(HomeQueueDrag.canDrag(sub, view: nil))
+        XCTAssertFalse(HomeQueueDrag.canDrag(sub, view: model.view))
     }
 
     // MARK: - c4: a ticket that cannot start moves like any other
@@ -354,7 +361,30 @@ final class HomeQueueDragTests: XCTestCase {
 
         XCTAssertEqual(calls.moves, [.queueMove("TP-1596", place: .top)])
         XCTAssertEqual(Self.shown(model.pager, count: 6), Self.before)
-        XCTAssertEqual(model.notice, "Couldn't move TP-1596 in the queue: TP-1596 depends on TP-1590 and must stay below it. (HTTP 409)")
+        XCTAssertEqual(model.notice, "TP-1596 depends on TP-1590 and must stay below it.", "in the engine's words alone (TP-1645)")
+    }
+
+    func testARefusalIsSaidInTheEnginesWordsAndOtherFailuresAsTheyAre() {
+        let move = ControlAction.queueMove("A", place: .top)
+        let start = ControlAction.start("A", note: nil, slot: 2)
+        func failure(_ action: ControlAction, _ status: Int, _ body: String) -> String {
+            guard case let .failed(message) = ControlAPI.result(action, statusCode: status, data: Data(body.utf8)) else { return "" }
+            return message
+        }
+        let refused = failure(move, 409, #"{"error":{"message":"A depends on B and must stay below it."}}"#)
+        XCTAssertEqual(ControlAPI.reason(refused, for: move), "A depends on B and must stay below it.")
+        let startRefused = failure(start, 409, #"{"error":{"message":"A depends on B (C) and can't start before it is done."}}"#)
+        XCTAssertEqual(ControlAPI.reason(startRefused, for: start), "A depends on B (C) and can't start before it is done.")
+        // A failure without Symphony's own reason keeps what it says.
+        for message in [
+            failure(move, 500, "{}"), failure(move, 401, "{}"), failure(move, 503, "{}"),
+            "Couldn't move A in the queue: no control token in /tmp", "something else (HTTP 409)",
+            "Couldn't move A in the queue: (HTTP 409)", "Couldn't move A in the queue: why (HTTP x)",
+        ] {
+            XCTAssertEqual(ControlAPI.reason(message, for: move), message)
+        }
+        // Another action's failure is not this one's.
+        XCTAssertEqual(ControlAPI.reason(refused, for: start), refused)
     }
 
     func testTheFixtureRefusesOnlyTheMovesItNames() throws {

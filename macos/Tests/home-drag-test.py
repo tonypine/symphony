@@ -27,6 +27,46 @@ so no move of one reaches another:
 - filter: with a saved view picked no drag starts, no drop line or target shows and the rows keep
   their real numbers; with All tickets picked again the row drags (step 11).
 
+Epics and dependencies (TP-1645) run on Tests/Fixtures/director-app/home-queue-epics: the same two
+slots, and a queue whose sixth ticket, the epic TP-975, has six open sub-tickets (6.1 to 6.6, each
+waiting on another) and two done, then TP-1051 waiting on a release, the epic MOT-105 with three,
+and more tickets after them:
+
+- epic: TP-975's row dragged above TP-1596 is left behind dimmed with its sub-rows, and lands with
+  them: TP-975 is number 3 and its sub-tickets 3.1 to 3.6;
+- sub-row: TP-979 (6.4) dragged above TP-977 (6.2) shows a drop line that starts at the sub-row's
+  step and lands at 6.2; MOT-106 (8.1) dropped two rows below its epic's block stays inside it, the
+  last of its epic's sub-tickets (8.3);
+- dependency: TP-978 dropped above TP-977, which it depends on, is back at its place with its number,
+  and Home shows the engine's reason.
+
+The epic slot card (TP-1646) runs on Tests/Fixtures/director-app/home-queue-epic-slot: slot 1 is
+held by the epic TP-1597 (7 of 16 done, TP-1619 in work) and its band opens the sub-tickets to
+come, numbered 9 to 16 (TP-1624 waits on TP-1623, TP-1609 on TP-1607):
+
+- slot-epic: TP-1607 (11) dragged above TP-1623 (9) in the card's list shows the drop line, is
+  sent as a move before TP-1623, and lands at 9, the others following;
+- slot-epic-refused: TP-1624 (10) dropped above TP-1623, which it depends on, is back at its place
+  with its number, and Home shows the engine's reason.
+
+A ticket's title is the way into its page (TP-1647). The clicks are real clicks of the mouse at a
+point inside the title, worked out from the element's frame (`TITLE_X` in from a row's left edge):
+
+- title-card: the title on slot 1's card opens TP-1619's page (check c1);
+- title-row: a queue row's title opens its page; title-strip: a strip line's opens its slot's
+  ticket (c3);
+- title-drag: a drag that starts on a row's title moves the row and opens no page (c6);
+- title-sub-row (epics): a sub-ticket row's title opens its page; title-epic-fold: a click on
+  TP-975's row beside its title closes and opens its sub-tickets and opens no page; title-queue-done:
+  TP-975's done count shows its done rows, and a done row's title opens its page (c3, c4);
+- title-sub-drag (epics): a sub-row dragged from its title lands among its epic's (c6);
+- title-band, title-slot-sub, title-upcoming, title-slot-done (epic slot): the epic's title in the
+  band opens the epic, the card's title the sub-ticket in work, a row to come's title its ticket, and
+  a row of the done list its ticket; the band's chevron and done count still open their lists (c2,
+  c3);
+- title-recent (Tests/Fixtures/director-app/home-queue, which holds Recently done): a done row's
+  title in Recently done opens its page (c3).
+
 Each scenario prints `ok [name]` or `FAIL [name]: why`, and its screenshots (mid-drag and after the
 drop) go to `HOME_DRAG_TEST_SHOTS` when it is set, otherwise to a folder the test names and keeps.
 
@@ -50,10 +90,18 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 PRIV = os.path.normpath(os.path.join(HERE, "..", "..", "priv", "qa_driver"))
 FIXTURES = os.path.join(HERE, "Fixtures", "director-app", "home-queue-drag")
+RECENT = os.path.join(HERE, "Fixtures", "director-app", "home-queue")
+EPICS = os.path.join(HERE, "Fixtures", "director-app", "home-queue-epics")
+EPIC_SLOT = os.path.join(HERE, "Fixtures", "director-app", "home-queue-epic-slot")
+SLOT_REFUSAL = "TP-1624 depends on TP-1623 and must stay below it."
 REFUSAL = "TP-1596 depends on TP-1590 and must stay below it."
+DEPENDENCY_REFUSAL = "TP-978 depends on TP-977 and must stay below it."
 # The Mac's laptop viewport (WORKFLOW.md): 1440 × 900 pt.
 WINDOW = (1440, 900)
 PITCH = 36
+# How far in from a row's left edge (or a card's, a band's, a strip line's) a point stands inside the title: past the
+# number cell, the elbow of a sub-row, the state glyph and the identifier's column, well before a long title ends.
+TITLE_X = 240
 
 # Posts a drag through the HID tap, as a mouse does: the pointer moves to the start, the button goes
 # down, the pointer moves to the end in small steps with the button held, and the helper prints
@@ -153,7 +201,7 @@ def app_executable(path):
 class Home:
     """One launch of the app on the fixture, read and driven through the QA driver and the drag helper."""
 
-    def __init__(self, driver, dragger, executable, shots, name):
+    def __init__(self, driver, dragger, executable, shots, name, fixtures=FIXTURES):
         self.driver_binary = driver
         self.dragger = dragger
         self.shots = shots
@@ -165,7 +213,7 @@ class Home:
         env = dict(os.environ)
         env.update({
             "SYMPHONY_BAR_QA_ROOT": self.root,
-            "SYMPHONY_BAR_QA_API_FIXTURES": FIXTURES,
+            "SYMPHONY_BAR_QA_API_FIXTURES": fixtures,
             "SYMPHONY_BAR_QA_OPEN_VIEW": "overview",
             "SYMPHONY_BAR_QA_APPEARANCE": "light",
         })
@@ -234,13 +282,38 @@ class Home:
         row = self.row(ticket) or {}
         return row.get("value") == "Dragged" or (row.get("label") or "").endswith(", Dragged")
 
-    def ready(self):
+    def ready(self, shown=None):
         if not wait(lambda: self.window(), 40):
             return fail(self.name, "the app's window never showed")
         self.driver("ax-resize", self.pid, "", *WINDOW)
+        if shown:
+            if not wait(lambda: self.element(shown), 30):
+                return fail(self.name, f"Home never showed {shown}")
+            return True
         if not wait(lambda: self.row("TP-1590"), 30):
             return fail(self.name, "Home never showed the fixture's queue (no row TP-1590)")
         return True
+
+    def on_home(self):
+        """Whether Home is the page shown: its first slot card or a queue row is in the tree."""
+        return bool(self.element("slot-card-1") or self.rows())
+
+    def on_page(self, ticket):
+        """The element naming `ticket` exactly once Home has given way to a page (the breadcrumb's last part), or None."""
+        if self.on_home():
+            return None
+        return next((m for m in self.find(ticket) if ticket in (m.get("title"), m.get("description"), m.get("value"))), None)
+
+    def click_at(self, x, y):
+        reply = self.pointer("click", f"{int(x)},{int(y)}", 1)
+        print(f"  click {int(x)},{int(y)}: {json.dumps(reply)[:200]}")
+        time.sleep(0.4)
+        return reply
+
+    @staticmethod
+    def title_point(frame, dy=None):
+        """A point inside the title of the row, card or line at `frame`: `TITLE_X` in, mid-height or `dy` down."""
+        return frame["x"] + TITLE_X, frame["y"] + (frame["h"] / 2 if dy is None else dy)
 
     def visible(self):
         """The rows fully on screen, below the strip when it shows."""
@@ -632,6 +705,414 @@ def scenario_filter(home):
     return ok(name)
 
 
+def bring(home, tickets, step="0,250", tries=10):
+    """Scrolls down a step at a time until every one of `tickets` is fully on screen; their rows, or None."""
+    for _ in range(tries):
+        shown = {row["ticket"]: row for row in home.visible()}
+        if all(ticket in shown for ticket in tickets):
+            return shown
+        home.scroll(step)
+    shown = {row["ticket"]: row for row in home.visible()}
+    return shown if all(ticket in shown for ticket in tickets) else None
+
+
+def drop_on_row(home, name, picked, below):
+    """Drags `picked` (a row) to the gap above `below` (a row) and lets go; returns the drop line seen mid-drag."""
+    home.hover(picked)
+    grab = home.grab_point(picked).split(",")
+    start = (int(grab[0]), int(grab[1]))
+    helper = home.drag(start, (start[0], below["frame"]["y"] - 1))
+    try:
+        line = home.element("queue-drop-line")
+        home.screenshot("mid-drag")
+    finally:
+        home.release(helper)
+    return line
+
+
+def numbers(home):
+    return {row["ticket"]: row["number"] for row in home.rows()}
+
+
+def landed(home, expected):
+    return wait(lambda: (lambda now: now if all(now.get(t) == n for t, n in expected.items()) else None)(numbers(home)))
+
+
+def scenario_epic(home):
+    name = "epic: an epic's row moves with its sub-tickets and the numbers follow"
+    shown = bring(home, ["TP-1596", "TP-975", "TP-976"])
+    if not shown:
+        return fail(name, f"TP-1596, TP-975 and TP-976 are not on screen together: {sorted(numbers(home))}")
+    if shown["TP-975"]["number"] != "6" or shown["TP-976"]["number"] != "6.1":
+        return fail(name, f"the epic and its first sub-ticket are not 6 and 6.1: {numbers(home)}")
+    picked, below = shown["TP-975"], shown["TP-1596"]
+    home.hover(picked)
+    grab = home.grab_point(picked).split(",")
+    start = (int(grab[0]), int(grab[1]))
+    helper = home.drag(start, (start[0], below["frame"]["y"] - 1))
+    try:
+        if not wait(lambda: home.dragged("TP-975") and home.dragged("TP-976"), 3):
+            fail(name, "mid-drag the epic's row and its sub-rows are not left behind dimmed")
+        if home.element("queue-drop-line") is None:
+            fail(name, "mid-drag no drop line shows above TP-1596")
+        home.screenshot("mid-drag")
+    finally:
+        home.release(helper)
+    moves = wait(lambda: home.requests("/api/v1/control/queue/move"))
+    if not moves or moves[-1].get("issue_identifier") != "TP-975" or moves[-1].get("before") != "TP-1596":
+        return fail(name, f"the move sent was {moves!r}, not TP-975 before TP-1596")
+    expected = {"TP-975": "3", "TP-976": "3.1", "TP-977": "3.2", "TP-981": "3.6", "TP-1596": "4", "TP-1605": "5", "HUB-212": "6"}
+    result = landed(home, expected)
+    home.screenshot("after-drop")
+    if not result:
+        return fail(name, f"after the drop the numbers are {numbers(home)}, not {expected}")
+    if name in failures:
+        return False
+    return ok(name)
+
+
+def scenario_sub_row(home):
+    name = "sub-row: a sub-row moves among its epic's sub-tickets and nowhere else"
+    shown = bring(home, ["TP-977", "TP-979"])
+    if not shown:
+        return fail(name, f"TP-977 and TP-979 are not on screen together: {sorted(numbers(home))}")
+    picked, below = shown["TP-979"], shown["TP-977"]
+    line = drop_on_row(home, name, picked, below)
+    if line is None:
+        fail(name, "mid-drag no drop line shows above TP-977")
+    elif line["frame"]["x"] < picked["frame"]["x"] + 40:
+        fail(name, f"the drop line starts at x {line['frame']['x']}, not at the sub-row's step (the row starts at {picked['frame']['x']})")
+    moves = wait(lambda: home.requests("/api/v1/control/queue/move"))
+    if not moves or moves[-1].get("issue_identifier") != "TP-979" or moves[-1].get("before") != "TP-977":
+        return fail(name, f"the move sent was {moves!r}, not TP-979 before TP-977")
+    expected = {"TP-976": "6.1", "TP-979": "6.2", "TP-977": "6.3", "TP-978": "6.4", "TP-980": "6.5"}
+    if not landed(home, expected):
+        return fail(name, f"after the drop the numbers are {numbers(home)}, not {expected}")
+
+    shown = bring(home, ["MOT-106", "MOT-108", "HUB-213", "TP-1700"])
+    if not shown:
+        return fail(name, f"MOT-105's sub-rows and the rows below it are not on screen together: {sorted(numbers(home))}")
+    drop_on_row(home, name, shown["MOT-106"], shown["TP-1700"])
+    moves = wait(lambda: len(home.requests("/api/v1/control/queue/move")) > 1 and home.requests("/api/v1/control/queue/move"))
+    if not moves or moves[-1].get("issue_identifier") != "MOT-106" or moves[-1].get("after") != "MOT-108":
+        return fail(name, f"the move sent was {moves!r}, not MOT-106 after MOT-108, the last of its epic's")
+    expected = {"MOT-105": "8", "MOT-107": "8.1", "MOT-108": "8.2", "MOT-106": "8.3", "HUB-213": "9"}
+    result = landed(home, expected)
+    home.screenshot("after-drop-outside")
+    if not result:
+        return fail(name, f"after the drop outside its epic the numbers are {numbers(home)}, not {expected}")
+    if name in failures:
+        return False
+    return ok(name)
+
+
+def scenario_dependency(home):
+    name = "dependency: a drop above a ticket it depends on leaves the queue as it was and says why"
+    shown = bring(home, ["TP-977", "TP-978"])
+    if not shown:
+        return fail(name, f"TP-977 and TP-978 are not on screen together: {sorted(numbers(home))}")
+    before = numbers(home)
+    drop_on_row(home, name, shown["TP-978"], shown["TP-977"])
+    moves = wait(lambda: home.requests("/api/v1/control/queue/move"))
+    if not moves or moves[-1].get("issue_identifier") != "TP-978":
+        return fail(name, f"the move sent was {moves!r}")
+    said = wait(lambda: home.find(DEPENDENCY_REFUSAL), 10)
+    home.screenshot("after-drop")
+    if not said:
+        return fail(name, f"Home does not show the engine's reason {DEPENDENCY_REFUSAL!r}")
+    if not landed(home, before):
+        return fail(name, f"the queue changed: {before} became {numbers(home)}")
+    return ok(name)
+
+
+def open_upcoming(home, name):
+    """Clicks slot 1's epic band, which opens the sub-tickets to come below its card; their rows, or None."""
+    band = wait(lambda: home.element("epic-slot-band-1"), 10)
+    if band is None:
+        fail(name, "slot 1 shows no epic band")
+        return None
+    # On the band's chevron, at its left: the band's middle is the epic's title, which opens the epic's page (TP-1647).
+    frame = band["frame"]
+    reply = home.click_at(frame["x"] + 8, frame["y"] + frame["h"] / 2)
+    if "error" in reply:
+        fail(name, f"the click on the band's chevron failed: {reply['error']}")
+        return None
+    shown = wait(lambda: (lambda now: now if all(t in now for t in ("TP-1623", "TP-1624", "TP-1607")) else None)(
+        {row["ticket"]: row for row in home.rows()}), 10)
+    if not shown:
+        fail(name, f"the band opened no sub-tickets to come: {sorted(numbers(home))}")
+        return None
+    return shown
+
+
+def scenario_slot_epic(home):
+    name = "slot-epic: a sub-ticket dragged in an epic slot card's list lands among its epic's"
+    shown = open_upcoming(home, name)
+    if not shown:
+        return False
+    if [shown[t]["number"] for t in ("TP-1623", "TP-1624", "TP-1607")] != ["9", "10", "11"]:
+        return fail(name, f"the rows to come are not numbered on from 7 done: {numbers(home)}")
+    home.hover(shown["TP-1607"])
+    grab = home.grab_point(shown["TP-1607"]).split(",")
+    start = (int(grab[0]), int(grab[1]))
+    helper = home.drag(start, (start[0], shown["TP-1623"]["frame"]["y"] - 1))
+    try:
+        if not wait(lambda: home.dragged("TP-1607"), 3):
+            fail(name, "mid-drag TP-1607 is not left behind dimmed")
+        if home.element("queue-drop-line") is None:
+            fail(name, "mid-drag no drop line shows above TP-1623")
+        home.screenshot("mid-drag")
+    finally:
+        home.release(helper)
+    moves = wait(lambda: home.requests("/api/v1/control/queue/move"))
+    if not moves or moves[-1].get("issue_identifier") != "TP-1607" or moves[-1].get("before") != "TP-1623":
+        return fail(name, f"the move sent was {moves!r}, not TP-1607 before TP-1623")
+    expected = {"TP-1607": "9", "TP-1623": "10", "TP-1624": "11", "TP-1609": "12"}
+    result = landed(home, expected)
+    home.screenshot("after-drop")
+    if not result:
+        return fail(name, f"after the drop the numbers are {numbers(home)}, not {expected}")
+    if name in failures:
+        return False
+    return ok(name)
+
+
+def scenario_slot_epic_refused(home):
+    name = "slot-epic-refused: a drop above a sub-ticket it depends on leaves the card's list as it was and says why"
+    shown = open_upcoming(home, name)
+    if not shown:
+        return False
+    before = numbers(home)
+    drop_on_row(home, name, shown["TP-1624"], shown["TP-1623"])
+    moves = wait(lambda: home.requests("/api/v1/control/queue/move"))
+    if not moves or moves[-1].get("issue_identifier") != "TP-1624":
+        return fail(name, f"the move sent was {moves!r}")
+    said = wait(lambda: home.find(SLOT_REFUSAL), 10)
+    home.screenshot("after-drop")
+    if not said:
+        return fail(name, f"Home does not show the engine's reason {SLOT_REFUSAL!r}")
+    if not landed(home, before):
+        return fail(name, f"the list changed: {before} became {numbers(home)}")
+    return ok(name)
+
+
+# TP-1647: a click on a ticket's title opens its page; the rest of a card or a row keeps its own behaviour.
+
+def opens(home, name, point, ticket, what):
+    """Clicks `point` (inside `what`'s title) and checks the page of `ticket` opened in Home's place."""
+    reply = home.click_at(*point)
+    if "error" in reply:
+        return fail(name, f"the click on {what}'s title failed: {reply['error']}")
+    page = wait(lambda: home.on_page(ticket), 10)
+    home.screenshot("after-click")
+    if not page:
+        return fail(name, f"a click on {what}'s title did not open {ticket}'s page (Home still shows: {home.on_home()})")
+    return True
+
+
+def card_title(home, slot=1):
+    """A point inside the title on slot `slot`'s card: the header's line, below the card's top padding."""
+    card = wait(lambda: home.element(f"slot-card-{slot}"), 10)
+    if card is None:
+        return None
+    return home.title_point(card["frame"], dy=16 + 12)
+
+
+def scenario_title_card(home):
+    name = "title-card: the title on a slot card opens the ticket's page"
+    point = card_title(home)
+    if point is None:
+        return fail(name, "slot 1's card is not on screen")
+    return opens(home, name, point, "TP-1619", "slot 1's card") and ok(name)
+
+
+def scenario_title_row(home):
+    name = "title-row: a queue row's title opens its ticket's page"
+    row = wait(lambda: home.row("TP-1592"), 10)
+    if row is None:
+        return fail(name, "row TP-1592 is not on screen")
+    return opens(home, name, home.title_point(row["frame"]), "TP-1592", "TP-1592's row") and ok(name)
+
+
+def scenario_title_strip(home):
+    name = "title-strip: a strip line's title opens its slot's ticket"
+    if not home.scroll("0,1500"):
+        return fail(name, "the queue did not scroll")
+    line = wait(lambda: home.element("slot-line-2"), 10)
+    if line is None:
+        return fail(name, "the strip never showed")
+    return opens(home, name, home.title_point(line["frame"]), "TP-1594", "the strip's second line") and ok(name)
+
+
+def drag_from_title(home, name, picked, below, expected):
+    """Drags `picked` from its title to the gap above `below`; checks the move, the numbers and that no page opened."""
+    x, y = home.title_point(picked["frame"])
+    helper = home.drag((int(x), int(y)), (int(x), below["frame"]["y"] - 1))
+    try:
+        if not wait(lambda: home.dragged(picked["ticket"]), 3):
+            fail(name, f"mid-drag from its title {picked['ticket']} is not left behind dimmed")
+        if home.element("queue-drop-line") is None:
+            fail(name, f"mid-drag from its title no drop line shows above {below['ticket']}")
+        home.screenshot("mid-drag")
+    finally:
+        home.release(helper)
+    moves = wait(lambda: home.requests("/api/v1/control/queue/move"))
+    if not moves or moves[-1].get("issue_identifier") != picked["ticket"] or moves[-1].get("before") != below["ticket"]:
+        return fail(name, f"the move sent was {moves!r}, not {picked['ticket']} before {below['ticket']}")
+    result = landed(home, expected)
+    home.screenshot("after-drop")
+    if not home.on_home():
+        return fail(name, "a drag from the title opened a page")
+    if not result:
+        return fail(name, f"after the drop the numbers are {numbers(home)}, not {expected}")
+    if name in failures:
+        return False
+    return ok(name)
+
+
+def scenario_title_drag(home):
+    name = "title-drag: a row dragged from its title moves and opens no page"
+    # Past the rows the fixture refuses to move: there every row moves freely.
+    if not home.scroll("0,1500"):
+        return fail(name, "the queue did not scroll")
+    rows = wait(lambda: len(home.visible()) >= 8 and home.visible(), 10)
+    if not rows:
+        return fail(name, "fewer than 8 rows show")
+    # The gap is three rows below the strip: within the list's top edge (48 pt) the list scrolls under the drag.
+    picked, below = rows[6], rows[3]
+    expected = {picked["ticket"]: below["number"]}
+    for row in rows[3:6]:
+        expected[row["ticket"]] = str(number(row["number"]) + 1)
+    print(f"  dragging {picked['ticket']} (#{picked['number']}) from its title above {below['ticket']} (#{below['number']})")
+    return drag_from_title(home, name, picked, below, expected)
+
+
+def scenario_title_sub_row(home):
+    name = "title-sub-row: a sub-ticket row's title opens its page"
+    shown = bring(home, ["TP-977"])
+    if not shown:
+        return fail(name, f"TP-977 is not on screen: {sorted(numbers(home))}")
+    return opens(home, name, home.title_point(shown["TP-977"]["frame"]), "TP-977", "TP-977's sub-row") and ok(name)
+
+
+def scenario_title_epic_fold(home):
+    name = "title-epic-fold: a click on an epic's row beside its title folds it and opens no page"
+    shown = bring(home, ["TP-975", "TP-976"])
+    if not shown:
+        return fail(name, f"TP-975 and its sub-rows are not on screen: {sorted(numbers(home))}")
+    frame = shown["TP-975"]["frame"]
+    # In the number's cell, left of the chevron: the row, not its title.
+    home.click_at(frame["x"] + 18, frame["y"] + frame["h"] / 2)
+    if not wait(lambda: home.row("TP-976") is None, 5):
+        return fail(name, "a click on TP-975's row beside its title did not close its sub-tickets")
+    if not home.on_home():
+        return fail(name, "a click on TP-975's row beside its title opened a page")
+    home.click_at(frame["x"] + 18, frame["y"] + frame["h"] / 2)
+    if not wait(lambda: home.row("TP-976"), 5):
+        return fail(name, "a second click beside the title did not open its sub-tickets again")
+    home.screenshot("folded-and-open")
+    if not home.on_home():
+        return fail(name, "a click on TP-975's row beside its title opened a page")
+    return ok(name)
+
+
+def scenario_title_queue_done(home):
+    name = "title-queue-done: a done row's title in a queue epic's block opens its page"
+    shown = bring(home, ["TP-975"])
+    if not shown:
+        return fail(name, f"TP-975 is not on screen: {sorted(numbers(home))}")
+    frame = shown["TP-975"]["frame"]
+    # The done count stands just before the repo's cell at the row's end (8 pt in, 68 pt wide, 12 pt between).
+    home.click_at(frame["x"] + frame["w"] - 8 - 68 - 12 - 30, frame["y"] + frame["h"] / 2)
+    done = wait(lambda: home.element("done-row-TP-982"), 5)
+    if done is None:
+        return fail(name, "TP-975's done count did not show its done rows (no done-row-TP-982)")
+    if not home.on_home():
+        return fail(name, "the done count opened a page")
+    done = on_screen(home, "done-row-TP-982")
+    if done is None:
+        return fail(name, "TP-982's done row is not on screen")
+    return opens(home, name, home.title_point(done["frame"]), "TP-982", "TP-982's done row") and ok(name)
+
+
+def on_screen(home, identifier, tries=4):
+    """The element `identifier`, scrolled up into the window when it shows below its bottom edge; None if it never is."""
+    for _ in range(tries):
+        element = home.element(identifier)
+        if element is None:
+            return None
+        frame = element["frame"]
+        bottom = home.window()["frame"]["y"] + home.window()["frame"]["h"] - 4
+        below = frame["y"] + frame["h"] - bottom
+        if below <= 0:
+            return element
+        home.scroll(f"0,{int(below) + 120}")
+    return None
+
+
+def scenario_title_sub_drag(home):
+    name = "title-sub-drag: a sub-row dragged from its title lands among its epic's and opens no page"
+    shown = bring(home, ["TP-977", "TP-979"])
+    if not shown:
+        return fail(name, f"TP-977 and TP-979 are not on screen together: {sorted(numbers(home))}")
+    expected = {"TP-976": "6.1", "TP-979": "6.2", "TP-977": "6.3", "TP-978": "6.4"}
+    return drag_from_title(home, name, shown["TP-979"], shown["TP-977"], expected)
+
+
+def scenario_title_band(home):
+    name = "title-band: the epic's title in the band opens the epic's page; the chevron still opens its list"
+    band = wait(lambda: home.element("epic-slot-band-1"), 10)
+    if band is None:
+        return fail(name, "slot 1 shows no epic band")
+    # The chevron first: it opens the list to come and no page.
+    if not open_upcoming(home, name):
+        return False
+    if not home.on_home():
+        return fail(name, "the band's chevron opened a page")
+    return opens(home, name, home.title_point(band["frame"]), "TP-1597", "the band") and ok(name)
+
+
+def scenario_title_slot_sub(home):
+    name = "title-slot-sub: the title of the sub-ticket in work on an epic slot card opens its page"
+    point = card_title(home)
+    if point is None:
+        return fail(name, "slot 1's card is not on screen")
+    return opens(home, name, point, "TP-1619", "the card in work") and ok(name)
+
+
+def scenario_title_upcoming(home):
+    name = "title-upcoming: a row to come's title under an epic slot card opens its page"
+    shown = open_upcoming(home, name)
+    if not shown:
+        return False
+    return opens(home, name, home.title_point(shown["TP-1623"]["frame"]), "TP-1623", "TP-1623's row") and ok(name)
+
+
+def scenario_title_slot_done(home):
+    name = "title-slot-done: the done count opens the done list, and a done row's title opens its page"
+    count = wait(lambda: home.element("epic-slot-done-count-1"), 10)
+    if count is None:
+        return fail(name, "slot 1's epic band has no done count")
+    reply = home.pointer("click", count["path"], 1)
+    if "error" in reply:
+        return fail(name, f"the click on the done count failed: {reply['error']}")
+    # The most recent done row, next to the card: the list opens at its end.
+    done = wait(lambda: home.element("done-row-TP-1622"), 5)
+    if done is None:
+        return fail(name, "the done count did not open the done list (no done-row-TP-1622)")
+    if not home.on_home():
+        return fail(name, "the done count opened a page")
+    return opens(home, name, home.title_point(done["frame"]), "TP-1622", "TP-1622's done row") and ok(name)
+
+
+def scenario_title_recent(home):
+    name = "title-recent: a done row's title in Recently done opens its page"
+    done = wait(lambda: home.element("done-row-TP-1622"), 10)
+    if done is None:
+        return fail(name, "Recently done shows no TP-1622")
+    return opens(home, name, home.title_point(done["frame"]), "TP-1622", "TP-1622's done row") and ok(name)
+
+
 SCENARIOS = {
     "hover": scenario_hover,
     "reorder": scenario_reorder,
@@ -639,7 +1120,32 @@ SCENARIOS = {
     "card": scenario_card,
     "refused": scenario_refused,
     "filter": scenario_filter,
+    "epic": scenario_epic,
+    "sub-row": scenario_sub_row,
+    "dependency": scenario_dependency,
+    "slot-epic": scenario_slot_epic,
+    "slot-epic-refused": scenario_slot_epic_refused,
+    "title-card": scenario_title_card,
+    "title-row": scenario_title_row,
+    "title-strip": scenario_title_strip,
+    "title-drag": scenario_title_drag,
+    "title-sub-row": scenario_title_sub_row,
+    "title-epic-fold": scenario_title_epic_fold,
+    "title-queue-done": scenario_title_queue_done,
+    "title-sub-drag": scenario_title_sub_drag,
+    "title-band": scenario_title_band,
+    "title-slot-sub": scenario_title_slot_sub,
+    "title-upcoming": scenario_title_upcoming,
+    "title-slot-done": scenario_title_slot_done,
+    "title-recent": scenario_title_recent,
 }
+
+# The scenarios that run on the epics fixture; the others run on FIXTURES.
+ON_EPICS = {"epic", "sub-row", "dependency", "title-sub-row", "title-epic-fold", "title-queue-done", "title-sub-drag"}
+# The scenarios that run on the epic slot fixture.
+ON_EPIC_SLOT = {"slot-epic", "slot-epic-refused", "title-band", "title-slot-sub", "title-upcoming", "title-slot-done"}
+# The scenarios that run on the fixture with Recently done, and the element that shows its Home is drawn.
+ON_RECENT = {"title-recent": "done-row-TP-1622"}
 
 
 def main():
@@ -671,9 +1177,10 @@ def main():
 
         for name in picked:
             print(f"== {name}")
-            home = Home(driver, dragger, executable, shots, name)
+            fixtures = EPICS if name in ON_EPICS else EPIC_SLOT if name in ON_EPIC_SLOT else RECENT if name in ON_RECENT else FIXTURES
+            home = Home(driver, dragger, executable, shots, name, fixtures)
             try:
-                if home.ready():
+                if home.ready(ON_RECENT.get(name)):
                     SCENARIOS[name](home)
             except Exception as error:  # noqa: BLE001 - a scenario's crash is its failure, the rest still run
                 fail(name, f"{type(error).__name__}: {error}")

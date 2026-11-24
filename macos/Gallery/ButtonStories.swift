@@ -14,7 +14,8 @@ struct ComponentStory {
     /// `save-bar`, `list-card` or `progress-meter` (TP-1530), `reorderable-list` (TP-1531), `window-bar` or
     /// `breadcrumb` (TP-1496), or `control-bar` (TP-1497), or `sidebar` or `status-line` (TP-1498), or `toggle`,
     /// `number-field`, `time-field`, `settings-row`, `settings-group` or `section-list` (TP-1574), or `slot-card`,
-    /// `slot-strip-line`, `checks-bar`, `token-line`, `slot-count` or `queue-row` (TP-1608).
+    /// `slot-strip-line`, `checks-bar`, `token-line`, `slot-count` or `queue-row` (TP-1608), or `done-row` or
+    /// `recently-done-head` (TP-1644).
     let component: String
     let id: String
     /// The catalog's component title, for the sheet.

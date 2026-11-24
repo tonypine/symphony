@@ -121,7 +121,8 @@ final class SymphonyWindowModel: ObservableObject {
     /// at once on each `event: queue` of the live channel.
     lazy var homeQueue = HomeQueueModel(
         fetch: { [client] path, tag in await client.get(path, ifNoneMatch: tag) },
-        send: { [weak self] action in await self?.onControl(action) ?? .done }
+        send: { [weak self] action in await self?.onControl(action) ?? .done },
+        choices: AppStores.current.defaults
     )
     /// The last Initiatives Symphony served, read again after each state poll.
     @Published private(set) var initiatives: InitiativesPayload?
@@ -1326,7 +1327,15 @@ extension SymphonyWindowModel {
             pick: { [weak self] id in self?.homeQueueTask { await $0.pick(view: id) } },
             show: { [weak self] range in self?.homeQueueTask { await $0.show(range) } },
             openTicket: { [weak self] in self?.openTicket($0) },
-            dismissNotice: { [weak self] in self?.homeQueue.notice = nil }
+            toggleEpic: { [weak self] epic in self?.homeQueueTask { await $0.toggle(epic: epic) } },
+            toggleEpicDone: { [weak self] epic in self?.homeQueueTask { await $0.toggleDone(epic: epic) } },
+            toggleSlotUpcoming: { [weak self] epic in self?.homeQueue.toggleUpcoming(epic: epic) },
+            toggleSlotDone: { [weak self] epic in self?.homeQueue.toggleSlotDone(epic: epic) },
+            moveInSlot: { [weak self] slot, index, gap in self?.homeQueueTask { await $0.moveUpcoming(inSlot: slot, from: index, to: gap) } },
+            dismissNotice: { [weak self] in self?.homeQueue.notice = nil },
+            pickDoneRange: { [weak self] range in self?.homeQueueTask { await $0.pick(doneRange: range) } },
+            toggleRecentlyDone: { [weak self] in self?.homeQueue.toggleRecentlyDone() },
+            showMoreDone: { [weak self] in self?.homeQueueTask { await $0.showMoreDone() } }
         )
     }
 

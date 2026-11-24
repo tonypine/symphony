@@ -1,0 +1,52 @@
+{
+ "views": [
+  {
+   "id": "view-rework",
+   "name": "Rework",
+   "filters": [
+    {
+     "column": "phase",
+     "value": [
+      "Rework"
+     ]
+    }
+   ],
+   "columns": [
+    "identifier",
+    "title",
+    "repo",
+    "phase"
+   ],
+   "sort": {
+    "column": "identifier",
+    "direction": "asc"
+   },
+   "created_at": "2026-10-01T10:00:00Z",
+   "updated_at": "2026-10-01T10:00:00Z"
+  },
+  {
+   "id": "view-hub",
+   "name": "Hub",
+   "filters": [
+    {
+     "column": "repo",
+     "value": [
+      "hub"
+     ]
+    }
+   ],
+   "columns": [
+    "identifier",
+    "title",
+    "repo",
+    "phase"
+   ],
+   "sort": {
+    "column": "identifier",
+    "direction": "asc"
+   },
+   "created_at": "2026-10-01T10:00:00Z",
+   "updated_at": "2026-10-01T10:00:00Z"
+  }
+ ]
+}

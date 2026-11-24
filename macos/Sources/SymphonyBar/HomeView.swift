@@ -18,15 +18,31 @@ struct HomeActions {
     var pick: (String?) -> Void = { _ in }
     /// The rows on screen changed: their pages are read.
     var show: (Range<Int>) -> Void = { _ in }
-    /// A click on a row opens the ticket's page.
+    /// A click on a ticket's title, on a slot card or any row, opens the ticket's page (TP-1647).
     var openTicket: (String) -> Void = { _ in }
+    /// A click on an epic's row shows or hides its sub-tickets (TP-1645).
+    var toggleEpic: (String) -> Void = { _ in }
+    /// An epic's done count shows or hides its done sub-tickets.
+    var toggleEpicDone: (String) -> Void = { _ in }
+    /// An epic slot card's band shows or hides what is still to come (TP-1646), by epic.
+    var toggleSlotUpcoming: (String) -> Void = { _ in }
+    /// An epic slot card's done count shows or hides what is done, by epic.
+    var toggleSlotDone: (String) -> Void = { _ in }
+    /// A row to come of the epic slot card of a slot dropped into a gap of its list: the slot, the row's index and the gap.
+    var moveInSlot: (Int, Int, Int) -> Void = { _, _, _ in }
     /// Dismisses the line that says why a move didn't go through.
     var dismissNotice: () -> Void = {}
+    /// Recently done's range control (TP-1644).
+    var pickDoneRange: (HomeRead.DoneRange) -> Void = { _ in }
+    /// Recently done's head: folds the section or opens it.
+    var toggleRecentlyDone: () -> Void = {}
+    /// The last done row came into view: the next page of the range is read.
+    var showMoreDone: () -> Void = {}
 }
 
-/// Home, the window to Symphony's queue (TP-1609, `docs/design/prototypes/home-queue/`): two sections on one 32 pt
-/// gutter. In progress, one card per slot (an empty slot an outline reading "Slot N") with the slot count control beside
-/// its title; then Queue, the saved views of the Tickets page as pills and every ticket that holds no slot in its stored
+/// Home, the window to Symphony's queue (TP-1609, `docs/design/prototypes/home-queue/`): three sections on one 32 pt
+/// gutter. Recently done (TP-1644), the tickets that finished today or this week, folding to its head; In progress,
+/// one card per slot (an empty slot an outline reading "Slot N") with the slot count control beside its title; then Queue, the saved views of the Tickets page as pills and every ticket that holds no slot in its stored
 /// order with its position number. The list is virtual: it is as tall as all its rows, and only the rows on screen are
 /// drawn, their pages read as they come on screen. Once the cards scroll out of view, a strip with one line per slot
 /// stays on top, its columns over the queue's columns.
@@ -66,7 +82,9 @@ struct HomeView: View {
     static let viewportSpace = "home-viewport"
 
     var body: some View {
-        let range = HomeQueuePager.visibleRange(scrollTop: scrollTop, listTop: listTop, viewport: viewport, count: model.pager.count)
+        let range = HomeQueuePager.visibleRange(scrollTop: scrollTop, listTop: listTop, viewport: viewport, count: model.pager.shownCount)
+        // The number cell: the whole numbers' column, widened by the part after a sub-ticket's point while one is on screen.
+        let fractionWidth = QueueRow.fractionWidth(characters: model.pager.widestFraction(in: range))
         let numberWidth = QueueRow.numberWidth(widest: model.pager.widestNumber(in: range))
         let pinned = HomeStrip.pinned(scrollTop: scrollTop, cardsBottom: cardsBottom) && !model.cards.isEmpty
         let target = dropTarget(pinned: pinned)
@@ -77,7 +95,7 @@ struct HomeView: View {
         ScrollView {
             HomePageContent(
                 model: model, views: views, notices: notices, reference: reference, actions: actions, range: range, numberWidth: numberWidth,
-                space: Self.space, cardsBottom: { cardsBottom = $0 }, listTop: { listTop = $0 }, dragging: dragging,
+                fractionWidth: fractionWidth, space: Self.space, cardsBottom: { cardsBottom = $0 }, listTop: { listTop = $0 }, dragging: dragging,
                 cardFrame: { cardFrames[$0] = $1 }, listFrame: { listFrame = $0 }
             )
             .onGeometryChange(for: Double.self) { $0.size.width } action: { contentWidth = $0 }
@@ -100,13 +118,14 @@ struct HomeView: View {
                 // On the content's width, not the scroll view's: a shown scroller takes its width from the content's
                 // right, and the strip's lines end where the rows and the cards end.
                 HomeStrip(
-                    cards: model.cards, reference: reference, numberWidth: numberWidth, dropSlot: target?.slot, lineFrame: { stripFrames[$0] = $1 }
+                    cards: model.cards, reference: reference, numberWidth: numberWidth + fractionWidth, dropSlot: target?.slot,
+                    lineFrame: { stripFrames[$0] = $1 }, open: actions.openTicket
                 )
                 .frame(width: contentWidth > 0 ? contentWidth : nil)
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .overlay(alignment: .topLeading) { lifted(numberWidth: numberWidth, gap: target?.gap) }
+        .overlay(alignment: .topLeading) { lifted(numberWidth: numberWidth, fractionWidth: fractionWidth, gap: target?.gap) }
         .coordinateSpace(.named(Self.viewportSpace))
         .overlay(alignment: .bottom) {
             if let notice = model.notice {
@@ -128,9 +147,10 @@ struct HomeView: View {
         let slots = Set(model.cards.map(\.number))
         let strip = pinned ? stripFrames.filter { slots.contains($0.key) } : [:]
         let cards = cardFrames.filter { slots.contains($0.key) }
-        let target = HomeQueueDrag.target(at: point, strip: strip, cards: cards, list: listFrame, count: model.pager.count)
-        // A gap inside an epic's sub-tickets is not a top-level row's place: the line and the drop go past them.
-        if case let .gap(gap)? = target { return .gap(HomeQueueDrag.snap(gap, in: model.pager)) }
+        let target = HomeQueueDrag.target(at: point, strip: strip, cards: cards, list: listFrame, count: model.pager.shownCount)
+        // A top-level row lands only between top-level rows, a sub-row only among its parent's: the line and the drop go
+        // to the nearest such gap.
+        if case let .gap(gap)? = target, let drag { return .gap(HomeQueueDrag.snap(gap, dragging: drag.row, from: drag.index, in: model.pager)) }
         return target
     }
 
@@ -175,17 +195,20 @@ struct HomeView: View {
     }
 
     /// The dragged row, lifted under the pointer over the list's column, and the line in the `gap` it would land in,
-    /// drawn over the lifted row (`.drop-line` stands above the rows, and the row is lifted right over the gap).
-    @ViewBuilder private func lifted(numberWidth: CGFloat, gap: Int?) -> some View {
+    /// drawn over the lifted row (`.drop-line` stands above the rows, and the row is lifted right over the gap). A
+    /// sub-row's line starts at the sub-row's step.
+    @ViewBuilder private func lifted(numberWidth: CGFloat, fractionWidth: CGFloat, gap: Int?) -> some View {
         if let drag, let listFrame {
             ZStack(alignment: .topLeading) {
-                QueueRow(HomeQueueCards.row(drag.row), numberWidth: numberWidth, look: .dragged)
-                    .frame(width: listFrame.width)
-                    .offset(x: listFrame.minX, y: drag.location.y - drag.grab)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
+                QueueRow(
+                    HomeQueueCards.row(drag.row, fold: model.pager.fold), numberWidth: numberWidth, fractionWidth: fractionWidth, look: .dragged
+                )
+                .frame(width: listFrame.width)
+                .offset(x: listFrame.minX, y: drag.location.y - drag.grab)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
                 if let gap {
-                    QueueDropLine()
+                    QueueDropLine(indent: drag.row.parent == nil ? 0 : QueueDropLine.indent(numberCell: numberWidth + fractionWidth))
                         .frame(width: listFrame.width)
                         .offset(x: listFrame.minX, y: listFrame.minY + HomeQueueDrag.lineY(gap))
                 }
@@ -227,7 +250,7 @@ extension HomeQueueDrag.Target {
     }
 }
 
-/// Home's two sections, outside the scroll view so they also render offscreen: the rows of `range` drawn, the cards'
+/// Home's three sections, outside the scroll view so they also render offscreen: the rows of `range` drawn, the cards'
 /// bottom and the list's top reported in the coordinate space `space`.
 struct HomePageContent: View {
     @ObservedObject var model: HomeQueueModel
@@ -237,6 +260,7 @@ struct HomePageContent: View {
     let actions: HomeActions
     let range: Range<Int>
     let numberWidth: CGFloat
+    var fractionWidth: CGFloat = 0
     var space = "home-content"
     var cardsBottom: (Double) -> Void = { _ in }
     var listTop: (Double) -> Void = { _ in }
@@ -245,15 +269,22 @@ struct HomePageContent: View {
     var cardFrame: (Int, CGRect) -> Void = { _, _ in }
     /// The list's frame in the scroll view's space.
     var listFrame: (CGRect) -> Void = { _ in }
+    @Environment(\.timeZone) private var timeZone
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(notices, id: \.self) { HomeNoticeLine(text: $0) }
+            HomeRecentlyDone(
+                list: model.recentlyDone, reference: reference, pick: actions.pickDoneRange, toggle: actions.toggleRecentlyDone,
+                more: actions.showMoreDone, open: actions.openTicket
+            )
             progress
                 .onGeometryChange(for: Double.self) { $0.frame(in: .named(space)).maxY } action: { cardsBottom($0) }
             queueHead
             HomeQueueList(
-                pager: model.pager, range: range, numberWidth: numberWidth, start: actions.start, open: actions.openTicket, dragging: dragging
+                pager: model.pager, range: range, numberWidth: numberWidth, fractionWidth: fractionWidth, reference: reference,
+                start: actions.start, toggle: actions.toggleEpic, toggleDone: actions.toggleEpicDone, open: actions.openTicket,
+                dragging: dragging
             )
                 .onGeometryChange(for: Double.self) { $0.frame(in: .named(space)).minY } action: { listTop($0) }
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(HomeView.viewportSpace)) } action: { listFrame($0) }
@@ -277,15 +308,34 @@ struct HomePageContent: View {
             .padding(.bottom, DesignTokens.HomeQueue.headBottom)
             VStack(spacing: DesignTokens.HomeQueue.cardsGap) {
                 ForEach(model.cards) { slot in
-                    SlotCard(
-                        slot: slot.number, ticket: slot.ticket.map { HomeQueueCards.card($0, epic: slot.epic, reference: reference) },
-                        dropTarget: dragging.target?.slot == slot.number
-                    ) { action in
-                        if let ticket = slot.ticket { actions.slotMove(HomeQueueCards.move(action, ticket)) }
-                    }
-                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(HomeView.viewportSpace)) } action: { cardFrame(slot.number, $0) }
+                    card(slot)
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(HomeView.viewportSpace)) } action: { cardFrame(slot.number, $0) }
                 }
             }
+        }
+    }
+
+    /// A slot's card: the epic slot card when an epic holds the slot (TP-1646), around the card of its sub-ticket in work;
+    /// otherwise the slot card, or the empty slot.
+    @ViewBuilder private func card(_ slot: HomeRead.Slot) -> some View {
+        let dropTarget = dragging.target?.slot == slot.number
+        let move: (SlotCardModel.Action) -> Void = { action in
+            if let ticket = slot.ticket { actions.slotMove(HomeQueueCards.move(action, ticket)) }
+        }
+        if let epic = slot.epic, let ticket = slot.ticket {
+            EpicSlotCard(
+                slot: slot.number, epic: HomeQueueCards.epicCard(epic, reference: reference, timeZone: timeZone),
+                ticket: HomeQueueCards.card(ticket, reference: reference), showsUpcoming: model.epicSlots.showsUpcoming(epic.identifier),
+                showsDone: model.epicSlots.showsDone(epic.identifier), dropTarget: dropTarget, onAction: move,
+                onToggleUpcoming: { actions.toggleSlotUpcoming(epic.identifier) }, onToggleDone: { actions.toggleSlotDone(epic.identifier) },
+                onStart: { actions.startOnSlot($0, slot.number) }, onMove: { actions.moveInSlot(slot.number, $0, $1) },
+                onOpen: actions.openTicket
+            )
+        } else {
+            SlotCard(
+                slot: slot.number, ticket: slot.ticket.map { HomeQueueCards.card($0, reference: reference) }, dropTarget: dropTarget,
+                onAction: move, onOpen: actions.openTicket
+            )
         }
     }
 
@@ -316,38 +366,63 @@ struct HomeSectionTitle: View {
     }
 }
 
-/// The virtual list (`.vlist`): as tall as every row the filter keeps, drawing only `range`, each row at its index
-/// times the pitch. A row whose page is not read yet is left blank until it is. While a row is dragged (TP-1610) it stays
-/// drawn in its place, dimmed, even once it scrolls out of `range` (its gesture lives on it); `HomeView` draws the line
-/// in the gap it would land in, over the lifted row. With a saved view picked no row is dragged.
+/// The virtual list (`.vlist`): as tall as every place it shows, drawing only `range`, each at its place times the pitch.
+/// The places are the read under the fold (TP-1645, `HomeQueuePager.entries`): queue rows, an epic's sub-rows one step
+/// in, and an open epic's done sub-tickets as quiet done rows at the top of its block. A row whose page is not read yet
+/// is left blank until it is. While a row is dragged (TP-1610) it stays drawn in its place, dimmed with its block, even
+/// once it scrolls out of `range` (its gesture lives on it); `HomeView` draws the line in the gap it would land in, over
+/// the lifted row. With a saved view picked no row is dragged; a done row never is.
 struct HomeQueueList: View {
     let pager: HomeQueuePager
     let range: Range<Int>
     let numberWidth: CGFloat
+    var fractionWidth: CGFloat = 0
+    /// Symphony's clock, which a done row's time is measured against.
+    var reference = Date()
     var start: (String) -> Void = { _ in }
+    var toggle: (String) -> Void = { _ in }
+    var toggleDone: (String) -> Void = { _ in }
+    /// A click on a row's title opens its ticket's page (TP-1647).
     var open: (String) -> Void = { _ in }
     var dragging = HomeDragging()
     @GestureState private var active = false
+    @Environment(\.timeZone) private var timeZone
 
-    /// The indexes drawn: the rows on screen and the one dragged.
+    /// The places drawn: the ones on screen and the one dragged.
     static func drawn(_ range: Range<Int>, dragged: Int?) -> [Int] {
         guard let dragged, !range.contains(dragged) else { return Array(range) }
         return Array(range) + [dragged]
     }
 
     var body: some View {
+        let block = dragging.drag.map { pager.block(at: $0.index, row: $0.row) }
         ZStack(alignment: .topLeading) {
             Color.clear
             ForEach(Self.drawn(range, dragged: dragging.drag?.index), id: \.self) { index in
-                let dragged = dragging.drag?.index == index ? dragging.drag?.row : nil
-                if let row = dragged ?? pager.row(at: index) {
-                    let movable = HomeQueueDrag.canDrag(row, at: index, in: pager)
-                    QueueRow(
-                        HomeQueueCards.row(row), numberWidth: numberWidth, reorderable: movable, picked: dragged != nil
-                    ) { start(row.identifier) }
-                    .gesture(dragGesture(row, index: index, movable: movable))
-                    .offset(y: Double(index) * HomeQueuePager.pitch)
+                Group {
+                    switch pager.entry(at: index) {
+                    case let .done(epic, _, ticket)?:
+                        DoneRow(
+                            HomeQueueCards.done(ticket, epic: epic, reference: reference, timeZone: timeZone), cells: .queue,
+                            nesting: DoneRow.Nesting(numberCell: numberWidth + fractionWidth), picked: block?.contains(index) == true,
+                            onOpen: open
+                        )
+                    case .row?:
+                        let dragged = dragging.drag?.index == index ? dragging.drag?.row : nil
+                        if let row = dragged ?? pager.row(shown: index) {
+                            let movable = HomeQueueDrag.canDrag(row, at: index, in: pager)
+                            QueueRow(
+                                HomeQueueCards.row(row, fold: pager.fold), numberWidth: numberWidth, fractionWidth: fractionWidth,
+                                reorderable: movable, picked: block?.contains(index) == true, onStart: { start(row.identifier) },
+                                onToggle: { toggle(row.identifier) }, onToggleDone: { toggleDone(row.identifier) }, onOpen: open
+                            )
+                            .gesture(dragGesture(row, index: index, movable: movable))
+                        }
+                    case nil:
+                        EmptyView()
+                    }
                 }
+                .offset(y: Double(index) * HomeQueuePager.pitch)
             }
         }
         .onChange(of: active) { _, active in
@@ -360,9 +435,9 @@ struct HomeQueueList: View {
         .accessibilityLabel(HomeQueueModel.queueTitle)
     }
 
-    /// The drag of `row` at `index`, in the scroll view's space: each move reports the pointer, and the end drops it. The
-    /// gesture is on every row, and one that may not be `movable` (a saved view is picked, an epic with its sub-tickets)
-    /// reports nothing, so no mask changes when the view does.
+    /// The drag of `row` at the place `index`, in the scroll view's space: each move reports the pointer, and the end
+    /// drops it. The gesture is on every row, and one that may not be `movable` (a saved view is picked) reports nothing,
+    /// so no mask changes when the view does.
     private func dragGesture(_ row: HomeRead.Row, index: Int, movable: Bool) -> some Gesture {
         DragGesture(minimumDistance: 3, coordinateSpace: .named(HomeView.viewportSpace))
             .updating($active) { _, active, _ in active = movable }
@@ -416,6 +491,8 @@ struct HomeStrip: View {
     var dropSlot: Int?
     /// A line's frame in the scroll view's space, by slot: each line is a drop target.
     var lineFrame: (Int, CGRect) -> Void = { _, _ in }
+    /// A click on a line's title opens its ticket's page (TP-1647).
+    var open: (String) -> Void = { _ in }
 
     /// Whether the strip shows: once the cards' bottom has scrolled above the top of the view.
     static func pinned(scrollTop: Double, cardsBottom: Double) -> Bool { cardsBottom > 0 && scrollTop > cardsBottom }
@@ -424,8 +501,8 @@ struct HomeStrip: View {
         VStack(spacing: DesignTokens.HomeQueue.stripGap) {
             ForEach(cards) { slot in
                 SlotStripLine(
-                    slot: slot.number, ticket: slot.ticket.map { HomeQueueCards.card($0, epic: slot.epic, reference: reference) },
-                    numberWidth: numberWidth, dropTarget: dropSlot == slot.number
+                    slot: slot.number, ticket: slot.ticket.map { HomeQueueCards.card($0, epic: slot.epic?.identifier, reference: reference) },
+                    numberWidth: numberWidth, dropTarget: dropSlot == slot.number, onOpen: open
                 )
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(HomeView.viewportSpace)) } action: { lineFrame(slot.number, $0) }
             }

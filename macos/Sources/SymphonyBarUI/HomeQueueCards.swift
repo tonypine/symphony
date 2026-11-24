@@ -76,19 +76,75 @@ public enum HomeQueueCards {
         }
     }
 
-    /// The row of the queue at its real number: a whole number as a number, a sub-ticket's "6.1" as the read writes it.
-    public static func row(_ row: HomeRead.Row) -> QueueRowModel {
+    /// The row of the queue at its real number: a whole number as a number, a sub-ticket's "6.1" as the read writes it,
+    /// one step in per point (TP-1645). An epic's row has its fold from `fold` and its done count, and no state badge; a
+    /// row carries a marker for each dependency it still waits for.
+    public static func row(_ row: HomeRead.Row, fold: HomeQueueFold = HomeQueueFold()) -> QueueRowModel {
         let whole = Int(row.number)
         var marks: [QueueRowModel.Mark] = []
         if row.waitsOnYou {
             marks.append(.init(.you, row.situation?.word ?? DesignTokens.Status.you.word))
-        } else if let phase = row.phase, !["todo", "backlog"].contains(phase.lowercased()) {
+        } else if !row.isEpic, let phase = row.phase, !["todo", "backlog"].contains(phase.lowercased()) {
             marks.append(.init(.idle, phase))
         }
         let lead: RowLead = row.situation.map { .status($0.kind.status) } ?? .glyph("clock", DesignTokens.TextColor.secondary)
+        let epic = row.subTickets.flatMap { counts in
+            row.isEpic
+                ? QueueRowModel.Epic(
+                    done: counts.done, total: counts.total, open: fold.isOpen(row.identifier), showingDone: fold.showsDone(row.identifier)
+                )
+                : nil
+        }
         return QueueRowModel(
             number: whole ?? Int(row.number.split(separator: ".").first ?? "") ?? 0, identifier: row.identifier,
-            title: row.title ?? row.identifier, lead: lead, marks: marks, repo: row.repoKey ?? "", label: whole == nil ? row.number : nil
+            title: row.title ?? row.identifier, lead: lead, dependencies: row.unmet.map(dependency), marks: marks, repo: row.repoKey ?? "",
+            label: whole == nil ? row.number : nil, epic: epic, depth: row.number.filter { $0 == "." }.count
+        )
+    }
+
+    /// A slot's epic as its epic slot card draws it (TP-1646): its time in the slot against `reference`, its done
+    /// sub-tickets oldest first with the pull request and when (in `timeZone`), and its open ones in queue order, each
+    /// numbered on from the done count (with 7 done the first to come is 9), with a marker for each dependency it still
+    /// waits for.
+    public static func epicCard(_ epic: HomeRead.SlotEpic, reference: Date, timeZone: TimeZone = .current) -> EpicSlotCardModel {
+        let since = epic.since.map { EpicSlotCardModel.slotTime(Int(reference.timeIntervalSince($0))) } ?? "—"
+        return EpicSlotCardModel(
+            identifier: epic.identifier, title: epic.title ?? epic.identifier, done: epic.done, total: epic.total, since: since,
+            doneRows: epic.doneSubTickets.map { done($0, epic: epic.identifier, reference: reference, timeZone: timeZone) },
+            upcoming: epic.openSubTickets.enumerated().map { index, row in upcoming(row, number: epic.number(at: index)) }
+        )
+    }
+
+    /// An epic slot card's row to come: the queue row of the sub-ticket at the top level of the card's list, at `number`.
+    public static func upcoming(_ row: HomeRead.Row, number: Int) -> QueueRowModel {
+        var model = self.row(row)
+        model.number = number
+        model.label = nil
+        model.depth = 0
+        return model
+    }
+
+    /// A dependency's marker: the ticket waited for, done or released.
+    public static func dependency(_ dependency: HomeRead.Dependency) -> DependencyMarkerModel {
+        DependencyMarkerModel(identifier: dependency.identifier, kind: dependency.kind == .released ? .released : .done)
+    }
+
+    /// An epic's done sub-ticket as a quiet done row of the queue (TP-1645): when it was done against `reference` in
+    /// `timeZone`, the only cell the queue shows.
+    public static func done(_ ticket: HomeRead.DoneSubTicket, epic: String, reference: Date, timeZone: TimeZone = .current) -> DoneRowModel {
+        DoneRowModel(
+            identifier: ticket.identifier, title: ticket.title ?? ticket.identifier, epic: epic,
+            pullRequest: ticket.pullRequestNumber.map { "#\($0)" }, repo: "", when: DoneWhen.text(ticket.doneAt, now: reference, timeZone: timeZone)
+        )
+    }
+
+    /// A Recently done entry as a done row (TP-1644): its epic, its pull request as "#1053", its repo, and when it was
+    /// done against `reference` in `timeZone`.
+    public static func done(_ entry: HomeRead.DoneEntry, reference: Date, timeZone: TimeZone = .current) -> DoneRowModel {
+        DoneRowModel(
+            identifier: entry.identifier, title: entry.title ?? entry.identifier, epic: entry.epic?.identifier,
+            pullRequest: entry.pullRequestNumber.map { "#\($0)" }, repo: entry.repoKey ?? "",
+            when: DoneWhen.text(entry.doneAt, now: reference, timeZone: timeZone)
         )
     }
 
