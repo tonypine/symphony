@@ -15,7 +15,9 @@ import Foundation
 /// view keeps an epic's row above its matching sub-rows. `recently_done` holds
 /// the tickets done in the last 7 days, most recent first, each marked `today` when it finished today (TP-1644); the
 /// read gives the range `done_range` asks for (today by default) from `done_offset`, at most `done_limit`, with both
-/// counts, as Symphony does.
+/// counts, as Symphony does. A slot's `epic` (TP-1646) is passed through with its `done_sub_tickets` and
+/// `open_sub_tickets`; a queue move of one of its open sub-tickets moves it among them, a Start of one swaps it with the
+/// sub-ticket in work, which becomes the first to come, and both are refused as in the queue.
 ///
 ///     {"slots": {"total": 3, "entries": [{"slot": 1, "ticket": {…}}, …]},
 ///      "rows": [{"identifier": "TP-1590", "title": "…", "phase": "Code Review", "repo_key": "symphony"}, …],
@@ -97,12 +99,17 @@ public struct HomeQueueFixture: Equatable {
     /// "TP-977 depends on TP-976 and can't start before it is done." (or "released."). Nil for any other.
     public func refusal(path: String, body: [String: Any]?, after moves: [Move] = []) -> String? {
         guard let identifier = body?["issue_identifier"] as? String else { return nil }
-        let rows = applying(moves, to: []).rows
-        return refusal(path: path, identifier: identifier, body: body ?? [:], in: rows)
+        let (rows, entries) = applying(moves, to: slotEntries)
+        return refusal(path: path, identifier: identifier, body: body ?? [:], in: rows, entries: entries)
     }
 
-    /// The refusal of a POST to `path` for `identifier` with `body`, on the queue `rows`.
-    func refusal(path: String, identifier: String, body: [String: Any], in rows: [[String: Any]]) -> String? {
+    /// The slots' entries as written.
+    var slotEntries: [[String: Any]] { (slots["entries"] as? [[String: Any]]) ?? [] }
+
+    /// The refusal of a POST to `path` for `identifier` with `body`, on the queue `rows` and the slots' `entries`: a
+    /// ticket among a slot epic's open sub-tickets (TP-1646) is judged among them.
+    func refusal(path: String, identifier: String, body: [String: Any], in rows: [[String: Any]], entries: [[String: Any]] = []) -> String? {
+        let rows = Self.slotEpic(of: identifier, in: entries).map { Self.openSubTickets(entries[$0]) } ?? rows
         if path == Self.startPath {
             guard let row = rows.first(where: { $0["identifier"] as? String == identifier }),
                   let unmet = Self.unmet(row).first
@@ -147,9 +154,13 @@ public struct HomeQueueFixture: Equatable {
         var changed = false
         for move in moves {
             guard let identifier = move.body["issue_identifier"] as? String,
-                  refusal(path: move.path, identifier: identifier, body: move.body, in: rows) == nil,
-                  let from = rows.firstIndex(where: { $0["identifier"] as? String == identifier })
+                  refusal(path: move.path, identifier: identifier, body: move.body, in: rows, entries: entries) == nil
             else { continue }
+            if let at = Self.slotEpic(of: identifier, in: entries) {
+                entries[at] = Self.applying(move, identifier: identifier, toSlot: entries[at])
+                continue
+            }
+            guard let from = rows.firstIndex(where: { $0["identifier"] as? String == identifier }) else { continue }
             if move.path == Self.movePath, let moved = Self.moving(identifier, body: move.body, in: rows) {
                 rows = moved
                 changed = true
@@ -167,6 +178,44 @@ public struct HomeQueueFixture: Equatable {
             }
         }
         return (changed ? Self.numbered(rows) : rows, entries)
+    }
+
+    /// The index of the slot entry whose epic lists `identifier` among its open sub-tickets (TP-1646), nil for none.
+    static func slotEpic(of identifier: String, in entries: [[String: Any]]) -> Int? {
+        entries.firstIndex { openSubTickets($0).contains { $0["identifier"] as? String == identifier } }
+    }
+
+    /// A slot entry's epic's open sub-tickets, in their order.
+    static func openSubTickets(_ entry: [String: Any]) -> [[String: Any]] {
+        ((entry["epic"] as? [String: Any])?["open_sub_tickets"] as? [[String: Any]]) ?? []
+    }
+
+    /// The slot `entry` once `move` of its epic's open sub-ticket `identifier` is made, as the engine does: a queue
+    /// move puts it at its place among the epic's open sub-tickets; a Start swaps it with the sub-ticket in work, which
+    /// stops and becomes the first to come. Any other move changes nothing.
+    static func applying(_ move: Move, identifier: String, toSlot entry: [String: Any]) -> [String: Any] {
+        guard var epic = entry["epic"] as? [String: Any] else { return entry }
+        var entry = entry
+        var subs = openSubTickets(entry)
+        if move.path == movePath, let moved = moving(identifier, body: move.body, in: subs) {
+            subs = moved
+        } else if move.path == startPath, let from = subs.firstIndex(where: { $0["identifier"] as? String == identifier }) {
+            let row = subs.remove(at: from)
+            // The sub-ticket in work leaves the card when the other starts: the card's time starts again from its own.
+            let since = (entry["ticket"] as? [String: Any])?["since"] as? String ?? startedAt
+            if let held = entry["ticket"] as? [String: Any] {
+                var back = stopped(held, since: since)
+                back["parent"] = epic["identifier"] ?? NSNull()
+                back["dependencies"] = [Any]()
+                subs.insert(back, at: 0)
+            }
+            entry["ticket"] = started(row, since: since)
+        } else {
+            return entry
+        }
+        epic["open_sub_tickets"] = subs
+        entry["epic"] = epic
+        return entry
     }
 
     /// The parent a row names, nil at the top level.

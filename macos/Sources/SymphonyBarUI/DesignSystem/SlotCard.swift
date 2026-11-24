@@ -136,15 +136,25 @@ public struct SlotCard: View {
     let slot: Int
     let ticket: SlotCardModel?
     let dropTarget: Bool
+    let inEpic: Bool
     let onAction: (SlotCardModel.Action) -> Void
 
-    /// The card, drawn as the target under a dragged row while `dropTarget` (TP-1610).
-    public init(slot: Int, ticket: SlotCardModel?, dropTarget: Bool = false, onAction: @escaping (SlotCardModel.Action) -> Void = { _ in }) {
+    /// The card, drawn as the target under a dragged row while `dropTarget` (TP-1610). `inEpic` draws it inside an epic
+    /// slot card (TP-1646): its sides less the frame's inset, so its dot, identifier and title stand on an ordinary card's
+    /// columns, no epic chip (the band names the epic), and its time read as the time on this ticket.
+    public init(
+        slot: Int, ticket: SlotCardModel?, dropTarget: Bool = false, inEpic: Bool = false,
+        onAction: @escaping (SlotCardModel.Action) -> Void = { _ in }
+    ) {
         self.slot = slot
         self.ticket = ticket
         self.dropTarget = dropTarget
+        self.inEpic = inEpic
         self.onAction = onAction
     }
+
+    /// The header's time: "2 h 40 min in the slot", or inside an epic slot card "1 h 5 min on this ticket".
+    public static func sinceText(_ since: String, inEpic: Bool) -> String { inEpic ? "\(since) on this ticket" : "\(since) in the slot" }
 
     /// "Slot 3".
     public static func emptyLabel(_ slot: Int) -> String { "Slot \(slot)" }
@@ -190,7 +200,7 @@ public struct SlotCard: View {
             }
         }
         .padding(.top, queue.cardTopPadding)
-        .padding(.horizontal, queue.cardSidePadding)
+        .padding(.horizontal, inEpic ? queue.cardSidePadding - queue.epicFrameInset : queue.cardSidePadding)
         .padding(.bottom, queue.cardBottomPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .dropTarget(dropTarget, in: shape)
@@ -223,11 +233,11 @@ public struct SlotCard: View {
                 .truncationMode(.tail)
                 .foregroundStyle(DesignTokens.TextColor.primary.color)
                 .accessibilityAddTraits(.isHeader)
-            if let epic = ticket.epic {
+            if !inEpic, let epic = ticket.epic {
                 Chip(epic, kind: .epic).padding(.leading, DesignTokens.Space.s1)
             }
             Spacer(minLength: queue.headerSpring)
-            Text("\(ticket.since) in the slot")
+            Text(Self.sinceText(ticket.since, inEpic: inEpic))
                 .textStyle(.secondary)
                 .monospacedDigit()
                 .lineLimit(1)
@@ -502,7 +512,8 @@ public struct SlotStripLine: View {
     /// The line's label: what its parts say (the identifier, the title, the state and the time in the slot), and,
     /// under a dragged row, that it is the drop target (TP-1610).
     public static func accessibilityLabel(_ ticket: SlotCardModel, dropTarget: Bool) -> String {
-        SlotDropTarget.accessibilityLabel("\(ticket.identifier), \(ticket.title), \(ticket.word), \(ticket.since)", on: dropTarget)
+        let epic = ticket.epic.map { ", part of \($0)" } ?? ""
+        return SlotDropTarget.accessibilityLabel("\(ticket.identifier), \(ticket.title)\(epic), \(ticket.word), \(ticket.since)", on: dropTarget)
     }
 
     public var body: some View {
@@ -536,6 +547,19 @@ public struct SlotStripLine: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 HStack(spacing: queue.rowMainGap) {
+                    if let epic = ticket.epic {
+                        // An epic slot's line (TP-1646, `shots/strip-2x.png`): the epic's flag and identifier, quiet.
+                        HStack(spacing: queue.trailGlyphGap) {
+                            Image(systemName: queue.epicFlagSymbol)
+                                .font(DesignTokens.TypeStyle.font(size: queue.trailGlyph, weight: DesignTokens.TypeStyle.label.weight))
+                            Text(epic)
+                                .textStyle(.secondary)
+                                .monospacedDigit()
+                                .lineLimit(1)
+                        }
+                        .foregroundStyle(DesignTokens.TextColor.tertiary.color)
+                        .fixedSize()
+                    }
                     Badge(status: ticket.status, word: ticket.word, size: .small)
                         .probe(.marks, probes)
                     Text(ticket.since)

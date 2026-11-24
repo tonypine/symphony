@@ -93,6 +93,7 @@ public struct QueueRow: View {
     let reorderable: Bool
     let picked: Bool
     let doneCountHovered: Bool?
+    let end: CGFloat
     let onStart: () -> Void
     let onToggle: () -> Void
     let onToggleDone: () -> Void
@@ -105,11 +106,12 @@ public struct QueueRow: View {
     /// follows the pointer. A row that may not be `reorderable` (a saved view is picked) keeps its number under the
     /// pointer and shows no handle. A `picked` row is the one being dragged, left behind in its place and dimmed
     /// (`.row.dragging`). An epic's row calls `onToggle` on a click, and `onToggleDone` on its done count
-    /// (`doneCountHovered` draws its hover still, for a story).
+    /// (`doneCountHovered` draws its hover still, for a story). `end` is the room the row keeps at its end beyond its
+    /// own, as an epic slot card's rows do (TP-1646).
     public init(
         _ row: QueueRowModel, numberWidth: CGFloat, fractionWidth: CGFloat = 0, look: Look? = nil, reorderable: Bool = true,
-        picked: Bool = false, doneCountHovered: Bool? = nil, onStart: @escaping () -> Void = {}, onToggle: @escaping () -> Void = {},
-        onToggleDone: @escaping () -> Void = {}
+        picked: Bool = false, doneCountHovered: Bool? = nil, end: CGFloat = 0, onStart: @escaping () -> Void = {},
+        onToggle: @escaping () -> Void = {}, onToggleDone: @escaping () -> Void = {}
     ) {
         self.row = row
         self.numberWidth = numberWidth
@@ -118,6 +120,7 @@ public struct QueueRow: View {
         self.reorderable = reorderable
         self.picked = picked
         self.doneCountHovered = doneCountHovered
+        self.end = end
         self.onStart = onStart
         self.onToggle = onToggle
         self.onToggleDone = onToggleDone
@@ -201,6 +204,7 @@ public struct QueueRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             trail(look)
+                .padding(.trailing, end)
         }
         .padding(.horizontal, queue.rowInset)
         .frame(maxWidth: .infinity)

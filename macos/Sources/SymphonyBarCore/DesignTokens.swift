@@ -1917,6 +1917,32 @@ public enum DesignTokens {
         /// An epic's done row in the queue is quiet: its title secondary, at the regular weight.
         public static let quietTitleWeight = 400
 
+        // The epic slot card (TP-1646: `.eslot`, `.epic-band`, `.b-done`, `.dlist`, `.ulist` in page.css).
+        /// The frame around the slot card: 4 pt at the left, right and bottom, its corner the card's plus 4 pt, on half
+        /// the card's surface, with a 1 pt separator edge.
+        public static let epicFrameInset: Double = 4
+        public static let epicFrameRadius = Radius.card + epicFrameInset
+        public static let epicFrameOpacity: Double = 0.5
+        public static let epicFrameStroke: Double = 1
+        /// The band: one line, 36 pt.
+        public static let epicBandHeight: Double = 36
+        /// The band's progress bar, 96 pt, before "7 of 14 done".
+        public static let epicBarWidth: Double = 96
+        /// The bar with its count as one button: 24 pt high, 8 pt at the sides (drawn into the gaps around it), its
+        /// corner 7 pt.
+        public static let epicDoneHeight: Double = 24
+        public static let epicDoneInsetX = Space.s2
+        public static let epicDoneRadius: Double = 7
+        /// Before the time the epic has held the slot.
+        public static let epicSinceGap = Space.s3
+        /// The room the band's and the lists' rows keep at their end beyond a row's own, so they end where the card's
+        /// content ends.
+        public static let epicRowEnd = cardSidePadding - epicFrameInset - rowInset
+        /// The rows each list shows before it scrolls inside itself (216 pt on the queue's pitch).
+        public static let epicListRows = recentRows
+        /// The epic's flag, as a done row's epic cell draws it.
+        public static let epicFlagSymbol = SymphonyView.initiatives.symbol
+
         /// The number as a row shows it: with a comma between thousands ("1,243").
         public static func number(_ value: Int) -> String {
             let formatter = NumberFormatter()

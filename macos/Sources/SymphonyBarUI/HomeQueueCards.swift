@@ -102,6 +102,28 @@ public enum HomeQueueCards {
         )
     }
 
+    /// A slot's epic as its epic slot card draws it (TP-1646): its time in the slot against `reference`, its done
+    /// sub-tickets oldest first with the pull request and when (in `timeZone`), and its open ones in queue order, each
+    /// numbered on from the done count (with 7 done the first to come is 9), with a marker for each dependency it still
+    /// waits for.
+    public static func epicCard(_ epic: HomeRead.SlotEpic, reference: Date, timeZone: TimeZone = .current) -> EpicSlotCardModel {
+        let since = epic.since.map { EpicSlotCardModel.slotTime(Int(reference.timeIntervalSince($0))) } ?? "—"
+        return EpicSlotCardModel(
+            identifier: epic.identifier, title: epic.title ?? epic.identifier, done: epic.done, total: epic.total, since: since,
+            doneRows: epic.doneSubTickets.map { done($0, epic: epic.identifier, reference: reference, timeZone: timeZone) },
+            upcoming: epic.openSubTickets.enumerated().map { index, row in upcoming(row, number: epic.number(at: index)) }
+        )
+    }
+
+    /// An epic slot card's row to come: the queue row of the sub-ticket at the top level of the card's list, at `number`.
+    public static func upcoming(_ row: HomeRead.Row, number: Int) -> QueueRowModel {
+        var model = self.row(row)
+        model.number = number
+        model.label = nil
+        model.depth = 0
+        return model
+    }
+
     /// A dependency's marker: the ticket waited for, done or released.
     public static func dependency(_ dependency: HomeRead.Dependency) -> DependencyMarkerModel {
         DependencyMarkerModel(identifier: dependency.identifier, kind: dependency.kind == .released ? .released : .done)

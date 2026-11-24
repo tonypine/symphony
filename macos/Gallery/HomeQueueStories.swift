@@ -9,6 +9,8 @@
 // Week and folded; the head's range control and fold are live. Epics and dependencies (TP-1645) add the epic's queue row
 // closed, open with its sub-rows, with its done rows shown (its done count pressed) and with its done count hovered; the
 // sub-ticket's row with its elbow at rest and hovered; and the dependency marker in its two kinds, done and released.
+// The epic slot card (TP-1646) is drawn closed, with what is to come, with what is done, with both, and with its done
+// count hovered; its two lists open and close live in the gallery.
 import SwiftUI
 import SymphonyBarCore
 import SymphonyBarUI
@@ -233,6 +235,65 @@ private func epicStory(open: Bool = true, showingDone: Bool = false, hovered: In
     )
 }
 
+// MARK: - The epic slot card (TP-1646)
+
+/// TP-1619 in Coding, the sub-ticket in work of the prototype's epic TP-1597 (`shots/epic-card-closed-2x.png`).
+let epicSlotTicket = SlotCardModel(
+    identifier: "TP-1619", title: "Engine: one queue of top-level tickets with sort keys, sub-tickets inside their parent, explicit dependencies",
+    status: .working, stage: 0, since: "1 h 5 min", word: "Coding", sentence: "tests and coverage, round 2",
+    tokens: [TokenLine.Stage(name: "Coding", tokens: 14_200_000, series: .series1)], tokenTotal: 14_200_000, tokenCap: 100_000_000,
+    plan: "The queue's order becomes one sort key per ticket, sub-tickets live inside their parent, and a dependency is a fact Symphony stores and checks before a start.",
+    proved: 3, checks: 11, next: "Adding a dependency on a lower ticket is refused with the reason.", pullRequest: nil
+)
+
+/// The prototype's epic TP-1597: 7 of its 14 sub-tickets done, oldest first, and six to come, numbered 9 to 14.
+let epicSlotStory: EpicSlotCardModel = {
+    let done: [(String, String, String, String)] = [
+        ("TP-1611", "Engine: the slot owner is stored on the ticket record", "#1047", "Sat"),
+        ("TP-1612", "Engine: the queue has a stored order", "#1048", "yesterday"),
+        ("TP-1608", "Gallery: the Home queue components", "#1046", "yesterday"),
+        ("TP-1615", "Engine: a slot belongs to one ticket until it is done", "#1049", "5 h ago"),
+        ("TP-1616", "Config: remove finishing_max, max_by_issue_state and epic_lanes from symphony.yml", "#1050", "4 h ago"),
+        ("TP-1606", "Engine: a ticket without a slot does not react to anything", "#1052", "3 h ago"),
+        ("TP-1622", "Engine: the queue's order is stored as one sort key per ticket", "#1053", "20 min ago"),
+    ]
+    let upcoming: [(String, String, String?)] = [
+        ("TP-1623", "Engine: explicit dependencies stored by Symphony replace Linear's blocker links", nil),
+        ("TP-1624", "Engine: a parent uses a spare slot for its next sub-ticket that can start", "TP-1623"),
+        ("TP-1607", "Engine and API: Start shifts the queue, the queue can be reordered, and Home reads slots and a paged queue", "TP-1619"),
+        ("TP-1609", "Home: slot cards stuck at the top and the whole queue below, with filters and infinite scroll", "TP-1607"),
+        ("TP-1610", "Home: drag and drop reorders the queue, and dragging a ticket onto a slot starts it", "TP-1609"),
+        ("TP-1620", "Initiatives: list a parent because Symphony split it, from Symphony's own record", "TP-1610"),
+    ]
+    return EpicSlotCardModel(
+        identifier: "TP-1597", title: "A real queue: a slot belongs to one ticket until it is done, and Home is the window to the queue",
+        done: 7, total: 14, since: EpicSlotCardModel.slotTime(3 * 86_400 + 20 * 60),
+        doneRows: done.map { DoneRowModel(identifier: $0.0, title: $0.1, epic: "TP-1597", pullRequest: $0.2, repo: "symphony", when: $0.3) },
+        upcoming: upcoming.enumerated().map { index, row in
+            QueueRowModel(
+                number: 9 + index, identifier: row.0, title: row.1, lead: .glyph("clock", .textSecondary),
+                dependencies: row.2.map { [DependencyMarkerModel(identifier: $0)] } ?? [], repo: "symphony"
+            )
+        }
+    )
+}()
+
+/// The epic slot card of slot 1, its lists open as asked at first and live after, on the window's surface.
+@MainActor
+private func epicSlotCardStory(upcoming: Bool = false, done: Bool = false, doneHovered: Bool? = nil) -> AnyView {
+    AnyView(
+        HomeQueueLiveValue(value: (upcoming, done)) { open in
+            EpicSlotCard(
+                slot: 1, epic: epicSlotStory, ticket: epicSlotTicket, showsUpcoming: open.wrappedValue.0, showsDone: open.wrappedValue.1,
+                doneHovered: doneHovered, onToggleUpcoming: { open.wrappedValue.0.toggle() }, onToggleDone: { open.wrappedValue.1.toggle() }
+            )
+        }
+        .frame(width: slotCardStoryWidth, alignment: .topLeading)
+        .padding(DesignTokens.Space.s4)
+        .background(DesignTokens.Surface.window.color)
+    )
+}
+
 /// The dependency marker in a queue row's trail: the prototype's TP-977, waiting for TP-976, and TP-1051, waiting for
 /// TP-1590 to be released; `kinds` picks which.
 @MainActor
@@ -360,6 +421,9 @@ let homeQueueStories: [ComponentStory] = {
     func marker(_ id: String, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
         ComponentStory(component: "dependency-marker", id: id, title: "Dependency marker", width: queueRowStoryWidth, height: 120, draw: draw)
     }
+    func epicCard(_ id: String, height: CGFloat, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
+        ComponentStory(component: "epic-slot-card", id: id, title: "Epic slot card", width: slotCardStoryWidth, height: height, draw: draw)
+    }
     func head(_ id: String, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
         ComponentStory(component: "recently-done-head", id: id, title: "Recently done head", width: queueRowStoryWidth, height: 60, draw: draw)
     }
@@ -406,5 +470,10 @@ let homeQueueStories: [ComponentStory] = {
         marker("done") { dependencyStory([.done]) },
         marker("released") { dependencyStory([.released]) },
         marker("both-kinds") { dependencyStory([.done, .released]) },
+        epicCard("closed", height: 360) { epicSlotCardStory() },
+        epicCard("upcoming", height: 600) { epicSlotCardStory(upcoming: true) },
+        epicCard("done", height: 600) { epicSlotCardStory(done: true) },
+        epicCard("both", height: 840) { epicSlotCardStory(upcoming: true, done: true) },
+        epicCard("done-count-hovered", height: 360) { epicSlotCardStory(doneHovered: true) },
     ]
 }()
