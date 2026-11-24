@@ -101,7 +101,10 @@ test/symphony_elixir/connected_test.exs	0.0
 test/symphony_elixir/control_client_test.exs	0.0
 test/symphony_elixir/control_token_test.exs	0.0
 test/symphony_elixir/control_url_test.exs	0.0
-test/symphony_elixir/core_test.exs	21.9
+test/symphony_elixir/core_agent_runner_turns_test.exs	6.4
+test/symphony_elixir/core_agent_runner_workspace_test.exs	10.6
+test/symphony_elixir/core_orchestrator_test.exs	2.6
+test/symphony_elixir/core_test.exs	2.2
 test/symphony_elixir/coverage_report_test.exs	0.0
 test/symphony_elixir/decision_move_test.exs	0.1
 test/symphony_elixir/decision_request_sources_test.exs	0.3
