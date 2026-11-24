@@ -13,19 +13,21 @@ public struct HomeRecentlyDone: View {
     let pick: (HomeRead.DoneRange) -> Void
     let toggle: () -> Void
     let more: () -> Void
+    let open: ((String) -> Void)?
     @Environment(\.offscreenSnapshot) private var offscreenSnapshot
     /// The zone "yesterday" and the day are told in: the Mac's, or a story's.
     @Environment(\.timeZone) private var timeZone
 
     public init(
         list: RecentlyDoneList, reference: Date, pick: @escaping (HomeRead.DoneRange) -> Void = { _ in },
-        toggle: @escaping () -> Void = {}, more: @escaping () -> Void = {}
+        toggle: @escaping () -> Void = {}, more: @escaping () -> Void = {}, open: ((String) -> Void)? = nil
     ) {
         self.list = list
         self.reference = reference
         self.pick = pick
         self.toggle = toggle
         self.more = more
+        self.open = open
     }
 
     /// The rows' height: every row up to six on the queue's pitch, the last without the gap after it.
@@ -73,6 +75,6 @@ public struct HomeRecentlyDone: View {
     }
 
     private func row(_ entry: HomeRead.DoneEntry) -> some View {
-        DoneRow(HomeQueueCards.done(entry, reference: reference, timeZone: timeZone), cells: .all)
+        DoneRow(HomeQueueCards.done(entry, reference: reference, timeZone: timeZone), cells: .all, onOpen: open)
     }
 }

@@ -73,6 +73,7 @@ public struct EpicSlotCard: View {
     let onToggleDone: () -> Void
     let onStart: (String) -> Void
     let onMove: (Int, Int) -> Void
+    let onOpen: ((String) -> Void)?
 
     @Environment(\.offscreenSnapshot) private var offscreenSnapshot
     @State private var donePointer = false
@@ -82,13 +83,15 @@ public struct EpicSlotCard: View {
     /// and `showsDone` open the two lists; `doneHovered` and `hoveredRow` (an index of what is to come) draw the done
     /// count's and a row's hover still, for a story; nil follows the pointer. The band calls `onToggleUpcoming`, the done
     /// count `onToggleDone`, Start on a row to come `onStart` with its identifier, and a drop in that list `onMove` with
-    /// the row's index and the gap it landed in.
+    /// the row's index and the gap it landed in. A click on a title calls `onOpen` with its ticket (TP-1647): the epic's
+    /// title in the band opens the epic, the card's the sub-ticket in work, and each row's its own ticket; the rest of the
+    /// band still opens what is to come.
     public init(
         slot: Int, epic: EpicSlotCardModel, ticket: SlotCardModel, showsUpcoming: Bool = false, showsDone: Bool = false,
         dropTarget: Bool = false, doneHovered: Bool? = nil, hoveredRow: Int? = nil,
         onAction: @escaping (SlotCardModel.Action) -> Void = { _ in }, onToggleUpcoming: @escaping () -> Void = {},
         onToggleDone: @escaping () -> Void = {}, onStart: @escaping (String) -> Void = { _ in },
-        onMove: @escaping (Int, Int) -> Void = { _, _ in }
+        onMove: @escaping (Int, Int) -> Void = { _, _ in }, onOpen: ((String) -> Void)? = nil
     ) {
         self.slot = slot
         self.epic = epic
@@ -103,6 +106,7 @@ public struct EpicSlotCard: View {
         self.onToggleDone = onToggleDone
         self.onStart = onStart
         self.onMove = onMove
+        self.onOpen = onOpen
     }
 
     /// A row to come being dragged: its index, the pointer's height in the list, and how far below the row's top the
@@ -168,7 +172,7 @@ public struct EpicSlotCard: View {
                 doneList(numberWidth: numberWidth)
                     .padding(.bottom, queue.epicFrameInset)
             }
-            SlotCard(slot: slot, ticket: ticket, dropTarget: dropTarget, inEpic: true, onAction: onAction)
+            SlotCard(slot: slot, ticket: ticket, dropTarget: dropTarget, inEpic: true, onAction: onAction, onOpen: onOpen)
             if showsUpcoming, !epic.upcoming.isEmpty {
                 upcomingList(numberWidth: numberWidth)
                     .padding(.top, queue.epicFrameInset)
@@ -211,6 +215,8 @@ public struct EpicSlotCard: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .foregroundStyle(DesignTokens.TextColor.primary.color)
+                        // The title's own click wins over the band's: it opens the epic, the rest of the band its list.
+                        .titleLink(epic.identifier, open: onOpen)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -220,6 +226,7 @@ public struct EpicSlotCard: View {
             .accessibilityAddTraits(.isButton)
             .accessibilityAction(named: Text(Self.upcomingTitle(open: showsUpcoming)), onToggleUpcoming)
             .accessibilityAction { onToggleUpcoming() }
+            .openTicketAction(epic.identifier, open: onOpen)
             .accessibilityIdentifier(Self.bandIdentifier(slot))
             doneCount
             Text(epic.sinceText)
@@ -277,7 +284,9 @@ public struct EpicSlotCard: View {
         let queue = DesignTokens.HomeQueue.self
         let rows = VStack(spacing: queue.doneRowGap) {
             ForEach(offscreenSnapshot ? Array(Self.doneShown(epic.doneRows)) : epic.doneRows) { row in
-                DoneRow(row, cells: .slotCard, nesting: DoneRow.Nesting(numberCell: numberWidth, depth: 0, end: queue.epicRowEnd))
+                DoneRow(
+                    row, cells: .slotCard, nesting: DoneRow.Nesting(numberCell: numberWidth, depth: 0, end: queue.epicRowEnd), onOpen: onOpen
+                )
             }
         }
         return Group {
@@ -307,7 +316,7 @@ public struct EpicSlotCard: View {
             return AnyView(
                 VStack(spacing: queue.doneRowGap) {
                     ForEach(Array(Self.upcomingShown(Array(rows.enumerated()))), id: \.element.id) { index, row in
-                        QueueRow(row, numberWidth: numberWidth, look: hoveredRow == index ? .hover : nil, end: queue.epicRowEnd)
+                        QueueRow(row, numberWidth: numberWidth, look: hoveredRow == index ? .hover : nil, end: queue.epicRowEnd, onOpen: onOpen)
                     }
                 }
                 .frame(height: Self.listHeight(rows: rows.count), alignment: .top)
@@ -323,7 +332,7 @@ public struct EpicSlotCard: View {
                     ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                         QueueRow(
                             row, numberWidth: numberWidth, look: hoveredRow == index ? .hover : nil, picked: drag?.index == index,
-                            end: queue.epicRowEnd, onStart: { onStart(row.identifier) }
+                            end: queue.epicRowEnd, onStart: { onStart(row.identifier) }, onOpen: onOpen
                         )
                         .gesture(dragGesture(index, count: rows.count))
                     }

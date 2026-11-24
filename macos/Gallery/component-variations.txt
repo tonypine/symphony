@@ -228,6 +228,7 @@ slot-card-empty
 slot-card-empty-drop-target
 slot-card-needs-attention
 slot-card-now
+slot-card-title-hovered
 slot-card-waiting-on-you
 slot-count-one-slot
 slot-count-six-slots

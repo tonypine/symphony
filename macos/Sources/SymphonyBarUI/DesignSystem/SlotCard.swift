@@ -137,20 +137,26 @@ public struct SlotCard: View {
     let ticket: SlotCardModel?
     let dropTarget: Bool
     let inEpic: Bool
+    let titleHovered: Bool?
     let onAction: (SlotCardModel.Action) -> Void
+    let onOpen: ((String) -> Void)?
 
     /// The card, drawn as the target under a dragged row while `dropTarget` (TP-1610). `inEpic` draws it inside an epic
     /// slot card (TP-1646): its sides less the frame's inset, so its dot, identifier and title stand on an ordinary card's
-    /// columns, no epic chip (the band names the epic), and its time read as the time on this ticket.
+    /// columns, no epic chip (the band names the epic), and its time read as the time on this ticket. A click on the
+    /// title calls `onOpen` with the ticket's identifier (TP-1647); `titleHovered` draws the title under the pointer, for
+    /// a story.
     public init(
-        slot: Int, ticket: SlotCardModel?, dropTarget: Bool = false, inEpic: Bool = false,
-        onAction: @escaping (SlotCardModel.Action) -> Void = { _ in }
+        slot: Int, ticket: SlotCardModel?, dropTarget: Bool = false, inEpic: Bool = false, titleHovered: Bool? = nil,
+        onAction: @escaping (SlotCardModel.Action) -> Void = { _ in }, onOpen: ((String) -> Void)? = nil
     ) {
         self.slot = slot
         self.ticket = ticket
         self.dropTarget = dropTarget
         self.inEpic = inEpic
+        self.titleHovered = titleHovered
         self.onAction = onAction
+        self.onOpen = onOpen
     }
 
     /// The header's time: "2 h 40 min in the slot", or inside an epic slot card "1 h 5 min on this ticket".
@@ -232,6 +238,7 @@ public struct SlotCard: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .foregroundStyle(DesignTokens.TextColor.primary.color)
+                .titleLink(ticket.identifier, hovered: titleHovered, open: onOpen)
                 .accessibilityAddTraits(.isHeader)
             if !inEpic, let epic = ticket.epic {
                 Chip(epic, kind: .epic).padding(.leading, DesignTokens.Space.s1)
@@ -496,17 +503,25 @@ public struct SlotStripLine: View {
     let numberWidth: CGFloat
     let state: DesignTokens.Interaction?
     let dropTarget: Bool
+    let titleHovered: Bool?
+    let onOpen: ((String) -> Void)?
     @State private var hovered = false
     /// The queue row's probes: the strip line carries them on the same parts, so a test reads both rows' columns.
     @Environment(\.queueRowProbes) private var probes
 
-    /// The line, drawn as the target under a dragged row while `dropTarget` (TP-1610).
-    public init(slot: Int, ticket: SlotCardModel?, numberWidth: CGFloat, state: DesignTokens.Interaction? = nil, dropTarget: Bool = false) {
+    /// The line, drawn as the target under a dragged row while `dropTarget` (TP-1610). A click on the title calls
+    /// `onOpen` with the ticket's identifier (TP-1647); `titleHovered` draws the title under the pointer, for a story.
+    public init(
+        slot: Int, ticket: SlotCardModel?, numberWidth: CGFloat, state: DesignTokens.Interaction? = nil, dropTarget: Bool = false,
+        titleHovered: Bool? = nil, onOpen: ((String) -> Void)? = nil
+    ) {
         self.slot = slot
         self.ticket = ticket
         self.numberWidth = numberWidth
         self.state = state
         self.dropTarget = dropTarget
+        self.titleHovered = titleHovered
+        self.onOpen = onOpen
     }
 
     /// The line's label: what its parts say (the identifier, the title, the state and the time in the slot), and,
@@ -543,6 +558,7 @@ public struct SlotStripLine: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .foregroundStyle(DesignTokens.TextColor.primary.color)
+                        .titleLink(ticket.identifier, hovered: titleHovered, open: onOpen)
                         .probe(.title, probes)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
