@@ -55,6 +55,39 @@ modules your branch changes:
 mix cover.changed
 ```
 
+To run every Elixir test, use the script, not a bare `mix test`:
+
+```bash
+scripts/test-parts.sh          # all tests, in 8 processes at once
+scripts/test-parts.sh -n 4     # in 4
+```
+
+Most test files run one test at a time, because their tests share the app's one config, run store
+and named processes, so a single `mix test` leaves most cores idle (about 9 minutes). The script
+spreads the test files over the parts by how long each took (`test/support/test_weights.tsv`,
+heaviest first onto the lightest part) and runs each part as its own `mix test` (under 2 minutes
+on a 12-core Mac; more than 8 parts is no faster there). It also makes a fix quick to check:
+
+- The tests that failed in the last run (`_build/test/parts/failed.txt`) run first, alone. While
+  one still fails the script stops there, in seconds.
+- Each part stops after 10 failures (`TEST_MAX_FAILURES`), so a broken build is reported at once.
+- Each part runs 2 tests at a time (`TEST_MAX_CASES`). ExUnit's default, 2 per core in every
+  part, keeps every core so busy that the tests that measure time fail.
+- A test that failed runs once more, alone. One that passes then is named in the summary as
+  unsteady and does not fail the run; one that fails twice does, and runs first next time.
+- It prints the failures and one summary line; each part's whole output is in
+  `_build/test/parts/part-<n>.log`.
+
+`scripts/test-parts.sh --record` rewrites the weights file from a passing run; do that after
+adding or moving slow tests, so the parts stay even. A test file the weights don't list counts as
+an average one.
+
+In the test env the run store asks the disk for no flush after a write
+(`run_store_sync_log: false` in `config/config.exs`): the stores are temp folders, and the flushes
+of several test processes at once queue on the one disk. A wait for a message uses ExUnit's
+`assert_receive` with the suite default (1 s) or longer, never a shorter one: a passing assertion
+returns when its message arrives, and a short wait fails on a busy machine.
+
 The suite gives the same result on every machine, whatever the shell exports:
 
 - Every test runs on the memory ticket system. A test of the Linear adapter opts in with

@@ -56,6 +56,14 @@ runs the whole suite in a fresh workspace) or Dialyzer locally;
 `make all` is an optional extra for changes to shared infrastructure (config schema, orchestrator
 core). A coverage gap CI reports is fixed like any other red check.
 
+When a change touches code many tests depend on (the orchestrator, `dispatch/`, the run store,
+the ticket record, `pauses/`), run every Elixir test with `scripts/test-parts.sh`, not `mix test`:
+it runs the test files in 8 processes at once (under 2 minutes, against about 9 for one
+`mix test`), runs the tests that failed last time first and stops there while one still fails,
+runs a failed test once more alone before it counts, and prints only the failures and one summary
+line. The test of another module that breaks is then seen before the push, not one CI run at a
+time.
+
 In the Claude sandbox, build and test the Swift package (`macos/`) with
 `swift build --disable-sandbox --build-system native` and
 `swift test --disable-sandbox --build-system native`. `--disable-sandbox` skips SwiftPM's own
