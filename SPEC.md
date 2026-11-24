@@ -4285,7 +4285,9 @@ Slots:
   competing pull request, an app update that carries a dependency's fix).
 - A ticket that holds a slot is in progress; that is the only meaning of in progress. The dispatch
   order read and the Home read (Section 13.4) say which ticket holds each slot, how many are free,
-  and carry `in_progress` on each ticket, true exactly when it holds a slot.
+  and carry `in_progress` on each ticket, true exactly when it holds a slot. For a slot an epic
+  holds, the Home read also lists the epic's done sub-tickets and its open ones, and each queue row
+  lists all its stored dependencies with whether each is met.
 - The holders are stored on the ticket records (`slot_held_since`), so a restart keeps them. Each
   slot has a number from 1, stored with its holder (`slot_number`), so a restart keeps it: a new
   holder gets the lowest number no holder uses, and a sub-ticket running through its ancestor's slot
@@ -5820,6 +5822,26 @@ SHOULD return:
   reason's line on Symphony's pause, null when the pause does not hold it), but
   `dispatch_state.active?` is false only when the holds hold every provider (and model) and run kind
   in use.
+
+The Director's Home read (`GET /api/v1/home`), built from Symphony's own records and ledgers with
+no Linear or GitHub request, SHOULD give, beside the in-progress list and the queue tree:
+
+- `slots.entries`: one entry per slot in number order, an empty one included, each with its card
+  (Section 8.3). When tickets run through an epic's slot, the entry's `epic` gives the epic's
+  identifier, title, repo, since when it holds the slot, its sub-tickets `done` and `total` (a
+  cancelled one counts in neither), `done_sub_tickets` (its done sub-tickets, oldest completion
+  first, each with `identifier`, `title`, `pull_request_number` from its stored pull request and
+  `done_at`, when it entered Done) and `open_sub_tickets` (its open sub-tickets but the card's, in
+  their stored queue order, each with `phase`, `identifier`, `title`, `repo_key`, `parent` and
+  `dependencies`).
+- `queue.rows`: the open tickets with a place in the stored queue that are not in work, flat, in
+  the stored order, a page at a time, each with its position (`path`, `number`, `parent`), state,
+  identifier, title and repo; `dependencies`, every stored dependency with its `kind` (`done` or
+  `released`) and `met`; `waits_on`, the open ones alone (a `released` dependency is met once its
+  ticket is Done); and for an epic `sub_tickets` (`done`, `total`) and `done_sub_tickets` as in the
+  slot entry. An epic's open sub-tickets are the rows under it in their own order; a done one is no
+  row. A saved filter keeps the rows it matches and every row above one, so an epic stays when it or
+  one of its open sub-tickets matches, with only the matching sub-rows.
 
 Elixir implementation note: the current snapshot's `run_history` is read from the primary repo
 partition, while budget hydration reads runs across all repo partitions.

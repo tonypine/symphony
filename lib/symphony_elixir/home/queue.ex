@@ -15,21 +15,24 @@ defmodule SymphonyElixir.Home.Queue do
     down to it (`[6, 1]`), `number` the same as text (`"6.1"`), and `parent`, the identifier of the
     row it sits under. The numbers are counted over the whole queue before a filter and a page, so a
     filtered row keeps its real number.
-  - A row carries its state (`phase`), identifier, title, repo, what it waits on (its open stored
-    dependencies, `SymphonyElixir.Dispatch.DependsOn.open/2`, each with its kind: `done` or
-    `released`), and for an epic its sub-tickets done and in all. The rows of a page also carry
-    their situation, and whether they wait on the person.
+  - A row carries its state (`phase`), identifier, title, repo, its stored dependencies
+    (`dependencies`, each with its kind, `done` or `released`, and whether it is `met`), what it
+    waits on (`waits_on`: the open ones, `SymphonyElixir.Dispatch.DependsOn.open/2`, without
+    `met`), and for an epic its sub-tickets done and in all (`sub_tickets`) and its done
+    sub-tickets in order of completion (`done_sub_tickets`, `SymphonyElixir.Home.SubTickets`, on
+    the rows of a page). An epic's open sub-tickets are the rows under it, in their own order; a
+    done one is no row and counts in no number. The rows of a page also carry their situation, and
+    whether they wait on the person.
   - A filter keeps the rows it matches (`SymphonyElixir.TicketList.matching/2`) and the rows above
     them, so an epic's row stays while one of its sub-tickets matches, with only the matching
     sub-rows under it. The order stays the stored order: a view's sort and columns do not apply.
   """
 
   alias SymphonyElixir.{Dispatch, Situation}
-  alias SymphonyElixir.Dispatch.DependsOn
+  alias SymphonyElixir.Home.SubTickets
 
   @default_limit 100
   @max_limit 500
-  @cancelled ["canceled", "cancelled", "duplicate"]
 
   @typedoc "Which rows a read gives: from `offset`, at most `limit`, those `matching` lets through (nil keeps all)."
   @type page :: %{offset: non_neg_integer(), limit: pos_integer(), matching: MapSet.t(String.t()) | nil}
@@ -82,10 +85,10 @@ defmodule SymphonyElixir.Home.Queue do
     taken = kept |> Enum.drop(page.offset) |> Enum.take(page.limit)
     next = page.offset + length(taken)
     by_id = Map.new(records, &{&1.issue_id, &1})
-    moves = Keyword.get(opts, :moves)
+    page_ctx = %{records: records, live: live, moves: Keyword.get(opts, :moves), index: SubTickets.index(records, parents)}
 
     %{
-      rows: Enum.map(taken, &with_situation(&1, Map.fetch!(by_id, &1.issue_id), records, live, moves)),
+      rows: Enum.map(taken, &page_row(&1, Map.fetch!(by_id, &1.issue_id), page_ctx)),
       count: length(kept),
       total: length(rows),
       offset: page.offset,
@@ -94,7 +97,7 @@ defmodule SymphonyElixir.Home.Queue do
     }
   end
 
-  @doc "Every row of the queue, in the stored order, with its position; no situation and no page."
+  @doc "Every row of the queue, in the stored order, with its position; no situation, no done sub-tickets and no page."
   @spec rows([map()], MapSet.t(String.t()), %{String.t() => String.t()}, Situation.live_facts()) :: [map()]
   def rows(records, in_work, parents, live) do
     terminal = MapSet.new(live.terminal_states, &normalize/1)
@@ -114,7 +117,7 @@ defmodule SymphonyElixir.Home.Queue do
       |> Enum.sort_by(&{Map.fetch!(places, &1.issue_id), &1.issue_identifier || ""})
 
     queued_ids = MapSet.new(queued, & &1.issue_id)
-    ctx = %{by_id: by_id, parents: parents, parent_ids: parent_ids, terminal: terminal, records: records}
+    ctx = %{by_id: by_id, parent_ids: parent_ids, terminal: terminal, index: SubTickets.index(records, parents)}
 
     queued
     |> Enum.map_reduce(%{}, fn record, numbers -> number(record, queued_ids, numbers, ctx) end)
@@ -132,6 +135,8 @@ defmodule SymphonyElixir.Home.Queue do
   end
 
   defp row(record, path, parent_id, ctx) do
+    dependencies = SubTickets.dependencies(record, ctx.by_id)
+
     %{
       issue_id: record.issue_id,
       identifier: record.issue_identifier,
@@ -141,28 +146,20 @@ defmodule SymphonyElixir.Home.Queue do
       number: Enum.join(path, "."),
       path: path,
       parent: parent_id && Map.fetch!(ctx.by_id, parent_id).issue_identifier,
-      waits_on: waits_on(record, ctx.by_id),
+      waits_on: waits_on(dependencies),
+      dependencies: dependencies,
       sub_tickets: sub_tickets(record, ctx)
     }
   end
 
-  defp waits_on(record, by_id) do
-    for dependency <- DependsOn.open(record.depends_on, by_id) do
-      identifier = dependency.identifier || Map.get(by_id, dependency.issue_id, %{})[:issue_identifier]
-      %{issue_id: dependency.issue_id, identifier: identifier, kind: Atom.to_string(dependency.kind)}
-    end
-  end
+  # The open dependencies, as `SymphonyElixir.Dispatch.DependsOn.open/2` finds them, without `met`.
+  defp waits_on(dependencies), do: for(%{met: false} = dependency <- dependencies, do: Map.delete(dependency, :met))
 
-  # An epic's sub-tickets, done and in all (a cancelled one counts in neither): the records it is the
-  # parent of, and the sub-issues its record lists that Symphony holds no record of. Nil for a
-  # ticket with none.
+  # An epic's sub-tickets done and in all (a cancelled one counts in neither), nil for a ticket with
+  # none.
   defp sub_tickets(record, ctx) do
-    kids = for {id, parent} <- ctx.parents, parent == record.issue_identifier, kid = Map.get(ctx.by_id, id), do: kid
-    known = MapSet.new(kids, & &1.issue_id)
-    phases = Enum.map(kids, & &1.phase) ++ for(link <- record.sub_issues, not MapSet.member?(known, link.id), do: link.state)
-    phases = phases |> Enum.map(&normalize/1) |> Enum.reject(&(&1 in @cancelled))
-
-    if phases != [], do: %{done: Enum.count(phases, &MapSet.member?(ctx.terminal, &1)), total: length(phases)}
+    {done, total} = record |> SubTickets.of(ctx.index) |> SubTickets.counts(ctx.terminal)
+    if total > 0, do: %{done: done, total: total}
   end
 
   # The rows `matching` lets through and every row above one of them; all of them with no filter.
@@ -187,9 +184,18 @@ defmodule SymphonyElixir.Home.Queue do
     [row.issue_id | above(row, by_identifier)]
   end
 
-  defp with_situation(row, record, records, live, moves) do
-    situation = record |> Situation.read(live, records) |> Situation.payload()
-    Map.merge(row, %{situation: situation, waits_on_you: situation.kind == "waiting_on_you", move: SymphonyElixir.Home.move(record, situation, moves)})
+  # A row of the page: with its situation, whether it waits on the person and the move it then
+  # allows, and an epic's done sub-tickets (read from the stored pull requests, so only for a page).
+  defp page_row(row, record, ctx) do
+    situation = record |> Situation.read(ctx.live, ctx.records) |> Situation.payload()
+    terminal = MapSet.new(ctx.live.terminal_states, &normalize/1)
+
+    Map.merge(row, %{
+      situation: situation,
+      waits_on_you: situation.kind == "waiting_on_you",
+      move: SymphonyElixir.Home.move(record, situation, ctx.moves),
+      done_sub_tickets: record |> SubTickets.of(ctx.index) |> SubTickets.done(terminal)
+    })
   end
 
   defp normalize(state), do: state |> to_string() |> String.trim() |> String.downcase()

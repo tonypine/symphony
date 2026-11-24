@@ -8,6 +8,7 @@ defmodule SymphonyElixir.Home.QueueTest do
   alias SymphonyElixir.Home.Queue
   alias SymphonyElixir.Situation
   alias SymphonyElixir.TicketList
+  alias SymphonyElixir.TicketPullRequest
   alias SymphonyElixir.TicketState
 
   @all %{offset: 0, limit: 100, matching: nil}
@@ -47,6 +48,11 @@ defmodule SymphonyElixir.Home.QueueTest do
     # MT-0 is done: met. MT-9 is done but needs a release: met for a build from a checkout, as the
     # readers that show who waits on whom count it (`DependsOn.open/2`).
     assert third.waits_on == [%{issue_id: "id-MT-1", identifier: "MT-1", kind: "done"}]
+
+    # Every key a row gave before the dependencies and the done sub-tickets were added is still there.
+    old_keys = [:issue_id, :identifier, :title, :phase, :repo_key, :number, :path, :parent, :waits_on, :sub_tickets, :situation, :waits_on_you, :move]
+    assert Enum.all?(read.rows, &(old_keys -- Map.keys(&1) == []))
+    assert Enum.map(third.dependencies, &{&1.identifier, &1.met}) == [{"MT-1", false}, {"MT-9", true}, {"MT-0", true}]
   end
 
   test "a sub-ticket sits under its parent and is numbered inside it, at any depth; one that never ran is placed from its parent's sub-issues" do
@@ -117,6 +123,93 @@ defmodule SymphonyElixir.Home.QueueTest do
 
     assert Enum.map(read.rows, &{&1.number, &1.identifier}) == [{"1", "MT-1"}, {"2", "MT-2"}, {"2.1", "MT-3"}]
     assert %{count: 3, total: 5} = read
+  end
+
+  test "a row lists every stored dependency with its kind and whether it is met, and waits on the open ones alone" do
+    depends_on = [dep("MT-D"), dep("MT-T"), %{dep("MT-D") | kind: :released}, %{dep("MT-T") | kind: :released}, dep("MT-Z")]
+
+    records = [
+      record("MT-1", "Todo", "a1", depends_on: depends_on),
+      record("MT-T", "Todo", "a2"),
+      record("MT-D", "Done", nil)
+    ]
+
+    [row, _other] = Queue.rows(records, MapSet.new(), DispatchQueue.parents(records), live())
+
+    # MT-Z has no record: unmet, named by the stored identifier.
+    assert row.dependencies == [
+             %{issue_id: "id-MT-D", identifier: "MT-D", kind: "done", met: true},
+             %{issue_id: "id-MT-T", identifier: "MT-T", kind: "done", met: false},
+             %{issue_id: "id-MT-D", identifier: "MT-D", kind: "released", met: true},
+             %{issue_id: "id-MT-T", identifier: "MT-T", kind: "released", met: false},
+             %{issue_id: "id-MT-Z", identifier: "MT-Z", kind: "done", met: false}
+           ]
+
+    assert row.waits_on == [
+             %{issue_id: "id-MT-T", identifier: "MT-T", kind: "done"},
+             %{issue_id: "id-MT-T", identifier: "MT-T", kind: "released"},
+             %{issue_id: "id-MT-Z", identifier: "MT-Z", kind: "done"}
+           ]
+
+    # A dependency stored without its identifier is named by its ticket's record.
+    records = [record("MT-1", "Todo", "a1", depends_on: [%{issue_id: "id-MT-T", identifier: nil, kind: :done}]), record("MT-T", "Todo", "a2")]
+    [row, _other] = Queue.rows(records, MapSet.new(), DispatchQueue.parents(records), live())
+    assert row.dependencies == [%{issue_id: "id-MT-T", identifier: "MT-T", kind: "done", met: false}]
+  end
+
+  test "an epic's row carries its done sub-tickets in order of completion with their count; its open ones are the rows under it, each naming it" do
+    parent = %{identifier: "MT-E"}
+
+    records = [
+      record("MT-E", "Todo", "a1", sub_issues: [link("MT-K", "Done"), link("MT-X", "Canceled")]),
+      record("MT-2", "Todo", "a2", parent: parent),
+      record("MT-1", "Backlog", "a1", parent: parent),
+      record("MT-A", "Done", nil, parent: parent, phase_at: ~U[2026-11-24 09:00:00Z]),
+      record("MT-B", "Done", nil, parent: parent, phase_at: ~U[2026-11-24 08:00:00Z]),
+      record("MT-C", "Canceled", nil, parent: parent),
+      record("MT-9", "Todo", "a2")
+    ]
+
+    :ok = TicketPullRequest.record_created("default", "id-MT-A", "https://github.com/acme/app/pull/41", "auto/MT-A")
+    :ok = TicketPullRequest.mark_finished("default", "https://github.com/acme/app/pull/41", "merged")
+
+    read = Queue.read(records, MapSet.new(), DispatchQueue.parents(records), live(), @all)
+
+    assert Enum.map(read.rows, &{&1.number, &1.identifier, &1.parent}) == [{"1", "MT-E", nil}, {"1.1", "MT-1", "MT-E"}, {"1.2", "MT-2", "MT-E"}, {"2", "MT-9", nil}]
+    assert %{count: 4, total: 4} = read
+
+    [epic | _rest] = read.rows
+    assert epic.sub_tickets == %{done: 3, total: 5}
+
+    assert epic.done_sub_tickets == [
+             %{issue_id: "id-MT-K", identifier: "MT-K", title: nil, pull_request_number: nil, done_at: nil},
+             %{issue_id: "id-MT-B", identifier: "MT-B", title: "Ticket MT-B", pull_request_number: nil, done_at: ~U[2026-11-24 08:00:00Z]},
+             %{issue_id: "id-MT-A", identifier: "MT-A", title: "Ticket MT-A", pull_request_number: 41, done_at: ~U[2026-11-24 09:00:00Z]}
+           ]
+
+    assert Enum.all?(tl(read.rows), &(&1.done_sub_tickets == [] and &1.sub_tickets == nil))
+  end
+
+  test "a filter that matches only a sub-ticket gives its epic with that sub-ticket alone; an epic that matches is given with its done sub-tickets" do
+    parent = %{identifier: "MT-E"}
+
+    records = [
+      record("MT-E", "Todo", "a1"),
+      record("MT-1", "Todo", "a1", parent: parent),
+      record("MT-2", "Todo", "a2", parent: parent),
+      record("MT-D", "Done", nil, parent: parent),
+      record("MT-9", "Todo", "a2")
+    ]
+
+    parents = DispatchQueue.parents(records)
+    read = fn ids -> Queue.read(records, MapSet.new(), parents, live(), %{@all | matching: MapSet.new(ids)}) end
+
+    only_sub = read.(["id-MT-2"])
+    assert Enum.map(only_sub.rows, &{&1.number, &1.identifier, &1.parent}) == [{"1", "MT-E", nil}, {"1.2", "MT-2", "MT-E"}]
+    assert %{count: 2, total: 4} = only_sub
+
+    only_epic = read.(["id-MT-E"])
+    assert [%{identifier: "MT-E", sub_tickets: %{done: 1, total: 3}, done_sub_tickets: [%{identifier: "MT-D"}]}] = only_epic.rows
   end
 
   test "the page a query asks for: defaults, a cap, and a refusal for anything but a whole number" do

@@ -14,6 +14,10 @@ defmodule SymphonyElixir.Home.Slots do
     slot, at any depth, shares that slot's number. When tickets run through the slot, the card is
     the one being worked on (a run works on it, else the one that joined the slot last) and the
     owner is its `epic`; otherwise the card is the owner's own and `epic` is nil.
+  - The `epic` gives its identifier, title, repo, since when it holds the slot, its sub-tickets
+    done and in all, its done sub-tickets in order of completion (`done_sub_tickets`) and its open
+    ones in their queue order but the card's (`open_sub_tickets`), as `SymphonyElixir.Home.SubTickets`
+    shapes them.
   - A card carries the ticket, its situation (`SymphonyElixir.Situation`) and whether it waits on
     the person with the move it then allows, since when it is in the slot, its stages with the
     tokens of each (`SymphonyElixir.Lifecycle`, without their timings), its tokens against the
@@ -26,11 +30,11 @@ defmodule SymphonyElixir.Home.Slots do
   """
 
   alias SymphonyElixir.{Dispatch, Lifecycle, Situation, TicketChecks, TicketEvents, TicketPlan, TicketPullRequest}
+  alias SymphonyElixir.Home.SubTickets
   alias SymphonyElixir.TicketEvents.Event
 
   @failed ["failed", "cancelled_no_machine"]
   @pending ["running", "waiting"]
-  @cancelled ["canceled", "cancelled", "duplicate"]
 
   @doc """
   The entries over the ticket `records` (normalized, `SymphonyElixir.TicketState`), the
@@ -38,7 +42,7 @@ defmodule SymphonyElixir.Home.Slots do
 
   - `:total`: the slot count;
   - `:parents`: each ticket's parent, by issue id, as its parent's identifier
-    (`SymphonyElixir.Dispatch.Queue.parents/1`), for an epic's sub-ticket counts;
+    (`SymphonyElixir.Dispatch.Queue.parents/1`), for an epic's sub-tickets;
   - `:moves`: as `SymphonyElixir.Home.read/4` takes it;
   - `:runs`: the orchestrator's running entries (the snapshot's `running`), whose tokens so far
     count in the stages;
@@ -87,26 +91,35 @@ defmodule SymphonyElixir.Home.Slots do
       slot: number,
       empty: false,
       since: owner.since,
-      epic: card && epic(owner, records, live, opts),
+      epic: card && epic(owner, card, records, live, opts),
       ticket: card(card || owner, records, live, opts)
     }
   end
 
-  defp epic(%{record: record, since: since}, records, live, opts) do
+  defp epic(%{record: record, since: since}, card, records, live, opts) do
     terminal = MapSet.new(live.terminal_states, &normalize/1)
-    {done, total} = sub_ticket_counts(record, records, terminal, Keyword.get(opts, :parents, %{}))
+    parents = Keyword.get(opts, :parents, %{})
+    subs = SubTickets.of(record, SubTickets.index(records, parents))
+    {done, total} = SubTickets.counts(subs, terminal)
 
-    %{issue_id: record.issue_id, identifier: record.issue_identifier, title: record.title, repo_key: record.repo_key, since: since, done: done, total: total}
-  end
+    open =
+      SubTickets.open(record, subs, terminal,
+        by_id: Map.new(records, &{&1.issue_id, &1}),
+        places: SubTickets.places(records, parents, terminal),
+        leave_out: MapSet.new([card.record.issue_id])
+      )
 
-  # The epic's sub-tickets, done and in all, a cancelled one counting in neither: the records it is
-  # the parent of, and the sub-issues its record lists that Symphony holds no record of.
-  defp sub_ticket_counts(epic, records, terminal, parents) do
-    kids = Enum.filter(records, &(Map.get(parents, &1.issue_id) == epic.issue_identifier))
-    known = MapSet.new(kids, & &1.issue_id)
-    phases = Enum.map(kids, & &1.phase) ++ for(link <- epic.sub_issues, not MapSet.member?(known, link.id), do: link.state)
-    phases = phases |> Enum.map(&normalize/1) |> Enum.reject(&(&1 in @cancelled))
-    {Enum.count(phases, &MapSet.member?(terminal, &1)), length(phases)}
+    %{
+      issue_id: record.issue_id,
+      identifier: record.issue_identifier,
+      title: record.title,
+      repo_key: record.repo_key,
+      since: since,
+      done: done,
+      total: total,
+      done_sub_tickets: SubTickets.done(subs, terminal),
+      open_sub_tickets: open
+    }
   end
 
   defp card(%{record: record, since: since}, records, live, opts) do

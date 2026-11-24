@@ -205,6 +205,50 @@ defmodule SymphonyElixir.HomeTest do
     end
   end
 
+  describe "epics and dependencies" do
+    test "an epic's slot and an epic's queue row give their done and open sub-tickets and every dependency, with no Linear request" do
+      held = ~U[2026-11-24 08:00:00Z]
+      slot_epic = record("MT-E", "Waiting on sub-tickets", slot_held_since: held, slot_number: 1, sort_key: "a1")
+      working = record("MT-W", "In Progress", parent: %{identifier: "MT-E"}, slot_held_since: held, slot_number: 1, sort_key: "a1")
+      slot_done = record("MT-D", "Done", parent: %{identifier: "MT-E"}, phase_at: held)
+      slot_next = record("MT-N", "Todo", parent: %{identifier: "MT-E"}, sort_key: "a2", depends_on: [dep("MT-W")])
+      queued_epic = record("MT-Q", "Todo", sort_key: "a2")
+      queued_done = record("MT-QD", "Done", parent: %{identifier: "MT-Q"})
+      queued_sub = record("MT-QS", "Todo", parent: %{identifier: "MT-Q"}, sort_key: "a1", depends_on: [dep("MT-D"), dep("MT-N")])
+      records = [slot_epic, working, slot_done, slot_next, queued_epic, queued_done, queued_sub]
+
+      read = traced_linear(fn -> Home.read(walk(["MT-N", "MT-QS"]), records, live(), slot_count: 1) end)
+
+      assert [%{slot: 1, ticket: %{identifier: "MT-W"}, epic: epic}] = read.slots.entries
+      assert %{identifier: "MT-E", done: 1, total: 3} = epic
+      assert [%{identifier: "MT-D", done_at: ^held}] = epic.done_sub_tickets
+      assert [%{identifier: "MT-N", phase: "Todo", parent: "MT-E", dependencies: [%{identifier: "MT-W", kind: "done", met: false}]}] = epic.open_sub_tickets
+
+      assert [queued, sub] = read.queue.rows
+      assert %{identifier: "MT-Q", sub_tickets: %{done: 1, total: 2}, done_sub_tickets: [%{identifier: "MT-QD"}]} = queued
+      assert %{identifier: "MT-QS", parent: "MT-Q", waits_on: [%{identifier: "MT-N", kind: "done"}]} = sub
+      assert Enum.map(sub.dependencies, &{&1.identifier, &1.met}) == [{"MT-D", true}, {"MT-N", false}]
+    end
+  end
+
+  # Runs `fun` with every call of the Linear client from this process traced, and fails if one was made.
+  defp traced_linear(fun) do
+    {:module, client} = Code.ensure_loaded(SymphonyElixir.Linear.Client)
+    :erlang.trace_pattern({client, :_, :_}, true, [:local])
+    :erlang.trace(self(), true, [:call])
+
+    try do
+      result = fun.()
+      ref = :erlang.trace_delivered(self())
+      assert_receive {:trace_delivered, _pid, ^ref}
+      refute_received {:trace, _pid, :call, {^client, _function, _args}}
+      result
+    after
+      :erlang.trace(self(), false, [:call])
+      :erlang.trace_pattern({client, :_, :_}, false, [:local])
+    end
+  end
+
   defp record(identifier, phase, attrs \\ []) do
     Map.merge(
       %{
