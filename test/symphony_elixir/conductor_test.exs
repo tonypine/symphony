@@ -431,15 +431,15 @@ defmodule SymphonyElixir.ConductorTest do
       blocked!(ctx.issue_id)
       Application.put_env(:symphony_elixir, :memory_tracker_issues, [ctx.issue])
       Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
-      move = %{"stage" => "Rework", "reason" => "QA cannot fail the request until a flag exists."}
+      move = %{"stage" => "In Progress", "reason" => "QA cannot fail the request until a flag exists."}
 
       log = capture_log(fn -> assert Conductor.route_blocked_qa(ctx.issue, "default", turn: turn(routed(%{"to" => "rerun"}, %{"move" => move})), settings: @on) == :moved end)
 
       assert log =~ "Conductor's route rerun dropped"
-      assert log =~ "the turn moves the ticket to Rework"
-      assert log =~ "Conductor moved the ticket from Code Review to Rework"
-      assert_received {:memory_tracker_state_update, _id, "Rework"}
-      assert %{phase: "Rework"} = RunStore.get_ticket_state(ctx.issue_id)
+      assert log =~ "the turn moves the ticket to In Progress"
+      assert log =~ "Conductor moved the ticket from Code Review to In Progress"
+      assert_received {:memory_tracker_state_update, _id, "In Progress"}
+      assert %{phase: "In Progress"} = RunStore.get_ticket_state(ctx.issue_id)
       assert [%{payload: instructions}] = events(ctx.issue_id, "conductor.instructions")
       refute Map.has_key?(instructions, :route)
     end

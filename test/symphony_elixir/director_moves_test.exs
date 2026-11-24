@@ -2698,7 +2698,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       junctions = ~w(after_coding after_qa_fail after_qa_blocked after_rework before_merge during_run sub_ticket_ended child_message)
 
       Enum.reduce(junctions, "Rework", fn junction, from ->
-        to = if from == "Rework", do: "QA", else: "Rework"
+        to = if from == "QA", do: "In Progress", else: "QA"
         turn = moving_turn(move_to(to))
         assert Conductor.run(turn_plan(junction), %{issue | state: from}, turn: turn, facts: %{}, moves: opts) == :again, junction
         assert RunStore.get_ticket_state("pr").phase == to, junction
@@ -2727,9 +2727,10 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert Questions.open({:ticket, "repo-director", "pr"}) == []
 
       # A move to the stage the ticket is in moves nothing, and the run starts.
-      log = capture_log(fn -> assert Conductor.run(turn_plan("after_rework"), issue, turn: moving_turn(move_to("rework")), facts: %{}, moves: opts) == :ok end)
-      assert log =~ "Conductor's move to Rework moved nothing"
-      assert RunStore.list_ticket_events("pr", types: ["ticket.moved"]) == []
+      assert Conductor.run(turn_plan("after_rework"), issue, turn: moving_turn(move_to("QA")), facts: %{}, moves: opts) == :again
+      log = capture_log(fn -> assert Conductor.run(turn_plan("after_rework"), %{issue | state: "QA"}, turn: moving_turn(move_to("QA")), facts: %{}, moves: opts) == :ok end)
+      assert log =~ "Conductor's move to QA moved nothing"
+      assert [_moved] = RunStore.list_ticket_events("pr", types: ["ticket.moved"])
     end
 
     test "a move given with a question is dropped: the person decides", %{opts: opts} do
