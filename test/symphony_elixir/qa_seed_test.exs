@@ -4,8 +4,9 @@ defmodule SymphonyElixir.QaSeedTest do
   import Plug.Conn
   import Plug.Test
 
-  alias SymphonyElixir.{Artifacts, Config, DirectorMoves, Inbox, Initiatives, Orchestrator, Paths, Pauses, PlanBrief, QaSeed}
+  alias SymphonyElixir.{Artifacts, Config, DirectorMoves, Inbox, Initiatives, Orchestrator, Paths, Pauses}
   alias SymphonyElixir.Dispatch.DependsOn
+  alias SymphonyElixir.{PlanBrief, QaSeed}
   alias SymphonyElixir.{Questions, RunStore, Situation, SubIssueWait, TicketEvents, TicketPullRequest, Tracker}
   alias SymphonyElixir.Workflow
   alias SymphonyElixirWeb.ControlApiController
