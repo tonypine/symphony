@@ -10,7 +10,8 @@
 // closed, open with its sub-rows, with its done rows shown (its done count pressed) and with its done count hovered; the
 // sub-ticket's row with its elbow at rest and hovered; and the dependency marker in its two kinds, done and released.
 // The epic slot card (TP-1646) is drawn closed, with what is to come, with what is done, with both, and with its done
-// count hovered; its two lists open and close live in the gallery.
+// count hovered; its two lists open and close live in the gallery. A clickable title (TP-1647) adds the slot card with
+// its title under the pointer, underlined.
 import SwiftUI
 import SymphonyBarCore
 import SymphonyBarUI
@@ -75,9 +76,9 @@ let slotAttention = SlotCardModel(
 )
 
 @MainActor
-private func slotCardStory(_ ticket: SlotCardModel?, slot: Int, dropTarget: Bool = false) -> AnyView {
+private func slotCardStory(_ ticket: SlotCardModel?, slot: Int, dropTarget: Bool = false, titleHovered: Bool? = nil) -> AnyView {
     AnyView(
-        SlotCard(slot: slot, ticket: ticket, dropTarget: dropTarget)
+        SlotCard(slot: slot, ticket: ticket, dropTarget: dropTarget, titleHovered: titleHovered, onOpen: { _ in })
             .frame(width: slotCardStoryWidth, alignment: .topLeading)
             .padding(DesignTokens.Space.s4)
             .background(DesignTokens.Surface.sunken.color)
@@ -433,6 +434,8 @@ let homeQueueStories: [ComponentStory] = {
         card("needs-attention") { slotCardStory(slotAttention, slot: 3) },
         card("empty", height: 100) { slotCardStory(nil, slot: 4) },
         card("drop-target") { slotCardStory(slotNow, slot: 1, dropTarget: true) },
+        // TP-1647: the title under the pointer, underlined in its own colour; the pointer there is the pointing hand.
+        card("title-hovered") { slotCardStory(slotNow, slot: 1, titleHovered: true) },
         card("empty-drop-target", height: 100) { slotCardStory(nil, slot: 4, dropTarget: true) },
         strip("lines") { stripStory() },
         strip("hover") { stripStory(hover: 0) },

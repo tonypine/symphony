@@ -93,10 +93,12 @@ public struct QueueRow: View {
     let reorderable: Bool
     let picked: Bool
     let doneCountHovered: Bool?
+    let titleHovered: Bool?
     let end: CGFloat
     let onStart: () -> Void
     let onToggle: () -> Void
     let onToggleDone: () -> Void
+    let onOpen: ((String) -> Void)?
     @State private var hovered = false
     @Environment(\.queueRowProbes) private var probes
 
@@ -107,11 +109,14 @@ public struct QueueRow: View {
     /// pointer and shows no handle. A `picked` row is the one being dragged, left behind in its place and dimmed
     /// (`.row.dragging`). An epic's row calls `onToggle` on a click, and `onToggleDone` on its done count
     /// (`doneCountHovered` draws its hover still, for a story). `end` is the room the row keeps at its end beyond its
-    /// own, as an epic slot card's rows do (TP-1646).
+    /// own, as an epic slot card's rows do (TP-1646). A click on the title calls `onOpen` with the row's identifier
+    /// (TP-1647), and only on the title: the rest of an epic's row still opens and closes it, and a drag still starts
+    /// anywhere on the row. `titleHovered` draws the title under the pointer, for a story.
     public init(
         _ row: QueueRowModel, numberWidth: CGFloat, fractionWidth: CGFloat = 0, look: Look? = nil, reorderable: Bool = true,
-        picked: Bool = false, doneCountHovered: Bool? = nil, end: CGFloat = 0, onStart: @escaping () -> Void = {},
-        onToggle: @escaping () -> Void = {}, onToggleDone: @escaping () -> Void = {}
+        picked: Bool = false, doneCountHovered: Bool? = nil, titleHovered: Bool? = nil, end: CGFloat = 0,
+        onStart: @escaping () -> Void = {}, onToggle: @escaping () -> Void = {}, onToggleDone: @escaping () -> Void = {},
+        onOpen: ((String) -> Void)? = nil
     ) {
         self.row = row
         self.numberWidth = numberWidth
@@ -120,10 +125,12 @@ public struct QueueRow: View {
         self.reorderable = reorderable
         self.picked = picked
         self.doneCountHovered = doneCountHovered
+        self.titleHovered = titleHovered
         self.end = end
         self.onStart = onStart
         self.onToggle = onToggle
         self.onToggleDone = onToggleDone
+        self.onOpen = onOpen
     }
 
     /// The width of `text` in the number's style, its figures tabular.
@@ -200,6 +207,7 @@ public struct QueueRow: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .foregroundStyle(DesignTokens.TextColor.primary.color)
+                    .titleLink(row.identifier, hovered: titleHovered, open: onOpen)
                     .probe(.title, probes)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -331,7 +339,8 @@ public struct QueueRow: View {
     }
 }
 
-/// A click on an epic's row opens and closes it (TP-1645); any other row takes no click.
+/// A click on an epic's row opens and closes it (TP-1645); any other row takes no click. A click on the title opens the
+/// ticket's page instead (TP-1647): the title's own tap wins over the row's.
 private struct EpicToggle: ViewModifier {
     let epic: Bool
     let toggle: () -> Void

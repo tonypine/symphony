@@ -80,17 +80,25 @@ public struct DoneRow: View {
     let hovered: Bool?
     let nesting: Nesting?
     let picked: Bool
+    let titleHovered: Bool?
+    let onOpen: ((String) -> Void)?
     @State private var pointer = false
 
     /// The row of `row` with the trail's `cells`. `hovered` draws the hover still, for a story; nil follows the pointer.
     /// With `nesting` it is an epic's quiet done row in the queue: no number, the elbow, the title secondary; `picked`
-    /// dims it while its epic is dragged.
-    public init(_ row: DoneRowModel, cells: Cells = .all, hovered: Bool? = nil, nesting: Nesting? = nil, picked: Bool = false) {
+    /// dims it while its epic is dragged. A click on the title calls `onOpen` with the row's identifier (TP-1647);
+    /// `titleHovered` draws the title under the pointer, for a story.
+    public init(
+        _ row: DoneRowModel, cells: Cells = .all, hovered: Bool? = nil, nesting: Nesting? = nil, picked: Bool = false,
+        titleHovered: Bool? = nil, onOpen: ((String) -> Void)? = nil
+    ) {
         self.row = row
         self.cells = cells
         self.hovered = hovered
         self.nesting = nesting
         self.picked = picked
+        self.titleHovered = titleHovered
+        self.onOpen = onOpen
     }
 
     /// The parts a row with `cells` draws, in order. The epic's cell is drawn only for a ticket that has one; the pull
@@ -134,6 +142,7 @@ public struct DoneRow: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .foregroundStyle((nesting?.quiet == true ? DesignTokens.TextColor.secondary : DesignTokens.TextColor.primary).color)
+                    .titleLink(row.identifier, hovered: titleHovered, open: onOpen)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             trail

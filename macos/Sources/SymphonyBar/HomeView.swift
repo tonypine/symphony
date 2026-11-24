@@ -18,7 +18,7 @@ struct HomeActions {
     var pick: (String?) -> Void = { _ in }
     /// The rows on screen changed: their pages are read.
     var show: (Range<Int>) -> Void = { _ in }
-    /// A click on a row opens the ticket's page.
+    /// A click on a ticket's title, on a slot card or any row, opens the ticket's page (TP-1647).
     var openTicket: (String) -> Void = { _ in }
     /// A click on an epic's row shows or hides its sub-tickets (TP-1645).
     var toggleEpic: (String) -> Void = { _ in }
@@ -119,7 +119,7 @@ struct HomeView: View {
                 // right, and the strip's lines end where the rows and the cards end.
                 HomeStrip(
                     cards: model.cards, reference: reference, numberWidth: numberWidth + fractionWidth, dropSlot: target?.slot,
-                    lineFrame: { stripFrames[$0] = $1 }
+                    lineFrame: { stripFrames[$0] = $1 }, open: actions.openTicket
                 )
                 .frame(width: contentWidth > 0 ? contentWidth : nil)
                 .transition(.opacity.combined(with: .move(edge: .top)))
@@ -276,14 +276,15 @@ struct HomePageContent: View {
             ForEach(notices, id: \.self) { HomeNoticeLine(text: $0) }
             HomeRecentlyDone(
                 list: model.recentlyDone, reference: reference, pick: actions.pickDoneRange, toggle: actions.toggleRecentlyDone,
-                more: actions.showMoreDone
+                more: actions.showMoreDone, open: actions.openTicket
             )
             progress
                 .onGeometryChange(for: Double.self) { $0.frame(in: .named(space)).maxY } action: { cardsBottom($0) }
             queueHead
             HomeQueueList(
                 pager: model.pager, range: range, numberWidth: numberWidth, fractionWidth: fractionWidth, reference: reference,
-                start: actions.start, toggle: actions.toggleEpic, toggleDone: actions.toggleEpicDone, dragging: dragging
+                start: actions.start, toggle: actions.toggleEpic, toggleDone: actions.toggleEpicDone, open: actions.openTicket,
+                dragging: dragging
             )
                 .onGeometryChange(for: Double.self) { $0.frame(in: .named(space)).minY } action: { listTop($0) }
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(HomeView.viewportSpace)) } action: { listFrame($0) }
@@ -327,12 +328,13 @@ struct HomePageContent: View {
                 ticket: HomeQueueCards.card(ticket, reference: reference), showsUpcoming: model.epicSlots.showsUpcoming(epic.identifier),
                 showsDone: model.epicSlots.showsDone(epic.identifier), dropTarget: dropTarget, onAction: move,
                 onToggleUpcoming: { actions.toggleSlotUpcoming(epic.identifier) }, onToggleDone: { actions.toggleSlotDone(epic.identifier) },
-                onStart: { actions.startOnSlot($0, slot.number) }, onMove: { actions.moveInSlot(slot.number, $0, $1) }
+                onStart: { actions.startOnSlot($0, slot.number) }, onMove: { actions.moveInSlot(slot.number, $0, $1) },
+                onOpen: actions.openTicket
             )
         } else {
             SlotCard(
                 slot: slot.number, ticket: slot.ticket.map { HomeQueueCards.card($0, reference: reference) }, dropTarget: dropTarget,
-                onAction: move
+                onAction: move, onOpen: actions.openTicket
             )
         }
     }
@@ -380,6 +382,8 @@ struct HomeQueueList: View {
     var start: (String) -> Void = { _ in }
     var toggle: (String) -> Void = { _ in }
     var toggleDone: (String) -> Void = { _ in }
+    /// A click on a row's title opens its ticket's page (TP-1647).
+    var open: (String) -> Void = { _ in }
     var dragging = HomeDragging()
     @GestureState private var active = false
     @Environment(\.timeZone) private var timeZone
@@ -400,7 +404,8 @@ struct HomeQueueList: View {
                     case let .done(epic, _, ticket)?:
                         DoneRow(
                             HomeQueueCards.done(ticket, epic: epic, reference: reference, timeZone: timeZone), cells: .queue,
-                            nesting: DoneRow.Nesting(numberCell: numberWidth + fractionWidth), picked: block?.contains(index) == true
+                            nesting: DoneRow.Nesting(numberCell: numberWidth + fractionWidth), picked: block?.contains(index) == true,
+                            onOpen: open
                         )
                     case .row?:
                         let dragged = dragging.drag?.index == index ? dragging.drag?.row : nil
@@ -409,7 +414,7 @@ struct HomeQueueList: View {
                             QueueRow(
                                 HomeQueueCards.row(row, fold: pager.fold), numberWidth: numberWidth, fractionWidth: fractionWidth,
                                 reorderable: movable, picked: block?.contains(index) == true, onStart: { start(row.identifier) },
-                                onToggle: { toggle(row.identifier) }, onToggleDone: { toggleDone(row.identifier) }
+                                onToggle: { toggle(row.identifier) }, onToggleDone: { toggleDone(row.identifier) }, onOpen: open
                             )
                             .gesture(dragGesture(row, index: index, movable: movable))
                         }
@@ -486,6 +491,8 @@ struct HomeStrip: View {
     var dropSlot: Int?
     /// A line's frame in the scroll view's space, by slot: each line is a drop target.
     var lineFrame: (Int, CGRect) -> Void = { _, _ in }
+    /// A click on a line's title opens its ticket's page (TP-1647).
+    var open: (String) -> Void = { _ in }
 
     /// Whether the strip shows: once the cards' bottom has scrolled above the top of the view.
     static func pinned(scrollTop: Double, cardsBottom: Double) -> Bool { cardsBottom > 0 && scrollTop > cardsBottom }
@@ -495,7 +502,7 @@ struct HomeStrip: View {
             ForEach(cards) { slot in
                 SlotStripLine(
                     slot: slot.number, ticket: slot.ticket.map { HomeQueueCards.card($0, epic: slot.epic?.identifier, reference: reference) },
-                    numberWidth: numberWidth, dropTarget: dropSlot == slot.number
+                    numberWidth: numberWidth, dropTarget: dropSlot == slot.number, onOpen: open
                 )
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(HomeView.viewportSpace)) } action: { lineFrame(slot.number, $0) }
             }
