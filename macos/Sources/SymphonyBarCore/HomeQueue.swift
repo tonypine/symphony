@@ -1,10 +1,64 @@
 import Combine
 import Foundation
 
+/// What the list shows at one of its places (TP-1645): a queue row, by its index in the read, or one of an epic's done
+/// sub-tickets at the top of its block, with the epic's identifier and its row's index in the read.
+public enum HomeQueueEntry: Equatable {
+    case row(Int)
+    case done(epic: String, at: Int, HomeRead.DoneSubTicket)
+
+    /// The index in the read of the row it is, or of the epic it is a done row of.
+    public var readIndex: Int {
+        switch self {
+        case let .row(index): index
+        case let .done(_, index, _): index
+        }
+    }
+}
+
+/// Which epics of the queue are closed, and which show their done sub-tickets (TP-1645): client state over the read,
+/// kept while the app runs and never stored. An epic is open at first, its done sub-tickets hidden.
+public struct HomeQueueFold: Equatable {
+    public var closed: Set<String>
+    public var showingDone: Set<String>
+
+    public init(closed: Set<String> = [], showingDone: Set<String> = []) {
+        self.closed = closed
+        self.showingDone = showingDone
+    }
+
+    /// Whether the epic `identifier` shows its open sub-tickets.
+    public func isOpen(_ identifier: String) -> Bool { !closed.contains(identifier) }
+    /// Whether the epic `identifier` shows its done sub-tickets: only while it is open.
+    public func showsDone(_ identifier: String) -> Bool { isOpen(identifier) && showingDone.contains(identifier) }
+
+    /// The chevron: closes an open epic, opens a closed one.
+    public mutating func toggle(_ identifier: String) {
+        if closed.contains(identifier) { closed.remove(identifier) } else { closed.insert(identifier) }
+    }
+
+    /// The done count: shows the done sub-tickets, opening a closed epic, or hides them again.
+    public mutating func toggleDone(_ identifier: String) {
+        if !isOpen(identifier) {
+            closed.remove(identifier)
+            showingDone.insert(identifier)
+        } else if showingDone.contains(identifier) {
+            showingDone.remove(identifier)
+        } else {
+            showingDone.insert(identifier)
+        }
+    }
+}
+
 /// The queue's rows as Home has read them so far (TP-1609): the pages of `GET /api/v1/home` by index, for the saved view
-/// in force, with how many rows the filter keeps. Home's list is virtual: it is as tall as `count` rows on a fixed
+/// in force, with how many rows the filter keeps. Home's list is virtual: it is as tall as the rows it shows on a fixed
 /// pitch, and only the rows on screen are drawn (`visibleRange`); the pages they fall in are read as they come on
 /// screen (`pagesToRead`), so the list scrolls to its last row with every ticket in it.
+///
+/// The read is flat: an epic's open sub-tickets are the rows after it (TP-1645). What the list shows (`entries`) is
+/// the read under the fold: a closed epic's sub-rows left out, and an epic's done sub-tickets shown as done rows at the
+/// top of its block. Indexes into `entries` are the list's places ("shown"); `rows` stay by their index in the read.
+/// A row not read yet is shown in its place until its page is read.
 public struct HomeQueuePager: Equatable {
     /// A row's pitch: its 34 pt and the 2 pt between two rows.
     public static let pitch: Double = 36
@@ -24,25 +78,134 @@ public struct HomeQueuePager: Equatable {
     public private(set) var fresh: Set<Int>
     /// The pages read before the queue last changed: drawn until a fresh read replaces them.
     public private(set) var stale: Set<Int>
+    /// Which epics are closed and which show their done sub-tickets.
+    public private(set) var fold: HomeQueueFold
+    /// What the list shows, in order: the read under the fold.
+    public private(set) var entries: [HomeQueueEntry]
 
-    public init(view: String? = nil, pageSize: Int = HomeRead.pageSize) {
+    public init(view: String? = nil, pageSize: Int = HomeRead.pageSize, fold: HomeQueueFold = HomeQueueFold()) {
         self.view = view
         self.pageSize = max(pageSize, 1)
+        self.fold = fold
         count = 0
         total = 0
         rows = [:]
         fresh = []
         stale = []
+        entries = []
     }
 
-    /// The list's height.
-    public var height: Double { Double(count) * Self.pitch }
+    /// The places the list shows.
+    public var shownCount: Int { entries.count }
 
-    /// The row at `index`, nil while its page is not read.
+    /// The list's height.
+    public var height: Double { Double(shownCount) * Self.pitch }
+
+    /// The row at `index` of the read, nil while its page is not read.
     public func row(at index: Int) -> HomeRead.Row? { rows[index] }
 
-    /// Puts `row` at `index`, nil to forget it: a drop shown before Symphony's next read.
-    mutating func setRow(_ row: HomeRead.Row?, at index: Int) { rows[index] = row }
+    /// What the list shows at `index`, nil outside it.
+    public func entry(at index: Int) -> HomeQueueEntry? { entries.indices.contains(index) ? entries[index] : nil }
+
+    /// The queue row the list shows at `index`: nil for a done row, a row not read yet or a place outside the list.
+    public func row(shown index: Int) -> HomeRead.Row? {
+        guard case let .row(read)? = entry(at: index) else { return nil }
+        return rows[read]
+    }
+
+    /// Whether the list's place `index` is a top-level row's: a row with no parent, or one not read yet.
+    func isTopLevel(shown index: Int) -> Bool {
+        guard case let .row(read)? = entry(at: index) else { return false }
+        return rows[read]?.parent == nil
+    }
+
+    /// The read's indexes the list's places `range` stand for: from the first's to the last's, the rows a closed epic
+    /// keeps out between them included, and to the read's end when `range` ends the list.
+    public func readRange(shown range: Range<Int>) -> Range<Int> {
+        let range = range.clamped(to: 0..<entries.count)
+        guard let first = range.first, let last = range.last else { return 0..<0 }
+        let upper = range.upperBound == entries.count ? count : entries[last].readIndex + 1
+        return entries[first].readIndex..<max(upper, entries[first].readIndex)
+    }
+
+    /// The index in the read the list's gap `gap` stands before: the next row's, or the read's end.
+    func readGap(shown gap: Int) -> Int {
+        var gap = max(gap, 0)
+        while gap < entries.count {
+            if case let .row(read) = entries[gap] { return read }
+            gap += 1
+        }
+        return count
+    }
+
+    /// The list's places of the block that starts with `row` at the place `index`: the row, then the rows under it and
+    /// the done rows of epics among them that follow it. A row not read yet ends the block.
+    public func block(at index: Int, row: HomeRead.Row) -> Range<Int> {
+        guard entries.indices.contains(index) else { return index..<index }
+        var under: Set<String> = [row.identifier]
+        var end = index + 1
+        scan: while end < entries.count {
+            switch entries[end] {
+            case let .done(epic, _, _):
+                guard under.contains(epic) else { break scan }
+            case let .row(read):
+                guard let next = rows[read], let parent = next.parent, under.contains(parent) else { break scan }
+                under.insert(next.identifier)
+            }
+            end += 1
+        }
+        return index..<end
+    }
+
+    /// How many rows of the read the block of `row`, at `index` in the read, holds: the row and every row under it that
+    /// follows, a closed epic's hidden sub-rows included.
+    func readBlockSize(at index: Int, row: HomeRead.Row) -> Int {
+        var under: Set<String> = [row.identifier]
+        var end = index + 1
+        while end < count, let next = rows[end], let parent = next.parent, under.contains(parent) {
+            under.insert(next.identifier)
+            end += 1
+        }
+        return end - index
+    }
+
+    /// The chevron of the epic `identifier`: closes it, or opens it.
+    public mutating func toggle(_ identifier: String) {
+        fold.toggle(identifier)
+        relayout()
+    }
+
+    /// The done count of the epic `identifier`: shows its done sub-tickets at the top of its block (opening it when it
+    /// is closed), or hides them.
+    public mutating func toggleDone(_ identifier: String) {
+        fold.toggleDone(identifier)
+        relayout()
+    }
+
+    /// Lays the read out under the fold: a closed epic's rows under it are left out, and an open epic that shows its
+    /// done sub-tickets has them right after its row.
+    mutating func relayout() {
+        var shown: [HomeQueueEntry] = []
+        shown.reserveCapacity(count)
+        var hidden: Set<String> = []
+        for index in 0..<count {
+            guard let row = rows[index] else {
+                shown.append(.row(index))
+                continue
+            }
+            if let parent = row.parent, hidden.contains(parent) {
+                hidden.insert(row.identifier)
+                continue
+            }
+            shown.append(.row(index))
+            if !fold.isOpen(row.identifier) {
+                hidden.insert(row.identifier)
+            } else if fold.showsDone(row.identifier) {
+                shown += row.doneSubTickets.map { .done(epic: row.identifier, at: index, $0) }
+            }
+        }
+        if shown != entries { entries = shown }
+    }
 
     /// The offset of the page that holds `index`.
     public func page(of index: Int) -> Int { (max(index, 0) / pageSize) * pageSize }
@@ -60,6 +223,7 @@ public struct HomeQueuePager: Equatable {
         stale.remove(offset)
         // Rows past the end of a queue that shrank are gone.
         rows = rows.filter { $0.key < count }
+        relayout()
     }
 
     /// The queue changed: every page read is stale and is read again once it is on screen; until then it is drawn as
@@ -79,6 +243,7 @@ public struct HomeQueuePager: Equatable {
             for index in offset..<(offset + pageSize) { rows[index] = nil }
         }
         stale = stale.intersection(keep)
+        if !dropped.isEmpty { relayout() }
         return dropped
     }
 
@@ -111,13 +276,66 @@ public struct HomeQueuePager: Equatable {
         return lower..<upper
     }
 
-    /// The widest whole number among the rows of `range`, which sizes the number cell: "6.1" counts as 6, and a row
-    /// not read yet as its place in the list, which its number is never below.
+    /// The widest whole number among the rows the list shows at `range`, which sizes the number cell: "6.1" counts as
+    /// 6, a row not read yet as its place in the read, and a done row as nothing.
     public func widestNumber(in range: Range<Int>) -> Int {
-        range.reduce(0) { widest, index in
-            let whole = rows[index].flatMap { Int($0.number.split(separator: ".").first ?? "") } ?? (index + 1)
+        range.clamped(to: 0..<entries.count).reduce(0) { widest, index in
+            guard case let .row(read) = entries[index] else { return widest }
+            let whole = rows[read].flatMap { Int($0.number.split(separator: ".").first ?? "") } ?? (read + 1)
             return max(widest, whole)
         }
+    }
+
+    /// The most characters after the whole number among the rows the list shows at `range`: 2 for "6.1", 3 for "6.12",
+    /// 0 while no sub-row is on screen. The number cell widens by them, so the part after the point hangs right.
+    public func widestFraction(in range: Range<Int>) -> Int {
+        range.clamped(to: 0..<entries.count).reduce(0) { widest, index in
+            guard case let .row(read) = entries[index], let number = rows[read]?.number, let dot = number.firstIndex(of: ".") else {
+                return widest
+            }
+            return max(widest, number[dot...].count)
+        }
+    }
+}
+
+extension HomeQueuePager {
+    /// Moves `row`, at the list's place `from`, into the list's `gap` (`HomeQueueDrag.snap` keeps it in its scope) among
+    /// the rows read: its block (an epic's sub-rows, the hidden ones of a closed epic too) moves with it, the rows between
+    /// slide up or down, and the numbers follow at once. The numbers of its scope (the top-level ones, or its parent's
+    /// sub-tickets') stay in their order and go to the rows of its scope in their new order; a row under one of them takes
+    /// its new number before its own part ("7.2"). `row` is the dragged one as it was picked up, so a row whose page was
+    /// dropped from memory during the drag still lands. A gap outside the list, or one in the row's own place, changes
+    /// nothing.
+    public mutating func move(_ row: HomeRead.Row, from: Int, to gap: Int) {
+        guard gap >= 0, gap <= shownCount, case let .row(readFrom)? = entry(at: from) else { return }
+        let gap = HomeQueueDrag.snap(gap, dragging: row, from: from, in: self)
+        let block = self.block(at: from, row: row)
+        guard gap < block.lowerBound || gap > block.upperBound else { return }
+        let size = readBlockSize(at: readFrom, row: row)
+        let readGap = self.readGap(shown: gap)
+        let range = min(readFrom, readGap)..<max(readFrom + size, readGap)
+        var slice = range.map { $0 == readFrom ? row : rows[$0] }
+        var numbers = slice.compactMap { $0 }.filter { $0.parent == row.parent }.map(\.number).makeIterator()
+        let taken = (readFrom - range.lowerBound)..<(readFrom - range.lowerBound + size)
+        let moved = Array(slice[taken])
+        slice.removeSubrange(taken)
+        slice.insert(contentsOf: moved, at: (readGap > readFrom ? readGap - size : readGap) - range.lowerBound)
+        var renumbered: [String: String] = [:]
+        for (offset, index) in range.enumerated() {
+            guard var placed = slice[offset] else {
+                rows[index] = nil
+                continue
+            }
+            if placed.parent == row.parent, let number = numbers.next() {
+                placed.number = number
+                renumbered[placed.identifier] = number
+            } else if let parent = placed.parent, let prefix = renumbered[parent], let dot = placed.number.lastIndex(of: ".") {
+                placed.number = prefix + placed.number[dot...]
+                renumbered[placed.identifier] = placed.number
+            }
+            rows[index] = placed
+        }
+        relayout()
     }
 }
 
@@ -160,8 +378,10 @@ public final class HomeQueueModel: ObservableObject {
     private let fetch: Fetch
     private let send: Send
     private var reads = ConditionalReads()
-    /// The rows on screen, which a refresh reads again.
-    public private(set) var visible: Range<Int> = 0..<0
+    /// The list's places on screen.
+    public private(set) var shown: Range<Int> = 0..<0
+    /// The rows of the read on screen, which a refresh reads again.
+    public var visible: Range<Int> { pager.readRange(shown: shown) }
     /// The paths on their way, so a page is asked for once.
     private var inFlight: Set<String> = []
     /// The count the person last asked for, until the engine's answer settles it.
@@ -211,19 +431,33 @@ public final class HomeQueueModel: ObservableObject {
         }
     }
 
-    /// The rows on screen changed: reads the pages they fall in that are not read yet.
+    /// The list's places on screen changed: reads the pages they fall in that are not read yet.
     public func show(_ range: Range<Int>) async {
-        visible = range
-        for offset in pager.pagesToRead(for: range) { await read(offset) }
+        shown = range
+        for offset in pager.pagesToRead(for: visible) { await read(offset) }
     }
 
-    /// A pick above the queue: the saved view `id`, or every ticket with nil. The list starts again from its top.
+    /// A pick above the queue: the saved view `id`, or every ticket with nil. The list starts again from its top, and
+    /// each epic stays open or closed as it was.
     public func pick(view id: String?) async {
         guard id != view else { return }
-        pager = HomeQueuePager(view: id)
+        pager = HomeQueuePager(view: id, fold: pager.fold)
         reads = ConditionalReads()
-        visible = 0..<0
+        shown = 0..<0
         await read(0)
+    }
+
+    /// A click on an epic's row (TP-1645): shows or hides its open sub-tickets. The rows it brings on screen are read.
+    public func toggle(epic identifier: String) async {
+        pager.toggle(identifier)
+        await show(shown)
+    }
+
+    /// An epic's done count: shows its done sub-tickets at the top of its block, opening it when it is closed, or hides
+    /// them.
+    public func toggleDone(epic identifier: String) async {
+        pager.toggleDone(identifier)
+        await show(shown)
     }
 
     /// The slot count control: the cards follow at once, and the engine is told; a refusal puts the engine's count back.
@@ -245,27 +479,30 @@ public final class HomeQueueModel: ObservableObject {
         await refresh()
     }
 
-    /// Start on a queue row, Stop on a slot card: the control call, then Home read again.
+    /// Start on a queue row, Stop on a slot card: the control call, then Home read again. A refusal says Symphony's reason
+    /// in its own words (TP-1645).
     public func perform(_ action: ControlAction) async {
         notice = nil
-        if case let .failed(message) = await send(action) { notice = message }
+        if case let .failed(message) = await send(action) { notice = ControlAPI.reason(message, for: action) }
         await refresh()
     }
 
-    /// A queue row dropped into `gap` of the list (TP-1610): the list shows the ticket there at once with every number
-    /// following, Symphony is asked to move it, and Home is read again. A refusal puts the list back as it was and says
-    /// Symphony's reason. A drop at the row's own place, or a row that may not be dragged, sends nothing.
+    /// A queue row, at the list's place `from`, dropped into `gap` of the list (TP-1610): the list shows the ticket there
+    /// at once with every number following, Symphony is asked to move it, and Home is read again. An epic's row moves
+    /// with its sub-tickets and lands only between top-level rows; a sub-row lands only among its parent's sub-rows
+    /// (TP-1645, `HomeQueueDrag.snap`). A refusal puts the list back as it was and says Symphony's reason. A drop at the
+    /// row's own place, or a row that may not be dragged, sends nothing.
     public func move(_ row: HomeRead.Row, from: Int, to gap: Int) async {
-        let gap = HomeQueueDrag.snap(gap, in: pager)
-        guard HomeQueueDrag.canDrag(row, at: from, in: pager), let place = HomeQueueDrag.place(from: from, gap: gap, in: pager) else {
-            return
-        }
+        guard HomeQueueDrag.canDrag(row, at: from, in: pager) else { return }
+        let gap = HomeQueueDrag.snap(gap, dragging: row, from: from, in: pager)
+        guard let place = HomeQueueDrag.place(row, from: from, gap: gap, in: pager) else { return }
         let before = pager
         pager.move(row, from: from, to: gap)
         notice = nil
-        if case let .failed(message) = await send(.queueMove(row.identifier, place: place)) {
+        let action = ControlAction.queueMove(row.identifier, place: place)
+        if case let .failed(message) = await send(action) {
             if pager.view == before.view { pager = before }
-            notice = message
+            notice = ControlAPI.reason(message, for: action)
         }
         await refresh()
     }
@@ -319,8 +556,9 @@ public final class HomeQueueModel: ObservableObject {
     /// The slot count the engine last served.
     private var engineSlotCount = 0
 
-    /// Shows `read` as the first page, with no request: for an offscreen render.
-    public func load(_ read: HomeRead) {
+    /// Shows `read` as the first page under `fold`, with no request: for an offscreen render.
+    public func load(_ read: HomeRead, fold: HomeQueueFold = HomeQueueFold()) {
+        if fold != pager.fold { pager = HomeQueuePager(view: view, pageSize: pager.pageSize, fold: fold) }
         apply(read, offset: 0, view: view)
     }
 

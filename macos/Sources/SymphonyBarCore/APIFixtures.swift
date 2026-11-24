@@ -87,7 +87,7 @@ public struct APIFixtures: Equatable {
         if !isPost, let generated = homeQueue(url) { return (generated, response(url, statusCode: 200)) }
         let fixture = (isPost ? nil : file.flatMap(afterFixture(of:)) ?? file.flatMap { queryFixture(of: $0, query: url.query) })
             ?? file.flatMap { try? Data(contentsOf: $0) }
-        if isPost, let refusal = homeQueueFixture()?.refusal(path: url.path, body: Self.body(of: request)) {
+        if isPost, let refusal = homeQueueFixture()?.refusal(path: url.path, body: Self.body(of: request), after: loggedMoves()) {
             Self.logMove(request, method: method, path: url.path, at: now, to: requestLog)
             let body: [String: Any] = ["error": ["code": "move_not_allowed", "message": refusal]]
             return ((try? JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])) ?? Data(), response(url, statusCode: 409))

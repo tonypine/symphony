@@ -6,7 +6,9 @@
 // own (`slot-card-now`). The slot count control is live: in the gallery
 // it steps between 1 and 6. Recently done (TP-1644) adds the done row with every cell, with the pull request and when,
 // with when alone, without an epic, with a long title and hovered, and the section's head with a count, without one, on
-// Week and folded; the head's range control and fold are live.
+// Week and folded; the head's range control and fold are live. Epics and dependencies (TP-1645) add the epic's queue row
+// closed, open with its sub-rows, with its done rows shown (its done count pressed) and with its done count hovered; the
+// sub-ticket's row with its elbow at rest and hovered; and the dependency marker in its two kinds, done and released.
 import SwiftUI
 import SymphonyBarCore
 import SymphonyBarUI
@@ -96,7 +98,7 @@ let queueStoryRows: [QueueRowModel] = [
     ),
     QueueRowModel(
         number: 8, identifier: "TP-977", title: "Give agents one tool to request a protected change, and pause the ticket on it",
-        lead: .glyph("clock", .textSecondary), after: "TP-976", repo: "symphony"
+        lead: .glyph("clock", .textSecondary), dependencies: [DependencyMarkerModel(identifier: "TP-976")], repo: "symphony"
     ),
     QueueRowModel(
         number: 1_243, identifier: "MOT-1331",
@@ -168,6 +170,101 @@ private func padded(_ view: some View, width: CGFloat) -> AnyView {
 @MainActor
 private func slotCountStory(_ value: Int) -> AnyView {
     padded(HomeQueueLiveValue(value: value) { SlotCountControl(count: $0) }, width: 120)
+}
+
+// MARK: - Epics and dependencies (TP-1645)
+
+/// The prototype's epic TP-975 and its first open sub-tickets (`shots/queue-epic-2x.png`), numbered 6 and 6.1 to 6.4.
+func epicStoryRows(open: Bool = true, showingDone: Bool = false) -> [QueueRowModel] {
+    let epic = QueueRowModel(
+        number: 6, identifier: "TP-975", title: "Protected-change requests: ask, allow, record", lead: .glyph("clock", .textSecondary),
+        repo: "symphony", epic: QueueRowModel.Epic(done: 2, total: 11, open: open, showingDone: showingDone)
+    )
+    guard open else { return [epic] }
+    return [epic] + epicStorySubRows
+}
+
+let epicStorySubRows: [QueueRowModel] = [
+    QueueRowModel(
+        number: 6, identifier: "TP-976", title: "Record every protected-change request and its answer as ticket events", lead: .status(.you),
+        marks: [.init(.you, "Needs your approval")], repo: "symphony", label: "6.1", depth: 1
+    ),
+    QueueRowModel(
+        number: 6, identifier: "TP-977", title: "Give agents one tool to request a protected change, and pause the ticket on it",
+        lead: .glyph("clock", .textSecondary), dependencies: [DependencyMarkerModel(identifier: "TP-976")], repo: "symphony", label: "6.2",
+        depth: 1
+    ),
+    QueueRowModel(
+        number: 6, identifier: "TP-978", title: "Allow or decline a protected change from the control API", lead: .glyph("clock", .textSecondary),
+        dependencies: [DependencyMarkerModel(identifier: "TP-977")], repo: "symphony", label: "6.3", depth: 1
+    ),
+    QueueRowModel(
+        number: 6, identifier: "TP-979", title: "Let github_push_branch and github_sync_base accept exactly the granted change",
+        lead: .glyph("clock", .textSecondary), dependencies: [DependencyMarkerModel(identifier: "TP-976")], repo: "symphony", label: "6.4",
+        depth: 1
+    ),
+]
+
+/// The epic's done sub-tickets as the queue shows them: when alone.
+let epicStoryDoneRows: [DoneRowModel] = [
+    DoneRowModel(identifier: "TP-983", title: "Read the list of protected paths from one place", epic: "TP-975", repo: "symphony", when: "3 d ago"),
+    DoneRowModel(identifier: "TP-982", title: "Name the files a change may never touch", epic: "TP-975", repo: "symphony", when: "last week"),
+]
+
+/// The epic's block as the queue draws it, on the list's pitch: its row, its done rows at the top when `showingDone`,
+/// then its sub-rows; the sub-row at `hovered` under the pointer, and the done count hovered when `countHovered`.
+@MainActor
+private func epicStory(open: Bool = true, showingDone: Bool = false, hovered: Int? = nil, countHovered: Bool? = nil) -> AnyView {
+    let width = QueueRow.numberWidth(widest: 6)
+    let fraction = open ? QueueRow.fractionWidth(characters: 2) : 0
+    let rows = epicStoryRows(open: open, showingDone: showingDone)
+    let done = open && showingDone ? epicStoryDoneRows : []
+    return AnyView(
+        VStack(spacing: DesignTokens.HomeQueue.doneRowGap) {
+            QueueRow(rows[0], numberWidth: width, fractionWidth: fraction, look: .rest, doneCountHovered: countHovered)
+            ForEach(done) { DoneRow($0, cells: .queue, nesting: DoneRow.Nesting(numberCell: width + fraction)) }
+            ForEach(Array(rows.dropFirst().enumerated()), id: \.offset) { offset, row in
+                QueueRow(row, numberWidth: width, fractionWidth: fraction, look: offset == hovered ? .hover : .rest)
+            }
+        }
+        .frame(width: queueRowStoryWidth)
+        .padding(DesignTokens.Space.s4)
+        .background(DesignTokens.Surface.window.color)
+    )
+}
+
+/// The dependency marker in a queue row's trail: the prototype's TP-977, waiting for TP-976, and TP-1051, waiting for
+/// TP-1590 to be released; `kinds` picks which.
+@MainActor
+private func dependencyStory(_ kinds: [DependencyMarkerModel.Kind]) -> AnyView {
+    let rows = kinds.map { kind in
+        kind == .released
+            ? QueueRowModel(
+                number: 7, identifier: "TP-1051", title: "Keep a record of each background update check that survives a relaunch",
+                lead: .glyph("clock", .textSecondary), dependencies: [DependencyMarkerModel(identifier: "TP-1590", kind: .released)],
+                repo: "symphony"
+            )
+            : QueueRowModel(
+                number: 10, identifier: "HUB-213", title: "Mark a job as stale when its posting disappears", lead: .glyph("clock", .textSecondary),
+                dependencies: [DependencyMarkerModel(identifier: "HUB-212")], repo: "hub"
+            )
+    }
+    let width = QueueRow.numberWidth(widest: 10)
+    return AnyView(
+        VStack(spacing: DesignTokens.HomeQueue.doneRowGap) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in QueueRow(row, numberWidth: width) }
+            HStack(spacing: DesignTokens.HomeQueue.rowMainGap) {
+                ForEach(kinds, id: \.self) { kind in
+                    DependencyMarker(DependencyMarkerModel(identifier: kind == .released ? "TP-1590" : "HUB-212", kind: kind))
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .padding(.trailing, DesignTokens.HomeQueue.rowInset + DesignTokens.HomeQueue.endWidth + DesignTokens.HomeQueue.rowMainGap)
+        }
+        .frame(width: queueRowStoryWidth)
+        .padding(DesignTokens.Space.s4)
+        .background(DesignTokens.Surface.window.color)
+    )
 }
 
 /// A store kept in memory, for the screens drawn with Recently done's choices.
@@ -254,6 +351,15 @@ let homeQueueStories: [ComponentStory] = {
     func done(_ id: String, height: CGFloat = 220, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
         ComponentStory(component: "done-row", id: id, title: "Done row", width: queueRowStoryWidth, height: height, draw: draw)
     }
+    func epic(_ id: String, height: CGFloat = 240, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
+        ComponentStory(component: "queue-epic-row", id: id, title: "Queue epic row", width: queueRowStoryWidth, height: height, draw: draw)
+    }
+    func sub(_ id: String, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
+        ComponentStory(component: "queue-sub-row", id: id, title: "Queue sub-ticket row", width: queueRowStoryWidth, height: 200, draw: draw)
+    }
+    func marker(_ id: String, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
+        ComponentStory(component: "dependency-marker", id: id, title: "Dependency marker", width: queueRowStoryWidth, height: 120, draw: draw)
+    }
     func head(_ id: String, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
         ComponentStory(component: "recently-done-head", id: id, title: "Recently done head", width: queueRowStoryWidth, height: 60, draw: draw)
     }
@@ -291,5 +397,14 @@ let homeQueueStories: [ComponentStory] = {
         head("week") { recentlyDoneHeadStory(.week, count: "10") },
         head("folded") { recentlyDoneHeadStory(.week, count: "10", open: false) },
         head("hovered") { recentlyDoneHeadStory(.today, count: "5", hovered: true) },
+        epic("closed", height: 80) { epicStory(open: false) },
+        epic("open") { epicStory() },
+        epic("done-shown", height: 320) { epicStory(showingDone: true) },
+        epic("done-count-hovered") { epicStory(countHovered: true) },
+        sub("at-rest") { epicStory() },
+        sub("hovered") { epicStory(hovered: 1) },
+        marker("done") { dependencyStory([.done]) },
+        marker("released") { dependencyStory([.released]) },
+        marker("both-kinds") { dependencyStory([.done, .released]) },
     ]
 }()

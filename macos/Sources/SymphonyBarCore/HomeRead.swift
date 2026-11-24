@@ -249,6 +249,56 @@ public struct HomeRead: Equatable {
         }
     }
 
+    /// A stored dependency of a queue row (TP-1645): the ticket it waits for, whether it waits for that ticket to be
+    /// done or released, and whether that is met.
+    public struct Dependency: Equatable {
+        public enum Kind: String, Equatable {
+            case done, released
+        }
+
+        public var issueID: String?
+        public var identifier: String
+        public var kind: Kind
+        public var met: Bool
+
+        public init(issueID: String? = nil, identifier: String, kind: Kind = .done, met: Bool = false) {
+            self.issueID = issueID
+            self.identifier = identifier
+            self.kind = kind
+            self.met = met
+        }
+    }
+
+    /// An epic's sub-tickets: how many are done of how many (a cancelled one counts in neither).
+    public struct SubTickets: Equatable {
+        public var done: Int
+        public var total: Int
+
+        public init(done: Int, total: Int) {
+            self.done = done
+            self.total = total
+        }
+    }
+
+    /// An epic's done sub-ticket, as its queue row lists them, oldest first.
+    public struct DoneSubTicket: Equatable, Identifiable {
+        public var issueID: String?
+        public var identifier: String
+        public var title: String?
+        public var pullRequestNumber: Int?
+        public var doneAt: Date?
+
+        public var id: String { identifier }
+
+        public init(issueID: String? = nil, identifier: String, title: String? = nil, pullRequestNumber: Int? = nil, doneAt: Date? = nil) {
+            self.issueID = issueID
+            self.identifier = identifier
+            self.title = title
+            self.pullRequestNumber = pullRequestNumber
+            self.doneAt = doneAt
+        }
+    }
+
     /// One row of the queue.
     public struct Row: Equatable, Identifiable {
         public var issueID: String?
@@ -262,13 +312,27 @@ public struct HomeRead: Equatable {
         public var situation: Situation?
         public var waitsOnYou: Bool
         public var move: Move?
+        /// Its stored dependencies (TP-1645), met or not, in their order.
+        public var dependencies: [Dependency]
+        /// An epic's sub-tickets done and in all; nil for a ticket with none.
+        public var subTickets: SubTickets?
+        /// An epic's done sub-tickets, oldest first.
+        public var doneSubTickets: [DoneSubTicket]
 
         public var id: String { identifier }
+        /// Whether it is an epic: a ticket with sub-tickets.
+        public var isEpic: Bool { (subTickets?.total ?? 0) > 0 }
+        /// The dependencies it still waits for.
+        public var unmet: [Dependency] { dependencies.filter { !$0.met } }
 
         public init(
             issueID: String? = nil, identifier: String, title: String? = nil, phase: String? = nil, repoKey: String? = nil, number: String,
-            parent: String? = nil, situation: Situation? = nil, waitsOnYou: Bool = false, move: Move? = nil
+            parent: String? = nil, situation: Situation? = nil, waitsOnYou: Bool = false, move: Move? = nil, dependencies: [Dependency] = [],
+            subTickets: SubTickets? = nil, doneSubTickets: [DoneSubTicket] = []
         ) {
+            self.dependencies = dependencies
+            self.subTickets = subTickets
+            self.doneSubTickets = doneSubTickets
             self.issueID = issueID
             self.identifier = identifier
             self.title = title
@@ -553,10 +617,13 @@ private struct WireRow: Decodable {
     var situation: Situation?
     var waitsOnYou: Bool?
     var move: HomeRead.Move?
+    var dependencies: [WireDependency]?
+    var subTickets: WireSubTickets?
+    var doneSubTickets: [WireDoneSubTicket]?
 
     enum CodingKeys: String, CodingKey {
         case issueID = "issue_id", identifier, title, phase, repoKey = "repo_key", number, path, parent, situation,
-             waitsOnYou = "waits_on_you", move
+             waitsOnYou = "waits_on_you", move, dependencies, subTickets = "sub_tickets", doneSubTickets = "done_sub_tickets"
     }
 
     init(from decoder: Decoder) throws {
@@ -578,12 +645,61 @@ private struct WireRow: Decodable {
         situation = try? container.decodeIfPresent(Situation.self, forKey: .situation)
         waitsOnYou = try container.decodeIfPresent(Bool.self, forKey: .waitsOnYou)
         move = try? container.decodeIfPresent(HomeRead.Move.self, forKey: .move)
+        // A part that doesn't read leaves the row to show without it.
+        dependencies = (try? container.decodeIfPresent([WireDependency].self, forKey: .dependencies)) ?? nil
+        subTickets = (try? container.decodeIfPresent(WireSubTickets.self, forKey: .subTickets)) ?? nil
+        doneSubTickets = (try? container.decodeIfPresent([WireDoneSubTicket].self, forKey: .doneSubTickets)) ?? nil
     }
 
     var row: HomeRead.Row {
         HomeRead.Row(
             issueID: issueID, identifier: identifier, title: title, phase: phase, repoKey: repoKey, number: number, parent: parent,
-            situation: situation, waitsOnYou: waitsOnYou ?? (situation?.kind == .you), move: move
+            situation: situation, waitsOnYou: waitsOnYou ?? (situation?.kind == .you), move: move,
+            dependencies: (dependencies ?? []).compactMap(\.dependency),
+            subTickets: subTickets.map { HomeRead.SubTickets(done: $0.done ?? 0, total: $0.total ?? 0) },
+            doneSubTickets: (doneSubTickets ?? []).compactMap(\.ticket)
+        )
+    }
+}
+
+private struct WireDependency: Decodable {
+    var issueID: String?
+    var identifier: String?
+    var kind: String?
+    var met: Bool?
+
+    enum CodingKeys: String, CodingKey { case issueID = "issue_id", identifier, kind, met }
+
+    /// The dependency, nil for one that names no ticket.
+    var dependency: HomeRead.Dependency? {
+        guard let name = identifier ?? issueID else { return nil }
+        return HomeRead.Dependency(
+            issueID: issueID, identifier: name, kind: kind.flatMap(HomeRead.Dependency.Kind.init(rawValue:)) ?? .done, met: met ?? false
+        )
+    }
+}
+
+private struct WireSubTickets: Decodable {
+    var done: Int?
+    var total: Int?
+}
+
+private struct WireDoneSubTicket: Decodable {
+    var issueID: String?
+    var identifier: String?
+    var title: String?
+    var pullRequestNumber: Int?
+    var doneAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case issueID = "issue_id", identifier, title, pullRequestNumber = "pull_request_number", doneAt = "done_at"
+    }
+
+    /// The done sub-ticket, nil for one that names no ticket.
+    var ticket: HomeRead.DoneSubTicket? {
+        guard let name = identifier ?? issueID else { return nil }
+        return HomeRead.DoneSubTicket(
+            issueID: issueID, identifier: name, title: title, pullRequestNumber: pullRequestNumber, doneAt: doneAt.flatMap(SymphonyState.parseDate)
         )
     }
 }

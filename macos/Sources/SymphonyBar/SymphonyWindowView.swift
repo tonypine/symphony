@@ -1327,6 +1327,8 @@ extension SymphonyWindowModel {
             pick: { [weak self] id in self?.homeQueueTask { await $0.pick(view: id) } },
             show: { [weak self] range in self?.homeQueueTask { await $0.show(range) } },
             openTicket: { [weak self] in self?.openTicket($0) },
+            toggleEpic: { [weak self] epic in self?.homeQueueTask { await $0.toggle(epic: epic) } },
+            toggleEpicDone: { [weak self] epic in self?.homeQueueTask { await $0.toggleDone(epic: epic) } },
             dismissNotice: { [weak self] in self?.homeQueue.notice = nil },
             pickDoneRange: { [weak self] range in self?.homeQueueTask { await $0.pick(doneRange: range) } },
             toggleRecentlyDone: { [weak self] in self?.homeQueue.toggleRecentlyDone() },

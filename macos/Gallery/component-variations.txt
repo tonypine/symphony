@@ -65,6 +65,9 @@ count-badge-problems
 count-badge-quiet
 count-badge-waiting-on-you
 count-badge-zero
+dependency-marker-both-kinds
+dependency-marker-done
+dependency-marker-released
 done-row-all-cells
 done-row-hovered
 done-row-long-title
@@ -134,10 +137,16 @@ progress-meter-one-line-at-the-cap
 progress-meter-one-line-at-the-stop-mark
 progress-meter-one-line-with-a-stop-mark
 progress-meter-ticket-cap
+queue-epic-row-closed
+queue-epic-row-done-count-hovered
+queue-epic-row-done-shown
+queue-epic-row-open
 queue-row-at-rest
 queue-row-dragged
 queue-row-drop-line
 queue-row-hovered
+queue-sub-row-at-rest
+queue-sub-row-hovered
 recently-done-head-folded
 recently-done-head-hovered
 recently-done-head-week

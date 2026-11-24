@@ -995,11 +995,11 @@ func menuWaitingSituations() -> some View {
 /// Home (TP-1609) from the `home-queue` fixture's generated queue, on the fixture's clock, in a window `window` wide less
 /// its sidebar: Recently done (TP-1644) on `range`, open or `folded`, three slots (one working, one waiting on you, one
 /// empty) and the queue's first rows; `view` picks a saved view above the queue. `fixture` names another fixture of the
-/// same shape (`home-queue-done-week`: nothing done today).
+/// same shape (`home-queue-done-week`: nothing done today). `fold` closes epics and shows their done rows (TP-1645).
 @MainActor
 func homeQueue(
     window: CGFloat, view: String? = nil, rows: Int = 14, fixture name: String = "home-queue", range: HomeRead.DoneRange = .today,
-    folded: Bool = false
+    folded: Bool = false, fold: HomeQueueFold = HomeQueueFold()
 ) -> some View {
     let width = window - DesignTokens.Layout.sidebarWidth
     let api = situationsAPI.appendingPathComponent("\(name)/api/v1")
@@ -1015,12 +1015,13 @@ func homeQueue(
     let choices = GalleryChoices()
     RecentlyDoneChoices(range: range, open: !folded).save(to: choices)
     let model = HomeQueueModel(fetch: { _, _ in .unchanged }, send: { _ in .done }, view: view, choices: choices)
-    model.load(read)
+    model.load(read, fold: fold)
     let views = viewsData.flatMap { TicketView.views(fromViews: $0) } ?? []
-    let shown = 0..<min(rows, model.pager.count)
+    let shown = 0..<min(rows, model.pager.shownCount)
     return HomePageContent(
         model: model, views: views, notices: [], reference: situationsNow, actions: HomeActions(), range: shown,
-        numberWidth: QueueRow.numberWidth(widest: model.pager.widestNumber(in: shown))
+        numberWidth: QueueRow.numberWidth(widest: model.pager.widestNumber(in: shown)),
+        fractionWidth: QueueRow.fractionWidth(characters: model.pager.widestFraction(in: shown))
     )
     .environment(\.timeZone, TimeZone(identifier: "UTC")!)
     .frame(width: width, alignment: .topLeading)
@@ -2127,6 +2128,17 @@ MainActor.assumeIsolated {
             renderScreen(scheme, to: "home-queue-recently-done-folded") { window in homeQueue(window: window, folded: true) }
             renderScreen(scheme, to: "home-queue-recently-done-today-empty") { window in
                 homeQueue(window: window, fixture: "home-queue-done-week")
+            }
+            // Epics and dependencies (TP-1645): the epics fixture open, an epic's done rows shown with the other closed,
+            // and a saved view that keeps the epic's row above its matching sub-rows.
+            renderScreen(scheme, to: "home-queue-epics") { window in homeQueue(window: window, rows: 24, fixture: "home-queue-epics") }
+            renderScreen(scheme, to: "home-queue-epics-done") { window in
+                homeQueue(
+                    window: window, rows: 24, fixture: "home-queue-epics", fold: HomeQueueFold(closed: ["MOT-105"], showingDone: ["TP-975"])
+                )
+            }
+            renderScreen(scheme, to: "home-queue-epics-filtered") { window in
+                homeQueue(window: window, view: "view-rework", fixture: "home-queue-epics")
             }
             renderScreen(scheme, to: "home-unavailable") { window in homeUnavailable(window: window) }
         }

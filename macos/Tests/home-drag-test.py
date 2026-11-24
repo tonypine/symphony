@@ -27,6 +27,19 @@ so no move of one reaches another:
 - filter: with a saved view picked no drag starts, no drop line or target shows and the rows keep
   their real numbers; with All tickets picked again the row drags (step 11).
 
+Epics and dependencies (TP-1645) run on Tests/Fixtures/director-app/home-queue-epics: the same two
+slots, and a queue whose sixth ticket, the epic TP-975, has six open sub-tickets (6.1 to 6.6, each
+waiting on another) and two done, then TP-1051 waiting on a release, the epic MOT-105 with three,
+and more tickets after them:
+
+- epic: TP-975's row dragged above TP-1596 is left behind dimmed with its sub-rows, and lands with
+  them: TP-975 is number 3 and its sub-tickets 3.1 to 3.6;
+- sub-row: TP-979 (6.4) dragged above TP-977 (6.2) shows a drop line that starts at the sub-row's
+  step and lands at 6.2; MOT-106 (8.1) dropped two rows below its epic's block stays inside it, the
+  last of its epic's sub-tickets (8.3);
+- dependency: TP-978 dropped above TP-977, which it depends on, is back at its place with its number,
+  and Home shows the engine's reason.
+
 Each scenario prints `ok [name]` or `FAIL [name]: why`, and its screenshots (mid-drag and after the
 drop) go to `HOME_DRAG_TEST_SHOTS` when it is set, otherwise to a folder the test names and keeps.
 
@@ -50,7 +63,9 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 PRIV = os.path.normpath(os.path.join(HERE, "..", "..", "priv", "qa_driver"))
 FIXTURES = os.path.join(HERE, "Fixtures", "director-app", "home-queue-drag")
+EPICS = os.path.join(HERE, "Fixtures", "director-app", "home-queue-epics")
 REFUSAL = "TP-1596 depends on TP-1590 and must stay below it."
+DEPENDENCY_REFUSAL = "TP-978 depends on TP-977 and must stay below it."
 # The Mac's laptop viewport (WORKFLOW.md): 1440 × 900 pt.
 WINDOW = (1440, 900)
 PITCH = 36
@@ -153,7 +168,7 @@ def app_executable(path):
 class Home:
     """One launch of the app on the fixture, read and driven through the QA driver and the drag helper."""
 
-    def __init__(self, driver, dragger, executable, shots, name):
+    def __init__(self, driver, dragger, executable, shots, name, fixtures=FIXTURES):
         self.driver_binary = driver
         self.dragger = dragger
         self.shots = shots
@@ -165,7 +180,7 @@ class Home:
         env = dict(os.environ)
         env.update({
             "SYMPHONY_BAR_QA_ROOT": self.root,
-            "SYMPHONY_BAR_QA_API_FIXTURES": FIXTURES,
+            "SYMPHONY_BAR_QA_API_FIXTURES": fixtures,
             "SYMPHONY_BAR_QA_OPEN_VIEW": "overview",
             "SYMPHONY_BAR_QA_APPEARANCE": "light",
         })
@@ -632,6 +647,126 @@ def scenario_filter(home):
     return ok(name)
 
 
+def bring(home, tickets, step="0,250", tries=10):
+    """Scrolls down a step at a time until every one of `tickets` is fully on screen; their rows, or None."""
+    for _ in range(tries):
+        shown = {row["ticket"]: row for row in home.visible()}
+        if all(ticket in shown for ticket in tickets):
+            return shown
+        home.scroll(step)
+    shown = {row["ticket"]: row for row in home.visible()}
+    return shown if all(ticket in shown for ticket in tickets) else None
+
+
+def drop_on_row(home, name, picked, below):
+    """Drags `picked` (a row) to the gap above `below` (a row) and lets go; returns the drop line seen mid-drag."""
+    home.hover(picked)
+    grab = home.grab_point(picked).split(",")
+    start = (int(grab[0]), int(grab[1]))
+    helper = home.drag(start, (start[0], below["frame"]["y"] - 1))
+    try:
+        line = home.element("queue-drop-line")
+        home.screenshot("mid-drag")
+    finally:
+        home.release(helper)
+    return line
+
+
+def numbers(home):
+    return {row["ticket"]: row["number"] for row in home.rows()}
+
+
+def landed(home, expected):
+    return wait(lambda: (lambda now: now if all(now.get(t) == n for t, n in expected.items()) else None)(numbers(home)))
+
+
+def scenario_epic(home):
+    name = "epic: an epic's row moves with its sub-tickets and the numbers follow"
+    shown = bring(home, ["TP-1596", "TP-975", "TP-976"])
+    if not shown:
+        return fail(name, f"TP-1596, TP-975 and TP-976 are not on screen together: {sorted(numbers(home))}")
+    if shown["TP-975"]["number"] != "6" or shown["TP-976"]["number"] != "6.1":
+        return fail(name, f"the epic and its first sub-ticket are not 6 and 6.1: {numbers(home)}")
+    picked, below = shown["TP-975"], shown["TP-1596"]
+    home.hover(picked)
+    grab = home.grab_point(picked).split(",")
+    start = (int(grab[0]), int(grab[1]))
+    helper = home.drag(start, (start[0], below["frame"]["y"] - 1))
+    try:
+        if not wait(lambda: home.dragged("TP-975") and home.dragged("TP-976"), 3):
+            fail(name, "mid-drag the epic's row and its sub-rows are not left behind dimmed")
+        if home.element("queue-drop-line") is None:
+            fail(name, "mid-drag no drop line shows above TP-1596")
+        home.screenshot("mid-drag")
+    finally:
+        home.release(helper)
+    moves = wait(lambda: home.requests("/api/v1/control/queue/move"))
+    if not moves or moves[-1].get("issue_identifier") != "TP-975" or moves[-1].get("before") != "TP-1596":
+        return fail(name, f"the move sent was {moves!r}, not TP-975 before TP-1596")
+    expected = {"TP-975": "3", "TP-976": "3.1", "TP-977": "3.2", "TP-981": "3.6", "TP-1596": "4", "TP-1605": "5", "HUB-212": "6"}
+    result = landed(home, expected)
+    home.screenshot("after-drop")
+    if not result:
+        return fail(name, f"after the drop the numbers are {numbers(home)}, not {expected}")
+    if name in failures:
+        return False
+    return ok(name)
+
+
+def scenario_sub_row(home):
+    name = "sub-row: a sub-row moves among its epic's sub-tickets and nowhere else"
+    shown = bring(home, ["TP-977", "TP-979"])
+    if not shown:
+        return fail(name, f"TP-977 and TP-979 are not on screen together: {sorted(numbers(home))}")
+    picked, below = shown["TP-979"], shown["TP-977"]
+    line = drop_on_row(home, name, picked, below)
+    if line is None:
+        fail(name, "mid-drag no drop line shows above TP-977")
+    elif line["frame"]["x"] < picked["frame"]["x"] + 40:
+        fail(name, f"the drop line starts at x {line['frame']['x']}, not at the sub-row's step (the row starts at {picked['frame']['x']})")
+    moves = wait(lambda: home.requests("/api/v1/control/queue/move"))
+    if not moves or moves[-1].get("issue_identifier") != "TP-979" or moves[-1].get("before") != "TP-977":
+        return fail(name, f"the move sent was {moves!r}, not TP-979 before TP-977")
+    expected = {"TP-976": "6.1", "TP-979": "6.2", "TP-977": "6.3", "TP-978": "6.4", "TP-980": "6.5"}
+    if not landed(home, expected):
+        return fail(name, f"after the drop the numbers are {numbers(home)}, not {expected}")
+
+    shown = bring(home, ["MOT-106", "MOT-108", "HUB-213", "TP-1700"])
+    if not shown:
+        return fail(name, f"MOT-105's sub-rows and the rows below it are not on screen together: {sorted(numbers(home))}")
+    drop_on_row(home, name, shown["MOT-106"], shown["TP-1700"])
+    moves = wait(lambda: len(home.requests("/api/v1/control/queue/move")) > 1 and home.requests("/api/v1/control/queue/move"))
+    if not moves or moves[-1].get("issue_identifier") != "MOT-106" or moves[-1].get("after") != "MOT-108":
+        return fail(name, f"the move sent was {moves!r}, not MOT-106 after MOT-108, the last of its epic's")
+    expected = {"MOT-105": "8", "MOT-107": "8.1", "MOT-108": "8.2", "MOT-106": "8.3", "HUB-213": "9"}
+    result = landed(home, expected)
+    home.screenshot("after-drop-outside")
+    if not result:
+        return fail(name, f"after the drop outside its epic the numbers are {numbers(home)}, not {expected}")
+    if name in failures:
+        return False
+    return ok(name)
+
+
+def scenario_dependency(home):
+    name = "dependency: a drop above a ticket it depends on leaves the queue as it was and says why"
+    shown = bring(home, ["TP-977", "TP-978"])
+    if not shown:
+        return fail(name, f"TP-977 and TP-978 are not on screen together: {sorted(numbers(home))}")
+    before = numbers(home)
+    drop_on_row(home, name, shown["TP-978"], shown["TP-977"])
+    moves = wait(lambda: home.requests("/api/v1/control/queue/move"))
+    if not moves or moves[-1].get("issue_identifier") != "TP-978":
+        return fail(name, f"the move sent was {moves!r}")
+    said = wait(lambda: home.find(DEPENDENCY_REFUSAL), 10)
+    home.screenshot("after-drop")
+    if not said:
+        return fail(name, f"Home does not show the engine's reason {DEPENDENCY_REFUSAL!r}")
+    if not landed(home, before):
+        return fail(name, f"the queue changed: {before} became {numbers(home)}")
+    return ok(name)
+
+
 SCENARIOS = {
     "hover": scenario_hover,
     "reorder": scenario_reorder,
@@ -639,7 +774,13 @@ SCENARIOS = {
     "card": scenario_card,
     "refused": scenario_refused,
     "filter": scenario_filter,
+    "epic": scenario_epic,
+    "sub-row": scenario_sub_row,
+    "dependency": scenario_dependency,
 }
+
+# The scenarios that run on the epics fixture; the others run on FIXTURES.
+ON_EPICS = {"epic", "sub-row", "dependency"}
 
 
 def main():
@@ -671,7 +812,7 @@ def main():
 
         for name in picked:
             print(f"== {name}")
-            home = Home(driver, dragger, executable, shots, name)
+            home = Home(driver, dragger, executable, shots, name, EPICS if name in ON_EPICS else FIXTURES)
             try:
                 if home.ready():
                     SCENARIOS[name](home)

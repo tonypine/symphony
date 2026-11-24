@@ -515,9 +515,23 @@ public enum ControlAPI {
         case 503:
             return .failed("\(prefix): its orchestrator is unavailable (HTTP 503)")
         default:
-            if let message = errorMessage(data) { return .failed("\(prefix): \(message) (HTTP \(statusCode))") }
+            if let message = errorMessage(data) { return .failed(refusal(prefix, message, statusCode: statusCode)) }
             return .failed("\(prefix): HTTP \(statusCode)")
         }
+    }
+
+    /// The menu's line for a move Symphony refused with its own reason: what failed, the reason, the status.
+    private static func refusal(_ prefix: String, _ reason: String, statusCode: Int) -> String {
+        "\(prefix): \(reason) (HTTP \(statusCode))"
+    }
+
+    /// Symphony's own reason in the refusal (HTTP 409) `result(_:statusCode:data:)` made for `action` (TP-1645): Home
+    /// says a refused drop or Start in the engine's words alone. Any other failure (no token, nothing answered, a token
+    /// rejected, a bare status) is kept as it is.
+    public static func reason(_ message: String, for action: ControlAction) -> String {
+        let head = "\(action.failurePrefix): ", tail = " (HTTP 409)"
+        guard message.count > head.count + tail.count, message.hasPrefix(head), message.hasSuffix(tail) else { return message }
+        return String(message.dropFirst(head.count).dropLast(tail.count))
     }
 
     /// Symphony's answer to a Director's move (not Undo), nil when it doesn't read.

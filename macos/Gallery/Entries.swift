@@ -227,6 +227,15 @@ let galleryEntries: [GalleryEntry] = [
         id: "queue-row", title: "Queue row", kind: .component, prefixes: ["queue-row-"],
         files: ["SymphonyBarUI/DesignSystem/QueueRow.swift", "SymphonyBarUI/DesignSystem/ReorderableList.swift", "SymphonyBarUI/ListComponents.swift"]),
     GalleryEntry(
+        id: "queue-epic-row", title: "Queue epic row", kind: .component, prefixes: ["queue-epic-row-"],
+        files: ["SymphonyBarUI/DesignSystem/QueueEpicParts.swift"]),
+    GalleryEntry(
+        id: "queue-sub-row", title: "Queue sub-ticket row", kind: .component, prefixes: ["queue-sub-row-"],
+        files: ["SymphonyBarUI/DesignSystem/QueueEpicParts.swift"]),
+    GalleryEntry(
+        id: "dependency-marker", title: "Dependency marker", kind: .component, prefixes: ["dependency-marker-"],
+        files: ["SymphonyBarUI/DesignSystem/DependencyMarker.swift"]),
+    GalleryEntry(
         id: "done-row", title: "Done row", kind: .component, prefixes: ["done-row-"],
         files: ["SymphonyBarUI/DesignSystem/DoneRow.swift"]),
     GalleryEntry(
