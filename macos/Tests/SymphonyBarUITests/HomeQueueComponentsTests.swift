@@ -327,6 +327,13 @@ final class HomeQueueComponentsTests: XCTestCase {
         XCTAssertEqual(QueueDropLine.accessibilityIdentifier, "queue-drop-line")
         XCTAssertEqual(SlotCard.accessibilityLabel(1, ticket: "TP-1619", dropTarget: false), "\(SlotCard.emptyLabel(1)): TP-1619")
         XCTAssertEqual(SlotCard.accessibilityLabel(1, ticket: "TP-1619", dropTarget: true), "\(SlotCard.emptyLabel(1)): TP-1619, Drop target")
+        let line = slot(.working)
+        let said = "\(line.identifier), \(line.title), \(line.word), \(line.since)"
+        XCTAssertEqual(SlotStripLine.accessibilityLabel(line, dropTarget: false), said)
+        XCTAssertEqual(SlotStripLine.accessibilityLabel(line, dropTarget: true), "\(said), Drop target")
+        let row = QueueRowModel(number: 4, identifier: "TP-1605", title: "Sort the queue", lead: .glyph("clock", .textSecondary), repo: "symphony")
+        XCTAssertEqual(QueueRow.accessibilityLabel(row, picked: false), "Number \(row.numberText), TP-1605, Sort the queue")
+        XCTAssertEqual(QueueRow.accessibilityLabel(row, picked: true), "Number \(row.numberText), TP-1605, Sort the queue, Dragged")
     }
 
     func testTheNumberCellIsAsWideAsTheWidestNumberOnScreen() {

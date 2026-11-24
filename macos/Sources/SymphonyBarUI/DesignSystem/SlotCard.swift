@@ -205,8 +205,7 @@ public struct SlotCard: View {
 
     /// The card's label: its slot and its ticket, and, under a dragged row, that it is the drop target (TP-1610).
     public static func accessibilityLabel(_ slot: Int, ticket: String, dropTarget: Bool) -> String {
-        let label = "\(emptyLabel(slot)): \(ticket)"
-        return dropTarget ? "\(label), \(SlotDropTarget.accessibilityValue)" : label
+        SlotDropTarget.accessibilityLabel("\(emptyLabel(slot)): \(ticket)", on: dropTarget)
     }
 
     private func header(_ ticket: SlotCardModel) -> some View {
@@ -344,7 +343,7 @@ struct EmptySlot: View {
             .overlay(shape.strokeBorder(DesignTokens.Surface.separator.color))
             .dropTarget(dropTarget, in: shape)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(SlotCard.emptyLabel(slot)), empty")
+            .accessibilityLabel(SlotDropTarget.accessibilityLabel("\(SlotCard.emptyLabel(slot)), empty", on: dropTarget))
             .dropTargetAccessibility(dropTarget, identifier: identifier)
     }
 }
@@ -500,6 +499,12 @@ public struct SlotStripLine: View {
         self.dropTarget = dropTarget
     }
 
+    /// The line's label: what its parts say (the identifier, the title, the state and the time in the slot), and,
+    /// under a dragged row, that it is the drop target (TP-1610).
+    public static func accessibilityLabel(_ ticket: SlotCardModel, dropTarget: Bool) -> String {
+        SlotDropTarget.accessibilityLabel("\(ticket.identifier), \(ticket.title), \(ticket.word), \(ticket.since)", on: dropTarget)
+    }
+
     public var body: some View {
         let queue = DesignTokens.HomeQueue.self
         if let ticket {
@@ -551,6 +556,7 @@ public struct SlotStripLine: View {
             .contentShape(shape)
             .onHover { hovered = $0 }
             .accessibilityElement(children: .combine)
+            .accessibilityLabel(Self.accessibilityLabel(ticket, dropTarget: dropTarget))
             .dropTargetAccessibility(dropTarget, identifier: SlotDropTarget.lineIdentifier(slot))
         } else {
             EmptySlot(

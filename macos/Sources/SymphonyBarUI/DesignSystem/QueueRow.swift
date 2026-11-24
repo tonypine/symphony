@@ -156,10 +156,17 @@ public struct QueueRow: View {
         .opacity(picked ? DesignTokens.HomeQueue.draggedOpacity : 1)
         .onHover { hovered = $0 }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Number \(row.numberText), \(row.identifier), \(row.title)")
+        // The label also says it is dragged: a combined element's value does not always reach the tree mid-drag.
+        .accessibilityLabel(Self.accessibilityLabel(row, picked: picked))
         .accessibilityValue(Self.accessibilityState(look, reorderable: reorderable, picked: picked))
         .accessibilityIdentifier(Self.accessibilityIdentifier(row.identifier))
         .accessibilityAction(named: "Start") { onStart() }
+    }
+
+    /// The row's label: its number, identifier and title, and, while it is the row left behind under a drag, `Dragged`.
+    public static func accessibilityLabel(_ row: QueueRowModel, picked: Bool) -> String {
+        let label = "Number \(row.numberText), \(row.identifier), \(row.title)"
+        return picked ? "\(label), \(draggedValue)" : label
     }
 
     /// The row's identifier in the accessibility tree, which a window test finds it by.
@@ -362,6 +369,9 @@ extension View {
 /// A slot drawn as the target under a dragged row: what the accessibility tree says of it.
 public enum SlotDropTarget {
     public static let accessibilityValue = "Drop target"
+    /// A slot's label `label`, which also says it is the target while `on`: a card holds its parts and a strip line
+    /// combines them, and neither element's value reaches the tree mid-drag.
+    public static func accessibilityLabel(_ label: String, on: Bool) -> String { on ? "\(label), \(accessibilityValue)" : label }
     /// The identifier of slot `slot`'s card, or of its line in the strip.
     public static func cardIdentifier(_ slot: Int) -> String { "slot-card-\(slot)" }
     public static func lineIdentifier(_ slot: Int) -> String { "slot-line-\(slot)" }

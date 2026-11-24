@@ -222,12 +222,17 @@ class Home:
             if identifier.startswith("queue-row-") and match.get("frame") and number:
                 found.append({
                     "ticket": identifier[len("queue-row-"):], "number": number.group(1), "value": match.get("value") or "",
-                    "frame": match["frame"],
+                    "label": label, "frame": match["frame"],
                 })
         return sorted(found, key=lambda row: row["frame"]["y"])
 
     def row(self, ticket):
         return next((row for row in self.rows() if row["ticket"] == ticket), None)
+
+    def dragged(self, ticket):
+        """Whether `ticket`'s row says it is the one left behind under a drag, in its value or at its label's end."""
+        row = self.row(ticket) or {}
+        return row.get("value") == "Dragged" or (row.get("label") or "").endswith(", Dragged")
 
     def ready(self):
         if not wait(lambda: self.window(), 40):
@@ -420,11 +425,12 @@ def scenario_reorder(home):
     end = (start[0], below["frame"]["y"] - 1)
     helper = home.drag(start, end)
     try:
-        left = home.row(picked["ticket"])
+        left = wait(lambda: home.dragged(picked["ticket"]), 3)
         line = home.element("queue-drop-line")
         shot = home.screenshot("mid-drag")
-        if left is None or left["value"] != "Dragged":
-            fail(name, f"mid-drag the row left behind says {(left or {}).get('value')!r}, not 'Dragged'")
+        if not left:
+            row = home.row(picked["ticket"]) or {}
+            fail(name, f"mid-drag the row left behind says {row.get('value')!r} / {row.get('label')!r}, not 'Dragged'")
         if line is None:
             fail(name, "mid-drag no drop line shows")
         else:
@@ -474,8 +480,11 @@ def slot_drop(home, name, identifier, slot, holder, scrolled):
     try:
         over = home.element(identifier)
         shot = home.screenshot("mid-drag")
-        # A strip line says it in its value; a card, which holds its parts, in its label.
-        said = [(over or {}).get(key) or "" for key in ("value", "description", "title")]
+        # A card and a strip line say it in their label (their value does not reach the tree mid-drag).
+        def said_now():
+            over = home.element(identifier)
+            return [(over or {}).get(key) or "" for key in ("value", "description", "title")]
+        said = wait(lambda: (lambda now: now if any("Drop target" in text for text in now) else None)(said_now()), 3) or said_now()
         if over is None or not any("Drop target" in text for text in said):
             fail(name, f"mid-drag {identifier} says {said!r}, not 'Drop target'")
         if home.element("queue-drop-line") is not None:
@@ -581,10 +590,11 @@ def scenario_filter(home):
         home.screenshot("mid-drag")
         if home.element("queue-drop-line") is not None:
             fail(name, "a drop line shows under a saved view")
-        if (home.row("TP-1592") or {}).get("value") == "Dragged":
+        if home.dragged("TP-1592"):
             fail(name, "a drag started under a saved view")
         for slot in (1, 2):
-            if (home.element(f"slot-card-{slot}") or {}).get("value") == "Drop target":
+            said = [(home.element(f"slot-card-{slot}") or {}).get(key) or "" for key in ("value", "description", "title")]
+            if any("Drop target" in text for text in said):
                 fail(name, f"slot card {slot} shows as a drop target under a saved view")
     finally:
         home.release(helper)
@@ -610,9 +620,9 @@ def scenario_filter(home):
     helper = home.drag((int(grab[0]), int(grab[1])), (int(grab[0]), target["frame"]["y"] - 1))
     try:
         home.screenshot("mid-drag-all")
-        left = home.row("TP-1605") or {}
-        if left.get("value") != "Dragged":
-            fail(name, f"with All tickets picked the row left behind says {left.get('value')!r}, not 'Dragged'")
+        if not wait(lambda: home.dragged("TP-1605"), 3):
+            left = home.row("TP-1605") or {}
+            fail(name, f"with All tickets picked the row left behind says {left.get('value')!r} / {left.get('label')!r}, not 'Dragged'")
         if home.element("queue-drop-line") is None:
             fail(name, "with All tickets picked no drop line shows")
     finally:
