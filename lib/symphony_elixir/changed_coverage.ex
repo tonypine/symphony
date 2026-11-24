@@ -21,8 +21,12 @@ defmodule SymphonyElixir.ChangedCoverage do
   - The tests that failed in the last run go first, alone, and the run stops there while one still
     fails. A test that fails beside the others runs once more, alone: one that passes then is
     named as unsteady and doesn't fail the run.
+  - A part that stopped at `--max-failures`, or in which a `setup_all` failed, left tests that
+    never ran: the run fails and names the part, and no test is run again alone.
   - With no module to check (a change to test files only, or to ignored modules), the changed test
     files and the tests of the changed `lib/` files still run, without coverage.
+  - With `:all`, the one pass runs every test file of the suite, not only the ones picked for the
+    change, and reads the changed modules' coverage from it.
 
   `mix cover.changed` runs it. The git, test and `:cover` calls go through `deps`, so tests can
   fake them; `SymphonyElixir.ChangedCoverage.Runner` holds the real ones.
@@ -61,8 +65,9 @@ defmodule SymphonyElixir.ChangedCoverage do
   place of the changed ones: a CI Fix run's failed-check step names the modules CI found below 100%), `:ignore_modules` (modules or regexes),
   `:extra_tests` (test files to run as well), `:covering_tests` (a map from a `lib/` file to
   the test files that cover it without naming its modules, run whenever that file changes),
-  `:parts` (the number of `mix test` processes, in place of the one `part_count/2` picks) and
-  `:max_parts` (its ceiling). Returns `:ok`, or `{:error, message}` naming what failed.
+  `:parts` (the number of `mix test` processes, in place of the one `part_count/2` picks),
+  `:max_parts` (its ceiling) and `:all` (run every test file `deps.test_files` lists, in `:max_parts`
+  parts unless `:parts` says). Returns `:ok`, or `{:error, message}` naming what failed.
   """
   @spec run(keyword(), deps()) :: :ok | {:error, String.t()}
   def run(opts, deps) do
@@ -91,7 +96,9 @@ defmodule SymphonyElixir.ChangedCoverage do
   defp files(files, _base, _git), do: {:ok, files |> Enum.uniq() |> Enum.sort()}
 
   defp check(modules, files, extra_tests, opts, deps) do
-    case {modules, test_files(modules, files, extra_tests, deps)} do
+    tests = if all?(opts), do: Enum.uniq(extra_tests ++ Enum.sort(deps.test_files.())), else: test_files(modules, files, extra_tests, deps)
+
+    case {modules, tests} do
       {[], []} ->
         deps.info.("no changed lib/ module to check")
         :ok
@@ -120,12 +127,23 @@ defmodule SymphonyElixir.ChangedCoverage do
   # Runs `tests` in parts and returns the names of the runs whose coverage counts.
   defp run_tests(tests, modules, opts, deps) do
     with :ok <- failed_first(tests, deps) do
-      parts = tests |> parts(deps.weights.(), opts) |> Enum.with_index(1) |> Enum.map(fn {files, index} -> {"part-#{index}", files} end)
+      parts = tests |> parts(deps.weights.(), part_opts(opts)) |> Enum.with_index(1) |> Enum.map(fn {files, index} -> {"part-#{index}", files} end)
       coverage = if modules == [], do: "no coverage", else: "coverage of #{length(modules)} module(s)"
-      deps.info.("running #{length(tests)} test file(s) in #{length(parts)} part(s), #{coverage}:\n" <> Enum.map_join(Enum.sort(tests), "\n", &"  #{&1}"))
+      deps.info.(running(tests, length(parts), coverage, all?(opts)))
       parts |> deps.run_parts.(modules) |> ran(modules, deps)
     end
   end
+
+  defp all?(opts), do: Keyword.get(opts, :all, false)
+
+  # Every test of the suite is worth the ceiling, as in `scripts/test-parts.sh`.
+  defp part_opts(opts) do
+    if all?(opts), do: Keyword.put_new(opts, :parts, Keyword.get(opts, :max_parts, @max_parts)), else: opts
+  end
+
+  # The whole suite is not listed file by file.
+  defp running(tests, parts, coverage, true), do: "running every test file (#{length(tests)}) in #{parts} part(s), #{coverage}"
+  defp running(tests, parts, coverage, false), do: "running #{length(tests)} test file(s) in #{parts} part(s), #{coverage}:\n" <> Enum.map_join(Enum.sort(tests), "\n", &"  #{&1}")
 
   defp ran(results, modules, deps) do
     names = Enum.map(results, & &1.name)
@@ -189,10 +207,33 @@ defmodule SymphonyElixir.ChangedCoverage do
   defp fail(failed, specs, deps) do
     Enum.each(failed, &deps.info.("#{&1.name}:\n" <> failure_text(&1.output)))
     deps.save_failed.(specs)
+    unrun = Enum.flat_map(failed, &stopped_early/1)
 
-    case specs do
-      [] -> {:error, "mix test ended without running its tests (#{Enum.map_join(failed, ", ", & &1.name)}); fix what it printed first"}
-      specs -> {:error, "#{length(specs)} test(s) fail: #{Enum.join(specs, ", ")}. Fix the failing tests first; they run first next time"}
+    case {specs, unrun} do
+      {[], []} -> {:error, "mix test ended without running its tests (#{Enum.map_join(failed, ", ", & &1.name)}); fix what it printed first"}
+      {[], unrun} -> {:error, "tests did not run: " <> Enum.join(unrun, "; ")}
+      {specs, []} -> {:error, failing(specs)}
+      {specs, unrun} -> {:error, failing(specs) <> ". Tests did not run: " <> Enum.join(unrun, "; ")}
+    end
+  end
+
+  defp failing(specs), do: "#{length(specs)} test(s) fail: #{Enum.join(specs, ", ")}. Fix the failing tests first; they run first next time"
+
+  # What a part that left tests unrun says of itself: it stopped at `--max-failures`, or a
+  # `setup_all` failed and ExUnit counted its tests as invalid.
+  defp stopped_early(%{name: name, output: output}) do
+    {tests, _failures, invalid} = counts(output) || {0, 0, 0}
+
+    max_failures = if String.contains?(output, "--max-failures reached"), do: ["#{name} stopped at --max-failures after #{tests} tests, the rest of its tests did not run"], else: []
+    setup_all = if invalid > 0, do: ["#{name} did not run #{invalid} tests, a setup_all failed" <> setup_all_failures(output)], else: []
+
+    max_failures ++ setup_all
+  end
+
+  defp setup_all_failures(output) do
+    case Regex.scan(~r/^ +\d+\) ([^\n]*): failure on setup_all callback/m, output, capture: :all_but_first) do
+      [] -> ""
+      modules -> " (" <> (modules |> List.flatten() |> Enum.uniq() |> Enum.join(", ")) <> ")"
     end
   end
 

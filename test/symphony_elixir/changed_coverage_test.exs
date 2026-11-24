@@ -289,6 +289,80 @@ defmodule SymphonyElixir.ChangedCoverageTest do
     end
   end
 
+  describe "with :all" do
+    test "runs every test file of the suite in one pass, in the ceiling of parts, and checks the changed modules" do
+      assert :ok = ChangedCoverage.run([all: true, max_parts: 2, extra_tests: ["test/symphony_elixir/foo_test.exs"]], deps())
+
+      modules = [SymphonyElixir.Bar, SymphonyElixir.Foo, SymphonyElixir.Foo.Helper]
+      # other_test.exs names no changed module: only :all runs it.
+      assert_received {:run_parts, [{"part-1", ["test/symphony_elixir/bar_test.exs", "test/symphony_elixir/other_test.exs"]}, {"part-2", ["test/symphony_elixir/foo_test.exs"]}], ^modules}
+      assert_received {:coverage, ^modules, ["part-1", "part-2"]}
+      refute_received {:run_parts, _parts, _modules}
+
+      assert ["running every test file (3) in 2 part(s), coverage of 3 module(s)", "6 tests passed in 2 part(s)" | coverage] = infos()
+      assert List.last(coverage) == "every changed module is at 100.00%"
+    end
+
+    test "runs them in as many parts as asked for, 8 at most by default" do
+      many = for number <- 10..29, do: "test/symphony_elixir/t#{number}_test.exs"
+
+      assert :ok = ChangedCoverage.run([all: true], deps(%{test_files: fn -> many end}))
+      assert_received {:run_parts, parts, _modules}
+      assert length(parts) == 8
+      assert parts |> Enum.flat_map(&elem(&1, 1)) |> Enum.sort() == many
+
+      assert :ok = ChangedCoverage.run([all: true, parts: 3, max_parts: 2], deps(%{test_files: fn -> many end}))
+      assert_received {:run_parts, [_one, _two, _three], _modules}
+    end
+
+    test "runs every test without coverage when no module is to check" do
+      git = fn
+        ["merge-base" | _] -> {:ok, "abc123\n"}
+        ["diff" | _] -> {:ok, "README.md\n"}
+        ["ls-files" | _] -> {:ok, ""}
+      end
+
+      assert :ok = ChangedCoverage.run([all: true], deps(%{git: git}))
+
+      assert_received {:run_parts, [{"part-1", [_bar]}, {"part-2", [_foo]}, {"part-3", [_other]}], []}
+      refute_received {:coverage, _modules, _exports}
+      assert infos() == ["running every test file (3) in 3 part(s), no coverage", "9 tests passed in 3 part(s)", "no changed lib/ module to check"]
+    end
+
+    test "fails naming the uncovered lines when every test leaves a changed module below 100%" do
+      coverage = fn modules, _exports -> Map.new(modules, &{&1, {:ok, [{{&1, 3}, {1, 0}}, {{&1, 8}, {0, 1}}]}}) end
+
+      assert {:error, "3 changed module(s) below 100% coverage: " <> _rest} = ChangedCoverage.run([all: true], deps(%{coverage: coverage}))
+      assert "SymphonyElixir.Bar 50.00%, uncovered: lib/symphony_elixir/bar.ex:8" in infos()
+    end
+
+    test "runs the tests that failed last time first, whatever their file, and a test that fails beside the others alone" do
+      other_3 = "test/symphony_elixir/other_test.exs:3"
+      outputs = %{"part-3" => {2, failed_output([other_3])}}
+
+      assert :ok = ChangedCoverage.run([all: true], deps(%{failed_tests: fn -> [other_3] end, run_parts: run_parts(outputs)}))
+
+      assert_received {:run_parts, [{"failed-first", [^other_3]}], []}
+      assert_received {:run_parts, [{"part-1", _bar}, {"part-2", _foo}, {"part-3", ["test/symphony_elixir/other_test.exs"]}], [_ | _]}
+      assert_received {:run_parts, [{"retry", [^other_3]}], [_ | _]}
+      assert_received {:coverage, _modules, ["part-1", "part-2", "part-3", "retry"]}
+    end
+
+    test "fails naming the part that stopped at --max-failures, though the other parts passed" do
+      other_3 = "test/symphony_elixir/other_test.exs:3"
+      outputs = %{"part-3" => {2, failed_output([other_3], "--max-failures reached, aborting test suite\n")}}
+
+      assert {:error, message} = ChangedCoverage.run([all: true], deps(%{run_parts: run_parts(outputs)}))
+
+      assert message ==
+               "1 test(s) fail: #{other_3}. Fix the failing tests first; they run first next time. " <>
+                 "Tests did not run: part-3 stopped at --max-failures after 5 tests, the rest of its tests did not run"
+
+      refute_received {:run_parts, [{"retry", _specs}], _modules}
+      refute_received {:coverage, _modules, _exports}
+    end
+  end
+
   describe "a failing test" do
     @foo_12 "test/symphony_elixir/foo_test.exs:12"
     @bar_7 "test/symphony_elixir/bar_test.exs:7"
@@ -334,10 +408,40 @@ defmodule SymphonyElixir.ChangedCoverageTest do
     test "is not run again when its part stopped at --max-failures, which left tests that never ran" do
       outputs = %{"part-1" => {2, failed_output([@foo_12], "--max-failures reached, aborting test suite\n")}}
 
-      assert {:error, "1 test(s) fail: #{@foo_12}." <> _rest} = ChangedCoverage.run([], deps(%{run_parts: run_parts(outputs)}))
+      assert {:error, "1 test(s) fail: #{@foo_12}." <> rest} = ChangedCoverage.run([], deps(%{run_parts: run_parts(outputs)}))
+      assert rest =~ "Tests did not run: part-1 stopped at --max-failures after 5 tests, the rest of its tests did not run"
       assert_received {:run_parts, [{"part-1", _tests}], _modules}
       refute_received {:run_parts, _parts, _modules}
       assert_received {:save_failed, [@foo_12]}
+    end
+
+    test "fails naming the part in which a setup_all failed, with and without a failed test beside it" do
+      setup_all = "  1) SymphonyElixir.BarTest: failure on setup_all callback, all tests have been invalidated\n     ** (RuntimeError) boom\n\n"
+      beside = setup_all <> String.replace(failed_output([@foo_12]), "5 tests, 1 failures\n", "5 tests, 1 failure, 3 invalid\n")
+
+      assert {:error, message} = ChangedCoverage.run([], deps(%{run_parts: run_parts(%{"part-1" => {2, beside}})}))
+      assert message =~ "1 test(s) fail: #{@foo_12}."
+      assert message =~ "Tests did not run: part-1 did not run 3 tests, a setup_all failed (SymphonyElixir.BarTest)"
+
+      # ExUnit counts the invalid tests as failures and numbers no test.
+      alone = setup_all <> "Finished in 0.1 seconds\n4 tests, 4 failures, 4 invalid\n"
+      stopped = alone <> "--max-failures reached, aborting test suite\n"
+      weights = fn -> %{"test/symphony_elixir/bar_test.exs" => 12.0, "test/symphony_elixir/foo_test.exs" => 9.5} end
+      outputs = %{"part-1" => {2, alone}, "part-2" => {2, String.replace(stopped, "BarTest: failure", "FooTest (a note): failure")}}
+
+      assert {:error, message} = ChangedCoverage.run([], deps(%{weights: weights, run_parts: run_parts(outputs)}))
+
+      assert message ==
+               "tests did not run: part-1 did not run 4 tests, a setup_all failed (SymphonyElixir.BarTest); " <>
+                 "part-2 stopped at --max-failures after 4 tests, the rest of its tests did not run; " <>
+                 "part-2 did not run 4 tests, a setup_all failed (SymphonyElixir.FooTest (a note))"
+
+      assert_received {:save_failed, []}
+      refute_received {:run_parts, [{"retry", _specs}], _modules}
+
+      # An output that counts invalid tests and prints no setup_all line names no module.
+      assert {:error, "tests did not run: part-1 did not run 2 tests, a setup_all failed"} =
+               ChangedCoverage.run([], deps(%{run_parts: run_parts(%{"part-1" => {2, "2 tests, 2 failures, 2 invalid\n"}})}))
     end
 
     test "is not run again when its part counts a failure that names no test, or an invalid test" do
