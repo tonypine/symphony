@@ -4529,14 +4529,26 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # Each ticket's parent, by issue id (`slot_parents`), from the records and from the candidates'
-  # own parent: what tells which ticket a sub-ticket runs through (`SymphonyElixir.Dispatch.Slots`).
+  # own parent and sub-issues: what tells which ticket a sub-ticket runs through, at any depth
+  # (`SymphonyElixir.Dispatch.Slots`). A sub-ticket that never ran names no parent (Linear's parent is
+  # read when a run starts); its parent lists it among its sub-issues, so the chain to the top holds.
   defp refresh_slot_parents(%State{} = state, issues) do
     facts = queue_facts()
     ids = Map.merge(facts.ids, for(%Issue{id: id, identifier: identifier} when is_binary(id) and is_binary(identifier) <- issues, into: %{}, do: {identifier, id}))
-    named = Map.merge(facts.parents, for(%Issue{id: id, parent: %{identifier: parent}} when is_binary(parent) <- issues, into: %{}, do: {id, parent}))
+    named = issues |> listed_parents() |> Map.merge(facts.parents) |> Map.merge(own_parents(issues))
     parents = for {id, parent} <- named, parent_id = Map.get(ids, parent), is_binary(parent_id), parent_id != id, into: %{}, do: {id, parent_id}
     %{state | slot_parents: lend_slots(parents, state, ids)}
   end
+
+  # Each candidate's sub-issue, by issue id, to the candidate's identifier.
+  defp listed_parents(issues) do
+    for %Issue{identifier: parent, sub_issues: [_ | _] = subs} when is_binary(parent) <- issues,
+        %{id: child} when is_binary(child) <- subs,
+        into: %{},
+        do: {child, parent}
+  end
+
+  defp own_parents(issues), do: for(%Issue{id: id, parent: %{identifier: parent}} when is_binary(parent) <- issues, into: %{}, do: {id, parent})
 
   # A slot holder that waits on a ticket outside its own tree (a run's block report on another
   # ticket, a fix ticket filed under another ticket and reused, a Conductor blocker that already

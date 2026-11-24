@@ -161,6 +161,27 @@ defmodule SymphonyElixir.OrchestratorStartSlotTest do
     end
   end
 
+  describe "Start of a ticket two levels under the slot's holder (TP-1632)" do
+    test "a leaf under a split sub-ticket starts through its epic's slot, and the read counts one used slot of 1", ctx do
+      write_slots_workflow!(ctx, 1)
+      epic = recorded(epic("e", "MT-E", [{"m", "MT-M", "In Progress"}]))
+      recorded(%{epic("m", "MT-M", [{"a", "MT-A", "Todo"}]) | parent: %{identifier: "MT-E", title: nil, done: 0, total: 1, children: []}})
+      # A leaf that never ran names no parent: only its parent's record lists it.
+      a = recorded(issue("a", "MT-A", "Todo"))
+      tracked([epic, a])
+
+      {:reply, {:ok, reply}, next} = start(holding(orchestrator_state(1), epic, 1, @early), a)
+      assert %{slot: 1, started: true} = reply
+      refute Map.has_key?(reply, :displaced_issue_identifier)
+      assert Enum.sort(Map.keys(next.slot_holders)) == ["a", "e"]
+      assert %{slot: 1} = next.slot_holders["a"]
+      refute Map.has_key?(next.slot_holders, "m")
+
+      assert %{total: 1, used: 1, free: 0, holders: holders} = Orchestrator.dispatch_order_slots_for_test(next)
+      assert holders |> Enum.map(& &1.identifier) |> Enum.sort() == ["MT-A", "MT-E"]
+    end
+  end
+
   describe "Start naming a slot" do
     test "a named slot that is held is taken over even with another free; a named free slot is simply taken", ctx do
       write_slots_workflow!(ctx, 2)
@@ -372,7 +393,7 @@ defmodule SymphonyElixir.OrchestratorStartSlotTest do
   # The ticket's record, which joins the dispatch queue at its end (or at the end of its parent's
   # sub-tickets), in the order written.
   defp recorded(%Issue{} = issue) do
-    attrs = %{issue_identifier: issue.identifier, title: issue.title, phase: issue.state, linear_updated_at: DateTime.utc_now(), parent: issue.parent}
+    attrs = %{issue_identifier: issue.identifier, title: issue.title, phase: issue.state, linear_updated_at: DateTime.utc_now(), parent: issue.parent, sub_issues: issue.sub_issues}
     :ok = RunStore.put_ticket_state(TicketState.new("default", issue.id, attrs))
     issue
   end
