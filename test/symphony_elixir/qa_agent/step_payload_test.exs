@@ -54,7 +54,7 @@ defmodule SymphonyElixir.QaAgent.StepPayloadTest do
 
       for none <- [nil, "22 pt", [], ["x"]], do: refute(Map.has_key?(StepPayload.result(%{answer | "measures" => none}), :measures))
 
-      assert [%{step: 3, measures: [%{name: "row height"}]}] = StepPayload.results([Map.put(answer, "step", 3)])
+      assert [%{step: 3, measures: [%{name: "row height"}, %{value: 1.5}]}] = StepPayload.results([Map.put(answer, "step", 3)])
     end
   end
 
