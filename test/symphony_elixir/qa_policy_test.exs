@@ -25,6 +25,26 @@ defmodule SymphonyElixir.QaPolicyTest do
 
   defp kinds({:run, playbooks, reason}), do: {:run, Enum.map(playbooks, & &1.kind), reason}
 
+  @live_setting %{source: "live", page: "Home", window: %{width: 1440, height: 900}, appearance: "light"}
+  @fixture_setting %{source: "fixture", fixture: "macos/Tests/Fixtures/director-app", page: "Inbox", window: %{width: 2560, height: 1440}, appearance: "dark"}
+
+  defp qa_check(id, statement, setting) do
+    check = %{id: id, kind: "qa", statement: statement, proof: "qa", action: "Open it", expect: "It shows"}
+    if setting, do: Map.put(check, :setting, setting), else: check
+  end
+
+  # The test's issue, groomed afresh with a plan holding an outcome and `checks`.
+  defp groomed!(checks) do
+    :ok = RunStore.clear()
+    ticket = issue()
+    :ok = RunStore.put_ticket_state(%{repo_key: "repo-a", issue_id: ticket.id, issue_identifier: ticket.identifier})
+    outcome = %{id: "c1", kind: "outcome", statement: "The decision is stored.", proof: "test"}
+    size = %{tokens: 1, runs: 1}
+    plan = %{reason: "Grooming", by: "grooming", shape: "single", layers: ["engine"], summary: "s", text: "t", checks: [outcome | checks], size: size}
+    {:ok, _plan} = SymphonyElixir.TicketPlan.write("repo-a", ticket.id, plan)
+    ticket
+  end
+
   defp issue(attrs \\ %{}) do
     struct!(
       %Issue{
@@ -282,66 +302,90 @@ defmodule SymphonyElixir.QaPolicyTest do
       assert {:skip, "the issue has the `qa:skip` label"} = QaPolicy.decision(ticket, settings, docs)
     end
 
-    test "marks a macos_app pass live when the PR changes the server and the walkthrough names the Director" do
-      live = %{"start_cmd" => "scripts/qa-server-start.sh", "paths" => ["lib/**", "config/**"], "walkthrough_mentions" => ["Director"]}
-      settings = live_settings!(live)
-      director = "## User walkthrough\n\n1. In the Director, press Decide on the held ticket.\n"
-      server_and_app = ["lib/symphony_elixir/questions.ex", "macos/Sources/Inbox.swift"]
+    test "marks a macos_app pass live when the plan sets a QA check QA walks on the live server, whatever its words" do
+      settings = live_settings!(%{"start_cmd" => "scripts/qa-server-start.sh", "paths" => ["lib/**"], "walkthrough_mentions" => ["Director"]})
+      ticket = groomed!([qa_check("c2", "The Home screen shows the moved ticket.", @live_setting)])
 
-      assert {:run, [%{kind: "macos_app", live: true, live_reason: "the PR changes the server and the `## User walkthrough` names `Director`"}], reason} =
-               QaPolicy.decision(issue(%{description: director}), settings, server_and_app)
+      for paths <- [["macos/Sources/Inbox.swift"], ["lib/symphony_elixir/questions.ex"], ["priv/other.txt", "macos/Sources/Inbox.swift"]] do
+        assert {:run, [%{kind: "macos_app", live: true, live_reason: "the plan's QA check c2 is set to the live server"}], reason} =
+                 QaPolicy.decision(ticket, settings, paths)
 
-      assert reason =~ "the app gets a live server: the PR changes the server and the `## User walkthrough` names `Director`"
-
-      # A fixture-only Mac change, a walkthrough that never names the Director, or none: no server.
-      for {ticket, paths, why} <- [
-            {issue(%{description: director}), ["macos/Sources/Inbox.swift"], "the PR changes none of the server's paths"},
-            {issue(%{description: "## User walkthrough\n\n1. Open the menu bar menu.\n"}), server_and_app, "no `## User walkthrough` step names `Director`"},
-            {issue(%{description: "Directors' notes"}), server_and_app, "the ticket has no `## User walkthrough`"}
-          ] do
-        assert {:run, [macos_app], reason} = QaPolicy.decision(ticket, settings, paths)
-        refute Map.has_key?(macos_app, :live)
-        assert macos_app.live_reason == why
-        assert reason =~ "; the app reads fixtures only: " <> why
+        assert reason =~ "; the app gets a live server: the plan's QA check c2 is set to the live server"
       end
+    end
 
-      # The labels override the diff: `qa:fixture` wins over `qa:live`.
+    test "no word in a step makes a pass live: QA checks set to a fixture, and a ticket with no plan, read fixtures only" do
+      settings = live_settings!(%{"start_cmd" => "scripts/qa-server-start.sh", "paths" => ["lib/**"], "walkthrough_mentions" => ["Director", "Inbox"]})
+      server_and_app = ["lib/symphony_elixir/questions.ex", "macos/Sources/Inbox.swift"]
+      ticket = groomed!([qa_check("c2", "In the Director's Inbox, press Decide, then Undo.", @fixture_setting)])
+
+      assert {:run, [macos_app], reason} = QaPolicy.decision(ticket, settings, server_and_app)
+      refute Map.has_key?(macos_app, :live)
+      assert macos_app.live_reason == "no QA check of the plan that QA walks is set to the live server"
+      assert reason =~ "; the app reads fixtures only: no QA check of the plan that QA walks is set to the live server"
+
+      :ok = RunStore.clear()
+      director = issue(%{description: "## User walkthrough\n\n1. In the Director's Inbox, press Decide.\n"})
+      assert {:run, [macos_app], _reason} = QaPolicy.decision(director, settings, server_and_app)
+      refute Map.has_key?(macos_app, :live)
+      assert macos_app.live_reason == "the ticket has no plan, so no QA check is set to the live server"
+
+      # A server-only change gives the Mac app nothing to walk without the plan asking for the server.
+      assert {:skip, _reason} = QaPolicy.decision(director, settings, ["lib/symphony_elixir/questions.ex"])
+    end
+
+    test "a live QA check QA no longer walks, and a plan whose QA checks carry no setting, read fixtures only" do
+      settings = live_settings!(%{"start_cmd" => "start"})
+      app = ["macos/Sources/Inbox.swift"]
+
+      ticket = groomed!([qa_check("c2", "The Home screen moves.", @live_setting)])
+      assert {:run, [%{live: true}], _reason} = QaPolicy.decision(ticket, settings, app)
+      {:ok, _event} = SymphonyElixir.TicketChecks.prove("repo-a", ticket.id, %{check_id: "c2", by: "test", test: "test/home_test.exs"})
+      assert {:run, [macos_app], _reason} = QaPolicy.decision(ticket, settings, app)
+      refute Map.has_key?(macos_app, :live)
+
+      ticket = groomed!([qa_check("c2", "The Home screen moves.", @live_setting)])
+      {:ok, _event} = SymphonyElixir.TicketChecks.waive("repo-a", ticket.id, "c2", "Covered elsewhere.")
+      assert {:run, [macos_app], _reason} = QaPolicy.decision(ticket, settings, app)
+      refute Map.has_key?(macos_app, :live)
+
+      # A plan written before settings still gets its QA pass, on fixtures only.
+      ticket = groomed!([qa_check("c2", "The Director shows the decision.", nil)])
+      assert {:run, [macos_app], "the change delivers or updates a user journey" <> note} = QaPolicy.decision(ticket, settings, app)
+      refute Map.has_key?(macos_app, :live)
+      assert note == "; the app reads fixtures only: no QA check of the plan that QA walks is set to the live server"
+    end
+
+    test "the labels override the plan: qa:fixture wins over qa:live" do
+      settings = live_settings!(%{"start_cmd" => "start"})
+
       assert {:run, [%{live: true, live_reason: "the issue has the `qa:live` label"}], reason} =
                QaPolicy.decision(issue(%{labels: ["QA:Live"]}), settings, ["macos/Sources/Inbox.swift"])
 
       assert reason =~ "the issue has the `qa:live` label"
 
-      both = issue(%{description: director, labels: ["qa:live", "qa:fixture"]})
-      assert {:run, [macos_app], reason} = QaPolicy.decision(both, settings, server_and_app)
+      ticket = groomed!([qa_check("c2", "The Home screen moves.", @live_setting)])
+      assert {:run, [macos_app], reason} = QaPolicy.decision(%{ticket | labels: ["qa:live", "qa:fixture"]}, settings, ["macos/Sources/Inbox.swift"])
       refute Map.has_key?(macos_app, :live)
       assert macos_app.live_reason == "the issue has the `qa:fixture` label"
       assert reason =~ "the issue has the `qa:fixture` label"
     end
 
-    test "a server-only change whose walkthrough walks the Director selects the macos_app playbook, live" do
-      live = %{"start_cmd" => "scripts/qa-server-start.sh", "paths" => ["lib/**", "config/**"], "walkthrough_mentions" => ["Director"]}
-      macos_app = %{"build" => "make", "app" => "A.app", "paths" => ["macos/**"], "live" => live}
-      settings = settings!(%{"auto_review" => %{"playbooks" => %{"macos_app" => macos_app}}})
-      director = issue(%{description: "## User walkthrough\n\n1. In the Director, press Decide on the held ticket.\n"})
+    test "a macos_app playbook with no live server is never live, and says so when the plan asks for one" do
+      settings = settings!(%{"auto_review" => %{"playbooks" => %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make", "app" => "A.app"}}}})
+      ticket = groomed!([qa_check("c2", "The Home screen moves.", @live_setting)])
 
-      server_only = ["lib/symphony_elixir/questions.ex"]
-      macos_app = fn {:run, playbooks, _reason} -> Enum.find(playbooks, &(&1.kind == "macos_app")) end
+      assert {:run, [macos_app], reason} = QaPolicy.decision(ticket, settings, ["macos/Sources/Inbox.swift"])
+      refute Map.has_key?(macos_app, :live)
+      assert macos_app.live_reason == "the playbook sets no `live` server, though the plan's QA check c2 is set to the live server"
+      assert reason =~ "; the app reads fixtures only: the playbook sets no `live` server"
 
-      assert {:run, ["cli", "macos_app"], reason} = kinds(QaPolicy.decision(director, settings, server_only))
-      assert %{live: true} = macos_app.(QaPolicy.decision(director, settings, server_only))
-      assert reason =~ "the app gets a live server: the PR changes the server and the `## User walkthrough` names `Director`"
-
-      # A `qa:live` label selects it too; a server change no Director step walks, or `qa:fixture`, does not.
-      assert %{live: true} = macos_app.(QaPolicy.decision(issue(%{labels: ["qa:live"]}), settings, server_only))
-
-      menu = issue(%{description: "## User walkthrough\n\n1. Run `symphony status`.\n"})
-      assert {:run, ["cli"], _reason} = kinds(QaPolicy.decision(menu, settings, server_only))
-
-      fixture = issue(%{description: director.description, labels: ["qa:fixture"]})
-      assert {:run, ["cli"], _reason} = kinds(QaPolicy.decision(fixture, settings, server_only))
+      :ok = RunStore.clear()
+      assert {:run, [macos_app], "the change delivers or updates a user journey"} = QaPolicy.decision(issue(), settings, ["macos/Sources/Inbox.swift"])
+      refute Map.has_key?(macos_app, :live_reason)
     end
 
-    test "Symphony's own WORKFLOW.md gives the Director a live server only for a server change whose walkthrough walks it" do
+    test "Symphony's own WORKFLOW.md still loads, and its live server runs only when the plan asks for it" do
       assert {:ok, %{config: config}} = Workflow.load(Path.expand("../../WORKFLOW.md", __DIR__))
       assert {:ok, _workflow} = RepoWorkflowSchema.parse(config)
       own = get_in(config, ["auto_review", "playbooks", "macos_app"])
@@ -351,37 +395,28 @@ defmodule SymphonyElixir.QaPolicyTest do
       macos_app = Map.merge(%{"build" => "make -C macos qa-app", "app" => "macos/build/Symphony.app"}, own)
       settings = settings!(%{"auto_review" => %{"playbooks" => %{"cli" => %{"enabled" => false}, "macos_app" => macos_app}}})
       macos = fn {:run, playbooks, _reason} -> Enum.find(playbooks, &(&1.kind == "macos_app")) end
+      both = ["lib/symphony_elixir/questions.ex", "macos/Sources/SymphonyBar/InboxView.swift"]
+
+      # A Director walkthrough and a server change, with no plan: fixtures only.
+      :ok = RunStore.clear()
       director = issue(%{description: "## User walkthrough\n\n1. In the Director's Inbox, press Decide, then Undo.\n"})
-
-      # A Mac-only diff: fixtures only, no server, as before.
-      mac_only = macos.(QaPolicy.decision(director, settings, ["macos/Sources/SymphonyBar/InboxView.swift"]))
-      refute Map.has_key?(mac_only, :live)
-      assert mac_only.live_reason == "the PR changes none of the server's paths"
-
-      # A `lib/` diff with Director steps: the live server.
-      assert %{live: true} = macos.(QaPolicy.decision(director, settings, ["lib/symphony_elixir/questions.ex", "macos/Sources/SymphonyBar/InboxView.swift"]))
-
-      # The labels override the diff.
-      assert %{live: true, live_reason: "the issue has the `qa:live` label"} =
-               macos.(QaPolicy.decision(issue(%{labels: ["qa:live"]}), settings, ["macos/Sources/SymphonyBar/InboxView.swift"]))
-
-      fixture = issue(%{description: director.description, labels: ["qa:fixture"]})
-      held = macos.(QaPolicy.decision(fixture, settings, ["lib/symphony_elixir/questions.ex", "macos/Sources/SymphonyBar/InboxView.swift"]))
+      held = macos.(QaPolicy.decision(director, settings, both))
       refute Map.has_key?(held, :live)
-      assert held.live_reason == "the issue has the `qa:fixture` label"
+      assert held.live_reason == "the ticket has no plan, so no QA check is set to the live server"
+
+      # A plan that sets its QA check on the live server: the live server, on a Mac-only diff too.
+      ticket = groomed!([qa_check("c2", "The Home screen moves.", @live_setting)])
+      assert %{live: true} = macos.(QaPolicy.decision(ticket, settings, ["macos/Sources/SymphonyBar/InboxView.swift"]))
     end
 
-    test "a live server with no walkthrough words is live for any walkthrough, and one with nothing on screen is noted too" do
-      live = %{"start_cmd" => "start", "paths" => ["lib/**"]}
-      settings = live_settings!(live)
-
-      assert {:run, [%{live: true}], reason} =
-               QaPolicy.decision(issue(%{description: "## User walkthrough\n\n1. Open the menu.\n"}), settings, ["lib/a.ex", "macos/B.swift"])
-
-      assert reason =~ "the app gets a live server: the PR changes the server and the ticket has a `## User walkthrough`"
+    test "a pass with nothing on screen to judge says it reads fixtures only, and why" do
+      settings = live_settings!(%{"start_cmd" => "start", "paths" => ["lib/**"]})
+      :ok = RunStore.clear()
 
       assert {:run, [%{kind: "macos_app", scope: :none}], reason} = QaPolicy.decision(issue(%{labels: ["qa:macos_app"]}), settings, ["lib/a.ex"])
-      assert reason =~ "building and launching the app are the whole check; the app reads fixtures only: the ticket has no `## User walkthrough`"
+
+      assert reason =~
+               "building and launching the app are the whole check; the app reads fixtures only: the ticket has no plan, so no QA check is set to the live server"
     end
 
     test "skips a change that reaches no playbook" do

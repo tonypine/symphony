@@ -4,9 +4,8 @@ defmodule SymphonyElixir.QaAgent.SelectionTest do
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAgent.Selection
-  alias SymphonyElixir.{RunStore, TicketEvents}
+  alias SymphonyElixir.RunStore
 
-  @live_server %{paths: ["lib/**"], walkthrough_mentions: ["Director"]}
   @server_change ["lib/symphony_elixir/questions.ex"]
   @walkthrough """
   ## User walkthrough
@@ -39,89 +38,72 @@ defmodule SymphonyElixir.QaAgent.SelectionTest do
     :ok
   end
 
-  test "a groomed ticket's QA checks are what is walked: its description is not read", %{issue: issue} do
-    outcome = %{id: "c1", kind: "outcome", statement: "The decision is stored.", proof: "test"}
-    walk = %{id: "c2", kind: "qa", statement: "The Director shows the decision.", proof: "qa", action: "Open it", expect: "It shows"}
-    plain = %{id: "c3", kind: "qa", statement: "The status prints.", proof: "test", action: "Run `symphony status`", expect: "It prints"}
+  @live %{source: "live", page: "Home", window: %{width: 1440, height: 900}, appearance: "light"}
+  @fixture %{source: "fixture", fixture: "macos/Tests/Fixtures/director-app", page: "Inbox", window: %{width: 2560, height: 1440}, appearance: "dark"}
+  @outcome %{id: "c1", kind: "outcome", statement: "The decision is stored.", proof: "test"}
 
-    groom!(issue.id, [outcome])
-    refute Selection.user_walkthrough?(issue)
-    assert {false, "the ticket's plan has no QA check"} = Selection.live(issue, @live_server, @server_change)
+  defp qa_check(id, statement, setting) do
+    check = %{id: id, kind: "qa", statement: statement, proof: "qa", action: "Open it", expect: "It shows"}
+    if setting, do: Map.put(check, :setting, setting), else: check
+  end
 
-    groom!(issue.id, [outcome, plain])
+  test "a QA check QA walks that is set to the live server makes the pass live, whatever its words", %{issue: issue} do
+    groom!(issue.id, [@outcome, qa_check("c2", "The Home screen shows the decision after the move.", @live)])
     assert Selection.user_walkthrough?(%{issue | description: nil})
-    assert {false, "no QA check of the plan names `Director`"} = Selection.live(issue, @live_server, @server_change)
-    assert {true, "the PR changes the server and the plan has a QA check"} = Selection.live(issue, %{@live_server | walkthrough_mentions: []}, @server_change)
+    assert {true, "the plan's QA check c2 is set to the live server"} = Selection.live(issue)
 
-    groom!(issue.id, [outcome, walk, plain])
+    groom!(issue.id, [@outcome, qa_check("c2", "The Home screen moves.", @live), qa_check("c3", "The list moves.", @fixture), qa_check("c4", "It stays.", @live)])
+    assert {true, "the plan's QA checks c2, c4 are set to the live server"} = Selection.live(issue)
+  end
 
-    assert {true, "the PR changes the server and a QA check of the plan names `Director`"} =
-             Selection.live(issue, @live_server, @server_change)
+  test "no word in a step makes a pass live: QA checks set to a fixture read fixtures only", %{issue: issue} do
+    groom!(issue.id, [@outcome, qa_check("c2", "In the Director's Inbox, press Decide.", @fixture)])
+    assert {false, "no QA check of the plan that QA walks is set to the live server"} = Selection.live(issue)
+
+    # A ticket with no plan, whatever its walkthrough names, gets fixtures only.
+    other = %{issue | id: issue.id <> "-ungroomed"}
+    assert {false, "the ticket has no plan, so no QA check is set to the live server"} = Selection.live(other)
+  end
+
+  test "a live QA check that QA no longer walks, waived or proved by a recorded test, does not make the pass live", %{issue: issue} do
+    groom!(issue.id, [@outcome, qa_check("c2", "The Home screen moves.", @live), qa_check("c3", "The list moves.", @live)])
+    assert {true, "the plan's QA checks c2, c3 are set to the live server"} = Selection.live(issue)
 
     proof = %{check_id: "c2", by: "test", test: "test/director_test.exs"}
     {:ok, _event} = SymphonyElixir.TicketChecks.prove("repo-a", issue.id, proof, actor: {:agent, "run-1", "implementation"})
-    assert {false, "no QA check of the plan names `Director`"} = Selection.live(issue, @live_server, @server_change)
+    assert {true, "the plan's QA check c3 is set to the live server"} = Selection.live(issue)
 
-    proof = %{check_id: "c3", by: "test", test: "test/status_test.exs"}
-    {:ok, _event} = SymphonyElixir.TicketChecks.prove("repo-a", issue.id, proof, actor: {:agent, "run-1", "implementation"})
-
-    assert {false, "a test recorded on the ticket proves every QA check of the plan"} =
-             Selection.live(issue, @live_server, @server_change)
+    {:ok, _event} = SymphonyElixir.TicketChecks.waive("repo-a", issue.id, "c3", "Covered elsewhere.")
+    assert {false, "no QA check of the plan that QA walks is set to the live server"} = Selection.live(issue)
   end
 
-  defp record_proof!(issue_id, step) do
-    payload = %{caption: "step #{step}", proof: %{step: step, test: "test/director_test.exs"}}
-    {:ok, _event} = TicketEvents.record("repo-a", issue_id, "evidence", payload, actor: {:agent, "run-1", "implementation"})
+  test "a plan whose QA checks carry no setting reads fixtures only", %{issue: issue} do
+    groom!(issue.id, [@outcome, qa_check("c2", "The Director shows the decision.", nil)])
+    assert Selection.user_walkthrough?(issue)
+    assert {false, "no QA check of the plan that QA walks is set to the live server"} = Selection.live(issue)
+
+    groom!(issue.id, [@outcome])
+    refute Selection.user_walkthrough?(issue)
+    assert {false, "no QA check of the plan that QA walks is set to the live server"} = Selection.live(issue)
   end
 
-  test "a Director step no event proves asks for the live server, whatever the description's Proved by: line says", %{issue: issue} do
-    assert {true, "the PR changes the server and the `## User walkthrough` names `Director`"} =
-             Selection.live(issue, @live_server, @server_change)
+  test "the labels override the plan, and qa:fixture wins over qa:live", %{issue: issue} do
+    assert {true, "the issue has the `qa:live` label"} = Selection.live(%{issue | labels: ["qa:live"]})
+
+    groom!(issue.id, [@outcome, qa_check("c2", "The Home screen moves.", @live)])
+    assert {false, "the issue has the `qa:fixture` label"} = Selection.live(%{issue | labels: ["qa:live", "qa:fixture"]})
   end
 
-  test "a Director step a recorded test proves is not QA's to walk, so it asks for no live server", %{issue: issue} do
-    record_proof!(issue.id, 1)
-
-    # A recorded proof is complete in a repo with no proof check: QA does not walk the step.
-    assert {false, "no `## User walkthrough` step names `Director`"} = Selection.live(issue, @live_server, @server_change)
-  end
-
-  test "a recorded proof of every step leaves QA nothing to walk live", %{issue: issue} do
-    record_proof!(issue.id, 1)
-    record_proof!(issue.id, 2)
-
-    assert {false, "a test recorded on the ticket proves every `## User walkthrough` step"} =
-             Selection.live(issue, %{@live_server | walkthrough_mentions: []}, @server_change)
-  end
-
-  test "a walkthrough with no numbered step is read whole", %{issue: issue} do
-    issue = %{issue | description: "## User walkthrough\n\nOpen the Director and look around.\n"}
-    assert {true, _why} = Selection.live(issue, @live_server, @server_change)
-  end
-
-  test "the labels override the diff, and qa:fixture wins over qa:live", %{issue: issue} do
-    assert {true, "the issue has the `qa:live` label"} = Selection.live(%{issue | labels: ["qa:live"]}, @live_server, [])
-
-    assert {false, "the issue has the `qa:fixture` label"} =
-             Selection.live(%{issue | labels: ["qa:live", "qa:fixture"]}, @live_server, @server_change)
-  end
-
-  test "a ticket without a walkthrough asks for no live server", %{issue: issue} do
-    assert {false, "the ticket has no `## User walkthrough`"} =
-             Selection.live(%{issue | description: "Directors' notes"}, @live_server, @server_change)
-  end
-
-  test "a server that lists no mentions runs for any walked step", %{issue: issue} do
-    assert {true, "the PR changes the server and the ticket has a `## User walkthrough`"} =
-             Selection.live(issue, %{@live_server | walkthrough_mentions: []}, @server_change)
-  end
-
-  test "a server-only change selects the macos_app playbook whose live server should run", %{issue: issue} do
+  test "a change outside its paths selects the macos_app playbook when the plan sets a QA check on the live server", %{issue: issue} do
     live = %{"start_cmd" => "scripts/qa-server-start.sh", "paths" => ["lib/**"], "walkthrough_mentions" => ["Director"]}
     macos_app = %{"build" => "make", "app" => "A.app", "paths" => ["macos/**"], "live" => live}
     playbooks = %{"cli" => %{"enabled" => false}, "macos_app" => macos_app}
     assert {:ok, settings} = Schema.parse(%{"tracker" => %{"kind" => "memory"}, "auto_review" => %{"playbooks" => playbooks}})
 
+    # The walkthrough names the Director, but no plan sets the server: nothing selects the app.
+    assert {:skip, _reason} = Selection.decide(issue, @server_change, settings.auto_review)
+
+    groom!(issue.id, [@outcome, qa_check("c2", "The Home screen moves.", @live)])
     assert {:run, [%{kind: "macos_app"}]} = Selection.decide(issue, @server_change, settings.auto_review)
     assert {:skip, _reason} = Selection.decide(%{issue | labels: ["qa:fixture"]}, @server_change, settings.auto_review)
   end

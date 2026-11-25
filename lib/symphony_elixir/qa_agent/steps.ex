@@ -1369,7 +1369,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
     walked =
       case state.targets do
         [] -> "- none: no walkthrough step is QA's to walk (`walk` is then empty)"
-        targets -> Enum.map_join(targets, "\n", &"- Step #{&1.number}: #{String.slice(&1.text, 0, 600)}")
+        targets -> Enum.map_join(targets, "\n", &"- Step #{&1.number}: #{String.slice(&1.text, 0, 600)}\n  #{setting_fact(&1)}")
       end
 
     checks = state.job |> Map.get(:proofs, []) |> QaPreCheck.report_checks() |> Enum.map_join("\n", &"- #{&1.name}: #{&1.status}: #{&1.detail}")
@@ -1384,6 +1384,18 @@ defmodule SymphonyElixir.QaAgent.Steps do
     ]
     |> Enum.join("\n")
   end
+
+  # Where the plan walks a step (its check's `setting`, in the fixed shape the Conductor's answer
+  # validates), given as facts the plan's briefs use as they are.
+  defp setting_fact(%{setting: %{source: _source, page: page, window: %{width: width, height: height}, appearance: appearance} = setting}) do
+    "Setting (from the plan; use it as given): " <>
+      Enum.join([source_fact(setting), "page: #{page}", "window: #{width}×#{height}", "appearance: #{appearance}"], "; ")
+  end
+
+  defp setting_fact(_step), do: "Setting: none in the plan; work out where and how to launch, on fixtures."
+
+  defp source_fact(%{source: "live"}), do: "source: live (the live server, `environment: live`)"
+  defp source_fact(%{source: "fixture", fixture: fixture}), do: "source: fixture `#{fixture}` (`environment: fixture`, `api_fixtures: #{fixture}`)"
 
   defp gallery_facts(state) do
     case Keyword.get(state.opts, :qa_driver) && tool(state, "qa_gallery", %{}) do
