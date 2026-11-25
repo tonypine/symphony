@@ -68,8 +68,8 @@ defmodule SymphonyElixir.QaAgent.PlanCheck do
   def needs_shape(_brief), do: {:error, shape_error()}
 
   defp shape_error do
-    "each brief's `needs` must be a list of objects: {\"kind\": \"tool\", \"name\": \"<qa_ tool>\"}, " <>
-      "{\"kind\": \"fixture_page\", \"fixture\": \"<directory>\", \"page\": \"<page>\"} or {\"kind\": \"server\"}"
+    ~s(each brief's `needs` must be a list of objects: {"kind": "tool", "name": "<qa_ tool>"}, ) <>
+      ~s({"kind": "fixture_page", "fixture": "<directory>", "page": "<page>"} or {"kind": "server"})
   end
 
   defp need?(%{"kind" => "tool", "name" => name}), do: text?(name)

@@ -397,7 +397,8 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       File.mkdir_p!(Path.join(ctx.worktree, "macos/Tests/Fixtures/director-app"))
       live_pass = [%{kind: "macos_app", live: true, prompt: "Intro."}]
 
-      assert {:ok, _result} = run(ctx, %{journey: %{source: "the plan", text: "", steps: steps}, playbooks: live_pass}, [], [plan_step(), review()])
+      journey = %{source: "the plan", text: "", steps: steps}
+      assert {:ok, _result} = run(ctx, %{journey: journey, playbooks: live_pass}, [], [plan_step(), review()])
       [plan_turn, _review] = turns()
       refute plan_turn.prompt =~ "marked `unprovable`"
       assert plan_turn.prompt =~ "- The live server: this pass runs it."
@@ -1224,7 +1225,8 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
     test "a step set to the live server on a pass without one is marked from its setting before the plan session, and no session walks it", ctx do
       answers(%{"plan" => [{:write, plan([2])}], "review" => [{:verdict, @pass}]})
 
-      assert {:ok, %{result: result}} = run(ctx, %{journey: %{source: "the plan", text: "", steps: set_live(walkthrough([1, 2]), [1])}})
+      steps = set_live(walkthrough([1, 2]), [1])
+      assert {:ok, %{result: result}} = run(ctx, %{journey: %{source: "the plan", text: "", steps: steps}})
       turns = turns()
       assert Enum.map(turns, & &1.id) == ["plan", "walk_2", "design_check", "review"]
 
@@ -1247,7 +1249,8 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
     test "a pass whose walked steps the setting marks every one walks none, and is no pass with nothing on screen", ctx do
       answers(%{"plan" => [{:write, plan([], %{needs_app: false, gallery: []})}], "review" => [{:verdict, @pass}]})
 
-      assert {:ok, %{result: result}} = run(ctx, %{journey: %{source: "the plan", text: "", steps: set_live(walkthrough([1, 2]), [1, 2])}})
+      steps = set_live(walkthrough([1, 2]), [1, 2])
+      assert {:ok, %{result: result}} = run(ctx, %{journey: %{source: "the plan", text: "", steps: steps}})
       assert Enum.map(turns(), & &1.id) == ["plan", "design_check", "review"]
       refute Map.has_key?(result, :scope)
       assert ["unprovable", "unprovable"] == for(name <- ["Walkthrough step 1 (check c1)", "Walkthrough step 2 (check c2)"], do: marked_step(result, name).status)
@@ -1276,7 +1279,13 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
 
     test "a pass whose plan says none of its walked steps can be done starts no walk session", ctx do
       answers(%{
-        "plan" => [{:write, needs_plan([{1, %{needs: [%{kind: "server"}]}}, {2, %{needs: [%{kind: "fixture_page", fixture: "macos/Tests/Fixtures/absent", page: "Queue"}]}}])}],
+        "plan" => [
+          {:write,
+           needs_plan([
+             {1, %{needs: [%{kind: "server"}]}},
+             {2, %{needs: [%{kind: "fixture_page", fixture: "macos/Tests/Fixtures/absent", page: "Queue"}]}}
+           ])}
+        ],
         "review" => [{:verdict, %{"verdict" => "pass", "summary" => "Nothing was walked."}}]
       })
 

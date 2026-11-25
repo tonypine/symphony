@@ -4,8 +4,9 @@ defmodule SymphonyElixir.QaAgent.PlanCheckTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.Config.SystemSchema
-  alias SymphonyElixir.{QaDriver, TicketEvents}
   alias SymphonyElixir.QaAgent.{PlanCheck, Report, Steps, Verdict}
+  alias SymphonyElixir.QaDriver
+  alias SymphonyElixir.TicketEvents
 
   setup do
     worktree = Path.join(System.tmp_dir!(), "plan-check-#{System.unique_integer([:positive])}")
@@ -53,7 +54,14 @@ defmodule SymphonyElixir.QaAgent.PlanCheckTest do
                ]
              }) == :ok
 
-      for needs <- ["the drag tool", [%{"kind" => "tool"}], [%{"kind" => "tool", "name" => " "}], [%{"kind" => "fixture_page", "fixture" => "f", "page" => 3}], [%{"kind" => "magic"}], ["server"]] do
+      for needs <- [
+            "the drag tool",
+            [%{"kind" => "tool"}],
+            [%{"kind" => "tool", "name" => " "}],
+            [%{"kind" => "fixture_page", "fixture" => "f", "page" => 3}],
+            [%{"kind" => "magic"}],
+            ["server"]
+          ] do
         assert {:error, why} = PlanCheck.needs_shape(%{"needs" => needs})
         assert why =~ "each brief's `needs` must be a list of objects"
       end
