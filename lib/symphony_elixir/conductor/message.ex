@@ -498,7 +498,8 @@ defmodule SymphonyElixir.Conductor.Message do
     # A message that changes what is asked may change the outcomes: its ask is recorded right after.
     # An outcome is dropped only with the reason the turn gave for it.
     drop? = is_binary(Map.get(answered, :reason))
-    opts = [run_id: run_id, idempotency: "plan.written:#{run_id}", new_ask: answer.ask == true, drop_outcomes: drop?]
+    # A new QA check says where it is walked; one it keeps keeps the stored setting (`TicketPlan.write/4`).
+    opts = [run_id: run_id, idempotency: "plan.written:#{run_id}", new_ask: answer.ask == true, drop_outcomes: drop?, qa_setting: true]
 
     with :ok <- added_given(answer, messages),
          {:ok, _event} <- TicketPlan.write(repo_key, issue_id, next, opts),

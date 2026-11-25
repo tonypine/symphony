@@ -47,7 +47,17 @@ defmodule SymphonyElixir.Conductor.Answer do
       pull request's own CI run); a `qa` check also the `action` and what to `expect`, a `ci` check
       may name the one CI check whose passing proves it (`ci_check`, cut to 200), and any check may
       say the app `state` it needs (each cut to 400), the `size` it is walked at (`normal`, `wide`)
-      and a Gallery `story`. A sub-ticket
+      and a Gallery `story`. A `qa` check also says, in fixed shapes read as data, where it is
+      walked, `setting`: `{"source": "fixture" | "live", "fixture": <the repo-relative path of the
+      fixture directory, only with "fixture">, "page": <non-blank, cut to 200>, "window":
+      {"width": .., "height": ..} (whole points within `SymphonyElixir.PlaybookSettings`' window
+      limits), "appearance": <one of `PlaybookSettings.appearances/0`>}`, and the state it is walked
+      on, `walked_on`: 1 to 20 `{"path": <repo-relative path of a seed or fixture file or
+      directory>, "holds": "present" | "added"}` (`added`: the change adds that state). A
+      repo-relative path is not absolute and holds no `~`, `./` or `..`; only its shape is checked.
+      Grooming's answer (`qa_setting: true`) must give both on every `qa` check; any turn's answer
+      that gives one in another shape is refused, with the field's path
+      (`plan.checks[2].setting.appearance`). Other kinds carry neither. A sub-ticket
       holds a `title` (cut to 120) and an `ask` (cut to 4,000), the sibling keys it waits `after`,
       a `repo`, and the `identifier` of a sub-ticket the ticket already has, which is adopted
       instead of created. A check keeps the `id` it gives and is left without one otherwise:
@@ -121,6 +131,7 @@ defmodule SymphonyElixir.Conductor.Answer do
   require Logger
 
   alias SymphonyElixir.Conductor.Facts
+  alias SymphonyElixir.PlaybookSettings
   alias SymphonyElixir.ReviewAgent
   alias SymphonyElixir.TicketPlan
 
@@ -150,6 +161,18 @@ defmodule SymphonyElixir.Conductor.Answer do
   @check_sizes ~w(normal wide)
   @check_statement_max 600
   @check_walk_max 400
+  # A QA check's `setting`: a committed fixture directory or Symphony's live server.
+  @setting_sources ~w(fixture live)
+  @setting_page_max 200
+  # Whether the seed and fixtures hold a state a QA check is walked on (`present`), or the change adds it (`added`).
+  @walked_on_holds ~w(present added)
+  @walked_on_max 20
+  @path_max 300
+  @path_rule ~s[ (not absolute, and no "~", "./" or ".." in it)]
+  @placed_why %{
+    "setting" => "where it is walked: its `source`, `page`, `window` and `appearance`",
+    "walked_on" => "the state it is walked on: each seed or fixture path and what it `holds`"
+  }
   @sub_ticket_ask_max 4_000
   @id_max 20
   @operations ~w(add cancel rewrite stop reorder depend)
@@ -274,7 +297,7 @@ defmodule SymphonyElixir.Conductor.Answer do
   at a junction whose `ticket` route only is read, `plan: true` for the Grooming turn's, whose
   `plan` is read, and `tree: true` for a turn's on a ticket with sub-tickets, whose `done` and
   `tree` are read; `message: true` for a turn's that answers a person's message, `plan: :optional`,
-  `sub_tickets: :kept` or `:ignored`, `new_ticket: true`, `waive: true` and `hold: true` as the module doc says.
+  `sub_tickets: :kept` or `:ignored`, `qa_setting: true` (Grooming's), `new_ticket: true`, `waive: true` and `hold: true` as the module doc says.
   """
   @spec parse(String.t(), keyword()) :: {:ok, t()} | {:error, String.t()}
   def parse(text, opts \\ []) when is_binary(text) do
@@ -291,7 +314,8 @@ defmodule SymphonyElixir.Conductor.Answer do
          {:ok, route} <- route(Map.get(answer, "route"), Keyword.get(opts, :route, false)),
          {:ok, move} <- move(Map.get(answer, "move")),
          asks? = message == true and Map.get(answer, "ask") == true and is_nil(ask_person),
-         {:ok, plan} <- plan(Map.get(answer, "plan"), plan_read(plan_opt, asks?, answer), ask_person, Keyword.get(opts, :sub_tickets, :required)) do
+         read_plan = {Keyword.get(opts, :sub_tickets, :required), Keyword.get(opts, :qa_setting, false)},
+         {:ok, plan} <- plan(Map.get(answer, "plan"), plan_read(plan_opt, asks?, answer), ask_person, read_plan) do
       read = %{instructions: instructions, update: update, refs: refs, ask_person: ask_person, steer: steer, stop: stop, blocks: blocks(Map.get(answer, "blocks"))}
       resume? = message == true and Map.get(answer, "resume") == true and is_nil(ask_person)
       read = read |> Map.merge(%{route: route, move: move, plan: plan, ask: asks?, resume: resume?}) |> Map.merge(extras(answer, opts))
@@ -477,12 +501,12 @@ defmodule SymphonyElixir.Conductor.Answer do
   defp plan(nil, true, nil, _sub_tickets), do: {:error, "the answer holds neither a `plan` nor a question (`ask_person`)"}
   defp plan(plan, :ask, nil, _sub_tickets) when not is_map(plan), do: {:error, "`ask` is true, so the answer must hold the new `plan`"}
 
-  defp plan(%{} = plan, _read, nil, mode) do
+  defp plan(%{} = plan, _read, nil, {mode, qa_setting?}) do
     with {:ok, shape} <- one_of(plan, "shape", @plan_shapes, "plan"),
          layers = plan_layers(Map.get(plan, "layers")),
          {:ok, summary} <- required_text(plan, "summary", @plan_summary_max, "plan"),
          {:ok, text} <- required_text(plan, "text", @plan_text_max, "plan"),
-         {:ok, checks} <- entries(Map.get(plan, "checks"), "plan.checks", TicketPlan.max_checks(), &check/2),
+         {:ok, checks} <- entries(Map.get(plan, "checks"), "plan.checks", TicketPlan.max_checks(), &check(&1, &2, qa_setting?)),
          :ok <- with_outcome(checks),
          {:ok, size} <- plan_size(Map.get(plan, "size")),
          {:ok, sub_tickets} <- sub_tickets(Map.get(plan, "sub_tickets"), shape, mode) do
@@ -510,14 +534,16 @@ defmodule SymphonyElixir.Conductor.Answer do
 
   defp plan_size(_size), do: {:error, "`plan.size` must hold `tokens` and `runs`, both whole numbers"}
 
-  defp check(%{} = check, place) do
+  defp check(%{} = check, place, qa_setting?) do
     where = "plan.checks[#{place}]"
 
     with {:ok, kind} <- one_of(check, "kind", @check_kinds, where),
          {:ok, statement} <- required_text(check, "statement", @check_statement_max, where),
          {:ok, proof} <- one_of(check, "proof", @check_proofs, where),
-         :ok <- walkable(check, kind, where) do
+         :ok <- walkable(check, kind, where),
+         {:ok, placed} <- placed(check, kind, where, qa_setting?) do
       %{kind: kind, statement: statement, proof: proof}
+      |> Map.merge(placed)
       |> put_text(:id, check, @id_max, where)
       |> put_text(:state, check, @check_walk_max, where)
       |> put_text(:action, check, @check_walk_max, where)
@@ -529,7 +555,7 @@ defmodule SymphonyElixir.Conductor.Answer do
     end
   end
 
-  defp check(_check, place), do: {:error, "`plan.checks[#{place}]` must be an object"}
+  defp check(_check, place, _qa_setting?), do: {:error, "`plan.checks[#{place}]` must be an object"}
 
   # A QA check is walked: it says what to do and what to expect.
   defp walkable(check, "qa", where) do
@@ -540,6 +566,109 @@ defmodule SymphonyElixir.Conductor.Answer do
   end
 
   defp walkable(_check, _kind, _where), do: :ok
+
+  # Where a QA check is walked (`setting`) and the state it is walked on (`walked_on`), in fixed
+  # shapes a reader takes as data. Grooming (`qa_setting?`) must give both; a later turn may leave
+  # them out of a check it keeps (`SymphonyElixir.TicketPlan.write/4` carries the stored ones).
+  # A field given is checked whatever the turn, and other kinds carry neither.
+  defp placed(check, "qa", where, qa_setting?) do
+    with {:ok, setting} <- given(check, "setting", where, qa_setting?, &setting/2),
+         {:ok, walked_on} <- given(check, "walked_on", where, qa_setting?, &walked_on/2) do
+      {:ok, %{} |> put_present(:setting, setting) |> put_present(:walked_on, walked_on)}
+    end
+  end
+
+  defp placed(_check, _kind, _where, _qa_setting?), do: {:ok, %{}}
+
+  defp given(check, field, where, required?, read) do
+    case Map.get(check, field) do
+      nil when required? -> {:error, "`#{where}.#{field}` is missing: a `qa` check says #{@placed_why[field]}"}
+      nil -> {:ok, nil}
+      value -> read.(value, "#{where}.#{field}")
+    end
+  end
+
+  defp setting(%{} = setting, where) do
+    with {:ok, source} <- one_of(setting, "source", @setting_sources, where),
+         {:ok, fixture} <- fixture(source, Map.get(setting, "fixture"), where),
+         {:ok, page} <- required_text(setting, "page", @setting_page_max, where),
+         {:ok, window} <- window(Map.get(setting, "window"), "#{where}.window"),
+         {:ok, appearance} <- one_of(setting, "appearance", PlaybookSettings.appearances(), where) do
+      {:ok, put_present(%{source: source, page: page, window: window, appearance: appearance}, :fixture, fixture)}
+    end
+  end
+
+  defp setting(_setting, where), do: {:error, "`#{where}` must be an object: its `source`, `page`, `window` and `appearance`"}
+
+  defp fixture("live", nil, _where), do: {:ok, nil}
+  defp fixture("live", _fixture, where), do: {:error, ~s[`#{where}.fixture` must be left out: the `source` is "live", a server and no fixture]}
+
+  defp fixture("fixture", fixture, where) do
+    case repo_path(fixture) do
+      {:ok, path} -> {:ok, path}
+      :error -> {:error, ~s[`#{where}.fixture` must be the repo-relative path of the fixture directory, since the `source` is "fixture"] <> @path_rule}
+    end
+  end
+
+  defp window(%{"width" => width, "height" => height} = window, where) when map_size(window) == 2 do
+    case Enum.find([{"width", width}, {"height", height}], fn {_side, points} -> not window_points?(points) end) do
+      nil ->
+        {:ok, %{width: width, height: height}}
+
+      {side, _points} ->
+        {:error, "`#{where}.#{side}` must be a whole number of points from #{PlaybookSettings.min_window_size()} to #{PlaybookSettings.max_window_size()}"}
+    end
+  end
+
+  defp window(_window, where), do: {:error, "`#{where}` must be an object holding the `width` and the `height`, in points"}
+
+  defp window_points?(points), do: is_integer(points) and points >= PlaybookSettings.min_window_size() and points <= PlaybookSettings.max_window_size()
+
+  defp walked_on([_ | _] = entries, where) when length(entries) > @walked_on_max,
+    do: {:error, "`#{where}` lists #{length(entries)} entries, and a check holds at most #{@walked_on_max}"}
+
+  defp walked_on([_ | _] = entries, where) do
+    entries
+    |> Enum.with_index(1)
+    |> Enum.reduce_while({:ok, []}, fn {entry, place}, {:ok, acc} ->
+      case walked_on_entry(entry, "#{where}[#{place}]") do
+        {:ok, read} -> {:cont, {:ok, [read | acc]}}
+        {:error, _why} = refused -> {:halt, refused}
+      end
+    end)
+    |> then(fn
+      {:ok, read} -> {:ok, Enum.reverse(read)}
+      refused -> refused
+    end)
+  end
+
+  defp walked_on(_entries, where), do: {:error, "`#{where}` must list at least one `{\"path\": ..., \"holds\": ...}`: the state the check is walked on"}
+
+  defp walked_on_entry(%{} = entry, where) do
+    with {:ok, holds} <- one_of(entry, "holds", @walked_on_holds, where) do
+      case repo_path(Map.get(entry, "path")) do
+        {:ok, path} -> {:ok, %{path: path, holds: holds}}
+        :error -> {:error, "`#{where}.path` must be the repo-relative path of a seed or fixture file or directory" <> @path_rule}
+      end
+    end
+  end
+
+  defp walked_on_entry(_entry, where), do: {:error, "`#{where}` must be an object: its `path` and what it `holds`"}
+
+  # A path inside the repository, as written from its root: never absolute, never `~`, `./` or `..`.
+  defp repo_path(path) when is_binary(path) do
+    path = String.trim(path)
+    segments = String.split(path, "/")
+
+    cond do
+      path == "" or String.length(path) > @path_max -> :error
+      String.starts_with?(path, ["/", "~", "./", "\\"]) -> :error
+      ".." in segments or String.contains?(path, "\\") -> :error
+      true -> {:ok, path}
+    end
+  end
+
+  defp repo_path(_path), do: :error
 
   # Outside Grooming the sub-tickets are Symphony's to keep: none need be listed, and the ones
   # listed are read as what the turn wants of them (`kept_entry/2`).

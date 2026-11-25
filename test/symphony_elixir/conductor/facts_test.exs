@@ -534,7 +534,17 @@ defmodule SymphonyElixir.Conductor.FactsTest do
     setup ctx do
       checks = [
         %{id: "c1", kind: "outcome", statement: "The button signs in.", proof: "test"},
-        %{id: "c2", kind: "qa", statement: "The login works.", proof: "qa", state: "Signed out", action: "Click Login", expect: "The home screen"},
+        %{
+          id: "c2",
+          kind: "qa",
+          statement: "The login works.",
+          proof: "qa",
+          state: "Signed out",
+          action: "Click Login",
+          expect: "The home screen",
+          setting: %{source: "live", page: "Login", window: %{width: 1440, height: 900}, appearance: "dark"},
+          walked_on: [%{path: "priv/qa_seed/symphony/seed.json", holds: "present"}]
+        },
         %{id: "c3", kind: "outcome", statement: "The export matches.", proof: "attached"}
       ]
 
@@ -560,7 +570,16 @@ defmodule SymphonyElixir.Conductor.FactsTest do
 
       assert facts.checks == [
                %{id: "c1", kind: "outcome", statement: "The button signs in.", proof: "test", state: "proved", proved_by: %{by: "test", test: "login_test › signs in", event_id: proof.id}},
-               %{id: "c2", kind: "qa", statement: "The login works.", proof: "qa", state: "open"},
+               # A turn that writes the checks again sees where the QA check is walked and on what state.
+               %{
+                 id: "c2",
+                 kind: "qa",
+                 statement: "The login works.",
+                 proof: "qa",
+                 state: "open",
+                 setting: %{source: "live", page: "Login", window: %{width: 1440, height: 900}, appearance: "dark"},
+                 walked_on: [%{path: "priv/qa_seed/symphony/seed.json", holds: "present"}]
+               },
                %{id: "c3", kind: "outcome", statement: "The export matches.", proof: "attached", state: "waived", waived: "No export exists to attach."}
              ]
 

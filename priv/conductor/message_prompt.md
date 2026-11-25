@@ -148,7 +148,10 @@ Write your answer as one JSON object and nothing else:
       {"id": "<the id of a check that stands, omitted for a new one>", "kind": "outcome" or "evidence",
        "statement": "<at most 600 characters>", "proof": "test" or "qa" or "design" or "attached" or "ci", "ci_check": "<only for proof ci: the one CI check that proves it, when one does>"},
       {"id": "<as above>", "kind": "qa", "statement": "<what is checked>", "proof": "qa" or "design",
-       "state": "<the app state it needs>", "action": "<what the person does>", "expect": "<what they see>", "size": "normal" or "wide"}
+       "state": "<the app state it needs>", "action": "<what the person does>", "expect": "<what they see>", "size": "normal" or "wide",
+       "setting": {"source": "fixture" or "live", "fixture": "<only with fixture: the repo-relative fixture directory>", "page": "<the page it is walked on>",
+                   "window": {"width": <whole points, 320 to 8192>, "height": <whole points, 320 to 8192>}, "appearance": "light" or "dark"},
+       "walked_on": [{"path": "<repo-relative path of a seed or fixture file or directory>", "holds": "present" or "added"}]}
     ],
     "size": {"tokens": <whole number>, "runs": <whole number>}
   },
@@ -165,6 +168,10 @@ Write your answer as one JSON object and nothing else:
     "options": [{"label": "<short>", "effect": "<what picking it does>", "recommended": true, "action": "continue"},
                 {"label": "<short>", "effect": "<what picking it does>", "recommended": false, "action": "cancel"}]}
 }
+
+A QA check you keep by its `id` keeps the `setting` and `walked_on` the facts show on it when you
+leave them out; a new QA check gives both, in the shapes above (a repo-relative path is never
+absolute and holds no `~`, `./` or `..`), or Symphony refuses the plan.
 
 `new_ticket` is read only on a finished ticket, when `rules` says so. Leave out, or set to null,
 every field you do not use.

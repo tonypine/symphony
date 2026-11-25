@@ -92,6 +92,10 @@ defmodule SymphonyElixir.PlaybookSettings do
   @spec max_window_size() :: pos_integer()
   def max_window_size, do: @max_window_size
 
+  @doc "The appearances a playbook's QA target, and a launch, may name."
+  @spec appearances() :: [String.t()]
+  def appearances, do: @appearances
+
   @doc "The least points a window size setting, and a `qa_resize_window` size, takes."
   @spec min_window_size() :: pos_integer()
   def min_window_size, do: @min_window_size

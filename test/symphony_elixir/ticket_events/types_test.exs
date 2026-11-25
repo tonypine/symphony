@@ -463,6 +463,37 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       assert {:ok, %{checks: [%{id: "c2", kind: "qa", size: "wide", story: "plan-panel/folded", action: "Fold it"}]}} =
                Types.validate("plan.written", %{@plan | checks: [wide]}, :machine, nil)
 
+      # Where a QA check is walked and on what state, stored as data; a check from before them still reads.
+      placed =
+        Map.merge(qa, %{
+          "setting" => %{
+            "source" => "fixture",
+            "fixture" => "macos/Tests/Fixtures/director-app",
+            "page" => "Tickets",
+            "window" => %{"width" => 2560, "height" => 1440},
+            "appearance" => "dark"
+          },
+          "walked_on" => [%{"path" => "priv/qa_seed/symphony/seed.json", "holds" => "added"}]
+        })
+
+      assert {:ok, %{checks: [%{setting: setting, walked_on: walked_on}]}} =
+               Types.validate("plan.written", %{@plan | checks: [placed]}, :machine, nil)
+
+      assert %{source: "fixture", window: %{width: 2560, height: 1440}, appearance: "dark"} = setting
+      assert walked_on == [%{path: "priv/qa_seed/symphony/seed.json", holds: "added"}]
+
+      assert {:ok, %{checks: [old]}} = Types.validate("plan.written", %{@plan | checks: [qa]}, :machine, nil)
+      refute Map.has_key?(old, :setting) or Map.has_key?(old, :walked_on)
+
+      for bad <- [
+            put_in(placed, ["setting", "source"], "staging"),
+            put_in(placed, ["setting", "appearance"], "sepia"),
+            Map.update!(placed, "setting", &Map.delete(&1, "page")),
+            Map.put(placed, "walked_on", [%{"path" => "priv/qa_seed", "holds" => "maybe"}])
+          ] do
+        assert {:error, {:invalid_payload, _fields}} = Types.validate("plan.written", %{@plan | checks: [bad]}, :machine, nil)
+      end
+
       sub_ticket = %{key: "s1", title: "The model", ask: "Build the model.", after: [], repo: "symphony", identifier: "TP-2"}
       split = @plan |> Map.merge(%{shape: "split", by: "recalibration"}) |> Map.put(:sub_tickets, [sub_ticket, %{key: "s2", title: "The view", ask: "Draw it.", after: ["s1"]}])
       assert {:ok, %{sub_tickets: [^sub_ticket, %{key: "s2", after: ["s1"]}]}} = Types.validate("plan.written", split, :machine, nil)
