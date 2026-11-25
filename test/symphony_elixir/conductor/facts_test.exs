@@ -473,7 +473,13 @@ defmodule SymphonyElixir.Conductor.FactsTest do
       second = ticket.("TWO", "Done", %{identifier: middle.issue_identifier})
       link = &%{id: &1.issue_id, identifier: &1.issue_identifier, state: "Done"}
       # TWO's record names MID back as its sub-ticket: the walk does not go round.
-      sub_issues = %{root => [link.(middle)], middle => [link.(first), link.(second)], first => [], second => [link.(middle)]}
+      sub_issues = %{
+        root => [link.(middle)],
+        middle => [link.(first), link.(second)],
+        first => [],
+        second => [link.(middle)]
+      }
+
       for {record, subs} <- sub_issues, do: :ok = RunStore.put_ticket_state(Map.put(record, :sub_issues, subs))
       for record <- [root, middle, first, second], do: {:ok, _plan} = TicketPlan.write(ctx.repo, record.issue_id, plan())
 
@@ -508,7 +514,12 @@ defmodule SymphonyElixir.Conductor.FactsTest do
                checks: [check.(%{by: "test", test: "test/slot_test.exs", event_id: by_test.id})]
              }
 
-      assert %{identifier: _, pull_request: "merged", checks: [%{state: "proved", proved_by: %{by: "ci", details: "make-all passed.", event_id: by_ci_id}}]} = two
+      assert %{
+               identifier: _,
+               pull_request: "merged",
+               checks: [%{state: "proved", proved_by: %{by: "ci", details: "make-all passed.", event_id: by_ci_id}}]
+             } = two
+
       assert by_ci_id == by_ci.id
       refute Map.has_key?(two, :asks)
       # MID is already on the path: it is listed under TWO, and not entered again.

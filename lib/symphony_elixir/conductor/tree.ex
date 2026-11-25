@@ -1014,7 +1014,9 @@ defmodule SymphonyElixir.Conductor.Tree do
   end
 
   defp open_now(issue_id, repo_key, opts) do
-    with {:ok, fresh} <- read_one(issue_id, opts), do: {:ok, Issue.open_sub_issues(fresh, terminal_states(repo_key)), fresh}
+    with {:ok, fresh} <- read_one(issue_id, opts) do
+      {:ok, Issue.open_sub_issues(fresh, terminal_states(repo_key)), fresh}
+    end
   end
 
   defp done(repo_key, %Issue{id: issue_id} = issue, %Issue{} = fresh, opts) do
