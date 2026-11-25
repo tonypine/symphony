@@ -1815,8 +1815,9 @@ With `every_qa_pass` or `live_qa_pass` the server never starts on the Symphony h
 `verification.enabled: true`. With `symphony_host`, `verification.enabled` also starts it for every
 agent run (see [`verification`](#verification)). Without what it needs the `web` playbook is off,
 and the `QA selection` log line says which one is missing: `` needs `verification.dev_server` ``
-without a start command, `` needs `verification.dev_server.runs: symphony_host` `` with a rule that
-runs it on the QA VM, and `` needs `verification.enabled` `` with one but verification off.
+without a start command, `` needs `verification.enabled` `` with verification off, and
+`` needs `verification.dev_server.runs: symphony_host` `` with verification on and a rule that runs
+it on the QA VM.
 
 The QA agent's own sandbox cannot run a database such as Postgres: it lets a process create a
 System V shared memory segment but not look it up again or remove it, so `initdb` fails with

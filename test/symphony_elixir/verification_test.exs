@@ -892,6 +892,7 @@ defmodule SymphonyElixir.VerificationTest do
 
       assert Verification.selection_opts(settings) == [
                dev_server?: false,
+               verification_enabled?: false,
                dev_server_command?: true,
                dev_server_runs: "symphony_host"
              ]

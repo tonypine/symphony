@@ -161,7 +161,8 @@ defmodule SymphonyElixir.QaAgent.Selection do
   @doc """
   Selects playbooks for `issue` given the PR's changed paths and `auto_review` config.
   `dev_server?: true` says `verification` is on and `verification.dev_server` is configured to run
-  on this host, which the `web` playbook needs; `dev_server_command?: true` says
+  on this host, which the `web` playbook needs (`verification_enabled?:` says whether `verification`
+  is on, so the reason names the switch or the `runs` rule); `dev_server_command?: true` says
   `verification.dev_server` is configured, which is all the `macos_app` playbook needs when
   `dev_server_runs:` (its `runs` rule) runs it on the QA host. The `android_app` playbook
   reads `auto_review.android.avd`.
@@ -270,6 +271,7 @@ defmodule SymphonyElixir.QaAgent.Selection do
 
     host = %{
       dev_server?: dev_server?,
+      verification_enabled?: Keyword.get(opts, :verification_enabled?, dev_server?),
       dev_server_command?: Keyword.get(opts, :dev_server_command?, dev_server?),
       dev_server_runs: Keyword.get(opts, :dev_server_runs, "symphony_host"),
       android_avd?: android_avd?(auto_review)
@@ -357,16 +359,16 @@ defmodule SymphonyElixir.QaAgent.Selection do
 
   # A playbook that drives the project's server needs one configured: the `web` one on this host,
   # which `verification.enabled` and `runs: symphony_host` turn on, and the `macos_app` one with
-  # `runs: every_qa_pass` on the QA host, which reads only `verification.dev_server`. A `web`
-  # playbook whose server runs on the QA host names the rule, not `verification.enabled`.
+  # `runs: every_qa_pass` on the QA host, which reads only `verification.dev_server`. With
+  # verification on, a `web` playbook whose server runs on the QA host names the rule instead.
   defp missing_dev_server(kind, _override, host) do
     cond do
       not dev_server?(kind, host) -> []
       not host.dev_server_command? -> ["verification.dev_server"]
       kind == "macos_app" -> []
       host.dev_server? -> []
-      host.dev_server_runs != "symphony_host" -> ["verification.dev_server.runs: symphony_host"]
-      true -> ["verification.enabled"]
+      not host.verification_enabled? -> ["verification.enabled"]
+      true -> ["verification.dev_server.runs: symphony_host"]
     end
   end
 

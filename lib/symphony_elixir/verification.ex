@@ -70,6 +70,7 @@ defmodule SymphonyElixir.Verification do
   def selection_opts(%Schema{} = settings),
     do: [
       dev_server?: dev_server_configured?(settings),
+      verification_enabled?: enabled?(settings),
       dev_server_command?: dev_server_command_configured?(settings),
       dev_server_runs: runs(settings)
     ]
