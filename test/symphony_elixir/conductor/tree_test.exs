@@ -1125,8 +1125,11 @@ defmodule SymphonyElixir.Conductor.TreeTest do
       parent = waiting!(ctx, subs, entries)
 
       for %{id: id, identifier: identifier, state: state} <- tl(subs) do
-        :ok = RunStore.put_ticket_state(%{repo_key: "default", issue_id: id, issue_identifier: identifier, phase: state, title: identifier})
-        {:ok, _ask} = TicketPlan.record_ask("default", id, "The first ask of #{identifier}.", source: "parent", from: ctx.issue.identifier)
+        record = %{repo_key: "default", issue_id: id, issue_identifier: identifier, phase: state, title: identifier}
+        :ok = RunStore.put_ticket_state(record)
+
+        ask = "The first ask of #{identifier}."
+        {:ok, _ask} = TicketPlan.record_ask("default", id, ask, source: "parent", from: ctx.issue.identifier)
       end
 
       test = self()
@@ -1440,7 +1443,12 @@ defmodule SymphonyElixir.Conductor.TreeTest do
     end
 
     test "a plan whose list says nothing new adds no operation, and an answer without a plan is left as it is", ctx do
-      answer = %{tree: [], plan: %{reason: "Same.", sub_tickets: [%{key: "s1", identifier: "MT-2", ask: "The first ask of MT-2.", after: []}, %{key: "s2", identifier: "MT-1", after: ["MT-2"]}]}}
+      sub_tickets = [
+        %{key: "s1", identifier: "MT-2", ask: "The first ask of MT-2.", after: []},
+        %{key: "s2", identifier: "MT-1", after: ["MT-2"]}
+      ]
+
+      answer = %{tree: [], plan: %{reason: "Same.", sub_tickets: sub_tickets}}
       assert %{tree: [], plan: plan} = Tree.intent(answer, ctx.issue_id)
       refute Map.has_key?(plan, :sub_tickets)
       assert Tree.intent(%{tree: [], plan: %{reason: "Same."}}, ctx.issue_id) == %{tree: [], plan: %{reason: "Same."}}

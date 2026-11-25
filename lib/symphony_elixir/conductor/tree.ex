@@ -905,7 +905,8 @@ defmodule SymphonyElixir.Conductor.Tree do
     if length(names) < 2 or (not new? and queued == names) do
       []
     else
-      for [ticket, before] <- names |> Enum.chunk_every(2, 1, :discard) |> Enum.reverse(), do: %{op: "reorder", ticket: ticket, before: before, reason: reason}
+      for [ticket, before] <- names |> Enum.chunk_every(2, 1, :discard) |> Enum.reverse(),
+          do: %{op: "reorder", ticket: ticket, before: before, reason: reason}
     end
   end
 
@@ -939,25 +940,33 @@ defmodule SymphonyElixir.Conductor.Tree do
   def apply(%{done: done, tree: operations}, %{junction: "final_check", issue: %Issue{id: issue_id} = issue} = ctx, opts) do
     {adds, others} = Enum.split_with(operations, &(&1.op == "add"))
     carried = carry_out(others, @recalibration, ctx, opts)
-    events = Facts.events(issue_id)
-    made = rounds(events)
-    titles = Enum.map_join(adds, "; ", & &1.title)
 
     cond do
       adds == [] and done -> pass(ctx.repo_key, issue, opts)
       adds == [] and carried > 0 -> :ok
       adds == [] -> {:ask, :stuck, stuck_question(issue_id, "it answered that the ticket is not done, and added no sub-ticket")}
-      made >= round_limit(events, ctx.conductor) -> {:ask, :rounds, rounds_question(made, titles)}
-      carry_out(adds, @round, ctx, opts) > 0 -> :ok
-      # A bound refused them and the person was not asked about it yet: that question comes first.
-      limit_ask(issue_id) != :ok -> :ok
-      true -> {:ask, :stuck, stuck_question(issue_id, "none of the sub-tickets it wanted to add could be created (#{titles})")}
+      true -> next_round(adds, ctx, opts)
     end
   end
 
   def apply(%{tree: operations}, ctx, opts) do
     _carried = carry_out(operations, @recalibration, ctx, opts)
     :ok
+  end
+
+  # A final check's adds make the next round, within the rounds' limit.
+  defp next_round(adds, %{issue: %Issue{id: issue_id}} = ctx, opts) do
+    events = Facts.events(issue_id)
+    made = rounds(events)
+    titles = Enum.map_join(adds, "; ", & &1.title)
+
+    cond do
+      made >= round_limit(events, ctx.conductor) -> {:ask, :rounds, rounds_question(made, titles)}
+      carry_out(adds, @round, ctx, opts) > 0 -> :ok
+      # A bound refused them and the person was not asked about it yet: that question comes first.
+      limit_ask(issue_id) != :ok -> :ok
+      true -> {:ask, :stuck, stuck_question(issue_id, "none of the sub-tickets it wanted to add could be created (#{titles})")}
+    end
   end
 
   @doc """
@@ -981,7 +990,7 @@ defmodule SymphonyElixir.Conductor.Tree do
   def not_done(issue_id, run_id) do
     for %{type: "note", idempotency: key, payload: %{text: text}} <- Facts.events(issue_id),
         is_binary(key) and String.starts_with?(key, @try_key) and String.contains?(key, ":#{run_id}:"),
-        do: String.replace_prefix(text, "Symphony did not carry out part of the Conductor's answer: ", "")
+        do: text |> String.replace_prefix("Symphony did not carry out part of the Conductor's answer: ", "") |> String.replace_suffix(".", "")
   end
 
   # The ticket's sub-tickets are read again first: one added since the turn read them (no other
@@ -1238,8 +1247,11 @@ defmodule SymphonyElixir.Conductor.Tree do
   # this ticket's and has not ended.
   defp open_child(name, acc, %{terminal: terminal, repo_key: repo_key} = ctx) do
     case lookup(name, acc, ctx) do
-      :error -> {:error, "#{name} is not a sub-ticket of this ticket"}
-      {:ok, %{id: id, identifier: identifier, state: state}} -> open_child(%{id: id, identifier: identifier, repo: recorded_repo(id) || repo_key}, state, terminal)
+      :error ->
+        {:error, "#{name} is not a sub-ticket of this ticket"}
+
+      {:ok, %{id: id, identifier: identifier, state: state}} ->
+        open_child(%{id: id, identifier: identifier, repo: recorded_repo(id) || repo_key}, state, terminal)
     end
   end
 
@@ -1470,16 +1482,8 @@ defmodule SymphonyElixir.Conductor.Tree do
   @spec checked(String.t(), Issue.t(), map()) :: :ok | {:ask, :stuck, map()}
   def checked(repo_key, %Issue{id: issue_id}, %{held: held, rounds: before, exit: exit} = left) do
     events = Facts.events(issue_id)
-    # A pass that found a sub-ticket added meanwhile settled the check: the ticket waits on that one.
-    since = Map.get(left, :at)
-    since? = &(is_nil(since) or DateTime.compare(&1.at, since) != :lt)
-    waits? = Enum.any?(events, &(keyed?(&1, @waits_key) and since?.(&1)))
 
-    done? = match?(%{phase: @done}, RunStore.get_ticket_state(issue_id))
-    # A check that changed the open sub-tickets (one added meanwhile) concluded too: it acted on them.
-    changed? = Enum.any?(TicketPlan.versions(issue_id), &(String.starts_with?(Map.get(&1, :reason) || "", @recalibration) and since?.(&1)))
-
-    if held == :held or waits? or done? or changed? or rounds(events) > before do
+    if held == :held or concluded?(issue_id, events, Map.get(left, :at)) or rounds(events) > before do
       :ok
     else
       try = tries(events) + 1
@@ -1492,6 +1496,16 @@ defmodule SymphonyElixir.Conductor.Tree do
         {:ask, :stuck, stuck_question(issue_id, "the turn failed or its answer could not be read, #{try} times in a row")}
       end
     end
+  end
+
+  # A pass that found a sub-ticket added meanwhile settled the check (the ticket waits on that
+  # one), and so did a check that closed the ticket or changed its open sub-tickets.
+  defp concluded?(issue_id, events, since) do
+    since? = &(is_nil(since) or DateTime.compare(&1.at, since) != :lt)
+
+    Enum.any?(events, &(keyed?(&1, @waits_key) and since?.(&1))) or
+      match?(%{phase: @done}, RunStore.get_ticket_state(issue_id)) or
+      Enum.any?(TicketPlan.versions(issue_id), &(String.starts_with?(Map.get(&1, :reason) || "", @recalibration) and since?.(&1)))
   end
 
   defp note(repo_key, issue_id, text, key) do

@@ -285,8 +285,10 @@ defmodule SymphonyElixir.Conductor.Facts do
   @spec turn_tries([Event.t()]) :: [map()]
   def turn_tries(events) when is_list(events) do
     events
-    |> Enum.filter(&match?(%Event{type: "note", idempotency: key} when is_binary(key), &1))
-    |> Enum.filter(fn %Event{idempotency: key} -> Enum.any?(@try_keys, &String.starts_with?(key, &1)) end)
+    |> Enum.filter(fn
+      %Event{type: "note", idempotency: key} when is_binary(key) -> Enum.any?(@try_keys, &String.starts_with?(key, &1))
+      _event -> false
+    end)
     |> Enum.take(-@max_tries)
     |> Enum.map(&%{event_id: &1.id, at: iso8601(&1.at), reason: cut(payload(&1, :text), @text_max)})
   end

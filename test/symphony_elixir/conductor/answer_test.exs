@@ -460,7 +460,9 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
         %{"op" => "stop", "ticket" => "TP-6", "reason" => "It is kept."}
       ]
 
-      log = capture_log(fn -> assert {:ok, %{tree: [%{op: "stop", ticket: "TP-6"}], dropped: dropped}} = tree(%{"tree" => malformed}) end)
+      {result, log} = with_log(fn -> tree(%{"tree" => malformed}) end)
+      assert {:ok, %{tree: [%{op: "stop", ticket: "TP-6"}], dropped: dropped}} = result
+
       assert log =~ "tree[1] was left out"
       assert log =~ "tree[8] was left out"
       refute log =~ "tree[9]"
