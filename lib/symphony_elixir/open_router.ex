@@ -31,7 +31,7 @@ defmodule SymphonyElixir.OpenRouter do
   else. Other providers the stub stands in for (OpenCode Go) build their QA URLs on it.
   """
   @spec qa_base_url(%{optional(String.t()) => String.t()}) :: String.t() | nil
-  def qa_base_url(env \\ System.get_env()) do
+  def qa_base_url(env) do
     with root when is_binary(root) <- Map.get(env, @qa_root_env),
          false <- String.trim(root) == "",
          url when is_binary(url) <- Map.get(env, @qa_url_env),
