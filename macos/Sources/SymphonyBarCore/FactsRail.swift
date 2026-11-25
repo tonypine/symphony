@@ -308,10 +308,7 @@ public struct PullRequestPanelModel: Equatable {
     public var groups: [Group]
     public var accessibilityLabel: String
 
-    /// The panel's line when the ticket has no pull request yet.
-    public static let emptyLine = "No pull request yet: the first run opens one, and its checks appear here."
-
-    /// The panel from `pull_request`; nil for a ticket without one, which shows `emptyLine`.
+    /// The panel from `pull_request`; nil for a ticket without one, which draws no panel (TP-1652).
     public static func build(_ pr: TicketPullRequest?) -> PullRequestPanelModel? {
         guard let pr else { return nil }
         let (state, stateStatus): (String, DesignTokens.Status) = switch pr.state {

@@ -245,6 +245,37 @@ final class LifecycleTests: XCTestCase {
         XCTAssertEqual(LifecycleModel.build(fresh).summary, "No run yet")
     }
 
+    /// TP-1652: an epic waiting on its sub-tickets, with no stage of its own, says only the tokens its Conductor runs
+    /// used: no "Not started yet", no "No run yet", no stage "Not yet"; with no tokens the section is not drawn.
+    func testAnEpicWorkedByItsSubTicketsSaysOnlyItsOwnTokens() {
+        let names = [("coding", "Coding"), ("code_review", "Code Review"), ("qa", "QA"), ("merging", "Merging"), ("done", "Done")]
+        let untouched = names.map { TicketLifecycle.Stage(id: $0.0, name: $0.1, state: .notYet) }
+        let epic = TicketLifecycle(current: nil, stages: untouched, tokens: .init(total: 120_000))
+        let waiting = Situation(kind: .subTickets, cause: "1 of 4 done.")
+        let model = LifecycleModel.build(epic, situation: waiting, conductorTokens: 120_000)
+        XCTAssertTrue(model.tokensOnly)
+        XCTAssertTrue(model.drawn)
+        XCTAssertEqual(model.tokens.total, 120_000)
+        XCTAssertEqual(model.tokens.value, "120K tokens in all")
+        XCTAssertEqual(model.tokens.segments.filter(\.isConductor).map(\.tokens), [120_000])
+
+        let unspent = TicketLifecycle(current: nil, stages: untouched, tokens: .init(total: 0))
+        XCTAssertFalse(LifecycleModel.build(unspent, situation: waiting).drawn)
+
+        // Ended by its sub-tickets, it still has no stage of its own; an ordinary ticket before its first run keeps its section.
+        let done = Situation(kind: .done, cause: "It is done.")
+        XCTAssertTrue(LifecycleModel.build(epic, situation: done, hasSubTickets: true).tokensOnly)
+        XCTAssertFalse(LifecycleModel.build(epic, situation: done).tokensOnly)
+        XCTAssertFalse(LifecycleModel.build(unspent).tokensOnly)
+        XCTAssertTrue(LifecycleModel.build(unspent).drawn)
+
+        // An epic that did work of its own (a stage entered, or one current) draws its stages as any ticket does.
+        var worked = untouched
+        worked[0] = TicketLifecycle.Stage(id: "coding", name: "Coding", state: .passed, visits: 1, runs: 1)
+        XCTAssertFalse(LifecycleModel.build(TicketLifecycle(current: nil, stages: worked, tokens: .init(total: 1)), situation: waiting).tokensOnly)
+        XCTAssertFalse(LifecycleModel.build(TicketLifecycle(current: "coding", stages: untouched, tokens: .init(total: 1)), situation: waiting).tokensOnly)
+    }
+
     func testAStageLineSaysItsWordItsVisitsWhenMoreThanOneAndItsTime() {
         let coding = TicketLifecycle.Stage(id: "coding", name: "Coding", state: .current, visits: 1, timeMs: 120_000)
         XCTAssertEqual(plain(LifecycleModel.stage(of: coding).line), "Now · 2 min so far")

@@ -1610,8 +1610,7 @@ window.CATALOG = (function () {
   function prPanel(p) {
     const ci = p.ci || "running";
     const badgeFor = { passed: ["done", "Checks passing"], running: ["working", "Checks running"], failed: ["problem", "1 check failed"] }[ci];
-    const body = p.noPr ? '<p class="empty-line">No pull request yet: the first run opens one, and its checks appear here.</p>' :
-      '<a class="pr-line" href="#" onclick="return false">' + icon("pr", "pr-glyph") + '<span class="pr-name">PR #812</span><span class="t-secondary">14 files · +412 −88</span>' + badge(badgeFor[0], badgeFor[1], "small") + "</a>" + checksBlock(ci);
+    const body = '<a class="pr-line" href="#" onclick="return false">' + icon("pr", "pr-glyph") + '<span class="pr-name">PR #812</span><span class="t-secondary">14 files · +412 −88</span>' + badge(badgeFor[0], badgeFor[1], "small") + "</a>" + checksBlock(ci);
     return '<section class="facts-group"><h3 class="zone-title">Pull request</h3><div class="panel pr-panel">' + body + "</div></section>";
   }
 
@@ -1853,7 +1852,7 @@ window.CATALOG = (function () {
     {
       title: "Page layout",
       wide: true,
-      args: { chainOpen: "", briefOpen: false, noBrief: false, note: "read", noteDraft: false, decisions: true, page: "ticket", boardPick: "", ident: "TP-1382", title: "Design system catalog as HTML: every Director component and section as stories", role: "you", blocked: false, noRun: false, more: false, questions: 2, sheetOpen: false, selected: 0, text: "", selected2: 0, text2: "", runOpen: false, runNowOpen: false, ci: "running", blockedBy: false, noEpic: false, noPr: false, g1: true, g2: true, g3: true, emptyYou: false },
+      args: { chainOpen: "", briefOpen: false, noBrief: false, note: "read", noteDraft: false, decisions: true, page: "ticket", boardPick: "", ident: "TP-1382", title: "Design system catalog as HTML: every Director component and section as stories", role: "you", blocked: false, noRun: false, more: false, questions: 2, sheetOpen: false, selected: 0, text: "", selected2: 0, text2: "", runOpen: false, runNowOpen: false, ci: "running", blockedBy: false, noEpic: false, g1: true, g2: true, g3: true, emptyYou: false },
       controls: [
         { name: "page", label: "Page", type: "select", options: [{ value: "ticket", label: "Ticket page" }, { value: "board", label: "Board" }] },
         HEADER_CONTROLS[0],
@@ -1940,11 +1939,10 @@ window.CATALOG = (function () {
     {
       title: "Facts rail",
       wide: true,
-      args: { role: "working", noPr: false, ci: "running", noEpic: false, blockedBy: false, holdsNothing: false },
+      args: { role: "working", ci: "running", noEpic: false, blockedBy: false, holdsNothing: false },
       controls: [
         { name: "role", label: "Situation", type: "select", options: [{ value: "working", label: "Waiting for CI" }, { value: "you", label: "Waiting on you" }] },
-        { name: "noPr", label: "No pull request yet", type: "toggle" },
-        { name: "ci", label: "Checks", type: "select", options: [{ value: "running", label: "Running" }, { value: "failed", label: "One failed" }, { value: "passed", label: "All passed" }], when: (p) => !p.noPr },
+        { name: "ci", label: "Checks", type: "select", options: [{ value: "running", label: "Running" }, { value: "failed", label: "One failed" }, { value: "passed", label: "All passed" }] },
         { name: "noEpic", label: "Not part of an epic", type: "toggle" },
         { name: "blockedBy", label: "Another ticket holds it up", type: "toggle" },
         { name: "holdsNothing", label: "It holds no ticket up", type: "toggle" },
@@ -1952,9 +1950,9 @@ window.CATALOG = (function () {
       render: (p) => frame(factsRail(p)),
       docs: {
         what: "The column beside the lifecycle and the timeline, in two panels. Pull request: the pull request with its size and the state of its checks, then every check, by workflow, with its state (passed, failed, running, waiting, skipped) and how long it took. Connected shows where the ticket sits: its epic with the epic's progress and its tickets in order, what this ticket waits on, and what waits on it.",
-        when: ["The checks are listed in full, never summed up alone: a failed or running one is read in place, and each row opens its log.", "Time and tokens are not here: they belong to the lifecycle, beside the stages they were spent in.", "Each panel's title sits outside the card, like Lifecycle and Timeline, so the columns start on one line. The panels never fold: what is there is short enough to read in full.", "A fact that is unknown says so in a plain line (No pull request yet, Not part of an epic, Nothing holds this one up), never a dash."],
+        when: ["The checks are listed in full, never summed up alone: a failed or running one is read in place, and each row opens its log.", "Time and tokens are not here: they belong to the lifecycle, beside the stages they were spent in.", "Each panel's title sits outside the card, like Lifecycle and Timeline, so the columns start on one line. The panels never fold: what is there is short enough to read in full.", "A fact that is unknown says so in a plain line (Not part of an epic, Nothing holds this one up), never a dash.", "A ticket with no pull request of its own (an epic waiting on its sub-tickets, a ticket before its first run) has no Pull request panel, and no sentence in its place."],
         responsive: ["Laptop: one column, 340 pt, beside the page's main column.", "Desktop: one column, 440 pt, the wider room going to the check names and the ticket titles. The rail stays a column: facts are read top to bottom, never spread across the page.", "Check names and ticket titles wrap inside their row; the state, the identifier and the numbers never wrap."],
-        states: [["Checks running", "a live dot on each running check, the rest passed or waiting"], ["One check failed", "the failed row in red, the report after it skipped"], ["All passed", "every row green"], ["No pull request yet", "a plain line in its place"], ["Not part of an epic", "a plain line"], ["Held up", "the ticket it waits on, with its stage"]],
+        states: [["Checks running", "a live dot on each running check, the rest passed or waiting"], ["One check failed", "the failed row in red, the report after it skipped"], ["All passed", "every row green"], ["Not part of an epic", "a plain line"], ["Held up", "the ticket it waits on, with its stage"]],
         motion: "A check or ticket row lifts its background on hover and its arrow nudges right; a running check's dot pulses; states update in place.",
         tokens: ["--radius-card", "--elevation-1", "--space-4", "--space-5", "--surface-sunken", "--surface-hover", "--accent-tint", "meter tokens", "stacked stage bar tokens"],
       },
@@ -1964,7 +1962,6 @@ window.CATALOG = (function () {
         { name: "Held up by another ticket", viewport: "laptop", args: { blockedBy: true } },
         { name: "A check failed", viewport: "laptop", args: { ci: "failed" } },
         { name: "All checks passed", viewport: "desktop", args: { ci: "passed" } },
-        { name: "No pull request yet", viewport: "laptop", args: { noPr: true } },
         { name: "Not part of an epic", viewport: "laptop", args: { noEpic: true } },
         { name: "Nothing connected: no Connected panel", viewport: "laptop", args: { noEpic: true, holdsNothing: true } },
       ],

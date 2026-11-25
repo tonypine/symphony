@@ -62,6 +62,9 @@ public enum TicketPageLayout {
         public var desktop: Bool
         /// The rail sits beside the main column; false only on a laptop page too narrow for both.
         public var railBeside: Bool
+        /// The rail is drawn: false when it has no panel at all, and the main column and the page size without it
+        /// (TP-1652).
+        public var rail: Bool
         public var railWidth: Double
         /// The decisions column's width on a desktop while a Question waits; nil when there is none on the page.
         public var decisionsWidth: Double?
@@ -72,27 +75,40 @@ public enum TicketPageLayout {
         public var contentWidth: Double
     }
 
-    public static func arrangement(page width: Double, decisions: Bool) -> Arrangement {
+    /// How a page `width` wide lays its columns out, with the decisions column when `decisions` (a Question waits)
+    /// and the facts rail when `rail` (it has a panel to draw). Without the rail the main column keeps its widths and
+    /// the page leaves out the rail and its gap: nothing waiting, the desktop's columns are the main column alone, at
+    /// most 1040 pt.
+    public static func arrangement(page width: Double, decisions: Bool, rail: Bool = true) -> Arrangement {
         let inner = max(0, width - 2 * gap)
         guard isDesktop(page: width) else {
             let beside = railBeside(page: width)
             return Arrangement(
-                desktop: false, railBeside: beside, railWidth: railWidth, decisionsWidth: nil,
-                mainWidth: mainColumnWidth(page: width), columnGap: gap, contentWidth: inner
+                desktop: false, railBeside: beside, rail: rail, railWidth: railWidth, decisionsWidth: nil,
+                mainWidth: rail ? mainColumnWidth(page: width) : inner, columnGap: gap, contentWidth: inner
             )
         }
         let columnGap = desktopColumnGap
+        let railRoom = rail ? columnGap + desktopRailWidth : 0
         if decisions {
             return Arrangement(
-                desktop: true, railBeside: true, railWidth: desktopRailWidth, decisionsWidth: decisionsColumnWidth,
-                mainWidth: inner - 2 * columnGap - desktopRailWidth - decisionsColumnWidth, columnGap: columnGap, contentWidth: inner
+                desktop: true, railBeside: true, rail: rail, railWidth: desktopRailWidth, decisionsWidth: decisionsColumnWidth,
+                mainWidth: inner - columnGap - railRoom - decisionsColumnWidth, columnGap: columnGap, contentWidth: inner
             )
         }
-        let main = min(mainColumnMaxWidth, inner - columnGap - desktopRailWidth)
+        let main = min(mainColumnMaxWidth, inner - railRoom)
         return Arrangement(
-            desktop: true, railBeside: true, railWidth: desktopRailWidth, decisionsWidth: nil,
-            mainWidth: main, columnGap: columnGap, contentWidth: main + columnGap + desktopRailWidth
+            desktop: true, railBeside: true, rail: rail, railWidth: desktopRailWidth, decisionsWidth: nil,
+            mainWidth: main, columnGap: columnGap, contentWidth: main + railRoom
         )
+    }
+
+    /// Whether the facts rail has a panel to draw: the ticket's own pull request, a connection or an answered
+    /// decision. A rail with none draws no column (TP-1652).
+    public static func railHasPanels(
+        pullRequest: PullRequestPanelModel?, connected: ConnectedPanelModel, decided: DecisionsPanelModel
+    ) -> Bool {
+        pullRequest != nil || !connected.isEmpty || !decided.isEmpty
     }
 
     // MARK: Sticky columns (§5, Scrolling)

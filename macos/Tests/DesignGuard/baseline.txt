@@ -115,7 +115,7 @@ SymphonyBarUI/ChipText.swift rawColor 1
 SymphonyBarUI/ChipTextView.swift rawColor 7
 SymphonyBarUI/ChipTextView.swift number 1
 SymphonyBarUI/FactsRailPanels.swift font 7
-SymphonyBarUI/FactsRailPanels.swift color 13
+SymphonyBarUI/FactsRailPanels.swift color 12
 SymphonyBarUI/FactsRailPanels.swift number 3
 SymphonyBarUI/FactsRailPanels.swift button 1
 SymphonyBarUI/JournalSection.swift disabled 1
