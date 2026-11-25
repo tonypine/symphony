@@ -1356,6 +1356,7 @@ defmodule SymphonyElixir.QaDriverTest do
       refute_received {:slept, _ms}
 
       write_cursor!(driver, pid, %{"pointer" => nil, "cursor" => "arrow", "source" => "none"})
+
       assert {:ok, %{"cursor_settled" => false, "cursor_note" => "The app's last report says no pointer position. " <> _rest}} =
                QaDriver.call_tool(driver, "qa_hover", %{"pid" => pid, "path" => "0.3.1"})
     end
