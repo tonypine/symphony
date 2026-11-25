@@ -710,7 +710,12 @@ defmodule SymphonyElixir.ConductorTest do
     end
 
     test "a single ticket's turn after coding waives a check and drops the outcome that rested on it, with its reason", ctx do
-      checks = [%{id: "c1", kind: "outcome", statement: "The list exports.", proof: "test"}, %{id: "c2", kind: "evidence", statement: "It signs in.", proof: "test"}]
+      checks = [
+        %{id: "c1", kind: "outcome", statement: "The list exports.", proof: "test"},
+        %{id: "c2", kind: "evidence", statement: "It signs in.", proof: "test"},
+        %{id: "c3", kind: "outcome", statement: "The list shows.", proof: "test"}
+      ]
+
       plan = %{shape: "single", layers: ["engine"], summary: "s", text: "t", checks: checks, size: %{tokens: 1, runs: 1}}
       {:ok, _plan} = SymphonyElixir.TicketPlan.write("default", ctx.issue_id, Map.merge(plan, %{reason: "Grooming", by: "grooming"}))
       reason = "Nothing inside this ticket's life can export the list: the export service does not exist."
@@ -720,7 +725,7 @@ defmodule SymphonyElixir.ConductorTest do
         "shape" => "single",
         "summary" => "s",
         "text" => "t",
-        "checks" => [%{"id" => "c2", "kind" => "evidence", "statement" => "It signs in.", "proof" => "test"}],
+        "checks" => [%{"id" => "c2", "kind" => "evidence", "statement" => "It signs in.", "proof" => "test"}, %{"id" => "c3", "kind" => "outcome", "statement" => "The list shows.", "proof" => "test"}],
         "size" => %{"tokens" => 1, "runs" => 1}
       }
 
@@ -733,7 +738,7 @@ defmodule SymphonyElixir.ConductorTest do
 
       assert Conductor.run(plan(ctx), ctx.issue, turn: turn) == :ok
 
-      assert %{reason: ^reason, by: "recalibration", checks: [%{id: "c2"}]} = SymphonyElixir.TicketPlan.current(ctx.issue_id)
+      assert %{reason: ^reason, by: "recalibration", checks: [%{id: "c2"}, %{id: "c3"}]} = SymphonyElixir.TicketPlan.current(ctx.issue_id)
       assert_received {:prompt, prompt}
       assert prompt =~ "Dropping an outcome. When an outcome (a check of kind `outcome`) is itself a check nobody can prove"
       assert prompt =~ ~s("plan": null or {<this ticket's whole plan written again)
