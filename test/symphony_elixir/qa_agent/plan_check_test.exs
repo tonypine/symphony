@@ -80,7 +80,9 @@ defmodule SymphonyElixir.QaAgent.PlanCheckTest do
         %{"step" => "2", "needs" => [%{"kind" => "fixture_page", "fixture" => "macos/Tests/Fixtures/absent", "page" => "Queue"}, %{"kind" => "server"}]},
         %{"step" => 3, "needs" => [%{"kind" => "tool", "name" => "qa_click"}, %{"kind" => "fixture_page", "fixture" => "macos/Tests/Fixtures/director-app/running"}]},
         %{"step" => "four", "needs" => [%{"kind" => "server"}]},
-        %{"step" => 5, "needs" => "not a list"}
+        %{"step" => 5, "needs" => "not a list"},
+        # A brief that names no step marks none.
+        %{"needs" => [%{"kind" => "server"}]}
       ]
 
       assert {kept, [one, two]} = PlanCheck.briefs(targets, briefs, facts)
