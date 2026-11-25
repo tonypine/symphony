@@ -172,8 +172,7 @@ Fields:
 - `priority` (integer or null)
   - Lower numbers are higher priority in dispatch sorting.
   - Priority means importance, not queue position: it only orders issues within a dispatch stage
-    (Section 8.2) and never gets an issue a slot past a limit. Forcing (`concurrency.force_label`,
-    Section 8.3) is the way to have an issue worked ahead of the queue.
+    (Section 8.2) and never gets an issue a slot past a limit.
 - `state` (string)
   - Current tracker state name.
 - `team` (object or null)
@@ -190,11 +189,6 @@ Fields:
   - Repo route names that matched the same issue when routing was ambiguous.
 - `labels` (list of strings)
   - Normalized to lowercase.
-- `blocked_by` (list of blocker refs)
-  - Each blocker ref contains:
-    - `id` (string or null)
-    - `identifier` (string or null)
-    - `state` (string or null)
 - `sub_issues` (list of sub-issue refs)
   - Direct children of the issue, each with `id`, `identifier`, and `state` (string or null).
 - `created_at` (timestamp or null)
@@ -368,7 +362,7 @@ and otherwise at most every 5 s; the run's completion writes the final record.
 
 Each ticket also has a state record per `repo_key` and issue ID (`TicketState`), which learns from
 these Linear reads of its issues: the repo poll, the by-id reads each poll tick makes of the running,
-watched, forced and operator-stopped tickets, the dispatch prefetch and the revalidation before a
+watched and operator-stopped tickets, the dispatch prefetch and the revalidation before a
 start, and each PR watcher's read of the watched states, for every repo that read returns. A by-id
 read carries no repo key, so each issue it returns is written under the repo that already holds the
 ticket's record: the poll filters each repo in Linear (a project by its slug,
@@ -377,7 +371,7 @@ is skipped and counted unrouted, as the poll creates its record (a webhook deliv
 itself, Section 11.4), and so is one held in several repos, as the poll counts it a conflict. Observing adds no request to Linear. For every issue a read returns, the
 observation writes into the record the ticket's
 Linear state as its `phase`, its `issue_identifier`, `title`, `labels`, `priority`, `assignee` (the
-assignee's ID), `blockers` (the identifiers of its blockers outside the repo's terminal states), `url`
+assignee's ID), `url`
 and Linear's `updatedAt` as `linear_updated_at`, with `observed_at`, creating the record when the
 ticket has none. It writes only when one of those fields changed, so an identical poll writes
 nothing, and it writes only those fields, never the record's holds, verdicts or other state:
@@ -428,7 +422,8 @@ nothing, and it writes only those fields, never the record's holds, verdicts or 
   mark; and reads by id the repository's records no read observed yet, marking one Linear does not
   return (`not_found_at`) so it is not read again. It never decides a phase.
 - A record written before these fields existed reads with them at their defaults (`nil`, or an empty
-  list for `labels` and `blockers`); it needs no migration.
+  list for `labels`); it needs no migration. A record an older build stored with `blockers` (the
+  tracker's blocker links it observed then) loads without them, and they hold nothing.
 
 Nothing reads the observed fields yet. The Elixir implementation counts each observation's outcome
 (`updated`, `unchanged`, `stale`, `errors`) since startup (`TicketObservation.summary/0`).
@@ -541,9 +536,10 @@ kinds may, its payload schema and its idempotency rule; a payload outside its sc
 type does not allow, is refused. The types: `phase.entered`, `hold.set` and `hold.cleared` (kind
 `blocked` only, legacy), `run.started` and `run.ended` (keyed by run id), `attempt.pushed`,
 `verdict.recorded` (machine only: an agent never records a verdict), `decision.requested`,
-`decision.recorded`, `decision.withdrawn` (legacy), `person.action` (`stop`, `move`, `force`, `unblock`,
-`restart`), `ticket.cancelled` (the Director's cancel, with its note), `ticket.moved` (the
-Director's free move into any phase, with its note), `step.started` and `step.completed` (the step
+`decision.recorded`, `decision.withdrawn` (legacy), `person.action` (`stop`, `move`, `unblock`,
+`restart`; `force` is legacy), `ticket.cancelled` (the Director's cancel, with its note), `ticket.moved` (the
+Director's free move into any phase, with its note, or the Conductor's own move of its ticket made
+through it, whose actor is the Conductor's turn and whose note is its reason), `step.started` and `step.completed` (the step
 model below), `evidence`, `finding.recorded` (QA
 runs), `finding.resolved`, `finding.confirmed` (machine only: a QA pass confirmed a resolution),
 `checklist.answered`, `drift.detected`, `drift.reverted`,
@@ -575,14 +571,18 @@ prompt carries as its own section, marked as advice and wrapped as untrusted dat
 `after_qa_blocked` carries the `route` Symphony took on the turn's answer (`rerun` or `rework`), and
 at `after_qa_blocked`, `after_qa_fail`, `after_rework` and during a watched run `ticket`, a linked ticket
 Symphony filed through the self-heal lane's filer for a problem that is not this ticket's to solve, which
-holds the ticket when it `blocks` it (at most `conductor.max_filed_tickets`, 2, per ticket, never from a
+holds the ticket when it `blocks` it, filed as its sub-ticket so it runs through its slot (at most `conductor.max_filed_tickets`, 2, per ticket, never from a
 ticket the Conductor filed; `docs/configuration.md#conductor`); a
 question the Conductor asks goes through the decision path, pauses the ticket and holds the run it
 came before, and each of its options names the action a pick makes from a closed list (`continue`,
-`rerun`, `rework` with a finding, `accept_without_qa`, which records the `qa` verdict `skip` and moves
+`rerun`, `rework` with a finding, `back_to_review`, which moves a ticket in Rework to Code Review
+with its pull request as it is, `accept_without_qa`, which records the `qa` verdict `skip` and moves
 to Merging, and `cancel`), which the decision path performs; a ticket waits on one open question
 about its stage at a time, the Conductor's or QA's own "could not finish its check", and answering
 one withdraws any other open in the same phase as `superseded`; `docs/configuration.md#conductor`;
+at every junction the answer may move the ticket to a stage (`move`, with its reason), which
+Symphony makes through the Director's free move and its guards, asking nothing, and a turn before a
+run that moved the ticket keeps that run from starting;
 at `grooming`, before the first run of a ticket with no plan and no run of its own, the turn runs
 in the ticket's workspace with read-only tools and its answer holds the ticket's plan, which
 Symphony records as `plan.written` after recording the ask as `ask.recorded`: a try that writes
@@ -591,8 +591,11 @@ again at its next dispatch with that reason in its facts, and after 2 such tries
 a plan; a plan of shape `split` is carried out
 instead of a first run: its sub-tickets are created under the ticket, which then waits on them; on
 such a ticket the junctions `sub_ticket_ended` and `final_check` run outside any dispatch, and
-their answer's `tree` operations and `done` are carried out by Symphony: `docs/configuration.md`,
-The tree),
+their answer's `tree` operations and `done` are carried out by Symphony; every turn on a ticket with
+sub-tickets, whatever its junction, reads one form that adds, rewrites, cancels, stops, reorders
+and sets the dependencies of the sub-tickets that have not ended and writes the parent's plan again
+without listing them, and what Symphony refused or did not carry out of an answer reaches the next
+turn in its facts (`earlier_tries`): `docs/configuration.md`, The tree),
 `conductor.steer` (machine only: guidance the Conductor's watch gave a running run, under that run's
 `run_id`, with its `text`, `when` it asked for it, `next_turn`, `now` or `stop`, the `trigger` that
 made it look and how and when it was `delivered`; `conductor.watch` in `docs/configuration.md`),
@@ -604,13 +607,16 @@ it touches (none or more of `screen`, `gallery`, `api`, `logic`, `config`, `test
 `docs`; a name outside them is dropped and never refuses the plan), a `summary` for a person, the plan's `text` for agents, its `checks`, each with an `id`
 that is its alone across versions (a new check gets an id no version used, and a check whose
 statement a version changed counts only the proofs and waivers recorded after that version), a `kind`, `outcome`, `qa` or `evidence`, a `statement` and its
-`proof`, `test`, `qa`, `design` or `attached`, its `size` and, for a split, its `sub_tickets`; the
+`proof`, `test`, `qa`, `design`, `attached` or `ci` (the pull request's own CI run, with an optional
+`ci_check` naming the one CI check that proves it), its `size` and, for a split, its `sub_tickets`; the
 newest one is the ticket's plan, and a ticket is groomed exactly when it holds one), `check.proved`
-(any run's, or the machine's: a check of the current plan proved by a test, QA, the design or
-something attached, recorded once per check and head and refused for an id the plan does not hold),
+(any run's, or the machine's: a check of the current plan proved by a test, QA, the design,
+something attached or the pull request's CI run, recorded once per check and head and refused for an id the plan does not hold),
 `check.waived` (machine only: a check nobody has to prove any more, and why; an `outcome` check is
-waived only by the person's own decision, and a plan version may remove or reword one only after a
-new ask),
+waived only by the person's own decision, and a plan version may reword one only after a new ask
+and remove one only after a new ask or when the Conductor writes it outside Grooming with a reason
+of its own, for an outcome nothing inside the ticket's life can prove: on a ticket with sub-tickets
+at any turn, and on one without at the turns that may waive a check),
 `conductor.intervention` (machine only: what the Conductor of another ticket did to this one,
 `stopped`, `replanned`, `canceled`, `replaced` or `added`, and why) and
 `note` (which may carry a `tag` its writer gives it: `discovery`, something a run found that is not its
@@ -709,8 +715,8 @@ runs on that provider alone. The Director's Pause of a provider
 404 `provider_not_found`, naming it. While it holds, a paused provider is one more reason a run's
 candidate cannot take a run, as a usage limit that holds the provider is: a new run starts on the
 first fallback of its run kind whose provider can take it, and a continuation stays on its own
-choice. A run with no such candidate waits, as under a reached usage limit (landing runs and forced
-tickets' runs included): a candidate is skipped with rule `provider_pause`, naming the `provider`
+choice. A run with no such candidate waits, as under a reached usage limit (landing runs
+included): a candidate is skipped with rule `provider_pause`, naming the `provider`
 (`you paused Anthropic, and no fallback of its run can take it`), and a retry or continuation keeps
 its claim and attempt with no timer. Its situation is `waiting_for_provider` ("Waiting: you paused
 Anthropic"). A retry that waits for a slot keeps its attempt and claim the same way when its provider
@@ -737,6 +743,75 @@ joined by `; `. The log line names the kind too (`Dispatch pause active kind=bui
   so a pause the Director set meanwhile keeps dispatch paused.
 - A Symphony that starts on the version a `build` reason waits on, or a later one, clears that
   reason, so the pause of a finished update lifts by itself.
+- An update the menu bar app has ready (`POST /api/v1/control/update_ready` with its `version`,
+  sent once the release is downloaded and verified) does not pause dispatch: Symphony keeps
+  dispatching and picks the moment itself (`SymphonyElixir.UpdateWindow`). It checks when a run
+  ends, before the freed slot is refilled, and at each poll. The first moment no agent run is active
+  (a run between turns does not count, as for the drain), it sets the update's `build` reason itself
+  (`set_by` Symphony); the app then stops Symphony and swaps, so the pause lasts only the restart.
+  When runs never leave such a moment, after 15 minutes ready it holds dispatch so one forms, but
+  only once no active run began less than 3 minutes earlier. A hold lasts at most 10 minutes: with
+  runs still active it is lifted and the 15 minutes start again; with none left (the app never came
+  for it) the update is called off, and the app arms it again. These numbers are fixed and do not
+  depend on how many builds were published: a newer version ready while the update waits or holds
+  replaces the one ready, keeps the time already waited, and moves the hold's reason to the new
+  version, so several builds in a row cost one hold. The update ready is kept in memory and reported
+  as the state payload's `update_window` (`version`, `phase` `waiting` or `holding`, `ready_at`,
+  `holding_since`). Resume with `kind` `build` for its version calls it off; the Director's plain
+  Resume during a hold sends it back to waiting. A Director's Pause still holds dispatch, and an
+  update ready under it swaps as soon as no run is active.
+- An update's `build` reason holds ticket runs alone: Conductor turns (replies to a person's
+  messages, the turns on a ticket's sub-tickets and at the end of a review) keep starting and
+  answering under it, in the update's hold as in its pause, and they never count as agent runs when
+  Symphony looks for a moment with none active. Any other reason (the Director's Pause, a
+  repository's) still holds them.
+- Symphony is never stopped for an update or a restart while a Conductor turn is mid-run
+  (`SymphonyElixir.ConductorGate`). Once dispatch is paused and no agent run is active, the menu
+  bar app asks for the handover (`POST /api/v1/control/handover`) and stops Symphony only once it
+  is given, in every update mode and for a plain Restart. The check and the close are one step of
+  the gate, which every Conductor turn enters as it starts: with no turn running the handover is
+  given and from then on no turn starts (one due waits, still owed, and runs first thing after the
+  restart); with turns running the app is told how many (`409` `conductor_running`, and
+  `conductor_runs` in the state payload and the drain) and asks again at its next poll. Turns keep
+  starting for 2 minutes from the first ask that finds one; after that none starts, so the turns
+  running end and a gap forms even when they overlap, and the wait is bounded by 2 minutes plus a
+  turn's own time limit. A gate given the handover opens again when dispatch is resumed, and after
+  5 minutes with Symphony still up; a wait no one asked about for 1 minute is dropped. Update Now
+  Anyway stays the person's choice and stops Symphony at once.
+- A run Symphony's restart stopped goes on after it from where it stopped
+  (`SymphonyElixir.PhaseSteps.restart_point/2`), for an update's restart in every mode, a plain
+  Restart and Update Now Anyway alike. Symphony's start ends each run still running with the
+  restart's error (`SymphonyElixir.RunStore.restart_error/0`); the ticket's next run of the same
+  phase reads the ticket's newest step event, with no move of the ticket since, and when it is that
+  run's, goes on: at a step that started and did not end (an agent step in the interrupted turn's
+  session, resumed by its id kept on the run's record, so its conversation goes on; a machine step
+  runs again), or at the step after one that ended (the step a failed machine step fails to, with
+  its kept output; the step a failed agent step returns to). The turn's prompt says Symphony
+  restarted. What is kept: the workspace and its changes, every step that ended (none runs again),
+  and the session's conversation when the agent can resume it (Claude, opencode); a session that
+  can't be resumed is replaced, once, by a new session at the same step with the ticket's history.
+  A turn stopped mid-way by Update Now Anyway goes on the same way from its last step event.
+- A stepped QA pass (`SymphonyElixir.QaAgent.Steps`: Plan the pass, Walk a step N, Design check,
+  Wide pass, Review and verdict, with machine steps between them) is active for an update only while
+  a step is in flight. At each boundary between two steps it asks the orchestrator to begin the next
+  one: while it waits there it counts as a run between turns, so an update waiting for its moment
+  may take it, and it begins its next step at once unless an update's `build` reason holds dispatch
+  (its pause, or the hold above); then the next step waits until that reason lifts, and Symphony
+  restarts at the boundary. While the update still waits behind other runs, the pass goes on; a
+  person's own Pause does not stop a pass between its steps. The age rule judges a pass by the start
+  of its step in flight, not of the pass, so a long pass never keeps the hold from starting; the
+  update waits behind a pass at most for the step in flight. A recheck round (the launch again, its
+  rechecks, the quit and the evidence) is one piece, with a boundary before and after it.
+- At each boundary the pass keeps where it stands in the run store: its list as walked so far, the
+  step it goes on at, each finished step's result and answer (the plan, the walk results, the design
+  check), its sessions and tokens, and a copy of the evidence under `qa-evidence/`, kept beside the
+  worktree. A new pass of the ticket on the same commit and list, whose last run Symphony's restart
+  ended (an update's restart in every mode, a plain Restart, Update Now Anyway), goes on at that
+  step with those results and evidence, and its findings ledger is the ticket's as before; no step
+  that ended is walked again. The app under test was gone with its QA session, so when the next step
+  drives it the build and launch steps run again first. A step a person interrupted mid-way with
+  Update Now Anyway was not finished, so it alone runs again. A pass that ends forgets what it kept,
+  and one that finds no such record starts its list from the top.
 - Each usage-limit hold (Sections 8.4.1 and 8.4.2) is an `environment` reason waiting on condition
   `usage_limit:<provider>:<scope>`, its line the hold's (`Claude's 5-hour limit until 14:30 UTC-3`,
   its local time naming its zone): set with the hold, its line refreshed when the hold changes,
@@ -1072,7 +1147,6 @@ Allowed repo-local front matter keys:
 - `hooks`
 - `prompts`
 - `push_check`
-- `proof_check`
 - `verification`
 - `validation`
 - `auto_review`, with only its `playbooks` key
@@ -1081,13 +1155,15 @@ Allowed repo-local front matter keys:
   only and is not part of the returned `config`.
 
 Unknown repo workflow keys, and `auto_review` keys other than `playbooks`, are rejected with an
-error that directs the operator to move operator-owned configuration to `symphony.yml`.
+error that directs the operator to move operator-owned configuration to `symphony.yml`. A key the
+contract has removed and still tolerates MUST load without error and be dropped, so it never
+reaches the runtime config: a front matter written for an earlier release keeps loading.
 
 ### 5.4 Config Schema
 
 Unless explicitly called out as repo-local, fields in this section live in `symphony.yml` and become
 part of the merged runtime config. Repo-local front matter contributes `hooks`, `push_check`,
-`proof_check`, `verification`, `auto_review.playbooks` and `human_actions.enabled` values to the runtime settings for that repo. Nested
+`verification`, `auto_review.playbooks` and `human_actions.enabled` values to the runtime settings for that repo. Nested
 repo-local maps are merged over the operator config so repos can override only their dev-server
 command while inheriting process-wide verification defaults such as port allocation, or only one
 playbook's settings while inheriting the operator's other playbooks.
@@ -1288,7 +1364,7 @@ Fields:
   - Extensions are trimmed, lowercased, normalized to include a leading `.`, deduplicated, and
     rejected if they contain path separators or control characters.
   - Elixir evidence: `lib/symphony_elixir/config/schema.ex` and
-    `test/symphony_elixir/workspace_and_config_test.exs`.
+    `test/symphony_elixir/config_settings_test.exs`.
 
 #### 5.4.4 `execution.permissions.filesystem.allow_read_paths` (list)
 
@@ -1552,15 +1628,6 @@ Behavior:
   commit is refused with the recorded failure lines; a missing result, a result for another commit
   or an unreadable file is refused with the command to run.
 
-#### 5.4.8b `proof_check` (string, repo-local)
-
-The GitHub check run or workflow name that proves the repository's automated tests ran (Symphony's
-own repository: `make-all`). It is a property of the repository, so a ticket never repeats it.
-
-- Default: `null`. A repository without it has no named-test proofs: every step of its
-  walkthroughs is a QA step (Section 5.4.17, **Walkthrough proofs**).
-- A blank value fails configuration validation. `symphony.yml` MUST NOT accept the key.
-
 #### 5.4.8 `execution` (object)
 
 How every run is executed. What each kind of run starts with is `runs` (Section 5.4.8c).
@@ -1588,6 +1655,8 @@ Fields:
   - A harness needs an entry only when some run resolves to it.
 - `concurrency.max_total` (integer)
   - Default: `10`
+  - The number of slots: how many tickets Symphony works at once (Section 8.3). A slot belongs to a
+    ticket until it is done, not to one agent turn.
   - Changes SHOULD be re-applied at runtime and affect subsequent dispatch decisions.
 - `limits.max_turns` (positive integer)
   - Default: `20`
@@ -1603,41 +1672,15 @@ Fields:
     this many times consecutively within one turn. The signature MUST include execution kind,
     command/tool name, and a stable hash of arguments. Any successful execution or different
     execution signature resets the count.
-- `concurrency.epic_lanes` (integer)
-  - Default: `concurrency.max_total`.
-  - How many slots active epics may reserve as lanes (Section 8.3). Must be between `0` and
-    `concurrency.max_total`; other values fail configuration validation.
-- `concurrency.finishing_max` (positive integer)
-  - Default: `2`.
-  - Landing runs (issues in `Merging`) that may run at once outside `max_total` and the epic lanes
-    (Section 8.3). Values below `1` fail configuration validation.
-- `concurrency.force_label` (string)
-  - Default: `expedite`.
-  - An issue carrying this label (case-insensitive) joins the forced queue when a poll's candidate
-    fetch, which only returns active states, first sees it with the label. The orchestrator records
-    that time (`forced_since`, persisted across restarts), refreshes the queued issues by id on
-    every poll so they stay queued in any non-terminal state (Plan Review, Merging, ...), and drops
-    one when the label is removed, the issue is terminal, or the tracker no longer returns it. Forced issues are reported in the status snapshot
-    (`forced`) and the audit log (`forced_start`, `forced_end` with `reason` `label_removed`,
-    `done` or `missing`), and dispatch on their own allowance (Section 8.3).
-  - When a forced issue reaches a terminal state the service SHOULD remove the label from it.
-  - When a forced issue enters `Plan Review` the service SHOULD emit a `forced_human_gate`
-    notification, once per entry into `Plan Review`.
-  - Implementations MAY offer an operator control that adds or removes the label (this one has
-    `symphony force [--clear] <identifier>` over `POST /api/v1/control/force`). Such a control
-    SHOULD put the change into the queue at once rather than wait for the next poll, so tickets
-    forced in quick succession keep their order, and MUST NOT move the issue to another state.
-- `concurrency.forced_max` (positive integer)
-  - Default: `1`.
-  - Forced runs that may run at once outside `max_total`, the epic lanes, `finishing_max` and
-    `max_by_issue_state` (Section 8.3). Values below `1` fail configuration validation.
 - Implementations MAY offer an operator control that starts a ticket's run at once (this one has
-  `POST /api/v1/control/start` with `issue_identifier` and an optional `note`). Such a control
-  dispatches the run for the ticket's current phase in the same call, not queued: it ignores
-  queue order, the concurrency limits and the forced queue. It MUST NOT override what a person
-  or Symphony chose to stop: it refuses while dispatch is paused, while the ticket's repository
-  is paused, while the ticket has an open question, or while a run is already working on it, and
-  the answer names which; a ticket in the backlog is refused with "move it first". A ticket in
+  `POST /api/v1/control/start` with `issue_identifier`, an optional `note` and an optional `slot`).
+  Such a control dispatches the run for the ticket's current phase in the same call as a queue move:
+  the ticket goes to the head of the queue and takes a slot, never one over the slot count
+  (Section 8.3). It MUST NOT override what a person
+  or Symphony chose to stop: it refuses while the ticket has an unmet stored dependency ("TP-977
+  depends on TP-976 and can't start before it is done.", or "… released."), while dispatch is
+  paused, while the ticket's repository is paused, while the ticket has an open question, or while
+  a run is already working on it, and the answer names which; a ticket in the backlog is refused with "move it first". A ticket in
   the todo state is claimed (in progress) first. The run works in the repository the ticket's
   record holds, never a default one; a ticket with no repository on its record is refused. The
   run a person starts this way records one
@@ -1649,17 +1692,6 @@ Fields:
 - Implementations MAY carry the ticket's pull request and its checks on the ticket read (this one has
   `pull_request`, `docs/control-api.md`). That read MUST come from what the PR watcher already read,
   and MUST NOT add a read of GitHub.
-- `concurrency.forced_stale_after_hours` (positive integer)
-  - Default: `72`.
-  - How long an issue may stay forced before it counts as stale. A stale issue is reported as
-    `stale` in the snapshot's `forced` rows, and the service SHOULD log a warning and emit one
-    `forced_stale` notification per forced issue, kept across restarts. Values below `1` fail
-    configuration validation.
-- `concurrency.max_by_issue_state` (map `state_name -> positive integer`)
-  - Default: empty map.
-  - State keys are normalized (`lowercase`) for lookup.
-  - Invalid entries (blank state names, non-positive, or non-integer values) fail configuration
-    validation.
 - `limits.tokens_per_issue` (integer or null)
   - Default: `500000`.
   - Explicit `null` disables the per-issue cap.
@@ -1873,7 +1905,7 @@ fields locally if they want stricter startup checks.
     `execution.permissions.approval_policy="never"` is rejected for Codex. Use `auto_approve_all` for unattended
     auto-approval.
   - Elixir evidence: `lib/symphony_elixir/config/schema.ex` and
-    `test/symphony_elixir/workspace_and_config_test.exs`.
+    `test/symphony_elixir/config_settings_test.exs`.
 - `filesystem.sandbox` (Codex `SandboxMode` value)
   - Default: `workspace-write`.
 - `filesystem.turn_policy` (Codex `SandboxPolicy` value)
@@ -1931,7 +1963,7 @@ fields locally if they want stricter startup checks.
     enforced outside Codex while keeping shell command execution available.
   - Elixir evidence: `lib/symphony_elixir/config/schema.ex`,
     `lib/symphony_elixir/agent_sandbox_config.ex`,
-    `test/symphony_elixir/workspace_and_config_test.exs`, and
+    `test/symphony_elixir/config_settings_test.exs`, and
     `test/symphony_elixir/agent_sandbox_config_test.exs`.
 - `turn_timeout_ms` (integer)
   - Default: `3600000` (1 hour)
@@ -2216,7 +2248,7 @@ The QA agent:
   checks, and every other check the plan proves by QA or against a design, and judges nothing
   else, and QA MUST NOT be skipped while one of those is open; before the merge the Conductor's
   facts name every check still open; the `outcome` checks are the acceptance criteria; a
-  `check.proved` with `by: test` is confirmed on the PR head by the QA pre-check, and QA records a
+  `check.proved` with `by: test` is complete when recorded (**Walkthrough proofs** below), and QA records a
   `check.proved` (`by: qa` or `design`) for each check it saw pass. The ticket MUST NOT be handed
   off to Code Review while a check a test or an attachment proves is open. A plan whose layers
   hold `screen` or `gallery` MUST NOT be scoped to "nothing on screen". The Linear description of
@@ -2228,16 +2260,16 @@ The QA agent:
 - **Walkthrough proofs.** The person writing a ticket describes the user's flow in plain steps and
   names no test and no check. The implementer, who writes the tests, ends each step a test of its PR
   covers with `Proved by: <test>` through `linear_record_walkthrough_proofs`, which records each
-  proof as an `evidence` event on the ticket's history, naming only tests in the PR and never a check. The repository names the check that runs them (`proof_check`, Section
-  5.4.8b). A step ending in `Proved by: <test>` is proved by that test, run by the `proof_check`; the
-  older `Proved by: <check> › <test>` MUST still be read, naming the check itself; `Proved by: QA`, or
-  no line, is a QA step. A `Proved by:` inside inline code is a quotation in the step's prose, not its
-  proof, and MUST NOT be read as one. Without a `proof_check`, every step is a QA step. Before a QA
-  agent starts, Symphony MUST confirm each named-test step on the PR head: the test is in the
-  checkout and its check passed (pass), is still running (pending, waited for boundedly) or failed,
-  did not run or the test is missing (fail to `Rework` with no agent run). A step naming a check that
-  is neither the `proof_check` nor a check on the head MUST fail with a message naming the
-  repository's `proof_check`. QA links a confirmed step's result instead of walking it.
+  proof as an `evidence` event on the ticket's history, naming only tests in the PR and never a check;
+  a proof naming a test Symphony cannot find in the checkout MUST be refused when it is recorded. A
+  step ending in `Proved by: <test>` is proved by that test; the older `Proved by: <check> › <test>`
+  MUST still be read as proved by the test, its check name changing nothing; `Proved by: QA`, or no
+  line, is a QA step. A `Proved by:` inside inline code is a quotation in the step's prose, not its
+  proof, and MUST NOT be read as one. **A test proof is complete when it is recorded, and CI gates
+  the merge**: this holds for a walkthrough step and for a plan check a test proves. CI runs the test
+  on the pull request, and a red check blocks the merge. A QA pass MUST NOT read or wait for the pull
+  request's CI on a proof's account: the proved steps reach the QA agent as proved, named with their
+  tests, and QA does not walk them.
 - QA selection is deterministic and runs before any agent: a `qa:skip` label skips; a
   `qa:<kind>` label selects that playbook; a diff that only touches docs, tests or `skip_globs`
   skips; otherwise playbooks are selected by their trigger paths, and the `cli` playbook also by a
@@ -2480,7 +2512,7 @@ Fields:
   - `events` is an OPTIONAL list drawn from: `pr_opened`, `awaiting_review`, `run_failed`,
     `issue_completed`, `budget_exceeded`, `reviewer_commented`, `rework_pushed`, `ci_failed`,
     `ci_escalated`, `qa_passed`, `qa_failed`, `usage_limit_paused`, `usage_limit_headroom`,
-    `usage_limit_resumed`, `forced_waiting`, `forced_human_gate`, `forced_stale`.
+    `usage_limit_resumed`.
   - `headers` is an OPTIONAL map of webhook headers.
 
 ### 5.5 Prompt Template Contract
@@ -2539,7 +2571,7 @@ Playbook line:
 Template input variables:
 
 - `issue` (object)
-  - Includes all normalized issue fields, including labels and blockers.
+  - Includes all normalized issue fields, including labels.
 - `pr` (object)
   - Present for PR-mode runs.
   - Includes normalized PR fields such as `number`, `url`, `title`, `body`, `state`, `base_ref`,
@@ -2801,12 +2833,6 @@ not require recognizing or validating extension fields unless that extension is 
 - `hooks.after_create_timeout_ms`: integer or null, default `null` (the larger of `hooks.timeout_ms`
   and `600000`)
 - `execution.concurrency.max_total`: integer, default `10`
-- `execution.concurrency.max_by_issue_state`: map of positive integers, default `{}`
-- `execution.concurrency.epic_lanes`: integer between `0` and `max_total`, default `max_total`
-- `execution.concurrency.finishing_max`: integer `>= 1`, default `2`
-- `execution.concurrency.force_label`: string, default `expedite`
-- `execution.concurrency.forced_max`: integer `>= 1`, default `1`
-- `execution.concurrency.forced_stale_after_hours`: integer `>= 1`, default `72`
 - `execution.limits.max_turns`: integer, default `20`
 - `execution.limits.retry_backoff_max_ms`: integer, default `300000` (5m)
 - `execution.limits.max_consecutive_identical_tool_failures`: integer, default `5`; `0` disables
@@ -3025,6 +3051,14 @@ Important nuance:
   comment, CI failure or conflict and no open plan check a test proves, MUST instead end the run and move to the QA state on that head, even when the run pushed
   it: with no new commit there is nothing for Code Review to read, so it is neither handed to Code
   Review nor parked as idle.
+  A `Rework` that a person answered a question in (a `question.answered` event after the ticket's
+  newest entry into `Rework`), whose run reaches the idle park with the workspace `HEAD` still the
+  head the `Rework` started from, no uncommitted change, that `HEAD` the attached PR's head and no
+  pending reviewer comment, CI failure or conflict, MUST instead hand that head off to the configured
+  Code Review state with the answer as the move's reason: the answer is why nothing changed, so it is
+  neither parked as idle nor asked a second question. An answer to a hold's own question (the idle
+  park's "Run it again", a dispatch loop's, a block report's) says nothing about the work and does
+  not count: such a run parks again. The rule above, back to QA, wins over it.
 
   `Rework` continues the current attempt. Its run MUST NOT close the pull request, cut a branch
   from scratch or supersede the workpad: those belong to `Restart` (below). The post-PR state is
@@ -3244,15 +3278,13 @@ asks for at most three rechecks, each a fresh walk turn between the launch and t
 past two rounds the pass is `inconclusive`. The QA target audit, the QA host checks, turn timeouts,
 `tokens_per_issue` (across every turn of the pass) and the cleanup stay the pass's.
 
-When a machine step will run a command, the agent's session ends first and the run holds no slot:
-the orchestrator marks its running entry on the step (`session_id: nil`), counts it in no work,
-state or finishing slot and runs a cycle at once, so another ticket may dispatch. The machine
-step's own timeout replaces the stall and no-progress clocks while it runs. Once the list reaches an
-agent step again, the run asks the orchestrator for a turn and waits; the orchestrator gives it a
-free slot before any dispatch, at once and on every cycle, and starts its new session with the whole
-prompt. While Symphony is paused (dispatch only), a run between steps still runs its machine steps,
-and its next agent turn waits for the pause to lift (decision 1 of TP-1085). A forced run waits only
-for the pause. A run held by an update's pause records an `update_wait` signal on its ticket, with the
+When a machine step will run a command, the agent's session ends first and the ticket keeps its
+slot (Section 8.3): the orchestrator marks its running entry on the step (`session_id: nil`), and no
+other ticket takes the slot meanwhile. The machine step's own timeout replaces the stall and
+no-progress clocks while it runs. Once the list reaches an agent step again, the run asks the
+orchestrator for a turn and waits; the orchestrator gives it the turn at once, since its ticket holds
+its slot, and starts its new session with the whole prompt. While Symphony is paused (dispatch only), a run between steps still runs its machine steps,
+and its next agent turn waits for the pause to lift (decision 1 of TP-1085). A run held by an update's pause records an `update_wait` signal on its ticket, with the
 version and the step. A drain waits for no run between turns (`between_turns` in Section 13.4's
 state): the pause holds its next turn, so the wait would never end, and it has no session to lose.
 Symphony stops with it there. After the restart the ticket's next run starts the list again in the
@@ -3264,11 +3296,11 @@ Any step may pause on a Question. A delegated or orchestrated step whose agent a
 question tool during its turn (an open Question a run asked since the step started) ends `paused`
 with the Question's id before any other rule reads the turn; so does a machine step at its
 no-result limit. The run stops its agent session and tells the orchestrator, which marks its running
-entry on the step waiting for the `answer` (`question_id`), with no session and no slot, and with
-neither watchdog's clock. The ticket's pause is the Question's own `question` reason, so the
+entry on the step waiting for the `answer` (`question_id`), with no session, and with neither
+watchdog's clock; the ticket keeps its slot, since it waits on the person. The ticket's pause is the Question's own `question` reason, so the
 Director shows it waiting on the person and the Inbox lists the Question. The answer is the
 trigger: the change of the ticket's pause it makes reaches the orchestrator at once, which gives the
-run a slot as for any next turn (Symphony's pause still holds it back). Before resuming, the run
+run its next turn (Symphony's pause still holds it back). Before resuming, the run
 reads the ticket's record, never Linear: the Question answered, the record's phase still the run's,
 and no other pause reason; otherwise the run ends. An agent step resumes on the same step in a new
 session, resuming the paused turn's conversation when the agent can (Claude's `--resume`), with the
@@ -3461,9 +3493,27 @@ facts and applies it on the same read; upkeep never changes that decision. Both 
 `PrDecision.Apply`, the only writer: Linear moves go through the transition guard, holds through
 the Needs Decision hold and the self-heal lane, GitHub calls through `AutoMerge`.
 
-- Branch upkeep runs in every watched phase, whatever `pull_requests.auto_merge` says and whatever
-  the flow decides (a hold, a question, a CI or competitor wait), and only while no run is active
-  on the ticket: an upkeep due during a run is deferred, and the orchestrator asks the watcher to
+- The watcher acts only for a ticket that holds a slot (Section 8.3, `Slots.held?/1` on its
+  record). A ticket without one has its PR read and its facts, decision and CI label written as for
+  any other, and nothing done on it: no branch upkeep (U1, U2), no rerun of a failed or cancelled
+  check, no move to `CI Fix` (a red head, a conflict) or back from it, no fix ticket, no question,
+  no wait on its competitors, no landing step and no QA build; and no hold an idle or stalled run
+  set is lifted by its reads. When `main` moves, its PR is read again and left as it is. The step
+  held back is recorded as a `wait` on `symphony` until "the ticket takes a slot", naming the rule
+  and what it would do (`args.withheld`); the orchestrator's dispatch gate holds a Code Review, QA,
+  `CI Fix` or landing run back on it, and the silent-wait detector reads it as a wait with an owner,
+  never a stall. A hold's wait (R4) stays the decision, since the hold is what the ticket waits on.
+  What a person did on GitHub still applies: a merge closes the ticket out (R2) and a close sends it
+  to `Rework` (R8). A run's dispatch outside QA is the orchestrator's and takes a slot as it starts;
+  a QA run waits for the slot, since its app is built for its head first. The landing wait on
+  competing PRs still ends when they land or leave the race: nothing else would clear it, and it
+  clears only its own landing reasons, never a blocker's or a person's
+  hold. A person's answers, moves and cancels
+  go through the control API and apply as for any ticket; the app repository's release read is no
+  ticket and is not gated.
+- Branch upkeep runs in every watched phase, for a ticket that holds a slot, whatever
+  `pull_requests.auto_merge` says and whatever the flow decides (a hold, a question, a CI or
+  competitor wait), and only while no run is active on the ticket: an upkeep due during a run is deferred, and the orchestrator asks the watcher to
   read when a run ends, so it fires at once. U1: a `BEHIND` PR with no PR ahead of it in the
   landing order sharing its files, on a head not red on a failure or a cancelled run, gets one
   update-branch per head (`PUT .../update-branch` with `expected_head_sha`), and the CI runs left
@@ -3501,7 +3551,7 @@ the Needs Decision hold and the self-heal lane, GitHub calls through `AutoMerge`
   backstop also fires after 3 CI Fix runs in a row met the same failure (the same check and first
   error line), whatever the count. At the backstop the watcher turns auto-merge off and the
   self-heal lane files or reuses one fix ticket for the failing check (component `ci:<check>`) in
-  the repo whose CI fails, links it as a blocker and holds the ticket on it in place, logging
+  the repo whose CI fails and holds the ticket on it in place (no Linear blocker link), logging
   `pr_watch.ci_fix_ticket`; no person is asked, and the count restarts when that hold clears. A
   conflict back after 3 fix runs waits on the open PRs that share its files (below), or goes to
   `Rework` when none does.
@@ -3540,29 +3590,28 @@ Landing order of PRs that change the same files:
   then the lower PR number.
 - A PR waits for the first PR above it in that order that shares a path with it and leads: a PR
   on a hold (any kind) or whose state and head haven't moved for two hours doesn't lead, and a
-  PR that waits counts as moving on every poll it waits. A forced ticket never waits. The order is
+  PR that waits counts as moving on every poll it waits. The order is
   total, so a group of overlapping PRs never deadlocks.
 - A waiting PR keeps working (review, QA, rework); only its sync with the base branch waits: no
   conflict-fix run and no update-branch.
 - A PR that conflicts while one ahead of it shares a path (R14a), or whose conflict came back after
   its 3 fix runs while other open PRs share its paths (R15), waits on them as a visible dependency:
   a `Blocked` hold whose `waits_on` type is `landing`, in place, in any watched phase ("Waiting on
-  MT-1 and MT-2 to land: they change the same files (a.ex, b.md)"; auto-merge off in `Merging`),
-  and a Linear blocked-by link from each competitor's ticket that Linear doesn't have yet. A
-  competing PR with no ticket (a person's) gets no link; the hold names it by number and title. The
-  record keeps the competitors under `pr_watch.links`, with whether Symphony added each link.
+  MT-1 and MT-2 to land: they change the same files (a.ex, b.md)"; auto-merge off in `Merging`).
+  Symphony writes no Linear blocker link for it. A competing PR with no ticket (a person's) is named
+  by number and title. The record keeps the competitors under `pr_watch.links` (`linked` says an
+  earlier release added a Linear link for one; none is added now).
   `competing` (R15) is every open PR sharing a path, in any landing order, with its ticket when the
   watcher watches it, except one on a hold or idle two hours, and the wait at R15 steps behind them
   all: the ticket ranks after each, so none of them waits for it.
 - No wait closes a cycle: neither `ahead` nor `competing` names a ticket already blocked, directly
-  or through others, by the waiting one (its Linear blocked-by links and the waits the watcher
+  or through others, by the waiting one (its stored dependencies and the waits the watcher
   recorded).
 - The watcher judges the hold on every read: a competitor that lands (its ticket terminal, its PR
-  merged) stays linked, as history; one that leaves the race (PR closed, on a hold, idle two hours,
-  no longer sharing a path) is unlinked when Symphony added the link, never when a person did. The
-  hold clears once no competitor is left, and the same read decides on the conflict; the R15 wait
-  restarts the conflict count. A person's `Unblock` clears the hold, removes Symphony's links and
-  stops the wait on those PRs while they stay open. A ticket the watcher stops watching ends its
+  merged) stays recorded, as history; one that leaves the race (PR closed, on a hold, idle two
+  hours, no longer sharing a path) is dropped. The hold clears once no competitor is left, and the
+  same read decides on the conflict; the R15 wait restarts the conflict count. A person's `Unblock`
+  clears the hold and stops the wait on those PRs while they stay open. A ticket the watcher stops watching ends its
   wait the same way.
 - `/api/v1/state` lists every waiting PR under `landing_waits`: `issue_id`, `issue_identifier`,
   `pull_request_url`, `state`, `waits_for` (`issue_id`, `issue_identifier`, `pull_request_url`,
@@ -3607,7 +3656,7 @@ States and owners:
 | `Todo` | Machine | Triage; a plan approval's promotion | The claim → `In Progress` |
 | `In Progress` | Agent | The claim; `Restart`; PR review comments (addressed on the same PR) | The handoff → `Code Review` |
 | `Code Review` | Agent (reviewer) | The handoff (from `In Progress` or `Rework`); a `CI Fix` return | Approve → `QA`, or `Merging` when QA is skipped; rework → `Rework`; block → `Needs Decision` hold; red head → `CI Fix` |
-| `QA` | Agent (QA) | A Code Review approve; a `Rework` that answered every finding without a code change | Pass → `Merging`; fail → `Rework`; red head → `CI Fix` |
+| `QA` | Agent (QA) | A Code Review approve; a `Rework` that answered every finding without a code change (after a QA fail, or a blocked QA pass the Conductor routed to `Rework`), which is never parked for no progress | Pass → `Merging`; fail → `Rework`; red head → `CI Fix` |
 | `Merging` | Machine | QA pass, or an approve that skipped QA (with manual review on, after its confirmation), never while a check of the plan the merge waits on is open | Merged → `Done`, or `Waiting on sub-tickets` while started sub-tickets are open; red head or conflict → `CI Fix`; the plan holds the merge → `Rework` |
 | `Rework` | Agent | A rework verdict; a QA fail; a substantive CI Fix; a plan change | The handoff → `Code Review` (an epic parent → `Plan Review`); every finding of a QA fail answered on the unchanged head → `QA` |
 | `CI Fix` | Agent (mechanical lane) | A red head or a conflict in `Code Review`, `QA`, `Merging` or `Rework` | A green head → the recorded origin, approvals carried (none once a plan version was written after the code: → `Rework`); substantive → `Rework`; access needed → `Needs Decision` hold |
@@ -3626,7 +3675,12 @@ Rules:
   `In Progress` from `Rework`, `Code Review`, `QA` or `Merging` MUST be refused as a `Restart`.
 - **The plan holds the merge.** A move into `Merging`, and a move to `Done` that closes a ticket on
   its own pull request (a merge, a person's move), MUST be refused while a check of the ticket's
-  current plan is open, unwaived and not marked `after_merge`. A plan version written after the
+  current plan is open and unwaived. A check the pull request's own CI run proves (`proof: ci`)
+  holds the move to `Done` but neither the handoff nor the move into `Merging`: in `Merging` the PR
+  and CI watcher MUST NOT merge or arm auto-merge while it is open, MUST record it as proved when it
+  names a CI check that passed on the head, and otherwise gives one run per head the turn to read the
+  PR's checks and prove it, sending the ticket to `Rework` when that run leaves it open; no person is
+  asked about it (R28a to R28e). A plan version written after the
   newest implementation or rework run started cancels every approval of the code: from `Code Review`,
   `QA`, `CI Fix` and `Merging` the ticket goes to `Rework` and no approval carries it on. So does a
   Conductor turn's `hold` at `before_merge`, at `message` or on a watch. The PR and CI watcher turns
@@ -3693,7 +3747,10 @@ Rules:
   conflicting is recorded `blocked` with the component `ci` and leaves the ticket in `QA` for the
   watcher to route; it MUST NOT go to `Rework`. A red head in `Code Review` once approved, in
   `QA`, `Merging` or `Rework`, or a PR that conflicts with its base, MUST enter `CI Fix` with its
-  origin recorded, whether or not the PR also conflicts. The exception is a `Rework` head Code
+  origin recorded, whether or not the PR also conflicts, once its ticket holds a slot: a ticket
+  without one MUST NOT have its branch updated, its checks rerun, a conflict fixed or a QA build
+  asked for, and MUST keep every hold it has; it does all of that when it takes a slot
+  (Section 8.3). The exception is a `Rework` head Code
   Review's changes verdict stands on: its code is about to change, so the watcher MUST NOT rerun its
   checks, update its branch or send it to `CI Fix` for a red check, and the rework run goes ahead
   whatever CI says. An approval held in `Code Review`, or through `CI Fix` back to it, MUST be carried
@@ -3719,24 +3776,25 @@ Rules:
   with no open pull request recorded.
 - **Holds overlay, never relocate.** `Blocked` and `Needs Decision` are holds persisted in the
   ticket-state store and projected as machine-owned labels, which only the machine writes. A held
-  ticket MUST NOT dispatch and MUST NOT move because of the hold. `Blocked` is set by an open
-  blocked-by dependency on a ticket in any active phase, an agent's request to park in `Backlog` from
-  `In Progress` or `Rework` (its block report), a self-heal fix ticket (including the PR and CI
+  ticket MUST NOT dispatch and MUST NOT move because of the hold. `Blocked` is set by an agent's
+  request to park in `Backlog` from `In Progress` or `Rework` (its block report), a self-heal fix ticket (including the PR and CI
   watcher's fix ticket for a check that keeps failing), or the watcher's wait on competing PRs (its
   `landing` kind), and clears by itself when
-  what it waits on goes terminal (an access hold clears on a person's `Unblock`). A block report
-  from a ticket with open blocked-by blockers MUST record a dependency hold on those blockers, which
-  clears by itself once every one is terminal, in whatever phase the ticket is, and the ticket
-  dispatches again in that phase; outside `Todo`, a blocker whose fix merged into Symphony itself
-  also waits until the running app includes its merge commit. A block report with no open blocker
-  records an access hold. Beside a dependency or fix-ticket hold, the ticket's pause has one `ticket`
+  what it waits on goes terminal (an access hold clears on a person's `Unblock`). The tracker's
+  blocker links set no hold: Symphony does not read them, and a ticket's stored dependencies hold it
+  through the dispatch gate alone (Section 8.2). A block report from a ticket with open stored
+  dependencies MUST record a dependency hold on them, which clears by itself once each is met (or
+  removed), in whatever phase the ticket is, and the ticket dispatches again in that phase; outside
+  `Todo`, a dependency whose fix merged into Symphony itself also waits until the running app
+  includes its merge commit. A block report with no open dependency records an access hold. Beside a dependency or fix-ticket hold, the ticket's pause has one `ticket`
   reason per ticket the hold waits on ("Waiting for TP-12 to finish"), set by the same writer
   whoever paused it, and each poll clears the reason of a ticket the hold no longer waits on, so the
   pause clears with the last. A block report's dependency hold names its blockers until the last is
   terminal, but its pause drops each blocker's reason as soon as that one is terminal (keeping the
-  ones the hold waits on for an app update), and a reason the blocked-by sync, self-heal or a block
-  report set that no hold names any more is cleared on the next poll. A block report with no open
-  blocker asks a question through the
+  ones the hold waits on for an app update), and a reason self-heal or a block report set that no
+  hold names any more is cleared on the next poll, as is any reason the retired hold on the
+  tracker's blocker links (the rule "Blocked-by links") left behind. A block report with no open
+  dependency asks a question through the
   Question service ("The run on <id> cannot continue on its own": "Unblock and run again" or "Keep it
   paused"), which the access hold names; `Unblock` answers it with the first option, and answering
   it with that option unblocks the ticket. Beside a landing hold, the pause has one reason per
@@ -3752,7 +3810,7 @@ Rules:
   and the dispatch that follows reads the base branch again; beside
   self-heal's access hold, on one naming the broken QA component ("The QA machine is not
   reachable"), which clears when a QA pass or an epic review reaches a pass or fail verdict. `Unblock`
-  clears both. A ticket stopped, held back by its blockers or on a hold is listed under
+  clears both. A ticket stopped, held back by its stored dependencies or on a hold is listed under
   `dispatch_skipped` with its pause's text, every reason's line joined by `; ` whatever its kind; a
   ticket with no pause keeps the gate's own words.
   `Needs Decision` is set by an
@@ -3832,7 +3890,8 @@ Rules:
   confirming continues into `Merging`. Rework verdicts never wait on a person.
 - **Self-heal.** A QA or epic review blocked by tooling or environment retries boundedly, then files
   (or reuses) one fix ticket per broken component and sets a `Blocked` hold on the affected ticket
-  waiting on it. The PR and CI watcher's red backstop is such a block: a check still failing after
+  waiting on it. A new fix ticket is filed as the affected ticket's sub-ticket, so it runs through
+  the slot the affected ticket keeps while it waits (Section 8.3). The PR and CI watcher's red backstop is such a block: a check still failing after
   `pull_requests.checks.max_fix_attempts` CI Fix runs, or after 3 in a row with the same failure,
   names the component `ci:<check>` (one fix ticket per failing check per repository, filed in the
   repository whose CI fails), and the affected ticket waits on it in place instead of asking. From the `QA` state only these blocks reach it: the ones the QA tools raise
@@ -3926,52 +3985,48 @@ An issue is dispatch-eligible only if all are true:
 - Its state is in `active_states` and not in `terminal_states`.
 - It is not already in `running`.
 - It is not already in `claimed`.
-- Its priority is among `tickets.priorities` when that key is set, unless it is a forced ticket or
-  a retry waiting for a slot (see 5.4).
-- Global concurrency slots are available.
-- Per-state concurrency slots are available.
-- Blocker rule passes, in every active phase:
+- Its priority is among `tickets.priorities` when that key is set, unless it is a retry waiting
+  for a slot (see 5.4).
+- It holds a slot, or a slot is free (Section 8.3).
+- Dependency rule passes, in every active phase (the stored dependencies, below; the tracker's
+  blocker links are not read and hold nothing):
   - In any active state (`Todo`, `In Progress`, `Rework`, `CI Fix`, `Code Review`, `QA`, `Merging`
-    and the other states dispatch picks work up from), do not dispatch when any blocker is
-    non-terminal. The ticket's pause carries one dependency reason per open blocker ("Waiting for
-    TP-12 to finish"), as a `Todo` ticket's does, and lifts on its own once every blocker is
-    terminal; the ticket then dispatches again in its phase, with no state move. Outside `Todo`, a
-    blocker whose fix merged into Symphony itself also waits until the running app includes its
-    merge commit.
-  - A blocker counts as resolved only once its state is in `terminal_states`. `Merging`,
-    `Code Review`, `QA` and `Rework` still block, since the blocker's change is not on the
-    default branch yet. One exception: a non-plan blocker its PR's merge put in the waiting state
-    (default `Waiting on sub-tickets`) counts as resolved, since its change is on the default
-    branch; a sub-ticket blocked by its own merged parent would otherwise deadlock with it. A plan
-    parent in the waiting state still blocks. A groomed blocker (one that holds a `plan.written`)
-    counts as resolved once its record says its pull request merged, whatever its state. A blocker
-    without a known state counts as open.
-  - A blocker linked while a run is under way never stops the worker once its agent session
+    and the other states dispatch picks work up from), do not dispatch while a stored dependency is
+    not met. The gate decides from the records on every pass and writes no pause; the first pass
+    that finds every dependency met dispatches the ticket again in its phase, with no state move.
+  - A `done` dependency is met once the other issue's record says `Done`. `Merging`, `Code Review`,
+    `QA` and `Rework` still hold, since its change is not on the default branch yet. One exception:
+    a non-plan issue its PR's merge put in the waiting state (default `Waiting on sub-tickets`)
+    meets it, since its change is on the default branch; a sub-ticket that depends on its own merged
+    parent would otherwise deadlock with it. A plan parent in the waiting state still holds. A
+    groomed issue (one that holds a `plan.written`) meets it once its record says its pull request
+    merged, whatever its state. An issue Symphony holds no record of meets none.
+  - A dependency added while a run is under way never stops the worker once its agent session
     started: the turn in flight finishes, the run starts no further turn, and the next dispatch is
-    held. A blocker that reaches the ticket's record while the run is still starting (dispatched, no
-    agent session yet) stops that start, and the pause holds the ticket. The issue is dispatched
-    again on the first poll after every blocker is terminal.
-  - Linear sends a new ticket's create and its blocked-by links as separate webhook deliveries. The
-    first dispatch of a ticket Linear created less than a few seconds ago (`Config.dispatch_settle_ms/0`,
-    five seconds) waits: one timer is set for the end of that settle, and the ticket is read by id
-    with its relations when it fires or at the ticket's next record change, whichever comes first.
-    The read pauses the ticket on any open blocker it finds; the ticket then dispatches only if it is
-    still unblocked. The candidate is listed under `dispatch_skipped` meanwhile ("waiting for its
-    relations: Linear created it a moment ago"). An older ticket, or one with no creation time,
-    dispatches at once.
-  - The status snapshot lists each held candidate with its open blockers (`blocked` in
+    held. One that reaches the ticket's record while the run is still starting (dispatched, no
+    agent session yet) stops that start, and the gate holds the ticket.
+  - Linear sends a new ticket's create and its relations (its parent) as separate webhook
+    deliveries. The first dispatch of a ticket Linear created less than a few seconds ago
+    (`Config.dispatch_settle_ms/0`, five seconds) waits: one timer is set for the end of that
+    settle, and the ticket is read by id with its relations when it fires or at the ticket's next
+    record change, whichever comes first, and observed into its record. The candidate is listed
+    under `dispatch_skipped` meanwhile ("waiting for its relations: Linear created it a moment
+    ago"). An older ticket, or one with no creation time, dispatches at once.
+  - The status snapshot lists each held candidate with its open stored dependencies (`blocked` in
     `/api/v1/state`, for example "MT-12 waiting on MT-15 (In Progress)"), and the dashboard shows
     them under "Waiting on blockers".
   - A fix to Symphony itself takes effect when the running app is updated, not when it merges.
     When the running build knows its commit and repository (`SYMPHONY_BUILD_SHA` and
-    `SYMPHONY_BUILD_REPO`, set by the release workflow), a `Todo` issue whose blockers are all
-    terminal stays held while a blocker's merged pull request is in that repository and its merge
-    commit is not in the running build (GitHub compares `<merge sha>...<build sha>` as neither
+    `SYMPHONY_BUILD_REPO`, set by the release workflow), a `Todo` issue whose `done` dependencies
+    are all met stays held while a dependency's merged pull request (read from that issue's record
+    and Symphony's record of its pull request, never from the tracker's links) is in that repository
+    and its merge commit is not in the running build (GitHub compares `<merge sha>...<build sha>` as neither
     `ahead` nor `identical`). The wait lives on the issue's pause: one `build` reason per such
     blocker ("Waiting for a Symphony update that includes MT-15's fix", `waits_on:
     {pull_request: 132}`), written by the poll and kept across a restart, and cleared on the first
     poll after the running build includes the merge commit, the issue leaves `Todo`, gains an open
-    blocker or the `skip-update-hold` label, or the build has no sha. Its `blocked` entry, read from
+    dependency or the `skip-update-hold` label, loses the dependency, or the build has no sha. A
+    `released` dependency is the dependency gate's own wait for the build. Its `blocked` entry, read from
     the pause, has `kind: "app_update"` and the reason's line as its `reason`, the dispatch gate
     gives the same line, and `app_update.unblocks` counts these issues. While the release build of
     the fix's merge commit isn't published, the `reason` and the gate's line say what it is at
@@ -3993,8 +4048,8 @@ An issue is dispatch-eligible only if all are true:
     once published). `app_update.latest_release` reports the newest
     published release of the repository the app updates from (`repo`, `tag`, `published_at`,
     `source`: `webhook` or `poll`; null until Symphony knows one), so the app checks for the update
-    at once instead of waiting for its own timer. Blockers merged in another repository, a build from a
-    checkout (no sha), and the `skip-update-hold` label on the held issue or on the blocker release
+    at once instead of waiting for its own timer. Dependencies merged in another repository, a build from a
+    checkout (no sha), and the `skip-update-hold` label on the held issue or on the dependency release
     the issue at once. A lookup that fails holds no new issue, and leaves a reason already set
     until the lookup answers.
   - Every polled issue of the running build's own repository, in any active phase and whatever
@@ -4035,7 +4090,13 @@ An issue is dispatch-eligible only if all are true:
   - A groomed issue (one that holds a `plan.written`) follows its own rule there, whatever its
     labels: it is never dispatched, and it closes once its own pull request merged or it never had
     one and none of its sub-issues is outside `terminal_states` (one in `Backlog` holds it), after
-    the Conductor's final check when that junction is on. A final check that ran and did not
+    the Conductor's final check when that junction is on. The final check judges whether the plan
+    was delivered, from the issue's own work (its sub-issues, their checks and merges), and closes
+    the issue without asking whether it may. An outcome no sub-issue delivered and nothing explains
+    is the Conductor's to settle within the plan (a new sub-issue, or the plan written again without
+    it, with the reason), never a question to the person. A final check whose answer concludes nothing (not done,
+    nothing to add or change, no question) is given back to the Conductor once in the same turn,
+    with that reason, and the service acts on the second answer. A final check that ran and did not
     conclude MUST NOT close the issue: the service asks the person and the issue stays in the
     waiting state until they answer. A groomed issue whose pull request merges
     waits there on every sub-issue it has. The move that closes it updates Symphony's record of the
@@ -4103,7 +4164,7 @@ An issue is dispatch-eligible only if all are true:
     `Backlog` that is not running or claimed, the service reads the parent's state history. When
     its latest state change is `Plan Review` to the waiting state, every sub-issue that has been in
     `Backlog` since before that change (created before it, no state change after it) moves to
-    `Todo` in one batch. Blocked-by links keep the order. A parent the service parked from
+    `Todo` in one batch. Their stored dependencies keep the order. A parent the service parked from
     `In Progress` was not approved, so nothing moves. Only a person's move approves: the service
     and the reviewer can share one Linear user, so the service durably records when it moves a
     parent to the waiting state itself (before the move), and a change within 60 seconds of that
@@ -4128,131 +4189,232 @@ An issue is dispatch-eligible only if all are true:
     missing, it logs a warning and stops moving parents there until restart; parents then wait in
     `In Progress` as before. When the check itself fails, the state stays on.
 
-Sorting order (stable intent), forced first, then closest to done first:
+Dispatch order: the stored queue. The open top-level issues form one queue across all repositories,
+and each issue's sub-issues are ordered among themselves inside its place. The order is stored on
+each issue's record as a fractional sort key (`sort_key`, kept across a restart) and is never
+computed at a pass. No position number is stored: the 1, 2, 3 a read shows are counted from the walk.
 
-1. forced issues (Section 8.3), earliest `forced_since` first; a forced issue the queue has not
-   recorded yet follows the queued ones. This applies after the epic-lane ordering.
-2. stage: `Merging`, then `Rework`, then any other active state
-   (a resume, such as `In Progress`), then `Todo`
-3. `priority` ascending (1..4 are preferred; null/unknown sorts last)
-4. `created_at` oldest first
-5. `identifier` lexicographic tie-breaker
+1. Keys are the reference fractional indexing algorithm's: a 62-character alphabet (`0-9A-Za-z`),
+   compared as plain bytes, an integer part whose head counts its length followed by a fraction, and
+   a key between two neighbours taken at their midpoint.
+2. Nesting means "part of", and only that. An issue with a parent is ordered by its key among the
+   issues of the same parent (its scope), and the parent holds the place in the queue. The parent
+   link is permanent: a done sub-issue keeps it, so finished work traces back to its epic. A
+   sub-issue whose parent holds no place (out of the queue, or unknown) is ordered at the top level
+   by its own key. The queue is rebuilt at any moment from the open issues, their parent and their
+   key.
+3. A new issue joins at the end of its scope: the first time its record is written open, or when its
+   parent changes, it takes a key after the last one of its scope. Issues one read shows for the
+   first time join oldest `created_at` first, then by `identifier`.
+4. An issue keeps its key until it leaves the queue: a terminal state, or a removal. Reopened, it
+   joins at the end of its scope again.
+5. A move puts an issue at the top or the end of its scope, or between two neighbours next to each
+   other in it, by writing that one issue's key. When the new key would pass the length limit, only
+   a window of issues around the spot is rewritten, with evenly spaced keys in the same order; the
+   window grows only while its keys are still too long, and the rest of the queue keeps its keys.
+6. `priority` decides no place. A change of priority moves no issue; `tickets.priorities` stays a
+   gate on which issues may start.
+7. The dispatch pass walks its candidates by place alone: the top-level issues in key order, each
+   parent's sub-issues in their own key order right after it (Section 8.3 says how sub-issues run
+   through their parent's slot): a free slot goes to the first one that can start. An issue a gate holds (a
+   blocker, `Backlog`, the priority filter, a pause...) keeps its place and is skipped. A candidate
+   with no record yet goes last, by `created_at`, then `identifier`.
+8. The first start of the release that stored the queue places the issues already there once, in the
+   order the pass computed before: the issues already started (past `Todo`, or with a started run in
+   their ledger) in front, then the rest; inside each group stage (`Merging`, `Rework`, other active
+   states, then `Todo` and `Backlog`), then `priority` ascending (null last), then `created_at`
+   oldest first, then `identifier`. A later start keeps every place.
+9. The first start of the release that stored sort keys turns the integer places stored before into
+   keys once, in the same order: the top-level issues evenly spaced, and each parent's sub-issues
+   among their siblings in their previous relative order. A later start changes no key.
 
-While an issue in `Merging` is waiting for a slot, no `Todo` issue is dispatched. `Rework` and
-resumes still are, and so is a forced `Todo` on the forced allowance. The held `Todo` issue's
-`slot_waiting` reason names the issue it waits for (`MT-2 (Merging) is waiting for a finishing
-slot`).
+Stored dependencies: an issue's record holds the issues it depends on (`depends_on`). They are the
+only dependencies Symphony knows: it reads no blocker link of the tracker's, imports none, and a
+link a person adds in the tracker affects nothing. Each entry names the other issue (its id, and
+its identifier for the lines that show it) and what this one needs of it: `done` (merged: the
+other record's phase is `Done`, or its pull request merged and it waits on its own sub-issues, or
+it is groomed and its pull request merged) or `released` (done, and the running build includes its merge,
+as the app-update hold knows it; merged in another repository, opted out with `skip-update-hold`,
+or with a running build that has no sha, it is released at `Done`).
 
-Priority vs expedite: `priority` means importance and only orders issues waiting for normal slots,
-after the stage. Raising it never gets an issue past `max_total`, a per-state cap, the epic lanes
-or `finishing_max`. To have an issue worked now, a person forces it with the
-`concurrency.force_label` label (default `expedite`, or `symphony force <identifier>`); Section 8.3
-lists what forcing bypasses and what it respects. Forcing only removes the wait for a slot. These
-transitions stay with a person, forced or not:
+1. Only the engine's add and remove operations write the field; no read of the tracker, and no other
+   write of the record, fills, changes or clears it. Adding the same pair again replaces its kind; a
+   dependency of an issue on itself, or one that closes a cycle, is refused; removing one not
+   stored is fine.
+2. A dependency points upward in the queue: added on an issue that sits lower, it moves the
+   depending issue to just below it, where their scopes meet (the depending issue's ancestor and
+   the other's that share a parent, or are both top-level), in the same transaction. On an issue
+   already above, on its own parent or sub-issue, or on an issue out of the queue, no place changes.
+   A remove changes no place.
+3. A candidate with an unmet dependency is not dispatched: the gate (`depends_on`) is decided on every
+   pass from the stored records alone, with no read of the tracker and no pause written, and names
+   each issue waited on. An issue with no record, or cancelled, meets no dependency. The first pass
+   that finds every dependency met lets the issue start. An issue the gate holds reads, in its
+   situation (the Home and dispatch order reads), as `blocked_by_ticket` exactly as one paused on a
+   block report's dependency does:
+   "Blocked by MT-1", `waits_on: {ticket: "MT-1"}`, naming the first dependency whose issue is not
+   `Done`, else the first `released` one, whose cause says it waits for a Symphony update that
+   includes it.
+4. Symphony writes its own order as stored dependencies (`done`), never as a tracker blocker link:
+   a split's sub-issue that waits `after` siblings depends on each (it is created in `Backlog`, put
+   on the records, given them, then moved to `Todo`); a sub-issue a run files to do after its issue
+   depends on that issue; the Director's add and remove of a dependency
+   (`POST /api/v1/control/dependency`, with its kind), of a blocker on the ticket page
+   (`POST /api/v1/control/blocker`, a `done` dependency, whose
+   `GET /api/v1/tickets/:issue_identifier/blockers` lists the stored dependencies) and the agent
+   tools' `blocked_by` write and remove them. No code path writes
+   or removes a tracker blocker link; a competing PR's landing hold and a fix ticket's hold wait
+   through the issue's pause.
+5. No operator control breaks a dependency, and each refusal names the issues: a manual start of an
+   issue with an unmet dependency ("TP-977 depends on TP-976 and can't start before it is done.",
+   or "… released." for a `released` one, judged as the gate judges it, whatever slot it names; the
+   ticket reads' Start entry judges it with the same build and the update hold's cache the
+   orchestrator publishes in its snapshot, so the read never offers a Start the call refuses), a
+   queue move whose order would put an issue above one it depends on, compared where their scopes
+   meet ("TP-978 depends on TP-977 and must stay below it.", decided under the queue's lock; nothing
+   moves), and a cancel of an issue that open issues (not ended) depend on ("TP-976 can't be
+   cancelled: TP-977 and TP-978 depend on it. Remove those dependencies first.") until those
+   dependencies are removed. A move refuses only an order it turns upside down: a dependency already
+   upside down before it doesn't. The same holds inside an epic that holds a slot: its sub-tickets
+   still to come (Home's `open_sub_tickets`) move among themselves and start as an epic's in the
+   queue do, with the same refusals, and a Start of one swaps it with the sub-ticket in work
+   (Section 8.3).
+6. The first start of the release that writes them turns the order Symphony recorded for open
+   sub-issues into stored dependencies, once: each plan entry's `after` (on each sibling it names)
+   and each sub-issue the Conductor filed from a run to do after its issue (on that issue), read from
+   Symphony's events and records, never from the tracker.
+
+An issue in `Merging` gets no precedence and no allowance of its own: it keeps the slot it took at
+its first run, and a ticket in `Merging` without one waits for a free slot like any other.
+
+Priority: `priority` means importance; it orders nothing in the queue and only gates through
+`tickets.priorities`. Raising it never moves an issue in the queue, nor gets it past `max_total`.
+These transitions stay with a person:
 
 | Transition | Who |
 | --- | --- |
-| `Backlog` -> `Todo` | a person promotes the issue; forcing does not |
+| `Backlog` -> `Todo` | a person promotes the issue |
 | `Plan Review` -> the waiting state (default `Waiting on sub-tickets`) | a person approves a plan |
 | a `Needs Decision` hold | a person records the decision |
 | any state -> `Restart` | a person resets the approach |
 
-The Code Review and QA verdicts are still required for a forced issue.
+The Code Review and QA verdicts are required for every issue.
 
 ### 8.3 Concurrency Control
 
-Global limit:
+Slots:
 
-- `available_slots = max(max_concurrent_agents - running_count, 0)`, where `running_count`
-  leaves out landing runs and forced runs.
+- `max_concurrent_agents` (`concurrency.max_total`) is the number of slots: 1 slot means one
+  ticket is worked at a time, 2 slots two tickets.
+- A slot belongs to a ticket, never to one agent turn. A ticket takes a slot when its first run is
+  dispatched and holds it until it is done, whatever its phase: coding, review, QA, CI, a build,
+  `Merging`. It holds it on a machine step, between its agent turns, between its runs, in retry
+  backoff, while it waits for CI or a build with no live run, while it waits on the person (a
+  Question, a decision, a plan in `Plan Review`), and while it waits on another ticket (its own
+  sub-tickets, a stored dependency of either kind, a block report's dependency, a fix ticket, a
+  competing pull request, an app update that carries a dependency's fix).
+- A ticket that holds a slot is in progress; that is the only meaning of in progress. The dispatch
+  order read and the Home read (Section 13.4) say which ticket holds each slot, how many are free,
+  and carry `in_progress` on each ticket, true exactly when it holds a slot. For a slot an epic
+  holds, the Home read also lists the epic's done sub-tickets and its open ones, and each queue row
+  lists all its stored dependencies with whether each is met.
+- The holders are stored on the ticket records (`slot_held_since`), so a restart keeps them. Each
+  slot has a number from 1, stored with its holder (`slot_number`), so a restart keeps it: a new
+  holder gets the lowest number no holder uses, and a sub-ticket running through its ancestor's slot
+  shares its number.
+- A person's Start takes a slot: the one it names, else a free one, else the one taken most
+  recently. A slot that is held is taken over: the runs working through it stop (the pull request
+  stays open), and its holder gives it up and goes to the head of the queue, not paused. A ticket
+  that holds a slot, or runs through its ancestor's slot at no cost, starts in it; a sub-ticket whose
+  ancestor's slot another sub-ticket works through swaps with it, which becomes the next to come.
+- A person's Stop frees the ticket's slot in the same call. A stopped sub-ticket goes back to the
+  head of its epic, and the epic to the head of the queue. A Start or a Stop that changes a slot or
+  the order sends the queue notice (`order`, `slots`) on the stream at once.
+- A ticket in a slot that reaches a terminal state, with a live run or between its runs, ends in its
+  slot in that same handling, with no poll: a done one is noted done first, so a Home read made
+  right after gives it first in `recently_done`; it gives its slot up and a dispatch cycle runs at
+  once. A sub-ticket's epic keeps the slot, and the epic's next sub-ticket that can start takes it
+  in that cycle (none starts when none can; the epic waits in its slot). An ordinary ticket's slot
+  is free and goes down the queue in the stored order. The reads are walked again and published,
+  and the stream gets a `slots` notice for the end (`by: done`, `ended` for another terminal state)
+  and one for each slot the dispatch then gives (`by: pass` for an epic's next sub-ticket, `by:
+  take` for a free slot).
+- A ticket's sub-tickets run through its slot, whether or not it has work of its own: a split
+  epic's sub-tickets, and a fix ticket filed for a ticket in the middle of its work, which is filed
+  as its sub-ticket (the self-heal lane's fix tickets and the Conductor's blocking tickets). A
+  sub-ticket runs through the slot of its nearest ancestor in progress. The ancestor and its first
+  sub-ticket in progress count as one slot; each further sub-ticket in progress at the same time
+  counts as one extra slot, returned when that sub-ticket is done. The ancestor keeps exactly one
+  slot between its sub-tickets and through its waits; between two sub-tickets the slot idles.
+- A ticket that holds a slot lends it to a ticket it waits on outside its own tree, so that ticket
+  runs through the holder's slot as a sub-ticket does: the ticket its pause waits on (a run's block
+  report naming another ticket, a fix ticket reused from another affected ticket, a Conductor
+  blocker that already existed, a competing pull request) and each of its open stored dependencies
+  (one added mid-work). The waited-on ticket borrows only when it has no ancestor in progress, or
+  runs through the same ancestor as the holder (a sibling under one epic, since the holder already
+  counts as that epic's sub-ticket in progress), and is not in progress on its own slot; the
+  holder's own ancestor borrows nothing. It keeps the loan while the holder waits on it. So a holder
+  never waits on a ticket no slot is free for: with one slot, the blocker runs on the holder's slot,
+  and the two count as one used slot.
+- `available_slots = max(max_concurrent_agents - taken, 0)`, where `taken` counts the tickets in
+  progress (those that hold a slot and every other run under way: a PR run with no ticket takes a
+  slot while it runs) less, for each ticket in progress that a sub-ticket (or a ticket it lends its
+  slot to) in progress runs through, that ticket's own slot. The reads' `used` is that count.
+- A ticket that holds a slot always starts its next run (the worker hosts' own capacity still
+  applies), and so does a sub-ticket whose nearest ancestor in progress has no other sub-ticket in
+  progress. Any other ticket starts only when a slot is free, and takes it at dispatch. No agent
+  turn and no machine step runs for a ticket that holds no slot; its Grooming turn runs inside its
+  first dispatched run, after it took the slot. A QA build is asked for only for a ticket that holds
+  a slot.
+- The pull request upkeep acts only for a ticket that holds a slot (Section 10, the PR and CI
+  watcher): for a ticket without one the watcher reads and records its PR (its checks, its
+  conflicts, a merge or a close by a person) and takes no action on it. Whether a ticket holds a
+  slot is read from its record (`Slots.held?/1`), the one answer every caller outside the
+  orchestrator uses. A step the watcher holds back is recorded as a wait for a slot; when a slot is
+  free, such a ticket takes it in its place in the dispatch walk with no run (only the watcher's gate
+  may hold it back, none of the gates a fresh pick passes), and the orchestrator asks the watcher to
+  read its PR at once, so the ticket catches up with its base then: its branch is updated, its
+  conflict fixed, its checks rerun and its QA build asked for, and its run starts once the watcher
+  lets it.
+- When the pass finds no free slot it still runs while a holder has no run, so that ticket's next run
+  starts.
+- Lowering the slot count below the holders evicts nobody: no new ticket starts until fewer hold a
+  slot.
 
-Forced allowance:
+Giving a slot up:
 
-- An issue carrying `concurrency.force_label` outside a terminal state is forced. While fewer than
-  `forced_max` forced runs are running, a forced issue dispatches as a forced run: it skips
-  `max_total`, the epic lanes, `finishing_max`, `max_by_issue_state` and the "no `Todo` while a
-  finish waits" rule. The poll and the retry path (continuations such as `ci_fix` and
-  `review_feedback`, and landing runs) both apply it.
-- A forced run is marked `forced: true` and is counted by none of `running_count`, the finishing
-  count, the per-state counts or the epic lanes, so it never takes a normal slot. A run already
-  going when the label is added stays a normal run, and a running agent is never pre-empted.
-  When an issue leaves the forced queue (or stops being a forced parent's part) while its forced
-  run is going, that run is no longer `forced`: it gives the forced allowance back, so an issue
-  still forced can take it, and goes on as a normal run.
-- A forced issue that finds `forced_max` forced runs running gets no extra slot. It still sorts
-  first for a normal slot (and runs as a normal run if it gets one), shows its queue position in
-  the `forced` snapshot and as its `slot_waiting` reason (`queued #2; forced slot taken by MT-1`),
-  and the service logs a warning and emits one `forced_waiting` notification naming the forced
-  runs holding the allowance, once per wait.
-- When every normal and finishing slot is full, a poll still runs its dispatch pass for a forced
-  candidate the allowance can take, or that has not been noted as waiting yet.
-- The daily token budget (`max_tokens_per_day`) does not stop a forced dispatch: when it is
-  exhausted only forced candidates dispatch, with a warning, and other waiting issues keep their
-  place. The per-issue cap (`max_tokens_per_issue`) still applies.
-- A usage-limit headroom hold (Section 8.4.2) does not hold a forced issue's run. A `paused` or
-  `canary` hold still does, and when a hold resumes a held forced retry is chosen as the canary.
-- Still respected: the operator pause, the Linear rate-limit pause, the workspace quota pause, the
-  per-host worker cap, blocked-by links, setup-failure suppression, retry backoff,
-  and the auto-merge / `Merging` CI waits.
-- A forced plan parent is one forced unit; its plan, re-plan and epic review runs are
-  forced runs. While it waits on its sub-issues (and is not re-planning), its current part is
-  forced too, without the service writing the label on it: the first issue on its epic path
-  (see Epic lanes below) that is dispatch-eligible, in epic-lane order
-  (stage, then nearest the epic, then dispatch order), so a blocked sub-issue waits for its
-  blocker. The part keeps its
-  parent's place in the forced queue, and stays the parent's while it is on the path and running,
-  claimed or waiting on a retry, so at most one of the parent's issues runs on the
-  forced allowance at a time. The parent's other
-  sub-issues use normal slots and the epic lane. Forcing a sub-issue forces only that sub-issue.
-- Forcing never moves an issue or approves a plan: a forced parent in `Plan Review` stays there
-  until a human moves it.
+- A ticket gives up its slot only when it is done (a terminal state), when it leaves the active
+  states (a person moved it to `Backlog`, it was removed, or unassigned from this worker), or when
+  a person stops it. A stop that comes with a Question waits on the person and keeps the slot.
+  Every wait on another ticket keeps it, and the ticket it waits on runs through it (above). One
+  exception: a ticket that has not started (still in `Todo`) and gets a stored dependency on a
+  ticket that is not done and not in progress gives back the slot it was given, in the cycle the
+  dependency's write asks for, so the dependency starts through that slot. It keeps its place in
+  the queue and starts in its order once the dependency is done.
+- A ticket with no live run is judged on every cycle against the cycle's candidates and its closed
+  dispatch gate; one with a live run gives it up when the run is ended for a terminal or inactive
+  state. The cycle that frees a slot asks for another at once, so the next ticket takes it without
+  waiting for a poll.
 
-Finishing limit:
+Which ticket a free slot goes to:
 
-- A landing run (an issue in `Merging` that is not a parent ticket) does not use `available_slots`
-  or an epic lane. It needs `landing_running_count < finishing_max` instead.
+- In the stored queue order alone (Section 8.2), to the first ticket that can start: for the
+  parent at the top that holds a slot, its next sub-ticket whose dependencies are met, so
+  sub-tickets with no dependency between them run at the same time; when it has none ready, the next
+  ticket down. A sub-ticket never jumps ahead of a ticket placed above its parent.
+- The first ticket of the queue (the first candidate in progress, free to start, or held only by a
+  wait on a stored dependency or on its sub-tickets), when it holds no slot and waits on a stored
+  dependency or its sub-tickets, takes the free slot with no run and waits there; its run starts
+  once the wait is over. With one slot nothing below it starts meanwhile. A ticket that has not
+  started waits there on a dependency only when the dependency runs on a slot of its own or is done
+  and waits for its release; one whose dependency needs a slot is not the first of the queue, so the
+  dependency (its own or a sibling under the same epic) goes first through that slot. With nothing
+  running and a ticket that can start in the queue, the free slot goes to it. Any other ticket that
+  cannot start takes no slot.
 
-Per-state limit:
-
-- `max_concurrent_agents_by_state[state]` if present (state key normalized)
-- otherwise fallback to global limit
-
-The runtime counts issues by their current tracked state in the `running` map.
-
-Epic lanes:
-
-- An active epic is a plan parent waiting on its sub-issues with at least one sub-issue
-  approved and not finished (any state other than `Backlog`, `Triage` or a terminal state).
-- An active epic yields while nothing on its path can run: every open issue on the path is in
-  `Plan Review`, `Backlog` or `Triage`, has no known state, is a plan parent waiting on its
-  sub-issues (outside `Rework`), has open blockers in any active phase, or has a priority
-  `tickets.priorities` keeps from dispatching (unless the issue is forced, waits for a slot on a retry,
-  or has a run or a claim under way). A yielded epic takes no lane.
-- The other active epics are ordered by the parent's priority, then the parent's creation time. The
-  first `min(epic_lanes, max_concurrent_agents)` of them each reserve one slot (a lane); the rest
-  wait for a lane. `epic_lanes` defaults to `max_concurrent_agents`.
-- `shared_slots = max_concurrent_agents - lane_count`.
-- An epic's path is its non-terminal sub-issues, their sub-issues at any depth, and the
-  non-terminal blockers (`blocked_by`) of any of those, transitively. The walk follows the
-  candidate issues; an issue that is not a candidate ends its branch. Each issue on the path keeps
-  its shortest distance from the epic and the issue it blocks or is a sub-issue of.
-- An issue on the path of an epic with a lane runs in that lane when nothing else holds it;
-  otherwise it, and every other issue, needs a free shared slot. An issue on the path of two epics
-  runs in whichever lane is free first and holds only one lane.
-- Within a dispatch stage, a lane's issues go nearest the epic first: the epic's next part, then a
-  blocker or sub-issue of it, and so on. They swap only among the places they already hold in the
-  dispatch order, so priority and age only break ties between them.
-- A lane with nothing running stays reserved while an issue on its path can run, for example a
-  blocker that is landing, so the next issue on the epic's path starts there as soon as its blocker
-  merges, even when the shared slots are full.
-- The `epic_lanes` snapshot shows, for a running lane, the issue it runs and, when that is not one
-  of the epic's own sub-issues, the issue it blocks or is a sub-issue of (`via`). Yielded epics
-  follow the lanes with `status: "yielded"` and a `reason` naming each open issue on the path and
-  what it waits on; when a priority holds one of them, the reason opens with
-  `No sub-ticket Symphony can dispatch: priorities below <lowest allowed>.`
-- Lanes are recomputed from the candidate issues on every poll tick, so a yielded epic takes a lane
-  again once an issue on its path can run. A move of an issue and the end of a run on a lane's path
-  each run a tick at once, so a lane whose epic has nothing left to dispatch is released on that event.
+Nothing else limits the slots: landing has no allowance of its own, no phase has a limit of its
+own, and no slot is reserved for epics. `/api/v1/state` keeps `finishing`, `epic_lanes` and
+`concurrency.finishing_max` with empty values for the clients that read them.
 
 ### 8.4 Retry and Backoff
 
@@ -4331,8 +4493,8 @@ reached (for Claude, a used-up five-hour or weekly window; for Codex, an error w
   no hold covers. With no such fallback, every dispatch path skips the candidate: the poll,
   retries and operator PR runs. A continuation of a run in progress is judged on the run kind's
   own choice only. Other providers keep dispatching. Epic lanes stay reserved.
-- At `resume_at` the hold moves to `phase: canary` and exactly one held retry, the first in normal
-  dispatch order (a forced issue first), is released as the canary; an immediate poll tick runs. The hold keeps covering
+- At `resume_at` the hold moves to `phase: canary` and exactly one held retry, the first in the
+  queue order, is released as the canary; an immediate poll tick runs. The hold keeps covering
   every other run of that provider, so slots freed by held runs are not filled with other work on
   it. With nothing held, the hold is cleared and no canary runs. The held issues are read from the
   tracker to order them; until that read answers the hold stays as it was, and a held retry that
@@ -4371,8 +4533,7 @@ operator's own sessions: the provider is at its reserve.
   (reported as a new pause).
 - The hold skips new dispatches on every path, as a pause does, and holds a retry that comes due
   with its attempt. It does not hold runs in flight, their continuation turns, the continuation
-  run scheduled when a run ends with the issue still active, landing runs (`kind: landing`), or a
-  forced issue's run (Section 8.3).
+  run scheduled when a run ends with the issue still active, or landing runs (`kind: landing`).
   `dispatch_state.active?` stays true while landing runs can still dispatch.
 - The provider is unavailable for new runs the way a paused one is: a new run resolves to the first
   fallback of its run kind whose provider is neither paused nor held. A ticket whose run has no
@@ -5101,15 +5262,15 @@ Scoped Linear tool extension contract:
   list of issue identifiers, and MUST reject team, project, parent, assignee, and state arguments.
   Each `blocked_by` identifier MUST name a sub-issue of the current issue (an existing child, or
   one the run created earlier); otherwise the call MUST fail with an explicit error before the
-  issue is created. Accepted identifiers become `blocks` relations on the new issue, created right
-  after it. Without a `priority`, the new issue MUST inherit the current issue's priority. When the
+  issue is created. Accepted identifiers become stored `done` dependencies of the new issue,
+  written right after it (the records take the new issue first); no tracker link is written. Without a `priority`, the new issue MUST inherit the current issue's priority. When the
   current issue is a plan parent (the `plan` or `breakdown` label), the new issue MUST land in the
   team's `Backlog` state (falling back to a `backlog`-type state), where the plan's approval promotes
-  it. Otherwise it MUST land in the team's `Todo` state, and the current issue MUST be marked blocked
-  by it (a `blocks` relation from the new issue, created after the `blocked_by` ones), so the
-  split-off work lands first and the current issue continues once it is terminal, with no person
-  promoting or linking anything; a link Linear refuses MUST fail with an explicit error naming the
-  created issue, so the run can add it with `linear_add_blocked_by`. Title and description
+  it. Otherwise it MUST land in the team's `Todo` state, and the current issue MUST get a stored
+  `done` dependency on it (after the `blocked_by` ones), so the split-off work lands first and the
+  current issue continues once it is done, with no person promoting or linking anything; a
+  dependency the store refuses MUST fail with an explicit error naming the created issue, so the run
+  can add it with `linear_add_blocked_by`. Title and description
   MUST pass the same secret scan as comments before any Linear call. Creation MUST NOT be capped per run; a title matching
   (ignoring case and spacing) one the run already filed under the same parent MUST be refused with an
   explicit error naming the earlier sub-issue's identifier, and creation MUST be refused when the
@@ -5118,14 +5279,15 @@ Scoped Linear tool extension contract:
 - `linear_update_subissue` MUST only change a child of the current issue that is in `Backlog`; a
   sub-issue in any other state, or an issue that is not a child, MUST fail with an explicit error
   and change nothing. It accepts `identifier` and either `title`, `description` and a `blocked_by`
-  list (the complete set of sibling blockers: missing sibling links are created, sibling links
-  left out are removed, links to non-siblings stay), or `cancel_reason` alone, which is posted on
+  list (the complete set of sibling blockers, as stored `done` dependencies: missing ones are
+  stored, ones on siblings left out are removed, ones on non-siblings stay), or `cancel_reason` alone, which is posted on
   the sub-issue before it moves to the team's canceled state. Text fields MUST pass the same
   secret scan as comments. The read-only reviewer scope MUST NOT advertise or execute it.
-- `linear_add_blocked_by` MUST only add relations to the current issue: it accepts only a
-  non-empty `blocked_by` list of issue identifiers and creates one `blocks` relation from each to
-  the current issue. Every identifier MUST be looked up before any relation is created; an unknown
-  identifier or the current issue itself MUST fail with an explicit error and link nothing. A final
+- `linear_add_blocked_by` MUST only add dependencies to the current issue: it accepts only a
+  non-empty `blocked_by` list of issue identifiers and stores one `done` dependency of the current
+  issue on each; it writes no tracker link. Every identifier MUST be looked up among the issues
+  Symphony tracks before any dependency is stored; an unknown identifier or the current issue itself
+  MUST fail with an explicit error and store nothing. A final
   verification uses it to wait on its gaps in `Todo`. The read-only reviewer scope MUST NOT
   advertise or execute it.
 - `linear_create_project_update` MUST only post to the current issue's project, resolved
@@ -5168,9 +5330,9 @@ Scoped Linear tool extension contract:
   description unchanged. It MUST refuse, with nothing recorded, a test holding a ` › ` or ` > `
   separator (a check name), `QA`, a step the walkthrough lacks, a step its author ended with
   `Proved by: QA`, and a test that fails the comments' secret scan; the read-only reviewer and QA
-  scopes MUST NOT advertise or execute it. The QA journey, the QA pre-check and the QA
-  selection MUST read a step's proof from the recorded `evidence` events only, the latest event of a
-  step winning, and never from the description; the pre-check's steps come from the events alone.
+  scopes MUST NOT advertise or execute it. The QA journey, the proved steps a QA pass hands on and
+  the QA selection MUST read a step's proof from the recorded `evidence` events only, the latest
+  event of a step winning, and never from the description.
   The description's `Proved by:` lines MUST be a projection of those events, rendered between
   `<!-- symphony:proofs:start -->` and `<!-- symphony:proofs:end -->` at the end of the walkthrough in
   the same pass as the Decisions section, the walkthrough ending at the next heading or at a line
@@ -5656,20 +5818,6 @@ SHOULD return:
   final transcript replay metadata while the watch remains open
 - `retrying` (list of retry queue rows)
 - each retry row SHOULD include `repo_key`
-- running, retry and `slot_waiting` rows SHOULD include `forced`: for a running row, whether it
-  runs on the forced allowance; for the others, whether the issue is in the forced queue or is a
-  forced parent's current part
-- `forced` rows SHOULD include `title`, `repo_key` (null when Symphony hasn't routed the issue yet),
-  `sub_issue` (a forced plan parent's current part, or null)
-  and `waiting_on_human` (the issue is in `Backlog`, `Triage` or `Plan Review`)
-- `forced` rows SHOULD include `forced_for_seconds`, `stale` (forced for at least
-  `concurrency.forced_stale_after_hours`), `phase` (one of `implementation`, `rework`,
-  `review_feedback`, `ci_fix`, `waiting_on_ci`, `waiting_for_human`, `landing`, `code_review`,
-  `qa`, `breakdown`, `epic_review`), `running` (an agent run is
-  going for it), `waiting_on` (one of `slot`, `human`, `ci`, `blocker`, `usage_limit`, `paused`, `backlog`,
-  or null), `blockers` (the open blockers' identifiers when `waiting_on` is `blocker`) and a
-  one-line `summary`; for a forced plan parent with a current part, the phase and what it
-  waits on are the part's
 - `sessions`: every live session, of any kind, in one list: the agent runs (`kind` is the run's
   profile kind, such as `implementation` or `code_review`);
   each row has `kind`,
@@ -5706,6 +5854,11 @@ SHOULD return:
   `execution.providers.<provider>.reserve`, null when it has none or Symphony can't read its usage)
   and `at_reserve` (a headroom hold keeps new runs off it, Section 8.4.2). A
   Pause or a Resume of a provider pushes the new state at once.
+- `update_window`: the update the menu bar app has ready (Section 4.1.11's `update_ready`), null when
+  none is: `version`, `phase` (`waiting` while dispatch goes on, `holding` once Symphony paused for
+  it), `ready_at` and `holding_since`.
+- `conductor_runs`: the Conductor turns mid-run, which a restart's stop waits for (Section 4.1.11's
+  handover).
 - `pause`, `budget`, `dispatch_state`, and `workspace_lifecycle` when those extensions are enabled.
   `pause` is Symphony's own pause (Section 4.1.11): `paused` while a `person` or `build` reason
   stops all dispatch, with the first such reason's line as `reason` (an update's is
@@ -5718,6 +5871,37 @@ SHOULD return:
   reason's line on Symphony's pause, null when the pause does not hold it), but
   `dispatch_state.active?` is false only when the holds hold every provider (and model) and run kind
   in use.
+
+The Director's Home read (`GET /api/v1/home`), built from Symphony's own records and ledgers with
+no Linear or GitHub request, SHOULD give, beside the in-progress list and the queue tree:
+
+- `slots.entries`: one entry per slot in number order, an empty one included, each with its card
+  (Section 8.3). When tickets run through an epic's slot, the entry's `epic` gives the epic's
+  identifier, title, repo, since when it holds the slot, its sub-tickets `done` and `total` (a
+  cancelled one counts in neither), `done_sub_tickets` (its done sub-tickets, oldest completion
+  first, each with `identifier`, `title`, `pull_request_number` from its stored pull request and
+  `done_at`, when it entered Done) and `open_sub_tickets` (its open sub-tickets but the card's, in
+  their stored queue order, each with `phase`, `identifier`, `title`, `repo_key`, `parent` and
+  `dependencies`).
+- `queue.rows`: the open tickets with a place in the stored queue that are not in work, flat, in
+  the stored order, a page at a time, each with its position (`path`, `number`, `parent`), state,
+  identifier, title and repo; `dependencies`, every stored dependency with its `kind` (`done` or
+  `released`) and `met`; `waits_on`, the open ones alone (a `released` dependency is met once its
+  ticket is Done); and for an epic `sub_tickets` (`done`, `total`) and `done_sub_tickets` as in the
+  slot entry. An epic's open sub-tickets are the rows under it in their own order; a done one is no
+  row. A saved filter keeps the rows it matches and every row above one, so an epic stays when it or
+  one of its open sub-tickets matches, with only the matching sub-rows.
+- `recently_done`: the tickets of every repo Symphony saw reach done (it noted their completion, as
+  the shipped read counts them; a cancelled ticket is not one), most recent first, for one of two
+  ranges: `today`, since the host's local midnight, and `week`, the 7 local days ending today. Each
+  entry gives `issue_id`, `identifier`, `title`, `repo_key`, `done_at` (ISO 8601, whole seconds),
+  `pull_request_number` (nil when none is known) and `epic` (the parent's `identifier` and
+  `title`, nil when it has none). A ticket that finishes in a slot is noted done in the handling that
+  frees its slot (Section 8.3), so a read made right after gives it first. Beside the entries come `range`, `counts` (`today` and `week`,
+  both on every read, whichever range is read), `offset`, `limit` and `next_offset` (nil on the
+  last page). The query's `done_range` (`today` by default), `done_offset` (from 0) and
+  `done_limit` (from 1, capped) pick the page, apart from the queue's `offset` and `limit`; a bad
+  value answers `400 invalid_query`.
 
 Elixir implementation note: the current snapshot's `run_history` is read from the primary repo
 partition, while budget hydration reads runs across all repo partitions.
@@ -5813,7 +5997,6 @@ The Elixir implementation supports token budget limits under `agent` in `symphon
   - Default: `5000000`.
   - Explicit `null` disables the daily cap.
   - When configured, new dispatch SHOULD pause once the UTC-day token total reaches the limit.
-    Forced issues (Section 8.3) still dispatch, with a warning.
   - Already-running agents SHOULD continue; the daily guardrail only gates new dispatch.
   - Daily usage SHOULD reset at the UTC day boundary.
   - The Elixir implementation rehydrates the current UTC day usage from durable runs across every
@@ -5954,7 +6137,6 @@ Minimum endpoints:
         "watching": 1,
         "conflicts": 0,
         "retrying": 1,
-        "forced": 1,
         "shipped_today": 1,
         "waiting_on_you": 1,
         "review_inconclusive": {"invalid_verdict": 1}
@@ -5974,7 +6156,6 @@ Minimum endpoints:
           "pending_tool": null,
           "started_at": "2026-02-24T20:10:12Z",
           "last_event_at": "2026-02-24T20:14:59Z",
-          "forced": false,
           "tokens": {
             "input_tokens": 1200,
             "uncached_input_tokens": 900,
@@ -5992,17 +6173,12 @@ Minimum endpoints:
           "issue_identifier": "MT-650",
           "attempt": 3,
           "due_at": "2026-02-24T20:16:00Z",
-          "error": "agent exited: turn timeout",
-          "forced": false
+          "error": "agent exited: turn timeout"
         }
       ],
-      "finishing": {
-        "slots": 2,
-        "used": 1,
-        "running": [{"issue_id": "jkl012", "identifier": "MT-652", "state": "Merging"}]
-      },
+      "finishing": {"slots": 0, "used": 0, "running": []},
       "qa": {
-        "running": [{"issue_id": "mno345", "identifier": "MT-653", "sha": "abc1234def", "forced": true}],
+        "running": [{"issue_id": "mno345", "identifier": "MT-653", "sha": "abc1234def"}],
         "queued": []
       },
       "auto_merge": [
@@ -6032,10 +6208,9 @@ Minimum endpoints:
           "repo_key": "web",
           "title": "Add the export button",
           "state": "Todo",
-          "reason": "MT-655 (Merging) is waiting for a finishing slot",
+          "reason": "work slots full",
           "attempt": null,
-          "since": "2026-02-24T20:15:30Z",
-          "forced": false
+          "since": "2026-02-24T20:15:30Z"
         }
       ],
       "blocked": [
@@ -6065,27 +6240,7 @@ Minimum endpoints:
         "issue_identifiers": ["MT-658"],
         "latest_release": {"repo": "tonypine/symphony", "tag": "v0.0.1.583", "published_at": "2026-02-24T18:00:00Z", "source": "webhook"}
       },
-      "forced": [
-        {
-          "issue_id": "vwx234",
-          "issue_identifier": "MT-657",
-          "title": "Fix the release build",
-          "repo_key": "web",
-          "state": "In Progress",
-          "forced_since": "2026-02-24T19:00:00Z",
-          "forced_for_seconds": 7380,
-          "stale": false,
-          "position": 1,
-          "waiting_on_human": false,
-          "sub_issue": null,
-          "phase": "implementation",
-          "running": true,
-          "waiting_on": null,
-          "blockers": [],
-          "summary": "implementation · running"
-        }
-      ],
-      "concurrency": {"max_total": 10, "finishing_max": 2, "forced_max": 1},
+      "concurrency": {"max_total": 10, "finishing_max": 0},
       "watching": [
         {
           "repo_key": "web",
@@ -6198,8 +6353,9 @@ Minimum endpoints:
     which gives each request 250 ms. `/api/v1/state` stays the app's poll.
 
 - `GET /api/v1/drain`
-  - Answers `200` `{"running": 2, "between_turns": 1, "paused": true}`: the agent runs, how many
-    of them wait between turns (as `counts.between_turns`), and whether dispatch is paused. Read
+  - Answers `200` `{"running": 2, "between_turns": 1, "conductor_runs": 0, "paused": true}`: the
+    agent runs, how many of them wait between turns (as `counts.between_turns`), the Conductor turns
+    mid-run, which the stop waits for (Section 4.1.11's handover), and whether dispatch is paused. Read
     from the orchestrator's snapshot alone, with no page presenter, so it answers when
     `/api/v1/state` fails. `503` with `snapshot_timeout` or `snapshot_unavailable` when the
     orchestrator doesn't answer.
@@ -6346,8 +6502,8 @@ Minimum endpoints:
     `repositories[<key>].route.team` when that is exactly one team); the labels Symphony applies
     or reads, in each routed team, from one labels read per team: one missing (an `error` for
     `Blocked`, `Needs Decision` and the CI labels, which count only spelled exactly; a `warning`
-    for `plan` or `breakdown`, `qa:skip`, `protected-paths-approved`, `skip-update-hold`, the
-    `execution.concurrency.force_label` and each `escalate.labels` entry, which count in any case),
+    for `plan` or `breakdown`, `qa:skip`, `protected-paths-approved`, `skip-update-hold` and
+    each `escalate.labels` entry, which count in any case),
     with a `create_label` fix for the exact name; a label close to one of them (only case or
     spaces apart, or a short edit distance) or one that is both a team and a workspace label (a
     `warning` naming both, `open` `linear`); the deprecated `human-action` label in an
@@ -6555,22 +6711,24 @@ Minimum endpoints:
   - A page GitHub answered is kept for one poll interval (`polling.interval_ms`) per pull request.
 
 - `GET /api/v1/initiatives`
-  - Returns the plan tickets (label `plan` or `breakdown`) the operator follows to done, for the Mac
-    app's Initiatives: active ones, then those in review (the Plan Review state or `Epic Review`), then those done in the last 7 days. A canceled plan, one in
-    Backlog or Triage, and one done earlier are left out. Read-only, served like `/api/v1/state`,
-    and it MUST make no tracker request: the implementation reads the tracker on its own poll and
-    serves what it cached.
-  - The Elixir implementation (`SymphonyElixir.Initiatives`) reads Linear every
-    `polling.interval_ms`: one query per repository route lists the plan tickets in its scope with
-    their sub-issues, each sub-issue's state and the issues it is blocked by. A failed read keeps
-    the last list. Its Linear requests count as `initiatives`.
+  - Returns the parents Symphony split (its ticket record holds a `split` plan, or a sub-ticket it
+    filed under the parent, a `ticket.filed` of kind `split_off`) that the operator follows to done,
+    for the Mac app's Initiatives: active ones, then those in review (the Plan Review state or
+    `Epic Review`), then those done in the last 7 days. A tracker label (`plan`, `breakdown`) lists
+    nothing: a labelled ticket Symphony did not split is left out. A canceled parent, one in Backlog
+    or Triage, one with no sub-ticket yet and one done earlier are left out. Read-only, served like
+    `/api/v1/state`, and it MUST make no tracker request: the implementation builds the list from
+    its ticket records and ledgers on each read.
   - Each initiative has `issue_id`, `identifier`, `title`, `state`, `repo_key`, `url`, `group`
-    (`active`, `in_review`, `done`), `started_at` and `completed_at` (when the tracker says the plan
-    started and finished, or null), `tokens` (the sub-tickets' ended runs' tokens, summed from their
+    (`active`, `in_review`, `done`), `started_at` (when Symphony split it: its first split-off
+    filed, else its split plan, or null) and `completed_at` (when its record entered a terminal
+    phase, or null), `tokens` (the sub-tickets' ended runs' tokens, summed from their
     ledgers), `sub_tickets`, `counts` and `slot`.
-  - `sub_tickets` are the sub-issues in landing order (blocked-by order between them, then creation
-    order; a cycle is broken by creation order), canceled ones left out. Each has `issue_id`, `identifier`, `title`, `state`, `url`,
-    `completed_at` (when it landed, or null), `pull_request` (the number of the pull request its
+  - `sub_tickets` are the parent's sub-tickets as Symphony's records link them (the records that
+    name it as their parent and the sub-issues its record lists), a done one kept under its parent,
+    in landing order (the stored dependencies between them, then creation order; a cycle is broken
+    by creation order), canceled ones left out. Each has `issue_id`, `identifier`, `title`, `state`, `url`,
+    `completed_at` (when its record entered a terminal phase, or null), `pull_request` (the number of the pull request its
     record last read, or null), `blocked_by` (identifiers), `blockers` (each blocker's `identifier`, `open` and `completed_at`, when
     Linear says it was completed), `waits_on` and `waiting_for` (the open blockers it waits on when
     `waits_on` is `blocker`). `waits_on` is worked out at GET time from what Symphony knows
@@ -6580,11 +6738,9 @@ Minimum endpoints:
     for a free slot).
   - `counts` has `total` and the sub-tickets in each stage: `done`, `working` (`working` and `ci`),
     `you`, `queued` (`slot`) and `blocked` (`blocker`).
-  - `slot` is the initiative's line in `epic_lanes`: `status` (`running`, `waiting`, `yielded`),
-    the `identifier` of the part it runs or waits on and the `reason` it yielded; or `status`
-    `queued` with its `position` among the epics waiting for a lane; null when it has no lane.
-  - The response has `generated_at`, `read` (false while the server has not read Linear yet),
-    `counts` (`active`, `in_review`, `done`) and `initiatives`. When the orchestrator snapshot times
+  - `slot` is the initiative's line in `epic_lanes`, which the epic lanes no longer fill (Section
+    8.3): null.
+  - The response has `generated_at`, `counts` (`active`, `in_review`, `done`) and `initiatives`. When the orchestrator snapshot times
     out or is unavailable, return `200` with an `error` object in place of the list, as
     `/api/v1/state` does.
 
@@ -6616,14 +6772,15 @@ Minimum endpoints:
 - `GET /api/v1/shipped?days=N`
   - The tickets merged over the last `N` local days of the host ending today (default 7, at most
     90; any other value returns `400` `invalid_days`), for the Mac app's Shipped view. Read from the
-    run records, the tickets' signals (their events) and the cached initiatives; it MUST make no Linear
+    run records, the tickets' signals (their events) and the initiatives; it MUST make no Linear
     request. `/api/v1/history`'s `merged_per_day` only counts merges per UTC day, so the list is its
     own endpoint.
   - A ticket counts as merged when Symphony noted its completion, on the host's local day, as
     `shipped_today` in `/api/v1/state` counts it.
   - `tickets` lists each, newest first: `issue_id`, `identifier`, `title`, `repo_key`,
     `initiative` (the plan ticket's `identifier` and `title`, kept on the run when the completion
-    was noted, else the cached plan that lists it; null when none), `pr_url`, `merged_at`, `date`
+    was noted, else the parent Symphony split that lists it, `GET /api/v1/initiatives`'s read; null
+    when none), `pr_url`, `merged_at`, `date`
     (its local day), `todo_at` and `todo_to_done_seconds`: from Symphony's first claim of the ticket
     (its move out of Todo), else its first run, to the merge.
   - `shipped_per_day` has one entry per day (`date`, `shipped`). The response also has `days`,
@@ -6697,8 +6854,8 @@ Minimum endpoints:
     `repository_paused`. A pause or question change records a ticket event, so the live channel
     (`/api/v1/stream`) sends that ticket's notice once it commits.
   - An issue with a ticket state record or that the orchestrator tracks carries `connected`: where it
-    sits among the others, from the records, the ledgers, what the orchestrator holds and the cached
-    Initiatives (no tracker read per request). `parent` (`identifier`, `title`, `done`, `total`,
+    sits among the others, from the records, the ledgers, what the orchestrator holds and the
+    Initiatives' read (no tracker read per request). `parent` (`identifier`, `title`, `done`, `total`,
     `children` state types in landing order, or null), `epic` (`identifier`, `title`, `done`, `total`,
     `incomplete`, and `tickets` in chain order, each with its `situation` kind and whether it is
     `current`, or null; the same count as `/api/v1/initiatives`), and `sub_tickets`, `blocked_by`,
@@ -6827,6 +6984,19 @@ Minimum endpoints:
     client notice a dead one.
   - `repo_key` and `issue_identifier` each keep only the notices that carry them; without either,
     every ticket's notices come.
+  - A change of the dispatch queue or of its slots is its own message, `event: queue`, with no `id:`
+    and `data:` a notice as JSON: `change` (`order` after a ticket moved in the queue, with its
+    `issue_id` and `issue_identifier`; `slots` after the slot count changed, with the new `count`;
+    later writes name their own, such as a Start or a Stop) and `at`. The write path sends it right
+    after its write, never on a refused one, so the client reads the queue again at once. The queue is
+    global, so every stream gets it, whatever its `repo_key` and `issue_identifier`.
+  - A `slots` notice about one ticket carries its `issue_id`, `issue_identifier`, the slot's number
+    (`slot`) and `by`, what changed it: `start` (a person's Start, with the tickets it `displaced`),
+    `stop` (a person's Stop), `done` (the ticket in the slot is done; `ended` for another terminal
+    state), with `freed` (true when no ticket keeps the slot) and `held_by` (the epic that keeps it,
+    when one does), `pass` (the dispatch gave an epic's next sub-ticket the slot the epic keeps,
+    `through` naming the epic) and `take` (the dispatch gave a ticket a free slot). Fields are only
+    added to a notice, never renamed or removed.
   - When the client goes away a write fails, and the response ends and unsubscribes. Other methods
     are `405`. An older Symphony without the channel answers `404`, and the app keeps polling.
 
@@ -6872,8 +7042,9 @@ Minimum endpoints:
 
 - `POST /api/v1/control/stop` (OPTIONAL)
   - Ends the running agent of `issue_identifier` (the identifier or the Linear id) and records the
-    run as `stopped`, without changing the ticket's Linear state; answers `{"stopped": false}` when
-    nothing runs on it.
+    run as `stopped`, without changing the ticket's Linear state, and frees its slot in the call; a
+    ticket that holds a slot with no live run is stopped the same way. The answer names the freed
+    slot (`slot`). It answers `{"stopped": false}` when nothing runs on it and it holds no slot.
   - A stop is not a restart. Symphony's copy of the ticket still reads the state it had until a poll
     reads Linear again, so the stop pauses the ticket on a `person` reason that waits on the
     Director's Unblock: the dispatcher skips it (listed under `dispatch_skipped` with the reason's
@@ -6891,16 +7062,27 @@ Minimum endpoints:
     resolves as the events feed resolves it. The message is a `message.sent` event (Section 4.1.11)
     whose actor is the person "the Director", since the control API authenticates one shared token.
     Each message is its own event; none replaces or hides another. Sending one never starts, stops or
-    reorders a run, but on a groomed ticket whose Conductor answers messages (`conductor.enabled`
-    and the `message` junction): there no run is given the message, the Conductor's turn starts at
-    once, and its reply is a `conductor.update` (`junction: "message"`) whose `parent` is the
-    message. That turn may record a new plan version and the message as an ask, steer or stop the
+    reorders a run, but on a ticket whose Conductor answers messages (`conductor.enabled` and the
+    `message` junction): there no run is given the message, the Conductor's turn starts at once, in
+    any state of the ticket and without taking a slot, and its reply is a `conductor.update`
+    (`junction: "message"`) whose `parent` is the message. A ticket that has no plan and never ran
+    (with the `grooming` junction on, not finished, no question open) is groomed first, outside any
+    dispatch, and the message is answered once its plan exists; its first run then works from that
+    plan and is not given the message. A Grooming there that writes no plan is a failed try of the
+    message, never one of the dispatch's Grooming tries. A person's edit of a groomed ticket's
+    Linear description, once Symphony wrote it, is recorded as such a message (`source:
+    linear_description`) when its text is none of Symphony's own projections, asks or earlier
+    edits, compared in the form Linear stores markdown in (list markers, backslash escapes,
+    emphasis marks and white space set aside), and is answered the same way; a turn that changes
+    the ask for it must name the words the edit adds (`added`), which are recorded as the ask. That turn may record a new plan version and the message as an ask, steer or stop the
     working run, change the ticket's sub-tickets or waive a check; on a finished ticket it may only
-    reply or have a new, related ticket created. A turn that fails leaves Symphony's own reply.
+    reply or have a new, related ticket created. A turn that fails is tried again with the reason
+    in its facts, and after 3 failed tries Symphony's own reply says that nothing was done and why
+    the last try failed.
   - Answers `200` `{"event": ...}` with the event as the feed shows it (`summary.title` "You wrote",
     and `read`, null until a run read it), and writes a `director_note` audit record (`event_id`, the
-    text's first 500 characters). Text that is blank, or longer than the `message.sent` type's 4,000
-    characters, is `400` `invalid_note` with a message that says why; a ticket with no state record in
+    text's first 500 characters). Text that is blank, or longer than the `message.sent` type's 100,000
+    characters (as long as an ask), is `400` `invalid_note` with a message that says why; a ticket with no state record in
     that repo is `404` `ticket_not_found`; a request without `repo_key` or `issue_identifier` is `422`.
     None of them writes an event or an audit record. Unlike a stop's event, the message is the
     request: an answer other than `200` means it wasn't written.
@@ -6926,6 +7108,53 @@ Minimum endpoints:
   - The ticket read carries `looked_at` and `new_since_looked`, the count of the ticket's events
     later than the mark, and each event of the events feed carries `new`. Before the person ever
     looked, every event is new.
+
+- `POST /api/v1/control/dependency` (OPTIONAL)
+  - Adds or removes a stored dependency (Stored dependencies, above): `issue_identifier` (the ticket
+    that waits), `on` (the ticket it needs), `action` (`add` or `remove`) and, on an add, `kind`:
+    `done` (it needs `on` merged) or `released` (installed and live). Adding a pair already stored
+    with the other kind changes its kind. An add on a ticket that sits lower moves the waiting
+    ticket to just below it in the same write. `POST /api/v1/control/blocker` (`issue_identifier`,
+    `blocker`, `action`) keeps its request and answer and adds a `done` dependency.
+  - Answers `200` with `action` (`add_dependency`, `remove_dependency`), `issue_identifier`, `on`,
+    `kind` (null on a remove) and the ticket's `dependencies` (each `issue_identifier`, `title`,
+    `state` and `kind`). A ticket Symphony doesn't track, a dependency on itself, one that closes a
+    cycle, one on a finished ticket (a `released` one on a `Done` ticket is allowed), a pair already
+    stored with that kind, or a remove of a pair not stored is `409` `move_not_allowed` with the
+    reason; a missing parameter or a missing or unknown `kind` is `422`; a write the store refuses
+    is `502` `store_error`. The open streams get the ticket's record change (`depends_on`) and, when
+    the add moved a ticket, an `event: queue` notice (`change: order`) naming the moved ticket; the
+    orchestrator walks its candidates again in the same call and polls the ticket's repository.
+    Requires the control bearer token.
+
+- `POST /api/v1/control/queue/move` (OPTIONAL)
+  - Moves a ticket to another place in the stored dispatch queue, inside its scope (the top-level
+    tickets, or its parent's sub-tickets): `issue_identifier` (identifier or id) and exactly one of
+    `position` (`top` or `end`), `after` or `before` (a ticket of the same scope). It writes the
+    ticket's sort key (a crowded spot rewrites the keys around it), and
+    in the same call the orchestrator walks its candidates again and publishes its reads, so a read of
+    `GET /api/v1/dispatch/order` or `GET /api/v1/home` made after the answer shows the new order, and
+    a dispatch cycle runs at once. The open streams get an `event: queue` notice (`change: order`).
+  - Answers `200` with `issue_id`, `issue_identifier`, `scope` (the parent's identifier, null at the
+    top level) and the scope's tickets in their new `order`. A ticket that holds no place in the
+    queue, a neighbour that is the ticket itself or sits in another scope, a queue that changed
+    under the move, or an order that would put a ticket above one it depends on ("TP-978 depends on
+    TP-977 and must stay below it.", nothing moves) is `409` `move_not_allowed` with the reason; a missing or unknown parameter, or a
+    ticket or neighbour Symphony doesn't track, is `422`; a write the store refuses is `502`
+    `store_error`. Requires the control bearer token.
+
+- `POST /api/v1/control/slots` (OPTIONAL)
+  - Sets the slot count (`execution.max_concurrent_agents`): `count`, a whole number from 1 to 6. It
+    writes `execution.concurrency.max_total` in `symphony.yml` by editing that one line (or inserting
+    the key when it is missing), keeping every other line, comment and the order, as the macOS app's
+    Settings page does. The orchestrator reads it in the same call: a raised count fills the new slots
+    in a dispatch cycle run at once; a lowered one stops no run, the tickets that hold slots keep them
+    until they are done, and a freed slot is not given again while the slots used reach the count.
+    The open streams get an `event: queue` notice (`change: slots`).
+  - Answers `200` with `count` and the `slots` the reads now show (null when no orchestrator runs). A
+    count outside 1 to 6 is `422` and leaves the file as it is; a file the line editor can't change
+    (a section written inline, an unreadable file) is `502` `config_error` with why. Requires the
+    control bearer token.
 
 - `POST /api/v1/control/view` and `DELETE /api/v1/control/view/:id` (OPTIONAL)
   - Create a saved view (`name`, `filters`, `columns`, `sort`), update the one an `id` names (its
@@ -6996,7 +7225,16 @@ Minimum endpoints:
     answers `200` with `already_decided: true` and the recorded `answer` and `option`. An answer
     that keeps a ticket held (a loop-guard question's "Keep it paused", or words) writes the kept
     pause with the answer, so the ticket is never free to dispatch in between, and its text says
-    what the person did ("You kept it paused: …", "You answered in your own words: …").
+    what the person did ("You kept it paused: …"). An answer in the person's own words, no option
+    picked, to such a held question goes to the ticket's Conductor when its messages are the
+    Conductor's: the words are recorded as the person's message naming the question, the ticket
+    waits on that turn ("The Conductor is reading your answer: …"), and the turn acts on them. It
+    moves the ticket, runs it again where it stands (`resume`, or a steer for the next run), asks
+    its own question, or, when it cannot tell what the words ask, replies and has the question
+    asked again; a turn that fails 3 times replies and asks it again too. So the ticket is never
+    left paused with nothing running and nothing asked. When nobody reads the words (the Conductor
+    or its `message` junction off, a ticket not groomed), they keep the ticket held ("You answered
+    in your own words: …").
   - A missing `issue_identifier`, `reason` or `picks`, or a `decide` with neither `question_id` nor
     `request_comment_id`, answers `422`, an
     unknown ticket `404`, and a
@@ -7688,30 +7926,38 @@ infrastructure.
 
 ### 17.4 Orchestrator Dispatch, Reconciliation, and Retry
 
-- Dispatch sort order is stage (`Merging`, `Rework`, resume, `Todo`), then priority,
-  then oldest creation time
-- A landing run starts while every `max_total` slot and epic lane is busy, up to `finishing_max`
-- A forced issue dispatches first, on its own `forced_max` allowance, while `max_total`, the epic
-  lanes, `finishing_max` and the per-state caps are full, on the poll and the retry path; its run
-  takes no normal slot, and a second forced issue past `forced_max` waits and is noted once
-- A forced run whose issue is no longer forced gives the forced allowance back and goes on as a
-  normal run
-- The daily token budget and a usage-limit headroom hold do not stop a forced dispatch; the
-  operator pause, blocked-by links and a `paused` usage-limit hold do
-- A forced plan parent waiting on its sub-issues forces one issue on its epic path at a
-  time, in blocked-by order and without labelling it, then its epic review; a forced parent in
-  `Plan Review` is not moved
-- The snapshot's `forced` rows report each forced issue's phase and what it waits on (an open
-  blocker by identifier); a forced issue past `forced_stale_after_hours` is `stale` and notified
-  once; a forced plan entering `Plan Review` is notified; a forced issue that reaches a terminal
-  state leaves the queue with reason `done` and loses its label
-- No `Todo` issue is dispatched while a `Merging` issue waits for a finishing slot
+- Dispatch order is the stored queue order: each issue's sort key orders it at the top level or
+  among its parent's sub-issues, inside the parent's place; a new issue joins at the end of its
+  scope, a change of priority moves no issue, an issue a gate holds keeps its place, and the keys
+  survive a restart
+- A move writes the moved issue's key only, unless the spot is too crowded: then only the issues
+  around it are rewritten, evenly spaced and in the same order
+- A stored dependency is kept apart from the tracker's blockers and no read of the tracker changes
+  it; added on an issue that sits lower, it moves the depending issue to just below it; an unmet one
+  holds the issue from dispatch and reads "Blocked by" the issue it waits on; an issue that holds a
+  slot keeps it, the first of the queue takes the free slot and waits there, and the first pass that
+  finds it met lets the issue start; an issue that has not started and waits on a dependency that
+  needs a slot takes none and gives back one it was given, so the dependency starts through it
+- Splits, run-filed sub-issues, the Director's blockers and the agent tools write stored
+  dependencies and no tracker blocker link; the first start converts the recorded `after` of open
+  sub-issues
+- The first start on a store without places places its open issues once, started ones in front; the
+  first start on a store with integer places turns them into sort keys in the same order
+- A ticket holds its slot from its first run until it is done, through every phase, machine step,
+  agent turn and question to the person, and with no live run; with 1 slot no other ticket starts
+  meanwhile
+- A ticket gives its slot up when it is done, leaves the active states or a person stops it; it
+  keeps it while it waits on a dependency or its sub-tickets, unless it has not started and the
+  dependency needs that slot; the freed slot goes to the next ticket
+- A ticket's sub-tickets run through its slot, one at a time with 1 slot; an extra free slot goes in
+  queue order to the first ticket that can start, the parent's next ready sub-ticket first when the
+  parent is at the top, and comes back when that sub-ticket is done
+- A fix ticket filed for a ticket in the middle of its work is its sub-ticket and runs through its slot
+- With 1 slot, the ticket a holder waits on outside its own tree (a block report's ticket, a stored
+  dependency added mid-work) runs through the holder's slot, and the two count as one used slot
+- A `Merging` ticket keeps its slot and gets no allowance of its own
 - A retry that finds no slot keeps its attempt, gets no backoff, and starts on the first poll after
   a slot frees
-- Each active epic reserves one lane out of `max_total`; a standalone issue cannot take a reserved
-  lane while the epic's current sub-issue is in review, and the next sub-issue starts in it
-- An epic's lane runs a blocker of its next part from outside the epic, and a sub-issue of a
-  sub-issue; a blocker shared by two epics runs once and holds one lane
 - `Todo` issue with non-terminal blockers is not eligible
 - `Todo` issue with terminal blockers is eligible
 - plan parent with an approved non-terminal sub-issue is not eligible; once every sub-issue

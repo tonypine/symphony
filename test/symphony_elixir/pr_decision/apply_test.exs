@@ -60,14 +60,6 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
     end
   end
 
-  # Linear's blocked-by links: every call is reported; each answers what the process dictionary says.
-  defmodule Linker do
-    def add_blocked_by(blocker, issue_id) do
-      send(self(), {:add_blocked_by, blocker, issue_id})
-      Process.get(:add_blocked_by, :ok)
-    end
-  end
-
   # A store that refuses to set a hold.
   defmodule FailingOriginStore do
     def set_ci_fix_origin(_repo_key, _issue_id, _origin), do: {:error, :store_down}
@@ -116,8 +108,7 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
         state: Keyword.get(attrs, :state, phase_name(phase)),
         url: "https://linear.app/i/TP-7",
         description: Keyword.get(attrs, :description),
-        rulings: Keyword.get(attrs, :rulings, []),
-        blocked_by: Keyword.get(attrs, :blocked_by, [])
+        rulings: Keyword.get(attrs, :rulings, [])
       },
       read: Keyword.get(attrs, :read, read()),
       facts: facts,
@@ -126,7 +117,7 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       fix: %{ci_failure: nil, pr_conflict: nil},
       now: @now,
       links: Keyword.get(attrs, :links, []),
-      opts: [tracker: Tracker, github: GitHub, self_heal: SelfHeal, linker: Linker] ++ Keyword.get(attrs, :opts, [])
+      opts: [tracker: Tracker, github: GitHub, self_heal: SelfHeal] ++ Keyword.get(attrs, :opts, [])
     }
   end
 
@@ -525,6 +516,86 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       :ok = TicketPullRequest.record_created(@repo_key, @issue_id, @pr_url, "auto/TP-7")
       Process.put(:comment_result, {:error, :linear_down})
       capture_log(fn -> assert %{outcome: {:error, {:decision_request_failed, :linear_down}}} = Apply.apply(action("R2", :close_ticket), ctx(:merging)) end)
+    end
+  end
+
+  describe "checks the PR's own CI run proves (TP-1592)" do
+    @ci_plan %{
+      reason: "Grooming",
+      by: "grooming",
+      shape: "single",
+      layers: ["tooling"],
+      summary: "CI runs faster.",
+      text: "Run the steps in parallel.",
+      checks: [
+        %{id: "c1", kind: "outcome", statement: "The make-all check passes.", proof: "ci", ci_check: "make-all"},
+        %{id: "c2", kind: "outcome", statement: "The tests run faster than on main.", proof: "ci"}
+      ],
+      size: %{tokens: 1_000, runs: 1}
+    }
+
+    setup do
+      {:ok, _plan} = SymphonyElixir.TicketPlan.write(@repo_key, @issue_id, @ci_plan)
+      :ok
+    end
+
+    defp ci_read, do: read(ci: :green, check_names: ["make-all"], running_checks: [], failed_checks: [])
+    defp ci_ctx(attrs \\ []), do: ctx(:merging, Keyword.merge([read: ci_read(), facts: %{merge_guard: :ci_checks}], attrs))
+
+    test "R28b records the check a passed CI check proves, with no run and no move, each time it is decided on the head" do
+      action = action("R28b", :prove_checks)
+      capture_log(fn -> assert %{outcome: :applied, moved_to: nil} = Apply.apply(action, ci_ctx()) end)
+
+      assert [%{id: "c1", state: :proved, proved_by: %{by: "ci", head: "head-1"}}, %{id: "c2", state: :open}] = SymphonyElixir.TicketChecks.list(@issue_id)
+      refute_received {:move, _issue_id, _state}
+      refute_received {:comment, _issue_id, _body}
+
+      # The ledger does not hold it back on the same head.
+      applied = [%{head_sha: "head-1", rule: "R28b", kind: :prove_checks, at: @now}]
+      capture_log(fn -> assert %{outcome: :applied} = Apply.apply(action, ci_ctx(applied: applied)) end)
+    end
+
+    test "R28a turns auto-merge off and says why, with no move" do
+      assert %{outcome: :applied, moved_to: nil} = Apply.apply(action("R28a", :disarm), ci_ctx(facts: %{merge_guard: :ci_checks, auto_merge: :armed}))
+
+      assert_received {:disable_auto_merge, @pr_url, "PR_node", _opts}
+      assert_received {:comment, @issue_id, comment}
+      assert comment =~ "because checks of the ticket's plan that its own CI run proves are not proved yet. Symphony merges it once they are."
+      refute_received {:move, _issue_id, _state}
+
+      Process.put(:disable_auto_merge, {:error, :forbidden})
+      capture_log(fn -> assert %{outcome: {:error, {:disable_auto_merge_failed, :forbidden}}} = Apply.apply(action("R28a", :disarm), ci_ctx()) end)
+    end
+
+    test "R28d leaves the turn to the landing run the orchestrator starts, with nothing posted" do
+      assert %{outcome: :applied, moved_to: nil} = Apply.apply(action("R28d", :land_agent, args: %{ci_proof: true}), ci_ctx())
+      refute_received {:comment, _issue_id, _body}
+      refute_received {:move, _issue_id, _state}
+    end
+
+    test "R28e sends the ticket to Rework with what the run said, and asks nobody" do
+      put_dispatch(@repo_key, @issue_id, kind: :landing, head: "head-1", run_id: "landing-1")
+      {:ok, _note} = SymphonyElixir.TicketEvents.record(@repo_key, @issue_id, "note", %{text: "The tests took as long as on main."}, run_id: "landing-1")
+
+      assert %{outcome: :applied, moved_to: :rework} = Apply.apply(action("R28e", :to_rework), ci_ctx(facts: %{merge_guard: :ci_checks, auto_merge: :armed}))
+
+      assert_received {:disable_auto_merge, @pr_url, "PR_node", _opts}
+      assert_received {:move, @issue_id, "Rework"}
+      assert_received {:comment, @issue_id, "Symphony moved this ticket to Rework: " <> rest}
+      assert rest =~ "The run that read the pull request's checks on the head head-1 did not prove"
+      assert rest =~ "[c1] The make-all check passes.; [c2] The tests run faster than on main."
+      assert rest =~ "The run said: The tests took as long as on main. A rework run works on it on the same pull request."
+      signals = TicketState.recent_signals(RunStore.get_ticket_state(@issue_id))
+      assert [%{name: "review verdict", details: %{outcome: "ci_checks_unproved"}} | _] = signals
+      refute deciding()
+
+      # Once per head: the ledger holds it.
+      applied = [%{head_sha: "head-1", rule: "R28e", kind: :to_rework, at: @now}]
+      assert %{outcome: :recorded} = Apply.apply(action("R28e", :to_rework), ci_ctx(applied: applied))
+      refute_received {:move, _issue_id, _state}
+
+      Process.put(:disable_auto_merge, {:error, :forbidden})
+      capture_log(fn -> assert %{outcome: {:error, _reason}} = Apply.apply(action("R28e", :to_rework), ci_ctx(facts: %{merge_guard: :ci_checks, auto_merge: :armed})) end)
     end
   end
 
@@ -969,14 +1040,14 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
   describe "wait_for_competitors" do
     @leader %{issue_id: "issue-1", issue_identifier: "TP-1", pr_number: 1, pr_url: "https://github.com/acme/app/pull/1", title: "Lead", head_sha: "h1", files: ["SPEC.md"]}
 
-    test "turns auto-merge off on a Merging PR only, then links each competitor and holds the ticket in place (R14a)" do
+    test "turns auto-merge off on a Merging PR only, then records each competitor and holds the ticket in place (R14a)" do
       action = action("R14a", :wait_for_competitors, args: %{prs: [@leader], step_behind: false})
 
       assert %{outcome: :applied, links: [link]} = Apply.apply(action, ctx(:qa, facts: %{auto_merge: :armed}))
       refute_received {:disable_auto_merge, _url, _node, _opts}
-      assert_received {:add_blocked_by, "TP-1", @issue_id}
       assert %{issue_identifier: "TP-1", pr_number: 1, files: ["SPEC.md"], progress_at: @now} = link
-      assert %{linked: true, step_behind: false, released: false} = link
+      # No Linear blocker link is written for a competitor.
+      assert %{linked: false, step_behind: false, released: false} = link
 
       assert SymphonyElixir.Pauses.why({:ticket, @repo_key, @issue_id}) == ["Waiting for TP-1 to land: it changes the same files"]
       refute_received {:move, _id, _state}
@@ -987,7 +1058,7 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       assert comment =~ "because it conflicts with the base branch"
     end
 
-    test "skips a link Linear already has, makes none for a PR without a ticket, and keeps the links a person released" do
+    test "links no competitor, names a PR without a ticket, and keeps the competitors a person released" do
       person = %{pr_number: 12, pr_url: "https://github.com/acme/app/pull/12", title: "Docs pass", files: ["SPEC.md", "README.md"]}
 
       released = %{
@@ -1001,10 +1072,9 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       }
 
       action = action("R15", :wait_for_competitors, args: %{prs: [@leader, person], step_behind: true})
-      ctx = ctx(:code_review, blocked_by: [%{id: "issue-1", identifier: "TP-1", state: "QA"}], links: [released])
+      ctx = ctx(:code_review, links: [released])
 
       assert %{outcome: :applied, links: [^released, leader, other]} = Apply.apply(action, ctx)
-      refute_received {:add_blocked_by, _blocker, _issue_id}
       assert %{linked: false, step_behind: true} = leader
       assert %{pr_number: 12, linked: false, title: "Docs pass"} = other
 
@@ -1014,16 +1084,13 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
              ]
     end
 
-    test "a link Symphony recorded is still its own; one Linear refuses is logged and the ticket waits without it" do
+    test "a competitor an earlier wait recorded as linked stays so, as history; the ticket waits through its pause" do
       recorded = Map.merge(@leader, %{linked: true, step_behind: false, released: false, progress_at: @now})
-      ctx = ctx(:qa, blocked_by: [%{id: "issue-1", identifier: "TP-1", state: "QA"}], links: [recorded])
+      ctx = ctx(:qa, links: [recorded])
       action = action("R14a", :wait_for_competitors, args: %{prs: [@leader], step_behind: false})
       assert %{links: [%{linked: true}]} = Apply.apply(action, ctx)
-      refute_received {:add_blocked_by, _blocker, _issue_id}
 
-      Process.put(:add_blocked_by, {:error, :linear_down})
-      log = capture_log(fn -> assert %{outcome: :applied, links: [%{linked: false}]} = Apply.apply(action, ctx(:qa)) end)
-      assert log =~ "could not link TP-1 as a blocker"
+      assert %{outcome: :applied, links: [%{linked: false}]} = Apply.apply(action, ctx(:qa))
       assert SymphonyElixir.Pauses.paused?({:ticket, @repo_key, @issue_id})
     end
 

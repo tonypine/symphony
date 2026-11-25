@@ -20,8 +20,8 @@ defmodule SymphonyElixir.QaAgent.Steps do
   **Machine steps** run without a model (`PhaseSteps.run_machine_step/3`), with the QA pass's own
   commands (`Phases.qa_commands/0`) run here, through the QA driver the pass holds:
 
-  - `symphony:qa_pre_checks`: the pre-checks' results (`SymphonyElixir.QaPreCheck`), which ran
-    before the pass started: the steps a named test proves;
+  - `symphony:qa_pre_checks`: the steps a recorded test proves (`SymphonyElixir.QaPreCheck`),
+    proved as recorded, with nothing read from CI;
   - `symphony:qa_build`: `qa_build`, the app Symphony built for the commit; a build that failed
     fails the step;
   - `symphony:qa_launch`: `qa_launch_app` on the default fixtures, in the QA target's appearance,
@@ -49,7 +49,14 @@ defmodule SymphonyElixir.QaAgent.Steps do
   `session` continue one conversation (resumed by its id, which Claude supports; another harness
   starts a new one), `fresh` starts one for the step alone, and no `session` is the pass's one
   session. A step with `repeat: walkthrough` runs once per walkthrough step this pass walks (the
-  steps no named test proves), as `<id>_<n>`, each with that step's text and the plan's brief for it.
+  steps no named test proves), as `<id>_<n>`, each with that step's text and the plan's brief for it,
+  or once per group of them: the plan's briefs that name the same `group` (and the same `surface`)
+  sit on one screen in one app state, and are walked in one session, as `<id>_<n>_<m>…`, with every
+  step's text and brief. Such a step answers `results`, one per walkthrough step with its own
+  `status`; an answer that misses one is asked once more, and a step still without one is then not
+  judged (`blocked`), never passed. The review, the evidence and the step's `step.completed`
+  (`results`) read one answer per walkthrough step. The groups are the plan's: Symphony expands the
+  walk steps once it takes the plan, and a brief with no `group` is walked alone.
   Every agent step reads the Conductor's newest instructions
   (`SymphonyElixir.Conductor.prompt_section/2`), as the one session's prompt does, so a pass the
   Conductor sent back to QA reads what it must do differently.
@@ -62,9 +69,10 @@ defmodule SymphonyElixir.QaAgent.Steps do
     launch its `needs_app`;
   - `review` (required in every QA playbook's list): the verdict. It records it with `qa_verdict`
     in today's contract (`SymphonyElixir.QaAgent.Verdict`), or writes it to its answer file, or asks
-    for a recheck there (`{"recheck": [brief, ...]}`, at most #{3}): each brief runs as a fresh turn
-    of the list's `repeat` step, between the launch and the quit and attach steps run again, and the
-    review runs once more. Past two rounds of recheck the pass is `inconclusive`;
+    for a recheck there (`{"recheck": [brief, ...]}`, at most #{3} sessions of at most #{12} briefs):
+    each brief runs as a fresh turn of the list's `repeat` step, or, for the briefs that share a
+    `group`, one fresh turn for them all, between the launch and the quit and attach steps run again,
+    and the review runs once more. Past two rounds of recheck the pass is `inconclusive`;
   - the `repeat: walkthrough` step, whose prompt and model the rechecks take.
 
   The mechanical rules stay `SymphonyElixir.QaAgent`'s and `SymphonyElixir.QaVerification`'s: the
@@ -74,7 +82,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
 
   require Logger
 
-  alias SymphonyElixir.{AgentTelemetry, AgentTmpDir, Messages, PhaseSteps, PromptSafety, QaAgent, QaDriver}
+  alias SymphonyElixir.{AgentTelemetry, AgentTmpDir, Messages, PhaseSteps, PromptSafety, QaAgent, QaDriver, RunStore}
   alias SymphonyElixir.Conductor.Steer
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Phases
@@ -91,6 +99,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
   @attach "symphony:qa_attach"
   @statuses ~w(pass fail blocked plan_mismatch)
   @max_rechecks 3
+  @max_recheck_briefs 12
   @max_recheck_rounds 2
   @small_model "small"
   # The playbooks a walk turn can run without the app, from a shell in the worktree. A pass that
@@ -139,6 +148,31 @@ defmodule SymphonyElixir.QaAgent.Steps do
   defp configured(_job, _system), do: []
 
   @doc """
+  What a pass of ticket `issue_id` asks at each boundary between two steps (`opts[:qa_boundary]`):
+  the orchestrator `recipient` answers at once, unless an update holds dispatch for its restart,
+  which then comes at this boundary (TP-1590). It answers `:ok` once the next step may begin, or
+  `{:error, {:orchestrator_down, reason}}`. Nil, so the pass goes on unasked, with no orchestrator.
+  """
+  @spec boundary(pid() | nil, String.t() | nil) :: (map() -> :ok | {:error, term()}) | nil
+  def boundary(recipient, issue_id) when is_pid(recipient) and is_binary(issue_id) do
+    fn step ->
+      monitor = Process.monitor(recipient)
+      send(recipient, {:run_step, issue_id, {:qa_boundary, self(), step}})
+
+      receive do
+        {:run_step_turn, ^issue_id} ->
+          Process.demonitor(monitor, [:flush])
+          :ok
+
+        {:DOWN, ^monitor, :process, _pid, reason} ->
+          {:error, {:orchestrator_down, reason}}
+      end
+    end
+  end
+
+  def boundary(_recipient, _issue_id), do: nil
+
+  @doc """
   Walks `steps` for `job`'s pass in `worktree` with the QA agent `agent_module` and the QA session
   settings `qa_settings`, and returns what a pass that is one session returns
   (`QaAgent.run_result/0`): the review's verdict, `inconclusive` past the recheck rounds, `blocked`
@@ -157,7 +191,10 @@ defmodule SymphonyElixir.QaAgent.Steps do
     drain_verdicts(nil)
 
     try do
-      state |> walk(List.first(state.steps)) |> finish()
+      {state, start} = restore(state)
+      result = state |> walk(start) |> finish()
+      forget_pass(state)
+      result
     after
       Process.delete(@app_key)
       drain_verdicts(nil)
@@ -167,7 +204,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
   defp new_state(agent_module, job, worktree, qa_settings, steps, opts) do
     tmp_dir = Keyword.fetch!(opts, :qa_tmp_dir)
     targets = walked_steps(job)
-    {expanded, walk_targets} = expand(steps, targets)
+    {expanded, checks} = expand(steps, targets, &{:alone, &1.number})
 
     context =
       %{
@@ -181,7 +218,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
         steps: expanded,
         answer_dir: tmp_dir
       }
-      |> maybe_put(:runner, Keyword.get(opts, :qa_step_runner))
+      |> Map.merge(for {:qa_step_runner, runner} <- opts, into: %{}, do: {:runner, runner})
 
     %{
       agent_module: agent_module,
@@ -194,8 +231,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
       listed: steps,
       template: Enum.find(steps, &(&1.repeat == "walkthrough")),
       targets: targets,
-      walk_targets: walk_targets,
-      briefs: %{},
+      checks: checks,
       app_steps: app_steps(expanded),
       context: Map.put(context, :changes, PhaseSteps.changes(context)),
       results: [],
@@ -213,26 +249,68 @@ defmodule SymphonyElixir.QaAgent.Steps do
     }
   end
 
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
-
-  # The walkthrough steps this pass walks: those no named test proves (the pre-checks confirmed those).
+  # The walkthrough steps this pass walks: those no recorded test proves (those are proved as recorded).
   defp walked_steps(job) do
     job |> Map.get(:journey, %{}) |> Map.get(:steps, []) |> Enum.reject(&Walkthrough.named_test?/1)
   end
 
-  defp expand(steps, targets) do
+  # The list with its `repeat: walkthrough` step as one walk step per group of walkthrough steps
+  # (`key` names each target's group), in the order of each group's first step, and what each walk
+  # step checks: `%{step id => [%{target, brief}]}`.
+  defp expand(steps, targets, key) do
     Enum.reduce(steps, {[], %{}}, fn
-      %Step{repeat: "walkthrough"} = step, {list, walk_targets} ->
-        repeated = for target <- targets, do: {repeated(step, "#{step.id}_#{target.number}", "#{step.title} #{target.number}"), target}
-        {list ++ Enum.map(repeated, &elem(&1, 0)), Map.merge(walk_targets, Map.new(repeated, fn {step, target} -> {step.id, target} end))}
+      %Step{repeat: "walkthrough"} = step, {list, checks} ->
+        walks = for group <- in_groups(targets, key), do: {walk_step(step, Enum.map(group, & &1.number)), group}
+        {list ++ Enum.map(walks, &elem(&1, 0)), Map.merge(checks, Map.new(walks, fn {walk, group} -> {walk.id, Enum.map(group, &%{number: &1.number, target: &1, brief: nil})} end))}
 
-      step, {list, walk_targets} ->
-        {list ++ [step], walk_targets}
+      step, {list, checks} ->
+        {list ++ [step], checks}
     end)
   end
 
+  # `items` in groups by `key`, each group in its items' order, the groups in the order of their first item.
+  defp in_groups(items, key) do
+    by_key = Enum.group_by(items, key)
+    items |> Enum.map(key) |> Enum.uniq() |> Enum.map(&Map.fetch!(by_key, &1))
+  end
+
+  defp walk_step(step, [number]), do: repeated(step, "#{step.id}_#{number}", "#{step.title} #{number}")
+  defp walk_step(step, numbers), do: grouped(repeated(step, "#{step.id}_#{Enum.join(numbers, "_")}", "#{step.title} #{Enum.join(numbers, ", ")}"))
+
   defp repeated(%Step{} = step, id, title), do: %Step{step | id: id, title: title, repeat: nil}
+
+  # A walk step of several checks answers one result per check (`check_group/3`).
+  defp grouped(%Step{} = step), do: %Step{step | answer: %{"results" => "list"}}
+
+  # Once the plan is taken, the walk steps follow its groups: the briefs that share a `group` (and a
+  # surface) are walked in one session; a brief with none is walked alone.
+  defp regroup(%{template: nil} = state), do: state
+
+  defp regroup(state) do
+    {steps, checks} = expand(state.listed, state.targets, &plan_group(state, &1))
+    checks = Map.new(checks, fn {id, walked} -> {id, Enum.map(walked, &%{&1 | brief: plan_brief(state, &1.target)})} end)
+    %{state | steps: steps, context: %{state.context | steps: steps}, checks: checks, app_steps: app_steps(steps)}
+  end
+
+  defp plan_group(state, target) do
+    brief = plan_brief(state, target)
+
+    case group_name(brief) do
+      nil -> {:alone, target.number}
+      name -> {:group, command_line?(state, brief), name}
+    end
+  end
+
+  defp group_name(%{"group" => name}) when is_integer(name), do: Integer.to_string(name)
+
+  defp group_name(%{"group" => name}) when is_binary(name) do
+    case String.trim(name) do
+      "" -> nil
+      name -> name
+    end
+  end
+
+  defp group_name(_brief), do: nil
 
   # The agent steps that drive the app Symphony launched: those after the launch, up to the quit.
   defp app_steps(steps) do
@@ -252,11 +330,162 @@ defmodule SymphonyElixir.QaAgent.Steps do
   defp walk(%{verdict: verdict} = state, _step) when not is_nil(verdict), do: state
   defp walk(%{error: error} = state, _step) when not is_nil(error), do: state
 
+  defp walk(state, {:recheck, briefs, review}), do: state |> recheck_round(briefs) |> step_ended(review) |> walk(review)
+
   defp walk(state, step) do
     case run_step(state, step) do
-      {state, {:recheck, briefs}} -> state |> recheck_round(briefs) |> walk(step)
-      {state, outcome} -> walk(state, next_step(state, step, outcome))
+      {state, {:recheck, briefs}} -> state |> step_ended({:recheck, briefs, step}) |> walk({:recheck, briefs, step})
+      {state, outcome} -> state |> step_ended(next_step(state, step, outcome)) |> walk(next_step(state, step, outcome))
     end
+  end
+
+  # -- the step boundary ----------------------------------------------------------
+  #
+  # Between two steps the pass keeps where it stands (`RunStore.put_qa_pass/3`), then asks to begin
+  # its next step (`opts[:qa_boundary]`, the orchestrator's answer): while an update waits for its
+  # moment, a pass between steps counts as no active run, and once the update holds dispatch its next
+  # step waits, so Symphony restarts at that boundary rather than after the rest of the pass
+  # (TP-1590). A recheck round (the launch again, the rechecks, the quit and the evidence) is one
+  # piece: the boundary comes before it and after it.
+  defp step_ended(state, next) do
+    if goes_on?(state, next) do
+      keep_pass(state, next)
+      await_boundary(state, next)
+    end
+
+    state
+  end
+
+  defp goes_on?(%{verdict: nil, error: nil}, %Step{}), do: true
+  defp goes_on?(%{verdict: nil, error: nil}, {:recheck, _briefs, _review}), do: true
+  defp goes_on?(_state, _next), do: false
+
+  defp await_boundary(state, next) do
+    case Keyword.get(state.opts, :qa_boundary) do
+      boundary when is_function(boundary, 1) -> boundary.(boundary_step(next))
+      nil -> :ok
+    end
+  end
+
+  defp boundary_step({:recheck, _briefs, review}), do: boundary_step(review)
+  defp boundary_step(%Step{} = step), do: %{id: step.id, title: step.title, mode: step.mode}
+
+  # What a pass that goes on after a restart needs: its list as walked so far (rechecks included),
+  # the step it goes on at, and each finished step's result, answer and session.
+  defp keep_pass(state, next) do
+    {next_id, recheck} =
+      case next do
+        {:recheck, briefs, review} -> {review.id, briefs}
+        %Step{id: id} -> {id, nil}
+      end
+
+    pass = %{
+      run_id: Map.get(state.job, :run_id),
+      sha: Map.get(state.job, :sha),
+      listed: Enum.map(state.listed, & &1.id),
+      next: next_id,
+      recheck: recheck,
+      steps: state.steps,
+      results: state.results,
+      answers: state.answers,
+      plan: state.plan,
+      checks: state.checks,
+      app_steps: state.app_steps,
+      sessions: state.sessions,
+      tokens: state.tokens,
+      rounds: state.rounds,
+      launched: match?({:launched, _app}, state.launch),
+      launch: if(match?({:failed, _output}, state.launch), do: state.launch)
+    }
+
+    keep_evidence(state)
+
+    case RunStore.put_qa_pass(state.context.repo_key, state.context.issue_id, pass) do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("QA pass of #{state.job.issue.identifier} could not keep where it stands: #{inspect(reason)}")
+    end
+  end
+
+  defp forget_pass(state) do
+    File.rm_rf(kept_evidence_dir(state))
+    RunStore.delete_qa_pass(state.context.repo_key, state.context.issue_id)
+  end
+
+  # The evidence the finished steps wrote under `qa-evidence/` is kept beside the worktree, which the
+  # next pass makes again from scratch, and is put back when the pass goes on after a restart.
+  defp kept_evidence_dir(state), do: state.worktree <> ".kept-evidence"
+
+  defp keep_evidence(state) do
+    copy_evidence(Path.join(state.worktree, @evidence_dir), kept_evidence_dir(state))
+  end
+
+  defp put_back_evidence(state) do
+    copy_evidence(kept_evidence_dir(state), Path.join(state.worktree, @evidence_dir))
+  end
+
+  defp copy_evidence(from, to) do
+    for file <- Path.wildcard(Path.join(from, "**"), match_dot: false), File.regular?(file) do
+      target = Path.join(to, Path.relative_to(file, from))
+
+      if not File.exists?(target) or File.stat!(target).size != File.stat!(file).size do
+        File.mkdir_p!(Path.dirname(target))
+        File.cp!(file, target)
+      end
+    end
+
+    :ok
+  end
+
+  # A pass whose last run Symphony's restart stopped (`RunStore.restart_interrupted?/1`), on the same
+  # commit and list, goes on at the step after the last one that ended, with the results of the
+  # steps already done; the step the restart stopped mid-step runs again, and no step that ended does.
+  # The app the earlier run launched is gone with its QA session, so the build and launch steps run
+  # again first when the next step drives the app. Anything else starts the list from the top.
+  defp restore(state) do
+    with %{} = pass <- RunStore.get_qa_pass(state.context.repo_key, state.context.issue_id),
+         true <- pass.sha == Map.get(state.job, :sha) and pass.listed == Enum.map(state.listed, & &1.id),
+         true <- restart_interrupted?(state, pass.run_id),
+         %Step{} = next <- Enum.find(pass.steps, &(&1.id == pass.next)) do
+      Logger.info("QA pass of #{state.job.issue.identifier} goes on at step #{next.id} after Symphony's restart")
+      state = restored(state, pass)
+      put_back_evidence(state)
+      state = if pass.launched and (pass.recheck != nil or MapSet.member?(state.app_steps, next.id)), do: relaunch(state), else: state
+      {state, if(pass.recheck, do: {:recheck, pass.recheck, next}, else: next)}
+    else
+      _none ->
+        forget_pass(state)
+        {state, List.first(state.steps)}
+    end
+  end
+
+  defp restart_interrupted?(state, run_id) do
+    runs = RunStore.list_issue_runs(state.context.repo_key, state.context.issue_id)
+    is_list(runs) and Enum.any?(runs, &(Map.get(&1, :run_id) == run_id and RunStore.restart_interrupted?(&1)))
+  end
+
+  defp restored(state, pass) do
+    %{
+      state
+      | steps: pass.steps,
+        context: %{state.context | steps: pass.steps},
+        results: pass.results,
+        answers: pass.answers,
+        plan: pass.plan,
+        checks: pass.checks,
+        app_steps: pass.app_steps,
+        sessions: pass.sessions,
+        tokens: pass.tokens,
+        rounds: pass.rounds,
+        launch: pass.launch
+    }
+  end
+
+  # The app is launched again, on a QA session that may be new: the build and the launch steps run
+  # again. That prepares the app; it walks no step.
+  defp relaunch(state) do
+    state.listed
+    |> Enum.filter(&(runs?(&1, "symphony:qa_build") or runs?(&1, @launch)))
+    |> Enum.reduce(state, fn step, state -> state |> run_step(step) |> elem(0) end)
   end
 
   defp next_step(state, step, outcome) do
@@ -337,7 +566,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
 
   defp pre_checks(state) do
     case state.job |> Map.get(:proofs, []) |> QaPreCheck.report_checks() do
-      [] -> {:ok, {"No walkthrough step names a test that a check of this repo runs: QA walks every step.\n", 0}}
+      [] -> {:ok, {"No walkthrough step is proved by a recorded test: QA walks every step.\n", 0}}
       checks -> {:ok, {Enum.map_join(checks, "", &"#{&1.name}: #{&1.status}: #{&1.detail}\n"), 0}}
     end
   end
@@ -492,6 +721,15 @@ defmodule SymphonyElixir.QaAgent.Steps do
   defp after_turn({:verdict, result}, state, step, run, _notes, _attempt), do: give_verdict(state, step, run, result)
   defp after_turn({:recheck, briefs}, state, step, run, _notes, _attempt), do: asked_recheck(state, step, run, briefs)
 
+  # A group's answer that misses a check, or gives one a status Symphony does not take, is asked
+  # once more; the second time the others keep their results and that check is not judged (`blocked`).
+  defp after_turn({:partial, _answer, why}, state, step, run, notes, 1), do: after_turn({:error, why}, state, step, run, notes, 1)
+
+  defp after_turn({:partial, answer, why}, state, step, run, _notes, _attempt) do
+    Logger.info("QA step #{step.id} of #{state.job.issue.identifier} answered its group in part (#{why}); the checks with no result are blocked")
+    passed(state, step, run, answer)
+  end
+
   defp after_turn({:error, why}, state, step, run, notes, 1) do
     Logger.info("QA step #{step.id} of #{state.job.issue.identifier} answered nothing Symphony takes (#{why}); asking once more")
     turn(state, step, run, retry_notes(step, notes, why), 2)
@@ -503,17 +741,38 @@ defmodule SymphonyElixir.QaAgent.Steps do
   defp retry_notes(_step, notes, why), do: Map.put(notes, :answer_error, why)
 
   defp passed(state, step, run, answer) do
-    state = %{state | answers: state.answers ++ [{step, answer}]}
-    state = if step.id == @plan, do: %{state | plan: answer}, else: state
+    state = %{state | answers: state.answers ++ answer_entries(state, step, answer)}
+    state = if step.id == @plan, do: regroup(%{state | plan: answer}), else: state
     PhaseSteps.record_turn_completed(step, step_context(state, run), answer_fields(state, step, answer), duration(run))
-    {add_result(state, step, "passed", nil), :passed}
+    {add_result(state, step, "passed", group_detail(state, step, answer)), :passed}
   end
+
+  # What the review reads of an answer: a group's is one answer per check, named after its step.
+  defp answer_entries(state, step, answer) do
+    if group?(state, step),
+      do: for(result <- answer["results"], do: {%{step | title: "walkthrough step #{result["step"]}"}, result}),
+      else: [{step, answer}]
+  end
+
+  defp group_detail(state, step, answer) do
+    if group?(state, step),
+      do: Enum.map_join(answer["results"], "; ", &"walkthrough step #{&1["step"]}: #{&1["status"]}"),
+      else: nil
+  end
+
+  defp group?(state, step), do: match?([_, _ | _], Map.get(state.checks, step.id))
 
   # The step's answer rides on its own `step.completed` (`SymphonyElixir.QaAgent.StepPayload`), where
   # the Director reads it as fields, never as a note.
   defp answer_fields(state, %Step{id: @plan}, answer), do: %{outcome: "passed", plan: StepPayload.plan(answer, plan_skips(state))}
 
-  defp answer_fields(_state, _step, answer) do
+  defp answer_fields(state, step, answer) do
+    if group?(state, step),
+      do: %{outcome: "passed", results: StepPayload.results(answer["results"])},
+      else: single_fields(answer)
+  end
+
+  defp single_fields(answer) do
     case StepPayload.result(answer) do
       nil -> %{outcome: "passed"}
       result -> %{outcome: "passed", result: result}
@@ -568,31 +827,54 @@ defmodule SymphonyElixir.QaAgent.Steps do
     }
   end
 
-  # One round of recheck: the launch again, a fresh turn of the list's `repeat` step per brief, the
-  # quit and the evidence, then the review again (`walk/2`).
+  # One round of recheck: the launch again, a fresh turn of the list's `repeat` step per session
+  # (the briefs that share a `group`, or one brief alone), the quit and the evidence, then the review
+  # again (`walk/2`).
   defp recheck_round(state, briefs) do
     round = state.rounds + 1
 
-    checks =
-      for {_brief, index} <- Enum.with_index(briefs, 1),
-          do: %Step{repeated(state.template, "recheck_#{round}_#{index}", "Recheck #{round}.#{index}") | session: Step.fresh_session(), on_fail: nil}
+    sessions =
+      for {group, index} <- state |> recheck_sessions(briefs) |> Enum.with_index(1) do
+        check = %Step{repeated(state.template, "recheck_#{round}_#{index}", "Recheck #{round}.#{index}") | session: Step.fresh_session(), on_fail: nil}
+        {if(match?([_, _ | _], group), do: grouped(check), else: check), Enum.map(group, &%{number: brief_number(&1), target: brief_target(state, &1), brief: &1})}
+      end
 
-    recheck_targets = for {brief, check} <- Enum.zip(briefs, checks), target = brief_target(state, brief), into: %{}, do: {check.id, target}
+    rechecks = Enum.map(sessions, &elem(&1, 0))
     launches = Enum.filter(state.listed, &runs?(&1, @launch))
     after_checks = Enum.filter(state.listed, &(runs?(&1, @quit) or runs?(&1, @attach)))
-    app_steps = if launches == [], do: state.app_steps, else: Enum.reduce(checks, state.app_steps, &MapSet.put(&2, &1.id))
+    app_steps = if launches == [], do: state.app_steps, else: Enum.reduce(rechecks, state.app_steps, &MapSet.put(&2, &1.id))
 
     state = %{
       state
       | rounds: round,
-        steps: state.steps ++ checks,
-        context: %{state.context | steps: state.steps ++ checks},
-        briefs: Map.merge(state.briefs, Map.new(Enum.zip(checks, briefs), fn {check, brief} -> {check.id, brief} end)),
-        walk_targets: Map.merge(state.walk_targets, recheck_targets),
+        steps: state.steps ++ rechecks,
+        context: %{state.context | steps: state.steps ++ rechecks},
+        checks: Map.merge(state.checks, Map.new(sessions, fn {check, walked} -> {check.id, walked} end)),
         app_steps: app_steps
     }
 
-    Enum.reduce(launches ++ checks ++ after_checks, state, fn step, state -> state |> run_step(step) |> elem(0) end)
+    Enum.reduce(launches ++ rechecks ++ after_checks, state, fn step, state -> state |> run_step(step) |> elem(0) end)
+  end
+
+  # The recheck briefs by session: a brief that names a walkthrough step this pass walks and a
+  # `group` is rechecked with the others of its group (on the same surface); any other is rechecked
+  # alone.
+  defp recheck_sessions(state, briefs) do
+    briefs
+    |> Enum.with_index()
+    |> in_groups(fn {brief, index} ->
+      case {brief_number(brief), group_name(brief)} do
+        {number, name} when is_binary(name) and is_integer(number) -> recheck_group(state, brief, number, name, index)
+        _alone -> {:alone, index}
+      end
+    end)
+    |> Enum.map(fn group -> Enum.map(group, &elem(&1, 0)) end)
+  end
+
+  defp recheck_group(state, brief, number, name, index) do
+    if Enum.any?(state.targets, &(&1.number == number)),
+      do: {:group, command_line?(state, brief), name},
+      else: {:alone, index}
   end
 
   defp brief_target(state, brief), do: Enum.find(state.targets, &(&1.number == brief_number(brief)))
@@ -656,10 +938,15 @@ defmodule SymphonyElixir.QaAgent.Steps do
 
   defp check_recheck(%{template: nil}, _briefs), do: {:error, "this pass's list has no `repeat: walkthrough` step to recheck with: give the verdict"}
 
-  defp check_recheck(_state, briefs) do
-    if is_list(briefs) and briefs != [] and length(briefs) <= @max_rechecks and Enum.all?(briefs, &is_map/1),
-      do: {:recheck, briefs},
-      else: {:error, "`recheck` must be a list of one to #{@max_rechecks} briefs, each an object"}
+  # At most `@max_rechecks` sessions: the briefs that share a `group` are one session.
+  defp check_recheck(state, briefs) do
+    with true <- is_list(briefs) and briefs != [] and length(briefs) <= @max_recheck_briefs and Enum.all?(briefs, &is_map/1),
+         true <- length(recheck_sessions(state, briefs)) <= @max_rechecks do
+      {:recheck, briefs}
+    else
+      false ->
+        {:error, "`recheck` must be a list of one to #{@max_recheck_briefs} briefs, each an object, in at most #{@max_rechecks} sessions (the briefs that share a `group` are one session)"}
+    end
   end
 
   # The plan must brief every walkthrough step the pass walks; a judged step names its status.
@@ -672,13 +959,59 @@ defmodule SymphonyElixir.QaAgent.Steps do
     end
   end
 
-  defp check(_state, _step, %{"status" => status} = answer) do
+  defp check(state, step, answer) do
+    case Map.get(state.checks, step.id) do
+      [_, _ | _] = walked -> check_group(Enum.map(walked, & &1.number), answer)
+      _one -> check_one(answer)
+    end
+  end
+
+  defp check_one(%{"status" => status} = answer) do
     if status in @statuses,
       do: {:ok, answer},
       else: {:error, "`status` must be one of #{Enum.join(@statuses, ", ")}"}
   end
 
-  defp check(_state, _step, answer), do: {:ok, answer}
+  defp check_one(answer), do: {:ok, answer}
+
+  # A group's answer holds one result per check, each with a status Symphony takes. A check with no
+  # such result is asked again, then counts as not judged (`blocked`), never as passed.
+  defp check_group(numbers, %{"results" => results} = answer) do
+    # The first result of each check counts.
+    given =
+      for %{} = result <- Enum.reverse(results), number = brief_number(result), number in numbers, into: %{} do
+        {number, result}
+      end
+
+    judged =
+      for {number, %{"status" => status} = result} <- given, status in @statuses, into: %{} do
+        {number, Map.put(result, "step", number)}
+      end
+
+    unjudged = Enum.reject(numbers, &Map.has_key?(judged, &1))
+    answer = Map.put(answer, "results", Enum.map(numbers, &Map.get_lazy(judged, &1, fn -> not_judged(&1) end)))
+
+    case unjudged do
+      [] ->
+        {:ok, answer}
+
+      missing ->
+        {:partial, answer,
+         "`results` has no result with a `status` of #{Enum.join(@statuses, ", ")} for walkthrough step #{Enum.join(missing, ", ")} of this group: " <>
+           "give one result per step, each with its `step`"}
+    end
+  end
+
+  defp not_judged(number) do
+    %{
+      "step" => number,
+      "status" => "blocked",
+      "expected" => "a result for walkthrough step #{number}",
+      "actual" => "the walk gave no result Symphony takes for this step, so it was not judged",
+      "details" => "",
+      "evidence" => []
+    }
+  end
 
   defp brief_number(%{"step" => number}) when is_integer(number), do: number
 
@@ -883,7 +1216,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
 
   # A walk turn the plan gave to the command line reads that playbook's walk prompt, not the app's.
   defp surface_step(state, %Step{} = step) do
-    with true <- Map.has_key?(state.walk_targets, step.id) or Map.has_key?(state.briefs, step.id),
+    with true <- Map.has_key?(state.checks, step.id),
          true <- command_line?(state, walk_brief(state, step)),
          prompt when is_binary(prompt) <- StepPrompts.prompt(@command_line, "walk") do
       %Step{step | prompt: prompt}
@@ -923,18 +1256,46 @@ defmodule SymphonyElixir.QaAgent.Steps do
   end
 
   defp context_for(state, step) do
-    if Map.has_key?(state.walk_targets, step.id) or Map.has_key?(state.briefs, step.id),
-      do: walk_context(state, step),
-      else: check_context(state)
+    case Map.get(state.checks, step.id) do
+      [_, _ | _] = walked -> group_context(state, walked)
+      [walked] -> walk_context(state, walked)
+      nil -> check_context(state)
+    end
   end
 
-  defp walk_context(state, step) do
-    target = Map.get(state.walk_targets, step.id)
-    brief = walk_brief(state, step)
-
+  defp walk_context(state, %{target: target, brief: brief}) do
     [
       target_text(target),
       if(brief, do: "Your brief, from the lead QA agent:\n" <> json(brief), else: "The plan gave no brief for this step: walk it from its text and the ticket."),
+      surface_lines(state, brief)
+    ]
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\n\n")
+  end
+
+  # Several checks that share a screen and an app state, walked in one session: each step's text and
+  # brief, and the answer that holds one result per check.
+  defp group_context(state, walked) do
+    numbers = Enum.map_join(walked, ", ", & &1.number)
+
+    [
+      "You walk #{length(walked)} walkthrough steps in this one session (steps #{numbers}): the lead QA agent grouped them because they share a " <>
+        "screen and an app state. Reach the place once, then judge each step in turn, with its own screenshots and its own `evidence` " <>
+        "events, each naming its step.",
+      Enum.map_join(walked, "\n\n", &target_text(&1.target)),
+      "Your briefs, from the lead QA agent, one per step:\n" <> json(Enum.map(walked, & &1.brief)),
+      surface_lines(state, hd(walked).brief),
+      "Answer with `results`: one object per step above, each with `step` (its number), `status`, `expected`, `actual`, `details` and " <>
+        "`evidence`, judged on its own: one step's failure never changes another's status. Symphony refuses an answer that misses a step or " <>
+        "gives one a status other than #{Enum.join(@statuses, ", ")}, and asks once more; a step still without a result is then not judged " <>
+        "(`blocked`), never passed."
+    ]
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\n\n")
+  end
+
+  defp surface_lines(state, brief) do
+    [
       if(command_line?(state, brief), do: command_line_rules(state), else: app_line(state)),
       QaAgent.prompt_parts(state.job, nil, [:servers, :qa_mode, :conductor])
     ]
@@ -942,7 +1303,12 @@ defmodule SymphonyElixir.QaAgent.Steps do
     |> Enum.join("\n\n")
   end
 
-  defp walk_brief(state, step), do: Map.get(state.briefs, step.id) || plan_brief(state, Map.get(state.walk_targets, step.id))
+  defp walk_brief(state, step) do
+    case Map.get(state.checks, step.id) do
+      [%{brief: brief} | _] -> brief
+      _none -> nil
+    end
+  end
 
   # A brief the plan gave to the command line, on a pass that selected a command-line playbook.
   defp command_line?(state, %{"surface" => @command_line}), do: command_line_playbook(state) != nil
@@ -978,8 +1344,6 @@ defmodule SymphonyElixir.QaAgent.Steps do
       PromptSafety.linear_block(target.text, "walkthrough_step", @fact_bytes)
   end
 
-  defp plan_brief(%{plan: nil}, _target), do: nil
-  defp plan_brief(_state, nil), do: nil
   defp plan_brief(%{plan: plan}, target), do: Enum.find(List.wrap(plan["walk"]), &(brief_number(&1) == target.number))
 
   defp check_context(state) do
@@ -1015,7 +1379,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
       "- Playbooks: #{Enum.map_join(state.job.playbooks, ", ", & &1.kind)}",
       "- The PR's diff: `git diff origin/HEAD...HEAD` in this worktree (`origin/HEAD` is the base branch).",
       "Walkthrough steps QA walks (each needs a brief in `walk`):\n" <> walked,
-      if(checks == "", do: "No step is proved by a named test.", else: "Steps a named test proves (confirmed before the pass; do not brief them):\n" <> checks),
+      if(checks == "", do: "No step is proved by a named test.", else: "Steps a recorded test proves (proved, do not brief them):\n" <> checks),
       gallery_facts(state)
     ]
     |> Enum.join("\n")

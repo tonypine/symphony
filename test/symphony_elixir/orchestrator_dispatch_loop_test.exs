@@ -717,7 +717,12 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
           repo_key: @repo_key,
           identifier: @identifier,
           issue: %Issue{id: @issue_id, identifier: @identifier, state: issue_state, repo_key: @repo_key},
-          started_at: DateTime.utc_now()
+          started_at: DateTime.utc_now(),
+          # The periodic snapshot can land between the state swap and the DOWN below, and it
+          # reads these fields of every running entry.
+          last_codex_timestamp: nil,
+          last_codex_message: nil,
+          last_codex_event: nil
         },
         Map.new(entry)
       )

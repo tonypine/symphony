@@ -51,8 +51,9 @@ defmodule SymphonyElixir.EpicReview do
            again when it does, so the epic closes itself once it is whole; the loop ends at the
            first pass. A gap that can only be checked once another change has merged is two
            follow-ups: the step that checks it names the one it waits on (another gap of the same
-           answer, or a sub-ticket of the epic) in `blocked_by`, and is filed after it with that
-           blocked-by relation; a blocker that is neither is logged and left out.
+           answer, or a sub-ticket of the epic) in `blocked_by`, and is filed after it with a stored
+           dependency on it (no Linear blocker link); a blocker that is neither is logged and left
+           out.
          * `blocked` (tooling, environment, an answer that did not resolve the checklist, gaps none
            of which could be filed, or a run dispatched to a remote worker, where the flow does
            not run the QA agent) -> retried boundedly on the same commit, then handed to the
@@ -378,7 +379,7 @@ defmodule SymphonyElixir.EpicReview do
       playbooks: playbooks,
       token_limit: settings.execution.max_tokens_per_issue,
       run_profile: Keyword.get(opts, :run_profile),
-      journey: QaVerification.journey(issue, settings.proof_check, "the epic")
+      journey: QaVerification.journey(issue, "the epic")
     }
   end
 
@@ -543,7 +544,7 @@ defmodule SymphonyElixir.EpicReview do
   #
   # A failing step may name what it waits on (`blocked_by`): the `gap` label of another failing step
   # in the same answer, or a sub-ticket of the epic. A follow-up that can only be checked after
-  # another one merges (TP-994) is filed after its blockers with the blocked-by relation, so the
+  # another one merges (TP-994) is filed after its blockers with a stored dependency on each, so the
   # dependency gate — and on Symphony's own repository `SymphonyElixir.UpdateHold` — keeps it in
   # `Todo` until they land, rather than both running at once and holding each other in QA.
   defp create_gaps(issue, outcome, opts) do

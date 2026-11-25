@@ -1,7 +1,8 @@
 import Foundation
 
 /// What a stepped QA pass's step answered, as Symphony records it on the step's own `step.completed` payload: a check's
-/// result, the plan, the rechecks a review asks for, a review's verdict in words. Every field is optional and a shape
+/// result, or one result per walkthrough step of a walk that judged several in one session, the plan, the rechecks a
+/// review asks for, a review's verdict in words. Every field is optional and a shape
 /// this app does not know is skipped; a step with none of them has no answer.
 public struct StepAnswer: Equatable {
     /// A check step's result: what it expected, what it saw, and its status in Symphony's word ("passed", "blocked").
@@ -29,6 +30,31 @@ public struct StepAnswer: Equatable {
         }
 
         static let plain: Set<String> = ["passed", "failed", "done", "ok", "pass", "fail", "blocked"]
+    }
+
+    /// One walkthrough step a grouped walk judged in its session (`results`): its number and its own result.
+    public struct CheckResult: Equatable {
+        public var step: Int?
+        public var result: Result
+
+        public init(step: Int?, result: Result) {
+            self.step = step
+            self.result = result
+        }
+
+        /// "Step 2", the walkthrough step it judged.
+        public var title: String { step.map { "Step \($0)" } ?? "Check" }
+
+        /// Its own state: what it judged, or done for a status that is not a judgement ("plan_mismatch", said by `word`).
+        public var state: RunStep.State { result.judgement ?? .done }
+
+        /// Its state's word, with the status when it says more ("Done · plan_mismatch").
+        public var word: String { state.word + (result.extraWord.map { " · " + $0 } ?? "") }
+
+        /// VoiceOver's reading of the line: "Step 2, failed, Agents shows two rows".
+        public var accessibilityLabel: String {
+            ([title, word.lowercased(), result.actual].compactMap { $0 }).joined(separator: ", ")
+        }
     }
 
     /// The plan step's plan: a summary, what it will check and what it will not.
@@ -74,16 +100,20 @@ public struct StepAnswer: Equatable {
     /// A step's structured answer in a run that is not a QA pass (`answer`).
     public var entries: [Entry] = []
     public var result: Result?
+    /// A grouped walk's results, one per walkthrough step, in its order.
+    public var results: [CheckResult]
     public var plan: Plan?
     public var rechecks: [Recheck]
     /// The final review's verdict in words.
     public var verdictSummary: String?
 
     public init(
-        result: Result? = nil, plan: Plan? = nil, rechecks: [Recheck] = [], verdictSummary: String? = nil, entries: [Entry] = []
+        result: Result? = nil, results: [CheckResult] = [], plan: Plan? = nil, rechecks: [Recheck] = [], verdictSummary: String? = nil,
+        entries: [Entry] = []
     ) {
         self.entries = entries
         self.result = result
+        self.results = results
         self.plan = plan
         self.rechecks = rechecks
         self.verdictSummary = verdictSummary
@@ -94,6 +124,10 @@ public struct StepAnswer: Equatable {
         let result = fields.map("result").flatMap { map -> Result? in
             let read = Result(status: map.text("status"), expected: map.text("expected"), actual: map.text("actual"))
             return read.status == nil && read.expected == nil && read.actual == nil ? nil : read
+        }
+        let results = fields.list("results").compactMap { item -> CheckResult? in
+            let read = Result(status: item.text("status"), expected: item.text("expected"), actual: item.text("actual"))
+            return read.status == nil ? nil : CheckResult(step: item.number("step"), result: read)
         }
         let plan = fields.map("plan").flatMap { map -> Plan? in
             let checks = map.list("checks").compactMap { check in
@@ -114,12 +148,25 @@ public struct StepAnswer: Equatable {
             return Entry(label: label, value: value)
         }
         let answer = StepAnswer(
-            result: result, plan: plan, rechecks: rechecks, verdictSummary: fields.text("verdictSummary"),
+            result: result, results: results, plan: plan, rechecks: rechecks, verdictSummary: fields.text("verdictSummary"),
             entries: Array(entries.prefix(Self.maxEntries))
         )
         guard !answer.isEmpty else { return nil }
         self = answer
     }
 
-    public var isEmpty: Bool { entries.isEmpty && result == nil && plan == nil && rechecks.isEmpty && verdictSummary == nil }
+    public var isEmpty: Bool {
+        entries.isEmpty && result == nil && results.isEmpty && plan == nil && rechecks.isEmpty && verdictSummary == nil
+    }
+
+    /// What the step judged, as its state: its result's judgement, or a grouped walk's worst (failed when one check
+    /// failed, else blocked when one was blocked, done when every one passed); nil when it judged nothing.
+    public var judgement: RunStep.State? {
+        if let result { return result.judgement }
+        guard !results.isEmpty else { return nil }
+        let judged = results.map(\.result.judgement)
+        if judged.contains(.failed) { return .failed }
+        if judged.contains(.blocked) { return .blocked }
+        return judged.allSatisfy { $0 == .done } ? .done : nil
+    }
 }

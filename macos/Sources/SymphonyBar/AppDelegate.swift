@@ -45,13 +45,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private var controlInFlight: ControlAction?
     /// Why the last Pause or Resume failed, shown under the status until the next attempt.
     private var controlError: String?
-    /// Heads the forced tickets, hidden while there are none.
-    private let forcedTitleItem = NSMenuItem(title: StatusMenu.forcedTitle, action: nil, keyEquivalent: "")
-    private lazy var forceItem = menuItem(StatusMenu.forceTitle, action: #selector(forceTicket(_:)))
-    /// A row for each forced ticket, between its heading and Force a ticket….
-    private var forcedItems: [NSMenuItem] = []
-    /// The force or stop-forcing request under way, if any.
-    private var forceInFlight: ControlAction?
     private let updates = UpdatePoller()
     /// The newer release, while there is one.
     private var availableRelease: Release?
@@ -84,6 +77,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private var checkedUpdate: PendingUpdate?
     /// Decides when an automatic update mode installs a release.
     private var autoUpdater = AutoUpdater()
+    /// Automatically when released: the verified release Symphony has ready, which waits with dispatch going on for
+    /// the moment Symphony picks (TP-1590).
+    private var arming = UpdateArming()
     /// Posts and withdraws the notification an update Automatically when released posts as it starts.
     private var startNotifier = UpdateStartNotifier()
     /// Fires at the set time, so the attempt doesn't wait for the next status poll.
@@ -149,10 +145,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         tryNowItem.isHidden = true
         menu.addItem(tryNowItem)
         menu.addItem(.separator())
-        forcedTitleItem.isEnabled = false
-        menu.addItem(forcedTitleItem)
-        menu.addItem(forceItem)
-        menu.addItem(.separator())
         updateAvailableItem.action = #selector(showReleaseNotes(_:))
         updateAvailableItem.target = self
         releaseNotesItem.action = #selector(showReleaseNotes(_:))
@@ -213,7 +205,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         // Symphony reads its secrets only at start; restart() does nothing while it isn't running.
         settingsPage.onSecretsChanged = { [weak self] in self?.restart() }
         settingsPage.updateBlocker = { [weak self] developmentMode in self?.updater.blocker(developmentMode: developmentMode) }
-        settingsPage.onSettingsSaved = { [weak self] settings in self?.updates.configure(settings) }
+        settingsPage.onSettingsSaved = { [weak self] settings in
+            self?.updates.configure(settings)
+            // Leaving Automatically when released calls off an update Symphony has ready.
+            self?.reconsiderArming()
+        }
         updater.checkSettings = { [runner] binary in await runner.updateCheck(binary: binary) }
         updater.onChange = { [weak self] in
             guard let self else { return }
@@ -559,17 +555,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         case #selector(tryUsageLimitNow(_:)):
             if case .tryNow? = controlInFlight { menuItem.title = StatusMenu.tryingNowTitle } else { menuItem.title = StatusMenu.tryNowTitle }
             return controlInFlight == nil && !restarting && StatusMenu.tryNowLimit(machine.status) != nil
-        case #selector(forceTicket(_:)):
-            if case let .force(identifier)? = forceInFlight {
-                menuItem.title = StatusMenu.forcingTitle(identifier)
-            } else {
-                menuItem.title = StatusMenu.forceTitle
-            }
-            return forceInFlight == nil && StatusMenu.canForce(machine.status)
         case #selector(moveProvider(_:)):
             return controlInFlight == nil
-        case #selector(stopForcing(_:)):
-            return forceInFlight == nil && StatusMenu.canForce(machine.status)
         case #selector(openTerminalDashboard(_:)):
             return isAnswering
         case #selector(openLogs(_:)):
@@ -639,12 +626,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     /// can be called off, as once it reached the swap.
     @discardableResult
     private func cancelUpdate() -> Bool {
-        guard updater.isUpdating,
+        let ready = arming.waitingVersion == nil ? nil : updater.parked?.release
+        guard updater.isUpdating || ready != nil,
             let cancel = UpdateCancel(
                 downloading: updater.preparing != nil,
                 drain: restarter.machine,
                 kind: updater.kind,
-                release: updater.release
+                release: updater.release,
+                ready: ready
             )
         else { return false }
         if let release = cancel.hold { autoUpdater.hold(release) }
@@ -652,13 +641,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         case .download:
             updater.cancelPreparing()
         case .drain:
+            // During the swap of an update Symphony had ready, the drain's Cancel lifts Symphony's pause.
+            _ = arming.cancel()
             restarter.handle(.cancel)
+        case .ready:
+            performArming(arming.cancel())
+            updater.dropParked()
+            if updater.preparing != nil { updater.cancelPreparing() }
         }
         return true
     }
 
     private var offersCancel: Bool {
-        updater.preparing != nil || restarter.machine.canCancel
+        updater.preparing != nil || restarter.machine.canCancel || arming.waitingVersion != nil
     }
 
     private func startNotice(_ effect: UpdateStartNotifier.Effect?) {
@@ -729,40 +724,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             poller.pollNow()
             // The window's pages read the same state, so a provider's Pause or Resume shows there at once too.
             apiClient.refresh()
-        }
-    }
-
-    /// Opens the window's Force a Ticket sheet (D12b). Scripted QA mode answers it as a prompt: the rest of the command
-    /// file is the identifier, and nothing is sent when there is none.
-    @objc private func forceTicket(_ sender: Any?) {
-        guard forceInFlight == nil else { return }
-        if let script = QAScriptDriver.shared {
-            guard let input = script.answer(promptTitle: ForceSheet.title, message: ForceSheet.skips + " " + ForceSheet.keeps),
-                  let identifier = ForceSheet.identifier(input)
-            else { return }
-            sendForce(.force(identifier))
-            return
-        }
-        symphonyWindow.showForceSheet()
-    }
-
-    @objc private func stopForcing(_ sender: NSMenuItem) {
-        guard let identifier = sender.representedObject as? String else { return }
-        sendForce(.stopForcing(identifier))
-    }
-
-    /// Sends a force or stop-forcing request, then polls so the forced tickets follow. A failure shows an alert, as
-    /// the request came from a prompt or a submenu the user has left.
-    private func sendForce(_ action: ControlAction) {
-        guard forceInFlight == nil else { return }
-        forceInFlight = action
-
-        let stateRoot = runner.stateRoot
-        Task {
-            let result = await AppStores.current.sendControl(action, stateRoot: stateRoot)
-            forceInFlight = nil
-            if case let .failed(message) = result { SymphonyRunner.showAlert(title: message, body: "") }
-            poller.pollNow()
         }
     }
 
@@ -887,6 +848,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         guard let release = availableRelease, !updater.isUpdating else { return }
         updater.skips.record(SkippedRelease(release, reason: .skipped))
         autoUpdater.clearHold()
+        // A skipped release Symphony has ready is called off, so it never swaps in by itself.
+        reconsiderArming()
         showUpdateItems()
     }
 
@@ -906,6 +869,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         guard SymphonyRunner.confirm(alert) else { return }
 
         controlError = nil
+        // Installing by hand takes over from an update Symphony has ready.
+        if arming.waitingVersion != nil {
+            performArming(arming.cancel())
+            updater.dropParked()
+        }
         // Installing by hand overrides Skip This Version and a Cancel Update's hold for this build.
         updater.skips.clear(build: release.build)
         autoUpdater.clearHold()
@@ -922,8 +890,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     }
 
     /// Pauses dispatch, waits for agent runs and stops Symphony, then hands over. A Symphony the app doesn't run
-    /// is left alone. `kind` decides how the drain waits: see `UpdateKind`.
-    private func drainForUpdate(_ update: PreparedUpdate, kind: UpdateKind) {
+    /// is left alone. `kind` decides how the drain waits: see `UpdateKind`. `armed` is the swap of an update Symphony
+    /// had ready: it waits behind the pause Symphony set for it, and waits again for its next moment when Symphony
+    /// lifts that pause (TP-1590).
+    private func drainForUpdate(_ update: PreparedUpdate, kind: UpdateKind, armed: Bool = false) {
         // While Symphony's state fails to load, its drain read says whether dispatch is paused (TP-1550).
         let start = UpdateDrainStart(
             status: machine.status,
@@ -936,9 +906,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         let alreadyPaused: Bool
         switch start {
         case .refused:
+            arming.drainEnded(waitsAgain: false)
             updater.fail(UpdateDrainStart.refusal)
             return
         case .nothingToDrain:
+            arming.drainEnded(waitsAgain: false)
             updater.log.append(UpdateDrainStart.nothingToDrainLog)
             handOff(update, symphonyStopped: false, resumeDispatch: false)
             return
@@ -946,14 +918,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             alreadyPaused = paused
         }
         if let line = start.startLog { updater.log.append(line) }
-        restarter.drainForUpdate(alreadyPaused: alreadyPaused, kind: kind, version: update.release.version) {
+        restarter.drainForUpdate(alreadyPaused: alreadyPaused, kind: kind, version: update.release.version, armed: armed) {
             [weak self] stopped, pausedByUpdate in
             guard let self else { return }
             guard stopped else {
+                if armed, restarter.machine.released {
+                    arming.drainEnded(waitsAgain: true)
+                    updater.repark()
+                    return
+                }
+                arming.drainEnded(waitsAgain: false)
                 updater.cancel()
                 if restarter.machine.postponed { autoUpdater.postponed() }
                 return
             }
+            arming.drainEnded(waitsAgain: false)
             updater.log.append(UpdateDrainStart.doneLog)
             handOff(update, symphonyStopped: true, resumeDispatch: pausedByUpdate)
         }
@@ -1039,7 +1018,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                 busy: busy,
                 drain: drainReadForFailedState
             ),
-            runsTimeout: TimeInterval(runner.restartTimeoutMinutes * 60)
+            runsTimeout: TimeInterval(runner.restartTimeoutMinutes * 60),
+            armedBuild: arming.build
         )
     }
 
@@ -1072,11 +1052,79 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             // No confirmation: a failure shows on the update line, not in an alert.
             guard !updater.isUpdating, !restarting else { return }
             controlError = nil
-            startNotifier.began(release, kind: kind)
-            updater.prepare(release, kind: kind) { [weak self] update in self?.drainForUpdate(update, kind: kind) }
+            // An on-release update announces itself at its swap, not while it downloads.
+            if kind != .onRelease { startNotifier.began(release, kind: kind) }
+            updater.prepare(release, kind: kind) { [weak self] update in
+                guard let self else { return }
+                // Automatically when released arms the verified release with Symphony instead of pausing dispatch.
+                guard kind == .onRelease else { return drainForUpdate(update, kind: kind) }
+                let effects = arming.verified(update)
+                if effects.isEmpty { updater.cancel() } else { updater.park(update) }
+                performArming(effects)
+            }
         case nil:
             break
         }
+    }
+
+    /// Lets the update Symphony has ready act on each status poll: arm it again with a Symphony that forgot it, or
+    /// swap once Symphony paused for it (TP-1590). A newer release downloading meanwhile doesn't hold the swap up.
+    private func armingTick() {
+        reconsiderArming()
+        guard arming.target != nil else { return }
+        let snapshot: StateSnapshot?
+        switch machine.status {
+        case let .running(state, _), let .paused(state, _):
+            snapshot = state
+        case .stopped, .starting, .error:
+            snapshot = nil
+        }
+        let busy = restarting || updater.prepared != nil || runner.isStarting || runner.isStopping || startWhenStopped
+            || resumeWhenAnswering || health.isChecking
+        let activity = SymphonyActivity(status: machine.status, symphonyRunning: runner.isRunning, busy: busy, drain: drainReadForFailedState)
+        performArming(arming.polled(window: snapshot?.updateWindow, pauseVersion: snapshot?.updatePauseVersion, activity: activity))
+    }
+
+    /// Calls off the update Symphony has ready once the update mode left Automatically when released, updates are
+    /// blocked, or its release was skipped (TP-1590).
+    private func reconsiderArming() {
+        guard arming.target != nil else { return }
+        let settings = AppStores.current.settingsStore().loadSettings()
+        let effects = arming.reconsider(
+            mode: settings.updateMode,
+            blocked: updater.blocker(developmentMode: settings.developmentMode) != nil,
+            skips: updater.skips
+        )
+        guard !effects.isEmpty else { return }
+        updater.dropParked()
+        performArming(effects)
+    }
+
+    private func performArming(_ effects: [UpdateArming.Effect]) {
+        let stateRoot = runner.stateRoot
+        for effect in effects {
+            switch effect {
+            case let .arm(version):
+                updater.log.append("telling Symphony v\(version) is ready")
+                Task {
+                    let result = await AppStores.current.sendControl(.updateReady(version: version), stateRoot: stateRoot)
+                    if case let .failed(message) = result { updater.log.append("Symphony didn't take v\(version) as ready: \(message)") }
+                    performArming(arming.armed(version, result: result))
+                    poller.pollNow()
+                }
+            case .swap:
+                guard let update = updater.unpark() else { break }
+                startNotifier.began(update.release, kind: .onRelease)
+                drainForUpdate(update, kind: .onRelease, armed: true)
+            case .drain:
+                guard let update = updater.unpark() else { break }
+                startNotifier.began(update.release, kind: .onRelease)
+                drainForUpdate(update, kind: .onRelease)
+            case let .disarm(version):
+                Task { _ = await AppStores.current.sendControl(.resumeUpdate(version: version), stateRoot: stateRoot) }
+            }
+        }
+        showUpdateItems()
     }
 
     /// Shows or hides the update items.
@@ -1094,7 +1142,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
         // Skip This Version still shows for a release Cancel Update holds (S2e).
         let held = offer?.offersSkip == true && release?.build == autoUpdater.heldBuild
-        let line = updater.menuLine ?? health.menuLine ?? (held ? UpdateMenu.cancelledLine : nil)
+        let line = updater.menuLine ?? health.menuLine ?? arming.waitingVersion.map(UpdateMenu.readyLine(version:))
+            ?? (held ? UpdateMenu.cancelledLine : nil)
             ?? (release == nil ? nil : updateBlocker)
             ?? release.flatMap { updater.skips.entry(forBuild: $0.build) }.flatMap(UpdateMenu.skippedLine)
             ?? release.flatMap { UpdateMenu.migrationLine($0, migrating: settingsMigrating($0)) }
@@ -1189,6 +1238,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             }
             readDrainIfStateFailed(poll)
             autoUpdateTick()
+            armingTick()
             // A release Symphony reports starts the update check now instead of at the timer.
             if case let .state(snapshot) = poll { updates.reported(snapshot.latestRelease) }
         case .started, .exited:
@@ -1222,7 +1272,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         setupItem.image = setup.badge.map { NSImage(systemSymbolName: SymphonyView.setup.symbol, accessibilityDescription: $0.status.word) } ?? nil
         symphonyWindow.dockBadge = StatusMenu.badgeCount(for: status)
         symphonyWindow.update(
-            updateHold: UpdateHold(release: updater.release, downloading: updater.preparing != nil, drain: restarter.machine)
+            updateHold: UpdateHold(
+                release: updater.release,
+                downloading: updater.preparing != nil,
+                drain: restarter.machine,
+                ready: arming.waitingVersion
+            )
         )
 
         statusTitleItem.title = notAnswering ? StatusMenu.statusTitle(.error(StatusMachine.notAnsweringTitle)) : StatusMenu.statusTitle(status)
@@ -1231,7 +1286,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         detailItems.forEach(menu.removeItem)
         let updating = restarter.machine.purpose.isUpdate || updater.preparing != nil
         restartNowItem.title = updating ? UpdateMenu.updateNowTitle : StatusMenu.restartNowTitle
-        cancelRestartItem.title = updating ? UpdateMenu.cancelUpdateTitle : StatusMenu.cancelRestartTitle
+        cancelRestartItem.title = UpdateMenu.cancelTitle(
+            restartIsUpdate: restarter.machine.purpose.isUpdate, downloading: updater.preparing != nil, ready: arming.waitingVersion != nil
+        )
         restartNowItem.isHidden = !restarter.machine.offersRestartNow
         cancelRestartItem.isHidden = !offersCancel
         tryNowItem.isHidden = StatusMenu.tryNowLimit(status) == nil
@@ -1252,7 +1309,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         }
         showWaiting(in: menu)
         showProviders(in: menu)
-        showForced(in: menu)
     }
 
     /// The Providers block (TP-1536), as the catalog's "Menu bar menu, providers" draws it: a line per provider in
@@ -1360,33 +1416,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         }
         image.accessibilityDescription = symbol.accessibilityDescription
         return image
-    }
-
-    /// Shows a row for each forced ticket, with a submenu to stop forcing it, and hides their heading while there
-    /// are none. While the same tickets are listed, only the rows' titles change, so an open submenu stays open.
-    private func showForced(in menu: NSMenu) {
-        let tickets = StatusMenu.forcedTickets(machine.status)
-        forcedTitleItem.isHidden = tickets.isEmpty
-        if forcedItems.map({ $0.representedObject as? String }) == tickets.map(\.identifier) {
-            zip(forcedItems, tickets).forEach { item, ticket in item.title = StatusMenu.forcedLine(ticket) }
-            return
-        }
-        forcedItems.forEach(menu.removeItem)
-        forcedItems = tickets.map { ticket in
-            let stop = menuItem(StatusMenu.stopForcingTitle(ticket.identifier), action: #selector(stopForcing(_:)))
-            stop.representedObject = ticket.identifier
-            let submenu = NSMenu()
-            submenu.addItem(stop)
-            let item = NSMenuItem(title: StatusMenu.forcedLine(ticket), action: nil, keyEquivalent: "")
-            item.representedObject = ticket.identifier
-            item.submenu = submenu
-            return item
-        }
-        // Taken once: each row goes in above Force a ticket…, which moves down.
-        let start = menu.index(of: forceItem)
-        for (offset, item) in forcedItems.enumerated() {
-            menu.insertItem(item, at: start + offset)
-        }
     }
 
     private func menuItem(_ title: String, action: Selector, keyEquivalent: String = "") -> NSMenuItem {

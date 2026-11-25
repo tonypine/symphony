@@ -57,6 +57,9 @@ defmodule SymphonyElixir.Inbox.ReferencesTest do
     )
   end
 
+  # A stored dependency on the ticket `identifier`, which needs it done.
+  defp dep(identifier), do: %{issue_id: "id-" <> identifier, identifier: identifier, kind: :done}
+
   defp watched(url), do: %{facts: %PrDecision.Facts{}, pr_url: url}
 
   defp github(answers) do
@@ -94,15 +97,12 @@ defmodule SymphonyElixir.Inbox.ReferencesTest do
           phase: "In Progress",
           parent: %{identifier: "TP-923", title: "Improve decisions", done: 0, total: 1, children: ["started"]},
           pr_watch: watched("https://github.com/tonypine/symphony/pull/450"),
-          blockers: [
-            %{id: "id-TP-880", identifier: "TP-880", state: "In Progress"},
-            %{id: "id-TP-870", identifier: "TP-870", state: "Done"},
-            %{id: nil, identifier: nil, state: nil}
-          ]
+          depends_on: [dep("TP-880"), dep("TP-870"), %{issue_id: "id-unknown", identifier: nil, kind: :done}]
         })
 
       tp892 = ticket("TP-892", %{phase: "Rework"})
       other_repo = ticket("SHOP-1", %{repo_key: "shop"})
+      tp870 = ticket("TP-870", %{phase: "Done"})
 
       item = item("TP-892", action("TP-891 and SHOP-1 wait. Code Review sent PR #448 back; #449 is gone. TP-999 and SHA-256 too."))
 
@@ -122,7 +122,7 @@ defmodule SymphonyElixir.Inbox.ReferencesTest do
           ]
       end
 
-      records = [tp891, tp892, other_repo]
+      records = [tp891, tp892, other_repo, tp870]
       log = capture_log(fn -> send(self(), {:result, resolve([item], records, github, verdicts: verdicts)}) end)
 
       assert_received {:result, [resolved]}
@@ -174,7 +174,7 @@ defmodule SymphonyElixir.Inbox.ReferencesTest do
 
     test "reads a ticket's phase as terminal, backlog or started, by its repo's terminal states" do
       records = [
-        ticket("TP-1", %{phase: "Done", blockers: [%{id: nil, identifier: "TP-9", state: nil}]}),
+        ticket("TP-1", %{phase: "Done", depends_on: [dep("TP-9")]}),
         ticket("TP-2", %{phase: " Backlog "}),
         ticket("TP-3", %{phase: "Triage"}),
         ticket("TP-4", %{phase: nil})
@@ -274,11 +274,7 @@ defmodule SymphonyElixir.Inbox.ReferencesTest do
         ticket("TP-892", %{
           parent: parent,
           pr_watch: watched("https://github.com/tonypine/symphony/pull/448"),
-          blockers: [
-            %{id: "id-TP-880", identifier: "TP-880", state: "Done"},
-            %{id: "id-TP-881", identifier: "TP-881", state: "Todo"},
-            %{id: nil, identifier: nil, state: nil}
-          ],
+          depends_on: [dep("TP-880"), dep("TP-881"), %{issue_id: "id-unknown", identifier: nil, kind: :done}],
           questions: [
             answered.("q1", "First", "Pick A", ~U[2026-10-10 01:00:00Z]),
             answered.("q2", "Second", "B", ~U[2026-10-11 02:00:00.123Z]),
@@ -292,10 +288,11 @@ defmodule SymphonyElixir.Inbox.ReferencesTest do
       records = [
         own,
         ticket("TP-880", %{title: "Before", phase: "Done"}),
-        ticket("TP-893", %{title: "Next", blockers: [%{id: "id-TP-892", identifier: nil, state: "Rework"}]}),
-        ticket("TP-894", %{title: "Later", blockers: [%{id: nil, identifier: "TP-892", state: "Rework"}]}),
-        ticket("TP-895", %{blockers: [%{id: "id-TP-1", identifier: "TP-1", state: "Todo"}]}),
-        %{repo_key: "symphony", issue_id: "id-no-identifier", blockers: [%{id: "id-TP-892", identifier: "TP-892", state: nil}]}
+        ticket("TP-893", %{title: "Next", depends_on: [%{issue_id: "id-TP-892", identifier: nil, kind: :done}]}),
+        ticket("TP-894", %{title: "Later", depends_on: [%{dep("TP-892") | kind: :released}]}),
+        # A blocker link of Linear's an older build kept in the record is not read.
+        ticket("TP-895", %{depends_on: [dep("TP-1")], blockers: [%{id: "id-TP-892", identifier: "TP-892", state: "Todo"}]}),
+        %{repo_key: "symphony", issue_id: "id-no-identifier", depends_on: [dep("TP-892")]}
       ]
 
       verdicts = fn "symphony", "id-TP-892" ->
@@ -309,7 +306,7 @@ defmodule SymphonyElixir.Inbox.ReferencesTest do
       assert resolved.context == %{
                parent: parent,
                pull_request: %{number: 448, url: "https://github.com/tonypine/symphony/pull/448", checks: "pending", sent_back: 2, review: nil, failing_check: nil},
-               blocked_by: [%{identifier: "TP-880", title: "Before", state: "Done"}, %{identifier: "TP-881", title: nil, state: "Todo"}],
+               blocked_by: [%{identifier: "TP-880", title: "Before", state: "Done"}, %{identifier: "TP-881", title: nil, state: nil}],
                blocks: [%{identifier: "TP-893", title: "Next", state: "Todo"}, %{identifier: "TP-894", title: "Later", state: "Todo"}],
                related: [],
                earlier_decisions: [
@@ -404,23 +401,16 @@ defmodule SymphonyElixir.Inbox.ReferencesTest do
   end
 
   describe "facts/1" do
-    test "reads a Linear node's state and the blockers still open" do
+    test "reads a Linear node's state, and no blocker link of Linear's" do
       blocker = fn identifier, type -> %{"type" => "blocks", "issue" => %{"identifier" => identifier, "state" => %{"type" => type}}} end
 
       node = %{
         "id" => "i",
         "state" => %{"name" => "Todo", "type" => "unstarted"},
-        "inverseRelations" => %{
-          "nodes" => [
-            blocker.("TP-1", "started"),
-            blocker.("TP-2", "completed"),
-            blocker.("TP-3", "canceled"),
-            %{"type" => "related", "issue" => %{"identifier" => "TP-4", "state" => %{"type" => "started"}}}
-          ]
-        }
+        "inverseRelations" => %{"nodes" => [blocker.("TP-1", "started"), blocker.("TP-2", "completed")]}
       }
 
-      assert References.facts(node) == %{issue_id: "i", state: "Todo", state_type: "unstarted", open_blockers: ["TP-1"]}
+      assert References.facts(node) == %{issue_id: "i", state: "Todo", state_type: "unstarted", open_blockers: []}
       assert References.facts(%{}) == %{issue_id: nil, state: nil, state_type: nil, open_blockers: []}
     end
   end

@@ -168,15 +168,18 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
   describe "the orchestrator's tick" do
     # The repo poll's own requests (the poll, and the reads it makes once per interval) are left
     # out: the tick's by-id reads are the difference between the sources.
-    test "under dispatch.source: poll reads its running, watched, forced and stopped tickets by id" do
+    test "under dispatch.source: poll reads its running, watched and stopped tickets by id" do
       start_linear!(4)
       dispatch_from!("poll")
       observe_records()
 
       {result, _state} = Orchestrator.run_repo_poll_task_for_test(tick_state(), repos(), 0)
 
-      assert %{"SymphonyLinearPoll" => _polls, "SymphonyLinearIssuesById" => 4} = linear_requests()
+      assert %{"SymphonyLinearPoll" => _polls, "SymphonyLinearIssuesById" => 3} = linear_requests()
       assert {:ok, [%Issue{id: "issue-1", state: "Code Review"}]} = result.running_result
+      queries = linear_queries()
+      assert {"SymphonyLinearPoll", _query} = List.keyfind(queries, "SymphonyLinearPoll", 0)
+      refute Enum.any?(queries, fn {_operation, query} -> query =~ ~r/inverseRelations|issueRelation/ end)
     end
 
     test "under dispatch.source: record sends no Linear request but the repo poll's" do
@@ -264,8 +267,7 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
     %Orchestrator.State{
       repo_key: @repo_key,
       running: %{running.id => %{issue: running, identifier: running.identifier}},
-      watching: %{"issue-2" => %{}},
-      forced: %{"issue-3" => %{}}
+      watching: %{"issue-2" => %{}}
     }
   end
 
@@ -273,6 +275,8 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
     queries = linear_queries()
     assert queries != []
     refute Enum.any?(queries, fn {_operation, query} -> query =~ "attachments" end)
+    # Nor does any read or write touch Linear's blocker links.
+    refute Enum.any?(queries, fn {_operation, query} -> query =~ ~r/inverseRelations|issueRelation/ end)
     recorded = Enum.map(Usage.snapshot().queries, & &1.query)
     assert "SymphonyLinearPoll" in recorded
     refute "SymphonyLinearIssueAttachments" in recorded
@@ -313,7 +317,7 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
   # The application's own Linear readers poll on their timers and read the workflow this test
   # points at the fake endpoint, so a tick during the test would add its reads to the counts.
   defp suspend_background_readers do
-    for name <- [SymphonyElixir.Initiatives, SymphonyElixir.HumanActions],
+    for name <- [SymphonyElixir.HumanActions],
         pid = Process.whereis(name),
         is_pid(pid) do
       :ok = :sys.suspend(pid)
@@ -331,8 +335,7 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
       "state" => %{"name" => "Code Review"},
       "url" => "https://linear.test/TEAM-#{index}",
       "assignee" => %{"id" => "viewer-1"},
-      "labels" => %{"nodes" => []},
-      "inverseRelations" => %{"nodes" => []}
+      "labels" => %{"nodes" => []}
     }
   end
 

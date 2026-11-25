@@ -70,14 +70,6 @@
         "Rework"
       ]
     },
-    "force": {
-      "allowed": false,
-      "reason": "The ticket is done."
-    },
-    "unforce": {
-      "allowed": false,
-      "reason": "It isn't forced."
-    },
     "unblock": {
       "allowed": false,
       "reason": "TP-1 has nothing a person can unblock"

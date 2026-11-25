@@ -145,7 +145,7 @@ final class PlanPanelTests: XCTestCase {
             ]),
             "1 of 2 checks proved"
         )
-        XCTAssertEqual(["test", "qa", "design", "attached", "magic", nil].map(PlanPanelModel.proofWord), ["Test", "QA", "Design", "Attached", nil, nil])
+        XCTAssertEqual(["test", "qa", "design", "attached", "ci", "magic", nil].map(PlanPanelModel.proofWord), ["Test", "QA", "Design", "Attached", "CI", nil, nil])
     }
 
     func testAPlanDrawsOnlyWhatItHolds() throws {

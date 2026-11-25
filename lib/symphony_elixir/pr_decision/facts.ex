@@ -30,10 +30,19 @@ defmodule SymphonyElixir.PrDecision.Facts do
 
   `merge_guard` says whether the ticket's plan lets its pull request go on to the merge (`:clear`,
   the default). `:open_checks`: a check of the current plan the next step owes is open (in Merging,
-  or in CI Fix on the way back to it, every check but one seen only after the merge; before it, a
-  check a test or an attachment proves). `:rewritten`: a plan version was written after the newest
+  or in CI Fix on the way back to it, any check, unless every open one is a `:ci_checks` one; before
+  it, a check a test or an attachment proves). `:rewritten`: a plan version was written after the newest
   coding run started, so the code and any approval of it are for an older plan. `:held`: the
   Conductor held the merge since that run (`SymphonyElixir.TicketJourney.outdated/1`).
+  `:ci_checks`: in Merging, the only open checks are ones the pull request's own CI run proves
+  (`proof: ci`), so the merge waits on their proof instead of sending the ticket to Rework.
+
+  `ci_proof` says, for `:ci_checks`, where that proof stands on the head
+  (`SymphonyElixir.PrWatch.CiProof`): `:provable`, a check names a CI check that passed on the
+  head, so Symphony records the proof itself; `:running`, nothing provable yet and checks still
+  run; `:turn`, the checks finished and a check is left that a run must read the results for, and
+  no run had that turn on the head; `:spent`, that run had its turn on the head and the check is
+  still open. `:none` (the default) everywhere else.
   """
 
   @typedoc "The ticket's phase: one of the watched Linear states."
@@ -83,7 +92,8 @@ defmodule SymphonyElixir.PrDecision.Facts do
           head_origin: :symphony | :person,
           review_comments: :none | :unaddressed,
           review: :pending | :approved | :changes_requested,
-          merge_guard: :clear | :open_checks | :rewritten | :held,
+          merge_guard: :clear | :open_checks | :rewritten | :held | :ci_checks,
+          ci_proof: :none | :provable | :running | :turn | :spent,
           ci: :pending | :green | :none | :red | :required_missing,
           no_ci: :not_configured | :not_reported,
           missing_checks: [String.t()],
@@ -127,6 +137,7 @@ defmodule SymphonyElixir.PrDecision.Facts do
             review_comments: :none,
             review: :pending,
             merge_guard: :clear,
+            ci_proof: :none,
             ci: :pending,
             no_ci: :not_configured,
             missing_checks: [],
@@ -185,7 +196,8 @@ defmodule SymphonyElixir.PrDecision.Facts do
     {:landing_timed_out, [false, true], [mergeable: [:blocked]]},
     # Read only where the merge is next or carried on to, and enumerated on one clean and one
     # conflicting green PR with no hold and no run: the rule that guards it reads nothing else.
-    {:merge_guard, [:clear, :open_checks, :rewritten, :held], @guarded}
+    {:merge_guard, [:clear, :open_checks, :rewritten, :held, :ci_checks], @guarded},
+    {:ci_proof, [:provable, :running, :turn, :spent], [merge_guard: [:ci_checks]]}
   ]
 
   @doc "Builds facts from a map or keyword list; an unknown key raises."

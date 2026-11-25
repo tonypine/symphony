@@ -7,11 +7,14 @@ public struct DrainStatus: Equatable {
     public var running: Int
     public var betweenTurns: Int
     public var paused: Bool
+    /// The Conductor runs mid-run, which the stop waits for (TP-1590); 0 from a Symphony that predates them.
+    public var conductorRuns: Int
 
-    public init(running: Int, betweenTurns: Int = 0, paused: Bool) {
+    public init(running: Int, betweenTurns: Int = 0, paused: Bool, conductorRuns: Int = 0) {
         self.running = running
         self.betweenTurns = betweenTurns
         self.paused = paused
+        self.conductorRuns = conductorRuns
     }
 
     /// The runs a drain waits for, as `StateSnapshot.activeRuns` counts them.
@@ -24,13 +27,19 @@ public struct DrainStatus: Equatable {
     /// The drain read in a response, or nil when it isn't one: an error, an older Symphony without the request.
     public static func parse(data: Data, statusCode: Int) -> DrainStatus? {
         guard statusCode == 200, let payload = try? decoder.decode(Payload.self, from: data) else { return nil }
-        return DrainStatus(running: payload.running, betweenTurns: payload.betweenTurns, paused: payload.paused)
+        return DrainStatus(
+            running: payload.running,
+            betweenTurns: payload.betweenTurns,
+            paused: payload.paused,
+            conductorRuns: payload.conductorRuns ?? 0
+        )
     }
 
     private struct Payload: Decodable {
         let running: Int
         let betweenTurns: Int
         let paused: Bool
+        let conductorRuns: Int?
     }
 
     private static let decoder: JSONDecoder = {

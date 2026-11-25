@@ -17,7 +17,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
   @recipient :qa_steps_test_recipient
   @tools :qa_steps_test_tools
 
-  # Answers each turn from `:qa_steps_test_answers`: per step id (or the id before its `_<n>`), a
+  # Answers each turn from `:qa_steps_test_answers`: per step id (or the id before its `_<n>…`), a
   # list of what the turn does, the last one repeating: `{:write, map}` writes the answer file,
   # `{:verdict, map}` calls `qa_verdict`, `{:raw, text}` writes text, `:nothing`, `{:error, reason}`
   # fails the turn, `{:messages, list}` sends those messages first, `{:send_message, text, then}` has the person
@@ -85,7 +85,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
 
     defp next_action(id) do
       answers = Application.get_env(:symphony_elixir, :qa_steps_test_answers, %{})
-      key = Enum.find([id, String.replace(id, ~r/_\d+$/, ""), String.replace(id, ~r/^recheck_\d+_\d+$/, "recheck")], &Map.has_key?(answers, &1))
+      key = Enum.find([id, String.replace(id, ~r/(_\d+)+$/, ""), String.replace(id, ~r/^recheck_\d+_\d+$/, "recheck")], &Map.has_key?(answers, &1))
 
       case Map.get(answers, key, [{:write, pass_answer()}]) do
         [action | [_ | _] = rest] ->
@@ -551,6 +551,241 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
     end
   end
 
+  describe "grouped walks" do
+    defp group_plan(groups) do
+      walk =
+        for {number, group} <- groups do
+          Map.merge(%{step: number, where: "Settings", do: "Look at row #{number}", expect: "Row #{number} shows", screenshots: ["row-#{number}"]}, if(group, do: %{group: group}, else: %{}))
+        end
+
+      plan([], %{walk: walk})
+    end
+
+    defp result(step, status, extra \\ %{}) do
+      Map.merge(%{step: step, status: status, expected: "Row #{step} shows", actual: "Row #{step} #{status}", details: "fixture: settings", evidence: ["qa-evidence/row-#{step}.png"]}, extra)
+    end
+
+    defp walk_ids, do: for(%{id: "walk_" <> _ = id} <- turns(), do: id)
+
+    defp journey(numbers), do: %{journey: %{source: "the ticket", text: "1.", steps: walkthrough(numbers)}}
+
+    test "walks the checks the plan groups in one session, and a check outside any group in its own, each with its own result", ctx do
+      File.write!(Path.join([ctx.worktree, "qa-evidence", "row-1.png"]), "png")
+
+      answers(%{
+        "plan" => [{:write, group_plan([{1, "settings"}, {2, "settings"}, {3, "settings"}, {4, nil}])}],
+        "walk_1_2_3" => [{:write, %{results: [result(1, "pass"), result(2, "fail"), result(3, "pass")]}}],
+        "walk_4" => [{:write, FakeAgent.pass_answer()}],
+        "review" => [{:verdict, @pass}]
+      })
+
+      assert {:ok, %{result: %{verdict: :pass}}} = run(ctx, journey([1, 2, 3, 4]))
+      turns = turns()
+      assert Enum.map(turns, & &1.id) == ["plan", "walk_1_2_3", "walk_4", "design_check", "wide_pass", "review"]
+
+      group = Enum.find(turns, &(&1.id == "walk_1_2_3"))
+      assert group.prompt =~ "You walk 3 walkthrough steps in this one session (steps 1, 2, 3)"
+      for number <- 1..3, do: assert(group.prompt =~ "Step #{number}: open page #{number}.")
+      refute group.prompt =~ "Step 4: open page 4."
+      assert group.prompt =~ ~s("expect": "Row 3 shows")
+      assert group.prompt =~ "Answer with `results`: one object per step above"
+      assert group.prompt =~ "`results` (list)"
+      assert group.session[:run_profile].model == "claude-small"
+      refute Keyword.has_key?(group.turn, :resume_session_id)
+
+      single = Enum.find(turns, &(&1.id == "walk_4"))
+      assert single.prompt =~ "Step 4: open page 4."
+      refute single.prompt =~ "in this one session"
+
+      completed = Map.new(events("step.completed"), &{&1.payload.step_id, &1.payload})
+
+      assert completed["walk_1_2_3"].results == [
+               %{step: 1, status: "pass", expected: "Row 1 shows", actual: "Row 1 pass"},
+               %{step: 2, status: "fail", expected: "Row 2 shows", actual: "Row 2 fail"},
+               %{step: 3, status: "pass", expected: "Row 3 shows", actual: "Row 3 pass"}
+             ]
+
+      refute Map.has_key?(completed["walk_1_2_3"], :result)
+      assert completed["walk_4"].result.status == "pass"
+      assert Map.new(events("step.started"), &{&1.payload.step_id, &1.payload.title})["walk_1_2_3"] == "Walk a step 1, 2, 3"
+
+      # The review reads one answer per check, the failed one apart from the two that passed.
+      review = List.last(turns)
+      assert review.prompt =~ "`walk_1_2_3` (walkthrough step 1): {"
+      assert review.prompt =~ "`walk_1_2_3` (walkthrough step 3): {"
+      assert review.prompt =~ ~s("actual":"Row 2 fail")
+      assert review.prompt =~ "- `walk_1_2_3` (Walk a step 1, 2, 3): passed: walkthrough step 1: pass; walkthrough step 2: fail; walkthrough step 3: pass"
+
+      # The evidence step reads each check's evidence.
+      assert review.prompt =~ "- qa-evidence/row-1.png\nNamed as evidence but not written:\n- qa-evidence/row-2.png\n- qa-evidence/row-3.png\n"
+    end
+
+    test "a group walks where its first step falls, and a cli brief is never walked with an app brief", ctx do
+      answers(%{
+        "plan" => [{:write, group_plan([{1, "a"}, {2, nil}, {3, "a"}])}],
+        "walk_1_3" => [{:write, %{results: [result(1, "pass"), result(3, "pass")]}}],
+        "review" => [{:verdict, @pass}]
+      })
+
+      assert {:ok, _result} = run(ctx, journey([1, 2, 3]))
+      assert walk_ids() == ["walk_1_3", "walk_2"]
+
+      both = [%{kind: "cli", prompt: "CLI rules."}, %{kind: "macos_app", prompt: "Screen rules."}]
+
+      walk = [
+        %{step: 1, surface: "app", group: 7},
+        %{step: 2, surface: "cli", group: "7", do: ["bin/symphony check"]},
+        %{step: 3, surface: "cli", group: " 7 "}
+      ]
+
+      answers(%{
+        "plan" => [{:write, plan([], %{walk: walk})}],
+        "walk_2_3" => [{:write, %{results: [result(2, "pass"), result(3, "pass")]}}],
+        "review" => [{:verdict, @pass}]
+      })
+
+      assert {:ok, _result} = run(ctx, Map.put(journey([1, 2, 3]), :playbooks, both))
+      walks = for %{id: "walk_" <> _} = turn <- turns(), into: %{}, do: {turn.id, turn.prompt}
+      assert Map.keys(walks) |> Enum.sort() == ["walk_1", "walk_2_3"]
+      assert walks["walk_2_3"] =~ "on the command line"
+      assert walks["walk_2_3"] =~ "CLI rules."
+
+      # A blank group is no group.
+      blank = plan([], %{walk: [%{step: 1, group: " "}, %{step: 2, group: " "}]})
+      answers(%{"plan" => [{:write, blank}], "review" => [{:verdict, @pass}]})
+      assert {:ok, _result} = run(ctx)
+      assert walk_ids() == ["walk_1", "walk_2"]
+    end
+
+    test "a check the group's answer misses is asked once more, then counts as not judged, never as passed", ctx do
+      partial = %{results: [result(1, "pass"), result(2, "great"), result(1, "fail"), %{status: "pass"}, "not a result"]}
+
+      answers(%{
+        "plan" => [{:write, group_plan([{1, "g"}, {2, "g"}, {3, "g"}])}],
+        "walk_1_2_3" => [{:write, partial}],
+        "review" => [{:verdict, @pass}]
+      })
+
+      assert {:ok, _result} = run(ctx, journey([1, 2, 3]))
+      turns = turns()
+      [first, second] = Enum.filter(turns, &(&1.id == "walk_1_2_3"))
+      refute first.prompt =~ "Your last answer was refused"
+      assert second.prompt =~ "Your last answer was refused: `results` has no result with a `status` of pass, fail, blocked, plan_mismatch for walkthrough step 2, 3"
+
+      completed = Enum.find(events("step.completed"), &(&1.payload.step_id == "walk_1_2_3")).payload
+      assert completed.outcome == "passed"
+
+      assert [%{step: 1, status: "pass"}, %{step: 2, status: "blocked", actual: not_judged}, %{step: 3, status: "blocked"}] =
+               completed.results
+
+      assert not_judged =~ "not judged"
+
+      review = List.last(turns)
+      assert review.prompt =~ "walkthrough step 1: pass; walkthrough step 2: blocked; walkthrough step 3: blocked"
+
+      # An answer with no results list is refused twice and fails the step: none of its checks passed.
+      answers(%{
+        "plan" => [{:write, group_plan([{1, "g"}, {2, "g"}])}],
+        "walk_1_2" => [{:write, FakeAgent.pass_answer()}],
+        "review" => [{:verdict, @pass}]
+      })
+
+      :ok = RunStore.clear()
+      assert {:ok, _result} = run(ctx)
+      assert [%{payload: %{outcome: "failed", reason: reason}}] = Enum.filter(events("step.completed"), &(&1.payload.step_id == "walk_1_2"))
+      assert reason =~ "`results` (list)"
+    end
+
+    test "a pass shaped like TP-1575 (10 walked steps, most on one Settings page) starts fewer walk sessions with grouping than without", ctx do
+      steps = walkthrough(Enum.to_list(1..10))
+      journey = %{source: "the ticket", text: "1.", steps: steps}
+
+      # Before: every walked step is a fresh session.
+      answers(%{"plan" => [{:write, group_plan(for n <- 1..10, do: {n, nil})}], "review" => [{:verdict, @pass}]})
+      assert {:ok, _result} = run(ctx, %{journey: journey})
+      before = walk_ids()
+      assert length(before) == 10
+
+      # After: the seven checks on the Settings page in one state, the two that need the small window,
+      # and the one that needs a fresh app start on its own.
+      groups = for(n <- 1..7, do: {n, "settings"}) ++ [{8, nil}, {9, "small-window"}, {10, "small-window"}]
+
+      answers(%{
+        "plan" => [{:write, group_plan(groups)}],
+        "walk_1_2_3_4_5_6_7" => [{:write, %{results: for(n <- 1..7, do: result(n, "pass"))}}],
+        "walk_9_10" => [{:write, %{results: [result(9, "pass"), result(10, "pass")]}}],
+        "review" => [{:verdict, @pass}]
+      })
+
+      :ok = RunStore.clear()
+      assert {:ok, _result} = run(ctx, %{journey: journey})
+      grouped = walk_ids()
+      assert grouped == ["walk_1_2_3_4_5_6_7", "walk_8", "walk_9_10"]
+      assert {length(before), length(grouped)} == {10, 3}
+
+      # Every check keeps its own result.
+      judged = for %{payload: %{step_id: "walk_" <> _} = payload} <- events("step.completed"), result <- Map.get(payload, :results, [Map.get(payload, :result)]), do: result.status
+      assert length(judged) == 10
+    end
+
+    test "the review's rechecks that share a group run in one session, each with its own result; one alone runs in its own", ctx do
+      recheck = %{
+        recheck: [
+          %{step: 1, where: "Settings", group: "s"},
+          %{step: 2, where: "Settings", group: "s"},
+          %{step: 3, where: "The menu"},
+          %{step: 9, where: "Not walked", group: "s"}
+        ]
+      }
+
+      answers(%{
+        "plan" => [{:write, plan([1, 2, 3])}],
+        "review" => [{:write, recheck}, {:verdict, @pass}],
+        "recheck_1_1" => [{:write, %{results: [result(1, "pass"), result(2, "fail")]}}]
+      })
+
+      assert {:ok, %{result: %{verdict: :pass}}} = run(ctx, journey([1, 2, 3]))
+      rechecks = for %{id: "recheck_" <> _} = turn <- turns(), do: turn
+      assert Enum.map(rechecks, & &1.id) == ["recheck_1_1", "recheck_1_2", "recheck_1_3"]
+      [together, alone, not_walked] = rechecks
+      assert together.prompt =~ "You walk 2 walkthrough steps in this one session (steps 1, 2)"
+      refute alone.prompt =~ "in this one session"
+      assert alone.prompt =~ "The menu"
+      assert not_walked.prompt =~ "Not walked"
+
+      completed = Map.new(events("step.completed"), &{&1.payload.step_id, &1.payload})
+      assert [%{step: 1, status: "pass"}, %{step: 2, status: "fail"}] = completed["recheck_1_1"].results
+      assert completed["recheck_1_2"].result.status == "pass"
+    end
+
+    test "a recheck counts its sessions: four groups are refused, four briefs in two sessions are taken", ctx do
+      four = %{recheck: for(n <- 1..4, do: %{step: n, group: "g#{n}"})}
+      two = %{recheck: [%{step: 1, group: "a"}, %{step: 2, group: "a"}, %{step: 3, group: "a"}, %{step: 4}]}
+
+      answers(%{
+        "plan" => [{:write, plan([1, 2, 3, 4])}],
+        "review" => [{:write, four}, {:write, two}, {:verdict, @pass}],
+        "recheck_1_1" => [{:write, %{results: [result(1, "pass"), result(2, "pass"), result(3, "pass")]}}]
+      })
+
+      assert {:ok, %{result: %{verdict: :pass}}} = run(ctx, journey([1, 2, 3, 4]))
+      ids = Enum.map(turns(), & &1.id)
+      assert Enum.at(ids, Enum.find_index(ids, &(&1 == "review")) + 1) == "review"
+      assert Enum.filter(ids, &String.starts_with?(&1, "recheck_")) == ["recheck_1_1", "recheck_1_2"]
+    end
+
+    test "the plan is told to group the checks that share a screen or app state, and to keep apart those that need another", ctx do
+      prompt = StepPrompts.prompt("macos_app", "plan")
+      assert prompt =~ "Give the same `group` to the briefs that sit on the same screen or need the same app state"
+      assert prompt =~ "Keep in its own step (no `group`) any brief that needs a different state, a different window\n  size or a fresh app start"
+      refute prompt =~ "separate agent turn"
+
+      answers(%{"plan" => [{:write, plan([1, 2])}], "review" => [{:verdict, @pass}]})
+      assert {:ok, _result} = run(ctx)
+      assert hd(turns()).prompt =~ "Give the same `group` to the briefs"
+    end
+  end
+
   describe "the review" do
     test "may ask for a recheck: the launch again, a fresh walk per brief, the quit and evidence, then the review again", ctx do
       recheck = %{recheck: [%{step: 2, where: "Page 2, scrolled", do: "Scroll", expect: "Row 9 shows"}]}
@@ -598,7 +833,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
 
       answers(%{"plan" => [{:write, plan([1, 2])}], "review" => [{:write, %{recheck: [1, 2, 3, 4]}}, {:verdict, @pass}]})
       assert {:ok, %{result: %{verdict: :pass}}} = run(ctx)
-      assert List.last(turns()).prompt =~ "`recheck` must be a list of one to 3 briefs"
+      assert List.last(turns()).prompt =~ "`recheck` must be a list of one to 12 briefs, each an object, in at most 3 sessions"
     end
 
     test "takes a verdict written to the answer file, and refuses one that does not read", ctx do
@@ -871,8 +1106,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       File.write!(Path.join([ctx.worktree, "qa-evidence", "page-1.png"]), "png")
       answers(%{"look" => [{:write, %{FakeAgent.pass_answer() | evidence: ["qa-evidence/page-1.png", "qa-evidence/gone.png", "https://x"]}}], "review" => [{:verdict, @pass}]})
 
-      proved = %{number: 3, text: "Saved", proof: %{by: :test, check: "make-all", test: "saves"}}
-      proofs = [%{step: proved, status: :pass, detail: "passed", url: nil}]
+      proofs = [%{number: 3, text: "Saved", proof: %{by: :test, test: "saves"}}]
 
       steps = [
         machine("only_mac", "make mac", %{"when" => "macos_changed"}),
@@ -916,6 +1150,10 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
     test "has a prompt for each agent step of the default list" do
       for %Step{mode: "orchestrated", id: id} <- Phases.default_qa_steps("macos_app"), do: assert(is_binary(StepPrompts.prompt("macos_app", id)))
       assert StepPrompts.prompt("cli", "plan") =~ "`surface`"
+      assert StepPrompts.prompt("cli", "plan") =~ "never walks a `\"cli\"` brief and an `\"app\"` brief in one session"
+      assert StepPrompts.prompt("macos_app", "walk") =~ "When you walk several steps in one session"
+      assert StepPrompts.prompt("cli", "walk") =~ "When you walk several steps in one session"
+      assert StepPrompts.prompt("macos_app", "review") =~ "they are rechecked together in"
       assert StepPrompts.prompt("cli", "walk") =~ "on the command line"
       assert StepPrompts.prompt("web", "plan") == nil
       assert {"macos_app", "walk"} in StepPrompts.known()
@@ -943,4 +1181,175 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
 
   defp step(%Step{} = step), do: step
   defp step(attrs), do: attrs |> then(&Step.changeset(%Step{}, &1)) |> Ecto.Changeset.apply_action!(:validate)
+
+  describe "an update's restart at a step boundary (TP-1590)" do
+    # Symphony's start ends the run its restart stopped with the restart's error.
+    defp restart_stopped(run_id) do
+      :ok =
+        RunStore.put_run(%{
+          run_id: run_id,
+          repo_key: "default",
+          issue_id: @issue_id,
+          issue_identifier: "TP-77",
+          state: "QA",
+          status: "running"
+        })
+
+      {:ok, _count} = RunStore.interrupt_running_runs("default", RunStore.restart_error())
+    end
+
+    defp boundaries do
+      receive do
+        {:boundary, id} -> [id | boundaries()]
+      after
+        0 -> []
+      end
+    end
+
+    test "a pass asks to begin each next step at the boundary before it, and forgets where it stood once it ends", ctx do
+      answers(%{"plan" => [{:write, plan([1, 2])}], "review" => [{:verdict, @pass}]})
+      test = self()
+      boundary = fn step -> send(test, {:boundary, step.id}) && :ok end
+
+      assert {:ok, %{result: %{verdict: :pass}}} = run(ctx, %{}, qa_boundary: boundary)
+      assert boundaries() == ~w(build plan launch walk_1 walk_2 design_check wide_pass quit attach review)
+      assert RunStore.get_qa_pass("default", @issue_id) == nil
+    end
+
+    test "a pass the restart stopped mid-step goes on at that step with the finished steps' results, and walks none of them again", ctx do
+      answers(%{
+        "plan" => [{:write, plan([1, 2])}],
+        "walk" => [{:write, Map.put(FakeAgent.pass_answer(), :actual, "Page shows its title")}],
+        "design_check" => [{:messages, [:update_now_anyway], {:write, FakeAgent.pass_answer()}}, {:write, FakeAgent.pass_answer()}],
+        "review" => [{:verdict, @pass}]
+      })
+
+      File.write!(Path.join([ctx.worktree, "qa-evidence", "walk-1.png"]), "png")
+      # Update Now Anyway stops Symphony while the design check's turn is under way.
+      stop = fn
+        :update_now_anyway -> throw(:symphony_stopped)
+        _message -> :ok
+      end
+
+      assert catch_throw(run(ctx, %{}, on_message: stop)) == :symphony_stopped
+      assert Enum.map(turns(), & &1.id) == ["plan", "walk_1", "walk_2", "design_check"]
+      flush_tools()
+
+      # The restart: the run is ended with the restart's error, and the worktree is made again.
+      restart_stopped("qa-steps-run")
+      File.rm_rf!(Path.join(ctx.worktree, "qa-evidence"))
+      File.mkdir_p!(Path.join(ctx.worktree, "qa-evidence"))
+
+      assert {:ok, %{result: %{verdict: :pass}}} = run(ctx, %{run_id: "qa-steps-run-2"})
+
+      # Only the step the restart stopped runs again; no finished step is walked again.
+      turns = turns()
+      assert Enum.map(turns, & &1.id) == ["design_check", "wide_pass", "review"]
+
+      # The app is built and launched again on the new QA session: that walks no step.
+      assert_received {:tool, _driver, "qa_build", _args}
+      assert_received {:tool, _driver, "qa_launch_app", %{}}
+
+      resumed = events("step.completed") |> Enum.filter(&(&1.run_id == "qa-steps-run-2")) |> Enum.map(& &1.payload.step_id)
+      assert resumed == ["build", "launch", "design_check", "wide_pass", "quit", "attach", "review"]
+
+      # The steps after it are given what they would have had: the plan, the walk results and the evidence.
+      [design, _wide, review] = turns
+      assert design.prompt =~ ~s("entry": "button")
+      assert design.prompt =~ "Symphony launched it as PID 4242"
+      assert review.prompt =~ "Page shows its title"
+      assert review.prompt =~ "- `walk_1` (Walk a step 1): passed"
+      assert review.turn[:resume_session_id] == "session-plan"
+      assert File.read!(Path.join([ctx.worktree, "qa-evidence", "walk-1.png"])) == "png"
+      assert RunStore.get_qa_pass("default", @issue_id) == nil
+    end
+
+    test "a pass that can't keep where it stands still walks its list", ctx do
+      answers(%{"plan" => [{:write, plan([1])}], "review" => [{:verdict, @pass}]})
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{result: %{verdict: :pass}}} =
+                   Steps.run(FakeAgent, job(%{repo_key: " "}), ctx.worktree, QaAgent.qa_settings(Config.settings!()), Enum.map(Phases.default_qa_steps("macos_app"), &step/1),
+                     qa_tmp_dir: ctx.tmp_dir,
+                     qa_driver: self(),
+                     qa_driver_module: FakeDriver,
+                     qa_step_runner: fn _command, _env, _timeout -> {:ok, {"", 0}} end,
+                     qa_launch_settle_ms: 0
+                   )
+        end)
+
+      assert log =~ "could not keep where it stands"
+    end
+
+    test "a pass whose last run was not stopped by a restart starts its list from the top", ctx do
+      answers(%{"plan" => [{:write, plan([1])}], "review" => [{:verdict, @pass}]})
+      stop = fn step -> if step.id == "walk_1", do: throw(:symphony_stopped), else: :ok end
+
+      assert catch_throw(run(ctx, %{}, qa_boundary: stop)) == :symphony_stopped
+      assert %{next: "walk_1"} = RunStore.get_qa_pass("default", @issue_id)
+      _ = turns()
+
+      # The run ended some other way: nothing is taken from it.
+      assert {:ok, %{result: %{verdict: :pass}}} = run(ctx, %{run_id: "qa-steps-run-2"})
+      assert Enum.map(turns(), & &1.id) |> List.first() == "plan"
+    end
+
+    test "a pass stopped between the review's recheck and the recheck round goes on with the round", ctx do
+      answers(%{
+        "plan" => [{:write, plan([1])}],
+        "review" => [{:write, %{recheck: [%{step: 1, where: "Page 1", do: "Open it", expect: "It shows"}]}}, {:verdict, @pass}]
+      })
+
+      # The second boundary before the review is the one after its recheck, before the round.
+      stop = fn step ->
+        reviews = if step.id == "review", do: Process.put(:reviews, Process.get(:reviews, 0) + 1) || 0, else: 0
+        if reviews == 1, do: throw(:symphony_stopped), else: :ok
+      end
+
+      assert catch_throw(run(ctx, %{}, qa_boundary: stop)) == :symphony_stopped
+      assert List.last(Enum.map(turns(), & &1.id)) == "review"
+      flush_tools()
+      restart_stopped("qa-steps-run")
+
+      assert {:ok, %{result: %{verdict: :pass}}} = run(ctx, %{run_id: "qa-steps-run-2"})
+      assert Enum.map(turns(), & &1.id) == ["recheck_1_1", "review"]
+    end
+  end
+
+  describe "boundary/2" do
+    test "asks the orchestrator to begin the next step and waits for its answer" do
+      test = self()
+
+      orchestrator =
+        spawn(fn ->
+          receive do
+            {:run_step, "issue-1", {:qa_boundary, pass, %{id: "walk_1"}}} ->
+              send(test, :asked)
+              send(pass, {:run_step_turn, "issue-1"})
+          end
+        end)
+
+      assert Steps.boundary(orchestrator, "issue-1").(%{id: "walk_1"}) == :ok
+      assert_received :asked
+    end
+
+    test "goes on when the orchestrator is gone, and is nil with no orchestrator" do
+      gone = spawn(fn -> :ok end)
+      ref = Process.monitor(gone)
+      assert_receive {:DOWN, ^ref, :process, _pid, _reason}
+
+      assert {:error, {:orchestrator_down, _reason}} = Steps.boundary(gone, "issue-1").(%{id: "walk_1"})
+      assert Steps.boundary(nil, "issue-1") == nil
+    end
+  end
+
+  defp flush_tools do
+    receive do
+      {:tool, _driver, _tool, _args} -> flush_tools()
+      {:session_started, _worktree, _opts} -> flush_tools()
+    after
+      0 -> :ok
+    end
+  end
 end

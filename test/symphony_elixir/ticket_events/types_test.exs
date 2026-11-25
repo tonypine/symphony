@@ -128,6 +128,10 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       assert {:ok, %{action: "unblock"}} = Types.validate("person.action", %{action: :unblock}, :person, nil)
     end
 
+    test "a new force is no person's action: forcing is gone (TP-1611)" do
+      assert Types.validate("person.action", %{action: "force"}, :person, nil) == {:error, {:invalid_payload, [:action]}}
+    end
+
     test "rejects an agent outside the type's writers or run kinds" do
       assert {:error, {:not_allowed, reason}} =
                Types.validate("finding.recorded", finding(), :agent, "implementation")
@@ -348,6 +352,17 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
     end
   end
 
+  describe "a Conductor turn's move (TP-1656)" do
+    test "is a ticket.moved Symphony records for the turn: no other agent records one, and no run's tool offers it" do
+      assert {:ok, %{from: "Rework", to: "QA", note: "Nothing is left to code."}} =
+               Types.validate("ticket.moved", %{from: "Rework", to: "QA", note: "Nothing is left to code."}, :agent, "conductor")
+
+      assert {:error, {:not_allowed, _why}} = Types.validate("ticket.moved", %{from: "Rework", to: "QA"}, :agent, "rework")
+      assert {:ok, _payload} = Types.validate("ticket.moved", %{from: "Rework", to: "QA"}, :person, nil)
+      refute "ticket.moved" in Types.agent_types("conductor")
+    end
+  end
+
   describe "schema/1" do
     test "describes each field a tool's caller may send, leaving out the machinery's signal" do
       assert %{type: "list", max_items: 30} = Enum.find(Types.schema("plan.written").required, &(&1.name == "checks"))
@@ -482,6 +497,11 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       end
 
       assert {:ok, %{by: "qa"}} = Types.validate("check.proved", %{check_id: "c1", by: :qa}, :machine, nil)
+      # TP-1592: a check the pull request's own CI run proves, in the plan and in its proof.
+      assert {:ok, %{by: "ci", details: "make-all passed."}} = Types.validate("check.proved", %{check_id: "c1", by: "ci", details: "make-all passed."}, :agent, "landing")
+      ci_check = %{id: "c9", kind: "outcome", statement: "make-all passes.", proof: "ci", ci_check: "make-all"}
+      assert {:ok, %{checks: [_ | _] = checks}} = Types.validate("plan.written", %{@plan | checks: @plan.checks ++ [ci_check]}, :machine, nil)
+      assert %{proof: "ci", ci_check: "make-all"} = List.last(checks)
       assert {:error, {:invalid_payload, [:by]}} = Types.validate("check.proved", %{check_id: "c1", by: "trust"}, :machine, nil)
       long_test = %{check_id: "c1", by: "test", test: String.duplicate("a", 501)}
       assert {:error, {:invalid_payload, [:test]}} = Types.validate("check.proved", long_test, :machine, nil)

@@ -2,8 +2,9 @@ defmodule SymphonyElixir.TicketObservation do
   @moduledoc """
   Writes what Symphony reads of a ticket in Linear into its record (`SymphonyElixir.TicketState`),
   so the record learns from every poll: the ticket's state as the record's `phase`, its title,
-  description, team, project, labels, priority, assignee, open blockers and sub-issues (each by id,
-  identifier and state), parent, URL, creation time and Linear's `updatedAt`.
+  description, team, project, labels, priority, assignee, sub-issues (each by id, identifier and
+  state), parent, URL, creation time and Linear's `updatedAt`. Linear's blocker links are not read: a
+  ticket's dependencies are Symphony's own (`depends_on`, written by `SymphonyElixir.RunStore`).
 
   `observe/3` reads the record (a new one when the ticket has none), applies
   `SymphonyElixir.TicketState.observe/4` and writes the observed fields back through
@@ -12,7 +13,8 @@ defmodule SymphonyElixir.TicketObservation do
   the record's `linear_updated_at` is dropped. The record keeps which read brought its last change
   (`observed_from`: the poll, a by-id read, the PR and CI watcher or a webhook delivery). Only
   `SymphonyElixir.Dispatch.Candidates` reads the observed fields, and an observation records no
-  ledger event, except for drift.
+  ledger event, except for drift and a person's edit of a description Symphony wrote, which goes to
+  the ticket's Conductor as a message (`SymphonyElixir.Conductor.DescriptionEdit`).
 
   Drift: under `dispatch.source: record`, the phase of a record Symphony owns (`phase_owner:
   :symphony`, written by a move of Symphony's or the Director's) is not read back from Linear. When
@@ -50,7 +52,7 @@ defmodule SymphonyElixir.TicketObservation do
   (`SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_records/0`), `fields` naming the observed
   fields the write changed (all of them for a new record, `[:removed_at]` for a removal): with
   `dispatch.source: record` the orchestrator asks for a cycle of the ticket's repo at once, and the
-  PR watcher re-decides the ticket when its phase or blockers changed. The poll's and the by-id
+  PR watcher re-decides the ticket when its phase changed. The poll's and the by-id
   reads' changes are not announced, since the cycle that made them dispatches from them right after.
 
   Every read other than a webhook delivery is compared with the webhook: a read that changes a field
@@ -75,6 +77,7 @@ defmodule SymphonyElixir.TicketObservation do
 
   require Logger
 
+  alias SymphonyElixir.Conductor.DescriptionEdit
   alias SymphonyElixir.{Config, DirectorMoves, Orchestrator, RunStore, TicketSignals, TicketState, Tracker}
   alias SymphonyElixir.Linear.{Issue, Webhook}
   alias SymphonyElixir.Pauses.Projector
@@ -187,8 +190,6 @@ defmodule SymphonyElixir.TicketObservation do
   - `:now` — the observation time, defaulting to now
   - `:source` — the read it came from (`t:SymphonyElixir.TicketState.observation_source/0`),
     defaulting to `:poll`
-  - `:terminal_states` — the states whose blockers no longer block, defaulting to the repo's
-    `tracker.terminal_states`
   - `:compare` — whether a read that changes a webhook field counts as "poll first", defaulting to
     `linear.webhooks.enabled`
   - `:dispatch_source` — `"record"` or `"poll"`, defaulting to `dispatch.source`: under `"record"` a
@@ -204,15 +205,27 @@ defmodule SymphonyElixir.TicketObservation do
   def observe(repo_key, %Issue{id: issue_id} = issue, opts \\ []) when is_binary(issue_id) do
     now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
     source = Keyword.get(opts, :source, :poll)
-    issue = %{issue | blocked_by: open_blockers(issue, repo_key, opts)}
 
     result =
-      with {:ok, stored} <- read(issue_id),
-           do: observe_record(repo_key, stored, issue, {now, source}, opts)
+      with {:ok, stored} <- read(issue_id) do
+        repo_key |> observe_record(stored, issue, {now, source}, opts) |> edited(repo_key, stored, issue, opts)
+      end
 
     count(result)
     result
   end
+
+  # A description a read finds changed may hold a person's edit: it goes to the ticket's Conductor
+  # (`SymphonyElixir.Conductor.DescriptionEdit`), never dropped in silence.
+  defp edited({:ok, :updated} = result, repo_key, %{} = stored, %Issue{description: description}, opts) when is_binary(description) do
+    if Map.get(stored, :description) != description do
+      Keyword.get(opts, :description_edited, &DescriptionEdit.observed/4).(repo_key, stored, description, [])
+    end
+
+    result
+  end
+
+  defp edited(result, _repo_key, _stored, _issue, _opts), do: result
 
   @doc """
   Observes what a verified Linear webhook delivery says (`SymphonyElixir.Linear.Webhook.parse/1`):
@@ -228,7 +241,7 @@ defmodule SymphonyElixir.TicketObservation do
 
   A ticket no configured repo has a record of yet (a new one) is filed under the one repo whose poll
   would return it, as `SymphonyElixir.Routing.PollScope.route/3` decides from the delivery's fields.
-  A delivery carries no blockers or sub-issues, so the record is written from a by-id read of the
+  A delivery carries no sub-issues, so the record is written from a by-id read of the
   ticket (`:tracker`'s `fetch_issue_states_by_ids/1`, default `SymphonyElixir.Tracker`), still with
   `source: :webhook`: a new record is `:updated`, asks for the poll below and is announced, so under
   `dispatch.source: record` a new ticket dispatches from its first delivery. A ticket no repo's scope
@@ -289,15 +302,17 @@ defmodule SymphonyElixir.TicketObservation do
   end
 
   @doc """
-  Observes every issue of `issues` for `repo_key` (see `observe/3`), and returns how many had each
-  outcome. A store error is logged with the issue it was for and counted under `errors`; it never
+  Observes every issue of `issues` for `repo_key` (see `observe/3`), oldest first, and returns how
+  many had each outcome. A store error is logged with the issue it was for and counted under `errors`; it never
   stops the others.
   """
   @spec observe_all(String.t(), [Issue.t()], keyword()) :: counts()
   def observe_all(repo_key, issues, opts) when is_list(issues) do
-    opts = Keyword.put_new_lazy(opts, :terminal_states, fn -> terminal_states(repo_key) end)
-
-    Enum.reduce(issues, empty_summary(), fn issue, acc ->
+    # Oldest first, then by identifier: the tickets this read shows Symphony for the first time join
+    # the dispatch queue in that order (`SymphonyElixir.Dispatch.Queue`).
+    issues
+    |> Enum.sort_by(&created_order/1)
+    |> Enum.reduce(empty_summary(), fn issue, acc ->
       case observe_issue(repo_key, issue, opts) do
         {:ok, outcome} ->
           Map.update!(acc, outcome, &(&1 + 1))
@@ -975,7 +990,7 @@ defmodule SymphonyElixir.TicketObservation do
   defp observe_under(repo_key, issue, opts),
     do: {delivered(repo_key, issue, observe(repo_key, %{issue | repo_key: repo_key}, opts)), repo_key}
 
-  # A delivery never carries the ticket's blockers or sub-issues, which dispatch reads, so the new
+  # A delivery never carries the ticket's sub-issues, which dispatch reads, so the new
   # record is filed from a by-id read of the ticket (one Linear request) under the repo its delivery
   # routes to. A ticket the read doesn't return is left to the poll.
   defp file_new(issue, repos, opts) do
@@ -1110,19 +1125,9 @@ defmodule SymphonyElixir.TicketObservation do
          do: {:ok, :updated}
   end
 
-  defp open_blockers(%Issue{blocked_by: :unknown}, _repo_key, _opts), do: :unknown
-
-  defp open_blockers(issue, repo_key, opts) do
-    terminal_states = Keyword.get_lazy(opts, :terminal_states, fn -> terminal_states(repo_key) end)
-    Issue.open_blockers(issue, terminal_states)
-  end
-
-  defp terminal_states(repo_key) do
-    case Config.settings_for_repo(repo_key) do
-      {:ok, settings} -> settings.tracker.terminal_states
-      {:error, _reason} -> []
-    end
-  end
+  defp created_order(%Issue{created_at: %DateTime{} = at} = issue), do: {0, DateTime.to_unix(at, :microsecond), issue.identifier || ""}
+  defp created_order(%Issue{} = issue), do: {1, 0, issue.identifier || ""}
+  defp created_order(_other), do: {2, 0, ""}
 
   defp count({:ok, outcome}), do: bump(outcome)
   defp count({:error, _reason}), do: bump(:errors)

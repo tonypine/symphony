@@ -97,6 +97,7 @@ private struct CrumbStyle: ButtonStyle {
                 .contentShape(Rectangle())
                 .focusRing(keyboardFocus, RoundedRectangle(cornerRadius: DesignTokens.Breadcrumb.radius, style: .continuous))
                 .onHover { hovered = $0 }
+                .buttonPointer()
         }
     }
 }

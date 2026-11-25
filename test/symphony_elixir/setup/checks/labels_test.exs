@@ -23,7 +23,7 @@ defmodule SymphonyElixir.Setup.Checks.LabelsTest do
 
   # Every label the check wants, as team labels of `team`, but for `except`, plus `extra`.
   defp labels!(except \\ [], extra \\ [], team \\ "TP") do
-    wanted = for %{names: [name | _]} <- StateProvisioning.machine_labels("expedite", ["needs-human"]), name not in except, do: name
+    wanted = for %{names: [name | _]} <- StateProvisioning.machine_labels(["needs-human"]), name not in except, do: name
     Application.put_env(:symphony_elixir, :memory_tracker_labels_list, Enum.map(wanted, &team_label(&1, team)) ++ extra)
   end
 
@@ -114,26 +114,18 @@ defmodule SymphonyElixir.Setup.Checks.LabelsTest do
     assert problem.fix == %{kind: "open", target: "linear", url: nil}
   end
 
-  test "the force label and each escalate label are wanted, in the teams of the repos that name them" do
-    route!(
-      [%{key: "app", team: "TP", acceptance_gate: %{"escalate" => %{"labels" => ["security"]}}}, %{key: "ops", team: "OPS"}],
-      force_label: "rush"
-    )
+  test "each escalate label is wanted in the teams of the repos that name it, and no force label is" do
+    route!([%{key: "app", team: "TP", acceptance_gate: %{"escalate" => %{"labels" => ["security"]}}}, %{key: "ops", team: "OPS"}])
 
     labels!([], [], "TP")
-    ops = for %{names: [name | _]} <- StateProvisioning.machine_labels("expedite", ["needs-human"]), do: team_label(name, "OPS")
+    ops = for %{names: [name | _]} <- StateProvisioning.machine_labels(["needs-human"]), do: team_label(name, "OPS")
     tp = Application.get_env(:symphony_elixir, :memory_tracker_labels_list)
     Application.put_env(:symphony_elixir, :memory_tracker_labels_list, tp ++ ops)
 
     {%{problems: problems}, _log} = with_log(fn -> check() end)
 
-    assert Enum.map(problems, & &1.id) == [
-             "labels:missing:TP:rush",
-             "labels:missing:TP:security",
-             "labels:missing:OPS:rush"
-           ]
-
-    assert Enum.find(problems, &(&1.id == "labels:missing:TP:rush")).consequence == "No ticket can be expedited past the queue."
+    assert Enum.map(problems, & &1.id) == ["labels:missing:TP:security"]
+    refute Enum.any?(problems, &(&1.id =~ "expedite" or &1.consequence =~ "expedited"))
     assert Enum.find(problems, &(&1.id == "labels:missing:TP:security")).consequence =~ "Code Review can't be told to ask you"
   end
 

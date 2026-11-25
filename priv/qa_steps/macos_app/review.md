@@ -5,10 +5,13 @@ behaving as the ticket describes, on the screens the design names?
 
 You may first ask for a recheck: when an answer is `plan_mismatch`, when a step was walked against
 the wrong screen or state, or when an answer does not let you judge the step. Then write
-`{"recheck": [<brief>, ...]}` to the answer file: at most three briefs, each in the shape of your
-plan's `walk` briefs (with `step`, `where`, `launch`, `do`, `expect`, `design`, `screenshots`, and
-`surface` when your plan's briefs carried one). Each
-runs as a fresh walk turn, and you review again with its answer. Symphony allows two rounds of
+`{"recheck": [<brief>, ...]}` to the answer file: at most three sessions, each brief in the shape
+of your plan's `walk` briefs (with `step`, `where`, `launch`, `do`, `expect`, `design`,
+`screenshots`, and `surface` and `group` when your plan's briefs carried one). Give the same `group`
+to the briefs that share a screen and an app state, as in your plan: they are rechecked together in
+one fresh walk turn, each with its own result, and count as one session. A brief with no `group` is
+rechecked in a fresh walk turn of its own. At most twelve briefs in all; you review again with
+their answers. Symphony allows two rounds of
 recheck; past them a pass without a verdict is inconclusive.
 
 Otherwise record the verdict with the `qa_verdict` tool, once, as your last act, then end your

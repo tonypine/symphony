@@ -124,6 +124,32 @@ public struct EventStreamNotice: Decodable, Equatable {
     }
 }
 
+/// Symphony's notice that the dispatch queue or its slots changed (`event: queue` on `/api/v1/stream`): `change` is
+/// `order` after a ticket moved in the queue, `slots` after the slot count or one ticket's slot changed.
+public struct QueueNotice: Decodable, Equatable {
+    public static let event = "queue"
+
+    public var change: String
+    public var issueIdentifier: String?
+    public var count: Int?
+    public var by: String?
+    public var at: String?
+
+    public init(change: String, issueIdentifier: String? = nil, count: Int? = nil, by: String? = nil, at: String? = nil) {
+        self.change = change
+        self.issueIdentifier = issueIdentifier
+        self.count = count
+        self.by = by
+        self.at = at
+    }
+
+    public static func decode(_ data: String) -> QueueNotice? {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try? decoder.decode(QueueNotice.self, from: Data(data.utf8))
+    }
+}
+
 /// Where the live channel stands.
 public enum EventStreamState: Equatable {
     /// Not opened, or closed by `stop()`.
@@ -167,6 +193,9 @@ public final class EventStream: ObservableObject {
     @Published public private(set) var lastNotice: EventStreamNotice?
     /// Every notice Symphony sends, as it arrives.
     public let notices = PassthroughSubject<EventStreamNotice, Never>()
+    /// Every change of the dispatch queue or of its slots Symphony tells (`event: queue`, TP-1609), as it arrives: Home
+    /// reads the queue again at once.
+    public let queueNotices = PassthroughSubject<QueueNotice, Never>()
 
     private let base: () -> URL?
     private let connect: Connect
@@ -245,6 +274,10 @@ public final class EventStream: ObservableObject {
     }
 
     private func handle(_ item: ServerSentEventItem) {
+        if case let .event(event) = item, event.event == QueueNotice.event {
+            queueNotices.send(QueueNotice.decode(event.data) ?? QueueNotice(change: "unknown"))
+            return
+        }
         guard case let .event(event) = item, event.event == "ticket", let notice = EventStreamNotice.decode(event.data) else { return }
         lastNotice = notice
         notices.send(notice)

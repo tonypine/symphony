@@ -34,7 +34,7 @@ notes of the ticket and of its parent; a ticket with no plan has `plan: null` an
 `ticket_record(type, payload, artifacts?, parent?)` records one: a `note` (with an optional `tag`:
 `discovery` for something found that is not this ticket's to solve, `base_fault` for a fault of the
 base branch), a `check.proved` naming a check of the plan by its `check_id` and how it was proved
-(`by`: `test` with the `test`, `qa`, `design` or `attached`; an id the plan does not hold is refused),
+(`by`: `test` with the `test`, `qa`, `design`, `attached`, or `ci` for a check the pull request's own CI run proves; an id the plan does not hold is refused),
 `evidence` (with an optional `proof`: the walkthrough step and the test that proves
 it), a delegated step's `step.started` and `step.completed` (its `outcome`:
 `passed`, `failed` with the step it `returns_to`, `paused` on a question, or

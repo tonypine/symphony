@@ -1,4 +1,4 @@
-2026-10-15T08:00:00.104211+00:00 info: Dispatching issue_id=a0 issue_identifier=TP-900 state="In Progress" slot=1 forced=false
+2026-10-15T08:00:00.104211+00:00 info: Dispatching issue_id=a0 issue_identifier=TP-900 state="In Progress" slot=1
 2026-10-15T08:00:01.120533+00:00 debug: Skipping dispatch: issue_id=a1 issue_identifier=TP-901 state="Code Review"; the PR watcher (R24): Checks are running on PR #501's head
 2026-10-15T08:00:01.130002+00:00 info: Not dispatching the reviewer for issue_id=a1 issue_identifier=TP-901: its head is running
 2026-10-15T08:02:11.000000+00:00 debug: Skipping dispatch: issue_id=a2 issue_identifier=TP-902 state="Merging"; the PR watcher (R32): Checks are running on PR #502: auto-merge lands it when they pass

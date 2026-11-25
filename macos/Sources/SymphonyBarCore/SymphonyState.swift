@@ -21,8 +21,6 @@ public struct StateSnapshot: Equatable {
     /// The newest published release of the repository the app updates from, as Symphony last heard of it; nil when
     /// Symphony knows none, or predates `app_update.latest_release`.
     public var latestRelease: ReportedRelease?
-    /// Tickets forced past the dispatch limits, in queue order; empty when none is, or when Symphony predates them.
-    public var forced: [ForcedTicket]
     /// The running agents, in Symphony's order; empty when none runs.
     public var runs: [Run]
     /// The tickets only the operator can move on, oldest first; empty when none does, or when Symphony predates them.
@@ -54,6 +52,11 @@ public struct StateSnapshot: Equatable {
     /// Every reason Symphony's own pause holds (`pause.reasons`), in the order they were set, the usage-limit holds'
     /// included; nil when Symphony predates them, so the header reads `pause` as before.
     public var pauseReasons: [PauseReason]?
+    /// The update the app told Symphony is ready (`update_window`, TP-1590), nil when none is or Symphony predates it.
+    public var updateWindow: UpdateWindow?
+    /// The Conductor runs mid-run (`conductor_runs`, TP-1590), which a restart's stop waits for; 0 when Symphony
+    /// predates it.
+    public var conductorRuns = 0
     /// Each ticket's situation by identifier (`Situation.byTicket(state:)`): the one line every row that names the
     /// ticket shows.
     public var situations: [String: Situation] = [:]
@@ -62,6 +65,26 @@ public struct StateSnapshot: Equatable {
     public func situation(_ identifier: String?) -> Situation? {
         guard let identifier else { return nil }
         return situations[identifier] ?? situations.first { $0.key.caseInsensitiveCompare(identifier) == .orderedSame }?.value
+    }
+
+    /// An update Symphony knows is ready: it waits, with dispatch going on, for the moment Symphony picks.
+    public struct UpdateWindow: Equatable {
+        public enum Phase: Equatable {
+            /// Dispatch goes on while Symphony waits for a moment with no agent run active.
+            case waiting
+            /// Symphony paused dispatch for it: the app swaps once no agent run is active.
+            case holding
+        }
+
+        public var version: String
+        public var phase: Phase
+        public var readyAt: Date?
+
+        public init(version: String, phase: Phase = .waiting, readyAt: Date? = nil) {
+            self.version = version
+            self.phase = phase
+            self.readyAt = readyAt
+        }
     }
 
     /// One reason of Symphony's pause: who or what holds dispatch and since when.
@@ -426,46 +449,6 @@ public struct StateSnapshot: Equatable {
         }
     }
 
-    /// A ticket forced past the dispatch limits (`symphony force`, or its force label in Linear).
-    public struct ForcedTicket: Equatable {
-        public var identifier: String
-        public var issueID: String?
-        public var title: String?
-        public var repoKey: String?
-        /// What it is doing and what it waits on, as Symphony words it: "implementation · running",
-        /// "implementation · waiting on blocker TP-1", "waiting for a human". Nil when Symphony didn't say.
-        public var summary: String?
-        /// Its Linear state, for example "Todo".
-        public var state: String?
-        public var forcedForSeconds: Int?
-        /// Forced for longer than `execution.concurrency.forced_stale_after_hours`.
-        public var stale: Bool
-        /// For a forced parent, the sub-ticket it is working through now.
-        public var part: String?
-
-        public init(
-            identifier: String,
-            issueID: String? = nil,
-            title: String? = nil,
-            repoKey: String? = nil,
-            summary: String? = nil,
-            state: String? = nil,
-            forcedForSeconds: Int? = nil,
-            stale: Bool = false,
-            part: String? = nil
-        ) {
-            self.identifier = identifier
-            self.issueID = issueID
-            self.title = title
-            self.repoKey = repoKey
-            self.summary = summary
-            self.state = state
-            self.forcedForSeconds = forcedForSeconds
-            self.stale = stale
-            self.part = part
-        }
-    }
-
     /// Symphony's token counts for the UTC day and its token caps; a nil limit is a cap turned off.
     public struct Budget: Equatable {
         public var dailyLimit: Int?
@@ -504,7 +487,6 @@ public struct StateSnapshot: Equatable {
         updateUnblocks: Int = 0,
         updateBuildLine: String? = nil,
         latestRelease: ReportedRelease? = nil,
-        forced: [ForcedTicket] = [],
         runs: [Run] = [],
         waitingOnYou: [WaitingTicket] = [],
         inboxRead: Bool = true,
@@ -527,7 +509,6 @@ public struct StateSnapshot: Equatable {
         self.updateUnblocks = updateUnblocks
         self.updateBuildLine = updateBuildLine
         self.latestRelease = latestRelease
-        self.forced = forced
         self.runs = runs
         self.waitingOnYou = waitingOnYou
         self.inboxRead = inboxRead
@@ -971,6 +952,14 @@ public enum SymphonyState {
                 version: version?.isEmpty == false ? version : nil
             )
         }
+        snapshot.conductorRuns = max(payload.conductorRuns ?? 0, 0)
+        if let window = payload.updateWindow, let version = window.version?.trimmingWhitespace(), !version.isEmpty {
+            snapshot.updateWindow = StateSnapshot.UpdateWindow(
+                version: version,
+                phase: window.phase == "holding" ? .holding : .waiting,
+                readyAt: window.readyAt.flatMap(parseDate)
+            )
+        }
         snapshot.usageLimits = (payload.usageLimits ?? []).map { limit in
             StateSnapshot.UsageLimit(
                 provider: limit.provider ?? "anthropic",
@@ -994,20 +983,6 @@ public enum SymphonyState {
                 dailyRemaining: budget.dailyRemaining,
                 dailyPaused: budget.dailyPaused ?? false,
                 perIssueLimit: budget.perIssueLimit
-            )
-        }
-        snapshot.forced = (payload.forced ?? []).compactMap { ticket in
-            guard let identifier = ticket.issueIdentifier ?? ticket.issueId else { return nil }
-            return StateSnapshot.ForcedTicket(
-                identifier: identifier,
-                issueID: ticket.issueId,
-                title: ticket.title,
-                repoKey: ticket.repoKey,
-                summary: ticket.summary,
-                state: ticket.state,
-                forcedForSeconds: ticket.forcedForSeconds,
-                stale: ticket.stale ?? false,
-                part: ticket.subIssue?.issueIdentifier
             )
         }
         snapshot.sessionKinds = payload.sessions?.map { $0.kind ?? "agent" }
@@ -1140,6 +1115,12 @@ public enum SymphonyState {
             let message: String?
         }
 
+        struct UpdateWindow: Decodable {
+            let version: String?
+            let phase: String?
+            let readyAt: String?
+        }
+
         struct UsageLimit: Decodable {
             let provider: String?
             let scope: String?
@@ -1174,22 +1155,6 @@ public enum SymphonyState {
             let latestRelease: LatestRelease?
             /// Missing before Symphony watched the release build.
             let buildLine: String?
-        }
-
-        struct Forced: Decodable {
-            struct Part: Decodable {
-                let issueIdentifier: String?
-            }
-
-            let issueId: String?
-            let issueIdentifier: String?
-            let title: String?
-            let repoKey: String?
-            let summary: String?
-            let state: String?
-            let forcedForSeconds: Int?
-            let stale: Bool?
-            let subIssue: Part?
         }
 
         struct Running: Decodable {
@@ -1267,11 +1232,13 @@ public enum SymphonyState {
         /// Missing before Symphony listed every live session with its kind.
         let sessions: [Session]?
         let pause: Pause?
+        /// Missing before Symphony took an update ready (TP-1590).
+        let updateWindow: UpdateWindow?
+        /// Missing before Symphony waited for Conductor runs at a restart (TP-1590).
+        let conductorRuns: Int?
         let budget: Budget?
         let usageLimits: [UsageLimit]?
         let appUpdate: AppUpdate?
-        /// Missing before Symphony reported forced tickets.
-        let forced: [Forced]?
         /// Missing before Symphony listed what waits on the operator.
         let waitingOnYou: [Waiting]?
         /// Missing before Symphony said whether it had read the Inbox.

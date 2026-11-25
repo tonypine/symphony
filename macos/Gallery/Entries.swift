@@ -126,7 +126,7 @@ let galleryEntries: [GalleryEntry] = [
             "SymphonyBarUI/DesignSystem/TextInputs.swift", "SymphonyBarCore/UpdateMode.swift",
         ]),
     GalleryEntry(
-        id: "settings-row", title: "Settings row and group", kind: .component, prefixes: ["settings-row-", "settings-group-"],
+        id: "settings-row", title: "Settings row and group", kind: .component, prefixes: ["settings-row-", "settings-group-", "settings-line-"],
         files: ["SymphonyBarUI/DesignSystem/SettingsRow.swift"]),
     GalleryEntry(
         id: "section-list", title: "Section list", kind: .component, prefixes: ["section-list-"],
@@ -205,6 +205,45 @@ let galleryEntries: [GalleryEntry] = [
     GalleryEntry(
         id: "thumbnail-row", title: "Thumbnail row", kind: .component, prefixes: ["thumbnail-row-"],
         files: ["SymphonyBarUI/DesignSystem/TimelineParts.swift", "SymphonyBarCore/ThumbnailRowPlan.swift"]),
+    GalleryEntry(
+        id: "slot-card", title: "Slot card", kind: .component, prefixes: ["slot-card-"],
+        files: [
+            "SymphonyBarUI/DesignSystem/SlotCard.swift", "SymphonyBarUI/DesignSystem/ChecksBar.swift", "SymphonyBarUI/DesignSystem/TokenLine.swift",
+            "SymphonyBarUI/LifecycleSection.swift", "SymphonyBarCore/Lifecycle.swift",
+        ]),
+    GalleryEntry(
+        id: "epic-slot-card", title: "Epic slot card", kind: .component, prefixes: ["epic-slot-card-"],
+        files: ["SymphonyBarUI/DesignSystem/EpicSlotCard.swift", "SymphonyBarUI/DesignSystem/SlotCard.swift"]),
+    GalleryEntry(
+        id: "slot-strip-line", title: "Slot strip line", kind: .component, prefixes: ["slot-strip-line-"],
+        files: ["SymphonyBarUI/DesignSystem/SlotCard.swift", "SymphonyBarUI/DesignSystem/QueueRow.swift"]),
+    GalleryEntry(
+        id: "checks-bar", title: "Checks bar", kind: .component, prefixes: ["checks-bar-"],
+        files: ["SymphonyBarUI/DesignSystem/ChecksBar.swift"]),
+    GalleryEntry(
+        id: "token-line", title: "Token line", kind: .component, prefixes: ["token-line-"],
+        files: ["SymphonyBarUI/DesignSystem/TokenLine.swift"]),
+    GalleryEntry(
+        id: "slot-count", title: "Slot count", kind: .component, prefixes: ["slot-count-"],
+        files: ["SymphonyBarUI/DesignSystem/SlotCountControl.swift"]),
+    GalleryEntry(
+        id: "queue-row", title: "Queue row", kind: .component, prefixes: ["queue-row-"],
+        files: ["SymphonyBarUI/DesignSystem/QueueRow.swift", "SymphonyBarUI/DesignSystem/ReorderableList.swift", "SymphonyBarUI/ListComponents.swift"]),
+    GalleryEntry(
+        id: "queue-epic-row", title: "Queue epic row", kind: .component, prefixes: ["queue-epic-row-"],
+        files: ["SymphonyBarUI/DesignSystem/QueueEpicParts.swift"]),
+    GalleryEntry(
+        id: "queue-sub-row", title: "Queue sub-ticket row", kind: .component, prefixes: ["queue-sub-row-"],
+        files: ["SymphonyBarUI/DesignSystem/QueueEpicParts.swift"]),
+    GalleryEntry(
+        id: "dependency-marker", title: "Dependency marker", kind: .component, prefixes: ["dependency-marker-"],
+        files: ["SymphonyBarUI/DesignSystem/DependencyMarker.swift"]),
+    GalleryEntry(
+        id: "done-row", title: "Done row", kind: .component, prefixes: ["done-row-"],
+        files: ["SymphonyBarUI/DesignSystem/DoneRow.swift"]),
+    GalleryEntry(
+        id: "recently-done-head", title: "Recently done head", kind: .component, prefixes: ["recently-done-head-"],
+        files: ["SymphonyBarUI/DesignSystem/RecentlyDoneHead.swift", "SymphonyBarUI/DesignSystem/SegmentedControl.swift"]),
     GalleryEntry(id: "type-styles", title: "Type styles", kind: .component, prefixes: ["type-styles-"], files: []),
     // Screens.
     GalleryEntry(
@@ -215,8 +254,11 @@ let galleryEntries: [GalleryEntry] = [
             "SymphonyBarUI/PlanPanelView.swift", "SymphonyBarCore/PlanPanel.swift",
         ]),
     GalleryEntry(
-        id: "home", title: "Home", kind: .screen, prefixes: ["home-lists", "home-unavailable"],
-        files: ["SymphonyBar/HomeView.swift", "SymphonyBarCore/Home"]),
+        id: "home", title: "Home", kind: .screen, prefixes: ["home-queue", "home-unavailable"],
+        files: [
+            "SymphonyBar/HomeView.swift", "SymphonyBarCore/Home", "SymphonyBarCore/RecentlyDone.swift", "SymphonyBarUI/HomeQueueCards.swift",
+            "SymphonyBarUI/HomeRecentlyDone.swift", "SymphonyBarUI/DesignSystem/DoneRow.swift", "SymphonyBarUI/DesignSystem/RecentlyDoneHead.swift",
+        ]),
     GalleryEntry(
         id: "inbox", title: "Inbox, its reviews and the peek", kind: .screen,
         prefixes: ["inbox-drawer", "inbox-blocked-", "plan-questions", "plan-unapplied", "plan-unasked", "watcher-decision", "peek-"],

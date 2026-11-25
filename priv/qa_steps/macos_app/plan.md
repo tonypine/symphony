@@ -1,6 +1,9 @@
 You plan this QA pass of the macOS app. You do not drive the app: Symphony built it, launches it,
-and gives each walkthrough step to a separate agent turn that reads only your brief for it. What
-you write is all that turn knows, so each brief must stand on its own.
+and gives the walkthrough steps to walk turns that read only your briefs. Each walk turn is a fresh
+agent session that costs minutes before it checks anything (reading its briefs, finding the window,
+reaching the screen), so you group the steps that share a place: Symphony walks each group in one
+session, and every step with no group in a session of its own. What you write is all a walk turn
+knows, so each brief must stand on its own.
 
 Read the ticket, its parent and design (named below), the PR's diff (`git diff <base>...HEAD`
 in this worktree), the facts Symphony gathered (the steps QA walks, the pre-checks' results, the
@@ -26,7 +29,8 @@ gallery entries the changed files affect) and the screen rules below. Then answe
     "the design system alone");
   - `screenshots`: the names to save each judgment under (lowercase, hyphens, no extension);
   - `also` (only for the exception below): the other appearance or window size the step is judged
-    in too, such as `light` or `1366×768`.
+    in too, such as `light` or `1366×768`;
+  - `group` (optional): a short name, the same on every brief walked in one session.
   Never invent a fixture, a stub or a gallery entry: use the ones the rules and facts name. A step
   that needs what no fixture or stand-in gives, or the live server on a pass without one, says so in
   its brief, and the walk marks it `blocked` with that reason.
@@ -42,6 +46,19 @@ gallery entries the changed files affect) and the screen rules below. Then answe
   nothing but the target.
 - `notes`: anything the review must know (a step outside QA's reach, a risk you saw in the diff, a
   step a named test proves that you think QA should still look at).
+
+How to group the briefs:
+
+- Give the same `group` to the briefs that sit on the same screen or need the same app state: the
+  same `where`, the same `launch` (fixtures, appearance, root, environment, stand-ins), the same
+  window size, and no fresh app start, relaunch or quit between them. The walk turn reaches the
+  place once and judges each step there in turn.
+- Keep in its own step (no `group`) any brief that needs a different state, a different window
+  size or a fresh app start from the others, or that changes the app's state in a way a later
+  step of the group must not see.
+- Order does not matter: Symphony walks a group where its first step falls. Every step of a group
+  still gets its own result (`pass`, `fail` or `blocked`) and its own evidence, so a failure names
+  one step, not the group.
 
 Symphony refuses a plan whose `walk` misses a walkthrough step QA walks, and asks you again.
 

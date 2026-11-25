@@ -3,7 +3,9 @@ defmodule SymphonyElixir.TicketPlan do
   A groomed ticket's ask and plan, read from its events (`SymphonyElixir.TicketEvents`).
 
   The ask is what a person wrote, never rewritten: every `ask.recorded` of the ticket, oldest first
-  (`ask/1`, `record_ask/4`). The plan is a versioned document: each `plan.written` is one version
+  (`ask/1`, `record_ask/4`): the description at Grooming, what a person typed there before the
+  first projection, a parent's new ask, and a person's message (or edit of the Linear description)
+  that the Conductor read as a change to what is asked (`SymphonyElixir.Conductor.Message`). The plan is a versioned document: each `plan.written` is one version
   (`versions/1`), the newest is the ticket's plan (`current/1`), and `write/4` records the next one
   with the version it assigns. A ticket is groomed exactly when it holds a `plan.written`
   (`groomed?/1`); a ticket that holds none keeps the behaviour it had before plans.
@@ -93,11 +95,12 @@ defmodule SymphonyElixir.TicketPlan do
     payload = plan |> Map.drop([:version, "version"]) |> Map.put(:version, length(earlier) + 1) |> identified(earlier)
 
     {new_ask?, opts} = Keyword.pop(opts, :new_ask, false)
+    {drop?, opts} = Keyword.pop(opts, :drop_outcomes, false)
     binding = if new_ask?, do: [], else: history
 
     with :ok <- sized(payload),
          {:ok, valid} <- Types.validate("plan.written", payload, :machine, nil),
-         :ok <- coherent(valid, changed_outcomes(valid, binding)),
+         :ok <- coherent(valid, changed_outcomes(valid, binding, drop?)),
          {:ok, event} <- TicketEvents.record(repo_key, issue_id, "plan.written", valid, opts) do
       TicketProjection.changed(repo_key, issue_id)
       # A new version holds a merge the code is behind (`SymphonyElixir.PrDecision`'s R9a): the
@@ -155,20 +158,21 @@ defmodule SymphonyElixir.TicketPlan do
   defp put_id(check, id), do: check |> Map.drop([:id, "id"]) |> Map.put(if(Enum.any?(Map.keys(check), &is_binary/1), do: "id", else: :id), id)
 
   # Outcomes bind: a version that drops an outcome check of the one before it, or rewords it, is
-  # refused, unless the person asked for something since that version was written.
-  defp changed_outcomes(plan, history) do
+  # refused, unless the person asked for something since that version was written. A drop the
+  # caller permits (`drop?`) is no change; a rewording still is.
+  defp changed_outcomes(plan, history, drop?) do
     {newer, older} = history |> Enum.reverse() |> Enum.split_while(&(&1.type != "plan.written"))
 
     case older do
       [%Event{payload: previous} | _rest] when newer == [] ->
-        for %{} = check <- field(previous, :checks), field(check, :kind) == "outcome", change = outcome_change(check, plan.checks), do: change
+        for %{} = check <- field(previous, :checks), field(check, :kind) == "outcome", change = outcome_change(check, plan.checks, drop?), do: change
 
       _first_version_or_new_ask ->
         []
     end
   end
 
-  defp outcome_change(check, checks) do
+  defp outcome_change(check, checks, drop?) do
     id = field(check, :id)
 
     case Enum.find(checks, &(&1.id == id)) do
@@ -176,7 +180,7 @@ defmodule SymphonyElixir.TicketPlan do
         if String.trim(statement) == String.trim(to_string(field(check, :statement))), do: nil, else: "outcome check #{id} was reworded, and no new ask says so"
 
       _dropped ->
-        "outcome check #{id} was removed, and no new ask says so"
+        if drop?, do: nil, else: "outcome check #{id} was removed, and no new ask says so"
     end
   end
 

@@ -13,7 +13,9 @@ defmodule SymphonyElixir.PrWatch.Sweep do
       is R24, red R21);
     * a dispatch gate that is no PR case (`gate: blocked by a ticket`, `gate: hold`, `gate: paused`
       and the others in `labels/0`): the orchestrator's own reasons, which the decision table
-      leaves out on purpose;
+      leaves out on purpose. A watcher's reason that waits for a slot (the ticket holds none, so
+      the rule it names is held back) is `gate: waits for a slot`, never that rule: nothing is
+      stuck on it;
     * `no rule`: anything else, including a silent wait with no decision (`rule=none`). Each one
       is a case the table doesn't cover yet and is listed with its line.
 
@@ -23,6 +25,8 @@ defmodule SymphonyElixir.PrWatch.Sweep do
   """
 
   @no_rule "no rule"
+  @slot_wait "Waits for a slot before "
+  @slot_label "gate: waits for a slot"
   @landing "landing rows (R28-R33)"
   @first_read "watcher: first read"
 
@@ -69,6 +73,7 @@ defmodule SymphonyElixir.PrWatch.Sweep do
     {"readiness task failure", "gate: readiness failed"},
     {"previous Symphony may still be running", "gate: leftover agent"},
     {"agent left running by a previous Symphony", "gate: leftover agent"},
+    {@slot_wait, @slot_label},
     {"the PR watcher lands", @landing},
     {"the PR watcher hasn't", @first_read}
   ]
@@ -205,10 +210,11 @@ defmodule SymphonyElixir.PrWatch.Sweep do
     issue = identifier(message)
 
     label =
-      case {Regex.run(@watcher_rule, message), Regex.run(@held_head, message)} do
-        {[_match, rule], _held} -> rule
-        {nil, [_match, held, status]} -> Map.get(rules, held) || head_rule(status)
-        {nil, nil} -> gate(message)
+      case {String.contains?(message, @slot_wait), Regex.run(@watcher_rule, message), Regex.run(@held_head, message)} do
+        {true, _rule, _held} -> @slot_label
+        {false, [_match, rule], _held} -> rule
+        {false, nil, [_match, held, status]} -> Map.get(rules, held) || head_rule(status)
+        {false, nil, nil} -> gate(message)
       end
 
     %{kind: :skipped, label: label, issue: issue, line: message}

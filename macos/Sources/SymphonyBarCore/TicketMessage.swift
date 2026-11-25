@@ -9,8 +9,9 @@ import Foundation
 /// runs: leaving the page and coming back finds it there.
 @MainActor
 public final class TicketMessageComposer: ObservableObject {
-    /// The most characters a message holds: the `message.sent` event type's bound, which Symphony checks too.
-    public nonisolated static let maxLength = 4_000
+    /// The most characters a message holds: the `message.sent` event type's bound, as long as an ask, which Symphony
+    /// checks too.
+    public nonisolated static let maxLength = 100_000
     /// What VoiceOver reads the box as.
     public static let label = "Write to the ticket"
     public static let placeholder = "Write to the ticket."

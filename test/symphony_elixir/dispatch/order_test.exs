@@ -1,7 +1,8 @@
 defmodule SymphonyElixir.Dispatch.OrderTest do
-  # The dispatch order read against what the dispatcher dispatches: a fixture with slots, a blocker, a
-  # forced ticket and a pause, walked by the orchestrator (`put_dispatch_order_for_test/2`) and then
-  # dispatched by its own pass (`dispatch_chosen_issues_for_test/2`).
+  # The dispatch order read against what the dispatcher dispatches: a fixture with slots, a
+  # stored dependency, a ticket carrying the old force label and a pause, walked by the orchestrator
+  # (`put_dispatch_order_for_test/2`) and then dispatched by its own pass
+  # (`dispatch_chosen_issues_for_test/2`).
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.Dispatch.Order
@@ -42,22 +43,27 @@ defmodule SymphonyElixir.Dispatch.OrderTest do
       write_order_workflow!(ctx, max_concurrent_agents: 1)
       first = issue("a", "MT-A", "Todo", priority: 2)
       second = issue("b", "MT-B", "Todo", priority: 3)
-      blocked = issue("c", "MT-C", "Todo", priority: 1, blocked_by: [%{id: "id-MT-9", identifier: "MT-9", state: "In Progress"}])
+      blocked = issue("c", "MT-C", "Todo", priority: 1)
+      # Each joins the queue in this order, so the queue reads as before: MT-A, MT-B, MT-C.
+      for %Issue{} = ticket <- [first, second], do: put_record!(ticket)
+      depends_on!(blocked, {"id-MT-9", "MT-9", "In Progress"})
       issues = [blocked, second, first]
       tracked(issues)
-      assert sweep(issues) == 1
+      # The poll's sweep sets no pause for a dependency: the gate decides it from the records.
+      assert sweep(issues) == 0
 
       state = orchestrator_state(1)
       %{dispatch_order: order} = Orchestrator.put_dispatch_order_for_test(state, issues)
 
-      # The pass walks the blocked ticket first, for its priority, and passes over it.
+      # The pass walks the blocked ticket at its place in the queue, and passes over it.
       assert [
-               %{identifier: "MT-C", position: nil, outcome: :held, reason: "Waiting for MT-9 to finish" = blocked_reason},
                %{identifier: "MT-A", position: 1, outcome: :starts, starts_now: true, reason: "next: a slot is free", slot: "shared"},
-               %{identifier: "MT-B", position: 2, outcome: :waits, starts_now: false, reason: "2nd: behind MT-A", wait: "work slots full"}
+               %{identifier: "MT-B", position: 2, outcome: :waits, starts_now: false, reason: "2nd: behind MT-A", wait: "work slots full"},
+               %{identifier: "MT-C", position: nil, outcome: :held, reason: "waiting for MT-9 to be done" = blocked_reason}
              ] = order.entries
 
-      assert %{work_used: 0, work_free: 1, forced_used: 0, concurrency: %{max_total: 1}} = order.slots
+      assert %{work_used: 0, work_free: 1, concurrency: %{max_total: 1}} = order.slots
+      refute Map.has_key?(order.slots, :forced_used)
 
       dispatched = Orchestrator.dispatch_chosen_issues_for_test(issues, state)
       assert Map.keys(dispatched.running) == ["a"]
@@ -70,35 +76,62 @@ defmodule SymphonyElixir.Dispatch.OrderTest do
       assert %{outcome: :running, reason: "already running", slot: "shared"} = Enum.find(after_pass.entries, &(&1.issue_id == "a"))
     end
 
-    test "with slots, a blocker and a forced ticket, the read starts exactly the tickets the pass starts", ctx do
+    test "TP-1611: with a slot free, the force label gets no place in front; the read starts exactly the tickets the pass starts", ctx do
       write_order_workflow!(ctx, max_concurrent_agents: 2)
-      forced = issue("f", "MT-F", "Todo", forced: true, priority: 4)
+      labelled = issue("f", "MT-F", "Todo", labelled: true, priority: 4)
       first = issue("a", "MT-A", "Todo", priority: 1)
       second = issue("b", "MT-B", "Todo", priority: 2)
       third = issue("d", "MT-D", "Todo", priority: 3)
-      blocked = issue("c", "MT-C", "Todo", priority: 1, blocked_by: [%{id: "id-MT-9", identifier: "MT-9", state: "Todo"}])
+      # The others join the queue first, so the ticket held on a dependency is not its head; the head
+      # of the queue held on a dependency would take a free slot (TP-1624).
+      for %Issue{} = ticket <- [first, second, third, labelled], do: put_record!(ticket)
+      blocked = issue("c", "MT-C", "Todo", priority: 4)
+      depends_on!(blocked, {"id-MT-9", "MT-9", "Todo"})
       working = issue("w", "MT-W", "In Progress")
-      issues = [third, blocked, second, first, forced, working]
+      issues = [third, blocked, second, first, labelled, working]
       tracked(issues)
-      sweep(issues)
 
       state = run(orchestrator_state(2), working)
       %{dispatch_order: order} = Orchestrator.put_dispatch_order_for_test(state, issues)
 
       assert [
-               %{identifier: "MT-F", position: 1, outcome: :starts, forced: true, reason: "forced", slot: "forced"},
-               %{identifier: "MT-A", position: 2, outcome: :starts, reason: "2nd: a slot is free"},
-               %{identifier: "MT-B", position: 3, outcome: :waits, reason: "3rd: behind MT-A", wait: "work slots full"},
-               %{identifier: "MT-D", position: 4, outcome: :waits, reason: "4th: behind MT-B"}
+               %{identifier: "MT-A", position: 1, outcome: :starts, reason: "next: a slot is free", slot: "shared"},
+               %{identifier: "MT-B", position: 2, outcome: :waits, reason: "2nd: behind MT-A", wait: "work slots full"},
+               %{identifier: "MT-D", position: 3, outcome: :waits, reason: "3rd: behind MT-B"},
+               %{identifier: "MT-F", position: 4, outcome: :waits, reason: "4th: behind MT-D", wait: "work slots full"}
              ] = Enum.filter(order.entries, & &1.position)
 
       assert %{outcome: :running} = Enum.find(order.entries, &(&1.identifier == "MT-W"))
       assert %{outcome: :held} = Enum.find(order.entries, &(&1.identifier == "MT-C"))
+      refute Enum.any?(order.entries, &Map.has_key?(&1, :forced))
 
       dispatched = Orchestrator.dispatch_chosen_issues_for_test(issues, state)
       starts = for %{outcome: :starts, issue_id: issue_id} <- order.entries, do: issue_id
       assert Enum.sort(Map.keys(dispatched.running) -- Map.keys(state.running)) == Enum.sort(starts)
-      assert %{forced: true} = dispatched.running["f"]
+      assert starts == ["a"]
+      assert %{reason: "work slots full"} = dispatched.slot_waiting["f"]
+    end
+
+    test "TP-1611: with every slot taken, a ticket carrying the force label waits like any other and gets no extra slot", ctx do
+      write_order_workflow!(ctx, max_concurrent_agents: 1)
+      labelled = issue("f", "MT-F", "Todo", labelled: true, priority: 1)
+      plain = issue("a", "MT-A", "Todo", priority: 1, created_at: ~U[2026-11-01 00:00:00Z])
+      working = issue("w", "MT-W", "In Progress")
+      issues = [labelled, plain, working]
+      tracked(issues)
+
+      state = run(orchestrator_state(1), working)
+      %{dispatch_order: order} = Orchestrator.put_dispatch_order_for_test(state, issues)
+
+      assert [
+               %{identifier: "MT-A", position: 1, outcome: :waits, reason: "next: work slots full"},
+               %{identifier: "MT-F", position: 2, outcome: :waits, reason: "2nd: behind MT-A"}
+             ] = Enum.filter(order.entries, & &1.position)
+
+      dispatched = Orchestrator.dispatch_chosen_issues_for_test(issues, state)
+      assert Map.keys(dispatched.running) == ["w"]
+      assert %{reason: "work slots full"} = dispatched.slot_waiting["f"]
+      assert %{reason: "work slots full"} = dispatched.slot_waiting["a"]
     end
 
     test "while Symphony is paused every ticket in line reads the pause and keeps its place", ctx do
@@ -118,18 +151,19 @@ defmodule SymphonyElixir.Dispatch.OrderTest do
              ] = order.entries
     end
 
-    test "a spent daily budget pauses the line but lets a forced ticket start", ctx do
+    test "TP-1611: a spent daily budget pauses the whole line, a ticket carrying the force label too", ctx do
       write_order_workflow!(ctx, max_concurrent_agents: 2, max_tokens_per_day: 10)
-      forced = issue("f", "MT-F", "Todo", forced: true)
+      labelled = issue("f", "MT-F", "Todo", labelled: true)
       todo = issue("a", "MT-A", "Todo")
-      tracked([forced, todo])
+      tracked([labelled, todo])
 
       state = %{orchestrator_state(2) | budget_daily_used: 10}
-      %{dispatch_order: order} = Orchestrator.put_dispatch_order_for_test(state, [todo, forced])
+      %{dispatch_order: order} = Orchestrator.put_dispatch_order_for_test(state, [todo, labelled])
+      budget = "the daily token budget is spent (agent.max_tokens_per_day)"
 
       assert [
-               %{identifier: "MT-F", position: 1, outcome: :starts, reason: "forced"},
-               %{identifier: "MT-A", position: 2, outcome: :paused, rule: :daily_budget, reason: "the daily token budget is spent (agent.max_tokens_per_day)"}
+               %{identifier: "MT-A", position: 1, outcome: :paused, rule: :daily_budget, reason: ^budget},
+               %{identifier: "MT-F", position: 2, outcome: :paused, rule: :daily_budget, reason: ^budget}
              ] = order.entries
     end
 
@@ -167,7 +201,7 @@ defmodule SymphonyElixir.Dispatch.OrderTest do
 
     test "a ticket out of line keeps its reason and has no place" do
       assert [%{position: nil, starts_now: false, wait: nil, reason: "already running"}, %{position: 1, reason: "next: a slot is free"}] =
-               Order.place([%{identifier: "MT-1", outcome: :running, reason: "already running"}, %{identifier: "MT-2", outcome: :starts, forced: false, reason: nil}])
+               Order.place([%{identifier: "MT-1", outcome: :running, reason: "already running"}, %{identifier: "MT-2", outcome: :starts, reason: nil}])
     end
   end
 
@@ -225,7 +259,7 @@ defmodule SymphonyElixir.Dispatch.OrderTest do
   defp live, do: Situation.live_facts(%{running: [], retrying: []})
 
   defp entry(id, identifier, outcome, fields) do
-    base = %{issue_id: id, identifier: identifier, title: identifier, state: "Todo", repo_key: "default", forced: false, rule: nil}
+    base = %{issue_id: id, identifier: identifier, title: identifier, state: "Todo", repo_key: "default", rule: nil}
     Map.merge(base, Map.new([outcome: outcome] ++ fields))
   end
 
@@ -258,8 +292,28 @@ defmodule SymphonyElixir.Dispatch.OrderTest do
 
   defp sweep(issues), do: Orchestrator.sweep_dependencies_for_test("default", issues, Config.settings!().tracker.terminal_states)
 
+  # Stores that `issue` depends on the ticket `{id, identifier, phase}` (`:done`), with a record of each.
+  defp depends_on!(%Issue{} = issue, {on_id, on_identifier, on_phase}) do
+    put_record!(issue)
+
+    :ok =
+      RunStore.put_ticket_state(%{
+        repo_key: "default",
+        issue_id: on_id,
+        issue_identifier: on_identifier,
+        title: "Ticket #{on_identifier}",
+        phase: on_phase
+      })
+
+    :ok = RunStore.add_dependency(issue.id, on_id, :done)
+  end
+
+  defp put_record!(%Issue{} = issue) do
+    :ok = RunStore.put_ticket_state(%{repo_key: "default", issue_id: issue.id, issue_identifier: issue.identifier, title: issue.title, phase: issue.state})
+  end
+
   defp issue(id, identifier, state, attrs) do
-    {forced?, attrs} = Keyword.pop(attrs, :forced, false)
+    {labelled?, attrs} = Keyword.pop(attrs, :labelled, false)
 
     struct!(
       %Issue{
@@ -270,7 +324,7 @@ defmodule SymphonyElixir.Dispatch.OrderTest do
         state: state,
         priority: 3,
         team: %{key: "Test"},
-        labels: if(forced?, do: ["expedite"], else: []),
+        labels: if(labelled?, do: ["expedite"], else: []),
         url: "https://example.org/issues/#{identifier}"
       },
       attrs
@@ -291,7 +345,6 @@ defmodule SymphonyElixir.Dispatch.OrderTest do
       last_codex_message: nil,
       last_codex_timestamp: nil,
       last_codex_event: nil,
-      forced: false,
       started_at: DateTime.utc_now()
     }
 

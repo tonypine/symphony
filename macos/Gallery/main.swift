@@ -844,17 +844,13 @@ func situationLines(_ size: SituationLine.Size) -> some View {
     )
 }
 
-/// A forced ticket's line in both sizes, a pause with two more reasons, and both sizes in a narrow column, where the
-/// cause wraps and the word stays whole.
+/// A pause with two more reasons, and both sizes in a narrow column, where the cause wraps and the word stays whole.
 @MainActor
 func situationLineExtras() -> some View {
-    let ci = situationSample.lines.first { $0.kind == .ci }!
     var paused = situationSample.lines.first { $0.kind == .paused }!
     paused.andMore = 2
     return styleStage(
         VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
-            SituationLine(ci, reference: situationSample.now, size: .full, forced: true)
-            SituationLine(ci, reference: situationSample.now, size: .compact, forced: true)
             SituationLine(paused, reference: situationSample.now, size: .full)
             SituationLine(paused, reference: situationSample.now, size: .compact)
             VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
@@ -879,7 +875,7 @@ func situationsState(_ name: String) -> OverviewState {
 }
 
 /// Tickets: the Situation column of each row, as the table draws it (a `Table` doesn't render offscreen), and the
-/// inspector of a forced ticket beside it.
+/// inspector of SHOP-325 beside it.
 @MainActor
 func ticketsSituations() -> some View {
     let list = TicketList(state: situationsState("tickets"), now: situationsNow, timeZone: TimeZone(identifier: "UTC")!)
@@ -996,17 +992,62 @@ func menuWaitingSituations() -> some View {
     )
 }
 
-/// Home (TP-1499) from the `home` fixture's Home read, which holds the catalog's `PROGRESS` and `QUEUE`
-/// (`docs/design/catalog/stories.js`), on the fixture's clock, in a window `window` wide less its sidebar: the queue's
-/// long chain folded into its pill, or `opened` (`home-a-long-chain-shown-whole`), with `selection` picked.
+/// Home (TP-1609) from the `home-queue` fixture's generated queue, on the fixture's clock, in a window `window` wide less
+/// its sidebar: Recently done (TP-1644) on `range`, open or `folded`, three slots (one working, one waiting on you, one
+/// empty) and the queue's first rows; `view` picks a saved view above the queue. `fixture` names another fixture of the
+/// same shape (`home-queue-done-week`: nothing done today). `fold` closes epics and shows their done rows (TP-1645).
 @MainActor
-func homeLists(window: CGFloat, opened: Set<String> = [], selection: TreeKey<String>? = nil) -> some View {
+func homeQueue(
+    window: CGFloat, view: String? = nil, rows: Int = 14, fixture name: String = "home-queue", range: HomeRead.DoneRange = .today,
+    folded: Bool = false, fold: HomeQueueFold = HomeQueueFold()
+) -> some View {
     let width = window - DesignTokens.Layout.sidebarWidth
-    let url = situationsAPI.appendingPathComponent("home/api/v1/home.json")
-    guard let read = HomeRead.decode(try! Data(contentsOf: url)) else { fatalError("The home fixture's Home read doesn't read") }
-    return HomeBody(lists: HomeLists(read: read, reference: situationsNow), opened: opened, selection: selection)
-        .frame(width: width, alignment: .topLeading)
-        .background(DesignTokens.Surface.window.color)
+    let api = situationsAPI.appendingPathComponent("\(name)/api/v1")
+    guard let fixture = HomeQueueFixture(try! Data(contentsOf: api.appendingPathComponent(HomeQueueFixture.fileName))) else {
+        fatalError("The home-queue fixture doesn't read")
+    }
+    let viewsData = try? Data(contentsOf: api.appendingPathComponent("views.json"))
+    let done = HomeRead.DonePage(range: range, limit: RecentlyDoneList.pageSize)
+    let query = HomeRead.path(offset: 0, view: view, done: done).split(separator: "?").last.map(String.init)
+    guard let read = HomeRead.decode(fixture.answer(query: query, views: viewsData, slotCount: nil)) else {
+        fatalError("The home-queue fixture's Home read doesn't read")
+    }
+    let choices = GalleryChoices()
+    RecentlyDoneChoices(range: range, open: !folded).save(to: choices)
+    let model = HomeQueueModel(fetch: { _, _ in .unchanged }, send: { _ in .done }, view: view, choices: choices)
+    model.load(read, fold: fold)
+    let views = viewsData.flatMap { TicketView.views(fromViews: $0) } ?? []
+    let shown = 0..<min(rows, model.pager.shownCount)
+    return HomePageContent(
+        model: model, views: views, notices: [], reference: situationsNow, actions: HomeActions(), range: shown,
+        numberWidth: QueueRow.numberWidth(widest: model.pager.widestNumber(in: shown)),
+        fractionWidth: QueueRow.fractionWidth(characters: model.pager.widestFraction(in: shown))
+    )
+    .environment(\.timeZone, TimeZone(identifier: "UTC")!)
+    .frame(width: width, alignment: .topLeading)
+    .background(DesignTokens.Surface.window.color)
+}
+
+/// The strip that stays on top once the cards scroll away, over the queue's first rows.
+@MainActor
+func homeQueueStrip(window: CGFloat) -> some View {
+    let width = window - DesignTokens.Layout.sidebarWidth
+    let api = situationsAPI.appendingPathComponent("home-queue/api/v1")
+    let fixture = HomeQueueFixture(try! Data(contentsOf: api.appendingPathComponent(HomeQueueFixture.fileName)))!
+    let read = HomeRead.decode(fixture.answer(query: "offset=0&limit=100", views: nil, slotCount: nil))!
+    let model = HomeQueueModel(fetch: { _, _ in .unchanged }, send: { _ in .done })
+    model.load(read)
+    let range = 0..<12
+    let numberWidth = QueueRow.numberWidth(widest: model.pager.widestNumber(in: range))
+    return VStack(spacing: 0) {
+        HomeStrip(cards: model.cards, reference: situationsNow, numberWidth: numberWidth)
+        HomeQueueList(pager: model.pager, range: range, numberWidth: numberWidth)
+            .padding(.horizontal, DesignTokens.HomeQueue.gutter)
+            .frame(height: Double(range.count) * HomeQueuePager.pitch, alignment: .top)
+            .clipped()
+    }
+    .frame(width: width, alignment: .topLeading)
+    .background(DesignTokens.Surface.window.color)
 }
 
 /// Home on a Symphony that predates its read: the Empty state that asks for an update, never the old board.
@@ -1798,7 +1839,7 @@ enum TicketPageBrief: String, CaseIterable {
 
 // MARK: - Work › Tickets as the table with filters (TP-1456)
 
-/// The `tickets` fixture's answer to `GET /api/v1/tickets`, and its state for the forced marks and the drawer.
+/// The `tickets` fixture's answer to `GET /api/v1/tickets`, and its state for the situations and the drawer.
 let ticketsPayload: TicketsPayload = {
     guard let payload = TicketsPayload.decode(try! Data(contentsOf: situationsAPI.appendingPathComponent("tickets/api/v1/tickets.json"))) else {
         fatalError("The tickets fixture's tickets read doesn't read")
@@ -2053,7 +2094,7 @@ MainActor.assumeIsolated {
         render(homeTree(selected: .more("TP-1483")), scheme, to: "tree-home-\(suffix).png")
         render(homeTree(opened: ["TP-1481"], selected: .row("TP-1484")), scheme, to: "tree-home-chain-open-\(suffix).png")
         render(progressStrips(), scheme, to: "progress-strip-initiatives-\(suffix).png")
-        // The Situation line (TP-1439): every kind in the full and the compact size, and forced, "and n more", narrow.
+        // The Situation line (TP-1439): every kind in the full and the compact size, "and n more", narrow.
         render(situationLines(.full), scheme, to: "situation-line-full-\(suffix).png")
         render(situationLines(.compact), scheme, to: "situation-line-compact-\(suffix).png")
         render(situationLineExtras(), scheme, to: "situation-line-extras-\(suffix).png")
@@ -2076,13 +2117,31 @@ MainActor.assumeIsolated {
         }
         render(inboxContextSituations(), scheme, to: "situations-inbox-context-\(suffix).png")
         render(menuWaitingSituations(), scheme, to: "situations-menu-waiting-\(suffix).png")
-        // Home (TP-1499): the two lists from the catalog's data, the long chain folded and shown whole, and Home on a
-        // Symphony without its read, at the laptop's and the desktop's widths.
+        // Home (TP-1609): the slots and the queue from the generated fixture, a saved view picked, the strip over the
+        // queue, and Home on a Symphony without its read, at the laptop's and the desktop's widths.
         do {
-            renderScreen(scheme, to: "home-lists") { window in homeLists(window: window, selection: .row("BIL-306")) }
-            renderScreen(scheme, to: "home-lists-chain-open") { window in
-                homeLists(window: window, opened: ["TP-1481"], selection: .row("TP-1484"))
+            renderScreen(scheme, to: "home-queue") { window in homeQueue(window: window) }
+            renderScreen(scheme, to: "home-queue-filtered") { window in homeQueue(window: window, view: "view-hub") }
+            renderScreen(scheme, to: "home-queue-strip") { window in homeQueueStrip(window: window) }
+            // Recently done (TP-1644): on Week, folded, and on Today with nothing done today.
+            renderScreen(scheme, to: "home-queue-recently-done-week") { window in homeQueue(window: window, range: .week) }
+            renderScreen(scheme, to: "home-queue-recently-done-folded") { window in homeQueue(window: window, folded: true) }
+            renderScreen(scheme, to: "home-queue-recently-done-today-empty") { window in
+                homeQueue(window: window, fixture: "home-queue-done-week")
             }
+            // Epics and dependencies (TP-1645): the epics fixture open, an epic's done rows shown with the other closed,
+            // and a saved view that keeps the epic's row above its matching sub-rows.
+            renderScreen(scheme, to: "home-queue-epics") { window in homeQueue(window: window, rows: 24, fixture: "home-queue-epics") }
+            renderScreen(scheme, to: "home-queue-epics-done") { window in
+                homeQueue(
+                    window: window, rows: 24, fixture: "home-queue-epics", fold: HomeQueueFold(closed: ["MOT-105"], showingDone: ["TP-975"])
+                )
+            }
+            renderScreen(scheme, to: "home-queue-epics-filtered") { window in
+                homeQueue(window: window, view: "view-rework", fixture: "home-queue-epics")
+            }
+            // The epic slot card (TP-1646): slot 1 held by an epic, its lists closed.
+            renderScreen(scheme, to: "home-queue-epic-slot") { window in homeQueue(window: window, rows: 24, fixture: "home-queue-epic-slot") }
             renderScreen(scheme, to: "home-unavailable") { window in homeUnavailable(window: window) }
         }
         render(inboxDrawer(), scheme, to: "inbox-drawer-\(suffix).png")

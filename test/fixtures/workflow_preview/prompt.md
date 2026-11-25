@@ -9,7 +9,7 @@ An implementation run follows these steps (the default list, `phases.implementat
 3. `checks` Format, specs and credo · machine · when Elixir source files changed · times out after 10 min · on failure returns to `code`
    - `mix format --check-formatted && mix specs.check && (test -z "$SYMPHONY_CHANGED_ELIXIR_FILES" || mix credo --strict $SYMPHONY_CHANGED_ELIXIR_FILES)`
 4. `tests` Tests and coverage · machine · times out after 30 min · on failure returns to `code`
-   - when Elixir source files changed: `(test -z "$SYMPHONY_CHANGED_TEST_FILES" || mix test $SYMPHONY_CHANGED_TEST_FILES) && mix cover.changed`
+   - when Elixir source files changed: `mix cover.changed $SYMPHONY_CHANGED_TEST_FILES`
    - when macos/ changed: `cd macos && swift test --filter "$SYMPHONY_CHANGED_SWIFT_TEST_FILTER"`
 5. `window_tests` Window tests · machine · times out after 120 min · on failure returns to `code`
    - `symphony:window_tests`
@@ -107,7 +107,7 @@ notes of the ticket and of its parent; a ticket with no plan has `plan: null` an
 `ticket_record(type, payload, artifacts?, parent?)` records one: a `note` (with an optional `tag`:
 `discovery` for something found that is not this ticket's to solve, `base_fault` for a fault of the
 base branch), a `check.proved` naming a check of the plan by its `check_id` and how it was proved
-(`by`: `test` with the `test`, `qa`, `design` or `attached`; an id the plan does not hold is refused),
+(`by`: `test` with the `test`, `qa`, `design`, `attached`, or `ci` for a check the pull request's own CI run proves; an id the plan does not hold is refused),
 `evidence` (with an optional `proof`: the walkthrough step and the test that proves
 it), a delegated step's `step.started` and `step.completed` (its `outcome`:
 `passed`, `failed` with the step it `returns_to`, `paused` on a question, or
@@ -285,10 +285,10 @@ What a red head, a conflict or a closed PR does in each state is decided by one 
     - Example: `devbox-01:/home/dev-user/code/symphony-workspaces/MT-32@7bdde33bc`
     - Do not include metadata already inferable from Linear issue fields (`issue ID`, `status`, `branch`, `PR link`).
 6.  Add explicit acceptance criteria and TODOs in checklist form in the same comment.
-    - If the issue above has a `## Plan` and a `## Checks` section, the ticket has a plan: work from its checks. Copy each check (its id and statement) into the workpad `Acceptance Criteria`, plan a test in this PR for every `proof: test` check and say in the plan which test proves which check, and leave the `proof: qa` and `proof: design` checks to QA. Otherwise the two walkthrough bullets below apply.
+    - If the issue above has a `## Plan` and a `## Checks` section, the ticket has a plan: work from its checks. Copy each check (its id and statement) into the workpad `Acceptance Criteria`, plan a test in this PR for every `proof: test` check and say in the plan which test proves which check, leave the `proof: qa` and `proof: design` checks to QA, and the `proof: ci` checks to the pull request's own CI run, which Symphony reads in `Merging`. Otherwise the two walkthrough bullets below apply.
     - If changes are user-facing, include a UI walkthrough acceptance criterion that describes the end-to-end user path to validate.
       When the ticket has a `## User walkthrough` section, copy its numbered steps and expected results into that criterion verbatim, with any `Proved by:` line a step has.
-    - Each walkthrough step is proved in one place, and you name it: plan an automated test in this PR for every step code can drive, and write in the plan which test covers which step. Once the test exists, record it on the step (Step 2 says how). A step ending in `Proved by: <test>` (or the older `Proved by: <check> › <test>`) is met by that named test passing on the PR head; the repo's `proof_check` in WORKFLOW.md is the check that runs a `Proved by: <test>`. A step ending in `Proved by: QA`, or one no test covers, is walked by QA. When this run writes a walkthrough (a sub-ticket, a follow-up), write plain steps that name no test and no check, as `Splitting work and out-of-scope improvements` says.
+    - Each walkthrough step is proved in one place, and you name it: plan an automated test in this PR for every step code can drive, and write in the plan which test covers which step. Once the test exists, record it on the step (Step 2 says how). A step ending in `Proved by: <test>` (or the older `Proved by: <check> › <test>`) is proved by that named test once its proof is recorded: CI runs the test on the pull request and gates the merge. A step ending in `Proved by: QA`, or one no test covers, is walked by QA. When this run writes a walkthrough (a sub-ticket, a follow-up), write plain steps that name no test and no check, as `Splitting work and out-of-scope improvements` says.
     - If changes touch app files or app behavior, add explicit app-specific flow checks to `Acceptance Criteria` in the workpad (for example: launch path, changed interaction path, and expected result path).
     - If the ticket description/comment context includes `Validation`, `Test Plan`, or `Testing` sections, copy those requirements into the workpad `Acceptance Criteria` as required checkboxes (no optional downgrade).
     - If the ticket adds a `symphony.yml` setting, the plan includes its control in the macOS app: in the same PR (add the control, list the key in `SettingsUIManifest.keyPaths`, extend the line editor and its tests), or in a sub-ticket filed with `linear_create_subissue` that the parent's epic review checks and has a `## User walkthrough` for the new control. `mix settings.ui_coverage` fails CI for a setting with neither a control nor an exemption. Never add an exemption yourself: `config/settings_ui_exempt.yml` is agent-protected. If the setting should have no control, say so in the workpad `Confusions` and leave the exemption to a person. See `docs/configuration.md#settings-in-the-macos-app`.
@@ -550,7 +550,7 @@ Rules for every plan ticket run:
 - A person approves the plan with Approve Plan in the Director, which moves the parent
   from `Plan Review` to `Waiting on sub-tickets`.
   Symphony then moves every sub-ticket still in `Backlog` to `Todo` in one batch;
-  blocked-by links keep the order. Never move the parent to
+  their stored dependencies keep the order. Never move the parent to
   `Waiting on sub-tickets` yourself: `linear_update_state` refuses it because that
   move is the approval.
 - A person rejects the plan with Reject Plan in the Director, which moves the parent to
@@ -601,8 +601,8 @@ Which plan run this is:
 2. Create each sub-ticket with `linear_create_subissue`, in the order they should
    land. Each one must be deliverable as a single PR, with its own acceptance
    criteria and a line naming any earlier sub-ticket it depends on. For every
-   sub-ticket it depends on, pass that identifier in `blocked_by` too, so Linear
-   records the blocked-by link and Symphony's dependency gate holds it back. Each
+   sub-ticket it depends on, pass that identifier in `blocked_by` too, so Symphony
+   stores the dependency and its dependency gate holds it back. Each
    step of a sub-ticket's `## User walkthrough` is a plain step a user takes with
    the result they should see, naming no test and no check, as `Splitting work and
    out-of-scope improvements` says: the implementer names each step's test. One
@@ -678,7 +678,7 @@ What triggers it:
    `linear_update_comment`. Start each edited artifact with a short note of what
    changed.
 3. Bring the sub-tickets in line with `linear_update_subissue` and
-   `linear_create_subissue`: update the description, title and blocked-by links of
+   `linear_create_subissue`: update the description, title and `blocked_by` of
    `Backlog` sub-tickets, file new ones, and cancel the ones the change drops with a
    `cancel_reason` saying why. Leave every sub-ticket outside `Backlog` as it is.
 4. The parent's own description is the definition of done the epic review resolves, so
@@ -761,8 +761,8 @@ In this repository, a QA pass of the Director has two environments: the committe
     - Execute every ticket-provided `Validation`/`Test Plan`/`Testing` requirement that is not a check the step list runs (a preview to read, a fixture to render); treat unmet items as incomplete work.
     - You may make temporary local proof edits to validate assumptions; revert every one before you commit, and document them in the workpad `Notes`.
 6.  Re-check all acceptance criteria and close any gaps.
-    - If the prompt has a `## Plan` and a `## Checks` section, record the proof of every open `proof: test` check before the handoff push: call `linear_record_walkthrough_proofs` with the check's id as `step` and its test as the code names it, which records a `check.proved` for the check. Prove a `proof: attached` check with `ticket_record` (`check.proved`, `by: attached`, and the `evidence` event that holds the file). The handoff is refused while one of them is open. A check nothing can prove this way is the Conductor's to waive: name it and say why in a `note`. Otherwise:
-    - When the ticket has a `## User walkthrough`, record the proof of every step an automated test in this PR covers, before the handoff push: call `linear_record_walkthrough_proofs` with each step's number and its test. It records each proof as an `evidence` event with `proof` (the step and the test) on the ticket's history and leaves the description as it is. Name the test as the code has it: its file path (with the test name after it), a test or scenario name as written, a describe plus a test name as the ExUnit report prints it, or a Swift test's class plus method (`TimelineKeysTests testItWorks`). A test Symphony cannot find in your checkout is refused when you record it, and the refusal names these forms. Name only tests in this PR, and never a check name: the repo's `proof_check` in WORKFLOW.md is the check that runs them, and the tool refuses a ` › ` separator. Leave a step no test covers as it is, for QA; the tool refuses a step its author marked `Proved by: QA`. The QA pre-check then confirms each named test on the PR head, and QA links its result instead of walking the step.
+    - If the prompt has a `## Plan` and a `## Checks` section, record the proof of every open `proof: test` check before the handoff push: call `linear_record_walkthrough_proofs` with the check's id as `step` and its test as the code names it, which records a `check.proved` for the check. Prove a `proof: attached` check with `ticket_record` (`check.proved`, `by: attached`, and the `evidence` event that holds the file). The handoff is refused while one of them is open. A check nothing can prove this way is the Conductor's to waive: name it and say why in a `note`. A `proof: ci` check is proved by the pull request's own CI run, which exists only once the pull request does: it does not hold the handoff, so open the pull request without it and never ask to set it aside. Symphony proves it in `Merging`, before the merge. Otherwise:
+    - When the ticket has a `## User walkthrough`, record the proof of every step an automated test in this PR covers, before the handoff push: call `linear_record_walkthrough_proofs` with each step's number and its test. It records each proof as an `evidence` event with `proof` (the step and the test) on the ticket's history and leaves the description as it is. Name the test as the code has it: its file path (with the test name after it), a test or scenario name as written, a describe plus a test name as the ExUnit report prints it, or a Swift test's class plus method (`TimelineKeysTests testItWorks`). A test Symphony cannot find in your checkout is refused when you record it, and the refusal names these forms. Name only tests in this PR, and never a check name: the tool refuses a ` › ` separator. Leave a step no test covers as it is, for QA; the tool refuses a step its author marked `Proved by: QA`. A recorded proof is complete: QA does not walk the step and reads no CI for it, and CI runs the test on the pull request and gates the merge.
 7.  The `handoff` step pushes. When the step list reaches it, the build, checks and tests passed on your changes.
     - `github_push_branch` skips repo hooks, so when the push changes an Elixir file it needs the result of `.githooks/pre-push --head` for the commit it pushes. Run that command in your shell after your last commit: it records the result in `tmp/push-check`. The tool refuses the push when the result is missing, is for another commit, or names a failed check; fix what it names, commit, run the command again and push. Never use `git push --no-verify`.
     - After committing and before pushing, run `git diff origin/main..HEAD` and review it for stray debug statements, hardcoded test values, temporary proof edits, unintended files outside the ticket's scope, and incomplete hunks. Only push after this review is clean, and record `diff reviewed — clean` and the step list's results in the workpad.
@@ -832,8 +832,10 @@ Apply this whenever a ticket adds or changes a screen or pane.
 1. `Rework` means the work came back for changes. Continue on the **same** pull request and the same branch: never close the PR, never cut a new branch, and never move the workpad's prior plan aside.
 2. Read what sent it back — the reviewer's verdict and reasons, the failing assertions, the user journey QA ran — and address it directly. The old verdict does not survive the change: the new head is reviewed again from scratch.
    - When the report names a red check without its failing assertion, read the check's log with `github_ci_log` (`job_id` or `run_id` from the check's URL, or `pr_number` for the PR's failed checks) before changing anything: it returns the failed steps, their annotations and the last lines of their log.
-   - When the change adds, renames or moves a test that proves a walkthrough step, record the step's proof again with `linear_record_walkthrough_proofs`: it records an `evidence` event with `proof` (the step and the test, never a check name) and leaves the description as it is. A QA pre-check finding on a step's proof is fixed by making that test run and pass on the PR head, or by recording the test that does. If the prompt has a `## Checks` section, record the proof for the check instead: the same tool, with the check's id as `step`.
+   - When the change adds, renames or moves a test that proves a walkthrough step, record the step's proof again with `linear_record_walkthrough_proofs`: it records an `evidence` event with `proof` (the step and the test, never a check name) and leaves the description as it is. If the prompt has a `## Checks` section, record the proof for the check instead: the same tool, with the check's id as `step`.
    - Record each finding you fix with `ticket_record` as `finding.resolved`: its `finding_id`, `how` you fixed it, and `evidence` when you have it. Symphony fills the head that fixes it, and the next QA verdict confirms or reopens it. Record `evidence` for every screenshot or output you attach, and `step.completed` for each delegated step of the step list when you end it.
+   - A finding that needs no code change (its check was waived, a person's decision answered it, or it asks for nothing the code lacks) is recorded the same way: `finding.resolved` with `how` saying why no change is needed. When every finding is answered and the head is unchanged and clean, Symphony sends the ticket back to QA on that head, without Code Review and without a park for no progress.
+   - When you ask a person with `linear_request_human_action` and one of the answers would send the pull request back to review as it is (the code is right and only a reading of the ticket is in question), give that option `back_to_review: true`: picking it moves the ticket to `Code Review` on the same head and no rework run starts. If a person already answered a question in this Rework and you find nothing to change, commit nothing and end the turn: Symphony hands the unchanged head back to `Code Review` with the answer as its reason, without a park for no progress.
 3. The `findings` step ran before this turn: Symphony kept the open findings by class on the ticket's timeline, and when the same class failed twice it asked the person before any code. Read the open findings first with `ticket_events` and `open_findings: true`: each comes with its state (open, resolved awaiting QA, or reopened), its class and its screenshots, so the plan starts from what is still open.
 4. Keep the single workpad comment; extend its `Acceptance Criteria` and `Notes` with what the verdict adds instead of superseding what is there (Symphony writes `Plan` and `Validation` from the run's steps).
 5. Push the changes to the same branch when the step list reaches its `handoff` step. That push is the handoff: it moves the ticket to `Code Review` for a review of the new head. Do not ask for the state by hand.
@@ -969,7 +971,7 @@ it lands depends on the current issue:
 - Any other ticket's sub-issue lands in `Todo`, and the current issue is marked
   blocked by it: the new ticket lands first, and the current issue waits for it
   and then continues in its phase on its own. The turn in flight finishes; the
-  next run waits. If Linear refuses that link, the tool says so after the new
+  next run waits. If Symphony can't store that dependency, the tool says so after the new
   issue exists: mark the current issue blocked by it with
   `linear_add_blocked_by`.
 
@@ -998,9 +1000,9 @@ blocks the ticket.
 
 Write the walkthrough end to end, in plain words from the user's seat, and name no
 test and no check in it. The implementer, who writes the tests, records which test
-proves each step it covers (`Proved by: <test>`), and the repo names the check that
-runs them (`proof_check` in its WORKFLOW.md). Symphony's QA pre-check confirms each
-named test on the PR head, and QA walks every step without one. Unit-level facts
+proves each step it covers (`Proved by: <test>`). A recorded test proof is complete:
+CI runs the test on the pull request and gates the merge, QA does not walk that step,
+and QA walks every step without one. Unit-level facts
 (keys, counters, error tuples) are acceptance criteria, not walkthrough steps.
 Shape each step when you write it:
 
@@ -1018,12 +1020,11 @@ identifiers in the current workpad's `Notes`. If the tool refuses, list the
 remaining issues in the workpad `Notes` for a human to file.
 
 
-## Priority vs expedite
+## Priority
 
-- A ticket's priority means how important it is, not its place in the queue. Symphony uses it only to order tickets waiting for a normal slot.
+- A ticket's priority means how important it is, not its place in the queue. Symphony uses it only to order tickets waiting for a slot.
 - Never raise a ticket's priority (this ticket, a sub-ticket or a blocker) to get it picked sooner. Set a new sub-ticket's `priority` by importance only.
-- Jumping the queue is a person's call: they press Force in the Director or run `symphony force <ticket>`, which add the `expedite` label. Do not add or remove that label yourself. A forced ticket skips the slot limits (`max_total`, per-state caps, epic lanes, `finishing_max`, the daily token budget) but still waits for the operator's Pause, the Linear rate-limit and usage-limit pauses, its blocked-by links and the per-issue token cap.
-- Forcing never moves a ticket or skips a review. `Backlog` -> `Todo`, approving a plan, deciding a `Needs Decision` hold and `Restart` stay a person's moves in the Director (Move to…, Approve Plan, Decide, Restart), and the `Code Review` and `QA` verdicts still apply: follow the status map as usual.
+- `Backlog` -> `Todo`, approving a plan, deciding a `Needs Decision` hold and `Restart` stay a person's moves in the Director (Move to…, Approve Plan, Decide, Restart), and the `Code Review` and `QA` verdicts apply: follow the status map as usual.
 
 ## Dependency-change guardrail
 

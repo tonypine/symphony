@@ -1,0 +1,881 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+</head>
+<body>
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>Run Conversation View</title>
+<style>
+/* ================= The catalog's tokens.css, whole (theme switch in the page contract's shape) ================= */
+/*
+ * Design tokens of the Director (the Symphony Mac app), as CSS custom properties.
+ *
+ * The look: the current macOS (translucent glass for what floats, continuous rounded
+ * corners, the system font) with the craft of today's best web apps (layered soft
+ * shadows, a brand accent with depth, springy motion that is part of every component).
+ *
+ * Each token is a named role. Light and dark come from one declaration each, through
+ * light-dark(): the theme switch sets color-scheme on the root element.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* ---------- Surfaces ---------- */
+  --surface-window: light-dark(#f2f2f6, #121216);
+  --surface-content: light-dark(#ffffff, #1b1b21);
+  --surface-raised: light-dark(#f7f7fa, #23232a);
+  --surface-sunken: light-dark(#e9e9ef, #0c0c10);
+  --surface-hover: light-dark(rgba(28, 28, 52, 0.05), rgba(255, 255, 255, 0.06));
+  --surface-pressed: light-dark(rgba(28, 28, 52, 0.09), rgba(255, 255, 255, 0.1));
+  --surface-overlay: light-dark(rgba(18, 18, 30, 0.22), rgba(0, 0, 0, 0.55));
+
+  /* Glass: the material of what floats over content (menus, popovers, toasts, sheets, bars) */
+  --material-glass: light-dark(rgba(255, 255, 255, 0.72), rgba(38, 38, 46, 0.68));
+  --material-glass-thick: light-dark(rgba(252, 252, 254, 0.88), rgba(34, 34, 42, 0.86));
+  --material-blur: blur(28px) saturate(1.8);
+  --material-edge: light-dark(rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0.1));
+
+  /* The window behind everything carries a faint glow of the brand, never under text */
+  --backdrop-glow: radial-gradient(1200px 600px at 12% -10%, light-dark(rgba(108, 92, 255, 0.1), rgba(108, 92, 255, 0.16)), transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, light-dark(rgba(36, 150, 255, 0.07), rgba(36, 150, 255, 0.1)), transparent 60%);
+
+  /* ---------- Lines ---------- */
+  --stroke-separator: light-dark(rgba(24, 24, 48, 0.08), rgba(255, 255, 255, 0.08));
+  --stroke-strong: light-dark(rgba(24, 24, 48, 0.15), rgba(255, 255, 255, 0.15));
+  --stroke-highlight: light-dark(rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.07));
+
+  /* ---------- Text ---------- */
+  --text-primary: light-dark(#16161d, #f2f2f6);
+  --text-secondary: light-dark(#5c5c6e, #a5a5b4);
+  --text-tertiary: light-dark(#9898a8, #6c6c7c);
+  --text-on-accent: #ffffff;
+
+  /* ---------- Accent: Symphony's iris, for selection, links and the expected move ---------- */
+  --accent: light-dark(#5b4cf5, #6d5ff7);
+  --accent-hover: light-dark(#4f40ea, #7c70ff);
+  --accent-pressed: light-dark(#4234d0, #5e51e6);
+  --accent-text: light-dark(#4a3be0, #aaa2ff);
+  --accent-tint: light-dark(rgba(91, 76, 245, 0.1), rgba(124, 112, 255, 0.18));
+  --accent-tint-strong: light-dark(rgba(91, 76, 245, 0.17), rgba(124, 112, 255, 0.28));
+  --accent-fill: linear-gradient(180deg, color-mix(in oklab, var(--accent) 82%, white) 0%, var(--accent) 100%);
+  --accent-fill-hover: linear-gradient(180deg, color-mix(in oklab, var(--accent-hover) 80%, white) 0%, var(--accent-hover) 100%);
+  --accent-glow: 0 1px 2px color-mix(in oklab, var(--accent) 35%, transparent), 0 6px 16px -6px color-mix(in oklab, var(--accent) 70%, transparent);
+
+  /* ---------- Status: reserved, always with a glyph and a word ---------- */
+  --status-you: light-dark(#f08a00, #ffa733);
+  --status-working: light-dark(#1d8cff, #3d9fff);
+  --status-problem: light-dark(#ec3a4c, #ff5c68);
+  --status-done: light-dark(#18a957, #3bd47c);
+  --status-idle: light-dark(#8a8a99, #8f8f9e);
+  --status-forced: light-dark(#be3bd6, #d567ee);
+
+  /* Status text: the hue darkened in light so a word in it keeps 4.5:1 on content */
+  --status-you-text: light-dark(#a35200, #ffbf6e);
+  --status-working-text: light-dark(#0a63c4, #80bfff);
+  --status-problem-text: light-dark(#c0142b, #ff8f96);
+  --status-done-text: light-dark(#0f733a, #74e3a3);
+  --status-idle-text: light-dark(#5b5b6a, #b3b3c0);
+  --status-forced-text: light-dark(#8c1fa4, #e7a0f6);
+
+  /* Status tints: 12 % in light, 20 % in dark, behind a word kept in text-primary */
+  --tint-you: light-dark(rgba(240, 138, 0, 0.13), rgba(255, 167, 51, 0.2));
+  --tint-working: light-dark(rgba(29, 140, 255, 0.12), rgba(61, 159, 255, 0.2));
+  --tint-problem: light-dark(rgba(236, 58, 76, 0.12), rgba(255, 92, 104, 0.2));
+  --tint-done: light-dark(rgba(24, 169, 87, 0.12), rgba(59, 212, 124, 0.18));
+  --tint-idle: light-dark(rgba(138, 138, 153, 0.13), rgba(143, 143, 158, 0.2));
+  --tint-forced: light-dark(rgba(190, 59, 214, 0.12), rgba(213, 103, 238, 0.2));
+
+  /* ---------- Type: the system font only, no external fonts ---------- */
+  --font-text: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Monaco, monospace;
+
+  --type-title: 700 26px/32px var(--font-display);
+  --type-sentence: 650 18px/24px var(--font-display);
+  --type-heading: 600 15px/20px var(--font-text);
+  --type-row-title: 600 13px/18px var(--font-text);
+  --type-body: 400 13px/19px var(--font-text);
+  --type-secondary: 400 12px/16px var(--font-text);
+  --type-label: 550 11px/14px var(--font-text);
+  --type-caption: 500 10px/13px var(--font-text);
+  --type-mono: 450 12px/16px var(--font-mono);
+  /* Reading: a text the Director reads through, such as a ticket's brief */
+  --type-reading: 400 16px/1.45 var(--font-text);
+  --type-reading-compact: 400 14px/1.45 var(--font-text);
+  --tracking-reading: 0.03em;
+  --tracking-display: -0.022em;
+  --tracking-label: 0.02em;
+
+  /* Measure: no line of reading text runs past it */
+  --measure: 68ch;
+  --measure-narrow: 52ch;
+
+  /* ---------- Spacing: a 4 pt grid ---------- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  /* ---------- Controls: three sizes, every control is one of them ---------- */
+  --control-sm: 24px;
+  --control-md: 30px;
+  --control-lg: 36px;
+
+  /* ---------- Radii: concentric, the inner radius is the outer minus the inset ---------- */
+  --radius-sheet: 22px;
+  --radius-card: 16px;
+  --radius-row: 10px;
+  --radius-control-sm: 7px;
+  --radius-control-md: 9px;
+  --radius-control-lg: 11px;
+  --radius-control: var(--radius-control-md);
+  --radius-mark: 4px;
+  --radius-capsule: 999px;
+
+  /* ---------- Elevation: layered soft shadows; content is flat, what floats rises ---------- */
+  --shadow-ring: light-dark(rgba(24, 24, 48, 0.07), rgba(255, 255, 255, 0.075));
+  --shadow-near: light-dark(rgba(24, 24, 48, 0.06), rgba(0, 0, 0, 0.35));
+  --shadow-far: light-dark(rgba(24, 24, 60, 0.1), rgba(0, 0, 0, 0.55));
+  --shadow-deep: light-dark(rgba(20, 20, 60, 0.18), rgba(0, 0, 0, 0.7));
+  --elevation-0: none;
+  --elevation-1: 0 0 0 1px var(--shadow-ring), 0 1px 2px var(--shadow-near), 0 3px 8px -4px var(--shadow-far);
+  --elevation-2: 0 0 0 1px var(--shadow-ring), 0 2px 4px var(--shadow-near), 0 12px 28px -10px var(--shadow-far);
+  --elevation-3: 0 0 0 1px var(--shadow-ring), 0 4px 10px var(--shadow-near), 0 22px 48px -14px var(--shadow-deep);
+  --elevation-4: 0 0 0 1px var(--shadow-ring), 0 8px 20px var(--shadow-near), 0 40px 90px -24px var(--shadow-deep);
+  --edge-highlight: inset 0 1px 0 var(--stroke-highlight);
+
+  /* ---------- Motion: durations, easings and the patterns built from them ---------- */
+  --motion-instant: 0.1s;
+  --motion-fast: 0.16s;
+  --motion-standard: 0.28s;
+  --motion-slow: 0.45s;
+  --motion-spring: 0.5s;
+  --motion-hover-delay: 0.5s;
+  --motion-stagger: 35ms;
+
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-enter: cubic-bezier(0, 0, 0, 1);
+  --ease-exit: cubic-bezier(0.3, 0, 1, 1);
+  /* A critically damped spring with a hint of overshoot (about 2 %) */
+  --ease-spring: linear(0, 0.006, 0.025 2.8%, 0.101 6.1%, 0.539 18.9%, 0.721 25.3%, 0.849 31.5%, 0.937 38.1%, 0.968 41.8%, 0.991 45.7%, 1.006 50.1%, 1.015 55%, 1.017 63.9%, 1.001 85.9%, 1);
+  /* A livelier spring for knobs and marks that snap into place (about 8 %) */
+  --ease-bounce: linear(0, 0.157 5.1%, 0.528 13.2%, 0.828 21.4%, 1.008 29.5%, 1.064 33.4%, 1.081 37.6%, 1.074 42.2%, 1.025 52.6%, 0.995 63.9%, 0.99 71.5%, 1.001 92.4%, 1);
+
+  /* Patterns */
+  --press-scale: 0.97;
+  --lift: -1px;
+  --enter-offset: 6px;
+  --enter-scale: 0.97;
+
+  /* ---------- Focus ring: keyboard focus only, drawn outside the shape ---------- */
+  --focus-ring-color: light-dark(rgba(91, 76, 245, 0.55), rgba(140, 128, 255, 0.7));
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+}
+
+/* Increase Contrast: every colour again, chosen so text keeps 4.5:1 on each surface (tertiary too), hairlines and
+ * rings read at full strength and glass is nearly opaque. The glow behind the window goes. */
+@media (prefers-contrast: more) {
+  :root {
+    --surface-window: light-dark(#ececf2, #0a0a0d);
+    --surface-content: light-dark(#ffffff, #16161b);
+    --surface-raised: light-dark(#f4f4f8, #202027);
+    --surface-sunken: light-dark(#dcdce4, #000000);
+    --surface-hover: light-dark(rgba(28, 28, 52, 0.1), rgba(255, 255, 255, 0.12));
+    --surface-pressed: light-dark(rgba(28, 28, 52, 0.16), rgba(255, 255, 255, 0.18));
+    --surface-overlay: light-dark(rgba(18, 18, 30, 0.4), rgba(0, 0, 0, 0.75));
+    --material-glass: light-dark(rgba(255, 255, 255, 0.96), rgba(30, 30, 38, 0.96));
+    --material-glass-thick: light-dark(rgba(252, 252, 254, 0.98), rgba(28, 28, 36, 0.98));
+    --material-edge: light-dark(rgba(24, 24, 48, 0.35), rgba(255, 255, 255, 0.35));
+    --stroke-separator: light-dark(rgba(24, 24, 48, 0.45), rgba(255, 255, 255, 0.45));
+    --stroke-strong: light-dark(rgba(24, 24, 48, 0.7), rgba(255, 255, 255, 0.7));
+    --stroke-highlight: light-dark(rgba(255, 255, 255, 1), rgba(255, 255, 255, 0.16));
+    --text-primary: light-dark(#000000, #ffffff);
+    --text-secondary: light-dark(#3c3c4a, #cfcfd9);
+    --text-tertiary: light-dark(#5c5c6c, #a0a0ae);
+    --text-on-accent: light-dark(#ffffff, #ffffff);
+    --accent: light-dark(#3a2bc4, #5546e0);
+    --accent-hover: light-dark(#3123b0, #6457ee);
+    --accent-pressed: light-dark(#281c96, #4a3cd0);
+    --accent-text: light-dark(#3020b8, #c4beff);
+    --accent-tint: light-dark(rgba(58, 43, 196, 0.16), rgba(124, 112, 255, 0.3));
+    --accent-tint-strong: light-dark(rgba(58, 43, 196, 0.26), rgba(124, 112, 255, 0.42));
+    --status-you: light-dark(#c46a00, #ffbb5c);
+    --status-working: light-dark(#0a6fd6, #6cb6ff);
+    --status-problem: light-dark(#d01f33, #ff7f89);
+    --status-done: light-dark(#0b8a43, #5fe397);
+    --status-idle: light-dark(#6b6b7a, #b0b0be);
+    --status-forced: light-dark(#9e22b8, #e48cf6);
+    --status-you-text: light-dark(#7f3f00, #ffd29a);
+    --status-working-text: light-dark(#054a96, #a8d3ff);
+    --status-problem-text: light-dark(#980f22, #ffb3b8);
+    --status-done-text: light-dark(#0a5a2d, #9cf0c0);
+    --status-idle-text: light-dark(#45454f, #d0d0da);
+    --status-forced-text: light-dark(#6e1683, #f0c2fa);
+    --tint-you: light-dark(rgba(196, 106, 0, 0.2), rgba(255, 187, 92, 0.3));
+    --tint-working: light-dark(rgba(10, 111, 214, 0.2), rgba(108, 182, 255, 0.3));
+    --tint-problem: light-dark(rgba(208, 31, 51, 0.2), rgba(255, 127, 137, 0.3));
+    --tint-done: light-dark(rgba(11, 138, 67, 0.2), rgba(95, 227, 151, 0.28));
+    --tint-idle: light-dark(rgba(107, 107, 122, 0.2), rgba(176, 176, 190, 0.3));
+    --tint-forced: light-dark(rgba(158, 34, 184, 0.2), rgba(228, 140, 246, 0.3));
+    --shadow-ring: light-dark(rgba(24, 24, 48, 0.3), rgba(255, 255, 255, 0.3));
+    --shadow-near: light-dark(rgba(24, 24, 48, 0.1), rgba(0, 0, 0, 0.5));
+    --shadow-far: light-dark(rgba(24, 24, 60, 0.16), rgba(0, 0, 0, 0.7));
+    --shadow-deep: light-dark(rgba(20, 20, 60, 0.26), rgba(0, 0, 0, 0.85));
+    --focus-ring-color: light-dark(rgba(58, 43, 196, 0.9), rgba(170, 160, 255, 0.95));
+    --backdrop-glow: none;
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+  }
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-instant: 0.01s;
+    --motion-fast: 0.01s;
+    --motion-standard: 0.01s;
+    --motion-slow: 0.01s;
+    --motion-spring: 0.01s;
+    --motion-stagger: 0ms;
+    --press-scale: 1;
+    --lift: 0px;
+    --enter-offset: 0px;
+    --enter-scale: 1;
+  }
+}
+
+
+/* ================= The catalog's components.css: the rules this page uses, unchanged ================= */
+
+.role-you { --role: var(--status-you); --role-tint: var(--tint-you); --role-text: var(--status-you-text); }
+.role-working { --role: var(--status-working); --role-tint: var(--tint-working); --role-text: var(--status-working-text); }
+.role-problem { --role: var(--status-problem); --role-tint: var(--tint-problem); --role-text: var(--status-problem-text); }
+.role-done { --role: var(--status-done); --role-tint: var(--tint-done); --role-text: var(--status-done-text); }
+.role-idle { --role: var(--status-idle); --role-tint: var(--tint-idle); --role-text: var(--status-idle-text); }
+
+.ds {
+  --h: var(--control-md);
+  --px: 14px;
+  --fz: 13px;
+  --r: var(--radius-control-md);
+  --gl: 14px;
+  font: var(--type-body);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  font-optical-sizing: auto;
+}
+.ds .sz-sm,
+.ds.sz-sm { --h: var(--control-sm); --px: 10px; --fz: 12px; --r: var(--radius-control-sm); --gl: 12px; }
+.ds *,
+.ds *::before,
+.ds *::after { box-sizing: border-box; }
+.ds .glyph { width: 14px; height: 14px; flex: none; display: inline-block; vertical-align: -2px; }
+.ds p { text-wrap: pretty; }
+.ds a { color: var(--accent-text); text-decoration: none; }
+.ds a:hover { text-decoration: underline; text-underline-offset: 2px; }
+.ds :is(button, a[href], [role="radio"]) { cursor: pointer; }
+.ds [aria-disabled="true"],
+.ds [aria-disabled="true"] * { cursor: not-allowed; }
+.ds :is(button, a, [tabindex]):focus { outline: none; }
+.ds :is(button, a, [tabindex]):focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: var(--focus-ring-offset); }
+
+.fold { display: grid; grid-template-rows: 0fr; transition: grid-template-rows var(--motion-standard) var(--ease-standard); }
+.fold[data-open="true"] { grid-template-rows: 1fr; }
+.fold > .fold-inner { min-height: 0; overflow: hidden; }
+.fold > .fold-inner > * { transition: opacity var(--motion-standard) var(--ease-standard), transform var(--motion-standard) var(--ease-standard); }
+.fold:not([data-open="true"]) > .fold-inner > * { opacity: 0; transform: translateY(calc(var(--enter-offset) * -1)); }
+.fold:not([data-open="true"]) > .fold-inner { visibility: hidden; transition: visibility 0s var(--motion-standard); }
+
+.disclose { width: 10px; height: 10px; color: var(--text-secondary); transition: transform var(--motion-spring) var(--ease-spring); }
+[aria-expanded="true"] > .disclose,
+[aria-expanded="true"] .disclose { transform: rotate(90deg); }
+
+.btn {
+  position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex: none;
+  height: var(--h); min-height: var(--h); max-height: var(--h); padding: 0 var(--px); border: 0; border-radius: var(--r);
+  font: 550 var(--fz)/1 var(--font-text); letter-spacing: -0.003em; color: var(--text-primary); background: var(--surface-content);
+  box-shadow: 0 0 0 1px var(--stroke-strong), 0 1px 2px var(--shadow-near), var(--edge-highlight); white-space: nowrap; user-select: none;
+  transition: background var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard), transform var(--motion-instant) var(--ease-standard), color var(--motion-fast) var(--ease-standard);
+}
+.btn .glyph { width: var(--gl); height: var(--gl); margin-left: calc(var(--px) * -0.2); }
+.btn:not([aria-disabled="true"]):active { transform: scale(var(--press-scale)); }
+.btn-quiet { background: transparent; box-shadow: none; color: var(--accent-text); }
+.btn-quiet:not([aria-disabled="true"]):hover { background: var(--accent-tint); box-shadow: none; }
+.btn-quiet:not([aria-disabled="true"]):active { background: var(--accent-tint-strong); box-shadow: none; }
+
+.segmented {
+  position: relative; display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr; height: var(--h); padding: 2px;
+  border-radius: var(--radius-capsule); background: var(--surface-sunken); box-shadow: inset 0 0 0 1px var(--stroke-separator), inset 0 1px 2px var(--shadow-near);
+}
+.segmented .seg-thumb {
+  position: absolute; top: 2px; bottom: 2px; left: 2px; width: calc((100% - 4px) / var(--n, 3)); border-radius: var(--radius-capsule);
+  background: var(--surface-content); box-shadow: 0 0 0 0.5px var(--stroke-strong), 0 1px 3px var(--shadow-near), 0 2px 8px -2px var(--shadow-far), var(--edge-highlight);
+  transform: translateX(calc(var(--i, 0) * 100%)); transition: transform var(--motion-spring) var(--ease-spring);
+}
+.segment {
+  position: relative; z-index: 1; min-width: 0; padding: 0 calc(var(--px) * 0.9); border: 0; border-radius: var(--radius-capsule);
+  font: 550 var(--fz)/1 var(--font-text); color: var(--text-secondary); background: transparent; white-space: nowrap;
+  transition: color var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard);
+}
+.segment:not([aria-checked="true"]):hover { color: var(--text-primary); background: var(--surface-hover); }
+.segment:not([aria-checked="true"]):active { background: var(--surface-pressed); }
+.segment[aria-checked="true"] { color: var(--text-primary); }
+
+.chip {
+  display: inline-flex; align-items: center; gap: 5px; flex: none; height: var(--control-sm); padding: 0 10px; border: 0; border-radius: var(--radius-capsule);
+  font: var(--type-label); letter-spacing: 0.005em; color: var(--text-primary); background: var(--surface-content);
+  box-shadow: 0 0 0 1px var(--stroke-separator), 0 1px 1px var(--shadow-near); white-space: nowrap;
+}
+.chip .glyph { width: 12px; height: 12px; }
+.chip.chip-status { background: var(--role-tint); box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--role) 18%, transparent); }
+.chip.chip-status .glyph { color: var(--role); }
+.chip.chip-label { height: 20px; padding: 0 7px; border-radius: 6px; font: 550 11px/14px var(--font-text); color: var(--text-secondary); background: var(--surface-raised); box-shadow: inset 0 0 0 1px var(--stroke-separator); }
+.chip .n { font-variant-numeric: tabular-nums; color: var(--text-secondary); font-weight: 500; }
+
+.badge { display: inline-flex; align-items: center; gap: 4px; flex: none; height: 20px; padding: 0 8px 0 6px; border-radius: var(--radius-capsule); font: var(--type-label); color: var(--role-text); background: var(--role-tint); white-space: nowrap; }
+.badge .glyph { width: 12px; height: 12px; color: var(--role); }
+.badge-sm { height: 18px; padding: 0 6px 0 5px; font-size: 10.5px; }
+.badge-sm .glyph { width: 10px; height: 10px; }
+
+.dot { position: relative; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--role); flex: none; }
+.dot.live::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: var(--role); animation: dot-live 1.8s var(--ease-enter) infinite; }
+@keyframes dot-live {
+  0% { transform: scale(1); opacity: 0.6; }
+  70%, 100% { transform: scale(2.6); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) { .dot.live::after { animation: none; } }
+
+.tl-day { display: flex; align-items: baseline; gap: var(--space-2); font: var(--type-caption); color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.08em; padding: var(--space-3) var(--space-2) var(--space-1) 66px; }
+.zone-title { margin: 0 0 var(--space-2) var(--space-1); font: var(--type-caption); color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.08em; }
+
+.run-group { border-radius: var(--radius-row); transition: background var(--motion-standard) var(--ease-standard); }
+.run-group:has(> .run-head[aria-expanded="true"]) { background: color-mix(in oklab, var(--surface-hover), transparent 40%); }
+.run-group > .run-head {
+  display: grid; grid-template-columns: 48px 26px 1fr auto; gap: 0 var(--space-2); align-items: center; width: 100%; min-height: 38px; padding: 7px var(--space-2);
+  border: 0; border-radius: var(--radius-row); font: var(--type-body); color: var(--text-primary); background: transparent; text-align: left;
+  transition: background var(--motion-fast) var(--ease-standard), transform var(--motion-instant) var(--ease-standard);
+}
+.run-group > .run-head:hover { background: var(--surface-hover); }
+.run-group > .run-head:active { background: var(--surface-pressed); }
+.run-group .run-head .time { font: var(--type-secondary); color: var(--text-secondary); text-align: right; font-variant-numeric: tabular-nums; }
+.run-group .run-head .mark { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; color: var(--role); background: var(--role-tint); box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--role) 20%, transparent); }
+.run-group .run-head .mark .glyph { width: 12px; height: 12px; }
+.run-group .run-head .name { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.run-group .run-head .name b { font-weight: 600; }
+.run-group .run-head .dur { font: var(--type-secondary); color: var(--text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; padding-right: var(--space-1); }
+.run-group .run-body { margin-left: 70px; padding: 2px 0 var(--space-2) var(--space-3); border-left: 1.5px solid var(--stroke-separator); }
+/* from the ticket page prototype's page.css */
+.run-group .run-body { display: grid; gap: var(--space-3); padding-top: var(--space-2); padding-right: var(--space-2); }
+.run-group .run-body .run-meta { margin: 0; font: var(--type-secondary); color: var(--text-secondary); font-variant-numeric: tabular-nums; padding: 0 var(--space-2); }
+.run-group .step-list { margin: 0 calc(-1 * var(--space-1)); }
+
+.step-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.sl-step { border-radius: var(--radius-row); transition: background var(--motion-standard) var(--ease-standard); }
+.sl-head {
+  display: grid; grid-template-columns: 12px 20px minmax(0, 1fr) auto auto; align-items: center; gap: var(--space-2); width: 100%; min-height: 32px; padding: 5px var(--space-2);
+  border: 0; border-radius: var(--radius-row); font: var(--type-body); color: var(--text-primary); background: transparent; text-align: left;
+  transition: background var(--motion-fast) var(--ease-standard), transform var(--motion-instant) var(--ease-standard);
+}
+.sl-head:not([aria-disabled="true"]):hover { background: var(--surface-hover); }
+.sl-head[aria-disabled="true"] .disclose { visibility: hidden; }
+.sl-head .sl-mark { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; color: var(--role); background: var(--role-tint); }
+.sl-head .sl-mark .glyph { width: 11px; height: 11px; }
+.sl-head .sl-name { font-weight: 550; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sl-head .sl-state { font: var(--type-secondary); color: var(--role-text); font-weight: 550; white-space: nowrap; }
+.sl-head .sl-dur { min-width: 52px; font: var(--type-secondary); color: var(--text-secondary); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sl-msgs { display: grid; gap: 1px; margin: 0; padding: 2px var(--space-2) var(--space-2) calc(var(--space-2) + 12px + var(--space-2) + 9px); list-style: none; }
+.sl-msg { display: grid; grid-template-columns: 40px 16px minmax(0, 1fr); gap: var(--space-2); align-items: baseline; padding: 3px 0 3px var(--space-3); border-left: 1.5px solid var(--stroke-separator); font: var(--type-secondary); color: var(--text-primary); }
+.sl-msg .time { color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.sl-msg .kind { align-self: center; color: var(--text-tertiary); }
+.sl-msg .kind .glyph { width: 12px; height: 12px; }
+.sl-msg .text { min-width: 0; max-width: var(--measure); overflow-wrap: anywhere; }
+.sl-msg.tool .text,
+.sl-msg.result .text { font: var(--type-mono); font-size: 11.5px; color: var(--text-secondary); }
+.sl-msg.say .kind { color: var(--accent-text); }
+.sl-msg.result.failed .text { color: var(--status-problem-text); }
+
+.attachment { display: grid; gap: 6px; width: 160px; padding: 6px; border: 0; border-radius: 12px; text-align: left; font: var(--type-secondary); color: var(--text-primary); background: transparent; }
+.attachment .thumb { display: grid; place-items: center; height: 100px; border-radius: 8px; background: var(--surface-raised); box-shadow: inset 0 0 0 1px var(--stroke-separator); color: var(--text-secondary); overflow: hidden; }
+.attachment .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+
+/* ================= This page: the frame ================= */
+
+html, body { margin: 0; }
+body { background: var(--surface-window); background-image: var(--backdrop-glow); background-attachment: fixed; color: var(--text-primary); font: var(--type-body); }
+
+.proto { min-height: 100vh; }
+.proto-bar {
+  position: sticky; top: 0; z-index: 20; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4);
+  padding: var(--space-2) max(var(--space-4), env(safe-area-inset-right, 0px)) var(--space-2) max(var(--space-4), env(safe-area-inset-left, 0px));
+  background: var(--material-glass-thick); -webkit-backdrop-filter: var(--material-blur); backdrop-filter: var(--material-blur);
+  box-shadow: 0 1px 0 var(--stroke-separator), 0 8px 24px -16px var(--shadow-far);
+}
+.bar-scroll { max-width: 100%; overflow-x: auto; padding: 1px; scrollbar-width: none; }
+.bar-grow { flex: 1; }
+.proto-canvas {
+  display: grid; justify-items: center; gap: var(--space-2);
+  padding: var(--space-4) max(var(--space-4), env(safe-area-inset-right, 0px)) var(--space-8) max(var(--space-4), env(safe-area-inset-left, 0px));
+}
+.proto-caption { margin: 0; font: var(--type-caption); color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.08em; font-variant-numeric: tabular-nums; text-align: center; }
+/* The ticket page's timeline column at its laptop width: 1180 window, 24 page padding, 340 facts rail, 24 gap = 768. */
+.proto-window {
+  width: 100%; max-width: calc(768px + 2 * var(--space-6)); padding: var(--space-6); border-radius: var(--radius-sheet);
+  background: var(--surface-window); box-shadow: var(--elevation-3), inset 0 0 0 1px var(--stroke-separator); container-type: inline-size;
+}
+.proto-window :is(h3, p) { margin: 0; }
+.proto-window .zone-title { margin: 0 0 var(--space-2) var(--space-1); }
+
+/* ================= This page: what the design adds to the step body ================= */
+
+/* The run and step headers keep the catalog's shapes; the step's header gains the audit switch, so the
+   row is a group with the disclosure as a button under it. */
+.run-group .run-head .name b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sl-step:has(> .sl-head[data-open="true"]) { background: color-mix(in oklab, var(--surface-hover), transparent 40%); }
+.sl-head { position: relative; }
+.sl-head.has-audit { grid-template-columns: 12px 20px minmax(0, 1fr) auto auto auto; }
+.sl-head[data-open="true"] .disclose { transform: rotate(90deg); }
+.sl-head .sl-hit { position: absolute; inset: 0; border: 0; border-radius: inherit; background: transparent; }
+.sl-head .sl-hit:active { background: var(--surface-pressed); }
+.sl-head > :not(.sl-hit) { position: relative; pointer-events: none; }
+.sl-head > .audit { pointer-events: auto; }
+.audit[aria-pressed="true"] { background: var(--accent-tint); }
+.audit[aria-pressed="true"]:not([aria-disabled="true"]):hover { background: var(--accent-tint-strong); }
+.run-meta-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); min-height: var(--control-sm); }
+
+/* The conversation: the time on a small line of its own above the entry, the note at reading size, what it did folded under it. */
+.cv { display: grid; gap: var(--space-3); margin: 0; padding: var(--space-2) var(--space-2) var(--space-3) var(--space-2); list-style: none; }
+.sl-step .cv { margin-left: calc(var(--space-2) + 12px + var(--space-2) + 9px); padding-left: var(--space-3); border-left: 1.5px solid var(--stroke-separator); }
+.cv-turn { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-1); }
+.cv-turn > * { min-width: 0; }
+.cv-turn > .cv-time { font: var(--type-caption); color: var(--text-tertiary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.cv-note { display: grid; gap: var(--space-2); font: var(--type-reading-compact); letter-spacing: var(--tracking-reading); color: var(--text-primary); overflow-wrap: anywhere; }
+.cv-note :is(p, ul, ol, pre) { margin: 0; }
+.cv-note :is(ul, ol) { display: grid; gap: var(--space-1); padding-left: var(--space-5); }
+.cv-note ol { font-variant-numeric: tabular-nums; }
+.cv-note ul { list-style: disc; }
+.cv-note li::marker { color: var(--text-secondary); }
+.cv-note strong { font-weight: 600; }
+.cv-note .md-h { font: var(--type-label); letter-spacing: var(--tracking-label); color: var(--text-secondary); }
+.cv-note code { font: var(--type-mono); letter-spacing: 0; padding: 1px var(--space-1); border-radius: var(--radius-mark); background: var(--surface-pressed); -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+.cv-note pre { padding: var(--space-2) var(--space-3); border-radius: var(--radius-control-sm); background: var(--surface-sunken); overflow-x: auto; }
+.cv-note pre code { padding: 0; background: transparent; }
+
+/* The one quiet line a note's actions fold into. */
+.cv-fold-line {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) 6px; justify-self: start; max-width: calc(100% + var(--space-2)); min-height: var(--control-sm);
+  margin: 0 0 0 calc(-1 * var(--space-2)); padding: 2px var(--space-2); border: 0; border-radius: var(--radius-control-sm);
+  font: var(--type-secondary); color: var(--text-secondary); background: transparent; text-align: left; font-variant-numeric: tabular-nums;
+  transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard);
+}
+.cv-fold-line:hover { background: var(--surface-hover); color: var(--text-primary); }
+.cv-fold-line:active { background: var(--surface-pressed); }
+.cv-fold-line .disclose { margin: 0 2px 0 -3px; }
+.cv-fold-line .gist { display: contents; }
+.cv-fold-line .part { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.cv-fold-line .count { font-weight: 550; color: var(--text-primary); white-space: nowrap; }
+.cv-fold-line .sep { color: var(--text-tertiary); }
+.cv-fold-line .chip .glyph { color: var(--text-tertiary); }
+.cv-fold-line.is-still { margin-left: 0; padding-left: 0; }
+.cv-fold-line.is-still:hover { background: transparent; color: var(--text-secondary); }
+.cv-fold-line.is-still .live { margin-left: 0; }
+.cv-fold-line .live { display: inline-flex; align-items: center; gap: 6px; margin-left: var(--space-1); font-weight: 550; color: var(--status-working-text); }
+.cv-turn > .fold { margin-top: calc(-1 * var(--space-1)); }
+.cv-turn > .fold[data-open="true"] { margin-top: 0; }
+.cv-turn > .fold { transition: grid-template-rows var(--motion-standard) var(--ease-standard), margin-top var(--motion-standard) var(--ease-standard); }
+
+/* The actions, unfolded: the rows the step draws today, in the catalog's shapes. */
+.cv-acts { display: grid; gap: 1px; margin: 0; padding: 0; list-style: none; }
+.cv-acts .sl-msg, .before .sl-msg { grid-template-columns: 52px 16px minmax(0, 1fr); }
+.cv-acts .sl-msg { padding-left: 0; border-left: 0; }
+.cv-acts .sl-msg .time { text-align: left; }
+.sl-msg.tool .text b { font-weight: 600; color: var(--text-primary); }
+.sl-msg.result .text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; white-space: pre-wrap; }
+.cv-acts > li.fail { padding: var(--space-1) 0; }
+
+/* A failure is never folded: its own row, with the first lines of what came back. */
+.cv-fail { display: grid; gap: var(--space-1); padding: var(--space-2) var(--space-3); border-radius: var(--radius-row); background: var(--tint-problem); box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--status-problem) 30%, transparent); }
+.cv-fail-head { display: flex; align-items: center; gap: var(--space-2); min-width: 0; font: var(--type-secondary); }
+.cv-fail-head .glyph { width: 13px; height: 13px; color: var(--status-problem); }
+.cv-fail-head .word { font-weight: 550; color: var(--status-problem-text); white-space: nowrap; }
+.cv-fail-head .what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--type-mono); font-size: 11.5px; color: var(--text-primary); }
+.cv-fail-head .what b { font-weight: 600; }
+.cv-fail-head .times { margin-left: auto; font-weight: 550; color: var(--status-problem-text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cv-fail pre { margin: 0; padding-bottom: 2px; overflow-x: auto; font: var(--type-mono); font-size: 11.5px; color: var(--text-secondary); white-space: pre; }
+.cv-turn[data-open="true"] > .cv-fail { display: none; }
+
+/* Small blocks a note carries when its actions made something to show. */
+.cv-chips { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.cv-chips .chip .mono { font-family: var(--font-mono); font-weight: 500; }
+.cv-tests { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3); font: var(--type-secondary); font-weight: 550; font-variant-numeric: tabular-nums; }
+.cv-tests span { display: inline-flex; align-items: center; gap: 5px; color: var(--role-text); }
+.cv-tests .glyph { width: 12px; height: 12px; color: var(--role); }
+.cv-checks { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.cv-checks li { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: center; gap: var(--space-2); min-height: var(--control-sm); }
+.cv-checks .chip { justify-content: center; padding: 0; }
+.cv-checks .test { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--type-mono); font-size: 11.5px; color: var(--text-secondary); }
+.cv-checks .more { font: var(--type-secondary); color: var(--text-tertiary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cv-shots { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.cv-shots .attachment { width: 88px; align-content: start; padding: 0; gap: var(--space-1); font: var(--type-caption); color: var(--text-secondary); }
+.cv-shots .attachment .name { white-space: normal; overflow-wrap: anywhere; }
+.cv-shots .attachment .thumb { height: 52px; border-radius: var(--radius-control-sm); background: var(--surface-raised); }
+.cv-shots .attachment .thumb .glyph { width: 18px; height: 18px; color: var(--text-tertiary); }
+
+/* Before: today's rows. Nothing here but the catalog's step list. */
+.before .sl-msg .text { max-width: none; }
+
+@container (max-width: 560px) {
+  .run-group > .run-head { grid-template-columns: 36px 26px 1fr auto; }
+  .run-group .run-body { margin-left: var(--space-3); padding-left: var(--space-2); padding-right: 0; }
+  .tl-day { padding-left: var(--space-2); }
+  .sl-step .cv, .sl-msgs { margin-left: var(--space-2); padding-left: var(--space-2); padding-right: var(--space-2); }
+  .sl-msgs { margin-left: 0; }
+  .audit .audit-word { display: none; }
+  .audit .glyph { margin-left: 0; }
+  .sl-head .sl-dur { min-width: 0; }
+  .run-group .run-head .badge { display: none; }
+}
+@media (max-width: 520px) {
+  .proto-window { padding: var(--space-3) var(--space-2); border-radius: var(--radius-card); }
+}
+</style>
+
+<div class="proto ds" id="proto">
+  <header class="proto-bar sz-sm" id="bar"></header>
+  <main class="proto-canvas">
+    <p class="proto-caption" id="said"></p>
+    <div class="proto-window" id="window"></div>
+  </main>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  const SCENES = [{"key":"impl","tab":"Implementation","said":"TP-1644 · Write the code · real transcript","run":{"title":"Implementation run 1","time":"12:29","verdict":"passed","dur":"20 min","meta":"Claude Opus 5.5 · 20 min · Pushed and opened PR #1070"},"step":{"name":"Write the code","state":"passed","dur":"11 min"},"after":[{"name":"Hand off: push and open the pull request","state":"passed","dur":"1 min"}],"events":[{"k":"tool","t":"12:29:57","n":"Bash","d":"git log --oneline -1 && ls docs/design/prototypes/home-queue/ docs/design/proto…","c":"run","r":"2b54b5258 TP-1610 Home: drag and drop reorders the queue, and dragging a ticket onto a slot starts it (#1068)\ndocs/design/prototypes/home-queue/:\nREADME.md\nindex.html\npage.css\npage.js\nshots\n\ndocs/desi…"},{"k":"tool","t":"12:30:01","n":"Bash","d":"grep -n -i \"done\\|finish\" docs/design/prototypes/home-queue/README.md | sed -n…","c":"run","r":"1:# Home: the queue (approved 2026-11-21; epics, dependencies and Recently done approved 2026-11-23)\n11:Three sections on one 32 pt gutter: **Recently done**, **In progress**, then **Queue**.\n13:### R…"},{"k":"tool","t":"12:30:03","n":"Bash","d":"sed -n 135,145p docs/design/prototypes/home-queue/README.md; sed -n 280,364p do…","c":"run","r":"- Stop on a card frees the slot. A stopped sub-ticket goes back to the head of its epic, and the epic\n  becomes number 1 in the queue, open.\n- A free slot goes, in queue order, to the first ticket tha…"},{"k":"tool","t":"12:30:06","n":"Bash","d":"sed -n 260,275p docs/design/prototypes/home-queue/page.js; sed -n 300,320p docs…","c":"run","r":": '<div class=\"prbox\"><span class=\"sub\">Not opened yet<\/span><\/div><div><\/div><div><\/div>') +\n      \"<\/div><\/div>\";\n    const cls = \"slot role-\" + t.role + (t.fresh ? \" arrive\" : \"\"), label = 'tabinde…"},{"k":"note","t":"12:30:07","text":"Let me view the render and the existing Swift code."},{"k":"tool","t":"12:30:07","n":"Read","d":"docs/design/prototypes/home-queue/shots/recently-done-2x.png","f":"recently-done-2x.png","c":"read","img":1},{"k":"tool","t":"12:30:09","n":"Bash","d":"cd macos && wc -l Sources/SymphonyBarCore/HomeRead.swift Sources/SymphonyBarCor…","c":"run","r":"441 Sources/SymphonyBarCore/HomeRead.swift\n     349 Sources/SymphonyBarCore/HomeQueue.swift\n     483 Sources/SymphonyBar/HomeView.swift\n     378 Sources/SymphonyBarUI/DesignSystem/QueueRow.swift…"},{"k":"tool","t":"12:30:11","n":"Bash","d":"cat Sources/SymphonyBarCore/HomeRead.swift","c":"run","r":"import Foundation\n\n/// The Director's Home read (`GET /api/v1/home`, `docs/control-api.md` § Slot entries and queue rows), as the queue's\n/// Home draws it (TP-1609, `docs/design/prototypes/home-queue…"},{"k":"tool","t":"12:30:13","n":"Bash","d":"cd ~/symphony-workspaces/symphony/TP-1644 && cat lib/symphony_elixir/home/recen…","c":"run","r":"defmodule SymphonyElixir.Home.RecentlyDone do\n  @moduledoc \"\"\"\n  The Recently done list of the Home read (`recently_done` of `GET /api/v1/home`,\n  `docs/design/prototypes/home-queue/README.md`, sectio…"},{"k":"note","t":"12:30:14","text":"The read has every field. Now the model and view."},{"k":"tool","t":"12:30:15","n":"Bash","d":"cd macos && cat Sources/SymphonyBarCore/HomeQueue.swift","c":"run","r":"import Combine\nimport Foundation\n\n/// The queue's rows as Home has read them so far (TP-1609): the pages of `GET /api/v1/home` by index, for the saved view\n/// in force, with how many rows the filter…"},{"k":"tool","t":"12:30:16","n":"Bash","d":"cat Sources/SymphonyBar/HomeView.swift","c":"run","r":"import SwiftUI\nimport SymphonyBarCore\nimport SymphonyBarUI\n\n/// What Home's controls do (TP-1609).\nstruct HomeActions {\n    /// A slot card's move: Answer…, Message… or Stop.\n    var slotMove: (HomeSl…"},{"k":"tool","t":"12:30:17","n":"Bash","d":"cat Sources/SymphonyBarUI/DesignSystem/QueueRow.swift; sed -n 1,80p Sources/Sym…","c":"run","r":"import AppKit\nimport SwiftUI\nimport SymphonyBarCore\n\n// The Home queue's row (TP-1608, `.vlist .row` in `docs/design/prototypes/home-queue/page.css`): one ticket of the\n// queue on one line. Its posit…"},{"k":"tool","t":"12:30:19","n":"Bash","d":"sed -n 80,232p Sources/SymphonyBarUI/DesignSystem/SegmentedControl.swift; grep…","c":"run","r":".overlay {\n                        Capsule().strokeBorder(\n                            (disabled ? DesignTokens.Surface.separator : DesignTokens.Surface.strong).color,\n                            line…"},{"k":"tool","t":"12:30:22","n":"Bash","d":"grep -ln \"enum HomeQueue\" Sources/SymphonyBarCore/*.swift; sed -n 1864,1900p So…","c":"run","r":"Sources/SymphonyBarCore/DesignTokens.swift\nSources/SymphonyBarCore/HomeQueueDrag.swift\n        /// accent's tint.\n        public static let dropRing: Double = 2\n        public static let dropTint = Co…"},{"k":"tool","t":"12:30:25","n":"Bash","d":"sed -n 1,200p Sources/SymphonyBarUI/DesignSystem/Collapsible.swift","c":"run","r":"import SwiftUI\nimport SymphonyBarCore\n\n// The catalog's Collapsible card and its fold (`docs/design/catalog/stories.js`, the Collapsible card's `render` and\n// `fold()`; `.collapsible`, `.fold-head` a…"},{"k":"tool","t":"12:30:38","n":"Bash","d":"grep -rln \"HomeQueueModel\\|HomeRead\\b\\|HomePageContent\\|HomeQueueFixture\" Tests…","c":"run","r":"Sources/SymphonyBar/HomeView.swift\nSources/SymphonyBar/SymphonyWindowView.swift\nSources/SymphonyBarCore/APIFixtures.swift\nSources/SymphonyBarCore/HomeQueue.swift\nSources/SymphonyBarCore/HomeQueueDrag.…"},{"k":"tool","t":"12:30:41","n":"Bash","d":"cat Sources/SymphonyBarCore/HomeQueueFixture.swift; ls Tests/Fixtures/director-…","c":"run","r":"import Foundation\n\n/// The Home read served from a generated queue (TP-1609), for the tests and QA: `<dir>/api/v1/home.queue.json` holds the\n/// slots, the queue's first rows as written, and how many…"},{"k":"note","t":"12:30:46","text":"I've confirmed the Home read already gives every field Recently done needs. Next I'm reading the fixture and test setup, then I'll write the Swift code."},{"k":"tool","t":"12:30:47","n":"Bash","d":"find Tests/Fixtures/director-app/home-queue Tests/Fixtures/director-app/home-qu…","c":"run","r":"Tests/Fixtures/director-app/home-queue/api/v1/views.json\nTests/Fixtures/director-app/home-queue/api/v1/state.json\nTests/Fixtures/director-app/home-queue/api/v1/inbox.json\nTests/Fixtures/director-app/h…"},{"k":"tool","t":"12:30:49","n":"Bash","d":"sed -n 100,150p Sources/SymphonyBarCore/APIFixtures.swift; grep -n \"homeQueueFi…","c":"run","r":"}\n            return (answer ?? Data(#\"{\"ok\":true}\"#.utf8), response(url, statusCode: 200))\n        }\n        guard let fixture else {\n            if let file, let other = otherFixture(of: file) {…"},{"k":"tool","t":"12:31:11","n":"Bash","d":"grep -n \"home?\\|offset=\" Tests/home-drag-test.py Tests/SymphonyBarUITests/*.swi…","c":"run","r":"Tests/SymphonyBarUITests/HomeQueueCardsTests.swift:16:        return try XCTUnwrap(HomeRead.decode(fixture.answer(query: \"offset=0&limit=100\", views: nil, slotCount: nil)))\n122:    lazy var homeQueue…"},{"k":"tool","t":"12:31:13","n":"Bash","d":"sed -n 110,135p Sources/SymphonyBar/SymphonyWindowView.swift; sed -n 1260,1360p…","c":"run","r":"@Published var peekIssues: [String: Data] = [:]\n    var peekReads = PeekReads()\n    /// The consequence sheet shown (C17); nothing changes Linear until its button is pressed.\n    @Published var inboxS…"},{"k":"tool","t":"12:31:15","n":"Bash","d":"cat Sources/SymphonyBarCore/SettingsStore.swift | sed -n 1,134p; sed -n 1,200p…","c":"run","r":"import Foundation\n\n/// The subset of UserDefaults the settings store uses, so tests can swap it out.\npublic protocol KeyValueStore: AnyObject {\n    func object(forKey defaultName: String) -> Any?…"},{"k":"tool","t":"12:31:18","n":"Bash","d":"grep -rn \"KeyValueStore\\|defaults:\" Sources --include=*.swift | grep -v \"^Sourc…","c":"run","r":"(eval):1: no matches found: --include=*.swift"},{"k":"tool","t":"12:31:20","n":"Bash","d":"grep -rn \"KeyValueStore\\|defaults: \\|QAMode.defaults\\|qaDefaults\" Sources | gre…","c":"run","r":"Sources/SymphonyBar/AppDelegate.swift:25:    private let setupOnStart = SetupOnStartStore(defaults: AppStores.current.defaults)\nSources/SymphonyBar/AppDelegate.swift:27:    private lazy var inboxNotif…"},{"k":"tool","t":"12:31:24","n":"Bash","d":"grep -rn \"class .*: KeyValueStore\" Tests Sources | head; grep -n \"struct\\|func…","c":"run","r":"Tests/SymphonyBarCoreTests/TestDoubles.swift:4:final class MemoryKeyValueStore: KeyValueStore {\nSources/SymphonyBarCore/QAMode.swift:351:public final class PropertyListFileStore: KeyValueStore {\n9:fin…"},{"k":"tool","t":"12:31:26","n":"Bash","d":"sed -n 1,140p Tests/SymphonyBarUITests/HomeQueueComponentsTests.swift; sed -n 1…","c":"run","r":"import AppKit\nimport SwiftUI\nimport XCTest\n@testable import SymphonyBarCore\n@testable import SymphonyBarUI\n\n/// TP-1608: the Home queue's components in the design system, before the Home screen uses t…"},{"k":"note","t":"12:31:27","text":"Now the Gallery: where stories live."},{"k":"tool","t":"12:31:28","n":"Bash","d":"ls Gallery; grep -n \"queue-row\\|QueueRow\" Gallery/*.swift Gallery/component-var…","c":"run","r":"BadgeStories.swift\nButtonStories.swift\nConductorBlockStories.swift\nConductorStories.swift\nControlBarStories.swift\nEntries.swift\nFactoryStories.swift\nFieldStories.swift\nFiles.swift\nFoldStories.swift\nGa…"},{"k":"tool","t":"12:31:32","n":"Bash","d":"cat Gallery/HomeQueueStories.swift; sed -n 200,235p Gallery/Entries.swift; sed…","c":"run","r":"// The Home queue's components (TP-1608), drawn from the approved prototype's sample tickets\n// (`docs/design/prototypes/home-queue/page.js`): the slot card now, waiting on the person, needing attenti…"},{"k":"tool","t":"12:31:35","n":"Bash","d":"sed -n 1,60p Gallery/Files.swift; sed -n 1,40p Gallery/Entries.swift; grep -n \"…","c":"run","r":"// Where the gallery reads the committed fixtures its stories are drawn from, and the shared files `--check` lists.\n//\n// In a checkout that is the source tree itself, found from this file's place in…"},{"k":"tool","t":"12:31:38","n":"Bash","d":"sed -n 1,60p Tests/SymphonyBarCoreTests/CatalogCounterpartsTests.swift; sed -n…","c":"run","r":"import Foundation\nimport JavaScriptCore\nimport XCTest\n\n/// The counterpart check (TP-1511): every component and section of the design catalog (`docs/design/catalog/stories.js`)\n/// is in the table of…"},{"k":"tool","t":"12:31:40","n":"Bash","d":"sed -n 990,1060p Gallery/main.swift; grep -n \"situationsAPI =\" Gallery/*.swift","c":"run","r":"},\n        width: 640\n    )\n}\n\n/// Home (TP-1609) from the `home-queue` fixture's generated queue, on the fixture's clock, in a window `window` wide less\n/// its sidebar: three slots (one working, one…"},{"k":"tool","t":"12:31:43","n":"Bash","d":"cd ~/symphony-workspaces/symphony/TP-1644 && git ls-files | grep -i \"home-queue…","c":"run","r":"macos/Tests/Fixtures/director-app/home-queue-drag/api/v1/home.queue.json\nmacos/Tests/Fixtures/director-app/home-queue-drag/api/v1/inbox.json\nmacos/Tests/Fixtures/director-app/home-queue-drag/api/v1/in…"},{"k":"note","t":"12:32:06","text":"Read and design are settled: the Home read already gives every field, so no server change is needed. Writing the Swift core types and model now."},{"k":"tool","t":"12:32:07","n":"Bash","d":"cd macos && grep -rn \"enum AppStores\\|struct AppStores\\|class AppStores\" Source…","c":"run","r":"Sources/SymphonyBarCore/QAMode.swift:202:public struct AppStores {\nSources/SymphonyBarCore/ReposList.swift:217:    private static func parseDate(_ text: String) -> Date? {\nSources/SymphonyBarCore/Repo…"},{"k":"tool","t":"12:32:14","n":"ticket_record","d":"{\"type\": \"brief.written\", \"payload\": {\"text\": \"Home gets the Recently done sect…","c":"other","r":"{\n  \"event\": {\n    \"actor\": {\n      \"kind\": \"agent\",\n      \"run_id\": \"37c133d6-7a29-4c67-968d-4f3f1fed98ab-1795534088196396-170754\",\n      \"run_kind\": \"implementation\"\n    },\n    \"artifacts\": [],…"},{"k":"note","t":"12:32:15","text":"Now HomeRead additions."},{"k":"tool","t":"12:32:36","n":"Bash","d":"python3 - <<'EOF' p='Sources/SymphonyBarCore/HomeRead.swift' s=open(p).read() s…","c":"run","r":"Sources/SymphonyBarCore/SymphonyState.swift:1071:    static func parseDate(_ text: String) -> Date? {\nSources/SymphonyBarCore/ReposList.swift:217:    private static func parseDate(_ text: String) -> D…"},{"k":"note","t":"12:32:39","text":"Now the Core state, remembered choices and the \"when\" text."},{"k":"tool","t":"12:32:56","n":"Write","d":"macos/Sources/SymphonyBarCore/RecentlyDone.swift","f":"RecentlyDone.swift","c":"write","r":"File created successfully at: macos/Sources/SymphonyBarCore/RecentlyDone.swift (file state is current in your context — no need to Read it back)"},{"k":"note","t":"12:32:57","text":"Now the model wiring."},{"k":"tool","t":"12:33:09","n":"Bash","d":"python3 - <<'EOF' p='Sources/SymphonyBarCore/HomeQueue.swift' s=open(p).read()…","c":"run","r":"(Bash completed with no output)"},{"k":"tool","t":"12:33:17","n":"Bash","d":"python3 - <<'EOF' p='Sources/SymphonyBarCore/HomeQueue.swift' s=open(p).read()…","c":"run","r":"(Bash completed with no output)"},{"k":"note","t":"12:33:26","text":"Now the design tokens and the done row. Checking the row lead and status glyphs first."},{"k":"tool","t":"12:33:28","n":"Bash","d":"grep -rn \"enum RowLead\" -A25 Sources/SymphonyBarUI | head -40; grep -n \"struct…","c":"run","r":"Sources/SymphonyBarUI/ListComponents.swift:14:public enum RowLead: Equatable {\nSources/SymphonyBarUI/ListComponents.swift-15-    case none\nSources/SymphonyBarUI/ListComponents.swift-16-    case blank…"},{"k":"tool","t":"12:33:30","n":"Bash","d":"grep -n \"enum Status\" -A40 Sources/SymphonyBarCore/DesignTokens.swift | grep -n…","c":"run","r":"2:195-        case you, working, problem, done, idle, forced\n7:200-            case .you: .statusYou\n8:201-            case .working: .statusWorking\n9:202-            case .problem: .statusProblem\n10:…"},{"k":"tool","t":"12:33:32","n":"Bash","d":"sed -n 233,245p Sources/SymphonyBarCore/DesignTokens.swift; sed -n 1565,1580p S…","c":"run","r":"public var symbol: String {\n            switch self {\n            case .you: \"person.crop.circle.badge.exclamationmark\"\n            case .working: \"circle.dotted.circle\"\n            case .problem: \"ex…"},{"k":"tool","t":"12:33:36","n":"Bash","d":"grep -n '\"flag' Sources/SymphonyBarCore/DesignTokens.swift Sources/SymphonyBarU…","c":"run","r":"Sources/SymphonyBarCore/DesignTokens.swift:1573:        public static let epicSymbol = \"flag.pattern.checkered\"\nSources/SymphonyBarUI/DesignSystem.swift-900-        case plain\nSources/SymphonyBarUI/De…"},{"k":"tool","t":"12:33:39","n":"Bash","d":"sed -n 907,920p Sources/SymphonyBarUI/DesignSystem.swift; grep -n \"pullRequestS…","c":"run","r":"public var symbol: String? {\n            switch self {\n            case .plain, .label: nil\n            case .repo: SymphonyView.repos.symbol\n            case .epic: SymphonyView.initiatives.symbol…"},{"k":"note","t":"12:33:40","text":"Adding tokens."},{"k":"tool","t":"12:33:47","n":"Bash","d":"python3 - <<'EOF' p='Sources/SymphonyBarCore/DesignTokens.swift' s=open(p).read…","c":"run","r":"(Bash completed with no output)"},{"k":"note","t":"12:33:50","text":"Now the done row and the section head components."},{"k":"tool","t":"12:34:12","n":"Write","d":"macos/Sources/SymphonyBarUI/DesignSystem/DoneRow.swift","f":"DoneRow.swift","c":"write","r":"File created successfully at: macos/Sources/SymphonyBarUI/DesignSystem/DoneRow.swift (file state is current in your context — no need to Read it back)"},{"k":"tool","t":"12:34:16","n":"Bash","d":"grep -n \"enum FoldKeys\" -A12 Sources/SymphonyBarUI/*.swift Sources/SymphonyBarU…","c":"run","r":"Sources/SymphonyBarUI/StepList.swift:14:public enum FoldKeys {\nSources/SymphonyBarUI/StepList.swift-15-    public static let keys: Set<KeyEquivalent> = [.return, .space]\nSources/SymphonyBarUI/StepList…"},{"k":"tool","t":"12:34:35","n":"Write","d":"macos/Sources/SymphonyBarUI/DesignSystem/RecentlyDoneHead.swift","f":"RecentlyDoneHead.swift","c":"write","r":"File created successfully at: macos/Sources/SymphonyBarUI/DesignSystem/RecentlyDoneHead.swift (file state is current in your context — no need to Read it back)"},{"k":"tool","t":"12:34:37","n":"Bash","d":"grep -rn \"func focusRing\" Sources/SymphonyBarUI | head -3; grep -n \"enum StateS…","c":"run","r":"Sources/SymphonyBarUI/InteractionStyles.swift:14:    public func focusRing<S: InsettableShape>(_ shown: Bool, _ shape: S, offset: Double = DesignTokens.FocusRing.offset) -> some View {\n934:    public…"},{"k":"tool","t":"12:34:41","n":"Bash","d":"grep -n \"static func\\|^public enum\\|^enum\\|^public struct\" Sources/SymphonyBarU…","c":"run","r":"7:public enum HomeSlotMove: Equatable {\n15:public enum HomeQueueCards {\n20:    public static func status(_ ticket: HomeRead.SlotTicket) -> DesignTokens.Status {\n27:    public static func stage(_ ticke…"},{"k":"tool","t":"12:34:45","n":"Bash","d":"python3 - <<'EOF' p='Sources/SymphonyBarUI/HomeQueueCards.swift' s=open(p).read…","c":"run","r":"(Bash completed with no output)"},{"k":"note","t":"12:34:55","text":"I'm now adding the section to Home's page itself; checking how other views handle scroll views in offscreen renders first."},{"k":"tool","t":"12:34:56","n":"Bash","d":"grep -rn \"offscreenSnapshot\" Sources | grep -v \"@Entry\" | head -12","c":"run","r":"Sources/SymphonyBarUI/QuestionBlock.swift:600:    @Environment(\\.offscreenSnapshot) private var offscreenSnapshot\nSources/SymphonyBarUI/QuestionBlock.swift:643:            if offscreenSnapshot {\nSourc…"},{"k":"tool","t":"12:35:10","n":"Write","d":"macos/Sources/SymphonyBarUI/HomeRecentlyDone.swift","f":"HomeRecentlyDone.swift","c":"write","r":"File created successfully at: macos/Sources/SymphonyBarUI/HomeRecentlyDone.swift (file state is current in your context — no need to Read it back)"},{"k":"tool","t":"12:35:12","n":"Bash","d":"grep -rn \"var offscreenSnapshot\" Sources; grep -n \"offscreenSnapshot\" Gallery/m…","c":"run","r":"Sources/SymphonyBarUI/QuestionBlock.swift:600:    @Environment(\\.offscreenSnapshot) private var offscreenSnapshot\nSources/SymphonyBarUI/DesignSystem.swift:63:    @Entry public var offscreenSnapshot =…"},{"k":"note","t":"12:35:13","text":"Now wire it into HomeView and the window model."},{"k":"tool","t":"12:35:20","n":"Bash","d":"python3 - <<'EOF' p='Sources/SymphonyBar/HomeView.swift' s=open(p).read() def r…","c":"run","r":"120-    /// Home's slots and paged queue (`GET /api/v1/home`, TP-1609), read again after each state poll while Home shows and\n121-    /// at once on each `event: queue` of the live channel.\n122:    la…"},{"k":"note","t":"12:35:25","text":"Checking the server's ETag covers the Recently done block, so a finish isn't answered with \"unchanged\"."},{"k":"tool","t":"12:35:25","n":"Bash","d":"cd ~/symphony-workspaces/symphony/TP-1644 && grep -n \"def home\\b\\|def home(\" -A…","c":"run","r":"3:lib/symphony_elixir_web/controllers/observability_api_controller.ex-100-         {:ok, done} <- Home.RecentlyDone.page(params),\n6:lib/symphony_elixir_web/controllers/observability_api_controller.ex-…"},{"k":"note","t":"12:35:28","text":"ETag is computed over the whole payload, so a finish produces a fresh read. Now the fixture: serving Recently done from `home.queue.json`."},{"k":"tool","t":"12:35:37","n":"Bash","d":"cd macos && python3 - <<'EOF' p='Sources/SymphonyBarCore/HomeQueueFixture.swift…","c":"run","r":"(Bash completed with no output)"},{"k":"note","t":"12:35:43","text":"Now the fixture data. Reading the home-queue fixture to add done entries."},{"k":"tool","t":"12:35:45","n":"Bash","d":"cd macos/Tests/Fixtures/director-app/home-queue/api/v1 && python3 -c \" import j…","c":"run","r":"['slots', 'rows', 'generated']\n[{\"identifier\": \"TP-1590\", \"title\": \"App updates stop the factory for most of an hour when several tickets merge in a row\", \"phase\": \"Code Review\", \"repo_key\": \"symphony…"},{"k":"tool","t":"12:35:56","n":"Bash","d":"cd macos/Tests/Fixtures/director-app && python3 - <<'EOF' import json, shutil,…","c":"run","r":"home-queue/api/v1/home.queue.json:5\nhome-queue-done-week/api/v1/home.queue.json:0\n     \"title\": \"Protected-change requests: ask, allow, record\"\n    },\n    \"today\": false\n   },\n   {\n    \"issue_id\": \"is…"},{"k":"tool","t":"12:36:00","n":"Bash","d":"cd ~/symphony-workspaces/symphony/TP-1644 && git grep -n \"home-queue-drag\\|\\\"ho…","c":"run","r":"macos/Gallery/Entries.swift:239:        id: \"home\", title: \"Home\", kind: .screen, prefixes: [\"home-queue\", \"home-unavailable\"],\nmacos/Gallery/main.swift:2114:            renderScreen(scheme, to: \"home…"},{"k":"tool","t":"12:36:01","n":"Bash","d":"git grep -n \"director-app/\" -- 'priv' 'docs' 'test' 'lib' | head -8; git grep -…","c":"run","r":"docs/configuration.md:2153:| `qa_launch_app` | starts the private copy of the bundle with `SYMPHONY_BAR_QA_ROOT` set to a private directory ([QA mode](../macos/README.md#qa-mode)) and `SYMPHONY_QA_OPE…"},{"k":"tool","t":"12:36:03","n":"Bash","d":"sed -n 1410,1425p macos/README.md; grep -n \"home-queue\\|Home (TP-16\" priv/qa_pl…","c":"run","r":"all read through it, so the app shows Symphony as running (external). The fixtures of a running Symphony\n  are in [`Tests/Fixtures/director-app/running`](Tests/Fixtures/director-app/running), and thos…"},{"k":"tool","t":"12:36:08","n":"Bash","d":"python3 - <<'EOF' p='macos/README.md' s=open(p).read() a=''' empty, dispatch pa…","c":"run","r":"1420:  alone) and `home-queue-drag` (no Recently done, so the section is not drawn; TP-1610's drag and drop: two slots, both taken, a queue of 1,246 tickets whose fourth"},{"k":"note","t":"12:36:14","text":"Now the Gallery stories and entries."},{"k":"tool","t":"12:36:16","n":"Bash","d":"cd macos && sed -n 2100,2125p Gallery/main.swift; grep -n \"home-queue\" Gallery/…","c":"run","r":"initiativeStory(\"TP-1381\", window: window, unfolded: true)\n            }\n            renderScreen(scheme, to: \"initiative-story-window-behind\") { window in\n                initiativeStory(\"TP-1381\", w…"},{"k":"tool","t":"12:36:30","n":"Bash","d":"python3 - <<'EOF' p='Gallery/main.swift' s=open(p).read() def rep(a,b): global…","c":"run","r":"Gallery/main.swift:1025:    .environment(\\.timeZone, utcZone)\nGallery/main.swift:1293:    calendar.timeZone = TimeZone(identifier: \"UTC\")!\nGallery/main.swift:1966:    utc.timeZone = TimeZone(identifie…"},{"k":"tool","t":"12:36:38","n":"Bash","d":"python3 - <<'EOF' p='Gallery/main.swift' s=open(p).read() s=s.replace('.environ…","c":"run","r":"(Bash completed with no output)"},{"k":"note","t":"12:36:40","text":"Now the Gallery stories."},{"k":"tool","t":"12:37:02","n":"Bash","d":"python3 - <<'EOF' p='Gallery/HomeQueueStories.swift' s=open(p).read() def rep(a…","c":"run","r":"True True\n macos/Gallery/component-variations.txt | 11 +++++++++++\n 1 file changed, 11 insertions(+)"},{"k":"tool","t":"12:37:07","n":"Bash","d":"grep -n 'prefixes: \\[[^]]*\"\\(done\\|recently\\|d\"\\|r\"\\)' Gallery/Entries.swift |…","c":"run","r":"230:        id: \"done-row\", title: \"Done row\", kind: .component, prefixes: [\"done-row-\"],\n233:        id: \"recently-done-head\", title: \"Recently done head\", kind: .component, prefixes: [\"recently-done…"},{"k":"tool","t":"12:37:09","n":"Bash","d":"cd ~/symphony-workspaces/symphony/TP-1644 && git grep -n \"home-queue-strip\" | h…","c":"run","r":"macos/Gallery/main.swift:2124:            renderScreen(scheme, to: \"home-queue-strip\") { window in homeQueueStrip(window: window) }"},{"k":"note","t":"12:37:20","text":"Core code is in place. Now updating the existing tests whose expected read paths change, and writing the new ones."},{"k":"tool","t":"12:37:21","n":"Bash","d":"cd macos && grep -rn 'offset=0&limit=100' Tests/ | grep -v Fixtures","c":"run","r":"Tests/SymphonyBarUITests/HomeQueueCardsTests.swift:16:        return try XCTUnwrap(HomeRead.decode(fixture.answer(query: \"offset=0&limit=100\", views: nil, slotCount: nil)))\nTests/SymphonyBarCoreTests/…"},{"k":"tool","t":"12:37:23","n":"Bash","d":"grep -n \"reads\\b\\|calls.reads\\|path\" Tests/SymphonyBarCoreTests/HomeQueueDragTe…","c":"run","r":"39:    /// A page model on the fixtures: reads as the window's client makes them, moves through the control API.\n44:            fetch: { path, _ in\n45:                let (data, response) = fixtures.a…"},{"k":"tool","t":"12:37:30","n":"Bash","d":"python3 - <<'EOF' p='Tests/SymphonyBarCoreTests/HomeReadTests.swift' s=open(p).…","c":"run","r":"(Bash completed with no output)"},{"k":"note","t":"12:37:33","text":"Now the new Core tests for Recently done."},{"k":"tool","t":"12:38:26","n":"Write","d":"macos/Tests/SymphonyBarCoreTests/RecentlyDoneTests.swift","f":"RecentlyDoneTests.swift","c":"write","r":"File created successfully at: macos/Tests/SymphonyBarCoreTests/RecentlyDoneTests.swift (file state is current in your context — no need to Read it back)","x":{"kind":"checks","checks":[{"id":"c1","test":"testTheReadGivesTheRangeBothCountsThePagingAndEachEntry","more":1},{"id":"c2","test":"testTheModelReadsRecentlyDoneWithHomesFirstPage","more":4},{"id":"c3","test":"testTheRangeAndTheFoldAreRememberedAcrossRelaunches","more":0},{"id":"c4","test":"testTodayEmptyKeepsTheHeadWithoutACountOrRows","more":1},{"id":"c5","test":"testATicketThatFinishesShowsAtTheTopOnTheQueueNotice","more":1}]}},{"k":"tool","t":"12:38:44","n":"Bash","d":"python3 - <<'EOF' p='Tests/SymphonyBarCoreTests/RecentlyDoneTests.swift' s=open…","c":"run","r":"(Bash completed with no output)"},{"k":"tool","t":"12:38:47","n":"Bash","d":"grep -rn \"struct ConditionalReads\" -A40 Sources/SymphonyBarCore | head -50","c":"run","r":"Sources/SymphonyBarCore/LiveAPIClient.swift:94:public struct ConditionalReads: Equatable {\nSources/SymphonyBarCore/LiveAPIClient.swift-95-    /// What a read gives the page.\nSources/SymphonyBarCore/Li…"},{"k":"note","t":"12:38:54","text":"Found a subtle bug: switching back to a range whose read was tagged would get \"unchanged\" and leave the list empty. Fixing by forgetting that tag on a pick."},{"k":"tool","t":"12:39:01","n":"Bash","d":"python3 - <<'EOF' p='Sources/SymphonyBarCore/HomeQueue.swift' s=open(p).read()…","c":"run","r":"(Bash completed with no output)"},{"k":"tool","t":"12:39:05","n":"Bash","d":"python3 - <<'EOF' p='Tests/SymphonyBarCoreTests/RecentlyDoneTests.swift' s=open…","c":"run","r":"Sources/SymphonyBarCore/LiveAPIClient.swift:72:public enum ConditionalResult: Equatable {\nSources/SymphonyBarCore/LiveAPIClient.swift-73-    case changed(EndpointResult, etag: String?)\nSources/Symphon…"},{"k":"note","t":"12:39:15","text":"Now the view-level tests. Checking which targets the UI test target can import."},{"k":"tool","t":"12:39:15","n":"Bash","d":"grep -n \"testTarget\" -A6 Package.swift","c":"run","r":"20:        .testTarget(\n21-            name: \"SymphonyBarCoreTests\",\n22-            dependencies: [\"SymphonyBarCore\"],\n23-            // Read from the source tree by path, so the tests also run withou…"},{"k":"tool","t":"12:39:47","n":"Write","d":"macos/Tests/SymphonyBarUITests/RecentlyDoneViewTests.swift","f":"RecentlyDoneViewTests.swift","c":"write","r":"File created successfully at: macos/Tests/SymphonyBarUITests/RecentlyDoneViewTests.swift (file state is current in your context — no need to Read it back)","x":{"kind":"checks","checks":[{"id":"c6","test":"testTheDoneRowDrawsTheCellsThePlaceAsksFor","more":2},{"id":"c2","test":"testTheHeadHasTheTitleTheCountTheRangeControlAndTheChevron","more":1},{"id":"c4","test":"testTheSectionKeepsItsHeadAloneWhenTodayIsEmptyAndIsNotDrawnWhenTheWeekIs","more":1},{"id":"c7","test":"testTheGalleryHasTheDoneRowAndTheHeadWithTheirStories","more":0}]}},{"k":"tool","t":"12:40:03","n":"Bash","d":"sed -n 994,1032p Gallery/main.swift; git diff Sources/SymphonyBar/HomeView.swif…","c":"run","r":"/// Home (TP-1609) from the `home-queue` fixture's generated queue, on the fixture's clock, in a window `window` wide less\n/// its sidebar: Recently done (TP-1644) on `range`, open or `folded`, three…"},{"k":"tool","t":"12:40:09","n":"Bash","d":"python3 - <<'EOF' p='Sources/SymphonyBar/HomeView.swift' s=open(p).read() a='''…","c":"run","r":"(Bash completed with no output)"},{"k":"tool","t":"12:40:14","n":"Bash","d":"grep -n \"TP-1609\\|TP-1610\" README.md | head","c":"run","r":"1420:  alone) and `home-queue-drag` (no Recently done, so the section is not drawn; TP-1610's drag and drop: two slots, both taken, a queue of 1,246 tickets whose fourth"},{"k":"tool","t":"12:40:15","n":"Bash","d":"cd ~/symphony-workspaces/symphony/TP-1644 && git grep -n \"In progress, one card…","c":"run","r":"(Bash completed with no output)"},{"k":"note","t":"12:40:18","text":"Tests and Gallery are written. Reviewing the model diff before committing."},{"k":"tool","t":"12:40:19","n":"Bash","d":"git diff macos/Sources/SymphonyBarCore/HomeQueue.swift | head -150","c":"run","r":"diff --git a/macos/Sources/SymphonyBarCore/HomeQueue.swift b/macos/Sources/SymphonyBarCore/HomeQueue.swift\nindex d06196890..7eb73ffd3 100644\n--- a/macos/Sources/SymphonyBarCore/HomeQueue.swift\n+++ b/m…"},{"k":"note","t":"12:40:25","text":"Two fixes needed: `let path = path(offset)` won't compile (self-referencing initializer), and an unused `Optional.map` result. Fixing both."},{"k":"tool","t":"12:40:28","n":"Bash","d":"cd macos && python3 - <<'EOF' p='Sources/SymphonyBarCore/HomeQueue.swift' s=ope…","c":"run","r":"(Bash completed with no output)"},{"k":"tool","t":"12:40:43","n":"Bash","d":"cd ~/symphony-workspaces/symphony/TP-1644 && git status --short && git add -A &…","c":"run","r":"M macos/Gallery/ButtonStories.swift\n M macos/Gallery/Entries.swift\n M macos/Gallery/HomeQueueStories.swift\n M macos/Gallery/component-variations.txt\n M macos/Gallery/main.swift\n M macos/README.md\n M m…"},{"k":"note","t":"12:40:45","text":"Committed. Syncing with main before ending the step."},{"k":"tool","t":"12:40:45","n":"github_sync_base","d":"","c":"other","r":"{\n  \"base\": \"origin/main\",\n  \"conflicts\": [],\n  \"head\": \"3eeb5a669b0df3dbd6a863f12309801034229f07\",\n  \"message\": \"The branch contains origin/main; there is nothing to commit.\",\n  \"output\": \"Already up…"},{"k":"note","t":"12:40:50","text":"Now the workpad and the step record."},{"k":"tool","t":"12:40:50","n":"linear_get_comments","d":"{\"limit\": 5}","c":"other","r":"[\n  {\n    \"body\": \"<linear_issue_comment_body>\\n## Symphony Workpad\\n\\n```text\\nTonys-MacBook-Pro:~/symphony-workspaces/symphony/TP-1644@unknown\\n```\\n\\n<!-- symphony:workpad:plan:start:e9cf790e3a39 -…"},{"k":"tool","t":"12:41:06","n":"linear_update_comment","d":"{\"comment_id\": \"b6f97fce-5a1a-42b4-93dd-629ab7afffe3\", \"body\": \"## Symphony Wor…","c":"other","r":"{\n  \"data\": {\n    \"commentUpdate\": {\n      \"comment\": {\n        \"bodyLength\": 4044,\n        \"id\": \"b6f97fce-5a1a-42b4-93dd-629ab7afffe3\",\n        \"url\": \"https://linear.app/tonypine/issue/TP-1644/home…"},{"k":"tool","t":"12:41:09","n":"ticket_record","d":"{\"type\": \"step.completed\", \"payload\": {\"step_id\": \"code\", \"mode\": \"delegated\",…","c":"other","e":1,"r":"{\n  \"error\": {\n    \"fields\": [\n      \"summary\"\n    ],\n    \"message\": \"The step.completed payload is not valid: summary.\",\n    \"reason\": \"invalid_payload\",\n    \"schema\": {\n      \"required\": [\n        {\n          \"max\": 200,\n          \"name\": \"step_id\",\n          \"type\": \"string\"\n        },\n        {\n          \"max\": 200,\n          \"name\": \"title\",\n          \"type\": \"string\"\n        },\n        {\n          \"name\": \"mode\",\n          \"type\": \"enum\",\n          \"values\": […"},{"k":"tool","t":"12:41:10","n":"ticket_record","d":"{\"type\": \"step.completed\", \"payload\": {\"step_id\": \"code\", \"mode\": \"delegated\",…","c":"other","r":"{\n  \"event\": {\n    \"actor\": {\n      \"kind\": \"agent\",\n      \"run_id\": \"37c133d6-7a29-4c67-968d-4f3f1fed98ab-1795534088196396-170754\",\n      \"run_kind\": \"implementation\"\n    },\n    \"artifacts\": [],…"},{"k":"tool","t":"12:41:11","n":"ticket_record","d":"{\"type\": \"note\", \"payload\": {\"text\": \"No Elixir change: the Home read already g…","c":"other","r":"{\n  \"event\": {\n    \"actor\": {\n      \"kind\": \"agent\",\n      \"run_id\": \"37c133d6-7a29-4c67-968d-4f3f1fed98ab-1795534088196396-170754\",\n      \"run_kind\": \"implementation\"\n    },\n    \"artifacts\": [],…"},{"k":"note","t":"12:41:20","text":"I've written Recently done for Home and committed it (3eeb5a669). Nothing has been built or run yet: the step list runs the build, the Swift tests and the window tests next. The branch is synced with main and not pushed yet; the push and the pull request come at the hand-off step.\n\n**The Home read:** it already gives every field the section needs, so there is no server change.\n\n**What the app does now:**\n- **Section:** Recently done sits above In progress. The head shows the title, the count for the picked range (hidden at 0), a Today | Week switch and a fold chevron, and clicking the head folds the section. Rows are newest first: check, identifier, title, epic, pull request, repo, and when it finished. Six rows show and the rest scroll inside the section, loading more as you reach the end.\n- **Empty rules:** the section isn't drawn when nothing finished in the last 7 days. On Today with nothing done today, only the head shows, without a count.\n- **Remembered choices:** the range and the fold are saved in the app's settings store, so they survive a relaunch. Defaults are Today and open.\n- **Finishing tickets:** Home's first-page read now asks for Recently done too. Home already reads again on every queue notice, so a ticket that finishes appears at the top without a reload.\n- **Done row:** a shared design-system component. The place that uses it picks the cells after the title: all of them, the pull request and when, or only when.\n- **Gallery:** stories for the done row and the section head, plus Home renders on Week, folded, and Today with nothing done.\n\nI caught and fixed one bug while writing: switching back to a range read earlier could get an \"unchanged\" answer and leave the list empty.\n\nThe epic cell uses the app's own epic icon, the one the epic chip uses, rather than the prototype's flag drawing. QA should look at that when judging the design.\n\n**Tests and fixtures:**\n- New tests cover checks c1–c7, in `RecentlyDoneTests` and `RecentlyDoneViewTests`. Existing Home tests that check the exact read address were updated, since that address now carries the Recently done range.\n- The `home-queue` fixture now has ten tickets done this week, five of them today. A new `home-queue-done-week` fixture has none done today. The drag-and-drop fixture has none in the week, so the drag window test's layout doesn't change.\n\nChecks c8–c11 are QA and design checks, left to the QA pass. I'll record which test proves each of c1–c7 once the step list has run them."}]},{"key":"qa","tab":"QA","said":"TP-1610 · Walk a step 6, 12 · real transcript","run":{"title":"QA run 2","time":"11:39","verdict":"passed","dur":"10 min","meta":"Claude Haiku 5.5 · 10 min · Checks c6 and c12 match the prototype"},"step":{"name":"Walk a step 6, 12","state":"blocked","dur":"3 min"},"after":[{"name":"Design check","state":"blocked","dur":"3 min"}],"events":[{"k":"tool","t":"11:41:26","n":"qa_resize_window","d":"{\"pid\": 35097, \"pass\": \"wide\"}","c":"other","r":"{\n  \"limited\": false,\n  \"method\": \"AXSize\",\n  \"note\": \"The window is 1920×1080 pt on a 2560×1440 pt screen.\",\n  \"ok\": true,\n  \"pass\": \"wide\",\n  \"requested\": {\n    \"h\": 1080,\n    \"w\": 1920\n  },\n  \"scre…"},{"k":"tool","t":"11:41:26","n":"qa_ax_tree","d":"{\"pid\": 35097, \"text\": \"TP-1596\"}","c":"other","r":"{\n  \"matches\": [],\n  \"nodes\": 0,\n  \"truncated\": false\n}"},{"k":"tool","t":"11:41:28","n":"qa_ax_tree","d":"{\"pid\": 35097, \"max_nodes\": 600, \"max_depth\": 30}","c":"other","r":"Error: result (99,004 characters across 2,890 lines) exceeds maximum allowed tokens. Output has been saved to ~/.claude/projects/-Users-tonypine-symphony-workspaces--qa-symphony-TP-1610-d2d6f525af8b/d…"},{"k":"tool","t":"11:41:30","n":"qa_ax_tree","d":"{\"pid\": 35097, \"text\": \"1596\"}","c":"other","r":"{\n  \"matches\": [],\n  \"nodes\": 0,\n  \"truncated\": false\n}"},{"k":"tool","t":"11:41:30","n":"qa_ax_tree","d":"{\"pid\": 35097, \"text\": \"Drag\"}","c":"other","r":"{\n  \"matches\": [],\n  \"nodes\": 0,\n  \"truncated\": false\n}"},{"k":"tool","t":"11:41:32","n":"qa_ax_tree","d":"{\"pid\": 35097, \"role\": \"AXButton\", \"max_nodes\": 100}","c":"other","r":"{\n  \"matches\": [\n    {\n      \"description\": \"Home\",\n      \"frame\": {\n        \"h\": 30,\n        \"w\": 216,\n        \"x\": 8,\n        \"y\": 74\n      },\n      \"help\": \"Home (⌘1)\",\n      \"path\": \"0.0.0.0\",…"},{"k":"tool","t":"11:41:33","n":"qa_check_app","d":"{\"pid\": 35097, \"page\": \"Home\"}","c":"other","r":"{\n  \"crash_reports\": [],\n  \"healthy\": true,\n  \"page\": \"Home\",\n  \"pid\": 35097,\n  \"problems\": [],\n  \"responding\": true,\n  \"root\": 1,\n  \"running\": true,\n  \"window\": {\n    \"h\": 1080,\n    \"w\": 1920\n  }\n}"},{"k":"note","t":"11:41:35","text":"The app opened on Settings, so I'll select Home (⌘1 via the sidebar button) and read the tree."},{"k":"tool","t":"11:41:35","n":"qa_ax_press","d":"{\"pid\": 35097, \"path\": \"0.0.0.0\"}","c":"other","r":"{\n  \"element\": {\n    \"description\": \"Home\",\n    \"frame\": {\n      \"h\": 30,\n      \"w\": 216,\n      \"x\": 8,\n      \"y\": 74\n    },\n    \"help\": \"Home (⌘1)\",\n    \"path\": \"0.0.0.0\",\n    \"role\": \"AXButton\",…"},{"k":"tool","t":"11:41:36","n":"qa_ax_tree","d":"{\"pid\": 35097, \"text\": \"TP-1596\", \"max_nodes\": 300}","c":"other","r":"{\n  \"matches\": [],\n  \"nodes\": 0,\n  \"truncated\": false\n}"},{"k":"tool","t":"11:41:37","n":"qa_ax_tree","d":"{\"pid\": 35097, \"text\": \"Drag handle\"}","c":"other","r":"{\n  \"matches\": [],\n  \"nodes\": 0,\n  \"truncated\": false\n}"},{"k":"tool","t":"11:41:38","n":"Bash","d":"sleep 10; echo done","c":"run","r":"done"},{"k":"tool","t":"11:41:39","n":"qa_ax_tree","d":"{\"pid\": 35097, \"role\": \"AXStaticText\", \"max_nodes\": 300}","c":"other","r":"{\n  \"matches\": [\n    {\n      \"frame\": {\n        \"h\": 16,\n        \"w\": 37,\n        \"x\": 369,\n        \"y\": 44\n      },\n      \"help\": \"Home\",\n      \"path\": \"0.0.1.3.0\",\n      \"role\": \"AXStaticText\",…"},{"k":"tool","t":"11:41:52","n":"qa_key","d":"{\"pid\": 35097, \"key\": \"1\", \"modifiers\": [\"command\"]}","c":"other","r":"{\n  \"focused\": {\n    \"focused\": true,\n    \"frame\": {\n      \"h\": 1080,\n      \"w\": 1920,\n      \"x\": 0,\n      \"y\": 30\n    },\n    \"role\": \"AXWindow\",\n    \"subrole\": \"AXStandardWindow\",\n    \"title\": \"Symph…"},{"k":"tool","t":"11:41:54","n":"Bash","d":"sleep 10; echo done","c":"run","r":"done"},{"k":"tool","t":"11:41:54","n":"qa_ax_tree","d":"{\"pid\": 35097, \"role\": \"AXStaticText\", \"max_nodes\": 300}","c":"other","r":"{\n  \"matches\": [\n    {\n      \"frame\": {\n        \"h\": 16,\n        \"w\": 37,\n        \"x\": 369,\n        \"y\": 44\n      },\n      \"help\": \"Home\",\n      \"path\": \"0.0.1.3.0\",\n      \"role\": \"AXStaticText\",…"},{"k":"note","t":"11:42:06","text":"The app is on default fixtures and shows the \"not set up\" Home, so the queue fixture is missing. The brief's launch needs the `home-queue-drag` fixtures, so I'll relaunch with them."},{"k":"tool","t":"11:42:06","n":"qa_quit_app","d":"{\"pid\": 35097}","c":"other","r":"{\n  \"output\": \"\",\n  \"pid\": 35097,\n  \"quit\": true\n}"},{"k":"tool","t":"11:42:08","n":"qa_launch_app","d":"{\"api_fixtures\": \"macos/Tests/Fixtures/director-app/home-queue-drag\", \"appearan…","c":"other","r":"{\n  \"api_fixtures\": \"~/.symphony-qa/runs/run.cq7XvL/api-fixtures-351554\",\n  \"note\": \"Wait for the window to settle, then call `qa_resize_window` with `pass: \\\"walkthrough\\\"`: it sets the main window t…"},{"k":"tool","t":"11:42:11","n":"qa_resize_window","d":"{\"pid\": 36315, \"pass\": \"wide\"}","c":"other","r":"{\n  \"limited\": false,\n  \"method\": \"AXSize\",\n  \"note\": \"The window is 1920×1080 pt on a 2560×1440 pt screen.\",\n  \"ok\": true,\n  \"pass\": \"wide\",\n  \"requested\": {\n    \"h\": 1080,\n    \"w\": 1920\n  },\n  \"scre…"},{"k":"tool","t":"11:42:11","n":"Bash","d":"sleep 10; echo done","c":"run","r":"done"},{"k":"tool","t":"11:42:23","n":"qa_ax_tree","d":"{\"pid\": 36315, \"text\": \"TP-1596\", \"max_nodes\": 300}","c":"other","r":"{\n  \"matches\": [],\n  \"nodes\": 0,\n  \"truncated\": false\n}"},{"k":"tool","t":"11:42:23","n":"qa_ax_tree","d":"{\"pid\": 36315, \"role\": \"AXStaticText\", \"max_nodes\": 300}","c":"other","r":"{\n  \"matches\": [\n    {\n      \"frame\": {\n        \"h\": 16,\n        \"w\": 53,\n        \"x\": 369,\n        \"y\": 44\n      },\n      \"help\": \"Settings\",\n      \"path\": \"0.0.1.3.0\",\n      \"role\": \"AXStaticText\",…"},{"k":"tool","t":"11:42:25","n":"qa_key","d":"{\"pid\": 36315, \"key\": \"1\", \"modifiers\": [\"command\"]}","c":"other","r":"{\n  \"focused\": {\n    \"focused\": true,\n    \"frame\": {\n      \"h\": 1080,\n      \"w\": 1920,\n      \"x\": 0,\n      \"y\": 30\n    },\n    \"role\": \"AXWindow\",\n    \"subrole\": \"AXStandardWindow\",\n    \"title\": \"Symph…"},{"k":"tool","t":"11:42:26","n":"Bash","d":"sleep 10; echo done","c":"run","r":"done"},{"k":"tool","t":"11:42:38","n":"qa_ax_tree","d":"{\"pid\": 36315, \"text\": \"TP-1596\", \"max_nodes\": 300}","c":"other","r":"{\n  \"matches\": [\n    {\n      \"description\": \"Number 3, TP-1596, An answer that says back to Code Review unchanged moves the ticket there\",\n      \"frame\": {\n        \"h\": 34,\n        \"w\": 1416,…"},{"k":"tool","t":"11:42:38","n":"qa_ax_tree","d":"{\"pid\": 36315, \"role\": \"AXStaticText\", \"max_nodes\": 300}","c":"other","r":"{\n  \"matches\": [\n    {\n      \"frame\": {\n        \"h\": 16,\n        \"w\": 37,\n        \"x\": 369,\n        \"y\": 44\n      },\n      \"help\": \"Home\",\n      \"path\": \"0.0.1.3.0\",\n      \"role\": \"AXStaticText\",…"},{"k":"note","t":"11:42:42","text":"Home is loaded with the queue. Row 3 (TP-1596) is at path `0.0.2.0.0.6.2`. I'll read the row's children and the at-rest frames for its cells."},{"k":"tool","t":"11:42:43","n":"qa_ax_tree","d":"{\"pid\": 36315, \"text\": \"Start\", \"max_nodes\": 50}","c":"other","r":"{\n  \"matches\": [\n    {\n      \"frame\": {\n        \"h\": 57,\n        \"w\": 313,\n        \"x\": 1069,\n        \"y\": 205\n      },\n      \"path\": \"0.0.2.0.0.2.9\",\n      \"role\": \"AXStaticText\",\n      \"value\": \"The…"},{"k":"tool","t":"11:42:43","n":"qa_ax_tree","d":"{\"pid\": 36315, \"text\": \"An answer that says back\", \"max_nodes\": 50}","c":"other","r":"{\n  \"matches\": [\n    {\n      \"description\": \"Number 3, TP-1596, An answer that says back to Code Review unchanged moves the ticket there\",\n      \"frame\": {\n        \"h\": 34,\n        \"w\": 1416,…"},{"k":"tool","t":"11:42:43","n":"qa_screenshot","d":"{\"pid\": 36315, \"name\": \"home-rest\"}","c":"shot","r":"{\n  \"files\": [\n    {\n      \"frame\": {\n        \"h\": 1080,\n        \"w\": 1920,\n        \"x\": 0,\n        \"y\": 30\n      },\n      \"path\": \"qa-evidence/home-rest.png\",\n      \"title\": \"Symphony\",\n      \"window…","shots":["home-rest"]},{"k":"tool","t":"11:42:46","n":"Read","d":"qa-evidence/home-rest.png","f":"home-rest.png","c":"read","img":1},{"k":"note","t":"11:42:52","text":"The rest screenshot shows row 3 with its number, identifier, title, Rework badge and repo, and no Start button. Next I'll hover row 3's title, not the number, and check whether the number cell turns into the handle."},{"k":"tool","t":"11:42:52","n":"qa_hover","d":"{\"pid\": 36315, \"x\": 596, \"y\": 789}","c":"other","r":"{\n  \"cursor\": null,\n  \"cursor_unreadable\": \"The current cursor matches none of the system's named cursors: the app draws its own image there.\",\n  \"hovered\": {\n    \"x\": 596,\n    \"y\": 789\n  },\n  \"note\":…"},{"k":"tool","t":"11:42:52","n":"Bash","d":"sleep 3; echo done","c":"run","r":"done"},{"k":"tool","t":"11:42:57","n":"qa_screenshot","d":"{\"pid\": 36315, \"name\": \"home-row-hovered\"}","c":"shot","r":"{\n  \"files\": [\n    {\n      \"frame\": {\n        \"h\": 1080,\n        \"w\": 1920,\n        \"x\": 0,\n        \"y\": 30\n      },\n      \"path\": \"qa-evidence/home-row-hovered.png\",\n      \"title\": \"Symphony\",…","shots":["home-row-hovered"]},{"k":"tool","t":"11:42:57","n":"qa_ax_tree","d":"{\"pid\": 36315, \"text\": \"Drag handle\", \"max_nodes\": 50}","c":"other","r":"{\n  \"matches\": [\n    {\n      \"description\": \"Number 3, TP-1596, An answer that says back to Code Review unchanged moves the ticket there\",\n      \"frame\": {\n        \"h\": 34,\n        \"w\": 1416,…"},{"k":"tool","t":"11:43:00","n":"Read","d":"qa-evidence/home-row-hovered.png","f":"home-row-hovered.png","c":"read","img":1},{"k":"note","t":"11:43:01","text":"Hover looks right: the grip glyph sits in row 3's number cell, Start replaces the repo, and the row has its hover background. Next I'll make 2x crops of the number cell and identifier in both screenshots, and list the Gallery entries."},{"k":"tool","t":"11:43:02","n":"Bash","d":"for n in home-rest home-row-hovered; do sips -c 60 300 --cropOffset 1000 0 qa-e…","c":"run","r":"/private/tmp/symphony-qa-53fcdd53adfd/claude-501/home-rest-crop-2x.png\n  /private/tmp/symphony-qa-53fcdd53adfd/claude-501/home-row-hovered-crop-2x.png\ntotal 0\ndrwx------@ 4 tonypine  wheel  128 Nov 24…"},{"k":"tool","t":"11:43:02","n":"qa_gallery","d":"","c":"other","r":"{\n  \"affected\": {\n    \"all\": true,\n    \"entries\": [\n      \"button\",\n      \"icon-button\",\n      \"inline-refusal\",\n      \"card\",\n      \"badge\",\n      \"status-dot\",\n      \"keyboard-hint\",\n      \"panel-ch…"},{"k":"note","t":"11:43:16","text":"All six drop-target stories are listed. Next I'll draw the queue-row, slot-card and slot-strip-line entries, light and dark."},{"k":"tool","t":"11:43:16","n":"qa_gallery","d":"{\"entry\": \"queue-row\"}","c":"shot","r":"{\n  \"files\": [\n    {\n      \"path\": \"qa-evidence/queue-row-1-light.png\"\n    },\n    {\n      \"path\": \"qa-evidence/queue-row-1-dark.png\"\n    }\n  ]\n}","shots":["queue-row-1-light","queue-row-1-dark"]},{"k":"tool","t":"11:43:16","n":"qa_gallery","d":"{\"entry\": \"slot-card\"}","c":"shot","r":"{\n  \"files\": [\n    {\n      \"path\": \"qa-evidence/slot-card-1-light.png\"\n    },\n    {\n      \"path\": \"qa-evidence/slot-card-1-dark.png\"\n    }\n  ]\n}","shots":["slot-card-1-light","slot-card-1-dark"]},{"k":"tool","t":"11:43:16","n":"qa_gallery","d":"{\"entry\": \"slot-strip-line\"}","c":"shot","r":"{\n  \"files\": [\n    {\n      \"path\": \"qa-evidence/slot-strip-line-1-light.png\"\n    },\n    {\n      \"path\": \"qa-evidence/slot-strip-line-1-dark.png\"\n    }\n  ]\n}","shots":["slot-strip-line-1-light","slot-strip-line-1-dark"]},{"k":"tool","t":"11:43:51","n":"Read","d":"qa-evidence/queue-row-1-light.png","f":"queue-row-1-light.png","c":"read","img":1},{"k":"tool","t":"11:43:51","n":"Read","d":"qa-evidence/queue-row-1-dark.png","f":"queue-row-1-dark.png","c":"read","img":1},{"k":"tool","t":"11:43:53","n":"Read","d":"qa-evidence/slot-card-1-light.png","f":"slot-card-1-light.png","c":"read","img":1},{"k":"tool","t":"11:43:53","n":"Read","d":"qa-evidence/slot-strip-line-1-light.png","f":"slot-strip-line-1-light.png","c":"read","img":1},{"k":"tool","t":"11:43:54","n":"Read","d":"docs/design/prototypes/home-queue/page.css","f":"page.css","c":"read","r":"30\t.slot-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); container-type: inline-size; }\n31\t.slot { display: grid; gap: var(--space-4); min-width: 0; padding: var(--sp…"},{"k":"tool","t":"11:44:01","n":"Read","d":"docs/design/prototypes/home-queue/shots/queue-epic-drag-2x.png","f":"queue-epic-drag-2x.png","c":"read","img":1},{"k":"tool","t":"11:44:01","n":"Read","d":"qa-evidence/slot-card-1-dark.png","f":"slot-card-1-dark.png","c":"read","img":1},{"k":"tool","t":"11:44:01","n":"Read","d":"qa-evidence/slot-strip-line-1-dark.png","f":"slot-strip-line-1-dark.png","c":"read","img":1},{"k":"tool","t":"11:44:11","n":"Bash","d":"cd qa-evidence && sips -c 90 420 --cropOffset 1960 100 queue-row-1-light.png --…","c":"run","e":1,"r":"Exit code 1\n(eval):1: no matches found: /tmp/symphony-qa-53fcdd53adfd/claude-501/*.png\n(eval):1: no matches found: /private/tmp/symphony-qa-53fcdd53adfd/claude-501/*.png"},{"k":"tool","t":"11:44:13","n":"Bash","d":"echo \"TMPDIR=$TMPDIR\"; ls -la \"$TMPDIR\" 2>&1 | head; ls -la /private/tmp/sympho…","c":"run","r":"TMPDIR=/tmp/symphony-qa-53fcdd53adfd/claude-501\ntotal 0\ndrwx------@ 4 tonypine  wheel  128 Nov 24 11:41 -Users-tonypine-symphony-workspaces--qa-symphony-TP-1610-d2d6f525af8b\ndrwx------@ 5 tonypine  wh…"},{"k":"note","t":"11:44:20","text":"The `sips` crops were not written (the output files don't exist), so the 2x crops the briefs ask for were not produced. I'll record the evidence for each screenshot I took, then write the answer."},{"k":"tool","t":"11:44:21","n":"ticket_record","d":"{\"type\": \"evidence\", \"payload\": {\"step\": 6, \"caption\": \"Step 6: Home at rest, r…","c":"other","e":1,"r":"{\n  \"error\": {\n    \"fields\": [\n      \"step\"\n    ],\n    \"message\": \"The evidence payload is not valid: step.\",\n    \"reason\": \"invalid_payload\",\n    \"schema\": {\n      \"required\": [\n        {\n          \"max\": 500,\n          \"name\": \"caption\",\n          \"type\": \"string\"\n        }\n      ],\n      \"optional\": [\n        {\n          \"name\": \"artifacts\",\n          \"type\": \"list\",\n          \"item\": {\n            \"type\": \"string\"\n          }\n        },\n        {\n          \"name\": \"proof\"…"},{"k":"tool","t":"11:44:22","n":"ticket_record","d":"{\"type\": \"evidence\", \"payload\": {\"step\": 6, \"caption\": \"Step 6: Home with the p…","c":"other","e":1,"r":"{\n  \"error\": {\n    \"fields\": [\n      \"step\"\n    ],\n    \"message\": \"The evidence payload is not valid: step.\",\n    \"reason\": \"invalid_payload\",\n    \"schema\": {\n      \"required\": [\n        {\n          \"max\": 500,\n          \"name\": \"caption\",\n          \"type\": \"string\"\n        }\n      ],\n      \"optional\": [\n        {\n          \"name\": \"artifacts\",\n          \"type\": \"list\",\n          \"item\": {\n            \"type\": \"string\"\n          }\n        },\n        {\n          \"name\": \"proof\"…"},{"k":"tool","t":"11:44:22","n":"ticket_record","d":"{\"type\": \"evidence\", \"payload\": {\"step\": 6, \"caption\": \"Step 6: Gallery queue-r…","c":"other","e":1,"r":"{\n  \"error\": {\n    \"fields\": [\n      \"step\"\n    ],\n    \"message\": \"The evidence payload is not valid: step.\",\n    \"reason\": \"invalid_payload\",\n    \"schema\": {\n      \"required\": [\n        {\n          \"max\": 500,\n          \"name\": \"caption\",\n          \"type\": \"string\"\n        }\n      ],\n      \"optional\": [\n        {\n          \"name\": \"artifacts\",\n          \"type\": \"list\",\n          \"item\": {\n            \"type\": \"string\"\n          }\n        },\n        {\n          \"name\": \"proof\"…"},{"k":"tool","t":"11:44:23","n":"ticket_record","d":"{\"type\": \"evidence\", \"payload\": {\"step\": 6, \"caption\": \"Step 6: Gallery queue-r…","c":"other","e":1,"r":"{\n  \"error\": {\n    \"fields\": [\n      \"step\"\n    ],\n    \"message\": \"The evidence payload is not valid: step.\",\n    \"reason\": \"invalid_payload\",\n    \"schema\": {\n      \"required\": [\n        {\n          \"max\": 500,\n          \"name\": \"caption\",\n          \"type\": \"string\"\n        }\n      ],\n      \"optional\": [\n        {\n          \"name\": \"artifacts\",\n          \"type\": \"list\",\n          \"item\": {\n            \"type\": \"string\"\n          }\n        },\n        {\n          \"name\": \"proof\"…"},{"k":"tool","t":"11:44:24","n":"ticket_record","d":"{\"type\": \"evidence\", \"payload\": {\"step\": 12, \"caption\": \"Step 12: Gallery slot-…","c":"other","e":1,"r":"{\n  \"error\": {\n    \"fields\": [\n      \"step\"\n    ],\n    \"message\": \"The evidence payload is not valid: step.\",\n    \"reason\": \"invalid_payload\",\n    \"schema\": {\n      \"required\": [\n        {\n          \"max\": 500,\n          \"name\": \"caption\",\n          \"type\": \"string\"\n        }\n      ],\n      \"optional\": [\n        {\n          \"name\": \"artifacts\",\n          \"type\": \"list\",\n          \"item\": {\n            \"type\": \"string\"\n          }\n        },\n        {\n          \"name\": \"proof\"…"},{"k":"tool","t":"11:44:24","n":"ticket_record","d":"{\"type\": \"evidence\", \"payload\": {\"step\": 12, \"caption\": \"Step 12: Gallery slot-…","c":"other","e":1,"r":"{\n  \"error\": {\n    \"fields\": [\n      \"step\"\n    ],\n    \"message\": \"The evidence payload is not valid: step.\",\n    \"reason\": \"invalid_payload\",\n    \"schema\": {\n      \"required\": [\n        {\n          \"max\": 500,\n          \"name\": \"caption\",\n          \"type\": \"string\"\n        }\n      ],\n      \"optional\": [\n        {\n          \"name\": \"artifacts\",\n          \"type\": \"list\",\n          \"item\": {\n            \"type\": \"string\"\n          }\n        },\n        {\n          \"name\": \"proof\"…"},{"k":"tool","t":"11:44:25","n":"ticket_record","d":"{\"type\": \"evidence\", \"payload\": {\"step\": 12, \"caption\": \"Step 12: Gallery slot-…","c":"other","e":1,"r":"{\n  \"error\": {\n    \"fields\": [\n      \"step\"\n    ],\n    \"message\": \"The evidence payload is not valid: step.\",\n    \"reason\": \"invalid_payload\",\n    \"schema\": {\n      \"required\": [\n        {\n          \"max\": 500,\n          \"name\": \"caption\",\n          \"type\": \"string\"\n        }\n      ],\n      \"optional\": [\n        {\n          \"name\": \"artifacts\",\n          \"type\": \"list\",\n          \"item\": {\n            \"type\": \"string\"\n          }\n        },\n        {\n          \"name\": \"proof\"…"},{"k":"tool","t":"11:44:25","n":"ticket_record","d":"{\"type\": \"evidence\", \"payload\": {\"step\": 12, \"caption\": \"Step 12: Gallery slot-…","c":"other","e":1,"r":"{\n  \"error\": {\n    \"fields\": [\n      \"step\"\n    ],\n    \"message\": \"The evidence payload is not valid: step.\",\n    \"reason\": \"invalid_payload\",\n    \"schema\": {\n      \"required\": [\n        {\n          \"max\": 500,\n          \"name\": \"caption\",\n          \"type\": \"string\"\n        }\n      ],\n      \"optional\": [\n        {\n          \"name\": \"artifacts\",\n          \"type\": \"list\",\n          \"item\": {\n            \"type\": \"string\"\n          }\n        },\n        {\n          \"name\": \"proof\"…"},{"k":"note","t":"11:44:27","text":"The evidence schema wants `step` as a string and `environment` as an enum. I'll record the eight again in that shape."},{"k":"tool","t":"11:44:27","n":"ticket_record","d":"{\"type\": \"evidence\", \"payload\": {\"step\": \"6\", \"environment\": \"fixture\", \"status…","c":"other","r":"{\n  \"event\": {\n    \"actor\": {\n      \"kind\": \"agent\",\n      \"run_id\": \"a5d1c6ef-0832-4586-bdae-700bd73c4939-1795531133076813-134531\",\n      \"run_kind\": \"qa\"\n    },\n    \"artifacts\": [\n      {\n        \"i…","x":{"kind":"evidence","step":"6","status":"pass"}},{"k":"tool","t":"11:44:28","n":"ticket_record","d":"{\"type\": \"evidence\", \"payload\": {\"step\": \"6\", \"environment\": \"fixture\", \"status…","c":"other","r":"{\n  \"event\": {\n    \"actor\": {\n      \"kind\": \"agent\",\n      \"run_id\": \"a5d1c6ef-0832-4586-bdae-700bd73c4939-1795531133076813-134531\",\n      \"run_kind\": \"qa\"\n    },\n    \"artifacts\": [\n      {\n        \"i…","x":{"kind":"evidence","step":"6","status":"pass"}},{"k":"tool","t":"11:44:28","n":"ticket_record","d":"{\"type\": \"evidence\", \"payload\": {\"step\": \"6\", \"environment\": \"fixture\", \"status…","c":"other","r":"{\n  \"event\": {\n    \"actor\": {\n      \"kind\": \"agent\",\n      \"run_id\": \"a5d1c6ef-0832-4586-bdae-700bd73c4939-1795531133076813-134531\",\n      \"run_kind\": \"qa\"\n    },\n    \"artifacts\": [\n      {\n        \"i…","x":{"kind":"evidence","step":"6","status":"pass"}},{"k":"tool","t":"11:44:29","n":"ticket_record","d":"{\"type\": \"evidence\", \"payload\": {\"step\": \"6\", \"environment\": \"fixture\", \"status…","c":"other","r":"{\n  \"event\": {\n    \"actor\": {\n      \"kind\": \"agent\",\n      \"run_id\": \"a5d1c6ef-0832-4586-bdae-700bd73c4939-1795531133076813-134531\",\n      \"run_kind\": \"qa\"\n    },\n    \"artifacts\": [\n      {\n        \"i…","x":{"kind":"evidence","step":"6","status":"pass"}},{"k":"tool","t":"11:44:30","n":"ticket_record","d":"{\"type\": \"evidence\", \"payload\": {\"step\": \"12\", \"environment\": \"fixture\", \"statu…","c":"other","r":"{\n  \"event\": {\n    \"actor\": {\n      \"kind\": \"agent\",\n      \"run_id\": \"a5d1c6ef-0832-4586-bdae-700bd73c4939-1795531133076813-134531\",\n      \"run_kind\": \"qa\"\n    },\n    \"artifacts\": [\n      {\n        \"i…","x":{"kind":"evidence","step":"12","status":"pass"}},{"k":"tool","t":"11:44:30","n":"ticket_record","d":"{\"type\": \"evidence\", \"payload\": {\"step\": \"12\", \"environment\": \"fixture\", \"statu…","c":"other","r":"{\n  \"event\": {\n    \"actor\": {\n      \"kind\": \"agent\",\n      \"run_id\": \"a5d1c6ef-0832-4586-bdae-700bd73c4939-1795531133076813-134531\",\n      \"run_kind\": \"qa\"\n    },\n    \"artifacts\": [\n      {\n        \"i…","x":{"kind":"evidence","step":"12","status":"pass"}},{"k":"tool","t":"11:44:31","n":"ticket_record","d":"{\"type\": \"evidence\", \"payload\": {\"step\": \"12\", \"environment\": \"fixture\", \"statu…","c":"other","r":"{\n  \"event\": {\n    \"actor\": {\n      \"kind\": \"agent\",\n      \"run_id\": \"a5d1c6ef-0832-4586-bdae-700bd73c4939-1795531133076813-134531\",\n      \"run_kind\": \"qa\"\n    },\n    \"artifacts\": [\n      {\n        \"i…","x":{"kind":"evidence","step":"12","status":"pass"}},{"k":"tool","t":"11:44:31","n":"ticket_record","d":"{\"type\": \"evidence\", \"payload\": {\"step\": \"12\", \"environment\": \"fixture\", \"statu…","c":"other","r":"{\n  \"event\": {\n    \"actor\": {\n      \"kind\": \"agent\",\n      \"run_id\": \"a5d1c6ef-0832-4586-bdae-700bd73c4939-1795531133076813-134531\",\n      \"run_kind\": \"qa\"\n    },\n    \"artifacts\": [\n      {\n        \"i…","x":{"kind":"evidence","step":"12","status":"pass"}},{"k":"tool","t":"11:44:34","n":"qa_quit_app","d":"{\"pid\": 36315}","c":"other","r":"{\n  \"output\": \"symphony-qa-appearance: light\\nsymphony-qa-appearance: light\\n2026-11-24 14:42:10.489 SymphonyBar[36315:1128655] NSRequiresAquaSystemAppearance=YES\\n\",\n  \"pid\": 36315,\n  \"quit\": true\n}"},{"k":"tool","t":"11:44:43","n":"Bash","d":"mkdir -p /tmp/symphony-qa-53fcdd53adfd && cat > /tmp/symphony-qa-53fcdd53adfd/s…","c":"run","r":"written","x":{"kind":"answer","steps":[{"step":"6","status":"blocked"},{"step":"12","status":"blocked"}]}},{"k":"note","t":"11:44:47","text":"Both steps are `blocked`, not `pass`. I judged everything the briefs describe, but the 2x crops they require were never written: the `sips` crops produced no output file, so the close-up checks are missing.\n\n**Step 6 (c6, hover):** blocked on the crop requirement only.\n- With the pointer on row 3 (TP-1596), the number cell shows the grip glyph (the tree reports value \"Drag handle\"), Start replaces the repo, and the row gets its hover background.\n- Identifier, title and Rework badge sit at the same x as at rest, and the row frame is unchanged (359,772, 1416×34). Per-child frames aren't exposed by the accessibility tree, so \"nothing shifts\" rests on that and on the screenshots.\n- The Gallery dark queue-row shows the same handle-for-number swap.\n- All six drop-target and dragged variations are listed.\n\n**Step 12 (c12, drop targets):** blocked on the close-up crops only.\n- Light and dark Gallery pictures match the prototype's CSS (page.css lines 38, 112, 128): a 2 pt accent drop line inset by the row padding with glow, and a 2 pt accent ring with glow and accent tint on the slot card, empty slot and strip line. Nothing else in those shapes changes from rest.\n- The row left behind is dimmed in the drop-line picture.\n- One thing to check: the \"dragged\" picture shows the grabbed row as a lifted white card with a shadow, not dimmed. The prototype CSS I read has no lift style, so the reviewer may want to compare that against `index.html`, which I did not open.\n\n**Process notes:**\n- The app first launched on default fixtures and showed \"not set up\". I quit it and relaunched with `home-queue-drag`, light, fixture; that relaunch (PID 36315) is the one I judged, and it is now quit.\n- Evidence events are recorded for all eight screenshots. The first attempt was rejected for a `step` type error and was re-recorded with string steps.\n- The answer is at `/tmp/symphony-qa-53fcdd53adfd/symphony-step-answer-walk_6_12.json`.\n\nTo turn these into passes, someone needs to make the 2x crops (the `sips` writes fail in this sandbox) or capture the stories at a larger scale."}]},{"key":"silent","tab":"Silent stretch","said":"Synthesized from the Implementation scene · the red test run is invented","run":{"title":"Implementation run 1","time":"12:29","verdict":"running","dur":"9 min so far","meta":"Claude Opus 5.5 · 9 min so far"},"step":{"name":"Write the code","state":"current","dur":"9 min so far"},"after":[],"live":true,"events":[{"k":"tool","t":"12:29:57","n":"Bash","d":"git log --oneline -1 && ls docs/design/prototypes/home-queue/ docs/design/proto…","c":"run","r":"2b54b5258 TP-1610 Home: drag and drop reorders the queue, and dragging a ticket onto a slot starts it (#1068)\ndocs/design/prototypes/home-queue/:\nREADME.md\nindex.html\npage.css\npage.js\nshots\n\ndocs/desi…"},{"k":"tool","t":"12:30:01","n":"Bash","d":"grep -n -i \"done\\|finish\" docs/design/prototypes/home-queue/README.md | sed -n…","c":"run","r":"1:# Home: the queue (approved 2026-11-21; epics, dependencies and Recently done approved 2026-11-23)\n11:Three sections on one 32 pt gutter: **Recently done**, **In progress**, then **Queue**.\n13:### R…"},{"k":"tool","t":"12:30:03","n":"Bash","d":"sed -n 135,145p docs/design/prototypes/home-queue/README.md; sed -n 280,364p do…","c":"run","r":"- Stop on a card frees the slot. A stopped sub-ticket goes back to the head of its epic, and the epic\n  becomes number 1 in the queue, open.\n- A free slot goes, in queue order, to the first ticket tha…"},{"k":"tool","t":"12:30:06","n":"Bash","d":"sed -n 260,275p docs/design/prototypes/home-queue/page.js; sed -n 300,320p docs…","c":"run","r":": '<div class=\"prbox\"><span class=\"sub\">Not opened yet<\/span><\/div><div><\/div><div><\/div>') +\n      \"<\/div><\/div>\";\n    const cls = \"slot role-\" + t.role + (t.fresh ? \" arrive\" : \"\"), label = 'tabinde…"},{"k":"tool","t":"12:30:07","n":"Read","d":"docs/design/prototypes/home-queue/shots/recently-done-2x.png","f":"recently-done-2x.png","c":"read","img":1},{"k":"tool","t":"12:30:09","n":"Bash","d":"cd macos && wc -l Sources/SymphonyBarCore/HomeRead.swift Sources/SymphonyBarCor…","c":"run","r":"441 Sources/SymphonyBarCore/HomeRead.swift\n     349 Sources/SymphonyBarCore/HomeQueue.swift\n     483 Sources/SymphonyBar/HomeView.swift\n     378 Sources/SymphonyBarUI/DesignSystem/QueueRow.swift…"},{"k":"tool","t":"12:30:11","n":"Bash","d":"cat Sources/SymphonyBarCore/HomeRead.swift","c":"run","r":"import Foundation\n\n/// The Director's Home read (`GET /api/v1/home`, `docs/control-api.md` § Slot entries and queue rows), as the queue's\n/// Home draws it (TP-1609, `docs/design/prototypes/home-queue…"},{"k":"tool","t":"12:30:13","n":"Bash","d":"cd ~/symphony-workspaces/symphony/TP-1644 && cat lib/symphony_elixir/home/recen…","c":"run","r":"defmodule SymphonyElixir.Home.RecentlyDone do\n  @moduledoc \"\"\"\n  The Recently done list of the Home read (`recently_done` of `GET /api/v1/home`,\n  `docs/design/prototypes/home-queue/README.md`, sectio…"},{"k":"tool","t":"12:30:15","n":"Bash","d":"cd macos && cat Sources/SymphonyBarCore/HomeQueue.swift","c":"run","r":"import Combine\nimport Foundation\n\n/// The queue's rows as Home has read them so far (TP-1609): the pages of `GET /api/v1/home` by index, for the saved view\n/// in force, with how many rows the filter…"},{"k":"tool","t":"12:30:16","n":"Bash","d":"cat Sources/SymphonyBar/HomeView.swift","c":"run","r":"import SwiftUI\nimport SymphonyBarCore\nimport SymphonyBarUI\n\n/// What Home's controls do (TP-1609).\nstruct HomeActions {\n    /// A slot card's move: Answer…, Message… or Stop.\n    var slotMove: (HomeSl…"},{"k":"tool","t":"12:30:17","n":"Bash","d":"cat Sources/SymphonyBarUI/DesignSystem/QueueRow.swift; sed -n 1,80p Sources/Sym…","c":"run","r":"import AppKit\nimport SwiftUI\nimport SymphonyBarCore\n\n// The Home queue's row (TP-1608, `.vlist .row` in `docs/design/prototypes/home-queue/page.css`): one ticket of the\n// queue on one line. Its posit…"},{"k":"tool","t":"12:30:19","n":"Bash","d":"sed -n 80,232p Sources/SymphonyBarUI/DesignSystem/SegmentedControl.swift; grep…","c":"run","r":".overlay {\n                        Capsule().strokeBorder(\n                            (disabled ? DesignTokens.Surface.separator : DesignTokens.Surface.strong).color,\n                            line…"},{"k":"tool","t":"12:30:22","n":"Bash","d":"grep -ln \"enum HomeQueue\" Sources/SymphonyBarCore/*.swift; sed -n 1864,1900p So…","c":"run","r":"Sources/SymphonyBarCore/DesignTokens.swift\nSources/SymphonyBarCore/HomeQueueDrag.swift\n        /// accent's tint.\n        public static let dropRing: Double = 2\n        public static let dropTint = Co…"},{"k":"tool","t":"12:30:25","n":"Bash","d":"sed -n 1,200p Sources/SymphonyBarUI/DesignSystem/Collapsible.swift","c":"run","r":"import SwiftUI\nimport SymphonyBarCore\n\n// The catalog's Collapsible card and its fold (`docs/design/catalog/stories.js`, the Collapsible card's `render` and\n// `fold()`; `.collapsible`, `.fold-head` a…"},{"k":"tool","t":"12:30:38","n":"Bash","d":"grep -rln \"HomeQueueModel\\|HomeRead\\b\\|HomePageContent\\|HomeQueueFixture\" Tests…","c":"run","r":"Sources/SymphonyBar/HomeView.swift\nSources/SymphonyBar/SymphonyWindowView.swift\nSources/SymphonyBarCore/APIFixtures.swift\nSources/SymphonyBarCore/HomeQueue.swift\nSources/SymphonyBarCore/HomeQueueDrag.…"},{"k":"tool","t":"12:30:41","n":"Bash","d":"cat Sources/SymphonyBarCore/HomeQueueFixture.swift; ls Tests/Fixtures/director-…","c":"run","r":"import Foundation\n\n/// The Home read served from a generated queue (TP-1609), for the tests and QA: `<dir>/api/v1/home.queue.json` holds the\n/// slots, the queue's first rows as written, and how many…"},{"k":"tool","t":"12:30:47","n":"Bash","d":"find Tests/Fixtures/director-app/home-queue Tests/Fixtures/director-app/home-qu…","c":"run","r":"Tests/Fixtures/director-app/home-queue/api/v1/views.json\nTests/Fixtures/director-app/home-queue/api/v1/state.json\nTests/Fixtures/director-app/home-queue/api/v1/inbox.json\nTests/Fixtures/director-app/h…"},{"k":"tool","t":"12:30:49","n":"Bash","d":"sed -n 100,150p Sources/SymphonyBarCore/APIFixtures.swift; grep -n \"homeQueueFi…","c":"run","r":"}\n            return (answer ?? Data(#\"{\"ok\":true}\"#.utf8), response(url, statusCode: 200))\n        }\n        guard let fixture else {\n            if let file, let other = otherFixture(of: file) {…"},{"k":"tool","t":"12:31:11","n":"Bash","d":"grep -n \"home?\\|offset=\" Tests/home-drag-test.py Tests/SymphonyBarUITests/*.swi…","c":"run","r":"Tests/SymphonyBarUITests/HomeQueueCardsTests.swift:16:        return try XCTUnwrap(HomeRead.decode(fixture.answer(query: \"offset=0&limit=100\", views: nil, slotCount: nil)))\n122:    lazy var homeQueue…"},{"k":"tool","t":"12:31:13","n":"Bash","d":"sed -n 110,135p Sources/SymphonyBar/SymphonyWindowView.swift; sed -n 1260,1360p…","c":"run","r":"@Published var peekIssues: [String: Data] = [:]\n    var peekReads = PeekReads()\n    /// The consequence sheet shown (C17); nothing changes Linear until its button is pressed.\n    @Published var inboxS…"},{"k":"tool","t":"12:31:15","n":"Bash","d":"cat Sources/SymphonyBarCore/SettingsStore.swift | sed -n 1,134p; sed -n 1,200p…","c":"run","r":"import Foundation\n\n/// The subset of UserDefaults the settings store uses, so tests can swap it out.\npublic protocol KeyValueStore: AnyObject {\n    func object(forKey defaultName: String) -> Any?…"},{"k":"tool","t":"12:31:18","n":"Bash","d":"grep -rn \"KeyValueStore\\|defaults:\" Sources --include=*.swift | grep -v \"^Sourc…","c":"run","r":"(eval):1: no matches found: --include=*.swift"},{"k":"tool","t":"12:31:20","n":"Bash","d":"grep -rn \"KeyValueStore\\|defaults: \\|QAMode.defaults\\|qaDefaults\" Sources | gre…","c":"run","r":"Sources/SymphonyBar/AppDelegate.swift:25:    private let setupOnStart = SetupOnStartStore(defaults: AppStores.current.defaults)\nSources/SymphonyBar/AppDelegate.swift:27:    private lazy var inboxNotif…"},{"k":"note","t":"12:32:06","text":"Read and design are settled: the Home read already gives every field, so no server change is needed. Writing the Swift core types and model now."},{"k":"tool","t":"12:32:14","n":"ticket_record","d":"{\"type\": \"brief.written\", \"payload\": {\"text\": \"Home gets the Recently done sect…","c":"other","r":"{\n  \"event\": {\n    \"actor\": {\n      \"kind\": \"agent\",\n      \"run_id\": \"37c133d6-7a29-4c67-968d-4f3f1fed98ab-1795534088196396-170754\",\n      \"run_kind\": \"implementation\"\n    },\n    \"artifacts\": [],…"},{"k":"note","t":"12:37:33","text":"Now the new Core tests for Recently done."},{"k":"tool","t":"12:38:26","n":"Write","d":"macos/Tests/SymphonyBarCoreTests/RecentlyDoneTests.swift","f":"RecentlyDoneTests.swift","c":"write","r":"File created successfully at: macos/Tests/SymphonyBarCoreTests/RecentlyDoneTests.swift (file state is current in your context — no need to Read it back)","x":{"kind":"checks","checks":[{"id":"c1","test":"testTheReadGivesTheRangeBothCountsThePagingAndEachEntry","more":1},{"id":"c2","test":"testTheModelReadsRecentlyDoneWithHomesFirstPage","more":4},{"id":"c3","test":"testTheRangeAndTheFoldAreRememberedAcrossRelaunches","more":0},{"id":"c4","test":"testTodayEmptyKeepsTheHeadWithoutACountOrRows","more":1},{"id":"c5","test":"testATicketThatFinishesShowsAtTheTopOnTheQueueNotice","more":1}]}},{"k":"tool","t":"12:38:41","n":"Bash","c":"run","d":"cd macos && swift test --disable-sandbox --build-system native --filter RecentlyDoneTests","e":1,"r":"Test Case '-[SymphonyBarCoreTests.RecentlyDoneTests testPickingWeekReadsTheWeekWithItsCount]' started.\nmacos/Tests/SymphonyBarCoreTests/RecentlyDoneTests.swift:142: error: -[SymphonyBarCoreTests.RecentlyDoneTests testPickingWeekReadsTheWeekWithItsCount] : XCTAssertEqual failed: (\"[]\") is not equal to (\"[\"TP-988\", \"TP-985\", \"TP-981\"]\")\nTest Case '-[SymphonyBarCoreTests.RecentlyDoneTests testPickingWeekReadsTheWeekWithItsCount]' failed (0.012 seconds).\nExecuted 12 tests, with 1 failure (0 unexpected) in 0.214 (0.221) seconds","x":{"kind":"tests","passed":11,"failed":1}},{"k":"note","t":"12:38:54","text":"Found a subtle bug: switching back to a range whose read was tagged would get \"unchanged\" and leave the list empty. Fixing by forgetting that tag on a pick."},{"k":"tool","t":"12:39:01","n":"Bash","d":"python3 - <<'EOF' p='Sources/SymphonyBarCore/HomeQueue.swift' s=open(p).read()…","c":"run","r":"(Bash completed with no output)"},{"k":"tool","t":"12:39:05","n":"Bash","d":"python3 - <<'EOF' p='Tests/SymphonyBarCoreTests/RecentlyDoneTests.swift' s=open…","c":"run","r":"Sources/SymphonyBarCore/LiveAPIClient.swift:72:public enum ConditionalResult: Equatable {\nSources/SymphonyBarCore/LiveAPIClient.swift-73-    case changed(EndpointResult, etag: String?)\nSources/Symphon…"}]},{"key":"review","tab":"Code Review","said":"TP-1644 · PR #1070 · real transcript","run":null,"states":{"running":{"run":{"title":"Code Review run 1","time":"12:50","verdict":"running","dur":"1 min so far","meta":"Claude Opus 5.5 · 1 min so far"}},"finished":{"after":{"title":"Code Review run 1","time":"12:50","verdict":"request-changes","dur":"2 min","meta":"Claude Opus 5.5 · 2 min · 675K tokens"},"before":{"title":"Code Review run 1","time":"12:50","verdict":"today-green","dur":"2 min","meta":"Claude Opus 5.5 · 2 min · 675K tokens · Pushed and handed off","empty":"This run recorded no steps."}}},"step":null,"after":[],"events":[{"k":"tool","t":"12:50:21","n":"Bash","d":"git diff 2b54b5258..HEAD -- macos/Sources/SymphonyBarCore/HomeRead.swift macos/…","c":"run","r":"diff --git a/macos/Sources/SymphonyBarCore/HomeQueue.swift b/macos/Sources/SymphonyBarCore/HomeQueue.swift\nindex d06196890..f90670e30 100644\n--- a/macos/Sources/SymphonyBarCore/HomeQueue.swift\n+++ b/m…"},{"k":"tool","t":"12:50:33","n":"Bash","d":"git diff 2b54b5258..HEAD -- macos/Sources/SymphonyBarUI macos/Sources/SymphonyB…","c":"run","r":"diff --git a/macos/Sources/SymphonyBar/HomeView.swift b/macos/Sources/SymphonyBar/HomeView.swift\nindex 1a87ac7ab..dce21b2ad 100644\n--- a/macos/Sources/SymphonyBar/HomeView.swift\n+++ b/macos/Sources/Sy…"},{"k":"tool","t":"12:50:34","n":"Bash","d":"cat macos/Tests/SymphonyBarCoreTests/RecentlyDoneTests.swift macos/Tests/Sympho…","c":"run","r":"import Foundation\nimport XCTest\n@testable import SymphonyBarCore\n\n/// Home's Recently done (TP-1644): decoded from the Home read, read with Home's first page on the range picked, more\n/// entries read…"},{"k":"tool","t":"12:50:57","n":"Bash","d":"sed -n 1,200p lib/symphony_elixir/home/recently_done.ex | grep -nE \"epic|done_a…","c":"run","r":"5:  Symphony saw reach done in a range, most recent first, read in pages, from the run records and the\n8:  - A ticket is done when Symphony noted its `issue_completed` event, as the Shipped read count…"},{"k":"tool","t":"12:51:00","n":"Bash","d":"sed -n 60,100p lib/symphony_elixir/home/recently_done.ex; sed -n 195,230p macos…","c":"run","r":"value ->\n        case Integer.parse(to_string(value)) do\n          {number, \"\"} when number >= least -> {:ok, number}\n          _invalid -> {:error, {:invalid, \"#{name} must be a whole number from #{l…"},{"k":"tool","t":"12:51:20","n":"review_verdict","d":"{\"verdict\": \"request_changes\", \"reason\": \"The proof of c6 (the done row draws t…","c":"other","r":"{\n  \"next\": \"Symphony recorded the verdict. End your turn now.\",\n  \"recorded\": true,\n  \"verdict\": \"request_changes\"\n}","x":{"kind":"verdict","verdict":"request_changes","files":[{"file":"DoneRow.swift","lines":"70–79"},{"file":"DesignTokens.swift","lines":"1883–1885"}]}},{"k":"note","t":"12:51:26","text":"I've finished the review of TP-1644 (pull request #1070) and recorded **request changes**. I read the code and did not run any tests.\n\n**Blocking findings:**\n1. **The test for c6 doesn't test what's drawn.** c6 says the place that uses the done row picks its cells (all of them, pull request and when, or when only). Its test checks `DoneRow.parts(_:epic:)`, but the row's `body` never calls that function; it picks the cells again with its own branches. So `parts` is only used by tests, and the test would still pass if the drawn row stopped matching it. The fix is to draw the trailing cells from `parts`, or to remove `parts` and test the rendered row.\n2. **The `recentHeight` token is never used.** It's set to 216 and a test asserts that value. The section's height actually comes from `HomeRecentlyDone.listHeight(rows:)`, which gives 214 because it leaves out the gap after the last row. The fix is to remove the token, or make the view use it and agree on the value.\n\n**What looks right:**\n- The app's decode matches what `GET /api/v1/home` returns (`recently_done.ex`): the range, both counts, the paging fields and every entry field, with the epic and pull request optional. No server change was needed.\n- Switching between Today and Week can't leave the list stale or empty. Reading past the first page appends rows correctly, and a page left over from the other range is ignored.\n- The relaunch test (c3) really builds a new model on the same store. The finish test (c5) goes through the queue notice and the re-read.\n\n**Not blocking:** each done row is identified by its ticket identifier alone. If a ticket finishes twice in a week, or a ticket finishes while a later page is being read, the same identifier can appear twice in the list. SwiftUI's `ForEach` misbehaves with duplicate identifiers."}]}];
+
+  /* ---------- The catalog's glyphs (stories.js), the ones this page draws ---------- */
+  const INNER = 'stroke="var(--surface-content)" stroke-width="1.6"';
+  const INNER_FILL = 'fill="var(--surface-content)"';
+  const ICONS = {
+    wrench: '<path d="M10.8 2.2a3.3 3.3 0 0 0-3 4.6L2.6 12a1 1 0 0 0 1.4 1.4l5.2-5.2a3.3 3.3 0 0 0 4.6-3l-2 1.9-1.9-.5-.5-1.9z"/>',
+    problem: '<path d="M8 1.6 15.2 14.2H.8z" fill="currentColor" stroke="none"/><path d="M8 6v3.6" ' + INNER + '/><circle cx="8" cy="11.8" r=".8" stroke="none" ' + INNER_FILL + "/>",
+    done: '<circle cx="8" cy="8" r="7" fill="currentColor" stroke="none"/><path d="m5 8.2 2 2 4-4.4" ' + INNER + "/>",
+    "chevron-right": '<path d="m6 4 4 4-4 4"/>',
+    "run-start": '<circle cx="8" cy="8" r="6.3"/><path d="M6.6 5.3v5.4L10.8 8z" fill="currentColor" stroke="none"/>',
+    doc: '<path d="M4 1.8h5l3 3V14.2H4z"/><path d="M9 1.8V5h3M6 8h4M6 10.5h4"/>',
+    image: '<rect x="2" y="3" width="12" height="10" rx="1.5"/><circle cx="6" cy="6.5" r="1.2"/><path d="m2.5 12 3.5-3.5 2.5 2.5 2-2 3 3"/>',
+    log: '<rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="m4.5 6 2 2-2 2M8 10.5h3.5"/>',
+    undo: '<path d="M5.5 3 2.5 6l3 3"/><path d="M2.5 6H10a3.5 3.5 0 0 1 0 7H7"/>',
+    say: '<path d="M2.5 3h11v8H7.5L4.5 13.5V11h-2z"/>',
+    cancelled: '<circle cx="8" cy="8" r="6.3"/><path d="m3.6 12.4 8.8-8.8"/>',
+    pr: '<circle cx="4.5" cy="3.5" r="1.6"/><circle cx="4.5" cy="12.5" r="1.6"/><circle cx="11.5" cy="12.5" r="1.6"/><path d="M4.5 5.1v5.8M11.5 10.9V6.5a2 2 0 0 0-2-2H7M8.5 3 7 4.5 8.5 6"/>',
+  };
+  const icon = (name, cls) => '<svg class="glyph' + (cls ? " " + cls : "") + '" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICONS[name] + "</svg>";
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const plural = (n, one, many) => n + " " + (n === 1 ? one : many || one + "s");
+
+  const VERDICTS = {
+    running: { role: "working", word: "Running", glyph: "run-start" },
+    passed: { role: "done", word: "Passed", glyph: "done" },
+    "request-changes": { role: "you", word: "Request changes", glyph: "undo" },
+    "today-green": { role: "done", word: "Request changes", glyph: "done" },
+  };
+  const SL_STATES = {
+    passed: { word: "Passed", glyph: "done", role: "done" },
+    current: { word: "Now", glyph: "run-start", role: "working" },
+    blocked: { word: "Blocked", glyph: "cancelled", role: "idle" },
+  };
+  const QA_STATUS = { pass: { role: "done", glyph: "done", word: "Pass" }, fail: { role: "problem", glyph: "problem", word: "Fail" }, blocked: { role: "idle", glyph: "cancelled", word: "Blocked" } };
+  const REVIEW = { request_changes: { role: "you", glyph: "undo", word: "Request changes" }, approve: { role: "done", glyph: "done", word: "Approved" } };
+
+  /* ---------- State, kept in the address so a state can be opened directly ---------- */
+  const S = { scene: SCENES[0].key, view: "after", all: false, open: {}, theme: "", state: "finished" };
+  location.hash.replace(/^#/, "").split("&").forEach((kv) => {
+    const [k, v] = kv.split("=");
+    if (k === "scene" && SCENES.some((s) => s.key === v)) S.scene = v;
+    if (k === "view" && (v === "before" || v === "after")) S.view = v;
+    if (k === "state" && (v === "running" || v === "finished")) S.state = v;
+    if (k === "all") S.all = v === "1";
+    if (k === "open") v.split(",").forEach((i) => { S.open[i] = true; });
+    if (k === "theme" && (v === "light" || v === "dark")) S.theme = v;
+  });
+  if (S.theme) document.documentElement.setAttribute("data-theme", S.theme);
+  const remember = () => {
+    const open = Object.keys(S.open).filter((k) => S.open[k]);
+    const hash = "#scene=" + S.scene + "&view=" + S.view + (S.all ? "&all=1" : "") + (open.length ? "&open=" + open.join(",") : "") + (S.theme ? "&theme=" + S.theme : "") + (S.scene === "review" ? "&state=" + S.state : "");
+    try { history.replaceState(null, "", hash); } catch (e) { /* a sandboxed frame may refuse; the page works without it */ }
+  };
+
+  /* ---------- Markdown: a note is written as Markdown and is drawn as it was meant ---------- */
+  function inline(raw) {
+    const codes = [];
+    let s = raw.replace(/`([^`\n]+)`/g, (m, c) => { codes.push(c); return "\u0000" + (codes.length - 1) + "\u0000"; });
+    s = esc(s);
+    s = s.replace(/\*\*([^*]+?)\*\*/g, "<strong>$1</strong>");
+    s = s.replace(/(^|[\s(])\*([^*\s][^*]*?)\*(?=[\s).,;:!?]|$)/g, "$1<em>$2</em>");
+    s = s.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    return s.replace(/\u0000(\d+)\u0000/g, (m, i) => "<code>" + esc(codes[Number(i)]) + "</code>");
+  }
+  function markdown(text) {
+    const out = [];
+    let para = null, list = null, fence = null;
+    const flush = () => {
+      if (para) out.push("<p>" + inline(para.join(" ")) + "</p>");
+      if (list) out.push("<" + list.tag + (list.tag === "ol" && list.start !== 1 ? ' start="' + list.start + '"' : "") + ">" + list.items.map((i) => "<li>" + inline(i) + "</li>").join("") + "</" + list.tag + ">");
+      para = null; list = null;
+    };
+    text.split("\n").forEach((line) => {
+      if (fence) {
+        if (/^\s*```/.test(line)) { out.push("<pre><code>" + esc(fence.join("\n")) + "</code></pre>"); fence = null; } else fence.push(line);
+        return;
+      }
+      let m;
+      if (/^\s*```/.test(line)) { flush(); fence = []; return; }
+      if (!line.trim()) { flush(); return; }
+      if ((m = /^#{1,6}\s+(.*)$/.exec(line))) { flush(); out.push('<p class="md-h">' + inline(m[1]) + "</p>"); return; }
+      if ((m = /^\s*[-*]\s+(.*)$/.exec(line))) {
+        if (!list || list.tag !== "ul") { flush(); list = { tag: "ul", items: [] }; }
+        list.items.push(m[1]); return;
+      }
+      if ((m = /^\s*(\d+)[.)]\s+(.*)$/.exec(line))) {
+        if (!list || list.tag !== "ol") { flush(); list = { tag: "ol", start: Number(m[1]), items: [] }; }
+        list.items.push(m[2]); return;
+      }
+      if (list && /^\s{2,}\S/.test(line)) { list.items[list.items.length - 1] += " " + line.trim(); return; }
+      if (list) flush();
+      (para = para || []).push(line.trim());
+    });
+    if (fence) out.push("<pre><code>" + esc(fence.join("\n")) + "</code></pre>");
+    flush();
+    return out.join("");
+  }
+
+  /* ---------- A step's lines as a conversation: each note with the actions that followed it ---------- */
+  function turnsOf(events) {
+    const turns = [];
+    let cur = null;
+    events.forEach((e) => {
+      if (e.k === "note") { cur = { note: e, tools: [], lead: [] }; turns.push(cur); return; }
+      if (!cur) { cur = { note: null, tools: [], lead: [] }; turns.push(cur); }
+      cur.tools.push(e);
+    });
+    /* A verdict or a step's answer is recorded by the last call before the note that reports it:
+       it shows on that note. */
+    turns.forEach((t, i) => {
+      const next = turns[i + 1];
+      t.tools.forEach((e) => { if (e.x && (e.x.kind === "verdict" || e.x.kind === "answer") && next) next.lead.push(e.x); });
+    });
+    return turns;
+  }
+
+  const fileChip = (name, glyph) => '<span class="chip chip-label">' + icon(glyph || "doc") + esc(name) + "</span>";
+
+  /* The fold line's gist: counts and names only, nothing the calls don't say themselves. */
+  function gist(tools) {
+    const parts = [];
+    const of = (c) => tools.filter((e) => e.c === c);
+    const wrote = of("write"), edited = of("edit"), read = of("read"), ran = of("run"), shot = of("shot"), other = of("other");
+    if (wrote.length) parts.push("wrote " + wrote.map((e) => fileChip(e.f)).join(" "));
+    if (edited.length) parts.push("edited " + edited.map((e) => fileChip(e.f)).join(" "));
+    tools.forEach((e) => { if (e.x && e.x.kind === "commit") parts.push("committed " + '<span class="chip chip-label">' + icon("pr") + esc(e.x.sha) + "</span>"); });
+    if (read.length) parts.push("read " + plural(read.length, "file"));
+    if (ran.length) parts.push("ran " + plural(ran.length, "command"));
+    const pictures = shot.reduce((n, e) => n + (e.shots || []).length, 0);
+    if (pictures) parts.push("took " + plural(pictures, "picture"));
+    const names = {};
+    other.forEach((e) => { const n = e.n.replace(/^qa_/, "").replace(/_/g, " "); names[n] = (names[n] || 0) + 1; });
+    const keys = Object.keys(names);
+    if (keys.length > 3) parts.push(plural(other.length, "other call"));
+    else keys.forEach((n) => parts.push(esc(n) + (names[n] > 1 ? " ×" + names[n] : "")));
+    /* A part that ends in words takes the comma; one that ends in a chip is set apart by the gap alone. */
+    return parts.map((p, i) => '<span class="part">' + p + (i < parts.length - 1 && !/<\/span>$/.test(p) ? "," : "") + "</span>").join("");
+  }
+
+  function failure(e, times) {
+    const lines = (e.r || "").split("\n").slice(0, 6).join("\n");
+    return '<div class="cv-fail role-problem">' + '<div class="cv-fail-head">' + icon("problem") + '<span class="word">Failed</span><span class="what"><b>' + esc(e.n) + "</b> " + esc(e.d || "") + "</span>" +
+      (times > 1 ? '<span class="times">×' + times + "</span>" : "") + "</div>" + (lines ? "<pre>" + esc(lines) + "</pre>" : "") + "</div>";
+  }
+  /* Failures of a turn, the same one repeated drawn once with its count. */
+  function failures(tools) {
+    const rows = [];
+    tools.forEach((e) => {
+      if (!e.e) return;
+      const last = rows[rows.length - 1];
+      if (last && last.e.n === e.n && last.e.r === e.r && last.end === tools.indexOf(e) - 1) { last.n += 1; last.end += 1; } else rows.push({ e: e, n: 1, end: tools.indexOf(e) });
+    });
+    return rows;
+  }
+
+  const actRow = (kind, time, glyph, html, failed) => '<li class="sl-msg ' + kind + (failed ? " failed" : "") + '"><span class="time">' + esc(time) + '</span><span class="kind">' + icon(glyph) + '</span><span class="text">' + html + "</span></li>";
+  const toolRows = (e) => actRow("tool", e.t, "wrench", "<b>" + esc(e.n) + "</b> " + esc(e.d || "")) +
+    (e.r ? actRow("result", e.t, "undo", esc(e.r), e.e) : e.img ? actRow("result", e.t, "undo", esc(plural(e.img, "image"))) : "");
+
+  function blocks(t) {
+    let html = "";
+    const tools = t.tools;
+    const tests = tools.filter((e) => e.x && e.x.kind === "tests").map((e) => e.x);
+    tests.forEach((x) => {
+      html += '<div class="cv-tests">' + (x.passed ? '<span class="role-done">' + icon("done") + x.passed + " passed</span>" : "") + (x.failed ? '<span class="role-problem">' + icon("problem") + x.failed + " failed</span>" : "") + "</div>";
+    });
+    const checks = tools.filter((e) => e.x && e.x.kind === "checks").reduce((a, e) => a.concat(e.x.checks), []);
+    if (checks.length) html += '<ol class="cv-checks">' + checks.map((c) => '<li><span class="chip chip-label">' + esc(c.id) + '</span><span class="test">' + esc(c.test) + "</span>" + (c.more ? '<span class="more">+' + c.more + "</span>" : "") + "</li>").join("") + "</ol>";
+    const shots = tools.reduce((a, e) => a.concat(e.shots || []), []);
+    if (shots.length) html += '<div class="cv-shots">' + shots.map((n) => '<span class="attachment" title="' + esc(n) + '"><span class="thumb">' + icon("image") + '</span><span class="name">' + esc(n) + "</span></span>").join("") + "</div>";
+    const evidence = {};
+    tools.forEach((e) => { if (e.x && e.x.kind === "evidence") { const k = e.x.step + "|" + e.x.status; evidence[k] = (evidence[k] || 0) + 1; } });
+    const ev = Object.keys(evidence);
+    if (ev.length) html += '<div class="cv-chips">' + ev.map((k) => { const [step, status] = k.split("|"); const q = QA_STATUS[status] || QA_STATUS.blocked;
+      return '<span class="chip chip-status role-' + q.role + '">' + icon(q.glyph) + "Step " + esc(step) + " evidence" + '<span class="n">' + evidence[k] + "</span></span>"; }).join("") + "</div>";
+    return html;
+  }
+
+  function lead(t) {
+    return t.lead.map((x) => {
+      if (x.kind === "verdict") { const v = REVIEW[x.verdict] || { role: "idle", glyph: "cancelled", word: x.verdict };
+        return '<div class="cv-chips"><span class="chip chip-status role-' + v.role + '">' + icon(v.glyph) + esc(v.word) + "</span>" + x.files.map((f) => '<span class="chip chip-label">' + icon("doc") + esc(f.file) + (f.lines ? ' <span class="n">' + esc(f.lines) + "</span>" : "") + "</span>").join("") + "</div>"; }
+      return '<div class="cv-chips">' + x.steps.map((s) => { const q = QA_STATUS[s.status] || QA_STATUS.blocked; return '<span class="chip chip-status role-' + q.role + '">' + icon(q.glyph) + "Step " + esc(s.step) + '<span class="n">' + esc(q.word) + "</span></span>"; }).join("") + "</div>";
+    }).join("");
+  }
+
+  function conversation(scene, isLive) {
+    const turns = turnsOf(scene.events);
+    let lastMinute = "";
+    const html = turns.map((t, i) => {
+      const at = (t.note || t.tools[0]).t;
+      const minute = at.slice(0, 5);
+      const time = minute === lastMinute ? "" : '<span class="cv-time" title="' + esc(at) + '">' + esc(minute) + "</span>";
+      lastMinute = minute;
+      const open = S.all || !!S.open[i];
+      const live = isLive && i === turns.length - 1;
+      let body = lead(t) + (t.note ? '<div class="cv-note">' + markdown(t.note.text) + "</div>" : "");
+      if (t.tools.length) {
+        const g = gist(t.tools);
+        body += '<button type="button" class="cv-fold-line" aria-expanded="' + open + '" data-turn="' + i + '">' + icon("chevron-right", "disclose") +
+          '<span class="count">' + plural(t.tools.length, "action") + (live ? " so far" : "") + "</span>" + (g ? '<span class="sep">·</span><span class="gist">' + g + "</span>" : "") +
+          (live ? '<span class="live"><span class="dot live role-working"></span>Working</span>' : "") + "</button>";
+        const fails = failures(t.tools);
+        body += '<div class="fold" data-open="' + open + '"><div class="fold-inner"><ol class="cv-acts">' +
+          t.tools.map((e) => e.e ? '<li class="fail">' + failure(e, 1) + "</li>" : toolRows(e)).join("") + "</ol></div></div>";
+        body += fails.map((f) => failure(f.e, f.n)).join("") + blocks(t);
+      } else if (live) body += '<span class="cv-fold-line is-still"><span class="live"><span class="dot live role-working"></span>Working</span></span>';
+      return '<li class="cv-turn' + (t.note || t.lead.length ? "" : " no-note") + '" data-open="' + open + '">' + time + body + "</li>";
+    }).join("");
+    return '<ol class="cv">' + html + "</ol>";
+  }
+
+  /* Before: every line a row, as the step draws them today. A note is raw text, cut short. */
+  function before(scene) {
+    const cut = (text) => { const t = text.replace(/\s+/g, " "); return t.length > 240 ? t.slice(0, 240).trimEnd() + "…" : t; };
+    return '<ol class="sl-msgs before">' + scene.events.map((e) => e.k === "note" ? actRow("say", e.t, "say", esc(cut(e.text))) : toolRows(e)).join("") + "</ol>";
+  }
+
+  function counts(scene) {
+    const tools = scene.events.filter((e) => e.k === "tool");
+    const notes = scene.events.length - tools.length;
+    const turns = turnsOf(scene.events);
+    return {
+      notes: notes, tools: tools.length, failed: tools.filter((e) => e.e).length,
+      before: notes + tools.length + tools.filter((e) => e.r || e.img).length,
+      after: notes + turns.filter((t) => t.tools.length).length + turns.reduce((n, t) => n + failures(t.tools).length, 0),
+    };
+  }
+
+  /* ---------- The frame ---------- */
+  const auditButton = () => '<button type="button" class="btn btn-quiet sz-sm audit" aria-pressed="' + S.all + '" data-all title="Show all events">' + icon("log") + '<span class="audit-word">Show all events</span></button>';
+
+  function runGroup(scene) {
+    const state = scene.states ? scene.states[S.state] : null;
+    const run = state ? state[S.view] || state.run : scene.run;
+    const live = state ? S.state === "running" : !!scene.live;
+    const vd = VERDICTS[run.verdict], step = scene.step;
+    const body = run.empty ? '<p class="run-meta">' + esc(run.empty) + "</p>" : S.view === "after" ? conversation(scene, live) : before(scene);
+    const audit = S.view === "after" ? auditButton() : "";
+    let inner;
+    if (step) {
+      const st = SL_STATES[step.state];
+      const row = (s, open, withAudit) => { const k = SL_STATES[s.state];
+        return '<div class="sl-head' + (withAudit ? " has-audit" : "") + '"' + (open === null ? ' aria-disabled="true"' : ' data-open="' + open + '"') + ">" + (open === null ? "" : '<button type="button" class="sl-hit" aria-expanded="' + open + '" aria-label="' + esc(s.name) + '" data-step></button>') +
+          icon("chevron-right", "disclose") + '<span class="sl-mark">' + (s.state === "current" ? '<span class="dot live role-working"></span>' : icon(k.glyph)) + '</span><span class="sl-name">' + esc(s.name) + "</span>" + (withAudit ? audit : "") +
+          '<span class="sl-state">' + esc(k.word) + '</span><span class="sl-dur">' + esc(s.dur) + "</span></div>"; };
+      inner = '<ol class="step-list"><li class="sl-step role-' + st.role + '">' + row(step, S.stepOpen !== false, S.view === "after" && S.stepOpen !== false) +
+        '<div class="fold" data-open="' + (S.stepOpen !== false) + '"><div class="fold-inner">' + body + "</div></div></li>" +
+        scene.after.map((s) => '<li class="sl-step role-' + SL_STATES[s.state].role + '">' + row(s, null, false) + "</li>").join("") + "</ol>";
+      inner = '<p class="run-meta">' + esc(run.meta) + "</p>" + inner;
+    } else {
+      inner = '<div class="run-meta-row"><p class="run-meta">' + esc(run.meta) + "</p>" + audit + "</div>" + body;
+    }
+    return '<div class="zone-timeline"><h3 class="zone-title">Timeline</h3><div class="tl-day">Today</div><div class="run-group"><button type="button" class="run-head role-' + vd.role + '" aria-expanded="true">' +
+      '<span class="time">' + esc(run.time) + '</span><span class="mark">' + (run.verdict === "running" ? '<span class="dot live role-working"></span>' : icon(vd.glyph)) + "</span>" +
+      '<span class="name">' + icon("chevron-right", "disclose") + "<b>" + esc(run.title) + '</b><span class="badge badge-sm role-' + vd.role + '">' + icon(vd.glyph) + esc(vd.word) + "</span></span>" +
+      '<span class="dur">' + esc(run.dur) + '</span></button><div class="run-body">' + inner + "</div></div></div>";
+  }
+
+  const segmented = (name, options, selected) => '<div class="bar-scroll"><div class="segmented" role="radiogroup" aria-label="' + esc(name) + '" style="--n:' + options.length + ";--i:" + options.findIndex((o) => o[0] === selected) + '"><span class="seg-thumb"></span>' +
+    options.map((o) => '<button type="button" class="segment" role="radio" aria-checked="' + (o[0] === selected) + '" data-' + name + '="' + esc(o[0]) + '">' + esc(o[1]) + "</button>").join("") + "</div></div>";
+
+  function draw() {
+    const scene = SCENES.find((s) => s.key === S.scene);
+    const c = counts(scene);
+    document.getElementById("bar").innerHTML = segmented("scene", SCENES.map((s) => [s.key, s.tab]), S.scene) + (scene.states ? segmented("state", [["running", "Running"], ["finished", "Finished"]], S.state) : "") + '<span class="bar-grow"></span>' + segmented("view", [["before", "Before"], ["after", "After"]], S.view);
+    document.getElementById("said").textContent = scene.said + " · " + plural(c.notes, "note") + ", " + plural(c.tools, "tool call") + ", " + c.failed + " failed · rows drawn: " + c.before + " before, " + c.after + " after";
+    document.getElementById("window").innerHTML = runGroup(scene);
+    remember();
+  }
+
+  document.addEventListener("click", (e) => {
+    const t = e.target.closest("[data-scene], [data-view], [data-state], [data-all], [data-turn], [data-step]");
+    if (!t) return;
+    if (t.dataset.scene) { S.scene = t.dataset.scene; S.open = {}; S.all = false; S.stepOpen = true; draw(); return; }
+    if (t.dataset.view) { S.view = t.dataset.view; draw(); return; }
+    if (t.dataset.state) { S.state = t.dataset.state; draw(); return; }
+    if ("all" in t.dataset) {
+      S.all = !S.all; S.open = {};
+      t.setAttribute("aria-pressed", String(S.all));
+      document.querySelectorAll(".cv-turn").forEach((li) => setTurn(li, S.all));
+      remember(); return;
+    }
+    if ("turn" in t.dataset) {
+      const li = t.closest(".cv-turn");
+      const open = li.dataset.open !== "true";
+      S.open[t.dataset.turn] = open;
+      setTurn(li, open);
+      remember(); return;
+    }
+    if ("step" in t.dataset) { S.stepOpen = S.stepOpen === false; draw(); }
+  });
+  function setTurn(li, open) {
+    const line = li.querySelector(".cv-fold-line");
+    if (!line) return;
+    li.dataset.open = String(open);
+    line.setAttribute("aria-expanded", String(open));
+    li.querySelector(":scope > .fold").dataset.open = String(open);
+  }
+
+  window.__counts = () => SCENES.map((s) => Object.assign({ scene: s.key }, counts(s)));
+  draw();
+})();
+</script>
+
+</body>
+</html>

@@ -5,7 +5,7 @@ defmodule SymphonyElixir.BreakdownReview do
   A breakdown run leaves its sub-issues in `Backlog` and the parent in the configured `Plan Review`
   state (`SymphonyElixir.PlanReview`). The human approves the plan with one move of the parent from
   there to the waiting state (`Waiting on sub-tickets`), and Symphony then moves every sub-issue still in `Backlog` to
-  `Todo` in one batch; blocked-by links keep the order. Moving the parent to `Rework` rejects
+  `Todo` in one batch; their stored dependencies keep the order. Moving the parent to `Rework` rejects
   the plan: Symphony cancels the plan's sub-issues still in `Backlog` and runs the breakdown again.
   The plan's sub-issues are the ones created while the parent was worked into `Plan Review`, so a
   sub-issue a person added under the parent before or after that run is left alone.

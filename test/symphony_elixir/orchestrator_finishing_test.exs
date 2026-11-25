@@ -1,8 +1,7 @@
 defmodule SymphonyElixir.OrchestratorFinishingTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.EpicLanes
+  alias SymphonyElixir.TicketState
 
   @active_states ["Todo", "In Progress", "Merging", "Rework", "Waiting on sub-tickets"]
 
@@ -32,7 +31,7 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     ctx
   end
 
-  test "a ticket moved to Merging lands at once while both work slots run implementation work", ctx do
+  test "TP-1615: a ticket moved to Merging gets no allowance of its own: with both slots taken by implementation work it waits", ctx do
     write_finishing_workflow!(ctx, max_concurrent_agents: 2)
     landing = issue("land-1", "MT-LAND", "Merging")
     tracked([landing])
@@ -42,49 +41,40 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
       |> run(issue("impl-1", "MT-1", "In Progress"), :implementation)
       |> run(issue("impl-2", "MT-2", "In Progress"), :implementation)
 
-    refute Orchestrator.should_dispatch_issue_for_test(issue("todo-1", "MT-3", "Todo"), state)
+    refute Orchestrator.should_dispatch_issue_for_test(landing, state)
 
-    log = capture_log(fn -> send(self(), {:state, Orchestrator.dispatch_chosen_issues_for_test([landing], state)}) end)
-    assert_received {:state, state}
+    state = Orchestrator.dispatch_chosen_issues_for_test([landing], state)
 
-    assert %{run_profile: %{kind: :landing}} = state.running["land-1"]
-    assert log =~ ~r/Dispatching issue to agent: issue_id=land-1 .* slot=finishing/
-    assert state.slot_waiting == %{}
-
-    assert %{finishing: %{slots: 2, used: 1, running: [%{identifier: "MT-LAND", state: "Merging"}]}} = snapshot_of(state)
+    assert Enum.sort(Map.keys(state.running)) == ["impl-1", "impl-2"]
+    assert %{reason: "work slots full", state: "Merging"} = state.slot_waiting["land-1"]
+    snapshot = snapshot_of(state)
+    assert %{finishing: %{slots: 0, used: 0, running: []}} = snapshot
+    assert %{concurrency: %{max_total: 2, finishing_max: 0}} = snapshot
   end
 
-  test "with finishing_max 1 a second Merging ticket waits and no Todo starts until it does", ctx do
-    write_finishing_workflow!(ctx, max_concurrent_agents: 2, finishing_max: 1)
+  test "TP-1615: a Merging ticket that holds its slot lands on it, and holds no Todo back", ctx do
+    write_finishing_workflow!(ctx, max_concurrent_agents: 2)
     second_landing = issue("land-2", "MT-LAND-2", "Merging")
     todo = issue("todo-1", "MT-TODO", "Todo", priority: 1)
     tracked([second_landing, todo])
+    # The Todo ticket holds the earlier place, so the walk reaches it before the landing.
+    queued!([todo, second_landing])
 
-    state = run(orchestrator_state(2), issue("land-1", "MT-LAND-1", "Merging"), :landing)
-
-    state = Orchestrator.dispatch_chosen_issues_for_test([todo, second_landing, :not_an_issue], state)
-
-    hold_reason = "MT-LAND-2 (Merging) is waiting for a finishing slot"
-    assert Map.keys(state.running) == ["land-1"]
-    assert %{reason: "finishing slots full", state: "Merging"} = state.slot_waiting["land-2"]
-    assert %{reason: ^hold_reason, state: "Todo"} = state.slot_waiting["todo-1"]
-
-    assert [%{issue_id: "land-2", reason: "finishing slots full"}, %{issue_id: "todo-1", reason: ^hold_reason}] =
-             state |> snapshot_of() |> Map.fetch!(:slot_waiting) |> Enum.sort_by(& &1.issue_id)
-
-    # The landing run ends: the second landing starts, and only then the Todo ticket.
-    state = %{state | running: Map.delete(state.running, "land-1")}
+    # MT-LAND-2 holds its slot from its earlier runs, with no run now: it lands on it.
+    state = %{run(orchestrator_state(2), issue("land-1", "MT-LAND-1", "Merging"), :landing) | slot_holders: %{"land-2" => holder("MT-LAND-2", "Merging")}}
 
     log =
       capture_log(fn ->
-        send(self(), {:state, Orchestrator.dispatch_chosen_issues_for_test([todo, second_landing], state)})
+        dispatched = Orchestrator.dispatch_chosen_issues_for_test([todo, second_landing, :not_an_issue], state)
+        send(self(), {:state, dispatched})
       end)
 
     assert_received {:state, state}
 
-    assert Enum.sort(Map.keys(state.running)) == ["land-2", "todo-1"]
-    assert state.slot_waiting == %{}
-    assert dispatch_order(log) == ["land-2", "todo-1"]
+    # Two slots: MT-LAND-1's run and MT-LAND-2's hold. The Todo waits behind them, and MT-LAND-2 lands.
+    assert Enum.sort(Map.keys(state.running)) == ["land-1", "land-2"]
+    assert %{reason: "work slots full", state: "Todo"} = state.slot_waiting["todo-1"]
+    assert dispatch_order(log) == ["land-2"]
   end
 
   test "a Merging ticket held for CI neither lands nor waits for a slot, and a Todo still starts", ctx do
@@ -173,29 +163,48 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     refute Orchestrator.should_dispatch_issue_for_test(landing, orchestrator_state(2))
   end
 
-  test "a resume of Medium priority goes before an Urgent Todo when a slot frees", ctx do
+  test "a free slot goes to the first ticket of the stored queue, though the ones behind it are urgent, older or further on", ctx do
     write_finishing_workflow!(ctx, max_concurrent_agents: 1)
-    resume = issue("resume-1", "MT-RESUME", "In Progress", priority: 3)
-    urgent = issue("todo-1", "MT-URGENT", "Todo", priority: 1)
-    tracked([resume, urgent])
+    first = issue("low-1", "MT-LOW", "Todo", priority: 4, created_at: ~U[2026-03-01 00:00:00Z])
+    urgent = issue("urgent-1", "MT-URGENT", "Todo", priority: 1, created_at: ~U[2026-02-01 00:00:00Z])
+    resume = issue("resume-1", "MT-RESUME", "In Progress", priority: 1, created_at: ~U[2026-01-01 00:00:00Z])
+    tracked([first, urgent, resume])
+    queued!([first, urgent, resume])
 
-    state = Orchestrator.dispatch_chosen_issues_for_test([urgent, resume], orchestrator_state(1))
+    state = Orchestrator.dispatch_chosen_issues_for_test([resume, urgent, first], orchestrator_state(1))
 
-    assert Map.keys(state.running) == ["resume-1"]
-    assert %{reason: "work slots full"} = state.slot_waiting["todo-1"]
+    assert Map.keys(state.running) == ["low-1"]
+    assert %{reason: "work slots full"} = state.slot_waiting["urgent-1"]
+    assert %{reason: "work slots full"} = state.slot_waiting["resume-1"]
   end
 
-  test "candidates sort by stage before priority and age" do
-    issues = [
-      issue("todo", "MT-1", "Todo", priority: 1),
-      issue("progress", "MT-2", "In Progress", priority: 4),
-      issue("rework", "MT-3", "Rework", priority: 4),
-      issue("merging", "MT-5", "Merging", priority: 4),
-      issue("merging-urgent", "MT-6", "Merging", priority: 1)
-    ]
+  test "a ticket the gates hold keeps its place in the queue, and is taken before the ones behind it once it can start", ctx do
+    write_finishing_workflow!(ctx, max_concurrent_agents: 1, tickets: %{priorities: ["urgent", "high"]})
+    parked = issue("parked-1", "MT-PARKED", "Backlog", priority: 1)
+    low = issue("low-1", "MT-LOW", "Todo", priority: 4)
+    next = issue("next-1", "MT-NEXT", "Todo", priority: 2)
+    last = issue("last-1", "MT-LAST", "Todo", priority: 2)
+    tracked([parked, low, next, last])
+    queued!([parked, low, next, last])
+    places = Map.take(RunStore.queue_places(), ["parked-1", "low-1", "next-1", "last-1"])
 
-    assert issues |> Orchestrator.sort_issues_for_dispatch_for_test() |> Enum.map(& &1.id) ==
-             ["merging-urgent", "merging", "rework", "progress", "todo"]
+    # In Backlog, the first ticket cannot start; below the priority filter, the second is never started.
+    state = Orchestrator.dispatch_chosen_issues_for_test([last, next, low, parked], orchestrator_state(1))
+
+    assert Map.keys(state.running) == ["next-1"]
+    assert %{reason: "work slots full"} = state.slot_waiting["last-1"]
+    refute Map.has_key?(state.slot_waiting, "low-1")
+    refute Map.has_key?(state.slot_waiting, "parked-1")
+    assert Map.take(RunStore.queue_places(), Map.keys(places)) == places
+
+    # Moved to Todo, it goes before the tickets behind it.
+    :ok = RunStore.update_ticket_state("parked-1", %{phase: "Todo"})
+    issues = [last, next, low, %{parked | state: "Todo"}]
+    tracked(issues)
+    state = Orchestrator.dispatch_chosen_issues_for_test(issues, orchestrator_state(1))
+
+    assert Map.keys(state.running) == ["parked-1"]
+    assert Map.take(RunStore.queue_places(), Map.keys(places)) == places
   end
 
   test "a retry waiting for a slot keeps attempt 1 and starts on the first poll after a slot frees", ctx do
@@ -248,57 +257,64 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     refute MapSet.member?(state.claimed, "wait-1")
   end
 
-  test "a standalone ticket in Merging lands when epic lanes take every work slot" do
-    epics = for n <- 1..2, do: epic("e#{n}", "MT-#{n}0", [%{id: "p#{n}", identifier: "MT-#{n}1", state: "In Progress"}])
-    landing = issue("land-1", "MT-LAND", "Merging")
-    todo = issue("todo-1", "MT-TODO", "Todo")
+  test "TP-1624: a free slot follows the stored queue order, a started ticket's sub-ticket gets no place in front", ctx do
+    write_finishing_workflow!(ctx, max_concurrent_agents: 2)
+    standalone = issue("s1", "MT-S1", "Todo", priority: 1)
+    other = issue("o1", "MT-O1", "Todo", priority: 1)
+    child = issue("c1", "MT-C1", "Todo", priority: 4, parent: %{identifier: "MT-P1", title: "Epic", done: 0, total: 2, children: []})
+    tracked([standalone, other, child])
+    # The unrelated tickets joined the queue first, the sub-ticket last.
+    queued!([standalone, other, child])
 
-    state = Orchestrator.put_epic_lanes_for_test(orchestrator_state(2), epics ++ [landing, todo])
+    # MT-P1 has started: it holds a slot, with no run now.
+    state = %{orchestrator_state(2) | slot_holders: %{"p1" => holder("MT-P1", "In Progress")}}
+    order = state |> Orchestrator.put_dispatch_order_for_test([standalone, other, child]) |> Map.fetch!(:dispatch_order)
+    assert [%{identifier: "MT-S1", outcome: :starts}, %{identifier: "MT-O1", outcome: :waits}, %{identifier: "MT-C1", outcome: :waits}] = Enum.filter(order.entries, & &1.position)
 
-    assert state.epic_lanes.shared == 0
-    refute Orchestrator.should_dispatch_issue_for_test(todo, state)
-    assert Orchestrator.should_dispatch_issue_for_test(landing, state)
-  end
-
-  test "an epic's lane starts its next part before a higher-priority grandchild", ctx do
-    write_finishing_workflow!(ctx, max_concurrent_agents: 2, epic_lanes: 1)
-    part = issue("c1", "MT-C1", "Todo", priority: 3)
-    parent = issue("p2", "MT-P2", "In Progress", sub_issues: [%{id: "g1", identifier: "MT-G1", state: "Todo"}])
-    grandchild = issue("g1", "MT-G1", "Todo", priority: 1)
-    standalone = issue("s1", "MT-S1", "Todo", priority: 2)
-    epic = epic("e1", "MT-E1", [%{id: "c1", identifier: "MT-C1", state: "Todo"}, %{id: "p2", identifier: "MT-P2", state: "In Progress"}])
-    tracked([part, grandchild, standalone])
-
-    state = Orchestrator.put_epic_lanes_for_test(orchestrator_state(2), [epic, part, parent, grandchild, standalone])
-    candidates = [grandchild, standalone, part]
-    log = capture_log(fn -> send(self(), {:state, Orchestrator.dispatch_chosen_issues_for_test(candidates, state)}) end)
+    log = capture_log(fn -> send(self(), {:state, dispatch(state, [standalone, other, child])}) end)
     assert_received {:state, state}
 
-    assert dispatch_order(log) == ["c1", "s1"]
-    assert log =~ ~r/issue_id=c1 .* slot=lane:MT-E1/
-    assert %{reason: "work slots full"} = state.slot_waiting["g1"]
+    assert dispatch_order(log) == ["s1"]
+    assert %{reason: "work slots full"} = state.slot_waiting["o1"]
   end
 
-  test "landing runs leave the work slots and lane snapshot to implementation work" do
-    state =
-      orchestrator_state(1)
-      |> run(issue("land-1", "MT-LAND", "Merging"), :landing)
-      |> Orchestrator.put_epic_lanes_for_test([])
+  test "TP-1622: the pass walks an epic's sub-tickets inside its place, in their own key order, before a later top-level ticket", ctx do
+    write_finishing_workflow!(ctx, max_concurrent_agents: 1)
+    epic = %{identifier: "MT-E", title: "Epic", done: 0, total: 2, children: []}
+    later = issue("later-1", "MT-LATER", "Todo", priority: 1)
+    sub_1 = issue("sub-1", "MT-S1", "Todo", priority: 4, parent: epic)
+    sub_2 = issue("sub-2", "MT-S2", "Todo", priority: 4, parent: epic)
+    tracked([later, sub_1, sub_2])
 
-    assert Orchestrator.should_dispatch_issue_for_test(issue("todo-1", "MT-TODO", "Todo"), state)
-    assert %{epic_lanes: %{shared: %{used: 0}}, finishing: %{used: 1}} = snapshot_of(state)
+    # The epic (not started) joined first, the later ticket next, its sub-tickets last; then the
+    # second sub-ticket is moved before the first among its siblings.
+    :ok = RunStore.put_ticket_state(TicketState.new(Config.repo_key!(), "epic-1", %{issue_identifier: "MT-E", phase: "Backlog"}))
+    queued!([later])
+
+    for sub <- [sub_1, sub_2] do
+      attrs = %{issue_identifier: sub.identifier, phase: sub.state, priority: sub.priority, parent: sub.parent}
+      :ok = RunStore.put_ticket_state(TicketState.new(Config.repo_key!(), sub.id, attrs))
+    end
+
+    :ok = RunStore.move_in_queue("sub-2", :top)
+
+    state = orchestrator_state(1)
+    order = state |> Orchestrator.put_dispatch_order_for_test([later, sub_1, sub_2]) |> Map.fetch!(:dispatch_order)
+    assert [%{identifier: "MT-S2", outcome: :starts}, %{identifier: "MT-S1", outcome: :waits}, %{identifier: "MT-LATER", outcome: :waits}] = Enum.filter(order.entries, & &1.position)
+
+    log = capture_log(fn -> send(self(), {:state, dispatch(state, [later, sub_1, sub_2])}) end)
+    assert_received {:state, state}
+    assert dispatch_order(log) == ["sub-2"]
+    assert %{reason: "work slots full"} = state.slot_waiting["later-1"]
   end
 
-  test "finishing_max must be at least 1", ctx do
-    write_finishing_workflow!(ctx, finishing_max: 0)
-    assert {:error, {:invalid_workflow_config, message}} = Config.settings()
-    assert message =~ "finishing_max"
+  test "TP-1615: a landing run takes a plain slot, and the lane and finishing snapshot keys stay, empty" do
+    state = run(orchestrator_state(1), issue("land-1", "MT-LAND", "Merging"), :landing)
 
-    write_finishing_workflow!(ctx)
-    assert Config.settings!().execution.finishing_max == 2
-
-    changeset = Schema.Execution.changeset(%Schema.Execution{}, %{"kind" => "codex", "command" => "codex", "finishing_max" => 0})
-    assert {"must be greater than %{number}", _} = changeset.errors[:finishing_max]
+    refute Orchestrator.should_dispatch_issue_for_test(issue("todo-1", "MT-TODO", "Todo"), state)
+    snapshot = snapshot_of(state)
+    assert %{epic_lanes: %{lanes: [], queued_epics: [], shared: %{used: 1}}} = snapshot
+    assert %{finishing: %{slots: 0, used: 0}} = snapshot
   end
 
   describe "a run ending while issues wait for a slot" do
@@ -323,37 +339,21 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
   end
 
   describe "a run ending with nothing waiting for a slot" do
-    test "on a lane's path, plans the lanes again right away", ctx do
-      plan = EpicLanes.plan([epic_on("land-1")], 2, 1, ["Done", "Canceled"])
-      {pid, ref} = start_with_waiting_run(ctx, poll_check_in_progress: false, slot_waiting: %{}, epic_lanes: plan)
+    test "TP-1615: leaves the next poll where it is, and its ticket keeps its slot with no live run", ctx do
+      holders = %{"land-1" => holder("MT-LAND", "Merging")}
+      {pid, ref} = start_with_waiting_run(ctx, poll_check_in_progress: false, slot_waiting: %{}, slot_holders: holders)
 
       send(pid, {:DOWN, ref, :process, self(), :normal})
       state = :sys.get_state(pid)
 
-      assert is_integer(state.next_poll_due_at_ms)
-      assert state.next_poll_due_at_ms <= System.monotonic_time(:millisecond) + 100
-    end
-
-    test "off every lane's path, leaves the next poll where it is", ctx do
-      plan = EpicLanes.plan([epic_on("elsewhere")], 2, 1, ["Done", "Canceled"])
-      {pid, ref} = start_with_waiting_run(ctx, poll_check_in_progress: false, slot_waiting: %{}, epic_lanes: plan)
-
-      send(pid, {:DOWN, ref, :process, self(), :normal})
-
-      assert :sys.get_state(pid).next_poll_due_at_ms == nil
+      assert state.next_poll_due_at_ms == nil
+      refute Map.has_key?(state.running, "land-1")
+      assert %{identifier: "MT-LAND"} = state.slot_holders["land-1"]
+      assert Orchestrator.available_slots_for_test(%{state | max_concurrent_agents: 1}) == 0
     end
   end
 
-  defp epic_on(part_id) do
-    %Issue{
-      id: "epic-of-#{part_id}",
-      identifier: "MT-EPIC",
-      title: "Epic",
-      state: "Waiting on sub-tickets",
-      labels: ["breakdown"],
-      sub_issues: [%{id: part_id, identifier: part_id, state: "Todo"}]
-    }
-  end
+  defp holder(identifier, phase), do: %{identifier: identifier, state: phase, repo_key: "default", since: ~U[2026-11-22 07:00:00Z]}
 
   defp start_with_waiting_run(ctx, opts) do
     write_finishing_workflow!(ctx, poll_interval_ms: 600_000)
@@ -363,7 +363,7 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
 
     ref = make_ref()
     running = issue("land-1", "MT-LAND", "Merging")
-    waiting = %{identifier: "MT-WAIT", state: "Merging", reason: "finishing slots full", since: DateTime.utc_now()}
+    waiting = %{identifier: "MT-WAIT", state: "Merging", reason: "work slots full", since: DateTime.utc_now()}
 
     :sys.replace_state(pid, fn state ->
       if is_reference(state.tick_timer_ref), do: Process.cancel_timer(state.tick_timer_ref)
@@ -372,7 +372,7 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
         (run(state, running, :landing)
          |> put_in([Access.key(:running), "land-1", :ref], ref))
         | slot_waiting: Keyword.get(opts, :slot_waiting, %{"wait-1" => waiting}),
-          epic_lanes: Keyword.get(opts, :epic_lanes),
+          slot_holders: Keyword.get(opts, :slot_holders, %{}),
           poll_check_in_progress: Keyword.fetch!(opts, :poll_check_in_progress),
           next_poll_due_at_ms: nil,
           tick_timer_ref: nil,
@@ -403,11 +403,23 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
 
   defp tracked(issues), do: Application.put_env(:symphony_elixir, :memory_tracker_issues, issues)
 
+  # Each ticket's record, written in the order given: each joins the dispatch queue at its end.
+  defp queued!(issues) do
+    for issue <- issues do
+      attrs = %{issue_identifier: issue.identifier, phase: issue.state, priority: issue.priority, created_at: issue.created_at}
+      :ok = RunStore.put_ticket_state(TicketState.new(Config.repo_key!(), issue.id, attrs))
+    end
+
+    :ok
+  end
+
   defp dispatch_order(log) do
     ~r/Dispatching issue to agent: issue_id=(\S+)/
     |> Regex.scan(log, capture: :all_but_first)
     |> List.flatten()
   end
+
+  defp dispatch(state, issues), do: Orchestrator.dispatch_chosen_issues_for_test(issues, state)
 
   defp snapshot_of(state) do
     {:reply, snapshot, _state} = Orchestrator.handle_call(:snapshot, {self(), make_ref()}, state)
@@ -429,18 +441,6 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
       },
       attrs
     )
-  end
-
-  defp epic(id, identifier, sub_issues) do
-    %Issue{
-      id: id,
-      identifier: identifier,
-      title: "Epic #{identifier}",
-      state: "Waiting on sub-tickets",
-      labels: ["breakdown"],
-      priority: 2,
-      sub_issues: sub_issues
-    }
   end
 
   defp run(state, %Issue{} = issue, kind) do

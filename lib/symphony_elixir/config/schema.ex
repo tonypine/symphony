@@ -1125,14 +1125,8 @@ defmodule SymphonyElixir.Config.Schema do
       # `execution.harnesses`, parsed by `SymphonyElixir.Config.Runs.parse_harnesses/1`.
       field(:harnesses, :map, default: %{})
       field(:max_concurrent_agents, :integer, default: 10)
-      field(:epic_lanes, :integer)
-      field(:finishing_max, :integer, default: 2)
-      field(:force_label, :string, default: "expedite")
-      field(:forced_max, :integer, default: 1)
-      field(:forced_stale_after_hours, :integer, default: 72)
       field(:max_turns, :integer, default: 20)
       field(:max_retry_backoff_ms, :integer, default: 300_000)
-      field(:max_concurrent_agents_by_state, :map, default: %{})
       field(:max_tokens_per_issue, :integer, default: @default_max_tokens_per_issue)
       field(:max_tokens_per_day, :integer, default: @default_max_tokens_per_day)
       field(:max_consecutive_identical_tool_failures, :integer, default: 5)
@@ -1169,14 +1163,8 @@ defmodule SymphonyElixir.Config.Schema do
         [
           :harnesses,
           :max_concurrent_agents,
-          :epic_lanes,
-          :finishing_max,
-          :force_label,
-          :forced_max,
-          :forced_stale_after_hours,
           :max_turns,
           :max_retry_backoff_ms,
-          :max_concurrent_agents_by_state,
           :max_tokens_per_issue,
           :max_tokens_per_day,
           :max_consecutive_identical_tool_failures,
@@ -1195,12 +1183,7 @@ defmodule SymphonyElixir.Config.Schema do
         ],
         empty_values: []
       )
-      |> Schema.validate_present([:force_label])
       |> validate_number(:max_concurrent_agents, greater_than: 0)
-      |> validate_epic_lanes()
-      |> validate_number(:finishing_max, greater_than: 0)
-      |> validate_number(:forced_max, greater_than: 0)
-      |> validate_number(:forced_stale_after_hours, greater_than: 0)
       |> validate_number(:max_turns, greater_than: 0)
       |> validate_number(:max_retry_backoff_ms, greater_than: 0)
       |> validate_number(:max_tokens_per_issue, greater_than: 0)
@@ -1213,27 +1196,10 @@ defmodule SymphonyElixir.Config.Schema do
       |> validate_number(:mcp_tool_timeout_ms, greater_than: 0)
       |> validate_number(:codex_stdio_prompt_soft_limit, greater_than: 0)
       |> validate_project_guide_files()
-      |> update_change(:max_concurrent_agents_by_state, &Schema.normalize_state_limits/1)
-      |> Schema.validate_state_limits(:max_concurrent_agents_by_state)
       |> cast_embed(:mcp, with: &Mcp.changeset/2)
       |> cast_embed(:network_access, with: &NetworkAccess.changeset/2)
       |> cast_embed(:sandbox_runtime, with: &SandboxRuntime.changeset/2)
       |> cast_embed(:usage_limit, with: &UsageLimit.changeset/2)
-    end
-
-    # Lanes come out of `max_total`, so there can be at most that many; unset means every slot can be a lane.
-    defp validate_epic_lanes(changeset) do
-      case get_field(changeset, :max_concurrent_agents) do
-        max_total when is_integer(max_total) and max_total > 0 ->
-          validate_number(changeset, :epic_lanes,
-            greater_than_or_equal_to: 0,
-            less_than_or_equal_to: max_total,
-            message: "must be between 0 and execution.concurrency.max_total (#{max_total})"
-          )
-
-        _max_total ->
-          validate_number(changeset, :epic_lanes, greater_than_or_equal_to: 0)
-      end
     end
 
     defp validate_project_guide_files(changeset) do
@@ -2744,8 +2710,9 @@ defmodule SymphonyElixir.Config.Schema do
     TP-1085): `implementation` writes the code (delegated), builds it (`make build` when
     `macos/` changed; `mix compile --warnings-as-errors` when Elixir files did, `mix.lock` included), checks it (format,
     specs and credo on the changed source files, only when an Elixir source or test file changed:
-    `elixir_source_changed`), tests it (the changed test files, never `mix test` with no file, and
-    `mix cover.changed`, only when an Elixir source or test file changed, plus
+    `elixir_source_changed`), tests it (`mix cover.changed` with the changed test files: one pass
+    runs them and the tests of the changed modules and checks those modules' coverage, never the
+    whole suite, only when an Elixir source or test file changed, plus
     `swift test` for the changed targets when `macos/` changed), runs the window tests the change
     selects in the QA VM (`window_tests`, Symphony's own `window_tests_command/0`; skipped when the
     change touches nothing a declared window test covers), each returning to `code` on failure, then
@@ -2902,7 +2869,7 @@ defmodule SymphonyElixir.Config.Schema do
           "title" => "Tests and coverage",
           "mode" => "machine",
           "command" => [
-            %{"run" => "(test -z \"$SYMPHONY_CHANGED_TEST_FILES\" || mix test $SYMPHONY_CHANGED_TEST_FILES) && mix cover.changed", "when" => "elixir_source_changed"},
+            %{"run" => "mix cover.changed $SYMPHONY_CHANGED_TEST_FILES", "when" => "elixir_source_changed"},
             %{"run" => "cd macos && swift test --filter \"$SYMPHONY_CHANGED_SWIFT_TEST_FILTER\"", "when" => "macos_changed"}
           ],
           "timeout_ms" => 1_800_000,
@@ -2957,11 +2924,11 @@ defmodule SymphonyElixir.Config.Schema do
         "usage_limit_paused",
         "usage_limit_headroom",
         "usage_limit_resumed",
-        "forced_waiting",
-        "forced_human_gate",
-        "forced_stale",
         "human_action_needed"
       ]
+      # The forced-ticket notices TP-1611 removed with forcing: a channel that still names one loads,
+      # without it, so an older settings file isn't refused.
+      @retired_events ["forced_waiting", "forced_human_gate", "forced_stale"]
 
       embedded_schema do
         field(:kind, :string)
@@ -3015,7 +2982,7 @@ defmodule SymphonyElixir.Config.Schema do
       defp normalize_events(events) when is_list(events) do
         events
         |> Enum.map(&normalize_string/1)
-        |> Enum.reject(&(&1 == ""))
+        |> Enum.reject(&(&1 == "" or &1 in @retired_events))
         |> Enum.uniq()
       end
 
@@ -3123,10 +3090,6 @@ defmodule SymphonyElixir.Config.Schema do
     # key is absent (`SymphonyElixir.SystemSchema.manual_review_for_gate_mode/1`). With it `on`, the
     # last step into `Merging` waits for a person's confirmation.
     field(:manual_review, :string, default: "off")
-    # The repo's `proof_check` (WORKFLOW.md): the check that runs its automated tests, which a
-    # walkthrough step's `Proved by: <test>` names (`SymphonyElixir.Walkthrough`). Nil: no step is
-    # proved by a named test.
-    field(:proof_check, :string)
     embeds_one(:tracker, Tracker, on_replace: :update, defaults_to_struct: true)
     embeds_one(:tickets, Tickets, on_replace: :update, defaults_to_struct: true)
     embeds_one(:polling, Polling, on_replace: :update, defaults_to_struct: true)
@@ -3305,16 +3268,6 @@ defmodule SymphonyElixir.Config.Schema do
     String.downcase(state_name)
   end
 
-  @doc false
-  @spec normalize_state_limits(nil | map()) :: map()
-  def normalize_state_limits(nil), do: %{}
-
-  def normalize_state_limits(limits) when is_map(limits) do
-    Enum.reduce(limits, %{}, fn {state_name, limit}, acc ->
-      Map.put(acc, normalize_issue_state(to_string(state_name)), limit)
-    end)
-  end
-
   # Config changesets cast with `empty_values: []` so a blank string reaches the
   # validators as itself. Since Ecto 3.14, `validate_required/3` only counts the
   # changeset's `empty_values` as missing, so it is run with `""` empty here to
@@ -3327,28 +3280,9 @@ defmodule SymphonyElixir.Config.Schema do
     |> Map.put(:empty_values, empty_values)
   end
 
-  @doc false
-  @spec validate_state_limits(Ecto.Changeset.t(), atom()) :: Ecto.Changeset.t()
-  def validate_state_limits(changeset, field) do
-    validate_change(changeset, field, fn ^field, limits ->
-      Enum.flat_map(limits, fn {state_name, limit} ->
-        cond do
-          to_string(state_name) == "" ->
-            [{field, "state names must not be blank"}]
-
-          not is_integer(limit) or limit <= 0 ->
-            [{field, "limits must be positive integers"}]
-
-          true ->
-            []
-        end
-      end)
-    end)
-  end
-
   defp changeset(attrs) do
     %__MODULE__{}
-    |> cast(attrs, [:manual_review, :proof_check, :runs, :repository_runs], empty_values: [])
+    |> cast(attrs, [:manual_review, :runs, :repository_runs], empty_values: [])
     |> validate_inclusion(:manual_review, ["on", "off"])
     |> cast_embed(:tracker, with: &Tracker.changeset/2)
     |> cast_embed(:tickets, with: &Tickets.changeset/2)

@@ -6,22 +6,23 @@ defmodule SymphonyElixir.Dispatch.Order do
   not next.
 
   The orchestrator walks its candidates at the end of each poll cycle, after the cycle's dispatch
-  pass, in the order the pass walks them and through the pass's own gates and slot decision: no copy
+  pass, in the order the pass walks them (the stored queue order, `SymphonyElixir.Dispatch.Queue`)
+  and through the pass's own gates and slot decision: no copy
   of either lives here. Each walked ticket comes out with an `outcome`:
 
   - `running`: a run works on it;
-  - `held`: a gate keeps it out of the pass (a blocker, a hold, its repository's pause, the priority
+  - `held`: a gate keeps it out of the pass (a stored dependency, a hold, its repository's pause, the priority
     filter, the usage limit, a spent budget...), with the gate's reason and the `rule` behind it;
   - `paused`: its gates are open but the whole pass is paused (Symphony's pause, the workspace quota,
     the daily token budget);
-  - `starts`: a pass run now starts it, on the `slot` it names;
+  - `starts`: a pass run now starts it: it holds a slot, or takes a free one;
   - `waits`: a pass run now leaves it waiting for a slot.
 
   `place/1` numbers the tickets that are in line (`starts`, `waits`, `paused`) and words each one's
   reason; `read/3` adds the open tickets that are not candidates and groups them all.
   """
 
-  alias SymphonyElixir.{Situation, TicketState}
+  alias SymphonyElixir.{Dispatch.Slots, Situation, TicketState}
 
   @in_line [:starts, :waits, :paused]
 
@@ -43,7 +44,6 @@ defmodule SymphonyElixir.Dispatch.Order do
 
   - the next one: `next: a slot is free`, or `next: ` and why it waits;
   - a later one: `2nd: a slot is free` when a pass run now starts it too, else `2nd: behind TP-n`;
-  - a forced one that starts: `forced`;
   - a paused one: the pause's reason;
   - one out of line keeps the reason it came with.
   """
@@ -72,7 +72,6 @@ defmodule SymphonyElixir.Dispatch.Order do
   end
 
   defp reason(%{outcome: :paused, reason: reason}, _position, _previous), do: reason
-  defp reason(%{outcome: :starts, forced: true}, _position, _previous), do: "forced"
   defp reason(%{outcome: :starts}, position, _previous), do: "#{ordinal(position)}: a slot is free"
   defp reason(%{outcome: :waits, reason: reason}, 1, _previous), do: "next: #{reason}"
   defp reason(%{outcome: :waits}, position, previous), do: "#{ordinal(position)}: behind #{previous}"
@@ -103,7 +102,10 @@ defmodule SymphonyElixir.Dispatch.Order do
   - `groups`: every open ticket exactly once (a walked candidate, and every record neither removed nor
     in a terminal state), under the kind of its situation, the kinds in the situation's precedence
     and the tickets of a kind by place in line, then identifier;
-  - `slots`: the slot and lane facts the walk read.
+  - `slots`: the slots the walk read (`SymphonyElixir.Dispatch.Slots.read/3`): the slot count, how
+    many are used and free, and the tickets that hold them.
+
+  Each ticket carries `in_progress`: true exactly when it holds a slot.
 
   A ticket that is not a candidate has `outcome` `not_a_candidate` and its situation's cause as its
   reason.
@@ -119,9 +121,12 @@ defmodule SymphonyElixir.Dispatch.Order do
     open_ids =
       for record <- records, open?(record, terminal), not Map.has_key?(walked, record.issue_id), do: record.issue_id
 
+    holders = Slots.holder_ids(order.slots)
+
     tickets =
       (Enum.map(order.entries, & &1.issue_id) ++ open_ids)
       |> Enum.map(&ticket(Map.get(walked, &1), Map.get(by_id, &1), &1, live, records))
+      |> Enum.map(&Map.put(&1, :in_progress, Map.has_key?(holders, &1.issue_id)))
       |> Enum.sort_by(&{is_nil(&1.position), &1.position || 0, &1.identifier || &1.issue_id})
 
     queue = Enum.filter(tickets, & &1.position)
@@ -146,7 +151,7 @@ defmodule SymphonyElixir.Dispatch.Order do
     entry = entry || not_a_candidate(record, situation)
 
     entry
-    |> Map.take([:issue_id, :identifier, :title, :state, :repo_key, :position, :reason, :wait, :slot, :forced, :starts_now])
+    |> Map.take([:issue_id, :identifier, :title, :state, :repo_key, :position, :reason, :wait, :slot, :starts_now])
     |> Map.merge(%{outcome: Atom.to_string(entry.outcome), rule: entry |> Map.get(:rule) |> rule_name(), situation: situation})
   end
 
@@ -164,7 +169,6 @@ defmodule SymphonyElixir.Dispatch.Order do
       starts_now: false,
       wait: nil,
       slot: nil,
-      forced: false,
       rule: nil
     }
   end

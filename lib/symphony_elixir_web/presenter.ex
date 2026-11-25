@@ -7,8 +7,8 @@ defmodule SymphonyElixirWeb.Presenter do
     AgentProviders,
     Artifacts,
     BuildInfo,
+    ConductorGate,
     Config,
-    ForcedStatus,
     Home,
     Inbox,
     Initiatives,
@@ -34,16 +34,20 @@ defmodule SymphonyElixirWeb.Presenter do
     TicketBrief,
     TicketChecks,
     TicketEvents,
+    TicketList,
     TicketMoves,
     TicketObservation,
     TicketPlan,
     TicketState,
+    UpdateHold,
     URLUtils,
-    UsageLimit
+    UsageLimit,
+    Views
   }
 
   alias SymphonyElixir.Codex.MessageHumanizer
   alias SymphonyElixir.Connected.Read, as: ConnectedRead
+  alias SymphonyElixir.Dispatch.DependsOn
   alias SymphonyElixir.Dispatch.Order, as: DispatchOrder
   alias SymphonyElixir.Dispatch.Shadow, as: DispatchShadow
   alias SymphonyElixir.GitHub.WebhookSetup.Cache, as: WebhookSetupCache
@@ -78,8 +82,9 @@ defmodule SymphonyElixirWeb.Presenter do
         waiting_on_you = Inbox.items(snapshot, inbox)
         repositories = Map.get(snapshot, :repositories, [])
         records = ticket_state_records()
-        status = &with_ticket_status(&1, records, repositories, false)
-        running_status = &with_ticket_status(&1, records, repositories, true)
+        shared = %{dependents: records |> Map.values() |> dependents_index(), update_hold_cache: update_hold_cache(snapshot)}
+        status = &with_ticket_status(&1, records, repositories, false, shared)
+        running_status = &with_ticket_status(&1, records, repositories, true, shared)
 
         %{
           generated_at: generated_at,
@@ -94,7 +99,6 @@ defmodule SymphonyElixirWeb.Presenter do
             conflicts: length(Map.get(snapshot, :conflicts, [])),
             retrying: length(snapshot.retrying),
             claimed: length(Map.get(snapshot, :claimed, [])),
-            forced: length(Map.get(snapshot, :forced, [])),
             shipped_today: length(shipped_today),
             waiting_on_you: length(waiting_on_you),
             review_inconclusive: review_inconclusive_counts(run_history)
@@ -120,6 +124,8 @@ defmodule SymphonyElixirWeb.Presenter do
           codex_totals: normalize_codex_totals(Map.get(snapshot, :codex_totals)),
           pollers: normalize_pollers(Map.get(snapshot, :pollers)),
           pause: normalize_pause(Map.get(snapshot, :pause)),
+          update_window: normalize_update_window(Map.get(snapshot, :update_window)),
+          conductor_runs: ConductorGate.status().running,
           repositories: Enum.map(repositories, &repository_payload/1),
           all_repositories_paused: repositories != [] and Enum.all?(repositories, & &1.pause),
           providers: snapshot |> Map.get(:providers, []) |> Enum.map(&provider_state_payload/1),
@@ -141,8 +147,8 @@ defmodule SymphonyElixirWeb.Presenter do
           shipped_today: Enum.map(shipped_today, &shipped_payload/1),
           blocked: Enum.map(blocked, &blocked_payload/1),
           app_update: WatchPayload.app_update(blocked, PrWatch.Release.latest(), ReleaseBuild.latest_build()),
-          forced: snapshot |> Map.get(:forced, []) |> Enum.map(&forced_payload/1),
           concurrency: Map.get(snapshot, :concurrency),
+          slots: Map.get(snapshot, :slots),
           claimed: Map.get(snapshot, :claimed, []),
           rate_limits: snapshot.rate_limits,
           linear_usage: normalize_linear_usage(get_in(snapshot, [:polling, :linear, :usage])),
@@ -165,7 +171,7 @@ defmodule SymphonyElixirWeb.Presenter do
   @doc """
   The dispatch order (`GET /api/v1/dispatch/order`, `SymphonyElixir.Dispatch.Order.read/3`): every open
   ticket Symphony works, grouped by situation kind, and the candidates in the order the dispatcher
-  starts them, each with its reason. Read from what the orchestrator walked at its last poll cycle and
+  starts them (the stored queue order, `SymphonyElixir.Dispatch.Queue`), each with its reason. Read from what the orchestrator walked at its last poll cycle and
   the ticket records: it makes no Linear request.
   """
   @spec dispatch_order_payload(GenServer.name(), timeout()) :: map()
@@ -188,13 +194,21 @@ defmodule SymphonyElixirWeb.Presenter do
   @doc """
   The Director's Home read (`GET /api/v1/home`, `SymphonyElixir.Home.read/4`): the tickets in
   progress under their epics, the queue as the tree of what waits on what, and how many open
-  tickets neither holds, by reason. Read from the ticket records, their ledgers and what the
-  orchestrator walked at its last poll cycle: it makes no Linear request. It carries no time of its
-  own, so an unchanged read has an unchanged `ETag`. When the snapshot can't be read the situations
-  are the records' alone, the queue is empty and the answer carries an `error`.
+  tickets neither holds, by reason; the slot entries with their cards, one page of the queue rows
+  and one page of Recently done (`SymphonyElixir.Home.Slots`, `SymphonyElixir.Home.Queue`,
+  `SymphonyElixir.Home.RecentlyDone`). Read from the ticket records, their ledgers, the run records
+  and the orchestrator's snapshot (the slot count, the runs and what it
+  walked at its last poll cycle): it makes no Linear request. It carries no time of its own, so an
+  unchanged read has an unchanged `ETag`. When the snapshot can't be read the situations are the
+  records' alone, the queue tree is empty, the slots are numbered to the configured count and the
+  answer carries an `error`.
+
+  `query` takes the queue page (`offset`, `limit`), the Recently done page (`done`,
+  `SymphonyElixir.Home.RecentlyDone.page/1`) and the saved filter: `filters` (a view's,
+  `SymphonyElixir.Views`) narrow the queue rows, and `view` is echoed in `queue.view`.
   """
-  @spec home_payload(GenServer.name(), timeout()) :: map()
-  def home_payload(orchestrator, snapshot_timeout_ms) do
+  @spec home_payload(GenServer.name(), timeout(), map()) :: map()
+  def home_payload(orchestrator, snapshot_timeout_ms, query \\ %{}) do
     records = ticket_state_records() |> Map.values()
 
     {snapshot, error} =
@@ -206,6 +220,8 @@ defmodule SymphonyElixirWeb.Presenter do
 
     live = Situation.live_facts(snapshot)
     pauses = %{repositories: Map.get(snapshot, :repositories, []), symphony_pause: symphony_pause_reason()}
+    dependents = dependents_index(records)
+    cache = update_hold_cache(snapshot)
 
     moves = fn record ->
       moves_payload(record, %{
@@ -213,24 +229,43 @@ defmodule SymphonyElixirWeb.Presenter do
         repo_key: record.repo_key,
         symphony_pause: pauses.symphony_pause,
         repository_pause: repository_pause_in(pauses.repositories, record.repo_key),
-        running?: Map.has_key?(live.running, record.issue_id)
+        running?: Map.has_key?(live.running, record.issue_id),
+        dependents: Map.get(dependents, record.issue_id, []),
+        update_hold_cache: cache
       })
     end
 
-    payload = Home.read(Map.get(snapshot, :dispatch_order), records, live, priority_filter: Config.ticket_priority_filter(), moves: moves)
+    filters = Map.get(query, :filters, [])
+    matching = if filters != [], do: TicketList.matching(filters, records: records, live: live)
+    page = %{offset: Map.get(query, :offset, 0), limit: Map.get(query, :limit, Home.Queue.default_limit()), matching: matching}
+
+    payload =
+      Home.read(Map.get(snapshot, :dispatch_order), records, live,
+        priority_filter: Config.ticket_priority_filter(),
+        moves: moves,
+        slot_count: get_in(snapshot, [:slots, :total]) || Config.settings!().execution.max_concurrent_agents,
+        page: page,
+        done_page: Map.get(query, :done, Home.RecentlyDone.default_page()),
+        runs: Map.get(snapshot, :running, []),
+        pull_request: &PullRequestPayload.read/1
+      )
+
+    view = Map.get(query, :view)
+    payload = update_in(payload.queue, &Map.merge(&1, %{view: view && Views.payload(view), filters: filters}))
     if error, do: Map.put(payload, :error, error), else: payload
   end
 
   defp dispatch_order_read(snapshot, records), do: DispatchOrder.read(Map.get(snapshot, :dispatch_order), records, Situation.live_facts(snapshot))
 
   @doc """
-  The plan tickets followed to done (`SymphonyElixir.Initiatives.list/4`): active ones first, then
-  in review, then done in the last 7 days, each with its sub-tickets in landing order, what each
-  waits on, counts by stage and its slot line from `epic_lanes`. Read from
-  what Symphony cached on its last poll: it makes no Linear request.
+  The parents Symphony split, followed to done (`SymphonyElixir.Initiatives.list/4`): active ones
+  first, then in review, then done in the last 7 days, each with its sub-tickets in landing order,
+  what each waits on, counts by stage and its slot line from `epic_lanes`. Read from Symphony's
+  records on each call (`initiatives` are `SymphonyElixir.Initiatives.read/1`'s options, the stored
+  records by default): it makes no Linear request.
   """
-  @spec initiatives_payload(GenServer.name(), timeout(), GenServer.name(), GenServer.name()) :: map()
-  def initiatives_payload(orchestrator, snapshot_timeout_ms, initiatives \\ Initiatives, inbox \\ Inbox) do
+  @spec initiatives_payload(GenServer.name(), timeout(), [Initiatives.opt()], GenServer.name()) :: map()
+  def initiatives_payload(orchestrator, snapshot_timeout_ms, initiatives \\ [], inbox \\ Inbox) do
     generated_at = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
 
     case Orchestrator.snapshot(orchestrator, snapshot_timeout_ms) do
@@ -240,13 +275,12 @@ defmodule SymphonyElixirWeb.Presenter do
 
         listed =
           snapshot
-          |> Initiatives.list(initiatives, inbox)
+          |> Initiatives.list(Keyword.put_new(initiatives, :records, Map.values(records)), inbox)
           |> Enum.sort_by(&{group_rank(&1.group), &1.identifier || ""})
           |> Enum.map(&initiative_payload(&1, lanes, records))
 
         %{
           generated_at: generated_at,
-          read: Initiatives.read?(initiatives),
           counts: Map.new(~w(active in_review done), fn group -> {group, Enum.count(listed, &(&1.group == group))} end),
           initiatives: listed
         }
@@ -263,9 +297,9 @@ defmodule SymphonyElixirWeb.Presenter do
   defp group_rank("in_review"), do: 1
   defp group_rank(_done), do: 2
 
-  # The epic's `started_at` is Linear's and its `tokens` the sum of its sub-tickets' ended runs, from
-  # their ledgers; each sub-ticket's `completed_at` is Linear's and its `pull_request` the number of
-  # the PR its record last read.
+  # The epic's `started_at` is when Symphony split it and its `tokens` the sum of its sub-tickets'
+  # ended runs, from their ledgers; each sub-ticket's `completed_at` is when its record entered a
+  # terminal phase and its `pull_request` the number of the PR its record last read.
   defp initiative_payload(initiative, lanes, records) do
     %{
       issue_id: initiative.id,
@@ -479,7 +513,16 @@ defmodule SymphonyElixirWeb.Presenter do
     |> Map.merge(plan_payload(events))
     |> Map.put(:pull_request, PullRequestPayload.read(record))
     |> complete_connected(record, snapshot)
-    |> Map.merge(ticket_status(record, %{identifier: payload.issue_identifier, repo_key: payload.repo_key, repository_pause: repository_pause, running?: running?}))
+    |> Map.merge(
+      ticket_status(record, %{
+        identifier: payload.issue_identifier,
+        repo_key: payload.repo_key,
+        repository_pause: repository_pause,
+        running?: running?,
+        dependents: ticket_state_records() |> Map.values() |> dependents_index() |> Map.get(payload.issue_id, []),
+        update_hold_cache: update_hold_cache(snapshot)
+      })
+    )
   end
 
   # What a groomed ticket works from (`SymphonyElixir.TicketPlan`): its current plan without the
@@ -542,10 +585,21 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp moves_payload(record, live), do: record |> TicketMoves.facts(live) |> TicketMoves.read()
 
+  # The open tickets that depend on each ticket, by the issue id depended on: they refuse its cancel
+  # (`SymphonyElixir.TicketMoves`, `SymphonyElixir.Dispatch.DependsOn.dependents_index/2`).
+  defp dependents_index(records) do
+    DependsOn.dependents_index(records, MapSet.new(Config.settings!().tracker.terminal_states, &(&1 |> String.trim() |> String.downcase())))
+  end
+
+  # The update hold's cache the orchestrator published in its snapshot, which judges a `:released`
+  # dependency in a ticket's Start as the orchestrator's Start judges it; an empty one without it.
+  defp update_hold_cache(%{update_hold_cache: %{} = cache}), do: cache
+  defp update_hold_cache(_snapshot), do: UpdateHold.empty_cache()
+
   # A state payload entry with its ticket's status, read from the records the payload read once and
   # from the repositories' pauses in the snapshot. A ticket the snapshot lists among the running
   # ones has a run already working on it, so its Start now is not allowed.
-  defp with_ticket_status(entry, records, repositories, running?) do
+  defp with_ticket_status(entry, records, repositories, running?, shared) do
     record = Map.get(records, entry.issue_id)
     entry = with_record_repo_key(entry, record)
     repo_key = entry.repo_key
@@ -553,7 +607,16 @@ defmodule SymphonyElixirWeb.Presenter do
     identifier = Map.get(entry, :issue_identifier) || Map.get(entry, :identifier) || entry.issue_id
     repository_pause = repository_pause_in(repositories, repo_key)
 
-    Map.merge(entry, ticket_status(record, %{identifier: identifier, repo_key: repo_key, repository_pause: repository_pause, running?: running?}))
+    live = %{
+      identifier: identifier,
+      repo_key: repo_key,
+      repository_pause: repository_pause,
+      running?: running?,
+      dependents: Map.get(shared.dependents, entry.issue_id, []),
+      update_hold_cache: shared.update_hold_cache
+    }
+
+    Map.merge(entry, ticket_status(record, live))
   end
 
   # The line a repository's pause in the snapshot skips dispatch with; nil when it has none.
@@ -695,7 +758,13 @@ defmodule SymphonyElixirWeb.Presenter do
     watched = for {_issue_id, record} <- records, record.pr_watch, do: record
     live = Situation.live_facts(snapshot)
     all = Map.values(records)
-    pauses = %{repositories: Map.get(snapshot, :repositories, []), symphony_pause: symphony_pause_reason()}
+
+    pauses = %{
+      repositories: Map.get(snapshot, :repositories, []),
+      symphony_pause: symphony_pause_reason(),
+      dependents: dependents_index(all),
+      update_hold_cache: update_hold_cache(snapshot)
+    }
 
     watched = Enum.sort_by(watched, &{&1.repo_key || "", &1.issue_identifier || &1.issue_id || ""})
     tracked = tracked_connected(snapshot)
@@ -727,7 +796,9 @@ defmodule SymphonyElixirWeb.Presenter do
             repo_key: record.repo_key,
             symphony_pause: pauses.symphony_pause,
             repository_pause: repository_pause_in(pauses.repositories, record.repo_key),
-            running?: Map.has_key?(live.running, record.issue_id)
+            running?: Map.has_key?(live.running, record.issue_id),
+            dependents: Map.get(pauses.dependents, record.issue_id, []),
+            update_hold_cache: pauses.update_hold_cache
           })
       },
       Lifecycle.read(record.issue_id, DateTime.utc_now(), running_entry(snapshot, record.issue_id), paused?(record))
@@ -1328,7 +1399,6 @@ defmodule SymphonyElixirWeb.Presenter do
       between_turns: between_turns?(entry),
       started_at: iso8601(entry.started_at),
       last_event_at: iso8601(Map.get(entry, :last_event_at) || entry.last_codex_timestamp),
-      forced: Map.get(entry, :forced, false),
       tokens: %{
         input_tokens: entry_input_tokens(entry),
         uncached_input_tokens: entry_uncached_input_tokens(entry),
@@ -1423,8 +1493,7 @@ defmodule SymphonyElixirWeb.Presenter do
       due_at: due_at_iso8601(entry.due_in_ms),
       error: entry.error,
       worker_host: Map.get(entry, :worker_host),
-      workspace_path: Map.get(entry, :workspace_path),
-      forced: Map.get(entry, :forced, false)
+      workspace_path: Map.get(entry, :workspace_path)
     }
   end
 
@@ -1618,6 +1687,15 @@ defmodule SymphonyElixirWeb.Presenter do
     %{paused: false, reason: nil, paused_at: nil, reasons: []}
   end
 
+  # The update the menu bar app has ready (`SymphonyElixir.UpdateWindow`): `waiting` while dispatch
+  # goes on, `holding` once Symphony paused for it.
+  defp normalize_update_window(%{version: version, phase: phase} = window) do
+    holding_since = iso8601(window.holding_since)
+    %{version: version, phase: phase, ready_at: iso8601(window.ready_at), holding_since: holding_since}
+  end
+
+  defp normalize_update_window(_none), do: nil
+
   defp pause_reason_payload(reason),
     do: %{kind: reason.kind, text: reason.text, since: iso8601(Map.get(reason, :since)), waits_on: reason.waits_on}
 
@@ -1729,8 +1807,7 @@ defmodule SymphonyElixirWeb.Presenter do
       state: entry.state,
       reason: entry.reason,
       attempt: Map.get(entry, :attempt),
-      since: iso8601(Map.get(entry, :since)),
-      forced: Map.get(entry, :forced, false)
+      since: iso8601(Map.get(entry, :since))
     }
   end
 
@@ -1764,37 +1841,6 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp blocked_summary(identifier, reason, _blockers) when is_binary(reason), do: "#{identifier} #{reason}"
   defp blocked_summary(identifier, nil, blockers), do: "#{identifier} waiting on " <> Enum.map_join(blockers, ", ", &blocker_label/1)
-
-  # Tickets an app update would release: each one waits only for the running app to include a fix.
-  defp forced_payload(entry) do
-    status = %{
-      phase: Map.get(entry, :phase),
-      running: Map.get(entry, :running, false),
-      waiting_on: Map.get(entry, :waiting_on),
-      blockers: Map.get(entry, :blockers, [])
-    }
-
-    %{
-      issue_id: entry.issue_id,
-      issue_identifier: entry.identifier,
-      title: entry.title,
-      repo_key: Map.get(entry, :repo_key),
-      state: entry.state,
-      forced_since: iso8601(entry.forced_since),
-      forced_for_seconds: Map.get(entry, :forced_for_seconds),
-      stale: Map.get(entry, :stale, false),
-      position: entry.position,
-      waiting_on_human: Map.get(entry, :waiting_on_human, false),
-      sub_issue: forced_sub_issue_payload(Map.get(entry, :sub_issue))
-    }
-    |> Map.merge(status)
-    |> Map.put(:summary, if(status.phase, do: ForcedStatus.summary(status)))
-  end
-
-  defp forced_sub_issue_payload(%{issue_id: issue_id} = part),
-    do: %{issue_id: issue_id, issue_identifier: Map.get(part, :identifier), state: Map.get(part, :state)}
-
-  defp forced_sub_issue_payload(_no_part), do: nil
 
   defp blocker_label(%{issue_identifier: identifier, state: state}) do
     "#{identifier || "an unknown issue"} (#{state || "unknown state"})"

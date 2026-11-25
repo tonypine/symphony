@@ -132,7 +132,7 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
             model.onPauseControl = { [weak self] control, action in await self?.sendPause(control, action) ?? false }
             self.model = model
             let hostingController = NSHostingController(
-                rootView: ReposView(model: model).environment(\.openURL, URLOpener.action)
+                rootView: ReposView(model: model).environment(\.openURL, URLOpener.action).pointerButtons()
             )
             // Only the minimum: the window keeps the size it was left at.
             hostingController.sizingOptions = [.minSize]
@@ -239,7 +239,7 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
         case Self.chipItem:
             guard let model else { return nil }
             item.label = "Symphony"
-            item.view = NSHostingView(rootView: ReposChipView(model: model))
+            item.view = NSHostingView(rootView: ReposChipView(model: model).pointerButtons())
         case Self.addItem:
             item.label = AddRepo.buttonTitle
             item.toolTip = AddRepo.buttonTitle

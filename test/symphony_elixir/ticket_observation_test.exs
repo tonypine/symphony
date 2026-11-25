@@ -59,7 +59,6 @@ defmodule SymphonyElixir.TicketObservationTest do
         labels: ["backend"],
         priority: 2,
         assignee_id: "user-1",
-        blocked_by: [%{id: "issue-a", identifier: "ACME-5", state: "In Progress"}, %{id: "issue-b", identifier: "ACME-6", state: "Done"}],
         sub_issues: [%{id: "issue-c", identifier: "ACME-8", state: "Todo"}],
         url: "https://linear.app/acme/issue/ACME-7",
         created_at: @created_at,
@@ -132,7 +131,6 @@ defmodule SymphonyElixir.TicketObservationTest do
              labels: ["backend"],
              priority: 2,
              assignee: "user-1",
-             blockers: [%{id: "issue-a", identifier: "ACME-5", state: "In Progress"}],
              sub_issues: [%{id: "issue-c", identifier: "ACME-8", state: "Todo"}],
              parent: nil,
              url: "https://linear.app/acme/issue/ACME-7",
@@ -142,6 +140,7 @@ defmodule SymphonyElixir.TicketObservationTest do
            } = record
 
     assert ticket_events(repo_key, "issue-observed") == []
+    refute Map.has_key?(record, :blockers)
   end
 
   test "the same issue again writes nothing", %{repo_key: repo_key} do
@@ -161,26 +160,48 @@ defmodule SymphonyElixir.TicketObservationTest do
     assert {:ok, :unchanged} = TicketObservation.observe(repo_key, edited, now: DateTime.add(@now, 120))
   end
 
-  test "a sub-ticket or a blocker that moves is written, at the same updatedAt", %{repo_key: repo_key} do
+  # TP-1641 c4: a description a read finds changed is checked for a person's edit, and only then.
+  test "a changed description is given to the description-edit check, an unchanged one is not",
+       %{repo_key: repo_key} do
+    test = self()
+
+    seen = fn repo, stored, description, _opts ->
+      send(test, {:edited, repo, stored && stored.issue_id, description})
+    end
+
+    {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: @now, description_edited: seen)
+    refute_received {:edited, _repo, _issue_id, _description}
+
+    edited = linear_issue(%{description: "## Why\n\nEdited.", updated_at: DateTime.add(@linear_at, 60)})
+    assert {:ok, :updated} = TicketObservation.observe(repo_key, edited, now: DateTime.add(@now, 60), description_edited: seen)
+    assert_received {:edited, ^repo_key, "issue-observed", "## Why\n\nEdited."}
+
+    retitled = linear_issue(%{title: "Renamed", description: "## Why\n\nEdited.", updated_at: DateTime.add(@linear_at, 120)})
+    assert {:ok, :updated} = TicketObservation.observe(repo_key, retitled, now: DateTime.add(@now, 120), description_edited: seen)
+    refute_received {:edited, _repo, _issue_id, _description}
+  end
+
+  test "a sub-ticket that moves is written, at the same updatedAt", %{repo_key: repo_key} do
     {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: @now)
 
     started = linear_issue(%{sub_issues: [%{id: "issue-c", identifier: "ACME-8", state: "In Progress"}]})
     assert {:ok, :updated} = TicketObservation.observe(repo_key, started, now: DateTime.add(@now, 60))
     assert RunStore.get_ticket_state("issue-observed").sub_issues == [%{id: "issue-c", identifier: "ACME-8", state: "In Progress"}]
-
-    reviewed = %{started | blocked_by: [%{id: "issue-a", identifier: "ACME-5", state: "Code Review"}]}
-    assert {:ok, :updated} = TicketObservation.observe(repo_key, reviewed, now: DateTime.add(@now, 120))
-    assert RunStore.get_ticket_state("issue-observed").blockers == [%{id: "issue-a", identifier: "ACME-5", state: "Code Review"}]
   end
 
-  test "a record that kept its blockers by identifier alone is written once with their ids and states", %{repo_key: repo_key} do
+  test "a record an older build stored with blockers loads, and the next observation writes it without the blockers",
+       %{repo_key: repo_key} do
     {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: @now)
-    :ok = RunStore.update_ticket_state("issue-observed", %{blockers: ["ACME-5"]})
-    assert RunStore.get_ticket_state("issue-observed").blockers == [%{id: nil, identifier: "ACME-5", state: nil}]
+    stored = RunStore.get_ticket_state("issue-observed")
+    legacy = Map.put(stored, :blockers, [%{id: "issue-a", identifier: "ACME-5", state: "In Progress"}])
+    {:atomic, :ok} = :mnesia.transaction(fn -> :mnesia.write({:symphony_run_store_ticket_index, "issue-observed", repo_key, legacy}) end)
 
-    assert {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: DateTime.add(@now, 60))
-    assert RunStore.get_ticket_state("issue-observed").blockers == [%{id: "issue-a", identifier: "ACME-5", state: "In Progress"}]
-    assert {:ok, :unchanged} = TicketObservation.observe(repo_key, linear_issue(), now: DateTime.add(@now, 120))
+    assert {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(%{title: "Renamed", updated_at: DateTime.add(@linear_at, 60)}), now: DateTime.add(@now, 60))
+
+    record = RunStore.get_ticket_state("issue-observed")
+    refute Map.has_key?(record, :blockers)
+    assert record.depends_on == []
+    assert TicketState.pause_reasons(record) == []
   end
 
   test "a newer title reaches an existing record and leaves its other fields", %{repo_key: repo_key} do
@@ -208,26 +229,11 @@ defmodule SymphonyElixir.TicketObservationTest do
     assert counts() == %{updated: 1, unchanged: 0, stale: 1, unrouted: 0, errors: 0}
   end
 
-  test "blockers keep the open ones: the given terminal states, else the repo's", %{repo_key: repo_key} do
-    {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: @now, terminal_states: ["In Progress"])
-    assert RunStore.get_ticket_state("issue-observed").blockers == [%{id: "issue-b", identifier: "ACME-6", state: "Done"}]
-
-    {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(%{updated_at: DateTime.add(@linear_at, 1)}), now: @now)
-    assert RunStore.get_ticket_state("issue-observed").blockers == [%{id: "issue-a", identifier: "ACME-5", state: "In Progress"}]
-  end
-
-  test "an unknown blocker list keeps the known blockers", %{repo_key: repo_key} do
-    {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: @now)
-
-    assert {:ok, :unchanged} = TicketObservation.observe(repo_key, linear_issue(%{blocked_by: :unknown}), now: DateTime.add(@now, 60))
-    assert RunStore.get_ticket_state("issue-observed").blockers == [%{id: "issue-a", identifier: "ACME-5", state: "In Progress"}]
-  end
-
-  test "a repo Symphony has no settings for keeps every blocker" do
+  test "a repo Symphony has no settings for still gets the record" do
     assert {:ok, :updated} = TicketObservation.observe("observation-other-repo", linear_issue())
 
     record = RunStore.get_ticket_state("issue-observed")
-    assert Enum.map(record.blockers, & &1.identifier) == ["ACME-5", "ACME-6"]
+    assert record.repo_key == "observation-other-repo"
     assert %DateTime{} = record.observed_at
   end
 
@@ -340,11 +346,12 @@ defmodule SymphonyElixir.TicketObservationTest do
 
     {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: @now, source: :watcher)
     assert_received {:ticket_record, ^repo_key, "issue-observed", :changed, fields}
-    assert :phase in fields and :title in fields and :blockers in fields
+    assert :phase in fields and :title in fields and :sub_issues in fields
+    refute :blockers in fields
   end
 
   test "a read of Linear that changes the record, which announces nothing, is a reason to compute the ticket's situation", %{repo_key: repo_key} do
-    waiting = linear_issue(%{state: "Waiting on sub-tickets", blocked_by: [], labels: ["plan"]})
+    waiting = linear_issue(%{state: "Waiting on sub-tickets", labels: ["plan"]})
     {:ok, :updated} = TicketObservation.observe(repo_key, waiting, now: @now)
 
     recorder = start_supervised!(Recorder)
@@ -384,15 +391,16 @@ defmodule SymphonyElixir.TicketObservationTest do
       assert {:ok, :unchanged} = TicketObservation.observe(repo_key, linear_issue(), now: DateTime.add(@now, 60), source: :watcher)
       assert compare() == %{webhook_first: 1, poll_first: 0, poll_first_recent: []}
 
-      # A second change through the webhook, then a read that only learns the blockers it doesn't carry.
+      # A second change through the webhook, then a read that only learns the sub-issues it doesn't carry.
       edited = linear_issue(%{priority: 1, updated_at: DateTime.add(@linear_at, 120)})
-      {:ok, :updated} = TicketObservation.observe(repo_key, %{edited | blocked_by: :unknown}, now: DateTime.add(@now, 120), source: :webhook)
+      {:ok, :updated} = TicketObservation.observe(repo_key, %{edited | sub_issues: :unknown}, now: DateTime.add(@now, 120), source: :webhook)
 
-      assert {:ok, :updated} = TicketObservation.observe(repo_key, %{edited | blocked_by: []}, now: DateTime.add(@now, 150), compare: true)
+      polled = %{edited | sub_issues: [%{id: "issue-c", identifier: "ACME-8", state: "Done"}]}
+      assert {:ok, :updated} = TicketObservation.observe(repo_key, polled, now: DateTime.add(@now, 150), compare: true)
       assert compare().webhook_first == 2
 
       # The record's last change is now the poll's: a read finding nothing counts neither.
-      assert {:ok, :unchanged} = TicketObservation.observe(repo_key, %{edited | blocked_by: []}, now: DateTime.add(@now, 180), compare: true)
+      assert {:ok, :unchanged} = TicketObservation.observe(repo_key, polled, now: DateTime.add(@now, 180), compare: true)
       assert compare() == %{webhook_first: 2, poll_first: 0, poll_first_recent: []}
     end
 
@@ -435,13 +443,13 @@ defmodule SymphonyElixir.TicketObservationTest do
 
   describe "observe_delivery/2" do
     defp delivery(attrs \\ %{}) do
-      issue = linear_issue(Map.merge(%{team: %{key: "Test", name: "Test"}, blocked_by: :unknown, sub_issues: :unknown}, attrs))
+      issue = linear_issue(Map.merge(%{team: %{key: "Test", name: "Test"}, sub_issues: :unknown}, attrs))
       {:issue, :update, issue, issue.updated_at}
     end
 
     # The record the regular poll keeps, which a delivery updates.
     defp poll!(repo_key, attrs \\ %{}) do
-      {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(Map.put(attrs, :blocked_by, [])), now: @now, terminal_states: [])
+      {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(attrs), now: @now, terminal_states: [])
       RunStore.get_ticket_state("issue-observed")
     end
 
@@ -525,7 +533,7 @@ defmodule SymphonyElixir.TicketObservationTest do
       # One record per ticket: the team default reads the project repo's.
       assert %{repo_key: @project_repo} = RunStore.get_ticket_state("issue-observed")
 
-      repolled = linear_issue(%{project: @project, blocked_by: [], priority: 1, updated_at: DateTime.add(@linear_at, 60)})
+      repolled = linear_issue(%{project: @project, priority: 1, updated_at: DateTime.add(@linear_at, 60)})
       opts = [now: DateTime.add(@now, 120), terminal_states: [], compare: true]
       assert {:ok, :unchanged} = TicketObservation.observe(@project_repo, repolled, opts)
       assert compare() == %{webhook_first: 1, poll_first: 0, poll_first_recent: []}
@@ -550,12 +558,11 @@ defmodule SymphonyElixir.TicketObservationTest do
       assert_received {:tracker, {:fetch_issue_states_by_ids, ["issue-observed"]}}
       assert_receive {:"$gen_cast", {:request_refresh, @project_repo, :now}}
       assert_received {:ticket_record, @project_repo, "issue-observed", :changed, fields}
-      assert :phase in fields and :blockers in fields
+      assert :phase in fields and :sub_issues in fields
 
       record = RunStore.get_ticket_state("issue-observed")
       assert %{issue_identifier: "ACME-7", phase: "Todo", title: "Read by id", observed_from: :webhook} = record
       assert record.project == %{id: "project-harness", name: "Building the harness", slug_id: "f469eb38bbc5"}
-      assert [%{identifier: "ACME-5"}] = record.blockers
       assert [%{identifier: "ACME-8"}] = record.sub_issues
       # One record per ticket: the team default reads the project repo's.
       assert %{repo_key: @project_repo} = RunStore.get_ticket_state("issue-observed")
@@ -613,7 +620,9 @@ defmodule SymphonyElixir.TicketObservationTest do
 
       record = RunStore.get_ticket_state("issue-observed")
       assert {record.removed_at, record.updated_at} == {removed_at, removed_at}
-      assert Map.drop(record, [:removed_at, :updated_at]) == Map.drop(stored, [:removed_at, :updated_at])
+      # Removed, the ticket leaves the dispatch queue.
+      assert {stored.sort_key, record.sort_key} == {"a0", nil}
+      assert Map.drop(record, [:removed_at, :updated_at, :sort_key]) == Map.drop(stored, [:removed_at, :updated_at, :sort_key])
     end
 
     test "a removal of a ticket without a record writes nothing; a store refusal is an error" do
@@ -713,7 +722,7 @@ defmodule SymphonyElixir.TicketObservationTest do
     test "reads the parents again by id, writes their current sub-issues from the webhook and asks for a poll", %{repo_key: repo_key} do
       Process.register(self(), ReconcileProbe)
       on_exit(fn -> :persistent_term.erase({ReconcileTracker, :fetch_issue_states_by_ids}) end)
-      parent = linear_issue(%{id: "parent-1", identifier: "ACME-30", state: "Waiting on sub-tickets", blocked_by: [], updated_at: @linear_at})
+      parent = linear_issue(%{id: "parent-1", identifier: "ACME-30", state: "Waiting on sub-tickets", updated_at: @linear_at})
       {:ok, :updated} = TicketObservation.observe(repo_key, parent, now: @now, terminal_states: [])
 
       left = %{parent | sub_issues: [], updated_at: DateTime.add(@linear_at, 60)}
@@ -747,7 +756,7 @@ defmodule SymphonyElixir.TicketObservationTest do
 
   describe "observe_held/2" do
     defp by_id(attrs) do
-      linear_issue(Map.merge(%{project: @project, team: %{key: "Test", name: "Test"}, blocked_by: []}, attrs))
+      linear_issue(Map.merge(%{project: @project, team: %{key: "Test", name: "Test"}}, attrs))
     end
 
     test "a by-id read updates the record a project slug's poll keeps, as a by-id read, and nothing under the team default" do
@@ -839,7 +848,7 @@ defmodule SymphonyElixir.TicketObservationTest do
       :ok = TicketSignals.record_phase(repo_key, "issue-observed", "Code Review")
 
       later = DateTime.add(DateTime.utc_now(), 60)
-      moved = linear_issue(%{state: "Done", blocked_by: :unknown, sub_issues: :unknown, updated_at: later})
+      moved = linear_issue(%{state: "Done", sub_issues: :unknown, updated_at: later})
       delivery = {:issue, :update, moved, later}
       assert TicketObservation.observe_delivery(delivery, orchestrator: self(), task_supervisor: @moves) == :updated
       settle()
@@ -983,7 +992,7 @@ defmodule SymphonyElixir.TicketObservationTest do
       # is not either.
       Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_sleep_ms, 400)
 
-      delivery = {:issue, :update, hand_move("Done", %{blocked_by: :unknown, sub_issues: :unknown}), @moved_at}
+      delivery = {:issue, :update, hand_move("Done", %{sub_issues: :unknown}), @moved_at}
       opts = [orchestrator: self(), task_supervisor: @moves, timeout_ms: 200, dispatch_source: "record", now: @now]
       assert TicketObservation.observe_delivery(delivery, opts) == :updated
       refute_received {:memory_tracker_state_update, _issue_id, _state}

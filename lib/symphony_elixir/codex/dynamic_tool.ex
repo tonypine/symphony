@@ -162,7 +162,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "linear_create_subissue",
       "description" =>
-        "Create a child issue of the current Linear issue, in its team and project and assigned to its assignee. On a plan ticket the new issue lands in Backlog, where the plan's approval promotes it; on any other ticket it lands in Todo and the current issue is marked blocked by it, so the new issue lands first and the current one continues once it is done. Without `priority` it inherits the current issue's. Pass `blocked_by` with the identifiers of earlier sibling sub-issues it depends on to add Linear blocked-by links. A title this run already filed under the current issue is refused.",
+        "Create a child issue of the current Linear issue, in its team and project and assigned to its assignee. On a plan ticket the new issue lands in Backlog, where the plan's approval promotes it; on any other ticket it lands in Todo and the current issue is marked blocked by it, so the new issue lands first and the current one continues once it is done. Without `priority` it inherits the current issue's. Pass `blocked_by` with the identifiers of earlier sibling sub-issues it depends on: Symphony stores each as a dependency, and holds the new issue until they are done. A title this run already filed under the current issue is refused.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -199,7 +199,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
           "blocked_by" => %{
             "type" => "array",
             "items" => %{"type" => "string"},
-            "description" => "Every sibling sub-issue that blocks this one. Links to siblings not listed are removed; links to other issues stay."
+            "description" => "Every sibling sub-issue that blocks this one. Dependencies on siblings not listed are removed; those on other issues stay."
           },
           "cancel_reason" => %{
             "type" => "string",
@@ -211,7 +211,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "linear_add_blocked_by",
       "description" =>
-        "Mark the current Linear issue blocked by existing issues, such as the tickets its work depends on. Symphony holds an issue in Todo until every blocker is Done or Canceled, then dispatches it again on its own.",
+        "Mark the current issue blocked by existing tickets Symphony tracks, such as the tickets its work depends on. Symphony stores each as a dependency and holds the issue until every blocker is Done, then dispatches it again on its own.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -327,7 +327,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "description" =>
         "Record which test of this PR proves each `## User walkthrough` step you covered with an automated test: each named step gets an `evidence` event " <>
           "on the ticket's history with `proof` (the step and the test; a later proof of a step replaces an earlier one), and the description is left as it is. " <>
-          "Name the test as the code has it (its file path, or a test or scenario name as written), never a check: the repo's `proof_check` names that. " <>
+          "Name the test as the code has it (its file path, or a test or scenario name as written), never a check: the proof is complete once recorded, and CI runs the test and gates the merge. " <>
           "Leave a step no test of this PR covers out, for QA; a step its author marked `Proved by: QA` is refused. " <>
           "On a ticket with a plan (the prompt has a `## Checks` section), name the check instead: `step` is the check's id, the proof is recorded as a " <>
           "`check.proved`, and a check the plan proves by QA is refused.",
@@ -406,6 +406,11 @@ defmodule SymphonyElixir.Codex.DynamicTool do
                       "description" => "What will happen to the work once it is picked, in the Director's terms: `TP-612 moves to Done, linked to TP-668`."
                     },
                     "recommended" => %{"type" => "boolean", "description" => "True on the one option you recommend."},
+                    "back_to_review" => %{
+                      "type" => "boolean",
+                      "description" =>
+                        "True when picking this option sends the pull request back to Code Review as it is, with no change: the pick moves the ticket to Code Review itself and no rework run starts. Only on a ticket in Rework; elsewhere the request is refused."
+                    },
                     "unlocks" => %{
                       "type" => "array",
                       "items" => %{"type" => "string"},
@@ -528,7 +533,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     },
     %{
       "name" => "github_merge_pull_request",
-      "description" => "Squash-merge the pull request for the current workspace branch. Only allowed while the current Linear issue is in Merging and no checks are failing or pending.",
+      "description" =>
+        "Squash-merge the pull request for the current workspace branch. Only allowed while the current Linear issue is in Merging, no check of its plan is open, and no checks are failing or pending.",
       "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
     },
     %{
@@ -2002,7 +2008,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "error" => %{
         "code" => "split_link_failed",
-        "message" => "Created #{identifier} in Todo, but could not mark #{current} blocked by it, so #{current} would not wait for it. Call linear_add_blocked_by with #{identifier} to add the link.",
+        "message" =>
+          "Created #{identifier} in Todo, but could not store that #{current} depends on it, so #{current} would not wait for it. Call linear_add_blocked_by with #{identifier} to store it.",
         "identifier" => identifier,
         "blocked" => current,
         "reason" => inspect(reason)
@@ -2246,7 +2253,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "error" => %{
         "code" => "blocked_by_relation_failed",
         "message" =>
-          "Created #{identifier}, but could not mark it blocked by #{blocker}, so it and any later `blocked_by` links are missing. Add them with linear_add_blocked_by, or record them in the workpad: a person adds a blocker from the ticket page in the Director.",
+          "Created #{identifier}, but could not store that it depends on #{blocker}, so it and any later `blocked_by` dependencies are missing. Retry them with linear_update_subissue while it is in Backlog, or record them in the workpad: a person adds a blocker from the ticket page in the Director.",
         "identifier" => identifier,
         "blocker" => blocker,
         "reason" => inspect(reason)
@@ -2320,19 +2327,9 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "error" => %{
         "code" => "blocked_by_relation_failed",
-        "message" => "Could not mark #{identifier} blocked by #{blocker}; it and any later `blocked_by` changes are missing. Retry, or record them in the workpad for a human to make.",
+        "message" => "Could not store that #{identifier} depends on #{blocker}; it and any later `blocked_by` changes are missing. Retry, or record them in the workpad for a human to make.",
         "identifier" => identifier,
         "blocker" => blocker,
-        "reason" => inspect(reason)
-      }
-    }
-  end
-
-  defp tool_error_payload({:remove_blocked_by_failed, reason}) do
-    %{
-      "error" => %{
-        "code" => "remove_blocked_by_failed",
-        "message" => "Could not remove a blocked-by link the new list leaves out. Record it in the workpad: a person removes a blocker from the ticket page in the Director.",
         "reason" => inspect(reason)
       }
     }
@@ -2346,14 +2343,14 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "error" => %{
         "code" => "blocked_by_not_found",
-        "message" => "linear_add_blocked_by could not find #{Enum.join(unknown, ", ")}. Nothing was linked.",
+        "message" => "linear_add_blocked_by could not find #{Enum.join(unknown, ", ")} among the tickets Symphony tracks. Nothing was stored.",
         "unknown" => unknown
       }
     }
   end
 
   defp tool_error_payload({:blocked_by_self, identifier}) do
-    %{"error" => %{"code" => "blocked_by_self", "message" => "linear_add_blocked_by cannot mark #{identifier}, the current issue, as its own blocker. Nothing was linked."}}
+    %{"error" => %{"code" => "blocked_by_self", "message" => "linear_add_blocked_by cannot mark #{identifier}, the current issue, as its own blocker. Nothing was stored."}}
   end
 
   defp tool_error_payload({:add_blocked_by_failed, blocker, reason}) do
@@ -2361,7 +2358,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "error" => %{
         "code" => "add_blocked_by_failed",
         "message" =>
-          "Could not mark the current issue blocked by #{blocker}; it and any later `blocked_by` links are missing. Retry, or record them in the workpad: a person adds a blocker from the ticket page in the Director.",
+          "Could not store that the current issue depends on #{blocker}; it and any later `blocked_by` dependencies are missing. Retry, or record them in the workpad: a person adds a blocker from the ticket page in the Director.",
         "blocker" => blocker,
         "reason" => inspect(reason)
       }
@@ -2686,6 +2683,17 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "error" => %{
         "code" => "pull_request_not_open",
         "message" => "The pull request for the current workspace branch is #{inspect(state)}, so it cannot be merged."
+      }
+    }
+  end
+
+  defp tool_error_payload({:plan_checks_open, ids}) do
+    %{
+      "error" => %{
+        "code" => "plan_checks_open",
+        "message" =>
+          "Checks of the ticket's plan are still open (#{Enum.join(ids, ", ")}), so the pull request does not merge yet. " <>
+            "Prove each one (a check the pull request's own CI run proves: `ticket_record` `check.proved` with `by: ci`) and end the turn: Symphony merges it once they are proved."
       }
     }
   end

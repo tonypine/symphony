@@ -283,7 +283,9 @@ defmodule SymphonyElixir.TransitionGuard do
   a move to `Done` that closes the ticket on its own pull request (`:landing_done`, `:pr_merged`, a
   person's `:director_move`), while the ticket's current plan has an open check the merge waits on
   (`SymphonyElixir.TicketJourney.owed_before_merge/1`): `{:error, {:open_checks, ids}}`. A check
-  seen only after the merge holds neither, and a person waives a check to close such a ticket.
+  the pull request's own CI run proves (`proof: ci`) holds the move to `Done` but not the move into
+  `Merging`: it is proved there, from the PR's checks, before the PR watcher merges
+  (`SymphonyElixir.PrWatch.CiProof`). A person waives a check to close such a ticket.
   A move into `Merging` asks the PR and CI watcher to read now (`opts[:on_merging]` overrides it), so
   a PR that is already green merges at once instead of on the next timer, by when its head may be
   behind. Any other move asks it to read that ticket's PR now (`opts[:on_moved]` overrides it): no
@@ -331,19 +333,20 @@ defmodule SymphonyElixir.TransitionGuard do
 
   # The ids of the open checks of the ticket's plan that hold this move: a move into `Merging`, or a
   # move to `Done` that closes the ticket on its own pull request (a merge, a person's move), waits on
-  # every open check of the current plan but those seen only after the merge
-  # (`SymphonyElixir.TicketJourney.owed_before_merge/1`). A ticket whose work is its sub-tickets
-  # closes on them (`:final_check_pass`, `:sub_issues_done`, `:epic_review_pass`), not on its checks.
+  # every open check of the current plan (`SymphonyElixir.TicketJourney.owed_before_merge/1`); the
+  # move into `Merging` on every one but those the PR's own CI run proves, which are proved in
+  # `Merging` (`SymphonyElixir.TicketJourney.owed_into_merging/1`). A ticket whose work is its
+  # sub-tickets closes on them (`:final_check_pass`, `:sub_issues_done`, `:epic_review_pass`), not on
+  # its checks.
   defp owed_checks(issue_id, signal, target) do
-    if merge_gated?(signal, target),
-      do: issue_id |> TicketJourney.owed_before_merge() |> Enum.map(& &1.id),
-      else: []
+    cond do
+      state_name_matches?(target, @merging_state) -> issue_id |> TicketJourney.owed_into_merging() |> Enum.map(& &1.id)
+      closes_on_own_pr?(signal, target) -> issue_id |> TicketJourney.owed_before_merge() |> Enum.map(& &1.id)
+      true -> []
+    end
   end
 
-  defp merge_gated?(signal, target) do
-    closes_on_own_pr? = state_name_matches?(target, @done_state) and signal in @done_on_own_pr
-    state_name_matches?(target, @merging_state) or closes_on_own_pr?
-  end
+  defp closes_on_own_pr?(signal, target), do: state_name_matches?(target, @done_state) and signal in @done_on_own_pr
 
   # A move with no repo key has no record to write: Linear moves while Symphony's record, its events
   # and its Inbox see nothing. That is an error, logged with the key it tried.
@@ -412,13 +415,14 @@ defmodule SymphonyElixir.TransitionGuard do
   An agent asking to park its issue in `Backlog` while it is `In Progress` or `Rework` is not a
   move: the guard pauses the ticket in its phase with a recorded reason instead of moving it (the
   Backlog escape hatch is retired), and returns `{:hold, :blocked, attrs}`, the block it reported:
-  its `reason`, what clears it and what it waits on. When the issue has open blocked-by blockers
-  (`ctx`'s `:open_blockers`), the block waits on them (`dependency`), and
-  `SymphonyElixir.Pauses.Dependencies` lifts it on its own once they are all terminal; without one
-  it waits on a person's `Unblock` (`access`).
+  its `reason`, what clears it and what it waits on. When the issue has open stored dependencies
+  (`ctx`'s `:open_blockers`, `SymphonyElixir.Dispatch.DependsOn.open_identifiers/1`; Linear's
+  blocker links are not read), the block waits on them (`dependency`), and
+  `SymphonyElixir.Pauses.Dependencies` lifts it on its own once each is met; without one it waits on
+  a person's `Unblock` (`access`).
 
   With `ctx`'s `:ticket` (the issue as `SymphonyElixir.Pauses` names it), the block report pauses
-  the ticket through the one writer: one `:ticket` reason per open blocker ("Waiting for TP-12 to
+  the ticket through the one writer: one `:ticket` reason per open dependency ("Waiting for TP-12 to
   finish"), set by the run; with no blocker, the question `block_report_question/1` asks
   (`SymphonyElixir.Questions`), named in `waits_on.question_id`, which the Director's Unblock
   answers "#{@unblock_option}". A question that can't be asked pauses the ticket on an
@@ -427,7 +431,7 @@ defmodule SymphonyElixir.TransitionGuard do
 
   `ctx` carries `:settings`, `:from_state` (the issue's current state), `:plan_parent?` (the
   issue carries the `plan` label, so it is an epic parent), `:open_blockers` (the identifiers of
-  the issue's blockers still outside a terminal state), and optionally `:ticket` and
+  the tickets its open stored dependencies name), and optionally `:ticket` and
   `:issue_identifier`, which names the ticket in the question.
   """
   @spec resolve_request(map(), context()) ::
@@ -465,9 +469,10 @@ defmodule SymphonyElixir.TransitionGuard do
     end
   end
 
-  # A run that marked its issue blocked by other tickets waits on them: the pause lifts on its own
-  # once they are all terminal, in whatever phase the issue is. With no open blocker, what the run
-  # waits on is unknown to the machine, so the pause waits on a person's Unblock.
+  # A run that reported a block while its issue depends on other tickets waits on them: the pause
+  # lifts on its own once each dependency is met, in whatever phase the issue is. With no open
+  # dependency, what the run waits on is unknown to the machine, so the pause waits on a person's
+  # Unblock.
   defp block_report_attrs([_ | _] = keys) do
     %{
       reason: "the run reported a block: waiting on " <> Enum.join(keys, ", "),

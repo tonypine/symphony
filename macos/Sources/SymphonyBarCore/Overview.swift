@@ -80,8 +80,6 @@ public enum Overview {
         case openDiagnostics
         /// Opens Usage (D8).
         case openUsage
-        /// `POST /api/v1/control/force` with `clear`.
-        case stopForcing(String)
         /// Opens the Stop Run sheet (D12c); nothing stops until its button is pressed.
         case stopRun(String)
         /// Check Now: the ticket's PR and CI watcher reads and decides at once.
@@ -101,7 +99,6 @@ public enum Overview {
             case .openInLinear: "Open in Linear"
             case .openDiagnostics: "Open Diagnostics"
             case .openUsage: "Open Usage"
-            case .stopForcing: "Stop Forcing"
             case .stopRun: StopRunSheet.buttonTitle
             case .openSetup: "Open Setup"
             case .restartRelay: GitHubUpdatesCard.Action.restartRelay.title
@@ -119,8 +116,6 @@ public enum Overview {
         case conflict
         /// A provider's usage limit holds new runs.
         case usageLimit
-        /// Forced for longer than the configured stale time.
-        case staleForced
         /// Processes left running after their runs ended.
         case strayProcesses
         /// A watched ticket with nothing under way and no reason anybody can act on (S17).
@@ -160,7 +155,7 @@ public enum Overview {
 
         /// The ticket the row is about, which Return and a double-click open; nil for a hold or stray processes.
         public var ticketIdentifier: String? {
-            kinds.contains { [.stuck, .failing, .staleForced, .conflict, .silentWait].contains($0) } ? id : nil
+            kinds.contains { [.stuck, .failing, .conflict, .silentWait].contains($0) } ? id : nil
         }
     }
 
@@ -258,17 +253,6 @@ public enum Overview {
             ))
         }
 
-        // A forced ticket no list names (a Todo held by blockers) has no known repo: it shows under every scope.
-        for ticket in state.snapshot.forced where ticket.stale && index.repoKey(identifier: ticket.identifier).map(scope.includes) ?? true {
-            let forFor = ticket.forcedForSeconds.map { " for \(duration($0))" } ?? ""
-            let fixes: [Fix] = [.open(ticket.identifier), .stopForcing(ticket.identifier)]
-            findings.append(Finding(
-                subject: ticket.identifier, kind: .staleForced, severity: .warning,
-                sentence: "\(ticket.identifier) has been forced\(forFor) and is still not done.",
-                ageSeconds: ticket.forcedForSeconds, fixes: fixes
-            ))
-        }
-
         // S17: the watcher found nothing under way and no reason on it. A ticket of no known repo shows under every scope.
         for wait in state.silentWaits where (wait.repoKey ?? index.repoKey(identifier: wait.identifier)).map(scope.includes) ?? true {
             let phase = WatchBlock.phaseName(wait.phase).map { " in \($0)" } ?? ""
@@ -314,7 +298,7 @@ public enum Overview {
                 var row = rows[index]
                 row.kinds.append(finding.kind)
                 row.severity = max(row.severity, finding.severity)
-                // The ticket is named once: "SHOP-305 shows no agent activity for 14 min. It has been forced…"
+                // The ticket is named once: "SHOP-305 shows no agent activity for 14 min. It keeps failing…"
                 let prefix = "\(finding.subject) "
                 let sentence = finding.sentence.hasPrefix(prefix) ? "It " + finding.sentence.dropFirst(prefix.count) : finding.sentence
                 row.sentence += " \(sentence)"

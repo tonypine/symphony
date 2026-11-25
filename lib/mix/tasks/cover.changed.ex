@@ -4,25 +4,46 @@ defmodule Mix.Tasks.Cover.Changed do
   alias SymphonyElixir.ChangedCoverage
 
   @moduledoc """
-  Checks that every `lib/` module the branch changes is at 100% line coverage, before a push.
+  Runs the tests of what the branch changes and checks that every `lib/` module it changes is at
+  100% line coverage, in one pass, before a push.
 
-      mix cover.changed [--base origin/main] [--file lib/PATH.ex ...] [TEST_FILES...]
+      mix cover.changed [--all] [--base origin/main] [--file lib/PATH.ex ...] [--parts N] [TEST_FILES...]
 
   Runs the changed test files, `test/<path>_test.exs` for each changed `lib/<path>.ex` and every
-  test file that names a changed module, once with `--cover` (the test environment), then prints
-  each changed module's coverage with its uncovered lines. Fails when one is below 100%. Modules in
+  test file that names a changed module, once (the test environment), then prints
+  each changed module's coverage with its uncovered lines. Fails when a test fails or a module is below 100%. Modules in
   `mix.exs`'s `test_coverage` `ignore_modules` are skipped, as in CI. `--file` (repeatable) checks
   the modules of the `lib/` files it names in place of the changed ones, as a CI Fix run's
   failed-check step does for the modules CI's coverage report found below 100%.
+
+  The test files run in several `mix test` processes at once, spread by how long each took
+  (`test/support/test_weights.tsv`): as many as the tests are worth, at most 8 and the number of
+  cores; `--parts N` sets the number. Each process cover-compiles only the modules under check and
+  the report reads the coverage of all of them together. The tests that failed in the last run go
+  first, alone, and the run stops there while one still fails; a test that fails beside the others
+  runs once more, alone, and one that passes then is named and doesn't fail the run. The failures
+  are printed as ExUnit prints them; each process's whole output is in
+  `_build/test/cover_changed/<name>.log`.
 
   The changed files are those since the merge-base with `--base`, uncommitted and untracked ones
   included. Extra `TEST_FILES` run as well: pass them when the tests that cover a module don't name it.
   `mix.exs`'s `cover_changed` `covering_tests` maps a `lib/` file to the test files that always run
   when it changes, for a file such as the config schema whose modules the tests reach without naming.
-  """
-  @shortdoc "Fails when a lib/ module the branch changes is below 100% coverage"
+  With no module to check (test files only, or ignored modules) the changed test files, the tests
+  of the changed `lib/` files and the extra ones still run, without coverage.
 
-  @switches [base: :string, file: :keep]
+  `--all` runs every test file of the suite (`test/**/*_test.exs`, the files `scripts/test-parts.sh`
+  runs) in that one pass, in 8 parts (at most the number of cores; `--parts N` sets it), and checks
+  the changed modules' coverage from it: the run for a change to code many tests depend on, in
+  place of this command followed by the script. With no module to check it runs them without coverage.
+
+  A part that stopped at its 10 failures, or in which a `setup_all` failed, left tests that never
+  ran: the run fails and names the part.
+  """
+  @shortdoc "Runs the tests of the change; fails when a changed lib/ module is below 100% coverage"
+
+  @switches [all: :boolean, base: :string, file: :keep, parts: :integer]
+  @max_parts 8
 
   @impl Mix.Task
   def run(args) do
@@ -35,6 +56,7 @@ defmodule Mix.Tasks.Cover.Changed do
       Keyword.merge(opts,
         extra_tests: extra_tests,
         files: Keyword.get_values(opts, :file),
+        max_parts: min(@max_parts, System.schedulers_online()),
         ignore_modules: config[:test_coverage][:ignore_modules] || [],
         covering_tests: config[:cover_changed][:covering_tests] || %{}
       )

@@ -33,11 +33,16 @@ enum DesignGuard {
         case field
         /// A stock `Table(`: a table drawn by the system instead of `DataTable` (TP-1510).
         case table
+        /// A stock `Form`, `Toggle(`, `Stepper(` or `DatePicker(`: a form or a control drawn by the system instead of
+        /// `SettingsGroup` and `SettingsRow`, `DirectorSwitch`, `NumberField` or `TimeField` (TP-1576).
+        case control
         /// A numeric literal in `.frame(`: reported only.
         case frame
 
         /// The kinds that fail the guard.
-        static let guarded: [Kind] = [.font, .color, .rawColor, .number, .button, .disabled, .dot, .picker, .menu, .field, .table]
+        static let guarded: [Kind] = [
+            .font, .color, .rawColor, .number, .button, .disabled, .dot, .picker, .menu, .field, .table, .control,
+        ]
 
         static func < (lhs: Kind, rhs: Kind) -> Bool {
             allCases.firstIndex(of: lhs)! < allCases.firstIndex(of: rhs)!
@@ -161,6 +166,10 @@ enum DesignGuard {
         for match in matches(tableRegex, in: text, range: 0..<code.count) {
             record(match.offset, .table, match.text.trimmingCharacters(in: CharacterSet(charactersIn: "( \t")), tableReplacement)
         }
+        for match in matches(controlRegex, in: text, range: 0..<code.count) {
+            let value = match.text.trimmingCharacters(in: CharacterSet(charactersIn: "({ \t"))
+            record(match.offset, .control, value, controlReplacement(value))
+        }
         for range in arguments(of: [".frame("], in: code) {
             for match in matches(numberRegex, in: text, range: range) where !isZero(match.text) {
                 record(match.offset, .frame, match.text, "a `DesignTokens.Layout` or `DesignTokens.Control` measure")
@@ -220,6 +229,8 @@ enum DesignGuard {
     static let fieldPattern = #"(?<![\w.])(?:SwiftUI\.)?(?:TextField|SecureField|TextEditor)\s*\("#
     /// A stock table's initialiser, also written on `SwiftUI.`, not a longer name (`DataTable(`, `AuditTable(`).
     static let tablePattern = #"(?<![\w.])(?:SwiftUI\.)?Table\s*\("#
+    /// A stock form or control's initialiser, not a longer name (`DirectorToggle(`, `.toggleStyle(`, `FormRow(`).
+    static let controlPattern = #"(?<![\w.])(?:SwiftUI\.)?(?:(?:Toggle|Stepper|DatePicker)\s*\(|Form\s*[({])"#
     /// A status colour: anything on a status (`row.status.tint`, `DesignTokens.Status.idle`), a `.tint`, or a named
     /// status hue.
     static let statusColourPattern = #"\b[Ss]tatus\b|\.tint\b|\.(?:green|orange|red|blue|gray)\b"#
@@ -237,6 +248,7 @@ enum DesignGuard {
     static let menuRegex = regex(menuPattern)
     static let fieldRegex = regex(fieldPattern)
     static let tableRegex = regex(tablePattern)
+    static let controlRegex = regex(controlPattern)
     static let statusColourRegex = regex(statusColourPattern)
 
     static func regex(_ pattern: String) -> NSRegularExpression {
@@ -352,6 +364,18 @@ enum DesignGuard {
     // MARK: - Tables (TP-1510)
 
     static let tableReplacement = "`DataTable`, the catalog's table; the Tickets page keeps its stock table until its own ticket"
+
+    // MARK: - Forms and controls (TP-1576)
+
+    /// The component to use in place of a stock form or control.
+    static func controlReplacement(_ value: String) -> String {
+        switch value.replacingOccurrences(of: "SwiftUI.", with: "") {
+        case "Form": "`SettingsGroup`s of `SettingsRow`s in a scroll view"
+        case "Toggle": "`DirectorSwitch` in a `SettingsRow`, or `DirectorToggle`"
+        case "Stepper": "`NumberField`, whose stepper is the catalog's"
+        default: "`TimeField` for a time of day"
+        }
+    }
 
     // MARK: - Status dots
 
@@ -471,9 +495,9 @@ enum DesignGuard {
     # file still has, per kind, and (TP-1505) how many buttons without the shared style (`button`) and controls turned
     # off without a reason (`disabled`), and (TP-1506) how many status dots drawn by hand (`dot`), and (TP-1508) how
     # many stock pickers (`picker`) and stock menus (`menu`), and (TP-1509) how many stock text fields, secure fields and
-    # text editors (`field`), and (TP-1510) how many stock tables (`table`). It must equal what the guard counts: lower a
-    # number in the same change that removes a bypass, and delete the line when it reaches zero. A file not listed here
-    # may have none.
+    # text editors (`field`), and (TP-1510) how many stock tables (`table`), and (TP-1576) how many stock forms, toggles,
+    # steppers and date pickers (`control`). It must equal what the guard counts: lower a number in the same change that
+    # removes a bypass, and delete the line when it reaches zero. A file not listed here may have none.
     """
 
     static func formatBaseline(_ counts: Counts) -> String {

@@ -17,6 +17,23 @@ takes the usual red paths. An approval still in Code Review, or held for it thro
 to the head the update made, so that head is not reviewed again. A GitHub merge queue may later do
 the final update for `Merging`; the between-runs upkeep of the earlier phases stays useful under one.
 
+The watcher acts only for a ticket that holds a slot (TP-1606). Symphony works as many tickets at
+once as it has slots, and the CI runners' time belongs to them and to the release run. For a ticket
+without a slot the watcher reads its PR and records what it finds (the checks, a conflict, the CI
+label), but neither the upkeep nor a flow action that acts on the PR or the ticket is applied: no
+update-branch, no rerun, no CI Fix in or out, no fix ticket, no question, no competitor wait, no
+landing step. The decision is recorded as a `wait` on `symphony` until the ticket takes a slot,
+naming the rule it holds back and what that rule would do (`args.withheld`), so the Director and the
+silent-wait detector read it as a wait for a slot, never a stall, and `mix pr_watch.sweep` counts it
+as `gate: waits for a slot`. A hold's wait (R4) stays the decision, and the reads of a ticket without
+a slot lift no hold, with one exception: the landing wait on competing PRs still ends when they land
+or leave the race. That wait gave the slot up, so nothing else would clear it; it clears only its own
+landing reasons and links, never a blocker's or a person's hold. A merge or a close by a person still applies (R2, R8), and a run's dispatch
+outside QA stays the orchestrator's, which takes a slot as it starts it; a QA run waits for the slot,
+since the app is built for its head first. When a slot is free, the orchestrator gives it to such a
+ticket in its place in the queue, with no run, and asks the watcher to read it at once: the held-back
+rule then acts on that read.
+
 A green CI gates the merge, not the review. In Code Review the CI rules (R17 to R24) stand back until
 the head is approved (`review` is `approved`), so R27 dispatches the reviewer on any clean PR, with
 checks running or red, and a head that turns red during the review only records the fact (R9). The
@@ -34,13 +51,23 @@ Fix's return with its approvals (R25), the approved head's carry-on (R27) and ev
 auto-merge rule (R29 to R33), turns auto-merge off when it is armed, and moves the ticket to Rework,
 where a run codes the plan as it is now on the same PR. The same holds when the Conductor held the
 merge (its instructions routed `hold`), and when a check of the current plan the next step owes is
-open: in Merging, and in CI Fix on its way back there, every check but one seen only after the merge;
-before it, a check a test or an attachment proves. A plan version written asks the watcher to read
-the ticket at once, so a ticket already in Merging has its auto-merge turned off on that read.
-`TransitionGuard` refuses a move into Merging while such a check is open (a QA pass it refuses goes to
-Rework with the checks named), and a move to Done that closes a ticket on its own PR. A PR merged by
-hand meanwhile leaves the ticket out of Done: R2 asks the person to waive the open checks and close
-it, or cancel it.
+open: in Merging, and in CI Fix on its way back there, every open check; before it, a check a test or
+an attachment proves. A plan version written asks the watcher to read the ticket at once, so a ticket
+already in Merging has its auto-merge turned off on that read. `TransitionGuard` refuses a move into
+Merging while such a check is open (a QA pass it refuses goes to Rework with the checks named), and a
+move to Done that closes a ticket on its own PR. A PR merged by hand meanwhile leaves the ticket out of
+Done: R2 asks the person to waive the open checks and close it, or cancel it.
+
+A check the PR's own CI run proves (`proof: ci`, TP-1592) exists only once the PR does, so it holds
+neither the handoff nor the move into Merging: it holds the merge. In Merging, when every open check
+is one of those (`merge_guard: ci_checks`), the ticket waits on their proof instead of going to
+Rework (`ci_proof`, `SymphonyElixir.PrWatch.CiProof`). R28a turns auto-merge off if it is armed.
+R28b records a check that names a CI check (`ci_check`) as proved by CI as soon as that check passed
+on the head, with no run. R28c waits on CI while nothing is provable and checks still run. Once every
+check on the head finished, R28d gives one landing run the turn to read the PR's checks and record
+the proof of each check they show true; that run does not merge. If it leaves a check open, R28e
+sends the ticket to Rework with what the run said, and the turn is not given again on that head. No
+rule asks a person about these checks.
 
 A changes verdict means the code is about to change, so no CI work is spent on that head. While the
 verdict stands on the head (`review` is `changes_requested`, read in Rework), the CI rules (R17 to R23)
@@ -96,7 +123,7 @@ The flow decision: the first rule that matches decides what happens to the ticke
 | R7 | all | The PR's base is not the repo's base branch, and no run | `decision`: put the base back, or accept the new base |
 | R8 | all | The PR was closed without merging (or its branch deleted) | run active: `wait` on `agent`; In Progress or Rework: `dispatch`; otherwise `to_rework` |
 | R9 | all | A run is active | `wait` on `agent` until the run ends |
-| R9a | Code Review, QA, CI Fix, Merging | The ticket's plan holds the merge: a plan version written after the newest coding run started, a Conductor hold, or an open check the next step owes (in Merging: any check but one seen only after the merge) | `hold_merge`: auto-merge off when armed, then Rework, where a run codes the plan as it is now |
+| R9a | Code Review, QA, CI Fix, Merging | The ticket's plan holds the merge: a plan version written after the newest coding run started, a Conductor hold, or an open check the next step owes (in Merging: any check, unless all open ones are proved by the PR's own CI run, R28a to R28e) | `hold_merge`: auto-merge off when armed, then Rework, where a run codes the plan as it is now |
 | R10 | Code Review, QA, Merging | The PR is a draft | `wait` on `person` until it is marked ready for review |
 | R11 | Merging | A person pushed the PR's head | `to_code_review` (auto-merge goes off by R3) |
 | R12 | In Progress | The PR is open and no run | `dispatch` the agent |
@@ -121,6 +148,11 @@ The flow decision: the first rule that matches decides what happens to the ticke
 | R26 | Rework | Not red, or a changes verdict stands on the head whatever CI says (R17 to R23 stand back); not conflicting, no run | `dispatch` the rework run |
 | R27 | Code Review, QA | Code Review with no approval on the head: a clean PR, whatever CI says (R17 to R24 apply after an approve). QA, or an approved head: green, or no CI configured (counts as green). Either way not behind main with nothing ahead (the upkeep, U1, updates that one) | `dispatch` the reviewer or the QA agent; an approved head carries its approval on, with no second review |
 | R28 | Code Review, QA, Merging | The PR is behind main (in Code Review and QA: with no PR ahead sharing its files), and, unless Code Review is yet to judge the head, not red | a PR ahead shares its files: `wait` on `symphony`; otherwise `wait` on `symphony` while the upkeep (U1) updates the branch |
+| R28a | Merging | The plan's only open checks are ones the PR's own CI run proves, the head is not red, and auto-merge is armed | `disarm`: the PR does not merge before they are proved |
+| R28b | Merging | The plan's only open checks are ones the PR's own CI run proves, and one names a CI check that passed on the head | `prove_checks`: Symphony records each such check as proved by CI, with no run |
+| R28c | Merging | The plan's only open checks are ones the PR's own CI run proves, none provable yet, and checks still run on the head | `wait` on `ci` until the checks finish: no Rework, no question |
+| R28d | Merging | The plan's only open checks are ones the PR's own CI run proves, the checks finished on the head, and no run had the turn to read them there | `land_agent`: one run reads the PR's checks and records the proof of each check they show true |
+| R28e | Merging | The plan's only open checks are ones the PR's own CI run proves, and the run that had the turn on the head left one open | `to_rework` with the run's reason; the turn is not given again on the same head |
 | R29 | Merging | Green (or no CI) and mergeable now | `merge_now`, the ticket closed out in the same step |
 | R30 | Merging | Auto-merge off, and checks running or branch protection still blocking | `arm` auto-merge |
 | R31 | Merging | Branch protection blocked the merge past the merge wait | `land_agent` |
@@ -156,7 +188,8 @@ Each fact a rule decides on, the values the table test enumerates, and when the 
 | `conflict_attempts` | `2`, `3` | `mergeable` is `dirty` |
 | `competing` | empty, not empty | `mergeable` is `dirty` |
 | `landing_timed_out` | `false`, `true` | `mergeable` is `blocked` |
-| `merge_guard` | `clear`, `open_checks`, `rewritten`, `held` | `phase` is `code_review` or `qa` or `ci_fix` or `merging` and `hold` is `none` and `run` is `none` and `pr` is `open` and `ci` is `green` and `mergeable` is `clean` or `dirty` |
+| `merge_guard` | `clear`, `open_checks`, `rewritten`, `held`, `ci_checks` | `phase` is `code_review` or `qa` or `ci_fix` or `merging` and `hold` is `none` and `run` is `none` and `pr` is `open` and `ci` is `green` and `mergeable` is `clean` or `dirty` |
+| `ci_proof` | `provable`, `running`, `turn`, `spent` | `merge_guard` is `ci_checks` |
 
 ## Waits
 
@@ -231,8 +264,7 @@ when two or more watched PRs are open or one conflicts or waits on its competito
 repository's open PRs and their files once: the landing order fills `ahead`, and `competing` lists
 every open PR that shares a file with the ticket's, with its ticket when the watcher watches it,
 leaving out one on a hold or idle two hours. Neither names a PR whose wait would close a cycle of
-blocked-by links, nor one a person's `Unblock` released the ticket from, and a forced ticket has
-neither.
+blocked-by links, nor one a person's `Unblock` released the ticket from.
 
 The facts are kept on the ticket's state record and listed under each ticket's `watch.facts` in
 `/api/v1/state`. A GitHub error doubles the wait between reads, up to 5 minutes; GitHub's rate
@@ -531,8 +563,7 @@ that leaves the race (its PR closed, on a hold, idle two hours, or no longer sha
 unlinked when Symphony added the link, which logs `pr_watch.competitors_unlinked`. The hold clears
 once no competitor is left, and the same read decides on the conflict: CI Fix, with the approvals
 carried forward. The R15 wait restarts the conflict count. A person's `Unblock` clears the hold and
-removes Symphony's links, and the ticket no longer waits on those PRs while they stay open; a
-forced ticket waits on none.
+removes Symphony's links, and the ticket no longer waits on those PRs while they stay open.
 
 ## Replayed incidents and the skip-reason sweep
 

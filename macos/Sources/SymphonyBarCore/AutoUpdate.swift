@@ -57,10 +57,11 @@ public enum SymphonyActivity: Equatable {
 ///   that didn't happen it waits for the next check, unless it gave up because a run was active.
 /// - Automatically at a set time checks for a release at the daily time and installs it, waiting for agent runs up to
 ///   the restart timeout. A time missed while the Mac slept or the app was closed waits for the next day.
-/// - Automatically when released installs an available release as soon as a check finds it, or a poll sees one,
-///   whatever runs are active: the drain waits for them as Update to vX does. After an install that didn't happen it
-///   waits for the next check. Cancel Update holds that release (`hold`) until it is installed by hand, skipped, or a
-///   newer one comes out.
+/// - Automatically when released downloads an available release as soon as a check finds it, or a poll sees one,
+///   whatever runs are active, and arms it with Symphony (`UpdateArming`), which keeps dispatching until a moment with
+///   no agent run. While one waits armed, a newer release downloads in the background and replaces it (TP-1590).
+///   After an install that didn't happen it waits for the next check. Cancel Update holds that release (`hold`) until
+///   it is installed by hand, skipped, or a newer one comes out.
 /// - Manual never installs by itself.
 ///
 /// Nothing installs while `UpdateEligibility.blocker` gives a reason.
@@ -88,6 +89,9 @@ public struct AutoUpdater: Equatable {
         public var activity: SymphonyActivity
         /// The restart timeout: how long a set-time install waits for agent runs.
         public var runsTimeout: TimeInterval
+        /// The build Symphony has ready while it waits for its moment (`UpdateArming`): Automatically when released
+        /// downloads only a newer one meanwhile.
+        public var armedBuild: Int?
 
         public init(
             mode: UpdateMode,
@@ -95,7 +99,8 @@ public struct AutoUpdater: Equatable {
             offer: UpdateOffer?,
             blocker: String?,
             activity: SymphonyActivity,
-            runsTimeout: TimeInterval
+            runsTimeout: TimeInterval,
+            armedBuild: Int? = nil
         ) {
             self.mode = mode
             self.time = time
@@ -103,6 +108,7 @@ public struct AutoUpdater: Equatable {
             self.blocker = blocker
             self.activity = activity
             self.runsTimeout = runsTimeout
+            self.armedBuild = armedBuild
         }
     }
 
@@ -189,6 +195,8 @@ public struct AutoUpdater: Equatable {
 
     private mutating func installOnRelease(_ context: Context) -> Action? {
         guard !waitingForCheck, context.activity != .busy, let release = installable(context) else { return nil }
+        // The release armed with Symphony waits for its moment; only a newer one replaces it.
+        if let armed = context.armedBuild, release.build <= armed { return nil }
         // A newer release than the one held installs, and ends the hold.
         heldBuild = nil
         waitingForCheck = true

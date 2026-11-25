@@ -76,9 +76,11 @@ defmodule SymphonyElixir.Application do
           SymphonyElixir.AgentProcesses,
           # Before the task supervisor too: the QA passes it runs wait on its leases.
           SymphonyElixir.QaDriver.DevServerLease,
+          # Before the task supervisor too: the Conductor turns its tasks run enter and leave it.
+          SymphonyElixir.ConductorGate,
           {Task.Supervisor, name: SymphonyElixir.TaskSupervisor},
           SymphonyElixir.WorkspaceCleanup,
-          SymphonyElixir.Config.Cache,
+          {SymphonyElixir.Config.Cache, config_watch(system_config, env)},
           SymphonyElixir.AuditLog.Writer,
           SymphonyElixir.DirectorMoves,
           SymphonyElixir.Linear.Usage,
@@ -121,7 +123,6 @@ defmodule SymphonyElixir.Application do
              ci_child_spec(system_config),
              human_actions_child_spec(system_config),
              report_scheduler_child_spec(),
-             initiatives_child_spec(system_config),
              SymphonyElixir.Setup,
              SymphonyElixir.HttpServer,
              # After the HTTP server: a relay forwards to the port it listens on.
@@ -168,6 +169,43 @@ defmodule SymphonyElixir.Application do
 
     :ok
   end
+
+  @doc """
+  What the running app watches for a settings change, as `SymphonyElixir.Config.Cache`'s options:
+  `:watch`, the folders it starts a file watcher on, one each (the one that holds `symphony.yml`,
+  and each repo's workflow folder in Symphony's state, `SymphonyElixir.WorkflowSource.watch_dir/1`),
+  and `:watch_files`, the files whose own stamp it checks instead. `symphony.yml` is one of those
+  when its folder is a repository root, or holds a repo checkout, the workspace root, the clones root
+  or Symphony's state: a watcher there would watch every file below it. Neither for a one-shot
+  `symphony` command (`SYMPHONY_DISABLE_ORCHESTRATOR`), or with `:config_watch` off, as in the test
+  suite: a file there is checked by its stamp on each read (TP-1603).
+  """
+  @spec config_watch(SystemSchema.t(), map()) :: [watch: [Path.t()], watch_files: [Path.t()]]
+  def config_watch(%SystemSchema{repos: repos} = system_config, env) when is_map(env) do
+    if Application.get_env(:symphony_elixir, :config_watch, true) and not orchestrator_runtime_disabled?(env) do
+      symphony_file = Path.expand(SymphonyElixir.Workflow.symphony_file_path())
+      symphony_dir = Path.dirname(symphony_file)
+      workflow_dirs = Enum.flat_map(repos, &List.wrap(SymphonyElixir.WorkflowSource.watch_dir(&1)))
+
+      if large_folder?(symphony_dir, system_config),
+        do: [watch: Enum.uniq(workflow_dirs), watch_files: [symphony_file]],
+        else: [watch: Enum.uniq([symphony_dir | workflow_dirs]), watch_files: []]
+    else
+      [watch: [], watch_files: []]
+    end
+  end
+
+  # A folder whose watcher would cover a checkout or one of Symphony's own trees.
+  defp large_folder?(dir, %SystemSchema{repos: repos, workspace: workspace}) do
+    roots =
+      [workspace.root, workspace.clones_root || SymphonyElixir.ManagedClone.default_root(), SymphonyElixir.Paths.state_root()] ++
+        Enum.map(repos, & &1.path)
+
+    File.exists?(Path.join(dir, ".git")) or
+      Enum.any?(roots, &(is_binary(&1) and inside?(Path.expand(&1), dir)))
+  end
+
+  defp inside?(path, dir), do: path == dir or String.starts_with?(path, String.trim_trailing(dir, "/") <> "/")
 
   defp refresh_workflows!(system_config) do
     case SymphonyElixir.WorkflowSource.refresh_all(system_config) do
@@ -237,12 +275,6 @@ defmodule SymphonyElixir.Application do
   defp ci_child_spec(%SystemSchema{repos: repos}) do
     if Enum.any?(repos, &ci_enabled_for_repo?/1) do
       SymphonyElixir.CiPoller
-    end
-  end
-
-  defp initiatives_child_spec(%SystemSchema{repos: repos}) do
-    if Enum.any?(repos, &SymphonyElixir.Inbox.enabled?(Config.settings_for_repo!(&1.name))) do
-      SymphonyElixir.Initiatives
     end
   end
 

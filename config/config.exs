@@ -37,8 +37,15 @@ if config_env() == :test do
     state_root: Path.join(System.tmp_dir!(), "symphony-elixir-test-state-#{System.pid()}-#{System.unique_integer([:positive])}"),
     logs_root: Path.join(System.tmp_dir!(), "symphony-elixir-test-logs-#{System.pid()}-#{System.unique_integer([:positive])}"),
     run_store_dir: Path.join(System.tmp_dir!(), "symphony-elixir-test-run-store-#{System.pid()}-#{System.unique_integer([:positive])}"),
+    # The run store asks the disk for no flush after a write: the test stores are temp folders, and
+    # the flushes of several test processes at once queue on the one disk. A test of the flush
+    # itself turns it back on.
+    run_store_sync_log: false,
     # A git fetch that fails on `cannot lock ref` is retried at once in tests.
     repo_fetch_retry_delay_ms: 0,
+    # The app starts no config file watcher in tests: a watcher per folder bloats the host's file
+    # events daemon (TP-1603). A test of the watcher starts one on its own temp folder.
+    config_watch: false,
     # The orchestrator's boot starts the ticket events backfill, and the pause backfill after it, in
     # a task; in tests it would race the events and the state payload a test asserts, so it runs only
     # where a test starts it (`TicketEvents.Backfill.start/1`). Set here, not in `test_helper.exs`:

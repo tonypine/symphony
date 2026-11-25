@@ -61,19 +61,49 @@ private struct LifecycleHead: View {
 /// The five stages left to right, sharing the width equally: a bar, the name with its visits, the state and time.
 /// A stage's name never breaks: when the column is too narrow for every name on one line (a desktop's main column just
 /// past the breakpoint, beside the rail and the decisions), the stages stack as rows, each name with its line beside it.
-private struct StageStrip: View {
-    let stages: [LifecycleModel.Stage]
+/// The ticket page's Lifecycle draws it, and so does the Home queue's slot card, with stages whose line is their word
+/// alone (TP-1608).
+public struct StageStrip: View {
+    /// How the stages share the width side by side.
+    public enum Fit: Equatable {
+        /// Equal cells, each as wide as the widest name: the ticket page's strip.
+        case equal
+        /// Each cell at least as wide as its own name and line, the rest shared: the Home queue's slot card, whose
+        /// Status column is about half a card (TP-1608, page.css `.lsteps`: `minmax(min-content, 1fr)`).
+        case content
+    }
 
-    var body: some View {
+    public let stages: [LifecycleModel.Stage]
+    public let fit: Fit
+
+    public init(stages: [LifecycleModel.Stage], fit: Fit = .equal) {
+        self.stages = stages
+        self.fit = fit
+    }
+
+    /// The width the stages need side by side, every name and line whole.
+    public var sideBySideWidth: CGFloat {
+        switch fit {
+        case .equal: LifecycleSection.stripWidth(titles: stages.map(\.title))
+        case .content: LifecycleSection.contentStripWidth(stages: stages.map { ($0.title, $0.line) })
+        }
+    }
+
+    /// A cell's least width side by side: none for equal cells, its own name and line for content cells.
+    private func cellMinWidth(_ stage: LifecycleModel.Stage) -> CGFloat {
+        fit == .content ? LifecycleSection.cellWidth(title: stage.title, line: stage.line) : 0
+    }
+
+    public var body: some View {
         ViewThatFits(in: .horizontal) {
             HStack(alignment: .top, spacing: LifecycleSection.stageSpacing) {
                 ForEach(Array(stages.enumerated()), id: \.element.id) { index, stage in
                     StageCell(stage: stage, corners: corners(index, stacked: false), stacked: false)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                        .frame(minWidth: cellMinWidth(stage), maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
             }
             // Its ideal width is what its names need whole, so ViewThatFits takes it only when they fit.
-            .frame(minWidth: 0, idealWidth: LifecycleSection.stripWidth(titles: stages.map(\.title)), maxWidth: .infinity, alignment: .leading)
+            .frame(minWidth: 0, idealWidth: sideBySideWidth, maxWidth: .infinity, alignment: .leading)
             VStack(alignment: .leading, spacing: LifecycleSection.stageSpacing) {
                 ForEach(Array(stages.enumerated()), id: \.element.id) { index, stage in
                     StageCell(stage: stage, corners: corners(index, stacked: true), stacked: true)
@@ -112,15 +142,33 @@ extension LifecycleSection {
     /// The stage's symbol and the gap after it, before the name.
     static let stageSymbolWidth: CGFloat = 14
     static let stageSymbolGap: CGFloat = 5
+    /// The stage name's font, as AppKit measures it.
+    static let stageNameFont = NSFont.systemFont(ofSize: stageTitleSize, weight: .semibold)
 
     /// The width the stages need side by side with every name whole on one line: as many equal cells as `titles`,
     /// each as wide as the widest name with its symbol and padding.
     public static func stripWidth(titles: [String]) -> CGFloat {
         guard !titles.isEmpty else { return 0 }
-        let font = NSFont.systemFont(ofSize: stageTitleSize, weight: .semibold)
-        let widest = titles.map { ceil(($0 as NSString).size(withAttributes: [.font: font]).width) }.max() ?? 0
+        let widest = titles.map { ceil(($0 as NSString).size(withAttributes: [.font: stageNameFont]).width) }.max() ?? 0
         let cell = stageLeading + stageSymbolWidth + stageSymbolGap + widest + stageTrailing
         return cell * CGFloat(titles.count) + stageSpacing * CGFloat(titles.count - 1)
+    }
+
+    /// One cell's least width with its name (and symbol) and its line each whole on one line.
+    public static func cellWidth(title: String, line: String) -> CGFloat {
+        // The caption style at the weight an emphasized line takes, so its widest form fits.
+        let caption = DesignTokens.TypeStyle.caption.nsFont
+        let semibold = caption.fontDescriptor.addingAttributes([.traits: [NSFontDescriptor.TraitKey.weight: NSFont.Weight.semibold]])
+        let lineFont = NSFont(descriptor: semibold, size: caption.pointSize) ?? caption
+        let name = stageSymbolWidth + stageSymbolGap + ceil((title as NSString).size(withAttributes: [.font: stageNameFont]).width)
+        let words = ceil((line as NSString).size(withAttributes: [.font: lineFont]).width)
+        return stageLeading + max(name, words) + stageTrailing
+    }
+
+    /// The width cells as wide as their own name and line need side by side.
+    public static func contentStripWidth(stages: [(title: String, line: String)]) -> CGFloat {
+        guard !stages.isEmpty else { return 0 }
+        return stages.map { cellWidth(title: $0.title, line: $0.line) }.reduce(0, +) + stageSpacing * CGFloat(stages.count - 1)
     }
 }
 

@@ -2,8 +2,7 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.Config.SystemSchema
-  alias SymphonyElixir.Dispatch.Candidates
-  alias SymphonyElixir.EpicLanes
+  alias SymphonyElixir.Dispatch.{Candidates, Queue}
   alias SymphonyElixir.Linear.Client
   alias SymphonyElixir.{TicketObservation, TicketState}
 
@@ -20,16 +19,29 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
   # (TP-1214). The record path must give the same candidates, in the same dispatch order, and the
   # dispatch gate must decide each rebuilt issue as it decides the polled one.
   describe "the record path matches the cache path" do
-    test "on the blocked-by gate" do
+    test "on the stored-dependency gate, which reads Symphony's records on either path" do
       issues = [
-        issue("blocked", "MT-1", "Todo", blocked_by: [blocker("MT-90", "Merging")]),
-        issue("in-review", "MT-2", "Todo", blocked_by: [blocker("MT-91", "In Review")]),
-        issue("unblocked", "MT-3", "Todo", blocked_by: [blocker("MT-92", "Done"), blocker("MT-93", "Canceled")]),
-        issue("unknown-blocker", "MT-4", "Todo", blocked_by: [%{id: "b", identifier: "MT-94", state: nil}]),
-        issue("in-progress", "MT-5", "In Progress", blocked_by: [blocker("MT-95", "Todo")])
+        issue("blocked", "MT-1", "Todo"),
+        issue("in-review", "MT-2", "Todo"),
+        issue("unblocked", "MT-3", "Todo"),
+        issue("unknown-blocker", "MT-4", "Todo"),
+        issue("in-progress", "MT-5", "In Progress")
       ]
 
       {cache, record} = assert_same_candidates!(issues)
+
+      # No stored dependency yet: every one is let through.
+      assert gate(cache) == %{"MT-1" => true, "MT-2" => true, "MT-3" => true, "MT-4" => true, "MT-5" => true}
+
+      put_record!("merging", "MT-90", "Merging")
+      put_record!("reviewing", "MT-91", "In Review")
+      put_record!("done", "MT-92", "Done")
+      put_record!("todo", "MT-95", "Todo")
+      :ok = RunStore.add_dependency("blocked", "merging", :done)
+      :ok = RunStore.add_dependency("in-review", "reviewing", :done)
+      :ok = RunStore.add_dependency("unblocked", "done", :done)
+      :ok = RunStore.add_dependency("unknown-blocker", "ghost", :done)
+      :ok = RunStore.add_dependency("in-progress", "todo", :done)
 
       assert gate(cache) == %{"MT-1" => false, "MT-2" => false, "MT-3" => true, "MT-4" => false, "MT-5" => false}
       assert gate(record) == gate(cache)
@@ -54,33 +66,36 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
       assert gate(record, waiting)["MT-4"]
     end
 
-    test "on a forced ticket" do
+    test "TP-1611: on a ticket carrying the old force label, which is let through no more" do
       workflow!(tickets: %{priorities: ["urgent"]})
 
       issues = [
-        issue("forced", "MT-1", "Todo", priority: 4, labels: ["expedite"]),
+        issue("labelled", "MT-1", "Todo", priority: 4, labels: ["expedite"]),
         issue("low", "MT-2", "Todo", priority: 4),
         issue("urgent", "MT-3", "Rework", priority: 1)
       ]
 
       {cache, record} = assert_same_candidates!(issues)
 
-      assert gate(cache) == %{"MT-1" => true, "MT-2" => false, "MT-3" => true}
+      assert gate(cache) == %{"MT-1" => false, "MT-2" => false, "MT-3" => true}
       assert gate(record) == gate(cache)
     end
 
-    test "on an epic and its lanes' parts" do
+    test "on an epic and its parts" do
       part_1 = issue("part-1", "MT-11", "In Progress", priority: 2)
-      part_2 = issue("part-2", "MT-12", "Todo", blocked_by: [%{id: "part-1", identifier: "MT-11", state: "In Progress"}])
+      part_2 = issue("part-2", "MT-12", "Todo")
       part_3 = issue("part-3", "MT-31", "Todo")
 
-      # Two epics of the same priority: MT-30 is the older, so it takes the one lane.
+      # Two epics of the same priority.
       epic = issue("epic", "MT-10", @waiting, labels: ["plan"], sub_issues: [link(part_1), link(part_2)], created_at: ~U[2026-10-02 09:00:00Z])
       older = issue("older-epic", "MT-30", @waiting, labels: ["plan"], sub_issues: [link(part_3)], created_at: ~U[2026-10-01 09:00:00Z])
 
       issues = [epic, part_1, part_2, older, part_3, issue("merging", "MT-20", "Merging"), issue("standalone", "MT-21", "Todo", priority: 1)]
 
       {cache, record} = assert_same_candidates!(issues)
+
+      # The second part depends on the first, stored by Symphony.
+      :ok = RunStore.add_dependency("part-2", "part-1", :done)
 
       assert gate(record) == gate(cache)
       assert %{"MT-10" => false, "MT-30" => false, "MT-12" => false} = gate(cache)
@@ -89,17 +104,11 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
       for issues <- [cache, record], parent <- ["MT-10", "MT-30"] do
         assert issues |> Enum.find(&(&1.identifier == parent)) |> Issue.waiting_on_sub_issues?(terminal_states())
       end
-
-      for {epic_lanes, expected} <- [{nil, {["MT-30", "MT-10"], []}}, {1, {["MT-30"], ["MT-10"]}}] do
-        plan = EpicLanes.plan(record, 10, epic_lanes, terminal_states())
-        assert plan == EpicLanes.plan(cache, 10, epic_lanes, terminal_states())
-        assert {identifiers(plan.lanes), identifiers(plan.queued)} == expected
-        assert plan.yielded == []
-      end
     end
 
     test "on the dispatch order of tickets that differ only by age" do
-      # MT-99 is the older, so it runs first, though its identifier sorts after MT-100's.
+      # The poll observes them oldest first, so each joins the queue in that order: MT-99 is the
+      # older, so it runs first, though its identifier sorts after MT-100's.
       issues = [
         issue("newer", "MT-100", "Todo", created_at: ~U[2026-10-02 09:00:00Z]),
         issue("older", "MT-99", "Todo", created_at: ~U[2026-10-01 09:00:00Z]),
@@ -312,7 +321,7 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
       assert {rebuilt.description, rebuilt.team, rebuilt.project} == {nil, nil, nil}
     end
 
-    test "rebuilds what the record observed: its open blockers and sub-issues with their ids and states, its parent and age" do
+    test "rebuilds what the record observed: its sub-issues with their ids and states, its parent and age" do
       parent = %{identifier: "MT-1", title: "Epic", done: 1, total: 2, children: ["completed", "started"]}
 
       polled =
@@ -320,7 +329,6 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
           labels: ["backend"],
           priority: 2,
           assignee_id: "user-1",
-          blocked_by: [blocker("MT-6", "Todo"), blocker("MT-5", "Done")],
           sub_issues: [%{id: "sub", identifier: "MT-8", state: "Backlog"}],
           parent: parent,
           created_at: ~U[2026-10-01 09:00:00Z]
@@ -334,7 +342,6 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
                labels: ["backend"],
                priority: 2,
                assignee_id: "user-1",
-               blocked_by: [%{id: "id-MT-6", identifier: "MT-6", state: "Todo"}],
                sub_issues: [%{id: "sub", identifier: "MT-8", state: "Backlog"}],
                parent: ^parent,
                url: "https://example.org/issues/MT-7",
@@ -344,23 +351,23 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
              } = Candidates.issue_from_record(observed(polled))
 
       assert repo_key == repo_key()
-      assert Issue.blocked?(%{Candidates.issue_from_record(observed(polled)) | state: "Todo"}, ["Done"])
+      refute Map.has_key?(Candidates.issue_from_record(observed(polled)), :blocked_by)
     end
 
-    test "a blocker a record kept by identifier alone has no known state, so it still blocks" do
-      record = %{observed(issue("legacy", "MT-7", "Todo")) | blockers: ["MT-6"]}
+    test "a record stored with the blockers an older build observed rebuilds with none, and they hold nothing" do
+      record = Map.put(observed(issue("legacy", "MT-7", "Todo")), :blockers, [%{id: "id-MT-6", identifier: "MT-6", state: "Todo"}, "MT-5"])
 
       rebuilt = Candidates.issue_from_record(record)
 
-      assert rebuilt.blocked_by == [%{id: nil, identifier: "MT-6", state: nil}]
-      assert Issue.blocked?(rebuilt, ["Done"])
+      refute Map.has_key?(rebuilt, :blocked_by)
+      assert Orchestrator.should_dispatch_issue_for_test(rebuilt, orchestrator_state())
     end
   end
 
   defp assert_same_candidates!(issues, route \\ %{name: repo_key()}) do
     cache = poll!(issues, route)
-    # The poll pauses each Todo ticket on its open blockers (`Pauses.Dependencies`), which the gate reads.
-    _changed = Orchestrator.sweep_dependencies_for_test(repo_key(), issues, terminal_states())
+    # The poll's sweep of the pauses sets none for these tickets: nothing waits on another yet.
+    assert Orchestrator.sweep_dependencies_for_test(repo_key(), issues, terminal_states()) == 0
 
     records = RunStore.list_ticket_states(repo_key())
     assert length(records) == length(issues)
@@ -396,18 +403,21 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
 
   defp identifiers(issues), do: Enum.map(issues, & &1.identifier)
 
-  defp dispatch_order(issues), do: issues |> Orchestrator.sort_issues_for_dispatch_for_test() |> identifiers()
+  defp dispatch_order(issues), do: issues |> Queue.order(RunStore.queue_places()) |> identifiers()
 
-  # What the poll writes into a ticket's record (`TicketObservation.observe/3`): the open blockers only.
+  # What the poll writes into a ticket's record (`TicketObservation.observe/3`).
   defp observed(%Issue{} = issue) do
-    open = Issue.open_blockers(issue, Config.settings!().tracker.terminal_states)
-
     {record, :changed} =
       repo_key()
       |> TicketState.new(issue.id)
-      |> TicketState.observe(%{issue | blocked_by: open}, @observed_at, :poll)
+      |> TicketState.observe(issue, @observed_at, :poll)
 
     record
+  end
+
+  # A ticket depended on, outside the polled set: only its record, which the gate reads.
+  defp put_record!(issue_id, identifier, phase) do
+    :ok = RunStore.put_ticket_state(TicketState.new(repo_key(), issue_id, %{issue_identifier: identifier, phase: phase}))
   end
 
   defp settings_with_assignee(assignee) do
@@ -440,8 +450,6 @@ defmodule SymphonyElixir.Dispatch.CandidatesTest do
       attrs
     )
   end
-
-  defp blocker(identifier, state), do: %{id: "id-" <> identifier, identifier: identifier, state: state}
 
   defp link(%Issue{} = issue), do: Map.take(issue, [:id, :identifier, :state])
 

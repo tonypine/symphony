@@ -60,7 +60,7 @@
     {"id": "q2", "seq": 25, "at": "2026-10-08T09:10:00Z", "type": "question.answered", "actor": {"kind": "machine"},
      "payload": {"question_id": "q-1", "answer": "Approve the catalog", "by": {"kind": "person", "name": "Tony"}}, "summary": {"title": "Answered: Approve the catalog", "detail": "In the Inbox"}, "artifacts": [], "children": []},
     {"id": "h1", "seq": 26, "at": "2026-10-08T09:11:00Z", "type": "person.action", "actor": {"kind": "person", "name": "Tony"},
-     "payload": {"action": "force"}, "summary": {"title": "Forced ahead of the queue"}, "artifacts": [], "children": []},
+     "payload": {"action": "unblock"}, "summary": {"title": "Unblocked"}, "artifacts": [], "children": []},
     {"id": "g1", "seq": 27, "at": "2026-10-08T09:12:00Z", "type": "rule.action", "actor": {"kind": "machine"},
      "payload": {"rule": "PR watcher R22", "action": "updated_branch", "text": "Branch updated with the newest main"}, "summary": {"title": "Updated the branch", "detail": "with the newest main"}, "rule": "keep the branch current", "artifacts": [], "children": []},
     {"id": "v1", "seq": 28, "at": "2026-10-08T09:30:00Z", "type": "verdict.recorded", "actor": {"kind": "machine"},

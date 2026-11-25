@@ -31,88 +31,83 @@ struct ConductorSection: View {
 
     /// A whole-number field for one of the watch's limits.
     private func limitField(_ label: String, key: String, value: WritableKeyPath<ConductorWatchSettings, Int>) -> some View {
-        DirectorTextField(
-            label,
+        numberRow(
+            label, key: "conductor.watch.\(key)", reason: watchReason,
             text: Binding(
                 get: { String(settings.watch[keyPath: value]) },
                 set: { text in if let number = Int(text) { settings.watch[keyPath: value] = number } }
-            ),
-            disabledReason: watchReason,
-            mono: true
+            )
         )
-        .help("conductor.watch.\(key)")
+    }
+
+    /// A row of a whole number typed in a text field, `key` its help, off with `reason`.
+    private func numberRow(_ label: String, key: String, error: String? = nil, reason: String?, text: Binding<String>) -> some View {
+        SettingsRow(label, error: error, disabledReason: reason) {
+            DirectorTextField(nil, text: text, mono: true)
+                .frame(width: DesignTokens.SettingsRow.fieldWidth)
+                .help(key)
+        }
+    }
+
+    /// A row of one switch, `key` its help, off with `reason`. `spoken` is what VoiceOver reads, when not the title.
+    private func switchRow(_ title: String, key: String, spoken: String? = nil, reason: String?, isOn: Binding<Bool>) -> some View {
+        SettingsRow(title, disabledReason: reason) {
+            DirectorSwitch(spoken, isOn: isOn)
+                .help(key)
+        }
     }
 
     var body: some View {
-        Section {
-            Toggle("Run the Conductor", isOn: $settings.enabled)
-                .help("conductor.enabled")
-                .disabledReason(sectionReason)
+        SettingsGroup("Conductor (saved in symphony.yml)") {
+            switchRow("Run the Conductor", key: "conductor.enabled", reason: sectionReason, isOn: $settings.enabled)
             ForEach(ConductorJunction.settable) { junction in
-                Toggle(junction.title, isOn: Binding(
-                    get: { settings.runs(at: junction) },
-                    set: { settings = settings.setting(junction, on: $0) }
-                ))
-                .accessibilityLabel("Run the Conductor \(junction.title.lowercased())")
-                .help("conductor.junctions: \(junction.rawValue)")
-                .disabledReason(detailReason)
+                switchRow(
+                    junction.title, key: "conductor.junctions: \(junction.rawValue)",
+                    spoken: "Run the Conductor \(junction.title.lowercased())", reason: detailReason,
+                    isOn: Binding(
+                        get: { settings.runs(at: junction) },
+                        set: { settings = settings.setting(junction, on: $0) }
+                    )
+                )
             }
-            DirectorTextField(
-                "Time limit in seconds",
+            numberRow(
+                "Time limit in seconds", key: "conductor.timeout_ms", error: error, reason: detailReason,
                 text: Binding(
                     get: { String(settings.timeoutSeconds) },
                     set: { text in if let seconds = Int(text) { settings = settings.setting(timeoutSeconds: seconds) } }
-                ),
-                error: error,
-                disabledReason: detailReason,
-                mono: true
+                )
             )
-            .help("conductor.timeout_ms")
-            DirectorTextField(
-                "Grooming time limit in seconds",
+            numberRow(
+                "Grooming time limit in seconds", key: "conductor.grooming_timeout_ms", reason: detailReason,
                 text: Binding(
                     get: { String(settings.groomingTimeoutSeconds) },
                     set: { text in if let seconds = Int(text) { settings = settings.setting(groomingTimeoutSeconds: seconds) } }
-                ),
-                disabledReason: detailReason,
-                mono: true
+                )
             )
-            .help("conductor.grooming_timeout_ms")
-            DirectorTextField(
-                "Final check rounds before it asks you",
+            numberRow(
+                "Final check rounds before it asks you", key: "conductor.final_check_rounds", reason: detailReason,
                 text: Binding(
                     get: { String(settings.finalCheckRounds) },
                     set: { text in if let rounds = Int(text) { settings = settings.setting(finalCheckRounds: rounds) } }
-                ),
-                disabledReason: detailReason,
-                mono: true
+                )
             )
-            .help("conductor.final_check_rounds")
-            Toggle("File linked tickets", isOn: $settings.fileTickets)
-                .help("conductor.file_tickets")
-                .disabledReason(detailReason)
-            DirectorTextField(
-                "Tickets one ticket may file",
+            switchRow("File linked tickets", key: "conductor.file_tickets", reason: detailReason, isOn: $settings.fileTickets)
+            numberRow(
+                "Tickets one ticket may file", key: "conductor.max_filed_tickets", reason: filingReason,
                 text: Binding(
                     get: { String(settings.maxFiledTickets) },
                     set: { text in if let number = Int(text) { settings.maxFiledTickets = number } }
-                ),
-                disabledReason: filingReason,
-                mono: true
+                )
             )
-            .help("conductor.max_filed_tickets")
-            Toggle("Watch running runs", isOn: $settings.watch.enabled)
-                .help("conductor.watch.enabled")
-                .disabledReason(detailReason)
+            switchRow("Watch running runs", key: "conductor.watch.enabled", reason: detailReason, isOn: $settings.watch.enabled)
             limitField("Look at a run after minutes", key: "run_minutes", value: \.runMinutes)
             limitField("Look at a run after tokens", key: "run_tokens", value: \.runTokens)
             limitField("Minutes between looks at a run", key: "min_interval_minutes", value: \.minIntervalMinutes)
             limitField("Looks per run", key: "max_turns_per_run", value: \.maxTurnsPerRun)
-            Toggle("May stop a run, with a question to you", isOn: $settings.watch.allowStop)
-                .help("conductor.watch.allow_stop")
-                .disabledReason(watchReason)
-        } header: {
-            Text("Conductor (saved in symphony.yml)")
+            switchRow(
+                "May stop a run, with a question to you", key: "conductor.watch.allow_stop", reason: watchReason,
+                isOn: $settings.watch.allowStop
+            )
         }
     }
 }

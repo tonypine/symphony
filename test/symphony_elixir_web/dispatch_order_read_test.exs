@@ -1,6 +1,6 @@
 defmodule SymphonyElixirWeb.DispatchOrderReadTest do
   # The dispatch order read through the API: three tickets wait, and the read names the one that
-  # starts next and why the other two wait.
+  # starts next and why the other two wait. A ticket waits on another by a dependency Symphony stores.
   use SymphonyElixir.TestSupport
 
   import Phoenix.ConnTest, only: [build_conn: 0, get: 2, json_response: 2]
@@ -48,11 +48,15 @@ defmodule SymphonyElixirWeb.DispatchOrderReadTest do
   test "with three tickets waiting, the read names the one that starts next and why the other two wait", %{orchestrator: orchestrator} do
     first = ticket("a", "MT-A", 2)
     second = ticket("b", "MT-B", 3)
-    blocked = ticket("c", "MT-C", 3, [%{id: "id-MT-9", identifier: "MT-9", state: "In Progress"}])
+    blocked = ticket("c", "MT-C", 3)
+    :ok = RunStore.put_ticket_state(%{repo_key: @repo, issue_id: "id-MT-9", issue_identifier: "MT-9", title: "Ticket MT-9", phase: "In Progress"})
+    :ok = RunStore.add_dependency("c", "id-MT-9", :done)
     issues = [blocked, second, first]
-    Orchestrator.sweep_dependencies_for_test(@repo, issues, Config.settings!().tracker.terminal_states)
 
-    state = Orchestrator.put_dispatch_order_for_test(orchestrator_state(), issues)
+    # The dispatch pass skipped MT-C at its dependency gate, as it records each cycle.
+    skip = %{identifier: "MT-C", title: blocked.title, state: "Todo", repo_key: @repo, connected: nil}
+    skipped = %{"c" => Map.merge(skip, %{reason: "waiting for MT-9 to be done", gate: :depends_on, rule: nil, since: DateTime.utc_now()})}
+    state = Orchestrator.put_dispatch_order_for_test(%{orchestrator_state() | dispatch_skipped: skipped}, issues)
     {:reply, snapshot, _state} = Orchestrator.handle_call(:snapshot, {self(), make_ref()}, state)
     :ok = GenServer.call(orchestrator, {:put, snapshot})
 
@@ -67,8 +71,8 @@ defmodule SymphonyElixirWeb.DispatchOrderReadTest do
            ] = read["queue"]
 
     tickets = Enum.flat_map(read["groups"], & &1["tickets"])
-    assert tickets |> Enum.map(& &1["identifier"]) |> Enum.sort() == ["MT-A", "MT-B", "MT-C"]
-    assert %{"outcome" => "held", "reason" => "Waiting for MT-9 to finish", "position" => nil} = Enum.find(tickets, &(&1["identifier"] == "MT-C"))
+    assert tickets |> Enum.map(& &1["identifier"]) |> Enum.sort() == ["MT-9", "MT-A", "MT-B", "MT-C"]
+    assert %{"outcome" => "held", "reason" => "waiting for MT-9 to be done", "position" => nil} = Enum.find(tickets, &(&1["identifier"] == "MT-C"))
     assert Enum.find(read["groups"], &(&1["kind"] == "blocked_by_ticket"))["tickets"] |> Enum.map(& &1["identifier"]) == ["MT-C"]
     assert Enum.all?(tickets, &is_binary(&1["situation"]["kind"]))
 
@@ -76,11 +80,54 @@ defmodule SymphonyElixirWeb.DispatchOrderReadTest do
     assert %{"order" => %{"next" => "MT-A", "queue" => [_first, _second]}} = build_conn() |> get("/api/v1/state") |> json_response(200)
   end
 
+  test "the queue lists the tickets in line in the stored order, not by priority or age", %{orchestrator: orchestrator} do
+    # MT-Z joined the queue first; MT-Y, urgent and older, joined after it.
+    joined_first = ticket("z", "MT-Z", 4)
+    urgent_older = %{ticket("y", "MT-Y", 1) | created_at: ~U[2025-01-01 00:00:00Z]}
+
+    state = Orchestrator.put_dispatch_order_for_test(orchestrator_state(), [urgent_older, joined_first])
+    {:reply, snapshot, _state} = Orchestrator.handle_call(:snapshot, {self(), make_ref()}, state)
+    :ok = GenServer.call(orchestrator, {:put, snapshot})
+
+    read = build_conn() |> get("/api/v1/dispatch/order") |> json_response(200)
+
+    assert %{"next" => "MT-Z"} = read
+    assert [%{"identifier" => "MT-Z", "position" => 1, "starts_now" => true}, %{"identifier" => "MT-Y", "position" => 2, "starts_now" => false}] = read["queue"]
+  end
+
+  test "TP-1615: the dispatch order and Home name the ticket that holds the slot and the free ones, and mark it alone in progress", %{orchestrator: orchestrator} do
+    # MT-H holds the one slot with no run (it waits for CI, say); MT-A waits behind it.
+    held = %{ticket("h", "MT-H", 3) | state: "In Progress"}
+    :ok = RunStore.update_ticket_state("h", %{phase: "In Progress"})
+    waiting = ticket("a", "MT-A", 2)
+    holder = %{identifier: "MT-H", state: "In Progress", repo_key: @repo, since: ~U[2026-11-22 07:00:00Z]}
+
+    state = %{orchestrator_state() | slot_holders: %{"h" => holder}}
+    state = Orchestrator.put_dispatch_order_for_test(state, [held, waiting])
+    {:reply, snapshot, _state} = Orchestrator.handle_call(:snapshot, {self(), make_ref()}, state)
+    :ok = GenServer.call(orchestrator, {:put, snapshot})
+
+    order = build_conn() |> get("/api/v1/dispatch/order") |> json_response(200)
+
+    assert %{"total" => 1, "used" => 1, "free" => 0, "holders" => [%{"identifier" => "MT-H", "state" => "In Progress", "running" => false}]} = order["slots"]
+    assert [%{"identifier" => "MT-H", "in_progress" => true, "starts_now" => true}, %{"identifier" => "MT-A", "in_progress" => false, "wait" => "work slots full"}] = order["queue"]
+
+    home = build_conn() |> get("/api/v1/home") |> json_response(200)
+
+    assert %{"free" => 0, "holders" => [%{"identifier" => "MT-H"}]} = home["slots"]
+    assert [%{"identifier" => "MT-H", "in_progress" => true}] = home["in_progress"]
+    assert [%{"identifier" => "MT-A", "in_progress" => false}] = home["queue"]["roots"]
+
+    status = build_conn() |> get("/api/v1/state") |> json_response(200)
+
+    assert status["slots"] == order["slots"]
+  end
+
   test "an unreadable orchestrator reads as an error", %{orchestrator: _orchestrator} do
     assert %{"error" => %{"code" => "snapshot_unavailable"}} = build_conn() |> get("/api/v1/dispatch/order") |> json_response(200)
   end
 
-  defp ticket(id, identifier, priority, blockers \\ []) do
+  defp ticket(id, identifier, priority) do
     :ok =
       RunStore.put_ticket_state(%{
         repo_key: @repo,
@@ -98,7 +145,6 @@ defmodule SymphonyElixirWeb.DispatchOrderReadTest do
       state: "Todo",
       priority: priority,
       repo_key: @repo,
-      blocked_by: blockers,
       url: "https://example.org/issues/#{identifier}"
     }
   end

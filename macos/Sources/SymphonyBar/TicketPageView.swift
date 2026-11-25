@@ -505,8 +505,6 @@ extension SymphonyWindowModel {
             openStopRun(page.identifier, origin: .ticketPage)
         case let .sheet(.moveTo(state)):
             if let sheet = page.moveSheet(to: state) { openMove(sheet) }
-        case .sheet(.force):
-            openForceSheet(page.identifier)
         case .sheet(.cancel):
             openCancel(page.cancelSheet)
         case let .open(url):
@@ -1108,16 +1106,15 @@ struct TicketDecisionsColumn: View {
 private struct LiveSituationLine: View {
     let situation: Situation
     let reference: Date
-    let forced: Bool
     @Environment(\.liveDurations) private var live
 
     var body: some View {
         if live {
             TimelineView(.periodic(from: .now, by: 30)) { context in
-                SituationLine(situation, reference: max(context.date, reference), forced: forced)
+                SituationLine(situation, reference: max(context.date, reference))
             }
         } else {
-            SituationLine(situation, reference: reference, forced: forced)
+            SituationLine(situation, reference: reference)
         }
     }
 }
@@ -1161,7 +1158,7 @@ struct TicketPageHeader: View {
             }
             Group {
                 if let situation = page.situation {
-                    LiveSituationLine(situation: situation, reference: page.reference, forced: page.isForced)
+                    LiveSituationLine(situation: situation, reference: page.reference)
                 } else {
                     Text(page.phaseSentence)
                         .font(DesignTokens.TypeStyle.body.font)
@@ -1471,6 +1468,7 @@ struct MoveSheetPresenter: ViewModifier {
                 cancel: model.cancelMove,
                 confirm: { note in model.confirmMove(sheet, note: note) }
             )
+            .pointerButtons()
         }
     }
 }
@@ -1555,6 +1553,7 @@ struct CancelTicketSheetPresenter: ViewModifier {
                 keep: model.keepTicket,
                 confirm: { note in model.confirmCancel(sheet, note: note) }
             )
+            .pointerButtons()
         }
     }
 }
@@ -1650,6 +1649,7 @@ struct StopRunSheetPresenter: ViewModifier {
                 cancel: model.cancelStop,
                 confirm: { alsoBacklog, note in model.confirmStop(sheet, alsoBacklog: alsoBacklog, note: note) }
             )
+            .pointerButtons()
         }
     }
 }

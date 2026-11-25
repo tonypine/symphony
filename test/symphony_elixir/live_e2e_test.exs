@@ -224,8 +224,7 @@ defmodule SymphonyElixir.LiveE2ETest do
       description: issue["description"],
       state: get_in(issue, ["state", "name"]),
       url: issue["url"],
-      labels: [],
-      blocked_by: []
+      labels: []
     }
   end
 

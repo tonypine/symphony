@@ -35,8 +35,9 @@ public enum UpdateMode: String, CaseIterable, Identifiable {
                 + "waits for agent runs to finish, updates, and resumes dispatch. If the runs outlast the restart "
                 + "timeout it resumes dispatch and tries again the next day. " + UpdateMode.skipNote
         case .onRelease:
-            return "When Symphony finds a new release it installs it straight away: it pauses dispatch, waits for "
-                + "agent runs to finish, updates, and resumes dispatch. " + UpdateMode.skipNote
+            return "When Symphony finds a new release it downloads it straight away and keeps dispatching. It "
+                + "updates at the first moment no agent run is active, or after 15 minutes holds new runs for at "
+                + "most 10 so one comes; a newer release published meanwhile replaces it. " + UpdateMode.skipNote
         }
     }
 

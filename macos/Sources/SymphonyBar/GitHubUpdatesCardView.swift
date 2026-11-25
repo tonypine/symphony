@@ -53,7 +53,7 @@ struct GitHubUpdatesCardView: View {
                         Label(SetupPage.detailsTitle, systemImage: expanded ? "chevron.down" : "chevron.right")
                             .font(DesignTokens.TypeStyle.secondary.font)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.plainPointer)
                     .foregroundStyle(.secondary)
                     .accessibilityLabel(expanded ? "Hide GitHub updates details" : "Show GitHub updates details")
                     if expanded {
@@ -278,5 +278,22 @@ struct GitHubUpdatesSheetView: View {
             edited[keyPath: keyPath] = value
             change(edited)
         })
+    }
+}
+
+/// A number of minutes, shown as "5 min", with a stepper over `GitHubUpdates.minuteRange`: Setup's GitHub updates card.
+struct MinutesRow: View {
+    let title: String
+    @Binding var minutes: Int
+
+    var body: some View {
+        LabeledContent(title) {
+            HStack {
+                Text("\(minutes) min")
+                    .monospacedDigit()
+                Stepper(title, value: $minutes, in: GitHubUpdates.minuteRange)
+                    .labelsHidden()
+            }
+        }
     }
 }

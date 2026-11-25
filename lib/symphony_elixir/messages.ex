@@ -51,11 +51,16 @@ defmodule SymphonyElixir.Messages do
 
   @doc """
   Records `text` as a message to `repo_key`'s ticket `issue_id`, written by `opts[:by]` (default
-  the Director), as `TicketEvents.record/5` answers.
+  the Director), as `TicketEvents.record/5` answers. `opts[:answers]` names the question the
+  message answers in the person's own words (`question_id`), `opts[:source]` where it came from
+  when no person sent it in Symphony (`linear_description`: a person's edit of the Linear
+  description, `SymphonyElixir.Conductor.DescriptionEdit`) and `opts[:idempotency]` its key.
   """
   @spec send_message(String.t(), String.t(), String.t(), keyword()) :: {:ok, Event.t()} | {:error, term()}
-  def send_message(repo_key, issue_id, text, opts \\ []),
-    do: TicketEvents.record(repo_key, issue_id, "message.sent", %{text: text}, actor: {:person, Keyword.get(opts, :by, @person)})
+  def send_message(repo_key, issue_id, text, opts \\ []) do
+    payload = %{text: text, question_id: Keyword.get(opts, :answers), source: Keyword.get(opts, :source)}
+    TicketEvents.record(repo_key, issue_id, "message.sent", payload, [actor: {:person, Keyword.get(opts, :by, @person)}] ++ Keyword.take(opts, [:idempotency]))
+  end
 
   @doc "The messages among `events`, oldest first."
   @spec messages([Event.t()]) :: [Event.t()]

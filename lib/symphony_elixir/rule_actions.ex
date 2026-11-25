@@ -12,7 +12,7 @@ defmodule SymphonyElixir.RuleActions do
       backstop records only a question to a person: a fix ticket it hands the self-heal lane is
       recorded once, by the lane;
     * a pause reason a rule set or lifted (`SymphonyElixir.Pauses`, in the pause's own transaction,
-      `pause_event/4`): the CI wait, the release-build watch, the blocked-by links, self-heal's fix
+      `pause_event/4`): the CI wait, the release-build watch, self-heal's fix
       ticket, the update and instructions holds and every other setter of kind `:rule`. A question's
       reason is left out: its `question.asked` already says who asked;
     * the dispatch-loop guard (`SymphonyElixir.Orchestrator`), the idle park

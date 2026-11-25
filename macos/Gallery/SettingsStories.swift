@@ -1,6 +1,6 @@
 // The design-system components a Settings page is built of (TP-1574): the catalog's Toggle (its stories by the
 // catalog's names, `docs/design/catalog/stories.js`), and the number field, the time field, the settings row and its
-// group, and the in-page section list, which the catalog has no entry for. Each story is a variation of its own
+// group, the settings line (TP-1576) and the in-page section list, which the catalog has no entry for. Each story is a variation of its own
 // (`toggle-on`), so the gallery's board shows them together under their names. The resting stories are live: in the
 // gallery they can be clicked, typed in, stepped, hovered and focused; the hover, pressed, focus and error ones are
 // drawn in that state.
@@ -48,6 +48,27 @@ func numberFieldStory(
     return AnyView(field.frame(width: fieldStoryWidth, alignment: .leading))
 }
 
+/// The stop timeout typed past its range on a page that says so: the field keeps 900, and the error says the range.
+@MainActor
+func numberFieldOutOfRangeStory() -> AnyView {
+    let field = LiveValue(value: 900) { value in
+        NumberField(
+            "Stop timeout", value: value, in: 1...600, accepts: Int.min...Int.max, unit: "seconds",
+            error: value.wrappedValue > 600 ? "The stop timeout must be between 1 and 600 seconds." : nil, drawnAs: .focused
+        )
+    }
+    return AnyView(field.frame(width: fieldStoryWidth, alignment: .leading))
+}
+
+/// The summary size limit, a five-digit value: the field widens so 50000 shows whole, the unit after it (TP-1576).
+@MainActor
+func numberFieldLongValueStory() -> AnyView {
+    let field = LiveValue(value: 50_000) { value in
+        NumberField("Summary size limit", value: value, in: 1...Int.max, accepts: Int.min...Int.max, unit: "tokens", drawnAs: .rest)
+    }
+    return AnyView(field.frame(width: fieldStoryWidth, alignment: .leading))
+}
+
 // MARK: - Time field
 
 /// The update time's field: 03:00, in a shown state.
@@ -84,19 +105,21 @@ func settingsRowStory(help: String? = nil, error: String? = nil, reason: String?
 
 /// The Updates group: a pop-up, the time field, a switch and a number field, under its title and over its footer.
 @MainActor
-func settingsGroupStory(minutes: Int = 30) -> AnyView {
+func settingsGroupStory(minutes: Int = 30, mode: UpdateMode = .atTime) -> AnyView {
     struct UpdatesGroup: View {
-        @State var mode = "At a set time"
+        @State var mode: UpdateMode
         @State var time = TimeOfDay.defaultUpdateTime
         @State var notify = true
         @State var minutes: Int
 
         var body: some View {
-            SettingsGroup("Updates", footer: "Symphony installs a new release by itself at the time you set.") {
+            SettingsGroup("Updates", footer: mode == .atTime ? "Symphony installs a new release by itself at the time you set." : mode.explanation) {
                 SettingsRow("Update mode") {
-                    PopUp(nil, selection: $mode, choices: ["Manually", "At a set time", "On release"].map { PopUpChoice($0, $0) })
+                    PopUp(nil, selection: $mode, choices: UpdateMode.allCases.map { PopUpChoice($0, $0.title) })
                 }
-                SettingsRow("Time", help: "On the Mac's clock, every day.") { TimeField(time: $time) }
+                if mode == .atTime {
+                    SettingsRow("Time", help: "On the Mac's clock, every day.") { TimeField(time: $time) }
+                }
                 SettingsRow("Notify me when it installs", help: "A notification after each update.") { DirectorSwitch(isOn: $notify) }
                 SettingsRow("Check for releases every", error: minutes < 15 ? "GitHub allows a check every 15 minutes at most." : nil) {
                     NumberField(value: $minutes, in: 5...1440, step: 5, unit: "minutes")
@@ -104,7 +127,46 @@ func settingsGroupStory(minutes: Int = 30) -> AnyView {
             }
         }
     }
-    return AnyView(UpdatesGroup(minutes: minutes).frame(width: settingsStoryWidth))
+    return AnyView(UpdatesGroup(mode: mode, minutes: minutes).frame(width: settingsStoryWidth))
+}
+
+// MARK: - Settings line
+
+/// A group with a line that is no one setting: the words over its rows, an error line naming where its reason shows,
+/// and a variable's name and value with the button that removes it.
+@MainActor
+func settingsLineStory(_ kind: String) -> AnyView {
+    struct Lines: View {
+        let kind: String
+        @State var on = true
+        @State var name = "API_BASE_URL"
+        @State var value = "http://localhost:8090"
+
+        var body: some View {
+            SettingsGroup("Tickets") {
+                switch kind {
+                case "error":
+                    SettingsRow("Urgent") { DirectorSwitch(isOn: $on) }
+                    SettingsLine("symphony check rejected these ticket priorities; the reason shows above Save.", error: true)
+                case "with-fields":
+                    SettingsLine {
+                        HStack(spacing: DesignTokens.Space.s2) {
+                            DirectorTextField(nil, text: $name, placeholder: "NAME", mono: true).controlLabel("Name")
+                            DirectorTextField(nil, text: $value, placeholder: "Value").controlLabel("Value")
+                            IconButton("minus.circle", help: "Remove this variable", size: .small) {}
+                        }
+                    }
+                    SettingsLine {
+                        Button("Add Variable") {}.directorButton(.quiet, size: .small, glyph: "plus")
+                    }
+                default:
+                    SettingsLine("Only the chosen priorities start new work. With none chosen, every priority may.")
+                    SettingsRow("Urgent") { DirectorSwitch(isOn: $on) }
+                }
+            }
+        }
+    }
+    return AnyView(Lines(kind: kind).frame(width: settingsStoryWidth))
 }
 
 // MARK: - Section list
@@ -150,7 +212,7 @@ func sectionListStory(drawn: [SettingsSectionStory: DesignTokens.Interaction] = 
 
 // MARK: - Stories
 
-/// Every story of the five entries.
+/// Every story of the entries.
 @MainActor
 let settingsStories: [ComponentStory] = {
     func toggle(_ id: String, height: CGFloat = 72, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
@@ -169,6 +231,9 @@ let settingsStories: [ComponentStory] = {
     }
     func group(_ id: String, height: CGFloat = 300, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
         ComponentStory(component: "settings-group", id: id, title: "Settings group", width: settingsStoryWidth, height: height, draw: draw)
+    }
+    func line(_ id: String, height: CGFloat = 140, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
+        ComponentStory(component: "settings-line", id: id, title: "Settings line", width: settingsStoryWidth, height: height, draw: draw)
     }
     func sections(_ id: String, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
         ComponentStory(
@@ -190,6 +255,8 @@ let settingsStories: [ComponentStory] = {
         number("at-its-maximum") { numberFieldStory(120) },
         number("error") { numberFieldStory(1, state: .focused, error: "Give Symphony 5 seconds at least to stop.") },
         number("disabled-with-reason") { numberFieldStory(reason: "Symphony is stopping: the timeout is in use.") },
+        number("typed-out-of-range") { numberFieldOutOfRangeStory() },
+        number("long-value") { numberFieldLongValueStory() },
         time("rest") { timeFieldStory() },
         time("hover") { timeFieldStory(state: .hover) },
         time("focused") { timeFieldStory(state: .focused, part: .hour) },
@@ -201,6 +268,10 @@ let settingsStories: [ComponentStory] = {
         row("label-alone", height: 56) { settingsRowStory() },
         group("updates") { settingsGroupStory() },
         group("with-an-error") { settingsGroupStory(minutes: 10) },
+        group("updates-when-released", height: 340) { settingsGroupStory(mode: .onRelease) },
+        line("text") { settingsLineStory("text") },
+        line("error") { settingsLineStory("error") },
+        line("with-fields") { settingsLineStory("with-fields") },
         sections("rest") { sectionListStory() },
         sections("row-hover") { sectionListStory(drawn: [.notifications: .hover]) },
         sections("row-pressed") { sectionListStory(drawn: [.notifications: .press]) },

@@ -219,7 +219,6 @@ final class SituationTests: XCTestCase {
         let (_, text) = try line("waiting_for_ci")
         XCTAssertEqual(text.spokenAge, "for 6 minutes")
         XCTAssertEqual(text.spoken(), "Waiting for CI, for 6 minutes: Checks are running on PR #741.")
-        XCTAssertEqual(text.spoken(forced: true), "Waiting for CI, for 6 minutes: Checks are running on PR #741. Forced.")
     }
 
     func testTheFullLineShowsTheAgeBesideTheWordAndARowTrailsIt() throws {

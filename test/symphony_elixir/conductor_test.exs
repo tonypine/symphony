@@ -279,12 +279,46 @@ defmodule SymphonyElixir.ConductorTest do
       refute Enum.any?(options, &(Map.has_key?(&1, :action) or Map.has_key?(&1, :finding)))
     end
 
+    test "a back_to_review option moves a ticket in Rework to Code Review as it is, and is refused elsewhere (TP-1596)", _ctx do
+      question = %{
+        acting_question()
+        | "options" => [
+            %{"label" => "Back to Code Review unchanged", "effect" => "PR goes back to Code Review unchanged.", "recommended" => true, "action" => "back_to_review"},
+            %{"label" => "Keep it paused", "effect" => "Nothing moves.", "action" => "continue"}
+          ]
+      }
+
+      fresh = fresh_ticket!("Rework")
+      Conductor.run(plan(fresh), fresh.issue, turn: turn({:ok, [answer(%{"ask_person" => question})], 10}), facts: %{})
+      assert [%{options: [back, keep]}] = SymphonyElixir.Questions.open({:ticket, "default", fresh.issue_id})
+      assert %{to: "Code Review", handoff: %{head: _head}} = back.move
+      refute Map.has_key?(keep, :move)
+
+      elsewhere = fresh_ticket!("QA")
+      log = capture_log(fn -> Conductor.run(plan(elsewhere), elsewhere.issue, turn: turn({:ok, [answer(%{"ask_person" => question})], 10}), facts: %{}) end)
+      assert log =~ "sends the pull request back to review unchanged, but the ticket is in QA, not Rework"
+      assert SymphonyElixir.Questions.open({:ticket, "default", elsewhere.issue_id}) == []
+    end
+
+    test "every turn's prompt says it may move its ticket to a stage, and how to write the move (TP-1656)", _ctx do
+      junctions = ~w(grooming message child_message sub_ticket_ended final_check after_coding after_qa_fail after_qa_blocked after_rework before_merge during_run)
+
+      for junction <- junctions do
+        prompt = Conductor.prompt(junction, %{})
+        assert prompt =~ ~s("move": null or {"stage": "<one of the facts' stages), junction
+        assert prompt =~ ~s(add `"move": {"stage": "<a stage>",), junction
+        assert prompt =~ "one of the facts' `stages`", junction
+        assert prompt =~ "same path and checks as a person's move", junction
+        assert prompt =~ "is dropped", junction
+      end
+    end
+
     test "both prompts name the option actions, the one-question rule and the steps proved by a test", _ctx do
       for junction <- ["after_rework", "during_run"] do
         prompt = Conductor.prompt(junction, %{})
         for action <- Answer.actions(), do: assert(prompt =~ "`#{action}`")
         assert prompt =~ "`ticket.proved_steps`"
-        assert prompt =~ "QA does not walk the"
+        assert prompt =~ "and QA does not walk it"
         assert prompt =~ "A ticket waits on one question about its stage"
       end
     end
@@ -412,6 +446,23 @@ defmodule SymphonyElixir.ConductorTest do
       ran!(ctx.issue_id, "rework")
       blocked!(ctx.issue_id, "ddd")
       assert Conductor.route_blocked_qa(ctx.issue, "default", turn: turn(routed(%{"to" => "rerun"})), settings: @on) == :rerun
+    end
+
+    test "a move decides where the ticket goes: a rerun given beside it is dropped, and the pass is told it moved (TP-1656)", ctx do
+      blocked!(ctx.issue_id)
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [ctx.issue])
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+      move = %{"stage" => "In Progress", "reason" => "QA cannot fail the request until a flag exists."}
+
+      log = capture_log(fn -> assert Conductor.route_blocked_qa(ctx.issue, "default", turn: turn(routed(%{"to" => "rerun"}, %{"move" => move})), settings: @on) == :moved end)
+
+      assert log =~ "Conductor's route rerun dropped"
+      assert log =~ "the turn moves the ticket to In Progress"
+      assert log =~ "Conductor moved the ticket from Code Review to In Progress"
+      assert_received {:memory_tracker_state_update, _id, "In Progress"}
+      assert %{phase: "In Progress"} = RunStore.get_ticket_state(ctx.issue_id)
+      assert [%{payload: instructions}] = events(ctx.issue_id, "conductor.instructions")
+      refute Map.has_key?(instructions, :route)
     end
 
     test "at most 2 routes to rework per ticket", ctx do
@@ -677,6 +728,44 @@ defmodule SymphonyElixir.ConductorTest do
       no_waiver = plan(ctx, %{junction: "after_qa_fail"})
       assert Conductor.run(no_waiver, ctx.issue, turn: turn([answer(%{"waive" => [%{"check_id" => "c2", "reason" => "x"}]})] |> then(&{:ok, &1, 10}))) == :ok
       assert [_waived, %{id: "c2", state: :open}] = SymphonyElixir.TicketChecks.list(ctx.issue_id)
+    end
+
+    test "a single ticket's turn after coding waives a check and drops the outcome that rested on it, with its reason", ctx do
+      checks = [
+        %{id: "c1", kind: "outcome", statement: "The list exports.", proof: "test"},
+        %{id: "c2", kind: "evidence", statement: "It signs in.", proof: "test"},
+        %{id: "c3", kind: "outcome", statement: "The list shows.", proof: "test"}
+      ]
+
+      plan = %{shape: "single", layers: ["engine"], summary: "s", text: "t", checks: checks, size: %{tokens: 1, runs: 1}}
+      {:ok, _plan} = SymphonyElixir.TicketPlan.write("default", ctx.issue_id, Map.merge(plan, %{reason: "Grooming", by: "grooming"}))
+      reason = "Nothing inside this ticket's life can export the list: the export service does not exist."
+
+      written = %{
+        "reason" => reason,
+        "shape" => "single",
+        "summary" => "s",
+        "text" => "t",
+        "checks" => [%{"id" => "c2", "kind" => "evidence", "statement" => "It signs in.", "proof" => "test"}, %{"id" => "c3", "kind" => "outcome", "statement" => "The list shows.", "proof" => "test"}],
+        "size" => %{"tokens" => 1, "runs" => 1}
+      }
+
+      test = self()
+
+      turn = fn _plan, _issue, _run_id, prompt ->
+        send(test, {:prompt, prompt})
+        {:ok, [answer(%{"plan" => written})], 10}
+      end
+
+      assert Conductor.run(plan(ctx), ctx.issue, turn: turn) == :ok
+
+      assert %{reason: ^reason, by: "recalibration", checks: [%{id: "c2"}, %{id: "c3"}]} =
+               SymphonyElixir.TicketPlan.current(ctx.issue_id)
+
+      assert_received {:prompt, prompt}
+      assert prompt =~ "Dropping an outcome. When an outcome (a check of kind `outcome`) is itself a check nobody can prove"
+      assert prompt =~ ~s("plan": null or {<this ticket's whole plan written again)
+      assert prompt =~ ~s("summary": "s")
     end
 
     test "a watch turn may waive one too, and its prompt says so", ctx do

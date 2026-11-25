@@ -4,8 +4,9 @@ defmodule SymphonyElixir.QaSeedTest do
   import Plug.Conn
   import Plug.Test
 
-  alias SymphonyElixir.{Artifacts, Config, DirectorMoves, Inbox, Orchestrator, Paths, Pauses, PlanBrief, QaSeed}
-  alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.{Artifacts, Config, DirectorMoves, Inbox, Initiatives, Orchestrator, Paths, Pauses}
+  alias SymphonyElixir.Dispatch.DependsOn
+  alias SymphonyElixir.{PlanBrief, QaSeed}
   alias SymphonyElixir.{Questions, RunStore, Situation, SubIssueWait, TicketEvents, TicketPullRequest, Tracker}
   alias SymphonyElixir.Workflow
   alias SymphonyElixirWeb.ControlApiController
@@ -253,13 +254,14 @@ defmodule SymphonyElixir.QaSeedTest do
     assert %{kind: "waiting_on_sub_tickets", waits_on: %{sub_tickets: ["QA-115"]}} = status
     refute status.cause =~ "epic review"
 
-    # QA-115 is its sub-ticket and is blocked by it too, yet the merged parent does not hold it;
-    # QA-116, which QA-114 blocks, is not held either.
-    assert {:ok, %{parent: %{identifier: "QA-114", done: 0, total: 1}} = child} = Tracker.fetch_issue_by_identifier("QA-115")
-    refute Issue.blocked?(child, terminal_states)
-    assert {:ok, blocked} = Tracker.fetch_issue_by_identifier("QA-116")
-    assert [%{identifier: "QA-114"}] = blocked.blocked_by
-    refute Issue.blocked?(blocked, terminal_states)
+    # QA-115 is its sub-ticket, and neither it nor QA-116 is held by the merged parent: the seed
+    # stores their dependencies on QA-114, which its merged pull request meets.
+    assert [{%{issue_id: "qa-seed-114", kind: :done}, _record}] = RunStore.dependencies("qa-seed-115")
+    assert [{%{issue_id: "qa-seed-114", kind: :done}, _record}] = RunStore.dependencies("qa-seed-116")
+    assert {:ok, %{parent: %{identifier: "QA-114", done: 0, total: 1}}} = Tracker.fetch_issue_by_identifier("QA-115")
+    assert {:ok, %{identifier: "QA-116"}} = Tracker.fetch_issue_by_identifier("QA-116")
+    assert DependsOn.open_for("qa-seed-115") == []
+    assert DependsOn.open_for("qa-seed-116") == []
 
     # Linear's parent node counts a Done child as done and leaves a cancelled one out.
     :ok = Tracker.update_issue_state("qa-seed-115", "Done")
@@ -287,6 +289,19 @@ defmodule SymphonyElixir.QaSeedTest do
     assert {:ok, %{state: "Done"}} = Tracker.fetch_issue_by_identifier("QA-114")
     refute RunStore.merged_wait?("qa-seed-114")
     assert RunStore.list_runs(repo_key, :all) |> Enum.filter(&(&1.issue_identifier == "QA-114")) == []
+  end
+
+  test "TP-1620: the seed's Initiatives list QA-117, which Symphony split, and not the labelled QA-109", %{dir: dir} do
+    assert QaSeed.load(dir, now: @now) == :ok
+
+    # QA-117 carries no plan label; the Conductor filed its three sub-tickets, one of them done.
+    assert %{labels: []} = RunStore.get_ticket_state("qa-seed-117")
+    assert [initiative] = Initiatives.read(now: @now)
+    assert %{identifier: "QA-117", group: "active", sub_tickets: subs} = initiative
+    assert subs |> Enum.map(&{&1.identifier, &1.state_type}) |> Enum.sort() == [{"QA-118", "completed"}, {"QA-119", "started"}, {"QA-120", "started"}]
+
+    # QA-109 carries the plan label and QA-114 has a sub-ticket, but Symphony split neither.
+    assert %{labels: ["plan"]} = RunStore.get_ticket_state("qa-seed-109")
   end
 
   defp rows(inbox), do: %{} |> Inbox.items(inbox) |> Enum.map(&{&1.identifier, &1.kind, &1.review}) |> Enum.sort()

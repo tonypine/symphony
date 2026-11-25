@@ -5,7 +5,7 @@ defmodule SymphonyElixir.SelfHeal.Fixer do
 
   A fix ticket is created in **Todo** — not Backlog: it is work the machine is already waiting on
   (only a ticket the Conductor files to do after its parent names another `state`: `Backlog`, until
-  its blocker is linked) —
+  its dependency on its parent is stored) —
   at the affected ticket's priority when that is more urgent than High (an Urgent ticket's fix is
   Urgent, so `tickets.priorities` dispatches it like the ticket it unblocks), else at High, in the
   affected ticket's Linear team (else the team of the repo the scope rule names,
@@ -13,8 +13,8 @@ defmodule SymphonyElixir.SelfHeal.Fixer do
   `route.team`, else its routed projects' team, else its polled tickets') and in the affected
   ticket's project when
   the fix belongs to its own repo, else the scope repo's first routed project. The affected
-  ticket is linked to it as blocked-by, and a recurring failure attaches its evidence as a comment
-  on the fix ticket it already has. A reused fix ticket keeps the priority it was filed at.
+  ticket waits on it through its pause (`SymphonyElixir.SelfHeal`), with no Linear blocker link,
+  and a recurring failure attaches its evidence as a comment on the fix ticket it already has. A reused fix ticket keeps the priority it was filed at.
 
   The fix ticket is assigned to the user the scope repo's route polls with (its `assignee`, else
   `issues.linear.assignee`, `me` being the API key's user), so Symphony dispatches it: an unassigned
@@ -90,17 +90,6 @@ defmodule SymphonyElixir.SelfHeal.Fixer do
       tracker(opts).create_comment(issue.id, body)
     end
   end
-
-  @doc """
-  Records that `ticket` blocks `issue`: the affected ticket is blocked by the fix ticket, so it
-  cannot move until the fix lands.
-  """
-  @spec block(Issue.t(), map(), keyword()) :: :ok | {:error, term()}
-  def block(%Issue{id: issue_id}, %{identifier: identifier}, _opts) when is_binary(issue_id) and is_binary(identifier) do
-    Linear.Adapter.add_blocked_by(identifier, issue_id)
-  end
-
-  def block(_issue, _ticket, _opts), do: {:error, :invalid_blocked_by}
 
   # The team and project the fix ticket goes to. The team is the affected ticket's own Linear team,
   # else the scope repo's first routed team, which a repo routed only by project finds through its

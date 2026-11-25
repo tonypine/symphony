@@ -66,8 +66,8 @@ defmodule SymphonyElixir.ConfigPhasesTest do
 
       assert [%Command{run: "mix format --check-formatted && mix specs.check && (test -z" <> _, when: "always"}] = checks.command
       assert checks.when == "elixir_source_changed"
-      assert [%Command{run: "(test -z \"$SYMPHONY_CHANGED_TEST_FILES\" || mix test " <> elixir_tests}, %Command{run: "cd macos && swift test --filter" <> _, when: "macos_changed"}] = tests.command
-      assert elixir_tests =~ "mix cover.changed"
+      # One pass: `mix cover.changed` runs the changed tests itself, so no `mix test` goes before it.
+      assert [%Command{run: "mix cover.changed $SYMPHONY_CHANGED_TEST_FILES"}, %Command{run: "cd macos && swift test --filter" <> _, when: "macos_changed"}] = tests.command
       assert Enum.all?(steps, &(&1.no_result_limit == 2))
     end
 

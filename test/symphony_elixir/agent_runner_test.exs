@@ -293,7 +293,7 @@ defmodule SymphonyElixir.AgentRunnerTest do
 
   test "a test that hangs twice pauses the run on a Question with no session; going on past it resumes the run at once", ctx do
     ctx = Map.put(ctx, :orchestrator, self())
-    task = start_run(ctx, [{"mix test", [{:timeout, "hanging"}]}], in_progress_for(5))
+    task = start_run(ctx, [{"mix cover.changed", [{:timeout, "hanging"}]}], in_progress_for(5))
 
     assert_receive {:turn, 1, 1, _prompt}, 5_000
     assert_receive {:run_step, @issue_id, {:answer_wanted, runner, %{id: "tests", mode: "machine"}, question_id}}, 5_000
@@ -311,7 +311,7 @@ defmodule SymphonyElixir.AgentRunnerTest do
 
   test "a hung step run again runs once more, and the person's own words go to the agent step it returns to", ctx do
     ctx = Map.put(ctx, :orchestrator, self())
-    task = start_run(ctx, [{"mix test", [{:timeout, "hanging"}, {:timeout, "hanging"}, {:ok, {"ok", 0}}]}], in_progress_for(6))
+    task = start_run(ctx, [{"mix cover.changed", [{:timeout, "hanging"}, {:timeout, "hanging"}, {:ok, {"ok", 0}}]}], in_progress_for(6))
 
     assert_receive {:run_step, @issue_id, {:answer_wanted, runner, %{id: "tests"}, question_id}}, 5_000
     {:ok, _answered} = Questions.answer(@ticket, question_id, "Run it again")
@@ -325,7 +325,7 @@ defmodule SymphonyElixir.AgentRunnerTest do
 
     # Another run: the tests hang twice again, and the person answers in their own words.
     Application.put_env(:symphony_elixir, :walk_agent_turns, 0)
-    task = start_run(ctx, [{"mix test", [{:timeout, "hanging"}]}], in_progress_for(6))
+    task = start_run(ctx, [{"mix cover.changed", [{:timeout, "hanging"}]}], in_progress_for(6))
     assert_receive {:run_step, @issue_id, {:answer_wanted, runner, %{id: "tests"}, question_id}}, 5_000
     {:ok, _answered} = Questions.answer(@ticket, question_id, "Skip the slow suite and say so in the PR")
     send(runner, {:run_step_turn, @issue_id})
@@ -504,6 +504,126 @@ defmodule SymphonyElixir.AgentRunnerTest do
     assert_receive {:run_step, @issue_id, {:turn_wanted, runner, %{id: "handoff"}}}, 5_000
     send(runner, {:run_step_turn, @issue_id})
     assert :ok = Task.await(task, 10_000)
+  end
+
+  # The run `run-gone`, which Symphony's start ended because Symphony stopped while it worked (an update's restart).
+  defp interrupted_by_restart!(step_events) do
+    :ok =
+      RunStore.put_run(%{
+        run_id: "run-gone",
+        repo_key: "default",
+        issue_id: @issue_id,
+        issue_identifier: "TP-900",
+        state: "In Progress",
+        status: "running",
+        session_id: "sess-gone"
+      })
+
+    for {type, payload} <- step_events do
+      {:ok, _event} = TicketEvents.record("default", @issue_id, type, payload, run_id: "run-gone")
+    end
+
+    {:ok, _count} = RunStore.interrupt_running_runs("default", RunStore.restart_error())
+    :ok
+  end
+
+  @code_started {"step.started", %{step_id: "code", title: "Write the code", mode: "delegated"}}
+
+  # c7 (TP-1590): a run paused midway by an update's restart goes on where it paused, in the same session.
+  test "a run the restart stopped mid-step goes on at that step in the interrupted turn's session", ctx do
+    ctx = Map.put(ctx, :orchestrator, self())
+    interrupted_by_restart!([@code_started])
+
+    task = start_run(ctx, [], in_progress_for(5))
+    assert_receive {:turn, 1, 1, resumed}, 5_000
+    assert resumed =~ "This turn is the `code` step"
+    assert resumed =~ "Symphony restarted (to install an update) while this step's turn was under way"
+    assert_receive {:turn_resumes, 1, "sess-gone"}
+
+    assert_receive {:run_step, @issue_id, {:turn_wanted, runner, %{id: "handoff"}}}, 5_000
+    send(runner, {:run_step_turn, @issue_id})
+    assert_receive {:turn_resumes, 2, nil}
+    assert :ok = Task.await(task, 10_000)
+
+    assert [{"code", "passed"}, {"build", "passed"} | _rest] = for(%{type: "step.completed", payload: p} <- step_events(), do: {p.step_id, p.outcome})
+  end
+
+  test "a run the restart stopped between steps goes on at the next step and runs none that ended again", ctx do
+    ctx = Map.put(ctx, :orchestrator, self())
+    interrupted_by_restart!([@code_started, {"step.completed", %{step_id: "code", title: "Write the code", mode: "delegated", outcome: "passed"}}])
+
+    task = start_run(ctx, [], in_progress_for(5))
+    assert_receive {:step_command, "mix compile --warnings-as-errors"}, 5_000
+    refute_received {:turn, _count, _session, _prompt}
+
+    assert_receive {:run_step, @issue_id, {:turn_wanted, runner, %{id: "handoff"}}}, 5_000
+    send(runner, {:run_step_turn, @issue_id})
+    assert_receive {:turn, 1, 1, handoff}
+    assert handoff =~ "This turn is the `handoff` step"
+    assert :ok = Task.await(task, 10_000)
+
+    code_ends = for %{type: "step.completed", payload: %{step_id: "code"}} = event <- step_events(), do: event.run_id
+    assert code_ends == ["run-gone"], "the code step ran once, before the restart"
+  end
+
+  test "a run the restart stopped before an agent step goes on there with a note of the restart, in a new session", ctx do
+    ctx = Map.put(ctx, :orchestrator, self())
+    completed = {"step.completed", %{step_id: "build", title: "Build", mode: "machine", outcome: "failed", returns_to: "code"}}
+    interrupted_by_restart!([{"step.started", %{step_id: "build", title: "Build", mode: "machine", command: "make build"}}, completed])
+
+    task = start_run(ctx, [], in_progress_for(5))
+    assert_receive {:turn, 1, 1, prompt}, 5_000
+    assert prompt =~ "This turn is the `code` step"
+    assert prompt =~ "Symphony restarted (to install an update) between this run's steps"
+    assert prompt =~ "The `build` step (Build) failed"
+    assert_receive {:turn_resumes, 1, nil}
+
+    assert_receive {:run_step, @issue_id, {:turn_wanted, runner, %{id: "handoff"}}}, 5_000
+    send(runner, {:run_step_turn, @issue_id})
+    assert :ok = Task.await(task, 10_000)
+  end
+
+  test "a session the restart stopped that can't be resumed is replaced by a new session at the same step", ctx do
+    ctx = Map.put(ctx, :orchestrator, self())
+    interrupted_by_restart!([@code_started])
+
+    Application.put_env(:symphony_elixir, :walk_agent_script, fn count, prompt, opts ->
+      if Keyword.get(opts, :resume_session_id) == "sess-gone",
+        do: {:return, {:error, :no_conversation_found}},
+        else: WalkAgent.record_step(count, prompt, opts)
+    end)
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        task = start_run(ctx, [], in_progress_for(5))
+        assert_receive {:turn_resumes, 1, "sess-gone"}, 5_000
+        assert_receive {:session_stopped, 1}
+        assert_receive {:session_started, 2}
+        assert_receive {:turn, 2, 2, fresh}
+        assert fresh =~ "This turn is the `code` step"
+        assert fresh =~ "Symphony restarted"
+        assert_receive {:turn_resumes, 2, nil}
+
+        assert_receive {:run_step, @issue_id, {:turn_wanted, runner, %{id: "handoff"}}}, 5_000
+        send(runner, {:run_step_turn, @issue_id})
+        assert :ok = Task.await(task, 10_000)
+      end)
+
+    assert log =~ "Could not resume session sess-gone"
+  end
+
+  test "a usage limit on the resumed session is the run's, not a reason for a new session", ctx do
+    ctx = Map.put(ctx, :orchestrator, self())
+    interrupted_by_restart!([@code_started])
+    limited = {:usage_limited, %{provider: "anthropic"}}
+    script = fn _count, _prompt, _opts -> {:return, {:error, limited}} end
+    Application.put_env(:symphony_elixir, :walk_agent_script, script)
+
+    Process.flag(:trap_exit, true)
+    task = start_run(ctx, [], in_progress_for(5))
+    assert_receive {:turn_resumes, 1, "sess-gone"}, 5_000
+    assert {{:usage_limited, %{provider: "anthropic"}}, _call} = catch_exit(Task.await(task, 10_000))
+    refute_received {:session_started, 2}
   end
 
   test "a delegated step whose agent records no end is retried once with a reminder, then fails back to itself with a note", ctx do

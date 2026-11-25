@@ -288,11 +288,11 @@ final class SymphonyWindowTests: XCTestCase {
 
     private func trackedTickets() -> TicketList {
         let now = Date(timeIntervalSince1970: 1_000_000)
-        let forced: [StateSnapshot.ForcedTicket] = [
+        let blocked: [OverviewState.Blocked] = [
             ("TP-14", "Retry the release"), ("TP-1455", "The five destinations"), ("TP-145", "Sidebar badges"),
             ("API-9", "Release notes for the café"), ("API-10", nil),
-        ].map { .init(identifier: $0.0, issueID: nil, title: $0.1, repoKey: "web", summary: "", state: "Todo") }
-        return TicketList(state: OverviewState(snapshot: StateSnapshot(forced: forced), generatedAt: now), now: now)
+        ].map { .init(identifier: $0.0, title: $0.1, state: "Todo") }
+        return TicketList(state: OverviewState(generatedAt: now, blocked: blocked), now: now)
     }
 
     func testFindsATicketByItsIdentifierExactFirstThenByPrefix() {
@@ -320,9 +320,7 @@ final class SymphonyWindowTests: XCTestCase {
         XCTAssertEqual(TicketFinder.matches("", in: list), [])
         XCTAssertEqual(TicketFinder.matches("TP", in: nil), [])
         let many = TicketList(
-            state: OverviewState(snapshot: StateSnapshot(forced: (1...12).map {
-                .init(identifier: "TP-\($0)", issueID: nil, title: nil, repoKey: nil, summary: "", state: nil)
-            })),
+            state: OverviewState(blocked: (1...12).map { .init(identifier: "TP-\($0)") }),
             now: Date()
         )
         XCTAssertEqual(TicketFinder.matches("TP", in: many).count, TicketFinder.limit)

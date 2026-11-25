@@ -35,6 +35,7 @@ defmodule SymphonyElixir.TestSupport do
         only: [
           write_workflow_file!: 1,
           write_workflow_file!: 2,
+          write_symphony_blocks!: 0,
           restore_env: 2,
           linear_tracker: 0,
           linear_tracker: 1,
@@ -82,7 +83,6 @@ defmodule SymphonyElixir.TestSupport do
         workflow_file = Path.join(repo_root, "WORKFLOW.md")
         Workflow.set_symphony_file_path(Path.join(workflow_root, "symphony.yml"))
         Workflow.set_workflow_file_path(workflow_file)
-        Application.put_env(:symphony_elixir, :config_cache_watch, false)
         Cache.clear()
         Client.reset_viewer_cache_for_test()
         write_workflow_file!(workflow_file, tracker_api_token: nil)
@@ -119,7 +119,6 @@ defmodule SymphonyElixir.TestSupport do
           Application.delete_env(:symphony_elixir, :memory_tracker_create_comment_sleep_ms)
           Application.delete_env(:symphony_elixir, :memory_tracker_update_issue_state_sleep_ms)
           Application.delete_env(:symphony_elixir, :config_cache_file_reader)
-          Application.delete_env(:symphony_elixir, :config_cache_watch)
           Cache.clear()
           File.rm_rf(workflow_root)
         end)
@@ -148,6 +147,35 @@ defmodule SymphonyElixir.TestSupport do
 
     settle_config_cache!([path, symphony_path])
   end
+
+  # `write_workflow_file!/2` writes each section of `symphony.yml` as one inline map. A test of a
+  # one-line edit (`Config.LineEditor`) needs the file in indented blocks, as a person writes it:
+  # this rewrites it that way, with the same values.
+  def write_symphony_blocks! do
+    path = SymphonyElixir.Workflow.symphony_file_path()
+    {:ok, document} = YamlElixir.read_from_file(path)
+    write_atomically!(path, Enum.join(yaml_block_lines(document, 0), "\n") <> "\n")
+    Cache.clear()
+    settle_config_cache!([path])
+  end
+
+  defp yaml_block_lines(map, indent) do
+    map
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.flat_map(fn {key, value} ->
+      head = String.duplicate(" ", indent) <> yaml_block_key(key) <> ":"
+
+      if is_map(value) and map_size(value) > 0,
+        do: [head | yaml_block_lines(value, indent + 2)],
+        else: [head <> " " <> Jason.encode!(value)]
+    end)
+  end
+
+  defp yaml_block_key(key) when is_binary(key) do
+    if key =~ ~r/\A[A-Za-z0-9_][A-Za-z0-9_\-]*\z/, do: key, else: Jason.encode!(key)
+  end
+
+  defp yaml_block_key(key), do: Jason.encode!(to_string(key))
 
   # A test may rewrite the workflow while its orchestrator runs. `File.write!` truncates the file
   # first, so a config read in between would see an empty `symphony.yml`; a rename swaps it whole.
@@ -843,14 +871,8 @@ defmodule SymphonyElixir.TestSupport do
           worker_max_concurrent_agents_per_host: nil,
           github: nil,
           max_concurrent_agents: 10,
-          epic_lanes: nil,
-          finishing_max: nil,
-          force_label: nil,
-          forced_max: nil,
-          forced_stale_after_hours: nil,
           max_turns: 20,
           max_retry_backoff_ms: 300_000,
-          max_concurrent_agents_by_state: %{},
           max_consecutive_identical_tool_failures: 5,
           max_tokens_per_issue: nil,
           max_tokens_per_day: nil,
@@ -931,14 +953,8 @@ defmodule SymphonyElixir.TestSupport do
     worker_max_concurrent_agents_per_host = Keyword.get(config, :worker_max_concurrent_agents_per_host)
     github = Keyword.get(config, :github)
     max_concurrent_agents = Keyword.get(config, :max_concurrent_agents)
-    epic_lanes = Keyword.get(config, :epic_lanes)
-    finishing_max = Keyword.get(config, :finishing_max)
-    force_label = Keyword.get(config, :force_label)
-    forced_max = Keyword.get(config, :forced_max)
-    forced_stale_after_hours = Keyword.get(config, :forced_stale_after_hours)
     max_turns = Keyword.get(config, :max_turns)
     max_retry_backoff_ms = Keyword.get(config, :max_retry_backoff_ms)
-    max_concurrent_agents_by_state = Keyword.get(config, :max_concurrent_agents_by_state)
     max_consecutive_identical_tool_failures = Keyword.get(config, :max_consecutive_identical_tool_failures)
     max_tokens_per_issue = Keyword.get(config, :max_tokens_per_issue)
     max_tokens_per_day = Keyword.get(config, :max_tokens_per_day)
@@ -1021,12 +1037,6 @@ defmodule SymphonyElixir.TestSupport do
           code_review: section_run(review_agent, agent_kind),
           qa: section_run(auto_review, agent_kind),
           max_concurrent_agents: max_concurrent_agents,
-          epic_lanes: epic_lanes,
-          finishing_max: finishing_max,
-          force_label: force_label,
-          forced_max: forced_max,
-          forced_stale_after_hours: forced_stale_after_hours,
-          max_concurrent_agents_by_state: max_concurrent_agents_by_state,
           max_turns: max_turns,
           max_retry_backoff_ms: max_retry_backoff_ms,
           max_consecutive_identical_tool_failures: max_consecutive_identical_tool_failures,
@@ -1302,12 +1312,6 @@ defmodule SymphonyElixir.TestSupport do
       "  harnesses: #{yaml_value(test_harnesses(config))}",
       "  concurrency:",
       "    max_total: #{yaml_value(config.max_concurrent_agents)}",
-      "    max_by_issue_state: #{yaml_value(config.max_concurrent_agents_by_state)}",
-      optional_yaml_line("    epic_lanes", config.epic_lanes),
-      optional_yaml_line("    finishing_max", config.finishing_max),
-      optional_yaml_line("    force_label", config.force_label),
-      optional_yaml_line("    forced_max", config.forced_max),
-      optional_yaml_line("    forced_stale_after_hours", config.forced_stale_after_hours),
       "  limits:",
       "    max_turns: #{yaml_value(config.max_turns)}",
       "    retry_backoff_max_ms: #{yaml_value(config.max_retry_backoff_ms)}",
@@ -1680,37 +1684,27 @@ end
 defmodule SymphonyElixir.TestSupport.ProofSteps do
   @moduledoc """
   Walkthrough steps with proofs, written as a test reads best: `1. Do it. Proved by: <spec>` lines,
-  where `<spec>` is `QA`, a test the `proof_check` runs, `<check> › <test>`, or the `proof_check`'s
-  own name. Symphony reads a step's proof from the ticket's `evidence` events only
-  (`SymphonyElixir.Walkthrough.proof_steps/2`); the QA pre-check and the QA prompt take steps of
-  this shape, and these tests build them from text.
+  where `<spec>` is `QA` or a test (`<check> › <test>`, the older form, is read as the test, as
+  `SymphonyElixir.Walkthrough.proof_test/1` reads it). Symphony reads a step's proof from the
+  ticket's `evidence` events only (`SymphonyElixir.Walkthrough.proof_steps/1`); the QA prompt takes
+  steps of this shape, and these tests build them from text.
   """
 
   alias SymphonyElixir.Walkthrough
 
-  @separator ~r/\s*(?:›|\s>\s)\s*/u
-
-  @spec steps(String.t(), String.t() | nil) :: [Walkthrough.step()]
-  def steps(text, proof_check) do
+  @spec steps(String.t()) :: [Walkthrough.step()]
+  def steps(text) do
     for step <- Walkthrough.steps(text) do
       case Regex.run(~r/\A(.*)\s*Proved by:\s*(.*?)\.?\s*\z/su, step.text) do
-        [_all, rest, spec] -> %{step | text: String.trim(rest), proof: proof(spec |> String.replace("`", "") |> String.replace(~r/\s+/, " ") |> String.trim(), proof_check)}
+        [_all, rest, spec] -> %{step | text: String.trim(rest), proof: proof(spec |> String.replace("`", "") |> String.replace(~r/\s+/, " ") |> String.trim())}
         nil -> step
       end
     end
   end
 
-  defp proof(spec, proof_check) do
-    cond do
-      is_nil(proof_check) or spec == "" or (not Regex.match?(@separator, spec) and Regex.match?(~r/^qa(?:$|\s*[(:,;]|\s+[-–—]\s)/iu, spec)) -> %{by: :qa}
-      match?([_check, _test], Regex.split(@separator, spec, parts: 2)) -> two_part(spec)
-      String.downcase(spec) == String.downcase(proof_check) -> %{by: :test, check: proof_check, test: nil}
-      true -> %{by: :test, check: proof_check, test: spec}
-    end
-  end
-
-  defp two_part(spec) do
-    [check, test] = Regex.split(@separator, spec, parts: 2)
-    %{by: :test, check: String.trim(check), test: if(String.trim(test) == "", do: nil, else: String.trim(test))}
+  defp proof(spec) do
+    if spec == "" or Regex.match?(~r/^qa(?:$|\s*[(:,;]|\s+[-–—]\s)/iu, spec),
+      do: %{by: :qa},
+      else: %{by: :test, test: Walkthrough.proof_test(spec)}
   end
 end

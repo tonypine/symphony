@@ -249,13 +249,11 @@ and the same words. The older `start` field is `moves.start`, with the same shap
 | Move | Control call | Refused when | Example `reason` |
 | --- | --- | --- | --- |
 | `answer` | `/decide` with the `question_id` of one of `open_questions` | no Question is open | TP-1 is not waiting on a decision |
-| `start` | `/start` | Backlog, closed, its plan waits on a person, it waits on its sub-tickets, Symphony or the repository is paused, a Question is open, a run works on it | A run is already working on it. |
+| `start` | `/start` | Backlog, closed, its plan waits on a person, it waits on its sub-tickets, a stored dependency is unmet, Symphony or the repository is paused, a Question is open, a run works on it | TP-977 depends on TP-976 and can't start before it is done. |
 | `stop` | `/stop` | no run works on it | No run is working. |
 | `restart` | `/restart` | closed, or no record | The ticket is done. |
-| `cancel` | `/cancel` | closed, or no record | The ticket is done. |
+| `cancel` | `/cancel` | closed, no record, or open tickets depend on it | TP-976 can't be cancelled: TP-977 and TP-978 depend on it. Remove those dependencies first. |
 | `move_to` | `/move` | in no repository, or no record | The ticket is not one Symphony tracks. |
-| `force` | `/force` | closed, already forced, or no record | It is already forced. |
-| `unforce` | `/force` with `clear` | not forced, or no record | It isn't forced. |
 | `unblock` | `/unblock` | nothing a person can release | TP-1 has nothing a person can unblock |
 | `note` | `/note` | no record | No ticket TP-1 in symphony |
 | `blocker` | `/blocker` | no record, or removed in Linear | Symphony doesn't track TP-1, so it can't be linked as a blocker or be given one. |
@@ -274,8 +272,8 @@ What the read and the call each answer for:
 
 - A move the read allows is not refused for the ticket's state. A call may still fail on what no
   record says: Linear refusing a write, a label or state the team doesn't have.
-- `stop`, `force` and `unforce` never refuse the state the read calls not allowed: the call answers
-  200 with nothing done (`stopped: false`, the label as it was). A closed ticket's `force` is refused.
+- `stop` never refuses the state the read calls not allowed: the call answers 200 with nothing
+  done (`stopped: false`).
 - A call refuses on its own argument, which is no fact of the ticket: a phase the workflow doesn't
   name (`states` lists those it does), a blocker that is the ticket itself, already linked, finished
   or making a cycle, a label already on or off, the priority it already has, a ruling already recorded,
@@ -376,7 +374,7 @@ check that way (reruns it, spends no fix run), so `cancelled_no_machine` never r
 
 Where the ticket sits among the others, for the Connected panel (facts 15, 16 and 21 of
 `docs/design/director-ticket-page.md`). A ticket with a record, or one the orchestrator tracks, has it;
-it reads the records, the ledgers, what the orchestrator holds and the cached Initiatives, never Linear
+it reads the records, the ledgers, what the orchestrator holds and the Initiatives' read, never Linear
 (`SymphonyElixir.Connected.Read`).
 
 | Field | What it holds |
@@ -396,12 +394,12 @@ link, where each may be null.
 | Field | What it holds |
 | --- | --- |
 | `identifier`, `title` | The plan ticket. |
-| `done`, `total` | Its progress: sub-tickets completed, of all of them but the canceled ones. It equals the same plan's count on `GET /api/v1/initiatives`, which reads the same cache. |
-| `incomplete` | Whether Linear had more sub-tickets than the read returned, as on the Initiatives. |
+| `done`, `total` | Its progress: sub-tickets completed, of all of them but the canceled ones. It equals the same plan's count on `GET /api/v1/initiatives`, which reads the same records. |
+| `incomplete` | Always false: the records hold every sub-ticket, as on the Initiatives. |
 | `tickets` | The sub-tickets in chain order: `identifier`, `title`, `state`, `situation` (the kind of its `situation`, null without a record) and `current`, true on this ticket. |
 
-A plan the Initiatives don't hold (done more than 7 days ago, without the `plan` label, or right after a
-start, before their first read) comes from the parent's record: its sub-issues in creation order,
+A plan the Initiatives don't list (done more than 7 days ago, or not split by Symphony) comes from the
+parent's record: its sub-issues in creation order,
 counted by state, where `Done` is done and any other terminal state leaves it out. With no record of the
 parent, `done` and `total` are the parent's own and `tickets` is empty.
 
@@ -464,7 +462,7 @@ every event new then.
 ## Messages
 
 Writing to a ticket works like a prompt sent to it (`SymphonyElixir.Messages`).
-`POST /api/v1/control/message` takes `repo_key`, `issue_identifier` and `text` (at most 4,000 characters),
+`POST /api/v1/control/message` takes `repo_key`, `issue_identifier` and `text` (at most 100,000 characters, as long as an ask),
 and needs the control token; `POST /api/v1/control/note` is an alias of it, kept for older callers. It records a `message.sent` event on the ticket's ledger: the text, who wrote
 it (the person, the Director, whom the token names today) and when, and answers `200` with the event as the
 events feed shows it. Each message is its own event; none replaces or hides an earlier one. Blank or
@@ -567,7 +565,7 @@ and the asks it has, if any.
 | Field | What it holds |
 | --- | --- |
 | `plan` | The newest `plan.written`, without its checks: `version`, `reason`, `by` (`grooming`, `recalibration`, `parent`, `run`), `shape` (`single`, `split`), `layers`, `summary` (for a person), `text` (for agents), `size` (`tokens`, `runs`), `sub_tickets` for a split (each `key`, `title`, `ask`, `after`, `repo`, `identifier`), the event's id as `event_id` and when it was written as `at`. Null for a ticket with no plan. |
-| `checks` | The plan's checks, in its order: `id` (the same across plan versions), `kind` (`outcome`, `qa`, `evidence`), `statement`, `proof` (`test`, `qa`, `design`, `attached`), and for a `qa` check `needs` (the app state it needs), `action`, `expect`, `size` and `story`. |
+| `checks` | The plan's checks, in its order: `id` (the same across plan versions), `kind` (`outcome`, `qa`, `evidence`), `statement`, `proof` (`test`, `qa`, `design`, `attached`, `ci`: the pull request's own CI run, with `ci_check` when it names the one CI check that proves it), and for a `qa` check `needs` (the app state it needs), `action`, `expect`, `size` and `story`. |
 | `checks[].state` | `open`, `proved` (a `check.proved` names it, on any head) or `waived` (no proof names it and a `check.waived` does). |
 | `checks[].proved_by` | The newest proof: `by`, `test`, `evidence`, `details`, the proof's `event_id`, `at`, `head` and `run_id`. Null until the check is proved. |
 | `checks[].waived` | The waiver: `reason`, `event_id` and `at`. Null when the check was not waived. |
@@ -640,9 +638,16 @@ with an `ETag` and `304` as the ticket read does.
       { "identifier": "MOT-93", "epic": null, "after": null, "also_waits_on": [], "situation": { "kind": "waiting_for_slot", "...": "..." }, "children": [], "...": "..." }
     ]
   },
-  "outside": { "backlog": 12, "below_priority": 3, "epic": 2, "behind": 4 }
+  "outside": { "backlog": 12, "below_priority": 3, "epic": 2, "behind": 4 },
+  "slots": { "total": 2, "used": 2, "free": 0, "holders": [{ "issue_id": "t5", "identifier": "SHOP-305", "state": "In Progress", "running": true, "...": "..." }], "...": "..." }
 }
 ```
+
+`slots` is the dispatch order's `slots` (below): the slot count, how many are used and free, and the
+ticket that holds each slot, none of these before the orchestrator's first walk; with `entries`, the slot
+cards (below). Every entry of `in_progress`
+and of `queue.roots`, children included, carries `in_progress`: true exactly when the ticket holds a
+slot, which is the only meaning of in progress (SPEC.md Section 8.3).
 
 `in_progress` is every ticket that has started and has not landed or been cancelled: its phase is past
 Todo (and Backlog) and not terminal, or a run works on it, whatever it is doing now. Its entries come in
@@ -668,7 +673,7 @@ is an entry of its own.
 
 `queue.roots` is every ticket Symphony would dispatch that has not started, as a tree: a ticket in Todo
 that the dispatch walk reached (assigned, in a set-up repository) at a priority `tickets.priorities`
-dispatches, or forced. A ticket's `children` are the queued tickets it blocks. A ticket blocked by two
+dispatches. A ticket's `children` are the queued tickets it blocks. A ticket blocked by two
 queued tickets appears once, under the one that lands last (the one with more queued tickets above it,
 then the later in the dispatch order), and names its other open blockers in `also_waits_on`. A root waits
 on no queued ticket: when it waits on a ticket in progress, `after` names the one later in the dispatch
@@ -682,8 +687,71 @@ epic (`identifier`, `title`), null when it has none. An empty queue is `"roots":
 whose tickets is in progress) and `behind` (a queued ticket whose open blocker is outside both lists, or
 behind one). A ticket in Todo the dispatch walk does not reach counts in none.
 
-When the orchestrator can't be read the situations are the records' alone, the queue is empty (no walk
-to read) and the answer carries `error` (`snapshot_timeout`, `snapshot_unavailable`).
+When the orchestrator can't be read the situations are the records' alone, the queue tree is empty (no
+walk to read), the slot entries are numbered to the configured slot count and the answer carries `error`
+(`snapshot_timeout`, `snapshot_unavailable`).
+
+## Slot entries and queue rows
+
+The new Home (`docs/design/prototypes/home-queue/README.md`) reads two more parts, built from the
+ticket records at the read (`SymphonyElixir.Home.Slots`, `SymphonyElixir.Home.Queue`): a read made
+after a queue move, a slot count change, a Start or a Stop (and the stream's `queue` notice) shows it.
+
+    GET /api/v1/home?offset=0&limit=100
+    GET /api/v1/home?view=<id>&offset=100
+    GET /api/v1/home?phase=Todo,Backlog&epic=TP-1400
+
+`slots.entries` is one entry per slot, from 1 to the slot count (and any higher number a ticket still
+holds after the count was lowered), in number order: `slot`, `empty`, `since` (when the slot's owner
+took it), `epic` and `ticket`, both null for an empty slot. A sub-ticket that runs through its
+ancestor's slot, at any depth, shares that slot's number: the card is then that ticket's (the one a run
+works on, else the one that joined the slot last) and `epic` is the slot's owner (`issue_id`,
+`identifier`, `title`, `repo_key`, `since`, and its sub-tickets `done` and `total`); otherwise `ticket`
+is the owner's own and `epic` is null.
+
+```json
+{ "slot": 1, "empty": false, "since": "2026-11-21T09:00:00Z",
+  "epic": { "identifier": "TP-1607", "title": "Home: the queue", "since": "2026-11-21T09:00:00Z", "done": 7, "total": 14, "...": "..." },
+  "ticket": {
+    "issue_id": "t5", "identifier": "TP-1631", "title": "The Home read", "repo_key": "symphony", "phase": "In Progress",
+    "situation": { "kind": "working", "...": "..." }, "since": "2026-11-24T07:16:00Z", "working": true, "waits_on_you": false, "move": null,
+    "current_stage": "coding",
+    "stages": [{ "id": "coding", "name": "Coding", "state": "current", "tokens": 1200000, "runs": 1 }, { "id": "code_review", "state": "not_yet", "...": "..." }],
+    "tokens": { "used": 1200000, "budget": 100000000 },
+    "plan": { "summary": "GET /api/v1/home gains what the new Home screen needs." },
+    "checks": { "proved": 5, "waived": 0, "total": 9, "next": { "id": "c6", "statement": "The queue is read in pages." } },
+    "pull_request": { "number": 1062, "url": "...", "state": "open", "draft": false, "files_changed": 12, "additions": 840, "deletions": 60,
+                      "branch": "auto/TP-1631", "ci": "running", "review_state": "..." }
+  } }
+```
+
+`stages` are the ticket read's `lifecycle` stages without their times; `tokens.budget` is the token cap
+(null with none). `plan`, `checks` (null for a ticket with no plan) and `pull_request` (null before one
+is read; `ci` is `failed`, `running`, `passed`, or null with no check) are null when the ticket has none
+yet.
+
+`queue.rows` is one page of the queue: every open ticket with a place in the stored queue that is not in
+work (it holds no slot, no run works on it, and no ancestor of it holds a slot or has a run), Backlog
+included, flat, in the stored order. A ticket's parent is its record's, else the ticket whose record
+lists it among its sub-issues, so a sub-ticket that never ran sits under its parent.
+
+| Field | What it holds |
+| --- | --- |
+| `issue_id`, `identifier`, `title`, `phase`, `repo_key` | The ticket. |
+| `number`, `path` | Its position: the top-level number, then its number inside each parent (`"6.1"`, `[6, 1]`), counted over the whole queue before the filter and the page. |
+| `parent` | The identifier of the row it sits under; null at the top level. |
+| `waits_on` | Its open stored dependencies: `issue_id`, `identifier` and `kind` (`done`, or `released`: it needs a release). |
+| `sub_tickets` | An epic's sub-tickets, `done` and `total` (a cancelled one counts in neither); null for a ticket with none. |
+| `situation`, `waits_on_you`, `move` | Its `situation`, whether it waits on the Director, and the move that answers it, as in `in_progress`. |
+
+Beside the rows: `count` (the rows the filter keeps), `total` (the rows of the whole queue), `offset`,
+`limit` (default 100, at most 500), `next_offset` (the `offset` of the next page, null on the last),
+`view` (the saved view asked for, null without one) and `filters`. `offset` and `limit` are whole numbers
+(from 0 and from 1). The filter is a saved view of the Tickets page (`view=<id>`) or its inline filters,
+read as `GET /api/v1/tickets` reads them, with the same errors: `404` `view_not_found`, `400`
+`invalid_query` (also for a malformed `offset` or `limit`). It keeps the rows it matches and the rows above
+them, so an epic's row stays while one of its sub-tickets matches, with only the matching sub-rows under
+it; the order stays the stored order, and the view's sort and columns do not apply.
 
 # The dispatch order
 
@@ -692,8 +760,8 @@ grouped by the kind of its `situation`, and the dispatch candidates in the order
 them, each with the reason it is or is not next (`SymphonyElixir.Dispatch.Order`).
 
 The orchestrator walks the poll's candidates at the end of each poll cycle, after the cycle's dispatch
-pass, in the order the pass walks them (forced first, then closest to done, each epic lane's tickets
-nearest the epic, then priority and age) and through the pass's own gates and slot decision. A ticket a
+pass, in the order the pass walks them (the stored queue order, the sub-tickets of a ticket that has
+started first) and through the pass's own gates and slot decision. A ticket a
 pass run now would start takes its slot for the tickets after it. The read is recomputed on the
 triggers a poll cycle runs on and never on a timer of its own; it
 makes no Linear request.
@@ -704,12 +772,15 @@ makes no Linear request.
   "computed_at": "2026-11-09T21:59:58.120Z",
   "next": "TP-1401",
   "slots": {
-    "concurrency": { "max_total": 2, "finishing_max": 1, "forced_max": 1 },
+    "total": 2,
+    "used": 1,
+    "free": 1,
+    "holders": [{ "issue_id": "t9", "identifier": "TP-1399", "state": "Code Review", "repo_key": "symphony", "since": "2026-11-09T20:10:00Z", "running": false }],
+    "concurrency": { "max_total": 2, "finishing_max": 0 },
     "work_used": 1,
     "work_free": 1,
-    "forced_used": 0,
-    "finishing": { "slots": 1, "used": 0, "running": [] },
-    "epic_lanes": { "max_total": 2, "lanes": [], "queued_epics": [], "shared": { "slots": 2, "used": 1 } }
+    "finishing": { "slots": 0, "used": 0, "running": [] },
+    "epic_lanes": { "max_total": null, "lanes": [], "queued_epics": [], "shared": { "slots": null, "used": 1 } }
   },
   "queue": [
     { "identifier": "TP-1401", "position": 1, "outcome": "starts", "reason": "next: a slot is free", "slot": "shared", "starts_now": true, "...": "..." },
@@ -726,7 +797,7 @@ makes no Linear request.
 | --- | --- |
 | `computed_at` | When the orchestrator walked the candidates; null before its first poll cycle. |
 | `next` | The identifier of the ticket first in line; null when none is. |
-| `slots` | The slot and lane facts the walk read: `concurrency` (the limits), `work_used` and `work_free` (of `max_total`), `forced_used`, `finishing` and `epic_lanes` as the state gives them. |
+| `slots` | The slots the walk read (SPEC.md Section 8.3): `total` (`max_total`), `used`, `free` and `holders`, each slot's ticket (`issue_id`, `identifier`, `state`, `repo_key`, `since` it holds the slot, `running` whether a run works on it now), the longest held first; a PR run with no ticket counts as a holder while it runs. `concurrency`, `work_used` and `work_free` repeat them as before; `finishing` and `epic_lanes` stay, empty: those settings have no effect. |
 | `queue` | The tickets in line, by `position`. |
 | `groups` | Every open ticket exactly once: each walked candidate, and every ticket record neither removed nor in a terminal state. The groups follow the situation kinds' precedence and hold only kinds some ticket has; within one, tickets in line come first by `position`, then the rest by identifier. |
 
@@ -737,11 +808,11 @@ Each ticket, in `queue` and in `groups`:
 | `issue_id`, `identifier`, `title`, `state`, `repo_key` | The ticket. |
 | `outcome` | `starts` (a pass run now starts it), `waits` (it waits for a slot), `paused` (its gates are open but the whole pass is paused), `held` (a gate keeps it out of the pass), `running` (a run works on it) or `not_a_candidate` (an open ticket the poll does not offer for dispatch: Backlog, a plan in review, a parent waiting on its sub-tickets). |
 | `position` | Its place in line, 1 for the next one; null for `held`, `running` and `not_a_candidate`. |
-| `reason` | `next: a slot is free`; `next: ` and why it waits (`next: work slots full`); `2nd: a slot is free` for a later one a pass run now starts too; `2nd: behind TP-n` for a later one that waits; `forced` for a forced ticket that starts on its own allowance; the pause's line for a paused one (`dispatch is paused: updating to v0.0.1.825`); the gate's reason for a held one (`Waiting for TP-1399 to finish`); `already running` for a running one; the situation's `cause` for one that is not a candidate. |
-| `wait` | For `waits`: why it waits (`work slots full`, `finishing slots full`, `TP-n (Merging) is waiting for a finishing slot`). |
+| `reason` | `next: a slot is free`; `next: ` and why it waits (`next: work slots full`); `2nd: a slot is free` for a later one a pass run now starts too; `2nd: behind TP-n` for a later one that waits; the pause's line for a paused one (`dispatch is paused: updating to v0.0.1.825`); the gate's reason for a held one (`Waiting for TP-1399 to finish`); `already running` for a running one; the situation's `cause` for one that is not a candidate. |
+| `wait` | For `waits`: why it waits (`work slots full`, or `no worker host is free` for a ticket that holds its slot). |
 | `rule` | The rule behind a `held` or `paused` ticket (`priority`, `usage_limit`, `symphony_pause`, `daily_budget`...), as `dispatch_skipped` names it; null when no rule is. |
-| `slot` | For `starts` and `running`: the slot it takes (`forced`, `finishing`, `shared` or its epic lane). |
-| `forced` | Whether the ticket is forced. |
+| `slot` | For `starts` and `running`: `shared`, the one kind of slot. |
+| `in_progress` | Whether the ticket holds a slot: true exactly for the `holders` of `slots`. |
 | `starts_now` | `true` for `starts`. |
 | `situation` | The ticket's `situation`, as the ticket read gives it. |
 
@@ -982,6 +1053,41 @@ sorts by one; when the orchestrator's snapshot can't be read they come from the 
 answer carries an `error` (`snapshot_timeout` or `snapshot_unavailable`). An unknown view is `404`
 `view_not_found`; a malformed query, or `view` with inline parameters, is `400` `invalid_query`. It
 reads Symphony's store only, makes no Linear request and needs no token.
+
+# Update ready
+
+    POST /api/v1/control/update_ready  {"version": "0.0.1.1056"}
+
+The menu bar app sends it in Automatically when released once the release is downloaded and
+verified. Dispatch goes on: Symphony pauses on the update's `build` reason itself at the first moment
+no agent run is active, checked when a run ends before its slot is refilled, and the app stops
+Symphony and swaps once it sees that pause with no active run. After 15 minutes ready with runs
+always active, Symphony holds dispatch so a gap forms, once no active run began less than 3 minutes
+earlier, and lifts the hold after 10 minutes if runs are still active, to try again later (SPEC.md,
+Section 4.1.11). A newer version replaces the one ready and keeps the time waited. It answers 200
+with the update as `GET /api/v1/state`'s `update_window` gives it:
+
+```json
+{ "version": "0.0.1.1056", "phase": "waiting", "ready_at": "2026-11-21T14:17:02Z", "holding_since": null }
+```
+
+A missing version, or one that isn't a release's (`0.0.1.42`), is `422` `invalid_update`. Resume
+with `{"kind": "build", "version": "<version>"}` calls the update off.
+
+Conductor turns are not held by an update's pause: they keep starting and answering while the
+update waits, holds or pauses (SPEC.md, Section 4.1.11).
+
+# Handover
+
+    POST /api/v1/control/handover
+
+The menu bar app asks it once dispatch is paused and no agent run is active, before it stops
+Symphony for an update or a restart. With no Conductor turn running it answers `200`
+`{"handover": true, "conductor_runs": 0}`, and from then on no Conductor turn starts until Symphony is
+up again (one due waits and runs after the restart). While turns run it answers `409`
+`conductor_running` with `{"handover": false, "conductor_runs": 1}`, and the app asks again at its
+next poll. Two minutes after the first ask that finds one, no new turn starts, so a gap forms.
+Resume opens the gate again.
 
 # Resume and Try Now
 

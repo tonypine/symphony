@@ -24,6 +24,24 @@ defmodule SymphonyElixir.QaAgent.StepPayloadTest do
     end
   end
 
+  describe "results/1" do
+    test "keeps one result per walkthrough step of a grouped walk, each with its step, at most 20" do
+      results = [
+        %{"step" => 1, "status" => "pass", "expected" => "a", "actual" => "a", "details" => "d", "evidence" => []},
+        %{"step" => 2, "status" => "fail", "expected" => "b", "actual" => "c"}
+      ]
+
+      assert StepPayload.results(results) == [
+               %{step: 1, status: "pass", expected: "a", actual: "a"},
+               %{step: 2, status: "fail", expected: "b", actual: "c"}
+             ]
+
+      many = for step <- 1..25, do: %{"step" => step, "status" => "pass", "expected" => String.duplicate("e", 4_000), "actual" => "ok"}
+      assert length(StepPayload.results(many)) == 20
+      valid!(%{results: StepPayload.results(many)})
+    end
+  end
+
   describe "plan/2" do
     test "maps each walk brief and gallery entry to a check, and the skips" do
       answer = %{

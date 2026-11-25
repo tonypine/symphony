@@ -8,7 +8,7 @@ defmodule SymphonyElixir.GroomingEndToEndTest do
 
   alias SymphonyElixir.Conductor.Facts
   alias SymphonyElixir.Config.Cache
-  alias SymphonyElixir.{SubIssueWait, TicketChecks, TicketPlan}
+  alias SymphonyElixir.{SubIssueWait, TicketChecks, TicketPlan, TicketState}
 
   @repo "default"
   @waiting "Waiting on sub-tickets"
@@ -207,19 +207,19 @@ defmodule SymphonyElixir.GroomingEndToEndTest do
     # The run's task ended before its agent started, for the ticket's next dispatch.
     assert reason == {:shutdown, :groom_again}
 
-    # Both sub-tickets exist under the ticket in the tracker, the second blocked by the first.
+    # Both sub-tickets exist under the ticket in the tracker.
     assert [parent, first, second] = Application.get_env(:symphony_elixir, :memory_tracker_issues)
     assert parent.id == issue_id
     assert [%{id: first_id}, %{id: second_id}] = parent.sub_issues
-    assert %Issue{id: ^first_id, title: "The API", description: "Add the filter.", blocked_by: []} = first
-    assert %Issue{id: ^second_id, title: "The list", blocked_by: [%{id: ^first_id}]} = second
+    assert %Issue{id: ^first_id, title: "The API", description: "Add the filter."} = first
+    assert %Issue{id: ^second_id, title: "The list"} = second
     assert %{identifier: parent_identifier} = first.parent
     assert %{identifier: ^parent_identifier} = second.parent
     assert parent_identifier == issue.identifier
     assert_received {:memory_tracker_issue_created, ^first_id, %{parent_id: ^issue_id, state: "Todo"}}
     assert_received {:memory_tracker_issue_created, ^second_id, %{parent_id: ^issue_id, state: "Backlog"}}
-    # The second was linked while in Backlog, and only then moved to Todo.
-    assert_received {:memory_tracker_blocked_by_added, _first_identifier, ^second_id}
+    # The second was given its stored dependency on the first while in Backlog, and only then moved to Todo.
+    assert [%{issue_id: ^first_id, kind: :done}] = second_id |> RunStore.get_ticket_state() |> TicketState.normalize() |> Map.fetch!(:depends_on)
     assert_received {:memory_tracker_state_update, ^second_id, "Todo"}
 
     # Each sub-ticket's ask is on its own ledger, from the parent.

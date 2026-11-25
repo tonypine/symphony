@@ -24,14 +24,12 @@
   },
   "concurrency": {
     "finishing_max": 2,
-    "forced_max": 1,
     "max_total": 10
   },
   "conflicts": [],
   "counts": {
     "claimed": 3,
     "conflicts": 0,
-    "forced": 1,
     "retrying": 0,
     "running": 3,
     "shipped_today": 3,
@@ -88,25 +86,6 @@
     "slots": 2,
     "used": 1
   },
-  "forced": [
-    {
-      "blockers": [],
-      "forced_for_seconds": 259200,
-      "forced_since": "2026-10-04T14:20:00Z",
-      "issue_id": "i-305",
-      "issue_identifier": "SHOP-305",
-      "phase": "implementation",
-      "position": 1,
-      "running": true,
-      "stale": true,
-      "state": "In Progress",
-      "sub_issue": null,
-      "summary": "implementation \u00b7 running",
-      "title": "Checkout total rounding",
-      "waiting_on": null,
-      "waiting_on_human": false
-    }
-  ],
   "generated_at": "2026-10-07T14:20:00Z",
   "linear_usage": {
     "callers": [
@@ -175,7 +154,6 @@
     "queued": [],
     "running": [
       {
-        "forced": false,
         "identifier": "SHOP-301",
         "issue_id": "i-301",
         "sha": "4be1c0d9"
@@ -277,7 +255,6 @@
   ],
   "running": [
     {
-      "forced": true,
       "issue_id": "i-305",
       "issue_identifier": "SHOP-305",
       "last_event": "notification",
@@ -314,7 +291,6 @@
       "workspace_path": "/Users/director/symphony-workspaces/web-shop/SHOP-305"
     },
     {
-      "forced": false,
       "issue_id": "i-131",
       "issue_identifier": "API-131",
       "last_event": "notification",
@@ -346,7 +322,6 @@
       "workspace_path": "/Users/director/symphony-workspaces/api/API-131"
     },
     {
-      "forced": false,
       "issue_id": "i-298",
       "issue_identifier": "SHOP-298",
       "last_event": "notification",
@@ -405,7 +380,6 @@
   "slot_waiting": [
     {
       "attempt": null,
-      "forced": false,
       "issue_id": "i-320",
       "issue_identifier": "SHOP-320",
       "reason": "work slots full",
@@ -416,7 +390,6 @@
     },
     {
       "attempt": null,
-      "forced": false,
       "issue_id": "i-133",
       "issue_identifier": "API-133",
       "reason": "work slots full",

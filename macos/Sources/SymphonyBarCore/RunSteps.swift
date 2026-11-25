@@ -256,7 +256,7 @@ public struct RunStep: Equatable, Identifiable {
 
     /// A step the run stopped at: one that failed to run (not a QA check that judged the change failed), or asked.
     public var stopsTheRun: Bool {
-        state == .paused || (state == .failed && answer?.result?.judgement != .failed)
+        state == .paused || (state == .failed && answer?.judgement != .failed)
     }
 
     /// Whether the step has lines to unfold into: a transcript, or the run now's lines. The step the run now is on
@@ -644,7 +644,7 @@ public struct RunGroupModel: Equatable, Identifiable {
     static func completion(_ payload: TicketEventsPayload.Payload) -> (RunStep.State, String?) {
         switch payload.outcome?.lowercased() {
         case "passed":
-            return (payload.answer?.result?.judgement ?? .done, payload.reason?.trimmingWhitespace().nonEmpty)
+            return (payload.answer?.judgement ?? .done, payload.reason?.trimmingWhitespace().nonEmpty)
         case "failed":
             let back = payload.returnsToTitle?.trimmingWhitespace().nonEmpty ?? payload.returnsTo?.trimmingWhitespace().nonEmpty
             return (.failed, back.map { "back to \($0)" } ?? payload.reason?.trimmingWhitespace().nonEmpty)

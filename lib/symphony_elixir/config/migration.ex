@@ -61,17 +61,59 @@ defmodule SymphonyElixir.Config.Migration do
       release: "0.0.1.998"
     }),
     Map.merge(@rename_defaults, %{
+      key: "execution.concurrency.force_label",
+      to: nil,
+      ticket: "TP-1611",
+      release: "0.0.1.1068",
+      why: "a ticket with that label is dispatched like any other now"
+    }),
+    Map.merge(@rename_defaults, %{
+      key: "execution.concurrency.forced_max",
+      to: nil,
+      ticket: "TP-1611",
+      release: "0.0.1.1068",
+      why: "Symphony no longer forces tickets ahead of the queue"
+    }),
+    Map.merge(@rename_defaults, %{
+      key: "execution.concurrency.forced_stale_after_hours",
+      to: nil,
+      ticket: "TP-1611",
+      release: "0.0.1.1068",
+      why: "Symphony no longer forces tickets ahead of the queue"
+    }),
+    Map.merge(@rename_defaults, %{
+      key: "execution.concurrency.finishing_max",
+      to: nil,
+      ticket: "TP-1616",
+      release: "0.0.1.1072",
+      why: "a ticket keeps its slot through Merging, so landing takes no allowance of its own"
+    }),
+    Map.merge(@rename_defaults, %{
+      key: "execution.concurrency.max_by_issue_state",
+      to: nil,
+      ticket: "TP-1616",
+      release: "0.0.1.1072",
+      why: "a slot belongs to one ticket until it is done, whatever its state"
+    }),
+    Map.merge(@rename_defaults, %{
+      key: "execution.concurrency.epic_lanes",
+      to: nil,
+      ticket: "TP-1616",
+      release: "0.0.1.1072",
+      why: "spare slots go to the sub-tickets of started tickets first, with no lanes reserved"
+    }),
+    Map.merge(@rename_defaults, %{
       key: "auto_review.playbooks.macos_app.wide_pass_width",
       to: nil,
       ticket: "TP-1595",
-      release: "0.0.1.1061",
+      release: "0.0.1.1111",
       why: "QA checks the app at its target window (window_width and window_height), with no separate wide pass"
     }),
     Map.merge(@rename_defaults, %{
       key: "auto_review.playbooks.macos_app.wide_pass_height",
       to: nil,
       ticket: "TP-1595",
-      release: "0.0.1.1061",
+      release: "0.0.1.1111",
       why: "QA checks the app at its target window (window_width and window_height), with no separate wide pass"
     })
   ]

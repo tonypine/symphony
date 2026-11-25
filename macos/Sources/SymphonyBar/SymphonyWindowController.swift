@@ -96,12 +96,6 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
         model?.openPauseSheet()
     }
 
-    /// Opens the window with the Force a Ticket sheet.
-    func showForceSheet() {
-        show()
-        model?.openForceSheet()
-    }
-
     /// Opens the window, or brings it to the front.
     /// The GitHub updates card shows `section` until the state poll reports something new (Add Repo's Instant updates).
     func showGitHubUpdates(_ section: GitHubUpdatesSection) {
@@ -211,7 +205,7 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
             model.loadProviderKeys(with: secrets)
 
             let hostingController = NSHostingController(
-                rootView: SymphonyWindowView(model: model).environment(\.openURL, URLOpener.action)
+                rootView: SymphonyWindowView(model: model).environment(\.openURL, URLOpener.action).pointerButtons()
             )
             // The Director draws its own bar (TP-1496): nothing of SwiftUI's goes in a system toolbar, the window has
             // none, and its title is not drawn; the window buttons stay over the sidebar's top.
@@ -306,10 +300,6 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
         inspector.keyEquivalentModifierMask = [.command, .option]
         inspector.target = self
         menu.addItem(inspector)
-        let force = NSMenuItem(title: DispatchControl.forceTitle, action: #selector(forceTicket(_:)), keyEquivalent: "F")
-        force.keyEquivalentModifierMask = [.command, .shift]
-        force.target = self
-        menu.addItem(force)
         menu.addItem(.separator())
         let refresh = NSMenuItem(title: "Refresh", action: #selector(refresh(_:)), keyEquivalent: "r")
         refresh.target = self
@@ -342,10 +332,6 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
         model?.toggleInspector()
     }
 
-    @objc private func forceTicket(_ sender: Any?) {
-        model?.openForceSheet()
-    }
-
     @objc private func toggleSidebar(_ sender: Any?) {
         model?.toggleSidebar()
     }
@@ -366,7 +352,6 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
         case #selector(toggleInspector(_:)):
             menuItem.title = model?.inspectorTitle ?? "Show Inspector"
             return model?.hasInspector ?? false
-        case #selector(forceTicket(_:)): return model?.dispatchControl.canForce ?? false
         case #selector(toggleSidebar(_:)):
             menuItem.title = model?.sidebarMenuTitle ?? "Hide Sidebar"
             return model != nil

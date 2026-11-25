@@ -13,13 +13,10 @@ defmodule SymphonyElixir.Dispatch.Settings do
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
 
+  # The finishing allowance, the per-state limits and the epic lanes decide nothing
+  # (`SymphonyElixir.Dispatch.Slots`), so a change of theirs frees no ticket.
   @agent_fields [
     :max_concurrent_agents,
-    :max_concurrent_agents_by_state,
-    :epic_lanes,
-    :finishing_max,
-    :force_label,
-    :forced_max,
     :max_tokens_per_issue,
     :max_tokens_per_day
   ]

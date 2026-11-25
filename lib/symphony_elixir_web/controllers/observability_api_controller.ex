@@ -6,7 +6,21 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   use Phoenix.Controller, formats: [:json]
 
   alias Plug.Conn
-  alias SymphonyElixir.{Config, History, Inbox, Orchestrator, PullRequestPage, Quality, Shipped, StatusDashboard}
+
+  alias SymphonyElixir.{
+    ConductorGate,
+    Config,
+    History,
+    Home,
+    Inbox,
+    Orchestrator,
+    PullRequestPage,
+    Quality,
+    Shipped,
+    StatusDashboard,
+    Views
+  }
+
   alias SymphonyElixir.Inbox.FromRecord
   alias SymphonyElixir.Learnings.Feed
   alias SymphonyElixirWeb.{ConditionalJSON, Endpoint, Presenter}
@@ -32,6 +46,8 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
         json(conn, %{
           running: length(running),
           between_turns: Enum.count(running, &Presenter.between_turns?/1),
+          # The Conductor turns running, which the stop waits for (`SymphonyElixir.ConductorGate`).
+          conductor_runs: ConductorGate.status().running,
           paused: match?(%{paused: true}, Map.get(snapshot, :pause))
         })
 
@@ -76,9 +92,19 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
     json(conn, Presenter.dispatch_order_payload(orchestrator(), snapshot_timeout_ms()))
   end
 
+  # The queue page (`offset`, `limit`) and the saved filter (`view=<id>`, or the inline filters of
+  # `GET /api/v1/tickets`) the Home read's queue rows take (`SymphonyElixir.Home.Queue`).
   @spec home(Conn.t(), map()) :: Conn.t()
-  def home(conn, _params) do
-    ConditionalJSON.json(conn, Presenter.home_payload(orchestrator(), snapshot_timeout_ms()))
+  def home(conn, params) do
+    with {:ok, page} <- Home.Queue.page(params),
+         {:ok, done} <- Home.RecentlyDone.page(params),
+         {:ok, view, spec} <- Views.from_params(params) do
+      query = Map.merge(page, %{done: done, view: view, filters: spec.filters})
+      ConditionalJSON.json(conn, Presenter.home_payload(orchestrator(), snapshot_timeout_ms(), query))
+    else
+      {:error, :not_found} -> error_response(conn, 404, "view_not_found", "No view has the id #{params["view"]}")
+      {:error, {:invalid, message}} -> error_response(conn, 400, "invalid_query", message)
+    end
   end
 
   @spec repos(Conn.t(), map()) :: Conn.t()
@@ -275,7 +301,7 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   end
 
   defp initiatives do
-    Endpoint.config(:initiatives) || SymphonyElixir.Initiatives
+    Endpoint.config(:initiatives) || []
   end
 
   defp snapshot_timeout_ms do

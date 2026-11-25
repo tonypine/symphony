@@ -198,14 +198,14 @@ defmodule SymphonyElixir.OrchestratorProviderPauseTest do
       assert %{word: "Waiting: Anthropic is at its reserve"} = situation(state, "todo", "Todo")
     end
 
-    test "a landing run and a forced ticket's run are not held" do
+    test "a landing run is not held; a ticket carrying the old force label is" do
       state = at_reserve(orchestrator_state())
       landing = issue("landing", "MT-LAND", "Merging")
       assert Orchestrator.should_dispatch_issue_for_test(landing, state)
 
       todo = issue("todo", "MT-TODO", "Todo")
       refute Orchestrator.should_dispatch_issue_for_test(todo, state)
-      assert Orchestrator.should_dispatch_issue_for_test(%{todo | labels: ["expedite"]}, state)
+      refute Orchestrator.should_dispatch_issue_for_test(%{todo | labels: ["expedite"]}, state)
     end
 
     test "the state's providers fill the reserve and say the provider is at it", ctx do

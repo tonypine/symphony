@@ -880,12 +880,11 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       identifier: "MT-WATCH-CONN",
       title: "Watch connected",
       state: "In Progress",
-      blocked_by: [%{id: "blocker-1", identifier: "MT-BLOCKER", state: "In Progress"}],
       sub_issues: [%{id: "sub-1", identifier: "MT-SUB", state: "Todo"}]
     }
 
-    # Each poll's issue carries blockers and sub-tickets, never the parent or links.
-    watched_issue = %{running_issue | state: "In Review", blocked_by: [%{id: "blocker-1", identifier: "MT-BLOCKER", state: "Done"}]}
+    # Each poll's issue carries sub-tickets, never the parent, links or blocker links.
+    watched_issue = %{running_issue | state: "In Review"}
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [watched_issue])
 
     orchestrator_name = Module.concat(__MODULE__, :WatchingConnectedOrchestrator)
@@ -935,8 +934,9 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert running_connected == %{
              parent: parent,
              sub_tickets: [%{identifier: "MT-SUB", title: nil, state: "Todo"}],
-             blocked_by: [%{identifier: "MT-BLOCKER", title: nil, state: "In Progress"}],
-             blocks: [%{identifier: "MT-NEXT", title: "Next", state: "Todo"}],
+             # Linear's blocker links are not read, from the poll or the run's enrichment.
+             blocked_by: [],
+             blocks: [],
              related: [%{identifier: "MT-REL", title: "Context", state: "Done"}]
            }
 
@@ -945,7 +945,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     snapshot = wait_for_snapshot(pid, &match?(%{watching: [%{identifier: "MT-WATCH-CONN"}]}, &1), 1_000)
 
     assert [%{connected: watched_connected}] = snapshot.watching
-    assert watched_connected == %{running_connected | blocked_by: [%{identifier: "MT-BLOCKER", title: nil, state: "Done"}]}
+    assert watched_connected == running_connected
   end
 
   test "orchestrator transcript buffer is bounded by observability config" do
@@ -2865,16 +2865,19 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
 
     orchestrator_name = Module.concat(__MODULE__, :OperatorPauseOrchestrator)
-    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
 
-    on_exit(fn ->
-      if Process.alive?(pid) do
-        stop_process(pid)
-      end
-    end)
+    # The pause is logged once, by the first cycle; the boot runs one at start, so the orchestrator
+    # starts inside the capture.
+    {pid, warning} =
+      with_log(fn ->
+        {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
 
-    warning =
-      capture_log(fn ->
+        on_exit(fn ->
+          if Process.alive?(pid) do
+            stop_process(pid)
+          end
+        end)
+
         send(pid, :run_poll_cycle)
 
         assert %{running: [], pause: %{paused: true, reason: "deploy window", paused_at: %DateTime{}}} =
@@ -2882,6 +2885,8 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
                    snapshot.running == [] and snapshot.pause.paused == true and
                      snapshot.polling.checking? == false
                  end)
+
+        pid
       end)
 
     assert warning =~ ~s(Dispatch pause active kind=person reason="deploy window")
@@ -4467,11 +4472,19 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [done_issue])
     assert :ok = SymphonyElixir.Notifications.subscribe()
 
-    # The plan the ticket belongs to, as the Initiatives server caches it.
-    initiatives_key = {SymphonyElixir.Initiatives, :initiatives, SymphonyElixir.Initiatives}
-    plan = %{identifier: "MT-PLAN", title: "Plan", sub_tickets: [%{id: issue_id}]}
-    :persistent_term.put(initiatives_key, [plan])
-    on_exit(fn -> :persistent_term.erase(initiatives_key) end)
+    # The plan the ticket belongs to: a parent Symphony split, as the Initiatives read it from its record.
+    :ok =
+      RunStore.put_ticket_state(%{
+        repo_key: Config.repo_key!(),
+        issue_id: "issue-MT-PLAN",
+        issue_identifier: "MT-PLAN",
+        title: "Plan",
+        phase: "Done",
+        phase_at: DateTime.utc_now(),
+        sub_issues: [%{id: issue_id, identifier: issue_identifier, state: "Done"}]
+      })
+
+    {:ok, _event} = SymphonyElixir.TicketEvents.record(Config.repo_key!(), "issue-MT-PLAN", "ticket.filed", %{identifier: issue_identifier, kind: "split_off"})
 
     orchestrator_name = Module.concat(__MODULE__, :TerminalRestartOrchestrator)
     {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
@@ -5883,57 +5896,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert StatusDashboard.frame(140, Module.concat(__MODULE__, :NoSuchDashboard)) == :unavailable
     assert log =~ "snapshot stale"
     assert length(String.split(log, "snapshot stale")) == 2
-  end
-
-  test "status dashboard frame keeps the forced tickets from the live snapshot" do
-    write_workflow_file!(Workflow.workflow_file_path(), forced_max: 1)
-
-    {:ok, orchestrator_pid} = Orchestrator.start_link()
-    dashboard_name = Module.concat(__MODULE__, :ForcedSnapshotDashboard)
-
-    :ets.insert(
-      @snapshot_table,
-      {:current,
-       %{
-         running: [],
-         watching: [],
-         retrying: [],
-         forced: [
-           %{
-             issue_id: "issue-forced",
-             identifier: "MT-902",
-             title: "Forced",
-             state: "Todo",
-             position: 1,
-             phase: :implementation,
-             running: false,
-             waiting_on: :blocker,
-             blockers: ["MT-901"],
-             forced_for_seconds: 300,
-             stale: false,
-             sub_issue: nil
-           }
-         ],
-         codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
-         rate_limits: nil,
-         polling: %{next_poll_in_ms: 5_000}
-       }, System.monotonic_time(:millisecond), System.system_time(:millisecond)}
-    )
-
-    {:ok, dashboard_pid} =
-      StatusDashboard.start_link(name: dashboard_name, enabled: false, refresh_ms: 60_000, render_interval_ms: 1)
-
-    on_exit(fn ->
-      if Process.alive?(orchestrator_pid), do: stop_process(orchestrator_pid)
-      if Process.alive?(dashboard_pid), do: stop_process(dashboard_pid)
-    end)
-
-    assert {:ok, frame} = StatusDashboard.frame(140, dashboard_name)
-    plain = Regex.replace(~r/\e\[[0-9;]*m/, frame, "")
-
-    assert plain =~ "forced 1/1"
-    assert plain =~ "├─ Forced"
-    assert plain =~ ~r/MT-902\s+implementation\s+blocker MT-901/
   end
 
   test "status dashboard renders startup pending before the first snapshot grace expires" do

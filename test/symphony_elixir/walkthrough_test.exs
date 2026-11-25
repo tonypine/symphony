@@ -162,29 +162,52 @@ defmodule SymphonyElixir.WalkthroughTest do
     end
   end
 
-  describe "with_recorded_proofs/3 and proof_steps/2" do
-    test "lays the recorded proofs over the steps, the latest a step's, and leaves every step QA's without a proof check" do
+  describe "with_recorded_proofs/2 and proof_steps/1" do
+    test "a recorded proof makes its step proved, the latest a step's, in a repo with no proof check" do
       steps = Walkthrough.steps("1. Do it.\n2. Look.")
       recorded = [%{step: 2, test: "test/a_test.exs"}, %{step: 2, test: "test/b_test.exs"}, %{step: 9, test: "test/c_test.exs"}]
 
-      assert [%{proof: %{by: :qa}}, %{proof: %{by: :test, check: "make-all", test: "test/b_test.exs"}} = second] =
-               Walkthrough.with_recorded_proofs(steps, recorded, "make-all")
+      assert [%{proof: %{by: :qa}}, %{proof: %{by: :test, test: "test/b_test.exs"} = proof} = second] =
+               Walkthrough.with_recorded_proofs(steps, recorded)
 
+      refute Map.has_key?(proof, :check)
       assert Walkthrough.named_test?(second)
-      assert Walkthrough.proof_line(second) == "Proved by: `make-all` › test/b_test.exs"
-      assert Walkthrough.with_recorded_proofs(steps, recorded, " ") == steps
+      assert Walkthrough.proof_line(second) == "Proved by: `test/b_test.exs`"
+      assert Walkthrough.with_recorded_proofs(steps, []) == steps
     end
 
-    test "the pre-check's steps come from the events alone, by step number" do
+    test "the proved steps come from the events alone, by step number" do
       recorded = [%{step: 3, test: "test/a_test.exs"}, %{step: 1, test: "test/b_test.exs"}, %{step: 3, test: "test/c_test.exs"}]
 
-      assert Walkthrough.proof_steps(recorded, "make-all") == [
-               %{number: 1, text: "", proof: %{by: :test, check: "make-all", test: "test/b_test.exs"}},
-               %{number: 3, text: "", proof: %{by: :test, check: "make-all", test: "test/c_test.exs"}}
+      assert Walkthrough.proof_steps(recorded) == [
+               %{number: 1, text: "", proof: %{by: :test, test: "test/b_test.exs"}},
+               %{number: 3, text: "", proof: %{by: :test, test: "test/c_test.exs"}}
              ]
 
-      assert Walkthrough.proof_steps(recorded, nil) == []
-      assert Walkthrough.proof_line(%{proof: %{by: :test, check: "make-all", test: nil}}) == "Proved by: `make-all`"
+      assert Walkthrough.proof_steps([]) == []
+    end
+
+    test "a proof in the older form <check> › <test> is proved by the test, whatever the check" do
+      steps = Walkthrough.steps("1. Do it.")
+
+      results =
+        for check <- ["make-all", "macos-e2e", "ci", "CI / build", "any_check"] do
+          recorded = [%{step: 1, test: "#{check} › test/b_test.exs: does it"}]
+          {Walkthrough.with_recorded_proofs(steps, recorded), Walkthrough.proof_steps(recorded)}
+        end
+
+      assert [{[%{proof: %{by: :test, test: "test/b_test.exs: does it"}}], [%{number: 1, proof: %{by: :test, test: "test/b_test.exs: does it"}}]}] =
+               Enum.uniq(results)
+
+      assert Walkthrough.proof_test("make-all > does it") == "does it"
+    end
+
+    test "a test's own file or a name with spaces before the separator stays part of the test" do
+      assert Walkthrough.proof_test("test/b_test.exs › does it") == "test/b_test.exs › does it"
+      assert Walkthrough.proof_test("b_test.exs › does it") == "b_test.exs › does it"
+      assert Walkthrough.proof_test("the panel › folds") == "the panel › folds"
+      assert Walkthrough.proof_test("make-all › ") == "make-all ›"
+      assert Walkthrough.proof_test("  test/b_test.exs  ") == "test/b_test.exs"
     end
   end
 

@@ -59,7 +59,7 @@ defmodule SymphonyElixir.OrchestratorConfigReloadTest do
     for overrides <- [
           [max_concurrent_agents: 1, tickets: %{priorities: ["urgent"]}],
           [max_concurrent_agents: 1, tracker_active_states: ["Todo", "In Progress", "Rework"]],
-          [max_concurrent_agents: 1, max_concurrent_agents_by_state: %{"todo" => 1}]
+          [max_concurrent_agents: 2]
         ] do
       write_config!(overrides)
       refute Settings.read() == before, "#{inspect(overrides)} left the dispatch settings unchanged"

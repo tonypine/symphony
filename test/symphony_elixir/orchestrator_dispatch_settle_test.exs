@@ -43,7 +43,8 @@ defmodule SymphonyElixir.OrchestratorDispatchSettleTest do
   end
 
   describe "the first dispatch of a ticket Linear just created" do
-    test "waits for its relations: a blocker the next webhook brings holds it" do
+    test "waits for its relations: a dependency stored meanwhile holds it, and a Linear blocker link does not" do
+      upstream = upstream!()
       created = new_ticket()
       linear!([created])
 
@@ -58,13 +59,14 @@ defmodule SymphonyElixir.OrchestratorDispatchSettleTest do
       state = Orchestrator.dispatch_chosen_issues_for_test([created], state)
       assert %{timer: ^timer} = state.dispatch_settle[created.id]
 
-      # The relation lands in Linear and its webhook changes the ticket's record: the settle ends
-      # with a by-id read, which finds the blocker and pauses the ticket on it.
-      linear!([%{created | blocked_by: [blocker()]}])
-      {:noreply, state} = Orchestrator.handle_info({:ticket_record, "default", created.id, :changed, [:blockers]}, state)
+      # A dependency is stored on the ticket's record, which changes it: the settle ends with a
+      # by-id read, which pauses nothing; the dependency gate holds it from the record.
+      {:ok, :updated} = TicketObservation.observe("default", created, source: :webhook)
+      :ok = RunStore.add_dependency(created.id, upstream.id, :done)
+      {:noreply, state} = Orchestrator.handle_info({:ticket_record, "default", created.id, :changed, [:depends_on]}, state)
       assert_received {:memory_tracker_fetch_issue_states_by_ids, [_id]}
       refute Settle.settling?(state.dispatch_settle, created.id)
-      assert Pauses.paused?({:ticket, "default", created.id})
+      refute Pauses.paused?({:ticket, "default", created.id})
 
       # The timer it cancelled may still be in the mailbox: it reads nothing more.
       {:noreply, state} = Orchestrator.handle_info({:dispatch_settle, created.id}, state)
@@ -74,6 +76,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSettleTest do
       {state, log} = with_log(fn -> Orchestrator.dispatch_chosen_issues_for_test([created], state) end)
       refute log =~ "Holding the first dispatch"
       assert state.running == %{} and state.slot_waiting == %{}
+      assert %{gate: :depends_on} = state.dispatch_skipped[created.id]
     end
 
     test "with no relation after the settle, dispatches as today" do
@@ -138,35 +141,36 @@ defmodule SymphonyElixir.OrchestratorDispatchSettleTest do
   end
 
   describe "a run in its start window" do
-    test "is stopped when a blocker reaches its record, and the ticket holds" do
+    test "is stopped when a stored dependency reaches its record, and the ticket holds" do
+      upstream = upstream!()
       ticket = %{new_ticket() | created_at: nil}
       state = running(orchestrator_state(), ticket, nil)
 
-      # A record change with no blocker leaves the start alone.
+      # A record change with no dependency leaves the start alone.
       {:ok, :updated} = TicketObservation.observe("default", ticket, source: :webhook)
       {:noreply, state} = Orchestrator.handle_info({:ticket_record, "default", ticket.id, :changed, [:title]}, state)
       assert Map.has_key?(state.running, ticket.id)
 
-      # The relation's webhook writes the blocker before the agent's first turn: the start stops.
-      linked = %{ticket | blocked_by: [blocker()], updated_at: DateTime.add(ticket.updated_at, 1, :second)}
-      {:ok, :updated} = TicketObservation.observe("default", linked, source: :webhook)
+      # A dependency is stored before the agent's first turn: the start stops.
+      :ok = RunStore.add_dependency(ticket.id, upstream.id, :done)
 
       {{:noreply, state}, log} =
-        with_log(fn -> Orchestrator.handle_info({:ticket_record, "default", ticket.id, :changed, [:blockers]}, state) end)
+        with_log(fn -> Orchestrator.handle_info({:ticket_record, "default", ticket.id, :changed, [:depends_on]}, state) end)
 
       assert log =~ "Stopping the start of issue_id=#{ticket.id}"
       assert state.running == %{}
       refute MapSet.member?(state.claimed, ticket.id)
-      assert Pauses.paused?({:ticket, "default", ticket.id})
-      refute Orchestrator.should_dispatch_issue_for_test(linked, state)
+      refute Orchestrator.should_dispatch_issue_for_test(ticket, state)
     end
 
     test "a run whose agent session started finishes its turn; a pause change of a starting run is checked too" do
-      ticket = %{new_ticket() | created_at: nil, blocked_by: [blocker()]}
+      upstream = upstream!()
+      ticket = %{new_ticket() | created_at: nil}
       {:ok, :updated} = TicketObservation.observe("default", ticket, source: :webhook)
+      :ok = RunStore.add_dependency(ticket.id, upstream.id, :done)
 
       started = running(orchestrator_state(), ticket, "thread-1")
-      {:noreply, state} = Orchestrator.handle_info({:ticket_record, "default", ticket.id, :changed, [:blockers]}, started)
+      {:noreply, state} = Orchestrator.handle_info({:ticket_record, "default", ticket.id, :changed, [:depends_on]}, started)
       assert Map.has_key?(state.running, ticket.id)
 
       starting = running(orchestrator_state(), ticket, nil)
@@ -190,18 +194,30 @@ defmodule SymphonyElixir.OrchestratorDispatchSettleTest do
     %Issue{
       id: "settle-#{System.unique_integer([:positive])}",
       identifier: "MT-7",
-      title: "Created with a blocker",
+      title: "Created with a dependency",
       state: "Todo",
       priority: 1,
       repo_key: "default",
       url: "https://linear.app/acme/issue/MT-7",
       created_at: DateTime.utc_now(),
-      updated_at: DateTime.truncate(DateTime.utc_now(), :second),
-      blocked_by: []
+      updated_at: DateTime.truncate(DateTime.utc_now(), :second)
     }
   end
 
-  defp blocker, do: %{id: "id-MT-6", identifier: "MT-6", state: "Todo"}
+  # The ticket the new one depends on, recorded in Todo: a `:done` dependency on it is unmet.
+  defp upstream! do
+    upstream = %Issue{
+      id: "id-MT-6",
+      identifier: "MT-6",
+      title: "Upstream",
+      state: "Todo",
+      repo_key: "default",
+      updated_at: DateTime.truncate(DateTime.utc_now(), :second)
+    }
+
+    {:ok, _outcome} = TicketObservation.observe("default", upstream, source: :webhook)
+    upstream
+  end
 
   defp linear!(issues), do: Application.put_env(:symphony_elixir, :memory_tracker_issues, issues)
 
@@ -224,7 +240,6 @@ defmodule SymphonyElixir.OrchestratorDispatchSettleTest do
       last_codex_message: nil,
       last_codex_timestamp: nil,
       last_codex_event: nil,
-      forced: false,
       started_at: DateTime.utc_now()
     }
 

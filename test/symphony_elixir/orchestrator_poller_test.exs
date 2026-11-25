@@ -16,7 +16,6 @@ defmodule SymphonyElixir.OrchestratorPollerTest do
       labels: ["backend"],
       priority: 1,
       assignee_id: "user-1",
-      blocked_by: [%{id: "blocker", identifier: "ACME-70", state: "Todo"}],
       url: "https://linear.app/acme/issue/ACME-71",
       updated_at: ~U[2026-10-29 09:00:00Z]
     }
@@ -28,14 +27,13 @@ defmodule SymphonyElixir.OrchestratorPollerTest do
 
     record = RunStore.get_ticket_state(issue.id)
 
-    assert Map.take(record, [:issue_identifier, :phase, :title, :labels, :priority, :assignee, :blockers, :url, :linear_updated_at]) == %{
+    assert Map.take(record, [:issue_identifier, :phase, :title, :labels, :priority, :assignee, :url, :linear_updated_at]) == %{
              issue_identifier: "ACME-71",
              phase: "In Progress",
              title: "Observed by the poll",
              labels: ["backend"],
              priority: 1,
              assignee: "user-1",
-             blockers: [%{id: "blocker", identifier: "ACME-70", state: "Todo"}],
              url: "https://linear.app/acme/issue/ACME-71",
              linear_updated_at: ~U[2026-10-29 09:00:00Z]
            }

@@ -328,6 +328,7 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
       assert render("person.action", %{action: "move", to: "Rework", from: "QA"}) == %{title: "The Director moved the ticket to Rework", detail: "from QA"}
       assert render("person.action", %{action: "move", move: "backlog"}).title == "The Director moved the ticket to backlog"
       assert render("person.action", %{action: "move"}).title == "The Director moved the ticket"
+      # A force recorded before forcing was removed (TP-1611) still reads as it did.
       assert render("person.action", %{action: "force"}).title == "The Director forced a dispatch"
       assert render("person.action", %{action: "unblock"}).title == "The Director unblocked the ticket"
       assert render("person.action", %{action: "restart"}).title == "The Director restarted the ticket"
@@ -335,6 +336,10 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
       assert render("person.action", %{action: "remove_blocker", blocker: "TP-12"}).title == "The Director removed TP-12 as a blocker"
       assert render("person.action", %{action: "add_blocker"}).title == "The Director added a ticket as a blocker"
       assert render("person.action", %{action: "remove_blocker"}).title == "The Director removed a ticket as a blocker"
+      assert render("person.action", %{action: "add_dependency", blocker: "TP-12", kind: "released"}).title == "The Director made the ticket depend on TP-12"
+      assert render("person.action", %{action: "remove_dependency", blocker: "TP-12"}).title == "The Director removed the ticket's dependency on TP-12"
+      assert render("person.action", %{action: "add_dependency"}).title == "The Director made the ticket depend on a ticket"
+      assert render("person.action", %{action: "remove_dependency"}).title == "The Director removed the ticket's dependency on a ticket"
       assert render("person.action", %{action: "set_priority", from: "Low", to: "Urgent"}) |> Map.take([:title, :detail]) == %{title: "The Director set the priority to Urgent", detail: "from Low"}
       assert render("person.action", %{action: "set_priority"}).title == "The Director set the priority to another priority"
       assert render("person.action", %{action: "add_label", label: "qa:skip"}).title == "The Director added the qa:skip label"
@@ -395,6 +400,9 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
       result = %{status: "blocked", expected: "Rows", actual: "Empty state"}
       assert completed.(%{outcome: "passed", result: result, verdict_summary: "Blocked."}) == %{title: "Build passed", detail: "blocked · Empty state · Blocked."}
       assert completed.(%{outcome: "passed", result: %{status: "pass"}}) == %{title: "Build passed", detail: "pass"}
+
+      results = [%{step: 1, status: "pass", expected: "Rows", actual: "Rows show"}, %{step: 2, status: "fail", expected: "A", actual: "B"}]
+      assert completed.(%{outcome: "passed", results: results}) == %{title: "Build passed", detail: "Step 1: pass · Rows show · Step 2: fail · B"}
 
       assert completed.(%{outcome: "failed", returns_to: "code", reason: "refused twice"}) ==
                %{title: "Build failed: back to step code", detail: "refused twice"}

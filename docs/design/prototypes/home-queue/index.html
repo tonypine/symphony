@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Home: the queue · approved 2026-11-21, epics 2026-11-23</title>
+  <link rel="stylesheet" href="../../catalog/tokens.css">
+  <link rel="stylesheet" href="../../catalog/components.css">
+  <link rel="stylesheet" href="page.css">
+</head>
+<body>
+<div class="ds stage">
+  <div class="win">
+    <aside class="win-side" aria-label="Destinations"><div class="win-lights" aria-hidden="true"><i></i><i></i><i></i></div><nav class="win-nav"></nav></aside>
+    <div class="win-main">
+      <header class="win-bar" role="toolbar" aria-label="Window">
+        <button type="button" class="icon-btn sz-md" aria-label="Hide the sidebar" data-icon="sidebar"></button>
+        <span class="nav-pair"><button type="button" class="icon-btn sz-md" aria-label="Back" data-icon="left"></button><button type="button" class="icon-btn sz-md" aria-label="Forward" aria-disabled="true" data-icon="right"></button></span>
+        <span class="sep"></span><nav class="win-crumbs" aria-label="Where you are"><span class="here">Home</span></nav><span class="grow"></span>
+        <div class="field sz-sm win-search"><div class="input search" data-icon="search"><input type="search" id="find" aria-label="Find a ticket" placeholder="Find a ticket"></div></div>
+        <button type="button" class="icon-btn sz-md" aria-label="Inbox" data-icon="tray"></button><button type="button" class="icon-btn sz-md" aria-label="Refresh" data-icon="refresh"></button>
+      </header>
+      <div class="win-body">
+        <div class="pq">
+          <div class="pq-mini" aria-hidden="true"><div id="mini"></div></div>
+          <section class="pq-recent" aria-label="Recently done" hidden>
+            <div class="pq-head" role="button" tabindex="0"><h2>Recently done</h2><span class="pq-count" id="rcount"></span><span class="segmented sz-sm" id="range" role="radiogroup" aria-label="Range" style="--n:2;--i:0"><span class="seg-thumb" aria-hidden="true"></span><button type="button" role="radio" class="segment" data-range="today" aria-checked="true">Today</button><button type="button" role="radio" class="segment" data-range="week" aria-checked="false">Week</button></span><span class="grow"></span><span class="twist" id="rtwist"></span></div>
+            <div class="rlist" id="rlist"></div>
+          </section>
+          <section class="pq-top" aria-label="In progress">
+            <div class="pq-head"><h2>In progress</h2><span class="grow"></span>
+              <span class="slots-ctl" role="group" aria-label="Number of slots"><button type="button" id="less" aria-label="One slot fewer" data-icon="minus"></button><output id="slotsOut" for="less more"></output><button type="button" id="more" aria-label="One slot more" data-icon="plus"></button></span>
+            </div>
+            <div class="slot-grid" id="slots"></div>
+          </section>
+          <section class="pq-queue" aria-label="Queue">
+            <div class="pq-head"><h2>Queue</h2><span class="pq-count" id="qcount"></span></div>
+            <div class="pq-filters" id="views"></div>
+            <div class="vlist" role="listbox" aria-label="Queue"></div>
+          </section>
+        </div>
+      </div>
+      <footer class="win-status"><button type="button" class="dispatch"><span class="dot role-done live"></span><span>Dispatch on</span></button><span class="sep"></span><span id="st" style="display:contents"></span><span class="grow"></span><span class="build">Symphony 0.0.1.1062</span></footer>
+    </div>
+  </div>
+  <div class="notes">
+    <div><h3>Try it</h3><ul><li>Drag a queue row onto another to reorder it.</li><li>Drag a row onto a slot, or press Start, to put it in front.</li><li>Change the number of slots with − and +.</li><li>Stop on a card frees the slot; the queue fills it.</li><li>Scroll the queue: the slots fold into a strip that stays on top.</li><li>Click an epic’s row to show or hide its sub-tickets; drag it and they move with it.</li><li>Click an epic’s band to see what is still to come; click a “done” count, on the band or in the queue, to see what it has finished.</li><li>Drag a sub-ticket above one it depends on, or press Start on it: it is refused, with the reason.</li></ul></div>
+    <div><h3>New for the Gallery</h3><ul><li>Slot card (long), its empty slot, and its folded strip row</li><li>Phase track and checks bar on the card</li><li>Slot count control</li><li>Queue row with its number and grip</li><li>Epic slot card: the epic’s band around the sub-ticket in work</li><li>Epic queue row, sub-ticket row with its elbow, dependency marker</li><li>Done row, and the Recently done section</li></ul></div>
+    <div><h3>Prototype only</h3><ul><li><label><input type="checkbox" id="none"> Nothing in the queue is ready (shows empty slots)</label></li><li>The first rows are real tickets; the other 1,223 are generated to show scale.</li></ul></div>
+  </div>
+</div>
+
+  <script src="page.js"></script>
+</body>
+</html>

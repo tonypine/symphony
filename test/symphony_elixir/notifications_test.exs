@@ -307,9 +307,6 @@ defmodule SymphonyElixir.NotificationsTest do
              "usage_limit_paused",
              "usage_limit_headroom",
              "usage_limit_resumed",
-             "forced_waiting",
-             "forced_human_gate",
-             "forced_stale",
              "human_action_needed"
            ]
 
@@ -471,48 +468,26 @@ defmodule SymphonyElixir.NotificationsTest do
     assert Formatter.webhook_payload(headroom)["event"] == "usage_limit_headroom"
   end
 
-  test "formatter names the forced run a waiting forced ticket is queued behind" do
-    {:ok, event} =
-      Event.new(:forced_waiting, %{
-        issue_id: "issue-2",
-        issue_identifier: "ACME-2",
-        issue_title: "Second forced ticket",
-        reason: "queued #2; forced slot taken by ACME-1",
-        timestamp: ~U[2026-10-04 08:00:00Z]
-      })
-
-    slack = Formatter.slack_payload(event)
-    assert slack["text"] =~ "Forced ticket waiting"
-    assert [%{"color" => "warning", "blocks" => [headline | _]}] = slack["attachments"]
-    assert headline["text"]["text"] =~ "*Forced ticket waiting*"
-    assert Formatter.webhook_payload(event)["reason"] == "queued #2; forced slot taken by ACME-1"
-  end
-
-  test "formatter titles the forced human-gate and stale notices" do
-    {:ok, gate} =
-      Event.new(:forced_human_gate, %{
-        issue_identifier: "ACME-3",
-        issue_url: "https://linear.test/ACME-3",
-        pr_url: "https://github.test/org/repo/pull/3",
-        reason: "ACME-3 is waiting for your review",
-        timestamp: ~U[2026-10-04 08:00:00Z]
-      })
-
-    slack = Formatter.slack_payload(gate)
-    assert slack["text"] == "Forced ticket waiting for your review: ACME-3"
-    assert [%{"color" => "#2f80ed", "blocks" => [headline | _]}] = slack["attachments"]
-    assert headline["text"]["text"] =~ "*Forced ticket waiting for your review*"
-    assert Formatter.state_url(gate) == "https://github.test/org/repo/pull/3"
-
-    {:ok, stale} = Event.new(:forced_stale, %{issue_identifier: "ACME-4", reason: "forced for 3d 1h, past forced_stale_after_hours=72"})
-    slack = Formatter.slack_payload(stale)
-    assert slack["text"] == "Forced ticket stale: ACME-4"
-    assert [%{"color" => "warning"}] = slack["attachments"]
-    assert Formatter.webhook_payload(stale)["reason"] == "forced for 3d 1h, past forced_stale_after_hours=72"
-
+  test "formatter titles the human-action notice" do
     {:ok, action} = Event.new(:human_action_needed, %{issue_identifier: "ACME-5", reason: "Add the release signing secrets"})
     assert Formatter.slack_payload(action)["text"] == "Action needed from you: ACME-5"
     assert Formatter.webhook_payload(action)["reason"] == "Add the release signing secrets"
+  end
+
+  test "no forced-ticket notice exists, and a channel that still names one loads without it" do
+    for retired <- ["forced_waiting", "forced_human_gate", "forced_stale"] do
+      refute Event.known_event?(retired)
+      assert {:error, {:unknown_notification_event, _event}} = Event.new(retired)
+    end
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      notifications: %{
+        enabled: true,
+        channels: [%{kind: "webhook", url: "https://notify.test/events", events: ["run_failed", "forced_waiting", "Forced_Stale", "forced_human_gate"]}]
+      }
+    )
+
+    assert [%{events: ["run_failed"]}] = Config.settings!().notifications.channels
   end
 
   test "formatter includes reviewer feedback context for webhook and Slack payloads" do

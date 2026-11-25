@@ -5,10 +5,9 @@ defmodule SymphonyElixirWeb.ConnectedReadTest do
 
   import Phoenix.ConnTest, only: [build_conn: 0, get: 2, json_response: 2]
 
-  alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.Initiatives
   alias SymphonyElixir.Pauses
   alias SymphonyElixir.PrDecision.Facts
+  alias SymphonyElixir.TicketEvents
 
   @endpoint SymphonyElixirWeb.Endpoint
   @repo "default"
@@ -33,8 +32,6 @@ defmodule SymphonyElixirWeb.ConnectedReadTest do
 
     on_exit(fn ->
       RunStore.clear()
-      :persistent_term.erase({Initiatives, :initiatives, Initiatives})
-      :persistent_term.erase({Initiatives, :read, Initiatives})
     end)
 
     write_workflow_file!(Workflow.workflow_file_path())
@@ -51,42 +48,16 @@ defmodule SymphonyElixirWeb.ConnectedReadTest do
     %{orchestrator: orchestrator}
   end
 
-  # Eight sub-tickets in a chain, the first four done and the fifth, MT-6, this ticket.
+  # Eight sub-tickets in a chain, the first four done and the fifth, MT-6, this ticket: the plan
+  # Symphony split, as its record lists them.
   defp read_the_plan do
-    children =
+    sub_issues =
       for number <- 2..9 do
-        {name, type} = if number <= 5, do: {"Done", "completed"}, else: {"Todo", "unstarted"}
-
-        %{
-          "id" => "id-MT-#{number}",
-          "identifier" => "MT-#{number}",
-          "title" => "Part #{number}",
-          "createdAt" => "2026-11-01T10:00:0#{number}Z",
-          "state" => %{"name" => name, "type" => type},
-          "inverseRelations" => %{"nodes" => []}
-        }
+        %{id: "id-MT-#{number}", identifier: "MT-#{number}", state: if(number <= 5, do: "Done", else: "Todo")}
       end
 
-    plan = %{
-      "id" => "id-MT-1",
-      "identifier" => "MT-1",
-      "title" => "The plan",
-      "state" => %{"name" => "Waiting on sub-tickets", "type" => "started"},
-      "children" => %{"nodes" => children}
-    }
-
-    issues = %{"nodes" => [plan], "pageInfo" => %{"hasNextPage" => false}}
-
-    Initiatives.run_once(%{
-      opts: [
-        name: Initiatives,
-        repos: fn -> {:ok, [%{name: @repo}]} end,
-        settings_fun: fn _repo -> %Schema{} end,
-        scope_filter: fn _repo -> {:ok, %{}} end,
-        linear_client: fn _query, _variables, _opts -> {:ok, %{"data" => %{"issues" => issues}}} end,
-        now: fn -> ~U[2026-11-06 12:00:00Z] end
-      ]
-    })
+    ticket("id-MT-1", "MT-1", "Waiting on sub-tickets", %{title: "The plan", sub_issues: sub_issues})
+    {:ok, _event} = TicketEvents.record(@repo, "id-MT-1", "ticket.filed", %{identifier: "MT-2", kind: "split_off"})
   end
 
   defp ticket(id, identifier, phase, fields \\ %{}) do
@@ -95,16 +66,18 @@ defmodule SymphonyElixirWeb.ConnectedReadTest do
 
   defp wait_on(id, blocker, at), do: {:ok, _pause} = Pauses.set({:ticket, @repo, id}, Pauses.ticket_reason(:dependency, blocker), at: at)
 
+  # MT-6 depends on MT-5, which landed, and on MT-20, still in progress; MT-7 on MT-6. A run's block
+  # report paused each on the ticket it still waits on.
   defp ticket_in_a_chain do
-    ticket("id-MT-5", "MT-5", "Done", %{title: "Part 5"})
+    ticket("id-MT-5", "MT-5", "Done", %{title: "Part 5", phase_at: @landed})
     ticket("id-MT-20", "MT-20", "In Progress", %{title: "Elsewhere"})
-    ticket("id-MT-6", "MT-6", "Todo", %{title: "Part 6", blockers: [%{id: "id-MT-20", identifier: "MT-20", state: "In Progress"}]})
-    ticket("id-MT-7", "MT-7", "Todo", %{title: "Part 7", blockers: [%{id: "id-MT-6", identifier: "MT-6", state: "Todo"}]})
+    ticket("id-MT-6", "MT-6", "Todo", %{title: "Part 6"})
+    ticket("id-MT-7", "MT-7", "Todo", %{title: "Part 7"})
+    :ok = RunStore.add_dependency("id-MT-6", "id-MT-5", :done)
+    :ok = RunStore.add_dependency("id-MT-6", "id-MT-20", :done)
+    :ok = RunStore.add_dependency("id-MT-7", "id-MT-6", :done)
 
-    wait_on("id-MT-6", "MT-5", ~U[2026-11-01 11:00:00Z])
     wait_on("id-MT-6", "MT-20", ~U[2026-11-02 09:00:00Z])
-    landed = %{kind: :ticket, waits_on: %{identifier: "MT-5"}}
-    {:ok, _pause} = Pauses.clear_reason({:ticket, @repo, "id-MT-6"}, landed, at: @landed)
     wait_on("id-MT-7", "MT-6", ~U[2026-11-01 11:00:00Z])
   end
 

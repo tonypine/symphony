@@ -57,7 +57,7 @@ defmodule SymphonyElixir.Pauses do
   (`SymphonyElixir.Questions`) and its reason never disagree.
 
   A `:ticket` reason's line says why the ticket is waited on (`ticket_reason/2`): a blocker it is
-  blocked by (`:dependency`, the blocked-by sync and a run's block report), the fix ticket self-heal
+  blocked by (`:dependency`, a run's block report on its stored dependencies), the fix ticket self-heal
   filed for it (`:fix_ticket`) or a pull request competing for its files (`:landing`).
 
   Once a change to a ticket's pause commits, its labels are projected from it
@@ -414,6 +414,13 @@ defmodule SymphonyElixir.Pauses do
   @doc "Whether `subject` is paused."
   @spec paused?(subject()) :: boolean()
   def paused?(subject), do: reasons(subject) != []
+
+  @doc """
+  Whether `subject` is paused for a reason other than an app update's (`:build`). Conductor turns
+  are held only by such a reason: an update's pause holds ticket runs alone (TP-1590).
+  """
+  @spec paused_beyond_update?(subject()) :: boolean()
+  def paused_beyond_update?(subject), do: subject |> reasons() |> Enum.any?(&(&1.kind != :build))
 
   @doc "Why `subject` is paused: one line in plain words per reason, in the order they were set."
   @spec why(subject()) :: [String.t()]

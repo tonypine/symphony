@@ -3,6 +3,7 @@ defmodule SymphonyElixir.Conductor.FilingTest do
 
   alias SymphonyElixir.Conductor.{Facts, Filing}
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.Dispatch.DependsOn
   alias SymphonyElixir.{TicketEvents, TicketPlan, TicketState}
 
   @settings %Schema.Conductor{enabled: true}
@@ -28,11 +29,6 @@ defmodule SymphonyElixir.Conductor.FilingTest do
   defmodule Tracker do
     def fetch_issue_by_identifier(identifier), do: Process.get({:ticket, identifier}, {:error, :not_found})
 
-    def add_blocked_by(blocker, blocked_id) do
-      Process.put(:linked, {blocker, blocked_id})
-      Process.get(:link_result, :ok)
-    end
-
     def update_issue_state(issue_id, state) do
       Process.put(:moved, {issue_id, state})
       Process.get(:move_result, :ok)
@@ -50,6 +46,9 @@ defmodule SymphonyElixir.Conductor.FilingTest do
     identifier = "MOT-#{n}"
     state = %{repo_key: "default", issue_id: issue_id, issue_identifier: identifier, phase: "QA", title: "Translate Cycle"}
     :ok = RunStore.put_ticket_state(state)
+    # Every test's sub-ticket is `new-id`: none starts on another test's record of it.
+    RunStore.delete_ticket_state("new-id")
+    on_exit(fn -> RunStore.delete_ticket_state("new-id") end)
     issue = %Issue{id: issue_id, identifier: identifier, title: "Translate Cycle", state: "QA", repo_key: "default"}
     %{issue: issue, issue_id: issue_id, identifier: identifier}
   end
@@ -95,7 +94,8 @@ defmodule SymphonyElixir.Conductor.FilingTest do
     assert attrs.description =~ "## User walkthrough\n\n1. In the Director, open a Cycle ticket in QA"
     refute attrs.description =~ "## Evidence"
 
-    assert Process.get(:blocked) == {ctx.issue_id, "TP-2000"}
+    # The hold is the pause: no Linear blocker link is written.
+    refute Process.get(:blocked)
     assert [%{text: "Waiting for TP-2000 to finish: it fixes what stopped this ticket"}] = pause_reasons(ctx.issue_id)
 
     assert [%{payload: %{identifier: "TP-2000", kind: "split_off", by: "conductor", repo: "default", existing: false, reason: "QA builds" <> _}}] =
@@ -175,7 +175,8 @@ defmodule SymphonyElixir.Conductor.FilingTest do
 
     assert {:ok, %{identifier: "TP-1553", existing: true, url: "https://linear.app/t/TP-1553"}} = file(ctx, route(%{existing: "TP-1553"}))
     assert Process.get(:created) == nil
-    assert Process.get(:blocked) == {ctx.issue_id, "TP-1553"}
+    # The hold is the pause: no Linear blocker link is written.
+    refute Process.get(:blocked)
     assert [%{payload: %{identifier: "TP-1553", existing: true}}] = events(ctx.issue_id, "ticket.filed")
     assert [%{text: "Waiting for TP-1553 to finish" <> _}] = pause_reasons(ctx.issue_id)
 
@@ -224,7 +225,8 @@ defmodule SymphonyElixir.Conductor.FilingTest do
       end)
 
     assert log =~ "could not hold it"
-    assert Process.get(:blocked) == {ctx.issue_id, "TP-2000"}
+    # The hold is the pause: no Linear blocker link is written.
+    refute Process.get(:blocked)
     assert [%{payload: %{identifier: "TP-2000", existing: false}}] = events(ctx.issue_id, "ticket.filed")
     assert [%{payload: %{from: from}}] = events("new-id", "ticket.filed_from")
     assert from == ctx.identifier
@@ -238,34 +240,35 @@ defmodule SymphonyElixir.Conductor.FilingTest do
     assert Process.get(:created) == nil
   end
 
-  test "an open ticket already linked as blocking this one under the same title is linked, not filed again", ctx do
+  test "an open ticket this one already depends on under the same title is linked, not filed again", ctx do
     title = route().title
     Process.put({:ticket, "TP-1553"}, {:ok, %Issue{id: "tp-1553", identifier: "TP-1553", title: title, state: "In Progress", url: "https://linear.app/t/TP-1553"}})
     Process.put({:ticket, "TP-1554"}, {:ok, %Issue{id: "tp-1554", identifier: "TP-1554", title: "Something else", state: "Todo"}})
 
-    blockers = [
-      %{id: "done", identifier: "TP-1500", state: "Done"},
-      %{id: nil, identifier: nil, state: "Todo"},
-      %{id: "gone", identifier: "TP-404", state: "Todo"},
-      %{id: "tp-1554", identifier: "TP-1554", state: "Todo"},
-      %{id: "tp-1553", identifier: "TP-1553", state: nil}
-    ]
+    # The dependencies Symphony stores: a done one, one with no record (no identifier to read), one
+    # Linear can't read, one under another title and the one that covers the problem.
+    dependencies = [{"done", "TP-1500", "Done"}, {"gone", nil, nil}, {"unread", "TP-1555", "Todo"}, {"1554", "TP-1554", "Todo"}, {"1553", "TP-1553", "In Progress"}]
 
-    # The blockers the issue carries.
-    issue = %{ctx.issue | blocked_by: blockers}
-    assert {:ok, %{identifier: "TP-1553", existing: true, url: "https://linear.app/t/TP-1553"}} = file(%{ctx | issue: issue}, route())
+    for {suffix, identifier, phase} <- dependencies do
+      on = "#{ctx.issue_id}-#{suffix}"
+      if identifier, do: :ok = RunStore.put_ticket_state(TicketState.new("default", on, %{issue_identifier: identifier, phase: phase}))
+      :ok = RunStore.add_dependency(ctx.issue_id, on, :done)
+      on_exit(fn -> RunStore.delete_ticket_state(on) end)
+    end
+
+    assert {:ok, %{identifier: "TP-1553", existing: true, url: "https://linear.app/t/TP-1553"}} = file(ctx, route())
     assert Process.get(:created) == nil
-    assert Process.get(:blocked) == {ctx.issue_id, "TP-1553"}
+    # The hold is the pause: no Linear blocker link is written.
+    refute Process.get(:blocked)
     assert [%{text: "Waiting for TP-1553 to finish" <> _rest}] = pause_reasons(ctx.issue_id)
     assert [%{payload: %{identifier: "TP-1553", existing: true}}] = events(ctx.issue_id, "ticket.filed")
 
-    # Else the blockers the tracker reads of it.
-    Process.put({:ticket, ctx.identifier}, {:ok, %Issue{id: ctx.issue_id, identifier: ctx.identifier, blocked_by: blockers}})
+    # A follow-up is related to it instead.
     assert {:ok, %{identifier: "TP-1553", existing: true}} = file(ctx, route(%{relation: "follow_up"}))
     assert Process.get(:related) == {ctx.issue_id, "TP-1553"}
     assert Process.get(:created) == nil
 
-    # A linked ticket under another title covers nothing, and an issue without an identifier reads none.
+    # A dependency under another title covers nothing.
     assert {:ok, %{identifier: "TP-2000", existing: false}} = file(ctx, route(%{relation: "follow_up", title: "Another problem"}))
     Process.delete(:created)
     issue = %{ctx.issue | identifier: nil}
@@ -324,9 +327,9 @@ defmodule SymphonyElixir.Conductor.FilingTest do
       assert attrs.description =~ "The Conductor filed this sub-ticket of #{ctx.identifier}, which waits for it to be Done and then continues."
       assert attrs.state == nil
       refute Process.get(:moved)
-      assert Process.get(:blocked) == {ctx.issue_id, "TP-2000"}
+      # The hold is the pause: no Linear blocker link is written.
+      refute Process.get(:blocked)
       assert [%{kind: :ticket, waits_on: %{identifier: "TP-2000"}}] = pause_reasons(ctx.issue_id)
-      refute Process.get(:linked)
 
       from = ctx.identifier
       assert [%{source: "parent", from: ^from, text: "## Problem" <> _rest}] = TicketPlan.ask("new-id")
@@ -347,16 +350,35 @@ defmodule SymphonyElixir.Conductor.FilingTest do
       assert [%{identifier: "TP-2000", relation: "before"}] = facts.filed
     end
 
-    test "a ticket to do after is a sub-ticket that waits on this ticket's merge, and holds nothing", ctx do
+    test "a sub-ticket filed to do after its ticket depends on it", ctx do
+      child = %Issue{id: "new-id", identifier: "TP-2000", state: "Backlog", repo_key: "default"}
+      Process.put(:read_result, {:ok, [%{ctx.issue | sub_issues: [%{id: "new-id", identifier: "TP-2000", state: "Backlog"}]}, child]})
+
       assert {:ok, %{relation: "after"} = filed} = file(ctx, route(%{relation: "after"}))
 
       {attrs, _opts} = Process.get(:created)
       assert attrs.parent_id == ctx.issue_id
       assert attrs.description =~ "to do after it: it starts once #{ctx.identifier}'s pull request has merged."
-      # Created where no dispatch finds it, linked, and only then started.
+      # Created where no dispatch finds it, on the records, given its dependency on this ticket, and
+      # only then started; no Linear blocker link is written.
       assert attrs.state == "Backlog"
-      assert Process.get(:linked) == {ctx.identifier, "new-id"}
+      refute Process.get(:blocked)
+      parent_id = ctx.issue_id
+      stored = "new-id" |> RunStore.get_ticket_state() |> TicketState.normalize()
+      assert [%{issue_id: ^parent_id, identifier: identifier, kind: :done}] = stored.depends_on
+      assert identifier == ctx.identifier
       assert Process.get(:moved) == {"new-id", "Todo"}
+
+      # It waits on this ticket until this ticket is done.
+      unmet = fn ->
+        dependencies = RunStore.dependencies("new-id")
+        records = for {entry, %{} = record} <- dependencies, into: %{}, do: {entry.issue_id, record}
+        DependsOn.unmet(Enum.map(dependencies, &elem(&1, 0)), records, %{sha: nil, repo: nil}, %{blockers: %{}, included: %{}})
+      end
+
+      assert [%{issue_id: ^parent_id}] = unmet.()
+      :ok = RunStore.update_ticket_state(ctx.issue_id, %{phase: "Done"})
+      assert unmet.() == []
       assert events(ctx.issue_id, "note") == []
       assert pause_reasons(ctx.issue_id) == []
       assert [%{payload: %{kind: "follow_up"}}] = events(ctx.issue_id, "ticket.filed")
@@ -368,22 +390,25 @@ defmodule SymphonyElixir.Conductor.FilingTest do
 
     test "blocks and follow_up read as before and after, and any other relation is refused", ctx do
       assert {:error, "the ticket route's relation must be before or after"} = file(ctx, route(%{relation: "sideways"}))
-      assert {:ok, %{relation: "after"}} = file(ctx, route(%{relation: "follow_up"}))
+      capture_log(fn -> assert {:ok, %{relation: "after"}} = file(ctx, route(%{relation: "follow_up"})) end)
       assert {:ok, %{relation: "before"}} = file(ctx, route(%{relation: "blocks", title: "Another problem"}))
     end
 
     test "what can't be done around the sub-ticket is logged, and the sub-ticket stays filed", ctx do
-      Process.put(:link_result, {:error, :refused})
+      # The read-back fails, and the ticket already depends on the sub-ticket, so the sub-ticket's
+      # dependency on it would loop and the store refuses it.
       Process.put(:read_result, {:error, :timeout})
+      assert :ok = RunStore.add_dependency(ctx.issue_id, "new-id", :done)
 
       log = capture_log(fn -> assert {:ok, %{identifier: "TP-2000"}} = file(ctx, route(%{relation: "after"})) end)
 
-      assert log =~ "could not start it: the link to #{ctx.identifier} (:refused)"
       assert log =~ "could not put it on Symphony's records"
-      # It never starts without its link: it stays in Backlog, and that is said on this ticket.
+      assert log =~ "could not start it: its dependency on #{ctx.identifier}"
+      # It never starts without its dependency: it stays in Backlog, and that is said on this ticket.
       refute Process.get(:moved)
       assert [%{idempotency: "tree.start_failed:new-id", payload: %{status: true, text: text}}] = events(ctx.issue_id, "note")
-      assert text =~ "Symphony created TP-2000 but could not make the link to #{ctx.identifier} (:refused). It stays in Backlog"
+      assert text =~ "Symphony created TP-2000 but could not make its dependency on #{ctx.identifier} (:dependency_cycle)"
+      assert text =~ "It stays in Backlog"
 
       # One whose hold could not be set is still a sub-ticket with its ask.
       hold = fn _repo_key, _issue, _identifier -> {:error, :store_down} end
@@ -415,12 +440,32 @@ defmodule SymphonyElixir.Conductor.FilingTest do
     end
   end
 
-  test "a ticket with no plan takes neither before nor after, and files no sub-ticket", ctx do
+  test "a ticket with no plan takes neither before nor after; a blocking ticket is its sub-ticket, a follow-up is not (TP-1624)", ctx do
     assert {:error, "the ticket route's relation must be blocks or follow_up"} = file(ctx, route(%{relation: "before"}))
-    assert {:ok, _filed} = file(ctx, route())
+    assert Filing.facts(Facts.events(ctx.issue_id), @settings, repos: ["default"]).relations == ["blocks", "follow_up"]
+
+    # A ticket that blocks the current one in the middle of its work is filed under it, put on
+    # Symphony's records as its sub-ticket, so it runs through the current ticket's slot.
+    test = self()
+    Process.put(:read_result, {:ok, [%{ctx.issue | sub_issues: [%{id: "new-id", identifier: "TP-2000", state: "Todo"}]}, %Issue{id: "new-id", identifier: "TP-2000"}]})
+    observe = fn repo_key, issue -> send(test, {:observed, repo_key, issue.id}) end
+
+    assert {:ok, %{relation: "blocks"}} = file(ctx, route(), @settings, observe: observe)
+    {attrs, _opts} = Process.get(:created)
+    assert attrs.parent_id == ctx.issue_id
+    assert attrs.state == nil
+    assert Process.get(:read) == [ctx.issue_id, "new-id"]
+    assert_received {:observed, "default", "new-id"}
+    assert [%{source: "parent"}] = TicketPlan.ask("new-id")
+    assert [%{kind: :ticket, waits_on: %{identifier: "TP-2000"}}] = pause_reasons(ctx.issue_id)
+
+    # A follow-up holds nothing and is filed on its own.
+    Process.put(:create_result, {:ok, %{id: "follow-id", identifier: "TP-2001", url: "https://linear.app/t/TP-2001"}})
+    Process.put(:read_result, {:ok, [%Issue{id: "follow-id", identifier: "TP-2001"}]})
+    on_exit(fn -> RunStore.delete_ticket_state("follow-id") end)
+    assert {:ok, %{relation: "follow_up"}} = file(ctx, route(%{relation: "follow_up", title: "A follow-up"}))
     {attrs, _opts} = Process.get(:created)
     assert attrs.parent_id == nil
-    assert TicketPlan.ask("new-id") == []
-    assert Filing.facts(Facts.events(ctx.issue_id), @settings, repos: ["default"]).relations == ["blocks", "follow_up"]
+    assert TicketPlan.ask("follow-id") == []
   end
 end

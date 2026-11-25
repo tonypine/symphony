@@ -192,7 +192,7 @@ private struct RelayOptionRow: View {
             )
             .contentShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.plainPointer)
         // Labelled on the button itself, which keeps its own press: AXPress and a click both pick the relay.
         .accessibilityLabel(label)
         .accessibilityAddTraits(selected ? .isSelected : [])

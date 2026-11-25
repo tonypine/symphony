@@ -55,6 +55,50 @@ modules your branch changes:
 mix cover.changed
 ```
 
+When the change touches code many tests depend on, run every Elixir test in that same pass:
+
+```bash
+mix cover.changed --all        # every test file, in 8 processes at once, and the changed modules' coverage
+```
+
+To run every Elixir test without the coverage check, use the script, not a bare `mix test`:
+
+```bash
+scripts/test-parts.sh          # all tests, in 8 processes at once
+scripts/test-parts.sh -n 4     # in 4
+```
+
+Most test files run one test at a time, because their tests share the app's one config, run store
+and named processes, so a single `mix test` leaves most cores idle (about 9 minutes). The script
+spreads the test files over the parts by how long each took (`test/support/test_weights.tsv`,
+heaviest first onto the lightest part) and runs each part as its own `mix test` (under 2 minutes
+on a 12-core Mac; more than 8 parts is no faster there). It also makes a fix quick to check:
+
+- The tests that failed in the last run (`_build/test/parts/failed.txt`) run first, alone. While
+  one still fails the script stops there, in seconds.
+- Each part stops after 10 failures (`TEST_MAX_FAILURES`), so a broken build is reported at once.
+- Each part runs 2 tests at a time (`TEST_MAX_CASES`). ExUnit's default, 2 per core in every
+  part, keeps every core so busy that the tests that measure time fail.
+- A test that failed runs once more, alone. One that passes then is named in the summary as
+  unsteady and does not fail the run; one that fails twice does, and runs first next time.
+- A part that stopped at its 10 failures, or in which a `setup_all` failed, left tests that never
+  ran. The run then fails and names the part, also when every failed test passes alone.
+- It prints the failures and one summary line; each part's whole output is in
+  `_build/test/parts/part-<n>.log`.
+
+`scripts/test-parts.sh --record` rewrites the weights file from a passing run; do that after
+adding or moving slow tests, so the parts stay even. A test file the weights don't list counts as
+an average one. A part holds whole files, so it can't be shorter than its longest file: split a
+test file by subject when its weight passes about 15 s, and move what the new files share to a
+module under `test/support/` (`test/test_helper.exs` loads it, `mix.exs`'s `test_ignore_filters`
+names it).
+
+In the test env the run store asks the disk for no flush after a write
+(`run_store_sync_log: false` in `config/config.exs`): the stores are temp folders, and the flushes
+of several test processes at once queue on the one disk. A wait for a message uses ExUnit's
+`assert_receive` with the suite default (1 s) or longer, never a shorter one: a passing assertion
+returns when its message arrives, and a short wait fails on a busy machine.
+
 The suite gives the same result on every machine, whatever the shell exports:
 
 - Every test runs on the memory ticket system. A test of the Linear adapter opts in with
@@ -69,11 +113,54 @@ The suite gives the same result on every machine, whatever the shell exports:
   `GITHUB_TOKEN` and the Slack and webhook URLs) before the app boots. A test that needs one sets it.
 
 It runs the changed test files, the `test/<path>_test.exs` of each changed `lib/<path>.ex` and the
-test files that name a changed module, once with `--cover`, then prints each changed module's
-coverage with its uncovered lines and fails when one is below 100%. Changes count from the
+test files that name a changed module, once, then prints each changed module's
+coverage with its uncovered lines and fails when a test fails or a module is below 100%. Changes count from the
 merge-base with `origin/main` (`--base <ref>` for another branch), uncommitted and untracked files
 included. Modules in `mix.exs`'s `test_coverage` `ignore_modules` are skipped, as in CI. When the
 tests that cover a module don't name it, pass them: `mix cover.changed <test files>`.
+
+A test file names a module when the module's full name stands in its source as a whole token
+(`SymphonyElixir.Foo`, `SymphonyElixir.Foo.run()`, `alias SymphonyElixir.Foo`), or as a member of
+a multi-alias (`alias SymphonyElixir.{Bar, Foo}`). A longer name that starts with it
+(`SymphonyElixir.Foo.Helper`, `SymphonyElixir.FooBar`) does not name it, and neither does the head
+of a multi-alias: `alias SymphonyElixir.{Bar, Foo}` names `SymphonyElixir.Bar` and
+`SymphonyElixir.Foo`, not `SymphonyElixir`. The source is read as text, so a name in a string or
+a comment counts. `mix.exs`'s `cover_changed` `covering_tests` lists, for a `lib/` file, the test
+files that cover its modules without naming them; they run whenever that file changes.
+
+That one run is both the test run and the coverage run, so no `mix test` of the changed test files
+goes before it (the run's `Tests and coverage` step is `mix cover.changed $SYMPHONY_CHANGED_TEST_FILES`):
+
+- The test files run in several `mix test` processes at once, spread by how long each took
+  (`test/support/test_weights.tsv`, heaviest first onto the lightest part, as `scripts/test-parts.sh`
+  does). A part runs its files one after the other, so the run ends no sooner than its heaviest
+  file: the number of parts is the tests' total time over half the heaviest file's, so the other
+  parts end before it, and over 5 s when no file takes 10 s (a part pays about 3 s for its own
+  start), at most 8 and the number of cores. `--parts N` sets it. With several parts, each runs 2
+  tests at a time (`TEST_MAX_CASES`).
+- Each part cover-compiles only the modules under check, not the whole app (about 8 s a process),
+  and exports their coverage (`cover/cover_changed_<part>.coverdata`); the report reads all the
+  parts' exports together. `mix.exs` picks that coverage tool
+  (`SymphonyElixir.ChangedCoverage.Runner`) for a process that has `SYMPHONY_COVER_MODULES` set;
+  every other `mix test --cover` uses Mix's own.
+- The tests that failed in the last run (`_build/test/cover_changed/failed.txt`) run first, alone
+  and without coverage. While one still fails the run stops there.
+- A test that fails beside the others runs once more, alone. One that passes then is named as
+  unsteady and does not fail the run, and its coverage counts; one that fails twice does, and runs
+  first next time. A part that stopped at 10 failures, in which a `setup_all` failed, or that
+  never ran its tests, left tests unrun: no test is run again, its failures are printed and the
+  run fails naming the part, as `scripts/test-parts.sh` does.
+- It prints the failures as ExUnit printed them, one line of counts, then each module's coverage.
+  Each process's whole output is in `_build/test/cover_changed/<part>.log`.
+- With no module to check (a change to test files only, or to ignored modules), the changed test
+  files and the tests of the changed `lib/` files still run, without coverage.
+- `--all` runs every test file of the suite (`test/**/*_test.exs`, the files `scripts/test-parts.sh`
+  runs) in place of the ones picked for the change, in 8 parts (at most the number of cores;
+  `--parts N` sets it), and reads the changed modules' coverage from that one pass. Everything
+  else is the same: last time's failures first, a failed test once more alone, the parts that
+  left tests unrun. It takes what the script takes (only the modules under check are
+  cover-compiled), so a run that needs the whole suite uses it in place of `mix cover.changed`
+  followed by the script. With no module to check it runs every test without coverage.
 
 CI's `coverage report` job merges the four test partitions' coverage with `mix coverage.report`.
 It prints every module below 100% with its file and uncovered line numbers, and annotates the

@@ -223,6 +223,13 @@ private struct StepRow: View {
             ) {
                 StepHeaderLabel(step: step)
             }
+            // A walk that judged several walkthrough steps in one session: one line per step, with its own status,
+            // folded or not.
+            if let results = step.answer?.results, !results.isEmpty {
+                CheckResultRows(results: results)
+                    .padding(.leading, Self.linesLeading)
+                    .padding(.vertical, DesignTokens.Space.s1)
+            }
             // The screenshots the run recorded in this step, folded or not.
             if !step.screenshots.isEmpty {
                 ScreenshotRow(shots: step.screenshots)
@@ -317,6 +324,58 @@ private struct StepHeaderLabel: View {
     static let stateColumn: CGFloat = 96
     /// The duration's column (`.sl-dur`: at least 52 px, right-aligned).
     static let durationColumn: CGFloat = 52
+}
+
+/// The walkthrough steps a grouped walk judged, one line each in the step row's style: the check's mark, "Step 2" with
+/// what it saw after it, and its own state in the state column, so a failed check stands apart from those that passed.
+struct CheckResultRows: View {
+    let results: [StepAnswer.CheckResult]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+            ForEach(Array(results.enumerated()), id: \.offset) { _, check in
+                CheckResultRow(check: check)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Self.accessibilityLabel)
+    }
+
+    static let accessibilityLabel = "Checks of the step"
+}
+
+private struct CheckResultRow: View {
+    let check: StepAnswer.CheckResult
+
+    var body: some View {
+        HStack(alignment: .center, spacing: DesignTokens.Space.s2) {
+            TimelineMark(symbol: check.state.markSymbol, tint: check.state.status.tint, fill: check.state.status.badgeFill, kind: .step)
+            HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
+                Text(check.title)
+                    .font(DesignTokens.TypeStyle.body.font.weight(.medium))
+                    .lineLimit(1)
+                    .layoutPriority(1)
+                if let actual = check.result.actual {
+                    Text(actual)
+                        .font(DesignTokens.TypeStyle.secondary.font)
+                        .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Text(check.word)
+                .font(DesignTokens.TypeStyle.secondary.font.weight(.medium))
+                .foregroundStyle(check.state == .done ? DesignTokens.TextColor.secondary.color : check.state.status.text)
+                .lineLimit(1)
+                .fixedSize()
+                .frame(minWidth: StepHeaderLabel.stateColumn, alignment: .trailing)
+            // The step's duration column, empty: a check has no time of its own.
+            Color.clear.frame(width: StepHeaderLabel.durationColumn, height: 1)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(check.accessibilityLabel)
+    }
 }
 
 /// A step's mark (`.sl-mark`): its state's glyph in a 20 pt circle of its tint, or the live dot while it works.

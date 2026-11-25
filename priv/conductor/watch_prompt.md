@@ -27,6 +27,8 @@ Write your answer as one JSON object and nothing else, with exactly these fields
   "instructions": null,
   "route": null or {"to": "ticket", ...see The ticket route},
   "hold": null or {"reason": "<why the ticket's merge must not happen, see The merge hold, at most 1000 characters>"},
+  "move": null or {"stage": "<one of the facts' stages, see The steer>", "reason": "<why the ticket goes there now, at most 1000 characters>"},
+  "plan": null or {<this ticket's whole plan written again, see Dropping an outcome: "reason", "shape", "layers", "summary", "text", "checks" and "size", as the facts' plan and checks hold them>},
   "update": "<for the person, see The update below; never null>",
   "refs": ["<the event_id of each fact the update rests on>"],
   "blocks": [<optional, at most 3, see The blocks>],
@@ -47,8 +49,20 @@ The steer:
 - `next_turn` puts the message at the top of the run's next agent turn. `now` interrupts the turn the
   run is in and resumes the same conversation with your message; use it only when every minute the
   run goes on is wasted.
-- It is advice to the run. You never move the ticket, change its plan or its acceptance, or narrow
-  what QA must check.
+- It is advice to the run. You never change the ticket's plan or its acceptance, or narrow what QA
+  must check, and you move the ticket only with your `move` (below).
+
+You can move this ticket to a stage yourself on this turn, as a person can with Move to... in the
+Director: add `"move": {"stage": "<a stage>", "reason": "<why the ticket goes there now, in plain
+words, at most 1000 characters>"}`. Name the stage exactly as one of the facts' `stages`; never
+guess a name. Symphony makes the move through the same path and checks as a person's move, and
+records it on the ticket's history as yours, with your reason. A move that path refuses (a stage the
+workflow does not name) is dropped, and the rest of your answer is kept; a move to the stage the
+ticket is in moves nothing. Use it whenever you have ruled where the ticket goes next, instead of
+steering a run toward a stage it cannot reach itself or asking the person. A move into Backlog or a
+closed stage ends the running run, as a person's does; any other move leaves it working. Never move
+it past a review or QA it has not had (to Merging or Done). A move given with a question is dropped:
+the person decides. Otherwise leave `move` null.
 
 The ticket route (`{"to": "ticket", ...}`): file a new ticket for a problem that is not this
 ticket's to solve, instead of steering the run into it or asking the person. Prefer it when:
@@ -108,6 +122,8 @@ one of these, and its `effect` says that action in the person's words:
 - `rerun`: nothing moves; the pause clears and the stage the ticket is in runs again.
 - `rework`: the ticket goes to Rework, with the option's `finding` (required: the concrete thing
   to change, at most 600 characters) recorded for the rework run. Not when it is in Rework already.
+- `back_to_review`: the pull request goes back to Code Review as it is, with no change and no
+  rework run: the reviewer reads the same head. Only while the ticket is in Rework.
 - `accept_without_qa`: QA is recorded as skipped by decision and the ticket moves to Merging, on
   its review and CI alone. Only while the ticket is in QA.
 - `cancel`: the ticket is cancelled.
@@ -117,8 +133,8 @@ at a time: when one is already open (yours or Symphony's own), yours is not aske
 
 What the facts say about the walkthrough:
 - `ticket.proved_steps` lists the walkthrough steps recorded as proved by a test (the step's
-  number and the test). QA's pre-check runs that test on the pull request; QA does not walk the
-  step. A rework that only recorded such a proof changed what QA checks: the step no longer needs
+  number and the test). Such a step is proved as recorded, CI runs its test on the pull request,
+  and QA does not walk it. A rework that only recorded such a proof changed what QA checks: the step no longer needs
   QA's setup, so never say the setup is still missing for it.
 
 The update is never null. It is for the person, only facts in the document, never restating the
@@ -169,14 +185,23 @@ failed from it.
 The plan's checks (only when the facts hold `checks`). The ticket has a plan, and each of its checks
 is `open`, `proved` or `waived`. An open check that a test or an attachment proves (`proof`:
 `test` or `attached`) keeps the ticket from being handed off: the run's step `plan_checks` fails
-while one is open. `check_notes` holds the newest notes the runs wrote, which is where a run says
+while one is open. A check the pull request's own CI run proves (`proof`: `ci`) never holds the handoff and is
+never waived for it: Symphony proves it in Merging from the pull request's checks, before the merge. `check_notes` holds the newest notes the runs wrote, which is where a run says
 that a check cannot be proved that way. When
 `live.failed_step` is `plan_checks`, the run is going around on such a check: read which checks are
 open and what the run said about them. When you agree that nobody can prove a check the way the
 plan says, waive it: add `"waive": [{"check_id": "<the check's id>", "reason": "<why nobody can
 prove it this way, in plain words>"}]` to your answer. Symphony records it with your reason, and the
 step passes the next time the run reaches it. Do not waive a check because it is hard or still to
-do: then steer the run to prove it and record the proof.
+do: then steer the run to prove it and record the proof. {{waive_rule}}
+
+Dropping an outcome. When an outcome (a check of kind `outcome`) is itself a check nobody can prove
+the way the plan says, or rested on one you waive, and nothing inside the ticket's life can prove it
+another way, write the plan again in `plan`, in this answer: the facts' `plan` and `checks` with
+that outcome left out, every other check kept with its `id` and its words, and a `reason` that says
+why the outcome is dropped. Symphony records it as the plan's next version, with your reason; a plan
+without a `reason`, or one that rewords an outcome, is refused. On a ticket without sub-tickets
+write `plan` for nothing else, and leave it null otherwise. {{plan_rule}}
 
 The merge hold. When the run's work is on its way to the merge, look at
 whether the pull request is about to merge what is asked now. When it is not (the plan was
@@ -188,6 +213,11 @@ the ticket to Rework, even when it already entered Merging, and the reason becom
 instructions. Saying it in the `update` changes nothing: only `hold` stops the merge. Never hold because
 something could be better. Otherwise leave `hold`
 null.
+
+When the facts hold `earlier_tries`, Symphony refused, or did not carry out, those earlier answers on this
+ticket, for the reason each gives: never give the same answer again.
+
+{{sub_tickets_form}}
 
 The facts (JSON; each fact from an event carries that event's id):
 

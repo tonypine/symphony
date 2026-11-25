@@ -27,9 +27,9 @@ defmodule SymphonyElixir.PrWatch.Repo do
   A tick reads each watched PR once (`SymphonyElixir.PrWatch.Fetch.read/2`) and, when two or more
   watched PRs are open, or one conflicts or waits on its competitors, the repository's open PRs and
   their files once, for the landing order: `ahead` is the PR `SymphonyElixir.LandingOrder.waits/2`
-  makes the ticket wait for (none for a forced ticket), and `competing` every open PR that shares a
+  makes the ticket wait for, and `competing` every open PR that shares a
   file with it (`SymphonyElixir.PrWatch.Competitors`). Neither names a PR whose wait would close a
-  cycle of blocked-by links, or one a person released the ticket from. The checks a base branch
+  cycle of stored dependencies and waits, or one a person released the ticket from. The checks a base branch
   requires, and whether it has workflow files, are kept 10 minutes.
 
   A ticket waiting on its competitors (landing reasons on its pause) has its wait judged before
@@ -37,6 +37,16 @@ defmodule SymphonyElixir.PrWatch.Repo do
   decide on the conflict. A ticket that leaves the watched set ends its wait. A ticket an idle run
   held in its phase stays watched, and a read that shows a new head or checks that reported lifts
   the hold (`SymphonyElixir.IdlePark.settle/3`).
+
+  The watcher acts only for a ticket that holds a slot (`SymphonyElixir.Dispatch.Slots.held?/1`,
+  read from its record). A ticket without one has its PR read, its facts, decision and CI label
+  written as for any other, and nothing done: no upkeep (update-branch, a cancelled run's rerun), no
+  rerun, no move to CI Fix or back from it, no fix ticket, no question, no wait on its competitors,
+  no landing step and no QA build, and no hold an idle or stalled run set is lifted. The decision
+  then reads as a wait for a slot naming the rule it holds back (`args.withheld`), which the
+  orchestrator ends by giving the ticket a slot and asking for a read of it at once. A merge or a
+  close by a person still applies (R2, R8), and so does a run's dispatch outside QA, which takes a
+  slot as it starts.
 
   Before deciding, the read is completed with what Symphony knows: the attempts
   (`SymphonyElixir.PrWatch.Attempts`), a rerun whose checks haven't reported yet (the head reads as
@@ -126,11 +136,11 @@ defmodule SymphonyElixir.PrWatch.Repo do
     Tracker
   }
 
-  alias SymphonyElixir.Dispatch.Candidates
+  alias SymphonyElixir.Dispatch.{Candidates, Slots}
   alias SymphonyElixir.GitHub.{PullRequest, RelaySupervisor}
   alias SymphonyElixir.Linear.{Client, Issue}
   alias SymphonyElixir.PrDecision.{Action, Apply, Facts}
-  alias SymphonyElixir.PrWatch.{Attempts, Competitors, Fetch, Health, Ingest, Release, SilentWait, StalledRun}
+  alias SymphonyElixir.PrWatch.{Attempts, CiProof, Competitors, Fetch, Health, Ingest, Release, SilentWait, StalledRun}
   alias SymphonyElixir.Situation.Recorder, as: SituationRecorder
   alias SymphonyElixirWeb.ObservabilityPubSub
 
@@ -151,6 +161,9 @@ defmodule SymphonyElixir.PrWatch.Repo do
   # and one GitHub hasn't computed yet is read again, up to 5 times.
   @reread_gap_ms 1_000
   @max_rereads 5
+  # The flow actions applied for a ticket without a slot (`withhold/3`): a wait, a run's dispatch,
+  # and the close-out of a merged PR.
+  @free_kinds [:wait, :dispatch, :land_agent, :close_ticket]
   # The record's fields a decision reads: a change of one re-decides the ticket.
   @decided_fields [:phase, :blockers, :pause]
 
@@ -164,13 +177,14 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
   @doc """
   Starts the watcher of `opts[:repo_key]`. Other `opts`, for tests: `:tracker`, `:fetch`,
-  `:github`, `:run_store`, `:self_heal`, `:fixer`, `:linker`, `:git` and `:settings` (the modules
+  `:github`, `:run_store`, `:self_heal`, `:fixer`, `:git` and `:settings` (the modules
   and settings it reads and acts through), `:now` (a clock function), `:timer`
   (`fn message, delay_ms -> ref`, in place of `Process.send_after/3` for the confirm reads),
   `:interval_ms`, `:relay_status` (`fn repo_key -> relay status or nil`, in place of
   `SymphonyElixir.GitHub.RelaySupervisor.status/2`), `app_release: true` to read the app repository's newest release on each timed
-  tick, `auto: false` to tick only on `poll/2`, and `follow_records: false` to re-decide nothing on a
-  record's change.
+  tick, `auto: false` to tick only on `poll/2`, `follow_records: false` to re-decide nothing on a
+  record's change, and `:holds_slot` (`fn record -> boolean`, in place of
+  `SymphonyElixir.Dispatch.Slots.held?/1`).
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -261,7 +275,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   end
 
   def handle_call({:release, issue_id}, _from, state) do
-    {:reply, Competitors.release(state.repo_key, issue_id, Keyword.take(state.opts, [:run_store, :linker])), state}
+    {:reply, Competitors.release(state.repo_key, issue_id, Keyword.take(state.opts, [:run_store])), state}
   end
 
   @impl true
@@ -665,6 +679,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
           waiting: Competitors.waiting(record),
           landing_wait: nil,
           restart_conflicts: false,
+          slot: holds_slot?(state, record),
           ticket: %{
             phase: phase,
             origin: origin(record, settings),
@@ -814,7 +829,6 @@ defmodule SymphonyElixir.PrWatch.Repo do
           rank: LandingOrder.rank(landing_state(entry), settings),
           conflicting: match?({:ok, %{mergeable: :dirty}}, Map.get(reads, entry.issue.id)),
           held: entry.ticket.hold != :none,
-          forced: Issue.forced?(entry.issue, settings),
           behind: Competitors.behind(entry.links)
         })
       end
@@ -855,7 +869,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   end
 
   # What the tick knows of the race, for the competitors: the open PRs, the ones the landing order
-  # ranked by number, each watched ticket's blockers (its Linear blocked-by links and the waits it
+  # ranked by number, each watched ticket's blockers (its stored dependencies and the waits it
   # recorded), the tickets whose PR was read merged, and the clock.
   defp race(watched, reads, pulls, members, now) do
     %{
@@ -868,15 +882,18 @@ defmodule SymphonyElixir.PrWatch.Repo do
   end
 
   defp blocker_ids(entry) do
-    linear = for %{id: id} <- List.wrap(entry.issue.blocked_by), is_binary(id), do: id
-    Enum.uniq(linear ++ for(%{issue_id: id, released: false} <- entry.links, is_binary(id), do: id))
+    stored = for %{issue_id: id} <- stored_dependencies(entry.record), is_binary(id), do: id
+    Enum.uniq(stored ++ for(%{issue_id: id, released: false} <- entry.links, is_binary(id), do: id))
   end
+
+  defp stored_dependencies(%{} = record), do: TicketState.normalize(record).depends_on
+  defp stored_dependencies(_record), do: []
 
   # A ticket waiting on its competitors has its wait judged on the open PRs just read; with none read,
   # the wait stays as it was.
   defp settle(entry, {:ok, _pulls}, {landing, _ahead}, race, state, settings) do
     if entry.links != [] or entry.waiting != nil do
-      opts = [repo_key: state.repo_key, terminal_states: settings.tracker.terminal_states, store: store(state)] ++ Keyword.take(state.opts, [:tracker, :linker])
+      opts = [repo_key: state.repo_key, terminal_states: settings.tracker.terminal_states, store: store(state)] ++ Keyword.take(state.opts, [:tracker])
       settled = Competitors.settle(entry.issue, entry.waiting, entry.links, Map.put(race, :files, landing && Map.get(landing, :files)), opts)
       cleared? = entry.waiting != nil and is_nil(settled.wait)
       hold = if cleared? and entry.ticket.hold == :blocked, do: hold(entry.record, &(not Competitors.landing_reason?(&1))), else: entry.ticket.hold
@@ -893,12 +910,11 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
   # The ticket's `ahead` and `competing`, without a PR whose wait closes a cycle or that a person
   # released it from. With the open PRs unread, `competing` stays as it was.
-  defp waits(entry, read, {landing, ahead}, pulls, race, settings) do
+  defp waits(entry, read, {landing, ahead}, pulls, race) do
     own = %{
       issue_id: entry.issue.id,
       pr_number: pr_number(read),
       files: (landing && Map.get(landing, :files)) || [],
-      forced: Issue.forced?(entry.issue, settings),
       links: entry.links
     }
 
@@ -983,7 +999,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
     {_blockers, watches, health} =
       Enum.reduce(watched, {race.blockers, [], state.health}, fn entry, {blockers, watches, health} ->
         read = Map.get(reads, entry.issue.id)
-        waits = waits(entry, read, Map.get(landings, entry.issue.id), pulls, %{race | blockers: blockers}, settings)
+        waits = waits(entry, read, Map.get(landings, entry.issue.id), pulls, %{race | blockers: blockers})
         watch = write(entry, read, waits, seen, state, settings)
         health = observe(health, read, {entry, previous_watch(entry), watch}, seen, state, settings)
         {add_waits(watch, blockers, entry.issue.id), [watch | watches], health}
@@ -1046,15 +1062,23 @@ defmodule SymphonyElixir.PrWatch.Repo do
     if watch do
       watch = silence(watch, entry, previous, now, state, settings)
       store(state).put_ticket_pr_watch(state.repo_key, entry.issue.id, entry.issue.identifier, watch) |> log_write(entry)
-      # A hold an idle run set lifts on this read; the pause's change re-decides the ticket at once.
-      _ = IdlePark.settle({:ticket, state.repo_key, entry.issue.id}, entry.record, watch)
-      # So does a pause a run that never started set, once the PR has a new head.
-      _ = StalledRun.settle({:ticket, state.repo_key, entry.issue.id}, entry.record, watch)
+      settle_holds(entry, watch, state)
       announce_dispatch(watch, previous, entry, state)
       announce_situation(watch, previous, entry)
       request_qa_build(watch, previous, entry, state)
       watch
     end
+  end
+
+  # A hold an idle run set lifts on this read; the pause's change re-decides the ticket at once. So
+  # does a pause a run that never started set, once the PR has a new head. A ticket without a slot
+  # keeps every hold: the read records, and lifts nothing.
+  defp settle_holds(%{slot: false}, _watch, _state), do: :ok
+
+  defp settle_holds(entry, watch, state) do
+    _ = IdlePark.settle({:ticket, state.repo_key, entry.issue.id}, entry.record, watch)
+    _ = StalledRun.settle({:ticket, state.repo_key, entry.issue.id}, entry.record, watch)
+    :ok
   end
 
   # What the ticket read serves of the PR, stamped with when it was read. The record keeps it past
@@ -1093,15 +1117,19 @@ defmodule SymphonyElixir.PrWatch.Repo do
   # cycle at once rather than at its next tick. So is one that still stands with no run while the
   # silent-wait detector finds it quiet: each poll interval that finds it so starts the run (an extra
   # tick inside one adds nothing), and once it is listed the dispatch pass pauses a ticket no run can
-  # start (`SymphonyElixir.PrWatch.StalledRun`).
+  # start (`SymphonyElixir.PrWatch.StalledRun`). A new wait for a slot is announced too, so a free
+  # slot goes to that ticket on the cycle it runs.
   defp announce_dispatch(%{decision: %{kind: kind} = decision} = watch, previous, entry, state) do
     new_or_quieter? = not same_decision?(decision, previous && previous.decision) or quieter?(watch, previous)
 
-    if kind in StalledRun.run_kinds() and new_or_quieter?,
+    if (kind in StalledRun.run_kinds() or withheld?(decision)) and new_or_quieter?,
       do: ObservabilityPubSub.broadcast_ticket_record_changed(state.repo_key, entry.issue.id, [:pr_watch])
   end
 
   defp announce_dispatch(_watch, _previous, _entry, _state), do: :ok
+
+  defp withheld?(%{args: %{withheld: _kind}}), do: true
+  defp withheld?(_decision), do: false
 
   # The ticket went quiet on this tick, or stayed quiet into another poll interval.
   defp quieter?(%{silent: %{ticks: ticks}}, %{silent: %{ticks: ticks}}), do: false
@@ -1112,8 +1140,9 @@ defmodule SymphonyElixir.PrWatch.Repo do
   # ticket comes back to one of them with (a CI Fix return), is built for QA at once
   # (`SymphonyElixir.QaBuild`), so its build runs beside the review and CI, when its QA pass selects
   # the app: the builder reads that from the head with the ticket's issue. Asking again for a head
-  # already asked for changes nothing.
-  defp request_qa_build(%{head_sha: head}, previous, %{phase: phase, issue: %{identifier: identifier} = issue}, state)
+  # already asked for changes nothing. A ticket without a slot asks for none: the orchestrator asks
+  # for its build once it holds one (`QaBuildHold`).
+  defp request_qa_build(%{head_sha: head}, previous, %{phase: phase, slot: true, issue: %{identifier: identifier} = issue}, state)
        when is_binary(head) and is_binary(identifier) and phase in [:code_review, :qa] do
     new_head? = carried(previous, :head_sha, nil) != head
 
@@ -1276,8 +1305,9 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
     head = read[:head_sha]
     ticket = Map.put(ticket, :merge_guard, merge_guard(entry))
+    ticket = Map.put(ticket, :ci_proof, ci_proof(ticket.merge_guard, entry, read))
     # An approval carries to a new head only while the plan still stands behind the code it approved.
-    carried? = ticket.merge_guard == :clear and approval_carried?(entry, ticket, prior, head, state)
+    carried? = ticket.merge_guard in [:clear, :ci_checks] and approval_carried?(entry, ticket, prior, head, state)
     ticket = Map.merge(ticket, %{review_comments: review_comments(entry, read, settings, now), review: review(entry, head, carried?)})
     applied = if new_stay?, do: [], else: Enum.filter(previous.applied, &(&1.head_sha == head))
     {read, applied} = base_answer(read, applied, entry)
@@ -1303,6 +1333,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
     case decide(facts, entry) do
       {:ok, action} ->
+        action = withhold(action, entry, facts)
         read = with_protected_entries(read, action, entry, state)
         result = Apply.apply(action, Map.merge(ctx, %{read: read, attempts: attempts, applied: applied}))
         attempts = result.attempts
@@ -1342,6 +1373,8 @@ defmodule SymphonyElixir.PrWatch.Repo do
   # the next and into the flow decision's. Returns what was applied, as `actions` keeps it, and the
   # last action GitHub refused on this read, which the record keeps until a read has none
   # (`upkeep_failure`): the silent-wait detector lists a ticket whose upkeep keeps failing.
+  defp upkeep(_ctx, attempts, applied, %{slot: false}, _state), do: {[], nil, attempts, applied}
+
   defp upkeep(ctx, attempts, applied, entry, state) do
     ctx.facts
     |> PrDecision.upkeep()
@@ -1369,6 +1402,61 @@ defmodule SymphonyElixir.PrWatch.Repo do
         "outcome=#{outcome_name(outcome)} reason=#{inspect(action.reason)}"
     )
   end
+
+  # A ticket without a slot (`SymphonyElixir.Dispatch.Slots.held?/1`) has its PR read and recorded,
+  # and nothing done on it: a flow action that would act on the PR or the ticket, and the upkeep the
+  # facts call for, are recorded as a wait for a slot instead, which names the rule and what it
+  # would do (`args.withheld`). What a person did on GitHub still applies: a merge closes the ticket
+  # out (R2) and a close sends it to Rework (R8). A wait applies as it is, and a run's dispatch is the
+  # orchestrator's, which starts it only on a slot; but in QA the run needs the app built for its
+  # head first, a machine step, so it waits for the slot too. A hold's wait (R4) stays the decision:
+  # the hold is what the ticket waits on. The orchestrator gives a ticket whose decision waits for a
+  # slot one when one is free, and has the watcher read it at once, so it catches up then.
+  defp withhold(%Action{} = action, %{slot: false} = entry, %Facts{} = facts) do
+    withheld =
+      cond do
+        needs_slot?(action, facts) -> wait_for_slot(action)
+        action.kind == :wait and facts.hold == :none -> upkeep_wait(action, PrDecision.upkeep(facts))
+        true -> action
+      end
+
+    log_withheld(withheld, entry)
+    withheld
+  end
+
+  defp withhold(action, _entry, _facts), do: action
+
+  # A wait with upkeep due waits for the slot the upkeep needs; with none due, it is the decision.
+  defp upkeep_wait(action, []), do: action
+  defp upkeep_wait(_action, [upkeep | _rest]), do: wait_for_slot(upkeep)
+
+  defp needs_slot?(%Action{rule: "R8"}, _facts), do: false
+  defp needs_slot?(%Action{kind: :dispatch}, %Facts{phase: :qa}), do: true
+  defp needs_slot?(%Action{kind: kind}, _facts), do: kind not in @free_kinds
+
+  defp wait_for_slot(%Action{} = action) do
+    what =
+      case Action.next_step(action.kind) do
+        {_owner, step} -> step
+        nil -> action.reason
+      end
+
+    Action.new!(action.rule, :wait,
+      reason: "Waits for a slot before #{action.rule} acts (#{what}): #{action.reason}",
+      owner: :symphony,
+      clears_when: "the ticket takes a slot",
+      args: %{withheld: action.kind}
+    )
+  end
+
+  defp log_withheld(%Action{args: %{withheld: kind}} = action, entry) do
+    Logger.debug(
+      "pr_watch.withheld issue_id=#{entry.issue.id} issue_identifier=#{entry.issue.identifier} " <>
+        "rule=#{action.rule} action=#{kind}: the ticket holds no slot"
+    )
+  end
+
+  defp log_withheld(_action, _entry), do: :ok
 
   # The wait on competing PRs that stepped behind them (R15) is over: the conflict gets its fix runs
   # again.
@@ -1431,16 +1519,24 @@ defmodule SymphonyElixir.PrWatch.Repo do
   # What the ticket's plan says of the merge (`Facts`' `merge_guard`), read where the merge is next or
   # a step carries the ticket on to it: the code is behind the plan (a version written after the newest
   # coding run started) or the Conductor held it, else whether a check the next step owes is open. In
-  # Merging, and in CI Fix on the way back to it, that is every check but one seen only after the merge;
-  # before it, a check a test or an attachment proves, as at the handoff (QA proves its own).
+  # Merging, and in CI Fix on the way back to it, that is every open check; before it, a check a test or
+  # an attachment proves, as at the handoff (QA proves its own). When every open one is a check the PR's
+  # own CI run proves, the merge waits on that proof (`:ci_checks`) instead of going back to Rework.
   defp merge_guard(%{phase: phase, issue: %{id: issue_id}, ticket: ticket}) when phase in @guarded_phases do
     case TicketJourney.outdated(issue_id) do
-      nil -> if owed(issue_id, phase, ticket.origin) == [], do: :clear, else: :open_checks
+      nil -> owed_guard(owed(issue_id, phase, ticket.origin))
       outdated -> outdated
     end
   end
 
   defp merge_guard(_entry), do: :clear
+
+  defp owed_guard([]), do: :clear
+  defp owed_guard(checks), do: if(Enum.all?(checks, &(&1.proof == "ci")), do: :ci_checks, else: :open_checks)
+
+  # Where the proof of the plan's CI checks stands on the head, read only while they are all that holds the merge.
+  defp ci_proof(:ci_checks, %{issue: %{id: issue_id}}, read), do: CiProof.fact(issue_id, read)
+  defp ci_proof(_guard, _entry, _read), do: :none
 
   defp owed(issue_id, :merging, _origin), do: TicketJourney.owed_before_merge(issue_id)
   defp owed(issue_id, :ci_fix, :merging), do: TicketJourney.owed_before_merge(issue_id)
@@ -1742,7 +1838,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   defp outcome_error({:error, reason}), do: inspect(reason)
   defp outcome_error(_outcome), do: nil
 
-  defp apply_opts(state), do: Keyword.take(state.opts, [:tracker, :github, :run_store, :self_heal, :fixer, :gh_runner, :symphony_repo_key, :terminal_states, :linker])
+  defp apply_opts(state), do: Keyword.take(state.opts, [:tracker, :github, :run_store, :self_heal, :fixer, :gh_runner, :symphony_repo_key, :terminal_states])
 
   # What the ticket's record held.
   defp previous_watch(%{record: %{pr_watch: %{} = watch}}), do: watch
@@ -1752,12 +1848,15 @@ defmodule SymphonyElixir.PrWatch.Repo do
     watched_ids = MapSet.new(watched, & &1.issue.id)
 
     for {issue_id, %{pr_watch: %{}} = record} <- records, not MapSet.member?(watched_ids, issue_id) do
-      Competitors.leave(state.repo_key, record, [store: store(state)] ++ Keyword.take(state.opts, [:tracker, :linker]))
+      Competitors.leave(state.repo_key, record, [store: store(state)] ++ Keyword.take(state.opts, [:tracker]))
       result = store(state).put_ticket_pr_watch(state.repo_key, issue_id, record.issue_identifier, nil)
       log_write(result, %{issue: %{id: issue_id, identifier: record.issue_identifier}})
       SituationRecorder.ticket_changed(issue_id)
     end
   end
+
+  # Whether the ticket holds a slot, from its record (`Slots.held?/1`); `opts[:holds_slot]` in tests.
+  defp holds_slot?(state, record), do: Keyword.get(state.opts, :holds_slot, &Slots.held?/1).(record)
 
   defp log_write(:ok, _entry), do: :ok
 

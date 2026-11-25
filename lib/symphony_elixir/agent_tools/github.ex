@@ -15,6 +15,7 @@ defmodule SymphonyElixir.AgentTools.GitHub do
   alias SymphonyElixir.GitHub.{CiLog, CommentMarker, PullRequest}
   alias SymphonyElixir.Handoff
   alias SymphonyElixir.Repo.Fetcher
+  alias SymphonyElixir.TicketJourney
   alias SymphonyElixir.TicketPullRequest
   alias SymphonyElixir.Workspace
 
@@ -182,7 +183,9 @@ defmodule SymphonyElixir.AgentTools.GitHub do
   Squash-merges the current branch's pull request at the head commit whose checks were read.
 
   A human approves the merge by moving the Linear issue to `Merging`, so the merge is refused in
-  any other state. It is also refused while a check is failing or pending; when the base branch
+  any other state, and while a check of the ticket's plan the merge waits on is open
+  (`SymphonyElixir.TicketJourney.owed_before_merge/1`): `{:plan_checks_open, ids}`. It is also
+  refused while a check is failing or pending; when the base branch
   requires checks, only those must have passed (see `CiPoller.landing_action/1`). A pull request
   with no checks at all is mergeable. Merging an already merged pull request succeeds without a
   second merge.
@@ -190,6 +193,7 @@ defmodule SymphonyElixir.AgentTools.GitHub do
   @spec merge_pull_request(context(), keyword()) :: {:ok, map()} | {:error, term()}
   def merge_pull_request(context, opts \\ []) do
     with :ok <- require_merging_state(context, opts),
+         :ok <- require_plan_checks(context),
          {:ok, pr} <- view_current_pull_request(context, opts),
          {:ok, pr_url} <- pull_request_url(pr) do
       case Map.get(pr, "state") do
@@ -292,6 +296,15 @@ defmodule SymphonyElixir.AgentTools.GitHub do
         @merging_state -> :ok
         state_name -> {:error, {:issue_not_in_merging_state, state_name}}
       end
+    end
+  end
+
+  # A pull request whose plan still has an open check does not merge: Symphony's PR watcher merges it
+  # once the check is proved (a check its own CI run proves is proved in Merging).
+  defp require_plan_checks(context) do
+    case TicketJourney.owed_before_merge(handoff_issue_id(context)) do
+      [] -> :ok
+      checks -> {:error, {:plan_checks_open, Enum.map(checks, & &1.id)}}
     end
   end
 

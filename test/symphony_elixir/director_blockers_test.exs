@@ -4,19 +4,9 @@ defmodule SymphonyElixir.DirectorBlockersTest do
   import ExUnit.CaptureLog
 
   alias SymphonyElixir.{DirectorBlockers, RunStore, TicketState}
+  alias SymphonyElixirWeb.ObservabilityPubSub
 
   @moduletag :tmp_dir
-
-  defmodule Linker do
-    @moduledoc false
-    def add_blocked_by(blocker, issue_id), do: reply({:add, blocker, issue_id})
-    def remove_blocked_by(blocker, issue_id), do: reply({:remove, blocker, issue_id})
-
-    defp reply(call) do
-      send(self(), {:linker, call})
-      Process.get(:linker_reply, :ok)
-    end
-  end
 
   setup %{tmp_dir: tmp_dir} do
     n = System.unique_integer([:positive])
@@ -29,15 +19,32 @@ defmodule SymphonyElixir.DirectorBlockersTest do
     done = put.("4", %{phase: "Done", title: "Old work"})
 
     opts = [
-      linker: Linker,
-      orchestrator: self(),
+      orchestrator: forwarding_orchestrator(),
       audit_log: [dir: tmp_dir],
       terminal_states: ["Done", "Canceled"],
-      active_states: ["Todo", "In Progress", "Rework"],
       records_repo: repo
     ]
 
     %{repo: repo, ticket: ticket, blocker: blocker, other: other, done: done, opts: opts}
+  end
+
+  # An orchestrator that hands the test every message it gets, and answers a queue change.
+  defp forwarding_orchestrator do
+    parent = self()
+    spawn_link(fn -> forward(parent) end)
+  end
+
+  defp forward(parent) do
+    receive do
+      {:"$gen_call", from, :queue_changed} ->
+        send(parent, :queue_changed)
+        GenServer.reply(from, :ok)
+
+      message ->
+        send(parent, message)
+    end
+
+    forward(parent)
   end
 
   defp put(repo, n, attrs) do
@@ -58,8 +65,12 @@ defmodule SymphonyElixir.DirectorBlockersTest do
 
   defp change(action, ticket, blocker, opts), do: DirectorBlockers.change(action, ticket.issue_identifier, blocker.issue_identifier, scoped(opts))
 
-  test "adds a blocker: Linear first, then the record, the pause, the event, the audit and a refresh at once", ctx do
+  defp dependencies(ticket), do: Enum.map(record(ticket).depends_on, &{&1.issue_id, &1.identifier, &1.kind})
+
+  test "the Director's add and remove store and remove a done dependency, with no Linear write", ctx do
     %{ticket: ticket, blocker: blocker, repo: repo} = ctx
+    :ok = ObservabilityPubSub.subscribe_ticket_records()
+    ticket_id = ticket.issue_id
 
     assert {:ok, payload} = change(:add, ticket, blocker, ctx.opts)
 
@@ -70,15 +81,12 @@ defmodule SymphonyElixir.DirectorBlockersTest do
              blockers: [%{issue_identifier: blocker.issue_identifier, title: "Fix the exporter", state: "In Progress"}]
            }
 
-    assert_received {:linker, {:add, blocker_id, ticket_id}}
-    assert {blocker_id, ticket_id} == {blocker.issue_id, ticket.issue_id}
-    assert_received {:"$gen_cast", {:request_refresh, ^repo, :now}}
-
-    assert [%{id: blocker_id, identifier: blocker_identifier, state: "In Progress"}] = record(ticket).blockers
-    assert {blocker_id, blocker_identifier} == {blocker.issue_id, blocker.issue_identifier}
-
-    assert [%{kind: :ticket, waits_on: %{identifier: waits_on}}] = TicketState.pause_reasons(record(ticket))
-    assert waits_on == blocker.issue_identifier
+    assert dependencies(ticket) == [{blocker.issue_id, blocker.issue_identifier, :done}]
+    # Nothing of Linear's: the record keeps no Linear blocker, and the pause stays as it was.
+    refute Map.has_key?(record(ticket), :blockers)
+    assert TicketState.pause_reasons(record(ticket)) == []
+    assert_receive {:"$gen_cast", {:request_refresh, ^repo, :now}}
+    assert_received {:ticket_record, ^repo, ^ticket_id, :changed, [:depends_on]}
 
     assert [%{type: "person.action", payload: %{action: "add_blocker", blocker: event_blocker}, actor: %{kind: :person, name: "the Director"}}] =
              actions(ticket)
@@ -88,34 +96,32 @@ defmodule SymphonyElixir.DirectorBlockersTest do
     {:ok, stream} = SymphonyElixir.AuditLog.query(dir: ctx.tmp_dir, event_type: "director_move")
     assert [%{"move" => "add_blocker", "blocker" => audit_blocker}] = Enum.to_list(stream)
     assert audit_blocker == blocker.issue_identifier
-  end
-
-  test "removes a blocker: the link goes from Linear and the record, and the ticket no longer waits for it", ctx do
-    %{ticket: ticket, blocker: blocker} = ctx
-    assert {:ok, _added} = change(:add, ticket, blocker, ctx.opts)
 
     assert {:ok, %{action: "remove", blockers: []}} = change(:remove, ticket, blocker, ctx.opts)
-
-    assert_received {:linker, {:remove, _blocker_id, _ticket_id}}
-    assert record(ticket).blockers == []
+    assert dependencies(ticket) == []
+    refute Map.has_key?(record(ticket), :blockers)
     assert TicketState.pause_reasons(record(ticket)) == []
-
     assert [%{payload: %{action: "add_blocker"}}, %{payload: %{action: "remove_blocker"}}] = actions(ticket)
   end
 
-  test "an added blocker outside an active phase leaves the pause alone", ctx do
+  test "a blocker Linear's links name, kept on a record an older build stored, is neither listed nor counted", ctx do
     %{ticket: ticket, blocker: blocker} = ctx
-    assert {:ok, _added} = change(:add, ticket, blocker, Keyword.put(ctx.opts, :active_states, ["Rework"]))
-    assert TicketState.pause_reasons(record(ticket)) == []
+    linked = fn by, state -> %{blockers: [%{id: by.issue_id, identifier: by.issue_identifier, state: state}]} end
+    :ok = RunStore.update_ticket_state(blocker.issue_id, linked.(ticket, "Todo"))
+    :ok = RunStore.update_ticket_state(ticket.issue_id, linked.(blocker, "In Progress"))
+
+    assert {:ok, %{blockers: []}} = DirectorBlockers.blockers(ticket.issue_identifier, scoped(ctx.opts))
+    assert {:error, {:conflict, _missing}} = change(:remove, ticket, blocker, ctx.opts)
+    assert {:ok, %{blockers: [_stored]}} = change(:add, ticket, blocker, ctx.opts)
   end
 
   test "refuses a ticket blocking itself", ctx do
     assert {:error, {:conflict, message}} = change(:add, ctx.ticket, ctx.ticket, ctx.opts)
     assert message == "#{ctx.ticket.issue_identifier} can't block itself."
-    refute_received {:linker, _call}
+    assert dependencies(ctx.ticket) == []
   end
 
-  test "refuses a link that would make a cycle, directly or through another ticket", ctx do
+  test "refuses a dependency that would make a cycle, directly or through another ticket", ctx do
     %{ticket: ticket, blocker: blocker, other: other} = ctx
     assert {:ok, _added} = change(:add, ticket, blocker, ctx.opts)
     assert {:ok, _added} = change(:add, blocker, other, ctx.opts)
@@ -126,14 +132,7 @@ defmodule SymphonyElixir.DirectorBlockersTest do
 
     assert {:error, {:conflict, through}} = change(:add, other, ticket, ctx.opts)
     assert through =~ "would make a cycle"
-  end
-
-  test "a blocker known by identifier only still closes a cycle", ctx do
-    %{ticket: ticket, blocker: blocker} = ctx
-    :ok = RunStore.update_ticket_state(blocker.issue_id, %{blockers: [ticket.issue_identifier]})
-
-    assert {:error, {:conflict, message}} = change(:add, ticket, blocker, ctx.opts)
-    assert message =~ "would make a cycle"
+    assert dependencies(other) == []
   end
 
   test "refuses a ticket Symphony doesn't track, on either side", ctx do
@@ -144,7 +143,7 @@ defmodule SymphonyElixir.DirectorBlockersTest do
     assert {:error, {:conflict, _message}} = DirectorBlockers.change(:remove, "ZZZ-404", "ZZZ-405")
   end
 
-  test "refuses a finished blocker, a link already there and one that isn't", ctx do
+  test "refuses a finished blocker, a dependency already there and one that isn't", ctx do
     %{ticket: ticket, blocker: blocker, done: done} = ctx
 
     assert {:error, {:conflict, finished}} = change(:add, ticket, done, ctx.opts)
@@ -159,23 +158,27 @@ defmodule SymphonyElixir.DirectorBlockersTest do
   end
 
   @tag :capture_log
-  test "a write Linear refuses changes nothing", ctx do
-    Process.put(:linker_reply, {:error, :issue_relation_failed})
-    assert {:error, {:linear, message}} = change(:add, ctx.ticket, ctx.blocker, ctx.opts)
-    assert message == "Linear didn't add the link #{ctx.blocker.issue_identifier} blocks #{ctx.ticket.issue_identifier}, so nothing changed. Try again in a moment."
-    assert record(ctx.ticket).blockers == []
-    assert RunStore.list_ticket_events(ctx.ticket.issue_id, []) == []
-  end
+  test "a write the store refuses changes nothing and says so", ctx do
+    %{ticket: ticket, blocker: blocker} = ctx
+    # The record the read gave is gone from the store by the time of the write.
+    opts = scoped(ctx.opts)
+    :ok = RunStore.delete_ticket_state(ticket.issue_id)
 
-  @tag :capture_log
-  test "a write refused for a missing Linear key says so in plain words", ctx do
-    assert {:ok, _added} = change(:add, ctx.ticket, ctx.blocker, ctx.opts)
+    assert {:error, {:store, message}} = DirectorBlockers.change(:add, ticket.issue_identifier, blocker.issue_identifier, opts)
+    assert message == "Symphony couldn't add #{blocker.issue_identifier} as a blocker of #{ticket.issue_identifier}, so nothing changed. Try again in a moment."
 
-    for reason <- [:missing_linear_api_token, {:linear_api_request, :missing_linear_api_token}] do
-      Process.put(:linker_reply, {:error, reason})
-      assert {:error, {:linear, message}} = change(:remove, ctx.ticket, ctx.blocker, ctx.opts)
-      assert message == "Symphony has no Linear API key, so it couldn't remove the link #{ctx.blocker.issue_identifier} blocks #{ctx.ticket.issue_identifier} in Linear."
-    end
+    ghost = %{
+      repo_key: ctx.repo,
+      issue_id: "#{ticket.issue_id}-ghost",
+      issue_identifier: "#{ticket.issue_identifier}9",
+      depends_on: [%{issue_id: blocker.issue_id, identifier: blocker.issue_identifier, kind: :done}]
+    }
+
+    records = [ghost | Keyword.fetch!(opts, :records)]
+
+    assert {:error, {:store, removed}} = DirectorBlockers.change(:remove, ghost.issue_identifier, blocker.issue_identifier, Keyword.put(opts, :records, records))
+    assert removed =~ "Symphony couldn't remove #{blocker.issue_identifier} as a blocker of #{ghost.issue_identifier}"
+    assert RunStore.list_ticket_events(ticket.issue_id, []) == []
   end
 
   test "names a ticket by id or by identifier in any case, and skips a removed record", ctx do
@@ -191,15 +194,6 @@ defmodule SymphonyElixir.DirectorBlockersTest do
     assert {:error, {:conflict, _untracked}} = DirectorBlockers.change(:add, ticket.issue_identifier, ctx.other.issue_identifier, scoped(ctx.opts))
   end
 
-  test "a record that can't be written still answers the change Linear took", ctx do
-    %{ticket: ticket, blocker: blocker} = ctx
-    opts = scoped(ctx.opts)
-    :ok = RunStore.delete_ticket_state(ticket.issue_id)
-
-    log = capture_log(fn -> assert {:ok, %{blockers: [_blocker]}} = DirectorBlockers.change(:add, ticket.issue_identifier, blocker.issue_identifier, opts) end)
-    assert log =~ "Failed to write the blockers of issue_id=#{ticket.issue_id}"
-  end
-
   test "logs an audit record it can't write and still makes the change", ctx do
     file = Path.join(ctx.tmp_dir, "file")
     File.write!(file, "")
@@ -209,12 +203,142 @@ defmodule SymphonyElixir.DirectorBlockersTest do
     assert log =~ "Failed to record director_move audit event: issue_id=#{ctx.ticket.issue_id}"
   end
 
+  describe "TP-1633: dependency/5, the dependency route's change with its kind" do
+    defp dependency(action, ticket, on, kind, opts),
+      do: DirectorBlockers.dependency(action, ticket.issue_identifier, on.issue_identifier, kind, scoped(opts))
+
+    test "adds a done or a released dependency, changes its kind, and removes it, each announced", ctx do
+      %{ticket: ticket, blocker: blocker, other: other, repo: repo} = ctx
+      :ok = ObservabilityPubSub.subscribe_ticket_records()
+      ticket_id = ticket.issue_id
+
+      assert {:ok, payload} = dependency(:add, ticket, blocker, :released, ctx.opts)
+
+      assert payload == %{
+               action: "add_dependency",
+               issue_identifier: ticket.issue_identifier,
+               on: blocker.issue_identifier,
+               kind: "released",
+               dependencies: [%{issue_identifier: blocker.issue_identifier, title: "Fix the exporter", state: "In Progress", kind: "released"}]
+             }
+
+      assert dependencies(ticket) == [{blocker.issue_id, blocker.issue_identifier, :released}]
+      assert_receive {:ticket_record, ^repo, ^ticket_id, :changed, [:depends_on]}
+      assert_receive {:"$gen_cast", {:request_refresh, ^repo, :now}}
+
+      # The same pair with the other kind changes its kind; with the same kind it is refused.
+      assert {:ok, %{kind: "done"}} = dependency(:add, ticket, blocker, :done, ctx.opts)
+      assert dependencies(ticket) == [{blocker.issue_id, blocker.issue_identifier, :done}]
+      assert {:error, {:conflict, twice}} = dependency(:add, ticket, blocker, :done, ctx.opts)
+      assert twice == "#{ticket.issue_identifier} already depends on #{blocker.issue_identifier} being done."
+
+      assert {:ok, %{action: "add_dependency"}} = dependency(:add, ticket, other, :done, ctx.opts)
+      assert {:ok, removed} = dependency(:remove, ticket, blocker, nil, ctx.opts)
+      assert %{action: "remove_dependency", kind: nil, dependencies: [%{issue_identifier: other_identifier, kind: "done"}]} = removed
+      assert other_identifier == other.issue_identifier
+      assert dependencies(ticket) == [{other.issue_id, other.issue_identifier, :done}]
+      # The kind change, the second add and the remove each reached the stream.
+      for _change <- 1..3, do: assert_receive({:ticket_record, ^repo, ^ticket_id, :changed, [:depends_on]})
+
+      assert [
+               %{payload: %{action: "add_dependency", blocker: on, kind: "released"}},
+               %{payload: %{action: "add_dependency", kind: "done"}},
+               %{payload: %{action: "add_dependency"}},
+               %{payload: %{action: "remove_dependency"} = remove_payload}
+             ] = actions(ticket)
+
+      assert on == blocker.issue_identifier
+      refute Map.has_key?(remove_payload, :kind)
+
+      {:ok, stream} = SymphonyElixir.AuditLog.query(dir: ctx.tmp_dir, event_type: "director_move")
+      assert ["add_dependency", "add_dependency", "add_dependency", "remove_dependency"] = Enum.map(stream, & &1["move"])
+    end
+
+    test "an add on a ticket that sits lower moves the depending ticket just below it, and the queue's stream hears of it", ctx do
+      %{ticket: ticket, blocker: blocker, other: other} = ctx
+      :ok = ObservabilityPubSub.subscribe_queue()
+      # The three were queued in the order they were stored: ticket, blocker, other.
+      assert order([ticket, blocker, other]) == [ticket.issue_id, blocker.issue_id, other.issue_id]
+
+      assert {:ok, _added} = dependency(:add, ticket, other, :done, ctx.opts)
+      assert order([ticket, blocker, other]) == [blocker.issue_id, other.issue_id, ticket.issue_id]
+      assert_receive :queue_changed
+      ticket_id = ticket.issue_id
+      assert_receive {:queue_notice, %{change: "order", issue_id: ^ticket_id, issue_identifier: identifier}}
+      assert identifier == ticket.issue_identifier
+
+      # On a ticket already above, nothing moves and the queue's stream hears nothing.
+      assert {:ok, _added} = dependency(:add, ticket, blocker, :released, ctx.opts)
+      assert order([ticket, blocker, other]) == [blocker.issue_id, other.issue_id, ticket.issue_id]
+      refute_receive :queue_changed, 50
+      # The queue's topic is shared with the tests running beside this one: hear only this ticket.
+      refute_received {:queue_notice, %{issue_id: ^ticket_id}}
+
+      # The blocker route's add moves the same way.
+      assert {:ok, _added} = change(:add, blocker, other, ctx.opts)
+      assert order([ticket, blocker, other]) == [other.issue_id, blocker.issue_id, ticket.issue_id]
+      assert_receive :queue_changed
+    end
+
+    test "two sub-tickets of one parent: the depending one moves just below the other among its siblings", ctx do
+      n = System.unique_integer([:positive])
+      parent = put(ctx.repo, "#{n}p", %{phase: "In Progress", issue_identifier: "BLK-#{n}0"})
+      [s1, s2, s3] = for i <- 1..3, do: put(ctx.repo, "#{n}s#{i}", %{phase: "Todo", parent: %{identifier: parent.issue_identifier}})
+      assert order([s1, s2, s3]) == [s1.issue_id, s2.issue_id, s3.issue_id]
+
+      assert {:ok, _added} = dependency(:add, s1, s3, :done, ctx.opts)
+      assert order([s1, s2, s3]) == [s2.issue_id, s3.issue_id, s1.issue_id]
+      assert_receive :queue_changed
+    end
+
+    test "refuses in a dependency's words, and allows a released dependency on a done ticket", ctx do
+      %{ticket: ticket, blocker: blocker, other: other, done: done} = ctx
+
+      assert {:error, {:conflict, itself}} = dependency(:add, ticket, ticket, :done, ctx.opts)
+      assert itself == "#{ticket.issue_identifier} can't depend on itself."
+
+      assert {:error, {:conflict, finished}} = dependency(:add, ticket, done, :done, ctx.opts)
+      assert finished == "#{done.issue_identifier} is Done: a finished ticket holds nothing back."
+      assert {:ok, %{kind: "released"}} = dependency(:add, ticket, done, :released, ctx.opts)
+
+      canceled = put(ctx.repo, "#{System.unique_integer([:positive])}", %{phase: "Canceled"})
+      assert {:error, {:conflict, _finished}} = dependency(:add, ticket, canceled, :released, ctx.opts)
+
+      assert {:error, {:conflict, missing}} = dependency(:remove, ticket, other, nil, ctx.opts)
+      assert missing == "#{ticket.issue_identifier} doesn't depend on #{other.issue_identifier}."
+
+      assert {:ok, _added} = dependency(:add, ticket, blocker, :done, ctx.opts)
+      assert {:error, {:conflict, cycle}} = dependency(:add, blocker, ticket, :released, ctx.opts)
+
+      assert cycle ==
+               "#{ticket.issue_identifier} already depends on #{blocker.issue_identifier}, so #{blocker.issue_identifier} can't depend on it: that would make a cycle."
+    end
+
+    @tag :capture_log
+    test "a write the store refuses changes nothing and says so in a dependency's words", ctx do
+      %{ticket: ticket, blocker: blocker} = ctx
+      opts = scoped(ctx.opts)
+      :ok = RunStore.delete_ticket_state(ticket.issue_id)
+
+      result = DirectorBlockers.dependency(:add, ticket.issue_identifier, blocker.issue_identifier, :done, opts)
+      assert {:error, {:store, message}} = result
+      assert message == "Symphony couldn't add the dependency of #{ticket.issue_identifier} on #{blocker.issue_identifier}, so nothing changed. Try again in a moment."
+    end
+  end
+
+  # The issue ids of `tickets` in their stored queue order.
+  defp order(tickets) do
+    places = RunStore.queue_places()
+    tickets |> Enum.map(& &1.issue_id) |> Enum.sort_by(&Map.fetch!(places, &1))
+  end
+
   describe "blockers/2" do
-    test "lists the ticket's blockers and the open tickets it can be given, in identifier order", ctx do
+    test "lists the ticket's stored dependencies and the open tickets it can be given, in identifier order", ctx do
       %{ticket: ticket, blocker: blocker, other: other} = ctx
       assert {:ok, _added} = change(:add, ticket, blocker, ctx.opts)
-      external = %{identifier: "EXT-1", state: "Todo"}
-      :ok = RunStore.update_ticket_state(ticket.issue_id, %{blockers: record(ticket).blockers ++ [external]})
+      # A ticket of another repository, outside the records read: listed by the identifier stored.
+      elsewhere = put("#{ctx.repo}-elsewhere", "#{System.unique_integer([:positive])}", %{phase: "Todo"})
+      :ok = RunStore.add_dependency(ticket.issue_id, elsewhere.issue_id, :done)
 
       assert {:ok, payload} = DirectorBlockers.blockers(ticket.issue_identifier, scoped(ctx.opts))
 
@@ -222,7 +346,7 @@ defmodule SymphonyElixir.DirectorBlockersTest do
                issue_identifier: ticket.issue_identifier,
                blockers: [
                  %{issue_identifier: blocker.issue_identifier, title: "Fix the exporter", state: "In Progress"},
-                 %{issue_identifier: "EXT-1", title: nil, state: "Todo"}
+                 %{issue_identifier: elsewhere.issue_identifier, title: nil, state: nil}
                ],
                candidates: [%{issue_identifier: other.issue_identifier, title: "Rename the button", state: "Todo"}]
              }

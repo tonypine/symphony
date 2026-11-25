@@ -123,6 +123,13 @@ branch name Linear suggests for the ticket; a PR on a branch with any other name
   once every such sub-ticket is `Done`, `Canceled` or `Duplicate`, with a comment listing how each
   ended. Its `Backlog` sub-tickets (ones an agent filed) stay
   there for a person to promote and never hold it: with only those open it goes to `Done` on merge.
+  The order between sub-tickets is Symphony's own: a sub-ticket that comes after another (a split's
+  `after`, one a run files to do after its ticket, a blocker you add on the ticket page or an agent's
+  `blocked_by`) gets a dependency stored on its record, and Symphony holds it, shows it as
+  "Blocked by" that ticket until that ticket is done; a ticket that holds a slot keeps it meanwhile. Symphony neither reads nor
+  writes Linear's blocker links: a ticket's dependencies are the ones Symphony stores, and a
+  blocker link someone adds in Linear has no effect on it. The parent and sub-ticket link is still
+  read from Linear.
   The design this flow
   is moving to (bug, feature and `plan` ticket types, one review of a whole plan, artifacts in
   Linear documents) is recorded in
@@ -361,27 +368,6 @@ Work an existing PR:
 ./bin/symphony pr 123 --intent "address review comments"
 ```
 
-Force a ticket, or stop forcing it. `symphony force` adds the `execution.concurrency.force_label` label
-(default `expedite`) to the ticket in Linear through the running Symphony's control API
-(`POST /api/v1/control/force`, with the token in `<state-root>/control_token` or
-`SYMPHONY_CONTROL_TOKEN`), and prints the ticket's place in the forced queue:
-
-```bash
-./bin/symphony force TP-123          # TP-123 forced (slot 1 of 1)
-./bin/symphony force TP-124          # TP-124 forced (queued #2; TP-123 holds the forced slot)
-./bin/symphony force --clear TP-124  # TP-124 no longer forced
-```
-
-Forcing never changes a ticket's state: a ticket in `Backlog` stays there
-(`TP-125 forced (it is in Backlog; forcing doesn't promote it)`) and joins the queue once it moves to
-an active state. An unknown ticket, a missing or rejected control token, an unreachable Symphony and
-a Linear error each print a message and exit non-zero.
-
-The terminal dashboard and the Mac app list forced tickets in a "Forced" section above the running agents,
-with the phase each is in and what it waits on (`implementation · running`,
-`waiting for a human`, `implementation · waiting on blocker TP-12`), and mark forced rows elsewhere
-with ⚡. Once a forced ticket is done, Symphony removes the label.
-
 Test OpenRouter flows without a real key: `symphony openrouter-stub` serves a stub OpenRouter on
 `127.0.0.1` with a made-up valid key and three models, prints its URL and the variables that point a
 QA-mode Symphony or app at it, and runs until stopped (see
@@ -391,41 +377,72 @@ QA-mode Symphony or app at it, and runs until stopped (see
 ./bin/symphony openrouter-stub --port 4100
 ```
 
-### Priority vs expedite
+### Slots: one ticket per slot until it is done
 
-A ticket's Linear priority means how important it is. Symphony uses it only to order work that waits
-for the same kind of normal slot: after the stage (`Merging`, `Rework`, a resume,
-`Todo`) and before age. Raising a ticket to Urgent does not get it a slot any sooner when the slots
-are full, and a board full of Urgents stops saying which work matters. To have a ticket worked now,
-force it: add the `expedite` label (`execution.concurrency.force_label`) or run `symphony force TP-123`.
-Remove the label (`symphony force --clear TP-123`) to stop; it also ends when the ticket is done.
-A run already going then finishes as a normal run and gives the forced slot to the next forced ticket.
+`execution.concurrency.max_total` is the number of slots: how many tickets Symphony works at once.
+A slot belongs to a ticket, not to one agent turn. A ticket takes a slot when its first run starts
+and keeps it until it is done, whatever it is doing: coding, review, QA, CI, waiting for a build,
+`Merging`, a machine step between its agent turns, a question waiting on you, or no run at all. With
+one slot, one ticket moves at a time and nothing new starts until it lands. A ticket that holds a
+slot is the one in progress; the dispatch order and Home reads name the ticket that holds each slot
+and how many are free.
 
-| Forcing bypasses | Forcing still respects |
-| --- | --- |
-| `max_total` and the per-state caps (`max_by_issue_state`) | the operator's **Pause** |
-| the epic lanes | the Linear rate-limit pause and the workspace quota pause |
-| `finishing_max`, and the hold on `Todo` while a finish waits | a Claude or Codex usage-limit pause (the runs would just fail) |
-| priority and age ordering (forced tickets go first, oldest forced first) | blocked-by links: a blocked ticket waits for its blocker |
-| the daily token budget (with a warning) and a usage-limit headroom hold | the per-issue token cap and the per-host worker cap |
-| | a failed setup, retry backoff, and the CI waits before merging |
+A ticket gives its slot up only when it is done, or when you stop it, move it to `Backlog` or
+cancel it. Waiting keeps it: on you, on its own sub-tickets, or on another ticket (a dependency
+Symphony stores, a run's block report, a fix ticket, a competing pull request, an app update that
+carries a dependency's fix).
 
-`execution.concurrency.forced_max` (default `1`) forced runs go at once, on top of the normal slots. A
-second forced ticket queues behind the first, shows `queued #2` on the dashboard, and sends one
-`forced_waiting` notification. Forcing never stops a running agent. Forcing a plan ticket
-forces its sub-tickets one at a time, in blocked-by order. See `concurrency.force_label` in
-[docs/configuration.md](docs/configuration.md) for the details.
+A ticket's sub-tickets run through its slot, whether or not it has work of its own: an epic's
+sub-tickets, and a fix ticket filed for a ticket in the middle of its work, which is filed as its
+sub-ticket, runs through its slot, and then lets it continue where it stopped. Between two
+sub-tickets the slot idles; with one slot nothing else starts until the parent is done. With more
+slots, a parent can use more than one: a free slot goes, in queue order, to the first ticket that
+can start, which for the parent at the top is its next sub-ticket whose dependencies are met, so
+sub-tickets that don't depend on each other run at the same time. Such an extra slot comes back when
+that sub-ticket is done; the parent keeps one through its waits. When the parent has nothing ready,
+the free slot goes to the next ticket down the queue. A parent and the one sub-ticket running
+through its slot count as one used slot. This holds at any depth: a sub-ticket of a sub-ticket runs
+through the slot of the ticket at the top of its tree, and a parent in the middle that waits on its
+own sub-tickets takes no slot of its own.
 
-Forcing only removes the wait for a slot. These transitions stay with a person:
+A ticket that holds a slot and waits on a ticket outside its own tree (one a run's block report
+names, a fix ticket reused from another ticket, a dependency added mid-work, a competing pull
+request) lends its slot to it: that ticket runs through the holder's slot as a sub-ticket would, so
+with one slot the holder never waits on a ticket that can't get a slot.
+
+A ticket that can't start because a dependency is unmet takes the slot when its turn comes (it is
+the first of the queue) and waits there; its run starts once the dependency is met.
+
+Nothing else limits the slots: a ticket keeps its slot through `Merging`, no phase has a limit of
+its own, and no slot is reserved for epics.
+
+### Dispatch order and priority
+
+Symphony keeps one queue of the open top-level tickets, across all repositories, and stores each
+ticket's place in it with the ticket's record as a sort key, so the order survives a restart and a
+move rewrites only the ticket moved. A ticket's sub-tickets sit inside its place, in their own order;
+a finished sub-ticket keeps its link to its parent. A new ticket joins at the end of the queue, or of
+its parent's sub-tickets. When a slot frees, it goes to the first ticket in the queue that can start;
+a ticket that cannot start yet (blocked, in `Backlog`, below the priority filter) keeps its place and
+is passed over until it can. A ticket that is done or removed leaves the queue, and joins at the end
+again if it is reopened. The numbers the queue shows (1, 2, 3) are counted when it is read, never
+stored.
+
+A ticket's Linear priority means how important it is, not its place in the queue: changing it moves
+no ticket. Priority acts only through the `tickets.priorities` filter, which decides which tickets
+may start at all. Raising a ticket to Urgent does not get it a slot any sooner, and a board full of
+Urgents stops saying which work matters.
+
+These transitions stay with a person:
 
 | Transition | Who |
 | --- | --- |
-| `Backlog` → `Todo` | a person promotes the ticket; forcing doesn't |
+| `Backlog` → `Todo` | a person promotes the ticket |
 | `Plan Review` → `Waiting on sub-tickets` | a person approves a plan |
 | a `Needs Decision` hold | a person records the decision |
 | any state → `Restart` | a person resets the approach |
 
-The Code Review and QA verdicts are still required: forcing never skips or changes them.
+The Code Review and QA verdicts are required for every ticket.
 
 ### Preview the assembled prompt
 
@@ -485,12 +502,12 @@ Symphony builds the list on each read from its own records of the tickets, with 
 so an answer, an Unblock or a Stop shows on the very next read, and the list is there while Linear
 is down.
 
-**Initiatives.** The Mac app's Initiatives (`/api/v1/initiatives`) follow each plan ticket (`plan`
-or `breakdown`) to done: the active ones, those in review and those done in the last 7 days, each
-with its sub-tickets in landing order (blocked-by order, then creation order), what each waits on
-(you, a blocker, CI, a slot), when each landed and its pull request, counts by stage, the plan's
-start and its tokens, and its lane in `epic_lanes`. Symphony reads the plan tickets on its poll and serves them from that read, so a GET
-makes no Linear request; the reads show as `initiatives` in the Linear usage table.
+**Initiatives.** The Mac app's Initiatives (`/api/v1/initiatives`) follow each parent Symphony split
+into sub-tickets to done (from Symphony's own record of the split, not a Linear label): the active ones, those in review and those done in the last 7 days, each
+with its sub-tickets in landing order (the order of their stored dependencies, then creation order),
+what each waits on (you, a ticket it depends on, CI, a slot), when each landed and its pull request, counts by stage, the plan's
+start and its tokens. Symphony builds the list from its own ticket records on each read, so a GET
+makes no Linear request, and a done sub-ticket stays under its parent.
 
 You answer from the Inbox too. A plan offers **Approve Plan…** and **Send Decisions** (once a pick
 differs from the brief's recommendation), and each **Send to Rework…** with a required reason. An action that asks a decision
@@ -593,11 +610,9 @@ tuples) go under the acceptance criteria. Tickets with no user-facing change can
 out.
 
 Proving the walkthrough is split three ways. You write the flows. The agent that implements the
-ticket writes the tests, and ends each step a test covers with `Proved by: <test>` in the ticket's
-description. The repository names the check that runs its tests, `proof_check` in its `WORKFLOW.md`
-(`make-all` here). Before QA starts, Symphony confirms every named test exists and passed on the PR
-head, then QA links those results and walks only the steps no test covers. A repository without
-`proof_check` has every step walked by QA.
+ticket writes the tests and records, on the ticket, the test that proves each step it covers. A
+recorded test proof is complete: CI runs the test on the pull request and gates the merge, so QA
+walks only the steps no test covers.
 
 ## Documentation
 

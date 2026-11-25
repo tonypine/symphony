@@ -126,6 +126,18 @@ defmodule SymphonyElixir.SettingsUICoverageTest do
                SettingsUICoverage.check(SystemSchema.operator_key_paths(), manifest(), exemptions())
     end
 
+    test "the removed finishing, per-state and epic lane limits are neither settings nor exempt" do
+      removed = ~w(execution.concurrency.epic_lanes execution.concurrency.finishing_max execution.concurrency.max_by_issue_state)
+      exempt = Enum.flat_map(exemptions(), & &1.keys)
+
+      for key <- removed do
+        refute key in SystemSchema.operator_key_paths()
+        refute key in exempt
+      end
+
+      assert %{uncovered: [], unused_exemptions: []} = SettingsUICoverage.check(SystemSchema.operator_key_paths(), manifest(), exemptions())
+    end
+
     test "a setting added to the schema without a manifest entry or exemption is uncovered, by name" do
       keys = SystemSchema.operator_key_paths() ++ ["execution.limits.max_widgets", "repositories[].route.widget"]
 

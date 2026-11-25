@@ -1,7 +1,8 @@
 defmodule SymphonyElixir.HomeTest do
   # The Home read's two lists from ticket records, the dispatch walk and the live facts: an epic with
   # a ticket in progress, a chain, a fork, a ticket blocked by two, a root behind a Backlog ticket and
-  # an empty queue.
+  # an empty queue. Who waits on whom is the records' stored dependencies (`depends_on`); Linear's
+  # blocker links are not read.
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.{Home, Situation}
@@ -23,7 +24,7 @@ defmodule SymphonyElixir.HomeTest do
       parent = %{identifier: "MT-1", title: "Checkout"}
       done = record("MT-2", "Done", parent: parent)
       working = record("MT-3", "In Progress", parent: parent)
-      next = record("MT-4", "Todo", parent: parent, blockers: [link("MT-3", "In Progress")])
+      next = record("MT-4", "Todo", parent: parent, depends_on: [dep("MT-3")])
       asking = record("MT-8", "Plan Review", parent: parent)
       alone = record("LONE", "Rework")
 
@@ -88,9 +89,9 @@ defmodule SymphonyElixir.HomeTest do
   describe "the queue" do
     test "a chain steps down, a Done blocker holds nothing back, and a ready root carries its situation" do
       landed = record("MT-0", "Done")
-      first = record("MT-1", "Todo", blockers: [link("MT-0", nil)])
-      second = record("MT-2", "Todo", blockers: [link("MT-1", "Todo")])
-      third = record("MT-3", "Todo", blockers: [link("MT-2", "Todo")])
+      first = record("MT-1", "Todo", depends_on: [dep("MT-0")])
+      second = record("MT-2", "Todo", depends_on: [dep("MT-1")])
+      third = record("MT-3", "Todo", depends_on: [dep("MT-2")])
 
       read = Home.read(walk(["MT-1", "MT-2", "MT-3"]), [landed, first, second, third], live())
 
@@ -100,8 +101,8 @@ defmodule SymphonyElixir.HomeTest do
 
     test "a fork puts both tickets under the one they wait on, in the dispatch order" do
       root = record("MT-1", "Todo")
-      left = record("MT-2", "Todo", blockers: [link("MT-1", "Todo")])
-      right = record("MT-3", "Todo", blockers: [link("MT-1", "Todo")])
+      left = record("MT-2", "Todo", depends_on: [dep("MT-1")])
+      right = record("MT-3", "Todo", depends_on: [dep("MT-1")])
 
       read = Home.read(walk(["MT-1", "MT-3", "MT-2"]), [root, left, right], live())
 
@@ -111,12 +112,12 @@ defmodule SymphonyElixir.HomeTest do
     test "a ticket blocked by two sits once, under the one that lands last, and names the other" do
       first = record("MT-1", "Todo")
       second = record("MT-2", "Todo")
-      deeper = record("MT-3", "Todo", blockers: [link("MT-1", "Todo")])
-      both = record("MT-4", "Todo", blockers: [link("MT-1", "Todo"), link("MT-2", "Todo")])
-      deepest = record("MT-5", "Todo", blockers: [link("MT-2", "Todo"), link("MT-3", "Todo")])
+      deeper = record("MT-3", "Todo", depends_on: [dep("MT-1")])
+      both = record("MT-4", "Todo", depends_on: [dep("MT-1"), dep("MT-2")])
+      deepest = record("MT-5", "Todo", depends_on: [dep("MT-2"), dep("MT-3")])
       working = record("MT-6", "In Progress")
       reviewing = record("MT-7", "Code Review")
-      waits = record("MT-8", "Todo", blockers: [link("MT-7", "Code Review"), link("MT-6", "In Progress")])
+      waits = record("MT-8", "Todo", depends_on: [dep("MT-7"), dep("MT-6")])
       ready = record("MT-9", "Todo")
 
       order = walk(["MT-9", "MT-6", "MT-1", "MT-2", "MT-3", "MT-4", "MT-5", "MT-8", "MT-7"])
@@ -136,8 +137,8 @@ defmodule SymphonyElixir.HomeTest do
     test "roots that wait on a ticket in progress come after the ready ones, in that ticket's order" do
       early = record("MT-1", "In Progress")
       late = record("MT-2", "In Progress")
-      behind_late = record("MT-3", "Todo", blockers: [link("MT-2", "In Progress")])
-      behind_early = record("MT-4", "Todo", blockers: [link("MT-1", "In Progress")])
+      behind_late = record("MT-3", "Todo", depends_on: [dep("MT-2")])
+      behind_early = record("MT-4", "Todo", depends_on: [dep("MT-1")])
       ready = record("MT-5", "Todo")
 
       read = Home.read(walk(["MT-1", "MT-2", "MT-3", "MT-4", "MT-5"]), [early, late, behind_late, behind_early, ready], live())
@@ -146,35 +147,148 @@ defmodule SymphonyElixir.HomeTest do
     end
 
     test "a cycle of blockers is drawn from its first ticket, each ticket once" do
-      one = record("MT-1", "Todo", blockers: [link("MT-2", "Todo")])
-      two = record("MT-2", "Todo", blockers: [link("MT-1", "Todo")])
+      one = record("MT-1", "Todo", depends_on: [dep("MT-2")])
+      two = record("MT-2", "Todo", depends_on: [dep("MT-1")])
 
       read = Home.read(walk(["MT-1", "MT-2"]), [one, two], live())
 
       assert [%{identifier: "MT-1", situation: %{}, children: [%{identifier: "MT-2", children: []}]}] = read.queue.roots
     end
 
-    test "a root behind a Backlog ticket is outside, and so is the ticket behind it; a ticket below the dispatched priority is outside unless forced" do
+    test "a root behind a Backlog ticket is outside, and so is the ticket behind it; a ticket below the dispatched priority is outside" do
       backlog = record("MT-1", "Backlog")
-      root = record("MT-2", "Todo", blockers: [link("MT-1", "Backlog")])
-      next = record("MT-3", "Todo", blockers: [link("MT-2", "Todo")])
-      unknown = record("MT-4", "Todo", blockers: [%{id: nil, identifier: "OTHER-1", state: nil}])
+      root = record("MT-2", "Todo", depends_on: [dep("MT-1")])
+      next = record("MT-3", "Todo", depends_on: [dep("MT-2")])
+      unknown = record("MT-4", "Todo", depends_on: [dep("OTHER-1")])
       low = record("MT-5", "Todo", priority: 4)
-      forced = record("MT-6", "Todo", priority: 4)
+      queued = record("MT-6", "Todo")
       unassigned = record("MT-7", "Todo")
       removed = record("MT-8", "Todo", removed_at: DateTime.utc_now())
 
-      order = %{entries: [entry("MT-2"), entry("MT-3"), entry("MT-4"), entry("MT-5"), Map.put(entry("MT-6"), :forced, true)]}
-      read = Home.read(order, [backlog, root, next, unknown, low, forced, unassigned, removed], live(), priority_filter: MapSet.new([1]))
+      order = %{entries: [entry("MT-2"), entry("MT-3"), entry("MT-4"), entry("MT-5"), entry("MT-6")]}
+      read = Home.read(order, [backlog, root, next, unknown, low, queued, unassigned, removed], live(), priority_filter: MapSet.new([1]))
 
       assert [%{identifier: "MT-6"}] = read.queue.roots
       assert read.in_progress == []
       assert read.outside == %{backlog: 1, below_priority: 1, epic: 0, behind: 3}
     end
 
+    test "a ticket waits on its stored dependencies only: a blocker an older build observed, or a released dependency on a done ticket, holds nothing" do
+      landed = record("MT-1", "Done")
+      queued = record("MT-2", "Todo")
+      linked = record("MT-3", "Todo", blockers: [link("MT-2", "Todo")])
+      released = record("MT-4", "Todo", depends_on: [%{dep("MT-1") | kind: :released}])
+      waits = record("MT-5", "Todo", depends_on: [%{dep("MT-2") | kind: :released}])
+
+      read = Home.read(walk(["MT-2", "MT-3", "MT-4", "MT-5"]), [landed, queued, linked, released, waits], live())
+
+      assert [
+               %{identifier: "MT-2", children: [%{identifier: "MT-5"}]},
+               %{identifier: "MT-3", after: nil},
+               %{identifier: "MT-4", after: nil}
+             ] = read.queue.roots
+
+      assert read.outside == %{backlog: 0, below_priority: 0, epic: 0, behind: 0}
+    end
+
     test "an empty queue reads as no roots" do
-      assert Home.read(nil, [], live()) == %{in_progress: [], queue: %{roots: []}, outside: %{backlog: 0, below_priority: 0, epic: 0, behind: 0}}
-      assert Home.read(%{entries: []}, [record("MT-1", "Done")], live()).queue == %{roots: []}
+      empty_rows = %{rows: [], count: 0, total: 0, offset: 0, limit: 100, next_offset: nil}
+
+      assert Home.read(nil, [], live()) == %{
+               in_progress: [],
+               slots: %{entries: []},
+               queue: Map.put(empty_rows, :roots, []),
+               outside: %{backlog: 0, below_priority: 0, epic: 0, behind: 0},
+               recently_done: %{
+                 range: "today",
+                 counts: %{today: 0, week: 0},
+                 entries: [],
+                 offset: 0,
+                 limit: 50,
+                 next_offset: nil
+               }
+             }
+
+      assert Home.read(%{entries: []}, [record("MT-1", "Done")], live()).queue == Map.put(empty_rows, :roots, [])
+    end
+  end
+
+  describe "epics and dependencies" do
+    test "an epic's slot and an epic's queue row give their done and open sub-tickets and every dependency, with no Linear request" do
+      held = ~U[2026-11-24 08:00:00Z]
+      slot_epic = record("MT-E", "Waiting on sub-tickets", slot_held_since: held, slot_number: 1, sort_key: "a1")
+      working = record("MT-W", "In Progress", parent: %{identifier: "MT-E"}, slot_held_since: held, slot_number: 1, sort_key: "a1")
+      slot_done = record("MT-D", "Done", parent: %{identifier: "MT-E"}, phase_at: held)
+      slot_next = record("MT-N", "Todo", parent: %{identifier: "MT-E"}, sort_key: "a2", depends_on: [dep("MT-W")])
+      queued_epic = record("MT-Q", "Todo", sort_key: "a2")
+      queued_done = record("MT-QD", "Done", parent: %{identifier: "MT-Q"})
+      queued_sub = record("MT-QS", "Todo", parent: %{identifier: "MT-Q"}, sort_key: "a1", depends_on: [dep("MT-D"), dep("MT-N")])
+      records = [slot_epic, working, slot_done, slot_next, queued_epic, queued_done, queued_sub]
+
+      read = traced_linear(fn -> Home.read(walk(["MT-N", "MT-QS"]), records, live(), slot_count: 1) end)
+
+      assert [%{slot: 1, ticket: %{identifier: "MT-W"}, epic: epic}] = read.slots.entries
+      assert %{identifier: "MT-E", done: 1, total: 3} = epic
+      assert [%{identifier: "MT-D", done_at: ^held}] = epic.done_sub_tickets
+
+      assert [
+               %{
+                 identifier: "MT-N",
+                 phase: "Todo",
+                 parent: "MT-E",
+                 dependencies: [%{identifier: "MT-W", kind: "done", met: false}]
+               }
+             ] = epic.open_sub_tickets
+
+      assert [queued, sub] = read.queue.rows
+      assert %{identifier: "MT-Q", sub_tickets: %{done: 1, total: 2}, done_sub_tickets: [%{identifier: "MT-QD"}]} = queued
+      assert %{identifier: "MT-QS", parent: "MT-Q", waits_on: [%{identifier: "MT-N", kind: "done"}]} = sub
+      assert Enum.map(sub.dependencies, &{&1.identifier, &1.met}) == [{"MT-D", true}, {"MT-N", false}]
+    end
+  end
+
+  describe "recently done" do
+    test "the read gives the page of Recently done asked for, with both counts, beside every list it gave before, with no Linear request" do
+      epic = record("MT-E", "Waiting on sub-tickets")
+      done = record("MT-D", "Done", parent: %{identifier: "MT-E"})
+      alone = record("MT-A", "Done", repo_key: "other")
+
+      runs = [done_run("MT-D", "default", ~U[2026-11-24 10:00:00Z]), done_run("MT-A", "other", ~U[2026-11-20 10:00:00Z])]
+
+      opts = [
+        now: ~U[2026-11-24 12:00:00Z],
+        to_local: & &1,
+        runs_started_on: fn date -> Enum.filter(runs, &(DateTime.to_date(&1.started_at) == date)) end,
+        done_page: %{range: :week, offset: 0, limit: 1}
+      ]
+
+      read = traced_linear(fn -> Home.read(nil, [epic, done, alone], live(), opts) end)
+
+      assert Map.keys(read) |> Enum.sort() == [:in_progress, :outside, :queue, :recently_done, :slots]
+      assert %{range: "week", counts: %{today: 1, week: 2}, offset: 0, limit: 1, next_offset: 1} = read.recently_done
+      assert [%{identifier: "MT-D", repo_key: "default", epic: epic, done_at: "2026-11-24T10:00:00Z"}] = read.recently_done.entries
+      assert epic == %{identifier: "MT-E", title: "Ticket MT-E"}
+
+      second = Home.read(nil, [epic, done, alone], live(), Keyword.put(opts, :done_page, %{range: :week, offset: 1, limit: 1}))
+      assert [%{identifier: "MT-A", repo_key: "other", epic: nil}] = second.recently_done.entries
+    end
+  end
+
+  # Runs `fun` with every call of the Linear client from this process traced, and fails if one was made.
+  defp traced_linear(fun) do
+    {:module, client} = Code.ensure_loaded(SymphonyElixir.Linear.Client)
+    :erlang.trace_pattern({client, :_, :_}, true, [:local])
+    :erlang.trace(self(), true, [:call])
+
+    try do
+      result = fun.()
+      ref = :erlang.trace_delivered(self())
+      assert_receive {:trace_delivered, _pid, ^ref}
+      refute_received {:trace, _pid, :call, {^client, _function, _args}}
+      result
+    after
+      :erlang.trace(self(), false, [:call])
+      :erlang.trace_pattern({client, :_, :_}, false, [:local])
     end
   end
 
@@ -192,11 +306,26 @@ defmodule SymphonyElixir.HomeTest do
     )
   end
 
+  # A run of `identifier` that Symphony saw reach done at `done_at`, started an hour before.
+  defp done_run(identifier, repo_key, done_at) do
+    %{
+      issue_id: "id-#{identifier}",
+      issue_identifier: identifier,
+      title: "Ticket #{identifier}",
+      repo_key: repo_key,
+      started_at: DateTime.add(done_at, -3600, :second),
+      issue_completed_notified_at: done_at
+    }
+  end
+
   defp link(identifier, state), do: %{id: "id-#{identifier}", identifier: identifier, state: state}
+
+  # A stored dependency on the ticket `identifier`, which needs it done.
+  defp dep(identifier), do: %{issue_id: "id-#{identifier}", identifier: identifier, kind: :done}
 
   defp walk(identifiers), do: %{entries: Enum.map(identifiers, &entry/1)}
 
-  defp entry(identifier), do: %{issue_id: "id-#{identifier}", identifier: identifier, outcome: :held, reason: nil, forced: false}
+  defp entry(identifier), do: %{issue_id: "id-#{identifier}", identifier: identifier, outcome: :held, reason: nil}
 
   defp live(snapshot \\ %{}), do: Situation.live_facts(snapshot)
 end

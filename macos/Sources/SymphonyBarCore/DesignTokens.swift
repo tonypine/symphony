@@ -1739,6 +1739,264 @@ public enum DesignTokens {
         public static func pitch(_ height: Double) -> Double { max(height, lineHeight) + gap }
     }
 
+    /// The Home queue's components (TP-1608, `docs/design/prototypes/home-queue/page.css`): the slot card, its empty
+    /// outline and its folded strip line, the checks bar, the token line, the slot count control and the queue row.
+    public enum HomeQueue {
+        /// The slots a person may set: at least one, at most six.
+        public static let slots = 1...6
+
+        // The page (`.pq-top`, `.pq-queue`, `.pq-head`, `.pq-filters`, `.pq-mini` in page.css).
+        /// The page's gutter, both sides: the cards and the queue's rows share it.
+        public static let gutter = Space.s8
+        public static let pageTop = Space.s6
+        /// Above the Queue's head.
+        public static let queueTop = Space.s8
+        public static let pageBottom = Space.s10
+        /// A section head: its title and what stands beside it, on one line.
+        public static let headHeight: Double = 24
+        public static let headGap = Space.s3
+        public static let headBottom = Space.s4
+        /// Between two slot cards.
+        public static let cardsGap = Space.s3
+        /// The saved views above the queue: pills 4 pt apart, 12 pt above the list.
+        public static let viewsGap = Space.s1
+        public static let viewsBottom = Space.s3
+        public static let viewPillInset: Double = 10
+        public static let viewPillGap: Double = 6
+        /// The strip that stays on top once the cards scroll away: 6 pt around its lines, 2 pt between them.
+        public static let stripInset: Double = 6
+        public static let stripGap: Double = 2
+
+        // The slot card.
+        public static let cardTopPadding = Space.s4
+        public static let cardSidePadding = Space.s5
+        public static let cardBottomPadding = Space.s5
+        /// Between the header and the columns.
+        public static let cardGap = Space.s4
+        public static let cardElevation = Elevation.level1
+        public static let headerHeight: Double = 24
+        public static let headerGap = Space.s2
+        /// The room the header keeps between the title (and its chip) and the time in the slot.
+        public static let headerSpring = Space.s4
+        /// The three columns' shares of the card: Status about half, Plan and Pull request the rest.
+        public static let columnShares: [Double] = [1.9, 1, 1]
+        /// Each column's room inside its separator.
+        public static let columnInset = Space.s5
+        /// Between two rows of the columns.
+        public static let rowGap: Double = 10
+        /// A row's least height: a line of secondary text with its room.
+        public static let lineHeight: Double = 20
+        /// The status pill's least height and its room.
+        public static let pillHeight: Double = 28
+        public static let pillLeading: Double = 9
+        public static let pillTrailing = Space.s3
+        public static let pillGap: Double = 7
+        public static let pillGlyph: Double = 14
+        /// The plan's summary: at most three lines.
+        public static let planLines = 3
+        public static let nextGap = Space.s2
+        /// The pull request's lines: its name, its size and its branch, 4 pt apart.
+        public static let pullRequestGap = Space.s1
+        public static let pullRequestGlyph: Double = 14
+        public static let pullRequestSymbol = "arrow.triangle.pull"
+        /// A pull request fact (CI, review): a 6 pt dot, then its words.
+        public static let factDot: Double = 6
+        public static let factGap: Double = 9
+        public static let stopSymbol = "stop.fill"
+        /// The empty slot: an outline 56 pt tall.
+        public static let emptyHeight: Double = 56
+
+        // The strip line.
+        public static let stripHeight: Double = 30
+
+        // The checks bar.
+        public static let checksTrackWidth: Double = 132
+        public static let checksTrackHeight: Double = 3
+        public static let checksGap: Double = 10
+
+        // The token line.
+        public static let tokenDot: Double = 8
+        public static let tokenDotGap: Double = 6
+        public static let tokenStageGap = Space.s3
+        public static let tokenTotalGap = Space.s4
+
+        // The slot count control.
+        public static let countButtonWidth: Double = 22
+        public static let countButtonHeight: Double = 20
+        public static let countGlyph: Double = 10
+        public static let countValueWidth: Double = 50
+        public static let countInset: Double = 2
+        public static let countOffOpacity: Double = 0.35
+
+        // The queue row.
+        public static let rowHeight = Row.oneLineHeight
+        /// The room inside a row at both ends.
+        public static let rowInset = Space.s2
+        public static let rowPartGap: Double = 6
+        /// Between the identifier and the title, and between the items of the trail.
+        public static let rowMainGap = Space.s3
+        /// The lead's room on each side.
+        public static let leadMargin: Double = 2
+        /// The number's cell: as wide as the widest number on screen, never less than two digits.
+        public static let numberMinDigits = 2
+        public static let numberHeight: Double = 18
+        /// The grip that takes the number's place under the pointer: 10 by 14.
+        public static let gripWidth: Double = 10
+        public static let gripHeight: Double = 14
+        /// The identifier's column: as wide as eight digits, so every title starts at one place.
+        public static let identifierCharacters = 8
+        /// The last cell: the repo, and Start in its place under the pointer.
+        public static let endWidth: Double = 68
+        public static let endHeight = Control.small.height
+        public static let afterGlyph: Double = 11
+        public static let afterSymbol = "arrow.right"
+        /// A dragged row: lifted on the content surface.
+        public static let dragElevation = Elevation.level3
+
+        // Drag and drop (TP-1610: `.row.dragging`, `.drop-line`, `.slot.drop`, `.mslot.drop` in page.css).
+        /// The row left behind while it is dragged.
+        public static let draggedOpacity: Double = 0.35
+        /// The line in the gap a dragged row lands in: 2 pt of the accent with its glow, inset by the row's room.
+        public static let dropLineHeight: Double = 2
+        public static let dropLineRadius: Double = 1
+        public static let dropColor = ColorToken.accent
+        /// A slot card, an empty slot or a strip line under a dragged row: a 2 pt accent ring with its glow, on the
+        /// accent's tint.
+        public static let dropRing: Double = 2
+        public static let dropTint = ColorToken.accentTint
+        /// `--accent-glow`: the accent at 35 % one point down with a 2 pt blur, and at 70 % six points down with a
+        /// 16 pt blur drawn 6 pt in.
+        public static let dropGlow: [Elevation.Shadow] = [
+            Elevation.Shadow(y: 1, blur: 2, color: .accent), Elevation.Shadow(y: 6, blur: 16, spread: -6, color: .accent),
+        ]
+        public static let dropGlowOpacity: [Double] = [0.35, 0.7]
+
+        // Recently done and the done row (TP-1644: `.pq-recent`, `.rlist`, `.drow` in page.css).
+        /// Above the In progress section when Recently done stands over it.
+        public static let recentBottom = Space.s8
+        /// The range control's room after the count, beyond the head's own gap.
+        public static let rangeLead = Space.s2
+        /// The chevron's square at the head's end, its glyph and its corner.
+        public static let twistSize: Double = 18
+        public static let twistGlyph: Double = 12
+        public static let twistRadius: Double = 5
+        /// The rows shown before the list scrolls inside itself, on the queue's pitch.
+        public static let recentRows = 6
+        /// Between two done rows: the queue's pitch less a row.
+        public static let doneRowGap: Double = 2
+        /// The check's room: 2 pt before it, 4 pt after it in Recently done.
+        public static let doneLeadLeading: Double = 2
+        public static let doneLeadTrailing: Double = 4
+        /// The check of a passed stage.
+        public static let doneStatus = Status.done
+        /// The trail's cells: the epic's flag and identifier, the pull request (58 pt), the repo (68 pt, the queue's end
+        /// cell) and when it was done (76 pt), their glyphs 11 pt, 4 pt before their words.
+        public static let pullRequestCell: Double = 58
+        public static let repoCell = endWidth
+        public static let whenCell: Double = 76
+        public static let trailGlyph: Double = 11
+        public static let trailGlyphGap = Space.s1
+
+        // Epics and dependencies in the queue (TP-1645: `.row.sub`, `.elbow`, `.q-done`, `.pos .n i` in page.css).
+        /// A sub-row's step in: the lead cell (its glyph and its room) and the gap after it, so a sub-ticket's state glyph
+        /// starts where its epic's identifier starts.
+        public static let subRowStep = Row.leadSize + 2 * leadMargin + rowPartGap
+        /// The elbow that fills the step: a 14 pt glyph, drawn on a 16-unit grid with a 1.5-unit stroke, in the 18 pt
+        /// cell under the epic's chevron, in the tertiary text colour.
+        public static let elbowGlyph: Double = 14
+        public static let elbowGrid: Double = 16
+        public static let elbowStroke: Double = 1.5
+        public static let elbowColor = TextColor.tertiary
+        /// The epic's chevron in the state glyph's cell.
+        public static let chevronGlyph = twistGlyph
+        /// The done count as a control: 2 pt above and below and 6 pt at the sides, inside the trail's columns, on the
+        /// pressed surface under the pointer and while pressed, its corner 6 pt.
+        public static let doneCountInsetX: Double = 6
+        public static let doneCountInsetY: Double = 2
+        public static let doneCountRadius: Double = 6
+        /// An epic's done row in the queue is quiet: its title secondary, at the regular weight.
+        public static let quietTitleWeight = 400
+
+        // The epic slot card (TP-1646: `.eslot`, `.epic-band`, `.b-done`, `.dlist`, `.ulist` in page.css).
+        /// The frame around the slot card: 4 pt at the left, right and bottom, its corner the card's plus 4 pt, on half
+        /// the card's surface, with a 1 pt separator edge.
+        public static let epicFrameInset: Double = 4
+        public static let epicFrameRadius = Radius.card + epicFrameInset
+        public static let epicFrameOpacity: Double = 0.5
+        public static let epicFrameStroke: Double = 1
+        /// The band: one line, 36 pt.
+        public static let epicBandHeight: Double = 36
+        /// The band's progress bar, 96 pt, before "7 of 14 done".
+        public static let epicBarWidth: Double = 96
+        /// The bar with its count as one button: 24 pt high, 8 pt at the sides (drawn into the gaps around it), its
+        /// corner 7 pt.
+        public static let epicDoneHeight: Double = 24
+        public static let epicDoneInsetX = Space.s2
+        public static let epicDoneRadius: Double = 7
+        /// Before the time the epic has held the slot.
+        public static let epicSinceGap = Space.s3
+        /// The room the band's and the lists' rows keep at their end beyond a row's own, so they end where the card's
+        /// content ends.
+        public static let epicRowEnd = cardSidePadding - epicFrameInset - rowInset
+        /// The rows each list shows before it scrolls inside itself (216 pt on the queue's pitch).
+        public static let epicListRows = recentRows
+        /// The epic's flag, as a done row's epic cell draws it.
+        public static let epicFlagSymbol = SymphonyView.initiatives.symbol
+
+        /// The number as a row shows it: with a comma between thousands ("1,243").
+        public static func number(_ value: Int) -> String {
+            let formatter = NumberFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.numberStyle = .decimal
+            formatter.groupingSeparator = ","
+            formatter.usesGroupingSeparator = true
+            return formatter.string(from: NSNumber(value: value)) ?? String(value)
+        }
+
+        /// The characters the number cell is measured on for `widest`, each digit a "0" (the figures are tabular): at
+        /// least two digits.
+        public static func numberTemplate(widest: Int) -> String {
+            let digits = number(max(widest, 0)).map { $0.isNumber ? "0" : $0 }
+            let pad = max(numberMinDigits - digits.filter { $0 == "0" }.count, 0)
+            return String(repeating: "0", count: pad) + String(digits)
+        }
+
+        /// The characters the part after the point of a sub-ticket's number is measured on: `characters` of it, the point
+        /// and each digit a "0" (the figures are tabular); none while no sub-row is on screen.
+        public static func fractionTemplate(characters: Int) -> String {
+            characters > 0 ? "." + String(repeating: "0", count: characters - 1) : ""
+        }
+
+        /// An epic's done count: "2 of 11 done".
+        public static func doneCount(done: Int, total: Int) -> String { "\(done) of \(total) done" }
+
+        /// "5 of 9 checks proved", "1 of 1 check proved".
+        public static func checks(proved: Int, total: Int) -> String {
+            "\(proved) of \(total) " + (total == 1 ? "check" : "checks") + " proved"
+        }
+
+        /// The share of the checks proved, from 0 to 1.
+        public static func checksFraction(proved: Int, total: Int) -> Double {
+            guard total > 0 else { return 0 }
+            return min(max(Double(proved) / Double(total), 0), 1)
+        }
+
+        /// The token line's total: "21.4M of 100M tokens · 21 %"; "21.4M tokens" without a cap.
+        public static func tokens(_ total: Int, cap: Int?) -> String {
+            guard let cap, cap > 0 else { return Overview.tokens(total) + " tokens" }
+            let percent = Int((Double(total) / Double(cap) * 100).rounded())
+            return "\(Overview.tokens(total)) of \(Overview.tokens(cap)) tokens · \(percent) %"
+        }
+
+        /// "1 slot", "3 slots".
+        public static func slotsWord(_ count: Int) -> String { count == 1 ? "1 slot" : "\(count) slots" }
+
+        /// `count` moved by `step`, kept inside `slots`.
+        public static func slots(_ count: Int, step: Int) -> Int {
+            min(max(count + step, slots.lowerBound), slots.upperBound)
+        }
+    }
+
     /// The catalog's Progress meter (`.meter`, `.meter-line`, TP-1530): how much of a cap is used. The full form is
     /// 320 pt: its label and value, an 8 pt track and a note; the one-line form is its label, a 6 pt track, the
     /// percent and when it resets, with a stop mark where new work stops.
@@ -2217,6 +2475,15 @@ public enum DesignTokens {
         public static let groupsGap = Space.s6
         /// The group title's letter spacing, as a fraction of its size: the key-value list's group heading's.
         public static let titleTracking = KeyValue.groupHeadingTracking
+        /// A text field's width at a row's trailing end (a path, a name, a model), and a pair's (a variable's name
+        /// and value) on a line of its own (TP-1576).
+        public static let fieldWidth: Double = 280
+        /// A page of settings: its groups at most this wide, this far from the page's edges (TP-1576).
+        public static let pageMaxWidth: Double = 760
+        public static let pageInset = Space.s6
+        /// A preview inside a group (the step list as `symphony workflow preview` prints it): its least and most height.
+        public static let previewMinHeight: Double = 80
+        public static let previewMaxHeight: Double = 260
 
         /// What shows under the label: the reason while the row is off, else the error, else the help; one at most.
         public static func footnote(help: String?, error: String?, disabledReason: String?) -> Field.Footnote? {
@@ -2232,8 +2499,25 @@ public enum DesignTokens {
     /// typed text is read as a whole number and brought inside it, text that is no number puts the value back, and a
     /// half of the stepper that would leave the range is off.
     public enum NumberField {
-        /// The number's room, before the stepper.
+        /// The number's room, before the stepper: the least it takes, for a short value.
         public static let width: Double = 56
+        /// A digit's advance as a share of the font size: the input font's digits are monospaced, a little under 0.6
+        /// of an em, rounded up so a value never touches the field's edge.
+        public static let digitAdvance: Double = 0.62
+        /// The room after the last digit for the text cursor.
+        public static let cursorRoom: Double = 2
+        /// The most characters the room grows for: a whole number's 19 digits and its sign.
+        public static let maxCharacters = 20
+
+        /// The number's room for `text` (the value shown or being typed): `width` at least, wider by a digit's advance
+        /// for each character past what `width` holds, so "50000" or a 9-digit value shows whole (TP-1576).
+        public static func width(for text: String, fontSize: Double, padding: Double) -> Double {
+            let needed = 2 * padding + Double(min(text.count, maxCharacters)) * fontSize * digitAdvance + cursorRoom
+            return max(width, needed.rounded(.up))
+        }
+        /// The digits a value is drawn with, in the still drawing and the live field alike, and measured for by
+        /// `width(for:)`: plain digits with no grouping separator, so 50000 reads "50000", never "50,000" (TP-1576).
+        public static func digits(_ value: Int) -> String { String(value) }
         /// The stepper's width inside the field's trailing end, and its glyphs.
         public static let stepperWidth: Double = 16
         public static let stepperGlyph: Double = 7
@@ -2252,6 +2536,12 @@ public enum DesignTokens {
             let (sum, overflow) = clamp(value, to: range).addingReportingOverflow(by)
             if overflow { return by > 0 ? range.upperBound : range.lowerBound }
             return clamp(sum, to: range)
+        }
+
+        /// The values a field's typed text may set: `accepts` widened to hold `range`, or `range` alone.
+        public static func typedRange(_ range: ClosedRange<Int>, accepts: ClosedRange<Int>?) -> ClosedRange<Int> {
+            guard let accepts else { return range }
+            return min(accepts.lowerBound, range.lowerBound)...max(accepts.upperBound, range.upperBound)
         }
 
         /// Whether a step of `by` changes the value: false at the end of the range it moves toward.

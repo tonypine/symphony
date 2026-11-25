@@ -10,12 +10,11 @@ defmodule SymphonyElixir.Dispatch.Candidates do
   counted under the reason it was left out, so the counts explain each ticket missing from the
   candidates.
 
-  The rebuilt issue carries the record's priority, labels, open blockers and sub-issues (each with its
-  id and state), parent and creation time, so the dispatch gates (`Issue.blocked?/2`, a plan parent's
-  wait on its sub-tickets, the priority filter, a forced ticket's label), the epic lanes
-  (`SymphonyElixir.EpicLanes.plan/4`) and the dispatch order (priority, then age) read it as they read
-  a polled issue: the priority filter stays a gate because a forced ticket and a retry waiting for a
-  slot bypass it. It also carries the record's description, team and project, equal to the polled
+  The rebuilt issue carries the record's priority, labels and sub-issues (each with its id and
+  state), parent and creation time, so the dispatch gates (a plan parent's wait on its sub-tickets,
+  the priority filter; a ticket's stored dependencies are read from its record by the gate itself) and the dispatch order (the stored queue order, `SymphonyElixir.Dispatch.Queue`, by its creation
+  time for a ticket with no place yet) read it as they read a polled issue: the priority filter
+  stays a gate because a retry waiting for a slot bypasses it. It also carries the record's description, team and project, equal to the polled
   issue's, for the readers that rebuild a ticket from its record.
 
   `from_records/4` and `issue_from_record/1` are pure: no store read, no Linear read, no process. The
@@ -138,10 +137,10 @@ defmodule SymphonyElixir.Dispatch.Candidates do
 
   @doc """
   The `SymphonyElixir.Linear.Issue` a ticket record describes: its id, identifier, title, description,
-  team, project, state (the record's `phase`), labels, priority, assignee, blockers, sub-issues,
-  parent, URL, repo, creation time, Linear's `updatedAt` and the newest comment's time. The record keeps only the blockers that were open when it was observed; one
-  a record read before blockers kept their state has no known state, which `Issue.blocked?/2` counts
-  as open.
+  team, project, state (the record's `phase`), labels, priority, assignee, sub-issues, parent, URL,
+  repo, creation time, Linear's `updatedAt` and the newest comment's time. It carries no blocker: a
+  ticket's dependencies are the ones Symphony stores on its record (`depends_on`), which the dispatch
+  gate reads (`SymphonyElixir.Dispatch.DependsOn`).
   """
   @spec issue_from_record(map()) :: Issue.t()
   def issue_from_record(record) when is_map(record) do
@@ -158,7 +157,6 @@ defmodule SymphonyElixir.Dispatch.Candidates do
       labels: record.labels,
       priority: record.priority,
       assignee_id: record.assignee,
-      blocked_by: record.blockers,
       sub_issues: record.sub_issues,
       parent: record.parent,
       url: record.url,

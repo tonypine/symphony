@@ -42,8 +42,23 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   @bookkeeping_signals ["qa_head_not_green", "code_review_head_not_green", "stale_check"]
 
   # How a check was proved, and what the Conductor of a ticket did to this one, as a line says them.
-  @proved_by %{"test" => " by a test", "qa" => " by QA", "design" => " against the design", "attached" => " by an attachment"}
-  @intervened %{"stopped" => "Run stopped", "replanned" => "Plan changed", "canceled" => "Canceled", "replaced" => "Replaced", "added" => "Added"}
+  @proved_by %{
+    "test" => " by a test",
+    "qa" => " by QA",
+    "design" => " against the design",
+    "attached" => " by an attachment",
+    "ci" => " by the pull request's CI",
+    "sub_tickets" => " by its sub-tickets"
+  }
+  @intervened %{
+    "stopped" => "Run stopped",
+    "replanned" => "Plan changed",
+    "canceled" => "Canceled",
+    "replaced" => "Replaced",
+    "added" => "Added",
+    "reordered" => "Moved in the queue",
+    "rewired" => "Dependencies set"
+  }
 
   @doc """
   The summary of `event` (an `Event` or a stored record `Event.normalize/1` reads): its title and its
@@ -427,12 +442,17 @@ defmodule SymphonyElixir.TicketEvents.Summary do
         _none -> []
       end
 
+    results =
+      for %{} = result <- List.wrap(field(payload, :results)) do
+        cut_line(join(["Step #{field(result, :step)}: #{text(result, :status)}", text(result, :actual)]))
+      end
+
     entries =
       for %{} = entry <- List.wrap(field(payload, :answer)), label = text(entry, :label), value = text(entry, :value) do
         cut_line("#{label}: #{value}")
       end
 
-    result ++ entries ++ [text(payload, :verdict_summary)]
+    result ++ results ++ entries ++ [text(payload, :verdict_summary)]
   end
 
   defp cut_line(line), do: if(String.length(line) > 300, do: String.slice(line, 0, 299) <> "…", else: line)
@@ -558,10 +578,13 @@ defmodule SymphonyElixir.TicketEvents.Summary do
 
   defp person_action("stop", _to), do: "The Director stopped the run"
   defp person_action("move", to), do: "The Director moved the ticket" <> suffix(" to ", to)
+  # Forcing is gone (TP-1611); a ticket's history still holds the forces it was given before.
   defp person_action("force", _to), do: "The Director forced a dispatch"
   defp person_action("unblock", _to), do: "The Director unblocked the ticket"
   defp person_action("restart", _to), do: "The Director restarted the ticket"
   defp person_action("add_blocker", blocker), do: "The Director added " <> (blocker || "a ticket") <> " as a blocker"
+  defp person_action("add_dependency", on), do: "The Director made the ticket depend on " <> (on || "a ticket")
+  defp person_action("remove_dependency", on), do: "The Director removed the ticket's dependency on " <> (on || "a ticket")
   defp person_action("set_priority", to), do: "The Director set the priority to " <> (to || "another priority")
   defp person_action("add_label", label), do: "The Director added " <> label_name(label)
   defp person_action("remove_label", label), do: "The Director removed " <> label_name(label)

@@ -34,11 +34,9 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
   end
 
   test "with free slots and queued epics that cannot run, a standalone Todo ticket dispatches on the next poll", ctx do
-    # The lanes TP-912 reported: max_total 5 with one epic lane, so one epic holds the lane, five
-    # wait for it, one has yielded, and four slots are shared.
-    write_skipped_workflow!(ctx, max_concurrent_agents: 5, epic_lanes: 1)
-    blocked_by = [%{id: "fix", identifier: "MT-99", state: "In Progress"}]
-    parts = for n <- 1..6, do: issue("p#{n}", "MT-#{n}1", "Todo", blocked_by: blocked_by)
+    # The epics TP-912 reported: max_total 5, with no slot reserved for epics.
+    write_skipped_workflow!(ctx, max_concurrent_agents: 5)
+    parts = for n <- 1..6, do: issue("p#{n}", "MT-#{n}1", "Todo")
     epics = for {part, n} <- Enum.with_index(parts, 1), do: epic("e#{n}", "MT-#{n}0", [part])
     fix = issue("fix", "MT-99", "In Progress")
     yielded = epic("ey", "MT-90", [%{id: "y1", identifier: "MT-91", state: "Plan Review"}])
@@ -46,20 +44,18 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
     candidates = epics ++ [yielded, fix, standalone | parts]
     tracked([standalone])
     on_exit(fn -> RunStore.clear() end)
-    # The poll pauses each part on its open blocker before the dispatch gate reads it.
-    assert Orchestrator.sweep_dependencies_for_test("default", parts, ["Done", "Canceled"]) == 6
+    # Each part depends on the fix ticket, stored by Symphony: the dependency gate holds it.
+    for ticket <- [fix | parts], do: record!(ticket)
+    for part <- parts, do: :ok = RunStore.add_dependency(part.id, fix.id, :done)
 
-    state = Orchestrator.put_epic_lanes_for_test(%{orchestrator_state() | max_concurrent_agents: nil}, candidates)
-    assert {length(state.epic_lanes.lanes), length(state.epic_lanes.queued), length(state.epic_lanes.yielded)} == {1, 5, 1}
-    assert state.epic_lanes.shared == 4
-
+    state = %{orchestrator_state() | max_concurrent_agents: nil}
     state = Orchestrator.dispatch_chosen_issues_for_test(candidates, run(state, fix))
 
     assert Map.has_key?(state.running, "standalone")
     # Every candidate passed over says why; the one dispatched does not appear.
     skipped = Map.new(snapshot_of(state).dispatch_skipped, &{&1.identifier, &1.reason})
     refute Map.has_key?(skipped, "MT-888")
-    assert skipped["MT-11"] == "Waiting for MT-99 to finish"
+    assert skipped["MT-11"] == "waiting for MT-99 to be done"
     assert skipped["MT-10"] == "waiting on its sub-tickets"
     assert skipped["MT-99"] == "already running"
   end
@@ -152,7 +148,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
       issue("done", "MT-DONE", "Done"),
       issue("backlog", "MT-BACKLOG", "Backlog"),
       issue("untitled", "MT-UNTITLED", "Todo", title: nil),
-      issue("blocked", "MT-BLOCKED", "Todo", blocked_by: [%{id: "b", identifier: "MT-7", state: "In Progress"}, %{id: "c", state: "Todo"}]),
+      issue("blocked", "MT-BLOCKED", "Todo"),
       issue("skipped-decision", "MT-DECISION", "In Progress"),
       issue("update", "MT-UPDATE", "Todo"),
       issue("landing", "MT-LANDING", "Merging"),
@@ -196,8 +192,9 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
              "spent" => :token_budget
            }
 
-    # The ticket page shows a passed-over ticket's blockers from the entry (`SymphonyElixir.Connected`).
-    assert %{blocked_by: [%{identifier: "MT-7", title: nil, state: "In Progress"}], parent: nil} = state.dispatch_skipped["blocked"].connected
+    # The entry carries the ticket's connections (`SymphonyElixir.Connected`): a pause reason is not a
+    # dependency, and Linear's blocker links are not read.
+    assert %{blocked_by: [], parent: nil} = state.dispatch_skipped["blocked"].connected
   end
 
   # `/api/v1/state`'s `dispatch_skipped` and `slot_waiting` and the ticket read's situation are read
@@ -214,7 +211,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
     candidates = [
       issue("running", "MT-RUN", "In Progress"),
       issue("claimed", "MT-CLAIMED", "Todo"),
-      issue("blocked", "MT-BLOCKED", "Todo", blocked_by: [%{id: "b", identifier: "MT-7", state: "In Progress"}]),
+      issue("blocked", "MT-BLOCKED", "Todo"),
       issue("asked", "MT-ASKED", "In Progress"),
       issue("landing", "MT-LANDING", "Merging"),
       issue("backlog", "MT-BACKLOG", "Backlog"),
@@ -359,9 +356,8 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
            } == Map.new(snapshot_of(state).dispatch_skipped, &{&1.identifier, &1.reason})
   end
 
-  test "a ticket held back by its blockers, a fix ticket or a question is skipped with its pause's text (TP-1234)" do
+  test "a ticket held back by a block report's tickets, a fix ticket or a question is skipped with its pause's text (TP-1234)" do
     on_exit(fn -> RunStore.clear() end)
-    blockers = [%{id: "a", identifier: "MT-1", state: "In Progress"}, %{id: "b", identifier: "MT-2", state: "Todo"}]
     for identifier <- ["MT-1", "MT-2"], do: {:ok, _pause} = Pauses.set({:ticket, "default", "blocked"}, Pauses.ticket_reason(:dependency, identifier))
 
     {:ok, _pause} = Pauses.set({:ticket, "default", "fixing"}, Pauses.ticket_reason(:fix_ticket, "MT-9"))
@@ -375,7 +371,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
     {:ok, _pause} = Pauses.set({:ticket, "default", "waiting"}, environment, backfilled: true)
 
     issues = [
-      issue("blocked", "MT-BLOCKED", "Todo", blocked_by: blockers),
+      issue("blocked", "MT-BLOCKED", "Todo"),
       issue("fixing", "MT-FIX", "In Progress"),
       issue("asking", "MT-ASK", "In Progress"),
       issue("waiting", "MT-WAIT", "In Progress")
@@ -579,7 +575,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
     wait_until(pid, &(is_nil(&1.repo_poll_task_ref) and not &1.poll_check_in_progress))
 
     runnable = issue("runnable", "MT-RUNNABLE", "Todo")
-    blocked = issue("blocked", "MT-BLOCKED", "Todo", blocked_by: [%{id: "b", identifier: "MT-7", state: "In Progress"}])
+    blocked = issue("blocked", "MT-BLOCKED", "Todo")
     {:ok, _pause} = Pauses.set({:ticket, "default", "blocked"}, Pauses.ticket_reason(:dependency, "MT-7"))
     on_exit(fn -> RunStore.clear() end)
     waiting = issue("waiting", "MT-WAITING", "Todo")
@@ -865,6 +861,10 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
     snapshot
   end
 
+  defp record!(%Issue{} = issue) do
+    :ok = RunStore.put_ticket_state(TicketState.new("default", issue.id, %{issue_identifier: issue.identifier, title: issue.title, phase: issue.state}))
+  end
+
   defp epic(id, identifier, sub_issues) do
     issue(id, identifier, @waiting, labels: ["breakdown"], priority: 2, sub_issues: Enum.map(sub_issues, &Map.take(&1, [:id, :identifier, :state])))
   end
@@ -899,7 +899,6 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
       last_codex_message: nil,
       last_codex_timestamp: nil,
       last_codex_event: nil,
-      forced: false,
       started_at: DateTime.utc_now()
     }
 

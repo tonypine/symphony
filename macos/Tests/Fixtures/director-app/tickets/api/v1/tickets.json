@@ -222,8 +222,7 @@
       "situation": "waiting_for_slot",
       "situation_since": "2026-10-07T12:40:00Z",
       "labels": [
-        "checkout",
-        "expedite"
+        "checkout"
       ],
       "priority": 1,
       "assignee": "tonypine",

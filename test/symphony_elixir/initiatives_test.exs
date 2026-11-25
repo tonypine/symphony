@@ -1,156 +1,222 @@
 defmodule SymphonyElixir.InitiativesTest do
   use ExUnit.Case, async: true
 
-  import ExUnit.CaptureLog
-
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Initiatives
   alias SymphonyElixir.Initiatives.Initiative
-  alias SymphonyElixir.Linear.Usage
+  alias SymphonyElixir.TicketEvents.Event
+  alias SymphonyElixir.TicketState
 
   @now ~U[2026-10-12 12:00:00Z]
-  @repo %{name: "billing"}
 
   defp settings, do: %Schema{}
 
-  defp child(identifier, state, attrs \\ %{}) do
-    {name, type} = state
-
-    Map.merge(
-      %{
-        "id" => "id-" <> identifier,
-        "identifier" => identifier,
-        "title" => "Title of " <> identifier,
-        "url" => "https://linear.app/acme/issue/" <> identifier,
-        "createdAt" => "2026-10-01T10:00:00Z",
-        "state" => %{"name" => name, "type" => type},
-        "inverseRelations" => %{"nodes" => []}
-      },
-      attrs
+  # A ticket record, as the run store holds it.
+  defp record(identifier, phase, attrs \\ %{}) do
+    TicketState.new(
+      "billing",
+      "id-" <> identifier,
+      Map.merge(
+        %{
+          issue_identifier: identifier,
+          title: "Title of " <> identifier,
+          url: "https://linear.app/acme/issue/" <> identifier,
+          created_at: ~U[2026-10-01 10:00:00Z],
+          phase: phase
+        },
+        attrs
+      )
     )
   end
 
-  defp blocked_by(blockers) do
-    %{
-      "inverseRelations" => %{
-        "nodes" =>
-          Enum.map(blockers, fn {identifier, type} ->
-            %{"type" => "blocks", "issue" => %{"identifier" => identifier, "state" => %{"name" => "x", "type" => type}}}
-          end) ++ [%{"type" => "related", "issue" => %{"identifier" => "BIL-999"}}]
-      }
-    }
+  defp link(identifier, state), do: %{id: "id-" <> identifier, identifier: identifier, state: state}
+
+  defp context(settings \\ settings(), started_at \\ nil), do: %{settings: settings, now: @now, started_at: started_at}
+
+  # The initiative of the parent `identifier` in `phase` over the sub-ticket `records` and `links`.
+  defp initiative(identifier, phase, records, links \\ [], attrs \\ %{}, settings \\ settings()) do
+    Initiative.from_record(record(identifier, phase, Map.merge(%{title: "Plan " <> identifier}, attrs)), %{records: records, links: links}, context(settings))
   end
 
-  defp plan(identifier, state, children, attrs \\ %{}) do
-    {name, type} = state
-
-    Map.merge(
-      %{
-        "id" => "id-" <> identifier,
-        "identifier" => identifier,
-        "title" => "Plan " <> identifier,
-        "url" => "https://linear.app/acme/issue/" <> identifier,
-        "completedAt" => nil,
-        "state" => %{"name" => name, "type" => type},
-        "children" => %{"nodes" => children}
-      },
-      attrs
-    )
+  # The stored dependencies `live/2` reads (`:dependencies`): by sub-ticket id, each `{identifier, phase}`
+  # it depends on (`:done`), with a record in that phase (none for a nil phase).
+  defp stored(by_id) do
+    fn id -> for {identifier, phase} <- Map.get(by_id, id, []), do: stored_entry(identifier, phase) end
   end
 
-  @done {"Done", "completed"}
-  @todo {"Todo", "unstarted"}
-  @in_review {"Plan Review", "started"}
-  @in_progress {"In Progress", "started"}
+  defp stored_entry(identifier, phase) do
+    record = if phase, do: %{issue_id: "id-" <> identifier, issue_identifier: identifier, phase: phase, phase_at: ~U[2026-10-06 09:00:00Z]}
+    {%{issue_id: "id-" <> identifier, identifier: nil, kind: :done}, record}
+  end
 
-  describe "from_node/4" do
-    test "groups plan tickets as active, in review or done recently, and skips the rest" do
-      assert %{group: "active"} = Initiative.from_node(plan("BIL-1", {"Waiting on sub-tickets", "started"}, []), "billing", settings(), @now)
-      assert %{group: "in_review"} = Initiative.from_node(plan("BIL-2", @in_review, []), "billing", settings(), @now)
-      assert %{group: "in_review"} = Initiative.from_node(plan("BIL-3", {"Epic Review", "started"}, []), "billing", settings(), @now)
-      assert %{group: "done"} = Initiative.from_node(plan("BIL-4", @done, [], %{"completedAt" => "2026-10-08T00:00:00Z"}), "billing", settings(), @now)
+  defp live(initiative, settings, dependencies, opts \\ []) do
+    Initiative.live(initiative, %{
+      running: MapSet.new(Keyword.get(opts, :running, [])),
+      you: MapSet.new(Keyword.get(opts, :you, [])),
+      settings: settings,
+      dependencies: stored(dependencies)
+    })
+  end
 
-      assert Initiative.from_node(plan("BIL-5", @done, [], %{"completedAt" => "2026-09-01T00:00:00Z"}), "billing", settings(), @now) == nil
-      assert Initiative.from_node(plan("BIL-6", @done, [], %{"completedAt" => "yesterday"}), "billing", settings(), @now) == nil
-      assert Initiative.from_node(plan("BIL-7", @done, []), "billing", settings(), @now) == nil
-      assert Initiative.from_node(plan("BIL-8", {"Canceled", "canceled"}, []), "billing", settings(), @now) == nil
-      assert Initiative.from_node(plan("BIL-9", {"Backlog", "backlog"}, []), "billing", settings(), @now) == nil
-      assert Initiative.from_node(%{"identifier" => "BIL-10"}, "billing", settings(), @now) == nil
-      assert %{group: "active", state: nil} = Initiative.from_node(plan("BIL-11", {nil, "started"}, []), "billing", settings(), @now)
+  describe "from_record/3" do
+    test "groups a split parent as active, in review or done recently, and skips the rest" do
+      review = %Schema{tracker: %{kind: "memory", plan_review_state: "Plan Review"}}
+
+      assert %{group: "active"} = initiative("BIL-1", "Waiting on sub-tickets", [])
+      assert %{group: "in_review"} = initiative("BIL-2", "Plan Review", [], [], %{}, review)
+      assert %{group: "in_review"} = initiative("BIL-3", "Epic Review", [])
+      assert %{group: "done", completed_at: "2026-10-08T00:00:00Z"} = initiative("BIL-4", "Done", [], [], %{phase_at: ~U[2026-10-08 00:00:00Z]})
+
+      assert initiative("BIL-5", "Done", [], [], %{phase_at: ~U[2026-09-01 00:00:00Z]}) == nil
+      assert initiative("BIL-7", "Done", []) == nil
+      assert initiative("BIL-8", "Canceled", []) == nil
+      assert initiative("BIL-9", "Backlog", []) == nil
+      assert initiative("BIL-10", "Triage", []) == nil
+      assert Initiative.from_record(%{issue_identifier: "BIL-11"}, %{records: [], links: []}, context()) == nil
+      assert %{group: "active", state: nil, completed_at: nil} = initiative("BIL-12", nil, [])
+
+      # The repo's own terminal states say what is done.
+      shipped = %Schema{tracker: %{terminal_states: ["Shipped"]}}
+      assert %{group: "done"} = initiative("BIL-13", "Shipped", [], [], %{phase_at: ~U[2026-10-08 00:00:00Z]}, shipped)
+      assert %{group: "active"} = initiative("BIL-14", "Done", [], [], %{phase_at: ~U[2026-10-08 00:00:00Z]}, shipped)
     end
 
-    test "keeps when the plan started and finished, and when each sub-ticket landed (TP-1500)" do
-      children = [child("BIL-2", @done, %{"completedAt" => "2026-10-06T09:00:00Z"}), child("BIL-3", @todo)]
-      node = plan("BIL-1", @done, children, %{"startedAt" => "2026-10-02T08:00:00Z", "completedAt" => "2026-10-08T00:00:00Z"})
+    test "keeps when Symphony split the parent and when each sub-ticket landed, from the records" do
+      records = [record("BIL-2", "Done", %{phase_at: ~U[2026-10-06 09:00:00Z]}), record("BIL-3", "Todo")]
+      parent = record("BIL-1", "In Progress", %{title: "Plan BIL-1"})
 
-      assert %{started_at: "2026-10-02T08:00:00Z", completed_at: "2026-10-08T00:00:00Z", sub_tickets: sub_tickets} =
-               Initiative.from_node(node, "billing", settings(), @now)
+      assert %{started_at: "2026-10-02T08:00:00Z", completed_at: nil, repo_key: "billing", incomplete: false, sub_tickets: sub_tickets} =
+               Initiative.from_record(parent, %{records: records, links: []}, context(settings(), ~U[2026-10-02 08:00:00.123Z]))
 
-      assert Enum.map(sub_tickets, &{&1.identifier, &1.completed_at}) == [{"BIL-2", "2026-10-06T09:00:00Z"}, {"BIL-3", nil}]
+      assert Enum.map(sub_tickets, &{&1.identifier, &1.state_type, &1.created_at, &1.completed_at}) == [
+               {"BIL-2", "completed", "2026-10-01T10:00:00Z", "2026-10-06T09:00:00Z"},
+               {"BIL-3", "started", "2026-10-01T10:00:00Z", nil}
+             ]
     end
 
-    test "orders sub-tickets by blocked-by, then creation, and lists every open sub-ticket" do
-      children = [
-        child("BIL-4", @todo, Map.merge(%{"createdAt" => "2026-10-01T09:00:00Z"}, blocked_by([{"BIL-3", "unstarted"}]))),
-        child("BIL-3", @todo, %{"createdAt" => "2026-10-02T09:00:00Z"}),
-        child("BIL-2", @done, %{"createdAt" => "2026-10-03T09:00:00Z"}),
-        child("BIL-9", {"Canceled", "canceled"}),
-        child("BIL-6", @todo, Map.merge(%{"createdAt" => "2026-10-04T09:00:00Z"}, blocked_by([{"BIL-7", "unstarted"}]))),
-        child("BIL-7", @todo, Map.merge(%{"createdAt" => "2026-10-05T09:00:00Z"}, blocked_by([{"BIL-6", "unstarted"}]))),
-        child("BIL-5", @todo, %{"createdAt" => nil, "title" => nil})
+    test "orders the sub-tickets by creation, the records' and the links' Symphony holds no record of" do
+      records = [
+        record("BIL-4", "Todo", %{created_at: ~U[2026-10-01 09:00:00Z]}),
+        record("BIL-3", "Todo", %{created_at: ~U[2026-10-02 09:00:00Z]}),
+        record("BIL-2", "Done", %{created_at: ~U[2026-10-03 09:00:00Z]})
       ]
 
-      initiative = Initiative.from_node(plan("BIL-1", @in_progress, children), "billing", settings(), @now)
+      initiative = initiative("BIL-1", "In Progress", records, [link("BIL-5", "Backlog")])
 
-      # BIL-6 and BIL-7 block each other: creation order breaks the cycle.
-      assert Enum.map(initiative.sub_tickets, & &1.identifier) == ["BIL-5", "BIL-3", "BIL-4", "BIL-2", "BIL-6", "BIL-7"]
-      assert hd(Enum.filter(initiative.sub_tickets, &(&1.identifier == "BIL-4"))).blocked_by == [%{identifier: "BIL-3", state: "x", open: true, completed_at: nil}]
-      assert initiative.repo_key == "billing"
-      refute initiative.incomplete
+      assert Enum.map(initiative.sub_tickets, &{&1.identifier, &1.state_type}) ==
+               [{"BIL-5", "backlog"}, {"BIL-4", "started"}, {"BIL-3", "started"}, {"BIL-2", "completed"}]
+
+      assert %{title: nil, url: nil, created_at: nil, completed_at: nil} = hd(initiative.sub_tickets)
+      assert Enum.all?(initiative.sub_tickets, &(&1.blocked_by == []))
+    end
+  end
+
+  describe "read/1" do
+    # Each ticket's split events, by issue id.
+    defp events(by_id), do: fn issue_id -> Map.get(by_id, issue_id, []) end
+
+    defp filed(identifier, at \\ ~U[2026-10-02 08:00:00Z], kind \\ :split_off) do
+      %Event{type: "ticket.filed", at: at, payload: %{identifier: identifier, kind: Atom.to_string(kind)}}
     end
 
-    test "flags a plan whose sub-tickets or blockers run past one read as incomplete" do
-      more = %{"pageInfo" => %{"hasNextPage" => true}}
-      many_children = plan("BIL-1", @in_progress, [child("BIL-2", @todo)], %{"children" => Map.put(more, "nodes", [child("BIL-2", @todo)])})
-      assert Initiative.from_node(many_children, "billing", settings(), @now).incomplete
+    defp split_plan(at), do: %Event{type: "plan.written", at: at, payload: %{version: 1, shape: "split"}}
 
-      many_blockers = child("BIL-2", @todo, %{"inverseRelations" => Map.put(more, "nodes", [])})
-      assert Initiative.from_node(plan("BIL-1", @in_progress, [many_blockers]), "billing", settings(), @now).incomplete
+    defp read(records, by_id, opts \\ []) do
+      Initiatives.read(Keyword.merge([records: records, events: events(by_id), settings: fn "billing" -> settings() end, now: @now], opts))
+    end
+
+    test "lists a parent Symphony split that carries no plan label, and not one that only carries the label (c1, c2)" do
+      records = [
+        # Split by Symphony, no label: its sub-tickets name it, or it lists them.
+        record("BIL-1", "Waiting on sub-tickets", %{labels: [], sub_issues: [link("BIL-2", "Todo")]}),
+        record("BIL-2", "Todo"),
+        # Split by its plan, the sub-ticket naming its parent on its own record.
+        record("BIL-5", "Waiting on sub-tickets"),
+        record("BIL-6", "In Progress", %{parent: %{identifier: "BIL-5", title: "Plan BIL-5"}}),
+        # The label, sub-tickets, and no split on its record: not listed.
+        record("BIL-3", "Waiting on sub-tickets", %{labels: ["plan"], sub_issues: [link("BIL-4", "Todo")]}),
+        record("BIL-7", "Waiting on sub-tickets", %{labels: ["breakdown"], sub_issues: [link("BIL-8", "Todo")]}),
+        # Split, but no sub-ticket yet: nothing to follow.
+        record("BIL-9", "Todo", %{labels: []})
+      ]
+
+      by_id = %{
+        "id-BIL-1" => [filed("BIL-2", ~U[2026-10-03 08:00:00Z]), filed("BIL-2b", ~U[2026-10-02 08:00:00Z])],
+        "id-BIL-3" => [filed("BIL-4", ~U[2026-10-02 08:00:00Z], :follow_up), %Event{type: "plan.written", at: @now, payload: %{shape: "single"}}],
+        "id-BIL-5" => [split_plan(~U[2026-10-04 08:00:00Z])],
+        "id-BIL-9" => [filed("BIL-10")]
+      }
+
+      assert [bil_1, bil_5] = read(records, by_id)
+
+      assert %{identifier: "BIL-1", started_at: "2026-10-02T08:00:00Z", sub_tickets: [%{identifier: "BIL-2"}]} = bil_1
+      assert %{identifier: "BIL-5", started_at: "2026-10-04T08:00:00Z", sub_tickets: [%{identifier: "BIL-6"}]} = bil_5
+    end
+
+    test "takes each parent's sub-tickets from its record's links: a done one stays and counts as done, a cancelled one is left out (c3)" do
+      records = [
+        record("BIL-1", "Waiting on sub-tickets", %{
+          sub_issues: [link("BIL-2", "Done"), link("BIL-3", "Todo"), link("BIL-4", "Canceled"), link("BIL-5", "Done"), link("BIL-6", "Duplicate")]
+        }),
+        record("BIL-2", "Done", %{phase_at: ~U[2026-10-06 09:00:00Z]}),
+        record("BIL-3", "Todo"),
+        record("BIL-4", "Canceled")
+      ]
+
+      # A split event with no time still counts as a split.
+      assert [initiative] = read(records, %{"id-BIL-1" => [%Event{type: "ticket.filed", payload: %{"kind" => "split_off"}}]})
+      assert initiative.started_at == nil
+
+      assert Enum.map(initiative.sub_tickets, &{&1.identifier, &1.state_type}) == [{"BIL-5", "completed"}, {"BIL-2", "completed"}, {"BIL-3", "started"}]
+
+      live = Initiative.live(initiative, %{running: MapSet.new(), you: MapSet.new(), settings: settings(), dependencies: fn _id -> [] end})
+      assert %{"done" => 2, "queued" => 1, "total" => 3} = live.counts
+    end
+
+    test "reads a repo's settings from the configuration by default" do
+      records = [
+        record("BIL-1", "Plan Review", %{sub_issues: [link("BIL-2", "Todo")]}),
+        %{record("BIL-3", "Todo", %{sub_issues: [link("BIL-4", "Todo")]}) | repo_key: nil}
+      ]
+
+      by_id = %{"id-BIL-1" => [filed("BIL-2")], "id-BIL-3" => [filed("BIL-4")]}
+
+      assert [%{identifier: "BIL-1"}, %{identifier: "BIL-3"}] = Initiatives.read(records: records, events: events(by_id), now: @now)
+      assert is_list(Initiatives.read(records: []))
     end
   end
 
   describe "parent_of/2" do
-    test "names the plan that has the ticket among its sub-tickets" do
-      node = plan("BIL-1", @in_progress, [child("BIL-2", @done), child("BIL-3", @todo)])
-
-      other = plan("BIL-9", @in_progress, [])
-      initiatives = Enum.map([other, node], &Initiative.from_node(&1, "billing", settings(), @now))
+    test "names the parent that has the ticket among its sub-tickets" do
+      plan = initiative("BIL-1", "In Progress", [record("BIL-2", "Done"), record("BIL-3", "Todo")])
+      initiatives = [initiative("BIL-9", "In Progress", []), plan]
 
       assert Initiatives.parent_of("id-BIL-2", initiatives) == %{identifier: "BIL-1", title: "Plan BIL-1"}
       assert Initiatives.parent_of("id-BIL-3", initiatives) == %{identifier: "BIL-1", title: "Plan BIL-1"}
       assert Initiatives.parent_of("id-BIL-4", initiatives) == nil
-      assert Initiatives.parent_of("id-BIL-2") == nil
+      assert Initiatives.parent_of("id-BIL-unknown-#{System.unique_integer([:positive])}") == nil
     end
   end
 
   describe "live/2" do
-    test "says what each sub-ticket waits on and counts the stages" do
+    test "says what each sub-ticket waits on and counts the stages, from the stored dependencies" do
       children = [
-        child("BIL-2", @done),
-        child("BIL-3", {"In Progress", "started"}),
-        child("BIL-4", {"QA", "started"}),
-        child("BIL-5", @todo, blocked_by([{"BIL-4", "started"}, {"BIL-2", "completed"}])),
-        child("BIL-6", {"Code Review", "started"}),
-        child("BIL-7", @todo),
-        child("BIL-8", {"Backlog", "backlog"}),
-        child("BIL-10", @todo, blocked_by([{"BIL-4", "started"}])),
-        child("BIL-11", @in_review)
+        record("BIL-2", "Done", %{phase_at: ~U[2026-10-06 09:00:00Z]}),
+        record("BIL-3", "In Progress"),
+        record("BIL-4", "QA"),
+        record("BIL-5", "Todo"),
+        record("BIL-6", "Code Review"),
+        record("BIL-7", "Todo"),
+        record("BIL-8", "Backlog"),
+        record("BIL-10", "Todo"),
+        record("BIL-11", "Plan Review")
       ]
 
       settings = %Schema{tracker: %{kind: "memory", plan_review_state: "Plan Review"}}
 
-      initiative = Initiative.from_node(plan("BIL-1", @in_progress, children), "billing", settings, @now)
-      live = Initiative.live(initiative, %{running: MapSet.new(["id-BIL-3"]), you: MapSet.new(["id-BIL-4"]), settings: settings})
+      initiative = initiative("BIL-1", "In Progress", children, [], %{}, settings)
+      dependencies = %{"id-BIL-5" => [{"BIL-4", "QA"}, {"BIL-2", "Done"}], "id-BIL-10" => [{"BIL-4", "QA"}]}
+      live = live(initiative, settings, dependencies, running: ["id-BIL-3"], you: ["id-BIL-4"])
 
       waits = Map.new(live.sub_tickets, &{&1.identifier, &1.waits_on})
 
@@ -166,138 +232,60 @@ defmodule SymphonyElixir.InitiativesTest do
                "BIL-11" => "you"
              }
 
-      assert Enum.find(live.sub_tickets, &(&1.identifier == "BIL-5")).waiting_for == ["BIL-4"]
+      bil_5 = Enum.find(live.sub_tickets, &(&1.identifier == "BIL-5"))
+      assert bil_5.waiting_for == ["BIL-4"]
+
+      assert bil_5.blocked_by == [
+               %{identifier: "BIL-4", state: "QA", open: true, completed_at: nil},
+               %{identifier: "BIL-2", state: "Done", open: false, completed_at: "2026-10-06T09:00:00Z"}
+             ]
+
       assert live.counts == %{"done" => 1, "working" => 2, "you" => 3, "queued" => 1, "blocked" => 2, "total" => 9}
       assert Initiative.stages() == ~w(done working you queued blocked)
     end
+
+    test "orders the sub-tickets by their stored dependencies, then creation; a cycle breaks by creation" do
+      children = [
+        record("BIL-4", "Todo", %{created_at: ~U[2026-10-01 09:00:00Z]}),
+        record("BIL-3", "Todo", %{created_at: ~U[2026-10-02 09:00:00Z]}),
+        record("BIL-2", "Done", %{created_at: ~U[2026-10-03 09:00:00Z]}),
+        record("BIL-6", "Todo", %{created_at: ~U[2026-10-04 09:00:00Z]}),
+        record("BIL-7", "Todo", %{created_at: ~U[2026-10-05 09:00:00Z]}),
+        record("BIL-5", "Todo", %{created_at: nil, title: nil})
+      ]
+
+      initiative = initiative("BIL-1", "In Progress", children)
+
+      # BIL-4 depends on BIL-3, and on a ticket Symphony holds no record of; BIL-6 and BIL-7 on each other.
+      dependencies = %{"id-BIL-4" => [{"BIL-3", "Todo"}, {"OUT-1", nil}], "id-BIL-6" => [{"BIL-7", "Todo"}], "id-BIL-7" => [{"BIL-6", "Todo"}]}
+      live = live(initiative, settings(), dependencies)
+
+      assert Enum.map(live.sub_tickets, & &1.identifier) == ["BIL-5", "BIL-3", "BIL-4", "BIL-2", "BIL-6", "BIL-7"]
+      bil_4 = Enum.find(live.sub_tickets, &(&1.identifier == "BIL-4"))
+
+      assert [%{identifier: "BIL-3", open: true}, %{identifier: nil, state: nil, open: true, completed_at: nil}] =
+               bil_4.blocked_by
+
+      assert bil_4.waiting_for == ["BIL-3", nil]
+    end
   end
 
-  describe "the server" do
-    defp linear(test_pid, pages) do
-      fn query, variables, _opts ->
-        send(test_pid, {:query, query, variables, Usage.current_caller()})
-        Map.fetch!(pages, variables.after)
-      end
-    end
-
-    defp page(nodes, next \\ nil) do
-      info = if next, do: %{"hasNextPage" => true, "endCursor" => next}, else: %{"hasNextPage" => false}
-      {:ok, %{"data" => %{"issues" => %{"nodes" => nodes, "pageInfo" => info}}}}
-    end
-
-    defp server_state(linear_client, opts \\ []) do
-      %{
-        opts:
-          Keyword.merge(
-            [
-              name: {:test, make_ref()},
-              repos: fn -> {:ok, [@repo, %{name: "billing-copy"}]} end,
-              settings_fun: fn _repo -> settings() end,
-              scope_filter: fn repo -> {:ok, %{"team" => %{"key" => %{"eq" => repo.name}}}} end,
-              linear_client: linear_client,
-              now: fn -> @now end
-            ],
-            opts
-          ),
-        timer: make_ref()
-      }
-    end
-
-    test "reads the plan tickets of every route on the poll, page by page, and caches them" do
-      first = plan("BIL-1", @in_progress, [child("BIL-2", @todo)])
-      second = plan("BIL-3", @done, [], %{"completedAt" => "2026-09-01T00:00:00Z"})
-      pages = %{nil => page([first], "c1"), "c1" => page([second])}
-
-      state = server_state(linear(self(), pages))
-      name = Keyword.fetch!(state.opts, :name)
-
-      refute Initiatives.read?(name)
-      assert Initiatives.cached(name) == []
-
-      Initiatives.run_once(state)
-
-      assert_received {:query, query, %{filter: %{"and" => [scope, labels, open_or_recent]}, after: nil}, _caller}
-      assert query =~ "SymphonyInitiatives"
-      assert scope == %{"team" => %{"key" => %{"eq" => "billing"}}}
-      assert labels == %{"or" => [plan_label("plan"), plan_label("breakdown")]}
-      assert %{"or" => [_open, %{"completedAt" => %{"gte" => "2026-10-05T12:00:00Z"}}]} = open_or_recent
-      assert_received {:query, _query, %{after: "c1"}, _caller}
-
-      # The second route lists the same tickets: each is kept once.
-      assert [%{identifier: "BIL-1", repo_key: "billing"}] = Initiatives.cached(name)
-      assert Initiatives.read?(name)
-
-      # A second read with the same answer leaves the cache as it is.
-      Initiatives.run_once(state)
-      assert [%{identifier: "BIL-1"}] = Initiatives.cached(name)
-    end
-
-    test "warns about a plan read incomplete" do
-      truncated = plan("BIL-1", @in_progress, [], %{"children" => %{"nodes" => [], "pageInfo" => %{"hasNextPage" => true}}})
-      state = server_state(linear(self(), %{nil => page([truncated])}))
-
-      log = capture_log(fn -> Initiatives.run_once(state) end)
-      assert log =~ "Initiatives: BIL-1 has more sub-tickets or blockers than one read returns"
-      assert [%{incomplete: true}] = Initiatives.cached(Keyword.fetch!(state.opts, :name))
-    end
-
-    defp plan_label(name), do: %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => name}}}}
-
-    test "keeps the last list when Linear fails" do
-      name = {:test, make_ref()}
-      ok = server_state(linear(self(), %{nil => page([plan("BIL-1", @in_progress, [])])}), name: name)
-      Initiatives.run_once(ok)
-
-      for failing <- [
-            fn _query, _variables, _opts -> {:ok, %{"errors" => [%{"message" => "boom"}]}} end,
-            fn _query, _variables, _opts -> {:ok, %{"data" => nil}} end,
-            fn _query, _variables, _opts -> {:error, :timeout} end
-          ] do
-        log = capture_log(fn -> Initiatives.run_once(server_state(failing, name: name)) end)
-        assert log =~ "Initiatives: could not read the plan tickets from Linear"
-        assert [%{identifier: "BIL-1"}] = Initiatives.cached(name)
-      end
-
-      no_scope = server_state(nil, name: name, scope_filter: fn _repo -> {:error, :no_scope} end)
-      log = capture_log(fn -> Initiatives.run_once(no_scope) end)
-      assert log =~ ":no_scope"
-    end
-
-    test "ticks on its interval, tagged as the initiatives caller" do
-      test_pid = self()
-      name = Module.concat(__MODULE__, :Ticking)
-
-      {:ok, pid} =
-        Initiatives.start_link(
-          name: name,
-          initial_delay_ms: 0,
-          interval_ms: 60_000,
-          repos: fn -> {:ok, [@repo]} end,
-          settings_fun: fn _repo -> settings() end,
-          scope_filter: fn _repo -> {:ok, %{}} end,
-          linear_client: linear(test_pid, %{nil => page([])})
-        )
-
-      assert_receive {:query, _query, _variables, :initiatives}
-      GenServer.stop(pid)
-    end
-
-    test "lists the cached initiatives with what runs and what waits on the Director" do
-      name = {:test, make_ref()}
-      node = plan("BIL-1", @in_progress, [child("BIL-2", @todo), child("BIL-3", @todo)])
-      Initiatives.run_once(server_state(linear(self(), %{nil => page([node])}), name: name))
+  describe "list/4" do
+    test "lists the initiatives with what runs and what waits on the Director" do
+      records = [record("BIL-1", "In Progress", %{sub_issues: [link("BIL-2", "Todo"), link("BIL-3", "Todo")]}), record("BIL-2", "Todo"), record("BIL-3", "Todo")]
+      split_off = [%Event{type: "ticket.filed", at: @now, payload: %{kind: "split_off"}}]
+      opts = [records: records, events: fn id -> if id == "id-BIL-1", do: split_off, else: [] end, now: @now]
+      settings_fun = fn "billing" -> settings() end
 
       snapshot = %{running: [%{issue_id: "id-BIL-2"}]}
-
-      assert [%{counts: %{"working" => 1, "queued" => 1}}] = Initiatives.list(snapshot, name, {:test, make_ref()}, fn "billing" -> settings() end)
+      assert [%{counts: %{"working" => 1, "queued" => 1}}] = Initiatives.list(snapshot, opts, {:test, make_ref()}, settings_fun)
 
       # A run paused on a Question is not working: it waits for the answer.
       paused = %{running: [%{issue_id: "id-BIL-2", step: %{waiting: "answer"}}]}
-      assert [%{counts: %{"working" => 0}}] = Initiatives.list(paused, name, {:test, make_ref()}, fn "billing" -> settings() end)
+      assert [%{counts: %{"working" => 0}}] = Initiatives.list(paused, opts, {:test, make_ref()}, settings_fun)
 
-      assert [%{counts: %{"working" => 0}}] = Initiatives.list(%{}, name, {:test, make_ref()})
-      assert Initiatives.list(%{}, {:test, make_ref()}) == []
-      assert Initiatives.read?(Module.concat(__MODULE__, :NotStarted))
+      assert [%{counts: %{"working" => 0}}] = Initiatives.list(%{}, opts, {:test, make_ref()})
+      assert Initiatives.list(%{}, records: []) == []
     end
   end
 end

@@ -7,6 +7,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   alias SymphonyElixir.ClaudeCode.AppServer, as: ClaudeAppServer
   alias SymphonyElixir.Harnesses.{EventStream, Launcher}
+  alias SymphonyElixir.QaAgent.Steps, as: QaSteps
 
   alias SymphonyElixir.{
     AgentLabels,
@@ -26,6 +27,7 @@ defmodule SymphonyElixir.AgentRunner do
     Decisions,
     DependencyAudit,
     DependencyGate,
+    Dispatch.DependsOn,
     EpicReview,
     GitHub.PullRequest,
     Handoff,
@@ -176,13 +178,13 @@ defmodule SymphonyElixir.AgentRunner do
   defp provider_hold_reason({:model_api_unreachable, %{}} = reason), do: reason
   defp provider_hold_reason(_reason), do: nil
 
-  # The reasons the orchestrator reads as they are: the tool-failure circuit breaker, and an epic
-  # review or a QA pass waiting for CI.
+  # The reasons the orchestrator reads as they are: the tool-failure circuit breaker, and a run
+  # waiting for CI.
   defp exits_as_is?(reason), do: terminal_tool_failure_circuit_breaker?(reason) or ci_pending?(reason)
 
-  # An epic review that found CI still running on the commit it reviews, or a QA pass whose named
-  # check is still running on the PR head: the orchestrator starts it again after a short wait
-  # instead of failing the run (`SymphonyElixir.EpicReview`, `SymphonyElixir.QaVerification`).
+  # A run that found CI still running, such as an epic review on the commit it reviews: the
+  # orchestrator starts it again after a short wait instead of failing the run
+  # (`SymphonyElixir.EpicReview`).
   defp ci_pending?({:ci_pending, %{}}), do: true
   defp ci_pending?(_reason), do: false
 
@@ -686,6 +688,7 @@ defmodule SymphonyElixir.AgentRunner do
       opts
       |> Keyword.put(:worker_host, worker_host)
       |> Keyword.put(:on_message, codex_message_handler(codex_update_recipient, issue))
+      |> Keyword.put(:qa_boundary, QaSteps.boundary(codex_update_recipient, issue.id))
 
     case Keyword.get(opts, :code_review, CodeReview).run(issue, workspace, walkthrough_opts) do
       :skip -> run_non_review_issue(workspace, issue, codex_update_recipient, opts, walkthrough_opts, worker_host)
@@ -846,21 +849,56 @@ defmodule SymphonyElixir.AgentRunner do
 
   # A list that opens on machine steps runs them before the first turn. A ticket whose last step
   # paused on a Question that is answered now, by a run that is gone (Symphony restarted while it
-  # waited), resumes on that step.
+  # waited), resumes on that step. A ticket whose last run Symphony's restart interrupted goes on
+  # from where that run stopped (`PhaseSteps.restart_point/2`, TP-1590).
   defp start_walk(agent_module, %{walk: %{steps: steps, step: step}} = run_context, max_turns) do
-    case PhaseSteps.resume_point(steps, step_context(run_context)) do
+    context = step_context(run_context)
+
+    case PhaseSteps.resume_point(steps, context) do
       {paused, question} ->
         Logger.info("Resuming step #{paused.id} of #{issue_context(run_context.issue)} on the answer to question #{question.id}")
         resume_walk(agent_module, run_context, paused, question, 0, max_turns)
 
       nil ->
-        if PhaseSteps.machine?(step),
-          do: run_machine_steps(agent_module, nil, run_context, step, 0, max_turns),
-          else: start_turn_session(agent_module, run_context, 1, max_turns)
+        start_walk_at(agent_module, run_context, PhaseSteps.restart_point(steps, context), step, max_turns)
     end
   end
 
   defp start_walk(agent_module, run_context, max_turns), do: start_turn_session(agent_module, run_context, 1, max_turns)
+
+  defp start_walk_at(agent_module, run_context, %{} = point, _step, max_turns) do
+    Logger.info(
+      "Going on at step #{point.step.id} of #{issue_context(run_context.issue)} after Symphony restarted mid-run " <>
+        "resumed_session=#{is_binary(point.session_id)}"
+    )
+
+    go_on_after_restart(agent_module, run_context, point, max_turns)
+  end
+
+  defp start_walk_at(agent_module, run_context, nil, step, max_turns) do
+    if PhaseSteps.machine?(step),
+      do: run_machine_steps(agent_module, nil, run_context, step, 0, max_turns),
+      else: start_turn_session(agent_module, run_context, 1, max_turns)
+  end
+
+  # A machine step runs (again, when the restart stopped it); an agent step gets its turn with a
+  # note of the restart, in the interrupted turn's session when it was stopped mid-turn. A session
+  # that can't be resumed is replaced by a new one at the same step (`do_run_codex_turns/5`).
+  defp go_on_after_restart(agent_module, %{walk: walk} = run_context, %{step: step} = point, max_turns) do
+    if PhaseSteps.machine?(step) do
+      run_machine_steps(agent_module, nil, run_context, step, 0, max_turns)
+    else
+      notes = %{restarted: if(point.mid_step, do: :mid_step, else: :between_steps)}
+      run_context = %{run_context | walk: %{walk | step: step, carry: point.carry, notes: notes}}
+
+      run_context =
+        if is_binary(point.session_id),
+          do: Map.merge(run_context, %{resume_session_id: point.session_id, restart_session: point.session_id}),
+          else: run_context
+
+      start_turn_session(agent_module, run_context, 1, max_turns)
+    end
+  end
 
   defp start_turn_session(agent_module, run_context, turn_number, max_turns) do
     %{workspace: workspace, worker_host: worker_host, issue: issue, opts: opts} = run_context
@@ -896,7 +934,8 @@ defmodule SymphonyElixir.AgentRunner do
 
     turn_result = Steer.during_turn(run_id, fn -> run_agent_turn(agent_module, app_session, prompt, run_context) end)
     # A resumed step's conversation is resumed once, by its first turn.
-    run_context = run_context |> Map.drop([:resume_session_id, :steer_now]) |> keep_turn_transcript(turn_result)
+    restart_session = Map.get(run_context, :restart_session)
+    run_context = run_context |> Map.drop([:resume_session_id, :steer_now, :restart_session]) |> keep_turn_transcript(turn_result)
 
     case turn_result do
       # The Conductor steered the run now: the same session goes on with its steer as a new turn,
@@ -933,9 +972,30 @@ defmodule SymphonyElixir.AgentRunner do
             {:error, reason}
         end
 
-      {:error, _reason} = error ->
-        error
+      {:error, reason} = error ->
+        if fresh_session_after_restart?(restart_session, reason),
+          do: fresh_session_after_restart(agent_module, run_context, restart_session, reason, turn_number, max_turns),
+          else: error
     end
+  end
+
+  # The session a restart interrupted could not be resumed (its store is gone, or the agent
+  # refused it): a new session takes the same step once, with the ticket's history of what is
+  # done. A usage limit is the run's, as for any turn.
+  defp fresh_session_after_restart?(_restart_session, reason)
+       when is_tuple(reason) and elem(reason, 0) in [:usage_limited, :model_api_unreachable],
+       do: false
+
+  defp fresh_session_after_restart?(restart_session, _reason), do: is_binary(restart_session)
+
+  defp fresh_session_after_restart(agent_module, run_context, restart_session, reason, turn_number, max_turns) do
+    Logger.warning(
+      "Could not resume session #{restart_session} of #{issue_context(run_context.issue)} after the restart: " <>
+        "#{inspect(reason)}; a new session takes the step"
+    )
+
+    stop_current_session(agent_module)
+    start_turn_session(agent_module, run_context, turn_number, max_turns)
   end
 
   # A person's decision may unlock a protected path for the ticket's runs (`SymphonyElixir.PathUnlock`):
@@ -1476,17 +1536,30 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp hand_off_machine_head(%Issue{} = issue, %{opts: opts} = run_context) do
     head = read_workspace_head(run_context.workspace, run_context.worker_host, opts)
-    run_context = put_in(run_context.progress.head, head)
+    tree = read_workspace_tree(run_context.workspace, run_context.worker_host, opts)
+    fingerprint = progress_fingerprint(head, tree, issue, opts)
+    run_context = %{run_context | progress: %{run_context.progress | head: head, fingerprint: fingerprint}}
 
-    if machine_head_handed_off?(issue, run_context) do
-      Handoff.emit(run_repo_key(issue, opts), issue.id, %{head: head, pr_url: ticket_pr_url(issue, opts), source: "machine_handoff"})
+    # An answered rework goes back to QA ahead of the Code Review handoff, as after a turn
+    # (`end_run_after_turn/2`); a hold or a person's move while the steps ran wins over both.
+    cond do
+      not waiting_on_hold?(issue, opts) and rework_answered?(issue, run_context) ->
+        return_answered_rework_to_qa(issue, run_context)
 
-      case move_to_post_pr_state(issue, post_pr_state(run_context), "after its handoff step", run_context) do
-        :ok -> forget_rework_base(issue, opts)
-        {:error, reason} -> {:error, {:machine_handoff_failed, reason}}
-      end
-    else
-      forget_rework_base_outside_rework(issue, opts)
+      machine_head_handed_off?(issue, run_context) ->
+        hand_off_handed_machine_head(issue, head, run_context)
+
+      true ->
+        forget_rework_base_outside_rework(issue, opts)
+    end
+  end
+
+  defp hand_off_handed_machine_head(%Issue{} = issue, head, %{opts: opts} = run_context) do
+    Handoff.emit(run_repo_key(issue, opts), issue.id, %{head: head, pr_url: ticket_pr_url(issue, opts), source: "machine_handoff"})
+
+    case move_to_post_pr_state(issue, post_pr_state(run_context), "after its handoff step", run_context) do
+      :ok -> forget_rework_base(issue, opts)
+      {:error, reason} -> {:error, {:machine_handoff_failed, reason}}
     end
   end
 
@@ -1567,7 +1640,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   # A walk's turn records its step's start, and an orchestrated step's earlier answer is removed;
   # a retry of the step (a reminder, a refused answer) is the same step, started once.
-  defp start_walk_turn(%{walk: %{notes: notes} = walk} = run_context) when notes == %{} or is_map_key(notes, :resume) do
+  defp start_walk_turn(%{walk: %{notes: notes} = walk} = run_context) when notes == %{} or is_map_key(notes, :resume) or is_map_key(notes, :restarted) do
     context = step_context(run_context)
     PhaseSteps.record_turn_started(walk.step, context)
     if walk.step.mode == "orchestrated", do: PhaseSteps.clear_answer(walk.step, context)
@@ -1846,8 +1919,8 @@ defmodule SymphonyElixir.AgentRunner do
         Logger.info("Stopping agent run for #{issue_context(refreshed_issue)}; waiting for its open sub-issues")
         {:done, refreshed_issue}
 
-      Issue.blocked?(refreshed_issue, Config.settings!().tracker.terminal_states) ->
-        Logger.info("Stopping agent run for #{issue_context(refreshed_issue)}; it waits for its blockers")
+      DependsOn.open_for(refreshed_issue.id) != [] ->
+        Logger.info("Stopping agent run for #{issue_context(refreshed_issue)}; it waits on its dependencies")
         {:done, refreshed_issue}
 
       active_issue_state?(refreshed_issue.state) ->
@@ -2110,16 +2183,19 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  # A Rework whose findings are all answered without a code change (a proof recorded again, TP-1579)
-  # has nothing for Code Review to read: the head it leaves is the one QA judged. So once the
-  # workspace HEAD is still the head the Rework started from, with a clean tree, and that HEAD is the
-  # attached PR's head, QA failed that head after Code Review approved it, the ticket has at least
-  # one finding and none still open or reopened, no plan
-  # check a test proves is open (`TicketJourney.unproved/1`) and no reviewer comment, CI failure or
-  # conflict is pending, the run moves the ticket to QA, which runs again on that head (only a pass
-  # carries over a head). This wins over the Code Review handoff even when the run pushed the
-  # unchanged head or called the PR tool. A Rework with no finding, a finding left open or a new head
-  # keeps the rules below.
+  # A Rework whose findings are all answered without a code change (a proof recorded again, TP-1579;
+  # a finding the rework run ruled needs no change, such as one a blocked QA pass's Conductor route
+  # filed for a check it waived, TP-1655) has nothing for Code Review to read: the head it leaves is
+  # the one QA judged. So once the workspace HEAD is still the head the Rework started from, with a
+  # clean tree, and that HEAD is the attached PR's head, QA failed or could not judge (`blocked`)
+  # that head after Code Review approved it, the ticket has at least one finding and none still open
+  # or reopened, no plan check a test proves is open (`TicketJourney.unproved/1`) and no reviewer
+  # comment, CI failure or conflict is pending, the run moves the ticket to QA, which runs again on
+  # that head (only a pass carries over a head). This wins over the Code Review handoff even when
+  # the run pushed the unchanged head, called the PR tool or ended on the step list's machine
+  # `handoff` step (`hand_off_machine_head/2`), and over the idle park: such a run is never parked
+  # for no progress, so no hold and no question. A Rework with no finding, a finding left open or a
+  # new head keeps the rules below, and an idle one is parked as before.
   defp rework_answered?(%Issue{id: issue_id} = issue, %{progress: %{head: head} = progress} = run_context) do
     unchanged_clean_rework_head?(issue, head, progress) and attached_pr?(issue, run_context.opts) and
       findings_answered?(issue_id) and
@@ -2133,12 +2209,14 @@ defmodule SymphonyElixir.AgentRunner do
     rework_state?(state) and is_binary(head) and head == progress.rework_base and clean_tree?(progress)
   end
 
-  # The Rework came from QA failing `head` after Code Review approved it: QA's newest verdict is a
-  # fail on `head`, Code Review's newest is an approve on `head`, and the fail is the newer. A
-  # Rework Code Review sent back (its request-changes posts no finding) or any other order keeps the
-  # rules below, so the shortcut never skips the review that rejected the head.
+  # The Rework came from QA on `head` after Code Review approved it: QA's newest verdict is a fail
+  # on `head`, or a `blocked` pass the Conductor routed to Rework with a finding
+  # (`QaVerification`'s `:qa_blocked_rework`), Code Review's newest is an approve on `head`, and
+  # QA's is the newer. A Rework Code Review sent back (its request-changes posts no finding) or any
+  # other order keeps the rules below, so the shortcut never skips the review that rejected the head.
   defp qa_failed_approved_head?(repo_key, issue_id, head) do
-    with %{outcome: "fail", head_sha: ^head, recorded_at: %DateTime{} = failed_at} <- List.first(Handoff.verdicts(repo_key, issue_id, "qa")),
+    with %{outcome: outcome, head_sha: ^head, recorded_at: %DateTime{} = failed_at} when outcome in ["fail", "blocked"] <-
+           List.first(Handoff.verdicts(repo_key, issue_id, "qa")),
          %{outcome: "approve", head_sha: ^head, recorded_at: %DateTime{} = approved_at} <-
            List.first(Handoff.verdicts(repo_key, issue_id, "code_review")) do
       DateTime.compare(failed_at, approved_at) == :gt
@@ -2516,6 +2594,9 @@ defmodule SymphonyElixir.AgentRunner do
       idle_rework_handoff?(issue, ci_action, run_context) ->
         hand_off_idle_rework(issue, ci_action, run_context)
 
+      answer = rework_answer(issue, run_context) ->
+        hand_off_answered_rework(issue, answer, run_context)
+
       ci_action == :pending ->
         Logger.info("Not parking #{issue_context(issue)}; waiting for CI on its pushed head #{head}")
         :continue
@@ -2532,6 +2613,76 @@ defmodule SymphonyElixir.AgentRunner do
     ci_action in [:pending, :success] and rework_state?(issue.state) and
       (pushed_new_head?(run_context) or
          (is_map(run_context.opts[:ci_failure]) and pending_reviewer_comments(issue, run_context.opts) == []))
+  end
+
+  # A Rework a person answered a question in, whose run then changed nothing (TP-1596): the answer
+  # is why, so its idle run is neither parked for no progress nor asks a second question. Once the
+  # workspace HEAD is still the head the Rework started from, with a clean tree, that HEAD is the
+  # attached PR's head, no reviewer comment, CI failure or conflict is pending and a question on the
+  # ticket was answered since it last entered Rework, the run hands that head back to Code Review
+  # with the answer as the move's reason. The newest such answer, or nil. An answered QA rework
+  # (`rework_answered?/2`) already went back to QA ahead of this; a run with changes, another head,
+  # or no answer is parked as before.
+  defp rework_answer(%Issue{id: issue_id} = issue, %{progress: %{head: head} = progress} = run_context) do
+    with true <- unchanged_clean_rework_head?(issue, head, progress) and attached_pr?(issue, run_context.opts),
+         %{} = answer <- answer_since_rework({:ticket, run_repo_key(issue, run_context.opts), issue_id}),
+         true <- no_pending_rework_signal?(issue, run_context.opts) and pr_head?(issue, head, run_context) do
+      answer
+    else
+      _no_answer -> nil
+    end
+  end
+
+  # The newest `question.answered` after the ticket's newest entry into Rework; nil without such an
+  # entry, an answer after it or a readable ledger. The answer to a hold's own question (the idle
+  # park's "Run it again", a dispatch loop's, a block report's: `Questions.held_question?/1`) says
+  # nothing about the work, so it never counts: a run that changes nothing after it parks again.
+  defp answer_since_rework({:ticket, _repo_key, issue_id} = ticket) do
+    events = with {:error, _reason} <- RunStore.list_ticket_events(issue_id, []), do: []
+    {since, entry} = events |> Enum.reverse() |> Enum.split_while(&(not entered_rework?(&1)))
+    if entry != [], do: Enum.find(since, &work_answer?(ticket, &1))
+  end
+
+  defp work_answer?(ticket, event) do
+    Map.get(event, :type) == "question.answered" and not held_answer?(ticket, event_payload(event, :question_id))
+  end
+
+  # Whether the answered question `id` is a hold's own (`Questions.held_question?/1`).
+  defp held_answer?(ticket, id) do
+    question = Questions.find(ticket, id)
+    question != nil and Questions.held_question?(question)
+  end
+
+  defp entered_rework?(event), do: Map.get(event, :type) == "phase.entered" and rework_state?(event_payload(event, :to))
+
+  defp event_payload(event, key) do
+    payload = Map.get(event, :payload) || %{}
+    Map.get(payload, key, Map.get(payload, Atom.to_string(key)))
+  end
+
+  defp hand_off_answered_rework(%Issue{} = issue, answer, %{progress: %{head: head}} = run_context) do
+    post_pr_state = post_pr_state(run_context)
+    reason = "after the answer " <> answer_words(answer)
+    Logger.info("Rework for #{issue_context(issue)} changed nothing on its PR head #{head} #{reason}; moving to #{post_pr_state}")
+
+    if not handoff_emitted?(issue, run_context) do
+      Handoff.emit(run_repo_key(issue, run_context.opts), issue.id, %{head: head, pr_url: ticket_pr_url(issue, run_context.opts), source: "answered_rework"})
+    end
+
+    case move_to_post_pr_state(issue, post_pr_state, reason, run_context) do
+      :ok ->
+        forget_rework_base(issue, run_context.opts)
+        :ok
+
+      {:error, reason} ->
+        {:error, {:rework_handoff_failed, reason}}
+    end
+  end
+
+  # The option it picked, else its own words, cut to a line the reason can carry.
+  defp answer_words(answer) do
+    words = event_payload(answer, :option) || event_payload(answer, :answer) || ""
+    "“" <> String.slice(String.trim(to_string(words)), 0, 200) <> "”"
   end
 
   # The head moved past the one this run started on, or past the head the rework started from, so

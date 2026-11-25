@@ -15,6 +15,15 @@ defmodule SymphonyElixir.RunStoreTest do
     :ok = RunStore.clear()
   end
 
+  test "a write flushes the Mnesia log to disk unless the test configuration turned the flush off" do
+    assert Application.fetch_env!(:symphony_elixir, :run_store_sync_log) == false
+    Application.put_env(:symphony_elixir, :run_store_sync_log, true)
+    on_exit(fn -> Application.put_env(:symphony_elixir, :run_store_sync_log, false) end)
+
+    assert :ok = RunStore.record_ticket_self_heal(@repo_key, "issue-flushed", %{component: "ci", attempts: 1})
+    assert :ok = RunStore.clear()
+  end
+
   test "rejects partitioned write shims without an explicit repo_key" do
     assert {:error, :missing_repo_key} = RunStore.put_run(%{run_id: "run-missing-repo"})
     assert {:error, :missing_repo_key} = RunStore.update_run("run-missing-repo", %{status: "success"})
@@ -542,6 +551,20 @@ defmodule SymphonyElixir.RunStoreTest do
     assert {:error, :invalid_issue_id} = RunStore.get_own_state_move(nil)
 
     restart_run_store()
+  end
+
+  test "TP-1611: the forced queue a previous release kept loads and is deleted, the other repo's too only by its own key" do
+    entries = %{"issue-forced" => %{issue_id: "issue-forced", identifier: "MT-1", forced_since: ~U[2026-11-01 00:00:00Z]}}
+    {:atomic, :ok} = :mnesia.transaction(fn -> :mnesia.write({:symphony_run_store_totals, {:forced, @repo_key}, entries}) end)
+    {:atomic, :ok} = :mnesia.transaction(fn -> :mnesia.write({:symphony_run_store_totals, {:forced, @other_repo_key}, entries}) end)
+
+    restart_run_store()
+
+    assert :ok = RunStore.delete_forced_queue(@repo_key)
+    assert :mnesia.dirty_read(:symphony_run_store_totals, {:forced, @repo_key}) == []
+    assert [_row] = :mnesia.dirty_read(:symphony_run_store_totals, {:forced, @other_repo_key})
+    assert :ok = RunStore.delete_forced_queue(@repo_key)
+    assert {:error, :invalid_repo_key} = RunStore.delete_forced_queue(" ")
   end
 
   test "persists the issues a merge moved to the waiting state across run store restart" do

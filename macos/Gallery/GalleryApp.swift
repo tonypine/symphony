@@ -469,7 +469,7 @@ struct GalleryView: View {
                                 )
                                 .contentShape(Rectangle())
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(.plainPointer)
                             .accessibilityLabel(entry.title)
                             .accessibilityIdentifier("gallery.entry.\(entry.id)")
                             .accessibilityAddTraits(picked == entry.id ? .isSelected : [])
@@ -490,7 +490,7 @@ struct GalleryView: View {
                                             )
                                             .contentShape(Rectangle())
                                     }
-                                    .buttonStyle(.plain)
+                                    .buttonStyle(.plainPointer)
                                     .accessibilityLabel(own.id)
                                     .accessibilityIdentifier("gallery.variation.\(own.id)")
                                     .accessibilityAddTraits(variation == own.id ? .isSelected : [])
@@ -517,7 +517,7 @@ struct GalleryView: View {
                     .padding(DesignTokens.Space.s1)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.plainPointer)
             .accessibilityLabel(showsEntries ? "Hide the entries" : "Show the entries")
             Text(entry.map { $0.kind == .component ? "Components" : "Screens" } ?? "")
                 .textStyle(.body)
@@ -542,7 +542,7 @@ struct GalleryView: View {
                             .padding(DesignTokens.Space.s1)
                             .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.plainPointer)
                     .accessibilityLabel(label)
                 }
             } else if let entry {
@@ -575,7 +575,7 @@ struct GalleryView: View {
                         .background(picked == value ? DesignTokens.Surface.raised.color : .clear, in: Capsule())
                         .contentShape(Capsule())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.plainPointer)
                 .accessibilityLabel(label)
                 .accessibilityAddTraits(picked == value ? .isSelected : [])
             }

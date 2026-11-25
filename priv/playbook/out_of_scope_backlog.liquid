@@ -13,7 +13,7 @@ it lands depends on the current issue:
 - Any other ticket's sub-issue lands in `Todo`, and the current issue is marked
   blocked by it: the new ticket lands first, and the current issue waits for it
   and then continues in its phase on its own. The turn in flight finishes; the
-  next run waits. If Linear refuses that link, the tool says so after the new
+  next run waits. If Symphony can't store that dependency, the tool says so after the new
   issue exists: mark the current issue blocked by it with
   `linear_add_blocked_by`.
 
@@ -42,9 +42,9 @@ blocks the ticket.
 
 Write the walkthrough end to end, in plain words from the user's seat, and name no
 test and no check in it. The implementer, who writes the tests, records which test
-proves each step it covers (`Proved by: <test>`), and the repo names the check that
-runs them (`proof_check` in its WORKFLOW.md). Symphony's QA pre-check confirms each
-named test on the PR head, and QA walks every step without one. Unit-level facts
+proves each step it covers (`Proved by: <test>`). A recorded test proof is complete:
+CI runs the test on the pull request and gates the merge, QA does not walk that step,
+and QA walks every step without one. Unit-level facts
 (keys, counters, error tuples) are acceptance criteria, not walkthrough steps.
 Shape each step when you write it:
 

@@ -3,7 +3,7 @@ defmodule SymphonyElixir.UpdateHoldTest do
 
   import ExUnit.CaptureLog
 
-  alias SymphonyElixir.{Pauses, TicketPullRequest, UpdateHold}
+  alias SymphonyElixir.{Pauses, TicketPullRequest, TicketState, UpdateHold}
 
   @repo_key "repo-a"
 
@@ -24,9 +24,9 @@ defmodule SymphonyElixir.UpdateHoldTest do
   describe "resolve/5 and hold/4" do
     test "hold a Todo ticket until the running build includes its blocker's merge commit" do
       issue = todo_blocked_by(blocker("TP-419", "Done"))
-      fix = fix_issue("TP-419", @fix_pr)
+      fix_issue("TP-419", @fix_pr)
 
-      cache = resolve([issue], fetch_ok([fix]), included: false)
+      cache = resolve([issue], included: false)
 
       assert cache.blockers == %{"id-TP-419" => {:merged, @fix_pr, @merge_sha}}
       assert cache.included == %{{@merge_sha, @build_sha} => false}
@@ -43,7 +43,7 @@ defmodule SymphonyElixir.UpdateHoldTest do
 
     test "names every blocker still missing from the build" do
       unnamed = %{id: "id-x", identifier: nil, state: "Done"}
-      issue = %Issue{todo_blocked_by(blocker("TP-1", "Done")) | blocked_by: [blocker("TP-1", "Done"), unnamed]}
+      issue = todo_blocked_by([blocker("TP-1", "Done"), unnamed])
 
       cache = %{
         blockers: %{"id-TP-1" => {:merged, @fix_pr, "aaaaaaa1"}, "id-x" => {:merged, @other_pr, "bbbbbbb2"}},
@@ -56,9 +56,9 @@ defmodule SymphonyElixir.UpdateHoldTest do
 
     test "a blocker merged in another repository releases its dependents at Done" do
       issue = todo_blocked_by(blocker("APP-1", "Done"))
-      fix = fix_issue("APP-1", "https://github.com/acme/web-app/pull/5")
+      fix_issue("APP-1", "https://github.com/acme/web-app/pull/5")
 
-      cache = resolve([issue], fetch_ok([fix]), merge_commit_sha: fn _url -> flunk("not the build's repository") end)
+      cache = resolve([issue], merge_commit_sha: fn _url -> flunk("not the build's repository") end)
 
       assert cache.blockers == %{"id-APP-1" => :none}
       assert cache.included == %{}
@@ -67,19 +67,20 @@ defmodule SymphonyElixir.UpdateHoldTest do
 
     test "a blocker whose recorded link is not a GitHub pull request releases its dependents" do
       issue = todo_blocked_by(blocker("TP-5", "Done"))
-      fix = fix_issue("TP-5", "https://linear.app/not-a-pr")
+      fix_issue("TP-5", "https://linear.app/not-a-pr")
 
-      cache = resolve([issue], fetch_ok([fix]), merge_commit_sha: fn _url -> flunk("not a pull request") end)
+      cache = resolve([issue], merge_commit_sha: fn _url -> flunk("not a pull request") end)
 
       assert cache.blockers == %{"id-TP-5" => :none}
       assert UpdateHold.hold(issue, @build, cache, @terminal) == nil
     end
 
     test "a blocker with an unmerged or no pull request releases its dependents" do
-      issue = %Issue{todo_blocked_by(blocker("TP-2", "Canceled")) | blocked_by: [blocker("TP-2", "Canceled"), blocker("TP-3", "Done")]}
+      issue = todo_blocked_by([blocker("TP-2", "Canceled"), blocker("TP-3", "Done")])
 
-      fixes = [fix_issue("TP-2", @fix_pr), fix_issue("TP-3")]
-      cache = resolve([issue], fetch_ok(fixes), merge_commit_sha: fn @fix_pr -> {:ok, nil} end)
+      fix_issue("TP-2", @fix_pr)
+      fix_issue("TP-3")
+      cache = resolve([issue], merge_commit_sha: fn @fix_pr -> {:ok, nil} end)
 
       assert cache.blockers == %{"id-TP-2" => :none, "id-TP-3" => :none}
       assert UpdateHold.hold(issue, @build, cache, @terminal) == nil
@@ -89,13 +90,14 @@ defmodule SymphonyElixir.UpdateHoldTest do
       labelled = %Issue{todo_blocked_by(blocker("TP-419", "Done")) | labels: [" Skip-Update-Hold "]}
       merged_cache = not_included_cache()
 
-      assert resolve([labelled], fn _ids -> flunk("nothing to look up") end) == UpdateHold.empty_cache()
+      assert resolve([labelled], no_lookups()) == UpdateHold.empty_cache()
       assert UpdateHold.hold(labelled, @build, merged_cache, @terminal) == nil
 
-      issue = todo_blocked_by(blocker("TP-419", "Done"))
-      docs_fix = %Issue{fix_issue("TP-419", @fix_pr) | labels: [UpdateHold.skip_label()]}
+      # The blocker's own record carries the label.
+      issue = todo_blocked_by(Map.put(blocker("TP-419", "Done"), :labels, [UpdateHold.skip_label()]))
+      fix_issue("TP-419", @fix_pr)
 
-      cache = resolve([issue], fetch_ok([docs_fix]), merge_commit_sha: fn _url -> flunk("opted out") end)
+      cache = resolve([issue], merge_commit_sha: fn _url -> flunk("opted out") end)
 
       assert cache.blockers == %{"id-TP-419" => :skip}
       assert UpdateHold.hold(issue, @build, cache, @terminal) == nil
@@ -110,17 +112,32 @@ defmodule SymphonyElixir.UpdateHoldTest do
       assert UpdateHold.hold(issue, @build, cache, @terminal) == nil
     end
 
-    test "only Todo tickets whose blockers are all terminal are looked up or held" do
-      open_blocker = todo_blocked_by(blocker("TP-5", "In Review"))
-      running = %Issue{todo_blocked_by(blocker("TP-6", "Done")) | state: "In Progress"}
-      unblocked = %Issue{id: "free", identifier: "TP-7", state: "Todo", blocked_by: []}
-      no_state = %Issue{todo_blocked_by(blocker("TP-8", "Done")) | state: nil}
+    test "only Todo tickets whose stored dependencies are all met are looked up or held" do
+      open_blocker = todo_blocked_by(blocker("TP-5", "In Review"), "open")
+      running = %Issue{todo_blocked_by(blocker("TP-6", "Done"), "running") | state: "In Progress"}
+      unblocked = todo_blocked_by([], "free")
+      no_state = %Issue{todo_blocked_by(blocker("TP-8", "Done"), "stateless") | state: nil}
+      # A dependency on a ticket Symphony holds no record of is never met.
+      unknown = todo_blocked_by(blocker("TP-9", :no_record), "unknown")
+      # A ticket with no record at all has no stored dependency.
+      unrecorded = %Issue{id: "unrecorded", identifier: "TP-10", state: "Todo"}
 
-      assert resolve([open_blocker, running, unblocked, no_state, :not_an_issue], fn _ids -> flunk("nothing to look up") end) ==
+      assert resolve([open_blocker, running, unblocked, no_state, unknown, unrecorded, :not_an_issue], no_lookups()) ==
                UpdateHold.empty_cache()
 
       cache = %{not_included_cache() | blockers: %{"id-TP-6" => {:merged, @fix_pr, @merge_sha}}}
       assert UpdateHold.hold(running, @build, cache, @terminal) == nil
+      assert UpdateHold.hold(%Issue{unrecorded | id: nil}, @build, cache, @terminal) == nil
+    end
+
+    test "a dependency met by a merged ticket waiting on its own sub-tickets holds nothing and is not looked up" do
+      SymphonyElixir.SubIssueWait.reset_for_test("Waiting on sub-tickets")
+      issue = todo_blocked_by(blocker("TP-50", "Waiting on sub-tickets"))
+      :ok = RunStore.put_merged_wait("id-TP-50")
+      fix_issue("TP-50", @fix_pr)
+
+      assert resolve([issue], no_lookups()) == UpdateHold.empty_cache()
+      assert UpdateHold.hold(issue, @build, UpdateHold.empty_cache(), @terminal) == nil
     end
 
     test "cached blockers and merge commits are not looked up again" do
@@ -128,13 +145,15 @@ defmodule SymphonyElixir.UpdateHoldTest do
       cache = not_included_cache()
       no_compare = fn _url, _sha, _build -> flunk("cached") end
 
-      assert resolve([issue], fn _ids -> flunk("cached") end, cache: cache, commit_included?: no_compare) == cache
+      no_sha = fn _url -> flunk("cached") end
+
+      assert resolve([issue], cache: cache, merge_commit_sha: no_sha, commit_included?: no_compare) == cache
     end
 
     test "a build without a sha or repository holds nothing and looks nothing up" do
       issue = todo_blocked_by(blocker("TP-419", "Done"))
       cache = not_included_cache()
-      lookups = [fetch_issues: fn _ids -> flunk("no build") end]
+      lookups = [merge_commit_sha: fn _url -> flunk("no build") end]
 
       for build <- [%{@build | sha: nil}, %{@build | repo: nil}] do
         empty = UpdateHold.empty_cache()
@@ -146,29 +165,26 @@ defmodule SymphonyElixir.UpdateHoldTest do
 
     test "a failed lookup is not cached and does not hold the ticket" do
       issue = todo_blocked_by(blocker("TP-419", "Done"))
-      fix = fix_issue("TP-419", @fix_pr)
+      fix_issue("TP-419", @fix_pr)
 
-      assert resolve([issue], fn _ids -> {:error, :linear_down} end) == UpdateHold.empty_cache()
-
-      gh_down = resolve([issue], fetch_ok([fix]), merge_commit_sha: fn _url -> {:error, :gh_down} end)
+      gh_down = resolve([issue], merge_commit_sha: fn _url -> {:error, :gh_down} end)
       assert gh_down == UpdateHold.empty_cache()
 
       not_found = fn _url, _sha, _build -> {:error, :not_found} end
-      compare_down = resolve([issue], fetch_ok([fix]), commit_included?: not_found)
+      compare_down = resolve([issue], commit_included?: not_found)
       assert compare_down.blockers == %{"id-TP-419" => {:merged, @fix_pr, @merge_sha}}
       assert compare_down.included == %{}
       assert UpdateHold.hold(issue, @build, compare_down, @terminal) == nil
     end
 
     test "a blocker's pull request is the one Symphony recorded for it, merged or closed" do
-      :ok = RunStore.clear()
       issue = todo_blocked_by(blocker("TP-419", "Done"))
-      # Read by id, the blocker carries no repo: its record is looked up under the lane's.
+      # The blocker's record names its repo: its pull request is looked up under it.
       fix = fix_issue("TP-419")
       :ok = TicketPullRequest.record_created(@repo_key, fix.id, @fix_pr, "auto/TP-419")
       :ok = TicketPullRequest.mark_finished(@repo_key, @fix_pr, "merged")
 
-      cache = resolve([issue], fetch_ok([fix]), repo_key: @repo_key)
+      cache = resolve([issue], repo_key: "another-lane")
 
       assert cache.blockers == %{"id-TP-419" => {:merged, @fix_pr, @merge_sha}}
       assert %{blockers: [%{identifier: "TP-419"}]} = UpdateHold.hold(issue, @build, cache, @terminal)
@@ -177,33 +193,44 @@ defmodule SymphonyElixir.UpdateHoldTest do
       :ok = TicketPullRequest.record_created(@repo_key, fix.id, @fix_pr, "auto/TP-419")
       :ok = TicketPullRequest.mark_finished(@repo_key, @fix_pr, "closed")
 
-      cache = resolve([issue], fetch_ok([fix]), repo_key: @repo_key, merge_commit_sha: fn @fix_pr -> {:ok, nil} end)
+      cache = resolve([issue], merge_commit_sha: fn @fix_pr -> {:ok, nil} end)
 
       assert cache.blockers == %{"id-TP-419" => :none}
       assert UpdateHold.hold(issue, @build, cache, @terminal) == nil
     end
 
-    test "a blocker reopened since the poll, or not asked for, is left out" do
-      issue = todo_blocked_by(blocker("TP-419", "Done"))
-      reopened = %Issue{fix_issue("TP-419", @fix_pr) | state: "In Progress"}
-      stateless = %Issue{fix_issue("TP-419", @fix_pr) | state: nil}
-      stranger = fix_issue("TP-999", @fix_pr)
+    test "a blocker reopened is not looked up" do
+      issue = todo_blocked_by(blocker("TP-419", "In Progress"))
+      fix_issue("TP-419", @fix_pr)
 
-      assert resolve([issue], fetch_ok([reopened, stateless, stranger])) == UpdateHold.empty_cache()
-    end
-
-    test "a blocker without an id is never looked up" do
-      issue = todo_blocked_by(%{id: nil, identifier: "TP-1", state: "Done"})
-      assert resolve([issue], fn _ids -> flunk("nothing to look up") end) == UpdateHold.empty_cache()
+      assert resolve([issue], no_lookups()) == UpdateHold.empty_cache()
     end
   end
 
   describe "the wait on the ticket's pause" do
+    test "a Todo ticket waits for the update on its stored dependency and starts by itself once the build includes the fix" do
+      # The ticket read from Linear carries no blocker link at all: the dependency is Symphony's own.
+      refute Map.has_key?(%Issue{}, :blocked_by)
+      issue = todo_blocked_by(blocker("TP-419", "Done"))
+      fix_issue("TP-419", @fix_pr)
+
+      resolve([issue], included: false)
+      assert [%{kind: :build, waits_on: %{pull_request: 132}}] = UpdateHold.reasons(@repo_key, "issue")
+
+      # The app updates to a build that includes the merge: the reason clears, and the dispatch gate,
+      # which reads the reasons, lets the ticket start with no one's action.
+      included = %{not_included_cache() | included: %{{@merge_sha, @build_sha} => true}}
+      resolve([issue], no_lookups(cache: included))
+      assert UpdateHold.reasons(@repo_key, "issue") == []
+      assert Pauses.get({:ticket, @repo_key, "issue"}) == {:ok, nil}
+      assert UpdateHold.hold(issue, @build, included, @terminal) == nil
+    end
+
     test "resolve/5 writes one build reason per blocker the build lacks, once, and it outlasts a restart" do
       issue = todo_blocked_by(blocker("TP-419", "Done"))
-      fix = fix_issue("TP-419", @fix_pr)
+      fix_issue("TP-419", @fix_pr)
 
-      log = capture_log(fn -> resolve([issue], fetch_ok([fix])) end)
+      log = capture_log(fn -> resolve([issue]) end)
       assert log =~ "Holding for an app update: issue_id=issue issue_identifier=TP-332; Waiting for a Symphony update that includes TP-419's fix"
 
       assert [
@@ -218,11 +245,11 @@ defmodule SymphonyElixir.UpdateHoldTest do
 
       # The next poll writes nothing new and logs nothing.
       cache = not_included_cache()
-      refute capture_log(fn -> resolve([issue], fn _ids -> flunk("cached") end, cache: cache) end) =~ "app update"
+      refute capture_log(fn -> resolve([issue], no_lookups(cache: cache)) end) =~ "app update"
       assert [_one] = UpdateHold.reasons(@repo_key, "issue")
 
       # After a restart nothing is in memory and the lookup fails: the reason stays.
-      assert resolve([issue], fn _ids -> {:error, :linear_down} end) == UpdateHold.empty_cache()
+      assert resolve([issue], merge_commit_sha: fn _url -> {:error, :github_down} end) == UpdateHold.empty_cache()
       assert [%{waits_on: %{pull_request: 132}}] = UpdateHold.reasons(@repo_key, "issue")
     end
 
@@ -231,14 +258,14 @@ defmodule SymphonyElixir.UpdateHoldTest do
       set_reason(132, "TP-419")
 
       included = %{not_included_cache() | included: %{{@merge_sha, @build_sha} => true}}
-      log = capture_log(fn -> resolve([issue], fn _ids -> flunk("cached") end, cache: included) end)
+      log = capture_log(fn -> resolve([issue], no_lookups(cache: included)) end)
 
       assert log =~ "Released from the app update hold: issue_id=issue issue_identifier=TP-332"
       assert Pauses.get({:ticket, @repo_key, "issue"}) == {:ok, nil}
     end
 
     test "each reason clears on its own as its build arrives" do
-      issue = %Issue{todo_blocked_by(blocker("TP-1", "Done")) | blocked_by: [blocker("TP-1", "Done"), blocker("TP-2", "Done")]}
+      issue = todo_blocked_by([blocker("TP-1", "Done"), blocker("TP-2", "Done")])
       set_reason(132, "TP-1")
       set_reason(133, "TP-2")
 
@@ -247,65 +274,83 @@ defmodule SymphonyElixir.UpdateHoldTest do
         included: %{{@merge_sha, @build_sha} => true, {@other_sha, @build_sha} => false}
       }
 
-      refute capture_log(fn -> resolve([issue], fn _ids -> flunk("cached") end, cache: cache) end) =~ "Released"
+      refute capture_log(fn -> resolve([issue], no_lookups(cache: cache)) end) =~ "Released"
       assert [%{waits_on: %{pull_request: 133}}] = UpdateHold.reasons(@repo_key, "issue")
     end
 
     test "the skip-update-hold label prevents the reason, or clears it" do
       labelled = %Issue{todo_blocked_by(blocker("TP-419", "Done")) | labels: [UpdateHold.skip_label()]}
 
-      resolve([labelled], fn _ids -> flunk("opted out") end, cache: not_included_cache())
+      resolve([labelled], no_lookups(cache: not_included_cache()))
       assert Pauses.get({:ticket, @repo_key, "issue"}) == {:ok, nil}
 
       set_reason(132, "TP-419")
-      resolve([labelled], fn _ids -> flunk("opted out") end, cache: not_included_cache())
+      resolve([labelled], no_lookups(cache: not_included_cache()))
       assert Pauses.get({:ticket, @repo_key, "issue"}) == {:ok, nil}
     end
 
     test "a ticket out of Todo, with an open blocker, or on a build without a sha loses the reason" do
       held = todo_blocked_by(blocker("TP-419", "Done"))
       moved = %Issue{held | state: "In Progress"}
+
+      set_reason(132, "TP-419")
+      resolve([moved], no_lookups(cache: not_included_cache()))
+      assert Pauses.get({:ticket, @repo_key, "issue"}) == {:ok, nil}
+
+      # The blocker reopened: its record is back in progress.
       reopened = todo_blocked_by(blocker("TP-419", "In Progress"))
+      set_reason(132, "TP-419")
+      resolve([reopened], no_lookups(cache: not_included_cache()))
+      assert Pauses.get({:ticket, @repo_key, "issue"}) == {:ok, nil}
 
-      for issue <- [moved, reopened] do
-        set_reason(132, "TP-419")
-        resolve([issue], fn _ids -> flunk("not held") end, cache: not_included_cache())
-        assert Pauses.get({:ticket, @repo_key, "issue"}) == {:ok, nil}
-      end
-
+      todo_blocked_by(blocker("TP-419", "Done"))
       set_reason(132, "TP-419")
       UpdateHold.resolve([held], %{@build | sha: nil}, not_included_cache(), @terminal, repo_key: @repo_key)
       assert Pauses.get({:ticket, @repo_key, "issue"}) == {:ok, nil}
     end
 
-    test "a reason whose blocker no longer merged there clears; one the cache can't answer for stays" do
+    test "a ticket whose stored dependency a person removed is no longer held for a build" do
+      issue = todo_blocked_by(blocker("TP-419", "Done"))
       set_reason(132, "TP-419")
+
+      :ok = RunStore.remove_dependency("issue", "id-TP-419")
+      resolve([issue], no_lookups(cache: not_included_cache()))
+      assert Pauses.get({:ticket, @repo_key, "issue"}) == {:ok, nil}
+      assert UpdateHold.hold(issue, @build, not_included_cache(), @terminal) == nil
+    end
+
+    test "a reason whose blocker no longer merged there clears; one the cache can't answer for stays" do
       unknown = todo_blocked_by(blocker("TP-7", "Done"))
-      resolve([unknown], fn _ids -> {:error, :linear_down} end)
+      set_reason(132, "TP-419")
+      fix_issue("TP-7", @other_pr)
+      resolve([unknown], merge_commit_sha: fn _url -> {:error, :github_down} end)
       assert [%{waits_on: %{pull_request: 132}}] = UpdateHold.reasons(@repo_key, "issue")
 
-      # Its blocker is now one merged elsewhere: no blocker of the ticket merged that pull request.
-      resolve([unknown], fetch_ok([fix_issue("TP-7", "https://github.com/acme/web-app/pull/5")]))
+      # Its blocker merged nothing: no blocker of the ticket merged that pull request.
+      resolve([unknown], merge_commit_sha: fn @other_pr -> {:ok, nil} end)
       assert Pauses.get({:ticket, @repo_key, "issue"}) == {:ok, nil}
     end
 
     test "only its own reasons are cleared, and a ticket without a repo key is not written" do
       ticket = {:ticket, @repo_key, "issue"}
+      moved = %Issue{todo_blocked_by(blocker("TP-419", "Done")) | state: "In Progress"}
       {:ok, _pause} = Pauses.set(ticket, Pauses.ticket_reason(:dependency, "TP-9"))
       {:ok, _pause} = Pauses.set(ticket, %{kind: :build, waits_on: %{pull_request: 132}})
       set_reason(132, "TP-419")
 
-      resolve([%Issue{todo_blocked_by(blocker("TP-419", "Done")) | state: "In Progress"}], fn _ids -> flunk("not held") end)
+      resolve([moved], no_lookups())
       assert {:ok, %{reasons: [%{kind: :ticket}, %{kind: :build, set_by: %{kind: :symphony}}]}} = Pauses.get(ticket)
       assert UpdateHold.reasons(@repo_key, "issue") == []
 
       issue = todo_blocked_by(blocker("TP-419", "Done"))
       assert %{blockers: [_one]} = UpdateHold.hold(issue, @build, not_included_cache(), @terminal)
-      assert %{blockers: [_one]} = UpdateHold.hold(%Issue{issue | id: "other", repo_key: nil}, @build, not_included_cache(), @terminal)
+      other = todo_blocked_by(blocker("TP-419", "Done"), "other")
+      assert %{blockers: [_one]} = UpdateHold.hold(other, @build, not_included_cache(), @terminal)
       assert UpdateHold.reasons(nil, "other") == []
       assert UpdateHold.reasons(@repo_key, "other") == []
 
-      assert %{blockers: [_one]} = UpdateHold.hold(%Issue{issue | id: "own", repo_key: @repo_key}, @build, not_included_cache(), @terminal)
+      own = todo_blocked_by(blocker("TP-419", "Done"), "own")
+      assert %{blockers: [_one]} = UpdateHold.hold(%Issue{own | repo_key: @repo_key}, @build, not_included_cache(), @terminal)
       assert [%{waits_on: %{pull_request: 132}}] = UpdateHold.reasons(@repo_key, "own")
     end
 
@@ -380,18 +425,20 @@ defmodule SymphonyElixir.UpdateHoldTest do
     )
   end
 
-  defp resolve(issues, fetch_issues, opts \\ []) do
+  defp resolve(issues, opts \\ []) do
     included = Keyword.get(opts, :included, false)
 
     UpdateHold.resolve(issues, @build, Keyword.get(opts, :cache, UpdateHold.empty_cache()), @terminal,
-      fetch_issues: fetch_issues,
       merge_commit_sha: Keyword.get(opts, :merge_commit_sha, fn @fix_pr -> {:ok, @merge_sha} end),
       commit_included?: Keyword.get(opts, :commit_included?, fn @fix_pr, @merge_sha, @build_sha -> {:ok, included} end),
       repo_key: Keyword.get(opts, :repo_key, @repo_key)
     )
   end
 
-  defp fetch_ok(issues), do: fn _ids -> {:ok, issues} end
+  # Options under which any lookup fails the test.
+  defp no_lookups(opts \\ []) do
+    Keyword.merge([merge_commit_sha: fn _url -> flunk("nothing to look up") end, commit_included?: fn _url, _sha, _build -> flunk("cached") end], opts)
+  end
 
   # The reason the update hold sets on the test ticket's pause, as it would have on an earlier poll.
   defp set_reason(number, identifier) do
@@ -404,13 +451,29 @@ defmodule SymphonyElixir.UpdateHoldTest do
     %{blockers: %{"id-TP-419" => {:merged, @fix_pr, @merge_sha}}, included: %{{@merge_sha, @build_sha} => false}}
   end
 
-  defp todo_blocked_by(blocker) do
-    %Issue{id: "issue", identifier: "TP-332", title: "Final verification: Pause", state: "Todo", blocked_by: [blocker]}
+  # The Todo ticket `issue_id` (TP-332), stored with a `:done` dependency on each of `blockers`, each
+  # with its own record in the phase its `state` names (none for `:no_record`) and its labels. No
+  # blocker link of Linear's is read: the issue returned carries none.
+  defp todo_blocked_by(blockers, issue_id \\ "issue") do
+    identifier = if issue_id == "issue", do: "TP-332", else: "TP-" <> issue_id
+    put_record(issue_id, identifier, "Todo")
+
+    for %{id: id} = blocker <- List.wrap(blockers) do
+      if blocker.state != :no_record, do: put_record(id, blocker.identifier, blocker.state, Map.get(blocker, :labels, []))
+      :ok = RunStore.add_dependency(issue_id, id, :done)
+    end
+
+    %Issue{id: issue_id, identifier: identifier, title: "Final verification: Pause", state: "Todo"}
+  end
+
+  defp put_record(issue_id, identifier, phase, labels \\ []) do
+    :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, issue_id, %{issue_identifier: identifier, phase: phase, labels: labels}))
   end
 
   defp blocker(identifier, state), do: %{id: "id-" <> identifier, identifier: identifier, state: state}
 
-  # A done fix ticket, read by id without its repo; `pr_url` is the PR Symphony's record shows merged.
+  # A done fix ticket, as `awaiting_update/4` reads it (by id, without its repo); `pr_url` is the PR
+  # Symphony's record shows merged.
   defp fix_issue(identifier, pr_url \\ nil) do
     fix = %Issue{id: "id-" <> identifier, identifier: identifier, state: "Done"}
 

@@ -9,25 +9,29 @@ defmodule SymphonyElixir.Conductor.Filing do
   the `evidence` event ids it rests on), the repo it belongs to (`repo`, any repo Symphony
   manages) and how it relates to the current ticket (`relation`):
 
-    * `blocks`: the ticket is linked as blocking the current one, which is held on it until it is
-      terminal (`SymphonyElixir.SelfHeal.hold/3`), and then continues from the stage it was held
-      in;
+    * `blocks`: the ticket is filed as a **sub-ticket** of the current one and holds it until it is
+      terminal (`SymphonyElixir.SelfHeal.hold/3`): it runs through the current ticket's slot
+      (`SymphonyElixir.Dispatch.Slots`), and the current ticket then continues from the stage it
+      was held in;
     * `follow_up`: the two are linked as related, and the current ticket goes on at once.
 
   On a groomed ticket (`SymphonyElixir.TicketPlan`) the ticket is filed as a **sub-ticket** of the
   current one, and the relation says where it points:
 
     * `before`: the current ticket is held on it, as `blocks` holds it;
-    * `after`: the current ticket goes on at once, and the sub-ticket is linked as blocked by the
-      current ticket, so it starts once the current ticket's pull request has merged. It is created
-      in `Backlog`, linked, and only then moved to `Todo` (`SymphonyElixir.Conductor.Tree.start/5`),
-      so no dispatch finds it before its link; when the link fails it stays in `Backlog`, which is
-      said on the current ticket, and Symphony tries the link and the move again.
+    * `after`: the current ticket goes on at once, and the sub-ticket gets a stored dependency on
+      the current ticket (`:done`, `SymphonyElixir.RunStore.add_dependency/3`; no Linear blocker
+      link), so it starts once the current ticket is done. It is created in `Backlog`, put on
+      Symphony's records, given the dependency, and only then moved to `Todo`
+      (`SymphonyElixir.Conductor.Tree.start/5`), so no dispatch finds it before its dependency; when
+      the dependency can't be stored it stays in `Backlog`, which is said on the current ticket, and
+      Symphony tries the dependency and the move again.
 
   A sub-ticket holds the current ticket's close (`SymphonyElixir.Conductor.Tree`). Its description
   is recorded on it as its ask (`ask.recorded`, `source: parent`), and Symphony's records take it
   at once. `blocks` and `follow_up` read as `before` and `after` there, and on a ticket with no
-  plan `before` and `after` are refused, so such a ticket keeps what it had.
+  plan `before` and `after` are refused, so such a ticket keeps what it had. A follow-up on a ticket
+  with no plan is the one ticket filed with no parent.
 
   Symphony assembles the description in the house format (Problem, Wanted behaviour, Acceptance
   criteria, User walkthrough, and the evidence from the current ticket's events, naming the ticket
@@ -55,7 +59,7 @@ defmodule SymphonyElixir.Conductor.Filing do
   require Logger
 
   alias SymphonyElixir.Conductor.{Facts, Tree}
-  alias SymphonyElixir.{Config, SelfHeal, TicketEvents, TicketPlan}
+  alias SymphonyElixir.{Config, RunStore, SelfHeal, TicketEvents, TicketPlan}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.TicketEvents.{Event, Summary}
@@ -71,6 +75,8 @@ defmodule SymphonyElixir.Conductor.Filing do
     "after" => {"follow_up", "follow_up"}
   }
   @plain ["blocks", "follow_up"]
+  # The one relation filed with no parent: a follow-up on a ticket with no plan holds nothing.
+  @unparented "follow_up"
   @child %{"blocks" => "before", "follow_up" => "after", "before" => "before", "after" => "after"}
   @sections [
     title: "a title",
@@ -215,7 +221,8 @@ defmodule SymphonyElixir.Conductor.Filing do
   defp relation(_route, false), do: "the ticket route's relation must be blocks or follow_up"
 
   # A sub-ticket counts against what its parent may get (`Tree.room/3`), from whatever source.
-  # A link to a ticket that exists creates nothing.
+  # A link to a ticket that exists creates nothing. A blocking ticket on a ticket with no plan is
+  # its sub-ticket too, but never refused for the tree's bounds: the ticket waits on it to go on.
   defp room(relation, existing, _context, _route) when relation in @plain or existing != nil, do: :ok
 
   defp room(_relation, nil, %{issue: issue, repo_key: repo_key}, route) do
@@ -239,9 +246,10 @@ defmodule SymphonyElixir.Conductor.Filing do
   end
 
   # The open ticket that already covers the problem: the one the turn named, else one it already
-  # filed from this ticket in the same repo under the same title, else an open ticket already linked
-  # as blocking this one (by hand, or by the self-heal lane) under the same title. A named ticket that
-  # is terminal, unreadable or the current one covers nothing, and a new ticket is filed.
+  # filed from this ticket in the same repo under the same title, else an open ticket this one
+  # already depends on (stored by Symphony: a split, the Director or the self-heal lane) under the
+  # same title. A named ticket that is terminal, unreadable or the current one covers nothing, and a
+  # new ticket is filed.
   defp existing(route, issue, events, opts) do
     named = route.existing && open_ticket(route.existing, issue, opts)
     named || already_filed(route, issue, events, opts) || linked_blocker(route, issue, opts)
@@ -260,17 +268,17 @@ defmodule SymphonyElixir.Conductor.Filing do
 
   defp covering(nil, _identifier, _route), do: nil
 
-  # The tickets linked as blocking `issue`: the ones it carries, else the tracker's read of it.
-  defp blockers(%Issue{blocked_by: [_ | _] = blockers}, _opts), do: Enum.filter(blockers, &is_binary(&1[:identifier]))
-
-  defp blockers(%Issue{identifier: identifier}, opts) when is_binary(identifier) do
-    case tracker(opts).fetch_issue_by_identifier(identifier) do
-      {:ok, %Issue{blocked_by: [_ | _] = blockers}} -> Enum.filter(blockers, &is_binary(&1[:identifier]))
-      _other -> []
-    end
+  # The tickets `issue` depends on, as Symphony stores them (`SymphonyElixir.RunStore.dependencies/1`),
+  # each with its identifier and the phase its record holds.
+  defp blockers(%Issue{id: issue_id}, _opts) do
+    for {%{} = entry, record} <- List.wrap(RunStore.dependencies(issue_id)),
+        identifier = entry.identifier || record_field(record, :issue_identifier),
+        is_binary(identifier),
+        do: %{identifier: identifier, state: record_field(record, :phase)}
   end
 
-  defp blockers(_issue, _opts), do: []
+  defp record_field(%{} = record, key), do: Map.get(record, key)
+  defp record_field(nil, _key), do: nil
 
   defp already_filed(route, issue, events, opts) do
     events
@@ -315,8 +323,8 @@ defmodule SymphonyElixir.Conductor.Filing do
       description: description,
       labels: [@label],
       existing: existing && existing.identifier,
-      parent_id: if(relation not in @plain, do: issue.id),
-      # One that comes after waits in Backlog until its blocker is linked, as a split's does.
+      parent_id: if(relation != @unparented, do: issue.id),
+      # One that comes after waits in Backlog until its dependency is stored, as a split's does.
       state: if(relation == "after", do: @backlog)
     }
 
@@ -331,18 +339,19 @@ defmodule SymphonyElixir.Conductor.Filing do
 
   defp with_url(filed, existing), do: Map.merge(%{url: existing && existing.url}, filed)
 
-  # A sub-ticket just created under a groomed ticket: its ask is recorded on it from its parent, one
-  # that comes after waits on its parent's merge, and Symphony's records take it now, not at a poll.
+  # A sub-ticket just created under a groomed ticket: its ask is recorded on it from its parent,
+  # Symphony's records take it now, not at a poll, and one that comes after gets a stored dependency
+  # on its parent (`SymphonyElixir.Conductor.Tree.start/5`), so it waits on its parent's merge.
   defp sub_ticket(%{existing: false, id: id, identifier: identifier} = filed, relation, description, route, context, opts)
-       when relation not in @plain and is_binary(id) do
+       when relation != @unparented and is_binary(id) do
     %{issue: issue, repo_key: repo_key} = context
     from = issue.identifier || issue.id
     child = %{id: id, identifier: identifier, repo: route.repo}
 
     attempts = [
       {"record its ask", fn -> TicketPlan.record_ask(route.repo, id, String.slice(description, 0, 20_000), source: "parent", from: from, idempotency: "ask.recorded:parent") end},
-      {"start it", fn -> if(relation == "after", do: Tree.start(child, [from], issue, repo_key, Keyword.take(opts, [:tracker])), else: :ok) end},
-      {"put it on Symphony's records", fn -> Tree.observed(repo_key, issue.id, [child], Keyword.take(opts, [:tracker, :observe])) end}
+      {"put it on Symphony's records", fn -> Tree.observed(repo_key, issue.id, [child], Keyword.take(opts, [:tracker, :observe])) end},
+      {"start it", fn -> if(relation == "after", do: Tree.start(child, [%{id: issue.id, identifier: from}], issue, repo_key, Keyword.take(opts, [:tracker, :observe])), else: :ok) end}
     ]
 
     for {what, attempt} <- attempts, {:error, reason} <- [attempt.()] do

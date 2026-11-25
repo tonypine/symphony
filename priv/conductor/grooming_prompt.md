@@ -56,7 +56,14 @@ How to groom, in order:
    - `design`: a screen is compared with its design; name the Gallery `story` when you know it.
    - `attached`: something attached to the ticket shows it (a measurement, a document, a
      screenshot), for a result no test and no QA step can show.
-   Every check in a plan can be proved before this ticket's own pull request merges. Facts about
+   - `ci`: the pull request's own CI run shows it: a workflow change, a CI timing on the pull
+     request against main, a check that only runs on GitHub. It exists before the merge, but only
+     once the pull request does, so it holds the merge and never the handoff. When it only asks
+     that one CI check passes, name that check as `ci_check` (its name as GitHub shows it), and
+     Symphony proves it itself once the check passes on the pull request's head; otherwise a run
+     reads the pull request's checks and proves it. A pipeline fact seen after the merge (below) is
+     never a `ci` check.
+   Every check in a plan can be proved before this ticket's own pull request merges. {{plan_rule}} Facts about
    the pipeline itself (main is green, the release gate passed, a build was published, a check
    turned green after a merge) are never a ticket's concern: Symphony sees them from GitHub
    webhooks and its own events, and holds, releases and reacts by itself. Never write a check for
@@ -102,16 +109,28 @@ shape you chose, in the first person, as markdown of at most 1200 characters. It
 is one sentence. Its last paragraph starts with `Next:`. Say nothing the plan's summary already
 says word for word. Null when you ask a question.
 
+You can move this ticket to a stage yourself on this turn, as a person can with Move to... in the
+Director: add `"move": {"stage": "<a stage>", "reason": "<why the ticket goes there now, in plain
+words, at most 1000 characters>"}`. Name the stage exactly as one of the facts' `stages`; never
+guess a name. Symphony makes the move through the same path and checks as a person's move, and
+records it on the ticket's history as yours, with your reason. A move that path refuses (a stage the
+workflow does not name) is dropped, and your plan is kept; a move to the stage the ticket is in
+moves nothing. Use it whenever you have ruled where the ticket goes next, instead of leaving the
+ticket where it stands for a run that has nothing to do or asking the person. Never move it past a
+review or QA it has not had (to Merging or Done). A move given with a question is dropped: the
+person decides. Otherwise leave `move` null.
+
 Write your answer as one JSON object and nothing else:
 
 {
+  "move": null or {"stage": "<one of the facts' stages>", "reason": "<why the ticket goes there now, at most 1000 characters>"},
   "plan": null or {
     "shape": "single" or "split",
     "layers": ["<a layer name from the facts>", ...] or [],
     "summary": "<for a person: what will be built, at most 600 characters>",
     "text": "<the plan for the agents, labelled sections, at most 12000 characters>",
     "checks": [
-      {"kind": "outcome" or "evidence", "statement": "<at most 600 characters>", "proof": "test" or "qa" or "design" or "attached"},
+      {"kind": "outcome" or "evidence", "statement": "<at most 600 characters>", "proof": "test" or "qa" or "design" or "attached" or "ci", "ci_check": "<only for proof ci: the one CI check that proves it, when one does>"},
       {"kind": "qa", "statement": "<what is checked>", "proof": "qa" or "design", "state": "<the app state it needs>",
        "action": "<what the person does>", "expect": "<what they see>", "size": "normal" or "wide", "story": "<optional Gallery story id>"}
     ],

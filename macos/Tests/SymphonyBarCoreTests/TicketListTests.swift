@@ -66,16 +66,13 @@ final class TicketListTests: XCTestCase {
         XCTAssertEqual(review.kind, .working)
     }
 
-    func testForcedAndAttentionRowsCarryTheirFlagsAndFacts() throws {
+    func testAttentionRowsCarryTheirFlagsAndFacts() throws {
         let list = try tickets("tickets")
-        let forced = try XCTUnwrap(list.row("shop-325"))
-        XCTAssertTrue(forced.forced)
-        XCTAssertTrue(forced.facts.contains(TicketList.Fact(label: "Forced", value: "Yes")))
-        XCTAssertTrue(forced.facts.contains(TicketList.Fact(label: "Forced status", value: "implementation · waiting for a forced slot")))
-        XCTAssertFalse(forced.facts.contains { ["Stage", "State", "Waits on", "Failed attempts"].contains($0.label) })
-        let label = forced.accessibilityLabel(reference: list.reference)
+        let queued = try XCTUnwrap(list.row("shop-325"))
+        XCTAssertFalse(queued.facts.contains { ["Stage", "State", "Waits on", "Failed attempts"].contains($0.label) })
+        let label = queued.accessibilityLabel(reference: list.reference)
         XCTAssertTrue(label.hasPrefix("SHOP-325, Express checkout, Waiting for a slot, for 12 minutes"), label)
-        XCTAssertTrue(label.hasSuffix("The forced slot is taken. Forced."), label)
+        XCTAssertTrue(label.hasSuffix("Both work slots are taken."), label)
 
         XCTAssertTrue(try XCTUnwrap(list.row("SHOP-311")).needsAttention, "3 failed attempts")
         XCTAssertFalse(try XCTUnwrap(list.row("API-134")).needsAttention)
@@ -95,10 +92,7 @@ final class TicketListTests: XCTestCase {
 
         // The inspector's facts beside its situation line, which says the gate and since when.
         let row = try XCTUnwrap(TicketList(state: state, now: Date(), timeZone: utc).row("API-140"))
-        XCTAssertEqual(row.facts, [
-            TicketList.Fact(label: "Repo", value: "api"),
-            TicketList.Fact(label: "Forced", value: "No"),
-        ])
+        XCTAssertEqual(row.facts, [TicketList.Fact(label: "Repo", value: "api")])
         XCTAssertEqual(row.line.word, "Paused")
     }
 
@@ -118,34 +112,10 @@ final class TicketListTests: XCTestCase {
         XCTAssertEqual(TicketList.Stage.allCases.map(\.title), ["Queued", "Working", "Review", "Waiting on you", "Merging", "Shipped"])
     }
 
-    func testATicketOnlyForcedTakesItsTitleAndRepoFromTheForcedEntry() throws {
-        let now = Date(timeIntervalSince1970: 1_000_000)
-        let state = OverviewState(
-            snapshot: StateSnapshot(forced: [
-                .init(identifier: "TP-1", issueID: "issue-1", title: "Fix the release", repoKey: "web", summary: "implementation · waiting for a forced slot", state: "Todo"),
-            ]),
-            generatedAt: now
-        )
-        let list = TicketList(state: state, now: now, timeZone: utc)
-
-        let forced = try XCTUnwrap(list.row("TP-1"))
-        XCTAssertEqual(forced.issueID, "issue-1")
-        XCTAssertEqual(forced.title, "Fix the release")
-        XCTAssertEqual(forced.repoKey, "web")
-        XCTAssertTrue(forced.facts.contains(TicketList.Fact(label: "Repo", value: "web")))
-        XCTAssertEqual(list.rows.map(\.identifier), ["TP-1"])
-        XCTAssertEqual(TicketList(state: state, scope: .repo("web"), now: now, timeZone: utc).rows.map(\.identifier), ["TP-1"])
-        XCTAssertEqual(ForceSheet.summary("TP-1", in: list), "Fix the release\nTodo · Queued · already forced")
-    }
-
     func testRowsFromTheOtherListsAndTheirEdges() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let state = OverviewState(
-            snapshot: StateSnapshot(forced: [
-                .init(identifier: "TP-1", summary: "implementation · running", state: "In Progress", forcedForSeconds: 60, stale: true, part: "TP-2"),
-                .init(identifier: "TP-3", summary: "waiting for a human"),
-                .init(identifier: "TP-4"),
-            ]),
+            snapshot: StateSnapshot(),
             generatedAt: now,
             running: [.init(identifier: "TP-5", repoKey: "r", runKind: "plan_revision", turnCount: 2, lastMessage: "Hi", lastEventAt: now.addingTimeInterval(-Overview.stuckAfter), totalTokens: 1_200)],
             watching: [.init(identifier: "TP-6", state: "QA"), .init(identifier: "TP-5", title: "From watching", repoKey: "other", url: URL(string: "https://x.test/TP-5"))],
@@ -156,21 +126,13 @@ final class TicketListTests: XCTestCase {
         )
         let list = TicketList(state: state, now: now, timeZone: utc)
 
-        let forced = list.row("TP-1")
-        XCTAssertEqual(forced?.stage, .working)
-        XCTAssertEqual(forced?.waitsOn, "the agent")
-        XCTAssertEqual(forced?.needsAttention, true)
-        XCTAssertEqual(forced?.facts.last, TicketList.Fact(label: "Working through", value: "TP-2"))
-        XCTAssertEqual(list.row("TP-3")?.waitsOn, "a human")
-        XCTAssertEqual(list.row("TP-4")?.waitsOn, "a forced slot")
-
         let stuck = list.row("TP-5")
         XCTAssertEqual(stuck?.waitsOn, "a stuck run")
         XCTAssertEqual(stuck?.needsAttention, true)
         XCTAssertEqual(stuck?.title, "From watching", "a later list fills in what the first lacks")
         XCTAssertEqual(stuck?.repoKey, "r", "but never replaces it")
         XCTAssertEqual(stuck?.url, URL(string: "https://x.test/TP-5"))
-        XCTAssertEqual(stuck?.facts.map(\.label), ["Repo", "Forced", "Run", "Turn", "Last activity", "Tokens", "Last message"])
+        XCTAssertEqual(stuck?.facts.map(\.label), ["Repo", "Run", "Turn", "Last activity", "Tokens", "Last message"])
         XCTAssertEqual(stuck?.facts.first { $0.label == "Run" }?.value, "Plan revision")
 
         XCTAssertEqual(list.row("TP-6")?.waitsOn, "a QA pass")
@@ -183,7 +145,6 @@ final class TicketListTests: XCTestCase {
         XCTAssertEqual(list.row("TP-10")?.needsAttention, true)
         XCTAssertEqual(list.row("TP-11")?.waitsOn, "CI")
         XCTAssertNil(list.row("TP-404"))
-        XCTAssertEqual(TicketList.forcedWaitsOn("plan · paused"), "paused")
     }
 
     func testDecodesBlockedAutoMergeAndShippedTimes() throws {

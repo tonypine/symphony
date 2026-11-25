@@ -233,24 +233,11 @@ defmodule SymphonyElixir.Config do
     end
   end
 
-  @spec max_concurrent_agents_for_state(term()) :: pos_integer()
-  def max_concurrent_agents_for_state(state_name) when is_binary(state_name) do
-    config = settings!()
-
-    Map.get(
-      config.execution.max_concurrent_agents_by_state,
-      Schema.normalize_issue_state(state_name),
-      config.execution.max_concurrent_agents
-    )
-  end
-
-  def max_concurrent_agents_for_state(_state_name), do: settings!().execution.max_concurrent_agents
-
   @doc """
   The Linear priority numbers `tickets.priorities` allows to start new work, or nil when the key is
   empty and every priority may. An issue outside the set is not dispatched as new work: Symphony
-  waits with free lanes even when such an issue sits in an active state. A forced ticket and a retry
-  waiting for a slot are exempt, so the filter only gates fresh picks.
+  waits with free lanes even when such an issue sits in an active state. A retry waiting for a
+  slot is exempt, so the filter only gates fresh picks.
   """
   @spec ticket_priority_filter() :: MapSet.t(0..4) | nil
   def ticket_priority_filter, do: ticket_priority_filter(settings!())
@@ -615,9 +602,8 @@ defmodule SymphonyElixir.Config do
   @doc """
   How long after a ticket's creation in Linear its first dispatch waits for its relations
   (`SymphonyElixir.Dispatch.Settle`): five seconds. Linear sends a new ticket's create and its
-  blocked-by links as separate deliveries, so a ticket created with blockers is read once more by id
-  when this settle ends (or at the ticket's next record change, whichever comes first) and dispatches
-  only if it is still unblocked. A constant, not a symphony.yml setting; tests set
+  relations (its parent) as separate deliveries, so a new ticket is read once more by id when this
+  settle ends (or at the ticket's next record change, whichever comes first) before it dispatches. A constant, not a symphony.yml setting; tests set
   `:dispatch_settle_ms` in the application env.
   """
   @spec dispatch_settle_ms() :: non_neg_integer()

@@ -34,96 +34,72 @@ defmodule SymphonyElixir.Connected.ReadTest do
   defp read(id, tracked \\ nil, initiatives \\ []), do: Read.read(record(id), tracked, facts(initiatives))
 
   defp wait_on(id, blocker, source \\ :dependency), do: {:ok, _pause} = Pauses.set({:ticket, @repo, id}, Pauses.ticket_reason(source, blocker), at: DateTime.add(@at, -3_600))
-  defp clear(id, blocker), do: {:ok, _pause} = Pauses.clear_reason({:ticket, @repo, id}, %{kind: :ticket, waits_on: %{identifier: blocker}}, at: @at)
 
   describe "the blockers" do
-    test "the last reason to clear resolves its blocker, from pause.cleared" do
+    test "are the stored dependencies: one on a done ticket reads resolved, with when it got there" do
       ticket("MT-2", "Todo")
-      ticket("MT-3", "Done", %{title: "The blocker"})
-      wait_on("MT-2", "MT-3")
-      clear("MT-2", "MT-3")
+      ticket("MT-3", "Done", %{title: "The blocker", phase_at: @at})
+      :ok = RunStore.add_dependency("MT-2", "MT-3", :done)
 
       assert read("MT-2").blocked_by == [%{identifier: "MT-3", title: "The blocker", state: "Done", status: "resolved", resolved_at: "2026-11-05T15:22:30Z"}]
     end
 
-    test "a blocker Symphony has no record of reads resolved once its reason cleared" do
-      ticket("MT-2", "Todo")
-      wait_on("MT-2", "MT-3")
-      clear("MT-2", "MT-3")
-
-      assert [%{identifier: "MT-3", title: nil, state: nil, status: "resolved", resolved_at: "2026-11-05T15:22:30Z"}] = read("MT-2").blocked_by
-    end
-
-    test "a reason still set reads open even once its blocker landed" do
-      ticket("MT-2", "Rework")
-      ticket("MT-3", "Done")
-      wait_on("MT-2", "MT-3")
-
-      assert [%{identifier: "MT-3", state: "Done", status: "open", resolved_at: nil}] = read("MT-2").blocked_by
-    end
-
-    test "a blocker linked again after it resolved reads open" do
-      ticket("MT-2", "Todo")
-      wait_on("MT-2", "MT-3")
-      clear("MT-2", "MT-3")
-      {:ok, _pause} = Pauses.set({:ticket, @repo, "MT-2"}, Pauses.ticket_reason(:dependency, "MT-3"), at: DateTime.add(@at, 60))
-
-      assert [%{identifier: "MT-3", status: "open", resolved_at: nil}] = read("MT-2").blocked_by
-    end
-
-    test "a blocker unlinked while it is still open leaves the list" do
-      ticket("MT-2", "Todo")
-      ticket("MT-3", "In Progress")
-      wait_on("MT-2", "MT-3")
-      clear("MT-2", "MT-3")
-
-      assert read("MT-2").blocked_by == []
-    end
-
-    test "a link with no reason is open until its blocker ends, then resolved with no time" do
-      ticket("MT-2", "Code Review", %{blockers: [%{id: "a", identifier: "MT-3", state: "Todo"}, %{id: "b", identifier: "MT-4", state: "Done"}]})
+    test "one still unmet reads open, of either kind, and a released one on a done ticket reads resolved" do
+      ticket("MT-2", "Code Review")
+      ticket("MT-3", "Todo")
+      ticket("MT-4", "In Progress")
+      ticket("MT-5", "Done")
+      :ok = RunStore.add_dependency("MT-2", "MT-3", :done)
+      :ok = RunStore.add_dependency("MT-2", "MT-4", :released)
+      :ok = RunStore.add_dependency("MT-2", "MT-5", :released)
 
       assert [
                %{identifier: "MT-3", state: "Todo", status: "open", resolved_at: nil},
-               %{identifier: "MT-4", state: "Done", status: "resolved", resolved_at: nil}
+               %{identifier: "MT-4", state: "In Progress", status: "open", resolved_at: nil},
+               %{identifier: "MT-5", state: "Done", status: "resolved"}
              ] = read("MT-2").blocked_by
     end
 
-    test "a tracked ticket's links count, once, and a fix ticket or a competing pull request is no blocker" do
+    test "a dependency removed leaves the list, and one on a ticket Symphony knows no name of is not listed" do
+      ticket("MT-2", "Todo")
+      ticket("MT-3", "In Progress")
+      :ok = RunStore.add_dependency("MT-2", "MT-3", :done)
+      :ok = RunStore.add_dependency("MT-2", "ghost", :done)
+      assert [%{identifier: "MT-3", status: "open"}] = read("MT-2").blocked_by
+
+      :ok = RunStore.remove_dependency("MT-2", "MT-3")
+      assert read("MT-2").blocked_by == []
+    end
+
+    test "a Linear blocker link, a pause reason and what the run tracked are no blocker" do
       ticket("MT-2", "Todo", %{blockers: [%{id: "a", identifier: "MT-3", state: "Todo"}]})
+      wait_on("MT-2", "MT-7")
       wait_on("MT-2", "MT-8", :fix_ticket)
       wait_on("MT-2", "MT-9", :landing)
       {:ok, _event} = TicketEvents.record(@repo, "MT-2", "note", %{text: "Nothing to do with a pause"})
 
-      tracked = %{Connected.build(%{}, nil) | blocked_by: [%{identifier: "MT-3", title: "Polled", state: "Todo"}, %{identifier: "MT-4", title: nil, state: nil}]}
+      tracked = %{Connected.build(%{}, nil) | blocked_by: [%{identifier: "MT-4", title: "Polled", state: "Todo"}]}
 
-      assert [
-               %{identifier: "MT-3", title: "Polled", status: "open"},
-               %{identifier: "MT-4", state: nil, status: "open"}
-             ] = read("MT-2", tracked).blocked_by
+      assert read("MT-2", tracked).blocked_by == []
     end
   end
 
   describe "the epic" do
     defp initiative do
-      children =
-        for {identifier, name, type, created} <- [
-              {"MT-3", "Todo", "unstarted", "2026-11-01T10:00:03Z"},
-              {"MT-2", "Done", "completed", "2026-11-01T10:00:02Z"},
-              {"MT-4", "Canceled", "canceled", "2026-11-01T10:00:04Z"}
-            ] do
-          %{
-            "id" => identifier,
-            "identifier" => identifier,
-            "title" => "Part " <> identifier,
-            "createdAt" => created,
-            "state" => %{"name" => name, "type" => type},
-            "inverseRelations" => %{"nodes" => []}
-          }
+      records =
+        for {identifier, phase, created} <- [{"MT-3", "Todo", ~U[2026-11-01 10:00:03Z]}, {"MT-2", "Done", ~U[2026-11-01 10:00:02Z]}] do
+          TicketState.normalize(%{
+            repo_key: @repo,
+            issue_id: identifier,
+            issue_identifier: identifier,
+            title: "Part " <> identifier,
+            phase: phase,
+            created_at: created
+          })
         end
 
-      node = %{"id" => "MT-1", "identifier" => "MT-1", "title" => "The plan", "state" => %{"name" => "In Progress", "type" => "started"}, "children" => %{"nodes" => children}}
-      Initiative.from_node(node, @repo, %Schema{}, @at)
+      parent = TicketState.normalize(%{repo_key: @repo, issue_id: "MT-1", issue_identifier: "MT-1", title: "The plan", phase: "In Progress"})
+      Initiative.from_record(parent, %{records: records, links: []}, %{settings: %Schema{}, now: @at, started_at: nil})
     end
 
     test "the Initiatives' plan answers: its chain, with the same count as the page" do
@@ -189,13 +165,15 @@ defmodule SymphonyElixir.Connected.ReadTest do
   end
 
   describe "the tickets it holds up" do
-    test "the links the run read and the records that wait on it, once, each with its situation" do
+    test "the links the run read and the records that depend on it, once, each with its situation" do
       ticket("MT-2", "In Progress")
-      ticket("MT-3", "Todo", %{title: "Waits", blockers: [%{id: "MT-2", identifier: "MT-2", state: "In Progress"}]})
-      ticket("MT-4", "Todo", %{title: "Linked too", blockers: [%{id: "MT-2", identifier: "MT-2", state: "In Progress"}]})
-      ticket("MT-5", "Done", %{blockers: [%{id: "MT-2", identifier: "MT-2", state: "In Progress"}]})
-      ticket("MT-6", "Todo", %{blockers: [%{id: "MT-2", identifier: "MT-2", state: "Done"}]})
+      ticket("MT-3", "Todo", %{title: "Waits"})
+      ticket("MT-4", "Todo", %{title: "Linked too"})
+      ticket("MT-5", "Done")
+      # A blocker link of Linear's an older build kept in the record holds nothing up.
+      ticket("MT-6", "Todo", %{blockers: [%{id: "MT-2", identifier: "MT-2", state: "In Progress"}]})
       ticket("MT-8", "Done", %{title: "Ended since the run read it"})
+      for id <- ["MT-3", "MT-4", "MT-5"], do: :ok = RunStore.add_dependency(id, "MT-2", :done)
       wait_on("MT-3", "MT-2")
 
       links = [
@@ -212,12 +190,18 @@ defmodule SymphonyElixir.Connected.ReadTest do
                %{identifier: "MT-7", title: "Unknown", state: "Todo", situation: nil},
                %{identifier: "MT-3", title: "Waits", state: "Todo", situation: "blocked_by_ticket"}
              ]
+
+      # Once the ticket is done, the dependency on it is met: it holds nothing up.
+      :ok = RunStore.update_ticket_state("MT-2", %{phase: "Done"})
+      assert read("MT-2").blocks == []
     end
 
-    test "a ticket with no identifier holds nothing up, and a link to no identifier matches nothing" do
-      ticket("MT-3", "Todo", %{blockers: [%{id: "a", state: "Todo"}]})
+    test "a ticket nothing depends on holds nothing up, and neither does one with no id" do
+      ticket("MT-3", "Todo")
+      :ok = RunStore.add_dependency("MT-3", "other", :done)
 
       assert %{blocks: []} = Read.read(%{issue_id: "unnamed", repo_key: @repo}, nil, facts())
+      assert %{blocks: []} = Read.read(%{issue_id: nil, repo_key: @repo}, nil, facts())
     end
   end
 
@@ -233,8 +217,12 @@ defmodule SymphonyElixir.Connected.ReadTest do
     assert second.related == [%{identifier: "MT-3", title: "Known", state: "Todo"}, %{identifier: "MT-9", title: "Not known", state: "Done"}]
   end
 
-  test "facts takes the cached plans by default" do
-    assert %{records: [], initiatives: initiatives} = Read.facts([], Situation.live_facts(%{running: [], retrying: []}))
-    assert is_list(initiatives)
+  test "facts takes the plans the Initiatives read over the same records by default" do
+    ticket("MT-2", "Todo")
+    ticket("MT-1", "Waiting on sub-tickets", %{title: "The plan", sub_issues: [%{id: "MT-2", identifier: "MT-2", state: "Todo"}]})
+    {:ok, _event} = TicketEvents.record(@repo, "MT-1", "ticket.filed", %{identifier: "MT-2", kind: "split_off"})
+
+    assert %{initiatives: [%{identifier: "MT-1"}]} = Read.facts(RunStore.list_all_ticket_states(), Situation.live_facts(%{running: [], retrying: []}))
+    assert %{records: [], initiatives: []} = Read.facts([], Situation.live_facts(%{running: [], retrying: []}))
   end
 end

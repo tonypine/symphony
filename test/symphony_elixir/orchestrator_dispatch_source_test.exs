@@ -94,7 +94,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
 
       # The gates run unchanged on the rebuilt issue: Todo, assigned, Urgent and unblocked dispatches.
       only_record = Enum.find(dispatchable, &(&1.identifier == "ACME-3"))
-      assert %Issue{state: "Todo", priority: 1, assignee_id: "user-2", blocked_by: [], repo_key: repo_key} = only_record
+      assert %Issue{state: "Todo", priority: 1, assignee_id: "user-2", repo_key: repo_key} = only_record
       assert repo_key == ctx.repo_key
       assert Orchestrator.should_dispatch_issue_for_test(only_record, state)
     end
@@ -119,21 +119,23 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
       assert %{recent: [%{identifier: "ACME-2", side: :poll, field: :candidate, poll: "In Progress", record: nil}]} = Shadow.summary()
     end
 
-    test "a blocker a read wrote into the record pauses the ticket before its repo's next poll", ctx do
+    test "a dependency stored on the record holds the ticket before its repo's next poll, with no pause", ctx do
       set_source("record")
-      {_buckets, state} = cycle(orchestrator_state(), ctx.repos, [issue(ctx.repo_key, 1)], 0)
+      upstream = issue(ctx.repo_key, 9, state: "In Progress")
+      {_buckets, state} = cycle(orchestrator_state(), ctx.repos, [issue(ctx.repo_key, 1), upstream], 0)
+      :ok = RunStore.add_dependency("#{ctx.repo_key}-1", upstream.id, :done)
 
-      blocker = %{id: "blocker-1", identifier: "ACME-9", state: "In Progress"}
-      blocked = issue(ctx.repo_key, 1, blocked_by: [blocker], updated_at: DateTime.add(@linear_at, 60))
-      {:ok, :updated} = TicketObservation.observe(ctx.repo_key, blocked, source: :webhook)
-
-      # The next cycle's task syncs the records of the repos it doesn't poll.
-      {%{dependencies_synced: 1}, state} = Orchestrator.run_repo_poll_task_for_test(state, ctx.repos, 50)
-      assert SymphonyElixir.Pauses.why({:ticket, ctx.repo_key, "#{ctx.repo_key}-1"}) == ["Waiting for ACME-9 to finish"]
-
-      {%{dispatchable: [rebuilt]}, state} = capture_cycle(state, ctx.repos, 50)
-      assert [%{identifier: "ACME-9"}] = rebuilt.blocked_by
+      # The next cycle reads the records: the ticket is a candidate, held by the dependency gate
+      # from its record alone, and nothing pauses it.
+      {%{dispatchable: dispatchable}, state} = capture_cycle(state, ctx.repos, 50)
+      rebuilt = Enum.find(dispatchable, &(&1.identifier == "ACME-1"))
+      assert %Issue{} = rebuilt
+      refute SymphonyElixir.Pauses.paused?({:ticket, ctx.repo_key, rebuilt.id})
       refute Orchestrator.should_dispatch_issue_for_test(rebuilt, state)
+
+      # The ticket it depends on is done: the same record starts.
+      :ok = RunStore.update_ticket_state(upstream.id, %{phase: "Done"})
+      assert Orchestrator.should_dispatch_issue_for_test(rebuilt, state)
     end
 
     test "nothing dispatches before every cache is warm, and a repo whose records can't be read gives none", ctx do
@@ -293,16 +295,15 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
       ctx
     end
 
-    test "running, watched, forced and stopped tickets come from their records, with no by-id read", ctx do
+    test "running, watched and stopped tickets come from their records, with no by-id read", ctx do
       comments = [%{author: "Tony", body: "Mind the retry", created_at: @linear_at}]
       running = issue(ctx.repo_key, 1, state: "In Progress", description: "What the run read", comments: comments)
       watched = issue(ctx.repo_key, 2, state: "Plan Review")
-      forced = issue(ctx.repo_key, 3, state: "Plan Review", labels: ["expedite"])
       stopped = issue(ctx.repo_key, 4)
       gone = issue(ctx.repo_key, 5, state: "In Progress")
 
-      observe!(ctx.repo_key, [running, watched, forced, stopped, gone], :poll)
-      # A webhook raised the running ticket's priority, and said the forced-away one was removed.
+      observe!(ctx.repo_key, [running, watched, stopped, gone], :poll)
+      # A webhook raised the running ticket's priority, and said a watched one was removed.
       later = DateTime.add(@linear_at, 60)
       observe!(ctx.repo_key, [%{running | priority: 2, updated_at: later}], :webhook)
       :ok = RunStore.update_ticket_state(gone.id, %{removed_at: later})
@@ -310,8 +311,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
       state = %{
         orchestrator_state()
         | running: %{running.id => %{issue: running, identifier: running.identifier}},
-          watching: %{watched.id => %{}, "#{ctx.repo_key}-unknown" => %{}},
-          forced: %{forced.id => %{}, gone.id => %{}}
+          watching: %{watched.id => %{}, gone.id => %{}, "#{ctx.repo_key}-unknown" => %{}}
       }
 
       :ok = SymphonyElixir.Pauses.stop({:ticket, ctx.repo_key, stopped.id}, DateTime.utc_now())
@@ -324,13 +324,11 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
       assert running_id == running.id
       assert %Issue{state: "In Progress", priority: 2, description: "What the run read", comments: ^comments} = refreshed
 
-      # A ticket no record observed is not judged this tick, as a failed read judges none.
-      assert result.watching_ids == [watched.id]
-      assert {:ok, [%Issue{state: "Plan Review"}]} = result.watching_result
-
-      # A removed record reads as a ticket Linear no longer returns.
-      assert Enum.sort(result.forced_ids) == Enum.sort([forced.id, gone.id])
-      assert {:ok, [%Issue{identifier: "ACME-3", state: "Plan Review", labels: ["expedite"]}]} = result.forced_result
+      # A ticket no record observed is not judged this tick, as a failed read judges none; a removed
+      # record reads as a ticket Linear no longer returns.
+      assert Enum.sort(result.watching_ids) == Enum.sort([watched.id, gone.id])
+      assert {:ok, [%Issue{identifier: "ACME-2", state: "Plan Review"}]} = result.watching_result
+      refute Map.has_key?(result, :forced_ids)
 
       assert result.stopped_ids == [stopped.id]
       assert {:ok, [%Issue{identifier: "ACME-4", state: "Todo"}]} = result.stopped_result
@@ -404,22 +402,18 @@ defmodule SymphonyElixir.OrchestratorDispatchSourceTest do
       assert state.plan_comment_checks == %{parent_id => commented_at}
     end
 
-    test "a forced, stopped or watched plan parent under review is taken from its record, with no by-id read", ctx do
-      forced = issue(ctx.repo_key, 1, state: "Plan Review", labels: ["plan", "expedite"])
+    test "a stopped or watched plan parent under review is taken from its record, with no by-id read", ctx do
       stopped = issue(ctx.repo_key, 2, state: "Plan Review", labels: ["plan"])
-      forced_and_watched = issue(ctx.repo_key, 3, state: "Plan Review", labels: ["plan"])
-      observe!(ctx.repo_key, [forced, stopped, forced_and_watched], :poll)
-      both_id = forced_and_watched.id
+      watched = issue(ctx.repo_key, 3, state: "Plan Review", labels: ["plan"])
+      observe!(ctx.repo_key, [stopped, watched], :poll)
 
-      state = %{orchestrator_state() | forced: %{forced.id => %{}, both_id => %{}}, watching: %{both_id => %{}}}
+      state = %{orchestrator_state() | watching: %{watched.id => %{}}}
       :ok = SymphonyElixir.Pauses.stop({:ticket, ctx.repo_key, stopped.id}, DateTime.utc_now())
 
       {result, _state} = Orchestrator.run_repo_poll_task_for_test(state, [], 0)
       refute_received {:memory_tracker_fetch_issue_states_by_ids, _ids}
       assert {:ok, [%Issue{identifier: "ACME-3", state: "Plan Review"}]} = result.watching_result
       assert {:ok, [%Issue{identifier: "ACME-2", state: "Plan Review"}]} = result.stopped_result
-      assert {:ok, forced_issues} = result.forced_result
-      assert forced_issues |> Enum.map(& &1.identifier) |> Enum.sort() == ["ACME-1", "ACME-3"]
     end
   end
 
