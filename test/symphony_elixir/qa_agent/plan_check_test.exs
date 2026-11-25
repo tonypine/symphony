@@ -152,7 +152,13 @@ defmodule SymphonyElixir.QaAgent.PlanCheckTest do
                TicketEvents.record("default", "issue-word", "evidence", %{caption: "Walkthrough step 1: unprovable", step: "Walkthrough step 1", status: @word}, actor: {:agent, "run-1", "qa"})
 
       assert {:ok, _event} =
-               TicketEvents.record("default", "issue-word", "step.completed", %{step_id: "walk_1", title: "Walk 1", mode: "orchestrated", outcome: "passed", result: %{status: @word}}, run_id: "run-1")
+               TicketEvents.record(
+                 "default",
+                 "issue-word",
+                 "step.completed",
+                 %{step_id: "walk_1", title: "Walk 1", mode: "orchestrated", outcome: "passed", result: %{status: @word, expected: "the round trip", actual: "it needs the live server"}},
+                 run_id: "run-1"
+               )
     end
   end
 

@@ -400,7 +400,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       journey = %{source: "the plan", text: "", steps: steps}
       assert {:ok, _result} = run(ctx, %{journey: journey, playbooks: live_pass}, [], [plan_step(), review()])
       [plan_turn, _review] = turns()
-      refute plan_turn.prompt =~ "marked `unprovable`"
+      refute plan_turn.prompt =~ "Steps Symphony marked `unprovable` before this session"
       assert plan_turn.prompt =~ "- The live server: this pass runs it."
 
       assert plan_turn.prompt =~
@@ -699,7 +699,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       turns = turns()
       [first, second] = Enum.filter(turns, &(&1.id == "walk_1_2_3"))
       refute first.prompt =~ "Your last answer was refused"
-      assert second.prompt =~ "Your last answer was refused: `results` has no result with a `status` of pass, fail, blocked, plan_mismatch for walkthrough step 2, 3"
+      assert second.prompt =~ "Your last answer was refused: `results` has no result with a `status` of pass, fail, blocked, unprovable, plan_mismatch for walkthrough step 2, 3"
 
       completed = Enum.find(events("step.completed"), &(&1.payload.step_id == "walk_1_2_3")).payload
       assert completed.outcome == "passed"
@@ -894,7 +894,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
 
       [first, second, review_turn] = turns()
       assert {first.id, second.id} == {"look", "look"}
-      assert second.prompt =~ "`status` must be one of pass, fail, blocked, plan_mismatch"
+      assert second.prompt =~ "`status` must be one of pass, fail, blocked, unprovable, plan_mismatch"
       assert review_turn.prompt =~ "- `look` (look): failed: no answer was written to"
 
       assert [%{payload: %{outcome: "failed", returns_to: "review", reason: reason}}, _review] = events("step.completed")
@@ -1263,6 +1263,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
         "plan" => [
           {:write, needs_plan([{1, Map.put(drag, :group, "board")}, {2, Map.put(drag, :group, "board")}, {3, %{group: "list"}}, {4, %{group: "list", needs: [%{kind: "tool", name: "qa_click"}]}}])}
         ],
+        "walk_3_4" => [{:write, %{results: [result(3, "pass"), result(4, "pass")]}}],
         "review" => [{:verdict, @pass}]
       })
 
@@ -1302,10 +1303,10 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       })
 
       assert {:ok, _result} = run(ctx, %{journey: %{source: "the ticket", text: "1.", steps: walkthrough([1])}})
-      [first, second | _rest] = turns()
+      [first, second | _rest] = turns = turns()
       assert {first.id, second.id} == {"plan", "plan"}
       assert second.prompt =~ "Your last answer was refused: each brief's `needs` must be a list of objects"
-      assert "walk_1" in walks(turns())
+      assert "walk_1" in walks(turns)
     end
 
     test "the verdict carries a marked step as Symphony marked it, whatever the review wrote for it", ctx do
