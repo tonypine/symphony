@@ -11,6 +11,11 @@
 # reaches the process, and the `gh` on its PATH is a stand-in that answers only for the seed's own
 # pull requests and refuses every other call (scripts/qa-server-gh.sh).
 #
+# Nor does it reach OpenCode Go: an OpenRouter QA stub (`symphony openrouter-stub`) runs beside it,
+# in its process group, and the server reads OpenCode Go's usage from it in QA mode with the stub's
+# key, holding OpenCode Go at the reserve its symphony.yml sets (TP-1642). OpenCode Go is every kind
+# of run's fallback there, as on the operator's own Symphony, so the Providers page lists it in use.
+#
 # By hand on the QA VM: scripts/qa-server-build.sh, then
 #   SYMPHONY_VERIFICATION_PORT=8090 scripts/qa-server-start.sh
 # and open http://127.0.0.1:8090/api/v1/state.
@@ -64,8 +69,16 @@ execution:
   harnesses:
     codex:
       command: "false"
+  providers:
+    opencode-go:
+      reserve: 0.9
 runs:
-  default: { harness: codex, provider: openai, model: none }
+  default:
+    harness: codex
+    provider: openai
+    model: none
+    fallbacks:
+      - { provider: opencode-go, model: none }
 YAML
 
 cd "$repo"
@@ -78,6 +91,25 @@ if command -v mise >/dev/null 2>&1; then
   export MISE_TRUSTED_CONFIG_PATHS="$repo${MISE_TRUSTED_CONFIG_PATHS:+:$MISE_TRUSTED_CONFIG_PATHS}"
   set -- mise exec --
 fi
+
+# The QA stub stands in for OpenCode Go's usage API: started on a free port, its URL read from the
+# line it prints once it listens. It stops with the server's process group.
+stub_log="$root/logs/openrouter-stub.log"
+"$@" ./bin/symphony openrouter-stub --port 0 >"$stub_log" 2>&1 &
+stub_pid=$!
+stub_url=""
+for _ in $(seq 300); do
+  stub_url="$(sed -n 's/^OpenRouter QA stub listening on //p' "$stub_log")"
+  [ -n "$stub_url" ] && break
+  kill -0 "$stub_pid" 2>/dev/null || break
+  sleep 0.1
+done
+if [ -z "$stub_url" ]; then
+  echo "scripts/qa-server-start.sh: the OpenRouter QA stub did not start:" >&2
+  cat "$stub_log" >&2
+  exit 1
+fi
+export SYMPHONY_BAR_QA_ROOT="$root" SYMPHONY_QA_OPENROUTER_URL="$stub_url" OPENCODE_API_KEY="sk-or-v1-symphony-qa-stub"
 
 # A Symphony agent environment turns the orchestrator and its HTTP server off; no token for Linear
 # or GitHub crosses over, and `gh` is the stand-in.

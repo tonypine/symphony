@@ -8,14 +8,18 @@ import SymphonyBarUI
 // block (TP-1540) of a provider set up with an API key: OpenCode Go not in use with no key, a key under test, a test
 // that works (Enable offered) and one that fails, enabled (Disable and Remove Key), and off with its key set. Anthropic
 // stops new runs at 90 % (TP-1535): "Stop new runs at" under its meters, each with its mark, and a story at that reserve.
+// OpenCode Go's usage is read too (TP-1642): its 5 hours, Week and Month with "Stop new runs at" 90 %, and at that
+// reserve, its week at 92 %.
 
 /// Symphony's clock for the stories: Tuesday 17 November 2026, 14:00 UTC.
 private let providersNow = Date(timeIntervalSince1970: 1_794_924_000)
 
 /// The catalog's providers, Anthropic in `anthropic`'s state, stopping new runs at 90 %; at that reserve when
-/// `atReserve`, its week at 90 %.
+/// `atReserve`, its week at 90 %. OpenCode Go with its three windows and a 90 % reserve when `openCodeGoUsage` is set,
+/// at that reserve when it is `.atReserve`.
 func galleryProviders(
-    anthropic: (paused: Bool, held: Bool) = (false, false), atReserve: Bool = false, openCodeGoInUse: Bool = true
+    anthropic: (paused: Bool, held: Bool) = (false, false), atReserve: Bool = false, openCodeGoInUse: Bool = true,
+    openCodeGoUsage: GalleryOpenCodeGoUsage? = nil
 ) -> [StateSnapshot.Provider] {
     let hour: TimeInterval = 3600
     let held = anthropic.held || atReserve
@@ -32,18 +36,41 @@ func galleryProviders(
             harnesses: ["claude"], kinds: ["implementation", "breakdown", "rework", "code_review", "qa"], working: atReserve ? 0 : 3,
             tokensToday: 14_600_000, reserve: 0.9, atReserve: atReserve
         ),
-        openCodeGoInUse
+        openCodeGoUsage.map(galleryOpenCodeGo) ?? (openCodeGoInUse
             ? .init(
                 id: "opencode-go", name: "OpenCode Go", inUse: true, harnesses: ["claude", "codex", "opencode"],
                 kinds: ["landing"], fallbackFor: ["implementation", "breakdown"], working: 1, tokensToday: 3_100_000
             )
-            : .init(id: "opencode-go", name: "OpenCode Go", harnesses: ["claude", "codex", "opencode"]),
+            : .init(id: "opencode-go", name: "OpenCode Go", harnesses: ["claude", "codex", "opencode"])),
         .init(
             id: "openrouter", name: "OpenRouter", inUse: true, harnesses: ["claude"], kinds: ["ci_fix"], fallbackFor: ["qa"],
             tokensToday: 900_000
         ),
         .init(id: "openai", name: "OpenAI", harnesses: ["codex"]),
     ]
+}
+
+/// OpenCode Go's usage as Symphony reads it (TP-1642): below its reserve, or at it.
+enum GalleryOpenCodeGoUsage {
+    case belowReserve, atReserve
+}
+
+/// OpenCode Go every kind's fallback, its 5 hours, Week and Month read, stopping new runs at 90 %; at that reserve its
+/// week is at 92 % and new runs on it wait until the week resets.
+private func galleryOpenCodeGo(_ usage: GalleryOpenCodeGoUsage) -> StateSnapshot.Provider {
+    let hour: TimeInterval = 3600
+    let atReserve = usage == .atReserve
+    let weekResets = providersNow.addingTimeInterval(72 * hour)
+    return .init(
+        id: "opencode-go", name: "OpenCode Go", inUse: true, held: atReserve, heldUntil: atReserve ? weekResets : nil,
+        usageWindows: [
+            .init(name: "five_hour", utilization: 0.3, resetsAt: providersNow.addingTimeInterval(2 * hour)),
+            .init(name: "seven_day", utilization: atReserve ? 0.92 : 0.64, resetsAt: weekResets),
+            .init(name: "monthly", utilization: 0.55, resetsAt: providersNow.addingTimeInterval(20 * 24 * hour)),
+        ],
+        harnesses: ["claude", "codex", "opencode"], fallbackFor: ["implementation", "breakdown", "code_review", "qa"],
+        working: atReserve ? 0 : 1, tokensToday: 3_100_000, reserve: 0.9, atReserve: atReserve
+    )
 }
 
 /// The page in a window `window` pt wide, beside the sidebar, drawn unscrolled at its whole height.
@@ -95,8 +122,8 @@ func galleryKeyTest(_ result: ProviderKeyCheck.Result?) -> GalleryProviderKeys {
     return state
 }
 
-/// The page's states, by name: Anthropic available, paused, at its limit, at its reserve, a provider with no usage to read and one
-/// not in use; then OpenCode Go's Key block: no key, a key under test, a test that works and one that fails, off with
+/// The page's states, by name: Anthropic available, paused, at its limit, at its reserve, a provider with no usage to read,
+/// OpenCode Go's usage and OpenCode Go at its reserve with no key in the app, and one not in use; then OpenCode Go's Key block: no key, a key under test, a test that works and one that fails, off with
 /// its key set.
 @MainActor
 let providersStates: [(name: String, providers: [StateSnapshot.Provider], selection: String?, keys: GalleryProviderKeys)] = [
@@ -105,6 +132,11 @@ let providersStates: [(name: String, providers: [StateSnapshot.Provider], select
     ("providers-page-at-its-limit", galleryProviders(anthropic: (false, true)), nil, galleryProviderKeys()),
     ("providers-page-at-your-reserve", galleryProviders(atReserve: true), nil, galleryProviderKeys()),
     ("providers-page-no-usage", galleryProviders(), "opencode-go", galleryProviderKeys()),
+    ("providers-page-opencode-go-usage", galleryProviders(openCodeGoUsage: .belowReserve), "opencode-go", galleryProviderKeys()),
+    (
+        "providers-page-opencode-go-at-your-reserve", galleryProviders(openCodeGoUsage: .atReserve), "opencode-go",
+        galleryProviderKeys(openCodeGo: false)
+    ),
     ("providers-page-not-in-use", galleryProviders(), "openai", galleryProviderKeys()),
     ("providers-page-key-empty", galleryProviders(openCodeGoInUse: false), "opencode-go", galleryProviderKeys(openCodeGo: false)),
     ("providers-page-key-testing", galleryProviders(openCodeGoInUse: false), "opencode-go", galleryKeyTest(nil)),

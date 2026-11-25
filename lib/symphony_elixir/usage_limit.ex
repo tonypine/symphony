@@ -223,15 +223,21 @@ defmodule SymphonyElixir.UsageLimit do
   The windows in a worker update's `usage_windows` still allowed (`allowed` or `allowed_warning`)
   whose utilization is at or above `reserve` (the provider's `execution.providers.<provider>.reserve`)
   and that reset after `now`, as hold infos for `put_headroom/3`, each with the `reserve`.
+
+  Options: `provider` (default `anthropic`), whose windows they are, and `statuses`, the window
+  statuses a crossing counts in. A usage read that is not a run's own (OpenCode Go's usage API,
+  `SymphonyElixir.ProviderUsage`) counts a used-up window too: nothing else holds the provider for it.
   """
-  @spec headroom_crossings(map(), number(), DateTime.t()) :: [map()]
-  def headroom_crossings(usage_windows, reserve, %DateTime{} = now) when is_map(usage_windows) and is_number(reserve) do
+  @spec headroom_crossings(map(), number(), DateTime.t(), keyword()) :: [map()]
+  def headroom_crossings(usage_windows, reserve, %DateTime{} = now, opts \\ []) when is_map(usage_windows) and is_number(reserve) do
+    statuses = Keyword.get(opts, :statuses, ["allowed", "allowed_warning"])
+
     for {window, %{status: status, utilization: utilization, resets_at: %DateTime{} = resets_at}} <- Enum.sort(usage_windows),
-        status in ["allowed", "allowed_warning"],
+        status in statuses,
         is_number(utilization) and utilization >= reserve and DateTime.compare(resets_at, now) == :gt do
       %{
         reserve: reserve / 1,
-        provider: "anthropic",
+        provider: Keyword.get(opts, :provider, "anthropic"),
         window: window,
         scope: scope_for_window(window),
         resets_at: resets_at,

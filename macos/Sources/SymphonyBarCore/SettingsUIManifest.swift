@@ -46,6 +46,7 @@ public enum SettingsUIManifest {
         "execution.limits.tokens_per_day",
         "execution.limits.tokens_per_issue",
         "execution.providers.anthropic.reserve",
+        "execution.providers.opencode-go.reserve",
         "execution.timeouts.mcp_tool_ms",
         "execution.usage_limit.sign_in_ask_after_seconds",
         "github.webhooks.enabled",

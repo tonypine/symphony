@@ -11,6 +11,11 @@ defmodule SymphonyElixir.OpenRouter.Stub do
   - `GET /api/opencode-go/v1/models`: OpenCode Go's models list, which the macOS app's Test
     connection on OpenCode Go's provider page reads; the same valid key gets two models, any
     other key or none a 401, so QA tests that key with no real one either;
+  - `GET /api/opencode-go/v1/usage`: OpenCode Go's usage meters in its usage API's shape
+    (`opencode_go_usage/1`), which Symphony reads in QA mode (`SymphonyElixir.OpencodeGo.Usage`):
+    with the same valid key, the 5 hours at 30 %, the week at 92 % (above the reserve the QA seed
+    sets for OpenCode Go) and the month at 55 %, each resetting ahead of the request; any other key
+    or none a 401;
   - `POST /api/v1/messages` (and `/messages/count_tokens`): with the valid key, a canned
     Anthropic Messages answer that names the model it was asked for, as JSON or as an SSE stream
     when the request asks for one. That is enough to show a `claude` run's env and model id
@@ -78,6 +83,28 @@ defmodule SymphonyElixir.OpenRouter.Stub do
   @doc "The models `GET /api/opencode-go/v1/models` lists, in OpenCode Go's (OpenAI's) format."
   @spec opencode_go_models() :: [map()]
   def opencode_go_models, do: @opencode_go_models
+
+  @doc """
+  OpenCode Go's usage at `now`, as its usage API answers it: `rolling` (5 hours) at 30 %
+  resetting in 2 hours, `weekly` at 92 % resetting in 3 days, `monthly` at 55 % resetting in 20
+  days, all `ok`, each reset on the minute.
+  """
+  @spec opencode_go_usage(DateTime.t()) :: map()
+  def opencode_go_usage(%DateTime{} = now) do
+    now = %{DateTime.truncate(now, :second) | second: 0}
+
+    meter = fn percent, seconds ->
+      %{"status" => "ok", "percent" => percent, "resetsAt" => now |> DateTime.add(seconds) |> DateTime.to_iso8601()}
+    end
+
+    %{
+      "usage" => %{
+        "rolling" => meter.(30, 2 * 3600),
+        "weekly" => meter.(92, 3 * 86_400),
+        "monthly" => meter.(55, 20 * 86_400)
+      }
+    }
+  end
 
   @doc "The base URL to export as `SYMPHONY_QA_OPENROUTER_URL` for a stub on `port`."
   @spec url(:inet.port_number()) :: String.t()
@@ -154,6 +181,11 @@ defmodule SymphonyElixir.OpenRouter.Stub do
     do: {json(conn, 200, %{"object" => "list", "data" => @opencode_go_models}), 200, nil}
 
   defp route(conn, "GET", ["api", "opencode-go", "v1", "models"], false), do: unauthorized(conn)
+
+  defp route(conn, "GET", ["api", "opencode-go", "v1", "usage"], true),
+    do: {json(conn, 200, opencode_go_usage(DateTime.utc_now())), 200, nil}
+
+  defp route(conn, "GET", ["api", "opencode-go", "v1", "usage"], false), do: unauthorized(conn)
   defp route(conn, "POST", ["api", "v1", "messages" | _rest], false), do: unauthorized(conn)
 
   defp route(conn, "POST", ["api", "v1", "messages" | rest], true) do
