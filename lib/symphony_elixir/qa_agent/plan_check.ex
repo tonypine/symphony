@@ -111,6 +111,21 @@ defmodule SymphonyElixir.QaAgent.PlanCheck do
   def step_name(%{check_id: check_id, number: number}) when is_binary(check_id), do: "Walkthrough step #{number} (check #{check_id})"
   def step_name(%{number: number}), do: "Walkthrough step #{number}"
 
+  @doc """
+  Whether a verdict step `name` written by the review stands for walked step `target`: Symphony's
+  own name for it, or a name that opens with its walkthrough step's number (`Step 1`,
+  `Walkthrough step 1: ...`). A marked step keeps one entry in the verdict, the one Symphony settled.
+  """
+  @spec names_step?(term(), map()) :: boolean()
+  def names_step?(name, %{number: number} = target) when is_binary(name) do
+    name = String.trim(name)
+
+    String.downcase(name) == String.downcase(step_name(target)) or
+      Regex.match?(~r/^(walkthrough\s+)?step\s*#?\s*#{number}(?!\d)/i, name)
+  end
+
+  def names_step?(_name, _target), do: false
+
   @doc "What a marked step needed, as its `details` read."
   @spec details([String.t()]) :: String.t()
   def details(needs), do: "Symphony marked it before any session: it needs " <> Enum.join(needs, "; and ") <> "."

@@ -4482,7 +4482,9 @@ against the QA driver's tools, the live server and the worktree's fixtures, and 
 with one the pass lacks before the first walk session. A marked step gets no walk session: a group
 that loses every step starts none, and a pass whose steps are all marked walks none. The review is
 given the marked steps as settled; Symphony puts each in the verdict itself, `unprovable` with
-what it needed in its `details`, whatever the review wrote for it. The QA report lists each one
+what it needed in its `details`, and drops any step the review wrote for the same walkthrough step
+(under Symphony's name or one that opens with the step's number), so each marked step has one
+entry. The QA report lists each one
 with what it needed, and the ticket's record has its evidence event with that status and those
 details. Such a step keeps `unprovable` on any pass, and is decided as the steps QA cannot prove
 here are (see [QA passes](#qa-passes)): the pass is decided by its other steps and the steps a

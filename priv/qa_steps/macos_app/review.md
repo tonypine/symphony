@@ -17,11 +17,12 @@ recheck; past them a pass without a verdict is inconclusive.
 Otherwise record the verdict with the `qa_verdict` tool, once, as your last act, then end your
 turn:
 
-- one step per walkthrough step, named after it, with the walk's status (`plan_mismatch` that a
+- one step per walked walkthrough step, named after it, with the walk's status (`plan_mismatch` that a
   recheck did not settle is `blocked`), its `details` and its `evidence`;
 - the steps Symphony marked `unprovable` before any session (listed below, with what each
-  needed), carried as given: the same name, `unprovable`, the same `details`. Symphony puts them in
-  the verdict as it marked them, whatever you write for them;
+  needed), carried as given: the same name, `unprovable`, the same `details`, and no step of your
+  own for the same walkthrough step. Symphony puts them in the verdict as it marked them and drops
+  any other step you write for that walkthrough step;
 - one `Design check: <deliverable>` step per UI deliverable and gallery entry judged, from those
   steps' answers;
 - the steps a named test proves (the pre-checks): `pass`, with the check's result in `details`;

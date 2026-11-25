@@ -115,6 +115,18 @@ defmodule SymphonyElixir.QaAgent.PlanCheckTest do
     end
   end
 
+  describe "names_step?/2" do
+    test "is true for Symphony's name and any name that opens with the walkthrough step's number" do
+      target = Map.put(target(1), :check_id, "c3")
+
+      for name <- ["Walkthrough step 1 (check c3)", " walkthrough STEP 1 (check c3) ", "Step 1", "step 1: open the board", "Walkthrough step 1: drag", "Step #1"],
+          do: assert(PlanCheck.names_step?(name, target), name)
+
+      for name <- ["Step 12", "Step 2", "Design check: Home", "The step 1 of the board", nil],
+          do: refute(PlanCheck.names_step?(name, target), inspect(name))
+    end
+  end
+
   describe "the one status word" do
     @word "unprovable"
 

@@ -1457,8 +1457,12 @@ defmodule SymphonyElixir.QaAgent.Steps do
   defp marked_facts(marked, turn) do
     lead =
       case turn do
-        :plan -> "Steps Symphony marked `unprovable` before this session, from their setting (no brief, no walk):"
-        :review -> "Steps Symphony marked `unprovable` before any walk session (no session walked them); carry each in the verdict as given, name, status and details:"
+        :plan ->
+          "Steps Symphony marked `unprovable` before this session, from their setting (no brief, no walk):"
+
+        :review ->
+          "Steps Symphony marked `unprovable` before any walk session (no session walked them); carry each in the verdict " <>
+            "as given, name, status and details, and write no other step for the same walkthrough step:"
       end
 
     lead <> "\n" <> Enum.map_join(marked, "\n", &"- #{PlanCheck.step_name(&1.target)}: #{PlanCheck.details(&1.needs)}")
@@ -1526,14 +1530,15 @@ defmodule SymphonyElixir.QaAgent.Steps do
 
   defp run_result(state, result), do: %{result: with_marked(result, state.marked), tokens: state.tokens, session_id: state.session_id}
 
-  # The steps Symphony marked are in the verdict as it settled them, whatever the review wrote for
-  # the same name; one the review left out is added.
+  # The steps Symphony marked are in the verdict once, as it settled them: whatever the review wrote
+  # for the same walkthrough step, under Symphony's name or its own, is dropped.
   defp with_marked(result, []), do: result
 
   defp with_marked(result, marked) do
-    settled = Enum.map(marked, &PlanCheck.verdict_step/1)
-    names = MapSet.new(settled, &String.downcase(&1.name))
-    steps = Enum.reject(Map.get(result, :steps, []), &MapSet.member?(names, &1 |> Map.get(:name, "") |> String.trim() |> String.downcase()))
-    Map.put(result, :steps, steps ++ settled)
+    targets = Enum.map(marked, & &1.target)
+    review_steps = Enum.reject(Map.get(result, :steps, []), &marked_name?(Map.get(&1, :name), targets))
+    Map.put(result, :steps, review_steps ++ Enum.map(marked, &PlanCheck.verdict_step/1))
   end
+
+  defp marked_name?(name, targets), do: Enum.any?(targets, &PlanCheck.names_step?(name, &1))
 end

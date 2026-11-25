@@ -10,7 +10,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
   alias SymphonyElixir.Config.Schema.Phases
   alias SymphonyElixir.Config.Schema.Phases.Step
   alias SymphonyElixir.{QaAgent, TicketEvents}
-  alias SymphonyElixir.QaAgent.{StepPrompts, Steps}
+  alias SymphonyElixir.QaAgent.{PlanCheck, StepPrompts, Steps}
 
   @issue_id "issue-qa-steps"
   @answers :qa_steps_test_answers
@@ -1242,8 +1242,9 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
 
       assert %{status: "unprovable", needs: ["the live server, which this pass does not run"], details: details} = marked_step(result, "Walkthrough step 1 (check c1)")
       assert details =~ "it needs the live server"
-      # The review's own steps stay beside it.
-      assert marked_step(result, "Step 1").status == "pass"
+      # The review's own "Step 1" names the marked walkthrough step, so only Symphony's entry stays.
+      refute marked_step(result, "Step 1")
+      assert [%{status: "unprovable"}] = Enum.filter(result.steps, &PlanCheck.names_step?(&1.name, %{number: 1, check_id: "c1"}))
     end
 
     test "a pass whose walked steps the setting marks every one walks none, and is no pass with nothing on screen", ctx do
