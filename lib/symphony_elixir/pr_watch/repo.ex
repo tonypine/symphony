@@ -122,12 +122,14 @@ defmodule SymphonyElixir.PrWatch.Repo do
     Decisions,
     IdlePark,
     LandingOrder,
+    Orchestrator,
     PrDecision,
     ProtectedPathsGate,
     PrReviewPoller,
     QaBuild,
     Questions,
     RunStore,
+    Situation,
     TicketJourney,
     TicketObservation,
     TicketPullRequest,
@@ -183,8 +185,10 @@ defmodule SymphonyElixir.PrWatch.Repo do
   `:interval_ms`, `:relay_status` (`fn repo_key -> relay status or nil`, in place of
   `SymphonyElixir.GitHub.RelaySupervisor.status/2`), `app_release: true` to read the app repository's newest release on each timed
   tick, `auto: false` to tick only on `poll/2`, `follow_records: false` to re-decide nothing on a
-  record's change, and `:holds_slot` (`fn record -> boolean`, in place of
-  `SymphonyElixir.Dispatch.Slots.held?/1`).
+  record's change, `:holds_slot` (`fn record -> boolean`, in place of
+  `SymphonyElixir.Dispatch.Slots.held?/1`), and `:snapshot` (`fn -> {:ok, %{snapshot: map}} | :missing`,
+  in place of `SymphonyElixir.Orchestrator.snapshot_cache_entry/0`, the orchestrator's last published
+  snapshot, read for the tickets that wait for a slot).
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -514,7 +518,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
     with {:ok, settings} <- settings(state),
          {:ok, issues} <- watched_issues(state, settings) do
       records = ticket_states(state)
-      running = running_issue_ids(state)
+      running = {running_issue_ids(state), live_facts(state, now, settings)}
       reviews = review_records(state)
       watched = Enum.flat_map(issues, &watched(&1, settings, {records, reviews}, running, state))
       {reads, state} = reads(mode, in_scope(watched, scope), state, now, seen_source(scope))
@@ -660,7 +664,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
     end
   end
 
-  defp watched(issue, settings, {records, reviews}, running, state) do
+  defp watched(issue, settings, {records, reviews}, {running, live}, state) do
     phase = phase(issue.state, settings)
     record = Map.get(records, issue.id)
     pr_url = pr_url(issue, record, state.repo_key)
@@ -680,6 +684,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
           landing_wait: nil,
           restart_conflicts: false,
           slot: holds_slot?(state, record),
+          slot_wait: slot_wait(live, issue.id),
           ticket: %{
             phase: phase,
             origin: origin(record, settings),
@@ -1250,6 +1255,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
       SilentWait.check(watch, %{
         run: entry.ticket.run,
         hold: entry.ticket.hold,
+        slot: entry.slot_wait,
         now: now,
         interval_ms: tick_interval_ms(state, settings),
         ci_wait_ms: settings.ci.merging_wait_timeout_ms,
@@ -1854,6 +1860,19 @@ defmodule SymphonyElixir.PrWatch.Repo do
       SituationRecorder.ticket_changed(issue_id)
     end
   end
+
+  # What the orchestrator last published, as situations read it (`Situation.live_facts/3`): nil
+  # when it published nothing, so no ticket waits for a slot.
+  defp live_facts(state, now, settings) do
+    case Keyword.get(state.opts, :snapshot, &Orchestrator.snapshot_cache_entry/0).() do
+      {:ok, %{snapshot: snapshot}} -> Situation.live_facts(snapshot, now, settings)
+      :missing -> nil
+    end
+  end
+
+  # Whether the ticket waits for a slot, the fact its situation reads as Waiting for a slot.
+  defp slot_wait(nil, _issue_id), do: :none
+  defp slot_wait(live, issue_id), do: if(Situation.waits_for_slot?(live, issue_id), do: :waiting, else: :none)
 
   # Whether the ticket holds a slot, from its record (`Slots.held?/1`); `opts[:holds_slot]` in tests.
   defp holds_slot?(state, record), do: Keyword.get(state.opts, :holds_slot, &Slots.held?/1).(record)

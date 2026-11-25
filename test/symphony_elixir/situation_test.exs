@@ -185,6 +185,17 @@ defmodule SymphonyElixir.SituationTest do
     end
   end
 
+  describe "waits_for_slot?/2 (TP-1649)" do
+    test "a ticket held for a slot, in line, or with every slot in use waits for one; a wait for CI or a free slot is none" do
+      refute Situation.waits_for_slot?(live(), @id)
+      assert Situation.waits_for_slot?(live(%{slot_waiting: %{@id => %{since: @at, reason: "no worker host is free"}}}), @id)
+      refute Situation.waits_for_slot?(live(%{slot_waiting: %{@id => %{since: @at, ci_wait: true}}}), @id)
+      assert Situation.waits_for_slot?(live(%{order: %{@id => %{position: 2, wait: nil, behind: "TP-9"}}}), @id)
+      assert Situation.waits_for_slot?(live(%{limit: 1, running: %{"other" => %{run_kind: "implementation", started_at: @at}}}), @id)
+      refute Situation.waits_for_slot?(live(%{limit: 2, running: %{"other" => %{run_kind: "implementation", started_at: @at}}}), @id)
+    end
+  end
+
   describe "headline/3" do
     # The events whose time is a kind's since: a run's end, the step a run works on, a push, a cancel.
     defp ledger! do

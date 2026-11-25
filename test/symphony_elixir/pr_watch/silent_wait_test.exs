@@ -7,7 +7,7 @@ defmodule SymphonyElixir.PrWatch.SilentWaitTest do
   @interval 30_000
   @ci_wait 1_800_000
 
-  defp ctx(attrs \\ %{}), do: Map.merge(%{run: :none, hold: :none, now: @now, interval_ms: @interval, ci_wait_ms: @ci_wait, previous: nil}, Map.new(attrs))
+  defp ctx(attrs \\ %{}), do: Map.merge(%{run: :none, hold: :none, slot: :none, now: @now, interval_ms: @interval, ci_wait_ms: @ci_wait, previous: nil}, Map.new(attrs))
 
   defp ago(ms), do: DateTime.add(@now, -ms, :millisecond)
 
@@ -187,5 +187,27 @@ defmodule SymphonyElixir.PrWatch.SilentWaitTest do
     # A wait on GitHub with no reset to pass has no bound.
     assert SilentWait.check(watch(wait(:github, rule: "R16")), ctx()) == nil
     assert SilentWait.check(watch(rate_limit, github: {:rate_limited, nil}), ctx()) == nil
+  end
+
+  test "a run decided while every slot is taken is never silent, however long it waits; with a slot free it is listed from the second tick (TP-1649)" do
+    listed = %{since: ago(1_800_000), ticks: 60, bound: nil, reason: "R27 decided `dispatch`, but no run started and no wait is recorded"}
+
+    for kind <- [:dispatch, :ci_fix, :land_agent] do
+      run = watch(decision(rule: "R27", kind: kind))
+      assert SilentWait.check(run, ctx(slot: :waiting)) == nil
+      # A silence the record held clears on the tick that sees the slot wait.
+      assert SilentWait.check(run, ctx(slot: :waiting, previous: listed)) == nil
+    end
+
+    # The slot wait explains only a run: a decision that waits on nobody is quiet whatever the slots.
+    assert %{ticks: 1} = SilentWait.check(watch(decision(kind: :wait)), ctx(slot: :waiting))
+
+    # With a slot free, the same decision is quiet, and listed from its second tick.
+    first = SilentWait.check(watch(decision(rule: "R27")), ctx())
+    assert %{ticks: 1, reason: "R27 decided `dispatch`, but no run started and no wait is recorded"} = first
+    refute SilentWait.listed?(first)
+    second = SilentWait.check(watch(decision(rule: "R27", decided_at: DateTime.add(@now, @interval, :millisecond))), ctx(now: DateTime.add(@now, @interval, :millisecond), previous: first))
+    assert %{ticks: 2, since: @now} = second
+    assert SilentWait.listed?(second)
   end
 end
