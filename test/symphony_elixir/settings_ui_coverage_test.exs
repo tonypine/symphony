@@ -126,6 +126,24 @@ defmodule SymphonyElixir.SettingsUICoverageTest do
                SettingsUICoverage.check(SystemSchema.operator_key_paths(), manifest(), exemptions())
     end
 
+    test "every setting of the project's server has a control in the app and no exemption, and the playbook switch is gone (TP-1663)" do
+      keys = for key <- ~w(build_cmd start_cmd health_check_url health_timeout_ms stop_signal stop_timeout_ms runs), do: "verification.dev_server." <> key
+      exempt = Enum.flat_map(exemptions(), & &1.keys)
+
+      for key <- keys do
+        assert key in SystemSchema.operator_key_paths()
+        assert key in manifest()
+        refute key in exempt
+      end
+
+      refute "verification.dev_server.*" in exempt
+
+      for gone <- ~w(auto_review.playbooks.macos_app.dev_server auto_review.playbooks.macos_app.live) do
+        refute gone in SystemSchema.operator_key_paths()
+        refute gone in manifest()
+      end
+    end
+
     test "the removed finishing, per-state and epic lane limits are neither settings nor exempt" do
       removed = ~w(execution.concurrency.epic_lanes execution.concurrency.finishing_max execution.concurrency.max_by_issue_state)
       exempt = Enum.flat_map(exemptions(), & &1.keys)

@@ -634,10 +634,11 @@ private struct RiskRulesSection: View {
     }
 }
 
-/// The `macos_app` QA playbook: the tools the QA host needs, the project's dev server there and the variables the
-/// app under test gets (`auto_review.playbooks.macos_app.requires`, `dev_server`, `dev_server_port` and `launch_env`),
-/// and the QA target it judges the app at: the window size and appearance (`window_width`, `window_height` and
-/// `appearance`). Two groups, since the tools wait on their own read of symphony.yml.
+/// The `macos_app` QA playbook: the tools the QA host needs and the variables the app under test gets
+/// (`auto_review.playbooks.macos_app.requires` and `launch_env`), the QA target it judges the app at: the window size
+/// and appearance (`window_width`, `window_height` and `appearance`), and the project's own server
+/// (`verification.dev_server`, with `dev_server_port` for its port on the QA host). The tools are a group of their
+/// own, since they wait on their own read of symphony.yml; the project's server is one group too.
 private struct MacAppQASection: View {
     @ObservedObject var model: SettingsViewModel
 
@@ -660,13 +661,16 @@ private struct MacAppQASection: View {
             }
             SettingsGroup(
                 footer: "auto_review.playbooks.macos_app.requires (default none), window_width and window_height (default "
-                    + "2560 × 1440), appearance (default dark), dev_server (default off), "
-                    + "dev_server_port (default 8090) and launch_env (default none). A repository's WORKFLOW.md can set them too, and "
-                    + "wins. scripts/qa-vm/provision.sh installs Go, Postgres and jq on a QA VM. Save checks "
+                    + "2560 × 1440), appearance (default dark) and launch_env (default none). A repository's WORKFLOW.md "
+                    + "can set them too, and wins. scripts/qa-vm/provision.sh installs Go, Postgres and jq on a QA VM. Save checks "
                     + "symphony.yml with symphony check first; the next QA pass uses them."
             ) {
                 qaTargetControls
-                devServerControls
+                appEnvironmentControls
+            }
+            .disabledReason(model.canEditMacAppQA ? nil : SettingsView.waits)
+            SettingsGroup("Project server") {
+                projectServerControls
             }
             .disabledReason(model.canEditMacAppQA ? nil : SettingsView.waits)
         }
@@ -697,17 +701,70 @@ private struct MacAppQASection: View {
         }
     }
 
-    @ViewBuilder private var devServerControls: some View {
-        SettingsRow(
-            "Start the project's dev server on the QA host",
-            help: "A macOS app QA pass on the QA host runs the project's verification.dev_server there, beside the app, "
-                + "from the PR head, before the app launches, and stops it when the pass ends."
-        ) {
-            DirectorSwitch(isOn: $model.macAppQA.devServer)
+    /// The project's own server, `verification.dev_server`: one row for each of its settings, the rule for when it
+    /// runs among them, the port it listens on when it runs on the QA host, and the block's save error.
+    @ViewBuilder private var projectServerControls: some View {
+        SettingsRow("When it runs") {
+            PopUp(
+                nil, selection: $model.macAppQA.projectServer.runs,
+                choices: ProjectServerRuns.allCases.map { PopUpChoice($0, $0.title) },
+                help: "verification.dev_server.runs", accessibilityLabel: "When the project server runs"
+            )
         }
-        SettingsRow("Dev server port") {
+        SettingsRow("Build command") {
+            DirectorTextField(
+                nil,
+                text: Binding(
+                    get: { model.macAppQA.projectServer.buildCmd ?? "" },
+                    set: { model.macAppQA.projectServer.buildCmd = $0.isEmpty ? nil : $0 }
+                ),
+                placeholder: "None", mono: true
+            )
+            .frame(width: DesignTokens.SettingsRow.fieldWidth)
+            .help("verification.dev_server.build_cmd")
+        }
+        SettingsRow("Start command") {
+            DirectorTextField(nil, text: $model.macAppQA.projectServer.startCmd, mono: true)
+                .frame(width: DesignTokens.SettingsRow.fieldWidth)
+                .help("verification.dev_server.start_cmd")
+        }
+        SettingsRow("Health check URL") {
+            DirectorTextField(nil, text: $model.macAppQA.projectServer.healthCheckURL, mono: true)
+                .frame(width: DesignTokens.SettingsRow.fieldWidth)
+                .help("verification.dev_server.health_check_url")
+        }
+        SettingsRow("Health check timeout") {
+            NumberField(
+                value: $model.macAppQA.projectServer.healthTimeoutMs, in: 1...Int.max, accepts: SettingsView.anyWholeNumber,
+                step: 1_000, unit: "ms"
+            )
+            .help("verification.dev_server.health_timeout_ms")
+        }
+        SettingsRow("Stop signal") {
+            PopUp(
+                nil, selection: $model.macAppQA.projectServer.stopSignal,
+                choices: ProjectServerStopSignal.allCases.map { PopUpChoice($0, $0.rawValue) },
+                help: "verification.dev_server.stop_signal", accessibilityLabel: "Stop signal"
+            )
+        }
+        SettingsRow("Stop timeout") {
+            NumberField(
+                value: $model.macAppQA.projectServer.stopTimeoutMs, in: 0...Int.max, accepts: SettingsView.anyWholeNumber,
+                step: 1_000, unit: "ms"
+            )
+            .help("verification.dev_server.stop_timeout_ms")
+        }
+        SettingsRow("Port on the QA host") {
             NumberField(value: $model.macAppQA.devServerPort, in: 1...65_535, accepts: SettingsView.anyWholeNumber)
+                .help("auto_review.playbooks.macos_app.dev_server_port")
         }
+        if let error = model.macAppQAError {
+            SettingsLine(error, error: true)
+        }
+    }
+
+    /// The variables the app under test gets.
+    @ViewBuilder private var appEnvironmentControls: some View {
         SettingsLine {
             Text("App environment")
                 .textStyle(.rowTitle)
@@ -726,9 +783,6 @@ private struct MacAppQASection: View {
             "QA sets these on the app after its own variables; $SYMPHONY_VERIFICATION_PORT becomes the port. "
                 + "They are saved in plain text, so never put a secret here."
         )
-        if let error = model.macAppQAError {
-            SettingsLine(error, error: true)
-        }
     }
 }
 

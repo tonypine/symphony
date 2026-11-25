@@ -2,13 +2,26 @@ defmodule SymphonyElixir.Config.SchemaTest do
   use ExUnit.Case, async: true
 
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.Config.Schema.Verification.DevServer
 
   test "the QA review refuses a playbook PlaybookSettings refuses, naming it" do
     changeset = Schema.AutoReview.changeset(%Schema.AutoReview{}, %{"playbooks" => %{"cli" => %{"live" => %{"start_cmd" => "x"}}}})
 
     refute changeset.valid?
     assert {message, _} = changeset.errors[:playbooks]
-    assert message =~ "live is only read on the macos_app playbook"
+    assert message =~ "auto_review.playbooks.cli.live is gone: the project's server is described once, in verification.dev_server"
+  end
+
+  test "the project's server takes a runs rule from a closed set, symphony_host by default" do
+    assert DevServer.runs_values() == ~w(symphony_host every_qa_pass live_qa_pass)
+    assert %DevServer{runs: "symphony_host"} = %DevServer{}
+
+    for runs <- DevServer.runs_values() do
+      assert DevServer.changeset(%DevServer{}, %{"runs" => runs}).valid?
+    end
+
+    changeset = DevServer.changeset(%DevServer{}, %{"runs" => "sometimes"})
+    assert {"must be one of symphony_host, every_qa_pass, live_qa_pass", _} = changeset.errors[:runs]
   end
 
   test "the Conductor lists every junction in the order a ticket meets them" do

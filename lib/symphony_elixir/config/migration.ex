@@ -14,6 +14,10 @@ defmodule SymphonyElixir.Config.Migration do
   of its own (`agent: {run_profiles: {...}}`) can't be rewritten, and that is an error naming it and
   the line it sits on, and only the keys the rewrite left in place.
 
+  Moves the table can't say have movers of their own, run after it: the `agent` section's move to
+  `execution` and `runs` (`RunsRewrite`), and the project's server described once in
+  `verification.dev_server` with its `runs` rule (`DevServerMove`).
+
   `symphony start` and `symphony run` migrate the file in place. `symphony check --migrate`, which
   the macOS app runs with a downloaded build before it installs it, checks a migrated copy and
   leaves the file alone.
@@ -21,7 +25,7 @@ defmodule SymphonyElixir.Config.Migration do
 
   alias SymphonyElixir.BuildInfo
   alias SymphonyElixir.Config.{LineEditor, SystemSchema}
-  alias SymphonyElixir.Config.Migration.{Lines, RunsMove, RunsRewrite}
+  alias SymphonyElixir.Config.Migration.{DevServerMove, Lines, RunsMove, RunsRewrite}
 
   @type error :: {:not_migrated, [{String.t(), pos_integer() | nil}]} | {:runs_not_moved, String.t()} | File.posix()
 
@@ -135,9 +139,25 @@ defmodule SymphonyElixir.Config.Migration do
   def plan(text, backup) when is_binary(text) and is_binary(backup) do
     case read_map(text) do
       nil -> {:ok, text, []}
-      document -> text |> plan_document(document, backup) |> move_runs(backup)
+      document -> text |> plan_document(document, backup) |> move_runs(backup) |> move_dev_server(backup)
     end
   end
+
+  # Then a file that still describes the project's server twice, in `verification.dev_server` and
+  # a playbook's `dev_server` or `live`, has it described once (`DevServerMove`).
+  defp move_dev_server({:ok, text, notes}, backup) do
+    %{} = document = read_map(text)
+
+    if DevServerMove.needed?(document) do
+      with {:ok, moved, moved_notes} <- DevServerMove.plan(text, document, backup, BuildInfo.current().version) do
+        {:ok, moved, notes ++ moved_notes}
+      end
+    else
+      {:ok, text, notes}
+    end
+  end
+
+  defp move_dev_server({:error, _reason} = error, _backup), do: error
 
   # After the table's renames, a file that still has the `agent` section has it moved to
   # `execution` and `runs` (`RunsRewrite`).

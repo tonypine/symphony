@@ -1,0 +1,287 @@
+# Symphony operator config.
+# See docs/configuration.md for the full reference. Commented values show defaults
+# or optional advanced knobs.
+
+issues:
+  provider: linear
+  poll_interval_ms: 15000
+  linear:
+    # endpoint: https://api.linear.app/graphql
+    # api_key: $LINEAR_API_KEY
+    assignee: me
+    scope:
+      # project_slug: my-project
+      # team: ENG
+      # labels: [codex]
+  states:
+    active: [Todo, In Progress, Merging, Rework]
+    terminal: [Closed, Cancelled, Canceled, Duplicate, Done, "Won't Do"]
+
+# Only these Linear priorities start new work; empty (the default) lets every priority start.
+# Use it to focus a limited API budget, e.g. on urgent and high tickets only.
+# tickets:
+#   priorities: [urgent, high]
+
+repositories:
+  - key: symphony
+    # default: true
+    # base_branch: main
+    workflow: WORKFLOW.md
+    route:
+      # team: ENG
+      # labels: [backend]
+      # assignee: me
+      projects: ["building-the-harness-ai-agents-that-ship-production-code-safely-f469eb38bbc5"]
+    workspace:
+      strategy: worktree
+      repo: ~/Projects/symphony
+      fetch_before_dispatch: true
+      # Or let Symphony clone the repo itself instead of using `repo` (drop `repo` then):
+      # source: your-org/symphony
+    # Per-repo acceptance gate: mode and numbers replace the global ones, lists
+    # add to them (docs/acceptance_gate.md). The gate can't approve itself:
+    # acceptance_gate:
+    #   mode: shadow
+    #   escalate:
+    #     paths:
+    #       - lib/symphony_elixir/auto_review.ex
+    #       - lib/symphony_elixir/auto_review/**
+    #       - lib/symphony_elixir/acceptance_gate.ex
+    #       - lib/symphony_elixir/acceptance_gate/**
+    #       - lib/symphony_elixir/auto_merge.ex
+    #       - lib/symphony_elixir/review_agent.ex
+    #       - lib/symphony_elixir/review_agent/**
+    #       - lib/symphony_elixir/agent_sandbox_config.ex
+    #       - lib/symphony_elixir/path_safety.ex
+    #       - lib/symphony_elixir/prompt_safety.ex
+    #       - lib/symphony_elixir/sensitive_path.ex
+    #       - lib/symphony_elixir/secret.ex
+    #       - lib/symphony_elixir/agent_tools/**
+    #       - lib/symphony_elixir/agent_mcp.ex
+    #       - lib/symphony_elixir/github/webhook.ex
+    #       - lib/symphony_elixir_web/plugs/**
+
+workspaces:
+  root: ~/Projects/symphony-workspaces
+  # clones_root: ~/.local/share/symphony/repos   # Symphony's clones of `workspace.source` repos
+  # strategy: clone
+  # repo: ~/Projects/symphony
+  # fetch_before_dispatch: true
+  # attachments:
+  #   allowed_hosts: [github.com]
+  #   public_upload_extensions: [.png, .jpg, .jpeg, .gif, .webp, .svg, .pdf]
+  cleanup:
+    # enabled: true
+    max_age_days: 14
+    interval_ms: 3600000
+    # min_free_bytes: 10737418240
+    orphan_action: log
+    trash_dir: .trash
+
+# workers:
+#   ssh_hosts: []
+#   max_concurrent_agents_per_host: 2
+
+# github:
+#   enterprise_hosts: []
+#   failed_run_log_max_bytes: 65536
+#   # CI results through a webhook relay; see docs/github-webhooks.md. Needs a fixed dashboard.port.
+#   webhooks:
+#     enabled: false
+#     relay: smee   # smee | cloudflare_tunnel | gh_webhook_forward
+#     secret: $GITHUB_WEBHOOK_SECRET
+
+# How every run is executed. What each kind of run starts with is `runs:`, below.
+execution:
+  # Each harness's command. A harness is the agent program that runs a session: claude, codex
+  # or opencode. A command never passes a model or an effort: the run's entry sets both.
+  harnesses:
+    claude:
+      command: claude --dangerously-skip-permissions --verbose
+      # The model for claude's background calls (titles, summaries), by the run's provider.
+      small_model:
+        anthropic: claude-haiku-4-5
+        # openrouter: deepseek/deepseek-flash
+        # opencode-go: glm-5.3-flash
+    # codex:
+    #   command: codex --config shell_environment_policy.inherit=all --config model_reasoning_effort=high app-server
+  concurrency:
+    max_total: 10
+  limits:
+    max_turns: 8
+    retry_backoff_max_ms: 300000
+    tokens_per_issue: 100000000
+    tokens_per_day: 1000000000
+  prompts:
+    # include_project_guides: true
+    # project_guide_files:
+  permissions:
+    approval_policy: auto_approve_all
+    filesystem:
+      sandbox: workspace-write
+      turn_policy:
+        type: workspaceWrite
+        networkAccess: true
+        # writableRoots: []
+      # allow_read_paths: []
+    network:
+      mode: allowlist
+      # allowed_domains: []
+      # denied_domains: []
+    outer_sandbox:
+      # kind: srt
+      command: srt
+      enable_weaker_network_isolation: false
+  mcp:
+    inherit: none
+    # allowed_servers: []
+    # servers: {}
+  timeouts:
+    # turn_ms: 3600000
+    # read_ms: 30000
+    # stall_ms: 300000
+    # command_ms: 600000
+
+# What each kind of run starts with: its harness, the provider that serves its model, the
+# model, and optionally an effort (low | medium | high | xhigh | max), a small_model and a
+# command of its own. `default` is the only fallback, and nothing is built in: a run kind that
+# resolves no harness, provider or model stops symphony.yml from loading. Each field resolves
+# on its own: repositories[].runs.<kind>, repositories[].runs.default, runs.<kind>, runs.default.
+# Kinds: implementation, breakdown, rework, landing, code_review, epic_review, ci_fix,
+# review_feedback, qa.
+# Harnesses and the providers each reaches: claude (anthropic, openrouter, opencode-go),
+# codex (openai, opencode-go), opencode (opencode-go). openrouter needs OPENROUTER_API_KEY and
+# opencode-go needs OPENCODE_API_KEY.
+runs:
+  default: { harness: claude, provider: anthropic, model: claude-opus-5-5, effort: medium }
+  # breakdown: { effort: xhigh }
+  # landing: { model: claude-sonnet-5-5, effort: low }
+  # ci_fix: { provider: openrouter, model: deepseek/deepseek-flash }
+  # qa: { harness: codex, provider: openai, model: gpt-5.5 }
+
+# Code Review's reviewer: the agent that reviews each PR on its green head. Its harness, model
+# and effort are `runs.code_review`.
+code_review:
+  enabled: true
+
+# Auto Review: once the PR is open, Symphony moves the issue to `state` instead of
+# In Review and waits for CI there. Red CI goes back to In Progress; green CI runs
+# a QA agent on the PR head (skipped for docs/test-only or internal changes), then
+# moves the issue to In Review on pass, or back to In Progress with the findings on
+# fail. Needs a Linear state with this name (type started, between In Progress and
+# In Review) and `pull_requests.checks.enabled: true`.
+# auto_review:
+#   enabled: false
+#   state: Auto Review
+#   max_turns: 20
+#   timeout_ms: 1800000
+#   max_concurrent: 1
+#   max_fix_attempts: 2
+#   run_on: every_push
+#   skip_globs: []
+#   playbooks: {}
+#   # Acceptance gate (docs/acceptance_gate.md): after QA, decides whether a PR
+#   # can merge without a human; escalation rules send it to one regardless.
+#   # off never runs it; shadow comments a verdict and moves nothing; enforce
+#   # approves to Merging, reworks to In Progress and escalates to In Review.
+#   # Configured lists add to the built-in rules.
+#   acceptance_gate:
+#     mode: off              # off | shadow | enforce (the kill switch)
+#     runtime: claude
+#     command: claude --dangerously-skip-permissions
+#     model: claude-opus-5-5
+#     effort: high
+#     max_turns: 12
+#     timeout_ms: 900000
+#     max_concurrent: 2
+#     escalate:
+#       labels: [needs-human, breakdown]
+#       ticket_patterns: []  # added to the built-in patterns
+#       paths: []            # added to the built-in auth/secret/migration/CI paths
+#       diff_patterns: []    # added to the built-in DROP/TRUNCATE/DELETE FROM/rm -rf
+#       dependencies: major  # off | major | any
+#       max_changed_lines: 1500
+#       busy_files: { top: 10, window_days: 14, max_lines: 300 }
+#       inconclusive_limit: 2
+
+pull_requests:
+  enabled: true
+  poll_interval_ms: 30000
+  # Land Merging tickets with GitHub auto-merge instead of a landing agent.
+  # auto_merge: true
+  review_comments:
+    rework_delay_minutes: 1
+    # stale_after_days: 7
+    # Accounts whose PR comments are skipped (no rework, no reply). Scope this to
+    # bots that post automated, non-actionable status (coverage, CI, template
+    # reminders). Do NOT add review bots like copilot-pull-request-reviewer[bot]
+    # or coderabbitai[bot] here -- their comments are genuine, actionable reviews.
+    ignored_reviewers:
+      - github-actions[bot]
+      - jp-launch-control[bot]
+    reply_after_addressing: true
+    # request_review_after_push: false
+  checks:
+    enabled: true
+    log_excerpt_lines: 200
+    retry_failed_once: true
+    max_fix_attempts: 3
+    escalate_to_state: In Review
+  # learnings:
+  #   enabled: false
+  #   provider: anthropic
+  #   model: claude-haiku-4-5-20251001
+  #   max_total_per_repo: 500
+  #   max_per_run: 3
+
+# verification:
+#   enabled: false
+#   port_allocation:
+#     range: [4000, 4099]
+#   dev_server:
+#     start_cmd: "pnpm dev --port $SYMPHONY_VERIFICATION_PORT"
+#     health_check_url: "http://localhost:${SYMPHONY_VERIFICATION_PORT}/healthz"
+#     health_timeout_ms: 30000
+#     stop_signal: TERM
+#     stop_timeout_ms: 10000
+
+dashboard:
+  # Terminal dashboard on Symphony's own output; the web dashboard and control API stay up either way.
+  # enabled: true
+  # host: 127.0.0.1
+  # port: 0
+  # refresh_ms: 1000
+  # render_interval_ms: 16
+  # snapshot_publish_ms: 500
+  transcript_buffer_size: 200
+
+issue_gate:
+  enabled: false
+  provider: anthropic
+  model: claude-haiku-4-5-20251001
+  pass_threshold: 6
+  clarification_floor: 4
+  max_clarification_rounds: 2
+  on_error: pass
+
+watchdog:
+  enabled: true
+  tick_interval_ms: 60000
+  no_progress_threshold_ms: 600000
+
+# dependency_audit:
+#   allow_registries: []
+#   allow_git_sources: []
+#   allow_path_sources: []
+
+notifications:
+  enabled: true
+  # redact_titles: false
+  channels:
+    - kind: slack
+      webhook_url: $SLACK_WEBHOOK_URL
+      events: [pr_opened, awaiting_review, run_failed, budget_exceeded]
+    # - kind: webhook
+    #   url: $NOTIFY_WEBHOOK_URL
+    #   allow_private: false
+    #   events: [run_failed, ci_failed]

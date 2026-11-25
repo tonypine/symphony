@@ -1509,6 +1509,10 @@ defmodule SymphonyElixir.Config.Schema do
 
       @primary_key false
       @stop_signals ["TERM", "INT", "QUIT", "HUP", "KILL"]
+      # When the project's server runs (TP-1663): on Symphony's host for agent runs and `web`
+      # passes while `verification.enabled` is on, on the QA host for every `macos_app` pass, or
+      # on the QA host for a `macos_app` pass the ticket's plan marks live.
+      @runs ["symphony_host", "every_qa_pass", "live_qa_pass"]
 
       embedded_schema do
         field(:build_cmd, :string)
@@ -1517,14 +1521,19 @@ defmodule SymphonyElixir.Config.Schema do
         field(:health_timeout_ms, :integer, default: 30_000)
         field(:stop_signal, :string, default: "TERM")
         field(:stop_timeout_ms, :integer, default: 10_000)
+        field(:runs, :string, default: "symphony_host")
       end
+
+      @doc "The values `runs` takes: when the project's server runs."
+      @spec runs_values() :: [String.t()]
+      def runs_values, do: @runs
 
       @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
       def changeset(schema, attrs) do
         schema
         |> cast(
           attrs,
-          [:build_cmd, :start_cmd, :health_check_url, :health_timeout_ms, :stop_signal, :stop_timeout_ms],
+          [:build_cmd, :start_cmd, :health_check_url, :health_timeout_ms, :stop_signal, :stop_timeout_ms, :runs],
           empty_values: []
         )
         |> normalize_optional_string(:build_cmd)
@@ -1534,6 +1543,7 @@ defmodule SymphonyElixir.Config.Schema do
         |> validate_number(:health_timeout_ms, greater_than: 0)
         |> validate_number(:stop_timeout_ms, greater_than_or_equal_to: 0)
         |> validate_inclusion(:stop_signal, @stop_signals)
+        |> validate_inclusion(:runs, @runs, message: "must be one of #{Enum.join(@runs, ", ")}")
         |> validate_health_check_url_when_start_cmd_set()
       end
 

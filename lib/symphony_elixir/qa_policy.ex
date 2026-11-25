@@ -21,7 +21,8 @@ defmodule SymphonyElixir.QaPolicy do
   the QA agent is told up front that building and launching the app are the whole check, and the
   merge stays gated on the app starting (`SymphonyElixir.QaVerification`).
 
-  A `macos_app` playbook with a `live` server (`SymphonyElixir.PlaybookSettings`) is marked
+  A `macos_app` playbook whose project server runs on live passes (`verification.dev_server.runs:
+  live_qa_pass`, carried as `live_server: true`) is marked
   `live: true` when the pass should run that server on the QA host beside the app
   (`SymphonyElixir.QaAgent.Selection.live/1`): the ticket's plan sets a QA check QA still walks on
   the live server. The plan decides, never the words of a step or the changed paths; a plan with no
@@ -29,7 +30,7 @@ defmodule SymphonyElixir.QaPolicy do
   live and a `qa:fixture` label never does. The same rule selects the playbook for a diff outside its
   paths. A pass not marked live starts no server, and the app reads its fixtures only. Either way the
   playbook keeps the reason as `live_reason`, which the QA report's header states. A `macos_app`
-  playbook with no `live` server is never live: when the plan asks for the server it keeps that
+  playbook without that server is never live: when the plan asks for the server it keeps that
   reason too.
   """
 
@@ -133,7 +134,8 @@ defmodule SymphonyElixir.QaPolicy do
     end
   end
 
-  # Marks the `macos_app` playbook live when the plan asks for its `live` server, and says why in the reason.
+  # Marks the `macos_app` playbook live when the plan asks for the live server, which the project's
+  # server gives when its `runs` rule is `live_qa_pass`, and says why in the reason.
   defp mark_live(issue, playbooks) do
     Enum.map_reduce(playbooks, "", fn
       %{kind: "macos_app", live_server: _live_server} = playbook, note ->
@@ -145,7 +147,7 @@ defmodule SymphonyElixir.QaPolicy do
       %{kind: "macos_app"} = playbook, note ->
         case Selection.live(issue) do
           {true, why} ->
-            why = "the playbook sets no `live` server, though #{why}"
+            why = "the project's server does not run on live passes (`verification.dev_server.runs: live_qa_pass`), though #{why}"
             {Map.put(playbook, :live_reason, why), note <> "; the app reads fixtures only: " <> why}
 
           {false, _why} ->

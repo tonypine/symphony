@@ -265,6 +265,7 @@ public enum WorkflowTemplate {
                 // npm passes arguments on to the script only after `--`.
                 "#     start_cmd: \"\(devServer)\(devServer.hasPrefix("npm ") ? " --" : "") --port $SYMPHONY_VERIFICATION_PORT\"",
                 "#     health_check_url: \"http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/\"",
+                "#     runs: symphony_host  # or every_qa_pass, or live_qa_pass, for a macOS app QA pass on the QA host",
             ]
         }
         lines += [

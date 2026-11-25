@@ -35,15 +35,15 @@ public struct LaunchVariable: Equatable, Identifiable {
     }
 }
 
-/// The `macos_app` QA playbook settings that run the project's dev server on the QA host, hand the app its
-/// environment and set its QA target (window size and appearance), in the text of a `symphony.yml`: `dev_server`,
-/// `dev_server_port`, `launch_env`, `window_width`, `window_height` and `appearance` under
-/// `auto_review.playbooks.macos_app`. Only the lines that change are rewritten, or inserted when missing, so the
+/// The `macos_app` QA playbook settings that hand the app its environment and set its QA target (window size and
+/// appearance), in the text of a `symphony.yml`: `dev_server_port`, `launch_env`, `window_width`, `window_height` and
+/// `appearance` under `auto_review.playbooks.macos_app`, with the project's own server (`verification.dev_server`),
+/// which Settings shows in the same block. Only the lines that change are rewritten, or inserted when missing, so the
 /// rest of the file stays as it is.
 public struct MacAppQAPlaybook: Equatable {
-    /// Whether a pass on the QA host starts `verification.dev_server` there, beside the app.
-    public var devServer: Bool
-    /// The port that dev server listens on, as `SYMPHONY_VERIFICATION_PORT`.
+    /// The project's own server, `verification.dev_server`: how it runs, and when.
+    public var projectServer: ProjectServerSettings
+    /// The port the project's server listens on, as `SYMPHONY_VERIFICATION_PORT`, when it runs on the QA host.
     public var devServerPort: Int
     /// The extra variables the app gets, after Symphony's own.
     public var launchEnv: [LaunchVariable]
@@ -66,14 +66,14 @@ public struct MacAppQAPlaybook: Equatable {
     static let emptyMaps: Set<String> = ["{}", "~", "null", "Null", "NULL"]
 
     public init(
-        devServer: Bool = false,
+        projectServer: ProjectServerSettings = ProjectServerSettings(),
         devServerPort: Int = defaultDevServerPort,
         launchEnv: [LaunchVariable] = [],
         windowWidth: Int = defaultWindowWidth,
         windowHeight: Int = defaultWindowHeight,
         appearance: String = defaultAppearance
     ) {
-        self.devServer = devServer
+        self.projectServer = projectServer
         self.devServerPort = devServerPort
         self.launchEnv = launchEnv
         self.windowWidth = windowWidth
@@ -84,6 +84,7 @@ public struct MacAppQAPlaybook: Equatable {
     /// These settings without the variable rows left blank, names trimmed.
     public func trimmed() -> MacAppQAPlaybook {
         var copy = self
+        copy.projectServer = projectServer.trimmed()
         copy.launchEnv = launchEnv
             .map { LaunchVariable(id: $0.id, name: $0.name.trimmingWhitespace(), value: $0.value) }
             .filter { !$0.name.isEmpty || !$0.value.isEmpty }
@@ -92,10 +93,11 @@ public struct MacAppQAPlaybook: Equatable {
 
     /// The settings, with Symphony's default for a missing or null key.
     public static func values(in yaml: String) throws -> MacAppQAPlaybook {
+        let projectServer = try ProjectServerSettings.values(in: yaml)
         let document = Document(yaml)
-        guard let range = try block(path, in: document) else { return MacAppQAPlaybook() }
+        guard let range = try block(path, in: document) else { return MacAppQAPlaybook(projectServer: projectServer) }
         return MacAppQAPlaybook(
-            devServer: try devServer(document.child("dev_server", in: range)),
+            projectServer: projectServer,
             devServerPort: try integer(document.child("dev_server_port", in: range), key: "dev_server_port", default: defaultDevServerPort),
             launchEnv: try launchEnv(document.child("launch_env", in: range), in: document),
             windowWidth: try integer(document.child("window_width", in: range), key: "window_width", default: defaultWindowWidth),
@@ -124,8 +126,8 @@ public struct MacAppQAPlaybook: Equatable {
         if new.devServerPort != old.devServerPort {
             yaml = try setting("dev_server_port", to: String(new.devServerPort), in: yaml)
         }
-        if new.devServer != old.devServer {
-            yaml = try setting("dev_server", to: new.devServer ? "true" : "false", in: yaml)
+        if new.projectServer != old.projectServer {
+            yaml = try ProjectServerSettings.updating(yaml, from: old.projectServer, to: new.projectServer)
         }
         return yaml
     }
@@ -133,7 +135,7 @@ public struct MacAppQAPlaybook: Equatable {
     // MARK: Reading
 
     /// The lines under `path`, or nil when a key on it is missing, `{}` or null.
-    private static func block(_ path: [String], in document: Document) throws -> Range<Int>? {
+    static func block(_ path: [String], in document: Document) throws -> Range<Int>? {
         var range = document.all
         for name in path {
             guard let key = document.child(name, in: range) else { return nil }
@@ -147,16 +149,6 @@ public struct MacAppQAPlaybook: Equatable {
             }
         }
         return range
-    }
-
-    private static func devServer(_ key: Document.Key?) throws -> Bool {
-        guard let key else { return false }
-        switch ValueLine(key.rest).value {
-        case "true": return true
-        case "false": return false
-        case let value where TokenLimits.nullValues.contains(value): return false
-        case let value: throw MacAppQAPlaybookError.unreadable(key: "dev_server", value: value)
-        }
     }
 
     /// A whole-number setting such as `dev_server_port` or `window_width`, with `fallback` when it is missing or null.
@@ -270,7 +262,7 @@ public struct MacAppQAPlaybook: Equatable {
     }
 
     /// The text with a `{}` or null section on `path` turned into an empty block, so keys can go under it.
-    private static func opening(_ path: [String], in yaml: String) throws -> String {
+    static func opening(_ path: [String], in yaml: String) throws -> String {
         var document = Document(yaml)
         var range = document.all
         for name in path {
@@ -287,7 +279,7 @@ public struct MacAppQAPlaybook: Equatable {
     }
 
     /// Reports an inline section above a setting as a macOS app QA error.
-    private static func blockSection<T>(_ body: () throws -> T) throws -> T {
+    static func blockSection<T>(_ body: () throws -> T) throws -> T {
         do {
             return try body()
         } catch MaxConcurrentAgentsError.notABlock(let key) {

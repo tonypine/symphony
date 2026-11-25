@@ -206,8 +206,30 @@ The `agent` section is moved the same way, by a rewrite of its own
 A build with this change refuses a file that still has `agent`, once loaded:
 `` unknown symphony.yml key `agent` ``. Only the rewrite at start reads it.
 
+The project's own server is moved by a rewrite of its own too
+(`SymphonyElixir.Config.Migration.DevServerMove`, TP-1663): it was described twice, in
+`verification.dev_server` and in the `macos_app` playbook's `live` block, and is now described once,
+in `verification.dev_server`, whose `runs` rule says when it runs (see
+[`verification`](#verification)):
+
+- A `macos_app` playbook with `live` gives its `build_cmd`, `start_cmd`, `health_check_url` (default
+  `http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/api/v1/state`) and `health_timeout_ms` (default
+  `600000`) to `verification.dev_server`, with `runs: live_qa_pass`. They replace the commands
+  `verification.dev_server` held: a file with both recipes keeps the live one, and the comment names
+  the start command it dropped.
+- A `macos_app` playbook with `dev_server: true` gives `runs: every_qa_pass`.
+- Every playbook's `dev_server` and `live` go. `dev_server_port` stays.
+
+A `symphony.yml` is rewritten in place at `symphony start` and `symphony run` (and checked by
+`symphony check --migrate`), with a comment naming TP-1663 where each key was and the file as it
+was kept beside it. A repository's `WORKFLOW.md` is carried over the same way when it loads, in
+memory, so every repository's file and every open ticket's branch keeps working with no edit. Once
+loaded, a playbook that still sets `dev_server` or `live` is refused:
+`` auto_review.playbooks.<kind>.<key> is gone: the project's server is described once, in verification.dev_server, and its runs rule says when it runs ``.
+
 A ticket that renames or removes a key adds its row in the same pull request. CI's `build` job loads
-the previous release's `symphony.yml` on the new build (`scripts/ci/previous-release-config-check.sh`).
+the previous release's `symphony.yml` and `WORKFLOW.md` on the new build, with their migration applied
+(`scripts/ci/previous-release-config-check.sh`).
 
 ## Top-Level Sections
 
@@ -1498,7 +1520,7 @@ Before any agent runs, Symphony decides whether the PR needs QA and which playbo
 | `qa:<kind>` label (for example `qa:cli`) | that playbook runs |
 | only docs, tests or `skip_globs` paths changed | skipped |
 | `## User walkthrough` in the ticket | `cli` playbook runs |
-| web paths changed, `verification.enabled` on and `verification.dev_server` configured | `web` playbook runs |
+| web paths changed, `verification.enabled` on and `verification.dev_server` configured with `runs: symphony_host` | `web` playbook runs |
 | Android paths changed, `android_app` configured and `auto_review.android.avd` set | `android_app` playbook runs |
 | a playbook's trigger paths changed | that playbook runs |
 | nothing else | skipped (internal changes rely on tests and Code Review) |
@@ -1776,35 +1798,26 @@ auto_review:
 
 Set `enabled: false` on a kind to turn it off.
 
-Set `dev_server: true` on a kind of your own when its pass needs the project's server running,
-such as an API and the Postgres it stores in that the app under test talks to. Symphony then
-starts `verification.dev_server` for that pass as it does for `web` (from its own worktree at the
-PR head, on a pooled port, outside the agent's sandbox), gives the agent its URL and lets the
-agent's sandbox reach `localhost`; only a `web` pass also gets the `browser` MCP server. The
-`macos_app` playbook takes `dev_server: true` too: its server runs on the QA VM, beside the app,
-never on the Symphony host (see [macOS app QA](#macos-app-qa)). Each path reads its own flags:
+The project's own server is described once, in [`verification.dev_server`](#verification), and its
+`runs` rule says which QA passes start it (TP-1663). Only the built-in playbooks run it: a kind of
+your own takes no `dev_server` key, and a playbook that still sets `dev_server` or `live` is refused
+(see [Renamed keys are migrated](#renamed-keys-are-migrated)). Symphony starts it from its own
+worktree at the PR head, on a pooled port, outside the agent's sandbox, gives the agent its URL and
+lets the agent's sandbox reach `localhost`; only a `web` pass also gets the `browser` MCP server.
 
-| Playbook with a dev server | Needs |
-| --- | --- |
-| `macos_app` with `dev_server: true` | `verification.dev_server.start_cmd` only; `verification.enabled` may be `false` |
-| `web`, a kind of your own with `dev_server: true` | `verification.enabled: true` and `verification.dev_server.start_cmd` |
+| `verification.dev_server.runs` | The server runs for | Needs |
+| --- | --- | --- |
+| `symphony_host` (default) | agent runs and `web` passes, on the Symphony host | `verification.enabled: true` and `verification.dev_server.start_cmd` |
+| `every_qa_pass` | every `macos_app` pass, on the QA VM beside the app (see [macOS app QA](#macos-app-qa)) | `verification.dev_server.start_cmd` only; `verification.enabled` may be `false` |
+| `live_qa_pass` | a `macos_app` pass the ticket's plan marks live, on the QA VM beside the app (see [Two environments](#two-environments-fixtures-and-a-live-server)) | `verification.dev_server.start_cmd` only; `verification.enabled` may be `false` |
 
-`verification.enabled` also starts the dev server on the Symphony host for every agent run (see
-[`verification`](#verification)), so a repository whose server only runs on the QA host, beside a
-Mac app, leaves it `false`. Without the flags it needs the kind is off, and the `QA selection` log
-line says which one is missing: `` needs `verification.dev_server` `` without a start command,
-`` needs `verification.enabled` `` with one but verification off:
-
-```yaml
-auto_review:
-  playbooks:
-    server:
-      paths: ["server/**"]
-      dev_server: true
-      prompt: |
-        ### Playbook: server
-        Call the changed endpoints on the dev server and check the responses.
-```
+With `every_qa_pass` or `live_qa_pass` the server never starts on the Symphony host, even with
+`verification.enabled: true`. With `symphony_host`, `verification.enabled` also starts it for every
+agent run (see [`verification`](#verification)). Without what it needs the `web` playbook is off,
+and the `QA selection` log line says which one is missing: `` needs `verification.dev_server` ``
+without a start command, `` needs `verification.enabled` `` with verification off, and
+`` needs `verification.dev_server.runs: symphony_host` `` with verification on and a rule that runs
+it on the QA VM.
 
 The QA agent's own sandbox cannot run a database such as Postgres: it lets a process create a
 System V shared memory segment but not look it up again or remove it, so `initdb` fails with
@@ -1818,19 +1831,20 @@ outside service (a paid AI service, real credentials, a third-party API). When t
 server cannot build or start, the steps that need it are `blocked`, never judged against a stub
 the agent wrote. When they are blocked because the pass had no dev server at all, the agent says
 so (`needs_dev_server`), and the self-heal fix ticket lands in the project's own repository, asking
-it to set `verification.dev_server` and `dev_server: true` on the playbook.
+it to set `verification.dev_server` with the `runs` rule its passes need.
 
-A repository that sets `verification.dev_server` but keeps `verification.enabled: false` has ruled
-that repair out: its server exists and must not start on the Symphony host, where every agent run
-would start it inside its sandbox (a hub whose server only runs beside its Mac app on the QA VM,
-through `macos_app` with `dev_server: true`, say). On such a repository, a pass none of whose
+A repository that sets `verification.dev_server` but keeps `verification.enabled: false`, or whose
+`runs` rule is `every_qa_pass` or `live_qa_pass`, has ruled that repair out: its server exists and
+must not start on the Symphony host, where every agent run would start it inside its sandbox (a hub
+whose server only runs beside its Mac app on the QA VM, say). On such a repository, a pass none of whose
 playbooks runs the server (a server-only diff that selects only `cli`) files no fix ticket for a
 `needs_dev_server` block and sets no hold: the steps it blocked become `unprovable` with the
 repository's reason ("this repo runs its own server only beside the app on the QA host…"), and the
-pass is decided by the rest, as above. A pass whose playbook runs the server itself (that
-`macos_app` pass, or `web`) has it: its prompt never calls the server unprovable, and its
+pass is decided by the rest, as above. A pass whose playbook runs the server itself (a `macos_app`
+pass the rule runs it beside, or `web`) has it: its prompt never calls the server unprovable, and its
 `needs_dev_server` block gets the fix ticket as before. A repository without
-`verification.dev_server`, or with verification on, still gets the fix ticket.
+`verification.dev_server`, or with verification on and `runs: symphony_host`, still gets the fix
+ticket.
 
 A repository's `WORKFLOW.md` can set `auto_review.playbooks` too, for settings that differ per
 repository, such as a build command or trigger paths. It is the only `auto_review` key allowed
@@ -1929,8 +1943,8 @@ one-time host setup.
 #### Web app QA
 
 The built-in `web` playbook tests a web app in a headless browser against the project's dev
-server. It is on when `verification.enabled` is true and `verification.dev_server.start_cmd` is
-set (see [`verification`](#verification)), and triggers on `lib/*_web/**`, `lib/*_web.ex`,
+server. It is on when `verification.enabled` is true, `verification.dev_server.start_cmd` is set
+and its `runs` rule is `symphony_host`, the default (see [`verification`](#verification)), and triggers on `lib/*_web/**`, `lib/*_web.ex`,
 `priv/static/**`, `assets/**` and `.heex`, `.html`, `.css`, `.scss`, `.jsx`, `.tsx`, `.vue` and
 `.svelte` files (override with `paths`, or force it with a `qa:web` label).
 
@@ -1985,11 +1999,10 @@ auto_review:
 
 An invalid `browser_mcp` makes the pass `blocked` with the error.
 
-Symphony's own `WORKFLOW.md` points `verification.dev_server` at `scripts/qa-dashboard-server.sh`,
-which serves the status dashboard from the PR head's escript with an in-memory tracker, so
-dashboard changes get a `web` pass once the operator sets `verification.enabled: true`. That
-script needs the escript built first: set `build_cmd: scripts/qa-dashboard-build.sh` next to it,
-or the dev server stops because `bin/symphony` is missing.
+Symphony's own `WORKFLOW.md` no longer runs a `web` pass: its `verification.dev_server` is the
+server a live `macos_app` pass runs beside the Director on the QA VM (`runs: live_qa_pass`, see
+[Two environments](#two-environments-fixtures-and-a-live-server)), so it never starts on the
+Symphony host.
 
 #### macOS app QA
 
@@ -2007,16 +2020,13 @@ auto_review:
       build_timeout_ms: 900000            # optional, default 15 minutes
       # requires: [go, pg_ctl]          # optional: tools the QA host must have (see below)
       # paths: ["macos/Sources/**"]       # optional, default: Swift, Info.plist, xib, storyboard, xcassets
-      # dev_server: true                  # optional, default false: run verification.dev_server for the pass
-      # dev_server_port: 8090             # optional, default 8090: its port on the QA host
+      # dev_server_port: 8090             # optional, default 8090: the QA-host port of verification.dev_server
       # launch_env:                       # optional, default {}: extra variables for the app under test
       #   HUB_OWNER_TOKEN: qa-owner-token
-      # live:                             # optional: the project's own server for a live pass (below)
-      #   build_cmd: scripts/qa-server-build.sh
-      #   start_cmd: scripts/qa-server-start.sh
-      #   paths: ["lib/**", "config/**"]   # accepted, no longer read: the plan decides
-      #   walkthrough_mentions: [Director]  # accepted, no longer read
 ```
+
+The project's own server beside the app is `verification.dev_server`, with `runs: every_qa_pass`
+(every pass) or `runs: live_qa_pass` (a live pass, below); see [`verification`](#verification).
 
 | Key | Default | Does |
 | --- | --- | --- |
@@ -2024,9 +2034,7 @@ auto_review:
 | `app` | none (required) | the `.app` bundle the build writes, relative to the repo root |
 | `build_timeout_ms` | `900000` | how long the pre-build waits for `build`; a build that runs longer is killed on the QA host |
 | `paths` | Swift, `Info.plist`, xib, storyboard, xcassets | the changed paths that select the playbook |
-| `dev_server` | `false` | the pass starts `verification.dev_server` on the QA VM, beside the app (see [Running QA in a QA VM](#running-qa-in-a-qa-vm)), never on the Symphony host: without a `worker_host` no server starts and the `qa_*` tools say to set up the QA VM |
-| `dev_server_port` | `8090` | the port the QA-host dev server listens on, as `SYMPHONY_VERIFICATION_PORT` |
-| `live` | none | the project's own server for a live pass: see [Two environments: fixtures and a live server](#two-environments-fixtures-and-a-live-server). Not with `dev_server: true`, which would listen on the same port |
+| `dev_server_port` | `8090` | the port `verification.dev_server` listens on on the QA host, as `SYMPHONY_VERIFICATION_PORT`, when its `runs` rule is `every_qa_pass` or `live_qa_pass` (see [Running QA in a QA VM](#running-qa-in-a-qa-vm)): without a `worker_host` no server starts and the `qa_*` tools say to set up the QA VM |
 | `appearance` | `dark` | the QA target's appearance, `light` or `dark`: QA launches the app in it and judges every step, screenshot and design check in it, and another appearance only when the ticket is about it |
 | `window_width`, `window_height` | `2560`, `1440` | the QA target's window size, in points (320 to 8192 each): QA sets the app's main window to it before the first walkthrough step and judges every step, screenshot and design check there, and another size only when the ticket is about it. A QA screen under it limits the pass, and Setup reports the QA VM |
 | `launch_env` | `{}` | extra variables `qa_launch_app` sets on the app, after Symphony's own, with `$SYMPHONY_VERIFICATION_PORT` replaced by `dev_server_port`. Names match `^[A-Z][A-Z0-9_]*$`; the variables Symphony sets itself (`SYMPHONY_BAR_QA_ROOT`, `SYMPHONY_QA_OPENROUTER_URL`, `SYMPHONY_BAR_QA_API_FIXTURES` and the stand-ins below), `PATH`, `HOME` and `DYLD_*` fail the config check, naming the key |
@@ -2034,8 +2042,10 @@ auto_review:
 `launch_env` values are written in plain text, in `symphony.yml` or a repository's `WORKFLOW.md`,
 which is often public: put only documented QA values there (a QA owner token such as the Job
 Search Hub's `HUB_OWNER_TOKEN`), never a secret. The Director's **Settings → macOS app QA** edits
-`appearance`, `window_width`, `window_height`, `dev_server`, `dev_server_port` and `launch_env` in
-`symphony.yml`. `wide_pass_width` and `wide_pass_height`, the sizes of the separate wide pass QA ran
+`appearance`, `window_width`, `window_height` and `launch_env` in `symphony.yml`, and shows the
+server as one **Project server** group: a control for each `verification.dev_server` key, its rule
+(**When it runs**: On Symphony's host, Every QA pass or Live QA passes) and `dev_server_port`, the
+QA-host port. There is no separate dev server switch and no live section. `wide_pass_width` and `wide_pass_height`, the sizes of the separate wide pass QA ran
 before TP-1595, are removed from a `symphony.yml` that still sets them (see
 [Renamed keys are migrated](#renamed-keys-are-migrated)).
 
@@ -2046,8 +2056,8 @@ section in the managed context of its implementation, rework and CI-fix runs, an
 prompt: "QA mode, what Symphony's driver gives the app". It names `SYMPHONY_BAR_QA_ROOT` (the QA
 root, where `qa_api_requests` reads `api-requests.jsonl` and every file the driver reads must go),
 `SYMPHONY_BAR_QA_API_FIXTURES` (the read-only copy of the committed `api_fixtures` directory),
-`SYMPHONY_BAR_QA_APPEARANCE`, and, with `dev_server: true`, the dev server's port and the
-`launch_env` variables that carry its URL; for `android_app`, the emulator folder
+`SYMPHONY_BAR_QA_APPEARANCE`, and, when `verification.dev_server.runs` is `every_qa_pass`, the dev
+server's port and the `launch_env` variables that carry its URL; for `android_app`, the emulator folder
 `qa_android_put_file` writes. The names come from the drivers' own constants
 (`SymphonyElixir.QaModeContract`), so the text follows the code; `symphony workflow preview
 --repo <key>` shows it.
@@ -2062,16 +2072,13 @@ the server: press Decide and the Inbox row goes, Undo brings it back; pause a re
 tickets stop starting. The fixtures stay the default; Symphony runs the live server only when the
 ticket's plan asks for it.
 
-`live` on the `macos_app` playbook names that server:
-
-| Key | Default | Does |
-| --- | --- | --- |
-| `start_cmd` | none (required) | starts the server on the QA VM, in the pass's own copy of the PR head, as `dev_server: true` starts `verification.dev_server` there: as the QA user, with `SYMPHONY_VERIFICATION_PORT` set to `dev_server_port` and a fresh `HOME` |
-| `build_cmd` | none | runs first, in the same copy |
-| `health_check_url` | `http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/api/v1/state` | polled until it answers 200 before the agent starts |
-| `health_timeout_ms` | `600000` | how long that may take |
-| `paths` | `[]` | still accepted; no longer read: the plan decides whether a pass is live |
-| `walkthrough_mentions` | `[]` | still accepted; no longer read: no word in a step makes a pass live |
+That server is `verification.dev_server` with `runs: live_qa_pass`. Symphony starts it on the QA
+VM, in the pass's own copy of the PR head, as the QA user, with `SYMPHONY_VERIFICATION_PORT` set to
+`dev_server_port` and a fresh `HOME`: `build_cmd` first, then `start_cmd`, then `health_check_url`
+polled until it answers 200 within `health_timeout_ms` before the agent starts. It never starts on
+the Symphony host, even with `verification.enabled: true`. The `live` block the `macos_app` playbook
+took before TP-1663, with its `paths` and `walkthrough_mentions`, is gone: a file that still has it
+is [migrated](#renamed-keys-are-migrated) to this.
 
 A pass is live when the ticket's plan has a QA check that QA still walks (not waived, and no
 recorded test proves it) whose `setting` names the live server (`source: live`), whatever words
@@ -2084,7 +2091,7 @@ check on the live server gets a live pass of the app. A pass that is not live st
 QA plan step is given each walked step's setting (the fixture or the live server, the page, the
 window size and the appearance) as facts, and its briefs use them as given.
 
-A live pass runs the server through the same path as `dev_server: true`, with the same port lease
+A live pass runs the server through the same path as `runs: every_qa_pass`, with the same port lease
 and stop: a server that does not build, exits or fails its health check makes the pass
 `blocked` with its log. Each pass makes a control token of its own. The server gets it as
 `SYMPHONY_QA_CONTROL_TOKEN`, and every `qa_launch_app` while the server runs gives the app the
@@ -2106,12 +2113,24 @@ checks set to the live server), so a wrong choice can be corrected with a label.
 ticket's author nor its implementer names an environment: the walkthrough stays prose and the
 proofs name tests. `launch_env` may not set the two control variables.
 
-Symphony's own repository runs its server this way. Its `WORKFLOW.md` sets the `live` block on
-`auto_review.playbooks.macos_app`, with `requires: [mise]`, `build_cmd: scripts/qa-server-build.sh`,
-`start_cmd: scripts/qa-server-start.sh`, `paths` covering `lib/`, `config/`, `priv/`, `mix.exs`
-and `mix.lock`, and `walkthrough_mentions: [Director, Inbox]`; the build command, the app bundle and the port stay in the
-operator's `symphony.yml`. Its `paths` and `walkthrough_mentions` are kept but no longer read: a
-ticket whose plan sets a QA check QA walks on the live server gets it, and any other a
+Symphony's own repository runs its server this way. Its `WORKFLOW.md` reads:
+
+```yaml
+verification:
+  dev_server:
+    build_cmd: scripts/qa-server-build.sh
+    start_cmd: scripts/qa-server-start.sh
+    health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/api/v1/state"
+    health_timeout_ms: 600000
+    runs: live_qa_pass
+auto_review:
+  playbooks:
+    macos_app:
+      requires: [mise]
+```
+
+The build command, the app bundle and the port stay in the operator's `symphony.yml`. A ticket
+whose plan sets a QA check QA walks on the live server gets a live pass, and any other a
 fixtures-only pass. `scripts/qa-server-build.sh` builds the
 escript on the QA VM (Erlang and Elixir through mise), keeping the Hex, deps and build caches under
 the QA user's home (`$SYMPHONY_QA_SERVER_CACHE`, default `~/Library/Caches/symphony-qa-server`), so
@@ -2394,9 +2413,10 @@ host and the worktree checks still apply there. Then:
   directory and copies them back over SSH;
 - `qa_launch_app` with `fresh_root: true` makes the new QA root, `qa-root-<n>/`, in the run
   directory there with `mkdir` over SSH, and the app runs in it;
-- with `dev_server: true` on the `macos_app` playbook and `verification.dev_server.start_cmd` set,
-  whatever `verification.enabled` says (leave it `false` so agent runs start no server on the
-  Symphony host), the project's dev server runs on the QA host, beside the app, which cannot reach a server on the
+- with `verification.dev_server.start_cmd` set and its `runs` rule `every_qa_pass` (every
+  `macos_app` pass) or `live_qa_pass` (a pass the ticket's plan marks live), whatever
+  `verification.enabled` says (the server then never starts on the Symphony host), the project's
+  dev server runs on the QA host, beside the app, which cannot reach a server on the
   Symphony host. When the pass starts, before the agent does, Symphony copies the worktree's `HEAD`
   into `dev-server/src/` in the run directory (a copy of its own, since each `qa_build` unpacks
   `src/` afresh), runs `verification.dev_server.build_cmd` and then `start_cmd` there as the QA user,
@@ -3015,23 +3035,39 @@ verification:
     health_timeout_ms: 30000
     stop_signal: TERM
     stop_timeout_ms: 10000
+    runs: symphony_host         # optional, default symphony_host: when the server runs (below)
 ```
+
+`dev_server` is the one description of the project's own server, and `runs` says when it runs
+(TP-1663):
+
+| `runs` | The server runs |
+| --- | --- |
+| `symphony_host` (default) | on the Symphony host, for agent runs (before the first turn) and the `web` playbook's QA passes, while `enabled` is true |
+| `every_qa_pass` | on the QA host (the QA VM, `auto_review.worker_host`), beside the app, for every `macos_app` QA pass. It needs only `dev_server.start_cmd`, not `enabled` |
+| `live_qa_pass` | on the QA host, beside the app, only for a `macos_app` QA pass the ticket's plan marks live (see [Two environments](#two-environments-fixtures-and-a-live-server)). The server gets a fresh control token per pass as `SYMPHONY_QA_CONTROL_TOKEN`, and the app gets `SYMPHONY_BAR_CONTROL_URL` and `SYMPHONY_BAR_CONTROL_TOKEN` |
+
+With `every_qa_pass` or `live_qa_pass` the server never starts on the Symphony host, even with
+`enabled: true`. On the QA host it listens on `auto_review.playbooks.macos_app.dev_server_port`
+(default `8090`). These replace the `macos_app` playbook's `dev_server: true` and its `live` block,
+which a file that still has them is [migrated](#renamed-keys-are-migrated) from.
 
 `WORKFLOW.md` can override `verification.dev_server` per repo while inheriting the operator-owned
 port range.
 
-`enabled: true` starts `dev_server` on the Symphony host before the first turn of every agent run
-(implementation, review and fix runs alike) on a port from `port_allocation.range`, and turns on the
-QA `web` playbook and other `dev_server: true` kinds, whose server runs on this host too. With
-`enabled: false` no agent run starts a dev server or takes a port. A `macos_app` QA pass with
-`dev_server: true` reads only `dev_server`, whatever `enabled` says: its server runs on the QA VM,
-never on this host (see [macOS app QA](#macos-app-qa)).
+With `runs: symphony_host`, `enabled: true` starts `dev_server` on the Symphony host before the
+first turn of every agent run (implementation, review and fix runs alike) on a port from
+`port_allocation.range`, and turns on the QA `web` playbook, whose server runs on this host too.
+With `enabled: false` no agent run starts a dev server or takes a port. A `macos_app` QA pass
+reads only `dev_server`, whatever `enabled` says: with `every_qa_pass` or `live_qa_pass` its server
+runs on the QA VM, never on this host (see [macOS app QA](#macos-app-qa)).
 
-`dev_server` set with `enabled: false` is a decision Symphony reads: the server must not start on
+`dev_server` set with `enabled: false`, or with `runs: every_qa_pass` or `live_qa_pass`, is a
+decision Symphony reads: the server must not start on
 this host. QA's self-heal lane then never files the fix ticket that would turn `enabled` on for a
 pass that has no server; a QA step that needed the server on such a pass is `unprovable` there, with
 that reason, and the pass is decided by its other steps (see [QA passes](#qa-passes)). A `macos_app`
-pass with `dev_server: true` runs the server on the QA host and is judged as before.
+pass whose `runs` rule starts the server runs it on the QA host and is judged as before.
 
 The pool hands out the first port in `range` that no other run holds and nothing on the host already
 listens on (on `127.0.0.1`), so a port another program took is skipped rather than failing the run.
@@ -3060,7 +3096,7 @@ with nothing at the socket, the run fails with `dev_server_not_on_socket`, and a
 all: every task that loads deps starts `Mix.PubSub` on an ephemeral `127.0.0.1` port, and Mix's
 build lock takes one too, both refused by the no-TCP-listener profile. Build the escript or release
 in `build_cmd` and point `start_cmd` at that prebuilt artifact, so the dev server's sandbox only
-starts the artifact and never Mix (`scripts/qa-dashboard-server.sh` does this).
+starts the artifact and never Mix.
 
 The health check asks `health_check_url` every 250 ms and gives each request 250 ms, until one
 answers 200 or `health_timeout_ms` passes. Point it at a route that answers at once, not a page the
@@ -3077,15 +3113,7 @@ is, so Mix can run (see
 [security](security.md#the-build-command-runs-in-the-agents-confinement)). A build that exits
 non-zero (`dev_server_build_failed`) or runs past 15 minutes (`dev_server_build_timeout`) keeps
 the dev server from starting and releases its port: the agent run fails with
-`verification_failed`, and a QA `web` pass is `blocked`. Symphony's own repo builds its
-dashboard escript with it when `WORKFLOW.md` sets:
-
-```yaml
-verification:
-  dev_server:
-    build_cmd: scripts/qa-dashboard-build.sh   # mix deps.get && mix build, through mise when present
-    start_cmd: scripts/qa-dashboard-server.sh
-```
+`verification_failed`, and a QA `web` pass is `blocked`.
 
 The QA `web` playbook starts the same dev server, from a worktree at the PR head, for each web QA pass
 (see [Web app QA](#web-app-qa)).

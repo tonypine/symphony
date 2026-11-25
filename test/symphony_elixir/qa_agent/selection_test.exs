@@ -5,6 +5,7 @@ defmodule SymphonyElixir.QaAgent.SelectionTest do
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAgent.Selection
   alias SymphonyElixir.RunStore
+  alias SymphonyElixir.Verification
 
   @server_change ["lib/symphony_elixir/questions.ex"]
   @walkthrough """
@@ -95,16 +96,34 @@ defmodule SymphonyElixir.QaAgent.SelectionTest do
   end
 
   test "a change outside its paths selects the macos_app playbook when the plan sets a QA check on the live server", %{issue: issue} do
-    live = %{"start_cmd" => "scripts/qa-server-start.sh", "paths" => ["lib/**"], "walkthrough_mentions" => ["Director"]}
-    macos_app = %{"build" => "make", "app" => "A.app", "paths" => ["macos/**"], "live" => live}
+    dev_server = %{"start_cmd" => "scripts/qa-server-start.sh", "health_check_url" => "http://127.0.0.1:8090/api/v1/state", "runs" => "live_qa_pass"}
+    macos_app = %{"build" => "make", "app" => "A.app", "paths" => ["macos/**"]}
     playbooks = %{"cli" => %{"enabled" => false}, "macos_app" => macos_app}
-    assert {:ok, settings} = Schema.parse(%{"tracker" => %{"kind" => "memory"}, "auto_review" => %{"playbooks" => playbooks}})
+
+    assert {:ok, settings} =
+             Schema.parse(%{"tracker" => %{"kind" => "memory"}, "verification" => %{"dev_server" => dev_server}, "auto_review" => %{"playbooks" => playbooks}})
+
+    opts = Verification.selection_opts(settings)
 
     # The walkthrough names the Director, but no plan sets the server: nothing selects the app.
-    assert {:skip, _reason} = Selection.decide(issue, @server_change, settings.auto_review)
+    assert {:skip, _reason} = Selection.decide(issue, @server_change, settings.auto_review, opts)
 
     groom!(issue.id, [@outcome, qa_check("c2", "The Home screen moves.", @live)])
-    assert {:run, [%{kind: "macos_app"}]} = Selection.decide(issue, @server_change, settings.auto_review)
-    assert {:skip, _reason} = Selection.decide(%{issue | labels: ["qa:fixture"]}, @server_change, settings.auto_review)
+    assert {:run, [%{kind: "macos_app", live_server: true}]} = Selection.decide(issue, @server_change, settings.auto_review, opts)
+    assert {:skip, _reason} = Selection.decide(%{issue | labels: ["qa:fixture"]}, @server_change, settings.auto_review, opts)
+
+    # A server that runs on another rule gives the playbook no live server, and nothing selects it.
+    for runs <- ["symphony_host", "every_qa_pass"] do
+      {:ok, other} = Schema.parse(%{"tracker" => %{"kind" => "memory"}, "verification" => %{"dev_server" => %{dev_server | "runs" => runs}}, "auto_review" => %{"playbooks" => playbooks}})
+      assert {:skip, _reason} = Selection.decide(issue, @server_change, other.auto_review, Verification.selection_opts(other))
+    end
+  end
+
+  test "no setting of the macos_app playbook matches words or paths to start the server: the old keys are refused" do
+    for {key, value} <- [{"live", %{"start_cmd" => "start", "walkthrough_mentions" => ["Director"], "paths" => ["lib/**"]}}, {"dev_server", true}] do
+      macos_app = %{"build" => "make", "app" => "A.app", key => value}
+      assert {:error, message} = Schema.parse(%{"tracker" => %{"kind" => "memory"}, "auto_review" => %{"playbooks" => %{"macos_app" => macos_app}}})
+      assert inspect(message) =~ "auto_review.playbooks.macos_app.#{key} is gone"
+    end
   end
 end

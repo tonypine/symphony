@@ -209,8 +209,11 @@ defmodule SymphonyElixir.QaVerificationSupport do
   # the app nor the server.
   def hub_settings do
     settings!(%{
-      "verification" => %{"enabled" => false, "dev_server" => %{"start_cmd" => "bin/hub", "health_check_url" => "http://localhost:4000/healthz"}},
-      "auto_review" => %{"playbooks" => %{"macos_app" => %{"build" => "make app", "app" => "build/Hub.app", "dev_server" => true}}}
+      "verification" => %{
+        "enabled" => false,
+        "dev_server" => %{"start_cmd" => "bin/hub", "health_check_url" => "http://localhost:4000/healthz", "runs" => "every_qa_pass"}
+      },
+      "auto_review" => %{"playbooks" => %{"macos_app" => %{"build" => "make app", "app" => "build/Hub.app"}}}
     })
   end
 
