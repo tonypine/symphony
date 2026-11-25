@@ -18,23 +18,19 @@ public enum FactsRail {
 // MARK: - The Pull request panel
 
 public struct PullRequestPanel: View {
-    let model: PullRequestPanelModel?
+    let model: PullRequestPanelModel
     let open: (URL) -> Void
 
-    /// `model` nil for a ticket without a pull request; `open` opens the PR or a check's log.
-    public init(model: PullRequestPanelModel?, open: @escaping (URL) -> Void) {
+    /// `open` opens the PR or a check's log. A ticket without a pull request of its own has no panel (TP-1652).
+    public init(model: PullRequestPanelModel, open: @escaping (URL) -> Void) {
         self.model = model
         self.open = open
     }
 
     public var body: some View {
         FactsPanel(title: "Pull request") {
-            if let model {
-                PullRequestLine(model: model, open: open)
-                ChecksBlock(model: model, open: open)
-            } else {
-                EmptyLine(text: PullRequestPanelModel.emptyLine)
-            }
+            PullRequestLine(model: model, open: open)
+            ChecksBlock(model: model, open: open)
         }
     }
 }
@@ -310,18 +306,6 @@ struct SubPanel<Content: View>: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(title)
-    }
-}
-
-/// A fact that is unknown or absent, said in a plain line, never a dash.
-struct EmptyLine: View {
-    let text: String
-
-    var body: some View {
-        Text(text)
-            .font(DesignTokens.TypeStyle.secondary.font)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
     }
 }
 

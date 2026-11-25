@@ -262,11 +262,20 @@ public struct LifecycleModel: Equatable {
     public var live: Bool
     public var stages: [Stage]
     public var tokens: TokenBar
+    /// True for a ticket whose work is done by its sub-tickets and that has no stage of its own (an epic waiting on
+    /// them, or one that ended that way): the section says only the tokens the ticket itself used, its Conductor runs,
+    /// with no where line, no summary and no stages. The design covers no epic's stages, so they are not drawn (TP-1652).
+    public var tokensOnly = false
+
+    /// Whether the section is drawn at all: a ticket with stages always; one with its tokens alone only once it used some.
+    public var drawn: Bool { !tokensOnly || tokens.total > 0 }
 
     /// The section from `lifecycle`, said in one sentence with the phase path (`path`: the phase it is in and the
     /// move that sent it back) and the ticket's `situation` (what it waits on, and how a finished ticket ended).
+    /// `hasSubTickets`: the ticket has sub-tickets, so one that ended without a stage of its own ended by them.
     public static func build(
-        _ lifecycle: TicketLifecycle, path: TicketPhasePath? = nil, situation: Situation? = nil, conductorTokens: Int = 0
+        _ lifecycle: TicketLifecycle, path: TicketPhasePath? = nil, situation: Situation? = nil, conductorTokens: Int = 0,
+        hasSubTickets: Bool = false
     ) -> LifecycleModel {
         let stages = lifecycle.stages.map(stage(of:))
         let current = lifecycle.stages.first { $0.id == lifecycle.current }
@@ -283,8 +292,16 @@ public struct LifecycleModel: Equatable {
         }
         return LifecycleModel(
             whereLine: whereLine(lifecycle, current: current, ended: ended, path: path, situation: situation), summary: summary,
-            live: current?.state == .current && !ended, stages: stages, tokens: tokenBar(lifecycle, ended: ended, conductorTokens: conductorTokens)
+            live: current?.state == .current && !ended, stages: stages, tokens: tokenBar(lifecycle, ended: ended, conductorTokens: conductorTokens),
+            tokensOnly: bySubTickets(lifecycle, ended: ended, situation: situation, hasSubTickets: hasSubTickets)
         )
+    }
+
+    /// Whether the ticket's work is done by its sub-tickets and it has no stage of its own: it waits on them, or it
+    /// ended with sub-tickets, and no stage is current, was entered or had a run.
+    static func bySubTickets(_ lifecycle: TicketLifecycle, ended: Bool, situation: Situation?, hasSubTickets: Bool) -> Bool {
+        guard situation?.kind == .subTickets || (ended && hasSubTickets) else { return false }
+        return lifecycle.current == nil && !lifecycle.stages.contains { $0.visits > 0 || $0.runs > 0 }
     }
 
     /// Whether the ticket ended (Done or Cancelled): it spends nothing more.
