@@ -110,8 +110,9 @@ defmodule SymphonyElixir.OrchestratorStartSlotTest do
       assert SymphonyElixir.TicketEvents.query("h", types: ["workspace.removed"]) == []
 
       # Its next run opens the same folder as it is, and nothing rebuilds it.
-      assert {:ok, ^workspace} = Workspace.create_for_issue(held)
-      assert File.read!(Path.join(workspace, "uncommitted.txt")) == "half done\n"
+      assert {:ok, reopened} = Workspace.create_for_issue(held)
+      assert Path.basename(reopened) == "MT-H"
+      assert File.read!(Path.join(reopened, "uncommitted.txt")) == "half done\n"
       assert SymphonyElixir.TicketEvents.query("h", types: ["workspace.rebuilt"]) == []
     end
 
