@@ -503,7 +503,7 @@ defmodule SymphonyElixir.QaDriverTest do
       assert output =~ "Symphony built this commit's app on the QA host (tree #{@tree})"
       assert log =~ "QA driver takes the app Symphony builds for this commit issue_id=issue-1 issue_identifier=TP-1 repo_key=demo head_sha=#{@head}"
       assert log =~ "QA driver uses the build Symphony made for the pass issue_id=issue-1 issue_identifier=TP-1 repo_key=demo tree=#{@tree}"
-      assert_received {:prebuilt_fetch, "demo", @head, @ticket, []}
+      assert_received {:prebuilt_fetch, "demo", @head, @ticket, [ask_again: true]}
       assert_received :heartbeat
       refute_received {:cmd, "/bin/sh", ["-c", "make app"], _opts}
 
@@ -526,13 +526,41 @@ defmodule SymphonyElixir.QaDriverTest do
 
       {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_build", %{}) end)
       assert {:ok, %{"prebuilt" => true}} = result
-      assert_received {:prebuilt_fetch, "demo", @head, @ticket, []}
+      assert_received {:prebuilt_fetch, "demo", @head, @ticket, [ask_again: true]}
       assert_received {:prebuilt_fetch, "demo", @head, @ticket, [rebuild: true]}
 
       Process.put(:prebuilt_records, [%{status: :ready, tree: @tree, app: gone}, %{status: :ready, tree: @tree, app: gone}])
       {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_build", %{}) end)
       assert error_code(result) == "qa_app_missing"
       refute_received {:cmd, "/bin/sh", ["-c", "make app"], _opts}
+    end
+
+    test "the pass's first qa_build of a commit asks again for a build that could not run, and only the first", %{root: root, worktree: worktree} do
+      stored = stored_app!(root)
+      unavailable = %{status: :unavailable, tree: @tree, reason: "ssh: connection refused"}
+
+      # The builder answers the pass's first ask with the outcome of a new attempt: the app.
+      driver = prebuilt_driver(worktree, [ready_at(stored)])
+      {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_build", %{}) end)
+      assert {:ok, %{"prebuilt" => true}} = result
+      assert_received {:prebuilt_fetch, "demo", @head, @ticket, [ask_again: true]}
+
+      # A build that is unavailable again fails the pass with the new reason; a second qa_build in
+      # the same pass takes the record that attempt left and tries nothing more.
+      driver = prebuilt_driver(worktree, [unavailable, unavailable])
+      {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_build", %{}) end)
+      assert {:error, {:qa_tool, "qa_build_unavailable", message}} = result
+      assert message =~ "ssh: connection refused"
+      assert_received {:prebuilt_fetch, "demo", @head, @ticket, [ask_again: true]}
+      {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_build", %{}) end)
+      assert error_code(result) == "qa_build_unavailable"
+      assert_received {:prebuilt_fetch, "demo", @head, @ticket, []}
+
+      # The next pass, whoever started it, asks again.
+      driver = prebuilt_driver(worktree, [ready_at(stored)])
+      {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_build", %{}) end)
+      assert {:ok, %{"prebuilt" => true}} = result
+      assert_received {:prebuilt_fetch, "demo", @head, @ticket, [ask_again: true]}
     end
 
     test "a build that failed is the tool's result", %{worktree: worktree} do

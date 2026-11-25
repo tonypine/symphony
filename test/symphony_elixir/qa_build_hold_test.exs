@@ -35,6 +35,8 @@ defmodule SymphonyElixir.QaBuildHoldTest do
 
     def lookup(_repo_key, head), do: Map.get(Process.get(:qa_build_records, %{}), head)
 
+    def workspace?(_repo_key, _identifier), do: Process.get(:qa_workspace?, true)
+
     def request(repo_key, head, ticket) do
       send(self(), {:requested, repo_key, head, ticket})
       :ok
@@ -91,6 +93,25 @@ defmodule SymphonyElixir.QaBuildHoldTest do
       assert capture_log(fn -> assert resolve(@head) == :held end) == ""
       assert_received {:requested, @repo_key, @head, %{held: true}}
       assert commits() == [@head]
+    end
+
+    test "a ticket with no workspace folder dispatches without asking, so its run makes the workspace first" do
+      capture_log(fn -> assert resolve(@head) == :held end)
+      assert_received {:requested, @repo_key, @head, _request}
+      Process.put(:qa_workspace?, false)
+
+      for selection <- [:unread, :app] do
+        Process.put(:qa_selection, selection)
+        log = capture_log(fn -> assert resolve(@head) == :dispatch end)
+        assert log =~ "QA dispatches without a build ahead: the ticket has no workspace yet issue_id=#{@issue_id} issue_identifier=TP-7"
+        refute_received {:requested, _repo_key, _head, _request}
+        assert commits() == []
+      end
+
+      # A build already running keeps the ticket held, workspace or not.
+      record!(@head, %{status: :building, tree: @tree})
+      capture_log(fn -> assert resolve(@head) == :held end)
+      assert_received {:requested, @repo_key, @head, %{held: true}}
     end
 
     test "a head that moved while the ticket was held replaces the reason" do

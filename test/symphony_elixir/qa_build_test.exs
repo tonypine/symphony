@@ -303,6 +303,8 @@ defmodule SymphonyElixir.QaBuildTest do
     test "reads the tree in the ticket's own workspace" do
       server = start_builder!(workspace: nil)
       {:ok, workspace} = Workspace.local_path_for_issue("TP-1", @repo_key)
+      File.mkdir_p!(workspace)
+      on_exit(fn -> File.rm_rf!(workspace) end)
 
       QaBuild.request(@repo_key, @sha, @ticket, server: server)
       assert_receive {:reading, ^workspace, @sha, _reader}
@@ -419,6 +421,118 @@ defmodule SymphonyElixir.QaBuildTest do
       send(builder, {:outcome, {:failed, 1, "error"}})
       assert %{status: :failed} = QaBuild.fetch(@repo_key, @sha2, @ticket, server: server, rebuild: true)
       refute_receive {:building, _job, _builder}, 20
+    end
+  end
+
+  describe "a new QA pass (fetch/4 with ask_again: true)" do
+    test "asks again for a tree whose build could not run and uses the new build" do
+      server = start_builder!()
+      QaBuild.request(@repo_key, @sha, @ticket, server: server)
+      assert_receive {:building, _job, builder}
+      capture_log(fn -> send(builder, {:outcome, {:unavailable, "ssh: timeout"}}) && settled(server) end)
+
+      # A fetch that does not ask again gets the old record without trying.
+      assert %{status: :unavailable, reason: "ssh: timeout"} = QaBuild.fetch(@repo_key, @sha, @ticket, server: server)
+      refute_received {:building, _job, _builder}
+
+      {waiter, log} =
+        with_log(fn ->
+          waiter = Task.async(fn -> QaBuild.fetch(@repo_key, @sha, @ticket, server: server, ask_again: true) end)
+          assert_receive {:building, %{tree: @tree}, builder}
+          send(builder, {:outcome, {:ready, @app}})
+          waiter
+        end)
+
+      assert %{status: :ready, app: @app} = Task.await(waiter)
+      assert log =~ "QA build asked for again by a new QA pass repo_key=demo head_sha=#{@sha} issue_id=issue-1 issue_identifier=TP-1"
+
+      # A build that is ready is not built again for a pass that asks again.
+      assert %{status: :ready} = QaBuild.fetch(@repo_key, @sha, @ticket, server: server, ask_again: true)
+      refute_receive {:building, _job, _builder}, 20
+    end
+
+    test "a tree unavailable again answers the pass with the new reason, and stays until the next pass" do
+      server = start_builder!()
+      QaBuild.request(@repo_key, @sha, @ticket, server: server)
+      assert_receive {:building, _job, builder}
+      capture_log(fn -> send(builder, {:outcome, {:unavailable, "ssh: timeout"}}) && settled(server) end)
+
+      capture_log(fn ->
+        waiter = Task.async(fn -> QaBuild.fetch(@repo_key, @sha, @ticket, server: server, ask_again: true) end)
+        assert_receive {:building, _job, builder}
+        send(builder, {:outcome, {:unavailable, "ssh: refused"}})
+        assert %{status: :unavailable, reason: "ssh: refused"} = Task.await(waiter)
+      end)
+
+      assert %{status: :unavailable, reason: "ssh: refused"} = QaBuild.fetch(@repo_key, @sha, @ticket, server: server)
+      refute_receive {:building, _job, _builder}, 20
+    end
+
+    test "after a passing fault, a commit whose tree could not be read is read again and built, with no new head, restart or lift" do
+      {:ok, reads} = Agent.start_link(fn -> 0 end)
+      test = self()
+
+      # The first read finds no folder; the folder is back for the next.
+      tree = fn workspace, sha ->
+        send(test, {:reading, workspace, sha, self()})
+
+        if Agent.get_and_update(reads, &{&1, &1 + 1}) == 0,
+          do: {:error, "git fetch origin #{sha} failed (exit 128): fatal: cannot change to '#{workspace}': No such file or directory"},
+          else: {:ok, @tree}
+      end
+
+      server = start_builder!(tree: tree)
+      capture_log(fn -> assert %{status: :unavailable, reason: "the commit's tree could not be read: " <> _} = QaBuild.fetch(@repo_key, @sha, @ticket, server: server) end)
+
+      # Each starter's pass asks the same way: the driver's first qa_build carries no starter.
+      waiter = Task.async(fn -> QaBuild.fetch(@repo_key, @sha, @ticket, server: server, ask_again: true) end)
+      capture_log(fn -> assert_receive {:reading, _workspace, @sha, _reader} end)
+      assert_receive {:building, %{tree: @tree}, builder}
+      send(builder, {:outcome, {:ready, @app}})
+      assert %{status: :ready, app: @app} = Task.await(waiter)
+      assert %{status: :ready} = QaBuild.lookup(@repo_key, @sha)
+    end
+  end
+
+  describe "a ticket with no workspace folder" do
+    test "workspace/2 and workspace?/3 find the folder only once it exists" do
+      {:ok, path} = Workspace.local_path_for_issue("TP-404", @repo_key)
+      File.rm_rf!(path)
+      on_exit(fn -> File.rm_rf!(path) end)
+
+      assert QaBuild.workspace(@repo_key, "TP-404") == {:error, :no_workspace}
+      refute QaBuild.workspace?(@repo_key, "TP-404")
+
+      File.mkdir_p!(path)
+      assert QaBuild.workspace(@repo_key, "TP-404") == {:ok, path}
+      assert QaBuild.workspace?(@repo_key, "TP-404")
+      refute QaBuild.workspace?(@repo_key, "TP-404", workspace: fn _repo_key, _identifier -> {:error, :enoent} end)
+    end
+
+    test "reads no commit and records nothing until the folder exists, then reads and builds it" do
+      {:ok, path} = Workspace.local_path_for_issue("TP-1", @repo_key)
+      File.rm_rf!(path)
+      on_exit(fn -> File.rm_rf!(path) end)
+      server = start_builder!(workspace: nil)
+
+      log =
+        capture_log(fn ->
+          QaBuild.request(@repo_key, @sha, @held, server: server)
+          assert_receive {:released, @repo_key, "issue-1", "TP-1"}
+        end)
+
+      assert log =~ "QA build waits for the ticket's workspace: its folder does not exist yet repo_key=demo head_sha=#{@sha}"
+      refute_received {:reading, _workspace, @sha, _reader}
+      assert QaBuild.lookup(@repo_key, @sha) == nil
+      assert capture_log(fn -> assert QaBuild.fetch(@repo_key, @sha, @ticket, server: server) == nil end) =~ "waits for the ticket's workspace"
+
+      # The run made the workspace: the pass's ask reads the commit there and builds it.
+      File.mkdir_p!(path)
+      waiter = Task.async(fn -> QaBuild.fetch(@repo_key, @sha, @ticket, server: server, ask_again: true) end)
+      assert_receive {:reading, ^path, @sha, _reader}
+      assert_receive {:building, %{workspace: ^path}, builder}
+      send(builder, {:outcome, {:ready, @app}})
+      assert %{status: :ready} = Task.await(waiter)
     end
   end
 
