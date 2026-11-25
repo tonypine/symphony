@@ -319,7 +319,7 @@ later journeys point back to it. The mock draws every screen under its ID.
 
 #### D12c · Stop Run: the consequence sheet
 
-- **Shows:** what Stop does, from the code: it ends the agent and removes its workspace; the ticket keeps its Linear
+- **Shows:** what Stop does, from the code: it ends the agent and keeps its workspace, with any work not pushed, for the next run; the ticket keeps its Linear
   state, and Symphony doesn't start it again until it is unblocked, restarted or moved (TP-1137). **Also move to Backlog** (on by default from Needs attention)
   with a note posted as a comment.
 - **Data:** `POST /stop` exists; the Backlog move and comment go through DD4.

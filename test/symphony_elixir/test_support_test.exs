@@ -85,8 +85,8 @@ defmodule SymphonyElixir.TestSupportTest do
       )
 
       cleanup = Process.whereis(WorkspaceCleanup)
-      assert :ok = WorkspaceCleanup.remove(%{id: "issue-1", identifier: "S-1"}, nil)
-      assert :ok = WorkspaceCleanup.remove(%{id: "issue-2", identifier: "S-2"}, nil)
+      assert :ok = WorkspaceCleanup.remove(%{id: "issue-1", identifier: "S-1", remove_reason: :terminal}, nil)
+      assert :ok = WorkspaceCleanup.remove(%{id: "issue-2", identifier: "S-2", remove_reason: :terminal}, nil)
       wait_until(fn -> File.exists?(hook_log) end)
 
       assert :ok = SymphonyElixir.TestSupport.stop_leftover_work()

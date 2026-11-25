@@ -651,6 +651,7 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   defp rebuilt_title(_main, _head), do: "Workspace rebuilt from main: the ticket has no branch yet"
 
   defp rebuilt_reason("reclaim"), do: "Its old workspace was reclaimed"
+  # An event stored before a stop kept the workspace (TP-1648) still reads.
   defp rebuilt_reason("stop"), do: "Its workspace was removed when its run was stopped"
   defp rebuilt_reason("terminal"), do: "Its workspace was removed when it reached a terminal state"
   defp rebuilt_reason("cleanup"), do: "Symphony removed its workspace"
@@ -658,6 +659,7 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   defp rebuilt_reason(_missing), do: "Its workspace folder was missing"
 
   defp removed_reason("age_gc"), do: "It went unused too long"
+  # An event stored before a stop kept the workspace (TP-1648) still reads.
   defp removed_reason("stop"), do: "Its run was stopped"
   defp removed_reason("terminal"), do: "The ticket reached a terminal state"
   defp removed_reason(_cleanup), do: "Symphony cleaned it up"

@@ -96,7 +96,7 @@ defmodule SymphonyElixir.RestartTest do
 
       cleanup = Module.concat(__MODULE__, "Cleanup#{System.unique_integer([:positive])}")
       start_supervised!({WorkspaceCleanup, name: cleanup, remove_fun: remove_fun})
-      :ok = WorkspaceCleanup.remove(%{identifier: "MT-RESTART"}, nil, cleanup)
+      :ok = WorkspaceCleanup.remove(%{identifier: "MT-RESTART", remove_reason: :terminal}, nil, cleanup)
       assert_receive {:stop_removal, "MT-RESTART", removal}
 
       opts = opts(workspace_cleanup: cleanup)

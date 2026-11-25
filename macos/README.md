@@ -1151,8 +1151,8 @@ Home the first time, and on the page it showed last after that.
   messages, each tool call with its result and duration, and errors, grouped by turn, with **All**,
   **Messages**, **Tools** and **Errors**, a search field (⌘F) and **Copy Session ID**. The selected event shows
   in full below, monospaced and selectable, and a call that hasn't returned says how long it has been silent.
-- **Stop Run…** opens a sheet first. It says what a stop does: it ends the agent and removes its workspace,
-  with any work not pushed, and the ticket keeps its Linear state, so Symphony starts it again on its next
+- **Stop Run…** opens a sheet first. It says what a stop does: it ends the agent and keeps its workspace as
+  it is, with any work not pushed, for the next run, and the ticket keeps its Linear state, so Symphony starts it again on its next
   poll. **Also move to Backlog** (off from the ticket page) then moves the ticket to
   Backlog with your note as a comment (`POST /api/v1/control/stop`, then `backlog`). A failing ticket between
   attempts has no run to stop, so only the Backlog move is left.

@@ -4,7 +4,7 @@ defmodule SymphonyElixir.Workspace do
   """
 
   require Logger
-  alias SymphonyElixir.{Config, GitConfigCommands, ManagedClone, PathSafety, ProcessTree, SSH, Tracker, WorkflowSource}
+  alias SymphonyElixir.{Config, GitConfigCommands, ManagedClone, PathSafety, ProcessTree, SSH, Tracker, WorkflowSource, WorkspaceRemoval}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Hooks
   alias SymphonyElixir.GitHub.Repo, as: GitHubRepo
@@ -1435,27 +1435,39 @@ defmodule SymphonyElixir.Workspace do
 
   @spec reclaim_stale_workspaces(String.t(), term(), DateTime.t()) :: {:ok, [lifecycle_action()]} | {:error, term()}
   def reclaim_stale_workspaces(repo_key, protected_identifiers, %DateTime{} = now) when is_binary(repo_key) do
-    with {:ok, stale_entries} <- scan_stale_workspaces(repo_key, now) do
+    reclaim_stale_workspaces(repo_key, protected_identifiers, now, [])
+  end
+
+  @doc """
+  `reclaim_stale_workspaces/3` with `opts` for `scan_stale_workspaces/3` (`:ticket_status`).
+  """
+  @spec reclaim_stale_workspaces(String.t(), term(), DateTime.t(), keyword()) :: {:ok, [lifecycle_action()]} | {:error, term()}
+  def reclaim_stale_workspaces(repo_key, protected_identifiers, %DateTime{} = now, opts) when is_binary(repo_key) do
+    with {:ok, stale_entries} <- scan_stale_workspaces(repo_key, now, opts) do
       {:ok, delete_stale_workspaces(stale_entries, protected_identifiers)}
     end
   end
 
   @doc """
-  Identify age-eligible (stale) workspace entries without deleting anything.
+  Identify the workspaces the age collector may remove, without deleting anything: older than
+  `max_age_days`, and whose ticket has ended or no longer exists
+  (`SymphonyElixir.WorkspaceRemoval.removable_ticket?/2`). An open ticket's workspace, or one whose
+  ticket could not be read, is never in the list, however old it is.
 
-  The filesystem traversal lives here so callers can run the expensive scan off
-  the orchestrator process and apply the protected-identifier filter against
-  fresh state at delete time. Returns `{:ok, []}` when age GC is disabled.
+  The filesystem traversal and the ticket reads live here so callers can run them off the
+  orchestrator process and apply the protected-identifier filter against fresh state at delete time.
+  Returns `{:ok, []}` when age GC is disabled. `opts`: `:ticket_status`, a function of an
+  identifier returning `SymphonyElixir.WorkspaceRemoval.ticket_status/2`'s answer (tests).
   """
-  @spec scan_stale_workspaces(String.t(), DateTime.t()) :: {:ok, [map()]} | {:error, term()}
-  def scan_stale_workspaces(repo_key, %DateTime{} = now) when is_binary(repo_key) do
+  @spec scan_stale_workspaces(String.t(), DateTime.t(), keyword()) :: {:ok, [map()]} | {:error, term()}
+  def scan_stale_workspaces(repo_key, %DateTime{} = now, opts \\ []) when is_binary(repo_key) do
     lifecycle = Config.settings!().workspace.lifecycle
 
     if lifecycle.age_gc_enabled == true do
       cutoff = DateTime.to_unix(now) - lifecycle.max_age_days * 86_400
 
       with {:ok, entries} <- local_workspace_entries(repo_key) do
-        {:ok, Enum.filter(entries, &(&1.mtime <= cutoff))}
+        {:ok, entries |> Enum.filter(&(&1.mtime <= cutoff)) |> with_removable_tickets(opts)}
       end
     else
       {:ok, []}
@@ -1463,8 +1475,9 @@ defmodule SymphonyElixir.Workspace do
   end
 
   @doc """
-  Delete the stale workspace entries returned by `scan_stale_workspaces/2`,
-  skipping any whose identifier is currently protected (active).
+  Delete the stale workspace entries returned by `scan_stale_workspaces/3`,
+  skipping any whose identifier is currently protected (active) and any whose ticket the scan did
+  not find ended or missing.
 
   This step is cheap relative to the scan, so it is safe to run on the
   orchestrator process with an up-to-date protected set, closing the race where
@@ -1476,7 +1489,24 @@ defmodule SymphonyElixir.Workspace do
 
     stale_entries
     |> Enum.reject(&MapSet.member?(protected, &1.identifier))
+    |> Enum.filter(&(Map.get(&1, :ticket) in [:ended, :missing]))
     |> Enum.map(&delete_lifecycle_workspace(&1, :age_gc))
+  end
+
+  # Each entry with what is known of its ticket; only an ended or missing ticket's stays.
+  defp with_removable_tickets(entries, opts) do
+    status = Keyword.get(opts, :ticket_status, &WorkspaceRemoval.ticket_status/1)
+
+    Enum.flat_map(entries, fn entry ->
+      case status.(entry.identifier) do
+        ticket when ticket in [:ended, :missing] ->
+          [Map.put(entry, :ticket, ticket)]
+
+        ticket ->
+          Logger.info("Workspace kept repo_key=#{entry.repo_key} identifier=#{entry.identifier} workspace=#{entry.path} ticket=#{ticket}")
+          []
+      end
+    end)
   end
 
   @spec sweep_orphan_workspaces(Enumerable.t()) :: {:ok, [lifecycle_action()]} | {:error, term()}
@@ -1484,8 +1514,15 @@ defmodule SymphonyElixir.Workspace do
     sweep_orphan_workspaces(Config.repo_key!(), tracked_identifiers)
   end
 
-  @spec sweep_orphan_workspaces(String.t(), Enumerable.t()) :: {:ok, [lifecycle_action()]} | {:error, term()}
-  def sweep_orphan_workspaces(repo_key, tracked_identifiers) when is_binary(repo_key) do
+  @doc """
+  The startup sweep: acts on each workspace no tracked identifier names, as
+  `workspaces.cleanup.orphan_action` says, and only when its ticket has ended or no longer exists
+  (`SymphonyElixir.WorkspaceRemoval.removable_ticket?/2`). An open ticket outside the tracked set (in
+  Backlog, say), or one whose ticket could not be read, keeps its workspace. `opts`: `:ticket_status`,
+  as `scan_stale_workspaces/3` takes it.
+  """
+  @spec sweep_orphan_workspaces(String.t(), Enumerable.t(), keyword()) :: {:ok, [lifecycle_action()]} | {:error, term()}
+  def sweep_orphan_workspaces(repo_key, tracked_identifiers, opts \\ []) when is_binary(repo_key) do
     lifecycle = Config.settings!().workspace.lifecycle
     tracked = normalize_identifier_set(tracked_identifiers)
 
@@ -1493,6 +1530,7 @@ defmodule SymphonyElixir.Workspace do
       actions =
         entries
         |> Enum.reject(&MapSet.member?(tracked, &1.identifier))
+        |> with_removable_tickets(opts)
         |> Enum.map(&perform_orphan_action(&1, lifecycle))
 
       {:ok, actions}
@@ -1579,7 +1617,7 @@ defmodule SymphonyElixir.Workspace do
   end
 
   defp delete_lifecycle_workspace(entry, reason) do
-    case remove(entry.path) do
+    case WorkspaceRemoval.remove_path(entry.path, nil, reason, __MODULE__) do
       {:ok, _removed_paths} ->
         Logger.warning("Workspace lifecycle removed repo_key=#{entry.repo_key} identifier=#{entry.identifier} workspace=#{entry.path} reason=#{reason} action=delete")
 
@@ -1612,7 +1650,8 @@ defmodule SymphonyElixir.Workspace do
     trash_root = Path.join([root, entry.repo_key, lifecycle.trash_dir])
     destination = unique_trash_destination(trash_root, entry.identifier)
 
-    with :ok <- validate_workspace_path(entry.path, nil),
+    with :ok <- WorkspaceRemoval.check(reason),
+         :ok <- validate_workspace_path(entry.path, nil),
          :ok <- File.mkdir_p(trash_root),
          :ok <- File.rename(entry.path, destination) do
       clear_after_create_pending(entry.path, nil)
@@ -2943,7 +2982,9 @@ defmodule SymphonyElixir.Workspace do
   defp issue_labels(%{"labels" => labels}) when is_list(labels), do: labels
   defp issue_labels(_issue), do: []
 
-  defp remove_reason(%{remove_reason: reason}) when reason in [:terminal, :stop], do: Atom.to_string(reason)
+  # The `before_remove` hook's `SYMPHONY_REMOVE_REASON`: `terminal` when the ticket ended (the one
+  # removal whose hook closes the ticket's pull request), `cleanup` for the allow list's others.
+  defp remove_reason(%{remove_reason: :terminal}), do: "terminal"
   defp remove_reason(_issue), do: "cleanup"
 
   defp issue_state(%{state: state}) when is_binary(state), do: state

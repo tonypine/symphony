@@ -2893,7 +2893,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
 
   test "cleans up workspace and tracking when PR is merged" do
     now = ~U[2026-05-01 09:00:00Z]
-    Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now)])
+    Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now, state: "Done")])
     Application.put_env(:symphony_elixir, :pr_review_test_activity, open_activity(now, state: "MERGED"))
     :ok = put_review(now)
 
@@ -2907,6 +2907,34 @@ defmodule SymphonyElixir.PrReviewPollerTest do
 
     assert_receive {:remove_workspace, "/tmp/workspaces/ACME-1780", nil}
     assert [] = RunStore.list_pr_reviews()
+  end
+
+  test "a merged or closed PR whose ticket is still open keeps the workspace and drops the review record" do
+    now = ~U[2026-05-01 09:00:00Z]
+    Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now)])
+
+    for {gh_state, pr_state} <- [{"MERGED", "merged"}, {"CLOSED", "closed"}] do
+      Application.put_env(:symphony_elixir, :pr_review_test_activity, open_activity(now, state: gh_state))
+      :ok = put_review(now)
+
+      assert {:ok, %{actions: [{:cleanup, "issue-1780", ^pr_state}]}} =
+               PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, workspace: FakeWorkspace, now: now)
+
+      refute_received {:remove_workspace, _workspace_path, _worker_host}
+      assert [] = RunStore.list_pr_reviews()
+    end
+  end
+
+  test "a merged PR whose ticket could not be read keeps the workspace" do
+    now = ~U[2026-05-01 09:00:00Z]
+    Application.put_env(:symphony_elixir, :pr_review_test_issues, [])
+    Application.put_env(:symphony_elixir, :pr_review_test_activity, open_activity(now, state: "MERGED"))
+    :ok = put_review(now)
+
+    assert {:ok, %{actions: [{:cleanup, "issue-1780", "merged"}]}} =
+             PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, workspace: FakeWorkspace, now: now)
+
+    refute_received {:remove_workspace, _workspace_path, _worker_host}
   end
 
   test "a merged or closed PR marks its ticket's PR record" do
@@ -2928,7 +2956,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
 
   test "defers merged-PR workspace cleanup until the issue's agent run ends" do
     now = ~U[2026-05-01 09:00:00Z]
-    Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now)])
+    Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now, state: "Done")])
     Application.put_env(:symphony_elixir, :pr_review_test_activity, open_activity(now, state: "MERGED"))
     :ok = put_review(now)
 
@@ -3112,7 +3140,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
       learnings: %{enabled: true, provider: "anthropic", model: "claude-haiku-4-5-20251001"}
     )
 
-    Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now)])
+    Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now, state: "Done")])
     Application.put_env(:symphony_elixir, :pr_review_test_activity, open_activity(now, state: "MERGED"))
     Application.put_env(:symphony_elixir, :pr_review_test_delete_failures, ["issue-1780"])
 
@@ -3191,7 +3219,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
 
   test "does not remove workspace again when review delete fails after cleanup" do
     now = ~U[2026-05-01 09:00:00Z]
-    Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now)])
+    Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now, state: "Done")])
     Application.put_env(:symphony_elixir, :pr_review_test_activity, open_activity(now, state: "MERGED"))
     Application.put_env(:symphony_elixir, :pr_review_test_delete_failures, ["issue-1780"])
 
@@ -3228,7 +3256,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
 
   test "backs off workspace cleanup errors instead of retrying every poll" do
     now = ~U[2026-05-01 09:00:00Z]
-    issue = in_review_issue(updated_at: now)
+    issue = in_review_issue(updated_at: now, state: "Done")
     Application.put_env(:symphony_elixir, :pr_review_test_issues, [issue])
     Application.put_env(:symphony_elixir, :pr_review_test_activity, open_activity(now, state: "MERGED"))
 
@@ -3276,7 +3304,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
 
   test "does not remove workspace again when cleanup mark update fails before delete failure" do
     now = ~U[2026-05-01 09:00:00Z]
-    Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now)])
+    Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now, state: "Done")])
     Application.put_env(:symphony_elixir, :pr_review_test_activity, open_activity(now, state: "MERGED"))
     Application.put_env(:symphony_elixir, :pr_review_test_update_status_failures, ["cleanup_pending"])
     Application.put_env(:symphony_elixir, :pr_review_test_delete_failures, ["issue-1780"])
@@ -3315,7 +3343,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
 
   test "reports cleanup error when workspace removal update and fallback put both fail" do
     now = ~U[2026-05-01 09:00:00Z]
-    Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now)])
+    Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now, state: "Done")])
     Application.put_env(:symphony_elixir, :pr_review_test_activity, open_activity(now, state: "MERGED"))
     Application.put_env(:symphony_elixir, :pr_review_test_update_status_failures, ["cleanup_pending"])
     Application.put_env(:symphony_elixir, :pr_review_test_put_failures, ["issue-1780"])

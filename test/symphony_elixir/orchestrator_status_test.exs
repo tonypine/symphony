@@ -3056,7 +3056,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     end
   end
 
-  test "stop_running stops the tracked session, marks the run stopped, and cleans workspace" do
+  test "stop_running stops the tracked session, marks the run stopped, and keeps the workspace with its uncommitted changes" do
     workspace_root =
       Path.join(
         System.tmp_dir!(),
@@ -3081,6 +3081,8 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     workspace = Path.join([workspace_root, "default", issue.identifier])
     File.mkdir_p!(workspace)
+    uncommitted = Path.join(workspace, "uncommitted.txt")
+    File.write!(uncommitted, "work in progress\n")
 
     orchestrator_name = Module.concat(__MODULE__, :StopRunningOrchestrator)
     {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
@@ -3170,96 +3172,17 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     assert %{running: []} = GenServer.call(pid, :snapshot)
     assert :ok = WorkspaceCleanup.await(issue.identifier)
-    # The stop removes the workspace but tells the hook the ticket didn't end.
-    assert File.read!(marker) == "stop|"
-    refute File.exists?(workspace)
+    # A stop is not on the removal allow list: the workspace stays as it is, the before_remove hook
+    # never runs and no removal is recorded on the ticket.
+    refute File.exists?(marker)
+    assert File.read!(uncommitted) == "work in progress\n"
+    assert SymphonyElixir.TicketEvents.query(issue.id, types: ["workspace.removed"]) == []
 
     assert [%{run_id: ^run_id, status: "stopped", error: "agent stopped by operator"}] =
              RunStore.list_runs()
 
     assert {:ok, %{stopped: false, issue_id: "MT-STOP"}} =
              Orchestrator.stop_running(orchestrator_name, issue.identifier)
-  end
-
-  test "stop_running leaves the workspace removal to WorkspaceCleanup and keeps answering while its before_remove hook runs" do
-    workspace_root = Path.join(System.tmp_dir!(), "symphony-stop-running-slow-remove-#{System.unique_integer([:positive])}")
-    hook_log = Path.join(workspace_root, "hook.log")
-    release = Path.join(workspace_root, "release")
-
-    write_workflow_file!(Workflow.workflow_file_path(),
-      workspace_root: workspace_root,
-      poll_interval_ms: 60_000,
-      hook_before_remove: """
-      echo started >> #{hook_log}
-      while [ ! -f #{release} ]; do sleep 0.05; done
-      echo finished >> #{hook_log}
-      """
-    )
-
-    slow_issue = %Issue{id: "issue-slow-remove", identifier: "MT-SLOW-REMOVE", title: "Slow remove", state: "In Progress"}
-    other_issue = %Issue{id: "issue-other-stop", identifier: "MT-OTHER-STOP", title: "Other", state: "In Progress"}
-    workspace = Path.join([workspace_root, "default", slow_issue.identifier])
-    File.mkdir_p!(workspace)
-
-    orchestrator_name = Module.concat(__MODULE__, :SlowRemoveOrchestrator)
-    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
-
-    on_exit(fn ->
-      File.write(release, "")
-      WorkspaceCleanup.await(slow_issue.identifier)
-
-      if Process.alive?(pid) do
-        stop_process(pid)
-      end
-
-      File.rm_rf(workspace_root)
-    end)
-
-    # The startup poll would stop runs the memory tracker does not list.
-    wait_for_poll_cycle_idle(pid)
-    {slow_worker, slow_ref} = start_blocked_worker()
-    {other_worker, other_ref} = start_blocked_worker()
-    started_at = DateTime.utc_now()
-
-    # A poll that lands later reconciles the runs against the tracker: listing both issues keeps
-    # the other run alive until the test stops it.
-    Application.put_env(:symphony_elixir, :memory_tracker_issues, [slow_issue, other_issue])
-    on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_issues) end)
-
-    :sys.replace_state(pid, fn state ->
-      %{
-        state
-        | running: %{
-            slow_issue.id => running_entry(slow_issue, slow_worker, slow_ref, "run-slow-remove", started_at),
-            other_issue.id => running_entry(other_issue, other_worker, other_ref, "run-other-stop", started_at)
-          },
-          claimed: MapSet.new([slow_issue.id, other_issue.id])
-      }
-    end)
-
-    # A stop asks for a poll at once, and a poll stops the runs the tracker no longer lists: the
-    # tracker lists the other issue until that poll is over, so the poll keeps it running.
-    Application.put_env(:symphony_elixir, :memory_tracker_issues, [other_issue])
-
-    assert {:ok, %{stopped: true}} = Orchestrator.stop_running(orchestrator_name, slow_issue.identifier)
-    assert_receive {:DOWN, ^slow_ref, :process, ^slow_worker, :shutdown}, @min_wait_ms
-    assert wait_for_file_contents(hook_log, "started\n", 5_000)
-    wait_for_requested_poll(pid)
-
-    # The hook is still blocked: the orchestrator answers and handles another issue meanwhile.
-    assert %{running: [%{issue_id: "issue-other-stop"}]} = GenServer.call(pid, :snapshot, 1_000)
-    # The poll this stop asks for would dispatch the issue again if the tracker still listed it.
-    Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
-    assert {:ok, %{stopped: true}} = Orchestrator.stop_running(orchestrator_name, other_issue.identifier)
-    assert_receive {:DOWN, ^other_ref, :process, ^other_worker, :shutdown}, @min_wait_ms
-    assert %{running: []} = GenServer.call(pid, :snapshot, 1_000)
-    assert File.read!(hook_log) == "started\n"
-    assert File.exists?(workspace)
-
-    File.write!(release, "")
-    assert :ok = WorkspaceCleanup.await(slow_issue.identifier)
-    assert File.read!(hook_log) == "started\nfinished\n"
-    refute File.exists?(workspace)
   end
 
   test "stop_running returns before slow stop_session cleanup completes" do
@@ -7111,20 +7034,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     wait_for_orchestrator_state(
       pid,
       &(is_nil(&1.repo_poll_task_ref) and not &1.poll_check_in_progress and &1.dispatch_readiness_tasks == %{}),
-      5_000
-    )
-  end
-
-  # Returns once the poll a stop or a refresh asked for has run to its end: no poll is running and
-  # the next one is a full interval away.
-  defp wait_for_requested_poll(pid) do
-    wait_for_orchestrator_state(
-      pid,
-      fn state ->
-        is_nil(state.repo_poll_task_ref) and not state.poll_check_in_progress and
-          state.dispatch_readiness_tasks == %{} and is_integer(state.next_poll_due_at_ms) and
-          state.next_poll_due_at_ms > System.monotonic_time(:millisecond)
-      end,
       5_000
     )
   end

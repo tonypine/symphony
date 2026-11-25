@@ -125,32 +125,29 @@ defmodule SymphonyElixir.WorkspaceRebuildTest do
       assert [%{payload: %{reason: "reclaim", winner: "pull_request"}}] = TicketEvents.query(issue.id, types: ["workspace.rebuilt"])
     end
 
-    test "a Stop's or a terminal state's removal names itself, never a missing folder", ctx do
+    test "a terminal state's removal names itself, never a missing folder", ctx do
       issue = issue("TP-104")
       pr_head = push_branch!(ctx, "auto/TP-104", ["work"], pr: 104)
       put_pr(ctx, issue, 104)
       put_run(ctx, issue, "run-a", ended_at: DateTime.utc_now())
 
-      :ok = WorkspaceRebuild.record_removal(ctx.repo_key, issue.id, :stop)
-      assert {:ok, %{reason: :stop, head: ^pr_head}} = choose(issue)
-
       :ok = WorkspaceRebuild.record_removal(ctx.repo_key, issue.id, :terminal)
-      assert {:ok, %{reason: :terminal}} = choose(issue)
+      assert {:ok, %{reason: :terminal, head: ^pr_head}} = choose(issue)
 
-      :ok = WorkspaceRebuild.record_removal(ctx.repo_key, issue.id, nil)
+      :ok = WorkspaceRebuild.record_removal(ctx.repo_key, issue.id, :restart)
       assert {:ok, %{reason: :cleanup}} = choose(issue)
 
-      assert ["Its workspace was removed when its run was stopped", "Its workspace was removed when it reached a terminal state", "Symphony removed its workspace"] =
+      assert ["Its workspace was removed when it reached a terminal state", "Symphony removed its workspace"] =
                issue.id |> TicketEvents.query(types: ["workspace.rebuilt"]) |> Enum.map(&(&1.summary.detail |> String.split(" · ") |> hd()))
 
-      assert ["Its run was stopped", "The ticket reached a terminal state", "Symphony cleaned it up"] =
+      assert ["The ticket reached a terminal state", "Symphony cleaned it up"] =
                issue.id |> TicketEvents.query(types: ["workspace.removed"]) |> Enum.map(& &1.summary.detail)
 
       # A removal before the previous run started was made good by that run.
       put_run(ctx, issue, "run-b", ended_at: DateTime.add(DateTime.utc_now(), 3_600))
       assert {:ok, %{reason: :missing_folder}} = choose(issue)
 
-      assert :ok = WorkspaceRebuild.record_removal(ctx.repo_key, nil, :stop)
+      assert :ok = WorkspaceRebuild.record_removal(ctx.repo_key, nil, :terminal)
     end
 
     test "a local branch head that diverged from the chosen one is kept under refs/symphony/orphaned", ctx do
