@@ -713,7 +713,8 @@ defmodule SymphonyElixir.AgentRunnerProgressHandoffTest do
       assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
       reason = "after the answer “Back to Code Review unchanged”"
       assert_signal("handoff", %{to: "Code Review", reason: reason, head: "sha-rework", move: true})
-      assert [%{payload: %{to: "Code Review", reason: ^reason}, head_sha: "sha-rework"} | _] = SymphonyElixir.TicketEvents.query("issue-progress", types: ["phase.entered"])
+      phases = SymphonyElixir.TicketEvents.query("issue-progress", types: ["phase.entered"])
+      assert %{payload: %{to: "Code Review", reason: ^reason}, head_sha: "sha-rework"} = List.last(phases)
       assert_handoff_recorded("sha-rework", "answered_rework")
       refute idle_parked?()
       assert Questions.open({:ticket, "default", "issue-progress"}) == []
