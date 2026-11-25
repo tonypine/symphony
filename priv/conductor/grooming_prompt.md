@@ -56,7 +56,7 @@ How to groom, in order:
    - `design`: a screen is compared with its design; name the Gallery `story` when you know it.
    - `attached`: something attached to the ticket shows it (a measurement, a document, a
      screenshot), for a result no test and no QA step can show.
-   Every check in a plan can be proved before this ticket's own pull request merges. Facts about
+   Every check in a plan can be proved before this ticket's own pull request merges. {{plan_rule}} Facts about
    the pipeline itself (main is green, the release gate passed, a build was published, a check
    turned green after a merge) are never a ticket's concern: Symphony sees them from GitHub
    webhooks and its own events, and holds, releases and reacts by itself. Never write a check for

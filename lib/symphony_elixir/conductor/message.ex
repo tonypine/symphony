@@ -380,8 +380,10 @@ defmodule SymphonyElixir.Conductor.Message do
   plan (`by: recalibration`), keeping the ticket's shape and sub-tickets, which change only through
   `tree` operations, and then, when the message changed what is asked (`answer.ask`), the message's
   words as an ask. Any turn outside Grooming writes the plan this way: a message's, and every turn on
-  a ticket with sub-tickets. `{:error, why}`, in plain words, for a plan Symphony refuses; nothing
-  is recorded then.
+  a ticket with sub-tickets. A plan that gives a `reason` of its own may drop an outcome nothing
+  inside the ticket's life can prove (`TicketPlan.write/4`'s `drop_outcomes`); one without a
+  reason may not. `{:error, why}`, in plain words, for a plan Symphony refuses; nothing is recorded
+  then.
   """
   @spec write_plan(map(), Issue.t(), Answer.t(), String.t()) :: :ok | {:error, String.t()}
   def write_plan(%{issue_id: issue_id, repo_key: repo_key} = plan, %Issue{}, %{plan: %{} = answered} = answer, run_id) do
@@ -392,7 +394,11 @@ defmodule SymphonyElixir.Conductor.Message do
     messages = answered(plan) ++ List.wrap(get_in(plan, [:message, :event]))
 
     # A message that changes what is asked may change the outcomes: its ask is recorded right after.
-    with {:ok, _event} <- TicketPlan.write(repo_key, issue_id, next, run_id: run_id, idempotency: "plan.written:#{run_id}", new_ask: answer.ask == true),
+    # An outcome is dropped only with the reason the turn gave for it.
+    drop? = is_binary(Map.get(answered, :reason))
+    opts = [run_id: run_id, idempotency: "plan.written:#{run_id}", new_ask: answer.ask == true, drop_outcomes: drop?]
+
+    with {:ok, _event} <- TicketPlan.write(repo_key, issue_id, next, opts),
          :ok <- record_asks(answer.ask, repo_key, issue_id, messages, run_id) do
       :ok
     else

@@ -113,16 +113,47 @@ defmodule SymphonyElixir.Conductor.Facts do
   @try_keys ["conductor.try:", "message.try:", "final_check.try:"]
   @max_tries 5
   @max_check_notes 5
+  @waive_rule "Never waive a check for the person to verify later, by hand or on their promise: a ticket's life ends at its " <>
+                "delivery, and a waiver never leaves a debt on the person. When a check cannot be proved the way the plan says, " <>
+                "it is proved another way now (a test, or what the record shows) or the plan no longer holds it: the waiver's " <>
+                "reason says which, and how it is proved or why the plan does not need it. An outcome that rested on such a " <>
+                "check is settled the same way in this turn: proved another way, or dropped from the plan written again, with " <>
+                "the plan's `reason` saying why. It is never carried to the final check."
+  @plan_rule "Write every outcome and every check so that it can be proved inside the ticket's life, before its work " <>
+               "ends (a test, a QA or design verdict, a merge): never one that only use of the installed app after the " <>
+               "merge can settle. What a person does with the app once the work shipped is not the ticket's business; " <>
+               "when something is wrong later, they file a ticket."
   @waive "A check that is open and that nobody can prove the way the plan says (a `test` check for something no test can " <>
            "reach, an `attached` check for a file that cannot exist) holds the handoff for good. When a run's notes or its " <>
            "failed `plan_checks` step say so and you agree, waive it: " <>
            ~s(`waive: [{"check_id": ..., "reason": ...}]`, ) <>
            "with the reason in plain words. Never waive a check only because it is hard or still unproved. " <>
-           "A check of kind `outcome` is what the person asked for: Symphony refuses its waiver, and only the person can waive it."
+           @waive_rule <>
+           " " <>
+           "A check of kind `outcome` is what the person asked for: Symphony refuses its waiver in `waive`, and only the " <>
+           "person can waive it. Dropping an outcome is not a waiver: it is the plan written again without it, with the " <>
+           "plan's `reason`, and only for an outcome nothing inside the ticket's life can prove."
   @open_checks "These checks of the plan are still open, and the pull request merges next. A merge does not prove them. " <>
                  "Say so in your update. Waive one that nobody can prove the way the plan says, with its reason " <>
                  "(never a check of kind `outcome`: only the person waives one), or send the ticket back with instructions " <>
                  "that name the checks to prove, or ask the person."
+
+  @doc """
+  The rule every turn that may waive a check is told (its prompt's `{{waive_rule}}`, and the facts'
+  `waive`): a check is never waived for the person to verify later; one the plan's way cannot prove is
+  proved another way now, or the plan no longer holds it, and an outcome that rested on it is settled
+  in the same turn.
+  """
+  @spec waive_rule() :: String.t()
+  def waive_rule, do: @waive_rule
+
+  @doc """
+  The rule every turn that writes a plan or its checks is told (its prompt's `{{plan_rule}}`): no
+  outcome and no check is written so that only use of the installed app after the merge can settle it.
+  """
+  @spec plan_rule() :: String.t()
+  def plan_rule, do: @plan_rule
+
   @plan_text_max 6_000
   @max_siblings 20
   # The key `SymphonyElixir.Conductor.Grooming` counts a failed try under: `grooming.try:<n>`.
@@ -142,7 +173,7 @@ defmodule SymphonyElixir.Conductor.Facts do
     "grooming" => "The ticket is new and no run has worked on it; you write its plan from what was asked.",
     "message" => "A person sent a message on the ticket; you answer it.",
     "sub_ticket_ended" => "A sub-ticket of this ticket ended; you look at what is left of its plan.",
-    "final_check" => "The last sub-ticket ended; you check the whole ticket against its plan.",
+    "final_check" => "The last sub-ticket ended; you check that the plan was delivered, and close the ticket when it was.",
     "child_message" => "A person sent a message on a sub-ticket of this ticket.",
     "after_coding" => "The implementation run handed off; Code Review or QA judges it next.",
     "after_qa_fail" => "QA failed; a rework run answers its findings next.",
@@ -366,10 +397,12 @@ defmodule SymphonyElixir.Conductor.Facts do
 
   defp put_open_checks(facts, _junction), do: facts
 
-  # A groomed ticket's checks, what the runs said in their newest notes, and the rule for waiving one.
+  # A groomed ticket's plan and checks, what the runs said in their newest notes, and the rule for
+  # waiving one. The plan is there so that a turn can write it again without an outcome that rested
+  # on a check nobody can prove (`@waive_rule`).
   defp put_checks(facts, events) do
     if TicketPlan.groomed?(events),
-      do: Map.merge(facts, %{checks: checks(events), check_notes: run_notes(events), waive: @waive}),
+      do: Map.merge(facts, %{plan: plan_facts(TicketPlan.current(events)), checks: checks(events), check_notes: run_notes(events), waive: @waive}),
       else: facts
   end
 
@@ -462,6 +495,7 @@ defmodule SymphonyElixir.Conductor.Facts do
       layers: plan.layers,
       summary: plan.summary,
       text: cut(plan.text, @plan_text_max),
+      size: Map.get(plan, :size),
       sub_tickets: for(entry <- Map.get(plan, :sub_tickets, []), do: Map.take(entry, [:key, :title, :after, :identifier]))
     }
   end

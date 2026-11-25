@@ -709,6 +709,44 @@ defmodule SymphonyElixir.ConductorTest do
       assert [_waived, %{id: "c2", state: :open}] = SymphonyElixir.TicketChecks.list(ctx.issue_id)
     end
 
+    test "a single ticket's turn after coding waives a check and drops the outcome that rested on it, with its reason", ctx do
+      checks = [
+        %{id: "c1", kind: "outcome", statement: "The list exports.", proof: "test"},
+        %{id: "c2", kind: "evidence", statement: "It signs in.", proof: "test"},
+        %{id: "c3", kind: "outcome", statement: "The list shows.", proof: "test"}
+      ]
+
+      plan = %{shape: "single", layers: ["engine"], summary: "s", text: "t", checks: checks, size: %{tokens: 1, runs: 1}}
+      {:ok, _plan} = SymphonyElixir.TicketPlan.write("default", ctx.issue_id, Map.merge(plan, %{reason: "Grooming", by: "grooming"}))
+      reason = "Nothing inside this ticket's life can export the list: the export service does not exist."
+
+      written = %{
+        "reason" => reason,
+        "shape" => "single",
+        "summary" => "s",
+        "text" => "t",
+        "checks" => [%{"id" => "c2", "kind" => "evidence", "statement" => "It signs in.", "proof" => "test"}, %{"id" => "c3", "kind" => "outcome", "statement" => "The list shows.", "proof" => "test"}],
+        "size" => %{"tokens" => 1, "runs" => 1}
+      }
+
+      test = self()
+
+      turn = fn _plan, _issue, _run_id, prompt ->
+        send(test, {:prompt, prompt})
+        {:ok, [answer(%{"plan" => written})], 10}
+      end
+
+      assert Conductor.run(plan(ctx), ctx.issue, turn: turn) == :ok
+
+      assert %{reason: ^reason, by: "recalibration", checks: [%{id: "c2"}, %{id: "c3"}]} =
+               SymphonyElixir.TicketPlan.current(ctx.issue_id)
+
+      assert_received {:prompt, prompt}
+      assert prompt =~ "Dropping an outcome. When an outcome (a check of kind `outcome`) is itself a check nobody can prove"
+      assert prompt =~ ~s("plan": null or {<this ticket's whole plan written again)
+      assert prompt =~ ~s("summary": "s")
+    end
+
     test "a watch turn may waive one too, and its prompt says so", ctx do
       run = %{issue_id: ctx.issue_id, run_id: "run-w-#{System.unique_integer([:positive])}", repo_key: "default", started_at: DateTime.utc_now()}
       test = self()

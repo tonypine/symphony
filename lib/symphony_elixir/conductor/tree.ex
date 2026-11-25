@@ -1473,8 +1473,9 @@ defmodule SymphonyElixir.Conductor.Tree do
   Looks at what a `final_check` turn left: `before` holds whether it paused the ticket (`held`),
   how many rounds were made when it started (`rounds`), when (`at`) and how the turn ended (`exit`).
   A turn that closed the ticket, paused it, made a round or found a sub-ticket added meanwhile
-  changed something. Any other did not finish and is
-  counted, as a status note (see the module doc): the next poll tries once more, and after 2 in a
+  changed something. Its answer is already the second one when the first concluded nothing: that
+  one was given back to the Conductor in the same turn (`SymphonyElixir.Conductor.tend/4`). Any
+  other did not finish and is counted, as a status note (see the module doc): the next poll tries once more, and after 2 in a
   row `{:ask, :stuck, question}` is answered, since the ticket never closes without its check.
   """
   @spec checked(String.t(), Issue.t(), map()) :: :ok | {:ask, :stuck, map()}

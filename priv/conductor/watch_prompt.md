@@ -28,6 +28,7 @@ Write your answer as one JSON object and nothing else, with exactly these fields
   "route": null or {"to": "ticket", ...see The ticket route},
   "hold": null or {"reason": "<why the ticket's merge must not happen, see The merge hold, at most 1000 characters>"},
   "move": null or {"stage": "<one of the facts' stages, see The steer>", "reason": "<why the ticket goes there now, at most 1000 characters>"},
+  "plan": null or {<this ticket's whole plan written again, see Dropping an outcome: "reason", "shape", "layers", "summary", "text", "checks" and "size", as the facts' plan and checks hold them>},
   "update": "<for the person, see The update below; never null>",
   "refs": ["<the event_id of each fact the update rests on>"],
   "blocks": [<optional, at most 3, see The blocks>],
@@ -189,7 +190,15 @@ open and what the run said about them. When you agree that nobody can prove a ch
 plan says, waive it: add `"waive": [{"check_id": "<the check's id>", "reason": "<why nobody can
 prove it this way, in plain words>"}]` to your answer. Symphony records it with your reason, and the
 step passes the next time the run reaches it. Do not waive a check because it is hard or still to
-do: then steer the run to prove it and record the proof.
+do: then steer the run to prove it and record the proof. {{waive_rule}}
+
+Dropping an outcome. When an outcome (a check of kind `outcome`) is itself a check nobody can prove
+the way the plan says, or rested on one you waive, and nothing inside the ticket's life can prove it
+another way, write the plan again in `plan`, in this answer: the facts' `plan` and `checks` with
+that outcome left out, every other check kept with its `id` and its words, and a `reason` that says
+why the outcome is dropped. Symphony records it as the plan's next version, with your reason; a plan
+without a `reason`, or one that rewords an outcome, is refused. On a ticket without sub-tickets
+write `plan` for nothing else, and leave it null otherwise. {{plan_rule}}
 
 The merge hold. When the run's work is on its way to the merge, look at
 whether the pull request is about to merge what is asked now. When it is not (the plan was

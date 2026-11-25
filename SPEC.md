@@ -611,8 +611,10 @@ newest one is the ticket's plan, and a ticket is groomed exactly when it holds o
 (any run's, or the machine's: a check of the current plan proved by a test, QA, the design or
 something attached, recorded once per check and head and refused for an id the plan does not hold),
 `check.waived` (machine only: a check nobody has to prove any more, and why; an `outcome` check is
-waived only by the person's own decision, and a plan version may remove or reword one only after a
-new ask),
+waived only by the person's own decision, and a plan version may reword one only after a new ask
+and remove one only after a new ask or when the Conductor writes it outside Grooming with a reason
+of its own, for an outcome nothing inside the ticket's life can prove: on a ticket with sub-tickets
+at any turn, and on one without at the turns that may waive a check),
 `conductor.intervention` (machine only: what the Conductor of another ticket did to this one,
 `stopped`, `replanned`, `canceled`, `replaced` or `added`, and why) and
 `note` (which may carry a `tag` its writer gives it: `discovery`, something a run found that is not its
@@ -4076,7 +4078,13 @@ An issue is dispatch-eligible only if all are true:
   - A groomed issue (one that holds a `plan.written`) follows its own rule there, whatever its
     labels: it is never dispatched, and it closes once its own pull request merged or it never had
     one and none of its sub-issues is outside `terminal_states` (one in `Backlog` holds it), after
-    the Conductor's final check when that junction is on. A final check that ran and did not
+    the Conductor's final check when that junction is on. The final check judges whether the plan
+    was delivered, from the issue's own work (its sub-issues, their checks and merges), and closes
+    the issue without asking whether it may. An outcome no sub-issue delivered and nothing explains
+    is the Conductor's to settle within the plan (a new sub-issue, or the plan written again without
+    it, with the reason), never a question to the person. A final check whose answer concludes nothing (not done,
+    nothing to add or change, no question) is given back to the Conductor once in the same turn,
+    with that reason, and the service acts on the second answer. A final check that ran and did not
     conclude MUST NOT close the issue: the service asks the person and the issue stays in the
     waiting state until they answer. A groomed issue whose pull request merges
     waits there on every sub-issue it has. The move that closes it updates Symphony's record of the

@@ -22,6 +22,7 @@ Write your answer as one JSON object and nothing else, with exactly these fields
   "route": null or {"to": "rerun"} or {"to": "rework", "finding": "<what must change so QA can prove the step, at most 600 characters>"} or {"to": "ticket", ...see The ticket route},
   "hold": null or {"reason": "<why the merge must not happen now, see The merge hold, at most 1000 characters>"},
   "move": null or {"stage": "<one of the facts' stages, see The move>", "reason": "<why the ticket goes there now, at most 1000 characters>"},
+  "plan": null or {<this ticket's whole plan written again, at `after_coding`, `after_rework` and `before_merge` only, see Dropping an outcome: "reason", "shape", "layers", "summary", "text", "checks" and "size", as the facts' plan and checks hold them>},
   "ask_person": null or {
     "title": "<at most 120 characters>",
     "question": "<one question>",
@@ -39,8 +40,8 @@ The instructions:
 - Say what the next run should focus on and what earlier runs already learned, so it does not
   start cold. Name the findings it must answer, by class and in the words of their expected and
   actual text.
-- They are advice. You never change the ticket's plan or its acceptance, or narrow what QA must
-  check. Never tell QA to skip or trust a step. You move the ticket only with your `move` (see The
+- They are advice. You never change the ticket's plan (but to drop an outcome, see Dropping an
+  outcome) or its acceptance, or narrow what QA must check. Never tell QA to skip or trust a step. You move the ticket only with your `move` (see The
   move), and at `after_qa_blocked` with your `route`, which may send it back to Rework or to one
   more QA pass (see below). You never send it past QA: a ticket merges only on a real QA result or
   the person's decision. At
@@ -205,7 +206,16 @@ and `after_rework`, when a run says so and you agree that nobody can prove the c
 plan says, waive it: add `"waive": [{"check_id": "<the check's id>", "reason": "<why nobody can
 prove it this way, in plain words>"}]` to your answer. Symphony records it with your reason, and the
 handoff no longer waits on it. Do not waive a check because it is hard or still to do: then say in
-`instructions` how to prove it. At any other junction `waive` is ignored.
+`instructions` how to prove it. {{waive_rule}} At any other junction `waive` is ignored.
+
+Dropping an outcome. When an outcome (a check of kind `outcome`) is itself a check nobody can prove
+the way the plan says, or rested on one you waive, and nothing inside the ticket's life can prove it
+another way, write the plan again in `plan`, in this answer: the facts' `plan` and `checks` with
+that outcome left out, every other check kept with its `id` and its words, and a `reason` that says
+why the outcome is dropped. Symphony records it as the plan's next version, with your reason; a plan
+without a `reason`, or one that rewords an outcome, is refused. On a ticket without sub-tickets
+write `plan` for nothing else, and leave it null otherwise. {{plan_rule}} At any other junction of a
+ticket without sub-tickets, `plan` is ignored.
 
 The merge hold. At `before_merge` (at any other junction `hold` is ignored), whenever the ticket is on its way to the merge, look at
 whether the pull request is about to merge what is asked now. When it is not (the plan was

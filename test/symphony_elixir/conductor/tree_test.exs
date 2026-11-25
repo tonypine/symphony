@@ -619,6 +619,167 @@ defmodule SymphonyElixir.Conductor.TreeTest do
       assert %{phase: @waiting} = RunStore.get_ticket_state(ctx.issue_id)
     end
 
+    # A turn that answers each prompt it is given in turn, and tells the test each prompt and run id.
+    defp answering_in_turn(replies) do
+      test = self()
+      {:ok, script} = Agent.start_link(fn -> replies end)
+
+      fn _plan, _issue, run_id, prompt ->
+        send(test, {:prompt, run_id, prompt})
+        Agent.get_and_update(script, fn [reply | rest] -> {reply, rest} end)
+      end
+    end
+
+    defp question_for_the_person do
+      %{
+        "title" => "Which export format?",
+        "question" => "The ask names two formats.",
+        "why" => "Only the person knows which one they meant.",
+        "if_unanswered" => "The ticket stays paused.",
+        "recommendation_reason" => "It was asked for first.",
+        "options" => [
+          %{"label" => "CSV", "effect" => "The check runs again.", "recommended" => true, "action" => "continue"},
+          %{"label" => "Cancel", "effect" => "The ticket is cancelled.", "action" => "cancel"}
+        ]
+      }
+    end
+
+    test "an answer that concludes nothing goes back to the Conductor in the same turn, and its question is asked at once", ctx do
+      announced = %{"done" => false, "tree" => [], "update" => "I am asking you one question before I close the ticket.\n\nNext: you answer."}
+      asked = answered(%{"done" => false, "tree" => [], "ask_person" => question_for_the_person()})
+      turn = answering_in_turn([answered(announced), asked])
+
+      assert Conductor.tend(ctx.parent, "final_check", "default", settings: @on, turn: turn) == :ok
+
+      assert_received {:prompt, run_id, first}
+      assert_received {:prompt, ^run_id, second}
+      refute_received {:prompt, _run_id, _prompt}
+      refute first =~ "Your answer was given back to you"
+      assert String.starts_with?(second, first)
+      assert second =~ "Symphony gave it back to you: your answer closes nothing, changes nothing and asks nothing."
+      assert second =~ "I am asking you one question before I close the ticket."
+      refute second =~ "{{"
+
+      assert [%{title: "Which export format?"}] = Questions.open({:ticket, "default", ctx.issue_id})
+      refute Enum.any?(status_notes(ctx.issue_id), &(&1 =~ "The final check did not finish"))
+      assert [%{payload: %{tokens: 14, exit: "answered", run_id: ^run_id}}] = Enum.filter(Facts.events(ctx.issue_id), &(&1.type == "run.ended"))
+      refute_received {:memory_tracker_state_update, _parent, "Done"}
+    end
+
+    test "a corrected answer that closes the ticket closes it, with no question", ctx do
+      empty = answered(%{"done" => false, "tree" => []})
+      assert Conductor.tend(ctx.parent, "final_check", "default", settings: @on, turn: answering_in_turn([empty, answered(%{"done" => true, "tree" => []})])) == :ok
+
+      assert_received {:memory_tracker_state_update, parent_id, "Done"}
+      assert parent_id == ctx.issue_id
+      assert Questions.open({:ticket, "default", ctx.issue_id}) == []
+      refute Enum.any?(status_notes(ctx.issue_id), &(&1 =~ "The final check did not finish"))
+    end
+
+    test "a second try that fails keeps the first answer, which takes the path of a check that concluded nothing", ctx do
+      turn = answering_in_turn([answered(%{"done" => false, "tree" => []}), {:error, :boom, 5}])
+      assert Conductor.tend(ctx.parent, "final_check", "default", settings: @on, turn: turn) == :ok
+
+      assert [%{question: question}] = Questions.open({:ticket, "default", ctx.issue_id})
+      assert question =~ "it answered that the ticket is not done, and added no sub-ticket"
+      assert [%{payload: %{tokens: 12}}] = Enum.filter(Facts.events(ctx.issue_id), &(&1.type == "run.ended"))
+    end
+
+    test "an answer that changes something is not given back", ctx do
+      turn = answering_in_turn([answered(%{"done" => false, "tree" => [add("The docs")]})])
+      assert Conductor.tend(ctx.parent, "final_check", "default", settings: @on, turn: turn) == :ok
+      assert_received {:prompt, _run_id, _prompt}
+      refute_received {:prompt, _run_id, _prompt}
+      assert_received {:memory_tracker_issue_created, _id, %{title: "The docs"}}
+      assert Questions.open({:ticket, "default", ctx.issue_id}) == []
+    end
+
+    # The parent's plan with a second outcome, which no sub-ticket delivered and nothing explains.
+    defp with_undelivered_outcome!(ctx) do
+      checks = [%{id: "c1", kind: "outcome", statement: "The list is filtered.", proof: "test"}, %{id: "c2", kind: "outcome", statement: "The list is exported.", proof: "test"}]
+      {:ok, _event} = TicketPlan.write("default", ctx.issue_id, Map.merge(plan(two()), %{checks: checks, reason: "The export joined the ask.", by: "recalibration"}))
+      :ok
+    end
+
+    defp without_c2(reason) do
+      %{
+        "reason" => reason,
+        "shape" => "split",
+        "summary" => "The API, then the list.",
+        "text" => "Approach: the API first.",
+        "checks" => [%{"id" => "c1", "kind" => "outcome", "statement" => "The list is filtered.", "proof" => "test"}],
+        "size" => %{"tokens" => 1, "runs" => 2}
+      }
+    end
+
+    test "a final check that drops an outcome nothing delivers, with its reason, closes the ticket and asks nothing", ctx do
+      :ok = with_undelivered_outcome!(ctx)
+      prompt = Conductor.prompt("final_check", %{})
+      assert prompt =~ "act within the plan, by adding\nthe sub-ticket that delivers it or by dropping it with the reason. That is your decision, never a\nquestion to the person."
+
+      reason = "Nothing inside this ticket's life can export the list: the export service does not exist."
+      answer = answered(%{"done" => true, "tree" => [], "plan" => without_c2(reason)})
+      assert final(ctx, answer) == :ok
+
+      assert %{reason: ^reason, checks: [%{id: "c1"}]} = TicketPlan.current(ctx.issue_id)
+      assert_received {:memory_tracker_state_update, parent_id, "Done"}
+      assert parent_id == ctx.issue_id
+      assert Questions.open({:ticket, "default", ctx.issue_id}) == []
+    end
+
+    test "an outcome dropped with no reason of the turn's own is refused, and the ticket stays open", ctx do
+      :ok = with_undelivered_outcome!(ctx)
+      before = length(TicketPlan.versions(ctx.issue_id))
+
+      capture_log(fn -> assert final(ctx, answered(%{"done" => true, "tree" => [], "plan" => Map.delete(without_c2(nil), "reason")})) == :ok end)
+
+      assert length(TicketPlan.versions(ctx.issue_id)) == before
+      assert %{checks: [_, %{id: "c2"}]} = TicketPlan.current(ctx.issue_id)
+      refute_received {:memory_tracker_state_update, _parent, "Done"}
+    end
+
+    test "the final check judges the plan's delivery from the ticket's own work, closes without asking, and treats a waiver as settled" do
+      prompt = Conductor.prompt("final_check", %{})
+
+      assert prompt =~ "The final check has one job: was the plan delivered."
+      assert prompt =~ "what this ticket's own\nwork produced"
+      assert prompt =~ "A waived check is\nsettled: its reason stands, and a waiver is never a reason to ask the person."
+      assert prompt =~ "is not the ticket's business: never ask about it and never wait for it."
+      assert prompt =~ "Close it: never ask whether you\n  may."
+      assert prompt =~ "Never ask for permission to close, nor whether something worked\nonce it shipped."
+      assert prompt =~ "saying in your `update` that you ask a question does\n  not ask it"
+    end
+
+    test "every turn that may waive a check is told it is never waived for the person to verify later" do
+      rule = Facts.waive_rule()
+      assert rule =~ "Never waive a check for the person to verify later"
+      assert rule =~ "it is proved another way now (a test, or what the record shows) or the plan no longer holds it"
+
+      for junction <- ~w(message after_coding after_rework before_merge sub_ticket_ended final_check during_run) do
+        prompt = Conductor.prompt(junction, %{})
+        assert prompt =~ rule, "#{junction}'s prompt lacks the waiver rule"
+        refute prompt =~ "{{waive_rule}}"
+      end
+
+      assert rule =~ "An outcome that rested on such a check is settled the same way in this turn: proved another way, or dropped"
+      assert rule =~ "It is never carried to the final check."
+      refute Conductor.prompt("grooming", %{}) =~ rule
+    end
+
+    test "every turn that writes a plan or its checks is told each outcome is proved inside the ticket's life" do
+      rule = Facts.plan_rule()
+      assert rule =~ "Write every outcome and every check so that it can be proved inside the ticket's life"
+      assert rule =~ "never one that only use of the installed app after the merge can settle"
+
+      family = %{sub_tickets: [%{identifier: "MT-2", state: "Todo"}]}
+
+      for {junction, facts} <- [{"grooming", %{}}, {"message", %{}}, {"sub_ticket_ended", %{}}, {"final_check", %{}}, {"after_coding", family}, {"during_run", family}] do
+        prompt = Conductor.prompt(junction, facts)
+        assert prompt =~ rule, "#{junction}'s prompt lacks the plan rule"
+        refute prompt =~ "{{plan_rule}}"
+      end
+    end
+
     test "sub-tickets it wanted that could not be created ask the person at once", ctx do
       Application.put_env(:symphony_elixir, :memory_tracker_create_issue_result, {:error, :linear_down})
       log = capture_log(fn -> assert final(ctx, answered(%{"done" => false, "tree" => [add("The docs")]})) == :ok end)
@@ -1105,7 +1266,7 @@ defmodule SymphonyElixir.Conductor.TreeTest do
   end
 
   describe "one form on every turn on a ticket with sub-tickets (TP-1621)" do
-    @form File.read!(Path.expand("../../../priv/conductor/sub_tickets_form.md", __DIR__))
+    @form "../../../priv/conductor/sub_tickets_form.md" |> Path.expand(__DIR__) |> File.read!() |> String.replace("{{plan_rule}}", Facts.plan_rule())
 
     setup ctx do
       subs = [
