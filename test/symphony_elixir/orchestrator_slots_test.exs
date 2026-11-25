@@ -803,6 +803,113 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
     end
   end
 
+  describe "TP-1660: a free slot goes to the first ticket in queue order that can start" do
+    test "a retry due on a ticket lower in the queue that holds no slot waits in its place, keeping its attempt, and the pass gives the slot to the first ticket", ctx do
+      write_slots_workflow!(ctx, max_concurrent_agents: 2)
+      busy = recorded(issue("busy", "MT-BUSY", "In Progress"))
+      above = for n <- 1..4, do: recorded(issue("a#{n}", "MT-A#{n}", "Todo"))
+      late = recorded(issue("late", "MT-LATE", "Todo"))
+      issues = above ++ [late]
+      tracked(issues)
+
+      # The last cycle walked the queue with every slot taken; one slot has freed since.
+      full = orchestrator_state(2) |> holding(busy) |> run(busy) |> holding(issue("gone", "MT-GONE", "Merging"))
+      state = %{Orchestrator.put_dispatch_order_for_test(full, issues) | slot_holders: Map.delete(full.slot_holders, "gone")}
+      assert Orchestrator.available_slots_for_test(state) == 1
+
+      fetch = fn ["late"] -> {:ok, [late]} end
+      {:noreply, retried} = Orchestrator.handle_retry_issue_for_test(state, "late", 2, %{identifier: "MT-LATE"}, fetch)
+      refute Map.has_key?(retried.running, "late")
+      refute Map.has_key?(retried.slot_holders, "late")
+      assert %{attempt: 2, reason: "a free slot goes to the first ticket in queue order"} = retried.slot_waiting["late"]
+      # It asks for a cycle at once, whose pass decides in queue order.
+      assert_receive {:tick, _token}, 100
+
+      dispatched = Orchestrator.dispatch_chosen_issues_for_test(issues, retried)
+      assert dispatched.running |> Map.keys() |> Enum.sort() == ["a1", "busy"]
+      assert %{attempt: 2, reason: "work slots full"} = dispatched.slot_waiting["late"]
+      for id <- ["a2", "a3", "a4"], do: assert(%{reason: "work slots full"} = dispatched.slot_waiting[id])
+    end
+
+    test "a wait for a slot kept through a dispatch pause gives no precedence: the first ticket in queue order starts", ctx do
+      write_slots_workflow!(ctx, max_concurrent_agents: 2)
+      busy = recorded(issue("busy", "MT-BUSY", "In Progress"))
+      first = recorded(issue("f", "MT-F", "Todo"))
+      late = recorded(issue("late", "MT-LATE", "Todo"))
+      tracked([first, late])
+
+      kept = %{attempt: 3, repo_key: "default", since: @since}
+      state = orchestrator_state(2) |> holding(busy) |> run(busy) |> Map.put(:slot_waiting, %{"late" => kept})
+
+      dispatched = Orchestrator.dispatch_chosen_issues_for_test([first, late], state)
+      assert dispatched.running |> Map.keys() |> Enum.sort() == ["busy", "f"]
+      assert %{attempt: 3, since: @since, reason: "work slots full"} = dispatched.slot_waiting["late"]
+    end
+
+    test "a ticket passed over for one lower in the queue is listed with the gate's reason and has it on its own record, once per reason", ctx do
+      write_slots_workflow!(ctx, max_concurrent_agents: 2)
+      busy = recorded(issue("busy", "MT-BUSY", "In Progress"))
+      held = recorded(issue("held", "MT-HELD", "Todo"))
+      next = recorded(issue("next", "MT-NEXT", "Todo"))
+      later = recorded(issue("later", "MT-LATER", "Todo"))
+      {:ok, _pause} = Pauses.set({:ticket, "default", "held"}, Pauses.ticket_reason(:dependency, "MT-9"))
+      tracked([held, next, later])
+
+      state = orchestrator_state(2) |> holding(busy) |> run(busy)
+      dispatched = Orchestrator.dispatch_chosen_issues_for_test([held, next], state)
+
+      assert dispatched.running |> Map.keys() |> Enum.sort() == ["busy", "next"]
+      assert %{reason: reason} = dispatched.dispatch_skipped["held"]
+      assert is_binary(reason)
+      assert [%{details: %{reason: ^reason, started: "MT-NEXT"}}] = passed_over("held")
+      # The ticket that took the slot, and the one holding a slot already, were passed over by nobody.
+      assert passed_over("next") == []
+      assert passed_over("busy") == []
+
+      # A later pass that passes it over for the same reason writes nothing more.
+      wider = %{dispatched | max_concurrent_agents: 3}
+      again = Orchestrator.dispatch_chosen_issues_for_test([held, next, later], wider)
+      assert Map.has_key?(again.running, "later")
+      assert [%{details: %{reason: ^reason}}] = passed_over("held")
+    end
+
+    test "a ticket behind another in the dispatch order reads its place in line, never \"next and a slot is free\"", ctx do
+      write_slots_workflow!(ctx, max_concurrent_agents: 2)
+      busy = recorded(issue("busy", "MT-BUSY", "In Progress"))
+      first = recorded(issue("f", "MT-F", "Todo"))
+      late = recorded(issue("late", "MT-LATE", "Todo"))
+
+      # One slot is free: the first ticket takes it, and the one below waits behind it.
+      state = orchestrator_state(2) |> holding(busy) |> run(busy)
+      state = Orchestrator.put_dispatch_order_for_test(state, [first, late])
+
+      snapshot = %{
+        running: [%{issue_id: "busy", identifier: "MT-BUSY"}],
+        retrying: [],
+        concurrency: %{max_total: 2},
+        dispatch_order: state.dispatch_order
+      }
+
+      live = Situation.live_facts(snapshot)
+
+      assert %{kind: "waiting_for_slot", word: "Waiting for a slot", cause: "The implementation run is next. It is 2nd in line, behind MT-F."} = situation("late", live)
+      assert %{word: "Starting", cause: "The implementation run is next and a slot is free."} = situation("f", live)
+      assert {false, false, false, {:in_line, 2, "MT-F"}, nil, nil} = Situation.live_signature(live)["late"]
+
+      # A slot held with no run is not free: the first in line waits for it and says why.
+      taken = orchestrator_state(2) |> holding(busy) |> run(busy) |> holding(issue("idle", "MT-IDLE", "Merging"))
+      taken_order = Orchestrator.put_dispatch_order_for_test(taken, [first, late]).dispatch_order
+      live = Situation.live_facts(%{snapshot | dispatch_order: taken_order})
+      assert %{word: "Waiting for a slot", cause: "The implementation run is next. It is next in line: work slots full."} = situation("f", live)
+    end
+  end
+
+  defp passed_over(issue_id) do
+    issue_id |> RunStore.get_ticket_state() |> TicketState.signals() |> Enum.filter(&(&1.name == "passed_over"))
+  end
+
+  defp situation(issue_id, live), do: issue_id |> RunStore.get_ticket_state() |> TicketState.normalize() |> Situation.compute([], live)
+
   describe "the Director sets the slot count (TP-1629)" do
     test "a raised count applies at once: the next dispatch decision uses it, with no poll or timer", ctx do
       write_slots_workflow!(ctx, max_concurrent_agents: 1)

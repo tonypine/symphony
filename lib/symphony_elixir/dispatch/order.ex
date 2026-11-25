@@ -40,7 +40,8 @@ defmodule SymphonyElixir.Dispatch.Order do
 
   @doc """
   `entries` (in the order the pass walks them) with their place in line: `position` (1 for the next
-  one, nil for a ticket out of line), `starts_now`, `wait` (why a waiting one waits) and `reason`:
+  one, nil for a ticket out of line), `starts_now`, `wait` (why a waiting one waits), `behind` (the
+  ticket in line just ahead of a later one, nil for the next one and one out of line) and `reason`:
 
   - the next one: `next: a slot is free`, or `next: ` and why it waits;
   - a later one: `2nd: a slot is free` when a pass run now starts it too, else `2nd: behind TP-n`;
@@ -55,7 +56,7 @@ defmodule SymphonyElixir.Dispatch.Order do
           position = position + 1
           {in_line(entry, position, previous), {position, entry.identifier}}
         else
-          {Map.merge(entry, %{position: nil, starts_now: false, wait: nil}), {position, previous}}
+          {Map.merge(entry, %{position: nil, starts_now: false, wait: nil, behind: nil}), {position, previous}}
         end
       end)
 
@@ -67,6 +68,7 @@ defmodule SymphonyElixir.Dispatch.Order do
       position: position,
       starts_now: entry.outcome == :starts,
       wait: if(entry.outcome == :waits, do: entry.reason),
+      behind: if(position > 1, do: previous),
       reason: reason(entry, position, previous)
     })
   end

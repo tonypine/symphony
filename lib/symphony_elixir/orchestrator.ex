@@ -135,6 +135,12 @@ defmodule SymphonyElixir.Orchestrator do
   # The ledger signal recorded when a Code Review ticket has no reviewer to run;
   # `SymphonyElixir.CodeReview` records the same name when it refuses to review.
   @code_review_reviewer_disabled_signal "code_review_reviewer_disabled"
+  # The ledger signal recorded when a dispatch pass walks past a ticket, for the reason a gate gives,
+  # and gives a free slot to a ticket lower in the queue (`note_passed_over/3`).
+  @passed_over_signal "passed_over"
+  # Why a retry whose ticket holds no slot waits for one while a slot is free: a ticket ahead of it in
+  # the queue may take it (`behind_in_queue?/2`).
+  @queue_turn_reason "a free slot goes to the first ticket in queue order"
   @merging_terminal_grace_ms 300_000
   @snapshot_table :symphony_orchestrator_snapshot
   @snapshot_key :current
@@ -4445,7 +4451,9 @@ defmodule SymphonyElixir.Orchestrator do
   # first ticket of the queue that waits on a dependency or its sub-tickets takes the free slot with
   # no run (`queue_head/4`, `wait_in_slot/4`). `slot_waiting` is rebuilt from the pass, keeping the
   # attempt of any retry that was waiting for a slot. `dispatch_skipped` is rebuilt the same way:
-  # every candidate the pass neither starts nor leaves waiting for a slot gets the reason.
+  # every candidate the pass neither starts nor leaves waiting for a slot gets the reason, and one it
+  # walks past while a ticket lower in the queue takes a free slot has it on its record too
+  # (`note_passed_over/3`).
   defp dispatch_chosen_issues(issues, state) do
     issues = Enum.map(issues, &with_record_repo_key/1)
     active_states = active_state_set()
@@ -4458,15 +4466,44 @@ defmodule SymphonyElixir.Orchestrator do
     ordered = order_for_dispatch(issues)
     head = queue_head(ordered, state, active_states, terminal_states)
 
-    state =
+    walked =
       Enum.reduce(ordered, %{state | slot_waiting: %{}, dispatch_skipped: %{}}, fn issue, acc ->
         maybe_dispatch_chosen_issue(issue, acc, previous_waiting, {active_states, terminal_states, head})
       end)
 
-    state
+    walked
+    |> note_passed_over(ordered, state)
     |> settle_dispatch_skipped(previous_skipped)
     |> recover_usage_limit_canaries()
     |> hold_stalled_runs(issues)
+  end
+
+  # No silent pass-over (TP-1660): below the lowest candidate of the pass that took a slot it did not
+  # hold before (a run started, a wait in its slot, a catch-up), every candidate above it that held no
+  # slot either and that the pass skipped has the gate's reason on its own record, as a signal naming
+  # the ticket that took the slot, once per reason. `dispatch_skipped` lists it with the same reason.
+  defp note_passed_over(%State{} = walked, ordered, %State{} = before) do
+    took_slot? = fn %Issue{id: id} -> slot_cost(before, id) == 1 and slot_cost(walked, id) == 0 end
+
+    case ordered |> Enum.filter(&match?(%Issue{}, &1)) |> Enum.reverse() |> Enum.drop_while(&(not took_slot?.(&1))) do
+      [] ->
+        walked
+
+      [taker | above] ->
+        for %Issue{id: id} = issue <- above, slot_cost(before, id) == 1, %{reason: reason} <- [Map.get(walked.dispatch_skipped, id)], not passed_over_recorded?(issue, reason) do
+          record_signal(issue, @passed_over_signal, %{reason: reason, started: taker.identifier})
+        end
+
+        walked
+    end
+  end
+
+  # Whether the newest pass-over on the ticket's record is for the same reason.
+  defp passed_over_recorded?(%Issue{id: issue_id}, reason) do
+    case RunStore.get_ticket_state(issue_id) do
+      %{} = record -> match?(%{details: %{reason: ^reason}}, record |> TicketState.signals() |> Enum.find(&(&1.name == @passed_over_signal)))
+      _none_or_error -> false
+    end
   end
 
   # No silent state: a candidate the pass neither started nor left waiting for a slot, and passed over
@@ -7669,12 +7706,32 @@ defmodule SymphonyElixir.Orchestrator do
       active_retry_issue?(issue, terminal_state_set()) and
         dispatch_slots_available?(issue, state) and
           worker_slots_available?(state, metadata[:worker_host]) ->
-        dispatch_retry(state, issue, attempt, metadata)
+        retry_or_take_turn(state, issue, attempt, metadata)
 
       true ->
         Logger.debug("No available slots for retrying #{issue_context(issue)}; waiting for a slot")
         wait_for_slot(state, issue, attempt, metadata, "no available orchestrator slots")
     end
+  end
+
+  # A retry whose ticket holds a slot, or runs through its ancestor's, starts its run at once. One that
+  # needs a free slot takes it only when no candidate of the last cycle is ahead of it in the queue
+  # and could take it too; else it waits for a slot with its attempt and asks for a cycle, whose pass
+  # gives the slot to the first ticket in queue order that can start (TP-1660).
+  defp retry_or_take_turn(%State{} = state, %Issue{} = issue, attempt, metadata) do
+    if behind_in_queue?(state, issue),
+      do: state |> wait_for_slot(issue, attempt, metadata, @queue_turn_reason) |> request_cycle(),
+      else: dispatch_retry(state, issue, attempt, metadata)
+  end
+
+  defp behind_in_queue?(%State{} = state, %Issue{id: issue_id} = issue) do
+    others = for %Issue{id: id} = other <- state.dispatch_candidates || [], id != issue_id, do: other
+
+    slot_cost(state, issue_id) == 1 and
+      [issue | others]
+      |> order_for_dispatch()
+      |> Enum.take_while(&(&1.id != issue_id))
+      |> Enum.any?(&(not Map.has_key?(state.running, &1.id) and slot_cost(state, &1.id) == 1))
   end
 
   defp held_retry(state, issue, attempt, metadata) do
