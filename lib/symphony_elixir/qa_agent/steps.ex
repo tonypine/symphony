@@ -179,6 +179,13 @@ defmodule SymphonyElixir.QaAgent.Steps do
                    "{{status:unprovable}} and `actual` says what it needed (Symphony marks the steps it can see so before any session).",
                  PromptTerms.terms(statuses: @statuses)
                )
+  # The single statuses the text around the prompts names, refused at compile time when not in the list.
+  @blocked_status PromptTerms.build!("lib/symphony_elixir/qa_agent/steps.ex: a step not judged", "{{status:blocked}}", PromptTerms.terms(statuses: @statuses))
+  @unprovable_status PromptTerms.build!(
+                       "lib/symphony_elixir/qa_agent/steps.ex: the marked steps",
+                       "{{status:unprovable}}",
+                       PromptTerms.terms(statuses: @statuses)
+                     )
 
   @typedoc "What a stepped pass gives back: `QaAgent.run_result/0`'s, with the review's session (`session_id`)."
   @type run_result :: %{result: QaAgent.result(), tokens: map(), session_id: String.t() | nil}
@@ -1200,7 +1207,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
 
       marked ->
         {:error,
-         "`recheck` names steps Symphony marked `unprovable` before any walk session, which get no session: " <>
+         "`recheck` names steps Symphony marked #{@unprovable_status} before any walk session, which get no session: " <>
            Enum.map_join(marked, "; ", &"#{PlanCheck.step_name(&1.target)} (#{PlanCheck.details(&1.needs)})") <>
            ". Leave them out of the recheck; the verdict carries them as Symphony settled them"}
     end
@@ -1565,7 +1572,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
       "Answer with `results`: one object per step above, each with `step` (its number), `status`, `expected`, `actual`, `details` and " <>
         "`evidence`, judged on its own: one step's failure never changes another's status. Symphony refuses an answer that misses a step or " <>
         "gives one a status other than #{PromptTerms.status_list(@statuses)}, and asks once more; a step still without a result is then not judged " <>
-        "(`blocked`), never passed."
+        "(#{@blocked_status}), never passed."
     ]
     |> Enum.reject(&(&1 == ""))
     |> Enum.join("\n\n")
@@ -1736,10 +1743,10 @@ defmodule SymphonyElixir.QaAgent.Steps do
     lead =
       case turn do
         :plan ->
-          "Steps Symphony marked `unprovable` before this session, from their setting (no brief, no walk):"
+          "Steps Symphony marked #{@unprovable_status} before this session, from their setting (no brief, no walk):"
 
         :review ->
-          "Steps Symphony marked `unprovable` before any walk session (no session walked them); carry each in the verdict " <>
+          "Steps Symphony marked #{@unprovable_status} before any walk session (no session walked them); carry each in the verdict " <>
             "as given, name, status and details, write no other step for the same walkthrough step, and ask no recheck of one:"
       end
 

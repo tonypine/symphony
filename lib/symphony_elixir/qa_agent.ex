@@ -743,24 +743,29 @@ defmodule SymphonyElixir.QaAgent do
   # select the app's playbook for, or the project's own server on a repo that rules a dev server out —
   # can neither pass nor be repaired here (TP-1284): it is `unprovable`, and Symphony decides the pass
   # from the other steps, the pre-checks and CI. The rule is offered only when one of them holds.
+  # Built from the step statuses (`PromptTerms`); the cases are filled per pass.
+  @unprovable_rule PromptTerms.build!(
+                     "lib/symphony_elixir/qa_agent.ex: the unprovable rule",
+                     """
+
+
+                     Some steps cannot be proved in this pass:
+                     {{cases}}
+                     Mark a step that needs one of them {{status:unprovable}}, never {{status:blocked}}, with that reason in `details`,
+                     and do not set `needs_dev_server` for it. Symphony decides the pass from the other steps, the
+                     pre-checks and CI. Never mark {{status:unprovable}} a step one of this pass's playbooks (above) can run,
+                     or one that fails.\
+                     """,
+                     PromptTerms.terms(),
+                     keep: ~w(cases)
+                   )
+
   defp unprovable_rule(%{epic_review: true}), do: ""
 
   defp unprovable_rule(%{unprovable: unprovable}) do
     case unprovable_cases(unprovable) do
-      [] ->
-        ""
-
-      cases ->
-        """
-
-
-        Some steps cannot be proved in this pass:
-        #{Enum.map_join(cases, "\n", &("- " <> &1))}
-        Mark a step that needs one of them `unprovable`, never `blocked`, with that reason in `details`,
-        and do not set `needs_dev_server` for it. Symphony decides the pass from the other steps, the
-        pre-checks and CI. Never mark `unprovable` a step one of this pass's playbooks (above) can run,
-        or one that fails.\
-        """
+      [] -> ""
+      cases -> String.replace(@unprovable_rule, "{{cases}}", Enum.map_join(cases, "\n", &("- " <> &1)))
     end
   end
 
