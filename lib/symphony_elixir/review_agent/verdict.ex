@@ -8,6 +8,12 @@ defmodule SymphonyElixir.ReviewAgent.Verdict do
   synonym (`Approved`, `changes_requested`, `request-changes`, `blocked`), and a line range given
   as one line (`12`, `"12"`), a span (`"12-15"`), a reversed pair (`[15, 12]`) or an object
   (`{"start": 12, "end": 15}`).
+
+  Nothing the reviewer gave is accepted and then dropped: a field the tool does not name (on the
+  verdict or a finding), a comment or an unread file that is not a string and a finding's
+  `decision` that is not one are refused, and the refusal states the valid shape
+  (`SymphonyElixir.Codex.DynamicTool`). Every part of an accepted verdict is stored on its event
+  (`SymphonyElixir.TicketEvents.VerdictFacts`).
   """
 
   @tool_name "review_verdict"
@@ -106,7 +112,8 @@ defmodule SymphonyElixir.ReviewAgent.Verdict do
   @doc "Reads a decoded verdict object into the reviewer's result."
   @spec from_map(term()) :: {:ok, map()} | {:error, term()}
   def from_map(decoded) when is_map(decoded) do
-    with {:ok, verdict} <- coerce_verdict(Map.get(decoded, "verdict")),
+    with :ok <- known_fields(decoded, tool_arguments(), :unknown_field),
+         {:ok, verdict} <- coerce_verdict(Map.get(decoded, "verdict")),
          {:ok, comments} <- coerce_comments(Map.get(decoded, "comments")),
          {:ok, findings} <- coerce_findings(Map.get(decoded, "findings")),
          {:ok, reason} <- coerce_reason(Map.get(decoded, "reason"), verdict),
@@ -136,6 +143,12 @@ defmodule SymphonyElixir.ReviewAgent.Verdict do
   def describe_error(:invalid_unread_files), do: "`unread_files` must be a list of file paths."
   def describe_error(:invalid_findings), do: "`findings` must be a list of objects."
   def describe_error(:invalid_finding), do: "each finding must be an object."
+  def describe_error(:unknown_field), do: "the verdict names a field the tool does not take; use only the fields of the valid shape."
+
+  def describe_error(:invalid_finding_field),
+    do: "a finding names a field the tool does not take; a finding takes summary, file, line_range, quoted_snippet, suggested_fix and decision."
+
+  def describe_error(:invalid_finding_decision), do: "a finding's `decision` must be a recorded decision's id, such as D2."
   def describe_error(:invalid_finding_summary), do: "each finding needs a non-empty `summary`."
   def describe_error(:invalid_finding_file), do: "each finding needs a non-empty `file`."
   def describe_error(:invalid_finding_quoted_snippet), do: "each finding needs a non-empty `quoted_snippet`."
@@ -163,11 +176,9 @@ defmodule SymphonyElixir.ReviewAgent.Verdict do
   defp coerce_comments(nil), do: {:ok, []}
 
   defp coerce_comments(comments) when is_list(comments) do
-    {:ok,
-     comments
-     |> Enum.filter(&is_binary/1)
-     |> Enum.map(&String.trim/1)
-     |> Enum.reject(&(&1 == ""))}
+    if Enum.all?(comments, &is_binary/1),
+      do: {:ok, comments |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))},
+      else: {:error, :invalid_comments}
   end
 
   defp coerce_comments(_comments), do: {:error, :invalid_comments}
@@ -197,7 +208,9 @@ defmodule SymphonyElixir.ReviewAgent.Verdict do
   defp collect_coerced_findings([{:error, reason} | _rest], _acc), do: {:error, reason}
 
   defp coerce_finding(finding) when is_map(finding) do
-    with {:ok, summary} <- required_string(Map.get(finding, "summary"), :invalid_finding_summary),
+    with :ok <- known_fields(finding, Map.keys(@finding_schema["properties"]), :invalid_finding_field),
+         :ok <- valid_decision(Map.get(finding, "decision")),
+         {:ok, summary} <- required_string(Map.get(finding, "summary"), :invalid_finding_summary),
          {:ok, file} <- required_string(Map.get(finding, "file"), :invalid_finding_file),
          {:ok, line_range} <- coerce_line_range(Map.get(finding, "line_range")),
          {:ok, quoted_snippet} <- required_string(Map.get(finding, "quoted_snippet"), :invalid_finding_quoted_snippet),
@@ -227,6 +240,12 @@ defmodule SymphonyElixir.ReviewAgent.Verdict do
   end
 
   defp maybe_put_decision(finding, _decision), do: finding
+
+  defp valid_decision(decision) when is_nil(decision) or is_binary(decision), do: :ok
+  defp valid_decision(_decision), do: {:error, :invalid_finding_decision}
+
+  # A map's fields the tool names; any other is refused rather than dropped.
+  defp known_fields(map, fields, error), do: if(Enum.all?(Map.keys(map), &(&1 in fields)), do: :ok, else: {:error, error})
 
   defp required_string(value, error) when is_binary(value) do
     case String.trim(value) do

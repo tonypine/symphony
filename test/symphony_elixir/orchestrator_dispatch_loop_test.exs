@@ -218,6 +218,75 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
       assert [{"run.ended", %{run_id: "run-1", unpushed_head: ^head}}] = ticket_events(@repo_key, @issue_id, "run.ended")
     end
 
+    # TP-1682: what a run changed is Symphony's own fact, read from git when the run ends.
+    defp changed_workspace! do
+      workspace = Path.join(System.tmp_dir!(), "dispatch-loop-changed-#{System.unique_integer([:positive])}")
+      on_exit(fn -> File.rm_rf(workspace) end)
+      File.mkdir_p!(workspace)
+      git = fn args ->
+        {out, 0} = System.cmd("git", ["-c", "user.email=t@example.com", "-c", "user.name=t" | args], cd: workspace, stderr_to_stdout: true)
+        String.trim(out)
+      end
+
+      git.(["init", "-q"])
+      for file <- ["kept.txt", "gone.txt"], do: File.write!(Path.join(workspace, file), file)
+      git.(["add", "."])
+      git.(["commit", "-q", "-m", "start"])
+      {workspace, git.(["rev-parse", "HEAD"]), git}
+    end
+
+    test "a run that changed code records its commits and every file it changed, from git alone" do
+      {workspace, start, git} = changed_workspace!()
+      File.write!(Path.join(workspace, "fix.txt"), "fix")
+      git.(["add", "fix.txt"])
+      git.(["commit", "-q", "-m", "Fix the thing"])
+      head = git.(["rev-parse", "HEAD"])
+      # Left in the tree: an edit made through a shell command, an untracked file and a deleted one.
+      {_out, 0} = System.cmd("sh", ["-c", "echo more >> kept.txt"], cd: workspace)
+      File.write!(Path.join(workspace, "notes.txt"), "new")
+      File.rm!(Path.join(workspace, "gone.txt"))
+
+      pid = start_orchestrator(:DownChanged)
+      send_down(pid, "run-1", "In Progress", :normal, workspace_path: workspace, start_head: start)
+
+      assert [{"run.changed", payload}] = ticket_events(@repo_key, @issue_id, "run.changed")
+      assert %{run_id: "run-1", start_head: ^start, head: ^head, commits: [%{sha: ^head, subject: "Fix the thing"}], commit_count: 1, file_count: 4} = payload
+
+      assert Enum.sort_by(payload.files, & &1.path) == [
+               %{path: "fix.txt", status: "added"},
+               %{path: "gone.txt", status: "deleted"},
+               %{path: "kept.txt", status: "modified"},
+               %{path: "notes.txt", status: "added"}
+             ]
+
+      assert [%{run_id: "run-1", idempotency: "run.changed:run-1", actor: %{kind: :machine}}] = RunStore.list_ticket_events(@issue_id, types: ["run.changed"])
+    end
+
+    test "a run that changed nothing, or reported no start head, records no change" do
+      {workspace, start, _git} = changed_workspace!()
+
+      send_down(start_orchestrator(:DownUnchanged), "run-1", "In Progress", :normal, workspace_path: workspace, start_head: start)
+      send_down(start_orchestrator(:DownNoStartHead), "run-2", "In Progress", :normal, workspace_path: workspace)
+
+      assert ticket_events(@repo_key, @issue_id, "run.changed") == []
+      assert [{"run.ended", %{run_id: "run-1"}}, {"run.ended", %{run_id: "run-2"}}] = ticket_events(@repo_key, @issue_id, "run.ended")
+    end
+
+    test "a git read that fails or raises is logged and the run still ends" do
+      {workspace, _start, _git} = changed_workspace!()
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :run_changes_reader) end)
+
+      unread = send_down(start_orchestrator(:DownUnreadable), "run-1", "In Progress", :normal, workspace_path: workspace, start_head: "not-a-commit")
+
+      Application.put_env(:symphony_elixir, :run_changes_reader, fn _workspace, _host, _start -> raise "git is gone" end)
+      raised = send_down(start_orchestrator(:DownReadRaised), "run-2", "In Progress", :normal, workspace_path: workspace, start_head: "abc")
+
+      assert unread =~ "Run changes unread from git issue_id=#{@issue_id} issue_identifier=#{@identifier} run_id=run-1 start_head=not-a-commit"
+      assert raised =~ "Run changes read failed issue_id=#{@issue_id} issue_identifier=#{@identifier} run_id=run-2: git is gone"
+      assert ticket_events(@repo_key, @issue_id, "run.changed") == []
+      assert [{"run.ended", %{run_id: "run-1"}}, {"run.ended", %{run_id: "run-2"}}] = ticket_events(@repo_key, @issue_id, "run.ended")
+    end
+
     test "a failure is recorded with its reason" do
       down(:DownFailed, :boom)
 

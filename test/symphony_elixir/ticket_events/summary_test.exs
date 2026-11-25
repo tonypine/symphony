@@ -20,6 +20,16 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
      %{title: "Implementation run 1 started by the Director", detail: "customer demo"}},
     {"run.ended", @run_ended, [@transcript], %{title: "Rework run 3 ended: handoff", detail: "Claude Opus 5.5 · 21 min · 13.4M tokens · transcript"}},
     {"attempt.pushed", %{head: "e051234abcdef", attempt: 5, intent: "Render the summary on record"}, [], %{title: "Attempt 5 pushed e051234", detail: "Render the summary on record"}},
+    {"run.changed",
+     %{
+       run_id: "run-3",
+       start_head: "aaa1111",
+       head: "bbb2222",
+       commits: [%{sha: "bbb2222", subject: "Record verdicts"}],
+       files: [%{path: "lib/a.ex", status: "modified"}, %{path: "lib/b.ex", status: "added"}],
+       commit_count: 1,
+       file_count: 2
+     }, [], %{title: "Changed 2 files in 1 commit", detail: "Record verdicts"}},
     {"verdict.recorded", %{kind: "code_review", outcome: "approve", head: "e051234abcdef"}, [], %{title: "Code Review verdict: approve", detail: "on e051234"}},
     {"decision.requested", %{title: "Close TP-612 as a duplicate", question: "Should TP-612 close as a duplicate of TP-668?"}, [],
      %{title: "Decision needed from the Director", detail: "Close TP-612 as a duplicate: Should TP-612 close as a duplicate of TP-668?"}},
@@ -544,6 +554,7 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
       {"run.started_by_person", %{run_id: "run_1", by: "the Director", note: "see #{@sha}"}},
       {"run.ended", %{run_id: "run_1", run_kind: "pre_push_review", exit: "handoff_missing", model: "claude-opus-5-5", effort: "medium", head: @sha, unpushed_head: @sha}},
       {"attempt.pushed", %{head: @sha, attempt: 2, intent: "Push #{@sha}"}},
+      {"run.changed", %{run_id: "run_1", start_head: @sha, head: @sha, files: [%{path: "lib/a_b.ex", status: "renamed", from: "lib/c.ex"}], file_count: 1, commit_count: 0}},
       {"verdict.recorded", %{kind: "code_review", outcome: "changes_requested", head: @sha, reason: "every journey verified (qa_pass)"}},
       {"decision.requested", %{title: "Ship it", question: "Ship #{@sha}?"}},
       {"decision.recorded", %{answer: "Yes", request: "req_1", key: "decision_key"}},
@@ -628,6 +639,15 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
       assert render("phase.entered", %{to: "Merging", from: "QA", via: "qa_pass"}) == %{title: "Entered Merging from QA", detail: nil}
     end
 
+    test "what a run changed counts its files and commits, from the lists when no count is kept" do
+      assert render("run.changed", %{run_id: "r", start_head: "a", head: "b", files: [%{path: "a", status: "added"}]}) == %{title: "Changed 1 file", detail: nil}
+
+      assert render("run.changed", %{run_id: "r", start_head: "a", head: "b", commits: [%{sha: "b", subject: "Empty"}, %{sha: "c"}]}) ==
+               %{title: "Made 2 commits", detail: "Empty"}
+
+      assert render("run.changed", %{run_id: "r", start_head: "a", head: "b"}).title == "Made no change"
+    end
+
     test "a code a run, verdict, finding or hold carries reads as words" do
       assert render("run.ended", %{run_id: "r", exit: "handoff_missing"}).title == "Run ended: handoff missing"
       assert render("verdict.recorded", %{kind: "qa", outcome: "changes_requested"}).title == "QA verdict: changes requested"
@@ -646,6 +666,7 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
       refute bookkeeping?.("note", %{text: "A person's note"})
       assert bookkeeping?.("workspace.synced", %{action: "none"})
       assert bookkeeping?.("workspace.synced", %{})
+      assert bookkeeping?.("run.changed", %{run_id: "r", start_head: "a", head: "b"})
       refute bookkeeping?.("workspace.synced", %{action: "reset"})
       refute bookkeeping?.("phase.entered", %{to: "QA"})
     end

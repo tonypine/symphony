@@ -68,6 +68,7 @@ defmodule SymphonyElixir.TicketState do
   alias SymphonyElixir.Questions
   alias SymphonyElixir.TicketEvents
   alias SymphonyElixir.TicketEvents.Event
+  alias SymphonyElixir.TicketEvents.VerdictFacts
 
   @max_ci_states 20
   # The dispatch-loop limits are validated to at most this many runs (`Config.Schema.Watchdog`).
@@ -86,7 +87,9 @@ defmodule SymphonyElixir.TicketState do
           head_sha: String.t() | nil,
           outcome: String.t(),
           recorded_at: DateTime.t() | nil,
-          details: map()
+          details: map(),
+          findings: [map()],
+          qa_findings: [map()]
         }
 
   @typedoc """
@@ -1086,7 +1089,10 @@ defmodule SymphonyElixir.TicketState do
   @doc """
   The verdicts `events` (oldest first) record, newest first: each machine `verdict.recorded` of a
   verdict (`SymphonyElixir.TicketSignals.record_verdict/7`), bound to the head it judged, with the
-  details it carries (none for one recorded before verdicts carried them). A `verdict.recorded` a
+  details it carries (none for one recorded before verdicts carried them), and the findings it
+  carries in the typed shape (`SymphonyElixir.TicketEvents.VerdictFacts`): a code review's
+  `findings` (read from `details` for a verdict stored before they were typed) and QA's
+  `qa_findings`. A `verdict.recorded` a
   signal records (`fix verdict`, a plan's `plan verdict`) is that signal's (`signals_in/1`), not a
   verdict here.
   """
@@ -1100,7 +1106,9 @@ defmodule SymphonyElixir.TicketState do
         head_sha: map_string(payload, :head),
         outcome: map_string(payload, :outcome) || "",
         recorded_at: at,
-        details: map_or_empty(Map.get(payload, :details))
+        details: map_or_empty(Map.get(payload, :details)),
+        findings: VerdictFacts.findings(payload),
+        qa_findings: VerdictFacts.qa_findings(payload)
       }
     end)
     |> Enum.reverse()

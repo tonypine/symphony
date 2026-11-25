@@ -2892,7 +2892,7 @@ defmodule SymphonyElixir.QaAgentTest do
                QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession)
 
       assert_receive {:qa_verdict_response, %{"error" => %{"code" => "invalid_qa_verdict", "message" => invalid}}}
-      assert invalid == "Symphony could not read the verdict: `verdict` must be one of pass, fail or blocked. Fix it and call qa_verdict again."
+      assert invalid == "Symphony could not read the verdict, and recorded none of it: `verdict` must be one of pass, fail or blocked. Fix it and call qa_verdict again."
       assert_receive {:qa_verdict_response, %{"error" => %{"code" => "invalid_qa_verdict", "message" => missing_reason}}}
       assert missing_reason =~ "a blocked verdict needs a non-empty `reason`."
 

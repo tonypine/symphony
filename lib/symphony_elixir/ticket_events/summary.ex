@@ -192,6 +192,15 @@ defmodule SymphonyElixir.TicketEvents.Summary do
     {title, [model_name(payload) | usage]}
   end
 
+  # What a run changed, from git: how many files and commits, the commits' subjects as the detail.
+  defp summary("run.changed", payload, _event) do
+    files = count(payload, :file_count) || length(list(field(payload, :files)))
+    commits = count(payload, :commit_count) || length(list(field(payload, :commits)))
+    title = if files > 0, do: "Changed " <> plural(files, "file") <> suffix(" in ", plural(commits, "commit")), else: "Made " <> (plural(commits, "commit") || "no change")
+    subjects = for %{} = commit <- list(field(payload, :commits)), subject = text(commit, :subject), do: subject
+    {title, [Enum.join(subjects, " · ")]}
+  end
+
   defp summary("attempt.pushed", payload, _event) do
     title = Enum.join(["Attempt", count(payload, :attempt), "pushed", short_sha(text(payload, :head))] |> Enum.reject(&is_nil/1), " ")
     {title, [text(payload, :intent) || text(payload, :pr_url)]}
@@ -492,12 +501,14 @@ defmodule SymphonyElixir.TicketEvents.Summary do
 
   @doc """
   Whether `event` only records Symphony's bookkeeping: a review waiting on the PR watcher, GitHub
-  showing a stale check, a workspace already on the PR head. The timeline leaves it out of its
+  showing a stale check, a workspace already on the PR head, what a run changed. The timeline leaves it out of its
   default view; the feed keeps it for Diagnostics.
   """
   @spec bookkeeping?(Event.t()) :: boolean()
   def bookkeeping?(%Event{type: "note", payload: %{} = payload}), do: text(payload, :signal) in @bookkeeping_signals
   def bookkeeping?(%Event{type: "workspace.synced", payload: %{} = payload}), do: text(payload, :action) in [nil, "none"]
+  # What a run changed is the run view's to draw (its own ticket), not a line of the default timeline.
+  def bookkeeping?(%Event{type: "run.changed"}), do: true
   def bookkeeping?(%Event{}), do: false
 
   # What each of Symphony's rules does, as a person names it: "Rule: blockers first".

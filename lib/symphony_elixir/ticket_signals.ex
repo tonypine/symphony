@@ -170,7 +170,8 @@ defmodule SymphonyElixir.TicketSignals do
 
   `run_id:` in `opts` names the run that gave the verdict, the id its `run.started` event carries,
   so the event sits inside that run. A verdict no run gave (one carried to a new head) names none.
-  `reason:` is the verdict's summary in plain words, which the event carries.
+  `reason:` is the verdict's summary in plain words, which the event carries. `facts:` are what
+  the review said, in the event's typed fields (`SymphonyElixir.TicketEvents.VerdictFacts`).
   """
   @spec record_verdict(id, id, String.t(), id, String.t(), map(), keyword()) :: :ok when id: String.t() | nil
   def record_verdict(repo_key, issue_id, kind, head_sha, outcome, details \\ %{}, opts \\ []) do
@@ -182,12 +183,15 @@ defmodule SymphonyElixir.TicketSignals do
   @doc """
   The `verdict.recorded` event `record_verdict/7` records for a verdict of `kind` with `outcome` on
   `head_sha`, in the run `opts`' `run_id:` names, or in none, with `opts`' `reason:` as its summary
-  and `opts`' `details:` (a map, left out when empty) as the details it carries.
+  and `opts`' `details:` (a map, left out when empty) as the details it carries, and `opts`'
+  `facts:` (the typed fields of what the review said) merged in.
   """
   @spec verdict_event(String.t(), String.t() | nil, String.t() | nil, keyword()) :: {String.t(), map(), keyword()}
   def verdict_event(kind, outcome, head_sha, opts \\ []) do
     {type, payload, event_opts} = verdict(kind, outcome, head_sha, nil, Keyword.get(opts, :run_id))
+    facts = Keyword.get(opts, :facts)
     payload = Map.merge(payload, %{reason: string(Keyword.get(opts, :reason)), details: details_map(Keyword.get(opts, :details))})
+    payload = if is_map(facts), do: Map.merge(facts, payload), else: payload
     {type, compact(payload), event_opts}
   end
 

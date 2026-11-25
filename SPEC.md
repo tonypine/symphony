@@ -534,8 +534,14 @@ The event:
 The catalog is closed. Each type names who may write it (machine, agent, person), which agent run
 kinds may, its payload schema and its idempotency rule; a payload outside its schema, or a writer the
 type does not allow, is refused. The types: `phase.entered`, `hold.set` and `hold.cleared` (kind
-`blocked` only, legacy), `run.started` and `run.ended` (keyed by run id), `attempt.pushed`,
-`verdict.recorded` (machine only: an agent never records a verdict), `decision.requested`,
+`blocked` only, legacy), `run.started` and `run.ended` (keyed by run id), `run.changed` (machine
+only, keyed by run id: what a run that changed code changed, read from git alone when it ends, its
+start and end heads, its commits on the first parent and the files that differ between its start
+head and the working tree it left, untracked ones included, each with its status), `attempt.pushed`,
+`verdict.recorded` (machine only: an agent never records a verdict; a code review's carries its
+findings, each with its file and line range, its comments and unread files, and QA's its summary,
+steps and findings, all as typed fields, beside the open `details` of Symphony's own bookkeeping,
+which a verdict stored before them still reads from), `decision.requested`,
 `decision.recorded`, `decision.withdrawn` (legacy), `person.action` (`stop`, `move`, `unblock`,
 `restart`; `force` is legacy), `ticket.cancelled` (the Director's cancel, with its note), `ticket.moved` (the
 Director's free move into any phase, with its note, or the Conductor's own move of its ticket made

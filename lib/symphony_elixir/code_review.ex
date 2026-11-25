@@ -88,6 +88,7 @@ defmodule SymphonyElixir.CodeReview do
   alias SymphonyElixir.CodeReview.Rounds
   alias SymphonyElixir.HumanActions.PlainWords
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.TicketEvents.VerdictFacts
 
   @verdict_kind "code_review"
   @reviewer_disabled_signal "code_review_reviewer_disabled"
@@ -292,7 +293,7 @@ defmodule SymphonyElixir.CodeReview do
 
       asking ->
         head = workspace_head(workspace, opts)
-        record_verdict(issue, opts, head, "approve", %{reason: verdict_summary(result)})
+        record_verdict(issue, opts, head, "approve", %{reason: verdict_summary(result)}, VerdictFacts.review(result))
         Logger.info("Code Review for #{issue_label(issue)} matched a rule that asks a person: #{reasons_text(asking)}")
         escalate(issue, opts, settings, head, asking_why(asking, result), :continue)
     end
@@ -506,8 +507,9 @@ defmodule SymphonyElixir.CodeReview do
 
   defp apply_verdict(issue, workspace, opts, settings, verdict, result) do
     head = workspace_head(workspace, opts)
-    {findings, round} = round(issue, workspace, opts, {verdict, head}, result)
-    record_verdict(issue, opts, head, to_string(verdict), Map.put(round, :reason, verdict_summary(result)))
+    {findings, round, marked} = round(issue, workspace, opts, {verdict, head}, result)
+    facts = result |> Map.merge(%{findings: marked, comments: findings}) |> VerdictFacts.review()
+    record_verdict(issue, opts, head, to_string(verdict), Map.put(round, :reason, verdict_summary(result)), facts)
     Logger.info("Code Review verdict for #{issue_label(issue)} head=#{head || "unknown"} verdict=#{inspect(verdict)}")
 
     judged = %{reason: verdict_reason(result), findings: findings}
@@ -522,10 +524,10 @@ defmodule SymphonyElixir.CodeReview do
     previous = if is_binary(head), do: Rounds.previous_head(verdicts(issue, opts), head)
     marked = Rounds.mark(Map.get(result, :findings, []), previous, git(workspace, opts))
     findings = Rounds.annotate(findings(result), marked, previous)
-    {findings, Rounds.details(findings, marked, previous)}
+    {findings, Rounds.details(findings, marked, previous), marked}
   end
 
-  defp round(_issue, _workspace, _opts, _verdict, result), do: {findings(result), %{}}
+  defp round(_issue, _workspace, _opts, _verdict, result), do: {findings(result), %{}, Map.get(result, :findings, [])}
 
   # The routing half of a decided verdict, shared by a verdict this run just made and a deepening an
   # earlier version recorded. Every edge goes through the one writer.
@@ -723,15 +725,16 @@ defmodule SymphonyElixir.CodeReview do
     record_inconclusive_cause(issue, opts, cause)
 
     details = inconclusive_details(cause, reason)
+    facts = VerdictFacts.review(%{unread_files: Map.get(details, :unread_files)})
 
     if retries < @max_inconclusive_retries do
-      record_verdict(issue, opts, head, "inconclusive", details)
+      record_verdict(issue, opts, head, "inconclusive", details, facts)
 
       Logger.warning("Code Review for #{issue_label(issue)} head=#{head || "unknown"} was inconclusive cause=#{cause} (attempt #{retries + 1}/#{@max_inconclusive_retries}); retrying")
 
       {:error, {:code_review_inconclusive, reason}}
     else
-      record_verdict(issue, opts, head, "inconclusive_escalated", details)
+      record_verdict(issue, opts, head, "inconclusive_escalated", details, facts)
       Logger.warning("Code Review for #{issue_label(issue)} head=#{head || "unknown"} stayed inconclusive: #{inspect(reason)}")
       escalate(issue, opts, settings, head, "The reviewer could not reach a decision on the change after #{retries} more tries.", :rework)
     end
@@ -831,9 +834,10 @@ defmodule SymphonyElixir.CodeReview do
   end
 
   # The review run gave the verdict, so its event names that run. A `reason` in `details` is the
-  # verdict's summary, which the event carries too.
-  defp record_verdict(issue, opts, head, outcome, details \\ %{}) do
-    run_opts = [run_id: Keyword.get(opts, :run_id), reason: Map.get(details, :reason)]
+  # verdict's summary, which the event carries too, and `facts` are what the reviewer said, in the
+  # event's typed fields (`VerdictFacts.review/1`).
+  defp record_verdict(issue, opts, head, outcome, details \\ %{}, facts \\ %{}) do
+    run_opts = [run_id: Keyword.get(opts, :run_id), reason: Map.get(details, :reason), facts: facts]
     TicketSignals.record_verdict(repo_key(issue, opts), issue.id, @verdict_kind, head, outcome, details, run_opts)
   end
 

@@ -636,6 +636,13 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp send_worker_runtime_info(_recipient, _issue, _worker_host, _workspace), do: :ok
 
+  # The head the run's workspace held before its first turn, once its hooks ran: the orchestrator
+  # reads what the run changed from it when the run ends (`WorkspaceHead.changes/3`).
+  defp send_start_head(recipient, %Issue{id: issue_id}, head) when is_pid(recipient) and is_binary(issue_id) and is_binary(head),
+    do: send(recipient, {:worker_runtime_info, issue_id, %{start_head: head}})
+
+  defp send_start_head(_recipient, _issue, _head), do: :ok
+
   # The ticket's parent and links the enrichment read, so the ticket page can show them without a
   # Linear read of its own (see `SymphonyElixir.Connected`).
   defp send_linked_issues(recipient, %Issue{id: issue_id} = issue) when is_binary(issue_id) and is_pid(recipient) do
@@ -834,6 +841,8 @@ defmodule SymphonyElixir.AgentRunner do
         dispatch_pr_url: ticket_pr_url(issue, run_opts),
         walk: new_walk(Keyword.fetch!(opts, :run_profile))
       }
+
+      send_start_head(codex_update_recipient, issue, run_context.progress.start_head)
 
       try do
         start_walk(agent_module, run_context, max_turns)

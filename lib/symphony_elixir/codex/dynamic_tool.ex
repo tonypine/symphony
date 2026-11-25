@@ -2109,7 +2109,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "error" => %{
         "code" => "invalid_review_verdict",
-        "message" => "Symphony could not read the verdict: #{Verdict.describe_error(reason)} Fix it and call review_verdict again."
+        "message" => "Symphony could not read the verdict, and recorded none of it: #{Verdict.describe_error(reason)} Fix it and call review_verdict again.",
+        "valid_shape" => Verdict.tool_spec()["inputSchema"]
       }
     }
   end
@@ -2127,7 +2128,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "error" => %{
         "code" => "invalid_qa_verdict",
-        "message" => "Symphony could not read the verdict: #{QaVerdict.describe_error(reason)} Fix it and call qa_verdict again."
+        "message" => "Symphony could not read the verdict, and recorded none of it: #{QaVerdict.describe_error(reason)} Fix it and call qa_verdict again.",
+        "valid_shape" => QaVerdict.tool_spec()["inputSchema"]
       }
     }
   end

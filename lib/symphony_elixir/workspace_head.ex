@@ -120,6 +120,79 @@ defmodule SymphonyElixir.WorkspaceHead do
 
   defp trimmed({output, status}), do: {String.trim(output), status}
 
+  @max_commits 200
+  @max_files 500
+
+  @type changes :: %{
+          start_head: String.t(),
+          head: String.t(),
+          commits: [%{sha: String.t(), subject: String.t()}],
+          files: [%{required(:path) => String.t(), required(:status) => String.t(), optional(:from) => String.t()}],
+          commit_count: non_neg_integer(),
+          file_count: non_neg_integer()
+        }
+
+  @doc """
+  What the workspace changed since `start_head`, read from git only: its `HEAD` (`head`), the
+  commits from `start_head` to `HEAD` (`commits`, oldest first, each `sha` and `subject`; first
+  parent only, so a merge of the base branch is one commit and the base's own commits are not the
+  run's), and the files that differ between `start_head` and the working tree (`files`, tracked and
+  untracked ones git does not ignore, each with its `path`, its `status` `added`, `modified`,
+  `deleted` or `renamed`, and the path a rename came `from`). A file changed by any means (an edit, a
+  shell command, a generator) is in it, committed or not. The lists keep their first #{@max_commits}
+  commits and #{@max_files} files; `commit_count` and `file_count` are their full lengths.
+
+  Nil for an SSH worker's workspace, a directory that is not a checkout of its own, a `start_head`
+  git does not know, or a read that fails. Reads only: it writes no object and touches no index.
+  """
+  @spec changes(Path.t() | nil, String.t() | nil, String.t() | nil) :: changes() | nil
+  def changes(workspace, nil, start_head) when is_binary(workspace) and is_binary(start_head) do
+    with true <- toplevel?(workspace),
+         {head, 0} <- trimmed(git(workspace, ["rev-parse", "--verify", "-q", "HEAD"])),
+         {start, 0} <- trimmed(git(workspace, ["rev-parse", "--verify", "-q", start_head <> "^{commit}"])),
+         {log, 0} <- git(workspace, ["log", "--first-parent", "--reverse", "--format=%H%x1f%s%x1e", start <> ".." <> head]),
+         {diff, 0} <- git(workspace, ["diff", "--name-status", "-z", "-M", "--no-ext-diff", start]),
+         {untracked, 0} <- git(workspace, ["ls-files", "-z", "--others", "--exclude-standard"]) do
+      commits = parse_commits(log)
+      files = parse_name_status(diff) ++ Enum.map(String.split(untracked, <<0>>, trim: true), &%{path: &1, status: "added"})
+
+      %{
+        start_head: start,
+        head: head,
+        commits: Enum.take(commits, @max_commits),
+        files: Enum.take(files, @max_files),
+        commit_count: length(commits),
+        file_count: length(files)
+      }
+    else
+      _unreadable -> nil
+    end
+  end
+
+  def changes(_workspace, _worker_host, _start_head), do: nil
+
+  defp parse_commits(log) do
+    log
+    |> String.split("\x1e", trim: true)
+    |> Enum.flat_map(fn entry ->
+      case entry |> String.trim_leading() |> String.split("\x1f", parts: 2) do
+        [sha, subject] when sha != "" -> [%{sha: sha, subject: String.trim(subject)}]
+        _other -> []
+      end
+    end)
+  end
+
+  # `git diff --name-status -z`: a status, then its path, or for a rename its two paths (copies are
+  # not detected).
+  defp parse_name_status(output), do: output |> String.split(<<0>>, trim: true) |> name_status([])
+
+  defp name_status([], acc), do: Enum.reverse(acc)
+
+  defp name_status(["R" <> _score, from, path | rest], acc), do: name_status(rest, [%{path: path, status: "renamed", from: from} | acc])
+  defp name_status(["A", path | rest], acc), do: name_status(rest, [%{path: path, status: "added"} | acc])
+  defp name_status(["D", path | rest], acc), do: name_status(rest, [%{path: path, status: "deleted"} | acc])
+  defp name_status([_modified_or_type_changed, path | rest], acc), do: name_status(rest, [%{path: path, status: "modified"} | acc])
+
   @doc """
   The workspace's current branch, or nil when `HEAD` is detached, the workspace is an SSH worker's
   or it cannot be read.
