@@ -581,7 +581,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
 
       assert {:ok, %{result: %{verdict: :pass}}} = run(ctx, journey([1, 2, 3, 4]))
       turns = turns()
-      assert Enum.map(turns, & &1.id) == ["plan", "walk_1_2_3", "walk_4", "design_check", "wide_pass", "review"]
+      assert Enum.map(turns, & &1.id) == ["plan", "walk_1_2_3", "walk_4", "design_check", "review"]
 
       group = Enum.find(turns, &(&1.id == "walk_1_2_3"))
       assert group.prompt =~ "You walk 3 walkthrough steps in this one session (steps 1, 2, 3)"
@@ -1212,7 +1212,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       boundary = fn step -> send(test, {:boundary, step.id}) && :ok end
 
       assert {:ok, %{result: %{verdict: :pass}}} = run(ctx, %{}, qa_boundary: boundary)
-      assert boundaries() == ~w(build plan launch walk_1 walk_2 design_check wide_pass quit attach review)
+      assert boundaries() == ~w(build plan launch walk_1 walk_2 design_check quit attach review)
       assert RunStore.get_qa_pass("default", @issue_id) == nil
     end
 
@@ -1244,17 +1244,17 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
 
       # Only the step the restart stopped runs again; no finished step is walked again.
       turns = turns()
-      assert Enum.map(turns, & &1.id) == ["design_check", "wide_pass", "review"]
+      assert Enum.map(turns, & &1.id) == ["design_check", "review"]
 
       # The app is built and launched again on the new QA session: that walks no step.
       assert_received {:tool, _driver, "qa_build", _args}
       assert_received {:tool, _driver, "qa_launch_app", %{}}
 
       resumed = events("step.completed") |> Enum.filter(&(&1.run_id == "qa-steps-run-2")) |> Enum.map(& &1.payload.step_id)
-      assert resumed == ["build", "launch", "design_check", "wide_pass", "quit", "attach", "review"]
+      assert resumed == ["build", "launch", "design_check", "quit", "attach", "review"]
 
       # The steps after it are given what they would have had: the plan, the walk results and the evidence.
-      [design, _wide, review] = turns
+      [design, review] = turns
       assert design.prompt =~ ~s("entry": "button")
       assert design.prompt =~ "Symphony launched it as PID 4242"
       assert review.prompt =~ "Page shows its title"
