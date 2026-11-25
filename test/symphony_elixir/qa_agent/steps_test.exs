@@ -358,7 +358,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
     test "a macos_app playbook without a prompt gives the plan no screen rules", ctx do
       answers(%{"plan" => [{:write, plan([], %{needs_app: false, screens: []})}], "review" => [{:verdict, @pass}]})
 
-      assert {:ok, _result} = run(ctx, %{playbooks: [%{kind: "macos_app"}]}, [], [plan_step(), review()])
+      assert {:ok, _result} = run(ctx, %{journey: %{steps: []}, playbooks: [%{kind: "macos_app"}]}, [], [plan_step(), review()])
       [plan_turn, _review] = turns()
       assert plan_turn.prompt =~ "You plan this QA pass"
       refute plan_turn.prompt =~ "The playbook's rules for screens"
