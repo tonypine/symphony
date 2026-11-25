@@ -170,11 +170,18 @@ defmodule SymphonyElixir.AgentTools.QaPicturesTest do
       refute File.exists?(Path.join(ctx.workspace, "qa-evidence/planted.png"))
       assert File.exists?(outside)
 
-      # A run whose events cannot name it (no run) keeps no picture either.
+      # A session whose events cannot name their actor (no run kind) keeps no picture either.
       take = take(ctx, [{"norun.png", @png}], %{"path" => "qa-evidence/norun.png", "source" => "qa-evidence/a.png", "zoom" => 2})
-      assert {:error, {:qa_tool, "qa_picture_not_recorded", message}} = QaPictures.call(context(ctx, %{run_id: nil}), "qa_crop", %{"name" => "norun"}, take)
-      assert message =~ "invalid_actor"
+      assert {:error, {:qa_tool, "qa_picture_not_recorded", message}} = QaPictures.call(context(ctx, %{run_kind: nil}), "qa_crop", %{"name" => "norun"}, take)
+      assert message =~ "may not record evidence"
       refute File.exists?(Path.join(ctx.workspace, "qa-evidence/norun.png"))
+
+      # A failure of the record itself is named as it is.
+      take = take(ctx, [{"down.png", @png}], %{"files" => [%{"path" => "qa-evidence/down.png"}]})
+      down = fn _context, _args, _opts -> {:error, :store_down} end
+      assert {:error, {:qa_tool, "qa_picture_not_recorded", message}} = QaPictures.call(context(ctx), "qa_screenshot", %{"name" => "down"}, take, record: down)
+      assert message =~ ":store_down."
+      refute File.exists?(Path.join(ctx.workspace, "qa-evidence/down.png"))
 
       assert evidence() == []
     end

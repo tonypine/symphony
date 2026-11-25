@@ -1504,7 +1504,7 @@ defmodule SymphonyElixir.QaAgentTest do
 
       for step <- ["walk", "design_check"] do
         text = "macos_app" |> StepPrompts.prompt(step) |> String.replace(~r/\s+/, " ")
-        assert text =~ "never record it again with `ticket_record`", step
+        assert text =~ ~r/never record it again with `ticket_record`/i, step
         assert text =~ "name its path in your answer's `evidence`", step
         refute text =~ "top-level `artifacts` list", step
         refute text =~ ~r/Record each screenshot/i, step

@@ -42,7 +42,8 @@ defmodule SymphonyElixir.AgentTools.QaPictures do
 
   @doc """
   Runs the picture tool `tool` with `take` (the driver's call) and records what it saved on the
-  ticket `context` names (see the moduledoc). `opts` go to `TicketLedger.record/3`. A
+  ticket `context` names (see the moduledoc). `opts` go to `TicketLedger.record/3`, which
+  `opts[:record]` stands in for in tests. A
   `qa_gallery` call with no `entry` lists the gallery, takes no picture and is answered as it is.
   """
   @spec call(TicketLedger.context(), String.t(), map(), take(), keyword()) :: {:ok, map()} | {:error, term()}
@@ -89,7 +90,9 @@ defmodule SymphonyElixir.AgentTools.QaPictures do
     payload = %{"caption" => caption(tool, args, result, step)}
     args = put_parent(%{"type" => "evidence", "payload" => payload, "artifacts" => Enum.map(paths, &Path.join(workspace, &1))}, step)
 
-    case TicketLedger.record(context, args, opts) do
+    record = Keyword.get(opts, :record, &TicketLedger.record/3)
+
+    case record.(context, args, opts) do
       {:ok, %{"event" => %{"id" => event_id, "artifacts" => artifacts}}} ->
         {:ok, paths |> Enum.zip(artifacts) |> Enum.map(fn {path, %{"id" => id}} -> entry(path, event_id, id) end)}
 
