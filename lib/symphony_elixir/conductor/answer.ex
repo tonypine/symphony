@@ -43,9 +43,11 @@ defmodule SymphonyElixir.Conductor.Answer do
       cut to 600 characters), `text` (for agents, cut to 12,000), `checks` (at least one, at most 30,
       and at least one of kind `outcome`), `size` (`tokens` and `runs`, whole numbers) and, for a
       split, `sub_tickets` (at least one, at most 12). A check holds a `kind` (`outcome`, `qa`, `evidence`), a
-      `statement` (cut to 600) and its `proof` (`test`, `qa`, `design`, `attached`); a `qa` check
-      also the `action` and what to `expect`, and any check may say the app `state` it needs (each
-      cut to 400), the `size` it is walked at (`normal`, `wide`) and a Gallery `story`. A sub-ticket
+      `statement` (cut to 600) and its `proof` (`test`, `qa`, `design`, `attached`, or `ci`: the
+      pull request's own CI run); a `qa` check also the `action` and what to `expect`, a `ci` check
+      may name the one CI check whose passing proves it (`ci_check`, cut to 200), and any check may
+      say the app `state` it needs (each cut to 400), the `size` it is walked at (`normal`, `wide`)
+      and a Gallery `story`. A sub-ticket
       holds a `title` (cut to 120) and an `ask` (cut to 4,000), the sibling keys it waits `after`,
       a `repo`, and the `identifier` of a sub-ticket the ticket already has, which is adopted
       instead of created. A check keeps the `id` it gives and is left without one otherwise:
@@ -143,7 +145,8 @@ defmodule SymphonyElixir.Conductor.Answer do
   @plan_summary_max 600
   @plan_text_max 12_000
   @check_kinds ~w(outcome qa evidence)
-  @check_proofs ~w(test qa design attached)
+  # `ci`: the pull request's own CI run proves it (`ci_check` may name the one check that does).
+  @check_proofs ~w(test qa design attached ci)
   @check_sizes ~w(normal wide)
   @check_statement_max 600
   @check_walk_max 400
@@ -520,6 +523,7 @@ defmodule SymphonyElixir.Conductor.Answer do
       |> put_text(:action, check, @check_walk_max, where)
       |> put_text(:expect, check, @check_walk_max, where)
       |> put_text(:story, check, 200, where)
+      |> put_text(:ci_check, if(proof == "ci", do: check, else: %{}), 200, where)
       |> put_present(:size, if(Map.get(check, "size") in @check_sizes, do: Map.get(check, "size")))
       |> then(&{:ok, &1})
     end

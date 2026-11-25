@@ -254,13 +254,14 @@ public struct PlanPanelModel: Equatable {
         return "\(proved) of \(checks.count) \(checks.count == 1 ? "check" : "checks") proved"
     }
 
-    /// How a check is proved, in a word: "Test", "QA", "Design", "Attached"; nil for a proof this app does not know.
+    /// How a check is proved, in a word: "Test", "QA", "Design", "Attached", "CI" (the pull request's own CI run); nil for a proof this app does not know.
     public static func proofWord(_ proof: String?) -> String? {
         switch proof {
         case "test": "Test"
         case "qa": "QA"
         case "design": "Design"
         case "attached": "Attached"
+        case "ci": "CI"
         default: nil
         }
     }

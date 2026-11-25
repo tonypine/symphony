@@ -242,6 +242,58 @@ defmodule SymphonyElixir.PrDecisionTest do
     end
   end
 
+  describe "R28a to R28e: checks the PR's own CI run proves hold the merge, not the ticket (TP-1592)" do
+    @ci_merging [phase: :merging, merge_guard: :ci_checks]
+
+    test "they never send the ticket to Rework or merge it while open: the merge waits on their proof" do
+      for ci <- [:green, :none, :pending], state <- [:provable, :running, :turn, :spent] do
+        action = decide(@ci_merging ++ [ci: ci, ci_proof: state])
+        refute action.kind in [:hold_merge, :merge_now, :arm, :decision], inspect({ci, state})
+      end
+
+      assert %Action{rule: "R29", kind: :merge_now} = decide(phase: :merging)
+      assert %Action{rule: "R30", kind: :arm} = decide(phase: :merging, ci: :pending)
+    end
+
+    test "auto-merge goes off first when it is armed" do
+      assert %Action{rule: "R28a", kind: :disarm, reason: reason} =
+               decide(@ci_merging ++ [auto_merge: :armed, ci_proof: :running])
+
+      assert reason == "PR #42 waits on checks of its plan that its own CI run proves: auto-merge is off until they are proved"
+      assert %Action{rule: "R28a"} = decide(@ci_merging ++ [auto_merge: :armed, ci: :pending, ci_proof: :turn])
+    end
+
+    test "a check that names a CI check that passed is proved with no run" do
+      assert %Action{rule: "R28b", kind: :prove_checks} = action = decide(@ci_merging ++ [ci_proof: :provable])
+      assert action.reason == "A check of the plan names a CI check that passed on PR #42: Symphony records it as proved"
+      assert %Action{rule: "R28b"} = decide(@ci_merging ++ [ci: :pending, ci_proof: :provable])
+    end
+
+    test "while checks still run the ticket waits on CI, with no question" do
+      for ci <- [:pending, :green] do
+        assert %Action{rule: "R28c", kind: :wait, owner: :ci, clears_when: "the checks finish on the head"} =
+                 decide(@ci_merging ++ [ci: ci, ci_proof: :running])
+      end
+
+      assert %Action{rule: "R28c"} = decide(@ci_merging ++ [ci_proof: :none])
+    end
+
+    test "once the checks finished, one run has the turn; when it left a check open, Rework, never the turn again" do
+      assert %Action{rule: "R28d", kind: :land_agent, args: %{ci_proof: true}} = decide(@ci_merging ++ [ci_proof: :turn])
+      assert %Action{rule: "R28d"} = decide(@ci_merging ++ [ci: :none, ci_proof: :turn])
+      assert %Action{rule: "R28e", kind: :to_rework, reason: reason} = decide(@ci_merging ++ [ci_proof: :spent])
+      assert reason == "The run that read the checks on PR #42's head left checks of the plan its CI run proves unproved"
+    end
+
+    test "a red head, a conflict, a run or a hold come first; outside Merging the flow is as before" do
+      assert %Action{rule: "R22"} = decide(@ci_merging ++ [ci: :red, ci_proof: :turn])
+      assert %Action{rule: "R14"} = decide(@ci_merging ++ [mergeable: :dirty, ci_proof: :turn])
+      assert %Action{rule: "R9"} = decide(@ci_merging ++ [run: :active, ci_proof: :turn])
+      assert %Action{rule: "R4"} = decide(@ci_merging ++ [hold: :question, ci_proof: :spent])
+      assert %Action{rule: "R25"} = decide(phase: :ci_fix, origin: :merging, merge_guard: :ci_checks)
+    end
+  end
+
   describe "the whole table" do
     test "every combination of fact values gets exactly one rule, every wait has an owner and a clearing condition, and every rule fires" do
       report = check_table(Facts.combinations())
@@ -274,7 +326,7 @@ defmodule SymphonyElixir.PrDecisionTest do
 
     test "rule ids are unique and each rule names its phases and a line for the docs" do
       assert Enum.uniq(@ids) == @ids
-      assert length(@ids) == 39
+      assert length(@ids) == 44
 
       for rule <- PrDecision.rules() do
         assert rule.phases != [] and rule.phases -- Facts.phases() == []

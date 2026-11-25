@@ -497,6 +497,11 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       end
 
       assert {:ok, %{by: "qa"}} = Types.validate("check.proved", %{check_id: "c1", by: :qa}, :machine, nil)
+      # TP-1592: a check the pull request's own CI run proves, in the plan and in its proof.
+      assert {:ok, %{by: "ci", details: "make-all passed."}} = Types.validate("check.proved", %{check_id: "c1", by: "ci", details: "make-all passed."}, :agent, "landing")
+      ci_check = %{id: "c9", kind: "outcome", statement: "make-all passes.", proof: "ci", ci_check: "make-all"}
+      assert {:ok, %{checks: [_ | _] = checks}} = Types.validate("plan.written", %{@plan | checks: @plan.checks ++ [ci_check]}, :machine, nil)
+      assert %{proof: "ci", ci_check: "make-all"} = List.last(checks)
       assert {:error, {:invalid_payload, [:by]}} = Types.validate("check.proved", %{check_id: "c1", by: "trust"}, :machine, nil)
       long_test = %{check_id: "c1", by: "test", test: String.duplicate("a", 501)}
       assert {:error, {:invalid_payload, [:test]}} = Types.validate("check.proved", long_test, :machine, nil)

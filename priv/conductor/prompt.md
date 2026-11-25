@@ -202,7 +202,8 @@ exactly one recommended. Otherwise null.
 The plan's checks (only when the facts hold `checks`). The ticket has a plan, and each of its checks
 is `open`, `proved` or `waived`. An open check that a test or an attachment proves (`proof`:
 `test` or `attached`) keeps the ticket from being handed off: the run's step `plan_checks` fails
-while one is open. `check_notes` holds the newest notes the runs wrote, which is where a run says
+while one is open. A check the pull request's own CI run proves (`proof`: `ci`) never holds the handoff and is
+never waived for it: Symphony proves it in Merging from the pull request's checks, before the merge. `check_notes` holds the newest notes the runs wrote, which is where a run says
 that a check cannot be proved that way. At `after_coding`
 and `after_rework`, when a run says so and you agree that nobody can prove the check the way the
 plan says, waive it: add `"waive": [{"check_id": "<the check's id>", "reason": "<why nobody can

@@ -519,6 +519,86 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
     end
   end
 
+  describe "checks the PR's own CI run proves (TP-1592)" do
+    @ci_plan %{
+      reason: "Grooming",
+      by: "grooming",
+      shape: "single",
+      layers: ["tooling"],
+      summary: "CI runs faster.",
+      text: "Run the steps in parallel.",
+      checks: [
+        %{id: "c1", kind: "outcome", statement: "The make-all check passes.", proof: "ci", ci_check: "make-all"},
+        %{id: "c2", kind: "outcome", statement: "The tests run faster than on main.", proof: "ci"}
+      ],
+      size: %{tokens: 1_000, runs: 1}
+    }
+
+    setup do
+      {:ok, _plan} = SymphonyElixir.TicketPlan.write(@repo_key, @issue_id, @ci_plan)
+      :ok
+    end
+
+    defp ci_read, do: read(ci: :green, check_names: ["make-all"], running_checks: [], failed_checks: [])
+    defp ci_ctx(attrs \\ []), do: ctx(:merging, Keyword.merge([read: ci_read(), facts: %{merge_guard: :ci_checks}], attrs))
+
+    test "R28b records the check a passed CI check proves, with no run and no move, each time it is decided on the head" do
+      action = action("R28b", :prove_checks)
+      capture_log(fn -> assert %{outcome: :applied, moved_to: nil} = Apply.apply(action, ci_ctx()) end)
+
+      assert [%{id: "c1", state: :proved, proved_by: %{by: "ci", head: "head-1"}}, %{id: "c2", state: :open}] = SymphonyElixir.TicketChecks.list(@issue_id)
+      refute_received {:move, _issue_id, _state}
+      refute_received {:comment, _issue_id, _body}
+
+      # The ledger does not hold it back on the same head.
+      applied = [%{head_sha: "head-1", rule: "R28b", kind: :prove_checks, at: @now}]
+      capture_log(fn -> assert %{outcome: :applied} = Apply.apply(action, ci_ctx(applied: applied)) end)
+    end
+
+    test "R28a turns auto-merge off and says why, with no move" do
+      assert %{outcome: :applied, moved_to: nil} = Apply.apply(action("R28a", :disarm), ci_ctx(facts: %{merge_guard: :ci_checks, auto_merge: :armed}))
+
+      assert_received {:disable_auto_merge, @pr_url, "PR_node", _opts}
+      assert_received {:comment, @issue_id, comment}
+      assert comment =~ "because checks of the ticket's plan that its own CI run proves are not proved yet. Symphony merges it once they are."
+      refute_received {:move, _issue_id, _state}
+
+      Process.put(:disable_auto_merge, {:error, :forbidden})
+      capture_log(fn -> assert %{outcome: {:error, {:disable_auto_merge_failed, :forbidden}}} = Apply.apply(action("R28a", :disarm), ci_ctx()) end)
+    end
+
+    test "R28d leaves the turn to the landing run the orchestrator starts, with nothing posted" do
+      assert %{outcome: :applied, moved_to: nil} = Apply.apply(action("R28d", :land_agent, args: %{ci_proof: true}), ci_ctx())
+      refute_received {:comment, _issue_id, _body}
+      refute_received {:move, _issue_id, _state}
+    end
+
+    test "R28e sends the ticket to Rework with what the run said, and asks nobody" do
+      put_dispatch(@repo_key, @issue_id, kind: :landing, head: "head-1", run_id: "landing-1")
+      {:ok, _note} = SymphonyElixir.TicketEvents.record(@repo_key, @issue_id, "note", %{text: "The tests took as long as on main."}, run_id: "landing-1")
+
+      assert %{outcome: :applied, moved_to: :rework} = Apply.apply(action("R28e", :to_rework), ci_ctx(facts: %{merge_guard: :ci_checks, auto_merge: :armed}))
+
+      assert_received {:disable_auto_merge, @pr_url, "PR_node", _opts}
+      assert_received {:move, @issue_id, "Rework"}
+      assert_received {:comment, @issue_id, "Symphony moved this ticket to Rework: " <> rest}
+      assert rest =~ "The run that read the pull request's checks on the head head-1 did not prove"
+      assert rest =~ "[c1] The make-all check passes.; [c2] The tests run faster than on main."
+      assert rest =~ "The run said: The tests took as long as on main. A rework run works on it on the same pull request."
+      signals = TicketState.recent_signals(RunStore.get_ticket_state(@issue_id))
+      assert [%{name: "review verdict", details: %{outcome: "ci_checks_unproved"}} | _] = signals
+      refute deciding()
+
+      # Once per head: the ledger holds it.
+      applied = [%{head_sha: "head-1", rule: "R28e", kind: :to_rework, at: @now}]
+      assert %{outcome: :recorded} = Apply.apply(action("R28e", :to_rework), ci_ctx(applied: applied))
+      refute_received {:move, _issue_id, _state}
+
+      Process.put(:disable_auto_merge, {:error, :forbidden})
+      capture_log(fn -> assert %{outcome: {:error, _reason}} = Apply.apply(action("R28e", :to_rework), ci_ctx(facts: %{merge_guard: :ci_checks, auto_merge: :armed})) end)
+    end
+  end
+
   test "to_rework sends a conflict back after its fix runs, with nobody competing, to Rework (D16)" do
     reason = "The conflict with main came back after 3 fix runs and no open PR competes"
 

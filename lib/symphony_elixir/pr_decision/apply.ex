@@ -123,7 +123,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
   alias SymphonyElixir.HumanActions.{PlainWords, Request}
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.PrDecision.{Action, Facts}
-  alias SymphonyElixir.PrWatch.{Attempts, Fetch}
+  alias SymphonyElixir.PrWatch.{Attempts, CiProof, Fetch}
 
   @rework_state "Rework"
   @other_branch "another branch"
@@ -223,6 +223,9 @@ defmodule SymphonyElixir.PrDecision.Apply do
   # A fix is done when its run ends, not when the ticket moved: pending in CI Fix it is recorded
   # before here (`fix_pending?/2`), and anywhere else it is sent again.
   defp already_done(%Action{kind: :ci_fix}, _ctx), do: nil
+  # A proof is recorded once per check and head on its own, and a second CI check may pass later on
+  # the same head: R28b proves what is provable each time it is decided.
+  defp already_done(%Action{rule: "R28b"}, _ctx), do: nil
   defp already_done(%Action{rule: "U2"} = action, ctx), do: if(cancels_due(ctx) == [], do: action)
 
   defp already_done(%Action{rule: "R19a"} = action, ctx) do
@@ -380,6 +383,19 @@ defmodule SymphonyElixir.PrDecision.Apply do
     end
   end
 
+  # The run that had the turn to prove the plan's CI checks on the head left one open (R28e): Rework,
+  # with the run's reason as what the rework run reads; the turn is not given again on the head.
+  defp perform(%Action{kind: :to_rework, rule: "R28e"}, ctx) do
+    reason = CiProof.reason(ctx.issue.id, head(ctx))
+
+    with :ok <- disarm_if_armed(ctx, :merge_held),
+         :ok <- move(:merge_held, %{}, ctx) do
+      comment(ctx, "Symphony moved this ticket to #{@rework_state}: #{reason} A rework run works on it on the same pull request.")
+      TicketSignals.record(ctx.repo_key, ctx.issue.id, "review verdict", %{outcome: "ci_checks_unproved", to: @rework_state, reason: reason})
+      {:ok, %{moved_to: :rework}}
+    end
+  end
+
   defp perform(%Action{kind: :to_rework} = action, ctx) do
     with :ok <- disarm_if_armed(ctx, :conflict),
          :ok <- move(:conflict_rework, %{}, ctx) do
@@ -471,6 +487,22 @@ defmodule SymphonyElixir.PrDecision.Apply do
     end
   end
 
+  # The plan's checks its CI run proves are open (R28a): the PR does not merge before they are proved.
+  defp perform(%Action{kind: :disarm, rule: "R28a"}, ctx) do
+    with :ok <- disarm(ctx, :ci_checks) do
+      comment(ctx, disarm_comment(:ci_checks, ctx))
+      {:ok, %{}}
+    end
+  end
+
+  # The checks of the plan its CI run proves and one names a CI check that passed on the head (R28b).
+  defp perform(%Action{kind: :prove_checks}, ctx) do
+    with {:ok, count} <- CiProof.prove(ctx.repo_key, ctx.issue.id, ctx.read) do
+      Logger.info("PR watch recorded #{count} check(s) of the plan as proved by CI for #{label(ctx)} pr_url=#{pr_url(ctx)} head_sha=#{head(ctx)}")
+      {:ok, %{}}
+    end
+  end
+
   defp perform(%Action{kind: :disarm}, ctx) do
     with :ok <- disarm(ctx, :left_merging) do
       state = ctx.issue.state
@@ -478,6 +510,10 @@ defmodule SymphonyElixir.PrDecision.Apply do
       {:ok, %{}}
     end
   end
+
+  # The turn to prove the plan's CI checks (R28d): the orchestrator starts the landing run, whose prompt
+  # carries them (`SymphonyElixir.TicketJourney.ci_proof_text/1`); nothing to say on the ticket.
+  defp perform(%Action{kind: :land_agent, rule: "R28d"}, _ctx), do: {:ok, %{}}
 
   defp perform(%Action{kind: :land_agent} = action, ctx) do
     comment(ctx, AutoMerge.fallback_comment(pr_url(ctx), action.reason))
@@ -859,6 +895,11 @@ defmodule SymphonyElixir.PrDecision.Apply do
   defp disarm_comment(:merge_held, ctx) do
     "Symphony turned off GitHub auto-merge on #{pr_url(ctx) || "this PR"} because the ticket's plan holds the merge. " <>
       "The change goes back through Rework and review; moving this ticket to Merging again turns auto-merge back on."
+  end
+
+  defp disarm_comment(:ci_checks, ctx) do
+    "Symphony turned off GitHub auto-merge on #{pr_url(ctx) || "this PR"} because checks of the ticket's plan that its own CI run proves are not proved yet. " <>
+      "Symphony merges it once they are."
   end
 
   defp disarm_comment(_why, ctx), do: AutoMerge.ci_fix_comment(pr_url(ctx))

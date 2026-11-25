@@ -179,7 +179,7 @@ defmodule SymphonyElixir.TicketEvents.Brief do
   defp ask_source("parent", from), do: "from the parent ticket" <> suffix(" ", from)
   defp ask_source(_linear, _from), do: "from the ticket's description"
 
-  @proofs %{"test" => "a test", "qa" => "QA", "design" => "the design", "attached" => "an attachment"}
+  @proofs %{"test" => "a test", "qa" => "QA", "design" => "the design", "attached" => "an attachment", "ci" => "the pull request's CI"}
 
   defp check_state(%{state: :proved, proved_by: %{by: by}}), do: "proved by #{Map.get(@proofs, by, by)}"
   defp check_state(%{state: :waived, waived: %{reason: reason}}), do: "waived (#{reason})"

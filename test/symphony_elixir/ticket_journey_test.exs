@@ -397,4 +397,52 @@ defmodule SymphonyElixir.TicketJourneyTest do
       assert TicketJourney.outdated([started, routed, unsequenced, note]) == nil
     end
   end
+
+  describe "a check the pull request's own CI run proves (TP-1592)" do
+    @named %{id: "c5", kind: "outcome", statement: "The make-all check passes on the pull request.", proof: "ci", ci_check: "make-all"}
+    @timed %{id: "c6", kind: "outcome", statement: "The test step runs faster on the pull request than on main.", proof: "ci"}
+
+    defp ci_plan!, do: plan!(%{@plan | checks: @plan.checks ++ [@named, @timed]})
+
+    test "it holds the merge, never the handoff, and QA does not walk it" do
+      ci_plan!()
+
+      assert Enum.map(TicketJourney.unproved(issue()), & &1.id) == ["c1", "c3"]
+      assert Enum.map(TicketJourney.owed_by_qa(issue()), & &1.id) == ["c2", "c4"]
+      assert Enum.map(TicketJourney.steps(issue()), & &1.check_id) == ["c2", "c4"]
+      assert Enum.map(TicketJourney.owed_by_ci(issue()), & &1.id) == ["c5", "c6"]
+      assert Enum.map(TicketJourney.owed_before_merge(issue()), & &1.id) == ["c1", "c2", "c3", "c4", "c5", "c6"]
+      assert Enum.map(TicketJourney.owed_into_merging(issue()), & &1.id) == ["c1", "c2", "c3", "c4"]
+      assert [%{ci_check: "make-all"}, %{proof: "ci"}] = TicketJourney.owed_by_ci(issue())
+
+      # Once the test and attached checks are proved, nothing holds the handoff.
+      prove!(%{check_id: "c1", by: "test", test: "plan_test.exs"})
+      prove!(%{check_id: "c3", by: "attached", evidence: "evt-1"})
+      assert TicketJourney.unproved(issue()) == []
+
+      assert TicketJourney.plan_text(issue()) =~ "- [c5] outcome, proof: ci (CI check `make-all`), open: The make-all check passes on the pull request."
+      assert TicketJourney.plan_text(issue()) =~ "- [c6] outcome, proof: ci, open: The test step runs faster"
+
+      prove!(%{check_id: "c5", by: "ci", details: "The CI check `make-all` passed on the head abc1234."})
+      assert Enum.map(TicketJourney.owed_by_ci(issue()), & &1.id) == ["c6"]
+      assert TicketJourney.plan_text(issue()) =~ "- [c5] outcome, proof: ci (CI check `make-all`), proved by ci:"
+    end
+
+    test "the landing run reads the open ones and its turn, and none for a ticket with none" do
+      assert TicketJourney.owed_by_ci(nil) == []
+      assert TicketJourney.ci_proof_text(issue()) == nil
+
+      ci_plan!()
+      text = TicketJourney.ci_proof_text(issue())
+
+      assert text =~ "## Checks the pull request's CI run proves"
+      assert text =~ "It does not merge: Symphony merges once they are proved."
+      assert text =~ "- [c5] The make-all check passes on the pull request. (CI check `make-all`)"
+      assert text =~ "- [c6] The test step runs faster on the pull request than on main."
+      assert text =~ "`github_get_pr_checks`"
+      assert text =~ "`check.proved` with its `check_id`, `by: ci`"
+      assert text =~ "record a `note` that says why, then end the turn"
+      assert text =~ "Ask nobody about these checks."
+    end
+  end
 end

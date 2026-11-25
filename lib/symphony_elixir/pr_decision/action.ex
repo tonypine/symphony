@@ -18,6 +18,7 @@ defmodule SymphonyElixir.PrDecision.Action do
     :to_in_progress,
     :to_rework,
     :hold_merge,
+    :prove_checks,
     :update_branch,
     :merge_now,
     :arm,
@@ -39,6 +40,7 @@ defmodule SymphonyElixir.PrDecision.Action do
     to_in_progress: "the ticket moves to In Progress",
     to_rework: "the ticket moves to Rework",
     hold_merge: "auto-merge is off and the ticket moves to Rework",
+    prove_checks: "the plan's checks the CI run proves are recorded as proved",
     update_branch: "the branch is updated with the base",
     merge_now: "the PR merges",
     arm: "auto-merge is on for the PR",
@@ -57,6 +59,7 @@ defmodule SymphonyElixir.PrDecision.Action do
           | :to_in_progress
           | :to_rework
           | :hold_merge
+          | :prove_checks
           | :update_branch
           | :merge_now
           | :arm

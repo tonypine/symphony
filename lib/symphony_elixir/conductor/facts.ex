@@ -136,7 +136,8 @@ defmodule SymphonyElixir.Conductor.Facts do
   @open_checks "These checks of the plan are still open, and the pull request merges next. A merge does not prove them. " <>
                  "Say so in your update. Waive one that nobody can prove the way the plan says, with its reason " <>
                  "(never a check of kind `outcome`: only the person waives one), or send the ticket back with instructions " <>
-                 "that name the checks to prove, or ask the person."
+                 "that name the checks to prove, or ask the person. A check proved by the pull request's own CI run (`proof: ci`) " <>
+                 "is proved in Merging from the pull request's checks before the merge: leave it open, and never waive it or send the ticket back for it."
 
   @doc """
   The rule every turn that may waive a check is told (its prompt's `{{waive_rule}}`, and the facts'

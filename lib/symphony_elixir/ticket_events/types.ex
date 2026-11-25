@@ -293,8 +293,10 @@ defmodule SymphonyElixir.TicketEvents.Types do
   # What made the Conductor's watch look at a running run (`SymphonyElixir.Conductor.Watch`).
   @watch_triggers ~w(step_failed step_failed_twice qa_step_answer run_minutes run_tokens message)
 
-  # How a check of a plan is proved (`SymphonyElixir.TicketChecks`).
-  @check_proofs ~w(test qa design attached)
+  # How a check of a plan is proved (`SymphonyElixir.TicketChecks`). `ci`: by the pull request's
+  # own CI run, after the handoff and before the merge; its `ci_check` names the one CI check that
+  # proves it when that check passing is all it asks.
+  @check_proofs ~w(test qa design attached ci)
   @plan_check {:map,
                [
                  id: {:string, 20},
@@ -305,7 +307,8 @@ defmodule SymphonyElixir.TicketEvents.Types do
                  action: {:optional, {:string, 400}},
                  expect: {:optional, {:string, 400}},
                  size: {:optional, {:enum, ~w(normal wide)}},
-                 story: {:optional, {:string, 200}}
+                 story: {:optional, {:string, 200}},
+                 ci_check: {:optional, {:string, 200}}
                ]}
   @plan_sub_ticket {:map,
                     [

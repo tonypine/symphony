@@ -339,6 +339,17 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
       assert read == %{kind: "outcome", statement: "The page loads.", proof: "test"}
     end
 
+    test "a check the pull request's own CI run proves is read with the CI check it names, and only such a check names one (TP-1592)" do
+      named = %{"kind" => "outcome", "statement" => "The make-all check passes.", "proof" => "ci", "ci_check" => " make-all "}
+      timed = %{"kind" => "outcome", "statement" => "The test step is faster than on main.", "proof" => "ci"}
+      tested = %{"kind" => "outcome", "statement" => "It works.", "proof" => "test", "ci_check" => "make-all"}
+
+      assert {:ok, %{plan: %{checks: [read_named, read_timed, read_tested]}}} = plan(%{"checks" => [named, timed, tested]})
+      assert read_named == %{kind: "outcome", statement: "The make-all check passes.", proof: "ci", ci_check: "make-all"}
+      assert read_timed == %{kind: "outcome", statement: "The test step is faster than on main.", proof: "ci"}
+      assert read_tested == %{kind: "outcome", statement: "It works.", proof: "test"}
+    end
+
     test "is not read at another turn, which answers as before" do
       assert {:ok, %{plan: nil}} = Answer.parse(json(%{"instructions" => "x", "plan" => @plan}))
       assert Answer.parse(json(%{"plan" => @plan})) == {:error, "`instructions` must be a string"}
@@ -393,7 +404,7 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
             {%{"checks" => []}, "`plan.checks` must list at least one entry"},
             {%{"checks" => ["it works"]}, "`plan.checks[1]` must be an object"},
             {%{"checks" => [check, %{check | "kind" => "wish"}]}, "`plan.checks[2].kind` must be one of outcome, qa, evidence"},
-            {%{"checks" => [%{check | "proof" => "trust"}]}, "`plan.checks[1].proof` must be one of test, qa, design, attached"},
+            {%{"checks" => [%{check | "proof" => "trust"}]}, "`plan.checks[1].proof` must be one of test, qa, design, attached, ci"},
             {%{"checks" => [%{check | "statement" => ""}]}, "`plan.checks[1].statement` must be a non-blank string"},
             {%{"checks" => [%{check | "kind" => "evidence"}]}, "`plan.checks` holds no check of kind `outcome`"},
             {%{"checks" => [check, %{"kind" => "qa", "statement" => "Seen.", "proof" => "qa", "action" => "Open it"}]},

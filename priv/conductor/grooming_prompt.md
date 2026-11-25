@@ -56,6 +56,13 @@ How to groom, in order:
    - `design`: a screen is compared with its design; name the Gallery `story` when you know it.
    - `attached`: something attached to the ticket shows it (a measurement, a document, a
      screenshot), for a result no test and no QA step can show.
+   - `ci`: the pull request's own CI run shows it: a workflow change, a CI timing on the pull
+     request against main, a check that only runs on GitHub. It exists before the merge, but only
+     once the pull request does, so it holds the merge and never the handoff. When it only asks
+     that one CI check passes, name that check as `ci_check` (its name as GitHub shows it), and
+     Symphony proves it itself once the check passes on the pull request's head; otherwise a run
+     reads the pull request's checks and proves it. A pipeline fact seen after the merge (below) is
+     never a `ci` check.
    Every check in a plan can be proved before this ticket's own pull request merges. {{plan_rule}} Facts about
    the pipeline itself (main is green, the release gate passed, a build was published, a check
    turned green after a merge) are never a ticket's concern: Symphony sees them from GitHub
@@ -123,7 +130,7 @@ Write your answer as one JSON object and nothing else:
     "summary": "<for a person: what will be built, at most 600 characters>",
     "text": "<the plan for the agents, labelled sections, at most 12000 characters>",
     "checks": [
-      {"kind": "outcome" or "evidence", "statement": "<at most 600 characters>", "proof": "test" or "qa" or "design" or "attached"},
+      {"kind": "outcome" or "evidence", "statement": "<at most 600 characters>", "proof": "test" or "qa" or "design" or "attached" or "ci", "ci_check": "<only for proof ci: the one CI check that proves it, when one does>"},
       {"kind": "qa", "statement": "<what is checked>", "proof": "qa" or "design", "state": "<the app state it needs>",
        "action": "<what the person does>", "expect": "<what they see>", "size": "normal" or "wide", "story": "<optional Gallery story id>"}
     ],

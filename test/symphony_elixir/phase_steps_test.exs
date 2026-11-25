@@ -362,6 +362,18 @@ defmodule SymphonyElixir.PhaseStepsTest do
       assert [%{payload: %{step_id: "plan_checks", outcome: "passed"}}] = TicketEvents.query(@issue_id, types: ["step.completed"])
     end
 
+    test "passes a ticket whose only open checks are proved by the pull request's own CI run, and asks nobody (TP-1592)", ctx do
+      ci = %{id: "c1", kind: "outcome", statement: "The tests run faster than on main.", proof: "ci"}
+
+      {:ok, _plan} =
+        SymphonyElixir.TicketPlan.write(@repo_key, @issue_id, %{@guarded_plan | checks: [ci, %{id: "c2", kind: "outcome", statement: "make-all passes.", proof: "ci", ci_check: "make-all"}]})
+
+      for _run <- 1..2, do: assert({:turn, %Step{id: "handoff"}, nil} = run_guard(ctx))
+
+      assert [%{payload: %{outcome: "passed"}}, %{payload: %{outcome: "passed"}}] = events("step.completed")
+      assert events("question.asked") == []
+    end
+
     test "fails back to the code step, naming the open checks a test or an attachment proves", ctx do
       {:ok, _plan} = SymphonyElixir.TicketPlan.write(@repo_key, @issue_id, @guarded_plan)
 
