@@ -1652,7 +1652,8 @@ summary block's or the Decisions section's marker, so a write of those blocks ke
 it. A `Proved by: QA` the author wrote stays in their step's text and keeps an implementer's proof
 off that step. `SymphonyElixir.Walkthrough` reads the walkthrough into steps, and the QA prompt
 lists the proved steps and the steps to walk when an event proves at least one. The `macos_app`
-playbook's live server (`live.walkthrough_mentions`) is asked for only by a step QA walks.
+playbook's live server is asked for only by a plan's QA check QA walks: one a recorded test proves
+asks for nothing.
 
 First the QA run brings its workspace to the PR's current head (GitHub's `refs/pull/<number>/head`),
 so a branch that upkeep updated after the approve is judged at its new head. It uses the rule every
@@ -2011,8 +2012,8 @@ auto_review:
       # live:                             # optional: the project's own server for a live pass (below)
       #   build_cmd: scripts/qa-server-build.sh
       #   start_cmd: scripts/qa-server-start.sh
-      #   paths: ["lib/**", "config/**"]
-      #   walkthrough_mentions: [Director]
+      #   paths: ["lib/**", "config/**"]   # accepted, no longer read: the plan decides
+      #   walkthrough_mentions: [Director]  # accepted, no longer read
 ```
 
 | Key | Default | Does |
@@ -2057,7 +2058,7 @@ way to judge how it draws that state. A **live server** is the project's own ser
 QA VM beside the app, with seeded data behind it, for a step whose point is the round trip through
 the server: press Decide and the Inbox row goes, Undo brings it back; pause a repository and its
 tickets stop starting. The fixtures stay the default; Symphony runs the live server only when the
-change gives a reason.
+ticket's plan asks for it.
 
 `live` on the `macos_app` playbook names that server:
 
@@ -2067,16 +2068,19 @@ change gives a reason.
 | `build_cmd` | none | runs first, in the same copy |
 | `health_check_url` | `http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/api/v1/state` | polled until it answers 200 before the agent starts |
 | `health_timeout_ms` | `600000` | how long that may take |
-| `paths` | `[]` | the changed paths that make a pass live |
-| `walkthrough_mentions` | `[]` (any walkthrough) | words a `## User walkthrough` step must name for the pass to be live |
+| `paths` | `[]` | still accepted; no longer read: the plan decides whether a pass is live |
+| `walkthrough_mentions` | `[]` | still accepted; no longer read: no word in a step makes a pass live |
 
-A pass is live when its PR changes one of `paths` and the ticket's `## User walkthrough` names one
-of `walkthrough_mentions`. A `qa:live` label makes it live whatever the diff, and a `qa:fixture`
-label never does (it wins over `qa:live`). The QA decision's reason says which. For a ticket with a
-plan, the plan's QA checks are the steps, and the reason names them. The same rule
-selects the `macos_app` playbook when no changed path matches its own `paths`: a server-only change
-whose walkthrough walks the Director gets a live pass of the app. A pass that is not live starts no
-server.
+A pass is live when the ticket's plan has a QA check that QA still walks (not waived, and no
+recorded test proves it) whose `setting` names the live server (`source: live`), whatever words
+its text holds; the QA decision's reason names those checks. No word in a step and no changed path
+makes a pass live. A plan written before QA checks carried a setting, and a ticket with no plan
+(only a `## User walkthrough`), get a pass on fixtures only. A `qa:live` label makes it live, and a
+`qa:fixture` label never does (it wins over `qa:live`). The same rule selects the `macos_app`
+playbook when no changed path matches its own `paths`: a server-only change whose plan sets a QA
+check on the live server gets a live pass of the app. A pass that is not live starts no server. The
+QA plan step is given each walked step's setting (the fixture or the live server, the page, the
+window size and the appearance) as facts, and its briefs use them as given.
 
 A live pass runs the server through the same path as `dev_server: true`, with the same port lease
 and stop: a server that does not build, exits or fails its health check makes the pass
@@ -2086,15 +2090,17 @@ server's URL and the token as `SYMPHONY_BAR_CONTROL_URL` and `SYMPHONY_BAR_CONTR
 app's state polls, live channel and moves reach it instead of `api_fixtures`
 ([QA mode](../macos/README.md#qa-mode)). `qa_launch_app`'s `environment` argument picks per launch: `live` (the
 default then) or `fixture`, which launches the app without them. `live` on a pass without a live
-server fails with `qa_live_server_missing`. The QA prompt says both environments are open, and the
-agent picks one per step: a step about how a state looks runs on a committed fixture, a step about
-what happens after a move runs on the live server. Each step's `details` starts with the one it
+server fails with `qa_live_server_missing`. Each step runs in the setting its plan QA check gives
+(the fixture directory or the live server, the page, the window size and the appearance). Only for
+a step whose check carries no setting does the agent pick one by what the step proves, and then on
+fixtures: a step about how a state looks runs on a committed fixture, a step about what happens
+after a move needs the live server. Each step's `details` starts with the one it
 used, `fixture: <the fixture directory's name>` (such as `fixture: update-paused`) or `live: seed`.
 A step whose state no committed fixture has is a finding, so a fixture is committed for the next
 pass, and a step that needs the round trip on a pass with no live server is `unprovable here`,
 with that reason. The QA report's header has an **App environments** line: "fixtures and a live
-server" or "fixtures only", each with its reason (the `qa:live` or `qa:fixture` label, or what the
-diff and the walkthrough gave), so a wrong choice can be corrected with a label. Neither the
+server" or "fixtures only", each with its reason (the `qa:live` or `qa:fixture` label, or the plan's QA
+checks set to the live server), so a wrong choice can be corrected with a label. Neither the
 ticket's author nor its implementer names an environment: the walkthrough stays prose and the
 proofs name tests. `launch_env` may not set the two control variables.
 
@@ -2102,8 +2108,9 @@ Symphony's own repository runs its server this way. Its `WORKFLOW.md` sets the `
 `auto_review.playbooks.macos_app`, with `requires: [mise]`, `build_cmd: scripts/qa-server-build.sh`,
 `start_cmd: scripts/qa-server-start.sh`, `paths` covering `lib/`, `config/`, `priv/`, `mix.exs`
 and `mix.lock`, and `walkthrough_mentions: [Director, Inbox]`; the build command, the app bundle and the port stay in the
-operator's `symphony.yml`. A Mac-only change gets a fixtures-only pass, as before, and a server
-change whose walkthrough walks the Director gets the live server. `scripts/qa-server-build.sh` builds the
+operator's `symphony.yml`. Its `paths` and `walkthrough_mentions` are kept but no longer read: a
+ticket whose plan sets a QA check QA walks on the live server gets it, and any other a
+fixtures-only pass. `scripts/qa-server-build.sh` builds the
 escript on the QA VM (Erlang and Elixir through mise), keeping the Hex, deps and build caches under
 the QA user's home (`$SYMPHONY_QA_SERVER_CACHE`, default `~/Library/Caches/symphony-qa-server`), so
 a second pass fetches and compiles only what changed. `scripts/qa-server-start.sh` starts it on

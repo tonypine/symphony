@@ -23,12 +23,14 @@ defmodule SymphonyElixir.QaPolicy do
 
   A `macos_app` playbook with a `live` server (`SymphonyElixir.PlaybookSettings`) is marked
   `live: true` when the pass should run that server on the QA host beside the app
-  (`SymphonyElixir.QaAgent.Selection.live/3`): the diff touches one of the server's `paths` and the
-  ticket's `## User walkthrough` mentions one of its `walkthrough_mentions` (any walkthrough when it
-  lists none). A `qa:live` label marks it live and a `qa:fixture` label never does, whatever the
-  diff. The same rule selects the playbook for a server-only diff. A pass not marked live starts no
-  server, and the app reads its fixtures only. Either way the playbook keeps the reason as
-  `live_reason`, which the QA report's header states.
+  (`SymphonyElixir.QaAgent.Selection.live/1`): the ticket's plan sets a QA check QA still walks on
+  the live server. The plan decides, never the words of a step or the changed paths; a plan with no
+  setting on its QA checks, and a ticket with no plan, get fixtures only. A `qa:live` label marks it
+  live and a `qa:fixture` label never does. The same rule selects the playbook for a diff outside its
+  paths. A pass not marked live starts no server, and the app reads its fixtures only. Either way the
+  playbook keeps the reason as `live_reason`, which the QA report's header states. A `macos_app`
+  playbook with no `live` server is never live: when the plan asks for the server it keeps that
+  reason too.
   """
 
   require Logger
@@ -100,18 +102,18 @@ defmodule SymphonyElixir.QaPolicy do
 
   def decision(%Issue{} = issue, settings, paths) when is_list(paths) do
     case Selection.decide(issue, paths, settings.auto_review, Verification.selection_opts(settings)) do
-      {:skip, reason} -> skip(issue, settings, paths, reason)
+      {:skip, reason} -> skip(issue, settings, reason)
       {:run, playbooks} -> run(issue, playbooks, paths)
     end
   end
 
   # A groomed ticket whose plan holds an open check only QA proves is never skipped: the plan asked
   # for the pass, whatever a label or the diff says. With no playbook on, nothing can run it.
-  defp skip(issue, settings, paths, reason) do
+  defp skip(issue, settings, reason) do
     case {TicketJourney.owed_by_qa(issue), enabled_playbooks(settings)} do
       {[_ | _] = checks, [_ | _] = playbooks} ->
         ids = Enum.map_join(checks, ", ", & &1.id)
-        {playbooks, live_note} = mark_live(issue, playbooks, paths)
+        {playbooks, live_note} = mark_live(issue, playbooks)
         {:run, playbooks, "the plan has open checks only QA proves (#{ids}), so QA is not skipped though #{reason}" <> live_note}
 
       _nothing_owed_or_no_playbook ->
@@ -120,7 +122,7 @@ defmodule SymphonyElixir.QaPolicy do
   end
 
   defp run(issue, playbooks, paths) do
-    {playbooks, live_note} = mark_live(issue, playbooks, paths)
+    {playbooks, live_note} = mark_live(issue, playbooks)
 
     if nothing_on_screen?(issue, playbooks, paths) do
       {:run, Enum.map(playbooks, &scope_none/1),
@@ -131,13 +133,23 @@ defmodule SymphonyElixir.QaPolicy do
     end
   end
 
-  # Marks the `macos_app` playbook live when its `live` server should run, and says why in the reason.
-  defp mark_live(issue, playbooks, paths) do
+  # Marks the `macos_app` playbook live when the plan asks for its `live` server, and says why in the reason.
+  defp mark_live(issue, playbooks) do
     Enum.map_reduce(playbooks, "", fn
-      %{kind: "macos_app", live_server: live_server} = playbook, note ->
-        case Selection.live(issue, live_server, paths) do
+      %{kind: "macos_app", live_server: _live_server} = playbook, note ->
+        case Selection.live(issue) do
           {true, why} -> {Map.merge(playbook, %{live: true, live_reason: why}), note <> "; the app gets a live server: " <> why}
           {false, why} -> {Map.put(playbook, :live_reason, why), note <> "; the app reads fixtures only: " <> why}
+        end
+
+      %{kind: "macos_app"} = playbook, note ->
+        case Selection.live(issue) do
+          {true, why} ->
+            why = "the playbook sets no `live` server, though #{why}"
+            {Map.put(playbook, :live_reason, why), note <> "; the app reads fixtures only: " <> why}
+
+          {false, _why} ->
+            {playbook, note}
         end
 
       playbook, note ->

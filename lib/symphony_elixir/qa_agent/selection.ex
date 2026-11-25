@@ -3,14 +3,14 @@ defmodule SymphonyElixir.QaAgent.Selection do
   Decides, without an agent, whether a PR head gets a QA pass and which playbooks
   the QA agent follows.
 
-  The decision uses only the changed paths, the issue labels and the issue body:
+  The decision uses only the changed paths, the issue labels, the issue body and the ticket's plan:
 
   - a `qa:skip` label skips QA;
   - a `qa:<kind>` label always selects that playbook;
   - a diff that only touches docs, tests or `auto_review.skip_globs` is skipped;
   - otherwise each playbook is selected by its trigger paths or, for the `cli`
     playbook, a `## User walkthrough` section in the ticket, and the `macos_app`
-    playbook also when its `live` server should run (`live/3`);
+    playbook also when the plan sets a QA check it walks on its `live` server (`live/1`);
   - when nothing is selected (an internal refactor, say), QA is skipped.
 
   Built-in playbooks ship as `priv/qa_playbooks/<kind>.md`. `auto_review.playbooks`
@@ -32,9 +32,10 @@ defmodule SymphonyElixir.QaAgent.Selection do
   `:appearance`; it needs only `verification.dev_server`
   (`dev_server_command?: true`), since `verification.enabled` turns on this host's
   dev server, for agent runs too. Its `live` server, when set, is carried as
-  `:live_server`; when `live/3` says it should run, the playbook is selected even for a
-  diff outside its own paths (a server change the Director's journeys exercise), and
-  `SymphonyElixir.QaPolicy` marks the pass `live: true`. The built-in
+  `:live_server`; when `live/1` says it should run (the plan sets a QA check QA walks on the live
+  server), the playbook is selected even for a diff outside its own paths, and
+  `SymphonyElixir.QaPolicy` marks the pass `live: true`. The server's `paths` and
+  `walkthrough_mentions` stay valid settings but no longer decide it. The built-in
   `android_app` playbook is on only when its config names the `build` command the
   QA agent runs in its sandbox, the APKs it writes (`apk_paths`, or one
   `apk_path`) and the apps' `application_ids`, and `auto_review.android.avd` names the emulator that the
@@ -193,68 +194,29 @@ defmodule SymphonyElixir.QaAgent.Selection do
   end
 
   @doc """
-  Whether a `macos_app` playbook's `live` server runs for this change, and why: the diff touches
-  one of the server's `paths` and a `## User walkthrough` step QA walks mentions one of its
-  `walkthrough_mentions` (any such step when it lists none). A step the implementer proved with a
-  test, recorded as an `evidence` event, is not QA's to walk,
-  so it never asks for the server; the proofs are read from the ticket's events, never from the
-  description. A `qa:live` label makes it run and a `qa:fixture` label never does, whatever the
-  diff; `qa:fixture` wins over `qa:live`. A groomed ticket's steps are its plan's QA checks, and the
-  reason names them instead of the walkthrough.
+  Whether a `macos_app` playbook's `live` server runs for this ticket's QA pass, and why. The plan
+  decides: the pass is live when a QA check QA still walks (not waived, no recorded test proves it)
+  is set to the live server (its `setting.source` is `live`; `SymphonyElixir.TicketJourney.live_checks/1`),
+  whatever its text says, and the reason names those checks. No word in a step and no changed path
+  makes a pass live. A plan whose QA checks carry no setting (written before settings), and a ticket
+  with no plan, get fixtures only. A `qa:live` label makes it run and a `qa:fixture` label never
+  does; `qa:fixture` wins over `qa:live`.
   """
-  @spec live(Issue.t(), PlaybookSettings.live_server(), [String.t()]) :: {boolean(), String.t()}
-  def live(%Issue{} = issue, live_server, changed_paths) when is_list(changed_paths) do
+  @spec live(Issue.t()) :: {boolean(), String.t()}
+  def live(%Issue{} = issue) do
     labels = issue |> Issue.label_names() |> Enum.map(&normalize_label/1)
-    section = walked_section(issue)
-    words = live_words(TicketJourney.groomed?(issue))
 
     cond do
       @fixture_label in labels -> {false, "the issue has the `#{@fixture_label}` label"}
       @live_label in labels -> {true, "the issue has the `#{@live_label}` label"}
-      not server_change?(live_server, changed_paths) -> {false, "the PR changes none of the server's paths"}
-      is_nil(section) -> {false, words.none}
-      section == "" -> {false, words.proved}
-      not mentions?(section, live_server.walkthrough_mentions) -> {false, "#{words.unnamed} names #{words(live_server)}"}
-      true -> {true, "the PR changes the server and " <> walkthrough_note(live_server, words)}
+      (ids = TicketJourney.live_checks(issue)) != [] -> {true, live_checks_reason(ids)}
+      TicketJourney.groomed?(issue) -> {false, "no QA check of the plan that QA walks is set to the live server"}
+      true -> {false, "the ticket has no plan, so no QA check is set to the live server"}
     end
   end
 
-  # What the reason calls the steps: a groomed ticket's are its plan's QA checks.
-  defp live_words(true) do
-    %{
-      none: "the ticket's plan has no QA check",
-      proved: "a test recorded on the ticket proves every QA check of the plan",
-      unnamed: "no QA check of the plan",
-      any: "the plan has a QA check",
-      named: "a QA check of the plan"
-    }
-  end
-
-  defp live_words(false) do
-    %{
-      none: "the ticket has no `## User walkthrough`",
-      proved: "a test recorded on the ticket proves every `## User walkthrough` step",
-      unnamed: "no `## User walkthrough` step",
-      any: "the ticket has a `## User walkthrough`",
-      named: "the `## User walkthrough`"
-    }
-  end
-
-  # The text QA walks: the steps no recorded proof covers (all of a walkthrough with no numbered
-  # step); "" when a proof covers every step, nil for a ticket with no step. A groomed ticket's
-  # steps are its plan's QA checks (`SymphonyElixir.TicketJourney`).
-  defp walked_section(issue), do: TicketJourney.walked_text(issue)
-
-  defp server_change?(live_server, paths),
-    do: Enum.any?(paths, fn path -> Enum.any?(live_server.paths, &glob_match?(path, &1)) end)
-
-  defp mentions?(_section, []), do: true
-  defp mentions?(section, words), do: Enum.any?(words, &Regex.match?(~r/\b#{Regex.escape(&1)}\b/iu, section))
-
-  defp words(%{walkthrough_mentions: words}), do: Enum.map_join(words, " or ", &"`#{&1}`")
-
-  defp walkthrough_note(%{walkthrough_mentions: []}, words), do: words.any
-  defp walkthrough_note(live_server, words), do: "#{words.named} names #{words(live_server)}"
+  defp live_checks_reason([id]), do: "the plan's QA check #{id} is set to the live server"
+  defp live_checks_reason(ids), do: "the plan's QA checks #{Enum.join(ids, ", ")} are set to the live server"
 
   @doc "Whether the issue body has a `## User walkthrough` section, or its plan a QA check (`SymphonyElixir.TicketJourney`)."
   @spec user_walkthrough?(Issue.t()) :: boolean()
@@ -466,14 +428,14 @@ defmodule SymphonyElixir.QaAgent.Selection do
     walkthrough? = user_walkthrough?(issue)
 
     Enum.filter(playbooks, fn playbook ->
-      (walkthrough? and playbook.kind in @walkthrough_kinds) or live_server_runs?(playbook, issue, changed_paths) or
+      (walkthrough? and playbook.kind in @walkthrough_kinds) or live_server_runs?(playbook, issue) or
         Enum.any?(changed_paths, fn path -> Enum.any?(playbook.paths, &glob_match?(path, &1)) end)
     end)
   end
 
-  # A `macos_app` playbook whose live server should run is selected for a server-only diff too.
-  defp live_server_runs?(%{live_server: live_server}, issue, changed_paths), do: elem(live(issue, live_server, changed_paths), 0)
-  defp live_server_runs?(_playbook, _issue, _changed_paths), do: false
+  # A `macos_app` playbook whose live server the plan asks for is selected for a diff outside its paths too.
+  defp live_server_runs?(%{live_server: _live_server}, issue), do: elem(live(issue), 0)
+  defp live_server_runs?(_playbook, _issue), do: false
 
   defp docs_test_or_skipped?(path, skip_globs) do
     docs_or_test?(path) or Enum.any?(skip_globs, &glob_match?(path, &1))

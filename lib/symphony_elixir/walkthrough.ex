@@ -49,12 +49,14 @@ defmodule SymphonyElixir.Walkthrough do
   @test_max 300
 
   @type proof :: %{by: :test, test: String.t()} | %{by: :qa}
-  # A groomed ticket's step names the check of its plan (`SymphonyElixir.TicketJourney`).
+  # A groomed ticket's step names the check of its plan and, when the check sets one, where it is
+  # walked (`setting`; `SymphonyElixir.TicketJourney`).
   @type step :: %{
           required(:number) => pos_integer(),
           required(:text) => String.t(),
           required(:proof) => proof(),
-          optional(:check_id) => String.t()
+          optional(:check_id) => String.t(),
+          optional(:setting) => map()
         }
   @type recorded :: %{step: pos_integer(), test: String.t()}
 
