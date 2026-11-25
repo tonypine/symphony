@@ -12,7 +12,8 @@ to the briefs that share a screen and an app state, as in your plan: they are re
 one fresh walk turn, each with its own result, and count as one session. A brief with no `group` is
 rechecked in a fresh walk turn of its own. At most twelve briefs in all; you review again with
 their answers. Symphony allows two rounds of
-recheck; past them a pass without a verdict is inconclusive.
+recheck; past them a pass without a verdict is inconclusive. A step Symphony marked `unprovable`
+gets no recheck: a recheck whose brief names one is refused and asked again.
 
 Otherwise record the verdict with the `qa_verdict` tool, once, as your last act, then end your
 turn:

@@ -985,15 +985,28 @@ defmodule SymphonyElixir.QaAgent.Steps do
 
   defp check_recheck(%{template: nil}, _briefs), do: {:error, "this pass's list has no `repeat: walkthrough` step to recheck with: give the verdict"}
 
-  # At most `@max_rechecks` sessions: the briefs that share a `group` are one session.
+  # At most `@max_rechecks` sessions: the briefs that share a `group` are one session. A brief
+  # whose `step` is one Symphony marked is refused: a marked step gets no session, a recheck's either.
   defp check_recheck(state, briefs) do
     with true <- is_list(briefs) and briefs != [] and length(briefs) <= @max_recheck_briefs and Enum.all?(briefs, &is_map/1),
-         true <- length(recheck_sessions(state, briefs)) <= @max_rechecks do
+         true <- length(recheck_sessions(state, briefs)) <= @max_rechecks,
+         [] <- marked_briefs(state, briefs) do
       {:recheck, briefs}
     else
       false ->
         {:error, "`recheck` must be a list of one to #{@max_recheck_briefs} briefs, each an object, in at most #{@max_rechecks} sessions (the briefs that share a `group` are one session)"}
+
+      marked ->
+        {:error,
+         "`recheck` names steps Symphony marked `unprovable` before any walk session, which get no session: " <>
+           Enum.map_join(marked, "; ", &"#{PlanCheck.step_name(&1.target)} (#{PlanCheck.details(&1.needs)})") <>
+           ". Leave them out of the recheck; the verdict carries them as Symphony settled them"}
     end
+  end
+
+  defp marked_briefs(state, briefs) do
+    numbers = briefs |> Enum.map(&brief_number/1) |> MapSet.new()
+    Enum.filter(state.marked, &MapSet.member?(numbers, &1.number))
   end
 
   # The plan must brief every walkthrough step the pass walks; a judged step names its status.
@@ -1462,7 +1475,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
 
         :review ->
           "Steps Symphony marked `unprovable` before any walk session (no session walked them); carry each in the verdict " <>
-            "as given, name, status and details, and write no other step for the same walkthrough step:"
+            "as given, name, status and details, write no other step for the same walkthrough step, and ask no recheck of one:"
       end
 
     lead <> "\n" <> Enum.map_join(marked, "\n", &"- #{PlanCheck.step_name(&1.target)}: #{PlanCheck.details(&1.needs)}")

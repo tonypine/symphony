@@ -1247,6 +1247,23 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       assert [%{status: "unprovable"}] = Enum.filter(result.steps, &PlanCheck.names_step?(&1.name, %{number: 1, check_id: "c1"}))
     end
 
+    test "a review's recheck of a step Symphony marked is refused and asked again, and no session walks it", ctx do
+      recheck = %{recheck: [%{step: "1", where: "Home"}, %{step: 2, where: "Page 2"}]}
+      answers(%{"plan" => [{:write, plan([2])}], "review" => [{:write, recheck}, {:write, %{recheck: [%{step: 2, where: "Page 2"}]}}, {:verdict, @pass}]})
+
+      steps = set_live(walkthrough([1, 2]), [1])
+      assert {:ok, %{result: result}} = run(ctx, %{journey: %{source: "the plan", text: "", steps: steps}})
+      turns = turns()
+      assert Enum.map(turns, & &1.id) == ["plan", "walk_2", "design_check", "review", "review", "recheck_1_1", "review"]
+
+      refused = Enum.at(turns, 4)
+      assert refused.prompt =~ "`recheck` names steps Symphony marked `unprovable` before any walk session, which get no session: Walkthrough step 1 (check c1)"
+      assert Enum.at(turns, 3).prompt =~ "and ask no recheck of one:"
+      assert Enum.at(turns, 5).prompt =~ "Page 2"
+      refute Enum.at(turns, 5).prompt =~ "Step 1: open page 1."
+      assert marked_step(result, "Walkthrough step 1 (check c1)").status == "unprovable"
+    end
+
     test "a pass whose walked steps the setting marks every one walks none, and is no pass with nothing on screen", ctx do
       answers(%{"plan" => [{:write, plan([], %{needs_app: false, gallery: []})}], "review" => [{:verdict, @pass}]})
 

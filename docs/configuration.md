@@ -4466,7 +4466,8 @@ verdict with `qa_verdict` in today's contract (or writes it to its answer file),
 recheck, `{"recheck": [brief, ...]}`, at most three sessions of at most twelve briefs: each brief
 runs as a fresh turn of the list's `repeat: walkthrough` step, or one fresh turn for the briefs that
 share a `group`, between the launch and the quit and attach steps run again, then the review runs
-again. Past two rounds the pass is `inconclusive`. A walk-style answer's `status` is `pass`,
+again; a brief whose `step` Symphony marked `unprovable` is refused and asked again, so a marked
+step gets no recheck session either. Past two rounds the pass is `inconclusive`. A walk-style answer's `status` is `pass`,
 `fail`, `blocked`, `unprovable` or `plan_mismatch`: `unprovable` is a step that needs a QA tool, a
 fixture page or the live server the pass does not have, with what it needed; `blocked` is a step
 that could not be judged for any other reason (a harness fault, an empty state).
