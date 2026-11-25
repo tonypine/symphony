@@ -132,6 +132,14 @@ defmodule SymphonyElixir.Conductor.MessageTest do
     end
   end
 
+  describe "a turn that owes nothing" do
+    test "a failed turn of another junction counts nothing", ctx do
+      before = Facts.events(ctx.issue_id)
+      assert Message.unanswered(%{junction: "child_message", issue_id: ctx.issue_id}, nil, "the turn failed") == :ok
+      assert Facts.events(ctx.issue_id) == before
+    end
+  end
+
   describe "the message turn" do
     test "starts at once and replies under the message, with the conversation in its facts", ctx do
       earlier = say!(ctx.issue_id, "Is it started?")
@@ -182,6 +190,18 @@ defmodule SymphonyElixir.Conductor.MessageTest do
       assert [%{parent: ^from}] = events(ctx.issue_id, "conductor.update")
     end
 
+    test "a message as long as TP-1597's new ask (5,296 characters) reaches the turn whole and becomes the ask word for word (TP-1621)", ctx do
+      long = String.slice(String.duplicate("Keep the search text and the sort order too. ", 200), 0, 5_296)
+      assert String.length(long) == 5_296
+      message = say!(ctx.issue_id, long)
+
+      assert answer(ctx.record, message, opts(%{"message" => reply(%{"ask" => true, "plan" => answered_plan()})})) == :ok
+
+      assert_received {:turn, "message", prompt}
+      assert facts_of(prompt)["message"]["text"] == long
+      assert [_linear, %{source: "message", text: ^long}] = TicketPlan.ask(ctx.issue_id)
+    end
+
     test "a plan the ledger refuses is said in plain words, and nothing is written", ctx do
       turn = %{issue_id: ctx.issue_id, repo_key: "default", junction: "message", message: %{event: say!(ctx.issue_id)}}
       refused = Message.write_plan(turn, issue(ctx.record), %{plan: %{summary: "No checks."}, ask: true}, "run-x")
@@ -225,14 +245,19 @@ defmodule SymphonyElixir.Conductor.MessageTest do
       assert log =~ "its plan was refused: check id c1 is used twice"
 
       assert [first, second] = status_notes(ctx.issue_id)
-      assert first == "The Conductor could not answer a message (its answer could not be read). Symphony tries again."
+      assert first == "The Conductor could not answer a message (Symphony refused its answer: `ask` is true, so the answer must hold the new `plan`). Symphony tries again."
       assert second =~ "(its plan was refused: check id c1 is used twice)"
       assert [%{parent: parent, payload: %{junction: "message", text: text}}] = events(ctx.issue_id, "conductor.update")
       assert parent == message.id
 
+      # The reply says in plain words that nothing was done, and what was wrong with the last answer.
       assert text ==
-               "The Conductor could not read this message (its answer could not be read), 3 times, so nothing was done with it. " <>
+               "Symphony gave up on this message: the Conductor tried 3 times to answer it, and Symphony could use none of its answers. " <>
+                 "Nothing was done with it: the plan, the sub-tickets and the runs stay as they were. " <>
+                 "What went wrong the last time: Symphony refused its answer: `ask` is true, so the answer must hold the new `plan`. " <>
                  "It stays in the ticket's history. Send it again to have it read."
+
+      refute text =~ "could not read this message"
 
       assert Message.owed(ctx.issue_id) == %{messages: [], asks: [], children: []}
       assert length(TicketPlan.versions(ctx.issue_id)) == 1

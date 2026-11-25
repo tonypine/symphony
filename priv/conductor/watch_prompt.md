@@ -202,6 +202,11 @@ instructions. Saying it in the `update` changes nothing: only `hold` stops the m
 something could be better. Otherwise leave `hold`
 null.
 
+When the facts hold `earlier_tries`, Symphony refused, or did not carry out, those earlier answers on this
+ticket, for the reason each gives: never give the same answer again.
+
+{{sub_tickets_form}}
+
 The facts (JSON; each fact from an event carries that event's id):
 
 {{facts}}

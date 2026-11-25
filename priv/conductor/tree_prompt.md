@@ -44,25 +44,10 @@ Never answer `"done": true` to close a ticket you could not check. `"done": fals
 to add and no question closes nothing: Symphony then asks the person what to do, so say in your
 `update` what is still open.
 
-The operations (`tree`), each with a `reason`: one or two sentences that say why, in plain words.
-An operation without a reason is dropped. Each one is recorded on the sub-ticket it touches, with
-your reason, for the person to read.
-- `{"op": "add", "title": ..., "ask": ..., "after": [<identifiers>], "repo": ..., "reason": ...}`:
-  a new sub-ticket. Write the `ask` as a complete request for someone who has read nothing else: it
-  gets its own Grooming. `after` names sub-tickets of this ticket whose merged code it builds on;
-  leave it out when there is none. `repo` only when it belongs to another repository.
-- `{"op": "cancel", "ticket": <identifier>, "reason": ...}`: a sub-ticket that is not Done and is
-  no longer needed. Its run is stopped and its pull request closed.
-- `{"op": "rewrite", "ticket": <identifier>, "ask": ..., "stop": true or false, "reason": ...}`: a
-  sub-ticket keeps its place but is asked for something else. The new `ask` is complete, not a
-  correction of the old one. `"stop": true` stops its working run first; without it the run goes on
-  and the new ask is read at the sub-ticket's next turn.
-- `{"op": "stop", "ticket": <identifier>, "reason": ...}`: stop a sub-ticket's working run and
-  change nothing else.
-At `final_check` only `add` is read.
+{{sub_tickets_form}}
 
-Each change to the tree gives this ticket's plan a new version with your reasons. Do not rewrite an
-outcome: outcomes bind. Do not add work the asks do not need.
+Do not rewrite an outcome: outcomes bind. Do not add work the asks do not need. At `final_check`
+only `add` operations make a round; the others are carried out too.
 
 The `update` is for the person who watches the ticket: what you looked at and what you decided, in
 the first person, as markdown of at most 1200 characters. Its first paragraph is one sentence. Its
@@ -89,6 +74,7 @@ Write your answer as one JSON object and nothing else:
 {
   "done": true or false,
   "tree": [<operations>],
+  "plan": null or {<this ticket's whole plan, written again, without sub_tickets>},
   "update": "<for the person> or null",
   "move": null or {"stage": "<one of the facts' stages>", "reason": "<why the ticket goes there now, at most 1000 characters>"},
   "ask_person": null or {"title": "<at most 120 characters>", "question": "<one question>", "why": "<why it needs a person>",

@@ -452,7 +452,7 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
             {"   \n ", "A note needs text"},
             {nil, "A note needs text"},
             {42, "A note needs text"},
-            {String.duplicate("é", 4_001), "A note holds at most 4,000 characters; this one has 4,001"}
+            {String.duplicate("é", 100_001), "A note holds at most 100,000 characters; this one has 100,001"}
           ] do
         conn = post_note(note_params(ticket, text), tmp_dir)
 
@@ -463,8 +463,11 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
       assert RunStore.list_ticket_events(ticket.issue_id, []) == []
       assert audit_records(tmp_dir) == []
 
-      # The bound itself is a message.
-      assert post_note(note_params(ticket, String.duplicate("é", 4_000)), tmp_dir).status == 200
+      # A message is as long as an ask: the 5,296 characters of TP-1597's are one message, word for word,
+      # and so is the bound itself.
+      long = String.duplicate("é", 5_296)
+      assert %{"event" => %{"payload" => %{"text" => ^long}}} = json_body(post_note(note_params(ticket, long), tmp_dir))
+      assert post_note(note_params(ticket, String.duplicate("é", 100_000)), tmp_dir).status == 200
     end
 
     test "an unknown ticket is 404, and a request without the ticket is 422; neither writes", %{ticket: ticket, tmp_dir: tmp_dir} do
