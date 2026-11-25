@@ -157,10 +157,26 @@ defmodule SymphonyElixir.QaStateTest do
 
     test "a QA check that names no state, or only the live server, is not judged" do
       {dir, head} = workspace!()
-      plan!([qa_check("c1", %{}), qa_check("c2", %{setting: @live}), qa_check("c3", %{setting: Map.delete(fixture("x"), :fixture)})])
+
+      plan!([
+        qa_check("c1", %{}),
+        qa_check("c2", %{setting: @live}),
+        qa_check("c3", %{setting: Map.delete(fixture("x"), :fixture)}),
+        # A fixture directory that is only a slash names no path.
+        qa_check("c4", %{setting: fixture("/")})
+      ])
 
       assert {:ok, results} = QaState.judge(issue(), dir, head)
-      assert Enum.map(results, &{&1.check_id, &1.status, &1.paths}) == [{"c1", "unjudged", []}, {"c2", "unjudged", []}, {"c3", "unjudged", []}]
+
+      assert Enum.map(results, &{&1.check_id, &1.status, &1.paths}) ==
+               [{"c1", "unjudged", []}, {"c2", "unjudged", []}, {"c3", "unjudged", []}, {"c4", "unjudged", []}]
+    end
+
+    test "a missing fixture directory's finding says it is the check's fixture setting" do
+      path = %{path: "macos/Tests/Fixtures/demo/split", holds: "fixture", held: false, why: "absent"}
+      result = %{check_id: "c1", statement: "The panel shows c1.", status: "missing", paths: [path]}
+
+      assert QaState.finding_text(result) =~ "macos/Tests/Fixtures/demo/split (the check's fixture setting; the head does not hold it)"
     end
 
     test "a head git cannot read is an error, and so is a base branch it cannot find for an added path" do
