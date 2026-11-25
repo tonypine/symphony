@@ -17,7 +17,7 @@ defmodule SymphonyElixir.DirectorMoves do
     (`SymphonyElixir.BreakdownReview`); the full reset is `:restart`;
   - `:restart`: the full reset, and only a person makes it (design doc D7). A run the ticket has
     is ended first, as `/control/stop` ends it (`SymphonyElixir.Orchestrator.stop_running/2`: the
-    `stop` removal reason, so no pull request is closed by the stop), and the reset waits for its
+    stop keeps the workspace and closes no pull request), and the reset waits for its
     agent to exit before it touches the workspace. It closes the ticket's
     pull requests, removes its workspaces — so the next dispatch branches fresh from the configured
     base branch — and supersedes the workpad, then moves the ticket to `In Progress`
