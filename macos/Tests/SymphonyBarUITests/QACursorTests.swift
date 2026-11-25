@@ -110,8 +110,8 @@ final class QACursorTests: XCTestCase {
         XCTAssertEqual(area.cursor, .iBeam)
         XCTAssertEqual(area.element, "notes")
         let number = recordedKinds(NumberField(value: .constant(3), in: 1...9).qaName("slots"))
-        XCTAssertTrue(number.contains("i_beam slots"), "\(number)")
-        XCTAssertTrue(number.contains("pointing_hand slots"), "the stepper's buttons: \(number)")
+        // The live stepper halves set no cursor of their own (the arrow shows); only a refused half sets one.
+        XCTAssertEqual(number, ["i_beam slots"])
     }
 
     func testTheNotAllowedPointerRecordsItsKindOnlyWhileTheControlIsRefused() {
