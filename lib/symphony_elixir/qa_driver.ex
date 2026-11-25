@@ -687,12 +687,6 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
-  # A pass's first ask for a commit's build tries a build that could not run again, whoever started
-  # the pass; a later ask in the same pass takes the record that attempt left.
-  defp ask_again(driver, head) do
-    if GenServer.call(driver, {:first_ask, head}), do: [ask_again: true], else: []
-  end
-
   defp run_tool("qa_launch_app", driver, config, args) do
     case Map.get(args, "release_pair") do
       flag when flag in [nil, false] -> launch_build(driver, config, args)
@@ -948,6 +942,12 @@ defmodule SymphonyElixir.QaDriver do
       GenServer.call(driver, {:checkout, path})
       {:ok, %{"path" => path, "remote_url" => url, "note" => "Pass this path as qa_launch_app's open_panel_dir to open the folder picker in it."}}
     end
+  end
+
+  # A pass's first ask for a commit's build tries a build that could not run again, whoever started
+  # the pass; a later ask in the same pass takes the record that attempt left.
+  defp ask_again(driver, head) do
+    if GenServer.call(driver, {:first_ask, head}), do: [ask_again: true], else: []
   end
 
   defp api_request_filter(args) do
