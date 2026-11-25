@@ -149,9 +149,9 @@ final class SettingsViewModel: ObservableObject {
     @Published var conductor = ConductorSettings()
     /// Why `symphony check` rejected the changed Conductor settings, shown in their section.
     @Published private(set) var conductorError: String?
-    /// `auto_review.playbooks.macos_app.dev_server`, `dev_server_port` and `launch_env` in the configured
-    /// symphony.yml: whether a macOS app QA pass on the QA host starts the project's dev server there, on which port,
-    /// and the variables the app under test gets.
+    /// `auto_review.playbooks.macos_app.dev_server_port`, `launch_env` and the QA target, with the project's own server
+    /// (`verification.dev_server`), in the configured symphony.yml: how that server is built, started, checked and
+    /// stopped, when it runs, its port on the QA host, and the variables the app under test gets.
     @Published var macAppQA = MacAppQAPlaybook()
     /// Why `symphony check` rejected the changed macOS app QA settings, shown in their section.
     @Published private(set) var macAppQAError: String?

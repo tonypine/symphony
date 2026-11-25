@@ -16,11 +16,13 @@ defmodule SymphonyElixir.QaModeContractTest do
     prompt
   end
 
-  defp settings!(playbooks) do
+  defp settings!(playbooks, runs \\ "symphony_host") do
     config = %{
       "tracker" => %{"kind" => "memory"},
       "auto_review" => %{"playbooks" => playbooks},
-      "verification" => %{"dev_server" => %{"start_cmd" => "mix phx.server", "health_check_url" => "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/health"}}
+      "verification" => %{
+        "dev_server" => %{"start_cmd" => "mix phx.server", "health_check_url" => "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/health", "runs" => runs}
+      }
     }
 
     assert {:ok, settings} = Schema.parse(config)
@@ -71,8 +73,8 @@ defmodule SymphonyElixir.QaModeContractTest do
 
   test "a dev server playbook names its port and the URL variables the app gets" do
     launch_env = %{"HUB_API_URL" => "http://127.0.0.1:$SYMPHONY_VERIFICATION_PORT"}
-    playbook = Map.merge(@macos_app, %{"dev_server" => true, "dev_server_port" => 8123, "launch_env" => launch_env})
-    section = settings!(%{"macos_app" => playbook}) |> QaPolicy.enabled_playbooks() |> QaModeContract.section()
+    playbook = Map.merge(@macos_app, %{"dev_server_port" => 8123, "launch_env" => launch_env})
+    section = settings!(%{"macos_app" => playbook}, "every_qa_pass") |> QaPolicy.enabled_playbooks() |> QaModeContract.section()
 
     assert section =~
              "- The dev server runs on the QA host on port 8123 (`#{Verification.env_var()}`). " <>

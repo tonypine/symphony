@@ -14,16 +14,15 @@ defmodule SymphonyElixir.PlaybookSettingsTest do
   defp macos_app(settings), do: %{"macos_app" => Map.merge(%{"build" => "make app", "app" => "build/App.app"}, settings)}
 
   describe "validate/1" do
-    test "accepts the dev server settings and a launch_env of strings" do
-      assert PlaybookSettings.validate(macos_app(%{"dev_server" => true, "dev_server_port" => 8090, "launch_env" => %{"HUB_OWNER_TOKEN" => "abc"}})) == :ok
-      unset = %{macos_app: %{dev_server: false, dev_server_port: nil, launch_env: nil}, cli: nil, web: "on"}
+    test "accepts the dev server port and a launch_env of strings" do
+      assert PlaybookSettings.validate(macos_app(%{"dev_server_port" => 8090, "launch_env" => %{"HUB_OWNER_TOKEN" => "abc"}})) == :ok
+      unset = %{macos_app: %{dev_server_port: nil, launch_env: nil}, cli: nil, web: "on"}
       assert PlaybookSettings.validate(unset) == :ok
       assert PlaybookSettings.validate(nil) == :ok
     end
 
     test "names the key that is wrong" do
       for {settings, message} <- [
-            {%{"dev_server" => "yes"}, "auto_review.playbooks.macos_app.dev_server must be true or false"},
             {%{"dev_server_port" => 0}, "auto_review.playbooks.macos_app.dev_server_port must be a port number from 1 to 65535"},
             {%{"dev_server_port" => "8090"}, "auto_review.playbooks.macos_app.dev_server_port must be a port number from 1 to 65535"},
             {%{"launch_env" => ["HUB_OWNER_TOKEN=abc"]}, "auto_review.playbooks.macos_app.launch_env must be a map of variable names to strings"},
@@ -56,7 +55,7 @@ defmodule SymphonyElixir.PlaybookSettingsTest do
       assert {:error, {:invalid_repo_workflow_config, message}} = RepoWorkflowSchema.parse(%{"auto_review" => %{"playbooks" => playbooks}})
       assert message == "auto_review.playbooks.macos_app.launch_env.PATH is set by Symphony or the system, so launch_env may not set it"
 
-      good = macos_app(%{"dev_server" => true, "launch_env" => %{"HUB_OWNER_TOKEN" => "abc"}})
+      good = macos_app(%{"dev_server_port" => 8091, "launch_env" => %{"HUB_OWNER_TOKEN" => "abc"}})
       assert {:ok, _config} = SystemSchema.parse(Map.put(@base, "auto_review", %{"playbooks" => good}))
       assert {:ok, _workflow} = RepoWorkflowSchema.parse(%{"auto_review" => %{"playbooks" => good}})
     end
@@ -131,74 +130,25 @@ defmodule SymphonyElixir.PlaybookSettingsTest do
     assert %{dev_server_port: 8090, launch_env: %{}} = macos_app
   end
 
-  describe "live" do
-    @live %{"start_cmd" => "scripts/qa-server-start.sh"}
+  describe "the server's two old descriptions (TP-1663)" do
+    test "are refused, on any playbook, naming verification.dev_server, where the server is described once" do
+      for {kind, key, value} <- [{"macos_app", "dev_server", true}, {"macos_app", "dev_server", false}, {"macos_app", "live", %{"start_cmd" => "start"}}, {"cli", "live", nil}] do
+        playbooks = %{kind => Map.put(%{"build" => "make app", "app" => "build/App.app"}, key, value)}
 
-    test "accepts a live server with only its start command, or with every setting" do
-      assert PlaybookSettings.validate(macos_app(%{"live" => @live})) == :ok
-      assert PlaybookSettings.validate(macos_app(%{"live" => nil})) == :ok
-
-      full = %{
-        start_cmd: "scripts/qa-server-start.sh",
-        build_cmd: "scripts/qa-server-build.sh",
-        health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/healthz",
-        health_timeout_ms: 300_000,
-        paths: ["lib/**", "config/**"],
-        walkthrough_mentions: ["Director"]
-      }
-
-      assert PlaybookSettings.validate(macos_app(%{"live" => full})) == :ok
+        assert PlaybookSettings.validate(playbooks) ==
+                 {:error, "auto_review.playbooks.#{kind}.#{key} is gone: the project's server is described once, in verification.dev_server, and its runs rule says when it runs"}
+      end
     end
 
-    test "names the live setting that is wrong" do
-      path = "auto_review.playbooks.macos_app.live"
-
-      for {settings, message} <- [
-            {%{"live" => "on"}, "#{path} must be a map with at least start_cmd"},
-            {%{"live" => @live, "dev_server" => true}, "#{path} and auto_review.playbooks.macos_app.dev_server: true both run a server on its one port; keep one"},
-            {%{"live" => %{"start" => "x"}}, "#{path}.start is not a live setting"},
-            {%{"live" => %{}}, "#{path}.start_cmd must name the command that starts the server"},
-            {%{"live" => %{"start_cmd" => " "}}, "#{path}.start_cmd must name the command that starts the server"},
-            {%{"live" => Map.put(@live, "build_cmd", 1)}, "#{path}.build_cmd must be a command"},
-            {%{"live" => Map.put(@live, "health_check_url", "")}, "#{path}.health_check_url must be a URL"},
-            {%{"live" => Map.put(@live, "health_timeout_ms", 0)}, "#{path}.health_timeout_ms must be a positive number of milliseconds"},
-            {%{"live" => Map.put(@live, "paths", "lib/**")}, "#{path}.paths must be a list of path globs"},
-            {%{"live" => Map.put(@live, "walkthrough_mentions", [""])}, "#{path}.walkthrough_mentions must be a list of words"}
-          ] do
-        assert {:error, error} = PlaybookSettings.validate(macos_app(settings))
-        assert String.starts_with?(error, message)
-      end
-
-      assert PlaybookSettings.validate(%{"cli" => %{"live" => @live}}) == {:error, "auto_review.playbooks.cli.live is only read on the macos_app playbook"}
+    test "a repository's WORKFLOW.md that still has them loads, described once" do
+      playbooks = macos_app(%{"dev_server" => true, "launch_env" => %{"HUB_OWNER_TOKEN" => "abc"}})
+      assert {:ok, workflow} = RepoWorkflowSchema.parse(%{"auto_review" => %{"playbooks" => playbooks}})
+      assert workflow.verification.dev_server.runs == "every_qa_pass"
+      refute Map.has_key?(workflow.auto_review["playbooks"]["macos_app"], "dev_server")
     end
 
     test "refuses the control URL and token in launch_env: a live server sets them" do
       for name <- ~w(SYMPHONY_BAR_CONTROL_URL SYMPHONY_BAR_CONTROL_TOKEN), do: assert(PlaybookSettings.refused_env?(name))
-    end
-
-    test "the macos_app playbook carries its live server with the defaults filled in" do
-      [macos_app] = %{playbooks: macos_app(%{"live" => @live})} |> Selection.playbooks() |> Enum.filter(&(&1.kind == "macos_app"))
-
-      assert macos_app.live_server == %{
-               build_cmd: nil,
-               start_cmd: "scripts/qa-server-start.sh",
-               health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/api/v1/state",
-               health_timeout_ms: 600_000,
-               paths: [],
-               walkthrough_mentions: []
-             }
-
-      live = %{start_cmd: "start", paths: ["lib/**"], walkthrough_mentions: ["Director"], health_timeout_ms: 1000}
-
-      assert %{paths: ["lib/**"], walkthrough_mentions: ["Director"], health_timeout_ms: 1000} =
-               PlaybookSettings.live_server(%{"live" => live})
-
-      for playbook <- [%{}, %{"live" => nil}, %{"live" => %{}}, %{"live" => @live, "dev_server" => true}] do
-        assert PlaybookSettings.live_server(playbook) == nil
-      end
-
-      [macos_app] = %{playbooks: macos_app(%{})} |> Selection.playbooks() |> Enum.filter(&(&1.kind == "macos_app"))
-      refute Map.has_key?(macos_app, :live_server)
     end
   end
 end

@@ -10,6 +10,7 @@ hooks:
 #   dev_server:
 #     start_cmd: "pnpm dev --port $SYMPHONY_VERIFICATION_PORT"
 #     health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/"
+#     runs: symphony_host  # or every_qa_pass, or live_qa_pass, for a macOS app QA pass on the QA host
 # The body's last line expands to Symphony's playbook. It leaves out these two partials, which the
 # body's Step 1 relies on.
 playbook:

@@ -1,0 +1,37 @@
+# The Settings page's QA fixture for the project's server: the macOS app QA block's Project server group reads
+# verification.dev_server below, and runs: live_qa_pass starts it only for a QA pass the plan marks live.
+issues:
+  provider: memory
+  memory:
+    issues_file: issues.json
+  states:
+    active: [Todo, In Progress]
+    terminal: [Done]
+repositories:
+  - key: web-shop
+    workflow: WORKFLOW.md
+    route:
+      team: TP
+    workspace:
+      source: https://github.com/acme/web-shop.git
+execution:
+  harnesses:
+    claude:
+      command: claude
+      small_model:
+        anthropic: claude-haiku-4-5
+runs:
+  default: { harness: claude, provider: anthropic, model: claude-sonnet-5-5 }
+dashboard:
+  port: 0
+verification:
+  dev_server:
+    build_cmd: scripts/qa-server-build.sh
+    start_cmd: scripts/qa-server-start.sh
+    health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/api/v1/state"
+    health_timeout_ms: 600000
+    runs: live_qa_pass
+auto_review:
+  playbooks:
+    macos_app:
+      dev_server_port: 8090

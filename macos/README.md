@@ -217,12 +217,17 @@ under the form whichever section is shown; a section holding a refused value car
   first and writes only the changed lines.
 - **macOS app QA** sets what a `macos_app` QA pass on the QA host (`auto_review.worker_host`) needs and how it
   runs the project's own server: **QA host tools** is `auto_review.playbooks.macos_app.requires`, the programs
-  the pass looks for when it starts, **Start the project's dev server on the QA host** is `dev_server`
-  (off by default), **Dev server port** is `dev_server_port` (8090), and **App environment** is `launch_env`, a
+  the pass looks for when it starts, and **App environment** is `launch_env`, a
   table of variables the app under test gets after Symphony's own, with **Add Variable** and a remove button per
   row. **QA target window width** and **height in points** are `window_width` and `window_height` (2560 × 1440),
   and **QA target appearance** (Light or Dark) is `appearance` (dark): the one window size and appearance QA
-  launches the app in and judges it at. Values are saved in plain text, so they hold documented QA values only, never a secret. Save runs
+  launches the app in and judges it at. The **Project server** group is the project's own server,
+  `verification.dev_server`, described once: **When it runs** is `runs` (On Symphony's host, `symphony_host`, the
+  default; Every QA pass, `every_qa_pass`; or Live QA passes, `live_qa_pass`, only a pass the plan marks live),
+  **Build command** `build_cmd` (none), **Start command** `start_cmd`, **Health check URL** `health_check_url`,
+  **Health check timeout** `health_timeout_ms` (30000), **Stop signal** `stop_signal` (TERM, INT, QUIT, HUP or
+  KILL; TERM) and **Stop timeout** `stop_timeout_ms` (10000), with **Port on the QA host**, the playbook's
+  `dev_server_port` (8090). Values are saved in plain text, so they hold documented QA values only, never a secret. Save runs
   `symphony check` first, which refuses a name Symphony sets itself, `PATH`, `HOME` or `DYLD_*`, and writes only
   the changed lines.
 - Settings has no Models or Harnesses section: what each kind of run starts with, its fallbacks, each

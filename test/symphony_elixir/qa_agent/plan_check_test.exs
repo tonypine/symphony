@@ -188,7 +188,7 @@ defmodule SymphonyElixir.QaAgent.PlanCheckTest do
   end
 
   describe "the playbook's settings keys" do
-    test "are as they were: a configuration that loaded before loads the same" do
+    test "are as they were, less the server's two old descriptions (TP-1663): a configuration that loaded before loads the same" do
       playbooks = %{
         "macos_app" => %{
           "build" => "make app",
@@ -196,10 +196,8 @@ defmodule SymphonyElixir.QaAgent.PlanCheckTest do
           "appearance" => "dark",
           "window_width" => 2560,
           "window_height" => 1440,
-          "dev_server" => false,
           "dev_server_port" => 8090,
-          "launch_env" => %{"HUB_OWNER_TOKEN" => "abc"},
-          "live" => %{"start_cmd" => "scripts/qa-server-start.sh"}
+          "launch_env" => %{"HUB_OWNER_TOKEN" => "abc"}
         }
       }
 
@@ -217,7 +215,7 @@ defmodule SymphonyElixir.QaAgent.PlanCheckTest do
       assert system.phases.qa.stepped == true
 
       assert Enum.filter(SystemSchema.operator_key_paths(), &String.starts_with?(&1, "auto_review.playbooks.")) ==
-               ~w(auto_review.playbooks.macos_app.appearance auto_review.playbooks.macos_app.dev_server auto_review.playbooks.macos_app.dev_server_port
+               ~w(auto_review.playbooks.macos_app.appearance auto_review.playbooks.macos_app.dev_server_port
                   auto_review.playbooks.macos_app.launch_env auto_review.playbooks.macos_app.window_height auto_review.playbooks.macos_app.window_width)
 
       # The driver's tools the check reads are the driver's own list.

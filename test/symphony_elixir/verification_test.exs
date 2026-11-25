@@ -889,7 +889,14 @@ defmodule SymphonyElixir.VerificationTest do
 
       assert Verification.dev_server_command_configured?(settings)
       refute Verification.dev_server_configured?(settings)
-      assert Verification.selection_opts(settings) == [dev_server?: false, dev_server_command?: true]
+
+      assert Verification.selection_opts(settings) == [
+               dev_server?: false,
+               verification_enabled?: false,
+               dev_server_command?: true,
+               dev_server_runs: "symphony_host"
+             ]
+
       assert Verification.context_for_agent(issue, settings: settings) == {:ok, nil}
       assert Verification.child_specs_for_runtime(settings) == []
 

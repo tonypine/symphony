@@ -39,17 +39,18 @@ defmodule SymphonyElixir.QaAgent do
   `android_app` playbook gets the `qa_android_*` tools of a
   `SymphonyElixir.QaAndroid.Driver` in the same way, which uninstalls its apps and
   gives the emulator back when the pass ends. A pass that runs the
-  `web` playbook, or a playbook with `dev_server: true`, starts `verification.dev_server` on a
+  `web` playbook starts `verification.dev_server` on a
   pooled port from a second worktree at the PR head, outside the agent's sandbox (a server that
-  fails its health check makes the pass `blocked`). A `macos_app` pass with `dev_server: true`
-  runs it on the QA host instead, beside the app, before the agent starts
+  fails its health check makes the pass `blocked`). A `macos_app` pass runs it on the QA host
+  instead when the server's `runs` rule says so (`every_qa_pass`, or `live_qa_pass` for a pass the
+  plan marks live), beside the app, before the agent starts
   (`SymphonyElixir.QaDriver.start_dev_server/3`), and needs only `verification.dev_server`, not
   `verification.enabled`. It never runs it on this host: without a `worker_host` no server starts
   and the QA driver's tools say why. One that fails makes the pass `blocked` with
   `qa_dev_server_failed` and its log, and a port already taken with `qa_dev_server_port_busy`.
   Such a pass first waits for the QA host port's lease while another pass's server holds it
   (`SymphonyElixir.QaDriver.DevServerLease`). A `macos_app` pass `SymphonyElixir.QaPolicy` marked
-  `live` runs the playbook's `live` server the same way, with a control token of its own: the
+  `live` runs the project's server (its `runs` rule `live_qa_pass`) the same way, with a control token of its own: the
   server gets it as `SYMPHONY_QA_CONTROL_TOKEN`, and every app the pass launches gets the server's
   URL and the token as `SYMPHONY_BAR_CONTROL_URL` and `SYMPHONY_BAR_CONTROL_TOKEN`; the agent is
   told it may prove each step on the live server or on the fixtures, and to name which. A `web` pass's session alone gets a
@@ -342,9 +343,9 @@ defmodule SymphonyElixir.QaAgent do
     missing toolchain, a database that refuses to start), mark each step that needs it `blocked`
     with the error in `details`: that is never a reason to write a stub of it. Your sandbox cannot
     use System V shared memory, so a database such as Postgres cannot start inside it (`initdb`
-    fails with `could not create shared memory segment: Operation not permitted`); do not try. A
-    playbook with `dev_server: true` has Symphony run the project's server, and its database,
-    outside your sandbox. When Symphony started no dev server for this pass and a step is blocked
+    fails with `could not create shared memory segment: Operation not permitted`); do not try. The
+    project's server, when its settings say it runs for this pass, is run by Symphony, with its
+    database, outside your sandbox. When Symphony started no dev server for this pass and a step is blocked
     because the project's own server or database is not running, set `needs_dev_server` to true:
     the project then sets up a dev server for the playbook. Leave it false for any other block.
 
@@ -1176,7 +1177,8 @@ defmodule SymphonyElixir.QaAgent do
     end
   end
 
-  # A `macos_app` pass with `dev_server: true` runs the project's dev server on the QA host,
+  # A `macos_app` pass whose server's `runs` rule is `every_qa_pass` (the playbook carries
+  # `dev_server: true`), or a live pass with `live_qa_pass`, runs the project's server on the QA host,
   # beside the app, before the agent starts (TP-1111), and never on this host: without a
   # `worker_host` the driver starts none, and its tools say why (TP-1080). A server that does not
   # build, exits or fails its health check makes the pass `blocked` with its log, and costs no
@@ -1196,10 +1198,10 @@ defmodule SymphonyElixir.QaAgent do
     end
   end
 
-  # A live pass runs the playbook's `live` server; any other runs `verification.dev_server` when
-  # its playbook asks for it.
+  # The project's server (`verification.dev_server`) runs beside the app as its `runs` rule says: a
+  # live pass, with a control token of its own, for `live_qa_pass`; every pass for `every_qa_pass`.
   defp qa_host_server(job, settings) do
-    case Enum.find(job.playbooks, &(Map.get(&1, :kind) == "macos_app" and Map.get(&1, :live) == true and is_map(Map.get(&1, :live_server)))) do
+    case Enum.find(job.playbooks, &(Map.get(&1, :kind) == "macos_app" and Map.get(&1, :live) == true and Map.get(&1, :live_server) == true)) do
       %{} = playbook ->
         {:live_server_url, live_server_spec(playbook, settings, job)}
 
@@ -1211,25 +1213,17 @@ defmodule SymphonyElixir.QaAgent do
 
   # The live server's control token is fresh for each pass: only this pass's app and server know it.
   defp live_server_spec(playbook, settings, job) do
-    live = playbook.live_server
     port = Map.get(playbook, :dev_server_port) || PlaybookSettings.default_port()
     url = "http://127.0.0.1:#{port}"
     token = 24 |> :crypto.strong_rand_bytes() |> Base.url_encode64(padding: false)
-    defaults = settings.verification.dev_server
 
-    %{
-      build_cmd: live.build_cmd,
-      start_cmd: live.start_cmd,
-      health_check_url: Verification.interpolate_port(live.health_check_url, port),
-      health_timeout_ms: live.health_timeout_ms,
-      stop_signal: defaults.stop_signal,
-      stop_timeout_ms: defaults.stop_timeout_ms,
-      port: port,
+    playbook
+    |> qa_host_dev_server_spec(settings, job)
+    |> Map.merge(%{
       url: url,
-      ticket: job.issue.identifier,
       env: [{"SYMPHONY_QA_CONTROL_TOKEN", token}],
       launch_env: [{"SYMPHONY_BAR_CONTROL_URL", url}, {"SYMPHONY_BAR_CONTROL_TOKEN", token}]
-    }
+    })
   end
 
   # The pass holds the QA VM while it runs, so a run's Window tests step waits for it (TP-1554).
@@ -1361,14 +1355,14 @@ defmodule SymphonyElixir.QaAgent do
       "and QA runs again"
   end
 
-  # Only a pass that runs the `web` playbook, or one with `dev_server: true`, starts the dev
-  # server on this host. It runs from its own worktree at the PR head, so its build output never
+  # Only a pass that runs the `web` playbook starts the dev server on this host (a server whose
+  # `runs` rule is `symphony_host`). It runs from its own worktree at the PR head, so its build output never
   # lands in the agent's worktree (where `qa_build` refuses untracked files), and outside the
   # agent's sandbox, which keeps a database such as Postgres from starting (TP-1092). It is
   # stopped, with its port released, when the pass ends. A `macos_app` pass runs its server on the
   # QA host instead (`start_qa_host_dev_server/4`).
   defp with_dev_server(job, worktree, settings, opts, fun) do
-    if Enum.any?(job.playbooks, &(dev_server_playbook?(&1) and not qa_host_dev_server?(&1))) do
+    if web_playbook(job) do
       git = Keyword.get(opts, :git, &default_git/2)
 
       case add_worktree(job, worktree <> "-dev-server", git) do
@@ -1408,19 +1402,14 @@ defmodule SymphonyElixir.QaAgent do
 
   defp web_playbook(job), do: Enum.find(job.playbooks, &(Map.get(&1, :kind) == "web"))
 
-  defp dev_server_playbook?(playbook), do: Map.get(playbook, :kind) == "web" or Map.get(playbook, :dev_server) == true
-
   # The agent's own sandbox may reach the dev server: allowlist mode adds the localhost names.
   # The `browser` MCP server exists only in a `web` pass's session settings.
   defp put_browser_mcp(qa_settings, _job, _worktree, nil, _opts), do: {:ok, qa_settings}
 
+  # A dev server on this host runs only for a `web` pass (`with_dev_server/5`), so it has one.
   defp put_browser_mcp(%Schema{execution: agent} = qa_settings, job, worktree, dev_server, opts) do
     agent = %{agent | network_access: allow_localhost(agent.network_access)}
-
-    case web_playbook(job) do
-      nil -> {:ok, %{qa_settings | execution: agent}}
-      web -> put_browser_mcp_server(%{qa_settings | execution: agent}, web, worktree, dev_server, opts)
-    end
+    put_browser_mcp_server(%{qa_settings | execution: agent}, web_playbook(job), worktree, dev_server, opts)
   end
 
   defp put_browser_mcp_server(%Schema{execution: agent} = qa_settings, web, worktree, dev_server, opts) do

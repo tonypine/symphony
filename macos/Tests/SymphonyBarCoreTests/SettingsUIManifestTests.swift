@@ -140,14 +140,17 @@ final class SettingsUIManifestTests: XCTestCase {
             try QAHostTools.updating($0, from: QAHostTools(), to: QAHostTools(tools: ["go", "pg_ctl"]))
         }, from: yaml)
         let macAppQA = MacAppQAPlaybook(
-            devServer: true,
+            projectServer: ProjectServerSettings(
+                buildCmd: "make build", startCmd: "make serve", healthCheckURL: "http://127.0.0.1:8091/health",
+                healthTimeoutMs: 60_000, stopSignal: .int, stopTimeoutMs: 5_000, runs: .liveQAPass
+            ),
             devServerPort: 8091,
             launchEnv: [LaunchVariable(name: "HUB_OWNER_TOKEN", value: "abc")],
             windowWidth: 1440,
             windowHeight: 900,
             appearance: "light"
         )
-        yaml = try record("setting the macOS app QA dev server", {
+        yaml = try record("setting the macOS app QA settings and the project server", {
             try MacAppQAPlaybook.updating($0, from: MacAppQAPlaybook(), to: macAppQA)
         }, from: yaml)
         var phases = PhaseSettings()
