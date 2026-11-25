@@ -77,7 +77,7 @@ defmodule SymphonyElixir.QaAgent.StepPayloadTest do
   end
 
   describe "plan/2" do
-    test "maps each walk brief and gallery entry to a check, and the skips" do
+    test "maps each walk brief and screen of the app to a check, and the skips" do
       answer = %{
         "needs_app" => false,
         "walk" => [
@@ -87,7 +87,7 @@ defmodule SymphonyElixir.QaAgent.StepPayloadTest do
           %{},
           "not a brief"
         ],
-        "gallery" => [%{"entry" => "button", "variations" => ["primary", "danger"]}, %{"entry" => "chip", "why" => "changed"}, "card", %{}],
+        "screens" => [%{"screen" => "Settings", "where" => ["Open", "Settings"]}, %{"screen" => "Inbox", "why" => "changed", "where" => "the window"}, "Menu", %{}],
         "notes" => "Careful."
       }
 
@@ -99,22 +99,23 @@ defmodule SymphonyElixir.QaAgent.StepPayloadTest do
                %{title: "Step 2", expect: "Menu"},
                %{title: "The menu", expect: "not given"},
                %{title: "Check", expect: "not given"},
-               %{title: "Gallery: button", expect: "primary, danger"},
-               %{title: "Gallery: chip", expect: "changed"},
-               %{title: "Gallery: card", expect: "not given"},
-               %{title: "Gallery: ", expect: "not given"}
+               %{title: "Design: Settings", expect: "Open, Settings"},
+               %{title: "Design: Inbox", expect: "changed"},
+               %{title: "Design: Menu", expect: "not given"},
+               %{title: "Design: ", expect: "not given"}
              ]
 
       assert plan.skips == skips
       assert plan.summary =~ "QA plan. Needs the app: no."
       assert plan.summary =~ "- Step 1: Settings; Open it; expect It shows"
+      assert plan.summary =~ "Screens:\n- Settings\n- Inbox\n- Menu"
       assert plan.summary =~ "Notes: Careful."
       valid!(%{plan: plan})
     end
 
     test "an empty plan and an oversized one stay within the bounds" do
       empty = StepPayload.plan(%{}, [])
-      assert %{checks: [], skips: [], summary: "QA plan. Needs the app: no.\nWalk: nothing.\nGallery: nothing.\nNotes: "} = empty
+      assert %{checks: [], skips: [], summary: "QA plan. Needs the app: no.\nWalk: nothing.\nScreens: none.\nNotes: "} = empty
 
       walk = for n <- 1..60, do: %{"step" => n, "where" => String.duplicate("w", 300), "expect" => String.duplicate("x", 900)}
       big = StepPayload.plan(%{"needs_app" => true, "walk" => walk, "notes" => String.duplicate("n", 5_000)}, [%{title: String.duplicate("t", 300), why: String.duplicate("y", 900)}])

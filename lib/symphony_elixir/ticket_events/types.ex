@@ -706,17 +706,19 @@ defmodule SymphonyElixir.TicketEvents.Types do
       idempotency: :writer
     },
     "evidence" => %{
-      writers: [:agent],
+      # The machine writes the Gallery pictures a QA pass's Gallery step drew (`QaAgent.Steps`).
+      writers: [:agent, :machine],
       run_kinds: :any,
       required: [caption: {:string, 500}],
-      optional: [
-        proof: {:map, [step: :non_neg_integer, test: {:string, 500}]},
-        measures: @measures,
-        step: {:string, 200},
-        result: @step_answer,
-        environment: {:enum, @environments},
-        links: {:list, :string}
-      ],
+      optional:
+        [
+          proof: {:map, [step: :non_neg_integer, test: {:string, 500}]},
+          measures: @measures,
+          step: {:string, 200},
+          result: @step_answer,
+          environment: {:enum, @environments},
+          links: {:list, :string}
+        ] ++ @signal,
       idempotency: :writer
     },
     "finding.recorded" => %{

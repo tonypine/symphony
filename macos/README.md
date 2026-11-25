@@ -1301,7 +1301,7 @@ reached with Tab.
 
   ```bash
   build/SymphonyGallery --entries                      # the entries, their variations and files, as JSON
-  git diff --name-only origin/main | build/SymphonyGallery --affected   # the entries a change is a reason to look at
+  build/SymphonyGallery --shot-all --width desktop --appearance dark --out /tmp/all   # every entry, in one run
   build/SymphonyGallery --shot button --out /tmp/shots # a component's board, light and dark
   build/SymphonyGallery --shot ticket-page --variation ticket-page-waiting --width desktop --out /tmp/shots
   build/SymphonyGallery --shot button --appearance dark --out /tmp/shots   # only the dark pictures

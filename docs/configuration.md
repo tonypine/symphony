@@ -2224,7 +2224,7 @@ tools for it on the QA VM, outside the sandbox, and checks every argument:
 | `qa_build_release_pair` | builds the [signed release pair](#the-signed-release-pair) (`make -C macos release-pair`) where the app runs, signed with the QA host's test signing identity, into the pass's private directory, and returns its `manifest.json` | a worktree `qa_build` would refuse; a QA host without the identity (`qa_signing_identity_missing`) or whose identity is not trusted for code signing (`qa_signing_identity_untrusted`), which the QA agent reports as `blocked`, unless a `worker_host` with passwordless `sudo` lets Symphony install it first (`signing_identity_installed: true`) |
 | `qa_relaunched_app` | waits up to `wait_seconds` (default 60) for the update helper of a release pair's app to ask for the app to start again, after an install or a rollback, starts that bundle in QA mode with the launch's environment and returns its PID, `version` and `build` | a pass that launched no `release_pair` app; a bundle no `release_pair` launch made; no request in time (`qa_no_relaunch`) |
 | `qa_update_feed` | returns the release pair's feed's `mode`, `url` and the app's `requests` to it (oldest first, at most 200), after switching it to `mode` when given: `publish` offers N+1, `none` nothing newer, `forbidden` answers 403 | a pass whose feed is not running; another `mode` |
-| `qa_gallery` | for Symphony.app: runs the Component Gallery in the built bundle (`Contents/Helpers/SymphonyGallery`) on the QA VM. Without `entry` it returns the gallery's `entries` and `widths`, and `affected`: the entries the PR's changed files (the head against its merge base with the base branch) are a reason to look at, or `null` with a `note` when git could not list them. With `entry` (and `variation`, `width`: `laptop`, `desktop` or a number of points) it draws that entry without a window and copies each picture into `qa-evidence/` under the gallery's file name; a component's `entry` alone draws all its variations on one board. A picture `qa-evidence/` already holds is kept and returned with `existing: true` | a pass with no successful `qa_build`; a bundle without the gallery (`qa_gallery_missing`); a name that is not letters, digits, `.`, `_` or `-`; a `variation` or `width` without an `entry`; a screen without a `variation`; a gallery that exits non-zero (`qa_gallery_failed`) |
+| `qa_gallery` | for Symphony.app: runs the Component Gallery in the built bundle (`Contents/Helpers/SymphonyGallery`) on the QA VM. Without `entry` it returns the gallery's `entries` and `widths`. A stepped pass's design check calls it for none of the Gallery's pictures: its Gallery step draws and compares them (`symphony:qa_gallery`). With `entry` (and `variation`, `width`: `laptop`, `desktop` or a number of points) it draws that entry without a window and copies each picture into `qa-evidence/` under the gallery's file name; a component's `entry` alone draws all its variations on one board. A picture `qa-evidence/` already holds is kept and returned with `existing: true` | a pass with no successful `qa_build`; a bundle without the gallery (`qa_gallery_missing`); a name that is not letters, digits, `.`, `_` or `-`; a `variation` or `width` without an `entry`; a screen without a `variation`; a gallery that exits non-zero (`qa_gallery_failed`) |
 | `qa_gallery_open` | for Symphony.app: launches the built app as `qa_launch_app` does, on the fixture folder `macos/Tests/Fixtures/gallery` in the `fixture` environment, with `--open <entry>` and the `variation`, `width` and `appearance` given as the app's arguments, so the app starts the Component Gallery's window in its place; returns what a launch returns | what `qa_gallery` and `qa_launch_app` refuse; a call without `entry` |
 | `qa_api_requests` | returns the requests the apps of one QA root logged there, with `api_fixtures` or a live Symphony, that no call returned yet: each move (POST, DELETE) from `api-requests.jsonl` with its `at`, `method`, `path` and `body`, and each read (GET) from `api-reads.jsonl` with its `at`, `method`, `path`, `query` and `status`, oldest first. `method` and `path` narrow the list, and the requests they leave out stay for a later call; at most the last 500 that match, with `dropped` counting the rest. It takes the logs away so the next call returns only newer ones; it reads them on the QA VM. `root: <n>` names the root (a number `qa_launch_app` returned); without it, the root of the last launch. The result names the `root` it read | a `root` the pass does not have (`qa_unknown_root`), a log that cannot be read |
 
@@ -4504,6 +4504,19 @@ model, through the QA driver the pass holds:
   plan found nothing on screen to judge, and the review's `pass` is a `pass` with `scope: none`,
   accepted on the app check like any such pass. It is the pass's health check: every agent step
   that drives the app (a walk, a recheck, the design check) gets a launch of its own, below;
+- `symphony:qa_gallery`: the Component Gallery pictures the change changed. The gallery of the
+  change's app and the gallery of its base's app (the merge-base of the head with the base branch,
+  built and stored by Symphony as any head is) each draw every entry in one run
+  (`SymphonyGallery --shot-all`), at the QA target's appearance and, for a screen, its window's
+  width, and the pictures are paired by file name and compared by their decoded pixels: a picture
+  that differs, or that only the change has, is judged; one only the base has is listed as removed
+  and not judged. The pictures to judge are copied into `qa-evidence/`, put on the ticket's history
+  as one `evidence` event, and named in the design check's prompt, which calls `qa_gallery` for
+  none of them. A step that could not draw or compare (no build of the base, a base gallery from
+  before `--shot-all`, a gallery that failed) fails with its reason and never hands the design check
+  every entry. It is skipped when the plan found nothing on screen to judge. When no picture changed
+  and the plan names none of the app's screens (`screens`), the design check is skipped, saying so,
+  and no session starts for it;
 - `symphony:qa_quit`: `qa_quit_app` for every app the pass launched;
 - `symphony:qa_attach`: the evidence files the steps named and wrote under `qa-evidence/`, and any
   named but missing. The pass keeps them with its other files when it ends, as before.
@@ -4522,7 +4535,8 @@ PID of an app that quit.
 A failed machine step goes to its `on_fail`, else the pass ends `blocked` with its output. An agent
 step is a turn with the QA tool scope that ends with its answer file, checked against its `answer`;
 one that misses it is asked once more, then fails on to its `on_fail`, else to the next step, so the
-review sees it. Three steps are read by id: `plan` must brief every walkthrough step the pass walks
+review sees it. Four steps are read by id: `design_check` is given the Gallery step's pictures and
+skipped as above; `plan` must brief every walkthrough step the pass walks
 (a `walk` entry whose `step` is its number), or it is refused and asked again; `review` records the
 verdict with `qa_verdict` in today's contract (or writes it to its answer file), or asks for a
 recheck, `{"recheck": [brief, ...]}`, at most three sessions of at most twelve briefs: each brief
@@ -4592,7 +4606,7 @@ phases:
             mode: orchestrated
             session: lead
             effort: high
-            answer: {needs_app: boolean, walk: list, gallery: list, notes: string}
+            answer: {needs_app: boolean, walk: list, screens: list, notes: string}
           - {id: launch, title: Launch the app, mode: machine, command: "symphony:qa_launch", timeout_ms: 300000, on_fail: quit}
           - id: walk
             title: Walk a step
@@ -4601,14 +4615,17 @@ phases:
             session: fresh
             model: small
             answer: {status: string, expected: string, actual: string, details: string, evidence: list}
+          - {id: gallery, title: "Draw the Gallery and compare it with the base's", mode: machine, command: "symphony:qa_gallery", timeout_ms: 3600000, on_fail: quit}
           - {id: design_check, title: Design check, mode: orchestrated, session: fresh, model: small, answer: {status: string, expected: string, actual: string, details: string, evidence: list}}
           - {id: quit, title: Quit the app, mode: machine, command: "symphony:qa_quit", timeout_ms: 60000}
           - {id: attach, title: Attach the evidence, mode: machine, command: "symphony:qa_attach", timeout_ms: 60000}
           - {id: review, title: Review and verdict, mode: orchestrated, session: lead, effort: high}
 ```
 
-The build comes before the plan because the gallery's listing of the entries the change affects
-(`qa_gallery`) reads the built app. Settings › Phases edits `stepped` and each playbook's list
+The plan names the app's own windows, sheets, panels and menus the design check judges
+(`screens`), and no Gallery entry: the Gallery step finds those. A file that sets its own list keeps
+loading: a list without the Gallery step gives the design check no Gallery pictures, and a plan
+answer that still names `gallery` is read without it. Settings › Phases edits `stepped` and each playbook's list
 (pick QA, then the list), and each agent step's `model`, `effort`, `session` and `repeat`.
 
 A list is refused when `symphony.yml` loads, with the step named: an `on_fail` that names a step not

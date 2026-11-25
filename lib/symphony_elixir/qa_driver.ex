@@ -261,10 +261,11 @@ defmodule SymphonyElixir.QaDriver do
 
   Component Gallery: `qa_gallery` and `qa_gallery_open` show the second program in
   Symphony.app's bundle (`SymphonyElixir.QaDriver.Gallery`): the first lists its entries,
-  with the ones the PR's changed files are a reason to look at, or draws one entry into
-  `qa-evidence/` without a window; the second launches the build on the gallery's fixture
-  folder, where the app starts the gallery in its place, open on one entry. Both fail with
-  `qa_gallery_missing` on a bundle without it.
+  or draws one entry into `qa-evidence/` without a window; the second launches the build on the
+  gallery's fixture folder, where the app starts the gallery in its place, open on one entry. Both
+  fail with `qa_gallery_missing` on a bundle without it. `gallery_changes/1`, which no agent
+  calls, is the stepped pass's Gallery step: the pictures the change changed, drawn and compared
+  with its base's.
 
   Dev server: `start_dev_server/3` runs the project's `verification.dev_server`
   on the QA host, beside the app (`SymphonyElixir.QaDriver.DevServer`), and the
@@ -282,7 +283,7 @@ defmodule SymphonyElixir.QaDriver do
 
   require Logger
 
-  alias SymphonyElixir.{AgentEnv, OpenRouter, PathSafety, QaBuild, QaPolicy, Workspace}
+  alias SymphonyElixir.{AgentEnv, OpenRouter, PathSafety, QaBuild, Workspace}
   alias SymphonyElixir.PlaybookSettings
   alias SymphonyElixir.QaDriver.{Checks, Cursor, DevServer, DevServerLease, Elements, Gallery, Machine, Pages, Picture}
   alias SymphonyElixir.QaDriver.{ReleasePair, Remote, SafeHost}
@@ -563,6 +564,32 @@ defmodule SymphonyElixir.QaDriver do
   end
 
   @doc """
+  The Component Gallery pictures the change changed, for the stepped pass's Gallery step
+  (`SymphonyElixir.QaAgent.Steps`), with no agent: the gallery of the app the last `qa_build`
+  produced and the gallery of its base's app (the merge-base of `HEAD` with the base branch, whose
+  build Symphony stores like any other, `SymphonyElixir.QaBuild`) each draw every entry in one run,
+  at the QA target (its appearance, and its window's width for a screen), and the pictures are
+  compared by their pixels (`SymphonyElixir.QaDriver.Gallery.compare/3`). The changed and new
+  ones are copied into `qa-evidence/`.
+
+  It answers the base commit, the target's `appearance` and `width`, the file names `changed`,
+  `new`, `removed` and `same`, and `files`: the paths under `qa-evidence/` of the pictures to
+  judge. A base with no build, a gallery that failed, or a picture that could not be read is an
+  error, never every entry to judge.
+  """
+  @spec gallery_changes(pid() | nil) :: {:ok, map()} | {:error, tool_error()}
+  def gallery_changes(nil), do: call_tool(nil, "qa_gallery", %{})
+
+  def gallery_changes(driver) when is_pid(driver) do
+    case GenServer.call(driver, :config) do
+      %{unavailable: {:error, _reason} = error} -> error
+      config -> compare_gallery(driver, config)
+    end
+  catch
+    :exit, _reason -> tool_error("qa_driver_unavailable", "The QA driver for this pass has stopped.")
+  end
+
+  @doc """
   The PIDs of the launched apps still running (none has exited or been quit), so the stepped
   pass hands a session only an app it can drive. None when there is no driver.
   """
@@ -791,16 +818,14 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
-  # Without an entry: what the gallery shows, and which entries the PR's changed files (the paths
-  # the QA decision read, `SymphonyElixir.QaPolicy.changed_paths/4`) are a reason to look at.
-  # A picture is drawn at the QA target (its appearance, and its window's width for a screen) unless
+  # Without an entry: what the gallery shows. A picture is drawn at the QA target (its appearance, and its window's width for a screen) unless
   # the call names another.
   defp run_tool("qa_gallery", driver, config, args) do
     with {:ok, arguments} <- Gallery.arguments(args),
          {:ok, gallery} <- gallery(driver, config) do
       case arguments do
         %{entry: nil} ->
-          Gallery.listing(config, gallery, QaPolicy.changed_paths(config.worktree, config.repo_key, "HEAD", git: config.git))
+          Gallery.listing(config, gallery)
 
         arguments ->
           {target_width, _height} = config.window_size
@@ -1210,6 +1235,72 @@ defmodule SymphonyElixir.QaDriver do
         {:ok, Map.merge(payload, %{"release_pair" => true, "bundle" => bundle, "note" => note})}
       end
     end
+  end
+
+  # -- the Gallery step ---------------------------------------------------------
+
+  defp compare_gallery(driver, config) do
+    {width, _height} = config.window_size
+    target = %{width: Integer.to_string(width), appearance: config.appearance}
+
+    with {:ok, gallery} <- gallery(driver, config),
+         {:ok, base, base_gallery} <- base_gallery(config),
+         {:ok, head_drawn} <- Gallery.draw_all(config, gallery, target, "change"),
+         {:ok, base_drawn} <- Gallery.draw_all(config, base_gallery, target, "base"),
+         {:ok, compared} <- Gallery.compare(config, head_drawn, base_drawn),
+         {:ok, %{"files" => files}} <- Gallery.save(config, head_drawn, compared.changed ++ compared.new, compared.pngs) do
+      {:ok,
+       %{
+         "base" => base,
+         "appearance" => target.appearance,
+         "width" => width,
+         "changed" => compared.changed,
+         "new" => compared.new,
+         "removed" => compared.removed,
+         "same" => compared.same,
+         "files" => Enum.map(files, & &1["path"])
+       }}
+    end
+  end
+
+  # The gallery of the base's app: the build Symphony stores for the merge-base's tree, asked for
+  # as the pass's own build is, and copied out of the store as every build is.
+  defp base_gallery(config) do
+    with {:ok, base} <- merge_base(config),
+         {:ok, record} <- base_build(config, base),
+         {:ok, built} <- built_app(config, Path.dirname(record.app), Path.basename(record.app)),
+         gallery = Gallery.path(built.executable),
+         :ok <- Gallery.ensure_present(config, gallery) do
+      {:ok, base, gallery}
+    end
+  end
+
+  defp merge_base(config) do
+    branch = "origin/" <> SymphonyElixir.Config.base_branch(config.repo_key)
+
+    case config.git.(["merge-base", branch, "HEAD"], config.worktree) do
+      {output, 0} ->
+        {:ok, String.trim(to_string(output))}
+
+      {output, status} ->
+        tool_error("qa_gallery_no_base", "The base of the change (the merge-base of HEAD with #{branch}) could not be read: git exited #{status}: #{tail(String.trim(to_string(output)), 500)}")
+    end
+  end
+
+  # The base is asked for by the ticket's name alone: it is no head of the ticket, so it never
+  # replaces the build the ticket's head needs, nor holds the ticket. The pass's own build was
+  # asked for the same way, so the ticket is there.
+  defp base_build(%{repo_key: repo_key, ticket: %{identifier: identifier}} = config, base) do
+    case config.qa_build.fetch(repo_key, base, %{identifier: identifier}, heartbeat: config.heartbeat) do
+      %{status: :ready} = record -> {:ok, record}
+      %{status: :failed} = record -> no_base_build(base, "it failed to build (exit #{record.exit_status})")
+      %{status: :unavailable} = record -> no_base_build(base, "it could not be built: #{record.reason}")
+      _none -> no_base_build(base, "Symphony has no build of it")
+    end
+  end
+
+  defp no_base_build(base, why) do
+    tool_error("qa_gallery_no_base", "The base's app (commit #{String.slice(base, 0, 12)}) has no build to draw its Component Gallery with: #{why}.")
   end
 
   # -- build and bundle checks ------------------------------------------------

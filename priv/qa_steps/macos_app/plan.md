@@ -6,8 +6,8 @@ session, and every step with no group in a session of its own. What you write is
 knows, so each brief must stand on its own.
 
 Read the ticket, its parent and design (named below), the PR's diff (`git diff <base>...HEAD`
-in this worktree), the facts Symphony gathered (the steps QA walks, the pre-checks' results, the
-gallery entries the changed files affect) and the screen rules below. Then answer:
+in this worktree), the facts Symphony gathered (the steps QA walks, the pre-checks' results) and the
+screen rules below. Then answer:
 
 - `needs_app` (true or false): whether anything in this pass judges the running app's screens.
   False only when no walkthrough step is walked and nothing on screen changed. Symphony builds,
@@ -55,19 +55,21 @@ gallery entries the changed files affect) and the screen rules below. Then answe
     as `macos/Tests/Fixtures/director-app/update-paused`, or by its name, such as `update-paused`),
     `{"kind": "server"}` for the live server. Name
     every such need, including one the facts below say the pass lacks.
-  Never invent a fixture, a stub or a gallery entry: use the ones the rules and facts name.
+  Never invent a fixture or a stub: use the ones the rules and facts name.
   Symphony checks each brief's `needs` itself, against the QA driver's tools, the live server and
   the fixtures in this worktree (the facts below): a step with a need the pass lacks is
   `unprovable`, with what it needed, and no walk session runs for it. Symphony refuses a `needs`
   in another shape and asks you again. A step the facts list as marked `unprovable` already, from
   its setting, gets no brief.
-- `gallery`: the gallery entries to judge in the design check, each an object with `entry`, the
-  `variations` the change can show in, and why (the changed file, or the ticket's deliverable); an
-  `appearance` or `width` only for the exception below.
-  Include every entry the facts list as affected. Empty when nothing on screen changed.
+- `screens`: the app's own windows, sheets, panels and menus the change adds or changes, for the
+  design check to judge in the running app, each an object with `screen` (its name), `where` (how
+  to reach it from launch) and `why` (the changed file, or the ticket's deliverable). Empty when the
+  change shows on none of them. Name no Component Gallery entry: Symphony draws the gallery of the
+  change and of its base, and hands the design check every picture that changed. When the pictures
+  did not change and `screens` is empty, the design check does not run.
 - The QA target: QA judges the app in one appearance at one window size (the QA target below),
   and Symphony launches and sizes it there. Name another appearance or size, in a brief's `launch`
-  and `also`, or a gallery entry's `appearance` and `width`, only when the step's setting names it
+  and `also`, only when the step's setting names it
   or the ticket is about it: its
   ask or plan names light mode (or the other appearance), a small window or a specific size, or the
   change is to how the app adapts to its appearance or window size. Otherwise the briefs name

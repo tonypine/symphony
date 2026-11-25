@@ -6,7 +6,7 @@
 #
 # It lays the helper out as the QA build does (Contents/Helpers/SymphonyGallery, its fixtures in
 # Contents/Resources/GalleryResources) in a temporary folder, runs it from there, and checks that `--entries`,
-# `--check`, `--shot` and `--open`'s lookup read from that copy and nothing else. `make build-gallery` runs it.
+# `--check`, `--shot`, `--shot-all` and `--open`'s lookup read from that copy and nothing else. `make build-gallery` runs it.
 set -eu
 
 macos="$(cd "$(dirname "$0")/.." && pwd)"
@@ -38,6 +38,24 @@ python3 -c 'import json, sys; assert json.load(open(sys.argv[1]))["entries"], "n
 
 "$helper" --shot button --out "$work/shots" || fail "--shot button exited $?"
 ls "$work/shots" | grep -q 'light' || fail "--shot button drew nothing"
+
+# `--shot-all` draws every entry in one run, into one folder, under `--shot`'s file names (TP-1667): QA draws the
+# change's gallery and its base's this way and compares them, so two runs of one build draw the same pictures.
+"$helper" --shot-all --width desktop --appearance dark --out "$work/all" > "$work/all.txt" || fail "--shot-all exited $?"
+"$helper" --shot-all --width desktop --appearance dark --out "$work/again" > /dev/null || fail "--shot-all exited $? the second time"
+python3 - "$work/entries.json" "$work/all" "$work/again" <<'EOF' || fail "--shot-all did not draw every entry the same way twice"
+import json, os, sys
+entries, first, second = json.load(open(sys.argv[1]))["entries"], sys.argv[2], sys.argv[3]
+drawn = sorted(os.listdir(first))
+assert drawn, "no picture"
+assert all(name.endswith("-dark.png") for name in drawn), "a picture in another appearance"
+for entry in entries:
+    names = [entry["id"] + "-1-dark.png"] if entry["kind"] == "component" else entry["variations"]
+    assert any(any(name.startswith(n.removesuffix(".png")) for n in names) for name in drawn), "nothing of " + entry["id"]
+assert drawn == sorted(os.listdir(second)), "the two runs drew other pictures"
+changed = [name for name in drawn if open(os.path.join(first, name), "rb").read() != open(os.path.join(second, name), "rb").read()]
+assert not changed, "drawn otherwise the second time: " + ", ".join(changed)
+EOF
 
 # `--open` reads every story before it opens its window; an entry it does not know stops it there, with the list.
 if "$helper" --open no-such-entry > "$work/open.txt" 2>&1; then fail "--open no-such-entry opened a window"; fi

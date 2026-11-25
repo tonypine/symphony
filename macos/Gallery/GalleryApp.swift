@@ -14,8 +14,6 @@
 //                                         `--dark` for the dark appearance). It fills the screen, over the menu bar
 //                                         and the Dock; `--window` keeps it a window
 //   SymphonyGallery --entries             the entries, as JSON: id, title, kind, variations, the files each shows
-//   SymphonyGallery --affected            the entries a change is a reason to look at, as JSON; the changed files'
-//                                         repository paths come one per line on standard input
 //   SymphonyGallery --shot <entry> [--variation <name>] [--width laptop|desktop|<points>] [--appearance light|dark]
 //                      --out <dir>
 //                                         draws the entry to files, without a window, in both appearances or only
@@ -25,6 +23,11 @@
 //                                         `<dir>/<variation>-<laptop|desktop|points>-<light|dark>.png`, at both
 //                                         widths or at the named one; a variation of one size (a sheet) as
 //                                         `<dir>/<variation>-<light|dark>.png`
+//   SymphonyGallery --shot-all [--width laptop|desktop|<points>] [--appearance light|dark] --out <dir>
+//                                         every entry, in one run, into one folder, as `--shot` draws each (same
+//                                         file names): QA draws the change's gallery and its base's this way and
+//                                         compares the pictures (TP-1667). Its pictures are the same from one run
+//                                         to the next for the same build
 //   SymphonyGallery --check               fails, saying why, when the entries and the variations disagree, or the
 //                                         committed list of component variations is not the gallery's
 //   SymphonyGallery --component-variations   that list, as Gallery/component-variations.txt holds it
@@ -127,13 +130,6 @@ func runGallery() {
         ]))
         return
     }
-    if arguments.contains("--affected") {
-        var paths: [String] = []
-        while let line = readLine() { paths.append(line.trimmingCharacters(in: .whitespaces)) }
-        let affected = galleryAffected(by: paths)
-        print(json(["all": affected.all, "entries": affected.entries]))
-        return
-    }
     if arguments.contains("--component-variations") {
         print(componentVariationsText(componentVariationNames), terminator: "")
         return
@@ -148,17 +144,22 @@ func runGallery() {
         print(problems.isEmpty ? "gallery: \(galleryEntries.count) entries, \(galleryVariations.count) variations, every shared file shown" : "gallery: \(problems.count) problem(s)")
         exit(problems.isEmpty ? 0 : 1)
     }
+    let appearance = value(after: "--appearance").map { word -> ColorScheme in
+        switch word {
+        case "light": return .light
+        case "dark": return .dark
+        default:
+            FileHandle.standardError.write("--appearance takes light or dark, not \(word)\n".data(using: .utf8)!)
+            exit(2)
+        }
+    }
+    if arguments.contains("--shot-all") {
+        guard let out = value(after: "--out") else { fatalError("--shot-all needs --out <dir>") }
+        for entry in galleryEntries { shoot(entry, width: width, appearance: appearance, into: URL(fileURLWithPath: out)) }
+        return
+    }
     if let id = value(after: "--shot") {
         guard let out = value(after: "--out") else { fatalError("--shot needs --out <dir>") }
-        let appearance = value(after: "--appearance").map { word -> ColorScheme in
-            switch word {
-            case "light": return .light
-            case "dark": return .dark
-            default:
-                FileHandle.standardError.write("--appearance takes light or dark, not \(word)\n".data(using: .utf8)!)
-                exit(2)
-            }
-        }
         shoot(
             entry(id), only: value(after: "--variation").map { variation($0, of: entry(id)).id }, width: width,
             appearance: appearance, into: URL(fileURLWithPath: out)

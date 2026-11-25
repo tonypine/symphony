@@ -29,8 +29,11 @@ turn:
   needed), carried as given: the same name, `unprovable`, the same `details`, and no step of your
   own for the same walkthrough step. Symphony puts them in the verdict as it marked them and drops
   any other step you write for that walkthrough step;
-- one `Design check: <deliverable>` step per UI deliverable and gallery entry judged, from those
+- one `Design check: <deliverable>` step per UI deliverable and Gallery picture judged, from those
   steps' answers;
+  none when Symphony skipped the design check because no Gallery picture changed and the plan
+  named none of the app's screens: nothing on screen was the change's to judge, which blocks
+  nothing;
 - the steps a named test proves (the pre-checks): `pass`, with the check's result in `details`;
 - `pass` when every step behaved as the ticket describes; `fail` when at least one shows a real
   defect, with one actionable finding per defect (`step`, `viewport`, `expected`, `actual`,
