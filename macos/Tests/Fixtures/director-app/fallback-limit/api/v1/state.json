@@ -82,6 +82,15 @@
       "since": "2026-10-07T14:13:00Z",
       "state": "Todo",
       "title": "Webhook delivery log"
+    },
+    {
+      "issue_id": "i-301",
+      "issue_identifier": "SHOP-301",
+      "title": "Saved carts",
+      "state": "QA",
+      "repo_key": "web-shop",
+      "reason": "Claude and OpenCode Go are at their usage limits; the earliest reset is 13:02 UTC-3",
+      "since": "2026-10-07T14:20:00Z"
     }
   ],
   "dispatch_state": {
@@ -347,18 +356,7 @@
       "title": "Changelog page"
     }
   ],
-  "skipped": [
-    {
-      "issue_id": "i-301",
-      "issue_identifier": "SHOP-301",
-      "title": "Saved carts",
-      "state": "QA",
-      "repo_key": "web-shop",
-      "reason": "Claude and OpenCode Go are at their usage limits; the earliest reset is 13:02 UTC-3",
-      "rule": "usage_limit",
-      "since": "2026-10-07T14:20:00Z"
-    }
-  ],
+  "skipped": [],
   "slot_waiting": [
     {
       "attempt": null,
