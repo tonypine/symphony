@@ -40,6 +40,12 @@ defmodule SymphonyElixir.QaModeContractTest do
     assert prompt =~ "- `#{contract.qa_root_env}`: the QA root, the launch's run directory on the QA host."
     assert prompt =~ "`qa_api_requests` reads `#{contract.api_requests_log}` from the QA root."
     assert prompt =~ "The app logs its reads (GETs) to `#{contract.api_reads_log}` beside it"
+    # The element report (TP-1677): the folder the app's QAMode.elementsFolder names, one file per process.
+    assert contract.elements_folder == "elements"
+    assert prompt =~ "The app writes its element report (its named elements, their frames and its state) to `elements/<pid>.json` there"
+    swift = File.read!("macos/Sources/SymphonyBarCore/QAElementReport.swift")
+    assert swift =~ ~s(public static let elementsFolder = "#{contract.elements_folder}")
+    assert swift =~ ~s{appendingPathComponent("\\(pid).json")}
     assert prompt =~ "- `#{contract.api_fixtures_env}`: read-only, set on a launch with `api_fixtures`."
     assert prompt =~ "- `#{contract.appearance_env}`: `light` or `dark` when the launch asks for an appearance."
 

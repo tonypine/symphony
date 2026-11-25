@@ -316,6 +316,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         updates.start()
         QAScriptDriver.startIfScripted(menu: menu) { [weak self] in self?.runner.pid }
         QAStatusMenuOpener.startIfQAMode(item: item)
+        // QA mode only: the named elements on screen, for QA's element tools (TP-1677).
+        QAElementRecorder.start(qaMode: AppStores.current.qaMode)
         for opening in AppStores.current.qaMode?.openings ?? [] {
             switch opening {
             case let .page(view): symphonyWindow.show(view: view)

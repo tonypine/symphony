@@ -34,10 +34,14 @@ gallery entries the changed files affect) and the screen rules below. Then answe
   - `do`: the actions, in order, as a person would take them. A drag names where it starts and
     where it drops (the walk turn drags with `qa_drag`). A wait names its seconds (the walk turn
     waits with `qa_wait_check`); never write `sleep` or a shell command into a brief;
-  - `expect`: what must be true, in the ticket's words, including the exact texts to read. A
-    position, size or order the app reports is read from `qa_ax_tree`'s frames; a picture judges
-    how a thing looks, with `qa_crop` for a close look and `qa_measure` for an alignment or a gap
-    ("within 1 pt");
+  - `expect`: what must be true, in the ticket's words, including the exact texts to read. Name
+    the elements a step acts on, reaches or measures by their QA names (the playbook's "QA names":
+    `queue-row-TP-12`, `done-row-TP-12:title`), never by a name found by searching the code: the
+    walk turn lists them with `qa_elements`, brings one into view with `qa_scroll_to` and measures
+    a size, a gap or an alignment between two with `qa_measure_elements`, from the frames the app
+    reports. The page shown, a selection or a focus is read from the app's `app_state`. Other
+    positions and order come from `qa_ax_tree`'s frames; a picture judges how a thing looks, with
+    `qa_crop` for a close look and `qa_measure` only for what the app does not report;
   - `design`: the design reference to compare with (a Screens HTML file or image named below, or
     "the design system alone");
   - `screenshots`: the names to save each judgment under (lowercase, hyphens, no extension);

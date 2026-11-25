@@ -226,7 +226,7 @@ public struct QueueRow: View {
         // The label also says it is dragged: a combined element's value does not always reach the tree mid-drag.
         .accessibilityLabel(Self.accessibilityLabel(row, picked: picked))
         .accessibilityValue(Self.accessibilityState(look, reorderable: reorderable, picked: picked))
-        .accessibilityIdentifier(Self.accessibilityIdentifier(row.identifier))
+        .qaName(Self.accessibilityIdentifier(row.identifier))
         .accessibilityAction(named: "Start") { onStart() }
         .modifier(EpicActions(epic: row.epic, toggle: onToggle, toggleDone: onToggleDone))
     }
@@ -249,7 +249,7 @@ public struct QueueRow: View {
     public static func toggleDoneTitle(showing: Bool) -> String { showing ? "Hide done sub-tickets" : "Show done sub-tickets" }
 
     /// The row's identifier in the accessibility tree, which a window test finds it by.
-    public static func accessibilityIdentifier(_ ticket: String) -> String { "queue-row-\(ticket)" }
+    public static func accessibilityIdentifier(_ ticket: String) -> String { QAElementNames.queueRow(ticket) }
 
     /// The row's state as the accessibility tree says it (TP-1610): `Dragged` while it is the row left behind under a
     /// drag, `Drag handle` while the handle stands in the number's place, nothing at rest.
@@ -398,12 +398,12 @@ public struct QueueDropLine: View {
             .allowsHitTesting(false)
             .accessibilityElement()
             .accessibilityLabel(Self.accessibilityLabel)
-            .accessibilityIdentifier(Self.accessibilityIdentifier)
+            .qaName(Self.accessibilityIdentifier)
     }
 
     /// The line in the accessibility tree (TP-1610): where a drop would land, which a window test reads mid-drag.
     public static let accessibilityLabel = "Drop here"
-    public static let accessibilityIdentifier = "queue-drop-line"
+    public static let accessibilityIdentifier = QAElementNames.queueDropLine
 }
 
 /// `--accent-glow` around `shape`, outside it only, as a CSS box-shadow draws.
@@ -438,7 +438,7 @@ extension View {
     /// window test finds the card or the strip line by. Call it after the element is made.
     public func dropTargetAccessibility(_ on: Bool, identifier: String) -> some View {
         accessibilityValue(on ? SlotDropTarget.accessibilityValue : "")
-            .accessibilityIdentifier(identifier)
+            .qaName(identifier)
     }
 
     private func dropTargetLook<S: InsettableShape>(_ on: Bool, in shape: S) -> some View {
@@ -478,10 +478,11 @@ private struct QueueRowProbe: NSViewRepresentable {
 
 extension View {
     @ViewBuilder func probe(_ part: QueueRow.Part, _ probes: [QueueRow.Part: NSView]) -> some View {
+        // The same part is named in QA mode's element report (TP-1677).
         if let view = probes[part] {
-            background(QueueRowProbe(view: view))
+            background(QueueRowProbe(view: view)).qaPart(part.rawValue)
         } else {
-            self
+            qaPart(part.rawValue)
         }
     }
 }
@@ -493,6 +494,6 @@ public enum SlotDropTarget {
     /// combines them, and neither element's value reaches the tree mid-drag.
     public static func accessibilityLabel(_ label: String, on: Bool) -> String { on ? "\(label), \(accessibilityValue)" : label }
     /// The identifier of slot `slot`'s card, or of its line in the strip.
-    public static func cardIdentifier(_ slot: Int) -> String { "slot-card-\(slot)" }
-    public static func lineIdentifier(_ slot: Int) -> String { "slot-line-\(slot)" }
+    public static func cardIdentifier(_ slot: Int) -> String { QAElementNames.slotCard(slot) }
+    public static func lineIdentifier(_ slot: Int) -> String { QAElementNames.slotLine(slot) }
 }

@@ -1145,6 +1145,9 @@ defmodule SymphonyElixir.QaAgentTest do
       assert prompt =~ "On every page the walkthrough visits, call `qa_check_app` with the page's name"
       assert prompt =~ "call `qa_wait_check` with the `seconds` and the page: Symphony waits, then checks. Never sleep in your shell."
       refute prompt =~ ~r/sleep \d/
+      # TP-1677: what the app holds comes from the app's report, not from a picture.
+      assert prompt =~ "the page shown, the selection and the focus from the `app_state` of `qa_check_app` and `qa_wait_check`"
+      assert prompt =~ "sizes, gaps and alignments of named elements from `qa_measure_elements`"
       refute prompt =~ "Wide pass"
 
       prompt = macos_app.(%{"window_width" => 1440, "window_height" => 900, "appearance" => "light"})

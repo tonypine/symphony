@@ -161,6 +161,7 @@ struct SidebarRow<ID: Hashable>: View {
         .accessibilityLabel(entry.title)
         .accessibilityValue(entry.count > 0 ? entry.spoken ?? CountBadge.spoken(entry.count) : "")
         .accessibilityAddTraits(current ? .isSelected : [])
+        .qaName(QAElementNames.sidebar(entry.title), selected: current, focused: focused)
     }
 }
 

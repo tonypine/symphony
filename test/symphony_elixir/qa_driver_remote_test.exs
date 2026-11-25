@@ -81,6 +81,7 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
       screenshot) printf 'png-from-qa-host' > "$4"; echo '{"ok":true}' ;;
       ax-ping) echo '{"ok":true,"responding":true}' ;;
       drag) printf '{"ok":true,"via":"hid","from":"%s","to":"%s","hold_ms":%s,"steps":%s}\\n' "$3" "$4" "$5" "$6" ;;
+      scroll) printf '{"ok":true,"scrolled":"%s","amount":"%s","moved":{"x":0,"y":120}}\\n' "$3" "$4" ;;
     esac
     HELPER
     chmod +x "$out"
@@ -407,6 +408,62 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
       edges = [%{"x" => 0, "y" => 0, "width" => 10, "height" => 5, "side" => "left"}, %{"x" => 0, "y" => 0, "width" => 10, "height" => 5, "side" => "left"}]
       assert {:ok, %{"aligned" => true, "offset" => 0.0}} = QaDriver.call_tool(driver, "qa_measure", %{"path" => "home.png", "edges" => edges})
       assert trace() == traced
+
+      {:ok, _quit} = QaDriver.call_tool(driver, "qa_quit_app", %{"pid" => pid})
+      QaDriver.stop(driver)
+      refute File.exists?(run_dir)
+    end
+
+    test "reads the app's element report on the QA host: lists, scrolls to and measures named elements, and the state after a wait",
+         %{root: root, ssh_host: ssh_host} do
+      worktree = git_worktree!(root)
+      prepare = fn _operator_home, _canary -> Remote.prepare(ssh_host, Path.join(root, "operator"), Path.join(root, "no-canary")) end
+      test = self()
+
+      sleep = fn ms ->
+        send(test, {:slept, ms})
+        Process.get(:report_after_sleep, fn -> :ok end).()
+        :ok
+      end
+
+      opts = [worktree: worktree, worker_host: ssh_host, local_uuid: fn -> {:ok, @symphony_mac} end]
+      opts = opts ++ [playbook: %{build: "sh build.sh", app: @app}, host: %{prepare: prepare}, sleep: sleep]
+      {:ok, driver} = QaDriver.start_link(opts ++ start_prebuild!(root, ssh_host, worktree))
+      %{host_dir: run_dir} = GenServer.call(driver, :config)
+      {{:ok, %{"exit_status" => 0}}, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_build", %{}) end)
+      {{:ok, %{"pid" => pid}}, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
+
+      # The app writes its report into its QA root on the QA host, as QA mode does.
+      report_file = Path.join([run_dir, "app-root", "elements", "#{pid}.json"])
+      window = %{"number" => 7, "title" => "Symphony", "frame" => %{"x" => 0, "y" => 25, "w" => 1000, "h" => 500}, "key" => true}
+
+      write_report = fn elements ->
+        state = %{"page" => "overview", "page_title" => "Home", "ticket" => nil, "selected" => [], "focused" => ["recently-done-head"]}
+        report = %{"version" => 1, "at" => "2026-11-25T15:00:00Z", "pid" => pid, "windows" => [window], "state" => state, "elements" => elements, "names" => []}
+        File.mkdir_p!(Path.dirname(report_file))
+        File.write!(report_file, Jason.encode!(report))
+      end
+
+      row = fn name, y, visible -> %{"name" => name, "frame" => %{"x" => 100, "y" => y, "w" => 800, "h" => 32}, "visible" => visible, "window" => 7, "parts" => %{}} end
+
+      assert {:error, {:qa_tool, "qa_elements_missing", _message}} = QaDriver.call_tool(driver, "qa_elements", %{"pid" => pid})
+
+      write_report.([row.("recently-done-head", 100, true), row.("done-row-TP-1", 900, false)])
+      assert {:ok, %{"count" => 2, "state" => %{"focused" => ["recently-done-head"]}}} = QaDriver.call_tool(driver, "qa_elements", %{"pid" => pid})
+      # The copy read over SSH is taken away; the app's own report stays.
+      assert File.exists?(report_file)
+      assert Path.wildcard(Path.join(run_dir, "elements-*.json")) == []
+
+      Process.put(:report_after_sleep, fn -> write_report.([row.("recently-done-head", -20, false), row.("done-row-TP-1", 140, true)]) end)
+      assert {:ok, %{"name" => "done-row-TP-1", "scrolls" => 1}} = QaDriver.call_tool(driver, "qa_scroll_to", %{"pid" => pid, "name" => "done-row-TP-1"})
+      assert trace() =~ "scroll"
+      assert_received {:slept, 400}
+
+      assert {:ok, %{"gap" => %{"y" => 128.0}, "aligned" => ["center_x", "left", "right"]}} =
+               QaDriver.call_tool(driver, "qa_measure_elements", %{"pid" => pid, "a" => "recently-done-head", "b" => "done-row-TP-1"})
+
+      assert {:ok, %{"healthy" => true, "app_state" => %{"page" => "overview", "focused" => ["recently-done-head"]}}} =
+               QaDriver.call_tool(driver, "qa_wait_check", %{"pid" => pid, "seconds" => 5})
 
       {:ok, _quit} = QaDriver.call_tool(driver, "qa_quit_app", %{"pid" => pid})
       QaDriver.stop(driver)
