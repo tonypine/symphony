@@ -155,6 +155,17 @@ defmodule SymphonyElixir.TicketJourney do
     for %{setting: %{source: "live"}, check_id: id} = step <- steps(ticket), not Walkthrough.named_test?(step), do: id
   end
 
+  @doc """
+  The checks QA still walks (no recorded test proves them, none is waived), in the plan's order, as
+  the plan holds them, with their `walked_on` and `setting`: what `SymphonyElixir.QaState` checks the
+  head holds before QA. None for a ticket that is not groomed.
+  """
+  @spec walked_checks(ticket()) :: [TicketChecks.check()]
+  def walked_checks(ticket) do
+    ids = for %{check_id: id} = step <- steps(ticket), not Walkthrough.named_test?(step), do: id
+    for {check, _number} <- numbered(ticket), check.id in ids, do: check
+  end
+
   defp unproved_text(steps), do: steps |> Enum.reject(&Walkthrough.named_test?/1) |> Enum.map_join("\n", & &1.text)
 
   @doc """

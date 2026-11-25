@@ -44,7 +44,8 @@ defmodule SymphonyElixir.TicketEvents.Types do
   An agent records through `ticket_record` (`SymphonyElixir.AgentTools.TicketLedger`) only the types
   `agent_types/1` lists for its run kind: `finding.recorded` in a QA run (Symphony also records one
   as a Conductor turn's when a person picks its option to send the ticket to Rework,
-  `SymphonyElixir.DecisionMove`); `finding.resolved`,
+  `SymphonyElixir.DecisionMove`, and as its own when the QA seed and fixtures on a head miss a QA
+  check's walked-on state, `SymphonyElixir.QaState`); `finding.resolved`,
   `step.started`, `step.completed`, `evidence`, `checklist.answered`, `check.proved` and `note` in any run. Every other type is the
   machine's or a person's (a question is asked through the question tool), and a legacy type is
   never an agent's. An `evidence` may carry a `proof`: the walkthrough step it proves and the test.
@@ -85,6 +86,12 @@ defmodule SymphonyElixir.TicketEvents.Types do
   or paused, names in `failures` each test that failed in the QA VM, at most 10: its `script` and
   `title` (up to 500), its `exit_status`, the last lines it `printed` (up to 1,200) and, when it ran
   again on the base branch, the same there (`base`).
+  Symphony's check of the QA seed and fixtures before QA (`SymphonyElixir.QaState`, step
+  `qa_state`) puts its result in `qa_state`: for each QA check (`check_id`, at most 30) its `status`
+  (`held`, `missing`, or `unjudged` when the check names no state) and each path it names, with
+  what the plan said of it (`holds`: `present`, `added`, or `fixture` for its setting's fixture
+  directory), whether the head holds it (`held`) and, when not, why (`why`: `absent`, `empty`, or
+  `unchanged` for an `added` path the pull request does not change).
   A skipped step is a `step.completed` with
   `outcome: skipped`: there is no `step.skipped` type. A `question.answered` naming the question a
   paused step waits on is what resumes that step.
@@ -316,6 +323,23 @@ defmodule SymphonyElixir.TicketEvents.Types do
                     appearance: {:enum, ~w(light dark)}
                   ]}
   @walked_on {:map, [path: {:string, 300}, holds: {:enum, ~w(present added)}]}
+  # Symphony's check of a QA check's walked-on state on a head (`SymphonyElixir.QaState`): each path
+  # the plan names (a `walked_on` entry, or the `fixture` directory of its setting), whether the head
+  # holds it and, when not, why.
+  @qa_state_check {:map,
+                   [
+                     check_id: {:string, 20},
+                     status: {:enum, ~w(held missing unjudged)},
+                     paths:
+                       {:list,
+                        {:map,
+                         [
+                           path: {:string, 300},
+                           holds: {:enum, ~w(present added fixture)},
+                           held: :boolean,
+                           why: {:optional, {:enum, ~w(absent empty unchanged)}}
+                         ]}}
+                   ]}
   @plan_check {:map,
    [
      id: {:string, 20},
@@ -558,6 +582,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
               ]}},
           verdict_summary: {:string, 600},
           answer: {:list, {:map, [label: {:string, 60}, value: {:string, 1_500}]}},
+          qa_state: {:list, @qa_state_check, 30},
           failures:
             {:list,
              {:map,
@@ -589,10 +614,10 @@ defmodule SymphonyElixir.TicketEvents.Types do
       idempotency: :writer
     },
     "finding.recorded" => %{
-      writers: [:agent],
+      writers: [:agent, :machine],
       run_kinds: ["qa", "conductor"],
       required: [class: {:string, 100}, severity: {:string, 50}, description: {:string, 2_000}],
-      optional: [viewport: {:string, 100}, step: {:string, 200}, evidence: @evidence],
+      optional: [viewport: {:string, 100}, step: {:string, 200}, evidence: @evidence] ++ @signal,
       idempotency: :writer
     },
     "finding.resolved" => %{

@@ -24,6 +24,11 @@ defmodule SymphonyElixir.CodeReview do
   recorded in the verdict's signal, and the guard row it picks does the move — `:code_review_approve`
   into the configured QA state, `:code_review_approve_skip` into `Merging`.
 
+  Before an approve that runs QA moves the ticket, Symphony checks that the QA seed and fixtures on
+  the head hold the state the plan's QA checks are walked on (`SymphonyElixir.QaState`), recorded as
+  a step on the ticket: missing state moves the ticket to `Rework` instead (`:code_review_rework`),
+  with a finding per check, and no QA session starts.
+
   An inconclusive review retries boundedly on the same head, then escalates the same way. Its cause
   (`ReviewAgent.inconclusive_cause/1`) is recorded on the verdict and on the run, so `/api/v1/state`
   counts inconclusive reviews per cause. `run/3`
@@ -68,6 +73,7 @@ defmodule SymphonyElixir.CodeReview do
     MergeConfirmation,
     PrWatch,
     QaPolicy,
+    QaState,
     ReviewAgent,
     RunStore,
     TicketPullRequest,
@@ -600,7 +606,7 @@ defmodule SymphonyElixir.CodeReview do
     case policy.decide(issue, settings, workspace: workspace, repo_key: repo_key(issue, opts)) do
       {:run, _playbooks, reason} ->
         Logger.info("Code Review approved #{issue_label(issue)}; QA runs: #{reason}")
-        move(issue, opts, settings, :code_review_approve, Map.merge(extra, %{qa_decision: "run", reason: reason}))
+        enter_qa(issue, workspace, opts, settings, Map.merge(extra, %{qa_decision: "run", reason: reason}))
 
       {:skip, reason} ->
         Logger.info("Code Review approved #{issue_label(issue)}; QA skipped: #{reason}")
@@ -611,6 +617,18 @@ defmodule SymphonyElixir.CodeReview do
         Logger.warning("Code Review approved #{issue_label(issue)}, but #{reason}; asking GitHub before holding it instead of skipping QA")
 
         nothing_to_verify(issue, workspace, opts, settings, extra)
+    end
+  end
+
+  # Before the ticket enters QA, Symphony checks the QA seed and fixtures on the head hold the state
+  # the plan's QA checks are walked on (`SymphonyElixir.QaState`). Missing state sends the ticket to
+  # Rework at once, with a finding per check, and no QA session starts.
+  defp enter_qa(issue, workspace, opts, settings, extra) do
+    state_opts = [repo_key: repo_key(issue, opts), run_id: Keyword.get(opts, :run_id)]
+
+    case QaState.gate(issue, workspace, workspace_head(workspace, opts), state_opts) do
+      :go -> move(issue, opts, settings, :code_review_approve, extra)
+      {:rework, reason} -> move(issue, opts, settings, :code_review_rework, Map.merge(extra, %{qa_decision: "qa_state_missing", reason: reason}))
     end
   end
 

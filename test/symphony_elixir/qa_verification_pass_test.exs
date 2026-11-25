@@ -633,6 +633,71 @@ defmodule SymphonyElixir.QaVerificationPassTest do
     end
   end
 
+  describe "the seed and fixtures check before a pass (TP-1671)" do
+    setup do
+      clear_store!()
+      :ok
+    end
+
+    # The test's own small seed on the head, never the repository's.
+    defp seeded_workspace! do
+      {dir, _head} = git_workspace!()
+      File.mkdir_p!(Path.join(dir, "priv/qa_seed/demo"))
+      File.write!(Path.join(dir, "priv/qa_seed/demo/seed.json"), ~s({"tickets": 1}))
+      {_out, 0} = System.cmd("git", ["add", "."], cd: dir)
+      {_out, 0} = System.cmd("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "seed"], cd: dir)
+      {head, 0} = System.cmd("git", ["rev-parse", "HEAD"], cd: dir)
+      {dir, String.trim(head)}
+    end
+
+    defp groom_walked_on!(paths) do
+      walked_on = Enum.map(paths, &%{path: &1, holds: "present"})
+      [outcome, walk, design] = @groomed_plan.checks
+      groom!(%{@groomed_plan | checks: [outcome, Map.put(walk, :walked_on, walked_on), design]})
+    end
+
+    defp qa_state_steps(head) do
+      for %{type: "step.completed", payload: %{step_id: "qa_state"} = payload, head_sha: ^head} <-
+            RunStore.list_ticket_events(@issue_id, []),
+          do: payload
+    end
+
+    test "a head that misses a QA check's seed state goes to Rework with no QA session, told what is missing" do
+      {workspace, head} = seeded_workspace!()
+      groom_walked_on!(["priv/qa_seed/demo/split.json"])
+
+      log = capture_log(fn -> assert :ok = run(workspace, run_id: "run-qa-1") end)
+
+      assert log =~ "QA for TP-816 head=#{head} goes back to Rework without a QA session"
+      refute_received {:qa_agent_run, _job, _settings}
+      assert_received {:memory_tracker_state_update, @issue_id, "Rework"}
+      assert verdicts() == []
+
+      assert [%{outcome: "failed", qa_state: [c2, %{check_id: "c3", status: "unjudged"}]}] = qa_state_steps(head)
+      assert %{check_id: "c2", status: "missing", paths: [%{path: "priv/qa_seed/demo/split.json", why: "absent"}]} = c2
+
+      assert [%{state: :open, finding: %{run_id: "run-qa-1", payload: %{class: "qa_state", description: description}}}] =
+               @issue_id |> RunStore.list_ticket_events([]) |> SymphonyElixir.TicketEvents.findings()
+
+      assert description =~ "QA check c2 (The dashboard shows the result.)"
+
+      assert description =~
+               "priv/qa_seed/demo/split.json (the plan says the seed or fixtures hold it already; the head does not hold it)"
+    end
+
+    test "a head that holds every QA check's seed state goes on to the QA session" do
+      {workspace, head} = seeded_workspace!()
+      groom_walked_on!(["priv/qa_seed/demo/seed.json"])
+
+      capture_log(fn -> assert :ok = run(workspace, run_id: "run-qa-1") end)
+
+      assert_received {:qa_agent_run, _job, _settings}
+
+      assert [%{outcome: "passed", qa_state: [%{check_id: "c2", status: "held"}, %{check_id: "c3", status: "unjudged"}]}] =
+               qa_state_steps(head)
+    end
+  end
+
   describe "a recorded test proof" do
     @named_walkthrough """
     ## User walkthrough
