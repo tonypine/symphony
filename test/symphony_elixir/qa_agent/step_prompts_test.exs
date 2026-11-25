@@ -64,7 +64,7 @@ defmodule SymphonyElixir.QaAgent.StepPromptsTest do
         assert text =~ listed, "#{name} does not list the driver's tools"
       end
 
-      for id <- ~w(plan walk design_check review), do: refute(StepPrompts.prompt("macos_app", id) =~ "{{"), id
+      for id <- ~w(plan walk design_check review), do: refute(StepPrompts.prompt("macos_app", id) =~ "{{", id)
       refute playbook.prompt =~ "{{"
     end
   end
