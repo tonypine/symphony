@@ -116,6 +116,7 @@ defmodule SymphonyElixir.Conductor.DescriptionEditTest do
     unwritten = Map.delete(ctx.record, :projected)
     assert DescriptionEdit.observed("default", unwritten, "Keep my filter, and the sort order.", conductor(nil)) == :ok
     assert DescriptionEdit.observed("default", %{}, "Anything.", conductor(nil)) == :ok
+    assert DescriptionEdit.observed("default", unwritten, "Anything.") == :ok
     assert messages(ctx.issue_id) == []
 
     long = String.duplicate("x", 100_001)
