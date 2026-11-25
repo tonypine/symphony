@@ -23,12 +23,14 @@ gallery entries the changed files affect) and the screen rules below. Then answe
   facts say it has no setting is worked out as below, on fixtures. Each brief is an object:
   - `step`: the walkthrough step's number;
   - `where`: the window, page or menu, and how to reach it from launch;
-  - `launch`: what `qa_launch_app` needs for it (the step's setting, when it has one), when anything
-    beyond the app Symphony launched, and the window size to set when it is not the QA target:
-    `api_fixtures` (a committed fixture directory the screen rules name), `appearance` (only for
-    the exception below), `fresh_root` or `root`, `environment` (`fixture` or `live`), and the
-    stand-ins to start (the gh, Linear or update feed stubs, with the exact command from the screen
-    rules);
+  - `launch`: how the app is launched for it. Symphony launches the app for each walk session in
+    the step's setting (its source, page, appearance and window size) before the session starts, so
+    for a step with a setting name it as given and add only what a setting cannot state: `fresh_root`
+    or `root`, and the stand-ins to start (the gh, Linear or update feed stubs, with the exact
+    command from the screen rules). For a step with no setting: `api_fixtures` (a committed fixture
+    directory the screen rules name), `page` (the window's page to open on), `appearance` (only for
+    the exception below), `environment` (`fixture` or `live`), and the window size to set when it
+    is not the QA target;
   - `do`: the actions, in order, as a person would take them;
   - `expect`: what must be true, in the ticket's words, including the exact texts to read;
   - `design`: the design reference to compare with (a Screens HTML file or image named below, or
@@ -68,8 +70,9 @@ How to group the briefs:
 
 - Give the same `group` to the briefs that sit on the same screen or need the same app state: the
   same `where`, the same `launch` (fixtures, appearance, root, environment, stand-ins), the same
-  window size, and no fresh app start, relaunch or quit between them. The walk turn reaches the
-  place once and judges each step there in turn.
+  window size, and no fresh app start, relaunch or quit between them. Symphony launches a group
+  in its first step's setting, so group only steps whose settings are the same. The walk turn
+  reaches the place once and judges each step there in turn.
 - Keep in its own step (no `group`) any brief that needs a different state, a different window
   size or a fresh app start from the others, or that changes the app's state in a way a later
   step of the group must not see.

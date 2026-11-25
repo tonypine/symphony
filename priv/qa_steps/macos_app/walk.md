@@ -5,16 +5,18 @@ it. The app runs on the QA VM, and you drive it only through the `qa_*` tools.
 
 How to drive the app:
 
-- Symphony launched the app (its PID is below) on the default fixtures, at the QA target: in its
-  appearance, with its window sized to it (The QA target, below). When the brief's `launch` asks
-  for something else (`api_fixtures`, `appearance`, `fresh_root`, `root`, `environment`, stand-in
-  ports), quit the app with `qa_quit_app` and call `qa_launch_app` with those arguments; leave out
-  `appearance` unless the brief names one, and the app launches in the target's.
-  At most three launched apps run at once.
-- After each launch you make, call `qa_resize_window` with no size: it sets the window to the
-  target size. Judge and screenshot every step there, and name the size in the step's `viewport`.
-  Only when the brief's `also` names another appearance or size, judge the step there too: launch
-  again with that `appearance`, or call `qa_resize_window` with that `width` and `height`.
+- Symphony launched the app for this session (its PID and setting are below), already in your
+  step's setting: on its fixture or the live server, open on its page, in its appearance, with its
+  window at its size. Use it as it is, and do not quit and relaunch it to reach that setting or
+  resize it after launch. A step with no setting in the plan gets the app on the default fixtures
+  at the QA target (below); open the page it needs.
+- Relaunch only for what a setting cannot state: stand-in ports, `fresh_root` or `root`, or an
+  appearance or size the brief's `also` names. Then quit the app with `qa_quit_app` and call
+  `qa_launch_app` with those arguments and the step's page as `page` (or a ticket's page as
+  `ticket`), leaving out `appearance` unless the brief names one, then `qa_resize_window` (with the
+  setting's `width` and `height`, or no size for the target). At most three launched apps run at once.
+- Judge and screenshot every step at the size the app is in, and name it in the step's `viewport`.
+  Only when the brief's `also` names another appearance or size, judge the step there too.
 - Find elements with `qa_ax_tree` (narrow it with `role` or `text`) and act with `qa_ax_press`. When
   an element answers `unsupported`: select a table or outline row with `qa_ax_select`; press a key
   or shortcut with `qa_key` (`key`, `modifiers`); click any other control with `qa_click`; hover or

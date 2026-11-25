@@ -316,8 +316,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         updates.start()
         QAScriptDriver.startIfScripted(menu: menu) { [weak self] in self?.runner.pid }
         QAStatusMenuOpener.startIfQAMode(item: item)
-        if let ticket = AppStores.current.qaMode?.openTicket { symphonyWindow.showTicket(ticket) }
-        if let view = AppStores.current.qaMode?.openView { symphonyWindow.show(view: view) }
+        for opening in AppStores.current.qaMode?.openings ?? [] {
+            switch opening {
+            case let .page(view): symphonyWindow.show(view: view)
+            case .inbox: symphonyWindow.showInbox(selecting: nil)
+            case let .ticket(identifier): symphonyWindow.showTicket(identifier)
+            }
+        }
     }
 
     /// Where the window's client reads Symphony's local API.
