@@ -219,6 +219,59 @@ defmodule SymphonyElixir.WorkspaceHeadTest do
     end
   end
 
+  describe "changes/3 (TP-1682)" do
+    test "reads the run's commits and every file it changed from git: committed, edited, untracked, deleted and renamed", %{workspace: workspace} do
+      commit!(workspace, "old.txt")
+      commit!(workspace, "moved.txt")
+      start = WorkspaceHead.read(workspace, nil)
+
+      # A commit, then work left in the tree: an uncommitted edit made by a shell command, an
+      # untracked file, a deleted file and a rename. No transcript and no command text is read.
+      commit!(workspace, "fix.txt")
+      {_out, 0} = System.cmd("sh", ["-c", "printf 'edited by sed\\n' >> README.md"], cd: workspace)
+      File.write!(Path.join(workspace, "new.txt"), "untracked")
+      File.rm!(Path.join(workspace, "old.txt"))
+      git!(workspace, ["mv", "moved.txt", "renamed.txt"])
+      head = WorkspaceHead.read(workspace, nil)
+
+      assert %{start_head: ^start, head: ^head, commits: commits, commit_count: 1, file_count: 5, files: files} =
+               WorkspaceHead.changes(workspace, nil, start)
+
+      assert [%{sha: ^head, subject: "fix.txt"}] = commits
+
+      assert Enum.sort_by(files, & &1.path) == [
+               %{path: "README.md", status: "modified"},
+               %{path: "fix.txt", status: "added"},
+               %{path: "new.txt", status: "added"},
+               %{path: "old.txt", status: "deleted"},
+               %{path: "renamed.txt", status: "renamed", from: "moved.txt"}
+             ]
+    end
+
+    test "a merge of the base branch is one commit of the run: the base's own commits are not", %{source: source, workspace: workspace} do
+      start = WorkspaceHead.read(workspace, nil)
+      commit!(source, "base.txt")
+      git!(source, ["push", "origin", "main"])
+      git!(workspace, ["fetch", "origin"])
+      git!(workspace, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "merge", "--no-ff", "-m", "Merge main", "origin/main"])
+
+      assert %{commits: [%{subject: "Merge main"}], commit_count: 1, files: [%{path: "base.txt", status: "added"}]} =
+               WorkspaceHead.changes(workspace, nil, start)
+    end
+
+    test "a run that changed nothing reads as no change; a start git does not know, a worker's workspace or no checkout as nil", %{root: root, workspace: workspace} do
+      start = WorkspaceHead.read(workspace, nil)
+
+      assert WorkspaceHead.changes(workspace, nil, start) ==
+               %{start_head: start, head: start, commits: [], files: [], commit_count: 0, file_count: 0}
+
+      assert WorkspaceHead.changes(workspace, nil, String.duplicate("0", 40)) == nil
+      assert WorkspaceHead.changes(workspace, "worker-1", start) == nil
+      assert WorkspaceHead.changes(root, nil, start) == nil
+      assert WorkspaceHead.changes(nil, nil, start) == nil
+    end
+  end
+
   defp commit!(repo, file) do
     File.write!(Path.join(repo, file), file)
     git!(repo, ["add", file])

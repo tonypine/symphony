@@ -35,8 +35,15 @@ defmodule SymphonyElixir.QaAgent.VerdictTest do
       assert {:ok, %{findings: ["One.", "Step 1: Two! Expected: shown. Actual: hidden?"]}} =
                Verdict.from_map(%{
                  "verdict" => "fail",
-                 "findings" => ["One.", " ", %{"step" => "Step 1", "summary" => "Two!", "expected" => "shown", "actual" => "hidden?", "evidence" => []}]
+                 "findings" => ["One.", %{"step" => "Step 1", "summary" => "Two!", "expected" => "shown", "actual" => "hidden?", "evidence" => []}]
                })
+
+      # Nothing is dropped: a blank finding, a field the tool does not name, a field of the wrong
+      # kind and an evidence entry that is not a string are refused.
+      assert Verdict.from_map(%{"verdict" => "fail", "findings" => ["One.", " "]}) == {:error, :invalid_finding}
+      assert Verdict.from_map(%{"verdict" => "fail", "findings" => [%{"summary" => "One", "severity" => "high"}]}) == {:error, :invalid_finding_field}
+      assert Verdict.from_map(%{"verdict" => "fail", "findings" => [%{"summary" => "One", "step" => 2}]}) == {:error, :invalid_finding}
+      assert Verdict.from_map(%{"verdict" => "fail", "findings" => [%{"summary" => "One", "evidence" => [3]}]}) == {:error, :invalid_evidence}
 
       for findings <- [[%{"step" => "Step 1", "expected" => "shown"}], [3], 3] do
         assert {:error, reason} = Verdict.from_map(%{"verdict" => "fail", "findings" => findings})
@@ -47,11 +54,11 @@ defmodule SymphonyElixir.QaAgent.VerdictTest do
     test "keeps each finding's step, viewport and evidence beside the line it renders" do
       findings = [
         "One.",
-        " ",
         %{
           "step" => " Step 2 ",
           "viewport" => "1400×900 pt",
           "summary" => "The header is clipped",
+          "expected" => "the whole header",
           "evidence" => ["qa-evidence/header.png", " ", "https://uploads.linear.app/a/b.png"]
         }
       ]
@@ -59,12 +66,20 @@ defmodule SymphonyElixir.QaAgent.VerdictTest do
       assert {:ok, %{findings: [one, two] = lines, finding_details: details}} =
                Verdict.from_map(%{"verdict" => "fail", "findings" => findings})
 
-      assert two == "Step 2 at 1400×900 pt: The header is clipped. Evidence: qa-evidence/header.png, https://uploads.linear.app/a/b.png."
+      assert two == "Step 2 at 1400×900 pt: The header is clipped. Expected: the whole header. Evidence: qa-evidence/header.png, https://uploads.linear.app/a/b.png."
       assert Enum.map(details, & &1.line) == lines
 
       assert details == [
                %{line: one, step: nil, viewport: nil, evidence: []},
-               %{line: two, step: "Step 2", viewport: "1400×900 pt", evidence: ["qa-evidence/header.png", "https://uploads.linear.app/a/b.png"]}
+               %{
+                 line: two,
+                 step: "Step 2",
+                 viewport: "1400×900 pt",
+                 evidence: ["qa-evidence/header.png", "https://uploads.linear.app/a/b.png"],
+                 summary: "The header is clipped",
+                 expected: "the whole header",
+                 actual: nil
+               }
              ]
     end
 
@@ -98,8 +113,15 @@ defmodule SymphonyElixir.QaAgent.VerdictTest do
       assert {:ok, %{steps: [%{environment: "fixture"}]}} =
                Verdict.from_map(%{"verdict" => "pass", "steps" => [%{"name" => "a", "status" => "pass", "environment" => "fixtures"}]})
 
-      assert {:ok, %{steps: [unnamed]}} = Verdict.from_map(%{"verdict" => "pass", "steps" => [%{"name" => "a", "status" => "pass", "environment" => "staging"}]})
-      refute Map.has_key?(unnamed, :environment)
+      # Nothing is dropped: an environment that is not one of its words, a field the tool does not
+      # name and an entry that is not a string are refused.
+      assert Verdict.from_map(%{"verdict" => "pass", "steps" => [%{"name" => "a", "status" => "pass", "environment" => "staging"}]}) ==
+               {:error, :invalid_step_environment}
+
+      assert Verdict.from_map(%{"verdict" => "pass", "steps" => [%{"name" => "a", "status" => "pass", "score" => 3}]}) == {:error, :invalid_step_field}
+      assert Verdict.from_map(%{"verdict" => "pass", "steps" => [%{"name" => "a", "status" => "pass", "blocked_by" => [1]}]}) == {:error, :invalid_evidence}
+      assert Verdict.from_map(%{"verdict" => "pass", "steps" => [%{"name" => "a", "status" => "pass", "details" => 1}]}) == {:error, :invalid_steps}
+      assert Verdict.from_map(%{"verdict" => "pass", "steps" => [%{"name" => "a", "status" => "pass", "checklist" => "yes"}]}) == {:error, :invalid_steps}
 
       assert {:ok, %{steps: [%{name: "a", status: "skipped", details: "", evidence: []}]}} =
                Verdict.from_map(%{"verdict" => "pass", "steps" => [%{"name" => "a", "status" => "SKIP"}]})
@@ -135,17 +157,23 @@ defmodule SymphonyElixir.QaAgent.VerdictTest do
              }
 
       assert {:ok, result} =
-               Verdict.from_map(%{"verdict" => "blocked", "reason" => "x", "needs_person" => false, "needs_dev_server" => "no", "covered_by" => "the tools ticket"})
+               Verdict.from_map(%{"verdict" => "blocked", "reason" => "x", "needs_person" => false, "needs_dev_server" => "no", "covered_by" => " "})
 
       refute Map.has_key?(result, :needs_person)
       refute Map.has_key?(result, :needs_dev_server)
       refute Map.has_key?(result, :covered_by)
+
+      # A covered_by that names no ticket is refused, not dropped.
+      assert Verdict.from_map(%{"verdict" => "blocked", "reason" => "x", "covered_by" => "the tools ticket"}) == {:error, :invalid_covered_by}
+      assert Verdict.from_map(%{"verdict" => "blocked", "reason" => "x", "covered_by" => 12}) == {:error, :invalid_covered_by}
     end
 
     test "reads scope none on a pass" do
       assert {:ok, %{scope: :none}} = Verdict.from_map(%{"verdict" => "pass", "scope" => " None "})
-      assert {:ok, result} = Verdict.from_map(%{"verdict" => "pass", "scope" => "all"})
+      assert {:ok, result} = Verdict.from_map(%{"verdict" => "pass", "scope" => ""})
       refute Map.has_key?(result, :scope)
+      assert Verdict.from_map(%{"verdict" => "pass", "scope" => "all"}) == {:error, :invalid_scope}
+      assert Verdict.from_map(%{"verdict" => "pass", "score" => 3}) == {:error, :unknown_field}
     end
 
     test "a fail needs a finding or a failing step, and a blocked verdict a reason" do
@@ -194,6 +222,13 @@ defmodule SymphonyElixir.QaAgent.VerdictTest do
           {:invalid_finding, "each finding must be a sentence, or an object with a `summary` or the `actual` result."},
           {:missing_fail_findings, "a fail needs at least one finding or failing step."},
           {:missing_blocked_reason, "a blocked verdict needs a non-empty `reason`."},
+          {:unknown_field, "the verdict names a field the tool does not take; use only the fields of the valid shape."},
+          {:invalid_step_field, "a step names a field the tool does not take; a step takes name, status, details, evidence, environment, checklist, gap, blocked_by and defect."},
+          {:invalid_finding_field, "a finding names a field the tool does not take; a finding takes summary, step, viewport, expected, actual and evidence."},
+          {:invalid_step_environment, "a step's `environment` must be fixture or live."},
+          {:invalid_evidence, "`evidence` and `blocked_by` must be lists of strings."},
+          {:invalid_scope, "`scope` must be none, or left out."},
+          {:invalid_covered_by, "`covered_by` must be a ticket identifier such as TP-12, or left out."},
           {:other, ":other."}
         ] do
       assert Verdict.describe_error(reason) == text

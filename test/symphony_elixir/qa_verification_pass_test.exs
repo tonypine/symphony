@@ -1202,6 +1202,50 @@ defmodule SymphonyElixir.QaVerificationPassTest do
       assert [%{supersedes: nil}] = Enum.filter(events(), &(&1.type == "finding.recorded" and &1.run_id == "run-qa-10"))
     end
 
+    test "a fail's verdict keeps its summary, steps and findings in their fixed shape (TP-1682)" do
+      {workspace, _head} = git_workspace!()
+
+      {:ok, outcome} =
+        QaAgent.Verdict.from_map(%{
+          "verdict" => "fail",
+          "summary" => "The row is clipped.",
+          "steps" => [
+            %{"name" => "Step 1", "status" => "pass", "environment" => "fixture"},
+            %{"name" => "Step 2", "status" => "fail", "details" => "clipped", "evidence" => ["qa-evidence/row.png"], "environment" => "live"}
+          ],
+          "findings" => [
+            %{"summary" => "The row is clipped", "step" => "Step 2", "viewport" => "1400×900 pt", "expected" => "the whole row", "actual" => "half a row", "evidence" => ["qa-evidence/row.png"]},
+            "The header is late."
+          ]
+        })
+
+      agent_result(outcome)
+      assert :ok = run(workspace, run_id: "run-qa-shape")
+
+      assert [%{payload: payload}] = Enum.filter(events(), &(&1.type == "verdict.recorded"))
+      assert %{kind: "qa", outcome: "fail", summary: "The row is clipped."} = payload
+
+      assert payload.steps == [
+               %{name: "Step 1", status: "pass", environment: "fixture"},
+               %{name: "Step 2", status: "fail", details: "clipped", evidence: ["qa-evidence/row.png"], environment: "live"}
+             ]
+
+      assert [first, %{line: "The header is late."} = second] = payload.qa_findings
+
+      assert first == %{
+               line: Enum.at(outcome.findings, 0),
+               summary: "The row is clipped",
+               step: "Step 2",
+               viewport: "1400×900 pt",
+               expected: "the whole row",
+               actual: "half a row",
+               evidence: ["qa-evidence/row.png"]
+             }
+
+      assert Map.keys(second) == [:line]
+      assert [%{qa_findings: [^first, ^second]}] = SymphonyElixir.TicketState.verdicts_in(events())
+    end
+
     test "a pass confirms every finding resolved and awaiting QA, by that verdict, once however often it is handled" do
       {workspace, head} = git_workspace!()
       {finding, resolution} = resolved_finding!(%{step: "Step 2"}, "0ld0ld0ld")

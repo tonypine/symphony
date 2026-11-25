@@ -4,7 +4,7 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
   alias SymphonyElixir.TicketEvents.Types
 
   @types ~w(
-    phase.entered hold.set hold.cleared run.started run.started_by_person run.ended attempt.pushed verdict.recorded
+    phase.entered hold.set hold.cleared run.started run.started_by_person run.ended run.changed attempt.pushed verdict.recorded
     decision.requested decision.withdrawn decision.recorded person.action
     step.started step.completed evidence finding.recorded finding.resolved finding.confirmed checklist.answered
     ticket.cancelled ticket.moved drift.detected drift.reverted drift.revert_failed
@@ -51,6 +51,54 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
 
       assert Types.validate("verdict.recorded", %{kind: "qa", outcome: "blocked", details: "no emulator"}, :machine, nil) ==
                {:error, {:invalid_payload, [:details]}}
+    end
+
+    test "a verdict's findings, steps and QA findings have a fixed shape, and one that does not fit is refused (TP-1682)" do
+      finding = %{summary: "s", file: "lib/a.ex", line_range: %{start: 3, end: 4}, quoted_snippet: "q", suggested_fix: "x"}
+      step = %{name: "Step 1", status: "fail", evidence: ["a.png"], environment: "live"}
+      qa_finding = %{line: "Step 1: clipped.", step: "Step 1", expected: "whole", actual: "half"}
+
+      payload = %{kind: "code_review", outcome: "request_changes", findings: [finding], comments: ["c"], unread_files: ["lib/b.ex"]}
+      assert Types.validate("verdict.recorded", payload, :machine, nil) == {:ok, payload}
+
+      qa = %{kind: "qa", outcome: "fail", summary: "Clipped.", steps: [step], qa_findings: [qa_finding]}
+      assert Types.validate("verdict.recorded", qa, :machine, nil) == {:ok, qa}
+
+      for {field, value} <- [
+            findings: [Map.delete(finding, :file)],
+            findings: [%{finding | line_range: [3, 4]}],
+            findings: [Map.put(finding, :severity, "high")],
+            steps: [%{step | environment: "staging"}],
+            qa_findings: [%{qa_finding | line: " "}],
+            comments: [3]
+          ] do
+        payload = %{kind: "qa", outcome: "fail", "#{field}": value}
+        assert Types.validate("verdict.recorded", payload, :machine, nil) == {:error, {:invalid_payload, [field]}}
+      end
+
+      assert %{type: "list", item: %{type: "map", fields: fields}} = Enum.find(Types.schema("verdict.recorded").optional, &(&1.name == "findings"))
+      assert Enum.map(fields, & &1.name) == ~w(summary file line_range quoted_snippet suggested_fix decision since_last_review)
+      assert Types.review_finding_spec() |> elem(0) == :map
+      assert Types.qa_step_spec() |> elem(0) == :map
+      assert Types.qa_finding_spec() |> elem(0) == :map
+    end
+
+    test "what a run changed is the machine's fact, keyed on the run" do
+      payload = %{
+        run_id: "run-1",
+        start_head: "aaa",
+        head: "bbb",
+        commits: [%{sha: "bbb", subject: "Fix"}],
+        files: [%{path: "a.ex", status: "renamed", from: "b.ex"}, %{path: "c.ex", status: "deleted"}],
+        commit_count: 1,
+        file_count: 2
+      }
+
+      assert Types.validate("run.changed", payload, :machine, nil) == {:ok, payload}
+      assert Types.idempotency_key("run.changed", payload, nil) == "run.changed:run-1"
+      assert {:error, {:not_allowed, _reason}} = Types.validate("run.changed", payload, :agent, "implementation")
+      copied = %{payload | files: [%{path: "a.ex", status: "copied"}]}
+      assert Types.validate("run.changed", copied, :machine, nil) == {:error, {:invalid_payload, [:files]}}
     end
 
     test "an agent never records a signal: only the machinery's events carry one" do

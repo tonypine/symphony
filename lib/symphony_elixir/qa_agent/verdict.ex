@@ -17,7 +17,14 @@ defmodule SymphonyElixir.QaAgent.Verdict do
   A finding object (`step`, `viewport`, `expected`, `actual`, `evidence`) is rendered to the one
   line the QA report and the rework run read (`findings`); `finding_details` keeps, per finding and
   in the same order, that line with the finding's `step`, `viewport` and `evidence` as given, for
-  the ledger's `finding.recorded` events (`SymphonyElixir.QaVerification`).
+  the ledger's `finding.recorded` events (`SymphonyElixir.QaVerification`), and its `summary`,
+  `expected` and `actual`, which the verdict's event keeps (`SymphonyElixir.TicketEvents.VerdictFacts`).
+
+  Nothing the agent gave is accepted and then dropped: a field the tool does not name (on the
+  verdict, a step or a finding), a step's `environment` that is not one of its words, a blank
+  finding, an evidence or `blocked_by` entry that is not a string, a `scope` other than `none` and a
+  `covered_by` that is not a ticket identifier are refused, and the refusal states the valid shape
+  (`SymphonyElixir.Codex.DynamicTool`).
   """
 
   @tool_name "qa_verdict"
@@ -53,12 +60,18 @@ defmodule SymphonyElixir.QaAgent.Verdict do
 
   @identifier_pattern ~r/\A[A-Za-z][A-Za-z0-9]*-\d+\z/
 
-  @typedoc "A finding's line with the step, viewport and evidence it named (nil and `[]` when none)."
+  @typedoc """
+  A finding's line with the step, viewport and evidence it named (nil and `[]` when none), and, for
+  a finding given as an object, its `summary`, `expected` and `actual` as given.
+  """
   @type finding_detail :: %{
-          line: String.t(),
-          step: String.t() | nil,
-          viewport: String.t() | nil,
-          evidence: [String.t()]
+          required(:line) => String.t(),
+          required(:step) => String.t() | nil,
+          required(:viewport) => String.t() | nil,
+          required(:evidence) => [String.t()],
+          optional(:summary) => String.t() | nil,
+          optional(:expected) => String.t() | nil,
+          optional(:actual) => String.t() | nil
         }
 
   @evidence_schema %{
@@ -169,12 +182,15 @@ defmodule SymphonyElixir.QaAgent.Verdict do
   @doc "Reads a decoded verdict object into the QA agent's result."
   @spec from_map(term()) :: {:ok, map()} | {:error, term()}
   def from_map(decoded) when is_map(decoded) do
-    with {:ok, verdict} <- coerce_verdict(Map.get(decoded, "verdict")),
+    with :ok <- known_fields(decoded, tool_arguments(), :unknown_field),
+         {:ok, verdict} <- coerce_verdict(Map.get(decoded, "verdict")),
          {:ok, steps} <- coerce_steps(Map.get(decoded, "steps")),
          {:ok, details} <- coerce_findings(Map.get(decoded, "findings")),
          findings = Enum.map(details, & &1.line),
          reason = trimmed(Map.get(decoded, "reason")),
-         :ok <- validate_verdict(verdict, steps, findings, reason) do
+         :ok <- validate_verdict(verdict, steps, findings, reason),
+         :ok <- validate_scope(Map.get(decoded, "scope")),
+         :ok <- validate_covered_by(Map.get(decoded, "covered_by")) do
       {:ok,
        %{verdict: verdict, summary: trimmed(Map.get(decoded, "summary")) || "", steps: steps, findings: findings, finding_details: details}
        |> put_if(:reason, reason, reason)
@@ -198,6 +214,13 @@ defmodule SymphonyElixir.QaAgent.Verdict do
   def describe_error(:invalid_finding), do: "each finding must be a sentence, or an object with a `summary` or the `actual` result."
   def describe_error(:missing_fail_findings), do: "a fail needs at least one finding or failing step."
   def describe_error(:missing_blocked_reason), do: "a blocked verdict needs a non-empty `reason`."
+  def describe_error(:unknown_field), do: "the verdict names a field the tool does not take; use only the fields of the valid shape."
+  def describe_error(:invalid_step_field), do: "a step names a field the tool does not take; a step takes name, status, details, evidence, environment, checklist, gap, blocked_by and defect."
+  def describe_error(:invalid_finding_field), do: "a finding names a field the tool does not take; a finding takes summary, step, viewport, expected, actual and evidence."
+  def describe_error(:invalid_step_environment), do: "a step's `environment` must be fixture or live."
+  def describe_error(:invalid_evidence), do: "`evidence` and `blocked_by` must be lists of strings."
+  def describe_error(:invalid_scope), do: "`scope` must be none, or left out."
+  def describe_error(:invalid_covered_by), do: "`covered_by` must be a ticket identifier such as TP-12, or left out."
   def describe_error(reason), do: "#{inspect(reason)}."
 
   defp coerce_verdict(verdict) do
@@ -214,9 +237,14 @@ defmodule SymphonyElixir.QaAgent.Verdict do
   defp coerce_steps(step) when is_map(step), do: coerce_steps([step])
 
   defp coerce_steps(steps) when is_list(steps) do
-    steps
-    |> Enum.map(&coerce_step/1)
-    |> collect(:invalid_steps)
+    with :ok <- each_known(steps, Map.keys(@step_schema["properties"]), :invalid_step_field),
+         :ok <- each_valid(steps, &valid_environment?/1, :invalid_step_environment),
+         :ok <- each_valid(steps, &(string_entries?(&1, "evidence") and string_entries?(&1, "blocked_by")), :invalid_evidence),
+         :ok <- each_valid(steps, &(string_fields?(&1, ~w(details gap defect)) and Map.get(&1, "checklist") in [nil, true, false]), :invalid_steps) do
+      steps
+      |> Enum.map(&coerce_step/1)
+      |> collect(:invalid_steps)
+    end
   end
 
   defp coerce_steps(_steps), do: {:error, :invalid_steps}
@@ -242,8 +270,8 @@ defmodule SymphonyElixir.QaAgent.Verdict do
 
   defp coerce_step(_step), do: :error
 
-  # The environment a step was proved in, as a word the report and the ledger read: anything else
-  # is left out.
+  # The environment a step was proved in, as a word the report and the ledger read (anything else
+  # was refused).
   defp put_environment(step, environment) do
     case Map.fetch(@environments, word(environment)) do
       {:ok, environment} -> Map.put(step, :environment, environment)
@@ -255,18 +283,23 @@ defmodule SymphonyElixir.QaAgent.Verdict do
   defp coerce_findings(finding) when is_map(finding) or is_binary(finding), do: coerce_findings([finding])
 
   defp coerce_findings(findings) when is_list(findings) do
-    findings
-    |> Enum.map(&coerce_finding/1)
-    |> collect(:invalid_finding)
-    |> case do
-      {:ok, findings} -> {:ok, Enum.reject(findings, &is_nil(&1.line))}
-      error -> error
+    with :ok <- each_known(findings, Map.keys(@finding_schema["properties"]), :invalid_finding_field),
+         :ok <- each_valid(findings, &string_entries?(&1, "evidence"), :invalid_evidence),
+         :ok <- each_valid(findings, &string_fields?(&1, ~w(summary step viewport expected actual)), :invalid_finding) do
+      findings
+      |> Enum.map(&coerce_finding/1)
+      |> collect(:invalid_finding)
     end
   end
 
   defp coerce_findings(_findings), do: {:error, :invalid_findings}
 
-  defp coerce_finding(finding) when is_binary(finding), do: {:ok, %{line: trimmed(finding), step: nil, viewport: nil, evidence: []}}
+  defp coerce_finding(finding) when is_binary(finding) do
+    case trimmed(finding) do
+      nil -> :error
+      line -> {:ok, %{line: line, step: nil, viewport: nil, evidence: []}}
+    end
+  end
 
   defp coerce_finding(finding) when is_map(finding) do
     summary = trimmed(Map.get(finding, "summary"))
@@ -278,7 +311,10 @@ defmodule SymphonyElixir.QaAgent.Verdict do
          line: finding_line(finding, summary, actual),
          step: trimmed(Map.get(finding, "step")),
          viewport: trimmed(Map.get(finding, "viewport")),
-         evidence: evidence(finding)
+         evidence: evidence(finding),
+         summary: summary,
+         expected: trimmed(Map.get(finding, "expected")),
+         actual: actual
        }}
     else
       :error
@@ -338,16 +374,58 @@ defmodule SymphonyElixir.QaAgent.Verdict do
   defp validate_verdict(:blocked, _steps, _findings, nil), do: {:error, :missing_blocked_reason}
   defp validate_verdict(_verdict, _steps, _findings, _reason), do: :ok
 
+  # A map's fields the tool names; any other is refused rather than dropped.
+  defp known_fields(map, fields, error) when is_map(map) do
+    if Enum.all?(Map.keys(map), &(&1 in fields)), do: :ok, else: {:error, error}
+  end
+
+  defp known_fields(_value, _fields, _error), do: :ok
+
+  defp each_known(items, fields, error), do: Enum.find_value(items, :ok, &(known_fields(&1, fields, error) != :ok && {:error, error}))
+
+  defp each_valid(items, valid?, error), do: if(Enum.all?(items, &(not is_map(&1) or valid?.(&1))), do: :ok, else: {:error, error})
+
+  defp valid_environment?(step) do
+    case Map.get(step, "environment") do
+      nil -> true
+      environment -> Map.has_key?(@environments, word(environment))
+    end
+  end
+
+  defp string_entries?(map, key) do
+    case Map.get(map, key) do
+      nil -> true
+      values -> values |> List.wrap() |> Enum.all?(&is_binary/1)
+    end
+  end
+
+  defp string_fields?(map, keys), do: Enum.all?(keys, &(Map.get(map, &1) == nil or is_binary(Map.get(map, &1))))
+
+  defp validate_scope(scope) when scope in [nil, ""], do: :ok
+  defp validate_scope(scope), do: if(scope_none?(scope), do: :ok, else: {:error, :invalid_scope})
+
+  defp validate_covered_by(nil), do: :ok
+
+  defp validate_covered_by(covered_by) when is_binary(covered_by) do
+    case trimmed(covered_by) do
+      nil -> :ok
+      identifier -> if identifier =~ @identifier_pattern, do: :ok, else: {:error, :invalid_covered_by}
+    end
+  end
+
+  defp validate_covered_by(_covered_by), do: {:error, :invalid_covered_by}
+
   defp flag?(true), do: true
   defp flag?(value), do: word(value) == "true"
 
   defp scope_none?(scope), do: word(scope) == "none"
 
-  # The open ticket the agent says already tracks the missing QA tool; anything that is not a
-  # ticket identifier is dropped, so self-heal files its own fix ticket as before.
+  # The open ticket the agent says already tracks the missing QA tool (anything else was refused).
   defp put_covered_by(result, covered_by) when is_binary(covered_by) do
-    identifier = String.trim(covered_by)
-    put_if(result, :covered_by, String.upcase(identifier), identifier =~ @identifier_pattern)
+    case trimmed(covered_by) do
+      nil -> result
+      identifier -> Map.put(result, :covered_by, String.upcase(identifier))
+    end
   end
 
   defp put_covered_by(result, _covered_by), do: result

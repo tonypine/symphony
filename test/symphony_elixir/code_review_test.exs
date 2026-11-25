@@ -723,6 +723,19 @@ defmodule SymphonyElixir.CodeReviewTest do
       refute body =~ "earlier"
       assert [%{outcome: "request_changes", details: %{findings_count: 3} = details}] = verdicts()
       refute Map.has_key?(details, :missed_earlier)
+
+      # The verdict is stored in its fixed shape: its outcome, its reason and every finding as typed
+      # fields, each with its file and the start and end of its line range (TP-1682).
+      assert [%{payload: payload}] = RunStore.list_ticket_events(@issue_id, types: ["verdict.recorded"])
+      assert %{kind: "code_review", outcome: "request_changes", reason: "Two.", comments: ^comments} = payload
+
+      assert payload.findings == [
+               %{summary: "One.", file: "lib.ex", line_range: %{start: 1, end: 1}, quoted_snippet: "line", suggested_fix: "Fix it."},
+               %{summary: "Two.", file: "lib.ex", line_range: %{start: 2, end: 2}, quoted_snippet: "line", suggested_fix: "Fix it."},
+               %{summary: "Three.", file: "lib.ex", line_range: %{start: 3, end: 3}, quoted_snippet: "line", suggested_fix: "Fix it."}
+             ]
+
+      assert [%{findings: [%{file: "lib.ex", line_range: %{start: 1, end: 1}} | _rest]}] = verdicts()
     end
 
     test "a finding on unchanged lines in a second round is marked missed earlier" do
@@ -755,6 +768,11 @@ defmodule SymphonyElixir.CodeReviewTest do
 
       assert [verdict | _older] = @issue_id |> TicketEvents.query(types: ["verdict.recorded"]) |> Enum.reverse()
       assert Summary.render(verdict).detail =~ "2 findings · 1 missed earlier"
+
+      # Each typed finding says whether its lines changed since the last reviewed head.
+      assert [first, second] = verdict.payload.findings
+      assert %{file: "lib.ex", line_range: %{start: 2, end: 3}, since_last_review: "unchanged"} = first
+      assert %{line_range: %{start: 8, end: 8}, since_last_review: "changed"} = second
     end
 
     test "a review that could not read the whole change names the files it did not read on its verdict" do
@@ -766,6 +784,7 @@ defmodule SymphonyElixir.CodeReviewTest do
 
       refute_received {:moved, _issue_id, _state}
       assert [%{outcome: "inconclusive", details: %{cause: "review_incomplete", unread_files: ["lib/b.ex", "lib/c.ex"]}}] = verdicts()
+      assert [%{payload: %{unread_files: ["lib/b.ex", "lib/c.ex"]}}] = RunStore.list_ticket_events(@issue_id, types: ["verdict.recorded"])
     end
   end
 

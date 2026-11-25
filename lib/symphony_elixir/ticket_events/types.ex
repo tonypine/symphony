@@ -23,8 +23,32 @@ defmodule SymphonyElixir.TicketEvents.Types do
   `signal_details`, the details the signal was recorded with, so readers of the signals ledger can
   move over to events. A `note` also takes `status`, true on a note Symphony wrote itself as a wait
   or status message, which the Director's timeline lists only under "Show all events". A
-  `verdict.recorded` also takes the `details` the verdict carries. A tool's caller sees none of
-  them, and an agent records none (`schema/1`).
+  `verdict.recorded` also takes the `details` the verdict carries (Symphony's own bookkeeping of
+  it: a review round's counts, an inconclusive review's cause, a QA block's model and playbooks). A
+  tool's caller sees none of them, and an agent records none (`schema/1`).
+
+  A review's verdict carries what the reviewer said in a fixed shape (`review_finding_spec/0`,
+  `qa_step_spec/0`, `qa_finding_spec/0`), so a reader gets it without parsing text:
+
+    * a code review's `findings`, each with its `summary`, its `file`, its `line_range` (`start` and
+      `end`, 1-based), the `quoted_snippet`, the `suggested_fix`, the recorded `decision` it is about
+      and, once the pull request was reviewed before, `since_last_review` (`changed` or
+      `unchanged`); its `comments` (the change request's lines) and the `unread_files`;
+    * QA's `summary`, its `steps` (each with its `name`, `status`, `details`, `evidence`,
+      `environment` and an epic review's `checklist`, `gap`, `defect` and `blocked_by`) and its
+      `qa_findings` (each with the one `line` the report reads, and the `summary`, `step`,
+      `viewport`, `expected`, `actual` and `evidence` it was given).
+
+  A verdict stored before these fields kept a round's missed findings under `details`, and still
+  reads (`SymphonyElixir.TicketEvents.VerdictFacts.findings/1`).
+
+  `run.changed` is what a run that changed code changed, which Symphony reads from git itself when
+  the run ends (`SymphonyElixir.WorkspaceHead.changes/3`): the head the run started on
+  (`start_head`) and ended on (`head`), its `commits` (each `sha` and `subject`, first parent only,
+  so a merge of the base branch is one commit) and the `files` that differ between the start head
+  and the working tree it ended with, untracked files included (each `path`, `status` `added`,
+  `modified`, `deleted` or `renamed`, and the path it was renamed `from`), with `commit_count` and
+  `file_count` when the lists were cut to their most entries.
 
   The idempotency rule names the payload fields a key is derived from when the writer passes none
   (`{:fields, fields}`, used only when every field is present); `:writer` dedupes only on a key the
@@ -295,6 +319,42 @@ defmodule SymphonyElixir.TicketEvents.Types do
     measures: {:optional, @measures}
   ]
   @step_answer {:map, @step_answer_fields}
+  # A code review's finding, as the review_verdict tool takes it (`SymphonyElixir.ReviewAgent.Verdict`).
+  @review_finding {:map,
+                   [
+                     summary: :string,
+                     file: :string,
+                     line_range: {:map, [start: :non_neg_integer, end: :non_neg_integer]},
+                     quoted_snippet: :string,
+                     suggested_fix: :string,
+                     decision: {:optional, :string},
+                     since_last_review: {:optional, {:enum, ~w(changed unchanged)}}
+                   ]}
+  # A QA verdict's step and finding, as the qa_verdict tool takes them (`SymphonyElixir.QaAgent.Verdict`).
+  @qa_step {:map,
+            [
+              name: :string,
+              status: {:enum, ~w(pass fail blocked skipped unprovable)},
+              details: {:optional, :string},
+              evidence: {:optional, {:list, :string}},
+              environment: {:optional, {:enum, ~w(fixture live)}},
+              checklist: {:optional, :boolean},
+              gap: {:optional, :string},
+              defect: {:optional, :string},
+              blocked_by: {:optional, {:list, :string}}
+            ]}
+  @qa_finding {:map,
+               [
+                 line: :string,
+                 summary: {:optional, :string},
+                 step: {:optional, :string},
+                 viewport: {:optional, :string},
+                 expected: {:optional, :string},
+                 actual: {:optional, :string},
+                 evidence: {:optional, {:list, :string}}
+               ]}
+  @changed_file {:map, [path: :string, status: {:enum, ~w(added modified deleted renamed)}, from: {:optional, :string}]}
+  @run_commit {:map, [sha: :string, subject: {:optional, :string}]}
   @tokens {:any_of, [:non_neg_integer, :map]}
   # The signal an event records (`SymphonyElixir.TicketSignals.signal_event/2`) and the details it
   # was recorded with.
@@ -468,8 +528,32 @@ defmodule SymphonyElixir.TicketEvents.Types do
       writers: [:machine],
       run_kinds: [],
       required: [kind: {:enum, @verdict_kinds}, outcome: :string],
-      optional: [head: :string, reason: :string, details: :map] ++ @signal,
+      optional:
+        [
+          head: :string,
+          reason: :string,
+          findings: {:list, @review_finding},
+          comments: {:list, :string},
+          unread_files: {:list, :string},
+          summary: :string,
+          steps: {:list, @qa_step},
+          qa_findings: {:list, @qa_finding},
+          details: :map
+        ] ++ @signal,
       idempotency: :writer
+    },
+    "run.changed" => %{
+      writers: [:machine],
+      run_kinds: [],
+      required: [run_id: :string, start_head: :string, head: :string],
+      optional:
+        [
+          commits: {:list, @run_commit},
+          files: {:list, @changed_file},
+          commit_count: :non_neg_integer,
+          file_count: :non_neg_integer
+        ] ++ @signal,
+      idempotency: {:fields, [:run_id]}
     },
     "decision.requested" => %{
       writers: [:machine, :agent],
@@ -904,6 +988,18 @@ defmodule SymphonyElixir.TicketEvents.Types do
   @doc "The one shape of a measured value (see the moduledoc)."
   @spec measure_spec() :: field_spec()
   def measure_spec, do: @measure
+
+  @doc "The one shape of a code review's finding on a `verdict.recorded` (see the moduledoc)."
+  @spec review_finding_spec() :: field_spec()
+  def review_finding_spec, do: @review_finding
+
+  @doc "The one shape of a QA verdict's step on a `verdict.recorded` (see the moduledoc)."
+  @spec qa_step_spec() :: field_spec()
+  def qa_step_spec, do: @qa_step
+
+  @doc "The one shape of a QA verdict's finding on a `verdict.recorded` (see the moduledoc)."
+  @spec qa_finding_spec() :: field_spec()
+  def qa_finding_spec, do: @qa_finding
 
   @doc "The one shape of a QA step's answer (see the moduledoc)."
   @spec step_answer_spec() :: field_spec()

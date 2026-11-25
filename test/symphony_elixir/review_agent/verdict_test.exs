@@ -83,11 +83,22 @@ defmodule SymphonyElixir.ReviewAgent.VerdictTest do
       refute Map.has_key?(kept, :decision)
     end
 
-    test "trims comments and drops the blank and non-string ones" do
+    test "trims comments and drops the blank ones, and refuses a comment that is not a string" do
       assert {:ok, %{verdict: :approve, comments: ["Nit."], findings: []} = result} =
-               Verdict.from_map(%{"verdict" => "approve", "comments" => [" Nit. ", "", 3]})
+               Verdict.from_map(%{"verdict" => "approve", "comments" => [" Nit. ", ""]})
 
       refute Map.has_key?(result, :reason)
+      assert {:error, :invalid_comments} = Verdict.from_map(%{"verdict" => "approve", "comments" => [" Nit. ", 3]})
+    end
+
+    test "refuses a field the tool does not name, on the verdict or a finding, and a decision that is not text" do
+      assert {:error, :unknown_field} = Verdict.from_map(%{"verdict" => "approve", "score" => 3})
+
+      assert {:error, :invalid_finding_field} =
+               Verdict.from_map(%{"verdict" => "request_changes", "findings" => [finding(%{"severity" => "high"})]})
+
+      assert {:error, :invalid_finding_decision} =
+               Verdict.from_map(%{"verdict" => "request_changes", "findings" => [finding(%{"decision" => 2})]})
     end
 
     test "keeps a trimmed reason on any verdict and requires one for block" do
@@ -179,6 +190,9 @@ defmodule SymphonyElixir.ReviewAgent.VerdictTest do
           {:invalid_finding_line_range, "each finding's `line_range` must be [start, end] with positive line numbers."},
           {:missing_block_reason, "a block needs a non-empty `reason`."},
           {:missing_request_changes_comments, "request_changes needs at least one finding or comment."},
+          {:unknown_field, "the verdict names a field the tool does not take; use only the fields of the valid shape."},
+          {:invalid_finding_field, "a finding names a field the tool does not take; a finding takes summary, file, line_range, quoted_snippet, suggested_fix and decision."},
+          {:invalid_finding_decision, "a finding's `decision` must be a recorded decision's id, such as D2."},
           {:something_else, ":something_else."}
         ] do
       assert Verdict.describe_error(reason) == text

@@ -59,8 +59,22 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       response = DynamicTool.execute("review_verdict", %{"verdict" => "looks good"}, opts)
 
       refute response["success"]
-      assert %{"error" => %{"code" => "invalid_review_verdict", "message" => message}} = Jason.decode!(response["output"])
-      assert message == "Symphony could not read the verdict: `verdict` must be one of approve, request_changes or block. Fix it and call review_verdict again."
+      assert %{"error" => %{"code" => "invalid_review_verdict", "message" => message, "valid_shape" => shape}} = Jason.decode!(response["output"])
+
+      assert message ==
+               "Symphony could not read the verdict, and recorded none of it: `verdict` must be one of approve, request_changes or block. Fix it and call review_verdict again."
+
+      assert shape == Jason.decode!(Jason.encode!(SymphonyElixir.ReviewAgent.Verdict.tool_spec()["inputSchema"]))
+      refute_received {:review_verdict, _result}
+
+      # A finding with no file, or a field the tool does not name, is refused whole: nothing is recorded.
+      finding = %{"summary" => "Off by one", "line_range" => [3, 4], "quoted_snippet" => "x", "suggested_fix" => "y"}
+
+      for findings <- [[finding], [Map.merge(finding, %{"file" => "lib/a.ex", "severity" => "high"})]] do
+        response = DynamicTool.execute("review_verdict", %{"verdict" => "request_changes", "findings" => findings}, opts)
+        assert %{"error" => %{"code" => "invalid_review_verdict", "valid_shape" => %{"properties" => %{"findings" => _findings}}}} = Jason.decode!(response["output"])
+        refute_received {:review_verdict, _result}
+      end
 
       response = DynamicTool.execute("review_verdict", %{"verdict" => "approve", "score" => 3}, opts)
       assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
@@ -104,8 +118,21 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       response = DynamicTool.execute("qa_verdict", %{"verdict" => "fail"}, opts)
 
       refute response["success"]
-      assert %{"error" => %{"code" => "invalid_qa_verdict", "message" => message}} = Jason.decode!(response["output"])
-      assert message == "Symphony could not read the verdict: a fail needs at least one finding or failing step. Fix it and call qa_verdict again."
+      assert %{"error" => %{"code" => "invalid_qa_verdict", "message" => message, "valid_shape" => shape}} = Jason.decode!(response["output"])
+      assert message == "Symphony could not read the verdict, and recorded none of it: a fail needs at least one finding or failing step. Fix it and call qa_verdict again."
+      assert shape == Jason.decode!(Jason.encode!(SymphonyElixir.QaAgent.Verdict.tool_spec()["inputSchema"]))
+      refute_received {:qa_verdict, _result}
+
+      # A step proved in an environment QA does not have, or a finding with a field the tool does not
+      # name, is refused whole: nothing is recorded.
+      for args <- [
+            %{"verdict" => "pass", "steps" => [%{"name" => "a", "status" => "pass", "environment" => "staging"}]},
+            %{"verdict" => "fail", "findings" => [%{"summary" => "Clipped", "severity" => "high"}]}
+          ] do
+        response = DynamicTool.execute("qa_verdict", args, opts)
+        assert %{"error" => %{"code" => "invalid_qa_verdict", "valid_shape" => %{"properties" => %{"steps" => _steps}}}} = Jason.decode!(response["output"])
+        refute_received {:qa_verdict, _result}
+      end
 
       response = DynamicTool.execute("qa_verdict", %{"verdict" => "pass", "score" => 3}, opts)
       assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])

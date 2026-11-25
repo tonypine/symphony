@@ -118,6 +118,7 @@ defmodule SymphonyElixir.QaVerification do
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAgent
   alias SymphonyElixir.QaAgent.Report
+  alias SymphonyElixir.TicketEvents.VerdictFacts
 
   @verdict_kind "qa"
   @run_kind "qa"
@@ -1193,7 +1194,7 @@ defmodule SymphonyElixir.QaVerification do
       if verdict == "pass", do: confirm_findings(repo_key, issue, run_id, head)
     end
 
-    record_verdict(issue, opts, head, verdict, details)
+    record_verdict(issue, opts, head, verdict, details, VerdictFacts.qa(outcome))
   end
 
   # A groomed ticket's check QA saw pass is proved by QA on this head (`TicketJourney.record_walked/4`).
@@ -1366,9 +1367,10 @@ defmodule SymphonyElixir.QaVerification do
   defp cut(nil, _max), do: nil
   defp cut(text, max), do: String.slice(text, 0, max)
 
-  # The QA run gave the verdict, so its event names that run, as its evidence and findings do.
-  defp record_verdict(issue, opts, head, outcome, details \\ %{}) do
-    run_opts = [run_id: qa_run_id(issue, opts, head)]
+  # The QA run gave the verdict, so its event names that run, as its evidence and findings do, and
+  # carries what QA said (its summary, steps and findings) in its typed fields (`VerdictFacts.qa/1`).
+  defp record_verdict(issue, opts, head, outcome, details \\ %{}, facts \\ %{}) do
+    run_opts = [run_id: qa_run_id(issue, opts, head), facts: facts]
     TicketSignals.record_verdict(repo_key(issue, opts), issue.id, @verdict_kind, head, outcome, details, run_opts)
   end
 

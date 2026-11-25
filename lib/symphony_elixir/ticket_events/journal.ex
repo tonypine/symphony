@@ -49,6 +49,7 @@ defmodule SymphonyElixir.TicketEvents.Journal do
     "run.started" => "run",
     "run.started_by_person" => "run",
     "run.ended" => "run",
+    "run.changed" => "run",
     "attempt.pushed" => "run",
     "step.started" => "run",
     "step.completed" => "run",

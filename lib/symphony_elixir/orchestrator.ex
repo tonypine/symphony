@@ -727,6 +727,7 @@ defmodule SymphonyElixir.Orchestrator do
           |> maybe_put_runtime_value(:agent_session, runtime_info[:agent_session])
           |> maybe_put_runtime_value(:comment_ids, runtime_info[:comment_ids])
           |> maybe_put_runtime_value(:linked, runtime_info[:linked])
+          |> maybe_put_runtime_value(:start_head, runtime_info[:start_head])
           |> Map.put(:last_event_at, last_event_at)
           |> maybe_put_workspace_hook(runtime_info)
 
@@ -6639,11 +6640,40 @@ defmodule SymphonyElixir.Orchestrator do
       end
 
     opts = [run_id: run_id, at: DateTime.utc_now()]
+    record_run_changed(repo_key, issue_id, run_id, running_entry, opts)
 
     case run_transcript(issue_id, run_id, running_entry) do
       {:ok, path} -> record_run_ended_with_transcript(repo_key, issue_id, path, payload, opts)
       :none -> TicketSignals.record_event(repo_key, issue_id, "run.ended", payload, opts)
     end
+  end
+
+  # What a run that changed code changed, as its `run.changed` event, read from git alone
+  # (`WorkspaceHead.changes/3`): the head its workspace held before its first turn, which the agent
+  # runner reported (`:start_head`), against the head and the working tree it ended with. A run
+  # that changed nothing, one with no start head (a review, a QA pass, an SSH worker's) and a read
+  # that fails record none; a failure is logged and never holds up the run's end.
+  defp record_run_changed(repo_key, issue_id, run_id, running_entry, opts) do
+    case Map.get(running_entry, :start_head) do
+      start_head when is_binary(start_head) ->
+        case read_run_changes(running_entry, start_head) do
+          %{commit_count: 0, file_count: 0} -> :ok
+          %{} = changes -> TicketSignals.record_event(repo_key, issue_id, "run.changed", Map.put(changes, :run_id, run_id), opts)
+          nil -> Logger.info("Run changes unread from git issue_id=#{issue_id} issue_identifier=#{Map.get(running_entry, :identifier)} run_id=#{run_id} start_head=#{start_head}")
+        end
+
+      _no_start_head ->
+        :ok
+    end
+  rescue
+    error ->
+      Logger.warning("Run changes read failed issue_id=#{issue_id} issue_identifier=#{Map.get(running_entry, :identifier)} run_id=#{run_id}: #{Exception.message(error)}")
+      :ok
+  end
+
+  defp read_run_changes(running_entry, start_head) do
+    reader = Application.get_env(:symphony_elixir, :run_changes_reader, &WorkspaceHead.changes/3)
+    reader.(Map.get(running_entry, :workspace_path), Map.get(running_entry, :worker_host), start_head)
   end
 
   # A local Claude Code run's transcript (`Transcript.locate/4`), else its session's file wherever
