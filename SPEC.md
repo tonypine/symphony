@@ -6985,10 +6985,14 @@ Minimum endpoints:
     `run.started`, else its `run.ended`; null when it resolved none), `status` is `ended` once its `run.ended` is written and `running` before that
     only while the orchestrator holds a run with its id (or the run started after the snapshot
     read was taken); a run with no `run.ended` the orchestrator doesn't hold reads `ended` too,
-    with the `ended_at` its record proves (the ticket's next `run.started`, else the run's last
-    step, else its start) and the exit `ended; no end was recorded`. Each boot, before its first
-    tick, writes that `run.ended` for every run left without one (a run Symphony held when it quit,
-    say to install an update), once, at that same time, with `counted: false`. `verdict` is the
+    with the `ended_at` of its own last activity (the later of its last step and the last agent event
+    its row in the run list kept; a run with neither ends at the ticket's next `run.started` that is
+    not a Conductor turn, else at its start: a Conductor turn never gives another run's end) and the
+    exit `ended; no end was recorded`. Each boot, before its first tick, writes that `run.ended` for
+    every run left without one (a run Symphony held when it quit, say to install an update), once,
+    at that same time, with the `tokens` its row in the run list last kept for it (left out when it
+    kept none) and `counted: false`, so the ticket's budget and token totals count the run while it
+    counts toward no loop limit. `verdict` is the
     newest `verdict.recorded` naming the run (`{kind, outcome, head, at}`), else null. A run whose events span two pages shows
     on each with that page's events and its whole header; the client merges by `run_id`.
   - `since` (ISO 8601, exclusive) pages: `next_since` is the `at` of the last event returned (the

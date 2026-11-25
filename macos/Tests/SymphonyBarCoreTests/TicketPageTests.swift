@@ -31,9 +31,15 @@ final class TicketPageTests: XCTestCase {
         XCTAssertEqual(now.turn, 7)
         XCTAssertEqual(now.lastActivity, "14 min ago")
         XCTAssertEqual(now.workspace, "/Users/director/symphony-workspaces/web-shop/SHOP-305")
-        XCTAssertEqual(now.tokens.value, "1.2M of 2M")
-        XCTAssertEqual(try XCTUnwrap(now.tokens.fraction), 0.62, accuracy: 0.001)
-        XCTAssertEqual(now.tokens.note, "Per-ticket cap")
+        // The run header has the run's own tokens; the ticket's total (run 1's 860K and run 2's 1.24M) is what the
+        // per-ticket cap measures.
+        XCTAssertEqual(now.tokens.label, "This run")
+        XCTAssertEqual(now.tokens.value, "1.2M")
+        XCTAssertNil(now.tokens.fraction)
+        XCTAssertEqual(now.total.label, "Ticket total")
+        XCTAssertEqual(now.total.value, "2.1M of 2M")
+        XCTAssertEqual(try XCTUnwrap(now.total.fraction), 1, accuracy: 0.001)
+        XCTAssertEqual(now.total.note, "Per-ticket cap")
         // The run now's tokens so far, for its line on the timeline; the provider's last message isn't kept (TP-1452).
         XCTAssertEqual(page.runTokens, 1_240_000)
 
@@ -356,7 +362,11 @@ final class TicketPageTests: XCTestCase {
         XCTAssertEqual(now?.pendingTool, "waiting on linear_graphql for 2 min")
         XCTAssertEqual(now?.tokens.value, "1,200")
         XCTAssertNil(now?.tokens.fraction)
-        XCTAssertEqual(now?.tokens.note, "No per-ticket cap")
+        XCTAssertNil(now?.tokens.note)
+        // The past runs carry no tokens here, so the ticket's total is the run's; no cap is set.
+        XCTAssertEqual(now?.total.value, "1,200")
+        XCTAssertNil(now?.total.fraction)
+        XCTAssertEqual(now?.total.note, "No per-ticket cap")
         XCTAssertEqual(page.phaseSentence, "Working")
         XCTAssertEqual(page.facts.map(\.label), ["Type", "Pull request"])
         XCTAssertEqual(page.facts[0].value, "Plan")

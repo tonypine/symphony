@@ -298,7 +298,7 @@ struct TokenBarView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Tokens")
+                Text(LifecycleModel.tokensTitle)
                     .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(.secondary)
                 Spacer(minLength: DesignTokens.Space.s3)
