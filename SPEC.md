@@ -611,8 +611,10 @@ newest one is the ticket's plan, and a ticket is groomed exactly when it holds o
 (any run's, or the machine's: a check of the current plan proved by a test, QA, the design or
 something attached, recorded once per check and head and refused for an id the plan does not hold),
 `check.waived` (machine only: a check nobody has to prove any more, and why; an `outcome` check is
-waived only by the person's own decision, and a plan version may remove or reword one only after a
-new ask),
+waived only by the person's own decision, and a plan version may reword one only after a new ask
+and remove one only after a new ask or when the Conductor writes it outside Grooming with a reason
+of its own, for an outcome nothing inside the ticket's life can prove: on a ticket with sub-tickets
+at any turn, and on one without at the turns that may waive a check),
 `conductor.intervention` (machine only: what the Conductor of another ticket did to this one,
 `stopped`, `replanned`, `canceled`, `replaced` or `added`, and why) and
 `note` (which may carry a `tag` its writer gives it: `discovery`, something a run found that is not its

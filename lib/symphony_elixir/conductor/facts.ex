@@ -130,7 +130,9 @@ defmodule SymphonyElixir.Conductor.Facts do
            "with the reason in plain words. Never waive a check only because it is hard or still unproved. " <>
            @waive_rule <>
            " " <>
-           "A check of kind `outcome` is what the person asked for: Symphony refuses its waiver, and only the person can waive it."
+           "A check of kind `outcome` is what the person asked for: Symphony refuses its waiver in `waive`, and only the " <>
+           "person can waive it. Dropping an outcome is not a waiver: it is the plan written again without it, with the " <>
+           "plan's `reason`, and only for an outcome nothing inside the ticket's life can prove."
   @open_checks "These checks of the plan are still open, and the pull request merges next. A merge does not prove them. " <>
                  "Say so in your update. Waive one that nobody can prove the way the plan says, with its reason " <>
                  "(never a check of kind `outcome`: only the person waives one), or send the ticket back with instructions " <>
@@ -395,10 +397,12 @@ defmodule SymphonyElixir.Conductor.Facts do
 
   defp put_open_checks(facts, _junction), do: facts
 
-  # A groomed ticket's checks, what the runs said in their newest notes, and the rule for waiving one.
+  # A groomed ticket's plan and checks, what the runs said in their newest notes, and the rule for
+  # waiving one. The plan is there so that a turn can write it again without an outcome that rested
+  # on a check nobody can prove (`@waive_rule`).
   defp put_checks(facts, events) do
     if TicketPlan.groomed?(events),
-      do: Map.merge(facts, %{checks: checks(events), check_notes: run_notes(events), waive: @waive}),
+      do: Map.merge(facts, %{plan: plan_facts(TicketPlan.current(events)), checks: checks(events), check_notes: run_notes(events), waive: @waive}),
       else: facts
   end
 
@@ -491,6 +495,7 @@ defmodule SymphonyElixir.Conductor.Facts do
       layers: plan.layers,
       summary: plan.summary,
       text: cut(plan.text, @plan_text_max),
+      size: Map.get(plan, :size),
       sub_tickets: for(entry <- Map.get(plan, :sub_tickets, []), do: Map.take(entry, [:key, :title, :after, :identifier]))
     }
   end

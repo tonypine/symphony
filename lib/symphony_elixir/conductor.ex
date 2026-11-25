@@ -123,7 +123,10 @@ defmodule SymphonyElixir.Conductor do
   Symphony records as `check.waived` (`SymphonyElixir.TicketChecks.waive/4`); one that names no
   check of the plan, or names an outcome, which only the person waives, is dropped and logged.
   Each of those turns is told that a check is never waived for the person to verify later
-  (`Facts.waive_rule/0`).
+  (`Facts.waive_rule/0`), and that an outcome which rested on such a check is dropped in the same
+  turn by writing the plan again, with its reason. On a ticket without sub-tickets the turns at
+  `after_coding`, `after_rework`, `before_merge` and the watch turn read that `plan` too, and
+  Symphony records it as the plan's next version (`Message.write_plan/4`).
   """
 
   require Logger
@@ -192,6 +195,9 @@ defmodule SymphonyElixir.Conductor do
   @waive_junctions ["message", "after_coding", "after_rework", "before_merge", "sub_ticket_ended", "final_check", "during_run"]
   # The junctions whose answer may hold the ticket's merge.
   @hold_junctions ["before_merge", "message", "during_run"]
+  # The junctions that waive a check on a ticket without sub-tickets, where an outcome that rested on
+  # a check nobody can prove is dropped by writing the plan again, with its reason (`Facts.waive_rule/0`).
+  @plan_drop_junctions ["after_coding", "after_rework", "before_merge", "during_run"]
   @junction_words %{
     "grooming" => "the ticket is new; you write its plan before any work starts",
     "message" => "a person sent a message on the ticket; you answer it",
@@ -1009,6 +1015,7 @@ defmodule SymphonyElixir.Conductor do
   defp plan_read(%{junction: @child_message}), do: :optional
   # On a ticket with sub-tickets every turn may write the plan again.
   defp plan_read(%{family: true}), do: :optional
+  defp plan_read(%{junction: junction}) when junction in @plan_drop_junctions, do: :optional
   defp plan_read(_plan), do: false
 
   # Grooming's plan lists the sub-tickets a split creates; on a ticket with sub-tickets a plan that

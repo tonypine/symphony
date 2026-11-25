@@ -49,12 +49,12 @@ delivery; when something is wrong later, the person files a ticket. Then answer 
 - The `plan` written again without an outcome, with its `reason`: an outcome has no proof and no
   reason it was left out, and nothing inside the ticket's life can deliver it. The reason says why
   it is dropped. With nothing else missing, answer `"done": true` in the same answer.
-An outcome with no proof and no reason means the plan is incomplete: act within the plan, by adding
-the sub-ticket that delivers it or by dropping it with the reason. That is your decision, never a
-question to the person.
 - A question (`ask_person`) only for a real judgement nothing in the facts settles, never to confirm
   what the facts show. Ask it in this answer: saying in your `update` that you ask a question does
   not ask it, only `ask_person` does.
+An outcome with no proof and no reason means the plan is incomplete: act within the plan, by adding
+the sub-ticket that delivers it or by dropping it with the reason. That is your decision, never a
+question to the person.
 Never answer `"done": true` to close a ticket you could not check. An answer with `"done": false`,
 nothing to add or change and no question closes nothing: Symphony gives it back to you in the same
 turn, and if your next answer closes nothing either, it asks the person what to do.
