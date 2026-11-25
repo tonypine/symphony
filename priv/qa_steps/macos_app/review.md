@@ -19,6 +19,9 @@ turn:
 
 - one step per walkthrough step, named after it, with the walk's status (`plan_mismatch` that a
   recheck did not settle is `blocked`), its `details` and its `evidence`;
+- the steps Symphony marked `unprovable` before any session (listed below, with what each
+  needed), carried as given: the same name, `unprovable`, the same `details`. Symphony puts them in
+  the verdict as it marked them, whatever you write for them;
 - one `Design check: <deliverable>` step per UI deliverable and gallery entry judged, from those
   steps' answers;
 - the steps a named test proves (the pre-checks): `pass`, with the check's result in `details`;
@@ -35,6 +38,9 @@ Rules Symphony keeps on the verdict:
   missing QA tool. `needs_dev_server` only when a step was blocked because the project's own server
   was not running and Symphony started none.
 - A step that needs a QA tool or setup this PR itself adds is `skipped`, never `blocked`.
+- A step that needs a QA tool, a fixture page or the live server this pass does not have is
+  `unprovable`, with what it needed in `details`; `blocked` is for a step that could not be judged
+  for any other reason.
 - A QA harness fault (a click that fell back to `AXPress`, or was refused because of another app,
   `qa_permission_missing`, `qa_helper_unavailable`, `qa_worker_*`) makes the verdict `blocked` with
   the tool's message as `reason`.

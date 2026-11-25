@@ -1086,7 +1086,7 @@ defmodule SymphonyElixir.QaVerificationTest do
 
       assert_received {:memory_tracker_comment, @issue_id, report}
       assert report =~ "**Verdict:** pass → Merging"
-      assert report =~ "- **unprovable here** Watch the run in the Mac app"
+      assert report =~ "- **unprovable** Watch the run in the Mac app"
       assert report =~ "Unprovable here: Watch the run in the Mac app (this repo runs its own server only beside the app on the QA host"
 
       # The agent was told which steps fall there, and why.
@@ -1226,7 +1226,48 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert_received {:memory_tracker_comment, @issue_id, report}
       assert report =~ "**Verdict:** blocked → QA (blocked, retrying)"
       assert report =~ "- **blocked** Open the Mac app"
-      refute report =~ "unprovable here"
+      refute report =~ "**unprovable**"
+    end
+
+    # A step Symphony marked itself before any session of a stepped pass (TP-1672) carries `needs`.
+    defp marked(name, needs), do: %{name: name, status: "unprovable", details: "Symphony marked it before any session: it needs #{needs}.", evidence: [], needs: [needs]}
+
+    test "a step Symphony marked keeps unprovable on a pass that offered no such case, and the report and the ticket's record say what it needed" do
+      {workspace, _head} = git_workspace!()
+
+      passed = %{
+        verdict: :pass,
+        summary: "It ran.",
+        steps: [step("Walkthrough step 2", "pass"), marked("Walkthrough step 1 (check c1)", "the live server, which this pass does not run")],
+        findings: []
+      }
+
+      assert :ok = run_hub(workspace, passed, settings!())
+
+      assert_received {:qa_agent_run, job, _settings}
+      assert job.unprovable == %{unselected: [], dev_server_ruled_out: nil}
+      assert_received {:memory_tracker_state_update, @issue_id, "Merging"}
+
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ "- **unprovable** Walkthrough step 1 (check c1)"
+      assert report =~ "Symphony marked it before any session: it needs the live server, which this pass does not run."
+
+      assert [evidence] = for(%{payload: %{status: "unprovable"}} = event <- SymphonyElixir.TicketEvents.query(@issue_id, types: ["evidence"], limit: 50), do: event)
+      assert evidence.payload.step == "Walkthrough step 1 (check c1)"
+      assert evidence.payload.details == "Symphony marked it before any session: it needs the live server, which this pass does not run."
+    end
+
+    test "a pass whose every walked step Symphony marked asks a person at once, never the blocked retry" do
+      {workspace, head} = git_workspace!()
+
+      passed = %{verdict: :pass, summary: "Nothing walked.", steps: [marked("Walkthrough step 1", "the QA tool `qa_drag`, which the QA driver does not have")], findings: []}
+      assert :ok = run_hub(workspace, passed, settings!())
+
+      refute_received {:fixer_create, _attrs}
+      refute_received {:memory_tracker_state_update, @issue_id, _state}
+      assert [%{outcome: "blocked", head_sha: ^head}] = verdicts()
+      assert %{} = decision = deciding()
+      assert [_again, _rework, %{label: "Merge without a QA result", recommended?: true}] = decision.options
     end
 
     test "a pass the agent gave with an unprovable step passes, naming that step" do

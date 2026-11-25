@@ -61,6 +61,15 @@ defmodule SymphonyElixir.QaAgent.Steps do
   (`SymphonyElixir.Conductor.prompt_section/2`), as the one session's prompt does, so a pass the
   Conductor sent back to QA reads what it must do differently.
 
+  **Symphony's own check of the plan** (`SymphonyElixir.QaAgent.PlanCheck`): before the plan
+  session, a walked step whose plan check's setting is the live server on a pass that does not run
+  it, or a fixture directory the worktree lacks, is marked `unprovable` with what it needed; once
+  the plan answered, so is a step whose brief `needs` a QA tool the driver does not have, an absent
+  fixture, or the live server the pass does not run. A marked step is not briefed, gets no walk
+  session (a group that loses every step starts none, and a pass whose steps are all marked walks
+  none), and reaches the verdict as Symphony settled it: `unprovable`, with what it needed in its
+  `details` and `needs` set, whatever the review wrote for it.
+
   Three steps are read by their id:
 
   - `plan`: its `walk` must hold a brief (`step`: the walkthrough step's number) for every
@@ -88,7 +97,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
   alias SymphonyElixir.Config.Schema.Phases
   alias SymphonyElixir.Config.Schema.Phases.Step
   alias SymphonyElixir.PhaseSteps.Transcript
-  alias SymphonyElixir.QaAgent.{StepPayload, StepPrompts, Verdict}
+  alias SymphonyElixir.QaAgent.{PlanCheck, StepPayload, StepPrompts, Verdict}
   alias SymphonyElixir.QaPreCheck
   alias SymphonyElixir.Walkthrough
 
@@ -97,7 +106,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
   @launch "symphony:qa_launch"
   @quit "symphony:qa_quit"
   @attach "symphony:qa_attach"
-  @statuses ~w(pass fail blocked plan_mismatch)
+  @statuses ~w(pass fail blocked unprovable plan_mismatch)
   @max_rechecks 3
   @max_recheck_briefs 12
   @max_recheck_rounds 2
@@ -115,7 +124,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
   @nothing_on_screen "the plan found nothing on screen to judge: it needs no app and no walkthrough step is walked"
   @output_key {__MODULE__, :output}
   @evidence_dir "qa-evidence"
-  @judged_rule "A step's answer `status` is `pass` only when every check in its brief was actually seen and judged. When any part could not be reached, seen or judged (the wrong fixture, an empty state, a screenshot not viewed), the status is `blocked` and `actual` says what blocked it: never `pass`, never `fail`."
+  @judged_rule "A step's answer `status` is `pass` only when every check in its brief was actually seen and judged. When any part could not be reached, seen or judged (an empty state, a screenshot not viewed, a harness fault), the status is `blocked` and `actual` says what blocked it: never `pass`, never `fail`. When the step needs a QA tool, a fixture page or the live server this pass does not have, the status is `unprovable` and `actual` says what it needed (Symphony marks the steps it can see so before any session)."
 
   @typedoc "What a stepped pass gives back: `QaAgent.run_result/0`'s, with the review's session (`session_id`)."
   @type run_result :: %{result: QaAgent.result(), tokens: map(), session_id: String.t() | nil}
@@ -146,6 +155,14 @@ defmodule SymphonyElixir.QaAgent.Steps do
   end
 
   defp configured(_job, _system), do: []
+
+  @doc """
+  The statuses a walk step's answer may give: `unprovable` (`PlanCheck.status/0`) is a step this
+  pass cannot do (a QA tool, a fixture page or the live server it lacks), `blocked` one that could
+  not be judged, and `plan_mismatch` the app not being where the brief says.
+  """
+  @spec statuses() :: [String.t()]
+  def statuses, do: @statuses
 
   @doc """
   What a pass of ticket `issue_id` asks at each boundary between two steps (`opts[:qa_boundary]`):
@@ -203,7 +220,8 @@ defmodule SymphonyElixir.QaAgent.Steps do
 
   defp new_state(agent_module, job, worktree, qa_settings, steps, opts) do
     tmp_dir = Keyword.fetch!(opts, :qa_tmp_dir)
-    targets = walked_steps(job)
+    facts = pass_facts(job, worktree, opts)
+    {targets, marked} = job |> walked_steps() |> PlanCheck.settings(facts)
     {expanded, checks} = expand(steps, targets, &{:alone, &1.number})
 
     context =
@@ -231,6 +249,8 @@ defmodule SymphonyElixir.QaAgent.Steps do
       listed: steps,
       template: Enum.find(steps, &(&1.repeat == "walkthrough")),
       targets: targets,
+      marked: marked,
+      facts: facts,
       checks: checks,
       app_steps: app_steps(expanded),
       context: Map.put(context, :changes, PhaseSteps.changes(context)),
@@ -252,6 +272,20 @@ defmodule SymphonyElixir.QaAgent.Steps do
   # The walkthrough steps this pass walks: those no recorded test proves (those are proved as recorded).
   defp walked_steps(job) do
     job |> Map.get(:journey, %{}) |> Map.get(:steps, []) |> Enum.reject(&Walkthrough.named_test?/1)
+  end
+
+  # What the pass has, for Symphony's own check of its plan (`PlanCheck`): the QA driver's tools,
+  # whether its `macos_app` playbook runs the live server (and why not), and the worktree the
+  # fixtures are read from.
+  defp pass_facts(job, worktree, opts) do
+    app = Enum.find(job.playbooks, &(Map.get(&1, :kind) == "macos_app")) || %{}
+
+    %{
+      tools: Keyword.get_lazy(opts, :qa_tools, &QaDriver.tools/0),
+      live: Map.get(app, :live) == true,
+      live_reason: Map.get(app, :live_reason),
+      worktree: worktree
+    }
   end
 
   # The list with its `repeat: walkthrough` step as one walk step per group of walkthrough steps
@@ -290,6 +324,13 @@ defmodule SymphonyElixir.QaAgent.Steps do
     {steps, checks} = expand(state.listed, state.targets, &plan_group(state, &1))
     checks = Map.new(checks, fn {id, walked} -> {id, Enum.map(walked, &%{&1 | brief: plan_brief(state, &1.target)})} end)
     %{state | steps: steps, context: %{state.context | steps: steps}, checks: checks, app_steps: app_steps(steps)}
+  end
+
+  # The steps whose brief `needs` what the pass lacks (`PlanCheck.briefs/3`) are marked, and leave
+  # the walk: a group that loses every step starts no session.
+  defp mark_briefs(state) do
+    {targets, marked} = PlanCheck.briefs(state.targets, List.wrap(state.plan["walk"]), state.facts)
+    %{state | targets: targets, marked: state.marked ++ marked}
   end
 
   defp plan_group(state, target) do
@@ -389,6 +430,8 @@ defmodule SymphonyElixir.QaAgent.Steps do
       results: state.results,
       answers: state.answers,
       plan: state.plan,
+      targets: state.targets,
+      marked: state.marked,
       checks: state.checks,
       app_steps: state.app_steps,
       sessions: state.sessions,
@@ -471,6 +514,8 @@ defmodule SymphonyElixir.QaAgent.Steps do
         results: pass.results,
         answers: pass.answers,
         plan: pass.plan,
+        targets: Map.get(pass, :targets, state.targets),
+        marked: Map.get(pass, :marked, state.marked),
         checks: pass.checks,
         app_steps: pass.app_steps,
         sessions: pass.sessions,
@@ -537,7 +582,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
 
   # Nothing on screen to judge: the plan needs no app and no walkthrough step is walked. The launch
   # still runs, since such a pass rests on the app building, starting and checking healthy.
-  defp nothing_on_screen?(%{plan: %{"needs_app" => false}, targets: []}), do: true
+  defp nothing_on_screen?(%{plan: %{"needs_app" => false}, targets: [], marked: []}), do: true
   defp nothing_on_screen?(_state), do: false
 
   defp machine_context(state) do
@@ -742,7 +787,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
 
   defp passed(state, step, run, answer) do
     state = %{state | answers: state.answers ++ answer_entries(state, step, answer)}
-    state = if step.id == @plan, do: regroup(%{state | plan: answer}), else: state
+    state = if step.id == @plan, do: state |> Map.put(:plan, answer) |> mark_briefs() |> regroup(), else: state
     PhaseSteps.record_turn_completed(step, step_context(state, run), answer_fields(state, step, answer), duration(run))
     {add_result(state, step, "passed", group_detail(state, step, answer)), :passed}
   end
@@ -779,11 +824,13 @@ defmodule SymphonyElixir.QaAgent.Steps do
     end
   end
 
-  # The steps a plan that finds nothing on screen leaves unrun.
+  # The steps a plan that finds nothing on screen leaves unrun, and the walked steps Symphony marked.
   defp plan_skips(state) do
+    marked = for %{target: target, needs: needs} <- state.marked, do: %{title: PlanCheck.step_name(target), why: PlanCheck.details(needs)}
+
     if nothing_on_screen?(state),
       do: for(step <- state.steps, MapSet.member?(state.app_steps, step.id), do: %{title: step.title, why: @nothing_on_screen}),
-      else: []
+      else: marked
   end
 
   # A step whose agent gave nothing Symphony takes ends `failed`, and the pass goes on to its
@@ -953,9 +1000,12 @@ defmodule SymphonyElixir.QaAgent.Steps do
   defp check(state, %Step{id: @plan}, answer) do
     briefed = for brief <- List.wrap(answer["walk"]), number = brief_number(brief), into: MapSet.new(), do: number
 
-    case Enum.reject(state.targets, &MapSet.member?(briefed, &1.number)) do
-      [] -> {:ok, answer}
-      missing -> {:error, "the plan's `walk` has no brief for walkthrough step #{Enum.map_join(missing, ", ", & &1.number)}, which QA walks"}
+    with [] <- Enum.reject(state.targets, &MapSet.member?(briefed, &1.number)),
+         :ok <- needs_shapes(answer["walk"]) do
+      {:ok, answer}
+    else
+      [_ | _] = missing -> {:error, "the plan's `walk` has no brief for walkthrough step #{Enum.map_join(missing, ", ", & &1.number)}, which QA walks"}
+      {:error, why} -> {:error, why}
     end
   end
 
@@ -964,6 +1014,16 @@ defmodule SymphonyElixir.QaAgent.Steps do
       [_, _ | _] = walked -> check_group(Enum.map(walked, & &1.number), answer)
       _one -> check_one(answer)
     end
+  end
+
+  # Each brief's `needs` in the fixed shape (`PlanCheck.needs_shape/1`), else the plan is asked again.
+  defp needs_shapes(walk) do
+    Enum.find_value(List.wrap(walk), :ok, fn brief ->
+      case is_map(brief) && PlanCheck.needs_shape(brief) do
+        {:error, _why} = error -> error
+        _ok -> nil
+      end
+    end)
   end
 
   defp check_one(%{"status" => status} = answer) do
@@ -1250,8 +1310,10 @@ defmodule SymphonyElixir.QaAgent.Steps do
     [
       QaAgent.prompt_parts(state.job, parent(state), [:issue, :unprovable]),
       "Symphony's own steps of this pass, and how each step ended:\n" <> Enum.map_join(state.results, "\n", &result_line/1),
+      marked_facts(state.marked, :review),
       "Write a recheck, or the verdict when `qa_verdict` is not available, to `#{answer_path(state, %Step{id: @review})}`."
     ]
+    |> Enum.reject(&(&1 == ""))
     |> Enum.join("\n\n")
   end
 
@@ -1379,10 +1441,33 @@ defmodule SymphonyElixir.QaAgent.Steps do
       "- Playbooks: #{Enum.map_join(state.job.playbooks, ", ", & &1.kind)}",
       "- The PR's diff: `git diff origin/HEAD...HEAD` in this worktree (`origin/HEAD` is the base branch).",
       "Walkthrough steps QA walks (each needs a brief in `walk`):\n" <> walked,
+      marked_facts(state.marked, :plan),
+      pass_tools(state.facts),
       if(checks == "", do: "No step is proved by a named test.", else: "Steps a recorded test proves (proved, do not brief them):\n" <> checks),
       gallery_facts(state)
     ]
+    |> Enum.reject(&(&1 == ""))
     |> Enum.join("\n")
+  end
+
+  # The steps Symphony marked before this session: the plan briefs none of them, and the review
+  # carries each as given.
+  defp marked_facts([], _turn), do: ""
+
+  defp marked_facts(marked, turn) do
+    lead =
+      case turn do
+        :plan -> "Steps Symphony marked `unprovable` before this session, from their setting (no brief, no walk):"
+        :review -> "Steps Symphony marked `unprovable` before any walk session (no session walked them); carry each in the verdict as given, name, status and details:"
+      end
+
+    lead <> "\n" <> Enum.map_join(marked, "\n", &"- #{PlanCheck.step_name(&1.target)}: #{PlanCheck.details(&1.needs)}")
+  end
+
+  # What the plan checks each brief's `needs` against, and what Symphony checks them against itself.
+  defp pass_tools(facts) do
+    "- The live server: #{if facts.live, do: "this pass runs it", else: "this pass does not run it"}.\n" <>
+      "- The QA driver's tools: #{Enum.join(facts.tools, ", ")}."
   end
 
   # Where the plan walks a step (its check's `setting`, in the fixed shape the Conductor's answer
@@ -1439,5 +1524,16 @@ defmodule SymphonyElixir.QaAgent.Steps do
 
   defp finish(state), do: {:error, {:malformed_qa_response, :no_verdict_object}, state.tokens}
 
-  defp run_result(state, result), do: %{result: result, tokens: state.tokens, session_id: state.session_id}
+  defp run_result(state, result), do: %{result: with_marked(result, state.marked), tokens: state.tokens, session_id: state.session_id}
+
+  # The steps Symphony marked are in the verdict as it settled them, whatever the review wrote for
+  # the same name; one the review left out is added.
+  defp with_marked(result, []), do: result
+
+  defp with_marked(result, marked) do
+    settled = Enum.map(marked, &PlanCheck.verdict_step/1)
+    names = MapSet.new(settled, &String.downcase(&1.name))
+    steps = Enum.reject(Map.get(result, :steps, []), &MapSet.member?(names, &1 |> Map.get(:name, "") |> String.trim() |> String.downcase()))
+    Map.put(result, :steps, steps ++ settled)
+  end
 end

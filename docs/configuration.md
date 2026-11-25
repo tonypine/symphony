@@ -1726,11 +1726,13 @@ run store, which the dashboard's run history shows. The `QA` state applies the v
 on a pass the diff did not select the app's playbook for (a server-only fix whose walkthrough
 watches the Mac app), or the project's own server on a repository that rules a dev server out
 (below). Such a step can neither pass nor be repaired, so the agent marks it `unprovable` with the
-reason, and the report lists it as **unprovable here**. The prompt names the enabled playbooks the
+reason, and the report lists it as **unprovable** with that reason. The prompt names the enabled playbooks the
 diff did not select, so the agent knows which steps fall there; a `qa:<kind>` label on the ticket
 selects the playbook instead. Only a pass whose prompt offered the status (an enabled playbook the
 diff did not select, or a server the repository rules out for this pass) reads it: on any other
-pass an `unprovable` step is the agent's own block, reported `blocked` and retried as one. The pass
+pass an `unprovable` step is the agent's own block, reported `blocked` and retried as one. A step
+Symphony marked itself before any session of a stepped pass (see
+[Stepped QA passes](#stepped-qa-passes)) keeps `unprovable` on every pass. The pass
 is then decided by the other steps, the steps a recorded test proves and CI:
 
 | The other steps | The pass |
@@ -2097,7 +2099,7 @@ fixtures: a step about how a state looks runs on a committed fixture, a step abo
 after a move needs the live server. Each step's `details` starts with the one it
 used, `fixture: <the fixture directory's name>` (such as `fixture: update-paused`) or `live: seed`.
 A step whose state no committed fixture has is a finding, so a fixture is committed for the next
-pass, and a step that needs the round trip on a pass with no live server is `unprovable here`,
+pass, and a step that needs the round trip on a pass with no live server is `unprovable`,
 with that reason. The QA report's header has an **App environments** line: "fixtures and a live
 server" or "fixtures only", each with its reason (the `qa:live` or `qa:fixture` label, or the plan's QA
 checks set to the live server), so a wrong choice can be corrected with a label. Neither the
@@ -4465,7 +4467,26 @@ recheck, `{"recheck": [brief, ...]}`, at most three sessions of at most twelve b
 runs as a fresh turn of the list's `repeat: walkthrough` step, or one fresh turn for the briefs that
 share a `group`, between the launch and the quit and attach steps run again, then the review runs
 again. Past two rounds the pass is `inconclusive`. A walk-style answer's `status` is `pass`,
-`fail`, `blocked` or `plan_mismatch`.
+`fail`, `blocked`, `unprovable` or `plan_mismatch`: `unprovable` is a step that needs a QA tool, a
+fixture page or the live server the pass does not have, with what it needed; `blocked` is a step
+that could not be judged for any other reason (a harness fault, an empty state).
+
+Symphony checks the plan before any session walks a step, from data, never from a step's words. Before the
+`plan` session, a walked step whose plan check's setting is the live server, on a pass that does not
+run it, or a fixture directory the worktree does not hold, is marked `unprovable` with what it
+needed; the plan is told so and briefs it no more. Each of the plan's briefs may name, in `needs`,
+what its step needs that a pass may lack, in fixed shapes: `{"kind": "tool", "name": "qa_drag"}`,
+`{"kind": "fixture_page", "fixture": "<directory>", "page": "<page>"}` or `{"kind": "server"}`. A
+`needs` in another shape is refused and asked again. Once the plan answers, Symphony checks each need
+against the QA driver's tools, the live server and the worktree's fixtures, and marks the steps
+with one the pass lacks before the first walk session. A marked step gets no walk session: a group
+that loses every step starts none, and a pass whose steps are all marked walks none. The review is
+given the marked steps as settled; Symphony puts each in the verdict itself, `unprovable` with
+what it needed in its `details`, whatever the review wrote for it. The QA report lists each one
+with what it needed, and the ticket's record has its evidence event with that status and those
+details. Such a step keeps `unprovable` on any pass, and is decided as the steps QA cannot prove
+here are (see [QA passes](#qa-passes)): the pass is decided by its other steps and the steps a
+recorded test proves, and with nothing left to prove, the person is asked at once.
 
 The plan groups the walk. A walk session costs minutes before it checks anything (reading its
 brief, finding the window, reaching the screen), so the plan gives the same `group` to the briefs

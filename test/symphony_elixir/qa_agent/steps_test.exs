@@ -393,9 +393,14 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       [one, two, three] = walkthrough([1, 2, 3])
       steps = [Map.merge(one, %{check_id: "c2", setting: live}), Map.merge(two, %{check_id: "c3", setting: fixture}), three]
       answers(%{"plan" => [{:write, plan([1, 2, 3])}], "review" => [{:verdict, @pass}]})
+      # A pass that runs the live server, in a worktree that holds the fixture: nothing is marked.
+      File.mkdir_p!(Path.join(ctx.worktree, "macos/Tests/Fixtures/director-app"))
+      live_pass = [%{kind: "macos_app", live: true, prompt: "Intro."}]
 
-      assert {:ok, _result} = run(ctx, %{journey: %{source: "the plan", text: "", steps: steps}}, [], [plan_step(), review()])
+      assert {:ok, _result} = run(ctx, %{journey: %{source: "the plan", text: "", steps: steps}, playbooks: live_pass}, [], [plan_step(), review()])
       [plan_turn, _review] = turns()
+      refute plan_turn.prompt =~ "marked `unprovable`"
+      assert plan_turn.prompt =~ "- The live server: this pass runs it."
 
       assert plan_turn.prompt =~
                "- Step 1: Step 1: open page 1.\n  Setting (from the plan; use it as given): source: live (the live server, `environment: live`); " <>
@@ -1204,6 +1209,113 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
 
   defp step(%Step{} = step), do: step
   defp step(attrs), do: attrs |> then(&Step.changeset(%Step{}, &1)) |> Ecto.Changeset.apply_action!(:validate)
+
+  describe "Symphony's check of the plan before any session (TP-1672)" do
+    defp live_setting, do: %{source: "live", fixture: nil, page: "Home", window: %{width: 1440, height: 900}, appearance: "dark"}
+
+    defp set_live(targets, numbers), do: for(t <- targets, do: if(t.number in numbers, do: Map.merge(t, %{check_id: "c#{t.number}", setting: live_setting()}), else: t))
+
+    defp needs_plan(briefs), do: plan([], %{walk: for({number, extra} <- briefs, do: Map.merge(%{step: number, where: "Board", do: "Drag a card", expect: "It moves"}, extra))})
+
+    defp walks(turns), do: for(%{id: "walk_" <> _ = id} <- turns, do: id)
+
+    defp marked_step(result, name), do: Enum.find(result.steps, &(&1.name == name))
+
+    test "a step set to the live server on a pass without one is marked from its setting before the plan session, and no session walks it", ctx do
+      answers(%{"plan" => [{:write, plan([2])}], "review" => [{:verdict, @pass}]})
+
+      assert {:ok, %{result: result}} = run(ctx, %{journey: %{source: "the plan", text: "", steps: set_live(walkthrough([1, 2]), [1])}})
+      turns = turns()
+      assert Enum.map(turns, & &1.id) == ["plan", "walk_2", "design_check", "review"]
+
+      [plan_turn | _rest] = turns
+      needed = "Walkthrough step 1 (check c1): Symphony marked it before any session: it needs the live server, which this pass does not run."
+      assert plan_turn.prompt =~ "Steps Symphony marked `unprovable` before this session, from their setting (no brief, no walk):\n- " <> needed
+      assert plan_turn.prompt =~ "- The live server: this pass does not run it."
+      refute plan_turn.prompt =~ "- Step 1: Step 1: open page 1."
+
+      review_turn = List.last(turns)
+      assert review_turn.prompt =~ "Steps Symphony marked `unprovable` before any walk session"
+      assert review_turn.prompt =~ needed
+
+      assert %{status: "unprovable", needs: ["the live server, which this pass does not run"], details: details} = marked_step(result, "Walkthrough step 1 (check c1)")
+      assert details =~ "it needs the live server"
+      # The review's own steps stay beside it.
+      assert marked_step(result, "Step 1").status == "pass"
+    end
+
+    test "a pass whose walked steps the setting marks every one walks none, and is no pass with nothing on screen", ctx do
+      answers(%{"plan" => [{:write, plan([], %{needs_app: false, gallery: []})}], "review" => [{:verdict, @pass}]})
+
+      assert {:ok, %{result: result}} = run(ctx, %{journey: %{source: "the plan", text: "", steps: set_live(walkthrough([1, 2]), [1, 2])}})
+      assert Enum.map(turns(), & &1.id) == ["plan", "design_check", "review"]
+      refute Map.has_key?(result, :scope)
+      assert ["unprovable", "unprovable"] == for(name <- ["Walkthrough step 1 (check c1)", "Walkthrough step 2 (check c2)"], do: marked_step(result, name).status)
+    end
+
+    test "a step whose brief needs a tool the driver lacks is marked before the first walk, and a group that loses every step starts no session", ctx do
+      drag = %{needs: [%{kind: "tool", name: "qa_drag"}]}
+
+      answers(%{
+        "plan" => [
+          {:write, needs_plan([{1, Map.put(drag, :group, "board")}, {2, Map.put(drag, :group, "board")}, {3, %{group: "list"}}, {4, %{group: "list", needs: [%{kind: "tool", name: "qa_click"}]}}])}
+        ],
+        "review" => [{:verdict, @pass}]
+      })
+
+      assert {:ok, %{result: result}} = run(ctx, %{journey: %{source: "the ticket", text: "1.", steps: walkthrough([1, 2, 3, 4])}})
+      assert walks(turns()) == ["walk_3_4"]
+
+      for number <- [1, 2] do
+        assert %{status: "unprovable", needs: ["the QA tool `qa_drag`, which the QA driver does not have"]} = marked_step(result, "Walkthrough step #{number}")
+      end
+
+      # The plan's answer is recorded as it came.
+      assert [%{payload: %{outcome: "passed"}}] = Enum.filter(events("step.completed"), &(&1.payload.step_id == "plan"))
+    end
+
+    test "a pass whose plan says none of its walked steps can be done starts no walk session", ctx do
+      answers(%{
+        "plan" => [{:write, needs_plan([{1, %{needs: [%{kind: "server"}]}}, {2, %{needs: [%{kind: "fixture_page", fixture: "macos/Tests/Fixtures/absent", page: "Queue"}]}}])}],
+        "review" => [{:verdict, %{"verdict" => "pass", "summary" => "Nothing was walked."}}]
+      })
+
+      assert {:ok, %{result: result}} = run(ctx, %{journey: %{source: "the ticket", text: "1.", steps: walkthrough([1, 2])}})
+      assert walks(turns()) == []
+      assert marked_step(result, "Walkthrough step 1").needs == ["the live server, which this pass does not run"]
+      assert marked_step(result, "Walkthrough step 2").needs == ["the fixture `macos/Tests/Fixtures/absent` (page Queue), which this pass's worktree does not hold"]
+    end
+
+    test "a brief's needs in another shape is refused and asked again", ctx do
+      answers(%{
+        "plan" => [{:write, needs_plan([{1, %{needs: "a drag tool"}}])}, {:write, needs_plan([{1, %{}}])}],
+        "review" => [{:verdict, @pass}]
+      })
+
+      assert {:ok, _result} = run(ctx, %{journey: %{source: "the ticket", text: "1.", steps: walkthrough([1])}})
+      [first, second | _rest] = turns()
+      assert {first.id, second.id} == {"plan", "plan"}
+      assert second.prompt =~ "Your last answer was refused: each brief's `needs` must be a list of objects"
+      assert "walk_1" in walks(turns())
+    end
+
+    test "the verdict carries a marked step as Symphony marked it, whatever the review wrote for it", ctx do
+      verdict = %{"verdict" => "pass", "summary" => "Fine.", "steps" => [%{"name" => "walkthrough step 1", "status" => "pass"}, %{"name" => "Step 2", "status" => "pass"}]}
+      answers(%{"plan" => [{:write, needs_plan([{1, %{needs: [%{kind: "server"}]}}, {2, %{}}])}], "review" => [{:verdict, verdict}]})
+
+      assert {:ok, %{result: result}} = run(ctx, %{journey: %{source: "the ticket", text: "1.", steps: walkthrough([1, 2])}})
+      assert Enum.map(result.steps, &{&1.name, &1.status}) == [{"Step 2", "pass"}, {"Walkthrough step 1", "unprovable"}]
+    end
+
+    test "a walk that finds mid-walk that it lacks what the step needs answers unprovable, and it is taken", ctx do
+      unprovable = %{status: "unprovable", expected: "A card moves", actual: "needs the QA tool qa_drag", details: "fixture: board", evidence: []}
+      answers(%{"plan" => [{:write, plan([1])}], "walk" => [{:write, unprovable}], "review" => [{:verdict, @pass}]})
+
+      assert {:ok, _result} = run(ctx, %{journey: %{source: "the ticket", text: "1.", steps: walkthrough([1])}})
+      assert walks(turns()) == ["walk_1"]
+      assert [%{payload: %{result: %{status: "unprovable"}}}] = Enum.filter(events("step.completed"), &(&1.payload.step_id == "walk_1"))
+    end
+  end
 
   describe "an update's restart at a step boundary (TP-1590)" do
     # Symphony's start ends the run its restart stopped with the restart's error.
