@@ -42,6 +42,11 @@ defmodule SymphonyElixir.SelfHealTest do
       Process.put(:fixer_block, {issue.id, ticket.identifier})
       Process.get(:block_result, :ok)
     end
+
+    def relate(issue, ticket, _opts) do
+      Process.put(:fixer_relate, {issue.id, ticket.identifier})
+      Process.get(:relate_result, :ok)
+    end
   end
 
   # The tracker: the machine-label projection the holds go through, and the fix ticket's state.
@@ -824,6 +829,59 @@ defmodule SymphonyElixir.SelfHealTest do
 
     test "a non-issue is refused" do
       assert {:error, :invalid_issue} = SelfHeal.heal(%{}, heal_opts(outcome(:environment_unreachable)))
+    end
+  end
+
+  describe "file_ticket/3" do
+    @ticket %{scope: "repo-self-heal", title: "Fix it", description: "Why", relation: "blocks"}
+
+    test "an existing ticket is held on and nothing is created" do
+      hold = fn repo_key, issue, identifier ->
+        send(self(), {:hold, repo_key, issue.id, identifier})
+        :ok
+      end
+
+      assert {:ok, %{identifier: "TP-77", existing: true}} =
+               SelfHeal.file_ticket(issue(), Map.put(@ticket, :existing, "TP-77"), fixer: Fixer, hold: hold)
+
+      assert_received {:hold, @repo_key, @issue_id, "TP-77"}
+      assert Process.get(:fixer_create) == nil
+    end
+
+    test "a new blocking ticket is created and held on, and a failed hold hands the ticket back" do
+      log =
+        capture_log(fn ->
+          assert {:error, {:hold_failed, :down}, %{identifier: "TP-900", existing: false}} =
+                   SelfHeal.file_ticket(issue(), Map.put(@ticket, :labels, ["qa"]), fixer: Fixer, hold: fn _, _, _ -> {:error, :down} end)
+        end)
+
+      assert log =~ "could not hold it"
+      assert %{title: "Fix it", labels: ["qa"], team: :scope} = Process.get(:fixer_create)
+
+      capture_log(fn ->
+        assert {:ok, %{identifier: "TP-900"}} = SelfHeal.file_ticket(issue(), @ticket, fixer: Fixer, hold: fn _, _, _ -> :ok end)
+      end)
+    end
+
+    test "a create that fails is an error" do
+      Process.put(:create_result, {:error, :rate_limited})
+
+      assert {:error, {:file_ticket_failed, :rate_limited}} = SelfHeal.file_ticket(issue(), @ticket, fixer: Fixer)
+    end
+
+    test "a follow-up is linked as related, and a failed link never undoes the filing" do
+      follow_up = %{@ticket | relation: "follow_up"}
+
+      capture_log(fn ->
+        assert {:ok, %{identifier: "TP-900"}} = SelfHeal.file_ticket(issue(), follow_up, fixer: Fixer, repo_key: "other")
+      end)
+
+      assert Process.get(:fixer_relate) == {@issue_id, "TP-900"}
+      assert Process.get(:fixer_create).repo_key == "other"
+
+      Process.put(:relate_result, {:error, :nope})
+      log = capture_log(fn -> assert {:ok, _filed} = SelfHeal.file_ticket(issue(), follow_up, fixer: Fixer) end)
+      assert log =~ "as related"
     end
   end
 

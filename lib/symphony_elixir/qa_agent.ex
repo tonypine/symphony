@@ -1406,13 +1406,10 @@ defmodule SymphonyElixir.QaAgent do
   # The `browser` MCP server exists only in a `web` pass's session settings.
   defp put_browser_mcp(qa_settings, _job, _worktree, nil, _opts), do: {:ok, qa_settings}
 
+  # A dev server on this host runs only for a `web` pass (`with_dev_server/5`), so it has one.
   defp put_browser_mcp(%Schema{execution: agent} = qa_settings, job, worktree, dev_server, opts) do
     agent = %{agent | network_access: allow_localhost(agent.network_access)}
-
-    case web_playbook(job) do
-      nil -> {:ok, %{qa_settings | execution: agent}}
-      web -> put_browser_mcp_server(%{qa_settings | execution: agent}, web, worktree, dev_server, opts)
-    end
+    put_browser_mcp_server(%{qa_settings | execution: agent}, web_playbook(job), worktree, dev_server, opts)
   end
 
   defp put_browser_mcp_server(%Schema{execution: agent} = qa_settings, web, worktree, dev_server, opts) do
