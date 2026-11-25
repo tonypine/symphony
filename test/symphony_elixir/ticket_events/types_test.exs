@@ -303,11 +303,16 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       assert {:error, {:invalid_payload, [:evidence]}} = resolved.(["e1", ""])
 
       evidence = fn payload -> Types.validate("evidence", payload, :agent, "qa") end
-      assert {:ok, %{artifacts: ["a1"]}} = evidence.(%{caption: "Before", artifacts: ["a1"]})
+      # Files are the event's artifacts, never a payload field (TP-1680).
+      assert {:error, {:invalid_payload, [:artifacts]}} = evidence.(%{caption: "Before", artifacts: ["a1"]})
       assert {:error, {:invalid_payload, [:caption]}} = evidence.(%{caption: String.duplicate("c", 501)})
 
-      assert {:ok, %{step: "Step 2", status: "fail", environment: "live", links: ["https://ci.test/run/1"]}} =
-               evidence.(%{caption: "Step 2: fail", step: "Step 2", status: "fail", environment: "live", links: ["https://ci.test/run/1"]})
+      assert {:ok, %{step: "Step 2", result: %{status: "fail", actual: "Empty"}, environment: "live", links: ["https://ci.test/run/1"]}} =
+               evidence.(%{caption: "Step 2: fail", step: "Step 2", result: %{status: "fail", actual: "Empty"}, environment: "live", links: ["https://ci.test/run/1"]})
+
+      # A step's answer is its `result`: the loose `status` and `details` are not taken any more.
+      loose = %{caption: "Step 2: fail", step: "Step 2", status: "fail", details: "Empty"}
+      assert {:error, {:invalid_payload, [:details, :status]}} = evidence.(loose)
 
       assert {:error, {:invalid_payload, [:environment]}} = evidence.(%{caption: "Step 2", environment: "staging"})
 
@@ -380,12 +385,20 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
 
       assert %{
                optional: [
-                 %{name: "artifacts", type: "list", item: %{type: "string"}},
-                 %{name: "proof", type: "map", fields: proof} | step_fields
+                 %{name: "proof", type: "map", fields: proof},
+                 %{name: "measures", type: "list", max_items: 20, item: %{type: "map", fields: measure}} | step_fields
                ]
              } = Types.schema("evidence")
 
-      assert Enum.map(step_fields, & &1.name) == ~w(step status details environment links)
+      assert measure == [
+               %{name: "name", type: "string", max: 200},
+               %{name: "value", type: "number"},
+               %{name: "unit", type: "string", max: 40},
+               %{name: "expected", type: "number", optional: true}
+             ]
+
+      assert Enum.map(step_fields, & &1.name) == ~w(step result environment links)
+      refute Enum.any?(Types.schema("evidence").optional, &(&1.name == "artifacts"))
       assert %{type: "enum", values: ~w(fixture live)} = Enum.find(step_fields, &(&1.name == "environment"))
 
       assert proof == [%{name: "step", type: "non_neg_integer"}, %{name: "test", type: "string", max: 500}]
@@ -645,7 +658,8 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       assert {:ok, %{result: %{status: "pass"}}} = completed.(%{result: %{"status" => "pass", "expected" => "a", "actual" => "b"}})
       assert {:error, {:invalid_payload, [:result]}} = completed.(%{result: %{result | status: "great"}})
       assert {:error, {:invalid_payload, [:result]}} = completed.(%{result: Map.put(result, :extra, "x")})
-      assert {:error, {:invalid_payload, [:result]}} = completed.(%{result: Map.delete(result, :actual)})
+      assert {:error, {:invalid_payload, [:result]}} = completed.(%{result: Map.delete(result, :status)})
+      assert {:ok, %{result: %{status: "blocked"}}} = completed.(%{result: %{status: "blocked"}})
       too_long = String.duplicate("a", 1_501)
       assert {:error, {:invalid_payload, [:result]}} = completed.(%{result: %{result | actual: too_long}})
 
@@ -665,8 +679,15 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       too_long_summary = String.duplicate("a", 601)
       assert {:error, {:invalid_payload, [:verdict_summary]}} = completed.(%{verdict_summary: too_long_summary})
 
-      assert %{type: "map", fields: [%{name: "status", type: "enum"}, %{name: "expected", max: 1_500}, _actual]} =
-               Enum.find(Types.schema("step.completed").optional, &(&1.name == "result"))
+      assert %{
+               type: "map",
+               fields: [
+                 %{name: "status", type: "enum"},
+                 %{name: "expected", max: 1_500, optional: true},
+                 %{name: "actual", optional: true},
+                 %{name: "measures"}
+               ]
+             } = Enum.find(Types.schema("step.completed").optional, &(&1.name == "result"))
 
       assert %{type: "list", item: %{type: "map", fields: [_title, %{name: "do", type: "list"}, _expect, %{name: "design", max: 600}]}} =
                Enum.find(Types.schema("step.completed").optional, &(&1.name == "recheck"))
@@ -701,6 +722,91 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
         result = Types.validate("evidence", %{caption: "c", proof: proof}, :agent, "rework")
         assert {:error, {:invalid_payload, [:proof]}} = result, inspect(proof)
       end
+    end
+  end
+
+  describe "a measured value (TP-1680)" do
+    test "has one shape: name, a number value, unit and an optional expected number; any other shape is refused" do
+      evidence = fn measures -> Types.validate("evidence", %{caption: "Sizes", measures: measures}, :agent, "qa") end
+      width = %{name: "sidebar width", value: 280, unit: "pt", expected: 280}
+
+      assert {:ok, %{measures: [^width, %{name: "load", value: 1.25, unit: "s"}]}} =
+               evidence.([width, %{"name" => "load", "value" => 1.25, "unit" => "s"}])
+
+      for wrong <- [
+            %{width | value: "280"},
+            Map.delete(width, :name),
+            Map.delete(width, :unit),
+            Map.delete(width, :value),
+            %{width | expected: "280 pt"},
+            %{width | unit: " "},
+            Map.put(width, :tolerance, 2)
+          ] do
+        assert {:error, {:invalid_payload, [:measures]}} = evidence.([wrong]), inspect(wrong)
+      end
+
+      assert {:error, {:invalid_payload, [:measures]}} = evidence.(width)
+      assert {:error, {:invalid_payload, [:measures]}} = evidence.(List.duplicate(width, 21))
+
+      assert Types.measure_spec() ==
+               {:map, [name: {:string, 200}, value: :number, unit: {:string, 40}, expected: {:optional, :number}]}
+    end
+
+    test "a QA step's answer carries its measured values in the same shape, on step.completed and on evidence" do
+      measure = %{name: "row height", value: 22, unit: "pt", expected: 24}
+      answer = %{status: "fail", expected: "24 pt rows", actual: "22 pt rows", measures: [measure]}
+      completed = %{step_id: "walk_1", title: "Walk", mode: "orchestrated", outcome: "passed"}
+
+      assert {:ok, %{result: ^answer}} = Types.validate("step.completed", Map.put(completed, :result, answer), :machine, nil)
+      assert {:ok, %{results: [%{step: 2, measures: [^measure]}]}} = Types.validate("step.completed", Map.put(completed, :results, [Map.put(answer, :step, 2)]), :machine, nil)
+      assert {:ok, %{result: ^answer}} = Types.validate("evidence", %{caption: "Step 2: fail", step: "Step 2", result: answer}, :agent, "qa")
+
+      bad = %{answer | measures: [%{measure | value: "22"}]}
+      assert {:error, {:invalid_payload, [:result]}} = Types.validate("step.completed", Map.put(completed, :result, bad), :machine, nil)
+      assert {:error, {:invalid_payload, [:result]}} = Types.validate("evidence", %{caption: "Step 2", result: bad}, :agent, "qa")
+      great = %{caption: "Step 2", result: %{answer | status: "great"}}
+      assert {:error, {:invalid_payload, [:result]}} = Types.validate("evidence", great, :agent, "qa")
+      assert {:map, [status: _, expected: _, actual: _, measures: _]} = Types.step_answer_spec()
+    end
+  end
+
+  describe "shape/1 (TP-1680)" do
+    test "spells every field a run may send in one line, from the catalog, with the named shapes it uses" do
+      assert Types.shape("note") == "{text: string(4000), tag?: discovery|base_fault}"
+      assert Types.shape("brief.written") == "{text: string(1200) without `, walkthrough: string(4000) without `}"
+      assert Types.shape("finding.resolved") == "{finding_id: string, how: string(2000), head?: string, evidence?: string or [string]}"
+
+      assert Types.shape("evidence") ==
+               "{caption: string(500), proof?: {step: integer, test: string(500)}, measures?: [measure] (at most 20), step?: string(200), result?: step_answer, environment?: fixture|live, links?: [string]}"
+
+      # An agent records only a delegated step, so a machine or orchestrated step's own fields are left out.
+      started = Types.shape("step.started")
+      assert started =~ "mode: delegated,"
+      refute started =~ "command"
+      refute started =~ "prompt_ref"
+
+      completed = Types.shape("step.completed")
+      assert completed =~ "returns_to?: string(200) (required when outcome is failed)"
+      assert completed =~ "reason?: string(300) (required when outcome is skipped, allowed when failed or paused)"
+      assert completed =~ "result?: step_answer,"
+      assert completed =~ "[{step: integer, status: pass|fail|blocked|skipped|unprovable|plan_mismatch, expected?: string(1500)"
+      assert completed =~ "(at most 30)"
+
+      assert Types.named_shapes() == [
+               {"measure", "{name: string(200), value: number, unit: string(40), expected?: number}"},
+               {"step_answer", "{status: pass|fail|blocked|skipped|unprovable|plan_mismatch, expected?: string(1500), actual?: string(1500), measures?: [measure] (at most 20)}"}
+             ]
+
+      assert Types.shape("nope") == nil
+    end
+
+    test "an untyped map or list reads as object and list; an agent's only values are named in the schema" do
+      assert Types.shape("decision.requested") =~ "options?: list"
+      assert Types.shape("hold.set") =~ "waits_on?: object"
+      assert %{name: "mode", agent_values: ["delegated"], values: ~w(machine orchestrated delegated)} = Enum.find(Types.schema("step.started").required, &(&1.name == "mode"))
+
+      assert %{required_when: %{field: "outcome", equals: "skipped"}, allowed_when: ["failed", "paused"]} =
+               Enum.find(Types.schema("step.completed").optional, &(&1.name == "reason"))
     end
   end
 

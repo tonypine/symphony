@@ -6,7 +6,10 @@ defmodule SymphonyElixir.QaAgent.StepPayload do
   (`SymphonyElixir.TicketEvents.Types`):
 
     * `result/1`: `%{status, expected, actual}` of a check step (walk, design check,
-      recheck);
+      recheck), and its `measures` when it gave any: the one shape a QA step's answer has
+      (`SymphonyElixir.TicketEvents.Types.step_answer_spec/0`), each measured value
+      `%{name, value, unit}` with an optional `expected` number (at most 20; one that is not in that
+      shape is left out);
     * `results/1`: one `%{step, status, expected, actual}` per walkthrough step of a walk or recheck
       step that judged several in one session;
     * `plan/2`: `%{checks, skips, summary}` of the plan step: a check per walkthrough brief and per
@@ -28,12 +31,20 @@ defmodule SymphonyElixir.QaAgent.StepPayload do
   @max_instructions 12
   @max_checks 40
   @max_results 20
+  @max_measures 20
+  @measure_name 200
+  @measure_unit 40
   @missing "not given"
 
   @doc "`%{status, expected, actual}` of a check step's `answer`, or nil when it names no status."
   @spec result(map()) :: map() | nil
   def result(%{"status" => status} = answer) when is_binary(status) do
-    %{status: status, expected: text(answer["expected"], @result_text), actual: text(answer["actual"], @result_text)}
+    result = %{status: status, expected: text(answer["expected"], @result_text), actual: text(answer["actual"], @result_text)}
+
+    case measures(answer["measures"]) do
+      [] -> result
+      measures -> Map.put(result, :measures, measures)
+    end
   end
 
   def result(_answer), do: nil
@@ -91,6 +102,25 @@ defmodule SymphonyElixir.QaAgent.StepPayload do
   @doc "Why a step ended `failed`, cut to what the event takes."
   @spec reason(String.t()) :: String.t()
   defdelegate reason(why), to: SymphonyElixir.PhaseSteps.StepAnswer
+
+  # The measured values a step gave in their one shape, bounded: one in another shape is left out.
+  defp measures(values) when is_list(values) do
+    values |> Enum.flat_map(&measure/1) |> Enum.take(@max_measures)
+  end
+
+  defp measures(_values), do: []
+
+  defp measure(%{"name" => name, "value" => value, "unit" => unit} = given) when is_binary(name) and is_number(value) and is_binary(unit) do
+    with name when name != "" <- String.trim(name),
+         unit when unit != "" <- String.trim(unit) do
+      measure = %{name: cut(name, @measure_name), value: value, unit: cut(unit, @measure_unit)}
+      if is_number(given["expected"]), do: [Map.put(measure, :expected, given["expected"])], else: [measure]
+    else
+      _blank -> []
+    end
+  end
+
+  defp measure(_value), do: []
 
   defp recheck_brief(brief) do
     base = %{title: check_title(brief), do: instructions(brief["do"]), expect: text(brief["expect"], @result_text)}

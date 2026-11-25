@@ -80,7 +80,7 @@ defmodule SymphonyElixir.TicketEventsTest do
                supersedes: nil,
                idempotency: nil,
                payload: %{caption: "After"},
-               summary: %{title: "Evidence recorded", detail: "After"},
+               summary: %{title: "Evidence recorded with 1 file", detail: "After"},
                artifacts: ["artifact-1"],
                at: @at,
                seq: 1

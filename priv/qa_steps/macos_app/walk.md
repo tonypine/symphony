@@ -66,7 +66,8 @@ How to judge:
   action that changes what is on screen. Each name can be used once.
 - Record each screenshot on the ticket's history as you take it: `ticket_record` with an `evidence`
   event whose `caption` names the walkthrough step (its number and a few words), what you saw and
-  the environment (`fixture: <directory>` or `live: seed`), with the screenshot as its artifact.
+  the environment (`fixture: <directory>` or `live: seed`), with the screenshot's path in the tool's
+  top-level `artifacts` list, never inside `payload` (a payload naming `artifacts` is refused).
 - On each page the step visits, once it settled, call `qa_check_app` with `page` set to the page's
   name: it says whether the app still runs, answers within 10 seconds and left no crash report. A
   layout loop or a crash in a large window shows only there. When it says the app hung, call
@@ -90,6 +91,9 @@ Answer with:
 - `details`: the actions you took, the environment, and the tool output that bears on it.
 - `evidence`: the screenshot paths under `qa-evidence/` (with any `qa_crop` picture and `qa_sample`
   report).
+- `measures` (only when you measured something, such as a size from `qa_measure_elements`): one
+  object per measured value, `{"name": what you measured, "value": the number, "unit": its unit,
+  "expected": the number the brief expects, when it gives one}`.
 
 When you walk several steps in one session:
 
@@ -99,7 +103,7 @@ When you walk several steps in one session:
   events, each caption naming that step's number. One step's failure is that step's `fail`; the
   others keep their own status.
 - Answer with `results` in place of the fields above: one object per step, each with `step` (its
-  number) and that step's `status`, `expected`, `actual`, `details` and `evidence`. A step that
+  number) and that step's `status`, `expected`, `actual`, `details`, `evidence` and `measures`. A step that
   needs a tool, a fixture page or the live server this pass lacks is `unprovable`, with what it
   needed; any other step you could not reach or judge is `blocked`, with why. Symphony refuses an answer that misses a step and asks
   once more; a step still without a result is not judged, never passed.

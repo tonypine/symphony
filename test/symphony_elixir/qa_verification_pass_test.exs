@@ -1065,13 +1065,15 @@ defmodule SymphonyElixir.QaVerificationPassTest do
       [step_1, step_2, step_3, transcript, finding_1, finding_2, verdict, second_verdict] =
         Enum.filter(events(), &(&1.type in ["evidence", "finding.recorded", "verdict.recorded"]))
 
-      assert %{type: "evidence", payload: %{caption: "Step 1: fail", artifacts: [@home, @detail]}, artifacts: [@home, @detail]} = step_1
-      assert %{step: "Step 1", status: "fail", details: "blank", environment: "live"} = step_1.payload
+      # The files are the event's artifacts, and the step's answer is its result (TP-1680).
+      assert %{type: "evidence", payload: %{caption: "Step 1: fail"}, artifacts: [@home, @detail]} = step_1
+      assert %{step: "Step 1", result: %{status: "fail", actual: "blank"}, environment: "live"} = step_1.payload
       refute Map.has_key?(step_1.payload, :links)
-      assert %{type: "evidence", payload: %{caption: "Step 2: fail", artifacts: [@row]}, idempotency: "evidence:run-qa-1:2"} = step_2
+      refute Map.has_key?(step_1.payload, :artifacts)
+      assert %{type: "evidence", payload: %{caption: "Step 2: fail"}, artifacts: [@row], idempotency: "evidence:run-qa-1:2"} = step_2
       assert %{step: "Step 2", links: ["https://ci.test/run/1"]} = step_2.payload
       refute Map.has_key?(step_2.payload, :environment)
-      assert %{type: "evidence", artifacts: [], payload: %{caption: "Step 3: pass", step: "Step 3", status: "pass", details: "fine"}} = step_3
+      assert %{type: "evidence", artifacts: [], payload: %{caption: "Step 3: pass", step: "Step 3", result: %{status: "pass", actual: "fine"}}} = step_3
       assert %{type: "evidence", payload: %{caption: "QA session transcript"}, artifacts: [@transcript]} = transcript
       refute Map.has_key?(transcript.payload, :step)
 
@@ -1117,7 +1119,7 @@ defmodule SymphonyElixir.QaVerificationPassTest do
       assert :ok = run(workspace, run_id: "run-qa-2")
 
       assert [
-               %{type: "evidence", payload: %{caption: caption}},
+               %{type: "evidence", payload: %{caption: caption} = evidence},
                %{type: "evidence", artifacts: [@transcript]},
                %{type: "finding.recorded", artifacts: [@home], payload: payload},
                %{type: "verdict.recorded"}
@@ -1125,6 +1127,7 @@ defmodule SymphonyElixir.QaVerificationPassTest do
                Enum.filter(events(), &(&1.type in ["evidence", "finding.recorded", "verdict.recorded"]))
 
       assert String.length(caption) == 500
+      assert String.length(evidence.result.actual) == 1_500
       assert String.length(payload.description) == 2_000
       assert String.length(payload.step) == 200
     end
@@ -1228,7 +1231,10 @@ defmodule SymphonyElixir.QaVerificationPassTest do
       agent_result(%{
         verdict: :pass,
         summary: "Fine.",
-        steps: [%{name: "Step 1", status: "pass", details: "ok", evidence: ["qa-evidence/home.png", "https://ci.test/run/1"]}],
+        steps: [
+          %{name: "Step 1", status: "pass", details: "ok", evidence: ["qa-evidence/home.png", "https://ci.test/run/1"]},
+          %{name: "Step 2", status: "skipped", details: "", evidence: []}
+        ],
         findings: [],
         artifacts: artifacts()
       })
@@ -1236,10 +1242,19 @@ defmodule SymphonyElixir.QaVerificationPassTest do
       assert :ok = run(workspace, run_id: "run-qa-4")
 
       assert [
-               %{type: "evidence", payload: %{caption: "Step 1: pass"}, artifacts: [@home], actor: %{kind: :agent, run_kind: "qa"}},
-               %{type: "evidence", payload: %{caption: "QA session transcript"}, artifacts: [@transcript], idempotency: "evidence:run-qa-4:2"},
+               %{
+                 type: "evidence",
+                 payload: %{caption: "Step 1: pass", result: %{status: "pass", actual: "ok"}},
+                 artifacts: [@home],
+                 actor: %{kind: :agent, run_kind: "qa"}
+               },
+               # A step that said nothing of what it saw has an answer with its status alone.
+               %{type: "evidence", payload: %{caption: "Step 2: skipped", result: %{status: "skipped"} = no_details}, artifacts: []},
+               %{type: "evidence", payload: %{caption: "QA session transcript"}, artifacts: [@transcript], idempotency: "evidence:run-qa-4:3"},
                %{type: "verdict.recorded", run_id: "run-qa-4", payload: %{outcome: "pass"}}
              ] = Enum.filter(events(), &(&1.type in ["evidence", "finding.recorded", "verdict.recorded"]))
+
+      refute Map.has_key?(no_details, :actual)
     end
 
     test "a blocked verdict names the QA run that gave it" do

@@ -173,8 +173,11 @@ defmodule SymphonyElixir.Conductor.FactsTest do
     passed = %{step_id: "walk_2", title: "Walk 2", mode: "orchestrated", outcome: "passed", result: %{status: "pass", expected: "Rows", actual: "Rows"}}
     record!(ctx, "step.completed", passed, run_id: "qa-1")
     record!(ctx, "step.completed", %{step_id: "plan", title: "Plan", mode: "orchestrated", outcome: "passed"}, run_id: "qa-1")
-    evidence = record!(ctx, "evidence", %{caption: "Step 3: blocked", step: "Step 3", status: "blocked", details: "No way to fail the request."}, actor: agent("qa-1", "qa"))
-    record!(ctx, "evidence", %{caption: "Step 1: pass", step: "Step 1", status: "pass"}, actor: agent("qa-1", "qa"))
+    evidence = record!(ctx, "evidence", %{caption: "Step 3: blocked", step: "Step 3", result: %{status: "blocked", actual: "No way to fail the request."}}, actor: agent("qa-1", "qa"))
+    record!(ctx, "evidence", %{caption: "Step 1: pass", step: "Step 1", result: %{status: "pass"}}, actor: agent("qa-1", "qa"))
+    # Step evidence an earlier release wrote, with its status and details beside the step (TP-1680).
+    {:ok, built} = TicketEvents.build(ctx.repo, ctx.issue_id, "evidence", %{caption: "Step 4: blocked"}, actor: agent("qa-1", "qa"))
+    {:ok, old} = RunStore.append_ticket_event(%{built | payload: %{caption: "Step 4: blocked", step: "Step 4", status: "blocked", details: "No seed for it."}})
     first = record!(ctx, "verdict.recorded", %{kind: "qa", outcome: "blocked", head: "aaa", details: %{reason: "QA cannot make the state request fail"}}, run_id: "qa-1")
     record!(ctx, "conductor.instructions", %{junction: "after_qa_blocked", text: "Use the stand-in server.", route: "rerun"}, run_id: "conductor-1")
     record!(ctx, "conductor.steer", %{text: "Leave the blocked step.", when: "next_turn", trigger: "qa_step_answer"}, run_id: "qa-2")
@@ -194,7 +197,8 @@ defmodule SymphonyElixir.Conductor.FactsTest do
              reason: "QA cannot make the state request fail",
              blocked_steps: [
                %{event_id: step.id, step_id: "walk_1", title: "Walk 1", result: %{status: "blocked", expected: "A state error", actual: "QA cannot make the state request fail"}},
-               %{event_id: evidence.id, step: "Step 3", details: "No way to fail the request."}
+               %{event_id: evidence.id, step: "Step 3", details: "No way to fail the request."},
+               %{event_id: old.id, step: "Step 4", details: "No seed for it."}
              ]
            }
 

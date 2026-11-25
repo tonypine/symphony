@@ -885,9 +885,16 @@ defmodule SymphonyElixir.Conductor.Facts do
     end
   end
 
+  # A QA step's evidence carries its answer as `result`; one written before, as `status` and `details`.
   defp blocked_step(%Event{type: "evidence"} = evidence) do
-    if payload(evidence, :status) == "blocked",
-      do: [drop_nil(%{event_id: evidence.id, step: payload(evidence, :step), details: cut(payload(evidence, :details), @step_text_max)})],
+    {status, details} =
+      case payload(evidence, :result) do
+        %{} = result -> {field(result, :status), field(result, :actual)}
+        _none -> {payload(evidence, :status), payload(evidence, :details)}
+      end
+
+    if status == "blocked",
+      do: [drop_nil(%{event_id: evidence.id, step: payload(evidence, :step), details: cut(details, @step_text_max)})],
       else: []
   end
 

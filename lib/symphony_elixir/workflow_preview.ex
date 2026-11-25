@@ -234,7 +234,7 @@ defmodule SymphonyElixir.WorkflowPreview do
       {255, "run.started", %{run_id: "run_sample_3", run_kind: "rework", run_number: 1, state: "Rework", head: head}, :machine, "run_sample_3"},
       {256, "message.read", %{message_id: "evt_sample_250", run_id: "run_sample_3"}, :machine, "run_sample_3"},
       {260, "step.started", %{step_id: "code", title: "Fix the clipped export dialog at the laptop viewport", mode: "delegated"}, rework},
-      {280, "evidence", %{caption: "The export dialog at 1440×900 after the fix", artifacts: ["art_sample_1"]}, rework, nil, ["art_sample_1"]},
+      {280, "evidence", %{caption: "The export dialog at 1440×900 after the fix"}, rework, nil, ["art_sample_1"]},
       {285, "step.completed", %{step_id: "code", title: "Fix the clipped export dialog at the laptop viewport", mode: "delegated", outcome: "passed"}, rework},
       {290, "note", %{text: "The truncated labels come from a fixed column width; the next step makes it flexible."}, rework}
     ])

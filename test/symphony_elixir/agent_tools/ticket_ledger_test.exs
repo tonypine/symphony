@@ -465,6 +465,153 @@ defmodule SymphonyElixir.AgentTools.TicketLedgerTest do
     end
   end
 
+  describe "nothing accepted and then dropped (TP-1680)" do
+    test "an evidence naming its files inside the payload is refused with where they go, and keeps no file", ctx do
+      write!(ctx.workspace, "qa-evidence/home.png", @png)
+      payload = %{"caption" => "Step 1: the home screen", "artifacts" => ["qa-evidence/home.png"]}
+
+      assert {false, %{"error" => error}} = call("ticket_record", %{"type" => "evidence", "payload" => payload}, session(ctx, run_kind: "qa"))
+
+      assert %{"reason" => "invalid_payload", "fields" => ["artifacts"], "schema" => %{"required" => [%{"name" => "caption"}]}, "shape" => shape} = error
+      assert shape == Types.shape("evidence")
+      assert error["message"] =~ "`artifacts` and `parent` are arguments of ticket_record beside `type` and `payload`, never payload fields: files go in `artifacts`."
+      assert error["message"] =~ "Its shape: " <> shape
+      nothing_written()
+
+      # The same call with the file as the tool's own argument keeps it with the event.
+      assert {true, %{"event" => %{"artifacts" => [%{"kind" => "screenshot", "label" => "home.png"}], "payload" => stored}}} =
+               call("ticket_record", %{"type" => "evidence", "payload" => Map.delete(payload, "artifacts"), "artifacts" => ["qa-evidence/home.png"]}, session(ctx, run_kind: "qa"))
+
+      assert stored == %{"caption" => "Step 1: the home screen"}
+    end
+
+    test "a field the type lacks, a wrong value or a wrong type, at the top or nested, is refused with the type's shape; nothing is written", ctx do
+      evidence = fn payload -> call("ticket_record", %{"type" => "evidence", "payload" => Map.put(payload, "caption", "Step 2")}, session(ctx, run_kind: "qa")) end
+
+      for {payload, fields} <- [
+            {%{"screenshot" => "a.png"}, ["screenshot"]},
+            {%{"parent" => "evt-1"}, ["parent"]},
+            {%{"environment" => "staging"}, ["environment"]},
+            {%{"step" => 2}, ["step"]},
+            {%{"proof" => %{"step" => 2, "test" => "t", "check" => "c1"}}, ["proof"]},
+            {%{"result" => %{"status" => "pass", "seen" => "rows"}}, ["result"]},
+            {%{"measures" => [%{"name" => "width", "value" => "280pt", "unit" => "pt"}]}, ["measures"]}
+          ] do
+        assert {false, %{"error" => error}} = evidence.(payload)
+        assert %{"reason" => "invalid_payload", "fields" => ^fields, "schema" => %{"optional" => [_ | _]}, "shape" => shape} = error, inspect(payload)
+        assert shape == Types.shape("evidence")
+      end
+
+      assert {false, %{"error" => %{"reason" => "invalid_payload", "fields" => ["outcome"], "shape" => shape}}} =
+               call("ticket_record", %{"type" => "step.completed", "payload" => %{"step_id" => "code", "title" => "Code", "mode" => "delegated", "outcome" => "done"}}, session(ctx))
+
+      assert shape == Types.shape("step.completed")
+      nothing_written()
+    end
+
+    test "an argument the tool does not take is refused before anything is written", ctx do
+      response = DynamicTool.execute("ticket_record", %{"type" => "note", "payload" => %{"text" => "x"}, "files" => ["a.png"]}, session(ctx))
+      refute response["success"]
+      assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
+      nothing_written()
+    end
+
+    test "every field a run sends and every file it names is on the stored event", ctx do
+      write!(ctx.tmp_dir, "sizes.log", "sidebar 280pt")
+      measure = %{"name" => "sidebar width", "value" => 280, "unit" => "pt", "expected" => 280}
+
+      evidence = %{
+        "caption" => "Step 2: the sidebar at 1440×900",
+        "proof" => %{"step" => 2, "test" => "ticket_ledger_test.exs"},
+        "measures" => [measure],
+        "step" => "Step 2",
+        "result" => %{"status" => "pass", "expected" => "280 pt", "actual" => "280 pt", "measures" => [measure]},
+        "environment" => "fixture",
+        "links" => ["https://ci.test/run/1"]
+      }
+
+      assert {true, %{"event" => %{"id" => first, "artifacts" => [%{"label" => "sizes.log"}]}}} =
+               call("ticket_record", %{"type" => "evidence", "payload" => evidence, "artifacts" => [Path.join(ctx.tmp_dir, "sizes.log")]}, session(ctx, run_kind: "qa"))
+
+      step = %{
+        "step_id" => "code",
+        "title" => "Code",
+        "mode" => "delegated",
+        "outcome" => "failed",
+        "returns_to" => "plan",
+        "returns_to_title" => "Plan",
+        "reason" => "The plan missed a case",
+        "duration_ms" => 5
+      }
+
+      assert {true, %{"event" => %{"parent" => ^first}}} = call("ticket_record", %{"type" => "step.completed", "payload" => step, "parent" => first}, session(ctx))
+
+      [stored_evidence, stored_step] = RunStore.list_ticket_events(@issue_id, [])
+      assert Jason.decode!(Jason.encode!(stored_evidence.payload)) == evidence
+      assert Jason.decode!(Jason.encode!(stored_step.payload)) == step
+      assert [_file] = stored_evidence.artifacts
+      assert stored_step.parent == first
+    end
+
+    test "the tool's description lists every recordable type's payload shape, generated from the type catalog" do
+      %{"description" => description, "inputSchema" => %{"properties" => %{"payload" => payload}}} =
+        Enum.find(TicketLedger.tool_specs(), &(&1["name"] == "ticket_record"))
+
+      assert String.ends_with?(description, TicketLedger.record_shapes())
+      assert payload["description"] =~ "the shape the description lists"
+
+      recordable = TicketLedger.recordable_types()
+      assert recordable == Types.agent_run_kinds() |> Enum.flat_map(&Types.agent_types/1) |> Enum.uniq() |> Enum.sort()
+      assert "brief.written" in recordable and "finding.recorded" in recordable
+      lines = for "- `" <> rest <- String.split(description, "\n"), into: %{}, do: {rest |> String.split("`") |> hd(), "- `" <> rest}
+
+      for type <- recordable do
+        line = Map.fetch!(lines, type)
+        assert String.ends_with?(line, ": " <> Types.shape(type)), type
+        %{required: required, optional: optional} = Types.catalog()[type]
+
+        # Every field the catalog gives an agent is in the line, and none it never may send: the
+        # machinery's signal, a note's status, and a machine or orchestrated step's own fields.
+        note_only = if(type == "note", do: [:status], else: [])
+        step_only = if(type == "step.started", do: [:command, :prompt_ref], else: [])
+        not_agents = [:signal, :signal_details] ++ note_only ++ step_only
+
+        for {name, _spec} <- required, do: assert(line =~ "#{name}: ", "#{type}.#{name}")
+        for {name, _spec} <- optional, name not in not_agents, do: assert(line =~ "#{name}?: ", "#{type}.#{name}")
+        for name <- not_agents, do: refute(line =~ "#{name}?: ", "#{type}.#{name}")
+      end
+
+      assert lines["brief.written"] =~ "(implementation, rework, review_feedback runs)"
+      assert lines["finding.recorded"] =~ "(qa, conductor runs)"
+
+      for {name, shape} <- Types.named_shapes(), do: assert(description =~ "- `#{name}`: #{shape}")
+    end
+  end
+
+  describe "events stored before TP-1680" do
+    # An event as an earlier release wrote it: built on a payload valid today, then stored with the old one.
+    defp store_old!(type, valid, old, opts) do
+      {:ok, event} = TicketEvents.build(@repo_key, @issue_id, type, valid, opts)
+      {:ok, stored} = RunStore.append_ticket_event(%{event | payload: old})
+      stored
+    end
+
+    test "an evidence holding artifacts in its payload and step.completed in the earlier shapes still read", ctx do
+      old = %{caption: "Step 1: fail", artifacts: ["art-old"], step: "Step 1", status: "fail", details: "$ qa_screenshot\nempty"}
+      old_evidence = store_old!("evidence", %{caption: "Step 1: fail"}, old, actor: {:agent, "qa-0", "qa"})
+
+      step = %{step_id: "walk_1", title: "Walk", mode: "orchestrated", outcome: "passed"}
+      old_shapes = Map.merge(step, %{result: %{status: "pass", expected: "Rows", actual: "Rows"}, results: [%{step: 1, status: "pass", expected: "a", actual: "a"}]})
+      old_step = store_old!("step.completed", step, old_shapes, actor: :machine, run_id: "qa-0")
+
+      assert {true, %{"events" => [evidence, step]}} = call("ticket_events", %{}, session(ctx))
+      assert evidence["id"] == old_evidence.id
+      assert %{"artifacts" => ["art-old"], "status" => "fail", "details" => "$ qa_screenshot\nempty", "step" => "Step 1"} = evidence["payload"]
+      assert step["id"] == old_step.id
+      assert %{"result" => %{"expected" => "Rows"}, "results" => [%{"step" => 1}]} = step["payload"]
+    end
+  end
+
   describe "the tools in every scope" do
     test "declare their arguments, which DynamicTool takes and nothing else" do
       assert TicketLedger.tool_arguments() == %{

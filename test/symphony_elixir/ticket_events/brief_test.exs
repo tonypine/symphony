@@ -483,7 +483,7 @@ defmodule SymphonyElixir.TicketEvents.BriefTest do
                - Rework run 1 (latest): running in Rework, at 4f1c2a9, started 2026-10-22T10:10:00Z
                  - 2026-10-22T10:11:00Z Step passed: Fix the dialog
                  - 2026-10-22T10:12:00Z Checklist item answered: Viewports: #{long}
-                 - 2026-10-22T10:13:00Z Evidence recorded: After the fix (files: art1)
+                 - 2026-10-22T10:13:00Z Evidence recorded with 1 file: After the fix (files: art1)
                  - 2026-10-22T10:14:00Z Finding marked resolved: #{long}
                  - 2026-10-22T10:15:00Z Decision needed from the Director: Scope: Split?
                  - 2026-10-22T10:16:00Z Note added: #{long}

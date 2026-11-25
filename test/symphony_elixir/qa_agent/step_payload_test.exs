@@ -24,6 +24,40 @@ defmodule SymphonyElixir.QaAgent.StepPayloadTest do
     end
   end
 
+  describe "result/1's measured values (TP-1680)" do
+    test "keeps each in the one measure shape, cut and at most 20; one in another shape is left out" do
+      answer = %{
+        "status" => "fail",
+        "expected" => "24 pt rows",
+        "actual" => "22 pt rows",
+        "measures" => [
+          %{"name" => " row height ", "value" => 22, "unit" => "pt", "expected" => 24},
+          %{"name" => String.duplicate("n", 300), "value" => 1.5, "unit" => String.duplicate("u", 50), "expected" => "about 1"},
+          %{"name" => "width", "value" => "280", "unit" => "pt"},
+          %{"name" => " ", "value" => 1, "unit" => "pt"},
+          %{"name" => "gap", "value" => 8, "unit" => " "},
+          %{"value" => 1, "unit" => "pt"},
+          "12 pt"
+        ]
+      }
+
+      result = StepPayload.result(answer)
+      assert [%{name: "row height", value: 22, unit: "pt", expected: 24}, long] = result.measures
+      assert %{value: 1.5} = long
+      refute Map.has_key?(long, :expected)
+      assert String.length(long.name) == 200 and String.length(long.unit) == 40
+      valid!(%{result: result})
+
+      many = %{answer | "measures" => for(n <- 1..25, do: %{"name" => "m#{n}", "value" => n, "unit" => "pt"})}
+      assert length(StepPayload.result(many).measures) == 20
+      valid!(%{result: StepPayload.result(many)})
+
+      for none <- [nil, "22 pt", [], ["x"]], do: refute(Map.has_key?(StepPayload.result(%{answer | "measures" => none}), :measures))
+
+      assert [%{step: 3, measures: [%{name: "row height"}, %{value: 1.5}]}] = StepPayload.results([Map.put(answer, "step", 3)])
+    end
+  end
+
   describe "results/1" do
     test "keeps one result per walkthrough step of a grouped walk, each with its step, at most 20" do
       results = [

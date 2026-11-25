@@ -893,7 +893,7 @@ or finding's evidence entry names an artifact when it is a `qa-evidence/` path t
 Linear URL of a file it uploaded; any other entry (a CI run's URL) names none and stays as written.
 Before the pass's `verdict.recorded`, whatever its outcome, the QA run (`agent`, run kind `qa`)
 writes one `evidence` per step that cites evidence, captioned `<step>: <status>` with the artifacts
-its entries name, and one for the transcript, captioned "QA session transcript", keyed
+its entries name and the step's answer as its `result` (its `status` and, as `actual`, what QA saw), and one for the transcript, captioned "QA session transcript", keyed
 `evidence:<run_id>:<n>`; and, for a `fail`, one `finding.recorded` per finding (the failing steps
 when it gives none), keyed `finding:<run_id>:<n>`: class `unclassified` and severity `unrated` until
 findings are classified, the finding's line as `description` (at most 2,000 characters), its `step`,
@@ -5559,7 +5559,14 @@ Scoped GitHub tool extension contract:
   the ids the plan holds, MUST fill the event's actor, run, phase
   and head itself, MUST take artifacts only from regular files under the workspace or the run's
   temp folder, and MUST write nothing when it refuses a call, returning the reason and the type's
-  schema.
+  schema and shape. It MUST NOT accept a field and then drop it: every payload field it takes is
+  stored on the event, and a field the type lacks (such as `artifacts`, a tool argument, given
+  inside the payload) or a value out of shape is refused. Its description MUST list the payload
+  shape of every type a run may record, generated from the event catalog. A measured value has one
+  shape (`name`, a number `value`, `unit`, an optional number `expected`), as `measures` on an
+  `evidence`, and a QA step's answer one shape (`status`, optional `expected`, `actual` and
+  `measures`), the `result` of a stepped pass's `step.completed` and of a QA step's `evidence`.
+  Events stored before keep reading in their earlier shapes: only writes are checked.
 - The epic review SHOULD read the failed jobs of CI on the commit it reviewed itself when it files a
   follow-up about CI (a failing step or finding that names CI or a workflow run), and quote their
   failed steps, annotations and log tail in the follow-up's description, so the run that takes it

@@ -30,7 +30,7 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
     {"step.completed",
      Map.merge(%{step_id: "build", title: "Build", mode: "machine"}, %{outcome: "failed", returns_to: "code", returns_to_title: "writing the code"}) |> Map.put(:duration_ms, 240_000), ["out-1"],
      %{title: "Build failed after 4 min: back to writing the code", detail: "output kept"}},
-    {"evidence", %{caption: "The Activity tab after the fix", artifacts: ["a-1", "a-2"]}, [], %{title: "Evidence recorded with 2 files", detail: "The Activity tab after the fix"}},
+    {"evidence", %{caption: "The Activity tab after the fix"}, ["a-1", "a-2"], %{title: "Evidence recorded with 2 files", detail: "The Activity tab after the fix"}},
     {"finding.recorded",
      %{
        class: "content clipped",
@@ -194,7 +194,9 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
     assert render("attempt.pushed", %{head: " "}) == %{title: "Attempt pushed", detail: nil}
     assert render("verdict.recorded", %{}) == %{title: "Review verdict", detail: nil}
     assert render("finding.recorded", %{evidence: [1, 2]}) == %{title: "QA found a defect", detail: nil}
+    # An evidence written before TP-1680 kept its files' ids in its payload too.
     assert render("evidence", %{artifacts: "a-1"}) == %{title: "Evidence recorded with 1 file", detail: nil}
+    assert render("evidence", %{caption: "Old", artifacts: ["a-1", "a-2"]}).title == "Evidence recorded with 2 files"
     assert render("drift.reverted", %{}) == %{title: "Moved back to its phase: it was moved to another state in Linear by hand", detail: nil}
     assert render("pause.set", %{}) == %{title: "Paused", detail: nil}
     assert render("pause.cleared", %{cleared: "all"}) == %{title: "Moving again", detail: nil}

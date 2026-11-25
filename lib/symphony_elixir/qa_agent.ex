@@ -365,7 +365,12 @@ defmodule SymphonyElixir.QaAgent do
     tool: one `evidence` event for each walkthrough step you walked, whose `caption` names the step
     (its number and a few words), what you saw, and the environment you proved it in (the committed
     fixtures or the live server, and the appearance and window size when they matter), with the
-    step's screenshots or logs as `artifacts`. The Director's timeline shows each step's evidence.
+    step's screenshots or logs as the tool's top-level `artifacts` list, beside `type` and
+    `payload`: never inside `payload`, which refuses a field its type lacks. Its `payload` may also
+    name the step (`step`), its answer as `result` (`status`, `expected`, `actual`, and `measures`)
+    and each measured value in `measures`: one object per value, with what was measured (`name`),
+    the number (`value`), its `unit` and the number expected (`expected`) when there is one. The
+    tool's description lists every payload's shape. The Director's timeline shows each step's evidence.
     Name the same environment on the verdict's step (`environment`: `fixture` for the committed
     fixtures, `live` for the live server); the QA report shows it beside the step.
     The verdict is not an event you record: the `qa_verdict` tool records it, and `ticket_record`
