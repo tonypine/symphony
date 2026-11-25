@@ -20,6 +20,9 @@ defmodule SymphonyElixir.QaVerification do
       sized the window to the QA target) -> rerun once on the same change, then a Needs Decision hold in `QA`; never the self-heal
       lane, since nothing in the environment is broken
     * skip (the deterministic docs-only/internal-only rule, `SymphonyElixir.QaPolicy`) -> `Merging`
+    * a pass that would run on a head whose QA seed and fixtures miss the state a QA check of the
+      plan is walked on (`SymphonyElixir.QaState`, the second guard after Code Review's) -> `Rework`
+      with a finding per check, before any QA host or session is taken
     * no open pull request, or a PR whose diff GitHub reports empty -> a Needs Decision hold in `QA`
       (`SymphonyElixir.ClosedPullRequest`), with no verdict recorded: an empty diff means there is
       no change to verify, never a docs-only one. A workspace that finds nothing to verify while
@@ -96,6 +99,7 @@ defmodule SymphonyElixir.QaVerification do
     PrWatch,
     QaPolicy,
     QaPreCheck,
+    QaState,
     Questions,
     RunStore,
     SelfHeal,
@@ -344,7 +348,21 @@ defmodule SymphonyElixir.QaVerification do
     case policy.decide(issue, settings, workspace: workspace, repo_key: repo_key(issue, opts)) do
       {:skip, reason} -> skip(issue, opts, settings, head, reason)
       {:nothing_to_verify, _reason} -> nothing_to_verify(issue, workspace, opts, settings, head, pr_url)
-      {:run, playbooks, _reason} -> run_agent(issue, workspace, opts, settings, head, playbooks, QaPreCheck.proved(TicketJourney.proof_steps(issue)))
+      {:run, playbooks, _reason} -> gate_state(issue, workspace, opts, settings, head, playbooks)
+    end
+  end
+
+  # The second guard of the QA seed and fixtures check (`SymphonyElixir.QaState`; Code Review's
+  # approve is the first): a ticket that reached QA another way, on a head not checked yet, goes back
+  # to Rework with a finding per check when state is missing, before any QA host or session is taken.
+  defp gate_state(issue, workspace, opts, settings, head, playbooks) do
+    case QaState.gate(issue, workspace, head, repo_key: repo_key(issue, opts), run_id: qa_run_id(issue, opts, head)) do
+      :go ->
+        run_agent(issue, workspace, opts, settings, head, playbooks, QaPreCheck.proved(TicketJourney.proof_steps(issue)))
+
+      {:rework, reason} ->
+        Logger.warning("QA for #{issue_label(issue)} head=#{head} goes back to Rework without a QA session: #{reason}")
+        move(issue, opts, settings, :qa_fail, %{reason: reason})
     end
   end
 
