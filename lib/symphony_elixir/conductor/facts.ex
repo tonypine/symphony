@@ -113,16 +113,31 @@ defmodule SymphonyElixir.Conductor.Facts do
   @try_keys ["conductor.try:", "message.try:", "final_check.try:"]
   @max_tries 5
   @max_check_notes 5
+  @waive_rule "Never waive a check for the person to verify later, by hand or on their promise: a ticket's life ends at its " <>
+                "delivery, and a waiver never leaves a debt on the person. When a check cannot be proved the way the plan says, " <>
+                "it is proved another way now (a test, or what the record shows) or the plan no longer holds it: the waiver's " <>
+                "reason says which, and how it is proved or why the plan does not need it."
   @waive "A check that is open and that nobody can prove the way the plan says (a `test` check for something no test can " <>
            "reach, an `attached` check for a file that cannot exist) holds the handoff for good. When a run's notes or its " <>
            "failed `plan_checks` step say so and you agree, waive it: " <>
            ~s(`waive: [{"check_id": ..., "reason": ...}]`, ) <>
            "with the reason in plain words. Never waive a check only because it is hard or still unproved. " <>
+           @waive_rule <>
+           " " <>
            "A check of kind `outcome` is what the person asked for: Symphony refuses its waiver, and only the person can waive it."
   @open_checks "These checks of the plan are still open, and the pull request merges next. A merge does not prove them. " <>
                  "Say so in your update. Waive one that nobody can prove the way the plan says, with its reason " <>
                  "(never a check of kind `outcome`: only the person waives one), or send the ticket back with instructions " <>
                  "that name the checks to prove, or ask the person."
+
+  @doc """
+  The rule every turn that may waive a check is told (its prompt's `{{waive_rule}}`, and the facts'
+  `waive`): a check is never waived for the person to verify later; one the plan's way cannot prove is
+  proved another way now, or the plan no longer holds it.
+  """
+  @spec waive_rule() :: String.t()
+  def waive_rule, do: @waive_rule
+
   @plan_text_max 6_000
   @max_siblings 20
   # The key `SymphonyElixir.Conductor.Grooming` counts a failed try under: `grooming.try:<n>`.
@@ -142,7 +157,7 @@ defmodule SymphonyElixir.Conductor.Facts do
     "grooming" => "The ticket is new and no run has worked on it; you write its plan from what was asked.",
     "message" => "A person sent a message on the ticket; you answer it.",
     "sub_ticket_ended" => "A sub-ticket of this ticket ended; you look at what is left of its plan.",
-    "final_check" => "The last sub-ticket ended; you check the whole ticket against its plan.",
+    "final_check" => "The last sub-ticket ended; you check that the plan was delivered, and close the ticket when it was.",
     "child_message" => "A person sent a message on a sub-ticket of this ticket.",
     "after_coding" => "The implementation run handed off; Code Review or QA judges it next.",
     "after_qa_fail" => "QA failed; a rework run answers its findings next.",

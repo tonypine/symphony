@@ -87,7 +87,9 @@ defmodule SymphonyElixir.Conductor do
   Two junctions belong to a groomed ticket that waits on its sub-tickets, and are met outside any
   dispatch (`tend/4`, which the orchestrator starts on a poll): `sub_ticket_ended`, each time one of
   them ends while others are open, whose answer may change the tree, and `final_check`, once the
-  last one ended, whose answer closes the ticket or adds what is missing. Both read the tree's facts
+  last one ended, which checks that the plan was delivered and closes the ticket or adds what is
+  missing; an answer of it that concludes nothing is given back once in the same turn
+  (`timed_turn/5`). Both read the tree's facts
   on a prompt of their own (`priv/conductor/tree_prompt.md`) and answer `done` and `tree`
   operations, which Symphony carries out and records (`Tree.apply/3`).
 
@@ -120,6 +122,8 @@ defmodule SymphonyElixir.Conductor do
   and on a watch turn the answer may waive checks of the plan nobody can prove (`waive`), which
   Symphony records as `check.waived` (`SymphonyElixir.TicketChecks.waive/4`); one that names no
   check of the plan, or names an outcome, which only the person waives, is dropped and logged.
+  Each of those turns is told that a check is never waived for the person to verify later
+  (`Facts.waive_rule/0`).
   """
 
   require Logger
@@ -192,7 +196,7 @@ defmodule SymphonyElixir.Conductor do
     "grooming" => "the ticket is new; you write its plan before any work starts",
     "message" => "a person sent a message on the ticket; you answer it",
     "sub_ticket_ended" => "a sub-ticket of this ticket ended; you look at what is left of its plan",
-    "final_check" => "the last sub-ticket ended; you check the whole ticket against its plan",
+    "final_check" => "the last sub-ticket ended; you check that the plan was delivered, and close the ticket when it was",
     "child_message" => "a person sent a message on a sub-ticket of this ticket",
     "after_coding" => "an implementation run handed off; Code Review or QA judges it next",
     "after_qa_fail" => "QA failed; a rework run answers its findings next",
@@ -490,9 +494,11 @@ defmodule SymphonyElixir.Conductor do
   (`wait/5`). With `start` in place of a junction no turn runs: a sub-ticket Symphony created and left
   in `Backlog` is linked and started (`Tree.start_left/3`). Nothing runs while the Conductor or the junction is
   off, or no provider of `runs.conductor` can take a run now: the next poll asks again. The turn's
-  answer is carried out as it is recorded (`Tree.apply/3`). A final check that did not conclude
-  never closes the ticket: one that did not finish is counted and tried once more, then the person
-  is asked (`Tree.checked/3`). Always `:ok`. `opts`: `plan/4`'s and `run/3`'s.
+  answer is carried out as it is recorded (`Tree.apply/3`). A final check whose answer concludes
+  nothing (not done, nothing to add or change, no question) is given back to the Conductor once,
+  inside the same turn and its time limit, and the second answer is the one carried out. A final
+  check that did not conclude never closes the ticket: one that did not finish is counted and tried
+  once more, then the person is asked (`Tree.checked/3`). Always `:ok`. `opts`: `plan/4`'s and `run/3`'s.
   """
   @spec tend(Issue.t(), String.t(), String.t() | nil, keyword()) :: :ok
   def tend(%Issue{id: issue_id} = issue, junction, repo_key, opts \\ []) when junction in [@start | @tree_junctions] do
@@ -900,6 +906,7 @@ defmodule SymphonyElixir.Conductor do
     |> String.replace("{{junction}}", junction)
     |> String.replace("{{junction_words}}", Map.get(@junction_words, junction, junction))
     |> String.replace("{{sub_tickets_form}}", form(junction, facts))
+    |> String.replace("{{waive_rule}}", Facts.waive_rule())
     |> String.replace("{{facts}}", Jason.encode!(facts, pretty: true))
   end
 
@@ -916,8 +923,54 @@ defmodule SymphonyElixir.Conductor do
   defp prompt_text(_junction), do: @prompt
 
   # The turn runs in a task of its own, bounded by `timeout_ms`: one that runs over is stopped, and
-  # one that crashes is a failed turn, never the caller's crash.
+  # one that crashes is a failed turn, never the caller's crash. A final check's answer that
+  # concludes nothing is given back to the Conductor once, inside the same time limit (`sent_back/6`).
   defp timed_turn(plan, issue, run_id, prompt, turn) do
+    deadline = System.monotonic_time(:millisecond) + plan.timeout_ms
+
+    case bounded_turn(plan, issue, run_id, prompt, turn) do
+      {:ok, answer, _tokens} = outcome -> if concludes_nothing?(answer, plan), do: sent_back(outcome, plan, issue, run_id, {prompt, turn}, deadline), else: outcome
+      outcome -> outcome
+    end
+  end
+
+  # A final check's answer that is not done, changes nothing (no sub-ticket to add or change, no
+  # plan written again, no move) and asks nothing: read from the answer, never from its update.
+  defp concludes_nothing?(%{done: false, tree: [], ask_person: nil, plan: nil, move: nil}, %{junction: @final_check}), do: true
+  defp concludes_nothing?(_answer, _plan), do: false
+
+  @sent_back """
+
+
+  ## Your answer was given back to you
+
+  Your answer to this turn was:
+
+  {{answer}}
+
+  Symphony gave it back to you: your answer closes nothing, changes nothing and asks nothing.
+  Saying in your `update` that you ask a question does not ask it. Answer again, as one JSON object
+  in the same form: `"done": true` when every outcome holds, `add` operations for what is missing,
+  or the question in `ask_person` when only the person can settle it.
+  """
+
+  # The answer goes back with the reason, as one more prompt of the same turn (the same run id), in
+  # what is left of the turn's limit; Symphony then acts on the second answer. Both answers' tokens
+  # count on the turn. A second try that fails or runs out of time keeps the first answer, which
+  # takes the path any final check that concluded nothing takes (`Tree.apply/3`, `Tree.checked/3`).
+  defp sent_back({:ok, first, tokens}, plan, issue, run_id, {prompt, turn}, deadline) do
+    Logger.info("Conductor's final check concluded nothing #{context(issue, plan)} run_id=#{run_id}: Symphony gives the answer back once")
+    left = max(deadline - System.monotonic_time(:millisecond), 1)
+    shown = Jason.encode!(Map.take(first, [:done, :tree, :update, :ask_person]), pretty: true)
+    again = prompt <> String.replace(@sent_back, "{{answer}}", shown)
+
+    case bounded_turn(%{plan | timeout_ms: left}, issue, run_id, again, turn) do
+      {:ok, answer, more} -> {:ok, answer, tokens + more}
+      {:error, _reason, more} -> {:ok, first, tokens + more}
+    end
+  end
+
+  defp bounded_turn(plan, issue, run_id, prompt, turn) do
     task = Task.Supervisor.async_nolink(SymphonyElixir.TaskSupervisor, fn -> turn.(plan, issue, run_id, prompt) end)
 
     case Task.yield(task, plan.timeout_ms) || Task.shutdown(task, :brutal_kill) do

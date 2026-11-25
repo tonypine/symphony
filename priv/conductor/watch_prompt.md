@@ -189,7 +189,7 @@ open and what the run said about them. When you agree that nobody can prove a ch
 plan says, waive it: add `"waive": [{"check_id": "<the check's id>", "reason": "<why nobody can
 prove it this way, in plain words>"}]` to your answer. Symphony records it with your reason, and the
 step passes the next time the run reaches it. Do not waive a check because it is hard or still to
-do: then steer the run to prove it and record the proof.
+do: then steer the run to prove it and record the proof. {{waive_rule}}
 
 The merge hold. When the run's work is on its way to the merge, look at
 whether the pull request is about to merge what is asked now. When it is not (the plan was

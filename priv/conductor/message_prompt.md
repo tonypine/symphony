@@ -96,7 +96,7 @@ says (a `test` check for something no test can reach), you may waive it:
 `"waive": [{"check_id": "c2", "reason": "<why nobody can prove it this way>"}]`. An open `test` or
 `attached` check holds the ticket's handoff, so a check nobody can prove holds it for good. Never
 waive a check only because it is hard, or because the person is in a hurry: then it is a change to
-the ask, and the plan changes.
+the ask, and the plan changes. {{waive_rule}}
 
 When the message changes what is asked while the ticket is in review, QA or Merging, the pull
 request would merge the old work. Write the new `plan`, and hold the merge: `"hold": {"reason":

@@ -205,7 +205,7 @@ and `after_rework`, when a run says so and you agree that nobody can prove the c
 plan says, waive it: add `"waive": [{"check_id": "<the check's id>", "reason": "<why nobody can
 prove it this way, in plain words>"}]` to your answer. Symphony records it with your reason, and the
 handoff no longer waits on it. Do not waive a check because it is hard or still to do: then say in
-`instructions` how to prove it. At any other junction `waive` is ignored.
+`instructions` how to prove it. {{waive_rule}} At any other junction `waive` is ignored.
 
 The merge hold. At `before_merge` (at any other junction `hold` is ignored), whenever the ticket is on its way to the merge, look at
 whether the pull request is about to merge what is asked now. When it is not (the plan was
