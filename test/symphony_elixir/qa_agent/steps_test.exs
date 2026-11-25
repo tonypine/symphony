@@ -1249,7 +1249,11 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
 
     test "a review's recheck of a step Symphony marked is refused and asked again, and no session walks it", ctx do
       recheck = %{recheck: [%{step: "1", where: "Home"}, %{step: 2, where: "Page 2"}]}
-      answers(%{"plan" => [{:write, plan([2])}], "review" => [{:write, recheck}, {:write, %{recheck: [%{step: 2, where: "Page 2"}]}}, {:verdict, @pass}]})
+
+      answers(%{
+        "plan" => [{:write, plan([2])}],
+        "review" => [{:write, recheck}, {:write, %{recheck: [%{step: 2, where: "Page 2"}]}}, {:verdict, @pass}]
+      })
 
       steps = set_live(walkthrough([1, 2]), [1])
       assert {:ok, %{result: result}} = run(ctx, %{journey: %{source: "the plan", text: "", steps: steps}})
