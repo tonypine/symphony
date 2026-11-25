@@ -192,9 +192,34 @@ defmodule SymphonyElixir.QaAgent.Report do
       status: Map.get(result, :status) || "noted",
       details: Map.get(result, :actual) || "",
       environment: Map.get(payload, :environment),
-      entries: Enum.map(ids, &artifact_entry(&1, links)) ++ Map.get(payload, :links, [])
+      entries: Enum.map(ids, &artifact_entry(&1, links)) ++ Enum.map(Map.get(payload, :links) || [], &link_entry(&1, links))
     }
   end
+
+  # A step names a picture the run recorded as it took it (`SymphonyElixir.AgentTools.QaPictures`)
+  # by its path: it links to that picture's artifact, which the step does not carry again.
+  defp link_entry(entry, links) do
+    name = Path.basename(entry)
+
+    case Enum.find(links, fn {_id, link} -> base(link.label) == name end) do
+      {id, _link} -> artifact_entry(id, links)
+      nil -> entry
+    end
+  end
+
+  # The pictures the run recorded that its steps name by path.
+  defp named_pictures(events, run_id) do
+    names = for %Event{payload: payload} <- pass_steps(events, run_id), link <- Map.get(payload, :links) || [], into: MapSet.new(), do: Path.basename(link)
+
+    for %Event{type: "evidence", run_id: ^run_id, artifacts: ids} <- events, id <- ids, MapSet.member?(names, label(id)), do: id
+  end
+
+  defp label(id) do
+    with {:ok, artifact} <- Artifacts.get(id), do: base(artifact.label)
+  end
+
+  defp base(label) when is_binary(label), do: Path.basename(label)
+  defp base(_none), do: nil
 
   # The evidence a QA pass recorded per step (`SymphonyElixir.QaVerification`), oldest first.
   defp pass_steps(events, run_id) do
@@ -320,6 +345,7 @@ defmodule SymphonyElixir.QaAgent.Report do
     ids =
       (pass_steps(events, run_id) ++ Enum.map(pass_findings(events, run_id), &elem(&1, 0)))
       |> Enum.flat_map(& &1.artifacts)
+      |> Kernel.++(named_pictures(events, run_id))
       |> Enum.uniq()
 
     %{events: events, run_id: run_id, links: Map.new(ids, &{&1, artifact_link(issue, &1, upload?, opts)})}

@@ -307,6 +307,14 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
     end
   end
 
+  @doc """
+  The ticket the session `context` names (`issue_id` and `repo_key`, else its issue's), or the
+  `no_ticket` refusal. The qa_* picture tools check it before they take a picture
+  (`SymphonyElixir.AgentTools.QaPictures`).
+  """
+  @spec current_ticket(context()) :: {:ok, %{issue_id: String.t(), repo_key: String.t()}} | {:error, error()}
+  def current_ticket(context), do: ticket(context)
+
   defp ticket(context) do
     issue = Map.get(context, :issue) || %{}
     issue_id = present(Map.get(context, :issue_id)) || present(Map.get(issue, :id))

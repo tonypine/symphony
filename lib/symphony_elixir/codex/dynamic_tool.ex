@@ -5,7 +5,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   require Logger
 
-  alias SymphonyElixir.AgentTools.{GitHub, Linear, TicketLedger}
+  alias SymphonyElixir.AgentTools.{GitHub, Linear, QaPictures, TicketLedger}
   alias SymphonyElixir.Linear.Usage, as: LinearUsage
   alias SymphonyElixir.QaAgent.Verdict, as: QaVerdict
   alias SymphonyElixir.QaAndroid.Driver, as: QaAndroidDriver
@@ -624,6 +624,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "height" => @picture_size_property
   }
 
+  @qa_picture_recorded " Taking a picture records it: each one is on the ticket's record as an evidence event of this run (under the QA step running), its file kept as the event's artifact, and `recorded` names each picture's `path`, `event_id` and `artifact_id`. Never record it again with ticket_record; name its path in your step's answer. A picture the record refuses is not kept, and the call fails with qa_picture_not_recorded and the reason."
+
   @qa_tool_schemas [
     %{
       "name" => "qa_build",
@@ -739,7 +741,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
           "(`all: true` means every entry). Call it first when the PR changes shared views. " <>
           "With entry it draws that entry without opening a window and saves the pictures in qa-evidence/ under the gallery's own file names, in the QA target's appearance and, for a screen, its window's width: " <>
           "use it for a step that judges how a component or a screen looks. A component call (entry alone) draws every variation of the component on one board, in one picture; a screen needs variation, one at a time. " <>
-          "A picture this pass already drew comes back with its path and `existing: true` (the file is kept as it was drawn): judge that file. To press, hover or type in an entry, use qa_gallery_open.",
+          "A picture this pass already drew comes back with its path and `existing: true` (the file is kept as it was drawn, and `recorded` names the record it got when it was drawn): judge that file. To press, hover or type in an entry, use qa_gallery_open." <>
+          @qa_picture_recorded,
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -799,7 +802,9 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     },
     %{
       "name" => "qa_screenshot",
-      "description" => "Capture the launched app's on-screen windows (or one window_id) to qa-evidence/<name>.png. Returns the files with each window's frame.",
+      "description" =>
+        "Capture the launched app's on-screen windows (or one window_id) to qa-evidence/<name>.png. Returns the files with each window's frame." <>
+          @qa_picture_recorded,
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -815,7 +820,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "name" => "qa_crop",
       "description" =>
         "Cut a rectangle out of a picture a qa_* tool saved (a qa_screenshot, a qa_gallery picture), enlarge it `zoom` times (2 by default, each pixel drawn as a square) and save it as qa-evidence/<name>.png, for a close look at how a part looks (an icon, a gap, a border). " <>
-          "Symphony crops it on its side, so you write no file and need no sips. Returns the new picture's path and its scale (pixels per point). Fails with qa_picture_missing, qa_picture_refused (outside qa-evidence/), qa_picture_unreadable or qa_picture_out_of_bounds.",
+          "Symphony crops it on its side, so you write no file and need no sips. Returns the new picture's path and its scale (pixels per point). Fails with qa_picture_missing, qa_picture_refused (outside qa-evidence/), qa_picture_unreadable or qa_picture_out_of_bounds." <>
+          @qa_picture_recorded,
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -1547,6 +1553,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   # The QA agent reads like the reviewer and may attach evidence files; it never
   # moves the issue, comments, or writes to GitHub.
   @qa_tools MapSet.put(@read_only_tools, "linear_attach_file")
+  @qa_picture_tools QaPictures.tools()
 
   @qa_get_document_description "Without arguments, list the documents this issue's runs created (`documents`) and the ones its parent's runs created " <>
                                  "(`parentDocuments`, such as the plan's Screens document), with id, title and url. " <>
@@ -1644,6 +1651,10 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   defp execute_tool("qa_android_" <> _rest = tool, _context, args, opts),
     do: QaAndroidDriver.call_tool(Keyword.get(opts, :qa_android_driver), tool, args)
+
+  # A picture a qa_* tool takes is recorded on the ticket as it is taken (`AgentTools.QaPictures`).
+  defp execute_tool(tool, context, args, opts) when tool in @qa_picture_tools,
+    do: QaPictures.call(context, tool, args, fn -> QaDriver.call_tool(Keyword.get(opts, :qa_driver), tool, args) end, opts)
 
   defp execute_tool("qa_" <> _rest = tool, _context, args, opts), do: QaDriver.call_tool(Keyword.get(opts, :qa_driver), tool, args)
   defp execute_tool("ticket_events", context, args, _opts), do: TicketLedger.events(context, args)
