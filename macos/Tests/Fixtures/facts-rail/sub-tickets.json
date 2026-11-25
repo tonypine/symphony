@@ -1,0 +1,32 @@
+{
+  "identifier": "TP-1639",
+  "pull_request": null,
+  "connected": {
+    "epic": {
+      "identifier": "TP-1597",
+      "title": "A real queue: a slot belongs to one ticket until it is done",
+      "done": 3,
+      "total": 5,
+      "incomplete": false,
+      "tickets": [
+        { "identifier": "TP-1619", "title": "The queue's sort keys", "state": "Done", "situation": "done", "current": false },
+        { "identifier": "TP-1620", "title": "A slot belongs to one ticket", "state": "Done", "situation": "done", "current": false },
+        { "identifier": "TP-1638", "title": "Home's slot cards", "state": "Done", "situation": "done", "current": false },
+        { "identifier": "TP-1639", "title": "Home: Recently done, the epic slot card and epic queue rows", "state": "Waiting on sub-tickets", "situation": "waiting_on_sub_tickets", "current": true },
+        { "identifier": "TP-1640", "title": "Initiatives reads the queue", "state": "Todo", "situation": "blocked_by_ticket", "current": false }
+      ]
+    },
+    "parent": { "identifier": "TP-1597", "title": "A real queue: a slot belongs to one ticket until it is done", "done": 3, "total": 5, "children": ["completed", "completed", "completed", null, null] },
+    "sub_tickets": [
+      { "identifier": "TP-1644", "title": "Home: the Recently done section and the done row", "state": "Done", "situation": "done" },
+      { "identifier": "TP-1645", "title": "Home queue: epic rows with sub-rows and done rows, dependency markers", "state": "In Progress", "situation": "working" },
+      { "identifier": "TP-1646", "title": "Home: the epic slot card", "state": "Todo", "situation": "waiting_for_slot" },
+      { "identifier": "TP-1647", "title": "Home: a click on a ticket's title opens the ticket's page", "state": "Todo", "situation": "blocked_by_ticket" }
+    ],
+    "blocked_by": [
+      { "identifier": "TP-1638", "title": "Home's slot cards", "state": "Done", "status": "resolved", "resolved_at": "2026-11-09T22:37:00Z" }
+    ],
+    "blocks": [],
+    "related": []
+  }
+}

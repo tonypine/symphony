@@ -1453,11 +1453,12 @@ func phasePaths(width: CGFloat) -> some View {
 
 // MARK: - The facts rail's Pull request and Connected panels (TP-1446)
 
-/// Three tickets (`Tests/Fixtures/facts-rail`): a green PR and nothing connected; a red PR with three workflows; no PR
-/// yet, in an epic, with one blocker resolved yesterday and one open.
+/// Four tickets (`Tests/Fixtures/facts-rail`): a green PR and nothing connected; a red PR with three workflows; no PR
+/// yet, in an epic, with one blocker resolved yesterday and one open; a sub-ticket of an epic with sub-tickets of its own
+/// (TP-1651), its Connected panel's Epic block above its Sub-tickets list.
 let factsFixtures = here.appendingPathComponent("../Tests/Fixtures/facts-rail").standardizedFileURL
 let factsReference = ISO8601DateFormatter().date(from: "2026-11-10T15:00:00Z")!
-let factsTickets = ["green-pr", "red-pr", "blockers"]
+let factsTickets = ["green-pr", "red-pr", "blockers", "sub-tickets"]
 
 /// The two panels of `name`'s facts rail, one under the other, `width` wide: the laptop's (340 pt) or the desktop's
 /// (440 pt).

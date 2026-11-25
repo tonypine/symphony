@@ -10,7 +10,9 @@ defmodule SymphonyElixir.Connected do
   (`depends_on`) as `blocked_by`, and what the run's enrichment read once at dispatch (`linked/1`):
   the parent and the `related` links, with their titles. Linear's blocker links are not read, so
   `blocks` is empty here: `SymphonyElixir.Connected.Read` completes it, and `blocked_by`, from the
-  records for the ticket read.
+  records for the ticket read. The ticket read takes `parent` and `sub_tickets` from Symphony's own
+  tree of the records instead (`SymphonyElixir.Connected.Read`), so the enrichment's parent decides
+  neither there: a ticket filed by a split names its parent before any run reads it.
   """
 
   alias SymphonyElixir.Linear.Issue
