@@ -13,7 +13,8 @@
 #
 # Nor does it reach OpenCode Go: an OpenRouter QA stub (`symphony openrouter-stub`) runs beside it,
 # in its process group, and the server reads OpenCode Go's usage from it in QA mode with the stub's
-# key, holding OpenCode Go at the reserve its symphony.yml sets (TP-1642).
+# key, holding OpenCode Go at the reserve its symphony.yml sets (TP-1642). OpenCode Go is every kind
+# of run's fallback there, as on the operator's own Symphony, so the Providers page lists it in use.
 #
 # By hand on the QA VM: scripts/qa-server-build.sh, then
 #   SYMPHONY_VERIFICATION_PORT=8090 scripts/qa-server-start.sh
@@ -72,7 +73,12 @@ execution:
     opencode-go:
       reserve: 0.9
 runs:
-  default: { harness: codex, provider: openai, model: none }
+  default:
+    harness: codex
+    provider: openai
+    model: none
+    fallbacks:
+      - { provider: opencode-go, model: none }
 YAML
 
 cd "$repo"

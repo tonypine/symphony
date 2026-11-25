@@ -277,9 +277,10 @@ public struct ProvidersPage: Equatable {
 
     // MARK: The state
 
-    /// Where `provider` stands. The Director's pause reads first, then Off for a provider set up with a key that isn't
-    /// enabled, then Not in use (Available for such a provider once it is enabled), then a usage limit's hold. A hold
-    /// Symphony keeps on a provider it runs on wins over the app's own key store: that provider is not Off, it is held.
+    /// Where `provider` stands. The Director's pause reads first, then a hold Symphony keeps on it (its reserve, then a
+    /// usage limit), then Off for a provider set up with a key that isn't enabled, then Not in use (Available for such
+    /// a provider once it is enabled). A hold wins over the app's own key store and over Not in use, so the page says
+    /// what the status menu says: Symphony reads the provider's usage with its own key, which the app may not hold.
     public func state(_ provider: StateSnapshot.Provider) -> State {
         if provider.paused {
             let age = provider.pausedSince.map { Overview.duration(Int(now.timeIntervalSince($0))) }
@@ -287,16 +288,6 @@ public struct ProvidersPage: Equatable {
                 status: .you, word: "Paused", cause: age.map { "You paused it \($0) ago." } ?? "You paused it.",
                 waits: provider.inUse ? Self.waits : nil, short: age.map { "Paused by you · \($0)" } ?? "Paused by you", live: false
             )
-        }
-        let keyed = keys != nil && ProviderKeys.spec(provider.id) != nil
-        let heldBySymphony = provider.inUse && (provider.held || provider.atReserve)
-        if keyed, let keys, !keys.isEnabled(provider.id), !heldBySymphony {
-            let cause = keys.hasKey(provider.id) ? "You turned it off." : "It has no key."
-            return State(status: .idle, word: Self.offWord, cause: cause, waits: nil, short: Self.offWord, live: false)
-        }
-        if !provider.inUse {
-            let word = keyed ? "Available" : "Not in use"
-            return State(status: keyed ? .done : .idle, word: word, cause: "No kind of run is set to it.", waits: nil, short: word, live: false)
         }
         if provider.atReserve {
             let until = provider.heldUntil
@@ -313,6 +304,15 @@ public struct ProvidersPage: Equatable {
                 waits: Self.waits + (until.map { " Resumes \(longTime($0))." } ?? ""),
                 short: "Limit reached" + (until.map { " · until \(shortTime($0))" } ?? ""), live: false
             )
+        }
+        let keyed = keys != nil && ProviderKeys.spec(provider.id) != nil
+        if keyed, let keys, !keys.isEnabled(provider.id) {
+            let cause = keys.hasKey(provider.id) ? "You turned it off." : "It has no key."
+            return State(status: .idle, word: Self.offWord, cause: cause, waits: nil, short: Self.offWord, live: false)
+        }
+        if !provider.inUse {
+            let word = keyed ? "Available" : "Not in use"
+            return State(status: keyed ? .done : .idle, word: word, cause: "No kind of run is set to it.", waits: nil, short: word, live: false)
         }
         let working = provider.working
         return State(
@@ -361,10 +361,14 @@ public struct ProvidersPage: Equatable {
     /// OpenCode Go's monthly limit (TP-1642).
     static let monthWindow = "monthly"
 
-    /// Each usage window Symphony read a share for, as a one-line meter with its stop mark at the reserve.
+    /// Each usage window Symphony read a share for, as a one-line meter with its stop mark at the reserve, shortest
+    /// window first: 5 hours, the weeks, the month, then any other.
     func meters(_ provider: StateSnapshot.Provider) -> [Meter] {
         let stop = reservePercent(provider)
-        return provider.usageWindows.compactMap { window in
+        let windows = provider.usageWindows.enumerated()
+            .sorted { ($0.element.name.windowRank, $0.offset) < ($1.element.name.windowRank, $1.offset) }
+            .map(\.element)
+        return windows.compactMap { window in
             guard let used = window.utilization else { return nil }
             return Meter(
                 id: window.name, label: Self.windowLabel(window.name), percent: Self.percent(used), stop: stop,
@@ -432,5 +436,15 @@ public struct ProvidersPage: Equatable {
     func shortTime(_ date: Date) -> String {
         let calendar = calendar
         return SharedDateFormatter.string(date, format: calendar.isDate(date, inSameDayAs: now) ? "HH:mm" : "EEE HH:mm", calendar: calendar)
+    }
+}
+
+private extension String {
+    /// A usage window's place by its length: the 5 hours, the weeks, the month (OpenCode Go's, TP-1642), then any other.
+    var windowRank: Int {
+        if self == "five_hour" { return 0 }
+        if hasPrefix(ProvidersPage.weekWindow) { return 1 }
+        if self == ProvidersPage.monthWindow { return 2 }
+        return 3
     }
 }

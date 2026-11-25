@@ -101,6 +101,29 @@ defmodule SymphonyElixir.ProvidersTest do
       assert %{reserve: nil, at_reserve: false, usage_windows: [%{name: "five_hour"}]} = entry(list, "anthropic")
     end
 
+    test "usage windows read shortest first: 5 hours, the weeks, the month, then any other by name" do
+      at = ~U[2026-11-28 00:00:00Z]
+
+      windows =
+        for {provider, name} <- [
+              {"opencode-go", "monthly"},
+              {"opencode-go", "seven_day"},
+              {"opencode-go", "five_hour"},
+              {"anthropic", "seven_day_sonnet"},
+              {"anthropic", "extra"},
+              {"anthropic", "seven_day"},
+              {"anthropic", "five_hour"}
+            ],
+            into: %{},
+            do: {{provider, name}, %{utilization: 0.5, resets_at: at}}
+
+      list = Providers.list(%{usage_windows: windows})
+      names = &Enum.map(entry(list, &1).usage_windows, fn window -> window.name end)
+
+      assert names.("opencode-go") == ["five_hour", "seven_day", "monthly"]
+      assert names.("anthropic") == ["five_hour", "seven_day", "seven_day_sonnet", "extra"]
+    end
+
     test "a fallback provider's own usage limit marks that provider held until its own reset, not Claude" do
       go = %{provider: "opencode-go", phase: :paused, resume_at: ~U[2026-11-23 00:00:00Z]}
       reserve = %{provider: "anthropic", phase: :headroom, resume_at: ~U[2026-11-22 16:02:00Z]}

@@ -565,8 +565,8 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
 
       assert windows == [
                %{name: "five_hour", utilization: 0.3, resets_at: DateTime.add(ctx.now, 2 * 3600)},
-               %{name: "monthly", utilization: 0.55, resets_at: DateTime.add(ctx.now, 20 * 86_400)},
-               %{name: "seven_day", utilization: 0.92, resets_at: resets_at}
+               %{name: "seven_day", utilization: 0.92, resets_at: resets_at},
+               %{name: "monthly", utilization: 0.55, resets_at: DateTime.add(ctx.now, 20 * 86_400)}
              ]
 
       # Anthropic's own windows stay apart.

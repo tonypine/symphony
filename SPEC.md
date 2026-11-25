@@ -5923,8 +5923,9 @@ SHOULD return:
   `provider`, `name`, `in_use` (a kind of run or one of its fallbacks names it), `paused` and
   `paused_since` (the Director's pause of the provider), `held` and `held_until` (a usage limit
   holds it, until the latest resume time of its holds), `usage_windows` (each window Symphony read
-  for it from its runs: `name`, `utilization` from 0 to 1, `resets_at`; empty when it can read
-  none), `harnesses` (those that reach it), `kinds` and `fallback_for` (the kinds of run whose own
+  for it from its runs or its usage API: `name`, `utilization` from 0 to 1, `resets_at`; shortest
+  first: `five_hour`, the `seven_day` weeks, `monthly`, then any other by name; empty when it can
+  read none), `harnesses` (those that reach it), `kinds` and `fallback_for` (the kinds of run whose own
   choice, or one of whose fallbacks, is on it), `working` (runs working on it now),
   `tokens_today` (its runs' tokens on the daily budget's UTC day), `reserve` (its
   `execution.providers.<provider>.reserve`, null when it has none or Symphony can't read its usage)

@@ -4,7 +4,9 @@ defmodule SymphonyElixir.QaServerScriptsTest do
   # the QA host, by the QA pass's health check.
   use ExUnit.Case, async: true
 
+  alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.OpenRouter.Stub
+  alias SymphonyElixir.Providers
 
   @repo Path.expand("../..", __DIR__)
 
@@ -105,8 +107,15 @@ defmodule SymphonyElixir.QaServerScriptsTest do
     assert env["SYMPHONY_BAR_QA_ROOT"] == Path.dirname(config)
     assert File.read!(config) =~ "  providers:\n    opencode-go:\n      reserve: 0.9\n"
 
-    # The server's settings load with the reserve: OpenCode Go takes one.
-    assert {:ok, _config} = config |> File.read!() |> YamlElixir.read_from_string()
+    # The server's settings load with the reserve: OpenCode Go takes one. It is every kind of run's
+    # fallback, so the Providers page lists it in use and reads its hold at the reserve.
+    assert {:ok, yaml} = config |> File.read!() |> YamlElixir.read_from_string()
+    assert {:ok, settings} = Schema.parse(yaml)
+    assert Providers.reserves(settings) == %{"opencode-go" => 0.9}
+
+    go = Enum.find(Providers.list(%{runs: Providers.configured_runs([settings])}), &(&1.provider == "opencode-go"))
+    assert %{in_use: true, kinds: [], fallback_for: fallback_for} = go
+    assert "implementation" in fallback_for and "code_review" in fallback_for
   end
 
   test "a stub that does not start stops the start with its output", ctx do

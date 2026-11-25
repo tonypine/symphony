@@ -164,6 +164,13 @@ defmodule SymphonyElixir.Providers do
     for {{^provider, name}, seen} <- windows, is_binary(name) do
       %{name: name, utilization: Map.get(seen, :utilization), resets_at: Map.get(seen, :resets_at)}
     end
-    |> Enum.sort_by(& &1.name)
+    |> Enum.sort_by(&{window_rank(&1.name), &1.name})
   end
+
+  # Shortest window first: the 5 hours, the week (and its per-model weeks), then the month
+  # (OpenCode Go's, TP-1642); any other after them, by name.
+  defp window_rank("five_hour"), do: 0
+  defp window_rank("seven_day" <> _), do: 1
+  defp window_rank("monthly"), do: 2
+  defp window_rank(_name), do: 3
 end

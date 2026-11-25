@@ -205,10 +205,15 @@ final class ProvidersPageTests: XCTestCase {
         )
         let detail = try XCTUnwrap(page([anthropic(), go]).detail("opencode-go"))
         XCTAssertEqual(detail.reserve, .init(percent: 90, choices: [50, 60, 70, 75, 80, 85, 90, 95], saving: false))
-        XCTAssertEqual(detail.usage.map(\.label), ["5 hours", "Month", "Week"])
-        XCTAssertEqual(detail.usage.map(\.percent), [30, 50, 92])
+        // Shortest window first, whatever order the windows come in: 5 hours, Week, Month.
+        XCTAssertEqual(detail.usage.map(\.label), ["5 hours", "Week", "Month"])
+        XCTAssertEqual(detail.usage.map(\.percent), [30, 92, 50])
         XCTAssertEqual(detail.usage.map(\.stop), [90, 90, 90])
-        XCTAssertEqual(detail.usage.map(\.resets), ["today 15:00", "Tue 1 Dec, 14:00", "Thu 19 Nov, 14:00"])
+        XCTAssertEqual(detail.usage.map(\.resets), ["today 15:00", "Thu 19 Nov, 14:00", "Tue 1 Dec, 14:00"])
+        // Anthropic's weeks keep their place after the 5 hours; a window the app doesn't know comes last.
+        var anthropic = anthropic()
+        anthropic.usageWindows = ["other", "seven_day_opus", "seven_day", "five_hour"].map { .init(name: $0, utilization: 0.1) }
+        XCTAssertEqual(try XCTUnwrap(page([anthropic]).detail(nil)).usage.map(\.id), ["five_hour", "seven_day", "seven_day_opus", "other"])
     }
 
     func testAProviderWhoseUsageSymphonyCantReadHasNoStopNewRunsAt() throws {
@@ -384,6 +389,14 @@ final class ProvidersPageTests: XCTestCase {
         // At its reserve, the same: the hold reads, not Off.
         let reserved = StateSnapshot.Provider(id: "opencode-go", name: "OpenCode Go", inUse: true, harnesses: ["claude"], atReserve: true)
         XCTAssertEqual(page.state(reserved).word, "At your reserve")
+        // Not in use and held by Symphony, the hold reads too, as the status menu says it: not Off, not Not in use.
+        var idleReserved = reserved
+        idleReserved.inUse = false
+        XCTAssertEqual(page.state(idleReserved).word, "At your reserve")
+        XCTAssertEqual(ProvidersPage(providers: [idleReserved], now: now, timeZone: utc).state(idleReserved).word, "At your reserve")
+        var idleHeld = held
+        idleHeld.inUse = false
+        XCTAssertEqual(page.state(idleHeld).word, "Limit reached")
         // Not in use, or in use and not held, a provider with no key stays Off.
         XCTAssertEqual(page.state(openCodeGo).word, "Off")
         let free = StateSnapshot.Provider(id: "opencode-go", name: "OpenCode Go", inUse: true, harnesses: ["claude"])
