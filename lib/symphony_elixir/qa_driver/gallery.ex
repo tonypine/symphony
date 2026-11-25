@@ -31,7 +31,12 @@ defmodule SymphonyElixir.QaDriver.Gallery do
   @output_limit 2_000_000
 
   @type tool_error :: {:error, {:qa_tool, String.t(), String.t()}}
-  @type arguments :: %{entry: String.t() | nil, variation: String.t() | nil, width: String.t() | nil}
+  @type arguments :: %{
+          entry: String.t() | nil,
+          variation: String.t() | nil,
+          width: String.t() | nil,
+          appearance: String.t() | nil
+        }
 
   @doc "The fixture folder, relative to the checkout, on which the app starts the gallery in its place."
   @spec fixtures() :: String.t()
@@ -43,18 +48,19 @@ defmodule SymphonyElixir.QaDriver.Gallery do
 
   @doc """
   Checks `qa_gallery`'s arguments: `entry` and `variation` are names (letters, digits, `.`, `_`,
-  `-`, at most 120 bytes), `width` is `laptop`, `desktop` or 3 to 5 digits, and `variation` and
-  `width` need an `entry`.
+  `-`, at most 120 bytes), `width` is `laptop`, `desktop` or 3 to 5 digits, `appearance` is
+  `light` or `dark`, and `variation` and `width` need an `entry`.
   """
   @spec arguments(map()) :: {:ok, arguments()} | tool_error()
   def arguments(args) do
     with {:ok, entry} <- name(args, "entry"),
          {:ok, variation} <- name(args, "variation"),
-         {:ok, width} <- width(Map.get(args, "width")) do
+         {:ok, width} <- width(Map.get(args, "width")),
+         {:ok, appearance} <- appearance(Map.get(args, "appearance")) do
       if is_nil(entry) and not (is_nil(variation) and is_nil(width)) do
         tool_error("invalid_arguments", "`variation` and `width` need an `entry`. Call qa_gallery without arguments to list the entries.")
       else
-        {:ok, %{entry: entry, variation: variation, width: width}}
+        {:ok, %{entry: entry, variation: variation, width: width, appearance: appearance}}
       end
     end
   end
@@ -66,9 +72,8 @@ defmodule SymphonyElixir.QaDriver.Gallery do
   """
   @spec open(map()) :: {:ok, map(), [String.t()]} | tool_error()
   def open(args) do
-    with {:ok, %{entry: entry, variation: variation, width: width}} <- arguments(args),
-         :ok <- required(entry),
-         {:ok, appearance} <- appearance(Map.get(args, "appearance")) do
+    with {:ok, %{entry: entry, variation: variation, width: width, appearance: appearance}} <- arguments(args),
+         :ok <- required(entry) do
       launch = %{"api_fixtures" => @fixtures, "environment" => "fixture", "appearance" => appearance}
       dark = if appearance == "dark", do: ["--dark"], else: []
       {:ok, launch, ["--open", entry] ++ flag("--variation", variation) ++ flag("--width", width) ++ dark}
@@ -109,12 +114,14 @@ defmodule SymphonyElixir.QaDriver.Gallery do
 
   @doc """
   Draws one entry (`--shot`) and saves each picture in `qa-evidence/` under the gallery's file
-  name. A screen needs a `variation`.
+  name: in `appearance` alone when it names one, else light and dark, and a screen at `width`
+  alone when it names one, else at laptop and desktop widths. A screen needs a `variation`.
   """
   @spec shoot(map(), Path.t(), arguments()) :: {:ok, map()} | tool_error()
-  def shoot(config, gallery, %{entry: entry, variation: variation, width: width}) do
+  def shoot(config, gallery, %{entry: entry, variation: variation, width: width} = arguments) do
     out = Path.join(config.host_dir, "gallery-shots-#{System.unique_integer([:positive])}")
-    args = ["--shot", entry] ++ flag("--variation", variation) ++ flag("--width", width) ++ ["--out", out]
+    appearance = Map.get(arguments, :appearance)
+    args = ["--shot", entry] ++ flag("--variation", variation) ++ flag("--width", width) ++ flag("--appearance", appearance) ++ ["--out", out]
 
     with {:ok, %{"entries" => entries}} <- entries(config, gallery),
          :ok <- screen_variation(entries, entry, variation),

@@ -330,7 +330,6 @@ defmodule SymphonyElixir.ConfigPhasesTest do
                {"launch", "machine"},
                {"walk", "orchestrated"},
                {"design_check", "orchestrated"},
-               {"wide_pass", "orchestrated"},
                {"quit", "machine"},
                {"attach", "machine"},
                {"review", "orchestrated"}
@@ -351,7 +350,7 @@ defmodule SymphonyElixir.ConfigPhasesTest do
       assert {:ok, system} = parse(%{"qa" => %{"stepped" => true}})
       assert Phases.qa_stepped?(system.phases)
       assert Phases.steps(system.phases, :qa) == []
-      assert length(Phases.qa_steps(system.phases, "macos_app")) == 10
+      assert length(Phases.qa_steps(system.phases, "macos_app")) == 9
     end
 
     test "a playbook's list replaces its default, and an orchestrated step with no prompt takes Symphony's own" do
@@ -369,6 +368,22 @@ defmodule SymphonyElixir.ConfigPhasesTest do
       assert [%Step{id: "build"}, %Step{id: "walk", prompt: walk_prompt}, %Step{id: "review", prompt: "Judge it."}] = Phases.qa_steps(system.phases, "macos_app")
       assert walk_prompt =~ "You walk one step"
       assert [%Step{id: "code"}, %Step{id: "review"}] = Phases.qa_steps(system.phases, "cli")
+    end
+
+    test "a list written before the wide pass was retired still loads, without it" do
+      list = [
+        %{"id" => "walk", "mode" => "orchestrated", "repeat" => "walkthrough"},
+        %{"id" => "wide_pass", "mode" => "orchestrated"},
+        %{"id" => "review", "mode" => "orchestrated", "prompt" => "Judge it."}
+      ]
+
+      assert {:ok, system} = parse(%{"qa" => %{"stepped" => true, "playbooks" => %{"macos_app" => %{"steps" => list}}}})
+      assert Enum.map(Phases.qa_steps(system.phases, "macos_app"), & &1.id) == ["walk", "review"]
+
+      # A step of that id with a prompt of its own is the repo's, and stays.
+      own = List.replace_at(list, 1, %{"id" => "wide_pass", "mode" => "orchestrated", "prompt" => "Run it wide."})
+      assert {:ok, system} = parse(%{"qa" => %{"stepped" => true, "playbooks" => %{"macos_app" => %{"steps" => own}}}})
+      assert Enum.map(Phases.qa_steps(system.phases, "macos_app"), & &1.id) == ["walk", "wide_pass", "review"]
     end
 
     test "a bad playbook list is refused, naming its key" do

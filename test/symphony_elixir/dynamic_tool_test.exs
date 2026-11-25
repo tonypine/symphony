@@ -999,7 +999,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
             {"qa_build_release_pair", %{}},
             {"qa_relaunched_app", %{"wait_seconds" => 30}},
             {"qa_update_feed", %{"mode" => "none"}},
-            {"qa_gallery", %{"entry" => "home", "variation" => "home-busy", "width" => "laptop"}},
+            {"qa_gallery", %{"entry" => "home", "variation" => "home-busy", "width" => "laptop", "appearance" => "light"}},
             {"qa_gallery_open", %{"entry" => "home", "variation" => "home-busy", "width" => "laptop", "appearance" => "dark"}}
           ] do
         response = DynamicTool.execute(tool, args, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
@@ -1009,7 +1009,8 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       for {tool, args} <- [
             {"qa_build_release_pair", %{"out" => "/tmp"}},
             {"qa_update_feed", %{"port" => 1}},
-            {"qa_gallery", %{"appearance" => "dark"}},
+            {"qa_gallery", %{"out" => "/tmp"}},
+            {"qa_resize_window", %{"pid" => 1, "pass" => "wide"}},
             {"qa_gallery_open", %{"entry" => "home", "out" => "/tmp"}}
           ] do
         response = DynamicTool.execute(tool, args, issue: %Issue{id: "issue-current"}, tool_scope: :qa)

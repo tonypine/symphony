@@ -16,8 +16,8 @@ defmodule SymphonyElixir.QaVerification do
       `SymphonyElixir.QaPolicy`) -> `Merging` with the reason in the report, only when the pass built,
       launched and checked the app; otherwise `inconclusive`
     * `fail` -> `Rework`, with the report on the ticket for the next run
-    * `inconclusive` (the QA run's own omission, such as a pass that claimed screens but ran no wide
-      pass) -> rerun once on the same change, then a Needs Decision hold in `QA`; never the self-heal
+    * `inconclusive` (the QA run's own omission, such as a pass that claimed screens but never
+      sized the window to the QA target) -> rerun once on the same change, then a Needs Decision hold in `QA`; never the self-heal
       lane, since nothing in the environment is broken
     * skip (the deterministic docs-only/internal-only rule, `SymphonyElixir.QaPolicy`) -> `Merging`
     * no open pull request, or a PR whose diff GitHub reports empty -> a Needs Decision hold in `QA`
@@ -540,7 +540,7 @@ defmodule SymphonyElixir.QaVerification do
   end
 
   # A block that names its own cause is that block, whatever its steps say: a person to ask (an
-  # access case, or a wide pass a small QA screen limited, `QaAgent`), the open ticket that already
+  # access case, or a pass a QA screen too small for the target window limited, `QaAgent`), the open ticket that already
   # covers it, a QA tool's own failure, or the project's server a pass that runs it lacked.
   defp own_block?(%{verdict: :blocked} = outcome) do
     needs_person?(outcome) or Map.get(outcome, :needs_dev_server) == true or is_binary(Map.get(outcome, :covered_by)) or
@@ -624,8 +624,8 @@ defmodule SymphonyElixir.QaVerification do
   end
 
   # An inconclusive pass is the QA run's own omission, not a fault of its environment: it ran but did
-  # not reach a verdict it could ground (a pass that claimed screens but ran no wide pass, a
-  # `scope: none` pass that never started the app). Nothing is broken for the self-heal lane to
+  # not reach a verdict it could ground (a pass that claimed screens but never sized the window to
+  # the QA target, a `scope: none` pass that never started the app). Nothing is broken for the self-heal lane to
   # repair, so it never goes there: the Conductor's turn routes it first (`conduct/3`), and without a
   # route the pass reruns once on the same change, like an inconclusive Code Review, then asks a
   # person on a Needs Decision hold. A head CI rejects is the PR watcher's first.

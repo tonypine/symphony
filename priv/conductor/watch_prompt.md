@@ -174,8 +174,8 @@ Pick from:
 A question you ask (`ask_person`) is drawn by Symphony as a block of its own; do not pick one for it.
 
 A step's `outcome`, in the facts and in a `steps` block, is its one word: `passed`, `failed`,
-`blocked` or `skipped` (or `paused` on a question). A QA check step (a walk, a design check, the
-wide pass, a recheck) has the word of what it judged: `failed` when it judged the change failed,
+`blocked` or `skipped` (or `paused` on a question). A QA check step (a walk, a design check or
+a recheck) has the word of what it judged: `failed` when it judged the change failed,
 `blocked` when it could not check. That word is the step's state; there is nothing to reconcile.
 
 `live.failed_step`, when present, is the newest step that ended failed: its `step_id`, `title`, its

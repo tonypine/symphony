@@ -25,7 +25,7 @@
 //
 // `ax-set-value` types into a text field the way a person does (see
 // `enterText`), and sets `AXValue` directly only on other controls.
-// `ax-resize` sizes a window for the playbook's wide pass (see `resizeWindow`)
+// `ax-resize` sizes a window to the playbook's QA target or another size (see `resizeWindow`)
 // and `ax-ping` tells a hung app from a busy one; both use the Accessibility
 // grant like the other `ax-` commands. `ax-select` selects a table or outline
 // row, which answers no AXPress, `key` sends key events to the app's PID alone
@@ -495,7 +495,7 @@ func enterText(_ app: AXUIElement, _ pid: pid_t, _ element: AXUIElement, role: S
     emit(["ok": true, "typed": true, "element": describe(element, path: path)])
 }
 
-// -- wide pass --------------------------------------------------------------------
+// -- window sizes -----------------------------------------------------------------
 
 // An app counts as hung when it leaves an accessibility request unanswered this long.
 let hangTimeout: Float = 10

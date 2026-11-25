@@ -5,7 +5,7 @@ defmodule SymphonyElixir.QaAgent.StepPayload do
   fields and never a wall of text. Every text is bounded and cut, never refused
   (`SymphonyElixir.TicketEvents.Types`):
 
-    * `result/1`: `%{status, expected, actual}` of a check step (walk, design check, wide pass,
+    * `result/1`: `%{status, expected, actual}` of a check step (walk, design check,
       recheck);
     * `results/1`: one `%{step, status, expected, actual}` per walkthrough step of a walk or recheck
       step that judged several in one session;

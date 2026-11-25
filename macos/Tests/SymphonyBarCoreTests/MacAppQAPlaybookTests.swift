@@ -119,31 +119,39 @@ final class MacAppQAPlaybookTests: XCTestCase {
         XCTAssertEqual(try MacAppQAPlaybook.updating(config, from: configPlaybook, to: configPlaybook), config)
     }
 
-    func testReadsAndWritesTheWindowSizes() throws {
+    func testReadsAndWritesTheQATarget() throws {
         let defaults = MacAppQAPlaybook()
-        XCTAssertEqual([defaults.windowWidth, defaults.windowHeight, defaults.widePassWidth, defaults.widePassHeight], [1366, 768, 2560, 1440])
-        let yaml = "auto_review:\n  playbooks:\n    macos_app:\n      window_width: 1_440\n      window_height: ~\n"
+        XCTAssertEqual([defaults.windowWidth, defaults.windowHeight], [2560, 1440])
+        XCTAssertEqual(defaults.appearance, "dark")
+        let yaml = "auto_review:\n  playbooks:\n    macos_app:\n      window_width: 1_440\n      window_height: ~\n      appearance: null\n"
         let read = try MacAppQAPlaybook.values(in: yaml)
         XCTAssertEqual(read, MacAppQAPlaybook(windowWidth: 1440))
 
         var new = read
         new.windowHeight = 900
-        new.widePassWidth = 3008
-        new.widePassHeight = 1692
+        new.appearance = "light"
         let updated = try MacAppQAPlaybook.updating(yaml, from: read, to: new)
         XCTAssertEqual(
             updated,
-            "auto_review:\n  playbooks:\n    macos_app:\n      wide_pass_width: 3008\n      wide_pass_height: 1692\n"
-                + "      window_width: 1_440\n      window_height: 900\n"
+            "auto_review:\n  playbooks:\n    macos_app:\n      window_width: 1_440\n      window_height: 900\n      appearance: light\n"
         )
         XCTAssertEqual(try MacAppQAPlaybook.values(in: updated), new)
         XCTAssertEqual(
-            try MacAppQAPlaybook.updating("", from: MacAppQAPlaybook(), to: MacAppQAPlaybook(windowWidth: 1280, widePassHeight: 1600)),
-            "auto_review:\n  playbooks:\n    macos_app:\n      window_width: 1280\n      wide_pass_height: 1600\n"
+            try MacAppQAPlaybook.updating("", from: MacAppQAPlaybook(), to: MacAppQAPlaybook(windowWidth: 1280, appearance: "light")),
+            "auto_review:\n  playbooks:\n    macos_app:\n      window_width: 1280\n      appearance: light\n"
         )
-        let unreadable = "auto_review:\n  playbooks:\n    macos_app:\n      wide_pass_width: big\n"
-        XCTAssertThrowsError(try MacAppQAPlaybook.values(in: unreadable)) { error in
-            XCTAssertEqual(error as? MacAppQAPlaybookError, .unreadable(key: "wide_pass_width", value: "big"))
+        for (value, appearance) in [("light", "light"), ("dark", "dark"), ("\"light\"", "light"), ("'dark'", "dark")] {
+            let quoted = "auto_review:\n  playbooks:\n    macos_app:\n      appearance: \(value)\n"
+            XCTAssertEqual(try MacAppQAPlaybook.values(in: quoted).appearance, appearance, value)
+        }
+        for (yaml, expected) in [
+            ("auto_review:\n  playbooks:\n    macos_app:\n      window_width: big\n", MacAppQAPlaybookError.unreadable(key: "window_width", value: "big")),
+            ("auto_review:\n  playbooks:\n    macos_app:\n      appearance: dim\n", .unreadable(key: "appearance", value: "dim")),
+            ("auto_review:\n  playbooks:\n    macos_app:\n      appearance: Dark\n", .unreadable(key: "appearance", value: "Dark")),
+        ] {
+            XCTAssertThrowsError(try MacAppQAPlaybook.values(in: yaml), yaml) { error in
+                XCTAssertEqual(error as? MacAppQAPlaybookError, expected, yaml)
+            }
         }
     }
 

@@ -101,6 +101,20 @@ defmodule SymphonyElixir.Config.Migration do
       ticket: "TP-1616",
       release: "0.0.1.1072",
       why: "spare slots go to the sub-tickets of started tickets first, with no lanes reserved"
+    }),
+    Map.merge(@rename_defaults, %{
+      key: "auto_review.playbooks.macos_app.wide_pass_width",
+      to: nil,
+      ticket: "TP-1595",
+      release: "0.0.1.1111",
+      why: "QA checks the app at its target window (window_width and window_height), with no separate wide pass"
+    }),
+    Map.merge(@rename_defaults, %{
+      key: "auto_review.playbooks.macos_app.wide_pass_height",
+      to: nil,
+      ticket: "TP-1595",
+      release: "0.0.1.1111",
+      why: "QA checks the app at its target window (window_width and window_height), with no separate wide pass"
     })
   ]
 

@@ -16,8 +16,10 @@
 //   SymphonyGallery --entries             the entries, as JSON: id, title, kind, variations, the files each shows
 //   SymphonyGallery --affected            the entries a change is a reason to look at, as JSON; the changed files'
 //                                         repository paths come one per line on standard input
-//   SymphonyGallery --shot <entry> [--variation <name>] [--width laptop|desktop|<points>] --out <dir>
-//                                         draws the entry to files, without a window. A component: its board, as
+//   SymphonyGallery --shot <entry> [--variation <name>] [--width laptop|desktop|<points>] [--appearance light|dark]
+//                      --out <dir>
+//                                         draws the entry to files, without a window, in both appearances or only
+//                                         the named one (same file names). A component: its board, as
 //                                         `<dir>/<entry>-<n>-<light|dark>.png`, one picture or a few when it is tall.
 //                                         A screen: each variation, or the named one, as
 //                                         `<dir>/<variation>-<laptop|desktop|points>-<light|dark>.png`, at both
@@ -148,7 +150,19 @@ func runGallery() {
     }
     if let id = value(after: "--shot") {
         guard let out = value(after: "--out") else { fatalError("--shot needs --out <dir>") }
-        shoot(entry(id), only: value(after: "--variation").map { variation($0, of: entry(id)).id }, width: width, into: URL(fileURLWithPath: out))
+        let appearance = value(after: "--appearance").map { word -> ColorScheme in
+            switch word {
+            case "light": return .light
+            case "dark": return .dark
+            default:
+                FileHandle.standardError.write("--appearance takes light or dark, not \(word)\n".data(using: .utf8)!)
+                exit(2)
+            }
+        }
+        shoot(
+            entry(id), only: value(after: "--variation").map { variation($0, of: entry(id)).id }, width: width,
+            appearance: appearance, into: URL(fileURLWithPath: out)
+        )
         return
     }
     let first = value(after: "--open").map { entry($0).id }
@@ -289,14 +303,14 @@ private func write(_ view: some View, scheme: ColorScheme, scale: CGFloat, to ur
     print(url.path)
 }
 
-/// Draws the entry to files: still, in light and in dark. A component's board is drawn at twice its size, and cut
-/// between cells into a few pictures when it is taller than a picture is worth reading. A screen's variations are
-/// drawn one to a picture (`only`: that one), each at its true size: one that follows its window's width at `width`,
-/// or at the laptop's and at the desktop's.
+/// Draws the entry to files: still, in light and in dark, or only in `appearance` when it is given. A component's
+/// board is drawn at twice its size, and cut between cells into a few pictures when it is taller than a picture is
+/// worth reading. A screen's variations are drawn one to a picture (`only`: that one), each at its true size: one that
+/// follows its window's width at `width`, or at the laptop's and at the desktop's.
 @MainActor
-func shoot(_ entry: GalleryEntry, only: String? = nil, width: CGFloat? = nil, into folder: URL) {
+func shoot(_ entry: GalleryEntry, only: String? = nil, width: CGFloat? = nil, appearance: ColorScheme? = nil, into folder: URL) {
     try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-    let schemes = [(ColorScheme.light, "light"), (ColorScheme.dark, "dark")]
+    let schemes = [(ColorScheme.light, "light"), (ColorScheme.dark, "dark")].filter { appearance == nil || $0.0 == appearance }
     let own = variations(of: entry).filter { only == nil || $0.id == only }
     if entry.kind == .screen {
         for variation in own {

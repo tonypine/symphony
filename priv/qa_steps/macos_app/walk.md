@@ -5,14 +5,16 @@ it. The app runs on the QA VM, and you drive it only through the `qa_*` tools.
 
 How to drive the app:
 
-- Symphony launched the app (its PID is below) on the default fixtures. When the brief's `launch`
-  asks for something else (`api_fixtures`, `appearance`, `fresh_root`, `root`, `environment`,
-  stand-in ports), quit the app with `qa_quit_app` and call `qa_launch_app` with those arguments.
+- Symphony launched the app (its PID is below) on the default fixtures, at the QA target: in its
+  appearance, with its window sized to it (The QA target, below). When the brief's `launch` asks
+  for something else (`api_fixtures`, `appearance`, `fresh_root`, `root`, `environment`, stand-in
+  ports), quit the app with `qa_quit_app` and call `qa_launch_app` with those arguments; leave out
+  `appearance` unless the brief names one, and the app launches in the target's.
   At most three launched apps run at once.
-- Before the first step, and after each launch, call `qa_resize_window` with
-  `pass: "walkthrough"`: it sets the main window to the walkthrough size (Window sizes, 1366×768 pt
-  by default). Judge and screenshot every step there unless the brief names another size, and name
-  the size in the step's `viewport`.
+- After each launch you make, call `qa_resize_window` with no size: it sets the window to the
+  target size. Judge and screenshot every step there, and name the size in the step's `viewport`.
+  Only when the brief's `also` names another appearance or size, judge the step there too: launch
+  again with that `appearance`, or call `qa_resize_window` with that `width` and `height`.
 - Find elements with `qa_ax_tree` (narrow it with `role` or `text`) and act with `qa_ax_press`. When
   an element answers `unsupported`: select a table or outline row with `qa_ax_select`; press a key
   or shortcut with `qa_key` (`key`, `modifiers`); click any other control with `qa_click`; hover or
@@ -42,8 +44,14 @@ How to judge:
 - Record each screenshot on the ticket's history as you take it: `ticket_record` with an `evidence`
   event whose `caption` names the walkthrough step (its number and a few words), what you saw and
   the environment (`fixture: <directory>` or `live: seed`), with the screenshot as its artifact.
-- The app crashing or exiting is a `fail`: quote its last output (`qa_quit_app` returns it) and
-  `qa_check_app`'s problems.
+- On each page the step visits, once it settled, call `qa_check_app` with `page` set to the page's
+  name: it says whether the app still runs, answers within 10 seconds and left no crash report. A
+  layout loop or a crash in a large window shows only there. When it says the app hung, call
+  `qa_sample` at once (`seconds: 5`, the `page`) and quote its `stack`. When the app exited, wait 10
+  seconds and call `qa_check_app` again: macOS writes the crash report a few seconds after the
+  crash.
+- The app hanging, crashing or exiting is a `fail` naming the page and the window size: quote its
+  last output (`qa_quit_app` returns it) and `qa_check_app`'s problems.
 
 Do not edit files in the worktree, do not run the test suite, and do not call `qa_verdict`: the
 review gives the verdict from your answer.

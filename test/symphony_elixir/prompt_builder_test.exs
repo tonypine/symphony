@@ -889,7 +889,7 @@ defmodule SymphonyElixir.PromptBuilderTest do
     assert prompt =~ "### Visual work"
     assert flat =~ "Apply this whenever a ticket adds or changes a screen or pane."
     assert flat =~ "Viewports are inputs to any layout change; the repo's `WORKFLOW.md` names them with a goal each"
-    assert flat =~ "Where a repo names none, the QA walkthrough size (1366×768 pt) is the functional viewport."
+    assert flat =~ "Where a repo names none, the macOS app's QA target window (2560×1440 pt by default) is the functional viewport."
     assert flat =~ "Design before code, recorded in the workpad under `### Design`"
     assert flat =~ "3. Responsiveness pass, answered in writing: Is horizontal scroll needed, and where?"
     assert flat =~ "5. Accessibility pass: AX labels on every control; contrast per the repo's design system."

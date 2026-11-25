@@ -15,10 +15,10 @@ worktree's configured app and on apps you launched:
   pointing at the copy (returned as `api_fixtures`). The directory may hold only regular files,
   at most 5 MB, inside the checkout. Optional stand-ins, see "Stand-ins for GitHub, Linear, updates
   and the folder picker" below: `gh_stub_port`, `linear_stub_port`, `open_panel_dir`,
-  `update_feed_port`, `update_check_interval_seconds`. Pass `appearance` (`light` or `dark`) to
-  draw the app in that appearance whatever the host's, for any AppKit app (Symphony injects a
-  library that sets the app's appearance); without it the app follows the host. See
-  "Light and dark, and the status-bar menu" below. It also returns the app's QA `root`: every
+  `update_feed_port`, `update_check_interval_seconds`. The app draws in the QA target's
+  appearance (dark by default) whatever the host's, for any AppKit app (Symphony injects a library
+  that sets the app's appearance); pass `appearance` (`light` or `dark`) only when the ticket is
+  about another one. See "Design check: the QA target, and the status-bar menu" below. It also returns the app's QA `root`: every
   launch shares root 1 and its settings unless you pass `fresh_root: true` (a new, empty root) or
   `root` (one an earlier launch returned). See "QA roots: a first launch, a reset, a clean state"
   below. When the pass runs a live server, `environment` (`live` or `fixture`) picks which one the
@@ -89,11 +89,10 @@ worktree's configured app and on apps you launched:
   or covered.
 - `qa_resize_window`: moves the app's main window (or the `AXWindow` at `path`) to the top left
   of the screen and resizes it to `width`×`height` points, or the screen's usable area when that
-  is smaller. `pass: "walkthrough"` sets the walkthrough size (the Window sizes section names it,
-  1366×768 by default); `pass: "wide"`, the default, runs the wide pass at the wide pass size
-  (2560×1440 by default), and takes no smaller size. It returns the window's new frame in `window`
-  (`x`, `y`, `w`, `h`), the `screen` size, its `visible` (usable) area, and for the wide pass
-  `limited: true` when the screen is under the wide pass size.
+  is smaller. Without a size it sets the QA target window (The QA target section names it,
+  2560×1440 by default); pass `width` and `height` only when the ticket is about another size. It
+  returns the window's new frame in `window` (`x`, `y`, `w`, `h`), the `screen` size, its `visible`
+  (usable) area, `target`, and for the target `limited: true` when the screen is under it.
 - `qa_check_app`: says whether the app is still `running`, `responding` (it answered an
   accessibility request within 10 seconds; a hung app does not) and has written no new crash
   report since launch (`crash_reports`, from `~/Library/Logs/DiagnosticReports` on the machine
@@ -164,7 +163,7 @@ When the prompt has a "Live server" section, Symphony also runs the project's ow
 QA VM beside the app, over seeded data, and every launch reaches it unless you pass
 `environment: "fixture"`. Choose per step, by what the step proves:
 
-- **How the app draws a state** (a layout, a label, a colour, light and dark): the fixtures. They
+- **How the app draws a state** (a layout, a label, a colour, an appearance): the fixtures. They
   give the exact state the step names, and nothing changes under you.
 - **A round trip through the server** (press a button, then see what the app shows after it: an
   Inbox row that goes on Decide and comes back on Undo, a repository that stops starting tickets
@@ -244,6 +243,9 @@ GitHub or Linear in QA:
     `--current 0.0.1.0 0`).
   - The log has one JSON line per request (`method`, `path`, `status`, `time`). Quote the app's
     requests from it in the step's `details`. `test/support/README.md` lists every option.
+- **Sizes and appearances in the entries below:** each was its own ticket's. A pass judges the QA
+  target (one appearance, one window size) and another appearance or size only when its own ticket
+  is about it, whatever an entry below names.
 - **Update fixtures:** for an update's state in the Symphony window, pass a committed fixture as
   `api_fixtures`, never one you build under `qa-evidence/`.
   `macos/Tests/Fixtures/director-app/update-paused` has dispatch paused for an update to v9.9.9
@@ -699,37 +701,41 @@ GitHub or Linear in QA:
     every page, and nothing is clipped.
 
 QA does three things, in this order: (a) the walkthrough steps marked `Proved by: QA` (no test
-can drive them), steps 1 to 7 below; (b) the `Design check` of every UI deliverable, by sight, in
-light and dark (step 8); (c) the wide pass (step 9).
+can drive them), steps 1 to 7 below, with a health check on every page they visit; (b) the
+`Design check` of every UI deliverable, by sight (step 8); (c) nothing more: all of it at the QA
+target.
 
-Design check: light and dark, and the status-bar menu. The accessibility tree proves a control is
+Design check: the QA target, and the status-bar menu. The accessibility tree proves a control is
 there; only a screenshot shows whether it looks like the design. Judge every window, sheet, panel
-and menu the ticket adds or changes by sight in both appearances. The host's appearance is never
-switched; launch the app once per appearance instead:
+and menu the ticket adds or changes by sight, in the QA target's appearance at its window size.
+Judge another appearance or size only when the ticket is about it: its ask or plan names light
+mode (or the other appearance), a small window or a specific size, or the change is to how the app
+adapts to its appearance or window size. The host's appearance is never switched; a launch draws
+the app in one appearance:
 
-- **Dark:** `qa_launch_app` with `appearance: "dark"` (plus the walkthrough's `api_fixtures` and
-  stand-ins). Open the windows the ticket changes and set each to the walkthrough size with
-  `qa_resize_window` and `pass: "walkthrough"` (and the window's `path` when it is not the main
-  window). When the design names another size for one, pass it as `width` and `height`, and give
-  both sizes in the step. Let each settle (step 4
-  below) and `qa_screenshot` it, named with the appearance (for example `overview-dark`).
+- **The target:** `qa_launch_app` (plus the walkthrough's `api_fixtures` and stand-ins) draws the
+  app in the target's appearance. Open the windows the ticket changes and set each to the target
+  size with `qa_resize_window` and no size (and the window's `path` when it is not the main
+  window). Let each settle (step 4 below) and `qa_screenshot` it, named with the appearance (for
+  example `overview-dark`).
 - **Status-bar menu:** when the ticket changes the status-bar menu, or a step reads it:
   `qa_open_status_menu`, then `qa_screenshot` with the `window_id` it returned (for example
   `status-menu-dark`), then `qa_key` with `key: "escape"` to close it. Judge the menu from that
   screenshot, not only from the tree: read its items from `qa_ax_tree` when a step needs their
   titles, but how it looks is in the screenshot.
-- **Light:** `qa_quit_app`, then do the same with `appearance: "light"` (`overview-light`,
-  `status-menu-light`). At most three launched apps run at once, so quit each before the next.
+- **Another appearance or size, when the ticket is about it:** `qa_quit_app`, then do the same with
+  that `appearance` (`overview-light`, `status-menu-light`), or resize to that `width` and
+  `height`, and give both in the step. At most three launched apps run at once, so quit each before
+  the next.
 - **When the app ignores it:** the library prints `symphony-qa-appearance: dark` (or `light`) to
   the app's output once it has set the appearance, and `qa_quit_app` returns that output. When a
   screenshot is in the wrong appearance and that line is missing, the app's build refuses injected
   libraries (the hardened runtime): mark the `Design check` `blocked`, quoting the output, and say
   so in `findings`.
-- **Judge** each pair side by side with the deliverable's design: the ticket's or the parent's
+- **Judge** each screenshot side by side with the deliverable's design: the ticket's or the parent's
   Screens (named under "Design" above), then `docs/design/design-system.md`. Compare layout,
   spacing, alignment, truncation, contrast, symbols (SF Symbols, icons), wording, and whether it
-  looks finished: text and icons stay readable, nothing keeps a light-only or dark-only colour,
-  nothing is clipped or placeholder. When no Screens cover the deliverable, judge it against the
+  looks finished: text and icons stay readable, nothing is clipped or placeholder. When no Screens cover the deliverable, judge it against the
   design system alone. When `qa_open_status_menu` fails with `qa_status_menu_not_opened`, call
   `qa_check_app`; a menu that never opens on a healthy app is a failing step, quoted with the
   tool's message.
@@ -845,9 +851,19 @@ anyway: Symphony's tool does it, or it is host setup. Where it can't be installe
    API from those files instead of a running Symphony. When the walkthrough checks what the app
    sent or read (`api-requests.jsonl`, `api-reads.jsonl`), call `qa_api_requests` after the
    action and judge its `requests`.
-   Once the window shows, and after every later launch, call `qa_resize_window` with
-   `pass: "walkthrough"`: every step, screenshot and design check runs at the walkthrough size
-   unless the step itself names another. Name that size in each step's `viewport`.
+   Once the window shows, and after every later launch, call `qa_resize_window` with no size:
+   every step, screenshot and design check runs at the QA target size unless the ticket is about
+   another. Name that size in each step's `viewport`. On every page a step visits, once it
+   settled, call `qa_check_app` with `page` set to the page's name (for example `Decide` or
+   `Decide + inspector`): a layout loop or a constraint crash in a large window shows there. A
+   page where it is not `healthy` (the app exited, it hung, or it wrote a new crash report) fails
+   the step: quote its `problems`, which name the page and the window size, and list each one in
+   `findings`. When the app exits, wait 10 seconds and call `qa_check_app` once more, because
+   macOS writes the crash report a few seconds after the crash. When `qa_resize_window` returns
+   `limited: true`, the QA screen is under the target size: still walk at the size you got, say so
+   with the screen size and the size it needs, and mark the step `blocked`. Symphony reports a pass
+   the QA screen limited as `blocked` either way, so a person enlarges the QA screen, and reports a
+   pass that judged screens with no `qa_resize_window` call as `inconclusive`, and runs QA again.
 3. Open each window the ticket's walkthrough and acceptance criteria touch (menu items,
    buttons, Settings), using `qa_ax_tree` to find elements and `qa_ax_press` to act. When an
    element answers `qa_ax_press` with `unsupported`:
@@ -899,38 +915,16 @@ anyway: Symphony's tool does it, or it is host setup. Where it can't be installe
      `symphony-qa/no-tools` (no tools, so the Models picker leaves it out).
    Judge the walkthrough's OpenRouter steps with these, `pass` or `fail`. Checks with a real key
    are manual and not part of QA.
-8. **Design check.** Run the light and dark launches above for every UI deliverable and report
-   one step per deliverable named `Design check: <deliverable>` (for example
-   `Design check: status-bar menu`). Put both screenshots in its `evidence`, and in `details` name
-   the design it compared with (the Screens document or HTML screen, and the screen in it, or
-   "the design system alone: no Screens cover it") and the size it judged. `pass` when both
-   screenshots match the design; `fail` when either visibly differs, naming what differs.
-9. **Wide pass.** Layout bugs that only show in wide windows (a layout loop, a constraint
-   crash) never appear at the walkthrough size, so after the walkthrough run the app wide:
-   - call `qa_resize_window` with `pass: "wide"` for the app's main window. When the main window
-     is not the one the PR changes (a Settings window, a panel), pass that window's `path`. Leave
-     out the size: the window fills a screen of the wide pass size (2560×1440 by default). Pass a
-     size only when the ticket names a larger one;
-   - with the window at that size, open each page or view the PR changes (the main page when it
-     changes none), and on each one the inspector or side panel where the page has one;
-   - on each of them, wait 30 seconds with the app running (`sleep 30` in your shell), then call
-     `qa_check_app` with `page` set to the page's name (for example `Decide` or
-     `Decide + inspector`), and take a `qa_screenshot`.
-   Report one step named `Wide pass` with: the window size `qa_resize_window` reached, the
-   screen size it reports, and every page and panel you opened with its `qa_check_app` result.
-   The step fails when `qa_check_app` is not `healthy` on any of them (the app exited, it hung,
-   or it wrote a new crash report): quote its `problems`, which name the page and the window
-   size, and list each one in `findings`. When the app exits, wait 10 seconds and call
-   `qa_check_app` once more, because macOS writes the crash report a few seconds after the
-   crash. When `qa_resize_window` returns `limited: true`, the QA screen is under the wide pass
-   size: still run it at the size you got, say in the step that the wide pass was limited with
-   the screen size and the size it needs, and mark the step `blocked`. Symphony reports a pass whose wide pass
-   was limited as `blocked` either way, so a person enlarges the QA screen, and reports a pass
-   with no `qa_resize_window` call as `inconclusive`, because its wide pass did not run, and runs
-   QA again. In an epic review that launches no app, because the epic changed none, there is no
-   wide pass to run. Outside an epic review, a change with nothing on screen to judge owes no wide
-   pass either: build the app, launch it, call `qa_check_app`, and answer `pass` with
-   `"scope": "none"` and the reason.
+8. **Design check.** Run the target launch above for every UI deliverable and report one step per
+   deliverable named `Design check: <deliverable>` (for example `Design check: status-bar menu`).
+   Put its screenshots in its `evidence`, and in `details` name the design it compared with (the
+   Screens document or HTML screen, and the screen in it, or "the design system alone: no Screens
+   cover it") and the appearance and size it judged. `pass` when the screenshots match the design;
+   `fail` when one visibly differs, naming what differs.
+9. **Nothing on screen to judge.** In an epic review that launches no app, because the epic
+   changed none, there is no window to size. Outside an epic review, a change with nothing on
+   screen to judge owes no target resize either: build the app, launch it, call `qa_check_app`,
+   and answer `pass` with `"scope": "none"` and the reason.
 10. Run `qa_quit_app` when you are done. It returns what the app wrote to its output; quote
    the lines that bear on a step in that step's `details`.
 11. Attach the screenshots that show each step's result with `linear_attach_file`
@@ -938,7 +932,7 @@ anyway: Symphony's tool does it, or it is host setup. Where it can't be installe
 
 Verdicts for this playbook:
 
-- A `Design check` whose light or dark screenshot visibly differs from the design (a misaligned
+- A `Design check` whose screenshot visibly differs from the design (a misaligned
   or clipped control, wrong spacing, unreadable contrast, a wrong symbol or wording, an unfinished
   look) is a failing step, even when the tree shows every control: in `details` and `findings`
   name what differs from which screen of the design, and attach the screenshot that shows it.
@@ -959,5 +953,5 @@ Verdicts for this playbook:
   quote the `stack` it returned (the frames from the app's own code down to where the main thread
   waits or spins) and the page, and attach the report it saved with `linear_attach_file`. When
   `qa_sample` answers `qa_no_app`, the app exited: report it as below.
-- The app crashing or exiting (`qa_app_exited`) during the walkthrough or the wide pass is a
-  failing step; quote its last output and the `qa_check_app` problems.
+- The app hanging, crashing or exiting (`qa_app_exited`) during the walkthrough or the design
+  check is a failing step naming the page and the window size; quote its last output and the `qa_check_app` problems.

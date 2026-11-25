@@ -8,9 +8,9 @@ defmodule SymphonyElixir.Setup.Checks.QaHost do
     * a `worker_host` that is this Mac under another name (`localhost`, its `.local` name, a LAN
       address): the hardware compare of `SymphonyElixir.QaDriver.Machine` reads the same
       `IOPlatformUUID` over SSH as here, and every pass refuses it;
-    * a QA VM whose screen, in points, is under the wide pass size its repos' `macos_app`
-      playbooks need (`wide_pass_width`×`wide_pass_height`, 2560×1440 by default): every wide pass
-      there is limited and its `pass` comes back `blocked`. The size is the main display's, as
+    * a QA VM whose screen, in points, is under the QA target window its repos' `macos_app`
+      playbooks need (`window_width`×`window_height`, 2560×1440 by default): every pass there is
+      limited and its `pass` comes back `blocked`. The size is the main display's, as
       `system_profiler SPDisplaysDataType` reports what it looks like, so a Retina mode of a
       2560×1440 display reads 1280×720. The problem names the `tart set` command that fixes it.
 
@@ -45,7 +45,7 @@ defmodule SymphonyElixir.Setup.Checks.QaHost do
           {:ok, settings} <- [Config.settings_for_repo(repo.name)],
           playbook = Enum.find(Selection.playbooks(settings.auto_review), &(Map.get(&1, :kind) == "macos_app")),
           playbook != nil,
-          do: {repo.name, settings.auto_review.worker_host, Map.get(playbook, :wide_pass_size) || PlaybookSettings.default_wide_pass_size()}
+          do: {repo.name, settings.auto_review.worker_host, Map.get(playbook, :window_size) || PlaybookSettings.default_window_size()}
 
     {missing, hosted} = Enum.split_with(uses, fn {_repo, worker_host, _size} -> is_nil(worker_host) end)
 
@@ -130,10 +130,10 @@ defmodule SymphonyElixir.Setup.Checks.QaHost do
           id: "#{id()}:small_screen:#{worker_host}",
           severity: :error,
           category: :runtime,
-          title: "The QA VM's screen is too small for the wide pass",
+          title: "The QA VM's screen is too small for the QA target window",
           consequence:
-            "The QA host #{worker_host} has a #{size(screen)} screen, under the #{size(needed)} the wide pass of " <>
-              "#{Enum.join(repos, ", ")} fills, so every wide pass there is limited and a QA pass that passes comes back blocked. " <>
+            "The QA host #{worker_host} has a #{size(screen)} screen, under the #{size(needed)} QA target window of " <>
+              "#{Enum.join(repos, ", ")}, so every QA pass there is limited and a QA pass that passes comes back blocked. " <>
               "On the Mac that runs the VM, run #{command} with the VM stopped, then start it again.",
           repos: repos,
           details: [Host: worker_host, Screen: size(screen), Needs: size(needed), Fix: command],
