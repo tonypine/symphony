@@ -113,8 +113,10 @@ defmodule SymphonyElixir.Config.Migration.DevServerMove do
   end
 
   defp note(document, expected, version) do
+    previous = get_in_map(document, ["verification", "dev_server", "runs"])
+
     case get_in_map(expected, ["verification", "dev_server", "runs"]) do
-      runs when runs != nil and runs != get_in_map(document, ["verification", "dev_server", "runs"]) ->
+      runs when runs != nil and runs != previous ->
         "v#{version} described the project's server once, in `verification.dev_server`, which now runs on `runs: #{runs}`" <>
           dropped_recipe(document, expected)
 
