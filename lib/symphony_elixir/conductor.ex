@@ -1679,19 +1679,53 @@ defmodule SymphonyElixir.Conductor do
   `conductor.instructions` on the ticket `issue_id`, after a blank line, marked as advice from an
   earlier model turn and wrapped as untrusted data. Empty while the Conductor is off (`settings`,
   default `Config.conductor_settings/0`) or when it wrote none, so the prompt is unchanged.
+
+  With `for_run:` (a QA pass's run id, TP-1687) only instructions written for that run count: those
+  recorded after the newest `run.started` of any other kind than the Conductor's that precedes the
+  run's own `run.started` (all of the ticket's events when the run's start is not recorded). So
+  instructions written for Code Review, for a coding or rework run, or before an earlier QA pass never
+  reach the pass; those the turn that sent the ticket to it wrote (`after_coding` straight before QA,
+  `after_rework`, `after_qa_blocked` routing one more pass, a message's turn) do. It is read from the
+  recorded runs alone, never from the instructions' text.
   """
   @spec prompt_section(String.t() | nil, keyword()) :: String.t()
   def prompt_section(issue_id, opts \\ []) do
     settings = Keyword.get_lazy(opts, :settings, &Config.conductor_settings/0)
 
     with true <- enabled?(settings) and is_binary(issue_id),
-         events when is_list(events) <- RunStore.list_ticket_events(issue_id, types: ["conductor.instructions"]),
-         %Event{} = newest <- List.last(events) do
+         events when is_list(events) <- RunStore.list_ticket_events(issue_id, types: ["conductor.instructions", "run.started"]),
+         %Event{} = newest <- events |> instructions_for(opts) |> List.last() do
       block = PromptSafety.linear_block(payload(newest, :text), @instructions_tag, Answer.instructions_max() * 4)
       "\n\n" <> @advice <> "\n" <> block
     else
       _none -> ""
     end
+  end
+
+  defp instructions_for(events, opts) do
+    case Keyword.fetch(opts, :for_run) do
+      {:ok, run_id} -> events |> before_run(run_id) |> since_other_run() |> Enum.filter(&(&1.type == "conductor.instructions"))
+      :error -> Enum.filter(events, &(&1.type == "conductor.instructions"))
+    end
+  end
+
+  # The events before the run `run_id`'s own start, or all of them when its start is not recorded.
+  defp before_run(events, run_id) do
+    case Enum.split_while(events, &(not run_started?(&1, run_id))) do
+      {before, [_started | _rest]} -> before
+      {all, []} -> all
+    end
+  end
+
+  defp run_started?(%Event{type: "run.started"} = event, run_id) when is_binary(run_id), do: (event.run_id || payload(event, :run_id)) == run_id
+  defp run_started?(_event, _run_id), do: false
+
+  # The events after the newest start of a run other than the Conductor's.
+  defp since_other_run(events) do
+    events
+    |> Enum.reverse()
+    |> Enum.take_while(&(not (&1.type == "run.started" and payload(&1, :run_kind) != "conductor")))
+    |> Enum.reverse()
   end
 
   defp payload(%Event{payload: payload}, key), do: Map.get(payload, key, Map.get(payload, Atom.to_string(key)))
