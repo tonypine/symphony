@@ -59,8 +59,10 @@ public struct StoryRow<Under: View, Trail: View>: View {
                 .monospacedDigit()
                 .foregroundStyle((current ? DesignTokens.ColorToken.statusWorkingText : DesignTokens.TextColor.tertiary).color)
                 .frame(width: DesignTokens.StoryRow.numberWidth, alignment: .trailing)
+                .qaPart("number")
             RowLeadMark(lead: mark, glyphSize: DesignTokens.StoryRow.markGlyph)
                 .frame(width: DesignTokens.StoryRow.markSize, height: DesignTokens.StoryRow.markSize)
+                .qaPart("mark")
             VStack(alignment: .leading, spacing: DesignTokens.StoryRow.lineGap) {
                 HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Row.itemGap) {
                     Text(identifier)
@@ -68,6 +70,7 @@ public struct StoryRow<Under: View, Trail: View>: View {
                         .monospacedDigit()
                         .fixedSize()
                         .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                        .qaPart("identifier")
                     Text(title)
                         .font(DesignTokens.TypeStyle.font(
                             size: DesignTokens.TypeStyle.rowTitle.size,
@@ -77,6 +80,7 @@ public struct StoryRow<Under: View, Trail: View>: View {
                         .truncationMode(.tail)
                         .strikethrough(struck)
                         .foregroundStyle((quiet ? DesignTokens.TextColor.secondary : DesignTokens.TextColor.primary).color)
+                        .qaPart("title")
                 }
                 under
             }
@@ -88,6 +92,7 @@ public struct StoryRow<Under: View, Trail: View>: View {
                 .foregroundStyle(DesignTokens.TextColor.secondary.color)
                 .fixedSize()
                 .frame(height: current ? DesignTokens.StoryRow.markSize : nil)
+                .qaPart("trail")
             Image(systemName: "chevron.right")
                 .font(DesignTokens.TypeStyle.font(size: DesignTokens.StoryRow.arrowSize, weight: DesignTokens.Row.titleWeight))
                 .foregroundStyle(DesignTokens.TextColor.tertiary.color)

@@ -145,14 +145,16 @@ worktree's configured app and on apps you launched:
 - `qa_elements`: lists the named elements on screen as the app itself reports them (its QA build
   writes the report): each element's stable `name` (also its accessibility identifier, see "QA
   names" below), its `frame` in screen points (the points of `qa_ax_tree`'s frames and
-  `qa_click`), `visible`, `selected`, `focused`, and the frames of its named `parts` (a row's
+  `qa_click`), `visible` (some of it shows), `fully_visible` (all of it shows), `shown` (the part
+  that shows), `selected`, `focused`, and the frames of its named `parts` (a row's
   `identifier`, `title`). It also returns the app's `state` (as `app_state` above), its `windows`
   and `names`, the naming scheme. `prefix` (such as `queue-row-`) and `visible_only` narrow it.
   Take element names from here and from "QA names", never from a search of the code. An app that
   writes no report answers `qa_elements_missing`.
 - `qa_scroll_to`: brings a named element into view by its `name`: Symphony scrolls the list as
-  `qa_scroll` does until the app reports the element shown, and returns it with its `frame`,
-  `parts`, `scrolls` and the app's `state`. A row a lazy list has not drawn yet is looked for
+  `qa_scroll` does until the app reports the element wholly shown, and returns it with its
+  `frame`, `parts`, `scrolls` and the app's `state`; an element taller than its list comes back
+  with `partly_shown`. A row a lazy list has not drawn yet is looked for
   `direction` (`down`, then `up`, when you name none); pass `at`, a shown element of the list,
   when the window has more than one scroll area. It answers `qa_element_not_found` when the
   element never shows.
@@ -200,9 +202,12 @@ Do not edit files in the worktree, gitignored ones included (such as build cache
 QA names: the stable names the app gives the elements QA walks, also their accessibility
 identifiers (`qa_ax_tree`'s `identifier`). `qa_elements` lists the ones on screen with this scheme
 (`names`); a plan names elements by them, never by a search of the code. `<ticket>` is a ticket
-identifier (`TP-12`), `<slot>` a slot's number from 1, `<title>` a title in lower case with
-dashes:
+identifier (`TP-12`), `<slot>` a slot's number from 1, `<n>` a place from 1, `<title>`,
+`<label>`, `<id>` and `<column>` a title, a label, an id or a column's id in lower case with
+dashes. Two elements with one name on screen are told apart from the top: the first keeps the
+name, the next is `<name>#2`.
 
+Home:
 - `queue-row-<ticket>`: a row of Home's queue; parts `number`, `handle`, `elbow`, `lead`,
   `identifier`, `title`, `doneCount`, `dependencies`, `marks`, `repo`, `start`.
 - `done-row-<ticket>`: a row of Home's Recently done list; parts `identifier`, `title`.
@@ -216,8 +221,48 @@ dashes:
 - `epic-slot-card-<slot>`, `epic-slot-band-<slot>`, `epic-slot-done-count-<slot>`,
   `epic-slot-upcoming-<slot>`, `epic-slot-done-<slot>`: an epic's running slot card, its band,
   its done count, its upcoming sub-tickets and its done sub-tickets.
-- `sidebar-<title>`: a row of the window's sidebar (or of a page's section list), such as
-  `sidebar-home`; `selected` while it is current.
+
+The window and its pages' section lists:
+- `sidebar-<title>`: a row of the window's sidebar, such as `sidebar-home`; `selected` while it
+  is current.
+- `section-<title>`: a row of a page's section list (Settings' sections), such as
+  `section-notifications`; `selected` while it is current.
+
+The Inbox (Home's drawer) and every decision to answer:
+- `inbox-drawer`: the drawer; parts `title`, `close`.
+- `inbox-review-<ticket>`: the item the drawer shows; parts `header`, `badges`, `title`,
+  `actions`.
+- `inbox-action-<title>`: one of the item's action buttons, such as
+  `inbox-action-send-decision`.
+- `decision-<n>`: a decision to answer (a Question block) by its place from 1, in the Inbox, on
+  the ticket page or in the Journal; parts `question`, `story`, `options`, `option-<n>`,
+  `write-in`, `send`.
+
+The ticket page:
+- `ticket-head`: its head; parts `identifier`, `repo`, `epic`, `priority`, `label-<title>`,
+  `title`, `situation`, `moves`.
+- `ticket-decisions-line`: the decisions line (A question waits on you, Answer).
+- `ticket-decisions`: the decisions column beside the page.
+- `ticket-plan`, `ticket-brief`, `ticket-lifecycle`: the plan, brief and Lifecycle panels.
+- `ticket-timeline`: the timeline, the ticket's ledger of runs and events; parts `title`,
+  `composer`.
+- `step-<title>`: a run's step by its title, such as `step-write-the-code`; part `head`.
+- `ticket-pull-request`, `ticket-decided`: the Pull request and Decisions panels.
+- `ticket-connected`: the Connected panel; parts `epic`, `sub-tickets`, `waiting-on` (its
+  blockers), `holding-up`.
+
+Work › Tickets, Initiatives, Providers and Settings:
+- `tickets-row-<ticket>`: a row of the Tickets table; its parts are its cells by column id
+  (`<column>`); `selected` while picked.
+- `initiative-card-<ticket>`: an epic's card on Initiatives; parts `identifier`, `progress`,
+  `title`, `strip`; `selected` while picked.
+- `initiative-head`: the picked epic's story head.
+- `initiative-row-<ticket>`: a sub-ticket's row in the story; parts `number`, `mark`,
+  `identifier`, `title`, `trail`.
+- `provider-card-<id>`: a provider's card on Providers; `selected` while picked.
+- `provider-head`: the picked provider's head; parts `id`, `move`, `name`, `situation`.
+- `settings-group-<title>`: a group of settings by its title.
+- `settings-row-<label>`: one setting's row by its label; parts `label`, `line`, `control`.
 
 Servers the app talks to (a stand-in for an outside service, a proxy to the dev server Symphony
 started) run in your shell on this host; never a stub you write of the project's own server or

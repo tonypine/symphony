@@ -223,6 +223,7 @@ private struct StepRow: View {
             ) {
                 StepHeaderLabel(step: step)
             }
+            .qaPart("head")
             // A walk that judged several walkthrough steps in one session: one line per step, with its own status,
             // folded or not.
             if let results = step.answer?.results, !results.isEmpty {
@@ -258,6 +259,7 @@ private struct StepRow: View {
             }
         }
         .clipped()
+        .qaSection(QAElementNames.step(step.title))
     }
 }
 

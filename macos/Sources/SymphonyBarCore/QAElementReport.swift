@@ -30,11 +30,17 @@ public struct QAElementReport: Codable, Equatable, Sendable {
         static func rounded(_ value: Double) -> Double { (value * 100).rounded() / 100 }
     }
 
-    /// A named element: its frame, whether any of it shows (in its window and not scrolled out), and its parts.
+    /// A named element: its frame, whether any of it shows (in its window and not scrolled out), whether all of it
+    /// shows, the part of it that shows, and its parts. Two views with the same name are told apart by their place:
+    /// the first from the top left keeps the name, the next ones take `#2`, `#3` (`queue-row-TP-1#2`).
     public struct Element: Codable, Equatable, Sendable {
         public var name: String
         public var frame: Rect
         public var visible: Bool
+        /// All of it shows: no edge is cut by the scroll area or the window that holds it.
+        public var fullyVisible: Bool
+        /// The part of `frame` that shows, nil when none does.
+        public var shown: Rect?
         /// The window it is in, by `Window.number`.
         public var window: Int?
         public var selected: Bool
@@ -42,10 +48,15 @@ public struct QAElementReport: Codable, Equatable, Sendable {
         /// The frames of its named parts (a row's `identifier`, `title`), by part name.
         public var parts: [String: Rect]
 
-        public init(name: String, frame: Rect, visible: Bool, window: Int?, selected: Bool, focused: Bool, parts: [String: Rect]) {
+        public init(
+            name: String, frame: Rect, visible: Bool, fullyVisible: Bool? = nil, shown: Rect? = nil, window: Int?, selected: Bool,
+            focused: Bool, parts: [String: Rect]
+        ) {
             self.name = name
             self.frame = frame
             self.visible = visible
+            self.fullyVisible = fullyVisible ?? visible
+            self.shown = shown ?? (visible ? frame : nil)
             self.window = window
             self.selected = selected
             self.focused = focused
@@ -129,7 +140,8 @@ public struct QAElementReport: Codable, Equatable, Sendable {
 /// element's accessibility identifier.
 public enum QAElementNames {
     /// One name or pattern of the scheme and what it names. `<ticket>` is a ticket identifier (`TP-12`), `<slot>` a
-    /// slot's number from 1, `<title>` a title in lower case with dashes.
+    /// slot's number from 1, `<n>` a place from 1, `<title>`, `<label>`, `<id>` and `<column>` a title, a label, an id
+    /// or a column's id in lower case with dashes.
     public struct Entry: Codable, Equatable, Sendable {
         public var pattern: String
         public var what: String
@@ -155,9 +167,45 @@ public enum QAElementNames {
     public static func epicSlotDoneCount(_ slot: Int) -> String { "epic-slot-done-count-\(slot)" }
     public static func epicSlotUpcoming(_ slot: Int) -> String { "epic-slot-upcoming-\(slot)" }
     public static func epicSlotDone(_ slot: Int) -> String { "epic-slot-done-\(slot)" }
-    /// A sidebar row by its title, in lower case with dashes: `sidebar-home`, `sidebar-work`.
-    public static func sidebar(_ title: String) -> String {
-        "sidebar-" + title.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).joined(separator: "-")
+    /// A row of the window's sidebar by its title, in lower case with dashes: `sidebar-home`, `sidebar-work`.
+    public static func sidebar(_ title: String) -> String { "sidebar-" + slug(title) }
+    /// A row of a page's own section list (Settings' sections) by its title: `section-notifications`.
+    public static func section(_ title: String) -> String { "section-" + slug(title) }
+
+    // The Inbox (Home's drawer).
+    public static let inboxDrawer = "inbox-drawer"
+    public static func inboxReview(_ ticket: String) -> String { "inbox-review-\(ticket)" }
+    public static func inboxAction(_ title: String) -> String { "inbox-action-" + slug(title) }
+    /// A Question block (a decision to answer) by its place from 1, in the Inbox, on the ticket page or the Journal.
+    public static func decision(_ number: Int) -> String { "decision-\(number)" }
+
+    // The ticket page.
+    public static let ticketHead = "ticket-head"
+    public static let ticketDecisionsLine = "ticket-decisions-line"
+    public static let ticketDecisions = "ticket-decisions"
+    public static let ticketPlan = "ticket-plan"
+    public static let ticketBrief = "ticket-brief"
+    public static let ticketLifecycle = "ticket-lifecycle"
+    public static let ticketTimeline = "ticket-timeline"
+    public static let ticketPullRequest = "ticket-pull-request"
+    public static let ticketConnected = "ticket-connected"
+    public static let ticketDecided = "ticket-decided"
+    /// A run's step on the ticket page by its title: `step-write-the-code`.
+    public static func step(_ title: String) -> String { "step-" + slug(title) }
+
+    // Work › Tickets, Initiatives, Providers, Settings.
+    public static func ticketsRow(_ ticket: String) -> String { "tickets-row-\(ticket)" }
+    public static func initiativeCard(_ ticket: String) -> String { "initiative-card-\(ticket)" }
+    public static let initiativeHead = "initiative-head"
+    public static func initiativeRow(_ ticket: String) -> String { "initiative-row-\(ticket)" }
+    public static func providerCard(_ id: String) -> String { "provider-card-" + slug(id) }
+    public static let providerHead = "provider-head"
+    public static func settingsGroup(_ title: String) -> String { "settings-group-" + slug(title) }
+    public static func settingsRow(_ label: String) -> String { "settings-row-" + slug(label) }
+
+    /// `title` in lower case, its words joined by dashes: "Runs & Fallbacks" is `runs-fallbacks`.
+    public static func slug(_ title: String) -> String {
+        title.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).joined(separator: "-")
     }
 
     /// The queue row's parts, as `QueueRow.Part` names them.
@@ -179,7 +227,37 @@ public enum QAElementNames {
         Entry("epic-slot-done-count-<slot>", "An epic slot card's done count"),
         Entry("epic-slot-upcoming-<slot>", "An epic slot card's upcoming sub-tickets"),
         Entry("epic-slot-done-<slot>", "An epic slot card's done sub-tickets"),
-        Entry("sidebar-<title>", "A row of the window's sidebar (or of a page's section list) by its title in lower case with dashes, such as sidebar-home; selected while it is current"),
+        Entry("sidebar-<title>", "A row of the window's sidebar by its title, such as sidebar-home; selected while it is current"),
+        Entry("section-<title>", "A row of a page's section list (Settings' sections) by its title; selected while it is current"),
+        Entry(inboxDrawer, "The Inbox drawer beside Home", parts: ["title", "close"]),
+        Entry("inbox-review-<ticket>", "The Inbox item the drawer shows, by its ticket", parts: ["header", "badges", "title", "actions"]),
+        Entry("inbox-action-<title>", "One of the Inbox item's action buttons by its title, such as inbox-action-send-decision"),
+        Entry(
+            "decision-<n>", "A decision to answer (a Question block) by its place from 1, in the Inbox, the ticket page or the Journal",
+            parts: ["question", "story", "options", "option-<n>", "write-in", "send"]
+        ),
+        Entry(
+            ticketHead, "The ticket page's head",
+            parts: ["identifier", "repo", "epic", "priority", "label-<title>", "title", "situation", "moves"]
+        ),
+        Entry(ticketDecisionsLine, "The ticket page's decisions line (A question waits on you, Answer)"),
+        Entry(ticketDecisions, "The ticket page's decisions column beside the page"),
+        Entry(ticketPlan, "The ticket page's plan panel"),
+        Entry(ticketBrief, "The ticket page's brief panel"),
+        Entry(ticketLifecycle, "The ticket page's Lifecycle section"),
+        Entry(ticketTimeline, "The ticket page's timeline, its ledger of runs and events", parts: ["title", "composer"]),
+        Entry("step-<title>", "A run's step on the ticket page by its title, such as step-write-the-code", parts: ["head"]),
+        Entry(ticketPullRequest, "The ticket page's Pull request panel"),
+        Entry(ticketConnected, "The ticket page's Connected panel: its epic, sub-tickets and blockers", parts: ["epic", "sub-tickets", "waiting-on", "holding-up"]),
+        Entry(ticketDecided, "The ticket page's Decisions panel: what the person answered"),
+        Entry("tickets-row-<ticket>", "A row of Work › Tickets' table by its ticket; selected while picked", parts: ["<column>"]),
+        Entry("initiative-card-<ticket>", "An epic's card on Initiatives; selected while picked", parts: ["identifier", "progress", "title", "strip"]),
+        Entry(initiativeHead, "The picked epic's story head on Initiatives"),
+        Entry("initiative-row-<ticket>", "A sub-ticket's row in the picked epic's story", parts: ["number", "mark", "identifier", "title", "trail"]),
+        Entry("provider-card-<id>", "A provider's card on Providers; selected while picked"),
+        Entry(providerHead, "The picked provider's head", parts: ["id", "move", "name", "situation"]),
+        Entry("settings-group-<title>", "A group of settings by its title"),
+        Entry("settings-row-<label>", "One setting's row by its label", parts: ["label", "line", "control"]),
     ]
 }
 

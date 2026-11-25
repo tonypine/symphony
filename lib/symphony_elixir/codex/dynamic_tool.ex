@@ -1119,7 +1119,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "qa_elements",
       "description" =>
-        "List the named elements of a launched app as the app itself reports them (its QA build writes the report): each element's stable `name` (also its accessibility identifier, such as queue-row-TP-12), its `frame` in screen points (as qa_ax_tree frames and qa_click points), `visible` (some of it shows), `selected`, `focused` and the frames of its named `parts` (a row's identifier, title). " <>
+        "List the named elements of a launched app as the app itself reports them (its QA build writes the report): each element's stable `name` (also its accessibility identifier, such as queue-row-TP-12), its `frame` in screen points (as qa_ax_tree frames and qa_click points), `visible` (some of it shows), `fully_visible` (all of it shows) and `shown` (the part that shows), `selected`, `focused` and the frames of its named `parts` (a row's identifier, title). Two elements with one name are told apart from the top: the second is `name#2`. " <>
           "Also returns the app's `state` (the page shown, the ticket open, the selected and focused names), its `windows` and `names`: the naming scheme with each pattern's parts. Take element names from here, never from a search of the code. A row a lazy list has not drawn is not listed: bring it into view with qa_scroll_to. Fails with qa_elements_missing for an app that writes no report (a release build).",
       "inputSchema" => %{
         "type" => "object",
@@ -1135,7 +1135,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "qa_scroll_to",
       "description" =>
-        "Bring a named element (a name from qa_elements, or one its `names` scheme gives, such as done-row-TP-12) into view: Symphony scrolls the list as qa_scroll does until the app reports the element shown, and returns it with its frame, parts, `scrolls` and the app's `state`. " <>
+        "Bring a named element (a name from qa_elements, or one its `names` scheme gives, such as done-row-TP-12) into view: Symphony scrolls the list as qa_scroll does until the app reports the element wholly shown, and returns it with its frame, parts, `scrolls` and the app's `state`; an element taller than its list comes back with `partly_shown`. " <>
           "A row the list has not drawn yet is looked for `direction` (down, then up, when you name none). Pass `at`, a shown element of the list, when the window holds more than one scroll area. Fails with qa_element_not_found when it never shows.",
       "inputSchema" => %{
         "type" => "object",

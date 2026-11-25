@@ -6,9 +6,11 @@ defmodule SymphonyElixir.QaDriver.Elements do
   In QA mode the app writes `<QA root>/elements/<pid>.json` (`QAElementReport` in
   `macos/Sources/SymphonyBarCore/QAElementReport.swift`) a moment after its screen changes: the
   named elements on screen, each with its stable name (also its accessibility identifier), its
-  frame, whether any of it shows, and the frames of its named parts, in screen points from the top
-  left of the main display, as `qa_ax_tree` frames and `qa_click` points are; the state the app holds
-  (the page shown, the ticket open, the selected and focused named elements); and the naming scheme.
+  frame, whether any of it shows, whether all of it does and the part that shows, and the frames
+  of its named parts (two views with one name are told apart from the top: `name#2`), in screen
+  points from the top left of the main display, as `qa_ax_tree` frames and `qa_click` points are;
+  the state the app holds (the page shown, the ticket open, the selected and focused named
+  elements); and the naming scheme.
   A release build, or a build from before the report, writes none: the tools answer
   `qa_elements_missing`.
 
@@ -260,12 +262,14 @@ defmodule SymphonyElixir.QaDriver.Elements do
 
   @doc """
   Brings the element `request.name` into view: reads the report with `read`, and while the element
-  is not shown, scrolls with `scroll` (a point `x,y` and a vertical delta in points, positive down;
-  it returns the helper's answer) and waits with `sleep` for the app to report again. An element
-  the report has but does not show is scrolled toward; one not drawn yet (a lazy list draws rows as
-  they come into view) is looked for `request.direction` (down by default, then up once the list
-  stops moving). Returns the element with its frame and parts, `scrolls` and the app's state;
-  `qa_element_not_found` when it never shows.
+  is not wholly shown, scrolls with `scroll` (a point `x,y` and a vertical delta in points, positive
+  down; it returns the helper's answer) and waits with `sleep` for the app to report again. An
+  element the report has but does not show, or shows only in part (`fully_visible` false, `shown`
+  the part that shows), is scrolled toward; one not drawn yet (a lazy list draws rows as they come
+  into view) is looked for `request.direction` (down by default, then up once the list stops
+  moving). Returns the element with its frame and parts, `scrolls` and the app's state, with
+  `partly_shown` when the list stopped or the scrolls ran out while only part of it shows (an
+  element taller than the list); `qa_element_not_found` when none of it ever shows.
   """
   @type read_fun :: (-> {:ok, report()} | tool_error())
   @type scroll_fun :: (String.t(), integer() -> {:ok, map()} | tool_error())
@@ -283,14 +287,28 @@ defmodule SymphonyElixir.QaDriver.Elements do
     element = find(report, request.name)
 
     cond do
-      element && element["visible"] == true ->
-        {:ok, element |> Map.merge(%{"scrolls" => progress.scrolls, "state" => app_state(report)})}
+      shown?(element) and fully_shown?(element) -> {:ok, found(element, report, progress)}
+      progress.scrolls >= request.max_scrolls -> partly_or_not_found(request, report, progress, "after #{progress.scrolls} scrolls")
+      true -> scroll_once(request, report, element, io, progress)
+    end
+  end
 
-      progress.scrolls >= request.max_scrolls ->
-        not_found(request, "after #{progress.scrolls} scrolls")
+  defp shown?(element), do: is_map(element) and element["visible"] == true
+  # A report from before `fully_visible` says only whether any of it shows.
+  defp fully_shown?(element), do: Map.get(element, "fully_visible", true) == true
 
-      true ->
-        scroll_once(request, report, element, io, progress)
+  defp found(element, report, progress), do: Map.merge(element, %{"scrolls" => progress.scrolls, "state" => app_state(report)})
+
+  # The scrolls ran out, or the list stopped: an element partly shown is returned as it is, with a
+  # word that only part of it shows; one not shown at all is not found.
+  defp partly_or_not_found(request, report, progress, why) do
+    element = find(report, request.name)
+
+    if shown?(element) do
+      note = "Only part of #{request.name} shows (`shown`) #{why}: it is taller than the list that holds it, or the list ends there."
+      {:ok, element |> found(report, progress) |> Map.put("partly_shown", note)}
+    else
+      not_found(request, why)
     end
   end
 
@@ -314,7 +332,7 @@ defmodule SymphonyElixir.QaDriver.Elements do
       not still? -> step(request, next, io, progress)
       # Only a search the call gave no direction turns, and it starts down.
       element == nil and not progress.turned -> step(request, next, io, %{progress | direction: "up", turned: true})
-      true -> not_found(request, "once the list stopped moving (#{progress.scrolls} scrolls)")
+      true -> partly_or_not_found(request, next, progress, "once the list stopped moving (#{progress.scrolls} scrolls)")
     end
   end
 
@@ -351,12 +369,20 @@ defmodule SymphonyElixir.QaDriver.Elements do
 
   defp centre(%{"x" => x, "y" => y, "w" => w, "h" => h}), do: "#{round(x + w / 2)},#{round(y + h / 2)}"
 
-  # An element the report has: toward it, as far as it is (a page at most). A name not drawn yet: a
-  # page in the direction searched.
+  # An element partly shown: toward its cut edge, as far as it is cut. An element the report has:
+  # toward it, as far as it is (a page at most). A name not drawn yet: a page in the direction
+  # searched.
   defp delta(report, element, direction) do
     page = page(report)
 
     case element do
+      %{"visible" => true, "frame" => %{"y" => y, "h" => h}, "shown" => %{"y" => shown_y, "h" => shown_h}} ->
+        cond do
+          y + h > shown_y + shown_h + 0.5 -> {"down", clamp(round(y + h - (shown_y + shown_h)) + 8, page)}
+          y < shown_y - 0.5 -> {"up", -clamp(round(shown_y - y) + 8, page)}
+          true -> {direction, if(direction == "up", do: -page, else: page)}
+        end
+
       %{"frame" => %{"y" => y, "h" => h}} ->
         {top, bottom} = window_span(report, element)
 

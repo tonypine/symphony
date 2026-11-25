@@ -48,7 +48,8 @@ public struct TicketsTable: View {
             "Tickets", columns: TicketsTableColumns.columns(columns, rows: rows, situations: situations, reference: reference),
             rows: rows,
             selection: $selection, sort: tableSort, presorted: true, empty: empty, drawnAs: drawnAs,
-            open: { open($0.identifier) }, secondary: { toggleDetails($0.identifier) }, rowMenu: rowMenu
+            open: { open($0.identifier) }, secondary: { toggleDetails($0.identifier) }, rowMenu: rowMenu,
+            qaRowName: { QAElementNames.ticketsRow($0.identifier) }
         )
     }
 

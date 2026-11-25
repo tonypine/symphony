@@ -22,11 +22,25 @@ public final class QAElementRecorder {
         var focused: Bool
     }
 
-    /// Where a view is: its frame, whether any of it shows, and its window; nil when it is in no window.
+    /// Where a view is: its frame, whether any of it shows, whether all of it shows, the part that shows, and its
+    /// window; nil when it is in no window.
     struct Location {
         let frame: QAElementReport.Rect
         let visible: Bool
+        var fullyVisible: Bool?
+        var shown: QAElementReport.Rect?
         let window: QAElementReport.Window
+
+        init(
+            frame: QAElementReport.Rect, visible: Bool, fullyVisible: Bool? = nil, shown: QAElementReport.Rect? = nil,
+            window: QAElementReport.Window
+        ) {
+            self.frame = frame
+            self.visible = visible
+            self.fullyVisible = fullyVisible
+            self.shown = shown
+            self.window = window
+        }
     }
 
     private let writer: QAElementReportWriter
@@ -84,9 +98,10 @@ public final class QAElementRecorder {
         }
     }
 
-    /// The report as the screen is now.
+    /// The report as the screen is now. Two views with one name are told apart by their place: the first from the top
+    /// left keeps the name, the next take `#2`, `#3`; a part goes to the one of them that holds its centre.
     func report() -> QAElementReport {
-        var elements: [String: QAElementReport.Element] = [:]
+        var named: [String: [QAElementReport.Element]] = [:]
         var parts: [(String, String, QAElementReport.Rect)] = []
         var windows: [Int: QAElementReport.Window] = [:]
 
@@ -97,14 +112,26 @@ public final class QAElementRecorder {
                 continue
             }
             windows[location.window.number] = location.window
-            elements[entry.element] = QAElementReport.Element(
-                name: entry.element, frame: location.frame, visible: location.visible, window: location.window.number,
-                selected: entry.selected, focused: entry.focused, parts: [:]
-            )
+            named[entry.element, default: []].append(QAElementReport.Element(
+                name: entry.element, frame: location.frame, visible: location.visible, fullyVisible: location.fullyVisible,
+                shown: location.shown, window: location.window.number, selected: entry.selected, focused: entry.focused, parts: [:]
+            ))
         }
-        for (element, part, frame) in parts { elements[element]?.parts[part] = frame }
+        for (element, part, frame) in parts.sorted(by: { ($0.0, $0.1, $0.2.y, $0.2.x) < ($1.0, $1.1, $1.2.y, $1.2.x) }) {
+            guard var instances = named[element], !instances.isEmpty else { continue }
+            let index = instances.firstIndex { Self.holds($0.frame, frame) } ?? 0
+            instances[index].parts[part] = frame
+            named[element] = instances
+        }
 
-        let sorted = elements.values.sorted { ($0.frame.y, $0.frame.x, $0.name) < ($1.frame.y, $1.frame.x, $1.name) }
+        var elements: [QAElementReport.Element] = []
+        for (name, instances) in named {
+            for (index, var element) in instances.sorted(by: Self.placed).enumerated() {
+                if index > 0 { element.name = "\(name)#\(index + 1)" }
+                elements.append(element)
+            }
+        }
+        let sorted = elements.sorted { ($0.frame.y, $0.frame.x, $0.name) < ($1.frame.y, $1.frame.x, $1.name) }
         var state = state
         state.selected = sorted.filter(\.selected).map(\.name)
         state.focused = sorted.filter(\.focused).map(\.name)
@@ -113,18 +140,39 @@ public final class QAElementRecorder {
         )
     }
 
+    /// The order two views with one name are numbered in: from the top, then the left, then the smaller.
+    static func placed(_ a: QAElementReport.Element, _ b: QAElementReport.Element) -> Bool {
+        (a.frame.y, a.frame.x, a.frame.h, a.frame.w, a.selected ? 0 : 1, a.focused ? 0 : 1)
+            < (b.frame.y, b.frame.x, b.frame.h, b.frame.w, b.selected ? 0 : 1, b.focused ? 0 : 1)
+    }
+
+    /// Whether `frame` holds the centre of `part`.
+    static func holds(_ frame: QAElementReport.Rect, _ part: QAElementReport.Rect) -> Bool {
+        let x = part.x + part.w / 2, y = part.y + part.h / 2
+        return x >= frame.x && x <= frame.x + frame.w && y >= frame.y && y <= frame.y + frame.h
+    }
+
     /// Where `view` is on screen, nil when it is in no window.
     static func onScreen(_ view: NSView) -> Location? {
         guard let window = view.window else { return nil }
         let height = mainDisplayHeight()
+        let visibleRect = view.visibleRect
+        let visible = window.isVisible && !visibleRect.isEmpty
         return Location(
             frame: screenRect(window.convertToScreen(view.convert(view.bounds, to: nil)), mainHeight: height),
-            visible: window.isVisible && !view.visibleRect.isEmpty,
+            visible: visible,
+            fullyVisible: visible && fully(visibleRect, of: view.bounds),
+            shown: visible ? screenRect(window.convertToScreen(view.convert(visibleRect, to: nil)), mainHeight: height) : nil,
             window: QAElementReport.Window(
                 number: window.windowNumber, title: window.title, frame: screenRect(window.frame, mainHeight: height),
                 key: window.isKeyWindow
             )
         )
+    }
+
+    /// Whether `shown` (a view's visible rect) is all of `bounds`, to half a point.
+    static func fully(_ shown: NSRect, of bounds: NSRect) -> Bool {
+        abs(shown.width - bounds.width) <= 0.5 && abs(shown.height - bounds.height) <= 0.5
     }
 
     /// The main display's height, which flips AppKit's bottom-left screen points to the top-left ones QA uses.
@@ -151,6 +199,22 @@ extension View {
         accessibilityIdentifier(name)
             .modifier(QANameRecording(element: name, part: nil, selected: selected, focused: focused))
             .environment(\.qaElementName, name)
+    }
+
+    /// `qaName` when there is a `name`, nothing otherwise: for a shared view that only some pages name (a table's rows).
+    @ViewBuilder public func qaName(ifGiven name: String?, selected: Bool = false, focused: Bool = false) -> some View {
+        if let name { qaName(name, selected: selected, focused: focused) } else { self }
+    }
+
+    /// `qaPart` when there is a `part`, nothing otherwise.
+    @ViewBuilder public func qaPart(ifGiven part: String?) -> some View {
+        if let part { qaPart(part) } else { self }
+    }
+
+    /// Names a region that holds other elements (a panel, a section, a card) for QA: `qaName` on an accessibility
+    /// group that keeps its children, so the name never lands on the elements inside.
+    public func qaSection(_ name: String, selected: Bool = false) -> some View {
+        accessibilityElement(children: .contain).qaName(name, selected: selected)
     }
 
     /// Names a part of the element named around it (a row's `title`): QA mode's report gives its frame under the

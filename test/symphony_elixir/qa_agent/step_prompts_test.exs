@@ -67,7 +67,11 @@ defmodule SymphonyElixir.QaAgent.StepPromptsTest do
     assert playbook =~ "the page shown, the selection and the focus from `app_state`"
 
     # The playbook quotes the app's naming scheme, so a plan names elements without the code.
-    for pattern <- ~w(queue-row-<ticket> done-row-<ticket> queue-drop-line queue-done-count recently-done-head recently-done-range slot-card-<slot> slot-line-<slot> sidebar-<title>) do
+    # Every page QA walks has names: Home, the Inbox, the ticket page, Tickets, Initiatives, Providers, Settings.
+    for pattern <-
+          ~w(queue-row-<ticket> done-row-<ticket> queue-drop-line queue-done-count recently-done-head recently-done-range slot-card-<slot> slot-line-<slot> sidebar-<title>) ++
+            ~w(section-<title> inbox-drawer inbox-review-<ticket> inbox-action-<title> decision-<n> ticket-head ticket-timeline step-<title> ticket-connected) ++
+            ~w(tickets-row-<ticket> initiative-card-<ticket> initiative-row-<ticket> provider-card-<id> settings-row-<label>) do
       assert playbook =~ "`#{pattern}`", "the playbook's QA names lack #{pattern}"
     end
 

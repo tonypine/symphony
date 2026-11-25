@@ -55,6 +55,7 @@ struct InboxDrawer: View {
                 .id(item.id)
                 .questionKeys({ item.optionIndex(forKey: $0) }) { model.pick($0, decision: 0, itemID: item.id) }
             }
+            .qaSection(QAElementNames.inboxDrawer)
         } else {
             VStack(spacing: 0) {
                 InboxDrawerHeader(title: HomeInbox.drawerTitle, close: { model.inboxDrawerShown = false })
@@ -65,6 +66,7 @@ struct InboxDrawer: View {
                     EmptyState(title: "Reading the Inbox…", symbol: SymphonyView.inbox.symbol, showsSpinner: true)
                 }
             }
+            .qaSection(QAElementNames.inboxDrawer)
         }
     }
 }
@@ -79,12 +81,14 @@ struct InboxDrawerHeader: View {
             Text(title)
                 .font(DesignTokens.TypeStyle.heading.font)
                 .accessibilityAddTraits(.isHeader)
+                .qaPart("title")
             Spacer(minLength: DesignTokens.Space.s2)
             Button(action: close) { Label(PeekNavigation.closeTitle, systemImage: "xmark") }
                 .labelStyle(.iconOnly)
                 .directorButton(.quiet, size: .small)
                 .keyboardShortcut(.cancelAction)
                 .help("Close (Esc)")
+                .qaPart("close")
         }
         .padding(.horizontal, DesignTokens.Space.s4)
         .padding(.vertical, DesignTokens.Space.s2)

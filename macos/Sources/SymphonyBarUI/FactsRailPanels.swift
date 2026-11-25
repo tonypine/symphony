@@ -180,15 +180,19 @@ public struct ConnectedPanel: View {
                     SubPanel(title: "Epic") {
                         EpicBlock(epic: epic, openInitiatives: openInitiatives, openTicket: openTicket)
                     }
+                    .qaPart("epic")
                 }
                 if !model.subTickets.isEmpty {
                     SubPanel(title: "Sub-tickets") { TicketLines(lines: model.subTickets, open: openTicket) }
+                        .qaPart("sub-tickets")
                 }
                 if !model.waitingOn.isEmpty {
                     SubPanel(title: "Waiting on") { TicketLines(lines: model.waitingOn, open: openTicket) }
+                        .qaPart("waiting-on")
                 }
                 if !model.holdingUp.isEmpty {
                     SubPanel(title: "Holding up") { TicketLines(lines: model.holdingUp, open: openTicket) }
+                        .qaPart("holding-up")
                 }
             }
         }

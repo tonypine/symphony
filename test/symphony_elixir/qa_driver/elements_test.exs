@@ -8,15 +8,23 @@ defmodule SymphonyElixir.QaDriver.ElementsTest do
   @window %{"number" => 7, "title" => "Symphony", "frame" => %{"x" => 0, "y" => 25, "w" => 1000, "h" => 500}, "key" => true}
 
   defp element(name, y, opts \\ []) do
-    %{
+    base = %{
       "name" => name,
-      "frame" => %{"x" => Keyword.get(opts, :x, 100), "y" => y, "w" => Keyword.get(opts, :w, 800), "h" => 32},
+      "frame" => %{"x" => Keyword.get(opts, :x, 100), "y" => y, "w" => Keyword.get(opts, :w, 800), "h" => Keyword.get(opts, :h, 32)},
       "visible" => Keyword.get(opts, :visible, true),
       "window" => 7,
       "selected" => Keyword.get(opts, :selected, false),
       "focused" => false,
       "parts" => Keyword.get(opts, :parts, %{})
     }
+
+    case Keyword.fetch(opts, :shown) do
+      {:ok, {shown_y, shown_h}} ->
+        Map.merge(base, %{"fully_visible" => false, "shown" => %{"x" => base["frame"]["x"], "y" => shown_y, "w" => base["frame"]["w"], "h" => shown_h}})
+
+      :error ->
+        base
+    end
   end
 
   defp report(elements, opts \\ []) do
@@ -231,6 +239,45 @@ defmodule SymphonyElixir.QaDriver.ElementsTest do
       clipped = report([element("done-row-TP-1", 400, visible: false)])
       assert {:ok, %{"scrolls" => 1}} = scroll_to(request("done-row-TP-1", direction: "up"), [clipped, shown])
       assert_received {:scrolled, "500,275", -300}
+    end
+
+    test "goes on scrolling while a row is only partly shown, toward its cut edge" do
+      # Its bottom 7 points are cut by the list: down past them, by the least scroll.
+      cut_below = report([element("done-row-TP-1", 500, shown: {500, 25})])
+      whole = report([element("done-row-TP-1", 460)])
+      answers = [{:ok, %{"moved" => %{"y" => 40}}}]
+      assert {:ok, %{"scrolls" => 1, "frame" => %{"y" => 460}} = found} = scroll_to(request("done-row-TP-1"), [cut_below, whole], answers)
+      refute Map.has_key?(found, "partly_shown")
+      assert_received {:scrolled, "500,275", 40}
+
+      # Its top is cut: up.
+      cut_above = report([element("done-row-TP-1", 10, shown: {25, 17})])
+      assert {:ok, %{"scrolls" => 1}} = scroll_to(request("done-row-TP-1"), [cut_above, whole], answers)
+      assert_received {:scrolled, "500,275", -40}
+
+      # Not wholly shown, with no edge cut that the report says: a page in the direction searched.
+      odd = report([element("done-row-TP-1", 100, shown: {100, 32})])
+      assert {:ok, %{"scrolls" => 1}} = scroll_to(request("done-row-TP-1"), [odd, whole], answers)
+      assert_received {:scrolled, "500,275", 300}
+    end
+
+    test "returns a row taller than the list as partly shown once the list stops, or the scrolls run out" do
+      tall = report([element("done-row-TP-1", 25, h: 900, shown: {25, 500})])
+      stopped = [{:ok, %{"moved" => %{"y" => 0}}}]
+
+      assert {:ok, %{"name" => "done-row-TP-1", "scrolls" => 1, "partly_shown" => note}} =
+               scroll_to(request("done-row-TP-1"), [tall], stopped)
+
+      assert note =~ "Only part of done-row-TP-1 shows (`shown`) once the list stopped moving (1 scrolls)"
+      assert_received {:scrolled, "500,275", 300}
+
+      lower = report([element("done-row-TP-1", -275, h: 900, shown: {25, 500})])
+      moving = [{:ok, %{"moved" => %{"y" => 300}}}]
+
+      assert {:ok, %{"scrolls" => 1, "partly_shown" => note}} =
+               scroll_to(request("done-row-TP-1", max_scrolls: 1), [tall, lower], moving)
+
+      assert note =~ "after 1 scrolls"
     end
 
     test "looks down, then up, for a row a lazy list has not drawn" do

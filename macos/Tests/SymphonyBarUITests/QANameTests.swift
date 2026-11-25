@@ -101,6 +101,95 @@ final class QANameTests: XCTestCase {
         XCTAssertEqual(recorder.report().elements, [])
     }
 
+    /// Pages other than Home name their elements too: a Settings row by its label with its label, line and control,
+    /// a settings group by its title, and a page's section list row as `section-<title>`, apart from the window
+    /// sidebar's `sidebar-<title>` with the same title.
+    func testASettingsRowAndASectionListRowAreReportedByTheirNames() throws {
+        weak var hostView: NSView?
+        let recorder = makeRecorder { hostView }
+        QAElementRecorder.use(recorder)
+        let entries = [SidebarEntry(id: "notifications", title: "Notifications", symbol: "bell")]
+        let host = hosted(
+            VStack(spacing: 0) {
+                Sidebar(entries, current: "notifications") { _ in }.frame(height: 80)
+                SectionList(entries, current: "notifications") { _ in }
+                SettingsGroup("Alerts") {
+                    SettingsRow("Summary size limit", help: "Tokens a summary may take.") {
+                        Color.clear.frame(width: 80, height: 20)
+                    }
+                }
+            },
+            height: 400
+        )
+        hostView = host
+        recorder.setPage(.settings, ticket: nil)
+
+        let report = recorder.report()
+        let row = try XCTUnwrap(report.elements.first { $0.name == "settings-row-summary-size-limit" })
+        XCTAssertEqual(Set(row.parts.keys), ["label", "line", "control"])
+        XCTAssertLessThan(try XCTUnwrap(row.parts["label"]).x, try XCTUnwrap(row.parts["control"]).x)
+        XCTAssertNotNil(report.elements.first { $0.name == "settings-group-alerts" })
+        let section = try XCTUnwrap(report.elements.first { $0.name == "section-notifications" })
+        let sidebar = try XCTUnwrap(report.elements.first { $0.name == "sidebar-notifications" })
+        XCTAssertTrue(section.selected)
+        XCTAssertNotEqual(section.frame, sidebar.frame)
+        XCTAssertFalse(report.elements.contains { $0.name.contains("#") })
+        XCTAssertEqual(report.state.page, "settings")
+    }
+
+    /// Two views that share a name are both reported, in a fixed order: from the top, the first keeps the name and
+    /// the next takes `#2`; each part goes to the one that holds it.
+    func testTwoViewsWithOneNameAreReportedInAFixedOrder() throws {
+        weak var hostView: NSView?
+        let recorder = makeRecorder { hostView }
+        QAElementRecorder.use(recorder)
+        let host = hosted(
+            VStack(spacing: 0) {
+                HStack { Color.clear.frame(width: 50, height: 10).qaPart("title") }.frame(height: 30).qaName("twin", selected: true)
+                HStack { Color.clear.frame(width: 70, height: 10).qaPart("title") }.frame(height: 30).qaName("twin")
+            },
+            height: 60
+        )
+        hostView = host
+
+        let first = recorder.report()
+        XCTAssertEqual(first.elements.map(\.name), ["twin", "twin#2"])
+        XCTAssertLessThan(first.elements[0].frame.y, first.elements[1].frame.y)
+        let selected = try XCTUnwrap(first.elements.first(where: \.selected))
+        let other = try XCTUnwrap(first.elements.first { !$0.selected })
+        XCTAssertEqual(selected.parts["title"]?.w, 50)
+        XCTAssertEqual(other.parts["title"]?.w, 70)
+        XCTAssertEqual(first.state.selected, [selected.name])
+        // The same screen gives the same report, whatever order the views are kept in.
+        for _ in 0 ..< 3 {
+            XCTAssertEqual(recorder.report().elements, first.elements)
+        }
+    }
+
+    /// The report says whether all of an element shows and which part of it does, so the driver's scroll to a name
+    /// goes on while a row is only partly in view.
+    func testAnElementReportsTheShownPartOfItsFrame() throws {
+        XCTAssertTrue(QAElementRecorder.fully(NSRect(x: 0, y: 0, width: 100, height: 30), of: NSRect(x: 0, y: 0, width: 100, height: 30)))
+        XCTAssertFalse(QAElementRecorder.fully(NSRect(x: 0, y: 0, width: 100, height: 8), of: NSRect(x: 0, y: 0, width: 100, height: 30)))
+
+        let window = QAElementReport.Window(number: 1, title: "Test", frame: .init(x: 0, y: 0, w: 900, h: 600), key: true)
+        let partly = QAElementReport.Rect(x: 0, y: 592, w: 100, h: 8)
+        let recorder = QAElementRecorder(
+            writer: QAElementReportWriter(file: QAMode(root: root).elementsReport(pid: 9)), pid: 9,
+            locate: { _ in
+                .init(frame: .init(x: 0, y: 592, w: 100, h: 30), visible: true, fullyVisible: false, shown: partly, window: window)
+            }
+        )
+        QAElementRecorder.use(recorder)
+        let host = hosted(Color.clear.frame(height: 30).qaName("queue-row-TP-9"), height: 30)
+        _ = host
+
+        let element = try XCTUnwrap(recorder.report().elements.first)
+        XCTAssertTrue(element.visible)
+        XCTAssertFalse(element.fullyVisible)
+        XCTAssertEqual(element.shown, partly)
+    }
+
     /// The writer puts the report where the driver reads it.
     func testTheReportIsWrittenUnderTheQARoot() throws {
         let recorder = makeRecorder { nil }

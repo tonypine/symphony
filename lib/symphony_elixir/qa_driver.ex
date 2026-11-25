@@ -50,7 +50,7 @@ defmodule SymphonyElixir.QaDriver do
     `qa_elements` lists the named elements on screen with the frames of their parts, the app's
     state (the page shown, the ticket open, the selected and focused elements) and the naming
     scheme; `qa_scroll_to` scrolls with the helper, as `qa_scroll` does, until the app reports a
-    named element shown; `qa_measure_elements` gives the distance and the alignment between two
+    named element wholly shown; `qa_measure_elements` gives the distance and the alignment between two
     named elements or parts from their reported frames, not from a picture. `qa_check_app` and
     `qa_wait_check` add the app's state from the same report (`app_state`). An app without the
     report (a release build, or one from before it) answers `qa_elements_missing`;
