@@ -292,15 +292,22 @@ func shortName(_ variation: GalleryVariation, in entry: GalleryEntry) -> String 
     return rest.isEmpty ? variation.id.replacingOccurrences(of: "-", with: " ") : rest
 }
 
+/// Each picture is drawn and written in its own autorelease pool: `--shot-all` draws every entry in one run, on the
+/// main thread, whose pool would otherwise keep every picture's buffers until the run ends, and a QA host with less
+/// memory than the drawing needs then fails to write one (TP-1667).
 @MainActor
 private func write(_ view: some View, scheme: ColorScheme, scale: CGFloat, to url: URL) {
-    let renderer = ImageRenderer(content: view.background(DesignTokens.Surface.window.color).environment(\.colorScheme, scheme).environment(\.offscreenSnapshot, true))
-    renderer.scale = scale
-    guard let image = renderer.cgImage,
-        let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil)
-    else { fatalError("Could not draw \(url.lastPathComponent)") }
-    CGImageDestinationAddImage(destination, image, nil)
-    guard CGImageDestinationFinalize(destination) else { fatalError("Could not write \(url.path)") }
+    autoreleasepool {
+        let renderer = ImageRenderer(content: view.background(DesignTokens.Surface.window.color).environment(\.colorScheme, scheme).environment(\.offscreenSnapshot, true))
+        renderer.scale = scale
+        guard let image = renderer.cgImage,
+            let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil)
+        else { fatalError("Could not draw \(url.lastPathComponent)") }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else {
+            fatalError("Could not write \(url.path) (\(image.width)×\(image.height) pixels)")
+        }
+    }
     print(url.path)
 }
 
@@ -320,7 +327,7 @@ func shoot(_ entry: GalleryEntry, only: String? = nil, width: CGFloat? = nil, ap
             } ?? [(variation.id, variation.view)]
             for (name, view) in drawings {
                 // A wide screen is already a large picture: twice the size only when it is narrow.
-                let scale: CGFloat = NSHostingView(rootView: view).fittingSize.width > 1600 ? 1 : 2
+                let scale: CGFloat = autoreleasepool { NSHostingView(rootView: view).fittingSize.width } > 1600 ? 1 : 2
                 for (scheme, suffix) in schemes {
                     write(view.fixedSize(), scheme: scheme, scale: scale, to: folder.appendingPathComponent("\(name)-\(suffix).png"))
                 }
@@ -331,7 +338,7 @@ func shoot(_ entry: GalleryEntry, only: String? = nil, width: CGFloat? = nil, ap
     let limit = CGSize(width: 1600, height: 2000)
     let spacing = DesignTokens.Space.s5
     let sizes = own.map { variation -> CGSize in
-        var size = NSHostingView(rootView: variation.view).fittingSize
+        var size = autoreleasepool { NSHostingView(rootView: variation.view).fittingSize }
         size.width += 2 * DesignTokens.Space.s4
         size.height += 2 * DesignTokens.Space.s4 + 22
         return size
