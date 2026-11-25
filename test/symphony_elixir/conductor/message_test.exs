@@ -222,9 +222,12 @@ defmodule SymphonyElixir.Conductor.MessageTest do
       outcome = %{"id" => "c1", "kind" => "outcome", "statement" => "The filter survives a reload.", "proof" => "test"}
       turn = %{issue_id: record.issue_id, repo_key: "default", junction: "message", message: %{event: say!(record.issue_id)}}
 
-      {:ok, answer} = Answer.parse(Jason.encode!(%{"update" => "Kept.", "plan" => answered_plan(%{"checks" => [outcome, kept]})}), plan: true)
+      kept_plan = answered_plan(%{"checks" => [outcome, kept]})
+      {:ok, answer} = Answer.parse(Jason.encode!(%{"update" => "Kept.", "plan" => kept_plan}), plan: true)
       assert Message.write_plan(turn, issue(record), answer, "run-qa") == :ok
-      assert [_c1, %{id: "c2", expect: "Still filtered", setting: ^setting, walked_on: ^walked_on}] = TicketPlan.current(record.issue_id).checks
+
+      assert [_c1, %{id: "c2", expect: "Still filtered", setting: ^setting, walked_on: ^walked_on}] =
+               TicketPlan.current(record.issue_id).checks
 
       new = Map.delete(kept, "id")
       {:ok, answer} = Answer.parse(Jason.encode!(%{"update" => "Added.", "plan" => answered_plan(%{"checks" => [outcome, kept, new]})}), plan: true)

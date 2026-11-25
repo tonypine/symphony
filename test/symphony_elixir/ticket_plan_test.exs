@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.TicketPlanTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.Conductor.Answer
   alias SymphonyElixir.{TicketEvents, TicketPlan}
 
   @repo_key "plan-repo"
@@ -210,7 +211,8 @@ defmodule SymphonyElixir.TicketPlanTest do
           "walked_on" => [%{"path" => "priv/qa_seed/symphony/issues.json", "holds" => "present"}]
         })
 
-      assert {:ok, %{plan: plan}} = SymphonyElixir.Conductor.Answer.parse(Jason.encode!(%{"plan" => Map.put(stringify(@plan), "checks", [stringify(@check), answered])}), plan: true, qa_setting: true)
+      answer = Jason.encode!(%{"plan" => Map.put(stringify(@plan), "checks", [stringify(@check), answered])})
+      assert {:ok, %{plan: plan}} = Answer.parse(answer, plan: true, qa_setting: true)
       assert {:ok, _event} = TicketPlan.write(@repo_key, @issue_id, Map.merge(plan, %{reason: "Grooming", by: "grooming"}))
 
       assert [_outcome, %{id: "c2", setting: setting, walked_on: walked_on}] = TicketPlan.current(@issue_id).checks
@@ -225,7 +227,10 @@ defmodule SymphonyElixir.TicketPlanTest do
 
       rewritten = %{with_qa(Map.merge(@qa, %{id: "c2", expect: "Still filtered"})) | reason: "A message.", by: "recalibration"}
       assert {:ok, _second} = TicketPlan.write(@repo_key, @issue_id, rewritten, at: at(1), qa_setting: true)
-      assert [_c1, %{id: "c2", expect: "Still filtered", setting: @setting, walked_on: @walked_on}] = TicketPlan.current(@issue_id).checks
+
+      assert [_c1, %{id: "c2", expect: "Still filtered", setting: @setting, walked_on: @walked_on}] =
+               TicketPlan.current(@issue_id).checks
+
       assert stored.setting == @setting
 
       # Given with string keys, as a turn's answer may have them, and with a setting of its own.

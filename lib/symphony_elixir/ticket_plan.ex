@@ -165,12 +165,16 @@ defmodule SymphonyElixir.TicketPlan do
 
   defp place(check, stored) do
     with %{} <- check, "qa" <- field(check, :kind), %{} = before <- Map.get(stored, check_id(check)) do
-      Enum.reduce(@placed_fields, check, fn name, check ->
-        if is_nil(field(check, name)) and not is_nil(field(before, name)), do: put_field(check, name, field(before, name)), else: check
-      end)
+      Enum.reduce(@placed_fields, check, &keep_stored(&2, before, &1))
     else
       _new_or_other_kind -> check
     end
+  end
+
+  defp keep_stored(check, before, name) do
+    if is_nil(field(check, name)) and not is_nil(field(before, name)),
+      do: put_field(check, name, field(before, name)),
+      else: check
   end
 
   # With `qa_setting: true` a `qa` check new to the plan says where it is walked and on what state;

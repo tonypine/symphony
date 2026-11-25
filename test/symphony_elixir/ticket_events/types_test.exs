@@ -466,12 +466,21 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       # Where a QA check is walked and on what state, stored as data; a check from before them still reads.
       placed =
         Map.merge(qa, %{
-          "setting" => %{"source" => "fixture", "fixture" => "macos/Tests/Fixtures/director-app", "page" => "Tickets", "window" => %{"width" => 2560, "height" => 1440}, "appearance" => "dark"},
+          "setting" => %{
+            "source" => "fixture",
+            "fixture" => "macos/Tests/Fixtures/director-app",
+            "page" => "Tickets",
+            "window" => %{"width" => 2560, "height" => 1440},
+            "appearance" => "dark"
+          },
           "walked_on" => [%{"path" => "priv/qa_seed/symphony/seed.json", "holds" => "added"}]
         })
 
-      assert {:ok, %{checks: [%{setting: %{source: "fixture", window: %{width: 2560, height: 1440}, appearance: "dark"}, walked_on: [%{path: "priv/qa_seed/symphony/seed.json", holds: "added"}]}]}} =
+      assert {:ok, %{checks: [%{setting: setting, walked_on: walked_on}]}} =
                Types.validate("plan.written", %{@plan | checks: [placed]}, :machine, nil)
+
+      assert %{source: "fixture", window: %{width: 2560, height: 1440}, appearance: "dark"} = setting
+      assert walked_on == [%{path: "priv/qa_seed/symphony/seed.json", holds: "added"}]
 
       assert {:ok, %{checks: [old]}} = Types.validate("plan.written", %{@plan | checks: [qa]}, :machine, nil)
       refute Map.has_key?(old, :setting) or Map.has_key?(old, :walked_on)
