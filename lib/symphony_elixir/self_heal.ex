@@ -108,8 +108,9 @@ defmodule SymphonyElixir.SelfHeal do
   `verification.dev_server`) would then run against a decision the repo already made. A repo that
   configures `verification.dev_server` but keeps `verification.enabled` off made it: its server
   exists, and it must not start on this host, where every agent run would start it inside its
-  sandbox. A selected playbook that runs the server itself (`web`, or `dev_server: true`, as a
-  `macos_app` pass runs it beside the app on the QA host) has it, so that pass is never told
+  sandbox. So does one whose server's `runs` rule puts it on the QA host (`every_qa_pass`,
+  `live_qa_pass`). A selected playbook that runs the server itself (`web`, or a `macos_app` pass
+  the rule runs it beside on the QA host) has it, so that pass is never told
   otherwise and its `needs_dev_server` block takes the repair as before. When such a `macos_app`
   playbook is enabled but not selected, the reason names it. A repo without
   `verification.dev_server`, or with verification on, gets the repair as before.
@@ -117,7 +118,7 @@ defmodule SymphonyElixir.SelfHeal do
   @spec dev_server_ruled_out(Schema.t(), [Selection.playbook()]) :: String.t() | nil
   def dev_server_ruled_out(%Schema{} = settings, selected) do
     cond do
-      Verification.enabled?(settings) or not Verification.dev_server_command_configured?(settings) ->
+      Verification.dev_server_configured?(settings) or not Verification.dev_server_command_configured?(settings) ->
         nil
 
       Enum.any?(selected, &runs_server?/1) ->
@@ -133,12 +134,15 @@ defmodule SymphonyElixir.SelfHeal do
   end
 
   # The playbooks whose pass starts the project's server (`SymphonyElixir.QaAgent`'s dev server).
-  defp runs_server?(playbook), do: Map.get(playbook, :kind) == "web" or Map.get(playbook, :dev_server) == true
+  defp runs_server?(playbook) do
+    Map.get(playbook, :kind) == "web" or Map.get(playbook, :dev_server) == true or
+      (Map.get(playbook, :live_server) == true and Map.get(playbook, :live) == true)
+  end
 
   defp own_server_playbook?(settings) do
     settings.auto_review
     |> Selection.playbooks(Verification.selection_opts(settings))
-    |> Enum.any?(&(&1.kind == "macos_app" and Map.get(&1, :dev_server) == true))
+    |> Enum.any?(&(&1.kind == "macos_app" and (Map.get(&1, :dev_server) == true or Map.get(&1, :live_server) == true)))
   end
 
   @doc """
@@ -664,7 +668,7 @@ defmodule SymphonyElixir.SelfHeal do
   defp fix_description(issue, @dev_server, signature, %{needs_dev_server: true} = outcome) do
     """
     #{evidence(issue, signature, outcome)}
-    QA had no running copy of this project's own server: the steps above need it, Symphony started no dev server for the pass, and the QA agent may not stand in for the system under test. That is this repo's own run setup, so the fix belongs here. In this repo's `WORKFLOW.md`, set `verification.enabled: true` and `verification.dev_server` (`build_cmd`, `start_cmd`, `health_check_url`), start any database the server needs from `start_cmd` on a unix socket in the dev server's temp folder, seed the data those steps look at, and set `dev_server: true` on the playbook under `auto_review.playbooks`. Symphony then starts that server outside the QA agent's sandbox for each pass, and every ticket blocked on this one resumes on its own when this ticket goes terminal — no person has to move anything.
+    QA had no running copy of this project's own server: the steps above need it, Symphony started no dev server for the pass, and the QA agent may not stand in for the system under test. That is this repo's own run setup, so the fix belongs here. In this repo's `WORKFLOW.md`, set `verification.enabled: true` and `verification.dev_server` (`build_cmd`, `start_cmd`, `health_check_url`), start any database the server needs from `start_cmd` on a unix socket in the dev server's temp folder, seed the data those steps look at, and set `verification.dev_server.runs` to when it runs (`symphony_host` for a pass on the Symphony host, `every_qa_pass` beside the Mac app on the QA host). Symphony then starts that server outside the QA agent's sandbox for each pass, and every ticket blocked on this one resumes on its own when this ticket goes terminal — no person has to move anything.
     """
   end
 

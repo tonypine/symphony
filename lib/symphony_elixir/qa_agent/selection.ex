@@ -23,19 +23,19 @@ defmodule SymphonyElixir.QaAgent.Selection do
   playbook is on only when `verification.enabled` is on and `verification.dev_server`
   is configured (`dev_server?: true`), since its pass drives that server on this host
   in a browser; its optional `browser_mcp` replaces the default Playwright MCP server.
-  Any other playbook with `dev_server: true` (a project server and the database it
-  needs, which the agent's sandbox cannot start) has Symphony start that dev server for
-  its passes too, and needs it configured the same way. The `macos_app` playbook's
-  dev server runs on the QA host instead, never on this host, on its
+  The project's server is described once, in `verification.dev_server`, and its `runs` rule says
+  when it runs (`dev_server_runs:`, TP-1663): `symphony_host` keeps it on this host, for agent
+  runs and `web` passes; `every_qa_pass` runs it on the QA host beside every `macos_app` pass
+  (the playbook is carried with `dev_server: true`); `live_qa_pass` runs it there beside a
+  `macos_app` pass `live/1` says is live (the playbook is carried with `live_server: true`). Both
+  need only `verification.dev_server` (`dev_server_command?: true`), never `verification.enabled`,
+  which turns on this host's server. The `macos_app` playbook's server listens on its
   `dev_server_port`, and its `launch_env` reaches the app (see
   `SymphonyElixir.PlaybookSettings`), which also gives it the QA target, its `:window_size` and
-  `:appearance`; it needs only `verification.dev_server`
-  (`dev_server_command?: true`), since `verification.enabled` turns on this host's
-  dev server, for agent runs too. Its `live` server, when set, is carried as
-  `:live_server`; when `live/1` says it should run (the plan sets a QA check QA walks on the live
-  server), the playbook is selected even for a diff outside its own paths, and
-  `SymphonyElixir.QaPolicy` marks the pass `live: true`. The server's `paths` and
-  `walkthrough_mentions` stay valid settings but no longer decide it. The built-in
+  `:appearance`. When `live/1` says a live server should run (the plan sets a QA check QA walks on
+  the live server), the playbook is selected even for a diff outside its own paths, and
+  `SymphonyElixir.QaPolicy` marks the pass `live: true`. No word in a ticket or a walkthrough and
+  no changed path decides it. The built-in
   `android_app` playbook is on only when its config names the `build` command the
   QA agent runs in its sandbox, the APKs it writes (`apk_paths`, or one
   `apk_path`) and the apps' `application_ids`, and `auto_review.android.avd` names the emulator that the
@@ -152,7 +152,7 @@ defmodule SymphonyElixir.QaAgent.Selection do
           optional(:dev_server) => true,
           optional(:requires) => [String.t()],
           optional(:scope) => :none,
-          optional(:live_server) => PlaybookSettings.live_server(),
+          optional(:live_server) => true,
           optional(:live) => true,
           optional(:live_reason) => String.t()
         }
@@ -160,10 +160,10 @@ defmodule SymphonyElixir.QaAgent.Selection do
 
   @doc """
   Selects playbooks for `issue` given the PR's changed paths and `auto_review` config.
-  `dev_server?: true` says `verification` is on and `verification.dev_server` is configured, which
-  the `web` playbook and any playbook with `dev_server: true` need for a dev server on this host;
-  `dev_server_command?: true` says `verification.dev_server` is configured, which is all the
-  `macos_app` playbook with `dev_server: true` needs. The `android_app` playbook
+  `dev_server?: true` says `verification` is on and `verification.dev_server` is configured to run
+  on this host, which the `web` playbook needs; `dev_server_command?: true` says
+  `verification.dev_server` is configured, which is all the `macos_app` playbook needs when
+  `dev_server_runs:` (its `runs` rule) runs it on the QA host. The `android_app` playbook
   reads `auto_review.android.avd`.
   """
   @spec decide(Issue.t(), [String.t()], map(), keyword()) :: decision()
@@ -243,7 +243,7 @@ defmodule SymphonyElixir.QaAgent.Selection do
     |> kinds()
     |> Enum.flat_map(fn kind ->
       override = override(overrides, kind)
-      if off_reason(kind, override, host), do: [], else: [build_playbook(kind, override)]
+      if off_reason(kind, override, host), do: [], else: [build_playbook(kind, override, host)]
     end)
   end
 
@@ -271,6 +271,7 @@ defmodule SymphonyElixir.QaAgent.Selection do
     host = %{
       dev_server?: dev_server?,
       dev_server_command?: Keyword.get(opts, :dev_server_command?, dev_server?),
+      dev_server_runs: Keyword.get(opts, :dev_server_runs, "symphony_host"),
       android_avd?: android_avd?(auto_review)
     }
 
@@ -301,11 +302,11 @@ defmodule SymphonyElixir.QaAgent.Selection do
     end
   end
 
-  defp build_playbook(kind, override) do
+  defp build_playbook(kind, override, host) do
     playbook = %{kind: kind, paths: paths(kind, override), prompt: prompt(kind, override)}
-    playbook = if dev_server?(kind, override), do: Map.put(playbook, :dev_server, true), else: playbook
+    playbook = if dev_server?(kind, host), do: Map.put(playbook, :dev_server, true), else: playbook
     playbook = put_requires(playbook, override)
-    put_host_settings(playbook, kind, override)
+    put_host_settings(playbook, kind, override, host)
   end
 
   # The executables the pass needs on the QA host, trimmed and without repeats.
@@ -354,13 +355,12 @@ defmodule SymphonyElixir.QaAgent.Selection do
     for key <- Map.get(@required_settings, kind, []), is_nil(string_value(Map.get(override, key))), do: "auto_review.playbooks.#{kind}.#{key}"
   end
 
-  # A playbook that drives the verification dev server (the `web` one, or one with
-  # `dev_server: true`) needs one configured. A `macos_app` one runs it on the QA host, never on
-  # this host, and reads only `verification.dev_server`; any other one runs it on this host, which
-  # `verification.enabled` turns on too.
-  defp missing_dev_server(kind, override, host) do
+  # A playbook that drives the project's server needs one configured: the `web` one on this host,
+  # which `verification.enabled` and `runs: symphony_host` turn on, and the `macos_app` one with
+  # `runs: every_qa_pass` on the QA host, which reads only `verification.dev_server`.
+  defp missing_dev_server(kind, _override, host) do
     cond do
-      not dev_server?(kind, override) -> []
+      not dev_server?(kind, host) -> []
       not host.dev_server_command? -> ["verification.dev_server"]
       kind == "macos_app" -> []
       host.dev_server? -> []
@@ -368,8 +368,9 @@ defmodule SymphonyElixir.QaAgent.Selection do
     end
   end
 
-  defp dev_server?("web", _override), do: true
-  defp dev_server?(_kind, override), do: Map.get(override, "dev_server") == true
+  defp dev_server?("web", _host), do: true
+  defp dev_server?("macos_app", host), do: host.dev_server_runs == "every_qa_pass"
+  defp dev_server?(_kind, _host), do: false
 
   defp application_ids(override) do
     override |> Map.get("application_ids") |> string_list() |> List.wrap() |> Enum.filter(&string_value/1)
@@ -381,7 +382,7 @@ defmodule SymphonyElixir.QaAgent.Selection do
     paths |> Enum.filter(&string_value/1) |> Enum.uniq()
   end
 
-  defp put_host_settings(playbook, "macos_app", override) do
+  defp put_host_settings(playbook, "macos_app", override, host) do
     timeout = Map.get(override, "build_timeout_ms")
     port = Map.get(override, "dev_server_port")
     launch_env = Map.get(override, "launch_env")
@@ -397,13 +398,12 @@ defmodule SymphonyElixir.QaAgent.Selection do
         appearance: PlaybookSettings.appearance(override)
       })
 
-    case PlaybookSettings.live_server(override) do
-      nil -> playbook
-      live_server -> Map.put(playbook, :live_server, live_server)
-    end
+    if host.dev_server_runs == "live_qa_pass" and host.dev_server_command?,
+      do: Map.put(playbook, :live_server, true),
+      else: playbook
   end
 
-  defp put_host_settings(playbook, "android_app", override) do
+  defp put_host_settings(playbook, "android_app", override, _host) do
     Map.merge(playbook, %{
       build: Map.fetch!(override, "build"),
       apk_paths: apk_paths(override),
@@ -411,14 +411,14 @@ defmodule SymphonyElixir.QaAgent.Selection do
     })
   end
 
-  defp put_host_settings(playbook, "web", override) do
+  defp put_host_settings(playbook, "web", override, _host) do
     case Map.get(override, "browser_mcp") do
       %{} = browser_mcp -> Map.put(playbook, :browser_mcp, stringify_keys(browser_mcp))
       _default -> playbook
     end
   end
 
-  defp put_host_settings(playbook, _kind, _override), do: playbook
+  defp put_host_settings(playbook, _kind, _override, _host), do: playbook
 
   defp labelled_playbooks(playbooks, labels) do
     Enum.filter(playbooks, &((@label_prefix <> &1.kind) in labels))

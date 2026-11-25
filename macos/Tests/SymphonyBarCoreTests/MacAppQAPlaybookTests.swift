@@ -10,8 +10,7 @@ final class MacAppQAPlaybookTests: XCTestCase {
             macos_app:
               build: make -C macos app
               app: macos/build/App.app
-              dev_server: true  # the hub
-              dev_server_port: 8_091
+              dev_server_port: 8_091  # the hub
               launch_env:
                 HUB_OWNER_TOKEN: abc
                 "HUB_URL": "http://127.0.0.1:$SYMPHONY_VERIFICATION_PORT/"  # quoted
@@ -25,7 +24,6 @@ final class MacAppQAPlaybookTests: XCTestCase {
         """
 
     private let configPlaybook = MacAppQAPlaybook(
-        devServer: true,
         devServerPort: 8091,
         launchEnv: [
             LaunchVariable(name: "HUB_OWNER_TOKEN", value: "abc"),
@@ -41,26 +39,24 @@ final class MacAppQAPlaybookTests: XCTestCase {
     }
 
     func testMissingEmptyAndNullKeysReadAsSymphonysDefaults() throws {
-        let defaults = MacAppQAPlaybook(devServer: false, devServerPort: 8090, launchEnv: [])
+        let defaults = MacAppQAPlaybook(projectServer: ProjectServerSettings(), devServerPort: 8090, launchEnv: [])
         XCTAssertEqual(MacAppQAPlaybook(), defaults)
         for yaml in [
             "",
             "auto_review:\n  playbooks: {}\n",
             "auto_review:\n  playbooks:\n    macos_app:\n      build: make\n",
             "auto_review:\n  playbooks:\n    macos_app: ~\n",
-            "auto_review:\n  playbooks:\n    macos_app:\n      dev_server: null\n      dev_server_port: ~\n      launch_env: {}\n",
+            "auto_review:\n  playbooks:\n    macos_app:\n      dev_server_port: ~\n      launch_env: {}\n",
             "auto_review:\n  playbooks:\n    macos_app:\n      launch_env:\n        # none yet\n",
         ] {
             XCTAssertEqual(try MacAppQAPlaybook.values(in: yaml), defaults, yaml)
         }
-        XCTAssertFalse(try MacAppQAPlaybook.values(in: "auto_review:\n  playbooks:\n    macos_app:\n      dev_server: false\n").devServer)
     }
 
     func testRefusesValuesItCannotRead() {
         for (yaml, expected) in [
             ("auto_review:\n  playbooks: {macos_app: {}}\n", MacAppQAPlaybookError.notABlock("playbooks")),
             ("auto_review:\n  playbooks:\n    macos_app:\n      launch_env: {A: b}\n", .notABlock("launch_env")),
-            ("auto_review:\n  playbooks:\n    macos_app:\n      dev_server: yes\n", .unreadable(key: "dev_server", value: "yes")),
             ("auto_review:\n  playbooks:\n    macos_app:\n      dev_server_port: soon\n", .unreadable(key: "dev_server_port", value: "soon")),
             ("auto_review:\n  playbooks:\n    macos_app:\n      launch_env:\n        - A\n", .unreadable(key: "launch_env", value: "- A")),
             ("auto_review:\n  playbooks:\n    macos_app:\n      launch_env:\n        A: |\n          long\n", .unreadable(key: "launch_env", value: "long")),
@@ -76,8 +72,8 @@ final class MacAppQAPlaybookTests: XCTestCase {
             "`playbooks:` in symphony.yml is not an indented block. Change the macOS app QA settings by hand."
         )
         XCTAssertEqual(
-            MacAppQAPlaybookError.unreadable(key: "dev_server", value: "yes").errorDescription,
-            "`dev_server: yes` in symphony.yml can't be read here. Change it by hand."
+            MacAppQAPlaybookError.unreadable(key: "dev_server_port", value: "soon").errorDescription,
+            "`dev_server_port: soon` in symphony.yml can't be read here. Change it by hand."
         )
     }
 
@@ -90,7 +86,6 @@ final class MacAppQAPlaybookTests: XCTestCase {
 
     func testChangesOnlyTheSettingsThatDiffer() throws {
         var new = configPlaybook
-        new.devServer = false
         new.devServerPort = 9000
         new.launchEnv = [LaunchVariable(name: "HUB_OWNER_TOKEN", value: "xyz"), LaunchVariable(name: "MODE", value: "8090")]
         let updated = try MacAppQAPlaybook.updating(config, from: configPlaybook, to: new)
@@ -103,8 +98,7 @@ final class MacAppQAPlaybookTests: XCTestCase {
                 macos_app:
                   build: make -C macos app
                   app: macos/build/App.app
-                  dev_server: false  # the hub
-                  dev_server_port: 9000
+                  dev_server_port: 9000  # the hub
                   launch_env:
                     HUB_OWNER_TOKEN: "xyz"
                     MODE: "8090"
@@ -164,7 +158,7 @@ final class MacAppQAPlaybookTests: XCTestCase {
     }
 
     func testInsertsTheSettingsAndTheSectionsAboveThem() throws {
-        let new = MacAppQAPlaybook(devServer: true, devServerPort: 8091, launchEnv: [LaunchVariable(name: "HUB_OWNER_TOKEN", value: "a \"b\"")])
+        let new = MacAppQAPlaybook(devServerPort: 8091, launchEnv: [LaunchVariable(name: "HUB_OWNER_TOKEN", value: "a \"b\"")])
         for yaml in ["workspaces:\n  root: ~/work\n", "auto_review:\n  playbooks: {}\n", "auto_review:\n  playbooks:\n    macos_app: ~\n"] {
             let updated = try MacAppQAPlaybook.updating(yaml, from: MacAppQAPlaybook(), to: new)
             XCTAssertEqual(try MacAppQAPlaybook.values(in: updated), new, updated)
@@ -176,7 +170,6 @@ final class MacAppQAPlaybookTests: XCTestCase {
             auto_review:
               playbooks:
                 macos_app:
-                  dev_server: true
                   dev_server_port: 8091
                   launch_env:
                     HUB_OWNER_TOKEN: "a \\"b\\""
@@ -192,7 +185,7 @@ final class MacAppQAPlaybookTests: XCTestCase {
     }
 
     func testRefusesToWriteUnderAnInlineSection() {
-        let new = MacAppQAPlaybook(devServer: true)
+        let new = MacAppQAPlaybook(devServerPort: 8091)
         XCTAssertThrowsError(try MacAppQAPlaybook.updating("auto_review: {playbooks: {}}\n", from: MacAppQAPlaybook(), to: new)) { error in
             XCTAssertEqual(error as? MacAppQAPlaybookError, .notABlock("auto_review"))
         }
@@ -240,7 +233,8 @@ final class MacAppQAPlaybookTests: XCTestCase {
 
         XCTAssertEqual(try file.readMacAppQAPlaybook(), configPlaybook)
         var new = configPlaybook
-        new.devServer = false
+        new.devServerPort = 9000
+        new.projectServer.runs = .everyQAPass
 
         let failed = try await file.writeMacAppQAPlaybook(new, from: configPlaybook) { _ in .failed("nope") }
         XCTAssertEqual(failed, .failed("nope"))

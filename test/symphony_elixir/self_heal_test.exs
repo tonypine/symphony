@@ -219,7 +219,9 @@ defmodule SymphonyElixir.SelfHealTest do
 
   describe "dev_server_ruled_out/2" do
     @dev_server %{"start_cmd" => "bin/hub", "health_check_url" => "http://localhost:4000/healthz"}
-    @own_server_macos %{"macos_app" => %{"build" => "make app", "app" => "build/Hub.app", "dev_server" => true}}
+    @own_dev_server Map.put(@dev_server, "runs", "every_qa_pass")
+    @live_dev_server Map.put(@dev_server, "runs", "live_qa_pass")
+    @own_server_macos %{"macos_app" => %{"build" => "make app", "app" => "build/Hub.app"}}
     @cli [%{kind: "cli", paths: [], prompt: "Follow the CLI playbook."}]
 
     defp repo_settings(verification, playbooks \\ %{}) do
@@ -230,7 +232,10 @@ defmodule SymphonyElixir.SelfHealTest do
     end
 
     test "a repo that sets up a dev server but keeps it switched off has ruled it out, with the Mac app's pass named when it runs the server" do
-      assert SelfHeal.dev_server_ruled_out(repo_settings(%{"enabled" => false, "dev_server" => @dev_server}, @own_server_macos), @cli) =~
+      assert SelfHeal.dev_server_ruled_out(repo_settings(%{"enabled" => false, "dev_server" => @own_dev_server}, @own_server_macos), @cli) =~
+               "runs its own server only beside the app on the QA host"
+
+      assert SelfHeal.dev_server_ruled_out(repo_settings(%{"enabled" => false, "dev_server" => @live_dev_server}, @own_server_macos), @cli) =~
                "runs its own server only beside the app on the QA host"
 
       assert SelfHeal.dev_server_ruled_out(repo_settings(%{"enabled" => false, "dev_server" => @dev_server}), @cli) ==
@@ -238,18 +243,25 @@ defmodule SymphonyElixir.SelfHealTest do
     end
 
     test "a pass whose own playbook runs the server has not ruled it out" do
-      settings = repo_settings(%{"enabled" => false, "dev_server" => @dev_server}, @own_server_macos)
+      settings = repo_settings(%{"enabled" => false, "dev_server" => @own_dev_server}, @own_server_macos)
 
       own_server = %{kind: "macos_app", dev_server: true, paths: [], prompt: ""}
+      live_server = %{kind: "macos_app", live_server: true, live: true, paths: [], prompt: ""}
 
       assert SelfHeal.dev_server_ruled_out(settings, [own_server | @cli]) == nil
+      assert SelfHeal.dev_server_ruled_out(settings, [live_server | @cli]) == nil
+      assert SelfHeal.dev_server_ruled_out(settings, [Map.delete(live_server, :live) | @cli]) =~ "runs its own server only beside the app"
       assert SelfHeal.dev_server_ruled_out(settings, [%{kind: "web", paths: [], prompt: ""}]) == nil
     end
 
-    test "a repo with no dev server, or with verification on, has ruled nothing out: the repair stays open to it" do
+    test "a repo with no dev server, or with verification on for a server on the Symphony host, has ruled nothing out: the repair stays open to it" do
       assert SelfHeal.dev_server_ruled_out(repo_settings(%{"enabled" => false}), @cli) == nil
       verification_on = repo_settings(%{"enabled" => true, "dev_server" => @dev_server}, @own_server_macos)
       assert SelfHeal.dev_server_ruled_out(verification_on, @cli) == nil
+
+      # Verification on does not bring a server whose rule keeps it on the QA host to this one.
+      qa_host_only = repo_settings(%{"enabled" => true, "dev_server" => @own_dev_server}, @own_server_macos)
+      assert SelfHeal.dev_server_ruled_out(qa_host_only, @cli) =~ "runs its own server only beside the app on the QA host"
     end
   end
 

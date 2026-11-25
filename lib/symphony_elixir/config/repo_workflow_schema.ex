@@ -5,6 +5,7 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
 
   import Ecto.Changeset
 
+  alias SymphonyElixir.Config.Migration.DevServerMove
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Playbook.Assembly
   alias SymphonyElixir.PlaybookSettings
@@ -22,6 +23,9 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
   # dropped, whatever its value. `proof_check` named the check a QA pass read to confirm a recorded
   # test proof; a recorded proof is now complete, and CI gates the merge.
   @dropped_keys ~w(proof_check)
+  # An older file describes the project's server twice, in `verification.dev_server` and a
+  # playbook's `dev_server: true` or `live`: it loads described once, with its `runs` rule
+  # (`DevServerMove`, TP-1663), in memory, so every repository and open ticket branch keeps working.
 
   embedded_schema do
     field(:configured_paths, :map, virtual: true, default: %{})
@@ -39,7 +43,7 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
 
   @spec parse(map()) :: {:ok, t()} | {:error, {:invalid_repo_workflow_config, String.t()}}
   def parse(config) when is_map(config) do
-    config = config |> normalize_keys() |> Map.drop(@dropped_keys)
+    config = config |> normalize_keys() |> Map.drop(@dropped_keys) |> DevServerMove.migrate()
     configured_paths = configured_paths(config)
 
     with :ok <- reject_removed_keys(config),
@@ -214,7 +218,8 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
             "health_check_url" => configured_value(dev_server_paths, "health_check_url", verification.dev_server.health_check_url),
             "health_timeout_ms" => configured_value(dev_server_paths, "health_timeout_ms", verification.dev_server.health_timeout_ms),
             "stop_signal" => configured_value(dev_server_paths, "stop_signal", verification.dev_server.stop_signal),
-            "stop_timeout_ms" => configured_value(dev_server_paths, "stop_timeout_ms", verification.dev_server.stop_timeout_ms)
+            "stop_timeout_ms" => configured_value(dev_server_paths, "stop_timeout_ms", verification.dev_server.stop_timeout_ms),
+            "runs" => configured_value(dev_server_paths, "runs", verification.dev_server.runs)
           }
         end)
     }

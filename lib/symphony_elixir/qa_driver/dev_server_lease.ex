@@ -2,7 +2,8 @@ defmodule SymphonyElixir.QaDriver.DevServerLease do
   @moduledoc """
   One QA-host dev server per worker host and port at a time (TP-1125).
 
-  A `macos_app` pass with `dev_server: true` runs the project's server on the QA host on the
+  A `macos_app` pass whose project server runs beside it (`verification.dev_server.runs` is
+  `every_qa_pass`, or `live_qa_pass` on a live pass) runs that server on the QA host on the
   playbook's fixed `dev_server_port`, and the app under test reads its hub URL from its own
   defaults, so two such passes on one `worker_host` would share the port: the second's server
   fails to bind while the first's answers its health check. Before it starts its server (so

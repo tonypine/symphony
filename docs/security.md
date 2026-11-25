@@ -485,8 +485,7 @@ Symphony starts `verification.dev_server.start_cmd` itself, from the checkout un
 - in an agent run, from the agent's own workspace, before the first turn and for the whole run;
 - in a QA `web` pass, from a second worktree at the PR head.
 
-The command usually runs files from that checkout: a script such as Symphony's own
-`scripts/qa-dashboard-server.sh`, and the repo's build or runtime tool (`npm`, `pnpm`, or an
+The command usually runs files from that checkout: a script in the repo, and the repo's build or runtime tool (`npm`, `pnpm`, or an
 Elixir escript or release that `build_cmd` built; Mix itself can't run under the macOS profile,
 see [below](#macos-the-dev-server-listens-on-a-unix-socket)), which runs the project's code and
 build config. The agent can change all of these, so Symphony runs the command
@@ -618,9 +617,11 @@ server does not start either (`dev_server_sandbox_unconfined`), the same way. A 
 bind holds until Symphony restarts; a check that couldn't run is tried again next time. The
 health check that follows, on `127.0.0.1:<port>` through the bridge, shows the page is served.
 
-The dev server is off by default. It starts only when `verification.enabled` is `true` and
-`verification.dev_server.start_cmd` is set. A repo's `WORKFLOW.md` can set both, and its values
-override `symphony.yml`. To turn it off, leave `verification.enabled` unset (or `false`) in
+The dev server is off by default. On the Symphony host it starts only when `verification.enabled`
+is `true`, `verification.dev_server.start_cmd` is set and `verification.dev_server.runs` is
+`symphony_host` (the default). With `runs: every_qa_pass` or `live_qa_pass` it runs only on the QA
+host, beside the app under test, and never on the Symphony host. A repo's `WORKFLOW.md` can set
+these, and its values override `symphony.yml`. To turn it off, leave `verification.enabled` unset (or `false`) in
 `symphony.yml` and in every repo's `WORKFLOW.md`, or remove `start_cmd` from them. Without a dev
 server, QA skips the `web` playbook ("needs `verification.dev_server`").
 

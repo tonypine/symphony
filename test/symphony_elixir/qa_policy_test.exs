@@ -17,10 +17,14 @@ defmodule SymphonyElixir.QaPolicyTest do
     settings
   end
 
-  # A macos_app playbook with a `live` server, and no `cli` one beside it.
-  defp live_settings!(live) do
-    macos_app = %{"build" => "make", "app" => "A.app", "paths" => ["macos/**"], "live" => live}
-    settings!(%{"auto_review" => %{"playbooks" => %{"cli" => %{"enabled" => false}, "macos_app" => macos_app}}})
+  # A macos_app playbook whose project server runs on live passes, and no `cli` one beside it.
+  defp live_settings!(dev_server) do
+    macos_app = %{"build" => "make", "app" => "A.app", "paths" => ["macos/**"]}
+
+    settings!(%{
+      "verification" => %{"dev_server" => Map.merge(%{"health_check_url" => "http://127.0.0.1:8090/api/v1/state", "runs" => "live_qa_pass"}, dev_server)},
+      "auto_review" => %{"playbooks" => %{"cli" => %{"enabled" => false}, "macos_app" => macos_app}}
+    })
   end
 
   defp kinds({:run, playbooks, reason}), do: {:run, Enum.map(playbooks, & &1.kind), reason}
@@ -303,7 +307,7 @@ defmodule SymphonyElixir.QaPolicyTest do
     end
 
     test "marks a macos_app pass live when the plan sets a QA check QA walks on the live server, whatever its words" do
-      settings = live_settings!(%{"start_cmd" => "scripts/qa-server-start.sh", "paths" => ["lib/**"], "walkthrough_mentions" => ["Director"]})
+      settings = live_settings!(%{"start_cmd" => "scripts/qa-server-start.sh"})
       ticket = groomed!([qa_check("c2", "The Home screen shows the moved ticket.", @live_setting)])
 
       for paths <- [["macos/Sources/Inbox.swift"], ["lib/symphony_elixir/questions.ex"], ["priv/other.txt", "macos/Sources/Inbox.swift"]] do
@@ -315,7 +319,7 @@ defmodule SymphonyElixir.QaPolicyTest do
     end
 
     test "no word in a step makes a pass live: QA checks set to a fixture, and a ticket with no plan, read fixtures only" do
-      settings = live_settings!(%{"start_cmd" => "scripts/qa-server-start.sh", "paths" => ["lib/**"], "walkthrough_mentions" => ["Director", "Inbox"]})
+      settings = live_settings!(%{"start_cmd" => "scripts/qa-server-start.sh"})
       server_and_app = ["lib/symphony_elixir/questions.ex", "macos/Sources/Inbox.swift"]
       ticket = groomed!([qa_check("c2", "In the Director's Inbox, press Decide, then Undo.", @fixture_setting)])
 
@@ -377,8 +381,11 @@ defmodule SymphonyElixir.QaPolicyTest do
 
       assert {:run, [macos_app], reason} = QaPolicy.decision(ticket, settings, ["macos/Sources/Inbox.swift"])
       refute Map.has_key?(macos_app, :live)
-      assert macos_app.live_reason == "the playbook sets no `live` server, though the plan's QA check c2 is set to the live server"
-      assert reason =~ "; the app reads fixtures only: the playbook sets no `live` server"
+
+      assert macos_app.live_reason ==
+               "the project's server does not run on live passes (`verification.dev_server.runs: live_qa_pass`), though the plan's QA check c2 is set to the live server"
+
+      assert reason =~ "; the app reads fixtures only: the project's server does not run on live passes"
 
       :ok = RunStore.clear()
       assert {:run, [macos_app], "the change delivers or updates a user journey"} = QaPolicy.decision(issue(), settings, ["macos/Sources/Inbox.swift"])
@@ -445,10 +452,13 @@ defmodule SymphonyElixir.QaPolicyTest do
       # A Mac app repo: verification off, its dev server run on the QA host beside the app.
       settings =
         settings!(%{
-          "verification" => %{"enabled" => false, "dev_server" => %{"start_cmd" => "server/scripts/dev-server.sh", "health_check_url" => "http://127.0.0.1:8090/health"}},
+          "verification" => %{
+            "enabled" => false,
+            "dev_server" => %{"start_cmd" => "server/scripts/dev-server.sh", "health_check_url" => "http://127.0.0.1:8090/health", "runs" => "every_qa_pass"}
+          },
           "auto_review" => %{
             "worker_host" => "qa-vm",
-            "playbooks" => %{"macos_app" => %{"build" => "make app", "app" => "build/App.app", "dev_server" => true}}
+            "playbooks" => %{"macos_app" => %{"build" => "make app", "app" => "build/App.app"}}
           }
         })
 

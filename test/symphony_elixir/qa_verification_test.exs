@@ -806,7 +806,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert :ok = run(workspace, [])
 
       assert_received {:fixer_create, %{scope: @repo_key, component: "dev_server", description: description}}
-      assert description =~ "set `dev_server: true` on the playbook"
+      assert description =~ "set `verification.dev_server.runs` to when it runs"
     end
 
     test "a QA-host dev server that fails is reported with its log and files its fix ticket in the project's repo" do

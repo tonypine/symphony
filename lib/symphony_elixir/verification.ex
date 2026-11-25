@@ -41,11 +41,21 @@ defmodule SymphonyElixir.Verification do
   def enabled?(_settings), do: false
 
   @doc """
-  Whether verification is on and `verification.dev_server.start_cmd` is set: what a dev server on
-  this host needs, for an agent run or a `web` pass.
+  Whether verification is on, `verification.dev_server.start_cmd` is set and its `runs` rule is
+  `symphony_host`: what a dev server on this host needs, for an agent run or a `web` pass.
   """
   @spec dev_server_configured?(Schema.t()) :: boolean()
-  def dev_server_configured?(%Schema{} = settings), do: enabled?(settings) and dev_server_command_configured?(settings)
+  def dev_server_configured?(%Schema{} = settings),
+    do: enabled?(settings) and dev_server_command_configured?(settings) and runs(settings) == "symphony_host"
+
+  @doc """
+  When the project's server runs, `verification.dev_server.runs` (TP-1663): `symphony_host` (this
+  host, for agent runs and `web` passes, while verification is on), `every_qa_pass` (the QA host,
+  beside every `macos_app` pass) or `live_qa_pass` (the QA host, beside a `macos_app` pass the
+  ticket's plan marks live).
+  """
+  @spec runs(Schema.t()) :: String.t()
+  def runs(%Schema{verification: %{dev_server: %{runs: runs}}}), do: runs
 
   @doc """
   Whether `verification.dev_server.start_cmd` is set, whatever `verification.enabled` says: what a
@@ -58,7 +68,7 @@ defmodule SymphonyElixir.Verification do
   @doc "The dev-server flags `SymphonyElixir.QaAgent.Selection` reads to turn playbooks on."
   @spec selection_opts(Schema.t()) :: keyword()
   def selection_opts(%Schema{} = settings),
-    do: [dev_server?: dev_server_configured?(settings), dev_server_command?: dev_server_command_configured?(settings)]
+    do: [dev_server?: dev_server_configured?(settings), dev_server_command?: dev_server_command_configured?(settings), dev_server_runs: runs(settings)]
 
   @doc """
   Allocates a port and starts `verification.dev_server` in `workspace` for a QA pass, after its
@@ -174,7 +184,8 @@ defmodule SymphonyElixir.Verification do
     settings = Keyword.get(opts, :settings, Config.settings!())
     dev_server = settings.verification.dev_server
 
-    case dev_server.start_cmd do
+    # A server whose `runs` rule puts it on the QA host never starts on this one.
+    case runs(settings) == "symphony_host" and dev_server.start_cmd do
       command when is_binary(command) and command != "" ->
         child_opts = [
           run_id: run_id,
