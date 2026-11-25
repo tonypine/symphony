@@ -8,8 +8,11 @@ defmodule SymphonyElixir.QaBuildHold do
   (the head's selection and its build's record), and runs no git:
 
     * `:ready` -> QA dispatches;
-    * a head the builder has not read yet, or no record -> the build is asked for, with the issue,
-      and the ticket is held; `:building` -> held. The hold is one `:build` reason on the ticket's pause (`waits_on: %{commit: sha}`), set by the rule "QA
+    * a head the builder has not read yet, or no record, on a ticket whose workspace folder exists
+      (`SymphonyElixir.QaBuild.workspace?/3`) -> the build is asked for, with the issue, and the
+      ticket is held. A ticket with no workspace folder (reclaimed, removed by hand) dispatches
+      without asking: its run makes the workspace first, and its pass asks for the build itself, so
+      no commit is read in a folder that is not there; `:building` -> held. The hold is one `:build` reason on the ticket's pause (`waits_on: %{commit: sha}`), set by the rule "QA
       build hold", which a ticket read says as "Waiting for a build" (`SymphonyElixir.Situation`).
       The builder clears it when the build ends, whatever the outcome (`release/3`); the pause's
       change runs a dispatch cycle at once, so nothing waits on a timer;
@@ -21,8 +24,8 @@ defmodule SymphonyElixir.QaBuildHold do
     * `:unavailable` -> the ticket stays held, on an `:environment` reason the Director may release
       (`waits_on: %{condition: "qa_build:<sha>"}`), that reads "The QA build could not run:
       <reason>". Nothing asks for the build again on a timer: a new head does, Symphony's start
-      does, and a person who lifts the hold with Unblock does (`lifted/4`, which asks the builder
-      again before the reason goes).
+      does, a person who lifts the hold with Unblock does (`lifted/4`, which asks the builder
+      again before the reason goes), and each QA pass does the first time it asks for its build.
     * a repository with nothing to build (no `macos_app` `build` and `app`, or no `worker_host`), a
       head whose QA pass does not select the `macos_app` playbook (`SymphonyElixir.QaBuild.selection/4`:
       an Android-only repository, a change outside the app's paths, a change that could not be read),
@@ -88,10 +91,24 @@ defmodule SymphonyElixir.QaBuildHold do
     :held
   end
 
+  # A head with nothing built yet needs the ticket's workspace to be read or built in: without one,
+  # the run makes it, and the pass asks for its build.
+  defp act(nil, repo_key, issue, head, builder, _opts) do
+    if builder.workspace?(repo_key, issue.identifier) do
+      request(repo_key, issue, head, builder)
+    else
+      Logger.info("QA dispatches without a build ahead: the ticket has no workspace yet issue_id=#{issue.id} issue_identifier=#{issue.identifier} repo_key=#{repo_key} head_sha=#{head}")
+      release(repo_key, issue.id, issue.identifier)
+      :dispatch
+    end
+  end
+
+  defp act(_building, repo_key, issue, head, builder, _opts), do: request(repo_key, issue, head, builder)
+
   # Asked for again while it builds too: after a restart the builder learns who waits from this. A
   # head the builder has not read yet is held the same way: the builder reads it with the issue, and
   # releases the ticket at once when its pass does not select the app.
-  defp act(_none_or_building, repo_key, issue, head, builder, _opts) do
+  defp request(repo_key, issue, head, builder) do
     hold(repo_key, issue, head, building_reason(head))
     builder.request(repo_key, head, %{identifier: issue.identifier, issue_id: issue.id, held: true, issue: issue})
     :held

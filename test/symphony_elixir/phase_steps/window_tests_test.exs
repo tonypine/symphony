@@ -119,7 +119,7 @@ defmodule SymphonyElixir.PhaseSteps.WindowTestsTest do
 
     [
       plan: fn @repo_key -> {:ok, %{worker_host: "qa-vm", build: "make app", app: "build/Demo.app", build_timeout_ms: 60_000}} end,
-      fetch: fn @repo_key, sha, %{identifier: "TP-77", issue_id: @issue_id}, [] ->
+      fetch: fn @repo_key, sha, %{identifier: "TP-77", issue_id: @issue_id}, [ask_again: true] ->
         send(test, {:built, sha})
         Map.get(overrides, :build, &built/1).(sha)
       end,

@@ -2319,7 +2319,15 @@ agent, before QA starts. There is no setting for it: it is on exactly when the p
 - **A build that could not run** (no QA host it may use, the QA host refused or unreachable, the
   commit not copied, a timeout): the ticket stays in QA, held, reading "The QA build could not run:
   <reason>". Nothing tries again on a timer. The build is asked for again by a new head, by
-  Symphony's start, or by a person who lifts the hold with **Unblock** in the Director.
+  Symphony's start, by a person who lifts the hold with **Unblock** in the Director, and by each new
+  QA pass the first time its `qa_build` asks for the commit, whoever started the pass ("Run QA
+  again", the Conductor, the machine's own retry): the pass gets the outcome of that new attempt,
+  never the old record. A build unavailable again fails that pass with the new reason, and the next
+  pass tries once more. The Window tests step asks again the same way, once per run of the step.
+- **A ticket with no workspace folder** (reclaimed, deleted by hand): the commit is read only in
+  the ticket's workspace folder, so nothing reads it while the folder is missing, and no record is
+  left. The QA ticket dispatches without a build ahead; its run makes the workspace first, and its
+  pass's `qa_build` asks for the build there.
 
 Symphony reaches the QA VM with the same SSH transport as `workers.ssh_hosts` (`SYMPHONY_SSH_CONFIG`
 applies), non-interactively, so key authentication must already work. Do not list it in
