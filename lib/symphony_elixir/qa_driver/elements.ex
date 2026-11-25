@@ -377,25 +377,27 @@ defmodule SymphonyElixir.QaDriver.Elements do
 
     case element do
       %{"visible" => true, "frame" => %{"y" => y, "h" => h}, "shown" => %{"y" => shown_y, "h" => shown_h}} ->
-        cond do
-          y + h > shown_y + shown_h + 0.5 -> {"down", clamp(round(y + h - (shown_y + shown_h)) + 8, page)}
-          y < shown_y - 0.5 -> {"up", -clamp(round(shown_y - y) + 8, page)}
-          true -> {direction, if(direction == "up", do: -page, else: page)}
-        end
+        toward_cut(y, h, shown_y, shown_y + shown_h, 0.5, 8, page) || search_page(direction, page)
 
       %{"frame" => %{"y" => y, "h" => h}} ->
         {top, bottom} = window_span(report, element)
-
-        cond do
-          y + h > bottom -> {"down", clamp(round(y + h - bottom) + 40, page)}
-          y < top -> {"up", -clamp(round(top - y) + 40, page)}
-          true -> {direction, if(direction == "up", do: -page, else: page)}
-        end
+        toward_cut(y, h, top, bottom, 0, 40, page) || search_page(direction, page)
 
       nil ->
-        {direction, if(direction == "up", do: -page, else: page)}
+        search_page(direction, page)
     end
   end
+
+  defp toward_cut(y, h, top, bottom, slack, margin, page) do
+    cond do
+      y + h > bottom + slack -> {"down", clamp(round(y + h - bottom) + margin, page)}
+      y < top - slack -> {"up", -clamp(round(top - y) + margin, page)}
+      true -> nil
+    end
+  end
+
+  defp search_page("up", page), do: {"up", -page}
+  defp search_page(direction, page), do: {direction, page}
 
   defp clamp(value, page), do: value |> max(40) |> min(page)
 
