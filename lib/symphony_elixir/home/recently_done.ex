@@ -6,7 +6,10 @@ defmodule SymphonyElixir.Home.RecentlyDone do
   ticket records alone (no Linear request).
 
   - A ticket is done when Symphony noted its `issue_completed` event, as the Shipped read counts it
-    (`SymphonyElixir.Shipped.done_runs/2`); a cancelled ticket is not.
+    (`SymphonyElixir.Shipped.done_runs/2`); a cancelled ticket is not. Its done time is when it was
+    done, not when the completion was noted (`SymphonyElixir.Shipped.done_at/2`): the moment its
+    pull request merged, or for a ticket with no pull request the moment it entered Done. The same
+    time orders the list and decides the range a ticket counts in.
   - The ranges are `today`, the host's local day of the read, and `week`, the 7 local days ending
     today, today included. The counts of both come with every read, whichever range it gives.
   - An entry gives the ticket's issue id, identifier, title, repo, when it was done (`done_at`, whole
@@ -70,12 +73,12 @@ defmodule SymphonyElixir.Home.RecentlyDone do
   `parents`, each ticket's parent by issue id as its identifier
   (`SymphonyElixir.Dispatch.Queue.parents/1`): the `range`, `counts` (`today` and `week`), the
   entries, `offset`, `limit` and `next_offset` (nil on the last page). `opts`: `:now`, `:to_local`
-  and `:runs_started_on`, as `SymphonyElixir.Shipped.done_runs/2` takes them.
+  `:runs_started_on` and `:ticket_events`, as `SymphonyElixir.Shipped.done_runs/2` takes them.
   """
   @spec read([map()], %{String.t() => String.t()}, page(), keyword()) :: map()
   def read(records, parents, page, opts) do
-    %{today: today, local_date: local_date, runs: week} = Shipped.done_runs(@week_days, Keyword.take(opts, [:now, :to_local, :runs_started_on]))
-    today_runs = Enum.filter(week, &(local_date.(&1.issue_completed_notified_at) == today))
+    %{today: today, local_date: local_date, runs: week} = Shipped.done_runs(@week_days, Keyword.take(opts, [:now, :to_local, :runs_started_on, :ticket_events]))
+    today_runs = Enum.filter(week, &(local_date.(&1.done_at) == today))
     runs = if page.range == :today, do: today_runs, else: week
     taken = runs |> Enum.drop(page.offset) |> Enum.take(page.limit)
     next = page.offset + length(taken)
@@ -105,7 +108,7 @@ defmodule SymphonyElixir.Home.RecentlyDone do
       identifier: Map.get(run, :issue_identifier) || Map.get(record, :issue_identifier),
       title: Map.get(run, :title) || Map.get(record, :title),
       repo_key: repo_key,
-      done_at: run.issue_completed_notified_at |> DateTime.truncate(:second) |> DateTime.to_iso8601(),
+      done_at: run.done_at |> DateTime.truncate(:second) |> DateTime.to_iso8601(),
       pull_request_number: pull_request_number(repo_key, run),
       epic: epic(run, record, ctx)
     }

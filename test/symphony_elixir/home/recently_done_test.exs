@@ -6,6 +6,7 @@ defmodule SymphonyElixir.Home.RecentlyDoneTest do
 
   alias SymphonyElixir.Dispatch.Queue
   alias SymphonyElixir.Home.RecentlyDone
+  alias SymphonyElixir.TicketEvents
   alias SymphonyElixir.TicketPullRequest
 
   setup do
@@ -131,5 +132,86 @@ defmodule SymphonyElixir.Home.RecentlyDoneTest do
     assert RecentlyDone.page(%{"done_offset" => "-1"}) == {:error, {:invalid, "done_offset must be a whole number from 0"}}
     assert RecentlyDone.page(%{"done_limit" => "0"}) == {:error, {:invalid, "done_limit must be a whole number from 1"}}
     assert RecentlyDone.page(%{"done_limit" => "x"}) == {:error, {:invalid, "done_limit must be a whole number from 1"}}
+  end
+
+  describe "the done time" do
+    # One second in which Symphony noted the completion of several tickets done hours apart, as on
+    # a restart: the stamp every run below carries.
+    @noted ~U[2026-11-24 10:30:08Z]
+
+    defp merged(issue_id, at), do: {:ok, _event} = TicketEvents.record("app", issue_id, "phase.entered", %{to: "Done", from: "Merging", signal: "merge settled"}, at: at)
+
+    defp done_runs do
+      [
+        # Merged at 02:00 local, and again noted done by a later move.
+        run("d1", "APP-11", "app", @noted, %{started_at: ~U[2026-11-24 04:00:00Z]}),
+        # Merged at 04:30 local.
+        run("d2", "APP-12", "app", @noted, %{started_at: ~U[2026-11-24 06:00:00Z]}),
+        # An epic done through its sub-tickets, with no pull request: it entered Done at 03:00 local.
+        run("d3", "APP-13", "app", @noted, %{started_at: ~U[2026-11-24 05:00:00Z]}),
+        # Accepted with no pull request: moved to Done by a person at 01:00 local.
+        run("d4", "APP-14", "app", @noted, %{started_at: ~U[2026-11-24 03:30:00Z]}),
+        # Merged at 22:00 local yesterday, noted today.
+        run("d5", "APP-15", "app", @noted, %{started_at: ~U[2026-11-23 23:00:00Z]}),
+        # Merged a week ago, noted today: older than the week.
+        run("d6", "APP-16", "app", @noted, %{started_at: ~U[2026-11-17 10:00:00Z]}),
+        # A ticket whose ledger holds no merge and no move into Done: the time its completion was noted.
+        run("d7", "APP-17", "app", ~U[2026-11-24 11:00:00Z])
+      ]
+    end
+
+    defp record_done_events do
+      merged("d1", ~U[2026-11-24 05:00:00Z])
+      {:ok, _moved} = TicketEvents.record("app", "d1", "phase.entered", %{to: "Done", from: "Done"}, at: ~U[2026-11-24 09:00:00Z])
+      merged("d2", ~U[2026-11-24 07:30:00Z])
+      {:ok, _merge} = TicketEvents.record("app", "d3", "phase.entered", %{to: "QA", from: "In Progress"}, at: ~U[2026-11-24 05:30:00Z])
+      {:ok, _done} = TicketEvents.record("app", "d3", "phase.entered", %{to: "Done", from: "Waiting on sub-tickets"}, at: ~U[2026-11-24 06:00:00Z])
+      {:ok, _accepted} = TicketEvents.record("app", "d4", "ticket.moved", %{from: "QA", to: "Done"}, at: ~U[2026-11-24 04:00:00Z], actor: {:person, "Director"})
+      merged("d5", ~U[2026-11-24 01:00:00Z])
+      merged("d6", ~U[2026-11-17 11:00:00Z])
+    end
+
+    defp done(entries), do: Enum.map(entries, &{&1.identifier, &1.done_at})
+
+    test "is when the pull request merged, or when a ticket with none entered Done, not when its completion was noted" do
+      record_done_events()
+
+      assert done(read(page(:today), done_runs()).entries) == [
+               {"APP-17", "2026-11-24T11:00:00Z"},
+               {"APP-12", "2026-11-24T07:30:00Z"},
+               {"APP-13", "2026-11-24T06:00:00Z"},
+               {"APP-11", "2026-11-24T05:00:00Z"},
+               {"APP-14", "2026-11-24T04:00:00Z"}
+             ]
+    end
+
+    test "orders the list and decides Today and Week: a ticket done yesterday and noted today counts in Week only" do
+      record_done_events()
+
+      today = read(page(:today), done_runs())
+      week = read(page(:week), done_runs())
+
+      assert %{counts: %{today: 5, week: 6}} = today
+      refute "APP-15" in Enum.map(today.entries, & &1.identifier)
+      assert Enum.map(week.entries, & &1.identifier) == ["APP-17", "APP-12", "APP-13", "APP-11", "APP-14", "APP-15"]
+      assert {"APP-15", "2026-11-24T01:00:00Z"} in done(week.entries)
+    end
+
+    test "stays the same when the completion is noted again later, on the same run or a new one" do
+      record_done_events()
+      before = done(read(page(:week), done_runs()).entries)
+
+      noted_again =
+        Enum.map(done_runs(), fn
+          %{issue_id: "d7"} = run -> run
+          run -> %{run | issue_completed_notified_at: ~U[2026-11-24 11:59:59Z]}
+        end)
+
+      # A later run on a done ticket, as a parent's or sibling's work starts one, noted done again.
+      later_run = run("d2", "APP-12", "app", ~U[2026-11-24 11:45:00Z], %{started_at: ~U[2026-11-24 11:30:00Z]})
+
+      assert done(read(page(:week), [later_run | noted_again]).entries) == before
+      assert done(read(page(:week), [later_run | done_runs()]).entries) == before
+    end
   end
 end
