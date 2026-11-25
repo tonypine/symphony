@@ -2,7 +2,7 @@ defmodule SymphonyElixir.Conductor.MessageTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.{Conductor, Messages, Pauses, Questions, TicketChecks, TicketEvents, TicketPlan}
-  alias SymphonyElixir.Conductor.{Facts, Message, Steer}
+  alias SymphonyElixir.Conductor.{Facts, Grooming, Message, Steer}
   alias SymphonyElixir.Config.{Cache, Schema}
 
   @on %Schema.Conductor{enabled: true}
@@ -638,23 +638,30 @@ defmodule SymphonyElixir.Conductor.MessageTest do
       assert length(TicketPlan.versions(id)) == 1
     end
 
-    test "after a restart the ticket is found owed, and a try that writes no plan is counted until Grooming gives up", %{fresh_id: id} do
+    test "after a restart the ticket is found owed, and a Grooming that writes no plan is a try of the message, never of the dispatch",
+         %{fresh_id: id} do
       conductor_on!()
       message = say!(id)
       assert id in Message.owed_tickets(settings: @on)
+      failing = fresh_opts(%{"grooming" => {:error, :boom, 0}})
 
-      capture_log(fn -> assert Message.tend(id, fresh_opts(%{"grooming" => {:error, :boom, 0}})) == :owed end)
-      assert [_try] = status_notes(id)
+      capture_log(fn -> assert Message.tend(id, failing) == :owed end)
+      capture_log(fn -> assert Message.tend(id, failing) == :owed end)
+      assert [first, _second] = status_notes(id)
+      assert first =~ "Grooming did not finish"
       assert Message.owed(id, settings: @on).messages == [message]
 
-      capture_log(fn -> assert Message.tend(id, fresh_opts(%{"grooming" => {:error, :boom, 0}})) == :done end)
-      assert [_first, last] = status_notes(id)
-      assert last =~ "starts without a plan"
-
-      # Grooming gave up: the old rule, the first run is given the message.
-      refute Message.due?(id, settings: @on)
+      # The third try gives up with Symphony's own reply under the message, so it never stays unanswered.
+      capture_log(fn -> assert Message.tend(id, failing) == :done end)
+      message_id = message.id
+      assert [%{payload: %{text: text}}] = replies_to(id, message_id)
+      assert text =~ "Symphony gave up on this message"
+      assert text =~ "Grooming did not finish"
       refute id in Message.owed_tickets(settings: @on)
-      assert Messages.prepend_unread("The prompt.", "default", id, "run-first-#{id}") =~ "## Messages from the person"
+
+      # The dispatch's Grooming tries are untouched: the first run is still groomed.
+      assert Grooming.tries(Facts.events(id)) == 0
+      assert Conductor.dispatch_junction(:implementation, Facts.events(id)) == "grooming"
     end
 
     test "nothing runs and no try is counted while no provider can take the turn, another turn holds the lock, Symphony is paused or the gate is shut",
@@ -704,12 +711,26 @@ defmodule SymphonyElixir.Conductor.MessageTest do
       crash = fn _plan, _issue, _run_id, _prompt -> raise "the harness crashed" end
       other = ticket!("MSG-C#{id}", "msg-c-#{id}", %{description: "Keep it."})
       say!(other.issue_id)
-      assert capture_log(fn -> assert Message.tend(other.issue_id, fresh_opts(%{}, turn: crash)) == :owed end) =~ "Grooming wrote no plan"
+      capture_log(fn -> assert Message.tend(other.issue_id, fresh_opts(%{}, turn: crash)) == :owed end)
       assert Message.owed(other.issue_id, settings: @on).messages != []
+      assert [_try] = status_notes(other.issue_id)
+      assert Grooming.tries(Facts.events(other.issue_id)) == 0
 
-      # Grooming that raises before its turn is logged and leaves the message owed.
+      # Grooming that raises before its turn is logged and is a failed try.
       broken = fresh_opts(%{}, paused?: fn _subject -> raise "no pauses" end)
-      assert capture_log(fn -> assert Conductor.groom_now(issue(other), "default", broken) == :ok end) =~ "Grooming failed"
+      assert capture_log(fn -> assert Conductor.groom_now(issue(other), "default", broken) == {:failed, "Grooming failed: no pauses"} end) =~ "Grooming failed"
+    end
+
+    test "an ask too long to record is no failed try: the ticket runs without a plan and its run is given the message", ctx do
+      long = ticket!("MSG-L#{ctx.n}", "msg-l-#{ctx.n}", %{description: String.duplicate("x", TicketPlan.ask_max() + 1)})
+      say!(long.issue_id)
+      no_turn = fn _plan, _issue, _run_id, _prompt -> flunk("no turn runs") end
+
+      assert Conductor.groom_now(issue(long), "default", fresh_opts(%{}, turn: no_turn)) == :ok
+      refute TicketPlan.groomed?(long.issue_id)
+      assert [text] = status_notes(long.issue_id)
+      assert text =~ "starts without a plan"
+      refute Message.due?(long.issue_id, settings: @on)
     end
 
     test "a finished ticket and one that ran without a plan are not groomed for a message", ctx do

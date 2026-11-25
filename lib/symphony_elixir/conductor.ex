@@ -719,28 +719,31 @@ defmodule SymphonyElixir.Conductor do
   loses the label as at the dispatch (`Grooming.take_over/3`).
 
   Nothing runs while another turn holds the ticket's lock, while no provider of `runs.conductor`
-  can take the turn, or while Symphony or the repository is paused: the message stays owed. A try
-  that wrote no plan is counted as at the dispatch (`Grooming.failed/3`). Always `:ok`. `opts`:
-  `plan/4`'s, `run/3`'s and `Grooming.workspace/3`'s.
+  can take the turn, or while Symphony or the repository is paused: the message stays owed, and
+  `:ok` is returned. A try that wrote no plan is `{:failed, why}`, in plain words, and counts none
+  of the dispatch's Grooming tries (`Grooming.failed/3`): the message counts it as one of its own
+  (`SymphonyElixir.Conductor.Message.tend/2`), so a failure here never leaves the ticket's first run
+  without a plan. `opts`: `plan/4`'s, `run/3`'s and `Grooming.workspace/3`'s.
   """
-  @spec groom_now(Issue.t(), String.t() | nil, keyword()) :: :ok
+  @spec groom_now(Issue.t(), String.t() | nil, keyword()) :: :ok | {:failed, String.t()}
   def groom_now(%Issue{id: issue_id} = issue, repo_key, opts \\ []) do
     due = &if(Grooming.due?(:implementation, &1), do: @grooming)
 
     with %{} = plan <- plan_with(issue_id, repo_key, opts, due),
-         false <- Map.has_key?(plan, :unavailable) or dispatch_paused?(repo_key, opts) do
-      _groomed_or_busy = exclusive(issue_id, :skip, fn -> groom_early(plan, issue, opts) end)
+         false <- Map.has_key?(plan, :unavailable) or dispatch_paused?(repo_key, opts),
+         {:ok, groomed} <- exclusive(issue_id, :skip, fn -> groom_early(plan, issue, opts) end) do
+      groomed
+    else
+      _not_now -> :ok
     end
-
-    :ok
   rescue
     error ->
       Logger.warning("Grooming failed #{context(issue, %{issue_id: issue_id, repo_key: repo_key})}: #{Exception.message(error)}")
-      :ok
+      {:failed, "Grooming failed: #{Exception.message(error)}"}
   end
 
   # The lock is held: a dispatch's Grooming may have written the plan while this waited, and then
-  # nothing runs. A turn the gate closed, or one that asked the person, counts no try.
+  # nothing runs. A turn the gate closed, or one that asked the person, is no failure.
   defp groom_early(%{issue_id: issue_id, repo_key: repo_key} = plan, issue, opts) do
     with true <- Grooming.due?(:implementation, Facts.read_events(issue_id)),
          :ok <- Grooming.record_ask(repo_key, issue, record(issue_id, opts), Facts.events(issue_id)) do
@@ -749,11 +752,18 @@ defmodule SymphonyElixir.Conductor do
         {_exit, :held, _route} -> :ok
         {exit, _held, _route} -> groomed_early(TicketPlan.groomed?(issue_id), exit, plan, issue, opts)
       end
+    else
+      # Not due any more, or an ask that could not be recorded (too long: the ticket runs without a plan).
+      _not_due_or_unrecorded -> :ok
     end
   end
 
-  defp groomed_early(true, _exit, plan, issue, opts), do: Grooming.take_over(plan.repo_key, issue, Keyword.take(opts, [:tracker]))
-  defp groomed_early(false, exit, plan, issue, _opts), do: ungroomed(plan, issue, why_ungroomed(exit))
+  defp groomed_early(true, _exit, plan, issue, opts) do
+    _taken_over_or_unchanged = Grooming.take_over(plan.repo_key, issue, Keyword.take(opts, [:tracker]))
+    :ok
+  end
+
+  defp groomed_early(false, exit, _plan, _issue, _opts), do: {:failed, "Grooming did not finish: #{why_ungroomed(exit)}"}
 
   defp groom_turn(%{unavailable: provider} = plan, issue, _opts) do
     ungroomed(plan, issue, "no provider of runs.conductor can take a run now (#{provider})")

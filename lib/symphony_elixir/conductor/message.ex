@@ -23,7 +23,9 @@ defmodule SymphonyElixir.Conductor.Message do
   that no run read while the junction was off), and for an `ask.recorded` its parent wrote after
   the current version of its plan (`source: parent`), which the turn answers by writing the plan
   again. A ticket that can be groomed now is owed a turn for each such message too: `tend/2`
-  grooms it first. So a message written while Grooming still ran, when no turn could start, is
+  grooms it first; a Grooming there that wrote no plan is a failed try of each message it was for,
+  never one of the dispatch's, so the message gets Symphony's own reply after the third and the
+  ticket's first run is still groomed. So a message written while Grooming still ran, when no turn could start, is
   answered once the plan exists: `SymphonyElixir.Conductor` says so as Grooming ends
   (`plan_written/2`).
 
@@ -31,7 +33,7 @@ defmodule SymphonyElixir.Conductor.Message do
   too (`source: linear_description`, `SymphonyElixir.Conductor.DescriptionEdit`): the turn reads
   the whole edited text with `rules` that say so, and when the edit changes what is asked its
   answer gives the words it adds (`added`), which are recorded as the ask in place of the whole
-  description.
+  description; an answer that changes the ask without them is refused, and the turn tried again.
 
   `tend/2` runs what a ticket is owed. It is started as a message is written (`start/3`), as a
   parent writes a new ask (`recalibrate/3`), as a plan is first written, and by the orchestrator's
@@ -111,7 +113,7 @@ defmodule SymphonyElixir.Conductor.Message do
   @edit "This `message` is no message a person sent: it is the ticket's whole Linear description as a person edited it " <>
           "after Symphony had written it from the asks, the plan and its checks. Read what the edit adds or changes " <>
           "compared with the asks and the plan. When it changes what is asked, answer `\"ask\": true` with the plan " <>
-          "written again, and put in `added` the person's own words the edit adds, word for word: Symphony records them " <>
+          "written again, and put in `added` (then required: an answer without it is refused) the person's own words the edit adds, word for word: Symphony records them " <>
           "as the new ask in place of the whole description. When it changes nothing, say so in `update`."
   @child_junction "child_message"
   @finished "This ticket is finished, so nothing on it changes any more. Reply to the message. If it asks for more work, " <>
@@ -328,9 +330,22 @@ defmodule SymphonyElixir.Conductor.Message do
     end
   end
 
+  # A Grooming that failed here is a failed try of each message it was for (`unanswered/3`'s count),
+  # never one of the dispatch's: after 3 the message gets Symphony's own reply, and the
+  # ticket's first run is still groomed.
   defp groom(record, opts) do
-    Keyword.get(opts, :groom, &Conductor.groom_now/3).(issue(record), record.repo_key, opts)
+    case Keyword.get(opts, :groom, &Conductor.groom_now/3).(issue(record), record.repo_key, opts) do
+      {:failed, why} -> groom_failed(record, why, opts)
+      _ok -> :ok
+    end
+
     if TicketPlan.groomed?(record.issue_id), do: :groomed, else: :ungroomed
+  end
+
+  defp groom_failed(record, why, opts) do
+    events = Facts.events(record.issue_id)
+    plan = %{repo_key: record.repo_key, issue_id: record.issue_id}
+    for %Event{} = message <- owed(record.issue_id, opts).messages, do: count(plan, message, events, nil, why)
   end
 
   defp answer(record, %{messages: messages, asks: asks, children: children}, opts) do
@@ -485,10 +500,12 @@ defmodule SymphonyElixir.Conductor.Message do
     drop? = is_binary(Map.get(answered, :reason))
     opts = [run_id: run_id, idempotency: "plan.written:#{run_id}", new_ask: answer.ask == true, drop_outcomes: drop?]
 
-    with {:ok, _event} <- TicketPlan.write(repo_key, issue_id, next, opts),
+    with :ok <- added_given(answer, messages),
+         {:ok, _event} <- TicketPlan.write(repo_key, issue_id, next, opts),
          :ok <- record_asks(answer, repo_key, issue_id, messages, run_id) do
       :ok
     else
+      {:refused, why} -> {:error, why}
       {:error, {:invalid_plan, reasons}} -> {:error, "its plan was refused: " <> Enum.join(reasons, "; ")}
       {:error, reason} -> {:error, "its plan could not be recorded: #{inspect(reason)}"}
     end
@@ -504,7 +521,7 @@ defmodule SymphonyElixir.Conductor.Message do
   defp answered(_plan), do: []
 
   # Each message the turn answered is what is asked now, word for word, oldest first. Of a Linear
-  # description edit, the words the turn says it adds (`added`), when it gives them.
+  # description edit, the words the turn says it adds (`added`, `added_given/2`).
   defp record_asks(%{ask: false}, _repo_key, _issue_id, _messages, _run_id), do: :ok
 
   defp record_asks(answer, repo_key, issue_id, messages, run_id) do
@@ -785,9 +802,18 @@ defmodule SymphonyElixir.Conductor.Message do
     :ok
   end
 
-  defp asked_text(message, added) do
-    if field(message, :source) == @description_edit and is_binary(added), do: added, else: field(message, :text)
+  # A Linear description edit holds Symphony's own projection of the ask, the plan and its checks:
+  # recorded whole as an ask, the next projection would nest it inside itself. So an answer that
+  # changes the ask for one names the words the edit adds (`added`), and one that does not is refused.
+  defp added_given(%{ask: true} = answer, messages) do
+    if Enum.any?(messages, &(field(&1, :source) == @description_edit)) and not is_binary(Map.get(answer, :added)),
+      do: {:refused, "it changed the ask for a Linear description edit without `added`, the person's words the edit adds"},
+      else: :ok
   end
+
+  defp added_given(_answer, _messages), do: :ok
+
+  defp asked_text(message, added), do: if(field(message, :source) == @description_edit, do: added, else: field(message, :text))
 
   defp field(%Event{payload: payload}, key), do: Map.get(payload, key, Map.get(payload, Atom.to_string(key)))
 end

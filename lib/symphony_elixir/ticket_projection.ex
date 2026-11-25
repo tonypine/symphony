@@ -70,19 +70,34 @@ defmodule SymphonyElixir.TicketProjection do
   rendered from the ticket's `events` as they grew (`render/1` of each of their prefixes, so a
   description a newer plan has not reached yet is still Symphony's), none of the asks recorded,
   and no description edit already sent as a message. Nil otherwise, and for a ticket with no
-  projection. The text is compared whole, never diffed.
+  projection. The text is compared whole, never diffed, in the form Linear keeps it in
+  (`comparable/1`): Linear rewrites the markdown it is given (its own list markers, backslash
+  escapes, emphasis marks, blank lines), so what it gives back of Symphony's own write is still
+  Symphony's.
   """
   @spec edited(String.t() | nil, [Event.t()]) :: String.t() | nil
   def edited(description, events) when is_list(events) do
     text = person_text(description)
-    known? = text == "" or render(events) == nil or text in asks(events) or text in edits(events)
-    if known? or MapSet.member?(rendered(events), text), do: nil, else: text
+    key = comparable(text)
+    known? = key == "" or render(events) == nil or key in Enum.map(asks(events) ++ edits(events), &comparable/1)
+    if known? or MapSet.member?(rendered(events), key), do: nil, else: text
   end
 
-  # Every projection the ticket's events rendered as they grew, trimmed.
+  # `text` in a form that is the same for what Symphony writes and what Linear gives back of it: no
+  # list markers at the starts of lines, no backslashes, no `*` or `_` emphasis marks, every run of
+  # white space one space. Only used to compare texts, never written.
+  defp comparable(text) do
+    text
+    |> String.replace(~r/^[ \t]*[-*+][ \t]+/mu, "")
+    |> String.replace(~r/[\\*_]/u, "")
+    |> String.replace(~r/\s+/u, " ")
+    |> String.trim()
+  end
+
+  # Every projection the ticket's events rendered as they grew, comparable.
   defp rendered(events) do
     projected = Enum.filter(events, &(&1.type in @types))
-    for n <- 1..length(projected)//1, text = render(Enum.take(projected, n)), is_binary(text), into: MapSet.new(), do: String.trim(text)
+    for n <- 1..length(projected)//1, text = render(Enum.take(projected, n)), is_binary(text), into: MapSet.new(), do: comparable(text)
   end
 
   # The description edits already given to the Conductor as messages.

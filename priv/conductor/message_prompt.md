@@ -136,7 +136,7 @@ Write your answer as one JSON object and nothing else:
   "update": "<your reply to the person, markdown, at most 1200 characters>",
   "blocks": [<optional, at most 3>],
   "ask": true or false,
-  "added": null or "<only with ask true on a Linear description edit: the words the edit adds, as the person wrote them>",
+  "added": null or "<required with ask true on a Linear description edit, refused without: the words the edit adds, as the person wrote them>",
   "plan": null or {
     "reason": "<what changed and why, at most 1000 characters>",
     "shape": "single" or "split",

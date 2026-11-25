@@ -7055,10 +7055,13 @@ Minimum endpoints:
     (`junction: "message"`) whose `parent` is the message. A ticket that has no plan and never ran
     (with the `grooming` junction on, not finished, no question open) is groomed first, outside any
     dispatch, and the message is answered once its plan exists; its first run then works from that
-    plan and is not given the message. A person's edit of a groomed ticket's Linear description,
-    once Symphony wrote it, is recorded as such a message (`source: linear_description`) when its
-    text is none of Symphony's own projections, asks or earlier edits, and is answered the same
-    way. That turn may record a new plan version and the message as an ask, steer or stop the
+    plan and is not given the message. A Grooming there that writes no plan is a failed try of the
+    message, never one of the dispatch's Grooming tries. A person's edit of a groomed ticket's
+    Linear description, once Symphony wrote it, is recorded as such a message (`source:
+    linear_description`) when its text is none of Symphony's own projections, asks or earlier
+    edits, compared in the form Linear stores markdown in (list markers, backslash escapes,
+    emphasis marks and white space set aside), and is answered the same way; a turn that changes
+    the ask for it must name the words the edit adds (`added`), which are recorded as the ask. That turn may record a new plan version and the message as an ask, steer or stop the
     working run, change the ticket's sub-tickets or waive a check; on a finished ticket it may only
     reply or have a new, related ticket created. A turn that fails is tried again with the reason
     in its facts, and after 3 failed tries Symphony's own reply says that nothing was done and why

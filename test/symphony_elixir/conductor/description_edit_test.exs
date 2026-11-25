@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.Conductor.DescriptionEditTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.Conductor.{DescriptionEdit, Facts}
+  alias SymphonyElixir.Conductor.{DescriptionEdit, Facts, Message}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.{IssueSummary, Messages, TicketChecks, TicketPlan, TicketProjection}
 
@@ -101,15 +101,47 @@ defmodule SymphonyElixir.Conductor.DescriptionEditTest do
     assert [_once] = messages(ctx.issue_id)
   end
 
-  test "an edit the Conductor folds in without naming what it adds is recorded whole", ctx do
+  test "an answer that folds an edit in without naming what it adds is refused, and the turn is tried again", ctx do
     edited = written(ctx.issue_id, "\n\nAnd the search text.")
     checks = [%{"id" => "c1", "kind" => "outcome", "statement" => "The filter survives a reload.", "proof" => "test"}]
     plan = %{"shape" => "single", "layers" => ["logic"], "summary" => "Both.", "text" => "T.", "checks" => checks, "size" => %{"tokens" => 1, "runs" => 1}}
     reply = {:ok, [Jason.encode!(%{"update" => "Folded in.", "ask" => true, "plan" => plan})], 900}
 
-    assert DescriptionEdit.observed("default", ctx.record, edited, conductor(reply)) == :ok
-    assert [_linear, %{source: "message", text: text}] = TicketPlan.ask(ctx.issue_id)
-    assert text == TicketProjection.person_text(edited)
+    capture_log(fn -> assert DescriptionEdit.observed("default", ctx.record, edited, conductor(reply)) == :ok end)
+
+    # The whole description, which holds Symphony's own projection, is never recorded as an ask.
+    assert [%{source: "linear"}] = TicketPlan.ask(ctx.issue_id)
+    assert %{version: 1} = TicketPlan.current(ctx.issue_id)
+    assert ctx.issue_id |> Facts.events() |> Enum.filter(&(&1.type == "conductor.update")) == []
+    assert [note] = for(%{type: "note", payload: %{status: true, text: text}} <- Facts.events(ctx.issue_id), do: text)
+    assert note =~ "without `added`"
+    assert [_message] = Message.owed(ctx.issue_id, settings: @on).messages
+  end
+
+  test "Symphony's own write as Linear gives it back (its list markers, escapes and blank lines) is no edit", ctx do
+    {:ok, _proof} = TicketChecks.prove("default", ctx.issue_id, %{check_id: "c1", by: "test", test: "list_test › keeps_the_filter"})
+
+    {:ok, _ask} = TicketPlan.record_ask("default", ctx.issue_id, "Use the *list_view* module.")
+
+    projection =
+      ctx.issue_id
+      |> Facts.events()
+      |> TicketProjection.render()
+      |> String.replace(~r/^- /m, "* ")
+      |> String.replace("[", "\\[")
+      |> String.replace("_", "\\_")
+      |> String.replace("*list", "_list")
+      |> String.replace("view*", "view_")
+      |> String.replace("\n\n", "\n\n\n")
+
+    as_linear = "#{projection}\n\n#{IssueSummary.start_marker()}\nPR open.\n#{IssueSummary.end_marker()}"
+    assert as_linear =~ "* \\[proved\\] c1"
+    assert as_linear =~ "_list\\_view_"
+    assert DescriptionEdit.observed("default", ctx.record, as_linear, conductor(nil)) == :ok
+    assert messages(ctx.issue_id) == []
+
+    # A person's words added to it are still an edit.
+    assert TicketProjection.edited(as_linear <> "\n\nAnd the search text.", Facts.events(ctx.issue_id)) =~ "And the search text."
   end
 
   test "nothing before Symphony wrote the description, and an edit too long for a message is logged", ctx do
