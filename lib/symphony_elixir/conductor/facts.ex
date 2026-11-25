@@ -116,7 +116,13 @@ defmodule SymphonyElixir.Conductor.Facts do
   @waive_rule "Never waive a check for the person to verify later, by hand or on their promise: a ticket's life ends at its " <>
                 "delivery, and a waiver never leaves a debt on the person. When a check cannot be proved the way the plan says, " <>
                 "it is proved another way now (a test, or what the record shows) or the plan no longer holds it: the waiver's " <>
-                "reason says which, and how it is proved or why the plan does not need it."
+                "reason says which, and how it is proved or why the plan does not need it. An outcome that rested on such a " <>
+                "check is settled the same way in this turn: proved another way, or dropped from the plan written again, with " <>
+                "the plan's `reason` saying why. It is never carried to the final check."
+  @plan_rule "Write every outcome and every check so that it can be proved inside the ticket's life, before its work " <>
+               "ends (a test, a QA or design verdict, a merge): never one that only use of the installed app after the " <>
+               "merge can settle. What a person does with the app once the work shipped is not the ticket's business; " <>
+               "when something is wrong later, they file a ticket."
   @waive "A check that is open and that nobody can prove the way the plan says (a `test` check for something no test can " <>
            "reach, an `attached` check for a file that cannot exist) holds the handoff for good. When a run's notes or its " <>
            "failed `plan_checks` step say so and you agree, waive it: " <>
@@ -133,10 +139,18 @@ defmodule SymphonyElixir.Conductor.Facts do
   @doc """
   The rule every turn that may waive a check is told (its prompt's `{{waive_rule}}`, and the facts'
   `waive`): a check is never waived for the person to verify later; one the plan's way cannot prove is
-  proved another way now, or the plan no longer holds it.
+  proved another way now, or the plan no longer holds it, and an outcome that rested on it is settled
+  in the same turn.
   """
   @spec waive_rule() :: String.t()
   def waive_rule, do: @waive_rule
+
+  @doc """
+  The rule every turn that writes a plan or its checks is told (its prompt's `{{plan_rule}}`): no
+  outcome and no check is written so that only use of the installed app after the merge can settle it.
+  """
+  @spec plan_rule() :: String.t()
+  def plan_rule, do: @plan_rule
 
   @plan_text_max 6_000
   @max_siblings 20

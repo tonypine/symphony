@@ -4078,7 +4078,9 @@ An issue is dispatch-eligible only if all are true:
     one and none of its sub-issues is outside `terminal_states` (one in `Backlog` holds it), after
     the Conductor's final check when that junction is on. The final check judges whether the plan
     was delivered, from the issue's own work (its sub-issues, their checks and merges), and closes
-    the issue without asking whether it may. A final check whose answer concludes nothing (not done,
+    the issue without asking whether it may. An outcome no sub-issue delivered and nothing explains
+    is the Conductor's to settle within the plan (a new sub-issue, or the plan written again without
+    it, with the reason), never a question to the person. A final check whose answer concludes nothing (not done,
     nothing to add or change, no question) is given back to the Conductor once in the same turn,
     with that reason, and the service acts on the second answer. A final check that ran and did not
     conclude MUST NOT close the issue: the service asks the person and the issue stays in the

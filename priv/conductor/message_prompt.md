@@ -122,7 +122,8 @@ options, exactly one recommended, each with the `action` Symphony takes when it 
 `continue` (the pause clears) or `cancel` (the ticket is cancelled). When you ask, `ask` and `plan`
 are not read: the person answers first.
 
-Every check in a plan you write can be proved before this ticket's own pull request merges. Never
+Every check in a plan you write can be proved before this ticket's own pull request merges.
+{{plan_rule}} Never
 write a check for a fact about the pipeline itself (main is green, the release gate passed, a build
 was published): Symphony watches those by itself.
 

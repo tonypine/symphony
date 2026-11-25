@@ -646,7 +646,8 @@ defmodule SymphonyElixir.Conductor.TreeTest do
 
     test "an answer that concludes nothing goes back to the Conductor in the same turn, and its question is asked at once", ctx do
       announced = %{"done" => false, "tree" => [], "update" => "I am asking you one question before I close the ticket.\n\nNext: you answer."}
-      turn = answering_in_turn([answered(announced), answered(%{"done" => false, "tree" => [], "ask_person" => question_for_the_person()})])
+      asked = answered(%{"done" => false, "tree" => [], "ask_person" => question_for_the_person()})
+      turn = answering_in_turn([answered(announced), asked])
 
       assert Conductor.tend(ctx.parent, "final_check", "default", settings: @on, turn: turn) == :ok
 
@@ -690,6 +691,51 @@ defmodule SymphonyElixir.Conductor.TreeTest do
       assert_received {:prompt, _run_id, _prompt}
       refute_received {:prompt, _run_id, _prompt}
       assert_received {:memory_tracker_issue_created, _id, %{title: "The docs"}}
+      assert Questions.open({:ticket, "default", ctx.issue_id}) == []
+    end
+
+    # The parent's plan with a second outcome, which no sub-ticket delivered and nothing explains.
+    defp with_undelivered_outcome!(ctx) do
+      checks = [%{id: "c1", kind: "outcome", statement: "The list is filtered.", proof: "test"}, %{id: "c2", kind: "outcome", statement: "The list is exported.", proof: "test"}]
+      {:ok, _event} = TicketPlan.write("default", ctx.issue_id, Map.merge(plan(two()), %{checks: checks, reason: "The export joined the ask.", by: "recalibration"}))
+      :ok
+    end
+
+    defp without_c2(reason) do
+      %{
+        "reason" => reason,
+        "shape" => "split",
+        "summary" => "The API, then the list.",
+        "text" => "Approach: the API first.",
+        "checks" => [%{"id" => "c1", "kind" => "outcome", "statement" => "The list is filtered.", "proof" => "test"}],
+        "size" => %{"tokens" => 1, "runs" => 2}
+      }
+    end
+
+    test "a final check that drops an outcome nothing delivers, with its reason, closes the ticket and asks nothing", ctx do
+      :ok = with_undelivered_outcome!(ctx)
+      prompt = Conductor.prompt("final_check", %{})
+      assert prompt =~ "act within the plan, by adding\nthe sub-ticket that delivers it or by dropping it with the reason. That is your decision, never a\nquestion to the person."
+
+      reason = "Nothing inside this ticket's life can export the list: the export service does not exist."
+      answer = answered(%{"done" => true, "tree" => [], "plan" => without_c2(reason)})
+      assert final(ctx, answer) == :ok
+
+      assert %{reason: ^reason, checks: [%{id: "c1"}]} = TicketPlan.current(ctx.issue_id)
+      assert_received {:memory_tracker_state_update, parent_id, "Done"}
+      assert parent_id == ctx.issue_id
+      assert Questions.open({:ticket, "default", ctx.issue_id}) == []
+    end
+
+    test "an outcome dropped with no reason of the turn's own is refused, and the ticket stays open", ctx do
+      :ok = with_undelivered_outcome!(ctx)
+      before = length(TicketPlan.versions(ctx.issue_id))
+
+      capture_log(fn -> assert final(ctx, answered(%{"done" => true, "tree" => [], "plan" => Map.delete(without_c2(nil), "reason")})) == :ok end)
+
+      assert length(TicketPlan.versions(ctx.issue_id)) == before
+      assert %{checks: [_, %{id: "c2"}]} = TicketPlan.current(ctx.issue_id)
+      refute_received {:memory_tracker_state_update, _parent, "Done"}
     end
 
     test "the final check judges the plan's delivery from the ticket's own work, closes without asking, and treats a waiver as settled" do
@@ -715,7 +761,23 @@ defmodule SymphonyElixir.Conductor.TreeTest do
         refute prompt =~ "{{waive_rule}}"
       end
 
+      assert rule =~ "An outcome that rested on such a check is settled the same way in this turn: proved another way, or dropped"
+      assert rule =~ "It is never carried to the final check."
       refute Conductor.prompt("grooming", %{}) =~ rule
+    end
+
+    test "every turn that writes a plan or its checks is told each outcome is proved inside the ticket's life" do
+      rule = Facts.plan_rule()
+      assert rule =~ "Write every outcome and every check so that it can be proved inside the ticket's life"
+      assert rule =~ "never one that only use of the installed app after the merge can settle"
+
+      family = %{sub_tickets: [%{identifier: "MT-2", state: "Todo"}]}
+
+      for {junction, facts} <- [{"grooming", %{}}, {"message", %{}}, {"sub_ticket_ended", %{}}, {"final_check", %{}}, {"after_coding", family}, {"during_run", family}] do
+        prompt = Conductor.prompt(junction, facts)
+        assert prompt =~ rule, "#{junction}'s prompt lacks the plan rule"
+        refute prompt =~ "{{plan_rule}}"
+      end
     end
 
     test "sub-tickets it wanted that could not be created ask the person at once", ctx do
@@ -1204,7 +1266,7 @@ defmodule SymphonyElixir.Conductor.TreeTest do
   end
 
   describe "one form on every turn on a ticket with sub-tickets (TP-1621)" do
-    @form File.read!(Path.expand("../../../priv/conductor/sub_tickets_form.md", __DIR__))
+    @form "../../../priv/conductor/sub_tickets_form.md" |> Path.expand(__DIR__) |> File.read!() |> String.replace("{{plan_rule}}", Facts.plan_rule())
 
     setup ctx do
       subs = [

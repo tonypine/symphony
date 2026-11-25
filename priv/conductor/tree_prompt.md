@@ -46,6 +46,12 @@ delivery; when something is wrong later, the person files a ticket. Then answer 
   reason it was left out, and each new sub-ticket builds what is missing. This is a round. Rounds
   are limited: when `rounds.left` is 0 you may not add; Symphony would refuse it and ask the person.
   Then ask the person yourself (`ask_person`) and say what is missing.
+- The `plan` written again without an outcome, with its `reason`: an outcome has no proof and no
+  reason it was left out, and nothing inside the ticket's life can deliver it. The reason says why
+  it is dropped. With nothing else missing, answer `"done": true` in the same answer.
+An outcome with no proof and no reason means the plan is incomplete: act within the plan, by adding
+the sub-ticket that delivers it or by dropping it with the reason. That is your decision, never a
+question to the person.
 - A question (`ask_person`) only for a real judgement nothing in the facts settles, never to confirm
   what the facts show. Ask it in this answer: saying in your `update` that you ask a question does
   not ask it, only `ask_person` does.
@@ -55,7 +61,7 @@ turn, and if your next answer closes nothing either, it asks the person what to 
 
 {{sub_tickets_form}}
 
-Do not rewrite an outcome: outcomes bind. Do not add work the asks do not need. At `final_check`
+Do not rewrite an outcome: outcomes bind. Drop one only as the final check says, with the reason. Do not add work the asks do not need. At `final_check`
 only `add` operations make a round; the others are carried out too.
 
 The `update` is for the person who watches the ticket: what you looked at and what you decided, in

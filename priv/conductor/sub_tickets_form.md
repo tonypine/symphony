@@ -34,6 +34,7 @@ Most turns change nothing: then leave `tree` empty.
 `text`, `checks`, `size`, as a plan is written), recorded as its next version. It never lists the
 sub-tickets: Symphony keeps that list, and only `tree` changes it. Keep the `id` of every check
 that still stands, give a new check no `id`, and do not rewrite an outcome the asks do not change.
+{{plan_rule}}
 If you do list `sub_tickets` in it, Symphony reads them as the same changes: an entry with an
 `identifier` keeps that sub-ticket (with a new `ask` when you give one, and the `after` you give),
 one with no `identifier` is a new sub-ticket and needs a `title` and an `ask`, and the order of the

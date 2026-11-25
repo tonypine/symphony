@@ -907,6 +907,7 @@ defmodule SymphonyElixir.Conductor do
     |> String.replace("{{junction_words}}", Map.get(@junction_words, junction, junction))
     |> String.replace("{{sub_tickets_form}}", form(junction, facts))
     |> String.replace("{{waive_rule}}", Facts.waive_rule())
+    |> String.replace("{{plan_rule}}", Facts.plan_rule())
     |> String.replace("{{facts}}", Jason.encode!(facts, pretty: true))
   end
 
@@ -929,8 +930,13 @@ defmodule SymphonyElixir.Conductor do
     deadline = System.monotonic_time(:millisecond) + plan.timeout_ms
 
     case bounded_turn(plan, issue, run_id, prompt, turn) do
-      {:ok, answer, _tokens} = outcome -> if concludes_nothing?(answer, plan), do: sent_back(outcome, plan, issue, run_id, {prompt, turn}, deadline), else: outcome
-      outcome -> outcome
+      {:ok, answer, _tokens} = outcome ->
+        if concludes_nothing?(answer, plan),
+          do: sent_back(outcome, plan, issue, run_id, {prompt, turn}, deadline),
+          else: outcome
+
+      outcome ->
+        outcome
     end
   end
 
@@ -951,7 +957,8 @@ defmodule SymphonyElixir.Conductor do
   Symphony gave it back to you: your answer closes nothing, changes nothing and asks nothing.
   Saying in your `update` that you ask a question does not ask it. Answer again, as one JSON object
   in the same form: `"done": true` when every outcome holds, `add` operations for what is missing,
-  or the question in `ask_person` when only the person can settle it.
+  the `plan` written again without an outcome nothing can prove, with its `reason`, or the question
+  in `ask_person` when only the person can settle it.
   """
 
   # The answer goes back with the reason, as one more prompt of the same turn (the same run id), in
