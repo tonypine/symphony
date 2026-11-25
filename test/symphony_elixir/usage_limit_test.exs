@@ -68,7 +68,9 @@ defmodule SymphonyElixir.UsageLimitTest do
     end
 
     test "one line names every held provider of a run's list and the earliest reset" do
-      claude = %{provider: "anthropic", scope: :all, window: "five_hour", phase: :headroom, reserve: 0.9, resets_at: ~U[2026-10-03 16:02:00Z], resume_at: ~U[2026-10-03 16:02:00Z]}
+      reset = ~U[2026-10-03 16:02:00Z]
+      claude = %{provider: "anthropic", scope: :all, window: "five_hour", phase: :headroom, reserve: 0.9}
+      claude = Map.merge(claude, %{resets_at: reset, resume_at: reset})
       openrouter = %{opencode_go() | provider: "openrouter", resume_at: "2026-10-04T10:00:00Z"}
 
       assert UsageLimit.all_held_line([claude, opencode_go()], @now, @to_local) ==
@@ -80,7 +82,9 @@ defmodule SymphonyElixir.UsageLimitTest do
       assert UsageLimit.all_held_line([opencode_go(), opencode_go(%{scope: "opus"})], @now, @to_local) ==
                "OpenCode Go is at its usage limit; the earliest reset is 15:59 UTC-3"
 
-      assert UsageLimit.all_held_line([%{claude | resume_at: nil}, %{opencode_go() | resume_at: nil}], @now, @to_local) ==
+      unknown_resets = [%{claude | resume_at: nil}, %{opencode_go() | resume_at: nil}]
+
+      assert UsageLimit.all_held_line(unknown_resets, @now, @to_local) ==
                "Claude and OpenCode Go are at their usage limits"
     end
   end

@@ -345,7 +345,8 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
       issue = issue("issue-go-next", "MT-GO-NEXT")
       {worker_pid, worker_ref, run_id} = start_run!(pid, issue, %{run_profile: @go_run})
 
-      log = capture_log(fn -> send(self(), {:state, deliver(pid, {:DOWN, worker_ref, :process, worker_pid, {:usage_limited, go_refusal(ctx)}})}) end)
+      down = {:DOWN, worker_ref, :process, worker_pid, {:usage_limited, go_refusal(ctx)}}
+      log = capture_log(fn -> send(self(), {:state, deliver(pid, down)}) end)
       assert_received {:state, state}
 
       assert %{provider: "opencode-go", reason: "provider_usage_limit", window: "seven_day", resume_at: resume_at} = state.usage_limits[@opencode_go]

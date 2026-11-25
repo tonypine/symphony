@@ -16,8 +16,8 @@ defmodule SymphonyElixir.Harnesses.EventStreamUsageLimitTest do
   test "a usage limit in the result text of a run on a fallback provider is that provider's, with its own reset" do
     before = DateTime.utc_now()
 
-    assert {:error, {:usage_limited, %{provider: "opencode-go", window: "seven_day", source: :result_text, resets_at: %DateTime{} = resets_at}}} =
-             read([@fallback_refusal], "opencode-go")
+    assert {:error, {:usage_limited, info}} = read([@fallback_refusal], "opencode-go")
+    assert %{provider: "opencode-go", window: "seven_day", source: :result_text, resets_at: %DateTime{} = resets_at} = info
 
     assert DateTime.diff(resets_at, before) in (15 * 3600 + 11 * 60)..(15 * 3600 + 11 * 60 + 10)
   end

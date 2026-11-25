@@ -430,8 +430,11 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp handle_cast_message({:conductor_owed, issue_id}, state), do: {:noreply, tend_owed_turn(state, issue_id)}
 
-  defp handle_cast_message({:usage_limit_seen, info, identifier}, state),
-    do: {:noreply, if(Config.settings!().execution.usage_limit.auto_pause, do: record_usage_limit_seen(state, info, identifier), else: state)}
+  defp handle_cast_message({:usage_limit_seen, info, identifier}, state) do
+    if Config.settings!().execution.usage_limit.auto_pause,
+      do: {:noreply, record_usage_limit_seen(state, info, identifier)},
+      else: {:noreply, state}
+  end
 
   defp handle_cast_message({:request_refresh, repo_key, :now}, state) do
     now_ms = System.monotonic_time(:millisecond)
@@ -4885,7 +4888,8 @@ defmodule SymphonyElixir.Orchestrator do
         put_dispatch_skipped(state, issue, Pauses.provider_skip_reason(provider), :provider_pause)
 
       usage_limit_held?(issue, state) ->
-        put_dispatch_skipped(state, issue, usage_limit_hold_line(state, issue, usage_limit_hold(state, issue)), :usage_limit)
+        line = usage_limit_hold_line(state, issue, usage_limit_hold(state, issue))
+        put_dispatch_skipped(state, issue, line, :usage_limit)
 
       true ->
         state
