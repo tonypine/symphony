@@ -321,6 +321,98 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     assert %{status: "failure"} = run_record(run_id)
   end
 
+  describe "a fallback provider at its own usage limit (TP-1617)" do
+    @opencode_go {"opencode-go", :all}
+    @go_run %{provider: "opencode-go", model: "deepseek-v4.1-flash", fallback: 0, kind: :implementation}
+
+    defp fallback_workflow!(ctx, fallbacks) do
+      write_usage_workflow!(ctx, agent_run_profiles: %{"implementation" => %{"fallbacks" => fallbacks}})
+    end
+
+    # Anthropic at its reserve, as on 2026-11-22: the run had taken its fallback.
+    defp hold_anthropic_at_reserve(pid, ctx) do
+      reserve = hold(ctx, %{phase: :headroom, reserve: 0.9, resets_at: DateTime.add(ctx.now, 3720)})
+      :sys.replace_state(pid, &%{&1 | usage_limits: %{@anthropic => reserve}})
+    end
+
+    # What the Claude harness reports for the run on OpenCode Go (`EventStream` names the run's provider).
+    defp go_refusal(ctx), do: usage_info(ctx, %{provider: "opencode-go", window: "seven_day", resets_at: DateTime.add(ctx.now, 15 * 3600 + 11 * 60), utilization: nil, source: :result_text})
+
+    test "holds the fallback under its own name and starts the run on the next free provider, with no backoff", ctx do
+      fallback_workflow!(ctx, [%{"provider" => "opencode-go", "model" => "deepseek-v4.1-flash"}, %{"provider" => "openrouter", "model" => "openai/gpt-5"}])
+      pid = start_orchestrator(ctx, :FallbackLimitNextOrchestrator)
+      hold_anthropic_at_reserve(pid, ctx)
+      issue = issue("issue-go-next", "MT-GO-NEXT")
+      {worker_pid, worker_ref, run_id} = start_run!(pid, issue, %{run_profile: @go_run})
+
+      log = capture_log(fn -> send(self(), {:state, deliver(pid, {:DOWN, worker_ref, :process, worker_pid, {:usage_limited, go_refusal(ctx)}})}) end)
+      assert_received {:state, state}
+
+      assert %{provider: "opencode-go", reason: "provider_usage_limit", window: "seven_day", resume_at: resume_at} = state.usage_limits[@opencode_go]
+      assert resume_at == DateTime.add(ctx.now, 15 * 3600 + 11 * 60 + 120)
+      assert %{phase: :headroom} = state.usage_limits[@anthropic]
+      refute Map.has_key?(state.retry_attempts, issue.id)
+      assert %{attempt: 3} = state.slot_waiting[issue.id]
+      assert %{provider: "openrouter", fallback: 1} = Orchestrator.run_profile_for_test(state, issue, false)
+      assert log =~ "provider=opencode-go is held until #{DateTime.to_iso8601(resume_at)}, the next run starts on provider=openrouter"
+      assert %{status: "usage_limited"} = run_record(run_id)
+    end
+
+    test "with every provider of the list held, the retry waits for the reset on one line naming them all", ctx do
+      fallback_workflow!(ctx, [%{"provider" => "opencode-go", "model" => "deepseek-v4.1-flash"}])
+      pid = start_orchestrator(ctx, :FallbackLimitAllHeldOrchestrator)
+      hold_anthropic_at_reserve(pid, ctx)
+      issue = issue("issue-go-all", "MT-GO-ALL")
+      {worker_pid, worker_ref, _run_id} = start_run!(pid, issue, %{run_profile: @go_run})
+
+      state = deliver(pid, {:DOWN, worker_ref, :process, worker_pid, {:usage_limited, go_refusal(ctx)}})
+
+      assert %{attempt: 3, delay_type: :usage_limit, usage_limit_key: @opencode_go, due_at_ms: due_at_ms, error: error} = state.retry_attempts[issue.id]
+      earliest = UsageLimit.local_time(DateTime.add(ctx.now, 3720), ctx.now, [])
+      assert error == "Claude and OpenCode Go are at their usage limits; the earliest reset is #{earliest} #{UsageLimit.zone_label(DateTime.add(ctx.now, 3720), [])}"
+      # No backoff: the retry waits until OpenCode Go's own reset, more than 15 hours away.
+      assert due_at_ms - System.monotonic_time(:millisecond) > 15 * 3_600_000
+
+      # A new run of the ticket is held too, on the same line.
+      dispatched = Orchestrator.dispatch_chosen_issues_for_test([issue("issue-go-new", "MT-GO-NEW")], state)
+      assert %{reason: ^error, rule: :usage_limit} = dispatched.dispatch_skipped["issue-go-new"]
+      refute Orchestrator.should_dispatch_issue_for_test(issue("issue-go-new", "MT-GO-NEW"), state)
+    end
+
+    test "a QA run on the fallback is held the same way, not retried with backoff", ctx do
+      write_usage_workflow!(ctx, agent_run_profiles: %{"qa" => %{"fallbacks" => [%{"provider" => "opencode-go", "model" => "deepseek-v4.1-flash"}]}})
+      pid = start_orchestrator(ctx, :FallbackLimitQaOrchestrator)
+      hold_anthropic_at_reserve(pid, ctx)
+      issue = issue("issue-go-qa", "MT-GO-QA", %{state: "QA"})
+      {worker_pid, worker_ref, _run_id} = start_run!(pid, issue, %{run_profile: %{@go_run | kind: :qa}})
+
+      state = deliver(pid, {:DOWN, worker_ref, :process, worker_pid, {:usage_limited, go_refusal(ctx)}})
+
+      assert %{provider: "opencode-go"} = state.usage_limits[@opencode_go]
+      assert %{delay_type: :usage_limit, usage_limit_key: @opencode_go} = state.retry_attempts[issue.id]
+    end
+
+    test "a limit a Conductor turn ran into holds its provider, unless auto_pause is off", ctx do
+      write_usage_workflow!(ctx)
+      pid = start_orchestrator(ctx, :FallbackLimitConductorOrchestrator)
+
+      log =
+        capture_log(fn ->
+          assert Orchestrator.usage_limit_seen(pid, go_refusal(ctx), "MT-GO-COND") == :ok
+          :sys.get_state(pid)
+        end)
+
+      assert %{provider: "opencode-go", issue_identifier: "MT-GO-COND"} = :sys.get_state(pid).usage_limits[@opencode_go]
+      assert log =~ "Usage limit seen outside a run provider=opencode-go scope=all issue_identifier=MT-GO-COND"
+      assert Orchestrator.usage_limit_seen(:no_such_orchestrator, go_refusal(ctx), "MT-GO-COND") == :unavailable
+
+      write_usage_workflow!(ctx, agent_usage_limit: %{auto_pause: false})
+      :sys.replace_state(pid, &%{&1 | usage_limits: %{}})
+      :ok = Orchestrator.usage_limit_seen(pid, go_refusal(ctx), "MT-GO-COND")
+      assert :sys.get_state(pid).usage_limits == %{}
+    end
+  end
+
   test "runs that find the same outage share one hold, logged once, and a PR run is not retried", ctx do
     write_usage_workflow!(ctx)
     pid = start_orchestrator(ctx, :SharedOutageOrchestrator)

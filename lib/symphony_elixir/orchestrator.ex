@@ -430,6 +430,9 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp handle_cast_message({:conductor_owed, issue_id}, state), do: {:noreply, tend_owed_turn(state, issue_id)}
 
+  defp handle_cast_message({:usage_limit_seen, info, identifier}, state),
+    do: {:noreply, if(Config.settings!().execution.usage_limit.auto_pause, do: record_usage_limit_seen(state, info, identifier), else: state)}
+
   defp handle_cast_message({:request_refresh, repo_key, :now}, state) do
     now_ms = System.monotonic_time(:millisecond)
 
@@ -1381,24 +1384,62 @@ defmodule SymphonyElixir.Orchestrator do
         true -> "hit the usage limit"
       end
 
-    if pr_run_entry?(running_entry) do
-      Logger.warning("PR agent task #{cause} for issue_id=#{issue_id} session_id=#{session_id}; PR runs are not retried")
-      state
-    else
-      Logger.info("Agent task #{cause} for issue_id=#{issue_id} session_id=#{session_id}; holding the retry until #{DateTime.to_iso8601(entry.resume_at)}")
+    issue = Map.get(running_entry, :issue)
 
-      schedule_issue_retry(state, issue_id, retry_attempt(Map.get(running_entry, :retry_attempt)), %{
-        repo_key: running_entry_repo_key(running_entry),
-        identifier: running_entry.identifier,
-        title: running_entry_title(running_entry),
-        error: usage_limit_error(entry),
-        worker_host: Map.get(running_entry, :worker_host),
-        workspace_path: Map.get(running_entry, :workspace_path),
-        delay_type: :usage_limit,
-        usage_limit_key: {entry.provider, entry.scope},
-        usage_limit_delay_ms: UsageLimit.remaining_ms(entry, state.clock.())
-      })
+    cond do
+      pr_run_entry?(running_entry) ->
+        Logger.warning("PR agent task #{cause} for issue_id=#{issue_id} session_id=#{session_id}; PR runs are not retried")
+        state
+
+      not UsageLimit.api_unreachable?(entry) and fallback_free?(state, issue) ->
+        start_on_free_fallback(state, issue, running_entry, entry, cause, session_id)
+
+      true ->
+        hold_for_usage_limit(state, issue_id, running_entry, session_id, entry, cause)
     end
+  end
+
+  # The run's list has a provider no hold and no pause keeps off: its next run starts there, with
+  # the attempt unchanged and no backoff, as soon as a slot is free (TP-1617).
+  defp fallback_free?(%State{} = state, %Issue{} = issue),
+    do: is_nil(usage_limit_hold(state, issue)) and is_nil(provider_pause_hold(state, issue))
+
+  defp fallback_free?(_state, _issue), do: false
+
+  defp start_on_free_fallback(%State{} = state, %Issue{} = issue, running_entry, entry, cause, session_id) do
+    %{provider: next} = run_profile_for_issue(state, issue)
+
+    Logger.info(
+      "Agent task #{cause} for issue_id=#{issue.id} session_id=#{session_id}; provider=#{entry.provider} is held until " <>
+        "#{DateTime.to_iso8601(entry.resume_at)}, the next run starts on provider=#{next}"
+    )
+
+    metadata = %{repo_key: running_entry_repo_key(running_entry), worker_host: Map.get(running_entry, :worker_host)}
+
+    state
+    |> wait_for_slot(
+      issue,
+      retry_attempt(Map.get(running_entry, :retry_attempt)),
+      metadata,
+      "#{UsageLimit.provider_name(entry.provider)} is held; the next run starts on #{UsageLimit.provider_name(next)}"
+    )
+    |> schedule_immediate_tick()
+  end
+
+  defp hold_for_usage_limit(%State{} = state, issue_id, running_entry, session_id, entry, cause) do
+    Logger.info("Agent task #{cause} for issue_id=#{issue_id} session_id=#{session_id}; holding the retry until #{DateTime.to_iso8601(entry.resume_at)}")
+
+    schedule_issue_retry(state, issue_id, retry_attempt(Map.get(running_entry, :retry_attempt)), %{
+      repo_key: running_entry_repo_key(running_entry),
+      identifier: running_entry.identifier,
+      title: running_entry_title(running_entry),
+      error: usage_limit_wait_error(state, Map.get(running_entry, :issue), entry),
+      worker_host: Map.get(running_entry, :worker_host),
+      workspace_path: Map.get(running_entry, :workspace_path),
+      delay_type: :usage_limit,
+      usage_limit_key: {entry.provider, entry.scope},
+      usage_limit_delay_ms: UsageLimit.remaining_ms(entry, state.clock.())
+    })
   end
 
   # A usage limit for another provider seen by a run on this one: recording the hold still pauses
@@ -4730,7 +4771,7 @@ defmodule SymphonyElixir.Orchestrator do
         {%{outcome: :held, reason: Pauses.provider_skip_reason(provider), rule: :provider_pause}, pass}
 
       limit = usage_limit_hold(pass, issue) ->
-        {%{outcome: :held, reason: UsageLimit.hold_label(limit), rule: :usage_limit}, pass}
+        {%{outcome: :held, reason: usage_limit_hold_line(pass, issue, limit), rule: :usage_limit}, pass}
 
       pause ->
         {reason, rule} = pause
@@ -4844,7 +4885,7 @@ defmodule SymphonyElixir.Orchestrator do
         put_dispatch_skipped(state, issue, Pauses.provider_skip_reason(provider), :provider_pause)
 
       usage_limit_held?(issue, state) ->
-        put_dispatch_skipped(state, issue, UsageLimit.hold_label(usage_limit_hold(state, issue)), :usage_limit)
+        put_dispatch_skipped(state, issue, usage_limit_hold_line(state, issue, usage_limit_hold(state, issue)), :usage_limit)
 
       true ->
         state
@@ -7879,7 +7920,7 @@ defmodule SymphonyElixir.Orchestrator do
       Map.merge(metadata, %{
         identifier: issue.identifier,
         title: issue.title,
-        error: usage_limit_error(entry),
+        error: usage_limit_wait_error(state, issue, entry),
         delay_type: :usage_limit,
         usage_limit_key: {entry.provider, entry.scope},
         usage_limit_delay_ms: held_retry_delay_ms(entry, state.clock.())
@@ -9516,6 +9557,19 @@ defmodule SymphonyElixir.Orchestrator do
   @spec conductor_owed(GenServer.server(), String.t()) :: :ok | :unavailable
   def conductor_owed(server, issue_id) when is_binary(issue_id) do
     if server_available?(server), do: GenServer.cast(server, {:conductor_owed, issue_id}), else: :unavailable
+  end
+
+  @doc """
+  Records a usage limit a run outside the orchestrator's own ran into (a Conductor turn): the
+  provider the turn was on is held as a run's limit holds it, so the next turn on it waits for the
+  reset or takes a fallback. `identifier` is the ticket's. `:unavailable` when no orchestrator runs.
+  """
+  @spec usage_limit_seen(map(), String.t() | nil) :: :ok | :unavailable
+  def usage_limit_seen(info, identifier), do: usage_limit_seen(__MODULE__, info, identifier)
+
+  @spec usage_limit_seen(GenServer.server(), map(), String.t() | nil) :: :ok | :unavailable
+  def usage_limit_seen(server, info, identifier) when is_map(info) do
+    if server_available?(server), do: GenServer.cast(server, {:usage_limit_seen, info, identifier}), else: :unavailable
   end
 
   @spec stop_running(String.t()) :: {:ok, map()} | :unavailable | {:error, term()}
@@ -11380,6 +11434,46 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp usage_limit_error(entry) do
     "usage limit reached (provider=#{entry.provider} scope=#{UsageLimit.scope_label(entry.scope)}); resuming at #{DateTime.to_iso8601(entry.resume_at)}"
+  end
+
+  # A usage limit a Conductor turn ran into (`usage_limit_seen/3`): held as a run's is, with no run to
+  # hold with it.
+  defp record_usage_limit_seen(%State{} = state, info, identifier) do
+    {state, entry} = put_usage_limit(state, info, identifier)
+    Logger.info("Usage limit seen outside a run provider=#{entry.provider} scope=#{UsageLimit.scope_label(entry.scope)} issue_identifier=#{identifier}")
+    notify_dashboard()
+    state
+  end
+
+  # A held retry whose every provider is held waits on the one line naming them all; one held on a
+  # single provider keeps that hold's own error.
+  defp usage_limit_wait_error(%State{} = state, %Issue{} = issue, entry) do
+    case every_candidate_hold(state, issue) do
+      [_, _ | _] = holds -> UsageLimit.all_held_line(holds, state.clock.(), [])
+      _one_or_none -> usage_limit_error(entry)
+    end
+  end
+
+  defp usage_limit_wait_error(_state, _issue, entry), do: usage_limit_error(entry)
+
+  # What a ticket held by a usage limit reads: the hold's own label, or, when every provider of its
+  # run's list is held, one line naming each of them and the earliest reset (TP-1617).
+  defp usage_limit_hold_line(%State{} = state, %Issue{} = issue, hold) do
+    case every_candidate_hold(state, issue) do
+      [_, _ | _] = holds -> UsageLimit.all_held_line(holds, state.clock.(), [])
+      _one_or_none -> UsageLimit.hold_label(hold)
+    end
+  end
+
+  # The hold on each provider of the issue's run list (its run kind's own choice, then its
+  # fallbacks), one per hold, when every one of them is held by a usage limit; [] when one is free
+  # or only a Director's pause keeps it off.
+  defp every_candidate_hold(%State{} = state, %Issue{} = issue) do
+    repo_key = dispatch_repo_key(state, issue)
+    candidates = AgentRunner.run_candidates(issue, Config.settings_for_repo!(repo_key), repo_key: repo_key)
+    holds = Enum.map(candidates, &usage_limit_holding(state, issue, &1, false))
+
+    if Enum.all?(holds), do: Enum.uniq_by(holds, &{&1.provider, &1.scope}), else: []
   end
 
   defp arm_usage_limit_timers(%State{} = state) do

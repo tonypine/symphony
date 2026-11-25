@@ -866,6 +866,7 @@ defmodule SymphonyElixir.Conductor do
     turn = Keyword.get(opts, :turn, &harness_turn(&1, &2, &3, &4, Keyword.get(opts, :agent_module)))
     outcome = plan |> timed_turn(issue, run_id, prompt(junction, facts), turn) |> with_plan(plan, issue, run_id, opts)
     tokens = elem(outcome, 2)
+    seen_usage_limit(outcome, issue, opts)
     {exit, held, route} = record_outcome(outcome, plan, %{issue | state: phase}, run_id, {facts, record, opts})
     record_run_ended(plan, issue, run_id, %{exit: exit, tokens: tokens, started_at: started_at, phase: phase})
     # The move goes last, once the turn is recorded: a move into Backlog or a closed stage stops the
@@ -875,6 +876,14 @@ defmodule SymphonyElixir.Conductor do
     Message.settle(plan, outcome, held, issue, opts)
     {exit, held, route}
   end
+
+  # A turn its provider refused at its usage limit holds that provider, as a run's limit does: the
+  # next Conductor turn takes a fallback of `runs.conductor` or waits for the reset, never the same
+  # provider again at once (TP-1617). `opts[:usage_limit_seen]` replaces the orchestrator's record.
+  defp seen_usage_limit({:error, {:usage_limited, %{} = info}, _tokens}, issue, opts),
+    do: Keyword.get(opts, :usage_limit_seen, &Orchestrator.usage_limit_seen/2).(info, issue.identifier)
+
+  defp seen_usage_limit(_outcome, _issue, _opts), do: :ok
 
   # The stage the answer moves the ticket to, through the person's free move and its guards
   # (`SymphonyElixir.DirectorMoves`), made as the turn's (`by: {:conductor, run_id}`). A move beside a

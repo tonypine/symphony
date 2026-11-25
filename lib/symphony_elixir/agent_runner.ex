@@ -100,6 +100,13 @@ defmodule SymphonyElixir.AgentRunner do
   """
   @spec run_profile(Issue.t(), Config.Schema.t(), keyword()) :: Config.Runs.Run.t()
   def run_profile(%Issue{} = issue, settings, opts \\ []) do
+    [own | _fallbacks] = candidates = run_candidates(issue, settings, opts)
+    Enum.find(candidates, own, Keyword.get(opts, :available?, fn _run -> true end))
+  end
+
+  @doc "Every run the issue's next run kind may start with: its own choice, then its fallbacks (`Config.runs/2`)."
+  @spec run_candidates(Issue.t(), Config.Schema.t(), keyword()) :: [Config.Runs.Run.t(), ...]
+  def run_candidates(%Issue{} = issue, settings, opts \\ []) do
     kind =
       RunKind.classify(issue,
         terminal_states: settings.tracker.terminal_states,
@@ -108,8 +115,7 @@ defmodule SymphonyElixir.AgentRunner do
         settings: settings
       )
 
-    [own | _fallbacks] = candidates = Config.runs(settings, kind)
-    Enum.find(candidates, own, Keyword.get(opts, :available?, fn _run -> true end))
+    Config.runs(settings, kind)
   end
 
   @spec run(map(), pid() | nil, keyword()) :: :ok | no_return()
