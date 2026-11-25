@@ -7181,7 +7181,16 @@ Minimum endpoints:
     answers `200` with `already_decided: true` and the recorded `answer` and `option`. An answer
     that keeps a ticket held (a loop-guard question's "Keep it paused", or words) writes the kept
     pause with the answer, so the ticket is never free to dispatch in between, and its text says
-    what the person did ("You kept it paused: …", "You answered in your own words: …").
+    what the person did ("You kept it paused: …"). An answer in the person's own words, no option
+    picked, to such a held question goes to the ticket's Conductor when its messages are the
+    Conductor's: the words are recorded as the person's message naming the question, the ticket
+    waits on that turn ("The Conductor is reading your answer: …"), and the turn acts on them. It
+    moves the ticket, runs it again where it stands (`resume`, or a steer for the next run), asks
+    its own question, or, when it cannot tell what the words ask, replies and has the question
+    asked again; a turn that fails 3 times replies and asks it again too. So the ticket is never
+    left paused with nothing running and nothing asked. When nobody reads the words (the Conductor
+    or its `message` junction off, a ticket not groomed), they keep the ticket held ("You answered
+    in your own words: …").
   - A missing `issue_identifier`, `reason` or `picks`, or a `decide` with neither `question_id` nor
     `request_comment_id`, answers `422`, an
     unknown ticket `404`, and a

@@ -68,7 +68,10 @@ defmodule SymphonyElixir.Conductor.Answer do
       is the reply and must be there; `ask` is `true` when the message changes what is asked
       (anything else reads as `false`, and so does `true` beside a question), and then the new
       `plan` must come in the same answer, with the `reason` it changed for (cut to 1,000
-      characters); `ask: true` with no plan is refused. `message: :reply` (a finished ticket's) reads the reply
+      characters); `ask: true` with no plan is refused. `resume` is `true` when the message is the
+      person's answer, in their own words, to the question the ticket is held on and says to run
+      the ticket again where it stands (anything else reads as `false`, and so does `true` beside a
+      question; `SymphonyElixir.Conductor.Message.settle/5`). `message: :reply` (a finished ticket's) reads the reply
       and no `ask`. `plan: :optional` reads a plan when the
       answer holds one (`child_message`). Its `instructions` may be null;
     * `new_ticket` (`new_ticket: true`, a message on a finished ticket): null, or the ticket to
@@ -154,7 +157,8 @@ defmodule SymphonyElixir.Conductor.Answer do
           new_ticket: new_ticket() | nil,
           waive: [%{check_id: String.t(), reason: String.t()}],
           hold: %{reason: String.t()} | nil,
-          move: %{stage: String.t(), reason: String.t()} | nil
+          move: %{stage: String.t(), reason: String.t()} | nil,
+          resume: boolean()
         }
 
   @typedoc "The ticket a message on a finished ticket asks for: its title, its ask and, optionally, its repo."
@@ -266,7 +270,8 @@ defmodule SymphonyElixir.Conductor.Answer do
          asks? = message == true and Map.get(answer, "ask") == true and is_nil(ask_person),
          {:ok, plan} <- plan(Map.get(answer, "plan"), plan_read(plan_opt, asks?, answer), ask_person) do
       read = %{instructions: instructions, update: update, refs: refs, ask_person: ask_person, steer: steer, stop: stop, blocks: blocks(Map.get(answer, "blocks"))}
-      {:ok, read |> Map.merge(%{route: route, move: move, plan: plan, ask: asks?}) |> Map.merge(extras(answer, opts))}
+      resume? = message == true and Map.get(answer, "resume") == true and is_nil(ask_person)
+      {:ok, read |> Map.merge(%{route: route, move: move, plan: plan, ask: asks?, resume: resume?}) |> Map.merge(extras(answer, opts))}
     end
   end
 

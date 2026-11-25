@@ -2855,6 +2855,244 @@ defmodule SymphonyElixir.DirectorMovesTest do
     end
   end
 
+  describe "an answer in the Director's own words to a held question goes to the Conductor (TP-1657)" do
+    @held {:ticket, "repo-director", "pr"}
+    @tp1645 "Continue to QA, why is it trying to make a change?"
+
+    # MOT-40, groomed, in `phase`, held on a dispatch loop's question.
+    defp held!(phase) do
+      conducted!(phase)
+      {:ok, question} = Questions.ask(@held, DispatchLoop.question_attrs(loop(), "MOT-40"))
+      question
+    end
+
+    # A Conductor turn that answers with `attrs`, and tells the test its prompt and why the ticket
+    # is paused while it runs.
+    defp reading_turn(attrs) do
+      test = self()
+
+      fn _plan, _issue, _run_id, prompt ->
+        send(test, {:reading, prompt, Pauses.why(@held)})
+        {:ok, [Jason.encode!(Map.merge(%{"update" => "I read your answer."}, attrs))], 10}
+      end
+    end
+
+    defp failing_turn, do: fn _plan, _issue, _run_id, _prompt -> {:error, :boom, 0} end
+
+    # The Director's moves, and the Conductor whose turn is `turn`, its message turn started at once.
+    defp with_conductor(opts, turn, more \\ []) do
+      moves = Keyword.put(opts, :orchestrator, start_supervised!({FakeOrchestrator, self()}))
+      conductor = Keyword.merge([settings: %Schema.Conductor{enabled: true}, turn: turn, start: fn task -> task.() end, running: fn _id -> nil end, moves: moves], more)
+      Keyword.put(moves, :conductor, conductor)
+    end
+
+    defp answer_message!(question, words) do
+      assert [%{payload: %{text: ^words, question_id: question_id}} = message] =
+               RunStore.list_ticket_events("pr", types: ["message.sent"])
+
+      assert question_id == question.id
+      message
+    end
+
+    defp reply_under!(message) do
+      assert [%{parent: parent, payload: %{text: text}}] = RunStore.list_ticket_events("pr", types: ["conductor.update"])
+      assert parent == message.id
+      text
+    end
+
+    test "a ticket parked in Rework, answered \"Continue to QA\", is moved to QA by the Conductor and nothing holds it (TP-1645)", %{opts: opts} do
+      question = held!("Rework")
+      opts = with_conductor(opts, reading_turn(move_to("QA")))
+
+      assert {:ok, %{move: "decide", conductor: true, moved: false}} = DirectorMoves.answer_held_question("MOT-40", question.id, @tp1645, opts)
+
+      # The turn is given the words and the question they answer, and the ticket waits on it.
+      assert_received {:reading, prompt, ["The Conductor is reading your answer: " <> _title]}
+      assert prompt =~ ~s("text": #{Jason.encode!(@tp1645)})
+      assert prompt =~ ~s("answers_question": {)
+      assert prompt =~ ~s("question_id": "#{question.id}")
+      assert prompt =~ ~s("title": #{Jason.encode!(question.title)})
+      for option <- question.options, do: assert(prompt =~ ~s("label": #{Jason.encode!(option.label)}))
+      assert prompt =~ "Symphony asks the person the question again"
+
+      message = answer_message!(question, @tp1645)
+      assert reply_under!(message) == "I read your answer."
+      assert_received {:memory_tracker_state_update, "pr", "QA"}
+      assert %{phase: "QA"} = RunStore.get_ticket_state("pr")
+      assert [%{actor: %{run_kind: "conductor"}, payload: %{from: "Rework", to: "QA"}}] = RunStore.list_ticket_events("pr", types: ["ticket.moved"])
+
+      assert %{state: :answered, answer: %{text: @tp1645, option: nil, by: @director}} = Questions.find(@held, question.id)
+      assert Questions.open(@held) == []
+      refute Pauses.paused?(@held)
+    end
+
+    test "words that say to run it again, or that steer the next run, lift the pause in place", %{opts: opts} do
+      steer = %{"steer" => %{"message" => "The network failed; nothing in the code is wrong.", "when" => "next_turn"}}
+
+      for attrs <- [%{"resume" => true}, steer] do
+        question = held!("In Progress")
+        opts = with_conductor(opts, reading_turn(attrs))
+
+        assert {:ok, %{conductor: true}} = DirectorMoves.answer_held_question("MOT-40", question.id, "It was the network, go on.", opts)
+
+        assert_received {:reading, _prompt, ["The Conductor is reading your answer: " <> _title]}
+        assert_received {:memory_tracker_comment, "pr", "Unblocked by the Director: MOT-40 continues in place."}
+        assert %{phase: "In Progress"} = RunStore.get_ticket_state("pr")
+        assert %{state: :answered} = Questions.find(@held, question.id)
+        refute Pauses.paused?(@held)
+        stop_supervised!(FakeOrchestrator)
+      end
+
+      assert [%{payload: %{text: "The network failed; nothing in the code is wrong."}}] = RunStore.list_ticket_events("pr", types: ["conductor.instructions"])
+    end
+
+    test "words the Conductor cannot tell the meaning of get its reply, and the question is asked again", %{opts: opts} do
+      question = held!("Rework")
+      opts = with_conductor(opts, reading_turn(%{"update" => "I could not tell whether you want QA or another run."}))
+
+      assert {:ok, %{conductor: true}} = DirectorMoves.answer_held_question("MOT-40", question.id, "Hmm.", opts)
+
+      message = answer_message!(question, "Hmm.")
+      assert reply_under!(message) == "I could not tell whether you want QA or another run."
+      assert %{state: :open, answer: nil, taken_back: ["Hmm."]} = Questions.find(@held, question.id)
+      assert {:ok, %{reasons: [%{kind: :question, waits_on: %{question_id: question_id}}]}} = Pauses.get(@held)
+      assert question_id == question.id
+      refute Enum.any?(Pauses.why(@held), &String.starts_with?(&1, "You answered in your own words"))
+      assert RunStore.get_ticket_state("pr").phase == "Rework"
+    end
+
+    test "a move the Conductor makes that is refused has the question asked again", %{opts: opts} do
+      question = held!("Rework")
+      opts = with_conductor(opts, reading_turn(move_to("Shipping")))
+
+      capture_log(fn -> assert {:ok, %{conductor: true}} = DirectorMoves.answer_held_question("MOT-40", question.id, "Ship it.", opts) end)
+
+      assert %{state: :open} = Questions.find(@held, question.id)
+      assert {:ok, %{reasons: [%{kind: :question}]}} = Pauses.get(@held)
+      assert RunStore.get_ticket_state("pr").phase == "Rework"
+    end
+
+    test "a Conductor that asks its own question leaves the ticket on it, and the held one answered", %{opts: opts} do
+      question = held!("Rework")
+
+      ask = %{
+        "title" => "Should MOT-40 go on to QA or run again?",
+        "question" => "Your answer can mean QA or another run. Which one do you want for MOT-40?",
+        "why" => "The words name both.",
+        "if_unanswered" => "MOT-40 stays in Rework.",
+        "recommendation_reason" => "QA judges the change as it is.",
+        "options" => [
+          %{"label" => "Go on to QA", "effect" => "MOT-40 stays where it is and goes on.", "recommended" => true, "action" => "continue"},
+          %{"label" => "Cancel it", "effect" => "MOT-40 is cancelled.", "action" => "cancel"}
+        ]
+      }
+
+      opts = with_conductor(opts, reading_turn(%{"ask_person" => ask}))
+      assert {:ok, %{conductor: true}} = DirectorMoves.answer_held_question("MOT-40", question.id, "QA or again, you pick.", opts)
+
+      assert %{state: :answered} = Questions.find(@held, question.id)
+      assert [%{title: "Should MOT-40 go on to QA or run again?"} = asked] = Questions.open(@held)
+      assert {:ok, %{reasons: [%{kind: :question, waits_on: %{question_id: asked_id}}]}} = Pauses.get(@held)
+      assert asked_id == asked.id
+    end
+
+    test "a turn that fails waits on its retry, and the third failure replies and asks the question again", %{opts: opts} do
+      question = held!("Rework")
+      opts = with_conductor(opts, failing_turn())
+
+      capture_log(fn -> assert {:ok, %{conductor: true}} = DirectorMoves.answer_held_question("MOT-40", question.id, "Go on.", opts) end)
+
+      message = answer_message!(question, "Go on.")
+      assert ["The Conductor is reading your answer: " <> _title] = Pauses.why(@held)
+      assert RunStore.list_ticket_events("pr", types: ["conductor.update"]) == []
+
+      capture_log(fn -> assert Conductor.Message.tend("pr", opts[:conductor]) == :owed end)
+      assert ["The Conductor is reading your answer: " <> _title] = Pauses.why(@held)
+
+      capture_log(fn -> assert Conductor.Message.tend("pr", opts[:conductor]) == :done end)
+      assert reply_under!(message) =~ "Its question is asked again"
+      assert %{state: :open} = Questions.find(@held, question.id)
+      assert {:ok, %{reasons: [%{kind: :question}]}} = Pauses.get(@held)
+    end
+
+    test "a person's move while the Conductor reads the answer lifts the wait with the move", %{opts: opts} do
+      question = held!("Rework")
+      opts = with_conductor(opts, failing_turn())
+
+      capture_log(fn -> assert {:ok, %{conductor: true}} = DirectorMoves.answer_held_question("MOT-40", question.id, "Go on.", opts) end)
+      assert Pauses.paused?(@held)
+
+      assert {:ok, %{to_state: "QA", moved: true}} = DirectorMoves.move(:move, "MOT-40", %{to: "QA"}, opts)
+      refute Pauses.paused?(@held)
+
+      # The turn's later tries, and its last failure, ask nothing again: the move answered the words.
+      capture_log(fn -> Conductor.Message.tend("pr", opts[:conductor]) end)
+      capture_log(fn -> assert Conductor.Message.tend("pr", opts[:conductor]) == :done end)
+      assert %{state: :answered} = Questions.find(@held, question.id)
+      refute Pauses.paused?(@held)
+    end
+
+    test "an answer that can't be given to the Conductor, or a run again that fails, has the question asked again", %{opts: opts} do
+      question = held!("Rework")
+      refused = Keyword.put(with_conductor(opts, reading_turn(%{})), :send_message, fn _repo_key, _issue_id, _text, _opts -> {:error, :store_down} end)
+
+      log = capture_log(fn -> assert {:ok, %{conductor: true}} = DirectorMoves.answer_held_question("MOT-40", question.id, "Go on.", refused) end)
+      assert log =~ "Couldn't give MOT-40's answer to its Conductor"
+      assert %{state: :open} = Questions.find(@held, question.id)
+      assert {:ok, %{reasons: [%{kind: :question}]}} = Pauses.get(@held)
+      stop_supervised!(FakeOrchestrator)
+
+      run_again = fn "MOT-40", _moves -> {:error, :linear_down} end
+      failing = with_conductor(opts, reading_turn(%{"resume" => true}), run_again: run_again)
+      log = capture_log(fn -> assert {:ok, %{conductor: true}} = DirectorMoves.answer_held_question("MOT-40", question.id, "Run it.", failing) end)
+      assert log =~ "Conductor could not run the ticket again"
+      assert %{state: :open} = Questions.find(@held, question.id)
+      assert {:ok, %{reasons: [%{kind: :question}]}} = Pauses.get(@held)
+    end
+
+    test "an answer that picks an option does what the option does, with the Conductor on", %{opts: opts} do
+      question = held!("In Progress")
+      opts = with_conductor(opts, reading_turn(%{"resume" => true}))
+
+      assert {:ok, %{move: "unblock"}} = DirectorMoves.answer_held_question("MOT-40", question.id, "Run it again", opts)
+      refute Pauses.paused?(@held)
+
+      {:ok, kept} = Questions.ask(@held, DispatchLoop.question_attrs({:quiet_handoff, 2}, "MOT-40"))
+      assert {:ok, %{move: "decide"} = result} = DirectorMoves.answer_held_question("MOT-40", kept.id, "Keep it paused", opts)
+      refute Map.has_key?(result, :conductor)
+      assert ["You kept it paused: " <> _title] = Pauses.why(@held)
+
+      # Words given with a picked option follow the option.
+      assert {:ok, %{move: "unblock"}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
+      {:ok, worded} = Questions.ask(@held, DispatchLoop.question_attrs(loop(), "MOT-40"))
+      assert {:ok, %{move: "unblock"}} = DirectorMoves.answer_held_question("MOT-40", worded.id, "Go, it was the network.", Keyword.put(opts, :option, "Run it again"))
+      refute Pauses.paused?(@held)
+
+      refute_received {:reading, _prompt, _why}
+      assert RunStore.list_ticket_events("pr", types: ["message.sent"]) == []
+    end
+
+    test "a question that can't be asked again is logged, and the wait on the Conductor still goes", %{opts: opts} do
+      question = held!("Rework")
+      opts = with_conductor(opts, failing_turn())
+
+      capture_log(fn -> assert {:ok, %{conductor: true}} = DirectorMoves.answer_held_question("MOT-40", question.id, "Go on.", opts) end)
+      assert ["The Conductor is reading your answer: " <> _title] = Pauses.why(@held)
+
+      log = capture_log(fn -> assert Conductor.Message.ask_again("repo-director", "pr", ["no-such-question"]) == :ok end)
+      assert log =~ "Could not ask question no-such-question again"
+      refute Enum.any?(Pauses.why(@held), &String.starts_with?(&1, "The Conductor is reading your answer"))
+    end
+
+    test "run_again/2 lifts a held ticket in place, as Unblock does", %{opts: opts} do
+      conducted!("In Progress")
+      :ok = Pauses.stop(@held, DateTime.utc_now())
+
+      assert {:ok, %{move: "unblock"}} = DirectorMoves.run_again("MOT-40", opts)
+      refute Pauses.paused?(@held)
+    end
+  end
+
   describe "move: a ticket Symphony owns into any phase (TP-1327)" do
     # A ticket whose phase Symphony wrote, as every move of Symphony's or the Director's leaves it.
     defp owned(repo_key, state) do

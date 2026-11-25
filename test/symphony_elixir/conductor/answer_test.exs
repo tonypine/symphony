@@ -521,6 +521,23 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
       assert {:ok, %{ask: false, plan: nil, ask_person: %{title: "Which list?"}}} = said(%{"update" => "I need to know.", "ask" => true, "ask_person" => question})
     end
 
+    test "`resume` runs the ticket again only from a message turn, and never beside a question (TP-1657)" do
+      question = %{
+        "title" => "Which stage?",
+        "question" => "Which stage is meant?",
+        "why" => "There are two.",
+        "if_unanswered" => "It waits.",
+        "recommendation_reason" => "QA is the usual one.",
+        "options" => [%{"label" => "QA", "effect" => "It goes to QA.", "recommended" => true, "action" => "continue"}, %{"label" => "Cancel", "effect" => "It ends.", "action" => "cancel"}]
+      }
+
+      assert {:ok, %{resume: true}} = said(%{"update" => "I run it again.", "resume" => true})
+      assert {:ok, %{resume: false}} = said(%{"update" => "Ok."})
+      assert {:ok, %{resume: false}} = said(%{"update" => "Ok.", "resume" => "yes"})
+      assert {:ok, %{resume: false}} = said(%{"update" => "I need to know.", "resume" => true, "ask_person" => question})
+      assert {:ok, %{resume: false}} = said(%{"instructions" => "Go on.", "resume" => true}, [])
+    end
+
     test "an optional plan is read when the answer holds one" do
       assert {:ok, %{plan: nil, update: nil}} = said(%{"tree" => []}, plan: :optional, tree: true)
       assert {:ok, %{plan: %{summary: "It keeps the filter."}}} = said(%{"plan" => @plan}, plan: :optional)

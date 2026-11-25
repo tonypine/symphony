@@ -3509,8 +3509,13 @@ conductor:
   ended) run on the parent, on a poll, outside any dispatch (**The tree**, below). `message` (a
   person sent a message on a groomed ticket) runs as the message is written, outside any dispatch:
   the Conductor replies to it, and no run is given the message; `child_message` then shows a
-  sub-ticket's message to its parent's Conductor (`docs/control-api.md`, **Messages**). With
-  `message` off, a groomed ticket's messages are read by its next run, as before plans. At
+  sub-ticket's message to its parent's Conductor (`docs/control-api.md`, **Messages**). A person's
+  answer in their own words (no option picked) to the question a ticket is held on (a dispatch
+  loop's, a quiet handoff's, a park's, a spent budget's, a block report's) is such a message, naming
+  the question: the ticket waits on the turn, which moves it, runs it again (`resume`), asks its own
+  question, or replies and has the question asked again. With
+  `message` off, a groomed ticket's messages are read by its next run, as before plans, and an
+  own-words answer to a held question keeps the ticket held. At
   `message`, `after_coding`, `after_rework`, `before_merge`, `sub_ticket_ended`, `final_check` and on a watch turn
   the answer may waive a check of the plan nobody can prove (`check.waived`, with its reason). A `symphony.yml` that lists its junctions gets `after_qa_blocked`, `grooming` and the other
   new ones only when it adds them: a file that names no `junctions` runs every one.

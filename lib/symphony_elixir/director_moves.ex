@@ -107,7 +107,9 @@ defmodule SymphonyElixir.DirectorMoves do
     Symphony's from then on (`phase_owner: :symphony`) and Linear never moves it back; a move Linear
     refuses stands on the record for the reconciler to project, as a Cancel's does. A dispatch
     loop's, a quiet handoff's or a park's pause lifts with it (a person moving the ticket answers
-    "it looks stuck": its question is answered "Run it again"); every other pause reason stays. A
+    "it looks stuck": its question is answered "Run it again"), and so does the wait on the
+    Conductor reading a person's answer (`SymphonyElixir.Conductor.Message.reading_reason/1`);
+    every other pause reason stays. A
     move into `Backlog` or a closed phase stops a running turn as Stop does, without the stop's
     pause. The refresh `finish/6` asks for starts a phase that dispatches at once. The ticket's
     events get one `ticket.moved` with the note. A move to the phase the ticket is in answers
@@ -120,7 +122,9 @@ defmodule SymphonyElixir.DirectorMoves do
     reason as the note, and the audit record names it (`by`, `run_id`).
 
   `answer_held_question/4` answers the question a dispatch loop, a quiet handoff or a block report
-  paused the ticket on, and does what the picked option asks: Unblock, Restart, or nothing.
+  paused the ticket on, and does what the picked option asks: Unblock, Restart, or nothing; an
+  answer in the Director's own words goes to the ticket's Conductor, which acts on it.
+  `run_again/2` is the Unblock the Conductor's answer to those words makes.
 
   The comments are the Director's: none starts like one of Symphony's own, so the plan comment
   poll counts them as a person's comment too.
@@ -159,6 +163,7 @@ defmodule SymphonyElixir.DirectorMoves do
     Handoff,
     IdlePark,
     MergeConfirmation,
+    Messages,
     Orchestrator,
     PathUnlock,
     Pauses,
@@ -181,6 +186,7 @@ defmodule SymphonyElixir.DirectorMoves do
     TransitionGuard
   }
 
+  alias SymphonyElixir.Conductor.Message, as: ConductorMessage
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Dispatch.DependsOn
   alias SymphonyElixir.GitHub.PullRequest
@@ -407,11 +413,23 @@ defmodule SymphonyElixir.DirectorMoves do
   block report's, `SymphonyElixir.TransitionGuard.block_report_question/1`) with `answer`, as the
   Director, then does what the answer's option asks (`SymphonyElixir.DispatchLoop.answer_move/1`):
   "Run it again" and "Unblock and run again" are `:unblock`, "Start it over from main" is
-  `:restart`, its comment naming the question, and "Keep it paused" or an answer in the Director's
-  own words leaves the ticket where it is, held: the answered question no longer pauses it, so a
-  reason the Director releases with Unblock does, written with the answer so the ticket is never
-  free to dispatch in between ("You kept it paused: …" for the pick, "You answered in your own
-  words: …" for words; a loop's goes with a Restart too, as its question would have).
+  `:restart`, its comment naming the question, and "Keep it paused" (or another option) leaves the
+  ticket where it is, held: the answered question no longer pauses it, so a reason the Director
+  releases with Unblock does, written with the answer so the ticket is never free to dispatch in
+  between ("You kept it paused: …", or "You answered "<label>": …"; a loop's goes with a Restart
+  too, as its question would have).
+
+  An answer in the Director's own words, no option picked, goes to the ticket's Conductor when its
+  messages are the Conductor's (`SymphonyElixir.Conductor.Message.due?/2`, `opts[:conductor]` its
+  options): the words are recorded as the person's message naming the question (`question_id`),
+  whose turn starts at once and acts on them (a move, a run again, its own question, or the
+  question asked again: `SymphonyElixir.Conductor.Message.settle/5`). Until the turn ended the
+  ticket waits on it (`SymphonyElixir.Conductor.Message.reading_reason/1`), written with the answer.
+  A ticket whose messages are not the Conductor's (the Conductor or its `message` junction off, a
+  ticket not groomed) is held as for "Keep it paused", "You answered in your own words: …", since
+  nobody else acts on the words. `opts[:send_message]` records the message (default
+  `SymphonyElixir.Messages.send_message/4`).
+
   `opts[:option]` names the option picked when `answer` is the Director's words given with it.
   A question already answered is not answered again: the result says `already_decided: true`
   with the recorded pick. Takes the options of `move/4`.
@@ -421,26 +439,74 @@ defmodule SymphonyElixir.DirectorMoves do
     with {:ok, issue} <- fetch_issue(identifier), do: answer_and_act(issue, question_id, answer, Keyword.get(opts, :option), opts)
   end
 
+  @doc """
+  Runs the ticket `identifier` again where it stands, as "Run it again" does once its held question
+  is answered: every reason the Director may release goes, and a ticket an idle run parked goes back
+  to the phase it was parked from first. The Conductor's answer to a person's words on a held
+  question makes it (`SymphonyElixir.Conductor.Message.settle/5`). Takes the options of `move/4`.
+  """
+  @spec run_again(String.t(), keyword()) :: result()
+  def run_again(identifier, opts) when is_binary(identifier) do
+    with {:ok, issue} <- fetch_issue(identifier), do: unblock(issue, opts, true)
+  end
+
   defp answer_and_act(issue, question_id, answer, option, opts) when is_binary(answer) do
-    case answer_question(issue, question_id, answer, option) do
-      {:ok, question} -> act_on_held_answer(issue, question, opts)
+    conductor? = ConductorMessage.due?(issue.id, Keyword.get(opts, :conductor, []))
+
+    case answer_question(issue, question_id, answer, option, conductor?) do
+      {:ok, question} -> act_on_held_answer(issue, question, conductor?, opts)
       {:already_decided, question} -> already_decided(issue, question)
       {:error, _reason} = error -> error
     end
   end
 
-  defp act_on_held_answer(issue, question, opts) do
+  defp act_on_held_answer(issue, question, conductor?, opts) do
     case held_answer_move(question) do
       :unblock -> unblock(issue, opts, true)
       :restart -> do_move(:restart, issue, %{reason: "You answered \"#{DispatchLoop.option_label(:restart)}\" to: #{question.title}"}, opts)
-      :keep -> finish(:decide, issue, nil, nil, opts)
+      :keep -> keep_or_conduct(issue, question, conductor?, opts)
     end
   end
 
+  defp keep_or_conduct(issue, question, conductor?, opts) do
+    if to_conductor?(question, conductor?) do
+      to_conductor(issue, question, opts)
+    else
+      finish(:decide, issue, nil, nil, opts)
+    end
+  end
+
+  # An answer in the person's own words, no option picked, goes to the ticket's Conductor when the
+  # ticket's messages are its own (`SymphonyElixir.Conductor.Message.due?/2`).
+  defp to_conductor?(question, conductor?), do: conductor? and picked_label(question) == nil
+
+  # The words go to the Conductor as the person's message naming the question they answer, and its
+  # turn starts at once. A message that can't be recorded has the question asked again, so the
+  # ticket never waits on a turn that will not come.
+  defp to_conductor(issue, question, opts) do
+    send = Keyword.get(opts, :send_message, &Messages.send_message/4)
+
+    case send.(issue.repo_key, issue.id, question.answer.text, answers: question.id) do
+      {:ok, message} ->
+        ConductorMessage.start(%{issue_id: issue.id}, message, Keyword.get(opts, :conductor, []))
+
+      {:error, reason} ->
+        Logger.warning("Couldn't give #{issue.identifier}'s answer to its Conductor, so its question is asked again: #{inspect(reason)}")
+        ConductorMessage.ask_again(issue.repo_key, issue.id, [question.id])
+    end
+
+    with {:ok, result} <- finish(:decide, issue, nil, nil, opts), do: {:ok, Map.put(result, :conductor, true)}
+  end
+
   # The pause an answer that keeps the ticket held leaves, written with the answer itself
-  # (`SymphonyElixir.Questions.answer/4`'s `then_pause`): nil for one that runs it or restarts it.
-  defp kept_pause(question) do
-    if held_answer_move(question) == :keep, do: kept_reason(question)
+  # (`SymphonyElixir.Questions.answer/4`'s `then_pause`): nil for one that runs it or restarts it,
+  # the Conductor's reading of it for words it reads.
+  defp kept_pause(question, conductor?) do
+    cond do
+      held_answer_move(question) != :keep -> nil
+      to_conductor?(question, conductor?) -> ConductorMessage.reading_reason(question)
+      true -> kept_reason(question)
+    end
   end
 
   defp kept_reason(question) do
@@ -489,10 +555,10 @@ defmodule SymphonyElixir.DirectorMoves do
 
   defp picked_label(_question), do: nil
 
-  defp answer_question(issue, question_id, answer, option) do
+  defp answer_question(issue, question_id, answer, option, conductor?) do
     ticket = ticket(issue)
 
-    case Questions.answer(ticket, question_id, answer, by: Pauses.director(), option: option, then_pause: &kept_pause/1) do
+    case Questions.answer(ticket, question_id, answer, by: Pauses.director(), option: option, then_pause: &kept_pause(&1, conductor?)) do
       {:ok, question} -> {:ok, question}
       {:error, :question_not_found} -> conflict("#{issue.identifier} has no question #{question_id}")
       {:error, {:question_not_open, :answered}} -> {:already_decided, Questions.find(ticket, question_id)}
@@ -1151,8 +1217,12 @@ defmodule SymphonyElixir.DirectorMoves do
 
     held = Questions.held(ticket)
     ticket |> answer_held(held, loop_unblock_label(held)) |> log_failed("Moved #{issue.identifier} but couldn't answer its question")
-    ticket |> Pauses.clear_reasons(&loop_reason?/1, by: Pauses.director()) |> log_failed("Moved #{issue.identifier} but couldn't clear its pause")
+    ticket |> Pauses.clear_reasons(&released_by_move?/1, by: Pauses.director()) |> log_failed("Moved #{issue.identifier} but couldn't clear its pause")
   end
+
+  # A move releases a loop's reasons, and the wait on the Conductor reading an answer: the move is
+  # what the answer asked for.
+  defp released_by_move?(reason), do: loop_reason?(reason) or ConductorMessage.reading_reason?(reason)
 
   defp stops_run?(to_state, settings), do: same_state?(to_state, @backlog_state) or Enum.any?(settings.tracker.terminal_states, &same_state?(&1, to_state))
 
