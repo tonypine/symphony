@@ -60,6 +60,24 @@ enum GalleryWidth {
     }
 
     static func name(_ points: CGFloat) -> String { named.first { $0.points == points }?.name ?? "\(Int(points))" }
+
+    /// The height of the window `points` wide: the laptop's 900, the desktop's 1440, else the width's 16:10.
+    static func height(_ points: CGFloat) -> CGFloat {
+        switch points {
+        case 1440: 900
+        case 2560: 1440
+        default: (points * 10 / 16).rounded()
+        }
+    }
+}
+
+/// A screen as a window `height` tall shows it: its own width, laid out in the window's height and cut there from the
+/// top, so a screen whose content runs longer (a long queue) is drawn as far as the window shows, never at its whole
+/// content's height. Without a height, the screen's own size.
+@MainActor
+func bounded(_ view: AnyView, height: CGFloat?) -> AnyView {
+    guard let height else { return AnyView(view.fixedSize()) }
+    return AnyView(view.fixedSize(horizontal: true, vertical: false).frame(height: height, alignment: .top).clipped())
 }
 
 @MainActor var galleryVariations: [GalleryVariation] = []
@@ -292,9 +310,12 @@ func shortName(_ variation: GalleryVariation, in entry: GalleryEntry) -> String 
     return rest.isEmpty ? variation.id.replacingOccurrences(of: "-", with: " ") : rest
 }
 
-/// Each picture is drawn and written in its own autorelease pool: `--shot-all` draws every entry in one run, on the
-/// main thread, whose pool would otherwise keep every picture's buffers until the run ends, and a QA host with less
-/// memory than the drawing needs then fails to write one (TP-1667).
+/// The most pixels a picture may have on a side. A story whose picture grows past it (a screen laid out at its whole
+/// content's height, say) stops the run by name, before ImageIO fails to write it.
+let galleryPictureLimit = 16_384
+
+/// Each picture is drawn and written in its own autorelease pool, so a run that draws every entry (`--shot-all`)
+/// frees each picture's buffers before it draws the next.
 @MainActor
 private func write(_ view: some View, scheme: ColorScheme, scale: CGFloat, to url: URL) {
     autoreleasepool {
@@ -303,6 +324,9 @@ private func write(_ view: some View, scheme: ColorScheme, scale: CGFloat, to ur
         guard let image = renderer.cgImage,
             let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil)
         else { fatalError("Could not draw \(url.lastPathComponent)") }
+        guard image.width <= galleryPictureLimit, image.height <= galleryPictureLimit else {
+            fatalError("\(url.lastPathComponent) is \(image.width)×\(image.height) pixels, past the \(galleryPictureLimit) a picture may have on a side: its story must bound its size")
+        }
         CGImageDestinationAddImage(destination, image, nil)
         guard CGImageDestinationFinalize(destination) else {
             fatalError("Could not write \(url.path) (\(image.width)×\(image.height) pixels)")
@@ -314,7 +338,8 @@ private func write(_ view: some View, scheme: ColorScheme, scale: CGFloat, to ur
 /// Draws the entry to files: still, in light and in dark, or only in `appearance` when it is given. A component's
 /// board is drawn at twice its size, and cut between cells into a few pictures when it is taller than a picture is
 /// worth reading. A screen's variations are drawn one to a picture (`only`: that one), each at its true size: one that
-/// follows its window's width at `width`, or at the laptop's and at the desktop's.
+/// follows its window's width at `width`, or at the laptop's and at the desktop's, as a window of that size shows it,
+/// cut at the window's height from the top.
 @MainActor
 func shoot(_ entry: GalleryEntry, only: String? = nil, width: CGFloat? = nil, appearance: ColorScheme? = nil, into folder: URL) {
     try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -322,14 +347,16 @@ func shoot(_ entry: GalleryEntry, only: String? = nil, width: CGFloat? = nil, ap
     let own = variations(of: entry).filter { only == nil || $0.id == only }
     if entry.kind == .screen {
         for variation in own {
-            let drawings: [(String, AnyView)] = variation.sized.map { sized in
-                (width.map { [$0] } ?? GalleryWidth.named.map(\.points)).map { ("\(variation.id)-\(GalleryWidth.name($0))", sized($0)) }
-            } ?? [(variation.id, variation.view)]
-            for (name, view) in drawings {
+            let drawings: [(String, AnyView, CGFloat?)] = variation.sized.map { sized in
+                (width.map { [$0] } ?? GalleryWidth.named.map(\.points)).map {
+                    ("\(variation.id)-\(GalleryWidth.name($0))", sized($0), GalleryWidth.height($0))
+                }
+            } ?? [(variation.id, variation.view, nil)]
+            for (name, view, height) in drawings {
                 // A wide screen is already a large picture: twice the size only when it is narrow.
                 let scale: CGFloat = autoreleasepool { NSHostingView(rootView: view).fittingSize.width } > 1600 ? 1 : 2
                 for (scheme, suffix) in schemes {
-                    write(view.fixedSize(), scheme: scheme, scale: scale, to: folder.appendingPathComponent("\(name)-\(suffix).png"))
+                    write(bounded(view, height: height), scheme: scheme, scale: scale, to: folder.appendingPathComponent("\(name)-\(suffix).png"))
                 }
             }
         }

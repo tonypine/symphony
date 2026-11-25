@@ -53,6 +53,14 @@ for entry in entries:
     names = [entry["id"] + "-1-dark.png"] if entry["kind"] == "component" else entry["variations"]
     assert any(any(name.startswith(n.removesuffix(".png")) for n in names) for name in drawn), "nothing of " + entry["id"]
 assert drawn == sorted(os.listdir(second)), "the two runs drew other pictures"
+# A screen is drawn as a window of its width shows it, never at its whole content's height: at the desktop's width
+# (drawn at its own scale) no taller than the desktop window's 1440, and no picture past 16384 pixels on a side.
+def size(name):
+    head = open(os.path.join(first, name), "rb").read(24)
+    return int.from_bytes(head[16:20], "big"), int.from_bytes(head[20:24], "big")
+too_big = [f"{name} ({w}×{h})" for name in drawn for (w, h) in [size(name)]
+           if w > 16384 or h > 16384 or (name.endswith("-desktop-dark.png") and h > 1440)]
+assert not too_big, "pictures taller than their window: " + ", ".join(too_big)
 changed = [name for name in drawn if open(os.path.join(first, name), "rb").read() != open(os.path.join(second, name), "rb").read()]
 assert not changed, "drawn otherwise the second time: " + ", ".join(changed)
 EOF
