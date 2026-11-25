@@ -1003,7 +1003,9 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
             {"qa_gallery_open", %{"entry" => "home", "variation" => "home-busy", "width" => "laptop", "appearance" => "dark"}}
           ] do
         response = DynamicTool.execute(tool, args, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
-        assert %{"error" => %{"code" => "qa_driver_unavailable"}} = Jason.decode!(response["output"])
+        # A picture tool with no ticket context takes no picture (TP-1681).
+        code = if tool == "qa_gallery", do: "qa_picture_not_recorded", else: "qa_driver_unavailable"
+        assert %{"error" => %{"code" => ^code}} = Jason.decode!(response["output"])
       end
 
       for {tool, args} <- [
@@ -1048,7 +1050,8 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
             {"qa_wait_check", %{"pid" => 1, "seconds" => 30, "page" => "Home"}}
           ] do
         response = DynamicTool.execute(tool, args, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
-        assert %{"error" => %{"code" => "qa_driver_unavailable"}} = Jason.decode!(response["output"])
+        code = if tool == "qa_crop", do: "qa_picture_not_recorded", else: "qa_driver_unavailable"
+        assert %{"error" => %{"code" => ^code}} = Jason.decode!(response["output"])
 
         response = DynamicTool.execute(tool, Map.put(args, "sleep", 1), issue: %Issue{id: "issue-current"}, tool_scope: :qa)
         assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
