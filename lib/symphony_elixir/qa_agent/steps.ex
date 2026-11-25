@@ -27,8 +27,9 @@ defmodule SymphonyElixir.QaAgent.Steps do
   - `symphony:qa_launch`: `qa_launch_app` on the default fixtures, in the QA target's appearance,
     and `qa_resize_window` to its window size, then `qa_check_app` once the app had a moment to
     start; an app that is not healthy fails the step, and the agent steps between it
-    and the quit step are skipped. It always runs: a pass with nothing on screen to judge rests on
-    the app building, starting and checking healthy (`QaDriver.app_check/1`). When the plan answered
+    and the quit step are skipped. It is the pass's health check of the app: each session that
+    drives the app gets its own launch (below). It always runs: a pass with nothing on screen to
+    judge rests on the app building, starting and checking healthy (`QaDriver.app_check/1`). When the plan answered
     `needs_app: false` and no walkthrough step is walked, the agent steps between the launch and the
     quit (the design check) are skipped, saying the plan found nothing on screen to
     judge, and the review's `pass` is a pass with `scope: none`, which `SymphonyElixir.QaVerification`
@@ -60,6 +61,18 @@ defmodule SymphonyElixir.QaAgent.Steps do
   Every agent step reads the Conductor's newest instructions
   (`SymphonyElixir.Conductor.prompt_section/2`), as the one session's prompt does, so a pass the
   Conductor sent back to QA reads what it must do differently.
+
+  **Each session's app**: before every agent step that drives the app (a walk, a recheck, the
+  design check), Symphony quits every app the pass launched and launches one for that session
+  alone, so one session's leftovers never reach the next and the three-app limit is never Symphony's
+  own doing. A walk step whose plan check has a `setting` (for a group, its first step's: the group
+  shares one screen and state) is launched in it: `environment: live`, or `environment: fixture`
+  with the fixture as `api_fixtures`; its `appearance`; its `page`, opened at launch when it names a
+  page of the window or a ticket (`SymphonyElixir.QaDriver.Pages.place/1`), else said not opened;
+  then `qa_resize_window` to its window size. Any other session gets the default launch at the QA
+  target, and its prompt says to relaunch with its brief's `launch` when that names another state. Then `qa_check_app`, and the session's prompt names the app's PID only when the driver
+  reports it running at that moment (`QaDriver.running_pids/1`), with the setting it is in; a launch
+  that failed, or an app that is not running, is said with why, and no PID is given.
 
   **Symphony's own check of the plan** (`SymphonyElixir.QaAgent.PlanCheck`): before the plan
   session, a walked step whose plan check's setting is the live server on a pass that does not run
@@ -98,6 +111,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
   alias SymphonyElixir.Config.Schema.Phases.Step
   alias SymphonyElixir.PhaseSteps.Transcript
   alias SymphonyElixir.QaAgent.{PlanCheck, StepPayload, StepPrompts, Verdict}
+  alias SymphonyElixir.QaDriver.Pages
   alias SymphonyElixir.QaPreCheck
   alias SymphonyElixir.Walkthrough
 
@@ -258,6 +272,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
       answers: [],
       plan: nil,
       launch: nil,
+      session: nil,
       sessions: %{},
       offsets: %{},
       tokens: QaAgent.empty_tokens(),
@@ -577,7 +592,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
 
   defp forget_app(state) do
     Process.delete(@app_key)
-    state
+    %{state | session: nil}
   end
 
   # Nothing on screen to judge: the plan needs no app and no walkthrough step is walked. The launch
@@ -651,6 +666,79 @@ defmodule SymphonyElixir.QaAgent.Steps do
     {:ok, {if(output == "", do: "No app was running.\n", else: output), 0}}
   end
 
+  # -- each session's app ---------------------------------------------------------
+
+  # A session that drives the app gets one of its own, launched in its step's setting; any other
+  # session drives none.
+  defp session_app(state, step) do
+    if MapSet.member?(state.app_steps, step.id) and not command_line?(state, walk_brief(state, step)) do
+      quit_apps(state)
+      %{state | session: launch_session(state, session_setting(state, step))}
+    else
+      %{state | session: nil}
+    end
+  end
+
+  # The step's setting, from its plan check; a group's is its first step's.
+  defp session_setting(state, step) do
+    case Map.get(state.checks, step.id) do
+      [%{target: %{setting: %{} = setting}} | _] -> setting
+      _none -> nil
+    end
+  end
+
+  defp quit_apps(state) do
+    for pid <- driver_module(state).launched_pids(Keyword.get(state.opts, :qa_driver)), do: tool(state, "qa_quit_app", %{"pid" => pid})
+  end
+
+  defp launch_session(state, setting) do
+    {args, page} = launch_args(setting)
+
+    with {:ok, %{"pid" => pid} = launched} <- tool(state, "qa_launch_app", args),
+         :ok <- Process.sleep(Keyword.get(state.opts, :qa_launch_settle_ms, @launch_settle_ms)),
+         {:ok, _resized} <- tool(state, "qa_resize_window", resize_args(pid, setting)),
+         {:ok, health} <- tool(state, "qa_check_app", %{"pid" => pid, "page" => "launch"}),
+         :ok <- running(state, pid, health) do
+      {:launched, %{pid: pid, root: Map.get(launched, "root", 1), setting: setting, page: page, health: health}}
+    else
+      {:error, error} -> {:failed, String.trim(tool_error(error))}
+    end
+  end
+
+  # `qa_launch_app`'s arguments for a setting, and where its page opens the app.
+  defp launch_args(nil), do: {%{}, nil}
+
+  defp launch_args(%{} = setting) do
+    page = Pages.place(Map.get(setting, :page))
+
+    args =
+      case setting do
+        %{source: "live"} -> %{"environment" => "live"}
+        %{source: "fixture", fixture: fixture} -> %{"environment" => "fixture", "api_fixtures" => fixture}
+      end
+      |> Map.put("appearance", setting.appearance)
+      |> Map.merge(page_args(page))
+
+    {args, page}
+  end
+
+  defp page_args({:page, %{name: name}}), do: %{"page" => name}
+  defp page_args({:ticket, identifier}), do: %{"ticket" => identifier}
+  defp page_args(:unknown), do: %{}
+
+  defp resize_args(pid, %{window: %{width: width, height: height}}), do: %{"pid" => pid, "width" => width, "height" => height}
+  defp resize_args(pid, nil), do: %{"pid" => pid}
+
+  # Only an app the driver reports running at this moment is handed to the session.
+  defp running(state, pid, health) do
+    if pid in driver_module(state).running_pids(Keyword.get(state.opts, :qa_driver)) do
+      :ok
+    else
+      problems = health |> Map.get("problems", []) |> List.wrap() |> Enum.map_join("; ", &to_string/1)
+      {:error, {:qa_tool, "qa_app_not_running", "the app it launched (PID #{pid}) is not running#{if problems == "", do: "", else: ": " <> problems}"}}
+    end
+  end
+
   # The files the steps named as evidence and wrote under `qa-evidence/`; the pass keeps them with
   # its other files when it ends (`SymphonyElixir.QaAgent`).
   defp attach(state) do
@@ -692,7 +780,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
   defp agent(state, step) do
     case agent_skip(state, step) do
       nil ->
-        start_agent_step(state, step)
+        state |> session_app(step) |> start_agent_step(step)
 
       reason ->
         PhaseSteps.record_turn_completed(step, state.context, %{outcome: "skipped", reason: reason}, 0)
@@ -1433,12 +1521,53 @@ defmodule SymphonyElixir.QaAgent.Steps do
     |> Enum.join("\n\n")
   end
 
-  defp app_line(%{launch: {:launched, %{"pid" => pid} = app}}),
-    do:
-      "The app: Symphony launched it as PID #{pid} (QA root #{Map.get(app, "root", 1)}), on the default fixtures, at the QA target: " <>
-        "its appearance, with its window sized to the target."
+  defp app_line(%{session: {:launched, %{pid: pid, root: root} = app}}) do
+    "The app: Symphony launched it for this session as PID #{pid} (QA root #{root}), running now, #{where_text(app)} " <>
+      health_text(app.health) <> relaunch_text(app)
+  end
+
+  defp app_line(%{session: {:failed, why}}) do
+    "The app: Symphony could not launch it for this session (#{why}), so no app is running for you. Launch it with `qa_launch_app` " <>
+      "in the step's setting, with its page as `page`, when the step needs it."
+  end
 
   defp app_line(_state), do: "The app: Symphony has not launched it for this step; launch it with `qa_launch_app` when the step needs it."
+
+  defp where_text(%{setting: nil}) do
+    "on the default fixtures, at the QA target: its appearance, with its window sized to the target. The plan gives this step no setting, " <>
+      "so Symphony launched it as it launches by default."
+  end
+
+  defp where_text(%{setting: %{window: %{width: width, height: height}} = setting, page: page}) do
+    "in this step's setting: #{source_text(setting)}, #{page_text(page, setting.page)}, #{setting.appearance} appearance, " <>
+      "its window at #{width}×#{height} pt."
+  end
+
+  # A session with no setting from the plan reaches its state from its brief, as before; a session
+  # in a setting uses the app as it is.
+  defp relaunch_text(%{setting: nil}) do
+    "When your brief's `launch` (in the design check, the briefs' fixtures and stand-ins) names another state " <>
+      "(`api_fixtures`, `environment`, a page, an appearance, a window size or stand-ins), quit it with `qa_quit_app`, call " <>
+      "`qa_launch_app` with those arguments and the page as `page`, then `qa_resize_window` (with the brief's size, or no size for the target). " <>
+      "Otherwise use it as it is and open the page the step needs."
+  end
+
+  defp relaunch_text(_app) do
+    "Use it as it is: do not quit and relaunch it to reach this setting. Relaunch only for what the setting does not state " <>
+      "(a stand-in port, `fresh_root`, another appearance or size in `also`), and then pass the page to `qa_launch_app` as `page`."
+  end
+
+  defp source_text(%{source: "live"}), do: "on the live server (`environment: live`)"
+  defp source_text(%{source: "fixture", fixture: fixture}), do: "on the fixture `#{fixture}`"
+
+  defp page_text({:page, %{title: title}}, _page), do: "open on its #{title} page"
+  defp page_text({:ticket, identifier}, _page), do: "open on #{identifier}'s page"
+
+  defp page_text(:unknown, page),
+    do: "on its first page: the setting's page (#{inspect(page)}) is not one Symphony can open at launch, so navigate there yourself"
+
+  defp health_text(%{"healthy" => true}), do: ""
+  defp health_text(health), do: "`qa_check_app` found it unhealthy at launch: #{Jason.encode!(health)}. "
 
   defp plan_facts(state) do
     walked =

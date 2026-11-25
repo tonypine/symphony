@@ -3293,7 +3293,9 @@ its own loads without it). Off, it MUST run as one agent session as before
 recorded under the QA run's `run_id`. Its machine steps run the QA pass's own commands
 (`symphony:qa_pre_checks`, `symphony:qa_build`, `symphony:qa_launch`, `symphony:qa_quit`,
 `symphony:qa_attach`) through the pass's QA driver, with no model; only a QA playbook's list may run
-them. Its agent steps are turns with the QA tool scope, each ending with its answer file. The plan
+them. Its agent steps are turns with the QA tool scope, each ending with its answer file. Each
+agent step that drives the app MUST get a launch of its own, in its walkthrough step's plan setting
+when it has one, and its prompt MUST name only the PID of an app running when it starts. The plan
 MUST brief every walkthrough step the pass walks, else it is refused and asked again. The `review`
 step, which every QA playbook's list MUST have, gives the verdict in the `qa_verdict` contract, or
 asks for at most three rechecks, each a fresh walk turn between the launch and the quit run again;

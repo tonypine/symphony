@@ -137,6 +137,12 @@ defmodule SymphonyElixir.QaDriver do
   state fixtures, and `environment: "live"` without a live server is refused
   (`qa_live_server_missing`).
 
+  Opening page: `qa_launch_app`'s `page` (a page of Symphony.app's window, by its name or
+  title, `SymphonyElixir.QaDriver.Pages`) sets `SYMPHONY_BAR_QA_OPEN_VIEW`, and `ticket` (an
+  identifier) sets `SYMPHONY_BAR_QA_OPEN_TICKET`: the app opens its window there at launch, the
+  ticket's page over the page when both are given, and the launch result names them (`page`,
+  `ticket`). A page the window lacks is refused (`qa_unknown_page`, naming the pages it has).
+
   App stand-ins: besides `api_fixtures`, `qa_launch_app` takes five optional
   arguments that point the app at stand-ins instead of real services, all only
   in QA mode:
@@ -259,12 +265,15 @@ defmodule SymphonyElixir.QaDriver do
 
   alias SymphonyElixir.{AgentEnv, OpenRouter, PathSafety, QaBuild, QaPolicy, Workspace}
   alias SymphonyElixir.PlaybookSettings
-  alias SymphonyElixir.QaDriver.{Checks, DevServer, DevServerLease, Gallery, Machine, ReleasePair, Remote, SafeHost}
+  alias SymphonyElixir.QaDriver.{Checks, DevServer, DevServerLease, Gallery, Machine, Pages}
+  alias SymphonyElixir.QaDriver.{ReleasePair, Remote, SafeHost}
 
   @evidence_dir "qa-evidence"
   @qa_root_env "SYMPHONY_BAR_QA_ROOT"
   @api_fixtures_env "SYMPHONY_BAR_QA_API_FIXTURES"
   @appearance_env "SYMPHONY_BAR_QA_APPEARANCE"
+  @open_view_env "SYMPHONY_BAR_QA_OPEN_VIEW"
+  @open_ticket_env "SYMPHONY_BAR_QA_OPEN_TICKET"
   @appearances ~w(light dark)
   # AppKit reads this default from the launch arguments too. There is none for dark: the
   # appearance library does both.
@@ -516,6 +525,19 @@ defmodule SymphonyElixir.QaDriver do
 
   def launched_pids(driver) when is_pid(driver) do
     GenServer.call(driver, :launched_pids)
+  catch
+    :exit, _reason -> []
+  end
+
+  @doc """
+  The PIDs of the launched apps still running (none has exited or been quit), so the stepped
+  pass hands a session only an app it can drive. None when there is no driver.
+  """
+  @spec running_pids(pid() | nil) :: [pos_integer()]
+  def running_pids(nil), do: []
+
+  def running_pids(driver) when is_pid(driver) do
+    GenServer.call(driver, :running_pids)
   catch
     :exit, _reason -> []
   end
@@ -1035,15 +1057,16 @@ defmodule SymphonyElixir.QaDriver do
          {:ok, fixtures} <- api_fixtures(config, args),
          {:ok, built} <- fetch_build(driver),
          {:ok, stand_ins} <- stand_ins(driver, config, args),
+         {:ok, opening_env, opened} <- opening(args),
          :ok <- ensure_clean_worktree(config, GenServer.call(driver, :ignored)),
          name = Path.basename(built.executable),
          {:ok, reports} <- crash_reports(config, name),
          {:ok, library_env} <- appearance_library(config, Map.get(args, "appearance")),
          {:ok, fixtures_dir} <- copy_api_fixtures(config, fixtures) do
       app_args = appearance_args(Map.get(args, "appearance")) ++ extra_args
-      stand_ins = stand_ins ++ library_env
+      stand_ins = stand_ins ++ opening_env ++ library_env
       info = %{name: name, crash_reports: reports, api_fixtures: fixtures_dir, stand_ins: stand_ins, args: app_args}
-      info = Map.merge(info, %{root: root, environment: environment})
+      info = Map.merge(info, %{root: root, environment: environment, opened: opened})
       GenServer.call(driver, {:launch, built.executable, info})
     end
   end
@@ -1057,6 +1080,7 @@ defmodule SymphonyElixir.QaDriver do
          {:ok, fixtures} <- api_fixtures(config, args),
          {:ok, _pair} <- fetch_pair(driver),
          {:ok, stand_ins} <- stand_ins(driver, config, args),
+         {:ok, opening_env, opened} <- opening(args),
          {:ok, bundle} <- ReleasePair.copy_n(config),
          {:ok, name} <- bundle_executable_name(config, bundle),
          {:ok, reports} <- crash_reports(config, name),
@@ -1065,8 +1089,9 @@ defmodule SymphonyElixir.QaDriver do
          {:ok, feed_port} <- GenServer.call(driver, :ensure_feed, 300_000),
          {:ok, fixtures_dir} <- copy_api_fixtures(config, fixtures) do
       pair_env = [{"SYMPHONY_BAR_UPDATE_URL", ReleasePair.latest_url(feed_port)}, {"SYMPHONY_UPDATE_OPEN", relaunch}]
-      stand_ins = stand_ins ++ library_env ++ pair_env
+      stand_ins = stand_ins ++ opening_env ++ library_env ++ pair_env
       info = %{name: name, crash_reports: reports, api_fixtures: fixtures_dir, stand_ins: stand_ins, root: root}
+      info = Map.put(info, :opened, opened)
       info = Map.merge(info, %{pair_bundle: bundle, args: appearance_args(Map.get(args, "appearance")), environment: environment})
 
       with {:ok, payload} <- GenServer.call(driver, {:launch, Path.join([bundle, "Contents", "MacOS", name]), info}) do
@@ -1550,6 +1575,39 @@ defmodule SymphonyElixir.QaDriver do
   defp appearance(_other), do: tool_error("invalid_arguments", "`appearance` must be `light` or `dark`.")
 
   defp appearance_args(appearance), do: Map.get(@appearance_args, appearance, [])
+
+  # Where the app's window opens at launch: a page of the window (`page`), a ticket's page
+  # (`ticket`), or both, the ticket's page over the page. The launch result says which.
+  defp opening(args) do
+    with {:ok, page} <- page_argument(Map.get(args, "page")),
+         {:ok, ticket} <- ticket_argument(Map.get(args, "ticket")) do
+      env = if(page, do: [{@open_view_env, page.name}], else: []) ++ if(ticket, do: [{@open_ticket_env, ticket}], else: [])
+      opened = Map.reject(%{"page" => page && page.title, "ticket" => ticket}, fn {_key, value} -> is_nil(value) end)
+      {:ok, env, opened}
+    end
+  end
+
+  defp page_argument(nil), do: {:ok, nil}
+
+  defp page_argument(page) when is_binary(page) do
+    case Pages.named(page) do
+      {:ok, page} -> {:ok, page}
+      :error -> unknown_page(page)
+    end
+  end
+
+  defp page_argument(page), do: unknown_page(inspect(page))
+
+  defp unknown_page(page),
+    do: tool_error("qa_unknown_page", "The app has no page #{inspect(page)}. Its window's pages, by name or title: #{Pages.listing()}.")
+
+  defp ticket_argument(nil), do: {:ok, nil}
+
+  defp ticket_argument(ticket) do
+    if Pages.ticket?(ticket),
+      do: {:ok, String.upcase(ticket)},
+      else: tool_error("invalid_arguments", "`ticket` must be a ticket identifier, such as TP-12: the app opens on that ticket's page.")
+  end
 
   defp environment(nil), do: {:ok, nil}
   defp environment(environment) when environment in ["live", "fixture"], do: {:ok, environment}
@@ -2310,6 +2368,10 @@ defmodule SymphonyElixir.QaDriver do
   def handle_call(:target_resize, _from, state), do: {:reply, state.target_resize, state}
   def handle_call(:launched_app?, _from, state), do: {:reply, state.launched_app?, state}
   def handle_call(:launched_pids, _from, state), do: {:reply, state.apps |> Map.keys() |> Enum.sort(), state}
+
+  def handle_call(:running_pids, _from, state),
+    do: {:reply, for({pid, %{exit_status: nil}} <- state.apps, do: pid) |> Enum.sort(), state}
+
   def handle_call(:roots, _from, state), do: {:reply, %{roots: state.roots, last: state.last_root}, state}
 
   def handle_call({:hold_requests, root, taken}, _from, state) do
@@ -2487,7 +2549,7 @@ defmodule SymphonyElixir.QaDriver do
       {:ok, port, pid} ->
         Logger.info("QA driver launched app pid=#{pid} executable=#{executable} root=#{info.root} openrouter_stub=#{stub_url}")
         app = Map.merge(info, %{port: port, output: "", exit_status: nil, window: nil})
-        payload = %{"pid" => pid, "qa_mode" => true, "root" => info.root, "note" => launch_note(state.config)}
+        payload = Map.merge(%{"pid" => pid, "qa_mode" => true, "root" => info.root, "note" => launch_note(state.config)}, Map.get(info, :opened, %{}))
         payload = if info.api_fixtures, do: Map.put(payload, "api_fixtures", info.api_fixtures), else: payload
         payload = environment_payload(payload, state, info)
         state = if info[:pair_bundle], do: put_in(state.pair_launches[info.pair_bundle], info), else: state
@@ -2500,7 +2562,8 @@ defmodule SymphonyElixir.QaDriver do
 
   defp launch_note(config) do
     "Wait for the window to settle, then call `qa_resize_window` with no size: it sets the main window to the QA target, " <>
-      "#{size(config.window_size)}, the size every walkthrough step, screenshot and design check runs at unless the step names another."
+      "#{size(config.window_size)}, the size every walkthrough step, screenshot and design check runs at unless the step's setting names another " <>
+      "(then pass its `width` and `height`)."
   end
 
   # A fresh root is a new, empty folder beside the first, where the app runs: no
