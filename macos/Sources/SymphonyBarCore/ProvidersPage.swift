@@ -358,6 +358,9 @@ public struct ProvidersPage: Equatable {
 
     static let weekWindow = "seven_day"
 
+    /// OpenCode Go's monthly limit (TP-1642).
+    static let monthWindow = "monthly"
+
     /// Each usage window Symphony read a share for, as a one-line meter with its stop mark at the reserve.
     func meters(_ provider: StateSnapshot.Provider) -> [Meter] {
         let stop = reservePercent(provider)
@@ -400,6 +403,7 @@ public struct ProvidersPage: Equatable {
         case weekWindow: return "Week"
         case "seven_day_opus": return "Week, Opus"
         case "seven_day_sonnet": return "Week, Sonnet"
+        case monthWindow: return "Month"
         default:
             let words = name.replacingOccurrences(of: "_", with: " ")
             return words.prefix(1).uppercased() + words.dropFirst()

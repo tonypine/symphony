@@ -24,14 +24,21 @@ defmodule SymphonyElixir.OpenRouter do
   `https://openrouter.ai/api`.
   """
   @spec base_url(%{optional(String.t()) => String.t()}) :: String.t()
-  def base_url(env \\ System.get_env()) do
+  def base_url(env \\ System.get_env()), do: qa_base_url(env) || @base_url
+
+  @doc """
+  The QA stub's API base, without a trailing slash, in QA mode (see the module doc); nil anywhere
+  else. Other providers the stub stands in for (OpenCode Go) build their QA URLs on it.
+  """
+  @spec qa_base_url(%{optional(String.t()) => String.t()}) :: String.t() | nil
+  def qa_base_url(env \\ System.get_env()) do
     with root when is_binary(root) <- Map.get(env, @qa_root_env),
          false <- String.trim(root) == "",
          url when is_binary(url) <- Map.get(env, @qa_url_env),
          {:ok, url} <- loopback_url(url) do
       url
     else
-      _not_qa -> @base_url
+      _not_qa -> nil
     end
   end
 

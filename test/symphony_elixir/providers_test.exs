@@ -76,6 +76,30 @@ defmodule SymphonyElixir.ProvidersTest do
       assert %{at_reserve: false, held: true} = entry(Providers.list(%{usage_limits: [%{provider: "anthropic", phase: :paused}]}), "anthropic")
     end
 
+    test "OpenCode Go's usage is read from its API, so its windows show and it takes its reserve (TP-1642)" do
+      windows = %{
+        {"opencode-go", "seven_day"} => %{utilization: 0.92, resets_at: ~U[2026-11-28 00:00:00Z]},
+        {"opencode-go", "five_hour"} => %{utilization: 0.3, resets_at: ~U[2026-11-25 14:00:00Z]},
+        {"anthropic", "five_hour"} => %{utilization: 0.4, resets_at: ~U[2026-11-25 15:00:00Z]}
+      }
+
+      list =
+        Providers.list(%{
+          reserves: %{"opencode-go" => 0.9},
+          usage_windows: windows,
+          usage_limits: [%{provider: "opencode-go", phase: :headroom, resume_at: ~U[2026-11-28 00:02:00Z]}]
+        })
+
+      assert %{reserve: 0.9, at_reserve: true, held: true, held_until: ~U[2026-11-28 00:02:00Z], usage_windows: go_windows} = entry(list, "opencode-go")
+
+      assert go_windows == [
+               %{name: "five_hour", utilization: 0.3, resets_at: ~U[2026-11-25 14:00:00Z]},
+               %{name: "seven_day", utilization: 0.92, resets_at: ~U[2026-11-28 00:00:00Z]}
+             ]
+
+      assert %{reserve: nil, at_reserve: false, usage_windows: [%{name: "five_hour"}]} = entry(list, "anthropic")
+    end
+
     test "a fallback provider's own usage limit marks that provider held until its own reset, not Claude" do
       go = %{provider: "opencode-go", phase: :paused, resume_at: ~U[2026-11-23 00:00:00Z]}
       reserve = %{provider: "anthropic", phase: :headroom, resume_at: ~U[2026-11-22 16:02:00Z]}

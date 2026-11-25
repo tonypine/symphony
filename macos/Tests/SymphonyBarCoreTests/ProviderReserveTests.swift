@@ -58,7 +58,9 @@ final class ProviderReserveTests: XCTestCase {
 
     func testAProviderWhoseUsageSymphonyCantReadTakesNoReserve() {
         XCTAssertTrue(ProviderReserve.takesReserve("anthropic"))
+        XCTAssertTrue(ProviderReserve.takesReserve("opencode-go"))
         XCTAssertFalse(ProviderReserve.takesReserve("openai"))
+        XCTAssertFalse(ProviderReserve.takesReserve("openrouter"))
         XCTAssertThrowsError(try ProviderReserve.setting(80, of: "openai", in: config)) {
             XCTAssertEqual($0 as? ProviderReserveError, .notReadable("openai"))
             XCTAssertEqual($0.localizedDescription, "Symphony can't read OpenAI's usage, so it takes no reserve.")
@@ -103,6 +105,22 @@ final class ProviderReserveTests: XCTestCase {
         XCTAssertEqual(checked, written)
         XCTAssertEqual(written, config.replacingOccurrences(of: "reserve: 0.9 ", with: "reserve: 0.8 "))
         XCTAssertEqual(try file.readProviderReserve(of: "anthropic"), 80)
+    }
+
+    /// The Director picks 80 % for OpenCode Go (TP-1642): symphony.yml gains `execution.providers.opencode-go.reserve`
+    /// beside Anthropic's, which stays as it was.
+    func testFileWriteSetsOpenCodeGosReserveBesideAnthropics() async throws {
+        let url = try writeConfig()
+        let file = SymphonyConfigFile(path: url.path)
+
+        let result = try await file.writeProviderReserve(80, of: "opencode-go") { _ in .passed }
+
+        XCTAssertEqual(result, .passed)
+        let written = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertEqual(try ConfigSetting.value(at: ["execution", "providers", "opencode-go", "reserve"], of: written), "0.8")
+        XCTAssertEqual(try file.readProviderReserve(of: "opencode-go"), 80)
+        XCTAssertEqual(try file.readProviderReserve(of: "anthropic"), 90)
+        XCTAssertTrue(written.contains("reserve: 0.9  # leave room for my own sessions"))
     }
 
     func testFileWriteLeavesTheFileWhenTheCheckFails() async throws {

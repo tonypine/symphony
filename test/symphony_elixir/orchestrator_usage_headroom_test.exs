@@ -94,7 +94,7 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
     )
   end
 
-  defp start_run!(pid, %Issue{} = issue) do
+  defp start_run!(pid, %Issue{} = issue, attrs \\ %{}) do
     worker_pid = spawn(fn -> receive do: (:finish -> :ok) end)
     worker_ref = Process.monitor(worker_pid)
 
@@ -118,6 +118,8 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
       repo_key: Config.repo_key!(),
       started_at: DateTime.utc_now()
     }
+
+    entry = Map.merge(entry, attrs)
 
     :sys.replace_state(pid, fn state ->
       %{state | running: Map.put(state.running, issue.id, entry), claimed: MapSet.put(state.claimed, issue.id)}
@@ -513,5 +515,155 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
       wait_until(fn -> SymphonyElixirWeb.Presenter.state_payload(name, 15_000).usage_limits == [] end)
       wait_until(fn -> runs_for.(queued.id) != [] end)
     end)
+  end
+
+  describe "OpenCode Go's usage, read from its usage API (TP-1642)" do
+    @opencode_go {"opencode-go", :all}
+    @go_run %{provider: "opencode-go", model: "deepseek-v4.1-flash", fallback: nil, kind: :implementation}
+
+    defp go_windows(ctx, weekly, status \\ "allowed") do
+      %{
+        "five_hour" => %{status: "allowed", utilization: 0.3, resets_at: DateTime.add(ctx.now, 2 * 3600)},
+        "seven_day" => %{status: status, utilization: weekly, resets_at: DateTime.add(ctx.now, 3 * 86_400)},
+        "monthly" => %{status: "allowed", utilization: 0.55, resets_at: DateTime.add(ctx.now, 20 * 86_400)}
+      }
+    end
+
+    defp go_workflow!(ctx, reserves) do
+      write_headroom_workflow!(ctx,
+        execution_providers: reserves,
+        agent_run_profiles: %{"implementation" => %{"provider" => "opencode-go", "model" => "deepseek-v4.1-flash"}}
+      )
+    end
+
+    defp go_provider(pid), do: Enum.find(GenServer.call(pid, :snapshot).providers, &(&1.provider == "opencode-go"))
+
+    test "its windows show on its provider entry, and a window at its reserve holds new runs on it until it resets", ctx do
+      go_workflow!(ctx, %{anthropic: %{reserve: 0.9}, "opencode-go": %{reserve: 0.9}})
+      pid = start_orchestrator(ctx, :GoReserveOrchestrator)
+      new_run = issue("issue-go-new", "MT-GO-NEW")
+      assert Orchestrator.should_dispatch_issue_for_test(new_run, :sys.get_state(pid))
+
+      log =
+        capture_log(fn ->
+          send(pid, {:provider_usage_read, "opencode-go", {:ok, go_windows(ctx, 0.92)}})
+          :sys.get_state(pid)
+        end)
+
+      state = :sys.get_state(pid)
+      resets_at = DateTime.add(ctx.now, 3 * 86_400)
+      assert %{phase: :headroom, provider: "opencode-go", window: "seven_day", utilization: 0.92, reserve: 0.9, resets_at: ^resets_at} = state.usage_limits[@opencode_go]
+      refute Map.has_key?(state.usage_limits, @anthropic)
+      refute Orchestrator.should_dispatch_issue_for_test(new_run, state)
+      assert log =~ "Usage limit headroom hold provider=opencode-go utilization=0.92 reserve=0.9"
+      assert UsageLimit.hold_label(state.usage_limits[@opencode_go]) == "OpenCode Go at its 90% reserve: holding new runs"
+
+      assert %{usage_windows: windows, reserve: 0.9, at_reserve: true, held: true} = go_provider(pid)
+
+      assert windows == [
+               %{name: "five_hour", utilization: 0.3, resets_at: DateTime.add(ctx.now, 2 * 3600)},
+               %{name: "monthly", utilization: 0.55, resets_at: DateTime.add(ctx.now, 20 * 86_400)},
+               %{name: "seven_day", utilization: 0.92, resets_at: resets_at}
+             ]
+
+      # Anthropic's own windows stay apart.
+      assert Enum.find(GenServer.call(pid, :snapshot).providers, &(&1.provider == "anthropic")).usage_windows == []
+
+      # Past the reset the hold clears and runs go out on OpenCode Go again.
+      set_clock(ctx, DateTime.add(resets_at, 3600))
+      send(pid, {:usage_limit_resume, @opencode_go})
+      wait_until(fn -> :sys.get_state(pid).usage_limits == %{} end)
+      assert Orchestrator.should_dispatch_issue_for_test(new_run, :sys.get_state(pid))
+    end
+
+    test "a used-up window holds at the reserve too; below it, or with no reserve, nothing is held", ctx do
+      go_workflow!(ctx, %{"opencode-go": %{reserve: 0.9}})
+      pid = start_orchestrator(ctx, :GoUsedUpOrchestrator)
+      send(pid, {:provider_usage_read, "opencode-go", {:ok, go_windows(ctx, 1.0, "rejected")}})
+      assert %{phase: :headroom, window: "seven_day", utilization: 1.0} = :sys.get_state(pid).usage_limits[@opencode_go]
+      GenServer.stop(pid)
+
+      for {name, reserves, weekly} <- [
+            {:GoBelowOrchestrator, %{"opencode-go": %{reserve: 0.9}}, 0.89},
+            {:GoNoReserveOrchestrator, %{anthropic: %{reserve: 0.9}}, 1.0}
+          ] do
+        go_workflow!(ctx, reserves)
+        pid = start_orchestrator(ctx, name)
+        send(pid, {:provider_usage_read, "opencode-go", {:ok, go_windows(ctx, weekly)}})
+        state = :sys.get_state(pid)
+
+        assert state.usage_limits == %{}
+        assert state.usage_windows[{"opencode-go", "seven_day"}].utilization == weekly
+        assert Orchestrator.should_dispatch_issue_for_test(issue("issue-go-free", "MT-GO-FREE"), state)
+        GenServer.stop(pid)
+      end
+    end
+
+    test "a failed read keeps the last windows and holds nothing", ctx do
+      go_workflow!(ctx, %{"opencode-go": %{reserve: 0.9}})
+      pid = start_orchestrator(ctx, :GoFailedReadOrchestrator)
+      send(pid, {:provider_usage_read, "opencode-go", {:ok, go_windows(ctx, 0.5)}})
+      before = :sys.get_state(pid).usage_windows
+
+      log =
+        capture_log(fn ->
+          send(pid, {:provider_usage_read, "opencode-go", {:error, {:http_status, 403}}})
+          :sys.get_state(pid)
+        end)
+
+      state = :sys.get_state(pid)
+      assert state.usage_windows == before
+      assert state.usage_limits == %{}
+      assert log =~ "Provider usage read failed; keeping the last windows provider=opencode-go"
+      assert log =~ "HTTP 403"
+    end
+
+    test "it is read at boot, when a run on it starts and ends, and while it works at most once a minute", ctx do
+      test = self()
+      windows = go_windows(ctx, 0.5)
+
+      Application.put_env(:symphony_elixir, :provider_usage_reader, fn provider ->
+        send(test, {:usage_read, provider})
+        {:ok, windows}
+      end)
+
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :provider_usage_reader) end)
+      go_workflow!(ctx, %{"opencode-go": %{reserve: 0.9}})
+      pid = start_orchestrator(ctx, :GoTriggersOrchestrator)
+
+      # Boot.
+      assert_receive {:usage_read, "opencode-go"}, 5_000
+      wait_until(fn -> :sys.get_state(pid).usage_windows[{"opencode-go", "five_hour"}] end)
+
+      # A run on Anthropic reads nothing of OpenCode Go's.
+      claude = issue("issue-go-claude", "MT-GO-CLAUDE")
+      start_run!(pid, claude, %{run_profile: %{@go_run | provider: "anthropic"}})
+      send(pid, {:codex_worker_update, claude.id, %{event: :notification, timestamp: DateTime.utc_now(), payload: "working"}})
+      :sys.get_state(pid)
+      refute_receive {:usage_read, _provider}, 200
+
+      # A run on OpenCode Go working: its first update within the minute after boot reads nothing;
+      # a minute later it reads, and once more only after another minute.
+      go = issue("issue-go-run", "MT-GO-RUN")
+      {worker_pid, worker_ref} = start_run!(pid, go, %{run_profile: @go_run})
+      update = %{event: :notification, timestamp: DateTime.utc_now(), payload: "working"}
+      send(pid, {:codex_worker_update, go.id, update})
+      :sys.get_state(pid)
+      refute_receive {:usage_read, _provider}, 200
+
+      set_clock(ctx, DateTime.add(ctx.now, 61))
+      send(pid, {:codex_worker_update, go.id, update})
+      send(pid, {:codex_worker_update, go.id, update})
+      assert_receive {:usage_read, "opencode-go"}, 5_000
+      :sys.get_state(pid)
+      refute_receive {:usage_read, _provider}, 200
+
+      # The run ends: read at once.
+      capture_log(fn ->
+        send(pid, {:DOWN, worker_ref, :process, worker_pid, :normal})
+        assert_receive {:usage_read, "opencode-go"}, 5_000
+        :sys.get_state(pid)
+      end)
+    end
   end
 end

@@ -62,17 +62,12 @@ defmodule SymphonyElixir.QaSeedTest do
   test "the seeded server answers every move the Director makes, over the memory tracker", %{repo_key: repo_key, dir: dir} do
     assert QaSeed.load(dir, now: @now) == :ok
 
-    # Anthropic at its reserve and the fallback at its own weekly limit, each under its own name and
-    # reset, as the orchestrator keeps them.
-    assert %{
-             {"anthropic", :all} => %{phase: :headroom, reserve: 0.9, window: "five_hour", resets_at: anthropic_reset},
-             {"opencode-go", :all} => %{phase: :paused, reason: opencode_reason, window: "seven_day", resets_at: opencode_reset} = opencode
-           } = RunStore.get_usage_limits()
+    # Anthropic at its reserve, as the orchestrator keeps it. OpenCode Go holds nothing in the seed:
+    # the live server reads its usage from the QA stub and holds it at its reserve (TP-1642).
+    assert [{{"anthropic", :all}, %{phase: :headroom, reserve: 0.9, window: "five_hour", resets_at: anthropic_reset}}] =
+             Map.to_list(RunStore.get_usage_limits())
 
     assert anthropic_reset == DateTime.add(@now, 110 * 60)
-    assert opencode_reset == DateTime.add(@now, 911 * 60)
-    refute opencode_reason =~ "claude"
-    assert UsageLimit.banner(opencode, @now) =~ "OpenCode Go"
 
     # As in the application: the orchestrator starts after the seed, with its pauses, and the Inbox
     # reads the records the seed and each move write.
@@ -242,6 +237,17 @@ defmodule SymphonyElixir.QaSeedTest do
 
     assert [%{issue_identifier: "QA-110", transcript_path: nil, pull_request_url: nil, runtime_seconds: 0}] =
              RunStore.list_runs(repo_key, :all)
+  end
+
+  test "a usage-limit hold without a reserve is the limit the provider's own message reported", %{repo_key: repo_key} do
+    limit = %{"provider" => "opencode-go", "window" => "seven_day", "resets_in_minutes" => 911, "issue" => "QA-101"}
+    dir = seed_copy(repo_key, &Map.put(&1, "usage_limits", [limit]))
+
+    assert QaSeed.load(dir, now: @now) == :ok
+    assert %{{"opencode-go", :all} => %{phase: :paused, reason: reason, window: "seven_day", resets_at: resets_at} = hold} = RunStore.get_usage_limits()
+    assert resets_at == DateTime.add(@now, 911 * 60)
+    refute reason =~ "claude"
+    assert UsageLimit.banner(hold, @now) =~ "OpenCode Go"
   end
 
   test "a seed that does not load names why", %{repo_key: repo_key} do

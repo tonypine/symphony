@@ -26,7 +26,7 @@ public enum ProviderReserveError: LocalizedError, Equatable {
 /// line is rewritten, or inserted with the sections above it when missing, so the rest of the file stays as it is.
 public enum ProviderReserve {
     /// The providers whose usage Symphony reads (`SymphonyElixir.Providers.usage_readable/0`).
-    public static let usageReadable: Set<String> = ["anthropic"]
+    public static let usageReadable: Set<String> = ["anthropic", "opencode-go"]
 
     /// The shares "Stop new runs at" offers, in whole percent, before "No reserve".
     public static let choices = [50, 60, 70, 75, 80, 85, 90, 95]

@@ -19,12 +19,6 @@
       "utilization": 0.93,
       "resets_in_minutes": 110,
       "issue": "QA-101"
-    },
-    {
-      "provider": "opencode-go",
-      "window": "seven_day",
-      "resets_in_minutes": 911,
-      "issue": "QA-101"
     }
   ],
   "questions": [

@@ -191,6 +191,26 @@ final class ProvidersPageTests: XCTestCase {
         XCTAssertEqual(page([reserved(0.83)]).detail(nil)?.reserve?.choices, [50, 60, 70, 75, 80, 83, 85, 90, 95])
     }
 
+    /// OpenCode Go's usage is read too (TP-1642): its 5-hour, weekly and monthly windows are meters with their reset
+    /// times and the reserve's mark, and it has "Stop new runs at" like Anthropic.
+    func testOpenCodeGoHasItsWindowsAndStopNewRunsAtLikeAnthropic() throws {
+        let go = StateSnapshot.Provider(
+            id: "opencode-go", name: "OpenCode Go", inUse: true,
+            usageWindows: [
+                .init(name: "five_hour", utilization: 0.3, resetsAt: now.addingTimeInterval(hour)),
+                .init(name: "monthly", utilization: 0.5, resetsAt: now.addingTimeInterval(14 * 24 * hour)),
+                .init(name: "seven_day", utilization: 0.92, resetsAt: now.addingTimeInterval(48 * hour)),
+            ],
+            harnesses: ["claude", "codex", "opencode"], fallbackFor: ["implementation"], reserve: 0.9
+        )
+        let detail = try XCTUnwrap(page([anthropic(), go]).detail("opencode-go"))
+        XCTAssertEqual(detail.reserve, .init(percent: 90, choices: [50, 60, 70, 75, 80, 85, 90, 95], saving: false))
+        XCTAssertEqual(detail.usage.map(\.label), ["5 hours", "Month", "Week"])
+        XCTAssertEqual(detail.usage.map(\.percent), [30, 50, 92])
+        XCTAssertEqual(detail.usage.map(\.stop), [90, 90, 90])
+        XCTAssertEqual(detail.usage.map(\.resets), ["today 15:00", "Tue 1 Dec, 14:00", "Thu 19 Nov, 14:00"])
+    }
+
     func testAProviderWhoseUsageSymphonyCantReadHasNoStopNewRunsAt() throws {
         XCTAssertNil(try XCTUnwrap(page([openAI]).detail(nil)).reserve)
         XCTAssertNil(try XCTUnwrap(page([openRouter]).detail(nil)).reserve)
@@ -261,6 +281,8 @@ final class ProvidersPageTests: XCTestCase {
         XCTAssertEqual(ProvidersPage.windowLabel("seven_day"), "Week")
         XCTAssertEqual(ProvidersPage.windowLabel("seven_day_opus"), "Week, Opus")
         XCTAssertEqual(ProvidersPage.windowLabel("seven_day_sonnet"), "Week, Sonnet")
+        XCTAssertEqual(ProvidersPage.windowLabel("monthly"), "Month")
+        XCTAssertEqual(ProvidersPage.windowSubject("monthly"), "The month")
         XCTAssertEqual(ProvidersPage.windowLabel("monthly_credits"), "Monthly credits")
         XCTAssertEqual(ProvidersPage.percent(1.2), 100)
         XCTAssertEqual(ProvidersPage.percent(-0.1), 0)

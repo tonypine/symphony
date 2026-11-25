@@ -670,6 +670,8 @@ execution:
   providers:
     anthropic:
       reserve:
+    opencode-go:
+      reserve:
   prompts:
     include_project_guides: true
     project_guide_files: [AGENTS.md]
@@ -853,8 +855,8 @@ execution:
   `0.9`): where new runs on that provider stop, as a share of any of its usage windows, so the rest
   of the limit is left for your own sessions. Factory › Providers sets it ("Stop new runs at") and
   draws each usage meter's stop mark there. Only a provider whose usage Symphony reads takes a
-  reserve: today that is `anthropic`, whose windows Claude Code reports. Any other provider is
-  refused, naming the key (`` `execution.providers.openai.reserve` is not accepted: Symphony can't
+  reserve: `anthropic`, whose windows Claude Code reports, and `opencode-go`, whose windows its
+  usage API reports (below). Any other provider is refused, naming the key (`` `execution.providers.openai.reserve` is not accepted: Symphony can't
   read OpenAI's usage ``), and so is a provider no harness reaches.
   - When a running Claude agent reports a window at or above the reserve, Anthropic is at its
     reserve until that window resets (plus `resume_margin_seconds`). It is unavailable for new runs
@@ -874,6 +876,16 @@ execution:
     (seen at `0.75`), so a lower reserve behaves as if it were set at that point.
   - It replaces `usage_limit.headroom_utilization`, which v0.0.1.998 moves to
     `providers.anthropic.reserve` when Symphony starts (TP-1535).
+  - OpenCode Go (TP-1642): Symphony reads its usage from its usage API,
+    `GET https://opencode.ai/inference/go/v1/usage` with `OPENCODE_API_KEY` as a bearer token: the
+    5-hour (`five_hour`), weekly (`seven_day`) and monthly (`monthly`) windows, each with the share
+    used and its reset. It reads at start, when a run on OpenCode Go starts and ends, and on that
+    run's updates while it works, at most once a minute; there is no poller, and it only reads.
+    The windows show on OpenCode Go's Providers entry as Anthropic's do, and a window at or above
+    `providers.opencode-go.reserve` holds it at its reserve the same way, a used-up window too. A
+    read that fails (no key, a 401, a 403 for a key Go doesn't cover, no network) keeps the last
+    windows, logs `Provider usage read failed; keeping the last windows provider=opencode-go
+    reason=…` (no key only at debug level), and holds or fails no run.
 
 **Project guides:**
 
@@ -1703,6 +1715,7 @@ which listens on `127.0.0.1` only and answers with canned data:
 | --- | --- |
 | `GET /api/v1/key` | for the key `sk-or-v1-symphony-qa-stub`, the label `Symphony QA stub`, $1.25 used of a $10.00 limit, $8.75 left; any other key or none gets a 401, so the provider page says the key is rejected |
 | `GET /api/opencode-go/v1/models` | OpenCode Go's models list for Test connection on its provider page: `kimi-k3` and `symphony-qa-go` for the same valid key; any other key or none gets a 401 |
+| `GET /api/opencode-go/v1/usage` | OpenCode Go's usage in its usage API's shape, for the same valid key: the 5 hours (`rolling`) at 30 % resetting in 2 hours, the week at 92 % in 3 days, the month at 55 % in 20 days, all `ok`; any other key or none gets a 401. Symphony reads it in QA mode in place of OpenCode Go's, and the live QA server (`scripts/qa-server-start.sh`) runs a stub beside it with `OPENCODE_API_KEY` set to the stub's key and a `0.9` reserve for OpenCode Go, so it is held at its reserve |
 | `GET /api/v1/models` | `symphony-qa/reasoning-tools` (tools and reasoning), `symphony-qa/tools-only` (tools, no reasoning) and `symphony-qa/no-tools` (no tools) |
 | `POST /api/v1/messages` | with the valid key, a canned Anthropic message (JSON, or SSE when the request streams) naming the model it was asked for |
 
