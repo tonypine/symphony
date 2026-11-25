@@ -133,8 +133,8 @@ at a time: when one is already open (yours or Symphony's own), yours is not aske
 
 What the facts say about the walkthrough:
 - `ticket.proved_steps` lists the walkthrough steps recorded as proved by a test (the step's
-  number and the test). QA's pre-check runs that test on the pull request; QA does not walk the
-  step. A rework that only recorded such a proof changed what QA checks: the step no longer needs
+  number and the test). Such a step is proved as recorded, CI runs its test on the pull request,
+  and QA does not walk it. A rework that only recorded such a proof changed what QA checks: the step no longer needs
   QA's setup, so never say the setup is still missing for it.
 
 The update is never null. It is for the person, only facts in the document, never restating the
@@ -185,7 +185,8 @@ failed from it.
 The plan's checks (only when the facts hold `checks`). The ticket has a plan, and each of its checks
 is `open`, `proved` or `waived`. An open check that a test or an attachment proves (`proof`:
 `test` or `attached`) keeps the ticket from being handed off: the run's step `plan_checks` fails
-while one is open. `check_notes` holds the newest notes the runs wrote, which is where a run says
+while one is open. A check the pull request's own CI run proves (`proof`: `ci`) never holds the handoff and is
+never waived for it: Symphony proves it in Merging from the pull request's checks, before the merge. `check_notes` holds the newest notes the runs wrote, which is where a run says
 that a check cannot be proved that way. When
 `live.failed_step` is `plan_checks`, the run is going around on such a check: read which checks are
 open and what the run said about them. When you agree that nobody can prove a check the way the

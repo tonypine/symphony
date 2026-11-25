@@ -36,7 +36,9 @@ defmodule SymphonyElixir.WorkflowPreviewSnapshotTest do
     assert flat =~ "copy its numbered steps and expected results into that criterion verbatim, with any `Proved by:` line a step has"
     assert flat =~ "Each walkthrough step is proved in one place, and you name it"
     assert flat =~ "record the proof of every step an automated test in this PR covers, before the handoff push: call `linear_record_walkthrough_proofs`"
-    assert flat =~ "Name only tests in this PR, and never a check name: the repo's `proof_check` in WORKFLOW.md is the check that runs them"
+    assert flat =~ "Name only tests in this PR, and never a check name: the tool refuses a ` › ` separator."
+    assert flat =~ "A recorded proof is complete: QA does not walk the step and reads no CI for it"
+    refute flat =~ "proof_check"
     assert flat =~ "record the step's proof again with `linear_record_walkthrough_proofs`"
     refute flat =~ "<check> › <test>` or `Proved by: QA`"
 

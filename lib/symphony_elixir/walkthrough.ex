@@ -5,10 +5,10 @@ defmodule SymphonyElixir.Walkthrough do
 
   The person writing the ticket describes the steps in plain words. The implementer, who writes the
   tests, records the test that proves a step it covers as an `evidence` event with `proof` (the step
-  and the test, `linear_record_walkthrough_proofs`), and the repo names the check that runs them
-  (`proof_check` in its WORKFLOW.md). The ticket's history is the only source of a step's proof:
-  nothing reads a `Proved by:` line from the description. A step no event proves is walked by QA,
-  and so is every step in a repo without a `proof_check`.
+  and the test, `linear_record_walkthrough_proofs`). The ticket's history is the only source of a
+  step's proof: nothing reads a `Proved by:` line from the description. A recorded test proof is
+  complete: CI runs the test on the pull request and gates the merge, and nothing in between reads
+  CI for it. A step no event proves is walked by QA.
 
   The description shows the proofs as a projection Symphony renders from those events
   (`put_proofs/2`): one `Proved by:` line per proved step, between
@@ -22,9 +22,9 @@ defmodule SymphonyElixir.Walkthrough do
 
   A step whose author wrote `Proved by: QA` asked QA to walk it: `check_proofs/2` refuses a proof for
   it. A `Proved by:` inside inline code (between backticks) is a quotation, not that request.
-  The QA pre-check (`SymphonyElixir.QaPreCheck`) confirms the proved steps on the PR head before the
-  QA agent starts (`proof_steps/2`, from the events alone), and the QA prompt
-  (`SymphonyElixir.QaAgent`) tells QA to link, not walk, them.
+  A QA pass hands the proved steps (`proof_steps/1`, from the events alone) to the QA agent as
+  proved (`SymphonyElixir.QaPreCheck`), and the QA prompt (`SymphonyElixir.QaAgent`) tells QA not
+  to walk them.
   """
 
   alias SymphonyElixir.RunStore
@@ -39,6 +39,8 @@ defmodule SymphonyElixir.Walkthrough do
   @proved_by ~r/proved by:/i
   @backticks ~r/`+/
   @separator ~r/\s*(?:›|\s>\s)\s*/u
+  # The check an older `<check> › <test>` proof names: `make-all`, `macos-e2e`, `CI / build`.
+  @check_name ~r/^[\w-]+(?:\s+\/\s+[\w-]+)?$/u
   # `QA` as the whole spec, or followed only by a note: `QA (light mode only)`, `QA: desktop`.
   @qa ~r/^qa(?:$|\s*[(:,;]|\s+[-–—]\s)/iu
   @proofs_start "<!-- symphony:proofs:start -->"
@@ -46,7 +48,7 @@ defmodule SymphonyElixir.Walkthrough do
   @proofs_intro "_Symphony shows here the test the implementer recorded for each step it proves; QA walks the others._"
   @test_max 300
 
-  @type proof :: %{by: :test, check: String.t(), test: String.t() | nil} | %{by: :qa}
+  @type proof :: %{by: :test, test: String.t()} | %{by: :qa}
   # A groomed ticket's step names the check of its plan (`SymphonyElixir.TicketJourney`).
   @type step :: %{
           required(:number) => pos_integer(),
@@ -84,7 +86,7 @@ defmodule SymphonyElixir.Walkthrough do
 
   @doc """
   The numbered steps of a walkthrough's text, in order, each QA's to walk until a recorded proof
-  says otherwise (`with_recorded_proofs/3`). Lines before the first step (such as
+  says otherwise (`with_recorded_proofs/2`). Lines before the first step (such as
   `Nothing changes on screen.`) are not steps; a step runs until the next one. The text is the
   person's, as they wrote it.
   """
@@ -106,8 +108,7 @@ defmodule SymphonyElixir.Walkthrough do
 
   @doc "The proof of `step` as its `Proved by:` line."
   @spec proof_line(step()) :: String.t()
-  def proof_line(%{proof: %{by: :test, check: check, test: nil}}), do: "Proved by: `#{check}`"
-  def proof_line(%{proof: %{by: :test, check: check, test: test}}), do: "Proved by: `#{check}` › #{test}"
+  def proof_line(%{proof: %{by: :test, test: test}}), do: "Proved by: `#{test}`"
   def proof_line(_step), do: "Proved by: QA"
 
   @doc """
@@ -117,7 +118,7 @@ defmodule SymphonyElixir.Walkthrough do
   description stays as it is.
 
   `proofs` is a non-empty list of `%{"step" => number, "test" => test}`. A proof names a test only,
-  never a check (the repo's `proof_check` names that), so a test with a ` › ` or ` > ` separator is
+  never a check (CI runs the test and gates the merge), so a test with a ` › ` or ` > ` separator is
   refused, as is a step the walkthrough does not have and a step whose author wrote
   `Proved by: QA`: the author asked QA to walk it.
   """
@@ -151,46 +152,49 @@ defmodule SymphonyElixir.Walkthrough do
 
   @doc """
   `steps` with the proofs `recorded` laid over them: each `%{step: number, test: test}` (oldest
-  first, so a later proof of a step wins) makes that step `Proved by: <test>`, run by `proof_check`.
-  With no `proof_check` every step stays QA's.
+  first, so a later proof of a step wins) makes that step `Proved by: <test>`, proved as recorded.
   """
-  @spec with_recorded_proofs([step()], [recorded()], String.t() | nil) :: [step()]
-  def with_recorded_proofs(steps, recorded, proof_check) do
-    case check_name(proof_check) do
-      nil ->
-        steps
-
-      check ->
-        latest = latest(recorded)
-        Enum.map(steps, &recorded_proof(&1, Map.get(latest, &1.number), check))
-    end
+  @spec with_recorded_proofs([step()], [recorded()]) :: [step()]
+  def with_recorded_proofs(steps, recorded) do
+    latest = latest(recorded)
+    Enum.map(steps, &recorded_proof(&1, Map.get(latest, &1.number)))
   end
 
-  defp recorded_proof(step, nil, _check), do: step
-  defp recorded_proof(step, test, check), do: %{step | proof: %{by: :test, check: check, test: test}}
+  defp recorded_proof(step, nil), do: step
+  defp recorded_proof(step, test), do: %{step | proof: %{by: :test, test: test}}
 
   @doc """
-  The steps the proofs `recorded` prove, from the events alone, ordered by step number: the QA
-  pre-check's input, which reads no description text. A step carries its number and its proof, and
-  no text. With no `proof_check` there are none.
+  The steps the proofs `recorded` prove, from the events alone, ordered by step number: what a QA
+  pass hands on as proved, reading no description text. A step carries its number and its proof,
+  and no text.
   """
-  @spec proof_steps([recorded()], String.t() | nil) :: [step()]
-  def proof_steps(recorded, proof_check) do
-    case check_name(proof_check) do
-      nil ->
-        []
-
-      check ->
-        recorded
-        |> latest()
-        |> Enum.sort()
-        |> Enum.map(fn {number, test} -> %{number: number, text: "", proof: %{by: :test, check: check, test: test}} end)
-    end
+  @spec proof_steps([recorded()]) :: [step()]
+  def proof_steps(recorded) do
+    recorded
+    |> latest()
+    |> Enum.sort()
+    |> Enum.map(fn {number, test} -> %{number: number, text: "", proof: %{by: :test, test: test}} end)
   end
 
-  defp latest(recorded), do: Map.new(recorded, &{&1.step, &1.test})
+  # The latest test of each step, as `proof_test/1` reads it.
+  defp latest(recorded), do: Map.new(recorded, &{&1.step, proof_test(&1.test)})
 
-  defp check_name(proof_check), do: blank_to_nil(String.trim(proof_check || ""))
+  @doc """
+  The test a recorded proof names. A proof in the older form `<check> › <test>` names a check
+  before the test: the check is dropped, whatever it is, so the step is proved by the test alone
+  and the check changes nothing. The check is the part before the first ` › ` (or ` > `) when it is
+  a check's name, one word of letters, digits, `_` and `-`, or a `workflow / job` pair of such
+  words; a test's file (`test/x_test.exs › name`) or a name with spaces is part of the test.
+  """
+  @spec proof_test(String.t()) :: String.t()
+  def proof_test(test) when is_binary(test) do
+    test = String.trim(test)
+
+    case String.split(test, @separator, parts: 2) do
+      [first, rest] -> if Regex.match?(@check_name, first) and String.trim(rest) != "", do: String.trim(rest), else: test
+      [_whole] -> test
+    end
+  end
 
   @doc """
   Renders the proofs `recorded` into `description` as the `Proved by:` block (see the moduledoc):
@@ -299,7 +303,7 @@ defmodule SymphonyElixir.Walkthrough do
       Regex.match?(@separator, test) ->
         invalid_proof(
           "step #{number}: name the test only, never a check: `#{test}` holds a ` › ` or ` > ` separator. " <>
-            "The repo's `proof_check` in its WORKFLOW.md names the check that runs it"
+            "CI runs the test on the pull request and gates the merge"
         )
 
       qa_spec?(test) ->
@@ -423,7 +427,4 @@ defmodule SymphonyElixir.Walkthrough do
 
   # A spec with a separator names a test even when its check starts with `qa` (`qa-e2e › login`).
   defp qa_spec?(spec), do: not Regex.match?(@separator, spec) and Regex.match?(@qa, spec)
-
-  defp blank_to_nil(""), do: nil
-  defp blank_to_nil(value), do: value
 end

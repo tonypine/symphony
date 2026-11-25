@@ -11,8 +11,8 @@ defmodule SymphonyElixir.Conductor.Facts do
     * `junction`: the junction it is shaped for, and `focus`, what the turn there is for;
     * `ticket`: identifier, title, URL, the description's `problem`, `acceptance` and `walkthrough`
       sections, the walkthrough steps recorded as proved by a test (`proved_steps`: each step's
-      number and test, the newest proof of a step; QA's pre-check runs that test and QA does not
-      walk the step), the newest brief, the person's decisions, notes and messages, and answers to
+      number and test, the newest proof of a step; the step is proved as recorded and QA does not
+      walk it), the newest brief, the person's decisions, notes and messages, and answers to
       questions;
     * `standing`: phase, coding attempt (the implementation and rework runs started), the pull
       request and its head;
@@ -55,7 +55,9 @@ defmodule SymphonyElixir.Conductor.Facts do
   `pull_request`: `merged`, `unmerged` or `none`), `asks`, the ticket's current `plan` and its
   `checks` with where each stands, `sub_tickets` (each one's identifier, title and state, and for
   one Symphony tracks its `phase`, its plan's `summary`, its `checks`, the notes a run tagged, its
-  `asks` and whether its `pull_request` merged), `rounds` (how many the final check `made`, the
+  `asks`, whether its `pull_request` merged and, when it was split in turn, its own `sub_tickets`,
+  at any depth: a deeper level is compact, without asks and notes, and a ticket already on the path
+  is not entered again), `rounds` (how many the final check `made`, the
   `limit` and how many are `left`), the person's `decisions`, `notes` and `answers`, `conductor`,
   `earlier_tries` (`turn_tries/1`) and `budget`.
 
@@ -71,11 +73,15 @@ defmodule SymphonyElixir.Conductor.Facts do
   On a groomed ticket the other junctions' `ticket` is read through `SymphonyElixir.TicketJourney`
   (`problem` is what was asked, `acceptance` the plan's outcome checks, `walkthrough` its QA
   checks, `proved_steps` the checks a test proved), and the document also holds `checks` (each
-  check of the plan with where it stands, and the reason of a waived one), `check_notes` (the
+  check of the plan with where it stands, how a proved one was proved, and the reason of a waived one), `check_notes` (the
   newest notes the runs wrote, which is where a run says a check cannot be proved) and `waive`
   (the rule for waiving one). Every other junction's document also holds `earlier_tries`
   (`turn_tries/1`), and, on a ticket with sub-tickets, its `sub_tickets` as the tree's, since every
   turn on such a ticket may change them.
+
+  Every check in the document (the ticket's and each sub-ticket's) carries, once proved, how it was
+  proved (`proved_by`: `by`, the `test` or `details`, and the proof's `event_id`); a split ticket
+  whose final check passed has its checks proved `by: sub_tickets` (`SymphonyElixir.Conductor.Tree`).
 
   Each fact read from an event carries the event's id (`event_id`), so a claim built on it can be
   traced. Long texts are cut with a marker (`#{inspect(" [cut by Symphony]")}`), lists keep their
@@ -136,7 +142,8 @@ defmodule SymphonyElixir.Conductor.Facts do
   @open_checks "These checks of the plan are still open, and the pull request merges next. A merge does not prove them. " <>
                  "Say so in your update. Waive one that nobody can prove the way the plan says, with its reason " <>
                  "(never a check of kind `outcome`: only the person waives one), or send the ticket back with instructions " <>
-                 "that name the checks to prove, or ask the person."
+                 "that name the checks to prove, or ask the person. A check proved by the pull request's own CI run (`proof: ci`) " <>
+                 "is proved in Merging from the pull request's checks before the merge: leave it open, and never waive it or send the ticket back for it."
 
   @doc """
   The rule every turn that may waive a check is told (its prompt's `{{waive_rule}}`, and the facts'
@@ -279,8 +286,13 @@ defmodule SymphonyElixir.Conductor.Facts do
     }
   end
 
-  defp family(record, records) do
-    for %{identifier: identifier} = sub <- List.wrap(record.sub_issues), do: sub_ticket(sub, Enum.find(records, &(&1.issue_identifier == identifier)))
+  # The tickets under `record`, at any depth: its sub-tickets, each with its own sub-tickets. The
+  # first level is whole; a deeper one is compact (no asks, no notes) to keep the document small.
+  # A ticket already on the path is not entered again, so a cycle in the records ends.
+  defp family(record, records), do: family(record, records, MapSet.new([record.issue_identifier]))
+
+  defp family(record, records, path) do
+    for %{identifier: identifier} = sub <- List.wrap(record.sub_issues), do: sub_ticket(sub, Enum.find(records, &(&1.issue_identifier == identifier)), records, path)
   end
 
   # A groomed ticket's conversation with the person: what was asked, each message and its reply.
@@ -342,23 +354,45 @@ defmodule SymphonyElixir.Conductor.Facts do
   end
 
   # A sub-ticket as the parent's record lists it, with what its own record and events hold when Symphony tracks it.
-  defp sub_ticket(sub, %{issue_id: issue_id} = record) when is_binary(issue_id) do
+  defp sub_ticket(sub, %{issue_id: issue_id} = record, records, path) when is_binary(issue_id) do
     plan = TicketPlan.current(issue_id)
+    whole = if MapSet.size(path) == 1, do: %{notes: tagged_notes(issue_id), asks: asks(issue_id)}, else: %{}
 
     record
     |> family_ticket()
-    |> Map.merge(%{state: Map.get(sub, :state), plan: plan && plan.summary, checks: checks(issue_id), notes: tagged_notes(issue_id), asks: asks(issue_id)})
+    |> Map.merge(%{state: Map.get(sub, :state), plan: plan && plan.summary, checks: checks(issue_id)})
+    |> Map.merge(whole)
+    |> put_sub_tickets(record, records, path)
   end
 
-  defp sub_ticket(sub, _untracked), do: %{identifier: sub.identifier, state: Map.get(sub, :state)}
+  defp sub_ticket(sub, _untracked, _records, _path), do: %{identifier: sub.identifier, state: Map.get(sub, :state)}
+
+  defp put_sub_tickets(facts, %{sub_issues: [_ | _], issue_identifier: identifier} = record, records, path) do
+    if MapSet.member?(path, identifier), do: facts, else: Map.put(facts, :sub_tickets, family(record, records, MapSet.put(path, identifier)))
+  end
+
+  defp put_sub_tickets(facts, _record, _records, _path), do: facts
 
   defp asks(ticket), do: for(ask <- TicketPlan.ask(ticket), do: drop_nil(%{event_id: ask.event_id, source: ask.source, from: ask.from, text: cut(ask.text, @plan_text_max)}))
 
   defp checks(ticket) do
     for check <- TicketChecks.list(ticket) do
-      drop_nil(%{id: check.id, kind: check.kind, statement: check.statement, proof: check.proof, state: Atom.to_string(check.state), waived: check.waived && check.waived.reason})
+      drop_nil(%{
+        id: check.id,
+        kind: check.kind,
+        statement: check.statement,
+        proof: check.proof,
+        state: Atom.to_string(check.state),
+        proved_by: proved_by(check.proved_by),
+        waived: check.waived && check.waived.reason
+      })
     end
   end
+
+  # How a proved check was proved, and by which event: `by` (a `test`, `qa`, the `design`, an
+  # `attached` file, the pull request's `ci`, or the `sub_tickets` the ticket finished through).
+  defp proved_by(nil), do: nil
+  defp proved_by(proof), do: drop_nil(%{by: proof.by, test: proof.test, details: cut(proof.details, @text_max), event_id: proof.event_id})
 
   defp junction_facts(record, junction, events, opts) do
     last_run = last_run(events)

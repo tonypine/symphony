@@ -1967,5 +1967,48 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       assert %{facts: %Facts{merge_guard: :open_checks}, decision: %{rule: "R9a"}} = watch(repo_key, "1")
       assert %{facts: %Facts{merge_guard: :clear}, decision: %{rule: "R25"}} = watch(repo_key, "2")
     end
+
+    test "TP-1592: in Merging, checks the PR's own CI run proves wait on their proof, never on Rework or a person", %{repo_key: repo_key} do
+      named = %{kind: "outcome", statement: "The make-all check passes.", proof: "ci", ci_check: "make-all"}
+      timed = %{kind: "outcome", statement: "The tests run faster than on main.", proof: "ci"}
+
+      for {id, check} <- [{"1", named}, {"2", timed}, {"3", timed}, {"4", timed}] do
+        {:ok, _plan} = TicketPlan.write(repo_key, id, %{@plan_v1 | checks: [check]})
+        put_dispatch(repo_key, id, kind: :implementation)
+      end
+
+      # Ticket 4's landing run already had its turn on its head.
+      put_dispatch(repo_key, "4", kind: :landing, state: "Merging", head: "sha-4")
+
+      issues!(for id <- ["1", "2", "3", "4"], do: with_pr(repo_key, issue(id, "Merging"), String.to_integer(id)))
+      finished = %{check_names: ["make-all"], running_checks: [], failed_checks: []}
+
+      reads!(%{
+        pr_url(1) => {:ok, read_of(pr_url(1), finished)},
+        pr_url(2) => {:ok, read_of(pr_url(2), finished)},
+        pr_url(3) => {:ok, read_of(pr_url(3), %{finished | running_checks: ["tests"]})},
+        pr_url(4) => {:ok, read_of(pr_url(4), finished)}
+      })
+
+      capture_log(fn -> assert {:ok, _summary} = repo_key |> start_repo!(tracker: AskingTracker, github: DisarmingGitHub) |> Repo.poll() end)
+
+      assert %{facts: %Facts{merge_guard: :ci_checks, ci_proof: :provable}, decision: %{rule: "R28b"}} = watch(repo_key, "1")
+      assert [%{state: :proved, proved_by: %{by: "ci", head: "sha-1"}}] = TicketChecks.list("1")
+
+      assert %{facts: %Facts{merge_guard: :ci_checks, ci_proof: :turn}, decision: %{rule: "R28d", kind: :land_agent}} =
+               watch(repo_key, "2")
+
+      assert %{facts: %Facts{merge_guard: :ci_checks, ci_proof: :running}, decision: %{rule: "R28c", kind: :wait}} =
+               watch(repo_key, "3")
+
+      assert %{facts: %Facts{merge_guard: :ci_checks, ci_proof: :spent}, decision: %{rule: "R28e"}} = watch(repo_key, "4")
+
+      assert_received {:moved, "4", "Rework"}
+      refute_received {:moved, "1", _state}
+      refute_received {:moved, "2", _state}
+      refute_received {:moved, "3", _state}
+      refute_received {:merged, _pr_url, _head}
+      refute_received {:comment, _id, "## Decision needed" <> _rest}
+    end
   end
 end

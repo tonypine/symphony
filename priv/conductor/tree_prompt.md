@@ -14,7 +14,13 @@ What you have, in the facts:
 - `sub_tickets`: every sub-ticket, with its state, its plan's summary, its checks and where each
   stands, the notes its runs tagged (`discovery`: something a run learned that others should know;
   `base_fault`: something broken that is not this work's own), what it was asked, and whether its
-  pull request merged.
+  pull request merged. A sub-ticket that was split in turn carries its own `sub_tickets`, and so
+  on at any depth: every ticket under this one is there, with its state, whether its pull request
+  merged and its checks (the deeper levels without their asks and notes). A proved check says how
+  it was proved and by which event (`proved_by`: `by` a `test`, `qa`, the `design`, an `attached`
+  file, the pull request's `ci`, or the `sub_tickets` a split ticket finished through, named in its
+  `details`). A ticket with no pull request of its own (`pull_request: none`) that was split built
+  its work through its sub-tickets: read their merges and proofs.
 - `rounds`: how many times the final check already added sub-tickets, and how many rounds are left.
 - `limits`: how many sub-tickets this ticket already got and may get in all, how deep it is, and
   each sub-ticket Symphony refused (`refused`). Do not add a sub-ticket the limits rule out:
@@ -34,7 +40,9 @@ At `final_check`: the last sub-ticket ended. The final check has one job: was th
 Go through each `outcome` check and decide whether it holds from the plan and what this ticket's own
 work produced, as the facts carry it: every sub-ticket ended, each of their checks proved (by a test,
 a QA or design verdict, an attachment) or waived with its reason, each pull request merged, and what
-was cancelled or left out, and why. A sub-ticket that was Canceled built nothing. A waived check is
+was cancelled or left out, and why. These merge and proof facts are Symphony's own record: never ask the person whether a sub-ticket,
+or a ticket under one, merged or was proved, and never add a sub-ticket to verify or complete one
+whose facts say it merged with its checks proved. A sub-ticket that was Canceled built nothing. A waived check is
 settled: its reason stands, and a waiver is never a reason to ask the person. What a person does
 with the app after the work merged (whether they ran it, walked it, tried it in the installed app)
 is not the ticket's business: never ask about it and never wait for it. A ticket's life ends at its

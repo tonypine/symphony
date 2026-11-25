@@ -61,7 +61,7 @@ defmodule SymphonyElixir.TicketJourneyTest do
       assert TicketJourney.steps(issue("No walkthrough.")) == []
       assert TicketJourney.steps(nil) == []
 
-      assert TicketJourney.journey(issue(), "make-all") == nil
+      assert TicketJourney.journey(issue()) == nil
       assert TicketJourney.plan_text(issue()) == nil
       assert TicketJourney.plan_text(nil) == nil
       assert TicketJourney.body(issue(), fn -> "the description" end) == "the description"
@@ -74,21 +74,22 @@ defmodule SymphonyElixir.TicketJourneyTest do
       assert RunStore.list_ticket_events(@issue_id, []) == []
     end
 
-    test "its recorded proofs are laid over the walkthrough's steps" do
+    test "its recorded proofs are laid over the walkthrough's steps, each proved as recorded" do
+      assert TicketJourney.proof_steps(issue()) == []
+      assert TicketJourney.walked_text(issue()) == "Open the page.\nFold the panel."
+
       proof!(2, "folds the panel")
 
-      assert [%{number: 1, proof: %{by: :qa}}, %{number: 2, proof: %{by: :test, check: "make-all", test: "folds the panel"}}] = TicketJourney.steps(issue(), "make-all")
-      assert [%{number: 2, text: "", proof: %{by: :test, check: "make-all"}}] = TicketJourney.proof_steps(issue(), "make-all")
-      assert TicketJourney.proof_steps(issue(), nil) == []
+      assert [%{number: 1, proof: %{by: :qa}}, %{number: 2, proof: %{by: :test, test: "folds the panel"}}] = TicketJourney.steps(issue())
+      assert [%{number: 2, text: "", proof: %{by: :test, test: "folds the panel"}}] = TicketJourney.proof_steps(issue())
 
-      assert TicketJourney.walked_text(issue(), "make-all") == "Open the page."
-      assert TicketJourney.walked_text(issue(), nil) == "Open the page.\nFold the panel."
-      assert TicketJourney.walked_text(issue("## User walkthrough\n\nLook at it."), nil) == "Look at it."
-      assert TicketJourney.walked_text(issue("Nothing."), nil) == nil
-      assert TicketJourney.walked_text(nil, nil) == nil
+      assert TicketJourney.walked_text(issue()) == "Open the page."
+      assert TicketJourney.walked_text(issue("## User walkthrough\n\nLook at it.")) == "Look at it."
+      assert TicketJourney.walked_text(issue("Nothing.")) == nil
+      assert TicketJourney.walked_text(nil) == nil
 
       proof!(1, "opens the page")
-      assert TicketJourney.walked_text(issue(), "make-all") == ""
+      assert TicketJourney.walked_text(issue()) == ""
     end
 
     test "whether it has a walkthrough and its acceptance list are the caller's to parse" do
@@ -125,30 +126,27 @@ defmodule SymphonyElixir.TicketJourneyTest do
       assert TicketJourney.walkthrough?(issue(), fn _description -> false end)
       assert TicketJourney.acceptance(issue(), fn _description -> ["read"] end) == ["[c1] The page shows the plan."]
 
-      assert %{source: "the QA checks of the ticket's plan", text: text, steps: [%{number: 2}, %{number: 4}]} = TicketJourney.journey(issue(), nil)
+      assert %{source: "the QA checks of the ticket's plan", text: text, steps: [%{number: 2}, %{number: 4}]} = TicketJourney.journey(issue())
       assert text =~ "2. [c2] The panel folds.\nState: A groomed ticket"
       assert text =~ "\n4. [c4] The panel matches the design."
-      assert %{source: "the QA checks of the epic's plan"} = TicketJourney.journey(issue(), nil, "the epic")
+      assert %{source: "the QA checks of the epic's plan"} = TicketJourney.journey(issue(), "the epic")
     end
 
-    test "a check a test proves is not walked, and the pre-check reads every test-proved check" do
+    test "a check a test proves is proved as recorded and not walked, whatever kind it is" do
       prove!(%{check_id: "c1", by: "test", test: "test/plan_test.exs › shows the plan"})
       prove!(%{check_id: "c2", by: "test", test: "test/plan_test.exs: folds"})
       prove!(%{check_id: "c3", by: "attached"})
       prove!(%{check_id: "c4", by: "qa"})
 
-      assert [%{number: 2, check_id: "c2", proof: %{by: :test, check: "make-all", test: "test/plan_test.exs: folds"}}, %{number: 4, proof: %{by: :qa}}] =
-               TicketJourney.steps(issue(), "make-all")
-
-      assert [%{number: 2, proof: %{by: :qa}}, %{number: 4}] = TicketJourney.steps(issue(), nil)
+      assert [%{number: 2, check_id: "c2", proof: %{by: :test, test: "test/plan_test.exs: folds"}}, %{number: 4, proof: %{by: :qa}}] =
+               TicketJourney.steps(issue())
 
       assert [
-               %{number: 1, check_id: "c1", text: "[c1] The page shows the plan.", proof: %{by: :test, check: "make-all", test: "test/plan_test.exs › shows the plan"}},
+               %{number: 1, check_id: "c1", text: "[c1] The page shows the plan.", proof: %{by: :test, test: "test/plan_test.exs › shows the plan"}},
                %{number: 2, check_id: "c2", proof: %{by: :test}}
-             ] = TicketJourney.proof_steps(issue(), "make-all")
+             ] = TicketJourney.proof_steps(issue())
 
-      assert TicketJourney.proof_steps(issue(), nil) == []
-      assert TicketJourney.walked_text(issue(), "make-all") == "[c4] The panel matches the design.\nAction: Open it\nExpect: It matches"
+      assert TicketJourney.walked_text(issue()) == "[c4] The panel matches the design.\nAction: Open it\nExpect: It matches"
     end
 
     test "the prompt's text keeps every check whole: a long ask is what gets cut, and the plan's text only after it" do
@@ -193,8 +191,8 @@ defmodule SymphonyElixir.TicketJourneyTest do
       plan!(%{@plan | checks: [@outcome]})
       assert TicketJourney.steps(issue()) == []
       refute TicketJourney.walkthrough?(issue())
-      assert TicketJourney.walked_text(issue(), "make-all") == nil
-      assert %{text: "The plan names no QA check: no step is yours to walk.", steps: []} = TicketJourney.journey(issue(), nil)
+      assert TicketJourney.walked_text(issue()) == nil
+      assert %{text: "The plan names no QA check: no step is yours to walk.", steps: []} = TicketJourney.journey(issue())
     end
 
     test "the plan's layers say whether the change shows on screen" do
@@ -395,6 +393,54 @@ defmodule SymphonyElixir.TicketJourneyTest do
       started = %TicketEvents.Event{type: "run.started", payload: %{"run_kind" => "rework"}, seq: 1}
       note = %TicketEvents.Event{type: "note", payload: %{}, seq: 5}
       assert TicketJourney.outdated([started, routed, unsequenced, note]) == nil
+    end
+  end
+
+  describe "a check the pull request's own CI run proves (TP-1592)" do
+    @named %{id: "c5", kind: "outcome", statement: "The make-all check passes on the pull request.", proof: "ci", ci_check: "make-all"}
+    @timed %{id: "c6", kind: "outcome", statement: "The test step runs faster on the pull request than on main.", proof: "ci"}
+
+    defp ci_plan!, do: plan!(%{@plan | checks: @plan.checks ++ [@named, @timed]})
+
+    test "it holds the merge, never the handoff, and QA does not walk it" do
+      ci_plan!()
+
+      assert Enum.map(TicketJourney.unproved(issue()), & &1.id) == ["c1", "c3"]
+      assert Enum.map(TicketJourney.owed_by_qa(issue()), & &1.id) == ["c2", "c4"]
+      assert Enum.map(TicketJourney.steps(issue()), & &1.check_id) == ["c2", "c4"]
+      assert Enum.map(TicketJourney.owed_by_ci(issue()), & &1.id) == ["c5", "c6"]
+      assert Enum.map(TicketJourney.owed_before_merge(issue()), & &1.id) == ["c1", "c2", "c3", "c4", "c5", "c6"]
+      assert Enum.map(TicketJourney.owed_into_merging(issue()), & &1.id) == ["c1", "c2", "c3", "c4"]
+      assert [%{ci_check: "make-all"}, %{proof: "ci"}] = TicketJourney.owed_by_ci(issue())
+
+      # Once the test and attached checks are proved, nothing holds the handoff.
+      prove!(%{check_id: "c1", by: "test", test: "plan_test.exs"})
+      prove!(%{check_id: "c3", by: "attached", evidence: "evt-1"})
+      assert TicketJourney.unproved(issue()) == []
+
+      assert TicketJourney.plan_text(issue()) =~ "- [c5] outcome, proof: ci (CI check `make-all`), open: The make-all check passes on the pull request."
+      assert TicketJourney.plan_text(issue()) =~ "- [c6] outcome, proof: ci, open: The test step runs faster"
+
+      prove!(%{check_id: "c5", by: "ci", details: "The CI check `make-all` passed on the head abc1234."})
+      assert Enum.map(TicketJourney.owed_by_ci(issue()), & &1.id) == ["c6"]
+      assert TicketJourney.plan_text(issue()) =~ "- [c5] outcome, proof: ci (CI check `make-all`), proved by ci:"
+    end
+
+    test "the landing run reads the open ones and its turn, and none for a ticket with none" do
+      assert TicketJourney.owed_by_ci(nil) == []
+      assert TicketJourney.ci_proof_text(issue()) == nil
+
+      ci_plan!()
+      text = TicketJourney.ci_proof_text(issue())
+
+      assert text =~ "## Checks the pull request's CI run proves"
+      assert text =~ "It does not merge: Symphony merges once they are proved."
+      assert text =~ "- [c5] The make-all check passes on the pull request. (CI check `make-all`)"
+      assert text =~ "- [c6] The test step runs faster on the pull request than on main."
+      assert text =~ "`github_get_pr_checks`"
+      assert text =~ "`check.proved` with its `check_id`, `by: ci`"
+      assert text =~ "record a `note` that says why, then end the turn"
+      assert text =~ "Ask nobody about these checks."
     end
   end
 end

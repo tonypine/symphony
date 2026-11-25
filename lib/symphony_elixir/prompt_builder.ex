@@ -142,6 +142,7 @@ defmodule SymphonyElixir.PromptBuilder do
     |> append_extra_prompt(Keyword.get(opts, :extra_prompt) || Keyword.get(opts, :prompt_context))
     |> append_reviewer_comments(reviewer_comments)
     |> append_ci_failure(ci_failure)
+    |> append_ci_proof(issue)
     |> append_pr_conflict(pr_conflict)
     |> append_open_pr_overlap(Keyword.get(opts, :open_pr_overlap))
     |> append_ticket_state(Keyword.get(opts, :ticket_state))
@@ -226,6 +227,7 @@ defmodule SymphonyElixir.PromptBuilder do
     |> append_extra_prompt(Keyword.get(opts, :extra_prompt) || Keyword.get(opts, :prompt_context))
     |> append_reviewer_comments(reviewer_comments)
     |> append_ci_failure(ci_failure)
+    |> append_ci_proof(issue)
     |> append_pr_conflict(pr_conflict)
     |> append_open_pr_overlap(Keyword.get(opts, :open_pr_overlap))
     |> append_ticket_state(Keyword.get(opts, :ticket_state))
@@ -713,6 +715,17 @@ defmodule SymphonyElixir.PromptBuilder do
   defp append_reviewer_comments(prompt, comments) when is_list(comments) do
     prompt <> "\n\n" <> reviewer_comments_section(comments)
   end
+
+  # A landing run in Merging whose plan still has checks the pull request's own CI run proves has the
+  # turn to prove them (`SymphonyElixir.PrWatch.CiProof`), not to merge.
+  defp append_ci_proof(prompt, %{state: "Merging"} = issue) do
+    case TicketJourney.ci_proof_text(issue) do
+      nil -> prompt
+      text -> prompt <> "\n\n" <> text
+    end
+  end
+
+  defp append_ci_proof(prompt, _issue), do: prompt
 
   defp append_ci_failure(prompt, nil), do: prompt
 

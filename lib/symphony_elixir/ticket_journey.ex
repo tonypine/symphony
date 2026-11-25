@@ -12,9 +12,9 @@ defmodule SymphonyElixir.TicketJourney do
       would ever prove it. A step's number is the check's place in the plan, so one check has one
       number whoever reads it;
     * an `outcome` check is an acceptance criterion;
-    * a `check.proved` with `by: test` is the proof of its check, which the QA pre-check confirms on
-      the PR head as it confirms a walkthrough step's recorded proof; QA walks every other `qa`
-      check on each head it judges. A waived check is nobody's to prove, so it is no step and no
+    * a `check.proved` with `by: test` is the proof of its check, complete once recorded as a
+      walkthrough step's recorded proof is (CI runs the test and gates the merge): QA does not walk
+      it, and walks every other `qa` check on each head it judges. A waived check is nobody's to prove, so it is no step and no
       criterion;
     * the prompt carries `## Ask`, `## Plan` and `## Checks` (`plan_text/1`).
 
@@ -31,6 +31,9 @@ defmodule SymphonyElixir.TicketJourney do
   @handoff_proofs ["test", "attached"]
   # The proofs QA gives: a test of the PR never stands in for them.
   @qa_proofs ["qa", "design"]
+  # The proof the pull request's own CI run gives, once the pull request exists: owed before the
+  # merge, never at the handoff and never by QA (`owed_by_ci/1`).
+  @ci_proofs ["ci"]
   # The runs that write the code a pull request carries.
   @coding_kinds ["implementation", "rework"]
   # What can leave the code on a pull request behind its plan: a run that writes it, a plan version,
@@ -60,31 +63,31 @@ defmodule SymphonyElixir.TicketJourney do
 
   @doc """
   The steps of the ticket, in order, each with the proof recorded for it: QA's to walk, or a named
-  test's when one was recorded and the repo has a `proof_check`. For a groomed ticket they are its
+  test's when one was recorded. For a groomed ticket they are its
   `qa` checks and every other check QA proves (`proof: qa` or `design`); else the numbered steps of the description's `## User walkthrough`.
   """
-  @spec steps(ticket(), String.t() | nil) :: [step()]
-  def steps(ticket, proof_check \\ nil) do
+  @spec steps(ticket()) :: [step()]
+  def steps(ticket) do
     if groomed?(ticket) do
       numbered = numbered(ticket)
-      numbered |> walked() |> proved(numbered, proof_check)
+      numbered |> walked() |> proved(numbered)
     else
-      walkthrough_steps(ticket, proof_check)
+      walkthrough_steps(ticket)
     end
   end
 
   @doc """
-  The steps a recorded test proves, from the ticket's events alone: the QA pre-check's input. For
-  a groomed ticket they are the checks, of any kind, a `check.proved` with `by: test` names. With
-  no `proof_check` there are none.
+  The steps a recorded test proves, from the ticket's events alone: what a QA pass hands on as
+  proved. For a groomed ticket they are the checks, of any kind, a `check.proved` with `by: test`
+  names.
   """
-  @spec proof_steps(ticket(), String.t() | nil) :: [step()]
-  def proof_steps(ticket, proof_check) do
+  @spec proof_steps(ticket()) :: [step()]
+  def proof_steps(ticket) do
     if groomed?(ticket) do
       numbered = numbered(ticket)
-      numbered |> Enum.map(&step/1) |> proved(numbered, proof_check) |> Enum.filter(&Walkthrough.named_test?/1)
+      numbered |> Enum.map(&step/1) |> proved(numbered) |> Enum.filter(&Walkthrough.named_test?/1)
     else
-      Walkthrough.proof_steps(Walkthrough.recorded_proofs(id(ticket)), proof_check)
+      Walkthrough.proof_steps(Walkthrough.recorded_proofs(id(ticket)))
     end
   end
 
@@ -98,17 +101,17 @@ defmodule SymphonyElixir.TicketJourney do
   end
 
   @doc """
-  The journey a groomed ticket gives QA (`SymphonyElixir.QaVerification.journey/3`): its `qa`
+  The journey a groomed ticket gives QA (`SymphonyElixir.QaVerification.journey/2`): its `qa`
   checks as the steps and as the text. Nil for a ticket that is not groomed, whose journey is read
   from its description.
   """
   @typedoc "What QA verifies: where it comes from, its text and its steps."
   @type journey :: %{source: String.t(), text: String.t(), steps: [step()], groomed: true}
 
-  @spec journey(ticket(), String.t() | nil, String.t()) :: journey() | nil
-  def journey(ticket, proof_check, label \\ "the ticket") do
+  @spec journey(ticket(), String.t()) :: journey() | nil
+  def journey(ticket, label \\ "the ticket") do
     if groomed?(ticket) do
-      steps = steps(ticket, proof_check)
+      steps = steps(ticket)
       %{source: "the QA checks of #{label}'s plan", text: journey_text(steps), steps: steps, groomed: true}
     end
   end
@@ -120,10 +123,10 @@ defmodule SymphonyElixir.TicketJourney do
   The text of the steps QA walks, those no recorded test proves: "" when a test proves every one,
   nil when the ticket has no step. A walkthrough with no numbered step is walked whole.
   """
-  @spec walked_text(ticket(), String.t() | nil) :: String.t() | nil
-  def walked_text(ticket, proof_check) do
+  @spec walked_text(ticket()) :: String.t() | nil
+  def walked_text(ticket) do
     if groomed?(ticket) do
-      case steps(ticket, proof_check) do
+      case steps(ticket) do
         [] -> nil
         steps -> unproved_text(steps)
       end
@@ -133,7 +136,7 @@ defmodule SymphonyElixir.TicketJourney do
       case section && Walkthrough.steps(section) do
         nil -> nil
         [] -> section
-        steps -> steps |> recorded(ticket, proof_check) |> unproved_text()
+        steps -> steps |> recorded(ticket) |> unproved_text()
       end
     end
   end
@@ -311,7 +314,9 @@ defmodule SymphonyElixir.TicketJourney do
 
   @doc """
   The checks of a groomed ticket an implementation run still owes before the handoff: the open
-  ones a test or an attachment proves. None for a ticket that is not groomed.
+  ones a test or an attachment proves. A check the pull request's own CI run proves (`proof: ci`)
+  is not one of them: it can only be proved once the pull request exists, so it holds the merge
+  (`owed_by_ci/1`), never the handoff. None for a ticket that is not groomed.
   """
   @spec unproved(ticket()) :: [TicketChecks.check()]
   def unproved(ticket) do
@@ -335,6 +340,20 @@ defmodule SymphonyElixir.TicketJourney do
   end
 
   @doc """
+  The open checks of a groomed ticket that the pull request's own CI run proves (`proof: ci`).
+  They hold the merge (`owed_before_merge/1`) and nothing before it: once the pull request's
+  checks finish on its head, the PR watcher proves them (`SymphonyElixir.PrWatch.CiProof`). None
+  for a ticket that is not groomed.
+  """
+  @spec owed_by_ci(ticket()) :: [TicketChecks.check()]
+  def owed_by_ci(ticket) do
+    case id(ticket) do
+      nil -> []
+      id -> TicketChecks.open(id, proof: @ci_proofs)
+    end
+  end
+
+  @doc """
   The checks of a groomed ticket its merge waits on: every open one of its current plan, whatever
   proves it. While there is one, the ticket does not enter
   `Merging`, its pull request is not merged and it does not reach `Done`
@@ -347,6 +366,14 @@ defmodule SymphonyElixir.TicketJourney do
       id -> TicketChecks.open(id)
     end
   end
+
+  @doc """
+  The checks of a groomed ticket the move into `Merging` waits on: every open one but those the
+  pull request's own CI run proves (`owed_by_ci/1`), which are proved in `Merging` before the merge.
+  None for a ticket that is not groomed.
+  """
+  @spec owed_into_merging(ticket()) :: [TicketChecks.check()]
+  def owed_into_merging(ticket), do: Enum.reject(owed_before_merge(ticket), &(&1.proof in @ci_proofs))
 
   @doc """
   Whether the code on the ticket's pull request no longer stands for what is asked, so no approval
@@ -384,6 +411,32 @@ defmodule SymphonyElixir.TicketJourney do
   defp later?(%Event{seq: seq}, since), do: is_integer(seq) and seq > since
 
   defp field(payload, key), do: Map.get(payload, key, Map.get(payload, Atom.to_string(key)))
+
+  @doc """
+  The section a landing run in `Merging` reads while the plan still has open checks the pull
+  request's own CI run proves (`owed_by_ci/1`): that run has the turn to read the PR's checks and
+  record the proof of each (`SymphonyElixir.PrWatch.CiProof`), not to merge. Nil when none is open.
+  """
+  @spec ci_proof_text(ticket()) :: String.t() | nil
+  def ci_proof_text(ticket) do
+    case owed_by_ci(ticket) do
+      [] ->
+        nil
+
+      checks ->
+        listed = Enum.map_join(checks, "\n", &"- [#{&1.id}] #{one_line(&1.statement)}#{ci_check(&1)}")
+
+        """
+        ## Checks the pull request's CI run proves
+
+        This run has the one turn on the pull request's current head to prove these checks of the plan from its own CI run. It does not merge: Symphony merges once they are proved.
+
+        #{PromptSafety.ticket_plan_body(listed)}
+
+        Read the pull request's checks with `github_get_pr_checks`, and a job's log with `github_ci_log`. For each check the results show to be true, record `ticket_record` `check.proved` with its `check_id`, `by: ci` and `details` naming the CI checks and the head they ran on. For a check the results show to be false, or cannot show, record a `note` that says why, then end the turn: the ticket goes to Rework with that note, and the turn is not given again on this head. Ask nobody about these checks.\
+        """
+    end
+  end
 
   @doc "Why a ticket with the `unproved/1` checks `checks` is not handed off, naming each and what proves it."
   @spec unproved_message([TicketChecks.check()]) :: String.t()
@@ -423,22 +476,21 @@ defmodule SymphonyElixir.TicketJourney do
   end
 
   # The tests recorded for the checks, laid over `steps` as a walkthrough's recorded proofs are.
-  defp proved(steps, numbered, proof_check) do
+  defp proved(steps, numbered) do
     tests =
       for {%{proved_by: %{by: "test", test: test}}, number} <- numbered, is_binary(test), do: %{step: number, test: test}
 
-    Walkthrough.with_recorded_proofs(steps, tests, proof_check)
+    Walkthrough.with_recorded_proofs(steps, tests)
   end
 
-  defp walkthrough_steps(ticket, proof_check) do
+  defp walkthrough_steps(ticket) do
     case Walkthrough.section(description(ticket)) do
       nil -> []
-      text -> text |> Walkthrough.steps() |> recorded(ticket, proof_check)
+      text -> text |> Walkthrough.steps() |> recorded(ticket)
     end
   end
 
-  defp recorded(steps, ticket, proof_check),
-    do: Walkthrough.with_recorded_proofs(steps, Walkthrough.recorded_proofs(id(ticket)), proof_check)
+  defp recorded(steps, ticket), do: Walkthrough.with_recorded_proofs(steps, Walkthrough.recorded_proofs(id(ticket)))
 
   # -- the prompt's text -----------------------------------------------------------------
 
@@ -456,8 +508,11 @@ defmodule SymphonyElixir.TicketJourney do
 
   defp check_line(check) do
     parts = for {label, key} <- [{"State", :needs}, {"Action", :action}, {"Expect", :expect}], value = Map.get(check, key), do: "  #{label}: #{one_line(value)}"
-    Enum.join(["- [#{check.id}] #{check.kind}, proof: #{check.proof}, #{standing(check)}: #{one_line(check.statement)}" | parts], "\n")
+    Enum.join(["- [#{check.id}] #{check.kind}, proof: #{check.proof}#{ci_check(check)}, #{standing(check)}: #{one_line(check.statement)}" | parts], "\n")
   end
+
+  defp ci_check(%{ci_check: name}) when is_binary(name), do: " (CI check `#{one_line(name)}`)"
+  defp ci_check(_check), do: ""
 
   defp standing(%{state: :proved, proved_by: %{by: by, test: test}}) when is_binary(test), do: "proved by #{by} (#{one_line(test)})"
   defp standing(%{state: :proved, proved_by: %{by: by}}), do: "proved by #{by}"

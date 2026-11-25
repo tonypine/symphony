@@ -1597,16 +1597,36 @@ what any of them waits on, except on one another.
   covers through the `linear_record_walkthrough_proofs` tool, which records each proof as an
   `evidence` event on the ticket's history and refuses a check name, a step the walkthrough lacks
   and a step its author ended with `Proved by: QA`;
-- the repo names the check that runs its tests, `proof_check` in its WORKFLOW.md front matter (this
-  repository: `make-all`), and Symphony confirms every named test on the PR head before QA.
+- CI runs the tests on the pull request, and the merge waits for CI.
+
+**A test proof is complete when it is recorded, and CI gates the merge.** This is the one rule for
+every walkthrough step and every plan check a test proves: the run executed the test when it wrote
+it, a proof naming a test Symphony cannot find is refused when it is recorded (below), and CI runs
+the test on the pull request, where a red check blocks the merge and comes back by itself. Nothing
+in between reads CI for a proof: a QA pass neither waits for nor reads the pull request's checks on
+a proof's account.
 
 The ticket's history is the only source of a step's proof: nothing reads a `Proved by:` line from
 the description. A step an event proves is proved by that test (the latest event of the step
 wins), named as the code or `mix test` names it: a test file (`test/foo_test.exs`), a test or
 scenario name (`does X`), a describe plus a test name (`foo/1 does X`), or a file and a name
-(`test/foo_test.exs: does X`). QA does not walk it: Symphony's QA pre-check confirms it on the PR
-head before the agent starts (below), reading the steps from the events alone, and the agent links
-the result. QA walks every other step, and every step of a repo without `proof_check`.
+(`test/foo_test.exs: does X`). QA does not walk it: the QA pass reads the proved steps from the
+events alone and hands them to the agent as proved, named with their tests, and the report lists
+each under `### Pre-checks` as `proved` with its test. A proof recorded in the older form
+`<check> › <test>` is read as proved by the test; the check name in it changes nothing. QA walks
+every other step.
+
+When a proof is recorded, Symphony looks for its test in the run's checkout and refuses one it
+cannot find (`SymphonyElixir.QaPreCheck.missing_test/3`): a part with a `/` (or a file name such as
+`check_test.exs`, with or without a `:line`) must be a tracked file or folder, and any other part,
+such as a test or scenario name, must appear in the tracked files, within the file named before it
+when there is one (`test/foo_test.exs › "does X"`, `test/foo_test.exs: does X` or
+`test/foo_test.exs does X`). A part that opens with a file the rest is not in is also read as one
+name, so a test named `WORKFLOW.md front matter cannot set the agent` is found. A name is found as
+text (a test name or a describe alone) or as ExUnit's full test name, the describe and the test
+joined by a space, as `mix test` prints it (with its leading `test ` and trailing `(Module)` too),
+though the two sit on different lines, or as a Swift test's class plus method. A name found nowhere
+is refused naming the file it narrowed to (or the checkout) and the forms tried.
 
 Symphony shows the proofs in the description as a block it renders from the events, one
 `- Step 1 · Proved by: …` line per proved step between
@@ -1615,47 +1635,15 @@ in the same pass as the Decisions section. The walkthrough ends at the next head
 summary block's or the Decisions section's marker, so a write of those blocks keeps the proofs; the rest of the description stays as the person wrote
 it. A `Proved by: QA` the author wrote stays in their step's text and keeps an implementer's proof
 off that step. `SymphonyElixir.Walkthrough` reads the walkthrough into steps, and the QA prompt
-lists the steps to link and the steps to walk when an event proves at least one. The `macos_app`
+lists the proved steps and the steps to walk when an event proves at least one. The `macos_app`
 playbook's live server (`live.walkthrough_mentions`) is asked for only by a step QA walks.
-
-**The QA pre-check.** Before the QA agent starts, Symphony confirms each step a named test proves
-itself (`SymphonyElixir.QaPreCheck`), so whether a named test ran is never left to the agent reading
-check runs: a green head does not prove it, since a path-gated check such as the Mac checks' update test may
-not run on a PR at all. For each step it:
-
-- looks for the test in the PR's checkout: a part with a `/` (or a file name such as
-  `check_test.exs`, with or without a `:line`) must be a tracked file or folder, and any other part,
-  such as a test or scenario name, must appear in the tracked files, within the file named before it
-  when there is one (`test/foo_test.exs › "does X"`, `test/foo_test.exs: does X` or
-  `test/foo_test.exs does X`). A part that opens with a file the rest is not in is also read as one
-  name, so a test named `WORKFLOW.md front matter cannot set the agent` is found. A name is found
-  as text (a test name or a describe alone) or as ExUnit's full test name, the describe and the
-  test joined by a space, as `mix test` prints it (with its leading `test ` and trailing `(Module)`
-  too), though the two sit on different lines. A name found nowhere fails naming the file it
-  narrowed to (or the checkout) and the forms tried;
-- reads the PR head's status checks with `gh` and finds the ones the step's check names (the
-  `proof_check` for `Proved by: <test>`): a check run, a whole workflow, or `workflow / job`.
 
 First the QA run brings its workspace to the PR's current head (GitHub's `refs/pull/<number>/head`),
 so a branch that upkeep updated after the approve is judged at its new head. It uses the rule every
 review, QA and landing run shares (`SymphonyElixir.WorkspaceSync`, recorded as a `workspace.synced`
 event): the newest of the workspace's head, the PR's head and a run's recorded unpushed head wins,
 unpushed work is pushed first, the workspace is reset only when it holds no local change and no
-commit the PR lacks, a workspace with either is `blocked` naming it, and a PR head that moves during
-the run is synced once more before it blocks the pass.
-
-| What the pre-check finds | Step | The pass |
-| --- | --- | --- |
-| the check passed and the test is in the checkout | `pass`, linked to the check run | the agent starts; the prompt lists the step as confirmed, with its link, and tells the agent not to walk it |
-| the check failed, did not run on the head, reported only `skipped`, or the named test is not in the checkout | `fail`, naming the step and what is missing | `fail` to `Rework` with no agent run: the ticket's proof is part of its work |
-| the step names a check that is neither the `proof_check` nor a check on the head (a check name copied from another repo, such as `ci`) | `fail`, saying so and naming the repo's `proof_check` | as above |
-| the check is still running | waiting | waits like the epic review waits for CI (above): the pass starts again a minute later, with no verdict; after an hour on the same head it is `blocked` with the reason, retried like any blocked pass, then a person decides (no QA tool raised it, so it never reaches the self-heal lane) |
-| CI on the PR head cannot be read, or the PR head is not the commit QA judges | — | `blocked` with the reason |
-
-The QA report lists every result under `### Pre-checks`, one line per step with the check run's
-link, and a failed step is also one of the report's findings. A walkthrough with no named-test step
-reads nothing, and QA walks it whole. The epic review does not run the pre-check: its agent reads
-CI's runs on the base branch head, as above.
+commit the PR lacks, and a workspace with either is `blocked` naming it.
 
 The instructions that write walkthroughs (the plan pipeline, the plan run, new issues filed during a
 run, and the ticket templates) ask for plain steps that name no test and no check. A step that needs
@@ -1726,13 +1714,13 @@ diff did not select, so the agent knows which steps fall there; a `qa:<kind>` la
 selects the playbook instead. Only a pass whose prompt offered the status (an enabled playbook the
 diff did not select, or a server the repository rules out for this pass) reads it: on any other
 pass an `unprovable` step is the agent's own block, reported `blocked` and retried as one. The pass
-is then decided by the other steps, the pre-checks and CI:
+is then decided by the other steps, the steps a recorded test proves and CI:
 
 | The other steps | The pass |
 | --- | --- |
 | one is `blocked`, or the block names its own cause (`needs_person`, `covered_by`, `needs_dev_server`, a QA tool's own failure, a wide pass a small QA screen limited) | `blocked`, as before |
 | one fails | `fail` → `Rework` |
-| one passes, or a pre-check passed | `pass` → `Merging`, the report naming each unprovable step and its reason |
+| one passes, or a recorded test proves a step | `pass` → `Merging`, the report naming each unprovable step and its reason |
 | none is left | `blocked` with no retry and no fix ticket: the ticket pauses in `QA` on the "QA could not finish" Needs Decision hold at once, with its three options and **Merge without a QA result** recommended |
 
 A pass's retries count the passes in a row that reached no result on the ticket's current change:
@@ -3805,8 +3793,8 @@ other question is withdrawn (cause `superseded`) with a note naming the answer t
 nothing keeps the ticket paused on a question nobody needs.
 
 **Steps proved by a test.** The facts' `ticket.proved_steps` lists the walkthrough steps recorded as
-proved by a test (`evidence` with `proof`): each step's number, its test and the event. The QA
-pre-check runs that test on the pull request, and QA does not walk the step; both prompts say so, so
+proved by a test (`evidence` with `proof`): each step's number, its test and the event. Such a
+step is proved as recorded, and QA does not walk it; both prompts say so, so
 a rework that only recorded a proof is not read as missing QA's setup.
 
 **Message blocks.** An answer may pick at most 3 `blocks` to draw under the update's body: `steps`
@@ -4398,7 +4386,7 @@ brief was seen and judged; a part that could not be reached, seen or judged make
 Machine steps run without a
 model, through the QA driver the pass holds:
 
-- `symphony:qa_pre_checks`: the pre-checks' results (the steps a named test proves);
+- `symphony:qa_pre_checks`: the steps a recorded test proves, proved as recorded (nothing is read from CI);
 - `symphony:qa_build`: the app Symphony built for the commit (`qa_build`); a failed build fails
   the step;
 - `symphony:qa_launch`: `qa_launch_app` on the default fixtures, then `qa_check_app`; an app that is
@@ -4509,7 +4497,6 @@ prompts:
     You are working on PR {{ pr.url }}.
 push_check:
   command: scripts/push-check
-proof_check: make-all
 verification:
   dev_server:
     start_cmd: "pnpm dev --port $SYMPHONY_VERIFICATION_PORT"
@@ -4525,16 +4512,11 @@ auto_review:
 You are working on {{ issue.identifier }}.
 ```
 
-The front matter accepts only `hooks`, `prompts`, `push_check`, `proof_check`, `verification`,
-`validation`, `human_actions.enabled`, `playbook` and `auto_review.playbooks`; any other key fails
-the repository's workflow.
-
-`proof_check` is the GitHub check run or workflow name that proves the repository's automated tests
-ran (this repository: `make-all`). A walkthrough step the implementer ends with `Proved by: <test>`
-names a test it runs, and the QA pre-check confirms that check passed on the PR head and the test is
-in the checkout (see [Which steps QA walks](#auto_review)). Without it the repository has no
-named-test proofs: QA walks every walkthrough step. It is a non-empty string, read through
-`SymphonyElixir.Config` as the repository's `proof_check` setting; `symphony.yml` has no such key. `hooks`, `verification`
+The front matter accepts only `hooks`, `prompts`, `push_check`, `verification`, `validation`,
+`human_actions.enabled`, `playbook` and `auto_review.playbooks`; any other key fails the
+repository's workflow, except a key the contract has since removed and still tolerates
+(`SymphonyElixir.Config.RepoWorkflowSchema` lists them): it loads and is dropped, so a WORKFLOW.md
+written for an earlier release keeps working. `hooks`, `verification`
 and `auto_review.playbooks` are merged over `symphony.yml` key by key, with the repository's value
 winning (see [`auto_review`](#auto_review) for playbooks).
 
@@ -4630,7 +4612,7 @@ Every run kind, the reviewer and QA included, gets three tools on the current ti
 | Tool | What it does |
 | --- | --- |
 | `ticket_events` | Reads the ticket's events, oldest first, each with its id, seq, time, type, actor, summary, payload, head and artifacts (`{id, kind, label, url}`). `types`, `since` (ISO 8601, exclusive), `run_id`, `open_findings` (the findings QA has not confirmed fixed: open, resolved awaiting QA, reopened; each finding's `finding.recorded` carries `finding`, its `state`, resolution, the head it was resolved on, the event that reopened it and the resolution that event superseded) and `limit` (at most 200) narrow the read. |
-| `ticket_record` | Records one event: `finding.resolved`, a delegated step's `step.started` and `step.completed` (its `outcome`: `passed`, `failed` with the step it `returns_to`, `paused` with the `question_id` it waits on, `skipped` with a `reason`; Symphony records machine and orchestrated steps, and refuses them from an agent), `evidence` (with an optional `proof`: the walkthrough step and its test), `checklist.answered`, `check.proved` (a check of the plan by its `check_id`, and how it was proved: `by` `test` with the `test`, `qa`, `design` or `attached`; recorded once per check and head, and refused as `unknown_check`, with the ids the plan holds, for any other id) and `note` (with an optional `tag`: `discovery` or `base_fault`) in any run, `finding.recorded` in a QA run, and `brief.written` (the ticket's brief: `text` and `walkthrough`, prose with no backtick) in an implementation, rework or review-feedback run. Symphony fills the run, run kind, phase and head. `artifacts` are files under the workspace or the run's `$TMPDIR`, kept in the artifact store. A refusal (`unknown_type`, `not_allowed` with the types the run may record, `invalid_payload` naming the fields, `unknown_finding`, `already_resolved` naming the resolution, `no_head` for a resolution with no head that fixes it, `unknown_parent`, `invalid_artifact`) returns the type's schema and writes nothing. |
+| `ticket_record` | Records one event: `finding.resolved`, a delegated step's `step.started` and `step.completed` (its `outcome`: `passed`, `failed` with the step it `returns_to`, `paused` with the `question_id` it waits on, `skipped` with a `reason`; Symphony records machine and orchestrated steps, and refuses them from an agent), `evidence` (with an optional `proof`: the walkthrough step and its test), `checklist.answered`, `check.proved` (a check of the plan by its `check_id`, and how it was proved: `by` `test` with the `test`, `qa`, `design`, `attached` or `ci` (the pull request's own CI run); recorded once per check and head, and refused as `unknown_check`, with the ids the plan holds, for any other id) and `note` (with an optional `tag`: `discovery` or `base_fault`) in any run, `finding.recorded` in a QA run, and `brief.written` (the ticket's brief: `text` and `walkthrough`, prose with no backtick) in an implementation, rework or review-feedback run. Symphony fills the run, run kind, phase and head. `artifacts` are files under the workspace or the run's `$TMPDIR`, kept in the artifact store. A refusal (`unknown_type`, `not_allowed` with the types the run may record, `invalid_payload` naming the fields, `unknown_finding`, `already_resolved` naming the resolution, `no_head` for a resolution with no head that fixes it, `unknown_parent`, `invalid_artifact`) returns the type's schema and writes nothing. |
 | `ticket_plan` | Reads what a groomed ticket works from, with no argument: `ask` (every `ask.recorded`, oldest first: `text`, `source`, `from`, `at`, `event_id`), `plan` (the newest `plan.written` without its checks, with its `event_id` and `at`; `null` for a ticket with no plan), `checks` (the plan's checks, each with its `state`, `open`, `proved` or `waived`, the newest proof in `proved_by` and the waiver in `waived`; the app state a `qa` check needs is `needs`) and `notes` (the notes tagged `discovery` or `base_fault` of the ticket and of its parent, each saying which it is `on`). Each ask's `text`, the plan's `text` and each sub-ticket's `ask` are wrapped as untrusted text (`<linear_ticket_plan>`), as in the prompts. |
 
 ### Push check

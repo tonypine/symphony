@@ -327,7 +327,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "description" =>
         "Record which test of this PR proves each `## User walkthrough` step you covered with an automated test: each named step gets an `evidence` event " <>
           "on the ticket's history with `proof` (the step and the test; a later proof of a step replaces an earlier one), and the description is left as it is. " <>
-          "Name the test as the code has it (its file path, or a test or scenario name as written), never a check: the repo's `proof_check` names that. " <>
+          "Name the test as the code has it (its file path, or a test or scenario name as written), never a check: the proof is complete once recorded, and CI runs the test and gates the merge. " <>
           "Leave a step no test of this PR covers out, for QA; a step its author marked `Proved by: QA` is refused. " <>
           "On a ticket with a plan (the prompt has a `## Checks` section), name the check instead: `step` is the check's id, the proof is recorded as a " <>
           "`check.proved`, and a check the plan proves by QA is refused.",
@@ -533,7 +533,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     },
     %{
       "name" => "github_merge_pull_request",
-      "description" => "Squash-merge the pull request for the current workspace branch. Only allowed while the current Linear issue is in Merging and no checks are failing or pending.",
+      "description" =>
+        "Squash-merge the pull request for the current workspace branch. Only allowed while the current Linear issue is in Merging, no check of its plan is open, and no checks are failing or pending.",
       "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
     },
     %{
@@ -2678,6 +2679,17 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "error" => %{
         "code" => "pull_request_not_open",
         "message" => "The pull request for the current workspace branch is #{inspect(state)}, so it cannot be merged."
+      }
+    }
+  end
+
+  defp tool_error_payload({:plan_checks_open, ids}) do
+    %{
+      "error" => %{
+        "code" => "plan_checks_open",
+        "message" =>
+          "Checks of the ticket's plan are still open (#{Enum.join(ids, ", ")}), so the pull request does not merge yet. " <>
+            "Prove each one (a check the pull request's own CI run proves: `ticket_record` `check.proved` with `by: ci`) and end the turn: Symphony merges it once they are proved."
       }
     }
   end

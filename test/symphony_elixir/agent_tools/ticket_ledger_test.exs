@@ -601,8 +601,6 @@ defmodule SymphonyElixir.AgentTools.TicketLedgerTest do
   end
 
   describe "a proof naming a test the checkout lacks" do
-    @pr_url "https://github.com/o/r/pull/1"
-
     # A checkout with a Swift test whose class and method sit on different lines.
     setup ctx do
       write!(ctx.workspace, "macos/Tests/TimelineKeysTests.swift", "final class TimelineKeysTests: XCTestCase {\n    func testAClickLeavesNoRowSelected() {}\n}\n")
@@ -611,9 +609,8 @@ defmodule SymphonyElixir.AgentTools.TicketLedgerTest do
       {_out, 0} = git.(["init", "-q"])
       {_out, 0} = git.(["add", "."])
       {_out, 0} = git.(["commit", "-q", "-m", "first"])
-      {head, 0} = git.(["rev-parse", "HEAD"])
       {:ok, _plan} = TicketPlan.write(@repo_key, @issue_id, @plan)
-      %{head: String.trim(head)}
+      :ok
     end
 
     test "is refused, naming the forms a test name takes, and nothing is written", ctx do
@@ -633,7 +630,7 @@ defmodule SymphonyElixir.AgentTools.TicketLedgerTest do
       assert RunStore.list_ticket_events(@issue_id, []) == before
     end
 
-    test "a proof accepted when recorded is found by the QA pre-check on the same checkout", ctx do
+    test "a proof accepted when recorded is proved as recorded, its test found on the same checkout", ctx do
       test = "TimelineKeysTests testAClickLeavesNoRowSelected"
 
       assert {true, %{"event" => %{"type" => "check.proved"}}} =
@@ -642,17 +639,9 @@ defmodule SymphonyElixir.AgentTools.TicketLedgerTest do
       assert {true, %{"event" => %{"type" => "evidence"}}} =
                call("ticket_record", %{"type" => "evidence", "payload" => %{"caption" => "Proved", "proof" => %{"step" => 1, "test" => "test/plan_test.exs: shows it"}}}, session(ctx))
 
-      gh = fn
-        ["pr", "view", @pr_url, "--json", _fields], _opts ->
-          checks = [%{"name" => "make-all", "workflowName" => "make-all", "status" => "COMPLETED", "conclusion" => "SUCCESS"}]
-          {Jason.encode!(%{"url" => @pr_url, "headRefOid" => ctx.head, "statusCheckRollup" => checks}), 0}
-
-        ["api" | _endpoint], _opts ->
-          {Jason.encode!(%{"workflow_runs" => []}), 0}
-      end
-
-      assert [%{proof: %{test: ^test}}] = steps = SymphonyElixir.TicketJourney.proof_steps(@issue_id, "make-all")
-      assert {:pass, [_result]} = SymphonyElixir.QaPreCheck.run(steps, @pr_url, ctx.head, ctx.workspace, gh_runner: gh, proof_check: "make-all")
+      assert [%{proof: %{by: :test, test: ^test}}] = steps = SymphonyElixir.TicketJourney.proof_steps(@issue_id)
+      assert SymphonyElixir.QaPreCheck.proved(steps) == steps
+      assert SymphonyElixir.QaPreCheck.missing_test(test, ctx.workspace) == nil
     end
 
     test "a session with no checkout takes the proof as it is", ctx do

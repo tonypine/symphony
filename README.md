@@ -610,11 +610,9 @@ tuples) go under the acceptance criteria. Tickets with no user-facing change can
 out.
 
 Proving the walkthrough is split three ways. You write the flows. The agent that implements the
-ticket writes the tests, and ends each step a test covers with `Proved by: <test>` in the ticket's
-description. The repository names the check that runs its tests, `proof_check` in its `WORKFLOW.md`
-(`make-all` here). Before QA starts, Symphony confirms every named test exists and passed on the PR
-head, then QA links those results and walks only the steps no test covers. A repository without
-`proof_check` has every step walked by QA.
+ticket writes the tests and records, on the ticket, the test that proves each step it covers. A
+recorded test proof is complete: CI runs the test on the pull request and gates the merge, so QA
+walks only the steps no test covers.
 
 ## Documentation
 

@@ -203,7 +203,8 @@ defmodule SymphonyElixir.TicketEvents.Types do
   not the parent's and the `identifier` Symphony fills once the ticket exists.
 
   `check.proved` is an agent's, in any run, or the machine's: a check of the current plan
-  (`check_id`) proved `by` a `test`, `qa`, the `design` or something `attached`, with the `test`
+  (`check_id`) proved `by` a `test`, `qa`, the `design`, something `attached`, the pull request's
+  `ci` or its `sub_tickets` (the machine's, when a split ticket's final check passed on them), with the `test`
   that proves it (at most 500), the event that is its `evidence` and `details` (at most 2,000). It
   is recorded once per check and head (`SymphonyElixir.TicketChecks`). `check.waived` is
   machine-only: a check (`check_id`) nobody has to prove any more, and why (`reason`, at most
@@ -293,8 +294,13 @@ defmodule SymphonyElixir.TicketEvents.Types do
   # What made the Conductor's watch look at a running run (`SymphonyElixir.Conductor.Watch`).
   @watch_triggers ~w(step_failed step_failed_twice qa_step_answer run_minutes run_tokens message)
 
-  # How a check of a plan is proved (`SymphonyElixir.TicketChecks`).
-  @check_proofs ~w(test qa design attached)
+  # How a check of a plan is proved (`SymphonyElixir.TicketChecks`). `ci`: by the pull request's
+  # own CI run, after the handoff and before the merge; its `ci_check` names the one CI check that
+  # proves it when that check passing is all it asks.
+  @check_proofs ~w(test qa design attached ci)
+  # How a check was proved: as a plan says, or by the sub-tickets a split ticket finished through
+  # (the machine's, when its final check passed on them).
+  @proved_by_kinds @check_proofs ++ ~w(sub_tickets)
   @plan_check {:map,
                [
                  id: {:string, 20},
@@ -305,7 +311,8 @@ defmodule SymphonyElixir.TicketEvents.Types do
                  action: {:optional, {:string, 400}},
                  expect: {:optional, {:string, 400}},
                  size: {:optional, {:enum, ~w(normal wide)}},
-                 story: {:optional, {:string, 200}}
+                 story: {:optional, {:string, 200}},
+                 ci_check: {:optional, {:string, 200}}
                ]}
   @plan_sub_ticket {:map,
                     [
@@ -809,7 +816,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
     "check.proved" => %{
       writers: [:machine, :agent],
       run_kinds: :any,
-      required: [check_id: {:string, 20}, by: {:enum, @check_proofs}],
+      required: [check_id: {:string, 20}, by: {:enum, @proved_by_kinds}],
       optional: [test: {:string, 500}, evidence: {:string, 200}, details: {:string, 2_000}] ++ @signal,
       idempotency: :writer
     },

@@ -607,10 +607,11 @@ it touches (none or more of `screen`, `gallery`, `api`, `logic`, `config`, `test
 `docs`; a name outside them is dropped and never refuses the plan), a `summary` for a person, the plan's `text` for agents, its `checks`, each with an `id`
 that is its alone across versions (a new check gets an id no version used, and a check whose
 statement a version changed counts only the proofs and waivers recorded after that version), a `kind`, `outcome`, `qa` or `evidence`, a `statement` and its
-`proof`, `test`, `qa`, `design` or `attached`, its `size` and, for a split, its `sub_tickets`; the
+`proof`, `test`, `qa`, `design`, `attached` or `ci` (the pull request's own CI run, with an optional
+`ci_check` naming the one CI check that proves it), its `size` and, for a split, its `sub_tickets`; the
 newest one is the ticket's plan, and a ticket is groomed exactly when it holds one), `check.proved`
-(any run's, or the machine's: a check of the current plan proved by a test, QA, the design or
-something attached, recorded once per check and head and refused for an id the plan does not hold),
+(any run's, or the machine's: a check of the current plan proved by a test, QA, the design,
+something attached or the pull request's CI run, recorded once per check and head and refused for an id the plan does not hold),
 `check.waived` (machine only: a check nobody has to prove any more, and why; an `outcome` check is
 waived only by the person's own decision, and a plan version may reword one only after a new ask
 and remove one only after a new ask or when the Conductor writes it outside Grooming with a reason
@@ -1146,7 +1147,6 @@ Allowed repo-local front matter keys:
 - `hooks`
 - `prompts`
 - `push_check`
-- `proof_check`
 - `verification`
 - `validation`
 - `auto_review`, with only its `playbooks` key
@@ -1155,13 +1155,15 @@ Allowed repo-local front matter keys:
   only and is not part of the returned `config`.
 
 Unknown repo workflow keys, and `auto_review` keys other than `playbooks`, are rejected with an
-error that directs the operator to move operator-owned configuration to `symphony.yml`.
+error that directs the operator to move operator-owned configuration to `symphony.yml`. A key the
+contract has removed and still tolerates MUST load without error and be dropped, so it never
+reaches the runtime config: a front matter written for an earlier release keeps loading.
 
 ### 5.4 Config Schema
 
 Unless explicitly called out as repo-local, fields in this section live in `symphony.yml` and become
 part of the merged runtime config. Repo-local front matter contributes `hooks`, `push_check`,
-`proof_check`, `verification`, `auto_review.playbooks` and `human_actions.enabled` values to the runtime settings for that repo. Nested
+`verification`, `auto_review.playbooks` and `human_actions.enabled` values to the runtime settings for that repo. Nested
 repo-local maps are merged over the operator config so repos can override only their dev-server
 command while inheriting process-wide verification defaults such as port allocation, or only one
 playbook's settings while inheriting the operator's other playbooks.
@@ -1625,15 +1627,6 @@ Behavior:
   16 KiB) whose first line is the pushed commit's SHA followed by `pass`. A `fail` result for that
   commit is refused with the recorded failure lines; a missing result, a result for another commit
   or an unreadable file is refused with the command to run.
-
-#### 5.4.8b `proof_check` (string, repo-local)
-
-The GitHub check run or workflow name that proves the repository's automated tests ran (Symphony's
-own repository: `make-all`). It is a property of the repository, so a ticket never repeats it.
-
-- Default: `null`. A repository without it has no named-test proofs: every step of its
-  walkthroughs is a QA step (Section 5.4.17, **Walkthrough proofs**).
-- A blank value fails configuration validation. `symphony.yml` MUST NOT accept the key.
 
 #### 5.4.8 `execution` (object)
 
@@ -2255,7 +2248,7 @@ The QA agent:
   checks, and every other check the plan proves by QA or against a design, and judges nothing
   else, and QA MUST NOT be skipped while one of those is open; before the merge the Conductor's
   facts name every check still open; the `outcome` checks are the acceptance criteria; a
-  `check.proved` with `by: test` is confirmed on the PR head by the QA pre-check, and QA records a
+  `check.proved` with `by: test` is complete when recorded (**Walkthrough proofs** below), and QA records a
   `check.proved` (`by: qa` or `design`) for each check it saw pass. The ticket MUST NOT be handed
   off to Code Review while a check a test or an attachment proves is open. A plan whose layers
   hold `screen` or `gallery` MUST NOT be scoped to "nothing on screen". The Linear description of
@@ -2267,16 +2260,16 @@ The QA agent:
 - **Walkthrough proofs.** The person writing a ticket describes the user's flow in plain steps and
   names no test and no check. The implementer, who writes the tests, ends each step a test of its PR
   covers with `Proved by: <test>` through `linear_record_walkthrough_proofs`, which records each
-  proof as an `evidence` event on the ticket's history, naming only tests in the PR and never a check. The repository names the check that runs them (`proof_check`, Section
-  5.4.8b). A step ending in `Proved by: <test>` is proved by that test, run by the `proof_check`; the
-  older `Proved by: <check> › <test>` MUST still be read, naming the check itself; `Proved by: QA`, or
-  no line, is a QA step. A `Proved by:` inside inline code is a quotation in the step's prose, not its
-  proof, and MUST NOT be read as one. Without a `proof_check`, every step is a QA step. Before a QA
-  agent starts, Symphony MUST confirm each named-test step on the PR head: the test is in the
-  checkout and its check passed (pass), is still running (pending, waited for boundedly) or failed,
-  did not run or the test is missing (fail to `Rework` with no agent run). A step naming a check that
-  is neither the `proof_check` nor a check on the head MUST fail with a message naming the
-  repository's `proof_check`. QA links a confirmed step's result instead of walking it.
+  proof as an `evidence` event on the ticket's history, naming only tests in the PR and never a check;
+  a proof naming a test Symphony cannot find in the checkout MUST be refused when it is recorded. A
+  step ending in `Proved by: <test>` is proved by that test; the older `Proved by: <check> › <test>`
+  MUST still be read as proved by the test, its check name changing nothing; `Proved by: QA`, or no
+  line, is a QA step. A `Proved by:` inside inline code is a quotation in the step's prose, not its
+  proof, and MUST NOT be read as one. **A test proof is complete when it is recorded, and CI gates
+  the merge**: this holds for a walkthrough step and for a plan check a test proves. CI runs the test
+  on the pull request, and a red check blocks the merge. A QA pass MUST NOT read or wait for the pull
+  request's CI on a proof's account: the proved steps reach the QA agent as proved, named with their
+  tests, and QA does not walk them.
 - QA selection is deterministic and runs before any agent: a `qa:skip` label skips; a
   `qa:<kind>` label selects that playbook; a diff that only touches docs, tests or `skip_globs`
   skips; otherwise playbooks are selected by their trigger paths, and the `cli` playbook also by a
@@ -3677,7 +3670,12 @@ Rules:
   `In Progress` from `Rework`, `Code Review`, `QA` or `Merging` MUST be refused as a `Restart`.
 - **The plan holds the merge.** A move into `Merging`, and a move to `Done` that closes a ticket on
   its own pull request (a merge, a person's move), MUST be refused while a check of the ticket's
-  current plan is open, unwaived and not marked `after_merge`. A plan version written after the
+  current plan is open and unwaived. A check the pull request's own CI run proves (`proof: ci`)
+  holds the move to `Done` but neither the handoff nor the move into `Merging`: in `Merging` the PR
+  and CI watcher MUST NOT merge or arm auto-merge while it is open, MUST record it as proved when it
+  names a CI check that passed on the head, and otherwise gives one run per head the turn to read the
+  PR's checks and prove it, sending the ticket to `Rework` when that run leaves it open; no person is
+  asked about it (R28a to R28e). A plan version written after the
   newest implementation or rework run started cancels every approval of the code: from `Code Review`,
   `QA`, `CI Fix` and `Merging` the ticket goes to `Rework` and no approval carries it on. So does a
   Conductor turn's `hold` at `before_merge`, at `message` or on a watch. The PR and CI watcher turns
@@ -4347,10 +4345,12 @@ Slots:
   runs through the holder's slot as a sub-ticket does: the ticket its pause waits on (a run's block
   report naming another ticket, a fix ticket reused from another affected ticket, a Conductor
   blocker that already existed, a competing pull request) and each of its open stored dependencies
-  (one added mid-work). The waited-on ticket borrows only when it has no ancestor in progress and is
-  not in progress on its own slot; it keeps the loan while the holder waits on it. So a holder never
-  waits on a ticket no slot is free for: with one slot, the blocker runs on the holder's slot, and
-  the two count as one used slot.
+  (one added mid-work). The waited-on ticket borrows only when it has no ancestor in progress, or
+  runs through the same ancestor as the holder (a sibling under one epic, since the holder already
+  counts as that epic's sub-ticket in progress), and is not in progress on its own slot; the
+  holder's own ancestor borrows nothing. It keeps the loan while the holder waits on it. So a holder
+  never waits on a ticket no slot is free for: with one slot, the blocker runs on the holder's slot,
+  and the two count as one used slot.
 - `available_slots = max(max_concurrent_agents - taken, 0)`, where `taken` counts the tickets in
   progress (those that hold a slot and every other run under way: a PR run with no ticket takes a
   slot while it runs) less, for each ticket in progress that a sub-ticket (or a ticket it lends its
@@ -4381,7 +4381,11 @@ Giving a slot up:
 - A ticket gives up its slot only when it is done (a terminal state), when it leaves the active
   states (a person moved it to `Backlog`, it was removed, or unassigned from this worker), or when
   a person stops it. A stop that comes with a Question waits on the person and keeps the slot.
-  Every wait on another ticket keeps it, and the ticket it waits on runs through it (above).
+  Every wait on another ticket keeps it, and the ticket it waits on runs through it (above). One
+  exception: a ticket that has not started (still in `Todo`) and gets a stored dependency on a
+  ticket that is not done and not in progress gives back the slot it was given, in the cycle the
+  dependency's write asks for, so the dependency starts through that slot. It keeps its place in
+  the queue and starts in its order once the dependency is done.
 - A ticket with no live run is judged on every cycle against the cycle's candidates and its closed
   dispatch gate; one with a live run gives it up when the run is ended for a terminal or inactive
   state. The cycle that frees a slot asks for another at once, so the next ticket takes it without
@@ -4396,7 +4400,11 @@ Which ticket a free slot goes to:
 - The first ticket of the queue (the first candidate in progress, free to start, or held only by a
   wait on a stored dependency or on its sub-tickets), when it holds no slot and waits on a stored
   dependency or its sub-tickets, takes the free slot with no run and waits there; its run starts
-  once the wait is over. With one slot nothing below it starts meanwhile. Any other ticket that
+  once the wait is over. With one slot nothing below it starts meanwhile. A ticket that has not
+  started waits there on a dependency only when the dependency runs on a slot of its own or is done
+  and waits for its release; one whose dependency needs a slot is not the first of the queue, so the
+  dependency (its own or a sibling under the same epic) goes first through that slot. With nothing
+  running and a ticket that can start in the queue, the free slot goes to it. Any other ticket that
   cannot start takes no slot.
 
 Nothing else limits the slots: landing has no allowance of its own, no phase has a limit of its
@@ -5317,9 +5325,9 @@ Scoped Linear tool extension contract:
   description unchanged. It MUST refuse, with nothing recorded, a test holding a ` › ` or ` > `
   separator (a check name), `QA`, a step the walkthrough lacks, a step its author ended with
   `Proved by: QA`, and a test that fails the comments' secret scan; the read-only reviewer and QA
-  scopes MUST NOT advertise or execute it. The QA journey, the QA pre-check and the QA
-  selection MUST read a step's proof from the recorded `evidence` events only, the latest event of a
-  step winning, and never from the description; the pre-check's steps come from the events alone.
+  scopes MUST NOT advertise or execute it. The QA journey, the proved steps a QA pass hands on and
+  the QA selection MUST read a step's proof from the recorded `evidence` events only, the latest
+  event of a step winning, and never from the description.
   The description's `Proved by:` lines MUST be a projection of those events, rendered between
   `<!-- symphony:proofs:start -->` and `<!-- symphony:proofs:end -->` at the end of the walkthrough in
   the same pass as the Decisions section, the walkthrough ending at the next heading or at a line
@@ -7923,7 +7931,8 @@ infrastructure.
   it; added on an issue that sits lower, it moves the depending issue to just below it; an unmet one
   holds the issue from dispatch and reads "Blocked by" the issue it waits on; an issue that holds a
   slot keeps it, the first of the queue takes the free slot and waits there, and the first pass that
-  finds it met lets the issue start
+  finds it met lets the issue start; an issue that has not started and waits on a dependency that
+  needs a slot takes none and gives back one it was given, so the dependency starts through it
 - Splits, run-filed sub-issues, the Director's blockers and the agent tools write stored
   dependencies and no tracker blocker link; the first start converts the recorded `after` of open
   sub-issues
@@ -7933,7 +7942,8 @@ infrastructure.
   agent turn and question to the person, and with no live run; with 1 slot no other ticket starts
   meanwhile
 - A ticket gives its slot up when it is done, leaves the active states or a person stops it; it
-  keeps it while it waits on a dependency or its sub-tickets; the freed slot goes to the next ticket
+  keeps it while it waits on a dependency or its sub-tickets, unless it has not started and the
+  dependency needs that slot; the freed slot goes to the next ticket
 - A ticket's sub-tickets run through its slot, one at a time with 1 slot; an extra free slot goes in
   queue order to the first ticket that can start, the parent's next ready sub-ticket first when the
   parent is at the top, and comes back when that sub-ticket is done

@@ -42,9 +42,9 @@ blocks the ticket.
 
 Write the walkthrough end to end, in plain words from the user's seat, and name no
 test and no check in it. The implementer, who writes the tests, records which test
-proves each step it covers (`Proved by: <test>`), and the repo names the check that
-runs them (`proof_check` in its WORKFLOW.md). Symphony's QA pre-check confirms each
-named test on the PR head, and QA walks every step without one. Unit-level facts
+proves each step it covers (`Proved by: <test>`). A recorded test proof is complete:
+CI runs the test on the pull request and gates the merge, QA does not walk that step,
+and QA walks every step without one. Unit-level facts
 (keys, counters, error tuples) are acceptance criteria, not walkthrough steps.
 Shape each step when you write it:
 
