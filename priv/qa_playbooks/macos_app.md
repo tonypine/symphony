@@ -161,7 +161,10 @@ API, which is the system under test. For each one:
 Fixtures or the live server. Every pass can show the app a state from fixtures (`api_fixtures`).
 When the prompt has a "Live server" section, Symphony also runs the project's own server on the
 QA VM beside the app, over seeded data, and every launch reaches it unless you pass
-`environment: "fixture"`. Choose per step, by what the step proves:
+`environment: "fixture"`. Each step runs in the setting its plan QA check gives (the fixture
+directory or the live server, the page, the window size and the appearance), which the step's
+brief carries: launch it as given. Only a step whose check carries no setting is chosen here, by
+what the step proves, and then on fixtures unless it needs the round trip:
 
 - **How the app draws a state** (a layout, a label, a colour, an appearance): the fixtures. They
   give the exact state the step names, and nothing changes under you.
@@ -179,8 +182,9 @@ QA VM beside the app, over seeded data, and every launch reaches it unless you p
   reason in its `details`: "needs the live server; this pass reads fixtures only". Never prove it
   from a fixture. The report's header says why the pass had no live server; a `qa:live` label on
   the ticket gives the next pass one.
-- The ticket's walkthrough names no environment and its author never chooses one: you do, per
-  step, by what the step proves.
+- The ticket's walkthrough names no environment and its author never chooses one: the plan's QA
+  check sets it, and you use it as given. You choose by what the step proves only for a step
+  whose check carries no setting.
 
 QA roots: a first launch, a reset, a clean state. In QA mode the app keeps its settings in a QA
 root, never the real ones, and every `qa_launch_app` of the pass shares root 1: what one launch

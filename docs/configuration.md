@@ -2090,9 +2090,11 @@ server's URL and the token as `SYMPHONY_BAR_CONTROL_URL` and `SYMPHONY_BAR_CONTR
 app's state polls, live channel and moves reach it instead of `api_fixtures`
 ([QA mode](../macos/README.md#qa-mode)). `qa_launch_app`'s `environment` argument picks per launch: `live` (the
 default then) or `fixture`, which launches the app without them. `live` on a pass without a live
-server fails with `qa_live_server_missing`. The QA prompt says both environments are open, and the
-agent picks one per step: a step about how a state looks runs on a committed fixture, a step about
-what happens after a move runs on the live server. Each step's `details` starts with the one it
+server fails with `qa_live_server_missing`. Each step runs in the setting its plan QA check gives
+(the fixture directory or the live server, the page, the window size and the appearance). Only for
+a step whose check carries no setting does the agent pick one by what the step proves, and then on
+fixtures: a step about how a state looks runs on a committed fixture, a step about what happens
+after a move needs the live server. Each step's `details` starts with the one it
 used, `fixture: <the fixture directory's name>` (such as `fixture: update-paused`) or `live: seed`.
 A step whose state no committed fixture has is a finding, so a fixture is committed for the next
 pass, and a step that needs the round trip on a pass with no live server is `unprovable here`,
