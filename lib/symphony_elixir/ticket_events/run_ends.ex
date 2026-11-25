@@ -74,10 +74,9 @@ defmodule SymphonyElixir.TicketEvents.RunEnds do
   end
 
   defp latest(times) do
-    case Enum.filter(times, &match?(%DateTime{}, &1)) do
-      [] -> nil
-      times -> Enum.max(times, DateTime)
-    end
+    times
+    |> Enum.filter(&match?(%DateTime{}, &1))
+    |> Enum.max(DateTime, fn -> nil end)
   end
 
   defp next_start(starts, index) do
