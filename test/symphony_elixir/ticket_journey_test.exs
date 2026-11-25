@@ -212,6 +212,19 @@ defmodule SymphonyElixir.TicketJourneyTest do
       assert TicketJourney.live_checks(issue()) == []
     end
 
+    test "the checks QA still walks carry the state they are walked on, as the plan holds them" do
+      assert TicketJourney.walked_checks(issue()) == []
+      assert TicketJourney.walked_checks(nil) == []
+
+      walked_on = [%{path: "priv/qa_seed/demo/seed.json", holds: "present"}]
+      plan!(%{@plan | checks: [@outcome, Map.put(@walk, :walked_on, walked_on), @attached, @design]})
+
+      assert [%{id: "c2", walked_on: ^walked_on}, %{id: "c4"}] = TicketJourney.walked_checks(issue())
+
+      prove!(%{check_id: "c2", by: "test", test: "test/home_test.exs"})
+      assert [%{id: "c4"}] = TicketJourney.walked_checks(issue())
+    end
+
     test "the plan's layers say whether the change shows on screen" do
       refute TicketJourney.on_screen?(issue())
       plan!(%{@plan | layers: ["engine", "gallery"]})

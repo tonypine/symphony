@@ -2249,6 +2249,25 @@ which run with `--dangerously-skip-permissions`. Without a grant the tools retur
 other playbooks offered (`cli`, `web`) and reports each as `pass` or `fail`, then answers
 `blocked` with the missing permission as the reason, which the QA report records.
 
+##### The seed and the fixtures are checked before QA
+
+Before a ticket enters QA, Symphony checks that the pull request's head holds the state each QA
+check of the plan is walked on. It reads the plan's data only: each QA check QA still walks, its
+`walked_on` paths (each `present`, held already, or `added`, added by this change) and the
+`fixture` directory of its `setting`, and it reads those paths with git on the head, under the QA
+seed (`priv/qa_seed/`) and the committed fixtures (`macos/Tests/Fixtures/...`). A check's state is
+missing when a path does not exist on the head, is an empty file or a directory of empty files, or
+is marked `added` and the pull request does not change it against its merge base. The check runs
+where a Code Review approve would move the ticket into QA, and again when a QA pass would start on
+a head it has not passed on, for a ticket that reached QA another way. It is recorded on the
+ticket's history as a step (`qa_state`) bound to the head, with each check, each path and whether
+the head holds it. When state is missing the ticket goes to `Rework` at once, with no QA host or
+session taken, and a finding per check names the check and each missing path, which the rework run
+reads with the open findings. A QA check with no `walked_on` and no `setting` (a plan written
+before them) is not judged; a ticket with no plan, no QA check left to walk, or a change QA skips
+gets no check; and a head that cannot be read goes on to QA, the step saying why. No setting turns
+it on or off, and it adds no file to the repository.
+
 ##### Running QA in a QA VM
 
 `qa_build` runs the PR's build and app unsandboxed, as a person building the PR would. To keep

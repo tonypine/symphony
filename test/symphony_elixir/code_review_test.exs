@@ -264,6 +264,70 @@ defmodule SymphonyElixir.CodeReviewTest do
       SymphonyElixir.PrWatchSupport.put_watch!(@repo_key, @issue_id, head_sha: head, decision: :dispatch, facts: facts)
     end
 
+    # TP-1671: the plan's QA checks name the seed and fixture state they are walked on; the test's
+    # own small seed on the head, never the repository's.
+    defp seeded_workspace! do
+      {dir, _head} = git_workspace!()
+      File.mkdir_p!(Path.join(dir, "priv/qa_seed/demo"))
+      File.write!(Path.join(dir, "priv/qa_seed/demo/seed.json"), ~s({"tickets": 1}))
+      {_out, 0} = System.cmd("git", ["add", "."], cd: dir)
+      {_out, 0} = System.cmd("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "seed"], cd: dir)
+      {head, 0} = System.cmd("git", ["rev-parse", "HEAD"], cd: dir)
+      {dir, String.trim(head)}
+    end
+
+    defp plan_walked_on!(paths) do
+      walked_on = Enum.map(paths, &%{path: &1, holds: "present"})
+
+      plan = %{
+        reason: "Grooming",
+        by: "grooming",
+        shape: "single",
+        layers: ["logic"],
+        summary: "Show the split ticket.",
+        text: "Show the split ticket.",
+        checks: [%{id: "c1", kind: "qa", statement: "The split ticket shows.", proof: "qa", action: "Open it", expect: "It shows", walked_on: walked_on}],
+        size: %{tokens: 1_000, runs: 1}
+      }
+
+      {:ok, _event} = SymphonyElixir.TicketPlan.write(@repo_key, @issue_id, plan)
+      :ok
+    end
+
+    defp qa_state_steps(head) do
+      for %{type: "step.completed", payload: %{step_id: "qa_state"} = payload, head_sha: ^head} <- RunStore.list_ticket_events(@issue_id, []), do: payload
+    end
+
+    test "TP-1671: an approve whose head misses the seed state a QA check is walked on goes to Rework, told what is missing" do
+      {workspace, head} = seeded_workspace!()
+      plan_walked_on!(["priv/qa_seed/demo/seed.json", "priv/qa_seed/demo/split.json"])
+
+      capture_log(fn -> assert :ok = run(workspace, settings: designed_settings(), run_id: "run-cr-1") end)
+      assert_received {:moved, @issue_id, "Rework"}
+      refute_received {:moved, @issue_id, "QA"}
+
+      assert [%{outcome: "failed", qa_state: [%{check_id: "c1", status: "missing", paths: [%{held: true}, %{path: "priv/qa_seed/demo/split.json", held: false}]}]}] =
+               qa_state_steps(head)
+
+      assert [%{state: :open, finding: %{payload: %{class: "qa_state", description: description}}}] =
+               @issue_id |> RunStore.list_ticket_events([]) |> TicketEvents.findings()
+
+      assert description =~ "QA check c1 (The split ticket shows.)"
+      assert description =~ "priv/qa_seed/demo/split.json"
+
+      assert [%{name: "code_review", details: %{signal: "code_review_rework", target: "Rework", qa_decision: "qa_state_missing"}}] = signals()
+    end
+
+    test "TP-1671: an approve whose head holds the seed state every QA check is walked on goes on to QA" do
+      {workspace, head} = seeded_workspace!()
+      plan_walked_on!(["priv/qa_seed/demo/seed.json"])
+
+      assert :ok = run(workspace, settings: designed_settings(), run_id: "run-cr-1")
+      assert_received {:moved, @issue_id, "QA"}
+      assert [%{outcome: "passed", qa_state: [%{check_id: "c1", status: "held"}]}] = qa_state_steps(head)
+      assert [%{details: %{signal: "code_review_approve", target: "QA", qa_decision: "run"}}] = signals()
+    end
+
     test "TP-1204: an approve on a red head stays in Code Review for CI Fix, then goes to QA without a second review" do
       {workspace, head} = git_workspace!()
       watcher_reads!(head, %{ci: :red, failing_check: "macos build"})
