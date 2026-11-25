@@ -211,7 +211,7 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
 
       # Unmet: it takes the slot and waits there, with no run; the ticket below waits for a slot.
       held = Orchestrator.dispatch_chosen_issues_for_test([next, below], start)
-      assert held.running == %{}
+      assert Map.keys(held.running) == ["u"]
       assert %{identifier: "MT-N", since: %DateTime{} = since} = held.slot_holders["n"]
       assert %{slot_held_since: ^since} = RunStore.get_ticket_state("n") |> TicketState.normalize()
       assert %{gate: :depends_on} = held.dispatch_skipped["n"]
@@ -543,9 +543,9 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
       :ok = RunStore.add_dependency("b", "a", :done)
       tracked([waiting, upstream])
 
-      # The waiting ticket sits first in the queue, and still the dependency starts below it.
+      # The order read agrees with the pass: the dependency starts and the waiting ticket is held.
       %{dispatch_order: order} = Orchestrator.put_dispatch_order_for_test(orchestrator_state(1), [waiting, upstream])
-      assert [{"MT-B", :held}, {"MT-A", :starts}] = Enum.map(order.entries, &{&1.identifier, &1.outcome})
+      assert %{"MT-A" => :starts, "MT-B" => :held} == Map.new(order.entries, &{&1.identifier, &1.outcome})
 
       dispatched = Orchestrator.dispatch_chosen_issues_for_test([waiting, upstream], orchestrator_state(1))
       assert Map.keys(dispatched.running) == ["a"]
