@@ -1470,6 +1470,32 @@ defmodule SymphonyElixir.QaAgentTest do
       assert evidence < verdict
     end
 
+    test "every QA prompt says files go in the tool's top-level artifacts, and names the step answer and measure shapes (TP-1680)" do
+      flat = job() |> QaAgent.prompt(nil) |> String.replace(~r/\s+/, " ")
+
+      assert flat =~ "with the step's screenshots or logs as the tool's top-level `artifacts` list, beside `type` and `payload`: never inside `payload`"
+      assert flat =~ "its answer as `result` (`status`, `expected`, `actual`, and `measures`)"
+      assert flat =~ "with what was measured (`name`), the number (`value`), its `unit` and the number expected (`expected`) when there is one"
+
+      # The stepped pass's walk and design-check prompts say the same, and its answer's measured values.
+      for {kind, step} <- [{"macos_app", "walk"}, {"macos_app", "design_check"}, {"cli", "walk"}] do
+        text = Path.join([File.cwd!(), "priv", "qa_steps", kind, step <> ".md"]) |> File.read!() |> String.replace(~r/\s+/, " ")
+        assert text =~ "`measures`", "#{kind}/#{step}"
+        assert text =~ ~s("value"), "#{kind}/#{step}"
+        if step != "walk" or kind == "macos_app", do: assert(text =~ "top-level `artifacts` list", "#{kind}/#{step}")
+      end
+
+      # The instructions for the runs that write the code say it too.
+      for file <- ["091-step-2-execution.md", "093-step-4-rework.md"] do
+        text = Path.join([File.cwd!(), ".symphony", "instructions", file]) |> File.read!()
+        assert text =~ "the files as the tool's top-level `artifacts` list", file
+        assert text =~ "never inside `payload`", file
+        assert text =~ "`measures`", file
+        assert text =~ "`name`", file
+        assert text =~ "`unit`", file
+      end
+    end
+
     test "every QA prompt forbids starting an emulator or simulator and blocks device steps without the android_app playbook" do
       parent = issue(%{id: "issue-parent", identifier: "TP-243", title: "Parent", description: "- [ ] parent criterion"})
       verification = issue(%{id: "issue-fv", identifier: "TP-910", title: "Final verification: Parent", description: "- [ ] child criterion"})

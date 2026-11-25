@@ -182,11 +182,15 @@ defmodule SymphonyElixir.QaAgent.Report do
     end
   end
 
+  # A step's answer is its `result` (its status and what QA saw); step evidence written before the
+  # answer had one shape carries them as `status` and `details`.
   defp ledger_step(%Event{payload: payload, artifacts: ids}, links) do
+    result = Map.get(payload, :result) || %{status: Map.get(payload, :status), actual: Map.get(payload, :details)}
+
     %{
       name: payload.step,
-      status: Map.get(payload, :status) || "noted",
-      details: Map.get(payload, :details) || "",
+      status: Map.get(result, :status) || "noted",
+      details: Map.get(result, :actual) || "",
       environment: Map.get(payload, :environment),
       entries: Enum.map(ids, &artifact_entry(&1, links)) ++ Map.get(payload, :links, [])
     }

@@ -544,7 +544,7 @@ defmodule SymphonyElixir.PromptBuilder do
     |> Enum.join("\n")
   end
 
-  @evidence_line "`evidence` for every screenshot or output it attaches (the files as `artifacts`)"
+  @evidence_line "`evidence` for every screenshot or output it attaches (the files as the tool's top-level `artifacts`, never inside `payload`; a measured value in `measures`)"
 
   defp records_line("implementation") do
     "This implementation run records the ticket's brief first, as a `brief.written` (what it does and why, and its walkthrough, in a person's words), " <>

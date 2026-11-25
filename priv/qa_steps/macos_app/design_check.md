@@ -45,7 +45,8 @@ label on one line with an even gap; nothing clipped, cramped or cut by an ellips
 text and icons readable. A visible difference from the design is a `fail`, even when the tree shows
 every control: name what differs from which screen of the design.
 
-Record each screenshot as an `evidence` event with `ticket_record`, as you take it.
+Record each screenshot as an `evidence` event with `ticket_record`, as you take it, with its path
+in the tool's top-level `artifacts` list, never inside `payload`.
 Do not call `qa_verdict`.
 
 A design check is a `pass` only when every entry and variation the plan names was seen and compared
@@ -57,4 +58,6 @@ Answer with `status` (`pass`, `fail`, `blocked`, `unprovable` when the check nee
 fixture page or the live server this pass does not have, with what it needed in `actual`, or
 `plan_mismatch` when the plan named a screen or entry that does not exist), `expected` (the designs you compared with, and the appearance and size),
 `actual` (what you saw, entry by entry), `details`, and `evidence` (every screenshot, crop and gallery
-picture path under `qa-evidence/`).
+picture path under `qa-evidence/`), and `measures` when you measured something (one
+`{"name", "value", "unit", "expected"}` object per measured value, `expected` only when the design
+gives the number).

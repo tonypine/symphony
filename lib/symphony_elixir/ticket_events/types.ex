@@ -10,7 +10,8 @@ defmodule SymphonyElixir.TicketEvents.Types do
     * `:string` - a non-blank string; `{:string, max}` also bounds its length in characters.
     * `{:prose, max}` - a `{:string, max}` written for a person to read, which holds no backtick.
     * `{:enum, values}` - one of `values`, given as a string or an atom, stored as a string.
-    * `:non_neg_integer`, `:boolean`, `:map`, `{:list, :string}`, `:list`.
+    * `:non_neg_integer`, `:number` (an integer or a float), `:boolean`, `:map`, `{:list, :string}`,
+      `:list`.
     * `{:any_of, specs}` - the first spec that accepts the value.
     * `{:map, fields}` - a map holding exactly `fields` (a keyword of specs, each required unless
       wrapped as `{:optional, spec}`), its keys as atoms.
@@ -48,11 +49,27 @@ defmodule SymphonyElixir.TicketEvents.Types do
   check's walked-on state, `SymphonyElixir.QaState`); `finding.resolved`,
   `step.started`, `step.completed`, `evidence`, `checklist.answered`, `check.proved` and `note` in any run. Every other type is the
   machine's or a person's (a question is asked through the question tool), and a legacy type is
-  never an agent's. An `evidence` may carry a `proof`: the walkthrough step it proves and the test.
-  A QA pass's step evidence also names the step (`step`), its result (`status`), what QA saw
-  (`details`), the environment it was proved in (`environment`: `fixture` or `live`) and the
-  entries that name no kept file (`links`, a CI run's URL); the QA report renders its steps from
-  them (`SymphonyElixir.QaAgent.Report`).
+  never an agent's.
+
+  An `evidence` may carry a `proof`: the walkthrough step it proves and the test. Its files are the
+  event's artifacts (the tool's top-level `artifacts`), never a payload field: an evidence payload
+  that names `artifacts` is refused, so no file is accepted and then dropped. An evidence written
+  before that may hold `artifacts` in its payload, and still reads.
+
+  A measured value has one shape, `measure_spec/0`: what was measured (`name`, up to 200
+  characters), the number (`value`), its `unit` (up to 40) and, when there is one, the `expected`
+  number. An `evidence` carries its measured values as `measures` (at most 20), and a QA step's
+  answer carries its own.
+
+  A QA step's answer has one shape, `step_answer_spec/0`: its `status` (`pass`, `fail`, `blocked`,
+  `skipped`, `unprovable`, `plan_mismatch`) and, each optional, what was `expected` (up to 1,500
+  characters), what happened (`actual`, up to 1,500: what QA saw, or the command and its output)
+  and its `measures`. It is the `result` of a stepped pass's `step.completed`, each entry of its
+  `results` (with the walkthrough `step` number), and the `result` of a QA pass's step evidence,
+  which also names the step (`step`), the environment it was proved in (`environment`: `fixture`
+  or `live`) and the entries that name no kept file (`links`, a CI run's URL); the QA report
+  renders its steps from them (`SymphonyElixir.QaAgent.Report`). Step evidence written before
+  carried `status` and `details` beside `step` instead of a `result`, and still reads.
 
   A run's steps are `step.started` and `step.completed`, each naming the step (`step_id`, `title`)
   and how it runs (`mode`): `machine` (a command Symphony runs, `command`), `orchestrated` (an agent
@@ -71,7 +88,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
 
   A stepped QA pass puts each agent step's answer on its own `step.completed`
   (`SymphonyElixir.QaAgent.StepPayload`), each key optional and bounded: `result` (a check step's
-  `status`, `expected` up to 1,500 characters and `actual` up to 1,500); `plan` (the plan step's
+  answer, `step_answer_spec/0`); `results` (one per walkthrough step a grouped walk judged); `plan` (the plan step's
   `checks`, each a `title` up to 120 and an `expect` up to 400, its `skips`, each a `title` and the
   `why`, and a `summary` up to 600); `recheck` (on the review that asks for rechecks: one entry per
   brief, a `title` up to 120, its `do` instructions one string each up to 400, `expect` up to 1,500
@@ -236,6 +253,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
           | {:prose, pos_integer()}
           | {:enum, [String.t()]}
           | :non_neg_integer
+          | :number
           | :boolean
           | :map
           | :list
@@ -261,9 +279,22 @@ defmodule SymphonyElixir.TicketEvents.Types do
   @evidence {:any_of, [:string, {:list, :string}]}
   # A QA step's result and the environment it was proved in (`fixture`: the committed state
   # fixtures; `live`: Symphony's own server on the QA host), as a QA pass's step evidence carries them.
-  @evidence_statuses ~w(pass fail blocked skipped unprovable)
   @environments ~w(fixture live)
-  @qa_answer_statuses ~w(pass fail blocked unprovable plan_mismatch)
+  # The status of a QA step's answer: a stepped pass's (`plan_mismatch` when the step found the plan
+  # wrong) and a QA verdict's step (`skipped`).
+  @step_statuses ~w(pass fail blocked skipped unprovable plan_mismatch)
+  # A measured value: what was measured, the number, its unit and, when there is one, the number
+  # expected.
+  @measure {:map, [name: {:string, 200}, value: :number, unit: {:string, 40}, expected: {:optional, :number}]}
+  @measures {:list, @measure, 20}
+  # A QA step's answer, wherever it is stored (`step_answer_spec/0`).
+  @step_answer_fields [
+    status: {:enum, @step_statuses},
+    expected: {:optional, {:string, 1_500}},
+    actual: {:optional, {:string, 1_500}},
+    measures: {:optional, @measures}
+  ]
+  @step_answer {:map, @step_answer_fields}
   @tokens {:any_of, [:non_neg_integer, :map]}
   # The signal an event records (`SymphonyElixir.TicketSignals.signal_event/2`) and the details it
   # was recorded with.
@@ -554,16 +585,8 @@ defmodule SymphonyElixir.TicketEvents.Types do
           question_id: :string,
           reason: {:string, 300},
           duration_ms: :non_neg_integer,
-          result: {:map, [status: {:enum, @qa_answer_statuses}, expected: {:string, 1_500}, actual: {:string, 1_500}]},
-          results:
-            {:list,
-             {:map,
-              [
-                step: :non_neg_integer,
-                status: {:enum, @qa_answer_statuses},
-                expected: {:string, 1_500},
-                actual: {:string, 1_500}
-              ]}, 20},
+          result: @step_answer,
+          results: {:list, {:map, [step: :non_neg_integer] ++ @step_answer_fields}, 20},
           plan:
             {:map,
              [
@@ -603,11 +626,10 @@ defmodule SymphonyElixir.TicketEvents.Types do
       run_kinds: :any,
       required: [caption: {:string, 500}],
       optional: [
-        artifacts: {:list, :string},
         proof: {:map, [step: :non_neg_integer, test: {:string, 500}]},
+        measures: @measures,
         step: {:string, 200},
-        status: {:enum, @evidence_statuses},
-        details: {:string, 2_000},
+        result: @step_answer,
         environment: {:enum, @environments},
         links: {:list, :string}
       ],
@@ -879,6 +901,14 @@ defmodule SymphonyElixir.TicketEvents.Types do
     }
   }
 
+  @doc "The one shape of a measured value (see the moduledoc)."
+  @spec measure_spec() :: field_spec()
+  def measure_spec, do: @measure
+
+  @doc "The one shape of a QA step's answer (see the moduledoc)."
+  @spec step_answer_spec() :: field_spec()
+  def step_answer_spec, do: @step_answer
+
   @doc "What a `rule.action` may say a rule did."
   @spec rule_actions() :: [String.t()]
   def rule_actions, do: @rule_actions
@@ -920,34 +950,48 @@ defmodule SymphonyElixir.TicketEvents.Types do
 
   @doc """
   The payload schema of `type` as plain data a tool can return: its `required` and `optional`
-  fields, each `%{name, type}` with a `max` length, a character it `forbids`, the enum `values`, the
-  `item` spec of a list, the `of` specs of a choice or the `fields` of a map, and `required_when` (`%{field, equals}`) for
-  a field the type requires exactly when another field holds a value (and refuses otherwise). Nil
-  for an unknown type. The fields only the machinery passes (`signal`, `signal_details`, a note's `status`) are left out.
+  fields, each `%{name, type}` with a `max` length (`max_items` for a list), a character it
+  `forbids`, the enum `values`, the `item` spec of a list, the `of` specs of a choice or the
+  `fields` of a map (each nested field that may be left out marked `optional: true`),
+  `required_when` (`%{field, equals}`) for a field the type requires exactly when another field
+  holds a value (and refuses otherwise, unless the other field holds one of the values it is
+  `allowed_when`), and `agent_values`, the only values of an enum an agent may record. Nil for an
+  unknown type. The fields only the machinery passes (`signal`, `signal_details`, a note's
+  `status`) are left out.
   """
   @spec schema(term()) :: %{required: [map()], optional: [map()]} | nil
   def schema(type) do
     case fetch(type) do
       {:ok, entry} ->
-        optional = entry.optional |> Keyword.drop(machine_fields(type)) |> describe_fields(Map.get(entry, :conditional, []))
-        %{required: describe_fields(entry.required), optional: optional}
+        conditional = Map.get(entry, :conditional, [])
+        agent_values = Map.get(entry, :agent_values, [])
+        optional = entry.optional |> Keyword.drop(machine_fields(type)) |> describe_fields(conditional, agent_values)
+        %{required: describe_fields(entry.required, [], agent_values), optional: optional}
 
       {:error, _reason} ->
         nil
     end
   end
 
-  defp describe_fields(fields, conditional \\ []) do
+  defp describe_fields(fields, conditional \\ [], agent_values \\ []) do
     Enum.map(fields, fn {name, spec} ->
-      described = Map.put(describe(spec), :name, Atom.to_string(name))
+      {spec, optional?} = optional_spec(spec)
+      described = spec |> describe() |> Map.put(:name, Atom.to_string(name)) |> put_if(:optional, true, optional?)
+      described = put_if(described, :agent_values, Keyword.get(agent_values, name), Keyword.has_key?(agent_values, name))
 
       case Keyword.fetch(conditional, name) do
         {:ok, {field, value}} -> Map.put(described, :required_when, %{field: Atom.to_string(field), equals: value})
-        {:ok, {field, value, _allowed}} -> Map.put(described, :required_when, %{field: Atom.to_string(field), equals: value})
+        {:ok, {field, value, allowed}} -> Map.merge(described, %{required_when: %{field: Atom.to_string(field), equals: value}, allowed_when: allowed})
         :error -> described
       end
     end)
   end
+
+  defp optional_spec({:optional, spec}), do: {spec, true}
+  defp optional_spec(spec), do: {spec, false}
+
+  defp put_if(map, key, value, true), do: Map.put(map, key, value)
+  defp put_if(map, _key, _value, false), do: map
 
   defp describe(:string), do: %{type: "string"}
   defp describe({:string, max}), do: %{type: "string", max: max}
@@ -956,11 +1000,89 @@ defmodule SymphonyElixir.TicketEvents.Types do
   defp describe({:list, spec}), do: %{type: "list", item: describe(spec)}
   defp describe({:list, spec, max}), do: %{type: "list", item: describe(spec), max_items: max}
   defp describe({:any_of, specs}), do: %{type: "any_of", of: Enum.map(specs, &describe/1)}
-  defp describe({:map, fields}), do: %{type: "map", fields: fields |> Enum.map(&unwrap_optional/1) |> describe_fields()}
+  defp describe({:map, fields}), do: %{type: "map", fields: describe_fields(fields)}
   defp describe(spec) when is_atom(spec), do: %{type: Atom.to_string(spec)}
 
-  defp unwrap_optional({name, {:optional, spec}}), do: {name, spec}
-  defp unwrap_optional(field), do: field
+  @doc """
+  The payload shape of `type` in one line a tool's description carries, generated from the catalog
+  as `schema/1` is, so a run knows it before its first call: `{caption: string(500), proof?: {…}}`,
+  each field that may be left out marked `?`, a string with its most characters in brackets, an
+  enum as its values joined by `|` (only the ones an agent may record), a list as `[item]`, a
+  conditional field with when it is required, and a measured value and a QA step's answer by their
+  names, `measure` and `step_answer` (`named_shapes/0`). A field an agent can never send (one
+  required only with a value only the machinery records) is left out. Nil for an unknown type.
+  """
+  @spec shape(term()) :: String.t() | nil
+  def shape(type) do
+    case schema(type) do
+      nil ->
+        nil
+
+      %{required: required, optional: optional} ->
+        agent_values = Map.new(required ++ optional, &{&1.name, Map.get(&1, :agent_values)})
+
+        optional
+        |> Enum.reject(&machine_only?(&1, agent_values))
+        |> Enum.map(&Map.put(&1, :optional, true))
+        |> then(&shape_fields(required ++ &1))
+    end
+  end
+
+  @doc "The shapes `shape/1` names, each a name and its shape: `measure` and `step_answer`."
+  @spec named_shapes() :: [{String.t(), String.t()}]
+  def named_shapes, do: [{"measure", @measure |> describe() |> shape_spec(false)}, {"step_answer", @step_answer |> describe() |> shape_spec(false)}]
+
+  # A field required only when another holds a value an agent never records: a machine step's command.
+  defp machine_only?(%{required_when: %{field: field, equals: value}} = described, agent_values) do
+    case Map.get(agent_values, field) do
+      values when is_list(values) -> value not in values and not Enum.any?(Map.get(described, :allowed_when, []), &(&1 in values))
+      nil -> false
+    end
+  end
+
+  defp machine_only?(_field, _agent_values), do: false
+
+  defp shape_fields(fields), do: "{" <> Enum.map_join(fields, ", ", &shape_field/1) <> "}"
+
+  defp shape_field(field) do
+    mark = if Map.get(field, :optional), do: "?", else: ""
+    when_required = Map.get(field, :required_when)
+    condition = if when_required, do: " (required when #{when_required.field} is #{when_required.equals}#{allowed_note(field)})", else: ""
+    "#{field.name}#{mark}: #{shape_spec(field)}#{condition}"
+  end
+
+  defp allowed_note(%{allowed_when: [_ | _] = allowed}), do: ", allowed when #{Enum.join(allowed, " or ")}"
+  defp allowed_note(_field), do: ""
+
+  # A measured value and a QA step's answer read by their names, which `named_shapes/0` spells out.
+  defp shape_spec(spec, named? \\ true)
+  defp shape_spec(%{agent_values: values}, _named?), do: Enum.join(values, "|")
+  defp shape_spec(%{type: "string"} = spec, _named?), do: "string" <> max_note(spec) <> forbids_note(spec)
+  defp shape_spec(%{type: "enum", values: values}, _named?), do: Enum.join(values, "|")
+  defp shape_spec(%{type: "list", item: item} = spec, _named?), do: "[" <> shape_spec(item) <> "]" <> items_note(spec)
+  defp shape_spec(%{type: "list"}, _named?), do: "list"
+  defp shape_spec(%{type: "any_of", of: specs}, _named?), do: Enum.map_join(specs, " or ", &shape_spec/1)
+  defp shape_spec(%{type: "map", fields: fields} = spec, named?), do: (named? && shape_name(Map.drop(spec, [:name, :optional]))) || shape_fields(fields)
+  defp shape_spec(%{type: "map"}, _named?), do: "object"
+  defp shape_spec(%{type: "non_neg_integer"}, _named?), do: "integer"
+  defp shape_spec(%{type: type}, _named?), do: type
+
+  defp shape_name(spec) do
+    cond do
+      spec == describe(@measure) -> "measure"
+      spec == describe(@step_answer) -> "step_answer"
+      true -> nil
+    end
+  end
+
+  defp max_note(%{max: max}), do: "(#{max})"
+  defp max_note(_spec), do: ""
+
+  defp forbids_note(%{forbids: char}), do: " without #{char}"
+  defp forbids_note(_spec), do: ""
+
+  defp items_note(%{max_items: max}), do: " (at most #{max})"
+  defp items_note(_spec), do: ""
 
   @doc """
   Validates a payload of `type` written by an actor of `actor_kind` (an agent also names its
@@ -1137,6 +1259,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
   defp check({:enum, values}, value) when is_atom(value), do: check({:enum, values}, Atom.to_string(value))
   defp check({:enum, values}, value) when is_binary(value), do: if(value in values, do: {:ok, value}, else: :error)
   defp check(:non_neg_integer, value) when is_integer(value) and value >= 0, do: {:ok, value}
+  defp check(:number, value) when is_number(value), do: {:ok, value}
   defp check(:boolean, value) when is_boolean(value), do: {:ok, value}
   defp check(:map, value) when is_map(value), do: {:ok, value}
   defp check(:list, value) when is_list(value), do: {:ok, value}

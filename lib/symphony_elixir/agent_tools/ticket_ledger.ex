@@ -25,6 +25,15 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
   and an artifact that is not a regular file under the workspace or the run's `$TMPDIR`
   (`invalid_artifact`). Every check runs before anything is written: a refused call ingests no file
   and records no event.
+
+  Nothing is accepted and then dropped: every payload field is stored on the event, every file of
+  `artifacts` is kept as one of its artifacts, and anything else is refused, an argument the tool
+  does not take by `SymphonyElixir.Codex.DynamicTool`. A payload naming `artifacts` or `parent`, the
+  tool's own arguments, is refused with where they go. A refusal carries the type's `schema`
+  (`SymphonyElixir.TicketEvents.Types.schema/1`) and its one-line `shape`
+  (`SymphonyElixir.TicketEvents.Types.shape/1`), and the tool's description lists the shape of every
+  type a run may record (`record_shapes/0`), generated from the type catalog, so a run knows it
+  before its first call.
   """
 
   alias SymphonyElixir.{
@@ -91,21 +100,24 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
         "description" =>
           "Record an event on the current ticket's history. A run records `finding.resolved` (an open or reopened finding it fixed, by `finding_id`; Symphony fills the head that fixes it), " <>
             "a delegated step's `step.started` and `step.completed` (`outcome` `passed`, `failed` with the step it `returns_to`, `paused` with the `question_id` it waits on, or `skipped` with a `reason`; Symphony records machine and orchestrated steps), " <>
-            "`evidence` (with an optional `proof`: the walkthrough `step` number and the `test` that proves it), `checklist.answered`, " <>
+            "`evidence` (with an optional `proof`: the walkthrough `step` number and the `test` that proves it; its measured values as `measures`, each a `measure`; " <>
+            "and for a QA step the `step` it walked with its answer as `result`, a `step_answer`), `checklist.answered`, " <>
             "`check.proved` (a check of the plan, by its `check_id`, and how: `by` `test` with the `test` that proves it, `qa`, `design`, `attached`, or `ci` for a `proof: ci` check the pull request's own CI run proves, with `details` naming the checks and the head) and `note` " <>
             "(with an optional `tag`: `discovery` for something found that is not this ticket's to solve, `base_fault` for a fault of the base branch); " <>
             "a QA run also records `finding.recorded`, and an implementation, rework or review-feedback run `brief.written` " <>
             "(the ticket's brief: `text`, what it does and why in a person's words, under 1,200 characters, and `walkthrough`, the steps a person takes, both with no backtick). " <>
             "Verdicts, moves, pauses, questions and runs are Symphony's: ask a question with the question tool. " <>
             "`artifacts` are paths of files in the workspace or your $TMPDIR, kept with the event (a screenshot shows as a thumbnail in the Director); `parent` nests the event under another. " <>
-            "Symphony fills the run, phase and head. A refusal returns its reason and the type's schema; nothing is written.",
+            "Files never go in `payload`: a payload naming a field its type lacks, or a value out of shape, is refused. " <>
+            "Symphony fills the run, phase and head. A refusal returns its reason, the type's schema and its shape; nothing is written.\n\n" <>
+            record_shapes(),
         "inputSchema" => %{
           "type" => "object",
           "additionalProperties" => false,
           "required" => ["type", "payload"],
           "properties" => %{
-            "type" => %{"type" => "string"},
-            "payload" => %{"type" => "object"},
+            "type" => %{"type" => "string", "description" => "One of the types the description lists."},
+            "payload" => %{"type" => "object", "description" => "The event's fields, in the shape the description lists for its `type`."},
             "artifacts" => %{"type" => "array", "items" => %{"type" => "string"}},
             "parent" => %{"type" => "string", "description" => "The id of an event of this ticket to nest this one under."}
           }
@@ -120,6 +132,42 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
         "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
       }
     ]
+  end
+
+  @doc """
+  The types some agent run may record with `ticket_record`, sorted: every run kind's
+  `SymphonyElixir.TicketEvents.Types.agent_types/1`. Each run kind's own list is still enforced
+  when it records.
+  """
+  @spec recordable_types() :: [String.t()]
+  def recordable_types, do: Types.agent_run_kinds() |> Enum.flat_map(&Types.agent_types/1) |> Enum.uniq() |> Enum.sort()
+
+  @doc """
+  The payload shape of each type `recordable_types/0` lists, as `ticket_record`'s description
+  carries it: generated from the type catalog (`SymphonyElixir.TicketEvents.Types.shape/1`), never
+  written by hand, with the run kinds a type is restricted to and the named shapes it uses.
+  """
+  @spec record_shapes() :: String.t()
+  def record_shapes do
+    types =
+      for type <- recordable_types() do
+        "- `#{type}`#{run_kinds_note(type)}: #{Types.shape(type)}"
+      end
+
+    named = for {name, shape} <- Types.named_shapes(), do: "- `#{name}`: #{shape}"
+
+    Enum.join(
+      ["Payload shapes, from Symphony's type catalog (`?` marks a field that may be left out; string(N) holds at most N characters; a|b is one of the values):" | types] ++
+        ["Named shapes:" | named],
+      "\n"
+    )
+  end
+
+  defp run_kinds_note(type) do
+    case Types.catalog()[type].run_kinds do
+      :any -> ""
+      kinds -> " (#{Enum.join(kinds, ", ")} runs)"
+    end
   end
 
   @doc "The arguments each tool takes."
@@ -318,12 +366,20 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
 
       {:error, {:invalid_payload, fields}} ->
         fields = Enum.map(fields, &to_string/1)
-        refusal("invalid_payload", "The #{type} payload is not valid: #{Enum.join(fields, ", ")}.", type, nil, %{"fields" => fields})
+        message = "The #{type} payload is not valid: #{Enum.join(fields, ", ")}.#{argument_hint(fields)} Its shape: #{Types.shape(type)}"
+        refusal("invalid_payload", message, type, nil, %{"fields" => fields})
 
       # A value only Symphony records, such as a machine step's mode.
       {:error, {:not_allowed, why}} ->
         refusal("not_allowed", why <> ".", type)
     end
+  end
+
+  # A tool argument given inside the payload, where it would be lost, is named as the argument it is.
+  defp argument_hint(fields) do
+    if Enum.any?(["artifacts", "parent"], &(&1 in fields)),
+      do: " `artifacts` and `parent` are arguments of ticket_record beside `type` and `payload`, never payload fields: files go in `artifacts`.",
+      else: ""
   end
 
   defp finding("finding.resolved", %{finding_id: id} = payload, stored, head) do
@@ -513,6 +569,7 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
     error =
       %{"reason" => reason, "message" => message}
       |> put_present("schema", Types.schema(type))
+      |> put_present("shape", Types.shape(type))
       |> put_present("allowed", allowed)
       |> Map.merge(extra)
 

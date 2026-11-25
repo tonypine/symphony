@@ -93,6 +93,21 @@ defmodule SymphonyElixir.QaAgent.ReportTest do
       assert length(Regex.scan(~r/· \*\*reopened\*\*/, body)) == 1
     end
 
+    test "reads a step's status and what QA saw from its stored answer, and the earlier fields from older evidence (TP-1680)" do
+      events = [
+        event("n1", "evidence", @second, %{caption: "Step 1: fail", step: "Step 1 Open the page", result: %{status: "fail", expected: "Rows", actual: "$ qa_screenshot\nno rows"}, environment: "live"}),
+        event("n2", "evidence", @second, %{caption: "Step 2: pass", step: "Step 2 Read the list", result: %{status: "pass"}}),
+        # Written before the answer had one shape: status and details beside the step.
+        evidence("n3", @second, %{step: "Step 3 Remove it", status: "blocked", details: "no seed"})
+      ]
+
+      body = Report.render(Map.merge(outcome(), %{events: events, run_id: @second, links: %{}}))
+
+      assert body =~ "- **fail** Step 1 Open the page (proved on the live server)\n\n  ```text\n  $ qa_screenshot\n  no rows\n  ```\n"
+      assert body =~ "- **pass** Step 2 Read the list\n"
+      assert body =~ "- **blocked** Step 3 Remove it\n\n  ```text\n  no seed\n  ```\n"
+    end
+
     test "keeps the same sections as the report rendered from the outcome" do
       given =
         outcome(%{

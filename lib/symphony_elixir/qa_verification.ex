@@ -1202,9 +1202,11 @@ defmodule SymphonyElixir.QaVerification do
     TicketJourney.record_walked(repo_key, issue, Map.get(outcome, :steps, []), opts)
   end
 
-  # Every step is recorded, with its result, what QA saw, the environment it was proved in and its
-  # evidence: the files the pass kept as `artifacts`, any other entry (a CI run's URL) as `links`.
-  # The QA report renders its steps from these events (`Report.render/1`).
+  # Every step is recorded, with its answer in the one shape a QA step's answer has (`result`: its
+  # status and what QA saw, `SymphonyElixir.TicketEvents.Types.step_answer_spec/0`), the environment
+  # it was proved in and its evidence: the files the pass kept as the event's artifacts, any other
+  # entry (a CI run's URL) as `links`. The QA report renders its steps from these events
+  # (`Report.render/1`).
   defp record_evidence(repo_key, issue, run_id, outcome) do
     artifacts = Map.get(outcome, :artifacts)
 
@@ -1215,8 +1217,7 @@ defmodule SymphonyElixir.QaVerification do
 
         fields = %{
           step: cut(step.name, 200),
-          status: step.status,
-          details: cut(Map.get(step, :details), 2_000),
+          result: step_answer(step),
           environment: Map.get(step, :environment),
           links: unresolved(artifacts, entries)
         }
@@ -1233,9 +1234,16 @@ defmodule SymphonyElixir.QaVerification do
     (steps ++ transcript)
     |> Enum.with_index(1)
     |> Enum.each(fn {{caption, ids, fields}, n} ->
-      payload = Map.merge(%{caption: cut(caption, 500), artifacts: ids}, fields)
+      payload = Map.put(fields, :caption, cut(caption, 500))
       TicketSignals.record_event(repo_key, issue.id, "evidence", payload, pass_event_opts(run_id, "evidence:#{run_id}:#{n}", ids))
     end)
+  end
+
+  defp step_answer(step) do
+    case cut(Map.get(step, :details), 1_500) do
+      details when is_binary(details) and details != "" -> %{status: step.status, actual: details}
+      _none -> %{status: step.status}
+    end
   end
 
   defp unresolved(artifacts, entries) do

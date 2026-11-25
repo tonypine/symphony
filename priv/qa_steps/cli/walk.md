@@ -34,8 +34,11 @@ Answer with:
 - `actual`: what the commands did, with each exit status.
 - `details`: the commands you ran and the output that bears on it.
 - `evidence`: `qa-evidence/cli-transcript.md`.
+- `measures` (only when you measured something, such as a run's duration or a file's size): one
+  object per measured value, `{"name": what you measured, "value": the number, "unit": its unit,
+  "expected": the number the brief expects, when it gives one}`.
 
 When you walk several steps in one session, run each step's commands in turn and answer with
 `results` in place of the fields above: one object per step, each with `step` (its number) and that
-step's own `status`, `expected`, `actual`, `details` and `evidence`. Symphony refuses an answer that
+step's own `status`, `expected`, `actual`, `details`, `evidence` and `measures`. Symphony refuses an answer that
 misses a step and asks once more; a step still without a result is not judged, never passed.

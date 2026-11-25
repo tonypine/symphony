@@ -1252,9 +1252,9 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert report =~ "- **unprovable** Walkthrough step 1 (check c1)"
       assert report =~ "Symphony marked it before any session: it needs the live server, which this pass does not run."
 
-      assert [evidence] = for(%{payload: %{status: "unprovable"}} = event <- SymphonyElixir.TicketEvents.query(@issue_id, types: ["evidence"], limit: 50), do: event)
+      assert [evidence] = for(%{payload: %{result: %{status: "unprovable"}}} = event <- SymphonyElixir.TicketEvents.query(@issue_id, types: ["evidence"], limit: 50), do: event)
       assert evidence.payload.step == "Walkthrough step 1 (check c1)"
-      assert evidence.payload.details == "Symphony marked it before any session: it needs the live server, which this pass does not run."
+      assert evidence.payload.result.actual == "Symphony marked it before any session: it needs the live server, which this pass does not run."
     end
 
     test "a pass whose every walked step Symphony marked asks a person at once, never the blocked retry" do

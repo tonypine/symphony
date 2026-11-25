@@ -237,8 +237,10 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   # A stored `step.skipped`, from before it was folded into `step.completed`.
   defp summary("step.skipped", payload, _event), do: {"Step skipped", [text(payload, :title)]}
 
-  defp summary("evidence", payload, _event) do
-    title = "Evidence recorded" <> suffix(" with ", plural(length(strings(field(payload, :artifacts))), "file"))
+  # An evidence's files are the event's artifacts; one written before kept their ids in its payload too.
+  defp summary("evidence", payload, event) do
+    files = with [] <- strings(Map.get(event, :artifacts)), do: strings(field(payload, :artifacts))
+    title = "Evidence recorded" <> suffix(" with ", plural(length(files), "file"))
     {title <> suffix(", ", environment(text(payload, :environment))), [text(payload, :caption)]}
   end
 
