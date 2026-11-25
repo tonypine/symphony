@@ -265,7 +265,8 @@ defmodule SymphonyElixir.QaDriver do
 
   alias SymphonyElixir.{AgentEnv, OpenRouter, PathSafety, QaBuild, QaPolicy, Workspace}
   alias SymphonyElixir.PlaybookSettings
-  alias SymphonyElixir.QaDriver.{Checks, DevServer, DevServerLease, Gallery, Machine, Pages, ReleasePair, Remote, SafeHost}
+  alias SymphonyElixir.QaDriver.{Checks, DevServer, DevServerLease, Gallery, Machine, Pages}
+  alias SymphonyElixir.QaDriver.{ReleasePair, Remote, SafeHost}
 
   @evidence_dir "qa-evidence"
   @qa_root_env "SYMPHONY_BAR_QA_ROOT"
@@ -1089,7 +1090,8 @@ defmodule SymphonyElixir.QaDriver do
          {:ok, fixtures_dir} <- copy_api_fixtures(config, fixtures) do
       pair_env = [{"SYMPHONY_BAR_UPDATE_URL", ReleasePair.latest_url(feed_port)}, {"SYMPHONY_UPDATE_OPEN", relaunch}]
       stand_ins = stand_ins ++ opening_env ++ library_env ++ pair_env
-      info = %{name: name, crash_reports: reports, api_fixtures: fixtures_dir, stand_ins: stand_ins, root: root, opened: opened}
+      info = %{name: name, crash_reports: reports, api_fixtures: fixtures_dir, stand_ins: stand_ins, root: root}
+      info = Map.put(info, :opened, opened)
       info = Map.merge(info, %{pair_bundle: bundle, args: appearance_args(Map.get(args, "appearance")), environment: environment})
 
       with {:ok, payload} <- GenServer.call(driver, {:launch, Path.join([bundle, "Contents", "MacOS", name]), info}) do
@@ -2369,6 +2371,7 @@ defmodule SymphonyElixir.QaDriver do
 
   def handle_call(:running_pids, _from, state),
     do: {:reply, for({pid, %{exit_status: nil}} <- state.apps, do: pid) |> Enum.sort(), state}
+
   def handle_call(:roots, _from, state), do: {:reply, %{roots: state.roots, last: state.last_root}, state}
 
   def handle_call({:hold_requests, root, taken}, _from, state) do

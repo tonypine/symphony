@@ -1252,7 +1252,8 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       File.mkdir_p!(Path.join(ctx.worktree, "macos/Tests/Fixtures/director-app/running"))
       answers(%{"plan" => [{:write, plan([1, 2, 3])}], "review" => [{:verdict, @pass}]})
 
-      assert {:ok, _result} = run(ctx, %{journey: %{source: "the plan", text: "", steps: steps}, playbooks: [%{kind: "macos_app", live: true, prompt: "Intro."}]})
+      playbooks = [%{kind: "macos_app", live: true, prompt: "Intro."}]
+      assert {:ok, _result} = run(ctx, %{journey: %{source: "the plan", text: "", steps: steps}, playbooks: playbooks})
       calls = tool_calls()
 
       # The launch step's health check, then one launch per session: walk 1, walk 2, walk 3, the design check.
@@ -1351,7 +1352,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
 
       assert {:ok, _result} = run(ctx, %{journey: %{source: "the ticket", text: "1. Open it.", steps: walkthrough([1])}})
       turns = Map.new(turns(), &{&1.id, &1.prompt})
-      assert turns["walk_1"] =~ ~s[`qa_check_app` found it unhealthy at launch: {"healthy":false,"problems":["not responding"]}.]
+      assert turns["walk_1"] =~ ~s|`qa_check_app` found it unhealthy at launch: {"healthy":false,"problems":["not responding"]}.|
 
       # Not running and checked unhealthy: the check's problems say why.
       Application.put_env(:symphony_elixir, @tools, Map.put(tools, "qa_check_app", check))
