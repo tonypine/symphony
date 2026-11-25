@@ -738,7 +738,9 @@ defmodule SymphonyElixir.ConductorTest do
 
       assert Conductor.run(plan(ctx), ctx.issue, turn: turn) == :ok
 
-      assert %{reason: ^reason, by: "recalibration", checks: [%{id: "c2"}, %{id: "c3"}]} = SymphonyElixir.TicketPlan.current(ctx.issue_id)
+      assert %{reason: ^reason, by: "recalibration", checks: [%{id: "c2"}, %{id: "c3"}]} =
+               SymphonyElixir.TicketPlan.current(ctx.issue_id)
+
       assert_received {:prompt, prompt}
       assert prompt =~ "Dropping an outcome. When an outcome (a check of kind `outcome`) is itself a check nobody can prove"
       assert prompt =~ ~s("plan": null or {<this ticket's whole plan written again)
