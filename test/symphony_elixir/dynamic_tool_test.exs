@@ -1071,6 +1071,15 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       # qa_hover keeps its arguments, and launching on a page stays qa_launch_app's alone.
       assert Map.keys(specs["qa_hover"]["inputSchema"]["properties"]) |> Enum.sort() == ["path", "pid", "x", "y"]
 
+      # TP-1678: qa_hover returns the cursor the app reports, with its element, never an image match.
+      hover = specs["qa_hover"]["description"]
+      assert hover =~ "The result's `cursor` is the cursor the app reports it set there, from its own record in its QA root"
+      assert hover =~ "`cursor_element` the named element that set it"
+      assert hover =~ "`none` (no element set one: the arrow, the system's default)"
+      assert hover =~ "`unrecorded` (the app holds a cursor none of its recording places set there: a finding, not a block)"
+      refute hover =~ "cursor_unreadable"
+      refute hover =~ "own image"
+
       for {"qa_" <> _rest = name, spec} <- specs, name != "qa_launch_app" do
         refute Map.has_key?(spec["inputSchema"]["properties"] || %{}, "ticket"), "#{name} takes a ticket to open"
       end

@@ -220,6 +220,39 @@ final class ChipTextViewTests: XCTestCase {
         XCTAssertFalse(view.writeSelection(to: pasteboard, types: [.string]))
     }
 
+    // MARK: - QA mode's cursor report (TP-1678)
+
+    /// c1: over the text the view records the I-beam AppKit sets, over a chip the pointing hand it sets itself, for the
+    /// named element it is in; text that can't be selected records none.
+    @MainActor
+    func testInQAModeTheTextRecordsTheIBeamAndThePointingHandOverAChip() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("chip-cursor-\(UUID().uuidString).json")
+        let recorder = QACursorRecorder(
+            writer: QACursorReportWriter(file: file), pid: 1,
+            locate: { _ in .init(shown: .init(x: 0, y: 0, w: 600, h: 100), window: 1) },
+            pointer: { .init(x: 5, y: 5) }, windowAt: { _ in nil }, appCursor: { nil }
+        )
+        QACursorRecorder.use(recorder)
+        defer { QACursorRecorder.use(nil) }
+        let view = try storyView()
+        view.hoverDelay = 100
+        view.setFrameSize(CGSize(width: 600, height: view.height(forWidth: 600)))
+        view.qaElement = "decision-1"
+        XCTAssertEqual(recorder.report().cursor, .iBeam)
+        XCTAssertEqual(recorder.report().element, "decision-1")
+
+        let rect = try XCTUnwrap(view.chipRects(0).first)
+        view.pointerMoved(to: CGPoint(x: rect.midX, y: rect.midY))
+        XCTAssertEqual(recorder.report().cursor, .pointingHand)
+        XCTAssertEqual(recorder.report().element, "decision-1")
+        view.pointerMoved(to: nil)
+        XCTAssertEqual(recorder.report().cursor, .iBeam)
+
+        let still = ChipTextView(content: ChipTextContent("Plain words.", references: [:]), style: ChipTextStyle(font: font, selectable: false))
+        XCTAssertNil(still.cursorKind)
+        withExtendedLifetime(view) {}
+    }
+
     // MARK: - Popover, click and keyboard
 
     func testHoverOpensThePopoverAfterTheDelayAndLeavingTellsIt() throws {

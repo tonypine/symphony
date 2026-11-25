@@ -398,9 +398,9 @@ public struct DirectorTextField: View {
     private var entry: some View {
         let prompt = Text(placeholder).foregroundStyle(DesignTokens.TextColor.tertiary.color)
         if secure {
-            SecureField(label ?? placeholder, text: $text, prompt: prompt)
+            SecureField(label ?? placeholder, text: $text, prompt: prompt).qaCursor(disabled ? nil : .iBeam)
         } else {
-            TextField(label ?? placeholder, text: $text, prompt: prompt)
+            TextField(label ?? placeholder, text: $text, prompt: prompt).qaCursor(disabled ? nil : .iBeam)
         }
     }
 }
@@ -547,6 +547,7 @@ public struct SearchField: View {
                 // The match count rides on the hint: the field's value stays the typed text, as any Mac text field reports it.
                 .accessibilityHint(hasQuery ? (matches.map(DesignTokens.Field.matches) ?? "") : "")
                 .accessibilityAddTraits(.isSearchField)
+                .qaCursor(.iBeam)
         }
     }
 
@@ -692,6 +693,7 @@ public struct TextArea: View {
             .focused(focusBinding)
             .accessibilityLabel(label)
             .accessibilityHint(hint ?? "")
+            .qaCursor(.iBeam)
     }
 
     /// The least the text's room is tall: `minLines` lines, or what `minHeight` leaves inside the padding when that is

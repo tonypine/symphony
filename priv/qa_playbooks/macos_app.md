@@ -64,14 +64,19 @@ worktree's configured app and on apps you launched:
   `y`, in the points of `qa_ax_tree`'s frames) and waits for the app to settle (`settled`). The
   pointer stays there, so a hover state (a button that only shows on hover, a highlight) is in
   the next `qa_ax_tree` and `qa_screenshot`. A `qa_click` on what the hover showed moves the
-  pointer onto it, as a person's would. It fails like `qa_click`. Its `cursor` names the cursor
-  the app shows there once it settled: `arrow`, `pointing_hand`, `i_beam`, `open_hand`,
-  `closed_hand`, `crosshair`, `operation_not_allowed`, `resize_left_right`, `resize_up_down` or
-  another system cursor by name. A screenshot never draws the pointer, so a step about the cursor
-  (the pointing hand over clickable things, the I-beam over a field) is judged by `cursor` alone,
-  never by hover tint or `under_pointer`. A `cursor` of null comes with `cursor_unreadable`
-  saying why (none could be read, or the app draws its own image): that step is blocked, never
-  passed and never read as the arrow.
+  pointer onto it, as a person's would. It fails like `qa_click`. Its `cursor` is the cursor the
+  app reports it set at the pointer, read from the app's own cursor report in its QA root, never
+  from an image: `pointing_hand`, `arrow`, `i_beam`, `open_hand`, `closed_hand`,
+  `operation_not_allowed`, `resize_left_right`, `resize_up_down` or another system cursor by
+  name. `cursor_element` is the named element that set it, `cursor_source` says who did and
+  `cursor_note` says it in words: `recorded` (that element set it), `none` (no element set one:
+  the arrow, the system's default) or `unrecorded` (the app holds a cursor that none of its
+  places that record the cursor set there). A screenshot never draws the pointer, so a step about
+  the cursor (the pointing hand over clickable things, the I-beam over a field) is judged by
+  `cursor` and `cursor_element` alone, never by hover tint or `under_pointer`. An `unrecorded`
+  cursor is a finding (the app sets a cursor it does not record), never a block. A
+  `cursor_source` of `no_report` means the app wrote no cursor report: a release build, or one
+  from before it.
 - `qa_context_menu`: right-clicks an element's centre or a point and returns the `menu` that
   opened, with each item's `path`, `title`, `enabled` and `shortcut`, and its `window_id` for
   `qa_screenshot`. Press an item with `qa_ax_press` on its `path`; close the menu with `qa_key`
@@ -1002,8 +1007,9 @@ anyway: Symphony's tool does it, or it is host setup. Where it can't be installe
    - any other control: `qa_click` it;
    - a step that hovers over something (to show a button, a highlight) or right-clicks it: use
      `qa_hover` or `qa_context_menu` on it, and screenshot the state it shows. A step about the
-     cursor's shape: `qa_hover` the element and judge the result's `cursor`, not the tint;
-     `cursor_unreadable` blocks the step.
+     cursor's shape: `qa_hover` the element and judge the result's `cursor` and
+     `cursor_element`, the cursor the app reports it set there, not the tint; an `unrecorded`
+     `cursor_source` is a finding, not a block.
    - a step that drags something (a row to another place, a card to another column, a divider):
      `qa_drag` it from its element to the drop point, then read `qa_ax_tree` again for the new
      order and screenshot it;

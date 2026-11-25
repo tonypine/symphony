@@ -318,6 +318,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         QAStatusMenuOpener.startIfQAMode(item: item)
         // QA mode only: the named elements on screen, for QA's element tools (TP-1677).
         QAElementRecorder.start(qaMode: AppStores.current.qaMode)
+        // QA mode only: the cursor each place sets and the element it sets it for, for qa_hover (TP-1678).
+        QACursorRecorder.start(qaMode: AppStores.current.qaMode)
         for opening in AppStores.current.qaMode?.openings ?? [] {
             switch opening {
             case let .page(view): symphonyWindow.show(view: view)

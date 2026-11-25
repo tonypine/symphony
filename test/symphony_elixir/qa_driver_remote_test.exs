@@ -80,6 +80,7 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
       ax-tree) echo '{"root":{"path":"","role":"AXApplication","children":[{"path":"0","role":"AXWindow","title":"Settings"}]},"nodes":2,"truncated":false}' ;;
       screenshot) printf 'png-from-qa-host' > "$4"; echo '{"ok":true}' ;;
       ax-ping) echo '{"ok":true,"responding":true}' ;;
+      hover) echo '{"ok":true,"hovered":{"x":120,"y":200},"settled":true}' ;;
       drag) printf '{"ok":true,"via":"hid","from":"%s","to":"%s","hold_ms":%s,"steps":%s}\\n' "$3" "$4" "$5" "$6" ;;
       scroll) printf '{"ok":true,"scrolled":"%s","amount":"%s","moved":{"x":0,"y":120}}\\n' "$3" "$4" ;;
     esac
@@ -471,6 +472,38 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
       {:ok, _quit} = QaDriver.call_tool(driver, "qa_quit_app", %{"pid" => pid})
       QaDriver.stop(driver)
       refute File.exists?(run_dir)
+    end
+
+    # TP-1678: qa_hover returns the cursor the app reports in its QA root on the QA host.
+    test "hovers on the QA host and returns the cursor the app reports there", %{root: root, ssh_host: ssh_host} do
+      worktree = git_worktree!(root)
+      prepare = fn _operator_home, _canary -> Remote.prepare(ssh_host, Path.join(root, "operator"), Path.join(root, "no-canary")) end
+      opts = [worktree: worktree, worker_host: ssh_host, local_uuid: fn -> {:ok, @symphony_mac} end]
+      opts = opts ++ [playbook: %{build: "sh build.sh", app: @app}, host: %{prepare: prepare}, sleep: fn _ms -> :ok end]
+      {:ok, driver} = QaDriver.start_link(opts ++ start_prebuild!(root, ssh_host, worktree))
+      %{host_dir: run_dir} = GenServer.call(driver, :config)
+      {{:ok, %{"exit_status" => 0}}, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_build", %{}) end)
+      {{:ok, %{"pid" => pid}}, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
+
+      assert {:ok, %{"cursor" => nil, "cursor_source" => "no_report"}} = QaDriver.call_tool(driver, "qa_hover", %{"pid" => pid, "x" => 120, "y" => 200})
+
+      # The app writes its cursor report into its QA root on the QA host, as QA mode does.
+      report_file = Path.join([run_dir, "app-root", "cursor", "#{pid}.json"])
+      recorded = %{"cursor" => "i_beam", "element" => "settings-row-name", "frame" => %{"x" => 100, "y" => 190, "w" => 300, "h" => 24}}
+      report = %{"version" => 1, "at" => "2026-11-25T17:00:00Z", "pid" => pid, "pointer" => %{"x" => 120, "y" => 200}, "cursor" => "i_beam"}
+      File.mkdir_p!(Path.dirname(report_file))
+      File.write!(report_file, Jason.encode!(Map.merge(report, %{"element" => "settings-row-name", "source" => "recorded", "recorded" => recorded})))
+
+      assert {:ok, %{"hovered" => %{"x" => 120}, "cursor" => "i_beam", "cursor_element" => "settings-row-name", "cursor_source" => "recorded", "cursor_settled" => true}} =
+               QaDriver.call_tool(driver, "qa_hover", %{"pid" => pid, "x" => 120, "y" => 200})
+
+      assert trace() =~ "hover"
+      # The copy read over SSH is taken away; the app's own report stays.
+      assert File.exists?(report_file)
+      assert Path.wildcard(Path.join(run_dir, "cursor-*.json")) == []
+
+      {:ok, _quit} = QaDriver.call_tool(driver, "qa_quit_app", %{"pid" => pid})
+      QaDriver.stop(driver)
     end
 
     test "refuses a QA host that runs as the operator", %{root: root, ssh_host: ssh_host} do

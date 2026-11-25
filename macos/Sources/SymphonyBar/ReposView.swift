@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import SymphonyBarCore
+import SymphonyBarUI
 
 /// The Repos window: a sidebar of repos and the detail of the selected one, as `ReposList` describes them.
 struct ReposView: View {
@@ -766,6 +767,7 @@ struct RepoPauseView: View {
                 // Repos window's Form and jump above the field once text is typed.
                 TextField(RepoPauseControl.reasonPrompt, text: $reason, prompt: Text(RepoPauseControl.reasonPrompt))
                     .labelsHidden()
+                    .qaCursor(.iBeam)
                     .textFieldStyle(.roundedBorder)
                     .multilineTextAlignment(.leading)
                     .frame(width: 240)

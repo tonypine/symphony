@@ -265,6 +265,7 @@ public struct ReorderableList<Item: Identifiable, Line: View>: View {
                     }
                 }
                 .pointerStyle(dragFrom == nil ? .grabIdle : .grabActive)
+                .qaCursor(dragFrom == nil ? .openHand : .closedHand)
                 .gesture(
                     DragGesture(minimumDistance: 2, coordinateSpace: .global)
                         .onChanged { dragChanged(id, translation: $0.translation) }
