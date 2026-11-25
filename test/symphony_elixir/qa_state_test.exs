@@ -192,12 +192,18 @@ defmodule SymphonyElixir.QaStateTest do
       assert reason =~ "priv/qa_seed/demo/split.json (the plan says the seed or fixtures hold it already; the head does not hold it)"
 
       assert [started, completed] = step_events()
-      assert %{type: "step.started", run_id: "run-cr-1", head_sha: ^head, actor: %{kind: :machine}, payload: %{step_id: "qa_state", mode: "machine", command: "symphony qa-state"}} = started
+      assert %{type: "step.started", run_id: "run-cr-1", head_sha: ^head, actor: %{kind: :machine}, payload: started_payload} = started
+      assert %{step_id: "qa_state", mode: "machine", command: "symphony qa-state"} = started_payload
 
-      assert %{type: "step.completed", run_id: "run-cr-1", head_sha: ^head, payload: %{outcome: "failed", returns_to: "code", qa_state: state}} = completed
+      assert %{type: "step.completed", run_id: "run-cr-1", head_sha: ^head, payload: completed_payload} = completed
+      assert %{outcome: "failed", returns_to: "code", qa_state: state} = completed_payload
 
       assert [
-               %{check_id: "c1", status: "missing", paths: [%{held: true}, %{path: "priv/qa_seed/demo/split.json", holds: "present", held: false, why: "absent"}]},
+               %{
+                 check_id: "c1",
+                 status: "missing",
+                 paths: [%{held: true}, %{path: "priv/qa_seed/demo/split.json", holds: "present", held: false, why: "absent"}]
+               },
                %{check_id: "c2", status: "missing", paths: [%{holds: "added", why: "unchanged"}, %{holds: "fixture", why: "absent"}]},
                %{check_id: "c3", status: "held"},
                %{check_id: "c4", status: "unjudged", paths: []}
@@ -219,7 +225,8 @@ defmodule SymphonyElixir.QaStateTest do
       plan!([qa_check("c1", %{walked_on: [walked("priv/qa_seed/demo/split.json", "added")]}), qa_check("c2", %{})])
 
       assert QaState.gate(issue(), dir, head, repo_key: @repo_key, run_id: "run-cr-1") == :go
-      assert [_started, %{head_sha: ^head, payload: %{outcome: "passed", qa_state: [%{check_id: "c1", status: "held"}, %{check_id: "c2", status: "unjudged"}]}}] = step_events()
+      assert [_started, %{head_sha: ^head, payload: %{outcome: "passed", qa_state: state}}] = step_events()
+      assert [%{check_id: "c1", status: "held"}, %{check_id: "c2", status: "unjudged"}] = state
       assert findings() == []
       assert QaState.passed_on?(@issue_id, head)
 

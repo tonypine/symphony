@@ -295,7 +295,9 @@ defmodule SymphonyElixir.CodeReviewTest do
     end
 
     defp qa_state_steps(head) do
-      for %{type: "step.completed", payload: %{step_id: "qa_state"} = payload, head_sha: ^head} <- RunStore.list_ticket_events(@issue_id, []), do: payload
+      for %{type: "step.completed", payload: %{step_id: "qa_state"} = payload, head_sha: ^head} <-
+            RunStore.list_ticket_events(@issue_id, []),
+          do: payload
     end
 
     test "TP-1671: an approve whose head misses the seed state a QA check is walked on goes to Rework, told what is missing" do
@@ -306,8 +308,8 @@ defmodule SymphonyElixir.CodeReviewTest do
       assert_received {:moved, @issue_id, "Rework"}
       refute_received {:moved, @issue_id, "QA"}
 
-      assert [%{outcome: "failed", qa_state: [%{check_id: "c1", status: "missing", paths: [%{held: true}, %{path: "priv/qa_seed/demo/split.json", held: false}]}]}] =
-               qa_state_steps(head)
+      assert [%{outcome: "failed", qa_state: [c1]}] = qa_state_steps(head)
+      assert %{check_id: "c1", status: "missing", paths: [%{held: true}, %{path: "priv/qa_seed/demo/split.json", held: false}]} = c1
 
       assert [%{state: :open, finding: %{payload: %{class: "qa_state", description: description}}}] =
                @issue_id |> RunStore.list_ticket_events([]) |> TicketEvents.findings()

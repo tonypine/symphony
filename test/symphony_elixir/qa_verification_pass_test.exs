@@ -657,7 +657,9 @@ defmodule SymphonyElixir.QaVerificationPassTest do
     end
 
     defp qa_state_steps(head) do
-      for %{type: "step.completed", payload: %{step_id: "qa_state"} = payload, head_sha: ^head} <- RunStore.list_ticket_events(@issue_id, []), do: payload
+      for %{type: "step.completed", payload: %{step_id: "qa_state"} = payload, head_sha: ^head} <-
+            RunStore.list_ticket_events(@issue_id, []),
+          do: payload
     end
 
     test "a head that misses a QA check's seed state goes to Rework with no QA session, told what is missing" do
@@ -671,14 +673,16 @@ defmodule SymphonyElixir.QaVerificationPassTest do
       assert_received {:memory_tracker_state_update, @issue_id, "Rework"}
       assert verdicts() == []
 
-      assert [%{outcome: "failed", qa_state: [%{check_id: "c2", status: "missing", paths: [%{path: "priv/qa_seed/demo/split.json", why: "absent"}]}, %{check_id: "c3", status: "unjudged"}]}] =
-               qa_state_steps(head)
+      assert [%{outcome: "failed", qa_state: [c2, %{check_id: "c3", status: "unjudged"}]}] = qa_state_steps(head)
+      assert %{check_id: "c2", status: "missing", paths: [%{path: "priv/qa_seed/demo/split.json", why: "absent"}]} = c2
 
       assert [%{state: :open, finding: %{run_id: "run-qa-1", payload: %{class: "qa_state", description: description}}}] =
                @issue_id |> RunStore.list_ticket_events([]) |> SymphonyElixir.TicketEvents.findings()
 
       assert description =~ "QA check c2 (The dashboard shows the result.)"
-      assert description =~ "priv/qa_seed/demo/split.json (the plan says the seed or fixtures hold it already; the head does not hold it)"
+
+      assert description =~
+               "priv/qa_seed/demo/split.json (the plan says the seed or fixtures hold it already; the head does not hold it)"
     end
 
     test "a head that holds every QA check's seed state goes on to the QA session" do
@@ -688,7 +692,9 @@ defmodule SymphonyElixir.QaVerificationPassTest do
       capture_log(fn -> assert :ok = run(workspace, run_id: "run-qa-1") end)
 
       assert_received {:qa_agent_run, _job, _settings}
-      assert [%{outcome: "passed", qa_state: [%{check_id: "c2", status: "held"}, %{check_id: "c3", status: "unjudged"}]}] = qa_state_steps(head)
+
+      assert [%{outcome: "passed", qa_state: [%{check_id: "c2", status: "held"}, %{check_id: "c3", status: "unjudged"}]}] =
+               qa_state_steps(head)
     end
   end
 

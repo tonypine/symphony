@@ -109,18 +109,19 @@ defmodule SymphonyElixir.QaState do
     git = Keyword.get(opts, :git, &default_git/2)
     entries = Enum.map(checks, &{&1, entries(&1)})
 
-    with {:ok, changed} <- changed(entries, workspace, head, git, opts) do
-      Enum.reduce_while(entries, {:ok, []}, fn {check, paths}, {:ok, acc} ->
-        case judge_paths(paths, workspace, head, git, changed) do
-          {:ok, results} -> {:cont, {:ok, [result(check, results) | acc]}}
-          {:error, _reason} = error -> {:halt, error}
-        end
-      end)
-      |> case do
-        {:ok, results} -> {:ok, Enum.reverse(results)}
-        error -> error
-      end
+    with {:ok, changed} <- changed(entries, workspace, head, git, opts),
+         {:ok, results} <- judge_checks(entries, workspace, head, git, changed) do
+      {:ok, Enum.reverse(results)}
     end
+  end
+
+  defp judge_checks(entries, workspace, head, git, changed) do
+    Enum.reduce_while(entries, {:ok, []}, fn {check, paths}, {:ok, acc} ->
+      case judge_paths(paths, workspace, head, git, changed) do
+        {:ok, results} -> {:cont, {:ok, [result(check, results) | acc]}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
   end
 
   # The paths a check names: its `walked_on` entries, then its fixture setting's directory unless an
