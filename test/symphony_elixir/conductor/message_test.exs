@@ -752,7 +752,8 @@ defmodule SymphonyElixir.Conductor.MessageTest do
         {:ok, _run} = TicketEvents.record("default", record.issue_id, "run.started", %{run_id: "run-working", run_kind: "implementation"}, run_id: "run-working")
       end
 
-      answered_in_state!(ctx, %{phase: "In Progress"}, started, running: fn id -> %{run_id: "run-working", issue_id: id, run_profile: %{harness: "codex"}} end)
+      running = fn id -> %{run_id: "run-working", issue_id: id, run_profile: %{harness: "codex"}} end
+      answered_in_state!(ctx, %{phase: "In Progress"}, started, running: running)
     end
 
     test "waiting on sub-tickets", ctx do

@@ -233,17 +233,19 @@ defmodule SymphonyElixir.Conductor.Message do
     case Enum.split_while(Enum.reverse(events), &(&1.type != "plan.written")) do
       {_all, []} ->
         settings = Keyword.get_lazy(opts, :settings, &Config.conductor_settings/0)
-        messages = if groomable?(issue_id, settings), do: for(%Event{type: "message.sent"} = message <- events, open?.(message), do: message), else: []
+        messages = if groomable?(issue_id, settings), do: open_messages(events, open?), else: []
         %{messages: messages, asks: [], children: []}
 
       {newer, _plan_and_older} ->
         %{
-          messages: for(%Event{type: "message.sent"} = message <- events, open?.(message), do: message),
+          messages: open_messages(events, open?),
           asks: for(%Event{type: "ask.recorded"} = ask <- Enum.reverse(newer), field(ask, :source) == "parent", open?.(ask), do: ask),
           children: children(issue_id, events, opts)
         }
     end
   end
+
+  defp open_messages(events, open?), do: for(%Event{type: "message.sent"} = message <- events, open?.(message), do: message)
 
   # A message is settled once it has a reply, or a run read it while the junction was off.
   defp settled?(events, %Event{id: id}) do

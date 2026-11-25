@@ -77,8 +77,8 @@ defmodule SymphonyElixir.TicketObservation do
 
   require Logger
 
-  alias SymphonyElixir.{Config, DirectorMoves, Orchestrator, RunStore, TicketSignals, TicketState, Tracker}
   alias SymphonyElixir.Conductor.DescriptionEdit
+  alias SymphonyElixir.{Config, DirectorMoves, Orchestrator, RunStore, TicketSignals, TicketState, Tracker}
   alias SymphonyElixir.Linear.{Issue, Webhook}
   alias SymphonyElixir.Pauses.Projector
   alias SymphonyElixir.PlanBrief

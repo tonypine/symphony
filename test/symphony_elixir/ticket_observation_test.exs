@@ -161,9 +161,14 @@ defmodule SymphonyElixir.TicketObservationTest do
   end
 
   # TP-1641 c4: a description a read finds changed is checked for a person's edit, and only then.
-  test "a changed description is given to the description-edit check, an unchanged one is not", %{repo_key: repo_key} do
+  test "a changed description is given to the description-edit check, an unchanged one is not",
+       %{repo_key: repo_key} do
     test = self()
-    seen = fn repo, stored, description, _opts -> send(test, {:edited, repo, stored && stored.issue_id, description}) end
+
+    seen = fn repo, stored, description, _opts ->
+      send(test, {:edited, repo, stored && stored.issue_id, description})
+    end
+
     {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: @now, description_edited: seen)
     refute_received {:edited, _repo, _issue_id, _description}
 

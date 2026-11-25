@@ -1,9 +1,9 @@
 defmodule SymphonyElixir.Conductor.DescriptionEditTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{IssueSummary, Messages, TicketChecks, TicketPlan, TicketProjection}
   alias SymphonyElixir.Conductor.{DescriptionEdit, Facts}
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.{IssueSummary, Messages, TicketChecks, TicketPlan, TicketProjection}
 
   @on %Schema.Conductor{enabled: true}
   @projected %{labels: [], section: nil, comments: nil, described: true}
