@@ -51,6 +51,10 @@ defmodule SymphonyElixir.WorkspaceRemovalTest do
 
           assert {:error, {:removal_not_allowed, ^reason}} =
                    WorkspaceRemoval.remove_path(workspace, nil, reason, FakeWorkspace)
+
+          # The default remover (SymphonyElixir.Workspace) is refused the same way, before it runs.
+          assert {:error, {:removal_not_allowed, ^reason}} = WorkspaceRemoval.remove_now(issue, reason)
+          assert {:error, {:removal_not_allowed, ^reason}} = WorkspaceRemoval.remove_path(workspace, nil, reason)
         end
       end)
 
