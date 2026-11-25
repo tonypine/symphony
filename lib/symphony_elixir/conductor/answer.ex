@@ -129,7 +129,7 @@ defmodule SymphonyElixir.Conductor.Answer do
   @evidence_max 4
   @compare_text_max 80
   @question_fields ~w(title question why if_unanswered recommendation_reason)
-  @actions ~w(continue rerun rework accept_without_qa cancel)
+  @actions ~w(continue rerun rework back_to_review accept_without_qa cancel)
   @ticket_title_max 120
   @ticket_text_max 2_000
   @ticket_items_max 12
@@ -216,8 +216,9 @@ defmodule SymphonyElixir.Conductor.Answer do
   @typedoc """
   What picking a question's option makes Symphony do (`SymphonyElixir.Conductor`): `continue` clears
   the pause only, `rerun` runs the stage again, `rework` moves the ticket to Rework with the
-  option's finding, `accept_without_qa` records QA's `skip` verdict and moves it to Merging (in QA
-  only), `cancel` cancels it.
+  option's finding, `back_to_review` sends the pull request back to Code Review as it is (in Rework
+  only: no rework run starts), `accept_without_qa` records QA's `skip` verdict and moves it to
+  Merging (in QA only), `cancel` cancels it.
   """
   @type action :: String.t()
 

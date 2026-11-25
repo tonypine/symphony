@@ -3783,6 +3783,9 @@ when the person picks it (`action`), from a closed list:
 - `rerun`: nothing moves; the answer clears the pause and the stage the ticket is in runs again.
 - `rework` (with `finding`, at most 600 characters): the ticket moves to Rework, and the finding is
   recorded as the turn's (`unclassified`, `unrated`) for the rework run to read. Not from Rework.
+- `back_to_review`: the ticket moves from Rework to Code Review with the pull request as it is:
+  Symphony emits the handoff for the head the question was asked on and forgets the Rework's base,
+  so no rework run starts and the reviewer reads that head. Only while it is in Rework.
 - `accept_without_qa`: Symphony records the `qa` verdict `skip` on the head, reason `skipped by
   decision`, and moves the ticket to where a QA pass goes (Merging). Only while it is in QA.
 - `cancel`: the ticket moves to Canceled.

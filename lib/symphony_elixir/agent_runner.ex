@@ -2594,6 +2594,9 @@ defmodule SymphonyElixir.AgentRunner do
       idle_rework_handoff?(issue, ci_action, run_context) ->
         hand_off_idle_rework(issue, ci_action, run_context)
 
+      answer = rework_answer(issue, run_context) ->
+        hand_off_answered_rework(issue, answer, run_context)
+
       ci_action == :pending ->
         Logger.info("Not parking #{issue_context(issue)}; waiting for CI on its pushed head #{head}")
         :continue
@@ -2610,6 +2613,76 @@ defmodule SymphonyElixir.AgentRunner do
     ci_action in [:pending, :success] and rework_state?(issue.state) and
       (pushed_new_head?(run_context) or
          (is_map(run_context.opts[:ci_failure]) and pending_reviewer_comments(issue, run_context.opts) == []))
+  end
+
+  # A Rework a person answered a question in, whose run then changed nothing (TP-1596): the answer
+  # is why, so its idle run is neither parked for no progress nor asks a second question. Once the
+  # workspace HEAD is still the head the Rework started from, with a clean tree, that HEAD is the
+  # attached PR's head, no reviewer comment, CI failure or conflict is pending and a question on the
+  # ticket was answered since it last entered Rework, the run hands that head back to Code Review
+  # with the answer as the move's reason. The newest such answer, or nil. An answered QA rework
+  # (`rework_answered?/2`) already went back to QA ahead of this; a run with changes, another head,
+  # or no answer is parked as before.
+  defp rework_answer(%Issue{id: issue_id} = issue, %{progress: %{head: head} = progress} = run_context) do
+    with true <- unchanged_clean_rework_head?(issue, head, progress) and attached_pr?(issue, run_context.opts),
+         %{} = answer <- answer_since_rework({:ticket, run_repo_key(issue, run_context.opts), issue_id}),
+         true <- no_pending_rework_signal?(issue, run_context.opts) and pr_head?(issue, head, run_context) do
+      answer
+    else
+      _no_answer -> nil
+    end
+  end
+
+  # The newest `question.answered` after the ticket's newest entry into Rework; nil without such an
+  # entry, an answer after it or a readable ledger. The answer to a hold's own question (the idle
+  # park's "Run it again", a dispatch loop's, a block report's: `Questions.held_question?/1`) says
+  # nothing about the work, so it never counts: a run that changes nothing after it parks again.
+  defp answer_since_rework({:ticket, _repo_key, issue_id} = ticket) do
+    events = with {:error, _reason} <- RunStore.list_ticket_events(issue_id, []), do: []
+    {since, entry} = events |> Enum.reverse() |> Enum.split_while(&(not entered_rework?(&1)))
+    if entry != [], do: Enum.find(since, &work_answer?(ticket, &1))
+  end
+
+  defp work_answer?(ticket, event) do
+    Map.get(event, :type) == "question.answered" and not held_answer?(ticket, event_payload(event, :question_id))
+  end
+
+  # Whether the answered question `id` is a hold's own (`Questions.held_question?/1`).
+  defp held_answer?(ticket, id) do
+    question = Questions.find(ticket, id)
+    question != nil and Questions.held_question?(question)
+  end
+
+  defp entered_rework?(event), do: Map.get(event, :type) == "phase.entered" and rework_state?(event_payload(event, :to))
+
+  defp event_payload(event, key) do
+    payload = Map.get(event, :payload) || %{}
+    Map.get(payload, key, Map.get(payload, Atom.to_string(key)))
+  end
+
+  defp hand_off_answered_rework(%Issue{} = issue, answer, %{progress: %{head: head}} = run_context) do
+    post_pr_state = post_pr_state(run_context)
+    reason = "after the answer " <> answer_words(answer)
+    Logger.info("Rework for #{issue_context(issue)} changed nothing on its PR head #{head} #{reason}; moving to #{post_pr_state}")
+
+    if not handoff_emitted?(issue, run_context) do
+      Handoff.emit(run_repo_key(issue, run_context.opts), issue.id, %{head: head, pr_url: ticket_pr_url(issue, run_context.opts), source: "answered_rework"})
+    end
+
+    case move_to_post_pr_state(issue, post_pr_state, reason, run_context) do
+      :ok ->
+        forget_rework_base(issue, run_context.opts)
+        :ok
+
+      {:error, reason} ->
+        {:error, {:rework_handoff_failed, reason}}
+    end
+  end
+
+  # The option it picked, else its own words, cut to a line the reason can carry.
+  defp answer_words(answer) do
+    words = event_payload(answer, :option) || event_payload(answer, :answer) || ""
+    "“" <> String.slice(String.trim(to_string(words)), 0, 200) <> "”"
   end
 
   # The head moved past the one this run started on, or past the head the rework started from, so

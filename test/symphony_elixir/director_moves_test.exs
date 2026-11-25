@@ -1767,6 +1767,36 @@ defmodule SymphonyElixir.DirectorMovesTest do
                Enum.map(ticket_events("repo-director", "pr"), &elem(&1, 0))
     end
 
+    test "TP-1596: an answer that sends the PR back to review unchanged moves a Rework ticket to Code Review, with no rework run", %{opts: opts} do
+      put_issues([%{pr("Rework") | repo_key: "repo-director"}])
+      :ok = RunStore.put_rework_base("repo-director", "pr", "abc123")
+      {:ok, back} = DecisionMove.back_to_review("Rework", "Rework", "Code Review", nil)
+
+      ask_decision(
+        %{
+          title: "How to read check c3 of MOT-40",
+          question: "Should PR #12 go back to Code Review as it is?",
+          options: [
+            DecisionMove.option(%{label: "Back to Code Review unchanged", effect: "PR #12 goes back to Code Review unchanged", recommended: true}, back),
+            %{label: "Change the check", effect: "The rework run changes it"}
+          ]
+        },
+        asked_in: "Rework"
+      )
+
+      pick = [%{question: "Should PR #12 go back to Code Review as it is?", answer: "Back to Code Review unchanged"}]
+      assert {:ok, result} = DirectorMoves.move(:decide, "MOT-40", %{picks: pick, request_comment_id: "comment-1"}, opts)
+      assert %{moved: true, from_state: "Rework", to_state: "Code Review"} = result
+      assert_received {:memory_tracker_state_update, "pr", "Code Review"}
+      refute deciding("pr")
+
+      # Left as a finished rework leaves it: Code Review's handoff for the unchanged head, and no
+      # Rework base, so the next dispatch is the review of that head and no rework run starts.
+      assert RunStore.get_ticket_state("pr").phase == "Code Review"
+      assert SymphonyElixir.Handoff.emitted?("repo-director", "pr", "abc123")
+      assert RunStore.get_rework_base("repo-director", "pr") == nil
+    end
+
     test "QA's Send it back to Rework moves the ticket to Rework, and Run QA again moves nothing", %{opts: opts} do
       put_issues([%{pr("QA") | repo_key: "repo-director"}])
       set_qa_hold()

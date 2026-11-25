@@ -683,6 +683,103 @@ defmodule SymphonyElixir.AgentRunnerProgressHandoffTest do
     end
   end
 
+  describe "a Rework a person answered a question in, whose run changes nothing (TP-1596)" do
+    @reading %{
+      title: "How to read check c3",
+      question: "Should PR #337 go back to Code Review as it is?",
+      why: "The check reads two ways.",
+      if_unanswered: "The ticket waits.",
+      recommendation_reason: "The code already does it.",
+      options: [%{label: "Back to Code Review unchanged", effect: "PR #337 goes back to Code Review.", recommended: true}, %{label: "Change it", effect: "The rework changes it."}]
+    }
+
+    defp entered_rework! do
+      {:ok, _event} = SymphonyElixir.TicketEvents.record("default", "issue-progress", "phase.entered", %{to: "Rework", from: "Code Review"})
+    end
+
+    defp answered! do
+      ticket = {:ticket, "default", "issue-progress"}
+      {:ok, question} = Questions.ask(ticket, @reading, request: true)
+      {:ok, _answered} = Questions.answer(ticket, question.id, "Back to Code Review unchanged", by: Pauses.director())
+    end
+
+    test "hands its unchanged PR head back to Code Review with the answer as the reason, with no park and no second question" do
+      entered_rework!()
+      answered!()
+
+      assert :ok = run_issue!("Rework", heads: ["sha-rework"], max_turns: 5)
+
+      assert turns() == 2
+      assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+      reason = "after the answer “Back to Code Review unchanged”"
+      assert_signal("handoff", %{to: "Code Review", reason: reason, head: "sha-rework", move: true})
+      phases = SymphonyElixir.TicketEvents.query("issue-progress", types: ["phase.entered"])
+      assert %{payload: %{to: "Code Review", reason: ^reason}, head_sha: "sha-rework"} = List.last(phases)
+      assert_handoff_recorded("sha-rework", "answered_rework")
+      refute idle_parked?()
+      assert Questions.open({:ticket, "default", "issue-progress"}) == []
+      assert RunStore.get_rework_base("default", "issue-progress") == nil
+    end
+
+    test "a handoff the run already emitted for the head is kept, and the move still carries the answer" do
+      entered_rework!()
+      answered!()
+
+      assert :ok = run_issue!("Rework", heads: ["sha-rework"], max_turns: 5, handoff: "sha-rework")
+
+      assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+      assert_signal("handoff", %{to: "Code Review", reason: "after the answer “Back to Code Review unchanged”", head: "sha-rework", move: true})
+      refute Enum.any?(ticket_signals("issue-progress"), &match?(%{name: "handoff", details: %{source: "answered_rework"}}, &1))
+      refute idle_parked?()
+    end
+
+    test "an answer from before the ticket last entered Rework parks the run as before" do
+      answered!()
+      entered_rework!()
+
+      assert :ok = run_issue!("Rework", heads: ["sha-rework"], max_turns: 5)
+
+      refute_received {:memory_tracker_state_update, _issue_id, "Code Review"}
+      assert idle_parked?()
+    end
+
+    test "the answer to the idle park's own question parks the run again, never hands the head back" do
+      entered_rework!()
+      ticket = {:ticket, "default", "issue-progress"}
+      {:ok, question} = Questions.ask(ticket, SymphonyElixir.IdlePark.hold_question_attrs("TP-1", "Rework", 2))
+      run_again = SymphonyElixir.DispatchLoop.option_label(:unblock)
+      {:ok, _answered} = Questions.answer(ticket, question.id, run_again, by: Pauses.director())
+
+      assert :ok = run_issue!("Rework", heads: ["sha-rework"], max_turns: 5)
+
+      refute_received {:memory_tracker_state_update, _issue_id, "Code Review"}
+      assert idle_parked?()
+    end
+
+    test "with uncommitted edits, or the PR on another head, the run is not handed back" do
+      entered_rework!()
+      answered!()
+
+      run_issue!("Rework", heads: ["sha-rework"], max_turns: 5, runner_opts: [workspace_tree_reader: fn _workspace, nil -> "uncommitted-digest" end])
+      refute_received {:memory_tracker_state_update, _issue_id, "Code Review"}
+
+      Application.delete_env(:symphony_elixir, :progress_agent_turns)
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-other", checks: []}})
+      run_issue!("Rework", heads: ["sha-rework"], states: ["Rework", "Todo"])
+      refute_received {:memory_tracker_state_update, _issue_id, "Code Review"}
+    end
+
+    test "a failed move to Code Review fails the run" do
+      entered_rework!()
+      answered!()
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, {:error, :linear_down})
+
+      assert_raise RuntimeError, ~r/rework_handoff_failed/, fn ->
+        run_issue!("Rework", heads: ["sha-rework"], max_turns: 5)
+      end
+    end
+  end
+
   describe "a Rework whose findings need no code change, after a blocked QA pass the Conductor routed (TP-1655)" do
     # QA could not judge the head Code Review approved (its drag steps were blocked), and the
     # Conductor waived the check and routed the ticket to Rework with a finding.

@@ -178,6 +178,8 @@ one of these, and its `effect` says that action in the person's words:
 - `rerun`: nothing moves; the pause clears and the stage the ticket is in runs again.
 - `rework`: the ticket goes to Rework, with the option's `finding` (required: the concrete thing
   to change, at most 600 characters) recorded for the rework run. Not when it is in Rework already.
+- `back_to_review`: the pull request goes back to Code Review as it is, with no change and no
+  rework run: the reviewer reads the same head. Only while the ticket is in Rework.
 - `accept_without_qa`: QA is recorded as skipped by decision and the ticket moves to Merging, on
   its review and CI alone. Only while the ticket is in QA.
 - `cancel`: the ticket is cancelled.

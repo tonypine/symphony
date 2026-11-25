@@ -46,7 +46,7 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
       assert {:ok, %{ask_person: %{options: [%{action: ^action} | _rest]}}} = Answer.parse(json(%{"instructions" => "x", "ask_person" => Map.put(@question, "options", options)}))
     end
 
-    assert Answer.actions() == ["continue", "rerun", "rework", "accept_without_qa", "cancel"]
+    assert Answer.actions() == ["continue", "rerun", "rework", "back_to_review", "accept_without_qa", "cancel"]
   end
 
   test "a question with an option Symphony cannot act on is dropped, and the rest of the answer kept" do
