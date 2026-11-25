@@ -178,9 +178,11 @@ what the step proves, and then on fixtures unless it needs the round trip:
   (a look checked on a fixture, then a move made live) names both.
 - A step whose state no committed fixture has is a finding: say so in `findings`, so a fixture is
   committed for the next pass. Never build one under `qa-evidence/` to prove a step.
-- A step that needs the round trip on a pass with no live server is `unprovable` here, with that
+- A step that needs the round trip on a pass with no live server is `unprovable`, with that
   reason in its `details`: "needs the live server; this pass reads fixtures only". Never prove it
-  from a fixture. The report's header says why the pass had no live server; a `qa:live` label on
+  from a fixture. On a stepped pass Symphony marks such a step itself before any session (from its
+  check's setting, or from the plan's `needs`), so no walk session runs for it; the same holds
+  for a QA tool the driver lacks and a fixture this pass does not hold. The report's header says why the pass had no live server; a `qa:live` label on
   the ticket gives the next pass one.
 - The ticket's walkthrough names no environment and its author never chooses one: the plan's QA
   check sets it, and you use it as given. You choose by what the step proves only for a step

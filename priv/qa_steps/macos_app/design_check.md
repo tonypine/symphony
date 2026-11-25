@@ -46,7 +46,8 @@ with the design by eye. Any part that could not be reached, seen or judged (an e
 only its empty state, a screenshot you did not view) makes the status `blocked`, with what blocked
 it in `actual`: never `pass`, never `fail`.
 
-Answer with `status` (`pass`, `fail`, `blocked`, or `plan_mismatch` when the plan named a screen or
-entry that does not exist), `expected` (the designs you compared with, and the appearance and size),
+Answer with `status` (`pass`, `fail`, `blocked`, `unprovable` when the check needs a QA tool, a
+fixture page or the live server this pass does not have, with what it needed in `actual`, or
+`plan_mismatch` when the plan named a screen or entry that does not exist), `expected` (the designs you compared with, and the appearance and size),
 `actual` (what you saw, entry by entry), `details`, and `evidence` (every screenshot and gallery
 picture path under `qa-evidence/`).

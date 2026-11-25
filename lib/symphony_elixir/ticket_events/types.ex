@@ -263,7 +263,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
   # fixtures; `live`: Symphony's own server on the QA host), as a QA pass's step evidence carries them.
   @evidence_statuses ~w(pass fail blocked skipped unprovable)
   @environments ~w(fixture live)
-  @qa_answer_statuses ~w(pass fail blocked plan_mismatch)
+  @qa_answer_statuses ~w(pass fail blocked unprovable plan_mismatch)
   @tokens {:any_of, [:non_neg_integer, :map]}
   # The signal an event records (`SymphonyElixir.TicketSignals.signal_event/2`) and the details it
   # was recorded with.

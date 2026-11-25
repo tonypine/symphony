@@ -228,7 +228,7 @@ defmodule SymphonyElixir.QaAgent.Report do
         notes -> " (" <> Enum.join(notes, "; ") <> ")"
       end
 
-    head = "- **#{step_status(step.status)}** #{step.name}#{notes}"
+    head = "- **#{step.status}** #{step.name}#{notes}"
 
     case String.trim(step.details) do
       "" -> head
@@ -252,9 +252,6 @@ defmodule SymphonyElixir.QaAgent.Report do
       _none -> "artifact `#{id}`"
     end
   end
-
-  defp step_status("unprovable"), do: "unprovable here"
-  defp step_status(status), do: status
 
   # A Linear URL stays as it is: the upload is what the reader opens.
   defp evidence_entry(entry, artifacts) do

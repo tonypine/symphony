@@ -36,10 +36,20 @@ gallery entries the changed files affect) and the screen rules below. Then answe
   - `screenshots`: the names to save each judgment under (lowercase, hyphens, no extension);
   - `also` (only for the exception below): the other appearance or window size the step is judged
     in too, such as `light` or `1366×768`;
-  - `group` (optional): a short name, the same on every brief walked in one session.
-  Never invent a fixture, a stub or a gallery entry: use the ones the rules and facts name. A step
-  that needs what no fixture or stand-in gives, or the live server on a pass without one, says so in
-  its brief, and the walk marks it `blocked` with that reason.
+  - `group` (optional): a short name, the same on every brief walked in one session;
+  - `needs` (optional): what the step needs that a pass may lack, as a list of objects, each in one
+    of three shapes: `{"kind": "tool", "name": "<qa_ tool>"}` for a QA tool the step cannot be
+    walked without (such as a drag), `{"kind": "fixture_page", "fixture": "<directory>", "page":
+    "<page>"}` for a page of a committed fixture (the directory by its path in the checkout, such
+    as `macos/Tests/Fixtures/director-app/update-paused`, or by its name, such as `update-paused`),
+    `{"kind": "server"}` for the live server. Name
+    every such need, including one the facts below say the pass lacks.
+  Never invent a fixture, a stub or a gallery entry: use the ones the rules and facts name.
+  Symphony checks each brief's `needs` itself, against the QA driver's tools, the live server and
+  the fixtures in this worktree (the facts below): a step with a need the pass lacks is
+  `unprovable`, with what it needed, and no walk session runs for it. Symphony refuses a `needs`
+  in another shape and asks you again. A step the facts list as marked `unprovable` already, from
+  its setting, gets no brief.
 - `gallery`: the gallery entries to judge in the design check, each an object with `entry`, the
   `variations` the change can show in, and why (the changed file, or the ticket's deliverable); an
   `appearance` or `width` only for the exception below.
@@ -64,8 +74,8 @@ How to group the briefs:
   size or a fresh app start from the others, or that changes the app's state in a way a later
   step of the group must not see.
 - Order does not matter: Symphony walks a group where its first step falls. Every step of a group
-  still gets its own result (`pass`, `fail` or `blocked`) and its own evidence, so a failure names
-  one step, not the group.
+  still gets its own result (`pass`, `fail`, `blocked` or `unprovable`) and its own evidence, so a
+  failure names one step, not the group.
 
 Symphony refuses a plan whose `walk` misses a walkthrough step QA walks, and asks you again.
 
