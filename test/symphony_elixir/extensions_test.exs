@@ -1468,16 +1468,11 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     assert %{"status" => "watching", "connected" => watched} = json_response(get(build_conn(), "/api/v1/MT-WATCH"), 200)
 
+    # The parent the run's enrichment read decides nothing: Symphony's records name none for it.
     assert watched == %{
-             "parent" => %{
-               "identifier" => "MT-EPIC",
-               "title" => "Ship the peek",
-               "done" => 1,
-               "total" => 3,
-               "children" => ["completed", "started", "unstarted"]
-             },
-             "epic" => %{"identifier" => "MT-EPIC", "title" => "Ship the peek", "done" => 1, "total" => 3, "incomplete" => false, "tickets" => []},
-             "sub_tickets" => [%{"identifier" => "MT-SUB", "title" => nil, "state" => "Todo"}],
+             "parent" => nil,
+             "epic" => nil,
+             "sub_tickets" => [%{"identifier" => "MT-SUB", "title" => nil, "state" => "Todo", "situation" => nil}],
              "blocked_by" => [],
              "blocks" => [%{"identifier" => "MT-NEXT", "title" => "Downstream", "state" => "Todo", "situation" => nil}],
              "related" => [%{"identifier" => "MT-REL", "title" => "Context", "state" => "Done"}]

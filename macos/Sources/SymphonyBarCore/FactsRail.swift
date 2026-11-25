@@ -125,7 +125,8 @@ public struct TicketPullRequest: Equatable, Decodable {
     }
 }
 
-/// Where the ticket sits among the others: its epic, the tickets it waits on and the tickets it holds up.
+/// Where the ticket sits among the others: its epic, its sub-tickets, the tickets it waits on and the tickets it holds
+/// up.
 public struct TicketConnected: Equatable, Decodable {
     /// Another ticket as the read names it: a `title` and `state` may be unknown; `situation` is its situation's kind.
     public struct Ticket: Equatable, Decodable {
@@ -214,23 +215,28 @@ public struct TicketConnected: Equatable, Decodable {
     }
 
     public var epic: Epic?
+    /// The tickets it is the parent of, in their order inside it, the done ones still listed.
+    public var subTickets: [Ticket]
     public var blockedBy: [Blocker]
     public var blocks: [Ticket]
 
-    public init(epic: Epic? = nil, blockedBy: [Blocker] = [], blocks: [Ticket] = []) {
+    public init(epic: Epic? = nil, subTickets: [Ticket] = [], blockedBy: [Blocker] = [], blocks: [Ticket] = []) {
         self.epic = epic
+        self.subTickets = subTickets
         self.blockedBy = blockedBy
         self.blocks = blocks
     }
 
     private enum CodingKeys: String, CodingKey {
         case epic, blocks
+        case subTickets = "sub_tickets"
         case blockedBy = "blocked_by"
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         epic = try container.decodeIfPresent(Epic.self, forKey: .epic)
+        subTickets = try container.decodeIfPresent([Ticket].self, forKey: .subTickets) ?? []
         blockedBy = try container.decodeIfPresent([Blocker].self, forKey: .blockedBy) ?? []
         blocks = try container.decodeIfPresent([Ticket].self, forKey: .blocks) ?? []
     }
@@ -412,8 +418,8 @@ public struct PullRequestPanelModel: Equatable {
 // MARK: - The Connected panel
 
 /// What the Connected panel says (`docs/design/director-window-and-home.md` § The ticket page): the epic with its
-/// progress, where this ticket sits in it and the tickets around it; the tickets that block this one now; the tickets
-/// it holds up. Every ticket is one line: its dot, identifier, title and where it stands. A part with nothing to list
+/// progress, where this ticket sits in it and the tickets around it; its sub-tickets; the tickets that block this one
+/// now; the tickets it holds up. Every ticket is one line: its dot, identifier, title and where it stands. A part with nothing to list
 /// is left out, and a ticket connected to nothing has no panel (`isEmpty`).
 public struct ConnectedPanelModel: Equatable {
     public struct Epic: Equatable {
@@ -460,15 +466,24 @@ public struct ConnectedPanelModel: Equatable {
     }
 
     public var epic: Epic?
+    /// Its sub-tickets, in their order inside it, the done ones still listed.
+    public var subTickets: [Line]
     public var waitingOn: [Line]
     public var holdingUp: [Line]
+
+    public init(epic: Epic? = nil, subTickets: [Line] = [], waitingOn: [Line] = [], holdingUp: [Line] = []) {
+        self.epic = epic
+        self.subTickets = subTickets
+        self.waitingOn = waitingOn
+        self.holdingUp = holdingUp
+    }
 
     /// How many tickets before this one, and after it, the epic's list shows.
     public static let ticketsBefore = 1
     public static let ticketsAfter = 2
 
-    /// Nothing to say: no epic, nothing blocks it and it holds nothing up. The panel is not drawn.
-    public var isEmpty: Bool { epic == nil && waitingOn.isEmpty && holdingUp.isEmpty }
+    /// Nothing to say: no epic, no sub-ticket, nothing blocks it and it holds nothing up. The panel is not drawn.
+    public var isEmpty: Bool { epic == nil && subTickets.isEmpty && waitingOn.isEmpty && holdingUp.isEmpty }
 
     /// The panel from `connected`; a ticket without the field reads as connected to nothing. Only a blocker still
     /// open is listed: what it waited on before is the timeline's. A blocker's situation is read from the epic's list
@@ -476,9 +491,13 @@ public struct ConnectedPanelModel: Equatable {
     public static func build(_ connected: TicketConnected?) -> ConnectedPanelModel {
         let connected = connected ?? TicketConnected()
         let known = Dictionary(
-            (connected.epic?.tickets ?? []).map { ($0.identifier, $0) } + connected.blocks.map { ($0.identifier, $0) },
+            (connected.epic?.tickets ?? []).map { ($0.identifier, $0) } + connected.subTickets.map { ($0.identifier, $0) }
+                + connected.blocks.map { ($0.identifier, $0) },
             uniquingKeysWith: { first, _ in first }
         )
+        let subTickets = connected.subTickets.map { sub in
+            line(identifier: sub.identifier, title: sub.title, situation: sub.situation, state: sub.state, relation: "sub-ticket of this one")
+        }
         let waitingOn = connected.blockedBy.filter { !$0.resolved }.map { blocker in
             line(
                 identifier: blocker.identifier, title: blocker.title, situation: known[blocker.identifier]?.situation,
@@ -488,7 +507,7 @@ public struct ConnectedPanelModel: Equatable {
         let holdingUp = connected.blocks.map { held in
             line(identifier: held.identifier, title: held.title, situation: held.situation, state: held.state, relation: "waits on this one")
         }
-        return ConnectedPanelModel(epic: connected.epic.map(epic), waitingOn: waitingOn, holdingUp: holdingUp)
+        return ConnectedPanelModel(epic: connected.epic.map(epic), subTickets: subTickets, waitingOn: waitingOn, holdingUp: holdingUp)
     }
 
     static func epic(_ epic: TicketConnected.Epic) -> Epic {

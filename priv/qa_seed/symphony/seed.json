@@ -437,6 +437,39 @@
         "title": "Warn when a repository passes its monthly budget",
         "by": "conductor"
       }
+    },
+    {
+      "issue": "QA-121",
+      "minutes_ago": 500,
+      "type": "ticket.filed",
+      "payload": {
+        "identifier": "QA-122",
+        "kind": "split_off",
+        "title": "Keep the ticket pages readable offline",
+        "by": "conductor"
+      }
+    },
+    {
+      "issue": "QA-122",
+      "minutes_ago": 499,
+      "type": "ticket.filed",
+      "payload": {
+        "identifier": "QA-123",
+        "kind": "split_off",
+        "title": "Cache each ticket page the Director opened",
+        "by": "conductor"
+      }
+    },
+    {
+      "issue": "QA-122",
+      "minutes_ago": 498,
+      "type": "ticket.filed",
+      "payload": {
+        "identifier": "QA-124",
+        "kind": "split_off",
+        "title": "Show when a cached page was last read",
+        "by": "conductor"
+      }
     }
   ]
 }

@@ -4,12 +4,23 @@ defmodule SymphonyElixir.Connected.Read do
   15, 16 and 21 of `docs/design/director-ticket-page.md`. It starts from what the orchestrator holds
   of a tracked ticket (`SymphonyElixir.Connected`) or from the ticket's record, and adds:
 
+    * `parent`: the ticket it is part of, from Symphony's own tree of the records
+      (`SymphonyElixir.Dispatch.Queue.parents/1`, the tree the queue orders by): as its record names
+      it, else as the parent's record lists it among its sub-issues. A ticket filed by a split, one a
+      person filed as a sub-issue and one a split adopted are all found there, whether or not a run
+      worked on them; what a run's enrichment read from Linear at dispatch decides nothing. Its count
+      is the epic's.
     * `epic`: the plan the ticket is part of, its progress and its sub-tickets in chain order, each
       with its situation kind and whether it is this ticket (`current`). The Initiatives' read
       (`SymphonyElixir.Initiatives`) answers when it lists the plan, so the two count the same. A plan
-      it does not list (long done, or not split by Symphony) comes
-      from the parent's record: its sub-issues in creation order, or only the parent's own count when
-      Symphony has no record of it. The parent is the one `parent` reads.
+      it does not list (long done, or not split by Symphony) comes from the tree: the parent's
+      sub-tickets in creation order, or only the parent's own count when Symphony has no record of
+      it.
+    * `sub_tickets`: the tickets it is the parent of in the same tree, with the sub-issues its poll
+      lists that Symphony holds no record of, in their order inside it: the done ones first, oldest
+      first, then the open ones in the stored queue order (`SymphonyElixir.Dispatch.Queue.places/2`),
+      each with its situation kind. A sub-ticket that ended without landing (cancelled) is left out,
+      as the epic leaves it out.
     * `blocked_by`: every ticket it depends on (its stored dependencies, `depends_on`), each `open`
       while `SymphonyElixir.Dispatch.DependsOn.open/2` finds it unmet, else `resolved` with the time
       the ticket it names reached its phase. A dependency removed leaves the list. Linear's blocker
@@ -21,7 +32,8 @@ defmodule SymphonyElixir.Connected.Read do
   """
 
   alias SymphonyElixir.{Connected, Initiatives, Situation, TicketState}
-  alias SymphonyElixir.Dispatch.DependsOn
+  alias SymphonyElixir.Dispatch.{DependsOn, Queue}
+  alias SymphonyElixir.Home.SubTickets
   alias SymphonyElixir.Initiatives.Initiative
 
   @done "done"
@@ -51,7 +63,7 @@ defmodule SymphonyElixir.Connected.Read do
   @type t :: %{
           parent: Connected.parent() | nil,
           epic: epic() | nil,
-          sub_tickets: [Connected.ticket()],
+          sub_tickets: [situated()],
           blocked_by: [blocker()],
           blocks: [situated()],
           related: [Connected.ticket()]
@@ -81,11 +93,17 @@ defmodule SymphonyElixir.Connected.Read do
   """
   @spec read_all([{map(), Connected.t() | nil}], facts()) :: [t()]
   def read_all(tickets, facts) do
+    parents = Queue.parents(facts.records)
+    terminal = terminal(facts.live)
+
     context =
       Map.merge(facts, %{
         by_identifier: Map.new(facts.records, &{&1.issue_identifier, &1}),
         by_id: Map.new(facts.records, &{&1.issue_id, &1}),
-        terminal: terminal(facts.live)
+        terminal: terminal,
+        parents: parents,
+        children: SubTickets.index(facts.records, parents),
+        places: SubTickets.places(facts.records, parents, terminal)
       })
 
     connected = Enum.map(tickets, fn {record, tracked} -> shape(TicketState.normalize(record), tracked, context) end)
@@ -95,14 +113,13 @@ defmodule SymphonyElixir.Connected.Read do
   end
 
   defp shape(record, tracked, context) do
-    own = Connected.build(record, nil)
-    base = tracked || own
-    parent = base.parent || record.parent
+    base = tracked || Connected.build(record, nil)
+    parent = parent(record, context)
 
     %{
       parent: parent,
       epic: epic(%{record | parent: parent}, context),
-      sub_tickets: known(base.sub_tickets, context),
+      sub_tickets: record |> family(base.sub_tickets, context) |> in_queue_order(context),
       blocked_by: blocked_by(record, context),
       blocks: blocks(record, base.blocks, context),
       related: known(base.related, context)
@@ -118,6 +135,71 @@ defmodule SymphonyElixir.Connected.Read do
       end
     end)
   end
+
+  ## The tree
+
+  # The parent the tree names for the ticket, with its title and its sub-tickets' count from its
+  # record; the ticket's own record of it when Symphony holds no record of the parent.
+  defp parent(record, context) do
+    case Map.get(context.parents, record.issue_id) do
+      nil -> nil
+      identifier -> tree_parent(identifier, record.parent, context)
+    end
+  end
+
+  defp tree_parent(identifier, own, context) do
+    case Map.get(context.by_identifier, identifier) do
+      nil ->
+        own
+
+      parent_record ->
+        tickets = family(parent_record, context)
+
+        %{
+          identifier: identifier,
+          title: parent_record.title || (own && own.title),
+          done: Enum.count(tickets, &done?/1),
+          total: length(tickets),
+          children: Enum.map(tickets, &if(done?(&1), do: "completed"))
+        }
+    end
+  end
+
+  defp family(parent_record, context), do: family(parent_record, Connected.build(parent_record, nil).sub_tickets, context)
+
+  # The sub-tickets of `parent_record`: the records the tree puts under it, and the `links` (the
+  # sub-issues its poll lists) Symphony holds no record of. What ended without landing is left out.
+  defp family(parent_record, links, context) do
+    records =
+      for child <- Map.get(context.children, parent_record.issue_identifier, []), is_binary(child.issue_identifier) do
+        %{identifier: child.issue_identifier, title: child.title, state: child.phase}
+      end
+
+    unrecorded = Enum.reject(links, &Map.has_key?(context.by_identifier, &1.identifier))
+
+    Enum.reject(records ++ unrecorded, &(terminal?(&1.state, context) and not done?(&1)))
+  end
+
+  # Their order inside the parent: the done ones, oldest first, then the open ones in the stored
+  # queue order, then the open ones Symphony holds no record of, as the poll lists them.
+  defp in_queue_order(tickets, context) do
+    Enum.sort_by(tickets, fn ticket -> order_key(ticket, Map.get(context.by_identifier, ticket.identifier), context) end)
+  end
+
+  defp order_key(ticket, nil, _context), do: if(done?(ticket), do: {0, 0, ""}, else: {3, [], ""})
+
+  defp order_key(ticket, record, context) do
+    cond do
+      terminal?(record.phase, context) -> {0, unix(record.phase_at), ticket.identifier}
+      place = Map.get(context.places, record.issue_id) -> {1, place, ticket.identifier}
+      true -> {2, [], ticket.identifier}
+    end
+  end
+
+  defp done?(ticket), do: normalized(ticket.state) == @done
+
+  defp unix(%DateTime{} = at), do: DateTime.to_unix(at, :microsecond)
+  defp unix(_at), do: 0
 
   ## The epic
 
@@ -144,38 +226,22 @@ defmodule SymphonyElixir.Connected.Read do
   defp recorded_epic(%{parent: nil}, _context), do: nil
 
   defp recorded_epic(%{parent: parent} = record, context) do
-    case sub_issues(parent, context) do
-      [] ->
+    case Map.get(context.by_identifier, parent.identifier) do
+      nil ->
         parent |> Map.take([:identifier, :title, :done, :total]) |> Map.merge(%{incomplete: false, tickets: []})
 
-      links ->
-        tickets = chain(links, context)
+      parent_record ->
+        tickets = parent_record |> family(context) |> Enum.sort_by(&{created_at(&1.identifier, context), &1.identifier})
 
         %{
           identifier: parent.identifier,
           title: parent.title,
-          done: Enum.count(tickets, &(normalized(&1.state) == @done)),
+          done: Enum.count(tickets, &done?/1),
           total: length(tickets),
           incomplete: false,
           tickets: current(tickets, record)
         }
     end
-  end
-
-  defp sub_issues(parent, context) do
-    case Map.get(context.by_identifier, parent.identifier) do
-      nil -> []
-      parent_record -> Connected.build(parent_record, nil).sub_tickets
-    end
-  end
-
-  # In creation order, with what ended without landing left out, as the Initiatives leave canceled
-  # sub-tickets out.
-  defp chain(links, context) do
-    links
-    |> known(context)
-    |> Enum.reject(&(terminal?(&1.state, context) and normalized(&1.state) != @done))
-    |> Enum.sort_by(&{created_at(&1.identifier, context), &1.identifier})
   end
 
   defp created_at(identifier, context) do
@@ -231,7 +297,7 @@ defmodule SymphonyElixir.Connected.Read do
 
   ## Situations
 
-  defp situated(%{epic: epic, blocks: blocks}), do: Enum.map(blocks ++ epic_tickets(epic), & &1.identifier)
+  defp situated(%{epic: epic, blocks: blocks, sub_tickets: sub_tickets}), do: Enum.map(blocks ++ sub_tickets ++ epic_tickets(epic), & &1.identifier)
 
   defp epic_tickets(nil), do: []
   defp epic_tickets(epic), do: epic.tickets
@@ -244,7 +310,12 @@ defmodule SymphonyElixir.Connected.Read do
   end
 
   defp with_situations(connected, kinds) do
-    %{connected | epic: epic_with_situations(connected.epic, kinds), blocks: put_situations(connected.blocks, kinds)}
+    %{
+      connected
+      | epic: epic_with_situations(connected.epic, kinds),
+        blocks: put_situations(connected.blocks, kinds),
+        sub_tickets: put_situations(connected.sub_tickets, kinds)
+    }
   end
 
   defp epic_with_situations(nil, _kinds), do: nil

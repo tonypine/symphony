@@ -244,6 +244,64 @@ final class FactsRailTests: XCTestCase {
         XCTAssertTrue(resolved.isEmpty)
         XCTAssertFalse(ConnectedPanelModel.build(TicketConnected(blocks: [TicketConnected.Ticket(identifier: "TP-4")])).isEmpty)
         XCTAssertFalse(ConnectedPanelModel.build(TicketConnected(epic: .init(identifier: "TP-9"))).isEmpty)
+        XCTAssertFalse(ConnectedPanelModel.build(TicketConnected(subTickets: [TicketConnected.Ticket(identifier: "TP-3")])).isEmpty)
+        XCTAssertFalse(ConnectedPanelModel.build(TicketConnected(blockedBy: [TicketConnected.Blocker(identifier: "TP-8")])).isEmpty)
+    }
+
+    func testTheSubTicketsFixtureDecodesTheSubTicketsInTheirOrderWithTheDoneOneKept() throws {
+        let connected = try XCTUnwrap(try read("sub-tickets").connected)
+        XCTAssertEqual(connected.subTickets.map(\.identifier), ["TP-1644", "TP-1645", "TP-1646", "TP-1647"])
+        XCTAssertEqual(connected.subTickets.map(\.state), ["Done", "In Progress", "Todo", "Todo"])
+        XCTAssertEqual(connected.subTickets.map(\.situation), [.done, .working, .slot, .blocked])
+        XCTAssertEqual(connected.subTickets[0].title, "Home: the Recently done section and the done row")
+    }
+
+    func testTheSubTicketsAreOneLineEachInTheirOrderAndEachOpensItsPage() throws {
+        let model = try connected("sub-tickets")
+        XCTAssertEqual(model.subTickets.map(\.identifier), ["TP-1644", "TP-1645", "TP-1646", "TP-1647"])
+        XCTAssertEqual(model.subTickets.map(\.title), [
+            "Home: the Recently done section and the done row",
+            "Home queue: epic rows with sub-rows and done rows, dependency markers",
+            "Home: the epic slot card",
+            "Home: a click on a ticket's title opens the ticket's page",
+        ])
+        let kinds: [DesignTokens.SituationKind] = [.done, .working, .slot, .blocked]
+        XCTAssertEqual(model.subTickets.map(\.status), kinds.map(\.status))
+        XCTAssertEqual(model.subTickets.map(\.badge), kinds.map(\.word))
+        // None is this ticket, so each line opens its ticket's page.
+        XCTAssertEqual(model.subTickets.map(\.current), [false, false, false, false])
+        XCTAssertEqual(
+            model.subTickets[0].accessibilityLabel,
+            "TP-1644, Home: the Recently done section and the done row, sub-ticket of this one, \(DesignTokens.SituationKind.done.word)"
+        )
+    }
+
+    func testATicketThatIsASubTicketAndAParentShowsItsEpicAndItsSubTickets() throws {
+        let model = try connected("sub-tickets")
+        let epic = try XCTUnwrap(model.epic)
+        XCTAssertEqual(epic.identifier, "TP-1597")
+        XCTAssertEqual(epic.progressLine, "3 of 5 done · this is the 4th")
+        XCTAssertNotNil(epic.strip)
+        XCTAssertEqual(model.subTickets.count, 4)
+        // Its only dependency is met: no Waiting on lines, and the panel is still drawn.
+        XCTAssertTrue(model.waitingOn.isEmpty)
+        XCTAssertFalse(model.isEmpty)
+    }
+
+    func testAnEpicWithOnlySubTicketsAndAMetDependencyStillHasItsPanel() {
+        let connected = TicketConnected(
+            subTickets: [TicketConnected.Ticket(identifier: "TP-2", title: "Done part", state: "Done", situation: .done)],
+            blockedBy: [TicketConnected.Blocker(identifier: "TP-8", resolved: true)]
+        )
+        let model = ConnectedPanelModel.build(connected)
+        XCTAssertEqual(model.subTickets.map(\.identifier), ["TP-2"])
+        XCTAssertFalse(model.isEmpty)
+        let blocker = ConnectedPanelModel.build(TicketConnected(
+            subTickets: [TicketConnected.Ticket(identifier: "TP-2", situation: .done)],
+            blockedBy: [TicketConnected.Blocker(identifier: "TP-2")]
+        ))
+        // A blocker that is also a sub-ticket takes its situation from the sub-tickets' list.
+        XCTAssertEqual(blocker.waitingOn.map(\.status), [DesignTokens.SituationKind.done.status])
     }
 
     func testTicketsWithoutTheirFactsStillReadInWords() {

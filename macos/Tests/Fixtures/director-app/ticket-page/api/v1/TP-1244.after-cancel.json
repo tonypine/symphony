@@ -95,7 +95,10 @@
         "unstarted"
       ]
     },
-    "sub_tickets": [],
+    "sub_tickets": [
+      { "identifier": "TP-1246", "title": "The paused line on the ticket page", "state": "Done", "situation": "done" },
+      { "identifier": "TP-1247", "title": "The paused line names who paused the ticket", "state": "Code Review", "situation": "waiting_for_ci" }
+    ],
     "blocked_by": [
       {
         "identifier": "TP-1445",

@@ -147,20 +147,76 @@ defmodule SymphonyElixir.Connected.ReadTest do
       assert %{parent: nil, epic: nil} = read("MT-3")
     end
 
-    test "a parent only the orchestrator holds gives the epic too, from its record when it has one" do
-      ticket("MT-1", "Waiting on sub-tickets", %{sub_issues: [%{id: "MT-3", identifier: "MT-3", state: "Todo"}, %{id: "MT-4", identifier: "MT-4", state: "Done"}]})
+    test "the parent comes from Symphony's records, never from what the run's enrichment read" do
+      subs = [%{id: "MT-3", identifier: "MT-3", state: "Todo"}, %{id: "MT-4", identifier: "MT-4", state: "Done"}]
+      ticket("MT-1", "Waiting on sub-tickets", %{title: "The plan", sub_issues: subs})
       ticket("MT-3", "Todo")
       ticket("MT-9", "Todo")
 
-      known = %{Connected.build(%{}, nil) | parent: %{identifier: "MT-1", title: "The plan", done: 0, total: 9, children: []}}
-      unknown = %{Connected.build(%{}, nil) | parent: %{identifier: "MT-8", title: "Not recorded", done: 1, total: 3, children: ["completed"]}}
+      known = %{Connected.build(%{}, nil) | parent: %{identifier: "MT-8", title: "Read at dispatch", done: 0, total: 9, children: []}}
 
-      assert %{parent: %{identifier: "MT-1"}, epic: recorded} = read("MT-3", known)
+      assert %{parent: parent, epic: recorded} = read("MT-3", known)
+      assert parent == %{identifier: "MT-1", title: "The plan", done: 1, total: 2, children: [nil, "completed"]}
       assert %{identifier: "MT-1", done: 1, total: 2, tickets: tickets} = recorded
       assert %{identifier: "MT-3", current: true} = Enum.find(tickets, & &1.current)
 
-      assert %{parent: %{identifier: "MT-8"}, epic: own} = read("MT-9", unknown)
-      assert %{identifier: "MT-8", done: 1, total: 3, incomplete: false, tickets: []} = own
+      assert %{parent: nil, epic: nil} = read("MT-9", known)
+    end
+  end
+
+  describe "the tree" do
+    test "a sub-ticket no run worked on names its parent and its epic, whether a split filed it, a person did, or a split adopted it" do
+      subs = for id <- ["MT-2", "MT-3", "MT-4"], do: %{id: id, identifier: id, state: "Todo"}
+      ticket("MT-1", "Waiting on sub-tickets", %{title: "The plan", sub_issues: subs})
+      # Filed by a split: the parent's record lists it and its ledger says so.
+      ticket("MT-2", "Todo", %{title: "Split off"})
+      {:ok, _event} = TicketEvents.record(@repo, "MT-1", "ticket.filed", %{identifier: "MT-2", kind: "split_off"})
+      {:ok, _event} = TicketEvents.record(@repo, "MT-2", "ticket.filed_from", %{from: "MT-1", by: "conductor", kind: "split_off"})
+      # Filed by a person as a sub-issue: only the parent's record lists it.
+      ticket("MT-3", "Todo", %{title: "By hand"})
+      # Adopted by a split: its own record names the parent too.
+      ticket("MT-4", "Todo", %{title: "Adopted", parent: %{identifier: "MT-1", title: "The plan"}})
+
+      for id <- ["MT-2", "MT-3", "MT-4"] do
+        assert %{parent: parent, epic: %{identifier: "MT-1", total: 3, tickets: tickets}} = read(id)
+        assert %{identifier: "MT-1", title: "The plan", done: 0, total: 3} = parent
+        assert [%{identifier: ^id}] = Enum.filter(tickets, & &1.current)
+      end
+    end
+
+    test "a ticket two levels down names its own parent, which names its epic, and lists its sub-tickets" do
+      ticket("MT-1", "Waiting on sub-tickets", %{title: "The epic", sub_issues: [%{id: "MT-2", identifier: "MT-2", state: "Waiting on sub-tickets"}]})
+      ticket("MT-2", "Waiting on sub-tickets", %{title: "The middle", sub_issues: [%{id: "MT-3", identifier: "MT-3", state: "Todo"}]})
+      ticket("MT-3", "Todo", %{title: "The leaf"})
+
+      assert %{parent: %{identifier: "MT-1"}, epic: epic, sub_tickets: subs} = read("MT-2")
+      assert %{identifier: "MT-1", tickets: [%{identifier: "MT-2", current: true}]} = epic
+      assert [%{identifier: "MT-3", title: "The leaf", state: "Todo"}] = subs
+      assert %{parent: %{identifier: "MT-2", title: "The middle"}, epic: %{identifier: "MT-2"}, sub_tickets: []} = read("MT-3")
+    end
+
+    test "the sub-tickets: done ones first, oldest first, then the open ones in queue order, then the unrecorded ones; cancelled ones left out" do
+      subs =
+        for {id, state} <- [{"MT-2", "Todo"}, {"MT-3", "Done"}, {"MT-4", "Todo"}, {"MT-5", "Canceled"}, {"MT-6", "Done"}, {"MT-7", "Todo"}, {"MT-8", "Done"}] do
+          %{id: id, identifier: id, state: state}
+        end
+
+      ticket("MT-1", "Waiting on sub-tickets", %{title: "The plan", sub_issues: subs})
+      ticket("MT-2", "Todo", %{title: "Second in line"})
+      ticket("MT-4", "Todo", %{title: "First in line"})
+      ticket("MT-3", "Done", %{title: "Done last", phase_at: @at})
+      ticket("MT-5", "Canceled")
+      ticket("MT-6", "Done", %{title: "Done first", phase_at: DateTime.add(@at, -60)})
+      :ok = RunStore.move_in_queue("MT-4", :top)
+
+      assert [
+               %{identifier: "MT-8", title: nil, state: "Done", situation: nil},
+               %{identifier: "MT-6", title: "Done first", state: "Done", situation: "done"},
+               %{identifier: "MT-3", title: "Done last", state: "Done"},
+               %{identifier: "MT-4", title: "First in line", state: "Todo", situation: "waiting_for_slot"},
+               %{identifier: "MT-2", title: "Second in line", state: "Todo"},
+               %{identifier: "MT-7", title: nil, state: "Todo", situation: nil}
+             ] = read("MT-1").sub_tickets
     end
   end
 
@@ -205,7 +261,7 @@ defmodule SymphonyElixir.Connected.ReadTest do
     end
   end
 
-  test "read_all reads each ticket in order, sub-tickets and related from the tracked links with what the records know" do
+  test "read_all reads each ticket in order, sub-tickets from the tree and related from the tracked links with what the records know" do
     ticket("MT-2", "Todo", %{sub_issues: [%{id: "MT-3", identifier: "MT-3", state: "Backlog"}]})
     ticket("MT-3", "Todo", %{title: "Known"})
 
@@ -213,7 +269,7 @@ defmodule SymphonyElixir.Connected.ReadTest do
 
     assert [first, second] = Read.read_all([{record("MT-2"), nil}, {record("MT-3"), tracked}], facts())
 
-    assert first.sub_tickets == [%{identifier: "MT-3", title: "Known", state: "Todo"}]
+    assert first.sub_tickets == [%{identifier: "MT-3", title: "Known", state: "Todo", situation: "waiting_for_slot"}]
     assert second.related == [%{identifier: "MT-3", title: "Known", state: "Todo"}, %{identifier: "MT-9", title: "Not known", state: "Done"}]
   end
 
