@@ -9,9 +9,12 @@ How to drive the app:
   step's setting: on its fixture or the live server, open on its page, in its appearance, with its
   window at its size. Use it as it is, and do not quit and relaunch it to reach that setting or
   resize it after launch. A step with no setting in the plan gets the app on the default fixtures
-  at the QA target (below); open the page it needs.
+  at the QA target (below): when its brief's `launch` names `api_fixtures`, an `environment`, a
+  `page`, an `appearance` or a window size, relaunch it with them as the next point says;
+  otherwise open the page it needs.
 - Relaunch only for what a setting cannot state: stand-in ports, `fresh_root` or `root`, or an
-  appearance or size the brief's `also` names. Then quit the app with `qa_quit_app` and call
+  appearance or size the brief's `also` names, and for a step with no setting, what its brief's
+  `launch` names. Then quit the app with `qa_quit_app` and call
   `qa_launch_app` with those arguments and the step's page as `page` (or a ticket's page as
   `ticket`), leaving out `appearance` unless the brief names one, then `qa_resize_window` (with the
   setting's `width` and `height`, or no size for the target). At most three launched apps run at once.

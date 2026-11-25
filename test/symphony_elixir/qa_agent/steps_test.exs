@@ -1288,6 +1288,15 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       assert turns["walk_2"] =~ "on the fixture `macos/Tests/Fixtures/director-app/running`, open on TP-9001's page, dark appearance, its window at 2000×1200 pt."
       assert turns["walk_3"] =~ "The plan gives this step no setting, so Symphony launched it as it launches by default"
       assert turns["design_check"] =~ "Symphony launched it for this session as PID 4242"
+
+      # A session in a setting uses the app as it is; one with no setting relaunches from its brief, as before.
+      assert turns["walk_1"] =~ "Use it as it is: do not quit and relaunch it to reach this setting."
+
+      for id <- ["walk_3", "design_check"] do
+        assert turns[id] =~ "When your brief's `launch` (in the design check, the briefs' fixtures and stand-ins) names another state"
+        assert turns[id] =~ "quit it with `qa_quit_app`, call `qa_launch_app` with those arguments and the page as `page`, then `qa_resize_window`"
+        refute turns[id] =~ "do not quit and relaunch it to reach this setting"
+      end
     end
 
     test "a group of steps is launched once, in its first step's setting, and a page Symphony cannot open is said", ctx do
@@ -1371,6 +1380,9 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       refute walk =~ "on the default fixtures, at the QA target: in its"
       refute walk =~ "After each launch you make, call `qa_resize_window`"
       refute walk =~ "When the brief's `launch` asks\n  for something else"
+
+      # A step with no setting still reaches its brief's state by a relaunch.
+      assert walk =~ "A step with no setting in the plan gets the app on the default fixtures\n  at the QA target (below): when its brief's `launch` names `api_fixtures`"
     end
   end
 

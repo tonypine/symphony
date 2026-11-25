@@ -70,7 +70,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
   with the fixture as `api_fixtures`; its `appearance`; its `page`, opened at launch when it names a
   page of the window or a ticket (`SymphonyElixir.QaDriver.Pages.place/1`), else said not opened;
   then `qa_resize_window` to its window size. Any other session gets the default launch at the QA
-  target. Then `qa_check_app`, and the session's prompt names the app's PID only when the driver
+  target, and its prompt says to relaunch with its brief's `launch` when that names another state. Then `qa_check_app`, and the session's prompt names the app's PID only when the driver
   reports it running at that moment (`QaDriver.running_pids/1`), with the setting it is in; a launch
   that failed, or an app that is not running, is said with why, and no PID is given.
 
@@ -1523,9 +1523,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
 
   defp app_line(%{session: {:launched, %{pid: pid, root: root} = app}}) do
     "The app: Symphony launched it for this session as PID #{pid} (QA root #{root}), running now, #{where_text(app)} " <>
-      health_text(app.health) <>
-      "Use it as it is: do not quit and relaunch it to reach this setting. Relaunch only for what the setting does not state " <>
-      "(a stand-in port, `fresh_root`, another appearance or size in `also`), and then pass the page to `qa_launch_app` as `page`."
+      health_text(app.health) <> relaunch_text(app)
   end
 
   defp app_line(%{session: {:failed, why}}) do
@@ -1537,12 +1535,26 @@ defmodule SymphonyElixir.QaAgent.Steps do
 
   defp where_text(%{setting: nil}) do
     "on the default fixtures, at the QA target: its appearance, with its window sized to the target. The plan gives this step no setting, " <>
-      "so Symphony launched it as it launches by default; open the page the step needs."
+      "so Symphony launched it as it launches by default."
   end
 
   defp where_text(%{setting: %{window: %{width: width, height: height}} = setting, page: page}) do
     "in this step's setting: #{source_text(setting)}, #{page_text(page, setting.page)}, #{setting.appearance} appearance, " <>
       "its window at #{width}×#{height} pt."
+  end
+
+  # A session with no setting from the plan reaches its state from its brief, as before; a session
+  # in a setting uses the app as it is.
+  defp relaunch_text(%{setting: nil}) do
+    "When your brief's `launch` (in the design check, the briefs' fixtures and stand-ins) names another state " <>
+      "(`api_fixtures`, `environment`, a page, an appearance, a window size or stand-ins), quit it with `qa_quit_app`, call " <>
+      "`qa_launch_app` with those arguments and the page as `page`, then `qa_resize_window` (with the brief's size, or no size for the target). " <>
+      "Otherwise use it as it is and open the page the step needs."
+  end
+
+  defp relaunch_text(_app) do
+    "Use it as it is: do not quit and relaunch it to reach this setting. Relaunch only for what the setting does not state " <>
+      "(a stand-in port, `fresh_root`, another appearance or size in `also`), and then pass the page to `qa_launch_app` as `page`."
   end
 
   defp source_text(%{source: "live"}), do: "on the live server (`environment: live`)"
