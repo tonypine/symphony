@@ -4,8 +4,8 @@ defmodule SymphonyElixir.QaDriverTest do
   import ExUnit.CaptureLog
 
   alias SymphonyElixir.{AgentEnv, Artifacts, Paths, PathSafety, QaDriver, RunStore, TicketEvents}
-  alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Codex.DynamicTool
+  alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaDriver.{DevServerLease, Host, ReleasePair}
 
   @app "macos/build/Demo.app"
