@@ -761,7 +761,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
       writers: [:person],
       run_kinds: [],
       required: [text: {:string, 100_000}],
-      optional: [question_id: :string] ++ @signal,
+      optional: [question_id: :string, source: {:enum, ~w(linear_description)}] ++ @signal,
       idempotency: :writer
     },
     "message.read" => %{

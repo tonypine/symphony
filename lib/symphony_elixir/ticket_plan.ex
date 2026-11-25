@@ -3,7 +3,9 @@ defmodule SymphonyElixir.TicketPlan do
   A groomed ticket's ask and plan, read from its events (`SymphonyElixir.TicketEvents`).
 
   The ask is what a person wrote, never rewritten: every `ask.recorded` of the ticket, oldest first
-  (`ask/1`, `record_ask/4`). The plan is a versioned document: each `plan.written` is one version
+  (`ask/1`, `record_ask/4`): the description at Grooming, what a person typed there before the
+  first projection, a parent's new ask, and a person's message (or edit of the Linear description)
+  that the Conductor read as a change to what is asked (`SymphonyElixir.Conductor.Message`). The plan is a versioned document: each `plan.written` is one version
   (`versions/1`), the newest is the ticket's plan (`current/1`), and `write/4` records the next one
   with the version it assigns. A ticket is groomed exactly when it holds a `plan.written`
   (`groomed?/1`); a ticket that holds none keeps the behaviour it had before plans.

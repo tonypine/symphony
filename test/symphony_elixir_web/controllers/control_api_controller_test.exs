@@ -422,24 +422,24 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
       assert Phoenix.Router.route_info(SymphonyElixirWeb.Router, "POST", "/api/v1/control/note", "localhost").plug_opts == :note
       test = self()
       on = %SymphonyElixir.Config.Schema.Conductor{enabled: true}
-      started = [settings: on, start: fn _task -> send(test, :conductor_started) end]
+      no_grooming = %{on | junctions: on.junctions -- ["grooming"]}
 
-      post_message = fn text ->
+      post_message = fn text, settings ->
         build_conn(:post, "/api/v1/control/message", note_params(ticket, text))
         |> Plug.Conn.assign(:audit_log, dir: tmp_dir)
-        |> Plug.Conn.assign(:conductor_message, started)
+        |> Plug.Conn.assign(:conductor_message, settings: settings, start: fn _task -> send(test, :conductor_started) end)
         |> send_to(:message, start_stub([]), note_params(ticket, text))
       end
 
-      # No plan yet: the next run reads the message, and no turn starts.
-      conn = post_message.("Keep the export button.")
+      # No plan yet and Grooming off: the next run reads the message, and no turn starts.
+      conn = post_message.("Keep the export button.", no_grooming)
       assert %{"event" => %{"type" => "message.sent", "payload" => %{"text" => "Keep the export button."}}} = json_body(conn)
       refute_received :conductor_started
 
       plan = %{shape: "single", layers: ["engine"], summary: "s", text: "t", size: %{tokens: 1, runs: 1}, reason: "Grooming", by: "grooming"}
       {:ok, _plan} = SymphonyElixir.TicketPlan.write(ticket.repo_key, ticket.issue_id, Map.put(plan, :checks, [%{id: "c1", kind: "outcome", statement: "s", proof: "test"}]))
 
-      conn = post_message.("And the colour.")
+      conn = post_message.("And the colour.", on)
       assert conn.status == 200
       assert %{"event" => %{"type" => "message.sent", "read" => nil}} = json_body(conn)
       assert_received :conductor_started

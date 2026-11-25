@@ -26,6 +26,9 @@ What you have, in the facts:
   this ticket, with the reply it got; `other_children` holds more such messages, older first, when
   several wait) or `new_ask` (a new ask this ticket's parent gave it). Then `rules` says what the
   turn is for, and no reply is owed: `update` may be null.
+- `message.source` `linear_description`: the message is no message a person sent but the ticket's
+  whole Linear description, as a person edited it after Symphony wrote it. Then `rules` says what
+  to do with it.
 - `answers_question`: when it is there, `message` is the person's answer, in their own words, to
   the question the ticket is held on (its title, question, why and options). Then `rules` says what
   to do with it.
@@ -133,6 +136,7 @@ Write your answer as one JSON object and nothing else:
   "update": "<your reply to the person, markdown, at most 1200 characters>",
   "blocks": [<optional, at most 3>],
   "ask": true or false,
+  "added": null or "<required with ask true on a Linear description edit, refused without: the words the edit adds, as the person wrote them>",
   "plan": null or {
     "reason": "<what changed and why, at most 1000 characters>",
     "shape": "single" or "split",
