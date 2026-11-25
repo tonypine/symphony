@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.Conductor.TreeTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Conductor, Questions, SubIssueWait, TicketEvents, TicketPlan}
+  alias SymphonyElixir.{Conductor, Questions, SubIssueWait, TicketChecks, TicketEvents, TicketPlan}
   alias SymphonyElixir.Conductor.{Facts, Filing, Grooming, Tree}
   alias SymphonyElixir.Config.{Cache, Schema}
   alias SymphonyElixir.Dispatch.DependsOn
@@ -497,6 +497,10 @@ defmodule SymphonyElixir.Conductor.TreeTest do
       assert prompt =~ "This turn's junction is `final_check`: the last sub-ticket ended"
       assert prompt =~ ~s("rounds": {)
       refute prompt =~ "{{"
+      # The merge and proof of every ticket under it are in its facts, and never asked of the person.
+      assert prompt =~ "every ticket under this one is there, with its state, whether its pull request"
+      assert prompt =~ "These merge and proof facts are Symphony's own record: never ask the person whether a sub-ticket,"
+      assert prompt =~ "never add a sub-ticket to verify or complete one"
       assert_received {:memory_tracker_state_update, parent_id, "Done"}
       assert parent_id == ctx.issue_id
       assert %{phase: "Done", phase_owner: :symphony} = RunStore.get_ticket_state(ctx.issue_id)
@@ -504,6 +508,20 @@ defmodule SymphonyElixir.Conductor.TreeTest do
       assert [note] = status_notes(ctx.issue_id)
       assert note =~ "The final check passed"
       assert [%{payload: %{junction: "final_check"}}] = Enum.filter(Facts.events(ctx.issue_id), &(&1.type == "conductor.update"))
+
+      # It finished through its sub-tickets: its open check is proved by the one that ended Done, named.
+      assert [%{id: "c1", state: :proved, proved_by: %{by: "sub_tickets", details: details}}] = TicketChecks.list(ctx.issue_id)
+      assert details == "The final check passed on its sub-tickets MT-1, which ended Done."
+    end
+
+    test "done on sub-tickets that were all canceled proves none of the ticket's checks", ctx do
+      canceled = waiting!(ctx, [%{id: "c2", identifier: "MT-2", state: "Canceled"}])
+      turn = fn _plan, _issue, _run_id, _prompt -> answered(%{"done" => true, "tree" => []}) end
+
+      assert Conductor.tend(canceled, "final_check", "default", settings: @on, turn: turn) == :ok
+
+      assert_received {:memory_tracker_state_update, _parent, "Done"}
+      assert [%{id: "c1", state: :open}] = TicketChecks.list(ctx.issue_id)
     end
 
     test "done reads the sub-tickets again: one added meanwhile keeps the ticket waiting", ctx do
