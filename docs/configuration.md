@@ -4591,7 +4591,11 @@ count its turns against `auto_review.max_turns`: its list bounds them.
 
 The default `macos_app` list, used when `stepped` is on and the file doesn't set
 `phases.qa.playbooks.macos_app` (its prompts are `priv/qa_steps/macos_app/*.md`, each with only the
-playbook rules its step needs; the plan alone reads the playbook's screen rules):
+playbook rules its step needs; the plan alone reads the playbook's screen rules). Those prompts and
+the built-in `macos_app` playbook are built when Symphony compiles: their step statuses and the QA
+tools they list come from one definition each, and a prompt that names a QA tool the driver does not
+serve, a status outside the list or a window size by hand does not compile. The window size a session
+is told comes from the QA target or its step's setting:
 
 ```yaml
 phases:

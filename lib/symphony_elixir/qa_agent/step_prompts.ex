@@ -10,7 +10,16 @@ defmodule SymphonyElixir.QaAgent.StepPrompts do
   the playbook itself stays whole for a pass that is one agent session. The rules that name a screen
   (its fixtures, stand-ins and what each one shows) go to the plan alone, which passes on what
   applies in each step's brief (`screen_rules/1`).
+
+  The `macos_app` prompts are built at compile time by `SymphonyElixir.QaAgent.PromptTerms`: their
+  step statuses come from `SymphonyElixir.QaAgent.Steps.statuses/0` and the QA tools they list from
+  `SymphonyElixir.QaDriver.tools/0`, and none writes a window size: the QA target and each step's
+  setting are stated by the text Symphony adds around them (`SymphonyElixir.QaAgent.prompt_parts/3`
+  and `SymphonyElixir.QaAgent.Steps`). A prompt that names a QA tool the driver does not serve, a
+  status outside the list or a size by hand does not compile.
   """
+
+  alias SymphonyElixir.QaAgent.PromptTerms
 
   @source_root Path.expand(Path.join([__DIR__, "..", "..", "..", "priv", "qa_steps"]))
   @files Path.wildcard(Path.join([@source_root, "*", "*.md"]))
@@ -19,8 +28,15 @@ defmodule SymphonyElixir.QaAgent.StepPrompts do
     @external_resource file
   end
 
+  # The playbook kinds whose prompts are built from the terms' definitions.
+  @built_kinds ~w(macos_app)
+  @terms PromptTerms.terms()
+
   @prompts (for file <- @files, into: %{} do
-              {{file |> Path.dirname() |> Path.basename(), Path.basename(file, ".md")}, File.read!(file)}
+              kind = file |> Path.dirname() |> Path.basename()
+              text = File.read!(file)
+              name = Path.relative_to(file, Path.dirname(Path.dirname(@source_root)))
+              {{kind, Path.basename(file, ".md")}, if(kind in @built_kinds, do: PromptTerms.build!(name, text, @terms), else: text)}
             end)
 
   # The plan's share of the `macos_app` playbook: from its servers and stand-ins, through every

@@ -4,7 +4,7 @@ defmodule SymphonyElixir.QaAgent.PlanCheckTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.Config.SystemSchema
-  alias SymphonyElixir.QaAgent.{PlanCheck, Report, Steps, Verdict}
+  alias SymphonyElixir.QaAgent.{PlanCheck, Report, StepPrompts, Steps, Verdict}
   alias SymphonyElixir.QaDriver
   alias SymphonyElixir.TicketEvents
 
@@ -146,7 +146,7 @@ defmodule SymphonyElixir.QaAgent.PlanCheckTest do
 
       # The QA plan rules and the walk, design check and review prompts.
       for name <- ~w(plan walk design_check review) do
-        text = File.read!(Path.join(:code.priv_dir(:symphony_elixir), "qa_steps/macos_app/#{name}.md"))
+        text = StepPrompts.prompt("macos_app", name)
         assert text =~ "`#{@word}`", "#{name}.md does not name `#{@word}`"
         refute text =~ ~r/marks it `blocked`/, "#{name}.md still marks a step the pass cannot do `blocked`"
       end

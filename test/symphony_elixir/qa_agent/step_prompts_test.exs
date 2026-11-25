@@ -1,101 +1,73 @@
 defmodule SymphonyElixir.QaAgent.StepPromptsTest do
   use ExUnit.Case, async: true
 
-  alias SymphonyElixir.QaAgent.StepPrompts
+  alias SymphonyElixir.QaAgent.{PromptTerms, Selection, StepPrompts, Steps}
+  alias SymphonyElixir.QaDriver
 
-  @playbook File.read!(Path.expand("../../../priv/qa_playbooks/macos_app.md", __DIR__))
-  # A session told to wait by itself: a shell sleep, or a wait of so many seconds with no tool.
-  @self_wait ~r/sleep \d|\bwait (about )?\d+ seconds/i
+  # Made-up definitions, so a test of the mechanism never depends on today's lists.
+  @terms PromptTerms.terms(tools: ~w(qa_launch_app qa_click), statuses: ~w(pass fail unprovable), symphony_tools: ~w(qa_verdict), codes: ~w(qa_app_exited qa_worker_missing))
 
-  defp prompt(id), do: StepPrompts.prompt("macos_app", id) |> String.replace(~r/\s+/, " ")
+  defp build(source, terms \\ @terms, opts \\ [])
+  defp build(source, terms, []), do: PromptTerms.build!("priv/qa_steps/made_up/walk.md", source, terms)
+  defp build(source, terms, opts), do: PromptTerms.build!("priv/qa_steps/made_up/walk.md", source, terms, opts)
 
-  test "no macOS QA prompt tells a session to sleep: each wait names qa_wait_check" do
-    texts = [{"the playbook", String.replace(@playbook, ~r/\s+/, " ")} | for(id <- ~w(plan walk design_check review), do: {id, prompt(id)})]
+  describe "building a prompt refuses what the definitions do not hold" do
+    test "a QA tool the driver does not serve, naming the prompt and the tool" do
+      error = assert_raise ArgumentError, fn -> build("Drag the card with `qa_drag`.") end
+      assert error.message =~ "priv/qa_steps/made_up/walk.md names `qa_drag`, which is not a QA tool the driver serves (qa_launch_app, qa_click)"
 
-    for {name, text} <- texts do
-      refute text =~ @self_wait, "#{name} tells a session to wait by itself"
-      assert text =~ "qa_wait_check", "#{name} names no qa_wait_check"
+      # A tool Symphony serves, a code, and a family of codes are not tools the driver lacks.
+      assert build("Call `qa_click`, then `qa_verdict`; `qa_app_exited` or any `qa_worker_*` is a harness fault.") =~ "`qa_verdict`"
+      assert_raise ArgumentError, ~r/names `qa_helper_\*`/, fn -> build("Any `qa_helper_*` code.") end
     end
 
-    assert prompt("walk") =~ "call `qa_wait_check` with `seconds: 10` after a window opens"
-    assert prompt("walk") =~ "When the app exited, call `qa_wait_check` with `seconds: 10`"
-    assert prompt("design_check") =~ "let it settle (`qa_wait_check` with `seconds: 10`"
-    assert prompt("plan") =~ "never write `sleep` or a shell command into a brief"
+    test "a step status outside the status list, naming the prompt and the word" do
+      error = assert_raise ArgumentError, fn -> build("Answer {{status:pass}} or {{status:passed}}.") end
+      assert error.message == "priv/qa_steps/made_up/walk.md gives the step status `passed`, which is not one of `pass`, `fail` or `unprovable`"
+
+      error = assert_raise ArgumentError, fn -> build("Answer {{statuses:pass}} or {{status}}.") end
+      assert error.message =~ "priv/qa_steps/made_up/walk.md has the marker {{statuses:pass}}, which names no term"
+      assert_raise ArgumentError, ~r/has the marker \{\{status\}\}, which names no term/, fn -> build("Answer {{status}}.") end
+    end
+
+    test "a window size written by hand, unless it is a text the app shows" do
+      error = assert_raise ArgumentError, fn -> build("Walk it at 1440×900.") end
+      assert error.message == "priv/qa_steps/made_up/walk.md states the window size 1440×900 by hand: a size comes from the QA target or the step's setting"
+
+      # A quoted text is what the app shows; a marker the caller fills keeps the size out of the source.
+      assert build(~s|The row reads "Clipped at 1440×900".|) =~ "1440×900"
+      assert build("A {{target}} pt window.", @terms, keep: ~w(target)) == "A {{target}} pt window."
+      assert_raise ArgumentError, ~r/has the marker \{\{target\}\}/, fn -> build("A {{target}} pt window.") end
+    end
   end
 
-  test "the step prompts and the playbook name the drag, crop and measure tools, and the app's own values first" do
-    for {name, text, tools} <- [
-          {"walk", prompt("walk"), ~w(qa_drag qa_crop qa_measure)},
-          {"design_check", prompt("design_check"), ~w(qa_crop qa_measure)},
-          {"plan", prompt("plan"), ~w(qa_drag qa_crop qa_measure)},
-          {"review", prompt("review"), ~w(qa_drag)},
-          {"the playbook", @playbook, ~w(qa_drag qa_crop qa_measure)}
-        ],
-        tool <- tools do
-      assert text =~ "`#{tool}`", "#{name} names no #{tool}"
+  describe "a built prompt states the definitions" do
+    test "the status list and the tool list come from the definitions: changing one changes the prompt" do
+      source = "You have {{tools}}. Answer {{statuses}}; a harness fault is {{status:fail}}."
+      assert build(source) == "You have `qa_launch_app`, `qa_click`. Answer `pass`, `fail` or `unprovable`; a harness fault is `fail`."
+
+      more = %{@terms | tools: @terms.tools ++ ["qa_scroll"], statuses: ["pass", "fail"]}
+      assert build(source, more) == "You have `qa_launch_app`, `qa_click`, `qa_scroll`. Answer `pass` or `fail`; a harness fault is `fail`."
+      assert PromptTerms.status_list(["pass"]) == "`pass`"
     end
 
-    for text <- [prompt("walk"), prompt("design_check"), String.replace(@playbook, ~r/\s+/, " ")] do
-      assert text =~ "a picture is for how a thing looks" or text =~ "A picture is for how a thing looks"
-      assert text =~ "`qa_ax_tree`'s frames"
+    test "the built-in terms are the driver's tools and the step statuses" do
+      assert %{tools: tools, statuses: statuses, codes: codes} = PromptTerms.terms()
+      assert tools == QaDriver.tools()
+      assert statuses == Steps.statuses()
+      assert codes == PromptTerms.codes()
     end
 
-    refute prompt("plan") =~ "(such as a drag)"
-  end
+    test "the macOS step prompts and playbook are built: every tool the driver serves is listed, and no marker is left" do
+      listed = Enum.map_join(QaDriver.tools(), ", ", &"`#{&1}`")
+      playbook = Selection.playbooks(%{playbooks: %{"macos_app" => %{"build" => "make app", "app" => "build/App.app"}}}) |> Enum.find(&(&1.kind == "macos_app"))
 
-  # TP-1677: names come from the app's report, a scroll reaches a name, a measure reads the app's frames.
-  test "plan and walk sessions take names from qa_elements, scroll by name and measure named elements; pictures stay for looks" do
-    playbook = String.replace(@playbook, ~r/\s+/, " ")
+      for {name, text} <- [{"walk", StepPrompts.prompt("macos_app", "walk")}, {"design_check", StepPrompts.prompt("macos_app", "design_check")}, {"playbook", playbook.prompt}] do
+        assert text =~ listed, "#{name} does not list the driver's tools"
+      end
 
-    for {name, text, tools} <- [
-          {"plan", prompt("plan"), ~w(qa_elements qa_scroll_to qa_measure_elements)},
-          {"walk", prompt("walk"), ~w(qa_elements qa_scroll_to qa_measure_elements)},
-          {"design_check", prompt("design_check"), ~w(qa_elements qa_measure_elements)},
-          {"review", prompt("review"), ~w(qa_measure_elements)},
-          {"the playbook", playbook, ~w(qa_elements qa_scroll_to qa_measure_elements)}
-        ],
-        tool <- tools do
-      assert text =~ "`#{tool}`", "#{name} names no #{tool}"
+      for id <- ~w(plan walk design_check review), do: refute(StepPrompts.prompt("macos_app", id) =~ "{{", id)
+      refute playbook.prompt =~ "{{"
     end
-
-    assert prompt("plan") =~ "never by a name found by searching the code"
-    assert prompt("walk") =~ "Take element names from `qa_elements`"
-    assert prompt("walk") =~ "never from a search of the code; bring a named element into view with `qa_scroll_to`"
-    assert prompt("walk") =~ "a size, a gap or an alignment between named elements with `qa_measure_elements`"
-    assert prompt("design_check") =~ "`qa_measure` the edges in the picture only for what the app does not report"
-    assert playbook =~ "A value the app holds is read from the app, never judged by eye"
-    assert playbook =~ "the page shown, the selection and the focus from `app_state`"
-
-    # The playbook quotes the app's naming scheme, so a plan names elements without the code.
-    # Every page QA walks has names: Home, the Inbox, the ticket page, Tickets, Initiatives, Providers, Settings.
-    for pattern <-
-          ~w(queue-row-<ticket> done-row-<ticket> queue-drop-line queue-done-count recently-done-head recently-done-range slot-card-<slot> slot-line-<slot> sidebar-<title>) ++
-            ~w(section-<title> inbox-drawer inbox-review-<ticket> inbox-action-<title> decision-<n> ticket-head ticket-timeline step-<title> ticket-connected) ++
-            ~w(tickets-row-<ticket> initiative-card-<ticket> initiative-row-<ticket> provider-card-<id> settings-row-<label>) do
-      assert playbook =~ "`#{pattern}`", "the playbook's QA names lack #{pattern}"
-    end
-
-    # Pictures stay for how a thing looks; qa_hover and qa_scroll keep their entries.
-    assert playbook =~ "`qa_crop` and `qa_measure` are for that"
-    assert playbook =~ "`qa_scroll`: scrolls the list or scroll view at an element"
-  end
-
-  # TP-1678: a cursor step is judged by the cursor the app reports it set, with its element.
-  test "the walk prompt and the playbook judge the cursor by the one the app reports, with no image matching" do
-    playbook = String.replace(@playbook, ~r/\s+/, " ")
-    texts = [{"the playbook", playbook} | for(id <- ~w(plan walk design_check review), do: {id, prompt(id)})]
-
-    for {name, text} <- texts do
-      refute text =~ "cursor_unreadable", "#{name} still speaks of cursor_unreadable"
-      refute text =~ "named cursors", "#{name} still speaks of matching the system's named cursors"
-    end
-
-    assert prompt("walk") =~ "judge a cursor step by `qa_hover`'s `cursor` and `cursor_element`, the cursor the app reports it set"
-    assert prompt("walk") =~ "an `unrecorded` cursor is a finding, not a block"
-    assert playbook =~ "Its `cursor` is the cursor the app reports it set at the pointer, read from the app's own cursor report in its QA root, never from an image"
-    assert playbook =~ "`cursor_element` is the named element that set it"
-    assert playbook =~ "`none` (no element set one: the arrow, the system's default)"
-    assert playbook =~ "An `unrecorded` cursor is a finding"
-    assert playbook =~ "judge the result's `cursor` and `cursor_element`, the cursor the app reports it set there"
   end
 end

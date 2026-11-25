@@ -92,6 +92,7 @@ defmodule SymphonyElixir.QaAgent do
   alias SymphonyElixir.{Messages, PathSafety, PromptSafety, QaDriver, QaModeContract, ReviewAgent}
   alias SymphonyElixir.PlaybookSettings
   alias SymphonyElixir.QaAgent.Design
+  alias SymphonyElixir.QaAgent.PromptTerms
   alias SymphonyElixir.QaAgent.Steps
   alias SymphonyElixir.QaAgent.Verdict
   alias SymphonyElixir.QaAndroid.Driver, as: AndroidDriver
@@ -113,8 +114,12 @@ defmodule SymphonyElixir.QaAgent do
   @missing_verdict [:no_verdict_object, :empty_response]
   @browser_mcp_name "browser"
   @localhost_domains ["localhost", "127.0.0.1"]
-  @target_missing_reason "the app was not judged at the QA target: no `qa_resize_window` call set its window to the " <>
-                           "target size, so the screens were not checked at the size QA judges them"
+  @target_missing_reason PromptTerms.build!(
+                           "lib/symphony_elixir/qa_agent.ex: the reason a pass missed the QA target",
+                           "the app was not judged at the QA target: no `qa_resize_window` call set its window to the " <>
+                             "target size, so the screens were not checked at the size QA judges them",
+                           PromptTerms.terms()
+                         )
   # The default browser MCP server runs on the Symphony host, outside the agent sandbox, so it
   # is pinned to an exact version and never fetched during a pass (`npx --no`). To bump it,
   # change this version, check the flags in `default_browser_mcp/2` against that release, and
@@ -270,6 +275,67 @@ defmodule SymphonyElixir.QaAgent do
     %{settings | execution: %{execution | max_turns: config.max_turns, turn_timeout_ms: config.timeout_ms}}
   end
 
+  # How a pass records its evidence and its verdict, and the verdict's shape. Built from the QA
+  # tools (`PromptTerms`); the fields a pass adds to the shape are filled per pass.
+  @verdict_rules PromptTerms.build!(
+                   "lib/symphony_elixir/qa_agent.ex: the verdict rules",
+                   """
+                   Record what you proved on the ticket's history before the verdict, with the `ticket_record`
+                   tool: one `evidence` event for each walkthrough step you walked, whose `caption` names the step
+                   (its number and a few words), what you saw, and the environment you proved it in (the committed
+                   fixtures or the live server, and the appearance and window size when they matter), with the
+                   step's logs and other files as the tool's top-level `artifacts` list, beside `type` and
+                   `payload`: never inside `payload`, which refuses a field its type lacks. A picture a
+                   `qa_screenshot`, `qa_gallery` or `qa_crop` call took is on the ticket's history already (the
+                   tool's `recorded` names its event and artifact): never pass it in `artifacts` or record it again;
+                   name its path in the verdict step's `evidence`. Its `payload` may also
+                   name the step (`step`), its answer as `result` (`status`, `expected`, `actual`, and `measures`)
+                   and each measured value in `measures`: one object per value, with what was measured (`name`),
+                   the number (`value`), its `unit` and the number expected (`expected`) when there is one. The
+                   tool's description lists every payload's shape. The Director's timeline shows each step's evidence.
+                   Name the same environment on the verdict's step (`environment`: `fixture` for the committed
+                   fixtures, `live` for the live server); the QA report shows it beside the step.
+                   The verdict is not an event you record: the `qa_verdict` tool records it, and `ticket_record`
+                   refuses one.
+
+                   Your last act is to record the verdict: call the `qa_verdict` tool once with it, then end your
+                   turn. The call is the verdict, recorded the moment it arrives, so nothing you write after it
+                   counts. If the tool refuses the verdict, it says why: fix it and call the tool again. The verdict
+                   has this shape:
+                   {
+                     "verdict": "pass" | "fail" | "blocked",
+                     "summary": "<one or two sentences>",
+                     "steps": [
+                       {
+                         "name": "<what you checked>",
+                         "status": "pass" | "fail" | "blocked" | "skipped"{{unprovable_status}},
+                         "details": "<command and the relevant output, or what you saw>",
+                         "environment": "fixture" | "live",
+                         "evidence": ["<linear_attach_file URL or qa-evidence/ path>"]{{checklist_field}}
+                       }
+                     ],
+                     "findings": [
+                       {
+                         "step": "<the step it was found on>",
+                         "viewport": "<the window size it shows at, when it is about layout>",
+                         "expected": "<what the ticket says should happen>",
+                         "actual": "<what happened instead>",
+                         "evidence": ["<linear_attach_file URL or qa-evidence/ path>"]
+                       }
+                     ],
+                     "reason": "<required for blocked>",
+                     "needs_person": true | false,
+                     "needs_dev_server": true | false,
+                     "covered_by": "<optional: the identifier of an open ticket that already tracks the missing QA tool>"{{scope_field}}
+                   }
+                   `findings` is required for `fail`: one actionable defect per entry. If the `qa_verdict` tool is
+                   not available, your final message must be only this JSON object, with no prose before or after
+                   it.
+                   """,
+                   PromptTerms.terms(),
+                   keep: ~w(unprovable_status checklist_field scope_field)
+                 )
+
   @doc """
   Builds the QA prompt for `job`; `parent` is the parent issue for sub-tickets. A job with
   `:epic_review` is the epic review of a plan parent: `job.issue` is the epic
@@ -363,57 +429,7 @@ defmodule SymphonyElixir.QaAgent do
     work running in the background. Run each command in the foreground with a timeout, or poll it
     until it finishes, before you answer.
 
-    Record what you proved on the ticket's history before the verdict, with the `ticket_record`
-    tool: one `evidence` event for each walkthrough step you walked, whose `caption` names the step
-    (its number and a few words), what you saw, and the environment you proved it in (the committed
-    fixtures or the live server, and the appearance and window size when they matter), with the
-    step's logs and other files as the tool's top-level `artifacts` list, beside `type` and
-    `payload`: never inside `payload`, which refuses a field its type lacks. A picture a
-    `qa_screenshot`, `qa_gallery` or `qa_crop` call took is on the ticket's history already (the
-    tool's `recorded` names its event and artifact): never pass it in `artifacts` or record it again;
-    name its path in the verdict step's `evidence`. Its `payload` may also
-    name the step (`step`), its answer as `result` (`status`, `expected`, `actual`, and `measures`)
-    and each measured value in `measures`: one object per value, with what was measured (`name`),
-    the number (`value`), its `unit` and the number expected (`expected`) when there is one. The
-    tool's description lists every payload's shape. The Director's timeline shows each step's evidence.
-    Name the same environment on the verdict's step (`environment`: `fixture` for the committed
-    fixtures, `live` for the live server); the QA report shows it beside the step.
-    The verdict is not an event you record: the `qa_verdict` tool records it, and `ticket_record`
-    refuses one.
-
-    Your last act is to record the verdict: call the `qa_verdict` tool once with it, then end your
-    turn. The call is the verdict, recorded the moment it arrives, so nothing you write after it
-    counts. If the tool refuses the verdict, it says why: fix it and call the tool again. The verdict
-    has this shape:
-    {
-      "verdict": "pass" | "fail" | "blocked",
-      "summary": "<one or two sentences>",
-      "steps": [
-        {
-          "name": "<what you checked>",
-          "status": "pass" | "fail" | "blocked" | "skipped"#{unprovable_status(job)},
-          "details": "<command and the relevant output, or what you saw>",
-          "environment": "fixture" | "live",
-          "evidence": ["<linear_attach_file URL or qa-evidence/ path>"]#{checklist_field(job)}
-        }
-      ],
-      "findings": [
-        {
-          "step": "<the step it was found on>",
-          "viewport": "<the window size it shows at, when it is about layout>",
-          "expected": "<what the ticket says should happen>",
-          "actual": "<what happened instead>",
-          "evidence": ["<linear_attach_file URL or qa-evidence/ path>"]
-        }
-      ],
-      "reason": "<required for blocked>",
-      "needs_person": true | false,
-      "needs_dev_server": true | false,
-      "covered_by": "<optional: the identifier of an open ticket that already tracks the missing QA tool>"#{scope_field(job)}
-    }
-    `findings` is required for `fail`: one actionable defect per entry. If the `qa_verdict` tool is
-    not available, your final message must be only this JSON object, with no prose before or after
-    it.
+    #{verdict_rules(job)}
     """
   end
 
@@ -423,8 +439,9 @@ defmodule SymphonyElixir.QaAgent do
   (the ticket with its decisions and parent, and the Conductor's newest instructions, as the one
   session's prompt carries them), `:conductor` (those instructions alone), `:design` (the design
   and the files Symphony downloaded), `:servers` (the dev or live server and the host ports),
-  `:qa_mode` (what the driver gives the app) and `:unprovable` (the steps no playbook of the pass
-  can prove).
+  `:qa_mode` (what the driver gives the app, and the QA target), `:qa_mode_in_setting` (the same
+  without the QA target, for a session Symphony launched in its step's setting, whose size is that
+  setting's) and `:unprovable` (the steps no playbook of the pass can prove).
   """
   @spec prompt_parts(job(), map() | nil, [atom()]) :: String.t()
   def prompt_parts(job, parent, parts) when is_list(parts) do
@@ -451,6 +468,7 @@ defmodule SymphonyElixir.QaAgent do
   defp prompt_part(:design, job, parent), do: design_section(job, parent)
   defp prompt_part(:servers, job, _parent), do: dev_server_section(job) <> host_ports_section(Map.get(job, :host_ports, []))
   defp prompt_part(:qa_mode, job, _parent), do: qa_mode_section(job)
+  defp prompt_part(:qa_mode_in_setting, job, _parent), do: setting_qa_mode_section(job)
   defp prompt_part(:unprovable, job, _parent), do: unprovable_rule(job)
 
   # What the driver gives the app in QA mode, by the driver's own names (TP-1346).
@@ -462,7 +480,46 @@ defmodule SymphonyElixir.QaAgent do
   end
 
   # The one appearance and window size a `macos_app` pass judges the app at (TP-1595), from the
-  # playbook's settings; another only when the ticket is about it.
+  # playbook's settings; another only when the ticket is about it. Built from the step statuses and
+  # the driver's tools (`PromptTerms`); the target's size and appearance are filled from the settings.
+  @target_rules PromptTerms.build!(
+                  "lib/symphony_elixir/qa_agent.ex: the QA target",
+                  """
+
+                  The QA target: {{appearance}} appearance, a {{target}} pt window.
+                  - `qa_launch_app` and `qa_gallery` draw the app {{appearance}} when you name no
+                    `appearance`; `qa_launch_app`'s `page` opens the app on a page of its window (`ticket` on a
+                    ticket's page). After each `qa_launch_app` you make, once the window shows and before the
+                    first step, call `qa_resize_window` with no size: it sets the window to {{target}} pt. Every
+                    walkthrough step, screenshot and design check runs there; name the size in each step's
+                    `viewport`, and the report names it.
+                  - Judge nothing else unless the ticket is about it: only when its ask or plan names
+                    {{other_appearance}} mode, a small window or a specific size, or the change is to
+                    how the app adapts to its appearance or window size, launch in that appearance too
+                    (`appearance`) or resize to that size too (`width` and `height`), and say so in the step.
+                  {{page_checks}}
+                  """,
+                  PromptTerms.terms(),
+                  keep: ~w(appearance target other_appearance page_checks)
+                )
+
+  # The rules a session judges every page by, at the target or in its step's setting.
+  @page_checks PromptTerms.build!(
+                 "lib/symphony_elixir/qa_agent.ex: the page checks",
+                 """
+                 - On every page the walkthrough visits, call `qa_check_app` with the page's name: a hang (a
+                   layout loop) or a crash at this size is a {{status:fail}} naming the page and the window size. To
+                   let a page settle first (a wide window can collapse seconds after it opens), call
+                   `qa_wait_check` with the `seconds` and the page: Symphony waits, then checks. Never sleep in
+                   your shell.
+                 - What the app holds is read from the app: the page shown, the selection and the focus from
+                   the `app_state` of `qa_check_app` and `qa_wait_check`, the names of elements from
+                   `qa_elements`, and sizes, gaps and alignments of named elements from `qa_measure_elements`.
+                   A picture is for how a thing looks.
+                 """,
+                 PromptTerms.terms()
+               )
+
   defp window_sizes_section(job) do
     case Enum.find(job.playbooks, &(Map.get(&1, :kind) == "macos_app")) do
       nil ->
@@ -472,30 +529,18 @@ defmodule SymphonyElixir.QaAgent do
         {ww, wh} = Map.get(playbook, :window_size) || PlaybookSettings.default_window_size()
         appearance = Map.get(playbook, :appearance) || PlaybookSettings.default_appearance()
 
-        """
-
-        The QA target: #{appearance} appearance, a #{ww}×#{wh} pt window.
-        - `qa_launch_app` and `qa_gallery` draw the app #{appearance} when you name no
-          `appearance`; `qa_launch_app`'s `page` opens the app on a page of its window (`ticket` on a
-          ticket's page). After each `qa_launch_app` you make, once the window shows and before the
-          first step, call `qa_resize_window` with no size: it sets the window to #{ww}×#{wh} pt. Every
-          walkthrough step, screenshot and design check runs there; name the size in each step's
-          `viewport`, and the report names it.
-        - Judge nothing else unless the ticket is about it: only when its ask or plan names
-          #{other_appearance(appearance)} mode, a small window or a specific size, or the change is to
-          how the app adapts to its appearance or window size, launch in that appearance too
-          (`appearance`) or resize to that size too (`width` and `height`), and say so in the step.
-        - On every page the walkthrough visits, call `qa_check_app` with the page's name: a hang (a
-          layout loop) or a crash at this size is a `fail` naming the page and the window size. To
-          let a page settle first (a wide window can collapse seconds after it opens), call
-          `qa_wait_check` with the `seconds` and the page: Symphony waits, then checks. Never sleep in
-          your shell.
-        - What the app holds is read from the app: the page shown, the selection and the focus from
-          the `app_state` of `qa_check_app` and `qa_wait_check`, the names of elements from
-          `qa_elements`, and sizes, gaps and alignments of named elements from `qa_measure_elements`.
-          A picture is for how a thing looks.
-        """
+        @target_rules
+        |> String.replace("{{appearance}}", appearance)
+        |> String.replace("{{target}}", "#{ww}×#{wh}")
+        |> String.replace("{{other_appearance}}", other_appearance(appearance))
+        |> String.replace("{{page_checks}}\n", @page_checks)
     end
+  end
+
+  # A session Symphony launched in its step's setting is told that setting's size alone (its app
+  # line): it gets what the driver gives the app and the page checks, never the QA target's size.
+  defp setting_qa_mode_section(job) do
+    "\n" <> ([QaModeContract.section(job.playbooks), @page_checks] |> Enum.reject(&is_nil/1) |> Enum.join("\n\n"))
   end
 
   defp other_appearance("dark"), do: "light"
@@ -506,35 +551,47 @@ defmodule SymphonyElixir.QaAgent do
   # `SymphonyElixir.QaPolicy` already found nothing on screen it marks the `macos_app` playbook
   # `scope: :none`, and the agent is told up front that build and launch are the whole check. The
   # epic review judges the merged result and keeps its own target rule.
+  # Built from the driver's tools (`PromptTerms`), as the prompts around them are.
+  @scope_none_by_policy PromptTerms.build!(
+                          "lib/symphony_elixir/qa_agent.ex: nothing on screen, by the QA policy",
+                          """
+
+                          Nothing on screen to judge:
+                          Symphony's QA policy found that this PR changes none of the paths of the playbooks below and
+                          the ticket has no `## User walkthrough`, so build and launch are the whole check. Build the
+                          app with `qa_build`, launch it with `qa_launch_app`, call `qa_check_app` once it has started,
+                          then `qa_quit_app`. Skip the design check. Answer `pass` with
+                          `"scope": "none"` when the app built, launched and `qa_check_app` found it healthy, with a
+                          `reason` saying so; `fail` when it did not build or start, with what happened in `findings`.
+                          """,
+                          PromptTerms.terms()
+                        )
+  @scope_none_macos PromptTerms.build!(
+                      "lib/symphony_elixir/qa_agent.ex: nothing on screen",
+                      """
+
+                      Nothing on screen to judge:
+                      When neither the diff nor the ticket names a walkthrough step or a screen (no window, page,
+                      panel or menu changes, and no step says `Proved by: QA`), there is nothing to judge by sight.
+                      Then build the app with `qa_build`, launch it with `qa_launch_app`, call `qa_check_app` once it
+                      has started, then `qa_quit_app`, and answer `pass` with `"scope": "none"` and a `reason` such
+                      as "the change touches no screen; the app built and launched; nothing to judge by sight".
+                      Symphony accepts that pass only when the build, the launch and a healthy `qa_check_app` all
+                      ran; without them it reports the pass `inconclusive`. A pass that judged any screen judged it
+                      at the QA target, after `qa_resize_window` set it, and one without that is `inconclusive` too.
+                      """,
+                      PromptTerms.terms()
+                    )
+
   defp scope_section(%{epic_review: true}), do: ""
 
   defp scope_section(job) do
     cond do
       policy_scope_none?(job) ->
-        """
-
-        Nothing on screen to judge:
-        Symphony's QA policy found that this PR changes none of the paths of the playbooks below and
-        the ticket has no `## User walkthrough`, so build and launch are the whole check. Build the
-        app with `qa_build`, launch it with `qa_launch_app`, call `qa_check_app` once it has started,
-        then `qa_quit_app`. Skip the design check. Answer `pass` with
-        `"scope": "none"` when the app built, launched and `qa_check_app` found it healthy, with a
-        `reason` saying so; `fail` when it did not build or start, with what happened in `findings`.
-        """
+        @scope_none_by_policy
 
       macos_app?(job) ->
-        """
-
-        Nothing on screen to judge:
-        When neither the diff nor the ticket names a walkthrough step or a screen (no window, page,
-        panel or menu changes, and no step says `Proved by: QA`), there is nothing to judge by sight.
-        Then build the app with `qa_build`, launch it with `qa_launch_app`, call `qa_check_app` once it
-        has started, then `qa_quit_app`, and answer `pass` with `"scope": "none"` and a `reason` such
-        as "the change touches no screen; the app built and launched; nothing to judge by sight".
-        Symphony accepts that pass only when the build, the launch and a healthy `qa_check_app` all
-        ran; without them it reports the pass `inconclusive`. A pass that judged any screen judged it
-        at the QA target, after `qa_resize_window` set it, and one without that is `inconclusive` too.
-        """
+        @scope_none_macos
 
       true ->
         ""
@@ -553,18 +610,24 @@ defmodule SymphonyElixir.QaAgent do
 
   # The sandbox denies the hypervisor and Mach ports, so an emulator the agent boots dies with
   # SIGILL and leaves crash reports on the host (TP-497). Only Symphony's host-side driver boots one.
-  defp device_rule do
-    """
-    Never start an emulator, a simulator or a device tool yourself (`emulator`, `qemu-*`,
-    `xcrun simctl boot`, `adb start-server`, or a script that runs them): your sandbox cannot run
-    them, and each attempt leaves crash reports on the host. Only Symphony boots a device, for the
-    `android_app` playbook, and you reach it through the `qa_android_*` tools; when those tools say
-    the device is unavailable, the step is `blocked`, not a reason to boot one. When a step needs an
-    Android device and no `android_app` playbook is offered to you below, mark that step `blocked`
-    with "#{AndroidDriver.no_playbook_reason()}" in `details`, and do not try to run it another
-    way.\
-    """
-  end
+  # Built from the QA tools of both drivers (`PromptTerms`); the reason is the Android driver's.
+  @device_rule PromptTerms.build!(
+                 "lib/symphony_elixir/qa_agent.ex: the device rule",
+                 """
+                 Never start an emulator, a simulator or a device tool yourself (`emulator`, `qemu-*`,
+                 `xcrun simctl boot`, `adb start-server`, or a script that runs them): your sandbox cannot run
+                 them, and each attempt leaves crash reports on the host. Only Symphony boots a device, for the
+                 `android_app` playbook, and you reach it through the `qa_android_*` tools; when those tools say
+                 the device is unavailable, the step is `blocked`, not a reason to boot one. When a step needs an
+                 Android device and no `android_app` playbook is offered to you below, mark that step `blocked`
+                 with "{{no_playbook_reason}}" in `details`, and do not try to run it another
+                 way.\
+                 """,
+                 PromptTerms.terms(tools: QaDriver.tools() ++ AndroidDriver.tools()),
+                 keep: ~w(no_playbook_reason)
+               )
+
+  defp device_rule, do: String.replace(@device_rule, "{{no_playbook_reason}}", AndroidDriver.no_playbook_reason())
 
   # The epic review of a plan parent: the epic has to close itself, so the pass
   # judges the merged result against the epic's own plan, not against a PR.
@@ -713,30 +776,49 @@ defmodule SymphonyElixir.QaAgent do
   # select the app's playbook for, or the project's own server on a repo that rules a dev server out —
   # can neither pass nor be repaired here (TP-1284): it is `unprovable`, and Symphony decides the pass
   # from the other steps, the pre-checks and CI. The rule is offered only when one of them holds.
+  # Built from the step statuses (`PromptTerms`); the cases are filled per pass.
+  @unprovable_rule PromptTerms.build!(
+                     "lib/symphony_elixir/qa_agent.ex: the unprovable rule",
+                     """
+
+
+                     Some steps cannot be proved in this pass:
+                     {{cases}}
+                     Mark a step that needs one of them {{status:unprovable}}, never {{status:blocked}}, with that reason in `details`,
+                     and do not set `needs_dev_server` for it. Symphony decides the pass from the other steps, the
+                     pre-checks and CI. Never mark {{status:unprovable}} a step one of this pass's playbooks (above) can run,
+                     or one that fails.\
+                     """,
+                     PromptTerms.terms(),
+                     keep: ~w(cases)
+                   )
+
   defp unprovable_rule(%{epic_review: true}), do: ""
 
   defp unprovable_rule(%{unprovable: unprovable}) do
     case unprovable_cases(unprovable) do
-      [] ->
-        ""
-
-      cases ->
-        """
-
-
-        Some steps cannot be proved in this pass:
-        #{Enum.map_join(cases, "\n", &("- " <> &1))}
-        Mark a step that needs one of them `unprovable`, never `blocked`, with that reason in `details`,
-        and do not set `needs_dev_server` for it. Symphony decides the pass from the other steps, the
-        pre-checks and CI. Never mark `unprovable` a step one of this pass's playbooks (above) can run,
-        or one that fails.\
-        """
+      [] -> ""
+      cases -> String.replace(@unprovable_rule, "{{cases}}", Enum.map_join(cases, "\n", &("- " <> &1)))
     end
   end
 
   defp unprovable_rule(_job), do: ""
 
-  defp unprovable_status(job), do: if(unprovable_rule(job) == "", do: "", else: ~s( | "unprovable"))
+  # The unprovable status as the verdict's shape writes it, from the step statuses (`PromptTerms`).
+  @unprovable_shape String.trim(
+                      PromptTerms.build!("lib/symphony_elixir/qa_agent.ex: the unprovable answer", "{{status:unprovable}}", PromptTerms.terms()),
+                      "`"
+                    )
+
+  defp unprovable_status(job), do: if(unprovable_rule(job) == "", do: "", else: ~s( | "#{@unprovable_shape}"))
+
+  defp verdict_rules(job) do
+    @verdict_rules
+    |> String.trim_trailing()
+    |> String.replace("{{unprovable_status}}", unprovable_status(job))
+    |> String.replace("{{checklist_field}}", checklist_field(job))
+    |> String.replace("{{scope_field}}", scope_field(job))
+  end
 
   defp unprovable_cases(unprovable) do
     playbooks =
@@ -981,30 +1063,34 @@ defmodule SymphonyElixir.QaAgent do
   # QA keeps the job no test can do (ADR 0003): the steps no test drives, a judgment by sight of
   # every UI deliverable against its design, then the playbooks' checks of the running app, at the
   # QA target unless the ticket is about another appearance or size (TP-1595).
-  defp qa_jobs_section do
-    """
-    QA's three jobs, in this order:
-    1. Walk the walkthrough steps marked `Proved by: QA`, or naming no proof: no test can drive them.
-    2. Judge every UI deliverable by sight. A UI deliverable is each window, page, screen, panel or
-       menu the change adds or changes. Screenshot it in the real app at the QA target (its appearance
-       and window size, for the Mac app), and in another appearance or size only when the ticket is
-       about it, and compare it with its design above: layout, spacing, alignment, truncation,
-       contrast, symbols, wording, and whether it looks finished. Report one step per UI deliverable
-       named
-       `Design check: <deliverable>`, with its screenshots in `evidence`, and in `details` the
-       design it compared with (the Screens document or file and the screen in it). When no Screens
-       cover the deliverable, judge it against `docs/design/design-system.md` alone and say so in
-       `details`. When the playbook says an appearance cannot be switched, say so in `details`.
-       `pass` when the screenshots match the design. A visible mismatch is `fail`, even when every
-       structural check passes: name in `details` and `findings` what differs from which design,
-       with the screenshot that shows it. A change with no UI deliverable has no `Design check` step.
-    3. The other checks of the running app the playbooks ask for (for the Mac app, at its QA target:
-       `qa_check_app` on every page the walkthrough visits, for a hang or a crash). A defect is
-       content clipped with no way to reach it, or a mechanism (scroll, collapse, resize) that
-       doesn't work. Horizontal scroll or a collapsed pane at a `functional` viewport is not a defect. A finding names the viewport, the
-       screen, the mechanism expected, the actual, and the evidence file.
-    """
-  end
+  @qa_jobs PromptTerms.build!(
+             "lib/symphony_elixir/qa_agent.ex: QA's three jobs",
+             """
+             QA's three jobs, in this order:
+             1. Walk the walkthrough steps marked `Proved by: QA`, or naming no proof: no test can drive them.
+             2. Judge every UI deliverable by sight. A UI deliverable is each window, page, screen, panel or
+                menu the change adds or changes. Screenshot it in the real app at the QA target (its appearance
+                and window size, for the Mac app), and in another appearance or size only when the ticket is
+                about it, and compare it with its design above: layout, spacing, alignment, truncation,
+                contrast, symbols, wording, and whether it looks finished. Report one step per UI deliverable
+                named
+                `Design check: <deliverable>`, with its screenshots in `evidence`, and in `details` the
+                design it compared with (the Screens document or file and the screen in it). When no Screens
+                cover the deliverable, judge it against `docs/design/design-system.md` alone and say so in
+                `details`. When the playbook says an appearance cannot be switched, say so in `details`.
+                `pass` when the screenshots match the design. A visible mismatch is `fail`, even when every
+                structural check passes: name in `details` and `findings` what differs from which design,
+                with the screenshot that shows it. A change with no UI deliverable has no `Design check` step.
+             3. The other checks of the running app the playbooks ask for (for the Mac app, at its QA target:
+                `qa_check_app` on every page the walkthrough visits, for a hang or a crash). A defect is
+                content clipped with no way to reach it, or a mechanism (scroll, collapse, resize) that
+                doesn't work. Horizontal scroll or a collapsed pane at a `functional` viewport is not a defect. A finding names the viewport, the
+                screen, the mechanism expected, the actual, and the evidence file.
+             """,
+             PromptTerms.terms()
+           )
+
+  defp qa_jobs_section, do: @qa_jobs
 
   defp design_files_text([_file | _rest] = files) do
     lines = Enum.map_join(files, "\n", &"- `#{&1.path}` (attached to #{&1.issue})")
@@ -1684,18 +1770,24 @@ defmodule SymphonyElixir.QaAgent do
     end)
   end
 
+  # Built from the QA tools (`PromptTerms`); the error is filled per turn.
+  @follow_up PromptTerms.build!(
+               "lib/symphony_elixir/qa_agent.ex: the follow-up for a missing verdict",
+               """
+               Symphony did not get your verdict: {{error}} Ending your turn ends the
+               session. Finish now: do not start new work or wait for anything still running. Call the
+               `qa_verdict` tool once with your verdict for what you have tested so far, in the shape from the
+               first message, then end your turn. Mark each step you could not finish `skipped` and say why.
+               If the `qa_verdict` tool is not available, your final message must be only the JSON verdict
+               object, with no prose before or after it.
+               """,
+               PromptTerms.terms(),
+               keep: ~w(error)
+             )
+
   @doc "The follow-up prompt for a turn that ended without a verdict, with why it is missing."
   @spec follow_up_prompt(term()) :: String.t()
-  def follow_up_prompt(reason) do
-    """
-    Symphony did not get your verdict: #{Verdict.describe_error(reason)} Ending your turn ends the
-    session. Finish now: do not start new work or wait for anything still running. Call the
-    `qa_verdict` tool once with your verdict for what you have tested so far, in the shape from the
-    first message, then end your turn. Mark each step you could not finish `skipped` and say why.
-    If the `qa_verdict` tool is not available, your final message must be only the JSON verdict
-    object, with no prose before or after it.
-    """
-  end
+  def follow_up_prompt(reason), do: String.replace(@follow_up, "{{error}}", Verdict.describe_error(reason))
 
   defp parse_turn(turn_result, messages) do
     turn_result

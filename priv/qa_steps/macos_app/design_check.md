@@ -3,12 +3,16 @@ window size, below), every window, sheet, panel and menu the ticket adds or chan
 screens, below), and the Component Gallery pictures Symphony found changed. The accessibility tree proves a control is there; only a
 picture shows whether it looks like the design.
 
+You drive the app and read its pictures through the QA tools: {{tools}}.
+
 The running app:
 
-- Use the app Symphony launched for this session (its PID is below): it runs in the target's
-  appearance, with its window at the target size. When the plan's briefs name `api_fixtures` or
-  stand-ins for the screens you judge, `qa_quit_app` it and `qa_launch_app` with them and the
-  screen's page as `page`, leaving out `appearance`, then call `qa_resize_window` with no size. Open each changed window (pass its `path` to
+- Symphony launched the app for this session (its PID and where it runs are below), as it
+  launches a walk session with no setting: on the default fixtures, in the target's appearance,
+  with its window at the target size. Use it as it is for the screens those fixtures show. When the
+  plan's briefs name `api_fixtures` or stand-ins for a screen you judge, `qa_quit_app` it and
+  `qa_launch_app` with them and the screen's page as `page`, leaving out `appearance`, then call
+  `qa_resize_window` with no size. Open each changed window (pass its `path` to
   `qa_resize_window` when it is not the main one), let it settle (`qa_wait_check` with `seconds: 10`, never a
   sleep in your shell; change focus once) and `qa_screenshot` it. The status-bar menu: `qa_open_status_menu`, `qa_screenshot` with its
   `window_id`, then `qa_key` `escape`.
@@ -18,7 +22,7 @@ The running app:
   too. Name each screenshot with its appearance (`overview-dark`).
 - When a screenshot is in the wrong appearance and the app's output (from `qa_quit_app`) lacks the
   line `symphony-qa-appearance: dark` (or `light`), the build refuses injected libraries: answer
-  `blocked`, quoting the output.
+  {{status:blocked}}, quoting the output.
 
 The Component Gallery (the app's own views drawn from made-up inputs, built with the app):
 
@@ -44,7 +48,7 @@ Judge each picture side by side with the design the plan names (the ticket's or 
 Screens, else `docs/design/design-system.md`): layout, spacing, alignment, truncation, contrast,
 symbols, wording, and whether it looks finished. Content centred in its shape; a glyph and its
 label on one line with an even gap; nothing clipped, cramped or cut by an ellipsis it has room for;
-text and icons readable. A visible difference from the design is a `fail`, even when the tree shows
+text and icons readable. A visible difference from the design is a {{status:fail}}, even when the tree shows
 every control: name what differs from which screen of the design.
 
 The Gallery pictures Symphony drew are on the ticket's history already, and so is each
@@ -52,14 +56,14 @@ The Gallery pictures Symphony drew are on the ticket's history already, and so i
 `ticket_record`; name its path in your answer's `evidence`.
 Do not call `qa_verdict`.
 
-A design check is a `pass` only when every screen the plan names and every Gallery picture named
+A design check is a {{status:pass}} only when every screen the plan names and every Gallery picture named
 below was seen and compared with the design by eye. Any part that could not be reached, seen or judged (an entry that showed
-only its empty state, a screenshot you did not view) makes the status `blocked`, with what blocked
-it in `actual`: never `pass`, never `fail`.
+only its empty state, a screenshot you did not view) makes the status {{status:blocked}}, with what blocked
+it in `actual`: never {{status:pass}}, never {{status:fail}}.
 
-Answer with `status` (`pass`, `fail`, `blocked`, `unprovable` when the check needs a QA tool, a
+Answer with `status` ({{status:pass}}, {{status:fail}}, {{status:blocked}}, {{status:unprovable}} when the check needs a QA tool, a
 fixture page or the live server this pass does not have, with what it needed in `actual`, or
-`plan_mismatch` when the plan named a screen that does not exist), `expected` (the designs you compared with, and the appearance and size),
+{{status:plan_mismatch}} when the plan named a screen that does not exist), `expected` (the designs you compared with, and the appearance and size),
 `actual` (what you saw, entry by entry), `details`, and `evidence` (every screenshot, crop and Gallery
 picture path under `qa-evidence/` you judged), and `measures` when you measured something (one
 `{"name", "value", "unit", "expected"}` object per measured value, `expected` only when the design

@@ -10,10 +10,22 @@ defmodule SymphonyElixir.QaModeContract do
   """
 
   alias SymphonyElixir.PlaybookSettings
+  alias SymphonyElixir.QaAgent.PromptTerms
   alias SymphonyElixir.QaAndroid.Driver, as: AndroidDriver
   alias SymphonyElixir.{QaDriver, Verification}
 
   @heading "QA mode, what Symphony's driver gives the app:"
+  # The markers the macOS lines keep, each filled from the driver's contract field it names.
+  @contract_fields %{
+    "root_env" => :qa_root_env,
+    "api_requests_log" => :api_requests_log,
+    "api_reads_log" => :api_reads_log,
+    "elements_folder" => :elements_folder,
+    "cursor_folder" => :cursor_folder,
+    "api_fixtures_env" => :api_fixtures_env,
+    "appearance_env" => :appearance_env
+  }
+  @contract_markers ["appearances" | Map.keys(@contract_fields)]
 
   @doc """
   The section for the enabled `playbooks` (`SymphonyElixir.QaAgent.Selection.playbooks/2`), or
@@ -31,14 +43,29 @@ defmodule SymphonyElixir.QaModeContract do
     if lines == [], do: nil, else: Enum.join([@heading, "" | lines], "\n")
   end
 
+  # The macOS lines, built from the driver's QA tools (`PromptTerms`) at compile time, so a tool the
+  # driver drops fails the build; the contract's names are filled from the driver at run time.
+  @macos_lines Enum.map(
+                 [
+                   "- `{{root_env}}`: the QA root, the launch's run directory on the QA host. The app keeps its settings and secrets there, and every file the driver reads from the app goes there: `qa_api_requests` reads `{{api_requests_log}}` from the QA root. The app logs its reads (GETs) to `{{api_reads_log}}` beside it, and the tool returns both. The app writes its element report (its named elements, their frames and its state) to `{{elements_folder}}/<pid>.json` there, which `qa_elements`, `qa_scroll_to`, `qa_measure_elements` and `qa_wait_check` read. It writes the cursor it set at the pointer and the named element it set it for to `{{cursor_folder}}/<pid>.json` there, which `qa_hover` reads.",
+                   "- `{{api_fixtures_env}}`: read-only, set on a launch with `api_fixtures`. It names a copy on the QA host of the fixture directory the ticket committed; the app reads Symphony's API answers from it and never writes there.",
+                   "- `{{appearance_env}}`: {{appearances}} when the launch asks for an appearance."
+                 ],
+                 &PromptTerms.build!("lib/symphony_elixir/qa_mode_contract.ex: the macOS QA mode", &1, PromptTerms.terms(), keep: @contract_markers)
+               )
+
   defp macos_lines(playbook) do
     contract = QaDriver.app_contract()
 
-    [
-      "- `#{contract.qa_root_env}`: the QA root, the launch's run directory on the QA host. The app keeps its settings and secrets there, and every file the driver reads from the app goes there: `qa_api_requests` reads `#{contract.api_requests_log}` from the QA root. The app logs its reads (GETs) to `#{contract.api_reads_log}` beside it, and the tool returns both. The app writes its element report (its named elements, their frames and its state) to `#{contract.elements_folder}/<pid>.json` there, which `qa_elements`, `qa_scroll_to`, `qa_measure_elements` and `qa_wait_check` read. It writes the cursor it set at the pointer and the named element it set it for to `#{contract.cursor_folder}/<pid>.json` there, which `qa_hover` reads.",
-      "- `#{contract.api_fixtures_env}`: read-only, set on a launch with `api_fixtures`. It names a copy on the QA host of the fixture directory the ticket committed; the app reads Symphony's API answers from it and never writes there.",
-      "- `#{contract.appearance_env}`: #{Enum.map_join(contract.appearances, " or ", &"`#{&1}`")} when the launch asks for an appearance."
-    ] ++
+    fill = fn line ->
+      Enum.reduce(
+        @contract_fields,
+        String.replace(line, "{{appearances}}", Enum.map_join(contract.appearances, " or ", &"`#{&1}`")),
+        fn {marker, field}, text -> String.replace(text, "{{#{marker}}}", Map.fetch!(contract, field)) end
+      )
+    end
+
+    Enum.map(@macos_lines, fill) ++
       dev_server_lines(playbook) ++
       ["- Write what QA must read into the QA root (`$#{contract.qa_root_env}`); read what the ticket committed from the fixtures copy (`$#{contract.api_fixtures_env}`)."]
   end

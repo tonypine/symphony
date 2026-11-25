@@ -12,7 +12,7 @@ screen rules below. Then answer:
 - `needs_app` (true or false): whether anything in this pass judges the running app's screens.
   False only when no walkthrough step is walked and nothing on screen changed. Symphony builds,
   launches and health-checks the app either way (a pass with nothing on screen to judge rests on the
-  app starting); false skips the design check, and the pass is a `pass` with
+  app starting); false skips the design check, and the pass is a {{status:pass}} with
   `scope: none` once the app checked healthy.
 - `walk`: one brief for every walkthrough step QA walks (listed below), never fewer. Each step in
   the facts comes with its `Setting`: the source (a fixture directory or the live server), the page,
@@ -46,10 +46,10 @@ screen rules below. Then answer:
     "the design system alone");
   - `screenshots`: the names to save each judgment under (lowercase, hyphens, no extension);
   - `also` (only for the exception below): the other appearance or window size the step is judged
-    in too, such as `light` or `1366×768`;
+    in too, such as `light` or a `width` and `height`;
   - `group` (optional): a short name, the same on every brief walked in one session;
   - `needs` (optional): what the step needs that a pass may lack, as a list of objects, each in one
-    of three shapes: `{"kind": "tool", "name": "<qa_ tool>"}` for a QA tool the step cannot be
+    of three shapes: `{"kind": "tool", "name": "<tool name>"}` for a QA tool the step cannot be
     walked without (one the driver's tools, listed in the facts, do not include), `{"kind": "fixture_page", "fixture": "<directory>", "page":
     "<page>"}` for a page of a committed fixture (the directory by its path in the checkout, such
     as `macos/Tests/Fixtures/director-app/update-paused`, or by its name, such as `update-paused`),
@@ -58,8 +58,8 @@ screen rules below. Then answer:
   Never invent a fixture or a stub: use the ones the rules and facts name.
   Symphony checks each brief's `needs` itself, against the QA driver's tools, the live server and
   the fixtures in this worktree (the facts below): a step with a need the pass lacks is
-  `unprovable`, with what it needed, and no walk session runs for it. Symphony refuses a `needs`
-  in another shape and asks you again. A step the facts list as marked `unprovable` already, from
+  {{status:unprovable}}, with what it needed, and no walk session runs for it. Symphony refuses a `needs`
+  in another shape and asks you again. A step the facts list as marked {{status:unprovable}} already, from
   its setting, gets no brief.
 - `screens`: the app's own windows, sheets, panels and menus the change adds or changes, for the
   design check to judge in the running app, each an object with `screen` (its name), `where` (how
@@ -88,7 +88,7 @@ How to group the briefs:
   size or a fresh app start from the others, or that changes the app's state in a way a later
   step of the group must not see.
 - Order does not matter: Symphony walks a group where its first step falls. Every step of a group
-  still gets its own result (`pass`, `fail`, `blocked` or `unprovable`) and its own evidence, so a
+  still gets its own result ({{statuses}}) and its own evidence, so a
   failure names one step, not the group.
 
 Symphony refuses a plan whose `walk` misses a walkthrough step QA walks, and asks you again.
