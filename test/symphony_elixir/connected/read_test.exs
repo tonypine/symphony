@@ -218,6 +218,26 @@ defmodule SymphonyElixir.Connected.ReadTest do
                %{identifier: "MT-7", title: nil, state: "Todo", situation: nil}
              ] = read("MT-1").sub_tickets
     end
+
+    test "an open sub-ticket holding no queue place follows the placed ones, and a done one with no time of its move leads" do
+      subs = for {id, state} <- [{"MT-2", "Todo"}, {"MT-3", "Todo"}, {"MT-4", "Done"}], do: %{id: id, identifier: id, state: state}
+      ticket("MT-1", "Waiting on sub-tickets", %{title: "The plan", sub_issues: subs})
+      ticket("MT-2", "Todo", %{title: "No place"})
+      ticket("MT-3", "Todo", %{title: "Placed"})
+      ticket("MT-4", "Done", %{title: "Done, no time"})
+
+      records =
+        Enum.map(RunStore.list_all_ticket_states(), fn
+          %{issue_id: "MT-2"} = record -> Map.put(record, :sort_key, nil)
+          %{issue_id: "MT-4"} = record -> Map.put(record, :phase_at, nil)
+          record -> record
+        end)
+
+      facts = Read.facts(records, Situation.live_facts(%{running: [], retrying: []}), [])
+      parent = Enum.find(records, &(&1.issue_id == "MT-1")) |> TicketState.normalize()
+
+      assert [%{identifier: "MT-4"}, %{identifier: "MT-3"}, %{identifier: "MT-2"}] = Read.read(parent, nil, facts).sub_tickets
+    end
   end
 
   describe "the tickets it holds up" do
