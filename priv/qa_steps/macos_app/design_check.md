@@ -5,10 +5,10 @@ picture shows whether it looks like the design.
 
 The running app:
 
-- Use the app Symphony launched (its PID is below): it runs in the target's appearance, with its
-  window at the target size. When the plan's briefs name `api_fixtures` or stand-ins for the
-  screens you judge, `qa_quit_app` it and `qa_launch_app` with them, leaving out `appearance`, then
-  call `qa_resize_window` with no size. Open each changed window (pass its `path` to
+- Use the app Symphony launched for this session (its PID is below): it runs in the target's
+  appearance, with its window at the target size. When the plan's briefs name `api_fixtures` or
+  stand-ins for the screens you judge, `qa_quit_app` it and `qa_launch_app` with them and the
+  screen's page as `page`, leaving out `appearance`, then call `qa_resize_window` with no size. Open each changed window (pass its `path` to
   `qa_resize_window` when it is not the main one), let it settle (about 10 seconds, change focus
   once) and `qa_screenshot` it. The status-bar menu: `qa_open_status_menu`, `qa_screenshot` with its
   `window_id`, then `qa_key` `escape`.

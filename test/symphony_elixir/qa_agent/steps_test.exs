@@ -102,14 +102,29 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
     defp recipient, do: Application.fetch_env!(:symphony_elixir, :qa_steps_test_recipient)
   end
 
-  # The QA driver's calls, answered from `:qa_steps_test_tools` (a tool name to its result).
+  # The QA driver's calls, answered from `:qa_steps_test_tools` (a tool name to its result, or
+  # `{:seq, results}`: one per call, the last one repeating). The apps running are
+  # `:qa_steps_test_running` (default PID 4242).
   defmodule FakeDriver do
     def call_tool(driver, tool, args) do
       send(Application.fetch_env!(:symphony_elixir, :qa_steps_test_recipient), {:tool, driver, tool, args})
-      Map.get(Application.get_env(:symphony_elixir, :qa_steps_test_tools, %{}), tool, {:ok, %{}})
+      tools = Application.get_env(:symphony_elixir, :qa_steps_test_tools, %{})
+
+      case Map.get(tools, tool, {:ok, %{}}) do
+        {:seq, [result | [_ | _] = rest]} ->
+          Application.put_env(:symphony_elixir, :qa_steps_test_tools, Map.put(tools, tool, {:seq, rest}))
+          result
+
+        {:seq, [result]} ->
+          result
+
+        result ->
+          result
+      end
     end
 
     def launched_pids(_driver), do: [4242]
+    def running_pids(_driver), do: Application.get_env(:symphony_elixir, :qa_steps_test_running, [4242])
   end
 
   setup do
@@ -130,7 +145,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
     })
 
     on_exit(fn ->
-      Enum.each([@answers, @recipient, @tools], &Application.delete_env(:symphony_elixir, &1))
+      Enum.each([@answers, @recipient, @tools, :qa_steps_test_running], &Application.delete_env(:symphony_elixir, &1))
       File.rm_rf(root)
     end)
 
@@ -285,7 +300,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       refute walk_1.prompt =~ "Screen rules here."
       assert walk_1.prompt =~ "Step 1: open page 1."
       assert walk_1.prompt =~ ~s("where": "Page 1")
-      assert walk_1.prompt =~ "Symphony launched it as PID 4242"
+      assert walk_1.prompt =~ "Symphony launched it for this session as PID 4242"
       assert design.prompt =~ ~s("entry": "button")
       assert review.prompt =~ "Earlier steps of this run answered"
       assert review.prompt =~ "- `build` (Build the app): passed"
@@ -446,7 +461,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
 
       assert turns["plan"] =~ "This pass also runs the `cli` playbook"
       assert turns["walk_1"] =~ "in the macOS app"
-      assert turns["walk_1"] =~ "Symphony launched it as PID 4242"
+      assert turns["walk_1"] =~ "Symphony launched it for this session as PID 4242"
       refute turns["walk_1"] =~ "CLI rules"
       assert turns["walk_2"] =~ "on the command line"
       assert turns["walk_2"] =~ "The playbook's rules for the command line:\n\nCLI rules: throwaway locations."
@@ -1211,6 +1226,166 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
   defp step(%Step{} = step), do: step
   defp step(attrs), do: attrs |> then(&Step.changeset(%Step{}, &1)) |> Ecto.Changeset.apply_action!(:validate)
 
+  describe "each session's app (TP-1664)" do
+    defp tool_calls do
+      receive_tool_calls([])
+    end
+
+    defp receive_tool_calls(acc) do
+      receive do
+        {:tool, _driver, tool, args} -> receive_tool_calls([{tool, args} | acc])
+      after
+        0 -> Enum.reverse(acc)
+      end
+    end
+
+    # The calls Symphony made between two quits of the launch step's app: a session's own launch.
+    defp session_launches(calls) do
+      for {"qa_launch_app", args} <- calls, do: args
+    end
+
+    test "c1: launches each walk session in its step's setting: source, page, appearance and window size", ctx do
+      live = %{source: "live", fixture: nil, page: "Tickets", window: %{width: 1440, height: 900}, appearance: "light"}
+      fixture = %{source: "fixture", fixture: "macos/Tests/Fixtures/director-app/running", page: "TP-9001's page", window: %{width: 2000, height: 1200}, appearance: "dark"}
+      [one, two, three] = walkthrough([1, 2, 3])
+      steps = [Map.merge(one, %{check_id: "c1", setting: live}), Map.merge(two, %{check_id: "c2", setting: fixture}), three]
+      File.mkdir_p!(Path.join(ctx.worktree, "macos/Tests/Fixtures/director-app/running"))
+      answers(%{"plan" => [{:write, plan([1, 2, 3])}], "review" => [{:verdict, @pass}]})
+
+      playbooks = [%{kind: "macos_app", live: true, prompt: "Intro."}]
+      assert {:ok, _result} = run(ctx, %{journey: %{source: "the plan", text: "", steps: steps}, playbooks: playbooks})
+      calls = tool_calls()
+
+      # The launch step's health check, then one launch per session: walk 1, walk 2, walk 3, the design check.
+      assert session_launches(calls) == [
+               %{},
+               %{"environment" => "live", "appearance" => "light", "page" => "tickets"},
+               %{"environment" => "fixture", "api_fixtures" => "macos/Tests/Fixtures/director-app/running", "appearance" => "dark", "ticket" => "TP-9001"},
+               %{},
+               %{}
+             ]
+
+      resizes = for {"qa_resize_window", args} <- calls, do: args
+
+      assert resizes == [
+               %{"pid" => 4242},
+               %{"pid" => 4242, "width" => 1440, "height" => 900},
+               %{"pid" => 4242, "width" => 2000, "height" => 1200},
+               %{"pid" => 4242},
+               %{"pid" => 4242}
+             ]
+
+      # Every earlier app is quit before a session's launch, so Symphony never reaches the three-app limit.
+      launches_and_quits = for {tool, _args} <- calls, tool in ["qa_launch_app", "qa_quit_app"], do: tool
+      assert launches_and_quits == ~w(qa_launch_app qa_quit_app qa_launch_app qa_quit_app qa_launch_app qa_quit_app qa_launch_app qa_quit_app qa_launch_app qa_quit_app)
+
+      turns = Map.new(turns(), &{&1.id, &1.prompt})
+
+      assert turns["walk_1"] =~
+               "Symphony launched it for this session as PID 4242 (QA root 1), running now, in this step's setting: on the live server " <>
+                 "(`environment: live`), open on its Tickets page, light appearance, its window at 1440×900 pt."
+
+      assert turns["walk_2"] =~ "on the fixture `macos/Tests/Fixtures/director-app/running`, open on TP-9001's page, dark appearance, its window at 2000×1200 pt."
+      assert turns["walk_3"] =~ "The plan gives this step no setting, so Symphony launched it as it launches by default"
+      assert turns["design_check"] =~ "Symphony launched it for this session as PID 4242"
+
+      # A session in a setting uses the app as it is; one with no setting relaunches from its brief, as before.
+      assert turns["walk_1"] =~ "Use it as it is: do not quit and relaunch it to reach this setting."
+
+      for id <- ["walk_3", "design_check"] do
+        assert turns[id] =~ "When your brief's `launch` (in the design check, the briefs' fixtures and stand-ins) names another state"
+        assert turns[id] =~ "quit it with `qa_quit_app`, call `qa_launch_app` with those arguments and the page as `page`, then `qa_resize_window`"
+        refute turns[id] =~ "do not quit and relaunch it to reach this setting"
+      end
+    end
+
+    test "a group of steps is launched once, in its first step's setting, and a page Symphony cannot open is said", ctx do
+      setting = %{source: "fixture", fixture: "running", page: "The board of cards", window: %{width: 1440, height: 900}, appearance: "dark"}
+      [one, two] = walkthrough([1, 2])
+      steps = [Map.merge(one, %{check_id: "c1", setting: setting}), Map.merge(two, %{check_id: "c2", setting: setting})]
+      File.mkdir_p!(Path.join(ctx.worktree, "macos/Tests/Fixtures/director-app/running"))
+      grouped = plan([1, 2]) |> Map.update!(:walk, fn walk -> Enum.map(walk, &Map.put(&1, :group, "board")) end)
+      group_answer = %{results: [Map.put(FakeAgent.pass_answer(), :step, 1), Map.put(FakeAgent.pass_answer(), :step, 2)]}
+      answers(%{"plan" => [{:write, grouped}], "walk" => [{:write, group_answer}], "review" => [{:verdict, @pass}]})
+
+      assert {:ok, _result} = run(ctx, %{journey: %{source: "the plan", text: "", steps: steps}})
+
+      assert session_launches(tool_calls()) == [
+               %{},
+               %{"environment" => "fixture", "api_fixtures" => "running", "appearance" => "dark"},
+               %{}
+             ]
+
+      turns = Map.new(turns(), &{&1.id, &1.prompt})
+      assert turns["walk_1_2"] =~ ~s[on its first page: the setting's page ("The board of cards") is not one Symphony can open at launch, so navigate there yourself]
+      assert turns["walk_1_2"] =~ "Use it as it is: do not quit and relaunch it to reach this setting."
+    end
+
+    test "c2: a session is handed only a PID that is running; after an app quit, the next gets a new one or none", ctx do
+      tools = Application.get_env(:symphony_elixir, @tools)
+
+      launches =
+        {:seq,
+         [
+           {:ok, %{"pid" => 4242, "root" => 1}},
+           {:ok, %{"pid" => 5001, "root" => 1}},
+           {:error, {:qa_tool, "qa_launch_failed", "The app could not start: :enoent"}},
+           {:ok, %{"pid" => 5003, "root" => 2}}
+         ]}
+
+      Application.put_env(:symphony_elixir, @tools, Map.put(tools, "qa_launch_app", launches))
+      # Only the first session's app and the launch step's are running; 5003 exited at once.
+      Application.put_env(:symphony_elixir, :qa_steps_test_running, [4242, 5001])
+      answers(%{"plan" => [{:write, plan([1, 2])}], "review" => [{:verdict, @pass}]})
+
+      assert {:ok, _result} = run(ctx)
+      turns = Map.new(turns(), &{&1.id, &1.prompt})
+
+      assert turns["walk_1"] =~ "launched it for this session as PID 5001 (QA root 1), running now"
+
+      assert turns["walk_2"] =~
+               "The app: Symphony could not launch it for this session (qa_launch_failed: The app could not start: :enoent), so no app is running for you."
+
+      refute turns["walk_2"] =~ "PID 5001"
+      refute turns["walk_2"] =~ "PID 4242"
+
+      assert turns["design_check"] =~ "could not launch it for this session (qa_app_not_running: the app it launched (PID 5003) is not running)"
+      refute turns["design_check"] =~ "PID 5001 "
+    end
+
+    test "an app that runs but checked unhealthy is handed with what the check found", ctx do
+      tools = Application.get_env(:symphony_elixir, @tools)
+      check = {:seq, [{:ok, %{"healthy" => true}}, {:ok, %{"healthy" => false, "problems" => ["not responding"]}}]}
+      Application.put_env(:symphony_elixir, @tools, Map.put(tools, "qa_check_app", check))
+      answers(%{"plan" => [{:write, plan([1])}], "review" => [{:verdict, @pass}]})
+
+      assert {:ok, _result} = run(ctx, %{journey: %{source: "the ticket", text: "1. Open it.", steps: walkthrough([1])}})
+      turns = Map.new(turns(), &{&1.id, &1.prompt})
+      assert turns["walk_1"] =~ ~s|`qa_check_app` found it unhealthy at launch: {"healthy":false,"problems":["not responding"]}.|
+
+      # Not running and checked unhealthy: the check's problems say why.
+      Application.put_env(:symphony_elixir, @tools, Map.put(tools, "qa_check_app", check))
+      Application.put_env(:symphony_elixir, :qa_steps_test_running, [])
+      answers(%{"plan" => [{:write, plan([1])}], "review" => [{:verdict, @pass}]})
+      :ok = RunStore.clear()
+      assert {:ok, _result} = run(ctx, %{journey: %{source: "the ticket", text: "1. Open it.", steps: walkthrough([1])}})
+      turns = Map.new(turns(), &{&1.id, &1.prompt})
+      assert turns["walk_1"] =~ "(qa_app_not_running: the app it launched (PID 4242) is not running: not responding)"
+    end
+
+    test "c3: a walk session's instructions say the app is already in its setting, and never to relaunch to reach it" do
+      walk = StepPrompts.prompt("macos_app", "walk")
+      assert walk =~ "already in your\n  step's setting: on its fixture or the live server, open on its page, in its appearance, with its\n  window at its size."
+      assert walk =~ "do not quit and relaunch it to reach that setting"
+      refute walk =~ "on the default fixtures, at the QA target: in its"
+      refute walk =~ "After each launch you make, call `qa_resize_window`"
+      refute walk =~ "When the brief's `launch` asks\n  for something else"
+
+      # A step with no setting still reaches its brief's state by a relaunch.
+      assert walk =~ "A step with no setting in the plan gets the app on the default fixtures\n  at the QA target (below): when its brief's `launch` names `api_fixtures`"
+    end
+  end
+
   describe "Symphony's check of the plan before any session (TP-1672)" do
     defp live_setting, do: %{source: "live", fixture: nil, page: "Home", window: %{width: 1440, height: 900}, appearance: "dark"}
 
@@ -1423,7 +1598,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       # The steps after it are given what they would have had: the plan, the walk results and the evidence.
       [design, review] = turns
       assert design.prompt =~ ~s("entry": "button")
-      assert design.prompt =~ "Symphony launched it as PID 4242"
+      assert design.prompt =~ "Symphony launched it for this session as PID 4242"
       assert review.prompt =~ "Page shows its title"
       assert review.prompt =~ "- `walk_1` (Walk a step 1): passed"
       assert review.turn[:resume_session_id] == "session-plan"

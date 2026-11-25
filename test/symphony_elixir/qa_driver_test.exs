@@ -4,6 +4,7 @@ defmodule SymphonyElixir.QaDriverTest do
   import ExUnit.CaptureLog
 
   alias SymphonyElixir.{AgentEnv, Paths, PathSafety, QaDriver}
+  alias SymphonyElixir.Codex.DynamicTool
   alias SymphonyElixir.QaDriver.{DevServerLease, Host, ReleasePair}
 
   @app "macos/build/Demo.app"
@@ -2147,6 +2148,66 @@ defmodule SymphonyElixir.QaDriverTest do
       end
 
       refute_received {:launched, _executable, _opts, _port, _pid}
+    end
+  end
+
+  describe "qa_launch_app page (TP-1664)" do
+    test "c4: opens the app on the page or ticket named, and the result says where", %{worktree: worktree} do
+      driver = start_driver(worktree)
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+
+      for {args, view, ticket, opened} <- [
+            {%{"page" => "Tickets"}, "tickets", nil, %{"page" => "Tickets"}},
+            {%{"page" => " home "}, "overview", nil, %{"page" => "Home"}},
+            {%{"page" => "audit"}, "audit", nil, %{"page" => "Audit"}},
+            {%{"ticket" => "tp-12"}, nil, "TP-12", %{"ticket" => "TP-12"}},
+            {%{"page" => "Initiatives", "ticket" => "TP-12"}, "initiatives", "TP-12", %{"page" => "Initiatives", "ticket" => "TP-12"}},
+            {%{}, nil, nil, %{}}
+          ] do
+        {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", args) end)
+        assert {:ok, %{"pid" => pid} = payload} = result
+        assert Map.take(payload, ["page", "ticket"]) == opened
+        assert_received {:launched, _executable, launch_opts, _port, ^pid}
+        env = Map.new(launch_opts[:env])
+        assert env["SYMPHONY_BAR_QA_OPEN_VIEW"] == view
+        assert env["SYMPHONY_BAR_QA_OPEN_TICKET"] == ticket
+        assert {:ok, _quit} = QaDriver.call_tool(driver, "qa_quit_app", %{"pid" => pid})
+      end
+    end
+
+    test "c4: refuses a page the app does not have, naming its pages, and a ticket that is no identifier", %{worktree: worktree} do
+      driver = start_driver(worktree)
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+
+      assert {:error, {:qa_tool, "qa_unknown_page", message}} = QaDriver.call_tool(driver, "qa_launch_app", %{"page" => "Nowhere"})
+      assert message =~ ~s(The app has no page "Nowhere".)
+      assert message =~ "`overview` (Home), "
+      assert message =~ "`settings` (Settings)."
+
+      assert {:error, {:qa_tool, "qa_unknown_page", _message}} = QaDriver.call_tool(driver, "qa_launch_app", %{"page" => 3})
+      assert {:error, {:qa_tool, "invalid_arguments", ticket}} = QaDriver.call_tool(driver, "qa_launch_app", %{"ticket" => "the board"})
+      assert ticket =~ "`ticket` must be a ticket identifier"
+      refute_received {:launched, _executable, _opts, _port, _pid}
+    end
+
+    test "the tool's schema takes a page and a ticket" do
+      schema = Enum.find(DynamicTool.tool_specs(:qa), &(&1["name"] == "qa_launch_app"))
+      assert %{"page" => %{"type" => "string"}, "ticket" => %{"type" => "string"}} = schema["inputSchema"]["properties"]
+    end
+
+    test "running_pids lists the launched apps still running", %{worktree: worktree} do
+      assert QaDriver.running_pids(nil) == []
+      {driver, pid} = launched_app(worktree)
+      assert_received {:launched, _executable, _opts, port, ^pid}
+      assert QaDriver.running_pids(driver) == [pid]
+      assert QaDriver.launched_pids(driver) == [pid]
+
+      send(driver, {port, {:exit_status, 0}})
+      assert QaDriver.running_pids(driver) == []
+      assert QaDriver.launched_pids(driver) == [pid]
+
+      QaDriver.stop(driver)
+      assert QaDriver.running_pids(driver) == []
     end
   end
 

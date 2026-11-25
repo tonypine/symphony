@@ -466,8 +466,9 @@ defmodule SymphonyElixir.QaAgent do
 
         The QA target: #{appearance} appearance, a #{ww}×#{wh} pt window.
         - `qa_launch_app` and `qa_gallery` draw the app #{appearance} when you name no
-          `appearance`. After each `qa_launch_app`, once the window shows and before the first step,
-          call `qa_resize_window` with no size: it sets the window to #{ww}×#{wh} pt. Every
+          `appearance`; `qa_launch_app`'s `page` opens the app on a page of its window (`ticket` on a
+          ticket's page). After each `qa_launch_app` you make, once the window shows and before the
+          first step, call `qa_resize_window` with no size: it sets the window to #{ww}×#{wh} pt. Every
           walkthrough step, screenshot and design check runs there; name the size in each step's
           `viewport`, and the report names it.
         - Judge nothing else unless the ticket is about it: only when its ask or plan names

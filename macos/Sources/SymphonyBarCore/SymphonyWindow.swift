@@ -9,6 +9,13 @@ public enum SymphonyView: String, CaseIterable, Equatable, Hashable, Identifiabl
 
     public var id: String { rawValue }
 
+    /// The page `name` names, by its name (`overview`) or its title (`Home`), whatever the case; nil for a name the
+    /// window lacks. QA mode's `SYMPHONY_BAR_QA_OPEN_VIEW` reads it.
+    public static func named(_ name: String) -> SymphonyView? {
+        let wanted = name.trimmingWhitespace().lowercased()
+        return allCases.first { $0.rawValue == wanted || $0.title.lowercased() == wanted }
+    }
+
     public var title: String {
         switch self {
         case .inbox: "Inbox"
