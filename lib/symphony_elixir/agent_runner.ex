@@ -2625,7 +2625,7 @@ defmodule SymphonyElixir.AgentRunner do
   # or no answer is parked as before.
   defp rework_answer(%Issue{id: issue_id} = issue, %{progress: %{head: head} = progress} = run_context) do
     with true <- unchanged_clean_rework_head?(issue, head, progress) and attached_pr?(issue, run_context.opts),
-         %{} = answer <- answer_since_rework(issue_id),
+         %{} = answer <- answer_since_rework({:ticket, run_repo_key(issue, run_context.opts), issue_id}),
          true <- no_pending_rework_signal?(issue, run_context.opts) and pr_head?(issue, head, run_context) do
       answer
     else
@@ -2634,11 +2634,23 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   # The newest `question.answered` after the ticket's newest entry into Rework; nil without such an
-  # entry, an answer after it or a readable ledger.
-  defp answer_since_rework(issue_id) do
+  # entry, an answer after it or a readable ledger. The answer to a hold's own question (the idle
+  # park's "Run it again", a dispatch loop's, a block report's: `Questions.held_question?/1`) says
+  # nothing about the work, so it never counts: a run that changes nothing after it parks again.
+  defp answer_since_rework({:ticket, _repo_key, issue_id} = ticket) do
     events = with {:error, _reason} <- RunStore.list_ticket_events(issue_id, []), do: []
     {since, entry} = events |> Enum.reverse() |> Enum.split_while(&(not entered_rework?(&1)))
-    if entry != [], do: Enum.find(since, &(Map.get(&1, :type) == "question.answered"))
+    if entry != [], do: Enum.find(since, &work_answer?(ticket, &1))
+  end
+
+  defp work_answer?(ticket, event) do
+    Map.get(event, :type) == "question.answered" and not held_answer?(ticket, event_payload(event, :question_id))
+  end
+
+  # Whether the answered question `id` is a hold's own (`Questions.held_question?/1`).
+  defp held_answer?(ticket, id) do
+    question = Questions.find(ticket, id)
+    question != nil and Questions.held_question?(question)
   end
 
   defp entered_rework?(event), do: Map.get(event, :type) == "phase.entered" and rework_state?(event_payload(event, :to))

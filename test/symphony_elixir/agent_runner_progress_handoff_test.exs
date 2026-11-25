@@ -743,6 +743,19 @@ defmodule SymphonyElixir.AgentRunnerProgressHandoffTest do
       assert idle_parked?()
     end
 
+    test "the answer to the idle park's own question parks the run again, never hands the head back" do
+      entered_rework!()
+      ticket = {:ticket, "default", "issue-progress"}
+      {:ok, question} = Questions.ask(ticket, SymphonyElixir.IdlePark.hold_question_attrs("TP-1", "Rework", 2))
+      run_again = SymphonyElixir.DispatchLoop.option_label(:unblock)
+      {:ok, _answered} = Questions.answer(ticket, question.id, run_again, by: Pauses.director())
+
+      assert :ok = run_issue!("Rework", heads: ["sha-rework"], max_turns: 5)
+
+      refute_received {:memory_tracker_state_update, _issue_id, "Code Review"}
+      assert idle_parked?()
+    end
+
     test "with uncommitted edits, or the PR on another head, the run is not handed back" do
       entered_rework!()
       answered!()

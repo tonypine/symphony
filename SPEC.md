@@ -3059,7 +3059,9 @@ Important nuance:
   head the `Rework` started from, no uncommitted change, that `HEAD` the attached PR's head and no
   pending reviewer comment, CI failure or conflict, MUST instead hand that head off to the configured
   Code Review state with the answer as the move's reason: the answer is why nothing changed, so it is
-  neither parked as idle nor asked a second question. The rule above, back to QA, wins over it.
+  neither parked as idle nor asked a second question. An answer to a hold's own question (the idle
+  park's "Run it again", a dispatch loop's, a block report's) says nothing about the work and does
+  not count: such a run parks again. The rule above, back to QA, wins over it.
 
   `Rework` continues the current attempt. Its run MUST NOT close the pull request, cut a branch
   from scratch or supersede the workpad: those belong to `Restart` (below). The post-PR state is
