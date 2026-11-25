@@ -696,7 +696,8 @@ defmodule SymphonyElixir.QaAgentTest do
       # With verification on, a rule that runs the server on the QA host is the reason, not the
       # verification switch.
       for runs <- ["every_qa_pass", "live_qa_pass"] do
-        assert {"web", "needs `verification.dev_server.runs: symphony_host`"} in Selection.unavailable(config, command_only ++ [verification_enabled?: true, dev_server_runs: runs])
+        opts = command_only ++ [verification_enabled?: true, dev_server_runs: runs]
+        assert {"web", "needs `verification.dev_server.runs: symphony_host`"} in Selection.unavailable(config, opts)
       end
     end
 
