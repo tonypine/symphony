@@ -177,6 +177,12 @@ defmodule SymphonyElixir.QaAgent.ReportTest do
       body = Report.render(outcome(%{steps: [%{name: "Step 1", status: "pass", details: "", environment: "live", evidence: []}]}))
       assert body =~ "- **pass** Step 1 (proved on the live server)\n"
     end
+
+    test "a filed ticket names the tickets it is blocked by, and one with none names none" do
+      filed = [%{identifier: "TP-2", title: "Fix step 2", blocked_by: ["TP-1"]}, %{identifier: "TP-3", title: "Fix step 3"}]
+      body = Report.render(outcome(%{filed: filed}))
+      assert body =~ "- TP-2 Fix step 2 (blocked by TP-1)\n- TP-3 Fix step 3\n"
+    end
   end
 
   describe "ledger/4" do

@@ -59,7 +59,8 @@ review gives the verdict from your answer.
 Answer with:
 
 - `status`: `pass` when the step behaved as the brief expects and you saw and judged every part of it; `fail` when it shows a real defect;
-  `blocked` when you could not walk it, or could not reach, see or judge any part of it (a tool, a fixture or a stand-in missing, an empty state, a screenshot not viewed; say which), never `pass` then;
+  `unprovable` when the step needs a QA tool, a fixture page or the live server this pass does not have (say which in `actual`, such as "needs the QA tool qa_drag"); Symphony marks the steps it can see so before any session, so this is for one you find only as you walk it;
+  `blocked` when you could not walk it, or could not reach, see or judge any part of it for any other reason (a harness fault, a stand-in that did not start, an empty state, a screenshot not viewed; say which), never `pass` then;
   `plan_mismatch` when the app is not where the brief says (a window, a control or a fixture the
   brief names does not exist), so the review can write a new brief.
 - `expected`: what the brief said must be true.
@@ -75,6 +76,7 @@ When you walk several steps in one session:
   events, each caption naming that step's number. One step's failure is that step's `fail`; the
   others keep their own status.
 - Answer with `results` in place of the fields above: one object per step, each with `step` (its
-  number) and that step's `status`, `expected`, `actual`, `details` and `evidence`. A step you could
-  not reach or judge is `blocked`, with why. Symphony refuses an answer that misses a step and asks
+  number) and that step's `status`, `expected`, `actual`, `details` and `evidence`. A step that
+  needs a tool, a fixture page or the live server this pass lacks is `unprovable`, with what it
+  needed; any other step you could not reach or judge is `blocked`, with why. Symphony refuses an answer that misses a step and asks
   once more; a step still without a result is not judged, never passed.

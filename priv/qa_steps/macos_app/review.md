@@ -12,13 +12,18 @@ to the briefs that share a screen and an app state, as in your plan: they are re
 one fresh walk turn, each with its own result, and count as one session. A brief with no `group` is
 rechecked in a fresh walk turn of its own. At most twelve briefs in all; you review again with
 their answers. Symphony allows two rounds of
-recheck; past them a pass without a verdict is inconclusive.
+recheck; past them a pass without a verdict is inconclusive. A step Symphony marked `unprovable`
+gets no recheck: a recheck whose brief names one is refused and asked again.
 
 Otherwise record the verdict with the `qa_verdict` tool, once, as your last act, then end your
 turn:
 
-- one step per walkthrough step, named after it, with the walk's status (`plan_mismatch` that a
+- one step per walked walkthrough step, named after it, with the walk's status (`plan_mismatch` that a
   recheck did not settle is `blocked`), its `details` and its `evidence`;
+- the steps Symphony marked `unprovable` before any session (listed below, with what each
+  needed), carried as given: the same name, `unprovable`, the same `details`, and no step of your
+  own for the same walkthrough step. Symphony puts them in the verdict as it marked them and drops
+  any other step you write for that walkthrough step;
 - one `Design check: <deliverable>` step per UI deliverable and gallery entry judged, from those
   steps' answers;
 - the steps a named test proves (the pre-checks): `pass`, with the check's result in `details`;
@@ -35,6 +40,9 @@ Rules Symphony keeps on the verdict:
   missing QA tool. `needs_dev_server` only when a step was blocked because the project's own server
   was not running and Symphony started none.
 - A step that needs a QA tool or setup this PR itself adds is `skipped`, never `blocked`.
+- A step that needs a QA tool, a fixture page or the live server this pass does not have is
+  `unprovable`, with what it needed in `details`; `blocked` is for a step that could not be judged
+  for any other reason.
 - A QA harness fault (a click that fell back to `AXPress`, or was refused because of another app,
   `qa_permission_missing`, `qa_helper_unavailable`, `qa_worker_*`) makes the verdict `blocked` with
   the tool's message as `reason`.
