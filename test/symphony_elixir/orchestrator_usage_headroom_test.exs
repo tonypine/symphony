@@ -585,6 +585,8 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
       send(pid, {:provider_usage_read, "opencode-go", {:ok, go_windows(ctx, 1.0, "rejected")}})
       assert %{phase: :headroom, window: "seven_day", utilization: 1.0} = :sys.get_state(pid).usage_limits[@opencode_go]
       GenServer.stop(pid)
+      # The run store keeps the hold across a restart; each case below starts from none.
+      RunStore.put_usage_limits(%{})
 
       for {name, reserves, weekly} <- [
             {:GoBelowOrchestrator, %{"opencode-go": %{reserve: 0.9}}, 0.89},
@@ -599,6 +601,7 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
         assert state.usage_windows[{"opencode-go", "seven_day"}].utilization == weekly
         assert Orchestrator.should_dispatch_issue_for_test(issue("issue-go-free", "MT-GO-FREE"), state)
         GenServer.stop(pid)
+        RunStore.put_usage_limits(%{})
       end
     end
 
