@@ -203,8 +203,25 @@ defmodule SymphonyElixir.OrchestratorStartSlotTest do
       # The watcher decided the review run on the displaced ticket (R27), and the record already
       # holds a listed silence from before the slot wait was a fact the detector read.
       now = DateTime.utc_now()
-      decision = %{rule: "R27", kind: :dispatch, owner: nil, clears_when: nil, outcome: :recorded, reason: "The reviewer reads PR #7", decided_at: now, since: now}
-      listed = %{since: DateTime.add(now, -1_800, :second), ticks: 60, bound: nil, reason: "R27 decided `dispatch`, but no run started and no wait is recorded"}
+
+      decision = %{
+        rule: "R27",
+        kind: :dispatch,
+        owner: nil,
+        clears_when: nil,
+        outcome: :recorded,
+        reason: "The reviewer reads PR #7",
+        decided_at: now,
+        since: now
+      }
+
+      listed = %{
+        since: DateTime.add(now, -1_800, :second),
+        ticks: 60,
+        bound: nil,
+        reason: "R27 decided `dispatch`, but no run started and no wait is recorded"
+      }
+
       facts = struct(Facts, %{phase: :code_review, ci: :pending, pr: :open, pr_number: 7, review: :pending})
       watch = %{facts: facts, decision: decision, head_sha: "abc1234", read_at: now, github: :ok, silent: listed}
       :ok = RunStore.put_ticket_pr_watch("default", "r", "MT-R", watch)
@@ -214,7 +231,17 @@ defmodule SymphonyElixir.OrchestratorStartSlotTest do
       assert Situation.waits_for_slot?(live, "r")
 
       slot = if Situation.waits_for_slot?(live, "r"), do: :waiting, else: :none
-      ctx = %{run: :none, hold: :none, slot: slot, now: now, interval_ms: 30_000, ci_wait_ms: 1_800_000, previous: listed}
+
+      ctx = %{
+        run: :none,
+        hold: :none,
+        slot: slot,
+        now: now,
+        interval_ms: 30_000,
+        ci_wait_ms: 1_800_000,
+        previous: listed
+      }
+
       assert SilentWait.check(watch, ctx) == nil
 
       record = "r" |> RunStore.get_ticket_state() |> TicketState.normalize()
