@@ -1,8 +1,8 @@
 defmodule SymphonyElixir.TicketEvents.RunEndsTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Lifecycle, TicketEvents}
   alias SymphonyElixir.Conductor.Facts
+  alias SymphonyElixir.{Lifecycle, TicketEvents}
   alias SymphonyElixir.TicketEvents.RunEnds
 
   @repo_key "repo-a"
@@ -89,9 +89,11 @@ defmodule SymphonyElixir.TicketEvents.RunEndsTest do
       # The ticket's budget and the ticket page's total count it, with the Conductor's turn.
       events = TicketEvents.query(@issue_id, limit: :all)
       record = %{repo_key: @repo_key, issue_id: @issue_id, issue_identifier: "TP-1648"}
-      assert %{budget: %{tokens_used: 24_300_040}} = Facts.build(record, nil, events: events, token_cap: 50_000_000, diff_stat: fn _record -> [] end)
+      facts_opts = [events: events, token_cap: 50_000_000, diff_stat: fn _record -> [] end]
+      assert %{budget: %{tokens_used: 24_300_040}} = Facts.build(record, nil, facts_opts)
 
-      facts = %{now: minutes(30), terminal_states: ["Done"], token_cap: 50_000_000, phase_names: %{code_review: "Code Review", qa: "QA", ci_fix: "CI Fix"}}
+      phase_names = %{code_review: "Code Review", qa: "QA", ci_fix: "CI Fix"}
+      facts = %{now: minutes(30), terminal_states: ["Done"], token_cap: 50_000_000, phase_names: phase_names}
       assert %{lifecycle: %{tokens: %{total: 24_300_040, conductor_tokens: 40}}} = Lifecycle.compute(events, facts)
 
       # The next boot finds nothing left to close.
@@ -102,7 +104,8 @@ defmodule SymphonyElixir.TicketEvents.RunEndsTest do
       record!(@issue_id, 0, "run.started", started("run-1", "implementation", 1))
       record!(@issue_id, 4, "step.completed", step("run-1"))
 
-      capture_log(fn -> assert RunEnds.close_unended(runs: fn _repo_key, _issue_id -> {:error, :unavailable} end) == 1 end)
+      unreadable = fn _repo_key, _issue_id -> {:error, :unavailable} end
+      capture_log(fn -> assert RunEnds.close_unended(runs: unreadable) == 1 end)
 
       assert [%{at: at, payload: payload}] = TicketEvents.query(@issue_id, types: ["run.ended"])
       assert at == minutes(4)

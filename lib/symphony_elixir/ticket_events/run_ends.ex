@@ -95,7 +95,8 @@ defmodule SymphonyElixir.TicketEvents.RunEnds do
   none. A store that can't be read keeps nothing. `read` reads the rows
   (`RunStore.list_issue_runs/2`, the default).
   """
-  @spec kept(String.t() | nil, String.t(), (String.t() | nil, String.t() -> [map()] | {:error, term()})) :: %{optional(String.t()) => kept()}
+  @spec kept(String.t() | nil, String.t(), (String.t() | nil, String.t() -> [map()] | {:error, term()})) ::
+          %{optional(String.t()) => kept()}
   def kept(repo_key, issue_id, read \\ &RunStore.list_issue_runs/2) do
     case read.(repo_key, issue_id) do
       records when is_list(records) ->
@@ -157,7 +158,9 @@ defmodule SymphonyElixir.TicketEvents.RunEnds do
           events
           |> Enum.filter(&is_binary(&1.issue_id))
           |> Enum.group_by(& &1.issue_id)
-          |> Enum.flat_map(fn {issue_id, ticket_events} -> close_ticket(issue_id, Enum.sort_by(ticket_events, &sort_key/1), runs) end)
+          |> Enum.flat_map(fn {issue_id, ticket_events} ->
+            close_ticket(issue_id, Enum.sort_by(ticket_events, &sort_key/1), runs)
+          end)
 
         if closed != [], do: Logger.warning("Closed #{length(closed)} run(s) that ended without a recorded end")
         length(closed)
@@ -175,14 +178,19 @@ defmodule SymphonyElixir.TicketEvents.RunEnds do
 
       [{%Event{repo_key: repo_key}, _ended_at} | _rest] ->
         kept = kept(repo_key, issue_id, runs)
-        events |> open(kept) |> Enum.map(fn {started, ended_at} -> close(started, ended_at, Map.get(kept, started.payload.run_id)) end)
+
+        events
+        |> open(kept)
+        |> Enum.map(fn {started, ended_at} -> close(started, ended_at, Map.get(kept, started.payload.run_id)) end)
     end
   end
 
   defp sort_key(%Event{at: at, seq: seq}), do: {DateTime.to_unix(at, :microsecond), seq}
 
-  defp close(%Event{repo_key: repo_key, issue_id: issue_id, payload: %{run_id: run_id}} = started, ended_at, kept),
-    do: TicketSignals.record_event(repo_key, issue_id, "run.ended", end_payload(started, ended_at, kept), run_id: run_id, at: ended_at)
+  defp close(%Event{repo_key: repo_key, issue_id: issue_id, payload: %{run_id: run_id}} = started, ended_at, kept) do
+    payload = end_payload(started, ended_at, kept)
+    TicketSignals.record_event(repo_key, issue_id, "run.ended", payload, run_id: run_id, at: ended_at)
+  end
 
   @doc """
   The `run.ended` payload of the run `started` (its `run.started`) closed at `ended_at` without its
