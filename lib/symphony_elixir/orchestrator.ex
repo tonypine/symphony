@@ -4554,8 +4554,11 @@ defmodule SymphonyElixir.Orchestrator do
   # existed, a stored dependency added mid-work, a competing pull request) lends its slot to that
   # ticket: the ticket runs through the holder's slot as a sub-ticket does, so a holder never waits
   # on a ticket that no slot is free for. A ticket that runs through an ancestor of its own keeps
-  # that one, and a ticket already in progress on its own slot borrows none (only one the holder
-  # lent its slot to before keeps the loan).
+  # that one, but for a sibling under the same epic: the holder already counts as the epic's
+  # sub-ticket in progress, so the sibling it waits on borrows the holder's turn of the epic's slot
+  # instead of needing one more (TP-1635). A ticket already in progress on its own slot borrows none
+  # (only one the holder lent its slot to before keeps the loan), and neither does the holder's own
+  # ancestor, which would make a cycle of the parents.
   defp lend_slots(parents, %State{} = state, ids) do
     in_progress = occupied_slot_ids(state)
     previous = state.slot_parents || %{}
@@ -4580,14 +4583,19 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp lends?(waited, holder_id, in_progress, parents, previous) do
-    waited != holder_id and is_nil(Slots.through(waited, in_progress, parents)) and
+    via = Slots.through(waited, in_progress, parents)
+
+    waited != holder_id and waited not in Slots.ancestors(holder_id, parents) and
+      (is_nil(via) or via == Slots.through(holder_id, in_progress, parents)) and
       (not MapSet.member?(in_progress, waited) or Map.get(previous, waited) == holder_id)
   end
 
   # The ticket whose turn it is, by issue id, among the pass's `ordered` candidates: the first one in
   # progress, running through an ancestor's slot, free to start, or held only by a wait on a
   # dependency or its sub-tickets (`SymphonyElixir.Dispatch.Slots.waits_in_slot?/1`). A ticket a
-  # rule, a pause or anything else holds is passed over: it is not its turn. Nil when none is.
+  # rule, a pause or anything else holds is passed over: it is not its turn. So is a ticket that has
+  # not started and waits on a dependency that needs a slot to run (`yields_slot?/2`): the dependency
+  # goes first, through the slot it would have taken (TP-1635). Nil when none is.
   defp queue_head(ordered, %State{} = state, active_states, terminal_states) do
     Enum.find_value(ordered, fn
       %Issue{id: issue_id} = issue ->
@@ -4603,7 +4611,25 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp head_id(%Issue{id: issue_id}, nil, _state), do: issue_id
-  defp head_id(%Issue{id: issue_id} = issue, gate, state), do: if(Slots.waits_in_slot?(gate) and is_nil(taken_gate(issue, state)), do: issue_id)
+
+  defp head_id(%Issue{id: issue_id} = issue, gate, state) do
+    if Slots.waits_in_slot?(gate) and is_nil(taken_gate(issue, state)) and not yields_slot?(state, issue), do: issue_id
+  end
+
+  # Whether a ticket that has not started (still in Todo: its work begins with the move to In
+  # Progress, and a Conductor turn before it leaves it there) waits on an open stored dependency that
+  # is not in progress (`SymphonyElixir.Dispatch.DependsOn.open_for/1`): one that needs a slot to
+  # run. Such a ticket holds no slot, its own or its epic's, so the dependency can start through it
+  # (TP-1635). A dependency done and waiting for its release is not open, and one in progress runs on
+  # a slot of its own: the ticket may take the free slot and wait there for either.
+  defp yields_slot?(%State{} = state, %Issue{id: issue_id, state: issue_state}) do
+    is_binary(issue_state) and normalize_issue_state(issue_state) == "todo" and dependency_needs_slot?(state, issue_id)
+  end
+
+  defp dependency_needs_slot?(%State{} = state, issue_id) do
+    in_progress = occupied_slot_ids(state)
+    Enum.any?(DependsOn.open_for(issue_id), fn {%{issue_id: id}, _record} -> not MapSet.member?(in_progress, id) end)
+  end
 
   # The first ticket of the queue that cannot start because it waits on a dependency or on its
   # sub-tickets takes the free slot with no run and waits there; its run starts once the wait is
@@ -5481,7 +5507,10 @@ defmodule SymphonyElixir.Orchestrator do
   # no longer among them (done, moved out of the active states, removed; a plan in its review waits
   # on the person and keeps it) gives its slot up, and so does one a person stopped
   # (`Slots.releases?/2`). A ticket that waits on the person, on its sub-tickets or on another ticket
-  # keeps it. Only a warm read judges absence: a cold one offers no candidates at all.
+  # keeps it, but for a ticket that has not started and got a stored dependency that needs the slot
+  # (`yields_slot?/2`): it gives the slot back, in the cycle the dependency's write asks for, so the
+  # dependency starts through it (TP-1635). Only a warm read judges absence: a cold one offers no
+  # candidates at all.
   defp release_slots(%State{} = state, issues, warm?) do
     by_id = for %Issue{id: issue_id} = issue <- issues, into: %{}, do: {issue_id, issue}
     active_states = active_state_set()
@@ -5527,6 +5556,9 @@ defmodule SymphonyElixir.Orchestrator do
 
       Slots.releases?(gate, reasons) ->
         release_slot(state, issue_id, elem(gate, 0))
+
+      yields_slot?(state, issue) ->
+        release_slot(state, issue_id, "it waits, before its first run, on a dependency that needs the slot")
 
       true ->
         holder = %{holder | state: issue.state, identifier: issue.identifier}
