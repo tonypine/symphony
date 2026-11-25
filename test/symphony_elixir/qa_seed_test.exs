@@ -252,7 +252,8 @@ defmodule SymphonyElixir.QaSeedTest do
 
     assert [checked, walked] = Enum.filter(by_type.("step.completed"), &(&1.run_id == "qa-seed-qa-QA-104"))
     assert %{result: %{status: "pass", measures: [%{name: "Rows shown", value: 3, unit: "rows"}]}} = checked.payload
-    assert [%{step: 2, status: "pass"}, %{step: 3, status: "fail", measures: [%{value: 0, unit: "pt", expected: 80}]}] = walked.payload.results
+    assert [%{step: 2, status: "pass"}, %{step: 3, status: "fail", measures: [label_width]}] = walked.payload.results
+    assert %{value: 0, unit: "pt", expected: 80} = label_width
     assert Enum.all?(events, &(&1.repo_key == repo_key))
   end
 

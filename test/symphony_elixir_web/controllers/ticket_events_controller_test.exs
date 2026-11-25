@@ -622,7 +622,8 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
     ]
 
     verdict = %{kind: "code_review", outcome: "rework", head: "bbb2222", findings: findings, comments: ["Restore the filter after the settings load."], unread_files: ["docs/settings.md"]}
-    check_result = %{status: "pass", expected: expected, actual: "It is Failed", measures: [%{name: "Rows shown", value: 3, unit: "rows", expected: 3}]}
+    rows_shown = %{name: "Rows shown", value: 3, unit: "rows", expected: 3}
+    check_result = %{status: "pass", expected: expected, actual: "It is Failed", measures: [rows_shown]}
 
     results = [
       %{step: 2, status: "pass", actual: "Clearing the filter shows every row"},
