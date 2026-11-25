@@ -357,6 +357,10 @@ defmodule SymphonyElixir.QaAgentTest do
       "/bin/sh", ["-c", _script, "sh", _build_dir, "App.app", dest], _opts ->
         {:ok, {"symphony-qa-app:#{dest}/App.app/Contents/MacOS/App\n", 0}}
 
+      # `qa_check_app` reads the app's element report; this app wrote none.
+      "/bin/sh", ["-c", _script, "sh", _qa_root, _pid, _taken], _opts ->
+        {:ok, {"symphony-qa-no-report\n", 0}}
+
       "/usr/bin/plutil", _args, _opts ->
         {:ok, {"App\n", 0}}
 
