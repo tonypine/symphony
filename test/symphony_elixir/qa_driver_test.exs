@@ -648,6 +648,13 @@ defmodule SymphonyElixir.QaDriverTest do
 
       broken_git = start_driver(worktree, git: fn _args, _cwd -> {"fatal: not a git repository", 128} end)
       assert error_code(QaDriver.call_tool(broken_git, "qa_build", %{})) == "qa_git_failed"
+
+      long_output = String.duplicate("x", 600) <> "fatal: end"
+      noisy_git = start_driver(worktree, git: fn _args, _cwd -> {long_output, 128} end)
+      assert {:error, {:qa_tool, "qa_git_failed", message}} = QaDriver.call_tool(noisy_git, "qa_build", %{})
+      assert message =~ "git status failed (exit 128): …"
+      assert String.ends_with?(message, "fatal: end")
+      refute message =~ String.duplicate("x", 600)
     end
 
     test "refuses gitignored files the agent planted or changed", %{worktree: worktree} do
