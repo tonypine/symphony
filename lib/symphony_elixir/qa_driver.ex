@@ -15,7 +15,9 @@ defmodule SymphonyElixir.QaDriver do
     dispatch) is asked for first; meanwhile the driver calls `:heartbeat`, so the
     run's stall check sees it working. A build that failed is the tool's result,
     one that could not run is `qa_build_unavailable`, and a stored app gone from
-    the QA host is built once more. It refuses a worktree with edits outside
+    the QA host is built once more. The pass's first `qa_build` of a commit tries
+    once more a build that could not run before (`ask_again: true`), whoever
+    started the pass, so an old record never fails it untried. It refuses a worktree with edits outside
     `qa-evidence/` and the folders Symphony itself creates there (see
     `SymphonyElixir.AgentEnv.owned_dirs/0`), gitignored files included: none may
     exist before the first `qa_build`, and after one none may appear or change;
@@ -681,8 +683,14 @@ defmodule SymphonyElixir.QaDriver do
   defp run_tool("qa_build", driver, config, _args) do
     with :ok <- ensure_clean_worktree(config, GenServer.call(driver, :ignored)),
          {:ok, head} <- worktree_head(config) do
-      config |> prebuilt(head, []) |> use_build(driver, config, head, :first)
+      config |> prebuilt(head, ask_again(driver, head)) |> use_build(driver, config, head, :first)
     end
+  end
+
+  # A pass's first ask for a commit's build tries a build that could not run again, whoever started
+  # the pass; a later ask in the same pass takes the record that attempt left.
+  defp ask_again(driver, head) do
+    if GenServer.call(driver, {:first_ask, head}), do: [ask_again: true], else: []
   end
 
   defp run_tool("qa_launch_app", driver, config, args) do
@@ -1078,7 +1086,8 @@ defmodule SymphonyElixir.QaDriver do
 
   # The app Symphony built for the worktree's HEAD (`SymphonyElixir.QaBuild`): the pass never builds
   # it itself. `fetch` asks for the build when nobody did (the head moved after dispatch) and waits
-  # while it is queued or runs, telling the run it is working meanwhile.
+  # while it is queued or runs, telling the run it is working meanwhile. The pass's first ask
+  # (`ask_again: true`) tries again a build that could not run.
   defp prebuilt(%{repo_key: repo_key, ticket: %{identifier: identifier} = ticket} = config, head, opts) when is_binary(repo_key) and is_binary(identifier) do
     Logger.info("QA driver takes the app Symphony builds for this commit #{config.log_context} repo_key=#{repo_key} head_sha=#{head}")
     config.qa_build.fetch(repo_key, head, ticket, [heartbeat: config.heartbeat] ++ opts)
@@ -2224,6 +2233,8 @@ defmodule SymphonyElixir.QaDriver do
     state = Map.merge(state, %{roots: %{1 => Map.get(state.config, :qa_root)}, last_root: 1})
     # Requests taken from each root's logs that no qa_api_requests call returned yet.
     state = Map.put(state, :held_requests, %{})
+    # The commits whose build this pass asked for: only its first ask tries again.
+    state = Map.put(state, :asked, MapSet.new())
     state = Map.put(state, :host_check, check_tools(state.config))
     {:ok, open_tunnel(state, @tunnel_attempts)}
   end
@@ -2330,6 +2341,9 @@ defmodule SymphonyElixir.QaDriver do
 
   def handle_call({:record_build, built, ignored}, _from, state),
     do: {:reply, :ok, %{state | build: built, ignored: ignored}}
+
+  def handle_call({:first_ask, head}, _from, state),
+    do: {:reply, not MapSet.member?(state.asked, head), %{state | asked: MapSet.put(state.asked, head)}}
 
   def handle_call({:record_ignored, ignored}, _from, state), do: {:reply, :ok, %{state | ignored: ignored}}
   def handle_call({:record_pair, pair}, _from, state), do: {:reply, :ok, %{state | pair: pair}}

@@ -29,8 +29,16 @@ defmodule SymphonyElixir.QaBuild do
   `:ready` and `:failed` are final: the files did not change, so the same tree is never built
   again. An `:unavailable` record (by tree, or by commit when the commit's tree could not be read)
   stays until something new happens: a new head asks for the tree again, Symphony's start forgets
-  every one, and a person who lifts its hold in the Director asks for it again (`retry/4`). The
-  `:building` records a previous run of Symphony left are asked for again when this one starts.
+  every one, a person who lifts its hold in the Director asks for it again (`retry/4`), and so does
+  each new QA pass, whoever started it, the first time it asks for the commit's build (`fetch/4`
+  with `ask_again: true`): the pass gets the outcome of a new attempt, never the old record, and a
+  build that is unavailable again stays so until the next pass. The `:building` records a previous
+  run of Symphony left are asked for again when this one starts.
+
+  The commit is read in the ticket's workspace folder only once the folder exists: a ticket whose
+  workspace is missing (the age GC reclaimed it, a person deleted it) has its commit read once a
+  run made the workspace again, so a read that would fail only because the folder is not there yet
+  leaves no record (`workspace/2`, `workspace?/2`).
 
   A ticket's head that moves cancels the build of its old tree when no other ticket's head and no
   waiting QA pass needs that tree: the build is killed on the QA host (`SymphonyElixir.QaBuild.Store.cancel/3`)
@@ -113,8 +121,8 @@ defmodule SymphonyElixir.QaBuild do
 
   @doc """
   Starts the builder. Options: `:name`, `:run_store`, `:task_supervisor`, and the functions it
-  works through, each with a production default: `:plan` (`plan/1`), `:workspace` (`repo_key,
-  identifier -> {:ok, path} | {:error, term}`), `:tree` (`tree/3` with the default git), `:paths`
+  works through, each with a production default: `:plan` (`plan/1`), `:workspace` (`workspace/2`:
+  `repo_key, identifier -> {:ok, path} | {:error, :no_workspace | term}`), `:tree` (`tree/3` with the default git), `:paths`
   (`paths/4` with the default git), `:selects` (`repo_key, issue, paths -> boolean`, whether the QA
   pass selects the `macos_app` playbook), `:build`
   (`SymphonyElixir.QaBuild.Store.build/2`), `:cancel` (`SymphonyElixir.QaBuild.Store.cancel/3`) and
@@ -140,8 +148,10 @@ defmodule SymphonyElixir.QaBuild do
   asking for it first when nobody did: the QA pass's `qa_build` waits here. Nil when the build was
   cancelled, the repository has nothing to build or the builder is not running. While it waits it
   calls `:heartbeat` every `:heartbeat_ms` (default 30 seconds), so the run's stall check sees it
-  working. `rebuild: true` builds again a tree whose stored app is gone from the QA host. Options:
-  `:server`, `:heartbeat`, `:heartbeat_ms`, `:rebuild`.
+  working. `rebuild: true` builds again a tree whose stored app is gone from the QA host.
+  `ask_again: true` (a QA pass's first ask for the commit) forgets an `:unavailable` record of the
+  commit or of its tree first, as `retry/4` does, so the build is tried again. Options: `:server`,
+  `:heartbeat`, `:heartbeat_ms`, `:rebuild`, `:ask_again`.
   """
   @spec fetch(String.t(), String.t(), ticket(), keyword()) :: record() | nil
   def fetch(repo_key, sha, %{identifier: identifier} = ticket, opts) when is_binary(repo_key) and is_binary(sha) and is_binary(identifier) do
@@ -152,7 +162,8 @@ defmodule SymphonyElixir.QaBuild do
       pid ->
         ref = make_ref()
         monitor = Process.monitor(pid)
-        :ok = GenServer.call(pid, {:fetch, repo_key, sha, Map.put(ticket, :reply_to, {self(), ref}), Keyword.get(opts, :rebuild, false)}, :infinity)
+        ask = Keyword.take(opts, [:rebuild, :ask_again])
+        :ok = GenServer.call(pid, {:fetch, repo_key, sha, Map.put(ticket, :reply_to, {self(), ref}), ask}, :infinity)
         await(monitor, ref, opts)
     end
   end
@@ -183,6 +194,25 @@ defmodule SymphonyElixir.QaBuild do
   catch
     :exit, _not_running -> :ok
   end
+
+  @doc """
+  The ticket's workspace folder, where its commits are read: `{:error, :no_workspace}` while the
+  folder does not exist (no run made it yet, or it was removed and not made again).
+  """
+  @spec workspace(String.t(), String.t()) :: {:ok, Path.t()} | {:error, term()}
+  def workspace(repo_key, identifier) do
+    with {:ok, path} <- Workspace.local_path_for_issue(identifier, repo_key) do
+      if File.dir?(path), do: {:ok, path}, else: {:error, :no_workspace}
+    end
+  end
+
+  @doc """
+  Whether `repo_key`'s ticket `identifier` has a workspace folder its commits can be read in
+  (`workspace/2`). The QA dispatch gate lets a ticket with none dispatch: its run makes the
+  workspace, and its pass asks for the build. Options: `:workspace`.
+  """
+  @spec workspace?(String.t(), String.t(), keyword()) :: boolean()
+  def workspace?(repo_key, identifier, opts \\ []), do: match?({:ok, _path}, Keyword.get(opts, :workspace, &workspace/2).(repo_key, identifier))
 
   @doc "Whether the builder runs and `repo_key` has something to build (`plan/1`). Options: `:server`, `:plan`."
   @spec builds?(String.t(), keyword()) :: boolean()
@@ -313,7 +343,7 @@ defmodule SymphonyElixir.QaBuild do
       store: Keyword.get(opts, :run_store, RunStore),
       task_supervisor: Keyword.get(opts, :task_supervisor, SymphonyElixir.TaskSupervisor),
       plan_fun: Keyword.get(opts, :plan, &plan/1),
-      workspace_fun: Keyword.get(opts, :workspace, &Workspace.local_path_for_issue(&2, &1)),
+      workspace_fun: Keyword.get(opts, :workspace, &workspace/2),
       tree_fun: Keyword.get(opts, :tree, &tree/2),
       paths_fun: Keyword.get(opts, :paths, &paths/3),
       selects_fun: Keyword.get(opts, :selects, &selects?/3),
@@ -358,18 +388,18 @@ defmodule SymphonyElixir.QaBuild do
   def handle_cast({:request, repo_key, sha, ticket}, state), do: {:noreply, request_build(state, repo_key, sha, ticket)}
 
   @impl true
-  def handle_call({:fetch, repo_key, sha, ticket, rebuild?}, _from, state) do
-    if rebuild?, do: forget_gone(state, repo_key, sha)
+  def handle_call({:fetch, repo_key, sha, ticket, ask}, _from, state) do
+    if Keyword.get(ask, :rebuild), do: forget_gone(state, repo_key, sha)
+
+    if Keyword.get(ask, :ask_again) && forget_unavailable(state, repo_key, sha) do
+      Logger.info("QA build asked for again by a new QA pass repo_key=#{repo_key} head_sha=#{sha} #{issue_context([ticket])}")
+    end
+
     {:reply, :ok, request_build(state, repo_key, sha, ticket)}
   end
 
   def handle_call({:retry, repo_key, sha, ticket}, _from, state) do
-    case read(state.store, {:qa_build_head, repo_key, sha}) do
-      %{status: :unavailable} -> forget(state, {:qa_build_head, repo_key, sha})
-      %{tree: tree} -> if match?(%{status: :unavailable}, read(state.store, {:qa_build, repo_key, tree})), do: forget(state, {:qa_build, repo_key, tree})
-      nil -> :ok
-    end
-
+    forget_unavailable(state, repo_key, sha)
     Logger.info("QA build asked for again by a person repo_key=#{repo_key} head_sha=#{sha} #{issue_context([ticket])}")
     {:reply, :ok, request_build(state, repo_key, sha, Map.put(ticket, :held, true))}
   end
@@ -383,6 +413,21 @@ defmodule SymphonyElixir.QaBuild do
     else
       _not_failed_or_done -> {:reply, :already, state}
     end
+  end
+
+  # The build of a commit that could not run, by commit or by its tree, is forgotten, so the request
+  # that follows reads or builds it again. True when there was one.
+  defp forget_unavailable(state, repo_key, sha) do
+    case read(state.store, {:qa_build_head, repo_key, sha}) do
+      %{status: :unavailable} -> forget_key(state, {:qa_build_head, repo_key, sha})
+      %{tree: tree} -> match?(%{status: :unavailable}, read(state.store, {:qa_build, repo_key, tree})) and forget_key(state, {:qa_build, repo_key, tree})
+      nil -> false
+    end
+  end
+
+  defp forget_key(state, key) do
+    forget(state, key)
+    true
   end
 
   # A ready tree whose stored app the QA pass did not find is built again.
@@ -480,6 +525,16 @@ defmodule SymphonyElixir.QaBuild do
     write(state, {:qa_build_head, repo_key, sha}, record)
     list(state, @unavailable_index, {:qa_build_head, repo_key, sha})
     answer(state, tickets, record)
+    %{state | heads: heads}
+  end
+
+  # The ticket has no workspace folder to read the commit in yet: nothing is recorded, so the read
+  # runs once a run made the workspace and its pass asks. Everyone asking is answered with no
+  # record, and a held ticket is released: the dispatch gate lets a ticket with no workspace go.
+  defp no_workspace(state, {repo_key, sha} = head) do
+    {tickets, heads} = Map.pop(state.heads, head)
+    Logger.info("QA build waits for the ticket's workspace: its folder does not exist yet repo_key=#{repo_key} head_sha=#{sha} #{issue_context(tickets)}")
+    answer(state, tickets, nil)
     %{state | heads: heads}
   end
 
@@ -602,6 +657,7 @@ defmodule SymphonyElixir.QaBuild do
 
     case result do
       {:ok, tree, paths} -> {:noreply, tree_read(state, head, tree, paths)}
+      {:error, :no_workspace} -> {:noreply, no_workspace(state, head)}
       {:error, reason} -> {:noreply, tree_unread(state, head, if(is_binary(reason), do: reason, else: inspect(reason)))}
     end
   end

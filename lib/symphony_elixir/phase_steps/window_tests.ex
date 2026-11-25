@@ -18,7 +18,8 @@ defmodule SymphonyElixir.PhaseSteps.WindowTests do
   A run of the step (`run/2`):
 
   1. builds the workspace's `HEAD` with the QA build (`SymphonyElixir.QaBuild.fetch/4`: the host
-     command a QA pass's build uses, cached by tree, so the QA pass of the same head reuses it);
+     command a QA pass's build uses, cached by tree, so the QA pass of the same head reuses it; a
+     build that could not run before is tried again, once per run of the step);
   2. takes the QA VM (`SymphonyElixir.QaDriver.DevServerLease`, key `{worker_host, :desktop}`, which
      every `macos_app` QA pass holds for its whole pass), waiting while a QA pass holds it and
      saying so on the ticket's timeline, with the ticket that holds it;
@@ -295,11 +296,12 @@ defmodule SymphonyElixir.PhaseSteps.WindowTests do
   end
 
   # The QA build of `sha`: its app on the QA VM. A build the change broke fails the step back to the
-  # code; one the VM could not run, or a builder that is not running, could not run.
+  # code; one the VM could not run, or a builder that is not running, could not run. Each run of the
+  # step asks again for a build that could not run before, as a QA pass does.
   defp build(context, sha, opts, what) do
     ticket = %{identifier: Map.get(context, :identifier) || context.issue_id, issue_id: context.issue_id}
 
-    case Keyword.get(opts, :fetch, &QaBuild.fetch/4).(context.repo_key, sha, ticket, []) do
+    case Keyword.get(opts, :fetch, &QaBuild.fetch/4).(context.repo_key, sha, ticket, ask_again: true) do
       %{status: :ready, app: app} ->
         {:ok, app}
 
