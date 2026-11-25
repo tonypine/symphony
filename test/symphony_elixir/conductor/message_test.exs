@@ -190,6 +190,18 @@ defmodule SymphonyElixir.Conductor.MessageTest do
       assert [%{parent: ^from}] = events(ctx.issue_id, "conductor.update")
     end
 
+    test "a message as long as TP-1597's new ask (5,296 characters) reaches the turn whole and becomes the ask word for word (TP-1621)", ctx do
+      long = String.slice(String.duplicate("Keep the search text and the sort order too. ", 200), 0, 5_296)
+      assert String.length(long) == 5_296
+      message = say!(ctx.issue_id, long)
+
+      assert answer(ctx.record, message, opts(%{"message" => reply(%{"ask" => true, "plan" => answered_plan()})})) == :ok
+
+      assert_received {:turn, "message", prompt}
+      assert facts_of(prompt)["message"]["text"] == long
+      assert [_linear, %{source: "message", text: ^long}] = TicketPlan.ask(ctx.issue_id)
+    end
+
     test "a plan the ledger refuses is said in plain words, and nothing is written", ctx do
       turn = %{issue_id: ctx.issue_id, repo_key: "default", junction: "message", message: %{event: say!(ctx.issue_id)}}
       refused = Message.write_plan(turn, issue(ctx.record), %{plan: %{summary: "No checks."}, ask: true}, "run-x")
