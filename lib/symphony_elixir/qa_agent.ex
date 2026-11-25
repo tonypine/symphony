@@ -536,35 +536,47 @@ defmodule SymphonyElixir.QaAgent do
   # `SymphonyElixir.QaPolicy` already found nothing on screen it marks the `macos_app` playbook
   # `scope: :none`, and the agent is told up front that build and launch are the whole check. The
   # epic review judges the merged result and keeps its own target rule.
+  # Built from the driver's tools (`PromptTerms`), as the prompts around them are.
+  @scope_none_by_policy PromptTerms.build!(
+                          "lib/symphony_elixir/qa_agent.ex: nothing on screen, by the QA policy",
+                          """
+
+                          Nothing on screen to judge:
+                          Symphony's QA policy found that this PR changes none of the paths of the playbooks below and
+                          the ticket has no `## User walkthrough`, so build and launch are the whole check. Build the
+                          app with `qa_build`, launch it with `qa_launch_app`, call `qa_check_app` once it has started,
+                          then `qa_quit_app`. Skip the design check. Answer `pass` with
+                          `"scope": "none"` when the app built, launched and `qa_check_app` found it healthy, with a
+                          `reason` saying so; `fail` when it did not build or start, with what happened in `findings`.
+                          """,
+                          PromptTerms.terms()
+                        )
+  @scope_none_macos PromptTerms.build!(
+                      "lib/symphony_elixir/qa_agent.ex: nothing on screen",
+                      """
+
+                      Nothing on screen to judge:
+                      When neither the diff nor the ticket names a walkthrough step or a screen (no window, page,
+                      panel or menu changes, and no step says `Proved by: QA`), there is nothing to judge by sight.
+                      Then build the app with `qa_build`, launch it with `qa_launch_app`, call `qa_check_app` once it
+                      has started, then `qa_quit_app`, and answer `pass` with `"scope": "none"` and a `reason` such
+                      as "the change touches no screen; the app built and launched; nothing to judge by sight".
+                      Symphony accepts that pass only when the build, the launch and a healthy `qa_check_app` all
+                      ran; without them it reports the pass `inconclusive`. A pass that judged any screen judged it
+                      at the QA target, after `qa_resize_window` set it, and one without that is `inconclusive` too.
+                      """,
+                      PromptTerms.terms()
+                    )
+
   defp scope_section(%{epic_review: true}), do: ""
 
   defp scope_section(job) do
     cond do
       policy_scope_none?(job) ->
-        """
-
-        Nothing on screen to judge:
-        Symphony's QA policy found that this PR changes none of the paths of the playbooks below and
-        the ticket has no `## User walkthrough`, so build and launch are the whole check. Build the
-        app with `qa_build`, launch it with `qa_launch_app`, call `qa_check_app` once it has started,
-        then `qa_quit_app`. Skip the design check. Answer `pass` with
-        `"scope": "none"` when the app built, launched and `qa_check_app` found it healthy, with a
-        `reason` saying so; `fail` when it did not build or start, with what happened in `findings`.
-        """
+        @scope_none_by_policy
 
       macos_app?(job) ->
-        """
-
-        Nothing on screen to judge:
-        When neither the diff nor the ticket names a walkthrough step or a screen (no window, page,
-        panel or menu changes, and no step says `Proved by: QA`), there is nothing to judge by sight.
-        Then build the app with `qa_build`, launch it with `qa_launch_app`, call `qa_check_app` once it
-        has started, then `qa_quit_app`, and answer `pass` with `"scope": "none"` and a `reason` such
-        as "the change touches no screen; the app built and launched; nothing to judge by sight".
-        Symphony accepts that pass only when the build, the launch and a healthy `qa_check_app` all
-        ran; without them it reports the pass `inconclusive`. A pass that judged any screen judged it
-        at the QA target, after `qa_resize_window` set it, and one without that is `inconclusive` too.
-        """
+        @scope_none_macos
 
       true ->
         ""

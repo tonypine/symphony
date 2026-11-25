@@ -186,6 +186,34 @@ defmodule SymphonyElixir.QaAgent.Steps do
                        "{{status:unprovable}}",
                        PromptTerms.terms(statuses: @statuses)
                      )
+  # The fixed texts around the walk, design check and review prompts that name QA tools, built from
+  # the driver's tools (`PromptTerms`) so a tool the driver no longer serves does not compile. Their
+  # run-time parts are kept markers, filled by `around_text/2`.
+  @around_texts Map.new(
+                  [
+                    launched:
+                      "The app: Symphony launched it for this session as PID {{pid}} (QA root {{root}}), running now, {{where}} " <>
+                        "{{health}}{{relaunch}}",
+                    launch_failed:
+                      "The app: Symphony could not launch it for this session ({{why}}), so no app is running for you. " <>
+                        "Launch it with `qa_launch_app` in the step's setting, with its page as `page`, when the step needs it.",
+                    not_launched: "The app: Symphony has not launched it for this step; launch it with `qa_launch_app` when the step needs it.",
+                    relaunch_by_brief:
+                      "When your brief's `launch` (in the design check, the briefs' fixtures and stand-ins) names another state " <>
+                        "(`api_fixtures`, `environment`, a page, an appearance, a window size or stand-ins), quit it with `qa_quit_app`, call " <>
+                        "`qa_launch_app` with those arguments and the page as `page`, then `qa_resize_window` (with the brief's size, or no size for the target). " <>
+                        "Otherwise use it as it is and open the page the step needs.",
+                    relaunch_in_setting:
+                      "Use it as it is: do not quit and relaunch it to reach this setting. Relaunch only for what the setting does not state " <>
+                        "(a stand-in port, `fresh_root`, another appearance or size in `also`), and then pass the page to `qa_launch_app` as `page`.",
+                    unhealthy: "`qa_check_app` found it unhealthy at launch: {{health}}. ",
+                    review_answer: "Write a recheck, or the verdict when `qa_verdict` is not available, to `{{path}}`.",
+                    no_verdict: "no verdict was recorded with `qa_verdict`, and {{why}}"
+                  ],
+                  fn {key, text} ->
+                    {key, PromptTerms.build!("lib/symphony_elixir/qa_agent/steps.ex: the #{key} text", text, PromptTerms.terms(statuses: @statuses), keep: ~w(pid root where health relaunch why path))}
+                  end
+                )
 
   @typedoc "What a stepped pass gives back: `QaAgent.run_result/0`'s, with the review's session (`session_id`)."
   @type run_result :: %{result: QaAgent.result(), tokens: map(), session_id: String.t() | nil}
@@ -1178,7 +1206,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
         verdict -> verdict |> Verdict.from_map() |> verdict_answer()
       end
     else
-      {:error, why} -> {:error, "no verdict was recorded with `qa_verdict`, and #{why}"}
+      {:error, why} -> {:error, around_text(:no_verdict, why: why)}
     end
   end
 
@@ -1533,7 +1561,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
       QaAgent.prompt_parts(state.job, parent(state), [:issue, :unprovable]),
       "Symphony's own steps of this pass, and how each step ended:\n" <> Enum.map_join(state.results, "\n", &result_line/1),
       marked_facts(state.marked, :review),
-      "Write a recheck, or the verdict when `qa_verdict` is not available, to `#{answer_path(state, %Step{id: @review})}`."
+      around_text(:review_answer, path: answer_path(state, %Step{id: @review}))
     ]
     |> Enum.reject(&(&1 == ""))
     |> Enum.join("\n\n")
@@ -1665,16 +1693,11 @@ defmodule SymphonyElixir.QaAgent.Steps do
   defp removed_pictures(_changes), do: ""
 
   defp app_line(%{session: {:launched, %{pid: pid, root: root} = app}}) do
-    "The app: Symphony launched it for this session as PID #{pid} (QA root #{root}), running now, #{where_text(app)} " <>
-      health_text(app.health) <> relaunch_text(app)
+    around_text(:launched, pid: to_string(pid), root: root, where: where_text(app), health: health_text(app.health), relaunch: relaunch_text(app))
   end
 
-  defp app_line(%{session: {:failed, why}}) do
-    "The app: Symphony could not launch it for this session (#{why}), so no app is running for you. Launch it with `qa_launch_app` " <>
-      "in the step's setting, with its page as `page`, when the step needs it."
-  end
-
-  defp app_line(_state), do: "The app: Symphony has not launched it for this step; launch it with `qa_launch_app` when the step needs it."
+  defp app_line(%{session: {:failed, why}}), do: around_text(:launch_failed, why: why)
+  defp app_line(_state), do: around_text(:not_launched, [])
 
   defp where_text(%{setting: nil}) do
     "on the default fixtures, at the QA target: its appearance, with its window sized to the target. The plan gives this step no setting, " <>
@@ -1688,17 +1711,8 @@ defmodule SymphonyElixir.QaAgent.Steps do
 
   # A session with no setting from the plan reaches its state from its brief, as before; a session
   # in a setting uses the app as it is.
-  defp relaunch_text(%{setting: nil}) do
-    "When your brief's `launch` (in the design check, the briefs' fixtures and stand-ins) names another state " <>
-      "(`api_fixtures`, `environment`, a page, an appearance, a window size or stand-ins), quit it with `qa_quit_app`, call " <>
-      "`qa_launch_app` with those arguments and the page as `page`, then `qa_resize_window` (with the brief's size, or no size for the target). " <>
-      "Otherwise use it as it is and open the page the step needs."
-  end
-
-  defp relaunch_text(_app) do
-    "Use it as it is: do not quit and relaunch it to reach this setting. Relaunch only for what the setting does not state " <>
-      "(a stand-in port, `fresh_root`, another appearance or size in `also`), and then pass the page to `qa_launch_app` as `page`."
-  end
+  defp relaunch_text(%{setting: nil}), do: around_text(:relaunch_by_brief, [])
+  defp relaunch_text(_app), do: around_text(:relaunch_in_setting, [])
 
   defp source_text(%{source: "live"}), do: "on the live server (`environment: live`)"
   defp source_text(%{source: "fixture", fixture: fixture}), do: "on the fixture `#{fixture}`"
@@ -1710,7 +1724,12 @@ defmodule SymphonyElixir.QaAgent.Steps do
     do: "on its first page: the setting's page (#{inspect(page)}) is not one Symphony can open at launch, so navigate there yourself"
 
   defp health_text(%{"healthy" => true}), do: ""
-  defp health_text(health), do: "`qa_check_app` found it unhealthy at launch: #{Jason.encode!(health)}. "
+  defp health_text(health), do: around_text(:unhealthy, health: Jason.encode!(health))
+
+  # One of `@around_texts`, its kept markers filled with the run's values.
+  defp around_text(key, fills) do
+    Enum.reduce(fills, Map.fetch!(@around_texts, key), fn {marker, value}, text -> String.replace(text, "{{#{marker}}}", to_string(value)) end)
+  end
 
   defp plan_facts(state) do
     walked =
