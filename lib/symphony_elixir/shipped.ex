@@ -3,28 +3,35 @@ defmodule SymphonyElixir.Shipped do
   The tickets merged over the last days, for `GET /api/v1/shipped` and the Mac app's Shipped view,
   from the run records and the tickets' signals ledger alone (no Linear request).
 
-  A ticket counts as merged when Symphony noted its `issue_completed` event, on the host's local
-  day, as `shipped_today` in `/api/v1/state` counts it, so today's count matches the Overview's
-  Shipped today. Its initiative is the plan ticket kept on its run when the completion was noted,
+  A ticket counts as merged once Symphony noted its `issue_completed` event (a cancelled ticket is
+  not), and on the host's local day of its done time (`done_at/2`): the first time its own ledger
+  shows its pull request merged (a `merge settled` move) or the ticket entering Done, else, for a
+  ticket whose ledger holds neither, when the completion was noted. The done time is read from the
+  ledger, which is only ever appended to, so noting the completion again (a restart, an update) does
+  not move it. Its initiative is the plan ticket kept on its run when the completion was noted,
   else the parent Symphony split that lists it (`SymphonyElixir.Initiatives`). Its time from Todo to Done
   runs from Symphony's first claim of it (the `claim` signal: the move out of Todo), else its first
   run, to the merge.
   """
 
   alias SymphonyElixir.{Initiatives, RunStore, ShippedToday, TicketState, URLUtils}
+  alias SymphonyElixir.TicketEvents.Event
 
   @default_days 7
   @max_days 90
   # The run that carries a ticket's completion can start well before the merge.
   @lookback_days 30
+  # The ledger events that can say when a ticket was done.
+  @done_event_types ["phase.entered", "ticket.moved"]
 
   @type payload :: map()
 
   @doc """
   The tickets merged in the `params["days"]` local days ending today (default #{@default_days}, at
   most #{@max_days}), newest first. `opts`: `:now` (a `DateTime`), `:to_local` (see
-  `SymphonyElixir.ShippedToday`), `:runs_started_on` (a UTC `Date` → runs function), `:issue_runs`
-  (a repo key and issue id → runs function), `:ticket_states` and `:initiatives`.
+  `SymphonyElixir.ShippedToday`), `:runs_started_on` (a UTC `Date` → runs function),
+  `:ticket_events` (an issue id → ledger events function), `:issue_runs` (a repo key and issue id →
+  runs function), `:ticket_states` and `:initiatives`.
   """
   @spec payload(map(), keyword()) :: {:ok, payload()} | {:error, :invalid_days}
   def payload(params, opts \\ []) when is_map(params) do
@@ -56,10 +63,11 @@ defmodule SymphonyElixir.Shipped do
   end
 
   @doc """
-  The latest run of each ticket, of every repo, whose `issue_completed` event Symphony noted on one
-  of the `days` local days ending today, newest completion first, with `from` and `today` (the first
-  and last of those days) and `local_date`, the function that turns a time into its local day.
-  `opts`: `:now`, `:to_local` and `:runs_started_on`, as `payload/2` takes them.
+  The latest run of each ticket, of every repo, whose `issue_completed` event Symphony noted and
+  whose done time (`done_at/2`, put on the run as `done_at`) is on one of the `days` local days
+  ending today, latest done first, with `from` and `today` (the first and last of those days) and
+  `local_date`, the function that turns a time into its local day. `opts`: `:now`, `:to_local`,
+  `:runs_started_on` and `:ticket_events`, as `payload/2` takes them.
   """
   @spec done_runs(pos_integer(), keyword()) :: %{
           from: Date.t(),
@@ -74,6 +82,7 @@ defmodule SymphonyElixir.Shipped do
     from = Date.add(today, 1 - days)
     dates = Date.range(from, today)
     runs_started_on = Keyword.get(opts, :runs_started_on, &RunStore.list_runs_started_on/1)
+    ticket_events = Keyword.get(opts, :ticket_events, &RunStore.list_ticket_events(&1, types: @done_event_types))
 
     runs =
       from
@@ -83,11 +92,34 @@ defmodule SymphonyElixir.Shipped do
       |> Enum.filter(&completed?/1)
       |> Enum.group_by(&{Map.get(&1, :repo_key), &1.issue_id})
       |> Enum.map(fn {_key, runs} -> Enum.max_by(runs, & &1.issue_completed_notified_at, DateTime) end)
-      |> Enum.filter(&(local_date.(&1.issue_completed_notified_at) in dates))
-      |> Enum.sort_by(& &1.issue_completed_notified_at, {:desc, DateTime})
+      |> Enum.map(&Map.put(&1, :done_at, done_at(&1, list_or_empty(ticket_events.(&1.issue_id)))))
+      |> Enum.filter(&(local_date.(&1.done_at) in dates))
+      |> Enum.sort_by(& &1.done_at, {:desc, DateTime})
 
     %{from: from, today: today, local_date: local_date, runs: runs}
   end
+
+  @doc """
+  When the ticket of `run` (a run whose completion Symphony noted) was done, from its ledger
+  `events`: the first `merge settled` move (its pull request merged, or a parent closed once its
+  sub-tickets ended) or move into Done, whichever came first; else, when the ledger holds neither,
+  the run's `issue_completed_notified_at`. Home's Recently done and the Shipped read both take it.
+  """
+  @spec done_at(map(), [Event.t()]) :: DateTime.t()
+  def done_at(%{issue_completed_notified_at: %DateTime{} = noted_at}, events) when is_list(events) do
+    events
+    |> Enum.filter(&done_event?/1)
+    |> Enum.map(& &1.at)
+    |> Enum.min(DateTime, fn -> noted_at end)
+  end
+
+  defp done_event?(%Event{type: type, payload: payload, at: %DateTime{}}) when type in @done_event_types do
+    Map.get(payload, :signal) == "merge settled" or done_phase?(Map.get(payload, :to))
+  end
+
+  defp done_event?(_event), do: false
+
+  defp done_phase?(to), do: is_binary(to) and String.downcase(String.trim(to)) == "done"
 
   defp local_date_fun(nil), do: &ShippedToday.local_date/1
   defp local_date_fun(to_local), do: &ShippedToday.local_date(&1, to_local)
@@ -122,7 +154,7 @@ defmodule SymphonyElixir.Shipped do
   defp ticket(run, context) do
     repo_key = Map.get(run, :repo_key)
     runs = [run | list_or_empty(context.issue_runs.(repo_key, run.issue_id))]
-    merged_at = run.issue_completed_notified_at
+    merged_at = run.done_at
     starts = for %{started_at: %DateTime{} = started_at} <- runs, do: started_at
     todo_at = Map.get(context.claims, {repo_key, run.issue_id}) || Enum.min(starts, DateTime, fn -> nil end)
 

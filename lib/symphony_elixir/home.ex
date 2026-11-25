@@ -68,7 +68,8 @@ defmodule SymphonyElixir.Home do
   - `:done_page`: the Recently done entries to give (`t:SymphonyElixir.Home.RecentlyDone.page/0`);
     default today's first page.
   - `:runs`, `:pull_request` and `:now`: as `SymphonyElixir.Home.Slots.entries/3` takes them; `:now`,
-    `:to_local` and `:runs_started_on` as `SymphonyElixir.Home.RecentlyDone.read/4` takes them.
+    `:to_local`, `:runs_started_on` and `:ticket_events` as `SymphonyElixir.Home.RecentlyDone.read/4`
+    takes them.
   """
   @spec read(order(), [map()], Situation.live_facts(), keyword()) :: map()
   def read(order, records, live, opts \\ []) when is_list(records) do
@@ -111,7 +112,7 @@ defmodule SymphonyElixir.Home do
       queue: Map.put(QueueRows.read(records, in_work, parents, live, page, moves: ctx.moves), :roots, queue(queued, in_progress_ids, ctx)),
       outside: Map.put(outside, :behind, length(behind)),
       slots: Map.put(walked_slots || %{}, :entries, SlotEntries.entries(records, live, slot_opts)),
-      recently_done: RecentlyDone.read(records, parents, done_page, Keyword.take(opts, [:now, :to_local, :runs_started_on]))
+      recently_done: RecentlyDone.read(records, parents, done_page, Keyword.take(opts, [:now, :to_local, :runs_started_on, :ticket_events]))
     }
   end
 
