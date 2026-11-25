@@ -139,7 +139,11 @@ defmodule SymphonyElixir.DirectorMovesTest do
     end)
 
     test_pid = self()
-    remove_workspace = fn workspace, worker_host, reason -> send(test_pid, {:remove_workspace, workspace, worker_host, reason}) && :ok end
+
+    remove_workspace = fn workspace, worker_host, reason ->
+      send(test_pid, {:remove_workspace, workspace, worker_host, reason})
+      :ok
+    end
 
     %{opts: [server: server, clock: fn -> :counters.get(clock, 1) end, github: FakeGitHub, remove_workspace: remove_workspace], clock: clock}
   end
