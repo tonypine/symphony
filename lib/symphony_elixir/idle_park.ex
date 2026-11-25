@@ -2,7 +2,10 @@ defmodule SymphonyElixir.IdlePark do
   @moduledoc """
   The park of an idle run: the agent runner holds a ticket whose last turns made no new commit and
   no state change in the phase it is in (`SymphonyElixir.AgentRunner`, `hold/6`). It never leaves
-  the phase, so the PR and CI watcher keeps watching it (TP-1175).
+  the phase, so the PR and CI watcher keeps watching it (TP-1175). A Rework a person answered a
+  question in is not parked when its run changes nothing: the runner hands its unchanged PR head
+  back to Code Review with the answer as the reason (TP-1596), as an answered QA rework goes back to
+  QA (TP-1579).
 
   A hold is a stop like a dispatch loop's (`SymphonyElixir.DispatchLoop`), so it asks its question
   through the one path (`SymphonyElixir.Questions`, `hold_question_attrs/3`): "Run it again"
