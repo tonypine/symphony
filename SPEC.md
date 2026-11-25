@@ -1728,7 +1728,8 @@ Fields:
   - Default: `null` (no reserve). Where new runs on the provider stop, as a share of any of its
     usage windows: a window at or above it puts the provider at its reserve, a headroom hold on its
     new runs until the window resets (Section 8.4.2). Only a provider whose usage Symphony reads
-    takes one (`anthropic`); the config is refused for any other, with a message naming the key.
+    takes one (`anthropic`, `opencode-go`); the config is refused for any other, with a message
+    naming the key.
 - `prompts.include_project_guides` (boolean)
   - Default: `true`.
   - When enabled, implementations MAY append a `## Project conventions` section to the rendered
@@ -2869,7 +2870,7 @@ not require recognizing or validating extension fields unless that extension is 
 - `execution.usage_limit.unknown_reset_retry_seconds`: integer `>= 60`, default `900`
 - `execution.usage_limit.sign_in_ask_after_seconds`: integer `>= 60`, default `1800`
 - `execution.providers.<provider>.reserve`: number in `(0, 1]` or null, default `null`; only for a
-  provider whose usage Symphony reads (`anthropic`). It replaces
+  provider whose usage Symphony reads (`anthropic`, `opencode-go`). It replaces
   `execution.usage_limit.headroom_utilization`, which a start migrates to
   `execution.providers.anthropic.reserve`.
 - `execution.harnesses`: map of harness (`claude`, `codex`, `opencode`) to `{command,
@@ -4601,6 +4602,16 @@ operator's own sessions: the provider is at its reserve.
 - Log `Usage limit headroom hold provider=… utilization=… reserve=…` when the hold is created,
   moved out or raised. Emit one `usage_limit_headroom` notification when it is created and one
   `usage_limit_resumed` when it clears.
+
+OpenCode Go's windows come from its usage API instead of a run's events (TP-1642):
+`GET https://opencode.ai/inference/go/v1/usage` with the provider's key, whose `rolling`, `weekly`
+and `monthly` meters (`status` `ok` or `rate-limited`, `percent`, `resetsAt`) become the windows
+`five_hour`, `seven_day` and `monthly` (`utilization = percent / 100`). Symphony reads it at startup,
+when a run on `opencode-go` starts or ends, and on that run's worker updates at most once a minute,
+never on a timer of its own, and only reads. The windows are kept under `opencode-go`, and with
+`execution.providers.opencode-go.reserve` set a window at or above it creates the headroom hold
+above under that provider, counting a `rate-limited` window too. A failed read keeps the last
+windows and holds or fails no run.
 - Show it in the status surfaces as `Holding new runs: Anthropic at its 90% reserve, resets ~14:05`,
   and as a blocker line `Anthropic at its 90% reserve: holding new runs`.
 - The Claude CLI only reports utilization once it passes its own warning threshold (seen at
@@ -5919,8 +5930,9 @@ SHOULD return:
   `provider`, `name`, `in_use` (a kind of run or one of its fallbacks names it), `paused` and
   `paused_since` (the Director's pause of the provider), `held` and `held_until` (a usage limit
   holds it, until the latest resume time of its holds), `usage_windows` (each window Symphony read
-  for it from its runs: `name`, `utilization` from 0 to 1, `resets_at`; empty when it can read
-  none), `harnesses` (those that reach it), `kinds` and `fallback_for` (the kinds of run whose own
+  for it from its runs or its usage API: `name`, `utilization` from 0 to 1, `resets_at`; shortest
+  first: `five_hour`, the `seven_day` weeks, `monthly`, then any other by name; empty when it can
+  read none), `harnesses` (those that reach it), `kinds` and `fallback_for` (the kinds of run whose own
   choice, or one of whose fallbacks, is on it), `working` (runs working on it now),
   `tokens_today` (its runs' tokens on the daily budget's UTC day), `reserve` (its
   `execution.providers.<provider>.reserve`, null when it has none or Symphony can't read its usage)

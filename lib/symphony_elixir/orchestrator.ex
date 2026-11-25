@@ -32,6 +32,7 @@ defmodule SymphonyElixir.Orchestrator do
     PlanComments,
     PlanReview,
     Providers,
+    ProviderUsage,
     PrReviewPoller,
     PrRun,
     PrWatch,
@@ -249,6 +250,9 @@ defmodule SymphonyElixir.Orchestrator do
       continuation_dispatch: nil,
       usage_limit_timers: %{},
       usage_windows: %{},
+      # When each provider whose usage Symphony reads from the provider itself last started a read
+      # (`SymphonyElixir.ProviderUsage`), so a working run reads it at most once a minute.
+      provider_usage_read_at: %{},
       api_outages: %{},
       self_heal_opts: [],
       # The update the menu bar app has ready, waiting for the moment Symphony picks for it
@@ -324,7 +328,12 @@ defmodule SymphonyElixir.Orchestrator do
       config_reload_handler: config_reload_handler
     }
 
-    state = state |> seed_watching_from_completed_run_metadata() |> arm_usage_limit_timers()
+    state =
+      state
+      |> seed_watching_from_completed_run_metadata()
+      |> arm_usage_limit_timers()
+      |> read_provider_usage_at_boot()
+
     # Before the first tick: a pause the release before set on its old row is in force.
     RunStore.move_legacy_pause() |> log_run_store_error("move the old operator pause onto Symphony's pause")
     clear_installed_update_pause(BuildInfo.current().version)
@@ -801,6 +810,7 @@ defmodule SymphonyElixir.Orchestrator do
           |> enforce_issue_budget(issue_id)
           |> clear_usage_limit_on_allowed_canary(issue_id, update)
           |> hold_for_usage_headroom(updated_running_entry, update)
+          |> read_provider_usage(updated_running_entry, false)
           |> persist_running_metadata(issue_id)
 
         notify_transcript(running_repo_key(state, updated_running_entry), issue_id, update)
@@ -810,6 +820,12 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp handle_info_message({:codex_worker_update, _issue_id, _update}, state), do: {:noreply, state}
+
+  defp handle_info_message({:provider_usage_read, provider, result}, %State{} = state) when is_binary(provider) do
+    state = handle_provider_usage_read(state, provider, result)
+    notify_dashboard()
+    {:noreply, state}
+  end
 
   # A run walking its step list (`SymphonyElixir.PhaseSteps`) between agent turns: on a machine
   # step, or on a step paused on a Question, its session ended and it holds no slot, so a cycle runs
@@ -914,6 +930,7 @@ defmodule SymphonyElixir.Orchestrator do
 
       issue_id ->
         {running_entry, state} = pop_running_entry(state, issue_id)
+        state = read_provider_usage(state, running_entry, true)
         Verification.release(Map.get(running_entry, :verification), "agent process exit")
         reason = held_exit(reason, running_entry)
         record_dispatch_outcome(running_entry, reason)
@@ -6464,6 +6481,7 @@ defmodule SymphonyElixir.Orchestrator do
             claimed: MapSet.put(state.claimed, issue.id),
             retry_attempts: Map.delete(state.retry_attempts, issue.id)
         }
+        |> read_provider_usage(running_entry, true)
 
       {:error, reason} ->
         Verification.release(verification, "agent task spawn failed")
@@ -11343,18 +11361,54 @@ defmodule SymphonyElixir.Orchestrator do
   # holding new runs on it until the window resets. A pause or canary already in place is left as it
   # is. The windows a run reports are Anthropic's (Claude Code's rate-limit events).
   defp hold_for_usage_headroom(%State{} = state, running_entry, %{usage_windows: %{} = windows}) do
-    case Schema.Execution.reserve(Config.settings!().execution, "anthropic") do
+    hold_at_reserve(state, "anthropic", windows, running_entry.identifier, [])
+  end
+
+  defp hold_for_usage_headroom(%State{} = state, _running_entry, _update), do: state
+
+  # `execution.providers.<provider>.reserve`, for `windows` read for `provider`.
+  defp hold_at_reserve(%State{} = state, provider, windows, identifier, opts) do
+    case Schema.Execution.reserve(Config.settings!().execution, provider) do
       threshold when is_number(threshold) ->
         windows
-        |> UsageLimit.headroom_crossings(threshold, state.clock.())
-        |> Enum.reduce(state, &put_usage_headroom(&2, &1, threshold, running_entry.identifier))
+        |> UsageLimit.headroom_crossings(threshold, state.clock.(), [provider: provider] ++ opts)
+        |> Enum.reduce(state, &put_usage_headroom(&2, &1, threshold, identifier))
 
       nil ->
         state
     end
   end
 
-  defp hold_for_usage_headroom(%State{} = state, _running_entry, _update), do: state
+  # A read of a provider's usage from the provider itself (`SymphonyElixir.ProviderUsage`): at boot,
+  # when a run on it starts or ends (`force?`), and on its worker updates at most once a minute.
+  defp read_provider_usage_at_boot(%State{} = state) do
+    Enum.reduce(ProviderUsage.providers(), state, fn provider, state ->
+      %{state | provider_usage_read_at: ProviderUsage.request(state.provider_usage_read_at, provider, state.clock.(), force: true)}
+    end)
+  end
+
+  defp read_provider_usage(%State{} = state, running_entry, force?) do
+    case Map.get(running_entry, :run_profile) do
+      %{provider: provider} ->
+        %{state | provider_usage_read_at: ProviderUsage.request(state.provider_usage_read_at, provider, state.clock.(), force: force?)}
+
+      _no_profile ->
+        state
+    end
+  end
+
+  # The windows read are kept under the provider and hold it at its reserve as Anthropic's do; a
+  # used-up window counts too, since no run's limit event holds the provider for it. A failed read
+  # keeps the last windows.
+  defp handle_provider_usage_read(%State{} = state, provider, {:ok, windows}) do
+    state = %{state | usage_windows: UsageLimit.remember_windows(state.usage_windows, windows, provider)}
+    hold_at_reserve(state, provider, windows, nil, statuses: ["allowed", "allowed_warning", "rejected"])
+  end
+
+  defp handle_provider_usage_read(%State{} = state, provider, {:error, reason}) do
+    ProviderUsage.log_failure(provider, reason)
+    state
+  end
 
   defp put_usage_headroom(%State{} = state, info, threshold, identifier) do
     key = UsageLimit.key(info)

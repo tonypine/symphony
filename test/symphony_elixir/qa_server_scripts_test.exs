@@ -4,6 +4,10 @@ defmodule SymphonyElixir.QaServerScriptsTest do
   # the QA host, by the QA pass's health check.
   use ExUnit.Case, async: true
 
+  alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.OpenRouter.Stub
+  alias SymphonyElixir.Providers
+
   @repo Path.expand("../..", __DIR__)
 
   setup do
@@ -16,9 +20,17 @@ defmodule SymphonyElixir.QaServerScriptsTest do
     File.cp_r!(Path.join(@repo, "priv/qa_seed/symphony"), Path.join(checkout, "priv/qa_seed/symphony"))
 
     # Records its arguments, its environment and what `gh` answers, as the server would call it.
+    # As `symphony openrouter-stub`, it prints the line the real stub prints once it listens, unless
+    # the test makes the stub fail.
     File.write!(Path.join(checkout, "bin/symphony"), """
     #!/bin/sh
     out="$SYMPHONY_TEST_OUT"
+    if [ "$1" = openrouter-stub ]; then
+      printf '%s\\n' "$@" > "$out/stub-args"
+      [ -n "$SYMPHONY_TEST_STUB_FAILS" ] && { echo "eaddrinuse"; exit 1; }
+      echo "OpenRouter QA stub listening on http://127.0.0.1:4555/api"
+      exit 0
+    fi
     printf '%s\\n' "$@" > "$out/args"
     env > "$out/env"
     gh pr view https://github.com/symphony-qa/seed/pull/450 --json id,number,state > "$out/gh-seed" 2>&1; echo "status:$?" >> "$out/gh-seed"
@@ -82,6 +94,35 @@ defmodule SymphonyElixir.QaServerScriptsTest do
     assert lines(ctx.out, "gh-close") == ["{}", "status:0"]
     assert lines(ctx.out, "gh-comments") == ["[]"]
     assert lines(ctx.out, "gh-other") == ["gh: the QA server reaches no GitHub", "status:1"]
+  end
+
+  test "OpenCode Go's usage is read from a QA stub beside the server, at the reserve the config sets", ctx do
+    assert {_output, 0} = start(ctx, [{"SYMPHONY_QA_CONTROL_TOKEN", "pass-token"}])
+
+    assert lines(ctx.out, "stub-args") == ["openrouter-stub", "--port", "0"]
+    env = for line <- lines(ctx.out, "env"), [name, value] <- [String.split(line, "=", parts: 2)], into: %{}, do: {name, value}
+    assert env["SYMPHONY_QA_OPENROUTER_URL"] == "http://127.0.0.1:4555/api"
+    assert env["OPENCODE_API_KEY"] == Stub.valid_key()
+    [config] = for {"--config", path} <- ctx.out |> lines("args") |> then(&Enum.zip(&1, tl(&1))), do: path
+    assert env["SYMPHONY_BAR_QA_ROOT"] == Path.dirname(config)
+    assert File.read!(config) =~ "  providers:\n    opencode-go:\n      reserve: 0.9\n"
+
+    # The server's settings load with the reserve: OpenCode Go takes one. It is every kind of run's
+    # fallback, so the Providers page lists it in use and reads its hold at the reserve.
+    assert {:ok, yaml} = config |> File.read!() |> YamlElixir.read_from_string()
+    assert {:ok, settings} = Schema.parse(yaml)
+    assert Providers.reserves(settings) == %{"opencode-go" => 0.9}
+
+    go = Enum.find(Providers.list(%{runs: Providers.configured_runs([settings])}), &(&1.provider == "opencode-go"))
+    assert %{in_use: true, kinds: [], fallback_for: fallback_for} = go
+    assert "implementation" in fallback_for and "code_review" in fallback_for
+  end
+
+  test "a stub that does not start stops the start with its output", ctx do
+    assert {output, 1} = start(ctx, [{"SYMPHONY_QA_CONTROL_TOKEN", "pass-token"}, {"SYMPHONY_TEST_STUB_FAILS", "1"}])
+    assert output =~ "the OpenRouter QA stub did not start:"
+    assert output =~ "eaddrinuse"
+    refute File.exists?(Path.join(ctx.out, "args"))
   end
 
   test "makes and prints a control token for a run by hand, and refuses to start without the escript or a port", ctx do

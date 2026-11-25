@@ -3,6 +3,7 @@ defmodule SymphonyElixir.OpenRouter.StubTest do
 
   import ExUnit.CaptureLog
 
+  alias SymphonyElixir.OpencodeGo.Usage
   alias SymphonyElixir.OpenRouter.Stub
   alias SymphonyElixir.TestSupport
 
@@ -50,6 +51,34 @@ defmodule SymphonyElixir.OpenRouter.StubTest do
     end
 
     assert_receive {:stub_log, "OpenRouter stub: GET /api/opencode-go/v1/models key=rejected status=401"}, 1_000
+  end
+
+  test "answers OpenCode Go's usage for the valid key only, as Symphony reads it in QA mode", %{url: url} do
+    response = request(:get, url <> "/opencode-go/v1/usage", valid_key())
+    assert response.status == 200
+    assert %{"usage" => %{"rolling" => rolling, "weekly" => weekly, "monthly" => monthly}} = Jason.decode!(response.body)
+    assert {rolling["percent"], weekly["percent"], monthly["percent"]} == {30, 92, 55}
+    assert Enum.all?([rolling, weekly, monthly], &(&1["status"] == "ok"))
+    {:ok, weekly_reset, 0} = DateTime.from_iso8601(weekly["resetsAt"])
+    assert DateTime.compare(weekly_reset, DateTime.utc_now()) == :gt
+    assert_receive {:stub_log, "OpenRouter stub: GET /api/opencode-go/v1/usage key=accepted status=200"}, 1_000
+
+    # Symphony's own reader takes the stub's answer as OpenCode Go's.
+    assert {:ok, %{"five_hour" => %{utilization: 0.3}, "seven_day" => %{utilization: 0.92, status: "allowed"}, "monthly" => %{utilization: 0.55}}} =
+             Usage.read(api_key: Stub.valid_key(), url: url <> "/opencode-go/v1/usage", request_fun: &Req.get/2)
+
+    for opts <- [[auth: {:bearer, "sk-go-made-up"}], []] do
+      assert request(:get, url <> "/opencode-go/v1/usage", opts).status == 401
+    end
+
+    assert_receive {:stub_log, "OpenRouter stub: GET /api/opencode-go/v1/usage key=rejected status=401"}, 1_000
+  end
+
+  test "OpenCode Go's usage resets on the minute, ahead of the request" do
+    usage = Stub.opencode_go_usage(~U[2026-11-25 10:15:42.123456Z])
+    assert usage["usage"]["rolling"]["resetsAt"] == "2026-11-25T12:15:00Z"
+    assert usage["usage"]["weekly"]["resetsAt"] == "2026-11-28T10:15:00Z"
+    assert usage["usage"]["monthly"]["resetsAt"] == "2026-12-15T10:15:00Z"
   end
 
   test "lists a model with tools and reasoning, one with tools only and one without tools", %{url: url} do

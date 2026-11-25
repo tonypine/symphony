@@ -14,8 +14,9 @@ defmodule SymphonyElixir.Providers do
       `{:provider, provider}`), since when;
     * `held` and `held_until`: a usage limit holds new runs on it (`SymphonyElixir.UsageLimit`),
       until the latest of its holds' resume times;
-    * `usage_windows`: the windows Symphony read for it from its runs (name, `utilization` from 0
-      to 1, `resets_at`), by name; empty when Symphony can read none;
+    * `usage_windows`: the windows Symphony read for it (name, `utilization` from 0 to 1,
+      `resets_at`), by name: Anthropic's from its runs, OpenCode Go's from its usage API; empty when
+      Symphony can read none;
     * `harnesses`: the harnesses that reach it;
     * `kinds` and `fallback_for`: the kinds of run whose own choice is on it, and those one of
       whose fallbacks is, in `SymphonyElixir.RunKind`'s order;
@@ -76,8 +77,9 @@ defmodule SymphonyElixir.Providers do
           optional(:reserves) => %{optional(String.t()) => float() | nil}
         }
 
-  # The providers whose usage Symphony reads from their runs: Claude Code reports Anthropic's windows.
-  @usage_readable ["anthropic"]
+  # The providers whose usage Symphony reads: Claude Code reports Anthropic's windows from its runs,
+  # and OpenCode Go's usage API reports its own (`SymphonyElixir.ProviderUsage`).
+  @usage_readable ["anthropic", "opencode-go"]
 
   @doc "Every provider and its state, in use first (see the module doc)."
   @spec list(facts()) :: [entry()]
@@ -162,6 +164,13 @@ defmodule SymphonyElixir.Providers do
     for {{^provider, name}, seen} <- windows, is_binary(name) do
       %{name: name, utilization: Map.get(seen, :utilization), resets_at: Map.get(seen, :resets_at)}
     end
-    |> Enum.sort_by(& &1.name)
+    |> Enum.sort_by(&{window_rank(&1.name), &1.name})
   end
+
+  # Shortest window first: the 5 hours, the week (and its per-model weeks), then the month
+  # (OpenCode Go's, TP-1642); any other after them, by name.
+  defp window_rank("five_hour"), do: 0
+  defp window_rank("seven_day" <> _), do: 1
+  defp window_rank("monthly"), do: 2
+  defp window_rank(_name), do: 3
 end

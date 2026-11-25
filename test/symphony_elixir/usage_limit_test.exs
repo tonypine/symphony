@@ -545,6 +545,12 @@ defmodule SymphonyElixir.UsageLimitTest do
 
       write_workflow_file!(Workflow.workflow_file_path(), execution_providers: %{anthropic: %{reserve: nil}})
       assert Providers.reserves(Config.settings!()) == %{}
+
+      # OpenCode Go takes one too (TP-1642), beside Anthropic's.
+      providers = %{anthropic: %{reserve: 0.9}, "opencode-go": %{reserve: 0.8}}
+      write_workflow_file!(Workflow.workflow_file_path(), execution_providers: providers)
+      assert Schema.Execution.reserve(Config.settings!().execution, "opencode-go") == 0.8
+      assert Providers.reserves(Config.settings!()) == %{"anthropic" => 0.9, "opencode-go" => 0.8}
     end
 
     test "a reserve is refused for a provider whose usage Symphony can't read, naming the key" do
@@ -572,8 +578,9 @@ defmodule SymphonyElixir.UsageLimitTest do
     end
 
     test "only the providers whose usage Symphony reads take a reserve" do
-      assert Providers.usage_readable() == ["anthropic"]
+      assert Providers.usage_readable() == ["anthropic", "opencode-go"]
       assert "execution.providers.anthropic.reserve" in SystemSchema.operator_key_paths()
+      assert "execution.providers.opencode-go.reserve" in SystemSchema.operator_key_paths()
       refute "execution.providers.openai.reserve" in SystemSchema.operator_key_paths()
     end
 
@@ -686,6 +693,16 @@ defmodule SymphonyElixir.UsageLimitTest do
              ] = UsageLimit.headroom_crossings(windows, 0.9, @now)
 
       assert UsageLimit.headroom_crossings(windows, 1.0, @now) == []
+    end
+
+    test "a read of another provider's usage crosses under that provider, counting the statuses it names" do
+      used_up = %{status: "rejected", utilization: 1.0, resets_at: ~U[2026-10-06 00:00:00Z]}
+      windows = %{"seven_day" => used_up, "monthly" => %{used_up | status: "allowed", utilization: 0.5}}
+
+      assert UsageLimit.headroom_crossings(windows, 0.9, @now, provider: "opencode-go") == []
+
+      assert [%{provider: "opencode-go", window: "seven_day", scope: :all, utilization: 1.0, reserve: 0.9}] =
+               UsageLimit.headroom_crossings(windows, 0.9, @now, provider: "opencode-go", statuses: ["allowed", "rejected"])
     end
 
     test "a headroom hold lasts until the reset plus the margin, a later window refreshes it and the same window raises its utilization" do
