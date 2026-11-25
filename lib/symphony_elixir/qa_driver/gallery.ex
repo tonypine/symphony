@@ -115,7 +115,8 @@ defmodule SymphonyElixir.QaDriver.Gallery do
   @doc """
   Draws one entry (`--shot`) and saves each picture in `qa-evidence/` under the gallery's file
   name: in `appearance` alone when it names one, else light and dark, and a screen at `width`
-  alone when it names one, else at laptop and desktop widths. A screen needs a `variation`.
+  alone when it names one, else at laptop and desktop widths. A screen needs a `variation`. A
+  picture this pass already saved under that name is kept and returned with `existing: true`.
   """
   @spec shoot(map(), Path.t(), arguments()) :: {:ok, map()} | tool_error()
   def shoot(config, gallery, %{entry: entry, variation: variation, width: width} = arguments) do
@@ -240,25 +241,33 @@ defmodule SymphonyElixir.QaDriver.Gallery do
     |> Enum.reduce_while({:ok, []}, fn picture, {:ok, files} ->
       file = Path.basename(picture)
 
+      path = Path.join(Checks.evidence_dir(), file)
+
       case save_picture(config, picture, evidence, file) do
-        :ok -> {:cont, {:ok, [%{"path" => Path.join(Checks.evidence_dir(), file)} | files]}}
+        :ok -> {:cont, {:ok, [%{"path" => path} | files]}}
+        :existing -> {:cont, {:ok, [%{"path" => path, "existing" => true} | files]}}
         {:error, _reason} = error -> {:halt, error}
       end
     end)
     |> case do
-      {:ok, files} -> {:ok, %{"files" => Enum.reverse(files)}}
+      {:ok, files} -> {:ok, files |> Enum.reverse() |> files_payload()}
       error -> error
     end
   end
 
+  defp files_payload(files) do
+    if Enum.any?(files, & &1["existing"]),
+      do: %{"files" => files, "note" => "A file marked `existing` is the picture this pass drew before under that name; it was kept as it was. Judge it."},
+      else: %{"files" => files}
+  end
+
+  # A picture this pass drew before keeps its file: the gallery draws the same entry the same way.
   defp save_picture(config, picture, evidence, file) do
     case config.host.read.(picture) do
       {:ok, png} ->
-        with {:error, {:qa_tool, "qa_screenshot_exists", _message}} <- Checks.write_evidence(Path.join(evidence, file), png, file) do
-          tool_error(
-            "qa_screenshot_exists",
-            "#{Checks.evidence_dir()}/#{file} already exists: this pass drew that picture before. Use that file, or move it aside and call qa_gallery again."
-          )
+        case Checks.write_evidence(Path.join(evidence, file), png, file) do
+          {:error, {:qa_tool, "qa_screenshot_exists", _message}} -> :existing
+          result -> result
         end
 
       {:error, reason} ->

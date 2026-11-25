@@ -156,7 +156,8 @@ defmodule SymphonyElixir.QaDriverTest do
         "hover" => {~s({"ok":true,"hovered":{"x":120,"y":200},"settled":true,"under_pointer":{"role":"AXRow"},"cursor":"pointing_hand"}), 0},
         "context-menu" => {~s({"ok":true,"clicked":{"x":120,"y":200},"menu":{"path":"2","role":"AXMenu","items":[{"path":"2.0","role":"AXMenuItem","title":"Pause"}]},"window_id":31}), 0},
         "scroll" => {~s({"ok":true,"scrolled":{"x":300,"y":200},"via":"pid","edge":"bottom","at_edge":true,"visible":{"count":16,"last":{"role":"AXRow","text":"Run 120"}}}), 0},
-        "key" => {~s({"ok":true,"key":"return","modifiers":[],"window":{"role":"AXWindow"},"focused":{"role":"AXOutline"}}), 0}
+        "key" => {~s({"ok":true,"key":"return","modifiers":[],"window":{"role":"AXWindow"},"focused":{"role":"AXOutline"}}), 0},
+        "drag" => {~s({"ok":true,"via":"hid","from":{"x":120,"y":200},"to":{"x":120,"y":340},"hold_ms":150,"steps":30,"settled":true,"changed":true,"under_pointer":{"role":"AXRow"}}), 0}
       },
       Map.get(overrides, :helper_replies, %{})
     )
@@ -323,7 +324,7 @@ defmodule SymphonyElixir.QaDriverTest do
           git: Keyword.get(opts, :git, &clean_git/2)
         ] ++
           Keyword.merge(defaults, Keyword.take(opts, [:repo_key, :qa_build, :ticket])) ++
-          Keyword.take(opts, [:start_stub, :status_menu_poll, :release_pair_timeout_ms, :relaunch_poll_ms, :feed_poll, :log_context, :heartbeat])
+          Keyword.take(opts, [:start_stub, :status_menu_poll, :release_pair_timeout_ms, :relaunch_poll_ms, :feed_poll, :log_context, :heartbeat, :sleep])
       )
 
     on_exit(fn -> QaDriver.stop(driver) end)
@@ -371,6 +372,7 @@ defmodule SymphonyElixir.QaDriverTest do
       assert "qa_put_file" in QaDriver.tools()
       assert "qa_gallery" in QaDriver.tools()
       assert "qa_gallery_open" in QaDriver.tools()
+      for tool <- ~w(qa_drag qa_crop qa_measure qa_wait_check), do: assert(tool in QaDriver.tools())
       assert error_code(QaDriver.call_tool(nil, "qa_build", %{})) == "qa_driver_unavailable"
     end
 
@@ -1386,6 +1388,103 @@ defmodule SymphonyElixir.QaDriverTest do
       assert error_code(QaDriver.call_tool(driver, "qa_screenshot", %{"pid" => pid, "name" => "x"})) == "qa_screenshot_failed"
       refute File.exists?(Path.join(worktree, "qa-evidence/x.png"))
       assert File.read!(secret) == "host secret"
+    end
+  end
+
+  describe "qa_drag, qa_crop, qa_measure and qa_wait_check (TP-1676)" do
+    test "drags from one target to another through the helper, as a mouse does", %{worktree: worktree} do
+      {driver, pid} = launched_app(worktree)
+      pid_arg = Integer.to_string(pid)
+
+      assert {:ok, %{"via" => "hid", "changed" => true, "under_pointer" => %{"role" => "AXRow"}}} =
+               QaDriver.call_tool(driver, "qa_drag", %{"pid" => pid, "from" => %{"path" => "0.3.1"}, "to" => %{"x" => 120, "y" => 340}})
+
+      assert_received {:cmd, @helper, ["drag", ^pid_arg, "0.3.1", "120,340", "150", "30"], opts}
+      assert opts[:timeout_ms] == 30_000
+
+      assert {:ok, _reply} =
+               QaDriver.call_tool(driver, "qa_drag", %{
+                 "pid" => pid,
+                 "from" => %{"x" => -5, "y" => 0},
+                 "to" => %{"path" => "0.4"},
+                 "hold_ms" => 0,
+                 "steps" => 200
+               })
+
+      assert_received {:cmd, @helper, ["drag", ^pid_arg, "-5,0", "0.4", "0", "200"], _opts}
+    end
+
+    test "checks the drag's arguments before the helper runs", %{worktree: worktree} do
+      {driver, pid} = launched_app(worktree)
+      to = %{"x" => 1, "y" => 2}
+
+      for {args, words} <- [
+            {%{"to" => to}, "`from` is required"},
+            {%{"from" => "0.1", "to" => to}, "`from` is required"},
+            {%{"from" => to}, "`to` is required"},
+            {%{"from" => %{"path" => "0", "x" => 1}, "to" => to}, "`from`: Pass an element `path` or a point's `x` and `y`, not both."},
+            {%{"from" => to, "to" => %{"x" => 1}}, "`to`: Pass an element `path`"},
+            {%{"from" => to, "to" => to, "hold_ms" => 5_001}, "`hold_ms` must be an integer from 0 to 5000"},
+            {%{"from" => to, "to" => to, "steps" => 1}, "`steps` must be an integer from 2 to 200"}
+          ] do
+        assert {:error, {:qa_tool, "invalid_arguments", message}} = QaDriver.call_tool(driver, "qa_drag", Map.put(args, "pid", pid))
+        assert message =~ words
+      end
+
+      assert error_code(QaDriver.call_tool(driver, "qa_drag", %{"pid" => 4_242, "from" => to, "to" => to})) == "qa_pid_not_launched"
+      refute_received {:cmd, @helper, ["drag" | _rest], _opts}
+    end
+
+    test "names what kept the helper from dragging", %{worktree: worktree} do
+      covered = {~s({"error":{"code":"covered","message":"Dock covers point 1,2"}}), 1}
+      {driver, pid} = launched_app(worktree, host: host(%{helper_replies: %{"drag" => covered}}))
+      point = %{"x" => 1, "y" => 2}
+
+      assert {:error, {:qa_tool, "qa_covered", "Dock covers point 1,2"}} = QaDriver.call_tool(driver, "qa_drag", %{"pid" => pid, "from" => point, "to" => point})
+    end
+
+    test "waits inside Symphony, then checks the app as qa_check_app does", %{worktree: worktree} do
+      test = self()
+      sleep = fn ms -> send(test, {:slept, ms}) && :ok end
+      ping = %{"ax-ping" => {~s({"ok":true,"responding":true}), 0}}
+      {driver, pid} = launched_app(worktree, sleep: sleep, host: host(%{helper_replies: ping}))
+
+      assert {:ok, %{"healthy" => true, "running" => true, "responding" => true, "page" => "Home", "waited_seconds" => 30}} =
+               QaDriver.call_tool(driver, "qa_wait_check", %{"pid" => pid, "seconds" => 30, "page" => "Home"})
+
+      assert_received {:slept, 30_000}
+      assert_received {:cmd, @helper, ["ax-ping", _pid], _opts}
+      assert QaDriver.app_check(driver).checked
+
+      for seconds <- [0, 121, "30", nil] do
+        assert {:error, {:qa_tool, "invalid_arguments", message}} = QaDriver.call_tool(driver, "qa_wait_check", %{"pid" => pid, "seconds" => seconds})
+        assert message =~ "`seconds` must be an integer from 1 to 120"
+      end
+
+      assert error_code(QaDriver.call_tool(driver, "qa_wait_check", %{"pid" => pid, "seconds" => 5, "page" => 7})) == "invalid_arguments"
+      assert error_code(QaDriver.call_tool(driver, "qa_wait_check", %{"seconds" => 5})) == "invalid_arguments"
+      assert error_code(QaDriver.call_tool(driver, "qa_wait_check", %{"pid" => 4_242, "seconds" => 5})) == "qa_pid_not_launched"
+      refute_received {:slept, _ms}
+    end
+
+    test "crops and measures a picture the pass saved, without the QA host", %{worktree: worktree} do
+      driver = start_driver(worktree)
+      black_box = fn x, y -> if x in 4..9 and y in 2..7, do: <<0, 0, 0, 255>>, else: <<255, 255, 255, 255>> end
+      rgba = for y <- 0..9, x <- 0..19, into: <<>>, do: black_box.(x, y)
+      File.mkdir_p!(Path.join(worktree, "qa-evidence"))
+      File.write!(Path.join(worktree, "qa-evidence/home.png"), QaDriver.Picture.encode(20, 10, rgba, 2))
+
+      assert {:ok, %{"path" => "qa-evidence/home-icon.png", "scale" => 4, "pixels" => %{"w" => 12, "h" => 12}}} =
+               QaDriver.call_tool(driver, "qa_crop", %{"path" => "qa-evidence/home.png", "name" => "home-icon", "x" => 2, "y" => 1, "width" => 3, "height" => 3})
+
+      assert File.regular?(Path.join(worktree, "qa-evidence/home-icon.png"))
+
+      edges = [%{"x" => 0, "y" => 0, "width" => 10, "height" => 5, "side" => "left"}, %{"x" => 0, "y" => 0, "width" => 10, "height" => 5, "side" => "right"}]
+      measured = QaDriver.call_tool(driver, "qa_measure", %{"path" => "home.png", "edges" => edges})
+      assert {:ok, %{"edges" => [%{"at" => 2.0}, %{"at" => 5.0}], "distance" => 3.0}} = measured
+
+      assert error_code(QaDriver.call_tool(driver, "qa_measure", %{"path" => "gone.png", "edges" => edges})) == "qa_picture_missing"
+      refute_received {:cmd, @helper, _args, _opts}
     end
   end
 

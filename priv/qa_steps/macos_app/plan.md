@@ -31,8 +31,13 @@ gallery entries the changed files affect) and the screen rules below. Then answe
     directory the screen rules name), `page` (the window's page to open on), `appearance` (only for
     the exception below), `environment` (`fixture` or `live`), and the window size to set when it
     is not the QA target;
-  - `do`: the actions, in order, as a person would take them;
-  - `expect`: what must be true, in the ticket's words, including the exact texts to read;
+  - `do`: the actions, in order, as a person would take them. A drag names where it starts and
+    where it drops (the walk turn drags with `qa_drag`). A wait names its seconds (the walk turn
+    waits with `qa_wait_check`); never write `sleep` or a shell command into a brief;
+  - `expect`: what must be true, in the ticket's words, including the exact texts to read. A
+    position, size or order the app reports is read from `qa_ax_tree`'s frames; a picture judges
+    how a thing looks, with `qa_crop` for a close look and `qa_measure` for an alignment or a gap
+    ("within 1 pt");
   - `design`: the design reference to compare with (a Screens HTML file or image named below, or
     "the design system alone");
   - `screenshots`: the names to save each judgment under (lowercase, hyphens, no extension);
@@ -41,7 +46,7 @@ gallery entries the changed files affect) and the screen rules below. Then answe
   - `group` (optional): a short name, the same on every brief walked in one session;
   - `needs` (optional): what the step needs that a pass may lack, as a list of objects, each in one
     of three shapes: `{"kind": "tool", "name": "<qa_ tool>"}` for a QA tool the step cannot be
-    walked without (such as a drag), `{"kind": "fixture_page", "fixture": "<directory>", "page":
+    walked without (one the driver's tools, listed in the facts, do not include), `{"kind": "fixture_page", "fixture": "<directory>", "page":
     "<page>"}` for a page of a committed fixture (the directory by its path in the checkout, such
     as `macos/Tests/Fixtures/director-app/update-paused`, or by its name, such as `update-paused`),
     `{"kind": "server"}` for the live server. Name

@@ -1142,6 +1142,8 @@ defmodule SymphonyElixir.QaAgentTest do
       assert prompt =~ "call `qa_resize_window` with no size: it sets the window to 2560×1440 pt."
       assert prompt =~ "only when its ask or plan names light mode, a small window or a specific size"
       assert prompt =~ "On every page the walkthrough visits, call `qa_check_app` with the page's name"
+      assert prompt =~ "call `qa_wait_check` with the `seconds` and the page: Symphony waits, then checks. Never sleep in your shell."
+      refute prompt =~ ~r/sleep \d/
       refute prompt =~ "Wide pass"
 
       prompt = macos_app.(%{"window_width" => 1440, "window_height" => 900, "appearance" => "light"})

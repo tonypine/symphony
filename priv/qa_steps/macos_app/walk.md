@@ -27,6 +27,13 @@ How to drive the app:
   never by hover tint; `cursor_unreadable` blocks it); reach rows below the fold with `qa_scroll`
   (`edge: "bottom"`). Type into fields with `qa_ax_set_value`, with made-up values, never real
   credentials. Open the status-bar menu only with `qa_open_status_menu`, never by pressing its item.
+- Drag and drop with `qa_drag`: `from` and `to` are each an element `path` or a point's `x` and
+  `y`; it presses, moves and releases as a mouse does. Then read the new order or position in
+  `qa_ax_tree` and screenshot it.
+- Wait only with `qa_wait_check` (`seconds`, the `page`): it waits inside Symphony, then checks
+  the app as `qa_check_app` does. Wherever a brief or this prompt says to wait, settle or sleep
+  for some seconds, call it with those seconds. Never sleep in your shell: the harness blocks it,
+  and a step that says the app was healthy after a wait quotes this call.
 - A file the app must open: write it under `qa-evidence/` or `$TMPDIR`, call `qa_put_file`, and
   give the app the `path` it returns. A git checkout: `qa_put_checkout`.
 - What the app sent or read from its API, POSTs and GETs alike: `qa_api_requests` after the
@@ -38,9 +45,14 @@ How to drive the app:
 
 How to judge:
 
-- Settle before you judge: wait about 10 seconds after a window opens (`sleep 10`), change focus
-  once (raise another window, then this one), wait a few seconds more, then read `qa_ax_tree`. A
-  window can open at the right size and collapse seconds later.
+- Settle before you judge: call `qa_wait_check` with `seconds: 10` after a window opens, change
+  focus once (raise another window, then this one), call it again with a few seconds, then read
+  `qa_ax_tree`. A window can open at the right size and collapse seconds later.
+- Where the app reports a value exactly, read it from the app: positions, sizes and order from
+  `qa_ax_tree`'s frames, health from `qa_check_app`. A picture is for how a thing looks. For a
+  close look (a "2x crop"), `qa_crop` the screenshot; for an alignment or a gap a brief asks of a
+  picture ("within 1 pt"), `qa_measure` its edges in the screenshot. Both work on the pictures in
+  `qa-evidence/` and save or report everything themselves: never write image code or call `sips`.
 - Judge from the tree, not the window frame alone: the controls the step describes are there, with
   sensible titles and values, and content areas have a real size. An empty or collapsed window, a
   missing control or a control that does nothing is a `fail`.
@@ -52,9 +64,8 @@ How to judge:
 - On each page the step visits, once it settled, call `qa_check_app` with `page` set to the page's
   name: it says whether the app still runs, answers within 10 seconds and left no crash report. A
   layout loop or a crash in a large window shows only there. When it says the app hung, call
-  `qa_sample` at once (`seconds: 5`, the `page`) and quote its `stack`. When the app exited, wait 10
-  seconds and call `qa_check_app` again: macOS writes the crash report a few seconds after the
-  crash.
+  `qa_sample` at once (`seconds: 5`, the `page`) and quote its `stack`. When the app exited, call
+  `qa_wait_check` with `seconds: 10`: macOS writes the crash report a few seconds after the crash.
 - The app hanging, crashing or exiting is a `fail` naming the page and the window size: quote its
   last output (`qa_quit_app` returns it) and `qa_check_app`'s problems.
 
@@ -64,14 +75,15 @@ review gives the verdict from your answer.
 Answer with:
 
 - `status`: `pass` when the step behaved as the brief expects and you saw and judged every part of it; `fail` when it shows a real defect;
-  `unprovable` when the step needs a QA tool, a fixture page or the live server this pass does not have (say which in `actual`, such as "needs the QA tool qa_drag"); Symphony marks the steps it can see so before any session, so this is for one you find only as you walk it;
+  `unprovable` when the step needs a QA tool, a fixture page or the live server this pass does not have (say which in `actual`, such as "needs the live server"); Symphony marks the steps it can see so before any session, so this is for one you find only as you walk it;
   `blocked` when you could not walk it, or could not reach, see or judge any part of it for any other reason (a harness fault, a stand-in that did not start, an empty state, a screenshot not viewed; say which), never `pass` then;
   `plan_mismatch` when the app is not where the brief says (a window, a control or a fixture the
   brief names does not exist), so the review can write a new brief.
 - `expected`: what the brief said must be true.
 - `actual`: what you saw.
 - `details`: the actions you took, the environment, and the tool output that bears on it.
-- `evidence`: the screenshot paths under `qa-evidence/` (and any `qa_sample` report).
+- `evidence`: the screenshot paths under `qa-evidence/` (with any `qa_crop` picture and `qa_sample`
+  report).
 
 When you walk several steps in one session:
 

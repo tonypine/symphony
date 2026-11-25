@@ -80,6 +80,7 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
       ax-tree) echo '{"root":{"path":"","role":"AXApplication","children":[{"path":"0","role":"AXWindow","title":"Settings"}]},"nodes":2,"truncated":false}' ;;
       screenshot) printf 'png-from-qa-host' > "$4"; echo '{"ok":true}' ;;
       ax-ping) echo '{"ok":true,"responding":true}' ;;
+      drag) printf '{"ok":true,"via":"hid","from":"%s","to":"%s","hold_ms":%s,"steps":%s}\\n' "$3" "$4" "$5" "$6" ;;
     esac
     HELPER
     chmod +x "$out"
@@ -365,6 +366,49 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
       assert QaDriver.call_tool(driver, "qa_api_requests", %{"root" => 1}) ==
                {:ok, %{"requests" => [%{"root" => "#{run_dir}/app-root"}], "dropped" => 0, "root" => 1}}
 
+      QaDriver.stop(driver)
+      refute File.exists?(run_dir)
+    end
+
+    test "drags, waits and checks the app on the QA host, and crops and measures its pictures here", %{root: root, ssh_host: ssh_host} do
+      worktree = git_worktree!(root)
+      prepare = fn _operator_home, _canary -> Remote.prepare(ssh_host, Path.join(root, "operator"), Path.join(root, "no-canary")) end
+      test = self()
+      sleep = fn ms -> send(test, {:slept, ms}) && :ok end
+      opts = [worktree: worktree, worker_host: ssh_host, local_uuid: fn -> {:ok, @symphony_mac} end]
+      opts = opts ++ [playbook: %{build: "sh build.sh", app: @app}, host: %{prepare: prepare}, sleep: sleep]
+      {:ok, driver} = QaDriver.start_link(opts ++ start_prebuild!(root, ssh_host, worktree))
+      %{host_dir: run_dir} = GenServer.call(driver, :config)
+      {{:ok, %{"exit_status" => 0}}, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_build", %{}) end)
+      {{:ok, %{"pid" => pid}}, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
+
+      # The helper on the QA host makes the drag, over SSH.
+      assert QaDriver.call_tool(driver, "qa_drag", %{"pid" => pid, "from" => %{"path" => "0.2"}, "to" => %{"x" => 300, "y" => 40}, "steps" => 12}) ==
+               {:ok, %{"ok" => true, "via" => "hid", "from" => "0.2", "to" => "300,40", "hold_ms" => 150, "steps" => 12}}
+
+      assert trace() =~ "drag"
+
+      # The wait is Symphony's; the check reads the QA host's crash reports and pings the app there.
+      assert {:ok, %{"healthy" => true, "responding" => true, "waited_seconds" => 30}} =
+               QaDriver.call_tool(driver, "qa_wait_check", %{"pid" => pid, "seconds" => 30, "page" => "Home"})
+
+      assert_received {:slept, 30_000}
+
+      # A picture the pass saved is on this host, so the crop and the measure never reach the QA host.
+      black_box = fn x, y -> if x in 4..9 and y in 2..7, do: <<0, 0, 0, 255>>, else: <<255, 255, 255, 255>> end
+      rgba = for y <- 0..9, x <- 0..19, into: <<>>, do: black_box.(x, y)
+      File.mkdir_p!(Path.join(worktree, "qa-evidence"))
+      File.write!(Path.join(worktree, "qa-evidence/home.png"), QaDriver.Picture.encode(20, 10, rgba, 2))
+      traced = trace()
+
+      assert {:ok, %{"path" => "qa-evidence/home-crop.png", "scale" => 4}} =
+               QaDriver.call_tool(driver, "qa_crop", %{"path" => "qa-evidence/home.png", "name" => "home-crop", "x" => 2, "y" => 1, "width" => 3, "height" => 3})
+
+      edges = [%{"x" => 0, "y" => 0, "width" => 10, "height" => 5, "side" => "left"}, %{"x" => 0, "y" => 0, "width" => 10, "height" => 5, "side" => "left"}]
+      assert {:ok, %{"aligned" => true, "offset" => 0.0}} = QaDriver.call_tool(driver, "qa_measure", %{"path" => "home.png", "edges" => edges})
+      assert trace() == traced
+
+      {:ok, _quit} = QaDriver.call_tool(driver, "qa_quit_app", %{"pid" => pid})
       QaDriver.stop(driver)
       refute File.exists?(run_dir)
     end

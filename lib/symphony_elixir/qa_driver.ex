@@ -37,8 +37,18 @@ defmodule SymphonyElixir.QaDriver do
     local API from those JSON files;
   - `qa_quit_app`, `qa_screenshot`, `qa_ax_tree`, `qa_ax_press`,
     `qa_ax_set_value`, `qa_ax_select`, `qa_click`, `qa_hover`,
-    `qa_context_menu`, `qa_scroll`, `qa_key` and `qa_resize_window` accept only a PID this driver launched and that is still
-    running; `qa_check_app` also reports on one that has exited;
+    `qa_context_menu`, `qa_drag`, `qa_scroll`, `qa_key` and `qa_resize_window` accept only a PID this driver launched and that is still
+    running; `qa_check_app` also reports on one that has exited, and
+    `qa_wait_check` waits up to 120 seconds inside Symphony (`:sleep`), then
+    answers as `qa_check_app`, so no QA session sleeps in its own shell;
+  - `qa_drag` makes a real drag between two targets (an element path or a
+    point each), as a mouse does: button down at the start, a held pause,
+    moves in steps, button up at the end, through the HID tap, after the same
+    checks as `qa_click` at both ends;
+  - `qa_crop` and `qa_measure` work on a picture already in `qa-evidence/`, on
+    this host, without the QA host or any tool (`SymphonyElixir.QaDriver.Picture`):
+    a crop enlarged as a new evidence picture, and distances, edges and their
+    alignment in points;
   - `qa_ax_select` selects a table or outline row (which answers no AXPress)
     through `AXSelectedRows` or `AXSelected`; `qa_click` clicks an element's
     frame centre only when the app's window is on screen there and the
@@ -265,7 +275,7 @@ defmodule SymphonyElixir.QaDriver do
 
   alias SymphonyElixir.{AgentEnv, OpenRouter, PathSafety, QaBuild, QaPolicy, Workspace}
   alias SymphonyElixir.PlaybookSettings
-  alias SymphonyElixir.QaDriver.{Checks, DevServer, DevServerLease, Gallery, Machine, Pages}
+  alias SymphonyElixir.QaDriver.{Checks, DevServer, DevServerLease, Gallery, Machine, Pages, Picture}
   alias SymphonyElixir.QaDriver.{ReleasePair, Remote, SafeHost}
 
   @evidence_dir "qa-evidence"
@@ -332,6 +342,14 @@ defmodule SymphonyElixir.QaDriver do
   @scroll_edges ~w(top bottom left right)
   # The largest delta `qa_scroll` takes per unit; an edge scroll covers any length.
   @max_scroll %{"pixel" => 20_000, "line" => 2_000}
+  # `qa_drag`: how long the button is held at the start before the pointer moves, and in how many
+  # moves the pointer goes from the start to the end.
+  @default_drag_hold_ms 150
+  @max_drag_hold_ms 5_000
+  @default_drag_steps 30
+  @max_drag_steps 200
+  # `qa_wait_check` waits up to two minutes inside Symphony, so no session sleeps in its shell.
+  @max_wait_seconds 120
 
   # Clones the bundle `$2` into `$1/checkouts/$3` without hooks (the empty
   # template and `core.hooksPath` keep the operator's out too) and points
@@ -408,7 +426,8 @@ defmodule SymphonyElixir.QaDriver do
 
   @tools ~w(qa_build qa_launch_app qa_quit_app qa_screenshot qa_ax_tree qa_ax_press qa_ax_set_value qa_ax_select qa_click qa_key) ++
            ~w(qa_hover qa_context_menu qa_scroll qa_resize_window qa_check_app qa_put_file qa_put_checkout qa_api_requests qa_open_status_menu) ++
-           ~w(qa_sample qa_build_release_pair qa_relaunched_app qa_update_feed qa_gallery qa_gallery_open)
+           ~w(qa_sample qa_build_release_pair qa_relaunched_app qa_update_feed qa_gallery qa_gallery_open) ++
+           ~w(qa_drag qa_crop qa_measure qa_wait_check)
 
   # The QA host's OS boundary: `SymphonyElixir.QaDriver.Remote.host/1`, unless a test overrides it.
   @type host :: %{
@@ -856,6 +875,36 @@ defmodule SymphonyElixir.QaDriver do
          {:ok, clicks} <- optional_integer(args, "clicks", 1, 2),
          {:ok, helper} <- helper(driver, config) do
       run_helper(config, helper, ["click", Integer.to_string(pid), target, Integer.to_string(clicks || 1)])
+    end
+  end
+
+  # A real drag, as a mouse makes it: button down at `from`, moves with the button held, button up
+  # at `to`, through the system's mouse route.
+  defp run_tool("qa_drag", driver, config, args) do
+    with {:ok, pid} <- running_pid(driver, args),
+         {:ok, from} <- drag_end(args, "from"),
+         {:ok, to} <- drag_end(args, "to"),
+         {:ok, hold_ms} <- optional_integer(args, "hold_ms", 0, @max_drag_hold_ms),
+         {:ok, steps} <- optional_integer(args, "steps", 2, @max_drag_steps),
+         {:ok, helper} <- helper(driver, config) do
+      drag_args = [Integer.to_string(hold_ms || @default_drag_hold_ms), Integer.to_string(steps || @default_drag_steps)]
+      run_helper(config, helper, ["drag", Integer.to_string(pid), from, to | drag_args])
+    end
+  end
+
+  # The pictures are in the worktree's `qa-evidence/`, on this host, wherever the app runs.
+  defp run_tool("qa_crop", _driver, config, args), do: Picture.crop(config.worktree, args)
+  defp run_tool("qa_measure", _driver, config, args), do: Picture.measure(config.worktree, args)
+
+  # The wait happens here, inside Symphony, then the same check as `qa_check_app`.
+  defp run_tool("qa_wait_check", driver, config, args) do
+    with {:ok, pid} <- pid_argument(args),
+         {:ok, seconds} <- wait_seconds(Map.get(args, "seconds")),
+         {:ok, _page} <- optional_string(args, "page", 200),
+         {:ok, _app} <- GenServer.call(driver, {:app, pid}),
+         :ok <- config.sleep.(seconds * 1_000),
+         {:ok, health} <- run_tool("qa_check_app", driver, config, args) do
+      {:ok, Map.put(health, "waited_seconds", seconds)}
     end
   end
 
@@ -1696,6 +1745,21 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
+  defp drag_end(args, key) do
+    case Map.get(args, key) do
+      %{} = target ->
+        with {:error, {:qa_tool, code, message}} <- pointer_target(target), do: tool_error(code, "`#{key}`: " <> message)
+
+      _other ->
+        tool_error("invalid_arguments", "`#{key}` is required: an object with an element `path` from qa_ax_tree, or a point's `x` and `y` on screen.")
+    end
+  end
+
+  defp wait_seconds(seconds) when is_integer(seconds) and seconds >= 1 and seconds <= @max_wait_seconds, do: {:ok, seconds}
+
+  defp wait_seconds(_seconds),
+    do: tool_error("invalid_arguments", "`seconds` must be an integer from 1 to #{@max_wait_seconds}: how long to wait before the check.")
+
   defp scroll_unit(nil), do: {:ok, "pixel"}
   defp scroll_unit(unit) when is_map_key(@max_scroll, unit), do: {:ok, unit}
   defp scroll_unit(_unit), do: tool_error("invalid_arguments", "`unit` must be pixel or line.")
@@ -2270,7 +2334,8 @@ defmodule SymphonyElixir.QaDriver do
       dev_server_lease: Keyword.get(opts, :dev_server_lease, DevServerLease),
       qa_build: Keyword.get(opts, :qa_build, QaBuild),
       ticket: Keyword.get(opts, :ticket),
-      heartbeat: Keyword.get(opts, :heartbeat, fn -> :ok end)
+      heartbeat: Keyword.get(opts, :heartbeat, fn -> :ok end),
+      sleep: Keyword.get(opts, :sleep, &Process.sleep/1)
     }
 
     state = %{config: host_dirs(config, worker_host), build: nil, ignored: %{}, apps: %{}, helper: nil, stub: nil}

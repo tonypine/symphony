@@ -275,9 +275,29 @@ defmodule SymphonyElixir.QaDriver.GalleryTest do
       assert {"qa_gallery_failed", message} = failure(Gallery.shoot(config(context, shot, fn _path -> {:error, :unreadable} end), @gallery, arguments))
       assert message =~ "button-1-light.png could not be copied from the QA host: :unreadable"
 
-      assert {:ok, %{"files" => [_light, _dark]}} = Gallery.shoot(config(context, shot), @gallery, arguments)
-      assert {"qa_screenshot_exists", message} = failure(Gallery.shoot(config(context, shot), @gallery, arguments))
-      assert message =~ "qa-evidence/button-1-light.png already exists: this pass drew that picture before"
+      assert {:ok, %{"files" => [_light, _dark]} = first} = Gallery.shoot(config(context, shot), @gallery, arguments)
+      refute Map.has_key?(first, "note")
+      light = Path.join(context.worktree, "qa-evidence/button-1-light.png")
+      File.write!(light, "the first drawing")
+
+      # A picture this pass drew before comes back with its path, kept as it was; no refusal.
+      assert {:ok, %{"files" => files, "note" => note}} = Gallery.shoot(config(context, shot), @gallery, arguments)
+
+      assert files == [
+               %{"path" => "qa-evidence/button-1-light.png", "existing" => true},
+               %{"path" => "qa-evidence/button-1-dark.png", "existing" => true}
+             ]
+
+      assert note =~ "is the picture this pass drew before under that name"
+      assert File.read!(light) == "the first drawing"
+
+      # One new picture beside one drawn before: only the earlier one is marked.
+      File.rm!(Path.join(context.worktree, "qa-evidence/button-1-dark.png"))
+
+      assert {:ok, %{"files" => [%{"existing" => true}, %{"path" => "qa-evidence/button-1-dark.png"} = dark]}} =
+               Gallery.shoot(config(context, shot), @gallery, arguments)
+
+      refute Map.has_key?(dark, "existing")
 
       # Another failure to save keeps its own words.
       evidence = Path.join(context.worktree, "qa-evidence")

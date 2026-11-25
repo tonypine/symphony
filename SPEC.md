@@ -2364,7 +2364,12 @@ The QA agent:
   and `qa_context_menu` right-clicks one and lists the menu that opens; `qa_scroll` scrolls the
   scroll area at an element or point by a delta or to an edge with scroll-wheel events, and MAY
   post them again at the pointer, over the app's own window, when the app took none of them. They
-  MUST refuse the same points as `qa_click` before the pointer moves.
+  MUST refuse the same points as `qa_click` before the pointer moves. `qa_drag` presses the mouse
+  button at one element or point, moves to another with it held and lets go there, as a mouse does,
+  and MUST refuse either end as `qa_click` refuses a point. `qa_wait_check` waits up to 120 seconds
+  inside Symphony and then answers as `qa_check_app`, so a QA session never sleeps in its own
+  shell. `qa_crop` and `qa_measure` read a picture a `qa_*` tool saved in `qa-evidence/`, on the
+  Symphony host, MUST refuse any other file, and MUST NOT run a tool to read or write it.
   A `macos_app` pass judges the app at the playbook's QA target, one appearance (`appearance`, dark
   by default) and one window size (`window_width`×`window_height`, 2560×1440 points by default), and
   MUST judge another appearance or size only when the ticket is about it (its ask or plan names that

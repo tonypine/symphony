@@ -141,6 +141,54 @@ defmodule SymphonyElixir.QaDriver.Checks do
   end
 
   @doc """
+  Reads a picture a QA tool saved in the worktree's `qa-evidence/`, named by its path in the
+  worktree (`qa-evidence/home.png`) or in the folder (`home.png`), and returns that path and its
+  bytes. Only a regular file inside the folder once every link on the way is resolved passes, not
+  a link itself, with no other hard link, and of at most `limit` bytes, read through one
+  descriptor that must be the file just checked. A missing file is `qa_picture_missing`; any other
+  refusal is `qa_picture_refused`.
+  """
+  @spec read_evidence(Path.t(), term(), pos_integer()) :: {:ok, String.t(), binary()} | tool_error()
+  def read_evidence(worktree, path, limit) when is_binary(path) and path != "" and byte_size(path) <= 4_096 do
+    dir = Path.join(worktree, @evidence_dir)
+    relative = String.replace_prefix(path, @evidence_dir <> "/", "")
+    shown = Path.join(@evidence_dir, relative)
+    full = Path.expand(relative, dir)
+
+    with false <- String.contains?(path, <<0>>),
+         {:ok, canonical_dir} <- PathSafety.canonicalize(dir),
+         {:ok, %File.Stat{} = stat} <- evidence_lstat(full, shown),
+         {:ok, canonical} <- PathSafety.canonicalize(full),
+         true <- String.starts_with?(canonical, canonical_dir <> "/") || :outside,
+         :ok <- evidence_file(stat, shown, limit) do
+      read_checked(canonical, stat, shown, "qa_picture", limit) |> evidence_read(shown)
+    else
+      {:error, {:qa_tool, _code, _message}} = error -> error
+      true -> tool_error("invalid_arguments", "`path` must not contain NUL bytes.")
+      _outside -> tool_error("qa_picture_refused", "#{path} is outside #{@evidence_dir}/. Name a picture a qa_* tool saved there, such as #{@evidence_dir}/home.png.")
+    end
+  end
+
+  def read_evidence(_worktree, _path, _limit),
+    do: tool_error("invalid_arguments", "`path` is required: a picture under #{@evidence_dir}/, such as #{@evidence_dir}/home.png.")
+
+  defp evidence_lstat(full, shown) do
+    case File.lstat(full, time: :posix) do
+      {:ok, %File.Stat{type: :symlink}} -> tool_error("qa_picture_refused", "#{shown} is a symlink. Name the picture a qa_* tool saved.")
+      {:ok, stat} -> {:ok, stat}
+      {:error, :enoent} -> tool_error("qa_picture_missing", "#{shown} does not exist. Name a picture a qa_* tool saved, with the path it returned.")
+      {:error, reason} -> tool_error("qa_picture_refused", "#{shown} could not be read: #{inspect(reason)}.")
+    end
+  end
+
+  defp evidence_file(%File.Stat{type: :regular, links: 1, size: size}, _shown, limit) when size <= limit, do: :ok
+  defp evidence_file(%File.Stat{type: :regular, links: 1}, shown, limit), do: tool_error("qa_picture_refused", "#{shown} is over #{limit} bytes.")
+  defp evidence_file(_stat, shown, _limit), do: tool_error("qa_picture_refused", "#{shown} is not a picture file of its own.")
+
+  defp evidence_read({:ok, bytes}, shown), do: {:ok, shown, bytes}
+  defp evidence_read(error, _shown), do: error
+
+  @doc """
   Checks a `local_path` argument: a non-empty string without NUL bytes, at
   most 4 KB.
   """

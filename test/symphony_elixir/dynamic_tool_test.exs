@@ -1028,6 +1028,33 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       assert %{"error" => %{"code" => "qa_driver_unavailable"}} = Jason.decode!(response["output"])
     end
 
+    test "describes qa_gallery's boards and earlier pictures, and lists the drag, crop, measure and wait-and-check tools (TP-1676)" do
+      specs = Map.new(DynamicTool.tool_specs(:qa), &{&1["name"], &1})
+      gallery = String.replace(specs["qa_gallery"]["description"], ~r/\s+/, " ")
+      assert gallery =~ "A component call (entry alone) draws every variation of the component on one board, in one picture"
+      assert gallery =~ "A picture this pass already drew comes back with its path and `existing: true`"
+
+      assert %{"required" => ["pid", "from", "to"], "properties" => %{"from" => %{"properties" => %{"path" => _, "x" => _, "y" => _}}}} = specs["qa_drag"]["inputSchema"]
+      assert %{"required" => ["path", "name", "x", "y", "width", "height"], "properties" => %{"zoom" => %{"default" => 2}}} = specs["qa_crop"]["inputSchema"]
+      assert %{"properties" => %{"edges" => %{"items" => %{"properties" => %{"side" => %{"enum" => ~w(left right top bottom)}}}}}} = specs["qa_measure"]["inputSchema"]
+      assert %{"required" => ["pid", "seconds"], "properties" => %{"seconds" => %{"maximum" => 120}}} = specs["qa_wait_check"]["inputSchema"]
+      assert specs["qa_measure"]["description"] =~ "prefer that: qa_ax_tree's frames give positions and sizes exactly"
+      assert specs["qa_check_app"]["description"] =~ "call qa_wait_check instead of sleeping"
+
+      for {tool, args} <- [
+            {"qa_drag", %{"pid" => 1, "from" => %{"path" => "0.1"}, "to" => %{"x" => 1, "y" => 2}, "hold_ms" => 0, "steps" => 10}},
+            {"qa_crop", %{"path" => "a.png", "name" => "b", "x" => 0, "y" => 0, "width" => 1, "height" => 1, "zoom" => 2, "scale" => 2}},
+            {"qa_measure", %{"path" => "a.png", "points" => [], "edges" => [], "within" => 1, "tolerance" => 4, "scale" => 1}},
+            {"qa_wait_check", %{"pid" => 1, "seconds" => 30, "page" => "Home"}}
+          ] do
+        response = DynamicTool.execute(tool, args, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
+        assert %{"error" => %{"code" => "qa_driver_unavailable"}} = Jason.decode!(response["output"])
+
+        response = DynamicTool.execute(tool, Map.put(args, "sleep", 1), issue: %Issue{id: "issue-current"}, tool_scope: :qa)
+        assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
+      end
+    end
+
     test "only the QA scope lists and runs the qa_android tools, routed to the Android driver" do
       qa_tools = Enum.map(DynamicTool.tool_specs(:qa), & &1["name"])
 
