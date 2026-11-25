@@ -46,7 +46,12 @@ defmodule SymphonyElixir.QaSeed do
     event, `actor: "agent"` (of the run's `run_kind`, default implementation). An `output` names a
     file relative to the seed (`file`, with its `label`), kept as the event's `step_output` artifact
     (`SymphonyElixir.Artifacts.ingest/3`); `gone: true` removes its bytes from the store afterwards,
-    so the Director reads it as unavailable.
+    so the Director reads it as unavailable. A `picture` names a PNG or JPEG the same way (`file`,
+    `label`), kept as the event's `screenshot` artifact, as a picture a QA tool took is kept on its
+    `evidence` (`SymphonyElixir.AgentTools.QaPictures`). QA-104's history holds a fact of each kind
+    the ticket page draws: an implementation run's `run.changed` (its files and commits), a code
+    review's `verdict.recorded` with its findings, and a QA run's step answer with its measures, a
+    picture and a measured value.
 
   It runs as a child of the application between the run store and the orchestrator, when the
   service was started with `--qa-seed <dir>`, so the orchestrator starts with the seeded runs and
@@ -343,8 +348,12 @@ defmodule SymphonyElixir.QaSeed do
   defp actor(%{"actor" => "agent"} = entry, run_id), do: {:agent, run_id, Map.get(entry, "run_kind", "implementation")}
   defp actor(_entry, _run_id), do: :machine
 
-  defp output(dir, repo_key, issue_id, %{"issue" => identifier, "output" => %{"file" => file} = output} = entry) do
-    meta = %{repo_key: repo_key, issue_id: issue_id, run_id: Map.get(entry, "run_id"), label: Map.get(output, "label"), kind: "step_output"}
+  defp output(dir, repo_key, issue_id, %{"output" => %{"file" => _file} = output} = entry), do: keep(dir, repo_key, issue_id, entry, output, "step_output")
+  defp output(dir, repo_key, issue_id, %{"picture" => %{"file" => _file} = picture} = entry), do: keep(dir, repo_key, issue_id, entry, picture, "screenshot")
+  defp output(_dir, _repo_key, _issue_id, _entry), do: {:ok, []}
+
+  defp keep(dir, repo_key, issue_id, %{"issue" => identifier} = entry, %{"file" => file} = output, kind) do
+    meta = %{repo_key: repo_key, issue_id: issue_id, run_id: Map.get(entry, "run_id"), label: Map.get(output, "label"), kind: kind}
 
     case Artifacts.ingest(Path.expand(file, dir), meta, roots: [dir]) do
       {:ok, artifact} ->
@@ -355,8 +364,6 @@ defmodule SymphonyElixir.QaSeed do
         {:error, {{:output, identifier, file}, reason}}
     end
   end
-
-  defp output(_dir, _repo_key, _issue_id, _entry), do: {:ok, []}
 
   # The store no longer holds the bytes; the next read of its path marks the artifact expired.
   defp gone(id) do

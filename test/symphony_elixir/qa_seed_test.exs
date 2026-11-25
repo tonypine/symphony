@@ -4,7 +4,7 @@ defmodule SymphonyElixir.QaSeedTest do
   import Plug.Conn
   import Plug.Test
 
-  alias SymphonyElixir.{Config, DirectorMoves, Inbox, Orchestrator, Paths, Pauses}
+  alias SymphonyElixir.{Artifacts, Config, DirectorMoves, Inbox, Orchestrator, Paths, Pauses}
   alias SymphonyElixir.{PlanBrief, QaSeed}
   alias SymphonyElixir.{Questions, RunStore, Situation, SubIssueWait, TicketEvents, Tracker, UsageLimit}
   alias SymphonyElixir.Workflow
@@ -224,6 +224,39 @@ defmodule SymphonyElixir.QaSeedTest do
     Jason.decode!(conn.resp_body)
   end
 
+  test "QA-104's history holds a fact of each kind the ticket page draws, its picture kept as a screenshot", %{repo_key: repo_key, dir: dir} do
+    assert QaSeed.load(dir, now: @now) == :ok
+
+    events = RunStore.list_ticket_events("qa-seed-104", [])
+    by_type = fn type -> Enum.filter(events, &(&1.type == type)) end
+
+    # The files a run edited and the commits it made.
+    assert [first, second] = by_type.("run.changed")
+    assert %{start_head: "4e1d0c2", head: "9b7a3f1", commits: [%{sha: "6c2e9d4" <> _, subject: "Keep the Activity filter" <> _}, %{}]} = first.payload
+    assert Enum.map(first.payload.files, &{&1.status, Map.get(&1, :from)}) == [{"added", nil}, {"modified", nil}, {"renamed", "macos/Sources/SymphonyBar/ActivityPane.swift"}, {"deleted", nil}]
+    assert %{commits: [%{subject: "Read the Activity filter" <> _}], files: [%{status: "modified"}]} = second.payload
+
+    # A review's verdict with its findings, each with its file and line range.
+    assert [rework, approve] = by_type.("verdict.recorded")
+    assert %{kind: "code_review", outcome: "rework", findings: [%{file: "macos/Sources/SymphonyBar/ActivityTab.swift", line_range: %{start: 42, end: 47}}]} = rework.payload
+    assert %{outcome: "approve", findings: [%{since_last_review: "changed"}]} = approve.payload
+
+    # A picture with its artifact, a measured value, and a QA step's answer.
+    assert [picture, measured] = by_type.("evidence")
+    assert %{step: "1", environment: "fixture", result: %{status: "pass"}} = picture.payload
+    assert [artifact_id] = picture.artifacts
+    assert {:ok, %{kind: "screenshot", mime: "image/png", label: "Activity tab after a relaunch"}} = Artifacts.get(artifact_id)
+    assert {:ok, path} = Artifacts.path(artifact_id)
+    assert File.read!(path) == File.read!(Path.join(@seed, "pictures/QA-104-activity-filter.png"))
+    assert %{measures: [%{name: "Filter restored after launch", value: 0.42, unit: "s", expected: 1}]} = measured.payload
+
+    assert [checked, walked] = Enum.filter(by_type.("step.completed"), &(&1.run_id == "qa-seed-qa-QA-104"))
+    assert %{result: %{status: "pass", measures: [%{name: "Rows shown", value: 3, unit: "rows"}]}} = checked.payload
+    assert [%{step: 2, status: "pass"}, %{step: 3, status: "fail", measures: [label_width]}] = walked.payload.results
+    assert %{value: 0, unit: "pt", expected: 80} = label_width
+    assert Enum.all?(events, &(&1.repo_key == repo_key))
+  end
+
   test "a seed with only its repository loads, and the ages count from now", %{repo_key: repo_key} do
     dir = seed_copy(repo_key, fn seed -> Map.take(seed, ["repository"]) end)
     File.write!(Path.join(dir, "seed.json"), Jason.encode!(%{"repository" => repo_key, "runs" => [%{"issue" => "QA-110"}], "pauses" => %{}}))
@@ -269,6 +302,10 @@ defmodule SymphonyElixir.QaSeedTest do
 
     no_output = &Map.put(&1, "events", [%{"issue" => "QA-105", "type" => "note", "payload" => %{"text" => "x"}, "output" => %{"file" => "outputs/none.txt"}}])
     assert {:error, {{:output, "QA-105", "outputs/none.txt"}, _reason}} = QaSeed.load(seed_copy(repo_key, no_output))
+
+    # A picture that isn't an image is refused as a screenshot.
+    not_a_picture = &Map.put(&1, "events", [%{"issue" => "QA-104", "type" => "note", "payload" => %{"text" => "x"}, "picture" => %{"file" => "outputs/QA-105-build.txt"}}])
+    assert {:error, {{:output, "QA-104", "outputs/QA-105-build.txt"}, :unsupported_mime}} = QaSeed.load(seed_copy(repo_key, not_a_picture))
 
     bad_event = &Map.put(&1, "events", [%{"issue" => "QA-105", "type" => "step.completed", "payload" => %{}}])
     assert {:error, {{:event, "QA-105", "step.completed"}, {:invalid_payload, _fields}}} = QaSeed.load(seed_copy(repo_key, bad_event))

@@ -20,6 +20,12 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
   # A QA pass whose plan walked three checks of one Settings page in one session (TP-1594): the
   # grouped walk step's `results`, one failed and two passed, as the Director's timeline reads them.
   @grouped_walk_api Path.expand("../../../macos/Tests/Fixtures/director-app/ticket-grouped-walk/api/v1", __DIR__)
+  # A ticket with a fact of each kind the ticket page draws (TP-1683): a picture with its artifact,
+  # measured values, QA step answers, a code review's verdict with its findings, and a run's changed
+  # files and commits, as the app's core decodes them (`TicketFactsTests`).
+  @facts_api Path.expand("../../../macos/Tests/Fixtures/director-app/ticket-facts/api/v1", __DIR__)
+  # The QA seed's picture, so the seed and the fixture keep the same artifact.
+  @picture Path.expand("../../../priv/qa_seed/symphony/pictures/QA-104-activity-filter.png", __DIR__)
   @test_output "1 test, 1 failure\n\n  1) test the timeline shows the failed step (TimelineTest)\n     Assertion with == failed\n     left:  :done\n     right: :failed\n"
 
   setup do
@@ -240,6 +246,64 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
       walk = Enum.find(run_events, &(&1["type"] == "step.completed" and &1["payload"]["step_id"] == "walk_1_2_3"))
       assert Enum.map(walk["payload"]["results"], &{&1["step"], &1["status"]}) == [{1, "pass"}, {2, "fail"}, {3, "pass"}]
       assert walk["summary"]["detail"] =~ "Step 2: fail"
+    end
+
+    test "the checked-in facts fixture equals the answer for a ticket with a fact of each kind, each as data", %{workspace: workspace} do
+      picture = facts_ticket!(workspace)
+
+      body = json_response(get(build_conn(), @path <> "?group=run"), 200)
+      events = Path.join(@facts_api, "repos/web-shop/tickets/SHOP-410/events.json")
+      picture_file = Path.join(@facts_api, "artifacts/#{picture}.png")
+
+      if System.get_env("SYMPHONY_WRITE_FIXTURES") == "1" do
+        File.mkdir_p!(Path.dirname(events))
+        File.mkdir_p!(Path.dirname(picture_file))
+        File.write!(events, [Jason.encode_to_iodata!(body, pretty: true), "\n"])
+        File.cp!(@picture, picture_file)
+      end
+
+      assert body == events |> File.read!() |> Jason.decode!()
+      assert File.read!(picture_file) == response(get(build_conn(), "/api/v1/artifacts/#{picture}"), 200)
+
+      grouped = Enum.flat_map(body["timeline"], &Map.get(&1, "events", [&1]))
+      %{"events" => flat} = json_response(get(build_conn(), @path), 200)
+
+      # The flat answer and the grouped one carry each fact the same way.
+      for events <- [grouped, flat] do
+        of = fn type -> Enum.filter(events, &(&1["type"] == type)) end
+
+        # A picture: an evidence whose artifact is a screenshot, with its address.
+        assert [shot, measured] = of.("evidence")
+        url = "/api/v1/artifacts/" <> picture
+        assert [%{"id" => ^picture, "kind" => "screenshot", "mime" => "image/png", "available" => true, "url" => ^url}] = shot["artifacts"]
+        assert %{"caption" => "Settings after the relaunch" <> _, "step" => "1", "environment" => "fixture"} = shot["payload"]
+        assert %{"status" => "pass", "expected" => "The filter" <> _, "actual" => "It is" <> _} = shot["payload"]["result"]
+
+        # A measured value: its name, number, unit and the number expected.
+        assert [%{"name" => "Window width", "value" => 1440, "unit" => "pt", "expected" => 1440}, %{"value" => 0.42, "unit" => "s"} = timing] =
+                 measured["payload"]["measures"]
+
+        refute Map.has_key?(timing, "expected")
+
+        # A QA step's answer, on a check step and per walkthrough step of a grouped walk.
+        [check, walk] = Enum.filter(of.("step.completed"), &(&1["run_id"] == "run-qa-1" and &1["payload"]["step_id"] in ["check_1", "walk_2_3"]))
+        assert %{"status" => "pass", "measures" => [%{"name" => "Rows shown", "value" => 3, "unit" => "rows"}]} = check["payload"]["result"]
+        assert [%{"step" => 2, "status" => "pass"}, %{"step" => 3, "status" => "fail", "measures" => [%{"value" => 0, "expected" => 80}]}] = walk["payload"]["results"]
+
+        # A review's verdict with its findings, each with its file and line range.
+        assert [%{"payload" => verdict}, _qa] = of.("verdict.recorded")
+        assert %{"kind" => "code_review", "outcome" => "rework", "findings" => [first, second], "unread_files" => ["docs/settings.md"]} = verdict
+        assert %{"file" => "lib/web_shop/settings.ex", "line_range" => %{"start" => 42, "end" => 47}, "quoted_snippet" => "filter = " <> _, "suggested_fix" => _} = first
+        assert %{"line_range" => %{"start" => 9, "end" => 9}, "decision" => "D1", "since_last_review" => "unchanged"} = second
+
+        # The files a run edited and the commits it made.
+        assert [%{"payload" => changed}] = of.("run.changed")
+        assert %{"start_head" => "aaa1111", "head" => "bbb2222", "commit_count" => 3, "file_count" => 3} = changed
+        assert [%{"sha" => "c0ffee1" <> _, "subject" => "Keep the filter in settings"}, %{"sha" => "bbb2222" <> _}] = changed["commits"]
+
+        assert [%{"path" => "lib/web_shop/filter.ex", "status" => "added"}, %{"status" => "modified"}, %{"status" => "renamed", "from" => "lib/web_shop/pane.ex"}] =
+                 changed["files"]
+      end
     end
 
     test "a ticket with 10,000 events answers one page in under 200 ms" do
@@ -503,6 +567,97 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
 
     {:ok, _events} = RunStore.append_ticket_events(events)
     :ok
+  end
+
+  # The facts ticket: an implementation run that changed three files in two commits (of three, the
+  # list cut), a code review that sent it back with two findings, and a QA pass whose check step
+  # answered with a measure, whose grouped walk judged two steps, which took a picture and measured
+  # the window, and which passed. Fixed ids, times and bytes, so its answer never changes. Returns
+  # the picture's id.
+  defp facts_ticket!(workspace) do
+    path = Path.join(workspace, "settings.png")
+    File.cp!(@picture, path)
+    meta = %{repo_key: @repo_key, issue_id: @issue_id, run_id: "run-qa-1", label: "Settings after the relaunch", kind: "screenshot"}
+    {:ok, %{id: picture}} = Artifacts.ingest(path, meta, roots: [workspace])
+
+    impl = [run_id: "run-impl-1"]
+    review = [run_id: "run-review-1"]
+    qa = [run_id: "run-qa-1"]
+    qa_agent = [actor: {:agent, "run-qa-1", "qa"}]
+    check = %{step_id: "check_1", title: "The filter survives a relaunch", mode: "orchestrated"}
+    walk = %{step_id: "walk_2_3", title: "Walk a step 2, 3", mode: "orchestrated"}
+    expected = "The filter is still Failed after a relaunch"
+
+    changed = %{
+      run_id: "run-impl-1",
+      start_head: "aaa1111",
+      head: "bbb2222",
+      commits: [%{sha: "c0ffee1a2b3c4d5e6f708192a3b4c5d6e7f80912", subject: "Keep the filter in settings"}, %{sha: "bbb2222aa41f00d", subject: "Restore the filter at launch"}],
+      files: [
+        %{path: "lib/web_shop/filter.ex", status: "added"},
+        %{path: "lib/web_shop/settings.ex", status: "modified"},
+        %{path: "lib/web_shop/tab.ex", status: "renamed", from: "lib/web_shop/pane.ex"}
+      ],
+      commit_count: 3,
+      file_count: 3
+    }
+
+    findings = [
+      %{
+        summary: "The filter is read before the settings load, so a relaunch shows All.",
+        file: "lib/web_shop/settings.ex",
+        line_range: %{start: 42, end: 47},
+        quoted_snippet: "filter = settings.filter || :all",
+        suggested_fix: "Read the filter once the settings have loaded."
+      },
+      %{
+        summary: "The default filter is not the one D1 chose.",
+        file: "lib/web_shop/filter.ex",
+        line_range: %{start: 9, end: 9},
+        quoted_snippet: "@default :all",
+        suggested_fix: "Default to :failed, as D1 says.",
+        decision: "D1",
+        since_last_review: "unchanged"
+      }
+    ]
+
+    verdict = %{kind: "code_review", outcome: "rework", head: "bbb2222", findings: findings, comments: ["Restore the filter after the settings load."], unread_files: ["docs/settings.md"]}
+    rows_shown = %{name: "Rows shown", value: 3, unit: "rows", expected: 3}
+    check_result = %{status: "pass", expected: expected, actual: "It is Failed", measures: [rows_shown]}
+
+    results = [
+      %{step: 2, status: "pass", actual: "Clearing the filter shows every row"},
+      %{step: 3, status: "fail", expected: "The filter menu names the filter", actual: "The menu shows no name", measures: [%{name: "Menu label width", value: 0, unit: "pt", expected: 80}]}
+    ]
+
+    shot = %{caption: "Settings after the relaunch, filter still Failed", step: "1", environment: "fixture", result: %{status: "pass", expected: expected, actual: "It is Failed"}}
+    measures = [%{name: "Window width", value: 1440, unit: "pt", expected: 1440}, %{name: "Filter restored after launch", value: 0.42, unit: "s"}]
+
+    events =
+      for {id, minute, type, payload, opts} <- [
+            {"fx-01", 1, "phase.entered", %{to: "In Progress", from: "Todo"}, phase: "In Progress"},
+            {"fx-02", 2, "run.started", %{run_id: "run-impl-1", run_kind: "implementation", run_number: 1, head: "aaa1111"}, impl},
+            {"fx-03", 20, "run.ended", %{run_id: "run-impl-1", run_kind: "implementation", run_number: 1, exit: "handoff", head: "bbb2222", duration_ms: 1_080_000}, impl},
+            {"fx-04", 20, "run.changed", changed, impl},
+            {"fx-05", 21, "run.started", %{run_id: "run-review-1", run_kind: "code_review", run_number: 1, head: "bbb2222"}, review},
+            {"fx-06", 30, "verdict.recorded", verdict, review},
+            {"fx-07", 30, "run.ended", %{run_id: "run-review-1", run_kind: "code_review", run_number: 1, exit: "ended normally", duration_ms: 540_000}, review},
+            {"fx-08", 40, "run.started", %{run_id: "run-qa-1", run_kind: "qa", run_number: 1, head: "bbb2222"}, qa},
+            {"fx-09", 41, "step.started", Map.put(check, :prompt_ref, "phases.qa.playbooks.macos_app.steps.check_1"), qa},
+            {"fx-10", 44, "evidence", shot, qa_agent ++ [artifacts: [picture]]},
+            {"fx-11", 45, "evidence", %{caption: "The window and how long the filter took to come back", measures: measures}, qa_agent},
+            {"fx-12", 46, "step.completed", Map.merge(check, %{outcome: "passed", duration_ms: 300_000, result: check_result}), qa},
+            {"fx-13", 46, "step.started", Map.put(walk, :prompt_ref, "phases.qa.playbooks.macos_app.steps.walk_2_3"), qa},
+            {"fx-14", 50, "step.completed", Map.merge(walk, %{outcome: "passed", duration_ms: 240_000, results: results}), qa},
+            {"fx-15", 51, "verdict.recorded", %{kind: "qa", outcome: "pass", head: "bbb2222"}, qa},
+            {"fx-16", 52, "run.ended", %{run_id: "run-qa-1", run_kind: "qa", run_number: 1, exit: "ended normally", duration_ms: 720_000}, qa}
+          ] do
+        {:ok, event} = TicketEvents.build(@repo_key, @issue_id, type, payload, Keyword.put(opts, :at, at(minute)))
+        %{event | id: id}
+      end
+
+    {:ok, _events} = RunStore.append_ticket_events(events)
+    picture
   end
 
   defp at(minute), do: DateTime.add(@base, minute * 60, :second)

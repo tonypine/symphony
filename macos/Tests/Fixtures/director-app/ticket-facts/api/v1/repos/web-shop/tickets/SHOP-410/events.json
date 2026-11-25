@@ -1,0 +1,680 @@
+{
+  "next_since": "2026-10-18T10:52:00.000000Z",
+  "timeline": [
+    {
+      "actor": {
+        "kind": "machine"
+      },
+      "artifacts": [],
+      "at": "2026-10-18T10:01:00.000000Z",
+      "bookkeeping": false,
+      "children": [],
+      "head_sha": null,
+      "id": "fx-01",
+      "idempotency": null,
+      "new": true,
+      "parent": null,
+      "payload": {
+        "from": "Todo",
+        "to": "In Progress"
+      },
+      "phase": "In Progress",
+      "rule": null,
+      "run_id": null,
+      "seq": 1,
+      "summary": {
+        "detail": null,
+        "title": "Entered In Progress from Todo"
+      },
+      "supersedes": null,
+      "type": "phase.entered"
+    },
+    {
+      "effort": null,
+      "ended_at": "2026-10-18T10:20:00.000000Z",
+      "events": [
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:02:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "fx-02",
+          "idempotency": "run.started:run-impl-1",
+          "new": true,
+          "parent": null,
+          "payload": {
+            "head": "aaa1111",
+            "run_id": "run-impl-1",
+            "run_kind": "implementation",
+            "run_number": 1
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-impl-1",
+          "seq": 2,
+          "summary": {
+            "detail": "at aaa1111",
+            "title": "Implementation run 1 started"
+          },
+          "supersedes": null,
+          "type": "run.started"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:20:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "fx-03",
+          "idempotency": "run.ended:run-impl-1",
+          "new": true,
+          "parent": null,
+          "payload": {
+            "duration_ms": 1080000,
+            "exit": "handoff",
+            "head": "bbb2222",
+            "run_id": "run-impl-1",
+            "run_kind": "implementation",
+            "run_number": 1
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-impl-1",
+          "seq": 3,
+          "summary": {
+            "detail": "18 min",
+            "title": "Implementation run 1 ended: handoff"
+          },
+          "supersedes": null,
+          "type": "run.ended"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:20:00.000000Z",
+          "bookkeeping": true,
+          "children": [],
+          "head_sha": null,
+          "id": "fx-04",
+          "idempotency": "run.changed:run-impl-1",
+          "new": true,
+          "parent": null,
+          "payload": {
+            "commit_count": 3,
+            "commits": [
+              {
+                "sha": "c0ffee1a2b3c4d5e6f708192a3b4c5d6e7f80912",
+                "subject": "Keep the filter in settings"
+              },
+              {
+                "sha": "bbb2222aa41f00d",
+                "subject": "Restore the filter at launch"
+              }
+            ],
+            "file_count": 3,
+            "files": [
+              {
+                "path": "lib/web_shop/filter.ex",
+                "status": "added"
+              },
+              {
+                "path": "lib/web_shop/settings.ex",
+                "status": "modified"
+              },
+              {
+                "from": "lib/web_shop/pane.ex",
+                "path": "lib/web_shop/tab.ex",
+                "status": "renamed"
+              }
+            ],
+            "head": "bbb2222",
+            "run_id": "run-impl-1",
+            "start_head": "aaa1111"
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-impl-1",
+          "seq": 4,
+          "summary": {
+            "detail": "Keep the filter in settings · Restore the filter at launch",
+            "title": "Changed 3 files in 3 commits"
+          },
+          "supersedes": null,
+          "type": "run.changed"
+        }
+      ],
+      "exit": "handoff",
+      "head": "bbb2222",
+      "kind": "run",
+      "model": null,
+      "model_name": null,
+      "outcome": "Pushed and handed off",
+      "run_id": "run-impl-1",
+      "run_kind": "implementation",
+      "run_number": 1,
+      "started_at": "2026-10-18T10:02:00.000000Z",
+      "status": "ended",
+      "summary": {
+        "detail": "18 min",
+        "title": "Implementation run 1 ended: handoff"
+      },
+      "verdict": null
+    },
+    {
+      "effort": null,
+      "ended_at": "2026-10-18T10:30:00.000000Z",
+      "events": [
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:21:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "fx-05",
+          "idempotency": "run.started:run-review-1",
+          "new": true,
+          "parent": null,
+          "payload": {
+            "head": "bbb2222",
+            "run_id": "run-review-1",
+            "run_kind": "code_review",
+            "run_number": 1
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-review-1",
+          "seq": 5,
+          "summary": {
+            "detail": "at bbb2222",
+            "title": "Code Review run 1 started"
+          },
+          "supersedes": null,
+          "type": "run.started"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:30:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "fx-06",
+          "idempotency": null,
+          "new": true,
+          "parent": null,
+          "payload": {
+            "comments": [
+              "Restore the filter after the settings load."
+            ],
+            "findings": [
+              {
+                "file": "lib/web_shop/settings.ex",
+                "line_range": {
+                  "end": 47,
+                  "start": 42
+                },
+                "quoted_snippet": "filter = settings.filter || :all",
+                "suggested_fix": "Read the filter once the settings have loaded.",
+                "summary": "The filter is read before the settings load, so a relaunch shows All."
+              },
+              {
+                "decision": "D1",
+                "file": "lib/web_shop/filter.ex",
+                "line_range": {
+                  "end": 9,
+                  "start": 9
+                },
+                "quoted_snippet": "@default :all",
+                "since_last_review": "unchanged",
+                "suggested_fix": "Default to :failed, as D1 says.",
+                "summary": "The default filter is not the one D1 chose."
+              }
+            ],
+            "head": "bbb2222",
+            "kind": "code_review",
+            "outcome": "rework",
+            "unread_files": [
+              "docs/settings.md"
+            ]
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-review-1",
+          "seq": 6,
+          "summary": {
+            "detail": "on bbb2222",
+            "title": "Code Review verdict: rework"
+          },
+          "supersedes": null,
+          "type": "verdict.recorded"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:30:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "fx-07",
+          "idempotency": "run.ended:run-review-1",
+          "new": true,
+          "parent": null,
+          "payload": {
+            "duration_ms": 540000,
+            "exit": "ended normally",
+            "run_id": "run-review-1",
+            "run_kind": "code_review",
+            "run_number": 1
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-review-1",
+          "seq": 7,
+          "summary": {
+            "detail": "9 min",
+            "title": "Code Review run 1 ended: ended normally"
+          },
+          "supersedes": null,
+          "type": "run.ended"
+        }
+      ],
+      "exit": "ended normally",
+      "head": "bbb2222",
+      "kind": "run",
+      "model": null,
+      "model_name": null,
+      "outcome": "Sent back to Rework",
+      "run_id": "run-review-1",
+      "run_kind": "code_review",
+      "run_number": 1,
+      "started_at": "2026-10-18T10:21:00.000000Z",
+      "status": "ended",
+      "summary": {
+        "detail": "9 min",
+        "title": "Code Review run 1 ended: ended normally"
+      },
+      "verdict": {
+        "at": "2026-10-18T10:30:00.000000Z",
+        "head": "bbb2222",
+        "kind": "code_review",
+        "outcome": "rework"
+      }
+    },
+    {
+      "effort": null,
+      "ended_at": "2026-10-18T10:52:00.000000Z",
+      "events": [
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:40:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "fx-08",
+          "idempotency": "run.started:run-qa-1",
+          "new": true,
+          "parent": null,
+          "payload": {
+            "head": "bbb2222",
+            "run_id": "run-qa-1",
+            "run_kind": "qa",
+            "run_number": 1
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-qa-1",
+          "seq": 8,
+          "summary": {
+            "detail": "at bbb2222",
+            "title": "QA run 1 started"
+          },
+          "supersedes": null,
+          "type": "run.started"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:41:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "fx-09",
+          "idempotency": null,
+          "new": true,
+          "parent": null,
+          "payload": {
+            "mode": "orchestrated",
+            "prompt_ref": "phases.qa.playbooks.macos_app.steps.check_1",
+            "step_id": "check_1",
+            "title": "The filter survives a relaunch"
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-qa-1",
+          "seq": 9,
+          "summary": {
+            "detail": null,
+            "title": "The filter survives a relaunch started"
+          },
+          "supersedes": null,
+          "type": "step.started"
+        },
+        {
+          "actor": {
+            "kind": "agent",
+            "run_id": "run-qa-1",
+            "run_kind": "qa"
+          },
+          "artifacts": [
+            {
+              "available": true,
+              "id": "7763409689b96f805ef476477c10d809e7c5e3b42df5f4ceb05f69833bb1582d",
+              "kind": "screenshot",
+              "label": "Settings after the relaunch",
+              "mime": "image/png",
+              "url": "/api/v1/artifacts/7763409689b96f805ef476477c10d809e7c5e3b42df5f4ceb05f69833bb1582d"
+            }
+          ],
+          "at": "2026-10-18T10:44:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "fx-10",
+          "idempotency": null,
+          "new": true,
+          "parent": null,
+          "payload": {
+            "caption": "Settings after the relaunch, filter still Failed",
+            "environment": "fixture",
+            "result": {
+              "actual": "It is Failed",
+              "expected": "The filter is still Failed after a relaunch",
+              "status": "pass"
+            },
+            "step": "1"
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-qa-1",
+          "seq": 10,
+          "summary": {
+            "detail": "Settings after the relaunch, filter still Failed",
+            "title": "Evidence recorded with 1 file, on the fixtures"
+          },
+          "supersedes": null,
+          "type": "evidence"
+        },
+        {
+          "actor": {
+            "kind": "agent",
+            "run_id": "run-qa-1",
+            "run_kind": "qa"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:45:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "fx-11",
+          "idempotency": null,
+          "new": true,
+          "parent": null,
+          "payload": {
+            "caption": "The window and how long the filter took to come back",
+            "measures": [
+              {
+                "expected": 1440,
+                "name": "Window width",
+                "unit": "pt",
+                "value": 1440
+              },
+              {
+                "name": "Filter restored after launch",
+                "unit": "s",
+                "value": 0.42
+              }
+            ]
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-qa-1",
+          "seq": 11,
+          "summary": {
+            "detail": "The window and how long the filter took to come back",
+            "title": "Evidence recorded"
+          },
+          "supersedes": null,
+          "type": "evidence"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:46:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "fx-12",
+          "idempotency": null,
+          "new": true,
+          "parent": null,
+          "payload": {
+            "duration_ms": 300000,
+            "mode": "orchestrated",
+            "outcome": "passed",
+            "result": {
+              "actual": "It is Failed",
+              "expected": "The filter is still Failed after a relaunch",
+              "measures": [
+                {
+                  "expected": 3,
+                  "name": "Rows shown",
+                  "unit": "rows",
+                  "value": 3
+                }
+              ],
+              "status": "pass"
+            },
+            "step_id": "check_1",
+            "title": "The filter survives a relaunch"
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-qa-1",
+          "seq": 12,
+          "summary": {
+            "detail": "pass · It is Failed",
+            "title": "The filter survives a relaunch passed in 5 min"
+          },
+          "supersedes": null,
+          "type": "step.completed"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:46:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "fx-13",
+          "idempotency": null,
+          "new": true,
+          "parent": null,
+          "payload": {
+            "mode": "orchestrated",
+            "prompt_ref": "phases.qa.playbooks.macos_app.steps.walk_2_3",
+            "step_id": "walk_2_3",
+            "title": "Walk a step 2, 3"
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-qa-1",
+          "seq": 13,
+          "summary": {
+            "detail": null,
+            "title": "Walk a step 2, 3 started"
+          },
+          "supersedes": null,
+          "type": "step.started"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:50:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "fx-14",
+          "idempotency": null,
+          "new": true,
+          "parent": null,
+          "payload": {
+            "duration_ms": 240000,
+            "mode": "orchestrated",
+            "outcome": "passed",
+            "results": [
+              {
+                "actual": "Clearing the filter shows every row",
+                "status": "pass",
+                "step": 2
+              },
+              {
+                "actual": "The menu shows no name",
+                "expected": "The filter menu names the filter",
+                "measures": [
+                  {
+                    "expected": 80,
+                    "name": "Menu label width",
+                    "unit": "pt",
+                    "value": 0
+                  }
+                ],
+                "status": "fail",
+                "step": 3
+              }
+            ],
+            "step_id": "walk_2_3",
+            "title": "Walk a step 2, 3"
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-qa-1",
+          "seq": 14,
+          "summary": {
+            "detail": "Step 2: pass · Clearing the filter shows every row · Step 3: fail · The menu shows no name",
+            "title": "Walk a step 2, 3 passed in 4 min"
+          },
+          "supersedes": null,
+          "type": "step.completed"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:51:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "fx-15",
+          "idempotency": null,
+          "new": true,
+          "parent": null,
+          "payload": {
+            "head": "bbb2222",
+            "kind": "qa",
+            "outcome": "pass"
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-qa-1",
+          "seq": 15,
+          "summary": {
+            "detail": "on bbb2222",
+            "title": "QA verdict: pass"
+          },
+          "supersedes": null,
+          "type": "verdict.recorded"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:52:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "fx-16",
+          "idempotency": "run.ended:run-qa-1",
+          "new": true,
+          "parent": null,
+          "payload": {
+            "duration_ms": 720000,
+            "exit": "ended normally",
+            "run_id": "run-qa-1",
+            "run_kind": "qa",
+            "run_number": 1
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-qa-1",
+          "seq": 16,
+          "summary": {
+            "detail": "12 min",
+            "title": "QA run 1 ended: ended normally"
+          },
+          "supersedes": null,
+          "type": "run.ended"
+        }
+      ],
+      "exit": "ended normally",
+      "head": "bbb2222",
+      "kind": "run",
+      "model": null,
+      "model_name": null,
+      "outcome": "Every walkthrough step passed",
+      "run_id": "run-qa-1",
+      "run_kind": "qa",
+      "run_number": 1,
+      "started_at": "2026-10-18T10:40:00.000000Z",
+      "status": "ended",
+      "summary": {
+        "detail": "12 min",
+        "title": "QA run 1 ended: ended normally"
+      },
+      "verdict": {
+        "at": "2026-10-18T10:51:00.000000Z",
+        "head": "bbb2222",
+        "kind": "qa",
+        "outcome": "pass"
+      }
+    }
+  ]
+}

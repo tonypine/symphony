@@ -480,6 +480,376 @@
         "title": "Show when a cached page was last read",
         "by": "conductor"
       }
+    },
+    {
+      "issue": "QA-104",
+      "run_id": "qa-seed-impl-QA-104",
+      "minutes_ago": 200,
+      "type": "run.started",
+      "payload": {
+        "run_id": "qa-seed-impl-QA-104",
+        "run_kind": "implementation",
+        "run_number": 1,
+        "head": "4e1d0c2"
+      }
+    },
+    {
+      "issue": "QA-104",
+      "run_id": "qa-seed-impl-QA-104",
+      "minutes_ago": 170,
+      "type": "run.ended",
+      "payload": {
+        "run_id": "qa-seed-impl-QA-104",
+        "run_kind": "implementation",
+        "run_number": 1,
+        "exit": "handoff",
+        "head": "9b7a3f1",
+        "duration_ms": 1800000
+      }
+    },
+    {
+      "issue": "QA-104",
+      "run_id": "qa-seed-impl-QA-104",
+      "minutes_ago": 170,
+      "type": "run.changed",
+      "payload": {
+        "run_id": "qa-seed-impl-QA-104",
+        "start_head": "4e1d0c2",
+        "head": "9b7a3f1",
+        "commits": [
+          {
+            "sha": "6c2e9d4a1b3f5e7d9c0a2b4d6f8e0a1c3e5b7d9f",
+            "subject": "Keep the Activity filter in the app's settings"
+          },
+          {
+            "sha": "9b7a3f1e2d4c6b8a0f1e3d5c7b9a1f2e4d6c8b0a",
+            "subject": "Restore the Activity filter at launch"
+          }
+        ],
+        "files": [
+          {
+            "path": "macos/Sources/SymphonyBar/ActivityFilter.swift",
+            "status": "added"
+          },
+          {
+            "path": "macos/Sources/SymphonyBarCore/AppSettings.swift",
+            "status": "modified"
+          },
+          {
+            "path": "macos/Sources/SymphonyBar/ActivityTab.swift",
+            "status": "renamed",
+            "from": "macos/Sources/SymphonyBar/ActivityPane.swift"
+          },
+          {
+            "path": "macos/Sources/SymphonyBar/ActivityFilterMenu.swift",
+            "status": "deleted"
+          }
+        ]
+      }
+    },
+    {
+      "issue": "QA-104",
+      "run_id": "qa-seed-review-QA-104",
+      "minutes_ago": 160,
+      "type": "run.started",
+      "payload": {
+        "run_id": "qa-seed-review-QA-104",
+        "run_kind": "code_review",
+        "run_number": 1,
+        "head": "9b7a3f1"
+      }
+    },
+    {
+      "issue": "QA-104",
+      "run_id": "qa-seed-review-QA-104",
+      "minutes_ago": 150,
+      "type": "verdict.recorded",
+      "payload": {
+        "kind": "code_review",
+        "outcome": "rework",
+        "head": "9b7a3f1",
+        "reason": "The filter is restored before the settings are read.",
+        "findings": [
+          {
+            "summary": "The filter is read before the settings load, so a relaunch shows All.",
+            "file": "macos/Sources/SymphonyBar/ActivityTab.swift",
+            "line_range": {
+              "start": 42,
+              "end": 47
+            },
+            "quoted_snippet": "filter = settings.activityFilter ?? .all",
+            "suggested_fix": "Read the filter once the settings have loaded, in the same task that loads them."
+          }
+        ],
+        "comments": [
+          "Restore the filter after the settings load."
+        ]
+      }
+    },
+    {
+      "issue": "QA-104",
+      "run_id": "qa-seed-review-QA-104",
+      "minutes_ago": 150,
+      "type": "run.ended",
+      "payload": {
+        "run_id": "qa-seed-review-QA-104",
+        "run_kind": "code_review",
+        "run_number": 1,
+        "exit": "ended normally",
+        "duration_ms": 600000
+      }
+    },
+    {
+      "issue": "QA-104",
+      "run_id": "qa-seed-impl2-QA-104",
+      "minutes_ago": 140,
+      "type": "run.started",
+      "payload": {
+        "run_id": "qa-seed-impl2-QA-104",
+        "run_kind": "rework",
+        "run_number": 1,
+        "head": "9b7a3f1"
+      }
+    },
+    {
+      "issue": "QA-104",
+      "run_id": "qa-seed-impl2-QA-104",
+      "minutes_ago": 120,
+      "type": "run.ended",
+      "payload": {
+        "run_id": "qa-seed-impl2-QA-104",
+        "run_kind": "rework",
+        "run_number": 1,
+        "exit": "handoff",
+        "head": "d83c5a0",
+        "duration_ms": 1200000
+      }
+    },
+    {
+      "issue": "QA-104",
+      "run_id": "qa-seed-impl2-QA-104",
+      "minutes_ago": 120,
+      "type": "run.changed",
+      "payload": {
+        "run_id": "qa-seed-impl2-QA-104",
+        "start_head": "9b7a3f1",
+        "head": "d83c5a0",
+        "commits": [
+          {
+            "sha": "d83c5a0b2e4f6a8c0e2b4d6f8a0c2e4b6d8f0a2c",
+            "subject": "Read the Activity filter once the settings have loaded"
+          }
+        ],
+        "files": [
+          {
+            "path": "macos/Sources/SymphonyBar/ActivityTab.swift",
+            "status": "modified"
+          }
+        ]
+      }
+    },
+    {
+      "issue": "QA-104",
+      "run_id": "qa-seed-review2-QA-104",
+      "minutes_ago": 110,
+      "type": "run.started",
+      "payload": {
+        "run_id": "qa-seed-review2-QA-104",
+        "run_kind": "code_review",
+        "run_number": 2,
+        "head": "d83c5a0"
+      }
+    },
+    {
+      "issue": "QA-104",
+      "run_id": "qa-seed-review2-QA-104",
+      "minutes_ago": 100,
+      "type": "verdict.recorded",
+      "payload": {
+        "kind": "code_review",
+        "outcome": "approve",
+        "head": "d83c5a0",
+        "findings": [
+          {
+            "summary": "The filter is read once the settings have loaded.",
+            "file": "macos/Sources/SymphonyBar/ActivityTab.swift",
+            "line_range": {
+              "start": 44,
+              "end": 49
+            },
+            "quoted_snippet": "await settings.load()\nfilter = settings.activityFilter ?? .all",
+            "suggested_fix": "None: the earlier finding is fixed.",
+            "since_last_review": "changed"
+          }
+        ]
+      }
+    },
+    {
+      "issue": "QA-104",
+      "run_id": "qa-seed-review2-QA-104",
+      "minutes_ago": 100,
+      "type": "run.ended",
+      "payload": {
+        "run_id": "qa-seed-review2-QA-104",
+        "run_kind": "code_review",
+        "run_number": 2,
+        "exit": "ended normally",
+        "duration_ms": 540000
+      }
+    },
+    {
+      "issue": "QA-104",
+      "run_id": "qa-seed-qa-QA-104",
+      "minutes_ago": 60,
+      "type": "run.started",
+      "payload": {
+        "run_id": "qa-seed-qa-QA-104",
+        "run_kind": "qa",
+        "run_number": 1,
+        "head": "d83c5a0"
+      }
+    },
+    {
+      "issue": "QA-104",
+      "run_id": "qa-seed-qa-QA-104",
+      "minutes_ago": 58,
+      "type": "step.started",
+      "actor": "agent",
+      "run_kind": "qa",
+      "payload": {
+        "step_id": "check_1",
+        "title": "The filter survives a relaunch",
+        "mode": "delegated"
+      }
+    },
+    {
+      "issue": "QA-104",
+      "run_id": "qa-seed-qa-QA-104",
+      "minutes_ago": 52,
+      "type": "evidence",
+      "picture": {
+        "file": "pictures/QA-104-activity-filter.png",
+        "label": "Activity tab after a relaunch"
+      },
+      "actor": "agent",
+      "run_kind": "qa",
+      "payload": {
+        "caption": "The Activity tab after a relaunch, still filtered to Failed",
+        "step": "1",
+        "environment": "fixture",
+        "result": {
+          "status": "pass",
+          "expected": "The Activity tab opens filtered to Failed.",
+          "actual": "It opened filtered to Failed."
+        }
+      }
+    },
+    {
+      "issue": "QA-104",
+      "run_id": "qa-seed-qa-QA-104",
+      "minutes_ago": 51,
+      "type": "evidence",
+      "actor": "agent",
+      "run_kind": "qa",
+      "payload": {
+        "caption": "How long the filter took to come back after the relaunch",
+        "measures": [
+          {
+            "name": "Filter restored after launch",
+            "value": 0.42,
+            "unit": "s",
+            "expected": 1
+          }
+        ]
+      }
+    },
+    {
+      "issue": "QA-104",
+      "run_id": "qa-seed-qa-QA-104",
+      "minutes_ago": 50,
+      "type": "step.completed",
+      "actor": "agent",
+      "run_kind": "qa",
+      "payload": {
+        "step_id": "check_1",
+        "title": "The filter survives a relaunch",
+        "mode": "delegated",
+        "outcome": "passed",
+        "result": {
+          "status": "pass",
+          "expected": "The Activity tab opens filtered to Failed.",
+          "actual": "It opened filtered to Failed.",
+          "measures": [
+            {
+              "name": "Rows shown",
+              "value": 3,
+              "unit": "rows",
+              "expected": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "issue": "QA-104",
+      "run_id": "qa-seed-qa-QA-104",
+      "minutes_ago": 48,
+      "type": "step.started",
+      "actor": "agent",
+      "run_kind": "qa",
+      "payload": {
+        "step_id": "walk_2_3",
+        "title": "Walk steps 2 and 3",
+        "mode": "delegated"
+      }
+    },
+    {
+      "issue": "QA-104",
+      "run_id": "qa-seed-qa-QA-104",
+      "minutes_ago": 40,
+      "type": "step.completed",
+      "actor": "agent",
+      "run_kind": "qa",
+      "payload": {
+        "step_id": "walk_2_3",
+        "title": "Walk steps 2 and 3",
+        "mode": "delegated",
+        "outcome": "passed",
+        "results": [
+          {
+            "step": 2,
+            "status": "pass",
+            "actual": "Clearing the filter shows every row."
+          },
+          {
+            "step": 3,
+            "status": "fail",
+            "expected": "The filter menu names the filter.",
+            "actual": "The menu shows no name.",
+            "measures": [
+              {
+                "name": "Menu label width",
+                "value": 0,
+                "unit": "pt",
+                "expected": 80
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "issue": "QA-104",
+      "run_id": "qa-seed-qa-QA-104",
+      "minutes_ago": 38,
+      "type": "run.ended",
+      "payload": {
+        "run_id": "qa-seed-qa-QA-104",
+        "run_kind": "qa",
+        "run_number": 1,
+        "exit": "ended normally",
+        "duration_ms": 1320000
+      }
     }
   ]
 }
