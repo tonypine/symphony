@@ -362,7 +362,11 @@ final class TicketPageTests: XCTestCase {
         XCTAssertEqual(now?.pendingTool, "waiting on linear_graphql for 2 min")
         XCTAssertEqual(now?.tokens.value, "1,200")
         XCTAssertNil(now?.tokens.fraction)
-        XCTAssertEqual(now?.tokens.note, "No per-ticket cap")
+        XCTAssertNil(now?.tokens.note)
+        // The past runs carry no tokens here, so the ticket's total is the run's; no cap is set.
+        XCTAssertEqual(now?.total.value, "1,200")
+        XCTAssertNil(now?.total.fraction)
+        XCTAssertEqual(now?.total.note, "No per-ticket cap")
         XCTAssertEqual(page.phaseSentence, "Working")
         XCTAssertEqual(page.facts.map(\.label), ["Type", "Pull request"])
         XCTAssertEqual(page.facts[0].value, "Plan")
