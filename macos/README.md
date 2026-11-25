@@ -1484,9 +1484,11 @@ Ten more variables, read only in QA mode:
 - `SYMPHONY_BAR_QA_APPEARANCE=light` or `dark` makes the app draw in that appearance (`NSApp.appearance`
   set to Aqua or Dark Aqua at launch) whatever the Mac's own setting, so QA launches the app in the playbook's
   `appearance` (dark by default) without switching the Mac's appearance. Any other value, or none, follows the Mac.
-- `SYMPHONY_BAR_QA_OPEN_TICKET=TP-123` opens the Symphony window on that ticket's page at launch.
-- `SYMPHONY_BAR_QA_OPEN_VIEW=audit` opens the Symphony window on that page at launch (a page's name: `audit`,
-  `usage`, `tickets`…).
+- `SYMPHONY_BAR_QA_OPEN_TICKET=TP-123` opens the Symphony window on that ticket's page at launch, over the page
+  `SYMPHONY_BAR_QA_OPEN_VIEW` names when both are set.
+- `SYMPHONY_BAR_QA_OPEN_VIEW=audit` opens the Symphony window on that page at launch, named by its name or its
+  title, whatever the case (`audit`, `Home`, `Tickets`…); `Inbox` opens Home with the Inbox's drawer. QA's
+  `qa_launch_app` sets both from its `page` and `ticket`.
 - `SYMPHONY_BAR_QA_SCRIPTED=1` lets a script drive the app without Accessibility access. The app presses the
   menu item whose title the first line of a file in `commands/` holds (files are taken in name order and
   deleted; a name starting with `.` is skipped, so write one and rename it). As a click would, it presses

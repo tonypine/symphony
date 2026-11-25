@@ -605,7 +605,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "qa_launch_app",
       "description" =>
-        "Launch the configured app bundle the last qa_build produced, in QA mode (private settings and secrets). Returns its PID and its QA root's number (`root`): launches share root 1 and its settings unless you pass fresh_root (a new, empty root) or root (an earlier one). Pass api_fixtures when a walkthrough runs the app with SYMPHONY_BAR_QA_API_FIXTURES set. Optionally point the app at your stubs on QA_HOST_PORTS (a fake gh, Linear, a release feed), shorten its update-check interval, open its folder picker in a qa_put_checkout checkout and draw it light or dark (appearance) whatever the host's appearance.",
+        "Launch the configured app bundle the last qa_build produced, in QA mode (private settings and secrets). Returns its PID and its QA root's number (`root`): launches share root 1 and its settings unless you pass fresh_root (a new, empty root) or root (an earlier one). Pass api_fixtures when a walkthrough runs the app with SYMPHONY_BAR_QA_API_FIXTURES set. Optionally point the app at your stubs on QA_HOST_PORTS (a fake gh, Linear, a release feed), shorten its update-check interval, open its folder picker in a qa_put_checkout checkout, open it on a page of its window (page) or a ticket's page (ticket), and draw it light or dark (appearance) whatever the host's appearance.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -661,6 +661,15 @@ defmodule SymphonyElixir.Codex.DynamicTool do
             "type" => "integer",
             "minimum" => 1,
             "description" => "Launch in a QA root this pass already has, by the number a launch returned as `root`: 1 is the first, each fresh_root launch adds the next. Defaults to 1."
+          },
+          "page" => %{
+            "type" => "string",
+            "description" =>
+              "Symphony.app: the page of its window the app opens on, by name or title (Home, Tickets, Initiatives, Quality, Audit, Settings…). A page the window lacks is refused, naming the pages it has. The result's `page` says which page it opened on."
+          },
+          "ticket" => %{
+            "type" => "string",
+            "description" => "Symphony.app: a ticket identifier, e.g. TP-12; the app opens on that ticket's page (over `page` when both are given)."
           }
         }
       }
@@ -1247,7 +1256,9 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "environment",
       "release_pair",
       "fresh_root",
-      "root"
+      "root",
+      "page",
+      "ticket"
     ],
     "qa_build_release_pair" => [],
     "qa_relaunched_app" => ["wait_seconds"],

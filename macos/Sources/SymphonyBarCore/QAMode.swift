@@ -11,7 +11,7 @@ import Foundation
 /// the app draws in light or dark whatever the Mac's own appearance, which QA never changes. With
 /// `SYMPHONY_BAR_CONTROL_URL` and `SYMPHONY_BAR_CONTROL_TOKEN` it talks to a live Symphony, the QA pass's own server,
 /// instead of the fixtures (see `LiveControl`). With `SYMPHONY_BAR_QA_OPEN_TICKET` the app opens its window on that
-/// ticket's page at launch, with `SYMPHONY_BAR_QA_OPEN_VIEW` on that page (`audit`).
+/// ticket's page at launch, with `SYMPHONY_BAR_QA_OPEN_VIEW` on that page, by its name or its title (`audit`, `Home`).
 public struct QAMode: Equatable {
     /// The directory QA mode keeps everything under. QA mode is on while it is set and not blank.
     public static let environmentKey = "SYMPHONY_BAR_QA_ROOT"
@@ -40,7 +40,8 @@ public struct QAMode: Equatable {
     public static let controlTokenKey = "SYMPHONY_BAR_CONTROL_TOKEN"
     /// A ticket identifier, such as `TP-9001`: the app opens its window on that ticket's page at launch.
     public static let openTicketKey = "SYMPHONY_BAR_QA_OPEN_TICKET"
-    /// A window page's name, such as `audit`: the app opens its window on that page at launch (the table scroll test).
+    /// A window page's name or title, such as `audit` or `Home`: the app opens its window on that page at launch (QA's
+    /// `qa_launch_app` `page`, the table scroll test).
     public static let openViewKey = "SYMPHONY_BAR_QA_OPEN_VIEW"
     /// Where Symphony writes its logs (`SymphonyElixir.Paths`).
     public static let symphonyLogsRootKey = "SYMPHONY_LOGS_ROOT"
@@ -150,8 +151,25 @@ public struct QAMode: Equatable {
             appearance: environment[appearanceKey].flatMap { Appearance(rawValue: $0.trimmingWhitespace()) },
             liveControl: LiveControl.detect(environment: environment),
             openTicket: environment[openTicketKey].map { $0.trimmingWhitespace() }.flatMap { $0.isEmpty ? nil : $0 },
-            openView: environment[openViewKey].flatMap { SymphonyView(rawValue: $0.trimmingWhitespace()) }
+            openView: environment[openViewKey].flatMap(SymphonyView.named)
         )
+    }
+
+    /// Where the window opens at a QA launch.
+    public enum Opening: Equatable {
+        /// A page of the window (Repos opens its own window).
+        case page(SymphonyView)
+        /// Home with the Inbox's drawer: the Inbox is Home's drawer, not a page of its own.
+        case inbox
+        /// A ticket's page.
+        case ticket(String)
+    }
+
+    /// What the window opens on at launch, in order: the page, then the ticket's page over it, so Back returns to the
+    /// page. Empty when the launch names neither.
+    public var openings: [Opening] {
+        let page: [Opening] = openView.map { [$0 == .inbox ? .inbox : .page($0)] } ?? []
+        return page + (openTicket.map { [.ticket($0)] } ?? [])
     }
 
     /// `value` as a positive whole number of seconds, else nil.

@@ -91,6 +91,27 @@ final class QAModeTests: XCTestCase {
         XCTAssertEqual(qaStores([QAMode.openViewKey: " audit\n"]).qaMode?.openView, .audit)
     }
 
+    // TP-1664 c5: QA's `qa_launch_app` `page` opens the window on any of its pages, by name or by title.
+    func testEveryPageOfTheWindowOpensAtLaunchByItsNameOrItsTitle() {
+        for view in SymphonyView.allCases {
+            let opening: QAMode.Opening = view == .inbox ? .inbox : .page(view)
+            for name in [view.rawValue, view.title, view.title.uppercased(), " \(view.title.lowercased())\n"] {
+                let qaMode = qaStores([QAMode.openViewKey: name]).qaMode
+                XCTAssertEqual(qaMode?.openView, view, name)
+                XCTAssertEqual(qaMode?.openings, [opening], name)
+            }
+        }
+        XCTAssertEqual(SymphonyView.named("home"), .overview)
+        XCTAssertNil(SymphonyView.named("Home page"))
+    }
+
+    func testTheWindowOpensOnThePageThenTheTicketsPageOverIt() {
+        let both: [QAMode.Opening] = [.page(.tickets), .ticket("TP-9001")]
+        XCTAssertEqual(qaStores().qaMode?.openings, [QAMode.Opening]())
+        XCTAssertEqual(qaStores([QAMode.openTicketKey: "TP-9001"]).qaMode?.openings, [QAMode.Opening.ticket("TP-9001")])
+        XCTAssertEqual(qaStores([QAMode.openTicketKey: "TP-9001", QAMode.openViewKey: "Tickets"]).qaMode?.openings, both)
+    }
+
     func testALiveControlURLIsIgnoredOutsideQAMode() {
         let stores = AppStores(
             environment: [QAMode.controlURLKey: "http://127.0.0.1:4000", QAMode.controlTokenKey: "qa-token"],

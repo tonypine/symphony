@@ -1137,7 +1137,8 @@ defmodule SymphonyElixir.QaAgentTest do
 
       prompt = macos_app.(%{})
       assert prompt =~ "The QA target: dark appearance, a 2560×1440 pt window."
-      assert prompt =~ "`qa_launch_app` and `qa_gallery` draw the app dark when you name no `appearance`."
+      assert prompt =~ "`qa_launch_app` and `qa_gallery` draw the app dark when you name no `appearance`;"
+      assert prompt =~ "`qa_launch_app`'s `page` opens the app on a page of its window (`ticket` on a ticket's page)."
       assert prompt =~ "call `qa_resize_window` with no size: it sets the window to 2560×1440 pt."
       assert prompt =~ "only when its ask or plan names light mode, a small window or a specific size"
       assert prompt =~ "On every page the walkthrough visits, call `qa_check_app` with the page's name"
