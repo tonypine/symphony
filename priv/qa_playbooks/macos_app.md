@@ -154,7 +154,7 @@ worktree's configured app and on apps you launched:
 - `qa_scroll_to`: brings a named element into view by its `name`: Symphony scrolls the list as
   `qa_scroll` does until the app reports the element wholly shown, and returns it with its
   `frame`, `parts`, `scrolls` and the app's `state`; an element taller than its list comes back
-  with `partly_shown`. A row a lazy list has not drawn yet is looked for
+  at once with its top shown and `partly_shown`. A row a lazy list has not drawn yet is looked for
   `direction` (`down`, then `up`, when you name none); pass `at`, a shown element of the list,
   when the window has more than one scroll area. It answers `qa_element_not_found` when the
   element never shows.

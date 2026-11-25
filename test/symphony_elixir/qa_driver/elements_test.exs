@@ -280,6 +280,46 @@ defmodule SymphonyElixir.QaDriver.ElementsTest do
       assert note =~ "after 1 scrolls"
     end
 
+    test "brings the top of an element taller than its list to the top, and returns it partly shown at once" do
+      # A 900 pt section in a 500 pt list (25 to 525) that keeps moving: down toward its cut bottom,
+      # then both edges are cut, so up by as far as its top is cut, and no more.
+      top_shows = report([element("ticket-timeline", 200, h: 900, shown: {200, 325})])
+      both_cut = report([element("ticket-timeline", -100, h: 900, shown: {25, 500})])
+      top_at_top = report([element("ticket-timeline", 25, h: 900, shown: {25, 500})])
+      moving = [{:ok, %{"moved" => %{"y" => 300}}}, {:ok, %{"moved" => %{"y" => -125}}}]
+
+      assert {:ok, %{"scrolls" => 2, "frame" => %{"y" => 25}, "partly_shown" => note}} =
+               scroll_to(request("ticket-timeline", max_scrolls: 20), [top_shows, both_cut, top_at_top], moving)
+
+      assert note =~ "Only part of ticket-timeline shows (`shown`) with its top shown (2 scrolls)"
+      assert_received {:scrolled, "500,275", 300}
+      assert_received {:scrolled, "500,275", -125}
+      refute_received {:scrolled, _point, _dy}
+
+      # The scroll toward its cut bottom cut its top: up to bring the top back, then done.
+      bottom_cut = report([element("ticket-plan", 100, h: 520, shown: {100, 425})])
+      top_cut = report([element("ticket-plan", -3, h: 520, shown: {25, 492})])
+      top_back = report([element("ticket-plan", 25, h: 520, shown: {25, 500})])
+
+      assert {:ok, %{"scrolls" => 2, "frame" => %{"y" => 25}, "partly_shown" => _note}} =
+               scroll_to(request("ticket-plan"), [bottom_cut, top_cut, top_back], moving)
+
+      assert_received {:scrolled, "500,275", 103}
+      assert_received {:scrolled, "500,275", -28}
+      refute_received {:scrolled, _point, _dy}
+
+      # The scroll toward its cut top cut its bottom: its top shows, so it is returned as it is.
+      top_cut_first = report([element("ticket-plan", -50, h: 520, shown: {25, 445})])
+      bottom_cut_after = report([element("ticket-plan", 33, h: 520, shown: {33, 492})])
+
+      assert {:ok, %{"scrolls" => 1, "frame" => %{"y" => 33}, "partly_shown" => note}} =
+               scroll_to(request("ticket-plan"), [top_cut_first, bottom_cut_after], moving)
+
+      assert note =~ "with its top shown (1 scrolls)"
+      assert_received {:scrolled, "500,275", -83}
+      refute_received {:scrolled, _point, _dy}
+    end
+
     test "looks down, then up, for a row a lazy list has not drawn" do
       first = report([element("done-row-TP-1", 100)])
       later = report([element("done-row-TP-2", 100)])

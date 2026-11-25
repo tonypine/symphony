@@ -268,8 +268,10 @@ defmodule SymphonyElixir.QaDriver.Elements do
   the part that shows), is scrolled toward; one not drawn yet (a lazy list draws rows as they come
   into view) is looked for `request.direction` (down by default, then up once the list stops
   moving). Returns the element with its frame and parts, `scrolls` and the app's state, with
-  `partly_shown` when the list stopped or the scrolls ran out while only part of it shows (an
-  element taller than the list); `qa_element_not_found` when none of it ever shows.
+  `partly_shown` when only part of it can show: an element taller than its list (both edges cut,
+  or the scroll toward one cut edge cut the other) is scrolled once so its top shows at the top of
+  the list and returned at once, never turned back and forth; and when the list stopped or the
+  scrolls ran out. `qa_element_not_found` when none of it ever shows.
   """
   @type read_fun :: (-> {:ok, report()} | tool_error())
   @type scroll_fun :: (String.t(), integer() -> {:ok, map()} | tool_error())
@@ -278,7 +280,7 @@ defmodule SymphonyElixir.QaDriver.Elements do
   def scroll_to(request, read, scroll, sleep) do
     with {:ok, report} <- read.() do
       io = %{read: read, scroll: scroll, sleep: sleep}
-      progress = %{scrolls: 0, direction: request.direction || "down", turned: request.direction != nil}
+      progress = %{scrolls: 0, direction: request.direction || "down", turned: request.direction != nil, cut: nil}
       step(request, report, io, progress)
     end
   end
@@ -286,10 +288,49 @@ defmodule SymphonyElixir.QaDriver.Elements do
   defp step(request, report, io, progress) do
     element = find(report, request.name)
 
+    cut = cut(element)
+
     cond do
       shown?(element) and fully_shown?(element) -> {:ok, found(element, report, progress)}
       progress.scrolls >= request.max_scrolls -> partly_or_not_found(request, report, progress, "after #{progress.scrolls} scrolls")
-      true -> scroll_once(request, report, element, io, progress)
+      taller_than_list?(cut, progress) -> top_to_top(request, report, element, cut, io, progress)
+      true -> scroll_once(request, report, element, io, %{progress | cut: cut})
+    end
+  end
+
+  # Which edges of a shown element its list cuts, from the part that shows: `:top`, `:bottom`,
+  # `:both`, or nil (wholly shown, not shown, or a report with no `shown`).
+  defp cut(%{"visible" => true, "frame" => %{"y" => y, "h" => h}, "shown" => %{"y" => shown_y, "h" => shown_h}}) do
+    case {y < shown_y - 0.5, y + h > shown_y + shown_h + 0.5} do
+      {true, true} -> :both
+      {true, false} -> :top
+      {false, true} -> :bottom
+      {false, false} -> nil
+    end
+  end
+
+  defp cut(_element), do: nil
+
+  # An element cannot fit its list when both its edges are cut, or when the scroll toward one cut
+  # edge cut the other.
+  defp taller_than_list?(:both, _progress), do: true
+  defp taller_than_list?(:top, %{cut: :bottom}), do: true
+  defp taller_than_list?(:bottom, %{cut: :top}), do: true
+  defp taller_than_list?(_cut, _progress), do: false
+
+  # It cannot show whole: its top is brought to the top of the part that shows (one scroll up, none
+  # when the top shows), and it is returned as partly shown, never scrolled the other way.
+  defp top_to_top(request, report, _element, :bottom, _io, progress),
+    do: partly_or_not_found(request, report, progress, "with its top shown (#{progress.scrolls} scrolls)")
+
+  defp top_to_top(request, report, element, _cut, io, progress) do
+    with {:ok, point} <- scroll_point(report, request.at),
+         dy = -round(element["shown"]["y"] - element["frame"]["y"]),
+         {:ok, _answer} <- io.scroll.(point, dy),
+         _slept = io.sleep.(@settle_ms),
+         {:ok, next} <- io.read.() do
+      scrolls = progress.scrolls + 1
+      partly_or_not_found(request, next, %{progress | scrolls: scrolls}, "with its top shown (#{scrolls} scrolls)")
     end
   end
 
