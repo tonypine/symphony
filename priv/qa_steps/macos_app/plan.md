@@ -7,7 +7,11 @@ knows, so each brief must stand on its own.
 
 Read the ticket, its parent and design (named below), the PR's diff (`git diff <base>...HEAD`
 in this worktree), the facts Symphony gathered (the steps QA walks, the pre-checks' results) and the
-screen rules below. Then answer:
+screen rules below. Symphony hands you the app's facts too: the fixture directories in this
+worktree and the files each holds, the pages the app opens on, the Component Gallery's entries,
+and, in the screen rules, the element names ("QA names"). Use them as given: they are read from
+their sources for this pass, so do not look for fixtures, pages, Gallery entries or element names
+in the code. Then answer:
 
 - `needs_app` (true or false): whether anything in this pass judges the running app's screens.
   False only when no walkthrough step is walked and nothing on screen changed. Symphony builds,
@@ -27,21 +31,21 @@ screen rules below. Then answer:
     the step's setting (its source, page, appearance and window size) before the session starts, so
     for a step with a setting name it as given and add only what a setting cannot state: `fresh_root`
     or `root`, and the stand-ins to start (the gh, Linear or update feed stubs, with the exact
-    command from the screen rules). For a step with no setting: `api_fixtures` (a committed fixture
-    directory the screen rules name), `page` (the window's page to open on), `appearance` (only for
-    the exception below), `environment` (`fixture` or `live`), and the window size to set when it
-    is not the QA target;
+    command from the screen rules). For a step with no setting: `api_fixtures` (a fixture directory
+    the facts list, whose files hold what the step needs), `page` (one of the pages the facts
+    list), `appearance` (only for the exception below), `environment` (`fixture` or `live`), and
+    the window size to set when it is not the QA target;
   - `do`: the actions, in order, as a person would take them. A drag names where it starts and
     where it drops (the walk turn drags with `qa_drag`). A wait names its seconds (the walk turn
     waits with `qa_wait_check`); never write `sleep` or a shell command into a brief;
   - `expect`: what must be true, in the ticket's words, including the exact texts to read. Name
-    the elements a step acts on, reaches or measures by their QA names (the playbook's "QA names":
-    `queue-row-TP-12`, `done-row-TP-12:title`), never by a name found by searching the code: the
-    walk turn lists them with `qa_elements`, brings one into view with `qa_scroll_to` and measures
-    a size, a gap or an alignment between two with `qa_measure_elements`, from the frames the app
-    reports. The page shown, a selection or a focus is read from the app's `app_state`. Other
-    positions and order come from `qa_ax_tree`'s frames; a picture judges how a thing looks, with
-    `qa_crop` for a close look and `qa_measure` only for what the app does not report;
+    the elements a step acts on, reaches or measures by their QA names, as the screen rules give
+    them (`queue-row-TP-12`, `done-row-TP-12:title`): the walk turn lists them with `qa_elements`,
+    brings one into view with `qa_scroll_to` and measures a size, a gap or an alignment between
+    two with `qa_measure_elements`, from the frames the app reports. The page shown, a selection
+    or a focus is read from the app's `app_state`. Other positions and order come from
+    `qa_ax_tree`'s frames; a picture judges how a thing looks, with `qa_crop` for a close look and
+    `qa_measure` only for what the app does not report;
   - `design`: the design reference to compare with (a Screens HTML file or image named below, or
     "the design system alone");
   - `screenshots`: the names to save each judgment under (lowercase, hyphens, no extension);

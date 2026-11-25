@@ -321,8 +321,8 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       assert plan_turn.prompt =~ "You plan this QA pass"
       assert plan_turn.prompt =~ "Screen rules here."
       assert plan_turn.prompt =~ "- Step 2: Step 2: open page 2."
-      assert plan_turn.prompt =~ "Name no gallery entry."
-      refute_received {:tool, _driver, "qa_gallery", _args}
+      assert plan_turn.prompt =~ "Name no gallery entry in `screens`."
+      refute_received {:tool, _driver, "qa_gallery", %{"entry" => _entry}}
       refute walk_1.prompt =~ "Screen rules here."
       assert walk_1.prompt =~ "Step 1: open page 1."
       assert walk_1.prompt =~ ~s("where": "Page 1")
@@ -467,13 +467,15 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       assert plan_turn.prompt =~ "Use that setting as given and\n  never work it out"
     end
 
-    test "the plan is told Symphony finds the Gallery pictures, and asks the gallery nothing", ctx do
+    test "the plan is told Symphony finds the Gallery pictures, and asks the gallery only for its list", ctx do
       answers(%{"plan" => [{:write, plan([1, 2])}], "review" => [{:verdict, @pass}]})
 
       assert {:ok, _result} = run(ctx, %{}, [], [plan_step(), review()])
       [plan_turn, _review] = turns()
-      assert plan_turn.prompt =~ "Symphony draws it from the change's app and from its base's, and hands the design check the pictures that changed."
+      assert plan_turn.prompt =~ "Symphony draws the Gallery from the change's app and from its base's, and hands the design check the pictures"
       refute plan_turn.prompt =~ "affected"
+      assert_received {:tool, _driver, "qa_gallery", args}
+      assert args == %{}
       refute_received {:tool, _driver, "qa_gallery", _args}
       refute_received {:gallery_changes, _driver}
     end
@@ -493,7 +495,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       assert_received {:gallery_changes, driver}
       assert driver == self()
       refute_received {:gallery_changes, _driver}
-      refute_received {:tool, _driver, "qa_gallery", _args}
+      refute_received {:tool, _driver, "qa_gallery", %{"entry" => _entry}}
       turns = turns()
       assert Enum.map(turns, & &1.id) == ["plan", "walk_1", "walk_2", "design_check", "review"]
 
@@ -553,7 +555,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       assert outcomes["gallery"] == "failed"
       refute Map.has_key?(outcomes, "design_check")
       assert List.last(turns).prompt =~ "qa_gallery_no_base: The base's app (commit base123) has no build"
-      refute_received {:tool, _driver, "qa_gallery", _args}
+      refute_received {:tool, _driver, "qa_gallery", %{"entry" => _entry}}
     end
 
     test "a picture that cannot be kept on the ticket's history stays in the evidence, and the step says so", ctx do
@@ -643,6 +645,37 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
     end
   end
 
+  describe "the plan's facts of the app" do
+    # TP-1687: the plan is handed the fixtures, pages, Gallery entries and element names, read from their sources.
+    test "the plan's prompt lists the worktree's fixtures, the pages, the Gallery's entries and the element names, to use as given", ctx do
+      fixtures = Path.join(ctx.worktree, "macos/Tests/Fixtures")
+
+      for file <- ["director-app/home/api/v1/home.json", "director-app/home/api/v1/state.json", "facts-rail/blockers.json"] do
+        File.mkdir_p!(Path.dirname(Path.join(fixtures, file)))
+        File.write!(Path.join(fixtures, file), "{}")
+      end
+
+      listing = %{"entries" => [%{"id" => "button", "kind" => "component", "variations" => ["button-primary"]}], "widths" => %{"laptop" => 1440}}
+      Application.put_env(:symphony_elixir, @tools, Map.put(Application.fetch_env!(:symphony_elixir, @tools), "qa_gallery", {:ok, listing}))
+      playbook = "Intro.\nQA names: the names.\n- `queue-row-<ticket>`: a row.\nServers the app talks to: stand-ins.\nQA does three things.\nSteps."
+      answers(%{"plan" => [{:write, plan([1, 2])}], "review" => [{:verdict, @pass}]})
+
+      assert {:ok, _run} = run(ctx, %{playbooks: [%{kind: "macos_app", prompt: playbook}]})
+      plan_turn = Enum.find(turns(), &(&1.id == "plan"))
+
+      assert plan_turn.prompt =~ "  - director-app/home: api/v1/: home.json, state.json"
+      assert plan_turn.prompt =~ "  - facts-rail: blockers.json"
+      assert plan_turn.prompt =~ SymphonyElixir.QaDriver.Pages.listing()
+      assert plan_turn.prompt =~ "(widths: laptop 1440 pt):\n  - button (component): button-primary"
+      assert plan_turn.prompt =~ "QA names: the names.\n- `queue-row-<ticket>`: a row."
+      # The plan is told to use them as given, and never sent to the code or the playbook for them.
+      assert plan_turn.prompt =~ "Use them as given"
+      refute plan_turn.prompt =~ "searching the code"
+      refute plan_turn.prompt =~ ~s(the playbook's "QA names")
+      refute plan_turn.prompt =~ "the screen rules name"
+    end
+  end
+
   describe "the Conductor's steer" do
     test "a steer waiting for the pass opens its next step's prompt, recorded as delivered there", ctx do
       path = Workflow.symphony_file_path()
@@ -668,24 +701,75 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       assert [%{run_id: "qa-steps-run", payload: %{delivered: %{how: "next_turn"}}}] = events("conductor.steer")
     end
 
-    # TP-1550: a pass the Conductor sent back to QA reads what it must do differently, in every agent step.
-    test "every agent step reads the Conductor's newest instructions, as the one session's prompt does", ctx do
+    # TP-1550, TP-1687: a pass the Conductor sent back to QA reads what it must do differently in the
+    # plan, the design check and the review; a walk reads no Conductor instructions.
+    test "the plan, design check and review read the instructions written for this pass, and a walk none", ctx do
       path = Workflow.symphony_file_path()
       File.write!(path, File.read!(path) <> "conductor:\n  enabled: true\n")
       Cache.clear()
+      record_run_started("qa", "earlier-qa-run")
       instructions = %{junction: "after_qa_blocked", text: "Point the app at the stand-in server before step 2.", route: "rerun"}
-      {:ok, _event} = SymphonyElixir.TicketEvents.record("default", @issue_id, "conductor.instructions", instructions)
+      {:ok, _event} = TicketEvents.record("default", @issue_id, "conductor.instructions", instructions)
+      record_run_started("qa", "qa-steps-run")
+
+      answers(%{
+        "plan" => [{:write, plan([1, 2, 3], %{walk: [%{step: 1, where: "Home", group: "home"}, %{step: 2, where: "Home", group: "home"}, %{step: 3, where: "Page 3"}]})}],
+        "review" => [{:verdict, @pass}]
+      })
+
+      assert {:ok, _run} = run(ctx, %{journey: %{source: "the ticket", text: "", steps: walkthrough([1, 2, 3])}})
+
+      prompts = Map.new(turns(), &{&1.id, &1.prompt})
+      assert Enum.sort(Map.keys(prompts)) == ["design_check", "plan", "review", "walk_1_2", "walk_3"]
+
+      for id <- ["plan", "design_check", "review"] do
+        assert prompts[id] =~ "Advice from the Conductor", id
+        assert prompts[id] =~ "Point the app at the stand-in server before step 2.", id
+      end
+
+      # A walk, alone or a group, holds its step, its brief, the launched app and the walk rules, and no Conductor block.
+      for id <- ["walk_1_2", "walk_3"] do
+        refute prompts[id] =~ "Advice from the Conductor", id
+        refute prompts[id] =~ "Point the app at the stand-in server", id
+        assert prompts[id] =~ "Symphony launched it for this session as PID 4242", id
+        assert prompts[id] =~ StepPrompts.prompt("macos_app", "walk"), id
+      end
+
+      assert prompts["walk_1_2"] =~ "Step 1: open page 1."
+      assert prompts["walk_1_2"] =~ "Step 2: open page 2."
+      assert prompts["walk_1_2"] =~ ~s("group": "home")
+      assert prompts["walk_3"] =~ "Step 3: open page 3."
+      assert prompts["walk_3"] =~ ~s("where": "Page 3")
+    end
+
+    test "instructions written for another run, or before an earlier pass, reach no step of a later pass", ctx do
+      path = Workflow.symphony_file_path()
+      File.write!(path, File.read!(path) <> "conductor:\n  enabled: true\n")
+      Cache.clear()
+      record_run_started("implementation", "coding-run")
+      {:ok, _event} = TicketEvents.record("default", @issue_id, "conductor.instructions", %{junction: "after_coding", text: "Judge the diff for Code Review."})
+      record_run_started("code_review", "review-run")
+      record_run_started("qa", "earlier-qa-run")
+      {:ok, _event} = TicketEvents.record("default", @issue_id, "conductor.instructions", %{junction: "after_qa_fail", text: "Known trap: retry the fix."})
+      record_run_started("rework", "rework-run")
+      record_run_started("qa", "qa-steps-run")
 
       answers(%{"plan" => [{:write, plan([1, 2])}], "review" => [{:verdict, @pass}]})
       assert {:ok, _run} = run(ctx)
 
-      prompts = Map.new(turns(), &{&1.id, &1.prompt})
+      prompts = turns()
+      assert Enum.map(prompts, & &1.id) == ["plan", "walk_1", "walk_2", "design_check", "review"]
 
-      for id <- ["plan", "walk_1", "walk_2", "design_check", "review"] do
-        assert prompts[id] =~ "Advice from the Conductor", id
-        assert prompts[id] =~ "Point the app at the stand-in server before step 2.", id
+      for %{id: id, prompt: prompt} <- prompts do
+        refute prompt =~ "Advice from the Conductor", id
+        refute prompt =~ "Judge the diff for Code Review.", id
+        refute prompt =~ "Known trap", id
       end
     end
+  end
+
+  defp record_run_started(kind, run_id) do
+    {:ok, _event} = TicketEvents.record("default", @issue_id, "run.started", %{run_id: run_id, run_kind: kind}, run_id: run_id)
   end
 
   describe "the messages written to the ticket" do
@@ -1348,12 +1432,14 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       rules = StepPrompts.screen_rules(playbook)
 
       assert rules =~ "Servers the app talks to"
+      assert rules =~ "QA names: the stable names the app gives the elements QA walks"
       assert rules =~ "Home's two lists (TP-1499)"
       assert rules =~ "After an update: the signed release pair."
       refute rules =~ "QA does three things"
       refute rules =~ "`qa_ax_tree`: the app's accessibility tree"
 
       assert StepPrompts.screen_rules("Servers the app talks to: a\nQA does three things") == "Servers the app talks to: a"
+      assert StepPrompts.screen_rules("Intro.\nQA names: b\nServers the app talks to: a\nQA does three things") == "QA names: b\nServers the app talks to: a"
       assert StepPrompts.screen_rules("Just my playbook.") == "Just my playbook."
     end
   end

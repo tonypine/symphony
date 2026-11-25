@@ -67,9 +67,19 @@ defmodule SymphonyElixir.QaAgent.Steps do
   judged (`blocked`), never passed. The review, the evidence and the step's `step.completed`
   (`results`) read one answer per walkthrough step. The groups are the plan's: Symphony expands the
   walk steps once it takes the plan, and a brief with no `group` is walked alone.
-  Every agent step reads the Conductor's newest instructions
-  (`SymphonyElixir.Conductor.prompt_section/2`), as the one session's prompt does, so a pass the
-  Conductor sent back to QA reads what it must do differently.
+  The plan, the design check and the review read the Conductor's instructions written for this pass
+  alone (`SymphonyElixir.Conductor.prompt_section/2` with `for_run:`): those a turn wrote after the
+  newest run before this pass started, so a pass the Conductor sent back to QA reads what it must do
+  differently, and never instructions written for Code Review, a coding or rework run or an earlier
+  QA pass. A walk reads none: its prompt holds its step, its brief, the app Symphony launched in its
+  setting, the servers and QA mode, and the walk rules, and a Conductor message meant for a walk
+  reaches it through the plan's brief.
+
+  The plan is handed the app's facts, so it never searches the code for them
+  (`SymphonyElixir.QaAgent.PlanFacts`): the fixture directories in the worktree and the files each
+  holds, the pages the app opens on, the Component Gallery's entries as the built app's gallery lists
+  them (`qa_gallery`, once the build step built it), and, in its screen rules, the element names
+  (the playbook's "QA names").
 
   **Each session's app**: before every agent step that drives the app (a walk, a recheck, the
   design check), Symphony quits every app the pass launched and launches one for that session
@@ -137,7 +147,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
   alias SymphonyElixir.Config.Schema.Phases
   alias SymphonyElixir.Config.Schema.Phases.Step
   alias SymphonyElixir.PhaseSteps.Transcript
-  alias SymphonyElixir.QaAgent.{PlanCheck, PromptTerms, StepPayload, StepPrompts, Verdict}
+  alias SymphonyElixir.QaAgent.{PlanCheck, PlanFacts, PromptTerms, StepPayload, StepPrompts, Verdict}
   alias SymphonyElixir.QaDriver.Pages
   alias SymphonyElixir.QaPreCheck
   alias SymphonyElixir.Walkthrough
@@ -1609,7 +1619,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
   defp surface_lines(state, brief) do
     [
       if(command_line?(state, brief), do: command_line_rules(state), else: app_line(state)),
-      QaAgent.prompt_parts(state.job, nil, [:servers, qa_mode_part(state), :conductor])
+      QaAgent.prompt_parts(state.job, nil, [:servers, qa_mode_part(state)])
     ]
     |> Enum.reject(&(&1 == ""))
     |> Enum.join("\n\n")
@@ -1748,7 +1758,13 @@ defmodule SymphonyElixir.QaAgent.Steps do
       marked_facts(state.marked, :plan),
       pass_tools(state.facts),
       if(checks == "", do: "No step is proved by a named test.", else: "Steps a recorded test proves (proved, do not brief them):\n" <> checks),
-      "- The Component Gallery: Symphony draws it from the change's app and from its base's, and hands the design check the pictures that changed. Name no gallery entry."
+      "The app's fixtures, pages and Gallery, read by Symphony for this pass (use them as given; the element names are the " <>
+        "\"QA names\" in the screen rules below):",
+      PlanFacts.fixtures(state.facts.worktree),
+      PlanFacts.pages(),
+      PlanFacts.gallery(tool(state, "qa_gallery", %{})),
+      "- The design check: Symphony draws the Gallery from the change's app and from its base's, and hands the design check the pictures " <>
+        "that changed. Name no gallery entry in `screens`."
     ]
     |> Enum.reject(&(&1 == ""))
     |> Enum.join("\n")

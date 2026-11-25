@@ -8,8 +8,8 @@ defmodule SymphonyElixir.QaAgent.StepPrompts do
 
   Each prompt carries only the rules of the playbook (`priv/qa_playbooks/<kind>.md`) its step needs;
   the playbook itself stays whole for a pass that is one agent session. The rules that name a screen
-  (its fixtures, stand-ins and what each one shows) go to the plan alone, which passes on what
-  applies in each step's brief (`screen_rules/1`).
+  (the element names, its fixtures, stand-ins and what each one shows) go to the plan alone, which
+  passes on what applies in each step's brief (`screen_rules/1`).
 
   The `macos_app` prompts are built at compile time by `SymphonyElixir.QaAgent.PromptTerms`: their
   step statuses come from `SymphonyElixir.QaAgent.Steps.statuses/0` and the QA tools they list from
@@ -39,9 +39,11 @@ defmodule SymphonyElixir.QaAgent.StepPrompts do
               {{kind, Path.basename(file, ".md")}, if(kind in @built_kinds, do: PromptTerms.build!(name, text, @terms), else: text)}
             end)
 
-  # The plan's share of the `macos_app` playbook: from its servers and stand-ins, through every
-  # screen's fixtures, up to the numbered procedure the steps split between them; and the release
-  # pair.
+  # The plan's share of the `macos_app` playbook: from the element names ("QA names", which a Swift
+  # test holds to the app's scheme) or, in a playbook without them, its servers and stand-ins,
+  # through every screen's fixtures, up to the numbered procedure the steps split between them; and
+  # the release pair.
+  @names_start "QA names:"
   @screen_rules_start "Servers the app talks to"
   @screen_rules_end "QA does three things"
   @release_pair_start "After an update: the signed release pair."
@@ -56,13 +58,14 @@ defmodule SymphonyElixir.QaAgent.StepPrompts do
   def known, do: @prompts |> Map.keys() |> Enum.sort()
 
   @doc """
-  The screen rules of the `macos_app` playbook text `playbook` (the servers and stand-ins, the
-  fixtures and what each screen shows, and the signed release pair), which only the plan reads.
+  The screen rules of the `macos_app` playbook text `playbook` (the element names, the servers and
+  stand-ins, the fixtures and what each screen shows, and the signed release pair), which only the
+  plan reads.
   A playbook whose text lacks the sections (one a repo replaced) is given whole.
   """
   @spec screen_rules(String.t()) :: String.t()
   def screen_rules(playbook) when is_binary(playbook) do
-    screens = between(playbook, @screen_rules_start, @screen_rules_end)
+    screens = between(playbook, @names_start, @screen_rules_end) || between(playbook, @screen_rules_start, @screen_rules_end)
 
     case {screens, between(playbook, @release_pair_start, @release_pair_end)} do
       {nil, _pair} -> playbook

@@ -2102,7 +2102,11 @@ makes a pass live. A plan written before QA checks carried a setting, and a tick
 playbook when no changed path matches its own `paths`: a server-only change whose plan sets a QA
 check on the live server gets a live pass of the app. A pass that is not live starts no server. The
 QA plan step is given each walked step's setting (the fixture or the live server, the page, the
-window size and the appearance) as facts, and its briefs use them as given.
+window size and the appearance) as facts, and its briefs use them as given. It is also handed the
+app's facts, each read from its source as the prompt is built, so it never searches the code for
+them: the fixture directories under `macos/Tests/Fixtures` in the pass's worktree with the files
+each holds, the pages the app opens on at launch, the Component Gallery's entries and widths as the
+built app's gallery lists them, and the element names (the `macos_app` playbook's "QA names").
 
 A live pass runs the server through the same path as `runs: every_qa_pass`, with the same port lease
 and stop: a server that does not build, exits or fails its health check makes the pass
@@ -3560,7 +3564,10 @@ update for the person, which the ticket's timeline shows as an entry titled Upda
 markdown in the Conductor's own first-person voice, at most 1,200 characters: its first paragraph is
 the headline, a junction update's last paragraph starts with `Next:`, and a phrase may be wrapped in
 a status tag (`{problem}...{/}`, `{done}...{/}`, `{you}...{/}`) to colour it by meaning. Every run's
-prompt carries the newest instructions, Code Review's reviewer and QA included. When the same class
+prompt carries the newest instructions, Code Review's reviewer included. A QA pass reads only the
+instructions written for it, by the turn after the newest run before it started (never those
+written for Code Review, a coding or rework run or an earlier pass), and a QA walk step reads none:
+what a walk must know reaches it through the plan's brief. When the same class
 of finding came back or the budget is going wrong, it may ask the person a question, through the
 same validated decision path as any other: the ticket pauses on it, and the run the turn came before
 does not start. A question is its last resort: the prompts tell it to decide what it can from the

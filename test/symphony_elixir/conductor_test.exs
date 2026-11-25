@@ -683,6 +683,41 @@ defmodule SymphonyElixir.ConductorTest do
       assert PromptBuilder.build_prompt(ctx.issue) == off <> section
     end
 
+    # TP-1687: a QA pass reads only the instructions written for it, decided from the recorded runs.
+    test "for a QA run, carries only the instructions written after the newest other run before it", ctx do
+      start! = fn kind, run_id -> record!(ctx.issue_id, "run.started", %{run_id: run_id, run_kind: kind}, run_id: run_id) end
+      section = &Conductor.prompt_section(ctx.issue_id, settings: @on, for_run: &1)
+
+      ran!(ctx.issue_id, "implementation")
+      start!.("conductor", "turn-1")
+      record!(ctx.issue_id, "conductor.instructions", %{junction: "after_coding", text: "Review the empty list carefully."})
+      start!.("code_review", "review-1")
+      start!.("qa", "qa-1")
+
+      # Written for Code Review: the first QA pass, which Code Review's approve sent, reads none.
+      assert section.("qa-1") == ""
+      # Without `for_run:` the newest instructions are read, whatever run they were written for.
+      assert Conductor.prompt_section(ctx.issue_id, settings: @on) =~ "Review the empty list carefully."
+
+      # The turn inside the pass routed one more pass: the next pass reads it, the earlier one does not.
+      start!.("conductor", "turn-2")
+      record!(ctx.issue_id, "conductor.instructions", %{junction: "after_qa_blocked", text: "Start the gh stub first.", route: "rerun"})
+      start!.("qa", "qa-2")
+      assert section.("qa-1") == ""
+      assert section.("qa-2") =~ "<conductor_instructions>\nStart the gh stub first.\n</conductor_instructions>"
+
+      # A rework run after it: the pass after the rework reads only what came after the rework.
+      start!.("rework", "rework-1")
+      start!.("qa", "qa-3")
+      assert section.("qa-3") == ""
+      record!(ctx.issue_id, "conductor.instructions", %{junction: "message", text: "Walk step 2 on Home."})
+
+      # A run whose start is not recorded (yet) reads what came after the newest other run.
+      assert section.("qa-4") =~ "Walk step 2 on Home."
+      refute section.("qa-4") =~ "Start the gh stub first."
+      assert section.(nil) =~ "Walk step 2 on Home."
+    end
+
     test "the Conductor's settings are its defaults while symphony.yml can't be read" do
       File.write!(Workflow.symphony_file_path(), "not: [valid")
       Cache.clear()

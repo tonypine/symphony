@@ -373,7 +373,7 @@ defmodule SymphonyElixir.QaAgent do
     Issue:
     Identifier: #{issue.identifier}
     Title: #{PromptSafety.linear_issue_title(issue.title || "")}
-    #{issue_text(issue)}#{SymphonyElixir.Conductor.prompt_section(Map.get(issue, :id))}
+    #{issue_text(issue)}#{conductor_section(job)}
     #{decisions_rule(issue, job)}#{parent_section(parent)}#{design_section(job, parent)}#{epic_section(job)}#{dev_server_section(job)}#{host_ports_section(Map.get(job, :host_ports, []))}#{android_section(job)}
     #{qa_jobs_section()}#{scope_section(job)}#{qa_mode_section(job)}
     Playbooks to follow:
@@ -436,8 +436,9 @@ defmodule SymphonyElixir.QaAgent do
   @doc """
   The parts of `prompt/2` an agent step of a stepped pass reads (`SymphonyElixir.QaAgent.Steps`),
   as `parts` names them: `:intro` (the pass, the worktree and what the agent may not do), `:issue`
-  (the ticket with its decisions and parent, and the Conductor's newest instructions, as the one
-  session's prompt carries them), `:conductor` (those instructions alone), `:design` (the design
+  (the ticket with its decisions and parent, and the Conductor's instructions written for this pass,
+  as the one session's prompt carries them), `:conductor` (those instructions alone, for the design
+  check; a walk reads none), `:design` (the design
   and the files Symphony downloaded), `:servers` (the dev or live server and the host ports),
   `:qa_mode` (what the driver gives the app, and the QA target), `:qa_mode_in_setting` (the same
   without the QA target, for a session Symphony launched in its step's setting, whose size is that
@@ -458,18 +459,22 @@ defmodule SymphonyElixir.QaAgent do
     Issue:
     Identifier: #{issue.identifier}
     Title: #{PromptSafety.linear_issue_title(issue.title || "")}
-    #{issue_text(issue)}#{SymphonyElixir.Conductor.prompt_section(Map.get(issue, :id))}
+    #{issue_text(issue)}#{conductor_section(job)}
     #{decisions_rule(issue, job)}#{parent_section(parent)}
     """
   end
 
-  defp prompt_part(:conductor, %{issue: issue}, _parent), do: SymphonyElixir.Conductor.prompt_section(Map.get(issue, :id))
+  defp prompt_part(:conductor, job, _parent), do: conductor_section(job)
 
   defp prompt_part(:design, job, parent), do: design_section(job, parent)
   defp prompt_part(:servers, job, _parent), do: dev_server_section(job) <> host_ports_section(Map.get(job, :host_ports, []))
   defp prompt_part(:qa_mode, job, _parent), do: qa_mode_section(job)
   defp prompt_part(:qa_mode_in_setting, job, _parent), do: setting_qa_mode_section(job)
   defp prompt_part(:unprovable, job, _parent), do: unprovable_rule(job)
+
+  # The Conductor's instructions written for this pass alone: those after the newest run that started
+  # before it (`Conductor.prompt_section/2`'s `for_run:`), never ones written for another run.
+  defp conductor_section(job), do: SymphonyElixir.Conductor.prompt_section(Map.get(job.issue, :id), for_run: Map.get(job, :run_id))
 
   # What the driver gives the app in QA mode, by the driver's own names (TP-1346).
   defp qa_mode_section(job) do
