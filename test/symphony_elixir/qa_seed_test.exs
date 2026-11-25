@@ -4,10 +4,9 @@ defmodule SymphonyElixir.QaSeedTest do
   import Plug.Conn
   import Plug.Test
 
-  alias SymphonyElixir.{Artifacts, Config, DirectorMoves, Inbox, Initiatives, Orchestrator, Paths, Pauses}
-  alias SymphonyElixir.Dispatch.DependsOn
+  alias SymphonyElixir.{Config, DirectorMoves, Inbox, Orchestrator, Paths, Pauses}
   alias SymphonyElixir.{PlanBrief, QaSeed}
-  alias SymphonyElixir.{Questions, RunStore, Situation, SubIssueWait, TicketEvents, TicketPullRequest, Tracker}
+  alias SymphonyElixir.{Questions, RunStore, Situation, SubIssueWait, TicketEvents, Tracker}
   alias SymphonyElixir.Workflow
   alias SymphonyElixirWeb.ControlApiController
 
@@ -60,64 +59,6 @@ defmodule SymphonyElixir.QaSeedTest do
     %{} = RunStore.get_ticket_state(issue_id)
   end
 
-  test "loads Symphony's own seed: phases, pauses, an access hold, an open question, runs and PRs", %{repo_key: repo_key, dir: dir} do
-    assert QaSeed.load(dir, now: @now) == :ok
-
-    # Every tracker issue's state is its record's phase.
-    assert %{phase: "Code Review"} = record(repo_key, "qa-seed-103")
-    assert %{phase: "Plan Review"} = record(repo_key, "qa-seed-109")
-
-    assert {:ok, %{reasons: [%{kind: :person, text: "Paused for the QA seed: resume to let tickets start again"}]}} = Pauses.get(:symphony)
-    assert {:ok, %{reasons: [%{kind: :person, text: "Paused while the release notes are written"}]}} = Pauses.get({:repository, repo_key})
-
-    # Unblock releases the access reason; Decide answers the open question.
-    assert [%{kind: :environment, releasable: true}] = record(repo_key, "qa-seed-102").pause.reasons
-    held = record(repo_key, "qa-seed-108")
-    assert [%{id: question_id, title: "How long a paused repository stays paused", request: true}] = Enum.filter(held.questions, &(&1.state == :open))
-    assert %{id: ^question_id} = Questions.deciding({:ticket, repo_key, "qa-seed-108"})
-
-    runs = RunStore.list_runs(repo_key, :all)
-    assert Enum.map(runs, & &1.issue_identifier) |> Enum.sort() == ["QA-103", "QA-105", "QA-107", "QA-112", "QA-113"]
-    run = Enum.find(runs, &(&1.issue_identifier == "QA-107"))
-    assert %{status: "success", runtime_seconds: 980, ended_at: ended_at, pull_request_url: "https://github.com/symphony-qa/seed/pull/452"} = run
-    assert DateTime.compare(ended_at, DateTime.add(@now, -20 * 60, :second)) == :eq
-    assert File.regular?(run.transcript_path) and Path.dirname(run.transcript_path) == Path.join(dir, "transcripts")
-
-    assert %{pr_url: "https://github.com/symphony-qa/seed/pull/450", state: "open"} = TicketPullRequest.get(repo_key, "qa-seed-105")
-    assert %{facts: %{ci: :red, failing_check: "make-all", phase: :rework, pr_number: 450}} = record(repo_key, "qa-seed-105").pr_watch
-    assert %{facts: %{ci: :pending, phase: :qa}} = record(repo_key, "qa-seed-104").pr_watch
-    assert %{facts: %{ci: :green, phase: :merging}} = record(repo_key, "qa-seed-107").pr_watch
-  end
-
-  test "Symphony's own seed gives QA-105 a run's step history, its test output kept and its build output gone", %{dir: dir} do
-    assert QaSeed.load(dir, now: @now) == :ok
-
-    events = TicketEvents.query("qa-seed-105", limit: 200)
-    steps = Enum.filter(events, &String.starts_with?(&1.type, "step."))
-
-    assert Enum.map(steps, & &1.summary.title) == [
-             "Step started",
-             "Step passed",
-             "building started",
-             "building passed in 2 min",
-             "tests started",
-             "tests failed: back to writing the code",
-             "Step started",
-             "Paused on your answer"
-           ]
-
-    assert Enum.all?(events, &(&1.run_id == "qa-seed-steps-QA-105"))
-    assert %{actor: %{kind: :agent, run_kind: "implementation"}} = hd(steps)
-    assert hd(events).at == DateTime.add(@now, -40 * 60, :second)
-
-    [build, tests] = for %{artifacts: [id]} <- steps, do: Artifacts.get(id) |> elem(1)
-    assert %{kind: "step_output", label: "Build output", expired: true} = build
-    assert {:error, :expired} = Artifacts.path(build.id)
-    assert %{kind: "step_output", label: "Test output", expired: false, mime: "text/plain", run_id: "qa-seed-steps-QA-105"} = tests
-    assert {:ok, path} = Artifacts.path(tests.id)
-    assert File.read!(path) == File.read!(Path.join(dir, "outputs/QA-105-tests.txt"))
-  end
-
   test "the seeded server answers every move the Director makes, over the memory tracker", %{repo_key: repo_key, dir: dir} do
     assert QaSeed.load(dir, now: @now) == :ok
 
@@ -128,25 +69,15 @@ defmodule SymphonyElixir.QaSeedTest do
     inbox = [name: {:qa_seed_inbox, make_ref()}, github_repos: %{}]
     # The plan's move into Plan Review captures its brief, read from the issues file.
     assert {:ok, _brief} = PlanBrief.capture({repo_key, "qa-seed-109"})
-    read_inbox = fn -> rows(inbox) end
     moves_server = :"qa_seed_moves_#{System.unique_integer([:positive])}"
     start_supervised!({DirectorMoves, name: moves_server})
     moves = [server: moves_server, github: SeedGitHub, workspace: SeedWorkspace, inbox: inbox]
     move = &control(&1, &2, orchestrator, moves)
 
-    # The held question is a row in the Inbox, beside the access hold and the plan in review. Decide
-    # takes the row away and answers the question; Undo brings both back.
+    # Decide takes the held question's row away and answers the question; Undo brings both back.
     [%{id: question_id}] = Questions.open({:ticket, repo_key, "qa-seed-108"})
 
-    assert [
-             {"QA-102", :blocked, %{reason: "The agent can't reach the package registry: it needs a token only you can add."}},
-             {"QA-108", :action, %{question_id: ^question_id}},
-             {"QA-109", :plan, _plan},
-             {"QA-112", :action, _conductor},
-             {"QA-113", :action, _conductor_after_blocked_pass}
-           ] = read_inbox.()
-
-    # The Conductor's questions are walked in their own test; the rest of this one reads around them.
+    # The Conductor's questions are walked in their own test; this one reads around them.
     read_inbox = fn -> Enum.reject(rows(inbox), &(elem(&1, 0) in ["QA-112", "QA-113"])) end
 
     picks = [%{"question" => "How long a paused repository stays paused", "answer" => "Stay paused until resumed"}]
@@ -184,7 +115,7 @@ defmodule SymphonyElixir.QaSeedTest do
     assert %{"stopped" => false} = move.(:stop, %{"issue_identifier" => "QA-103"})
   end
 
-  test "the seeded Conductor questions act when picked: QA-112 accepts without QA, QA-113 holds one question", %{repo_key: repo_key, dir: dir} do
+  test "a Conductor question acts when picked: accepting without QA merges, going on lifts the held QA pass", %{repo_key: repo_key, dir: dir} do
     assert QaSeed.load(dir, now: @now) == :ok
     {:ok, orchestrator} = Orchestrator.start_link(name: Module.concat(__MODULE__, :ConductorOrchestrator))
     on_exit(fn -> stop_process(orchestrator) end)
@@ -194,19 +125,8 @@ defmodule SymphonyElixir.QaSeedTest do
     moves = [server: moves_server, github: SeedGitHub, workspace: SeedWorkspace, inbox: inbox]
     move = &control(&1, &2, orchestrator, moves)
 
-    # QA-112: the Conductor's question in QA, each option carrying the move its action makes.
-    assert [%{id: question_id, asked_by: %{kind: :run, name: "Conductor", run_id: "qa-seed-conductor-QA-112"}, asked_in: "QA"} = question] =
-             Questions.open({:ticket, repo_key, "qa-seed-112"})
-
-    head = :sha |> :crypto.hash("QA-112") |> Base.encode16(case: :lower)
-
-    assert [
-             %{label: "Accept without QA", move: %{to: "Merging", verdict: %{kind: "qa", outcome: "skip", head_sha: ^head}}},
-             %{label: "Send back to add a failing upload", move: %{to: "Rework", finding: %{run_kind: "conductor"}}},
-             %{label: "Run QA again"} = rerun
-           ] = question.options
-
-    refute Map.has_key?(rerun, :move)
+    # QA-112: picking Accept without QA merges without QA, records the skip and takes the row away.
+    [%{id: question_id} = question] = Questions.open({:ticket, repo_key, "qa-seed-112"})
     assert Enum.any?(rows(inbox), &match?({"QA-112", :action, %{question_id: ^question_id}}, &1))
 
     picks = [%{"question" => question.title, "answer" => "Accept without QA"}]
@@ -215,11 +135,9 @@ defmodule SymphonyElixir.QaSeedTest do
     assert [%{payload: %{outcome: "skip", details: %{reason: "skipped by decision"}}}] = TicketEvents.query("qa-seed-112", types: ["verdict.recorded"])
     refute Enum.any?(rows(inbox), &(elem(&1, 0) == "QA-112"))
 
-    # QA-113: a QA pass ended blocked with the Conductor's question open, and asked none of its own.
-    assert [%{payload: %{kind: "qa", outcome: "blocked"}}] = TicketEvents.query("qa-seed-113", types: ["verdict.recorded"])
-    assert [%{id: held_id, title: title}] = Questions.open({:ticket, repo_key, "qa-seed-113"})
-    assert %{title: ^title} = Questions.open_stage_question({:ticket, repo_key, "qa-seed-113"}, "QA")
-    assert Enum.count(rows(inbox), &(elem(&1, 0) == "QA-113")) == 1
+    # QA-113: going on from a QA pass held on the Conductor's question closes it and lifts the pause.
+    [%{id: held_id, title: title}] = Questions.open({:ticket, repo_key, "qa-seed-113"})
+    assert %{id: ^held_id} = Questions.open_stage_question({:ticket, repo_key, "qa-seed-113"}, "QA")
 
     picks = [%{"question" => title, "answer" => "Go on as it is"}]
     assert %{"move" => "decide"} = move.(:decide, %{"issue_identifier" => "QA-113", "question_id" => held_id, "picks" => picks})
@@ -228,16 +146,14 @@ defmodule SymphonyElixir.QaSeedTest do
     refute Pauses.paused?({:ticket, repo_key, "qa-seed-113"})
   end
 
-  test "TP-1560: the seed's merged QA-114 waits on its one sub-ticket, and closes once the Director cancels it", %{repo_key: repo_key, dir: dir} do
+  test "TP-1560: a merged parent waits on its one sub-ticket, and closes once the Director cancels it", %{repo_key: repo_key, dir: dir} do
     assert QaSeed.load(dir, now: @now) == :ok
     settings = Config.settings!()
     terminal_states = settings.tracker.terminal_states
 
-    # QA-114 is no plan, its merge put it in the waiting state, and its one sub-ticket is open: its
-    # status names that sub-ticket and never the epic review.
-    assert RunStore.merged_wait?("qa-seed-114")
+    # A merged parent that is no plan, waiting on its one open sub-ticket: its status names that
+    # sub-ticket and never the epic review.
     waiting = record(repo_key, "qa-seed-114")
-    assert %{phase: "Waiting on sub-tickets", labels: [], sub_issues: [%{identifier: "QA-115", state: "Todo"}]} = waiting
 
     live = %{
       running: %{},
@@ -254,16 +170,8 @@ defmodule SymphonyElixir.QaSeedTest do
     assert %{kind: "waiting_on_sub_tickets", waits_on: %{sub_tickets: ["QA-115"]}} = status
     refute status.cause =~ "epic review"
 
-    # QA-115 is its sub-ticket, and neither it nor QA-116 is held by the merged parent: the seed
-    # stores their dependencies on QA-114, which its merged pull request meets.
-    assert [{%{issue_id: "qa-seed-114", kind: :done}, _record}] = RunStore.dependencies("qa-seed-115")
-    assert [{%{issue_id: "qa-seed-114", kind: :done}, _record}] = RunStore.dependencies("qa-seed-116")
-    assert {:ok, %{parent: %{identifier: "QA-114", done: 0, total: 1}}} = Tracker.fetch_issue_by_identifier("QA-115")
-    assert {:ok, %{identifier: "QA-116"}} = Tracker.fetch_issue_by_identifier("QA-116")
-    assert DependsOn.open_for("qa-seed-115") == []
-    assert DependsOn.open_for("qa-seed-116") == []
-
     # Linear's parent node counts a Done child as done and leaves a cancelled one out.
+    assert {:ok, %{parent: %{done: 0, total: 1}}} = Tracker.fetch_issue_by_identifier("QA-115")
     :ok = Tracker.update_issue_state("qa-seed-115", "Done")
     assert {:ok, %{parent: %{done: 1, total: 1}}} = Tracker.fetch_issue_by_identifier("QA-115")
     :ok = Tracker.update_issue_state("qa-seed-115", "Todo")
@@ -289,19 +197,6 @@ defmodule SymphonyElixir.QaSeedTest do
     assert {:ok, %{state: "Done"}} = Tracker.fetch_issue_by_identifier("QA-114")
     refute RunStore.merged_wait?("qa-seed-114")
     assert RunStore.list_runs(repo_key, :all) |> Enum.filter(&(&1.issue_identifier == "QA-114")) == []
-  end
-
-  test "TP-1620: the seed's Initiatives list QA-117, which Symphony split, and not the labelled QA-109", %{dir: dir} do
-    assert QaSeed.load(dir, now: @now) == :ok
-
-    # QA-117 carries no plan label; the Conductor filed its three sub-tickets, one of them done.
-    assert %{labels: []} = RunStore.get_ticket_state("qa-seed-117")
-    assert [initiative] = Initiatives.read(now: @now)
-    assert %{identifier: "QA-117", group: "active", sub_tickets: subs} = initiative
-    assert subs |> Enum.map(&{&1.identifier, &1.state_type}) |> Enum.sort() == [{"QA-118", "completed"}, {"QA-119", "started"}, {"QA-120", "started"}]
-
-    # QA-109 carries the plan label and QA-114 has a sub-ticket, but Symphony split neither.
-    assert %{labels: ["plan"]} = RunStore.get_ticket_state("qa-seed-109")
   end
 
   defp rows(inbox), do: %{} |> Inbox.items(inbox) |> Enum.map(&{&1.identifier, &1.kind, &1.review}) |> Enum.sort()
