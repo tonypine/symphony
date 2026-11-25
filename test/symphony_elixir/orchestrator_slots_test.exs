@@ -535,7 +535,7 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
     end
   end
 
-  describe "a ticket that waits on a dependency never holds the slot its dependency needs (TP-1635)" do
+  describe "TP-1635 the dependency goes first" do
     test "c1: with 1 slot, a ticket that never ran and waits on a dependency that is not done takes no slot; the dependency starts on it", ctx do
       write_slots_workflow!(ctx, max_concurrent_agents: 1)
       waiting = recorded(issue("b", "MT-B", "Todo"))
