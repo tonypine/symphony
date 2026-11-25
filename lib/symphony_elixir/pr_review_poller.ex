@@ -21,7 +21,7 @@ defmodule SymphonyElixir.PrReviewPoller do
   alias SymphonyElixir.Learnings.Reflection
   alias SymphonyElixir.Linear.{Issue, Usage}
   alias SymphonyElixir.{SubIssueWait, TicketPullRequest, TicketSignals, Tracker, TransitionGuard}
-  alias SymphonyElixir.Workspace
+  alias SymphonyElixir.{Workspace, WorkspaceRemoval}
 
   @merging_state "Merging"
   @rework_state "Rework"
@@ -804,12 +804,12 @@ defmodule SymphonyElixir.PrReviewPoller do
         with {:ok, record} <- finish_merged(record, settings, opts, now) do
           record
           |> maybe_capture_learnings(activity, settings, opts, now)
-          |> cleanup_review(opts, now, "merged")
+          |> cleanup_review(settings, opts, now, "merged")
         end
 
       :closed ->
         finish_pull_request(record, "closed", opts)
-        cleanup_review(record, opts, now, "closed")
+        cleanup_review(record, settings, opts, now, "closed")
 
       :changes_requested ->
         maybe_transition_rework(record, attrs, settings, opts, now)
@@ -1154,7 +1154,13 @@ defmodule SymphonyElixir.PrReviewPoller do
 
   defp active_agent_run?(_issue_id, _opts), do: false
 
-  defp cleanup_review(record, opts, now, reason) do
+  # A merged or closed PR ends its review record. Its workspace is removed only when its ticket
+  # ended (`SymphonyElixir.WorkspaceRemoval`'s `:terminal`). A PR closed while its ticket is still
+  # open sends the ticket to Rework, whose run continues in that workspace: the record goes and the
+  # workspace stays. A merged PR's ticket that has not reached Done yet (the watcher closes a
+  # Merging ticket out after the merge, and a parent waits on its sub-tickets) keeps the record, so
+  # a later poll removes the workspace once the ticket reads ended.
+  defp cleanup_review(record, settings, opts, now, reason) do
     workspace = Keyword.get(opts, :workspace, Workspace)
     run_store = Keyword.get(opts, :run_store, RunStore)
 
@@ -1171,7 +1177,25 @@ defmodule SymphonyElixir.PrReviewPoller do
         finish_workspace_cleanup(record, opts, now, reason)
 
       true ->
-        remove_review_workspace(workspace, record, opts, now, reason)
+        cleanup_by_ticket(review_ticket_status(record, settings, opts), workspace, run_store, record, opts, now, reason)
+    end
+  end
+
+  defp cleanup_by_ticket(:ended, workspace, _run_store, record, opts, now, reason), do: remove_review_workspace(workspace, record, opts, now, reason)
+  defp cleanup_by_ticket(:open, _workspace, _run_store, record, _opts, _now, "merged"), do: {:cleanup_deferred, Map.get(record, :issue_id), "merged"}
+  defp cleanup_by_ticket(_open_or_missing, _workspace, run_store, record, _opts, _now, reason), do: delete_review_after_cleanup(run_store, record, reason)
+
+  # `:open` covers a ticket that could not be read: a merged PR's record waits for a read that says.
+  defp review_ticket_status(record, settings, opts) do
+    case fetch_review_issue(record, opts) do
+      {:ok, %Issue{state: state}} ->
+        if WorkspaceRemoval.ended_state?(state, settings.tracker.terminal_states), do: :ended, else: :open
+
+      :missing ->
+        :missing
+
+      {:error, _reason} ->
+        :open
     end
   end
 
@@ -1179,7 +1203,7 @@ defmodule SymphonyElixir.PrReviewPoller do
   defp no_workspace?(record), do: not match?(path when is_binary(path) and path != "", Map.get(record, :workspace_path))
 
   defp remove_review_workspace(workspace, record, opts, now, reason) do
-    case workspace.remove(Map.get(record, :workspace_path), Map.get(record, :worker_host)) do
+    case WorkspaceRemoval.remove_path(Map.get(record, :workspace_path), Map.get(record, :worker_host), :terminal, workspace) do
       {:ok, _removed_paths} ->
         finish_workspace_cleanup(record, opts, now, reason)
 

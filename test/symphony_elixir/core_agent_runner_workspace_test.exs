@@ -376,7 +376,7 @@ defmodule SymphonyElixir.CoreAgentRunnerWorkspaceTest do
 
       issue = %Issue{id: "issue-s-689", identifier: "S-689", title: "Redispatched", state: "In Progress", labels: []}
 
-      assert :ok = WorkspaceCleanup.remove(%{id: issue.id, identifier: issue.identifier}, nil)
+      assert :ok = WorkspaceCleanup.remove(%{id: issue.id, identifier: issue.identifier, remove_reason: :terminal}, nil)
       wait_for_hook_log(hook_log, "remove-started\n")
 
       test_pid = self()

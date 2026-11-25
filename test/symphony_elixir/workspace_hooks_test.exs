@@ -3,7 +3,7 @@ defmodule SymphonyElixir.WorkspaceHooksTest do
   import SymphonyElixir.WorkspaceTestSupport
   alias SymphonyElixir.Config.Schema
 
-  test "workspace age GC removes stale workspaces while protecting active identifiers" do
+  test "workspace age GC removes a stale workspace only when its ticket ended or no longer exists" do
     test_root =
       Path.join(
         System.tmp_dir!(),
@@ -13,15 +13,23 @@ defmodule SymphonyElixir.WorkspaceHooksTest do
     try do
       workspace_root = Path.join(test_root, "workspaces")
       stale_workspace = Path.join([workspace_root, "default", "MT-STALE"])
+      ended_workspace = Path.join([workspace_root, "default", "MT-ENDED"])
+      open_workspace = Path.join([workspace_root, "default", "MT-OPEN"])
       protected_workspace = Path.join([workspace_root, "default", "MT-RUNNING"])
       recent_workspace = Path.join([workspace_root, "default", "MT-RECENT"])
       other_repo_workspace = Path.join([workspace_root, "other", "MT-OTHER-STALE"])
+      stale = [stale_workspace, ended_workspace, open_workspace, protected_workspace, other_repo_workspace]
 
-      Enum.each([stale_workspace, protected_workspace, recent_workspace, other_repo_workspace], &File.mkdir_p!/1)
-      old_timestamp = {{2026, 1, 1}, {0, 0, 0}}
-      File.touch!(stale_workspace, old_timestamp)
-      File.touch!(protected_workspace, old_timestamp)
-      File.touch!(other_repo_workspace, old_timestamp)
+      Enum.each([recent_workspace | stale], &File.mkdir_p!/1)
+      File.write!(Path.join(open_workspace, "uncommitted.txt"), "still being worked on\n")
+      Enum.each(stale, &File.touch!(&1, {{2026, 1, 1}, {0, 0, 0}}))
+
+      # MT-STALE's ticket no longer exists; MT-ENDED's is Done; MT-OPEN's is open, however old.
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [
+        %Issue{id: "issue-ended", identifier: "MT-ENDED", state: "Done"},
+        %Issue{id: "issue-open", identifier: "MT-OPEN", state: "Backlog"},
+        %Issue{id: "issue-running", identifier: "MT-RUNNING", state: "Done"}
+      ])
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
@@ -32,17 +40,30 @@ defmodule SymphonyElixir.WorkspaceHooksTest do
 
       assert {:ok, actions} = Workspace.reclaim_stale_workspaces(["MT-RUNNING"], now)
 
-      assert Enum.any?(actions, &match?(%{identifier: "MT-STALE", action: :deleted, reason: :age_gc}, &1))
+      assert actions |> Enum.map(& &1.identifier) |> Enum.sort() == ["MT-ENDED", "MT-STALE"]
+      assert Enum.all?(actions, &match?(%{action: :deleted, reason: :age_gc}, &1))
       refute File.exists?(stale_workspace)
+      refute File.exists?(ended_workspace)
+      assert File.read!(Path.join(open_workspace, "uncommitted.txt")) == "still being worked on\n"
       assert File.exists?(protected_workspace)
       assert File.exists?(recent_workspace)
       assert File.exists?(other_repo_workspace)
+
+      # A ticket whose state could not be read keeps its workspace too.
+      assert {:ok, []} = Workspace.reclaim_stale_workspaces("other", [], now, ticket_status: fn _identifier -> :unknown end)
+      assert File.exists?(other_repo_workspace)
+
+      # An entry the scan did not find ended or missing is never deleted, whatever its age.
+      entry = %{repo_key: "default", identifier: "MT-OPEN", name: "MT-OPEN", path: open_workspace, mtime: 0}
+      assert [] = Workspace.delete_stale_workspaces([entry], [])
+      assert File.exists?(open_workspace)
     after
+      Application.delete_env(:symphony_elixir, :memory_tracker_issues)
       File.rm_rf(test_root)
     end
   end
 
-  test "startup orphan sweep can delete untracked workspace directories" do
+  test "startup orphan sweep can delete untracked workspace directories of ended or missing tickets" do
     test_root =
       Path.join(
         System.tmp_dir!(),
@@ -53,11 +74,13 @@ defmodule SymphonyElixir.WorkspaceHooksTest do
       workspace_root = Path.join(test_root, "workspaces")
       tracked_workspace = Path.join([workspace_root, "default", "MT-TRACKED"])
       orphan_workspace = Path.join([workspace_root, "default", "MT-ORPHAN"])
+      backlog_workspace = Path.join([workspace_root, "default", "MT-BACKLOG"])
       other_repo_orphan = Path.join([workspace_root, "other", "MT-ORPHAN"])
 
-      File.mkdir_p!(tracked_workspace)
-      File.mkdir_p!(orphan_workspace)
-      File.mkdir_p!(other_repo_orphan)
+      Enum.each([tracked_workspace, orphan_workspace, backlog_workspace, other_repo_orphan], &File.mkdir_p!/1)
+
+      # An open ticket outside the tracked set (in Backlog) is no orphan.
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [%Issue{id: "issue-backlog", identifier: "MT-BACKLOG", state: "Backlog"}])
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
@@ -66,15 +89,20 @@ defmodule SymphonyElixir.WorkspaceHooksTest do
 
       assert {:ok, actions} = Workspace.sweep_orphan_workspaces(["MT-TRACKED"])
 
-      assert Enum.any?(actions, &match?(%{identifier: "MT-ORPHAN", action: :deleted, reason: :orphan}, &1))
+      assert [%{identifier: "MT-ORPHAN", action: :deleted, reason: :orphan}] = actions
       assert File.exists?(tracked_workspace)
+      assert File.exists?(backlog_workspace)
       refute File.exists?(orphan_workspace)
+      assert File.exists?(other_repo_orphan)
+
+      assert {:ok, []} = Workspace.sweep_orphan_workspaces("other", [], ticket_status: fn _identifier -> :unknown end)
       assert File.exists?(other_repo_orphan)
 
       assert {:ok, other_actions} = Workspace.sweep_orphan_workspaces("other", [])
       assert Enum.any?(other_actions, &match?(%{repo_key: "other", identifier: "MT-ORPHAN", action: :deleted, reason: :orphan}, &1))
       refute File.exists?(other_repo_orphan)
     after
+      Application.delete_env(:symphony_elixir, :memory_tracker_issues)
       File.rm_rf(test_root)
     end
   end
@@ -696,7 +724,7 @@ defmodule SymphonyElixir.WorkspaceHooksTest do
 
       removals = [
         %{id: "issue-done", identifier: "MT-REASON", remove_reason: :terminal, state: "Done"},
-        %{id: "issue-stop", identifier: "MT-REASON", remove_reason: :stop},
+        %{id: "issue-restart", identifier: "MT-REASON", remove_reason: :restart},
         "MT-REASON"
       ]
 
@@ -705,7 +733,7 @@ defmodule SymphonyElixir.WorkspaceHooksTest do
         assert :ok = Workspace.remove_issue_workspaces(removal)
       end
 
-      assert File.read!(marker) == "terminal|Done\nstop|\ncleanup|\n"
+      assert File.read!(marker) == "terminal|Done\ncleanup|\ncleanup|\n"
     after
       File.rm_rf(test_root)
     end

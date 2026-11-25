@@ -17,7 +17,7 @@ defmodule SymphonyElixir.DirectorMoves do
     (`SymphonyElixir.BreakdownReview`); the full reset is `:restart`;
   - `:restart`: the full reset, and only a person makes it (design doc D7). A run the ticket has
     is ended first, as `/control/stop` ends it (`SymphonyElixir.Orchestrator.stop_running/2`: the
-    `stop` removal reason, so no pull request is closed by the stop), and the reset waits for its
+    stop keeps the workspace and closes no pull request), and the reset waits for its
     agent to exit before it touches the workspace. It closes the ticket's
     pull requests, removes its workspaces — so the next dispatch branches fresh from the configured
     base branch — and supersedes the workpad, then moves the ticket to `In Progress`
@@ -183,7 +183,8 @@ defmodule SymphonyElixir.DirectorMoves do
     TicketSignals,
     TicketState,
     Tracker,
-    TransitionGuard
+    TransitionGuard,
+    WorkspaceRemoval
   }
 
   alias SymphonyElixir.Conductor.Message, as: ConductorMessage
@@ -973,13 +974,15 @@ defmodule SymphonyElixir.DirectorMoves do
   # The record takes the canceled state first and Linear follows (`DecisionMove.perform/4`); a team
   # with neither spelling leaves the record where it was and refuses the move. A move Linear refuses
   # otherwise stands on the record, marked for the reconciler to project, so the rest of the cancel
-  # goes on: the run is stopped, the pull request closed, the questions, holds and pauses cleared.
+  # goes on: the run is stopped, the pull request closed, the workspace removed (the ticket ended),
+  # the questions, holds and pauses cleared.
   defp cancel(issue, note, opts) do
     with :ok <- guard(:cancel, issue),
          :ok <- refute_dependents(issue),
          {:ok, to_state} <- cancel_in_linear(issue) do
       stopped? = stop_run(issue, opts)
       closed = close_cancelled_pull_requests(issue, note, opts)
+      remove_cancelled_workspace(issue, to_state, opts)
       clear_cancelled(issue, to_state, opts)
 
       TicketSignals.record_event(
@@ -1040,6 +1043,17 @@ defmodule SymphonyElixir.DirectorMoves do
       _nothing_stopped ->
         false
     end
+  end
+
+  # A cancelled ticket ended, so its workspace goes (`WorkspaceRemoval`'s `:terminal`), whether a run
+  # was working in it or not: the stop keeps a workspace, and no reconcile sees a ticket no run holds.
+  # It is queued after the stop, so the removal waits for the run's teardown, and after the pull
+  # requests closed, so the `before_remove` hook finds none open to close again.
+  defp remove_cancelled_workspace(issue, to_state, opts) do
+    remove = Keyword.get(opts, :remove_workspace, &WorkspaceRemoval.remove/3)
+    workspace = %{id: issue.id, identifier: issue.identifier, repo_key: issue.repo_key, labels: issue.labels, state: to_state}
+    _ = remove.(workspace, nil, :terminal)
+    :ok
   end
 
   # Each open pull request of the ticket closes with the Director's note as its comment. A pull

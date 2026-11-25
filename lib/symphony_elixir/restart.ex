@@ -11,12 +11,13 @@ defmodule SymphonyElixir.Restart do
   `perform/2` runs the reset. A run the ticket had is already ended by the caller
   (`SymphonyElixir.DirectorMoves` stops it as Stop does), so first the reset waits for it to be
   gone: the agent process groups tracked in the ticket's workspace have exited
-  (`SymphonyElixir.AgentProcesses.await_exit/2`) and the removal the stop queued has finished
+  (`SymphonyElixir.AgentProcesses.await_exit/2`) and any removal already queued has finished
   (`SymphonyElixir.WorkspaceCleanup.await/2`). The workspace is never removed under a live agent:
   one still running after the wait stops the reset there. Then:
 
     1. every open pull request of the ticket is closed on GitHub;
-    2. the ticket's workspaces are removed, which deletes the worktree and its branch, so the next
+    2. the ticket's workspaces are removed (`SymphonyElixir.WorkspaceRemoval`'s `:restart`, a
+       person's request), which deletes the worktree and its branch, so the next
        dispatch creates `auto/<identifier>` again from the configured base branch;
     3. the workpad comment is superseded: the prior attempt is kept under a `Superseded` heading
        and a fresh `Plan`, `Acceptance Criteria` and `Validation` follow it.
@@ -45,6 +46,7 @@ defmodule SymphonyElixir.Restart do
   alias SymphonyElixir.Workpad
   alias SymphonyElixir.Workspace
   alias SymphonyElixir.WorkspaceCleanup
+  alias SymphonyElixir.WorkspaceRemoval
 
   @typedoc "The reset stopped at `message`, which names the step and what GitHub or Linear said."
   @type error :: {:error, {:restart, String.t()}}
@@ -59,9 +61,9 @@ defmodule SymphonyElixir.Restart do
     end
   end
 
-  # A stopped run's agent is signalled after its task ended, and the stop queued its own removal of
-  # the workspace; both are waited for, so the removal below never runs under the agent or races
-  # the stop's.
+  # A stopped run's agent is signalled after its task ended (the stop keeps the workspace), and a
+  # removal may already be queued (the ticket ended, say); both are waited for, so the removal below
+  # never runs under the agent or races another.
   defp await_run_gone(%Issue{identifier: identifier}, opts) do
     case AgentProcesses.await_exit(identifier, Keyword.get(opts, :agent_processes, [])) do
       :ok ->
@@ -118,7 +120,7 @@ defmodule SymphonyElixir.Restart do
   defp remove_workspaces(issue, opts) do
     workspace = Keyword.get(opts, :workspace, Workspace)
 
-    case workspace.remove_issue_workspaces_checked(issue) do
+    case WorkspaceRemoval.remove_now(issue, :restart, workspace) do
       :ok -> :ok
       other -> failed("couldn't remove the workspace of #{issue.identifier} (#{inspect(other)})")
     end

@@ -546,6 +546,22 @@ workspaces:
     trash_dir: .trash
 ```
 
+#### Workspace cleanup
+
+Removing a workspace is an allow list: Symphony removes one only when the ticket ended (Done,
+Canceled), when a person asked for it (Start over), or when the age collector finds an old workspace
+whose ticket has ended or no longer exists. SPEC.md §9.1 ("Workspace persistence") is the list. A
+Stop, a run displaced by a Start, and a run that times out, fails, is refused or is cut short by an
+app update keep the workspace as it is, uncommitted changes included, and the ticket's next run
+continues in it.
+
+`cleanup.max_age_days` (default `14`) is the age at which the collector, every `cleanup.interval_ms`,
+looks at a workspace: it removes it only when its ticket has ended or no longer exists. An open
+ticket's workspace is kept however old it is, and so is one whose ticket could not be read.
+`cleanup.orphan_action` (`log` by default, or `delete`, `trash` into `cleanup.trash_dir`) is what the
+startup sweep does with a folder no tracked ticket, run or retry names, again only when its ticket
+has ended or no longer exists.
+
 `git_network_timeout_ms` (default `300000`, 5 minutes) is the wall-clock limit of each `git fetch`,
 `pull`, `push` or `ls-remote` Symphony runs on this host. At the limit Symphony stops git and the
 `ssh` it started, logs an error naming the repo and command, and the call fails. Settings in the
@@ -4574,11 +4590,11 @@ hooks:
   they should run nothing from it. See [security](security.md#workspace-hooks-run-outside-the-sandbox).
 - `before_remove` gets the branch in `SYMPHONY_BRANCH`, its GitHub repo in `SYMPHONY_REPO`, and
   why the workspace goes in `SYMPHONY_REMOVE_REASON`: `terminal` when the ticket reached a
-  terminal state, which `SYMPHONY_ISSUE_STATE` names; `stop` when the operator stopped its run
-  (Stop Run, `mix symphony.stop`); `cleanup` for any other removal, such as a restart or the workspace
-  lifecycle sweep. `SYMPHONY_ISSUE_STATE` is empty for the last two. A hook that closes the
-  branch's pull requests should close them only for `terminal`: a stopped ticket is still worked.
-  A move to a state that isn't terminal, such as Backlog, removes no workspace.
+  terminal state, which `SYMPHONY_ISSUE_STATE` names; `cleanup` for the removal allow list's other
+  reasons, a restart or the workspace lifecycle sweep, with `SYMPHONY_ISSUE_STATE` empty. A hook that
+  closes the branch's pull requests should close them only for `terminal`. A stop of a run (Stop Run,
+  `mix symphony.stop`) and a move to a state that isn't terminal, such as Backlog, remove no
+  workspace, so they run no `before_remove` (see [workspace cleanup](#workspace-cleanup)).
 - A hook on this machine runs Gradle without a daemon: Symphony appends `-Dorg.gradle.daemon=false`
   to the host's `GRADLE_OPTS`. Gradle then never hands the hook's build to a daemon an agent
   started inside its sandbox, and the hook leaves no daemon behind.

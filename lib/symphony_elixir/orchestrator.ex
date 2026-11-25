@@ -70,9 +70,9 @@ defmodule SymphonyElixir.Orchestrator do
     UsageLimit,
     Verification,
     Workspace,
-    WorkspaceCleanup,
     WorkspaceHead,
-    WorkspaceRebuild
+    WorkspaceRebuild,
+    WorkspaceRemoval
   }
 
   alias SymphonyElixir.Artifacts.Transcript
@@ -2732,7 +2732,7 @@ defmodule SymphonyElixir.Orchestrator do
         running_entry = Map.get(state.running, issue.id)
 
         state
-        |> terminate_running_issue(issue.id, true, remove_reason: :terminal, issue_state: issue.state)
+        |> terminate_running_issue(issue.id, remove_workspace: :terminal, issue_state: issue.state)
         |> finish_slot(issue, running_entry, "it moved to #{issue.state}")
 
       active_issue_state?(issue.state, active_states) ->
@@ -2750,7 +2750,7 @@ defmodule SymphonyElixir.Orchestrator do
         :ok = record_stopped_run_ended(state, running_entry, issue.state)
 
         state
-        |> terminate_running_issue(issue.id, false, track_completed_run: true)
+        |> terminate_running_issue(issue.id, track_completed_run: true)
         |> release_non_active_slot(issue)
         |> put_watching_issue(issue)
         |> maybe_emit_awaiting_review(issue, running_entry)
@@ -2916,7 +2916,7 @@ defmodule SymphonyElixir.Orchestrator do
         state_acc
       else
         log_missing_running_issue(state_acc, issue_id)
-        terminate_running_issue(state_acc, issue_id, false)
+        terminate_running_issue(state_acc, issue_id)
       end
     end)
   end
@@ -2946,14 +2946,17 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp terminate_running_issue(%State{} = state, issue_id, cleanup_workspace, opts \\ []) do
+  # A run's stop removes its ticket's workspace only when `opts` name a reason the allow list holds
+  # (`remove_workspace: :terminal`); every other stop keeps it (`SymphonyElixir.WorkspaceRemoval`).
+  defp terminate_running_issue(%State{} = state, issue_id, opts \\ []) do
     case Map.get(state.running, issue_id) do
       nil ->
         release_issue_claim(state, issue_id)
 
       %{pid: pid, ref: ref, identifier: identifier} = running_entry ->
         state = record_session_completion_totals(state, running_entry)
-        state = maybe_track_completed_run(state, issue_id, running_entry, cleanup_workspace, opts)
+        remove_workspace = Keyword.get(opts, :remove_workspace)
+        state = maybe_track_completed_run(state, issue_id, running_entry, remove_workspace, opts)
 
         persist_run_completion(
           running_entry,
@@ -2983,13 +2986,13 @@ defmodule SymphonyElixir.Orchestrator do
 
         worker_host = Map.get(running_entry, :worker_host)
 
-        if cleanup_workspace do
+        if remove_workspace do
           cleanup_issue_workspace(
             %{
               id: issue_id,
               identifier: identifier,
               repo_key: running_repo_key(state, running_entry),
-              remove_reason: Keyword.get(opts, :remove_reason),
+              remove_reason: remove_workspace,
               state: Keyword.get(opts, :issue_state)
             },
             worker_host
@@ -3050,7 +3053,7 @@ defmodule SymphonyElixir.Orchestrator do
     error = "stalled for #{elapsed_ms}ms without codex activity"
 
     state =
-      terminate_running_issue(state, issue_id, false, status: "timeout", error: error)
+      terminate_running_issue(state, issue_id, status: "timeout", error: error)
 
     if pr_run_entry?(running_entry) do
       state
@@ -3264,7 +3267,7 @@ defmodule SymphonyElixir.Orchestrator do
     emit_run_stuck(running_entry, elapsed_ms, next_attempt)
 
     state =
-      terminate_running_issue(state, issue_id, false,
+      terminate_running_issue(state, issue_id,
         status: "timeout",
         error: error,
         stop_agent_session: true,
@@ -5288,7 +5291,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp fetch_issue_by_identifier(identifier) do
     case Tracker.fetch_issue_by_identifier(identifier) do
       {:error, {:linear_graphql_errors, errors}} = error ->
-        if Enum.any?(List.wrap(errors), &entity_not_found?/1), do: {:error, :issue_not_found}, else: error
+        if Tracker.issue_not_found?({:linear_graphql_errors, errors}), do: {:error, :issue_not_found}, else: error
 
       result ->
         result
@@ -5308,9 +5311,6 @@ defmodule SymphonyElixir.Orchestrator do
   defp refute_no_repository(%Issue{} = issue) do
     if is_binary(issue_repo_key(issue)), do: :ok, else: {:error, {:start_refused, StartNow.no_repository_reason()}}
   end
-
-  defp entity_not_found?(%{"message" => message}) when is_binary(message), do: message =~ ~r/not found/i
-  defp entity_not_found?(_error), do: false
 
   # Start now (`start_issue/3`) answers with the same reason the state payload's `start` field
   # shows (`SymphonyElixir.StartNow`): checked in the caller, before the claim, so a refusal
@@ -5915,7 +5915,7 @@ defmodule SymphonyElixir.Orchestrator do
          reason when is_binary(reason) <- depends_on_reason(recorded, state.update_hold_cache) do
       Logger.info("Stopping the start of #{issue_context(recorded)}; a dependency reached it before its first turn: #{reason}")
       :ok = record_stopped_run_ended(state, running_entry, recorded.state)
-      terminate_running_issue(state, issue_id, false, status: "stopped", error: "blocked before its first turn")
+      terminate_running_issue(state, issue_id, status: "stopped", error: "blocked before its first turn")
     else
       _not_a_blocked_start -> state
     end
@@ -7031,11 +7031,11 @@ defmodule SymphonyElixir.Orchestrator do
   # The removal runs the repo's before_remove hook and git under the repo's fetch lock, which
   # can take minutes, so it is queued with WorkspaceCleanup and the orchestrator moves on. A run
   # of the same issue waits for it before it creates the workspace again.
-  # The removal is recorded on the ticket, so a later rebuild of its workspace names why the folder
-  # is gone (`WorkspaceRebuild`).
+  # `WorkspaceRemoval` decides it (only the ticket's end reaches here) and records it on the ticket,
+  # so a later rebuild of its workspace names why the folder is gone (`WorkspaceRebuild`).
   defp cleanup_issue_workspace(%{identifier: identifier} = issue, worker_host) when is_binary(identifier) do
-    WorkspaceRebuild.record_removal(Map.get(issue, :repo_key), Map.get(issue, :id), Map.get(issue, :remove_reason))
-    WorkspaceCleanup.remove(issue, worker_host)
+    _ = WorkspaceRemoval.remove(issue, worker_host, Map.get(issue, :remove_reason))
+    :ok
   end
 
   defp cleanup_issue_workspace(_identifier, _worker_host), do: :ok
@@ -9903,14 +9903,13 @@ defmodule SymphonyElixir.Orchestrator do
         repo_key = running_repo_key(state, running_entry)
         Logger.warning("Operator stopping running agent issue_id=#{issue_id} issue_identifier=#{running_entry.identifier} session_id=#{session_id}")
 
-        # The stop removes the workspace, but the ticket didn't end: the `stop` reason keeps a
-        # `before_remove` hook that closes PRs from closing the ticket's PR.
+        # The ticket didn't end, so its workspace stays as it is, uncommitted changes included: the
+        # next run continues in it (`SymphonyElixir.WorkspaceRemoval`).
         state =
-          terminate_running_issue(state, issue_id, true,
+          terminate_running_issue(state, issue_id,
             status: "stopped",
             error: "agent stopped by operator",
-            track_completed_run: true,
-            remove_reason: :stop
+            track_completed_run: true
           )
           |> mark_operator_stop(issue_id, running_entry, repo_key)
 
@@ -10179,11 +10178,10 @@ defmodule SymphonyElixir.Orchestrator do
         Logger.info("Start takes the slot of issue_id=#{issue_id} issue_identifier=#{identifier} for #{issue_context(issue)}")
 
         state
-        |> terminate_running_issue(issue_id, true,
+        |> terminate_running_issue(issue_id,
           status: "stopped",
           error: "stopped: #{issue.identifier} took its slot",
-          track_completed_run: true,
-          remove_reason: :stop
+          track_completed_run: true
         )
         |> release_slot(issue_id, "#{issue.identifier} took its slot")
       end)
@@ -10836,12 +10834,12 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp remember_completed_run(state, _issue_id, _running_entry), do: state
 
-  defp maybe_track_completed_run(state, issue_id, running_entry, cleanup_workspace, opts) do
+  defp maybe_track_completed_run(state, issue_id, running_entry, remove_workspace, opts) do
     cond do
       Keyword.get(opts, :track_completed_run, false) ->
         remember_completed_run(state, issue_id, running_entry)
 
-      cleanup_workspace ->
+      remove_workspace != nil ->
         forget_completed_issue(state, issue_id)
 
       true ->
@@ -12183,7 +12181,7 @@ defmodule SymphonyElixir.Orchestrator do
       facts = running_budget_facts(state, running_entry, issue_id, limit, total_tokens)
 
       state
-      |> terminate_running_issue(issue_id, false,
+      |> terminate_running_issue(issue_id,
         status: "budget_exhausted",
         error: "token budget exhausted: total_tokens=#{total_tokens} limit=#{limit}"
       )
