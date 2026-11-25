@@ -4411,6 +4411,18 @@ Which ticket a free slot goes to:
   dependency (its own or a sibling under the same epic) goes first through that slot. With nothing
   running and a ticket that can start in the queue, the free slot goes to it. Any other ticket that
   cannot start takes no slot.
+- Nothing a ticket waited before gives it precedence. A retry that comes due (or is sent on when a
+  pause lifts) on a ticket that holds no slot starts at once only when no candidate of the last
+  cycle is ahead of it in the queue; otherwise it waits for a slot with its attempt and asks for a
+  cycle at once, whose pass gives the slot in queue order. A wait for a slot kept through a pause
+  keeps its attempt and its `since`, not a place: the pass walks it in its queue place. A ticket that
+  holds a slot, or runs through its ancestor's, starts its next run as before.
+- A candidate the pass walks past while a ticket lower in the queue takes a free slot is listed
+  under `dispatch_skipped` with its gate's reason, and has the same reason on its own record: a
+  `passed_over` signal naming the ticket that took the slot, written once per reason.
+- A ticket's situation says "next and a slot is free" only when the dispatch order would start it;
+  one the order leaves waiting says its place in line and the ticket just ahead of it, and a slot
+  held with no run is not free.
 
 Nothing else limits the slots: landing has no allowance of its own, no phase has a limit of its
 own, and no slot is reserved for epics. `/api/v1/state` keeps `finishing`, `epic_lanes` and

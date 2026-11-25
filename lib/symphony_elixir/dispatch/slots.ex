@@ -45,7 +45,10 @@ defmodule SymphonyElixir.Dispatch.Slots do
     dependency only when that dependency runs on a slot of its own or is done and waits for its
     release: one that waits on a dependency that needs a slot takes none, so the dependency, its
     own or a sibling under the same epic, goes first through that slot (TP-1635). With nothing
-    running and a ticket that can start in the queue, the free slot always goes to it.
+    running and a ticket that can start in the queue, the free slot always goes to it. Whatever asks
+    for a start (a pass, a retry coming due, a pause lifting) gives the free slot this way: a retry
+    on a ticket that holds no slot, with a candidate ahead of it in the queue, waits for a slot with
+    its attempt and asks for a cycle, whose pass decides (TP-1660).
   - Nothing else limits the slots: landing has no allowance of its own, no phase has a limit of its
     own, and no slot is reserved for epics.
   - Each slot has a number, from 1: a ticket that takes a slot gets the lowest number no holder uses

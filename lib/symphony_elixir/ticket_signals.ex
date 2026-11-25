@@ -58,7 +58,8 @@ defmodule SymphonyElixir.TicketSignals do
     "qa_head_unreadable" => "QA could not read the workspace head",
     "ci_rerun" => "Symphony reran the failed CI",
     "ci_flake" => "CI passed on Symphony's rerun, a flake",
-    "stale_check" => "GitHub still shows a check as running after it finished"
+    "stale_check" => "GitHub still shows a check as running after it finished",
+    "passed_over" => "Passed over: a ticket lower in the queue took the free slot"
   }
   @note_max 4_000
 
