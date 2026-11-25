@@ -4,7 +4,19 @@ defmodule SymphonyElixir.Workspace do
   """
 
   require Logger
-  alias SymphonyElixir.{Config, GitConfigCommands, ManagedClone, PathSafety, ProcessTree, SSH, Tracker, WorkflowSource, WorkspaceRemoval}
+
+  alias SymphonyElixir.{
+    Config,
+    GitConfigCommands,
+    ManagedClone,
+    PathSafety,
+    ProcessTree,
+    SSH,
+    Tracker,
+    WorkflowSource,
+    WorkspaceRemoval
+  }
+
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Hooks
   alias SymphonyElixir.GitHub.Repo, as: GitHubRepo
@@ -1441,7 +1453,8 @@ defmodule SymphonyElixir.Workspace do
   @doc """
   `reclaim_stale_workspaces/3` with `opts` for `scan_stale_workspaces/3` (`:ticket_status`).
   """
-  @spec reclaim_stale_workspaces(String.t(), term(), DateTime.t(), keyword()) :: {:ok, [lifecycle_action()]} | {:error, term()}
+  @spec reclaim_stale_workspaces(String.t(), term(), DateTime.t(), keyword()) ::
+          {:ok, [lifecycle_action()]} | {:error, term()}
   def reclaim_stale_workspaces(repo_key, protected_identifiers, %DateTime{} = now, opts) when is_binary(repo_key) do
     with {:ok, stale_entries} <- scan_stale_workspaces(repo_key, now, opts) do
       {:ok, delete_stale_workspaces(stale_entries, protected_identifiers)}

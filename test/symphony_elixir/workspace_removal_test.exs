@@ -48,7 +48,9 @@ defmodule SymphonyElixir.WorkspaceRemovalTest do
         for reason <- @refused do
           assert {:error, {:removal_not_allowed, ^reason}} = WorkspaceRemoval.remove(issue, nil, reason, missing_server)
           assert {:error, {:removal_not_allowed, ^reason}} = WorkspaceRemoval.remove_now(issue, reason, FakeWorkspace)
-          assert {:error, {:removal_not_allowed, ^reason}} = WorkspaceRemoval.remove_path(workspace, nil, reason, FakeWorkspace)
+
+          assert {:error, {:removal_not_allowed, ^reason}} =
+                   WorkspaceRemoval.remove_path(workspace, nil, reason, FakeWorkspace)
         end
       end)
 
