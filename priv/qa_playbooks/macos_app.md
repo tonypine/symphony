@@ -526,7 +526,7 @@ GitHub or Linear in QA:
   group of the step opens; again, they all fold. "Implementation run 2" is running on "Write the
   code": its last entry, the note "Found a subtle bug…", carries "Working" and its fold line
   reads "2 actions so far". On the live server the seed gives QA-104's first implementation run
-  the same finished step (its transcript in `priv/qa_seed/symphony/step_transcripts`).
+  the same finished step, its saved transcript served by Symphony's own server.
 - **A grouped walk step (TP-1594):** pass
   `macos/Tests/Fixtures/director-app/ticket-grouped-walk` as `api_fixtures`, open Work ›
   Tickets (it lists SHOP-410 alone, in QA) and open SHOP-410. Its timeline holds "QA run 1" with the pass's steps, as Symphony's server writes
