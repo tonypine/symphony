@@ -120,6 +120,7 @@ final class SettingsUIManifestTests: XCTestCase {
             )
         }, from: yaml)
         yaml = try record("setting Anthropic's reserve", { try ProviderReserve.setting(85, of: "anthropic", in: $0) }, from: yaml)
+        yaml = try record("setting OpenCode Go's reserve", { try ProviderReserve.setting(90, of: "opencode-go", in: $0) }, from: yaml)
         yaml = try record("setting allowed ticket priorities", {
             try TicketPriorities.updating($0, from: TicketPriorities(), to: TicketPriorities(priorities: [.urgent, .high]))
         }, from: yaml)
