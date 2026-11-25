@@ -11,7 +11,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
   alias SymphonyElixir.Config.Schema.Phases.Step
   alias SymphonyElixir.{QaAgent, TicketEvents}
   alias SymphonyElixir.QaAgent.{PlanCheck, StepPrompts, Steps}
-  alias SymphonyElixir.QaDriver.Picture
+  alias SymphonyElixir.QaDriver.{Pages, Picture}
 
   @issue_id "issue-qa-steps"
   @answers :qa_steps_test_answers
@@ -665,7 +665,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
 
       assert plan_turn.prompt =~ "  - director-app/home: api/v1/: home.json, state.json"
       assert plan_turn.prompt =~ "  - facts-rail: blockers.json"
-      assert plan_turn.prompt =~ SymphonyElixir.QaDriver.Pages.listing()
+      assert plan_turn.prompt =~ Pages.listing()
       assert plan_turn.prompt =~ "(widths: laptop 1440 pt):\n  - button (component): button-primary"
       assert plan_turn.prompt =~ "QA names: the names.\n- `queue-row-<ticket>`: a row."
       # The plan is told to use them as given, and never sent to the code or the playbook for them.
@@ -713,7 +713,16 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       record_run_started("qa", "qa-steps-run")
 
       answers(%{
-        "plan" => [{:write, plan([1, 2, 3], %{walk: [%{step: 1, where: "Home", group: "home"}, %{step: 2, where: "Home", group: "home"}, %{step: 3, where: "Page 3"}]})}],
+        "plan" => [
+          {:write,
+           plan([1, 2, 3], %{
+             walk: [
+               %{step: 1, where: "Home", group: "home"},
+               %{step: 2, where: "Home", group: "home"},
+               %{step: 3, where: "Page 3"}
+             ]
+           })}
+        ],
         "review" => [{:verdict, @pass}]
       })
 
@@ -727,7 +736,8 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
         assert prompts[id] =~ "Point the app at the stand-in server before step 2.", id
       end
 
-      # A walk, alone or a group, holds its step, its brief, the launched app and the walk rules, and no Conductor block.
+      # A walk, alone or a group, holds its step, its brief, the launched app and the walk rules,
+      # and no Conductor block.
       for id <- ["walk_1_2", "walk_3"] do
         refute prompts[id] =~ "Advice from the Conductor", id
         refute prompts[id] =~ "Point the app at the stand-in server", id
