@@ -23,16 +23,16 @@ defmodule SymphonyElixir.QaAgent.PromptTerms do
     target or the step's setting, which the text around the prompt renders. A quoted text (what the
     app shows, between double quotes) may hold one.
 
-  `SymphonyElixir.QaAgent.StepPrompts` builds the step prompts with it, and
-  `SymphonyElixir.QaAgent.Selection` the `macos_app` playbook, both at compile time, so a prompt
-  that contradicts a definition does not compile.
+  `SymphonyElixir.QaAgent.StepPrompts` builds the step prompts with it,
+  `SymphonyElixir.QaAgent.Selection` the `macos_app` playbook, and `SymphonyElixir.QaAgent`,
+  `SymphonyElixir.QaAgent.Steps` and `SymphonyElixir.QaModeContract` every text they add around
+  them that names a QA tool or a step status (the verdict rules, QA's jobs, the device rule, the
+  follow-up for a missing verdict, the QA mode the driver gives the app), all at compile time, so a
+  prompt that contradicts a definition does not compile.
   """
 
-  alias SymphonyElixir.QaAgent.Steps
+  alias SymphonyElixir.QaAgent.{Steps, Verdict}
   alias SymphonyElixir.QaDriver
-
-  # The QA tools Symphony serves itself, not the host driver.
-  @symphony_tools ~w(qa_verdict)
 
   # The codes the QA tools and Symphony answer with, which the prompts name for what a session does
   # when it sees one.
@@ -58,7 +58,7 @@ defmodule SymphonyElixir.QaAgent.PromptTerms do
     %{
       tools: Keyword.get_lazy(overrides, :tools, &QaDriver.tools/0),
       statuses: Keyword.get_lazy(overrides, :statuses, &Steps.statuses/0),
-      symphony_tools: Keyword.get(overrides, :symphony_tools, @symphony_tools),
+      symphony_tools: Keyword.get_lazy(overrides, :symphony_tools, fn -> [Verdict.tool_name()] end),
       codes: Keyword.get(overrides, :codes, @codes)
     }
   end

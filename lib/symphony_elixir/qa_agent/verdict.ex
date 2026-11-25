@@ -206,7 +206,7 @@ defmodule SymphonyElixir.QaAgent.Verdict do
   @doc "What was wrong with a verdict, in a sentence the agent can act on."
   @spec describe_error(term()) :: String.t()
   def describe_error(:empty_response), do: "the answer was empty."
-  def describe_error(:no_verdict_object), do: "the answer had no qa_verdict call and no JSON verdict object."
+  def describe_error(:no_verdict_object), do: "the answer had no #{@tool_name} call and no JSON verdict object."
   def describe_error(:not_a_json_object), do: "the verdict must be a JSON object."
   def describe_error(:invalid_verdict), do: "`verdict` must be one of pass, fail or blocked."
   def describe_error(:invalid_steps), do: "each step must be an object with a non-empty `name` and a `status` of pass, fail, blocked, skipped or unprovable."

@@ -114,8 +114,12 @@ defmodule SymphonyElixir.QaAgent do
   @missing_verdict [:no_verdict_object, :empty_response]
   @browser_mcp_name "browser"
   @localhost_domains ["localhost", "127.0.0.1"]
-  @target_missing_reason "the app was not judged at the QA target: no `qa_resize_window` call set its window to the " <>
-                           "target size, so the screens were not checked at the size QA judges them"
+  @target_missing_reason PromptTerms.build!(
+                           "lib/symphony_elixir/qa_agent.ex: the reason a pass missed the QA target",
+                           "the app was not judged at the QA target: no `qa_resize_window` call set its window to the " <>
+                             "target size, so the screens were not checked at the size QA judges them",
+                           PromptTerms.terms()
+                         )
   # The default browser MCP server runs on the Symphony host, outside the agent sandbox, so it
   # is pinned to an exact version and never fetched during a pass (`npx --no`). To bump it,
   # change this version, check the flags in `default_browser_mcp/2` against that release, and
@@ -271,6 +275,67 @@ defmodule SymphonyElixir.QaAgent do
     %{settings | execution: %{execution | max_turns: config.max_turns, turn_timeout_ms: config.timeout_ms}}
   end
 
+  # How a pass records its evidence and its verdict, and the verdict's shape. Built from the QA
+  # tools (`PromptTerms`); the fields a pass adds to the shape are filled per pass.
+  @verdict_rules PromptTerms.build!(
+                   "lib/symphony_elixir/qa_agent.ex: the verdict rules",
+                   """
+                   Record what you proved on the ticket's history before the verdict, with the `ticket_record`
+                   tool: one `evidence` event for each walkthrough step you walked, whose `caption` names the step
+                   (its number and a few words), what you saw, and the environment you proved it in (the committed
+                   fixtures or the live server, and the appearance and window size when they matter), with the
+                   step's logs and other files as the tool's top-level `artifacts` list, beside `type` and
+                   `payload`: never inside `payload`, which refuses a field its type lacks. A picture a
+                   `qa_screenshot`, `qa_gallery` or `qa_crop` call took is on the ticket's history already (the
+                   tool's `recorded` names its event and artifact): never pass it in `artifacts` or record it again;
+                   name its path in the verdict step's `evidence`. Its `payload` may also
+                   name the step (`step`), its answer as `result` (`status`, `expected`, `actual`, and `measures`)
+                   and each measured value in `measures`: one object per value, with what was measured (`name`),
+                   the number (`value`), its `unit` and the number expected (`expected`) when there is one. The
+                   tool's description lists every payload's shape. The Director's timeline shows each step's evidence.
+                   Name the same environment on the verdict's step (`environment`: `fixture` for the committed
+                   fixtures, `live` for the live server); the QA report shows it beside the step.
+                   The verdict is not an event you record: the `qa_verdict` tool records it, and `ticket_record`
+                   refuses one.
+
+                   Your last act is to record the verdict: call the `qa_verdict` tool once with it, then end your
+                   turn. The call is the verdict, recorded the moment it arrives, so nothing you write after it
+                   counts. If the tool refuses the verdict, it says why: fix it and call the tool again. The verdict
+                   has this shape:
+                   {
+                     "verdict": "pass" | "fail" | "blocked",
+                     "summary": "<one or two sentences>",
+                     "steps": [
+                       {
+                         "name": "<what you checked>",
+                         "status": "pass" | "fail" | "blocked" | "skipped"{{unprovable_status}},
+                         "details": "<command and the relevant output, or what you saw>",
+                         "environment": "fixture" | "live",
+                         "evidence": ["<linear_attach_file URL or qa-evidence/ path>"]{{checklist_field}}
+                       }
+                     ],
+                     "findings": [
+                       {
+                         "step": "<the step it was found on>",
+                         "viewport": "<the window size it shows at, when it is about layout>",
+                         "expected": "<what the ticket says should happen>",
+                         "actual": "<what happened instead>",
+                         "evidence": ["<linear_attach_file URL or qa-evidence/ path>"]
+                       }
+                     ],
+                     "reason": "<required for blocked>",
+                     "needs_person": true | false,
+                     "needs_dev_server": true | false,
+                     "covered_by": "<optional: the identifier of an open ticket that already tracks the missing QA tool>"{{scope_field}}
+                   }
+                   `findings` is required for `fail`: one actionable defect per entry. If the `qa_verdict` tool is
+                   not available, your final message must be only this JSON object, with no prose before or after
+                   it.
+                   """,
+                   PromptTerms.terms(),
+                   keep: ~w(unprovable_status checklist_field scope_field)
+                 )
+
   @doc """
   Builds the QA prompt for `job`; `parent` is the parent issue for sub-tickets. A job with
   `:epic_review` is the epic review of a plan parent: `job.issue` is the epic
@@ -364,57 +429,7 @@ defmodule SymphonyElixir.QaAgent do
     work running in the background. Run each command in the foreground with a timeout, or poll it
     until it finishes, before you answer.
 
-    Record what you proved on the ticket's history before the verdict, with the `ticket_record`
-    tool: one `evidence` event for each walkthrough step you walked, whose `caption` names the step
-    (its number and a few words), what you saw, and the environment you proved it in (the committed
-    fixtures or the live server, and the appearance and window size when they matter), with the
-    step's logs and other files as the tool's top-level `artifacts` list, beside `type` and
-    `payload`: never inside `payload`, which refuses a field its type lacks. A picture a
-    `qa_screenshot`, `qa_gallery` or `qa_crop` call took is on the ticket's history already (the
-    tool's `recorded` names its event and artifact): never pass it in `artifacts` or record it again;
-    name its path in the verdict step's `evidence`. Its `payload` may also
-    name the step (`step`), its answer as `result` (`status`, `expected`, `actual`, and `measures`)
-    and each measured value in `measures`: one object per value, with what was measured (`name`),
-    the number (`value`), its `unit` and the number expected (`expected`) when there is one. The
-    tool's description lists every payload's shape. The Director's timeline shows each step's evidence.
-    Name the same environment on the verdict's step (`environment`: `fixture` for the committed
-    fixtures, `live` for the live server); the QA report shows it beside the step.
-    The verdict is not an event you record: the `qa_verdict` tool records it, and `ticket_record`
-    refuses one.
-
-    Your last act is to record the verdict: call the `qa_verdict` tool once with it, then end your
-    turn. The call is the verdict, recorded the moment it arrives, so nothing you write after it
-    counts. If the tool refuses the verdict, it says why: fix it and call the tool again. The verdict
-    has this shape:
-    {
-      "verdict": "pass" | "fail" | "blocked",
-      "summary": "<one or two sentences>",
-      "steps": [
-        {
-          "name": "<what you checked>",
-          "status": "pass" | "fail" | "blocked" | "skipped"#{unprovable_status(job)},
-          "details": "<command and the relevant output, or what you saw>",
-          "environment": "fixture" | "live",
-          "evidence": ["<linear_attach_file URL or qa-evidence/ path>"]#{checklist_field(job)}
-        }
-      ],
-      "findings": [
-        {
-          "step": "<the step it was found on>",
-          "viewport": "<the window size it shows at, when it is about layout>",
-          "expected": "<what the ticket says should happen>",
-          "actual": "<what happened instead>",
-          "evidence": ["<linear_attach_file URL or qa-evidence/ path>"]
-        }
-      ],
-      "reason": "<required for blocked>",
-      "needs_person": true | false,
-      "needs_dev_server": true | false,
-      "covered_by": "<optional: the identifier of an open ticket that already tracks the missing QA tool>"#{scope_field(job)}
-    }
-    `findings` is required for `fail`: one actionable defect per entry. If the `qa_verdict` tool is
-    not available, your final message must be only this JSON object, with no prose before or after
-    it.
+    #{verdict_rules(job)}
     """
   end
 
@@ -595,18 +610,24 @@ defmodule SymphonyElixir.QaAgent do
 
   # The sandbox denies the hypervisor and Mach ports, so an emulator the agent boots dies with
   # SIGILL and leaves crash reports on the host (TP-497). Only Symphony's host-side driver boots one.
-  defp device_rule do
-    """
-    Never start an emulator, a simulator or a device tool yourself (`emulator`, `qemu-*`,
-    `xcrun simctl boot`, `adb start-server`, or a script that runs them): your sandbox cannot run
-    them, and each attempt leaves crash reports on the host. Only Symphony boots a device, for the
-    `android_app` playbook, and you reach it through the `qa_android_*` tools; when those tools say
-    the device is unavailable, the step is `blocked`, not a reason to boot one. When a step needs an
-    Android device and no `android_app` playbook is offered to you below, mark that step `blocked`
-    with "#{AndroidDriver.no_playbook_reason()}" in `details`, and do not try to run it another
-    way.\
-    """
-  end
+  # Built from the QA tools of both drivers (`PromptTerms`); the reason is the Android driver's.
+  @device_rule PromptTerms.build!(
+                 "lib/symphony_elixir/qa_agent.ex: the device rule",
+                 """
+                 Never start an emulator, a simulator or a device tool yourself (`emulator`, `qemu-*`,
+                 `xcrun simctl boot`, `adb start-server`, or a script that runs them): your sandbox cannot run
+                 them, and each attempt leaves crash reports on the host. Only Symphony boots a device, for the
+                 `android_app` playbook, and you reach it through the `qa_android_*` tools; when those tools say
+                 the device is unavailable, the step is `blocked`, not a reason to boot one. When a step needs an
+                 Android device and no `android_app` playbook is offered to you below, mark that step `blocked`
+                 with "{{no_playbook_reason}}" in `details`, and do not try to run it another
+                 way.\
+                 """,
+                 PromptTerms.terms(tools: QaDriver.tools() ++ AndroidDriver.tools()),
+                 keep: ~w(no_playbook_reason)
+               )
+
+  defp device_rule, do: String.replace(@device_rule, "{{no_playbook_reason}}", AndroidDriver.no_playbook_reason())
 
   # The epic review of a plan parent: the epic has to close itself, so the pass
   # judges the merged result against the epic's own plan, not against a PR.
@@ -783,7 +804,21 @@ defmodule SymphonyElixir.QaAgent do
 
   defp unprovable_rule(_job), do: ""
 
-  defp unprovable_status(job), do: if(unprovable_rule(job) == "", do: "", else: ~s( | "unprovable"))
+  # The unprovable status as the verdict's shape writes it, from the step statuses (`PromptTerms`).
+  @unprovable_shape String.trim(
+                      PromptTerms.build!("lib/symphony_elixir/qa_agent.ex: the unprovable answer", "{{status:unprovable}}", PromptTerms.terms()),
+                      "`"
+                    )
+
+  defp unprovable_status(job), do: if(unprovable_rule(job) == "", do: "", else: ~s( | "#{@unprovable_shape}"))
+
+  defp verdict_rules(job) do
+    @verdict_rules
+    |> String.trim_trailing()
+    |> String.replace("{{unprovable_status}}", unprovable_status(job))
+    |> String.replace("{{checklist_field}}", checklist_field(job))
+    |> String.replace("{{scope_field}}", scope_field(job))
+  end
 
   defp unprovable_cases(unprovable) do
     playbooks =
@@ -1028,30 +1063,34 @@ defmodule SymphonyElixir.QaAgent do
   # QA keeps the job no test can do (ADR 0003): the steps no test drives, a judgment by sight of
   # every UI deliverable against its design, then the playbooks' checks of the running app, at the
   # QA target unless the ticket is about another appearance or size (TP-1595).
-  defp qa_jobs_section do
-    """
-    QA's three jobs, in this order:
-    1. Walk the walkthrough steps marked `Proved by: QA`, or naming no proof: no test can drive them.
-    2. Judge every UI deliverable by sight. A UI deliverable is each window, page, screen, panel or
-       menu the change adds or changes. Screenshot it in the real app at the QA target (its appearance
-       and window size, for the Mac app), and in another appearance or size only when the ticket is
-       about it, and compare it with its design above: layout, spacing, alignment, truncation,
-       contrast, symbols, wording, and whether it looks finished. Report one step per UI deliverable
-       named
-       `Design check: <deliverable>`, with its screenshots in `evidence`, and in `details` the
-       design it compared with (the Screens document or file and the screen in it). When no Screens
-       cover the deliverable, judge it against `docs/design/design-system.md` alone and say so in
-       `details`. When the playbook says an appearance cannot be switched, say so in `details`.
-       `pass` when the screenshots match the design. A visible mismatch is `fail`, even when every
-       structural check passes: name in `details` and `findings` what differs from which design,
-       with the screenshot that shows it. A change with no UI deliverable has no `Design check` step.
-    3. The other checks of the running app the playbooks ask for (for the Mac app, at its QA target:
-       `qa_check_app` on every page the walkthrough visits, for a hang or a crash). A defect is
-       content clipped with no way to reach it, or a mechanism (scroll, collapse, resize) that
-       doesn't work. Horizontal scroll or a collapsed pane at a `functional` viewport is not a defect. A finding names the viewport, the
-       screen, the mechanism expected, the actual, and the evidence file.
-    """
-  end
+  @qa_jobs PromptTerms.build!(
+             "lib/symphony_elixir/qa_agent.ex: QA's three jobs",
+             """
+             QA's three jobs, in this order:
+             1. Walk the walkthrough steps marked `Proved by: QA`, or naming no proof: no test can drive them.
+             2. Judge every UI deliverable by sight. A UI deliverable is each window, page, screen, panel or
+                menu the change adds or changes. Screenshot it in the real app at the QA target (its appearance
+                and window size, for the Mac app), and in another appearance or size only when the ticket is
+                about it, and compare it with its design above: layout, spacing, alignment, truncation,
+                contrast, symbols, wording, and whether it looks finished. Report one step per UI deliverable
+                named
+                `Design check: <deliverable>`, with its screenshots in `evidence`, and in `details` the
+                design it compared with (the Screens document or file and the screen in it). When no Screens
+                cover the deliverable, judge it against `docs/design/design-system.md` alone and say so in
+                `details`. When the playbook says an appearance cannot be switched, say so in `details`.
+                `pass` when the screenshots match the design. A visible mismatch is `fail`, even when every
+                structural check passes: name in `details` and `findings` what differs from which design,
+                with the screenshot that shows it. A change with no UI deliverable has no `Design check` step.
+             3. The other checks of the running app the playbooks ask for (for the Mac app, at its QA target:
+                `qa_check_app` on every page the walkthrough visits, for a hang or a crash). A defect is
+                content clipped with no way to reach it, or a mechanism (scroll, collapse, resize) that
+                doesn't work. Horizontal scroll or a collapsed pane at a `functional` viewport is not a defect. A finding names the viewport, the
+                screen, the mechanism expected, the actual, and the evidence file.
+             """,
+             PromptTerms.terms()
+           )
+
+  defp qa_jobs_section, do: @qa_jobs
 
   defp design_files_text([_file | _rest] = files) do
     lines = Enum.map_join(files, "\n", &"- `#{&1.path}` (attached to #{&1.issue})")
@@ -1731,18 +1770,24 @@ defmodule SymphonyElixir.QaAgent do
     end)
   end
 
+  # Built from the QA tools (`PromptTerms`); the error is filled per turn.
+  @follow_up PromptTerms.build!(
+               "lib/symphony_elixir/qa_agent.ex: the follow-up for a missing verdict",
+               """
+               Symphony did not get your verdict: {{error}} Ending your turn ends the
+               session. Finish now: do not start new work or wait for anything still running. Call the
+               `qa_verdict` tool once with your verdict for what you have tested so far, in the shape from the
+               first message, then end your turn. Mark each step you could not finish `skipped` and say why.
+               If the `qa_verdict` tool is not available, your final message must be only the JSON verdict
+               object, with no prose before or after it.
+               """,
+               PromptTerms.terms(),
+               keep: ~w(error)
+             )
+
   @doc "The follow-up prompt for a turn that ended without a verdict, with why it is missing."
   @spec follow_up_prompt(term()) :: String.t()
-  def follow_up_prompt(reason) do
-    """
-    Symphony did not get your verdict: #{Verdict.describe_error(reason)} Ending your turn ends the
-    session. Finish now: do not start new work or wait for anything still running. Call the
-    `qa_verdict` tool once with your verdict for what you have tested so far, in the shape from the
-    first message, then end your turn. Mark each step you could not finish `skipped` and say why.
-    If the `qa_verdict` tool is not available, your final message must be only the JSON verdict
-    object, with no prose before or after it.
-    """
-  end
+  def follow_up_prompt(reason), do: String.replace(@follow_up, "{{error}}", Verdict.describe_error(reason))
 
   defp parse_turn(turn_result, messages) do
     turn_result
