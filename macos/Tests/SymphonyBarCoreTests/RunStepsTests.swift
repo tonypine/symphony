@@ -356,6 +356,197 @@ final class RunStepsTests: XCTestCase {
         XCTAssertEqual(named.effort, "medium")
         XCTAssertNil(RunGroupModel(id: "x", title: "Run", state: .passed, word: "Passed").meta)
     }
+
+    // MARK: - The conversation (TP-1688)
+
+    private static let utc = TimeZone(identifier: "UTC")!
+
+    private func conversation(_ name: String, live: Bool = false) throws -> [ConversationEntry] {
+        RunConversation.entries(TranscriptLine.lines(try fixture("artifacts/\(name).ndjson")), live: live, timeZone: Self.utc)
+    }
+
+    func testAToolLineCarriesItsToolAndItsFileAsFields() throws {
+        let lines = TranscriptLine.lines(try fixture("artifacts/tr-conversation.ndjson"))
+        let write = try XCTUnwrap(lines.first { $0.tool == "Write" })
+        XCTAssertEqual(write.file, "macos/Sources/SymphonyBarCore/ActivityFilterStore.swift")
+        XCTAssertEqual(write.toolName, "Write")
+        XCTAssertEqual(write.body, "macos/Sources/SymphonyBarCore/ActivityFilterStore.swift")
+        // A blank field is no field; a line saved before Symphony gave them has none.
+        let blank = TranscriptLine.lines(Data(#"{"kind":"tool","text":"Bash: ls","tool":" ","file":""}"#.utf8))
+        XCTAssertEqual(blank.map(\.tool), [nil])
+        XCTAssertEqual(blank.map(\.file), [nil])
+        // A live call whose text is only its tool's name has no description to draw.
+        XCTAssertEqual(TranscriptLine(kind: .tool, text: "Bash", tool: "Bash").body, "")
+        XCTAssertEqual(TranscriptLine(kind: .tool, text: "other words", tool: "Bash").body, "other words")
+    }
+
+    func testTheGistAndTheChipsComeFromTheFieldsNeverFromTheText() {
+        // Text that reads like a write, with no fields: counted, never named.
+        let untold = RunAction(call: TranscriptLine(kind: .tool, text: "Write: lib/x.ex"), result: TranscriptLine(kind: .result, text: "ok"))
+        XCTAssertEqual(ActionGist([untold]).count, 1)
+        XCTAssertEqual(ActionGist([untold]).parts, [])
+        // Fields whose text says something else: the fields win.
+        let told = RunAction(call: TranscriptLine(kind: .tool, text: "something else", tool: "Write", file: "a/b/Kept.swift"))
+        XCTAssertEqual(ActionGist([told, told]).parts, [.wrote(["Kept.swift"])])
+        // Each kind of tool in words, in the order it first came; a write or an edit with no file counts its files.
+        let call = { (tool: String, file: String?) in RunAction(call: TranscriptLine(kind: .tool, text: "", tool: tool, file: file)) }
+        let gist = ActionGist([
+            call("Read", "x.swift"), call("Bash", nil), call("mcp__symphony__ticket_record", nil), call("Bash", nil),
+            call("mcp__symphony__ticket_record", nil), call("Grep", nil), call("Edit", nil), call("Write", nil), call("shell", nil),
+            call("linear-get_comments", nil), call("MultiEdit", "lib/y.ex"),
+        ])
+        XCTAssertEqual(gist.parts, [
+            .words("read 1 file"), .words("ran 3 commands"), .words("ticket record ×2"), .words("searched 1 time"),
+            .edited(["y.ex"]), .words("wrote 1 file"), .words("linear get comments"),
+        ])
+        XCTAssertEqual(gist.text, "read 1 file, ran 3 commands, ticket record ×2, searched 1 time, edited y.ex, wrote 1 file, linear get comments")
+        XCTAssertEqual(ActionGist([call("Edit", nil), call("Edit", nil)]).parts, [.words("edited 2 files")])
+        XCTAssertEqual(gist.countText(), "11 actions")
+        XCTAssertEqual(ActionGist([call("Bash", nil)]).countText(soFar: true), "1 action so far")
+    }
+
+    func testANotesActionsFoldUnderItWithACountAGistAndTheirFilesAsChips() throws {
+        let entries = try conversation("tr-conversation")
+        XCTAssertEqual(entries.map(\.kind), [.note, .note, .failure, .note, .failure, .actions, .note, .note])
+        XCTAssertEqual(entries.map(\.actions.count), [2, 3, 0, 0, 0, 1, 3, 2])
+        XCTAssertEqual(entries[0].gist.parts, [.words("read 1 file"), .words("ran 1 command")])
+        XCTAssertEqual(entries[1].gist.countText(), "3 actions")
+        XCTAssertEqual(entries[1].gist.parts, [.wrote(["ActivityFilterStore.swift", "ActivityFilterStoreTests.swift"]), .edited(["ActivityPane.swift"])])
+        XCTAssertEqual(entries[6].gist.parts, [.edited(["Package.swift"]), .words("ran 2 commands")])
+        XCTAssertEqual(entries[7].gist.parts, [.words("ran 1 command"), .words("ticket record")])
+        // A note with nothing after it draws no fold line.
+        XCTAssertFalse(entries[3].hasFold)
+        XCTAssertTrue(entries[0].hasFold)
+        // Actions after a failure, before the next note, are a fold of their own: no sentence is made up for them.
+        XCTAssertNil(entries[5].note)
+    }
+
+    func testASilentStretchIsOneFoldedLineThenTheRedTestsOwnRow() throws {
+        let entries = try conversation("tr-silent")
+        XCTAssertEqual(entries.map(\.kind), [.actions, .failure])
+        XCTAssertNil(entries[0].note)
+        XCTAssertEqual(entries[0].gist.countText(), "23 actions")
+        XCTAssertEqual(entries[0].gist.text, "read 1 file, ran 22 commands")
+        // The red test is never in the fold.
+        XCTAssertFalse(entries[0].actions.contains(where: \.failed))
+        let red = try XCTUnwrap(entries[1].failure)
+        XCTAssertEqual(red.call?.toolName, "Bash")
+        XCTAssertEqual(red.firstLines().count, 4)
+        XCTAssertEqual(red.firstLines().last, "Executed 4 tests, with 1 failure (0 unexpected) in 0.031 (0.034) seconds")
+        XCTAssertEqual(red.firstLines(1), ["Test Case '-[SymphonyBarCoreTests.ActivityFilterTests testTheFilterSurvivesARelaunch]' started."])
+    }
+
+    func testTheSameFailureBackToBackIsOneRowWithItsCount() throws {
+        let entries = try conversation("tr-conversation")
+        XCTAssertEqual(entries.filter { $0.kind == .failure }.map(\.repeats), [1, 3])
+        // A different answer is a failure of its own.
+        let call = TranscriptLine(kind: .tool, text: "Bash: mix test", tool: "Bash")
+        let red = { (text: String) in [call, TranscriptLine(kind: .result, text: text, failed: true)] }
+        let rows = RunConversation.entries(red("1 failure") + red("1 failure") + red("2 failures"))
+        XCTAssertEqual(rows.map(\.repeats), [2, 1])
+        XCTAssertTrue(RunAction(call: call, result: TranscriptLine(kind: .result, text: "x", failed: true)).isSameFailure(as: RunAction(call: call, result: TranscriptLine(kind: .result, text: "x", failed: true))))
+        XCTAssertFalse(RunAction(call: call, result: TranscriptLine(kind: .result, text: "x")).isSameFailure(as: RunAction(call: call, result: TranscriptLine(kind: .result, text: "x"))))
+    }
+
+    func testTheMinuteShowsAboveAnEntryOnlyWhenItChanges() throws {
+        XCTAssertEqual(try conversation("tr-conversation").map(\.minute), ["09:30", "09:31", nil, "09:32", nil, "09:35", nil, "09:38"])
+        XCTAssertEqual(try conversation("tr-silent").map(\.minute), ["09:30", "09:33"])
+        // An entry with no time shows none and leaves the minute as it was.
+        let untimed = RunConversation.entries([
+            TranscriptLine(kind: .say, text: "a", at: "2026-10-07T09:30:00Z"), TranscriptLine(kind: .say, text: "b"),
+            TranscriptLine(kind: .say, text: "c", at: "2026-10-07T09:30:40Z"),
+        ], timeZone: Self.utc)
+        XCTAssertEqual(untimed.map(\.minute), ["09:30", nil, nil])
+    }
+
+    func testWhileTheRunWorksItsLastEntryIsWorkingWithItsActionsSoFar() throws {
+        let live = try conversation("tr-conversation", live: true)
+        XCTAssertEqual(live.map(\.working), [false, false, false, false, false, false, false, true])
+        XCTAssertEqual(live.last?.gist.countText(soFar: true), "2 actions so far")
+        XCTAssertFalse(try conversation("tr-conversation").contains(where: \.working))
+        // A note the run just wrote has its fold line for "Working" before its first action.
+        let fresh = RunConversation.entries([TranscriptLine(kind: .say, text: "Starting.")], live: true)
+        XCTAssertTrue(fresh[0].hasFold)
+        XCTAssertEqual(fresh[0].gist.count, 0)
+        XCTAssertEqual(RunConversation.entries([], live: true), [])
+    }
+
+    func testCallsMadeTogetherGetTheirResultsInOrderAndAResultWithoutACallStandsAlone() {
+        let a = TranscriptLine(kind: .tool, text: "Read: a", tool: "Read"), b = TranscriptLine(kind: .tool, text: "Read: b", tool: "Read")
+        let ra = TranscriptLine(kind: .result, text: "A"), rb = TranscriptLine(kind: .result, text: "B", failed: true)
+        let entries = RunConversation.entries([a, b, ra, rb, TranscriptLine(kind: .result, text: "lost")])
+        XCTAssertEqual(entries.map(\.kind), [.actions, .failure, .actions])
+        XCTAssertEqual(entries[0].actions, [RunAction(call: a, result: ra)])
+        XCTAssertEqual(entries[1].failure, RunAction(call: b, result: rb))
+        XCTAssertEqual(entries[2].actions, [RunAction(result: TranscriptLine(kind: .result, text: "lost"))])
+        // A call still running has no result yet.
+        XCTAssertEqual(RunConversation.entries([a]).first?.actions, [RunAction(call: a)])
+    }
+
+    func testShowAllUnfoldsEveryGroupAndAClickUnfoldsOnlyItsOwn() {
+        var folds = ConversationFolds()
+        let ids = ["a", "b", "c"]
+        folds.toggle("b", among: ids)
+        XCTAssertEqual(ids.map(folds.isOpen), [false, true, false])
+        folds.toggle("b", among: ids)
+        XCTAssertEqual(ids.map(folds.isOpen), [false, false, false])
+        folds.toggleAll()
+        XCTAssertEqual(ids.map(folds.isOpen), [true, true, true])
+        // A click with every group shown folds that one alone.
+        folds.toggle("a", among: ids)
+        XCTAssertEqual(ids.map(folds.isOpen), [false, true, true])
+        XCTAssertFalse(folds.showsAll)
+        folds.toggleAll()
+        folds.toggleAll()
+        XCTAssertEqual(ids.map(folds.isOpen), [false, false, false])
+        XCTAssertEqual(ConversationFolds.showAll, "Show all events")
+    }
+
+    /// The ticket-page fixture QA walks (`Fixtures/director-app/ticket-conversation`): SHOP-410's finished run, whose
+    /// code step's transcript holds a silent stretch, notes, a repeated failure, and its run now, live on that step.
+    func testTheConversationFixtureDrawsAFinishedStepAndTheRunNowAsConversations() throws {
+        let api = Self.fixtures.deletingLastPathComponent().appendingPathComponent("director-app/ticket-conversation/api/v1")
+        let history = try XCTUnwrap(TicketEventsPayload.decode(Data(contentsOf: api.appendingPathComponent("repos/web-shop/tickets/SHOP-410/events.json"))))
+        let runNow = try XCTUnwrap(RunNow.decode(issue: Data(contentsOf: api.appendingPathComponent("SHOP-410.json"))))
+        let runs = RunGroupModel.groups(history, runNow: runNow, reference: reference)
+        XCTAssertEqual(runs.map(\.state), [.passed, .running])
+
+        let finished = try XCTUnwrap(runs[0].steps.first)
+        let transcript = try XCTUnwrap(finished.transcript)
+        let saved = TranscriptLine.lines(try Data(contentsOf: api.appendingPathComponent(transcript.path.replacingOccurrences(of: "api/v1/", with: "") + ".txt")))
+        let entries = RunConversation.entries(saved, timeZone: Self.utc)
+        XCTAssertEqual(entries.first?.kind, .actions)
+        XCTAssertEqual(entries.first?.gist.text, "read 1 file, ran 22 commands")
+        XCTAssertEqual(entries[1].kind, .failure)
+        XCTAssertEqual(entries.filter { $0.kind == .failure }.map(\.repeats), [1, 1, 3])
+        XCTAssertTrue(entries.contains { $0.gist.parts.contains(.wrote(["ActivityFilterStore.swift", "ActivityFilterStoreTests.swift"])) })
+
+        let live = try XCTUnwrap(runs[1].steps.last)
+        XCTAssertTrue(live.isLive)
+        let now = RunConversation.entries(live.liveLines, live: true, timeZone: Self.utc)
+        XCTAssertEqual(now.map(\.kind), [.actions, .failure, .note])
+        XCTAssertEqual(now.last?.working, true)
+        XCTAssertEqual(now.last?.gist.countText(soFar: true), "2 actions so far")
+    }
+
+    func testANotesMarkdownReadsAsParagraphsListsCodeAndBold() {
+        let markup = RunNote.markup("**Plan:**\n\n* one `x`\n- two\n\n## Then\n1. first\n2. second\n\n```\n# not a heading\n* not a bullet\n```")
+        XCTAssertEqual(markup.blocks, [
+            .paragraph([.bold([.plain("Plan:")])]),
+            .list([[.plain("one "), .code("x")], [.plain("two")]]),
+            .paragraph([.bold([.plain("Then")]), .plain("\n1. first\n2. second")]),
+            .codeBlock([.init(text: "# not a heading", change: .unchanged), .init(text: "* not a bullet", change: .unchanged)]),
+        ])
+        // A note has no headline: every paragraph is body text.
+        XCTAssertEqual(markup.roles, [.body, .body, .body, .body])
+        XCTAssertNil(RunNote.heading("#nospace"))
+        XCTAssertNil(RunNote.heading("# "))
+        XCTAssertNil(RunNote.heading("####### seven"))
+        // Plain words stay whole, never cut.
+        let long = String(repeating: "word ", count: 400).trimmingCharacters(in: .whitespaces)
+        XCTAssertEqual(RunNote.markup(long).plainText, long)
+    }
+
 }
 
 private extension RunGroupModel.State {

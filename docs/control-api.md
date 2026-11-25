@@ -584,7 +584,7 @@ doing now, for the run in place on the ticket page (facts 4, 8 and 13 of
 | Field | What it holds |
 | --- | --- |
 | `current_step` | The step the run started and has not ended, from its `step.started` on the ledger: `id`, `title`, `mode` and `started_at`. Null between steps and on a run with no step list. |
-| `recent_lines` | The run's newest lines, oldest first and at most 20, from the session stream the orchestrator buffers for the run: that step's while `current_step` names one, else the lines since the run's last step completed, or the whole stream's for a run that walks no steps (a QA or Code Review run, whose lines the Director draws under the run). Each is a line as below; a tool line carries only the tool's name, since the stream holds no arguments. |
+| `recent_lines` | The run's lines, oldest first, every one the session stream still holds the orchestrator buffers for the run: that step's while `current_step` names one, else the lines since the run's last step completed, or the whole stream's for a run that walks no steps (a QA or Code Review run, whose lines the Director draws under the run). Each is a line as below; a Claude tool call carries its arguments in short, its `tool` and its `file` as the saved lines do, another harness's only the tool's name. |
 
 Once a step ends, its whole slice of the session transcript is a `transcript` artifact on its
 `step.completed`, served by `GET /api/v1/artifacts/:id` like any other, so the Director's timeline unfolds
@@ -595,7 +595,9 @@ that walks no steps. It is JSON lines (`text/x-ndjson`), one object a line:
 | Field | What it holds |
 | --- | --- |
 | `kind` | `say` (what the agent said), `tool` (a call: the tool's name and its arguments summarised, the command, path, pattern or query when it has one, else its input as JSON) or `result` (what the call returned, summarised). |
-| `text` | The line, its whitespace folded and bounded: 4,000 characters for what the agent said, 300 for a call's arguments, 500 for a result. |
+| `text` | The line. What the agent said is whole, its line breaks kept (it is Markdown); a call's arguments have their whitespace folded and are bounded at 300 characters; a result keeps its lines, blank ones dropped, bounded at 500. |
+| `tool` | On a call, the tool's name (`Bash`, `Edit`, `mcp__symphony__ticket_record`): the app counts a step's actions from it, never from `text`. |
+| `file` | On a call whose input names one (`file_path`, `notebook_path` or `path`), that file: the app names the files written or edited from it. |
 | `at` | When the entry was written; absent when the transcript gave no time. |
 | `duration_ms` | On a result, how long its call took. |
 | `failed` | `true` on a result whose call failed. |

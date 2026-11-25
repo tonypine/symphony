@@ -34,6 +34,7 @@ struct ComponentStory {
 var allComponentStories: [ComponentStory] {
     componentStories + badgeStories + rowStories + menuStories + fieldStories + tableStories + foldStories + markStories
         + factoryStories + windowStories + sidebarStatusStories + controlBarStories + settingsStories + homeQueueStories
+        + runConversationStories
 }
 
 /// The component stories' variation names, as `Gallery/component-variations.txt` lists them.

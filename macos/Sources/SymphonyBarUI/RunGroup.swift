@@ -11,6 +11,8 @@ public struct RunGroup: View {
     let unfoldedSteps: Set<String>?
     /// The person's own fold, over the run's default: the run now opens, and folds once it ended, until they fold it.
     @State private var folded: Bool?
+    /// The groups of the run now's conversation a person unfolded, while the run is on no step.
+    @State private var lineFolds = ConversationFolds()
     /// The fold, when the view around it keeps it (the timeline, whose Return folds the selected run).
     let fold: Binding<Bool>?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -56,9 +58,9 @@ public struct RunGroup: View {
                             ConductorRunNote(message: placed.message)
                         }
                     }
-                    // The run now on no step (a QA or Code Review run walks none) has its newest lines here.
+                    // The run now on no step (a QA or Code Review run walks none) has its conversation here.
                     if !run.liveLines.isEmpty {
-                        LineList(lines: run.liveLines, live: true)
+                        RunConversationView(entries: RunConversation.entries(run.liveLines, live: true), folds: $lineFolds)
                     }
                     if !run.screenshots.isEmpty {
                         ScreenshotRow(shots: run.screenshots)

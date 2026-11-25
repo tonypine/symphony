@@ -23,16 +23,24 @@ public struct TranscriptLine: Equatable, Hashable, Decodable {
     public var durationMs: Int?
     /// True on a result whose tool failed.
     public var failed: Bool
+    /// On a tool call, the tool's name as Symphony gave it ("Bash", "Edit"); nil on a line saved before it did.
+    public var tool: String?
+    /// On a tool call, the file its input names (the file it reads, writes or edits).
+    public var file: String?
 
-    enum CodingKeys: String, CodingKey { case kind, text, at, durationMs, failed }
+    enum CodingKeys: String, CodingKey { case kind, text, at, durationMs, failed, tool, file }
 
-    public init(kind: Kind, text: String, at: String? = nil, durationMs: Int? = nil, failed: Bool = false) {
+    public init(
+        kind: Kind, text: String, at: String? = nil, durationMs: Int? = nil, failed: Bool = false, tool: String? = nil, file: String? = nil
+    ) {
         self.kind = kind
         self.text = text
         self.at = at
         self.date = at.flatMap(TicketPage.date)
         self.durationMs = durationMs
         self.failed = failed
+        self.tool = tool
+        self.file = file
     }
 
     public init(from decoder: Decoder) throws {
@@ -43,6 +51,8 @@ public struct TranscriptLine: Equatable, Hashable, Decodable {
         date = at.flatMap(TicketPage.date)
         durationMs = try? container.decodeIfPresent(Int.self, forKey: .durationMs)
         failed = (try? container.decodeIfPresent(Bool.self, forKey: .failed)) == true
+        tool = (try? container.decodeIfPresent(String.self, forKey: .tool))?.trimmingWhitespace().nonEmpty
+        file = (try? container.decodeIfPresent(String.self, forKey: .file))?.trimmingWhitespace().nonEmpty
     }
 
     /// The lines of a `transcript` artifact: one JSON object a line. A line that isn't one, or of a kind the app
@@ -53,17 +63,22 @@ public struct TranscriptLine: Equatable, Hashable, Decodable {
             .compactMap { try? decoder.decode(TranscriptLine.self, from: Data($0.utf8)) }
     }
 
-    /// A tool call's tool: "Bash" of "Bash: mix test". Nil on another kind, or a call with no name before a colon.
+    /// A tool call's tool, as its row names it: the line's `tool`, or for a line saved before Symphony gave one, "Bash"
+    /// of "Bash: mix test". Nil on another kind, or a call with neither. Only the row's drawing reads the text; what a
+    /// step did is counted from `tool` alone (`ActionGist`).
     public var toolName: String? {
-        guard kind == .tool, let colon = text.range(of: ": ") else { return nil }
+        guard kind == .tool else { return nil }
+        if let tool { return tool }
+        guard let colon = text.range(of: ": ") else { return nil }
         let name = text[..<colon.lowerBound]
         return name.isEmpty || name.contains(" ") ? nil : String(name)
     }
 
-    /// A tool call's arguments in short, "mix test" of "Bash: mix test"; any other line's text.
+    /// A tool call's arguments in short, "mix test" of "Bash: mix test"; any other line's text, and a call's whose text
+    /// is only its tool's name.
     public var body: String {
         guard let name = toolName else { return text }
-        return String(text.dropFirst(name.count + 2))
+        return text.hasPrefix(name + ": ") ? String(text.dropFirst(name.count + 2)) : (text == name ? "" : text)
     }
 
     /// "840 ms", "1.2 s", "2 min 4 s": how long a result's tool took.

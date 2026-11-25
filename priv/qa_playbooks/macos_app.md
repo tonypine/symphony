@@ -511,6 +511,22 @@ GitHub or Linear in QA:
   failure" … "right: :failed"), and Esc closes it. VoiceOver reads the link as "Test output,
   opens its text" and the unavailable line as "Build output unavailable". Walk it in light and dark: nothing clipped. On the live server the seed gives QA-105 the
   same history, with its own test output to open and its build output gone.
+- **A step read as a conversation (TP-1688):** pass
+  `macos/Tests/Fixtures/director-app/ticket-conversation` as `api_fixtures` and open SHOP-410.
+  "Implementation run 1" ended; unfold it and its "Write the code" step. The step opens on one
+  folded line, "23 actions · read 1 file, ran 22 commands", then the red test's own row in the
+  problem treatment ("Failed", "Bash", the command, then the first lines of what came back). The
+  agent's notes follow at reading size across the column, their Markdown rendered (bold, inline
+  code, a numbered plan, a bullet list, a code block) and none cut. Under each note, 4 pt below
+  it, one fold line: a count and a gist, the files written or edited as chips ("3 actions · wrote
+  ActivityFilterStore.swift ActivityFilterStoreTests.swift edited ActivityPane.swift"). The build
+  that failed three times back to back is one row with "×3". The time is a small line above an
+  entry only when the minute changes. Click one fold line: only that group opens, as monospace
+  rows (tool, short description, result). Click "Show all events" in the step's header: every
+  group of the step opens; again, they all fold. "Implementation run 2" is running on "Write the
+  code": its last entry, the note "Found a subtle bug…", carries "Working" and its fold line
+  reads "2 actions so far". On the live server the seed gives QA-104's first implementation run
+  the same finished step (its transcript in `priv/qa_seed/symphony/step_transcripts`).
 - **A grouped walk step (TP-1594):** pass
   `macos/Tests/Fixtures/director-app/ticket-grouped-walk` as `api_fixtures`, open Work ›
   Tickets (it lists SHOP-410 alone, in QA) and open SHOP-410. Its timeline holds "QA run 1" with the pass's steps, as Symphony's server writes

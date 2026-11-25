@@ -19,14 +19,15 @@ final class FoldKeysTests: XCTestCase {
         XCTAssertFalse(FoldKeys.toggles(.space, modifiers: .shift))
     }
 
-    func testALineKeepsItsKeyAsTheRunNowsWindowOfLinesSlides() {
+    func testAnEntryKeepsItsIdAsTheRunNowsWindowOfLinesSlides() {
         let said = TranscriptLine(kind: .say, text: "Running the tests", at: "2026-10-07T12:00:00Z")
-        let called = TranscriptLine(kind: .tool, text: "Bash: mix test", at: "2026-10-07T12:00:01Z")
-        let before = LineList.keyed([said, called, called]).map(\.key)
-        let after = LineList.keyed([called, called, said]).map(\.key)
-        XCTAssertEqual(Set(before), Set(after))
-        XCTAssertEqual(Set(before).count, 3)
-        XCTAssertEqual(before[2], before[1] + "#2")
+        let again = TranscriptLine(kind: .say, text: "Running the tests", at: "2026-10-07T12:00:00Z")
+        let called = TranscriptLine(kind: .tool, text: "Bash: mix test", at: "2026-10-07T12:00:01Z", tool: "Bash")
+        let before = RunConversation.entries([said, called, again]).map(\.id)
+        let after = RunConversation.entries([called, said, called, again]).map(\.id)
+        // The note keeps its id once the actions before it drop out of the window; the same words twice are told apart.
+        XCTAssertEqual(before, Array(after.dropFirst()))
+        XCTAssertEqual(before[1], before[0] + "#2")
     }
 
     func testALineSaysWhenItHappenedAndWhatItsGlyphMeans() {

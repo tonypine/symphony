@@ -48,10 +48,10 @@ defmodule SymphonyElixir.QaSeed do
     (`SymphonyElixir.Artifacts.ingest/3`); `gone: true` removes its bytes from the store afterwards,
     so the Director reads it as unavailable. A `picture` names a PNG or JPEG the same way (`file`,
     `label`), kept as the event's `screenshot` artifact, as a picture a QA tool took is kept on its
-    `evidence` (`SymphonyElixir.AgentTools.QaPictures`). QA-104's history holds a fact of each kind
-    the ticket page draws: an implementation run's `run.changed` (its files and commits), a code
-    review's `verdict.recorded` with its findings, and a QA run's step answer with its measures, a
-    picture and a measured value.
+    `evidence` (`SymphonyElixir.AgentTools.QaPictures`). A `transcript` names a step's lines the same
+    way (`file`, `label`), one JSON object a line (`SymphonyElixir.PhaseSteps.Transcript`), kept as
+    the `transcript` artifact a step's `step.completed` carries, so the Director unfolds the step
+    into what the agent said and did.
 
   It runs as a child of the application between the run store and the orchestrator, when the
   service was started with `--qa-seed <dir>`, so the orchestrator starts with the seeded runs and
@@ -350,6 +350,7 @@ defmodule SymphonyElixir.QaSeed do
 
   defp output(dir, repo_key, issue_id, %{"output" => %{"file" => _file} = output} = entry), do: keep(dir, repo_key, issue_id, entry, output, "step_output")
   defp output(dir, repo_key, issue_id, %{"picture" => %{"file" => _file} = picture} = entry), do: keep(dir, repo_key, issue_id, entry, picture, "screenshot")
+  defp output(dir, repo_key, issue_id, %{"transcript" => %{"file" => _file} = lines} = entry), do: keep(dir, repo_key, issue_id, entry, lines, "transcript")
   defp output(_dir, _repo_key, _issue_id, _entry), do: {:ok, []}
 
   defp keep(dir, repo_key, issue_id, %{"issue" => identifier} = entry, %{"file" => file} = output, kind) do

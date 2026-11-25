@@ -160,7 +160,7 @@ defmodule SymphonyElixirWeb.ArtifactsControllerTest do
 
       assert conn |> response(200) |> String.split("\n", trim: true) |> Enum.map(&Jason.decode!/1) == [
                %{"at" => "2026-11-18T10:00:00Z", "kind" => "say", "text" => "Checking."},
-               %{"at" => "2026-11-18T10:00:00Z", "kind" => "tool", "text" => "Bash: mix test"}
+               %{"at" => "2026-11-18T10:00:00Z", "kind" => "tool", "text" => "Bash: mix test", "tool" => "Bash"}
              ]
 
       assert get_resp_header(conn, "content-type") == ["application/x-ndjson; charset=utf-8"]
