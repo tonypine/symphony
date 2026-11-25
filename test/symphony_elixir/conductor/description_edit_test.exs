@@ -129,6 +129,7 @@ defmodule SymphonyElixir.Conductor.DescriptionEditTest do
       |> TicketProjection.render()
       |> String.replace(~r/^- /m, "* ")
       |> String.replace("[", "\\[")
+      |> String.replace("]", "\\]")
       |> String.replace("_", "\\_")
       |> String.replace("*list", "_list")
       |> String.replace("view*", "view_")
