@@ -382,6 +382,9 @@ defmodule SymphonyElixir.Conductor.Facts do
         kind: check.kind,
         statement: check.statement,
         proof: check.proof,
+        # Where a QA check is walked and on what state, so a turn writing the checks again keeps them.
+        setting: Map.get(check, :setting),
+        walked_on: Map.get(check, :walked_on),
         state: Atom.to_string(check.state),
         proved_by: proved_by(check.proved_by),
         waived: check.waived && check.waived.reason

@@ -70,6 +70,7 @@ defmodule SymphonyElixir.PlaybookSettingsTest do
       assert PlaybookSettings.appearance(%{}) == "dark"
       assert PlaybookSettings.appearance(%{"appearance" => nil}) == "dark"
       assert {PlaybookSettings.min_window_size(), PlaybookSettings.max_window_size()} == {320, 8192}
+      assert PlaybookSettings.appearances() == ["light", "dark"]
     end
 
     test "takes a playbook's own values, with atom or string keys, and the default for one out of range" do

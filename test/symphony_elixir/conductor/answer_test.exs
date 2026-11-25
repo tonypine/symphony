@@ -790,4 +790,106 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
       assert length(kept) == 20
     end
   end
+
+  describe "a QA check's setting and walked-on state (TP-1673)" do
+    @outcome %{"kind" => "outcome", "statement" => "The filter is kept after a reload.", "proof" => "test"}
+    @setting %{"source" => "fixture", "fixture" => "macos/Tests/Fixtures/director-app", "page" => "Tickets", "window" => %{"width" => 1440, "height" => 900}, "appearance" => "light"}
+    @walked_on [%{"path" => "priv/qa_seed/symphony/seed.json", "holds" => "present"}, %{"path" => "macos/Tests/Fixtures/director-app/filtered", "holds" => "added"}]
+    @qa %{"kind" => "qa", "statement" => "The list is filtered.", "proof" => "qa", "action" => "Reload", "expect" => "Filtered", "setting" => @setting, "walked_on" => @walked_on}
+
+    defp placed_plan(qa, opts \\ [plan: true, qa_setting: true]) do
+      plan = %{"shape" => "single", "summary" => "Keeps the filter.", "text" => "Approach: store it.", "checks" => [@outcome, qa], "size" => %{"tokens" => 1, "runs" => 1}}
+      Answer.parse(json(%{"plan" => plan}), opts)
+    end
+
+    defp in_setting(attrs), do: Map.put(@qa, "setting", Map.merge(@setting, attrs))
+
+    test "Grooming's QA check holds both as data: closed values, points and repo-relative paths" do
+      assert {:ok, %{plan: %{checks: [_outcome, qa]}}} = placed_plan(@qa)
+      assert qa.setting == %{source: "fixture", fixture: "macos/Tests/Fixtures/director-app", page: "Tickets", window: %{width: 1440, height: 900}, appearance: "light"}
+      assert qa.walked_on == [%{path: "priv/qa_seed/symphony/seed.json", holds: "present"}, %{path: "macos/Tests/Fixtures/director-app/filtered", holds: "added"}]
+
+      live = @setting |> Map.delete("fixture") |> Map.merge(%{"source" => "live", "page" => " Home ", "unknown" => 1})
+      assert {:ok, %{plan: %{checks: [_outcome, %{setting: setting}]}}} = placed_plan(Map.put(@qa, "setting", live))
+      assert setting == %{source: "live", page: "Home", window: %{width: 1440, height: 900}, appearance: "light"}
+    end
+
+    test "Grooming's QA check with no setting, or a malformed one, is refused with the field it misses" do
+      max = SymphonyElixir.PlaybookSettings.max_window_size()
+
+      for {qa, why} <- [
+            {Map.delete(@qa, "setting"), "`plan.checks[2].setting` is missing: a `qa` check says where it is walked: its `source`, `page`, `window` and `appearance`"},
+            {Map.put(@qa, "setting", "the tickets page"), "`plan.checks[2].setting` must be an object: its `source`, `page`, `window` and `appearance`"},
+            {in_setting(%{"source" => "staging"}), "`plan.checks[2].setting.source` must be one of fixture, live"},
+            {in_setting(%{"fixture" => nil}), "`plan.checks[2].setting.fixture` must be the repo-relative path of the fixture directory"},
+            {in_setting(%{"fixture" => "/Users/me/fixtures"}), "`plan.checks[2].setting.fixture` must be the repo-relative path"},
+            {in_setting(%{"fixture" => "./macos/Tests"}), "`plan.checks[2].setting.fixture` must be the repo-relative path"},
+            {in_setting(%{"fixture" => "~/fixtures"}), "`plan.checks[2].setting.fixture` must be the repo-relative path"},
+            {in_setting(%{"fixture" => "macos/../secrets"}), "`plan.checks[2].setting.fixture` must be the repo-relative path"},
+            {in_setting(%{"fixture" => "macos\\Tests"}), "`plan.checks[2].setting.fixture` must be the repo-relative path"},
+            {in_setting(%{"fixture" => " "}), "`plan.checks[2].setting.fixture` must be the repo-relative path"},
+            {in_setting(%{"source" => "live"}), "`plan.checks[2].setting.fixture` must be left out: the `source` is \"live\""},
+            {in_setting(%{"page" => " "}), "`plan.checks[2].setting.page` must be a non-blank string"},
+            {in_setting(%{"window" => nil}), "`plan.checks[2].setting.window` must be an object holding the `width` and the `height`, in points"},
+            {in_setting(%{"window" => %{"width" => 1440}}), "`plan.checks[2].setting.window` must be an object holding the `width` and the `height`"},
+            {in_setting(%{"window" => %{"width" => 100, "height" => 900}}), "`plan.checks[2].setting.window.width` must be a whole number of points from 320 to #{max}"},
+            {in_setting(%{"window" => %{"width" => 1440, "height" => max + 1}}), "`plan.checks[2].setting.window.height` must be a whole number of points"},
+            {in_setting(%{"window" => %{"width" => 1440.5, "height" => 900}}), "`plan.checks[2].setting.window.width` must be a whole number of points"},
+            {in_setting(%{"appearance" => "sepia"}), "`plan.checks[2].setting.appearance` must be one of light, dark"}
+          ] do
+        assert {:error, refused} = placed_plan(qa)
+        assert String.starts_with?(refused, why), "#{inspect(qa["setting"])}: #{refused}"
+      end
+    end
+
+    test "Grooming's QA check that does not name its walked-on state in the fixed shape is refused with the field" do
+      for {walked_on, why} <- [
+            {nil, "`plan.checks[2].walked_on` is missing: a `qa` check says the state it is walked on"},
+            {[], "`plan.checks[2].walked_on` must list at least one"},
+            {"the seed", "`plan.checks[2].walked_on` must list at least one"},
+            {["priv/qa_seed"], "`plan.checks[2].walked_on[1]` must be an object: its `path` and what it `holds`"},
+            {[%{"path" => "priv/qa_seed/symphony/seed.json"}], "`plan.checks[2].walked_on[1].holds` must be one of present, added"},
+            {[%{"path" => "priv/qa_seed", "holds" => "maybe"}], "`plan.checks[2].walked_on[1].holds` must be one of present, added"},
+            {[hd(@walked_on), %{"holds" => "added"}], "`plan.checks[2].walked_on[2].path` must be the repo-relative path of a seed or fixture file or directory"},
+            {[%{"path" => "../qa_seed", "holds" => "added"}], "`plan.checks[2].walked_on[1].path` must be the repo-relative path"},
+            {[%{"path" => String.duplicate("a", 301), "holds" => "added"}], "`plan.checks[2].walked_on[1].path` must be the repo-relative path"},
+            {List.duplicate(hd(@walked_on), 21), "`plan.checks[2].walked_on` lists 21 entries, and a check holds at most 20"}
+          ] do
+        qa = if walked_on, do: Map.put(@qa, "walked_on", walked_on), else: Map.delete(@qa, "walked_on")
+        assert {:error, refused} = placed_plan(qa)
+        assert String.starts_with?(refused, why), "#{inspect(walked_on)}: #{refused}"
+      end
+    end
+
+    test "outside Grooming a QA check may leave both out, a malformed one is still refused, and other kinds carry neither" do
+      bare = Map.drop(@qa, ["setting", "walked_on"])
+      assert {:ok, %{plan: %{checks: [_outcome, qa]}}} = placed_plan(bare, plan: true)
+      refute Map.has_key?(qa, :setting) or Map.has_key?(qa, :walked_on)
+
+      assert {:error, "`plan.checks[2].setting.appearance` must be one of light, dark"} = placed_plan(in_setting(%{"appearance" => "blue"}), plan: true)
+
+      outcome = Map.merge(@outcome, %{"setting" => @setting, "walked_on" => @walked_on})
+      assert {:ok, %{plan: %{checks: [read, _qa]}}} = placed_plan_with(outcome)
+      assert read == %{kind: "outcome", statement: "The filter is kept after a reload.", proof: "test"}
+    end
+
+    defp placed_plan_with(outcome) do
+      plan = %{"shape" => "single", "summary" => "Keeps the filter.", "text" => "Approach: store it.", "checks" => [outcome, @qa], "size" => %{"tokens" => 1, "runs" => 1}}
+      Answer.parse(json(%{"plan" => plan}), plan: true, qa_setting: true)
+    end
+
+    test "Grooming's rules ask for both in the validated shapes, their own example passes, and new state ships with the change" do
+      rules = File.read!(Path.join(:code.priv_dir(:symphony_elixir), "conductor/grooming_prompt.md"))
+      [_before, after_example] = String.split(rules, "A small example, for the ask", parts: 2)
+      [example, _facts] = String.split(after_example, "The facts (JSON", parts: 2)
+      [_ask, example] = String.split(example, "\n\n", parts: 2)
+
+      assert {:ok, %{plan: %{checks: checks}}} = Answer.parse(example, plan: true, qa_setting: true)
+      assert [%{kind: "qa", setting: %{source: "fixture", appearance: "dark"}, walked_on: [%{holds: "present"}]}] = Enum.filter(checks, &(&1.kind == "qa"))
+
+      for words <- [~s("setting": {"source": "fixture" or "live"), ~s("walked_on": [{"path"), ~s("holds": "present" or "added"), "`priv/qa_seed/`) and to the fixtures in the same pull request"] do
+        assert rules =~ words
+      end
+    end
+  end
 end

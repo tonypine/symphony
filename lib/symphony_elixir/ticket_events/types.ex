@@ -198,7 +198,11 @@ defmodule SymphonyElixir.TicketEvents.Types do
   (`outcome`, `qa`, `evidence`), a `statement` (at most 600) and how it is proved (`proof`: `test`,
   `qa`, `design`, `attached`); a `qa` check also says the app `state` it needs, the `action` and
   what to `expect` (at most 400 each), the `size` it is walked at (`normal`, `wide`) and the Gallery
-  `story` a design proof compares. A sub-ticket entry has a `key` (`s1`), a `title` (at most 120),
+  `story` a design proof compares, and, as data, where it is walked (`setting`: its `source`,
+  `fixture` or `live`, the repo-relative `fixture` directory, the `page`, the `window` `width` and
+  `height` and the `appearance`, `light` or `dark`) and the state it is walked on (`walked_on`: each
+  repo-relative seed or fixture `path` and whether it `holds` it already, `present`, or the change
+  adds it, `added`). Both are optional, so a plan written before them still reads. A sub-ticket entry has a `key` (`s1`), a `title` (at most 120),
   an `ask` (at most 4,000), the sibling keys whose merge it waits on (`after`), a `repo` when it is
   not the parent's and the `identifier` Symphony fills once the ticket exists.
 
@@ -301,19 +305,33 @@ defmodule SymphonyElixir.TicketEvents.Types do
   # How a check was proved: as a plan says, or by the sub-tickets a split ticket finished through
   # (the machine's, when its final check passed on them).
   @proved_by_kinds @check_proofs ++ ~w(sub_tickets)
+  # Where a `qa` check is walked and the state it is walked on (`SymphonyElixir.Conductor.Answer`
+  # checks the paths are repo-relative and the window within the playbook limits).
+  @check_setting {:map,
+                  [
+                    source: {:enum, ~w(fixture live)},
+                    fixture: {:optional, {:string, 300}},
+                    page: {:string, 200},
+                    window: {:map, [width: :non_neg_integer, height: :non_neg_integer]},
+                    appearance: {:enum, ~w(light dark)}
+                  ]}
+  @walked_on {:map, [path: {:string, 300}, holds: {:enum, ~w(present added)}]}
   @plan_check {:map,
-               [
-                 id: {:string, 20},
-                 kind: {:enum, ~w(outcome qa evidence)},
-                 statement: {:string, 600},
-                 proof: {:enum, @check_proofs},
-                 state: {:optional, {:string, 400}},
-                 action: {:optional, {:string, 400}},
-                 expect: {:optional, {:string, 400}},
-                 size: {:optional, {:enum, ~w(normal wide)}},
-                 story: {:optional, {:string, 200}},
-                 ci_check: {:optional, {:string, 200}}
-               ]}
+   [
+     id: {:string, 20},
+     kind: {:enum, ~w(outcome qa evidence)},
+     statement: {:string, 600},
+     proof: {:enum, @check_proofs},
+     state: {:optional, {:string, 400}},
+     action: {:optional, {:string, 400}},
+     expect: {:optional, {:string, 400}},
+     size: {:optional, {:enum, ~w(normal wide)}},
+     story: {:optional, {:string, 200}},
+     ci_check: {:optional, {:string, 200}},
+     # Optional, so a plan written before a QA check named them still reads.
+     setting: {:optional, @check_setting},
+     walked_on: {:optional, {:list, @walked_on}}
+   ]}
   @plan_sub_ticket {:map,
                     [
                       key: {:string, 20},
