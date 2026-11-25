@@ -156,12 +156,15 @@ defmodule SymphonyElixir.Situation do
           retrying: %{optional(String.t()) => map()},
           slot_waiting: %{optional(String.t()) => map()},
           skipped: %{optional(String.t()) => map()},
-          order: %{optional(String.t()) => %{position: pos_integer(), wait: String.t() | nil, behind: String.t() | nil}},
+          order: %{optional(String.t()) => place_in_line()},
           limit: pos_integer() | nil,
           symphony_pause: %{optional(:reason) => String.t() | nil, optional(:paused_at) => DateTime.t() | nil} | nil,
           max_tries: pos_integer(),
           terminal_states: [String.t()]
         }
+
+  @typedoc "A ticket's place in the dispatch order while it waits in line."
+  @type place_in_line :: %{position: pos_integer(), wait: String.t() | nil, behind: String.t() | nil}
 
   @typedoc "The phase of a ticket named by its identifier, when Symphony knows it."
   @type phase_of :: (String.t() -> String.t() | nil)
@@ -194,7 +197,9 @@ defmodule SymphonyElixir.Situation do
   # The tickets the dispatch order leaves waiting in line (`SymphonyElixir.Dispatch.Order.place/1`),
   # each with its place, why it waits and the ticket just ahead of it.
   defp waiting_in_line(%{entries: entries}) when is_list(entries) do
-    for %{issue_id: issue_id, outcome: :waits, position: position} = entry <- entries, is_integer(position), into: %{} do
+    for %{issue_id: issue_id, outcome: :waits, position: position} = entry <- entries,
+        is_integer(position),
+        into: %{} do
       {issue_id, %{position: position, wait: Map.get(entry, :wait), behind: Map.get(entry, :behind)}}
     end
   end

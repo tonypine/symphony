@@ -817,7 +817,8 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
       state = %{Orchestrator.put_dispatch_order_for_test(full, issues) | slot_holders: Map.delete(full.slot_holders, "gone")}
       assert Orchestrator.available_slots_for_test(state) == 1
 
-      {:noreply, retried} = Orchestrator.handle_retry_issue_for_test(state, "late", 2, %{identifier: "MT-LATE"}, fn ["late"] -> {:ok, [late]} end)
+      fetch = fn ["late"] -> {:ok, [late]} end
+      {:noreply, retried} = Orchestrator.handle_retry_issue_for_test(state, "late", 2, %{identifier: "MT-LATE"}, fetch)
       refute Map.has_key?(retried.running, "late")
       refute Map.has_key?(retried.slot_holders, "late")
       assert %{attempt: 2, reason: "a free slot goes to the first ticket in queue order"} = retried.slot_waiting["late"]
@@ -866,7 +867,8 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
       assert passed_over("busy") == []
 
       # A later pass that passes it over for the same reason writes nothing more.
-      again = Orchestrator.dispatch_chosen_issues_for_test([held, next, later], %{dispatched | max_concurrent_agents: 3})
+      wider = %{dispatched | max_concurrent_agents: 3}
+      again = Orchestrator.dispatch_chosen_issues_for_test([held, next, later], wider)
       assert Map.has_key?(again.running, "later")
       assert [%{details: %{reason: ^reason}}] = passed_over("held")
     end
@@ -878,8 +880,16 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
       late = recorded(issue("late", "MT-LATE", "Todo"))
 
       # One slot is free: the first ticket takes it, and the one below waits behind it.
-      state = orchestrator_state(2) |> holding(busy) |> run(busy) |> Orchestrator.put_dispatch_order_for_test([first, late])
-      snapshot = %{running: [%{issue_id: "busy", identifier: "MT-BUSY"}], retrying: [], concurrency: %{max_total: 2}, dispatch_order: state.dispatch_order}
+      state = orchestrator_state(2) |> holding(busy) |> run(busy)
+      state = Orchestrator.put_dispatch_order_for_test(state, [first, late])
+
+      snapshot = %{
+        running: [%{issue_id: "busy", identifier: "MT-BUSY"}],
+        retrying: [],
+        concurrency: %{max_total: 2},
+        dispatch_order: state.dispatch_order
+      }
+
       live = Situation.live_facts(snapshot)
 
       assert %{kind: "waiting_for_slot", word: "Waiting for a slot", cause: "The implementation run is next. It is 2nd in line, behind MT-F."} = situation("late", live)
@@ -888,7 +898,8 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
 
       # A slot held with no run is not free: the first in line waits for it and says why.
       taken = orchestrator_state(2) |> holding(busy) |> run(busy) |> holding(issue("idle", "MT-IDLE", "Merging"))
-      live = Situation.live_facts(%{snapshot | dispatch_order: Orchestrator.put_dispatch_order_for_test(taken, [first, late]).dispatch_order})
+      taken_order = Orchestrator.put_dispatch_order_for_test(taken, [first, late]).dispatch_order
+      live = Situation.live_facts(%{snapshot | dispatch_order: taken_order})
       assert %{word: "Waiting for a slot", cause: "The implementation run is next. It is next in line: work slots full."} = situation("f", live)
     end
   end
