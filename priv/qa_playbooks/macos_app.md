@@ -879,9 +879,10 @@ the app in one appearance:
   its look is judged, and where a case the app rarely shows (a very long label, every size side
   by side) can be seen at all.
   1. Call `qa_gallery` with no arguments. It lists the entries (a component such as `button`, a
-     screen such as `ticket-page`), each with its variations, and `affected`: the entries the
-     PR's changed files are a reason to look at. Judge every affected entry. Never make up an
-     entry's or a variation's name: use the ones it returned.
+     screen such as `ticket-page`), each with its variations and the source files it shows. Judge
+     the entries whose files the PR's diff changes. Never make up an entry's or a variation's
+     name: use the ones it returned. (A stepped pass does not do this: Symphony draws the gallery of
+     the change and of its base, and its design check judges only the pictures that changed.)
   2. A component: call `qa_gallery` with its `entry`. It saves the entry's board to
      `qa-evidence/`, every variation together, in light and in dark, at its true size. Read the
      pictures.

@@ -6,7 +6,7 @@ defmodule SymphonyElixir.QaDriverTest do
   alias SymphonyElixir.{AgentEnv, Artifacts, Paths, PathSafety, QaDriver, RunStore, TicketEvents}
   alias SymphonyElixir.Codex.DynamicTool
   alias SymphonyElixir.Linear.Issue
-  alias SymphonyElixir.QaDriver.{DevServerLease, Host, ReleasePair}
+  alias SymphonyElixir.QaDriver.{DevServerLease, Host, Picture, ReleasePair}
 
   @app "macos/build/Demo.app"
   # The first line of the release pair's build script, which unlocks the keychain and runs make.
@@ -296,6 +296,13 @@ defmodule SymphonyElixir.QaDriverTest do
     end
 
     defp failed(status, output), do: %{status: :failed, tree: "tree", exit_status: status, output: output}
+  end
+
+  # `HostBuilder`, except that the base's commit (`base123`) gets `:qa_gallery_base_record`.
+  defmodule BaseBuilder do
+    @moduledoc false
+    def fetch(_repo_key, "base123", _ticket, _opts), do: Process.get(:qa_gallery_base_record)
+    def fetch(repo_key, head, ticket, opts), do: HostBuilder.fetch(repo_key, head, ticket, opts)
   end
 
   # The driver options that make its `qa_build` take what `HostBuilder` builds with `host`. A QA host
@@ -4214,20 +4221,32 @@ defmodule SymphonyElixir.QaDriverTest do
       "foundation" => ["Tokens.swift"]
     }
 
-    # A QA VM whose built bundle carries the gallery (unless `present: false`): `--entries` and
-    # `--affected` answer as the gallery does, and `--shot` writes the pictures it prints.
+    # A QA VM whose built bundle carries the gallery (unless `present: false`): `--entries`
+    # answers as the gallery does, `--shot` writes the pictures it prints, and `--shot-all` writes
+    # `opts[:drawn]`'s pictures, the change's first and its base's next (`{name, png}` each). The
+    # comparison's `cmp` runs here, for real.
     defp gallery_host(opts) do
       host(%{
         cmd: fn
           "/bin/test", ["-x", _gallery], _opts ->
             {:ok, {"", if(Keyword.get(opts, :present, true), do: 0, else: 1)}}
 
-          "/bin/sh", ["-c", script, "sh", gallery | paths] = args, cmd_opts ->
-            if script =~ "--affected" and String.ends_with?(gallery, "SymphonyGallery") do
-              {:ok, {Jason.encode!(%{"all" => false, "entries" => for("macos/Sources/SymphonyBarUI/Button.swift" <- paths, do: "button")}), 0}}
-            else
-              default_cmd("/bin/sh", args, cmd_opts, replies(%{}))
-            end
+          "/usr/bin/grep", ["-q", "-a", "-F", "--", "--shot-all", _gallery], _opts ->
+            {:ok, {"", 0}}
+
+          "/bin/sh", ["-c", script | _rest] = args, cmd_opts ->
+            if script =~ "cmp -s",
+              do: {:ok, System.cmd("/bin/sh", args)},
+              else: default_cmd("/bin/sh", args, cmd_opts, replies(%{}))
+
+          executable, ["--shot-all" | _rest] = args, _opts ->
+            true = String.ends_with?(executable, "/Contents/Helpers/SymphonyGallery")
+            [drawn | rest] = Process.get(:qa_gallery_draws, Keyword.get(opts, :drawn, []))
+            Process.put(:qa_gallery_draws, rest)
+            out = List.last(args)
+            File.mkdir_p!(out)
+            for {name, png} <- drawn, do: File.write!(Path.join(out, name), png)
+            {:ok, {Enum.map_join(drawn, "", fn {name, _png} -> Path.join(out, name) <> "\n" end), 0}}
 
           executable, args, cmd_opts ->
             if String.ends_with?(executable, "/Contents/Helpers/SymphonyGallery") do
@@ -4262,45 +4281,94 @@ defmodule SymphonyElixir.QaDriverTest do
       {:ok, {Enum.join(pictures, "\n") <> "\n", 0}}
     end
 
-    # The QA decision's git: the merge base, then the paths the head changes against it.
-    defp changed_git(paths) do
+    # The git of a change whose base is commit `base123`.
+    defp base_git(status \\ 0) do
       fn
-        ["merge-base", "origin/main", "HEAD"], _cwd -> {"abc123\n", 0}
-        ["diff", "--name-only", "abc123", "HEAD"], _cwd -> {Enum.join(paths, "\n") <> "\n", 0}
+        ["merge-base", "origin/main", "HEAD"], _cwd -> if(status == 0, do: {"base123\n", 0}, else: {"fatal: Not a valid object name origin/main\n", status})
         args, cwd -> clean_git(args, cwd)
       end
     end
 
     defp built_gallery(worktree, opts \\ []) do
-      driver = start_driver(worktree, host: gallery_host(opts), git: Keyword.get(opts, :git, &clean_git/2))
+      driver = start_driver(worktree, [host: gallery_host(opts), git: Keyword.get(opts, :git, &clean_git/2)] ++ Keyword.take(opts, [:qa_build]))
       assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
       driver
     end
 
-    test "lists the entries with the ones the PR's changed files touch", %{worktree: worktree} do
-      changed = ["macos/Sources/SymphonyBarUI/Button.swift", "README.md"]
-      driver = built_gallery(worktree, git: changed_git(changed))
+    test "lists the entries", %{worktree: worktree} do
+      driver = built_gallery(worktree)
       %{host_dir: host_dir} = GenServer.call(driver, :config)
 
       assert {:ok, payload} = QaDriver.call_tool(driver, "qa_gallery", %{})
-      assert payload == %{"entries" => @gallery_entries["entries"], "widths" => %{"laptop" => 1440, "desktop" => 2560}, "affected" => %{"all" => false, "entries" => ["button"]}}
+      assert payload == %{"entries" => @gallery_entries["entries"], "widths" => %{"laptop" => 1440, "desktop" => 2560}}
 
       assert_received {:cmd, gallery, ["--entries"], _opts}
       assert Path.dirname(gallery) |> String.starts_with?(Path.join(host_dir, "builds"))
       assert String.ends_with?(gallery, "Demo.app/Contents/Helpers/SymphonyGallery")
-      assert_received {:cmd, "/bin/sh", ["-c", _script, "sh", ^gallery | ^changed], _opts}
     end
 
-    test "lists the entries without `affected` when git cannot list the changed files", %{worktree: worktree} do
-      git = fn
-        ["merge-base" | _rest], _cwd -> {"fatal: Not a valid object name origin/main\n", 128}
-        args, cwd -> clean_git(args, cwd)
+    test "gallery_changes/1 draws the change's gallery and its base's and keeps the pictures that changed", %{worktree: worktree} do
+      black = Picture.encode(2, 2, :binary.copy(<<0, 0, 0, 255>>, 4), 2)
+      grey = Picture.encode(2, 2, :binary.copy(<<9, 9, 9, 255>>, 4), 2)
+      change = [{"button-1-dark.png", grey}, {"home-busy-desktop-dark.png", black}, {"badge-1-dark.png", black}]
+      base = [{"button-1-dark.png", black}, {"home-busy-desktop-dark.png", black}, {"old-1-dark.png", black}]
+      driver = built_gallery(worktree, git: base_git(), drawn: [change, base])
+      %{host_dir: host_dir} = GenServer.call(driver, :config)
+
+      assert {:ok, changes} = QaDriver.gallery_changes(driver)
+
+      assert changes == %{
+               "base" => "base123",
+               "appearance" => "dark",
+               "width" => 2560,
+               "changed" => ["button-1-dark.png"],
+               "new" => ["badge-1-dark.png"],
+               "removed" => ["old-1-dark.png"],
+               "same" => ["home-busy-desktop-dark.png"],
+               "files" => ["qa-evidence/button-1-dark.png", "qa-evidence/badge-1-dark.png"]
+             }
+
+      assert File.read!(Path.join(worktree, "qa-evidence/button-1-dark.png")) == grey
+      assert File.read!(Path.join(worktree, "qa-evidence/badge-1-dark.png")) == black
+      refute File.exists?(Path.join(worktree, "qa-evidence/home-busy-desktop-dark.png"))
+
+      # The base's build is asked for as the head's was, by the commit; each gallery draws once, at the QA target.
+      assert_received {:prebuild_fetch, "demo", "base123", []}
+      assert_received {:cmd, change_gallery, ["--shot-all", "--width", "2560", "--appearance", "dark", "--out", change_out], _opts}
+      assert_received {:cmd, base_gallery, ["--shot-all", "--width", "2560", "--appearance", "dark", "--out", base_out], _opts}
+      assert change_gallery != base_gallery
+      assert Path.dirname(change_out) == host_dir and Path.dirname(base_out) == host_dir
+      refute_received {:cmd, _gallery, ["--shot" | _rest], _opts}
+    end
+
+    test "gallery_changes/1 fails with its reason, never with every entry to judge", %{worktree: worktree} do
+      driver = built_gallery(worktree, git: base_git(128))
+      assert {:error, {:qa_tool, "qa_gallery_no_base", message}} = QaDriver.gallery_changes(driver)
+      assert message =~ "The base of the change (the merge-base of HEAD with origin/main) could not be read: git exited 128: fatal: Not a valid object name"
+
+      for {record, why} <- [
+            {%{status: :failed, exit_status: 2, output: "boom"}, "it failed to build (exit 2)"},
+            {%{status: :unavailable, reason: "the QA host was unreachable"}, "it could not be built: the QA host was unreachable"},
+            {nil, "Symphony has no build of it"}
+          ] do
+        Process.put(:qa_gallery_base_record, record)
+        driver = built_gallery(worktree, git: base_git(), qa_build: BaseBuilder)
+        assert {:error, {:qa_tool, "qa_gallery_no_base", message}} = QaDriver.gallery_changes(driver)
+        assert message == "The base's app (commit base123) has no build to draw its Component Gallery with: #{why}."
       end
 
-      driver = built_gallery(worktree, git: git)
-      assert {:ok, %{"entries" => [_button, _home], "affected" => nil, "note" => note}} = QaDriver.call_tool(driver, "qa_gallery", %{})
-      assert note =~ "could not be listed"
-      assert note =~ "Not a valid object name"
+      driver = start_driver(worktree, host: gallery_host([]))
+      assert {:error, {:qa_tool, "qa_not_built", _message}} = QaDriver.gallery_changes(driver)
+
+      assert {:error, {:qa_tool, "qa_driver_unavailable", _message}} = QaDriver.gallery_changes(nil)
+      QaDriver.stop(driver)
+      assert {:error, {:qa_tool, "qa_driver_unavailable", "The QA driver for this pass has stopped."}} = QaDriver.gallery_changes(driver)
+    end
+
+    test "gallery_changes/1 answers a QA host the driver refused with its refusal", %{worktree: worktree} do
+      driver = remote_driver(worktree, remote_host(%{prepare: {:error, {:unsafe, "has a private key ~/.ssh/id_ed25519"}}}))
+      assert {:error, {:qa_tool, "qa_worker_unsafe", _message}} = QaDriver.gallery_changes(driver)
+      QaDriver.stop(driver)
     end
 
     test "draws an entry into qa-evidence/ under the gallery's file names", %{worktree: worktree} do

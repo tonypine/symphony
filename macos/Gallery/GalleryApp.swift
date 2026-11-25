@@ -14,8 +14,6 @@
 //                                         `--dark` for the dark appearance). It fills the screen, over the menu bar
 //                                         and the Dock; `--window` keeps it a window
 //   SymphonyGallery --entries             the entries, as JSON: id, title, kind, variations, the files each shows
-//   SymphonyGallery --affected            the entries a change is a reason to look at, as JSON; the changed files'
-//                                         repository paths come one per line on standard input
 //   SymphonyGallery --shot <entry> [--variation <name>] [--width laptop|desktop|<points>] [--appearance light|dark]
 //                      --out <dir>
 //                                         draws the entry to files, without a window, in both appearances or only
@@ -25,6 +23,11 @@
 //                                         `<dir>/<variation>-<laptop|desktop|points>-<light|dark>.png`, at both
 //                                         widths or at the named one; a variation of one size (a sheet) as
 //                                         `<dir>/<variation>-<light|dark>.png`
+//   SymphonyGallery --shot-all [--width laptop|desktop|<points>] [--appearance light|dark] --out <dir>
+//                                         every entry, in one run, into one folder, as `--shot` draws each (same
+//                                         file names): QA draws the change's gallery and its base's this way and
+//                                         compares the pictures (TP-1667). Its pictures are the same from one run
+//                                         to the next for the same build
 //   SymphonyGallery --check               fails, saying why, when the entries and the variations disagree, or the
 //                                         committed list of component variations is not the gallery's
 //   SymphonyGallery --component-variations   that list, as Gallery/component-variations.txt holds it
@@ -57,6 +60,24 @@ enum GalleryWidth {
     }
 
     static func name(_ points: CGFloat) -> String { named.first { $0.points == points }?.name ?? "\(Int(points))" }
+
+    /// The height of the window `points` wide: the laptop's 900, the desktop's 1440, else the width's 16:10.
+    static func height(_ points: CGFloat) -> CGFloat {
+        switch points {
+        case 1440: 900
+        case 2560: 1440
+        default: (points * 10 / 16).rounded()
+        }
+    }
+}
+
+/// A screen as a window `height` tall shows it: its own width, laid out in the window's height and cut there from the
+/// top, so a screen whose content runs longer (a long queue) is drawn as far as the window shows, never at its whole
+/// content's height. Without a height, the screen's own size.
+@MainActor
+func bounded(_ view: AnyView, height: CGFloat?) -> AnyView {
+    guard let height else { return AnyView(view.fixedSize()) }
+    return AnyView(view.fixedSize(horizontal: true, vertical: false).frame(height: height, alignment: .top).clipped())
 }
 
 @MainActor var galleryVariations: [GalleryVariation] = []
@@ -127,13 +148,6 @@ func runGallery() {
         ]))
         return
     }
-    if arguments.contains("--affected") {
-        var paths: [String] = []
-        while let line = readLine() { paths.append(line.trimmingCharacters(in: .whitespaces)) }
-        let affected = galleryAffected(by: paths)
-        print(json(["all": affected.all, "entries": affected.entries]))
-        return
-    }
     if arguments.contains("--component-variations") {
         print(componentVariationsText(componentVariationNames), terminator: "")
         return
@@ -148,17 +162,22 @@ func runGallery() {
         print(problems.isEmpty ? "gallery: \(galleryEntries.count) entries, \(galleryVariations.count) variations, every shared file shown" : "gallery: \(problems.count) problem(s)")
         exit(problems.isEmpty ? 0 : 1)
     }
+    let appearance = value(after: "--appearance").map { word -> ColorScheme in
+        switch word {
+        case "light": return .light
+        case "dark": return .dark
+        default:
+            FileHandle.standardError.write("--appearance takes light or dark, not \(word)\n".data(using: .utf8)!)
+            exit(2)
+        }
+    }
+    if arguments.contains("--shot-all") {
+        guard let out = value(after: "--out") else { fatalError("--shot-all needs --out <dir>") }
+        for entry in galleryEntries { shoot(entry, width: width, appearance: appearance, into: URL(fileURLWithPath: out)) }
+        return
+    }
     if let id = value(after: "--shot") {
         guard let out = value(after: "--out") else { fatalError("--shot needs --out <dir>") }
-        let appearance = value(after: "--appearance").map { word -> ColorScheme in
-            switch word {
-            case "light": return .light
-            case "dark": return .dark
-            default:
-                FileHandle.standardError.write("--appearance takes light or dark, not \(word)\n".data(using: .utf8)!)
-                exit(2)
-            }
-        }
         shoot(
             entry(id), only: value(after: "--variation").map { variation($0, of: entry(id)).id }, width: width,
             appearance: appearance, into: URL(fileURLWithPath: out)
@@ -291,22 +310,36 @@ func shortName(_ variation: GalleryVariation, in entry: GalleryEntry) -> String 
     return rest.isEmpty ? variation.id.replacingOccurrences(of: "-", with: " ") : rest
 }
 
+/// The most pixels a picture may have on a side. A story whose picture grows past it (a screen laid out at its whole
+/// content's height, say) stops the run by name, before ImageIO fails to write it.
+let galleryPictureLimit = 16_384
+
+/// Each picture is drawn and written in its own autorelease pool, so a run that draws every entry (`--shot-all`)
+/// frees each picture's buffers before it draws the next.
 @MainActor
 private func write(_ view: some View, scheme: ColorScheme, scale: CGFloat, to url: URL) {
-    let renderer = ImageRenderer(content: view.background(DesignTokens.Surface.window.color).environment(\.colorScheme, scheme).environment(\.offscreenSnapshot, true))
-    renderer.scale = scale
-    guard let image = renderer.cgImage,
-        let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil)
-    else { fatalError("Could not draw \(url.lastPathComponent)") }
-    CGImageDestinationAddImage(destination, image, nil)
-    guard CGImageDestinationFinalize(destination) else { fatalError("Could not write \(url.path)") }
+    autoreleasepool {
+        let renderer = ImageRenderer(content: view.background(DesignTokens.Surface.window.color).environment(\.colorScheme, scheme).environment(\.offscreenSnapshot, true))
+        renderer.scale = scale
+        guard let image = renderer.cgImage,
+            let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil)
+        else { fatalError("Could not draw \(url.lastPathComponent)") }
+        guard image.width <= galleryPictureLimit, image.height <= galleryPictureLimit else {
+            fatalError("\(url.lastPathComponent) is \(image.width)×\(image.height) pixels, past the \(galleryPictureLimit) a picture may have on a side: its story must bound its size")
+        }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else {
+            fatalError("Could not write \(url.path) (\(image.width)×\(image.height) pixels)")
+        }
+    }
     print(url.path)
 }
 
 /// Draws the entry to files: still, in light and in dark, or only in `appearance` when it is given. A component's
 /// board is drawn at twice its size, and cut between cells into a few pictures when it is taller than a picture is
 /// worth reading. A screen's variations are drawn one to a picture (`only`: that one), each at its true size: one that
-/// follows its window's width at `width`, or at the laptop's and at the desktop's.
+/// follows its window's width at `width`, or at the laptop's and at the desktop's, as a window of that size shows it,
+/// cut at the window's height from the top.
 @MainActor
 func shoot(_ entry: GalleryEntry, only: String? = nil, width: CGFloat? = nil, appearance: ColorScheme? = nil, into folder: URL) {
     try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -314,14 +347,16 @@ func shoot(_ entry: GalleryEntry, only: String? = nil, width: CGFloat? = nil, ap
     let own = variations(of: entry).filter { only == nil || $0.id == only }
     if entry.kind == .screen {
         for variation in own {
-            let drawings: [(String, AnyView)] = variation.sized.map { sized in
-                (width.map { [$0] } ?? GalleryWidth.named.map(\.points)).map { ("\(variation.id)-\(GalleryWidth.name($0))", sized($0)) }
-            } ?? [(variation.id, variation.view)]
-            for (name, view) in drawings {
+            let drawings: [(String, AnyView, CGFloat?)] = variation.sized.map { sized in
+                (width.map { [$0] } ?? GalleryWidth.named.map(\.points)).map {
+                    ("\(variation.id)-\(GalleryWidth.name($0))", sized($0), GalleryWidth.height($0))
+                }
+            } ?? [(variation.id, variation.view, nil)]
+            for (name, view, height) in drawings {
                 // A wide screen is already a large picture: twice the size only when it is narrow.
-                let scale: CGFloat = NSHostingView(rootView: view).fittingSize.width > 1600 ? 1 : 2
+                let scale: CGFloat = autoreleasepool { NSHostingView(rootView: view).fittingSize.width } > 1600 ? 1 : 2
                 for (scheme, suffix) in schemes {
-                    write(view.fixedSize(), scheme: scheme, scale: scale, to: folder.appendingPathComponent("\(name)-\(suffix).png"))
+                    write(bounded(view, height: height), scheme: scheme, scale: scale, to: folder.appendingPathComponent("\(name)-\(suffix).png"))
                 }
             }
         }
@@ -330,7 +365,7 @@ func shoot(_ entry: GalleryEntry, only: String? = nil, width: CGFloat? = nil, ap
     let limit = CGSize(width: 1600, height: 2000)
     let spacing = DesignTokens.Space.s5
     let sizes = own.map { variation -> CGSize in
-        var size = NSHostingView(rootView: variation.view).fittingSize
+        var size = autoreleasepool { NSHostingView(rootView: variation.view).fittingSize }
         size.width += 2 * DesignTokens.Space.s4
         size.height += 2 * DesignTokens.Space.s4 + 22
         return size

@@ -481,7 +481,9 @@ public enum PhaseDefaults {
 
     /// The machine step commands the QA pass runs itself, with the QA host it holds (`Config.Schema.Phases.qa_commands/0`).
     /// Only a QA playbook's list runs them.
-    public static let qaCommands = ["symphony:qa_pre_checks", "symphony:qa_build", "symphony:qa_launch", "symphony:qa_quit", "symphony:qa_attach"]
+    public static let qaCommands = [
+        "symphony:qa_pre_checks", "symphony:qa_build", "symphony:qa_launch", "symphony:qa_gallery", "symphony:qa_quit", "symphony:qa_attach",
+    ]
 
     /// A QA playbook's default list, as `Config.Schema.Phases.default_qa_steps/1` gives it: only `macos_app` has one.
     /// Its orchestrated steps leave the prompt to Symphony (`priv/qa_steps/macos_app/<id>.md`).
@@ -503,7 +505,7 @@ public enum PhaseDefaults {
                 stepID: "plan", title: "Plan the pass", mode: .orchestrated,
                 answer: [
                     AnswerField(name: "needs_app", type: .boolean), AnswerField(name: "walk", type: .list),
-                    AnswerField(name: "gallery", type: .list), AnswerField(name: "notes"),
+                    AnswerField(name: "screens", type: .list), AnswerField(name: "notes"),
                 ],
                 effort: .high, session: "lead"
             ),
@@ -514,6 +516,10 @@ public enum PhaseDefaults {
             PhaseStep(
                 stepID: "walk", title: "Walk a step", mode: .orchestrated, answer: judged,
                 model: "small", session: PhaseStep.freshSession, repeat: .walkthrough
+            ),
+            PhaseStep(
+                stepID: "gallery", title: "Draw the Gallery and compare it with the base's", mode: .machine,
+                commands: [StepCommand(run: "symphony:qa_gallery")], timeoutMs: 3_600_000, onFail: "quit"
             ),
             PhaseStep(stepID: "design_check", title: "Design check", mode: .orchestrated, answer: judged, model: "small", session: PhaseStep.freshSession),
             PhaseStep(stepID: "quit", title: "Quit the app", mode: .machine, commands: [StepCommand(run: "symphony:qa_quit")], timeoutMs: 60_000),

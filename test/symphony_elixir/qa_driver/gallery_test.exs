@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.QaDriver.GalleryTest do
   use ExUnit.Case, async: true
 
-  alias SymphonyElixir.QaDriver.Gallery
+  alias SymphonyElixir.QaDriver.{Gallery, Picture}
 
   @gallery "/run/builds/1/Symphony.app/Contents/Helpers/SymphonyGallery"
   @entries %{
@@ -131,71 +131,178 @@ defmodule SymphonyElixir.QaDriver.GalleryTest do
     end
   end
 
-  describe "listing/3" do
-    test "returns the entries, the widths and the affected entries", context do
-      changed = ["macos/Sources/SymphonyBarUI/Button.swift", "docs/a file.md"]
+  describe "listing/2" do
+    test "returns the entries and the widths", context do
+      config = config(context, fn @gallery, ["--entries"] -> {:ok, {Jason.encode!(@entries), 0}} end)
 
-      config =
-        config(context, fn
-          @gallery, ["--entries"] -> {:ok, {Jason.encode!(@entries), 0}}
-          "/bin/sh", ["-c", _script, "sh", @gallery | ^changed] -> {:ok, {~s({"all":false,"entries":["button"]}\n), 0}}
-        end)
+      assert Gallery.listing(config, @gallery) == {:ok, %{"entries" => @entries["entries"], "widths" => @entries["widths"]}}
 
-      assert Gallery.listing(config, @gallery, {:ok, changed}) ==
-               {:ok, %{"entries" => @entries["entries"], "widths" => @entries["widths"], "affected" => %{"all" => false, "entries" => ["button"]}}}
-
-      assert_received {:cmd, "/bin/sh", ["-c", script | _rest], opts}
-      assert script == ~s(g=$1; shift; printf '%s\\n' "$@" | "$g" --affected)
+      assert_received {:cmd, @gallery, ["--entries"], opts}
       # The whole answer is kept, not the last few thousand bytes.
       assert opts[:output_limit] >= 1_000_000
     end
 
-    test "the shell hands the gallery one path a line", context do
-      gallery = Path.join(context.host_dir, "gallery")
-      File.write!(gallery, "#!/bin/sh\nprintf '{\"all\":true,\"entries\":['; sed 's/.*/\"&\"/' | paste -sd, - | tr -d '\\n'; printf ']}'\n")
-      File.chmod!(gallery, 0o755)
-
-      config =
-        config(context, fn
-          ^gallery, ["--entries"] -> {:ok, {Jason.encode!(@entries), 0}}
-          "/bin/sh", args -> {:ok, System.cmd("/bin/sh", args)}
-        end)
-
-      assert {:ok, %{"affected" => %{"all" => true, "entries" => ["a b.swift", "$HOME/c.swift"]}}} = Gallery.listing(config, gallery, {:ok, ["a b.swift", "$HOME/c.swift"]})
-    end
-
-    test "runs nothing for a PR that changes no file", context do
-      config = config(context, fn @gallery, ["--entries"] -> {:ok, {Jason.encode!(@entries), 0}} end)
-      assert {:ok, %{"affected" => %{"all" => false, "entries" => []}} = payload} = Gallery.listing(config, @gallery, {:ok, []})
-      refute Map.has_key?(payload, "note")
-    end
-
-    test "says why `affected` is unknown when the changed files could not be listed", context do
-      config = config(context, fn @gallery, ["--entries"] -> {:ok, {Jason.encode!(@entries), 0}} end)
-      unlisted = {:error, {:git_failed, 128, "fatal: bad object"}}
-      assert {:ok, %{"entries" => [_button, _home], "affected" => nil, "note" => note}} = Gallery.listing(config, @gallery, unlisted)
-      assert note =~ "could not be listed"
-      assert note =~ "fatal: bad object"
-    end
-
     test "fails when the gallery fails or answers something else", context do
-      for {entries, affected, expected} <- [
-            {{:ok, {"dyld: Library not loaded\n", 6}}, nil, "exit 6): dyld: Library not loaded"},
-            {{:error, :timeout}, nil, "could not run on the QA host: :timeout"},
-            {{:ok, {"not json", 0}}, nil, "answer to --entries could not be read: not json"},
-            {{:ok, {~s({"entries":"none"}), 0}}, nil, "answer to --entries"},
-            {{:ok, {Jason.encode!(@entries), 0}}, {:ok, {"boom", 1}}, "exit 1): boom"},
-            {{:ok, {Jason.encode!(@entries), 0}}, {:ok, {~s({"all":"yes","entries":[]}), 0}}, "answer to --affected"}
+      for {entries, expected} <- [
+            {{:ok, {"dyld: Library not loaded\n", 6}}, "exit 6): dyld: Library not loaded"},
+            {{:error, :timeout}, "could not run on the QA host: :timeout"},
+            {{:ok, {"not json", 0}}, "answer to --entries could not be read: not json"},
+            {{:ok, {~s({"entries":"none"}), 0}}, "answer to --entries"}
           ] do
-        config =
-          config(context, fn
-            @gallery, ["--entries"] -> entries
-            "/bin/sh", _args -> affected
-          end)
+        config = config(context, fn @gallery, ["--entries"] -> entries end)
 
-        assert {"qa_gallery_failed", message} = failure(Gallery.listing(config, @gallery, {:ok, ["a.swift"]}))
+        assert {"qa_gallery_failed", message} = failure(Gallery.listing(config, @gallery))
         assert message =~ expected
       end
+    end
+  end
+
+  # A QA host that runs the shell for real, here, and draws `pictures` (a file name to its PNG) for each gallery.
+  defp drawing_host(context, pictures_by_gallery, grep \\ fn _gallery -> {:ok, {"", 0}} end) do
+    config(context, fn
+      "/usr/bin/grep", ["-q", "-a", "-F", "--", "--shot-all", gallery] ->
+        grep.(gallery)
+
+      "/bin/sh", args ->
+        {:ok, System.cmd("/bin/sh", args)}
+
+      gallery, ["--shot-all", "--width", _width, "--appearance", _appearance, "--out", out] ->
+        File.mkdir_p!(out)
+
+        for {name, png} <- Map.fetch!(pictures_by_gallery, gallery), do: File.write!(Path.join(out, name), png)
+
+        {:ok, {"sysctlbyname failed\n" <> Enum.map_join(Map.fetch!(pictures_by_gallery, gallery), "", fn {name, _png} -> Path.join(out, name) <> "\n" end), 0}}
+    end)
+  end
+
+  defp png(colour, scale \\ 2, size \\ 2), do: Picture.encode(size, size, :binary.copy(colour, size * size), scale)
+
+  describe "draw_all/4" do
+    test "draws every entry in one run, at the target, into a folder of its own", context do
+      config = drawing_host(context, %{@gallery => [{"button-1-dark.png", png(<<0, 0, 0, 255>>)}, {"home-busy-desktop-dark.png", png(<<1, 1, 1, 255>>)}]})
+
+      assert {:ok, %{dir: dir, pictures: ["button-1-dark.png", "home-busy-desktop-dark.png"]}} =
+               Gallery.draw_all(config, @gallery, %{width: "2560", appearance: "dark"}, "change")
+
+      assert Path.dirname(dir) == context.host_dir
+      assert Path.basename(dir) =~ ~r/^gallery-change-\d+$/
+      assert_received {:cmd, "/usr/bin/grep", ["-q", "-a", "-F", "--", "--shot-all", @gallery], _opts}
+      assert_received {:cmd, @gallery, ["--shot-all", "--width", "2560", "--appearance", "dark", "--out", ^dir], opts}
+      assert opts[:timeout_ms] >= 600_000
+    end
+
+    test "refuses a gallery from before --shot-all, before it opens a window", context do
+      config = drawing_host(context, %{}, fn _gallery -> {:ok, {"", 1}} end)
+
+      assert {"qa_gallery_too_old", message} = failure(Gallery.draw_all(config, @gallery, %{width: "2560", appearance: "dark"}, "base"))
+      assert message =~ "The base's Component Gallery was built before it drew every entry in one run"
+      refute_received {:cmd, @gallery, _args, _opts}
+
+      unreachable = drawing_host(context, %{}, fn _gallery -> {:error, :closed} end)
+      assert {"qa_gallery_failed", message} = failure(Gallery.draw_all(unreachable, @gallery, %{width: "2560", appearance: "dark"}, "base"))
+      assert message =~ "could not be asked about the base's Component Gallery: :closed"
+    end
+
+    test "fails when the gallery fails or draws nothing", context do
+      host = drawing_host(context, %{@gallery => []})
+      target = %{width: "1440", appearance: "light"}
+      assert {"qa_gallery_failed", message} = failure(Gallery.draw_all(host, @gallery, target, "change"))
+      assert message =~ "drew no picture"
+
+      failing =
+        config(context, fn
+          "/usr/bin/grep", _args -> {:ok, {"", 0}}
+          @gallery, _args -> {:ok, {"Fatal error: Could not draw home-busy", 134}}
+        end)
+
+      assert {"qa_gallery_failed", message} = failure(Gallery.draw_all(failing, @gallery, %{width: "1440", appearance: "light"}, "change"))
+      assert message =~ "exit 134): Fatal error: Could not draw home-busy"
+    end
+  end
+
+  describe "compare/3" do
+    # The change's gallery and its base's, drawn into folders of their own.
+    defp drawn(context, head, base) do
+      config = drawing_host(context, %{"head" => head, "base" => base})
+      target = %{width: "2560", appearance: "dark"}
+      {:ok, head} = Gallery.draw_all(config, "head", target, "change")
+      {:ok, base} = Gallery.draw_all(config, "base", target, "base")
+      {config, head, base}
+    end
+
+    test "judges the pictures whose pixels differ and the new ones, never the same or the removed", context do
+      black = png(<<0, 0, 0, 255>>)
+      grey = png(<<9, 9, 9, 255>>)
+
+      {config, head, base} =
+        drawn(
+          context,
+          [{"same-1-dark.png", black}, {"changed-1-dark.png", grey}, {"new-1-dark.png", black}, {"rescaled-1-dark.png", png(<<0, 0, 0, 255>>, 1)}, {"resized-1-dark.png", png(<<0, 0, 0, 255>>, 2, 3)}],
+          [{"same-1-dark.png", black}, {"changed-1-dark.png", black}, {"removed-1-dark.png", black}, {"rescaled-1-dark.png", black}, {"resized-1-dark.png", black}]
+        )
+
+      assert Gallery.compare(config, head, base) ==
+               {:ok,
+                %{
+                  changed: ["changed-1-dark.png", "resized-1-dark.png"],
+                  new: ["new-1-dark.png"],
+                  removed: ["removed-1-dark.png"],
+                  # Written again with another `pHYs` but the same pixels: the same picture.
+                  same: ["same-1-dark.png", "rescaled-1-dark.png"],
+                  # The QA host removes a file it reads: the change's pictures that differ are kept.
+                  pngs: %{"changed-1-dark.png" => grey, "resized-1-dark.png" => png(<<0, 0, 0, 255>>, 2, 3)}
+                }}
+    end
+
+    test "decodes only the pairs whose bytes differ", context do
+      black = png(<<0, 0, 0, 255>>)
+      {config, head, base} = drawn(context, [{"same-1-dark.png", black}], [{"same-1-dark.png", black}])
+      config = %{config | host: %{config.host | read: fn path -> flunk("read #{path}") end}}
+
+      assert {:ok, %{changed: [], new: [], removed: [], same: ["same-1-dark.png"]}} = Gallery.compare(config, head, base)
+    end
+
+    test "asks the QA host nothing when no picture is in both", context do
+      config = config(context, fn executable, args -> flunk("ran #{executable} #{inspect(args)}") end)
+
+      assert Gallery.compare(config, %{dir: "/h", pictures: ["a.png"]}, %{dir: "/b", pictures: ["b.png"]}) ==
+               {:ok, %{changed: [], new: ["a.png"], removed: ["b.png"], same: [], pngs: %{}}}
+    end
+
+    test "fails, naming the picture, when one cannot be read or compared", context do
+      {config, head, base} = drawn(context, [{"a-1-dark.png", "not a png"}], [{"a-1-dark.png", png(<<0, 0, 0, 255>>)}])
+      assert {"qa_gallery_failed", message} = failure(Gallery.compare(config, head, base))
+      assert message == "The picture a-1-dark.png could not be compared: it is not a PNG."
+
+      {config, head, base} = drawn(context, [{"b-1-dark.png", png(<<1, 0, 0, 255>>)}], [{"b-1-dark.png", png(<<0, 0, 0, 255>>)}])
+      unreadable = %{config | host: %{config.host | read: fn _path -> {:error, :enoent} end}}
+      assert {"qa_gallery_failed", message} = failure(Gallery.compare(unreadable, head, base))
+      assert message =~ "The picture b-1-dark.png could not be copied from the QA host: :enoent"
+
+      failing = %{config | host: %{config.host | cmd: fn _executable, _args, _opts -> {:ok, {"cmp: not found", 127}} end}}
+      assert {"qa_gallery_failed", message} = failure(Gallery.compare(failing, head, base))
+      assert message =~ "exit 127): cmp: not found"
+    end
+  end
+
+  describe "save/3" do
+    test "copies the named pictures into qa-evidence/ under their own names", context do
+      black = png(<<0, 0, 0, 255>>)
+      config = drawing_host(context, %{@gallery => [{"a-1-dark.png", black}, {"b-1-dark.png", black}]})
+      {:ok, drawn} = Gallery.draw_all(config, @gallery, %{width: "2560", appearance: "dark"}, "change")
+
+      assert Gallery.save(config, drawn, ["b-1-dark.png"]) == {:ok, %{"files" => [%{"path" => "qa-evidence/b-1-dark.png"}]}}
+      assert File.read!(Path.join(context.worktree, "qa-evidence/b-1-dark.png")) == black
+      refute File.exists?(Path.join(context.worktree, "qa-evidence/a-1-dark.png"))
+
+      assert {:ok, %{"files" => [%{"path" => "qa-evidence/b-1-dark.png", "existing" => true}]}} = Gallery.save(config, drawn, ["b-1-dark.png"])
+      assert Gallery.save(config, drawn, []) == {:ok, %{"files" => []}}
+
+      # A picture the comparison read already is saved from what it read: the QA host removed the file.
+      gone = %{config | host: %{config.host | read: fn _path -> {:error, :enoent} end}}
+      assert Gallery.save(gone, drawn, ["a-1-dark.png"], %{"a-1-dark.png" => black}) == {:ok, %{"files" => [%{"path" => "qa-evidence/a-1-dark.png"}]}}
+      assert {"qa_gallery_failed", message} = failure(Gallery.save(gone, drawn, ["c-1-dark.png"], %{"a-1-dark.png" => black}))
+      assert message =~ "c-1-dark.png could not be copied from the QA host: :enoent"
     end
   end
 

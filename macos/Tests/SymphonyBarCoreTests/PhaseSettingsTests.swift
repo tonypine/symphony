@@ -774,7 +774,7 @@ final class PhaseSettingsTests: XCTestCase {
         let steps = PhaseDefaults.qaSteps(for: .macosApp)
         XCTAssertEqual(
             steps.map(\.stepID),
-            ["pre_checks", "build", "plan", "launch", "walk", "design_check", "quit", "attach", "review"]
+            ["pre_checks", "build", "plan", "launch", "walk", "gallery", "design_check", "quit", "attach", "review"]
         )
         XCTAssertEqual(steps.filter { $0.mode == .machine }.map { $0.commands.map(\.run) }, PhaseDefaults.qaCommands.map { [$0] })
         XCTAssertEqual(steps[1], PhaseStep(
@@ -785,14 +785,18 @@ final class PhaseSettingsTests: XCTestCase {
         XCTAssertEqual(steps[2].effort, .high)
         XCTAssertEqual(steps[2].answer, [
             AnswerField(name: "needs_app", type: .boolean), AnswerField(name: "walk", type: .list),
-            AnswerField(name: "gallery", type: .list), AnswerField(name: "notes"),
+            AnswerField(name: "screens", type: .list), AnswerField(name: "notes"),
         ])
         XCTAssertEqual(steps[4].repeat, .walkthrough)
         XCTAssertEqual(steps[4].session, "fresh")
         XCTAssertEqual(steps[4].model, "small")
         XCTAssertEqual(steps[4].answer.map(\.name), ["status", "expected", "actual", "details", "evidence"])
-        XCTAssertEqual(steps[5].answer, steps[4].answer)
-        XCTAssertEqual(steps[8], PhaseStep(stepID: "review", title: "Review and verdict", mode: .orchestrated, effort: .high, session: "lead"))
+        XCTAssertEqual(steps[5], PhaseStep(
+            stepID: "gallery", title: "Draw the Gallery and compare it with the base's", mode: .machine,
+            commands: [StepCommand(run: "symphony:qa_gallery")], timeoutMs: 3_600_000, onFail: "quit"
+        ))
+        XCTAssertEqual(steps[6].answer, steps[4].answer)
+        XCTAssertEqual(steps[9], PhaseStep(stepID: "review", title: "Review and verdict", mode: .orchestrated, effort: .high, session: "lead"))
         XCTAssertTrue(steps.filter { $0.mode == .orchestrated }.allSatisfy { $0.prompt.isEmpty })
 
         // Valid as a playbook's list, which may leave prompts to Symphony and run its QA commands; not as a run kind's.
@@ -998,7 +1002,7 @@ final class PhaseSettingsTests: XCTestCase {
         ))
         XCTAssertTrue(preview.contains(
             "3. `plan` Plan the pass · orchestrated · on failure ends the run\n   - prompt: Symphony's own (`priv/qa_steps/macos_app/plan.md`)\n"
-                + "   - answer: `gallery` list, `needs_app` boolean, `notes` string, `walk` list\n"
+                + "   - answer: `needs_app` boolean, `notes` string, `screens` list, `walk` list\n"
         ))
         let list = PhaseSteps.defaults(for: .implementation)
         XCTAssertEqual(PhasePreview.text(owner: .runKind(.implementation), list: list), PhasePreview.text(kind: .implementation, list: list))

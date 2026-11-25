@@ -13,7 +13,7 @@ defmodule SymphonyElixir.QaAgent.StepPayload do
     * `results/1`: one `%{step, status, expected, actual}` per walkthrough step of a walk or recheck
       step that judged several in one session;
     * `plan/2`: `%{checks, skips, summary}` of the plan step: a check per walkthrough brief and per
-      gallery entry the plan names, and the steps the plan leaves unrun;
+      screen of the app the plan names for the design check, and the steps the plan leaves unrun;
     * `recheck/1`: the briefs the review asks to walk again, each `%{title, do, expect}` and an
       optional `design`; whole trailing briefs are dropped before the list passes its size, then
       the strings are trimmed;
@@ -66,14 +66,14 @@ defmodule SymphonyElixir.QaAgent.StepPayload do
         %{title: check_title(brief), expect: text(brief["expect"], @check_expect)}
       end
 
-    gallery =
-      for entry <- list(answer["gallery"]) do
-        {name, detail} = if is_map(entry), do: {entry["entry"], entry["why"] || entry["variations"]}, else: {entry, nil}
-        %{title: cut("Gallery: #{display(name)}", @title), expect: text(display_list(detail), @check_expect)}
+    screens =
+      for screen <- list(answer["screens"]) do
+        {name, detail} = if is_map(screen), do: {screen["screen"], screen["why"] || screen["where"]}, else: {screen, nil}
+        %{title: cut("Design: #{display(name)}", @title), expect: text(display_list(detail), @check_expect)}
       end
 
     %{
-      checks: Enum.take(walk ++ gallery, @max_checks),
+      checks: Enum.take(walk ++ screens, @max_checks),
       skips: for(skip <- skips, do: %{title: text(skip.title, @title), why: text(skip.why, @check_expect)}),
       summary: summary_text(answer)
     }
@@ -185,12 +185,12 @@ defmodule SymphonyElixir.QaAgent.StepPayload do
 
   defp summary_text(answer) do
     walk = for brief <- list(answer["walk"]), is_map(brief), do: "- Step #{brief["step"]}: #{brief["where"]}; #{brief["do"]}; expect #{brief["expect"]}"
-    gallery = for entry <- list(answer["gallery"]), do: "- #{if is_map(entry), do: entry["entry"], else: entry}"
+    screens = for screen <- list(answer["screens"]), do: "- #{if is_map(screen), do: screen["screen"], else: screen}"
 
     [
       "QA plan. Needs the app: #{if answer["needs_app"], do: "yes", else: "no"}.",
       if(walk == [], do: "Walk: nothing.", else: Enum.join(["Walk:" | walk], "\n")),
-      if(gallery == [], do: "Gallery: nothing.", else: Enum.join(["Gallery:" | gallery], "\n")),
+      if(screens == [], do: "Screens: none.", else: Enum.join(["Screens:" | screens], "\n")),
       "Notes: #{answer["notes"]}"
     ]
     |> Enum.join("\n")

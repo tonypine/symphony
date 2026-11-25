@@ -1,15 +1,21 @@
 defmodule SymphonyElixir.QaDriver.Gallery do
   @moduledoc """
   The Component Gallery behind `SymphonyElixir.QaDriver`'s `qa_gallery` and
-  `qa_gallery_open`: the second program in Symphony.app's bundle
-  (`Contents/Helpers/SymphonyGallery`, `macos/Gallery/GalleryApp.swift`), which
-  draws the app's shared components and screens from made-up inputs.
+  `qa_gallery_open`, and the design check's comparison of pictures: the second program in
+  Symphony.app's bundle (`Contents/Helpers/SymphonyGallery`, `macos/Gallery/GalleryApp.swift`),
+  which draws the app's shared components and screens from made-up inputs.
 
-  `qa_gallery` runs it on the QA host without a window: `--entries` and
-  `--affected` list what there is to look at and what the PR's changed files
-  are a reason to look at, and `--shot` draws one entry into a fresh folder in
-  the pass's run directory (`host_dir`), from which each picture is copied
-  into `qa-evidence/` under the gallery's own file name.
+  `qa_gallery` runs it on the QA host without a window: `--entries` lists what there is to look
+  at, and `--shot` draws one entry into a fresh folder in the pass's run directory (`host_dir`),
+  from which each picture is copied into `qa-evidence/` under the gallery's own file name.
+
+  The design check judges only the pictures a change changed (TP-1667): `draw_all/4` draws every
+  entry in one run (`--shot-all`) into a folder of its own, once with the change's gallery and once
+  with its base's, and `compare/3` pairs the two folders by file name and compares each pair by its
+  decoded pixels (`SymphonyElixir.QaDriver.Picture`): a pair whose bytes are the same is the same
+  picture, and any other pair is the same only when its pixels are. A picture only the change has
+  is new, one only the base has is removed. `save/3` copies the changed and new ones into
+  `qa-evidence/`. `SymphonyElixir.QaDriver.gallery_changes/1` puts them together.
 
   `qa_gallery_open` launches the app as `qa_launch_app` does, on the gallery's
   fixture folder, where the app replaces itself with the gallery and hands it
@@ -17,20 +23,36 @@ defmodule SymphonyElixir.QaDriver.Gallery do
   other `qa_*` tools.
   """
 
-  alias SymphonyElixir.QaDriver.Checks
+  alias SymphonyElixir.QaDriver.{Checks, Picture}
 
   @fixtures "macos/Tests/Fixtures/gallery"
   @helper "Contents/Helpers/SymphonyGallery"
   @name ~r/\A[A-Za-z0-9._-]{1,120}\z/
   @width ~r/\A(laptop|desktop|[0-9]{3,5})\z/
   @picture ~r/\A[A-Za-z0-9._-]+\.png\z/
-  # `host.cmd` has no standard input: the shell pipes the changed paths, its own arguments, into the gallery.
-  @affected_script ~s(g=$1; shift; printf '%s\\n' "$@" | "$g" --affected)
+  # The pairs whose files are the same, byte for byte: those are the same picture, with nothing to decode.
+  @same_bytes_script ~s(h=$1; b=$2; shift 2; for f do if cmp -s "$h/$f" "$b/$f"; then printf '%s\\n' "$f"; fi; done)
   @timeout_ms 60_000
   @shot_timeout_ms 300_000
+  @draw_all_timeout_ms 1_200_000
   @output_limit 2_000_000
 
   @type tool_error :: {:error, {:qa_tool, String.t(), String.t()}}
+  @typedoc "One gallery's pictures, drawn by `draw_all/4`: the folder on the QA host and the pictures' file names."
+  @type drawn :: %{dir: Path.t(), pictures: [String.t()]}
+
+  @typedoc """
+  What `compare/3` found, each a list of file names: `changed` and `new` are the ones to judge.
+  `pngs` holds the change's pictures it read, by name: the QA host removes a file once it is read.
+  """
+  @type comparison :: %{
+          changed: [String.t()],
+          new: [String.t()],
+          removed: [String.t()],
+          same: [String.t()],
+          pngs: %{String.t() => binary()}
+        }
+
   @type arguments :: %{
           entry: String.t() | nil,
           variation: String.t() | nil,
@@ -98,17 +120,62 @@ defmodule SymphonyElixir.QaDriver.Gallery do
     end
   end
 
+  @doc "The gallery's entries and widths."
+  @spec listing(map(), Path.t()) :: {:ok, map()} | tool_error()
+  def listing(config, gallery) do
+    with {:ok, listed} <- entries(config, gallery), do: {:ok, Map.take(listed, ["entries", "widths"])}
+  end
+
   @doc """
-  The gallery's entries and widths, with the entries `changed` is a reason to look at as
-  `affected`. `changed` is the PR's changed files or why they could not be listed: then `affected`
-  is nil and `note` says why.
+  Draws every entry in one run (`--shot-all`), in `appearance` and, for a screen, at `width`, into
+  a fresh folder in the pass's run directory whose name starts with `label`. A gallery built before
+  it drew every entry in one run is refused, before it runs: it would open its window instead.
   """
-  @spec listing(map(), Path.t(), {:ok, [String.t()]} | {:error, term()}) :: {:ok, map()} | tool_error()
-  def listing(config, gallery, changed) do
-    with {:ok, listed} <- entries(config, gallery),
-         {:ok, affected, note} <- affected(config, gallery, changed) do
-      payload = listed |> Map.take(["entries", "widths"]) |> Map.put("affected", affected)
-      {:ok, if(note, do: Map.put(payload, "note", note), else: payload)}
+  @spec draw_all(map(), Path.t(), %{width: String.t(), appearance: String.t()}, String.t()) ::
+          {:ok, drawn()} | tool_error()
+  def draw_all(config, gallery, %{width: width, appearance: appearance}, label) do
+    out = Path.join(config.host_dir, "gallery-#{label}-#{System.unique_integer([:positive])}")
+
+    with :ok <- draws_all(config, gallery, label),
+         {:ok, output} <- run(config, gallery, ["--shot-all", "--width", width, "--appearance", appearance, "--out", out], @draw_all_timeout_ms),
+         {:ok, pictures} <- pictures(output, out) do
+      {:ok, %{dir: out, pictures: Enum.map(pictures, &Path.basename/1)}}
+    end
+  end
+
+  @doc """
+  Pairs the pictures of `head` (the change's gallery) and `base` (its base's) by file name, and
+  compares each pair: the same bytes, or else the same decoded pixels, is the same picture. A
+  picture only `head` has is `new`, one only `base` has is `removed`. The QA host removes a file
+  once it is read, so the change's pictures that differ come back in `pngs`, for `save/4`.
+  """
+  @spec compare(map(), drawn(), drawn()) :: {:ok, comparison()} | tool_error()
+  def compare(config, %{dir: head_dir, pictures: head}, %{dir: base_dir, pictures: base}) do
+    common = Enum.filter(head, &(&1 in base))
+
+    with {:ok, same_bytes} <- same_bytes(config, head_dir, base_dir, common),
+         {:ok, pngs} <- changed(config, head_dir, base_dir, common -- same_bytes) do
+      changed = Enum.filter(common, &Map.has_key?(pngs, &1))
+      {:ok, %{changed: changed, new: head -- base, removed: base -- head, same: common -- changed, pngs: pngs}}
+    end
+  end
+
+  @doc """
+  Copies the pictures `names` of `drawn` into `qa-evidence/` under their own file names, as
+  `shoot/3` saves its own: a picture this pass already saved under that name is kept and returned
+  with `existing: true`. A picture in `pngs` (by name, `compare/3`'s) was read already and is
+  saved from there; any other is read from the QA host.
+  """
+  @spec save(map(), drawn(), [String.t()], %{String.t() => binary()}) :: {:ok, map()} | tool_error()
+  def save(config, drawn, names, pngs \\ %{}), do: save_drawn(config, drawn, names, pngs)
+
+  defp save_drawn(_config, _drawn, [], _pngs), do: {:ok, %{"files" => []}}
+
+  defp save_drawn(config, %{dir: dir}, names, pngs) do
+    read = fn path -> with :error <- Map.fetch(pngs, Path.basename(path)), do: config.host.read.(path) end
+
+    with {:ok, evidence} <- Checks.ensure_evidence_dir(config.worktree) do
+      save_pictures(%{config | host: %{config.host | read: read}}, Enum.map(names, &Path.join(dir, &1)), evidence)
     end
   end
 
@@ -129,7 +196,7 @@ defmodule SymphonyElixir.QaDriver.Gallery do
          {:ok, output} <- run(config, gallery, args, @shot_timeout_ms),
          {:ok, pictures} <- pictures(output, out),
          {:ok, evidence} <- Checks.ensure_evidence_dir(config.worktree) do
-      save(config, pictures, evidence)
+      save_pictures(config, pictures, evidence)
     end
   end
 
@@ -175,25 +242,6 @@ defmodule SymphonyElixir.QaDriver.Gallery do
     end
   end
 
-  defp affected(_config, _gallery, {:error, reason}) do
-    {:ok, nil, "The PR's changed files could not be listed (#{inspect(reason)}), so `affected` is unknown: pick the entries from the PR's diff yourself."}
-  end
-
-  # Nothing changed is nothing to look at; the shell would hand the gallery one empty path.
-  defp affected(_config, _gallery, {:ok, []}), do: {:ok, %{"all" => false, "entries" => []}, nil}
-
-  defp affected(config, gallery, {:ok, paths}) do
-    with {:ok, output} <- run(config, "/bin/sh", ["-c", @affected_script, "sh", gallery | paths], @timeout_ms) do
-      case Jason.decode(output) do
-        {:ok, %{"all" => all, "entries" => entries}} when is_boolean(all) and is_list(entries) ->
-          {:ok, %{"all" => all, "entries" => entries}, nil}
-
-        _other ->
-          unreadable("--affected", output)
-      end
-    end
-  end
-
   defp unreadable(command, output) do
     tool_error("qa_gallery_failed", "The Component Gallery's answer to #{command} could not be read: #{tail(String.trim(output), 500)}")
   end
@@ -203,6 +251,69 @@ defmodule SymphonyElixir.QaDriver.Gallery do
       {:ok, {output, 0}} -> {:ok, output}
       {:ok, {output, status}} -> tool_error("qa_gallery_failed", "The Component Gallery failed (exit #{status}): #{tail(String.trim(output), 2_000)}")
       {:error, reason} -> tool_error("qa_gallery_failed", "The Component Gallery could not run on the QA host: #{inspect(reason)}")
+    end
+  end
+
+  # A gallery from before `--shot-all` does not know it and opens its window: its program names it, or it is not asked.
+  defp draws_all(config, gallery, label) do
+    case config.host.cmd.("/usr/bin/grep", ["-q", "-a", "-F", "--", "--shot-all", gallery], timeout_ms: @timeout_ms) do
+      {:ok, {_output, 0}} ->
+        :ok
+
+      {:ok, {_output, _status}} ->
+        tool_error(
+          "qa_gallery_too_old",
+          "The #{label}'s Component Gallery was built before it drew every entry in one run (`--shot-all`), so its pictures cannot be drawn to compare. Merging the base branch into the PR gives it a base that has it."
+        )
+
+      {:error, reason} ->
+        tool_error("qa_gallery_failed", "The QA host could not be asked about the #{label}'s Component Gallery: #{inspect(reason)}")
+    end
+  end
+
+  defp same_bytes(_config, _head_dir, _base_dir, []), do: {:ok, []}
+
+  defp same_bytes(config, head_dir, base_dir, names) do
+    with {:ok, output} <- run(config, "/bin/sh", ["-c", @same_bytes_script, "sh", head_dir, base_dir | names], @timeout_ms) do
+      listed = output |> String.split("\n", trim: true) |> MapSet.new()
+      {:ok, Enum.filter(names, &MapSet.member?(listed, &1))}
+    end
+  end
+
+  # The pairs whose bytes differ are decoded: a picture written again with the same pixels is the
+  # same. The change's pictures that differ are kept, by name.
+  defp changed(config, head_dir, base_dir, names) do
+    Enum.reduce_while(names, {:ok, %{}}, fn name, {:ok, changed} ->
+      case pair_changed(config, head_dir, base_dir, name) do
+        {:ok, :same} -> {:cont, {:ok, changed}}
+        {:ok, png} -> {:cont, {:ok, Map.put(changed, name, png)}}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp pair_changed(config, head_dir, base_dir, name) do
+    with {:ok, head, png} <- decoded(config, Path.join(head_dir, name)),
+         {:ok, base, _png} <- decoded(config, Path.join(base_dir, name)) do
+      if Map.take(head, [:width, :height, :rgba]) == Map.take(base, [:width, :height, :rgba]),
+        do: {:ok, :same},
+        else: {:ok, png}
+    end
+  end
+
+  defp decoded(config, path) do
+    with {:ok, png} <- read(config, path) do
+      case Picture.decode(png) do
+        {:ok, picture} -> {:ok, picture, png}
+        {:error, why} -> tool_error("qa_gallery_failed", "The picture #{Path.basename(path)} could not be compared: #{why}.")
+      end
+    end
+  end
+
+  defp read(config, path) do
+    case config.host.read.(path) do
+      {:ok, bytes} -> {:ok, bytes}
+      {:error, reason} -> tool_error("qa_gallery_failed", "The picture #{Path.basename(path)} could not be copied from the QA host: #{inspect(reason)}")
     end
   end
 
@@ -236,7 +347,7 @@ defmodule SymphonyElixir.QaDriver.Gallery do
     end
   end
 
-  defp save(config, pictures, evidence) do
+  defp save_pictures(config, pictures, evidence) do
     pictures
     |> Enum.reduce_while({:ok, []}, fn picture, {:ok, files} ->
       file = Path.basename(picture)

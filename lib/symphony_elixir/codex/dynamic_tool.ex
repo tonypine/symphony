@@ -737,8 +737,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "name" => "qa_gallery",
       "description" =>
         "Symphony.app only: the Component Gallery in the bundle the last qa_build produced, which draws the app's shared components and screens from made-up inputs. " <>
-          "Without arguments it lists the entries (id, title, kind, variations, the files each shows), the named widths, and `affected`: the entries this PR's changed files are a reason to look at " <>
-          "(`all: true` means every entry). Call it first when the PR changes shared views. " <>
+          "Without arguments it lists the entries (id, title, kind, variations, the files each shows) and the named widths. " <>
+          "In a stepped QA pass the design check is handed the pictures the change changed, already drawn: it calls this for none of them. " <>
           "With entry it draws that entry without opening a window and saves the pictures in qa-evidence/ under the gallery's own file names, in the QA target's appearance and, for a screen, its window's width: " <>
           "use it for a step that judges how a component or a screen looks. A component call (entry alone) draws every variation of the component on one board, in one picture; a screen needs variation, one at a time. " <>
           "A picture this pass already drew comes back with its path and `existing: true` (the file is kept as it was drawn, and `recorded` names the record it got when it was drawn): judge that file. To press, hover or type in an entry, use qa_gallery_open." <>

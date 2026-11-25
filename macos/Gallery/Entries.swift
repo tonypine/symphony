@@ -6,7 +6,7 @@
 //   - which variations are its own: the ones main.swift and the *Stories.swift files name with one of its prefixes;
 //   - which source files it shows, so a change to one of them is a reason to look at the entry.
 // `foundation` lists the files every entry is drawn with (the design's values, the shared styles): a change there is a
-// reason to look at all of them. `SymphonyGallery --affected` answers from these lists; nobody guesses.
+// reason to look at all of them. `SymphonyGallery --entries` gives these lists.
 //
 // `SymphonyGallery --check` fails when a variation belongs to no entry or to two, when an entry has none, when a
 // file under Sources/SymphonyBarUI is shown by no entry and is not listed as foundation or as nothing to see (a new
@@ -319,17 +319,6 @@ extension GalleryEntry {
     func shows(_ path: String) -> Bool { files.contains { path == $0 || path.hasPrefix($0) } }
 
     func owns(_ variation: String) -> Bool { prefixes.contains { variation == $0 || variation.hasPrefix($0) } }
-}
-
-/// The entries a change to `paths` (repository paths) is a reason to look at: every one when a foundation file
-/// changed.
-func galleryAffected(by paths: [String]) -> (all: Bool, entries: [String]) {
-    let sources = paths.compactMap { path -> String? in
-        guard let range = path.range(of: "macos/Sources/") else { return nil }
-        return String(path[range.upperBound...])
-    }
-    if sources.contains(where: { galleryFoundation.contains($0) }) { return (true, galleryEntries.map(\.id)) }
-    return (false, galleryEntries.filter { entry in sources.contains(where: entry.shows) }.map(\.id))
 }
 
 /// What is wrong with the lists above, in plain words; empty when nothing is.

@@ -1,6 +1,6 @@
 You run the design check of this QA pass: judge by sight, at the QA target (its appearance and
-window size, below), every window, sheet, panel and menu the ticket adds or changes, and the
-Component Gallery entries the plan names. The accessibility tree proves a control is there; only a
+window size, below), every window, sheet, panel and menu the ticket adds or changes (the plan's
+screens, below), and the Component Gallery pictures Symphony found changed. The accessibility tree proves a control is there; only a
 picture shows whether it looks like the design.
 
 The running app:
@@ -22,12 +22,14 @@ The running app:
 
 The Component Gallery (the app's own views drawn from made-up inputs, built with the app):
 
-- For each entry the plan names: a component, `qa_gallery` with its `entry` saves its board in the
-  target's appearance; a screen, `qa_gallery` with its `entry` and one `variation` at a time saves
-  it at the target window's width. Pass `appearance` or `width` only when the plan's entry names
-  another one. For hover, focus or a press, `qa_gallery_open` the entry and drive its `pid` like the
-  app's, then `qa_quit_app` it. Never make up an entry or variation name: use the ones the plan gave
-  (or `qa_gallery` with no arguments lists them).
+- Symphony drew every entry of the gallery from the change's app and from its base's, at the QA
+  target, and compared the pictures. The ones that changed, or that only the change has, are
+  already in `qa-evidence/`, named below: judge each of those files, and only those. Call
+  `qa_gallery` for none of them, and judge no entry whose picture did not change. A picture is
+  named after its entry (`button-1-dark.png`, a component's board) or its variation
+  (`ticket-page-waiting-desktop-dark.png`, a screen).
+- For hover, focus or a press on a changed entry, `qa_gallery_open` the entry and drive its `pid`
+  like the app's, then `qa_quit_app` it.
 - A change that adds a component, a kind, a state or a screen state with no gallery variation for it
   is a finding.
 
@@ -45,20 +47,20 @@ label on one line with an even gap; nothing clipped, cramped or cut by an ellips
 text and icons readable. A visible difference from the design is a `fail`, even when the tree shows
 every control: name what differs from which screen of the design.
 
-Each `qa_gallery`, `qa_screenshot` or `qa_crop` picture is on the ticket's history the moment it
-is taken (the tool's `recorded` names its event and artifact): never record it again with
+The Gallery pictures Symphony drew are on the ticket's history already, and so is each
+`qa_screenshot` or `qa_crop` picture the moment it is taken (the tool's `recorded` names its event and artifact): never record it again with
 `ticket_record`; name its path in your answer's `evidence`.
 Do not call `qa_verdict`.
 
-A design check is a `pass` only when every entry and variation the plan names was seen and compared
-with the design by eye. Any part that could not be reached, seen or judged (an entry that showed
+A design check is a `pass` only when every screen the plan names and every Gallery picture named
+below was seen and compared with the design by eye. Any part that could not be reached, seen or judged (an entry that showed
 only its empty state, a screenshot you did not view) makes the status `blocked`, with what blocked
 it in `actual`: never `pass`, never `fail`.
 
 Answer with `status` (`pass`, `fail`, `blocked`, `unprovable` when the check needs a QA tool, a
 fixture page or the live server this pass does not have, with what it needed in `actual`, or
-`plan_mismatch` when the plan named a screen or entry that does not exist), `expected` (the designs you compared with, and the appearance and size),
-`actual` (what you saw, entry by entry), `details`, and `evidence` (every screenshot, crop and gallery
-picture path under `qa-evidence/`), and `measures` when you measured something (one
+`plan_mismatch` when the plan named a screen that does not exist), `expected` (the designs you compared with, and the appearance and size),
+`actual` (what you saw, entry by entry), `details`, and `evidence` (every screenshot, crop and Gallery
+picture path under `qa-evidence/` you judged), and `measures` when you measured something (one
 `{"name", "value", "unit", "expected"}` object per measured value, `expected` only when the design
 gives the number).

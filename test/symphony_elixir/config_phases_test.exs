@@ -329,6 +329,7 @@ defmodule SymphonyElixir.ConfigPhasesTest do
                {"plan", "orchestrated"},
                {"launch", "machine"},
                {"walk", "orchestrated"},
+               {"gallery", "machine"},
                {"design_check", "orchestrated"},
                {"quit", "machine"},
                {"attach", "machine"},
@@ -341,16 +342,20 @@ defmodule SymphonyElixir.ConfigPhasesTest do
       assert %Step{session: "lead", answer: %{}} = by_id["review"]
       assert by_id["plan"].prompt =~ "You plan this QA pass"
       assert [%Command{run: "symphony:qa_launch"}] = by_id["launch"].command
+      assert %Step{on_fail: "quit", command: [%Command{run: "symphony:qa_gallery"}]} = by_id["gallery"]
+      assert by_id["plan"].answer["screens"] == "list"
+      refute Map.has_key?(by_id["plan"].answer, "gallery")
       assert Phases.qa_steps(system.phases, "cli") == []
       assert Phases.default_qa_steps("web") == []
       assert "symphony:qa_build" in Phases.qa_commands()
+      assert "symphony:qa_gallery" in Phases.qa_commands()
     end
 
     test "stepped turns them on, with only the switch set" do
       assert {:ok, system} = parse(%{"qa" => %{"stepped" => true}})
       assert Phases.qa_stepped?(system.phases)
       assert Phases.steps(system.phases, :qa) == []
-      assert length(Phases.qa_steps(system.phases, "macos_app")) == 9
+      assert length(Phases.qa_steps(system.phases, "macos_app")) == 10
     end
 
     test "a playbook's list replaces its default, and an orchestrated step with no prompt takes Symphony's own" do

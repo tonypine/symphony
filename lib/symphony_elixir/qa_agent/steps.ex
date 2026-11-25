@@ -34,6 +34,15 @@ defmodule SymphonyElixir.QaAgent.Steps do
     quit (the design check) are skipped, saying the plan found nothing on screen to
     judge, and the review's `pass` is a pass with `scope: none`, which `SymphonyElixir.QaVerification`
     accepts on the app check;
+  - `symphony:qa_gallery`: the Component Gallery pictures the change changed
+    (`QaDriver.gallery_changes/1`): the gallery of the change's app and the gallery of its base's
+    app each draw every entry in one run, at the QA target, and the pictures are compared by their
+    pixels. The changed and new ones are copied into `qa-evidence/`, put on the ticket's history as
+    one `evidence` event, and handed to the design check's session, named in its prompt; a removed
+    one is listed and not judged. A step that could not draw or compare (no build of the base, a
+    gallery that failed) fails with its reason, and never hands the design check every entry. When
+    no picture changed and the plan names none of the app's screens to judge (`screens`), the
+    design check is skipped, saying so, and no session starts for it;
   - `symphony:qa_quit`: `qa_quit_app` for every app the pass launched;
   - `symphony:qa_attach`: the evidence files the steps named and wrote under `qa-evidence/`, with
     any named but missing; the pass keeps them with its other files when it ends, as before.
@@ -83,12 +92,14 @@ defmodule SymphonyElixir.QaAgent.Steps do
   none), and reaches the verdict as Symphony settled it: `unprovable`, with what it needed in its
   `details` and `needs` set, whatever the review wrote for it.
 
-  Three steps are read by their id:
+  Four steps are read by their id:
 
   - `plan`: its `walk` must hold a brief (`step`: the walkthrough step's number) for every
     walkthrough step the pass walks, else it is refused and asked again. Its answer is recorded on its `step.completed` (`plan`,
-    `SymphonyElixir.QaAgent.StepPayload`), and gives the walk steps their briefs, the design check its gallery entries, and the
-    launch its `needs_app`;
+    `SymphonyElixir.QaAgent.StepPayload`), and gives the walk steps their briefs, the design check the app's `screens` to
+    judge, and the launch its `needs_app`;
+  - `design_check`: the design check, given the Gallery step's changed pictures, and skipped when
+    there are none and the plan names no screen of the app;
   - `review` (required in every QA playbook's list): the verdict. It records it with `qa_verdict`
     in today's contract (`SymphonyElixir.QaAgent.Verdict`), or writes it to its answer file, or asks
     for a recheck there (`{"recheck": [brief, ...]}`, at most #{3} sessions of at most #{12} briefs):
@@ -104,7 +115,19 @@ defmodule SymphonyElixir.QaAgent.Steps do
 
   require Logger
 
-  alias SymphonyElixir.{AgentTelemetry, AgentTmpDir, Messages, PhaseSteps, PromptSafety, QaAgent, QaDriver, RunStore}
+  alias SymphonyElixir.{
+    AgentTelemetry,
+    AgentTmpDir,
+    Artifacts,
+    Messages,
+    PhaseSteps,
+    PromptSafety,
+    QaAgent,
+    QaDriver,
+    RunStore,
+    TicketEvents
+  }
+
   alias SymphonyElixir.Conductor.Steer
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Phases
@@ -120,6 +143,8 @@ defmodule SymphonyElixir.QaAgent.Steps do
   @launch "symphony:qa_launch"
   @quit "symphony:qa_quit"
   @attach "symphony:qa_attach"
+  @gallery "symphony:qa_gallery"
+  @design_check "design_check"
   @statuses ~w(pass fail blocked unprovable plan_mismatch)
   @max_rechecks 3
   @max_recheck_briefs 12
@@ -137,6 +162,8 @@ defmodule SymphonyElixir.QaAgent.Steps do
   @app_key {__MODULE__, :app}
   @nothing_on_screen "the plan found nothing on screen to judge: it needs no app and no walkthrough step is walked"
   @output_key {__MODULE__, :output}
+  @gallery_key {__MODULE__, :gallery}
+  @nothing_changed "no Component Gallery picture changed and the plan names none of the app's screens to judge"
   @evidence_dir "qa-evidence"
   @judged_rule "A step's answer `status` is `pass` only when every check in its brief was actually seen and judged. When any part could not be reached, seen or judged (an empty state, a screenshot not viewed, a harness fault), the status is `blocked` and `actual` says what blocked it: never `pass`, never `fail`. When the step needs a QA tool, a fixture page or the live server this pass does not have, the status is `unprovable` and `actual` says what it needed (Symphony marks the steps it can see so before any session)."
 
@@ -271,6 +298,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
       results: [],
       answers: [],
       plan: nil,
+      gallery: nil,
       launch: nil,
       session: nil,
       sessions: %{},
@@ -445,6 +473,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
       results: state.results,
       answers: state.answers,
       plan: state.plan,
+      gallery: state.gallery,
       targets: state.targets,
       marked: state.marked,
       checks: state.checks,
@@ -507,7 +536,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
       Logger.info("QA pass of #{state.job.issue.identifier} goes on at step #{next.id} after Symphony's restart")
       state = restored(state, pass)
       put_back_evidence(state)
-      state = if pass.launched and (pass.recheck != nil or MapSet.member?(state.app_steps, next.id)), do: relaunch(state), else: state
+      state = if pass.launched and (pass.recheck != nil or MapSet.member?(state.app_steps, next.id) or runs?(next, @gallery)), do: relaunch(state), else: state
       {state, if(pass.recheck, do: {:recheck, pass.recheck, next}, else: next)}
     else
       _none ->
@@ -529,6 +558,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
         results: pass.results,
         answers: pass.answers,
         plan: pass.plan,
+        gallery: Map.get(pass, :gallery),
         targets: Map.get(pass, :targets, state.targets),
         marked: Map.get(pass, :marked, state.marked),
         checks: pass.checks,
@@ -555,7 +585,13 @@ defmodule SymphonyElixir.QaAgent.Steps do
     end
   end
 
-  defp run_step(state, %Step{mode: "machine"} = step), do: machine(state, step, 1)
+  # The Gallery step draws nothing for a pass with nothing on screen to judge.
+  defp run_step(state, %Step{mode: "machine"} = step) do
+    if runs?(step, @gallery) and nothing_on_screen?(state),
+      do: skipped(state, step, @nothing_on_screen),
+      else: machine(state, step, 1)
+  end
+
   defp run_step(state, step), do: agent(state, step)
 
   # -- machine steps -------------------------------------------------------------
@@ -586,6 +622,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
     cond do
       runs?(step, @launch) -> %{state | launch: {:launched, Process.get(@app_key)}}
       runs?(step, @quit) -> forget_app(state)
+      runs?(step, @gallery) -> %{state | gallery: Process.delete(@gallery_key)}
       true -> state
     end
   end
@@ -619,6 +656,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
       "symphony:qa_pre_checks" => fn _context -> pre_checks(state) end,
       "symphony:qa_build" => fn _context -> build(state) end,
       @launch => fn _context -> launch(state) end,
+      @gallery => fn _context -> gallery(state) end,
       @quit => fn _context -> quit(state) end,
       @attach => fn _context -> attach(state) end
     }
@@ -664,6 +702,60 @@ defmodule SymphonyElixir.QaAgent.Steps do
       end
 
     {:ok, {if(output == "", do: "No app was running.\n", else: output), 0}}
+  end
+
+  # The Gallery pictures the change changed, drawn and compared by the driver with no agent, and
+  # put on the ticket's history; the design check's session gets their paths.
+  defp gallery(state) do
+    Process.delete(@gallery_key)
+
+    case driver_module(state).gallery_changes(Keyword.get(state.opts, :qa_driver)) do
+      {:ok, changes} ->
+        Process.put(@gallery_key, changes)
+        {:ok, {gallery_output(changes) <> record_pictures(state, changes), 0}}
+
+      {:error, error} ->
+        {:ok, {tool_error(error), 1}}
+    end
+  end
+
+  defp gallery_output(changes) do
+    names = fn key -> Map.get(changes, key, []) end
+
+    "Compared the Component Gallery of this change with its base's (commit #{String.slice(to_string(changes["base"]), 0, 12)}), " <>
+      "drawn at the QA target (#{changes["appearance"]}, #{changes["width"]} pt): #{length(names.("changed"))} changed, " <>
+      "#{length(names.("new"))} new, #{length(names.("removed"))} removed, #{length(names.("same"))} the same.\n" <>
+      Enum.map_join(names.("files"), "", &"- #{&1}\n") <>
+      if(names.("removed") == [], do: "", else: "Removed, not judged:\n" <> Enum.map_join(names.("removed"), "", &"- #{&1}\n"))
+  end
+
+  # One `evidence` event holds the pictures to judge, as a `qa_gallery` call's does.
+  defp record_pictures(_state, %{"files" => []}), do: ""
+
+  defp record_pictures(state, %{"files" => files} = changes) do
+    context = state.context
+
+    meta =
+      &%{
+        repo_key: context.repo_key,
+        issue_id: context.issue_id,
+        run_id: context.run_id,
+        kind: "screenshot",
+        label: Path.basename(&1)
+      }
+
+    ids =
+      for path <- files, {:ok, %{id: id}} <- [Artifacts.ingest(Path.join(state.worktree, path), meta.(path), roots: [state.worktree])], do: id
+
+    caption =
+      "Gallery pictures the change changed (#{length(changes["changed"])}) or added (#{length(changes["new"])}), " <>
+        "drawn by Symphony at the QA target, for the design check"
+
+    case TicketEvents.record(context.repo_key, context.issue_id, "evidence", %{caption: caption}, run_id: context.run_id, artifacts: ids) do
+      {:ok, _event} when length(ids) == length(files) -> ""
+      {:ok, _event} -> "#{length(files) - length(ids)} of the pictures could not be kept on the ticket's history; they are in #{@evidence_dir}/.\n"
+      {:error, reason} -> "The pictures could not be put on the ticket's history (#{inspect(reason)}); they are in #{@evidence_dir}/.\n"
+    end
   end
 
   # -- each session's app ---------------------------------------------------------
@@ -783,9 +875,13 @@ defmodule SymphonyElixir.QaAgent.Steps do
         state |> session_app(step) |> start_agent_step(step)
 
       reason ->
-        PhaseSteps.record_turn_completed(step, state.context, %{outcome: "skipped", reason: reason}, 0)
-        {add_result(state, step, "skipped", reason), :passed}
+        skipped(state, step, reason)
     end
+  end
+
+  defp skipped(state, step, reason) do
+    PhaseSteps.record_turn_completed(step, state.context, %{outcome: "skipped", reason: reason}, 0)
+    {add_result(state, step, "skipped", reason), :passed}
   end
 
   # The steps that drive the app run only on an app that launched, and the listed ones only when
@@ -796,9 +892,14 @@ defmodule SymphonyElixir.QaAgent.Steps do
       command_line?(state, walk_brief(state, step)) -> nil
       not match?({:launched, _app}, state.launch) -> "the app did not launch"
       state.rounds == 0 and nothing_on_screen?(state) -> @nothing_on_screen
+      step.id == @design_check and nothing_changed?(state) -> @nothing_changed
       true -> nil
     end
   end
+
+  # The Gallery step found no picture to judge, and the plan names no screen of the app.
+  defp nothing_changed?(%{gallery: %{"files" => []}, plan: plan}), do: List.wrap(Map.get(plan || %{}, "screens")) == []
+  defp nothing_changed?(_state), do: false
 
   defp start_agent_step(state, step) do
     {profile, fields} = turn_profile(state, step)
@@ -1514,12 +1615,29 @@ defmodule SymphonyElixir.QaAgent.Steps do
 
     [
       app_line(state),
-      "The gallery entries the plan names:\n" <> json(Map.get(plan, "gallery", [])),
+      "The app's screens the plan names (windows, sheets, panels and menus to judge in the running app):\n" <> json(Map.get(plan, "screens", [])),
+      gallery_pictures(state.gallery),
       "The plan's briefs, for the screens and fixtures to use:\n" <> json(Map.get(plan, "walk", [])),
       QaAgent.prompt_parts(state.job, parent(state), [:design, :servers, :qa_mode, :conductor])
     ]
     |> Enum.join("\n\n")
   end
+
+  defp gallery_pictures(%{"files" => [_ | _] = files} = changes) do
+    "The Component Gallery pictures the change changed or added, drawn by Symphony at the QA target from the change's app and " <>
+      "compared with its base's (#{length(changes["changed"])} changed, #{length(changes["new"])} new, #{length(changes["same"])} the same): " <>
+      "judge each of these files, and no other entry:\n" <> Enum.map_join(files, "\n", &"- #{&1}") <> removed_pictures(changes)
+  end
+
+  defp gallery_pictures(%{} = changes) do
+    "The Component Gallery: Symphony drew every entry from the change's app and from its base's, at the QA target, and no picture " <>
+      "changed (#{length(changes["same"])} the same): there is no Gallery picture to judge." <> removed_pictures(changes)
+  end
+
+  defp gallery_pictures(nil), do: "The Component Gallery: this pass's list draws no Gallery pictures for you; judge the app's screens alone."
+
+  defp removed_pictures(%{"removed" => [_ | _] = removed}), do: "\nRemoved by the change, not judged: " <> Enum.join(removed, ", ")
+  defp removed_pictures(_changes), do: ""
 
   defp app_line(%{session: {:launched, %{pid: pid, root: root} = app}}) do
     "The app: Symphony launched it for this session as PID #{pid} (QA root #{root}), running now, #{where_text(app)} " <>
@@ -1586,7 +1704,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
       marked_facts(state.marked, :plan),
       pass_tools(state.facts),
       if(checks == "", do: "No step is proved by a named test.", else: "Steps a recorded test proves (proved, do not brief them):\n" <> checks),
-      gallery_facts(state)
+      "- The Component Gallery: Symphony draws it from the change's app and from its base's, and hands the design check the pictures that changed. Name no gallery entry."
     ]
     |> Enum.reject(&(&1 == ""))
     |> Enum.join("\n")
@@ -1627,14 +1745,6 @@ defmodule SymphonyElixir.QaAgent.Steps do
 
   defp source_fact(%{source: "live"}), do: "source: live (the live server, `environment: live`)"
   defp source_fact(%{source: "fixture", fixture: fixture}), do: "source: fixture `#{fixture}` (`environment: fixture`, `api_fixtures: #{fixture}`)"
-
-  defp gallery_facts(state) do
-    case Keyword.get(state.opts, :qa_driver) && tool(state, "qa_gallery", %{}) do
-      {:ok, listing} -> "The Component Gallery (`qa_gallery`; `affected` lists the entries the changed files are a reason to judge):\n" <> json(listing)
-      {:error, error} -> "The Component Gallery could not be read: #{String.trim(tool_error(error))}"
-      _no_driver -> ""
-    end
-  end
 
   defp screen_rules(state) do
     case Enum.find(state.job.playbooks, &(Map.get(&1, :kind) == "macos_app")) do

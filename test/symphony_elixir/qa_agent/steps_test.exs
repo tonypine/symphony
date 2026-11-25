@@ -11,6 +11,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
   alias SymphonyElixir.Config.Schema.Phases.Step
   alias SymphonyElixir.{QaAgent, TicketEvents}
   alias SymphonyElixir.QaAgent.{PlanCheck, StepPrompts, Steps}
+  alias SymphonyElixir.QaDriver.Picture
 
   @issue_id "issue-qa-steps"
   @answers :qa_steps_test_answers
@@ -125,6 +126,28 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
 
     def launched_pids(_driver), do: [4242]
     def running_pids(_driver), do: Application.get_env(:symphony_elixir, :qa_steps_test_running, [4242])
+
+    # The Gallery step's comparison, from `:qa_steps_test_gallery` (default: one picture changed).
+    def gallery_changes(driver) do
+      send(Application.fetch_env!(:symphony_elixir, :qa_steps_test_recipient), {:gallery_changes, driver})
+      Application.get_env(:symphony_elixir, :qa_steps_test_gallery, {:ok, gallery_changed()})
+    end
+
+    def gallery_changed(extra \\ %{}) do
+      Map.merge(
+        %{
+          "base" => "base1234567890",
+          "appearance" => "dark",
+          "width" => 2560,
+          "changed" => ["button-1-dark.png"],
+          "new" => [],
+          "removed" => [],
+          "same" => ["home-1-dark.png"],
+          "files" => ["qa-evidence/button-1-dark.png"]
+        },
+        extra
+      )
+    end
   end
 
   setup do
@@ -134,18 +157,19 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
     worktree = Path.join(root, "worktree")
     tmp_dir = Path.join(root, "tmp")
     File.mkdir_p!(Path.join(worktree, "qa-evidence"))
+    # The picture the Gallery step's comparison (`FakeDriver.gallery_changes/1`) saved.
+    File.write!(Path.join(worktree, "qa-evidence/button-1-dark.png"), Picture.encode(1, 1, <<0, 0, 0, 255>>, 2))
     File.mkdir_p!(tmp_dir)
 
     Application.put_env(:symphony_elixir, @tools, %{
       "qa_build" => {:ok, %{"exit_status" => 0, "output" => "Symphony built this commit's app."}},
       "qa_launch_app" => {:ok, %{"pid" => 4242, "root" => 1, "environment" => "fixture"}},
       "qa_check_app" => {:ok, %{"healthy" => true}},
-      "qa_quit_app" => {:ok, %{"quit" => true, "output" => "bye"}},
-      "qa_gallery" => {:ok, %{"entries" => [%{"entry" => "button"}], "affected" => ["button"]}}
+      "qa_quit_app" => {:ok, %{"quit" => true, "output" => "bye"}}
     })
 
     on_exit(fn ->
-      Enum.each([@answers, @recipient, @tools, :qa_steps_test_running], &Application.delete_env(:symphony_elixir, &1))
+      Enum.each([@answers, @recipient, @tools, :qa_steps_test_running, :qa_steps_test_gallery], &Application.delete_env(:symphony_elixir, &1))
       File.rm_rf(root)
     end)
 
@@ -197,7 +221,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       %{
         needs_app: true,
         walk: for(number <- numbers, do: %{step: number, where: "Page #{number}", do: "Open it", expect: "It shows", screenshots: ["page-#{number}"]}),
-        gallery: [%{entry: "button", variations: ["primary"]}],
+        screens: [%{screen: "Home", where: "the main window", why: "the ticket's new page"}],
         notes: "Look at the button."
       },
       extra
@@ -265,6 +289,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
                {"launch", "passed"},
                {"walk_1", "passed"},
                {"walk_2", "passed"},
+               {"gallery", "passed"},
                {"design_check", "passed"},
                {"quit", "passed"},
                {"attach", "passed"},
@@ -282,7 +307,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       by_step = Map.new(completed, &{&1.payload.step_id, &1.payload})
 
       assert %{
-               checks: [%{title: "Step 1: Page 1", expect: "It shows"}, %{title: "Step 2: Page 2"}, %{title: "Gallery: button", expect: "primary"}],
+               checks: [%{title: "Step 1: Page 1", expect: "It shows"}, %{title: "Step 2: Page 2"}, %{title: "Design: Home", expect: "the ticket's new page"}],
                skips: [],
                summary: "QA plan. Needs the app: yes." <> _
              } = by_step["plan"].plan
@@ -296,12 +321,15 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       assert plan_turn.prompt =~ "You plan this QA pass"
       assert plan_turn.prompt =~ "Screen rules here."
       assert plan_turn.prompt =~ "- Step 2: Step 2: open page 2."
-      assert plan_turn.prompt =~ ~s("affected")
+      assert plan_turn.prompt =~ "Name no gallery entry."
+      refute_received {:tool, _driver, "qa_gallery", _args}
       refute walk_1.prompt =~ "Screen rules here."
       assert walk_1.prompt =~ "Step 1: open page 1."
       assert walk_1.prompt =~ ~s("where": "Page 1")
       assert walk_1.prompt =~ "Symphony launched it for this session as PID 4242"
-      assert design.prompt =~ ~s("entry": "button")
+      assert design.prompt =~ ~s("screen": "Home")
+      assert design.prompt =~ "judge each of these files, and no other entry:\n- qa-evidence/button-1-dark.png"
+      assert design.prompt =~ "(1 changed, 0 new, 1 the same)"
       assert review.prompt =~ "Earlier steps of this run answered"
       assert review.prompt =~ "- `build` (Build the app): passed"
       assert walk_1.session[:run_profile].model == "claude-small"
@@ -327,9 +355,18 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       assert second.turn[:resume_session_id] == "session-plan"
     end
 
+    test "a macos_app playbook without a prompt gives the plan no screen rules", ctx do
+      answers(%{"plan" => [{:write, plan([], %{needs_app: false, screens: []})}], "review" => [{:verdict, @pass}]})
+
+      assert {:ok, _result} = run(ctx, %{journey: %{steps: []}, playbooks: [%{kind: "macos_app"}]}, [], [plan_step(), review()])
+      [plan_turn, _review] = turns()
+      assert plan_turn.prompt =~ "You plan this QA pass"
+      refute plan_turn.prompt =~ "The playbook's rules for screens"
+    end
+
     test "with nothing on screen to judge still launches and checks the app, skips the design check, and passes with scope none",
          ctx do
-      answers(%{"plan" => [{:write, plan([], %{needs_app: false, gallery: []})}], "review" => [{:verdict, @pass}]})
+      answers(%{"plan" => [{:write, plan([], %{needs_app: false, screens: []})}], "review" => [{:verdict, @pass}]})
 
       assert {:ok, %{result: %{verdict: :pass, scope: :none}}} = run(ctx, %{journey: %{steps: []}})
       assert Enum.map(turns(), & &1.id) == ["plan", "review"]
@@ -341,7 +378,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       assert outcomes["design_check"].reason =~ "the plan found nothing on screen to judge"
 
       # A fail stays a fail, with no scope.
-      answers(%{"plan" => [{:write, plan([], %{needs_app: false, gallery: []})}], "review" => [{:verdict, @fail}]})
+      answers(%{"plan" => [{:write, plan([], %{needs_app: false, screens: []})}], "review" => [{:verdict, @fail}]})
       :ok = RunStore.clear()
       assert {:ok, %{result: %{verdict: :fail} = failed}} = run(ctx, %{journey: %{steps: []}})
       refute Map.has_key?(failed, :scope)
@@ -349,7 +386,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
 
     test "a recheck the review asks for runs even when the plan found nothing on screen", ctx do
       answers(%{
-        "plan" => [{:write, plan([], %{needs_app: false, gallery: []})}],
+        "plan" => [{:write, plan([], %{needs_app: false, screens: []})}],
         "review" => [{:write, %{recheck: [%{where: "The menu"}]}}, {:verdict, @pass}]
       })
 
@@ -381,8 +418,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       Application.put_env(:symphony_elixir, @tools, %{
         "qa_build" => {:error, {:qa_tool, "qa_build_unavailable", "no build"}},
         "qa_launch_app" => {:error, :down},
-        "qa_quit_app" => {:error, {:qa_tool, "qa_no_app", "gone"}},
-        "qa_gallery" => {:error, {:qa_tool, "qa_no_build", "no gallery"}}
+        "qa_quit_app" => {:error, {:qa_tool, "qa_no_app", "gone"}}
       })
 
       answers(%{"review" => [{:verdict, @pass}]})
@@ -431,18 +467,121 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       assert plan_turn.prompt =~ "Use that setting as given and\n  never work it out"
     end
 
-    test "the plan reads the gallery's error, and a pass with no driver reads none", ctx do
-      tools = Application.get_env(:symphony_elixir, @tools)
-      Application.put_env(:symphony_elixir, @tools, Map.put(tools, "qa_gallery", {:error, {:qa_tool, "qa_no_build", "no gallery"}}))
+    test "the plan is told Symphony finds the Gallery pictures, and asks the gallery nothing", ctx do
       answers(%{"plan" => [{:write, plan([1, 2])}], "review" => [{:verdict, @pass}]})
 
       assert {:ok, _result} = run(ctx, %{}, [], [plan_step(), review()])
       [plan_turn, _review] = turns()
-      assert plan_turn.prompt =~ "The Component Gallery could not be read: qa_no_build: no gallery"
+      assert plan_turn.prompt =~ "Symphony draws it from the change's app and from its base's, and hands the design check the pictures that changed."
+      refute plan_turn.prompt =~ "affected"
+      refute_received {:tool, _driver, "qa_gallery", _args}
+      refute_received {:gallery_changes, _driver}
+    end
+  end
 
-      assert {:ok, _result} = run(ctx, %{playbooks: [%{kind: "macos_app"}]}, [qa_driver: nil], [plan_step(), review()])
-      [plan_turn, _review] = turns()
-      refute plan_turn.prompt =~ "Component Gallery"
+  describe "the Gallery step (TP-1667)" do
+    defp gallery(result), do: Application.put_env(:symphony_elixir, :qa_steps_test_gallery, result)
+
+    test "draws and compares by a machine step, puts the pictures on the ticket's history and names them to the design check", ctx do
+      gallery({:ok, FakeDriver.gallery_changed(%{"new" => ["badge-1-dark.png"], "removed" => ["old-1-dark.png"], "files" => ["qa-evidence/button-1-dark.png", "qa-evidence/badge-1-dark.png"]})})
+      File.write!(Path.join(ctx.worktree, "qa-evidence/badge-1-dark.png"), Picture.encode(1, 1, <<9, 9, 9, 255>>, 2))
+      answers(%{"plan" => [{:write, plan([1, 2])}], "review" => [{:verdict, @pass}]})
+
+      assert {:ok, %{result: %{verdict: :pass}}} = run(ctx)
+
+      # One machine step, no session and no `qa_gallery` call per entry.
+      assert_received {:gallery_changes, driver}
+      assert driver == self()
+      refute_received {:gallery_changes, _driver}
+      refute_received {:tool, _driver, "qa_gallery", _args}
+      turns = turns()
+      assert Enum.map(turns, & &1.id) == ["plan", "walk_1", "walk_2", "design_check", "review"]
+
+      started = Enum.find(events("step.started"), &(&1.payload.step_id == "gallery"))
+      assert %{mode: "machine", command: "symphony:qa_gallery"} = started.payload
+      assert started.actor.kind == :machine
+
+      # The pictures to judge are one `evidence` event of Symphony's, its files the event's artifacts.
+      assert [evidence] = events("evidence")
+      assert evidence.actor.kind == :machine
+      assert evidence.run_id == "qa-steps-run"
+      assert evidence.payload.caption =~ "Gallery pictures the change changed (1) or added (1)"
+      assert length(evidence.artifacts) == 2
+
+      design = Enum.find(turns, &(&1.id == "design_check"))
+      assert design.prompt =~ "judge each of these files, and no other entry:\n- qa-evidence/button-1-dark.png\n- qa-evidence/badge-1-dark.png"
+      assert design.prompt =~ "Removed by the change, not judged: old-1-dark.png"
+
+      review = List.last(turns)
+      assert review.prompt =~ "- `gallery` (Draw the Gallery and compare it with the base's): passed: Compared the Component Gallery of this change with its base's (commit base12345678)"
+      assert review.prompt =~ "1 changed, 1 new, 1 removed, 1 the same."
+    end
+
+    test "with no picture changed and no screen of the app to judge, starts no design check session and does not block", ctx do
+      gallery({:ok, FakeDriver.gallery_changed(%{"changed" => [], "files" => []})})
+      answers(%{"plan" => [{:write, plan([1, 2], %{screens: []})}], "review" => [{:verdict, @pass}]})
+
+      assert {:ok, %{result: %{verdict: :pass} = result}} = run(ctx)
+      refute Map.has_key?(result, :scope)
+      assert Enum.map(turns(), & &1.id) == ["plan", "walk_1", "walk_2", "review"]
+
+      outcomes = Map.new(events("step.completed"), &{&1.payload.step_id, &1.payload})
+      assert %{outcome: "passed"} = outcomes["gallery"]
+      assert outcomes["design_check"].outcome == "skipped"
+      assert outcomes["design_check"].reason == "no Component Gallery picture changed and the plan names none of the app's screens to judge"
+      assert events("evidence") == []
+    end
+
+    test "with no picture changed, still judges the app's screens the plan names", ctx do
+      gallery({:ok, FakeDriver.gallery_changed(%{"changed" => [], "files" => [], "same" => ["a.png", "b.png"]})})
+      answers(%{"plan" => [{:write, plan([1, 2])}], "review" => [{:verdict, @pass}]})
+
+      assert {:ok, %{result: %{verdict: :pass}}} = run(ctx)
+      design = Enum.find(turns(), &(&1.id == "design_check"))
+      assert design.prompt =~ "no picture changed (2 the same): there is no Gallery picture to judge."
+      assert design.prompt =~ ~s("screen": "Home")
+    end
+
+    test "a comparison that failed fails the step with its reason, and never hands the design check every entry", ctx do
+      gallery({:error, {:qa_tool, "qa_gallery_no_base", "The base's app (commit base123) has no build to draw its Component Gallery with: it failed to build (exit 2)."}})
+      answers(%{"plan" => [{:write, plan([1, 2])}], "review" => [{:verdict, @pass}]})
+
+      assert {:ok, %{result: %{verdict: :pass}}} = run(ctx)
+      turns = turns()
+      assert Enum.map(turns, & &1.id) == ["plan", "walk_1", "walk_2", "review"]
+      outcomes = Map.new(events("step.completed"), &{&1.payload.step_id, &1.payload.outcome})
+      assert outcomes["gallery"] == "failed"
+      refute Map.has_key?(outcomes, "design_check")
+      assert List.last(turns).prompt =~ "qa_gallery_no_base: The base's app (commit base123) has no build"
+      refute_received {:tool, _driver, "qa_gallery", _args}
+    end
+
+    test "a picture that cannot be kept on the ticket's history stays in the evidence, and the step says so", ctx do
+      gallery({:ok, FakeDriver.gallery_changed(%{"files" => ["qa-evidence/button-1-dark.png", "qa-evidence/gone-1-dark.png"]})})
+      answers(%{"plan" => [{:write, plan([1, 2])}], "review" => [{:verdict, @pass}]})
+
+      assert {:ok, %{result: %{verdict: :pass}}} = run(ctx)
+      assert [%{artifacts: [_one]}] = events("evidence")
+      assert List.last(turns()).prompt =~ "1 of the pictures could not be kept on the ticket's history; they are in qa-evidence/."
+    end
+
+    test "draws nothing for a pass with nothing on screen to judge", ctx do
+      answers(%{"plan" => [{:write, plan([], %{needs_app: false, screens: []})}], "review" => [{:verdict, @pass}]})
+
+      assert {:ok, %{result: %{verdict: :pass, scope: :none}}} = run(ctx, %{journey: %{steps: []}})
+      refute_received {:gallery_changes, _driver}
+      outcomes = Map.new(events("step.completed"), &{&1.payload.step_id, &1.payload})
+      assert %{outcome: "skipped", reason: "the plan found nothing on screen to judge" <> _} = outcomes["gallery"]
+    end
+
+    test "a list without the Gallery step tells the design check it has no Gallery pictures, and never skips it for that", ctx do
+      steps = Enum.reject(Phases.default_qa_steps("macos_app"), &(&1.id == "gallery"))
+      answers(%{"plan" => [{:write, plan([1, 2], %{screens: []})}], "review" => [{:verdict, @pass}]})
+
+      assert {:ok, %{result: %{verdict: :pass}}} = run(ctx, %{}, [], steps)
+      design = Enum.find(turns(), &(&1.id == "design_check"))
+      assert design.prompt =~ "this pass's list draws no Gallery pictures for you"
+      refute_received {:gallery_changes, _driver}
     end
   end
 
@@ -1110,13 +1249,14 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       Application.put_env(
         :symphony_elixir,
         @tools,
-        Map.merge(tools, %{"qa_build" => {:ok, %{"exit_status" => 1, "output" => long}}, "qa_gallery" => {:ok, %{"entries" => long}}})
+        Map.merge(tools, %{"qa_build" => {:ok, %{"exit_status" => 1, "output" => long}}})
       )
 
-      answers(%{"plan" => [{:write, plan([1, 2])}], "review" => [{:verdict, @pass}]})
-      assert {:ok, _result} = run(ctx, %{}, [], [machine("build", "symphony:qa_build", %{"on_fail" => "plan"}), plan_step(), review()])
-      [plan_turn, review_turn] = turns()
-      assert plan_turn.prompt =~ "\n…"
+      answers(%{"plan" => [{:write, plan([1, 2], %{screens: [long]})}], "review" => [{:verdict, @pass}]})
+      steps = [machine("build", "symphony:qa_build", %{"on_fail" => "plan"}), plan_step(), orchestrated("design_check"), review()]
+      assert {:ok, _result} = run(ctx, %{}, [], steps)
+      [_plan_turn, design_turn, review_turn] = turns()
+      assert design_turn.prompt =~ "\n…"
       assert review_turn.prompt =~ "failed: …x"
     end
   end
@@ -1444,7 +1584,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
     end
 
     test "a pass whose walked steps the setting marks every one walks none, and is no pass with nothing on screen", ctx do
-      answers(%{"plan" => [{:write, plan([], %{needs_app: false, gallery: []})}], "review" => [{:verdict, @pass}]})
+      answers(%{"plan" => [{:write, plan([], %{needs_app: false, screens: []})}], "review" => [{:verdict, @pass}]})
 
       steps = set_live(walkthrough([1, 2]), [1, 2])
       assert {:ok, %{result: result}} = run(ctx, %{journey: %{source: "the plan", text: "", steps: steps}})
@@ -1554,7 +1694,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       boundary = fn step -> send(test, {:boundary, step.id}) && :ok end
 
       assert {:ok, %{result: %{verdict: :pass}}} = run(ctx, %{}, qa_boundary: boundary)
-      assert boundaries() == ~w(build plan launch walk_1 walk_2 design_check quit attach review)
+      assert boundaries() == ~w(build plan launch walk_1 walk_2 gallery design_check quit attach review)
       assert RunStore.get_qa_pass("default", @issue_id) == nil
     end
 
@@ -1597,7 +1737,8 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
 
       # The steps after it are given what they would have had: the plan, the walk results and the evidence.
       [design, review] = turns
-      assert design.prompt =~ ~s("entry": "button")
+      assert design.prompt =~ "- qa-evidence/button-1-dark.png"
+      assert design.prompt =~ ~s("screen": "Home")
       assert design.prompt =~ "Symphony launched it for this session as PID 4242"
       assert review.prompt =~ "Page shows its title"
       assert review.prompt =~ "- `walk_1` (Walk a step 1): passed"

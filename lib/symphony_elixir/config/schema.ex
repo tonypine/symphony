@@ -2198,7 +2198,7 @@ defmodule SymphonyElixir.Config.Schema do
       %{check: "mac checks", step: "Test the QA signing identity script", why: "it changes the keychain of the machine it runs on"},
       %{check: "mac checks", step: "Test update, restart and rollback", why: "it signs, installs and launches the app on the machine it runs on"}
     ]
-    @qa_commands ~w(symphony:qa_pre_checks symphony:qa_build symphony:qa_launch symphony:qa_quit symphony:qa_attach)
+    @qa_commands ~w(symphony:qa_pre_checks symphony:qa_build symphony:qa_launch symphony:qa_gallery symphony:qa_quit symphony:qa_attach)
 
     defmodule Step do
       @moduledoc """
@@ -2683,7 +2683,8 @@ defmodule SymphonyElixir.Config.Schema do
     @doc """
     The machine step commands the QA pass runs itself, with the QA host it holds
     (`SymphonyElixir.QaAgent.Steps`): the pre-checks' results, the build, the launch with a health
-    check, quitting every app the pass launched, and the evidence the steps recorded. Only a QA
+    check, the Component Gallery pictures the change changed (drawn and compared with its base's),
+    quitting every app the pass launched, and the evidence the steps recorded. Only a QA
     playbook's list (`phases.qa.playbooks.<kind>.steps`) runs them.
     """
     @spec qa_commands() :: [String.t()]
@@ -2757,7 +2758,9 @@ defmodule SymphonyElixir.Config.Schema do
     `symphony.yml` doesn't set `phases.qa.playbooks.<kind>`. Only `macos_app` has one: the
     pre-checks, the build (before the plan, since the gallery's listing reads the built app), a plan
     in the lead session on the run's model, the launch, one fresh turn on the small model for each
-    walkthrough step QA walks and the design check, quitting the app and keeping the
+    walkthrough step QA walks, the Gallery step (a machine step that draws the Component Gallery of
+    the change and of its base and keeps the pictures that changed), the design check, which judges
+    them and the app's screens the plan names, quitting the app and keeping the
     evidence, and the review in the lead session, which gives the verdict. Its orchestrated steps'
     prompts are `priv/qa_steps/macos_app/<id>.md` (`SymphonyElixir.QaAgent.StepPrompts`). Every
     other playbook has none: its pass is one agent session.
@@ -2780,7 +2783,7 @@ defmodule SymphonyElixir.Config.Schema do
           "session" => "lead",
           "effort" => "high",
           "prompt" => prompt.("plan"),
-          "answer" => %{"needs_app" => "boolean", "walk" => "list", "gallery" => "list", "notes" => "string"}
+          "answer" => %{"needs_app" => "boolean", "walk" => "list", "screens" => "list", "notes" => "string"}
         },
         %{"id" => "launch", "title" => "Launch the app", "mode" => "machine", "command" => "symphony:qa_launch", "timeout_ms" => 300_000, "on_fail" => "quit"},
         %{
@@ -2793,6 +2796,7 @@ defmodule SymphonyElixir.Config.Schema do
           "prompt" => prompt.("walk"),
           "answer" => judged
         },
+        %{"id" => "gallery", "title" => "Draw the Gallery and compare it with the base's", "mode" => "machine", "command" => "symphony:qa_gallery", "timeout_ms" => 3_600_000, "on_fail" => "quit"},
         %{"id" => "design_check", "title" => "Design check", "mode" => "orchestrated", "session" => "fresh", "model" => "small", "prompt" => prompt.("design_check"), "answer" => judged},
         %{"id" => "quit", "title" => "Quit the app", "mode" => "machine", "command" => "symphony:qa_quit", "timeout_ms" => 60_000},
         %{"id" => "attach", "title" => "Attach the evidence", "mode" => "machine", "command" => "symphony:qa_attach", "timeout_ms" => 60_000},
