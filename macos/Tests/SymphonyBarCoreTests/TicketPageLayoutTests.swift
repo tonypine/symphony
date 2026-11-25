@@ -61,6 +61,10 @@ final class TicketPageLayoutTests: XCTestCase {
         XCTAssertEqual(page.lifecycleRead?.phasePath?.current, "Rework")
         XCTAssertEqual(page.factsRead?.pullRequest?.number, 741)
         XCTAssertEqual(page.factsRead?.connected?.epic?.identifier, "TP-1381")
+        // A sub-ticket with sub-tickets of its own: the Connected panel shows both (TP-1651).
+        let connected = ConnectedPanelModel.build(page.factsRead?.connected)
+        XCTAssertEqual(connected.epic?.identifier, "TP-1381")
+        XCTAssertEqual(connected.subTickets.map(\.identifier), ["TP-1246", "TP-1247"])
         XCTAssertEqual(page.detailsRead?.ticket?.title, "The paused line on the ticket page")
         // The timeline: the run now first, live.
         let history = try XCTUnwrap(page.history)

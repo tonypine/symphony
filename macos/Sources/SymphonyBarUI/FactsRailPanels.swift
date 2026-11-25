@@ -185,6 +185,9 @@ public struct ConnectedPanel: View {
                         EpicBlock(epic: epic, openInitiatives: openInitiatives, openTicket: openTicket)
                     }
                 }
+                if !model.subTickets.isEmpty {
+                    SubPanel(title: "Sub-tickets") { TicketLines(lines: model.subTickets, open: openTicket) }
+                }
                 if !model.waitingOn.isEmpty {
                     SubPanel(title: "Waiting on") { TicketLines(lines: model.waitingOn, open: openTicket) }
                 }

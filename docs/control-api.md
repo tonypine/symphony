@@ -380,8 +380,8 @@ it reads the records, the ledgers, what the orchestrator holds and the Initiativ
 | Field | What it holds |
 | --- | --- |
 | `epic` | The plan the ticket is part of, below; null when it has none, and on a plan ticket itself. |
-| `parent` | The parent as the run's read saw it: `identifier`, `title`, `done`, `total` and `children`, the sub-tickets' state types. Null before a read gave it. |
-| `sub_tickets` | The ticket's own sub-tickets: `identifier`, `title` and `state`. |
+| `parent` | The ticket it is part of, from Symphony's own tree of its records (the tree the queue orders by: as the ticket's record names its parent, else as the parent's record lists it among its sub-issues), whether a split, a person or an adoption filed it and whether or not a run worked on it: `identifier`, `title`, `done`, `total` and `children` (`completed` for a done sub-ticket, else null). What a run's enrichment read from Linear does not decide it. Null when the tree names none. |
+| `sub_tickets` | The ticket's own sub-tickets in the same tree, with the sub-issues its poll lists that Symphony holds no record of: `identifier`, `title`, `state` and `situation` (null without a record), in their order inside it: the done ones first, oldest first, then the open ones in the stored queue order, then the unrecorded open ones. A cancelled one is left out. |
 | `blocked_by` | Every blocker ever linked, below. |
 | `blocks` | The tickets it holds up, below. |
 | `related` | The related links of a tracked ticket: `identifier`, `title` and `state`. A ticket the orchestrator no longer tracks has none: its record does not keep them. |
@@ -399,7 +399,7 @@ link, where each may be null.
 | `tickets` | The sub-tickets in chain order: `identifier`, `title`, `state`, `situation` (the kind of its `situation`, null without a record) and `current`, true on this ticket. |
 
 A plan the Initiatives don't list (done more than 7 days ago, or not split by Symphony) comes from the
-parent's record: its sub-issues in creation order,
+tree: the parent's sub-tickets (as `sub_tickets` finds them) in creation order,
 counted by state, where `Done` is done and any other terminal state leaves it out. With no record of the
 parent, `done` and `total` are the parent's own and `tickets` is empty.
 

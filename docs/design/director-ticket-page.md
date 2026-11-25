@@ -6,7 +6,7 @@
 > is no Details panel (priority and labels are in the header, the workspace path and the Linear link in the
 > More menu, the pull request is Open Pull Request), and Decisions is a panel only once the Director has
 > answered something on the ticket. Since TP-1503 there is no note panel: writing to the ticket is one box
-> above the timeline.
+> above the timeline. Since TP-1651 the Connected panel lists the ticket's sub-tickets under its Epic block.
 
 Design research for the ticket page, and the prototype built on it (TP-1383, second design ticket of
 Phase 3b, TP-1381). The page is designed again from scratch around one question: **where does this

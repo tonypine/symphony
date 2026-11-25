@@ -103,8 +103,15 @@ Story: `#sections/window/ticket-page-laptop` and `#sections/page-layout/…`. Ma
   panel, and no Repo, Models or Links rows.
 - **Decisions** is a panel only when the Director has answered something on the ticket.
 - **Connected:** every ticket row is one line (dot, identifier, title, badge); the highlight marks this
-  ticket. "Waiting on" and "Holding up" are drawn only when there is a ticket to list; a ticket with no epic
-  has no Epic block; with nothing connected there is no Connected panel.
+  ticket. In order: Epic, Sub-tickets, Waiting on, Holding up. "Sub-tickets" (TP-1651) lists the tickets this
+  one is the parent of, one line each, in their order inside it (the done ones first, then the open ones in
+  queue order), the done ones still listed and a cancelled one left out; each line opens its ticket's page.
+  A ticket that is a sub-ticket and has sub-tickets of its own shows both its Epic block and its
+  Sub-tickets. "Sub-tickets", "Waiting on" and "Holding up" are drawn only when there is a ticket to list,
+  and a dependency already met is no entry; a ticket with no epic has no Epic block; with no epic, no
+  sub-ticket, no unmet dependency and nothing it holds up there is no Connected panel. The epic and the
+  sub-tickets come from Symphony's own tree of its records, so a ticket filed by a split names its epic
+  before any run.
 - **Laptop layout:** the timeline starts 24 pt under the Lifecycle card. The last grid row takes the height
   the facts rail adds (`grid-template-rows: auto auto 1fr`).
 - The right-hand column is, in order: Pull request, Connected, Decisions.
