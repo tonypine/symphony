@@ -67,7 +67,8 @@ defmodule SymphonyElixir.ProviderUsageTest do
   test "a read that can't start is logged and the next trigger tries again" do
     log =
       capture_log(fn ->
-        assert ProviderUsage.request(%{}, "opencode-go", @now, reader: reader(), supervisor: :no_such_task_supervisor) == %{"opencode-go" => @now}
+        opts = [reader: reader(), supervisor: :no_such_task_supervisor]
+        assert ProviderUsage.request(%{}, "opencode-go", @now, opts) == %{"opencode-go" => @now}
       end)
 
     assert log =~ "Provider usage read not started provider=opencode-go"

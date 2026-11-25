@@ -101,7 +101,9 @@ offline_models_request = fn _url, _opts -> {:error, :network_disabled_in_tests} 
 Application.put_env(:symphony_elixir, :openrouter_models_request, offline_models_request)
 
 # Tests never reach OpenCode Go's usage API: a test that needs it passes `:request_fun` or stubs this.
-Application.put_env(:symphony_elixir, :opencode_go_usage_request, fn _url, _opts -> {:error, :network_disabled_in_tests} end)
+Application.put_env(:symphony_elixir, :opencode_go_usage_request, fn _url, _opts ->
+  {:error, :network_disabled_in_tests}
+end)
 
 # The ticket pull request lookup a repo poll starts never reaches GitHub in tests: a test that
 # needs it passes `:gh_runner` itself.

@@ -90,7 +90,8 @@ defmodule SymphonyElixir.ProvidersTest do
           usage_limits: [%{provider: "opencode-go", phase: :headroom, resume_at: ~U[2026-11-28 00:02:00Z]}]
         })
 
-      assert %{reserve: 0.9, at_reserve: true, held: true, held_until: ~U[2026-11-28 00:02:00Z], usage_windows: go_windows} = entry(list, "opencode-go")
+      assert %{reserve: 0.9, at_reserve: true, held: true, held_until: ~U[2026-11-28 00:02:00Z], usage_windows: go_windows} =
+               entry(list, "opencode-go")
 
       assert go_windows == [
                %{name: "five_hour", utilization: 0.3, resets_at: ~U[2026-11-25 14:00:00Z]},

@@ -4,6 +4,8 @@ defmodule SymphonyElixir.QaServerScriptsTest do
   # the QA host, by the QA pass's health check.
   use ExUnit.Case, async: true
 
+  alias SymphonyElixir.OpenRouter.Stub
+
   @repo Path.expand("../..", __DIR__)
 
   setup do
@@ -98,7 +100,7 @@ defmodule SymphonyElixir.QaServerScriptsTest do
     assert lines(ctx.out, "stub-args") == ["openrouter-stub", "--port", "0"]
     env = for line <- lines(ctx.out, "env"), [name, value] <- [String.split(line, "=", parts: 2)], into: %{}, do: {name, value}
     assert env["SYMPHONY_QA_OPENROUTER_URL"] == "http://127.0.0.1:4555/api"
-    assert env["OPENCODE_API_KEY"] == SymphonyElixir.OpenRouter.Stub.valid_key()
+    assert env["OPENCODE_API_KEY"] == Stub.valid_key()
     [config] = for {"--config", path} <- ctx.out |> lines("args") |> then(&Enum.zip(&1, tl(&1))), do: path
     assert env["SYMPHONY_BAR_QA_ROOT"] == Path.dirname(config)
     assert File.read!(config) =~ "  providers:\n    opencode-go:\n      reserve: 0.9\n"

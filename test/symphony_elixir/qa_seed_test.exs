@@ -244,7 +244,10 @@ defmodule SymphonyElixir.QaSeedTest do
     dir = seed_copy(repo_key, &Map.put(&1, "usage_limits", [limit]))
 
     assert QaSeed.load(dir, now: @now) == :ok
-    assert %{{"opencode-go", :all} => %{phase: :paused, reason: reason, window: "seven_day", resets_at: resets_at} = hold} = RunStore.get_usage_limits()
+
+    assert %{{"opencode-go", :all} => %{phase: :paused, reason: reason, window: "seven_day", resets_at: resets_at} = hold} =
+             RunStore.get_usage_limits()
+
     assert resets_at == DateTime.add(@now, 911 * 60)
     refute reason =~ "claude"
     assert UsageLimit.banner(hold, @now) =~ "OpenCode Go"

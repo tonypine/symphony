@@ -547,7 +547,8 @@ defmodule SymphonyElixir.UsageLimitTest do
       assert Providers.reserves(Config.settings!()) == %{}
 
       # OpenCode Go takes one too (TP-1642), beside Anthropic's.
-      write_workflow_file!(Workflow.workflow_file_path(), execution_providers: %{anthropic: %{reserve: 0.9}, "opencode-go": %{reserve: 0.8}})
+      providers = %{anthropic: %{reserve: 0.9}, "opencode-go": %{reserve: 0.8}}
+      write_workflow_file!(Workflow.workflow_file_path(), execution_providers: providers)
       assert Schema.Execution.reserve(Config.settings!().execution, "opencode-go") == 0.8
       assert Providers.reserves(Config.settings!()) == %{"anthropic" => 0.9, "opencode-go" => 0.8}
     end

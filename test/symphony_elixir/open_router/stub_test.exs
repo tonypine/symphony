@@ -3,6 +3,7 @@ defmodule SymphonyElixir.OpenRouter.StubTest do
 
   import ExUnit.CaptureLog
 
+  alias SymphonyElixir.OpencodeGo.Usage
   alias SymphonyElixir.OpenRouter.Stub
   alias SymphonyElixir.TestSupport
 
@@ -64,7 +65,7 @@ defmodule SymphonyElixir.OpenRouter.StubTest do
 
     # Symphony's own reader takes the stub's answer as OpenCode Go's.
     assert {:ok, %{"five_hour" => %{utilization: 0.3}, "seven_day" => %{utilization: 0.92, status: "allowed"}, "monthly" => %{utilization: 0.55}}} =
-             SymphonyElixir.OpencodeGo.Usage.read(api_key: Stub.valid_key(), url: url <> "/opencode-go/v1/usage", request_fun: &Req.get/2)
+             Usage.read(api_key: Stub.valid_key(), url: url <> "/opencode-go/v1/usage", request_fun: &Req.get/2)
 
     for opts <- [[auth: {:bearer, "sk-go-made-up"}], []] do
       assert request(:get, url <> "/opencode-go/v1/usage", opts).status == 401

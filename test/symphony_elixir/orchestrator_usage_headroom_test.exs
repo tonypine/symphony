@@ -552,7 +552,10 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
 
       state = :sys.get_state(pid)
       resets_at = DateTime.add(ctx.now, 3 * 86_400)
-      assert %{phase: :headroom, provider: "opencode-go", window: "seven_day", utilization: 0.92, reserve: 0.9, resets_at: ^resets_at} = state.usage_limits[@opencode_go]
+
+      assert %{phase: :headroom, provider: "opencode-go", window: "seven_day", utilization: 0.92, reserve: 0.9, resets_at: ^resets_at} =
+               state.usage_limits[@opencode_go]
+
       refute Map.has_key?(state.usage_limits, @anthropic)
       refute Orchestrator.should_dispatch_issue_for_test(new_run, state)
       assert log =~ "Usage limit headroom hold provider=opencode-go utilization=0.92 reserve=0.9"
