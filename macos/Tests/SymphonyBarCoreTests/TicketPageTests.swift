@@ -1089,7 +1089,7 @@ final class TicketPageFeedTests: XCTestCase {
         composer.text = long
         var written = await submit()
         XCTAssertFalse(written)
-        XCTAssertEqual(composer.refusal, "A message holds at most 4,000 characters; this one has 4,001")
+        XCTAssertEqual(composer.refusal, "A message holds at most 100,000 characters; this one has 100,001")
         XCTAssertEqual(composer.text, long)
         XCTAssertEqual(calls.sent, [])
         XCTAssertNil(TicketMessageComposer.tooLong(String(repeating: "é", count: TicketMessageComposer.maxLength)))
