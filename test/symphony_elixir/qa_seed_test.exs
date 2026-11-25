@@ -6,7 +6,7 @@ defmodule SymphonyElixir.QaSeedTest do
 
   alias SymphonyElixir.{Config, DirectorMoves, Inbox, Orchestrator, Paths, Pauses}
   alias SymphonyElixir.{PlanBrief, QaSeed}
-  alias SymphonyElixir.{Questions, RunStore, Situation, SubIssueWait, TicketEvents, Tracker}
+  alias SymphonyElixir.{Questions, RunStore, Situation, SubIssueWait, TicketEvents, Tracker, UsageLimit}
   alias SymphonyElixir.Workflow
   alias SymphonyElixirWeb.ControlApiController
 
@@ -61,6 +61,18 @@ defmodule SymphonyElixir.QaSeedTest do
 
   test "the seeded server answers every move the Director makes, over the memory tracker", %{repo_key: repo_key, dir: dir} do
     assert QaSeed.load(dir, now: @now) == :ok
+
+    # Anthropic at its reserve and the fallback at its own weekly limit, each under its own name and
+    # reset, as the orchestrator keeps them.
+    assert %{
+             {"anthropic", :all} => %{phase: :headroom, reserve: 0.9, window: "five_hour", resets_at: anthropic_reset},
+             {"opencode-go", :all} => %{phase: :paused, reason: opencode_reason, window: "seven_day", resets_at: opencode_reset} = opencode
+           } = RunStore.get_usage_limits()
+
+    assert anthropic_reset == DateTime.add(@now, 110 * 60)
+    assert opencode_reset == DateTime.add(@now, 911 * 60)
+    refute opencode_reason =~ "claude"
+    assert UsageLimit.banner(opencode, @now) =~ "OpenCode Go"
 
     # As in the application: the orchestrator starts after the seed, with its pauses, and the Inbox
     # reads the records the seed and each move write.
