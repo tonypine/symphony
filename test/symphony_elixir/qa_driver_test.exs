@@ -1486,7 +1486,9 @@ defmodule SymphonyElixir.QaDriverTest do
 
     defp named(name, y, visible \\ true) do
       title = %{"x" => 180, "y" => y + 8, "w" => 300, "h" => 16}
-      %{"name" => name, "frame" => %{"x" => 100, "y" => y, "w" => 800, "h" => 32}, "visible" => visible, "window" => 7, "selected" => false, "focused" => false, "parts" => %{"title" => title}}
+      frame = %{"x" => 100, "y" => y, "w" => 800, "h" => 32}
+      flags = %{"selected" => false, "focused" => false}
+      Map.merge(flags, %{"name" => name, "frame" => frame, "visible" => visible, "window" => 7, "parts" => %{"title" => title}})
     end
 
     test "lists the named elements the app reports, with their parts' frames and its state", %{worktree: worktree} do

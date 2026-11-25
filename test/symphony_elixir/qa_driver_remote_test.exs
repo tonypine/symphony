@@ -444,7 +444,10 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
         File.write!(report_file, Jason.encode!(report))
       end
 
-      row = fn name, y, visible -> %{"name" => name, "frame" => %{"x" => 100, "y" => y, "w" => 800, "h" => 32}, "visible" => visible, "window" => 7, "parts" => %{}} end
+      row = fn name, y, visible ->
+        frame = %{"x" => 100, "y" => y, "w" => 800, "h" => 32}
+        %{"name" => name, "frame" => frame, "visible" => visible, "window" => 7, "parts" => %{}}
+      end
 
       assert {:error, {:qa_tool, "qa_elements_missing", _message}} = QaDriver.call_tool(driver, "qa_elements", %{"pid" => pid})
 

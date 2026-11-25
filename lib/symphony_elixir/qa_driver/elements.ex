@@ -267,11 +267,15 @@ defmodule SymphonyElixir.QaDriver.Elements do
   stops moving). Returns the element with its frame and parts, `scrolls` and the app's state;
   `qa_element_not_found` when it never shows.
   """
-  @spec scroll_to(map(), (-> {:ok, report()} | tool_error()), (String.t(), integer() -> {:ok, map()} | tool_error()), (non_neg_integer() -> any())) ::
-          {:ok, map()} | tool_error()
+  @type read_fun :: (-> {:ok, report()} | tool_error())
+  @type scroll_fun :: (String.t(), integer() -> {:ok, map()} | tool_error())
+
+  @spec scroll_to(map(), read_fun(), scroll_fun(), (non_neg_integer() -> any())) :: {:ok, map()} | tool_error()
   def scroll_to(request, read, scroll, sleep) do
     with {:ok, report} <- read.() do
-      step(request, report, %{read: read, scroll: scroll, sleep: sleep}, %{scrolls: 0, direction: request.direction || "down", turned: request.direction != nil})
+      io = %{read: read, scroll: scroll, sleep: sleep}
+      progress = %{scrolls: 0, direction: request.direction || "down", turned: request.direction != nil}
+      step(request, report, io, progress)
     end
   end
 
@@ -296,7 +300,8 @@ defmodule SymphonyElixir.QaDriver.Elements do
          {:ok, answer} <- io.scroll.(point, dy),
          _slept = io.sleep.(@settle_ms),
          {:ok, next} <- io.read.() do
-      moved(request, report, next, element, answer, io, %{progress | scrolls: progress.scrolls + 1, direction: direction})
+      progress = %{progress | scrolls: progress.scrolls + 1, direction: direction}
+      moved(request, report, next, element, answer, io, progress)
     end
   end
 

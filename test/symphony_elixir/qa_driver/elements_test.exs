@@ -163,7 +163,9 @@ defmodule SymphonyElixir.QaDriver.ElementsTest do
       assert Elements.measure_arguments(%{"a" => "x", "b" => "y"}) == {:ok, {"x", "y", 0.5}}
       assert Elements.measure_arguments(%{"a" => "x", "b" => "y", "within" => 2}) == {:ok, {"x", "y", 2}}
 
-      for args <- [%{"b" => "y"}, %{"a" => "", "b" => "y"}, %{"a" => "x"}, %{"a" => "x", "b" => "y", "within" => -1}, %{"a" => "x", "b" => "y", "within" => "1"}] do
+      bad_within = [%{"a" => "x", "b" => "y", "within" => -1}, %{"a" => "x", "b" => "y", "within" => "1"}]
+
+      for args <- [%{"b" => "y"}, %{"a" => "", "b" => "y"}, %{"a" => "x"} | bad_within] do
         assert {:error, {:qa_tool, "invalid_arguments", _message}} = Elements.measure_arguments(args)
       end
     end
@@ -216,7 +218,8 @@ defmodule SymphonyElixir.QaDriver.ElementsTest do
       above = report([element("done-row-TP-1", -100, visible: false)])
       shown = report([element("done-row-TP-1", 300)])
 
-      assert {:ok, %{"scrolls" => 1, "frame" => %{"y" => 300}}} = scroll_to(request("done-row-TP-1"), [below, shown], [{:ok, %{"moved" => %{"y" => 300}}}])
+      answers = [{:ok, %{"moved" => %{"y" => 300}}}]
+      assert {:ok, %{"scrolls" => 1, "frame" => %{"y" => 300}}} = scroll_to(request("done-row-TP-1"), [below, shown], answers)
       # The window spans 25 to 525: the row's bottom (732) is 207 below, plus a margin.
       assert_received {:scrolled, "500,275", 247}
       assert_received {:slept, 400}
@@ -236,8 +239,10 @@ defmodule SymphonyElixir.QaDriver.ElementsTest do
       found = report([element("done-row-TP-9", 200)])
 
       # Down a page at a time while the list moves; it turns up once it stops.
+      answers = [{:ok, %{"moved" => %{"y" => 300}}}, {:ok, %{"moved" => %{"y" => 0}}}]
+
       assert {:ok, %{"name" => "done-row-TP-9", "scrolls" => 3}} =
-               scroll_to(request("done-row-TP-9"), [first, later, later, found], [{:ok, %{"moved" => %{"y" => 300}}}, {:ok, %{"moved" => %{"y" => 0}}}])
+               scroll_to(request("done-row-TP-9"), [first, later, later, found], answers)
 
       assert_received {:scrolled, _point, 300}
       assert_received {:scrolled, _point, 300}
@@ -263,7 +268,8 @@ defmodule SymphonyElixir.QaDriver.ElementsTest do
     end
 
     test "scrolls at a shown element of the list when the call names one" do
-      reports = [report([element("done-row-TP-1", 100, x: 40, w: 200), element("done-row-TP-2", 900, visible: false)]), report([element("done-row-TP-2", 300)])]
+      first = report([element("done-row-TP-1", 100, x: 40, w: 200), element("done-row-TP-2", 900, visible: false)])
+      reports = [first, report([element("done-row-TP-2", 300)])]
       assert {:ok, %{"scrolls" => 1}} = scroll_to(request("done-row-TP-2", at: "done-row-TP-1"), reports)
       assert_received {:scrolled, "140,116", _dy}
 
