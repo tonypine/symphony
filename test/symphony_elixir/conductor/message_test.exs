@@ -132,6 +132,14 @@ defmodule SymphonyElixir.Conductor.MessageTest do
     end
   end
 
+  describe "a turn that owes nothing" do
+    test "a failed turn of another junction counts nothing", ctx do
+      before = Facts.events(ctx.issue_id)
+      assert Message.unanswered(%{junction: "child_message", issue_id: ctx.issue_id}, nil, "the turn failed") == :ok
+      assert Facts.events(ctx.issue_id) == before
+    end
+  end
+
   describe "the message turn" do
     test "starts at once and replies under the message, with the conversation in its facts", ctx do
       earlier = say!(ctx.issue_id, "Is it started?")

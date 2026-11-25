@@ -1236,12 +1236,10 @@ defmodule SymphonyElixir.Conductor.Tree do
     end
   end
 
-  defp dependency_why(identifier, reason),
-    do:
-      if(reason == :dependency_cycle,
-        do: "waiting on #{identifier} would make a cycle: #{identifier} already waits on it",
-        else: "its dependency on #{identifier} could not be stored (#{inspect(reason)})"
-      )
+  defp dependency_why(identifier, reason) do
+    why = if reason == :dependency_cycle, do: "would make a cycle: #{identifier} already waits on it", else: "could not be stored (#{inspect(reason)})"
+    "waiting on #{identifier} #{why}"
+  end
 
   # The sub-ticket `name` names (its identifier, or the key of one this turn added), when it is
   # this ticket's and has not ended.
