@@ -21,7 +21,7 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
   resolution), or carrying no head that fixes it (`no_head`), a `check.proved` naming no check of the
   current plan (`unknown_check`, with the ids it `known`s), a proof naming a test the run's checkout
   lacks (`test_not_found`, a `check.proved` with `by: test` or an `evidence` whose `proof` has a
-  `test`, found as the QA pre-check finds it: `SymphonyElixir.QaPreCheck.missing_test/3`), a `parent` that is no event of the ticket (`unknown_parent`)
+  `test`, looked up by `SymphonyElixir.QaPreCheck.missing_test/3`), a `parent` that is no event of the ticket (`unknown_parent`)
   and an artifact that is not a regular file under the workspace or the run's `$TMPDIR`
   (`invalid_artifact`). Every check runs before anything is written: a refused call ingests no file
   and records no event.
@@ -369,9 +369,9 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
   defp proof_test(_type, _payload, _context), do: :ok
 
   @doc """
-  Whether the test a proof names is in the run's checkout (the session's workspace), found as the
-  QA pre-check finds it (`SymphonyElixir.QaPreCheck.missing_test/3`), so a proof accepted when it
-  is recorded is found by QA too. A refusal (`test_not_found`) says what is missing and the forms
+  Whether the test a proof names is in the run's checkout (the session's workspace)
+  (`SymphonyElixir.QaPreCheck.missing_test/3`): a proof accepted when it is recorded is complete,
+  and nothing later looks for its test again. A refusal (`test_not_found`) says what is missing and the forms
   of test name the lookup takes. A session with no checkout (no workspace, or one that is not a git
   checkout) has nothing to search, and its proof is taken as it is. `opts[:git]` runs git.
   """

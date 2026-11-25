@@ -234,13 +234,18 @@ defmodule SymphonyElixir.ConfigSplitTest do
     assert settings.hooks.after_create == "echo setup"
     assert settings.verification.enabled == true
     assert settings.push_check == %Schema.PushCheck{}
-    assert settings.proof_check == nil
+    refute Map.has_key?(settings, :proof_check)
   end
 
-  test "repo workflow names its proof check, read through Config for that repo", %{root: root} do
+  # TP-1643 removed `proof_check`: a WORKFLOW.md of the previous shape still loads, and the key is
+  # dropped, so no setting of that name reaches the runtime config.
+  test "a repo workflow that still names its proof check loads, and the key is dropped", %{root: root} do
     repo =
       write_repo!(root, "app", """
       ---
+      hooks:
+        after_create: echo setup
+      # The GitHub check that runs this repo's automated tests.
       proof_check: make-all
       ---
       Repo prompt
@@ -250,18 +255,25 @@ defmodule SymphonyElixir.ConfigSplitTest do
     SymphonyElixir.Workflow.set_symphony_file_path(Path.join(root, "symphony.yml"))
 
     assert {:ok, settings} = Config.settings_for_repo("app")
-    assert settings.proof_check == "make-all"
-    assert {:ok, %{config: %{"proof_check" => "make-all"}}} = Config.workflow_for_repo("app")
+    assert settings.hooks.after_create == "echo setup"
+    refute Map.has_key?(settings, :proof_check)
+    assert {:ok, %{config: config}} = Config.workflow_for_repo("app")
+    refute Map.has_key?(config, "proof_check")
   end
 
-  test "repo workflow rejects a blank proof check" do
-    for blank <- ["", "  "] do
-      assert {:error, {:invalid_repo_workflow_config, message}} = RepoWorkflowSchema.parse(%{"proof_check" => blank})
-      assert message =~ "proof_check must be a non-empty check name"
+  test "a dropped proof check loads whatever its value" do
+    for value <- ["make-all", "", "  ", ["make-all"], nil, 3] do
+      assert {:ok, workflow} = RepoWorkflowSchema.parse(%{"proof_check" => value, "validation" => ["mix test"]})
+      assert RepoWorkflowSchema.to_config_map(workflow) == %{"validation" => ["mix test"]}
     end
 
-    assert {:error, {:invalid_repo_workflow_config, message}} = RepoWorkflowSchema.parse(%{"proof_check" => ["make-all"]})
-    assert message =~ "proof_check is invalid"
+    assert {:ok, _workflow} = RepoWorkflowSchema.parse(%{proof_check: "make-all"})
+  end
+
+  test "Symphony's own WORKFLOW.md no longer names a proof check" do
+    {:ok, %{config: config}} = SymphonyElixir.Workflow.load(Path.expand("../../WORKFLOW.md", __DIR__))
+    refute Map.has_key?(config, "proof_check")
+    refute File.read!(Path.expand("../../WORKFLOW.md", __DIR__)) =~ "proof_check"
   end
 
   test "repo workflow configures the push check", %{root: root} do

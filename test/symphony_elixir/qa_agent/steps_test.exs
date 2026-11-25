@@ -1106,8 +1106,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       File.write!(Path.join([ctx.worktree, "qa-evidence", "page-1.png"]), "png")
       answers(%{"look" => [{:write, %{FakeAgent.pass_answer() | evidence: ["qa-evidence/page-1.png", "qa-evidence/gone.png", "https://x"]}}], "review" => [{:verdict, @pass}]})
 
-      proved = %{number: 3, text: "Saved", proof: %{by: :test, check: "make-all", test: "saves"}}
-      proofs = [%{step: proved, status: :pass, detail: "passed", url: nil}]
+      proofs = [%{number: 3, text: "Saved", proof: %{by: :test, test: "saves"}}]
 
       steps = [
         machine("only_mac", "make mac", %{"when" => "macos_changed"}),

@@ -92,7 +92,6 @@ defmodule SymphonyElixir.QaAgent do
   alias SymphonyElixir.QaAgent.Steps
   alias SymphonyElixir.QaAgent.Verdict
   alias SymphonyElixir.QaAndroid.Driver, as: AndroidDriver
-  alias SymphonyElixir.QaPreCheck
   alias SymphonyElixir.Repo.Fetcher
   alias SymphonyElixir.TicketJourney
   alias SymphonyElixir.Verification
@@ -170,7 +169,7 @@ defmodule SymphonyElixir.QaAgent do
             optional(:steps) => [Walkthrough.step()],
             optional(:groomed) => true
           },
-          optional(:proofs) => [QaPreCheck.result()],
+          optional(:proofs) => [Walkthrough.step()],
           optional(:design_files) => [Design.file()],
           optional(:unprovable) => unprovable()
         }
@@ -757,44 +756,40 @@ defmodule SymphonyElixir.QaAgent do
   end
 
   # Each walkthrough step names the one place that proves it (ADR 0003): a named automated test or
-  # QA. QA links a named test's result instead of walking its step, and walks the rest; a step with
-  # no `Proved by:` is a QA step, so tickets written before the rule are walked as before. In the QA
-  # state Symphony's pre-check (`SymphonyElixir.QaPreCheck`) has already confirmed each named test on
-  # the head before the agent starts, so the agent only links the results it is given.
-  defp proof_routing(%{proofs: [_ | _] = proofs} = job, journey) do
+  # QA. A step a recorded test proves is proved: CI runs the test on the pull request and gates the
+  # merge, so QA neither walks it nor reads CI for it. In the QA state Symphony hands the proved
+  # steps on (`SymphonyElixir.QaPreCheck`); QA walks the rest. A step with no `Proved by:` is a QA
+  # step, so tickets written before the rule are walked as before.
+  defp proof_routing(%{proofs: [_ | _] = proofs}, journey) do
     """
-    Each walkthrough step names the one place that proves it. Symphony confirmed every step a named
-    automated test proves before you started: its check passed on `#{job.sha}` and its test is in the
-    checkout. Do not walk those steps and do not read their checks again. Report each as its own step
-    with the status `pass`, named after the walkthrough step, with the result below in `details` and
-    the check run's URL in `evidence`. Walk every step that says `Proved by: QA` or names no proof.
+    Each walkthrough step names the one place that proves it. A step a named automated test proves
+    is proved: its test was recorded on the ticket, and CI runs it on the pull request and gates the
+    merge. Do not walk those steps and do not read CI for them. Report each as its own step with the
+    status `pass`, named after the walkthrough step, naming its test in `details`. Walk every step
+    that says `Proved by: QA` or names no proof.
 
-    Steps a named test proves (confirmed by Symphony, do not walk them):
-    #{Enum.map_join(proofs, "", &confirmed_line(&1, Map.get(journey, :steps, [])))}
+    Steps a named test proves (proved, do not walk them):
+    #{Enum.map_join(proofs, "", &proved_line(&1, Map.get(journey, :steps, [])))}
     Steps to walk (`Proved by: QA`, or no proof named):
     #{step_lines(Enum.reject(Map.get(journey, :steps, []), &Walkthrough.named_test?/1), false)}\
     """
   end
 
-  # A walkthrough with no named-test step is QA's to walk whole: in a repo without a proof check
-  # its `Proved by:` lines name nothing a check of the repo runs (`SymphonyElixir.Walkthrough`).
-  defp proof_routing(job, journey) do
+  # A walkthrough with no step a recorded test proves is QA's to walk whole.
+  defp proof_routing(_job, journey) do
     case Enum.split_with(Map.get(journey, :steps, []), &Walkthrough.named_test?/1) do
       {[], _qa_steps} ->
-        "No walkthrough step names a test that a check of this repo runs: walk every step, whatever its `Proved by:` line says.\n"
+        "No walkthrough step is proved by a recorded test: walk every step, whatever its `Proved by:` line says.\n"
 
       {test_steps, qa_steps} ->
         """
         Each walkthrough step names the one place that proves it. A step ending in
-        `Proved by: <test>` (run by the repo's proof check) or `Proved by: <check> › <test>` is proved
-        by that named automated test, run by the check listed with it below: do not walk it. Report it
-        as its own step, named after the walkthrough step, with that check's result on `#{job.sha}` and
-        the check run's URL in `details` and `evidence`. #{check_runs_hint(job)} The check passed: `pass`.
-        It failed, or never ran on `#{job.sha}`: `fail`, naming the step and the check in `findings`, since
-        the ticket's proof is part of its work. It is still running: poll it for at most 10 minutes, then
-        `blocked` with the reason. Walk every step that says `Proved by: QA` or names no proof.
+        `Proved by: <test>` is proved by that named automated test: its test was recorded on the
+        ticket, and CI runs it on the pull request and gates the merge. Do not walk it and do not read
+        CI for it. Report it as its own step with the status `pass`, named after the walkthrough step,
+        naming its test in `details`. Walk every step that says `Proved by: QA` or names no proof.
 
-        Steps a named test proves (link the check run, do not walk them):
+        Steps a named test proves (proved, do not walk them):
         #{step_lines(test_steps, true)}
         Steps to walk (`Proved by: QA`, or no proof named):
         #{step_lines(qa_steps, false)}\
@@ -802,20 +797,11 @@ defmodule SymphonyElixir.QaAgent do
     end
   end
 
-  defp check_runs_hint(%{epic_review: true}), do: "Read the check the way the CI rule above reads CI's runs."
-
-  defp check_runs_hint(job) do
-    "Read the head's runs with `gh run list --commit #{job.sha} --json workflowName,status,conclusion,url` " <>
-      "and its check runs with `gh api repos/<owner>/<repo>/commits/#{job.sha}/check-runs` where `gh` is allowed, " <>
-      "else `curl -fsS \"https://api.github.com/repos/<owner>/<repo>/commits/#{job.sha}/check-runs\"`, " <>
-      "with `<owner>/<repo>` from `git remote get-url origin`."
-  end
-
-  # The pre-check reads the proofs from events alone, so the step's text is the walkthrough's.
-  defp confirmed_line(%{step: step} = proof, steps) do
+  # The proofs are read from events alone, so the step's text is the walkthrough's.
+  defp proved_line(step, steps) do
     text = steps |> Enum.find_value(step.text, &(&1.number == step.number && &1.text)) |> String.replace(~r/\s+/, " ") |> String.trim()
     words = Enum.join(Enum.reject([text, Walkthrough.proof_line(step)], &(&1 == "")), " ")
-    "- #{step.number}. #{words}: pass, #{QaPreCheck.linked(proof)}\n"
+    "- #{step.number}. #{words}\n"
   end
 
   defp step_lines([], _proof?), do: "- none\n"

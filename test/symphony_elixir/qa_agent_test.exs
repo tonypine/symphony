@@ -1222,7 +1222,7 @@ defmodule SymphonyElixir.QaAgentTest do
             journey: %{
               source: "the epic's acceptance criteria",
               text: "- [ ] The settings window opens",
-              steps: ProofSteps.steps("1. Open the settings window. Proved by: `test/settings_test.exs`", "make-all")
+              steps: ProofSteps.steps("1. Open the settings window. Proved by: `test/settings_test.exs`")
             }
           }),
           nil
@@ -1341,7 +1341,7 @@ defmodule SymphonyElixir.QaAgentTest do
       assert prompt =~ "It never fails or blocks the ticket."
     end
 
-    test "a walkthrough that mixes named-test and QA steps lists the steps to link and the steps to walk" do
+    test "a walkthrough that mixes named-test and QA steps lists the proved steps and the steps to walk" do
       description = """
       ## User walkthrough
 
@@ -1354,21 +1354,24 @@ defmodule SymphonyElixir.QaAgentTest do
       """
 
       section = SymphonyElixir.Walkthrough.section(description)
-      journey = %{source: "the ticket's `## User walkthrough`", text: section, steps: ProofSteps.steps(section, "make-all")}
+      journey = %{source: "the ticket's `## User walkthrough`", text: section, steps: ProofSteps.steps(section)}
       prompt = QaAgent.prompt(job(%{issue: issue(%{description: description}), journey: journey}), nil)
       flat = String.replace(prompt, ~r/\s+/, " ")
 
       assert flat =~
-               "A step ending in `Proved by: <test>` (run by the repo's proof check) or `Proved by: <check> › <test>` is proved by that named automated test, run by the check listed with it below: do not walk it."
+               "A step ending in `Proved by: <test>` is proved by that named automated test: its test was recorded on the ticket, " <>
+                 "and CI runs it on the pull request and gates the merge. Do not walk it and do not read CI for it."
 
       assert flat =~ "Walk every step that says `Proved by: QA` or names no proof."
       assert flat =~ "and walk yourself every step that no named test proves"
-      assert flat =~ "gh run list --commit #{job().sha}"
-      assert flat =~ "It failed, or never ran on `#{job().sha}`: `fail`, naming the step and the check in `findings`"
+      refute flat =~ "gh run list --commit"
+      refute flat =~ "never ran on"
+      refute flat =~ "proof check"
 
+      # The older form's check name is dropped: the step is proved by its test.
       assert prompt =~
-               "Steps a named test proves (link the check run, do not walk them):\n" <>
-                 "- 1. Preview the workflow → it states the rule. Proved by: `make-all` › the workflow preview tests\n"
+               "Steps a named test proves (proved, do not walk them):\n" <>
+                 "- 1. Preview the workflow → it states the rule. Proved by: `the workflow preview tests`\n"
 
       assert prompt =~
                "Steps to walk (`Proved by: QA`, or no proof named):\n" <>
@@ -1381,22 +1384,22 @@ defmodule SymphonyElixir.QaAgentTest do
     test "a walkthrough whose steps a named test proves all has no steps to walk" do
       journey = %{
         source: "the ticket's `## User walkthrough`",
-        text: "1. Parse it. Proved by: `make-all`",
-        steps: ProofSteps.steps("1. Parse it. Proved by: `make-all`", "make-all")
+        text: "1. Parse it. Proved by: `test/parse_test.exs`",
+        steps: ProofSteps.steps("1. Parse it. Proved by: `test/parse_test.exs`")
       }
 
       prompt = QaAgent.prompt(job(%{journey: journey}), nil)
 
-      assert prompt =~ "- 1. Parse it. Proved by: `make-all`\n"
+      assert prompt =~ "- 1. Parse it. Proved by: `test/parse_test.exs`\n"
       assert prompt =~ "Steps to walk (`Proved by: QA`, or no proof named):\n- none\n"
     end
 
     test "a walkthrough with no named-test step is walked whole, whatever its Proved by: lines say" do
-      text = "1. Run `symphony check`. Proved by: test/check_test.exs"
-      journey = %{source: "the ticket's `## User walkthrough`", text: text, steps: ProofSteps.steps(text, nil)}
+      text = "1. Run `symphony check`. Proved by: QA\n2. Read it."
+      journey = %{source: "the ticket's `## User walkthrough`", text: text, steps: ProofSteps.steps(text)}
       prompt = QaAgent.prompt(job(%{journey: journey}), nil)
 
-      assert prompt =~ "No walkthrough step names a test that a check of this repo runs: walk every step, whatever its `Proved by:` line says."
+      assert prompt =~ "No walkthrough step is proved by a recorded test: walk every step, whatever its `Proved by:` line says."
       refute prompt =~ "gh run list --commit"
       refute prompt =~ "Steps a named test proves"
       refute prompt =~ "Steps to walk"

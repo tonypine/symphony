@@ -2,7 +2,6 @@ defmodule SymphonyElixir.QaVerificationPassTest do
   use SymphonyElixir.TestSupport
   import SymphonyElixir.QaVerificationSupport
 
-  alias SymphonyElixir.CiWait
   alias SymphonyElixir.Conductor
   alias SymphonyElixir.Conductor.Facts
   alias SymphonyElixir.Config.Schema
@@ -18,7 +17,6 @@ defmodule SymphonyElixir.QaVerificationPassTest do
   alias SymphonyElixir.QaVerificationSupport.WalkthroughSession
   alias SymphonyElixir.RunStore
   alias SymphonyElixir.TicketPullRequest
-  alias SymphonyElixir.TicketSignals
 
   @repo_key "repo-qa-verification"
   @issue_id "issue-qa-verification"
@@ -515,36 +513,6 @@ defmodule SymphonyElixir.QaVerificationPassTest do
       end
     end
 
-    test "a pre-check that finds the named check never ran on a conflicting head is blocked on CI" do
-      clear_store!()
-      {workspace, head} = named_workspace!()
-      watch_head!(head, %{mergeable: :dirty})
-      record_proof!(1, "test/check_test.exs")
-
-      gh = fn
-        ["pr", "view", @pr_url, "--json", _fields], _opts -> {Jason.encode!(%{"url" => @pr_url, "headRefOid" => head, "statusCheckRollup" => []}), 0}
-        ["api" | _endpoint], _opts -> {Jason.encode!(%{"workflow_runs" => []}), 0}
-      end
-
-      description = "## User walkthrough\n\n1. Run `symphony check` → it passes.\n"
-
-      capture_log(fn ->
-        assert :ok =
-                 QaVerification.run(issue("QA", %{description: description}), workspace,
-                   settings: settings!(%{"proof_check" => "make-all"}),
-                   repo_key: @repo_key,
-                   qa_policy: RunPolicy,
-                   qa_agent: FakeQaAgent,
-                   fixer: FakeFixer,
-                   gh_runner: gh
-                 )
-      end)
-
-      refute_received {:qa_agent_run, _, _}
-      refute_received {:memory_tracker_state_update, _, _}
-      assert [%{outcome: "blocked", details: %{component: "ci"}}] = verdicts()
-    end
-
     test "an environment block on a red head is handed to the watcher and spends no attempt" do
       {workspace, head} = git_workspace!()
       watch_head!(head, %{ci: :red})
@@ -665,9 +633,7 @@ defmodule SymphonyElixir.QaVerificationPassTest do
     end
   end
 
-  describe "the QA pre-check of named tests" do
-    @run_url "https://github.com/acme/repo/actions/runs/555/job/1"
-
+  describe "a recorded test proof" do
     @named_walkthrough """
     ## User walkthrough
 
@@ -682,112 +648,124 @@ defmodule SymphonyElixir.QaVerificationPassTest do
       :ok
     end
 
+    # The repo's settings carry no proof check: none exists.
     defp run_named(workspace, description, opts) do
       QaVerification.run(
         issue("QA", %{description: description}),
         workspace,
-        opts ++
+        Keyword.merge(
           [
-            settings: settings!(%{"proof_check" => "make-all"}),
+            settings: settings!(),
             repo_key: @repo_key,
             qa_policy: RunPolicy,
             qa_agent: FakeQaAgent,
             fixer: FakeFixer,
-            symphony_repo_key: @symphony_repo_key
-          ]
+            symphony_repo_key: @symphony_repo_key,
+            gh_runner: unread_gh()
+          ],
+          opts
+        )
       )
     end
 
-    # Answers `gh pr view` with the head `head` and its `checks`, and the head's workflow runs with none.
-    defp gh(head, checks) do
-      fn
-        ["pr", "view", @pr_url, "--json", _fields], _opts ->
-          {Jason.encode!(%{"url" => @pr_url, "headRefOid" => head, "statusCheckRollup" => checks}), 0}
+    # A `gh` that answers the pull request's checks as `checks` say, and tells the test it was asked.
+    defp ci_gh(head, checks) do
+      recipient = self()
 
-        ["api" | _endpoint], _opts ->
-          {Jason.encode!(%{"workflow_runs" => []}), 0}
+      fn args, _opts ->
+        send(recipient, {:gh_read, args})
+        {Jason.encode!(%{"url" => @pr_url, "headRefOid" => head, "statusCheckRollup" => checks}), 0}
       end
     end
 
-    # The third case's proof names a test the checkout lacks; its walkthrough has the one step.
-    defp record_missing!(test) do
-      record_proof!(1, test)
-      "## User walkthrough\n\n1. Run it.\n"
+    defp unread_gh, do: fn args, _opts -> flunk("the pass read CI: gh #{inspect(args)}") end
+
+    defp make_all(status, conclusion), do: %{"name" => "make-all", "workflowName" => "make-all", "status" => status, "conclusion" => conclusion}
+
+    test "starts the agent with the step proved, reading no CI, whether the checks passed, run, failed or are absent" do
+      for checks <- [[make_all("COMPLETED", "SUCCESS")], [make_all("IN_PROGRESS", nil)], [make_all("COMPLETED", "FAILURE")], []] do
+        RunStore.delete_ticket_state(@issue_id)
+        clear_store!()
+        record_proof!(1, "test/check_test.exs")
+        {workspace, head} = named_workspace!()
+
+        assert :ok = run_named(workspace, @named_walkthrough, gh_runner: ci_gh(head, checks), run_id: "run-proof-#{System.unique_integer([:positive])}")
+
+        refute_received {:gh_read, _args}
+        assert_received {:qa_agent_run, job, %Schema{}}
+        assert [%{number: 1, proof: %{by: :test, test: "test/check_test.exs"}}] = job.proofs
+        assert_received {:memory_tracker_state_update, @issue_id, "Merging"}
+        assert [%{outcome: "pass", head_sha: ^head} | _] = verdicts()
+      end
     end
 
-    defp make_all(status, conclusion) do
-      %{"name" => "make-all", "workflowName" => "make-all", "status" => status, "conclusion" => conclusion, "detailsUrl" => @run_url}
+    test "the prompt says the step is proved and not to read CI for it, and the report names its test, never a passed check" do
+      {workspace, head} = named_workspace!()
+
+      assert :ok = run_named(workspace, @named_walkthrough, [])
+
+      assert_received {:qa_agent_run, job, %Schema{}}
+      prompt = QaAgent.prompt(job, nil)
+      assert prompt =~ "Do not walk those steps and do not read CI for them."
+      assert prompt =~ "Steps a named test proves (proved, do not walk them):\n- 1. Run `symphony check` → it passes. Proved by: `test/check_test.exs`\n"
+      assert prompt =~ "Steps to walk (`Proved by: QA`, or no proof named):\n- 2. Open the dashboard → it looks right. Proved by: QA\n"
+      refute prompt =~ "gh run list --commit"
+      refute prompt =~ "is in the checkout"
+
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ "### Pre-checks\n\n- **proved** step 1: proved by `test/check_test.exs`, recorded on the ticket"
+      refute report =~ "passed on"
+      refute report =~ "is in the checkout"
+      assert [%{outcome: "pass", head_sha: ^head}] = verdicts()
     end
 
-    test "a passed check decides a pass whose only walked step is unprovable here" do
+    test "a proof recorded in the older form naming a check is proved by its test, whatever the check" do
+      proofs =
+        for check <- ["make-all", "ci", "macos-e2e"] do
+          RunStore.delete_ticket_state(@issue_id)
+          clear_store!()
+          record_proof!(1, "#{check} › test/check_test.exs")
+          {workspace, _head} = named_workspace!()
+
+          assert :ok = run_named(workspace, @named_walkthrough, run_id: "run-old-form-#{check}")
+          assert_received {:qa_agent_run, job, %Schema{}}
+          {job.proofs, Enum.map(job.journey.steps, & &1.proof)}
+        end
+
+      assert [{[%{number: 1, proof: %{by: :test, test: "test/check_test.exs"}}], [%{by: :test, test: "test/check_test.exs"}, %{by: :qa}]}] = Enum.uniq(proofs)
+    end
+
+    test "a recorded proof decides a pass whose only walked step is unprovable here" do
       {workspace, head} = named_workspace!()
 
       steps = [%{name: "Open the dashboard", status: "unprovable", details: "the app's playbook is not in this pass", evidence: []}]
       blocked = %{verdict: :blocked, summary: "", steps: steps, findings: [], reason: "the app is not in this pass"}
       Process.put(:qa_agent_result, {:ok, %{result: blocked, tokens: %{}}})
 
-      settings = app_repo_settings(%{"proof_check" => "make-all"})
-      assert :ok = run_named(workspace, @named_walkthrough, settings: settings, gh_runner: gh(head, [make_all("COMPLETED", "SUCCESS")]))
+      assert :ok = run_named(workspace, @named_walkthrough, settings: app_repo_settings())
 
       assert_received {:memory_tracker_state_update, @issue_id, "Merging"}
       assert [%{outcome: "pass", head_sha: ^head}] = verdicts()
     end
 
-    test "a passed check is confirmed before the agent: the prompt says not to walk it and the report links it" do
-      {workspace, head} = named_workspace!()
-
-      assert :ok = run_named(workspace, @named_walkthrough, gh_runner: gh(head, [make_all("COMPLETED", "SUCCESS")]))
-
-      assert_received {:qa_agent_run, job, %Schema{}}
-      assert [%{status: :pass, url: @run_url}] = job.proofs
-
-      prompt = QaAgent.prompt(job, nil)
-      assert prompt =~ "Symphony confirmed every step a named\nautomated test proves before you started"
-      assert prompt =~ "Do not walk those steps and do not read their checks again."
-
-      assert prompt =~
-               "- 1. Run `symphony check` → it passes. Proved by: `make-all` › test/check_test.exs: pass, `make-all` passed on `#{String.slice(head, 0, 12)}` and `test/check_test.exs` is in the checkout (#{@run_url})\n"
-
-      assert prompt =~ "Steps to walk (`Proved by: QA`, or no proof named):\n- 2. Open the dashboard → it looks right. Proved by: QA\n"
-      refute prompt =~ "gh run list --commit"
-
-      assert_received {:memory_tracker_state_update, @issue_id, "Merging"}
-      assert_received {:memory_tracker_comment, @issue_id, report}
-      assert report =~ "### Pre-checks"
-      assert report =~ "- **pass** step 1 (Proved by: `make-all` › test/check_test.exs): `make-all` passed on `#{String.slice(head, 0, 12)}` and `test/check_test.exs` is in the checkout (#{@run_url})"
-      assert [%{outcome: "pass", head_sha: ^head}] = verdicts()
-    end
-
-    test "a groomed ticket's check a test proves is confirmed on the head, whatever its description says" do
-      {workspace, head} = named_workspace!()
-      # Its one check: the pass that confirms it leaves nothing open, so the ticket merges.
+    test "a groomed ticket's check a test proves is proved and not walked, in a repo with no proof check" do
+      {workspace, _head} = named_workspace!()
+      # Its one check: the pass leaves nothing open, so the ticket merges.
       groom!(%{@groomed_plan | checks: Enum.take(@groomed_plan.checks, 1)})
       prove_check!("c1", "test/check_test.exs")
 
-      assert :ok = run_named(workspace, "No walkthrough.", gh_runner: gh(head, [make_all("COMPLETED", "SUCCESS")]))
+      assert :ok = run_named(workspace, "No walkthrough.", [])
 
       assert_received {:qa_agent_run, job, %Schema{}}
-      assert [%{status: :pass, url: @run_url, step: %{number: 1, check_id: "c1", text: "[c1] `symphony check` passes."}}] = job.proofs
+      assert [%{number: 1, check_id: "c1", text: "[c1] `symphony check` passes.", proof: %{by: :test, test: "test/check_test.exs"}}] = job.proofs
       assert_received {:memory_tracker_state_update, @issue_id, "Merging"}
     end
 
-    test "a groomed ticket's proof that failed on the head fails the pass before any agent runs" do
-      {workspace, head} = named_workspace!()
-      groom!()
-      prove_check!("c1", "test/check_test.exs")
-
-      assert :ok = run_named(workspace, "No walkthrough.", gh_runner: gh(head, [make_all("COMPLETED", "FAILURE")]))
-
-      refute_received {:qa_agent_run, _job, _settings}
-      assert [%{outcome: "fail", head_sha: ^head}] = verdicts()
-    end
-
-    test "a ticket whose steps no event proves reads no check and QA walks every step" do
+    test "a ticket whose steps no event proves hands nothing on and QA walks every step" do
       clear_store!()
       {workspace, _head} = named_workspace!()
-      unused = fn args, _opts -> flunk("gh should not run: #{inspect(args)}") end
 
-      assert :ok = run_named(workspace, "## User walkthrough\n\n1. Run `symphony check`. Proved by: `test/check_test.exs`\n", gh_runner: unused)
+      assert :ok = run_named(workspace, "## User walkthrough\n\n1. Run `symphony check`. Proved by: `test/check_test.exs`\n", [])
 
       assert_received {:qa_agent_run, job, %Schema{}}
       assert job.proofs == []
@@ -797,109 +775,26 @@ defmodule SymphonyElixir.QaVerificationPassTest do
       refute report =~ "### Pre-checks"
     end
 
-    test "a failed check, a check that never ran, or a missing test fails to Rework naming the step, with no agent run" do
-      for {checks, description, expected} <- [
-            {[make_all("COMPLETED", "FAILURE")], @named_walkthrough, "`make-all` failed on"},
-            {[], @named_walkthrough, "`make-all` did not run on"},
-            {[make_all("COMPLETED", "SUCCESS")], "the QA pre-check's test file", "`the QA pre-check's test file` is not in the checkout"}
-          ] do
-        RunStore.delete_ticket_state(@issue_id)
-        {workspace, head} = named_workspace!()
-        description = if description == @named_walkthrough, do: description, else: record_missing!(description)
-
-        # Each case is a pass of its own: the report renders the findings that pass recorded.
-        assert :ok = run_named(workspace, description, gh_runner: gh(head, checks), run_id: "run-pre-check-#{System.unique_integer([:positive])}")
-
-        refute_received {:qa_agent_run, _, _}
-        assert_received {:memory_tracker_state_update, @issue_id, "Rework"}
-        assert_received {:memory_tracker_comment, @issue_id, report}
-        assert report =~ "**Verdict:** fail → Rework"
-        assert report =~ "### Pre-checks\n\n- **fail** step 1 (Proved by: `make-all` › "
-        assert report =~ "### Findings\n\n- Step 1 (Proved by: `make-all` › "
-        assert report =~ expected
-        assert [%{outcome: "fail", head_sha: ^head} | _] = verdicts()
-      end
-    end
-
-    test "a description's `Proved by:` line naming another repo's check proves nothing: the pre-check reads the events" do
+    test "a description's `Proved by:` line naming another repo's check proves nothing: only the events do" do
       clear_store!()
       {workspace, _head} = named_workspace!()
-      unused = fn args, _opts -> flunk("gh should not run: #{inspect(args)}") end
       description = "## User walkthrough\n\n1. Run it. Proved by: ci › test/x_test.exs\n2. Open the dashboard → it looks right.\n"
 
-      assert :ok = run_named(workspace, description, gh_runner: unused)
+      assert :ok = run_named(workspace, description, [])
 
       assert_received {:qa_agent_run, job, %Schema{}}
       assert job.proofs == []
       assert Enum.map(job.journey.steps, & &1.proof) == [%{by: :qa}, %{by: :qa}]
     end
 
-    test "a repo without a proof check reads no check: QA walks every step" do
+    test "a pass with no playbook that applies is blocked and keeps the proved steps' lines" do
       {workspace, _head} = named_workspace!()
-      unused = fn args, _opts -> flunk("gh should not run: #{inspect(args)}") end
 
-      assert :ok = run_named(workspace, @named_walkthrough, gh_runner: unused, settings: settings!())
-
-      assert_received {:qa_agent_run, job, %Schema{}}
-      assert job.proofs == []
-      assert Enum.map(job.journey.steps, & &1.proof) == [%{by: :qa}, %{by: :qa}]
-      assert QaAgent.prompt(job, nil) =~ "walk every step, whatever its `Proved by:` line says"
-    end
-
-    test "a check still running waits for CI, then reports blocked past the wait's limit" do
-      {workspace, head} = named_workspace!()
-      runner = gh(head, [make_all("IN_PROGRESS", nil)])
-
-      log =
-        capture_log(fn ->
-          assert {:error, {:ci_pending, _info}} = run_named(workspace, @named_walkthrough, gh_runner: runner)
-        end)
-
-      assert log =~ "waits for the named checks on #{String.slice(head, 0, 12)}: make-all"
-      refute_received {:qa_agent_run, _, _}
-      refute_received {:memory_tracker_comment, _, _}
-      assert verdicts() == []
-
-      # The orchestrator records when the wait on this head started; a minute in, the run still waits.
-      TicketSignals.record(@repo_key, @issue_id, CiWait.start_signal(), %{sha: head})
-      soon = DateTime.add(DateTime.utc_now(), 60, :second)
-
-      assert {:error, {:ci_pending, %{sha: ^head, run: "the QA pass", runs: [%{workflow_name: "make-all", url: @run_url}]}}} =
-               run_named(workspace, @named_walkthrough, gh_runner: runner, now: soon)
-
-      # Past the limit, the pass is blocked with the reason, and retried like any blocked pass.
-      later = DateTime.add(DateTime.utc_now(), div(CiWait.limit_ms(), 1000) + 60, :second)
-      assert :ok = run_named(workspace, @named_walkthrough, gh_runner: runner, now: later)
-
-      refute_received {:qa_agent_run, _, _}
-      assert_received {:memory_tracker_comment, @issue_id, report}
-      assert report =~ "**Verdict:** blocked → QA (blocked, retrying)"
-      assert report =~ "Reason: the named checks were still running after 61 minutes of waiting: step 1: `make-all` is still running on"
-      assert report =~ "- **pending** step 1 (Proved by: `make-all` › test/check_test.exs)"
-      assert [%{outcome: "blocked", head_sha: ^head}] = verdicts()
-    end
-
-    test "CI the pre-check cannot read blocks the pass" do
-      {workspace, head} = named_workspace!()
-      refused = fn _args, _opts -> {"HTTP 502", 1} end
-
-      assert :ok = run_named(workspace, @named_walkthrough, gh_runner: refused)
-
-      refute_received {:qa_agent_run, _, _}
-      assert_received {:memory_tracker_comment, @issue_id, report}
-      assert report =~ "Reason: the QA pre-check could not read CI on the PR head:"
-      assert [%{outcome: "blocked", head_sha: ^head}] = verdicts()
-    end
-
-    test "a pass with no playbook that applies is blocked and keeps the pre-check lines" do
-      {workspace, head} = named_workspace!()
-
-      runner = gh(head, [make_all("COMPLETED", "SUCCESS")])
-      assert :ok = run_named(workspace, @named_walkthrough, gh_runner: runner, qa_policy: NoPlaybookPolicy)
+      assert :ok = run_named(workspace, @named_walkthrough, qa_policy: NoPlaybookPolicy)
 
       assert_received {:memory_tracker_comment, @issue_id, report}
       assert report =~ "Reason: no QA playbook applies to this change"
-      assert report =~ "- **pass** step 1"
+      assert report =~ "- **proved** step 1"
     end
   end
 
@@ -907,7 +802,7 @@ defmodule SymphonyElixir.QaVerificationPassTest do
   # branch into the PR after the approve. `origin` is a bare repo holding the PR head where GitHub
   # keeps it, `refs/pull/816/head`.
   describe "the workspace synced to the PR head" do
-    # The walkthrough's step 1 is proved by an event, so each run reads CI on the PR head first.
+    # The walkthrough's step 1 is proved by an event.
     setup do
       clear_store!()
       record_proof!(1, "test/check_test.exs")
@@ -937,39 +832,6 @@ defmodule SymphonyElixir.QaVerificationPassTest do
 
       {workspace, head, pr_head, origin}
     end
-
-    # Answers `gh pr view` like `gh/2`, but the PR's head moves when it is first asked: `origin`'s PR
-    # ref gets a new commit, made in a scratch clone, as an upkeep merge landing after the sync would.
-    defp moving_gh(origin, checks) do
-      moved = start_supervised!({Agent, fn -> nil end})
-
-      fn
-        ["pr", "view", @pr_url, "--json", _fields], _opts ->
-          head =
-            Agent.get_and_update(moved, fn
-              nil -> origin |> move_pr_head!() |> then(&{&1, &1})
-              sha -> {sha, sha}
-            end)
-
-          {Jason.encode!(%{"url" => @pr_url, "headRefOid" => head, "statusCheckRollup" => checks}), 0}
-
-        ["api" | _endpoint], _opts ->
-          {Jason.encode!(%{"workflow_runs" => []}), 0}
-      end
-    end
-
-    defp move_pr_head!(origin) do
-      clone = origin <> "-clone-#{System.unique_integer([:positive])}"
-      git!(["clone", "-q", origin, clone], System.tmp_dir!())
-      git!(["fetch", "-q", "origin", "refs/pull/816/head"], clone)
-      git!(["reset", "-q", "--hard", "FETCH_HEAD"], clone)
-      commit!(clone, "Merge origin/main into auto/TP-816 again")
-      git!(["push", "-q", "origin", "HEAD:refs/pull/816/head"], clone)
-      File.rm_rf!(clone)
-      head_of!(origin)
-    end
-
-    defp head_of!(origin), do: git!(["rev-parse", "refs/pull/816/head"], origin)
 
     # GitHub's PR diff is not empty, so a workspace that finds nothing to verify is out of sync, never
     # an empty change: the walkthrough's "press Update branch, the ticket lands, no restart question".
@@ -1020,7 +882,7 @@ defmodule SymphonyElixir.QaVerificationPassTest do
     test "a workspace behind the PR head is reset to it, and the verdict binds to the PR head" do
       {workspace, _head, pr_head, _origin} = behind_pr_workspace!()
 
-      assert :ok = run_named(workspace, @named_walkthrough, gh_runner: gh(pr_head, [make_all("COMPLETED", "SUCCESS")]))
+      assert :ok = run_named(workspace, @named_walkthrough, [])
 
       assert git!(["rev-parse", "HEAD"], workspace) == pr_head
       assert_received {:qa_agent_run, %{sha: ^pr_head}, %Schema{}}
@@ -1033,7 +895,7 @@ defmodule SymphonyElixir.QaVerificationPassTest do
       {workspace, head, pr_head, _origin} = behind_pr_workspace!()
       for n <- 1..6, do: File.write!(Path.join(workspace, "notes-#{n}.txt"), "draft")
 
-      assert :ok = run_named(workspace, @named_walkthrough, gh_runner: gh(pr_head, [make_all("COMPLETED", "SUCCESS")]))
+      assert :ok = run_named(workspace, @named_walkthrough, [])
 
       assert git!(["rev-parse", "HEAD"], workspace) == head
       assert File.exists?(Path.join(workspace, "notes-6.txt"))
@@ -1085,63 +947,6 @@ defmodule SymphonyElixir.QaVerificationPassTest do
       assert log =~ "QA for TP-816 runs on its workspace head: the PR head could not be synced: {:pr_head_reset_failed, 128"
       assert_received {:qa_agent_run, %{sha: ^head}, %Schema{}}
       refute head == pr_head
-    end
-
-    test "a PR head that moves after the sync is synced again once, in the same run" do
-      {workspace, _head, _pr_head, origin} = behind_pr_workspace!()
-
-      log =
-        capture_log(fn ->
-          assert :ok = run_named(workspace, @named_walkthrough, gh_runner: moving_gh(origin, [make_all("COMPLETED", "SUCCESS")]))
-        end)
-
-      moved = head_of!(origin)
-      assert log =~ "re-syncs its workspace: the PR head moved from"
-      assert git!(["rev-parse", "HEAD"], workspace) == moved
-      assert_received {:qa_agent_run, %{sha: ^moved}, %Schema{}}
-      assert [%{outcome: "pass", head_sha: ^moved}] = verdicts()
-    end
-
-    test "a head that still differs after the sync blocks the run, as before" do
-      {workspace, _head, pr_head, _origin} = behind_pr_workspace!()
-      elsewhere = String.duplicate("f", 40)
-      runner = gh(elsewhere, [make_all("COMPLETED", "SUCCESS")])
-
-      capture_log(fn -> assert :ok = run_named(workspace, @named_walkthrough, gh_runner: runner) end)
-
-      refute_received {:qa_agent_run, _, _}
-      assert_received {:memory_tracker_comment, @issue_id, report}
-      assert report =~ ~s(Reason: the QA pre-check could not read CI on the PR head: {:pr_head_moved, "#{elsewhere}"})
-      assert [%{outcome: "blocked", head_sha: ^pr_head}] = verdicts()
-    end
-
-    test "a moved head the workspace cannot be synced to blocks the run with the reason" do
-      {workspace, head} = named_workspace!()
-      elsewhere = String.duplicate("e", 40)
-      runner = gh(elsewhere, [make_all("COMPLETED", "SUCCESS")])
-
-      capture_log(fn -> assert :ok = run_named(workspace, @named_walkthrough, gh_runner: runner) end)
-
-      assert_received {:memory_tracker_comment, @issue_id, report}
-      assert report =~ ~s(Reason: the QA pre-check could not read CI on the PR head: {:pr_head_moved, "#{elsewhere}", {:pr_head_fetch_failed, "refs/pull/816/head")
-      assert [%{outcome: "blocked", head_sha: ^head}] = verdicts()
-    end
-
-    test "local changes made before a moved head is synced are never reset" do
-      {workspace, _head, pr_head, origin} = behind_pr_workspace!()
-      gh = moving_gh(origin, [make_all("COMPLETED", "SUCCESS")])
-
-      dirtying_gh = fn args, opts ->
-        File.write!(Path.join(workspace, "scratch.txt"), "draft")
-        gh.(args, opts)
-      end
-
-      capture_log(fn -> assert :ok = run_named(workspace, @named_walkthrough, gh_runner: dirtying_gh) end)
-
-      assert git!(["rev-parse", "HEAD"], workspace) == pr_head
-      refute_received {:qa_agent_run, _, _}
-      assert_received {:memory_tracker_comment, @issue_id, report}
-      assert report =~ "and was not reset to it, because it has local changes (?? scratch.txt)"
     end
   end
 

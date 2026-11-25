@@ -12,9 +12,9 @@ defmodule SymphonyElixir.TicketJourney do
       would ever prove it. A step's number is the check's place in the plan, so one check has one
       number whoever reads it;
     * an `outcome` check is an acceptance criterion;
-    * a `check.proved` with `by: test` is the proof of its check, which the QA pre-check confirms on
-      the PR head as it confirms a walkthrough step's recorded proof; QA walks every other `qa`
-      check on each head it judges. A waived check is nobody's to prove, so it is no step and no
+    * a `check.proved` with `by: test` is the proof of its check, complete once recorded as a
+      walkthrough step's recorded proof is (CI runs the test and gates the merge): QA does not walk
+      it, and walks every other `qa` check on each head it judges. A waived check is nobody's to prove, so it is no step and no
       criterion;
     * the prompt carries `## Ask`, `## Plan` and `## Checks` (`plan_text/1`).
 
@@ -63,31 +63,31 @@ defmodule SymphonyElixir.TicketJourney do
 
   @doc """
   The steps of the ticket, in order, each with the proof recorded for it: QA's to walk, or a named
-  test's when one was recorded and the repo has a `proof_check`. For a groomed ticket they are its
+  test's when one was recorded. For a groomed ticket they are its
   `qa` checks and every other check QA proves (`proof: qa` or `design`); else the numbered steps of the description's `## User walkthrough`.
   """
-  @spec steps(ticket(), String.t() | nil) :: [step()]
-  def steps(ticket, proof_check \\ nil) do
+  @spec steps(ticket()) :: [step()]
+  def steps(ticket) do
     if groomed?(ticket) do
       numbered = numbered(ticket)
-      numbered |> walked() |> proved(numbered, proof_check)
+      numbered |> walked() |> proved(numbered)
     else
-      walkthrough_steps(ticket, proof_check)
+      walkthrough_steps(ticket)
     end
   end
 
   @doc """
-  The steps a recorded test proves, from the ticket's events alone: the QA pre-check's input. For
-  a groomed ticket they are the checks, of any kind, a `check.proved` with `by: test` names. With
-  no `proof_check` there are none.
+  The steps a recorded test proves, from the ticket's events alone: what a QA pass hands on as
+  proved. For a groomed ticket they are the checks, of any kind, a `check.proved` with `by: test`
+  names.
   """
-  @spec proof_steps(ticket(), String.t() | nil) :: [step()]
-  def proof_steps(ticket, proof_check) do
+  @spec proof_steps(ticket()) :: [step()]
+  def proof_steps(ticket) do
     if groomed?(ticket) do
       numbered = numbered(ticket)
-      numbered |> Enum.map(&step/1) |> proved(numbered, proof_check) |> Enum.filter(&Walkthrough.named_test?/1)
+      numbered |> Enum.map(&step/1) |> proved(numbered) |> Enum.filter(&Walkthrough.named_test?/1)
     else
-      Walkthrough.proof_steps(Walkthrough.recorded_proofs(id(ticket)), proof_check)
+      Walkthrough.proof_steps(Walkthrough.recorded_proofs(id(ticket)))
     end
   end
 
@@ -101,17 +101,17 @@ defmodule SymphonyElixir.TicketJourney do
   end
 
   @doc """
-  The journey a groomed ticket gives QA (`SymphonyElixir.QaVerification.journey/3`): its `qa`
+  The journey a groomed ticket gives QA (`SymphonyElixir.QaVerification.journey/2`): its `qa`
   checks as the steps and as the text. Nil for a ticket that is not groomed, whose journey is read
   from its description.
   """
   @typedoc "What QA verifies: where it comes from, its text and its steps."
   @type journey :: %{source: String.t(), text: String.t(), steps: [step()], groomed: true}
 
-  @spec journey(ticket(), String.t() | nil, String.t()) :: journey() | nil
-  def journey(ticket, proof_check, label \\ "the ticket") do
+  @spec journey(ticket(), String.t()) :: journey() | nil
+  def journey(ticket, label \\ "the ticket") do
     if groomed?(ticket) do
-      steps = steps(ticket, proof_check)
+      steps = steps(ticket)
       %{source: "the QA checks of #{label}'s plan", text: journey_text(steps), steps: steps, groomed: true}
     end
   end
@@ -123,10 +123,10 @@ defmodule SymphonyElixir.TicketJourney do
   The text of the steps QA walks, those no recorded test proves: "" when a test proves every one,
   nil when the ticket has no step. A walkthrough with no numbered step is walked whole.
   """
-  @spec walked_text(ticket(), String.t() | nil) :: String.t() | nil
-  def walked_text(ticket, proof_check) do
+  @spec walked_text(ticket()) :: String.t() | nil
+  def walked_text(ticket) do
     if groomed?(ticket) do
-      case steps(ticket, proof_check) do
+      case steps(ticket) do
         [] -> nil
         steps -> unproved_text(steps)
       end
@@ -136,7 +136,7 @@ defmodule SymphonyElixir.TicketJourney do
       case section && Walkthrough.steps(section) do
         nil -> nil
         [] -> section
-        steps -> steps |> recorded(ticket, proof_check) |> unproved_text()
+        steps -> steps |> recorded(ticket) |> unproved_text()
       end
     end
   end
@@ -476,22 +476,21 @@ defmodule SymphonyElixir.TicketJourney do
   end
 
   # The tests recorded for the checks, laid over `steps` as a walkthrough's recorded proofs are.
-  defp proved(steps, numbered, proof_check) do
+  defp proved(steps, numbered) do
     tests =
       for {%{proved_by: %{by: "test", test: test}}, number} <- numbered, is_binary(test), do: %{step: number, test: test}
 
-    Walkthrough.with_recorded_proofs(steps, tests, proof_check)
+    Walkthrough.with_recorded_proofs(steps, tests)
   end
 
-  defp walkthrough_steps(ticket, proof_check) do
+  defp walkthrough_steps(ticket) do
     case Walkthrough.section(description(ticket)) do
       nil -> []
-      text -> text |> Walkthrough.steps() |> recorded(ticket, proof_check)
+      text -> text |> Walkthrough.steps() |> recorded(ticket)
     end
   end
 
-  defp recorded(steps, ticket, proof_check),
-    do: Walkthrough.with_recorded_proofs(steps, Walkthrough.recorded_proofs(id(ticket)), proof_check)
+  defp recorded(steps, ticket), do: Walkthrough.with_recorded_proofs(steps, Walkthrough.recorded_proofs(id(ticket)))
 
   # -- the prompt's text -----------------------------------------------------------------
 
