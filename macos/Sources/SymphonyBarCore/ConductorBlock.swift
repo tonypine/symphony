@@ -222,6 +222,15 @@ struct BlockFields: Decodable {
         return ((try? container.decodeIfPresent(Double.self, forKey: BlockKey(key))) ?? nil).map { Int($0.rounded()) }
     }
 
+    /// A number as it was written, a fraction kept: 0.42 reads 0.42, 3 reads 3.0.
+    func decimal(_ key: String) -> Double? { (try? container.decodeIfPresent(Double.self, forKey: BlockKey(key))) ?? nil }
+
+    /// A text as it was written, its leading and trailing whitespace kept (a code snippet's indentation); nil when blank.
+    func verbatim(_ key: String) -> String? {
+        guard let text = (try? container.decodeIfPresent(String.self, forKey: BlockKey(key))) ?? nil else { return nil }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : text
+    }
+
     func flag(_ key: String) -> Bool? { (try? container.decodeIfPresent(Bool.self, forKey: BlockKey(key))) ?? nil }
 
     func map(_ key: String) -> BlockFields? { (try? container.decodeIfPresent(BlockFields.self, forKey: BlockKey(key))) ?? nil }

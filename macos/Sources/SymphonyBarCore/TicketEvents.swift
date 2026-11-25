@@ -189,6 +189,17 @@ public struct TicketEventsPayload: Equatable {
         public var messageID: String?
         /// A plan's version (`plan.written`): 1 for the one Grooming wrote, higher for each change.
         public var version: Int?
+        /// What an evidence shows (`evidence`'s `caption`), the QA step it was recorded in (`step`) and where that step
+        /// was proved (`environment`: `fixture` or `live`).
+        public var caption: String?
+        public var step: String?
+        public var environment: String?
+        /// The values an evidence measured (`measures`).
+        public var measures: [TicketMeasure] = []
+        /// A code review verdict's findings (`verdict.recorded`'s `findings`).
+        public var findings: [ReviewFinding] = []
+        /// What a run changed (`run.changed`): its heads, commits and files.
+        public var changes: RunChanges?
 
         enum CodingKeys: String, CodingKey {
             case kind, outcome, exit, stepId, title, reason, returnsTo, returnsToTitle, questionId, model, effort, tokens, durationMs
@@ -260,6 +271,13 @@ public struct TicketEventsPayload: Equatable {
                 messageID: text(.messageId),
                 version: number(.version)
             )
+            let fields = BlockFields(decoder)
+            caption = fields?.text("caption")
+            step = fields?.text("step")
+            environment = fields?.text("environment")
+            measures = TicketMeasure.list(fields, "measures")
+            findings = ReviewFinding.list(fields)
+            changes = RunChanges(fields: fields)
         }
     }
 

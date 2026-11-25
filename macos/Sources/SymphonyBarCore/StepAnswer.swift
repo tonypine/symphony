@@ -10,6 +10,8 @@ public struct StepAnswer: Equatable {
         public var status: String?
         public var expected: String?
         public var actual: String?
+        /// The values the step measured, each with its number and unit.
+        public var measures: [TicketMeasure] = []
 
         /// The status when it says more than the step's own state does ("plan_mismatch"); nil for "passed",
         /// "failed" and "blocked", which the state says (`judgement`).
@@ -122,11 +124,15 @@ public struct StepAnswer: Equatable {
     /// The answer a step's payload holds; nil when it holds none.
     init?(fields: BlockFields) {
         let result = fields.map("result").flatMap { map -> Result? in
-            let read = Result(status: map.text("status"), expected: map.text("expected"), actual: map.text("actual"))
-            return read.status == nil && read.expected == nil && read.actual == nil ? nil : read
+            let read = Result(
+                status: map.text("status"), expected: map.text("expected"), actual: map.text("actual"), measures: TicketMeasure.list(map, "measures")
+            )
+            return read.status == nil && read.expected == nil && read.actual == nil && read.measures.isEmpty ? nil : read
         }
         let results = fields.list("results").compactMap { item -> CheckResult? in
-            let read = Result(status: item.text("status"), expected: item.text("expected"), actual: item.text("actual"))
+            let read = Result(
+                status: item.text("status"), expected: item.text("expected"), actual: item.text("actual"), measures: TicketMeasure.list(item, "measures")
+            )
             return read.status == nil ? nil : CheckResult(step: item.number("step"), result: read)
         }
         let plan = fields.map("plan").flatMap { map -> Plan? in
