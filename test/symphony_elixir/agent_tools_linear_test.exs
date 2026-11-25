@@ -2555,7 +2555,10 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       refute Map.has_key?(change, :move)
 
       :ok = SymphonyElixir.RunStore.clear()
-      assert {:error, {:invalid_human_action, message}} = request_human_action(context, human_action_scope(), %{}, attrs)
+
+      assert {:error, {:invalid_human_action, message}} =
+               request_human_action(context, human_action_scope(), %{}, attrs)
+
       assert message =~ "sends the pull request back to review unchanged, but the ticket is in In Progress, not Rework"
       assert Agent.get(registry, & &1.human_actions) == 1
     end
