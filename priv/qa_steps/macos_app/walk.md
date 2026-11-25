@@ -20,7 +20,10 @@ How to drive the app:
   setting's `width` and `height`, or no size for the target). At most three launched apps run at once.
 - Judge and screenshot every step at the size the app is in, and name it in the step's `viewport`.
   Only when the brief's `also` names another appearance or size, judge the step there too.
-- Find elements with `qa_ax_tree` (narrow it with `role` or `text`) and act with `qa_ax_press`. When
+- Take element names from `qa_elements` (the app's own report: each named element, its frame and
+  its parts' frames, and the app's state) and from the brief, never from a search of the code;
+  bring a named element into view with `qa_scroll_to`. Find other elements with `qa_ax_tree`
+  (narrow it with `role`, `text`, or a QA name in `text`) and act with `qa_ax_press`. When
   an element answers `unsupported`: select a table or outline row with `qa_ax_select`; press a key
   or shortcut with `qa_key` (`key`, `modifiers`); click any other control with `qa_click`; hover or
   right-click with `qa_hover` or `qa_context_menu` (judge a cursor step by `qa_hover`'s `cursor`,
@@ -48,10 +51,12 @@ How to judge:
 - Settle before you judge: call `qa_wait_check` with `seconds: 10` after a window opens, change
   focus once (raise another window, then this one), call it again with a few seconds, then read
   `qa_ax_tree`. A window can open at the right size and collapse seconds later.
-- Where the app reports a value exactly, read it from the app: positions, sizes and order from
-  `qa_ax_tree`'s frames, health from `qa_check_app`. A picture is for how a thing looks. For a
-  close look (a "2x crop"), `qa_crop` the screenshot; for an alignment or a gap a brief asks of a
-  picture ("within 1 pt"), `qa_measure` its edges in the screenshot. Both work on the pictures in
+- Where the app reports a value exactly, read it from the app: a size, a gap or an alignment
+  between named elements with `qa_measure_elements` (from the frames the app reports), the page
+  shown, the selection and the focus from `app_state` (`qa_check_app`, `qa_wait_check`), other
+  positions and order from `qa_ax_tree`'s frames, health from `qa_check_app`. A picture is for how
+  a thing looks. For a close look (a "2x crop"), `qa_crop` the screenshot; for an alignment or a
+  gap of something the app does not name, `qa_measure` its edges in the screenshot. Both work on the pictures in
   `qa-evidence/` and save or report everything themselves: never write image code or call `sips`.
 - Judge from the tree, not the window frame alone: the controls the step describes are there, with
   sensible titles and values, and content areas have a real size. An empty or collapsed window, a

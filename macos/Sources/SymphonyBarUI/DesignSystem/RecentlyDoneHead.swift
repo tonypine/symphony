@@ -63,13 +63,13 @@ public struct RecentlyDoneHead: View {
             .accessibilityValue(Self.foldValue(open: open))
             .accessibilityAddTraits([.isHeader, .isButton])
             .accessibilityAction { toggle() }
-            .accessibilityIdentifier("recently-done-head")
+            .qaName(QAElementNames.recentlyDoneHead, focused: focused)
             SegmentedControl(
                 Self.rangeLabel, selection: $range,
                 segments: HomeRead.DoneRange.allCases.map { Segment($0, $0.title) }, size: .small
             )
             .padding(.leading, queue.rangeLead)
-            .accessibilityIdentifier("recently-done-range")
+            .qaName(QAElementNames.recentlyDoneRange)
             Spacer(minLength: 0)
             let twist = RoundedRectangle(cornerRadius: queue.twistRadius, style: .continuous)
             Image(systemName: Self.twistSymbol(open: open))

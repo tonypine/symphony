@@ -112,6 +112,7 @@ public struct ProvidersPageView: View {
                                 selected: card.id == picked,
                                 action: { actions.select(card.id) }
                             )
+                            .qaName(QAElementNames.providerCard(card.id), selected: card.id == picked)
                         }
                     }
                 }
@@ -174,11 +175,13 @@ struct ProviderDetailView: View {
                     .textStyle(.secondary)
                     .foregroundStyle(DesignTokens.TextColor.secondary.color)
                     .textSelection(.enabled)
+                    .qaPart("id")
                 Spacer(minLength: 0)
                 if let move = detail.move, let action = detail.action {
                     Button(move.title) { if !sending { actions.send(action) } }
                         .directorButton(move == .resume ? .primary : .secondary, size: tokens.control, glyph: move.glyph)
                         .accessibilityLabel("\(move.title) \(detail.name)")
+                        .qaPart("move")
                 }
             }
             .frame(minHeight: tokens.idLineHeight)
@@ -186,8 +189,11 @@ struct ProviderDetailView: View {
                 .textStyle(.title)
                 .foregroundStyle(DesignTokens.TextColor.primary.color)
                 .accessibilityAddTraits(.isHeader)
+                .qaPart("name")
             ProviderSituationLine(state: detail.state)
+                .qaPart("situation")
         }
+        .qaSection(QAElementNames.providerHead)
     }
 }
 

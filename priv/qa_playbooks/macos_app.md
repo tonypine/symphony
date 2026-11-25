@@ -91,7 +91,8 @@ worktree's configured app and on apps you launched:
   going while rows load there (`at_edge: true` once nothing moves); `top`, `left` and `right`
   likewise. `dy` (or `dx`) scrolls by that many points, or lines with `unit: "line"`; positive
   `dy` goes down. It returns the rows on screen in `visible` (`first`, `last`, `count`), the
-  `scroll_bars` and, for a delta, how far the content `moved`. Use it to reach rows below the
+  `scroll_bars` and, for a delta, how far the content `moved`. To bring a named element into
+  view, use `qa_scroll_to` below instead. Use it to reach rows below the
   fold or to trigger a list's pagination: `qa_key` with arrows, `end` or `page_down` does not
   scroll a SwiftUI list, and its overlay scroll bar takes no value. It fails with
   `no_scroll_area` when nothing scrolls there, and like `qa_click` when the target is off screen
@@ -107,9 +108,12 @@ worktree's configured app and on apps you launched:
   report since launch (`crash_reports`, from `~/Library/Logs/DiagnosticReports` on the machine
   the app runs on). Pass the `page` on screen: each entry of `problems` names it and the window
   size `qa_resize_window` set. `healthy` is true when there are no problems. It works after the
-  app has exited.
+  app has exited. `app_state` is what the app itself reports it shows: the `page` (its name, such
+  as `overview`, and `page_title`), the `ticket` whose page is open, and the `selected` and
+  `focused` named elements. Read the page, the selection and the focus from it, never from a
+  picture (`null`, with `app_state_note`, for an app that reports none).
 - `qa_wait_check`: waits `seconds` (1 to 120) inside Symphony, then answers as `qa_check_app`,
-  with `waited_seconds`. Call it wherever a step or this playbook says to wait or let the app
+  with `waited_seconds` and the `app_state` the app reports after the wait. Call it wherever a step or this playbook says to wait or let the app
   settle (10 seconds after a window opens, 30 seconds a step names, the few seconds macOS takes to
   write a crash report). Never sleep in your shell: the harness blocks it, and an answer that says
   the app was healthy "after the wait" must come from this call.
@@ -138,10 +142,33 @@ worktree's configured app and on apps you launched:
   `bottom`), where each region's edge is and, for two or more on one axis, their `offset` and
   whether they are `aligned` within `within` points (1 by default). Use it for a step that asks
   for an alignment or a gap by sight ("within 1 pt").
-- Where the app reports a value exactly, take it from the app: positions, sizes and order from
-  `qa_ax_tree`'s frames, health from `qa_check_app`. A picture is for how a thing looks; `qa_crop`
-  and `qa_measure` are for that. Symphony crops and measures pictures itself: never write image
-  code, decode a PNG or call `sips`.
+- `qa_elements`: lists the named elements on screen as the app itself reports them (its QA build
+  writes the report): each element's stable `name` (also its accessibility identifier, see "QA
+  names" below), its `frame` in screen points (the points of `qa_ax_tree`'s frames and
+  `qa_click`), `visible` (some of it shows), `fully_visible` (all of it shows), `shown` (the part
+  that shows), `selected`, `focused`, and the frames of its named `parts` (a row's
+  `identifier`, `title`). It also returns the app's `state` (as `app_state` above), its `windows`
+  and `names`, the naming scheme. `prefix` (such as `queue-row-`) and `visible_only` narrow it.
+  Take element names from here and from "QA names", never from a search of the code. An app that
+  writes no report answers `qa_elements_missing`.
+- `qa_scroll_to`: brings a named element into view by its `name`: Symphony scrolls the list as
+  `qa_scroll` does until the app reports the element wholly shown, and returns it with its
+  `frame`, `parts`, `scrolls` and the app's `state`; an element taller than its list comes back
+  at once with its top shown and `partly_shown`. A row a lazy list has not drawn yet is looked for
+  `direction` (`down`, then `up`, when you name none); pass `at`, a shown element of the list,
+  when the window has more than one scroll area. It answers `qa_element_not_found` when the
+  element never shows.
+- `qa_measure_elements`: measures between two named elements, or their parts (`name:part`, such
+  as `queue-row-TP-12:title`), from the frames the app reports, never from a picture: each edge's
+  and centre's `offsets` from `a` to `b`, which are `aligned` within `within` points (0.5 by
+  default), the `gap` on each axis (negative when they overlap), the `size` difference and the
+  `distance` between their centres.
+- A value the app holds is read from the app, never judged by eye: names, sizes, gaps and
+  alignments of named elements from `qa_elements` and `qa_measure_elements` (the app's own
+  frames); the page shown, the selection and the focus from `app_state`; other positions and order
+  from `qa_ax_tree`'s frames; health from `qa_check_app`. A picture is for how a thing looks;
+  `qa_crop` and `qa_measure` are for that. Symphony crops and measures pictures itself: never
+  write image code, decode a PNG or call `sips`.
 - `qa_open_status_menu`: opens the app's status-bar menu (its menu bar item) on screen, as a
   click on the item would, and returns the menu's `window_id` and `frame` once it shows. Close it
   with `qa_key` and `key: "escape"`. Never press the status item with `qa_ax_press` or
@@ -171,6 +198,71 @@ worktree's configured app and on apps you launched:
 
 Do not edit files in the worktree, gitignored ones included (such as build caches):
 `qa_build` and `qa_launch_app` refuse a modified checkout.
+
+QA names: the stable names the app gives the elements QA walks, also their accessibility
+identifiers (`qa_ax_tree`'s `identifier`). `qa_elements` lists the ones on screen with this scheme
+(`names`); a plan names elements by them, never by a search of the code. `<ticket>` is a ticket
+identifier (`TP-12`), `<slot>` a slot's number from 1, `<n>` a place from 1, `<title>`,
+`<label>`, `<id>` and `<column>` a title, a label, an id or a column's id in lower case with
+dashes. Two elements with one name on screen are told apart from the top: the first keeps the
+name, the next is `<name>#2`.
+
+Home:
+- `queue-row-<ticket>`: a row of Home's queue; parts `number`, `handle`, `elbow`, `lead`,
+  `identifier`, `title`, `doneCount`, `dependencies`, `marks`, `repo`, `start`.
+- `done-row-<ticket>`: a row of Home's Recently done list; parts `identifier`, `title`.
+- `queue-drop-line`: the line a dragged queue row would land on.
+- `queue-done-count`: an epic row's done count, which shows or hides its done sub-tickets.
+- `recently-done-head`: the Recently done list's head, which folds it.
+- `recently-done-range`: the Recently done list's range control.
+- `slot-card-<slot>`: a running slot's card on Home; parts `lead`, `identifier`, `title`, `marks`.
+- `slot-line-<slot>`: a running slot's line in the slot strip; parts `lead`, `identifier`,
+  `title`, `marks`.
+- `epic-slot-card-<slot>`, `epic-slot-band-<slot>`, `epic-slot-done-count-<slot>`,
+  `epic-slot-upcoming-<slot>`, `epic-slot-done-<slot>`: an epic's running slot card, its band,
+  its done count, its upcoming sub-tickets and its done sub-tickets.
+
+The window and its pages' section lists:
+- `sidebar-<title>`: a row of the window's sidebar, such as `sidebar-home`; `selected` while it
+  is current.
+- `section-<title>`: a row of a page's section list (Settings' sections), such as
+  `section-notifications`; `selected` while it is current.
+
+The Inbox (Home's drawer) and every decision to answer:
+- `inbox-drawer`: the drawer; parts `title`, `close`.
+- `inbox-review-<ticket>`: the item the drawer shows; parts `header`, `badges`, `title`,
+  `actions`.
+- `inbox-action-<title>`: one of the item's action buttons, such as
+  `inbox-action-send-decision`.
+- `decision-<n>`: a decision to answer (a Question block) by its place from 1, in the Inbox, on
+  the ticket page or in the Journal; parts `question`, `story`, `options`, `option-<n>`,
+  `write-in`, `send`.
+
+The ticket page:
+- `ticket-head`: its head; parts `identifier`, `repo`, `epic`, `priority`, `label-<title>`,
+  `title`, `situation`, `moves`.
+- `ticket-decisions-line`: the decisions line (A question waits on you, Answer).
+- `ticket-decisions`: the decisions column beside the page.
+- `ticket-plan`, `ticket-brief`, `ticket-lifecycle`: the plan, brief and Lifecycle panels.
+- `ticket-timeline`: the timeline, the ticket's ledger of runs and events; parts `title`,
+  `composer`.
+- `step-<title>`: a run's step by its title, such as `step-write-the-code`; part `head`.
+- `ticket-pull-request`, `ticket-decided`: the Pull request and Decisions panels.
+- `ticket-connected`: the Connected panel; parts `epic`, `sub-tickets`, `waiting-on` (its
+  blockers), `holding-up`.
+
+Work › Tickets, Initiatives, Providers and Settings:
+- `tickets-row-<ticket>`: a row of the Tickets table; its parts are its cells by column id
+  (`<column>`); `selected` while picked.
+- `initiative-card-<ticket>`: an epic's card on Initiatives; parts `identifier`, `progress`,
+  `title`, `strip`; `selected` while picked.
+- `initiative-head`: the picked epic's story head.
+- `initiative-row-<ticket>`: a sub-ticket's row in the story; parts `number`, `mark`,
+  `identifier`, `title`, `trail`.
+- `provider-card-<id>`: a provider's card on Providers; `selected` while picked.
+- `provider-head`: the picked provider's head; parts `id`, `move`, `name`, `situation`.
+- `settings-group-<title>`: a group of settings by its title.
+- `settings-row-<label>`: one setting's row by its label; parts `label`, `line`, `control`.
 
 Servers the app talks to (a stand-in for an outside service, a proxy to the dev server Symphony
 started) run in your shell on this host; never a stub you write of the project's own server or

@@ -45,6 +45,15 @@ defmodule SymphonyElixir.QaDriver do
     point each), as a mouse does: button down at the start, a held pause,
     moves in steps, button up at the end, through the HID tap, after the same
     checks as `qa_click` at both ends;
+  - `qa_elements`, `qa_scroll_to` and `qa_measure_elements` read the element report a QA-mode
+    app writes in its QA root (`elements/<pid>.json`, see `SymphonyElixir.QaDriver.Elements`):
+    `qa_elements` lists the named elements on screen with the frames of their parts, the app's
+    state (the page shown, the ticket open, the selected and focused elements) and the naming
+    scheme; `qa_scroll_to` scrolls with the helper, as `qa_scroll` does, until the app reports a
+    named element wholly shown; `qa_measure_elements` gives the distance and the alignment between two
+    named elements or parts from their reported frames, not from a picture. `qa_check_app` and
+    `qa_wait_check` add the app's state from the same report (`app_state`). An app without the
+    report (a release build, or one from before it) answers `qa_elements_missing`;
   - `qa_crop` and `qa_measure` work on a picture already in `qa-evidence/`, on
     this host, without the QA host or any tool (`SymphonyElixir.QaDriver.Picture`):
     a crop enlarged as a new evidence picture, and distances, edges and their
@@ -275,7 +284,7 @@ defmodule SymphonyElixir.QaDriver do
 
   alias SymphonyElixir.{AgentEnv, OpenRouter, PathSafety, QaBuild, QaPolicy, Workspace}
   alias SymphonyElixir.PlaybookSettings
-  alias SymphonyElixir.QaDriver.{Checks, DevServer, DevServerLease, Gallery, Machine, Pages, Picture}
+  alias SymphonyElixir.QaDriver.{Checks, DevServer, DevServerLease, Elements, Gallery, Machine, Pages, Picture}
   alias SymphonyElixir.QaDriver.{ReleasePair, Remote, SafeHost}
 
   @evidence_dir "qa-evidence"
@@ -427,7 +436,7 @@ defmodule SymphonyElixir.QaDriver do
   @tools ~w(qa_build qa_launch_app qa_quit_app qa_screenshot qa_ax_tree qa_ax_press qa_ax_set_value qa_ax_select qa_click qa_key) ++
            ~w(qa_hover qa_context_menu qa_scroll qa_resize_window qa_check_app qa_put_file qa_put_checkout qa_api_requests qa_open_status_menu) ++
            ~w(qa_sample qa_build_release_pair qa_relaunched_app qa_update_feed qa_gallery qa_gallery_open) ++
-           ~w(qa_drag qa_crop qa_measure qa_wait_check)
+           ~w(qa_drag qa_crop qa_measure qa_wait_check qa_elements qa_scroll_to qa_measure_elements)
 
   # The QA host's OS boundary: `SymphonyElixir.QaDriver.Remote.host/1`, unless a test overrides it.
   @type host :: %{
@@ -461,14 +470,16 @@ defmodule SymphonyElixir.QaDriver do
           appearance_env: String.t(),
           appearances: [String.t()],
           api_requests_log: String.t(),
-          api_reads_log: String.t()
+          api_reads_log: String.t(),
+          elements_folder: String.t()
         }
 
   @doc """
   The QA-mode contract the driver keeps with the app: the variable naming the QA root (where
   `qa_api_requests` reads `api_requests_log`, the moves, and `api_reads_log`, the reads), the
-  one naming the read-only copy of the `api_fixtures` directory, and the appearance variable
-  with its values.
+  one naming the read-only copy of the `api_fixtures` directory, the appearance variable
+  with its values, and the folder under the QA root the app writes its element report into
+  (`elements_folder`, `<pid>.json` in it, which `qa_elements` reads).
   `SymphonyElixir.QaModeContract` renders it into agent prompts.
   """
   @spec app_contract() :: app_contract()
@@ -479,7 +490,8 @@ defmodule SymphonyElixir.QaDriver do
       appearance_env: @appearance_env,
       appearances: @appearances,
       api_requests_log: @api_requests_log,
-      api_reads_log: @api_reads_log
+      api_reads_log: @api_reads_log,
+      elements_folder: Elements.folder()
     }
   end
 
@@ -958,7 +970,40 @@ defmodule SymphonyElixir.QaDriver do
          {:ok, responding} <- responding(driver, config, pid, app) do
       health = health(pid, page, app, reports -- app.crash_reports, responding)
       GenServer.call(driver, {:checked, health["healthy"]})
-      {:ok, health}
+      # What the app holds (the page shown, the selected and focused elements) is read from its report.
+      {:ok, Map.merge(health, Elements.state_fields(Elements.read(config, app.qa_root, pid)))}
+    end
+  end
+
+  # The app's element report (`SymphonyElixir.QaDriver.Elements`), in the launch's own QA root.
+  defp run_tool("qa_elements", driver, config, args) do
+    with {:ok, pid} <- pid_argument(args),
+         {:ok, prefix} <- optional_string(args, "prefix", 200),
+         {:ok, visible_only} <- optional_boolean(args, "visible_only"),
+         {:ok, app} <- GenServer.call(driver, {:app, pid}),
+         {:ok, report} <- Elements.read(config, app.qa_root, pid) do
+      {:ok, Elements.listing(report, prefix, visible_only == true)}
+    end
+  end
+
+  defp run_tool("qa_measure_elements", driver, config, args) do
+    with {:ok, pid} <- pid_argument(args),
+         {:ok, {a, b, within}} <- Elements.measure_arguments(args),
+         {:ok, app} <- GenServer.call(driver, {:app, pid}),
+         {:ok, report} <- Elements.read(config, app.qa_root, pid) do
+      Elements.measure(report, a, b, within)
+    end
+  end
+
+  # Scrolls with the helper, as `qa_scroll` does, until the app reports the element shown.
+  defp run_tool("qa_scroll_to", driver, config, args) do
+    with {:ok, pid} <- running_pid(driver, args),
+         {:ok, request} <- Elements.scroll_arguments(args),
+         {:ok, app} <- GenServer.call(driver, {:app, pid}),
+         {:ok, helper} <- helper(driver, config) do
+      read = fn -> Elements.read(config, app.qa_root, pid) end
+      scroll = fn point, dy -> run_helper(config, helper, ["scroll", Integer.to_string(pid), point, "0,#{dy}", "pixel"]) end
+      Elements.scroll_to(request, read, scroll, config.sleep)
     end
   end
 
@@ -1828,6 +1873,13 @@ defmodule SymphonyElixir.QaDriver do
       "" -> {:ok, nil}
       value when is_binary(value) and byte_size(value) <= limit -> {:ok, value}
       _value -> tool_error("invalid_arguments", "`#{key}` must be a string of at most #{limit} bytes.")
+    end
+  end
+
+  defp optional_boolean(args, key) do
+    case Map.get(args, key) do
+      value when is_boolean(value) or is_nil(value) -> {:ok, value}
+      _value -> tool_error("invalid_arguments", "`#{key}` must be true or false.")
     end
   end
 

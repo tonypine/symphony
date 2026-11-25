@@ -86,7 +86,8 @@ public struct Sidebar<ID: Hashable>: View {
         VStack(alignment: .leading, spacing: tokens.rowGap) {
             ForEach(entries) { entry in
                 SidebarRow(
-                    entry: entry, current: entry.id == current, collapsed: collapsed, windowActive: active,
+                    entry: entry, name: QAElementNames.sidebar(entry.title), current: entry.id == current, collapsed: collapsed,
+                    windowActive: active,
                     focused: Self.showsRing(focus == entry.id, byKeyboard: modality.keyboard, windowActive: active),
                     drawn: drawn[entry.id]
                 ) {
@@ -137,6 +138,8 @@ public struct Sidebar<ID: Hashable>: View {
 /// with it too.
 struct SidebarRow<ID: Hashable>: View {
     let entry: SidebarEntry<ID>
+    /// Its QA name: `sidebar-<title>` in the window's sidebar, `section-<title>` in a page's section list.
+    let name: String
     let current: Bool
     let collapsed: Bool
     let windowActive: Bool
@@ -161,6 +164,7 @@ struct SidebarRow<ID: Hashable>: View {
         .accessibilityLabel(entry.title)
         .accessibilityValue(entry.count > 0 ? entry.spoken ?? CountBadge.spoken(entry.count) : "")
         .accessibilityAddTraits(current ? .isSelected : [])
+        .qaName(name, selected: current, focused: focused)
     }
 }
 

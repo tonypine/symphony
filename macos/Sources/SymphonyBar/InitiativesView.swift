@@ -236,12 +236,14 @@ struct EpicCard: View {
                         .textStyle(.rowTitle)
                         .monospacedDigit()
                         .foregroundStyle(DesignTokens.TextColor.primary.color)
+                        .qaPart("identifier")
                     Spacer(minLength: DesignTokens.Space.s3)
                     Text(initiative.progress)
                         .textStyle(.secondary)
                         .monospacedDigit()
                         .fixedSize()
                         .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                        .qaPart("progress")
                 }
                 if let title = initiative.title {
                     Text(title)
@@ -249,15 +251,18 @@ struct EpicCard: View {
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
                         .foregroundStyle(DesignTokens.TextColor.primary.color)
+                        .qaPart("title")
                 }
                 if !initiative.subTickets.isEmpty {
                     ProgressStrip(initiative.cardStripItems, live: false, label: initiative.progress)
+                        .qaPart("strip")
                 }
                 legend
             }
         }
         .accessibilityLabel(initiative.cardAccessibilityLabel())
         .help("Show \(initiative.identifier)'s story")
+        .qaName(QAElementNames.initiativeCard(initiative.identifier), selected: selected, focused: selected && focused)
     }
 
     @ViewBuilder private var legend: some View {
@@ -361,6 +366,7 @@ struct InitiativeStoryView: View {
                     .foregroundStyle(DesignTokens.TextColor.secondary.color)
             }
         }
+        .qaSection(QAElementNames.initiativeHead)
     }
 
     /// "3 of 26 done." and, softer, where the chain stands.
@@ -428,6 +434,7 @@ struct InitiativeStoryRow: View {
             }
         }
         .help("Open \(row.identifier)")
+        .qaName(QAElementNames.initiativeRow(row.identifier), selected: row.mark == .current)
     }
 
     /// The line under the title without its age, which the trail says.

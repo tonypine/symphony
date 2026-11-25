@@ -1038,7 +1038,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       assert %{"required" => ["path", "name", "x", "y", "width", "height"], "properties" => %{"zoom" => %{"default" => 2}}} = specs["qa_crop"]["inputSchema"]
       assert %{"properties" => %{"edges" => %{"items" => %{"properties" => %{"side" => %{"enum" => ~w(left right top bottom)}}}}}} = specs["qa_measure"]["inputSchema"]
       assert %{"required" => ["pid", "seconds"], "properties" => %{"seconds" => %{"maximum" => 120}}} = specs["qa_wait_check"]["inputSchema"]
-      assert specs["qa_measure"]["description"] =~ "prefer that: qa_ax_tree's frames give positions and sizes exactly"
+      assert specs["qa_measure"]["description"] =~ "prefer that: qa_measure_elements gives sizes, gaps and alignments of named elements exactly"
       assert specs["qa_check_app"]["description"] =~ "call qa_wait_check instead of sleeping"
 
       for {tool, args} <- [
@@ -1051,6 +1051,41 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
         assert %{"error" => %{"code" => "qa_driver_unavailable"}} = Jason.decode!(response["output"])
 
         response = DynamicTool.execute(tool, Map.put(args, "sleep", 1), issue: %Issue{id: "issue-current"}, tool_scope: :qa)
+        assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
+      end
+    end
+
+    # TP-1677: names, scrolls and measures from the app's own element report.
+    test "lists the element tools, the app state of the health checks, and leaves qa_hover and launching as they were" do
+      specs = Map.new(DynamicTool.tool_specs(:qa), &{&1["name"], &1})
+
+      assert %{"required" => ["pid"], "properties" => %{"prefix" => _, "visible_only" => %{"type" => "boolean"}}} = specs["qa_elements"]["inputSchema"]
+      assert %{"required" => ["pid", "name"], "properties" => %{"direction" => %{"enum" => ["down", "up"]}, "at" => _}} = specs["qa_scroll_to"]["inputSchema"]
+      assert %{"required" => ["pid", "a", "b"], "properties" => %{"within" => %{"default" => 0.5}}} = specs["qa_measure_elements"]["inputSchema"]
+      assert specs["qa_elements"]["description"] =~ "Take element names from here, never from a search of the code."
+      assert specs["qa_measure_elements"]["description"] =~ "from the frames the app reports, not from a picture"
+      assert specs["qa_measure_elements"]["description"] =~ "qa_crop and qa_measure stay for how a thing looks in a picture"
+      assert specs["qa_check_app"]["description"] =~ "`app_state` is what the app itself reports it shows"
+      assert specs["qa_wait_check"]["description"] =~ "`app_state`"
+
+      # qa_hover keeps its arguments, and launching on a page stays qa_launch_app's alone.
+      assert Map.keys(specs["qa_hover"]["inputSchema"]["properties"]) |> Enum.sort() == ["path", "pid", "x", "y"]
+
+      for {"qa_" <> _rest = name, spec} <- specs, name != "qa_launch_app" do
+        refute Map.has_key?(spec["inputSchema"]["properties"] || %{}, "ticket"), "#{name} takes a ticket to open"
+      end
+
+      for tool <- ~w(qa_elements qa_scroll_to qa_measure_elements), do: refute(specs[tool]["inputSchema"]["properties"]["page"])
+
+      for {tool, args} <- [
+            {"qa_elements", %{"pid" => 1, "prefix" => "queue-row-", "visible_only" => true}},
+            {"qa_scroll_to", %{"pid" => 1, "name" => "done-row-TP-1", "at" => "done-row-TP-2", "direction" => "down", "max_scrolls" => 5}},
+            {"qa_measure_elements", %{"pid" => 1, "a" => "queue-row-TP-1", "b" => "queue-row-TP-2:title", "within" => 1}}
+          ] do
+        response = DynamicTool.execute(tool, args, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
+        assert %{"error" => %{"code" => "qa_driver_unavailable"}} = Jason.decode!(response["output"])
+
+        response = DynamicTool.execute(tool, Map.put(args, "page", "Home"), issue: %Issue{id: "issue-current"}, tool_scope: :qa)
         assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
       end
     end

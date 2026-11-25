@@ -135,6 +135,7 @@ public struct DoneRow: View {
                     .fixedSize()
                     .foregroundStyle(DesignTokens.TextColor.secondary.color)
                     .frame(minWidth: QueueRow.identifierWidth, alignment: .leading)
+                    .qaPart("identifier")
                 Text(row.title)
                     .font(DesignTokens.TypeStyle.font(
                         size: DesignTokens.TypeStyle.rowTitle.size, weight: nesting?.quiet == true ? queue.quietTitleWeight : DesignTokens.Row.titleWeight
@@ -143,6 +144,7 @@ public struct DoneRow: View {
                     .truncationMode(.tail)
                     .foregroundStyle((nesting?.quiet == true ? DesignTokens.TextColor.secondary : DesignTokens.TextColor.primary).color)
                     .titleLink(row.identifier, hovered: titleHovered, open: onOpen)
+                    .qaPart("title")
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             trail
@@ -157,7 +159,7 @@ public struct DoneRow: View {
         .onHover { pointer = $0 }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(Self.accessibilityLabel(row, cells: cells))
-        .accessibilityIdentifier(Self.accessibilityIdentifier(row.identifier))
+        .qaName(Self.accessibilityIdentifier(row.identifier))
     }
 
     /// The row as VoiceOver reads it: done, the identifier and title, then the cells the place shows.
@@ -177,7 +179,7 @@ public struct DoneRow: View {
     }
 
     /// The row's identifier in the accessibility tree, which a window test finds it by.
-    public static func accessibilityIdentifier(_ ticket: String) -> String { "done-row-\(ticket)" }
+    public static func accessibilityIdentifier(_ ticket: String) -> String { QAElementNames.doneRow(ticket) }
 
     /// The cells after the title, drawn from `parts(_:epic:)` so the row draws what that function lists.
     private var trail: some View {

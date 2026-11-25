@@ -174,6 +174,8 @@ public struct DataTable<Item: Identifiable>: View {
     let open: ((Item) -> Void)?
     let secondary: ((Item) -> Void)?
     let rowMenu: ((Item) -> AnyView)?
+    /// A row's QA name (`tickets-row-<ticket>`), its cells its parts by their column's id; nil names none.
+    let qaRowName: ((Item) -> String)?
 
     @State private var cache = DataTableCache<Item>()
     @State private var scroll = DataTableScroll()
@@ -187,8 +189,10 @@ public struct DataTable<Item: Identifiable>: View {
         sort: Binding<DesignTokens.Table.Sort?> = .constant(nil), presorted: Bool = false,
         empty: DataTableEmpty = DataTableEmpty("Nothing to show."),
         surface: DesignTokens.ColorToken = DesignTokens.Surface.content, drawnAs: DataTableShown? = nil,
-        open: ((Item) -> Void)? = nil, secondary: ((Item) -> Void)? = nil, rowMenu: ((Item) -> AnyView)? = nil
+        open: ((Item) -> Void)? = nil, secondary: ((Item) -> Void)? = nil, rowMenu: ((Item) -> AnyView)? = nil,
+        qaRowName: ((Item) -> String)? = nil
     ) {
+        self.qaRowName = qaRowName
         self.label = label
         self.columns = columns
         self.rows = rows
@@ -280,7 +284,8 @@ public struct DataTable<Item: Identifiable>: View {
                         selection = item.id
                     },
                     open: open.map { open in { open(item) } },
-                    menu: rowMenu.map { $0(item) }
+                    menu: rowMenu.map { $0(item) },
+                    qaName: qaRowName?(item), qaParts: columns.map(\.id)
                 )
                 .id(item.id)
             }
@@ -527,6 +532,8 @@ private struct DataTableRowView: View {
     let select: () -> Void
     let open: (() -> Void)?
     let menu: AnyView?
+    var qaName: String?
+    var qaParts: [String] = []
 
     @State private var hovered = false
     @Environment(\.appearsActive) private var appearsActive
@@ -545,6 +552,7 @@ private struct DataTableRowView: View {
                         width: widths[column], height: DesignTokens.Table.rowHeight,
                         alignment: alignments[column] == .number ? .trailing : .leading
                     )
+                    .qaPart(ifGiven: qaName == nil ? nil : qaParts[column])
                     .background { if column == 0, pinned { pinnedBackground(fill) } }
                     .offset(x: column == 0 && pinned ? DesignTokens.Table.pinnedOffset(scrolled: scroll.x) : 0)
                     .zIndex(column == 0 ? 1 : 0)
@@ -567,6 +575,7 @@ private struct DataTableRowView: View {
         .accessibilityAddTraits(selected ? [.isSelected, .isButton] : .isButton)
         .accessibilityAction { select() }
         .accessibilityAction(named: "Open") { open?() }
+        .qaName(ifGiven: qaName, selected: selected, focused: focusRing)
     }
 
     /// The first cell's own ground while it stays in place: the table's surface under the row's fill, the row's

@@ -1,5 +1,6 @@
 import SwiftUI
 import SymphonyBarCore
+import SymphonyBarUI
 
 /// A review's scroll view that starts where the review was left, and keeps where it is. A chip the keyboard moves to
 /// scrolls the review through its position: the scroll view keeps its offset itself, and its next layout puts back a
@@ -113,6 +114,7 @@ struct InboxReviewBody: View {
         }
         .padding(DesignTokens.Space.s5)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .qaSection(QAElementNames.inboxReview(item.identifier))
         // The mentions in the review's text are chips (N1) with popovers (N2, N3).
         .environment(\.mentionReferences, item.references)
         .environment(\.openMention, OpenMentionAction(handler: openMention))
@@ -132,13 +134,13 @@ private struct ReviewHeader: View {
             // doesn't, so a narrow pane never squeezes the badges or widens the window.
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: DesignTokens.Space.s2) {
-                    badges
+                    HStack(spacing: DesignTokens.Space.s2) { badges }.qaPart("badges")
                     Spacer(minLength: DesignTokens.Space.s2)
-                    ActionButtons(toolbar: toolbar, perform: perform)
+                    ActionButtons(toolbar: toolbar, perform: perform).qaPart("actions")
                 }
                 VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-                    HStack(spacing: DesignTokens.Space.s2) { badges }
-                    ActionButtons(toolbar: toolbar, perform: perform)
+                    HStack(spacing: DesignTokens.Space.s2) { badges }.qaPart("badges")
+                    ActionButtons(toolbar: toolbar, perform: perform).qaPart("actions")
                 }
             }
             // The ticket's identifier and title open its page (D3, principle 5).
@@ -152,11 +154,13 @@ private struct ReviewHeader: View {
             .help("Open the ticket page")
             .accessibilityAddTraits(.isHeader)
             .accessibilityHint("Opens the ticket page")
+            .qaPart("title")
             // A decision's question, in the callout under the title, says what the ask would.
             if !item.isDecision {
                 ChipText(text: item.ask, color: .secondaryLabelColor)
             }
         }
+        .qaPart("header")
     }
 
     /// The kind pill, waiting time, state and repo, each kept on one line.
@@ -202,9 +206,11 @@ private struct ActionButtons: View {
                         // ⌘↩ sends a decision from anywhere in the Inbox.
                         .keyboardShortcut(button.command == .move(.decide) ? KeyboardShortcut(.return, modifiers: .command) : nil)
                         .directorButton(.primary, disabledReason: button.reason)
+                        .qaName(QAElementNames.inboxAction(button.command.title))
                 } else {
                     Button(button.command.title) { perform(button.command) }
                         .directorButton(disabledReason: button.reason)
+                        .qaName(QAElementNames.inboxAction(button.command.title))
                 }
             }
             if !toolbar.overflow.isEmpty {
@@ -361,6 +367,7 @@ private struct PlanQuestionCard: View {
                 if let text = question.question {
                     ChipText(text: text, font: DecisionType.questionFont)
                         .accessibilityAddTraits(.isHeader)
+                        .qaPart("question")
                 }
                 ForEach(Array(question.whyParagraphs.enumerated()), id: \.offset) { _, paragraph in
                     ChipText(text: paragraph)
@@ -381,12 +388,15 @@ private struct PlanQuestionCard: View {
                     narrow: narrow,
                     choose: pick
                 )
+                .qaPart("options")
                 if writeInPicked {
                     WriteInField(initialText: picks.writeIns[index] ?? "", commit: writeIn, focused: $writeInFocused)
+                        .qaPart("write-in")
                 }
             }
             .font(DesignTokens.TypeStyle.body.font)
         }
+        .qaSection(QAElementNames.decision(index + 1))
         // Picking the write-in puts the keyboard in its field.
         .onChange(of: writeInPicked) { _, picked in writeInFocused = picked }
     }

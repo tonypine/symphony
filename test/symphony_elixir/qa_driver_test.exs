@@ -1474,6 +1474,103 @@ defmodule SymphonyElixir.QaDriverTest do
       refute_received {:slept, _ms}
     end
 
+    # TP-1677: the app's element report, in its QA root on the QA host.
+    defp write_elements!(driver, pid, elements, page \\ "overview") do
+      %{qa_root: qa_root} = GenServer.call(driver, :config)
+      window = %{"number" => 7, "title" => "Symphony", "frame" => %{"x" => 0, "y" => 25, "w" => 1000, "h" => 500}, "key" => true}
+      state = %{"page" => page, "page_title" => "Home", "ticket" => nil, "selected" => ["sidebar-home"], "focused" => []}
+      report = %{"version" => 1, "at" => "2026-11-25T15:00:00Z", "pid" => pid, "windows" => [window], "state" => state, "elements" => elements, "names" => []}
+      File.mkdir_p!(Path.join(qa_root, "elements"))
+      File.write!(Path.join([qa_root, "elements", "#{pid}.json"]), Jason.encode!(report))
+    end
+
+    defp named(name, y, visible \\ true) do
+      title = %{"x" => 180, "y" => y + 8, "w" => 300, "h" => 16}
+      frame = %{"x" => 100, "y" => y, "w" => 800, "h" => 32}
+      flags = %{"selected" => false, "focused" => false}
+      Map.merge(flags, %{"name" => name, "frame" => frame, "visible" => visible, "window" => 7, "parts" => %{"title" => title}})
+    end
+
+    test "lists the named elements the app reports, with their parts' frames and its state", %{worktree: worktree} do
+      {driver, pid} = launched_app(worktree)
+
+      assert {:error, {:qa_tool, "qa_elements_missing", message}} = QaDriver.call_tool(driver, "qa_elements", %{"pid" => pid})
+      assert message =~ "The app wrote no element report in its QA root"
+
+      write_elements!(driver, pid, [named("queue-row-TP-1", 100), named("queue-row-TP-2", 700, false), named("sidebar-home", 40)])
+
+      assert {:ok, %{"elements" => elements, "count" => 3, "state" => %{"page" => "overview", "selected" => ["sidebar-home"]}}} =
+               QaDriver.call_tool(driver, "qa_elements", %{"pid" => pid})
+
+      assert %{"name" => "queue-row-TP-1", "parts" => %{"title" => %{"x" => 180, "y" => 108}}} = hd(elements)
+
+      assert {:ok, %{"elements" => [%{"name" => "queue-row-TP-1"}]}} =
+               QaDriver.call_tool(driver, "qa_elements", %{"pid" => pid, "prefix" => "queue-row-", "visible_only" => true})
+
+      assert error_code(QaDriver.call_tool(driver, "qa_elements", %{"pid" => pid, "visible_only" => "yes"})) == "invalid_arguments"
+      assert error_code(QaDriver.call_tool(driver, "qa_elements", %{"pid" => 4_242})) == "qa_pid_not_launched"
+      assert error_code(QaDriver.call_tool(driver, "qa_elements", %{})) == "invalid_arguments"
+    end
+
+    test "measures between named elements from the frames the app reports, with no picture", %{worktree: worktree} do
+      {driver, pid} = launched_app(worktree)
+      write_elements!(driver, pid, [named("queue-row-TP-1", 100), named("queue-row-TP-2", 140)])
+
+      assert {:ok, %{"aligned" => aligned, "gap" => %{"y" => 8.0}, "offsets" => %{"top" => 40.0}}} =
+               QaDriver.call_tool(driver, "qa_measure_elements", %{"pid" => pid, "a" => "queue-row-TP-1", "b" => "queue-row-TP-2"})
+
+      assert aligned == ["center_x", "left", "right"]
+
+      assert {:ok, %{"aligned" => ["center_x", "left", "right"]}} =
+               QaDriver.call_tool(driver, "qa_measure_elements", %{"pid" => pid, "a" => "queue-row-TP-1:title", "b" => "queue-row-TP-2:title", "within" => 1})
+
+      assert error_code(QaDriver.call_tool(driver, "qa_measure_elements", %{"pid" => pid, "a" => "queue-row-TP-9", "b" => "queue-row-TP-2"})) == "qa_element_not_found"
+      assert error_code(QaDriver.call_tool(driver, "qa_measure_elements", %{"pid" => pid, "a" => "queue-row-TP-1"})) == "invalid_arguments"
+      assert error_code(QaDriver.call_tool(driver, "qa_measure_elements", %{"pid" => 4_242, "a" => "a", "b" => "b"})) == "qa_pid_not_launched"
+      assert error_code(QaDriver.call_tool(driver, "qa_measure_elements", %{"a" => "a", "b" => "b"})) == "invalid_arguments"
+    end
+
+    test "scrolls a named element into view with the helper's scroll, until the app reports it shown", %{worktree: worktree} do
+      test = self()
+      scrolled = %{"scroll" => {~s({"ok":true,"moved":{"x":0,"y":247}}), 0}}
+      # The tool runs in the caller's process: the app reports again while Symphony waits after the scroll.
+      sleep = fn ms ->
+        send(test, {:slept, ms})
+        Process.get(:report_after_sleep, fn -> :ok end).()
+        :ok
+      end
+
+      {driver, pid} = launched_app(worktree, sleep: sleep, host: host(%{helper_replies: scrolled}))
+      write_elements!(driver, pid, [named("done-row-TP-1", 700, false)])
+      Process.put(:report_after_sleep, fn -> write_elements!(driver, pid, [named("done-row-TP-1", 300)]) end)
+
+      assert {:ok, %{"name" => "done-row-TP-1", "frame" => %{"y" => 300}, "scrolls" => 1, "state" => %{"page" => "overview"}}} =
+               QaDriver.call_tool(driver, "qa_scroll_to", %{"pid" => pid, "name" => "done-row-TP-1"})
+
+      assert_received {:cmd, @helper, ["scroll", _pid, "500,275", "0,247", "pixel"], _opts}
+      assert_received {:slept, 400}
+
+      assert error_code(QaDriver.call_tool(driver, "qa_scroll_to", %{"pid" => pid})) == "invalid_arguments"
+      assert error_code(QaDriver.call_tool(driver, "qa_scroll_to", %{"pid" => 4_242, "name" => "x"})) == "qa_pid_not_launched"
+    end
+
+    test "says which page the app shows, and what is selected, after the wait", %{worktree: worktree} do
+      ping = %{"ax-ping" => {~s({"ok":true,"responding":true}), 0}}
+      {driver, pid} = launched_app(worktree, sleep: fn _ms -> :ok end, host: host(%{helper_replies: ping}))
+
+      assert {:ok, %{"healthy" => true, "app_state" => nil, "app_state_note" => note}} =
+               QaDriver.call_tool(driver, "qa_wait_check", %{"pid" => pid, "seconds" => 2})
+
+      assert note =~ "The app wrote no element report"
+
+      write_elements!(driver, pid, [named("sidebar-home", 40)], "tickets")
+
+      assert {:ok, %{"healthy" => true, "app_state" => %{"page" => "tickets", "selected" => ["sidebar-home"], "at" => "2026-11-25T15:00:00Z"}}} =
+               QaDriver.call_tool(driver, "qa_wait_check", %{"pid" => pid, "seconds" => 2})
+
+      assert {:ok, %{"app_state" => %{"page" => "tickets"}}} = QaDriver.call_tool(driver, "qa_check_app", %{"pid" => pid})
+    end
+
     test "crops and measures a picture the pass saved, without the QA host", %{worktree: worktree} do
       driver = start_driver(worktree)
       black_box = fn x, y -> if x in 4..9 and y in 2..7, do: <<0, 0, 0, 255>>, else: <<255, 255, 255, 255>> end

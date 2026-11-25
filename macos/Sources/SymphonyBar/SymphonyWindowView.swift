@@ -1139,6 +1139,10 @@ struct SymphonyWindowView: View {
         }
         .onChange(of: model.inboxDrawerShown) { model.fitDrawer(windowWidth: windowWidth) }
         .onChange(of: model.presentsInboxDrawer) { model.fitDrawer(windowWidth: windowWidth) }
+        // QA mode's element report says which page and ticket show (TP-1677); nothing outside QA mode.
+        .onChange(of: "\(model.selection.rawValue) \(model.shownTicket ?? "")", initial: true) {
+            QAElementRecorder.current?.setPage(model.selection, ticket: model.shownTicket)
+        }
     }
 }
 

@@ -925,13 +925,14 @@ struct TicketPageBody: View {
             // The desktop shows the Questions in their own column: no line, no Answer.
             if !desktop {
                 DecisionsLineView(line: line, open: sheetOpen, focus: answerFocus, answer: answer, review: actions.review)
+                    .qaSection(QAElementNames.ticketDecisionsLine)
             }
             // The plan first on a groomed ticket, in the brief's place; else the brief, above the Lifecycle. A ticket with
             // neither a brief nor a description has none.
             if let plan = PlanPanelModel.build(page.detailsRead) {
-                if !plan.isEmpty { PlanPanel(model: plan, open: briefOpen) }
+                if !plan.isEmpty { PlanPanel(model: plan, open: briefOpen).qaSection(QAElementNames.ticketPlan) }
             } else if let brief = BriefPanelModel.build(page.detailsRead, runs: page.history?.runs ?? [:], reference: page.reference, calendar: calendar) {
-                BriefPanel(model: brief, open: briefOpen)
+                BriefPanel(model: brief, open: briefOpen).qaSection(QAElementNames.ticketBrief)
             }
             // An epic with no stage of its own draws its tokens alone, and nothing before it used any (TP-1652).
             if let lifecycle = page.lifecycleRead?.lifecycle {
@@ -942,13 +943,16 @@ struct TicketPageBody: View {
                 if model.drawn {
                     LifecycleSection(model: model)
                         .equatable()
+                        .qaSection(QAElementNames.ticketLifecycle)
                 }
             }
             VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
                 TimelineTitle(marks: page.marksRead)
+                    .qaPart("title")
                 // Writing to the ticket: one box above the first entry; none on a Done or Cancelled ticket with no plan.
                 if page.takesMessages {
                     TimelineComposer(composer: message, focus: messageFocus, drawnAs: composerDrawnAs, send: actions.sendMessage)
+                        .qaPart("composer")
                         .id(TicketPageView.composerAnchor)
                 }
                 Group {
@@ -967,6 +971,7 @@ struct TicketPageBody: View {
                 .id(page.identifier)
                 .environment(\.readSession, ReadSessionAction(page.identifier, actions.readSession))
             }
+            .qaSection(QAElementNames.ticketTimeline)
         }
     }
 
@@ -989,16 +994,19 @@ struct TicketPageBody: View {
             if let pullRequest = PullRequestPanelModel.build(page.factsRead?.pullRequest) {
                 PullRequestPanel(model: pullRequest, open: actions.openURL)
                     .equatable()
+                    .qaSection(QAElementNames.ticketPullRequest)
             }
             // A ticket connected to nothing has no Connected panel.
             if !connected.isEmpty {
                 ConnectedPanel(model: connected, openTicket: actions.openTicket, openInitiatives: actions.openInitiatives)
                     .equatable()
+                    .qaSection(QAElementNames.ticketConnected)
             }
             // Decisions only once the person has answered something on the ticket.
             if !decided.isEmpty {
                 DecisionsPanel(model: decided)
                     .equatable()
+                    .qaSection(QAElementNames.ticketDecided)
             }
         }
         .frame(width: width, alignment: .topLeading)
@@ -1118,6 +1126,7 @@ struct TicketDecisionsColumn: View {
         }
         .clipShape(shape)
         .overlay(shape.strokeBorder(DesignTokens.Surface.separator.color))
+        .qaSection(QAElementNames.ticketDecisions)
     }
 }
 
@@ -1161,6 +1170,7 @@ struct TicketPageHeader: View {
                         ActionRail(rail: rail(moves, omitting: [.answer]), perform: move)
                             .layoutPriority(1)
                             .accessibilitySortPriority(Self.order.moves)
+                            .qaPart("moves")
                     }
                 } else {
                     identifierLine
@@ -1175,6 +1185,7 @@ struct TicketPageHeader: View {
                     .help(page.headerTitle ?? "")
                     .accessibilityAddTraits(.isHeader)
                     .accessibilitySortPriority(Self.order.title)
+                    .qaPart("title")
             }
             Group {
                 if let situation = page.situation {
@@ -1186,6 +1197,7 @@ struct TicketPageHeader: View {
                 }
             }
             .accessibilitySortPriority(Self.order.situation)
+            .qaPart("situation")
             if let note = page.repositoryPausedNote {
                 Label(note, systemImage: "pause.circle")
                     .font(DesignTokens.TypeStyle.body.font)
@@ -1196,10 +1208,12 @@ struct TicketPageHeader: View {
             if !desktop, let moves = page.moves {
                 ActionRail(rail: rail(moves), perform: move)
                     .accessibilitySortPriority(Self.order.moves)
+                    .qaPart("moves")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
+        .qaName(QAElementNames.ticketHead)
     }
 
     /// VoiceOver's order across the header, highest first: identity chips, title, situation, moves.
@@ -1218,9 +1232,11 @@ struct TicketPageHeader: View {
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
                 .frame(height: Chip.height)
-            if let repo = page.repoKey { Chip(repo, kind: .repo) }
+                .qaPart("identifier")
+            if let repo = page.repoKey { Chip(repo, kind: .repo).qaPart("repo") }
             if let epic = page.epicChip {
                 Chip(epic.shortName, kind: .epic, maxTextWidth: EpicChip.maxTextWidth, fullText: epic.fullTitle)
+                    .qaPart("epic")
             }
             if let priority = page.headerPriority {
                 // `.ident-sep`: the shared hairline, 14 pt tall.
@@ -1229,10 +1245,12 @@ struct TicketPageHeader: View {
                     .frame(height: Chip.height)
                 PriorityMark(priority)
                     .frame(height: Chip.height)
+                    .qaPart("priority")
             }
             ForEach(page.headerLabels, id: \.self) { label in
                 Chip(label, kind: .label(.idle))
                     .frame(height: Chip.height)
+                    .qaPart("label-" + QAElementNames.slug(label))
             }
         }
         .accessibilityElement(children: .contain)

@@ -68,13 +68,17 @@ public struct QuestionBlock<Evidence: View>: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
             if let question = action.question {
-                if action.options.isEmpty {
-                    Card(title: "Question") { ChipText(text: question) }
-                } else {
-                    QuestionCallout(question: question, kicker: kicker)
+                Group {
+                    if action.options.isEmpty {
+                        Card(title: "Question") { ChipText(text: question) }
+                    } else {
+                        QuestionCallout(question: question, kicker: kicker)
+                    }
                 }
+                .qaPart("question")
             }
             StoryCard(paragraphs: action.whyParagraphs, ifUnanswered: action.ifUnanswered)
+                .qaPart("story")
             evidence
             if !action.options.isEmpty {
                 Card(title: "Options", hint: answerable && showsKeys && !narrow ? action.keyHint : nil) {
@@ -90,16 +94,19 @@ public struct QuestionBlock<Evidence: View>: View {
                     )
                     if writeInPicked {
                         WriteInField(initialText: picks.writeIns[index] ?? "", commit: writeIn, focused: $writeInFocused)
+                            .qaPart("write-in")
                             .id(WriteInField.scrollID(decision: index))
                             .transition(.opacity)
                     }
                 }
+                .qaPart("options")
                 // The own-words field unfolds on the fold's spring; under Reduce Motion it is there at once.
                 .animation(.motion(.fold, reduceMotion: reduceMotion), value: writeInPicked)
                 // Picking the own-words card, by a click or its number key, puts the keyboard in its field.
                 .onChange(of: writeInPicked) { _, picked in writeInFocused = picked }
                 if answerable, let send {
                     QuestionSendArea(send: QuestionSend(question: action, decision: index, picks: picks), action: send)
+                        .qaPart("send")
                 }
             }
             if !action.steps.isEmpty {
@@ -116,6 +123,8 @@ public struct QuestionBlock<Evidence: View>: View {
                 }
             }
         }
+        // QA names the block by its place from 1 (TP-1677).
+        .qaSection(QAElementNames.decision(index + 1))
     }
 }
 
@@ -265,6 +274,7 @@ public struct OptionCardList: View {
                 ) {
                     choose(card.index)
                 }
+                .qaPart("option-\(card.index + 1)")
             }
         }
         .accessibilityRepresentation {

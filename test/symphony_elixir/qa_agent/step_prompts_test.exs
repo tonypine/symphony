@@ -42,4 +42,41 @@ defmodule SymphonyElixir.QaAgent.StepPromptsTest do
 
     refute prompt("plan") =~ "(such as a drag)"
   end
+
+  # TP-1677: names come from the app's report, a scroll reaches a name, a measure reads the app's frames.
+  test "plan and walk sessions take names from qa_elements, scroll by name and measure named elements; pictures stay for looks" do
+    playbook = String.replace(@playbook, ~r/\s+/, " ")
+
+    for {name, text, tools} <- [
+          {"plan", prompt("plan"), ~w(qa_elements qa_scroll_to qa_measure_elements)},
+          {"walk", prompt("walk"), ~w(qa_elements qa_scroll_to qa_measure_elements)},
+          {"design_check", prompt("design_check"), ~w(qa_elements qa_measure_elements)},
+          {"review", prompt("review"), ~w(qa_measure_elements)},
+          {"the playbook", playbook, ~w(qa_elements qa_scroll_to qa_measure_elements)}
+        ],
+        tool <- tools do
+      assert text =~ "`#{tool}`", "#{name} names no #{tool}"
+    end
+
+    assert prompt("plan") =~ "never by a name found by searching the code"
+    assert prompt("walk") =~ "Take element names from `qa_elements`"
+    assert prompt("walk") =~ "never from a search of the code; bring a named element into view with `qa_scroll_to`"
+    assert prompt("walk") =~ "a size, a gap or an alignment between named elements with `qa_measure_elements`"
+    assert prompt("design_check") =~ "`qa_measure` the edges in the picture only for what the app does not report"
+    assert playbook =~ "A value the app holds is read from the app, never judged by eye"
+    assert playbook =~ "the page shown, the selection and the focus from `app_state`"
+
+    # The playbook quotes the app's naming scheme, so a plan names elements without the code.
+    # Every page QA walks has names: Home, the Inbox, the ticket page, Tickets, Initiatives, Providers, Settings.
+    for pattern <-
+          ~w(queue-row-<ticket> done-row-<ticket> queue-drop-line queue-done-count recently-done-head recently-done-range slot-card-<slot> slot-line-<slot> sidebar-<title>) ++
+            ~w(section-<title> inbox-drawer inbox-review-<ticket> inbox-action-<title> decision-<n> ticket-head ticket-timeline step-<title> ticket-connected) ++
+            ~w(tickets-row-<ticket> initiative-card-<ticket> initiative-row-<ticket> provider-card-<id> settings-row-<label>) do
+      assert playbook =~ "`#{pattern}`", "the playbook's QA names lack #{pattern}"
+    end
+
+    # Pictures stay for how a thing looks; qa_hover and qa_scroll keep their entries.
+    assert playbook =~ "`qa_crop` and `qa_measure` are for that"
+    assert playbook =~ "`qa_scroll`: scrolls the list or scroll view at an element"
+  end
 end

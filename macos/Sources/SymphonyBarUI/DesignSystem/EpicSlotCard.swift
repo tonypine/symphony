@@ -156,11 +156,11 @@ public struct EpicSlotCard: View {
     public static func upcomingTitle(open: Bool) -> String { open ? "Hide what is to come" : "Show what is to come" }
 
     /// The identifiers a window test finds the parts by.
-    public static func identifier(_ slot: Int) -> String { "epic-slot-card-\(slot)" }
-    public static func bandIdentifier(_ slot: Int) -> String { "epic-slot-band-\(slot)" }
-    public static func doneCountIdentifier(_ slot: Int) -> String { "epic-slot-done-count-\(slot)" }
-    public static func upcomingIdentifier(_ slot: Int) -> String { "epic-slot-upcoming-\(slot)" }
-    public static func doneListIdentifier(_ slot: Int) -> String { "epic-slot-done-\(slot)" }
+    public static func identifier(_ slot: Int) -> String { QAElementNames.epicSlotCard(slot) }
+    public static func bandIdentifier(_ slot: Int) -> String { QAElementNames.epicSlotBand(slot) }
+    public static func doneCountIdentifier(_ slot: Int) -> String { QAElementNames.epicSlotDoneCount(slot) }
+    public static func upcomingIdentifier(_ slot: Int) -> String { QAElementNames.epicSlotUpcoming(slot) }
+    public static func doneListIdentifier(_ slot: Int) -> String { QAElementNames.epicSlotDone(slot) }
 
     public var body: some View {
         let queue = DesignTokens.HomeQueue.self
@@ -185,7 +185,7 @@ public struct EpicSlotCard: View {
         .overlay(shape.strokeBorder(DesignTokens.Surface.separator.color, lineWidth: queue.epicFrameStroke).allowsHitTesting(false))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Self.accessibilityLabel(slot, epic: epic, ticket: ticket.identifier))
-        .accessibilityIdentifier(Self.identifier(slot))
+        .qaName(Self.identifier(slot))
     }
 
     // MARK: - The band
@@ -227,7 +227,7 @@ public struct EpicSlotCard: View {
             .accessibilityAction(named: Text(Self.upcomingTitle(open: showsUpcoming)), onToggleUpcoming)
             .accessibilityAction { onToggleUpcoming() }
             .openTicketAction(epic.identifier, open: onOpen)
-            .accessibilityIdentifier(Self.bandIdentifier(slot))
+            .qaName(Self.bandIdentifier(slot))
             doneCount
             Text(epic.sinceText)
                 .textStyle(.secondary)
@@ -274,7 +274,7 @@ public struct EpicSlotCard: View {
         .accessibilityValue(showsDone ? "Shown" : "Hidden")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { onToggleDone() }
-        .accessibilityIdentifier(Self.doneCountIdentifier(slot))
+        .qaName(Self.doneCountIdentifier(slot))
     }
 
     // MARK: - The lists
@@ -300,7 +300,7 @@ public struct EpicSlotCard: View {
         .frame(height: Self.listHeight(rows: epic.doneRows.count))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Done sub-tickets of \(epic.identifier)")
-        .accessibilityIdentifier(Self.doneListIdentifier(slot))
+        .qaName(Self.doneListIdentifier(slot))
     }
 
     private static let listSpace = "epic-slot-upcoming"
@@ -323,7 +323,7 @@ public struct EpicSlotCard: View {
                 .clipped()
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel("Sub-tickets to come of \(epic.identifier)")
-                .accessibilityIdentifier(Self.upcomingIdentifier(slot))
+                .qaName(Self.upcomingIdentifier(slot))
             )
         }
         return AnyView(ScrollView(.vertical) {
@@ -352,7 +352,7 @@ public struct EpicSlotCard: View {
         .frame(height: Self.listHeight(rows: rows.count))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Sub-tickets to come of \(epic.identifier)")
-        .accessibilityIdentifier(Self.upcomingIdentifier(slot)))
+        .qaName(Self.upcomingIdentifier(slot)))
     }
 
     /// The drag of the row at `index` in the list's own space: each move follows the pointer, the end drops it.

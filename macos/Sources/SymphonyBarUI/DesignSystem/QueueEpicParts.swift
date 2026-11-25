@@ -102,7 +102,7 @@ public struct QueueDoneCount: View {
             .accessibilityValue(pressed ? "Shown" : "Hidden")
             .accessibilityAddTraits(.isButton)
             .accessibilityAction { toggle() }
-            .accessibilityIdentifier("queue-done-count")
+            .qaName(QAElementNames.queueDoneCount)
     }
 }
 

@@ -200,6 +200,8 @@ struct EpicBlockView: View {
                 } trail: {
                     if let state = row.state { Text(Self.words(state)) }
                 }
+                // Not a named element for QA: its parts don't land on the timeline around it.
+                .environment(\.qaElementName, nil)
             }
         }
     }

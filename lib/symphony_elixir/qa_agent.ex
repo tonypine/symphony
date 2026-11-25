@@ -480,6 +480,10 @@ defmodule SymphonyElixir.QaAgent do
           let a page settle first (a wide window can collapse seconds after it opens), call
           `qa_wait_check` with the `seconds` and the page: Symphony waits, then checks. Never sleep in
           your shell.
+        - What the app holds is read from the app: the page shown, the selection and the focus from
+          the `app_state` of `qa_check_app` and `qa_wait_check`, the names of elements from
+          `qa_elements`, and sizes, gaps and alignments of named elements from `qa_measure_elements`.
+          A picture is for how a thing looks.
         """
     end
   end

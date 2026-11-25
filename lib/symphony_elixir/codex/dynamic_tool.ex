@@ -834,7 +834,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "description" =>
         "Measure inside a picture a qa_* tool saved, in points: with `points`, the distance between two points (`dx`, `dy`, `distance`); with `edges`, where each region's edge is " <>
           "(its first or last pixel, from its `side`, unlike the region's corner on that side by more than `tolerance`) and, for two or more edges on one axis, `offset` (how far apart they are), `aligned` (offset within `within` points, 1 by default) and, for two, `distance`. " <>
-          "Use it for a step that asks for an alignment or a gap in a picture (\"within 1 pt\"). When the app reports the value itself, prefer that: qa_ax_tree's frames give positions and sizes exactly; a picture is for how a thing looks.",
+          "Use it for a step that asks for an alignment or a gap in a picture (\"within 1 pt\"). When the app reports the value itself, prefer that: qa_measure_elements gives sizes, gaps and alignments of named elements exactly, from the app's own frames; a picture is for how a thing looks.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -1089,7 +1089,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "qa_check_app",
       "description" =>
-        "Check a launched app's health: still running, answers an accessibility request within 10 s (not hung), and no new crash report in ~/Library/Logs/DiagnosticReports since launch. Works after the app exited. `problems` names the page you pass and the window size qa_resize_window set. To wait first (a settle, a crash report still being written), call qa_wait_check instead of sleeping.",
+        "Check a launched app's health: still running, answers an accessibility request within 10 s (not hung), and no new crash report in ~/Library/Logs/DiagnosticReports since launch. Works after the app exited. `problems` names the page you pass and the window size qa_resize_window set. `app_state` is what the app itself reports it shows (`page`, `ticket`, the `selected` and `focused` named elements): read the page, the selection and the focus from it, not from a picture; it is null, with `app_state_note`, for an app that reports none. To wait first (a settle, a crash report still being written), call qa_wait_check instead of sleeping.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -1104,7 +1104,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "name" => "qa_wait_check",
       "description" =>
         "Wait `seconds` (1 to 120) inside Symphony, then check the app as qa_check_app does, in one call: use it wherever a step says to wait or let the app settle (a window that may collapse seconds after it opens, a crash report macOS writes a few seconds after a crash, a step that waits 30 seconds). " <>
-          "Never sleep in your shell instead. Returns qa_check_app's answer with `waited_seconds`.",
+          "Never sleep in your shell instead. Returns qa_check_app's answer with `waited_seconds`, and `app_state`: the page, ticket, selected and focused named elements as the app reports them after the wait.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -1113,6 +1113,57 @@ defmodule SymphonyElixir.Codex.DynamicTool do
           "pid" => @pid_property,
           "seconds" => %{"type" => "integer", "minimum" => 1, "maximum" => 120, "description" => "How long to wait before the check."},
           "page" => %{"type" => "string", "maxLength" => 200, "description" => "The page, view or panel on screen, named in the problems."}
+        }
+      }
+    },
+    %{
+      "name" => "qa_elements",
+      "description" =>
+        "List the named elements of a launched app as the app itself reports them (its QA build writes the report): each element's stable `name` (also its accessibility identifier, such as queue-row-TP-12), its `frame` in screen points (as qa_ax_tree frames and qa_click points), `visible` (some of it shows), `fully_visible` (all of it shows) and `shown` (the part that shows), `selected`, `focused` and the frames of its named `parts` (a row's identifier, title). Two elements with one name are told apart from the top: the second is `name#2`. " <>
+          "Also returns the app's `state` (the page shown, the ticket open, the selected and focused names), its `windows` and `names`: the naming scheme with each pattern's parts. Take element names from here, never from a search of the code. A row a lazy list has not drawn is not listed: bring it into view with qa_scroll_to. Fails with qa_elements_missing for an app that writes no report (a release build).",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["pid"],
+        "properties" => %{
+          "pid" => @pid_property,
+          "prefix" => %{"type" => "string", "maxLength" => 200, "description" => "Only the names starting with this, such as `queue-row-`."},
+          "visible_only" => %{"type" => "boolean", "default" => false, "description" => "Only the elements that show."}
+        }
+      }
+    },
+    %{
+      "name" => "qa_scroll_to",
+      "description" =>
+        "Bring a named element (a name from qa_elements, or one its `names` scheme gives, such as done-row-TP-12) into view: Symphony scrolls the list as qa_scroll does until the app reports the element wholly shown, and returns it with its frame, parts, `scrolls` and the app's `state`; an element taller than its list comes back with `partly_shown`. " <>
+          "A row the list has not drawn yet is looked for `direction` (down, then up, when you name none). Pass `at`, a shown element of the list, when the window holds more than one scroll area. Fails with qa_element_not_found when it never shows.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["pid", "name"],
+        "properties" => %{
+          "pid" => @pid_property,
+          "name" => %{"type" => "string", "maxLength" => 200, "description" => "The element's name."},
+          "at" => %{"type" => "string", "maxLength" => 200, "description" => "A shown element in the list to scroll, whose middle the scroll is posted at. Defaults to the middle of the window."},
+          "direction" => %{"type" => "string", "enum" => ["down", "up"], "description" => "Where to look for an element not drawn yet."},
+          "max_scrolls" => %{"type" => "integer", "minimum" => 1, "maximum" => 50, "default" => 20}
+        }
+      }
+    },
+    %{
+      "name" => "qa_measure_elements",
+      "description" =>
+        "Measure between two named elements, or their parts (`name:part`, such as queue-row-TP-12:title), from the frames the app reports, not from a picture: each edge's and centre's `offsets` from `a` to `b` (left, right, top, bottom, center_x, center_y), which of them are `aligned` within `within` points (0.5 by default), the `gap` between them on each axis (negative when they overlap), the difference in `size` and the `distance` between their centres. " <>
+          "Use it for every size, gap and alignment a step asks for; qa_crop and qa_measure stay for how a thing looks in a picture.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["pid", "a", "b"],
+        "properties" => %{
+          "pid" => @pid_property,
+          "a" => %{"type" => "string", "maxLength" => 200, "description" => "An element's name, or `name:part`."},
+          "b" => %{"type" => "string", "maxLength" => 200, "description" => "An element's name, or `name:part`."},
+          "within" => %{"type" => "number", "minimum" => 0, "maximum" => 100, "default" => 0.5, "description" => "Points within which an edge or centre counts as aligned."}
         }
       }
     },
@@ -1421,6 +1472,9 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_resize_window" => ["pid", "path", "width", "height"],
     "qa_check_app" => ["pid", "page"],
     "qa_wait_check" => ["pid", "seconds", "page"],
+    "qa_elements" => ["pid", "prefix", "visible_only"],
+    "qa_scroll_to" => ["pid", "name", "at", "direction", "max_scrolls"],
+    "qa_measure_elements" => ["pid", "a", "b", "within"],
     "qa_drag" => ["pid", "from", "to", "hold_ms", "steps"],
     "qa_crop" => ["path", "name", "x", "y", "width", "height", "zoom", "scale"],
     "qa_measure" => ["path", "points", "edges", "within", "tolerance", "scale"],

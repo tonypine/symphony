@@ -60,10 +60,12 @@ public struct SettingsRow<Trailing: View>: View {
                     .foregroundStyle(tokens.label(disabled: disabled).color)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityHidden(true)
+                    .qaPart("label")
                 if let footnote {
                     FieldFootnote(footnote: footnote)
                         .frame(maxWidth: DesignTokens.Measure.width(DesignTokens.Measure.narrowCharacters, for: .secondary), alignment: .leading)
                         .accessibilityHidden(true)
+                        .qaPart("line")
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -74,11 +76,13 @@ public struct SettingsRow<Trailing: View>: View {
                 .notAllowedPointer(disabled)
                 .help(disabledReason ?? "")
                 .accessibilityHint(Self.spokenHint(footnote))
+                .qaPart("control")
         }
         .padding(.vertical, tokens.verticalPadding)
         .padding(.horizontal, tokens.horizontalPadding)
         .animation(.motion(.standard, reduceMotion: reduceMotion), value: footnote)
         .accessibilityElement(children: .contain)
+        .qaName(QAElementNames.settingsRow(label))
     }
 
     /// What VoiceOver reads after the control: the line under the label.
@@ -138,6 +142,7 @@ public struct SettingsGroup<Content: View>: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Self.shown(title) ?? "")
+        .qaName(ifGiven: Self.shown(title).map(QAElementNames.settingsGroup))
     }
 
     /// A title or footer that has words.

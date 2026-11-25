@@ -43,7 +43,8 @@ public struct SectionList<ID: Hashable>: View {
         VStack(alignment: .leading, spacing: tokens.rowGap) {
             ForEach(entries) { entry in
                 SidebarRow(
-                    entry: entry, current: entry.id == shown, collapsed: false, windowActive: active,
+                    entry: entry, name: QAElementNames.section(entry.title), current: entry.id == shown, collapsed: false,
+                    windowActive: active,
                     focused: Sidebar<ID>.showsRing(focus == entry.id, byKeyboard: modality.keyboard, windowActive: active),
                     drawn: drawn[entry.id]
                 ) {

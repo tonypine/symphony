@@ -33,9 +33,10 @@ The Component Gallery (the app's own views drawn from made-up inputs, built with
 
 For a close look at a part (an icon, a gap, a border, a "2x crop" the plan asks for), `qa_crop` the
 screenshot or gallery picture and judge the crop. For an alignment or a spacing the design states
-("within 1 pt"), `qa_measure` the edges in the picture. Where the app reports a value exactly
-(`qa_ax_tree`'s frames give positions and sizes), take it from there; a picture is for how a thing
-looks. Never write image code or call `sips`.
+("within 1 pt"), measure it from the app where it names the elements: `qa_measure_elements`
+gives sizes, gaps and alignments between named elements (`qa_elements` lists them) from the frames
+the app reports, and `qa_ax_tree`'s frames give other positions and sizes. `qa_measure` the edges
+in the picture only for what the app does not report; a picture is for how a thing looks. Never write image code or call `sips`.
 
 Judge each picture side by side with the design the plan names (the ticket's or the parent's
 Screens, else `docs/design/design-system.md`): layout, spacing, alignment, truncation, contrast,
