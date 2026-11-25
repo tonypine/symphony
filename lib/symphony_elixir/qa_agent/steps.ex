@@ -20,8 +20,8 @@ defmodule SymphonyElixir.QaAgent.Steps do
   **Machine steps** run without a model (`PhaseSteps.run_machine_step/3`), with the QA pass's own
   commands (`Phases.qa_commands/0`) run here, through the QA driver the pass holds:
 
-  - `symphony:qa_pre_checks`: the pre-checks' results (`SymphonyElixir.QaPreCheck`), which ran
-    before the pass started: the steps a named test proves;
+  - `symphony:qa_pre_checks`: the steps a recorded test proves (`SymphonyElixir.QaPreCheck`),
+    proved as recorded, with nothing read from CI;
   - `symphony:qa_build`: `qa_build`, the app Symphony built for the commit; a build that failed
     fails the step;
   - `symphony:qa_launch`: `qa_launch_app` on the default fixtures, then `qa_check_app` once the app
@@ -248,7 +248,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
     }
   end
 
-  # The walkthrough steps this pass walks: those no named test proves (the pre-checks confirmed those).
+  # The walkthrough steps this pass walks: those no recorded test proves (those are proved as recorded).
   defp walked_steps(job) do
     job |> Map.get(:journey, %{}) |> Map.get(:steps, []) |> Enum.reject(&Walkthrough.named_test?/1)
   end
@@ -565,7 +565,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
 
   defp pre_checks(state) do
     case state.job |> Map.get(:proofs, []) |> QaPreCheck.report_checks() do
-      [] -> {:ok, {"No walkthrough step names a test that a check of this repo runs: QA walks every step.\n", 0}}
+      [] -> {:ok, {"No walkthrough step is proved by a recorded test: QA walks every step.\n", 0}}
       checks -> {:ok, {Enum.map_join(checks, "", &"#{&1.name}: #{&1.status}: #{&1.detail}\n"), 0}}
     end
   end
@@ -1374,7 +1374,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
       "- Playbooks: #{Enum.map_join(state.job.playbooks, ", ", & &1.kind)}",
       "- The PR's diff: `git diff origin/HEAD...HEAD` in this worktree (`origin/HEAD` is the base branch).",
       "Walkthrough steps QA walks (each needs a brief in `walk`):\n" <> walked,
-      if(checks == "", do: "No step is proved by a named test.", else: "Steps a named test proves (confirmed before the pass; do not brief them):\n" <> checks),
+      if(checks == "", do: "No step is proved by a named test.", else: "Steps a recorded test proves (proved, do not brief them):\n" <> checks),
       gallery_facts(state)
     ]
     |> Enum.join("\n")

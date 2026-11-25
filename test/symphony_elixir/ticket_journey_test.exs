@@ -61,7 +61,7 @@ defmodule SymphonyElixir.TicketJourneyTest do
       assert TicketJourney.steps(issue("No walkthrough.")) == []
       assert TicketJourney.steps(nil) == []
 
-      assert TicketJourney.journey(issue(), "make-all") == nil
+      assert TicketJourney.journey(issue()) == nil
       assert TicketJourney.plan_text(issue()) == nil
       assert TicketJourney.plan_text(nil) == nil
       assert TicketJourney.body(issue(), fn -> "the description" end) == "the description"
@@ -74,21 +74,22 @@ defmodule SymphonyElixir.TicketJourneyTest do
       assert RunStore.list_ticket_events(@issue_id, []) == []
     end
 
-    test "its recorded proofs are laid over the walkthrough's steps" do
+    test "its recorded proofs are laid over the walkthrough's steps, each proved as recorded" do
+      assert TicketJourney.proof_steps(issue()) == []
+      assert TicketJourney.walked_text(issue()) == "Open the page.\nFold the panel."
+
       proof!(2, "folds the panel")
 
-      assert [%{number: 1, proof: %{by: :qa}}, %{number: 2, proof: %{by: :test, check: "make-all", test: "folds the panel"}}] = TicketJourney.steps(issue(), "make-all")
-      assert [%{number: 2, text: "", proof: %{by: :test, check: "make-all"}}] = TicketJourney.proof_steps(issue(), "make-all")
-      assert TicketJourney.proof_steps(issue(), nil) == []
+      assert [%{number: 1, proof: %{by: :qa}}, %{number: 2, proof: %{by: :test, test: "folds the panel"}}] = TicketJourney.steps(issue())
+      assert [%{number: 2, text: "", proof: %{by: :test, test: "folds the panel"}}] = TicketJourney.proof_steps(issue())
 
-      assert TicketJourney.walked_text(issue(), "make-all") == "Open the page."
-      assert TicketJourney.walked_text(issue(), nil) == "Open the page.\nFold the panel."
-      assert TicketJourney.walked_text(issue("## User walkthrough\n\nLook at it."), nil) == "Look at it."
-      assert TicketJourney.walked_text(issue("Nothing."), nil) == nil
-      assert TicketJourney.walked_text(nil, nil) == nil
+      assert TicketJourney.walked_text(issue()) == "Open the page."
+      assert TicketJourney.walked_text(issue("## User walkthrough\n\nLook at it.")) == "Look at it."
+      assert TicketJourney.walked_text(issue("Nothing.")) == nil
+      assert TicketJourney.walked_text(nil) == nil
 
       proof!(1, "opens the page")
-      assert TicketJourney.walked_text(issue(), "make-all") == ""
+      assert TicketJourney.walked_text(issue()) == ""
     end
 
     test "whether it has a walkthrough and its acceptance list are the caller's to parse" do
@@ -125,30 +126,27 @@ defmodule SymphonyElixir.TicketJourneyTest do
       assert TicketJourney.walkthrough?(issue(), fn _description -> false end)
       assert TicketJourney.acceptance(issue(), fn _description -> ["read"] end) == ["[c1] The page shows the plan."]
 
-      assert %{source: "the QA checks of the ticket's plan", text: text, steps: [%{number: 2}, %{number: 4}]} = TicketJourney.journey(issue(), nil)
+      assert %{source: "the QA checks of the ticket's plan", text: text, steps: [%{number: 2}, %{number: 4}]} = TicketJourney.journey(issue())
       assert text =~ "2. [c2] The panel folds.\nState: A groomed ticket"
       assert text =~ "\n4. [c4] The panel matches the design."
-      assert %{source: "the QA checks of the epic's plan"} = TicketJourney.journey(issue(), nil, "the epic")
+      assert %{source: "the QA checks of the epic's plan"} = TicketJourney.journey(issue(), "the epic")
     end
 
-    test "a check a test proves is not walked, and the pre-check reads every test-proved check" do
+    test "a check a test proves is proved as recorded and not walked, whatever kind it is" do
       prove!(%{check_id: "c1", by: "test", test: "test/plan_test.exs › shows the plan"})
       prove!(%{check_id: "c2", by: "test", test: "test/plan_test.exs: folds"})
       prove!(%{check_id: "c3", by: "attached"})
       prove!(%{check_id: "c4", by: "qa"})
 
-      assert [%{number: 2, check_id: "c2", proof: %{by: :test, check: "make-all", test: "test/plan_test.exs: folds"}}, %{number: 4, proof: %{by: :qa}}] =
-               TicketJourney.steps(issue(), "make-all")
-
-      assert [%{number: 2, proof: %{by: :qa}}, %{number: 4}] = TicketJourney.steps(issue(), nil)
+      assert [%{number: 2, check_id: "c2", proof: %{by: :test, test: "test/plan_test.exs: folds"}}, %{number: 4, proof: %{by: :qa}}] =
+               TicketJourney.steps(issue())
 
       assert [
-               %{number: 1, check_id: "c1", text: "[c1] The page shows the plan.", proof: %{by: :test, check: "make-all", test: "test/plan_test.exs › shows the plan"}},
+               %{number: 1, check_id: "c1", text: "[c1] The page shows the plan.", proof: %{by: :test, test: "test/plan_test.exs › shows the plan"}},
                %{number: 2, check_id: "c2", proof: %{by: :test}}
-             ] = TicketJourney.proof_steps(issue(), "make-all")
+             ] = TicketJourney.proof_steps(issue())
 
-      assert TicketJourney.proof_steps(issue(), nil) == []
-      assert TicketJourney.walked_text(issue(), "make-all") == "[c4] The panel matches the design.\nAction: Open it\nExpect: It matches"
+      assert TicketJourney.walked_text(issue()) == "[c4] The panel matches the design.\nAction: Open it\nExpect: It matches"
     end
 
     test "the prompt's text keeps every check whole: a long ask is what gets cut, and the plan's text only after it" do
@@ -193,8 +191,8 @@ defmodule SymphonyElixir.TicketJourneyTest do
       plan!(%{@plan | checks: [@outcome]})
       assert TicketJourney.steps(issue()) == []
       refute TicketJourney.walkthrough?(issue())
-      assert TicketJourney.walked_text(issue(), "make-all") == nil
-      assert %{text: "The plan names no QA check: no step is yours to walk.", steps: []} = TicketJourney.journey(issue(), nil)
+      assert TicketJourney.walked_text(issue()) == nil
+      assert %{text: "The plan names no QA check: no step is yours to walk.", steps: []} = TicketJourney.journey(issue())
     end
 
     test "the plan's layers say whether the change shows on screen" do

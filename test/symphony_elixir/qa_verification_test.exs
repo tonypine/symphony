@@ -86,10 +86,10 @@ defmodule SymphonyElixir.QaVerificationTest do
     end
   end
 
-  describe "journey/3" do
+  describe "journey/2" do
     test "is the ticket's `## User walkthrough` when it has one" do
       assert %{source: "the ticket's `## User walkthrough`", text: "1. Run `symphony check`."} =
-               QaVerification.journey(issue(), "make-all")
+               QaVerification.journey(issue())
     end
 
     test "carries the walkthrough's steps, each QA's while no event proves it: a description's `Proved by:` line proves nothing" do
@@ -107,21 +107,21 @@ defmodule SymphonyElixir.QaVerificationTest do
       """
 
       assert %{steps: [%{number: 1, proof: %{by: :qa}, text: first}, %{number: 2, proof: %{by: :qa}}]} =
-               QaVerification.journey(issue("QA", %{description: description}), "make-all")
+               QaVerification.journey(issue("QA", %{description: description}))
 
       assert first == "Run `symphony check` → it passes. Proved by: `make-all` › `test/mix/tasks/check_test.exs`"
 
-      assert %{steps: []} = QaVerification.journey(issue("QA", %{description: "## Acceptance criteria\n\n- It works.\n"}), "make-all")
-      assert %{steps: []} = QaVerification.journey(issue("QA", %{description: nil}), "make-all")
+      assert %{steps: []} = QaVerification.journey(issue("QA", %{description: "## Acceptance criteria\n\n- It works.\n"}))
+      assert %{steps: []} = QaVerification.journey(issue("QA", %{description: nil}))
     end
 
-    test "without the repo's proof check every step is QA's to walk" do
+    test "a recorded proof proves its step in a repo with no proof check" do
       :ok = RunStore.clear()
       record_proof!(1, "test/x_test.exs")
       description = "## User walkthrough\n\n1. Run it.\n2. Read it.\n"
 
-      assert %{steps: [%{number: 1, proof: %{by: :qa}}, %{number: 2, proof: %{by: :qa}}]} =
-               QaVerification.journey(issue("QA", %{description: description}), nil)
+      assert %{steps: [%{number: 1, proof: %{by: :test, test: "test/x_test.exs"}}, %{number: 2, proof: %{by: :qa}}]} =
+               QaVerification.journey(issue("QA", %{description: description}))
     end
 
     test "reads the proofs recorded as evidence events, the latest a step's" do
@@ -140,16 +140,13 @@ defmodule SymphonyElixir.QaVerificationTest do
 
       assert %{
                steps: [
-                 %{number: 1, proof: %{by: :test, check: "make-all", test: "test/c_test.exs"}},
-                 %{number: 2, proof: %{by: :test, check: "make-all", test: "test/d_test.exs"}},
+                 %{number: 1, proof: %{by: :test, test: "test/c_test.exs"}},
+                 %{number: 2, proof: %{by: :test, test: "test/d_test.exs"}},
                  %{number: 3, proof: %{by: :qa}}
                ]
-             } = QaVerification.journey(issue("QA", %{description: description}), "make-all")
+             } = QaVerification.journey(issue("QA", %{description: description}))
 
-      assert %{steps: [%{proof: %{by: :qa}}, %{proof: %{by: :qa}}, %{proof: %{by: :qa}}]} =
-               QaVerification.journey(issue("QA", %{description: description}), nil)
-
-      journey = QaVerification.journey(issue("QA", %{id: nil, description: description}), "make-all")
+      journey = QaVerification.journey(issue("QA", %{id: nil, description: description}))
       assert %{steps: [%{proof: %{by: :qa}} | _rest]} = journey
     end
 
@@ -164,7 +161,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       :ok = RunStore.clear()
 
       assert %{steps: [%{number: 1, text: first, proof: %{by: :qa}}, %{number: 2, text: second, proof: %{by: :qa}}]} =
-               QaVerification.journey(issue("QA", %{description: description}), "make-all")
+               QaVerification.journey(issue("QA", %{description: description}))
 
       assert first =~ "and the third is unchanged."
       assert second =~ "Expected: the pre-check fails it."
@@ -174,20 +171,20 @@ defmodule SymphonyElixir.QaVerificationTest do
       description = "Some context.\n\n## Acceptance criteria\n\n- It works.\n- It is fast.\n"
 
       assert %{source: "the ticket's acceptance criteria", text: "- It works.\n- It is fast."} =
-               QaVerification.journey(issue("QA", %{description: description}), "make-all")
+               QaVerification.journey(issue("QA", %{description: description}))
     end
 
     test "asks the run to derive the journeys when the ticket names none" do
       assert %{source: "the ticket's walkthrough and acceptance criteria", text: nil} =
-               QaVerification.journey(issue("QA", %{description: "Just context."}), "make-all")
+               QaVerification.journey(issue("QA", %{description: "Just context."}))
     end
 
     test "handles a heading with no body and a ticket with no description" do
       empty = issue("QA", %{description: "## User walkthrough\n\n## Acceptance criteria\n\n- It works.\n"})
 
-      assert %{source: "the ticket's acceptance criteria", text: "- It works."} = QaVerification.journey(empty, "make-all")
+      assert %{source: "the ticket's acceptance criteria", text: "- It works."} = QaVerification.journey(empty)
 
-      assert %{text: nil} = QaVerification.journey(issue("QA", %{description: nil}), "make-all")
+      assert %{text: nil} = QaVerification.journey(issue("QA", %{description: nil}))
     end
   end
 
@@ -1066,7 +1063,7 @@ defmodule SymphonyElixir.QaVerificationTest do
     end
   end
 
-  # The QA pre-check (`SymphonyElixir.QaPreCheck`) on a ticket whose walkthrough steps name tests.
+  # Steps a pass cannot prove here (TP-1284).
   describe "steps QA cannot prove here" do
     defp run_hub(workspace, result, settings \\ hub_settings()) do
       Process.put(:qa_agent_result, {:ok, %{result: result, tokens: %{input: 1, output: 1}}})

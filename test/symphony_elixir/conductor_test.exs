@@ -318,7 +318,7 @@ defmodule SymphonyElixir.ConductorTest do
         prompt = Conductor.prompt(junction, %{})
         for action <- Answer.actions(), do: assert(prompt =~ "`#{action}`")
         assert prompt =~ "`ticket.proved_steps`"
-        assert prompt =~ "QA does not walk the"
+        assert prompt =~ "and QA does not walk it"
         assert prompt =~ "A ticket waits on one question about its stage"
       end
     end

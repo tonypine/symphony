@@ -379,7 +379,7 @@ defmodule SymphonyElixir.EpicReview do
       playbooks: playbooks,
       token_limit: settings.execution.max_tokens_per_issue,
       run_profile: Keyword.get(opts, :run_profile),
-      journey: QaVerification.journey(issue, settings.proof_check, "the epic")
+      journey: QaVerification.journey(issue, "the epic")
     }
   end
 
