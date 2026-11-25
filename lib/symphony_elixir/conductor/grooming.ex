@@ -7,7 +7,10 @@ defmodule SymphonyElixir.Conductor.Grooming do
   It is due (`due?/2`) when the run about to start is a ticket's first (an implementation run, or
   the breakdown run of a ticket labelled `plan`), the ticket holds no `plan.written` and no run
   other than the Conductor's ever started or ended on it, and fewer than 2 tries failed. A ticket
-  that has a run or a plan is never groomed, so one in flight keeps the behaviour it had.
+  that has a run or a plan is never groomed, so one in flight keeps the behaviour it had. The same
+  turn also runs before any dispatch, as soon as a person writes a message on a ticket it is due
+  on (`SymphonyElixir.Conductor.groom_now/3`): the message is answered once the plan exists, and
+  the first dispatch then finds the plan written and grooms nothing.
 
   Before the turn Symphony records the ask (`record_ask/4`): the ticket's description, word for
   word but for Symphony's own blocks, once. The turn runs in the ticket's workspace

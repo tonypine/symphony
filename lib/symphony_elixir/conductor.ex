@@ -82,7 +82,9 @@ defmodule SymphonyElixir.Conductor do
   2 failed tries (`Grooming.max_tries/0`) it starts without a plan, with a note that says why. A turn
   no provider can take now is such a try, so a ticket never waits on Grooming. A plan of shape
   `split` is carried out instead of a first run (`SymphonyElixir.Conductor.Tree`): the ticket's
-  sub-tickets are created and it waits on them.
+  sub-tickets are created and it waits on them. A person's message on a ticket that has no plan yet
+  and never ran does not wait for that dispatch: the same turn runs at once, outside any dispatch
+  (`groom_now/3`), and the message is answered once the plan is written.
 
   Two junctions belong to a groomed ticket that waits on its sub-tickets, and are met outside any
   dispatch (`tend/4`, which the orchestrator starts on a poll): `sub_ticket_ended`, each time one of
@@ -102,10 +104,11 @@ defmodule SymphonyElixir.Conductor do
   carry out, is said on the ticket in a status note and named in the turn's reply, and the next turn
   reads it in its facts (`earlier_tries`).
 
-  A person's message on a groomed ticket is answered by a turn of its own (`message/4`,
-  `SymphonyElixir.Conductor.Message`), started as the message is written and tied to no dispatch:
-  the `message` junction on the ticket, then `child_message` on its parent. One written before the
-  plan existed is answered as Grooming ends, and a turn that failed is tried again, up to 3 times.
+  A person's message on a ticket is answered by a turn of its own (`message/4`,
+  `SymphonyElixir.Conductor.Message`), started as the message is written and tied to no dispatch,
+  in any state of the ticket: the `message` junction on the ticket, then `child_message` on its
+  parent. On a ticket that was never groomed nor run, Grooming runs first (`groom_now/3`); one
+  written while Grooming ran is answered as it ends, and a turn that failed is tried again, up to 3 times.
   One turn answers every message that waits at that moment.
 
   One Conductor turn works on a ticket at a time (`exclusive/3`): the process that runs a turn holds
@@ -674,8 +677,14 @@ defmodule SymphonyElixir.Conductor do
   # is a try that failed.
   # A ticket whose plan is already a split gets no turn: the split is carried out (again), which
   # creates what is missing and leaves the ticket waiting on its sub-tickets.
+  # A ticket a message's Grooming (`groom_now/3`) planned while this dispatch waited for the lock
+  # gets no second turn: what follows a written plan follows it now (the label, the split).
   defp groom(%{issue_id: issue_id} = plan, issue, opts) do
-    if split?(issue_id), do: split(plan, issue, opts), else: groom_turn(plan, issue, opts)
+    cond do
+      split?(issue_id) -> split(plan, issue, opts)
+      TicketPlan.groomed?(issue_id) -> after_grooming(true, "answered", plan, issue, opts)
+      true -> groom_turn(plan, issue, opts)
+    end
   end
 
   defp split?(issue_id), do: match?(%{shape: "split"}, TicketPlan.current(issue_id))
@@ -699,6 +708,52 @@ defmodule SymphonyElixir.Conductor do
       _retry -> :again
     end
   end
+
+  @doc """
+  Grooms `issue` now, outside any dispatch, because a person wrote it a message before it had a
+  plan (`SymphonyElixir.Conductor.Message.tend/2`): the message is answered once the plan exists,
+  not at the ticket's first run. It is the same turn as at the first dispatch (the ask recorded
+  first, the ticket's workspace, `Grooming.write_plan/4`), while Grooming is due on a first run
+  (`Grooming.due?/2`), and it starts no run and takes no slot. A plan of shape `split` is only
+  written: the first dispatch carries it out (`Grooming.split_due?/2`). A ticket labelled `plan`
+  loses the label as at the dispatch (`Grooming.take_over/3`).
+
+  Nothing runs while another turn holds the ticket's lock, while no provider of `runs.conductor`
+  can take the turn, or while Symphony or the repository is paused: the message stays owed. A try
+  that wrote no plan is counted as at the dispatch (`Grooming.failed/3`). Always `:ok`. `opts`:
+  `plan/4`'s, `run/3`'s and `Grooming.workspace/3`'s.
+  """
+  @spec groom_now(Issue.t(), String.t() | nil, keyword()) :: :ok
+  def groom_now(%Issue{id: issue_id} = issue, repo_key, opts \\ []) do
+    due = &if(Grooming.due?(:implementation, &1), do: @grooming)
+
+    with %{} = plan <- plan_with(issue_id, repo_key, opts, due),
+         false <- Map.has_key?(plan, :unavailable) or dispatch_paused?(repo_key, opts) do
+      _groomed_or_busy = exclusive(issue_id, :skip, fn -> groom_early(plan, issue, opts) end)
+    end
+
+    :ok
+  rescue
+    error ->
+      Logger.warning("Grooming failed #{context(issue, %{issue_id: issue_id, repo_key: repo_key})}: #{Exception.message(error)}")
+      :ok
+  end
+
+  # The lock is held: a dispatch's Grooming may have written the plan while this waited, and then
+  # nothing runs. A turn the gate closed, or one that asked the person, counts no try.
+  defp groom_early(%{issue_id: issue_id, repo_key: repo_key} = plan, issue, opts) do
+    with true <- Grooming.due?(:implementation, Facts.read_events(issue_id)),
+         :ok <- Grooming.record_ask(repo_key, issue, record(issue_id, opts), Facts.events(issue_id)) do
+      case turn(in_workspace(plan, issue, opts), issue, opts) do
+        {@closed, _held, _route} -> :ok
+        {_exit, :held, _route} -> :ok
+        {exit, _held, _route} -> groomed_early(TicketPlan.groomed?(issue_id), exit, plan, issue, opts)
+      end
+    end
+  end
+
+  defp groomed_early(true, _exit, plan, issue, opts), do: Grooming.take_over(plan.repo_key, issue, Keyword.take(opts, [:tracker]))
+  defp groomed_early(false, exit, plan, issue, _opts), do: ungroomed(plan, issue, why_ungroomed(exit))
 
   defp groom_turn(%{unavailable: provider} = plan, issue, _opts) do
     ungroomed(plan, issue, "no provider of runs.conductor can take a run now (#{provider})")

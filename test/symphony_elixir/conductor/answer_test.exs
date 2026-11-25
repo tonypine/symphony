@@ -615,6 +615,15 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
       assert said(%{"ask" => true}, message: :reply) == {:error, "`update` must hold the reply to the person's message"}
     end
 
+    # TP-1641: a Linear description edit holds the whole description; `added` is what it adds.
+    test "a changed ask may name the words a description edit adds, and only a changed ask" do
+      assert {:ok, %{ask: true, added: "Keep the sort order too."}} = said(%{"update" => "Ok.", "ask" => true, "added" => " Keep the sort order too. ", "plan" => @plan})
+      assert {:ok, read} = said(%{"update" => "Ok.", "ask" => true, "added" => " ", "plan" => @plan})
+      refute Map.has_key?(read, :added)
+      assert {:ok, read} = said(%{"update" => "Ok.", "added" => "Keep the sort order too."})
+      refute Map.has_key?(read, :added)
+    end
+
     test "a question leaves the changed ask and its plan unread" do
       question = %{
         "title" => "Which list?",

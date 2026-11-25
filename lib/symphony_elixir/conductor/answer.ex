@@ -79,7 +79,9 @@ defmodule SymphonyElixir.Conductor.Answer do
       is the reply and must be there; `ask` is `true` when the message changes what is asked
       (anything else reads as `false`, and so does `true` beside a question), and then the new
       `plan` must come in the same answer, with the `reason` it changed for (cut to 1,000
-      characters); `ask: true` with no plan is refused. `resume` is `true` when the message is the
+      characters); `ask: true` with no plan is refused. With `ask: true`, `added` (optional, cut
+      to 100,000 characters) is the person's words a Linear description edit adds to the ask
+      (`SymphonyElixir.Conductor.DescriptionEdit`). `resume` is `true` when the message is the
       person's answer, in their own words, to the question the ticket is held on and says to run
       the ticket again where it stands (anything else reads as `false`, and so does `true` beside a
       question; `SymphonyElixir.Conductor.Message.settle/5`). `message: :reply` (a finished ticket's) reads the reply
@@ -151,9 +153,12 @@ defmodule SymphonyElixir.Conductor.Answer do
   @places ~w(first last)
   @operations_max 10
   @reason_max 1_000
+  # The words a Linear description edit adds to the ask, as long as an ask.
+  @added_max 100_000
   @waivers_max 20
 
   @type t :: %{
+          optional(:added) => String.t(),
           instructions: String.t() | nil,
           update: String.t() | nil,
           refs: [String.t()],
@@ -286,7 +291,8 @@ defmodule SymphonyElixir.Conductor.Answer do
          {:ok, plan} <- plan(Map.get(answer, "plan"), plan_read(plan_opt, asks?, answer), ask_person, Keyword.get(opts, :sub_tickets, :required)) do
       read = %{instructions: instructions, update: update, refs: refs, ask_person: ask_person, steer: steer, stop: stop, blocks: blocks(Map.get(answer, "blocks"))}
       resume? = message == true and Map.get(answer, "resume") == true and is_nil(ask_person)
-      {:ok, read |> Map.merge(%{route: route, move: move, plan: plan, ask: asks?, resume: resume?}) |> Map.merge(extras(answer, opts))}
+      read = read |> Map.merge(%{route: route, move: move, plan: plan, ask: asks?, resume: resume?}) |> Map.merge(extras(answer, opts))
+      {:ok, if(asks?, do: put_text(read, :added, answer, @added_max, "added"), else: read)}
     end
   end
 

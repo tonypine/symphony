@@ -160,6 +160,22 @@ defmodule SymphonyElixir.TicketObservationTest do
     assert {:ok, :unchanged} = TicketObservation.observe(repo_key, edited, now: DateTime.add(@now, 120))
   end
 
+  # TP-1641 c4: a description a read finds changed is checked for a person's edit, and only then.
+  test "a changed description is given to the description-edit check, an unchanged one is not", %{repo_key: repo_key} do
+    test = self()
+    seen = fn repo, stored, description, _opts -> send(test, {:edited, repo, stored && stored.issue_id, description}) end
+    {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: @now, description_edited: seen)
+    refute_received {:edited, _repo, _issue_id, _description}
+
+    edited = linear_issue(%{description: "## Why\n\nEdited.", updated_at: DateTime.add(@linear_at, 60)})
+    assert {:ok, :updated} = TicketObservation.observe(repo_key, edited, now: DateTime.add(@now, 60), description_edited: seen)
+    assert_received {:edited, ^repo_key, "issue-observed", "## Why\n\nEdited."}
+
+    retitled = linear_issue(%{title: "Renamed", description: "## Why\n\nEdited.", updated_at: DateTime.add(@linear_at, 120)})
+    assert {:ok, :updated} = TicketObservation.observe(repo_key, retitled, now: DateTime.add(@now, 120), description_edited: seen)
+    refute_received {:edited, _repo, _issue_id, _description}
+  end
+
   test "a sub-ticket that moves is written, at the same updatedAt", %{repo_key: repo_key} do
     {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: @now)
 

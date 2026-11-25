@@ -13,9 +13,10 @@ defmodule SymphonyElixir.TicketProjection do
 
   Before the first projection of a ticket the projector reads what the description holds now: words
   a person typed there since the ask was recorded (`unrecorded_ask/2`) are recorded as a further
-  ask, and only then is the description written. After that first projection what a person types
-  into the description in Linear is overwritten at the next one: on a groomed ticket the ask
-  changes through a message, never through the description.
+  ask, and only then is the description written. After that first projection an edit a person
+  makes in Linear is never dropped in silence: a text that is none of Symphony's own (`edited/2`)
+  goes to the ticket's Conductor as a message (`SymphonyElixir.Conductor.DescriptionEdit`), which
+  answers it on the ticket, and the next projection writes the description again.
 
   The one writer is `SymphonyElixir.Pauses.Projector`, in the pass that also writes the Decisions
   section: it writes when the text changed. `changed/2` runs that pass, and is called each time a
@@ -62,6 +63,35 @@ defmodule SymphonyElixir.TicketProjection do
     text = person_text(description)
     if text == "" or text in asks(events), do: nil, else: text
   end
+
+  @doc """
+  What a person wrote in a groomed ticket's `description` that Symphony did not write: its text
+  without Symphony's own blocks (`person_text/1`), when it is none of the projections Symphony
+  rendered from the ticket's `events` as they grew (`render/1` of each of their prefixes, so a
+  description a newer plan has not reached yet is still Symphony's), none of the asks recorded,
+  and no description edit already sent as a message. Nil otherwise, and for a ticket with no
+  projection. The text is compared whole, never diffed.
+  """
+  @spec edited(String.t() | nil, [Event.t()]) :: String.t() | nil
+  def edited(description, events) when is_list(events) do
+    text = person_text(description)
+    known? = text == "" or render(events) == nil or text in asks(events) or text in edits(events)
+    if known? or MapSet.member?(rendered(events), text), do: nil, else: text
+  end
+
+  # Every projection the ticket's events rendered as they grew, trimmed.
+  defp rendered(events) do
+    projected = Enum.filter(events, &(&1.type in @types))
+    for n <- 1..length(projected)//1, text = render(Enum.take(projected, n)), is_binary(text), into: MapSet.new(), do: String.trim(text)
+  end
+
+  # The description edits already given to the Conductor as messages.
+  defp edits(events) do
+    for %Event{type: "message.sent", payload: payload} <- events, payload_source(payload) == "linear_description", do: String.trim(payload_text(payload))
+  end
+
+  defp payload_source(payload), do: Map.get(payload, :source, Map.get(payload, "source"))
+  defp payload_text(payload), do: to_string(Map.get(payload, :text, Map.get(payload, "text")))
 
   defp checks(events), do: Enum.map_join(TicketChecks.list(events), "\n", &"- [#{&1.state}] #{&1.id}: #{one_line(&1.statement)}")
 

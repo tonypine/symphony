@@ -1,10 +1,18 @@
 defmodule SymphonyElixir.Conductor.Message do
   @moduledoc """
-  A person's message on a groomed ticket goes to the ticket's Conductor, which answers it: what
-  Symphony does around that turn (`SymphonyElixir.Conductor.message/4`).
+  A person's message on a ticket goes to the ticket's Conductor, which answers it at once, in any
+  state of the ticket (waiting in the queue or on a dependency, running, waiting on sub-tickets):
+  what Symphony does around that turn (`SymphonyElixir.Conductor.message/4`). The turn starts no
+  run of the ticket and takes no slot.
 
-  A message is the Conductor's when the ticket is groomed and the `message` junction is on
-  (`due?/2`). Then no run is given the message (`SymphonyElixir.Messages.prepend_unread/4`). The
+  A message is the Conductor's when the Conductor and its `message` junction are on and the ticket
+  is groomed, or can be groomed now (`due?/2`): it has no plan, no run but the Conductor's ever
+  started on it, the `grooming` junction is on, it is not finished and no question holds it. Such
+  a ticket is groomed first, outside any dispatch (`SymphonyElixir.Conductor.groom_now/3`), and
+  the message is answered once its plan exists, so the plan its first run works from holds what
+  the message asked. Then no run is given the message (`SymphonyElixir.Messages.prepend_unread/4`).
+  A ticket that ran without a plan (Grooming off, or given up) keeps the old rule: its next run is
+  given the message. The
   turn reads the whole conversation (`SymphonyElixir.Conductor.Facts`) and the message it answers
   (`facts/2`), and its reply is a `conductor.update` at the `message` junction whose `parent` is
   the message.
@@ -14,8 +22,16 @@ defmodule SymphonyElixir.Conductor.Message do
   A groomed ticket is owed a turn (`owed/1`) for each `message.sent` that has no reply yet (and
   that no run read while the junction was off), and for an `ask.recorded` its parent wrote after
   the current version of its plan (`source: parent`), which the turn answers by writing the plan
-  again. So a message written while Grooming still ran, when no turn could start, is answered once
-  the plan exists: `SymphonyElixir.Conductor` says so as Grooming ends (`plan_written/2`).
+  again. A ticket that can be groomed now is owed a turn for each such message too: `tend/2`
+  grooms it first. So a message written while Grooming still ran, when no turn could start, is
+  answered once the plan exists: `SymphonyElixir.Conductor` says so as Grooming ends
+  (`plan_written/2`).
+
+  A person's edit of a groomed ticket's Linear description, once Symphony wrote it, is a message
+  too (`source: linear_description`, `SymphonyElixir.Conductor.DescriptionEdit`): the turn reads
+  the whole edited text with `rules` that say so, and when the edit changes what is asked its
+  answer gives the words it adds (`added`), which are recorded as the ask in place of the whole
+  description.
 
   `tend/2` runs what a ticket is owed. It is started as a message is written (`start/3`), as a
   parent writes a new ask (`recalibrate/3`), as a plan is first written, and by the orchestrator's
@@ -83,12 +99,20 @@ defmodule SymphonyElixir.Conductor.Message do
   require Logger
 
   alias SymphonyElixir.{Conductor, Config, DirectorMoves, Messages, Orchestrator, Pauses, Questions}
-  alias SymphonyElixir.Conductor.{Answer, Facts, Steer, Tree, Watch}
+  alias SymphonyElixir.Conductor.{Answer, Facts, Grooming, Steer, Tree, Watch}
+  alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.{RunStore, TicketEvents, TicketPlan, TicketState}
   alias SymphonyElixir.TicketEvents.Event
 
   @junction "message"
+  @grooming "grooming"
+  @description_edit "linear_description"
+  @edit "This `message` is no message a person sent: it is the ticket's whole Linear description as a person edited it " <>
+          "after Symphony had written it from the asks, the plan and its checks. Read what the edit adds or changes " <>
+          "compared with the asks and the plan. When it changes what is asked, answer `\"ask\": true` with the plan " <>
+          "written again, and put in `added` the person's own words the edit adds, word for word: Symphony records them " <>
+          "as the new ask in place of the whole description. When it changes nothing, say so in `update`."
   @child_junction "child_message"
   @finished "This ticket is finished, so nothing on it changes any more. Reply to the message. If it asks for more work, " <>
               "put that work in `new_ticket` (`title`, `ask` in the person's own words, optionally `repo`): Symphony creates it " <>
@@ -116,15 +140,36 @@ defmodule SymphonyElixir.Conductor.Message do
              "is asked now, as `plan`, with the `reason` it changed for. Keep the id of every check that still stands."
 
   @doc """
-  Whether a person's message on the ticket `issue_id` is answered by the Conductor: the ticket is
-  groomed, and the Conductor and its `message` junction are on. `opts[:settings]` is the
-  `conductor` section (default `Config.conductor_settings/0`).
+  Whether a person's message on the ticket `issue_id` is answered by the Conductor: the Conductor
+  and its `message` junction are on, and the ticket is groomed or can be groomed now
+  (`groomable?/2`). `opts[:settings]` is the `conductor` section (default
+  `Config.conductor_settings/0`).
   """
   @spec due?(String.t() | nil, keyword()) :: boolean()
   def due?(issue_id, opts \\ []) do
     settings = Keyword.get_lazy(opts, :settings, &Config.conductor_settings/0)
     on? = Conductor.enabled?(settings) and @junction in settings.junctions
-    is_binary(issue_id) and on? and TicketPlan.groomed?(issue_id)
+    is_binary(issue_id) and on? and (TicketPlan.groomed?(issue_id) or groomable?(issue_id, settings))
+  end
+
+  @doc """
+  Whether the ticket `issue_id`, which has no plan, can be groomed now for a message, outside any
+  dispatch: the `grooming` junction is on in `settings`, Symphony holds the ticket's record, the
+  ticket is not finished, no question of it is open (the person's answer comes first) and Grooming
+  is due before its first run (`SymphonyElixir.Conductor.Grooming.due?/2`: no plan, no run of its
+  own, a try left).
+  """
+  @spec groomable?(String.t(), Schema.Conductor.t()) :: boolean()
+  def groomable?(issue_id, settings) do
+    with true <- @grooming in settings.junctions,
+         %{} = record <- RunStore.get_ticket_state(issue_id),
+         record = TicketState.normalize(record),
+         false <- finished?(record),
+         [] <- Questions.open({:ticket, record.repo_key, issue_id}) do
+      Grooming.due?(:implementation, Facts.read_events(issue_id))
+    else
+      _not_now -> false
+    end
   end
 
   @doc """
@@ -176,20 +221,22 @@ defmodule SymphonyElixir.Conductor.Message do
   @type owed :: %{messages: [Event.t()], asks: [Event.t()], children: [%{event: Event.t(), child: String.t()}]}
 
   @doc """
-  What the groomed ticket `issue_id` is owed (see the module doc). A ticket with no plan is owed
-  nothing: its Grooming comes first. `opts` as `due?/2`'s.
+  What the ticket `issue_id` is owed (see the module doc). A ticket with no plan is owed its
+  messages with no reply while it can be groomed now (`groomable?/2`), and nothing otherwise.
+  `opts` as `due?/2`'s.
   """
   @spec owed(String.t(), keyword()) :: owed()
   def owed(issue_id, opts \\ []) when is_binary(issue_id) do
     events = Facts.events(issue_id)
+    open? = &(not settled?(events, &1) and tries(events, &1.id) < @tries)
 
     case Enum.split_while(Enum.reverse(events), &(&1.type != "plan.written")) do
       {_all, []} ->
-        %{messages: [], asks: [], children: []}
+        settings = Keyword.get_lazy(opts, :settings, &Config.conductor_settings/0)
+        messages = if groomable?(issue_id, settings), do: for(%Event{type: "message.sent"} = message <- events, open?.(message), do: message), else: []
+        %{messages: messages, asks: [], children: []}
 
       {newer, _plan_and_older} ->
-        open? = &(not settled?(events, &1) and tries(events, &1.id) < @tries)
-
         %{
           messages: for(%Event{type: "message.sent"} = message <- events, open?.(message), do: message),
           asks: for(%Event{type: "ask.recorded"} = ask <- Enum.reverse(newer), field(ask, :source) == "parent", open?.(ask), do: ask),
@@ -242,7 +289,9 @@ defmodule SymphonyElixir.Conductor.Message do
   Runs the turns the ticket `issue_id` is owed (`owed/2`), now, while it holds the ticket's lock:
   the one that writes its plan again for its parent's newest ask, one that answers every message
   with no reply, and one that reads every unread message of its sub-tickets. Then the ticket's
-  parent, when it has one, is started for what it is owed in turn.
+  parent, when it has one, is started for what it is owed in turn. A ticket with no plan is groomed
+  first (`opts[:groom]`, default `SymphonyElixir.Conductor.groom_now/3`), and its messages are
+  answered once the plan exists.
 
   `:owed` while something is still owed afterwards: another turn holds the ticket's lock, a turn
   failed and is tried again, or it cannot run now (no provider, a pause). `:done` otherwise, and
@@ -254,14 +303,23 @@ defmodule SymphonyElixir.Conductor.Message do
     with true <- due?(issue_id, opts),
          %{} = record <- RunStore.get_ticket_state(issue_id),
          record = TicketState.normalize(record),
+         :groomed <- groomed(record, opts),
          answer = fn -> answer(record, owed(issue_id, opts), opts) end,
          {:ok, _answered} <- Conductor.exclusive(issue_id, :skip, answer) do
       with parent_id when is_binary(parent_id) <- TicketPlan.parent_id(issue_id), do: plan_written(parent_id, opts)
       if owed?(owed(issue_id, opts)), do: :owed, else: :done
     else
       :busy -> :owed
+      :ungroomed -> if owed?(owed(issue_id, opts)), do: :owed, else: :done
       _not_the_conductors -> :done
     end
+  end
+
+  # A ticket with no plan is groomed before its messages are answered; one Grooming left without a
+  # plan (busy, waiting, a try that failed) stays owed while it can still be groomed.
+  defp groomed(record, opts) do
+    if not TicketPlan.groomed?(record.issue_id), do: Keyword.get(opts, :groom, &Conductor.groom_now/3).(issue(record), record.repo_key, opts)
+    if TicketPlan.groomed?(record.issue_id), do: :groomed, else: :ungroomed
   end
 
   defp answer(record, %{messages: messages, asks: asks, children: children}, opts) do
@@ -282,7 +340,17 @@ defmodule SymphonyElixir.Conductor.Message do
     end
   end
 
-  defp issue(record), do: %Issue{id: record.issue_id, identifier: record.issue_identifier, title: record.title, state: record.phase, repo_key: record.repo_key}
+  defp issue(record) do
+    %Issue{
+      id: record.issue_id,
+      identifier: record.issue_identifier,
+      title: record.title,
+      description: Map.get(record, :description),
+      state: record.phase,
+      repo_key: record.repo_key,
+      labels: List.wrap(Map.get(record, :labels))
+    }
+  end
 
   @doc "Whether the ticket `record` is finished: its phase is one of its repo's terminal states (Done, Canceled)."
   @spec finished?(map()) :: boolean()
@@ -330,7 +398,12 @@ defmodule SymphonyElixir.Conductor.Message do
     earlier = for %{event: event} <- Map.get(about, :also, []), do: said(event)
     facts = Map.put(facts, :message, said(message))
     facts = if earlier == [], do: facts, else: Map.put(facts, :earlier_messages, earlier)
-    if finished, do: Map.put(facts, :rules, @finished), else: answers(facts, plan, message)
+
+    cond do
+      finished -> Map.put(facts, :rules, @finished)
+      field(message, :source) == @description_edit -> Map.put(facts, :rules, @edit)
+      true -> answers(facts, plan, message)
+    end
   end
 
   defp about(facts, _plan), do: facts
@@ -348,7 +421,10 @@ defmodule SymphonyElixir.Conductor.Message do
     end
   end
 
-  defp said(%Event{} = message), do: %{event_id: message.id, by: Messages.writer(message.actor), text: Facts.cut(field(message, :text), @message_max)}
+  defp said(%Event{} = message) do
+    said = %{event_id: message.id, by: Messages.writer(message.actor), text: Facts.cut(field(message, :text), @message_max)}
+    if field(message, :source) == @description_edit, do: Map.put(said, :source, @description_edit), else: said
+  end
 
   defp child_said(%Event{} = message, child) do
     reply = with %Event{} = reply <- reply(message), do: Facts.cut(field(reply, :text), 1_200)
@@ -399,7 +475,7 @@ defmodule SymphonyElixir.Conductor.Message do
     opts = [run_id: run_id, idempotency: "plan.written:#{run_id}", new_ask: answer.ask == true, drop_outcomes: drop?]
 
     with {:ok, _event} <- TicketPlan.write(repo_key, issue_id, next, opts),
-         :ok <- record_asks(answer.ask, repo_key, issue_id, messages, run_id) do
+         :ok <- record_asks(answer, repo_key, issue_id, messages, run_id) do
       :ok
     else
       {:error, {:invalid_plan, reasons}} -> {:error, "its plan was refused: " <> Enum.join(reasons, "; ")}
@@ -416,14 +492,15 @@ defmodule SymphonyElixir.Conductor.Message do
   defp answered(%{junction: @junction, message: %{also: also}}), do: for(%{event: %Event{type: "message.sent"} = event} <- also, do: event)
   defp answered(_plan), do: []
 
-  # Each message the turn answered is what is asked now, word for word, oldest first.
-  defp record_asks(false, _repo_key, _issue_id, _messages, _run_id), do: :ok
+  # Each message the turn answered is what is asked now, word for word, oldest first. Of a Linear
+  # description edit, the words the turn says it adds (`added`), when it gives them.
+  defp record_asks(%{ask: false}, _repo_key, _issue_id, _messages, _run_id), do: :ok
 
-  defp record_asks(true, repo_key, issue_id, messages, run_id) do
+  defp record_asks(answer, repo_key, issue_id, messages, run_id) do
     asked =
       for %Event{id: id} = message <- messages do
         opts = [source: "message", from: id, run_id: run_id, idempotency: "ask.recorded:#{id}"]
-        TicketPlan.record_ask(repo_key, issue_id, field(message, :text), opts)
+        TicketPlan.record_ask(repo_key, issue_id, asked_text(message, Map.get(answer, :added)), opts)
       end
 
     Enum.find(asked, :ok, &match?({:error, _reason}, &1))
@@ -695,6 +772,10 @@ defmodule SymphonyElixir.Conductor.Message do
          do: Logger.warning("Conductor could not record #{type} issue_id=#{plan.issue_id}: #{inspect(reason)}")
 
     :ok
+  end
+
+  defp asked_text(message, added) do
+    if field(message, :source) == @description_edit and is_binary(added), do: added, else: field(message, :text)
   end
 
   defp field(%Event{payload: payload}, key), do: Map.get(payload, key, Map.get(payload, Atom.to_string(key)))

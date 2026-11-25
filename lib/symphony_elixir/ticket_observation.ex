@@ -13,7 +13,8 @@ defmodule SymphonyElixir.TicketObservation do
   the record's `linear_updated_at` is dropped. The record keeps which read brought its last change
   (`observed_from`: the poll, a by-id read, the PR and CI watcher or a webhook delivery). Only
   `SymphonyElixir.Dispatch.Candidates` reads the observed fields, and an observation records no
-  ledger event, except for drift.
+  ledger event, except for drift and a person's edit of a description Symphony wrote, which goes to
+  the ticket's Conductor as a message (`SymphonyElixir.Conductor.DescriptionEdit`).
 
   Drift: under `dispatch.source: record`, the phase of a record Symphony owns (`phase_owner:
   :symphony`, written by a move of Symphony's or the Director's) is not read back from Linear. When
@@ -77,6 +78,7 @@ defmodule SymphonyElixir.TicketObservation do
   require Logger
 
   alias SymphonyElixir.{Config, DirectorMoves, Orchestrator, RunStore, TicketSignals, TicketState, Tracker}
+  alias SymphonyElixir.Conductor.DescriptionEdit
   alias SymphonyElixir.Linear.{Issue, Webhook}
   alias SymphonyElixir.Pauses.Projector
   alias SymphonyElixir.PlanBrief
@@ -205,12 +207,25 @@ defmodule SymphonyElixir.TicketObservation do
     source = Keyword.get(opts, :source, :poll)
 
     result =
-      with {:ok, stored} <- read(issue_id),
-           do: observe_record(repo_key, stored, issue, {now, source}, opts)
+      with {:ok, stored} <- read(issue_id) do
+        repo_key |> observe_record(stored, issue, {now, source}, opts) |> edited(repo_key, stored, issue, opts)
+      end
 
     count(result)
     result
   end
+
+  # A description a read finds changed may hold a person's edit: it goes to the ticket's Conductor
+  # (`SymphonyElixir.Conductor.DescriptionEdit`), never dropped in silence.
+  defp edited({:ok, :updated} = result, repo_key, %{} = stored, %Issue{description: description}, opts) when is_binary(description) do
+    if Map.get(stored, :description) != description do
+      Keyword.get(opts, :description_edited, &DescriptionEdit.observed/4).(repo_key, stored, description, [])
+    end
+
+    result
+  end
+
+  defp edited(result, _repo_key, _stored, _issue, _opts), do: result
 
   @doc """
   Observes what a verified Linear webhook delivery says (`SymphonyElixir.Linear.Webhook.parse/1`):

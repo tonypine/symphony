@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.Conductor.MessageTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Conductor, Messages, TicketChecks, TicketEvents, TicketPlan}
+  alias SymphonyElixir.{Conductor, Messages, Pauses, Questions, TicketChecks, TicketEvents, TicketPlan}
   alias SymphonyElixir.Conductor.{Facts, Message, Steer}
   alias SymphonyElixir.Config.{Cache, Schema}
 
@@ -107,13 +107,15 @@ defmodule SymphonyElixir.Conductor.MessageTest do
       refute Message.due?(ctx.issue_id)
       refute Message.due?(nil)
 
+      # A ticket that ran without a plan keeps the old rule: its next run is given the message.
       ungroomed = ticket!("MSG-U#{ctx.n}", "msg-u-#{ctx.n}", %{})
+      {:ok, _run} = TicketEvents.record("default", ungroomed.issue_id, "run.started", %{run_id: "run-u", run_kind: "implementation"}, run_id: "run-u")
       refute Message.due?(ungroomed.issue_id, settings: @on)
 
       message = say!(ungroomed.issue_id)
       assert Message.start(ungroomed, message, opts(%{})) == :ok
       refute_received {:turn, _junction, _prompt}
-      assert events(ungroomed.issue_id, "run.started") == []
+      assert [%{payload: %{run_kind: "implementation"}}] = events(ungroomed.issue_id, "run.started")
     end
 
     test "a run is given a groomed ticket's message only while the Conductor does not answer it", ctx do
@@ -561,6 +563,201 @@ defmodule SymphonyElixir.Conductor.MessageTest do
       assert %{"text" => "The newest."} = List.last(messages)
       # Facts that hold no conversation are left as they are.
       assert Message.facts(%{ticket: %{}}, %{}) == %{ticket: %{}}
+    end
+  end
+
+  # TP-1641: a message on a ticket that was never groomed and never ran does not wait for its first run.
+  describe "a ticket that has no plan yet" do
+    setup ctx do
+      fresh = ticket!("MSG-N#{ctx.n}", "msg-n-#{ctx.n}", %{phase: "Todo", description: "Keep my filter when I reload."})
+      %{fresh: fresh, fresh_id: fresh.issue_id}
+    end
+
+    defp grooming_plan do
+      %{
+        "shape" => "single",
+        "layers" => ["logic"],
+        "summary" => "The list keeps its filter.",
+        "text" => "Approach: store the filter.",
+        "checks" => [%{"kind" => "outcome", "statement" => "The filter survives a reload.", "proof" => "test"}],
+        "size" => %{"tokens" => 1, "runs" => 1}
+      }
+    end
+
+    defp groomed, do: {:ok, [Jason.encode!(%{"plan" => grooming_plan(), "update" => "I read this as one small change."})], 9_000}
+
+    defp folded, do: reply(%{"update" => "I added the search text to the plan.", "ask" => true, "plan" => answered_plan()})
+
+    defp fresh_opts(replies, more \\ []), do: opts(replies, [worker_host: "elsewhere"] ++ more)
+
+    defp replies_to(issue_id, message_id), do: for(%{parent: ^message_id} = reply <- events(issue_id, "conductor.update"), do: reply)
+
+    defp runs_started(issue_id), do: for(%{payload: %{run_kind: kind}} <- events(issue_id, "run.started"), do: kind)
+
+    # c1, c3, c5
+    test "a message on a never-run ticket in Todo is answered at once: Grooming writes the plan, the reply folds the message in, and no run starts",
+         %{fresh: fresh, fresh_id: id} do
+      conductor_on!()
+      assert Message.due?(id, settings: @on)
+      message = say!(id, "Keep the search text too.")
+
+      assert Message.start(fresh, message, fresh_opts(%{"grooming" => groomed(), "message" => folded()})) == :ok
+
+      assert_received {:turn, "grooming", _prompt}
+      assert_received {:turn, "message", prompt}
+      assert facts_of(prompt)["message"]["text"] == "Keep the search text too."
+
+      message_id = message.id
+      assert [%{payload: %{junction: "message", text: "I added the search text to the plan."}}] = replies_to(id, message_id)
+      assert [%{source: "linear", text: "Keep my filter when I reload."}, %{source: "message", from: ^message_id, text: "Keep the search text too."}] = TicketPlan.ask(id)
+      assert [%{version: 1, by: "grooming"}, %{version: 2, by: "recalibration"}] = TicketPlan.versions(id)
+
+      # c3: only the Conductor's turns ran, and the ticket stays where it was.
+      assert runs_started(id) == ["conductor", "conductor"]
+      assert RunStore.get_ticket_state(id).phase == "Todo"
+      assert Message.owed(id, settings: @on) == %{messages: [], asks: [], children: []}
+
+      # c5: the first run is not given the message, and its dispatch grooms nothing: it works from version 2.
+      assert Messages.prepend_unread("The prompt.", "default", id, "run-first-#{id}") == "The prompt."
+      assert events(id, "message.read") == []
+      assert Conductor.dispatch_junction(:implementation, Facts.events(id)) == nil
+      assert %{version: 2, summary: "The list keeps its filter and its search text."} = TicketPlan.current(id)
+    end
+
+    test "a dispatch that waited for the lock finds the plan written and grooms nothing", %{fresh: fresh, fresh_id: id} do
+      message = say!(id)
+      assert Message.tend(id, fresh_opts(%{"grooming" => groomed(), "message" => reply()})) == :done
+      assert [_reply] = replies_to(id, message.id)
+
+      no_turn = fn _plan, _issue, _run_id, _prompt -> flunk("no second Grooming") end
+      plan = %{junction: "grooming", issue_id: id, repo_key: "default", run_profile: Config.run(Config.settings_for_repo!("default"), :conductor), timeout_ms: 5_000}
+      assert Conductor.run(plan, issue(fresh), turn: no_turn, settings: @on) == :ok
+      assert length(TicketPlan.versions(id)) == 1
+    end
+
+    test "after a restart the ticket is found owed, and a try that writes no plan is counted until Grooming gives up", %{fresh_id: id} do
+      conductor_on!()
+      message = say!(id)
+      assert id in Message.owed_tickets(settings: @on)
+
+      capture_log(fn -> assert Message.tend(id, fresh_opts(%{"grooming" => {:error, :boom, 0}})) == :owed end)
+      assert [_try] = status_notes(id)
+      assert Message.owed(id, settings: @on).messages == [message]
+
+      capture_log(fn -> assert Message.tend(id, fresh_opts(%{"grooming" => {:error, :boom, 0}})) == :done end)
+      assert [_first, last] = status_notes(id)
+      assert last =~ "starts without a plan"
+
+      # Grooming gave up: the old rule, the first run is given the message.
+      refute Message.due?(id, settings: @on)
+      refute id in Message.owed_tickets(settings: @on)
+      assert Messages.prepend_unread("The prompt.", "default", id, "run-first-#{id}") =~ "## Messages from the person"
+    end
+
+    test "nothing runs and no try is counted while no provider can take the turn, another turn holds the lock, Symphony is paused or the gate is shut",
+         %{fresh_id: id, n: n} do
+      say!(id)
+      no_turn = fn _plan, _issue, _run_id, _prompt -> flunk("no turn runs") end
+
+      assert Message.tend(id, fresh_opts(%{}, turn: no_turn, available?: fn _profile -> false end)) == :owed
+      assert Message.tend(id, fresh_opts(%{}, turn: no_turn, paused?: fn _subject -> true end)) == :owed
+
+      gate = start_supervised!({SymphonyElixir.ConductorGate, name: :"gate-fresh-#{n}"})
+      assert SymphonyElixir.ConductorGate.handover(gate) == :ok
+      assert Message.tend(id, fresh_opts(%{}, turn: no_turn, gate: gate)) == :owed
+
+      holder = held!(id)
+      assert Message.tend(id, fresh_opts(%{}, turn: no_turn)) == :owed
+      send(holder, :release)
+
+      assert status_notes(id) == []
+      assert events(id, "run.started") == []
+      refute TicketPlan.groomed?(id)
+    end
+
+    test "a Grooming turn that asks the person holds the message until the answer, and one that crashes is tried again", %{fresh_id: id} do
+      say!(id)
+
+      question = %{
+        "title" => "Which list?",
+        "question" => "Is it the ticket list or the run list?",
+        "why" => "The ask names no list.",
+        "if_unanswered" => "The ticket stays paused.",
+        "recommendation_reason" => "The ticket list has the filter.",
+        "options" => [
+          %{"label" => "The ticket list", "effect" => "Grooming runs again with this answer.", "recommended" => true, "action" => "continue"},
+          %{"label" => "Cancel it", "effect" => "The ticket is cancelled.", "action" => "cancel"}
+        ]
+      }
+
+      asks = {:ok, [Jason.encode!(%{"plan" => grooming_plan(), "ask_person" => question})], 4}
+      assert Message.tend(id, fresh_opts(%{"grooming" => asks})) == :done
+      assert [%{title: "Which list?"}] = Questions.open({:ticket, "default", id})
+      refute TicketPlan.groomed?(id)
+      # The person's answer comes first: the message waits for the plan the dispatch writes.
+      refute Message.due?(id, settings: @on)
+      assert status_notes(id) == []
+
+      crash = fn _plan, _issue, _run_id, _prompt -> raise "the harness crashed" end
+      other = ticket!("MSG-C#{id}", "msg-c-#{id}", %{description: "Keep it."})
+      say!(other.issue_id)
+      assert capture_log(fn -> assert Message.tend(other.issue_id, fresh_opts(%{}, turn: crash)) == :owed end) =~ "Grooming failed"
+    end
+
+    test "a finished ticket and one that ran without a plan are not groomed for a message", ctx do
+      done = ticket!("MSG-D#{ctx.n}", "msg-d-#{ctx.n}", %{phase: "Done", description: "Keep it."})
+      say!(done.issue_id)
+      refute Message.due?(done.issue_id, settings: @on)
+      assert Message.owed(done.issue_id, settings: @on) == %{messages: [], asks: [], children: []}
+      refute Message.groomable?(done.issue_id, %{@on | junctions: ["message"]})
+      refute Message.groomable?("msg-none-#{ctx.n}", @on)
+    end
+  end
+
+  # TP-1641 c2: a groomed ticket's message is answered at once whatever the ticket waits on, and no run starts.
+  describe "a groomed ticket in any state" do
+    # A groomed ticket in `attrs`, made to wait as `prepare` says, gets a message that changes its ask:
+    # the reply is under it, the ask and the plan hold it, and no run but the Conductor's started.
+    defp answered_in_state!(ctx, attrs, prepare, more \\ []) do
+      k = System.unique_integer([:positive])
+      record = ticket!("MSG-S#{ctx.n}-#{k}", "msg-s-#{ctx.n}-#{k}", attrs)
+      plan!(record.issue_id)
+      prepare.(record)
+      before = length(events(record.issue_id, "run.started"))
+      message = say!(record.issue_id, "Keep the search text too.")
+
+      assert Message.start(record, message, opts(%{"message" => reply(%{"ask" => true, "plan" => answered_plan()})}, more)) == :ok
+
+      message_id = message.id
+      assert [%{parent: ^message_id}] = events(record.issue_id, "conductor.update")
+      assert [_linear, %{from: ^message_id, text: "Keep the search text too."}] = TicketPlan.ask(record.issue_id)
+      assert %{version: 2} = TicketPlan.current(record.issue_id)
+      assert record.issue_id |> events("run.started") |> Enum.drop(before) |> Enum.map(& &1.payload.run_kind) == ["conductor"]
+      assert RunStore.get_ticket_state(record.issue_id).phase == attrs.phase
+    end
+
+    test "waiting in the queue", ctx do
+      answered_in_state!(ctx, %{phase: "Todo"}, fn _record -> :ok end)
+    end
+
+    test "waiting on a dependency", ctx do
+      answered_in_state!(ctx, %{phase: "Todo"}, fn record ->
+        {:ok, _pause} = Pauses.add_reason({:ticket, "default", record.issue_id}, Pauses.ticket_reason(:dependency, "TP-1"))
+        assert Pauses.paused?({:ticket, "default", record.issue_id})
+      end)
+    end
+
+    test "with a run in progress", ctx do
+      started = fn record ->
+        {:ok, _run} = TicketEvents.record("default", record.issue_id, "run.started", %{run_id: "run-working", run_kind: "implementation"}, run_id: "run-working")
+      end
+
+      answered_in_state!(ctx, %{phase: "In Progress"}, started, running: fn id -> %{run_id: "run-working", issue_id: id, run_profile: %{harness: "codex"}} end)
+    end
+
+    test "waiting on sub-tickets", ctx do
+      subs = [%{id: "msg-sub-#{ctx.n}", identifier: "MSG-SUB-#{ctx.n}", state: "Todo"}]
+      answered_in_state!(ctx, %{phase: "Waiting on sub-tickets", sub_issues: subs}, fn _record -> :ok end)
     end
   end
 
