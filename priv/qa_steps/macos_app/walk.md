@@ -26,8 +26,9 @@ How to drive the app:
   (narrow it with `role`, `text`, or a QA name in `text`) and act with `qa_ax_press`. When
   an element answers `unsupported`: select a table or outline row with `qa_ax_select`; press a key
   or shortcut with `qa_key` (`key`, `modifiers`); click any other control with `qa_click`; hover or
-  right-click with `qa_hover` or `qa_context_menu` (judge a cursor step by `qa_hover`'s `cursor`,
-  never by hover tint; `cursor_unreadable` blocks it); reach rows below the fold with `qa_scroll`
+  right-click with `qa_hover` or `qa_context_menu` (judge a cursor step by `qa_hover`'s `cursor`
+  and `cursor_element`, the cursor the app reports it set, never by hover tint; an `unrecorded`
+  cursor is a finding, not a block); reach rows below the fold with `qa_scroll`
   (`edge: "bottom"`). Type into fields with `qa_ax_set_value`, with made-up values, never real
   credentials. Open the status-bar menu only with `qa_open_status_menu`, never by pressing its item.
 - Drag and drop with `qa_drag`: `from` and `to` are each an element `path` or a point's `x` and

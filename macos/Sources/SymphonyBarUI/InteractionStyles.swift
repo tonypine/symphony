@@ -236,9 +236,11 @@ extension View {
     }
 
     /// The pointing hand over an enabled control, as the catalog's `cursor: pointer`; over a disabled one the pointer
-    /// is left as it is (an arrow, or the not-allowed pointer a refused control pushes).
+    /// is left as it is (an arrow, or the not-allowed pointer a refused control pushes). QA mode records it
+    /// (`qaCursor`).
     public func buttonPointer(enabled: Bool) -> some View {
         pointerStyle(ButtonPointer.style(enabled: enabled))
+            .qaCursor(ButtonPointer.hand(enabled: enabled) ? .pointingHand : nil)
     }
 
     /// The pointing hand while the control is enabled, as the environment says (`isEnabled`): what a button style's
@@ -825,6 +827,7 @@ private struct NotAllowedPointer: ViewModifier {
 
     func body(content: Content) -> some View {
         content
+            .qaCursor(notAllowed ? .operationNotAllowed : nil)
             .onHover { inside in
                 hovering = inside
                 update()

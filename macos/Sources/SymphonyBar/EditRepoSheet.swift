@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import SymphonyBarCore
+import SymphonyBarUI
 
 /// The Edit sheet of one section of a connected repo: its title with the key, which can't change, the section's
 /// fields, and a fixed footer with Cancel and Save. Each section's size keeps the footer on a 1024×768 screen.
@@ -103,6 +104,7 @@ private struct EditSourceForm: View {
                 switch model.draft.mode {
                 case .gitHub:
                     TextField("GitHub repo", text: model.gitHubInput, prompt: Text(verbatim: "https://github.com/owner/repo"))
+                        .qaCursor(.iBeam)
                 case .localFolder:
                     LabeledContent("Folder") {
                         HStack {
@@ -124,6 +126,7 @@ private struct EditSourceForm: View {
             }
             Section {
                 TextField("Base branch", text: model.baseBranch, prompt: Text("origin's default branch"))
+                    .qaCursor(.iBeam)
             }
             EditSaveErrorSection(message: model.saveError)
         }

@@ -188,6 +188,7 @@ public struct NumberField: View {
                 .foregroundStyle(color)
                 .focused($focused)
                 .disabled(disabled)
+                .qaCursor(disabled ? nil : .iBeam)
                 .onSubmit(commit)
                 .onKeyPress(.upArrow) { key(step) }
                 .onKeyPress(.downArrow) { key(-step) }

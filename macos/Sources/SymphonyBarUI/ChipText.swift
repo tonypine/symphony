@@ -235,6 +235,8 @@ private struct ChipTextRepresentable: NSViewRepresentable {
         let hoverTextLink = context.environment.hoverTextLink
         view.hoverTextLink = { hoverTextLink($0) }
         view.scrollReview = context.environment.scrollReview.map { scroll in { scroll($0) } }
+        view.qaElement = context.environment.qaElementName
+        view.recordCursor()
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView view: ChipTextView, context: Context) -> CGSize? {

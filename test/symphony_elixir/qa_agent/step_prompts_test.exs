@@ -79,4 +79,23 @@ defmodule SymphonyElixir.QaAgent.StepPromptsTest do
     assert playbook =~ "`qa_crop` and `qa_measure` are for that"
     assert playbook =~ "`qa_scroll`: scrolls the list or scroll view at an element"
   end
+
+  # TP-1678: a cursor step is judged by the cursor the app reports it set, with its element.
+  test "the walk prompt and the playbook judge the cursor by the one the app reports, with no image matching" do
+    playbook = String.replace(@playbook, ~r/\s+/, " ")
+    texts = [{"the playbook", playbook} | for(id <- ~w(plan walk design_check review), do: {id, prompt(id)})]
+
+    for {name, text} <- texts do
+      refute text =~ "cursor_unreadable", "#{name} still speaks of cursor_unreadable"
+      refute text =~ "named cursors", "#{name} still speaks of matching the system's named cursors"
+    end
+
+    assert prompt("walk") =~ "judge a cursor step by `qa_hover`'s `cursor` and `cursor_element`, the cursor the app reports it set"
+    assert prompt("walk") =~ "an `unrecorded` cursor is a finding, not a block"
+    assert playbook =~ "Its `cursor` is the cursor the app reports it set at the pointer, read from the app's own cursor report in its QA root, never from an image"
+    assert playbook =~ "`cursor_element` is the named element that set it"
+    assert playbook =~ "`none` (no element set one: the arrow, the system's default)"
+    assert playbook =~ "An `unrecorded` cursor is a finding"
+    assert playbook =~ "judge the result's `cursor` and `cursor_element`, the cursor the app reports it set there"
+  end
 end

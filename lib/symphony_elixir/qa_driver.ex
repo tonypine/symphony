@@ -284,7 +284,7 @@ defmodule SymphonyElixir.QaDriver do
 
   alias SymphonyElixir.{AgentEnv, OpenRouter, PathSafety, QaBuild, QaPolicy, Workspace}
   alias SymphonyElixir.PlaybookSettings
-  alias SymphonyElixir.QaDriver.{Checks, DevServer, DevServerLease, Elements, Gallery, Machine, Pages, Picture}
+  alias SymphonyElixir.QaDriver.{Checks, Cursor, DevServer, DevServerLease, Elements, Gallery, Machine, Pages, Picture}
   alias SymphonyElixir.QaDriver.{ReleasePair, Remote, SafeHost}
 
   @evidence_dir "qa-evidence"
@@ -347,7 +347,6 @@ defmodule SymphonyElixir.QaDriver do
   # Screen coordinates `qa_hover` and `qa_context_menu` take, in points; a
   # display left of or above the main one has negative ones.
   @max_coordinate 32_768
-  @pointer_commands %{"qa_hover" => "hover", "qa_context_menu" => "context-menu"}
   @scroll_edges ~w(top bottom left right)
   # The largest delta `qa_scroll` takes per unit; an edge scroll covers any length.
   @max_scroll %{"pixel" => 20_000, "line" => 2_000}
@@ -471,15 +470,17 @@ defmodule SymphonyElixir.QaDriver do
           appearances: [String.t()],
           api_requests_log: String.t(),
           api_reads_log: String.t(),
-          elements_folder: String.t()
+          elements_folder: String.t(),
+          cursor_folder: String.t()
         }
 
   @doc """
   The QA-mode contract the driver keeps with the app: the variable naming the QA root (where
   `qa_api_requests` reads `api_requests_log`, the moves, and `api_reads_log`, the reads), the
   one naming the read-only copy of the `api_fixtures` directory, the appearance variable
-  with its values, and the folder under the QA root the app writes its element report into
-  (`elements_folder`, `<pid>.json` in it, which `qa_elements` reads).
+  with its values, the folder under the QA root the app writes its element report into
+  (`elements_folder`, `<pid>.json` in it, which `qa_elements` reads), and the one it writes its
+  cursor report into (`cursor_folder`, `<pid>.json` in it, which `qa_hover` reads).
   `SymphonyElixir.QaModeContract` renders it into agent prompts.
   """
   @spec app_contract() :: app_contract()
@@ -491,7 +492,8 @@ defmodule SymphonyElixir.QaDriver do
       appearances: @appearances,
       api_requests_log: @api_requests_log,
       api_reads_log: @api_reads_log,
-      elements_folder: Elements.folder()
+      elements_folder: Elements.folder(),
+      cursor_folder: Cursor.folder()
     }
   end
 
@@ -920,11 +922,23 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
-  defp run_tool(tool, driver, config, args) when is_map_key(@pointer_commands, tool) do
+  # The helper moves the pointer; the cursor there is the one the app reports in its QA root
+  # (`SymphonyElixir.QaDriver.Cursor`), never an image of the system's cursor.
+  defp run_tool("qa_hover", driver, config, args) do
+    with {:ok, pid} <- running_pid(driver, args),
+         {:ok, target} <- pointer_target(args),
+         {:ok, helper} <- helper(driver, config),
+         {:ok, hovered} <- run_helper(config, helper, ["hover", Integer.to_string(pid), target]),
+         {:ok, app} <- GenServer.call(driver, {:app, pid}) do
+      {:ok, Map.merge(hovered, Cursor.hover_fields(config, app.qa_root, pid, hovered["hovered"]))}
+    end
+  end
+
+  defp run_tool("qa_context_menu", driver, config, args) do
     with {:ok, pid} <- running_pid(driver, args),
          {:ok, target} <- pointer_target(args),
          {:ok, helper} <- helper(driver, config) do
-      run_helper(config, helper, [@pointer_commands[tool], Integer.to_string(pid), target])
+      run_helper(config, helper, ["context-menu", Integer.to_string(pid), target])
     end
   end
 

@@ -46,6 +46,12 @@ defmodule SymphonyElixir.QaModeContractTest do
     swift = File.read!("macos/Sources/SymphonyBarCore/QAElementReport.swift")
     assert swift =~ ~s(public static let elementsFolder = "#{contract.elements_folder}")
     assert swift =~ ~s{appendingPathComponent("\\(pid).json")}
+    # The cursor report (TP-1678): the folder the app's QAMode.cursorFolder names, one file per process.
+    assert contract.cursor_folder == "cursor"
+    assert prompt =~ "It writes the cursor it set at the pointer and the named element it set it for to `cursor/<pid>.json` there, which `qa_hover` reads."
+    cursor_swift = File.read!("macos/Sources/SymphonyBarCore/QACursorReport.swift")
+    assert cursor_swift =~ ~s(public static let cursorFolder = "#{contract.cursor_folder}")
+    assert cursor_swift =~ ~s{appendingPathComponent("\\(pid).json")}
     assert prompt =~ "- `#{contract.api_fixtures_env}`: read-only, set on a launch with `api_fixtures`."
     assert prompt =~ "- `#{contract.appearance_env}`: `light` or `dark` when the launch asks for an appearance."
 

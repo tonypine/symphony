@@ -139,7 +139,11 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
 
     /// The chip under the pointer.
     public private(set) var hoveredChip: Int? {
-        didSet { if hoveredChip != oldValue { redrawChips() } }
+        didSet {
+            guard hoveredChip != oldValue else { return }
+            redrawChips()
+            recordCursor()
+        }
     }
 
     /// The caller's link under the pointer, drawn in the link color.
@@ -147,6 +151,7 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
         didSet {
             guard hoveredLink != oldValue else { return }
             apply()
+            recordCursor()
             // After the update that moved the pointer's link, so SwiftUI's state changes outside it.
             let link = hoveredLink.flatMap { content.links.indices.contains($0) ? content.links[$0] : nil }
             let hover = hoverTextLink
@@ -668,6 +673,23 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
         super.mouseExited(with: event)
         pointerMoved(to: nil)
         hoveredLink = nil
+    }
+
+    /// The named element this text is in, for QA mode's cursor report (`ChipText` sets it from `qaName`).
+    public var qaElement: String? {
+        didSet { if qaElement != oldValue { recordCursor() } }
+    }
+
+    /// The cursor over the text, for QA mode's cursor report (TP-1678): the pointing hand over a chip or a link, the
+    /// I-beam AppKit sets over selectable text elsewhere, and none over text that can't be selected.
+    var cursorKind: QACursorReport.Kind? {
+        if hoveredChip != nil || hoveredLink != nil { return .pointingHand }
+        return isSelectable ? .iBeam : nil
+    }
+
+    /// Records the cursor over the text in QA mode; nothing otherwise.
+    func recordCursor() {
+        QACursorRecorder.record(self, kind: cursorKind, element: qaElement)
     }
 
     override open func mouseDown(with event: NSEvent) {

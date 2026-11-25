@@ -1,5 +1,6 @@
 import SwiftUI
 import SymphonyBarCore
+import SymphonyBarUI
 
 /// What the guided setup's controls do.
 struct GitHubUpdatesSetupActions {
@@ -86,6 +87,7 @@ struct GitHubUpdatesSetupView: View {
                 TextField("Public URL", text: Binding(get: { setup.url }, set: actions.setURL), prompt: Text("https://smee.io/…"))
                     .textFieldStyle(.roundedBorder)
                     .disabled(setup.running.contains("turn_on"))
+                    .qaCursor(setup.running.contains("turn_on") ? nil : .iBeam)
                     .accessibilityLabel("The relay's public URL")
             }
             if let error = setup.turnOnError {

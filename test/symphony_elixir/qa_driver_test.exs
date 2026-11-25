@@ -153,7 +153,7 @@ defmodule SymphonyElixir.QaDriverTest do
         "ax-set-value" => {~s({"ok":true,"element":{"path":"0.2","role":"AXTextField"}}), 0},
         "ax-select" => {~s({"ok":true,"selected":true,"element":{"path":"0.3.1","role":"AXRow","selected":true}}), 0},
         "click" => {~s({"ok":true,"clicked":{"x":120,"y":200},"clicks":1,"element":{"path":"0.4","role":"AXButton"}}), 0},
-        "hover" => {~s({"ok":true,"hovered":{"x":120,"y":200},"settled":true,"under_pointer":{"role":"AXRow"},"cursor":"pointing_hand"}), 0},
+        "hover" => {~s({"ok":true,"hovered":{"x":120,"y":200},"settled":true,"under_pointer":{"role":"AXRow"}}), 0},
         "context-menu" => {~s({"ok":true,"clicked":{"x":120,"y":200},"menu":{"path":"2","role":"AXMenu","items":[{"path":"2.0","role":"AXMenuItem","title":"Pause"}]},"window_id":31}), 0},
         "scroll" => {~s({"ok":true,"scrolled":{"x":300,"y":200},"via":"pid","edge":"bottom","at_edge":true,"visible":{"count":16,"last":{"role":"AXRow","text":"Run 120"}}}), 0},
         "key" => {~s({"ok":true,"key":"return","modifiers":[],"window":{"role":"AXWindow"},"focused":{"role":"AXOutline"}}), 0},
@@ -1169,8 +1169,11 @@ defmodule SymphonyElixir.QaDriverTest do
       {driver, pid} = launched_app(worktree)
       pid_arg = Integer.to_string(pid)
 
-      assert {:ok, %{"settled" => true, "under_pointer" => %{"role" => "AXRow"}, "cursor" => "pointing_hand"}} =
+      # The app wrote no cursor report: the tool says so, and guesses no cursor.
+      assert {:ok, %{"settled" => true, "under_pointer" => %{"role" => "AXRow"}, "cursor" => nil, "cursor_source" => "no_report", "cursor_note" => note}} =
                QaDriver.call_tool(driver, "qa_hover", %{"pid" => pid, "path" => "0.3.1"})
+
+      assert note =~ "wrote no cursor report"
 
       assert_received {:cmd, @helper, ["hover", ^pid_arg, "0.3.1"], _opts}
 
@@ -1260,13 +1263,133 @@ defmodule SymphonyElixir.QaDriverTest do
       refute_received {:cmd, @helper, ["scroll" | _rest], _opts}
     end
 
-    test "passes an unreadable cursor on to the agent with its reason and no shape", %{worktree: worktree} do
-      reason = "The current cursor matches none of the system's named cursors: the app draws its own image there."
-      reply = Jason.encode!(%{"ok" => true, "hovered" => %{"x" => 120, "y" => 200}, "settled" => true, "cursor" => nil, "cursor_unreadable" => reason})
-      {driver, pid} = launched_app(worktree, host: host(%{helper_replies: %{"hover" => {reply, 0}}}))
+    # TP-1678: the cursor the app reports in its QA root, `cursor/<pid>.json`.
+    defp write_cursor!(driver, pid, fields) do
+      %{qa_root: qa_root} = GenServer.call(driver, :config)
+      report = Map.merge(%{"version" => 1, "at" => "2026-11-25T17:00:00Z", "pid" => pid, "pointer" => %{"x" => 120, "y" => 200}}, fields)
+      File.mkdir_p!(Path.join(qa_root, "cursor"))
+      File.write!(Path.join([qa_root, "cursor", "#{pid}.json"]), Jason.encode!(report))
+    end
 
-      assert {:ok, %{"cursor" => nil, "cursor_unreadable" => ^reason}} =
+    defp recorded(cursor, element), do: %{"cursor" => cursor, "element" => element, "frame" => %{"x" => 100, "y" => 190, "w" => 80, "h" => 24}}
+
+    test "returns the cursor the app recorded at the pointer and the element that set it", %{worktree: worktree} do
+      {driver, pid} = launched_app(worktree)
+
+      kinds = [{"pointing_hand", "queue-row-TP-1"}, {"i_beam", "settings-row-name"}, {"open_hand", "phases-list"}, {"closed_hand", "phases-list"}, {"resize_left_right", nil}]
+
+      for {kind, element} <- kinds do
+        write_cursor!(driver, pid, %{"cursor" => kind, "element" => element, "source" => "recorded", "recorded" => recorded(kind, element), "app_cursor" => kind})
+
+        assert {:ok, %{"hovered" => %{"x" => 120}, "cursor" => ^kind, "cursor_element" => ^element, "cursor_source" => "recorded", "cursor_settled" => true, "app_cursor" => ^kind} = reply} =
+                 QaDriver.call_tool(driver, "qa_hover", %{"pid" => pid, "path" => "0.3.1"})
+
+        assert reply["cursor_note"] =~ "The app set #{kind} here"
+        if element, do: assert(reply["cursor_note"] =~ "for #{element}"), else: assert(reply["cursor_note"] =~ "outside any named element")
+        refute Map.has_key?(reply, "cursor_recorded")
+        refute Map.has_key?(reply, "cursor_unreadable")
+      end
+    end
+
+    test "returns the arrow, and says no element set one, where nothing set a cursor", %{worktree: worktree} do
+      {driver, pid} = launched_app(worktree)
+      write_cursor!(driver, pid, %{"cursor" => "arrow", "source" => "none", "app_cursor" => "arrow"})
+
+      assert {:ok, %{"cursor" => "arrow", "cursor_element" => nil, "cursor_source" => "none", "cursor_note" => note} = reply} =
+               QaDriver.call_tool(driver, "qa_hover", %{"pid" => pid, "x" => 120, "y" => 200})
+
+      assert note == "No element set a cursor here: the arrow, the system's default."
+      refute Map.has_key?(reply, "cursor_unreadable")
+    end
+
+    test "marks a cursor set outside the recorded places as such, with what they set there", %{worktree: worktree} do
+      {driver, pid} = launched_app(worktree)
+      write_cursor!(driver, pid, %{"cursor" => "i_beam", "source" => "unrecorded", "recorded" => recorded("pointing_hand", "open-button"), "app_cursor" => "i_beam"})
+
+      assert {:ok, %{"cursor" => "i_beam", "cursor_element" => nil, "cursor_source" => "unrecorded", "cursor_recorded" => %{"cursor" => "pointing_hand", "element" => "open-button"}} = reply} =
                QaDriver.call_tool(driver, "qa_hover", %{"pid" => pid, "path" => "0.3.1"})
+
+      assert reply["cursor_note"] =~ "set outside the places that record the cursor (they set pointing_hand for open-button here)"
+      assert reply["cursor_note"] =~ "That is a finding"
+
+      write_cursor!(driver, pid, %{"cursor" => "resize_up_down", "source" => "unrecorded", "app_cursor" => "resize_up_down"})
+      assert {:ok, %{"cursor_source" => "unrecorded", "cursor_recorded" => nil, "cursor_note" => note}} = QaDriver.call_tool(driver, "qa_hover", %{"pid" => pid, "path" => "0.3.1"})
+      assert note =~ "(they set none here)"
+
+      write_cursor!(driver, pid, %{"cursor" => "crosshair", "source" => "unrecorded", "recorded" => recorded("pointing_hand", nil)})
+      assert {:ok, %{"cursor_note" => note}} = QaDriver.call_tool(driver, "qa_hover", %{"pid" => pid, "path" => "0.3.1"})
+      assert note =~ "(they set pointing_hand, outside any named element here)"
+
+      write_cursor!(driver, pid, %{"cursor" => "arrow", "source" => "guessed"})
+      assert {:ok, %{"cursor_note" => note}} = QaDriver.call_tool(driver, "qa_hover", %{"pid" => pid, "path" => "0.3.1"})
+      assert note =~ ~s(the source "guessed", which this driver does not know)
+    end
+
+    test "reads the cursor report again until it is for the point the pointer moved to", %{worktree: worktree} do
+      test = self()
+
+      sleep = fn ms ->
+        send(test, {:slept, ms})
+        Process.get(:cursor_after_sleep, fn -> :ok end).()
+        :ok
+      end
+
+      {driver, pid} = launched_app(worktree, sleep: sleep)
+      write_cursor!(driver, pid, %{"pointer" => %{"x" => 10, "y" => 10}, "cursor" => "arrow", "source" => "none"})
+
+      Process.put(:cursor_after_sleep, fn ->
+        write_cursor!(driver, pid, %{"pointer" => %{"x" => 120.4, "y" => 199.6}, "cursor" => "pointing_hand", "element" => "slot-card-1", "source" => "recorded"})
+      end)
+
+      assert {:ok, %{"cursor" => "pointing_hand", "cursor_element" => "slot-card-1", "cursor_settled" => true}} =
+               QaDriver.call_tool(driver, "qa_hover", %{"pid" => pid, "path" => "0.3.1"})
+
+      assert_received {:slept, 150}
+      refute_received {:slept, _ms}
+
+      # A report that never comes to the point is returned as the app's last word, marked unsettled.
+      Process.delete(:cursor_after_sleep)
+      write_cursor!(driver, pid, %{"pointer" => %{"x" => 10, "y" => 10}, "cursor" => "arrow", "source" => "none"})
+      assert {:ok, %{"cursor" => "arrow", "cursor_settled" => false, "cursor_note" => note}} = QaDriver.call_tool(driver, "qa_hover", %{"pid" => pid, "path" => "0.3.1"})
+      assert note =~ "The app's last report is for the pointer at 10,10, not where it moved"
+      for _read <- 1..5, do: assert_received({:slept, 150})
+      refute_received {:slept, _ms}
+
+      write_cursor!(driver, pid, %{"pointer" => nil, "cursor" => "arrow", "source" => "none"})
+      assert {:ok, %{"cursor_settled" => false, "cursor_note" => "The app's last report says no pointer position. " <> _rest}} =
+               QaDriver.call_tool(driver, "qa_hover", %{"pid" => pid, "path" => "0.3.1"})
+    end
+
+    test "says when the app's cursor report cannot be read, and never names a cursor then", %{worktree: worktree} do
+      {driver, pid} = launched_app(worktree, sleep: fn _ms -> :ok end)
+      %{qa_root: qa_root} = GenServer.call(driver, :config)
+      File.mkdir_p!(Path.join(qa_root, "cursor"))
+
+      cases = [{"not json", "not the app's JSON cursor report"}, {~s({"version":2}), "version 2"}, {~s({"version":1,"cursor":"arrow"}), "not the app's JSON cursor report"}]
+
+      for {bytes, why} <- cases do
+        File.write!(Path.join([qa_root, "cursor", "#{pid}.json"]), bytes)
+        assert {:ok, %{"cursor" => nil, "cursor_source" => "bad_report", "cursor_note" => note}} = QaDriver.call_tool(driver, "qa_hover", %{"pid" => pid, "path" => "0.3.1"})
+        assert note =~ why
+      end
+    end
+
+    test "opens a context menu with no cursor in the answer", %{worktree: worktree} do
+      {driver, pid} = launched_app(worktree)
+      write_cursor!(driver, pid, %{"cursor" => "pointing_hand", "source" => "recorded"})
+      assert {:ok, reply} = QaDriver.call_tool(driver, "qa_context_menu", %{"pid" => pid, "path" => "0.3.1"})
+      refute Map.has_key?(reply, "cursor")
+      refute Map.has_key?(reply, "cursor_unreadable")
+    end
+
+    test "the QA helper no longer compares the system's cursor images" do
+      helper = File.read!("priv/qa_driver/symphony-qa-driver.swift")
+
+      for gone <- ~w(namedCursors cursorPrint NamedCursorPrints cursorDistance currentCursor settledCursor addCursor cursor_unreadable currentSystem) do
+        refute helper =~ gone, "the helper still has #{gone}"
+      end
+
+      refute File.read!("lib/symphony_elixir/qa_driver.ex") =~ "cursor_unreadable"
     end
 
     test "passes the helper's row, click and key errors on to the agent", %{worktree: worktree} do

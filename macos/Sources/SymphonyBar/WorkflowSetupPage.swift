@@ -1,4 +1,5 @@
 import SwiftUI
+import SymphonyBarUI
 import SymphonyBarCore
 
 /// The WORKFLOW.md page: that the repo has none, what was found in it, the editable draft and how it lands. Add Repo
@@ -29,6 +30,7 @@ struct WorkflowSetupPage: View {
                 Spacer(minLength: 0)
             } else {
                 PlainTextEditor(text: $draft)
+                    .qaCursor(.iBeam)
                     .frame(minHeight: 120, maxHeight: .infinity)
                 Picker("Add it by", selection: $landing) {
                     ForEach(choices, id: \.self) { Text($0.rawValue).tag($0) }
