@@ -692,6 +692,13 @@ defmodule SymphonyElixir.QaAgentTest do
       command_only = [dev_server?: false, dev_server_command?: true]
       assert {"web", "needs `verification.enabled`"} in Selection.unavailable(config, command_only)
       assert {"web", "needs `verification.dev_server`"} in Selection.unavailable(config)
+
+      # With verification on, a rule that runs the server on the QA host is the reason, not the
+      # verification switch.
+      for runs <- ["every_qa_pass", "live_qa_pass"] do
+        assert {"web", "needs `verification.dev_server.runs: symphony_host`"} in
+                 Selection.unavailable(config, Keyword.put(command_only, :dev_server_runs, runs))
+      end
     end
 
     test "a macos_app playbook whose server runs on every QA pass needs only verification.dev_server, with or without a worker_host" do
@@ -701,7 +708,7 @@ defmodule SymphonyElixir.QaAgentTest do
 
       assert [%{kind: "macos_app", dev_server: true}] = Selection.playbooks(config, command_only)
       refute Enum.any?(Selection.unavailable(config, command_only), &(elem(&1, 0) == "macos_app"))
-      assert {"web", "needs `verification.enabled`"} in Selection.unavailable(config, command_only)
+      assert {"web", "needs `verification.dev_server.runs: symphony_host`"} in Selection.unavailable(config, command_only)
       assert {"macos_app", "needs `verification.dev_server`"} in Selection.unavailable(config, dev_server_runs: "every_qa_pass")
 
       # Without a worker_host it still never runs its server on this host, so it does not need

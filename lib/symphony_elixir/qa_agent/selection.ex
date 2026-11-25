@@ -357,13 +357,15 @@ defmodule SymphonyElixir.QaAgent.Selection do
 
   # A playbook that drives the project's server needs one configured: the `web` one on this host,
   # which `verification.enabled` and `runs: symphony_host` turn on, and the `macos_app` one with
-  # `runs: every_qa_pass` on the QA host, which reads only `verification.dev_server`.
+  # `runs: every_qa_pass` on the QA host, which reads only `verification.dev_server`. A `web`
+  # playbook whose server runs on the QA host names the rule, not `verification.enabled`.
   defp missing_dev_server(kind, _override, host) do
     cond do
       not dev_server?(kind, host) -> []
       not host.dev_server_command? -> ["verification.dev_server"]
       kind == "macos_app" -> []
       host.dev_server? -> []
+      host.dev_server_runs != "symphony_host" -> ["verification.dev_server.runs: symphony_host"]
       true -> ["verification.enabled"]
     end
   end
