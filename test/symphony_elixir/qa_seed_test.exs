@@ -69,7 +69,6 @@ defmodule SymphonyElixir.QaSeedTest do
     inbox = [name: {:qa_seed_inbox, make_ref()}, github_repos: %{}]
     # The plan's move into Plan Review captures its brief, read from the issues file.
     assert {:ok, _brief} = PlanBrief.capture({repo_key, "qa-seed-109"})
-    read_inbox = fn -> rows(inbox) end
     moves_server = :"qa_seed_moves_#{System.unique_integer([:positive])}"
     start_supervised!({DirectorMoves, name: moves_server})
     moves = [server: moves_server, github: SeedGitHub, workspace: SeedWorkspace, inbox: inbox]
