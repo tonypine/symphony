@@ -906,8 +906,9 @@ defmodule SymphonyElixirWeb.Presenter do
   that only while the orchestrator holds a run with its id (`opts[:held]`, `{run_ids, taken_at}`: the
   run ids its snapshot holds and when that snapshot was taken; `:unknown`, the default, when it could
   not be read) or the run started after that snapshot was taken, and otherwise `ended` too, with the
-  `ended_at` `SymphonyElixir.TicketEvents.RunEnds.open/1` gives it (the ticket's next `run.started`,
-  else the run's last step) and the exit `SymphonyElixir.TicketEvents.RunEnds.unrecorded_exit/0`.
+  `ended_at` `SymphonyElixir.TicketEvents.RunEnds.open/2` gives it (the run's own last activity, from
+  its steps and what its row in the run list kept), the tokens that row kept and the exit
+  `SymphonyElixir.TicketEvents.RunEnds.unrecorded_exit/0`, as the next boot records it.
   `verdict` is
   the newest verdict naming the run (`{kind, outcome, head, at}`), else null, and `summary` is the
   run's line (`SymphonyElixir.TicketEvents.Summary.run_group/1`), which names the step a running run
@@ -915,7 +916,7 @@ defmodule SymphonyElixirWeb.Presenter do
   """
   @spec ticket_timeline_json(String.t(), String.t(), [Event.t()], [Event.t()], keyword()) :: [map()]
   def ticket_timeline_json(repo_key, issue_id, events, history, opts \\ []) do
-    runs = run_headers(history, Keyword.get(opts, :held, :unknown))
+    runs = run_headers(repo_key, issue_id, history, Keyword.get(opts, :held, :unknown))
 
     {placed, _seen} =
       Enum.map_reduce(events, MapSet.new(), fn event, seen ->
@@ -963,8 +964,8 @@ defmodule SymphonyElixirWeb.Presenter do
     timeline.members |> Map.get(place, []) |> Enum.map(&timeline_entry({:event, &1}, timeline))
   end
 
-  defp run_headers(history, held) do
-    unended = Map.new(RunEnds.open(history), fn {started, ended_at} -> {started.payload.run_id, ended_at} end)
+  defp run_headers(repo_key, issue_id, history, held) do
+    unended = unended_runs(repo_key, issue_id, history, held)
 
     verdicts =
       history
@@ -978,6 +979,19 @@ defmodule SymphonyElixirWeb.Presenter do
     |> Map.new(fn {run_id, events} -> {run_id, run_header(run_id, events, Map.get(verdicts, run_id), run_end(run_id, events, unended, held))} end)
   end
 
+  # The runs with no `run.ended` the orchestrator doesn't hold, by run id, each with the end and the
+  # kept row `RunEnds` writes at the next boot. The run list is read only when there is one.
+  defp unended_runs(repo_key, issue_id, history, held) do
+    case Enum.reject(RunEnds.open(history), fn {started, _ended_at} -> held?(held, started.payload.run_id, started) end) do
+      [] ->
+        %{}
+
+      _unheld ->
+        kept = RunEnds.kept(repo_key, issue_id)
+        Map.new(RunEnds.open(history, kept), fn {started, ended_at} -> {started.payload.run_id, {ended_at, Map.get(kept, started.payload.run_id)}} end)
+    end
+  end
+
   # How the run ended: its `run.ended`; nil while the orchestrator holds it, started after its
   # snapshot was taken, or can't say; else the end `RunEnds` writes at the next boot.
   defp run_end(run_id, events, unended, held) do
@@ -987,7 +1001,7 @@ defmodule SymphonyElixirWeb.Presenter do
     cond do
       ended -> ended
       held?(held, run_id, started) -> nil
-      true -> unrecorded_end(run_id, started, Map.get(unended, run_id, started.at))
+      true -> unrecorded_end(run_id, started, Map.get(unended, run_id, {started.at, nil}))
     end
   end
 
@@ -996,8 +1010,8 @@ defmodule SymphonyElixirWeb.Presenter do
   defp held?({run_ids, %DateTime{} = taken_at}, run_id, %Event{at: started_at}),
     do: MapSet.member?(run_ids, run_id) or DateTime.compare(started_at, taken_at) == :gt
 
-  defp unrecorded_end(run_id, started, at),
-    do: %Event{type: "run.ended", run_id: run_id, at: at, payload: RunEnds.end_payload(started, at)}
+  defp unrecorded_end(run_id, started, {at, kept}),
+    do: %Event{type: "run.ended", run_id: run_id, at: at, payload: RunEnds.end_payload(started, at, kept)}
 
   defp run_header(run_id, events, verdict, ended) do
     started = Enum.find(events, &(&1.type == "run.started"))

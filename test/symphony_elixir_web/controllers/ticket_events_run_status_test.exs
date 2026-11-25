@@ -66,7 +66,7 @@ defmodule SymphonyElixirWeb.TicketEventsRunStatusTest do
     %{orchestrator: orchestrator}
   end
 
-  test "a run with no end the orchestrator doesn't hold reads as ended, at the next run's start, and the run it holds reads as running",
+  test "a run with no end the orchestrator doesn't hold reads as ended, at its last step, and the run it holds reads as running",
        %{orchestrator: orchestrator} do
     :ok = GenServer.call(orchestrator, {:hold, ["run-review-1"]})
     timeline = json_response(get(build_conn(), @path), 200)["timeline"]
@@ -78,8 +78,8 @@ defmodule SymphonyElixirWeb.TicketEventsRunStatusTest do
              "summary" => %{"title" => "Implementation run 1 ended: ended; no end was recorded", "detail" => detail}
            } = run(timeline, "run-impl-1")
 
-    assert ended_at == DateTime.to_iso8601(at(22))
-    assert detail =~ "22 min"
+    assert ended_at == DateTime.to_iso8601(at(20))
+    assert detail =~ "20 min"
     assert %{"status" => "ended", "exit" => "handoff"} = run(timeline, "run-impl-2")
     assert %{"status" => "running", "ended_at" => nil, "exit" => nil} = run(timeline, "run-review-1")
   end
@@ -93,15 +93,28 @@ defmodule SymphonyElixirWeb.TicketEventsRunStatusTest do
   end
 
   test "a run the boot closed reads its recorded end, the same end the feed gave it before", %{orchestrator: _orchestrator} do
+    # The Code Review run's row in the run list kept its tokens and its last agent event, at minute 29.
+    :ok =
+      RunStore.put_run(%{
+        repo_key: @repo_key,
+        run_id: "run-review-1",
+        issue_id: @issue_id,
+        status: "running",
+        started_at: at(26),
+        tokens: %{total_tokens: 312_000},
+        last_event_at: at(29)
+      })
+
     before = json_response(get(build_conn(), @path), 200)["timeline"]
     capture_log(fn -> RunEnds.close_unended() end)
     timeline = json_response(get(build_conn(), @path), 200)["timeline"]
 
     assert %{"status" => "ended", "ended_at" => impl_end} = run(timeline, "run-impl-1")
-    assert impl_end == DateTime.to_iso8601(at(22))
+    assert impl_end == DateTime.to_iso8601(at(20))
     assert %{"status" => "ended", "ended_at" => review_end, "exit" => "ended; no end was recorded"} = run(timeline, "run-review-1")
-    assert review_end == DateTime.to_iso8601(at(27))
+    assert review_end == DateTime.to_iso8601(at(29))
     assert review_end == run(before, "run-review-1")["ended_at"]
+    assert [%{payload: %{tokens: 312_000}}] = TicketEvents.query(@issue_id, types: ["run.ended"], run_id: "run-review-1")
   end
 
   test "a run that started after the published snapshot was taken reads as running", %{orchestrator: orchestrator} do

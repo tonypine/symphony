@@ -78,8 +78,10 @@ public struct TicketPage: Equatable {
         /// The tool call it waits on: "waiting on mix test for 14 min".
         public var pendingTool: String?
         public var workspace: String?
-        /// The run's tokens against the per-ticket cap (C11).
+        /// The run's own tokens so far, named as the run's.
         public var tokens: Overview.Meter
+        /// The ticket's tokens across its runs (every past run and this one) against the per-ticket cap (C11).
+        public var total: Overview.Meter
     }
 
     /// A row of the Ticket card.
@@ -194,6 +196,10 @@ public struct TicketPage: Equatable {
     public static let stoppedByYou = "Stopped by you"
     /// The running indicator's word for VoiceOver.
     public static let runningTitle = "Running"
+    /// The run header's tokens: the run's own, never the ticket's.
+    public static let runTokensLabel = "This run"
+    /// The ticket's tokens across all its runs, measured against the per-ticket cap.
+    public static let ticketTokensLabel = "Ticket total"
     /// A note the Director wrote on the ticket.
     public static let noteByYou = "Note by you"
     public static let movedToBacklog = "moved to Backlog"
@@ -533,7 +539,9 @@ public struct TicketPage: Equatable {
             let number = (counts[name] ?? 0) + 1
             let started = running.startedAt?.date
             let elapsed = started.map { max(Int(reference.timeIntervalSince($0)), 0) }
-            let total = running.tokens?.totalTokens ?? 0
+            let runTotal = running.tokens?.totalTokens ?? 0
+            // The ticket's total is every past run's tokens and this run's so far: the figure the cap measures.
+            let total = pastRuns.reduce(runTotal) { $0 + max($1.run.tokens ?? 0, 0) }
             let cap = state?.budget?.perIssueLimit
             let fraction = cap.flatMap { $0 > 0 ? min(Double(total) / Double($0), 1) : nil }
             let pending = issue?.running?.pendingTool ?? running.pendingTool
@@ -549,7 +557,10 @@ public struct TicketPage: Equatable {
                 },
                 workspace: workspacePath,
                 tokens: Overview.Meter(
-                    id: "ticket-tokens", label: "Tokens",
+                    id: "run-tokens", label: Self.runTokensLabel, value: Overview.tokens(runTotal), fraction: nil, note: nil
+                ),
+                total: Overview.Meter(
+                    id: "ticket-tokens", label: Self.ticketTokensLabel,
                     value: cap.map { "\(Overview.tokens(total)) of \(Overview.tokens($0))" } ?? Overview.tokens(total),
                     fraction: fraction, note: cap == nil ? "No per-ticket cap" : "Per-ticket cap"
                 )
@@ -558,7 +569,7 @@ public struct TicketPage: Equatable {
                 steps.append(Step(
                     id: "run-current", time: started, timeText: clock(started), title: "\(name) run \(number)",
                     result: .current, resultWord: "running",
-                    durationSeconds: elapsed, tokens: total, detail: nil
+                    durationSeconds: elapsed, tokens: runTotal, detail: nil
                 ))
             }
         } else {
