@@ -40,7 +40,9 @@ gallery entries the changed files affect) and the screen rules below. Then answe
   - `needs` (optional): what the step needs that a pass may lack, as a list of objects, each in one
     of three shapes: `{"kind": "tool", "name": "<qa_ tool>"}` for a QA tool the step cannot be
     walked without (such as a drag), `{"kind": "fixture_page", "fixture": "<directory>", "page":
-    "<page>"}` for a page of a committed fixture, `{"kind": "server"}` for the live server. Name
+    "<page>"}` for a page of a committed fixture (the directory by its path in the checkout, such
+    as `macos/Tests/Fixtures/director-app/update-paused`, or by its name, such as `update-paused`),
+    `{"kind": "server"}` for the live server. Name
     every such need, including one the facts below say the pass lacks.
   Never invent a fixture, a stub or a gallery entry: use the ones the rules and facts name.
   Symphony checks each brief's `needs` itself, against the QA driver's tools, the live server and

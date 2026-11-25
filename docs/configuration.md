@@ -4477,7 +4477,9 @@ run it, or a fixture directory the worktree does not hold, is marked `unprovable
 needed; the plan is told so and briefs it no more. Each of the plan's briefs may name, in `needs`,
 what its step needs that a pass may lack, in fixed shapes: `{"kind": "tool", "name": "qa_drag"}`,
 `{"kind": "fixture_page", "fixture": "<directory>", "page": "<page>"}` or `{"kind": "server"}`. A
-`needs` in another shape is refused and asked again. Once the plan answers, Symphony checks each need
+fixture is named by its path in the checkout (`macos/Tests/Fixtures/director-app/update-paused`) or
+by its directory's name among the state fixtures (`update-paused`), and so is a plan check's fixture
+setting: Symphony looks for either in the worktree. A `needs` in another shape is refused and asked again. Once the plan answers, Symphony checks each need
 against the QA driver's tools, the live server and the worktree's fixtures, and marks the steps
 with one the pass lacks before the first walk session. A marked step gets no walk session: a group
 that loses every step starts none, and a pass whose steps are all marked walks none. The review is

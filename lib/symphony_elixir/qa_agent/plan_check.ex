@@ -11,7 +11,8 @@ defmodule SymphonyElixir.QaAgent.PlanCheck do
     * `briefs/3`, once the QA plan answered and before the first walk session: each brief's
       `needs` (`needs_shape/1`), a list of objects in a fixed shape: `{"kind": "tool", "name":
       "qa_drag"}` for a QA driver tool, `{"kind": "fixture_page", "fixture": "<directory>",
-      "page": "<page>"}` for a page of a committed fixture, `{"kind": "server"}` for the live
+      "page": "<page>"}` for a page of a committed fixture (the directory by its path in the
+      checkout, or by its name among the state fixtures in `macos/Tests/Fixtures/director-app`), `{"kind": "server"}` for the live
       server. A tool the driver does not offer, a fixture directory that is absent, or the server on
       a pass without one marks the step.
 
@@ -26,6 +27,10 @@ defmodule SymphonyElixir.QaAgent.PlanCheck do
 
   @status "unprovable"
   @kinds ~w(tool fixture_page server)
+
+  # Where a fixture named by its bare directory name (`update-paused`, as the QA rules and
+  # docs/configuration.md name one) lives: the Director's committed state fixtures.
+  @state_fixtures "macos/Tests/Fixtures/director-app"
 
   @typedoc "What the pass has: the driver's tools, whether it runs the live server (and why not), and its worktree."
   @type facts :: %{tools: [String.t()], live: boolean(), live_reason: String.t() | nil, worktree: Path.t()}
@@ -69,7 +74,8 @@ defmodule SymphonyElixir.QaAgent.PlanCheck do
 
   defp shape_error do
     ~s(each brief's `needs` must be a list of objects: {"kind": "tool", "name": "<qa_ tool>"}, ) <>
-      ~s({"kind": "fixture_page", "fixture": "<directory>", "page": "<page>"} or {"kind": "server"})
+      ~s({"kind": "fixture_page", "fixture": "<directory: its path in the checkout or its name>", "page": "<page>"} ) <>
+      ~s(or {"kind": "server"})
   end
 
   defp need?(%{"kind" => "tool", "name" => name}), do: text?(name)
@@ -161,9 +167,15 @@ defmodule SymphonyElixir.QaAgent.PlanCheck do
   defp missing_fixture(fixture, page, facts) do
     fixture = fixture |> String.trim() |> String.trim_trailing("/")
 
-    if File.dir?(Path.join(facts.worktree, fixture)),
+    if fixture_dir?(facts.worktree, fixture),
       do: [],
       else: ["the fixture `#{fixture}`#{page_note(page)}, which this pass's worktree does not hold"]
+  end
+
+  # A fixture is named by its path in the checkout (`macos/Tests/Fixtures/director-app/running`)
+  # or by its directory's name among the state fixtures (`running`).
+  defp fixture_dir?(worktree, fixture) do
+    File.dir?(Path.join(worktree, fixture)) or File.dir?(Path.join([worktree, @state_fixtures, fixture]))
   end
 
   defp page_note(page) when is_binary(page), do: " (page #{String.trim(page)})"

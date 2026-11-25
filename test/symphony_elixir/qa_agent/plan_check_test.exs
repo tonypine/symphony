@@ -94,6 +94,17 @@ defmodule SymphonyElixir.QaAgent.PlanCheckTest do
                "the live server, which this pass does not run (no QA check of the plan is set to the live server)"
              ]
 
+      # A fixture named by its directory's name, as the QA rules and docs name one, is found among
+      # the state fixtures; a bare name that is not one of them is still absent.
+      by_name = [
+        %{"step" => 1, "needs" => [%{"kind" => "fixture_page", "fixture" => "running", "page" => "Home"}]},
+        %{"step" => 2, "needs" => [%{"kind" => "fixture_page", "fixture" => "update-paused", "page" => "Home"}]}
+      ]
+
+      assert {[%{number: 1}], [%{number: 2, needs: [absent]}]} = PlanCheck.briefs([target(1), target(2)], by_name, facts)
+      assert absent == "the fixture `update-paused` (page Home), which this pass's worktree does not hold"
+      assert {[%{number: 1}], []} = PlanCheck.settings([target(1, fixture("running"))], facts)
+
       # The server is met on a pass that runs it.
       assert {[_], []} = PlanCheck.briefs([target(1)], [%{"step" => 1, "needs" => [%{"kind" => "server"}]}], %{facts | live: true})
     end
