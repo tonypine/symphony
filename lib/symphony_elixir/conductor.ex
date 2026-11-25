@@ -776,7 +776,10 @@ defmodule SymphonyElixir.Conductor do
     record_run_ended(plan, issue, run_id, %{exit: exit, tokens: tokens, started_at: started_at, phase: phase})
     # The move goes last, once the turn is recorded: a move into Backlog or a closed stage stops the
     # ticket's running run, which may be the one this turn runs in.
-    {exit, moved(outcome, held, plan, issue, run_id, opts), route}
+    held = moved(outcome, held, plan, issue, run_id, opts)
+    # An answer to a held question, in the person's words, no longer holds the ticket once it is read.
+    Message.settle(plan, outcome, held, issue, opts)
+    {exit, held, route}
   end
 
   # The stage the answer moves the ticket to, through the person's free move and its guards

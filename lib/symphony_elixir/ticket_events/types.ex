@@ -152,7 +152,9 @@ defmodule SymphonyElixir.TicketEvents.Types do
   (`SymphonyElixir.Marks`).
 
   `message.sent` is the person's: what they wrote to the ticket (`text`), through the control API's
-  note endpoint, each message its own event (`SymphonyElixir.Messages`). `message.read` is
+  note endpoint, each message its own event (`SymphonyElixir.Messages`); one that answers, in the
+  person's own words, the question the ticket is held on names it (`question_id`,
+  `SymphonyElixir.DirectorMoves.answer_held_question/4`). `message.read` is
   machinery-only: the run (`run_id`) whose prompt was given the message (`message_id`, the
   `message.sent` event's id) as new, keyed by the message so it is given to one run only.
 
@@ -757,7 +759,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
       writers: [:person],
       run_kinds: [],
       required: [text: {:string, 4_000}],
-      optional: @signal,
+      optional: [question_id: :string] ++ @signal,
       idempotency: :writer
     },
     "message.read" => %{
