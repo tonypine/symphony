@@ -37,7 +37,7 @@
           "title": "Checkout that survives a reload"
         },
         "ticket": {
-          "issue_id": "issue-shop-301",
+          "issue_id": "i-301",
           "identifier": "SHOP-301",
           "title": "Saved carts",
           "repo_key": "shop",

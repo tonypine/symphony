@@ -84,6 +84,18 @@ final class DispatchTests: XCTestCase {
         XCTAssertEqual(held.limits, ["Daily token budget used up, resets at midnight UTC"])
     }
 
+    /// Anthropic at its reserve and OpenCode Go at its weekly limit: the bar names both, each once (TP-1617).
+    func testHoldingNamesEveryProviderAtItsLimit() throws {
+        let control = DispatchControl(window: .connected, paused: false, state: try state("fallback-limit"), now: Date(), timeZone: utc)
+        XCTAssertEqual(control.mode, .holding)
+        XCTAssertEqual(control.word, "Holding · Claude and OpenCode Go limits")
+        XCTAssertEqual(control.limits.count, 2)
+
+        let three = [StateSnapshot.UsageLimit(), .init(provider: "opencode-go"), .init(provider: "openrouter"), .init(provider: "opencode-go")]
+        XCTAssertEqual(DispatchControl.limitsWord(three), "Claude, OpenCode Go and OpenRouter limits")
+        XCTAssertEqual(DispatchControl.limitsWord([.init(reason: "model_api_unreachable")]), "limit")
+    }
+
     /// The popover offers Try Now beside the paused limit it checks (TP-1471).
     func testHoldingOffersTryNowForAPausedLimit() throws {
         let control = DispatchControl(window: .connected, paused: false, state: try state("holding"), now: Date(), timeZone: utc)
