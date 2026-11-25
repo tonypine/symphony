@@ -464,7 +464,11 @@ Each tick also looks for a ticket that waits with nothing under way and no reaso
 on (`SymphonyElixir.PrWatch.SilentWait`). A watched ticket with an active run or a hold is never
 silent, nor one the watcher acted on in this tick (a move, a rerun, a GitHub call), nor one whose
 decision, made within the last two ticks, leaves it waiting on an owner
-until something happens (`owner` and `clears_when`). Any other ticket is quiet: a decision with no
+until something happens (`owner` and `clears_when`), nor one whose fresh decision is a run
+(`dispatch`, `ci_fix`, `land_agent`) that waits for a slot: in line behind a ticket that takes the
+free slot, or with every slot in use. That is the fact the ticket's situation reads as Waiting for a
+slot (`SymphonyElixir.Situation.waits_for_slot?/2`, from the orchestrator's last published
+snapshot), so the two never disagree, and the wait is recorded however long it lasts. Any other ticket is quiet: a decision with no
 owner (such as `dispatch`) that nothing followed, no decision, or one older than two ticks. A ticket
 quiet for two poll cycles in a row is silent; quiet ticks count poll intervals, not polls, so a
 `poll_now` or Check Now inside an interval adds none. A wait that outlived its bound is silent too: on `ci` past
@@ -479,7 +483,8 @@ ticket is listed two ticks after the update.
 
 A silent ticket is listed in `silent_waits` in `GET /api/v1/state` (its phase, since when, the last
 rule, the bound that passed and why) and logs one `pr_watch.silent_wait` line when it turns silent.
-It leaves the list on the first tick a run is active, a hold is set or a wait is recorded.
+It leaves the list on the first tick a run is active, a hold is set, a wait is recorded or the
+ticket is seen waiting for a slot.
 
 ### The watch block and Check Now
 
