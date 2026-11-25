@@ -179,6 +179,14 @@ defmodule SymphonyElixir.QaStateTest do
       assert QaState.finding_text(result) =~ "macos/Tests/Fixtures/demo/split (the check's fixture setting; the head does not hold it)"
     end
 
+    test "an empty seed path's finding says it is empty on the head" do
+      path = %{path: "priv/qa_seed/demo/seed.json", holds: "present", held: false, why: "empty"}
+      result = %{check_id: "c1", statement: "The panel shows c1.", status: "missing", paths: [path]}
+
+      assert QaState.finding_text(result) =~
+               "priv/qa_seed/demo/seed.json (the plan says the seed or fixtures hold it already; it is empty on the head)"
+    end
+
     test "a head git cannot read is an error, and so is a base branch it cannot find for an added path" do
       plan!([qa_check("c1", %{walked_on: [walked("priv/qa_seed/demo/seed.json", "added")]})])
       not_git = Path.join(System.tmp_dir!(), "qa-state-none-#{System.unique_integer([:positive])}")
