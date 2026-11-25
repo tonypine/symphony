@@ -3712,7 +3712,9 @@ exactly as before.
   read 2 times in a row (each counted in a status note).
 - **Waiting for the Conductor.** While no provider of `runs.conductor` can take a run (paused, or
   at its usage limit), a turn the ticket is owed waits, and the ticket says so in one status note
-  per wait ("Waiting for the Conductor: …"). Symphony does not read the ticket from the tracker
+  per wait that names every provider of the list ("Waiting for the Conductor: Claude and OpenCode Go
+  are at their usage limits; the earliest reset is 13:02 UTC-3." when each is held at its limit,
+  "… are paused or at their usage limits" when a pause keeps one off). Symphony does not read the ticket from the tracker
   while it waits. A final check that has waited more than 30 minutes asks the person, once per
   wait: "Keep waiting" or "Close it on its sub-tickets".
 - **A sub-ticket left in Backlog.** A sub-ticket Symphony created in `Backlog` whose link or move

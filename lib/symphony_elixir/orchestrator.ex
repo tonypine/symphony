@@ -2671,6 +2671,10 @@ defmodule SymphonyElixir.Orchestrator do
   def tend_groomed_parents_for_test(issues, %State{} = state) when is_list(issues), do: state |> tend_groomed_parents(issues) |> await_tracker_tasks()
 
   @doc false
+  @spec conductor_opts_for_test(term(), Issue.t()) :: keyword()
+  def conductor_opts_for_test(%State{} = state, %Issue{} = issue), do: conductor_opts(state, issue)
+
+  @doc false
   @spec close_finished_parents_for_test([Issue.t()], term()) :: term()
   def close_finished_parents_for_test(issues, %State{} = state) when is_list(issues), do: state |> close_finished_parents(issues) |> await_tracker_tasks()
 
@@ -4091,10 +4095,10 @@ defmodule SymphonyElixir.Orchestrator do
          true <- SubIssueWait.in_state?(issue, settings) and SubIssueWait.groomed?(issue),
          false <- parent_busy?(state, :tree_turn, issue_id) or hold?(issue),
          junction when is_binary(junction) <- tree_junction(issue, terminal_states) do
-      available? = conductor_available?(state, issue)
+      conducting = conductor_opts(state, issue)
       repo_key = hold_repo_key(issue)
 
-      turn = tree_turn(issue, junction, repo_key, terminal_states, available?)
+      turn = tree_turn(issue, junction, repo_key, terminal_states, conducting)
       start_tracker_task(state, %{kind: :tree_turn, issue_ids: [issue_id]}, turn)
     else
       _not_owed -> state
@@ -4118,9 +4122,10 @@ defmodule SymphonyElixir.Orchestrator do
     if tracker_task_in_flight?(state, :tree_turn, issue_id) do
       %{state | conductor_owed: MapSet.put(state.conductor_owed, issue_id)}
     else
-      available? = conductor_available?(state, %Issue{id: issue_id})
+      conducting = conductor_opts(state, %Issue{id: issue_id})
       state = %{state | conductor_owed: MapSet.delete(state.conductor_owed, issue_id)}
-      start_tracker_task(state, %{kind: :tree_turn, issue_ids: [issue_id]}, fn -> {:ok, ConductorMessage.tend(issue_id, available?: available?)} end)
+      tend = fn -> {:ok, ConductorMessage.tend(issue_id, conducting)} end
+      start_tracker_task(state, %{kind: :tree_turn, issue_ids: [issue_id]}, tend)
     end
   end
 
@@ -4134,10 +4139,10 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # A turn no provider can take now is not worth a read of the ticket: it says that it waits.
-  defp tree_turn(issue, junction, repo_key, terminal_states, available?) do
-    case junction != "start" && Conductor.unavailable(repo_key, available?) do
-      provider when is_binary(provider) -> fn -> Conductor.wait(issue, junction, repo_key, provider) end
-      _can_run -> fn -> tend_fresh(issue, junction, repo_key, terminal_states, available?) end
+  defp tree_turn(issue, junction, repo_key, terminal_states, conducting) do
+    case junction != "start" && Conductor.unavailable(repo_key, conducting[:available?], conducting) do
+      why when is_binary(why) -> fn -> Conductor.wait(issue, junction, repo_key, why) end
+      _can_run -> fn -> tend_fresh(issue, junction, repo_key, terminal_states, conducting) end
     end
   end
 
@@ -4150,11 +4155,11 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp tend_fresh(%Issue{id: issue_id} = issue, junction, repo_key, terminal_states, available?) do
+  defp tend_fresh(%Issue{id: issue_id} = issue, junction, repo_key, terminal_states, conducting) do
     with {:ok, [%Issue{} = fresh | _rest]} <- Tracker.fetch_issue_states_by_ids([issue_id]),
          fresh = %{fresh | repo_key: fresh.repo_key || repo_key},
          ^junction <- tree_junction(fresh, terminal_states) do
-      Conductor.tend(fresh, junction, repo_key, available?: available?)
+      Conductor.tend(fresh, junction, repo_key, conducting)
     else
       {:error, reason} -> Logger.warning("Failed to refresh a ticket before its Conductor turn; retrying next poll: #{issue_context(issue)} reason=#{inspect(reason)}")
       _no_longer_owed -> :ok
@@ -6482,7 +6487,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp conductor_plan(_state, _issue, _run_profile, _repo_key, %{run_kind: :pr}), do: nil
 
   defp conductor_plan(%State{} = state, %Issue{} = issue, %{kind: kind}, repo_key, _running_attrs),
-    do: Conductor.plan(issue, kind, repo_key, available?: conductor_available?(state, issue))
+    do: Conductor.plan(issue, kind, repo_key, conductor_opts(state, issue))
 
   # The Conductor's turn runs in the run's task before its agent, and the run's `run.started` is
   # recorded once the turn is done, so the turn sits before the run on the timeline. A turn that asked
@@ -6509,7 +6514,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp start_conductor_after_run(%State{} = state, %{issue: %Issue{} = issue, run_profile: %{kind: kind}} = running_entry, :normal) do
     repo_key = running_entry_repo_key(running_entry)
 
-    case Conductor.plan_after_run(issue, kind, repo_key, available?: conductor_available?(state, issue)) do
+    case Conductor.plan_after_run(issue, kind, repo_key, conductor_opts(state, issue)) do
       nil -> :ok
       plan -> Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn -> Conductor.run(plan, issue, []) end)
     end
@@ -6517,9 +6522,28 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp start_conductor_after_run(_state, _running_entry, _reason), do: :ok
 
-  # A provider can take the Conductor's turn when it is not paused and no usage limit holds it.
-  defp conductor_available?(%State{} = state, %Issue{} = issue) do
-    fn profile -> not MapSet.member?(state.paused_providers, profile.provider) and is_nil(usage_limit_holding(state, issue, profile, false)) end
+  # What the Conductor plans a turn with: a provider can take its turn when it is not paused and no
+  # usage limit holds it (`available?`); when every provider of `runs.conductor` is held at its usage
+  # limit, the wait names them all and the earliest reset (`held_line`, TP-1617).
+  defp conductor_opts(%State{} = state, %Issue{} = issue) do
+    [
+      available?: fn profile -> conductor_free?(state, issue, profile) end,
+      held_line: fn candidates -> conductor_held_line(state, issue, candidates) end
+    ]
+  end
+
+  defp conductor_free?(%State{} = state, %Issue{} = issue, profile) do
+    not MapSet.member?(state.paused_providers, profile.provider) and
+      is_nil(usage_limit_holding(state, issue, profile, false))
+  end
+
+  # Nil when a provider of the list is free of a usage limit (a Director's pause keeps it off).
+  defp conductor_held_line(%State{} = state, %Issue{} = issue, candidates) do
+    holds = Enum.map(candidates, &usage_limit_holding(state, issue, &1, false))
+
+    if Enum.all?(holds) do
+      holds |> Enum.uniq_by(&{&1.provider, &1.scope}) |> UsageLimit.all_held_line(state.clock.(), [])
+    end
   end
 
   # Every run started for a ticket is recorded as its `run.started` event, best effort, which the

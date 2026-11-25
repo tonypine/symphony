@@ -153,7 +153,8 @@ defmodule SymphonyElixir.Conductor do
     TicketEvents,
     TicketPlan,
     TicketState,
-    TransitionGuard
+    TransitionGuard,
+    UsageLimit
   }
 
   alias SymphonyElixir.ClaudeCode.AppServer, as: ClaudeAppServer
@@ -350,7 +351,9 @@ defmodule SymphonyElixir.Conductor do
   The turn the dispatch of a run of `next_kind` on `issue` plans, or nil: when the Conductor is off,
   when no enabled junction is due (`dispatch_junction/2`), or when no run profile of `runs.conductor`
   can take a run now (but at `grooming`, whose turn is then planned as a try that failed). `opts`: `available?` (`(Run.t() -> boolean())`, whether a profile's provider
-  can take a run now, default every one), `settings` (the `conductor` section, default
+  can take a run now, default every one), `held_line` (`([Run.t()] -> String.t() | nil)`, the line a
+  wait names when no profile can: every one of them held, with the earliest reset; nil, the default,
+  names their providers), `settings` (the `conductor` section, default
   `Config.conductor_settings/0`) and `events` (the ticket's events, default its record's, read
   with `read`, `Facts.read_events/1`: a read that failed plans no turn, so it never looks like a
   ticket with no events, which Grooming would take for a new one).
@@ -456,7 +459,7 @@ defmodule SymphonyElixir.Conductor do
          junction when is_binary(junction) <- junction_of.(events),
          true <- junction in settings.junctions do
       %{junction: junction, issue_id: issue_id, repo_key: repo_key, timeout_ms: timeout_ms(settings, junction)}
-      |> with_profile(profile(repo_key, Keyword.get(opts, :available?, fn _profile -> true end)))
+      |> with_profile(profile(repo_key, Keyword.get(opts, :available?, fn _profile -> true end), opts))
     else
       _none -> nil
     end
@@ -477,22 +480,35 @@ defmodule SymphonyElixir.Conductor do
 
   defp with_profile(plan, {:ok, run_profile}), do: Map.put(plan, :run_profile, run_profile)
 
-  defp with_profile(%{junction: junction, issue_id: issue_id, repo_key: repo_key} = plan, {:held, provider}) do
+  defp with_profile(%{junction: junction, issue_id: issue_id, repo_key: repo_key} = plan, {:held, why}) do
     Logger.info(
       "Conductor skipped issue_id=#{issue_id} repo_key=#{repo_key}: " <>
-        "no provider of runs.conductor can take a run now (#{provider})"
+        "no provider of runs.conductor can take a run now (#{why})"
     )
 
-    if junction in @waiting_junctions, do: Map.put(plan, :unavailable, to_string(provider))
+    if junction in @waiting_junctions, do: Map.put(plan, :unavailable, why)
   end
 
-  # The run kind's own choice, or the first fallback whose provider can take a run now.
-  defp profile(repo_key, available?) do
-    [own | _fallbacks] = candidates = repo_key |> Config.settings_for_repo!() |> Config.runs(:conductor)
+  # The run kind's own choice, or the first fallback whose provider can take a run now. When none
+  # can, why: `opts[:held_line]`'s line for the list (each provider held at its usage limit and the
+  # earliest reset), else every provider of the list by name (TP-1617).
+  defp profile(repo_key, available?, opts) do
+    candidates = repo_key |> Config.settings_for_repo!() |> Config.runs(:conductor)
 
     case Enum.find(candidates, available?) do
       %Run{} = run -> {:ok, run}
-      nil -> {:held, own.provider}
+      nil -> {:held, held_why(candidates, Keyword.get(opts, :held_line))}
+    end
+  end
+
+  defp held_why(candidates, held_line) when is_function(held_line, 1) do
+    with nil <- held_line.(candidates), do: held_why(candidates, nil)
+  end
+
+  defp held_why(candidates, nil) do
+    case candidates |> Enum.map(&UsageLimit.provider_name(&1.provider)) |> Enum.uniq() do
+      [one] -> "#{one} is paused or at its usage limit"
+      names -> "#{Enum.join(Enum.drop(names, -1), ", ")} and #{List.last(names)} are paused or at their usage limits"
     end
   end
 
@@ -536,15 +552,16 @@ defmodule SymphonyElixir.Conductor do
   end
 
   @doc """
-  The provider that keeps the Conductor's turns on `repo_key`'s tickets waiting now, or nil: the
-  Conductor is on and no profile of `runs.conductor` can take a run (`available?`, as `plan/4`'s).
+  Why the Conductor's turns on `repo_key`'s tickets wait now, or nil: the Conductor is on and no
+  profile of `runs.conductor` can take a run (`available?`, as `plan/4`'s). The why names every
+  provider of the list, with the earliest reset when `opts[:held_line]` gives one (as `plan/4`'s).
   The orchestrator asks before it reads a waiting ticket from the tracker for a turn that cannot run.
   """
   @spec unavailable(String.t() | nil, (Run.t() -> boolean()), keyword()) :: String.t() | nil
   def unavailable(repo_key, available?, opts \\ []) do
     with true <- is_binary(repo_key) and enabled?(Keyword.get_lazy(opts, :settings, &Config.conductor_settings/0)),
-         {:held, provider} <- profile(repo_key, available?) do
-      to_string(provider)
+         {:held, why} <- profile(repo_key, available?, opts) do
+      why
     else
       _available_or_off -> nil
     end
@@ -553,15 +570,16 @@ defmodule SymphonyElixir.Conductor do
   end
 
   @doc """
-  The turn `issue` is owed at `junction` cannot run because `provider` takes no run now: the ticket
+  The turn `issue` is owed at `junction` cannot run because no provider takes a run now, for `why`
+  (`unavailable/3`'s): the ticket
   says that it waits (`Tree.waiting/5`, once per wait), and a final check that has waited more than
   30 minutes asks the person once. Always `:ok`. `opts[:now]` is the time.
   """
   @spec wait(Issue.t(), String.t(), String.t() | nil, String.t(), keyword()) :: :ok
-  def wait(%Issue{id: issue_id} = issue, junction, repo_key, provider, opts \\ []) do
+  def wait(%Issue{id: issue_id} = issue, junction, repo_key, why, opts \\ []) do
     plan = %{junction: junction, issue_id: issue_id, repo_key: repo_key}
     now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
-    say = fn -> ask_about(Tree.waiting(repo_key, issue_id, junction, provider, now), plan, issue) end
+    say = fn -> ask_about(Tree.waiting(repo_key, issue_id, junction, why, now), plan, issue) end
     _said_or_busy = exclusive(issue_id, :skip, say)
     :ok
   end
@@ -1395,7 +1413,7 @@ defmodule SymphonyElixir.Conductor do
     record = record(issue_id, opts)
     repo_key = Map.get(run, :repo_key) || record.repo_key
 
-    {:ok, run_profile} = profile(repo_key, fn _profile -> true end)
+    {:ok, run_profile} = profile(repo_key, fn _profile -> true end, [])
     events = Facts.events(issue_id)
     live = Watch.live(run, Enum.filter(events, &(&1.run_id == run_id)))
     facts = record |> Facts.build("during_run", Keyword.put(opts, :events, events)) |> Map.put(:live, live)
