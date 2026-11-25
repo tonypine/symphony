@@ -162,7 +162,7 @@ final class LifecycleTests: XCTestCase {
         XCTAssertEqual(model.tokens.segments.first?.value, "6.2M")
         XCTAssertNil(model.tokens.note)
         XCTAssertEqual(model.tokens.level, .normal)
-        XCTAssertEqual(model.tokens.accessibilityLabel, "Tokens, 6.2M of 8M tokens · 77 %, Coding 6.2M")
+        XCTAssertEqual(model.tokens.accessibilityLabel, "Ticket total, 6.2M of 8M tokens · 77 %, Coding 6.2M")
         // Still working at the same share, it warns.
         let working = TicketLifecycle(current: "coding", stages: [.init(id: "coding", name: "Coding", state: .current, tokens: 6_200_000)], tokens: shipped.tokens)
         XCTAssertEqual(LifecycleModel.build(working).tokens.note, "Getting close: 23 % left of the ticket's cap.")
@@ -191,7 +191,7 @@ final class LifecycleTests: XCTestCase {
         XCTAssertEqual(bar.level, .normal)
         XCTAssertEqual(bar.note, "55 % of the ticket's cap left.")
         XCTAssertEqual(bar.scale, 8_000_000)
-        XCTAssertEqual(bar.accessibilityLabel, "Tokens, 3.6M of 8M tokens · 45 %, Coding 3.1M, Code Review 500K, 55 % of the ticket's cap left.")
+        XCTAssertEqual(bar.accessibilityLabel, "Ticket total, 3.6M of 8M tokens · 45 %, Coding 3.1M, Code Review 500K, 55 % of the ticket's cap left.")
     }
 
     func testATicketAt95PercentOfItsCapTurnsTheBarToTheProblemColour() throws {
@@ -229,7 +229,7 @@ final class LifecycleTests: XCTestCase {
         XCTAssertNil(bar(3_600_000, cap: nil).note)
         XCTAssertNil(bar(3_600_000, cap: 0).fraction)
         XCTAssertEqual(bar(0, cap: nil).value, "Nothing yet")
-        XCTAssertEqual(bar(0, cap: nil).accessibilityLabel, "Tokens, Nothing yet")
+        XCTAssertEqual(bar(0, cap: nil).accessibilityLabel, "Ticket total, Nothing yet")
     }
 
     func testATicketOutsideTheStagesOrNotStartedSaysSo() {

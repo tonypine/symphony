@@ -383,6 +383,10 @@ public struct LifecycleModel: Equatable {
         part.replacingOccurrences(of: " ", with: "\u{00A0}")
     }
 
+    /// The token bar's title: the ticket's total across all its runs, which the cap measures; a run's own tokens are
+    /// on its header in the timeline.
+    public static let tokensTitle = TicketPage.ticketTokensLabel
+
     /// The Conductor's segment of the token bar.
     public static let conductorSegmentID = "conductor"
     public static let conductorName = "Conductor"
@@ -428,7 +432,7 @@ public struct LifecycleModel: Equatable {
             }
         }
         let split = segments.filter { $0.tokens > 0 }.map { "\($0.name) \($0.value)" }
-        let label = ["Tokens", value] + split + [note].compactMap { $0 }
+        let label = [tokensTitle, value] + split + [note].compactMap { $0 }
         return TokenBar(
             segments: segments, total: total, cap: cap, fraction: fraction, level: level, value: value, note: note,
             accessibilityLabel: label.joined(separator: ", ")
