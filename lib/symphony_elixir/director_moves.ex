@@ -1051,7 +1051,7 @@ defmodule SymphonyElixir.DirectorMoves do
   # requests closed, so the `before_remove` hook finds none open to close again.
   defp remove_cancelled_workspace(issue, to_state, opts) do
     remove = Keyword.get(opts, :remove_workspace, &WorkspaceRemoval.remove/3)
-    workspace = %{id: issue.id, identifier: issue.identifier, repo_key: issue.repo_key, labels: issue.labels || [], state: to_state}
+    workspace = %{id: issue.id, identifier: issue.identifier, repo_key: issue.repo_key, labels: issue.labels, state: to_state}
     _ = remove.(workspace, nil, :terminal)
     :ok
   end
