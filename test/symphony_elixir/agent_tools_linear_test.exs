@@ -2534,6 +2534,32 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
                SymphonyElixir.Questions.deciding({:ticket, "repo-a", "issue-24"})
     end
 
+    test "TP-1596: an option with back_to_review carries the move to Code Review on a ticket in Rework, and is refused elsewhere" do
+      :ok = SymphonyElixir.RunStore.clear()
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      context = %{issue: %Issue{id: "issue-24", identifier: "MOT-24", repo_key: "repo-a"}, comment_registry: registry}
+
+      options = [
+        %{"label" => "Back to Code Review unchanged", "effect" => "PR #12 goes back to Code Review unchanged.", "recommended" => true, "back_to_review" => true},
+        %{"label" => "Change the check", "effect" => "The rework run changes it.", "back_to_review" => false}
+      ]
+
+      attrs = put_in(@human_action, ["decision", "options"], options)
+      rework = human_action_scope(%{issue: %{"state" => %{"name" => "Rework"}}})
+      assert {:ok, %{"requested" => true, "state" => "Rework"}} = request_human_action(context, rework, %{}, attrs)
+
+      assert %{options: [%{move: %{to: "Code Review", handoff: %{head: nil}}} = back, change]} =
+               SymphonyElixir.Questions.deciding({:ticket, "repo-a", "issue-24"})
+
+      refute Map.has_key?(back, :back_to_review)
+      refute Map.has_key?(change, :move)
+
+      :ok = SymphonyElixir.RunStore.clear()
+      assert {:error, {:invalid_human_action, message}} = request_human_action(context, human_action_scope(), %{}, attrs)
+      assert message =~ "sends the pull request back to review unchanged, but the ticket is in In Progress, not Rework"
+      assert Agent.get(registry, & &1.human_actions) == 1
+    end
+
     test "an option that unlocks a path still says what it allows in plain words, never the file name" do
       {:ok, registry} = Linear.CommentRegistry.start_link()
       context = %{issue: %Issue{id: "issue-24", identifier: "MOT-24", repo_key: "repo-a"}, comment_registry: registry}

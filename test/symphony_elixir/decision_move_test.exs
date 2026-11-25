@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.DecisionMoveTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{DecisionMove, RunStore, Workflow}
+  alias SymphonyElixir.{DecisionMove, Handoff, RunStore, Workflow}
 
   @repo_key "repo-move"
   @issue_id "issue-move"
@@ -54,5 +54,33 @@ defmodule SymphonyElixir.DecisionMoveTest do
     Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [{:error, :rate_limited}])
     capture_log(fn -> assert {:error, :rate_limited} = DecisionMove.perform(@repo_key, @issue_id, %{to: "Canceled"}) end)
     refute_received {:memory_tracker_state_update, @issue_id, _state}
+  end
+
+  test "back_to_review/4 moves a ticket in Rework to Code Review with the handoff, and is refused elsewhere" do
+    assert DecisionMove.back_to_review("Rework", "Rework", "Code Review", "abc123") == {:ok, %{to: "Code Review", handoff: %{head: "abc123"}}}
+    assert {:error, why} = DecisionMove.back_to_review("QA", "Rework", "Code Review", nil)
+    assert why =~ "the ticket is in QA, not Rework"
+  end
+
+  test "perform/4 with a handoff emits it for the Rework's base, moves to Code Review and forgets the base" do
+    :ok = RunStore.put_rework_base(@repo_key, @issue_id, "base123")
+    {:ok, move} = DecisionMove.back_to_review("Rework", "Rework", "Code Review", nil)
+
+    assert {:ok, "Code Review"} = DecisionMove.perform(@repo_key, @issue_id, move)
+    assert_received {:memory_tracker_state_update, @issue_id, "Code Review"}
+    assert Handoff.emitted?(@repo_key, @issue_id, "base123")
+    assert RunStore.get_rework_base(@repo_key, @issue_id) == nil
+  end
+
+  test "perform/4 with a handoff emits it for the question's head, and keeps the base when the move is refused" do
+    :ok = RunStore.put_rework_base(@repo_key, @issue_id, "base123")
+    Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [{:error, :rate_limited}])
+
+    capture_log(fn ->
+      assert {:error, :rate_limited} = DecisionMove.perform(@repo_key, @issue_id, %{to: "Code Review", handoff: %{head: "head456"}})
+    end)
+
+    assert Handoff.emitted?(@repo_key, @issue_id, "head456")
+    assert RunStore.get_rework_base(@repo_key, @issue_id) == "base123"
   end
 end

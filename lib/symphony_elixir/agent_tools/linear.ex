@@ -18,6 +18,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Workspace.Attachments
+  alias SymphonyElixir.DecisionMove
   alias SymphonyElixir.DecisionRequest
   alias SymphonyElixir.Decisions
   alias SymphonyElixir.DescriptionLock
@@ -1407,7 +1408,11 @@ defmodule SymphonyElixir.AgentTools.Linear do
       tradeoffs: for(tradeoff <- List.wrap(option["tradeoffs"]), do: %{kind: tradeoff["kind"], text: tradeoff["text"]})
     }
     |> put_option_unlocks(PathUnlock.protected(option["unlocks"]))
+    |> put_back_to_review(option["back_to_review"])
   end
+
+  defp put_back_to_review(option, true), do: Map.put(option, :back_to_review, true)
+  defp put_back_to_review(option, _none), do: option
 
   defp put_option_unlocks(option, []), do: option
   defp put_option_unlocks(option, unlocks), do: Map.put(option, :unlocks, unlocks)
@@ -1506,10 +1511,15 @@ defmodule SymphonyElixir.AgentTools.Linear do
   # recorded, so nothing is asked or posted again. A request raised
   # from the CI Fix lane is the lane's `cannot_fix` verdict: the repair needs access or a secret,
   # which no run can supply, so the ticket waits for a person in place.
+  #
+  # An option with `back_to_review` carries its move as data (`DecisionMove.back_to_review/4`): the
+  # pull request goes back to Code Review as it is, so picking it starts no rework run. It is refused
+  # outside Rework.
   defp hold_request(repo_key, issue, open, request, settings, opts) do
     state = get_in(issue, ["state", "name"])
 
-    with {:ok, result} <- ask_or_project(repo_key, issue, open, request, opts) do
+    with {:ok, request} <- back_to_review_moves(request, state, settings),
+         {:ok, result} <- ask_or_project(repo_key, issue, open, request, opts) do
       record_hold_verdict(repo_key, issue, state, settings)
 
       {:ok,
@@ -1519,6 +1529,25 @@ defmodule SymphonyElixir.AgentTools.Linear do
        |> Map.put("hold", Projector.question_label())}
     end
   end
+
+  defp back_to_review_moves(%{options: options} = request, state, settings) do
+    moved =
+      Enum.reduce_while(options, {:ok, []}, fn option, {:ok, acc} ->
+        case back_to_review_move(option, state, settings) do
+          {:ok, option} -> {:cont, {:ok, acc ++ [option]}}
+          {:error, why} -> {:halt, {:error, {:invalid_human_action, "Option #{inspect(option.label)} #{why}."}}}
+        end
+      end)
+
+    with {:ok, options} <- moved, do: {:ok, %{request | options: options}}
+  end
+
+  defp back_to_review_move(%{back_to_review: true} = option, state, settings) do
+    with {:ok, move} <- DecisionMove.back_to_review(state, "Rework", settings.tracker.code_review_state, nil),
+         do: {:ok, option |> Map.delete(:back_to_review) |> DecisionMove.option(move)}
+  end
+
+  defp back_to_review_move(option, _state, _settings), do: {:ok, option}
 
   # Best-effort, like every other ledger write: the question pauses the ticket either way.
   defp record_hold_verdict(repo_key, issue, state, settings) do

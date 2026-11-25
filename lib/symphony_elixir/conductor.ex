@@ -1411,9 +1411,11 @@ defmodule SymphonyElixir.Conductor do
   action makes once picked (`SymphonyElixir.DecisionMove`), for a question asked in `state` on
   `head` by the run `run_id`: `continue` and `rerun` move nothing (the answer clears the pause, and
   the phase's run starts again), `rework` moves to Rework with the option's finding recorded as that
-  run's, `accept_without_qa` records QA's `skip` verdict on the head and moves to where a QA pass
+  run's, `back_to_review` moves a ticket in Rework to Code Review with the pull request as it is (the
+  handoff for `head` emitted, `SymphonyElixir.DecisionMove.back_to_review/4`), `accept_without_qa` records QA's `skip` verdict on the head and moves to where a QA pass
   goes (Merging), `cancel` moves to Canceled. An action this phase can't take refuses the question
-  (`{:error, why}`): accepting without QA outside QA, Rework from Rework. The QA seed builds its
+  (`{:error, why}`): accepting without QA outside QA, Rework from Rework, back to review outside
+  Rework. The QA seed builds its
   Conductor questions with it (`SymphonyElixir.QaSeed`).
   """
   @spec actioned_options([map()], map(), String.t(), String.t() | nil, String.t()) ::
@@ -1440,6 +1442,9 @@ defmodule SymphonyElixir.Conductor do
       do: {:error, "sends the ticket to Rework, where it already is"},
       else: {:ok, %{to: @rework, finding: %{description: finding, run_id: run_id, run_kind: "conductor"}}}
   end
+
+  defp option_move(%{action: "back_to_review"}, settings, state, head, _run_id),
+    do: DecisionMove.back_to_review(state, @rework, settings.tracker.code_review_state, head)
 
   defp option_move(%{action: "accept_without_qa"}, settings, state, head, _run_id) do
     if state == settings.tracker.qa_state,

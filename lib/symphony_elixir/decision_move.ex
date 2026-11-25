@@ -16,11 +16,18 @@ defmodule SymphonyElixir.DecisionMove do
   Conductor's "Send it to Rework" option): the rework run reads it as it reads QA's findings. And
   it may carry waivers (`waive`): checks of the ticket's plan recorded as waived before the move,
   each with its reason (`SymphonyElixir.ChecksHold`'s "Waive them and pass it on").
+
+  A move back to Code Review from Rework with the pull request as it is (`handoff`, an option's
+  "back to review unchanged": the Conductor's `back_to_review` action, a run's question option with
+  `back_to_review`) leaves the ticket as a finished rework leaves it: the handoff for the head is
+  emitted first (the head the question was asked on, else the head the Rework started from), and once
+  the move is made the stored rework base is forgotten, so the next dispatch is Code Review's on that
+  head and no rework run starts.
   """
 
   require Logger
 
-  alias SymphonyElixir.{MergeConfirmation, TicketChecks, TicketSignals, TransitionGuard}
+  alias SymphonyElixir.{Handoff, MergeConfirmation, RunStore, TicketChecks, TicketSignals, TransitionGuard}
 
   @canceled_spellings ["Canceled", "Cancelled"]
 
@@ -33,13 +40,29 @@ defmodule SymphonyElixir.DecisionMove do
   @typedoc "A check of the ticket's plan a move waives first, and why."
   @type waiver :: %{check_id: String.t(), reason: String.t()}
 
-  @typedoc "The state a picked option moves the ticket to, and the verdict, the finding and the waivers it records first, if any."
+  @typedoc "A handoff a move emits first: the head the pull request returns to review on, nil for the Rework's base."
+  @type handoff :: %{head: String.t() | nil}
+
+  @typedoc "The state a picked option moves the ticket to, and the verdict, the finding, the waivers and the handoff it records first, if any."
   @type t :: %{
           required(:to) => String.t(),
           optional(:verdict) => verdict(),
           optional(:finding) => finding(),
-          optional(:waive) => [waiver()]
+          optional(:waive) => [waiver()],
+          optional(:handoff) => handoff()
         }
+
+  @doc """
+  The move back to Code Review with the pull request as it is, from Rework: to `code_review_state`,
+  with the handoff for `head` (nil for the head the Rework started from). `{:error, why}` outside
+  `rework_state`, as Rework is refused from Rework.
+  """
+  @spec back_to_review(String.t() | nil, String.t(), String.t(), String.t() | nil) :: {:ok, t()} | {:error, String.t()}
+  def back_to_review(state, rework_state, code_review_state, head) do
+    if state == rework_state,
+      do: {:ok, %{to: code_review_state, handoff: %{head: head}}},
+      else: {:error, "sends the pull request back to review unchanged, but the ticket is in #{state}, not #{rework_state}"}
+  end
 
   @doc "`option` carrying `move`: picking it makes the move."
   @spec option(map(), t()) :: map()
@@ -72,16 +95,39 @@ defmodule SymphonyElixir.DecisionMove do
     record_finding(repo_key, issue_id, Map.get(move, :finding))
     record_verdict(repo_key, issue_id, Map.get(move, :verdict))
     record_waivers(repo_key, issue_id, Map.get(move, :waive))
+    handoff = Map.get(move, :handoff)
+    emit_handoff(repo_key, issue_id, handoff)
     ctx = %{repo_key: repo_key, issue_identifier: Keyword.get(opts, :issue_identifier)}
 
-    Enum.reduce_while(spellings(to), {:error, :state_not_found}, fn state, _result ->
+    spellings(to)
+    |> Enum.reduce_while({:error, :state_not_found}, fn state, _result ->
       case TransitionGuard.perform(issue_id, :director_move, Map.put(ctx, :target, state), Keyword.take(opts, [:tracker])) do
         :ok -> {:halt, {:ok, state}}
         {:error, :state_not_found} = error -> {:cont, error}
         error -> {:halt, error}
       end
     end)
+    |> tap(&forget_rework_base(&1, repo_key, issue_id, handoff))
   end
+
+  # The head the question was asked on, else the one the Rework started from; a handoff with no
+  # head counts for any head (`Handoff.emitted?/3`), as a tool hook's that could not read one.
+  defp emit_handoff(repo_key, issue_id, %{} = handoff) when is_binary(repo_key) do
+    head = Map.get(handoff, :head) || rework_base(repo_key, issue_id)
+    Handoff.emit(repo_key, issue_id, %{head: head, source: "decision"})
+  end
+
+  defp emit_handoff(_repo_key, _issue_id, _none), do: :ok
+
+  defp rework_base(repo_key, issue_id) do
+    case RunStore.get_rework_base(repo_key, issue_id) do
+      head when is_binary(head) -> head
+      _none -> nil
+    end
+  end
+
+  defp forget_rework_base({:ok, _state}, repo_key, issue_id, %{}) when is_binary(repo_key), do: RunStore.delete_rework_base(repo_key, issue_id)
+  defp forget_rework_base(_result, _repo_key, _issue_id, _handoff), do: :ok
 
   defp record_verdict(repo_key, issue_id, %{kind: kind, outcome: outcome} = verdict),
     do: TicketSignals.record_verdict(repo_key, issue_id, kind, Map.get(verdict, :head_sha), outcome, %{reason: Map.get(verdict, :reason)})

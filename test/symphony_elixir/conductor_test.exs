@@ -279,6 +279,27 @@ defmodule SymphonyElixir.ConductorTest do
       refute Enum.any?(options, &(Map.has_key?(&1, :action) or Map.has_key?(&1, :finding)))
     end
 
+    test "a back_to_review option moves a ticket in Rework to Code Review as it is, and is refused elsewhere (TP-1596)", _ctx do
+      question = %{
+        acting_question()
+        | "options" => [
+            %{"label" => "Back to Code Review unchanged", "effect" => "PR goes back to Code Review unchanged.", "recommended" => true, "action" => "back_to_review"},
+            %{"label" => "Keep it paused", "effect" => "Nothing moves.", "action" => "continue"}
+          ]
+      }
+
+      fresh = fresh_ticket!("Rework")
+      Conductor.run(plan(fresh), fresh.issue, turn: turn({:ok, [answer(%{"ask_person" => question})], 10}), facts: %{})
+      assert [%{options: [back, keep]}] = SymphonyElixir.Questions.open({:ticket, "default", fresh.issue_id})
+      assert %{to: "Code Review", handoff: %{head: _head}} = back.move
+      refute Map.has_key?(keep, :move)
+
+      elsewhere = fresh_ticket!("QA")
+      log = capture_log(fn -> Conductor.run(plan(elsewhere), elsewhere.issue, turn: turn({:ok, [answer(%{"ask_person" => question})], 10}), facts: %{}) end)
+      assert log =~ "sends the pull request back to review unchanged, but the ticket is in QA, not Rework"
+      assert SymphonyElixir.Questions.open({:ticket, "default", elsewhere.issue_id}) == []
+    end
+
     test "every turn's prompt says it may move its ticket to a stage, and how to write the move (TP-1656)", _ctx do
       junctions = ~w(grooming message child_message sub_ticket_ended final_check after_coding after_qa_fail after_qa_blocked after_rework before_merge during_run)
 

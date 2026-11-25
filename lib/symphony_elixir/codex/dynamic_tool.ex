@@ -406,6 +406,11 @@ defmodule SymphonyElixir.Codex.DynamicTool do
                       "description" => "What will happen to the work once it is picked, in the Director's terms: `TP-612 moves to Done, linked to TP-668`."
                     },
                     "recommended" => %{"type" => "boolean", "description" => "True on the one option you recommend."},
+                    "back_to_review" => %{
+                      "type" => "boolean",
+                      "description" =>
+                        "True when picking this option sends the pull request back to Code Review as it is, with no change: the pick moves the ticket to Code Review itself and no rework run starts. Only on a ticket in Rework; elsewhere the request is refused."
+                    },
                     "unlocks" => %{
                       "type" => "array",
                       "items" => %{"type" => "string"},
