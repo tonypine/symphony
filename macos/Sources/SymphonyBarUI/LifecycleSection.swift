@@ -27,8 +27,11 @@ public struct LifecycleSection: View {
 
     public var body: some View {
         TitledPanel(title: Self.title) {
-            LifecycleHead(model: model)
-            StageStrip(stages: model.stages)
+            // A ticket worked by its sub-tickets, with no stage of its own, says only its own tokens.
+            if !model.tokensOnly {
+                LifecycleHead(model: model)
+                StageStrip(stages: model.stages)
+            }
             TokenBarView(bar: model.tokens)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

@@ -130,9 +130,12 @@ final class FactsRailTests: XCTestCase {
         XCTAssertEqual(Set(model.groups.map(\.id)).count, 3)
     }
 
-    func testAPullRequestLessTicketHasNoPanelModelAndThePanelSaysSoInAPlainLine() throws {
+    /// TP-1652: a ticket with no pull request of its own (an epic waiting on its sub-tickets, a ticket before its first
+    /// run) has no panel model, so the page draws no Pull request panel and no blank-state sentence.
+    func testAPullRequestLessTicketHasNoPanelModel() throws {
         XCTAssertNil(PullRequestPanelModel.build(try read("blockers").pullRequest))
-        XCTAssertEqual(PullRequestPanelModel.emptyLine, "No pull request yet: the first run opens one, and its checks appear here.")
+        XCTAssertNil(PullRequestPanelModel.build(nil))
+        XCTAssertNotNil(PullRequestPanelModel.build(try read("green-pr").pullRequest))
     }
 
     func testEachStateOfThePullRequestAndOfItsChecksHasItsWordAndStatus() {

@@ -1454,7 +1454,7 @@ func phasePaths(width: CGFloat) -> some View {
 // MARK: - The facts rail's Pull request and Connected panels (TP-1446)
 
 /// Four tickets (`Tests/Fixtures/facts-rail`): a green PR and nothing connected; a red PR with three workflows; no PR
-/// yet, in an epic, with one blocker resolved yesterday and one open; a sub-ticket of an epic with sub-tickets of its own
+/// (so no Pull request panel), in an epic, with one blocker resolved yesterday and one open; a sub-ticket of an epic with sub-tickets of its own
 /// (TP-1651), its Connected panel's Epic block above its Sub-tickets list.
 let factsFixtures = here.appendingPathComponent("../Tests/Fixtures/facts-rail").standardizedFileURL
 let factsReference = ISO8601DateFormatter().date(from: "2026-11-10T15:00:00Z")!
@@ -1468,7 +1468,9 @@ func factsRail(_ name: String, width: CGFloat) -> some View {
           let read = TicketFactsRead.decode(data)
     else { fatalError("The facts rail fixture \(name) is missing from \(factsFixtures.path)") }
     return VStack(alignment: .leading, spacing: DesignTokens.Space.s5) {
-        PullRequestPanel(model: PullRequestPanelModel.build(read.pullRequest), open: { _ in })
+        if let pullRequest = PullRequestPanelModel.build(read.pullRequest) {
+            PullRequestPanel(model: pullRequest, open: { _ in })
+        }
         ConnectedPanel(model: ConnectedPanelModel.build(read.connected), openTicket: { _ in }, openInitiatives: {})
     }
     .frame(width: width, alignment: .leading)

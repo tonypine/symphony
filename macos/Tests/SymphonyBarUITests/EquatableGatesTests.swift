@@ -16,7 +16,8 @@ final class EquatableGatesTests: XCTestCase {
             ConnectedPanel(model: connected, openTicket: { _ in }, openInitiatives: {}),
             ConnectedPanel(model: connected, openTicket: { _ in XCTFail() }, openInitiatives: { XCTFail() })
         )
-        XCTAssertEqual(PullRequestPanel(model: nil, open: { _ in }), PullRequestPanel(model: nil, open: { _ in XCTFail() }))
+        let pullRequest = PullRequestPanelModel.build(TicketPullRequest(number: 7))!
+        XCTAssertEqual(PullRequestPanel(model: pullRequest, open: { _ in }), PullRequestPanel(model: pullRequest, open: { _ in XCTFail() }))
 
         let one = DecisionsPanelModel.build([TicketDecision(id: "D1", answer: "Keep it")])
         let two = DecisionsPanelModel.build([TicketDecision(id: "D1", answer: "Keep it"), TicketDecision(id: "D2", answer: "Drop it")])

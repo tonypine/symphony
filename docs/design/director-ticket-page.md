@@ -7,6 +7,10 @@
 > More menu, the pull request is Open Pull Request), and Decisions is a panel only once the Director has
 > answered something on the ticket. Since TP-1503 there is no note panel: writing to the ticket is one box
 > above the timeline. Since TP-1651 the Connected panel lists the ticket's sub-tickets under its Epic block.
+> Since TP-1652 the Pull request panel is drawn only when the ticket has a pull request of its own, with no
+> "No pull request yet" line, and a rail with no panel draws no column. This design does not cover an epic's
+> Lifecycle: an epic whose work is done by its sub-tickets and that has no stage of its own draws only the token
+> bar of what it used itself (its Conductor runs), and no Lifecycle at all while that is zero.
 
 Design research for the ticket page, and the prototype built on it (TP-1383, second design ticket of
 Phase 3b, TP-1381). The page is designed again from scratch around one question: **where does this

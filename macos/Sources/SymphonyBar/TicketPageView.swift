@@ -884,8 +884,11 @@ struct TicketPageBody: View {
             if arrangement.railBeside {
                 HStack(alignment: .top, spacing: arrangement.columnGap) {
                     mainColumn(desktop: arrangement.desktop).frame(maxWidth: .infinity, alignment: .topLeading)
-                    StickyColumn(scroll: scroll) { rail(width: arrangement.railWidth) }
-                        .frame(width: arrangement.railWidth)
+                    // A rail with no panel draws no column: the main column takes its room (TP-1652).
+                    if railHasPanels {
+                        StickyColumn(scroll: scroll) { rail(width: arrangement.railWidth) }
+                            .frame(width: arrangement.railWidth)
+                    }
                     if let decisionsWidth = arrangement.decisionsWidth {
                         if decisionsInRow {
                             UnscrolledDecisions(scroll: scroll) {
@@ -901,7 +904,7 @@ struct TicketPageBody: View {
                 .modifier(RowMeasure(scroll: scroll, measures: arrangement.decisionsWidth != nil))
             } else {
                 mainColumn(desktop: false)
-                rail(width: nil)
+                if railHasPanels { rail(width: nil) }
             }
         }
         // At most as wide as the columns need, never wider than the scroll view gives: a scroller beside the page
@@ -930,11 +933,16 @@ struct TicketPageBody: View {
             } else if let brief = BriefPanelModel.build(page.detailsRead, runs: page.history?.runs ?? [:], reference: page.reference, calendar: calendar) {
                 BriefPanel(model: brief, open: briefOpen)
             }
+            // An epic with no stage of its own draws its tokens alone, and nothing before it used any (TP-1652).
             if let lifecycle = page.lifecycleRead?.lifecycle {
-                LifecycleSection(model: LifecycleModel.build(
-                    lifecycle, path: page.lifecycleRead?.phasePath, situation: page.situation, conductorTokens: page.history?.conductorTokens ?? 0
-                ))
-                    .equatable()
+                let model = LifecycleModel.build(
+                    lifecycle, path: page.lifecycleRead?.phasePath, situation: page.situation, conductorTokens: page.history?.conductorTokens ?? 0,
+                    hasSubTickets: !(page.factsRead?.connected?.subTickets.isEmpty ?? true)
+                )
+                if model.drawn {
+                    LifecycleSection(model: model)
+                        .equatable()
+                }
             }
             VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
                 TimelineTitle(marks: page.marksRead)
@@ -962,14 +970,23 @@ struct TicketPageBody: View {
         }
     }
 
+    /// Whether the rail has a panel to draw: a pull request, a connection or an answered decision.
+    private var railHasPanels: Bool {
+        page.factsRead?.pullRequest != nil || !ConnectedPanelModel.build(page.factsRead?.connected).isEmpty
+            || !DecisionsPanelModel.build(decisions, reference: page.reference, calendar: calendar).isEmpty
+    }
+
     private func rail(width: CGFloat?) -> some View {
         let connected = ConnectedPanelModel.build(page.factsRead?.connected)
         let decided = DecisionsPanelModel.build(decisions, reference: page.reference, calendar: calendar)
         // Pull request, Connected, Decisions (`docs/design/director-window-and-home.md`); there is no Details panel.
         return VStack(alignment: .leading, spacing: gap) {
             // Each card draws again only when its model changed; their actions don't open the gate (TP-1480).
-            PullRequestPanel(model: PullRequestPanelModel.build(page.factsRead?.pullRequest), open: actions.openURL)
-                .equatable()
+            // Pull request only once the ticket has one of its own: an epic's sub-tickets open theirs (TP-1652).
+            if let pullRequest = PullRequestPanelModel.build(page.factsRead?.pullRequest) {
+                PullRequestPanel(model: pullRequest, open: actions.openURL)
+                    .equatable()
+            }
             // A ticket connected to nothing has no Connected panel.
             if !connected.isEmpty {
                 ConnectedPanel(model: connected, openTicket: actions.openTicket, openInitiatives: actions.openInitiatives)
