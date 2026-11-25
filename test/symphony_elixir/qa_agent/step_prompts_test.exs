@@ -7,7 +7,9 @@ defmodule SymphonyElixir.QaAgent.StepPromptsTest do
   # Made-up definitions, so a test of the mechanism never depends on today's lists.
   @terms PromptTerms.terms(tools: ~w(qa_launch_app qa_click), statuses: ~w(pass fail unprovable), symphony_tools: ~w(qa_verdict), codes: ~w(qa_app_exited qa_worker_missing))
 
-  defp build(source, terms \\ @terms, opts \\ []), do: PromptTerms.build!("priv/qa_steps/made_up/walk.md", source, terms, opts)
+  defp build(source, terms \\ @terms, opts \\ [])
+  defp build(source, terms, []), do: PromptTerms.build!("priv/qa_steps/made_up/walk.md", source, terms)
+  defp build(source, terms, opts), do: PromptTerms.build!("priv/qa_steps/made_up/walk.md", source, terms, opts)
 
   describe "building a prompt refuses what the definitions do not hold" do
     test "a QA tool the driver does not serve, naming the prompt and the tool" do
