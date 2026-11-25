@@ -1439,6 +1439,25 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       end
     end
 
+    test "c5: a walk session is told its step's setting's window size and no other; a session with no setting, the QA target's (TP-1686)", ctx do
+      live = %{source: "live", fixture: nil, page: "Tickets", window: %{width: 1440, height: 900}, appearance: "light"}
+      [one, two] = walkthrough([1, 2])
+      answers(%{"plan" => [{:write, plan([1, 2])}], "review" => [{:verdict, @pass}]})
+
+      playbooks = [%{kind: "macos_app", live: true, prompt: "Intro.", window_size: {1800, 1000}}]
+      steps = [Map.merge(one, %{check_id: "c1", setting: live}), two]
+      assert {:ok, _result} = run(ctx, %{journey: %{source: "the plan", text: "", steps: steps}, playbooks: playbooks})
+
+      turns = Map.new(turns(), &{&1.id, &1.prompt})
+      sizes = fn id -> ~r/\d+×\d+/u |> Regex.scan(turns[id]) |> List.flatten() |> Enum.uniq() end
+
+      assert sizes.("walk_1") == ["1440×900"]
+      refute turns["walk_1"] =~ "The QA target:"
+      assert turns["walk_1"] =~ "call `qa_check_app` with the page's name"
+      assert sizes.("walk_2") == ["1800×1000"]
+      assert sizes.("design_check") == ["1800×1000"]
+    end
+
     test "a group of steps is launched once, in its first step's setting, and a page Symphony cannot open is said", ctx do
       setting = %{source: "fixture", fixture: "running", page: "The board of cards", window: %{width: 1440, height: 900}, appearance: "dark"}
       [one, two] = walkthrough([1, 2])

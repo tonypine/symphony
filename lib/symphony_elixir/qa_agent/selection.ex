@@ -15,7 +15,9 @@ defmodule SymphonyElixir.QaAgent.Selection do
 
   Built-in playbooks ship as `priv/qa_playbooks/<kind>.md`. `auto_review.playbooks`
   can override a built-in's `paths`, turn it off with `enabled: false`, or add a new
-  kind with `paths` and `prompt`.
+  kind with `paths` and `prompt`. The built-in `macos_app` playbook's text is built at compile
+  time by `SymphonyElixir.QaAgent.PromptTerms` (its statuses and QA tools from their one
+  definition, no window size by hand); a repo's own `prompt` is used as it is.
 
   The built-in `macos_app` playbook is on only when its config names the `build`
   command and the `app` bundle (relative to the repo root) that the host-side
@@ -48,6 +50,7 @@ defmodule SymphonyElixir.QaAgent.Selection do
 
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.PlaybookSettings
+  alias SymphonyElixir.QaAgent.PromptTerms
   alias SymphonyElixir.TicketJourney
 
   @skip_label "qa:skip"
@@ -85,8 +88,15 @@ defmodule SymphonyElixir.QaAgent.Selection do
     @external_resource Path.join(@source_root, kind <> ".md")
   end
 
+  # The built-ins whose text is built from the prompt terms' definitions.
+  @built_prompt_kinds ~w(macos_app)
+
   @built_in_prompts (for kind <- @built_in_kinds, into: %{} do
-                       {kind, File.read!(Path.join(@source_root, kind <> ".md"))}
+                       text = File.read!(Path.join(@source_root, kind <> ".md"))
+
+                       if kind in @built_prompt_kinds,
+                         do: {kind, PromptTerms.build!("priv/qa_playbooks/#{kind}.md", text, PromptTerms.terms())},
+                         else: {kind, text}
                      end)
 
   # A built-in also triggers on its own instructions (`priv/qa_playbooks/<kind>.md`) and on the

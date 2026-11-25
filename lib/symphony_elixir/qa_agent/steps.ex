@@ -81,7 +81,11 @@ defmodule SymphonyElixir.QaAgent.Steps do
   then `qa_resize_window` to its window size. Any other session gets the default launch at the QA
   target, and its prompt says to relaunch with its brief's `launch` when that names another state. Then `qa_check_app`, and the session's prompt names the app's PID only when the driver
   reports it running at that moment (`QaDriver.running_pids/1`), with the setting it is in; a launch
-  that failed, or an app that is not running, is said with why, and no PID is given.
+  that failed, or an app that is not running, is said with why, and no PID is given. A session in
+  a setting is told that setting's window size alone, never the QA target's
+  (`QaAgent.prompt_parts/3`'s `:qa_mode_in_setting`). The step prompts and the text Symphony adds
+  around them take their statuses from `statuses/0` and their QA tools from
+  `SymphonyElixir.QaDriver.tools/0`, built by `SymphonyElixir.QaAgent.PromptTerms`.
 
   **Symphony's own check of the plan** (`SymphonyElixir.QaAgent.PlanCheck`): before the plan
   session, a walked step whose plan check's setting is the live server on a pass that does not run
@@ -133,7 +137,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
   alias SymphonyElixir.Config.Schema.Phases
   alias SymphonyElixir.Config.Schema.Phases.Step
   alias SymphonyElixir.PhaseSteps.Transcript
-  alias SymphonyElixir.QaAgent.{PlanCheck, StepPayload, StepPrompts, Verdict}
+  alias SymphonyElixir.QaAgent.{PlanCheck, PromptTerms, StepPayload, StepPrompts, Verdict}
   alias SymphonyElixir.QaDriver.Pages
   alias SymphonyElixir.QaPreCheck
   alias SymphonyElixir.Walkthrough
@@ -165,7 +169,16 @@ defmodule SymphonyElixir.QaAgent.Steps do
   @gallery_key {__MODULE__, :gallery}
   @nothing_changed "no Component Gallery picture changed and the plan names none of the app's screens to judge"
   @evidence_dir "qa-evidence"
-  @judged_rule "A step's answer `status` is `pass` only when every check in its brief was actually seen and judged. When any part could not be reached, seen or judged (an empty state, a screenshot not viewed, a harness fault), the status is `blocked` and `actual` says what blocked it: never `pass`, never `fail`. When the step needs a QA tool, a fixture page or the live server this pass does not have, the status is `unprovable` and `actual` says what it needed (Symphony marks the steps it can see so before any session)."
+  # Built from the step statuses and the driver's tools (`PromptTerms`), as the prompts around it are.
+  @judged_rule PromptTerms.build!(
+                 "lib/symphony_elixir/qa_agent/steps.ex: the judged rule",
+                 "A step's answer `status` is {{status:pass}} only when every check in its brief was actually seen and judged. " <>
+                   "When any part could not be reached, seen or judged (an empty state, a screenshot not viewed, a harness fault), " <>
+                   "the status is {{status:blocked}} and `actual` says what blocked it: never {{status:pass}}, never {{status:fail}}. " <>
+                   "When the step needs a QA tool, a fixture page or the live server this pass does not have, the status is " <>
+                   "{{status:unprovable}} and `actual` says what it needed (Symphony marks the steps it can see so before any session).",
+                 PromptTerms.terms(statuses: @statuses)
+               )
 
   @typedoc "What a stepped pass gives back: `QaAgent.run_result/0`'s, with the review's session (`session_id`)."
   @type run_result :: %{result: QaAgent.result(), tokens: map(), session_id: String.t() | nil}
@@ -1551,7 +1564,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
       surface_lines(state, hd(walked).brief),
       "Answer with `results`: one object per step above, each with `step` (its number), `status`, `expected`, `actual`, `details` and " <>
         "`evidence`, judged on its own: one step's failure never changes another's status. Symphony refuses an answer that misses a step or " <>
-        "gives one a status other than #{Enum.join(@statuses, ", ")}, and asks once more; a step still without a result is then not judged " <>
+        "gives one a status other than #{PromptTerms.status_list(@statuses)}, and asks once more; a step still without a result is then not judged " <>
         "(`blocked`), never passed."
     ]
     |> Enum.reject(&(&1 == ""))
@@ -1561,11 +1574,16 @@ defmodule SymphonyElixir.QaAgent.Steps do
   defp surface_lines(state, brief) do
     [
       if(command_line?(state, brief), do: command_line_rules(state), else: app_line(state)),
-      QaAgent.prompt_parts(state.job, nil, [:servers, :qa_mode, :conductor])
+      QaAgent.prompt_parts(state.job, nil, [:servers, qa_mode_part(state), :conductor])
     ]
     |> Enum.reject(&(&1 == ""))
     |> Enum.join("\n\n")
   end
+
+  # A session Symphony launched in its step's setting is told that setting's window size alone (its
+  # app line), never the QA target's.
+  defp qa_mode_part(%{session: {:launched, %{setting: %{}}}}), do: :qa_mode_in_setting
+  defp qa_mode_part(_state), do: :qa_mode
 
   defp walk_brief(state, step) do
     case Map.get(state.checks, step.id) do

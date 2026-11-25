@@ -4,7 +4,7 @@ Use the macOS app the way a user would and judge what is on screen, not what the
 Do not run the project's test suite, `make all`, coverage or static analysis: CI already ran them.
 Your sandbox cannot build Swift, launch apps or read the screen, so Symphony runs these tools
 for you on the QA VM, a separate macOS machine: never on this host. They only act on this
-worktree's configured app and on apps you launched:
+worktree's configured app and on apps you launched. They are {{tools}}. What each does:
 
 - `qa_build`: takes the app Symphony built on the QA VM for this checkout's commit, waiting for
   the build when it is still running. Call it once, before anything else.
@@ -55,8 +55,8 @@ worktree's configured app and on apps you launched:
 - A click that fell back to `AXPress`, or that `covered` or `not_frontmost` refused because of an
   app that is not the one under test, is a finding against the QA harness, never a silent
   workaround and never the ticket's defect. Do not walk the step again with `qa_ax_press` to pass
-  it: mark the steps whose click it was `blocked`, quoting the tool's result (`fallback`, `note`,
-  or the message naming the app) in `details`, and answer `blocked` with that result as `reason`
+  it: mark the steps whose click it was {{status:blocked}}, quoting the tool's result (`fallback`, `note`,
+  or the message naming the app) in `details`, and answer {{status:blocked}} with that result as `reason`
   once for the pass, after the other steps. When an open ticket already tracks it, put that
   ticket in `covered_by`; otherwise Symphony's self-heal lane files the harness fix ticket. Either
   way it is filed once, and the ticket waits on it.
@@ -87,7 +87,7 @@ worktree's configured app and on apps you launched:
   default) with the button held, and the button goes up there, through the system's mouse route
   (`via: "hid"`). `from` and `to` are each an element's centre (`path`) or a point on screen (`x`,
   `y`, in the points of `qa_ax_tree`'s frames). Use it for every drag and drop (moving a row, a
-  card, a divider); a drag step is never `unprovable` for want of a tool. It returns
+  card, a divider); a drag step is never {{status:unprovable}} for want of a tool. It returns
   `under_pointer` (the element under the drop), `changed` and `settled`; then read the new order
   or position in `qa_ax_tree` and screenshot it. It fails like `qa_click` when either end is not
   the app's own window on screen.
@@ -104,8 +104,7 @@ worktree's configured app and on apps you launched:
   or covered.
 - `qa_resize_window`: moves the app's main window (or the `AXWindow` at `path`) to the top left
   of the screen and resizes it to `width`×`height` points, or the screen's usable area when that
-  is smaller. Without a size it sets the QA target window (The QA target section names it,
-  2560×1440 by default); pass `width` and `height` only when the ticket is about another size. It
+  is smaller. Without a size it sets the QA target window (the QA target section names it); pass `width` and `height` only when the ticket is about another size. It
   returns the window's new frame in `window` (`x`, `y`, `w`, `h`), the `screen` size, its `visible`
   (usable) area, `target`, and for the target `limited: true` when the screen is under it.
 - `qa_check_app`: says whether the app is still `running`, `responding` (it answered an
@@ -283,7 +282,7 @@ API, which is the system under test. For each one:
   shell tool's background option, with a time limit). Have it log each request, and quote the
   app's requests from that log in the step's `details`.
 - When the server cannot listen on the port, or the app still cannot reach it, mark the steps
-  that need it `blocked` with the error in `details`.
+  that need it {{status:blocked}} with the error in `details`.
 
 Fixtures or the live server. Every pass can show the app a state from fixtures (`api_fixtures`).
 When the prompt has a "Live server" section, Symphony also runs the project's own server on the
@@ -305,7 +304,7 @@ what the step proves, and then on fixtures unless it needs the round trip:
   (a look checked on a fixture, then a move made live) names both.
 - A step whose state no committed fixture has is a finding: say so in `findings`, so a fixture is
   committed for the next pass. Never build one under `qa-evidence/` to prove a step.
-- A step that needs the round trip on a pass with no live server is `unprovable`, with that
+- A step that needs the round trip on a pass with no live server is {{status:unprovable}}, with that
   reason in its `details`: "needs the live server; this pass reads fixtures only". Never prove it
   from a fixture. On a stepped pass Symphony marks such a step itself before any session (from its
   check's setting, or from the plan's `needs`), so no walk session runs for it; the same holds
@@ -468,8 +467,7 @@ GitHub or Linear in QA:
   ticket number inside the path is not a chip. Clicking the `index.html` one asks the default
   browser to open it (the file does not exist on the QA host, so the browser shows it missing),
   and clicking the `.png` one reveals it in Finder instead of picking the option. Open TP-892
-  from the Inbox: its **Your decision** card shows the same `index.html` link. Walk it at
-  1440×900, light and dark: the link stays readable and nothing on the cards is clipped.
+  from the Inbox: its **Your decision** card shows the same `index.html` link. Walk it in light and dark: the link stays readable and nothing on the cards is clipped.
 - **Unasked choices on a plan (TP-1197):** pass
   `macos/Tests/Fixtures/director-app/inbox-unasked-choices` as `api_fixtures`. It is `inbox` with
   four choices SHOP-330's plan run could not ask, each with a long title. In the Inbox, SHOP-330's
@@ -477,7 +475,7 @@ GitHub or Linear in QA:
   reached its limit of questions. Not asked: …" with all four titles; the triangle is orange and
   the text stays the primary colour. Choose Approve Plan…: the sheet says the same, then "The plan
   stays as written: its 2 open questions are not answered." The other Inbox items carry no such
-  line. Walk it at 1440×900, light and dark: every title is readable and nothing on the page or the
+  line. Walk it in light and dark: every title is readable and nothing on the page or the
   sheet is clipped.
 - **An epic that gave up its lane (TP-1431):** pass
   `macos/Tests/Fixtures/director-app/inbox-lane-yielded` as `api_fixtures`. It is `inbox` with
@@ -485,7 +483,7 @@ GitHub or Linear in QA:
   Overview, the Initiatives card's DOCS-20 row shows, under its bar and legend, the secondary line
   "Gave up its lane: No sub-ticket Symphony can dispatch: priorities below Urgent. DOCS-24 (Todo,
   priority High), DOCS-25 (Todo, priority High)", wrapped to at most two lines; BIL-200, which holds
-  a lane, shows no such line. Walk it at 1440×900, light and dark: the line stays readable in the
+  a lane, shows no such line. Walk it in light and dark: the line stays readable in the
   secondary colour and nothing in the card is clipped.
 - **Ticket timeline (TP-1193):** pass `macos/Tests/Fixtures/director-app/ticket-ledger` as
   `api_fixtures` and open SHOP-410 from Tickets (Code Review & QA). Its clock is 2026-10-18 11:20
@@ -498,8 +496,8 @@ GitHub or Linear in QA:
   full image opens in a sheet, and Esc closes it. VoiceOver reads the chevron as "Collapse QA run
   1, failed", a thumbnail as "Screenshot Run header at 1440×900, opens full size", the
   placeholder as "Screenshot Verdict badge after refresh unavailable", and the running symbol as
-  "Running". Walk it at 1440×900 and 2560×1440, light and dark: nothing clipped; at 1440×900
-  the thumbnails wrap when the window narrows and the page scrolls. Then launch with
+  "Running". Walk it in light and dark: nothing clipped; the
+  thumbnails wrap when the window narrows and the page scrolls. Then launch with
   `macos/Tests/Fixtures/director-app/ticket-ledger-no-feed` (an older Symphony, no feed): the
   same ticket's timeline is today's, "Implementation run 1", "QA pass run 1" and "QA failed"
   with "on bbb2222", and the app doesn't crash.
@@ -511,8 +509,7 @@ GitHub or Linear in QA:
   output" link under it, and "Paused on your answer" with the stopped symbol. Click "Test
   output": a sheet shows the test run's text in a monospaced, selectable block ("1 test, 1
   failure" … "right: :failed"), and Esc closes it. VoiceOver reads the link as "Test output,
-  opens its text" and the unavailable line as "Build output unavailable". Walk it at 1440×900
-  and 2560×1440, light and dark: nothing clipped. On the live server the seed gives QA-105 the
+  opens its text" and the unavailable line as "Build output unavailable". Walk it in light and dark: nothing clipped. On the live server the seed gives QA-105 the
   same history, with its own test output to open and its build output gone.
 - **A grouped walk step (TP-1594):** pass
   `macos/Tests/Fixtures/director-app/ticket-grouped-walk` as `api_fixtures`, open Work ›
@@ -522,25 +519,25 @@ GitHub or Linear in QA:
   missing", and "Step 3" Done, each with its own mark. Unfold the step: each check's Expected
   and Actual sit under its own "Step N" heading. "Walk a step 4" stays a single step, Done.
   VoiceOver reads a check's line as "Step 2, failed, Agents shows two rows; Codex is missing".
-  Walk it at 1440×900 and 2560×1440, light and dark: nothing clipped.
+  Walk it in light and dark: nothing clipped.
 - **Conductor question options act (TP-1556):** on the live server the seed gives two tickets in
   QA a Conductor question. QA-112's has "Accept without QA", "Send back to add a failing upload"
   and "Run QA again": pick "Accept without QA" in the Inbox and QA-112 moves to Merging, its page
   shows QA skipped by decision, and its Inbox row goes. QA-113 had a QA pass end blocked after its
   question was asked: the Inbox lists one question for it, and "Go on as it is" takes the row away
-  and leaves it in QA with no pause. Look at both questions at 1440×900, light and dark.
+  and leaves it in QA with no pause. Look at both questions in light and dark.
 - **A merged ticket closes after its sub-ticket (TP-1560):** on the live server the seed's QA-114
   is no plan, its PR merged and it sits in Waiting on sub-tickets on its one open sub-ticket,
   QA-115: its page says it waits on its sub-tickets and names QA-115, never that the epic review
   is next. QA-115 and QA-116 are blocked by QA-114, yet neither is held by it. Cancel QA-115
   from its page: within a poll QA-114's page shows Done with no run started for it. Look at
-  QA-114 at 1440×900, light and dark.
+  QA-114 in light and dark.
 - **Initiatives from Symphony's split (TP-1620):** on the live server Work › Initiatives lists
   one parent, QA-117 ("Show each repository's spend on the Home page"), which Symphony split and
   which carries no plan label: its sub-tickets are QA-118 (Done), QA-119 and QA-120 (Todo), so its
   progress counts 1 of 3 done and QA-118 still shows under it. QA-109 carries the plan label and
   QA-114 has a sub-ticket, but Symphony split neither: neither is listed. The page looks as the
-  fixture's Initiatives do. Look at it at 1440×900, light and dark.
+  fixture's Initiatives do. Look at it in light and dark.
 - **Ticket note (TP-1195):** with the same `ticket-ledger` fixture, SHOP-410's page has a
   one-line field pinned under the page, "Add a note for the next run"; it stays on screen
   however far the page scrolls. The fixture's feed already holds the Director's note, "Note by
@@ -553,9 +550,8 @@ GitHub or Linear in QA:
   4,000 characters; this one has …". VoiceOver reads the field as "Note on SHOP-410" and the
   line as "Note not added: …". Then with `ticket-ledger-no-feed`, the field is dimmed and
   disabled, and the line under it says "This version of Symphony can't take notes. Update
-  Symphony to add one."; typing is impossible and no request is logged. Walk it at 1440×900 and
-  2560×1440, light and dark: the field and its line are never clipped, and at 2560×1440 the
-  field stops at 720 pt wide.
+  Symphony to add one."; typing is impossible and no request is logged. Walk it in light and dark: the field and its line are never clipped, and in a wide
+  window the field stops at 720 pt wide.
 - **Symphony's wait notes (TP-1552):** pass
   `macos/Tests/Fixtures/director-app/ticket-waiting-ci` as `api_fixtures` and open SHOP-410
   from Tickets. Its pull request #512 waits on CI: the ticket's status reads "Waiting for CI"
@@ -580,8 +576,8 @@ GitHub or Linear in QA:
   The live server proves that the page shows In Progress and its running line after the move. On
   Tickets, right-click SHOP-430's row: its menu has the same **Move to…** submenu. VoiceOver reads
   the menu as "Move SHOP-430 to another phase", an entry as "Move to In Progress", and the
-  checked one as "Backlog, the phase it is in". Walk it at 1440×900 and 2560×1440, light and
-  dark. At 1440×900 the menu is on screen without scrolling, and nothing on the action bar is
+  checked one as "Backlog, the phase it is in". Walk it in light and
+  dark. The menu is on screen without scrolling, and nothing on the action bar is
   clipped.
 - **Start Now (TP-1330):** pass `macos/Tests/Fixtures/director-app/start-now` as `api_fixtures`.
   Every slot is busy (three runs, `max_total` 3) and SHOP-320 waits in Todo on a slot. Open
@@ -595,10 +591,10 @@ GitHub or Linear in QA:
   SHOP-320's Start Now is dimmed with the tooltip "Dispatch is paused by the operator: Deploy
   freeze". The fixture's state stays the same; the live server proves that the page shows In
   Progress and its running line within seconds of the press while the other tickets keep their
-  order. Walk it at 1440×900 and 2560×1440, light and dark: nothing on the action bar is clipped.
+  order. Walk it in light and dark: nothing on the action bar is clipped.
 - **Ticket page at laptop width (TP-1448):** pass
-  `macos/Tests/Fixtures/director-app/ticket-page` as `api_fixtures` and size the window to
-  1440×900. The page replaced the cards page (Now, Ticket, Blocked by, Priority, Labels,
+  `macos/Tests/Fixtures/director-app/ticket-page` as `api_fixtures`, in the laptop width the step's setting
+  gives. The page replaced the cards page (Now, Ticket, Blocked by, Priority, Labels,
   Decisions and the note field under it are gone). Open TP-1244 from Tickets: the header has
   TP-1244 with its repo and epic chips, the title, the situation line "Working on the tests
   step", and the moves on their own row (Start Now dimmed, Force…, More with Stop Run… last in
@@ -626,7 +622,7 @@ GitHub or Linear in QA:
   Where the screen is too small for 1600 pt, the desktop width is proved by the
   `ticket-page-*-desktop` and `ticket-page-waiting-1590`/`-1610` stories in the Component Gallery. Walk it in light and
   dark.
-- **Answering from the ticket page (TP-1450):** the same `ticket-page` fixtures at 1440×900, on a
+- **Answering from the ticket page (TP-1450):** the same `ticket-page` fixtures, on a
   fresh launch (its answer reads once Symphony took a `decide`: the fixtures then serve each
   file's `.after-decide.json`). Open TP-1245 and press Answer…; press 2, 3, then 1: the option
   cards follow the keys. Press Return: the same consequence sheet as the Inbox's Send Decision
@@ -643,7 +639,7 @@ GitHub or Linear in QA:
   of content, the desktop's column has the same Send, and it slides out once the read drops the
   question. Walk it in light and dark, and once with Reduce Motion on: the question disappears
   at once.
-- **Cancel Ticket from the ticket page (TP-1317):** the same `ticket-page` fixtures at 1440×900.
+- **Cancel Ticket from the ticket page (TP-1317):** the same `ticket-page` fixtures.
   Open TP-1244 (running, PR #741 open) from its row in Work › Tickets, or on Home under in
   progress: the fixtures list TP-1244, TP-1245 and TP-1246 there. Choose **Cancel Ticket…** in
   More: a sheet titled "Cancel TP-1244?" says, in red, that it ends the agent, closes its pull
@@ -672,7 +668,7 @@ GitHub or Linear in QA:
   stops, its pull request closes with the note, nothing waits on it". Relaunch the app on a fresh
   QA root to see the before state again.
 - **Symphony late to answer its state (TP-1562):** pass
-  `macos/Tests/Fixtures/director-app/symphony-late` as `api_fixtures` at 1440×900. It is the
+  `macos/Tests/Fixtures/director-app/symphony-late` as `api_fixtures`. It is the
   `ticket-page` fixtures with `api/v1/state.late.json` (`{"after": 60, "for": 60}`): from 60 s
   after the app's first read until 120 s, every state read waits until 120 s, while the health
   read and every other read answer at once. Before 60 s, open Work › Tickets (TP-1244, TP-1245,
@@ -830,7 +826,7 @@ GitHub or Linear in QA:
   - Look: judge each page and Add Repo's last step in light and dark against
     the Component Gallery's `github-setup-*` stories, `add-repo-instant-updates-*.png` (six steps:
     `add-repo-instant-updates-six-steps-*.png`, and `add-repo-six-steps-*.png` for every page's
-    step indicator), at the laptop viewport (1440×900 pt): the sheet keeps its footer in place on
+    step indicator), in a laptop-sized window: the sheet keeps its footer in place on
     every page, and nothing is clipped.
 
 QA does three things, in this order: (a) the walkthrough steps marked `Proved by: QA` (no test
@@ -863,7 +859,7 @@ the app in one appearance:
 - **When the app ignores it:** the library prints `symphony-qa-appearance: dark` (or `light`) to
   the app's output once it has set the appearance, and `qa_quit_app` returns that output. When a
   screenshot is in the wrong appearance and that line is missing, the app's build refuses injected
-  libraries (the hardened runtime): mark the `Design check` `blocked`, quoting the output, and say
+  libraries (the hardened runtime): mark the `Design check` {{status:blocked}}, quoting the output, and say
   so in `findings`.
 - **Judge** each screenshot side by side with the deliverable's design: the ticket's or the parent's
   Screens (named under "Design" above), then `docs/design/design-system.md`. Compare layout,
@@ -954,7 +950,7 @@ anyway: Symphony's tool does it, or it is host setup. Where it can't be installe
   QA host's test signing identity in that call: say so in the report. When it fails with
   `qa_signing_identity_missing` or
   `qa_signing_identity_untrusted`, the QA host lacks its test signing identity: mark the steps that
-  need the pair `blocked` with the tool's message, finish the other steps, and answer `blocked`
+  need the pair {{status:blocked}} with the tool's message, finish the other steps, and answer {{status:blocked}}
   with that message.
   When it fails with `qa_host_missing_tool`, the QA host lacks a tool the pair's build needs
   (`minisign`, `jq`, …): do the same. Symphony files the fix for the QA host itself, so don't ask for
@@ -995,8 +991,8 @@ anyway: Symphony's tool does it, or it is host setup. Where it can't be installe
    `findings`. When the app exits, call `qa_wait_check` with `seconds: 10`, because macOS writes
    the crash report a few seconds after the crash. When `qa_resize_window` returns
    `limited: true`, the QA screen is under the target size: still walk at the size you got, say so
-   with the screen size and the size it needs, and mark the step `blocked`. Symphony reports a pass
-   the QA screen limited as `blocked` either way, so a person enlarges the QA screen, and reports a
+   with the screen size and the size it needs, and mark the step {{status:blocked}}. Symphony reports a pass
+   the QA screen limited as {{status:blocked}} either way, so a person enlarges the QA screen, and reports a
    pass that judged screens with no `qa_resize_window` call as `inconclusive`, and runs QA again.
 3. Open each window the ticket's walkthrough and acceptance criteria touch (menu items,
    buttons, Settings), using `qa_ax_tree` to find elements and `qa_ax_press` to act. When an
@@ -1045,25 +1041,25 @@ anyway: Symphony's tool does it, or it is host setup. Where it can't be installe
    OpenRouter Symphony starts for this pass: `qa_launch_app` points the app at it, and the
    Symphony the app runs (`symphony check` on Save) checks models against it too. The app never
    reaches openrouter.ai in QA, so never ask for a real key and never mark an OpenRouter step
-   `blocked` for want of one. The stub knows:
+   {{status:blocked}} for want of one. The stub knows:
    - one valid key, `sk-or-v1-symphony-qa-stub`: Test connection answers "Connected as Symphony
      QA stub: $1.25 used of a $10.00 limit, $8.75 left". Any other key is rejected ("OpenRouter
      rejected the key…"). The stub key is made up and public, so you may quote it;
    - three models: `symphony-qa/reasoning-tools` (tools and reasoning),
      `symphony-qa/tools-only` (tools, no reasoning, so Effort gets its note) and
      `symphony-qa/no-tools` (no tools, so the Models picker leaves it out).
-   Judge the walkthrough's OpenRouter steps with these, `pass` or `fail`. Checks with a real key
+   Judge the walkthrough's OpenRouter steps with these, {{status:pass}} or {{status:fail}}. Checks with a real key
    are manual and not part of QA.
 8. **Design check.** Run the target launch above for every UI deliverable and report one step per
    deliverable named `Design check: <deliverable>` (for example `Design check: status-bar menu`).
    Put its screenshots in its `evidence`, and in `details` name the design it compared with (the
    Screens document or HTML screen, and the screen in it, or "the design system alone: no Screens
-   cover it") and the appearance and size it judged. `pass` when the screenshots match the design;
-   `fail` when one visibly differs, naming what differs.
+   cover it") and the appearance and size it judged. {{status:pass}} when the screenshots match the design;
+   {{status:fail}} when one visibly differs, naming what differs.
 9. **Nothing on screen to judge.** In an epic review that launches no app, because the epic
    changed none, there is no window to size. Outside an epic review, a change with nothing on
    screen to judge owes no target resize either: build the app, launch it, call `qa_check_app`,
-   and answer `pass` with `"scope": "none"` and the reason.
+   and answer {{status:pass}} with `"scope": "none"` and the reason.
 10. Run `qa_quit_app` when you are done. It returns what the app wrote to its output; quote
    the lines that bear on a step in that step's `details`.
 11. Attach the screenshots that show each step's result with `linear_attach_file`
@@ -1079,9 +1075,9 @@ Verdicts for this playbook:
   failing step. In `details` quote the relevant part of the settled AX tree (the window and
   its direct children, with frames) and attach the screenshot of that window.
 - When a tool returns `qa_permission_missing`, stop this playbook: mark each app step you
-  could not check `blocked` with the tool's message in `details`. Then continue with the
+  could not check {{status:blocked}} with the tool's message in `details`. Then continue with the
   steps of the other playbooks offered to you (such as `cli` or `web`) and report each of
-  them as `pass` or `fail`. Answer `blocked` with the tool's message as `reason`. Do the same
+  them as {{status:pass}} or {{status:fail}}. Answer {{status:blocked}} with the tool's message as `reason`. Do the same
   for `qa_helper_unavailable`, and for `qa_worker_missing`, `qa_worker_same_machine`,
   `qa_worker_unsafe` and `qa_worker_unreachable`, which mean there is no QA VM Symphony may use:
   never try to build or launch the app another way.

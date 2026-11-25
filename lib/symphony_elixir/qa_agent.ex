@@ -92,6 +92,7 @@ defmodule SymphonyElixir.QaAgent do
   alias SymphonyElixir.{Messages, PathSafety, PromptSafety, QaDriver, QaModeContract, ReviewAgent}
   alias SymphonyElixir.PlaybookSettings
   alias SymphonyElixir.QaAgent.Design
+  alias SymphonyElixir.QaAgent.PromptTerms
   alias SymphonyElixir.QaAgent.Steps
   alias SymphonyElixir.QaAgent.Verdict
   alias SymphonyElixir.QaAndroid.Driver, as: AndroidDriver
@@ -423,8 +424,9 @@ defmodule SymphonyElixir.QaAgent do
   (the ticket with its decisions and parent, and the Conductor's newest instructions, as the one
   session's prompt carries them), `:conductor` (those instructions alone), `:design` (the design
   and the files Symphony downloaded), `:servers` (the dev or live server and the host ports),
-  `:qa_mode` (what the driver gives the app) and `:unprovable` (the steps no playbook of the pass
-  can prove).
+  `:qa_mode` (what the driver gives the app, and the QA target), `:qa_mode_in_setting` (the same
+  without the QA target, for a session Symphony launched in its step's setting, whose size is that
+  setting's) and `:unprovable` (the steps no playbook of the pass can prove).
   """
   @spec prompt_parts(job(), map() | nil, [atom()]) :: String.t()
   def prompt_parts(job, parent, parts) when is_list(parts) do
@@ -451,6 +453,7 @@ defmodule SymphonyElixir.QaAgent do
   defp prompt_part(:design, job, parent), do: design_section(job, parent)
   defp prompt_part(:servers, job, _parent), do: dev_server_section(job) <> host_ports_section(Map.get(job, :host_ports, []))
   defp prompt_part(:qa_mode, job, _parent), do: qa_mode_section(job)
+  defp prompt_part(:qa_mode_in_setting, job, _parent), do: setting_qa_mode_section(job)
   defp prompt_part(:unprovable, job, _parent), do: unprovable_rule(job)
 
   # What the driver gives the app in QA mode, by the driver's own names (TP-1346).
@@ -462,7 +465,46 @@ defmodule SymphonyElixir.QaAgent do
   end
 
   # The one appearance and window size a `macos_app` pass judges the app at (TP-1595), from the
-  # playbook's settings; another only when the ticket is about it.
+  # playbook's settings; another only when the ticket is about it. Built from the step statuses and
+  # the driver's tools (`PromptTerms`); the target's size and appearance are filled from the settings.
+  @target_rules PromptTerms.build!(
+                  "lib/symphony_elixir/qa_agent.ex: the QA target",
+                  """
+
+                  The QA target: {{appearance}} appearance, a {{target}} pt window.
+                  - `qa_launch_app` and `qa_gallery` draw the app {{appearance}} when you name no
+                    `appearance`; `qa_launch_app`'s `page` opens the app on a page of its window (`ticket` on a
+                    ticket's page). After each `qa_launch_app` you make, once the window shows and before the
+                    first step, call `qa_resize_window` with no size: it sets the window to {{target}} pt. Every
+                    walkthrough step, screenshot and design check runs there; name the size in each step's
+                    `viewport`, and the report names it.
+                  - Judge nothing else unless the ticket is about it: only when its ask or plan names
+                    {{other_appearance}} mode, a small window or a specific size, or the change is to
+                    how the app adapts to its appearance or window size, launch in that appearance too
+                    (`appearance`) or resize to that size too (`width` and `height`), and say so in the step.
+                  {{page_checks}}
+                  """,
+                  PromptTerms.terms(),
+                  keep: ~w(appearance target other_appearance page_checks)
+                )
+
+  # The rules a session judges every page by, at the target or in its step's setting.
+  @page_checks PromptTerms.build!(
+                 "lib/symphony_elixir/qa_agent.ex: the page checks",
+                 """
+                 - On every page the walkthrough visits, call `qa_check_app` with the page's name: a hang (a
+                   layout loop) or a crash at this size is a {{status:fail}} naming the page and the window size. To
+                   let a page settle first (a wide window can collapse seconds after it opens), call
+                   `qa_wait_check` with the `seconds` and the page: Symphony waits, then checks. Never sleep in
+                   your shell.
+                 - What the app holds is read from the app: the page shown, the selection and the focus from
+                   the `app_state` of `qa_check_app` and `qa_wait_check`, the names of elements from
+                   `qa_elements`, and sizes, gaps and alignments of named elements from `qa_measure_elements`.
+                   A picture is for how a thing looks.
+                 """,
+                 PromptTerms.terms()
+               )
+
   defp window_sizes_section(job) do
     case Enum.find(job.playbooks, &(Map.get(&1, :kind) == "macos_app")) do
       nil ->
@@ -472,30 +514,18 @@ defmodule SymphonyElixir.QaAgent do
         {ww, wh} = Map.get(playbook, :window_size) || PlaybookSettings.default_window_size()
         appearance = Map.get(playbook, :appearance) || PlaybookSettings.default_appearance()
 
-        """
-
-        The QA target: #{appearance} appearance, a #{ww}×#{wh} pt window.
-        - `qa_launch_app` and `qa_gallery` draw the app #{appearance} when you name no
-          `appearance`; `qa_launch_app`'s `page` opens the app on a page of its window (`ticket` on a
-          ticket's page). After each `qa_launch_app` you make, once the window shows and before the
-          first step, call `qa_resize_window` with no size: it sets the window to #{ww}×#{wh} pt. Every
-          walkthrough step, screenshot and design check runs there; name the size in each step's
-          `viewport`, and the report names it.
-        - Judge nothing else unless the ticket is about it: only when its ask or plan names
-          #{other_appearance(appearance)} mode, a small window or a specific size, or the change is to
-          how the app adapts to its appearance or window size, launch in that appearance too
-          (`appearance`) or resize to that size too (`width` and `height`), and say so in the step.
-        - On every page the walkthrough visits, call `qa_check_app` with the page's name: a hang (a
-          layout loop) or a crash at this size is a `fail` naming the page and the window size. To
-          let a page settle first (a wide window can collapse seconds after it opens), call
-          `qa_wait_check` with the `seconds` and the page: Symphony waits, then checks. Never sleep in
-          your shell.
-        - What the app holds is read from the app: the page shown, the selection and the focus from
-          the `app_state` of `qa_check_app` and `qa_wait_check`, the names of elements from
-          `qa_elements`, and sizes, gaps and alignments of named elements from `qa_measure_elements`.
-          A picture is for how a thing looks.
-        """
+        @target_rules
+        |> String.replace("{{appearance}}", appearance)
+        |> String.replace("{{target}}", "#{ww}×#{wh}")
+        |> String.replace("{{other_appearance}}", other_appearance(appearance))
+        |> String.replace("{{page_checks}}\n", @page_checks)
     end
+  end
+
+  # A session Symphony launched in its step's setting is told that setting's size alone (its app
+  # line): it gets what the driver gives the app and the page checks, never the QA target's size.
+  defp setting_qa_mode_section(job) do
+    "\n" <> ([QaModeContract.section(job.playbooks), @page_checks] |> Enum.reject(&is_nil/1) |> Enum.join("\n\n"))
   end
 
   defp other_appearance("dark"), do: "light"

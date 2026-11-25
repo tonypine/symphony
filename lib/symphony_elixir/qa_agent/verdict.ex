@@ -85,7 +85,7 @@ defmodule SymphonyElixir.QaAgent.Verdict do
     "properties" => %{
       "summary" => %{"type" => "string", "description" => "The defect in one sentence."},
       "step" => %{"type" => "string", "description" => "The walkthrough step or check it was found on."},
-      "viewport" => %{"type" => "string", "description" => "The window or viewport size it shows at, e.g. 1366×768 pt."},
+      "viewport" => %{"type" => "string", "description" => "The window size it shows at, as the step it was found on names it in its `viewport`."},
       "expected" => %{"type" => "string", "description" => "What the ticket says should happen."},
       "actual" => %{"type" => "string", "description" => "What happened instead."},
       "evidence" => @evidence_schema
