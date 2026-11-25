@@ -108,9 +108,15 @@ defmodule SymphonyElixir.QaDriver.Cursor do
 
   defp decode({:ok, bytes}) do
     case Jason.decode(bytes) do
-      {:ok, %{"version" => 1, "cursor" => cursor, "source" => source} = report} when is_binary(cursor) and is_binary(source) -> {:ok, report}
-      {:ok, %{"version" => version}} when version != 1 -> {:error, "it is version #{inspect(version)}; this driver reads version 1"}
-      _other -> {:error, "it is not the app's JSON cursor report"}
+      {:ok, %{"version" => 1, "cursor" => cursor, "source" => source} = report}
+      when is_binary(cursor) and is_binary(source) ->
+        {:ok, report}
+
+      {:ok, %{"version" => version}} when version != 1 ->
+        {:error, "it is version #{inspect(version)}; this driver reads version 1"}
+
+      _other ->
+        {:error, "it is not the app's JSON cursor report"}
     end
   end
 
