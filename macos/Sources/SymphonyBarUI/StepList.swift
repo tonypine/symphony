@@ -184,7 +184,7 @@ private struct StepRow: View {
                     StepShowAllButton(on: groups.showsAll) {
                         withAnimation(.motion(.standard, reduceMotion: reduceMotion)) { groups.toggleAll() }
                     }
-                    .padding(.trailing, StepHeaderLabel.stateColumn + StepHeaderLabel.durationColumn + 2 * DesignTokens.Space.s2)
+                    .padding(.trailing, StepHeaderLabel.stateColumn + StepHeaderLabel.durationColumn + StepHeaderLabel.columnGaps)
                 }
             }
             .qaPart("head")
@@ -293,6 +293,8 @@ private struct StepHeaderLabel: View {
     static let stateColumn: CGFloat = 96
     /// The duration's column (`.sl-dur`: at least 52 px, right-aligned).
     static let durationColumn: CGFloat = 52
+    /// The row's gaps after the reserved room: before the state column and before the duration column.
+    static let columnGaps: CGFloat = DesignTokens.Space.s2 + DesignTokens.Space.s2
 }
 
 /// The walkthrough steps a grouped walk judged, one line each in the step row's style: the check's mark, "Step 2" with
