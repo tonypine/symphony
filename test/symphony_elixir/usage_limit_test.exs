@@ -38,7 +38,55 @@ defmodule SymphonyElixir.UsageLimitTest do
     assert UsageLimit.limit_label(%{provider: "anthropic", window: "seven_day_sonnet"}) == "Claude weekly Sonnet limit"
     assert UsageLimit.limit_label(%{window: nil}) == "Claude usage limit"
     assert UsageLimit.limit_label(%{provider: "openrouter", window: "daily"}) == "OpenRouter daily limit"
-    assert UsageLimit.limit_label(%{provider: "openai", window: "five_hour"}) == "openai 5-hour limit"
+    assert UsageLimit.limit_label(%{provider: "openai", window: "five_hour"}) == "OpenAI 5-hour limit"
+    assert UsageLimit.limit_label(%{provider: "opencode-go", window: "seven_day"}) == "OpenCode Go weekly limit"
+  end
+
+  describe "a fallback provider's own usage limit" do
+    @to_local [to_local: &__MODULE__.three_hours_behind/1]
+
+    defp opencode_go(attrs \\ %{}) do
+      put(nil, info(Map.merge(%{provider: "opencode-go", window: "seven_day", resets_at: ~U[2026-10-03 18:57:00Z], source: :result_text}, attrs)), issue_identifier: "TP-1615")
+    end
+
+    test "is held under its own name and reset, never as Claude's or with Claude's remembered reset" do
+      windows = %{{"anthropic", "seven_day"} => %{resets_at: ~U[2026-10-04 16:02:00Z], utilization: 0.95}}
+      entry = put(nil, info(%{provider: "opencode-go", window: "seven_day", resets_at: nil, source: :result_text}), windows: windows)
+
+      assert %{provider: "opencode-go", reason: "provider_usage_limit"} = entry
+      assert entry.resume_at == DateTime.add(@now, @config.unknown_reset_retry_seconds)
+
+      entry = opencode_go()
+      assert %{provider: "opencode-go", scope: :all, reason: "provider_usage_limit", resume_at: ~U[2026-10-03 18:59:00Z]} = entry
+      assert UsageLimit.covers?(entry, %{provider: "opencode-go", model: "deepseek-v4.1-flash"})
+      refute UsageLimit.covers?(entry, %{provider: "anthropic", model: "claude-opus-5-5"})
+
+      assert UsageLimit.hold_label(entry) == "OpenCode Go weekly limit reached"
+      assert UsageLimit.banner(entry, @now, @to_local) == "Paused: OpenCode Go weekly limit, resumes ~15:59"
+      assert UsageLimit.reason(entry, @now, @to_local).text == "OpenCode Go's weekly limit until 15:59 UTC-3"
+      assert UsageLimit.provider_name("opencode-go") == "OpenCode Go"
+    end
+
+    test "one line names every held provider of a run's list and the earliest reset" do
+      reset = ~U[2026-10-03 16:02:00Z]
+      claude = %{provider: "anthropic", scope: :all, window: "five_hour", phase: :headroom, reserve: 0.9}
+      claude = Map.merge(claude, %{resets_at: reset, resume_at: reset})
+      openrouter = %{opencode_go() | provider: "openrouter", resume_at: "2026-10-04T10:00:00Z"}
+
+      assert UsageLimit.all_held_line([claude, opencode_go()], @now, @to_local) ==
+               "Claude and OpenCode Go are at their usage limits; the earliest reset is 13:02 UTC-3"
+
+      assert UsageLimit.all_held_line([opencode_go(), claude, openrouter], @now, @to_local) ==
+               "OpenCode Go, Claude and OpenRouter are at their usage limits; the earliest reset is 13:02 UTC-3"
+
+      assert UsageLimit.all_held_line([opencode_go(), opencode_go(%{scope: "opus"})], @now, @to_local) ==
+               "OpenCode Go is at its usage limit; the earliest reset is 15:59 UTC-3"
+
+      unknown_resets = [%{claude | resume_at: nil}, %{opencode_go() | resume_at: nil}]
+
+      assert UsageLimit.all_held_line(unknown_resets, @now, @to_local) ==
+               "Claude and OpenCode Go are at their usage limits"
+    end
   end
 
   describe "an unreachable model API" do

@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.Conductor.TreeTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Conductor, Questions, SubIssueWait, TicketChecks, TicketEvents, TicketPlan}
+  alias SymphonyElixir.{Conductor, Questions, SubIssueWait, TicketChecks, TicketEvents, TicketPlan, UsageLimit}
   alias SymphonyElixir.Conductor.{Facts, Filing, Grooming, Tree}
   alias SymphonyElixir.Config.{Cache, Schema}
   alias SymphonyElixir.Dispatch.DependsOn
@@ -868,33 +868,37 @@ defmodule SymphonyElixir.Conductor.TreeTest do
       no_turn = fn _plan, _issue, _run_id, _prompt -> flunk("no turn runs") end
       held = [settings: @on, turn: no_turn, available?: fn _profile -> false end]
       [%{provider: provider} | _fallbacks] = Config.runs(Config.settings!(), :conductor)
+      why = "#{UsageLimit.provider_name(provider)} is paused or at its usage limit"
 
-      assert Conductor.unavailable("default", fn _profile -> false end, settings: @on) == to_string(provider)
+      assert Conductor.unavailable("default", fn _profile -> false end, settings: @on) == why
+      # A line given for the held list stands in for the names; a nil one leaves them.
+      assert Conductor.unavailable("default", fn _profile -> false end, settings: @on, held_line: fn [_ | _] -> "All held" end) == "All held"
+      assert Conductor.unavailable("default", fn _profile -> false end, settings: @on, held_line: fn _runs -> nil end) == why
       assert Conductor.unavailable("default", fn _profile -> true end, settings: @on) == nil
       assert Conductor.unavailable("default", fn _profile -> false end, settings: @off) == nil
       assert Conductor.unavailable(nil, fn _profile -> false end, settings: @on) == nil
       assert Conductor.unavailable("no-such-repo", fn _profile -> false end, settings: @on) == nil
 
       for _poll <- 1..2, do: assert(Conductor.tend(ctx.parent, "final_check", "default", held) == :ok)
-      assert ["Waiting for the Conductor: #{provider} is paused or at its usage limit."] == status_notes(ctx.issue_id)
+      assert ["Waiting for the Conductor: #{why}."] == status_notes(ctx.issue_id)
       assert Questions.open({:ticket, "default", ctx.issue_id}) == []
 
       # A look at the plan waits as long as it must, and asks nothing.
       later = DateTime.add(DateTime.utc_now(), 31, :minute)
-      assert Conductor.wait(ctx.parent, "sub_ticket_ended", "default", "openai", now: later) == :ok
+      assert Conductor.wait(ctx.parent, "sub_ticket_ended", "default", "OpenAI is paused or at its usage limit", now: later) == :ok
       assert Questions.open({:ticket, "default", ctx.issue_id}) == []
 
-      assert Conductor.wait(ctx.parent, "final_check", "default", "openai", now: later) == :ok
+      assert Conductor.wait(ctx.parent, "final_check", "default", "OpenAI is paused or at its usage limit", now: later) == :ok
       assert [%{title: "The final check waits for the Conductor", options: options}] = Questions.open({:ticket, "default", ctx.issue_id})
       assert [%{label: "Keep waiting"}, %{label: "Close it on its sub-tickets", move: %{to: "Done"}}] = options
       assert [_waiting, "The final check still waits for the Conductor, so Symphony asked the person."] = status_notes(ctx.issue_id)
-      assert Tree.waiting("default", ctx.issue_id, "final_check", "openai", later) == :ok
+      assert Tree.waiting("default", ctx.issue_id, "final_check", "OpenAI is paused or at its usage limit", later) == :ok
 
       # A turn ran: the next time the provider is away is a wait of its own.
       capture_log(fn -> assert final(ctx, {:error, :boom, 1}) == :ok end)
-      assert Tree.waiting("default", ctx.issue_id, "final_check", "openai") == :ok
-      assert List.last(status_notes(ctx.issue_id)) == "Waiting for the Conductor: openai is paused or at its usage limit."
-      assert {:ask, {:waiting, 2}, _question} = Tree.waiting("default", ctx.issue_id, "final_check", "openai", DateTime.add(later, 31, :minute))
+      assert Tree.waiting("default", ctx.issue_id, "final_check", "OpenAI is paused or at its usage limit") == :ok
+      assert List.last(status_notes(ctx.issue_id)) == "Waiting for the Conductor: OpenAI is paused or at its usage limit."
+      assert {:ask, {:waiting, 2}, _question} = Tree.waiting("default", ctx.issue_id, "final_check", "OpenAI is paused or at its usage limit", DateTime.add(later, 31, :minute))
     end
 
     test "the poll reads no waiting ticket from the tracker for a turn no provider can take", ctx do
@@ -907,6 +911,47 @@ defmodule SymphonyElixir.Conductor.TreeTest do
 
       assert mailbox() == []
       assert ["Waiting for the Conductor: " <> _provider] = status_notes(ctx.issue_id)
+    end
+
+    test "with every provider of runs.conductor at its usage limit, the wait names each one and the earliest reset", ctx do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        agent_kind: "claude",
+        agent_run_profiles: %{"conductor" => %{"fallbacks" => [%{"provider" => "opencode-go", "model" => "deepseek-v4.1-flash"}]}}
+      )
+
+      append_symphony_yml!("conductor:\n  enabled: true\n")
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      held = fn provider, resume_at ->
+        %{provider: provider, scope: :all, reason: "usage_limit", window: "seven_day", phase: :paused, since: now, resume_at: resume_at}
+      end
+
+      claude_reset = DateTime.add(now, 3720)
+      go_reset = DateTime.add(now, 15 * 3600)
+      usage_limits = %{{"anthropic", :all} => held.("anthropic", claude_reset), {"opencode-go", :all} => held.("opencode-go", go_reset)}
+      clock = fn -> now end
+
+      state = %Orchestrator.State{
+        max_concurrent_agents: 1,
+        running: %{},
+        claimed: MapSet.new(),
+        retry_attempts: %{},
+        usage_limits: usage_limits,
+        clock: clock
+      }
+
+      mailbox()
+      Orchestrator.tend_groomed_parents_for_test([ctx.parent], state)
+
+      earliest = "#{UsageLimit.local_time(claude_reset, now, [])} #{UsageLimit.zone_label(claude_reset, [])}"
+      line = "Waiting for the Conductor: Claude and OpenCode Go are at their usage limits; the earliest reset is #{earliest}."
+      assert [^line] = status_notes(ctx.issue_id)
+
+      # One provider of the list only paused by the Director is not at a limit: the wait names the list.
+      paused = %{state | usage_limits: Map.delete(usage_limits, {"opencode-go", :all}), paused_providers: MapSet.new(["opencode-go"])}
+
+      assert Conductor.unavailable("default", fn _profile -> false end, Orchestrator.conductor_opts_for_test(paused, ctx.parent)) ==
+               "Claude and OpenCode Go are paused or at their usage limits"
     end
 
     test "a sub-ticket whose dependency can't be stored is not started, and one that can't be started is said on the parent too", ctx do

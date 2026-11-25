@@ -76,6 +76,15 @@ defmodule SymphonyElixir.ProvidersTest do
       assert %{at_reserve: false, held: true} = entry(Providers.list(%{usage_limits: [%{provider: "anthropic", phase: :paused}]}), "anthropic")
     end
 
+    test "a fallback provider's own usage limit marks that provider held until its own reset, not Claude" do
+      go = %{provider: "opencode-go", phase: :paused, resume_at: ~U[2026-11-23 00:00:00Z]}
+      reserve = %{provider: "anthropic", phase: :headroom, resume_at: ~U[2026-11-22 16:02:00Z]}
+      list = Providers.list(%{usage_limits: [reserve, go]})
+
+      assert %{name: "OpenCode Go", held: true, at_reserve: false, held_until: ~U[2026-11-23 00:00:00Z]} = entry(list, "opencode-go")
+      assert %{held: true, at_reserve: true, held_until: ~U[2026-11-22 16:02:00Z]} = entry(list, "anthropic")
+    end
+
     test "an available provider a fallback names, with no readable usage" do
       assert %{
                name: "OpenRouter",

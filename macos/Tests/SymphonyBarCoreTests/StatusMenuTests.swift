@@ -502,6 +502,7 @@ final class StatusMenuTests: XCTestCase {
             "Claude monthly limit", "Claude usage limit",
         ])
         XCTAssertEqual(StatusMenu.limitName(.init(provider: "openrouter", window: "five_hour")), "OpenRouter 5-hour limit")
+        XCTAssertEqual(StatusMenu.limitName(.init(provider: "opencode-go", window: "seven_day")), "OpenCode Go weekly limit")
         XCTAssertEqual(StatusMenu.limitName(.init(provider: "acme")), "acme usage limit")
     }
 

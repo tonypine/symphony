@@ -849,6 +849,22 @@ final class TicketPageFeedTests: XCTestCase {
 
     private var feedData: Data { get throws { try Data(contentsOf: TicketEventsTests.sharedFixture) } }
 
+    /// The ticket every provider of its list holds reads as waiting on its own page, with the all-held line, as on
+    /// Home: Symphony lists it under `dispatch_skipped` (TP-1617).
+    func testTheTicketEveryProviderHoldsWaitsOnItsPageWithTheAllHeldLine() throws {
+        let api = Self.director("fallback-limit").appendingPathComponent("api/v1")
+        let page = TicketPage(
+            identifier: "SHOP-301",
+            sources: TicketPage.Sources(state: try Data(contentsOf: api.appendingPathComponent("state.json"))),
+            timeZone: utc
+        )
+        let line = "Claude and OpenCode Go are at their usage limits; the earliest reset is 13:02 UTC-3"
+        XCTAssertEqual(page.title, "Saved carts")
+        XCTAssertEqual(page.phase, .waiting(on: line))
+        XCTAssertEqual(page.phaseSentence, "Waiting on \(line)")
+        XCTAssertEqual(page.badges.first, TicketPage.Badge(status: .idle, word: "Waiting"))
+    }
+
     /// The page as the window builds it from a QA fixture's files, with what the feed's reader read.
     private func fixturePage(_ name: String, events: TicketEventsPayload?, feedAbsence: TicketFeedAbsence = .unread) throws -> TicketPage {
         let api = Self.director(name).appendingPathComponent("api/v1")

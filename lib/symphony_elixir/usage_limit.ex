@@ -10,7 +10,13 @@ defmodule SymphonyElixir.UsageLimit do
   (`"opus"`, `"sonnet"`) only runs whose model is in that family. A run that sees a limit for a
   provider other than its own — an OpenRouter run through the Claude runtime can see the Claude
   subscription's window — records the hold for that provider but is not held itself: the
-  orchestrator retries it with the normal backoff.
+  orchestrator retries it with the normal backoff. Only the Claude runtime's `rate_limit_event`
+  is the subscription's own signal; a limit read from a run's result text is the limit of the
+  provider the run was on (a fallback such as OpenCode Go answers through the Claude runtime with
+  its own `usage limit reached (weekly, resets in 15h 11m)`), so that provider is held, with the
+  reset read from its message, and the run's next start takes the next fallback its provider
+  list has free. When every provider of a run's list is held, its ticket waits on one line naming
+  them all and the earliest reset (`all_held_line/3`).
 
   At `resume_at` a hold moves to `phase: :canary`: one held run goes out alone while the
   hold keeps covering every other run, and the canary's outcome decides whether the hold
@@ -290,7 +296,8 @@ defmodule SymphonyElixir.UsageLimit do
   def headroom?(entry) when is_map(entry), do: Map.get(entry, :phase) in [:headroom, "headroom"]
 
   defp reason("openai"), do: "codex_usage_limit"
-  defp reason(_provider), do: "claude_usage_limit"
+  defp reason(provider) when provider in [nil, "anthropic"], do: "claude_usage_limit"
+  defp reason(_provider), do: "provider_usage_limit"
 
   defp unknown_reset_resume_at(info, windows, now, config) do
     case remembered_reset(info, windows, now) do
@@ -437,13 +444,12 @@ defmodule SymphonyElixir.UsageLimit do
     end
   end
 
-  @doc "A provider as people name it: `Claude` for `anthropic`."
+  @doc "A provider as people name it: `Claude` for `anthropic`, `OpenCode Go` for `opencode-go`."
   @spec provider_name(String.t() | nil) :: String.t()
   def provider_name(provider), do: provider_label(provider)
 
   defp provider_label(provider) when provider in [nil, "anthropic"], do: "Claude"
-  defp provider_label("openrouter"), do: "OpenRouter"
-  defp provider_label(provider), do: to_string(provider)
+  defp provider_label(provider), do: provider |> to_string() |> AgentProviders.display_name()
 
   defp window_label("five_hour"), do: "5-hour limit"
   defp window_label("seven_day"), do: "weekly limit"
@@ -535,6 +541,24 @@ defmodule SymphonyElixir.UsageLimit do
   def reason(entry, %DateTime{} = now, opts) when is_map(entry) do
     %{kind: :environment, waits_on: %{condition: condition(entry)}, text: reason_text(entry, now, opts)}
   end
+
+  @doc """
+  The one line a ticket waits on when every provider its run could start on is held: `Claude and
+  OpenCode Go are at their usage limits; the earliest reset is 13:02 UTC-3`. Each provider is named
+  once, in the order of `holds` (the run's own choice first, then its fallbacks), and the time is the
+  soonest `resume_at` among them, worded as `reason/3` words it. A headroom hold's provider counts
+  as held: it is at its reserve.
+  """
+  @spec all_held_line([entry()], DateTime.t(), keyword()) :: String.t()
+  def all_held_line([_ | _] = holds, %DateTime{} = now, opts) do
+    names = holds |> Enum.map(&provider_label(Map.get(&1, :provider))) |> Enum.uniq()
+    earliest = holds |> Enum.map(&datetime(Map.get(&1, :resume_at))) |> Enum.reject(&is_nil/1) |> Enum.min(DateTime, fn -> nil end)
+    subject = if length(names) == 1, do: "#{hd(names)} is at its usage limit", else: "#{join_names(names)} are at their usage limits"
+    subject <> at("; the earliest reset is ", earliest, now, opts)
+  end
+
+  defp join_names([one, two]), do: "#{one} and #{two}"
+  defp join_names(names), do: Enum.join(Enum.drop(names, -1), ", ") <> " and " <> List.last(names)
 
   @doc "The condition a hold's reason on Symphony's pause waits on: `usage_limit:anthropic:all`."
   @spec condition(map()) :: String.t()

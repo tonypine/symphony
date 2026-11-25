@@ -142,7 +142,7 @@ public struct DispatchControl: Equatable {
         } else if let hold = holds.first {
             mode = .holding
             status = .idle
-            word = "Holding · " + (hold.isAPIUnreachable ? StatusMenu.apiUnreachableName(hold) : "\(StatusMenu.providerName(hold.provider)) limit")
+            word = "Holding · " + (hold.isAPIUnreachable ? StatusMenu.apiUnreachableName(hold) : Self.limitsWord(holds))
             pauseFacts = []
         } else if state?.snapshot.budget?.dailyPaused == true {
             mode = .holding
@@ -161,6 +161,18 @@ public struct DispatchControl: Equatable {
             updatingTo = update.isReady ? nil : update.version
             word = update.isReady ? "\(word) · \(update.title)" : update.title
         }
+    }
+
+    /// "Claude limit", or every provider held at its usage limit when more than one is: "Claude and OpenCode Go limits".
+    static func limitsWord(_ holds: [StateSnapshot.UsageLimit]) -> String {
+        var names: [String] = []
+        for hold in holds where !hold.isAPIUnreachable {
+            let name = StatusMenu.providerName(hold.provider)
+            if !names.contains(name) { names.append(name) }
+        }
+        guard let last = names.last else { return "limit" }
+        guard names.count > 1 else { return "\(last) limit" }
+        return names.dropLast().joined(separator: ", ") + " and " + last + " limits"
     }
 
     private static func stoppedWord(_ window: WindowState) -> String {

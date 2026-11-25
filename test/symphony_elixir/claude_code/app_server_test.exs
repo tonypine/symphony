@@ -540,6 +540,34 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       assert {:usage_limited, %{resets_at: nil, source: :result_text}} = AppServer.parse_event(line)
     end
 
+    test "reads a fallback provider's own usage-limit text: its window and the time left until its reset" do
+      parse = fn text ->
+        line = Jason.encode!(%{"type" => "result", "subtype" => "success", "is_error" => true, "result" => text})
+        before = DateTime.utc_now()
+        assert {:usage_limited, %{source: :result_text, scope: :all} = info} = AppServer.parse_event(line)
+        {info, before}
+      end
+
+      {info, before} = parse.("API Error: Request rejected (429) · OpenCode Go usage limit reached (weekly, resets in 15h 11m).")
+      assert info.window == "seven_day"
+      assert DateTime.diff(info.resets_at, before) in (15 * 3600 + 11 * 60)..(15 * 3600 + 11 * 60 + 5)
+
+      {info, before} = parse.("OpenCode Go usage limit reached (resets in 2d 3h)")
+      assert info.window == nil
+      assert DateTime.diff(info.resets_at, before) in (2 * 86_400 + 3 * 3600)..(2 * 86_400 + 3 * 3600 + 5)
+
+      {info, before} = parse.("usage limit reached (5-hour, resets in 45m)")
+      assert info.window == "five_hour"
+      assert DateTime.diff(info.resets_at, before) in 2700..2705
+
+      {info, before} = parse.("usage limit reached (Daily, resets in 1 hour 30 seconds)")
+      assert info.window == "daily"
+      assert DateTime.diff(info.resets_at, before) in 3630..3635
+
+      {info, _before} = parse.("usage limit reached (monthly quota, resets in a while)")
+      assert %{window: "monthly_quota", resets_at: nil} = info
+    end
+
     test "resolves newer usage-limit reset times in UTC-like zones and leaves other zones unknown" do
       parse = fn reset ->
         line =

@@ -11,6 +11,22 @@
       "clearing_condition": "when a person unblocks it"
     }
   ],
+  "usage_limits": [
+    {
+      "provider": "anthropic",
+      "window": "five_hour",
+      "reserve": 0.9,
+      "utilization": 0.93,
+      "resets_in_minutes": 110,
+      "issue": "QA-101"
+    },
+    {
+      "provider": "opencode-go",
+      "window": "seven_day",
+      "resets_in_minutes": 911,
+      "issue": "QA-101"
+    }
+  ],
   "questions": [
     {
       "issue": "QA-108",

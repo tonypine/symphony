@@ -278,7 +278,8 @@ public struct ProvidersPage: Equatable {
     // MARK: The state
 
     /// Where `provider` stands. The Director's pause reads first, then Off for a provider set up with a key that isn't
-    /// enabled, then Not in use (Available for such a provider once it is enabled), then a usage limit's hold.
+    /// enabled, then Not in use (Available for such a provider once it is enabled), then a usage limit's hold. A hold
+    /// Symphony keeps on a provider it runs on wins over the app's own key store: that provider is not Off, it is held.
     public func state(_ provider: StateSnapshot.Provider) -> State {
         if provider.paused {
             let age = provider.pausedSince.map { Overview.duration(Int(now.timeIntervalSince($0))) }
@@ -288,7 +289,8 @@ public struct ProvidersPage: Equatable {
             )
         }
         let keyed = keys != nil && ProviderKeys.spec(provider.id) != nil
-        if keyed, let keys, !keys.isEnabled(provider.id) {
+        let heldBySymphony = provider.inUse && (provider.held || provider.atReserve)
+        if keyed, let keys, !keys.isEnabled(provider.id), !heldBySymphony {
             let cause = keys.hasKey(provider.id) ? "You turned it off." : "It has no key."
             return State(status: .idle, word: Self.offWord, cause: cause, waits: nil, short: Self.offWord, live: false)
         }

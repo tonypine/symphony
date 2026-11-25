@@ -1450,13 +1450,14 @@ defmodule SymphonyElixir.Conductor.Tree do
   end
 
   @doc """
-  Says on the ticket `issue_id` that the turn it is owed at `junction` waits, because `provider`
-  cannot take a run now: a status note, written once per wait (see the module doc). `:ok`, or
+  Says on the ticket `issue_id` that the turn it is owed at `junction` waits, because no provider
+  of `runs.conductor` can take a run now, for `why` (`Claude and OpenCode Go are at their usage
+  limits; the earliest reset is 13:02 UTC-3`): a status note, written once per wait (see the module doc). `:ok`, or
   `{:ask, {:waiting, n}, question}` once a final check has waited more than
   #{@wait_ask_after_minutes} minutes and the person was not asked in this wait. `now` is the time.
   """
   @spec waiting(String.t() | nil, String.t(), String.t(), String.t(), DateTime.t()) :: :ok | {:ask, asked(), map()}
-  def waiting(repo_key, issue_id, junction, provider, now \\ DateTime.utc_now()) do
+  def waiting(repo_key, issue_id, junction, why, now \\ DateTime.utc_now()) do
     events = Facts.events(issue_id)
     # The wait in progress: its note, unless a Conductor turn ran on the ticket since.
     since = events |> Enum.reverse() |> Enum.take_while(&(not conductor_run?(&1))) |> Enum.find(&keyed?(&1, @wait_key))
@@ -1464,10 +1465,10 @@ defmodule SymphonyElixir.Conductor.Tree do
 
     cond do
       is_nil(since) ->
-        note(repo_key, issue_id, "Waiting for the Conductor: #{provider} is paused or at its usage limit.", "#{@wait_key}#{waits + 1}")
+        note(repo_key, issue_id, "Waiting for the Conductor: #{why}.", "#{@wait_key}#{waits + 1}")
 
       junction == "final_check" and DateTime.diff(now, since.at, :minute) > @wait_ask_after_minutes and keyed(events, "#{@wait_asked_key}#{waits}") == 0 ->
-        {:ask, {:waiting, waits}, waiting_question(provider)}
+        {:ask, {:waiting, waits}, waiting_question(why)}
 
       true ->
         :ok
@@ -1477,11 +1478,12 @@ defmodule SymphonyElixir.Conductor.Tree do
   defp conductor_run?(%{type: "run.started", payload: payload}), do: Map.get(payload, :run_kind) == "conductor"
   defp conductor_run?(_event), do: false
 
-  defp waiting_question(provider) do
+  defp waiting_question(why) do
     %{
       title: "The final check waits for the Conductor",
       question:
-        "Every sub-ticket of this ticket ended, and its final check has waited more than #{@wait_ask_after_minutes} minutes: #{provider} is paused or at its usage limit. Close the ticket on its sub-tickets, or keep waiting?",
+        "Every sub-ticket of this ticket ended, and its final check has waited more than " <>
+          "#{@wait_ask_after_minutes} minutes: #{why}. Close the ticket on its sub-tickets, or keep waiting?",
       why: "The final check needs the Conductor, and nothing says when its provider takes runs again.",
       if_unanswered: "The ticket stays in the waiting state until the provider takes runs again.",
       recommendation_reason: "The final check is what says the ticket does what was asked.",
