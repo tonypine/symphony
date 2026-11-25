@@ -1,7 +1,9 @@
 defmodule SymphonyElixir.ShippedTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.Home.RecentlyDone
   alias SymphonyElixir.Shipped
+  alias SymphonyElixir.TicketEvents
 
   setup do
     :ok = RunStore.clear()
@@ -165,9 +167,56 @@ defmodule SymphonyElixir.ShippedTest do
     host_today = SymphonyElixir.ShippedToday.local_date(@now)
 
     # A ticket merged this instant is merged today wherever the host is.
-    assert %{from: ^host_today, today: ^host_today, local_date: local_date, runs: [^merged]} =
+    now = @now
+
+    assert %{from: ^host_today, today: ^host_today, local_date: local_date, runs: [%{issue_id: "i1", done_at: ^now}]} =
              Shipped.done_runs(1, now: @now, runs_started_on: fn _date -> [merged] end)
 
     assert local_date.(@now) == host_today
+  end
+
+  # The ledger events that say when a ticket was done, written to the store as Symphony writes them.
+  defp merged(issue_id, at), do: {:ok, _event} = TicketEvents.record("app", issue_id, "phase.entered", %{to: "Done", from: "Merging", signal: "merge settled"}, at: at)
+
+  test "a ticket's merge time is when its pull request merged, as Recently done gives it, and it counts on that day" do
+    # Both merged on the 12th; Symphony noted both completions in the same second on the 13th.
+    noted_late = ~U[2026-10-13 11:40:08Z]
+    merged("i1", ~U[2026-10-12 14:00:00Z])
+    merged("i2", ~U[2026-10-12 18:00:00Z])
+
+    runs = [
+      run("i1", "APP-1", ~U[2026-10-12 13:00:00Z], %{issue_completed_notified_at: noted_late}),
+      run("i2", "APP-2", ~U[2026-10-12 17:00:00Z], %{issue_completed_notified_at: noted_late})
+    ]
+
+    assert {:ok, payload} = payload(%{"days" => "2"}, runs)
+    assert [%{identifier: "APP-2", merged_at: "2026-10-12T18:00:00Z", date: "2026-10-12"}, %{identifier: "APP-1", merged_at: "2026-10-12T14:00:00Z", date: "2026-10-12"}] = payload.tickets
+    assert payload.shipped_per_day == [%{date: "2026-10-12", shipped: 2}, %{date: "2026-10-13", shipped: 0}]
+    assert [%{todo_to_done_seconds: 3600}, %{todo_to_done_seconds: 3600}] = payload.tickets
+
+    runs_started_on = fn date -> Enum.filter(runs, &(DateTime.to_date(&1.started_at) == date)) end
+    page = %{range: :week, offset: 0, limit: 50}
+    home = RecentlyDone.read([], %{}, page, now: @now, to_local: &to_local/1, runs_started_on: runs_started_on)
+
+    assert Enum.map(home.entries, &{&1.identifier, &1.done_at}) == Enum.map(payload.tickets, &{&1.identifier, &1.merged_at})
+  end
+
+  test "done_at/2: the first merge or move into Done of the ledger, else when the completion was noted" do
+    noted = %{issue_completed_notified_at: ~U[2026-10-13 11:00:00Z]}
+    event = fn type, payload, at -> %TicketEvents.Event{type: type, payload: payload, at: at} end
+
+    events = [
+      event.("note", %{text: "Done"}, ~U[2026-10-10 08:00:00Z]),
+      event.("phase.entered", %{to: "QA"}, ~U[2026-10-11 08:00:00Z]),
+      event.("ticket.moved", %{from: "QA", to: " done "}, ~U[2026-10-12 09:00:00Z]),
+      event.("phase.entered", %{to: "Done", signal: "merge settled"}, ~U[2026-10-12 10:00:00Z])
+    ]
+
+    assert Shipped.done_at(noted, events) == ~U[2026-10-12 09:00:00Z]
+    assert Shipped.done_at(noted, Enum.take(events, 2)) == ~U[2026-10-13 11:00:00Z]
+
+    # A parent that merged and then waited on its sub-tickets was done at the merge.
+    waited = [event.("phase.entered", %{to: "Waiting on sub-tickets", signal: "merge settled"}, ~U[2026-10-11 10:00:00Z]) | events]
+    assert Shipped.done_at(noted, waited) == ~U[2026-10-11 10:00:00Z]
   end
 end
