@@ -359,6 +359,20 @@ defmodule SymphonyElixir.ConductorTest do
       assert Enum.all?(RunStore.list_issue_runs("default", ctx.issue_id), &(&1.status == "failed"))
     end
 
+    test "a turn its provider refused at its usage limit holds that provider, so the next turn does not start on it", ctx do
+      info = %{provider: "opencode-go", window: "seven_day", scope: :all, resets_at: DateTime.add(DateTime.utc_now(), 3600), source: :result_text}
+      test_pid = self()
+      seen = fn seen_info, identifier -> send(test_pid, {:usage_limit_seen, seen_info, identifier}) end
+
+      capture_log(fn -> assert Conductor.run(plan(ctx), ctx.issue, turn: turn({:error, {:usage_limited, info}, 0}), facts: %{}, usage_limit_seen: seen) == :ok end)
+
+      assert_received {:usage_limit_seen, ^info, identifier}
+      assert identifier == ctx.issue.identifier
+
+      capture_log(fn -> Conductor.run(plan(ctx), ctx.issue, turn: turn({:error, :turn_failed, 0}), facts: %{}, usage_limit_seen: seen) end)
+      refute_received {:usage_limit_seen, _info, _identifier}
+    end
+
     test "a turn that cannot be recorded or prompted is logged, never raised", ctx do
       log = capture_log(fn -> assert Conductor.run(plan(ctx, %{junction: "whenever", repo_key: nil}), ctx.issue, turn: turn({:ok, [answer()], 1}), facts: %{}) == :ok end)
       assert log =~ "Conductor could not record conductor.instructions"

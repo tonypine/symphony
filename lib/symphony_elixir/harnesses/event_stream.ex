@@ -517,12 +517,14 @@ defmodule SymphonyElixir.Harnesses.EventStream do
   end
 
   # A rejection from the `rate_limit_event` wins over the result text that follows it:
-  # only the event carries the window and the epoch reset time.
+  # only the event carries the window and the epoch reset time. A limit read from the result
+  # text is the run's own provider's: the harness talks to that provider's endpoint, so a
+  # fallback's refusal is the fallback's limit, not the Claude subscription's.
   defp apply_event({:usage_limited, info}, on_message, acc) do
     info =
       case acc.usage_limited do
         %{source: :rate_limit_event} = earlier -> earlier
-        _none_or_fallback -> info
+        _none_or_fallback -> own_provider_limit(info, acc.provider)
       end
 
     reason = usage_limit_message(info)
@@ -744,6 +746,9 @@ defmodule SymphonyElixir.Harnesses.EventStream do
   rescue
     _ -> :ok
   end
+
+  defp own_provider_limit(%{source: :result_text} = info, provider), do: %{info | provider: provider}
+  defp own_provider_limit(info, _provider), do: info
 
   @doc "The line a usage-limit rejection reads as: the window and when it resets."
   @spec usage_limit_message(map()) :: String.t()

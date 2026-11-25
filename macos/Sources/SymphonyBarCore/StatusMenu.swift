@@ -387,7 +387,7 @@ public enum StatusMenu {
             : "\(providerName(limit.provider)) API unreachable"
     }
 
-    /// How people name a provider: "Claude" for `anthropic`.
+    /// How people name a provider: "Claude" for `anthropic`, "OpenCode Go" for `opencode-go`.
     public static func providerName(_ provider: String) -> String {
         switch provider {
         case "anthropic":
@@ -396,6 +396,8 @@ public enum StatusMenu {
             return "Codex"
         case "openrouter":
             return "OpenRouter"
+        case "opencode-go":
+            return "OpenCode Go"
         default:
             return provider
         }

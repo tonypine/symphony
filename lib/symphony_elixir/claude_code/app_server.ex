@@ -254,7 +254,11 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
            | {:background_command_ended, String.t()}
            | {:malformed, String.t()}
 
-  @typedoc "A Claude usage-limit hit: a plan window (five-hour or weekly) is used up."
+  @typedoc """
+  A usage-limit hit: a plan window (five-hour or weekly) is used up. A `rate_limit_event` is the
+  Claude subscription's (`provider: "anthropic"`); one read from the result text is the run's own
+  provider's, which `SymphonyElixir.Harnesses.EventStream` puts in for the placeholder here.
+  """
   @type usage_limit_info :: %{
           provider: String.t(),
           window: String.t() | nil,
@@ -1657,7 +1661,10 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   defp number_or_nil(_value), do: nil
 
   # Older CLIs end the run with `Claude AI usage limit reached|<epoch>`; newer ones
-  # with `You've hit your limit · resets 3pm (Europe/Paris)`.
+  # with `You've hit your limit · resets 3pm (Europe/Paris)`. A provider behind the harness's
+  # endpoint (OpenCode Go) answers with its own words: `OpenCode Go usage limit reached (weekly,
+  # resets in 15h 11m)`, its window and the time left until its reset.
+  @usage_limit_relative_pattern ~r/usage limit reached\s*\(\s*(?:([a-z0-9][a-z0-9 _-]*?)\s*,\s*)?resets in\s+([^)]+?)\s*\)/i
   @usage_limit_epoch_pattern ~r/usage limit reached(?:\|(\d+))?/i
   @usage_limit_text_pattern ~r/hit your\b[^·\n]*?\blimit(?:\s*·\s*resets\s+(.+?)\s*\(([^)]+)\))?/iu
 
@@ -1668,6 +1675,9 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     cond do
       not is_binary(text) ->
         :error
+
+      captures = Regex.run(@usage_limit_relative_pattern, text, capture: :all_but_first) ->
+        {:ok, relative_usage_limit(captures, DateTime.utc_now())}
 
       captures = Regex.run(@usage_limit_epoch_pattern, text, capture: :all_but_first) ->
         {:ok, result_usage_limit(epoch_capture_to_datetime(captures))}
@@ -1761,6 +1771,36 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
       overage: nil,
       source: :result_text
     }
+  end
+
+  defp relative_usage_limit([window_word, left], now) do
+    window = window_from_word(window_word)
+    %{result_usage_limit(relative_reset(left, now)) | window: window, scope: UsageLimit.scope_for_window(window)}
+  end
+
+  defp window_from_word(word) do
+    case word |> String.trim() |> String.downcase() do
+      "" -> nil
+      "weekly" -> "seven_day"
+      word when word in ["5-hour", "5 hour", "five-hour", "five hour"] -> "five_hour"
+      word -> String.replace(word, ~r/[\s-]+/, "_")
+    end
+  end
+
+  # `15h 11m`, `2d 3h`, `45m`, `1 day 2 hours`: the time left until the reset, from now. A text
+  # with no amount in it leaves the reset unknown.
+  @duration_part_pattern ~r/(\d+)\s*(d|h|m|s)[a-z]*/i
+  @duration_unit_seconds %{"d" => 86_400, "h" => 3600, "m" => 60, "s" => 1}
+
+  defp relative_reset(text, now) do
+    case Regex.scan(@duration_part_pattern, text, capture: :all_but_first) do
+      [] ->
+        nil
+
+      parts ->
+        seconds = Enum.reduce(parts, 0, fn [amount, unit], acc -> acc + String.to_integer(amount) * Map.fetch!(@duration_unit_seconds, String.downcase(unit)) end)
+        DateTime.add(now, seconds)
+    end
   end
 
   defp epoch_capture_to_datetime([epoch]), do: epoch_to_datetime(String.to_integer(epoch))

@@ -16,6 +16,13 @@ defmodule SymphonyElixir.QaSeed do
   - `holds`: a ticket paused for access (`reason`), which only a person's Unblock lifts: the
     environment reason its pause waits on, as self-heal sets it for a block only a person can clear
     (`SymphonyElixir.SelfHeal.environment_reason/1`);
+  - `usage_limits`: a provider's usage-limit hold, as the orchestrator keeps it
+    (`SymphonyElixir.RunStore.put_usage_limits/1`) and restores it at its start: its `provider`, the
+    `window` it limits, `resets_in_minutes` from the seed's now, and the ticket whose run found it
+    (`issue`). With a `reserve` (and the `utilization` seen) it is a hold at the reserve, as Anthropic's
+    rate-limit events set it (`SymphonyElixir.UsageLimit.put_headroom/3`); without one, the limit the
+    provider's own message reported (`SymphonyElixir.UsageLimit.put/3`). The QA server's runs are on
+    another provider, so the holds start no wait of theirs;
   - `questions`: a decision request on a ticket, which opens its Question and sets its Needs Decision
     hold (`SymphonyElixir.DecisionRequest.ask/4`, in its words: `title`, `question`, `why`,
     `if_unanswered`, `recommendation_reason`, `options`). With `asked_by: "Conductor"` it is the
@@ -60,7 +67,8 @@ defmodule SymphonyElixir.QaSeed do
     RunStore,
     SelfHeal,
     TicketEvents,
-    TicketObservation
+    TicketObservation,
+    UsageLimit
   }
 
   alias SymphonyElixir.Artifacts.Store
@@ -106,6 +114,7 @@ defmodule SymphonyElixir.QaSeed do
          :ok <- pauses(repo_key, Map.get(seed, "pauses", %{})),
          :ok <- each(issues, &observe(repo_key, tracker, now, &1)),
          :ok <- each(Map.get(seed, "holds", []), &hold(repo_key, tracker, &1)),
+         :ok <- usage_limits(Map.get(seed, "usage_limits", []), now),
          :ok <- each(Map.get(seed, "questions", []), &question(repo_key, tracker, &1)),
          :ok <- each(Map.get(seed, "runs", []), &run(dir, repo_key, tracker, now, &1)),
          :ok <- each(Map.get(seed, "merged_waits", []), &merged_wait(tracker, &1)),
@@ -183,6 +192,38 @@ defmodule SymphonyElixir.QaSeed do
         {:error, reason} -> {:error, {{:hold, identifier}, reason}}
       end
     end
+  end
+
+  # The holds go in as the orchestrator keeps them, so it restores them at its start.
+  defp usage_limits([], _now), do: :ok
+
+  defp usage_limits(entries, now) do
+    config = Config.settings!().execution.usage_limit
+    holds = Map.new(entries, &usage_limit(&1, now, config))
+
+    holds |> RunStore.put_usage_limits() |> tagged(:usage_limits)
+  end
+
+  defp usage_limit(%{"provider" => provider, "resets_in_minutes" => minutes} = entry, now, config) do
+    window = entry["window"]
+
+    info = %{
+      provider: provider,
+      scope: UsageLimit.scope_for_window(window),
+      window: window,
+      resets_at: DateTime.add(now, minutes * 60),
+      utilization: entry["utilization"]
+    }
+
+    opts = [now: now, config: config, issue_identifier: entry["issue"]]
+
+    hold =
+      case entry["reserve"] do
+        nil -> UsageLimit.put(nil, Map.put(info, :source, :result_text), opts)
+        reserve -> UsageLimit.put_headroom(nil, Map.merge(info, %{source: :rate_limit_event, reserve: reserve / 1}), opts)
+      end
+
+    {UsageLimit.key(info), hold}
   end
 
   defp question(repo_key, tracker, %{"issue" => identifier} = entry) do

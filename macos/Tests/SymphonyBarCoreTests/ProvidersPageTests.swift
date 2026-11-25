@@ -345,6 +345,29 @@ final class ProvidersPageTests: XCTestCase {
         XCTAssertEqual(page([openCodeGo]).detail(nil)?.state.word, "Not in use")
     }
 
+    func testAHeldProviderInUseReadsAtItsLimitEvenWithNoKeyInTheApp() throws {
+        // Symphony runs on OpenCode Go and holds it at its weekly limit (TP-1617); the app's own key store has no key.
+        let until = now.addingTimeInterval(15 * hour)
+        let held = StateSnapshot.Provider(
+            id: "opencode-go", name: "OpenCode Go", inUse: true, held: true, heldUntil: until,
+            harnesses: ["claude"], fallbackFor: ["ci_fix"]
+        )
+        let page = ProvidersPage(providers: [anthropic(), held], now: now, timeZone: utc, keys: ProviderKeys(), keyEditor: ProviderKeyEditor())
+        let detail = try XCTUnwrap(page.detail("opencode-go"))
+        XCTAssertEqual(detail.state.word, "Limit reached")
+        XCTAssertEqual(detail.state.status, .problem)
+        XCTAssertEqual(detail.state.short, "Limit reached · until Wed 05:00")
+        XCTAssertEqual(detail.state.waits, "New runs start on their fallbacks, or wait. Resumes Wed 18 Nov, 05:00.")
+        XCTAssertEqual(page.sections[0].cards.last?.statusLine, "Limit reached · until Wed 05:00")
+        // At its reserve, the same: the hold reads, not Off.
+        let reserved = StateSnapshot.Provider(id: "opencode-go", name: "OpenCode Go", inUse: true, harnesses: ["claude"], atReserve: true)
+        XCTAssertEqual(page.state(reserved).word, "At your reserve")
+        // Not in use, or in use and not held, a provider with no key stays Off.
+        XCTAssertEqual(page.state(openCodeGo).word, "Off")
+        let free = StateSnapshot.Provider(id: "opencode-go", name: "OpenCode Go", inUse: true, harnesses: ["claude"])
+        XCTAssertEqual(page.state(free).word, "Off")
+    }
+
     func testATestThatPassesOffersEnableAndEnableMakesItAvailable() throws {
         var editor = ProviderKeyEditor()
         var keys = ProviderKeys()

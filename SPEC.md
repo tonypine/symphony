@@ -4519,6 +4519,21 @@ reached (for Claude, a used-up five-hour or weekly window; for Codex, an error w
   so its runs pause, but does not hold the run itself: an OpenRouter run on the `claude` harness
   can see the Claude subscription's window, and it retries with the normal backoff instead of
   waiting for the Claude reset. That run is recorded as `failure` and emits the usual `run_failed`.
+  Only the `claude` harness's `rate_limit_event` is the Claude subscription's own signal: a limit read
+  from a run's result text belongs to the provider the run was on, since the harness talks to that
+  provider's endpoint. A fallback such as OpenCode Go answers `OpenCode Go usage limit reached
+  (weekly, resets in 15h 11m)`: its window (`weekly` is `seven_day`) and its reset (now plus the time
+  left) are read from that text, and its hold is named for it (`OpenCode Go weekly limit`), never
+  Claude's, and never timed from Claude's remembered windows.
+- A run held by its own provider's limit whose list (the run kind's own choice and its fallbacks)
+  still has a provider no hold and no pause keeps off is not held until the reset: it waits for a
+  slot with its attempt and no backoff, and its next run starts on that provider. When every provider
+  of the list is held, the held retry and the dispatch skip read one line naming each held provider
+  and the earliest `resume_at` among them (`Claude and OpenCode Go are at their usage limits; the
+  earliest reset is 13:02 UTC-3`).
+- A Conductor turn that ends on a usage limit records the hold for its provider the same way
+  (`Orchestrator.usage_limit_seen/2`), so the next Conductor turn takes a fallback of
+  `runs.conductor` or waits for the reset.
 - A QA run (the `QA` state's, or an epic review's) whose agent hits the limit creates or refreshes
   the hold the same way. It records no verdict, writes no QA report and leaves the issue's state
   alone; it is held and retried as its run.
