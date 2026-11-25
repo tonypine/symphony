@@ -20,6 +20,7 @@
 //   click <pid> <path> <clicks>
 //   hover <pid> <path or x,y>
 //   context-menu <pid> <path or x,y>
+//   drag <pid> <path or x,y> <path or x,y> <hold ms> <steps>
 //   key <pid> <key> <modifiers, comma-separated, or "">
 //   scroll <pid> <path or x,y> <top|bottom|left|right or dx,dy> <line|pixel>
 //
@@ -41,6 +42,8 @@
 // cannot be read (see `settledCursor`).
 // `scroll` posts scroll-wheel events in the scroll area at the target, by a delta
 // or to an edge (see `scroll`).
+// `drag` presses the button at one target, moves to the other with it held and
+// lets go there, through the HID tap, as a mouse does (see `drag`).
 
 import AppKit
 import ApplicationServices
@@ -787,7 +790,13 @@ func pointerTarget(_ app: AXUIElement, _ argument: String) -> PointerTarget {
 // land on another app.
 func reach(_ app: AXUIElement, _ pid: pid_t, _ target: PointerTarget) -> Int {
     bringForward(app, target.element)
+    return reachable(pid, target)
+}
 
+// The checks of `reach` without bringing anything forward: the number of the
+// app's window under the point, or a failure when none is there or something
+// else would take the pointer.
+func reachable(_ pid: pid_t, _ target: PointerTarget) -> Int {
     let windows = onScreenWindows(at: target.point)
     guard let window = windows.first(where: { ownerPID($0) == pid }), let number = windowNumber(window) else {
         fail("not_on_screen", "\(capitalized(target.label)) is not on screen; scroll it into view or raise its window.")
@@ -1007,6 +1016,73 @@ func click(_ pid: pid_t, _ argument: String, clicks: Int) {
         }
     }
 
+    emit(result)
+}
+
+// How long the pointer rests at the start before the button goes down, and
+// between two moves of a drag (about one frame).
+let dragRestPause: useconds_t = 200_000
+let dragStepPause: useconds_t = 16_000
+
+// One mouse event of a drag, from the hardware's own source state and through
+// the HID tap, as a mouse's: the window server routes it to the window under the
+// pointer and keeps the button's state.
+func postDrag(_ type: CGEventType, at point: CGPoint) {
+    guard let event = CGEvent(mouseEventSource: pointerSource, mouseType: type, mouseCursorPosition: point, mouseButton: .left) else {
+        fail("drag_failed", "Could not create a mouse event.")
+    }
+    event.setIntegerValueField(.mouseEventClickState, value: 1)
+    event.post(tap: .cghidEventTap)
+}
+
+// Drags from one element's centre or point to another, as a person's mouse
+// does (macos/Tests/home-drag-test.py posts the same): the pointer rests at the
+// start, the button goes down and is held for `holdMs`, the pointer moves to the
+// end in `steps` moves with the button held, rests there, and the button goes up.
+// Both ends pass the checks a click does: the app's own window is on screen
+// there and nothing else would take the pointer, and the app is the active app.
+// The start's window is brought forward, and the end is checked as it then is.
+func drag(_ pid: pid_t, _ fromArgument: String, _ toArgument: String, holdMs: Int, steps: Int) {
+    let app = application(pid)
+    let from = pointerTarget(app, fromArgument)
+    let to = pointerTarget(app, toArgument)
+    _ = reach(app, pid, from)
+    _ = reachable(pid, to)
+    guard waitUntil(5, { isActive(app, pid) }) else {
+        fail("not_frontmost", "\(activeAppName()) is the active app, so a drag from \(from.label) would only activate the app's window; nothing was dragged. Raise the app's window with qa_ax_press and AXRaise, then try again.")
+    }
+
+    movePointer(to: from.point)
+    usleep(dragRestPause)
+    let before = settle(app, pid, within: 1).fingerprint
+
+    postDrag(.leftMouseDown, at: from.point)
+    usleep(useconds_t(holdMs) * 1_000)
+    for step in 1...steps {
+        let t = Double(step) / Double(steps)
+        postDrag(.leftMouseDragged, at: CGPoint(x: from.point.x + (to.point.x - from.point.x) * t, y: from.point.y + (to.point.y - from.point.y) * t))
+        usleep(dragStepPause)
+    }
+    // A last move at the end, so the view's last report is the end itself.
+    postDrag(.leftMouseDragged, at: to.point)
+    usleep(dragRestPause)
+    postDrag(.leftMouseUp, at: to.point)
+    usleep(clickPause)
+
+    let after = settle(app, pid, within: 2)
+    var result: [String: Any] = [
+        "ok": true,
+        "via": "hid",
+        "from": ["x": Int(from.point.x), "y": Int(from.point.y)],
+        "to": ["x": Int(to.point.x), "y": Int(to.point.y)],
+        "hold_ms": holdMs,
+        "steps": steps,
+        "settled": after.settled,
+        "changed": after.fingerprint != before
+    ]
+    result["under_pointer"] = elementUnder(app, to.point)
+    if let element = from.element { result["from_element"] = describe(element, path: from.path) }
+    if let element = to.element { result["to_element"] = describe(element, path: to.path) }
     emit(result)
 }
 
@@ -1700,6 +1776,13 @@ case "click" where args.count == 4:
 case "hover" where args.count == 3:
     requireAccessibility()
     hover(pidArgument(args[1]), args[2])
+
+case "drag" where args.count == 6:
+    requireAccessibility()
+    guard let hold = Int(args[4]), (0...5000).contains(hold), let steps = Int(args[5]), (2...200).contains(steps) else {
+        fail("invalid_drag", "The hold is 0 to 5000 ms and the steps 2 to 200.")
+    }
+    drag(pidArgument(args[1]), args[2], args[3], holdMs: hold, steps: steps)
 
 case "context-menu" where args.count == 3:
     requireAccessibility()

@@ -1454,7 +1454,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
     end
 
     test "a step whose brief needs a tool the driver lacks is marked before the first walk, and a group that loses every step starts no session", ctx do
-      drag = %{needs: [%{kind: "tool", name: "qa_drag"}]}
+      drag = %{needs: [%{kind: "tool", name: "qa_pinch"}]}
 
       answers(%{
         "plan" => [
@@ -1468,7 +1468,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       assert walks(turns()) == ["walk_3_4"]
 
       for number <- [1, 2] do
-        assert %{status: "unprovable", needs: ["the QA tool `qa_drag`, which the QA driver does not have"]} = marked_step(result, "Walkthrough step #{number}")
+        assert %{status: "unprovable", needs: ["the QA tool `qa_pinch`, which the QA driver does not have"]} = marked_step(result, "Walkthrough step #{number}")
       end
 
       # The plan's answer is recorded as it came.

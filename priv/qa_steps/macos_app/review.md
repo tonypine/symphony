@@ -7,7 +7,9 @@ You may first ask for a recheck: when an answer is `plan_mismatch`, when a step 
 the wrong screen or state, or when an answer does not let you judge the step. Then write
 `{"recheck": [<brief>, ...]}` to the answer file: at most three sessions, each brief in the shape
 of your plan's `walk` briefs (with `step`, `where`, `launch`, `do`, `expect`, `design`,
-`screenshots`, and `surface` and `group` when your plan's briefs carried one). Give the same `group`
+`screenshots`, and `surface` and `group` when your plan's briefs carried one). A recheck that
+waits names its seconds for `qa_wait_check`, never a sleep; one that drags names its start and
+drop for `qa_drag`. Give the same `group`
 to the briefs that share a screen and an app state, as in your plan: they are rechecked together in
 one fresh walk turn, each with its own result, and count as one session. A brief with no `group` is
 rechecked in a fresh walk turn of its own. At most twelve briefs in all; you review again with

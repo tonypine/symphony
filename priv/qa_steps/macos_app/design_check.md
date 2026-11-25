@@ -9,8 +9,8 @@ The running app:
   appearance, with its window at the target size. When the plan's briefs name `api_fixtures` or
   stand-ins for the screens you judge, `qa_quit_app` it and `qa_launch_app` with them and the
   screen's page as `page`, leaving out `appearance`, then call `qa_resize_window` with no size. Open each changed window (pass its `path` to
-  `qa_resize_window` when it is not the main one), let it settle (about 10 seconds, change focus
-  once) and `qa_screenshot` it. The status-bar menu: `qa_open_status_menu`, `qa_screenshot` with its
+  `qa_resize_window` when it is not the main one), let it settle (`qa_wait_check` with `seconds: 10`, never a
+  sleep in your shell; change focus once) and `qa_screenshot` it. The status-bar menu: `qa_open_status_menu`, `qa_screenshot` with its
   `window_id`, then `qa_key` `escape`.
 - Judge one appearance and one size: the target's. Only when a brief's `also` names another
   appearance, quit and `qa_launch_app` once more with that `appearance` and judge the same screens
@@ -31,6 +31,12 @@ The Component Gallery (the app's own views drawn from made-up inputs, built with
 - A change that adds a component, a kind, a state or a screen state with no gallery variation for it
   is a finding.
 
+For a close look at a part (an icon, a gap, a border, a "2x crop" the plan asks for), `qa_crop` the
+screenshot or gallery picture and judge the crop. For an alignment or a spacing the design states
+("within 1 pt"), `qa_measure` the edges in the picture. Where the app reports a value exactly
+(`qa_ax_tree`'s frames give positions and sizes), take it from there; a picture is for how a thing
+looks. Never write image code or call `sips`.
+
 Judge each picture side by side with the design the plan names (the ticket's or the parent's
 Screens, else `docs/design/design-system.md`): layout, spacing, alignment, truncation, contrast,
 symbols, wording, and whether it looks finished. Content centred in its shape; a glyph and its
@@ -49,5 +55,5 @@ it in `actual`: never `pass`, never `fail`.
 Answer with `status` (`pass`, `fail`, `blocked`, `unprovable` when the check needs a QA tool, a
 fixture page or the live server this pass does not have, with what it needed in `actual`, or
 `plan_mismatch` when the plan named a screen or entry that does not exist), `expected` (the designs you compared with, and the appearance and size),
-`actual` (what you saw, entry by entry), `details`, and `evidence` (every screenshot and gallery
+`actual` (what you saw, entry by entry), `details`, and `evidence` (every screenshot, crop and gallery
 picture path under `qa-evidence/`).

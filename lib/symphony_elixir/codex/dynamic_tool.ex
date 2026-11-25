@@ -594,6 +594,35 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   @element_path_property %{"type" => "string", "description" => "An element path from qa_ax_tree, like `0.2.1`."}
   @screen_x_property %{"type" => "integer", "minimum" => -32_768, "maximum" => 32_768, "description" => "A point's x on screen, with y, instead of path."}
   @screen_y_property %{"type" => "integer", "minimum" => -32_768, "maximum" => 32_768, "description" => "A point's y on screen, with x, instead of path."}
+  @drag_end_property %{
+    "type" => "object",
+    "additionalProperties" => false,
+    "description" => "An element's centre (`path`) or a point on screen (`x` and `y`, in the points of qa_ax_tree's frames).",
+    "properties" => %{"path" => @element_path_property, "x" => @screen_x_property, "y" => @screen_y_property}
+  }
+  @evidence_picture_property %{
+    "type" => "string",
+    "description" => "A picture a qa_* tool saved, by the path it returned, e.g. qa-evidence/home.png (or home.png)."
+  }
+  @picture_point_property %{
+    "type" => "number",
+    "minimum" => 0,
+    "description" => "Points from the picture's top-left corner. For a window's screenshot: a point on screen minus the window frame's x (or y)."
+  }
+  @picture_size_property %{"type" => "number", "exclusiveMinimum" => 0, "description" => "Points."}
+  @picture_scale_property %{
+    "type" => "integer",
+    "minimum" => 1,
+    "maximum" => 4,
+    "description" =>
+      "The picture's pixels per point. Omit it to read it from the picture (144 dpi is 2), else 1; pass it when the picture's pixel width is a multiple of the window frame's width it shows."
+  }
+  @picture_rect_properties %{
+    "x" => @picture_point_property,
+    "y" => @picture_point_property,
+    "width" => @picture_size_property,
+    "height" => @picture_size_property
+  }
 
   @qa_tool_schemas [
     %{
@@ -709,7 +738,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
           "Without arguments it lists the entries (id, title, kind, variations, the files each shows), the named widths, and `affected`: the entries this PR's changed files are a reason to look at " <>
           "(`all: true` means every entry). Call it first when the PR changes shared views. " <>
           "With entry it draws that entry without opening a window and saves the pictures in qa-evidence/ under the gallery's own file names, in the QA target's appearance and, for a screen, its window's width: " <>
-          "use it for a step that judges how a component or a screen looks. A component is drawn whole; a screen needs variation. To press, hover or type in an entry, use qa_gallery_open.",
+          "use it for a step that judges how a component or a screen looks. A component call (entry alone) draws every variation of the component on one board, in one picture; a screen needs variation, one at a time. " <>
+          "A picture this pass already drew comes back with its path and `existing: true` (the file is kept as it was drawn): judge that file. To press, hover or type in an entry, use qa_gallery_open.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -778,6 +808,77 @@ defmodule SymphonyElixir.Codex.DynamicTool do
           "pid" => @pid_property,
           "name" => %{"type" => "string", "description" => "File name without extension: letters, digits, `.`, `_`, `-`."},
           "window_id" => %{"type" => "integer", "minimum" => 1}
+        }
+      }
+    },
+    %{
+      "name" => "qa_crop",
+      "description" =>
+        "Cut a rectangle out of a picture a qa_* tool saved (a qa_screenshot, a qa_gallery picture), enlarge it `zoom` times (2 by default, each pixel drawn as a square) and save it as qa-evidence/<name>.png, for a close look at how a part looks (an icon, a gap, a border). " <>
+          "Symphony crops it on its side, so you write no file and need no sips. Returns the new picture's path and its scale (pixels per point). Fails with qa_picture_missing, qa_picture_refused (outside qa-evidence/), qa_picture_unreadable or qa_picture_out_of_bounds.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["path", "name", "x", "y", "width", "height"],
+        "properties" =>
+          Map.merge(@picture_rect_properties, %{
+            "path" => @evidence_picture_property,
+            "name" => %{"type" => "string", "description" => "The crop's file name without extension: letters, digits, `.`, `_`, `-`. Each name can be used once."},
+            "zoom" => %{"type" => "integer", "minimum" => 1, "maximum" => 8, "default" => 2, "description" => "How many times to enlarge the crop."},
+            "scale" => @picture_scale_property
+          })
+      }
+    },
+    %{
+      "name" => "qa_measure",
+      "description" =>
+        "Measure inside a picture a qa_* tool saved, in points: with `points`, the distance between two points (`dx`, `dy`, `distance`); with `edges`, where each region's edge is " <>
+          "(its first or last pixel, from its `side`, unlike the region's corner on that side by more than `tolerance`) and, for two or more edges on one axis, `offset` (how far apart they are), `aligned` (offset within `within` points, 1 by default) and, for two, `distance`. " <>
+          "Use it for a step that asks for an alignment or a gap in a picture (\"within 1 pt\"). When the app reports the value itself, prefer that: qa_ax_tree's frames give positions and sizes exactly; a picture is for how a thing looks.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["path"],
+        "properties" => %{
+          "path" => @evidence_picture_property,
+          "points" => %{
+            "type" => "array",
+            "minItems" => 2,
+            "maxItems" => 2,
+            "description" => "Two points to measure between. Not with edges.",
+            "items" => %{
+              "type" => "object",
+              "additionalProperties" => false,
+              "required" => ["x", "y"],
+              "properties" => %{"x" => @picture_point_property, "y" => @picture_point_property}
+            }
+          },
+          "edges" => %{
+            "type" => "array",
+            "minItems" => 1,
+            "maxItems" => 8,
+            "description" => "Regions, each around one thing's edge with background at its corner on that side; all left/right (x) or all top/bottom (y). Not with points.",
+            "items" => %{
+              "type" => "object",
+              "additionalProperties" => false,
+              "required" => ["x", "y", "width", "height", "side"],
+              "properties" =>
+                Map.put(@picture_rect_properties, "side", %{
+                  "type" => "string",
+                  "enum" => ~w(left right top bottom),
+                  "description" => "Which edge of what the region holds: left finds its first column, right its last, top its first row, bottom its last."
+                })
+            }
+          },
+          "within" => %{"type" => "number", "minimum" => 0, "default" => 1, "description" => "Points the edges may differ by and still be aligned."},
+          "tolerance" => %{
+            "type" => "integer",
+            "minimum" => 0,
+            "maximum" => 255,
+            "default" => 24,
+            "description" => "How far (0 to 255, per colour channel) a pixel may differ from the region's corner and still count as background."
+          },
+          "scale" => @picture_scale_property
         }
       }
     },
@@ -881,6 +982,31 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       }
     },
     %{
+      "name" => "qa_drag",
+      "description" =>
+        "Drag with the mouse in the launched app, as a person does: the pointer goes to `from` (an element's centre or a point), the left button goes down and is held `hold_ms`, the pointer moves to `to` in `steps` moves with the button held, and the button goes up there, all through the system's mouse route (`via: hid`). " <>
+          "Use it for drag and drop (moving a row, a card, a divider). The app and the start's window come to the front first; it fails like qa_click (`covered`, `not_on_screen`, `not_frontmost`) when either end is not the app's own window or another app is active. " <>
+          "Returns `under_pointer` (the element under the end once the drop settled), `changed` (whether the tree or windows changed) and `settled`; then read qa_ax_tree, which reports positions and order exactly, and qa_screenshot for how it looks.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["pid", "from", "to"],
+        "properties" => %{
+          "pid" => @pid_property,
+          "from" => Map.put(@drag_end_property, "description", "Where the drag starts. " <> @drag_end_property["description"]),
+          "to" => Map.put(@drag_end_property, "description", "Where it drops. " <> @drag_end_property["description"]),
+          "hold_ms" => %{
+            "type" => "integer",
+            "minimum" => 0,
+            "maximum" => 5_000,
+            "default" => 150,
+            "description" => "How long the button is held at the start before the pointer moves: raise it for a drag that starts on a long press."
+          },
+          "steps" => %{"type" => "integer", "minimum" => 2, "maximum" => 200, "default" => 30, "description" => "In how many moves the pointer goes from the start to the end."}
+        }
+      }
+    },
+    %{
       "name" => "qa_scroll",
       "description" =>
         "Scroll the list or scroll view at an element (`path`, such as a row or the AXScrollArea) or a point on screen (`x`, `y`) of the launched app, as a trackpad does: to an `edge` (`bottom` reaches the end and waits for rows a page load adds there) or by `dx`/`dy` (positive `dy` scrolls down toward later rows) in `unit` pixels or lines. Use it to reach rows below the fold or to trigger a list's pagination; arrow, End and Page Down keys do not scroll a SwiftUI list. Returns `visible` (the first and last row shown), `scroll_bars`, `moved` for a delta and `at_edge` for an edge. Fails like qa_click when the target is off screen or covered, and with `no_scroll_area` when nothing scrolls there.",
@@ -963,13 +1089,29 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "qa_check_app",
       "description" =>
-        "Check a launched app's health: still running, answers an accessibility request within 10 s (not hung), and no new crash report in ~/Library/Logs/DiagnosticReports since launch. Works after the app exited. `problems` names the page you pass and the window size qa_resize_window set.",
+        "Check a launched app's health: still running, answers an accessibility request within 10 s (not hung), and no new crash report in ~/Library/Logs/DiagnosticReports since launch. Works after the app exited. `problems` names the page you pass and the window size qa_resize_window set. To wait first (a settle, a crash report still being written), call qa_wait_check instead of sleeping.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
         "required" => ["pid"],
         "properties" => %{
           "pid" => @pid_property,
+          "page" => %{"type" => "string", "maxLength" => 200, "description" => "The page, view or panel on screen, named in the problems."}
+        }
+      }
+    },
+    %{
+      "name" => "qa_wait_check",
+      "description" =>
+        "Wait `seconds` (1 to 120) inside Symphony, then check the app as qa_check_app does, in one call: use it wherever a step says to wait or let the app settle (a window that may collapse seconds after it opens, a crash report macOS writes a few seconds after a crash, a step that waits 30 seconds). " <>
+          "Never sleep in your shell instead. Returns qa_check_app's answer with `waited_seconds`.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["pid", "seconds"],
+        "properties" => %{
+          "pid" => @pid_property,
+          "seconds" => %{"type" => "integer", "minimum" => 1, "maximum" => 120, "description" => "How long to wait before the check."},
           "page" => %{"type" => "string", "maxLength" => 200, "description" => "The page, view or panel on screen, named in the problems."}
         }
       }
@@ -1278,6 +1420,10 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_key" => ["pid", "key", "modifiers"],
     "qa_resize_window" => ["pid", "path", "width", "height"],
     "qa_check_app" => ["pid", "page"],
+    "qa_wait_check" => ["pid", "seconds", "page"],
+    "qa_drag" => ["pid", "from", "to", "hold_ms", "steps"],
+    "qa_crop" => ["path", "name", "x", "y", "width", "height", "zoom", "scale"],
+    "qa_measure" => ["path", "points", "edges", "within", "tolerance", "scale"],
     "qa_sample" => ["pid", "page", "seconds", "name"],
     "qa_open_status_menu" => ["pid"],
     "qa_put_file" => ["local_path", "remote_name"],

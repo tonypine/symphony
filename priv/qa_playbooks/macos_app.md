@@ -77,6 +77,15 @@ worktree's configured app and on apps you launched:
   `qa_screenshot`. Press an item with `qa_ax_press` on its `path`; close the menu with `qa_key`
   and `key: "escape"`. Use it for a row or control whose `AXShowMenu` is `unsupported`. It fails
   with `no_menu` when no menu opened.
+- `qa_drag`: drags as a person's mouse does: the pointer goes to `from`, the left button goes
+  down and is held `hold_ms` (150 by default), the pointer moves to `to` in `steps` moves (30 by
+  default) with the button held, and the button goes up there, through the system's mouse route
+  (`via: "hid"`). `from` and `to` are each an element's centre (`path`) or a point on screen (`x`,
+  `y`, in the points of `qa_ax_tree`'s frames). Use it for every drag and drop (moving a row, a
+  card, a divider); a drag step is never `unprovable` for want of a tool. It returns
+  `under_pointer` (the element under the drop), `changed` and `settled`; then read the new order
+  or position in `qa_ax_tree` and screenshot it. It fails like `qa_click` when either end is not
+  the app's own window on screen.
 - `qa_scroll`: scrolls the list or scroll view at an element (`path`: a row, or the
   `AXScrollArea`) or a point, as a trackpad does. `edge: "bottom"` scrolls to the end and keeps
   going while rows load there (`at_edge: true` once nothing moves); `top`, `left` and `right`
@@ -99,6 +108,11 @@ worktree's configured app and on apps you launched:
   the app runs on). Pass the `page` on screen: each entry of `problems` names it and the window
   size `qa_resize_window` set. `healthy` is true when there are no problems. It works after the
   app has exited.
+- `qa_wait_check`: waits `seconds` (1 to 120) inside Symphony, then answers as `qa_check_app`,
+  with `waited_seconds`. Call it wherever a step or this playbook says to wait or let the app
+  settle (10 seconds after a window opens, 30 seconds a step names, the few seconds macOS takes to
+  write a crash report). Never sleep in your shell: the harness blocks it, and an answer that says
+  the app was healthy "after the wait" must come from this call.
 - `qa_sample`: samples the app's threads on the QA VM for `seconds` (1 to 10, default 3) and
   returns the main thread's heaviest stack (`stack`, outermost frame first, each with its sample
   count), with the whole report saved to `qa-evidence/<name>.txt`. Pass the `page` on screen. It
@@ -106,12 +120,28 @@ worktree's configured app and on apps you launched:
 - `qa_gallery`: reads the Component Gallery the last `qa_build` built. With no arguments it
   returns the entries, their variations and the entries the PR's changed files affect. With an
   `entry` (and, for a screen, a `variation`; optionally a `width`: `laptop`, `desktop` or points)
-  it saves that entry's pictures to `qa-evidence/`.
+  it saves that entry's pictures to `qa-evidence/`. A component's call (its `entry` alone) draws
+  every variation of it on one board, in one picture. A picture this pass already drew comes back
+  with its `path` and `existing: true`, kept as it was: judge that file.
 - `qa_gallery_open`: opens the gallery's window on an `entry` (optionally a `variation`, a `width`
   and an `appearance`) and returns its PID, to drive like the app's.
 - `qa_screenshot`: saves the app's windows to `qa-evidence/<name>.png`. Each name can be used
   once; it never replaces an existing file. Pass `window_id` to save one window, such as the menu
   `qa_open_status_menu` opened.
+- `qa_crop`: cuts a rectangle (`x`, `y`, `width`, `height`, in points from the picture's top-left
+  corner) out of a picture a `qa_*` tool saved (`path`, such as `qa-evidence/home.png`), enlarges
+  it `zoom` times (2 by default) and saves it as `qa-evidence/<name>.png`, for a "2x crop" a step
+  asks for or a close look at an icon, a gap or a border. For a window's screenshot, a point on
+  screen is that point minus the window frame's `x` and `y` (`qa_screenshot` returns the frame).
+- `qa_measure`: measures inside such a picture, in points: with `points`, the distance between two
+  points; with `edges` (regions, each with the `side` to find: `left`, `right`, `top` or
+  `bottom`), where each region's edge is and, for two or more on one axis, their `offset` and
+  whether they are `aligned` within `within` points (1 by default). Use it for a step that asks
+  for an alignment or a gap by sight ("within 1 pt").
+- Where the app reports a value exactly, take it from the app: positions, sizes and order from
+  `qa_ax_tree`'s frames, health from `qa_check_app`. A picture is for how a thing looks; `qa_crop`
+  and `qa_measure` are for that. Symphony crops and measures pictures itself: never write image
+  code, decode a PNG or call `sips`.
 - `qa_open_status_menu`: opens the app's status-bar menu (its menu bar item) on screen, as a
   click on the item would, and returns the menu's `window_id` and `frame` once it shows. Close it
   with `qa_key` and `key: "escape"`. Never press the status item with `qa_ax_press` or
@@ -864,8 +894,8 @@ anyway: Symphony's tool does it, or it is host setup. Where it can't be installe
    `Decide + inspector`): a layout loop or a constraint crash in a large window shows there. A
    page where it is not `healthy` (the app exited, it hung, or it wrote a new crash report) fails
    the step: quote its `problems`, which name the page and the window size, and list each one in
-   `findings`. When the app exits, wait 10 seconds and call `qa_check_app` once more, because
-   macOS writes the crash report a few seconds after the crash. When `qa_resize_window` returns
+   `findings`. When the app exits, call `qa_wait_check` with `seconds: 10`, because macOS writes
+   the crash report a few seconds after the crash. When `qa_resize_window` returns
    `limited: true`, the QA screen is under the target size: still walk at the size you got, say so
    with the screen size and the size it needs, and mark the step `blocked`. Symphony reports a pass
    the QA screen limited as `blocked` either way, so a person enlarges the QA screen, and reports a
@@ -882,15 +912,19 @@ anyway: Symphony's tool does it, or it is host setup. Where it can't be installe
      `qa_hover` or `qa_context_menu` on it, and screenshot the state it shows. A step about the
      cursor's shape: `qa_hover` the element and judge the result's `cursor`, not the tint;
      `cursor_unreadable` blocks the step.
+   - a step that drags something (a row to another place, a card to another column, a divider):
+     `qa_drag` it from its element to the drop point, then read `qa_ax_tree` again for the new
+     order and screenshot it;
    - a step that reads rows below the fold or scrolls a list to its end (to load older rows):
      `qa_scroll` it with `edge: "bottom"`, read `qa_ax_tree` again for the rows that appeared, and
      screenshot the bottom of the list.
 4. Let every window settle before you judge it. A window can open at the right size and
    collapse seconds later, so a check right after opening proves nothing:
-   - wait about 10 seconds after the window opens (`sleep 10` in your shell);
+   - call `qa_wait_check` with `seconds: 10` and the `page` once the window opens: Symphony waits,
+     then checks the app. Never sleep in your shell;
    - change focus once: `qa_ax_press` with `action: "AXRaise"` on another window of the app,
      or press a different control, then raise the window under test again;
-   - wait a few more seconds, then read `qa_ax_tree` for that window.
+   - call `qa_wait_check` with a few `seconds` more, then read `qa_ax_tree` for that window.
 5. Judge the settled window from the tree, not from the window frame alone:
    - the controls the ticket describes are present (text fields, labels, buttons), with
      sensible titles and values;

@@ -184,6 +184,7 @@ defmodule SymphonyElixir.PhaseSteps.WindowTestsTest do
       assert Enum.map(tests, & &1.script) |> Enum.sort() == [
                "macos/Tests/home-drag-test.py",
                "macos/Tests/qa-appearance-test.sh",
+               "macos/Tests/qa-drag-test.py",
                "macos/Tests/qa-key-test.py",
                "macos/Tests/qa-scroll-test.py"
              ]

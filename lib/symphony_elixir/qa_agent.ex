@@ -476,7 +476,10 @@ defmodule SymphonyElixir.QaAgent do
           how the app adapts to its appearance or window size, launch in that appearance too
           (`appearance`) or resize to that size too (`width` and `height`), and say so in the step.
         - On every page the walkthrough visits, call `qa_check_app` with the page's name: a hang (a
-          layout loop) or a crash at this size is a `fail` naming the page and the window size.
+          layout loop) or a crash at this size is a `fail` naming the page and the window size. To
+          let a page settle first (a wide window can collapse seconds after it opens), call
+          `qa_wait_check` with the `seconds` and the page: Symphony waits, then checks. Never sleep in
+          your shell.
         """
     end
   end
