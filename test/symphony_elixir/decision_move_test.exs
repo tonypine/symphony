@@ -83,4 +83,11 @@ defmodule SymphonyElixir.DecisionMoveTest do
     assert Handoff.emitted?(@repo_key, @issue_id, "head456")
     assert RunStore.get_rework_base(@repo_key, @issue_id) == "base123"
   end
+
+  test "perform/4 with a handoff and no stored Rework base emits it for any head" do
+    {:ok, move} = DecisionMove.back_to_review("Rework", "Rework", "Code Review", nil)
+
+    assert {:ok, "Code Review"} = DecisionMove.perform(@repo_key, @issue_id, move)
+    assert Handoff.emitted?(@repo_key, @issue_id, "any-head")
+  end
 end
