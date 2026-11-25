@@ -91,7 +91,8 @@ defmodule SymphonyElixir.WorkspaceRemovalTest do
       # Linear answers an unknown identifier with an "Entity not found" GraphQL error.
       "MT-DELETED" => {:error, {:linear_graphql_errors, [%{"message" => "Entity not found: Issue"}]}},
       "MT-BAD-QUERY" => {:error, {:linear_graphql_errors, [%{"message" => "Argument Validation Error"}, "unshaped"]}},
-      "MT-DOWN" => {:error, :linear_unavailable}
+      "MT-DOWN" => {:error, :linear_unavailable},
+      "MT-ODD" => {:ok, nil}
     }
 
     fetch = fn
@@ -108,6 +109,7 @@ defmodule SymphonyElixir.WorkspaceRemovalTest do
     assert WorkspaceRemoval.ticket_status("MT-DELETED", opts) == :missing
     assert WorkspaceRemoval.ticket_status("MT-BAD-QUERY", opts) == :unknown
     assert WorkspaceRemoval.ticket_status("MT-DOWN", opts) == :unknown
+    assert WorkspaceRemoval.ticket_status("MT-ODD", opts) == :unknown
 
     log = capture_log(fn -> assert WorkspaceRemoval.ticket_status("MT-RAISE", opts) == :unknown end)
     assert log =~ "Couldn't read the ticket of workspace MT-RAISE: tracker down; keeping the workspace"
