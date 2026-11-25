@@ -295,8 +295,11 @@ defmodule SymphonyElixir.Conductor.MessageTest do
     test "a message a run already read, or one written before the plan, is owed as the rule says", ctx do
       early = ticket!("MSG-E#{ctx.n}", "msg-e-#{ctx.n}", %{})
       before = say!(early.issue_id, "Mind the empty list.")
+      # With the Conductor off, or Grooming off, a ticket with no plan is owed nothing.
       assert Message.owed(early.issue_id) == %{messages: [], asks: [], children: []}
-      assert Message.plan_written(early.issue_id, opts(%{})) == :ok
+      no_grooming = %{@on | junctions: @on.junctions -- ["grooming"]}
+      assert Message.owed(early.issue_id, settings: no_grooming) == %{messages: [], asks: [], children: []}
+      assert Message.plan_written(early.issue_id, opts(%{}, settings: no_grooming)) == :ok
       refute_received {:turn, _junction, _prompt}
 
       # The plan is written: the message that waited is answered, with no new message to start it.
@@ -701,7 +704,12 @@ defmodule SymphonyElixir.Conductor.MessageTest do
       crash = fn _plan, _issue, _run_id, _prompt -> raise "the harness crashed" end
       other = ticket!("MSG-C#{id}", "msg-c-#{id}", %{description: "Keep it."})
       say!(other.issue_id)
-      assert capture_log(fn -> assert Message.tend(other.issue_id, fresh_opts(%{}, turn: crash)) == :owed end) =~ "Grooming failed"
+      assert capture_log(fn -> assert Message.tend(other.issue_id, fresh_opts(%{}, turn: crash)) == :owed end) =~ "Grooming wrote no plan"
+      assert Message.owed(other.issue_id, settings: @on).messages != []
+
+      # Grooming that raises before its turn is logged and leaves the message owed.
+      broken = fresh_opts(%{}, paused?: fn _subject -> raise "no pauses" end)
+      assert capture_log(fn -> assert Conductor.groom_now(issue(other), "default", broken) == :ok end) =~ "Grooming failed"
     end
 
     test "a finished ticket and one that ran without a plan are not groomed for a message", ctx do
@@ -742,7 +750,7 @@ defmodule SymphonyElixir.Conductor.MessageTest do
 
     test "waiting on a dependency", ctx do
       answered_in_state!(ctx, %{phase: "Todo"}, fn record ->
-        {:ok, _pause} = Pauses.add_reason({:ticket, "default", record.issue_id}, Pauses.ticket_reason(:dependency, "TP-1"))
+        {:ok, _pause} = Pauses.set({:ticket, "default", record.issue_id}, Pauses.ticket_reason(:dependency, "TP-1"))
         assert Pauses.paused?({:ticket, "default", record.issue_id})
       end)
     end

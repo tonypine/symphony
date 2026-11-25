@@ -222,7 +222,8 @@ defmodule SymphonyElixir.Conductor.Message do
 
   @doc """
   What the ticket `issue_id` is owed (see the module doc). A ticket with no plan is owed its
-  messages with no reply while it can be groomed now (`groomable?/2`), and nothing otherwise.
+  messages with no reply while the Conductor answers them (`due?/2`: it can be groomed now), and
+  nothing otherwise.
   `opts` as `due?/2`'s.
   """
   @spec owed(String.t(), keyword()) :: owed()
@@ -232,8 +233,7 @@ defmodule SymphonyElixir.Conductor.Message do
 
     case Enum.split_while(Enum.reverse(events), &(&1.type != "plan.written")) do
       {_all, []} ->
-        settings = Keyword.get_lazy(opts, :settings, &Config.conductor_settings/0)
-        messages = if groomable?(issue_id, settings), do: open_messages(events, open?), else: []
+        messages = if due?(issue_id, opts), do: open_messages(events, open?), else: []
         %{messages: messages, asks: [], children: []}
 
       {newer, _plan_and_older} ->
@@ -317,10 +317,19 @@ defmodule SymphonyElixir.Conductor.Message do
     end
   end
 
-  # A ticket with no plan is groomed before its messages are answered; one Grooming left without a
-  # plan (busy, waiting, a try that failed) stays owed while it can still be groomed.
+  # A ticket with no plan is groomed before its messages are answered, and only when a message waits
+  # for an answer; one Grooming left without a plan (busy, waiting, a try that failed) stays owed
+  # while it can still be groomed.
   defp groomed(record, opts) do
-    if not TicketPlan.groomed?(record.issue_id), do: Keyword.get(opts, :groom, &Conductor.groom_now/3).(issue(record), record.repo_key, opts)
+    cond do
+      TicketPlan.groomed?(record.issue_id) -> :groomed
+      owed(record.issue_id, opts).messages == [] -> :nothing
+      true -> groom(record, opts)
+    end
+  end
+
+  defp groom(record, opts) do
+    Keyword.get(opts, :groom, &Conductor.groom_now/3).(issue(record), record.repo_key, opts)
     if TicketPlan.groomed?(record.issue_id), do: :groomed, else: :ungroomed
   end
 
