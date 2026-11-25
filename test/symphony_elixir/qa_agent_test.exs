@@ -840,9 +840,13 @@ defmodule SymphonyElixir.QaAgentTest do
       assert {:ok, %{verdict: :fail, summary: "", findings: []} = result} = QaAgent.parse_response(fail)
       assert QaAgent.failure_findings(result) == ["bad config: exit 0"]
 
-      with_findings = ~s({"verdict":"fail","findings":["exit status is 0", " "],"steps":null})
+      with_findings = ~s({"verdict":"fail","findings":["exit status is 0"],"steps":null})
       assert {:ok, %{findings: ["exit status is 0"], steps: []} = result} = QaAgent.parse_response(with_findings)
       assert QaAgent.failure_findings(result) == ["exit status is 0"]
+
+      # A blank finding is refused, never dropped (TP-1682).
+      assert {:error, {:malformed_qa_response, :invalid_finding}} =
+               QaAgent.parse_response(~s({"verdict":"fail","findings":["exit status is 0", " "]}))
 
       assert {:ok, %{verdict: :blocked, reason: "mix is missing"} = blocked} = QaAgent.parse_response(~s({"verdict":"blocked","reason":" mix is missing "}))
       refute Map.has_key?(blocked, :needs_person)
@@ -862,36 +866,48 @@ defmodule SymphonyElixir.QaAgentTest do
       refute Map.has_key?(blocked, :needs_dev_server)
     end
 
-    test "reads a pass with nothing on screen to judge, and ignores any other scope" do
+    test "reads a pass with nothing on screen to judge, and refuses any other scope" do
       assert {:ok, %{verdict: :pass, scope: :none, reason: "the change touches no screen"}} =
                QaAgent.parse_response(~s({"verdict":"pass","scope":" None ","reason":"the change touches no screen"}))
 
-      for scope <- [~s("journeys"), ~s(""), "true", "null"] do
+      for scope <- [~s(""), "null"] do
         assert {:ok, pass} = QaAgent.parse_response(~s({"verdict":"pass","scope":#{scope}}))
         refute Map.has_key?(pass, :scope)
       end
+
+      for scope <- [~s("journeys"), "true"] do
+        assert {:error, {:malformed_qa_response, :invalid_scope}} = QaAgent.parse_response(~s({"verdict":"pass","scope":#{scope}}))
+      end
     end
 
-    test "keeps a covering ticket the blocked answer names, and drops anything that is not an identifier" do
+    test "keeps a covering ticket the blocked answer names, and refuses anything that is not an identifier" do
       assert {:ok, %{verdict: :blocked, covered_by: "TP-716"} = blocked} =
                QaAgent.parse_response(~s({"verdict":"blocked","reason":"no fake gh","covered_by":" tp-716 "}))
 
       refute Map.has_key?(blocked, :needs_person)
 
-      for covered_by <- [~s("TP-716 and TP-694"), ~s(""), "716", "null"] do
+      for covered_by <- [~s(""), "null"] do
         assert {:ok, blocked} = QaAgent.parse_response(~s({"verdict":"blocked","reason":"no fake gh","covered_by":#{covered_by}}))
         refute Map.has_key?(blocked, :covered_by)
+      end
+
+      for covered_by <- [~s("TP-716 and TP-694"), "716"] do
+        assert {:error, {:malformed_qa_response, :invalid_covered_by}} =
+                 QaAgent.parse_response(~s({"verdict":"blocked","reason":"no fake gh","covered_by":#{covered_by}}))
       end
     end
 
     test "marks the steps a parent walkthrough reports for its verification checklist" do
       text =
-        ~s({"verdict":"pass","steps":[{"name":"UC1","status":"pass","checklist":true},{"name":"Open Settings","status":"pass","checklist":"yes"},{"name":"Quit","status":"pass"}]})
+        ~s({"verdict":"pass","steps":[{"name":"UC1","status":"pass","checklist":true},{"name":"Open Settings","status":"pass","checklist":false},{"name":"Quit","status":"pass"}]})
 
       assert {:ok, %{steps: [row, walkthrough, plain]}} = QaAgent.parse_response(text)
       assert row == %{name: "UC1", status: "pass", details: "", evidence: [], checklist: true}
       refute Map.has_key?(walkthrough, :checklist)
       refute Map.has_key?(plain, :checklist)
+
+      assert {:error, {:malformed_qa_response, :invalid_steps}} =
+               QaAgent.parse_response(~s({"verdict":"pass","steps":[{"name":"UC1","status":"pass","checklist":"yes"}]}))
     end
 
     test "keeps the gap label and the blockers a failing step names" do
@@ -900,7 +916,7 @@ defmodule SymphonyElixir.QaAgentTest do
           "verdict" => "fail",
           "steps" => [
             %{"name" => "Make the tool", "status" => "fail", "gap" => " G1 "},
-            %{"name" => "Check with it", "status" => "fail", "gap" => "G2", "blocked_by" => [" G1 ", "TP-824", "", 7]},
+            %{"name" => "Check with it", "status" => "fail", "gap" => "G2", "blocked_by" => [" G1 ", "TP-824", ""]},
             %{"name" => "One blocker", "status" => "fail", "blocked_by" => "TP-824"},
             %{"name" => "Nothing named", "status" => "fail", "gap" => " ", "blocked_by" => []}
           ]
@@ -913,6 +929,9 @@ defmodule SymphonyElixir.QaAgentTest do
       assert single.blocked_by == ["TP-824"]
       refute Map.has_key?(plain, :gap)
       refute Map.has_key?(plain, :blocked_by)
+
+      assert {:error, {:malformed_qa_response, :invalid_evidence}} =
+               QaAgent.parse_response(~s({"verdict":"fail","steps":[{"name":"x","status":"fail","blocked_by":["TP-824",7]}]}))
     end
 
     test "keeps the defect a failing step names" do

@@ -885,10 +885,9 @@ defmodule SymphonyElixir.ReviewAgentTest do
 
       refute Map.has_key?(finding, :decision)
 
-      assert {:ok, %{findings: [finding]}} =
+      # A decision that is not a string is refused, never dropped (TP-1682).
+      assert {:error, {:malformed_review_agent_response, :invalid_finding_decision}} =
                ReviewAgent.parse_response(~s({"verdict":"request_changes","findings":[{"summary":"s","file":"f","line_range":[1,1],"quoted_snippet":"q","suggested_fix":"x","decision":3}]}))
-
-      refute Map.has_key?(finding, :decision)
     end
   end
 

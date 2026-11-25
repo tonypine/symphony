@@ -835,8 +835,16 @@ defmodule SymphonyElixir.TicketStateTest do
       ]
 
       assert TicketState.verdicts_in(events) == [
-               %{kind: "code_review", head_sha: "def", outcome: "approve", recorded_at: at(3), details: %{}},
-               %{kind: "qa", head_sha: "abc", outcome: "blocked", recorded_at: at(1), details: %{model: "m", reason: "no emulator"}}
+               %{kind: "code_review", head_sha: "def", outcome: "approve", recorded_at: at(3), details: %{}, findings: [], qa_findings: []},
+               %{
+                 kind: "qa",
+                 head_sha: "abc",
+                 outcome: "blocked",
+                 recorded_at: at(1),
+                 details: %{model: "m", reason: "no emulator"},
+                 findings: [],
+                 qa_findings: []
+               }
              ]
     end
   end

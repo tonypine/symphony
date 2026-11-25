@@ -212,14 +212,14 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
 
       assert TicketState.signals(record) == held.signals
       assert TicketState.recent_signals(record, 3) == Enum.take(held.signals, 3)
-      assert TicketState.verdicts(record) == held.verdicts
+      assert TicketState.verdicts(record) == without_findings(held.verdicts)
       assert TicketState.dispatches(record) == held.dispatches
 
       # A start after it changes nothing the views read.
       restart_run_store()
       assert {:ok, %{tickets: 0, events: 0}} = Backfill.run(now: @now, audit_log: audit)
       assert TicketState.signals(record) == held.signals
-      assert TicketState.verdicts(record) == held.verdicts
+      assert TicketState.verdicts(record) == without_findings(held.verdicts)
     end
 
     test "a record written before the backfill ran still converts the history it kept", %{audit: audit} do
@@ -390,7 +390,7 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
 
       # What the defect read: the signals in a note or beside a pause are gone, the rest rewritten.
       refute TicketState.signals(%{issue_id: @issue_id}) == held.signals
-      refute TicketState.verdicts(%{issue_id: @issue_id}) == held.verdicts
+      refute TicketState.verdicts(%{issue_id: @issue_id}) == without_findings(held.verdicts)
 
       # Six signals and one verdict upgraded in place, three signals appended.
       assert {:ok, %{tickets: 1, events: 10}} = Backfill.run(now: @now, audit_log: audit)
@@ -399,7 +399,7 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
       assert record.legacy_history == nil
       assert TicketState.signals(record) == held.signals
       assert TicketState.recent_signals(record, 3) == Enum.take(held.signals, 3)
-      assert TicketState.verdicts(record) == held.verdicts
+      assert TicketState.verdicts(record) == without_findings(held.verdicts)
 
       # Only fields were added to what the old release wrote, and nothing it said reads twice.
       upgraded = events()
@@ -477,7 +477,7 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
 
       assert {:ok, %{tickets: 1, events: 2}} = Backfill.run(now: @now, audit_log: audit)
       assert [%{idempotency: "backfill:reconciled:verdict:" <> _}] = Enum.filter(events(types: ["verdict.recorded"]), &(not Map.has_key?(&1.payload, :signal)))
-      assert TicketState.verdicts(%{issue_id: @issue_id}) == [verdict]
+      assert TicketState.verdicts(%{issue_id: @issue_id}) == without_findings([verdict])
       assert TicketState.signals(%{issue_id: @issue_id}) == [fix]
     end
 
@@ -567,6 +567,9 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
   # A store as 0.0.1.792 left it: the marker set, the fields still on the record, and each entry
   # written through `TicketSignals.event/2`, the mapping it used: a note with no `signal`, no event
   # for a signal a pause or a question mirrored, no `signal_details`, a verdict with no `details`.
+  # A verdict read back from its event carries its typed findings, none for these (TP-1682).
+  defp without_findings(verdicts), do: Enum.map(verdicts, &Map.merge(&1, %{findings: [], qa_findings: []}))
+
   defp epic_one_store(attrs, written_signals \\ nil, written_verdicts \\ nil) do
     :ok = put_ticket(attrs)
     :ok = RunStore.put_marker(Backfill.marker(), @now)
