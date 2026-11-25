@@ -5,7 +5,11 @@ defmodule SymphonyElixir.PrWatch.SilentWait do
   (`TicketState.pr_watch`), never GitHub, and runs on each tick (`SymphonyElixir.PrWatch.Repo`).
 
   A ticket with an active run or a hold is never silent, nor one the watcher acted on in this tick
-  (it moved the ticket, reran a check or called GitHub). Nor is one whose decision, made within the
+  (it moved the ticket, reran a check or called GitHub), nor one whose fresh decision is a run
+  (`StalledRun.run_kinds/0`) that waits for a slot (`slot: :waiting`): in line behind a ticket that
+  takes the free slot, or with every slot in use, the fact its situation reads as Waiting for a slot
+  (`SymphonyElixir.Situation.waits_for_slot?/2`). That wait is recorded, however long it lasts, and a
+  silence the record held clears on the tick that sees it. Nor is one whose decision, made within the
   last two ticks, leaves it waiting on someone (`owner`) until something happens (`clears_when`),
   unless the wait outlived its bound: CI still running past `ci.merging_wait_timeout_ms`, or
   GitHub's rate limit still holding one tick past its reset. A ticket whose upkeep GitHub refused
@@ -19,6 +23,7 @@ defmodule SymphonyElixir.PrWatch.SilentWait do
   """
 
   alias SymphonyElixir.PrDecision.Action
+  alias SymphonyElixir.PrWatch.StalledRun
 
   @silent_ticks 2
 
@@ -30,12 +35,14 @@ defmodule SymphonyElixir.PrWatch.SilentWait do
   @type t :: %{since: DateTime.t(), ticks: pos_integer(), bound: String.t() | nil, reason: String.t()}
 
   @typedoc """
-  What the detector reads besides the record: whether a run is active, the ticket's hold, the
-  tick's time, the tick interval, the CI wait bound, and the silence the record held.
+  What the detector reads besides the record: whether a run is active, the ticket's hold, whether
+  it waits for a slot, the tick's time, the tick interval, the CI wait bound, and the silence the
+  record held.
   """
   @type context :: %{
           run: :active | :none,
           hold: :none | :question | :blocked,
+          slot: :waiting | :none,
           now: DateTime.t(),
           interval_ms: pos_integer(),
           ci_wait_ms: pos_integer(),
@@ -55,6 +62,7 @@ defmodule SymphonyElixir.PrWatch.SilentWait do
       applied_now?(decision, ctx) -> nil
       failure = upkeep_failure(watch) -> quiet(failure, ctx)
       stalled_update?(watch, decision, ctx) -> quiet("U1 updated the branch on the head on an earlier read, but the head has not moved", ctx)
+      slot_wait?(decision, ctx) -> nil
       waiting?(decision) -> bound(watch, decision, ctx)
       true -> quiet("#{decision.rule} decided `#{decision.kind}`, but no run started and no wait is recorded", ctx)
     end
@@ -90,6 +98,10 @@ defmodule SymphonyElixir.PrWatch.SilentWait do
 
   defp earlier_update?(%{rule: "U1", head_sha: head, at: %DateTime{} = at}, head, now), do: DateTime.compare(at, now) == :lt
   defp earlier_update?(_entry, _head, _now), do: false
+
+  # The decided run waits for a slot, which its situation already tells.
+  defp slot_wait?(%{kind: kind}, %{slot: :waiting}), do: kind in StalledRun.run_kinds()
+  defp slot_wait?(_decision, _ctx), do: false
 
   defp waiting?(%{owner: owner, clears_when: clears_when}), do: owner in Action.owners() and is_binary(clears_when) and clears_when != ""
   defp waiting?(_decision), do: false

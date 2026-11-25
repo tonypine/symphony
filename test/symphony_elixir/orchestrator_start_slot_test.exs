@@ -6,7 +6,9 @@ defmodule SymphonyElixir.OrchestratorStartSlotTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.Dispatch.Queue
-  alias SymphonyElixir.{Pauses, TicketState}
+  alias SymphonyElixir.{Pauses, Situation, TicketState}
+  alias SymphonyElixir.PrDecision.Facts
+  alias SymphonyElixir.PrWatch.SilentWait
   alias SymphonyElixirWeb.ObservabilityPubSub
 
   @active_states ["Todo", "In Progress", "Code Review", "QA", "CI Fix", "Merging", "Rework"]
@@ -182,6 +184,68 @@ defmodule SymphonyElixir.OrchestratorStartSlotTest do
       assert %{slot: 1, started: true} = reply
       assert order(nil) == ["MT-H", "MT-O"]
       assert Map.keys(again.slot_holders) == ["o"]
+    end
+  end
+
+  describe "a ticket a Start displaced (TP-1649)" do
+    test "waits for a slot while the started epic's sub-ticket holds it: never a silent wait, and its situation says so", ctx do
+      write_slots_workflow!(ctx, 1)
+      displaced = recorded(issue("r", "MT-R", "Code Review"))
+      epic = recorded(epic("e", "MT-E", [{"a", "MT-A", "Todo"}, {"b", "MT-B", "Todo"}]))
+      a = recorded(sub("a", "MT-A", "Todo", "MT-E"))
+      b = recorded(sub("b", "MT-B", "Todo", "MT-E"))
+      tracked([displaced, epic, a, b])
+      state = orchestrator_state(1) |> holding(displaced, 1, @early) |> live_run(displaced)
+
+      {:reply, {:ok, %{displaced_issue_identifier: "MT-R"}}, next} = start(state, a)
+      assert Map.keys(next.running) == ["a"]
+
+      # The watcher decided the review run on the displaced ticket (R27), and the record already
+      # holds a listed silence from before the slot wait was a fact the detector read.
+      now = DateTime.utc_now()
+
+      decision = %{
+        rule: "R27",
+        kind: :dispatch,
+        owner: nil,
+        clears_when: nil,
+        outcome: :recorded,
+        reason: "The reviewer reads PR #7",
+        decided_at: now,
+        since: now
+      }
+
+      listed = %{
+        since: DateTime.add(now, -1_800, :second),
+        ticks: 60,
+        bound: nil,
+        reason: "R27 decided `dispatch`, but no run started and no wait is recorded"
+      }
+
+      facts = struct(Facts, %{phase: :code_review, ci: :pending, pr: :open, pr_number: 7, review: :pending})
+      watch = %{facts: facts, decision: decision, head_sha: "abc1234", read_at: now, github: :ok, silent: listed}
+      :ok = RunStore.put_ticket_pr_watch("default", "r", "MT-R", watch)
+
+      {:reply, snapshot, _state} = Orchestrator.handle_call(:snapshot, {self(), make_ref()}, next)
+      live = Situation.live_facts(snapshot)
+      assert Situation.waits_for_slot?(live, "r")
+
+      slot = if Situation.waits_for_slot?(live, "r"), do: :waiting, else: :none
+
+      ctx = %{
+        run: :none,
+        hold: :none,
+        slot: slot,
+        now: now,
+        interval_ms: 30_000,
+        ci_wait_ms: 1_800_000,
+        previous: listed
+      }
+
+      assert SilentWait.check(watch, ctx) == nil
+
+      record = "r" |> RunStore.get_ticket_state() |> TicketState.normalize()
+      assert %{kind: "waiting_for_slot", word: "Waiting for a slot"} = Situation.read(record, live)
     end
   end
 

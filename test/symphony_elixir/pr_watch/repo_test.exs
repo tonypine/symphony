@@ -915,6 +915,49 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     stop_registered!(pid)
   end
 
+  describe "a decided run waiting for a slot (TP-1649)" do
+    setup %{repo_key: repo_key} do
+      clock = start_supervised!({Agent, fn -> @now end}, id: :slot_clock)
+      published = start_supervised!({Agent, fn -> :missing end}, id: :slot_snapshot)
+      pid = start_repo!(repo_key, now: fn -> Agent.get(clock, & &1) end, snapshot: fn -> Agent.get(published, & &1) end)
+      %{clock: clock, published: published, pid: pid}
+    end
+
+    # What the orchestrator publishes: one slot, and the runs in it.
+    defp publish!(published, running) do
+      runs = for id <- running, do: %{issue_id: id, run_kind: "implementation", started_at: @now}
+      Agent.update(published, fn _ -> {:ok, %{snapshot: %{running: runs, concurrency: %{max_total: 1}}}} end)
+    end
+
+    test "with a slot free it is listed from the second tick; once every slot is taken it leaves on the next tick and stays off however long it waits",
+         %{repo_key: repo_key, clock: clock, published: published, pid: pid} do
+      issues!([repo_key |> with_pr(issue("1", "Code Review"), 1)])
+      publish!(published, [])
+
+      # The reviewer run is decided (R27), the one slot is free, and no run starts.
+      assert {:ok, _summary} = Repo.poll(pid)
+      assert %{decision: %{rule: "R27", kind: :dispatch}, silent: %{ticks: 1}} = watch(repo_key, "1")
+      Agent.update(clock, &DateTime.add(&1, 30_000, :millisecond))
+      assert {:ok, _summary} = Repo.poll(pid)
+      assert [%{issue_identifier: "TP-1", rule: "R27", reason: "R27 decided `dispatch`, but no run started and no wait is recorded"}] = PrWatch.silent_waits(repo_key: repo_key)
+
+      # Another ticket's run takes the slot: the review waits for it, a recorded wait.
+      publish!(published, ["2"])
+
+      for _tick <- 1..5 do
+        Agent.update(clock, &DateTime.add(&1, 30_000, :millisecond))
+        assert {:ok, _summary} = Repo.poll(pid)
+        assert %{decision: %{rule: "R27", kind: :dispatch}, silent: nil} = watch(repo_key, "1")
+        assert PrWatch.silent_waits(repo_key: repo_key) == []
+      end
+
+      # With nothing published, no slot wait is known: the decision is quiet again.
+      Agent.update(published, fn _ -> :missing end)
+      assert {:ok, _summary} = Repo.poll(pid)
+      assert %{silent: %{ticks: 1}} = watch(repo_key, "1")
+    end
+  end
+
   describe "silent waits (TP-945)" do
     setup %{repo_key: repo_key} do
       clock = start_supervised!({Agent, fn -> @now end})

@@ -227,6 +227,21 @@ defmodule SymphonyElixir.Situation do
   end
 
   @doc """
+  Whether `issue_id` waits for a slot in `live`, as its situation reads it (Waiting for a slot): the
+  orchestrator holds it for one (`slot_waiting`, not a wait for CI), the dispatch order leaves it in
+  line behind a ticket that takes the free slot, or every slot is in use. The PR and CI watcher's
+  silent-wait detector (`SymphonyElixir.PrWatch.SilentWait`) reads the same fact, so a ticket whose
+  decided run waits for a slot is never a silent wait.
+  """
+  @spec waits_for_slot?(live_facts(), String.t()) :: boolean()
+  def waits_for_slot?(live, issue_id) do
+    slot_held?(Map.get(live.slot_waiting, issue_id)) or place_in_line(live, issue_id) != nil or slots_full?(live)
+  end
+
+  defp slot_held?(%{ci_wait: true}), do: false
+  defp slot_held?(slot), do: slot != nil
+
+  @doc """
   What decides each ticket's kind in `live_facts`: a change of it is a reason to compute the ticket's
   situation again (`SymphonyElixir.Situation.Recorder`).
   """
@@ -883,11 +898,14 @@ defmodule SymphonyElixir.Situation do
     end
   end
 
-  defp slots_full?(%{live: %{limit: limit, running: running}}), do: is_integer(limit) and map_size(running) >= limit
+  defp slots_full?(%{live: live}), do: slots_full?(live)
+  defp slots_full?(%{limit: limit, running: running}), do: is_integer(limit) and map_size(running) >= limit
 
   # The ticket's place when the dispatch order leaves it waiting: a ticket ahead of it takes the free
   # slot, or every slot is taken, by a run or by a ticket that holds one with no run.
-  defp in_line(%{live: live, record: record}), do: live |> Map.get(:order, %{}) |> Map.get(record.issue_id)
+  defp in_line(%{live: live, record: record}), do: place_in_line(live, record.issue_id)
+
+  defp place_in_line(live, issue_id), do: live |> Map.get(:order, %{}) |> Map.get(issue_id)
 
   defp place_sentence(%{position: 1, wait: wait}), do: "It is next in line: #{sentence(to_string(wait))}"
   defp place_sentence(%{position: position, behind: behind}), do: "It is #{Order.ordinal(position)} in line, behind #{behind}."
