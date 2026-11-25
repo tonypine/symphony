@@ -30,10 +30,14 @@ defmodule SymphonyElixir.Conductor.Message do
   now, or that a pause of Symphony or the repository stops, is not a failure: it waits, still owed.
   The turn is given every ask and the newest 20 messages with their replies, no more.
 
-  A turn that failed, or whose answer could not be read, is counted on what it was to answer
-  (`unanswered/3`, a status note under `message.try:<event id>:<n>`) and stays owed, so the next
-  poll tries again. After 3 failed tries Symphony leaves its own short reply under the message,
-  or says that the plan stays as it is, and the turn is owed no more.
+  A turn that failed, or whose answer Symphony refused, is counted on what it was to answer
+  (`unanswered/3`, a status note under `message.try:<event id>:<n>` that says why, in plain words
+  and with the exact reason of a refusal) and stays owed, so the next poll tries again; the next try
+  reads each such note in its facts (`earlier_tries`, `SymphonyElixir.Conductor.Facts.turn_tries/1`),
+  so it does not give the same answer again. After 3 failed tries Symphony leaves its own reply under
+  the message, which says that nothing was done with it and why the last try failed, or says that
+  the plan stays as it is, and the turn is owed no more. A message is as long as an ask (100,000
+  characters), and the turn reads it whole.
 
   What the answer may do besides reply (`acted/5`, `write_plan/4`):
 
@@ -46,7 +50,10 @@ defmodule SymphonyElixir.Conductor.Message do
       Conductor's instructions, which the next run reads;
     * `stop`: the working run's work is wrong now, so it is stopped, and a
       `conductor.intervention` says why;
-    * `tree` and `waive`, as at the other junctions.
+    * `tree` and `waive`, as at the other junctions: on a ticket with sub-tickets the one form that
+      adds, rewrites, cancels, stops, reorders and sets the dependencies of the open ones
+      (`SymphonyElixir.Conductor.Tree.apply/3`); a `plan` that lists them anyway is read as the
+      same changes (`SymphonyElixir.Conductor.Tree.intent/2`).
 
   A message may be the person's answer, in their own words, to the question the ticket is held on
   (a dispatch loop's, a quiet handoff's, a park's, a spent budget's or a block report's:
@@ -98,6 +105,8 @@ defmodule SymphonyElixir.Conductor.Message do
   @reading_condition "conductor_answer"
   @symphony %{kind: :symphony, name: "Symphony"}
   @tries 3
+  # A message holds as much as an ask, and the turn reads it whole.
+  @message_max 100_000
   @try_key "message.try:"
   @seen_key "child_message.seen:"
   # How many messages, with their replies, a turn is given besides every ask.
@@ -339,11 +348,11 @@ defmodule SymphonyElixir.Conductor.Message do
     end
   end
 
-  defp said(%Event{} = message), do: %{event_id: message.id, by: Messages.writer(message.actor), text: Facts.cut(field(message, :text), 4_000)}
+  defp said(%Event{} = message), do: %{event_id: message.id, by: Messages.writer(message.actor), text: Facts.cut(field(message, :text), @message_max)}
 
   defp child_said(%Event{} = message, child) do
     reply = with %Event{} = reply <- reply(message), do: Facts.cut(field(reply, :text), 1_200)
-    %{identifier: child, event_id: message.id, message: Facts.cut(field(message, :text), 4_000), reply: reply}
+    %{identifier: child, event_id: message.id, message: Facts.cut(field(message, :text), @message_max), reply: reply}
   end
 
   # The Conductor's reply to `message`, when it has one.
@@ -360,7 +369,7 @@ defmodule SymphonyElixir.Conductor.Message do
   def limited(answer, %{message: %{finished: true}}) do
     answer
     |> Map.merge(%{instructions: nil, ask_person: nil, steer: nil, stop: nil, route: nil})
-    |> Map.merge(%{plan: nil, done: false, tree: [], ask: false, waive: [], resume: false})
+    |> Map.merge(%{plan: nil, done: false, tree: [], dropped: [], ask: false, waive: [], resume: false})
   end
 
   def limited(%{tree: [], plan: nil, ask_person: nil} = answer, %{junction: @child_junction}), do: %{answer | update: nil, refs: [], blocks: []}
@@ -368,20 +377,23 @@ defmodule SymphonyElixir.Conductor.Message do
 
   @doc """
   Records the plan the turn `plan` answered (`answer.plan`) as the next version of the ticket's
-  plan (`by: recalibration`), keeping the ticket's shape and sub-tickets, and then, when the
-  message changed what is asked (`answer.ask`), the message's words as an ask. `{:error, why}`, in
-  plain words, for a plan Symphony refuses; nothing is recorded then.
+  plan (`by: recalibration`), keeping the ticket's shape and sub-tickets, which change only through
+  `tree` operations, and then, when the message changed what is asked (`answer.ask`), the message's
+  words as an ask. Any turn outside Grooming writes the plan this way: a message's, and every turn on
+  a ticket with sub-tickets. `{:error, why}`, in plain words, for a plan Symphony refuses; nothing
+  is recorded then.
   """
   @spec write_plan(map(), Issue.t(), Answer.t(), String.t()) :: :ok | {:error, String.t()}
-  def write_plan(%{issue_id: issue_id, repo_key: repo_key, message: %{event: message}} = plan, %Issue{}, %{plan: %{} = answered} = answer, run_id) do
+  def write_plan(%{issue_id: issue_id, repo_key: repo_key} = plan, %Issue{}, %{plan: %{} = answered} = answer, run_id) do
     current = TicketPlan.current(issue_id) || %{}
     kept = Map.take(current, [:shape, :sub_tickets])
     reason = Map.get(answered, :reason) || reason(plan)
     next = answered |> Map.delete(:sub_tickets) |> Map.merge(kept) |> Map.merge(%{by: "recalibration", reason: reason})
+    messages = answered(plan) ++ List.wrap(get_in(plan, [:message, :event]))
 
     # A message that changes what is asked may change the outcomes: its ask is recorded right after.
     with {:ok, _event} <- TicketPlan.write(repo_key, issue_id, next, run_id: run_id, idempotency: "plan.written:#{run_id}", new_ask: answer.ask == true),
-         :ok <- record_asks(answer.ask, repo_key, issue_id, answered(plan) ++ [message], run_id) do
+         :ok <- record_asks(answer.ask, repo_key, issue_id, messages, run_id) do
       :ok
     else
       {:error, {:invalid_plan, reasons}} -> {:error, "its plan was refused: " <> Enum.join(reasons, "; ")}
@@ -391,7 +403,8 @@ defmodule SymphonyElixir.Conductor.Message do
 
   defp reason(%{message: %{event: %Event{type: "ask.recorded"} = ask}}), do: "The ask changed: #{field(ask, :from) || "the parent"} asked for something else."
   defp reason(%{junction: @child_junction, message: %{child: child}}), do: "A message on #{child} changed the plan."
-  defp reason(_plan), do: "A message changed what is asked."
+  defp reason(%{message: _about}), do: "A message changed what is asked."
+  defp reason(%{junction: junction}), do: "The Conductor wrote the plan again at #{junction}."
 
   # The earlier messages the turn `plan` answers with its newest.
   defp answered(%{junction: @junction, message: %{also: also}}), do: for(%{event: %Event{type: "message.sent"} = event} <- also, do: event)
@@ -641,7 +654,10 @@ defmodule SymphonyElixir.Conductor.Message do
         :ok
 
       type == "message.sent" and not left? ->
-        text = "The Conductor could not read this message (#{why}), #{@tries} times, so nothing was done with it. #{given_up(event)}"
+        text =
+          "Symphony gave up on this message: the Conductor tried #{@tries} times to answer it, and Symphony could use none of its answers. " <>
+            "Nothing was done with it: the plan, the sub-tickets and the runs stay as they were. What went wrong the last time: #{why}. #{given_up(event)}"
+
         record(plan, "conductor.update", %{junction: @junction, text: Facts.fit(text, Answer.update_max()), refs: []}, run_id: run_id, parent: id, idempotency: "conductor.update:unanswered:#{id}")
         ask_again_answered(plan, event)
 

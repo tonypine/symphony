@@ -3627,25 +3627,43 @@ exactly as before.
   sub-ticket does not hold it). Either close moves Symphony's record with Linear, under the
   ticket's repo key; a ticket read with no repo key is not moved and is tried again on the next
   poll.
+- **One form on every turn.** Every Conductor turn on a ticket with sub-tickets (a person's
+  message, a message on a sub-ticket, a sub-ticket ending, the final check, a watch turn, any other
+  junction such a ticket reaches; Grooming aside) is told the same form, in the same words
+  (`priv/conductor/sub_tickets_form.md`), and its answer is read and carried out the same way. It
+  may hold `tree` operations, at most 10, each with a `reason`: `add` (`title`, `ask`, `after`,
+  `repo`, `before`: the sub-ticket it goes in front of in the queue, `key`: a name later operations
+  may use for it), `cancel` (`ticket`; the Director's cancel move), `rewrite` (`ticket`, `ask`, and
+  `stop: true` to stop its working run first; the new ask is an `ask.recorded` on the sub-ticket,
+  `source: parent`, whatever it was asked before), `stop` (`ticket`), `reorder` (`ticket`, and
+  `before` another sub-ticket or `to` `first` or `last`; the Director's queue move, which refuses an
+  order that puts a sub-ticket above one it waits on) and `depend` (`ticket` and the complete list
+  it waits `after`: the dependencies it lacks are stored, the ones on siblings it no longer lists are
+  removed, and a cycle is refused). Only sub-tickets that have not ended change. Each one carried
+  out records a `conductor.intervention` on the sub-ticket (`added`, `canceled`, `replanned`,
+  `stopped`, `reordered`, `rewired`) and together they give the parent's plan a new version
+  (`by: recalibration`). The answer may also write the parent's plan again (`plan`), recorded as its
+  next version; it needs no `sub_tickets`, since the list is Symphony's and changes only through
+  `tree`. A plan that lists them anyway is read as the same changes: an entry with an `identifier`
+  keeps that sub-ticket (with a new `ask` when it gives one, and the `after` it gives), one without
+  is a new sub-ticket and needs a `title` and an `ask`, and the order of the entries is the order
+  wanted. An operation left out of the answer (it misses a field or its reason) or one that can't be
+  carried out is said on the ticket in a status note, named in the turn's reply, and read by the next
+  turn in its facts (`earlier_tries`), as is the reason Symphony refused a whole answer.
 - **`sub_ticket_ended`.** Each sub-ticket that ends while others are open owes the parent one turn.
   Its facts are the tree (the parent's plan and checks; each sub-ticket's state, plan summary,
-  checks, tagged notes, asks and whether its pull request merged; the rounds), and its answer may
-  hold `tree` operations, each with a `reason`: `add` (`title`, `ask`, `after`, `repo`), `cancel`
-  (`ticket`; the Director's cancel move), `rewrite` (`ticket`, `ask`, and `stop: true` to stop its
-  working run first; the new ask is an `ask.recorded` on the sub-ticket, `source: parent`) and
-  `stop` (`ticket`). Each one carried out records a `conductor.intervention` on the sub-ticket
-  (`added`, `canceled`, `replanned`, `stopped`) and together they give the parent's plan a new
-  version (`by: recalibration`). One that can't be carried out is logged and left out.
+  checks, tagged notes, asks and whether its pull request merged; the rounds), and its answer is
+  the one form above.
 - **`final_check`.** Once the last sub-ticket ended and the close rule holds, the parent owes the
-  final check. `done: true` with no operation moves the ticket to `Done` (`final_check_pass`).
-  `add` operations are a round: the plan's new version has a `reason` that starts with
+  final check. Its operations other than `add` are carried out first. `done: true` with nothing to
+  add moves the ticket to `Done` (`final_check_pass`). `add` operations are a round: the plan's new version has a `reason` that starts with
   `Final check`, and those versions are the count. After `final_check_rounds` rounds Symphony
   refuses one more and asks the person: "Allow one more round" lets one through, "Close it as it
   is" moves the ticket to `Done`. With the Conductor or the junction off the check cannot run at
   all, and only then does the ticket close on its sub-tickets alone. A check that ran and did not
   conclude never closes the ticket: Symphony asks the person, naming the checks still open ("Check
   again" or "Close it as it is"), and the ticket stays in the waiting state until they answer. That
-  is so when the check answered `done: false` and added nothing, when none of the sub-tickets it
+  is so when the check answered `done: false` and carried nothing out, when none of the sub-tickets it
   wanted could be created, when the move to `Done` failed, and when the turn failed or could not be
   read 2 times in a row (each counted in a status note).
 - **Waiting for the Conductor.** While no provider of `runs.conductor` can take a run (paused, or

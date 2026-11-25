@@ -460,14 +460,119 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
         %{"op" => "stop", "ticket" => "TP-6", "reason" => "It is kept."}
       ]
 
-      log = capture_log(fn -> assert {:ok, %{tree: [%{op: "stop", ticket: "TP-6"}]}} = tree(%{"tree" => malformed}) end)
-      assert log =~ "`tree[1]` was dropped"
-      assert log =~ "`tree[8]` was dropped"
-      refute log =~ "`tree[9]`"
+      log = capture_log(fn -> assert {:ok, %{tree: [%{op: "stop", ticket: "TP-6"}], dropped: dropped}} = tree(%{"tree" => malformed}) end)
+      assert log =~ "tree[1] was left out"
+      assert log =~ "tree[8] was left out"
+      refute log =~ "tree[9]"
+
+      # Why each was left out is kept, in words the next turn can act on.
+      assert dropped == [
+               "tree[1] was left out: an operation must be an object",
+               ~s(tree[2] was left out: `op` must be one of add, cancel, rewrite, stop, reorder, depend, not "merge"),
+               "tree[3] was left out: it needs a `reason`, a non-blank string",
+               "tree[4] was left out: it needs the `ticket` it is about",
+               "tree[5] was left out: an `add` needs a `title` and an `ask`",
+               "tree[6] was left out: an `add` needs a `title` and an `ask`",
+               "tree[7] was left out: a `rewrite` needs the `ticket` and its new `ask`",
+               "tree[8] was left out: a `rewrite` needs the `ticket` and its new `ask`"
+             ]
 
       many = for n <- 1..12, do: %{"op" => "stop", "ticket" => "TP-#{n}", "reason" => "Stop."}
-      assert {:ok, %{tree: kept}} = tree(%{"tree" => many})
+      assert {{:ok, %{tree: kept, dropped: over}}, _log} = with_log(fn -> tree(%{"tree" => many}) end)
       assert length(kept) == 10
+      assert over == ["the stop of TP-11 was left out: an answer holds at most 10 operations", "the stop of TP-12 was left out: an answer holds at most 10 operations"]
+
+      assert {{:ok, %{tree: [], dropped: ["`tree` was left out: it must be a list of operations"]}}, _log} = with_log(fn -> tree(%{"tree" => "none"}) end)
+    end
+
+    test "reorder, depend and an add's place and key are read, each with what it takes (TP-1621)" do
+      operations = [
+        %{"op" => "add", "title" => "The base", "ask" => "Build the base.", "before" => "TP-2", "key" => "base", "reason" => "It goes first."},
+        %{"op" => "reorder", "ticket" => "TP-3", "before" => "TP-2", "reason" => "It is needed sooner."},
+        %{"op" => "reorder", "ticket" => "TP-4", "to" => "last", "reason" => "It can wait."},
+        %{"op" => "depend", "ticket" => "TP-2", "after" => ["base", " TP-3 ", ""], "reason" => "It builds on both."},
+        %{"op" => "depend", "ticket" => "TP-5", "after" => [], "reason" => "It waits on nothing now."}
+      ]
+
+      assert {:ok, %{tree: tree, dropped: []}} = tree(%{"tree" => operations})
+
+      assert tree == [
+               %{op: "add", title: "The base", ask: "Build the base.", after: [], before: "TP-2", key: "base", reason: "It goes first."},
+               %{op: "reorder", ticket: "TP-3", before: "TP-2", reason: "It is needed sooner."},
+               %{op: "reorder", ticket: "TP-4", to: "last", reason: "It can wait."},
+               %{op: "depend", ticket: "TP-2", after: ["base", "TP-3"], reason: "It builds on both."},
+               %{op: "depend", ticket: "TP-5", after: [], reason: "It waits on nothing now."}
+             ]
+
+      malformed = [
+        %{"op" => "reorder", "ticket" => "TP-3", "reason" => "Nowhere."},
+        %{"op" => "reorder", "ticket" => "TP-3", "before" => "TP-2", "to" => "first", "reason" => "Both."},
+        %{"op" => "reorder", "ticket" => "TP-3", "to" => "middle", "reason" => "No such place."},
+        %{"op" => "reorder", "before" => "TP-2", "reason" => "No ticket."},
+        %{"op" => "depend", "ticket" => "TP-2", "reason" => "No list."},
+        %{"op" => "depend", "after" => ["TP-3"], "reason" => "No ticket."}
+      ]
+
+      {{:ok, %{tree: [], dropped: dropped}}, log} = with_log(fn -> tree(%{"tree" => malformed}) end)
+      assert log =~ "tree[6] was left out"
+      reorder = ~s[a `reorder` needs either `before`, the sub-ticket it goes in front of, or `to`, "first" or "last", not both]
+
+      assert dropped == [
+               "tree[1] was left out: " <> reorder,
+               "tree[2] was left out: " <> reorder,
+               "tree[3] was left out: " <> reorder,
+               "tree[4] was left out: a `reorder` needs the `ticket` it moves",
+               "tree[5] was left out: a `depend` needs `after`: the complete list of sub-tickets it waits on, `[]` for none",
+               "tree[6] was left out: a `depend` needs the `ticket` and the list it waits `after`"
+             ]
+    end
+
+    test "a plan outside Grooming needs no sub-tickets, and the ones it lists are read as the same intent (TP-1621)" do
+      plan = %{
+        "reason" => "The design changed.",
+        "shape" => "split",
+        "summary" => "A real queue.",
+        "text" => "Approach: the engine first.",
+        "checks" => [%{"kind" => "outcome", "statement" => "A slot belongs to one ticket.", "proof" => "test"}],
+        "size" => %{"tokens" => 1, "runs" => 4}
+      }
+
+      kept = fn attrs -> Answer.parse(Jason.encode!(%{"update" => "Done.", "plan" => Map.merge(plan, attrs)}), plan: :optional, tree: true, sub_tickets: :kept) end
+
+      # A split plan with no sub-tickets, or an empty list, is the next version; the list stays Symphony's.
+      assert {:ok, %{plan: %{shape: "split", reason: "The design changed."} = read}} = kept.(%{})
+      refute Map.has_key?(read, :sub_tickets)
+      assert {:ok, %{plan: read}} = kept.(%{"sub_tickets" => []})
+      refute Map.has_key?(read, :sub_tickets)
+
+      # One named by its identifier with no ask keeps that sub-ticket; one with an ask rewrites it; a new one adds.
+      entries = [
+        %{"key" => "front", "title" => "The engine", "ask" => "Build the engine."},
+        %{"identifier" => "TP-1607", "title" => "Engine and API"},
+        %{"identifier" => "TP-1609", "ask" => "Home reads the queue.", "after" => ["front", " "]}
+      ]
+
+      assert {:ok, %{plan: %{sub_tickets: listed}}} = kept.(%{"sub_tickets" => entries})
+
+      assert listed == [
+               %{key: "front", title: "The engine", ask: "Build the engine."},
+               %{key: "s2", identifier: "TP-1607", title: "Engine and API"},
+               %{key: "s3", identifier: "TP-1609", ask: "Home reads the queue.", after: ["front"]}
+             ]
+
+      # A new one without a title or an ask is refused, with what to write instead.
+      assert {:error, why} = kept.(%{"sub_tickets" => [%{"identifier" => "TP-1607"}, %{"title" => "The engine"}]})
+      assert why =~ "`plan.sub_tickets[2]` names no `identifier`, so it would be a new sub-ticket, and a new one needs a `title` and an `ask`."
+      assert why =~ "leave `plan.sub_tickets` out and change the sub-tickets with `tree` operations"
+      assert {:error, "`plan.sub_tickets[1]` must be an object"} = kept.(%{"sub_tickets" => ["TP-1607"]})
+
+      # Where the list is Symphony's alone, it is not read at all.
+      ignored = Answer.parse(Jason.encode!(%{"update" => "Done.", "plan" => Map.put(plan, "sub_tickets", [%{"title" => "x"}])}), plan: :optional, sub_tickets: :ignored)
+      assert {:ok, %{plan: read}} = ignored
+      refute Map.has_key?(read, :sub_tickets)
+
+      # Grooming's split still lists its sub-tickets, each complete.
+      assert {:error, "`plan.sub_tickets` must list at least one entry"} = Answer.parse(Jason.encode!(%{"plan" => plan}), plan: true)
     end
 
     test "any other turn's answer holds neither" do

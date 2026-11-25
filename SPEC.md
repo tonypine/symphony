@@ -590,8 +590,11 @@ again at its next dispatch with that reason in its facts, and after 2 such tries
 a plan; a plan of shape `split` is carried out
 instead of a first run: its sub-tickets are created under the ticket, which then waits on them; on
 such a ticket the junctions `sub_ticket_ended` and `final_check` run outside any dispatch, and
-their answer's `tree` operations and `done` are carried out by Symphony: `docs/configuration.md`,
-The tree),
+their answer's `tree` operations and `done` are carried out by Symphony; every turn on a ticket with
+sub-tickets, whatever its junction, reads one form that adds, rewrites, cancels, stops, reorders
+and sets the dependencies of the sub-tickets that have not ended and writes the parent's plan again
+without listing them, and what Symphony refused or did not carry out of an answer reaches the next
+turn in its facts (`earlier_tries`): `docs/configuration.md`, The tree),
 `conductor.steer` (machine only: guidance the Conductor's watch gave a running run, under that run's
 `run_id`, with its `text`, `when` it asked for it, `next_turn`, `now` or `stop`, the `trigger` that
 made it look and how and when it was `delivered`; `conductor.watch` in `docs/configuration.md`),
@@ -7034,11 +7037,13 @@ Minimum endpoints:
     once, and its reply is a `conductor.update` (`junction: "message"`) whose `parent` is the
     message. That turn may record a new plan version and the message as an ask, steer or stop the
     working run, change the ticket's sub-tickets or waive a check; on a finished ticket it may only
-    reply or have a new, related ticket created. A turn that fails leaves Symphony's own reply.
+    reply or have a new, related ticket created. A turn that fails is tried again with the reason
+    in its facts, and after 3 failed tries Symphony's own reply says that nothing was done and why
+    the last try failed.
   - Answers `200` `{"event": ...}` with the event as the feed shows it (`summary.title` "You wrote",
     and `read`, null until a run read it), and writes a `director_note` audit record (`event_id`, the
-    text's first 500 characters). Text that is blank, or longer than the `message.sent` type's 4,000
-    characters, is `400` `invalid_note` with a message that says why; a ticket with no state record in
+    text's first 500 characters). Text that is blank, or longer than the `message.sent` type's 100,000
+    characters (as long as an ask), is `400` `invalid_note` with a message that says why; a ticket with no state record in
     that repo is `404` `ticket_not_found`; a request without `repo_key` or `issue_identifier` is `422`.
     None of them writes an event or an audit record. Unlike a stop's event, the message is the
     request: an answer other than `200` means it wasn't written.

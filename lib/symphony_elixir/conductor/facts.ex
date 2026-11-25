@@ -56,8 +56,8 @@ defmodule SymphonyElixir.Conductor.Facts do
   `checks` with where each stands, `sub_tickets` (each one's identifier, title and state, and for
   one Symphony tracks its `phase`, its plan's `summary`, its `checks`, the notes a run tagged, its
   `asks` and whether its `pull_request` merged), `rounds` (how many the final check `made`, the
-  `limit` and how many are `left`), the person's `decisions`, `notes` and `answers`, `conductor`
-  and `budget`.
+  `limit` and how many are `left`), the person's `decisions`, `notes` and `answers`, `conductor`,
+  `earlier_tries` (`turn_tries/1`) and `budget`.
 
   At `message` and `child_message`, on a groomed ticket, the document is the conversation's (same
   `schema`, `junction` and `focus`): `ticket` (as the tree's, with its `parent`'s identifier),
@@ -65,14 +65,17 @@ defmodule SymphonyElixir.Conductor.Facts do
   `source` and where it came `from`, a message with who wrote it and the `reply` the Conductor
   gave it, null while it has none), the current `plan` and its `checks`, `standing`, `last_run`,
   `sub_tickets` (as the tree's, when the ticket has any), the person's `decisions` and `answers`,
-  `conductor` and `budget`. `SymphonyElixir.Conductor` adds which message the turn answers.
+  `conductor`, `earlier_tries` (`turn_tries/1`) and `budget`. `SymphonyElixir.Conductor` adds which
+  message the turn answers, whose text reaches it whole (a message holds as much as an ask).
 
   On a groomed ticket the other junctions' `ticket` is read through `SymphonyElixir.TicketJourney`
   (`problem` is what was asked, `acceptance` the plan's outcome checks, `walkthrough` its QA
   checks, `proved_steps` the checks a test proved), and the document also holds `checks` (each
   check of the plan with where it stands, and the reason of a waived one), `check_notes` (the
   newest notes the runs wrote, which is where a run says a check cannot be proved) and `waive`
-  (the rule for waiving one).
+  (the rule for waiving one). Every other junction's document also holds `earlier_tries`
+  (`turn_tries/1`), and, on a ticket with sub-tickets, its `sub_tickets` as the tree's, since every
+  turn on such a ticket may change them.
 
   Each fact read from an event carries the event's id (`event_id`), so a claim built on it can be
   traced. Long texts are cut with a marker (`#{inspect(" [cut by Symphony]")}`), lists keep their
@@ -104,7 +107,11 @@ defmodule SymphonyElixir.Conductor.Facts do
   @grooming "grooming"
   @tree_junctions ["sub_ticket_ended", "final_check"]
   @message_junctions ["message", "child_message"]
-  @message_text_max 4_000
+  # A message holds as much as an ask (`message.sent`'s bound), and reaches the turn whole.
+  @message_text_max 100_000
+  # The keys a turn that Symphony refused, or whose operations it did not carry out, is said under.
+  @try_keys ["conductor.try:", "message.try:", "final_check.try:"]
+  @max_tries 5
   @max_check_notes 5
   @waive "A check that is open and that nobody can prove the way the plan says (a `test` check for something no test can " <>
            "reach, an `attached` check for a file that cannot exist) holds the handoff for good. When a run's notes or its " <>
@@ -236,6 +243,7 @@ defmodule SymphonyElixir.Conductor.Facts do
       notes: person_notes(events),
       answers: answers(events),
       conductor: conductor(events),
+      earlier_tries: turn_tries(events),
       budget: budget(record, events, opts)
     }
   end
@@ -262,8 +270,25 @@ defmodule SymphonyElixir.Conductor.Facts do
       decisions: Enum.map(record.decisions, &%{title: &1.title, answer: cut(&1.answer, @text_max)}),
       answers: answers(events),
       conductor: conductor(events),
+      earlier_tries: turn_tries(events),
       budget: budget(record, events, opts)
     }
+  end
+
+  @doc """
+  What Symphony did not take from the Conductor's earlier turns on the ticket, from its `events`
+  (oldest first): each answer it refused and each operation it left out or could not carry out, as
+  the status note that says it, the newest #{@max_tries}. Every turn but Grooming (whose own tries
+  are its `earlier_tries`) reads them as `earlier_tries`, so a turn that runs again does not give
+  the answer Symphony refused again.
+  """
+  @spec turn_tries([Event.t()]) :: [map()]
+  def turn_tries(events) when is_list(events) do
+    events
+    |> Enum.filter(&match?(%Event{type: "note", idempotency: key} when is_binary(key), &1))
+    |> Enum.filter(fn %Event{idempotency: key} -> Enum.any?(@try_keys, &String.starts_with?(key, &1)) end)
+    |> Enum.take(-@max_tries)
+    |> Enum.map(&%{event_id: &1.id, at: iso8601(&1.at), reason: cut(payload(&1, :text), @text_max)})
   end
 
   defp said(%Event{type: "ask.recorded"} = ask, _events) do
@@ -315,13 +340,19 @@ defmodule SymphonyElixir.Conductor.Facts do
       findings: findings(events),
       verdicts: verdicts(events),
       conductor: conductor(events),
+      earlier_tries: turn_tries(events),
       budget: budget(record, events, opts),
       filings: Filing.facts(events, Keyword.get_lazy(opts, :conductor, &Config.conductor_settings/0), Keyword.take(opts, [:repos]))
     }
+    |> put_family(record, opts)
     |> put_qa_passes(junction, events)
     |> put_checks(events)
     |> put_open_checks(junction)
   end
+
+  # A ticket with sub-tickets: every turn on it may change them, so it sees them as the tree's turn does.
+  defp put_family(facts, %{sub_issues: [_ | _]} = record, opts), do: Map.put(facts, :sub_tickets, family(record, Keyword.get_lazy(opts, :records, &records/0)))
+  defp put_family(facts, _record, _opts), do: facts
 
   # Before the merge of a groomed ticket's own pull request, the checks nobody proved or waived.
   defp put_open_checks(facts, "before_merge") do

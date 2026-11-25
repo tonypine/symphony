@@ -462,7 +462,7 @@ every event new then.
 ## Messages
 
 Writing to a ticket works like a prompt sent to it (`SymphonyElixir.Messages`).
-`POST /api/v1/control/message` takes `repo_key`, `issue_identifier` and `text` (at most 4,000 characters),
+`POST /api/v1/control/message` takes `repo_key`, `issue_identifier` and `text` (at most 100,000 characters, as long as an ask),
 and needs the control token; `POST /api/v1/control/note` is an alias of it, kept for older callers. It records a `message.sent` event on the ticket's ledger: the text, who wrote
 it (the person, the Director, whom the token names today) and when, and answers `200` with the event as the
 events feed shows it. Each message is its own event; none replaces or hides an earlier one. Blank or

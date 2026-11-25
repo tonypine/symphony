@@ -225,14 +225,19 @@ defmodule SymphonyElixir.Conductor.MessageTest do
       assert log =~ "its plan was refused: check id c1 is used twice"
 
       assert [first, second] = status_notes(ctx.issue_id)
-      assert first == "The Conductor could not answer a message (its answer could not be read). Symphony tries again."
+      assert first == "The Conductor could not answer a message (Symphony refused its answer: `ask` is true, so the answer must hold the new `plan`). Symphony tries again."
       assert second =~ "(its plan was refused: check id c1 is used twice)"
       assert [%{parent: parent, payload: %{junction: "message", text: text}}] = events(ctx.issue_id, "conductor.update")
       assert parent == message.id
 
+      # The reply says in plain words that nothing was done, and what was wrong with the last answer.
       assert text ==
-               "The Conductor could not read this message (its answer could not be read), 3 times, so nothing was done with it. " <>
+               "Symphony gave up on this message: the Conductor tried 3 times to answer it, and Symphony could use none of its answers. " <>
+                 "Nothing was done with it: the plan, the sub-tickets and the runs stay as they were. " <>
+                 "What went wrong the last time: Symphony refused its answer: `ask` is true, so the answer must hold the new `plan`. " <>
                  "It stays in the ticket's history. Send it again to have it read."
+
+      refute text =~ "could not read this message"
 
       assert Message.owed(ctx.issue_id) == %{messages: [], asks: [], children: []}
       assert length(TicketPlan.versions(ctx.issue_id)) == 1

@@ -151,7 +151,8 @@ defmodule SymphonyElixir.TicketEvents.Types do
   `note` event's id) read it (`run_id`), keyed by the note so only the first read is kept
   (`SymphonyElixir.Marks`).
 
-  `message.sent` is the person's: what they wrote to the ticket (`text`), through the control API's
+  `message.sent` is the person's: what they wrote to the ticket (`text`, as long as an ask: at most
+  100,000 characters), through the control API's
   note endpoint, each message its own event (`SymphonyElixir.Messages`); one that answers, in the
   person's own words, the question the ticket is held on names it (`question_id`,
   `SymphonyElixir.DirectorMoves.answer_held_question/4`). `message.read` is
@@ -207,7 +208,8 @@ defmodule SymphonyElixir.TicketEvents.Types do
   is recorded once per check and head (`SymphonyElixir.TicketChecks`). `check.waived` is
   machine-only: a check (`check_id`) nobody has to prove any more, and why (`reason`, at most
   1,000). `conductor.intervention` is machine-only: what the Conductor of the ticket `by` did to
-  this one (`action`: `stopped`, `replanned`, `canceled`, `replaced`, `added`), why (`reason`, at
+  this one (`action`: `stopped`, `replanned`, `canceled`, `replaced`, `added`, `reordered` (put at
+  another place among its siblings), `rewired` (what it waits on set again)), why (`reason`, at
   most 1,000) and the ticket it names (`target`). A `note` may carry a `tag` an agent writes:
   `discovery` (something a run found that is not its own to solve) or `base_fault` (a fault of the
   base branch).
@@ -758,7 +760,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
     "message.sent" => %{
       writers: [:person],
       run_kinds: [],
-      required: [text: {:string, 4_000}],
+      required: [text: {:string, 100_000}],
       optional: [question_id: :string] ++ @signal,
       idempotency: :writer
     },
@@ -821,7 +823,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
     "conductor.intervention" => %{
       writers: [:machine],
       run_kinds: [],
-      required: [action: {:enum, ~w(stopped replanned canceled replaced added)}, reason: {:string, 1_000}, by: {:string, 200}],
+      required: [action: {:enum, ~w(stopped replanned canceled replaced added reordered rewired)}, reason: {:string, 1_000}, by: {:string, 200}],
       optional: [target: {:string, 200}] ++ @signal,
       idempotency: :writer
     }

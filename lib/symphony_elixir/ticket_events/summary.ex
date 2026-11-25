@@ -43,7 +43,15 @@ defmodule SymphonyElixir.TicketEvents.Summary do
 
   # How a check was proved, and what the Conductor of a ticket did to this one, as a line says them.
   @proved_by %{"test" => " by a test", "qa" => " by QA", "design" => " against the design", "attached" => " by an attachment"}
-  @intervened %{"stopped" => "Run stopped", "replanned" => "Plan changed", "canceled" => "Canceled", "replaced" => "Replaced", "added" => "Added"}
+  @intervened %{
+    "stopped" => "Run stopped",
+    "replanned" => "Plan changed",
+    "canceled" => "Canceled",
+    "replaced" => "Replaced",
+    "added" => "Added",
+    "reordered" => "Moved in the queue",
+    "rewired" => "Dependencies set"
+  }
 
   @doc """
   The summary of `event` (an `Event` or a stored record `Event.normalize/1` reads): its title and its
