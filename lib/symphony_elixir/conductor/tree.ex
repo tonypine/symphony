@@ -70,7 +70,9 @@ defmodule SymphonyElixir.Conductor.Tree do
   A groomed ticket in the waiting state closes by one rule (`due/3`): its own pull request merged
   or it never had one, and none of its sub-tickets is left outside Done or Canceled (one in
   `Backlog` holds it). Then the Conductor's `final_check` turn is owed: it reads the whole tree and
-  answers `done`, which moves the ticket to `Done` (`final_check_pass`), or adds sub-tickets
+  answers `done`, which moves the ticket to `Done` (`final_check_pass`) and records each check of
+  its plan still open as proved by the sub-tickets that ended Done (`by: sub_tickets`, naming them),
+  so a parent's facts read it as finished through them, or adds sub-tickets
   (`tree` operations of `op: add`), which is a round: the plan takes a new version whose `reason`
   starts with `Final check`, and those versions are the count of rounds (`rounds/1`). After
   `conductor.final_check_rounds` rounds Symphony refuses one more and asks the person instead
@@ -997,10 +999,10 @@ defmodule SymphonyElixir.Conductor.Tree do
   # turn can add one meanwhile, but a person or a run can) keeps the ticket open, and it waits on it.
   defp pass(repo_key, %Issue{id: issue_id} = issue, opts) do
     case open_now(issue_id, repo_key, opts) do
-      {:ok, []} ->
-        done(repo_key, issue, opts)
+      {:ok, [], fresh} ->
+        done(repo_key, issue, fresh, opts)
 
-      {:ok, open} ->
+      {:ok, open, _fresh} ->
         names = Enum.map_join(open, ", ", &(Map.get(&1, :identifier) || "one without an identifier"))
         waits = keyed(Facts.events(issue_id), @waits_key) + 1
         note(repo_key, issue_id, "The final check passed, but #{names} was added meanwhile and has not ended. This ticket waits for it.", "#{@waits_key}#{waits}")
@@ -1012,15 +1014,16 @@ defmodule SymphonyElixir.Conductor.Tree do
   end
 
   defp open_now(issue_id, repo_key, opts) do
-    with {:ok, fresh} <- read_one(issue_id, opts), do: {:ok, Issue.open_sub_issues(fresh, terminal_states(repo_key))}
+    with {:ok, fresh} <- read_one(issue_id, opts), do: {:ok, Issue.open_sub_issues(fresh, terminal_states(repo_key)), fresh}
   end
 
-  defp done(repo_key, %Issue{id: issue_id} = issue, opts) do
+  defp done(repo_key, %Issue{id: issue_id} = issue, %Issue{} = fresh, opts) do
     ctx = %{repo_key: repo_key, issue_identifier: issue.identifier}
 
     case TransitionGuard.perform(issue_id, :final_check_pass, ctx, tracker: tracker(opts)) do
       :ok ->
         _ = RunStore.delete_merged_wait(issue_id)
+        prove_by_sub_tickets(repo_key, issue, fresh)
         note(repo_key, issue_id, "The final check passed: every sub-ticket ended and the plan's outcomes hold. This ticket is #{@done}.", "final_check.passed")
         Logger.info("Moved a groomed ticket to #{@done}: its final check passed #{context(issue, repo_key)}")
 
@@ -1029,6 +1032,24 @@ defmodule SymphonyElixir.Conductor.Tree do
         {:ask, :stuck, stuck_question(issue_id, "it passed, but the ticket could not be moved to #{@done}")}
     end
   end
+
+  # The ticket finished through its sub-tickets: its final check passed on them, so each check of
+  # its plan still open is proved by the sub-tickets that ended Done, named in the proof. A waived
+  # check stays waived; a ticket whose sub-tickets were all canceled proves nothing this way.
+  defp prove_by_sub_tickets(repo_key, %Issue{id: issue_id} = issue, %Issue{sub_issues: sub_issues}) do
+    case for(%{identifier: identifier, state: state} <- List.wrap(sub_issues), is_binary(identifier) and done_state?(state), do: identifier) do
+      [] ->
+        :ok
+
+      names ->
+        details = "The final check passed on its sub-tickets #{Enum.join(names, ", ")}, which ended Done."
+
+        proved = for %{id: check_id} <- TicketChecks.open(issue_id), do: TicketChecks.prove(repo_key, issue_id, %{check_id: check_id, by: "sub_tickets", details: details})
+        Logger.info("Recorded #{length(proved)} open check(s) as proved by the sub-tickets #{context(issue, repo_key)} sub_tickets=#{Enum.join(names, ",")}")
+    end
+  end
+
+  defp done_state?(state), do: is_binary(state) and String.downcase(String.trim(state)) == "done"
 
   # Each operation in order, on the plan's sub-ticket entries. What was carried out is written as a
   # new version of the plan, whose reason opens with `why` and holds each operation's own; what was

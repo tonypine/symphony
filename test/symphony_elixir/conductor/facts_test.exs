@@ -2,7 +2,7 @@ defmodule SymphonyElixir.Conductor.FactsTest do
   use ExUnit.Case, async: true
 
   alias SymphonyElixir.Conductor.{Answer, Facts, Grooming}
-  alias SymphonyElixir.{RunStore, TicketEvents, TicketPlan}
+  alias SymphonyElixir.{RunStore, TicketEvents, TicketPlan, TicketState}
 
   @description """
   Intro line.
@@ -461,6 +461,62 @@ defmodule SymphonyElixir.Conductor.FactsTest do
       # A ticket with no plan reads as at any other junction.
       assert %{ticket: %{problem: _problem}} = Facts.build(ctx.record, "final_check", token_cap: nil)
     end
+
+    # TP-1605's shape: a parent split into sub-tickets, one of which closed through its own two
+    # sub-tickets, which both merged with every check proved.
+    test "the tree reaches every ticket under the parent: state, merge and each check's proof, at any depth", ctx do
+      n = System.unique_integer([:positive])
+      ticket = fn id, phase, parent -> %{repo_key: ctx.repo, issue_id: "#{id}-#{n}", issue_identifier: "#{id}-#{n}", phase: phase, title: id, parent: parent} end
+      root = ticket.("ROOT", "Waiting on sub-tickets", nil)
+      middle = ticket.("MID", "Done", %{identifier: root.issue_identifier})
+      first = ticket.("ONE", "Done", %{identifier: middle.issue_identifier})
+      second = ticket.("TWO", "Done", %{identifier: middle.issue_identifier})
+      link = &%{id: &1.issue_id, identifier: &1.issue_identifier, state: "Done"}
+      # TWO's record names MID back as its sub-ticket: the walk does not go round.
+      sub_issues = %{root => [link.(middle)], middle => [link.(first), link.(second)], first => [], second => [link.(middle)]}
+      for {record, subs} <- sub_issues, do: :ok = RunStore.put_ticket_state(Map.put(record, :sub_issues, subs))
+      for record <- [root, middle, first, second], do: {:ok, _plan} = TicketPlan.write(ctx.repo, record.issue_id, plan())
+
+      for {record, pr} <- [{first, 1615}, {second, 1616}] do
+        url = "https://github.com/acme/app/pull/#{pr}-#{n}"
+        :ok = SymphonyElixir.TicketPullRequest.put(ctx.repo, record.issue_id, %{pr_url: url})
+        :ok = SymphonyElixir.TicketPullRequest.mark_finished(ctx.repo, url, "merged")
+      end
+
+      {:ok, by_test} = SymphonyElixir.TicketChecks.prove(ctx.repo, first.issue_id, %{check_id: "c1", by: "test", test: "test/slot_test.exs"})
+      {:ok, by_ci} = SymphonyElixir.TicketChecks.prove(ctx.repo, second.issue_id, %{check_id: "c1", by: "ci", details: "make-all passed."})
+      details = "The final check passed on its sub-tickets #{first.issue_identifier}, #{second.issue_identifier}, which ended Done."
+      {:ok, by_subs} = SymphonyElixir.TicketChecks.prove(ctx.repo, middle.issue_id, %{check_id: "c1", by: "sub_tickets", details: details})
+
+      facts = Facts.build(TicketState.normalize(Map.put(root, :sub_issues, sub_issues[root])), "final_check", token_cap: nil)
+      statement = "The list is filtered."
+      check = &Map.merge(%{id: "c1", kind: "outcome", statement: statement, proof: "test", state: "proved"}, %{proved_by: &1})
+
+      assert [mid] = facts.sub_tickets
+      assert %{identifier: _, state: "Done", pull_request: "none", notes: [], asks: []} = mid
+      assert mid.checks == [check.(%{by: "sub_tickets", details: details, event_id: by_subs.id})]
+
+      assert [one, two] = mid.sub_tickets
+
+      assert one == %{
+               identifier: first.issue_identifier,
+               title: "ONE",
+               phase: "Done",
+               state: "Done",
+               pull_request: "merged",
+               plan: "Two sub-tickets: the API, then the list.",
+               checks: [check.(%{by: "test", test: "test/slot_test.exs", event_id: by_test.id})]
+             }
+
+      assert %{identifier: _, pull_request: "merged", checks: [%{state: "proved", proved_by: %{by: "ci", details: "make-all passed.", event_id: by_ci_id}}]} = two
+      assert by_ci_id == by_ci.id
+      refute Map.has_key?(two, :asks)
+      # MID is already on the path: it is listed under TWO, and not entered again.
+      assert [%{identifier: mid_identifier} = again] = two.sub_tickets
+      assert mid_identifier == middle.issue_identifier
+      refute Map.has_key?(again, :sub_tickets)
+      assert {:ok, _json} = Jason.encode(facts)
+    end
   end
 
   describe "a groomed ticket at the other junctions" do
@@ -492,7 +548,7 @@ defmodule SymphonyElixir.Conductor.FactsTest do
       assert facts.ticket.decisions == [%{title: "Scope", answer: "Only the button."}]
 
       assert facts.checks == [
-               %{id: "c1", kind: "outcome", statement: "The button signs in.", proof: "test", state: "proved"},
+               %{id: "c1", kind: "outcome", statement: "The button signs in.", proof: "test", state: "proved", proved_by: %{by: "test", test: "login_test › signs in", event_id: proof.id}},
                %{id: "c2", kind: "qa", statement: "The login works.", proof: "qa", state: "open"},
                %{id: "c3", kind: "outcome", statement: "The export matches.", proof: "attached", state: "waived", waived: "No export exists to attach."}
              ]
