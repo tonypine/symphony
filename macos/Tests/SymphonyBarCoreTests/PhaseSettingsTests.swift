@@ -774,7 +774,7 @@ final class PhaseSettingsTests: XCTestCase {
         let steps = PhaseDefaults.qaSteps(for: .macosApp)
         XCTAssertEqual(
             steps.map(\.stepID),
-            ["pre_checks", "build", "plan", "launch", "walk", "design_check", "wide_pass", "quit", "attach", "review"]
+            ["pre_checks", "build", "plan", "launch", "walk", "design_check", "quit", "attach", "review"]
         )
         XCTAssertEqual(steps.filter { $0.mode == .machine }.map { $0.commands.map(\.run) }, PhaseDefaults.qaCommands.map { [$0] })
         XCTAssertEqual(steps[1], PhaseStep(
@@ -792,8 +792,7 @@ final class PhaseSettingsTests: XCTestCase {
         XCTAssertEqual(steps[4].model, "small")
         XCTAssertEqual(steps[4].answer.map(\.name), ["status", "expected", "actual", "details", "evidence"])
         XCTAssertEqual(steps[5].answer, steps[4].answer)
-        XCTAssertEqual(steps[6].answer, steps[4].answer)
-        XCTAssertEqual(steps[9], PhaseStep(stepID: "review", title: "Review and verdict", mode: .orchestrated, effort: .high, session: "lead"))
+        XCTAssertEqual(steps[8], PhaseStep(stepID: "review", title: "Review and verdict", mode: .orchestrated, effort: .high, session: "lead"))
         XCTAssertTrue(steps.filter { $0.mode == .orchestrated }.allSatisfy { $0.prompt.isEmpty })
 
         // Valid as a playbook's list, which may leave prompts to Symphony and run its QA commands; not as a run kind's.

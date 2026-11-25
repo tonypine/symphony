@@ -636,8 +636,8 @@ private struct RiskRulesSection: View {
 
 /// The `macos_app` QA playbook: the tools the QA host needs, the project's dev server there and the variables the
 /// app under test gets (`auto_review.playbooks.macos_app.requires`, `dev_server`, `dev_server_port` and `launch_env`),
-/// and the window sizes QA judges it at (`window_width`, `window_height`, `wide_pass_width` and `wide_pass_height`).
-/// Two groups, since the tools wait on their own read of symphony.yml.
+/// and the QA target it judges the app at: the window size and appearance (`window_width`, `window_height` and
+/// `appearance`). Two groups, since the tools wait on their own read of symphony.yml.
 private struct MacAppQASection: View {
     @ObservedObject var model: SettingsViewModel
 
@@ -660,26 +660,33 @@ private struct MacAppQASection: View {
             }
             SettingsGroup(
                 footer: "auto_review.playbooks.macos_app.requires (default none), window_width and window_height (default "
-                    + "1366 × 768), wide_pass_width and wide_pass_height (default 2560 × 1440), dev_server (default off), "
+                    + "2560 × 1440), appearance (default dark), dev_server (default off), "
                     + "dev_server_port (default 8090) and launch_env (default none). A repository's WORKFLOW.md can set them too, and "
                     + "wins. scripts/qa-vm/provision.sh installs Go, Postgres and jq on a QA VM. Save checks "
                     + "symphony.yml with symphony check first; the next QA pass uses them."
             ) {
-                windowSizeControls
+                qaTargetControls
                 devServerControls
             }
             .disabledReason(model.canEditMacAppQA ? nil : SettingsView.waits)
         }
     }
 
-    @ViewBuilder private var windowSizeControls: some View {
-        sizeField("Walkthrough window width in points", key: "window_width", value: \.windowWidth)
-        sizeField("Walkthrough window height in points", key: "window_height", value: \.windowHeight)
-        sizeField("Wide pass screen width in points", key: "wide_pass_width", value: \.widePassWidth)
-        sizeField("Wide pass screen height in points", key: "wide_pass_height", value: \.widePassHeight)
+    /// The QA target: the window size and the appearance QA launches the app in.
+    @ViewBuilder private var qaTargetControls: some View {
+        sizeField("QA target window width in points", key: "window_width", value: \.windowWidth)
+        sizeField("QA target window height in points", key: "window_height", value: \.windowHeight)
+        SettingsRow("QA target appearance") {
+            SegmentedControl(
+                "QA target appearance",
+                selection: $model.macAppQA.appearance,
+                segments: [Segment("light", "Light"), Segment("dark", "Dark")]
+            )
+            .help("auto_review.playbooks.macos_app.appearance")
+        }
     }
 
-    /// A whole-number field for one of the window sizes QA judges the app at.
+    /// A whole-number field for one of the QA target window's sizes.
     private func sizeField(_ label: String, key: String, value: WritableKeyPath<MacAppQAPlaybook, Int>) -> some View {
         SettingsRow(label) {
             NumberField(

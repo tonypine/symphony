@@ -3,7 +3,7 @@ defmodule SymphonyElixir.TicketEvents.StepWord do
   The one word a step's `step.completed` is drawn with: the ticket page's step list, the Conductor's
   `steps` and `attempts` blocks and the Conductor's facts all read it from here.
 
-  A stepped QA pass's check step (a walk, a design check, the wide pass, a recheck) records two
+  A stepped QA pass's check step (a walk, a design check, a recheck) records two
   facts: `outcome`, whether the step ran to an answer Symphony takes, and `result.status`, what the
   step judged. A step that ran to an answer is drawn with its judgement, so a check that judged
   `fail` reads `failed` and one that judged `blocked` reads `blocked`; "the step ran" is not what a

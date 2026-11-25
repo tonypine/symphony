@@ -94,7 +94,7 @@ defmodule SymphonyElixir.Setup.Checks.QaHostTest do
     assert not_checked.reason =~ "the QA host qa@qa-vm: the hardware UUID of the QA host could not be read: ioreg could not run: :timeout"
   end
 
-  test "a QA VM whose screen is under the wide pass size is an error naming the sizes and the command that fixes it" do
+  test "a QA VM whose screen is under the QA target window is an error naming the sizes and the command that fixes it" do
     vm = ioreg("99999999-8888-7777-6666-555544443333")
     fake_machines(vm, screen({1280, 720}))
     write_qa_config!(%{playbooks: @macos_app, worker_host: "qa@qa-vm"})
@@ -102,8 +102,8 @@ defmodule SymphonyElixir.Setup.Checks.QaHostTest do
     assert [problem] = problems()
     assert problem.id == "qa_host:small_screen:qa@qa-vm"
     assert problem.severity == "error"
-    assert problem.title == "The QA VM's screen is too small for the wide pass"
-    assert problem.consequence =~ "The QA host qa@qa-vm has a 1280×720 pt screen, under the 2560×1440 pt the wide pass of default fills"
+    assert problem.title == "The QA VM's screen is too small for the QA target window"
+    assert problem.consequence =~ "The QA host qa@qa-vm has a 1280×720 pt screen, under the 2560×1440 pt QA target window of default"
     assert problem.consequence =~ "run tart set <the QA VM> --display 2560x1440pt with the VM stopped"
     assert problem.repos == ["default"]
     assert problem.fix == @docs_fix
@@ -112,8 +112,8 @@ defmodule SymphonyElixir.Setup.Checks.QaHostTest do
     assert %{label: "Fix", value: "tart set <the QA VM> --display 2560x1440pt"} in problem.details
     assert_received {:qa_cmd, "qa@qa-vm", "/usr/sbin/system_profiler", ["SPDisplaysDataType", "-json"]}
 
-    # The playbook's own wide pass size is the one the screen needs.
-    small = %{window_width: 960, window_height: 600, wide_pass_width: 1280, wide_pass_height: 720}
+    # The playbook's own target size is the one the screen needs.
+    small = %{window_width: 1280, window_height: 720}
     write_qa_config!(%{playbooks: %{macos_app: Map.merge(@macos_app.macos_app, small)}, worker_host: "qa@qa-vm"})
     assert problems() == []
 

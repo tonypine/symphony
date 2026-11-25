@@ -19,8 +19,8 @@ turn:
 
 - one step per walkthrough step, named after it, with the walk's status (`plan_mismatch` that a
   recheck did not settle is `blocked`), its `details` and its `evidence`;
-- one `Design check: <deliverable>` step per UI deliverable and gallery entry judged, and one
-  `Wide pass` step, from those steps' answers;
+- one `Design check: <deliverable>` step per UI deliverable and gallery entry judged, from those
+  steps' answers;
 - the steps a named test proves (the pre-checks): `pass`, with the check's result in `details`;
 - `pass` when every step behaved as the ticket describes; `fail` when at least one shows a real
   defect, with one actionable finding per defect (`step`, `viewport`, `expected`, `actual`,
@@ -38,11 +38,13 @@ Rules Symphony keeps on the verdict:
 - A QA harness fault (a click that fell back to `AXPress`, or was refused because of another app,
   `qa_permission_missing`, `qa_helper_unavailable`, `qa_worker_*`) makes the verdict `blocked` with
   the tool's message as `reason`.
-- A pass that judged any screen owes the wide pass; Symphony reports one without it `inconclusive`.
+- A pass judges screens at the QA target (the window size Symphony set at launch); Symphony reports
+  one that judged screens with no window sized to the target `inconclusive`. A hang or a crash a
+  walk saw at that size is a `fail` naming the page and the window size.
   A change with nothing on screen to judge answers `pass` with `"scope": "none"` and the reason;
   Symphony accepts it only when the app built, launched and checked healthy.
 - Name each step's environment (`fixture` or `live`).
-- A walk, design check or wide pass keeps what it judged: the step list shows its word. When you
+- A walk or design check keeps what it judged: the step list shows its word. When you
   overrule one (a `fail` you judge an artifact of the seed, a `blocked` a recheck settled), say in
   the verdict's `summary` which step you overruled and why.
 

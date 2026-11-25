@@ -516,7 +516,6 @@ public enum PhaseDefaults {
                 model: "small", session: PhaseStep.freshSession, repeat: .walkthrough
             ),
             PhaseStep(stepID: "design_check", title: "Design check", mode: .orchestrated, answer: judged, model: "small", session: PhaseStep.freshSession),
-            PhaseStep(stepID: "wide_pass", title: "Wide pass", mode: .orchestrated, answer: judged, model: "small", session: PhaseStep.freshSession),
             PhaseStep(stepID: "quit", title: "Quit the app", mode: .machine, commands: [StepCommand(run: "symphony:qa_quit")], timeoutMs: 60_000),
             PhaseStep(
                 stepID: "attach", title: "Attach the evidence", mode: .machine, commands: [StepCommand(run: "symphony:qa_attach")], timeoutMs: 60_000

@@ -119,9 +119,9 @@ defmodule SymphonyElixir.QaAgentTest do
     end
   end
 
-  # Builds and launches the macos_app and resizes its window for the wide pass, as a
+  # Builds and launches the macos_app and resizes its window to the QA target, as a
   # macos_app QA agent does, then answers like `FakeSession`.
-  defmodule WidePassSession do
+  defmodule TargetSession do
     alias SymphonyElixir.QaDriver
 
     defdelegate start_session(workspace, opts), to: FakeSession
@@ -151,7 +151,7 @@ defmodule SymphonyElixir.QaAgentTest do
     end
   end
 
-  # Builds, launches and checks the macos_app without a wide pass, as a QA agent does for a change
+  # Builds, launches and checks the macos_app without a target resize, as a QA agent does for a change
   # with nothing on screen to judge, then answers like `FakeSession`.
   defmodule AppCheckSession do
     alias SymphonyElixir.QaDriver
@@ -339,7 +339,7 @@ defmodule SymphonyElixir.QaAgentTest do
 
   # A QA host whose stored build is the playbook's `App.app` and whose screen is `{w, h}`
   # points, 93 pt of its height taken by the menu bar and the Dock; the window fills the usable area.
-  defp wide_pass_host({w, h}) do
+  defp screen_host({w, h}) do
     usable = h - 93
     window = %{x: 0, y: 25, w: w, h: usable}
     resized = Jason.encode!(%{ok: true, window: window, screen: %{w: w, h: h}, visible: %{x: 0, y: 25, w: w, h: usable}})
@@ -393,7 +393,9 @@ defmodule SymphonyElixir.QaAgentTest do
         {:ok, dest}
       end,
       cleanup: fn dir -> File.rm_rf!(dir) && :ok end,
-      kill: fn _pid -> :ok end
+      kill: fn _pid -> :ok end,
+      # Every launch draws the app in the QA target's appearance, with the library built on the QA host.
+      appearance_library: fn dir -> {:ok, Path.join(dir, "appearance/symphony-qa-appearance.dylib")} end
     }
 
     ioreg = fn
@@ -1096,16 +1098,18 @@ defmodule SymphonyElixir.QaAgentTest do
       assert epic =~ "No HTML screens or image files are attached to this ticket or its parent"
     end
 
-    test "lists QA's three jobs in order, with a Design check per UI deliverable in light and dark" do
+    test "lists QA's three jobs in order, with a Design check per UI deliverable at the QA target" do
       prompt = QaAgent.prompt(job(), nil) |> String.replace(~r/\s+/, " ")
 
       [_before, jobs] = String.split(prompt, "QA's three jobs, in this order: ", parts: 2)
       [jobs, _playbooks] = String.split(jobs, "Playbooks to follow:", parts: 2)
 
-      assert jobs =~ ~r/^1\. Walk the walkthrough steps marked `Proved by: QA`.* 2\. Judge every UI deliverable by sight\..* 3\. The wide pass/
-      assert jobs =~ "Screenshot it in the real app in light and in dark, at the sizes the design names"
+      assert jobs =~ ~r/^1\. Walk the walkthrough steps marked `Proved by: QA`.* 2\. Judge every UI deliverable by sight\..* 3\. The other checks of the running app/
+      assert jobs =~ "Screenshot it in the real app at the QA target (its appearance and window size, for the Mac app)"
+      assert jobs =~ "and in another appearance or size only when the ticket is about it"
+      refute jobs =~ "in light and in dark"
       assert jobs =~ "layout, spacing, alignment, truncation, contrast, symbols, wording, and whether it looks finished"
-      assert jobs =~ "Report one step per UI deliverable named `Design check: <deliverable>`, with both screenshots in `evidence`"
+      assert jobs =~ "Report one step per UI deliverable named `Design check: <deliverable>`, with its screenshots in `evidence`"
       assert jobs =~ "the design it compared with"
       assert jobs =~ "When no Screens cover the deliverable, judge it against `docs/design/design-system.md` alone and say so"
       assert jobs =~ "A visible mismatch is `fail`, even when every structural check passes"
@@ -1115,7 +1119,7 @@ defmodule SymphonyElixir.QaAgentTest do
       assert epic =~ "QA's three jobs, in this order:"
     end
 
-    test "names the walkthrough and wide pass sizes of a macos_app pass, from the playbook's settings" do
+    test "names the QA target of a macos_app pass, from the playbook's settings, and when to judge another" do
       macos_app = fn settings ->
         [playbook] =
           Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => Map.merge(%{"build" => "make app", "app" => "build/App.app"}, settings)}})
@@ -1124,23 +1128,26 @@ defmodule SymphonyElixir.QaAgentTest do
       end
 
       prompt = macos_app.(%{})
-      assert prompt =~ ~s(Window sizes: - Walkthrough: 1366×768 pt. After each `qa_launch_app`)
-      assert prompt =~ ~s(call `qa_resize_window` with `pass: "walkthrough"`)
-      assert prompt =~ "- Wide pass: 2560×1440 pt, the screen the window fills."
+      assert prompt =~ "The QA target: dark appearance, a 2560×1440 pt window."
+      assert prompt =~ "`qa_launch_app` and `qa_gallery` draw the app dark when you name no `appearance`."
+      assert prompt =~ "call `qa_resize_window` with no size: it sets the window to 2560×1440 pt."
+      assert prompt =~ "only when its ask or plan names light mode, a small window or a specific size"
+      assert prompt =~ "On every page the walkthrough visits, call `qa_check_app` with the page's name"
+      refute prompt =~ "Wide pass"
 
-      prompt = macos_app.(%{"window_width" => 1440, "window_height" => 900, "wide_pass_width" => 3008, "wide_pass_height" => 1692})
-      assert prompt =~ "Walkthrough: 1440×900 pt."
-      assert prompt =~ "Wide pass: 3008×1692 pt"
+      prompt = macos_app.(%{"window_width" => 1440, "window_height" => 900, "appearance" => "light"})
+      assert prompt =~ "The QA target: light appearance, a 1440×900 pt window."
+      assert prompt =~ "only when its ask or plan names dark mode"
 
-      # A playbook built without the sizes takes the defaults; a pass with no macos_app names none.
-      assert QaAgent.prompt(job(%{playbooks: [%{kind: "macos_app", paths: [], prompt: "Drive the app."}]}), nil) =~ "Walkthrough: 1366×768 pt."
-      refute QaAgent.prompt(job(), nil) =~ "Window sizes:"
+      # A playbook built without the target takes the defaults; a pass with no macos_app names none.
+      assert QaAgent.prompt(job(%{playbooks: [%{kind: "macos_app", paths: [], prompt: "Drive the app."}]}), nil) =~ "dark appearance, a 2560×1440 pt window"
+      refute QaAgent.prompt(job(), nil) =~ "The QA target:"
     end
 
     test "the viewport passes name the layout defect rule and the finding format" do
-      [_before, jobs] = QaAgent.prompt(job(), nil) |> String.replace(~r/\s+/, " ") |> String.split("3. The wide pass", parts: 2)
+      [_before, jobs] = QaAgent.prompt(job(), nil) |> String.replace(~r/\s+/, " ") |> String.split("3. The other checks of the running app", parts: 2)
 
-      assert jobs =~ "One pass per viewport the repo names (today: the wide pass)."
+      assert jobs =~ "(for the Mac app, at its QA target: `qa_check_app` on every page the walkthrough visits, for a hang or a crash)"
 
       assert jobs =~
                "A defect is content clipped with no way to reach it, or a mechanism (scroll, collapse, resize) that doesn't work."
@@ -1152,30 +1159,40 @@ defmodule SymphonyElixir.QaAgentTest do
       assert epic =~ "A finding names the viewport, the screen, the mechanism expected, the actual, and the evidence file."
     end
 
-    test "each UI playbook runs the Design check in light and dark between the walkthrough and its other checks" do
+    test "each UI playbook runs the Design check between the walkthrough and its other checks; the macos_app one at the QA target" do
       macos_app = %{build: "make app", app: "build/App.app"}
       android_app = %{build: "./gradlew assembleDebug", apk_path: "app.apk", application_ids: ["com.example.app"]}
       config = %{android: %{avd: "Pixel_3a_API_34"}, playbooks: %{macos_app: macos_app, android_app: android_app}}
       playbooks = Map.new(Selection.playbooks(config, dev_server?: true), &{&1.kind, String.replace(&1.prompt, ~r/\s+/, " ")})
 
-      for kind <- ["macos_app", "web", "android_app"] do
+      for kind <- ["web", "android_app"] do
         prompt = Map.fetch!(playbooks, kind)
 
         assert prompt =~
                  ~r/QA does three things, in this order: \(a\) the walkthrough steps marked `Proved by: QA`.*\(b\) the `Design check` of every UI deliverable, by sight, in light and dark.*\(c\)/
 
-        assert prompt =~ "named `Design check: <deliverable>`", "#{kind} playbook must name the Design check step"
-        assert prompt =~ "the design it compared with", "#{kind} playbook must name the design compared with"
-        assert prompt =~ "the design system alone", "#{kind} playbook must fall back to the design system"
         assert prompt =~ ~r/A `Design check` whose light or dark screenshot visibly differs from the design .* is a failing step/
       end
 
+      for kind <- ["macos_app", "web", "android_app"] do
+        prompt = Map.fetch!(playbooks, kind)
+        assert prompt =~ "named `Design check: <deliverable>`", "#{kind} playbook must name the Design check step"
+        assert prompt =~ "the design it compared with", "#{kind} playbook must name the design compared with"
+        assert prompt =~ "the design system alone", "#{kind} playbook must fall back to the design system"
+      end
+
       macos = Map.fetch!(playbooks, "macos_app")
-      assert macos =~ ~s(`qa_launch_app` with `appearance: "dark"`)
-      assert macos =~ ~s(do the same with `appearance: "light"`)
+
+      assert macos =~
+               ~r/QA does three things, in this order: \(a\) the walkthrough steps marked `Proved by: QA`.*\(b\) the `Design check` of every UI deliverable, by sight.*\(c\) nothing more: all of it at the QA target/
+
+      assert macos =~ "in the QA target's appearance at its window size"
+      assert macos =~ "Judge another appearance or size only when the ticket is about it"
       assert macos =~ "Judge the menu from that screenshot, not only from the tree"
       assert macos =~ "`qa_open_status_menu`, then `qa_screenshot` with the `window_id` it returned"
-      assert macos =~ ~r/8\. \*\*Design check\.\*\*.* 9\. \*\*Wide pass\.\*\*/
+      assert macos =~ ~r/8\. \*\*Design check\.\*\*.* 9\. \*\*Nothing on screen to judge\.\*\*/
+      refute macos =~ "Wide pass"
+      refute macos =~ ~s(do the same with `appearance: "light"`)
 
       assert Map.fetch!(playbooks, "android_app") =~ "Dark: `qa_android_dark_mode` `on`"
       assert Map.fetch!(playbooks, "web") =~ "await page.emulateMedia({ colorScheme: 'dark' })"
@@ -2153,7 +2170,7 @@ defmodule SymphonyElixir.QaAgentTest do
       refute_received {:qa_session_started, _worktree, _opts}
     end
 
-    test "reports a pass whose wide pass the QA screen limited as blocked, for a person" do
+    test "reports a pass whose QA target window the QA screen limited as blocked, for a person" do
       [macos_app] =
         Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app"}}})
 
@@ -2164,8 +2181,8 @@ defmodule SymphonyElixir.QaAgentTest do
           with_log(fn ->
             QaAgent.run(job(%{playbooks: [macos_app]}), Config.settings!(),
               git: fake_git(),
-              qa_agent_module: WidePassSession,
-              qa_driver_opts: qa_vm_opts(wide_pass_host(screen)) ++ [git: fn _args, _cwd -> {"", 0} end]
+              qa_agent_module: TargetSession,
+              qa_driver_opts: qa_vm_opts(screen_host(screen)) ++ [git: fn _args, _cwd -> {"", 0} end]
             )
           end)
 
@@ -2175,38 +2192,38 @@ defmodule SymphonyElixir.QaAgentTest do
       assert {:ok, %{result: %{verdict: :blocked, reason: reason, needs_person: true, steps: [%{name: "symphony check"}]}}} =
                run.({1024, 768}, {:ok, %{result: FakeSession.pass_json()}})
 
-      assert reason =~ "the wide pass was limited: the QA screen is 1024×768 pt (1024×675 pt usable)"
-      assert reason =~ "under the 2560×1440 pt screen the wide pass needs, so the app's window reached only 1024×675 pt"
+      assert reason =~ "the pass was limited: the QA screen is 1024×768 pt (1024×675 pt usable)"
+      assert reason =~ "under the 2560×1440 pt QA target window, so the app's window reached only 1024×675 pt"
       assert reason =~ "`tart set <vm> --display 2560x1440pt`"
-      assert Report.render(%{verdict: :blocked, reason: reason, sha: @sha, target_state: "Human Review"}) =~ "Reason: the wide pass was limited"
+      assert Report.render(%{verdict: :blocked, reason: reason, sha: @sha, target_state: "Human Review"}) =~ "Reason: the pass was limited"
 
-      # A 1920×1200 screen, enough for the old 1400×900 wide pass, is under the 2560×1440 one.
+      # A 1920×1200 screen is under the 2560×1440 target.
       small_screen_run = run.({1920, 1200}, {:ok, %{result: FakeSession.pass_json()}})
       assert {:ok, %{result: %{verdict: :blocked, reason: reason}}} = small_screen_run
-      assert reason =~ "the QA screen is 1920×1200 pt (1920×1107 pt usable), under the 2560×1440 pt screen the wide pass needs"
+      assert reason =~ "the QA screen is 1920×1200 pt (1920×1107 pt usable), under the 2560×1440 pt QA target window"
 
       assert {:ok, %{result: %{verdict: :pass}}} = run.({2560, 1440}, {:ok, %{result: FakeSession.pass_json()}})
 
       blocked_json =
         Jason.encode!(%{
           verdict: "blocked",
-          summary: "The wide pass was limited.",
-          reason: "the Wide pass step is blocked: the screen is 1024×768",
-          steps: [%{name: "Wide pass", status: "blocked", details: "qa_resize_window returned limited: true at 1024×675 pt."}],
+          summary: "The pass was limited.",
+          reason: "the Walk step is blocked: the screen is 1024×768",
+          steps: [%{name: "Walk", status: "blocked", details: "qa_resize_window returned limited: true at 1024×675 pt."}],
           findings: []
         })
 
-      assert {:ok, %{result: %{verdict: :blocked, reason: blocked_reason, needs_person: true, steps: [%{name: "Wide pass"}]}}} =
+      assert {:ok, %{result: %{verdict: :blocked, reason: blocked_reason, needs_person: true, steps: [%{name: "Walk"}]}}} =
                run.({1024, 768}, {:ok, %{result: blocked_json}})
 
-      assert blocked_reason =~ "the Wide pass step is blocked: the screen is 1024×768; the wide pass was limited: the QA screen is 1024×768 pt"
+      assert blocked_reason =~ "the Walk step is blocked: the screen is 1024×768; the pass was limited: the QA screen is 1024×768 pt"
 
       fail_json = Jason.encode!(%{verdict: "fail", summary: "Decide crashed.", steps: [], findings: ["Decide crashes at 1024 pt"]})
       assert {:ok, %{result: %{verdict: :fail} = failed}} = run.({1024, 768}, {:ok, %{result: fail_json}})
       refute Map.has_key?(failed, :needs_person)
     end
 
-    test "reports a macos_app pass that never resized a window as inconclusive, since its wide pass did not run" do
+    test "reports a macos_app pass that never resized a window to the QA target as inconclusive" do
       [macos_app] =
         Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app"}}})
 
@@ -2223,9 +2240,9 @@ defmodule SymphonyElixir.QaAgentTest do
       assert {:ok, %{result: %{verdict: :inconclusive, reason: reason, steps: [%{name: "symphony check"}]} = inconclusive}} =
                run.({:ok, %{result: FakeSession.pass_json()}})
 
-      assert reason =~ "the wide pass did not run: no `qa_resize_window` call resized the app's window"
+      assert reason =~ "the app was not judged at the QA target: no `qa_resize_window` call set its window"
       refute Map.has_key?(inconclusive, :needs_person)
-      assert Report.render(%{verdict: :inconclusive, reason: reason, sha: @sha, target_state: "QA"}) =~ "Reason: the wide pass did not run"
+      assert Report.render(%{verdict: :inconclusive, reason: reason, sha: @sha, target_state: "QA"}) =~ "Reason: the app was not judged at the QA target"
 
       fail_json = Jason.encode!(%{verdict: "fail", summary: "The app crashed at launch.", steps: [], findings: ["App exits at launch"]})
       assert {:ok, %{result: %{verdict: :fail}}} = run.({:ok, %{result: fail_json}})
@@ -2234,7 +2251,7 @@ defmodule SymphonyElixir.QaAgentTest do
       assert {:ok, %{result: %{verdict: :pass}}} = QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession)
     end
 
-    test "a macos_app pass with nothing on screen to judge owes no wide pass and carries what it did with the app" do
+    test "a macos_app pass with nothing on screen to judge owes no target resize and carries what it did with the app" do
       [macos_app] =
         Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app"}}})
 
@@ -2247,7 +2264,7 @@ defmodule SymphonyElixir.QaAgentTest do
             QaAgent.run(job(%{playbooks: [macos_app]}), Config.settings!(),
               git: fake_git(),
               qa_agent_module: session,
-              qa_driver_opts: qa_vm_opts(wide_pass_host({2560, 1440})) ++ [git: fn _args, _cwd -> {"", 0} end]
+              qa_driver_opts: qa_vm_opts(screen_host({2560, 1440})) ++ [git: fn _args, _cwd -> {"", 0} end]
             )
           end)
 
@@ -2288,7 +2305,7 @@ defmodule SymphonyElixir.QaAgentTest do
           QaAgent.run(job(%{playbooks: [Map.put(macos_app, :scope, :none)]}), Config.settings!(),
             git: fake_git(),
             qa_agent_module: AppCheckSession,
-            qa_driver_opts: qa_vm_opts(wide_pass_host({2560, 1440})) ++ [git: fn _args, _cwd -> {"", 0} end]
+            qa_driver_opts: qa_vm_opts(screen_host({2560, 1440})) ++ [git: fn _args, _cwd -> {"", 0} end]
           )
         end)
 
@@ -2347,7 +2364,7 @@ defmodule SymphonyElixir.QaAgentTest do
       refute Map.has_key?(failed, :cause)
     end
 
-    test "holds an epic review to the wide pass only when it launched an app" do
+    test "holds an epic review to the QA target only when it launched an app" do
       [macos_app] =
         Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app"}}})
 
@@ -2360,27 +2377,27 @@ defmodule SymphonyElixir.QaAgentTest do
             QaAgent.run(epic_job, Config.settings!(),
               git: fake_git(),
               qa_agent_module: session,
-              qa_driver_opts: qa_vm_opts(wide_pass_host({2560, 1440})) ++ [git: fn _args, _cwd -> {"", 0} end]
+              qa_driver_opts: qa_vm_opts(screen_host({2560, 1440})) ++ [git: fn _args, _cwd -> {"", 0} end]
             )
           end)
 
         result
       end
 
-      # A backend-only epic: the review never launched the app, so there was no window to widen.
+      # A backend-only epic: the review never launched the app, so there was no window to size.
       assert {:ok, %{result: %{verdict: :pass}}} = run.(FakeSession)
 
       assert {:ok, %{result: %{verdict: :blocked, reason: reason}}} = run.(LaunchOnlySession)
-      assert reason =~ "the wide pass did not run: no `qa_resize_window` call resized the app's window"
+      assert reason =~ "the app was not judged at the QA target: no `qa_resize_window` call set its window"
 
-      assert {:ok, %{result: %{verdict: :pass}}} = run.(WidePassSession)
+      assert {:ok, %{result: %{verdict: :pass}}} = run.(TargetSession)
 
       # The epic review judges the merged result: an answer of nothing to judge on screen does not
-      # excuse its wide pass, and its prompt does not offer one.
+      # excuse its target resize, and its prompt does not offer one.
       scope_none = Jason.encode!(%{verdict: "pass", summary: "Nothing to judge.", scope: "none", reason: "no screen"})
       Application.put_env(:symphony_elixir, :qa_test_turn_result, {:ok, %{result: scope_none}})
       assert {:ok, %{result: %{verdict: :blocked, reason: reason}}} = run.(LaunchOnlySession)
-      assert reason =~ "the wide pass did not run"
+      assert reason =~ "the app was not judged at the QA target"
 
       assert {:ok, %{result: %{verdict: :pass}}} =
                (fn ->
@@ -2389,7 +2406,7 @@ defmodule SymphonyElixir.QaAgentTest do
                       QaAgent.run(%{epic_job | playbooks: [Map.put(macos_app, :scope, :none)]}, Config.settings!(),
                         git: fake_git(),
                         qa_agent_module: FakeSession,
-                        qa_driver_opts: qa_vm_opts(wide_pass_host({2560, 1440})) ++ [git: fn _args, _cwd -> {"", 0} end]
+                        qa_driver_opts: qa_vm_opts(screen_host({2560, 1440})) ++ [git: fn _args, _cwd -> {"", 0} end]
                       )
                     end)
 

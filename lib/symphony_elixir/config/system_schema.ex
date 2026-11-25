@@ -151,11 +151,10 @@ defmodule SymphonyElixir.Config.SystemSchema do
   # `auto_review.playbooks` is a free-form map of playbook kinds, one setting; these keys under it
   # have a control in the app too (`SymphonyElixir.PlaybookSettings` checks them).
   @playbook_key_paths ~w(
+    auto_review.playbooks.macos_app.appearance
     auto_review.playbooks.macos_app.dev_server
     auto_review.playbooks.macos_app.dev_server_port
     auto_review.playbooks.macos_app.launch_env
-    auto_review.playbooks.macos_app.wide_pass_height
-    auto_review.playbooks.macos_app.wide_pass_width
     auto_review.playbooks.macos_app.window_height
     auto_review.playbooks.macos_app.window_width
   )

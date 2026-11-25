@@ -1164,10 +1164,10 @@ defmodule SymphonyElixir.QaVerificationTest do
     test "a block that names its own cause stays blocked, whatever its unprovable steps" do
       steps = [step("Start a run", "pass"), step("Watch the run on Android", "unprovable", "the Android playbook is not in this pass")]
 
-      # A wide pass a small QA screen limited, the ticket that already covers the gap, a QA tool's own
+      # A pass a small QA screen limited, the ticket that already covers the gap, a QA tool's own
       # failure, and the project's server on a repo that has not ruled it out.
       causes = [
-        %{needs_person: true, reason: "the QA screen is too small for the wide pass"},
+        %{needs_person: true, reason: "the QA screen is too small for the QA target window"},
         %{covered_by: "TP-716"},
         %{cause: {:qa_worker, "qa_worker_unsafe"}},
         %{needs_dev_server: true}

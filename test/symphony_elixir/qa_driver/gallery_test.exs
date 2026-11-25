@@ -60,10 +60,10 @@ defmodule SymphonyElixir.QaDriver.GalleryTest do
 
   describe "arguments/1" do
     test "takes names and a width" do
-      assert Gallery.arguments(%{}) == {:ok, %{entry: nil, variation: nil, width: nil}}
+      assert Gallery.arguments(%{}) == {:ok, %{entry: nil, variation: nil, width: nil, appearance: nil}}
 
-      assert Gallery.arguments(%{"entry" => "home", "variation" => "home-busy_2.x", "width" => "1100"}) ==
-               {:ok, %{entry: "home", variation: "home-busy_2.x", width: "1100"}}
+      assert Gallery.arguments(%{"entry" => "home", "variation" => "home-busy_2.x", "width" => "1100", "appearance" => "dark"}) ==
+               {:ok, %{entry: "home", variation: "home-busy_2.x", width: "1100", appearance: "dark"}}
 
       for width <- ~w(laptop desktop 800 25600) do
         assert {:ok, %{width: ^width}} = Gallery.arguments(%{"entry" => "home", "width" => width})
@@ -85,6 +85,7 @@ defmodule SymphonyElixir.QaDriver.GalleryTest do
             %{"entry" => "home", "width" => "99"},
             %{"entry" => "home", "width" => "123456"},
             %{"entry" => "home", "width" => 1440},
+            %{"entry" => "home", "appearance" => "sepia"},
             %{"variation" => "home-busy"},
             %{"width" => "laptop"}
           ] do
@@ -231,6 +232,14 @@ defmodule SymphonyElixir.QaDriver.GalleryTest do
       config = config(context, entries_then(&draw(&1, ["button-1-light.png"])))
       assert {:ok, %{"files" => [%{"path" => "qa-evidence/button-1-light.png"}]}} = Gallery.shoot(config, @gallery, %{entry: "button", variation: nil, width: nil})
       assert_received {:cmd, @gallery, ["--shot", "button", "--out", _out], _opts}
+
+      # One appearance alone when the call names it.
+      dark = config(context, entries_then(&draw(&1, ["button-1-dark.png"])))
+
+      assert {:ok, %{"files" => [%{"path" => "qa-evidence/button-1-dark.png"}]}} =
+               Gallery.shoot(dark, @gallery, %{entry: "button", variation: nil, width: nil, appearance: "dark"})
+
+      assert_received {:cmd, @gallery, ["--shot", "button", "--appearance", "dark", "--out", _out], _opts}
 
       assert {"invalid_arguments", message} = failure(Gallery.shoot(config, @gallery, %{entry: "home", variation: nil, width: "laptop"}))
       assert message == "home is a screen: pass `variation`, one of home-empty, home-busy."

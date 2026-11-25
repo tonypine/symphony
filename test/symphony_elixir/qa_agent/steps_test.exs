@@ -239,7 +239,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       assert tokens.total_tokens == 15
 
       turns = turns()
-      assert Enum.map(turns, & &1.id) == ["plan", "walk_1", "walk_2", "design_check", "wide_pass", "review"]
+      assert Enum.map(turns, & &1.id) == ["plan", "walk_1", "walk_2", "design_check", "review"]
 
       completed = events("step.completed")
 
@@ -251,7 +251,6 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
                {"walk_1", "passed"},
                {"walk_2", "passed"},
                {"design_check", "passed"},
-               {"wide_pass", "passed"},
                {"quit", "passed"},
                {"attach", "passed"},
                {"review", "passed"}
@@ -278,7 +277,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       assert by_step["review"].verdict_summary == "Every step behaved."
       refute Map.has_key?(by_step["build"], :result)
 
-      [plan_turn, walk_1, _walk_2, design, _wide, review] = turns
+      [plan_turn, walk_1, _walk_2, design, review] = turns
       assert plan_turn.prompt =~ "You plan this QA pass"
       assert plan_turn.prompt =~ "Screen rules here."
       assert plan_turn.prompt =~ "- Step 2: Step 2: open page 2."
@@ -296,7 +295,9 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       assert review.turn[:resume_session_id] == "session-plan"
       refute Keyword.has_key?(walk_1.turn, :resume_session_id)
 
+      # Launched in the QA target's appearance (the driver's default) and sized to its window.
       assert_received {:tool, _driver, "qa_launch_app", %{}}
+      assert_received {:tool, _driver, "qa_resize_window", %{"pid" => 4242}}
       assert_received {:tool, _driver, "qa_check_app", %{"pid" => 4242, "page" => "launch"}}
       assert_received {:tool, _driver, "qa_quit_app", %{"pid" => 4242}}
     end
@@ -311,7 +312,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       assert second.turn[:resume_session_id] == "session-plan"
     end
 
-    test "with nothing on screen to judge still launches and checks the app, skips the design check and wide pass, and passes with scope none",
+    test "with nothing on screen to judge still launches and checks the app, skips the design check, and passes with scope none",
          ctx do
       answers(%{"plan" => [{:write, plan([], %{needs_app: false, gallery: []})}], "review" => [{:verdict, @pass}]})
 
@@ -323,7 +324,6 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       outcomes = Map.new(events("step.completed"), &{&1.payload.step_id, &1.payload})
       assert %{outcome: "passed"} = outcomes["launch"]
       assert outcomes["design_check"].reason =~ "the plan found nothing on screen to judge"
-      assert outcomes["wide_pass"].reason =~ "the plan found nothing on screen to judge"
 
       # A fail stays a fail, with no scope.
       answers(%{"plan" => [{:write, plan([], %{needs_app: false, gallery: []})}], "review" => [{:verdict, @fail}]})
@@ -581,7 +581,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
 
       assert {:ok, %{result: %{verdict: :pass}}} = run(ctx, journey([1, 2, 3, 4]))
       turns = turns()
-      assert Enum.map(turns, & &1.id) == ["plan", "walk_1_2_3", "walk_4", "design_check", "wide_pass", "review"]
+      assert Enum.map(turns, & &1.id) == ["plan", "walk_1_2_3", "walk_4", "design_check", "review"]
 
       group = Enum.find(turns, &(&1.id == "walk_1_2_3"))
       assert group.prompt =~ "You walk 3 walkthrough steps in this one session (steps 1, 2, 3)"
@@ -1212,7 +1212,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       boundary = fn step -> send(test, {:boundary, step.id}) && :ok end
 
       assert {:ok, %{result: %{verdict: :pass}}} = run(ctx, %{}, qa_boundary: boundary)
-      assert boundaries() == ~w(build plan launch walk_1 walk_2 design_check wide_pass quit attach review)
+      assert boundaries() == ~w(build plan launch walk_1 walk_2 design_check quit attach review)
       assert RunStore.get_qa_pass("default", @issue_id) == nil
     end
 
@@ -1244,17 +1244,17 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
 
       # Only the step the restart stopped runs again; no finished step is walked again.
       turns = turns()
-      assert Enum.map(turns, & &1.id) == ["design_check", "wide_pass", "review"]
+      assert Enum.map(turns, & &1.id) == ["design_check", "review"]
 
       # The app is built and launched again on the new QA session: that walks no step.
       assert_received {:tool, _driver, "qa_build", _args}
       assert_received {:tool, _driver, "qa_launch_app", %{}}
 
       resumed = events("step.completed") |> Enum.filter(&(&1.run_id == "qa-steps-run-2")) |> Enum.map(& &1.payload.step_id)
-      assert resumed == ["build", "launch", "design_check", "wide_pass", "quit", "attach", "review"]
+      assert resumed == ["build", "launch", "design_check", "quit", "attach", "review"]
 
       # The steps after it are given what they would have had: the plan, the walk results and the evidence.
-      [design, _wide, review] = turns
+      [design, review] = turns
       assert design.prompt =~ ~s("entry": "button")
       assert design.prompt =~ "Symphony launched it as PID 4242"
       assert review.prompt =~ "Page shows its title"
