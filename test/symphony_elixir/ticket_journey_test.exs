@@ -213,7 +213,9 @@ defmodule SymphonyElixir.TicketJourneyTest do
     end
 
     test "the checks QA still walks carry the state they are walked on, as the plan holds them" do
-      assert TicketJourney.walked_checks(issue()) == []
+      # The groomed plan's checks carry no walked-on state until a plan names it.
+      assert [%{id: "c2"} = c2, %{id: "c4"}] = TicketJourney.walked_checks(issue())
+      refute Map.has_key?(c2, :walked_on)
       assert TicketJourney.walked_checks(nil) == []
 
       walked_on = [%{path: "priv/qa_seed/demo/seed.json", holds: "present"}]

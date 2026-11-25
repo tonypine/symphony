@@ -36,7 +36,9 @@ defmodule SymphonyElixir.QaStateTest do
       layers: ["logic"],
       summary: "Check the seed.",
       text: "Check the seed.",
-      checks: [%{id: "c0", kind: "outcome", statement: "It works.", proof: "test"} | checks],
+      # A first plan numbers its checks in order, so the QA checks keep the ids the test gives them
+      # and the outcome check comes last.
+      checks: checks ++ [%{id: "c#{length(checks) + 1}", kind: "outcome", statement: "It works.", proof: "test"}],
       size: %{tokens: 1_000, runs: 1}
     }
 
@@ -162,7 +164,7 @@ defmodule SymphonyElixir.QaStateTest do
     end
 
     test "a head git cannot read is an error, and so is a base branch it cannot find for an added path" do
-      plan!([qa_check("c1", %{walked_on: [walked("priv/qa_seed/demo/seed.json", "present")]})])
+      plan!([qa_check("c1", %{walked_on: [walked("priv/qa_seed/demo/seed.json", "added")]})])
       not_git = Path.join(System.tmp_dir!(), "qa-state-none-#{System.unique_integer([:positive])}")
       File.mkdir_p!(not_git)
       on_exit(fn -> File.rm_rf(not_git) end)
@@ -170,7 +172,6 @@ defmodule SymphonyElixir.QaStateTest do
       assert {:error, {:git_failed, _status, _output}} = QaState.judge(issue(), not_git, "abc123")
 
       {dir, head} = workspace!(%{}, origin: false)
-      plan!([qa_check("c1", %{walked_on: [walked("priv/qa_seed/demo/seed.json", "added")]})])
       assert {:error, {:git_failed, _status, _output}} = QaState.judge(issue(), dir, head)
     end
   end
