@@ -464,7 +464,15 @@ defmodule SymphonyElixir.DirectorMoves do
     case held_answer_move(question) do
       :unblock -> unblock(issue, opts, true)
       :restart -> do_move(:restart, issue, %{reason: "You answered \"#{DispatchLoop.option_label(:restart)}\" to: #{question.title}"}, opts)
-      :keep -> if to_conductor?(question, conductor?), do: to_conductor(issue, question, opts), else: finish(:decide, issue, nil, nil, opts)
+      :keep -> keep_or_conduct(issue, question, conductor?, opts)
+    end
+  end
+
+  defp keep_or_conduct(issue, question, conductor?, opts) do
+    if to_conductor?(question, conductor?) do
+      to_conductor(issue, question, opts)
+    else
+      finish(:decide, issue, nil, nil, opts)
     end
   end
 

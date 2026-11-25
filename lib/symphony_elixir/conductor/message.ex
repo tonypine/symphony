@@ -75,9 +75,10 @@ defmodule SymphonyElixir.Conductor.Message do
 
   require Logger
 
-  alias SymphonyElixir.{Conductor, Config, DirectorMoves, Messages, Orchestrator, Pauses, Questions, RunStore, TicketEvents, TicketPlan, TicketState}
+  alias SymphonyElixir.{Conductor, Config, DirectorMoves, Messages, Orchestrator, Pauses, Questions}
   alias SymphonyElixir.Conductor.{Answer, Facts, Steer, Tree, Watch}
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.{RunStore, TicketEvents, TicketPlan, TicketState}
   alias SymphonyElixir.TicketEvents.Event
 
   @junction "message"
@@ -540,7 +541,12 @@ defmodule SymphonyElixir.Conductor.Message do
   @spec settle(map(), term(), atom(), Issue.t(), keyword()) :: :ok
   def settle(%{junction: @junction, message: %{event: %Event{type: "message.sent"}, finished: false}} = plan, {:ok, answer, _tokens}, held, %Issue{} = issue, opts) do
     ids = answered_questions(plan)
-    if ids != [] and reading?({:ticket, plan.repo_key, plan.issue_id}), do: settle_answer(plan, ids, answer, held, issue, opts), else: :ok
+
+    if ids != [] and reading?({:ticket, plan.repo_key, plan.issue_id}) do
+      settle_answer(plan, ids, answer, held, issue, opts)
+    else
+      :ok
+    end
   end
 
   def settle(_plan, _outcome, _held, _issue, _opts), do: :ok
@@ -582,13 +588,17 @@ defmodule SymphonyElixir.Conductor.Message do
     ticket = {:ticket, repo_key, issue_id}
 
     if reading?(ticket) do
-      for id <- ids do
-        with {:error, reason} <- Questions.reopen(ticket, id, by: @symphony), do: Logger.warning("Could not ask question #{id} again issue_id=#{issue_id}: #{inspect(reason)}")
-      end
-
+      Enum.each(ids, &reopen(ticket, issue_id, &1))
       clear_reading(ticket)
     else
       :ok
+    end
+  end
+
+  defp reopen(ticket, issue_id, id) do
+    case Questions.reopen(ticket, id, by: @symphony) do
+      {:error, reason} -> Logger.warning("Could not ask question #{id} again issue_id=#{issue_id}: #{inspect(reason)}")
+      _ok -> :ok
     end
   end
 
@@ -633,10 +643,17 @@ defmodule SymphonyElixir.Conductor.Message do
       type == "message.sent" and not left? ->
         text = "The Conductor could not read this message (#{why}), #{@tries} times, so nothing was done with it. #{given_up(event)}"
         record(plan, "conductor.update", %{junction: @junction, text: Facts.fit(text, Answer.update_max()), refs: []}, run_id: run_id, parent: id, idempotency: "conductor.update:unanswered:#{id}")
-        with question_id when is_binary(question_id) <- field(event, :question_id), do: ask_again(plan.repo_key, plan.issue_id, [question_id])
+        ask_again_answered(plan, event)
 
       true ->
         record(plan, "note", %{text: Facts.fit(failed(type, why, left?), 4_000), status: true}, run_id: run_id, idempotency: "#{@try_key}#{id}:#{try}")
+    end
+  end
+
+  defp ask_again_answered(plan, event) do
+    case field(event, :question_id) do
+      question_id when is_binary(question_id) -> ask_again(plan.repo_key, plan.issue_id, [question_id])
+      _none -> :ok
     end
   end
 

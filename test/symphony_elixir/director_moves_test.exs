@@ -2887,7 +2887,9 @@ defmodule SymphonyElixir.DirectorMovesTest do
     end
 
     defp answer_message!(question, words) do
-      assert [%{payload: %{text: ^words, question_id: question_id}} = message] = RunStore.list_ticket_events("pr", types: ["message.sent"])
+      assert [%{payload: %{text: ^words, question_id: question_id}} = message] =
+               RunStore.list_ticket_events("pr", types: ["message.sent"])
+
       assert question_id == question.id
       message
     end
@@ -3040,7 +3042,8 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert {:ok, %{reasons: [%{kind: :question}]}} = Pauses.get(@held)
       stop_supervised!(FakeOrchestrator)
 
-      failing = with_conductor(opts, reading_turn(%{"resume" => true}), run_again: fn "MOT-40", _moves -> {:error, :linear_down} end)
+      run_again = fn "MOT-40", _moves -> {:error, :linear_down} end
+      failing = with_conductor(opts, reading_turn(%{"resume" => true}), run_again: run_again)
       log = capture_log(fn -> assert {:ok, %{conductor: true}} = DirectorMoves.answer_held_question("MOT-40", question.id, "Run it.", failing) end)
       assert log =~ "Conductor could not run the ticket again"
       assert %{state: :open} = Questions.find(@held, question.id)
