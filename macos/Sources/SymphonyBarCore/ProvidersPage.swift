@@ -440,11 +440,12 @@ public struct ProvidersPage: Equatable {
 }
 
 private extension String {
-    /// A usage window's place by its length: the 5 hours, the weeks, the month (OpenCode Go's, TP-1642), then any other.
+    /// A usage window's place by its length: the 5 hours, the week, its model weeks (Opus), the month (OpenCode Go's, TP-1642), then any other.
     var windowRank: Int {
         if self == "five_hour" { return 0 }
-        if hasPrefix(ProvidersPage.weekWindow) { return 1 }
-        if self == ProvidersPage.monthWindow { return 2 }
-        return 3
+        if self == ProvidersPage.weekWindow { return 1 }
+        if hasPrefix(ProvidersPage.weekWindow) { return 2 }
+        if self == ProvidersPage.monthWindow { return 3 }
+        return 4
     }
 }
