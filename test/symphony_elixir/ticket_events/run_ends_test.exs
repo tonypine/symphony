@@ -225,7 +225,9 @@ defmodule SymphonyElixir.TicketEvents.RunEndsTest do
     event
   end
 
-  # A step's run id is its agent's, not its payload's.
+  # A step's run id is its agent's, not its payload's; only a completed step has an outcome.
+  defp split("step.started", payload, minute), do: split("step.completed", Map.delete(payload, :outcome), minute)
+
   defp split("step." <> _rest, payload, minute),
     do: {Map.delete(payload, :run_id), actor: {:agent, payload.run_id, "implementation"}, at: minutes(minute)}
 
