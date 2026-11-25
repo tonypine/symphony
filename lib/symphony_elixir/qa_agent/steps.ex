@@ -115,7 +115,19 @@ defmodule SymphonyElixir.QaAgent.Steps do
 
   require Logger
 
-  alias SymphonyElixir.{AgentTelemetry, AgentTmpDir, Artifacts, Messages, PhaseSteps, PromptSafety, QaAgent, QaDriver, RunStore, TicketEvents}
+  alias SymphonyElixir.{
+    AgentTelemetry,
+    AgentTmpDir,
+    Artifacts,
+    Messages,
+    PhaseSteps,
+    PromptSafety,
+    QaAgent,
+    QaDriver,
+    RunStore,
+    TicketEvents
+  }
+
   alias SymphonyElixir.Conductor.Steer
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Phases
@@ -722,7 +734,15 @@ defmodule SymphonyElixir.QaAgent.Steps do
 
   defp record_pictures(state, %{"files" => files} = changes) do
     context = state.context
-    meta = &%{repo_key: context.repo_key, issue_id: context.issue_id, run_id: context.run_id, kind: "screenshot", label: Path.basename(&1)}
+
+    meta =
+      &%{
+        repo_key: context.repo_key,
+        issue_id: context.issue_id,
+        run_id: context.run_id,
+        kind: "screenshot",
+        label: Path.basename(&1)
+      }
 
     ids =
       for path <- files, {:ok, %{id: id}} <- [Artifacts.ingest(Path.join(state.worktree, path), meta.(path), roots: [state.worktree])], do: id

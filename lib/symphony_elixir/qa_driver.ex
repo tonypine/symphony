@@ -818,8 +818,8 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
-  # Without an entry: what the gallery shows. A picture is drawn at the QA target (its appearance, and its window's width for a screen) unless
-  # the call names another.
+  # Without an entry: what the gallery shows. A picture is drawn at the QA target (its appearance,
+  # and its window's width for a screen) unless the call names another.
   defp run_tool("qa_gallery", driver, config, args) do
     with {:ok, arguments} <- Gallery.arguments(args),
          {:ok, gallery} <- gallery(driver, config) do

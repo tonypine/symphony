@@ -204,7 +204,9 @@ defmodule SymphonyElixir.QaDriver.GalleryTest do
     end
 
     test "fails when the gallery fails or draws nothing", context do
-      assert {"qa_gallery_failed", message} = failure(Gallery.draw_all(drawing_host(context, %{@gallery => []}), @gallery, %{width: "1440", appearance: "light"}, "change"))
+      host = drawing_host(context, %{@gallery => []})
+      target = %{width: "1440", appearance: "light"}
+      assert {"qa_gallery_failed", message} = failure(Gallery.draw_all(host, @gallery, target, "change"))
       assert message =~ "drew no picture"
 
       failing =

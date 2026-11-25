@@ -45,7 +45,13 @@ defmodule SymphonyElixir.QaDriver.Gallery do
   What `compare/3` found, each a list of file names: `changed` and `new` are the ones to judge.
   `pngs` holds the change's pictures it read, by name: the QA host removes a file once it is read.
   """
-  @type comparison :: %{changed: [String.t()], new: [String.t()], removed: [String.t()], same: [String.t()], pngs: %{String.t() => binary()}}
+  @type comparison :: %{
+          changed: [String.t()],
+          new: [String.t()],
+          removed: [String.t()],
+          same: [String.t()],
+          pngs: %{String.t() => binary()}
+        }
 
   @type arguments :: %{
           entry: String.t() | nil,
@@ -125,7 +131,8 @@ defmodule SymphonyElixir.QaDriver.Gallery do
   a fresh folder in the pass's run directory whose name starts with `label`. A gallery built before
   it drew every entry in one run is refused, before it runs: it would open its window instead.
   """
-  @spec draw_all(map(), Path.t(), %{width: String.t(), appearance: String.t()}, String.t()) :: {:ok, drawn()} | tool_error()
+  @spec draw_all(map(), Path.t(), %{width: String.t(), appearance: String.t()}, String.t()) ::
+          {:ok, drawn()} | tool_error()
   def draw_all(config, gallery, %{width: width, appearance: appearance}, label) do
     out = Path.join(config.host_dir, "gallery-#{label}-#{System.unique_integer([:positive])}")
 
@@ -160,10 +167,11 @@ defmodule SymphonyElixir.QaDriver.Gallery do
   saved from there; any other is read from the QA host.
   """
   @spec save(map(), drawn(), [String.t()], %{String.t() => binary()}) :: {:ok, map()} | tool_error()
-  def save(config, drawn, names, pngs \\ %{})
-  def save(_config, _drawn, [], _pngs), do: {:ok, %{"files" => []}}
+  def save(config, drawn, names, pngs \\ %{}), do: save_drawn(config, drawn, names, pngs)
 
-  def save(config, %{dir: dir}, names, pngs) do
+  defp save_drawn(_config, _drawn, [], _pngs), do: {:ok, %{"files" => []}}
+
+  defp save_drawn(config, %{dir: dir}, names, pngs) do
     read = fn path -> with :error <- Map.fetch(pngs, Path.basename(path)), do: config.host.read.(path) end
 
     with {:ok, evidence} <- Checks.ensure_evidence_dir(config.worktree) do
@@ -276,15 +284,21 @@ defmodule SymphonyElixir.QaDriver.Gallery do
   # same. The change's pictures that differ are kept, by name.
   defp changed(config, head_dir, base_dir, names) do
     Enum.reduce_while(names, {:ok, %{}}, fn name, {:ok, changed} ->
-      with {:ok, head, png} <- decoded(config, Path.join(head_dir, name)),
-           {:ok, base, _png} <- decoded(config, Path.join(base_dir, name)) do
-        if Map.take(head, [:width, :height, :rgba]) == Map.take(base, [:width, :height, :rgba]),
-          do: {:cont, {:ok, changed}},
-          else: {:cont, {:ok, Map.put(changed, name, png)}}
-      else
+      case pair_changed(config, head_dir, base_dir, name) do
+        {:ok, :same} -> {:cont, {:ok, changed}}
+        {:ok, png} -> {:cont, {:ok, Map.put(changed, name, png)}}
         error -> {:halt, error}
       end
     end)
+  end
+
+  defp pair_changed(config, head_dir, base_dir, name) do
+    with {:ok, head, png} <- decoded(config, Path.join(head_dir, name)),
+         {:ok, base, _png} <- decoded(config, Path.join(base_dir, name)) do
+      if Map.take(head, [:width, :height, :rgba]) == Map.take(base, [:width, :height, :rgba]),
+        do: {:ok, :same},
+        else: {:ok, png}
+    end
   end
 
   defp decoded(config, path) do
