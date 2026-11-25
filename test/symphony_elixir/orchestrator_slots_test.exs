@@ -622,7 +622,12 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
       :ok = RunStore.add_dependency("b", "a", :done)
 
       # It had a run, so it keeps its slot.
-      kept = orchestrator_state(1) |> holding(epic) |> holding(waiting) |> Orchestrator.release_slots_for_test([epic, waiting, sibling], true)
+      kept =
+        orchestrator_state(1)
+        |> holding(epic)
+        |> holding(waiting)
+        |> Orchestrator.release_slots_for_test([epic, waiting, sibling], true)
+
       assert Enum.sort(Map.keys(kept.slot_holders)) == ["b", "e"]
 
       dispatched = Orchestrator.dispatch_chosen_issues_for_test([epic, waiting, sibling], kept)
