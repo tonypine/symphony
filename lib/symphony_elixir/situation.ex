@@ -17,7 +17,10 @@ defmodule SymphonyElixir.Situation do
   doesn't decide on, its phase's run), named with the decision's reason. Symphony's pause reads
   `paused_by_rule` naming that run; every slot in use reads `waiting_for_slot` naming it; a slot free
   reads "Starting" until the watcher finds the run never started (`SymphonyElixir.PrWatch.SilentWait`),
-  then "Not started", which Symphony tries again. Once the dispatch pass paused it for that
+  then "Not started", which Symphony tries again. "Starting" is said only of a ticket the dispatch
+  order would start (`live_facts/2`'s `order`, `SymphonyElixir.Dispatch.Order.place/1`): one the
+  order leaves waiting reads `waiting_for_slot` with its place in line and the ticket just ahead of
+  it, as the order read says, whatever the count of runs (a slot held with no run is not free). Once the dispatch pass paused it for that
   (`SymphonyElixir.PrWatch.StalledRun`), the pause itself reads "Not started" (`waiting_on_you`) and
   the Inbox lists it from that pause. "Waiting for a slot" is never said while a slot is free. A
   decision that waits on something else says what it waits on in its own words: CI or GitHub
@@ -66,7 +69,7 @@ defmodule SymphonyElixir.Situation do
   alias SymphonyElixir.AgentProviders
   alias SymphonyElixir.{CiWait, Config, PrDecision, RunStore, TicketEvents, TicketPullRequest, TicketState}
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.Dispatch.DependsOn
+  alias SymphonyElixir.Dispatch.{DependsOn, Order}
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.PrWatch.{SilentWait, StalledRun}
   alias SymphonyElixir.TicketEvents.{Event, Summary}
@@ -153,6 +156,7 @@ defmodule SymphonyElixir.Situation do
           retrying: %{optional(String.t()) => map()},
           slot_waiting: %{optional(String.t()) => map()},
           skipped: %{optional(String.t()) => map()},
+          order: %{optional(String.t()) => %{position: pos_integer(), wait: String.t() | nil, behind: String.t() | nil}},
           limit: pos_integer() | nil,
           symphony_pause: %{optional(:reason) => String.t() | nil, optional(:paused_at) => DateTime.t() | nil} | nil,
           max_tries: pos_integer(),
@@ -179,12 +183,23 @@ defmodule SymphonyElixir.Situation do
       retrying: by_issue(snapshot, :retrying, &retry_facts(&1, now)),
       slot_waiting: by_issue(snapshot, :slot_waiting, &Map.take(&1, [:since, :reason, :ci_wait])),
       skipped: by_issue(snapshot, :dispatch_skipped, &Map.take(&1, [:since, :reason, :rule, :gate, :provider, :reserve, :cause, :error, :sign_in_since])),
+      order: snapshot |> Map.get(:dispatch_order) |> waiting_in_line(),
       limit: snapshot |> Map.get(:concurrency) |> max_total(),
       symphony_pause: snapshot |> Map.get(:pause) |> symphony_pause(),
       max_tries: settings.watchdog.dispatch_loop_runs,
       terminal_states: settings.tracker.terminal_states
     }
   end
+
+  # The tickets the dispatch order leaves waiting in line (`SymphonyElixir.Dispatch.Order.place/1`),
+  # each with its place, why it waits and the ticket just ahead of it.
+  defp waiting_in_line(%{entries: entries}) when is_list(entries) do
+    for %{issue_id: issue_id, outcome: :waits, position: position} = entry <- entries, is_integer(position), into: %{} do
+      {issue_id, %{position: position, wait: Map.get(entry, :wait), behind: Map.get(entry, :behind)}}
+    end
+  end
+
+  defp waiting_in_line(_order), do: %{}
 
   defp max_total(%{max_total: max_total}), do: max_total
   defp max_total(_concurrency), do: nil
@@ -212,10 +227,12 @@ defmodule SymphonyElixir.Situation do
   """
   @spec live_signature(live_facts()) :: %{optional(String.t()) => tuple()}
   def live_signature(live) do
-    [live.running, live.retrying, live.slot_waiting, live.skipped]
+    order = Map.get(live, :order, %{})
+
+    [live.running, live.retrying, live.slot_waiting, live.skipped, order]
     |> Enum.flat_map(&Map.keys/1)
     |> Map.new(fn issue_id ->
-      slot = slot_signature(Map.get(live.slot_waiting, issue_id), live)
+      slot = slot_signature(Map.get(live.slot_waiting, issue_id), live) || place_signature(Map.get(order, issue_id))
       skip = Map.get(live.skipped, issue_id) || %{}
       retry = Map.get(live.retrying, issue_id)
 
@@ -229,6 +246,9 @@ defmodule SymphonyElixir.Situation do
   defp slot_signature(%{ci_wait: true}, _live), do: :ci
   defp slot_signature(_slot, %{symphony_pause: nil}), do: :slot
   defp slot_signature(_slot, _live), do: :paused
+
+  defp place_signature(nil), do: nil
+  defp place_signature(place), do: {:in_line, place.position, place.behind}
 
   @doc """
   The situation of `record` for a read, from its ledger and `live`. `records` are the ticket records
@@ -842,6 +862,9 @@ defmodule SymphonyElixir.Situation do
 
   defp due(run, ctx) do
     cond do
+      place = in_line(ctx) ->
+        base("waiting_for_slot", "Waiting for a slot", "#{next_words(run)} #{place_sentence(place)}", "Starts when a slot frees.", run.since)
+
       slots_full?(ctx) ->
         base("waiting_for_slot", "Waiting for a slot", "#{next_words(run)} #{slots_sentence(map_size(ctx.live.running), ctx.live.limit)}", "Starts when a slot frees.", run.since)
 
@@ -856,6 +879,13 @@ defmodule SymphonyElixir.Situation do
   end
 
   defp slots_full?(%{live: %{limit: limit, running: running}}), do: is_integer(limit) and map_size(running) >= limit
+
+  # The ticket's place when the dispatch order leaves it waiting: a ticket ahead of it takes the free
+  # slot, or every slot is taken, by a run or by a ticket that holds one with no run.
+  defp in_line(%{live: live, record: record}), do: live |> Map.get(:order, %{}) |> Map.get(record.issue_id)
+
+  defp place_sentence(%{position: 1, wait: wait}), do: "It is next in line: #{sentence(to_string(wait))}"
+  defp place_sentence(%{position: position, behind: behind}), do: "It is #{Order.ordinal(position)} in line, behind #{behind}."
 
   # The decision waits on something that is not a run, and says on what in its own words.
   defp undecided(%{owner: owner, reason: reason} = decision, _ctx) when owner in [:ci, :github] do
