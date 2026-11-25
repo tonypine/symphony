@@ -502,16 +502,18 @@ final class RunStepsTests: XCTestCase {
         XCTAssertEqual(ConversationFolds.showAll, "Show all events")
     }
 
-    /// The ticket-page fixture QA walks (`Fixtures/director-app/ticket-conversation`): SHOP-410's finished run, whose
-    /// code step's transcript holds a silent stretch, notes, a repeated failure, and its run now, live on that step.
-    func testTheConversationFixtureDrawsAFinishedStepAndTheRunNowAsConversations() throws {
-        let api = Self.fixtures.deletingLastPathComponent().appendingPathComponent("director-app/ticket-conversation/api/v1")
+    /// The ticket-page fixture QA walks (`Fixtures/director-app/ticket-steps`, written by Symphony's server): SHOP-410's
+    /// second run, whose code step's transcript holds a silent stretch, notes, a repeated failure, and its third run,
+    /// live on that step.
+    func testTheStepFixtureDrawsAFinishedStepAndTheRunNowAsConversations() throws {
+        let api = Self.fixtures.deletingLastPathComponent().appendingPathComponent("director-app/ticket-steps/api/v1")
         let history = try XCTUnwrap(TicketEventsPayload.decode(Data(contentsOf: api.appendingPathComponent("repos/web-shop/tickets/SHOP-410/events.json"))))
         let runNow = try XCTUnwrap(RunNow.decode(issue: Data(contentsOf: api.appendingPathComponent("SHOP-410.json"))))
         let runs = RunGroupModel.groups(history, runNow: runNow, reference: reference)
-        XCTAssertEqual(runs.map(\.state), [.passed, .running])
+        XCTAssertEqual(runs.map(\.state).suffix(2), [.passed, .running])
+        let latest = Array(runs.suffix(2))
 
-        let finished = try XCTUnwrap(runs[0].steps.first)
+        let finished = try XCTUnwrap(latest[0].steps.first)
         let transcript = try XCTUnwrap(finished.transcript)
         let saved = TranscriptLine.lines(try Data(contentsOf: api.appendingPathComponent(transcript.path.replacingOccurrences(of: "api/v1/", with: "") + ".txt")))
         let entries = RunConversation.entries(saved, timeZone: Self.utc)
@@ -521,7 +523,7 @@ final class RunStepsTests: XCTestCase {
         XCTAssertEqual(entries.filter { $0.kind == .failure }.map(\.repeats), [1, 1, 3])
         XCTAssertTrue(entries.contains { $0.gist.parts.contains(.wrote(["ActivityFilterStore.swift", "ActivityFilterStoreTests.swift"])) })
 
-        let live = try XCTUnwrap(runs[1].steps.last)
+        let live = try XCTUnwrap(latest[1].steps.last)
         XCTAssertTrue(live.isLive)
         let now = RunConversation.entries(live.liveLines, live: true, timeZone: Self.utc)
         XCTAssertEqual(now.map(\.kind), [.actions, .failure, .note])

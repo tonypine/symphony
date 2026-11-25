@@ -1,5 +1,5 @@
 {
-  "next_since": "2026-10-18T10:21:00.000000Z",
+  "next_since": "2026-10-30T09:00:30.000000Z",
   "timeline": [
     {
       "actor": {
@@ -377,6 +377,244 @@
       "summary": {
         "detail": "19 min",
         "title": "Implementation run 1 ended: paused"
+      },
+      "verdict": null
+    },
+    {
+      "effort": null,
+      "ended_at": "2026-10-30T08:55:00.000000Z",
+      "events": [
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-30T08:40:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "st-12",
+          "idempotency": "run.started:run-impl-2",
+          "new": true,
+          "parent": null,
+          "payload": {
+            "head": "bbb2222",
+            "run_id": "run-impl-2",
+            "run_kind": "implementation",
+            "run_number": 2
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-impl-2",
+          "seq": 12,
+          "summary": {
+            "detail": "at bbb2222",
+            "title": "Implementation run 2 started"
+          },
+          "supersedes": null,
+          "type": "run.started"
+        },
+        {
+          "actor": {
+            "kind": "agent",
+            "run_id": "run-impl-2",
+            "run_kind": "implementation"
+          },
+          "artifacts": [],
+          "at": "2026-10-30T08:40:30.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "st-13",
+          "idempotency": null,
+          "new": true,
+          "parent": null,
+          "payload": {
+            "mode": "delegated",
+            "step_id": "code",
+            "title": "Write the code"
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-impl-2",
+          "seq": 13,
+          "summary": {
+            "detail": "Write the code",
+            "title": "Step started"
+          },
+          "supersedes": null,
+          "type": "step.started"
+        },
+        {
+          "actor": {
+            "kind": "agent",
+            "run_id": "run-impl-2",
+            "run_kind": "implementation"
+          },
+          "artifacts": [
+            {
+              "available": true,
+              "id": "df5a39a8551f2ffba18d9110e7065df86c908292d7e79cea6dbd7b0904e70393",
+              "kind": "transcript",
+              "label": "Write the code transcript",
+              "mime": "text/x-ndjson",
+              "url": "/api/v1/artifacts/df5a39a8551f2ffba18d9110e7065df86c908292d7e79cea6dbd7b0904e70393"
+            }
+          ],
+          "at": "2026-10-30T08:54:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "st-14",
+          "idempotency": null,
+          "new": true,
+          "parent": null,
+          "payload": {
+            "mode": "delegated",
+            "outcome": "passed",
+            "step_id": "code",
+            "title": "Write the code"
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-impl-2",
+          "seq": 14,
+          "summary": {
+            "detail": "Write the code · output kept",
+            "title": "Step passed"
+          },
+          "supersedes": null,
+          "type": "step.completed"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-30T08:55:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "st-15",
+          "idempotency": "run.ended:run-impl-2",
+          "new": true,
+          "parent": null,
+          "payload": {
+            "duration_ms": 900000,
+            "exit": "success",
+            "run_id": "run-impl-2",
+            "run_kind": "implementation",
+            "run_number": 2
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-impl-2",
+          "seq": 15,
+          "summary": {
+            "detail": "15 min",
+            "title": "Implementation run 2 ended: success"
+          },
+          "supersedes": null,
+          "type": "run.ended"
+        }
+      ],
+      "exit": "success",
+      "head": "bbb2222",
+      "kind": "run",
+      "model": null,
+      "model_name": null,
+      "outcome": null,
+      "run_id": "run-impl-2",
+      "run_kind": "implementation",
+      "run_number": 2,
+      "started_at": "2026-10-30T08:40:00.000000Z",
+      "status": "ended",
+      "summary": {
+        "detail": "15 min",
+        "title": "Implementation run 2 ended: success"
+      },
+      "verdict": null
+    },
+    {
+      "effort": null,
+      "ended_at": null,
+      "events": [
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-30T09:00:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "st-16",
+          "idempotency": "run.started:run-impl-3",
+          "new": true,
+          "parent": null,
+          "payload": {
+            "head": "ccc3333",
+            "run_id": "run-impl-3",
+            "run_kind": "implementation",
+            "run_number": 3
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-impl-3",
+          "seq": 16,
+          "summary": {
+            "detail": "at ccc3333",
+            "title": "Implementation run 3 started"
+          },
+          "supersedes": null,
+          "type": "run.started"
+        },
+        {
+          "actor": {
+            "kind": "agent",
+            "run_id": "run-impl-3",
+            "run_kind": "implementation"
+          },
+          "artifacts": [],
+          "at": "2026-10-30T09:00:30.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "st-17",
+          "idempotency": null,
+          "new": true,
+          "parent": null,
+          "payload": {
+            "mode": "delegated",
+            "step_id": "code",
+            "title": "Write the code"
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-impl-3",
+          "seq": 17,
+          "summary": {
+            "detail": "Write the code",
+            "title": "Step started"
+          },
+          "supersedes": null,
+          "type": "step.started"
+        }
+      ],
+      "exit": null,
+      "head": "ccc3333",
+      "kind": "run",
+      "model": null,
+      "model_name": null,
+      "outcome": null,
+      "run_id": "run-impl-3",
+      "run_kind": "implementation",
+      "run_number": 3,
+      "started_at": "2026-10-30T09:00:00.000000Z",
+      "status": "running",
+      "summary": {
+        "detail": "Write the code",
+        "title": "Implementation run 3 running a step"
       },
       "verdict": null
     }

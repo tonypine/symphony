@@ -512,8 +512,8 @@ GitHub or Linear in QA:
   opens its text" and the unavailable line as "Build output unavailable". Walk it in light and dark: nothing clipped. On the live server the seed gives QA-105 the
   same history, with its own test output to open and its build output gone.
 - **A step read as a conversation (TP-1688):** pass
-  `macos/Tests/Fixtures/director-app/ticket-conversation` as `api_fixtures` and open SHOP-410.
-  "Implementation run 1" ended; unfold it and its "Write the code" step. The step opens on one
+  `macos/Tests/Fixtures/director-app/ticket-steps` as `api_fixtures` and open SHOP-410.
+  "Implementation run 2" ended; unfold it and its "Write the code" step. The step opens on one
   folded line, "23 actions · read 1 file, ran 22 commands", then the red test's own row in the
   problem treatment ("Failed", "Bash", the command, then the first lines of what came back). The
   agent's notes follow at reading size across the column, their Markdown rendered (bold, inline
@@ -523,7 +523,7 @@ GitHub or Linear in QA:
   that failed three times back to back is one row with "×3". The time is a small line above an
   entry only when the minute changes. Click one fold line: only that group opens, as monospace
   rows (tool, short description, result). Click "Show all events" in the step's header: every
-  group of the step opens; again, they all fold. "Implementation run 2" is running on "Write the
+  group of the step opens; again, they all fold. "Implementation run 3" is running on "Write the
   code": its last entry, the note "Found a subtle bug…", carries "Working" and its fold line
   reads "2 actions so far". On the live server the seed gives QA-104's first implementation run
   the same finished step, its saved transcript served by Symphony's own server.
