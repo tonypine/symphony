@@ -16,7 +16,7 @@ defmodule Mix.Tasks.Workspace.BeforeRemove do
 
   It closes them only when the ticket ended: Symphony sets `SYMPHONY_REMOVE_REASON` to `terminal`
   and names the state in `SYMPHONY_ISSUE_STATE`, which the closing comment quotes. Any other reason
-  (`stop`, `cleanup`) keeps them open. A manual run, without the variable, closes them.
+  (`cleanup`) keeps them open. A manual run, without the variable, closes them.
 
   Usage:
 

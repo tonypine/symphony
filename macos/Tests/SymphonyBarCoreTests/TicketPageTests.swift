@@ -682,7 +682,7 @@ final class StopRunSheetTests: XCTestCase {
         XCTAssertEqual(sheet.id, "SHOP-305")
         XCTAssertEqual(
             sheet.happens(alsoBacklog: true),
-            "Ends the agent working on SHOP-305 and removes its workspace, with any work it hasn't pushed. Then moves SHOP-305 to Backlog and posts your note on it as a comment."
+            "Ends the agent working on SHOP-305. Its workspace stays as it is, with any work it hasn't pushed, for its next run. Then moves SHOP-305 to Backlog and posts your note on it as a comment."
         )
         XCTAssertTrue(sheet.stays(alsoBacklog: true).hasPrefix("Symphony leaves SHOP-305 alone while it is in Backlog"))
         XCTAssertEqual(sheet.actions(alsoBacklog: true, note: "  Hangs on the rounding test.\n"), [
@@ -695,7 +695,7 @@ final class StopRunSheetTests: XCTestCase {
         let sheet = StopRunSheet(identifier: "SHOP-305", origin: .ticketPage, isRunning: true, state: "In Progress")
 
         XCTAssertFalse(sheet.alsoBacklogByDefault)
-        XCTAssertEqual(sheet.happens(alsoBacklog: false), "Ends the agent working on SHOP-305 and removes its workspace, with any work it hasn't pushed.")
+        XCTAssertEqual(sheet.happens(alsoBacklog: false), "Ends the agent working on SHOP-305. Its workspace stays as it is, with any work it hasn't pushed, for its next run.")
         XCTAssertEqual(
             sheet.stays(alsoBacklog: false),
             "SHOP-305 keeps its Linear state, In Progress, but Symphony doesn't start it again: it waits in the Inbox as stopped by "

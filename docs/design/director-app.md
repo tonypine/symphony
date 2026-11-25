@@ -205,7 +205,7 @@ D10); see the build plan in [Screens](director-app-screens.md#5-build-plan).
    test/checkout_test.exs" 14 min ago, 1.4M tokens of its 2M cap. The timeline shows run 1 failed on the same test.
    → **D3**
 3. **View Transcript**: the last events show the agent waiting on a test that hangs. → **D4**
-4. **Stop Run…**: the sheet says Symphony ends the run and removes its workspace; the ticket stays `In Progress`, and
+4. **Stop Run…**: the sheet says Symphony ends the run and keeps its workspace for the next run; the ticket stays `In Progress`, and
    Symphony doesn't start it again until it is unblocked, restarted or moved (TP-1137). **Also move to Backlog** is checked, with a note
    field. → **D12c**
 5. On the next poll the attention row goes away, and the ticket's timeline reads "Stopped by you, moved to Backlog".

@@ -118,6 +118,19 @@ defmodule SymphonyElixir.Tracker do
     adapter().fetch_issue_by_identifier(identifier)
   end
 
+  @doc """
+  True when `reason`, an error `fetch_issue_by_identifier/1` returned, says the tracker has no such
+  ticket: `:issue_not_found`, or the "Entity not found" GraphQL error Linear answers an unknown
+  identifier with rather than a null issue.
+  """
+  @spec issue_not_found?(term()) :: boolean()
+  def issue_not_found?(:issue_not_found), do: true
+  def issue_not_found?({:linear_graphql_errors, errors}), do: Enum.any?(List.wrap(errors), &not_found_error?/1)
+  def issue_not_found?(_reason), do: false
+
+  defp not_found_error?(%{"message" => message}) when is_binary(message), do: message =~ ~r/not found/i
+  defp not_found_error?(_error), do: false
+
   @spec fetch_issues_by_states([String.t()]) :: {:ok, [term()]} | {:error, term()}
   def fetch_issues_by_states(states) do
     adapter().fetch_issues_by_states(states)

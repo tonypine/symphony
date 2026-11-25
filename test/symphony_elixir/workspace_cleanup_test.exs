@@ -26,7 +26,7 @@ defmodule SymphonyElixir.WorkspaceCleanupTest do
   test "remove returns at once and await waits until the removal ends" do
     server = start_cleanup!()
 
-    assert :ok = WorkspaceCleanup.remove(%{id: "issue-1", identifier: "MT-1"}, "worker-01", server)
+    assert :ok = WorkspaceCleanup.remove(%{id: "issue-1", identifier: "MT-1", remove_reason: :terminal}, "worker-01", server)
     assert_receive {:removing, "MT-1", "worker-01", removal}
 
     waiter = await_async("MT-1", server)
@@ -42,11 +42,11 @@ defmodule SymphonyElixir.WorkspaceCleanupTest do
   test "removals of one issue run one after the other and a duplicate queued one is dropped" do
     server = start_cleanup!()
 
-    assert :ok = WorkspaceCleanup.remove(%{identifier: "MT-2"}, nil, server)
+    assert :ok = WorkspaceCleanup.remove(%{identifier: "MT-2", remove_reason: :terminal}, nil, server)
     assert_receive {:removing, "MT-2", nil, first}
 
-    assert :ok = WorkspaceCleanup.remove(%{identifier: "MT-2"}, nil, server)
-    assert :ok = WorkspaceCleanup.remove(%{identifier: "MT-2"}, nil, server)
+    assert :ok = WorkspaceCleanup.remove(%{identifier: "MT-2", remove_reason: :terminal}, nil, server)
+    assert :ok = WorkspaceCleanup.remove(%{identifier: "MT-2", remove_reason: :terminal}, nil, server)
     refute_receive {:removing, "MT-2", _worker_host, _removal}, 50
 
     waiter = await_async("MT-2", server)
@@ -72,10 +72,10 @@ defmodule SymphonyElixir.WorkspaceCleanupTest do
 
     server = start_cleanup!(remove_fun: remove_fun)
 
-    assert :ok = WorkspaceCleanup.remove(%{identifier: "MT-7", remove_reason: :stop}, nil, server)
-    assert_receive {:removing, "MT-7", :stop, first}
+    assert :ok = WorkspaceCleanup.remove(%{identifier: "MT-7", remove_reason: :age_gc}, nil, server)
+    assert_receive {:removing, "MT-7", :age_gc, first}
 
-    assert :ok = WorkspaceCleanup.remove(%{identifier: "MT-7", remove_reason: :stop}, nil, server)
+    assert :ok = WorkspaceCleanup.remove(%{identifier: "MT-7", remove_reason: :age_gc}, nil, server)
     assert :ok = WorkspaceCleanup.remove(%{identifier: "MT-7", remove_reason: :terminal}, nil, server)
 
     send(first, :release)
@@ -88,8 +88,8 @@ defmodule SymphonyElixir.WorkspaceCleanupTest do
   test "removals past the concurrency cap wait for a free slot" do
     server = start_cleanup!(max_concurrent: 1)
 
-    assert :ok = WorkspaceCleanup.remove(%{identifier: "MT-3"}, nil, server)
-    assert :ok = WorkspaceCleanup.remove(%{identifier: "MT-4"}, nil, server)
+    assert :ok = WorkspaceCleanup.remove(%{identifier: "MT-3", remove_reason: :terminal}, nil, server)
+    assert :ok = WorkspaceCleanup.remove(%{identifier: "MT-4", remove_reason: :terminal}, nil, server)
     assert_receive {:removing, "MT-3", nil, first}
     refute_receive {:removing, "MT-4", _worker_host, _removal}, 50
 
@@ -105,7 +105,7 @@ defmodule SymphonyElixir.WorkspaceCleanupTest do
   test "a removal that crashes is logged and releases its waiters" do
     server = start_cleanup!()
 
-    assert :ok = WorkspaceCleanup.remove(%{id: "issue-5", identifier: "MT-5"}, nil, server)
+    assert :ok = WorkspaceCleanup.remove(%{id: "issue-5", identifier: "MT-5", remove_reason: :terminal}, nil, server)
     assert_receive {:removing, "MT-5", nil, removal}
     waiter = await_async("MT-5", server)
 
@@ -123,7 +123,7 @@ defmodule SymphonyElixir.WorkspaceCleanupTest do
 
     log =
       capture_log(fn ->
-        assert :ok = WorkspaceCleanup.remove(%{identifier: "MT-6"}, "worker-01", server)
+        assert :ok = WorkspaceCleanup.remove(%{identifier: "MT-6", remove_reason: :terminal}, "worker-01", server)
         assert :ok = WorkspaceCleanup.await("MT-6", server)
       end)
 
@@ -146,7 +146,7 @@ defmodule SymphonyElixir.WorkspaceCleanupTest do
     on_exit(fn -> File.rm_rf(workspace_root) end)
 
     missing = Module.concat(__MODULE__, MissingServer)
-    assert :ok = WorkspaceCleanup.remove(%{identifier: "MT-8"}, nil, missing)
+    assert :ok = WorkspaceCleanup.remove(%{identifier: "MT-8", remove_reason: :terminal}, nil, missing)
     refute File.exists?(workspace)
     assert :ok = WorkspaceCleanup.await("MT-8", missing)
   end
@@ -164,7 +164,7 @@ defmodule SymphonyElixir.WorkspaceCleanupTest do
 
     server = start_cleanup!(await_fun: await_fun)
 
-    assert :ok = WorkspaceCleanup.remove(%{identifier: "MT-9"}, nil, server)
+    assert :ok = WorkspaceCleanup.remove(%{identifier: "MT-9", remove_reason: :terminal}, nil, server)
     assert_receive {:awaiting, "MT-9", awaiting}
     refute_receive {:removing, "MT-9", _worker_host, _removal}, 50
 
@@ -179,7 +179,7 @@ defmodule SymphonyElixir.WorkspaceCleanupTest do
 
     log =
       capture_log(fn ->
-        assert :ok = WorkspaceCleanup.remove(%{id: "issue-10", identifier: "MT-10"}, "worker-01", server)
+        assert :ok = WorkspaceCleanup.remove(%{id: "issue-10", identifier: "MT-10", remove_reason: :terminal}, "worker-01", server)
         assert :ok = WorkspaceCleanup.await("MT-10", server)
       end)
 
@@ -187,5 +187,16 @@ defmodule SymphonyElixir.WorkspaceCleanupTest do
     assert log =~ "Workspace cleanup skipped: an agent is still running in it"
     assert log =~ "issue_identifier=MT-10"
     assert log =~ "still_running"
+  end
+
+  test "a removal whose reason is not on the allow list is refused and queues nothing" do
+    server = start_cleanup!()
+
+    for reason <- [:stop, :cleanup, true, nil] do
+      assert {:error, {:removal_not_allowed, ^reason}} = WorkspaceCleanup.remove(%{identifier: "MT-11", remove_reason: reason}, nil, server)
+    end
+
+    assert {:error, {:removal_not_allowed, nil}} = WorkspaceCleanup.remove(%{identifier: "MT-11"}, nil, server)
+    refute_receive {:removing, "MT-11", _worker_host, _removal}, 50
   end
 end

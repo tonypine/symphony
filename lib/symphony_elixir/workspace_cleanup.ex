@@ -2,6 +2,10 @@ defmodule SymphonyElixir.WorkspaceCleanup do
   @moduledoc """
   Removes the workspaces of issues that ended, outside the orchestrator.
 
+  It carries out removals `SymphonyElixir.WorkspaceRemoval` decided: an issue's `remove_reason`
+  must be one of `SymphonyElixir.WorkspaceRemoval.reasons/0`, and any other is refused without
+  queuing anything (`remove/3` returns the refusal).
+
   A removal runs the repo's `before_remove` hook, then `git worktree remove` and the branch
   delete under the repo's fetch lock, which can take minutes. The orchestrator hands it here
   with `remove/2` and moves on; each removal runs in a `SymphonyElixir.TaskSupervisor` task, at
@@ -28,7 +32,7 @@ defmodule SymphonyElixir.WorkspaceCleanup do
 
   require Logger
 
-  alias SymphonyElixir.{AgentProcesses, Workspace}
+  alias SymphonyElixir.{AgentProcesses, Workspace, WorkspaceRemoval}
 
   @max_concurrent 4
 
@@ -58,13 +62,18 @@ defmodule SymphonyElixir.WorkspaceCleanup do
 
   @doc """
   Queues the removal of the issue's workspaces on `worker_host` (every host when `nil`), as
-  `Workspace.remove_issue_workspaces/2` does, and returns without waiting for it.
+  `Workspace.remove_issue_workspaces/2` does, and returns without waiting for it. The issue's
+  `remove_reason` must be on `SymphonyElixir.WorkspaceRemoval`'s allow list; any other is refused
+  and nothing is removed. Callers go through `SymphonyElixir.WorkspaceRemoval.remove/4`.
   """
-  @spec remove(%{required(:identifier) => String.t(), optional(atom()) => term()}, Workspace.worker_host(), GenServer.server()) :: :ok
+  @spec remove(%{required(:identifier) => String.t(), optional(atom()) => term()}, Workspace.worker_host(), GenServer.server()) ::
+          :ok | {:error, {:removal_not_allowed, term()}}
   def remove(%{identifier: identifier} = issue, worker_host, server \\ __MODULE__) when is_binary(identifier) do
-    case call(server, {:remove, issue, worker_host}) do
-      :ok -> :ok
-      :unavailable -> Workspace.remove_issue_workspaces(issue, worker_host)
+    with :ok <- WorkspaceRemoval.check(Map.get(issue, :remove_reason)) do
+      case call(server, {:remove, issue, worker_host}) do
+        :ok -> :ok
+        :unavailable -> Workspace.remove_issue_workspaces(issue, worker_host)
+      end
     end
   end
 
@@ -85,8 +94,8 @@ defmodule SymphonyElixir.WorkspaceCleanup do
 
   @impl true
   # A removal asked for again while it waits in the queue takes the newer request's place, so the
-  # `before_remove` hook gets the latest reason: a stop's removal followed by the ticket's terminal
-  # one runs as the terminal one.
+  # `before_remove` hook gets the latest reason: an age collector's removal followed by the ticket's
+  # terminal one runs as the terminal one.
   def handle_call({:remove, %{identifier: identifier} = issue, worker_host}, _from, state) do
     queue =
       case Enum.find_index(state.queue, fn {queued_issue, queued_host} -> queued_issue.identifier == identifier and queued_host == worker_host end) do

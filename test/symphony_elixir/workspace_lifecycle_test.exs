@@ -1,8 +1,9 @@
 defmodule SymphonyElixir.WorkspaceLifecycleTest do
-  # A ticket's workspace is removed only on a terminal state, Restart, the operator's Stop and the
-  # age GC of idle workspaces (`docs/design/state-machine.md`, "Workspace"). A phase move between
-  # the active phases, a person's push in Merging (R11) and a run that ends with its ticket still
-  # in a phase keep it.
+  # A ticket's workspace is removed only for a reason on the allow list (`SymphonyElixir.WorkspaceRemoval`):
+  # a terminal state, Start over and the age GC of an ended or missing ticket's idle workspace. A
+  # phase move between the active phases, a person's push in Merging (R11), a Stop, a run that times
+  # out, fails or is cut short by an app update, and a run that ends with its ticket still in a phase
+  # keep it.
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.RunStore
@@ -55,6 +56,55 @@ defmodule SymphonyElixir.WorkspaceLifecycleTest do
     assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}, @wait_ms
     assert %{running: []} = GenServer.call(pid, :snapshot)
     assert_workspace_kept(issue, workspace)
+  end
+
+  test "a run that times out, fails, or is cut short by an app update keeps the workspace", %{pid: pid} = ctx do
+    # The stall watchdog restarts a run silent past the stall timeout.
+    timed_out = issue("issue-timeout", "MT-TIMEOUT", "In Progress")
+    timed_out_workspace = workspace!(ctx, timed_out)
+    {worker_pid, worker_ref} = put_running!(pid, timed_out, timed_out_workspace)
+
+    :sys.replace_state(pid, fn state ->
+      state
+      |> put_in([Access.key!(:running), timed_out.id, :session_id], "sess-timeout")
+      |> put_in([Access.key!(:running), timed_out.id, :last_codex_timestamp], DateTime.add(DateTime.utc_now(), -86_400, :second))
+      |> Orchestrator.run_watchdogs_for_test()
+    end)
+
+    assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, _reason}, @wait_ms
+    assert %{running: []} = GenServer.call(pid, :snapshot)
+    assert_workspace_kept(timed_out, timed_out_workspace)
+
+    # A run whose task exits abnormally (the agent failed or refused) is retried in its workspace.
+    failed = issue("issue-failed", "MT-FAILED", "In Progress")
+    failed_workspace = workspace!(ctx, failed)
+    {failed_pid, failed_ref} = put_running!(pid, failed, failed_workspace)
+    send(pid, {:DOWN, failed_ref, :process, failed_pid, {:agent_failed, "refused"}})
+    assert %{running: []} = GenServer.call(pid, :snapshot)
+    assert_workspace_kept(failed, failed_workspace)
+    send(failed_pid, :finish)
+
+    # An app update ends the process with a run in flight. The next start's sweeps keep the
+    # workspace of a ticket that is still open, even one outside the tracked states (Backlog here)
+    # with the startup sweep set to delete orphans.
+    interrupted = issue("issue-update", "MT-UPDATE", "In Progress")
+    interrupted_workspace = workspace!(ctx, interrupted)
+    {interrupted_pid, _interrupted_ref} = put_running!(pid, interrupted, interrupted_workspace)
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{interrupted | state: "Backlog"}])
+    on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_issues) end)
+    stop_process(pid)
+    send(interrupted_pid, :finish)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      workspace_root: ctx.workspace_root,
+      tracker_active_states: @phases,
+      workspace_lifecycle: %{max_age_days: 1, orphan_action: "delete"}
+    )
+
+    {:ok, restarted} = Orchestrator.start_link(name: Module.concat(__MODULE__, "Restarted#{System.unique_integer([:positive])}"))
+    on_exit(fn -> stop_process(restarted) end)
+    wait_until_quiet(restarted)
+    assert_workspace_kept(interrupted, interrupted_workspace)
   end
 
   test "a Director move from QA to Rework keeps the workspace", %{pid: pid} = ctx do

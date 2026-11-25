@@ -550,8 +550,8 @@ runs), `finding.resolved`, `finding.confirmed` (machine only: a QA pass confirme
 `workspace.synced` (machine only: before a review, QA, landing or rework run, the heads the
 newest-known-head rule compared, the one that won and what it did), `workspace.rebuilt` (machine
 only: a workspace made again, why, the heads compared and the one it started on),
-`workspace.removed` (machine only: Symphony removed a ticket's workspace, for the age GC, a Stop, a
-terminal state or another cleanup), `rule.action` (machine only: a rule of Symphony's acted on the
+`workspace.removed` (machine only: Symphony removed a ticket's workspace, for a reason on the
+removal allow list of Section 9.1: a terminal state, the age GC or another of the list's removals), `rule.action` (machine only: a rule of Symphony's acted on the
 ticket, with the rule's name and what it did), `ticket.filed` (machine only: a ticket split off from
 this one, or an epic review's follow-up; one the Conductor filed or linked through its `ticket` route
 also carries `by: conductor`, `repo`, `url`, `reason` and `existing`), `ticket.filed_from` (machine
@@ -1343,10 +1343,9 @@ Fields:
 - `cleanup` (object)
   - Optional workspace lifecycle guardrails.
   - `enabled` defaults to `true`.
-  - `max_age_days` defaults to `14`; local workspaces older than this MAY be reclaimed even when
-    their associated issue is not terminal, except a workspace whose ticket has a run going, a
-    retry due, or an open PR the PR and CI watcher is waiting on in a phase (its review, QA or
-    landing run is still to come).
+  - `max_age_days` defaults to `14`; a local workspace older than this MAY be reclaimed only when
+    its ticket has ended or no longer exists (the removal allow list, Section 9.1). An open
+    ticket's workspace is kept however old it is, and so is one whose ticket could not be read.
   - `interval_ms` defaults to `3600000` and controls how often the running service scans for
     stale workspaces.
   - `min_free_bytes` is unset by default. When set to a positive integer, new dispatch SHOULD pause
@@ -3405,7 +3404,8 @@ The poller:
   already-answered comment is not replied to twice;
 - leaves a PR that conflicts with its base branch, a red head, auto-merge and the landing to the PR
   and CI watcher (Section 7.5.1): it decides and acts on none of them;
-- removes tracked workspaces and durable review records when PRs merge or close, and moves a
+- drops durable review records when PRs merge or close, removing the tracked workspace only when
+  the ticket has ended (Section 9.1: a PR closed while its ticket is open keeps it), and moves a
   merged PR's ticket outside `Merging` with started sub-issues open to the waiting state (a
   `Merging` ticket is the watcher's to close out); while the run store still reports a
   `running` agent run for the issue, it defers that cleanup to a later poll so a live turn (for
@@ -4667,9 +4667,12 @@ When the service starts:
 2. For each returned issue identifier, remove the corresponding workspace directory.
 3. Query tracked active/terminal issues plus durable run/retry records and scan `workspaces.root`
    for local orphan directories.
-4. For each orphan directory, log the selected action and then log, delete, or move it to
-   `workspaces.cleanup.trash_dir` according to `workspaces.cleanup.orphan_action`.
-5. Run age-based GC for local workspaces older than `workspaces.cleanup.max_age_days`.
+4. For each orphan directory whose ticket has ended or no longer exists, log the selected action
+   and then log, delete, or move it to `workspaces.cleanup.trash_dir` according to
+   `workspaces.cleanup.orphan_action`. An open ticket's directory (one in Backlog, say) is no orphan
+   and stays, and so does one whose ticket could not be read.
+5. Run age-based GC for local workspaces older than `workspaces.cleanup.max_age_days` whose ticket
+   has ended or no longer exists.
 6. If any tracker, run-store, or filesystem read required for startup cleanup fails, log a warning
    and continue startup without deleting workspaces whose ownership could not be determined.
 
@@ -4690,14 +4693,27 @@ Per-issue workspace path:
 Workspace persistence:
 
 - Workspaces are reused across runs for the same issue.
-- A workspace is removed only when its issue reaches a terminal state (reconciliation, a retry that
-  finds the issue terminal, or startup terminal cleanup), when the issue is restarted, when the
-  operator stops its run, or by the age-based GC below. A run that ends (success, failure, timeout,
-  or a stop because the issue moved) with its issue still in an active or watched state, and a move
-  between those states, never remove it; the issue's next run reuses it.
-- Age-based workspace GC MAY later remove successful, failed, crashed, or sideways-state workspaces
-  once their directory age exceeds the configured lifecycle threshold. It never removes the
-  workspace of an issue with a running agent, a retry due, or a watched issue with an open PR.
+- Removing a workspace is an allow list, not a deny list. A workspace is removed only for one of
+  these reasons, and in every other case it stays as it is, uncommitted changes included:
+  1. The ticket ended: it reached a terminal state (reconciliation of a running issue, a retry that
+     finds the issue terminal, startup terminal cleanup, a Director Cancel whether a run was working
+     or not, or the PR review poller after a merged or closed PR whose ticket ended; a merged PR's
+     record waits for a later poll that reads its ticket ended, and a PR closed while its ticket is
+     open drops the record and keeps the workspace). This is the one reason whose `before_remove` hook gets
+     `SYMPHONY_REMOVE_REASON=terminal`, the reason a hook that closes the ticket's pull request acts on.
+  2. A person asked for it: Start over (`restart`) removes it so the ticket starts again from its
+     base branch.
+  3. The age collector: the age-based GC removes a workspace older than
+     `workspaces.cleanup.max_age_days`, and the startup sweep acts on an orphan directory as
+     `workspaces.cleanup.orphan_action` says, only when the workspace's ticket has ended or no
+     longer exists. An open ticket keeps its workspace however old it is; so does a ticket whose
+     state could not be read, an issue with a running agent or a retry due.
+- A person's Stop of a run, a run displaced by a Start, a run that succeeds, fails, times out, is
+  refused or is interrupted by an app update, a stop because the issue moved, and a move between
+  the active and watched states never remove the workspace: the issue's next run continues in it,
+  brought to the right head as Section 4.1.11 says without throwing away uncommitted work Symphony
+  did not make. One place decides every removal (`SymphonyElixir.WorkspaceRemoval`) and refuses a
+  reason outside the list, removing nothing and recording nothing.
 - With effective workspace strategy `worktree`, cleanup removes the registered worktree with
   `git worktree remove --force` and deletes Symphony's `auto/<issue.identifier>` branch.
   Forced worktree removal also deletes the working directory on disk, including any
@@ -4708,8 +4724,8 @@ Workspace persistence:
 - A removal never runs while an agent process group tracked in the workspace is alive: it first
   waits for the stopped run's agent to exit, and skips the removal (logged) when it outlives the
   wait. A Restart of a ticket with a live run ends that run first, as the operator's Stop does
-  (no pull request is closed by the stop), waits for its agent to exit and for the stop's queued
-  removal, then performs the reset.
+  (no pull request is closed by the stop), waits for its agent to exit and for any removal already
+  queued, then performs the reset.
 
 ### 9.2 Workspace Creation and Reuse
 

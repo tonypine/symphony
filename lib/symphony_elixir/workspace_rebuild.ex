@@ -25,7 +25,8 @@ defmodule SymphonyElixir.WorkspaceRebuild do
 
   Why the workspace is made again is read from what Symphony recorded since the ticket's previous
   run started, never guessed: a `workspace.removed` event (`record_removal/3`, `record_reclaims/1`)
-  names Symphony's own removal (the age GC's reclaim, a Stop, a terminal state); a Restart
+  names Symphony's own removal (the age GC's reclaim, a terminal state); a Stop keeps the workspace
+  (`SymphonyElixir.WorkspaceRemoval`), so it never rebuilds one; a Restart
   (`person.action` `restart`) starts the ticket over, which is no rebuild; a previous run on an SSH
   worker is a host change; and a folder missing with none of these was removed by hand.
 
@@ -47,11 +48,11 @@ defmodule SymphonyElixir.WorkspaceRebuild do
   @removed "workspace.removed"
 
   @typedoc """
-  Why the workspace is made again: Symphony removed it (`:reclaim` by the age GC, `:stop`,
-  `:terminal`, `:cleanup` for another removal), the previous run was on another host, or the folder
-  went missing without Symphony removing it.
+  Why the workspace is made again: Symphony removed it (`:reclaim` by the age GC, `:terminal`,
+  `:cleanup` for another removal the allow list holds), the previous run was on another host, or the
+  folder went missing without Symphony removing it.
   """
-  @type reason :: :reclaim | :stop | :terminal | :cleanup | :missing_folder | :host_change
+  @type reason :: :reclaim | :terminal | :cleanup | :missing_folder | :host_change
 
   @typedoc "Which head the workspace starts on; `:main` is the configured base branch."
   @type winner :: :pull_request | :branch | :recorded | :local | :main
@@ -142,8 +143,9 @@ defmodule SymphonyElixir.WorkspaceRebuild do
 
   @doc """
   Records on the ticket's ledger that Symphony removed its workspace, as a `workspace.removed`
-  event: `"stop"` and `"terminal"` for those removals, `"age_gc"` for the age GC's reclaim, and
-  `"cleanup"` for any other. A ticket read without its id records nothing.
+  event: `"terminal"` when the ticket ended, `"age_gc"` for the age GC's reclaim, and `"cleanup"` for
+  the allow list's others (`SymphonyElixir.WorkspaceRemoval`). A ticket read without its id records
+  nothing.
   """
   @spec record_removal(String.t() | nil, String.t() | nil, atom() | String.t() | nil) :: :ok
   def record_removal(repo_key, issue_id, reason) when is_binary(issue_id) do
@@ -184,7 +186,7 @@ defmodule SymphonyElixir.WorkspaceRebuild do
 
   defp identifier_and_id(_incomplete_run), do: []
 
-  defp removal_reason(reason) when reason in [:stop, :terminal, :age_gc, "stop", "terminal", "age_gc"], do: to_string(reason)
+  defp removal_reason(reason) when reason in [:terminal, :age_gc, "terminal", "age_gc"], do: to_string(reason)
   defp removal_reason(_reason), do: "cleanup"
 
   defp source_repo(opts) do
@@ -248,7 +250,6 @@ defmodule SymphonyElixir.WorkspaceRebuild do
   end
 
   defp removal_kind(%{reason: "age_gc"}), do: :reclaim
-  defp removal_kind(%{reason: "stop"}), do: :stop
   defp removal_kind(%{reason: "terminal"}), do: :terminal
   defp removal_kind(_payload), do: :cleanup
 

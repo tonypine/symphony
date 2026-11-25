@@ -44,7 +44,7 @@ public struct StopRunSheet: Equatable, Identifiable {
         guard isRunning else {
             return "No agent runs on \(identifier) right now, so there is nothing to stop. This " + backlog + "."
         }
-        let stop = "Ends the agent working on \(identifier) and removes its workspace, with any work it hasn't pushed."
+        let stop = "Ends the agent working on \(identifier). Its workspace stays as it is, with any work it hasn't pushed, for its next run."
         return alsoBacklog ? stop + " Then " + backlog + "." : stop
     }
 

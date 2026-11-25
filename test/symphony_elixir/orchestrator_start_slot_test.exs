@@ -92,6 +92,30 @@ defmodule SymphonyElixir.OrchestratorStartSlotTest do
       assert_receive {:queue_notice, %{change: "slots", by: "start", slot: 1, displaced: ["MT-H"]}}
     end
 
+    test "the displaced ticket keeps its workspace with its uncommitted changes, and its next run continues there without a rebuild", ctx do
+      write_slots_workflow!(ctx, 1)
+      held = recorded(issue("h", "MT-H", "In Progress"))
+      started = recorded(issue("s", "MT-S", "In Progress"))
+      tracked([held, started])
+      workspace = Path.join([ctx.test_root, "workspaces", "default", "MT-H"])
+      File.mkdir_p!(workspace)
+      File.write!(Path.join(workspace, "uncommitted.txt"), "half done\n")
+      state = orchestrator_state(1) |> holding(held, 1, @early) |> live_run(held)
+
+      {:reply, {:ok, %{displaced_issue_identifier: "MT-H"}}, _next} = start(state, started)
+
+      # No removal was queued or recorded: a displaced run is not on the removal allow list.
+      assert :ok = WorkspaceCleanup.await("MT-H")
+      assert File.read!(Path.join(workspace, "uncommitted.txt")) == "half done\n"
+      assert SymphonyElixir.TicketEvents.query("h", types: ["workspace.removed"]) == []
+
+      # Its next run opens the same folder as it is, and nothing rebuilds it.
+      assert {:ok, reopened} = Workspace.create_for_issue(held)
+      assert Path.basename(reopened) == "MT-H"
+      assert File.read!(Path.join(reopened, "uncommitted.txt")) == "half done\n"
+      assert SymphonyElixir.TicketEvents.query("h", types: ["workspace.rebuilt"]) == []
+    end
+
     test "taking over an epic's slot stops its sub-ticket too: the sub-ticket heads its epic and the epic is number 1", ctx do
       write_slots_workflow!(ctx, 1)
       epic = recorded(epic("e", "MT-E", [{"a", "MT-A", "Todo"}, {"b", "MT-B", "Todo"}]))
