@@ -118,7 +118,16 @@ defmodule SymphonyElixir.GroomingEndToEndTest do
         "text" => "Approach: store the filter with the view state.",
         "checks" => [
           %{"kind" => "outcome", "statement" => "The filter is applied after a reload.", "proof" => "test"},
-          %{"kind" => "qa", "statement" => "The list is still filtered.", "proof" => "qa", "state" => "2 states", "action" => "Reload", "expect" => "Filtered"}
+          %{
+            "kind" => "qa",
+            "statement" => "The list is still filtered.",
+            "proof" => "qa",
+            "state" => "2 states",
+            "action" => "Reload",
+            "expect" => "Filtered",
+            "setting" => %{"source" => "fixture", "fixture" => "macos/Tests/Fixtures/director-app", "page" => "Tickets", "window" => %{"width" => 2560, "height" => 1440}, "appearance" => "dark"},
+            "walked_on" => [%{"path" => "macos/Tests/Fixtures/director-app", "holds" => "present"}]
+          }
         ],
         "size" => %{"tokens" => 3_000_000, "runs" => 3}
       },

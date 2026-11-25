@@ -83,7 +83,16 @@ defmodule SymphonyElixir.Conductor.GroomingTest do
         "text" => "Approach: store the filter with the view state.",
         "checks" => [
           %{"kind" => "outcome", "statement" => "The filter is applied after a reload.", "proof" => "test"},
-          %{"kind" => "qa", "statement" => "The list is still filtered.", "proof" => "qa", "state" => "2 states", "action" => "Reload", "expect" => "Filtered"}
+          %{
+            "kind" => "qa",
+            "statement" => "The list is still filtered.",
+            "proof" => "qa",
+            "state" => "2 states",
+            "action" => "Reload",
+            "expect" => "Filtered",
+            "setting" => %{"source" => "fixture", "fixture" => "macos/Tests/Fixtures/director-app", "page" => "Tickets", "window" => %{"width" => 2560, "height" => 1440}, "appearance" => "dark"},
+            "walked_on" => [%{"path" => "macos/Tests/Fixtures/director-app", "holds" => "present"}]
+          }
         ],
         "size" => %{"tokens" => 3_000_000, "runs" => 3}
       },
@@ -198,6 +207,11 @@ defmodule SymphonyElixir.Conductor.GroomingTest do
       assert current.size == %{tokens: 3_000_000, runs: 3}
       assert [%{run_id: ^run_id}] = events(ctx.issue_id, "plan.written")
       assert [%{id: "c1", kind: "outcome", state: :open}, %{id: "c2", kind: "qa", needs: "2 states", state: :open}] = TicketChecks.list(ctx.issue_id)
+
+      # Where the QA check is walked and on what state, stored as data on the check.
+      assert [_outcome, %{setting: setting, walked_on: walked_on}] = current.checks
+      assert setting == %{source: "fixture", fixture: "macos/Tests/Fixtures/director-app", page: "Tickets", window: %{width: 2560, height: 1440}, appearance: "dark"}
+      assert walked_on == [%{path: "macos/Tests/Fixtures/director-app", holds: "present"}]
       assert [%{payload: %{junction: "grooming", text: "I read this as one small change." <> _rest}}] = events(ctx.issue_id, "conductor.update")
       assert events(ctx.issue_id, "conductor.instructions") == []
       assert [%{payload: %{run_kind: "conductor", state: "Todo"}}] = events(ctx.issue_id, "run.started")
@@ -459,10 +473,13 @@ defmodule SymphonyElixir.Conductor.GroomingTest do
 
     test "a turn that runs over, a plan Symphony refuses and a question that can't be asked are tries that failed", ctx do
       refused = written(%{"shape" => "split", "sub_tickets" => [%{"title" => "The API", "ask" => "Add the filter.", "after" => ["s9"]}]})
+      [outcome, qa] = written()["checks"]
+      unplaced = written(%{"checks" => [outcome, Map.delete(qa, "setting")]})
 
       cases = [
         {fn _plan, _issue, _run_id, _prompt -> Process.sleep(1_000) end, %{timeout_ms: 20}, "the turn ran past its time limit"},
         {turn({:ok, [answer(%{"plan" => refused, "update" => "Planned."})], 3}), %{}, "its plan was refused: sub-ticket s1 waits after s9"},
+        {turn({:ok, [answer(%{"plan" => unplaced, "update" => "Planned."})], 3}), %{}, "`plan.checks[2].setting` is missing"},
         {turn({:ok, [answer(%{"ask_person" => question("accept_without_qa")})], 3}), %{}, "its question could not be asked"}
       ]
 

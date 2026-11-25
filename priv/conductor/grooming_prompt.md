@@ -74,6 +74,23 @@ How to groom, in order:
    (the data, the screen, the setting), the `action` a person takes, and what they `expect` to see.
    `size` is `wide` when it must be judged in a wide window, else `normal`. Never write a QA check
    for something a test proves. A ticket with nothing to see in the app has no QA check.
+   Each QA check also says, as data Symphony reads without parsing words, where it is walked
+   (`setting`) and the state it is walked on (`walked_on`):
+   - `setting`: `source` is `fixture` (the app draws a committed state fixture) or `live`
+     (Symphony's own server runs over the QA seed, for what happens after a move). With `fixture`,
+     `fixture` is the repo-relative path of the fixture directory; with `live`, leave `fixture`
+     out. `page` is the page or window the check is walked on. `window` is its `width` and
+     `height` in whole points, from 320 to 8192 (the QA target is 2560 by 1440). `appearance` is
+     `light` or `dark`: dark unless the check is about light mode.
+   - `walked_on`: one or more entries, each the repo-relative `path` of a seed file or directory
+     (under `priv/qa_seed/`) or a fixture file or directory that holds the state, and `holds`:
+     `present` when it holds that state already, `added` when this change must add it.
+   A repo-relative path is written from the repository's root: never absolute, never starting
+   with `~` or `./`, and never with `..` in it. Symphony refuses a QA check whose `setting` or
+   `walked_on` is missing or in another shape, and names the field.
+   A feature that needs state the seed or the fixtures do not hold yet adds that state to the seed
+   (`priv/qa_seed/`) and to the fixtures in the same pull request, and its QA checks mark those
+   paths `added`. Say so under `State needed:`.
    Use kind `evidence` for something that must be attached and is not a behaviour.
 7. Name the `layers` the work touches, from `layers` in the facts, in any repository: an app's
    screens, its logic, its tests. Validation follows them: name `screen` or `gallery` only when
@@ -132,7 +149,10 @@ Write your answer as one JSON object and nothing else:
     "checks": [
       {"kind": "outcome" or "evidence", "statement": "<at most 600 characters>", "proof": "test" or "qa" or "design" or "attached" or "ci", "ci_check": "<only for proof ci: the one CI check that proves it, when one does>"},
       {"kind": "qa", "statement": "<what is checked>", "proof": "qa" or "design", "state": "<the app state it needs>",
-       "action": "<what the person does>", "expect": "<what they see>", "size": "normal" or "wide", "story": "<optional Gallery story id>"}
+       "action": "<what the person does>", "expect": "<what they see>", "size": "normal" or "wide", "story": "<optional Gallery story id>",
+       "setting": {"source": "fixture" or "live", "fixture": "<only with fixture: the repo-relative fixture directory>", "page": "<the page it is walked on>",
+                   "window": {"width": <whole points, 320 to 8192>, "height": <whole points, 320 to 8192>}, "appearance": "light" or "dark"},
+       "walked_on": [{"path": "<repo-relative path of a seed or fixture file or directory>", "holds": "present" or "added"}]}
     ],
     "size": {"tokens": <whole number>, "runs": <whole number>},
     "sub_tickets": [{"title": "<at most 120 characters>", "ask": "<the complete request>", "after": ["s1"], "repo": "<optional repo key>",
@@ -158,7 +178,10 @@ A small example, for the ask "The ticket list forgets my filter when I reload. K
     {"kind": "outcome", "statement": "A filter picked in the ticket list is still applied after the app reloads.", "proof": "test"},
     {"kind": "qa", "statement": "The list shows the same filtered tickets after a reload.", "proof": "qa",
      "state": "The ticket list with tickets in 2 or more states", "action": "Pick the Done filter, then reload the window",
-     "expect": "The Done filter is still picked and only Done tickets are listed", "size": "normal"}],
+     "expect": "The Done filter is still picked and only Done tickets are listed", "size": "normal",
+     "setting": {"source": "fixture", "fixture": "macos/Tests/Fixtures/director-app", "page": "Tickets",
+                 "window": {"width": 2560, "height": 1440}, "appearance": "dark"},
+     "walked_on": [{"path": "macos/Tests/Fixtures/director-app", "holds": "present"}]}],
   "size": {"tokens": 3000000, "runs": 3}},
  "update": "I read this as one small change: the ticket list should keep the filter across a reload.\n\nNext: one coding run builds it, with a test for the stored filter and 1 QA check on the list.",
  "ask_person": null}

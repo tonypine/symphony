@@ -194,6 +194,70 @@ defmodule SymphonyElixir.TicketPlanTest do
     end
   end
 
+  describe "a QA check's setting and walked-on state (TP-1673)" do
+    @setting %{source: "fixture", fixture: "macos/Tests/Fixtures/director-app", page: "Tickets", window: %{width: 2560, height: 1440}, appearance: "dark"}
+    @walked_on [%{path: "priv/qa_seed/symphony/seed.json", holds: "present"}, %{path: "macos/Tests/Fixtures/director-app/filtered", holds: "added"}]
+    @qa %{kind: "qa", statement: "The list is filtered.", proof: "qa", action: "Reload", expect: "Filtered"}
+
+    defp with_qa(qa), do: %{@plan | checks: [@check, qa]}
+
+    test "a plan from a Grooming answer keeps both on its QA check in the store, as data" do
+      answered = %{"kind" => "qa", "statement" => "The list is filtered.", "proof" => "qa", "action" => "Reload", "expect" => "Filtered"}
+
+      answered =
+        Map.merge(answered, %{
+          "setting" => %{"source" => "live", "page" => "Home", "window" => %{"width" => 1440, "height" => 900}, "appearance" => "light"},
+          "walked_on" => [%{"path" => "priv/qa_seed/symphony/issues.json", "holds" => "present"}]
+        })
+
+      assert {:ok, %{plan: plan}} = SymphonyElixir.Conductor.Answer.parse(Jason.encode!(%{"plan" => Map.put(stringify(@plan), "checks", [stringify(@check), answered])}), plan: true, qa_setting: true)
+      assert {:ok, _event} = TicketPlan.write(@repo_key, @issue_id, Map.merge(plan, %{reason: "Grooming", by: "grooming"}))
+
+      assert [_outcome, %{id: "c2", setting: setting, walked_on: walked_on}] = TicketPlan.current(@issue_id).checks
+      assert setting == %{source: "live", page: "Home", window: %{width: 1440, height: 900}, appearance: "light"}
+      assert walked_on == [%{path: "priv/qa_seed/symphony/issues.json", holds: "present"}]
+      assert [_c1, %{id: "c2", setting: %{window: %{width: 1440}}, walked_on: [%{holds: "present"}]}] = SymphonyElixir.TicketChecks.list(@issue_id)
+    end
+
+    test "a later version that keeps a QA check's id without them keeps the stored ones; one that gives new ones replaces them" do
+      assert {:ok, _first} = TicketPlan.write(@repo_key, @issue_id, with_qa(Map.merge(@qa, %{setting: @setting, walked_on: @walked_on})), at: at(0))
+      [_c1, %{id: "c2"} = stored] = TicketPlan.current(@issue_id).checks
+
+      rewritten = %{with_qa(Map.merge(@qa, %{id: "c2", expect: "Still filtered"})) | reason: "A message.", by: "recalibration"}
+      assert {:ok, _second} = TicketPlan.write(@repo_key, @issue_id, rewritten, at: at(1), qa_setting: true)
+      assert [_c1, %{id: "c2", expect: "Still filtered", setting: @setting, walked_on: @walked_on}] = TicketPlan.current(@issue_id).checks
+      assert stored.setting == @setting
+
+      # Given with string keys, as a turn's answer may have them, and with a setting of its own.
+      light = %{@setting | appearance: "light"}
+      strings = %{"id" => "c2", "kind" => "qa", "statement" => "The list is filtered.", "proof" => "qa", "action" => "Reload", "expect" => "Filtered", "setting" => light}
+      assert {:ok, _third} = TicketPlan.write(@repo_key, @issue_id, Map.put(stringify(@plan), "checks", [stringify(@check), strings]), at: at(2), qa_setting: true)
+      assert [_c1, %{id: "c2", setting: ^light, walked_on: @walked_on}] = TicketPlan.current(@issue_id).checks
+    end
+
+    test "with qa_setting a QA check new to the plan must give both, and one kept from a plan without them need not" do
+      assert {:ok, _old} = TicketPlan.write(@repo_key, @issue_id, with_qa(@qa), at: at(0))
+
+      kept = %{with_qa(Map.put(@qa, :id, "c2")) | reason: "A message.", by: "recalibration"}
+      assert {:ok, _kept} = TicketPlan.write(@repo_key, @issue_id, kept, at: at(1), qa_setting: true)
+      refute Map.has_key?(List.last(TicketPlan.current(@issue_id).checks), :setting)
+
+      fresh = %{kept | checks: [@check, Map.put(@qa, :id, "c2"), Map.put(@qa, :walked_on, @walked_on)]}
+      assert TicketPlan.write(@repo_key, @issue_id, fresh, at: at(2), qa_setting: true) == {:error, {:invalid_plan, ["QA check c3 has no setting"]}}
+      assert length(TicketPlan.versions(@issue_id)) == 2
+    end
+
+    test "a plan stored before them, whose QA check holds neither, still reads as a valid plan" do
+      old = with_qa(Map.merge(@qa, %{id: "c2", state: "2 states"})) |> Map.put(:version, 1)
+      assert {:ok, _valid} = SymphonyElixir.TicketEvents.Types.validate("plan.written", old, :machine, nil)
+      assert {:ok, _event} = TicketEvents.record(@repo_key, @issue_id, "plan.written", old, at: at(0))
+
+      assert %{version: 1, checks: [_c1, qa]} = TicketPlan.current(@issue_id)
+      refute Map.has_key?(qa, :setting) or Map.has_key?(qa, :walked_on)
+      assert [_c1, %{id: "c2", needs: "2 states", state: :open}] = SymphonyElixir.TicketChecks.list(@issue_id)
+    end
+  end
+
   describe "the ask" do
     test "every ask, oldest first, with where it came from" do
       {:ok, first} = TicketPlan.record_ask(@repo_key, @issue_id, "Show the plan.", at: at(0))
@@ -240,4 +304,6 @@ defmodule SymphonyElixir.TicketPlanTest do
       assert TicketPlan.parent_id(@issue_id) == "plan-parent"
     end
   end
+
+  defp stringify(map), do: Map.new(map, fn {key, value} -> {to_string(key), value} end)
 end

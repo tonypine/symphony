@@ -26,6 +26,8 @@ defmodule SymphonyElixir.TicketPlan do
   alias SymphonyElixir.TicketEvents.{Event, Types}
 
   @machine_fields [:signal, :signal_details]
+  # Where a `qa` check is walked and the state it is walked on, kept across versions (`placed/2`).
+  @placed_fields [:setting, :walked_on]
   @ask_max 100_000
   @max_checks 30
   @max_sub_tickets 12
@@ -72,12 +74,17 @@ defmodule SymphonyElixir.TicketPlan do
   It names the checks: a check that comes with the id a check of an earlier version had keeps it,
   and with it what was recorded for that check; any other (no id, or one no version used) gets a
   new id that no version of the ticket ever used (`c1`, `c2`, and on from the highest ever used).
+  A `qa` check that keeps an id and leaves out its `setting` or `walked_on` keeps the ones the
+  newest version holding that id recorded, so a later turn that writes the checks again never
+  drops them. Neither is required: a plan written before them stays valid.
 
   Besides what the type's schema refuses (`{:invalid_payload, fields}`), a plan is refused, with
   what is wrong in plain words (`{:invalid_plan, reasons}`), when it holds more than
   `max_checks/0` checks or `max_sub_tickets/0` sub-tickets, two checks share an id, a `qa`
   check names no `action` or nothing to `expect`, two sub-tickets share a key, or a sub-ticket
-  waits `after` itself or a key the plan does not hold. Nothing is written then.
+  waits `after` itself or a key the plan does not hold. With `qa_setting: true` (a later Conductor
+  turn's plan), a `qa` check new to the plan that names no `setting` or no `walked_on` is refused
+  too. Nothing is written then.
 
   Outcomes bind: a version that removes an `outcome` check of the version before it, or changes
   its statement, is refused the same way, unless an `ask.recorded` was written after that version.
@@ -92,15 +99,16 @@ defmodule SymphonyElixir.TicketPlan do
   def write(repo_key, issue_id, plan, opts \\ []) when is_binary(issue_id) and is_map(plan) do
     history = issue_id |> RunStore.list_ticket_events(types: ["plan.written", "ask.recorded"]) |> List.wrap() |> Enum.filter(&is_struct(&1, Event))
     earlier = versions(history)
-    payload = plan |> Map.drop([:version, "version"]) |> Map.put(:version, length(earlier) + 1) |> identified(earlier)
+    payload = plan |> Map.drop([:version, "version"]) |> Map.put(:version, length(earlier) + 1) |> identified(earlier) |> placed(earlier)
 
     {new_ask?, opts} = Keyword.pop(opts, :new_ask, false)
     {drop?, opts} = Keyword.pop(opts, :drop_outcomes, false)
+    {qa_setting?, opts} = Keyword.pop(opts, :qa_setting, false)
     binding = if new_ask?, do: [], else: history
 
     with :ok <- sized(payload),
          {:ok, valid} <- Types.validate("plan.written", payload, :machine, nil),
-         :ok <- coherent(valid, changed_outcomes(valid, binding, drop?)),
+         :ok <- coherent(valid, changed_outcomes(valid, binding, drop?) ++ unplaced(valid, earlier, qa_setting?)),
          {:ok, event} <- TicketEvents.record(repo_key, issue_id, "plan.written", valid, opts) do
       TicketProjection.changed(repo_key, issue_id)
       # A new version holds a merge the code is behind (`SymphonyElixir.PrDecision`'s R9a): the
@@ -143,6 +151,37 @@ defmodule SymphonyElixir.TicketPlan do
     checks
   end
 
+  # A `qa` check that keeps the id of a stored one and leaves out where it is walked (`setting`) or
+  # the state it is walked on (`walked_on`) keeps the stored ones: a later turn never drops them.
+  defp placed(plan, earlier) do
+    key = if is_map_key(plan, "checks"), do: "checks", else: :checks
+    stored = for %{checks: checks} <- earlier, %{} = check <- checks, into: %{}, do: {check_id(check), check}
+
+    case Map.get(plan, key) do
+      checks when is_list(checks) -> Map.put(plan, key, Enum.map(checks, &place(&1, stored)))
+      _not_a_list -> plan
+    end
+  end
+
+  defp place(check, stored) do
+    with %{} <- check, "qa" <- field(check, :kind), %{} = before <- Map.get(stored, check_id(check)) do
+      Enum.reduce(@placed_fields, check, fn name, check ->
+        if is_nil(field(check, name)) and not is_nil(field(before, name)), do: put_field(check, name, field(before, name)), else: check
+      end)
+    else
+      _new_or_other_kind -> check
+    end
+  end
+
+  # With `qa_setting: true` a `qa` check new to the plan says where it is walked and on what state;
+  # one kept from a version that had neither may still go without (a plan from before them).
+  defp unplaced(_plan, _earlier, false), do: []
+
+  defp unplaced(plan, earlier, true) do
+    used = used_ids(earlier)
+    for %{kind: "qa", id: id} = check <- plan.checks, id not in used, name <- @placed_fields, not Map.has_key?(check, name), do: "QA check #{id} has no #{name}"
+  end
+
   defp used_ids(versions), do: for(%{checks: checks} <- versions, check <- checks, uniq: true, do: check_id(check))
 
   defp number("c" <> digits) do
@@ -155,6 +194,7 @@ defmodule SymphonyElixir.TicketPlan do
   defp number(_id), do: []
 
   defp check_id(check), do: field(check, :id)
+  defp put_field(check, name, value), do: Map.put(check, if(Enum.any?(Map.keys(check), &is_binary/1), do: Atom.to_string(name), else: name), value)
   defp put_id(check, id), do: check |> Map.drop([:id, "id"]) |> Map.put(if(Enum.any?(Map.keys(check), &is_binary/1), do: "id", else: :id), id)
 
   # Outcomes bind: a version that drops an outcome check of the one before it, or rewords it, is

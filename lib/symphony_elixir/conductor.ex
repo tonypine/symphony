@@ -1067,6 +1067,8 @@ defmodule SymphonyElixir.Conductor do
       route: route_read(junction),
       plan: plan_read(plan),
       sub_tickets: sub_tickets_read(plan),
+      # Grooming's QA checks say where they are walked and on what state; a later turn may keep the stored ones.
+      qa_setting: junction == @grooming,
       tree: tree_turn?(plan),
       message: reply_read(plan),
       new_ticket: match?(%{message: %{finished: true}}, plan),
