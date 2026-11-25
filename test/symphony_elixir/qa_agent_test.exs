@@ -1236,7 +1236,7 @@ defmodule SymphonyElixir.QaAgentTest do
       assert prompt =~ "You are verifying the epic itself, not running a script"
       assert prompt =~ "It never fails or blocks the ticket."
       assert prompt =~ "Journeys to verify, from the epic's acceptance criteria:\n- [ ] The settings window opens"
-      assert String.replace(prompt, ~r/\s+/, " ") =~ "Read the check the way the CI rule above reads CI's runs."
+      assert String.replace(prompt, ~r/\s+/, " ") =~ "Do not walk it and do not read CI for it."
       assert prompt =~ ~s("checklist": true | false)
 
       flat = String.replace(prompt, ~r/\s+/, " ")
