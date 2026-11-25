@@ -133,8 +133,8 @@ at a time: when one is already open (yours or Symphony's own), yours is not aske
 
 What the facts say about the walkthrough:
 - `ticket.proved_steps` lists the walkthrough steps recorded as proved by a test (the step's
-  number and the test). QA's pre-check runs that test on the pull request; QA does not walk the
-  step. A rework that only recorded such a proof changed what QA checks: the step no longer needs
+  number and the test). Such a step is proved as recorded, CI runs its test on the pull request,
+  and QA does not walk it. A rework that only recorded such a proof changed what QA checks: the step no longer needs
   QA's setup, so never say the setup is still missing for it.
 
 The update is never null. It is for the person, only facts in the document, never restating the

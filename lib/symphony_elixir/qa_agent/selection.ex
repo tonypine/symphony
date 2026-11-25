@@ -196,16 +196,16 @@ defmodule SymphonyElixir.QaAgent.Selection do
   Whether a `macos_app` playbook's `live` server runs for this change, and why: the diff touches
   one of the server's `paths` and a `## User walkthrough` step QA walks mentions one of its
   `walkthrough_mentions` (any such step when it lists none). A step the implementer proved with a
-  test, recorded as an `evidence` event and run by the repo's `proof_check`, is not QA's to walk,
+  test, recorded as an `evidence` event, is not QA's to walk,
   so it never asks for the server; the proofs are read from the ticket's events, never from the
   description. A `qa:live` label makes it run and a `qa:fixture` label never does, whatever the
   diff; `qa:fixture` wins over `qa:live`. A groomed ticket's steps are its plan's QA checks, and the
   reason names them instead of the walkthrough.
   """
-  @spec live(Issue.t(), PlaybookSettings.live_server(), [String.t()], String.t() | nil) :: {boolean(), String.t()}
-  def live(%Issue{} = issue, live_server, changed_paths, proof_check \\ nil) when is_list(changed_paths) do
+  @spec live(Issue.t(), PlaybookSettings.live_server(), [String.t()]) :: {boolean(), String.t()}
+  def live(%Issue{} = issue, live_server, changed_paths) when is_list(changed_paths) do
     labels = issue |> Issue.label_names() |> Enum.map(&normalize_label/1)
-    section = walked_section(issue, proof_check)
+    section = walked_section(issue)
     words = live_words(TicketJourney.groomed?(issue))
 
     cond do
@@ -243,7 +243,7 @@ defmodule SymphonyElixir.QaAgent.Selection do
   # The text QA walks: the steps no recorded proof covers (all of a walkthrough with no numbered
   # step); "" when a proof covers every step, nil for a ticket with no step. A groomed ticket's
   # steps are its plan's QA checks (`SymphonyElixir.TicketJourney`).
-  defp walked_section(issue, proof_check), do: TicketJourney.walked_text(issue, proof_check)
+  defp walked_section(issue), do: TicketJourney.walked_text(issue)
 
   defp server_change?(live_server, paths),
     do: Enum.any?(paths, fn path -> Enum.any?(live_server.paths, &glob_match?(path, &1)) end)

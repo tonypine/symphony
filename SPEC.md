@@ -1147,7 +1147,6 @@ Allowed repo-local front matter keys:
 - `hooks`
 - `prompts`
 - `push_check`
-- `proof_check`
 - `verification`
 - `validation`
 - `auto_review`, with only its `playbooks` key
@@ -1156,13 +1155,15 @@ Allowed repo-local front matter keys:
   only and is not part of the returned `config`.
 
 Unknown repo workflow keys, and `auto_review` keys other than `playbooks`, are rejected with an
-error that directs the operator to move operator-owned configuration to `symphony.yml`.
+error that directs the operator to move operator-owned configuration to `symphony.yml`. A key the
+contract has removed and still tolerates MUST load without error and be dropped, so it never
+reaches the runtime config: a front matter written for an earlier release keeps loading.
 
 ### 5.4 Config Schema
 
 Unless explicitly called out as repo-local, fields in this section live in `symphony.yml` and become
 part of the merged runtime config. Repo-local front matter contributes `hooks`, `push_check`,
-`proof_check`, `verification`, `auto_review.playbooks` and `human_actions.enabled` values to the runtime settings for that repo. Nested
+`verification`, `auto_review.playbooks` and `human_actions.enabled` values to the runtime settings for that repo. Nested
 repo-local maps are merged over the operator config so repos can override only their dev-server
 command while inheriting process-wide verification defaults such as port allocation, or only one
 playbook's settings while inheriting the operator's other playbooks.
@@ -1625,15 +1626,6 @@ Behavior:
   16 KiB) whose first line is the pushed commit's SHA followed by `pass`. A `fail` result for that
   commit is refused with the recorded failure lines; a missing result, a result for another commit
   or an unreadable file is refused with the command to run.
-
-#### 5.4.8b `proof_check` (string, repo-local)
-
-The GitHub check run or workflow name that proves the repository's automated tests ran (Symphony's
-own repository: `make-all`). It is a property of the repository, so a ticket never repeats it.
-
-- Default: `null`. A repository without it has no named-test proofs: every step of its
-  walkthroughs is a QA step (Section 5.4.17, **Walkthrough proofs**).
-- A blank value fails configuration validation. `symphony.yml` MUST NOT accept the key.
 
 #### 5.4.8 `execution` (object)
 
@@ -2255,7 +2247,7 @@ The QA agent:
   checks, and every other check the plan proves by QA or against a design, and judges nothing
   else, and QA MUST NOT be skipped while one of those is open; before the merge the Conductor's
   facts name every check still open; the `outcome` checks are the acceptance criteria; a
-  `check.proved` with `by: test` is confirmed on the PR head by the QA pre-check, and QA records a
+  `check.proved` with `by: test` is complete when recorded (**Walkthrough proofs** below), and QA records a
   `check.proved` (`by: qa` or `design`) for each check it saw pass. The ticket MUST NOT be handed
   off to Code Review while a check a test or an attachment proves is open. A plan whose layers
   hold `screen` or `gallery` MUST NOT be scoped to "nothing on screen". The Linear description of
@@ -2267,16 +2259,16 @@ The QA agent:
 - **Walkthrough proofs.** The person writing a ticket describes the user's flow in plain steps and
   names no test and no check. The implementer, who writes the tests, ends each step a test of its PR
   covers with `Proved by: <test>` through `linear_record_walkthrough_proofs`, which records each
-  proof as an `evidence` event on the ticket's history, naming only tests in the PR and never a check. The repository names the check that runs them (`proof_check`, Section
-  5.4.8b). A step ending in `Proved by: <test>` is proved by that test, run by the `proof_check`; the
-  older `Proved by: <check> › <test>` MUST still be read, naming the check itself; `Proved by: QA`, or
-  no line, is a QA step. A `Proved by:` inside inline code is a quotation in the step's prose, not its
-  proof, and MUST NOT be read as one. Without a `proof_check`, every step is a QA step. Before a QA
-  agent starts, Symphony MUST confirm each named-test step on the PR head: the test is in the
-  checkout and its check passed (pass), is still running (pending, waited for boundedly) or failed,
-  did not run or the test is missing (fail to `Rework` with no agent run). A step naming a check that
-  is neither the `proof_check` nor a check on the head MUST fail with a message naming the
-  repository's `proof_check`. QA links a confirmed step's result instead of walking it.
+  proof as an `evidence` event on the ticket's history, naming only tests in the PR and never a check;
+  a proof naming a test Symphony cannot find in the checkout MUST be refused when it is recorded. A
+  step ending in `Proved by: <test>` is proved by that test; the older `Proved by: <check> › <test>`
+  MUST still be read as proved by the test, its check name changing nothing; `Proved by: QA`, or no
+  line, is a QA step. A `Proved by:` inside inline code is a quotation in the step's prose, not its
+  proof, and MUST NOT be read as one. **A test proof is complete when it is recorded, and CI gates
+  the merge**: this holds for a walkthrough step and for a plan check a test proves. CI runs the test
+  on the pull request, and a red check blocks the merge. A QA pass MUST NOT read or wait for the pull
+  request's CI on a proof's account: the proved steps reach the QA agent as proved, named with their
+  tests, and QA does not walk them.
 - QA selection is deterministic and runs before any agent: a `qa:skip` label skips; a
   `qa:<kind>` label selects that playbook; a diff that only touches docs, tests or `skip_globs`
   skips; otherwise playbooks are selected by their trigger paths, and the `cli` playbook also by a
@@ -5347,9 +5339,9 @@ Scoped Linear tool extension contract:
   description unchanged. It MUST refuse, with nothing recorded, a test holding a ` › ` or ` > `
   separator (a check name), `QA`, a step the walkthrough lacks, a step its author ended with
   `Proved by: QA`, and a test that fails the comments' secret scan; the read-only reviewer and QA
-  scopes MUST NOT advertise or execute it. The QA journey, the QA pre-check and the QA
-  selection MUST read a step's proof from the recorded `evidence` events only, the latest event of a
-  step winning, and never from the description; the pre-check's steps come from the events alone.
+  scopes MUST NOT advertise or execute it. The QA journey, the proved steps a QA pass hands on and
+  the QA selection MUST read a step's proof from the recorded `evidence` events only, the latest
+  event of a step winning, and never from the description.
   The description's `Proved by:` lines MUST be a projection of those events, rendered between
   `<!-- symphony:proofs:start -->` and `<!-- symphony:proofs:end -->` at the end of the walkthrough in
   the same pass as the Decisions section, the walkthrough ending at the next heading or at a line

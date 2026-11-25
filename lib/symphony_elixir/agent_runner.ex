@@ -178,13 +178,13 @@ defmodule SymphonyElixir.AgentRunner do
   defp provider_hold_reason({:model_api_unreachable, %{}} = reason), do: reason
   defp provider_hold_reason(_reason), do: nil
 
-  # The reasons the orchestrator reads as they are: the tool-failure circuit breaker, and an epic
-  # review or a QA pass waiting for CI.
+  # The reasons the orchestrator reads as they are: the tool-failure circuit breaker, and a run
+  # waiting for CI.
   defp exits_as_is?(reason), do: terminal_tool_failure_circuit_breaker?(reason) or ci_pending?(reason)
 
-  # An epic review that found CI still running on the commit it reviews, or a QA pass whose named
-  # check is still running on the PR head: the orchestrator starts it again after a short wait
-  # instead of failing the run (`SymphonyElixir.EpicReview`, `SymphonyElixir.QaVerification`).
+  # A run that found CI still running, such as an epic review on the commit it reviews: the
+  # orchestrator starts it again after a short wait instead of failing the run
+  # (`SymphonyElixir.EpicReview`).
   defp ci_pending?({:ci_pending, %{}}), do: true
   defp ci_pending?(_reason), do: false
 

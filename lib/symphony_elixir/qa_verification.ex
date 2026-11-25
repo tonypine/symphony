@@ -40,7 +40,7 @@ defmodule SymphonyElixir.QaVerification do
       select the app's playbook for, or the project's own server on a repo whose setup rules a dev
       server out of a pass none of whose playbooks runs it,
       `SymphonyElixir.SelfHeal.dev_server_ruled_out/2`) -> decided by the other steps, the
-      pre-checks and CI: a failing step fails, a passing one passes, and with nothing left to prove
+      steps a recorded test proves and CI: a failing step fails, a passing one passes, and with nothing left to prove
       a Needs Decision hold in `QA` at once, recommending a merge without a QA result; a
       `needs_dev_server` block on such a pass makes its blocked steps unprovable instead of filing a
       dev-server repair. A block that names its own cause (a person to ask, the ticket that covers
@@ -60,13 +60,12 @@ defmodule SymphonyElixir.QaVerification do
 
   First the run brings its workspace to the PR's current head (a reused workspace still holds the
   head of its last run, and branch upkeep may have updated the PR since), resetting it only when it
-  holds no local work; a head that moves during the run is synced once more before it blocks.
+  holds no local work.
 
-  Before the agent starts, the QA pre-check (`SymphonyElixir.QaPreCheck`) confirms each walkthrough
-  step a named test proves, on the PR head: a passed check whose test is in the checkout reaches the
-  agent as confirmed, linked and not walked; a failed check, one that never ran, or a test not in the
-  checkout fails the pass to `Rework` without an agent run; a check still running is waited for, then
-  reported `blocked` past the wait's limit (`SymphonyElixir.CiWait`). Every result is one line of the
+  A walkthrough step or plan check a recorded test proves is proved: a test proof is complete when
+  it is recorded, and CI runs the test on the pull request and gates the merge. The pass neither
+  reads nor waits for CI on a proof's account: the proved steps reach the agent as proved, named
+  with their tests and not walked (`SymphonyElixir.QaPreCheck`), and each is one line of the
   report's `### Pre-checks`.
 
   QA is journey-driven: the prompt carries the ticket's user walkthrough and acceptance criteria
@@ -86,7 +85,6 @@ defmodule SymphonyElixir.QaVerification do
   require Logger
 
   alias SymphonyElixir.{
-    CiWait,
     ClosedPullRequest,
     Conductor,
     Config,
@@ -217,25 +215,22 @@ defmodule SymphonyElixir.QaVerification do
   instruction to derive them. The QA prompt renders this, so the run knows what to verify from the
   user's point of view and which steps a named test proves instead.
 
-  `proof_check` is the repo's `proof_check` (WORKFLOW.md), the check a `Proved by: <test>` step
-  names; with none, every step is QA's to walk.
-
-  A groomed ticket's journey is its plan's QA checks (`SymphonyElixir.TicketJourney.journey/3`), and
+  A groomed ticket's journey is its plan's QA checks (`SymphonyElixir.TicketJourney.journey/2`), and
   its description is not read.
 
   `label` names whose plan the journeys come from in the source phrase: the ticket for the QA
   state's own run (the default), and the epic for the epic review of a plan parent
   (`SymphonyElixir.EpicReview`), so the prompt reads right about which issue carries them.
   """
-  @spec journey(Issue.t(), String.t() | nil, String.t()) ::
+  @spec journey(Issue.t(), String.t()) ::
           %{required(:source) => String.t(), required(:text) => String.t() | nil, required(:steps) => [Walkthrough.step()], optional(:groomed) => true}
-  def journey(issue, proof_check, label \\ "the ticket"),
-    do: TicketJourney.journey(issue, proof_check, label) || journey_for(issue, proof_check, label)
+  def journey(issue, label \\ "the ticket"),
+    do: TicketJourney.journey(issue, label) || journey_for(issue, label)
 
-  defp journey_for(%Issue{description: description} = issue, proof_check, label) when is_binary(description) do
+  defp journey_for(%Issue{description: description} = issue, label) when is_binary(description) do
     cond do
       text = Walkthrough.section(description) ->
-        steps = text |> Walkthrough.steps() |> Walkthrough.with_recorded_proofs(Walkthrough.recorded_proofs(issue.id), proof_check)
+        steps = text |> Walkthrough.steps() |> Walkthrough.with_recorded_proofs(Walkthrough.recorded_proofs(issue.id))
         %{source: "#{label}'s `## User walkthrough`", text: text, steps: steps}
 
       text = section(description, @acceptance_heading) ->
@@ -246,7 +241,7 @@ defmodule SymphonyElixir.QaVerification do
     end
   end
 
-  defp journey_for(_issue, _proof_check, label), do: %{source: "#{label}'s walkthrough and acceptance criteria", text: nil, steps: []}
+  defp journey_for(_issue, label), do: %{source: "#{label}'s walkthrough and acceptance criteria", text: nil, steps: []}
 
   defp verify(issue, workspace, opts, settings) do
     case Keyword.get(opts, :worker_host) do
@@ -266,7 +261,7 @@ defmodule SymphonyElixir.QaVerification do
   # upkeep merges the base branch in after the approve), so the run first brings the workspace to the
   # PR's current head and only then reads the head its verdict binds to. A workspace with local work
   # is never reset: the run is blocked naming it. A PR head that cannot be fetched leaves the
-  # workspace as it is; the pre-check still catches a head that moved.
+  # workspace as it is, and the verdict binds to the head the run reads.
   defp read_head(issue, workspace, opts, settings) do
     case sync_to_pr_head(issue, workspace, opts) do
       {:error, {:workspace_dirty, _head, _pr_head, _dirt} = dirty} -> dirty_workspace(issue, opts, settings, dirty)
@@ -349,7 +344,7 @@ defmodule SymphonyElixir.QaVerification do
     case policy.decide(issue, settings, workspace: workspace, repo_key: repo_key(issue, opts)) do
       {:skip, reason} -> skip(issue, opts, settings, head, reason)
       {:nothing_to_verify, _reason} -> nothing_to_verify(issue, workspace, opts, settings, head, pr_url)
-      {:run, playbooks, _reason} -> pre_check(issue, workspace, opts, settings, {head, pr_url}, playbooks)
+      {:run, playbooks, _reason} -> run_agent(issue, workspace, opts, settings, head, playbooks, QaPreCheck.proved(TicketJourney.proof_steps(issue)))
     end
   end
 
@@ -377,91 +372,6 @@ defmodule SymphonyElixir.QaVerification do
         paused_or_error -> paused_or_error
       end
     end
-  end
-
-  # The steps a named test proves, read from the proof events alone and never from the description,
-  # are confirmed before the agent starts (`SymphonyElixir.QaPreCheck`):
-  # a failed or missing proof fails the pass without an agent run, a check still running waits, and
-  # the confirmed steps reach the agent and the report. A walkthrough without one runs as before.
-  defp pre_check(issue, workspace, opts, settings, {head, pr_url}, playbooks) do
-    pre_check_opts = [proof_check: settings.proof_check] ++ Keyword.take(opts, [:gh_runner, :git])
-
-    case QaPreCheck.run(TicketJourney.proof_steps(issue, settings.proof_check), pr_url, head, workspace, pre_check_opts) do
-      :none -> run_agent(issue, workspace, opts, settings, head, playbooks, [])
-      {:pass, results} -> run_agent(issue, workspace, opts, settings, head, playbooks, results)
-      {:fail, results} -> fail(issue, opts, settings, head, pre_check_failed(results))
-      {:pending, results} -> wait_for_checks(issue, opts, settings, head, results)
-      {:error, {:pr_head_moved, moved_to}} -> head_moved(issue, workspace, opts, settings, head, moved_to)
-      {:error, reason} -> pre_check_unreadable(issue, opts, settings, head, reason)
-    end
-  end
-
-  defp pre_check_unreadable(issue, opts, settings, head, reason) do
-    blocked(issue, opts, settings, head, blocked_outcome("the QA pre-check could not read CI on the PR head: #{inspect(reason)}", %{}))
-  end
-
-  # The PR's head moved after the workspace was synced (upkeep merged the base branch in, a push
-  # landed): the workspace is synced once more and the run starts again from the head it reads, in
-  # the same run. Only a head that still differs after that sync blocks the run.
-  defp head_moved(issue, workspace, opts, settings, head, moved_to) do
-    if Keyword.get(opts, :qa_head_resynced, false) do
-      pre_check_unreadable(issue, opts, settings, head, {:pr_head_moved, moved_to})
-    else
-      Logger.info("QA for #{issue_label(issue)} re-syncs its workspace: the PR head moved from #{String.slice(head, 0, 12)} to #{String.slice(moved_to, 0, 12)}")
-
-      case sync_to_pr_head(issue, workspace, opts) do
-        :ok -> read_synced_head(issue, workspace, Keyword.put(opts, :qa_head_resynced, true), settings)
-        {:error, {:workspace_dirty, _head, _pr_head, _dirt} = dirty} -> dirty_workspace(issue, opts, settings, dirty)
-        {:error, reason} -> pre_check_unreadable(issue, opts, settings, head, {:pr_head_moved, moved_to, reason})
-      end
-    end
-  end
-
-  defp pre_check_failed(results) do
-    %{
-      verdict: :fail,
-      summary: "The QA pre-check found a walkthrough step whose named test did not pass on this head, so no QA agent ran.",
-      steps: [],
-      findings: QaPreCheck.findings(results),
-      checks: QaPreCheck.report_checks(results),
-      reason: nil,
-      needs_person: false,
-      playbooks: []
-    }
-  end
-
-  # A named check still running is waited for like the epic review waits for CI: the run exits with
-  # `{:ci_pending, info}` and the orchestrator starts it again after CI had a minute more, counting
-  # the wait on this head (`SymphonyElixir.CiWait`). Past the wait's limit the pass is `blocked`
-  # with the reason: retried boundedly, then the self-heal lane.
-  defp wait_for_checks(issue, opts, settings, head, results) do
-    pending = Enum.filter(results, &(&1.status == :pending))
-    now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
-
-    case CiWait.since(Handoff.signals(repo_key(issue, opts), issue.id), head) do
-      %DateTime{} = since ->
-        if CiWait.over?(since, now),
-          do: blocked(issue, opts, settings, head, checks_still_running(pending, results, since, now)),
-          else: ci_pending(issue, head, pending)
-
-      nil ->
-        ci_pending(issue, head, pending)
-    end
-  end
-
-  defp ci_pending(issue, head, pending) do
-    runs = Enum.map(pending, &%{workflow_name: &1.step.proof.check, url: &1.url})
-    Logger.info("QA for #{issue_label(issue)} waits for the named checks on #{String.slice(head, 0, 12)}: #{Enum.map_join(runs, ", ", & &1.workflow_name)}")
-    {:error, {:ci_pending, %{sha: head, runs: runs, run: "the QA pass"}}}
-  end
-
-  defp checks_still_running(pending, results, since, now) do
-    minutes = div(DateTime.diff(now, since, :second), 60)
-    steps = Enum.map_join(pending, "; ", &"step #{&1.step.number}: #{QaPreCheck.linked(&1)}")
-
-    blocked_outcome("the named checks were still running after #{minutes} minutes of waiting: #{steps}", %{
-      checks: QaPreCheck.report_checks(results)
-    })
   end
 
   # With no open pull request the workspace is built from the base branch, and its head is not the
@@ -570,7 +480,7 @@ defmodule SymphonyElixir.QaVerification do
   # pass nor be repaired, so it decides nothing: on such a pass, a `needs_dev_server` block makes
   # its blocked steps `unprovable` with the repo's reason rather than filing a dev-server repair the
   # repo decided against, and a pass or block whose only open steps are unprovable is decided by
-  # the rest. A failing step fails it; a passing step or a passed pre-check passes it, the report
+  # the rest. A failing step fails it; a passing step or a step a recorded test proves passes it, the report
   # naming each unprovable step; with nothing left to prove it stays blocked, marked `unprovable`,
   # and goes straight to a person, who is told merging without a QA result is the way on. Any other
   # blocked step, or a block that names its own cause, keeps the pass blocked as before.
@@ -621,7 +531,7 @@ defmodule SymphonyElixir.QaVerification do
       Map.has_key?(by_status, "fail") ->
         %{outcome | verdict: :fail, findings: settled_findings(outcome.findings, by_status["fail"])}
 
-      Map.has_key?(by_status, "pass") or Enum.any?(Map.get(outcome, :checks, []), &(&1.status == :pass)) ->
+      Map.has_key?(by_status, "pass") or Enum.any?(Map.get(outcome, :checks, []), &(&1.status == :proved)) ->
         %{outcome | verdict: :pass, summary: String.trim("#{outcome.summary} #{unprovable_note(unprovable)}")}
 
       true ->
@@ -1104,7 +1014,7 @@ defmodule SymphonyElixir.QaVerification do
       playbooks: playbooks,
       token_limit: settings.execution.max_tokens_per_issue,
       run_profile: Keyword.get(opts, :run_profile),
-      journey: journey(issue, settings.proof_check),
+      journey: journey(issue),
       proofs: proofs,
       unprovable: %{
         unselected: QaPolicy.unselected_playbooks(settings, playbooks),

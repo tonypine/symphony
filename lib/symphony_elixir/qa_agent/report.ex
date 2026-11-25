@@ -59,8 +59,8 @@ defmodule SymphonyElixir.QaAgent.Report do
 
   The epic review (`SymphonyElixir.EpicReview`) also passes `:checks`, its deterministic
   pre-checks as `%{name: atom, status: :ok | :attention, detail: String.t()}`, and so does the QA
-  state's pass, with one `%{name: String.t(), status: :pass | :fail | :pending, detail: String.t()}`
-  per walkthrough step a named test proves (`SymphonyElixir.QaPreCheck`); they render as a
+  state's pass, with one `%{name: String.t(), status: :proved, detail: String.t()}` per
+  walkthrough step a recorded test proves (`SymphonyElixir.QaPreCheck`); they render as a
   `### Pre-checks` section so the issue's history says what ran before the agent did.
   """
   @spec render(map()) :: String.t()

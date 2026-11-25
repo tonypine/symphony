@@ -98,13 +98,14 @@ defmodule SymphonyElixir.PlaybookTest do
       assert body =~ "State: only `Plan Review`"
     end
 
-    test "the partials that write walkthroughs write plain steps: the implementer names the test, the repo the check" do
+    test "the partials that write walkthroughs write plain steps: the implementer names the test, CI gates the merge" do
       assert {:ok, backlog} = Playbook.fetch("out_of_scope_backlog")
       backlog = String.replace(backlog, ~r/\s+/, " ")
 
       assert backlog =~ "Write the walkthrough end to end, in plain words from the user's seat, and name no test and no check in it."
       assert backlog =~ "The implementer, who writes the tests, records which test proves each step it covers (`Proved by: <test>`)"
-      assert backlog =~ "the repo names the check that runs them (`proof_check` in its WORKFLOW.md)"
+      assert backlog =~ "A recorded test proof is complete: CI runs the test on the pull request and gates the merge"
+      refute backlog =~ "proof_check"
       assert backlog =~ "Unit-level facts (keys, counters, error tuples) are acceptance criteria, not walkthrough steps."
       assert backlog =~ "A step that needs an environment QA lacks (a signed build, a device, real credentials) needs an automated harness"
       assert backlog =~ "A judgment by sight of what the user sees ends with `Proved by: QA`"

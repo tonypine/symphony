@@ -11,8 +11,8 @@ defmodule SymphonyElixir.Conductor.Facts do
     * `junction`: the junction it is shaped for, and `focus`, what the turn there is for;
     * `ticket`: identifier, title, URL, the description's `problem`, `acceptance` and `walkthrough`
       sections, the walkthrough steps recorded as proved by a test (`proved_steps`: each step's
-      number and test, the newest proof of a step; QA's pre-check runs that test and QA does not
-      walk the step), the newest brief, the person's decisions, notes and messages, and answers to
+      number and test, the newest proof of a step; the step is proved as recorded and QA does not
+      walk it), the newest brief, the person's decisions, notes and messages, and answers to
       questions;
     * `standing`: phase, coding attempt (the implementation and rework runs started), the pull
       request and its head;
