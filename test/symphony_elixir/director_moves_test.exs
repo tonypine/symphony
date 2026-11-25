@@ -3072,6 +3072,18 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert RunStore.list_ticket_events("pr", types: ["message.sent"]) == []
     end
 
+    test "a question that can't be asked again is logged, and the wait on the Conductor still goes", %{opts: opts} do
+      question = held!("Rework")
+      opts = with_conductor(opts, failing_turn())
+
+      capture_log(fn -> assert {:ok, %{conductor: true}} = DirectorMoves.answer_held_question("MOT-40", question.id, "Go on.", opts) end)
+      assert ["The Conductor is reading your answer: " <> _title] = Pauses.why(@held)
+
+      log = capture_log(fn -> assert Conductor.Message.ask_again("repo-director", "pr", ["no-such-question"]) == :ok end)
+      assert log =~ "Could not ask question no-such-question again"
+      refute Enum.any?(Pauses.why(@held), &String.starts_with?(&1, "The Conductor is reading your answer"))
+    end
+
     test "run_again/2 lifts a held ticket in place, as Unblock does", %{opts: opts} do
       conducted!("In Progress")
       :ok = Pauses.stop(@held, DateTime.utc_now())

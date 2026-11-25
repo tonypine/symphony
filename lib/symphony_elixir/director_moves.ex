@@ -446,7 +446,7 @@ defmodule SymphonyElixir.DirectorMoves do
   question makes it (`SymphonyElixir.Conductor.Message.settle/5`). Takes the options of `move/4`.
   """
   @spec run_again(String.t(), keyword()) :: result()
-  def run_again(identifier, opts \\ []) when is_binary(identifier) do
+  def run_again(identifier, opts) when is_binary(identifier) do
     with {:ok, issue} <- fetch_issue(identifier), do: unblock(issue, opts, true)
   end
 
