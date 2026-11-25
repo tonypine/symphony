@@ -4353,10 +4353,12 @@ Slots:
   runs through the holder's slot as a sub-ticket does: the ticket its pause waits on (a run's block
   report naming another ticket, a fix ticket reused from another affected ticket, a Conductor
   blocker that already existed, a competing pull request) and each of its open stored dependencies
-  (one added mid-work). The waited-on ticket borrows only when it has no ancestor in progress and is
-  not in progress on its own slot; it keeps the loan while the holder waits on it. So a holder never
-  waits on a ticket no slot is free for: with one slot, the blocker runs on the holder's slot, and
-  the two count as one used slot.
+  (one added mid-work). The waited-on ticket borrows only when it has no ancestor in progress, or
+  runs through the same ancestor as the holder (a sibling under one epic, since the holder already
+  counts as that epic's sub-ticket in progress), and is not in progress on its own slot; the
+  holder's own ancestor borrows nothing. It keeps the loan while the holder waits on it. So a holder
+  never waits on a ticket no slot is free for: with one slot, the blocker runs on the holder's slot,
+  and the two count as one used slot.
 - `available_slots = max(max_concurrent_agents - taken, 0)`, where `taken` counts the tickets in
   progress (those that hold a slot and every other run under way: a PR run with no ticket takes a
   slot while it runs) less, for each ticket in progress that a sub-ticket (or a ticket it lends its
@@ -4387,7 +4389,11 @@ Giving a slot up:
 - A ticket gives up its slot only when it is done (a terminal state), when it leaves the active
   states (a person moved it to `Backlog`, it was removed, or unassigned from this worker), or when
   a person stops it. A stop that comes with a Question waits on the person and keeps the slot.
-  Every wait on another ticket keeps it, and the ticket it waits on runs through it (above).
+  Every wait on another ticket keeps it, and the ticket it waits on runs through it (above). One
+  exception: a ticket that has not started (still in `Todo`) and gets a stored dependency on a
+  ticket that is not done and not in progress gives back the slot it was given, in the cycle the
+  dependency's write asks for, so the dependency starts through that slot. It keeps its place in
+  the queue and starts in its order once the dependency is done.
 - A ticket with no live run is judged on every cycle against the cycle's candidates and its closed
   dispatch gate; one with a live run gives it up when the run is ended for a terminal or inactive
   state. The cycle that frees a slot asks for another at once, so the next ticket takes it without
@@ -4402,7 +4408,11 @@ Which ticket a free slot goes to:
 - The first ticket of the queue (the first candidate in progress, free to start, or held only by a
   wait on a stored dependency or on its sub-tickets), when it holds no slot and waits on a stored
   dependency or its sub-tickets, takes the free slot with no run and waits there; its run starts
-  once the wait is over. With one slot nothing below it starts meanwhile. Any other ticket that
+  once the wait is over. With one slot nothing below it starts meanwhile. A ticket that has not
+  started waits there on a dependency only when the dependency runs on a slot of its own or is done
+  and waits for its release; one whose dependency needs a slot is not the first of the queue, so the
+  dependency (its own or a sibling under the same epic) goes first through that slot. With nothing
+  running and a ticket that can start in the queue, the free slot goes to it. Any other ticket that
   cannot start takes no slot.
 
 Nothing else limits the slots: landing has no allowance of its own, no phase has a limit of its
@@ -7929,7 +7939,8 @@ infrastructure.
   it; added on an issue that sits lower, it moves the depending issue to just below it; an unmet one
   holds the issue from dispatch and reads "Blocked by" the issue it waits on; an issue that holds a
   slot keeps it, the first of the queue takes the free slot and waits there, and the first pass that
-  finds it met lets the issue start
+  finds it met lets the issue start; an issue that has not started and waits on a dependency that
+  needs a slot takes none and gives back one it was given, so the dependency starts through it
 - Splits, run-filed sub-issues, the Director's blockers and the agent tools write stored
   dependencies and no tracker blocker link; the first start converts the recorded `after` of open
   sub-issues
@@ -7939,7 +7950,8 @@ infrastructure.
   agent turn and question to the person, and with no live run; with 1 slot no other ticket starts
   meanwhile
 - A ticket gives its slot up when it is done, leaves the active states or a person stops it; it
-  keeps it while it waits on a dependency or its sub-tickets; the freed slot goes to the next ticket
+  keeps it while it waits on a dependency or its sub-tickets, unless it has not started and the
+  dependency needs that slot; the freed slot goes to the next ticket
 - A ticket's sub-tickets run through its slot, one at a time with 1 slot; an extra free slot goes in
   queue order to the first ticket that can start, the parent's next ready sub-ticket first when the
   parent is at the top, and comes back when that sub-ticket is done

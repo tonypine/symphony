@@ -11,7 +11,11 @@ defmodule SymphonyElixir.Dispatch.Slots do
     is in progress; that is the only meaning of in progress.
   - A ticket gives up its slot only when it is done (a terminal state), leaves the active states (a
     person moved it to Backlog, or it was removed or unassigned), or when a person stops it without
-    a question (`releases?/2`).
+    a question (`releases?/2`). One more case (TP-1635): a ticket that has not started (still in
+    Todo) and gets a stored dependency on a ticket that is not done and not in progress gives back
+    the slot it was given, in the cycle the dependency's write asks for, so the dependency starts
+    through that slot; it keeps its place in the queue and starts in its order once the dependency
+    is done.
   - A ticket's sub-tickets run through its slot, whether or not it has work of its own: a sub-ticket
     whose nearest ancestor in progress holds a slot (`through/3`) starts on that slot, and the
     ticket and its first sub-ticket in progress count as one. Each further sub-ticket in progress at
@@ -26,7 +30,9 @@ defmodule SymphonyElixir.Dispatch.Slots do
   - A ticket that holds a slot lends it to a ticket it waits on outside its own tree (the ticket
     its pause waits on, an open stored dependency): the orchestrator names the holder as that
     ticket's parent in the map it gives `through/3`, `used/2` and `cost/3`, so with one slot the
-    holder never waits on a ticket no slot is free for.
+    holder never waits on a ticket no slot is free for. A sibling under the same ancestor borrows it
+    too: the holder already counts as that ancestor's sub-ticket in progress, so inside one epic one
+    sub-ticket waiting on another never blocks it. The holder's own ancestor borrows nothing.
   - No agent turn and no machine step runs for a ticket that holds no slot. A ticket without one
     starts only on a free slot or through its ancestor's; one that holds a slot always starts its
     next run.
@@ -35,7 +41,11 @@ defmodule SymphonyElixir.Dispatch.Slots do
     next sub-ticket whose dependencies are met; when it has none ready, the next ticket down. The
     first ticket of the queue, when it holds no slot and cannot start only because it waits on a
     stored dependency or on its sub-tickets (`waits_in_slot?/1`), takes the free slot with no run and
-    waits there; its run starts once the wait is over.
+    waits there; its run starts once the wait is over. A ticket that has not started does so on a
+    dependency only when that dependency runs on a slot of its own or is done and waits for its
+    release: one that waits on a dependency that needs a slot takes none, so the dependency, its
+    own or a sibling under the same epic, goes first through that slot (TP-1635). With nothing
+    running and a ticket that can start in the queue, the free slot always goes to it.
   - Nothing else limits the slots: landing has no allowance of its own, no phase has a limit of its
     own, and no slot is reserved for epics.
   - Each slot has a number, from 1: a ticket that takes a slot gets the lowest number no holder uses
@@ -93,7 +103,8 @@ defmodule SymphonyElixir.Dispatch.Slots do
   `SymphonyElixir.Dispatch.DependsOn`), an app update carrying a dependency's fix, a pause on
   another ticket (a run's block report, a fix ticket, a competing pull request). So does any other
   gate (a question, a decision, CI, a build, a usage limit, a pause of Symphony or a provider, the
-  priority filter).
+  priority filter). The orchestrator alone takes back the slot of a ticket that has not started and
+  waits on a dependency that needs that slot, since that needs the slots in progress.
   """
   @spec releases?({term(), term(), term()} | nil, [map()]) :: boolean()
   def releases?(nil, _pause_reasons), do: false
@@ -109,7 +120,8 @@ defmodule SymphonyElixir.Dispatch.Slots do
   @doc """
   Whether the gate a ticket without a slot is held by lets it take the free slot with no run and
   wait there when it is the first of the queue: it waits on a stored dependency or on its own
-  sub-tickets.
+  sub-tickets. The orchestrator passes over a ticket that has not started and waits on a dependency
+  that needs a slot, as that needs the slots in progress.
   """
   @spec waits_in_slot?({term(), term(), term()} | nil) :: boolean()
   def waits_in_slot?({_reason, nil, gate}) when gate in [:depends_on, :sub_tickets], do: true

@@ -191,23 +191,26 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
       assert Orchestrator.release_slots_for_test(kept, done, true).slot_holders == %{}
     end
 
-    test "the first of the queue held on an unmet dependency takes the free slot with no run, nothing below starts, and its run starts once it is met (TP-1624)", ctx do
-      write_slots_workflow!(ctx, max_concurrent_agents: 1)
-      upstream = recorded(issue("u", "MT-U", "Code Review"))
+    test "the first of the queue held on an unmet dependency that runs on a slot of its own takes the free slot with no run, nothing below starts, and its run starts once it is met (TP-1624, TP-1635)",
+         ctx do
+      write_slots_workflow!(ctx, max_concurrent_agents: 2)
+      upstream = recorded(issue("u", "MT-U", "In Progress"))
       next = recorded(issue("n", "MT-N", "Todo"))
       below = recorded(issue("t", "MT-T", "Todo"))
       :ok = RunStore.add_dependency("n", "u", :done)
       tracked([next, below])
+      # The ticket it depends on runs on the other slot.
+      start = orchestrator_state(2) |> holding(upstream) |> run(upstream)
 
       # The dispatch order reads it so: the head takes its slot in the read's copy only, and the
       # ticket below waits for a slot.
-      %{dispatch_order: order} = Orchestrator.put_dispatch_order_for_test(orchestrator_state(1), [next, below])
-      assert %{used: 0, free: 1} = order.slots
+      %{dispatch_order: order} = Orchestrator.put_dispatch_order_for_test(start, [next, below])
+      assert %{used: 1, free: 1} = order.slots
       assert [{"MT-N", :held}, {"MT-T", :waits}] = Enum.map(order.entries, &{&1.identifier, &1.outcome})
       assert RunStore.slot_holders() == %{}
 
       # Unmet: it takes the slot and waits there, with no run; the ticket below waits for a slot.
-      held = Orchestrator.dispatch_chosen_issues_for_test([next, below], orchestrator_state(1))
+      held = Orchestrator.dispatch_chosen_issues_for_test([next, below], start)
       assert held.running == %{}
       assert %{identifier: "MT-N", since: %DateTime{} = since} = held.slot_holders["n"]
       assert %{slot_held_since: ^since} = RunStore.get_ticket_state("n") |> TicketState.normalize()
@@ -217,12 +220,12 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
 
       # The cycle keeps it there while it waits.
       held = Orchestrator.release_slots_for_test(held, [next, below], true)
-      assert Map.keys(held.slot_holders) == ["n"]
+      assert Enum.sort(Map.keys(held.slot_holders)) == ["n", "u"]
 
       # Met: its run starts on the slot it holds, with no pause to lift and no read of Linear.
       :ok = RunStore.update_ticket_state(upstream.id, %{phase: "Done"})
       dispatched = Orchestrator.dispatch_chosen_issues_for_test([next, below], held)
-      assert Map.keys(dispatched.running) == ["n"]
+      assert Enum.sort(Map.keys(dispatched.running)) == ["n", "u"]
       assert %{since: ^since} = dispatched.slot_holders["n"]
       assert %{reason: "work slots full"} = dispatched.slot_waiting["t"]
       refute Pauses.paused?({:ticket, "default", "n"})
@@ -529,6 +532,103 @@ defmodule SymphonyElixir.OrchestratorSlotsTest do
       assert Map.keys(depended.running) == ["u"]
       assert %{gate: :depends_on} = depended.dispatch_skipped["h"]
       assert %{reason: "work slots full"} = depended.slot_waiting["t"]
+    end
+  end
+
+  describe "a ticket that waits on a dependency never holds the slot its dependency needs (TP-1635)" do
+    test "c1: with 1 slot, a ticket that never ran and waits on a dependency that is not done takes no slot; the dependency starts on it", ctx do
+      write_slots_workflow!(ctx, max_concurrent_agents: 1)
+      waiting = recorded(issue("b", "MT-B", "Todo"))
+      upstream = recorded(issue("a", "MT-A", "Todo"))
+      :ok = RunStore.add_dependency("b", "a", :done)
+      tracked([waiting, upstream])
+
+      # The waiting ticket sits first in the queue, and still the dependency starts below it.
+      %{dispatch_order: order} = Orchestrator.put_dispatch_order_for_test(orchestrator_state(1), [waiting, upstream])
+      assert [{"MT-B", :held}, {"MT-A", :starts}] = Enum.map(order.entries, &{&1.identifier, &1.outcome})
+
+      dispatched = Orchestrator.dispatch_chosen_issues_for_test([waiting, upstream], orchestrator_state(1))
+      assert Map.keys(dispatched.running) == ["a"]
+      assert Map.keys(dispatched.slot_holders) == ["a"]
+      assert %{gate: :depends_on} = dispatched.dispatch_skipped["b"]
+      refute Map.has_key?(dispatched.slot_waiting, "a")
+    end
+
+    test "c3: a ticket given a slot that gets a dependency on a ticket not done before its first run gives the slot back, and the dependency takes it", ctx do
+      write_slots_workflow!(ctx, max_concurrent_agents: 1)
+      waiting = recorded(issue("b", "MT-B", "Todo"))
+      upstream = recorded(issue("a", "MT-A", "Todo"))
+      tracked([waiting, upstream])
+      given = holding(orchestrator_state(1), waiting)
+
+      # With no dependency it keeps the slot it was given.
+      assert Map.keys(Orchestrator.release_slots_for_test(given, [waiting, upstream], true).slot_holders) == ["b"]
+
+      # The dependency arrives: the cycle its write asks for takes the slot back.
+      :ok = RunStore.add_dependency("b", "a", :done)
+      released = Orchestrator.release_slots_for_test(given, [waiting, upstream], true)
+      assert released.slot_holders == %{}
+      assert Orchestrator.available_slots_for_test(released) == 1
+      assert %{holders: []} = Orchestrator.put_dispatch_order_for_test(released, [waiting, upstream]).dispatch_order.slots
+
+      dispatched = Orchestrator.dispatch_chosen_issues_for_test([waiting, upstream], released)
+      assert Map.keys(dispatched.running) == ["a"]
+      assert %{gate: :depends_on} = dispatched.dispatch_skipped["b"]
+    end
+
+    test "c2, c4: the 2026-11-24 case: under the epic holding the one slot, a sub-ticket given the slot in Todo that gets a dependency on its sibling gives it back; the sibling starts, then it does",
+         ctx do
+      write_slots_workflow!(ctx, max_concurrent_agents: 1)
+      epic = recorded(epic("e", "MT-E", [{"b", "MT-B", "Todo"}, {"a", "MT-A", "Todo"}]))
+      waiting = recorded(sub("b", "MT-B", "Todo", "MT-E"))
+      sibling = recorded(sub("a", "MT-A", "Todo", "MT-E"))
+      other = recorded(issue("t", "MT-T", "Todo"))
+      tracked([epic, waiting, sibling, other])
+      given = orchestrator_state(1) |> holding(epic) |> holding(waiting)
+      :ok = RunStore.add_dependency("b", "a", :done)
+
+      released = Orchestrator.release_slots_for_test(given, [epic, waiting, sibling, other], true)
+      assert Map.keys(released.slot_holders) == ["e"]
+
+      # The order read agrees with the pass: the waiting sub-ticket is no holder, and its sibling
+      # starts rather than reading "work slots full".
+      %{dispatch_order: order} = Orchestrator.put_dispatch_order_for_test(released, [epic, waiting, sibling, other])
+      assert Enum.map(order.slots.holders, & &1.issue_id) == ["e"]
+      assert %{outcome: :starts} = Enum.find(order.entries, &(&1.identifier == "MT-A"))
+      refute Enum.find(order.entries, &(&1.identifier == "MT-A"))[:reason] == "work slots full"
+
+      dispatched = Orchestrator.dispatch_chosen_issues_for_test([epic, waiting, sibling, other], released)
+      assert Map.keys(dispatched.running) == ["a"]
+      assert %{gate: :depends_on} = dispatched.dispatch_skipped["b"]
+      refute Map.has_key?(dispatched.slot_holders, "b")
+      assert %{reason: "work slots full"} = dispatched.slot_waiting["t"]
+
+      # The sibling done, the waiting sub-ticket starts through the same slot.
+      stop_orchestrator_agent_tasks()
+      :ok = RunStore.update_ticket_state("a", %{phase: "Done"})
+      epic = %{epic | sub_issues: [%{id: "b", identifier: "MT-B", state: "Todo"}, %{id: "a", identifier: "MT-A", state: "Done"}]}
+      gap = holding(orchestrator_state(1), epic) |> Orchestrator.release_slots_for_test([epic, waiting, other], true)
+      second = Orchestrator.dispatch_chosen_issues_for_test([epic, waiting, other], gap)
+      assert Map.keys(second.running) == ["b"]
+      assert %{reason: "work slots full"} = second.slot_waiting["t"]
+    end
+
+    test "c2: under the epic holding the one slot, a sub-ticket that already worked and waits on its sibling lends it its turn of the epic's slot", ctx do
+      write_slots_workflow!(ctx, max_concurrent_agents: 1)
+      epic = recorded(epic("e", "MT-E", [{"b", "MT-B", "In Progress"}, {"a", "MT-A", "Todo"}]))
+      waiting = recorded(sub("b", "MT-B", "In Progress", "MT-E"))
+      sibling = recorded(sub("a", "MT-A", "Todo", "MT-E"))
+      tracked([epic, waiting, sibling])
+      :ok = RunStore.add_dependency("b", "a", :done)
+
+      # It had a run, so it keeps its slot.
+      kept = orchestrator_state(1) |> holding(epic) |> holding(waiting) |> Orchestrator.release_slots_for_test([epic, waiting, sibling], true)
+      assert Enum.sort(Map.keys(kept.slot_holders)) == ["b", "e"]
+
+      dispatched = Orchestrator.dispatch_chosen_issues_for_test([epic, waiting, sibling], kept)
+      assert Map.keys(dispatched.running) == ["a"]
+      assert Orchestrator.available_slots_for_test(dispatched) == 0
+      assert %{used: 1, free: 0} = Orchestrator.put_dispatch_order_for_test(dispatched, [epic, waiting, sibling]).dispatch_order.slots
     end
   end
 
