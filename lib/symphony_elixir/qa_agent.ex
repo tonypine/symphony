@@ -74,7 +74,9 @@ defmodule SymphonyElixir.QaAgent do
   projection), and a Claude session's transcript (`SymphonyElixir.Artifacts.Transcript`). A file the
   store refuses (a symlink, a file outside `qa-evidence/`, one over the size cap) is skipped and
   logged; keeping the files never changes the verdict. `evidence_artifact/2` reads which artifact an
-  evidence entry (a `qa-evidence/` path or a Linear URL) names.
+  evidence entry (a `qa-evidence/` path or a Linear URL) names. A picture a qa_* tool took is
+  already on the record (`SymphonyElixir.AgentTools.QaPictures`): its bytes are the same artifact,
+  and a step's evidence names it without attaching it again (`SymphonyElixir.QaVerification`).
   """
 
   require Logger
@@ -365,8 +367,11 @@ defmodule SymphonyElixir.QaAgent do
     tool: one `evidence` event for each walkthrough step you walked, whose `caption` names the step
     (its number and a few words), what you saw, and the environment you proved it in (the committed
     fixtures or the live server, and the appearance and window size when they matter), with the
-    step's screenshots or logs as the tool's top-level `artifacts` list, beside `type` and
-    `payload`: never inside `payload`, which refuses a field its type lacks. Its `payload` may also
+    step's logs and other files as the tool's top-level `artifacts` list, beside `type` and
+    `payload`: never inside `payload`, which refuses a field its type lacks. A picture a
+    `qa_screenshot`, `qa_gallery` or `qa_crop` call took is on the ticket's history already (the
+    tool's `recorded` names its event and artifact): never pass it in `artifacts` or record it again;
+    name its path in the verdict step's `evidence`. Its `payload` may also
     name the step (`step`), its answer as `result` (`status`, `expected`, `actual`, and `measures`)
     and each measured value in `measures`: one object per value, with what was measured (`name`),
     the number (`value`), its `unit` and the number expected (`expected`) when there is one. The

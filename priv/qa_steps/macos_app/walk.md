@@ -64,10 +64,10 @@ How to judge:
   missing control or a control that does nothing is a `fail`.
 - One `qa_screenshot` per judgment, named as the brief's `screenshots` say, and one after every
   action that changes what is on screen. Each name can be used once.
-- Record each screenshot on the ticket's history as you take it: `ticket_record` with an `evidence`
-  event whose `caption` names the walkthrough step (its number and a few words), what you saw and
-  the environment (`fixture: <directory>` or `live: seed`), with the screenshot's path in the tool's
-  top-level `artifacts` list, never inside `payload` (a payload naming `artifacts` is refused).
+- Taking a picture records it: each `qa_screenshot`, `qa_gallery` or `qa_crop` picture is on the
+  ticket's history the moment it is taken, under this step, and the tool's `recorded` names its
+  event and artifact. Never record it again with `ticket_record`: name its path in your answer's
+  `evidence`. A call that fails with `qa_picture_not_recorded` kept no picture; take it again.
 - On each page the step visits, once it settled, call `qa_check_app` with `page` set to the page's
   name: it says whether the app still runs, answers within 10 seconds and left no crash report. A
   layout loop or a crash in a large window shows only there. When it says the app hung, call

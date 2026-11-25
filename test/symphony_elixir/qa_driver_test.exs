@@ -3,7 +3,8 @@ defmodule SymphonyElixir.QaDriverTest do
 
   import ExUnit.CaptureLog
 
-  alias SymphonyElixir.{AgentEnv, Paths, PathSafety, QaDriver}
+  alias SymphonyElixir.{AgentEnv, Artifacts, Paths, PathSafety, QaDriver, RunStore, TicketEvents}
+  alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Codex.DynamicTool
   alias SymphonyElixir.QaDriver.{DevServerLease, Host, ReleasePair}
 
@@ -1411,6 +1412,39 @@ defmodule SymphonyElixir.QaDriverTest do
       assert {:error, {:qa_tool, "qa_not_on_screen", _message}} = QaDriver.call_tool(driver, "qa_hover", %{"pid" => pid, "x" => 5, "y" => 5})
       assert {:error, {:qa_tool, "qa_no_menu", _message}} = QaDriver.call_tool(driver, "qa_context_menu", %{"pid" => pid, "path" => "0.4"})
       assert {:error, {:qa_tool, "qa_no_scroll_area", _message}} = QaDriver.call_tool(driver, "qa_scroll", %{"pid" => pid, "path" => "0.4", "edge" => "top"})
+    end
+
+    test "a qa_screenshot through the agent's tools is on the ticket's record under the running step, and says so (TP-1681)", %{worktree: worktree} do
+      windows = %{windows: [%{id: 21, title: "Main", layer: 0, onscreen: true, frame: %{x: 0, y: 0, w: 800, h: 600}}]}
+      {driver, pid} = launched_app(worktree, host: host(%{helper_replies: %{"windows" => {Jason.encode!(windows), 0}}}))
+      issue_id = "issue-pictures-#{System.unique_integer([:positive])}"
+      run_id = "qa-run-#{issue_id}"
+      step = %{step_id: "walk_1", title: "Walk step 1", mode: "delegated"}
+      {:ok, started} = TicketEvents.record("demo", issue_id, "step.started", step, actor: {:agent, run_id, "qa"})
+
+      opts = [
+        tool_scope: :qa,
+        qa_driver: driver,
+        issue: %Issue{id: issue_id, identifier: "TP-9", repo_key: "demo"},
+        workspace: worktree,
+        run_id: run_id
+      ]
+
+      response = DynamicTool.execute("qa_screenshot", %{"pid" => pid, "name" => "home"}, opts)
+      assert response["success"]
+      assert %{"files" => [%{"path" => "qa-evidence/home.png"}], "recorded" => [recorded]} = Jason.decode!(response["output"])
+
+      assert [event] = RunStore.list_ticket_events(issue_id, types: ["evidence"])
+      assert %{"path" => "qa-evidence/home.png", "event_id" => event.id, "artifact_id" => hd(event.artifacts)} == recorded
+      assert %{run_id: ^run_id, parent: parent, payload: %{caption: "Screenshot home of Main, taken during the QA step Walk step 1"}} = event
+      assert parent == started.id
+      assert {:ok, %{label: "home.png"}} = Artifacts.get(hd(event.artifacts))
+
+      # A session with no ticket takes no picture: the helper is never asked for one.
+      response = DynamicTool.execute("qa_screenshot", %{"pid" => pid, "name" => "lost"}, Keyword.drop(opts, [:issue]))
+      refute response["success"]
+      assert %{"error" => %{"code" => "qa_picture_not_recorded"}} = Jason.decode!(response["output"])
+      refute File.exists?(Path.join(worktree, "qa-evidence/lost.png"))
     end
 
     test "captures each on-screen window or one window id into qa-evidence", %{worktree: worktree} do

@@ -45,8 +45,9 @@ label on one line with an even gap; nothing clipped, cramped or cut by an ellips
 text and icons readable. A visible difference from the design is a `fail`, even when the tree shows
 every control: name what differs from which screen of the design.
 
-Record each screenshot as an `evidence` event with `ticket_record`, as you take it, with its path
-in the tool's top-level `artifacts` list, never inside `payload`.
+Each `qa_gallery`, `qa_screenshot` or `qa_crop` picture is on the ticket's history the moment it
+is taken (the tool's `recorded` names its event and artifact): never record it again with
+`ticket_record`; name its path in your answer's `evidence`.
 Do not call `qa_verdict`.
 
 A design check is a `pass` only when every entry and variation the plan names was seen and compared

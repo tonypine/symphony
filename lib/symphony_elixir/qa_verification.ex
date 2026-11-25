@@ -1205,22 +1205,28 @@ defmodule SymphonyElixir.QaVerification do
   # Every step is recorded, with its answer in the one shape a QA step's answer has (`result`: its
   # status and what QA saw, `SymphonyElixir.TicketEvents.Types.step_answer_spec/0`), the environment
   # it was proved in and its evidence: the files the pass kept as the event's artifacts, any other
-  # entry (a CI run's URL) as `links`. The QA report renders its steps from these events
-  # (`Report.render/1`).
+  # entry (a CI run's URL) as `links`. A file already on the run's record (a picture a qa_* tool
+  # recorded as it took it, `SymphonyElixir.AgentTools.QaPictures`) is not attached again: the step
+  # names its path in `links`, and the QA report links it from there. The QA report renders its
+  # steps from these events (`Report.render/1`).
   defp record_evidence(repo_key, issue, run_id, outcome) do
     artifacts = Map.get(outcome, :artifacts)
+    on_record = on_record(issue.id, run_id)
 
     steps =
       for step <- Map.get(outcome, :steps, []) do
         entries = Map.get(step, :evidence, [])
-        ids = resolved(artifacts, entries)
+        {named, ids} = entries |> resolved_entries(artifacts) |> Enum.split_with(fn {_entry, id} -> MapSet.member?(on_record, id) end)
+        links = (unresolved(artifacts, entries) || []) ++ Enum.map(named, &elem(&1, 0))
 
         fields = %{
           step: cut(step.name, 200),
           result: step_answer(step),
           environment: Map.get(step, :environment),
-          links: unresolved(artifacts, entries)
+          links: if(links == [], do: nil, else: links)
         }
+
+        ids = ids |> Enum.map(&elem(&1, 1)) |> Enum.uniq()
 
         {"#{step.name}: #{step.status}", ids, fields}
       end
@@ -1237,6 +1243,15 @@ defmodule SymphonyElixir.QaVerification do
       payload = Map.put(fields, :caption, cut(caption, 500))
       TicketSignals.record_event(repo_key, issue.id, "evidence", payload, pass_event_opts(run_id, "evidence:#{run_id}:#{n}", ids))
     end)
+  end
+
+  # The files the run's evidence carries so far.
+  defp on_record(issue_id, run_id) do
+    for %{artifacts: ids} <- List.wrap(RunStore.list_ticket_events(issue_id, run_id: run_id, types: ["evidence"])), id <- ids, into: MapSet.new(), do: id
+  end
+
+  defp resolved_entries(entries, artifacts) do
+    for entry <- entries, id = QaAgent.evidence_artifact(artifacts, entry), is_binary(id), uniq: true, do: {entry, id}
   end
 
   defp step_answer(step) do

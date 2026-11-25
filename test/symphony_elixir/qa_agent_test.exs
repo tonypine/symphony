@@ -9,7 +9,7 @@ defmodule SymphonyElixir.QaAgentTest do
   alias SymphonyElixir.Config.Schema.Phases.Step
   alias SymphonyElixir.LeftoverProcesses.Table
   alias SymphonyElixir.QaAgent
-  alias SymphonyElixir.QaAgent.{Report, Selection}
+  alias SymphonyElixir.QaAgent.{Report, Selection, StepPrompts}
   alias SymphonyElixir.QaAndroid.Driver, as: AndroidDriver
   alias SymphonyElixir.QaDriver.DevServerLease
   alias SymphonyElixir.SelfHeal
@@ -1473,7 +1473,7 @@ defmodule SymphonyElixir.QaAgentTest do
     test "every QA prompt says files go in the tool's top-level artifacts, and names the step answer and measure shapes (TP-1680)" do
       flat = job() |> QaAgent.prompt(nil) |> String.replace(~r/\s+/, " ")
 
-      assert flat =~ "with the step's screenshots or logs as the tool's top-level `artifacts` list, beside `type` and `payload`: never inside `payload`"
+      assert flat =~ "with the step's logs and other files as the tool's top-level `artifacts` list, beside `type` and `payload`: never inside `payload`"
       assert flat =~ "its answer as `result` (`status`, `expected`, `actual`, and `measures`)"
       assert flat =~ "with what was measured (`name`), the number (`value`), its `unit` and the number expected (`expected`) when there is one"
 
@@ -1482,7 +1482,6 @@ defmodule SymphonyElixir.QaAgentTest do
         text = Path.join([File.cwd!(), "priv", "qa_steps", kind, step <> ".md"]) |> File.read!() |> String.replace(~r/\s+/, " ")
         assert text =~ "`measures`", "#{kind}/#{step}"
         assert text =~ ~s("value"), "#{kind}/#{step}"
-        if step != "walk" or kind == "macos_app", do: assert(text =~ "top-level `artifacts` list", "#{kind}/#{step}")
       end
 
       # The instructions for the runs that write the code say it too.
@@ -1493,6 +1492,22 @@ defmodule SymphonyElixir.QaAgentTest do
         assert text =~ "`measures`", file
         assert text =~ "`name`", file
         assert text =~ "`unit`", file
+      end
+    end
+
+    test "no QA prompt asks a run to record a picture a qa_* tool took: taking it records it (TP-1681)" do
+      flat = job() |> QaAgent.prompt(nil) |> String.replace(~r/\s+/, " ")
+
+      assert flat =~ "A picture a `qa_screenshot`, `qa_gallery` or `qa_crop` call took is on the ticket's history already"
+      assert flat =~ "never pass it in `artifacts` or record it again; name its path in the verdict step's `evidence`"
+      refute flat =~ "step's screenshots"
+
+      for step <- ["walk", "design_check"] do
+        text = "macos_app" |> StepPrompts.prompt(step) |> String.replace(~r/\s+/, " ")
+        assert text =~ "never record it again with `ticket_record`", step
+        assert text =~ "name its path in your answer's `evidence`", step
+        refute text =~ "top-level `artifacts` list", step
+        refute text =~ ~r/Record each screenshot/i, step
       end
     end
 

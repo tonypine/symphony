@@ -1257,6 +1257,28 @@ defmodule SymphonyElixir.QaVerificationPassTest do
       refute Map.has_key?(no_details, :actual)
     end
 
+    test "a step's picture the run already recorded as it took it is not attached to the step again, only named (TP-1681)" do
+      {workspace, _head} = git_workspace!()
+      {:ok, taken} = SymphonyElixir.TicketEvents.record(@repo_key, @issue_id, "evidence", %{caption: "Screenshot home"}, actor: {:agent, "run-qa-12", "qa"}, artifacts: [@home])
+
+      agent_result(%{
+        verdict: :pass,
+        summary: "Fine.",
+        steps: [%{name: "Step 1", status: "pass", details: "ok", evidence: ["qa-evidence/home.png", "qa-evidence/detail.png", "https://ci.test/run/1"]}],
+        findings: [],
+        artifacts: artifacts()
+      })
+
+      assert :ok = run(workspace, run_id: "run-qa-12")
+
+      taken_id = taken.id
+
+      assert [%{id: ^taken_id}, %{payload: %{caption: "Step 1: pass"} = step, artifacts: [@detail]}, %{payload: %{caption: "QA session transcript"}}] =
+               Enum.filter(events(), &(&1.type == "evidence"))
+
+      assert step.links == ["https://ci.test/run/1", "qa-evidence/home.png"]
+    end
+
     test "a blocked verdict names the QA run that gave it" do
       {workspace, _head} = git_workspace!()
       agent_result(%{verdict: :blocked, summary: "No emulator.", steps: [], findings: [], reason: "the QA host failed", artifacts: artifacts()})

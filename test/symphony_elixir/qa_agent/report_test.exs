@@ -315,6 +315,25 @@ defmodule SymphonyElixir.QaAgent.ReportTest do
       assert RunStore.list_ticket_events("issue-1354", []) == []
     end
 
+    test "a step names a picture the run recorded as it took it by its path, and links that picture's artifact (TP-1681)", %{dir: dir} do
+      taken = ingest!(dir, "home.png", @png <> "home", "home.png")
+      other = ingest!(dir, "other.png", @png <> "other", "other.png")
+
+      events = [
+        event("p1", "evidence", @second, %{caption: "Screenshot home, taken during the QA step Walk step 1"}, [taken.id]),
+        event("p2", "evidence", @second, %{caption: "Screenshot other"}, [other.id]),
+        evidence("e1", @second, %{step: "Step 1 Open the page", status: "pass", links: ["qa-evidence/home.png", "https://ci.test/run/9"]})
+      ]
+
+      ledger = Report.ledger(issue(), events, @second, linear_client: linear_client(self()))
+      assert ledger.links == %{taken.id => %{label: "home.png", url: nil}}
+
+      body = Report.render(Map.merge(outcome(), ledger))
+      assert body =~ "- **pass** Step 1 Open the page (evidence: home.png (artifact `#{taken.id}`), https://ci.test/run/9)\n"
+      assert length(Regex.scan(~r/^- \*\*/m, body)) == 1
+      refute body =~ other.id
+    end
+
     test "a file with no label is uploaded under its short id; a failed upload is logged and leaves the file unlinked", %{dir: dir} do
       write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear")
       unlabelled = ingest!(dir, "c.png", @png <> "c", nil)
