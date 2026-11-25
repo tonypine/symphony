@@ -244,6 +244,10 @@ pull_requests:
 #     health_timeout_ms: 30000
 #     stop_signal: TERM
 #     stop_timeout_ms: 10000
+#     # When the project's server runs: symphony_host (beside the web playbook, with
+#     # verification.enabled), every_qa_pass (beside every macos_app QA pass, on its
+#     # dev_server_port) or live_qa_pass (only for a pass the plan marks live).
+#     runs: symphony_host
 
 dashboard:
   # Terminal dashboard on Symphony's own output; the web dashboard and control API stay up either way.

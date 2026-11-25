@@ -39,29 +39,22 @@ push_check:
   command: .githooks/pre-push --head
   result_file: tmp/push-check
   paths: ["*.ex", "*.exs", "*.heex", "*.eex", "mix.lock"]
-# Used only when the operator sets `verification.enabled: true` in symphony.yml. Serves the
-# dashboard with an in-memory tracker; Auto Review's web playbook tests dashboard changes on it.
+# Symphony's own server, described once (TP-1663). `runs: live_qa_pass` starts it beside the
+# Director on the QA host for a QA pass whose plan walks a check on the live server (`qa:live`
+# forces it, `qa:fixture` keeps it off); other passes read the app's committed fixtures. The
+# app's build command, the app and the port stay in the operator's symphony.yml
+# (docs/configuration.md, "Two environments").
 verification:
   dev_server:
-    # Builds the escript in the build sandbox (the agent's confinement): Mix can't run in the
-    # dev server's sandbox, which allows no TCP listener.
-    build_cmd: scripts/qa-dashboard-build.sh
-    start_cmd: scripts/qa-dashboard-server.sh
+    build_cmd: scripts/qa-server-build.sh
+    start_cmd: scripts/qa-server-start.sh
     health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/api/v1/state"
     health_timeout_ms: 600000
-# The Director's QA pass gets Symphony's own server beside the app on the QA host when the PR
-# changes the server and a walkthrough step walks the Director (`qa:live` forces it, `qa:fixture`
-# keeps it off); otherwise the app reads its committed fixtures. The build command, the app and
-# the port stay in the operator's symphony.yml (docs/configuration.md, "Two environments").
+    runs: live_qa_pass
 auto_review:
   playbooks:
     macos_app:
       requires: [mise]
-      live:
-        build_cmd: scripts/qa-server-build.sh
-        start_cmd: scripts/qa-server-start.sh
-        paths: ["lib/**", "config/**", "priv/**", "mix.exs", "mix.lock"]
-        walkthrough_mentions: [Director, Inbox]
 playbook:
   lockfile: mix.lock
 prompts:
