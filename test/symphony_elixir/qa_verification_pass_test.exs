@@ -1206,7 +1206,7 @@ defmodule SymphonyElixir.QaVerificationPassTest do
       {workspace, _head} = git_workspace!()
 
       {:ok, outcome} =
-        SymphonyElixir.QaAgent.Verdict.from_map(%{
+        QaAgent.Verdict.from_map(%{
           "verdict" => "fail",
           "summary" => "The row is clipped.",
           "steps" => [

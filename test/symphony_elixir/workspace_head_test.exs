@@ -234,8 +234,10 @@ defmodule SymphonyElixir.WorkspaceHeadTest do
       git!(workspace, ["mv", "moved.txt", "renamed.txt"])
       head = WorkspaceHead.read(workspace, nil)
 
-      assert %{start_head: ^start, head: ^head, commits: [%{sha: ^head, subject: "fix.txt"}], commit_count: 1, file_count: 5, files: files} =
+      assert %{start_head: ^start, head: ^head, commits: commits, commit_count: 1, file_count: 5, files: files} =
                WorkspaceHead.changes(workspace, nil, start)
+
+      assert [%{sha: ^head, subject: "fix.txt"}] = commits
 
       assert Enum.sort_by(files, & &1.path) == [
                %{path: "README.md", status: "modified"},
@@ -253,13 +255,16 @@ defmodule SymphonyElixir.WorkspaceHeadTest do
       git!(workspace, ["fetch", "origin"])
       git!(workspace, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "merge", "--no-ff", "-m", "Merge main", "origin/main"])
 
-      assert %{commits: [%{subject: "Merge main"}], commit_count: 1, files: [%{path: "base.txt", status: "added"}]} = WorkspaceHead.changes(workspace, nil, start)
+      assert %{commits: [%{subject: "Merge main"}], commit_count: 1, files: [%{path: "base.txt", status: "added"}]} =
+               WorkspaceHead.changes(workspace, nil, start)
     end
 
     test "a run that changed nothing reads as no change; a start git does not know, a worker's workspace or no checkout as nil", %{root: root, workspace: workspace} do
       start = WorkspaceHead.read(workspace, nil)
 
-      assert WorkspaceHead.changes(workspace, nil, start) == %{start_head: start, head: start, commits: [], files: [], commit_count: 0, file_count: 0}
+      assert WorkspaceHead.changes(workspace, nil, start) ==
+               %{start_head: start, head: start, commits: [], files: [], commit_count: 0, file_count: 0}
+
       assert WorkspaceHead.changes(workspace, nil, String.duplicate("0", 40)) == nil
       assert WorkspaceHead.changes(workspace, "worker-1", start) == nil
       assert WorkspaceHead.changes(root, nil, start) == nil

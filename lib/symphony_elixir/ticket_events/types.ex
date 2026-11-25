@@ -546,12 +546,13 @@ defmodule SymphonyElixir.TicketEvents.Types do
       writers: [:machine],
       run_kinds: [],
       required: [run_id: :string, start_head: :string, head: :string],
-      optional: [
-        commits: {:list, @run_commit},
-        files: {:list, @changed_file},
-        commit_count: :non_neg_integer,
-        file_count: :non_neg_integer
-      ] ++ @signal,
+      optional:
+        [
+          commits: {:list, @run_commit},
+          files: {:list, @changed_file},
+          commit_count: :non_neg_integer,
+          file_count: :non_neg_integer
+        ] ++ @signal,
       idempotency: {:fields, [:run_id]}
     },
     "decision.requested" => %{

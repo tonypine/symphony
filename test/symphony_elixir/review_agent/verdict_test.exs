@@ -191,8 +191,7 @@ defmodule SymphonyElixir.ReviewAgent.VerdictTest do
           {:missing_block_reason, "a block needs a non-empty `reason`."},
           {:missing_request_changes_comments, "request_changes needs at least one finding or comment."},
           {:unknown_field, "the verdict names a field the tool does not take; use only the fields of the valid shape."},
-          {:invalid_finding_field,
-           "a finding names a field the tool does not take; a finding takes summary, file, line_range, quoted_snippet, suggested_fix and decision."},
+          {:invalid_finding_field, "a finding names a field the tool does not take; a finding takes summary, file, line_range, quoted_snippet, suggested_fix and decision."},
           {:invalid_finding_decision, "a finding's `decision` must be a recorded decision's id, such as D2."},
           {:something_else, ":something_else."}
         ] do

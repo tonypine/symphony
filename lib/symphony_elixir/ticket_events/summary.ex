@@ -196,7 +196,7 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   defp summary("run.changed", payload, _event) do
     files = count(payload, :file_count) || length(list(field(payload, :files)))
     commits = count(payload, :commit_count) || length(list(field(payload, :commits)))
-    title = if files > 0, do: "Changed " <> plural(files, "file") <> suffix(" in ", plural(commits, "commit")), else: "Made " <> (plural(commits, "commit") || "no change")
+    title = changed_title(files, plural(commits, "commit"))
     subjects = for %{} = commit <- list(field(payload, :commits)), subject = text(commit, :subject), do: subject
     {title, [Enum.join(subjects, " · ")]}
   end
@@ -625,6 +625,9 @@ defmodule SymphonyElixir.TicketEvents.Summary do
     missed = if (count(details, :missed_earlier) || 0) > 0, do: "#{count(details, :missed_earlier)} missed earlier"
     join([plural(count(details, :findings_count) || 0, "finding"), missed])
   end
+
+  defp changed_title(files, commits) when files > 0, do: "Changed " <> plural(files, "file") <> suffix(" in ", commits)
+  defp changed_title(_files, commits), do: "Made " <> (commits || "no change")
 
   defp plural(0, _noun), do: nil
   defp plural(1, noun), do: "1 #{noun}"

@@ -223,6 +223,7 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
       workspace = Path.join(System.tmp_dir!(), "dispatch-loop-changed-#{System.unique_integer([:positive])}")
       on_exit(fn -> File.rm_rf(workspace) end)
       File.mkdir_p!(workspace)
+
       git = fn args ->
         {out, 0} = System.cmd("git", ["-c", "user.email=t@example.com", "-c", "user.name=t" | args], cd: workspace, stderr_to_stdout: true)
         String.trim(out)
@@ -250,7 +251,8 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
       send_down(pid, "run-1", "In Progress", :normal, workspace_path: workspace, start_head: start)
 
       assert [{"run.changed", payload}] = ticket_events(@repo_key, @issue_id, "run.changed")
-      assert %{run_id: "run-1", start_head: ^start, head: ^head, commits: [%{sha: ^head, subject: "Fix the thing"}], commit_count: 1, file_count: 4} = payload
+      assert %{run_id: "run-1", start_head: ^start, head: ^head, commit_count: 1, file_count: 4} = payload
+      assert [%{sha: ^head, subject: "Fix the thing"}] = payload.commits
 
       assert Enum.sort_by(payload.files, & &1.path) == [
                %{path: "fix.txt", status: "added"},
@@ -259,7 +261,8 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
                %{path: "notes.txt", status: "added"}
              ]
 
-      assert [%{run_id: "run-1", idempotency: "run.changed:run-1", actor: %{kind: :machine}}] = RunStore.list_ticket_events(@issue_id, types: ["run.changed"])
+      assert [%{run_id: "run-1", idempotency: "run.changed:run-1", actor: %{kind: :machine}}] =
+               RunStore.list_ticket_events(@issue_id, types: ["run.changed"])
     end
 
     test "a run that changed nothing, or reported no start head, records no change" do
@@ -276,10 +279,12 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
       {workspace, _start, _git} = changed_workspace!()
       on_exit(fn -> Application.delete_env(:symphony_elixir, :run_changes_reader) end)
 
-      unread = send_down(start_orchestrator(:DownUnreadable), "run-1", "In Progress", :normal, workspace_path: workspace, start_head: "not-a-commit")
+      unread_pid = start_orchestrator(:DownUnreadable)
+      unread = send_down(unread_pid, "run-1", "In Progress", :normal, workspace_path: workspace, start_head: "not-a-commit")
 
       Application.put_env(:symphony_elixir, :run_changes_reader, fn _workspace, _host, _start -> raise "git is gone" end)
-      raised = send_down(start_orchestrator(:DownReadRaised), "run-2", "In Progress", :normal, workspace_path: workspace, start_head: "abc")
+      raised_pid = start_orchestrator(:DownReadRaised)
+      raised = send_down(raised_pid, "run-2", "In Progress", :normal, workspace_path: workspace, start_head: "abc")
 
       assert unread =~ "Run changes unread from git issue_id=#{@issue_id} issue_identifier=#{@identifier} run_id=run-1 start_head=not-a-commit"
       assert raised =~ "Run changes read failed issue_id=#{@issue_id} issue_identifier=#{@identifier} run_id=run-2: git is gone"

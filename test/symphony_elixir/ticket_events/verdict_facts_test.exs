@@ -58,7 +58,14 @@ defmodule SymphonyElixir.TicketEvents.VerdictFactsTest do
     end
 
     test "marks a finding with whether its lines changed since the last review" do
-      finding = %{summary: "s", file: "f", line_range: {1, 2}, quoted_snippet: "q", suggested_fix: "x", since_last_review: :unchanged}
+      finding = %{
+        summary: "s",
+        file: "f",
+        line_range: {1, 2},
+        quoted_snippet: "q",
+        suggested_fix: "x",
+        since_last_review: :unchanged
+      }
 
       assert %{findings: [%{since_last_review: "unchanged"}]} = payload = recorded("code_review", "request_changes", facts: VerdictFacts.review(%{findings: [finding]}))
       assert [%{since_last_review: "unchanged", line_range: %{start: 1, end: 2}}] = VerdictFacts.findings(payload)
@@ -129,7 +136,8 @@ defmodule SymphonyElixir.TicketEvents.VerdictFactsTest do
     test "reads nothing from a payload that is not a verdict's" do
       assert VerdictFacts.findings(nil) == []
       assert VerdictFacts.findings(%{details: %{findings: "a sentence"}}) == []
-      assert VerdictFacts.findings(%{findings: [%{summary: "s", line_range: nil, since_last_review: "later"}]}) == [%{summary: "s"}]
+      loose = %{summary: "s", line_range: nil, since_last_review: "later"}
+      assert VerdictFacts.findings(%{findings: [loose]}) == [%{summary: "s"}]
     end
   end
 end

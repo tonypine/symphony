@@ -770,8 +770,9 @@ defmodule SymphonyElixir.CodeReviewTest do
       assert Summary.render(verdict).detail =~ "2 findings · 1 missed earlier"
 
       # Each typed finding says whether its lines changed since the last reviewed head.
-      assert [%{file: "lib.ex", line_range: %{start: 2, end: 3}, since_last_review: "unchanged"}, %{line_range: %{start: 8, end: 8}, since_last_review: "changed"}] =
-               verdict.payload.findings
+      assert [first, second] = verdict.payload.findings
+      assert %{file: "lib.ex", line_range: %{start: 2, end: 3}, since_last_review: "unchanged"} = first
+      assert %{line_range: %{start: 8, end: 8}, since_last_review: "changed"} = second
     end
 
     test "a review that could not read the whole change names the files it did not read on its verdict" do

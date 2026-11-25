@@ -554,7 +554,15 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
       {"run.started_by_person", %{run_id: "run_1", by: "the Director", note: "see #{@sha}"}},
       {"run.ended", %{run_id: "run_1", run_kind: "pre_push_review", exit: "handoff_missing", model: "claude-opus-5-5", effort: "medium", head: @sha, unpushed_head: @sha}},
       {"attempt.pushed", %{head: @sha, attempt: 2, intent: "Push #{@sha}"}},
-      {"run.changed", %{run_id: "run_1", start_head: @sha, head: @sha, files: [%{path: "lib/a_b.ex", status: "renamed", from: "lib/c.ex"}], file_count: 1, commit_count: 0}},
+      {"run.changed",
+       %{
+         run_id: "run_1",
+         start_head: @sha,
+         head: @sha,
+         files: [%{path: "lib/a_b.ex", status: "renamed", from: "lib/c.ex"}],
+         file_count: 1,
+         commit_count: 0
+       }},
       {"verdict.recorded", %{kind: "code_review", outcome: "changes_requested", head: @sha, reason: "every journey verified (qa_pass)"}},
       {"decision.requested", %{title: "Ship it", question: "Ship #{@sha}?"}},
       {"decision.recorded", %{answer: "Yes", request: "req_1", key: "decision_key"}},
@@ -640,7 +648,8 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
     end
 
     test "what a run changed counts its files and commits, from the lists when no count is kept" do
-      assert render("run.changed", %{run_id: "r", start_head: "a", head: "b", files: [%{path: "a", status: "added"}]}) == %{title: "Changed 1 file", detail: nil}
+      one_file = %{run_id: "r", start_head: "a", head: "b", files: [%{path: "a", status: "added"}]}
+      assert render("run.changed", one_file) == %{title: "Changed 1 file", detail: nil}
 
       assert render("run.changed", %{run_id: "r", start_head: "a", head: "b", commits: [%{sha: "b", subject: "Empty"}, %{sha: "c"}]}) ==
                %{title: "Made 2 commits", detail: "Empty"}

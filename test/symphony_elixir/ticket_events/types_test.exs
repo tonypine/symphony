@@ -72,7 +72,8 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
             qa_findings: [%{qa_finding | line: " "}],
             comments: [3]
           ] do
-        assert Types.validate("verdict.recorded", %{kind: "qa", outcome: "fail", "#{field}": value}, :machine, nil) == {:error, {:invalid_payload, [field]}}
+        payload = %{kind: "qa", outcome: "fail", "#{field}": value}
+        assert Types.validate("verdict.recorded", payload, :machine, nil) == {:error, {:invalid_payload, [field]}}
       end
 
       assert %{type: "list", item: %{type: "map", fields: fields}} = Enum.find(Types.schema("verdict.recorded").optional, &(&1.name == "findings"))
@@ -96,7 +97,8 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       assert Types.validate("run.changed", payload, :machine, nil) == {:ok, payload}
       assert Types.idempotency_key("run.changed", payload, nil) == "run.changed:run-1"
       assert {:error, {:not_allowed, _reason}} = Types.validate("run.changed", payload, :agent, "implementation")
-      assert Types.validate("run.changed", %{payload | files: [%{path: "a.ex", status: "copied"}]}, :machine, nil) == {:error, {:invalid_payload, [:files]}}
+      copied = %{payload | files: [%{path: "a.ex", status: "copied"}]}
+      assert Types.validate("run.changed", copied, :machine, nil) == {:error, {:invalid_payload, [:files]}}
     end
 
     test "an agent never records a signal: only the machinery's events carry one" do
