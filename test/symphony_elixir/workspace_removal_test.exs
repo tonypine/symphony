@@ -88,6 +88,9 @@ defmodule SymphonyElixir.WorkspaceRemovalTest do
       "MT-OPEN" => {:ok, %{state: "In Progress"}},
       "MT-NO-STATE" => {:ok, %{state: nil}},
       "MT-GONE" => {:error, :issue_not_found},
+      # Linear answers an unknown identifier with an "Entity not found" GraphQL error.
+      "MT-DELETED" => {:error, {:linear_graphql_errors, [%{"message" => "Entity not found: Issue"}]}},
+      "MT-BAD-QUERY" => {:error, {:linear_graphql_errors, [%{"message" => "Argument Validation Error"}, "unshaped"]}},
       "MT-DOWN" => {:error, :linear_unavailable}
     }
 
@@ -102,6 +105,8 @@ defmodule SymphonyElixir.WorkspaceRemovalTest do
     assert WorkspaceRemoval.ticket_status("MT-OPEN", opts) == :open
     assert WorkspaceRemoval.ticket_status("MT-NO-STATE", opts) == :open
     assert WorkspaceRemoval.ticket_status("MT-GONE", opts) == :missing
+    assert WorkspaceRemoval.ticket_status("MT-DELETED", opts) == :missing
+    assert WorkspaceRemoval.ticket_status("MT-BAD-QUERY", opts) == :unknown
     assert WorkspaceRemoval.ticket_status("MT-DOWN", opts) == :unknown
 
     log = capture_log(fn -> assert WorkspaceRemoval.ticket_status("MT-RAISE", opts) == :unknown end)
@@ -109,6 +114,7 @@ defmodule SymphonyElixir.WorkspaceRemovalTest do
 
     assert WorkspaceRemoval.removable_ticket?("MT-DONE", opts)
     assert WorkspaceRemoval.removable_ticket?("MT-GONE", opts)
+    assert WorkspaceRemoval.removable_ticket?("MT-DELETED", opts)
     refute WorkspaceRemoval.removable_ticket?("MT-OPEN", opts)
     refute WorkspaceRemoval.removable_ticket?("MT-DOWN", opts)
   end
@@ -120,6 +126,13 @@ defmodule SymphonyElixir.WorkspaceRemovalTest do
     assert WorkspaceRemoval.ticket_status("MT-CANCELED") == :ended
     assert WorkspaceRemoval.ticket_status("MT-NOWHERE") == :missing
     assert WorkspaceRemoval.removable_ticket?("MT-CANCELED")
+  end
+
+  test "the tracker says a ticket does not exist with its own reason or Linear's Entity not found error" do
+    assert SymphonyElixir.Tracker.issue_not_found?(:issue_not_found)
+    assert SymphonyElixir.Tracker.issue_not_found?({:linear_graphql_errors, %{"message" => "Entity not found"}})
+    refute SymphonyElixir.Tracker.issue_not_found?({:linear_graphql_errors, [%{"message" => "Rate limited"}]})
+    refute SymphonyElixir.Tracker.issue_not_found?(:linear_unavailable)
   end
 
   test "ended_state? compares trimmed and case-insensitively, and a missing state never ended" do

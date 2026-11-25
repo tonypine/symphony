@@ -87,7 +87,8 @@ defmodule SymphonyElixir.WorkspaceRemoval do
 
   @doc """
   What Symphony knows of the ticket a workspace folder is named after: `:ended` in a terminal
-  state, `:missing` when the tracker has no such ticket, `:open` in any other state, and `:unknown`
+  state, `:missing` when the tracker has no such ticket (`Tracker.issue_not_found?/1`: Linear's "Entity not
+  found" error included), `:open` in any other state, and `:unknown`
   when it could not be read.
 
   Options: `:fetch` reads a ticket by its identifier (`Tracker.fetch_issue_by_identifier/1` by
@@ -99,7 +100,7 @@ defmodule SymphonyElixir.WorkspaceRemoval do
 
     case fetch.(identifier) do
       {:ok, %{state: state}} -> if ended_state?(state, terminal_states(opts)), do: :ended, else: :open
-      {:error, :issue_not_found} -> :missing
+      {:error, reason} -> if Tracker.issue_not_found?(reason), do: :missing, else: :unknown
       _unreadable -> :unknown
     end
   rescue

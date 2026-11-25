@@ -856,8 +856,8 @@ defmodule SymphonyElixir.Workspace do
       {:error, :issue_not_found} ->
         true
 
-      {:error, {:linear_graphql_errors, errors}} ->
-        Enum.any?(List.wrap(errors), &entity_not_found_error?/1)
+      {:error, {:linear_graphql_errors, _errors} = reason} ->
+        Tracker.issue_not_found?(reason)
 
       {:error, reason} ->
         Logger.warning("Kept workspace branch on sibling worktree; issue lookup failed sibling=#{identifier} reason=#{inspect(reason)}")
@@ -872,9 +872,6 @@ defmodule SymphonyElixir.Workspace do
   end
 
   defp terminal_issue_state?(_state), do: false
-
-  defp entity_not_found_error?(%{"message" => message}) when is_binary(message), do: message =~ ~r/not found/i
-  defp entity_not_found_error?(_error), do: false
 
   defp find_worktree_for_branch(porcelain_output, branch) when is_binary(branch) do
     porcelain_output

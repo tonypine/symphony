@@ -5291,7 +5291,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp fetch_issue_by_identifier(identifier) do
     case Tracker.fetch_issue_by_identifier(identifier) do
       {:error, {:linear_graphql_errors, errors}} = error ->
-        if Enum.any?(List.wrap(errors), &entity_not_found?/1), do: {:error, :issue_not_found}, else: error
+        if Tracker.issue_not_found?({:linear_graphql_errors, errors}), do: {:error, :issue_not_found}, else: error
 
       result ->
         result
@@ -5311,9 +5311,6 @@ defmodule SymphonyElixir.Orchestrator do
   defp refute_no_repository(%Issue{} = issue) do
     if is_binary(issue_repo_key(issue)), do: :ok, else: {:error, {:start_refused, StartNow.no_repository_reason()}}
   end
-
-  defp entity_not_found?(%{"message" => message}) when is_binary(message), do: message =~ ~r/not found/i
-  defp entity_not_found?(_error), do: false
 
   # Start now (`start_issue/3`) answers with the same reason the state payload's `start` field
   # shows (`SymphonyElixir.StartNow`): checked in the caller, before the claim, so a refusal

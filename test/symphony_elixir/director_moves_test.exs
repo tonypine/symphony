@@ -138,7 +138,10 @@ defmodule SymphonyElixir.DirectorMovesTest do
       File.rm_rf(audit_dir)
     end)
 
-    %{opts: [server: server, clock: fn -> :counters.get(clock, 1) end, github: FakeGitHub], clock: clock}
+    test_pid = self()
+    remove_workspace = fn workspace, worker_host, reason -> send(test_pid, {:remove_workspace, workspace, worker_host, reason}) && :ok end
+
+    %{opts: [server: server, clock: fn -> :counters.get(clock, 1) end, github: FakeGitHub, remove_workspace: remove_workspace], clock: clock}
   end
 
   describe "approve_plan" do
@@ -791,6 +794,8 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert_received {:memory_tracker_state_update, "pr", "Canceled"}
       refute_received {:memory_tracker_comment, _id, _body}
       assert %{phase: "Canceled", phase_owner: :symphony} = RunStore.get_ticket_state("pr")
+      # The ticket ended, so its workspace goes even though no run was working in it.
+      assert_received {:remove_workspace, %{identifier: "MOT-40", state: "Canceled"}, nil, :terminal}
 
       assert [%{actor: %{kind: :person, name: "the Director"}, payload: payload}] =
                RunStore.list_ticket_events("pr", types: ["ticket.cancelled"])
@@ -816,6 +821,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
       assert_received {:stop_running, "pr"}
       assert_received {:close_pr_comment, @cancel_pr_url, "Closed: the Director cancelled MOT-40.\n\nNot needed"}
+      assert_received {:remove_workspace, %{id: "pr", identifier: "MOT-40", repo_key: "repo-cancel", state: "Canceled"}, nil, :terminal}
       assert_received {:memory_tracker_state_update, "pr", "Canceled"}
       assert_receive {:request_refresh, "repo-cancel", :now}
 

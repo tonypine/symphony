@@ -1155,9 +1155,11 @@ defmodule SymphonyElixir.PrReviewPoller do
   defp active_agent_run?(_issue_id, _opts), do: false
 
   # A merged or closed PR ends its review record. Its workspace is removed only when its ticket
-  # ended (`SymphonyElixir.WorkspaceRemoval`'s `:terminal`): a PR closed while its ticket is still
-  # open sends the ticket to Rework, whose run continues in that workspace, and a merged PR's ticket
-  # that has not reached Done yet keeps it too. The record goes either way.
+  # ended (`SymphonyElixir.WorkspaceRemoval`'s `:terminal`). A PR closed while its ticket is still
+  # open sends the ticket to Rework, whose run continues in that workspace: the record goes and the
+  # workspace stays. A merged PR's ticket that has not reached Done yet (the watcher closes a
+  # Merging ticket out after the merge, and a parent waits on its sub-tickets) keeps the record, so
+  # a later poll removes the workspace once the ticket reads ended.
   defp cleanup_review(record, settings, opts, now, reason) do
     workspace = Keyword.get(opts, :workspace, Workspace)
     run_store = Keyword.get(opts, :run_store, RunStore)
@@ -1174,21 +1176,26 @@ defmodule SymphonyElixir.PrReviewPoller do
       no_workspace?(record) ->
         finish_workspace_cleanup(record, opts, now, reason)
 
-      not review_ticket_ended?(record, settings, opts) ->
-        delete_review_after_cleanup(run_store, record, reason)
-
       true ->
-        remove_review_workspace(workspace, record, opts, now, reason)
+        cleanup_by_ticket(review_ticket_status(record, settings, opts), workspace, run_store, record, opts, now, reason)
     end
   end
 
-  defp review_ticket_ended?(record, settings, opts) do
+  defp cleanup_by_ticket(:ended, workspace, _run_store, record, opts, now, reason), do: remove_review_workspace(workspace, record, opts, now, reason)
+  defp cleanup_by_ticket(:open, _workspace, _run_store, record, _opts, _now, "merged"), do: {:cleanup_deferred, Map.get(record, :issue_id), "merged"}
+  defp cleanup_by_ticket(_open_or_missing, _workspace, run_store, record, _opts, _now, reason), do: delete_review_after_cleanup(run_store, record, reason)
+
+  # `:open` covers a ticket that could not be read: a merged PR's record waits for a read that says.
+  defp review_ticket_status(record, settings, opts) do
     case fetch_review_issue(record, opts) do
       {:ok, %Issue{state: state}} ->
-        WorkspaceRemoval.ended_state?(state, settings.tracker.terminal_states)
+        if WorkspaceRemoval.ended_state?(state, settings.tracker.terminal_states), do: :ended, else: :open
 
-      _missing_or_unreadable ->
-        false
+      :missing ->
+        :missing
+
+      {:error, _reason} ->
+        :open
     end
   end
 

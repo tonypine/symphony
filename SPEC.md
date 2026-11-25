@@ -4696,8 +4696,10 @@ Workspace persistence:
 - Removing a workspace is an allow list, not a deny list. A workspace is removed only for one of
   these reasons, and in every other case it stays as it is, uncommitted changes included:
   1. The ticket ended: it reached a terminal state (reconciliation of a running issue, a retry that
-     finds the issue terminal, startup terminal cleanup, or the PR review poller after a merged or
-     closed PR). This is the one reason whose `before_remove` hook gets
+     finds the issue terminal, startup terminal cleanup, a Director Cancel whether a run was working
+     or not, or the PR review poller after a merged or closed PR whose ticket ended; a merged PR's
+     record waits for a later poll that reads its ticket ended, and a PR closed while its ticket is
+     open drops the record and keeps the workspace). This is the one reason whose `before_remove` hook gets
      `SYMPHONY_REMOVE_REASON=terminal`, the reason a hook that closes the ticket's pull request acts on.
   2. A person asked for it: Start over (`restart`) removes it so the ticket starts again from its
      base branch.
