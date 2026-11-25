@@ -4472,11 +4472,19 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [done_issue])
     assert :ok = SymphonyElixir.Notifications.subscribe()
 
-    # The plan the ticket belongs to, as the Initiatives server caches it.
-    initiatives_key = {SymphonyElixir.Initiatives, :initiatives, SymphonyElixir.Initiatives}
-    plan = %{identifier: "MT-PLAN", title: "Plan", sub_tickets: [%{id: issue_id}]}
-    :persistent_term.put(initiatives_key, [plan])
-    on_exit(fn -> :persistent_term.erase(initiatives_key) end)
+    # The plan the ticket belongs to: a parent Symphony split, as the Initiatives read it from its record.
+    :ok =
+      RunStore.put_ticket_state(%{
+        repo_key: Config.repo_key!(),
+        issue_id: "issue-MT-PLAN",
+        issue_identifier: "MT-PLAN",
+        title: "Plan",
+        phase: "Done",
+        phase_at: DateTime.utc_now(),
+        sub_issues: [%{id: issue_id, identifier: issue_identifier, state: "Done"}]
+      })
+
+    {:ok, _event} = SymphonyElixir.TicketEvents.record(Config.repo_key!(), "issue-MT-PLAN", "ticket.filed", %{identifier: issue_identifier, kind: "split_off"})
 
     orchestrator_name = Module.concat(__MODULE__, :TerminalRestartOrchestrator)
     {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)

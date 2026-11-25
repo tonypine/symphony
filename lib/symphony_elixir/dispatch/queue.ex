@@ -20,9 +20,9 @@ defmodule SymphonyElixir.Dispatch.Queue do
     around the spot is rewritten with evenly spaced keys, in the same order; the rest keep theirs.
   - Priority decides no place: the `tickets.priorities` filter stays a gate on which tickets may
     start, as blockers, pauses and the other gates do.
-  - The dispatch pass walks its candidates in the stored order (`order/3`), the sub-tickets of a
-    ticket that has started first (`SymphonyElixir.Dispatch.Slots`): a free slot goes to the first one
-    that can start, and a ticket a gate holds keeps its place and is skipped.
+  - The dispatch pass walks its candidates in the stored order alone (`order/2`): a free slot goes
+    to the first one that can start, and a ticket a gate holds keeps its place and is skipped
+    (`SymphonyElixir.Dispatch.Slots` says how a ticket's sub-tickets run through its slot).
   - The first start of the release that stored the queue placed the tickets already there in the
     order the pass computed before (`placement/2`): the tickets already started in front, then the
     rest, each group closest to done first (Merging, Rework, the other active states, then Todo and
@@ -56,21 +56,8 @@ defmodule SymphonyElixir.Dispatch.Queue do
   (the store could not be read) count as no places.
   """
   @spec order([Issue.t() | term()], %{String.t() => place()} | term()) :: [Issue.t() | term()]
-  def order(issues, places) when is_list(issues), do: order(issues, places, MapSet.new())
-
-  @doc """
-  `issues` in the stored order (`order/2`), the ones whose id is in `first` (the sub-tickets of a
-  ticket that has started, `SymphonyElixir.Dispatch.Slots.first_ids/3`) ahead of the rest, each
-  group in the stored order: a free slot goes to them first.
-  """
-  @spec order([Issue.t() | term()], %{String.t() => place()} | term(), MapSet.t()) :: [Issue.t() | term()]
-  def order(issues, places, %MapSet{} = first) when is_list(issues) and is_map(places),
-    do: Enum.sort_by(issues, &{group(&1, first), order_key(&1, places)})
-
-  def order(issues, _places, first) when is_list(issues), do: order(issues, %{}, first)
-
-  defp group(%Issue{id: id}, first), do: if(MapSet.member?(first, id), do: 0, else: 1)
-  defp group(_other, _first), do: 1
+  def order(issues, places) when is_list(issues) and is_map(places), do: Enum.sort_by(issues, &order_key(&1, places))
+  def order(issues, _places) when is_list(issues), do: order(issues, %{})
 
   defp order_key(%Issue{id: id} = issue, places) do
     case Map.get(places, id) do
@@ -89,13 +76,47 @@ defmodule SymphonyElixir.Dispatch.Queue do
   level; a parent cycle is cut where it closes.
   """
   @spec places([map()]) :: %{String.t() => place()}
-  def places(records) when is_list(records) do
-    {keys, parents} = links(records)
+  def places(records) when is_list(records), do: places(records, nil)
+
+  @doc """
+  The places of `places/1`, each ticket ordered under the parent `parents` names for it (issue id to
+  the parent's identifier, `parents/1`) instead of its record's own: a sub-ticket that never ran,
+  whose record names no parent, is placed under the parent whose record lists it. `nil` reads each
+  record's own parent, as `places/1` does.
+  """
+  @spec places([map()], %{String.t() => String.t()} | nil) :: %{String.t() => place()}
+  def places(records, parents) when is_list(records) and (is_map(parents) or is_nil(parents)) do
+    {keys, parents} = links(records, parents)
     Map.new(keys, fn {id, _key} -> {id, id |> lineage(parents) |> Enum.map(&Map.fetch!(keys, &1))} end)
   end
 
-  # The keyed tickets' keys and the parent each one is ordered under (one that holds a key), by id.
-  defp links(records) do
+  @doc """
+  Each ticket's parent, by issue id, as its parent's identifier: as its own record names it, else as
+  its parent's record lists it among its sub-issues. Every poll reads a ticket's sub-issues, but its
+  parent only when a run starts, so a sub-ticket that never ran is known by its parent's record
+  alone. What the slots' parents map (`SymphonyElixir.Dispatch.Slots`) and the Home read's queue
+  (`SymphonyElixir.Home.Queue`) both resolve parents with.
+  """
+  @spec parents([map()]) :: %{String.t() => String.t()}
+  def parents(records) when is_list(records), do: records |> listed_parents() |> Map.merge(named_parents(records))
+
+  defp listed_parents(records) do
+    records
+    |> Enum.filter(&is_binary(Map.get(&1, :issue_identifier)))
+    |> Enum.flat_map(fn record -> for child <- sub_ids(Map.get(record, :sub_issues)), do: {child, record.issue_identifier} end)
+    |> Map.new()
+  end
+
+  defp named_parents(records) do
+    for %{issue_id: id, parent: %{identifier: parent}} <- records, is_binary(parent), into: %{}, do: {id, parent}
+  end
+
+  defp sub_ids(subs) when is_list(subs), do: for(%{id: child} <- subs, is_binary(child), do: child)
+  defp sub_ids(_subs), do: []
+
+  # The keyed tickets' keys and the parent each one is ordered under (one that holds a key), by id:
+  # the record's own parent, or the one `named` gives (issue id to the parent's identifier).
+  defp links(records, named \\ nil) do
     keyed = for %{issue_id: id, sort_key: key} = record <- records, is_binary(id), is_binary(key), do: record
     keys = Map.new(keyed, &{&1.issue_id, &1.sort_key})
 
@@ -104,7 +125,8 @@ defmodule SymphonyElixir.Dispatch.Queue do
         {identifier, record.issue_id}
       end
 
-    parents = for record <- keyed, parent_id = Map.get(ids, scope(record)), into: %{}, do: {record.issue_id, parent_id}
+    scope_of = if named, do: &Map.get(named, &1.issue_id), else: &scope/1
+    parents = for record <- keyed, parent_id = Map.get(ids, scope_of.(record)), into: %{}, do: {record.issue_id, parent_id}
     {keys, parents}
   end
 
@@ -131,20 +153,57 @@ defmodule SymphonyElixir.Dispatch.Queue do
   @spec dependency_move([map()], String.t(), String.t()) ::
           {:below, String.t(), non_neg_integer(), [{String.t(), SortKey.t()}]} | :stay
   def dependency_move(records, issue_id, on_id) when is_list(records) do
-    {keys, parents} = links(records)
+    {keys, parents} = links = links(records)
 
+    case above(links, issue_id, on_id) do
+      {:above, moved, anchor} ->
+        siblings =
+          for {id, key} <- keys, id != moved, Map.get(parents, id) == Map.get(parents, moved) do
+            {id, key}
+          end
+          |> Enum.sort_by(&elem(&1, 1))
+
+        {:below, moved, Enum.find_index(siblings, &(elem(&1, 0) == anchor)) + 1, siblings}
+
+      :below ->
+        :stay
+    end
+  end
+
+  @doc """
+  The first stored dependency that the order of `moved` (the ticket records once a move is applied)
+  puts upside down and the order of `records` (the same records before it) did not: `{issue_id,
+  on_id}`, the ticket that would sit above the ticket `on_id` it depends on, compared where their
+  scopes meet as `dependency_move/3` compares them; nil when the move keeps every dependency pointing
+  upward. A dependency already upside down before the move doesn't refuse it.
+  """
+  @spec broken_dependency([map()], [map()]) :: {String.t(), String.t()} | nil
+  def broken_dependency(records, moved) when is_list(records) and is_list(moved) do
+    before = links(records)
+    now = links(moved)
+
+    Enum.find_value(moved, fn record ->
+      Enum.find_value(Map.get(record, :depends_on) || [], fn %{issue_id: on_id} ->
+        turned_upside_down(before, now, record.issue_id, on_id)
+      end)
+    end)
+  end
+
+  defp turned_upside_down(before, now, issue_id, on_id) do
+    if match?({:above, _, _}, above(now, issue_id, on_id)) and above(before, issue_id, on_id) == :below,
+      do: {issue_id, on_id}
+  end
+
+  # Whether the ticket `issue_id` sits above `on_id` where their scopes meet: `{:above, moved,
+  # anchor}` with the two tickets compared there, or `:below` when it sits below, when either holds
+  # no place or when one is the other's ancestor.
+  defp above({keys, parents}, issue_id, on_id) do
     with true <- Map.has_key?(keys, issue_id) and Map.has_key?(keys, on_id),
          {[moved | _], [anchor | _]} <- diverge(lineage(issue_id, parents), lineage(on_id, parents)),
          true <- Map.fetch!(keys, moved) < Map.fetch!(keys, anchor) do
-      siblings =
-        for {id, key} <- keys, id != moved, Map.get(parents, id) == Map.get(parents, moved) do
-          {id, key}
-        end
-        |> Enum.sort_by(&elem(&1, 1))
-
-      {:below, moved, Enum.find_index(siblings, &(elem(&1, 0) == anchor)) + 1, siblings}
+      {:above, moved, anchor}
     else
-      _stay -> :stay
+      _below -> :below
     end
   end
 

@@ -135,13 +135,32 @@ public struct SlotCard: View {
 
     let slot: Int
     let ticket: SlotCardModel?
+    let dropTarget: Bool
+    let inEpic: Bool
+    let titleHovered: Bool?
     let onAction: (SlotCardModel.Action) -> Void
+    let onOpen: ((String) -> Void)?
 
-    public init(slot: Int, ticket: SlotCardModel?, onAction: @escaping (SlotCardModel.Action) -> Void = { _ in }) {
+    /// The card, drawn as the target under a dragged row while `dropTarget` (TP-1610). `inEpic` draws it inside an epic
+    /// slot card (TP-1646): its sides less the frame's inset, so its dot, identifier and title stand on an ordinary card's
+    /// columns, no epic chip (the band names the epic), and its time read as the time on this ticket. A click on the
+    /// title calls `onOpen` with the ticket's identifier (TP-1647); `titleHovered` draws the title under the pointer, for
+    /// a story.
+    public init(
+        slot: Int, ticket: SlotCardModel?, dropTarget: Bool = false, inEpic: Bool = false, titleHovered: Bool? = nil,
+        onAction: @escaping (SlotCardModel.Action) -> Void = { _ in }, onOpen: ((String) -> Void)? = nil
+    ) {
         self.slot = slot
         self.ticket = ticket
+        self.dropTarget = dropTarget
+        self.inEpic = inEpic
+        self.titleHovered = titleHovered
         self.onAction = onAction
+        self.onOpen = onOpen
     }
+
+    /// The header's time: "2 h 40 min in the slot", or inside an epic slot card "1 h 5 min on this ticket".
+    public static func sinceText(_ since: String, inEpic: Bool) -> String { inEpic ? "\(since) on this ticket" : "\(since) in the slot" }
 
     /// "Slot 3".
     public static func emptyLabel(_ slot: Int) -> String { "Slot \(slot)" }
@@ -150,7 +169,10 @@ public struct SlotCard: View {
         if let ticket {
             card(ticket)
         } else {
-            EmptySlot(slot: slot, height: DesignTokens.HomeQueue.emptyHeight, radius: DesignTokens.Radius.card)
+            EmptySlot(
+                slot: slot, height: DesignTokens.HomeQueue.emptyHeight, radius: DesignTokens.Radius.card, dropTarget: dropTarget,
+                identifier: SlotDropTarget.cardIdentifier(slot)
+            )
         }
     }
 
@@ -184,14 +206,22 @@ public struct SlotCard: View {
             }
         }
         .padding(.top, queue.cardTopPadding)
-        .padding(.horizontal, queue.cardSidePadding)
+        .padding(.horizontal, inEpic ? queue.cardSidePadding - queue.epicFrameInset : queue.cardSidePadding)
         .padding(.bottom, queue.cardBottomPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .dropTarget(dropTarget, in: shape)
         .background(DesignTokens.Surface.content.color, in: shape)
         .elevation(queue.cardElevation, in: shape)
         .edgeHighlight(shape)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(Self.emptyLabel(slot)): \(ticket.identifier)")
+        // A card holds its parts (`.contain`), and such an element's value does not reach the tree: its label says it.
+        .accessibilityLabel(Self.accessibilityLabel(slot, ticket: ticket.identifier, dropTarget: dropTarget))
+        .dropTargetAccessibility(dropTarget, identifier: SlotDropTarget.cardIdentifier(slot))
+    }
+
+    /// The card's label: its slot and its ticket, and, under a dragged row, that it is the drop target (TP-1610).
+    public static func accessibilityLabel(_ slot: Int, ticket: String, dropTarget: Bool) -> String {
+        SlotDropTarget.accessibilityLabel("\(emptyLabel(slot)): \(ticket)", on: dropTarget)
     }
 
     private func header(_ ticket: SlotCardModel) -> some View {
@@ -208,12 +238,13 @@ public struct SlotCard: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .foregroundStyle(DesignTokens.TextColor.primary.color)
+                .titleLink(ticket.identifier, hovered: titleHovered, open: onOpen)
                 .accessibilityAddTraits(.isHeader)
-            if let epic = ticket.epic {
+            if !inEpic, let epic = ticket.epic {
                 Chip(epic, kind: .epic).padding(.leading, DesignTokens.Space.s1)
             }
             Spacer(minLength: queue.headerSpring)
-            Text("\(ticket.since) in the slot")
+            Text(Self.sinceText(ticket.since, inEpic: inEpic))
                 .textStyle(.secondary)
                 .monospacedDigit()
                 .lineLimit(1)
@@ -315,6 +346,9 @@ struct EmptySlot: View {
     let slot: Int
     let height: Double
     let radius: Double
+    var dropTarget = false
+    /// Its identifier in the accessibility tree: the card's or the strip line's.
+    var identifier: String
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
@@ -324,8 +358,10 @@ struct EmptySlot: View {
             .frame(maxWidth: .infinity)
             .frame(height: height)
             .overlay(shape.strokeBorder(DesignTokens.Surface.separator.color))
+            .dropTarget(dropTarget, in: shape)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(SlotCard.emptyLabel(slot)), empty")
+            .accessibilityLabel(SlotDropTarget.accessibilityLabel("\(SlotCard.emptyLabel(slot)), empty", on: dropTarget))
+            .dropTargetAccessibility(dropTarget, identifier: identifier)
     }
 }
 
@@ -466,13 +502,33 @@ public struct SlotStripLine: View {
     let ticket: SlotCardModel?
     let numberWidth: CGFloat
     let state: DesignTokens.Interaction?
+    let dropTarget: Bool
+    let titleHovered: Bool?
+    let onOpen: ((String) -> Void)?
     @State private var hovered = false
+    /// The queue row's probes: the strip line carries them on the same parts, so a test reads both rows' columns.
+    @Environment(\.queueRowProbes) private var probes
 
-    public init(slot: Int, ticket: SlotCardModel?, numberWidth: CGFloat, state: DesignTokens.Interaction? = nil) {
+    /// The line, drawn as the target under a dragged row while `dropTarget` (TP-1610). A click on the title calls
+    /// `onOpen` with the ticket's identifier (TP-1647); `titleHovered` draws the title under the pointer, for a story.
+    public init(
+        slot: Int, ticket: SlotCardModel?, numberWidth: CGFloat, state: DesignTokens.Interaction? = nil, dropTarget: Bool = false,
+        titleHovered: Bool? = nil, onOpen: ((String) -> Void)? = nil
+    ) {
         self.slot = slot
         self.ticket = ticket
         self.numberWidth = numberWidth
         self.state = state
+        self.dropTarget = dropTarget
+        self.titleHovered = titleHovered
+        self.onOpen = onOpen
+    }
+
+    /// The line's label: what its parts say (the identifier, the title, the state and the time in the slot), and,
+    /// under a dragged row, that it is the drop target (TP-1610).
+    public static func accessibilityLabel(_ ticket: SlotCardModel, dropTarget: Bool) -> String {
+        let epic = ticket.epic.map { ", part of \($0)" } ?? ""
+        return SlotDropTarget.accessibilityLabel("\(ticket.identifier), \(ticket.title)\(epic), \(ticket.word), \(ticket.since)", on: dropTarget)
     }
 
     public var body: some View {
@@ -480,43 +536,73 @@ public struct SlotStripLine: View {
         if let ticket {
             let shape = RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous)
             let shown = state ?? DesignTokens.Interaction(hovered: hovered)
+            // The queue row's own cells and gaps (`QueueRow`), so each column stands over the row's: the number's cell
+            // left blank, the lead, the identifier and the title one main gap apart, then the trail, whose last cell
+            // (the time here, the repo there) is the row's end cell.
             HStack(spacing: queue.rowPartGap) {
                 Color.clear.frame(width: numberWidth, height: 1)
                 StatusDot(ticket.status, live: ticket.status == .working)
                     .frame(width: DesignTokens.Row.leadSize, height: DesignTokens.Row.leadSize)
                     .padding(.horizontal, queue.leadMargin)
-                Text(ticket.identifier)
-                    .textStyle(.rowTitle)
-                    .monospacedDigit()
-                    .fixedSize()
-                    .foregroundStyle(DesignTokens.TextColor.secondary.color)
-                    .frame(minWidth: QueueRow.identifierWidth, alignment: .leading)
-                Text(ticket.title)
-                    .font(DesignTokens.TypeStyle.font(size: DesignTokens.TypeStyle.rowTitle.size, weight: DesignTokens.Row.titleWeight))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .foregroundStyle(DesignTokens.TextColor.primary.color)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.leading, DesignTokens.Space.s1)
-                Badge(status: ticket.status, word: ticket.word, size: .small)
-                    .padding(.leading, DesignTokens.Space.s1)
-                Text(ticket.since)
-                    .textStyle(.secondary)
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .foregroundStyle(DesignTokens.TextColor.secondary.color)
-                    .frame(width: queue.stripSinceWidth, alignment: .trailing)
-                    .padding(.leading, DesignTokens.Space.s1)
+                    .probe(.lead, probes)
+                HStack(spacing: queue.rowMainGap) {
+                    Text(ticket.identifier)
+                        .textStyle(.rowTitle)
+                        .monospacedDigit()
+                        .fixedSize()
+                        .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                        .frame(minWidth: QueueRow.identifierWidth, alignment: .leading)
+                        .probe(.identifier, probes)
+                    Text(ticket.title)
+                        .font(DesignTokens.TypeStyle.font(size: DesignTokens.TypeStyle.rowTitle.size, weight: DesignTokens.Row.titleWeight))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .foregroundStyle(DesignTokens.TextColor.primary.color)
+                        .titleLink(ticket.identifier, hovered: titleHovered, open: onOpen)
+                        .probe(.title, probes)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: queue.rowMainGap) {
+                    if let epic = ticket.epic {
+                        // An epic slot's line (TP-1646, `shots/strip-2x.png`): the epic's flag and identifier, quiet.
+                        HStack(spacing: queue.trailGlyphGap) {
+                            Image(systemName: queue.epicFlagSymbol)
+                                .font(DesignTokens.TypeStyle.font(size: queue.trailGlyph, weight: DesignTokens.TypeStyle.label.weight))
+                            Text(epic)
+                                .textStyle(.secondary)
+                                .monospacedDigit()
+                                .lineLimit(1)
+                        }
+                        .foregroundStyle(DesignTokens.TextColor.tertiary.color)
+                        .fixedSize()
+                    }
+                    Badge(status: ticket.status, word: ticket.word, size: .small)
+                        .probe(.marks, probes)
+                    Text(ticket.since)
+                        .textStyle(.secondary)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                        .probe(.repo, probes)
+                        .frame(width: queue.endWidth, alignment: .trailing)
+                }
+                .fixedSize()
             }
             .padding(.horizontal, queue.rowInset)
             .frame(height: queue.stripHeight)
             .frame(maxWidth: .infinity)
-            .background { if let fill = shown.surface { shape.fill(fill.fill) } }
+            .background { if !dropTarget, let fill = shown.surface { shape.fill(fill.fill) } }
+            .dropTarget(dropTarget, in: shape)
             .contentShape(shape)
             .onHover { hovered = $0 }
             .accessibilityElement(children: .combine)
+            .accessibilityLabel(Self.accessibilityLabel(ticket, dropTarget: dropTarget))
+            .dropTargetAccessibility(dropTarget, identifier: SlotDropTarget.lineIdentifier(slot))
         } else {
-            EmptySlot(slot: slot, height: queue.stripHeight, radius: DesignTokens.Radius.row)
+            EmptySlot(
+                slot: slot, height: queue.stripHeight, radius: DesignTokens.Radius.row, dropTarget: dropTarget,
+                identifier: SlotDropTarget.lineIdentifier(slot)
+            )
         }
     }
 }

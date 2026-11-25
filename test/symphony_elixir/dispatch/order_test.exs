@@ -82,7 +82,10 @@ defmodule SymphonyElixir.Dispatch.OrderTest do
       first = issue("a", "MT-A", "Todo", priority: 1)
       second = issue("b", "MT-B", "Todo", priority: 2)
       third = issue("d", "MT-D", "Todo", priority: 3)
-      blocked = issue("c", "MT-C", "Todo", priority: 1)
+      # The others join the queue first, so the ticket held on a dependency is not its head; the head
+      # of the queue held on a dependency would take a free slot (TP-1624).
+      for %Issue{} = ticket <- [first, second, third, labelled], do: put_record!(ticket)
+      blocked = issue("c", "MT-C", "Todo", priority: 4)
       depends_on!(blocked, {"id-MT-9", "MT-9", "Todo"})
       working = issue("w", "MT-W", "In Progress")
       issues = [third, blocked, second, first, labelled, working]

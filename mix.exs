@@ -10,21 +10,28 @@ defmodule SymphonyElixir.MixProject do
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       # `mix cover.changed` runs these whenever the file changes: its tests reach the schema's
-      # modules through `Config` without naming them.
+      # modules through `Config` without naming them, and the groomed prompts' tests build a prompt
+      # under the `PromptBuilder` alias of `test/support/test_support.exs`.
       cover_changed: [
         covering_tests: %{
+          "lib/symphony_elixir/prompt_builder.ex" => ["test/symphony_elixir/groomed_prompts_test.exs"],
           "lib/symphony_elixir/config/schema.ex" => [
             "test/symphony_elixir/agent_tools_linear_test.exs",
             "test/symphony_elixir/claude_code/app_server_test.exs",
             "test/symphony_elixir/cli_check_test.exs",
             "test/symphony_elixir/config/embed_dependencies_test.exs",
             "test/symphony_elixir/config/required_fields_test.exs",
+            "test/symphony_elixir/config_settings_test.exs",
             "test/symphony_elixir/config_split_test.exs",
+            "test/symphony_elixir/core_agent_runner_turns_test.exs",
+            "test/symphony_elixir/core_agent_runner_workspace_test.exs",
+            "test/symphony_elixir/core_orchestrator_test.exs",
             "test/symphony_elixir/core_test.exs",
             "test/symphony_elixir/dispatch_config_test.exs",
             "test/symphony_elixir/dynamic_tool_test.exs",
             "test/symphony_elixir/learnings_config_test.exs",
             "test/symphony_elixir/ledger_config_test.exs",
+            "test/symphony_elixir/linear_client_candidates_test.exs",
             "test/symphony_elixir/linear_webhooks_config_test.exs",
             "test/symphony_elixir/qa_agent/playbook_settings_test.exs",
             "test/symphony_elixir/qa_agent_test.exs",
@@ -39,11 +46,17 @@ defmodule SymphonyElixir.MixProject do
             "test/symphony_elixir/state_provisioning_test.exs",
             "test/symphony_elixir/sub_issue_wait_test.exs",
             "test/symphony_elixir/ticket_priority_filter_test.exs",
-            "test/symphony_elixir/workspace_and_config_test.exs"
+            "test/symphony_elixir/workspace_hooks_test.exs",
+            "test/symphony_elixir/workspace_remote_test.exs",
+            "test/symphony_elixir/workspace_remote_worktree_reuse_test.exs",
+            "test/symphony_elixir/workspace_remote_worktree_test.exs",
+            "test/symphony_elixir/workspace_worktree_branches_test.exs",
+            "test/symphony_elixir/workspace_worktree_test.exs"
           ]
         }
       ],
       test_coverage: [
+        tool: cover_tool(),
         summary: [
           threshold: 100
         ],
@@ -123,9 +136,12 @@ defmodule SymphonyElixir.MixProject do
         ]
       ],
       test_ignore_filters: [
+        "test/support/agent_runner_progress_support.exs",
         "test/support/pr_watch_support.exs",
+        "test/support/qa_verification_support.exs",
         "test/support/snapshot_support.exs",
-        "test/support/test_support.exs"
+        "test/support/test_support.exs",
+        "test/support/workspace_test_support.exs"
       ],
       dialyzer: [
         plt_add_apps: [:mix, :mnesia, :tools],
@@ -138,6 +154,12 @@ defmodule SymphonyElixir.MixProject do
       aliases: aliases(),
       deps: deps()
     ]
+  end
+
+  # A `mix test --cover` process that `mix cover.changed` starts names the modules it checks in
+  # `SYMPHONY_COVER_MODULES`, and cover-compiles only those; any other run uses Mix's own tool.
+  defp cover_tool do
+    if System.get_env("SYMPHONY_COVER_MODULES"), do: SymphonyElixir.ChangedCoverage.Runner, else: Mix.Tasks.Test.Coverage
   end
 
   # `mix cover.changed` runs the tests with --cover, so it needs the test build.

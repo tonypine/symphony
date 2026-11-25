@@ -218,7 +218,7 @@ final class HomeQueueComponentsTests: XCTestCase {
 
     private let row = QueueRowModel(
         number: 1_243, identifier: "TP-977", title: "Give agents one tool to request a protected change, and pause the ticket on it",
-        lead: .glyph("clock", .textSecondary), after: "TP-976", marks: [.init(.you, "Needs your approval")], repo: "symphony"
+        lead: .glyph("clock", .textSecondary), dependencies: [DependencyMarkerModel(identifier: "TP-976")], marks: [.init(.you, "Needs your approval")], repo: "symphony"
     )
 
     /// Where each part of the row stands, in a row 900 wide, drawn in `look`.
@@ -236,11 +236,40 @@ final class HomeQueueComponentsTests: XCTestCase {
         return probes.mapValues { $0.convert($0.bounds, to: host) }
     }
 
+    /// Where each part of a strip line stands, in a line 900 wide on the same number cell as `parts`.
+    private func stripParts() -> [QueueRow.Part: CGRect] {
+        let probes = Dictionary(uniqueKeysWithValues: QueueRow.Part.allCases.map { ($0, NSView()) })
+        let host = NSHostingView(
+            rootView: SlotStripLine(slot: 1, ticket: slot(.working), numberWidth: QueueRow.numberWidth(widest: row.number))
+                .frame(width: 900)
+                .environment(\.queueRowProbes, probes)
+                .environment(\.offscreenSnapshot, true)
+        )
+        host.frame = CGRect(x: 0, y: 0, width: 900, height: DesignTokens.HomeQueue.stripHeight)
+        host.layoutSubtreeIfNeeded()
+        return probes.mapValues { $0.convert($0.bounds, to: host) }
+    }
+
+    /// TP-1609 QA (steps 8 and 10): the strip's dot, identifier and title start where the queue row's do, its state
+    /// badge ends where the row's badges end and its time ends where the row's repo ends, so the strip stands over the
+    /// queue's columns. A gap or a cell width changed in one of them and not the other fails here.
+    func testTheStripLinesColumnsStandOverTheQueueRowsColumns() {
+        let row = parts(.rest)
+        let strip = stripParts()
+        for part in [QueueRow.Part.lead, .identifier, .title] {
+            let line = strip[part] ?? .null, under = row[part] ?? .null
+            XCTAssertGreaterThan(line.width, 0, "the strip draws its \(part)")
+            XCTAssertEqual(line.minX, under.minX, accuracy: 0.5, "the strip's \(part) starts over the row's")
+        }
+        XCTAssertEqual((strip[.marks] ?? .null).maxX, (row[.marks] ?? .null).maxX, accuracy: 0.5, "the state badge ends over the row's badges")
+        XCTAssertEqual((strip[.repo] ?? .null).maxX, (row[.repo] ?? .null).maxX, accuracy: 0.5, "the time ends over the row's repo")
+    }
+
     func testOnHoverTheHandleAndStartTakeTheNumbersAndTheReposPlacesAndNothingShifts() {
         let rest = parts(.rest)
         let hover = parts(.hover)
         let dragged = parts(.dragged)
-        for part in [QueueRow.Part.lead, .identifier, .title, .after, .marks] {
+        for part in [QueueRow.Part.lead, .identifier, .title, .dependencies, .marks] {
             let at = rest[part] ?? .null
             XCTAssertGreaterThan(at.width, 0, "\(part) is drawn")
             XCTAssertEqual(hover[part] ?? .null, at, "\(part) keeps its place and width on hover")
@@ -260,6 +289,52 @@ final class HomeQueueComponentsTests: XCTestCase {
         XCTAssertTrue(QueueRow.starts(.hover))
         XCTAssertFalse(QueueRow.starts(.rest))
         XCTAssertFalse(QueueRow.starts(.dragged))
+    }
+
+    /// TP-1610 c3: under a saved filter the row keeps its number under the pointer, and Start still stands in the repo's
+    /// place; the drop targets draw at the size they have at rest.
+    func testUnderASavedFilterTheHandleNeverTakesTheNumbersPlace() {
+        XCTAssertFalse(QueueRow.handles(.hover, reorderable: false))
+        XCTAssertFalse(QueueRow.handles(.dragged, reorderable: false))
+        XCTAssertTrue(QueueRow.handles(.hover, reorderable: true))
+        XCTAssertTrue(QueueRow.starts(.hover))
+
+        let row = QueueRowModel(number: 3, identifier: "TP-1596", title: "A row", lead: .glyph("clock", .textSecondary), repo: "symphony")
+        let width = QueueRow.numberWidth(widest: 3)
+        XCTAssertEqual(
+            fittingSize(QueueRow(row, numberWidth: width, picked: true).frame(width: 900)).height,
+            fittingSize(QueueRow(row, numberWidth: width).frame(width: 900)).height
+        )
+        XCTAssertEqual(
+            fittingSize(SlotCard(slot: 3, ticket: nil, dropTarget: true).frame(width: 600)),
+            fittingSize(SlotCard(slot: 3, ticket: nil).frame(width: 600))
+        )
+        XCTAssertEqual(
+            fittingSize(SlotStripLine(slot: 1, ticket: slot(.working), numberWidth: 20, dropTarget: true).frame(width: 900)),
+            fittingSize(SlotStripLine(slot: 1, ticket: slot(.working), numberWidth: 20).frame(width: 900))
+        )
+        XCTAssertEqual(fittingSize(QueueDropLine().frame(width: 900)).height, DesignTokens.HomeQueue.dropLineHeight)
+    }
+
+    func testTheAccessibilityTreeSaysWhichRowIsDraggedAndWhichSlotIsTheTarget() {
+        XCTAssertEqual(QueueRow.accessibilityState(.rest, reorderable: true, picked: false), "")
+        XCTAssertEqual(QueueRow.accessibilityState(.hover, reorderable: true, picked: false), QueueRow.handleValue)
+        XCTAssertEqual(QueueRow.accessibilityState(.hover, reorderable: false, picked: false), "", "no handle under a saved view")
+        XCTAssertEqual(QueueRow.accessibilityState(.hover, reorderable: true, picked: true), QueueRow.draggedValue)
+        XCTAssertEqual(QueueRow.accessibilityIdentifier("TP-1596"), "queue-row-TP-1596")
+        XCTAssertEqual(SlotDropTarget.cardIdentifier(1), "slot-card-1")
+        XCTAssertEqual(SlotDropTarget.lineIdentifier(2), "slot-line-2")
+        XCTAssertEqual(QueueDropLine.accessibilityIdentifier, "queue-drop-line")
+        XCTAssertEqual(SlotCard.accessibilityLabel(1, ticket: "TP-1619", dropTarget: false), "\(SlotCard.emptyLabel(1)): TP-1619")
+        XCTAssertEqual(SlotCard.accessibilityLabel(1, ticket: "TP-1619", dropTarget: true), "\(SlotCard.emptyLabel(1)): TP-1619, Drop target")
+        let line = slot(.working)
+        // An epic slot's line names its epic after the title (TP-1646).
+        let said = "\(line.identifier), \(line.title), part of \(line.epic ?? ""), \(line.word), \(line.since)"
+        XCTAssertEqual(SlotStripLine.accessibilityLabel(line, dropTarget: false), said)
+        XCTAssertEqual(SlotStripLine.accessibilityLabel(line, dropTarget: true), "\(said), Drop target")
+        let row = QueueRowModel(number: 4, identifier: "TP-1605", title: "Sort the queue", lead: .glyph("clock", .textSecondary), repo: "symphony")
+        XCTAssertEqual(QueueRow.accessibilityLabel(row, picked: false), "Number \(row.numberText), TP-1605, Sort the queue")
+        XCTAssertEqual(QueueRow.accessibilityLabel(row, picked: true), "Number \(row.numberText), TP-1605, Sort the queue, Dragged")
     }
 
     func testTheNumberCellIsAsWideAsTheWidestNumberOnScreen() {

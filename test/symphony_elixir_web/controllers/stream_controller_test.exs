@@ -3,7 +3,7 @@ defmodule SymphonyElixirWeb.StreamControllerTest do
 
   import Phoenix.ConnTest
 
-  alias SymphonyElixir.{Pauses, Questions, TicketEvents, TransitionGuard}
+  alias SymphonyElixir.{DirectorQueue, Pauses, Questions, TicketEvents, TransitionGuard}
   alias SymphonyElixirWeb.{ControlApiController, ObservabilityPubSub, StreamController}
 
   @endpoint SymphonyElixirWeb.Endpoint
@@ -133,6 +133,70 @@ defmodule SymphonyElixirWeb.StreamControllerTest do
              [other_ticket.id, other_repo.id, wanted.id]
   end
 
+  @tag :tmp_dir
+  test "TP-1629: a queue move and a slot count change send a queue notice to every stream within a second; ticket notices are unchanged",
+       %{port: port, tmp_dir: tmp_dir} do
+    :ok = RunStore.put_ticket_state(%{repo_key: @repo_key, issue_id: "issue-2", issue_identifier: "TP-2", phase: "Todo"})
+    :ok = RunStore.update_ticket_state(@issue_id, %{phase: "Todo"})
+    file = Path.join(tmp_dir, "symphony.yml")
+    File.write!(file, "execution:\n  concurrency:\n    max_total: 2\n")
+    # The queue is global: a stream kept to another ticket gets its notices too.
+    filtered = open!(port, "?repo_key=other&issue_identifier=TP-9")
+    everything = open!(port)
+
+    started = System.monotonic_time(:millisecond)
+    {:ok, _moved} = DirectorQueue.move("TP-2", :top, orchestrator: :no_orchestrator)
+
+    for client <- [filtered, everything] do
+      buffer = recv_until!(client, "\"change\":\"order\"", 1_000)
+      assert System.monotonic_time(:millisecond) - started < 1_000
+      assert buffer =~ "event: queue\ndata: {"
+      assert [%{"change" => "order", "issue_id" => "issue-2", "issue_identifier" => "TP-2", "at" => at}] = notices(buffer)
+      assert {:ok, _at, 0} = DateTime.from_iso8601(at)
+    end
+
+    started = System.monotonic_time(:millisecond)
+    {:ok, _slots} = DirectorQueue.set_slots(3, file: file, orchestrator: :no_orchestrator)
+
+    for client <- [filtered, everything] do
+      buffer = recv_until!(client, "\"change\":\"slots\"", 1_000)
+      assert System.monotonic_time(:millisecond) - started < 1_000
+      assert [%{"change" => "slots", "count" => 3}] = notices(buffer)
+    end
+
+    # A refused write sends none; a ticket's notice still comes as it always did.
+    {:error, {:invalid, _message}} = DirectorQueue.set_slots(9, file: file, orchestrator: :no_orchestrator)
+    {:ok, event} = TicketEvents.record(@repo_key, @issue_id, "note", %{text: "live"})
+    buffer = recv_until!(everything, "id: #{event.id}\n", 1_000)
+    refute buffer =~ "event: queue"
+    assert buffer =~ "event: ticket\nid: #{event.id}\ndata: {"
+    assert [%{"event_id" => event_id, "type" => "note", "issue_identifier" => "TP-1"}] = notices(buffer)
+    assert event_id == event.id
+  end
+
+  test "TP-1638: a ticket done in its slot, the slot passed to an epic's next sub-ticket and a slot freed each reach every stream as sent",
+       %{port: port} do
+    client = open!(port, "?issue_identifier=TP-9")
+
+    notices = [
+      %{issue_id: "a", issue_identifier: "MT-A", by: "done", slot: 1, freed: false, held_by: "MT-E"},
+      %{issue_id: "b", issue_identifier: "MT-B", by: "pass", slot: 1, through: "MT-E"},
+      %{issue_id: "h", issue_identifier: "MT-H", by: "done", slot: 2, freed: true},
+      %{issue_id: "t", issue_identifier: "MT-T", by: "take", slot: 2}
+    ]
+
+    for notice <- notices, do: ObservabilityPubSub.broadcast_queue_change("slots", notice)
+
+    buffer = recv_until!(client, "\"issue_identifier\":\"MT-T\"", 1_000)
+
+    assert [
+             %{"change" => "slots", "by" => "done", "issue_identifier" => "MT-A", "freed" => false, "held_by" => "MT-E", "slot" => 1},
+             %{"change" => "slots", "by" => "pass", "issue_identifier" => "MT-B", "through" => "MT-E", "slot" => 1},
+             %{"change" => "slots", "by" => "done", "issue_identifier" => "MT-H", "freed" => true, "slot" => 2},
+             %{"change" => "slots", "by" => "take", "issue_identifier" => "MT-T", "slot" => 2}
+           ] = notices(buffer)
+  end
+
   test "an idle stream stays open with a keep-alive line at the interval", %{port: port} do
     assert StreamController.keep_alive_ms() == 15_000
     Application.put_env(:symphony_elixir, :stream_keep_alive_ms, 200)
@@ -158,6 +222,7 @@ defmodule SymphonyElixirWeb.StreamControllerTest do
 
     assert_receive {:DOWN, ^ref, :process, ^stream, _reason}, 5_000
     assert Registry.lookup(SymphonyElixir.PubSub, ObservabilityPubSub.ticket_events_topic()) == []
+    assert Registry.lookup(SymphonyElixir.PubSub, ObservabilityPubSub.queue_topic()) == []
   end
 
   test "other methods are not allowed" do

@@ -38,13 +38,28 @@ defmodule SymphonyElixir.Conductor do
 
   A turn that fails never holds a ticket up: one that times out (`conductor.timeout_ms`), fails,
   answers outside the schema, or whose provider a usage limit holds with no free fallback is logged,
-  records nothing for the person, and the next run starts as if the Conductor were off; the
+  records only why in a status note (which the next turn reads), and the next run starts as if the
+  Conductor were off; the
   mechanical guard on the merge (the plan's open checks and a plan version written after the code,
   `SymphonyElixir.PrDecision`'s R9a) holds without it. It never changes the ticket's plan; its
-  instructions are advice added to the next run's prompt. It routes the ticket in two ways only. At
-  `after_qa_blocked` its answer may route the ticket (`route`), back to Rework with a finding or to
-  one more QA pass, within bounds Symphony keeps from the ticket's events (`open_routes/1`); it never
-  routes it past QA. At `before_merge`, at `message` and on a watch turn its answer may hold the
+  instructions are advice added to the next run's prompt.
+
+  At every junction its answer may move the ticket to a stage (`move`, with a reason), as a person
+  may: Symphony makes the move through the person's free move (`SymphonyElixir.DirectorMoves`,
+  `move/4` with `:move`), with its guards (a phase of the repo's workflow, a ticket in a configured
+  repository, `SymphonyElixir.TransitionGuard`), once the turn's run has ended, and asks nothing.
+  The move runs in a task of its own: a move into Backlog or a closed stage stops the ticket's
+  running run, which may be the task the turn runs in, and the move is still recorded in full.
+  The ticket's events get one `ticket.moved` whose actor is the turn and whose note is its reason.
+  A move that path refuses is dropped and logged, and the rest of the turn is kept; one to the stage
+  the ticket is in moves nothing; one given with a question is dropped, since the person decides.
+  The stages it may name are in the facts (`stages`). A turn before a run that moved the ticket
+  keeps that run from starting (`run/3` answers `:again`), so the new stage is dispatched instead.
+
+  Its answer also routes the ticket in two ways. At `after_qa_blocked` its answer may route the
+  ticket (`route`), back to Rework with a finding or to one more QA pass, within bounds Symphony
+  keeps from the ticket's events (`open_routes/1`); such a route given beside a `move` is dropped,
+  and the move decides. At `before_merge`, at `message` and on a watch turn its answer may hold the
   ticket's merge (`hold`, with a reason) when the pull request is about to merge work that is not
   what is asked now: Symphony records the reason as the next run's instructions routed `hold`, and
   the PR and CI watcher, asked to read the ticket at once, turns auto-merge off and moves the ticket
@@ -67,19 +82,33 @@ defmodule SymphonyElixir.Conductor do
   2 failed tries (`Grooming.max_tries/0`) it starts without a plan, with a note that says why. A turn
   no provider can take now is such a try, so a ticket never waits on Grooming. A plan of shape
   `split` is carried out instead of a first run (`SymphonyElixir.Conductor.Tree`): the ticket's
-  sub-tickets are created and it waits on them.
+  sub-tickets are created and it waits on them. A person's message on a ticket that has no plan yet
+  and never ran does not wait for that dispatch: the same turn runs at once, outside any dispatch
+  (`groom_now/3`), and the message is answered once the plan is written.
 
   Two junctions belong to a groomed ticket that waits on its sub-tickets, and are met outside any
   dispatch (`tend/4`, which the orchestrator starts on a poll): `sub_ticket_ended`, each time one of
   them ends while others are open, whose answer may change the tree, and `final_check`, once the
-  last one ended, whose answer closes the ticket or adds what is missing. Both read the tree's facts
+  last one ended, which checks that the plan was delivered and closes the ticket or adds what is
+  missing; an answer of it that concludes nothing is given back once in the same turn
+  (`timed_turn/5`). Both read the tree's facts
   on a prompt of their own (`priv/conductor/tree_prompt.md`) and answer `done` and `tree`
   operations, which Symphony carries out and records (`Tree.apply/3`).
 
-  A person's message on a groomed ticket is answered by a turn of its own (`message/4`,
-  `SymphonyElixir.Conductor.Message`), started as the message is written and tied to no dispatch:
-  the `message` junction on the ticket, then `child_message` on its parent. One written before the
-  plan existed is answered as Grooming ends, and a turn that failed is tried again, up to 3 times.
+  Every other turn on a ticket with sub-tickets (`Tree.family?/1`: a message, a message on a
+  sub-ticket, a watch turn, any junction such a ticket reaches; Grooming aside) reads the same form:
+  its prompt holds the one text that says it (`priv/conductor/sub_tickets_form.md`), its `tree` is
+  carried out as at `sub_ticket_ended`, and its `plan`, when it has one, is the plan's next version
+  with the sub-tickets kept by Symphony (`Message.write_plan/4`); a plan that lists them anyway is
+  read as the same changes (`Tree.intent/2`). What Symphony refused of a turn's answer, or did not
+  carry out, is said on the ticket in a status note and named in the turn's reply, and the next turn
+  reads it in its facts (`earlier_tries`).
+
+  A person's message on a ticket is answered by a turn of its own (`message/4`,
+  `SymphonyElixir.Conductor.Message`), started as the message is written and tied to no dispatch,
+  in any state of the ticket: the `message` junction on the ticket, then `child_message` on its
+  parent. On a ticket that was never groomed nor run, Grooming runs first (`groom_now/3`); one
+  written while Grooming ran is answered as it ends, and a turn that failed is tried again, up to 3 times.
   One turn answers every message that waits at that moment.
 
   One Conductor turn works on a ticket at a time (`exclusive/3`): the process that runs a turn holds
@@ -96,6 +125,11 @@ defmodule SymphonyElixir.Conductor do
   and on a watch turn the answer may waive checks of the plan nobody can prove (`waive`), which
   Symphony records as `check.waived` (`SymphonyElixir.TicketChecks.waive/4`); one that names no
   check of the plan, or names an outcome, which only the person waives, is dropped and logged.
+  Each of those turns is told that a check is never waived for the person to verify later
+  (`Facts.waive_rule/0`), and that an outcome which rested on such a check is dropped in the same
+  turn by writing the plan again, with its reason. On a ticket without sub-tickets the turns at
+  `after_coding`, `after_rework`, `before_merge` and the watch turn read that `plan` too, and
+  Symphony records it as the plan's next version (`Message.write_plan/4`).
   """
 
   require Logger
@@ -107,6 +141,7 @@ defmodule SymphonyElixir.Conductor do
     Config,
     DecisionMove,
     DecisionRequest,
+    DirectorMoves,
     Orchestrator,
     Pauses,
     PromptSafety,
@@ -144,6 +179,11 @@ defmodule SymphonyElixir.Conductor do
   @message_prompt_path Path.expand(Path.join([__DIR__, "..", "..", "priv", "conductor", "message_prompt.md"]))
   @external_resource @message_prompt_path
   @message_prompt File.read!(@message_prompt_path)
+  # The one form a turn on a ticket with sub-tickets changes them and the plan in, the same text in
+  # every prompt (`{{sub_tickets_form}}`).
+  @form_path Path.expand(Path.join([__DIR__, "..", "..", "priv", "conductor", "sub_tickets_form.md"]))
+  @external_resource @form_path
+  @form File.read!(@form_path)
   @grooming "grooming"
   # How a turn ends that `SymphonyElixir.ConductorGate` did not let start.
   @closed "closed"
@@ -158,11 +198,14 @@ defmodule SymphonyElixir.Conductor do
   @waive_junctions ["message", "after_coding", "after_rework", "before_merge", "sub_ticket_ended", "final_check", "during_run"]
   # The junctions whose answer may hold the ticket's merge.
   @hold_junctions ["before_merge", "message", "during_run"]
+  # The junctions that waive a check on a ticket without sub-tickets, where an outcome that rested on
+  # a check nobody can prove is dropped by writing the plan again, with its reason (`Facts.waive_rule/0`).
+  @plan_drop_junctions ["after_coding", "after_rework", "before_merge", "during_run"]
   @junction_words %{
     "grooming" => "the ticket is new; you write its plan before any work starts",
     "message" => "a person sent a message on the ticket; you answer it",
     "sub_ticket_ended" => "a sub-ticket of this ticket ended; you look at what is left of its plan",
-    "final_check" => "the last sub-ticket ended; you check the whole ticket against its plan",
+    "final_check" => "the last sub-ticket ended; you check that the plan was delivered, and close the ticket when it was",
     "child_message" => "a person sent a message on a sub-ticket of this ticket",
     "after_coding" => "an implementation run handed off; Code Review or QA judges it next",
     "after_qa_fail" => "QA failed; a rework run answers its findings next",
@@ -212,10 +255,10 @@ defmodule SymphonyElixir.Conductor do
 
   @typedoc """
   What the turn after a QA pass that could not judge the change answered (`route_blocked_qa/3`):
-  the ticket goes to Rework with the finding, QA runs again, the turn asked the person, or none of
-  these, and the pass goes on as if the Conductor were off.
+  the ticket goes to Rework with the finding, QA runs again, the turn asked the person, the turn
+  moved the ticket itself (`move`), or none of these, and the pass goes on as if the Conductor were off.
   """
-  @type blocked_qa_route :: {:rework, String.t()} | :rerun | :held | :none
+  @type blocked_qa_route :: {:rework, String.t()} | :rerun | :held | :moved | :none
 
   @doc """
   Runs `work` while this process holds the lock of the ticket `issue_id`, which one Conductor turn
@@ -369,6 +412,7 @@ defmodule SymphonyElixir.Conductor do
   end
 
   defp blocked_qa_route({:held, _route}), do: :held
+  defp blocked_qa_route({:moved, _route}), do: :moved
   defp blocked_qa_route({:ok, %{to: "rework", finding: finding}}), do: {:rework, finding}
   defp blocked_qa_route({:ok, %{to: "rerun"}}), do: :rerun
   defp blocked_qa_route({:ok, %{to: "ticket"}}), do: :none
@@ -459,9 +503,11 @@ defmodule SymphonyElixir.Conductor do
   (`wait/5`). With `start` in place of a junction no turn runs: a sub-ticket Symphony created and left
   in `Backlog` is linked and started (`Tree.start_left/3`). Nothing runs while the Conductor or the junction is
   off, or no provider of `runs.conductor` can take a run now: the next poll asks again. The turn's
-  answer is carried out as it is recorded (`Tree.apply/3`). A final check that did not conclude
-  never closes the ticket: one that did not finish is counted and tried once more, then the person
-  is asked (`Tree.checked/3`). Always `:ok`. `opts`: `plan/4`'s and `run/3`'s.
+  answer is carried out as it is recorded (`Tree.apply/3`). A final check whose answer concludes
+  nothing (not done, nothing to add or change, no question) is given back to the Conductor once,
+  inside the same turn and its time limit, and the second answer is the one carried out. A final
+  check that did not conclude never closes the ticket: one that did not finish is counted and tried
+  once more, then the person is asked (`Tree.checked/3`). Always `:ok`. `opts`: `plan/4`'s and `run/3`'s.
   """
   @spec tend(Issue.t(), String.t(), String.t() | nil, keyword()) :: :ok
   def tend(%Issue{id: issue_id} = issue, junction, repo_key, opts \\ []) when junction in [@start | @tree_junctions] do
@@ -594,7 +640,8 @@ defmodule SymphonyElixir.Conductor do
   person a question, which pauses the ticket, so the run that would follow does not start; `:again`
   when a Grooming turn left the ticket to its next dispatch, which starts at once (a try that
   failed and is made again, or a ticket labelled `plan` whose plan is written,
-  `Grooming.take_over/3`), so the run does not start either; `:ok`
+  `Grooming.take_over/3`), and when the turn moved the ticket to another stage (`move`): the run
+  does not start either, and the ticket is dispatched again at once, in its new stage; `:ok`
   otherwise, whatever happened, so a failed turn never holds the ticket up. Nil plans nothing. `opts`: `turn` (`(plan, issue, run_id, prompt) ->
   {:ok, [String.t()], tokens} | {:error, reason, tokens}`, the turn's text candidates; default a
   harness session, whose launcher `agent_module` overrides), `facts` (the document, default
@@ -617,7 +664,7 @@ defmodule SymphonyElixir.Conductor do
 
   def run(%{} = plan, %Issue{} = issue, opts) do
     {:ok, {held, _route}} = exclusive(plan.issue_id, :wait, fn -> conduct(plan, issue, opts) end)
-    held
+    if held == :moved, do: :again, else: held
   rescue
     error ->
       Logger.warning("Conductor turn failed #{context(issue, plan)}: #{Exception.message(error)}; the next run starts without it")
@@ -630,8 +677,14 @@ defmodule SymphonyElixir.Conductor do
   # is a try that failed.
   # A ticket whose plan is already a split gets no turn: the split is carried out (again), which
   # creates what is missing and leaves the ticket waiting on its sub-tickets.
+  # A ticket a message's Grooming (`groom_now/3`) planned while this dispatch waited for the lock
+  # gets no second turn: what follows a written plan follows it now (the label, the split).
   defp groom(%{issue_id: issue_id} = plan, issue, opts) do
-    if split?(issue_id), do: split(plan, issue, opts), else: groom_turn(plan, issue, opts)
+    cond do
+      split?(issue_id) -> split(plan, issue, opts)
+      TicketPlan.groomed?(issue_id) -> after_grooming(true, "answered", plan, issue, opts)
+      true -> groom_turn(plan, issue, opts)
+    end
   end
 
   defp split?(issue_id), do: match?(%{shape: "split"}, TicketPlan.current(issue_id))
@@ -656,6 +709,62 @@ defmodule SymphonyElixir.Conductor do
     end
   end
 
+  @doc """
+  Grooms `issue` now, outside any dispatch, because a person wrote it a message before it had a
+  plan (`SymphonyElixir.Conductor.Message.tend/2`): the message is answered once the plan exists,
+  not at the ticket's first run. It is the same turn as at the first dispatch (the ask recorded
+  first, the ticket's workspace, `Grooming.write_plan/4`), while Grooming is due on a first run
+  (`Grooming.due?/2`), and it starts no run and takes no slot. A plan of shape `split` is only
+  written: the first dispatch carries it out (`Grooming.split_due?/2`). A ticket labelled `plan`
+  loses the label as at the dispatch (`Grooming.take_over/3`).
+
+  Nothing runs while another turn holds the ticket's lock, while no provider of `runs.conductor`
+  can take the turn, or while Symphony or the repository is paused: the message stays owed, and
+  `:ok` is returned. A try that wrote no plan is `{:failed, why}`, in plain words, and counts none
+  of the dispatch's Grooming tries (`Grooming.failed/3`): the message counts it as one of its own
+  (`SymphonyElixir.Conductor.Message.tend/2`), so a failure here never leaves the ticket's first run
+  without a plan. `opts`: `plan/4`'s, `run/3`'s and `Grooming.workspace/3`'s.
+  """
+  @spec groom_now(Issue.t(), String.t() | nil, keyword()) :: :ok | {:failed, String.t()}
+  def groom_now(%Issue{id: issue_id} = issue, repo_key, opts \\ []) do
+    due = &if(Grooming.due?(:implementation, &1), do: @grooming)
+
+    with %{} = plan <- plan_with(issue_id, repo_key, opts, due),
+         false <- Map.has_key?(plan, :unavailable) or dispatch_paused?(repo_key, opts),
+         {:ok, groomed} <- exclusive(issue_id, :skip, fn -> groom_early(plan, issue, opts) end) do
+      groomed
+    else
+      _not_now -> :ok
+    end
+  rescue
+    error ->
+      Logger.warning("Grooming failed #{context(issue, %{issue_id: issue_id, repo_key: repo_key})}: #{Exception.message(error)}")
+      {:failed, "Grooming failed: #{Exception.message(error)}"}
+  end
+
+  # The lock is held: a dispatch's Grooming may have written the plan while this waited, and then
+  # nothing runs. A turn the gate closed, or one that asked the person, is no failure.
+  defp groom_early(%{issue_id: issue_id, repo_key: repo_key} = plan, issue, opts) do
+    with true <- Grooming.due?(:implementation, Facts.read_events(issue_id)),
+         :ok <- Grooming.record_ask(repo_key, issue, record(issue_id, opts), Facts.events(issue_id)) do
+      case turn(in_workspace(plan, issue, opts), issue, opts) do
+        {@closed, _held, _route} -> :ok
+        {_exit, :held, _route} -> :ok
+        {exit, _held, _route} -> groomed_early(TicketPlan.groomed?(issue_id), exit, plan, issue, opts)
+      end
+    else
+      # Not due any more, or an ask that could not be recorded (too long: the ticket runs without a plan).
+      _not_due_or_unrecorded -> :ok
+    end
+  end
+
+  defp groomed_early(true, _exit, plan, issue, opts) do
+    _taken_over_or_unchanged = Grooming.take_over(plan.repo_key, issue, Keyword.take(opts, [:tracker]))
+    :ok
+  end
+
+  defp groomed_early(false, exit, _plan, _issue, _opts), do: {:failed, "Grooming did not finish: #{why_ungroomed(exit)}"}
+
   defp groom_turn(%{unavailable: provider} = plan, issue, _opts) do
     ungroomed(plan, issue, "no provider of runs.conductor can take a run now (#{provider})")
   end
@@ -673,8 +782,15 @@ defmodule SymphonyElixir.Conductor do
 
   defp groom_asked(%{issue_id: issue_id} = plan, issue, opts) do
     case turn(in_workspace(plan, issue, opts), issue, opts) do
-      {_exit, :held, _route} -> :held
-      {exit, :ok, _route} -> after_grooming(TicketPlan.groomed?(issue_id), exit, plan, issue, opts)
+      {_exit, :held, _route} ->
+        :held
+
+      {exit, :ok, _route} ->
+        after_grooming(TicketPlan.groomed?(issue_id), exit, plan, issue, opts)
+
+      # The ticket moved: the run it came before does not start, and the new stage is dispatched.
+      {exit, :moved, _route} ->
+        with :ok <- after_grooming(TicketPlan.groomed?(issue_id), exit, plan, issue, opts), do: :again
     end
   end
 
@@ -719,8 +835,8 @@ defmodule SymphonyElixir.Conductor do
   defp why_ungroomed("failed"), do: "the turn failed"
   defp why_ungroomed(exit), do: exit
 
-  # The turn, recorded: whether it asked the person (`:held`) and the route Symphony takes from its
-  # answer, nil when none.
+  # The turn, recorded: whether it asked the person (`:held`) or moved the ticket (`:moved`), and the
+  # route Symphony takes from its answer, nil when none.
   defp conduct(plan, issue, opts) do
     {_exit, held, route} = turn(plan, issue, opts)
     {held, route}
@@ -737,11 +853,13 @@ defmodule SymphonyElixir.Conductor do
   end
 
   defp gated_turn(%{junction: junction, issue_id: issue_id} = plan, issue, opts) do
+    # A ticket with sub-tickets: every turn on it but Grooming reads the one form that changes them.
+    plan = Map.put_new_lazy(plan, :family, fn -> junction != @grooming and Tree.family?(issue_id) end)
     run_id = "conductor-" <> Event.ulid(DateTime.utc_now())
     started_at = DateTime.utc_now()
     record = record(issue_id, opts)
     phase = record.phase || issue.state
-    facts = Keyword.get_lazy(opts, :facts, fn -> record |> Facts.build(junction) |> with_routes(plan) |> with_code(plan) |> Message.facts(plan) |> Tree.facts(issue_id) end)
+    facts = opts |> Keyword.get_lazy(:facts, fn -> record |> Facts.build(junction) |> with_routes(plan) |> with_code(plan) |> Message.facts(plan) |> Tree.facts(issue_id) end) |> with_stages()
     record_run_started(plan, run_id, phase)
     Logger.info("Conductor turn started #{context(issue, plan)} run_id=#{run_id} junction=#{junction} model=#{plan.run_profile.model}")
 
@@ -750,12 +868,64 @@ defmodule SymphonyElixir.Conductor do
     tokens = elem(outcome, 2)
     {exit, held, route} = record_outcome(outcome, plan, %{issue | state: phase}, run_id, {facts, record, opts})
     record_run_ended(plan, issue, run_id, %{exit: exit, tokens: tokens, started_at: started_at, phase: phase})
+    # The move goes last, once the turn is recorded: a move into Backlog or a closed stage stops the
+    # ticket's running run, which may be the one this turn runs in.
+    held = moved(outcome, held, plan, issue, run_id, opts)
+    # An answer to a held question, in the person's words, no longer holds the ticket once it is read.
+    Message.settle(plan, outcome, held, issue, opts)
     {exit, held, route}
   end
 
-  # The plan a Grooming turn answered, recorded before anything else of the answer: a plan Symphony
-  # refuses makes the whole answer unreadable, so nothing of it is recorded.
-  defp with_plan({:ok, %{plan: %{}} = answer, tokens} = outcome, %{junction: junction} = plan, issue, run_id, _opts) when junction in @message_junctions do
+  # The stage the answer moves the ticket to, through the person's free move and its guards
+  # (`SymphonyElixir.DirectorMoves`), made as the turn's (`by: {:conductor, run_id}`). A move beside a
+  # question is dropped (the person decides), and so is one the path refuses; a turn that holds the
+  # ticket stays `:held`. `opts[:moves]` are the free move's options.
+  defp moved({:ok, %{move: %{stage: stage}, ask_person: %{}}, _tokens}, held, plan, issue, _run_id, _opts) do
+    Logger.info("Conductor's move to #{stage} dropped #{context(issue, plan)}: the turn asked the person, who decides")
+    held
+  end
+
+  defp moved({:ok, %{move: %{stage: stage, reason: reason}}, _tokens}, held, plan, issue, run_id, opts) do
+    moves = Keyword.merge(Keyword.get(opts, :moves, []), by: {:conductor, run_id})
+
+    case own_move(issue.identifier || issue.id, %{to: stage, note: reason}, moves) do
+      {:ok, %{moved: true, from_state: from, to_state: to}} ->
+        Logger.info("Conductor moved the ticket from #{from} to #{to} #{context(issue, plan)} run_id=#{run_id} junction=#{plan.junction}")
+        if held == :ok, do: :moved, else: held
+
+      {:ok, %{to_state: to}} ->
+        Logger.info("Conductor's move to #{to} moved nothing #{context(issue, plan)} run_id=#{run_id}: the ticket is there already")
+        held
+
+      {:error, why} ->
+        Logger.warning("Conductor's move to #{stage} was refused #{context(issue, plan)} run_id=#{run_id}: #{inspect(why)}")
+        held
+    end
+  end
+
+  defp moved(_outcome, held, _plan, _issue, _run_id, _opts), do: held
+
+  # The move runs in a task of its own, not linked to the turn: a move into Backlog or a closed stage
+  # stops the ticket's running run, which may be the task this turn runs in (a turn before a run, or
+  # one inside a QA pass). The stop then ends this process, and the move still records its
+  # `ticket.moved`, its audit record and the release of the stop's pause. A move that crashes is a
+  # refused one.
+  defp own_move(target, attrs, moves) do
+    task = Task.Supervisor.async_nolink(SymphonyElixir.TaskSupervisor, fn -> DirectorMoves.move(:move, target, attrs, moves) end)
+
+    case Task.yield(task, :infinity) do
+      {:ok, answer} -> answer
+      {:exit, reason} -> {:error, {:crashed, reason}}
+    end
+  end
+
+  # The stages a move may name, the ones a person's free move takes (`DirectorMoves.phases/1`).
+  defp with_stages(facts), do: Map.put_new_lazy(facts, :stages, fn -> DirectorMoves.phases(Config.settings!()) end)
+
+  # The plan a turn answered, recorded before anything else of the answer: a plan Symphony refuses
+  # makes the whole answer unreadable, so nothing of it is recorded. Outside Grooming the ticket's
+  # shape and sub-tickets stay Symphony's (`Message.write_plan/4`).
+  defp with_plan({:ok, %{plan: %{}} = answer, tokens} = outcome, %{junction: junction} = plan, issue, run_id, _opts) when junction != @grooming do
     case Message.write_plan(plan, issue, answer, run_id) do
       :ok -> outcome
       {:error, why} -> {:error, {:plan_refused, why}, tokens}
@@ -806,8 +976,17 @@ defmodule SymphonyElixir.Conductor do
     |> prompt_text()
     |> String.replace("{{junction}}", junction)
     |> String.replace("{{junction_words}}", Map.get(@junction_words, junction, junction))
+    |> String.replace("{{sub_tickets_form}}", form(junction, facts))
+    |> String.replace("{{waive_rule}}", Facts.waive_rule())
+    |> String.replace("{{plan_rule}}", Facts.plan_rule())
     |> String.replace("{{facts}}", Jason.encode!(facts, pretty: true))
   end
+
+  # Every turn on a ticket with sub-tickets is told the one form that changes them, in the same words.
+  defp form(@grooming, _facts), do: ""
+  defp form(junction, _facts) when junction in @tree_junctions, do: @form
+  defp form(_junction, %{sub_tickets: [_ | _]}), do: @form
+  defp form(_junction, _facts), do: ""
 
   defp prompt_text("during_run"), do: @watch_prompt
   defp prompt_text(@grooming), do: @grooming_prompt
@@ -816,8 +995,60 @@ defmodule SymphonyElixir.Conductor do
   defp prompt_text(_junction), do: @prompt
 
   # The turn runs in a task of its own, bounded by `timeout_ms`: one that runs over is stopped, and
-  # one that crashes is a failed turn, never the caller's crash.
+  # one that crashes is a failed turn, never the caller's crash. A final check's answer that
+  # concludes nothing is given back to the Conductor once, inside the same time limit (`sent_back/6`).
   defp timed_turn(plan, issue, run_id, prompt, turn) do
+    deadline = System.monotonic_time(:millisecond) + plan.timeout_ms
+
+    case bounded_turn(plan, issue, run_id, prompt, turn) do
+      {:ok, answer, _tokens} = outcome ->
+        if concludes_nothing?(answer, plan),
+          do: sent_back(outcome, plan, issue, run_id, {prompt, turn}, deadline),
+          else: outcome
+
+      outcome ->
+        outcome
+    end
+  end
+
+  # A final check's answer that is not done, changes nothing (no sub-ticket to add or change, no
+  # plan written again, no move) and asks nothing: read from the answer, never from its update.
+  defp concludes_nothing?(%{done: false, tree: [], ask_person: nil, plan: nil, move: nil}, %{junction: @final_check}), do: true
+  defp concludes_nothing?(_answer, _plan), do: false
+
+  @sent_back """
+
+
+  ## Your answer was given back to you
+
+  Your answer to this turn was:
+
+  {{answer}}
+
+  Symphony gave it back to you: your answer closes nothing, changes nothing and asks nothing.
+  Saying in your `update` that you ask a question does not ask it. Answer again, as one JSON object
+  in the same form: `"done": true` when every outcome holds, `add` operations for what is missing,
+  the `plan` written again without an outcome nothing can prove, with its `reason`, or the question
+  in `ask_person` when only the person can settle it.
+  """
+
+  # The answer goes back with the reason, as one more prompt of the same turn (the same run id), in
+  # what is left of the turn's limit; Symphony then acts on the second answer. Both answers' tokens
+  # count on the turn. A second try that fails or runs out of time keeps the first answer, which
+  # takes the path any final check that concluded nothing takes (`Tree.apply/3`, `Tree.checked/3`).
+  defp sent_back({:ok, first, tokens}, plan, issue, run_id, {prompt, turn}, deadline) do
+    Logger.info("Conductor's final check concluded nothing #{context(issue, plan)} run_id=#{run_id}: Symphony gives the answer back once")
+    left = max(deadline - System.monotonic_time(:millisecond), 1)
+    shown = Jason.encode!(Map.take(first, [:done, :tree, :update, :ask_person]), pretty: true)
+    again = prompt <> String.replace(@sent_back, "{{answer}}", shown)
+
+    case bounded_turn(%{plan | timeout_ms: left}, issue, run_id, again, turn) do
+      {:ok, answer, more} -> {:ok, answer, tokens + more}
+      {:error, _reason, more} -> {:ok, first, tokens + more}
+    end
+  end
+
+  defp bounded_turn(plan, issue, run_id, prompt, turn) do
     task = Task.Supervisor.async_nolink(SymphonyElixir.TaskSupervisor, fn -> turn.(plan, issue, run_id, prompt) end)
 
     case Task.yield(task, plan.timeout_ms) || Task.shutdown(task, :brutal_kill) do
@@ -828,13 +1059,15 @@ defmodule SymphonyElixir.Conductor do
     end
   end
 
-  # What the answer of a turn at the plan's junction is read for (`Answer.parse/2`).
+  # What the answer of a turn at the plan's junction is read for (`Answer.parse/2`). Outside
+  # Grooming a plan never needs to list the sub-tickets, which are Symphony's to keep.
   defp read_opts(%{junction: junction} = plan) do
     [
       watch: Map.has_key?(plan, :watch),
       route: route_read(junction),
       plan: plan_read(plan),
-      tree: junction in @tree_junctions or junction in @message_junctions,
+      sub_tickets: sub_tickets_read(plan),
+      tree: tree_turn?(plan),
       message: reply_read(plan),
       new_ticket: match?(%{message: %{finished: true}}, plan),
       waive: junction in @waive_junctions,
@@ -845,13 +1078,31 @@ defmodule SymphonyElixir.Conductor do
   defp plan_read(%{junction: @grooming}), do: true
   defp plan_read(%{message: %{event: %Event{type: "ask.recorded"}}}), do: true
   defp plan_read(%{junction: @child_message}), do: :optional
+  # On a ticket with sub-tickets every turn may write the plan again.
+  defp plan_read(%{family: true}), do: :optional
+  defp plan_read(%{junction: junction}) when junction in @plan_drop_junctions, do: :optional
   defp plan_read(_plan), do: false
+
+  # Grooming's plan lists the sub-tickets a split creates; on a ticket with sub-tickets a plan that
+  # lists them is read as changes to them (`Tree.intent/2`); elsewhere the list is Symphony's alone.
+  defp sub_tickets_read(%{junction: @grooming}), do: :required
+  defp sub_tickets_read(%{family: true}), do: :kept
+  defp sub_tickets_read(_plan), do: :ignored
+
+  # Whether the turn's answer may change the ticket's sub-tickets (`tree`): every turn on a ticket
+  # that has some, whatever its junction, and the turns that are about the tree or a message.
+  defp tree_turn?(%{junction: junction} = plan), do: junction in @tree_junctions or junction in @message_junctions or Map.get(plan, :family) == true
 
   # A person's message is owed a reply; on a finished ticket the reply is all that is read of it.
   defp reply_read(%{junction: @message, message: %{event: %Event{type: "message.sent"}, finished: finished}}), do: if(finished, do: :reply, else: true)
   defp reply_read(_plan), do: false
 
-  defp limited({:ok, answer, tokens}, plan), do: {:ok, Message.limited(answer, plan), tokens}
+  # A plan that lists the sub-tickets anyway is read as the same changes as `tree` (`Tree.intent/2`).
+  defp limited({:ok, answer, tokens}, plan) do
+    answer = Message.limited(answer, plan)
+    {:ok, if(Map.get(plan, :family) == true, do: Tree.intent(answer, plan.issue_id), else: answer), tokens}
+  end
+
   defp limited(outcome, _plan), do: outcome
 
   # Which routes a junction's answer may hold: every one at `after_qa_blocked`, a ticket route only
@@ -876,11 +1127,13 @@ defmodule SymphonyElixir.Conductor do
     waive(answer.waive, plan, issue)
     # The question goes first: the update's `question` block names the decision it opened.
     asked = ask_person(answer.ask_person, plan, issue, run_id)
+    # What the answer's `tree` left out is said on the ticket, as what Symphony could not carry out is.
+    if answer.dropped != [], do: Tree.not_done(plan.repo_key, plan.issue_id, plan.junction, run_id, answer.dropped)
     # A ticket that blocks this one holds it as a question does; only a question lets a watch stop the run.
     held = if holds?(filed), do: :held, else: tend_tree(answer, plan, issue, run_id, asked, opts)
     # A sub-ticket Symphony refused because the ticket reached a bound: the person is asked, once.
     held = if held == :ok and ask_about(Tree.limit_ask(plan.issue_id), plan, issue) == :held, do: :held, else: held
-    answer = Message.acted(answer, plan, issue, run_id, opts)
+    answer = answer |> Message.acted(plan, issue, run_id, opts) |> with_not_done(plan, run_id)
     record_update(with_filed(answer, filed, route), plan, run_id, {facts, record})
     steer(plan, answer, asked)
 
@@ -894,14 +1147,35 @@ defmodule SymphonyElixir.Conductor do
 
   defp record_outcome({:error, reason, _tokens}, plan, issue, run_id, _context) do
     Logger.warning("Conductor turn wrote nothing #{context(issue, plan)} run_id=#{run_id} junction=#{plan.junction}: #{inspect(reason)}; the next run starts without it")
-    Message.unanswered(plan, run_id, why_unanswered(reason))
+    refused(plan, run_id, why_unanswered(reason))
     {exit_text(reason), :ok, nil}
   end
 
+  # Why the turn wrote nothing, said on the ticket so the next try of the turn reads it in its facts
+  # (`Facts.turn_tries/1`): a message's on what it was to answer (`Message.unanswered/3`), Grooming's
+  # and the final check's by their own count (`Grooming.failed/3`, `Tree.checked/3`), any other's as
+  # a status note under `conductor.try:<junction>:<run_id>`.
+  defp refused(%{junction: @message} = plan, run_id, why), do: Message.unanswered(plan, run_id, why)
+  defp refused(%{junction: junction}, _run_id, _why) when junction in [@grooming, @final_check], do: :ok
+
+  defp refused(plan, run_id, why) do
+    text = "Symphony used nothing of the Conductor's turn at #{plan.junction}: #{why}."
+    record_event(plan, "note", %{text: Facts.fit(text, 4_000), status: true}, run_id, idempotency: "conductor.try:#{plan.junction}:#{run_id}")
+  end
+
   defp why_unanswered(:timeout), do: "the turn ran past its time limit"
-  defp why_unanswered({:unreadable_answer, _why}), do: "its answer could not be read"
+  defp why_unanswered({:unreadable_answer, why}), do: "Symphony refused its answer: #{why}"
   defp why_unanswered({:plan_refused, why}), do: why
   defp why_unanswered(_reason), do: "the turn failed"
+
+  # The reply says what Symphony did not carry out of the answer (`Tree.not_done/2`), before its
+  # `Next:` paragraph, and is written even when the answer had none.
+  defp with_not_done(answer, plan, run_id) do
+    case Tree.not_done(plan.issue_id, run_id) do
+      [] -> answer
+      whys -> %{answer | update: Facts.fit(update_with(answer.update, "Symphony did not carry out: " <> Enum.join(whys, "; ") <> "."), Answer.update_max())}
+    end
+  end
 
   # The checks the answer waives, each recorded with its reason; one the plan does not hold is dropped.
   defp waive(waivers, plan, issue) do
@@ -915,18 +1189,22 @@ defmodule SymphonyElixir.Conductor do
 
   # What a turn on a ticket with sub-tickets answered about its tree (`Tree.apply/3`), unless it
   # asked the person, who then decides first. A round Symphony refuses becomes its own question.
-  defp tend_tree(answer, %{junction: junction} = plan, issue, run_id, :ok, opts) when junction in @tree_junctions or junction in @message_junctions do
+  defp tend_tree(answer, plan, issue, run_id, :ok, opts) do
+    if tree_turn?(plan), do: tree_turn(answer, plan, issue, run_id, opts), else: :ok
+  end
+
+  defp tend_tree(_answer, _plan, _issue, _run_id, asked, _opts), do: asked
+
+  defp tree_turn(answer, %{junction: junction} = plan, issue, run_id, opts) do
     settings = Keyword.get_lazy(opts, :settings, &Config.conductor_settings/0)
     ctx = %{issue: issue, repo_key: plan.repo_key, run_id: run_id, junction: junction, conductor: settings}
 
-    with {:ask, kind, request} <- Tree.apply(answer, ctx, Keyword.take(opts, [:tracker, :repo, :routed_teams, :observe, :cancel, :stop, :recalibrate])),
+    with {:ask, kind, request} <- Tree.apply(answer, ctx, Keyword.take(opts, [:tracker, :repo, :routed_teams, :observe, :cancel, :stop, :reorder, :recalibrate])),
          :held <- ask_person(request, plan, issue, run_id) do
       Tree.asked(plan.repo_key, plan.issue_id, kind)
       :held
     end
   end
-
-  defp tend_tree(_answer, _plan, _issue, _run_id, asked, _opts), do: asked
 
   # The answer's route when Symphony takes it now: one of the plan's open routes, and never beside a
   # question, which leaves the choice to the person. A route past its bound is dropped and logged.
@@ -934,6 +1212,12 @@ defmodule SymphonyElixir.Conductor do
 
   defp route_taken(%{route: %{to: to}, ask_person: %{}}, plan, issue) do
     Logger.info("Conductor's route #{to} dropped #{context(issue, plan)}: the turn asked the person, who decides")
+    nil
+  end
+
+  # A rerun or a rework decides where the ticket goes, as a move does: the move decides.
+  defp route_taken(%{route: %{to: to}, move: %{stage: stage}}, plan, issue) when to in @routes do
+    Logger.info("Conductor's route #{to} dropped #{context(issue, plan)}: the turn moves the ticket to #{stage}")
     nil
   end
 
@@ -1192,9 +1476,11 @@ defmodule SymphonyElixir.Conductor do
   action makes once picked (`SymphonyElixir.DecisionMove`), for a question asked in `state` on
   `head` by the run `run_id`: `continue` and `rerun` move nothing (the answer clears the pause, and
   the phase's run starts again), `rework` moves to Rework with the option's finding recorded as that
-  run's, `accept_without_qa` records QA's `skip` verdict on the head and moves to where a QA pass
+  run's, `back_to_review` moves a ticket in Rework to Code Review with the pull request as it is (the
+  handoff for `head` emitted, `SymphonyElixir.DecisionMove.back_to_review/4`), `accept_without_qa` records QA's `skip` verdict on the head and moves to where a QA pass
   goes (Merging), `cancel` moves to Canceled. An action this phase can't take refuses the question
-  (`{:error, why}`): accepting without QA outside QA, Rework from Rework. The QA seed builds its
+  (`{:error, why}`): accepting without QA outside QA, Rework from Rework, back to review outside
+  Rework. The QA seed builds its
   Conductor questions with it (`SymphonyElixir.QaSeed`).
   """
   @spec actioned_options([map()], map(), String.t(), String.t() | nil, String.t()) ::
@@ -1222,6 +1508,9 @@ defmodule SymphonyElixir.Conductor do
       else: {:ok, %{to: @rework, finding: %{description: finding, run_id: run_id, run_kind: "conductor"}}}
   end
 
+  defp option_move(%{action: "back_to_review"}, settings, state, head, _run_id),
+    do: DecisionMove.back_to_review(state, @rework, settings.tracker.code_review_state, head)
+
   defp option_move(%{action: "accept_without_qa"}, settings, state, head, _run_id) do
     if state == settings.tracker.qa_state,
       do: {:ok, %{to: TransitionGuard.target(:qa_pass, %{settings: settings}), verdict: %{kind: "qa", outcome: "skip", head_sha: head, reason: "skipped by decision"}}},
@@ -1234,7 +1523,7 @@ defmodule SymphonyElixir.Conductor do
   def asked?(_question), do: false
 
   defp record_event(plan, type, payload, run_id, opts \\ []) do
-    case TicketEvents.record(plan.repo_key, plan.issue_id, type, payload, [run_id: run_id, idempotency: "#{type}:#{run_id}"] ++ opts) do
+    case TicketEvents.record(plan.repo_key, plan.issue_id, type, payload, Keyword.merge([run_id: run_id, idempotency: "#{type}:#{run_id}"], opts)) do
       {:ok, _event} -> :ok
       {:error, reason} -> Logger.warning("Conductor could not record #{type} issue_id=#{plan.issue_id} run_id=#{run_id}: #{inspect(reason)}")
     end

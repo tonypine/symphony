@@ -273,7 +273,7 @@ defmodule SymphonyElixir.PhaseStepsTest do
                ["format --check-formatted", "specs.check", "credo --strict lib/a.ex lib/b.ex"]
 
       assert run_with_fake_mix(ctx, tests.run, %{"SYMPHONY_CHANGED_TEST_FILES" => ""}) == ["cover.changed"]
-      assert run_with_fake_mix(ctx, tests.run, %{"SYMPHONY_CHANGED_TEST_FILES" => "test/a_test.exs"}) == ["test test/a_test.exs", "cover.changed"]
+      assert run_with_fake_mix(ctx, tests.run, %{"SYMPHONY_CHANGED_TEST_FILES" => "test/a_test.exs test/b_test.exs"}) == ["cover.changed test/a_test.exs test/b_test.exs"]
     end
 
     test "a change the default list selects nothing for skips its lint and tests with a plain reason, and a lock change only compiles", ctx do

@@ -1861,7 +1861,10 @@ defmodule SymphonyElixir.RunStore do
   only, unless the new key would pass `SymphonyElixir.Dispatch.Queue.max_key_length/0`: then the
   tickets around the spot get evenly spaced keys too, in the same order
   (`SymphonyElixir.Dispatch.Queue.insertion/2`). `{:error, :not_in_queue}` when the ticket holds no
-  place, `{:error, :not_neighbours}` when the two are not next to each other in its scope.
+  place, `{:error, :not_neighbours}` when the two are not next to each other in its scope, and
+  `{:error, {:dependency_order, issue_id, on_issue_id}}`, writing nothing, when the new order would
+  put the ticket `issue_id` above the ticket `on_issue_id` it depends on
+  (`SymphonyElixir.Dispatch.Queue.broken_dependency/2`).
   """
   @spec move_in_queue(String.t(), queue_move()) :: :ok | {:error, term()}
   def move_in_queue(issue_id, to) when is_binary(issue_id) and (to in [:top, :end] or (is_tuple(to) and tuple_size(to) == 3 and elem(to, 0) == :between)) do
@@ -1875,11 +1878,29 @@ defmodule SymphonyElixir.RunStore do
 
     with %{sort_key: key} = record when is_binary(key) <- read_ticket_record(nil, issue_id, :write),
          siblings = scope_siblings(issue_id, Queue.scope(record)),
-         {:ok, index} <- move_index(siblings, to) do
-      rekey(issue_id, insertion_key(siblings, index))
+         {:ok, index} <- move_index(siblings, to),
+         keys = Queue.insertion(siblings, index),
+         :ok <- keep_dependency_order(issue_id, keys) do
+      Enum.each(keys, fn {id, key} -> rekey(placed_id(id, issue_id), key) end)
     else
       {:error, _reason} = error -> error
       _none -> {:error, :not_in_queue}
+    end
+  end
+
+  defp placed_id(:placed, issue_id), do: issue_id
+  defp placed_id(id, _issue_id), do: id
+
+  # A move never puts a ticket above one it depends on (`SymphonyElixir.Dispatch.Queue.broken_dependency/2`),
+  # decided under the queue's lock, so no dependency added meanwhile slips past it.
+  defp keep_dependency_order(issue_id, keys) do
+    records = :all |> listed_ticket_records() |> Enum.map(&TicketState.normalize/1)
+    changed = Map.new(keys, fn {id, key} -> {placed_id(id, issue_id), key} end)
+    moved = Enum.map(records, fn record -> %{record | sort_key: Map.get(changed, record.issue_id, record.sort_key)} end)
+
+    case Queue.broken_dependency(records, moved) do
+      nil -> :ok
+      {dependent, on} -> {:error, {:dependency_order, dependent, on}}
     end
   end
 
@@ -2034,18 +2055,22 @@ defmodule SymphonyElixir.RunStore do
   end
 
   @doc """
-  Marks the ticket `issue_id` as holding a dispatch slot since `since`, or as holding none when
-  `since` is nil (`slot_held_since` on `SymphonyElixir.TicketState`, `SymphonyElixir.Dispatch.Slots`);
+  Marks the ticket `issue_id` as holding the dispatch slot numbered `number` since `since`, or as
+  holding none when `since` is nil, which clears the number too (`slot_held_since` and `slot_number`
+  on `SymphonyElixir.TicketState`, `SymphonyElixir.Dispatch.Slots`);
   `{:error, :ticket_state_not_found}` when the ticket has no record.
   """
-  @spec put_slot_holder(String.t(), DateTime.t() | nil) :: :ok | {:error, term()}
-  def put_slot_holder(issue_id, since) when is_binary(issue_id) and (is_nil(since) or is_struct(since, DateTime)),
-    do: update_ticket_state(issue_id, %{slot_held_since: since})
+  @spec put_slot_holder(String.t(), DateTime.t() | nil, pos_integer() | nil) :: :ok | {:error, term()}
+  def put_slot_holder(issue_id, since, number \\ nil)
+      when is_binary(issue_id) and (is_nil(since) or is_struct(since, DateTime)) and
+             (is_nil(number) or (is_integer(number) and number > 0)) do
+    update_ticket_state(issue_id, %{slot_held_since: since, slot_number: if(since, do: number)})
+  end
 
   @doc """
   The tickets that hold a dispatch slot, across every repository, by issue id: each one's
-  identifier, phase, repository and since when it holds its slot; when the store can't be read,
-  its error.
+  identifier, phase, repository, since when it holds its slot and that slot's number (`slot`, nil
+  for a holder stored before slots had numbers); when the store can't be read, its error.
   """
   @spec slot_holders() :: %{String.t() => map()} | {:error, term()}
   def slot_holders do
@@ -2060,12 +2085,14 @@ defmodule SymphonyElixir.RunStore do
     |> Map.new(&{&1.issue_id, slot_holder(&1)})
   end
 
-  defp parent_map(records) do
-    for %{issue_id: id, parent: %{identifier: parent}} <- records, is_binary(parent), into: %{}, do: {id, parent}
-  end
+  # A ticket's parent as its own record names it, else as its parent's record lists it among its
+  # sub-issues (`SymphonyElixir.Dispatch.Queue.parents/1`).
+  defp parent_map(records), do: Queue.parents(records)
 
-  defp phase_map(records) do
-    for %{issue_identifier: id, phase: phase} <- records, is_binary(id), into: %{}, do: {id, phase}
+  defp id_map(records) do
+    for %{issue_identifier: identifier, issue_id: id} <- records, is_binary(identifier), is_binary(id), into: %{} do
+      {identifier, id}
+    end
   end
 
   defp slot_holder(record) do
@@ -2073,17 +2100,20 @@ defmodule SymphonyElixir.RunStore do
       identifier: Map.get(record, :issue_identifier),
       state: Map.get(record, :phase),
       repo_key: Map.get(record, :repo_key),
-      since: record.slot_held_since
+      since: record.slot_held_since,
+      slot: Map.get(record, :slot_number)
     }
   end
 
   @doc """
   What the dispatch pass orders its candidates by, from every repository's records in one read:
   each queued ticket's place (`places`, as `queue_places/0`), the identifier of each ticket's
-  parent (`parents`, by issue id) and each ticket's phase (`phases`, by identifier); when the store
-  can't be read, its error.
+  parent (`parents`, by issue id: as the ticket's record names it, else as its parent's record lists
+  it among its sub-issues) and each ticket's issue id (`ids`, by identifier), from which the
+  slots tell which ticket a sub-ticket runs through (`SymphonyElixir.Dispatch.Slots`); when the
+  store can't be read, its error.
   """
-  @spec queue_facts() :: %{places: map(), parents: map(), phases: map()} | {:error, term()}
+  @spec queue_facts() :: %{places: map(), parents: map(), ids: map()} | {:error, term()}
   def queue_facts do
     with :ok <- ensure_started() do
       transaction(fn ->
@@ -2092,7 +2122,7 @@ defmodule SymphonyElixir.RunStore do
         %{
           places: queue_place_map(records),
           parents: parent_map(records),
-          phases: phase_map(records)
+          ids: id_map(records)
         }
       end)
     end
@@ -3118,7 +3148,15 @@ defmodule SymphonyElixir.RunStore do
     end
   end
 
+  # A sync asks the disk to flush (`F_FULLFSYNC` on macOS), which is what makes a write survive a
+  # power cut. The test suite turns it off (`config :symphony_elixir, run_store_sync_log: false`):
+  # its stores live in temp folders that are deleted at exit, and thousands of flushes from
+  # several test processes at once queue on the one disk.
   defp sync_mnesia_log do
+    if Application.get_env(:symphony_elixir, :run_store_sync_log, true), do: sync_log(), else: :ok
+  end
+
+  defp sync_log do
     case :mnesia.sync_log() do
       :ok -> :ok
       {:error, reason} -> {:error, reason}

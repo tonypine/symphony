@@ -1,30 +1,46 @@
 {
-  "in_progress": [
-    {
-      "kind": "ticket",
-      "issue_id": "i-1245",
-      "identifier": "TP-1245",
-      "title": "The paused line on the ticket page",
-      "repo_key": "symphony",
-      "phase": "Rework",
-      "situation": {
-        "kind": "waiting_on_you",
-        "word": "Waiting on you",
-        "cause": "Implementation run 2 asked how the paused line's times should read.",
-        "since": "2026-10-08T10:04:31Z"
+  "slots": {
+    "total": 2,
+    "entries": [
+      {
+        "slot": 1,
+        "empty": true,
+        "since": null,
+        "epic": null,
+        "ticket": null
       },
-      "since": "2026-10-08T10:04:31Z",
-      "working": false,
-      "move": null
-    }
-  ],
-  "queue": {
-    "roots": []
+      {
+        "slot": 2,
+        "empty": false,
+        "since": "2026-10-08T10:04:31Z",
+        "epic": null,
+        "ticket": {
+          "issue_id": "i-1245",
+          "identifier": "TP-1245",
+          "title": "The paused line on the ticket page",
+          "repo_key": "symphony",
+          "phase": "Rework",
+          "situation": {
+            "kind": "waiting_on_you",
+            "word": "Waiting on you",
+            "cause": "Implementation run 2 asked how the paused line's times should read.",
+            "since": "2026-10-08T10:04:31Z"
+          },
+          "since": "2026-10-08T10:04:31Z",
+          "working": false,
+          "move": null,
+          "waits_on_you": true
+        }
+      }
+    ]
   },
-  "outside": {
-    "backlog": 0,
-    "below_priority": 0,
-    "epic": 0,
-    "behind": 0
+  "queue": {
+    "rows": [],
+    "count": 0,
+    "total": 0,
+    "offset": 0,
+    "limit": 100,
+    "next_offset": null,
+    "view": null
   }
 }

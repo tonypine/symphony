@@ -379,6 +379,7 @@ defmodule SymphonyElixir.Conductor.FactsTest do
                  layers: ["api", "screen"],
                  summary: "Two sub-tickets: the API, then the list.",
                  text: "Approach: the API first.",
+                 size: %{tokens: 1, runs: 1},
                  sub_tickets: [%{key: "s1", title: "The API filter"}]
                },
                notes: [%{event_id: base.id, tag: "base_fault", text: "main fails to build."}]

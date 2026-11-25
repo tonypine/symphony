@@ -440,12 +440,32 @@ defmodule SymphonyElixir.Conductor.FilingTest do
     end
   end
 
-  test "a ticket with no plan takes neither before nor after, and files no sub-ticket", ctx do
+  test "a ticket with no plan takes neither before nor after; a blocking ticket is its sub-ticket, a follow-up is not (TP-1624)", ctx do
     assert {:error, "the ticket route's relation must be blocks or follow_up"} = file(ctx, route(%{relation: "before"}))
-    assert {:ok, _filed} = file(ctx, route())
+    assert Filing.facts(Facts.events(ctx.issue_id), @settings, repos: ["default"]).relations == ["blocks", "follow_up"]
+
+    # A ticket that blocks the current one in the middle of its work is filed under it, put on
+    # Symphony's records as its sub-ticket, so it runs through the current ticket's slot.
+    test = self()
+    Process.put(:read_result, {:ok, [%{ctx.issue | sub_issues: [%{id: "new-id", identifier: "TP-2000", state: "Todo"}]}, %Issue{id: "new-id", identifier: "TP-2000"}]})
+    observe = fn repo_key, issue -> send(test, {:observed, repo_key, issue.id}) end
+
+    assert {:ok, %{relation: "blocks"}} = file(ctx, route(), @settings, observe: observe)
+    {attrs, _opts} = Process.get(:created)
+    assert attrs.parent_id == ctx.issue_id
+    assert attrs.state == nil
+    assert Process.get(:read) == [ctx.issue_id, "new-id"]
+    assert_received {:observed, "default", "new-id"}
+    assert [%{source: "parent"}] = TicketPlan.ask("new-id")
+    assert [%{kind: :ticket, waits_on: %{identifier: "TP-2000"}}] = pause_reasons(ctx.issue_id)
+
+    # A follow-up holds nothing and is filed on its own.
+    Process.put(:create_result, {:ok, %{id: "follow-id", identifier: "TP-2001", url: "https://linear.app/t/TP-2001"}})
+    Process.put(:read_result, {:ok, [%Issue{id: "follow-id", identifier: "TP-2001"}]})
+    on_exit(fn -> RunStore.delete_ticket_state("follow-id") end)
+    assert {:ok, %{relation: "follow_up"}} = file(ctx, route(%{relation: "follow_up", title: "A follow-up"}))
     {attrs, _opts} = Process.get(:created)
     assert attrs.parent_id == nil
-    assert TicketPlan.ask("new-id") == []
-    assert Filing.facts(Facts.events(ctx.issue_id), @settings, repos: ["default"]).relations == ["blocks", "follow_up"]
+    assert TicketPlan.ask("follow-id") == []
   end
 end

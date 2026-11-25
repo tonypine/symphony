@@ -56,8 +56,8 @@ defmodule SymphonyElixir.Conductor.Facts do
   `checks` with where each stands, `sub_tickets` (each one's identifier, title and state, and for
   one Symphony tracks its `phase`, its plan's `summary`, its `checks`, the notes a run tagged, its
   `asks` and whether its `pull_request` merged), `rounds` (how many the final check `made`, the
-  `limit` and how many are `left`), the person's `decisions`, `notes` and `answers`, `conductor`
-  and `budget`.
+  `limit` and how many are `left`), the person's `decisions`, `notes` and `answers`, `conductor`,
+  `earlier_tries` (`turn_tries/1`) and `budget`.
 
   At `message` and `child_message`, on a groomed ticket, the document is the conversation's (same
   `schema`, `junction` and `focus`): `ticket` (as the tree's, with its `parent`'s identifier),
@@ -65,14 +65,17 @@ defmodule SymphonyElixir.Conductor.Facts do
   `source` and where it came `from`, a message with who wrote it and the `reply` the Conductor
   gave it, null while it has none), the current `plan` and its `checks`, `standing`, `last_run`,
   `sub_tickets` (as the tree's, when the ticket has any), the person's `decisions` and `answers`,
-  `conductor` and `budget`. `SymphonyElixir.Conductor` adds which message the turn answers.
+  `conductor`, `earlier_tries` (`turn_tries/1`) and `budget`. `SymphonyElixir.Conductor` adds which
+  message the turn answers, whose text reaches it whole (a message holds as much as an ask).
 
   On a groomed ticket the other junctions' `ticket` is read through `SymphonyElixir.TicketJourney`
   (`problem` is what was asked, `acceptance` the plan's outcome checks, `walkthrough` its QA
   checks, `proved_steps` the checks a test proved), and the document also holds `checks` (each
   check of the plan with where it stands, and the reason of a waived one), `check_notes` (the
   newest notes the runs wrote, which is where a run says a check cannot be proved) and `waive`
-  (the rule for waiving one).
+  (the rule for waiving one). Every other junction's document also holds `earlier_tries`
+  (`turn_tries/1`), and, on a ticket with sub-tickets, its `sub_tickets` as the tree's, since every
+  turn on such a ticket may change them.
 
   Each fact read from an event carries the event's id (`event_id`), so a claim built on it can be
   traced. Long texts are cut with a marker (`#{inspect(" [cut by Symphony]")}`), lists keep their
@@ -104,19 +107,54 @@ defmodule SymphonyElixir.Conductor.Facts do
   @grooming "grooming"
   @tree_junctions ["sub_ticket_ended", "final_check"]
   @message_junctions ["message", "child_message"]
-  @message_text_max 4_000
+  # A message holds as much as an ask (`message.sent`'s bound), and reaches the turn whole.
+  @message_text_max 100_000
+  # The keys a turn that Symphony refused, or whose operations it did not carry out, is said under.
+  @try_keys ["conductor.try:", "message.try:", "final_check.try:"]
+  @max_tries 5
   @max_check_notes 5
+  @waive_rule "Never waive a check for the person to verify later, by hand or on their promise: a ticket's life ends at its " <>
+                "delivery, and a waiver never leaves a debt on the person. When a check cannot be proved the way the plan says, " <>
+                "it is proved another way now (a test, or what the record shows) or the plan no longer holds it: the waiver's " <>
+                "reason says which, and how it is proved or why the plan does not need it. An outcome that rested on such a " <>
+                "check is settled the same way in this turn: proved another way, or dropped from the plan written again, with " <>
+                "the plan's `reason` saying why. It is never carried to the final check."
+  @plan_rule "Write every outcome and every check so that it can be proved inside the ticket's life, before its work " <>
+               "ends (a test, a QA or design verdict, a merge): never one that only use of the installed app after the " <>
+               "merge can settle. What a person does with the app once the work shipped is not the ticket's business; " <>
+               "when something is wrong later, they file a ticket."
   @waive "A check that is open and that nobody can prove the way the plan says (a `test` check for something no test can " <>
            "reach, an `attached` check for a file that cannot exist) holds the handoff for good. When a run's notes or its " <>
            "failed `plan_checks` step say so and you agree, waive it: " <>
            ~s(`waive: [{"check_id": ..., "reason": ...}]`, ) <>
            "with the reason in plain words. Never waive a check only because it is hard or still unproved. " <>
-           "A check of kind `outcome` is what the person asked for: Symphony refuses its waiver, and only the person can waive it."
+           @waive_rule <>
+           " " <>
+           "A check of kind `outcome` is what the person asked for: Symphony refuses its waiver in `waive`, and only the " <>
+           "person can waive it. Dropping an outcome is not a waiver: it is the plan written again without it, with the " <>
+           "plan's `reason`, and only for an outcome nothing inside the ticket's life can prove."
   @open_checks "These checks of the plan are still open, and the pull request merges next. A merge does not prove them. " <>
                  "Say so in your update. Waive one that nobody can prove the way the plan says, with its reason " <>
                  "(never a check of kind `outcome`: only the person waives one), or send the ticket back with instructions " <>
                  "that name the checks to prove, or ask the person. A check proved by the pull request's own CI run (`proof: ci`) " <>
                  "is proved in Merging from the pull request's checks before the merge: leave it open, and never waive it or send the ticket back for it."
+
+  @doc """
+  The rule every turn that may waive a check is told (its prompt's `{{waive_rule}}`, and the facts'
+  `waive`): a check is never waived for the person to verify later; one the plan's way cannot prove is
+  proved another way now, or the plan no longer holds it, and an outcome that rested on it is settled
+  in the same turn.
+  """
+  @spec waive_rule() :: String.t()
+  def waive_rule, do: @waive_rule
+
+  @doc """
+  The rule every turn that writes a plan or its checks is told (its prompt's `{{plan_rule}}`): no
+  outcome and no check is written so that only use of the installed app after the merge can settle it.
+  """
+  @spec plan_rule() :: String.t()
+  def plan_rule, do: @plan_rule
+
   @plan_text_max 6_000
   @max_siblings 20
   # The key `SymphonyElixir.Conductor.Grooming` counts a failed try under: `grooming.try:<n>`.
@@ -136,7 +174,7 @@ defmodule SymphonyElixir.Conductor.Facts do
     "grooming" => "The ticket is new and no run has worked on it; you write its plan from what was asked.",
     "message" => "A person sent a message on the ticket; you answer it.",
     "sub_ticket_ended" => "A sub-ticket of this ticket ended; you look at what is left of its plan.",
-    "final_check" => "The last sub-ticket ended; you check the whole ticket against its plan.",
+    "final_check" => "The last sub-ticket ended; you check that the plan was delivered, and close the ticket when it was.",
     "child_message" => "A person sent a message on a sub-ticket of this ticket.",
     "after_coding" => "The implementation run handed off; Code Review or QA judges it next.",
     "after_qa_fail" => "QA failed; a rework run answers its findings next.",
@@ -237,6 +275,7 @@ defmodule SymphonyElixir.Conductor.Facts do
       notes: person_notes(events),
       answers: answers(events),
       conductor: conductor(events),
+      earlier_tries: turn_tries(events),
       budget: budget(record, events, opts)
     }
   end
@@ -263,8 +302,27 @@ defmodule SymphonyElixir.Conductor.Facts do
       decisions: Enum.map(record.decisions, &%{title: &1.title, answer: cut(&1.answer, @text_max)}),
       answers: answers(events),
       conductor: conductor(events),
+      earlier_tries: turn_tries(events),
       budget: budget(record, events, opts)
     }
+  end
+
+  @doc """
+  What Symphony did not take from the Conductor's earlier turns on the ticket, from its `events`
+  (oldest first): each answer it refused and each operation it left out or could not carry out, as
+  the status note that says it, the newest #{@max_tries}. Every turn but Grooming (whose own tries
+  are its `earlier_tries`) reads them as `earlier_tries`, so a turn that runs again does not give
+  the answer Symphony refused again.
+  """
+  @spec turn_tries([Event.t()]) :: [map()]
+  def turn_tries(events) when is_list(events) do
+    events
+    |> Enum.filter(fn
+      %Event{type: "note", idempotency: key} when is_binary(key) -> Enum.any?(@try_keys, &String.starts_with?(key, &1))
+      _event -> false
+    end)
+    |> Enum.take(-@max_tries)
+    |> Enum.map(&%{event_id: &1.id, at: iso8601(&1.at), reason: cut(payload(&1, :text), @text_max)})
   end
 
   defp said(%Event{type: "ask.recorded"} = ask, _events) do
@@ -316,13 +374,19 @@ defmodule SymphonyElixir.Conductor.Facts do
       findings: findings(events),
       verdicts: verdicts(events),
       conductor: conductor(events),
+      earlier_tries: turn_tries(events),
       budget: budget(record, events, opts),
       filings: Filing.facts(events, Keyword.get_lazy(opts, :conductor, &Config.conductor_settings/0), Keyword.take(opts, [:repos]))
     }
+    |> put_family(record, opts)
     |> put_qa_passes(junction, events)
     |> put_checks(events)
     |> put_open_checks(junction)
   end
+
+  # A ticket with sub-tickets: every turn on it may change them, so it sees them as the tree's turn does.
+  defp put_family(facts, %{sub_issues: [_ | _]} = record, opts), do: Map.put(facts, :sub_tickets, family(record, Keyword.get_lazy(opts, :records, &records/0)))
+  defp put_family(facts, _record, _opts), do: facts
 
   # Before the merge of a groomed ticket's own pull request, the checks nobody proved or waived.
   defp put_open_checks(facts, "before_merge") do
@@ -334,10 +398,12 @@ defmodule SymphonyElixir.Conductor.Facts do
 
   defp put_open_checks(facts, _junction), do: facts
 
-  # A groomed ticket's checks, what the runs said in their newest notes, and the rule for waiving one.
+  # A groomed ticket's plan and checks, what the runs said in their newest notes, and the rule for
+  # waiving one. The plan is there so that a turn can write it again without an outcome that rested
+  # on a check nobody can prove (`@waive_rule`).
   defp put_checks(facts, events) do
     if TicketPlan.groomed?(events),
-      do: Map.merge(facts, %{checks: checks(events), check_notes: run_notes(events), waive: @waive}),
+      do: Map.merge(facts, %{plan: plan_facts(TicketPlan.current(events)), checks: checks(events), check_notes: run_notes(events), waive: @waive}),
       else: facts
   end
 
@@ -430,6 +496,7 @@ defmodule SymphonyElixir.Conductor.Facts do
       layers: plan.layers,
       summary: plan.summary,
       text: cut(plan.text, @plan_text_max),
+      size: Map.get(plan, :size),
       sub_tickets: for(entry <- Map.get(plan, :sub_tickets, []), do: Map.take(entry, [:key, :title, :after, :identifier]))
     }
   end

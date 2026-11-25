@@ -82,6 +82,56 @@ defmodule SymphonyElixir.Dispatch.QueueTest do
     end
   end
 
+  describe "parents/1" do
+    test "the record's own parent wins, else the parent whose sub-issues list the ticket" do
+      records = [
+        Map.put(keyed("epic", "a1"), :sub_issues, [%{id: "never-ran"}, %{id: "ran"}, %{id: nil}]),
+        Map.put(keyed("other", "a2"), :sub_issues, nil),
+        keyed("ran", "a0", "OTHER"),
+        keyed("never-ran", "a1"),
+        %{issue_id: "no-identifier", sub_issues: [%{id: "lost"}]}
+      ]
+
+      assert Queue.parents(records) == %{"never-ran" => "EPIC", "ran" => "OTHER"}
+    end
+  end
+
+  describe "TP-1633: broken_dependency/2" do
+    test "names the first dependency a move turns upside down, never one already upside down" do
+      record = fn id, key, depends_on, parent ->
+        %{
+          issue_id: id,
+          issue_identifier: "MT-#{id}",
+          sort_key: key,
+          parent: parent && %{identifier: "MT-#{parent}"},
+          depends_on: depends_on
+        }
+      end
+
+      on = fn id -> [%{issue_id: id, identifier: "MT-#{id}", kind: :done}] end
+
+      records = [
+        record.("a", "a0", [], nil),
+        record.("b", "a1", on.("a"), nil),
+        record.("c", "a2", on.("d"), nil),
+        record.("d", "a3", [], nil)
+      ]
+
+      # c already sits above d, which it depends on: a move that keeps it there is not refused.
+      assert Queue.broken_dependency(records, records) == nil
+
+      moved_b_up = Enum.map(records, &if(&1.issue_id == "b", do: %{&1 | sort_key: "Zz"}, else: &1))
+      assert Queue.broken_dependency(records, moved_b_up) == {"b", "a"}
+
+      # A sub-ticket depending on a ticket of another scope is compared where they meet: its parent.
+      subs = [record.("p", "a0", [], nil), record.("s", "a0", on.("x"), "p"), record.("x", "a1", [], nil)]
+      parent_up = Enum.map(subs, &if(&1.issue_id == "x", do: %{&1 | sort_key: "Zz"}, else: &1))
+      assert Queue.broken_dependency(parent_up, subs) == {"s", "x"}
+      # A record without a dependency list breaks nothing.
+      assert Queue.broken_dependency([%{issue_id: "z", sort_key: "a0"}], [%{issue_id: "z", sort_key: "a0"}]) == nil
+    end
+  end
+
   describe "insertion/2" do
     test "one key between the two neighbours, at the top or at the end" do
       siblings = [{"a", "a0"}, {"b", "a1"}, {"c", "a2"}]

@@ -6,20 +6,17 @@ defmodule SymphonyElixir.InboxConfigTest do
   alias SymphonyElixir.{Inbox, Pauses, TicketState}
   alias SymphonyElixir.Inbox.References
 
-  test "no Inbox server starts with the application: the Inbox is read from the records" do
+  test "no Inbox or Initiatives server starts with the application: both are read from the records" do
     write_workflow_file!(Workflow.workflow_file_path(), linear_tracker())
     specs = SymphonyElixir.Application.child_specs_for_runtime(%{})
     refute Enum.any?(specs, &match?(Inbox, &1))
     refute Enum.any?(specs, &match?({Inbox, _opts}, &1))
-    assert SymphonyElixir.Initiatives in specs
-
-    write_workflow_file!(Workflow.workflow_file_path())
-    refute SymphonyElixir.Initiatives in SymphonyElixir.Application.child_specs_for_runtime(%{})
+    refute SymphonyElixir.Initiatives in specs
+    assert Inbox.enabled?(Config.settings!())
   end
 
-  test "over a memory tracker's issues file the initiatives server does not start" do
+  test "over a memory tracker's issues file the Inbox reads the memory source" do
     write_workflow_file!(Workflow.workflow_file_path(), tracker_memory_issues_file: "issues.json")
-    refute SymphonyElixir.Initiatives in SymphonyElixir.Application.child_specs_for_runtime(%{})
 
     settings = Config.settings!()
     assert Inbox.enabled?(settings, :memory)
@@ -91,37 +88,5 @@ defmodule SymphonyElixir.InboxConfigTest do
     assert_received {:log_result, nil}
     assert_received {:log_result, result}
     result
-  end
-
-  test "the initiatives server reads every Linear repository route on the poll interval" do
-    write_workflow_file!(
-      Workflow.workflow_file_path(),
-      linear_tracker(
-        tracker_project_slug: "cycle",
-        poll_interval_ms: 12_345
-      )
-    )
-
-    test_pid = self()
-
-    plan = %{
-      "id" => "id-MT-1",
-      "identifier" => "MT-1",
-      "state" => %{"name" => "In Progress", "type" => "started"},
-      "children" => %{"nodes" => []}
-    }
-
-    linear_client = fn _query, variables, _opts ->
-      send(test_pid, {:filter, variables.filter})
-      {:ok, %{"data" => %{"issues" => %{"nodes" => [plan], "pageInfo" => %{"hasNextPage" => false}}}}}
-    end
-
-    name = {:test, make_ref()}
-    server_state = %{opts: [name: name, linear_client: linear_client], timer: make_ref()}
-    assert {:noreply, state} = SymphonyElixir.Initiatives.handle_info(:tick, server_state)
-
-    assert_received {:filter, %{"and" => [%{"project" => %{"slugId" => %{"eq" => "cycle"}}} | _rest]}}
-    assert [%{identifier: "MT-1", group: "active"}] = SymphonyElixir.Initiatives.cached(name)
-    assert Process.read_timer(state.timer) in 12_000..12_345
   end
 end

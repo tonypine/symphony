@@ -151,10 +151,7 @@ final class CancelTicketTests: XCTestCase {
             XCTAssertNotNil(TicketView.views(fromViews: try get(TicketsPayload.viewsPath, from: fixtures), catalog: TicketColumn.catalog), name)
 
             let home = try XCTUnwrap(HomeRead.decode(try get(HomeRead.path, from: fixtures)), name)
-            let onHome: [String] = home.inProgress.compactMap { entry in
-                if case let .ticket(ticket) = entry { return ticket.identifier }
-                return nil
-            }
+            let onHome: [String] = home.slots.compactMap { $0.ticket?.identifier }
             XCTAssertEqual(onHome, ["TP-1244", "TP-1245"], name)
             XCTAssertEqual(try page("TP-1244", from: fixtures).identifier, "TP-1244", name)
         }
@@ -201,11 +198,11 @@ final class CancelTicketTests: XCTestCase {
         let tickets = try XCTUnwrap(TicketsPayload.decode(try get(TicketsQuery().path(scope: .all, now: Date()), from: fixtures)))
         XCTAssertEqual(tickets.rows.first { $0.identifier == "TP-1244" }?.phase, "Canceled")
         let home = try XCTUnwrap(HomeRead.decode(try get(HomeRead.path, from: fixtures)))
-        let onHome: [String] = home.inProgress.compactMap { entry in
-            if case let .ticket(ticket) = entry { return ticket.identifier }
-            return nil
-        }
+        let onHome: [String] = home.slots.compactMap { $0.ticket?.identifier }
         XCTAssertEqual(onHome, ["TP-1245"])
+        // Its slot stays on Home, free.
+        XCTAssertEqual(home.slots.map(\.number), [1, 2])
+        XCTAssertTrue(home.slots[0].isEmpty)
     }
 
     func testTheRefusedFixtureAnswersTheCancelWithSymphonysReason() throws {

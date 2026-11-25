@@ -19,6 +19,8 @@ defmodule SymphonyElixir.SelfHeal do
       ticket (`SymphonyElixir.SelfHeal.Fixer`) — deduplicated: an open fix ticket for the same
       component and the same failure is reused, not filed again, keeping its priority, and the new
       failure is attached to it as evidence; a terminal one, or one for another failure, is not;
+    * files a new fix ticket as a sub-ticket of the affected ticket, so it runs through the slot the
+      affected ticket keeps while it waits (`SymphonyElixir.Dispatch.Slots`);
     * pauses the affected ticket on a reason that waits on the fix ticket (no Linear blocker link
       is written) (`SymphonyElixir.Pauses`), which lifts on its own when the fix goes
       terminal (`SymphonyElixir.Pauses.Dependencies`), or, for a fix merged into the repo the
@@ -398,6 +400,9 @@ defmodule SymphonyElixir.SelfHeal do
           issue: ctx.issue,
           repo_key: ctx.repo_key,
           component: ctx.component,
+          # Filed under the ticket it unblocks, it runs through that ticket's slot
+          # (`SymphonyElixir.Dispatch.Slots`), which the ticket keeps while it waits.
+          parent_id: ctx.issue.id,
           title: fix_title(ctx.component),
           description: fix_description(ctx.issue, ctx.component, ctx.signature, ctx.outcome)
         }

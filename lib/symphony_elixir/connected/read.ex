@@ -5,9 +5,9 @@ defmodule SymphonyElixir.Connected.Read do
   of a tracked ticket (`SymphonyElixir.Connected`) or from the ticket's record, and adds:
 
     * `epic`: the plan the ticket is part of, its progress and its sub-tickets in chain order, each
-      with its situation kind and whether it is this ticket (`current`). The Initiatives' cached read
-      (`SymphonyElixir.Initiatives`) answers when it holds the plan, so the two count the same. A plan
-      it does not hold (long done, not labelled a plan, or before its first read after a start) comes
+      with its situation kind and whether it is this ticket (`current`). The Initiatives' read
+      (`SymphonyElixir.Initiatives`) answers when it lists the plan, so the two count the same. A plan
+      it does not list (long done, or not split by Symphony) comes
       from the parent's record: its sub-issues in creation order, or only the parent's own count when
       Symphony has no record of it. The parent is the one `parent` reads.
     * `blocked_by`: every ticket it depends on (its stored dependencies, `depends_on`), each `open`
@@ -26,7 +26,7 @@ defmodule SymphonyElixir.Connected.Read do
 
   @done "done"
 
-  @typedoc "What a read needs beside the ticket: every record, the orchestrator's facts and the cached plans."
+  @typedoc "What a read needs beside the ticket: every record, the orchestrator's facts and the Initiatives' plans."
   @type facts :: %{records: [TicketState.t()], live: Situation.live_facts(), initiatives: [Initiative.t()]}
 
   @type blocker :: %{
@@ -57,9 +57,13 @@ defmodule SymphonyElixir.Connected.Read do
           related: [Connected.ticket()]
         }
 
-  @doc "The facts of a read, the cached plans by default."
+  @doc "The facts of a read, with the plans the Initiatives read over the same `records`."
+  @spec facts([map()], Situation.live_facts()) :: facts()
+  def facts(records, live), do: facts(records, live, Initiatives.read(records: records))
+
+  @doc "The facts of a read over `initiatives`."
   @spec facts([map()], Situation.live_facts(), [Initiative.t()]) :: facts()
-  def facts(records, live, initiatives \\ Initiatives.cached()) do
+  def facts(records, live, initiatives) do
     %{records: Enum.map(records, &TicketState.normalize/1), live: live, initiatives: initiatives}
   end
 

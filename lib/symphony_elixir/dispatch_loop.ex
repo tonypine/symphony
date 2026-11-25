@@ -140,7 +140,8 @@ defmodule SymphonyElixir.DispatchLoop do
   @doc """
   What the answer to a `question_attrs/2` question asks for, by the option it picked: `:unblock`
   for "#{@run_again}" (and a spent budget's "#{@another_budget}"), `:restart` for "#{@start_over}", and `:keep` for "#{@keep_paused}", a
-  free-text answer or a question not answered.
+  free-text answer or a question not answered. A free-text answer then goes to the ticket's
+  Conductor, which acts on the words (`SymphonyElixir.DirectorMoves.answer_held_question/4`).
   """
   @spec answer_move(map()) :: :unblock | :restart | :keep
   def answer_move(%{state: :answered, answer: %{option: number}, options: options}) when is_integer(number) do

@@ -5,12 +5,22 @@ defmodule SymphonyElixirWeb.ControlApiController do
   `SymphonyElixir.ControlClient`. A stop that ends a run writes a `run_stopped`
   audit record and a `person.action` event (`stop`) on the ticket.
 
-  `start` (`SymphonyElixir.Orchestrator.start_issue/3`) starts a ticket's run at once, ahead of
-  the dispatch queue and outside its order: it takes `issue_identifier` and an optional `note`,
-  answers 200 with the run it started (`run_id`; its session id arrives with the run) or 409 with
-  the reason it was refused (Symphony paused, the repository paused, an open Question, a run
-  already working on it, Backlog's "move it first") — the same reason each ticket payload's
-  `start` field shows.
+  `start` (`SymphonyElixir.Orchestrator.start_issue/4`) starts a ticket's run at once as a queue
+  move: the ticket goes to the head of the queue and takes a slot, never one over the slot count.
+  It takes `issue_identifier`, an optional `note` and an optional `slot` (a whole number from 1 to
+  the slot count; 422 `invalid_request` otherwise): the slot to take, taken over when it is held.
+  Without one it takes a free slot, else the one taken most recently. A slot taken over stops the
+  runs working through it, and its holder goes to the head of the queue. It answers 200 with the
+  run it started (`run_id`; its session id arrives with the run), the slot's number (`slot`) and,
+  when it took one over, the ticket that held it (`displaced_issue_identifier`), or 409 with the
+  reason it was refused (Symphony paused, the repository paused, an open Question, a run already
+  working on it, Backlog's "move it first") — the same reason each ticket payload's `start` field
+  shows.
+
+  `stop` stops a ticket's run and frees its slot in the call; a ticket that holds a slot between
+  its runs or while it waits is stopped too (`stopped: true`, its slot freed). The answer names the
+  freed slot (`slot`). A stopped sub-ticket goes back to the head of its epic, and the epic to the
+  head of the queue.
 
   `resume` clears the Director's pause and an update's. A pause held only by reasons Resume can't
   clear (a usage limit's) answers 409 `nothing_to_resume`, naming them in `reasons`, and lifts
@@ -113,6 +123,24 @@ defmodule SymphonyElixirWeb.ControlApiController do
   has), 422 for a missing parameter or a priority that isn't one of Linear's, and 502, with why,
   when the tracker refuses the write.
 
+  `queue/move` moves a ticket to another place in the dispatch queue (`SymphonyElixir.DirectorQueue`),
+  inside its scope (the top-level tickets, or its parent's sub-tickets): it takes `issue_identifier`
+  and one of `position` (`top` or `end`), `after` or `before` (a ticket of the same scope), and
+  answers 200 with the ticket, its `scope` and the scope's tickets in their new `order`. Every read
+  of the queue made after the answer shows the new order, and the open streams get an
+  `event: queue` notice (`change: order`). 409 with the reason the app shows when the move is
+  refused (the ticket holds no place in the queue, the neighbour is the ticket itself or in another
+  scope, the queue changed under the move), 422 for a missing or unknown parameter or a ticket
+  Symphony doesn't track, 502, with why, when the store refuses the write.
+
+  `slots` sets how many tickets hold a slot at once: it takes `count`, a whole number from 1 to 6,
+  writes it to `execution.concurrency.max_total` in `symphony.yml` by editing that one line, applies
+  it at once (a raised count fills the new slots in the same moment; a lowered one stops no run, and
+  a freed slot is not given again while the tickets in progress reach the count), and answers 200
+  with `count` and the `slots` the reads now show. The open streams get an `event: queue` notice
+  (`change: slots`). 422 for a count outside 1 to 6, with the file left as it is, and 502, with why,
+  when the file can't be changed one line at a time.
+
   `label` turns one of the labels a person adds for Symphony to read on or off from the ticket page
   (`SymphonyElixir.DirectorLabels`): it takes `issue_identifier`, `label` and `action` (`add` or
   `remove`), and answers 200 with the ticket's label toggles after the change, 409 with the reason
@@ -133,7 +161,18 @@ defmodule SymphonyElixirWeb.ControlApiController do
   require Logger
 
   alias Plug.Conn
-  alias SymphonyElixir.{AuditLog, DirectorBlockers, DirectorLabels, DirectorMoves, DirectorPriority, DirectorRulings}
+
+  alias SymphonyElixir.{
+    AuditLog,
+    Config,
+    DirectorBlockers,
+    DirectorLabels,
+    DirectorMoves,
+    DirectorPriority,
+    DirectorQueue,
+    DirectorRulings
+  }
+
   alias SymphonyElixir.Conductor.Message, as: ConductorMessage
   alias SymphonyElixir.{ConductorGate, Marks, Messages, Orchestrator, TicketMoves, TicketSignals, UpdateWindow}
   alias SymphonyElixir.TicketEvents.Types
@@ -260,7 +299,7 @@ defmodule SymphonyElixirWeb.ControlApiController do
 
   @spec stop(Conn.t(), map()) :: Conn.t()
   def stop(conn, %{"issue_identifier" => identifier}) when is_binary(identifier) and identifier != "" do
-    result = Orchestrator.stop_running(orchestrator(conn), identifier)
+    result = Orchestrator.stop_running(orchestrator(conn), identifier, free_slot: true)
     record_stop(conn, result)
     respond(conn, result)
   end
@@ -290,8 +329,10 @@ defmodule SymphonyElixirWeb.ControlApiController do
   @spec start(Conn.t(), map()) :: Conn.t()
   def start(conn, params) do
     with {:ok, identifier} <- required_param(params["issue_identifier"], "issue_identifier"),
-         {:ok, note} <- start_note(params["note"]) do
-      respond_start(conn, identifier, Orchestrator.start_issue(orchestrator(conn), identifier, note))
+         {:ok, note} <- start_note(params["note"]),
+         {:ok, slot} <- start_slot(params["slot"]) do
+      opts = if slot, do: [slot: slot], else: []
+      respond_start(conn, identifier, Orchestrator.start_issue(orchestrator(conn), identifier, note, opts))
     else
       {:error, {:invalid_request, message}} -> error_response(conn, 422, "invalid_request", message)
     end
@@ -422,6 +463,35 @@ defmodule SymphonyElixirWeb.ControlApiController do
     end
   end
 
+  # A stored dependency of `issue_identifier` on `on`, with the kind given on an add (`done` or
+  # `released`), through `DirectorBlockers.dependency/5`.
+  @spec dependency(Conn.t(), map()) :: Conn.t()
+  def dependency(conn, params) do
+    with {:ok, identifier} <- required_param(params["issue_identifier"], "issue_identifier"),
+         {:ok, on} <- required_param(params["on"], "on"),
+         {:ok, action} <- blocker_action(params["action"]),
+         {:ok, kind} <- dependency_kind(action, params["kind"]) do
+      opts = [orchestrator: orchestrator(conn), audit_log: Map.get(conn.assigns, :audit_log, [])] ++ Map.get(conn.assigns, :director_blockers, [])
+
+      case DirectorBlockers.dependency(action, identifier, on, kind, opts) do
+        {:error, {:store, message}} -> error_response(conn, 502, "store_error", message)
+        result -> respond_move(conn, identifier, result)
+      end
+    else
+      {:error, {:invalid_request, message}} -> error_response(conn, 422, "invalid_request", message)
+    end
+  end
+
+  defp dependency_kind(:remove, _kind), do: {:ok, nil}
+
+  defp dependency_kind(:add, kind) do
+    case string_param(kind) do
+      "done" -> {:ok, :done}
+      "released" -> {:ok, :released}
+      _other -> {:error, {:invalid_request, "kind must be done or released"}}
+    end
+  end
+
   @spec priority(Conn.t(), map()) :: Conn.t()
   def priority(conn, params) do
     with {:ok, identifier} <- required_param(params["issue_identifier"], "issue_identifier"),
@@ -434,6 +504,39 @@ defmodule SymphonyElixirWeb.ControlApiController do
       end
     else
       {:error, {:invalid_request, message}} -> error_response(conn, 422, "invalid_request", message)
+    end
+  end
+
+  @spec queue_move(Conn.t(), map()) :: Conn.t()
+  def queue_move(conn, params) do
+    with {:ok, identifier} <- required_param(params["issue_identifier"], "issue_identifier"),
+         {:ok, target} <- queue_target(params) do
+      case DirectorQueue.move(identifier, target, [orchestrator: orchestrator(conn)] ++ Map.get(conn.assigns, :director_queue, [])) do
+        {:error, {:invalid, message}} -> error_response(conn, 422, "invalid_request", message)
+        result -> respond_move(conn, identifier, result)
+      end
+    else
+      {:error, {:invalid_request, message}} -> error_response(conn, 422, "invalid_request", message)
+    end
+  end
+
+  @spec slots(Conn.t(), map()) :: Conn.t()
+  def slots(conn, params) do
+    case DirectorQueue.set_slots(params["count"], [orchestrator: orchestrator(conn)] ++ Map.get(conn.assigns, :director_queue, [])) do
+      {:ok, payload} -> json(conn, payload)
+      {:error, {:invalid, message}} -> error_response(conn, 422, "invalid_request", message)
+      {:error, {:config, message}} -> error_response(conn, 502, "config_error", message)
+    end
+  end
+
+  # Exactly one of `position` (top or end), `after` and `before`.
+  defp queue_target(params) do
+    case {string_param(params["position"]), string_param(params["after"]), string_param(params["before"])} do
+      {"top", nil, nil} -> {:ok, :top}
+      {"end", nil, nil} -> {:ok, :end}
+      {nil, after_ticket, nil} when is_binary(after_ticket) -> {:ok, {:after, after_ticket}}
+      {nil, nil, before_ticket} when is_binary(before_ticket) -> {:ok, {:before, before_ticket}}
+      _other -> {:error, {:invalid_request, "name one place: position (top or end), after or before"}}
     end
   end
 
@@ -659,6 +762,28 @@ defmodule SymphonyElixirWeb.ControlApiController do
   end
 
   # Start now's optional note, bounded by the `run.started_by_person` event's `note` line.
+  # The slot a start names: a whole number from 1 to the slot count, or its digits.
+  defp start_slot(nil), do: {:ok, nil}
+
+  defp start_slot(slot) when is_binary(slot) do
+    case Integer.parse(String.trim(slot)) do
+      {value, ""} -> start_slot(value)
+      _other -> invalid_slot(slot)
+    end
+  end
+
+  defp start_slot(slot) when is_integer(slot) do
+    count = Config.settings!().execution.max_concurrent_agents
+    if slot in 1..count//1, do: {:ok, slot}, else: invalid_slot(slot)
+  end
+
+  defp start_slot(slot), do: invalid_slot(slot)
+
+  defp invalid_slot(slot) do
+    count = Config.settings!().execution.max_concurrent_agents
+    {:error, {:invalid_request, "#{inspect(slot)} is not a slot: use a whole number from 1 to #{count}."}}
+  end
+
   defp start_note(note) do
     case string_param(note) do
       nil ->

@@ -92,7 +92,10 @@ defmodule SymphonyElixir.TicketEvents.Types do
   A person's cancel of a ticket Symphony owns is one `ticket.cancelled` (`SymphonyElixir.DirectorMoves`):
   the phase it left and the canceled state, the Director's note, whether a run was stopped and the
   pull requests closed with it. A person's free move of one into any phase is one `ticket.moved`:
-  the phase it left and the one it entered, the Director's note and whether a run was stopped.
+  the phase it left and the one it entered, the Director's note and whether a run was stopped. The
+  Conductor's own move of its ticket, made through the same free move, is one too, its actor the
+  Conductor's turn (an agent of run kind `conductor`) and its note the turn's reason; Symphony
+  records it for the turn, and no run records it through `ticket_record` (`tool: false`).
 
   Drift is machinery-only too: `drift.detected` when Linear shows a state other than the phase
   Symphony owns, then `drift.reverted` or `drift.revert_failed` for the move back, each with the
@@ -148,8 +151,11 @@ defmodule SymphonyElixir.TicketEvents.Types do
   `note` event's id) read it (`run_id`), keyed by the note so only the first read is kept
   (`SymphonyElixir.Marks`).
 
-  `message.sent` is the person's: what they wrote to the ticket (`text`), through the control API's
-  note endpoint, each message its own event (`SymphonyElixir.Messages`). `message.read` is
+  `message.sent` is the person's: what they wrote to the ticket (`text`, as long as an ask: at most
+  100,000 characters), through the control API's
+  note endpoint, each message its own event (`SymphonyElixir.Messages`); one that answers, in the
+  person's own words, the question the ticket is held on names it (`question_id`,
+  `SymphonyElixir.DirectorMoves.answer_held_question/4`). `message.read` is
   machinery-only: the run (`run_id`) whose prompt was given the message (`message_id`, the
   `message.sent` event's id) as new, keyed by the message so it is given to one run only.
 
@@ -202,7 +208,8 @@ defmodule SymphonyElixir.TicketEvents.Types do
   is recorded once per check and head (`SymphonyElixir.TicketChecks`). `check.waived` is
   machine-only: a check (`check_id`) nobody has to prove any more, and why (`reason`, at most
   1,000). `conductor.intervention` is machine-only: what the Conductor of the ticket `by` did to
-  this one (`action`: `stopped`, `replanned`, `canceled`, `replaced`, `added`), why (`reason`, at
+  this one (`action`: `stopped`, `replanned`, `canceled`, `replaced`, `added`, `reordered` (put at
+  another place among its siblings), `rewired` (what it waits on set again)), why (`reason`, at
   most 1,000) and the ticket it names (`target`). A `note` may carry a `tag` an agent writes:
   `discovery` (something a run found that is not its own to solve) or `base_fault` (a fault of the
   base branch).
@@ -231,12 +238,13 @@ defmodule SymphonyElixir.TicketEvents.Types do
           required(:optional) => keyword(field_spec()),
           required(:idempotency) => idempotency_rule(),
           optional(:conditional) => keyword({atom(), String.t()} | {atom(), String.t(), [String.t()]}),
-          optional(:agent_values) => keyword([String.t()])
+          optional(:agent_values) => keyword([String.t()]),
+          optional(:tool) => boolean()
         }
   @type error :: {:unknown_type, term()} | {:invalid_payload, [atom() | String.t()]} | {:not_allowed, String.t()}
 
   @verdict_kinds ~w(code_review qa ci_fix plan_review epic_review)
-  @person_actions ~w(stop move unblock restart add_blocker remove_blocker set_priority add_label remove_label)
+  @person_actions ~w(stop move unblock restart add_blocker remove_blocker add_dependency remove_dependency set_priority add_label remove_label)
   @step_modes ~w(machine orchestrated delegated)
   @evidence {:any_of, [:string, {:list, :string}]}
   # A QA step's result and the environment it was proved in (`fixture`: the committed state
@@ -459,7 +467,15 @@ defmodule SymphonyElixir.TicketEvents.Types do
       run_kinds: [],
       required: [action: {:enum, @person_actions}],
       optional:
-        [move: :string, from: :string, to: :string, blocker: :string, label: :string, run_stopped: :boolean] ++
+        [
+          move: :string,
+          from: :string,
+          to: :string,
+          blocker: :string,
+          kind: {:enum, ~w(done released)},
+          label: :string,
+          run_stopped: :boolean
+        ] ++
           @signal,
       idempotency: :writer
     },
@@ -586,8 +602,9 @@ defmodule SymphonyElixir.TicketEvents.Types do
       idempotency: :writer
     },
     "ticket.moved" => %{
-      writers: [:person],
-      run_kinds: [],
+      writers: [:person, :agent],
+      run_kinds: ["conductor"],
+      tool: false,
       required: [from: :string, to: :string],
       optional: [note: {:string, 4_000}, run_stopped: :boolean] ++ @signal,
       idempotency: :writer
@@ -746,8 +763,8 @@ defmodule SymphonyElixir.TicketEvents.Types do
     "message.sent" => %{
       writers: [:person],
       run_kinds: [],
-      required: [text: {:string, 4_000}],
-      optional: @signal,
+      required: [text: {:string, 100_000}],
+      optional: [question_id: :string, source: {:enum, ~w(linear_description)}] ++ @signal,
       idempotency: :writer
     },
     "message.read" => %{
@@ -809,7 +826,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
     "conductor.intervention" => %{
       writers: [:machine],
       run_kinds: [],
-      required: [action: {:enum, ~w(stopped replanned canceled replaced added)}, reason: {:string, 1_000}, by: {:string, 200}],
+      required: [action: {:enum, ~w(stopped replanned canceled replaced added reordered rewired)}, reason: {:string, 1_000}, by: {:string, 200}],
       optional: [target: {:string, 200}] ++ @signal,
       idempotency: :writer
     }
@@ -837,16 +854,17 @@ defmodule SymphonyElixir.TicketEvents.Types do
 
   @doc """
   The types an agent of `run_kind` may record, sorted: the ones an agent writes whose run kinds
-  include it, never a legacy type. Empty for a name that is not an agent run kind.
+  include it, never a legacy type, and never one Symphony records for the agent only (`tool:
+  false`: a Conductor turn's `ticket.moved`). Empty for a name that is not an agent run kind.
   """
   @spec agent_types(String.t() | atom() | nil) :: [String.t()]
   def agent_types(run_kind) do
     run_kind = run_kind_name(run_kind)
 
     types =
-      for {type, %{writers: writers, run_kinds: kinds}} <- @catalog,
+      for {type, %{writers: writers, run_kinds: kinds} = entry} <- @catalog,
           run_kind in agent_run_kinds(),
-          :agent in writers and not legacy?(type),
+          :agent in writers and not legacy?(type) and Map.get(entry, :tool, true),
           kinds == :any or run_kind in kinds,
           do: type
 

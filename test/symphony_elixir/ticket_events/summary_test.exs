@@ -336,6 +336,10 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
       assert render("person.action", %{action: "remove_blocker", blocker: "TP-12"}).title == "The Director removed TP-12 as a blocker"
       assert render("person.action", %{action: "add_blocker"}).title == "The Director added a ticket as a blocker"
       assert render("person.action", %{action: "remove_blocker"}).title == "The Director removed a ticket as a blocker"
+      assert render("person.action", %{action: "add_dependency", blocker: "TP-12", kind: "released"}).title == "The Director made the ticket depend on TP-12"
+      assert render("person.action", %{action: "remove_dependency", blocker: "TP-12"}).title == "The Director removed the ticket's dependency on TP-12"
+      assert render("person.action", %{action: "add_dependency"}).title == "The Director made the ticket depend on a ticket"
+      assert render("person.action", %{action: "remove_dependency"}).title == "The Director removed the ticket's dependency on a ticket"
       assert render("person.action", %{action: "set_priority", from: "Low", to: "Urgent"}) |> Map.take([:title, :detail]) == %{title: "The Director set the priority to Urgent", detail: "from Low"}
       assert render("person.action", %{action: "set_priority"}).title == "The Director set the priority to another priority"
       assert render("person.action", %{action: "add_label", label: "qa:skip"}).title == "The Director added the qa:skip label"

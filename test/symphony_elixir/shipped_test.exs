@@ -153,7 +153,21 @@ defmodule SymphonyElixir.ShippedTest do
       assert payload(%{"days" => days}, []) == {:error, :invalid_days}
     end
 
+    # The options default to none: a bad value is refused before any store is read.
+    assert Shipped.payload(%{"days" => "0"}) == {:error, :invalid_days}
+
     failing = fn _date -> {:error, :down} end
     assert {:ok, %{total: 0}} = payload(%{"days" => "1"}, [], runs_started_on: failing, ticket_states: {:error, :down})
+  end
+
+  test "counts the host's own local days when no conversion is given" do
+    merged = run("i1", "APP-1", ~U[2026-10-13 09:00:00Z], %{issue_completed_notified_at: @now})
+    host_today = SymphonyElixir.ShippedToday.local_date(@now)
+
+    # A ticket merged this instant is merged today wherever the host is.
+    assert %{from: ^host_today, today: ^host_today, local_date: local_date, runs: [^merged]} =
+             Shipped.done_runs(1, now: @now, runs_started_on: fn _date -> [merged] end)
+
+    assert local_date.(@now) == host_today
   end
 end

@@ -288,7 +288,7 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
       )
 
     assert conn.status == 200
-    assert calls(pid) == [{:stop_running, "ACME-123"}]
+    assert calls(pid) == [{:stop_running, "ACME-123", [free_slot: true]}]
   end
 
   describe "POST /control/stop audit record" do
@@ -422,24 +422,24 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
       assert Phoenix.Router.route_info(SymphonyElixirWeb.Router, "POST", "/api/v1/control/note", "localhost").plug_opts == :note
       test = self()
       on = %SymphonyElixir.Config.Schema.Conductor{enabled: true}
-      started = [settings: on, start: fn _task -> send(test, :conductor_started) end]
+      no_grooming = %{on | junctions: on.junctions -- ["grooming"]}
 
-      post_message = fn text ->
+      post_message = fn text, settings ->
         build_conn(:post, "/api/v1/control/message", note_params(ticket, text))
         |> Plug.Conn.assign(:audit_log, dir: tmp_dir)
-        |> Plug.Conn.assign(:conductor_message, started)
+        |> Plug.Conn.assign(:conductor_message, settings: settings, start: fn _task -> send(test, :conductor_started) end)
         |> send_to(:message, start_stub([]), note_params(ticket, text))
       end
 
-      # No plan yet: the next run reads the message, and no turn starts.
-      conn = post_message.("Keep the export button.")
+      # No plan yet and Grooming off: the next run reads the message, and no turn starts.
+      conn = post_message.("Keep the export button.", no_grooming)
       assert %{"event" => %{"type" => "message.sent", "payload" => %{"text" => "Keep the export button."}}} = json_body(conn)
       refute_received :conductor_started
 
       plan = %{shape: "single", layers: ["engine"], summary: "s", text: "t", size: %{tokens: 1, runs: 1}, reason: "Grooming", by: "grooming"}
       {:ok, _plan} = SymphonyElixir.TicketPlan.write(ticket.repo_key, ticket.issue_id, Map.put(plan, :checks, [%{id: "c1", kind: "outcome", statement: "s", proof: "test"}]))
 
-      conn = post_message.("And the colour.")
+      conn = post_message.("And the colour.", on)
       assert conn.status == 200
       assert %{"event" => %{"type" => "message.sent", "read" => nil}} = json_body(conn)
       assert_received :conductor_started
@@ -452,7 +452,7 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
             {"   \n ", "A note needs text"},
             {nil, "A note needs text"},
             {42, "A note needs text"},
-            {String.duplicate("é", 4_001), "A note holds at most 4,000 characters; this one has 4,001"}
+            {String.duplicate("é", 100_001), "A note holds at most 100,000 characters; this one has 100,001"}
           ] do
         conn = post_note(note_params(ticket, text), tmp_dir)
 
@@ -463,8 +463,11 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
       assert RunStore.list_ticket_events(ticket.issue_id, []) == []
       assert audit_records(tmp_dir) == []
 
-      # The bound itself is a message.
-      assert post_note(note_params(ticket, String.duplicate("é", 4_000)), tmp_dir).status == 200
+      # A message is as long as an ask: the 5,296 characters of TP-1597's are one message, word for word,
+      # and so is the bound itself.
+      long = String.duplicate("é", 5_296)
+      assert %{"event" => %{"payload" => %{"text" => ^long}}} = json_body(post_note(note_params(ticket, long), tmp_dir))
+      assert post_note(note_params(ticket, String.duplicate("é", 100_000)), tmp_dir).status == 200
     end
 
     test "an unknown ticket is 404, and a request without the ticket is 422; neither writes", %{ticket: ticket, tmp_dir: tmp_dir} do

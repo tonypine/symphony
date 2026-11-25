@@ -8,7 +8,8 @@ defmodule SymphonyElixir.TokenBudget do
   whether its pull request has its work, the commits it left unpushed and the files it changed
   without committing. Its options are "Give it another budget" (recommended: Unblock, one more run
   with the same limit), "Start it over from main" (Restart) and "Keep it paused"; the person may
-  answer in their own words too, which keeps it paused (`SymphonyElixir.DispatchLoop.answer_move/1`).
+  answer in their own words too, which go to the ticket's Conductor to act on
+  (`SymphonyElixir.DirectorMoves.answer_held_question/4`).
   While it is open the ticket's pause reads "Its token budget is spent (100M)" (`pause_text/1`), so
   the Director shows "Paused: its token budget is spent (100M)".
 

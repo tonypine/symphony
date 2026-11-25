@@ -165,6 +165,88 @@ defmodule SymphonyElixir.Dispatch.DependsOnTest do
     end
   end
 
+  describe "TP-1633: a queue move never puts a ticket above one it depends on" do
+    test "a move above the ticket depended on, or of that ticket below its dependent, is refused and nothing moves" do
+      for {id, n} <- [{"a", 1}, {"b", 2}, {"c", 3}], do: put!(id, "MT-#{n}", "Todo")
+      assert :ok = RunStore.add_dependency("b", "a", :done)
+      before = places()
+
+      assert {:error, {:dependency_order, "b", "a"}} = RunStore.move_in_queue("b", :top)
+      assert {:error, {:dependency_order, "b", "a"}} = RunStore.move_in_queue("a", :end)
+      assert {:error, {:dependency_order, "b", "a"}} = RunStore.move_in_queue("a", {:between, "b", "c"})
+      assert places() == before
+
+      # Moves that keep it pointing upward go through.
+      assert :ok = RunStore.move_in_queue("c", :top)
+      assert :ok = RunStore.move_in_queue("b", :end)
+      assert walk() == ["c", "a", "b"]
+    end
+
+    test "between two sub-tickets of one parent, and between scopes where they meet" do
+      put!("epic", "MT-E", "In Progress")
+      put!("s1", "MT-S1", "Todo", "MT-E")
+      put!("s2", "MT-S2", "Todo", "MT-E")
+      put!("x", "MT-X", "Todo")
+      assert :ok = RunStore.add_dependency("s2", "s1", :released)
+      before = places()
+
+      assert {:error, {:dependency_order, "s2", "s1"}} = RunStore.move_in_queue("s2", :top)
+      assert places() == before
+
+      # A sub-ticket that depends on a top-level ticket keeps its parent below it.
+      assert :ok = RunStore.add_dependency("s1", "x", :done)
+      assert walk() == ["x", "epic", "s1", "s2"]
+      assert {:error, {:dependency_order, "s1", "x"}} = RunStore.move_in_queue("epic", :top)
+      assert walk() == ["x", "epic", "s1", "s2"]
+    end
+  end
+
+  describe "TP-1633: start_refusal/4, dependents/3 and cancel_refusal/2" do
+    test "a Start is refused with the first unmet dependency, done or released, as the gate judges it" do
+      run_build(@old_build)
+      put!("fix", "MT-F", "In Progress")
+      put!("rel", "MT-R", "Done")
+      put!("next", "MT-N", "Todo")
+      :ok = RunStore.add_dependency("next", "fix", :done)
+      :ok = RunStore.add_dependency("next", "rel", :released)
+      build = SymphonyElixir.BuildInfo.current()
+
+      assert DependsOn.start_refusal("MT-N", "next", build, UpdateHold.empty_cache()) == "MT-N depends on MT-F and can't start before it is done."
+
+      :ok = RunStore.update_ticket_state("fix", %{phase: "Done"})
+      assert DependsOn.start_refusal("MT-N", "next", build, UpdateHold.empty_cache()) == "MT-N depends on MT-R and can't start before it is released."
+      # With no build, a released dependency is met once its ticket is done.
+      assert DependsOn.start_refusal("MT-N", "next", %{}, UpdateHold.empty_cache()) == nil
+      # A ticket with no identifier is named by its id, and so is one depended on that has no record.
+      :ok = RunStore.add_dependency("fix", "ghost", :done)
+      assert DependsOn.start_refusal(nil, "fix", build, UpdateHold.empty_cache()) == "fix depends on ticket ghost and can't start before it is done."
+
+      assert DependsOn.start_refusal("MT-F", "missing", build, UpdateHold.empty_cache()) == nil
+      assert DependsOn.start_refusal("MT-F", nil, build, UpdateHold.empty_cache()) == nil
+    end
+
+    test "the open tickets that depend on a ticket refuse its cancel, named in order" do
+      put!("base", "MT-1", "Todo")
+      put!("b", "MT-3", "Todo")
+      put!("a", "MT-2", "In Progress")
+      put!("done", "MT-4", "Todo")
+      put!("gone", "MT-5", "Todo")
+      for id <- ["a", "b", "done", "gone"], do: :ok = RunStore.add_dependency(id, "base", :done)
+      :ok = RunStore.update_ticket_state("done", %{phase: "Done"})
+      :ok = RunStore.update_ticket_state("gone", %{removed_at: DateTime.utc_now()})
+      terminal = MapSet.new(["done", "canceled"])
+
+      dependents = DependsOn.dependents("base", RunStore.list_all_ticket_states(), terminal)
+      assert dependents == ["MT-2", "MT-3"]
+      assert DependsOn.dependents("a", RunStore.list_all_ticket_states(), terminal) == []
+
+      assert DependsOn.cancel_refusal("MT-1", dependents) == "MT-1 can't be cancelled: MT-2 and MT-3 depend on it. Remove those dependencies first."
+      assert DependsOn.cancel_refusal("MT-1", ["MT-2"]) == "MT-1 can't be cancelled: MT-2 depends on it. Remove that dependency first."
+      assert DependsOn.cancel_refusal("MT-1", ["MT-2", "MT-3", "MT-4"]) == "MT-1 can't be cancelled: MT-2, MT-3 and MT-4 depend on it. Remove those dependencies first."
+      assert DependsOn.cancel_refusal("MT-1", []) == nil
+    end
+  end
+
   describe "dispatch" do
     test "holds a ticket on an unmet done dependency, and starts it by itself once it is met, from the stored records alone" do
       put!("epic", "MT-E", "In Progress")
@@ -284,7 +366,7 @@ defmodule SymphonyElixir.Dispatch.DependsOnTest do
         %{dispatch_order: order} = Orchestrator.put_dispatch_order_for_test(orchestrator_state(), issues)
         order = %{order | computed_at: computed_at}
         records = RunStore.list_all_ticket_states()
-        {order, Order.read(order, records, live), Home.read(order, records, live)}
+        {order, Order.read(order, records, live), without_dependencies(Home.read(order, records, live))}
       end
 
       before = reads.()
@@ -294,6 +376,15 @@ defmodule SymphonyElixir.Dispatch.DependsOnTest do
       assert reads.() == before
     end
   end
+
+  # The Home read lists a row's stored dependencies (a field it gained); the
+  # rest of the read must not change with them.
+  defp without_dependencies(%{} = map) when not is_struct(map) do
+    map |> Map.delete(:dependencies) |> Map.new(fn {k, v} -> {k, without_dependencies(v)} end)
+  end
+
+  defp without_dependencies(list) when is_list(list), do: Enum.map(list, &without_dependencies/1)
+  defp without_dependencies(other), do: other
 
   describe "unmet/4 and reason/1" do
     test "decide from the records and the update hold's cache alone" do

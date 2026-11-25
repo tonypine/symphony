@@ -43,7 +43,15 @@ defmodule SymphonyElixir.TicketEvents.Summary do
 
   # How a check was proved, and what the Conductor of a ticket did to this one, as a line says them.
   @proved_by %{"test" => " by a test", "qa" => " by QA", "design" => " against the design", "attached" => " by an attachment", "ci" => " by the pull request's CI"}
-  @intervened %{"stopped" => "Run stopped", "replanned" => "Plan changed", "canceled" => "Canceled", "replaced" => "Replaced", "added" => "Added"}
+  @intervened %{
+    "stopped" => "Run stopped",
+    "replanned" => "Plan changed",
+    "canceled" => "Canceled",
+    "replaced" => "Replaced",
+    "added" => "Added",
+    "reordered" => "Moved in the queue",
+    "rewired" => "Dependencies set"
+  }
 
   @doc """
   The summary of `event` (an `Event` or a stored record `Event.normalize/1` reads): its title and its
@@ -568,6 +576,8 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   defp person_action("unblock", _to), do: "The Director unblocked the ticket"
   defp person_action("restart", _to), do: "The Director restarted the ticket"
   defp person_action("add_blocker", blocker), do: "The Director added " <> (blocker || "a ticket") <> " as a blocker"
+  defp person_action("add_dependency", on), do: "The Director made the ticket depend on " <> (on || "a ticket")
+  defp person_action("remove_dependency", on), do: "The Director removed the ticket's dependency on " <> (on || "a ticket")
   defp person_action("set_priority", to), do: "The Director set the priority to " <> (to || "another priority")
   defp person_action("add_label", label), do: "The Director added " <> label_name(label)
   defp person_action("remove_label", label), do: "The Director removed " <> label_name(label)

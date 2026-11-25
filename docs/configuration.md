@@ -2816,14 +2816,25 @@ store (it survives a restart); beside it the stop sets a `Blocked` hold of type 
 Linear label, shown in the Inbox as "Stopped by you". A poll that finds the ticket closed or out of
 the active states clears both; otherwise the ticket waits for a person: **Unblock** runs it again in
 place, **Restart** starts it over from main, and moving it to another state on the board clears the
-stop too.
+stop too. The stop frees the ticket's slot in the same call (the answer names it, `slot`), and a
+ticket that holds a slot between its runs or while it waits is stopped the same way. The free slot
+goes in the queue's order: first to the next sub-ticket of a ticket in progress, then to the first
+ticket that can start. A stopped sub-ticket goes back to the head of its epic, and the epic to the
+head of the queue. The open streams (`GET /api/v1/stream`) get a queue notice at once.
 
-**Start** (`POST /api/v1/control/start` with `issue_identifier` and an optional `note`) starts a
-ticket's run at once, ahead of the dispatch queue and outside its order: the run for the ticket's
-current phase is dispatched in the same call, not queued — implementation for Todo (claimed to
-In Progress first) or In Progress, the reviewer for Code Review, QA for QA, the CI fixer for CI
-Fix, the rework run for Rework. It ignores queue order, the per-repo and global concurrency limits
-(it may run one over the limit; the next cycle simply has one slot fewer).
+**Start** (`POST /api/v1/control/start` with `issue_identifier`, an optional `note` and an optional
+`slot`) starts a ticket's run at once as a queue move: the run for the ticket's current phase is
+dispatched in the same call — implementation for Todo (claimed to In Progress first) or In
+Progress, the reviewer for Code Review, QA for QA, the CI fixer for CI Fix, the rework run for
+Rework. The ticket goes to the head of the queue and takes a slot, never one over the slot count:
+the slot `slot` names (a whole number from 1 to the slot count, 422 otherwise), else a free one,
+else the one taken most recently. Slots have numbers that survive a restart. A slot that is held is
+taken over: the runs working through it stop (the pull request stays open), and the ticket that held
+it goes to the head of the queue, number 1, not paused, so it takes the next free slot. A ticket
+that holds a slot already, or a sub-ticket whose epic's slot is idle, starts in it; a sub-ticket
+started while a sibling works through its epic's slot swaps with it, and the sibling comes next. The
+answer adds the slot's number (`slot`) and, when it took one over, the ticket that held it
+(`displaced_issue_identifier`); the open streams get a queue notice at once.
 It does not override what a person or Symphony chose to stop: it is refused while Symphony is
 paused, while the ticket's repository is paused, while the ticket has an open Question, or while
 a run is already working on it — the answer names which — and a ticket in Backlog is refused with
@@ -3498,8 +3509,13 @@ conductor:
   ended) run on the parent, on a poll, outside any dispatch (**The tree**, below). `message` (a
   person sent a message on a groomed ticket) runs as the message is written, outside any dispatch:
   the Conductor replies to it, and no run is given the message; `child_message` then shows a
-  sub-ticket's message to its parent's Conductor (`docs/control-api.md`, **Messages**). With
-  `message` off, a groomed ticket's messages are read by its next run, as before plans. At
+  sub-ticket's message to its parent's Conductor (`docs/control-api.md`, **Messages**). A person's
+  answer in their own words (no option picked) to the question a ticket is held on (a dispatch
+  loop's, a quiet handoff's, a park's, a spent budget's, a block report's) is such a message, naming
+  the question: the ticket waits on the turn, which moves it, runs it again (`resume`), asks its own
+  question, or replies and has the question asked again. With
+  `message` off, a groomed ticket's messages are read by its next run, as before plans, and an
+  own-words answer to a held question keeps the ticket held. At
   `message`, `after_coding`, `after_rework`, `before_merge`, `sub_ticket_ended`, `final_check` and on a watch turn
   the answer may waive a check of the plan nobody can prove (`check.waived`, with its reason). A `symphony.yml` that lists its junctions gets `after_qa_blocked`, `grooming` and the other
   new ones only when it adds them: a file that names no `junctions` runs every one.
@@ -3517,7 +3533,8 @@ conductor:
 
 But for Grooming, the turn runs in an empty folder under the workspace root with read-only tools and
 no ticket, so it can neither change nor read the repository. Past Grooming it changes the ticket's plan only when a person's message, or the ticket's parent, changes what is asked (a new plan version, with its reason), and it moves the
-ticket only at `after_qa_blocked`, through Symphony (below); a ticket it files that blocks this one
+ticket through Symphony only: with its `move` at any junction and with its route at
+`after_qa_blocked` (below); a ticket it files that blocks this one
 holds it, as a question does. Its own
 run is recorded on the ticket (`run.started`, `run.ended` with its model and tokens, `counted: false`
 so the dispatch-loop guard ignores it), and its tokens count toward the ticket under the phase it ran
@@ -3610,25 +3627,43 @@ exactly as before.
   sub-ticket does not hold it). Either close moves Symphony's record with Linear, under the
   ticket's repo key; a ticket read with no repo key is not moved and is tried again on the next
   poll.
+- **One form on every turn.** Every Conductor turn on a ticket with sub-tickets (a person's
+  message, a message on a sub-ticket, a sub-ticket ending, the final check, a watch turn, any other
+  junction such a ticket reaches; Grooming aside) is told the same form, in the same words
+  (`priv/conductor/sub_tickets_form.md`), and its answer is read and carried out the same way. It
+  may hold `tree` operations, at most 10, each with a `reason`: `add` (`title`, `ask`, `after`,
+  `repo`, `before`: the sub-ticket it goes in front of in the queue, `key`: a name later operations
+  may use for it), `cancel` (`ticket`; the Director's cancel move), `rewrite` (`ticket`, `ask`, and
+  `stop: true` to stop its working run first; the new ask is an `ask.recorded` on the sub-ticket,
+  `source: parent`, whatever it was asked before), `stop` (`ticket`), `reorder` (`ticket`, and
+  `before` another sub-ticket or `to` `first` or `last`; the Director's queue move, which refuses an
+  order that puts a sub-ticket above one it waits on) and `depend` (`ticket` and the complete list
+  it waits `after`: the dependencies it lacks are stored, the ones on siblings it no longer lists are
+  removed, and a cycle is refused). Only sub-tickets that have not ended change. Each one carried
+  out records a `conductor.intervention` on the sub-ticket (`added`, `canceled`, `replanned`,
+  `stopped`, `reordered`, `rewired`) and together they give the parent's plan a new version
+  (`by: recalibration`). The answer may also write the parent's plan again (`plan`), recorded as its
+  next version; it needs no `sub_tickets`, since the list is Symphony's and changes only through
+  `tree`. A plan that lists them anyway is read as the same changes: an entry with an `identifier`
+  keeps that sub-ticket (with a new `ask` when it gives one, and the `after` it gives), one without
+  is a new sub-ticket and needs a `title` and an `ask`, and the order of the entries is the order
+  wanted. An operation left out of the answer (it misses a field or its reason) or one that can't be
+  carried out is said on the ticket in a status note, named in the turn's reply, and read by the next
+  turn in its facts (`earlier_tries`), as is the reason Symphony refused a whole answer.
 - **`sub_ticket_ended`.** Each sub-ticket that ends while others are open owes the parent one turn.
   Its facts are the tree (the parent's plan and checks; each sub-ticket's state, plan summary,
-  checks, tagged notes, asks and whether its pull request merged; the rounds), and its answer may
-  hold `tree` operations, each with a `reason`: `add` (`title`, `ask`, `after`, `repo`), `cancel`
-  (`ticket`; the Director's cancel move), `rewrite` (`ticket`, `ask`, and `stop: true` to stop its
-  working run first; the new ask is an `ask.recorded` on the sub-ticket, `source: parent`) and
-  `stop` (`ticket`). Each one carried out records a `conductor.intervention` on the sub-ticket
-  (`added`, `canceled`, `replanned`, `stopped`) and together they give the parent's plan a new
-  version (`by: recalibration`). One that can't be carried out is logged and left out.
+  checks, tagged notes, asks and whether its pull request merged; the rounds), and its answer is
+  the one form above.
 - **`final_check`.** Once the last sub-ticket ended and the close rule holds, the parent owes the
-  final check. `done: true` with no operation moves the ticket to `Done` (`final_check_pass`).
-  `add` operations are a round: the plan's new version has a `reason` that starts with
+  final check. Its operations other than `add` are carried out first. `done: true` with nothing to
+  add moves the ticket to `Done` (`final_check_pass`). `add` operations are a round: the plan's new version has a `reason` that starts with
   `Final check`, and those versions are the count. After `final_check_rounds` rounds Symphony
   refuses one more and asks the person: "Allow one more round" lets one through, "Close it as it
   is" moves the ticket to `Done`. With the Conductor or the junction off the check cannot run at
   all, and only then does the ticket close on its sub-tickets alone. A check that ran and did not
   conclude never closes the ticket: Symphony asks the person, naming the checks still open ("Check
   again" or "Close it as it is"), and the ticket stays in the waiting state until they answer. That
-  is so when the check answered `done: false` and added nothing, when none of the sub-tickets it
+  is so when the check answered `done: false` and carried nothing out, when none of the sub-tickets it
   wanted could be created, when the move to `Done` failed, and when the turn failed or could not be
   read 2 times in a row (each counted in a status note).
 - **Waiting for the Conductor.** While no provider of `runs.conductor` can take a run (paused, or
@@ -3674,7 +3709,22 @@ A route past its bound is dropped and logged, and so is a route given with a que
 decides. Then the pass goes on as without the Conductor (the retry, the self-heal lane or the "QA
 could not finish" question). A question the turn asks holds the ticket, and Symphony then asks none
 of its own. The route Symphony took is recorded on the turn's `conductor.instructions` (`route`).
-The Conductor never routes a ticket past QA, and never narrows what QA checks.
+The Conductor never routes a ticket past QA, and never narrows what QA checks. A turn that moved the
+ticket itself (`move`, below) leaves it there: the pass moves nothing and asks nothing of its own.
+
+**Moving its own ticket** (`move`). At every junction, the message turn and the watch included,
+the answer may move the ticket to a stage, as a person's Move to... in the Director does:
+`{"stage": "<a stage>", "reason": "<at most 1000 characters>"}`. Symphony makes it through the
+person's free move (`SymphonyElixir.DirectorMoves`) with the same guards (a phase of the repo's
+workflow, a ticket in a configured repository, the transition guard), once the turn's run has
+ended, and asks nothing. The facts list the stages it may name (`stages`). The ticket's timeline
+gets one `ticket.moved` whose actor is the Conductor's turn and whose note is its reason, and the
+`director_move` audit record names it (`by: Conductor`). A move the path refuses is dropped and
+logged, and the rest of the answer is kept; one to the stage the ticket is in moves nothing; one
+given with a question is dropped, and at `after_qa_blocked` a `rerun` or `rework` route given beside
+a move is dropped, so the move decides. A turn before a run that moved the ticket keeps that run
+from starting, and the ticket is dispatched again at once in its new stage; a move into Backlog or a
+closed stage stops a running run, as a person's does. A malformed `move` refuses the answer.
 
 **Filing a linked ticket** (`file_tickets`). At `after_qa_blocked`, `after_qa_fail`,
 `after_rework` and during a watched run, the answer's `route` may be a ticket for a problem that is
@@ -3733,6 +3783,9 @@ when the person picks it (`action`), from a closed list:
 - `rerun`: nothing moves; the answer clears the pause and the stage the ticket is in runs again.
 - `rework` (with `finding`, at most 600 characters): the ticket moves to Rework, and the finding is
   recorded as the turn's (`unclassified`, `unrated`) for the rework run to read. Not from Rework.
+- `back_to_review`: the ticket moves from Rework to Code Review with the pull request as it is:
+  Symphony emits the handoff for the head the question was asked on and forgets the Rework's base,
+  so no rework run starts and the reviewer reads that head. Only while it is in Rework.
 - `accept_without_qa`: Symphony records the `qa` verdict `skip` on the head, reason `skipped by
   decision`, and moves the ticket to where a QA pass goes (Merging). Only while it is in QA.
 - `cancel`: the ticket moves to Canceled.
@@ -4077,7 +4130,7 @@ phases:
         title: Tests and coverage
         mode: machine
         command:
-          - {run: (test -z "$SYMPHONY_CHANGED_TEST_FILES" || mix test $SYMPHONY_CHANGED_TEST_FILES) && mix cover.changed, when: elixir_source_changed}
+          - {run: mix cover.changed $SYMPHONY_CHANGED_TEST_FILES, when: elixir_source_changed}
           - {run: cd macos && swift test --filter "$SYMPHONY_CHANGED_SWIFT_TEST_FILTER", when: macos_changed}
         timeout_ms: 1800000
         on_fail: code
@@ -4256,13 +4309,20 @@ Each step has:
   files, `mix.lock` included; `elixir_source_changed`, when it touches an Elixir source or test
   file, `.ex` or `.exs`, and not for `mix.lock` alone). A step whose `when`, or every command's,
   does not hold is skipped with a plain reason that says what did not change ("no Elixir source or
-  test file changed"): the default list compiles a lock-only change and runs no credo, no
-  `mix test` and no `mix cover.changed` for it, nor for a change to docs or workflow files only. A
-  dependency update is proved by CI's full suite; no local step runs the whole suite. The step runner gives a machine step `SYMPHONY_CHANGED_ELIXIR_FILES`
+  test file changed"): the default list compiles a lock-only change and runs no credo and no
+  `mix cover.changed` for it, nor for a change to docs or workflow files only. The tests step is
+  one pass: `mix cover.changed` runs the changed test files, the tests of the changed `lib/` files
+  and the tests that name a changed module once, in several processes at once, and that one run
+  both proves they pass and gives the changed modules' coverage (`docs/development.md`). A
+  repository whose change needs every Elixir test puts `mix cover.changed --all $SYMPHONY_CHANGED_TEST_FILES`
+  in that step in place of a later step that runs the suite: one pass runs every test file and
+  checks the changed modules' coverage, and no test runs twice. A
+  dependency update is proved by CI's full suite; no step of the default list runs the whole suite. The step runner gives a machine step `SYMPHONY_CHANGED_ELIXIR_FILES`
   (the Elixir source files, `.ex` and `.exs`, the change touches that still exist; never a
   generated file such as `mix.lock`), `SYMPHONY_CHANGED_TEST_FILES` (the changed test files and the
-  tests of the changed `lib/` files; either may be empty, and the default steps then run no credo
-  and no `mix test`, which would lint or test the whole project) and `SYMPHONY_CHANGED_SWIFT_TEST_FILTER` (the Swift test
+  tests of the changed `lib/` files; either may be empty, and the default steps then run no credo,
+  which would lint the whole project, and `mix cover.changed` runs the tests it selects itself,
+  never the whole suite) and `SYMPHONY_CHANGED_SWIFT_TEST_FILTER` (the Swift test
   targets of what changed under `macos/`, `.` for all), read against the merge-base with the
   repository's base branch, uncommitted and untracked files included. The command runs in the
   ticket's workspace in a login shell with the environment an agent gets (its allow-list; Symphony's

@@ -1761,16 +1761,16 @@ defmodule SymphonyElixir.ExtensionsTest do
              }
   end
 
-  test "the initiatives api lists plan tickets from Symphony's cache, without a Linear request" do
-    test_pid = self()
-    initiatives = {:test, make_ref()}
+  test "the initiatives api lists the parents Symphony split from its records, without a Linear request" do
+    initiatives = []
     inbox = {:test, make_ref()}
 
     # A landed sub-ticket with its PR on its record and three ended runs in its ledger (TP-1500).
     landed_id = "issue-landed-#{System.unique_integer([:positive])}"
     on_exit(fn -> RunStore.delete_ticket_state(landed_id) end)
     pull_request = %{number: 812, url: "https://github.com/example/app/pull/812", state: "merged"}
-    :ok = RunStore.put_ticket_state(TicketState.new("default", landed_id, %{issue_identifier: "MT-LANDED", phase: "Done", pull_request: pull_request}))
+    landed = %{issue_identifier: "MT-LANDED", phase: "Done", phase_at: ~U[2026-10-03 10:00:00Z], pull_request: pull_request}
+    :ok = RunStore.put_ticket_state(TicketState.new("default", landed_id, landed))
 
     for tokens <- [1_200, %{total_tokens: 300}, nil] do
       run_id = "run-#{System.unique_integer([:positive])}"
@@ -1778,89 +1778,44 @@ defmodule SymphonyElixir.ExtensionsTest do
       {:ok, _event} = TicketEvents.record("default", landed_id, "run.ended", payload, run_id: run_id)
     end
 
-    child = fn identifier, state, type, extra ->
-      Map.merge(
-        %{
-          "id" => "issue-" <> identifier,
-          "identifier" => identifier,
-          "title" => "Part " <> identifier,
-          "url" => "https://linear.app/example/issue/" <> identifier,
-          "createdAt" => "2026-10-01T10:00:00Z",
-          "state" => %{"name" => state, "type" => type}
-        },
-        extra
-      )
-    end
-
     # MT-3 depends on MT-2 (open) and on MT-1 (done), as Symphony stores it: Linear's blocker links
     # are not read.
-    for {id, identifier, phase, phase_at} <- [
-          {"issue-MT-3", "MT-3", "Todo", nil},
-          {"issue-MT-2", "MT-2", "Plan Review", nil},
-          {"issue-MT-1", "MT-1", "Done", ~U[2026-10-02 10:00:00Z]}
+    for {id, identifier, phase, fields} <- [
+          {"issue-MT-3", "MT-3", "Todo", %{created_at: ~U[2026-10-01 09:00:00Z]}},
+          {"issue-MT-2", "MT-2", "Plan Review", %{created_at: ~U[2026-10-01 10:00:00Z]}},
+          {"issue-http", "MT-HTTP", "In Progress", %{created_at: ~U[2026-10-01 10:00:00Z]}},
+          {"issue-MT-1", "MT-1", "Done", %{phase_at: ~U[2026-10-02 10:00:00Z]}}
         ] do
-      :ok = RunStore.put_ticket_state(TicketState.new("default", id, %{issue_identifier: identifier, phase: phase, phase_at: phase_at}))
+      :ok = RunStore.put_ticket_state(TicketState.new("default", id, Map.merge(%{issue_identifier: identifier, title: "Part " <> identifier, phase: phase}, fields)))
       on_exit(fn -> RunStore.delete_ticket_state(id) end)
     end
 
     :ok = RunStore.add_dependency("issue-MT-3", "issue-MT-2", :done)
     :ok = RunStore.add_dependency("issue-MT-3", "issue-MT-1", :done)
 
-    plan = fn identifier, state, type, children, extra ->
-      Map.merge(
-        %{
-          "id" => "issue-" <> identifier,
-          "identifier" => identifier,
-          "title" => "Plan " <> identifier,
-          "url" => "https://linear.app/example/issue/" <> identifier,
-          "completedAt" => nil,
-          "state" => %{"name" => state, "type" => type},
-          "children" => %{"nodes" => children}
-        },
-        extra
-      )
-    end
+    link = fn identifier, id, state -> %{id: id, identifier: identifier, state: state} end
 
-    nodes = [
-      plan.("MT-DONE", "Done", "completed", [], %{"completedAt" => DateTime.utc_now() |> DateTime.to_iso8601()}),
-      plan.("MT-REVIEW", "Plan Review", "started", [], %{}),
-      plan.(
-        "MT-PLAN",
-        "Waiting on sub-tickets",
-        "started",
-        [
-          child.("MT-3", "Todo", "unstarted", %{"createdAt" => "2026-10-01T09:00:00Z"}),
-          child.("MT-2", "Plan Review", "started", %{}),
-          child.("MT-HTTP", "In Progress", "started", %{"id" => "issue-http"})
-        ],
-        %{}
-      ),
-      plan.(
-        "MT-QUEUED",
-        "Waiting on sub-tickets",
-        "started",
-        [child.("MT-LANDED", "Done", "completed", %{"id" => landed_id, "completedAt" => "2026-10-03T10:00:00Z"})],
-        %{"startedAt" => "2026-10-01T08:00:00Z"}
-      )
+    # The parents Symphony split, each with the sub-tickets its record lists, and a ticket that only
+    # carries the plan label: it is not listed.
+    parents = [
+      {"MT-DONE", "Done", %{phase_at: DateTime.utc_now()}, [link.("MT-D1", "issue-MT-D1", "Done")], true},
+      {"MT-REVIEW", "Plan Review", %{}, [link.("MT-R1", "issue-MT-R1", "Backlog")], true},
+      {"MT-PLAN", "Waiting on sub-tickets", %{}, [link.("MT-3", "issue-MT-3", "Todo"), link.("MT-2", "issue-MT-2", "Plan Review"), link.("MT-HTTP", "issue-http", "In Progress")], true},
+      {"MT-QUEUED", "Waiting on sub-tickets", %{}, [link.("MT-LANDED", landed_id, "Done")], true},
+      {"MT-LABEL", "Waiting on sub-tickets", %{labels: ["plan"]}, [link.("MT-L1", "issue-MT-L1", "Todo")], false}
     ]
 
-    linear_client = fn query, _variables, _opts ->
-      send(test_pid, {:linear, query})
-      {:ok, %{"data" => %{"issues" => %{"nodes" => nodes, "pageInfo" => %{"hasNextPage" => false}}}}}
+    for {identifier, phase, fields, sub_issues, split?} <- parents do
+      id = "issue-" <> identifier
+      fields = Map.merge(%{issue_identifier: identifier, title: "Plan " <> identifier, url: "https://linear.app/example/issue/" <> identifier, phase: phase, sub_issues: sub_issues}, fields)
+      :ok = RunStore.put_ticket_state(TicketState.new("default", id, fields))
+      on_exit(fn -> RunStore.delete_ticket_state(id) end)
+
+      if split? do
+        [%{identifier: first} | _rest] = sub_issues
+        {:ok, _event} = TicketEvents.record("default", id, "ticket.filed", %{identifier: first, kind: "split_off"}, at: ~U[2026-10-01 08:00:00Z])
+      end
     end
-
-    SymphonyElixir.Initiatives.run_once(%{
-      opts: [
-        name: initiatives,
-        repos: fn -> {:ok, [%{name: "default"}]} end,
-        settings_fun: fn _repo -> Config.settings!() end,
-        scope_filter: fn _repo -> {:ok, %{}} end,
-        linear_client: linear_client
-      ],
-      timer: nil
-    })
-
-    assert_received {:linear, _query}
 
     lanes = %{
       max_total: 2,
@@ -1880,9 +1835,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     )
 
     payload = json_response(get(build_conn(), "/api/v1/initiatives"), 200)
-    refute_received {:linear, _query}
 
-    assert %{"read" => true, "counts" => %{"active" => 2, "in_review" => 1, "done" => 1}, "initiatives" => listed} = payload
+    assert %{"counts" => %{"active" => 2, "in_review" => 1, "done" => 1}, "initiatives" => listed} = payload
     assert Enum.map(listed, & &1["identifier"]) == ["MT-PLAN", "MT-QUEUED", "MT-REVIEW", "MT-DONE"]
 
     assert %{

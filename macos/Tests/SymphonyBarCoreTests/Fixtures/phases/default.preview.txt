@@ -9,7 +9,7 @@ An implementation run follows these steps (the default list, `phases.implementat
 3. `checks` Format, specs and credo · machine · when Elixir source files changed · times out after 10 min · on failure returns to `code`
    - `mix format --check-formatted && mix specs.check && (test -z "$SYMPHONY_CHANGED_ELIXIR_FILES" || mix credo --strict $SYMPHONY_CHANGED_ELIXIR_FILES)`
 4. `tests` Tests and coverage · machine · times out after 30 min · on failure returns to `code`
-   - when Elixir source files changed: `(test -z "$SYMPHONY_CHANGED_TEST_FILES" || mix test $SYMPHONY_CHANGED_TEST_FILES) && mix cover.changed`
+   - when Elixir source files changed: `mix cover.changed $SYMPHONY_CHANGED_TEST_FILES`
    - when macos/ changed: `cd macos && swift test --filter "$SYMPHONY_CHANGED_SWIFT_TEST_FILTER"`
 5. `window_tests` Window tests · machine · times out after 120 min · on failure returns to `code`
    - `symphony:window_tests`

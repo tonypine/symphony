@@ -1,11 +1,110 @@
 import Foundation
 
-/// The Director's Home read (`GET /api/v1/home`, `docs/control-api.md` § The Home read): the two lists Home draws,
-/// already shaped by Symphony. `inProgress` is every ticket that has started, a ticket of an epic under its epic's node;
-/// `queue` is every ticket Symphony would dispatch that has not started, as the tree of what waits on what. The app
-/// decides nothing about either: it only draws them (`HomeLists`).
+/// The Director's Home read (`GET /api/v1/home`, `docs/control-api.md` § Slot entries and queue rows), as the queue's
+/// Home draws it (TP-1609, `docs/design/prototypes/home-queue/`): one entry per slot, from 1 to the slot count, and one
+/// page of the queue, every ticket that holds no slot in its stored order with its position. The app decides nothing
+/// about either: it only draws them.
 public struct HomeRead: Equatable {
     public static let path = "api/v1/home"
+    /// The rows a page asks for.
+    public static let pageSize = 100
+
+    /// The read of the page from `offset`, kept to the saved view `view` (a Tickets page's view id) when one is picked,
+    /// with the Recently done entries `done` asks for (TP-1644):
+    /// `api/v1/home?offset=0&limit=100&view=view-a1&done_range=week&done_offset=0&done_limit=50`. Without `done` the read
+    /// gives today's first entries.
+    public static func path(offset: Int, limit: Int = pageSize, view: String? = nil, done: DonePage? = nil) -> String {
+        var query = "offset=\(max(offset, 0))&limit=\(max(limit, 1))"
+        if let view, let escaped = view.addingPercentEncoding(withAllowedCharacters: .urlQueryValue) { query += "&view=\(escaped)" }
+        if let done { query += "&done_range=\(done.range.rawValue)&done_offset=\(max(done.offset, 0))&done_limit=\(max(done.limit, 1))" }
+        return "\(path)?\(query)"
+    }
+
+    // MARK: - Recently done (TP-1644)
+
+    /// The ranges Recently done reads: what finished since local midnight, or in the last 7 days.
+    public enum DoneRange: String, CaseIterable, Equatable {
+        case today, week
+
+        /// The word the range control shows.
+        public var title: String { self == .today ? "Today" : "Week" }
+    }
+
+    /// Which Recently done entries a read asks for: the `range`'s, from `offset`, at most `limit`.
+    public struct DonePage: Equatable {
+        public var range: DoneRange
+        public var offset: Int
+        public var limit: Int
+
+        public init(range: DoneRange, offset: Int = 0, limit: Int) {
+            self.range = range
+            self.offset = offset
+            self.limit = limit
+        }
+    }
+
+    /// A ticket's epic, as a done entry names it.
+    public struct EpicRef: Equatable {
+        public var identifier: String
+        public var title: String?
+
+        public init(identifier: String, title: String? = nil) {
+            self.identifier = identifier
+            self.title = title
+        }
+    }
+
+    /// A ticket Symphony saw reach done.
+    public struct DoneEntry: Equatable, Identifiable {
+        public var issueID: String?
+        public var identifier: String
+        public var title: String?
+        public var repoKey: String?
+        public var doneAt: Date?
+        public var pullRequestNumber: Int?
+        public var epic: EpicRef?
+
+        public var id: String { identifier }
+
+        public init(
+            issueID: String? = nil, identifier: String, title: String? = nil, repoKey: String? = nil, doneAt: Date? = nil,
+            pullRequestNumber: Int? = nil, epic: EpicRef? = nil
+        ) {
+            self.issueID = issueID
+            self.identifier = identifier
+            self.title = title
+            self.repoKey = repoKey
+            self.doneAt = doneAt
+            self.pullRequestNumber = pullRequestNumber
+            self.epic = epic
+        }
+    }
+
+    /// The read's Recently done: the range it gives, how many finished today and in the week, and one page of the
+    /// range's entries, most recent first.
+    public struct RecentlyDone: Equatable {
+        public var range: DoneRange
+        public var today: Int
+        public var week: Int
+        public var entries: [DoneEntry]
+        public var offset: Int
+        public var limit: Int
+        /// The next page's offset, nil on the last.
+        public var nextOffset: Int?
+
+        public init(
+            range: DoneRange = .today, today: Int = 0, week: Int = 0, entries: [DoneEntry] = [], offset: Int = 0, limit: Int = 50,
+            nextOffset: Int? = nil
+        ) {
+            self.range = range
+            self.today = today
+            self.week = week
+            self.entries = entries
+            self.offset = offset
+            self.limit = limit
+            self.nextOffset = nextOffset
+        }
+    }
 
     /// The move a ticket that waits on the Director offers: `answer` or `unblock`, as the ticket's `moves` judge it.
     public struct Move: Equatable, Decodable {
@@ -18,24 +117,98 @@ public struct HomeRead: Equatable {
             self.allowed = allowed
             self.reason = reason
         }
+
+        private enum CodingKeys: String, CodingKey { case name, allowed, reason }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            name = try container.decode(String.self, forKey: .name)
+            allowed = try container.decodeIfPresent(Bool.self, forKey: .allowed) ?? true
+            reason = try container.decodeIfPresent(String.self, forKey: .reason)
+        }
     }
 
-    /// A ticket in progress.
-    public struct Ticket: Equatable {
+    /// A stage of the ticket's lifecycle, as the ticket read's `lifecycle` gives it, without its times.
+    public struct Stage: Equatable {
+        public var id: String
+        public var name: String
+        /// `passed`, `current`, `paused`, `skipped` or `not_yet`.
+        public var state: String
+        public var tokens: Int
+
+        public init(id: String, name: String, state: String, tokens: Int = 0) {
+            self.id = id
+            self.name = name
+            self.state = state
+            self.tokens = tokens
+        }
+    }
+
+    /// The ticket's plan checks: how many are proved of how many, and the next open one.
+    public struct Checks: Equatable {
+        public var proved: Int
+        public var total: Int
+        public var next: String?
+
+        public init(proved: Int, total: Int, next: String? = nil) {
+            self.proved = proved
+            self.total = total
+            self.next = next
+        }
+    }
+
+    /// The ticket's pull request, as Symphony last read it.
+    public struct PullRequest: Equatable {
+        public var number: Int?
+        public var filesChanged: Int?
+        public var additions: Int?
+        public var deletions: Int?
+        public var branch: String?
+        /// `failed`, `running`, `passed`, or nil with no check.
+        public var ci: String?
+        /// GitHub's review state (`APPROVED`, `CHANGES_REQUESTED`, `REVIEW_REQUIRED`), nil with none.
+        public var reviewState: String?
+
+        public init(
+            number: Int? = nil, filesChanged: Int? = nil, additions: Int? = nil, deletions: Int? = nil, branch: String? = nil,
+            ci: String? = nil, reviewState: String? = nil
+        ) {
+            self.number = number
+            self.filesChanged = filesChanged
+            self.additions = additions
+            self.deletions = deletions
+            self.branch = branch
+            self.ci = ci
+            self.reviewState = reviewState
+        }
+    }
+
+    /// The ticket a slot holds: the card's data.
+    public struct SlotTicket: Equatable {
         public var issueID: String?
         public var identifier: String
         public var title: String?
         public var repoKey: String?
         public var phase: String?
         public var situation: Situation?
+        /// When it took the slot.
         public var since: Date?
-        /// Whether a run works on it now.
         public var working: Bool
+        public var waitsOnYou: Bool
         public var move: Move?
+        public var currentStage: String?
+        public var stages: [Stage]
+        public var tokens: Int
+        public var tokenBudget: Int?
+        public var plan: String?
+        public var checks: Checks?
+        public var pullRequest: PullRequest?
 
         public init(
             issueID: String? = nil, identifier: String, title: String? = nil, repoKey: String? = nil, phase: String? = nil,
-            situation: Situation? = nil, since: Date? = nil, working: Bool = false, move: Move? = nil
+            situation: Situation? = nil, since: Date? = nil, working: Bool = false, waitsOnYou: Bool = false, move: Move? = nil,
+            currentStage: String? = nil, stages: [Stage] = [], tokens: Int = 0, tokenBudget: Int? = nil, plan: String? = nil,
+            checks: Checks? = nil, pullRequest: PullRequest? = nil
         ) {
             self.issueID = issueID
             self.identifier = identifier
@@ -45,119 +218,419 @@ public struct HomeRead: Equatable {
             self.situation = situation
             self.since = since
             self.working = working
+            self.waitsOnYou = waitsOnYou
             self.move = move
+            self.currentStage = currentStage
+            self.stages = stages
+            self.tokens = tokens
+            self.tokenBudget = tokenBudget
+            self.plan = plan
+            self.checks = checks
+            self.pullRequest = pullRequest
         }
     }
 
-    /// An epic's tickets by state, which `total` sums.
-    public struct Counts: Equatable {
-        public var done: Int
-        public var inProgress: Int
-        public var needsPerson: Int
-        public var needsFix: Int
-        public var notStarted: Int
-
-        public init(done: Int = 0, inProgress: Int = 0, needsPerson: Int = 0, needsFix: Int = 0, notStarted: Int = 0) {
-            self.done = done
-            self.inProgress = inProgress
-            self.needsPerson = needsPerson
-            self.needsFix = needsFix
-            self.notStarted = notStarted
-        }
-    }
-
-    /// An epic with a ticket in progress, and those tickets.
-    public struct Epic: Equatable {
-        /// Nil when Symphony holds no record of the epic.
-        public var issueID: String?
-        public var identifier: String
-        public var title: String?
-        public var counts: Counts
-        public var total: Int
-        public var tickets: [Ticket]
-
-        public init(issueID: String? = nil, identifier: String, title: String? = nil, counts: Counts, total: Int, tickets: [Ticket]) {
-            self.issueID = issueID
-            self.identifier = identifier
-            self.title = title
-            self.counts = counts
-            self.total = total
-            self.tickets = tickets
-        }
-    }
-
-    /// One entry of `in_progress`: an epic's node, or a ticket with no epic.
-    public enum Entry: Equatable {
-        case epic(Epic)
-        case ticket(Ticket)
-    }
-
-    /// A queued ticket and the queued tickets that wait on it.
-    public struct QueueNode: Equatable {
+    /// The epic that holds a slot (TP-1646): its sub-tickets run through the slot one after another. Since when it holds
+    /// the slot, its sub-tickets done and in all, its done ones oldest first, and its open ones in queue order but the one
+    /// in work, each with its dependencies.
+    public struct SlotEpic: Equatable {
         public var issueID: String?
         public var identifier: String
         public var title: String?
         public var repoKey: String?
-        /// The ticket's epic's title, nil when it has none.
-        public var epic: String?
-        /// On a root, the ticket in progress it starts after.
-        public var after: String?
-        public var alsoWaitsOn: [String]
-        /// On a root that waits on nothing, where it stands; nil on every other node.
-        public var situation: Situation?
-        public var children: [QueueNode]
+        public var since: Date?
+        public var done: Int
+        public var total: Int
+        public var doneSubTickets: [DoneSubTicket]
+        public var openSubTickets: [Row]
 
         public init(
-            issueID: String? = nil, identifier: String, title: String? = nil, repoKey: String? = nil, epic: String? = nil,
-            after: String? = nil, alsoWaitsOn: [String] = [], situation: Situation? = nil, children: [QueueNode] = []
+            issueID: String? = nil, identifier: String, title: String? = nil, repoKey: String? = nil, since: Date? = nil, done: Int = 0,
+            total: Int = 0, doneSubTickets: [DoneSubTicket] = [], openSubTickets: [Row] = []
         ) {
             self.issueID = issueID
             self.identifier = identifier
             self.title = title
             self.repoKey = repoKey
+            self.since = since
+            self.done = done
+            self.total = total
+            self.doneSubTickets = doneSubTickets
+            self.openSubTickets = openSubTickets
+        }
+
+        /// The number of the open sub-ticket at `index`: the epic's count goes on past the done ones and the one in work,
+        /// so with 7 done the first to come is 9.
+        public func number(at index: Int) -> Int { done + 2 + index }
+    }
+
+    /// One slot: its number from 1, and its ticket; an empty slot holds none.
+    public struct Slot: Equatable, Identifiable {
+        public var number: Int
+        public var since: Date?
+        /// The epic whose slot it is, when the ticket runs through its epic's slot.
+        public var epic: SlotEpic?
+        public var ticket: SlotTicket?
+
+        public var id: Int { number }
+        public var isEmpty: Bool { ticket == nil }
+
+        public init(number: Int, since: Date? = nil, epic: SlotEpic? = nil, ticket: SlotTicket? = nil) {
+            self.number = number
+            self.since = since
             self.epic = epic
-            self.after = after
-            self.alsoWaitsOn = alsoWaitsOn
-            self.situation = situation
-            self.children = children
+            self.ticket = ticket
         }
     }
 
-    public var inProgress: [Entry]
-    public var queue: [QueueNode]
+    /// A stored dependency of a queue row (TP-1645): the ticket it waits for, whether it waits for that ticket to be
+    /// done or released, and whether that is met.
+    public struct Dependency: Equatable {
+        public enum Kind: String, Equatable {
+            case done, released
+        }
 
-    public init(inProgress: [Entry] = [], queue: [QueueNode] = []) {
-        self.inProgress = inProgress
-        self.queue = queue
+        public var issueID: String?
+        public var identifier: String
+        public var kind: Kind
+        public var met: Bool
+
+        public init(issueID: String? = nil, identifier: String, kind: Kind = .done, met: Bool = false) {
+            self.issueID = issueID
+            self.identifier = identifier
+            self.kind = kind
+            self.met = met
+        }
     }
+
+    /// An epic's sub-tickets: how many are done of how many (a cancelled one counts in neither).
+    public struct SubTickets: Equatable {
+        public var done: Int
+        public var total: Int
+
+        public init(done: Int, total: Int) {
+            self.done = done
+            self.total = total
+        }
+    }
+
+    /// An epic's done sub-ticket, as its queue row lists them, oldest first.
+    public struct DoneSubTicket: Equatable, Identifiable {
+        public var issueID: String?
+        public var identifier: String
+        public var title: String?
+        public var pullRequestNumber: Int?
+        public var doneAt: Date?
+
+        public var id: String { identifier }
+
+        public init(issueID: String? = nil, identifier: String, title: String? = nil, pullRequestNumber: Int? = nil, doneAt: Date? = nil) {
+            self.issueID = issueID
+            self.identifier = identifier
+            self.title = title
+            self.pullRequestNumber = pullRequestNumber
+            self.doneAt = doneAt
+        }
+    }
+
+    /// One row of the queue.
+    public struct Row: Equatable, Identifiable {
+        public var issueID: String?
+        public var identifier: String
+        public var title: String?
+        public var phase: String?
+        public var repoKey: String?
+        /// Its position, counted over the whole queue before the filter and the page: "6", "6.1".
+        public var number: String
+        public var parent: String?
+        public var situation: Situation?
+        public var waitsOnYou: Bool
+        public var move: Move?
+        /// Its stored dependencies (TP-1645), met or not, in their order.
+        public var dependencies: [Dependency]
+        /// An epic's sub-tickets done and in all; nil for a ticket with none.
+        public var subTickets: SubTickets?
+        /// An epic's done sub-tickets, oldest first.
+        public var doneSubTickets: [DoneSubTicket]
+
+        public var id: String { identifier }
+        /// Whether it is an epic: a ticket with sub-tickets.
+        public var isEpic: Bool { (subTickets?.total ?? 0) > 0 }
+        /// The dependencies it still waits for.
+        public var unmet: [Dependency] { dependencies.filter { !$0.met } }
+
+        public init(
+            issueID: String? = nil, identifier: String, title: String? = nil, phase: String? = nil, repoKey: String? = nil, number: String,
+            parent: String? = nil, situation: Situation? = nil, waitsOnYou: Bool = false, move: Move? = nil, dependencies: [Dependency] = [],
+            subTickets: SubTickets? = nil, doneSubTickets: [DoneSubTicket] = []
+        ) {
+            self.dependencies = dependencies
+            self.subTickets = subTickets
+            self.doneSubTickets = doneSubTickets
+            self.issueID = issueID
+            self.identifier = identifier
+            self.title = title
+            self.phase = phase
+            self.repoKey = repoKey
+            self.number = number
+            self.parent = parent
+            self.situation = situation
+            self.waitsOnYou = waitsOnYou
+            self.move = move
+        }
+    }
+
+    /// One page of the queue.
+    public struct QueuePage: Equatable {
+        public var rows: [Row]
+        /// The rows the filter keeps.
+        public var count: Int
+        /// The rows of the whole queue.
+        public var total: Int
+        public var offset: Int
+        public var limit: Int
+        /// The next page's offset, nil on the last.
+        public var nextOffset: Int?
+        /// The saved view the page was read with, nil without one.
+        public var view: String?
+
+        public init(rows: [Row] = [], count: Int? = nil, total: Int? = nil, offset: Int = 0, limit: Int = HomeRead.pageSize, nextOffset: Int? = nil, view: String? = nil) {
+            self.rows = rows
+            self.count = count ?? rows.count
+            self.total = total ?? count ?? rows.count
+            self.offset = offset
+            self.limit = limit
+            self.nextOffset = nextOffset
+            self.view = view
+        }
+    }
+
+    /// The slot count the engine runs.
+    public var slotCount: Int
+    /// One entry per slot, in number order.
+    public var slots: [Slot]
+    public var queue: QueuePage
+    /// Recently done, nil from a read without it.
+    public var recentlyDone: RecentlyDone?
+
+    public init(slotCount: Int? = nil, slots: [Slot] = [], queue: QueuePage = QueuePage(), recentlyDone: RecentlyDone? = nil) {
+        self.slotCount = slotCount ?? slots.count
+        self.slots = slots
+        self.queue = queue
+        self.recentlyDone = recentlyDone
+    }
+
+    /// The tickets that hold a slot.
+    public var slotted: Set<String> { Set(slots.compactMap { $0.ticket?.identifier }) }
 
     /// The read's JSON; nil for anything else.
     public static func decode(_ data: Data) -> HomeRead? {
         guard let wire = try? JSONDecoder().decode(Wire.self, from: data) else { return nil }
-        return HomeRead(inProgress: wire.inProgress.map(\.entry), queue: wire.queue.roots.map(\.node))
+        let entries = wire.slots?.entries ?? []
+        let slots = entries.map(\.model).sorted { $0.number < $1.number }
+        let queue = wire.queue ?? WireQueue()
+        // The read keeps a ticket that holds a slot out of the rows; the rows keep their places in the list.
+        let rows = (queue.rows ?? []).map(\.row)
+        return HomeRead(
+            slotCount: wire.slots?.total ?? slots.count,
+            slots: slots,
+            queue: QueuePage(
+                rows: rows, count: queue.count, total: queue.total, offset: queue.offset ?? 0, limit: queue.limit ?? pageSize,
+                nextOffset: queue.nextOffset, view: queue.view
+            ),
+            recentlyDone: wire.recentlyDone?.model
+        )
     }
+}
+
+extension CharacterSet {
+    /// What a query value keeps as it is: the URL query characters but the ones that separate its parts.
+    static let urlQueryValue = CharacterSet.urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&=+#?"))
 }
 
 // MARK: - The wire
 
 private struct Wire: Decodable {
-    var inProgress: [WireEntry]
-    var queue: WireQueue
+    var slots: WireSlots?
+    var queue: WireQueue?
+    var recentlyDone: WireRecentlyDone?
 
-    enum CodingKeys: String, CodingKey { case inProgress = "in_progress", queue }
+    enum CodingKeys: String, CodingKey { case slots, queue, recentlyDone = "recently_done" }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        inProgress = try container.decodeIfPresent([WireEntry].self, forKey: .inProgress) ?? []
-        queue = try container.decodeIfPresent(WireQueue.self, forKey: .queue) ?? WireQueue(roots: [])
+        slots = try container.decodeIfPresent(WireSlots.self, forKey: .slots)
+        queue = try container.decodeIfPresent(WireQueue.self, forKey: .queue)
+        // A block that doesn't read leaves the rest of Home to show.
+        recentlyDone = (try? container.decodeIfPresent(WireRecentlyDone.self, forKey: .recentlyDone)) ?? nil
     }
 }
 
-private struct WireQueue: Decodable {
-    var roots: [WireNode]
+private struct WireRecentlyDone: Decodable {
+    struct Counts: Decodable {
+        var today: Int?
+        var week: Int?
+    }
+
+    struct Entry: Decodable {
+        var issueID: String?
+        var identifier: String
+        var title: String?
+        var repoKey: String?
+        var doneAt: String?
+        var pullRequestNumber: Int?
+        var epic: WireEpicRef?
+
+        enum CodingKeys: String, CodingKey {
+            case issueID = "issue_id", identifier, title, repoKey = "repo_key", doneAt = "done_at", pullRequestNumber = "pull_request_number", epic
+        }
+
+        var entry: HomeRead.DoneEntry {
+            HomeRead.DoneEntry(
+                issueID: issueID, identifier: identifier, title: title, repoKey: repoKey, doneAt: doneAt.flatMap(SymphonyState.parseDate),
+                pullRequestNumber: pullRequestNumber, epic: epic?.identifier.map { HomeRead.EpicRef(identifier: $0, title: epic?.title) }
+            )
+        }
+    }
+
+    var range: String?
+    var counts: Counts?
+    var entries: [Entry]?
+    var offset: Int?
+    var limit: Int?
+    var nextOffset: Int?
+
+    enum CodingKeys: String, CodingKey { case range, counts, entries, offset, limit, nextOffset = "next_offset" }
+
+    var model: HomeRead.RecentlyDone {
+        HomeRead.RecentlyDone(
+            range: range.flatMap(HomeRead.DoneRange.init(rawValue:)) ?? .today, today: counts?.today ?? 0, week: counts?.week ?? 0,
+            entries: (entries ?? []).map(\.entry), offset: offset ?? 0, limit: limit ?? 50, nextOffset: nextOffset
+        )
+    }
 }
 
-private struct WireTicket: Decodable {
+private struct WireSlots: Decodable {
+    var total: Int?
+    var entries: [WireSlot]?
+}
+
+private struct WireEpicRef: Decodable {
+    var identifier: String?
+    var title: String?
+}
+
+private struct WireSlot: Decodable {
+    var slot: Int
+    var since: String?
+    var epic: WireSlotEpic?
+    var ticket: WireSlotTicket?
+
+    enum CodingKeys: String, CodingKey { case slot, since, epic, ticket }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        slot = try container.decode(Int.self, forKey: .slot)
+        since = try container.decodeIfPresent(String.self, forKey: .since)
+        // An epic that doesn't read leaves the slot's card to show without it.
+        epic = (try? container.decodeIfPresent(WireSlotEpic.self, forKey: .epic)) ?? nil
+        ticket = try container.decodeIfPresent(WireSlotTicket.self, forKey: .ticket)
+    }
+
+    var model: HomeRead.Slot {
+        HomeRead.Slot(number: slot, since: since.flatMap(SymphonyState.parseDate), epic: epic?.epic, ticket: ticket?.ticket)
+    }
+}
+
+/// A slot's epic (TP-1646, `SymphonyElixir.Home.Slots`): its done sub-tickets oldest first, its open ones in queue order.
+private struct WireSlotEpic: Decodable {
+    var issueID: String?
+    var identifier: String?
+    var title: String?
+    var repoKey: String?
+    var since: String?
+    var done: Int?
+    var total: Int?
+    var doneSubTickets: [WireDoneSubTicket]?
+    var openSubTickets: [WireRow]?
+
+    enum CodingKeys: String, CodingKey {
+        case issueID = "issue_id", identifier, title, repoKey = "repo_key", since, done, total, doneSubTickets = "done_sub_tickets",
+             openSubTickets = "open_sub_tickets"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        issueID = try container.decodeIfPresent(String.self, forKey: .issueID)
+        identifier = try container.decodeIfPresent(String.self, forKey: .identifier)
+        title = try container.decodeIfPresent(String.self, forKey: .title)
+        repoKey = try container.decodeIfPresent(String.self, forKey: .repoKey)
+        since = try container.decodeIfPresent(String.self, forKey: .since)
+        done = try container.decodeIfPresent(Int.self, forKey: .done)
+        total = try container.decodeIfPresent(Int.self, forKey: .total)
+        // A list that doesn't read leaves the band to show without it.
+        doneSubTickets = (try? container.decodeIfPresent([WireDoneSubTicket].self, forKey: .doneSubTickets)) ?? nil
+        openSubTickets = (try? container.decodeIfPresent([WireRow].self, forKey: .openSubTickets)) ?? nil
+    }
+
+    /// The epic, nil for one that names no ticket.
+    var epic: HomeRead.SlotEpic? {
+        guard let name = identifier ?? issueID else { return nil }
+        return HomeRead.SlotEpic(
+            issueID: issueID, identifier: name, title: title, repoKey: repoKey, since: since.flatMap(SymphonyState.parseDate), done: done ?? 0,
+            total: total ?? 0, doneSubTickets: (doneSubTickets ?? []).compactMap(\.ticket), openSubTickets: (openSubTickets ?? []).map(\.row)
+        )
+    }
+}
+
+private struct WireStage: Decodable {
+    var id: String
+    var name: String?
+    var state: String?
+    var tokens: Int?
+}
+
+private struct WireChecks: Decodable {
+    struct Next: Decodable {
+        var statement: String?
+    }
+
+    var proved: Int?
+    var total: Int?
+    var next: Next?
+}
+
+private struct WireTokens: Decodable {
+    var used: Int?
+    var budget: Int?
+}
+
+private struct WirePlan: Decodable {
+    var summary: String?
+}
+
+private struct WirePullRequest: Decodable {
+    var number: Int?
+    var filesChanged: Int?
+    var additions: Int?
+    var deletions: Int?
+    var branch: String?
+    var ci: String?
+    var reviewState: String?
+
+    enum CodingKeys: String, CodingKey {
+        case number, filesChanged = "files_changed", additions, deletions, branch, ci, reviewState = "review_state"
+    }
+
+    var pullRequest: HomeRead.PullRequest {
+        HomeRead.PullRequest(
+            number: number, filesChanged: filesChanged, additions: additions, deletions: deletions, branch: branch, ci: ci,
+            reviewState: reviewState
+        )
+    }
+}
+
+private struct WireSlotTicket: Decodable {
     var issueID: String?
     var identifier: String
     var title: String?
@@ -166,265 +639,153 @@ private struct WireTicket: Decodable {
     var situation: Situation?
     var since: String?
     var working: Bool?
+    var waitsOnYou: Bool?
     var move: HomeRead.Move?
+    var currentStage: String?
+    var stages: [WireStage]?
+    var tokens: WireTokens?
+    var plan: WirePlan?
+    var checks: WireChecks?
+    var pullRequest: WirePullRequest?
 
     enum CodingKeys: String, CodingKey {
-        case issueID = "issue_id", identifier, title, repoKey = "repo_key", phase, situation, since, working, move
+        case issueID = "issue_id", identifier, title, repoKey = "repo_key", phase, situation, since, working, waitsOnYou = "waits_on_you",
+             move, currentStage = "current_stage", stages, tokens, plan, checks, pullRequest = "pull_request"
     }
 
-    var ticket: HomeRead.Ticket {
-        HomeRead.Ticket(
+    var ticket: HomeRead.SlotTicket {
+        HomeRead.SlotTicket(
             issueID: issueID, identifier: identifier, title: title, repoKey: repoKey, phase: phase, situation: situation,
-            since: since.flatMap(SymphonyState.parseDate) ?? situation?.since, working: working ?? false, move: move
+            since: since.flatMap(SymphonyState.parseDate), working: working ?? false,
+            waitsOnYou: waitsOnYou ?? (situation?.kind == .you), move: move, currentStage: currentStage,
+            stages: (stages ?? []).map { HomeRead.Stage(id: $0.id, name: $0.name ?? $0.id, state: $0.state ?? "not_yet", tokens: $0.tokens ?? 0) },
+            tokens: tokens?.used ?? 0, tokenBudget: tokens?.budget, plan: plan?.summary,
+            checks: checks.map { HomeRead.Checks(proved: $0.proved ?? 0, total: $0.total ?? 0, next: $0.next?.statement) },
+            pullRequest: pullRequest?.pullRequest
         )
     }
 }
 
-private struct WireCounts: Decodable {
-    var done: Int?
-    var inProgress: Int?
-    var needsPerson: Int?
-    var needsFix: Int?
-    var notStarted: Int?
+private struct WireQueue: Decodable {
+    var rows: [WireRow]?
+    var count: Int?
+    var total: Int?
+    var offset: Int?
+    var limit: Int?
+    var nextOffset: Int?
+    var view: String?
 
-    enum CodingKeys: String, CodingKey {
-        case done, inProgress = "in_progress", needsPerson = "needs_person", needsFix = "needs_fix", notStarted = "not_started"
-    }
+    enum CodingKeys: String, CodingKey { case rows, count, total, offset, limit, nextOffset = "next_offset", view }
 
-    var counts: HomeRead.Counts {
-        HomeRead.Counts(
-            done: done ?? 0, inProgress: inProgress ?? 0, needsPerson: needsPerson ?? 0, needsFix: needsFix ?? 0,
-            notStarted: notStarted ?? 0
-        )
-    }
-}
-
-private struct WireEntry: Decodable {
-    var entry: HomeRead.Entry
-
-    enum CodingKeys: String, CodingKey { case kind, issueID = "issue_id", identifier, title, counts, total, tickets }
+    init() {}
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        guard try container.decodeIfPresent(String.self, forKey: .kind) == "epic" else {
-            entry = .ticket(try WireTicket(from: decoder).ticket)
-            return
-        }
-        let counts = (try container.decodeIfPresent(WireCounts.self, forKey: .counts))?.counts ?? HomeRead.Counts()
-        let tickets = try container.decodeIfPresent([WireTicket].self, forKey: .tickets) ?? []
-        let sum = counts.done + counts.inProgress + counts.needsPerson + counts.needsFix + counts.notStarted
-        entry = .epic(HomeRead.Epic(
-            issueID: try container.decodeIfPresent(String.self, forKey: .issueID),
-            identifier: try container.decode(String.self, forKey: .identifier),
-            title: try container.decodeIfPresent(String.self, forKey: .title),
-            counts: counts,
-            total: try container.decodeIfPresent(Int.self, forKey: .total) ?? sum,
-            tickets: tickets.map(\.ticket)
-        ))
+        rows = try container.decodeIfPresent([WireRow].self, forKey: .rows)
+        count = try container.decodeIfPresent(Int.self, forKey: .count)
+        total = try container.decodeIfPresent(Int.self, forKey: .total)
+        offset = try container.decodeIfPresent(Int.self, forKey: .offset)
+        limit = try container.decodeIfPresent(Int.self, forKey: .limit)
+        nextOffset = try container.decodeIfPresent(Int.self, forKey: .nextOffset)
+        // The view read back is its id, or the view itself.
+        view = (try? container.decodeIfPresent(String.self, forKey: .view)) ?? nil
     }
 }
 
-private struct WireEpicRef: Decodable {
-    var identifier: String?
-    var title: String?
-}
-
-private struct WireNode: Decodable {
+private struct WireRow: Decodable {
     var issueID: String?
     var identifier: String
     var title: String?
+    var phase: String?
     var repoKey: String?
-    var epic: WireEpicRef?
-    var after: String?
-    var alsoWaitsOn: [String]?
+    var number: String
+    var parent: String?
     var situation: Situation?
-    var children: [WireNode]?
+    var waitsOnYou: Bool?
+    var move: HomeRead.Move?
+    var dependencies: [WireDependency]?
+    var subTickets: WireSubTickets?
+    var doneSubTickets: [WireDoneSubTicket]?
 
     enum CodingKeys: String, CodingKey {
-        case issueID = "issue_id", identifier, title, repoKey = "repo_key", epic, after, alsoWaitsOn = "also_waits_on", situation,
-             children
+        case issueID = "issue_id", identifier, title, phase, repoKey = "repo_key", number, path, parent, situation,
+             waitsOnYou = "waits_on_you", move, dependencies, subTickets = "sub_tickets", doneSubTickets = "done_sub_tickets"
     }
 
-    var node: HomeRead.QueueNode {
-        HomeRead.QueueNode(
-            issueID: issueID, identifier: identifier, title: title, repoKey: repoKey, epic: epic?.title ?? epic?.identifier,
-            after: after, alsoWaitsOn: alsoWaitsOn ?? [], situation: situation, children: (children ?? []).map(\.node)
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        issueID = try container.decodeIfPresent(String.self, forKey: .issueID)
+        identifier = try container.decode(String.self, forKey: .identifier)
+        title = try container.decodeIfPresent(String.self, forKey: .title)
+        phase = try container.decodeIfPresent(String.self, forKey: .phase)
+        repoKey = try container.decodeIfPresent(String.self, forKey: .repoKey)
+        // "6.1", or a whole number; else from its path.
+        if let text = try? container.decode(String.self, forKey: .number) {
+            number = text
+        } else if let whole = try? container.decode(Int.self, forKey: .number) {
+            number = String(whole)
+        } else {
+            number = ((try? container.decode([Int].self, forKey: .path)) ?? []).map(String.init).joined(separator: ".")
+        }
+        parent = try container.decodeIfPresent(String.self, forKey: .parent)
+        situation = try? container.decodeIfPresent(Situation.self, forKey: .situation)
+        waitsOnYou = try container.decodeIfPresent(Bool.self, forKey: .waitsOnYou)
+        move = try? container.decodeIfPresent(HomeRead.Move.self, forKey: .move)
+        // A part that doesn't read leaves the row to show without it.
+        dependencies = (try? container.decodeIfPresent([WireDependency].self, forKey: .dependencies)) ?? nil
+        subTickets = (try? container.decodeIfPresent(WireSubTickets.self, forKey: .subTickets)) ?? nil
+        doneSubTickets = (try? container.decodeIfPresent([WireDoneSubTicket].self, forKey: .doneSubTickets)) ?? nil
+    }
+
+    var row: HomeRead.Row {
+        HomeRead.Row(
+            issueID: issueID, identifier: identifier, title: title, phase: phase, repoKey: repoKey, number: number, parent: parent,
+            situation: situation, waitsOnYou: waitsOnYou ?? (situation?.kind == .you), move: move,
+            dependencies: (dependencies ?? []).compactMap(\.dependency),
+            subTickets: subTickets.map { HomeRead.SubTickets(done: $0.done ?? 0, total: $0.total ?? 0) },
+            doneSubTickets: (doneSubTickets ?? []).compactMap(\.ticket)
         )
     }
 }
 
-// MARK: - The page
+private struct WireDependency: Decodable {
+    var issueID: String?
+    var identifier: String?
+    var kind: String?
+    var met: Bool?
 
-/// Home as it is drawn (TP-1499, `docs/design/director-window-and-home.md` § Home): two tree lists of one-line rows,
-/// "In progress" and "Queue", each left out when it has no entry. Every row is keyed by its ticket's identifier.
-public struct HomeLists: Equatable {
-    public static let progressTitle = "In progress"
-    public static let queueTitle = "Queue"
-    /// While the first read is on its way.
-    public static let reading = "Reading Home…"
-    /// A read that came back and doesn't decode.
-    public static let unreadable = "Symphony's Home read doesn't read."
-    /// The failure symbol of the Empty state Home shows while it has no read to show.
-    public static let failureSymbol = "exclamationmark.triangle"
+    enum CodingKeys: String, CodingKey { case issueID = "issue_id", identifier, kind, met }
 
-    /// What `result`, a Home read that gave no Home to show, tells the page: `unsupported` for an older Symphony's
-    /// 404, its failure for one that got no answer, and `unreadable` for a body that came and doesn't decode.
-    public static func failure(after result: ConditionalResult) -> EndpointResult {
-        if case let .changed(answer, _) = result {
-            switch answer {
-            case .loaded: break
-            case .unsupported, .failed: return answer
-            }
-        }
-        return .failed(unreadable)
-    }
-
-    /// One row of either list.
-    public struct Row: Equatable, Identifiable {
-        /// What the row starts with: the live dot while a run works, the situation's glyph, the clock of a ticket that
-        /// waits in the queue, or the epic's glyph.
-        public enum Lead: Equatable {
-            case live
-            case status(DesignTokens.Status)
-            case waiting
-            case epic
-        }
-
-        /// The situation as a small badge.
-        public struct Badge: Equatable {
-            public var status: DesignTokens.Status
-            public var word: String
-        }
-
-        /// The move on a ticket that needs the Director: its title and the move the read names.
-        public struct Move: Equatable {
-            public var name: String
-            public var title: String
-            /// Why it can't act now; nil when it can.
-            public var reason: String?
-        }
-
-        public var identifier: String
-        public var issueID: String?
-        public var title: String
-        public var lead: Lead
-        /// "TP-1480": the ticket in progress a queue root starts after.
-        public var after: String?
-        /// The epic's chip, in the queue.
-        public var epic: String?
-        public var badge: Badge?
-        public var move: Move?
-        /// How long the situation has held, or an epic's "4 of 9".
-        public var value: String?
-        /// An epic's progress strip.
-        public var strip: [DesignTokens.ProgressStrip.Item]?
-
-        public var id: String { identifier }
-        public var isEpic: Bool { lead == .epic }
-
-        /// "Starts when TP-1480 lands": the help of the ticket a root comes after.
-        public static func afterHelp(_ identifier: String) -> String { "Starts when \(identifier) lands" }
-    }
-
-    public var progress: [TreeNode<String>]
-    public var queue: [TreeNode<String>]
-    public var rows: [String: Row]
-    /// What holds the whole factory, one line each above the lists (TP-1515): "Agents can't sign in to Claude since
-    /// Nov 13, 09:46 (Failed to authenticate. …): new runs wait until Nov 13, 10:01." Empty when nothing does.
-    public var notices: [String]
-
-    public init(progress: [TreeNode<String>] = [], queue: [TreeNode<String>] = [], rows: [String: Row] = [:], notices: [String] = []) {
-        self.progress = progress
-        self.queue = queue
-        self.rows = rows
-        self.notices = notices
-    }
-
-    /// Home's lines for a provider that refuses the agents' sign-in, one per hold, from `snapshot`: the provider's
-    /// message and since when. A hold its probe is checking (canary) is lifting, so it has no line.
-    public static func notices(_ snapshot: StateSnapshot, reference: Date, timeZone: TimeZone = .current) -> [String] {
-        snapshot.usageLimits.filter { $0.isSignInFailure && $0.phase != .canary }.map { limit in
-            Overview.signInSentence(
-                limit, what: StatusMenu.apiUnreachableName(limit), when: Overview.untilPhrase(limit, reference: reference, timeZone: timeZone),
-                reference: reference, timeZone: timeZone
-            )
-        }
-    }
-
-    /// The lists of `read`, with `notices` above them; ages are measured against `reference`, Symphony's own clock.
-    public init(read: HomeRead, reference: Date, notices: [String] = []) {
-        self.notices = notices
-        var rows: [String: Row] = [:]
-        progress = read.inProgress.map { entry in
-            switch entry {
-            case let .ticket(ticket):
-                rows[ticket.identifier] = Self.row(ticket, reference: reference)
-                return TreeNode(ticket.identifier)
-            case let .epic(epic):
-                rows[epic.identifier] = Self.row(epic)
-                for ticket in epic.tickets { rows[ticket.identifier] = Self.row(ticket, reference: reference) }
-                return TreeNode(epic.identifier, children: epic.tickets.map { TreeNode($0.identifier) })
-            }
-        }
-        func walk(_ node: HomeRead.QueueNode) -> TreeNode<String> {
-            rows[node.identifier] = Self.row(node, reference: reference)
-            return TreeNode(node.identifier, children: node.children.map(walk))
-        }
-        queue = read.queue.map(walk)
-        self.rows = rows
-    }
-
-    public func row(_ identifier: String) -> Row? { rows[identifier] }
-
-    /// Whether neither list has an entry.
-    public var isEmpty: Bool { progress.isEmpty && queue.isEmpty }
-
-    static func row(_ ticket: HomeRead.Ticket, reference: Date) -> Row {
-        let lead: Row.Lead = ticket.working ? .live : ticket.situation.map { .status($0.kind.status) } ?? .waiting
-        return Row(
-            identifier: ticket.identifier, issueID: ticket.issueID, title: ticket.title ?? ticket.identifier, lead: lead,
-            badge: ticket.situation.map(badge), move: ticket.move.map(move), value: age(ticket.since, reference: reference)
+    /// The dependency, nil for one that names no ticket.
+    var dependency: HomeRead.Dependency? {
+        guard let name = identifier ?? issueID else { return nil }
+        return HomeRead.Dependency(
+            issueID: issueID, identifier: name, kind: kind.flatMap(HomeRead.Dependency.Kind.init(rawValue:)) ?? .done, met: met ?? false
         )
     }
+}
 
-    static func row(_ epic: HomeRead.Epic) -> Row {
-        Row(
-            identifier: epic.identifier, issueID: epic.issueID, title: epic.title ?? epic.identifier, lead: .epic,
-            value: "\(epic.counts.done) of \(epic.total)", strip: strip(epic.counts)
+private struct WireSubTickets: Decodable {
+    var done: Int?
+    var total: Int?
+}
+
+private struct WireDoneSubTicket: Decodable {
+    var issueID: String?
+    var identifier: String?
+    var title: String?
+    var pullRequestNumber: Int?
+    var doneAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case issueID = "issue_id", identifier, title, pullRequestNumber = "pull_request_number", doneAt = "done_at"
+    }
+
+    /// The done sub-ticket, nil for one that names no ticket.
+    var ticket: HomeRead.DoneSubTicket? {
+        guard let name = identifier ?? issueID else { return nil }
+        return HomeRead.DoneSubTicket(
+            issueID: issueID, identifier: name, title: title, pullRequestNumber: pullRequestNumber, doneAt: doneAt.flatMap(SymphonyState.parseDate)
         )
-    }
-
-    static func row(_ node: HomeRead.QueueNode, reference: Date) -> Row {
-        Row(
-            identifier: node.identifier, issueID: node.issueID, title: node.title ?? node.identifier,
-            lead: node.situation.map { .status($0.kind.status) } ?? .waiting, after: node.after, epic: node.epic,
-            badge: node.situation.map(badge), value: age(node.situation?.since, reference: reference)
-        )
-    }
-
-    static func badge(_ situation: Situation) -> Row.Badge {
-        Row.Badge(status: situation.kind.status, word: situation.word)
-    }
-
-    static func move(_ move: HomeRead.Move) -> Row.Move {
-        let title = TicketActionRail.Move(rawValue: move.name)?.title ?? move.name.capitalized
-        return Row.Move(name: move.name, title: title, reason: move.allowed ? nil : (move.reason ?? TicketActionRail.unknownReason))
-    }
-
-    /// "14 min": how long since `since`, nil without one.
-    static func age(_ since: Date?, reference: Date) -> String? {
-        since.map { Overview.duration(Int(reference.timeIntervalSince($0))) }
-    }
-
-    /// An epic's strip: its done tickets, those waiting on the Director, those to fix, those in progress (breathing),
-    /// then those not started, one segment each.
-    static func strip(_ counts: HomeRead.Counts) -> [DesignTokens.ProgressStrip.Item] {
-        let parts: [(DesignTokens.Status?, Int)] = [
-            (.done, counts.done), (.you, counts.needsPerson), (.problem, counts.needsFix), (.working, counts.inProgress),
-            (nil, counts.notStarted),
-        ]
-        return parts.flatMap { status, count in
-            Array(repeating: DesignTokens.ProgressStrip.Item(status, live: status == .working), count: max(count, 0))
-        }
     }
 }
