@@ -572,7 +572,9 @@ defmodule SymphonyElixir.AgentTools.TicketLedgerTest do
 
         # Every field the catalog gives an agent is in the line, and none it never may send: the
         # machinery's signal, a note's status, and a machine or orchestrated step's own fields.
-        not_agents = [:signal, :signal_details] ++ if(type == "note", do: [:status], else: []) ++ if(type == "step.started", do: [:command, :prompt_ref], else: [])
+        note_only = if(type == "note", do: [:status], else: [])
+        step_only = if(type == "step.started", do: [:command, :prompt_ref], else: [])
+        not_agents = [:signal, :signal_details] ++ note_only ++ step_only
 
         for {name, _spec} <- required, do: assert(line =~ "#{name}: ", "#{type}.#{name}")
         for {name, _spec} <- optional, name not in not_agents, do: assert(line =~ "#{name}?: ", "#{type}.#{name}")

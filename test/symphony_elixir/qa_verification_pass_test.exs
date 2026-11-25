@@ -1242,7 +1242,12 @@ defmodule SymphonyElixir.QaVerificationPassTest do
       assert :ok = run(workspace, run_id: "run-qa-4")
 
       assert [
-               %{type: "evidence", payload: %{caption: "Step 1: pass", result: %{status: "pass", actual: "ok"}}, artifacts: [@home], actor: %{kind: :agent, run_kind: "qa"}},
+               %{
+                 type: "evidence",
+                 payload: %{caption: "Step 1: pass", result: %{status: "pass", actual: "ok"}},
+                 artifacts: [@home],
+                 actor: %{kind: :agent, run_kind: "qa"}
+               },
                # A step that said nothing of what it saw has an answer with its status alone.
                %{type: "evidence", payload: %{caption: "Step 2: skipped", result: %{status: "skipped"} = no_details}, artifacts: []},
                %{type: "evidence", payload: %{caption: "QA session transcript"}, artifacts: [@transcript], idempotency: "evidence:run-qa-4:3"},

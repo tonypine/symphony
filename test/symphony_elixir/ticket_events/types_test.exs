@@ -311,7 +311,8 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
                evidence.(%{caption: "Step 2: fail", step: "Step 2", result: %{status: "fail", actual: "Empty"}, environment: "live", links: ["https://ci.test/run/1"]})
 
       # A step's answer is its `result`: the loose `status` and `details` are not taken any more.
-      assert {:error, {:invalid_payload, [:details, :status]}} = evidence.(%{caption: "Step 2: fail", step: "Step 2", status: "fail", details: "Empty"})
+      loose = %{caption: "Step 2: fail", step: "Step 2", status: "fail", details: "Empty"}
+      assert {:error, {:invalid_payload, [:details, :status]}} = evidence.(loose)
 
       assert {:error, {:invalid_payload, [:environment]}} = evidence.(%{caption: "Step 2", environment: "staging"})
 
@@ -678,8 +679,15 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       too_long_summary = String.duplicate("a", 601)
       assert {:error, {:invalid_payload, [:verdict_summary]}} = completed.(%{verdict_summary: too_long_summary})
 
-      assert %{type: "map", fields: [%{name: "status", type: "enum"}, %{name: "expected", max: 1_500, optional: true}, %{name: "actual", optional: true}, %{name: "measures"}]} =
-               Enum.find(Types.schema("step.completed").optional, &(&1.name == "result"))
+      assert %{
+               type: "map",
+               fields: [
+                 %{name: "status", type: "enum"},
+                 %{name: "expected", max: 1_500, optional: true},
+                 %{name: "actual", optional: true},
+                 %{name: "measures"}
+               ]
+             } = Enum.find(Types.schema("step.completed").optional, &(&1.name == "result"))
 
       assert %{type: "list", item: %{type: "map", fields: [_title, %{name: "do", type: "list"}, _expect, %{name: "design", max: 600}]}} =
                Enum.find(Types.schema("step.completed").optional, &(&1.name == "recheck"))
@@ -739,7 +747,9 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
 
       assert {:error, {:invalid_payload, [:measures]}} = evidence.(width)
       assert {:error, {:invalid_payload, [:measures]}} = evidence.(List.duplicate(width, 21))
-      assert Types.measure_spec() == {:map, [name: {:string, 200}, value: :number, unit: {:string, 40}, expected: {:optional, :number}]}
+
+      assert Types.measure_spec() ==
+               {:map, [name: {:string, 200}, value: :number, unit: {:string, 40}, expected: {:optional, :number}]}
     end
 
     test "a QA step's answer carries its measured values in the same shape, on step.completed and on evidence" do
@@ -754,7 +764,8 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       bad = %{answer | measures: [%{measure | value: "22"}]}
       assert {:error, {:invalid_payload, [:result]}} = Types.validate("step.completed", Map.put(completed, :result, bad), :machine, nil)
       assert {:error, {:invalid_payload, [:result]}} = Types.validate("evidence", %{caption: "Step 2", result: bad}, :agent, "qa")
-      assert {:error, {:invalid_payload, [:result]}} = Types.validate("evidence", %{caption: "Step 2", result: %{answer | status: "great"}}, :agent, "qa")
+      great = %{caption: "Step 2", result: %{answer | status: "great"}}
+      assert {:error, {:invalid_payload, [:result]}} = Types.validate("evidence", great, :agent, "qa")
       assert {:map, [status: _, expected: _, actual: _, measures: _]} = Types.step_answer_spec()
     end
   end

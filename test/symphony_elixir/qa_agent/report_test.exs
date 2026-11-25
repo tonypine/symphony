@@ -95,7 +95,12 @@ defmodule SymphonyElixir.QaAgent.ReportTest do
 
     test "reads a step's status and what QA saw from its stored answer, and the earlier fields from older evidence (TP-1680)" do
       events = [
-        event("n1", "evidence", @second, %{caption: "Step 1: fail", step: "Step 1 Open the page", result: %{status: "fail", expected: "Rows", actual: "$ qa_screenshot\nno rows"}, environment: "live"}),
+        event("n1", "evidence", @second, %{
+          caption: "Step 1: fail",
+          step: "Step 1 Open the page",
+          result: %{status: "fail", expected: "Rows", actual: "$ qa_screenshot\nno rows"},
+          environment: "live"
+        }),
         event("n2", "evidence", @second, %{caption: "Step 2: pass", step: "Step 2 Read the list", result: %{status: "pass"}}),
         # Written before the answer had one shape: status and details beside the step.
         evidence("n3", @second, %{step: "Step 3 Remove it", status: "blocked", details: "no seed"})
