@@ -387,6 +387,29 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       assert review.prompt =~ "Quit 4242: qa_no_app: gone"
     end
 
+    test "the plan is given each walked step's setting from its plan check as facts, and told to use them", ctx do
+      live = %{source: "live", page: "Home", window: %{width: 1440, height: 900}, appearance: "light"}
+      fixture = %{source: "fixture", fixture: "macos/Tests/Fixtures/director-app", page: "Inbox", window: %{width: 2560, height: 1440}, appearance: "dark"}
+      [one, two, three] = walkthrough([1, 2, 3])
+      steps = [Map.merge(one, %{check_id: "c2", setting: live}), Map.merge(two, %{check_id: "c3", setting: fixture}), three]
+      answers(%{"plan" => [{:write, plan([1, 2, 3])}], "review" => [{:verdict, @pass}]})
+
+      assert {:ok, _result} = run(ctx, %{journey: %{source: "the plan", text: "", steps: steps}}, [], [plan_step(), review()])
+      [plan_turn, _review] = turns()
+
+      assert plan_turn.prompt =~
+               "- Step 1: Step 1: open page 1.\n  Setting (from the plan; use it as given): source: live (the live server, `environment: live`); " <>
+                 "page: Home; window: 1440×900; appearance: light"
+
+      assert plan_turn.prompt =~
+               "- Step 2: Step 2: open page 2.\n  Setting (from the plan; use it as given): source: fixture `macos/Tests/Fixtures/director-app` " <>
+                 "(`environment: fixture`, `api_fixtures: macos/Tests/Fixtures/director-app`); page: Inbox; window: 2560×1440; appearance: dark"
+
+      assert plan_turn.prompt =~ "- Step 3: Step 3: open page 3.\n  Setting: none in the plan; work out where and how to launch, on fixtures."
+      # The plan's own prompt tells it to use the facts and never work them out.
+      assert plan_turn.prompt =~ "Use that setting as given and\n  never work it out"
+    end
+
     test "the plan reads the gallery's error, and a pass with no driver reads none", ctx do
       tools = Application.get_env(:symphony_elixir, @tools)
       Application.put_env(:symphony_elixir, @tools, Map.put(tools, "qa_gallery", {:error, {:qa_tool, "qa_no_build", "no gallery"}}))

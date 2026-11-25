@@ -16,6 +16,9 @@ defmodule SymphonyElixir.TicketJourney do
       walkthrough step's recorded proof is (CI runs the test and gates the merge): QA does not walk
       it, and walks every other `qa` check on each head it judges. A waived check is nobody's to prove, so it is no step and no
       criterion;
+    * a `qa` check's `setting` (where it is walked: a fixture or the live server, the page, the
+      window and the appearance) rides on its step as `:setting`, and decides whether the pass runs
+      the live server (`live_checks/1`). A check written before settings has none;
     * the prompt carries `## Ask`, `## Plan` and `## Checks` (`plan_text/1`).
 
   A ticket that is not groomed answers what the callers computed before plans, from the
@@ -139,6 +142,17 @@ defmodule SymphonyElixir.TicketJourney do
         steps -> steps |> recorded(ticket) |> unproved_text()
       end
     end
+  end
+
+  @doc """
+  The ids of the checks QA still walks (no recorded test proves them, none is waived) whose plan
+  sets them on the live server (`setting.source` is `live`), in the plan's order: what makes a QA
+  pass live (`SymphonyElixir.QaAgent.Selection.live/1`). None for a ticket that is not groomed, or a
+  plan whose QA checks carry no setting.
+  """
+  @spec live_checks(ticket()) :: [String.t()]
+  def live_checks(ticket) do
+    for %{setting: %{source: "live"}, check_id: id} = step <- steps(ticket), not Walkthrough.named_test?(step), do: id
   end
 
   defp unproved_text(steps), do: steps |> Enum.reject(&Walkthrough.named_test?/1) |> Enum.map_join("\n", & &1.text)
@@ -468,7 +482,31 @@ defmodule SymphonyElixir.TicketJourney do
 
   defp qa_walks?(%{kind: kind, proof: proof}), do: kind == "qa" or proof in @qa_proofs
 
-  defp step({check, number}), do: %{number: number, text: step_text(check), proof: %{by: :qa}, check_id: check.id}
+  defp step({check, number}) do
+    step = %{number: number, text: step_text(check), proof: %{by: :qa}, check_id: check.id}
+
+    case setting(Map.get(check, :setting)) do
+      nil -> step
+      setting -> Map.put(step, :setting, setting)
+    end
+  end
+
+  # A check's setting with atom keys, as the plan validated it; a stored record may have kept strings.
+  defp setting(%{} = setting) do
+    window = field(setting, :window)
+
+    %{
+      source: field(setting, :source),
+      fixture: field(setting, :fixture),
+      page: field(setting, :page),
+      window: if(is_map(window), do: %{width: field(window, :width), height: field(window, :height)}),
+      appearance: field(setting, :appearance)
+    }
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+  end
+
+  defp setting(_none), do: nil
 
   defp step_text(check) do
     parts = for {label, key} <- [{"State", :needs}, {"Action", :action}, {"Expect", :expect}, {"Size", :size}], value = Map.get(check, key), do: "#{label}: #{one_line(value)}"

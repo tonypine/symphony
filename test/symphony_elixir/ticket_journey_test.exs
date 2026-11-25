@@ -195,6 +195,23 @@ defmodule SymphonyElixir.TicketJourneyTest do
       assert %{text: "The plan names no QA check: no step is yours to walk.", steps: []} = TicketJourney.journey(issue())
     end
 
+    test "a QA check's setting rides on its step, and the live ones QA still walks are what ask for the server" do
+      live = %{source: "live", page: "Home", window: %{width: 1440, height: 900}, appearance: "light"}
+      fixture = %{source: "fixture", fixture: "macos/Tests/Fixtures/director-app", page: "Inbox", window: %{width: 2560, height: 1440}, appearance: "dark"}
+      # A plan written before settings, and a ticket with no plan, ask for nothing.
+      refute Enum.any?(TicketJourney.steps(issue()), &Map.has_key?(&1, :setting))
+      assert TicketJourney.live_checks(issue()) == []
+      assert TicketJourney.live_checks(nil) == []
+
+      plan!(%{@plan | checks: [@outcome, Map.put(@walk, :setting, live), @attached, Map.put(@design, :setting, fixture)]})
+
+      assert [%{check_id: "c2", setting: ^live}, %{check_id: "c4", setting: ^fixture}] = TicketJourney.steps(issue())
+      assert TicketJourney.live_checks(issue()) == ["c2"]
+
+      prove!(%{check_id: "c2", by: "test", test: "test/home_test.exs"})
+      assert TicketJourney.live_checks(issue()) == []
+    end
+
     test "the plan's layers say whether the change shows on screen" do
       refute TicketJourney.on_screen?(issue())
       plan!(%{@plan | layers: ["engine", "gallery"]})

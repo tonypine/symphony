@@ -21,8 +21,9 @@ defmodule SymphonyElixir.PlaybookSettings do
     `dev_server: true`, with a control token of its own. `build_cmd` and `start_cmd` run it (the
     start command is required), `health_check_url` (default
     `http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/api/v1/state`)
-    and `health_timeout_ms` (default 600000) check it, `paths` (globs) and `walkthrough_mentions`
-    (words) say which changes make a pass live. A playbook with `dev_server: true` takes no `live`:
+    and `health_timeout_ms` (default 600000) check it. `paths` (globs) and `walkthrough_mentions`
+    (words) are still accepted but no longer read: the ticket's plan says whether a pass is live
+    (`SymphonyElixir.QaAgent.Selection.live/1`). A playbook with `dev_server: true` takes no `live`:
     both would listen on its one port.
   - the QA target of a `macos_app` playbook, what every Mac app QA pass checks unless the ticket
     is about another appearance or size: `appearance` (`light` or `dark`, default `dark`), the

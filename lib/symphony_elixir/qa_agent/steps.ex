@@ -1369,7 +1369,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
     walked =
       case state.targets do
         [] -> "- none: no walkthrough step is QA's to walk (`walk` is then empty)"
-        targets -> Enum.map_join(targets, "\n", &"- Step #{&1.number}: #{String.slice(&1.text, 0, 600)}")
+        targets -> Enum.map_join(targets, "\n", &"- Step #{&1.number}: #{String.slice(&1.text, 0, 600)}\n  #{setting_fact(&1)}")
       end
 
     checks = state.job |> Map.get(:proofs, []) |> QaPreCheck.report_checks() |> Enum.map_join("\n", &"- #{&1.name}: #{&1.status}: #{&1.detail}")
@@ -1384,6 +1384,30 @@ defmodule SymphonyElixir.QaAgent.Steps do
     ]
     |> Enum.join("\n")
   end
+
+  # Where the plan walks a step (its check's `setting`), given as facts the plan's briefs use as they are.
+  defp setting_fact(%{setting: %{} = setting}) do
+    parts =
+      [
+        source_fact(setting),
+        Map.get(setting, :page) && "page: #{Map.get(setting, :page)}",
+        window_fact(Map.get(setting, :window)),
+        Map.get(setting, :appearance) && "appearance: #{Map.get(setting, :appearance)}"
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    "Setting (from the plan; use it as given): " <> Enum.join(parts, "; ")
+  end
+
+  defp setting_fact(_step), do: "Setting: none in the plan; work out where and how to launch, on fixtures."
+
+  defp source_fact(%{source: "live"}), do: "source: live (the live server, `environment: live`)"
+  defp source_fact(%{source: "fixture", fixture: fixture}) when is_binary(fixture), do: "source: fixture `#{fixture}` (`environment: fixture`, `api_fixtures: #{fixture}`)"
+  defp source_fact(%{source: source}) when is_binary(source), do: "source: #{source}"
+  defp source_fact(_setting), do: nil
+
+  defp window_fact(%{width: width, height: height}), do: "window: #{width}×#{height}"
+  defp window_fact(_window), do: nil
 
   defp gallery_facts(state) do
     case Keyword.get(state.opts, :qa_driver) && tool(state, "qa_gallery", %{}) do
