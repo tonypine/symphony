@@ -8,7 +8,7 @@
 > answered something on the ticket. Since TP-1503 there is no note panel: writing to the ticket is one box
 > above the timeline. Since TP-1651 the Connected panel lists the ticket's sub-tickets under its Epic block.
 > Since TP-1652 the Pull request panel is drawn only when the ticket has a pull request of its own, with no
-> "No pull request yet" line, and a rail with no panel draws no column. This design does not cover an epic's
+> "No pull request yet" line, and a rail with no panel draws no column: the page sizes without it, and on a desktop with nothing waiting the main column stays at most 1040 pt. This design does not cover an epic's
 > Lifecycle: an epic whose work is done by its sub-tickets and that has no stage of its own draws only the token
 > bar of what it used itself (its Conductor runs), and no Lifecycle at all while that is zero.
 

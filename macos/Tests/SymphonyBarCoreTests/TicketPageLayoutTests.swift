@@ -300,6 +300,42 @@ final class TicketPageLayoutTests: XCTestCase {
         XCTAssertEqual(TicketPageLayout.arrangement(page: 3000, decisions: false).mainWidth, 1040)
     }
 
+    // MARK: - A rail with no panel (TP-1652)
+
+    func testARailWithNoPanelIsNotDrawnAndThePageSizesWithoutIt() {
+        let none = ConnectedPanelModel.build(nil)
+        let undecided = DecisionsPanelModel.build([])
+        // No pull request, nothing connected, nothing decided: an ordinary ticket before its first run.
+        XCTAssertFalse(TicketPageLayout.railHasPanels(pullRequest: PullRequestPanelModel.build(nil), connected: none, decided: undecided))
+        // Its own pull request alone draws the rail.
+        XCTAssertTrue(TicketPageLayout.railHasPanels(
+            pullRequest: PullRequestPanelModel.build(TicketPullRequest(number: 7)), connected: none, decided: undecided
+        ))
+        // An epic with no pull request of its own still has its Connected panel (its sub-tickets).
+        let epic = ConnectedPanelModel.build(TicketConnected(subTickets: [.init(identifier: "QA-122")]))
+        XCTAssertTrue(TicketPageLayout.railHasPanels(pullRequest: nil, connected: epic, decided: undecided))
+        // An answered decision alone draws it too.
+        let decided = DecisionsPanelModel.build([TicketDecision(id: "D1", date: "2026-11-10", answer: "Keep Release.")])
+        XCTAssertTrue(TicketPageLayout.railHasPanels(pullRequest: nil, connected: none, decided: decided))
+
+        // The desktop with nothing waiting and no rail: the main column alone, at most 1040 pt, and nothing wider.
+        let desktop = TicketPageLayout.arrangement(page: 2200, decisions: false, rail: false)
+        XCTAssertFalse(desktop.rail)
+        XCTAssertEqual(desktop.mainWidth, TicketPageLayout.mainColumnMaxWidth)
+        XCTAssertEqual(desktop.contentWidth, TicketPageLayout.mainColumnMaxWidth)
+        // With a Question waiting, the main column takes the rail's room beside the decisions column.
+        let waiting = TicketPageLayout.arrangement(page: 2200, decisions: true, rail: false)
+        XCTAssertEqual(waiting.mainWidth, 1048 + 32 + 440)
+        XCTAssertEqual(waiting.contentWidth, 2152)
+        // The laptop's main column takes the page's whole inner width.
+        let laptop = TicketPageLayout.arrangement(page: TicketPageLayout.laptopPageWidth, decisions: false, rail: false)
+        XCTAssertEqual(laptop.mainWidth, TicketPageLayout.laptopPageWidth - 2 * TicketPageLayout.gap)
+        XCTAssertEqual(laptop.contentWidth, laptop.mainWidth)
+        // With the rail, the arrangement is the one it always was.
+        XCTAssertTrue(TicketPageLayout.arrangement(page: 2200, decisions: false).rail)
+        XCTAssertEqual(TicketPageLayout.arrangement(page: 2200, decisions: false, rail: true).contentWidth, 1512)
+    }
+
     // MARK: - Sticky columns
 
     func testAShortRailSticksUnderTheWindowsTopAndNeverLeavesItsRow() {

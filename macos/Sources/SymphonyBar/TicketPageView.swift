@@ -874,7 +874,7 @@ struct TicketPageBody: View {
     private var gap: CGFloat { TicketPageLayout.gap }
     private var line: DecisionsLine { DecisionsLine(openQuestions: page.openQuestions, questions: questions) }
     private var arrangement: TicketPageLayout.Arrangement {
-        TicketPageLayout.arrangement(page: width, decisions: line.waiting)
+        TicketPageLayout.arrangement(page: width, decisions: line.waiting, rail: railHasPanels)
     }
 
     var body: some View {
@@ -885,7 +885,7 @@ struct TicketPageBody: View {
                 HStack(alignment: .top, spacing: arrangement.columnGap) {
                     mainColumn(desktop: arrangement.desktop).frame(maxWidth: .infinity, alignment: .topLeading)
                     // A rail with no panel draws no column: the main column takes its room (TP-1652).
-                    if railHasPanels {
+                    if arrangement.rail {
                         StickyColumn(scroll: scroll) { rail(width: arrangement.railWidth) }
                             .frame(width: arrangement.railWidth)
                     }
@@ -904,7 +904,7 @@ struct TicketPageBody: View {
                 .modifier(RowMeasure(scroll: scroll, measures: arrangement.decisionsWidth != nil))
             } else {
                 mainColumn(desktop: false)
-                if railHasPanels { rail(width: nil) }
+                if arrangement.rail { rail(width: nil) }
             }
         }
         // At most as wide as the columns need, never wider than the scroll view gives: a scroller beside the page
@@ -972,8 +972,11 @@ struct TicketPageBody: View {
 
     /// Whether the rail has a panel to draw: a pull request, a connection or an answered decision.
     private var railHasPanels: Bool {
-        page.factsRead?.pullRequest != nil || !ConnectedPanelModel.build(page.factsRead?.connected).isEmpty
-            || !DecisionsPanelModel.build(decisions, reference: page.reference, calendar: calendar).isEmpty
+        TicketPageLayout.railHasPanels(
+            pullRequest: PullRequestPanelModel.build(page.factsRead?.pullRequest),
+            connected: ConnectedPanelModel.build(page.factsRead?.connected),
+            decided: DecisionsPanelModel.build(decisions, reference: page.reference, calendar: calendar)
+        )
     }
 
     private func rail(width: CGFloat?) -> some View {
