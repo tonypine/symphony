@@ -68,7 +68,11 @@ defmodule SymphonyElixir.Verification do
   @doc "The dev-server flags `SymphonyElixir.QaAgent.Selection` reads to turn playbooks on."
   @spec selection_opts(Schema.t()) :: keyword()
   def selection_opts(%Schema{} = settings),
-    do: [dev_server?: dev_server_configured?(settings), dev_server_command?: dev_server_command_configured?(settings), dev_server_runs: runs(settings)]
+    do: [
+      dev_server?: dev_server_configured?(settings),
+      dev_server_command?: dev_server_command_configured?(settings),
+      dev_server_runs: runs(settings)
+    ]
 
   @doc """
   Allocates a port and starts `verification.dev_server` in `workspace` for a QA pass, after its

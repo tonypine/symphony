@@ -92,7 +92,8 @@ defmodule SymphonyElixir.Config.Migration.DevServerMove do
   lines of the keys that move, with a comment naming the ticket where each was and `backup`, the
   file as it was. An error names a key the rewrite could not move (one written inside `{...}`).
   """
-  @spec plan(String.t(), map(), String.t(), String.t()) :: {:ok, String.t(), [String.t()]} | {:error, {:not_migrated, [{String.t(), pos_integer() | nil}]}}
+  @spec plan(String.t(), map(), String.t(), String.t()) ::
+          {:ok, String.t(), [String.t()]} | {:error, {:not_migrated, [{String.t(), pos_integer() | nil}]}}
   def plan(text, document, backup, version) when is_binary(text) and is_map(document) do
     expected = migrate(document)
     lines = String.split(text, "\n")
@@ -140,9 +141,15 @@ defmodule SymphonyElixir.Config.Migration.DevServerMove do
 
     Enum.filter(entries, fn entry ->
       case String.split(entry.path, ".") do
-        ["auto_review", "playbooks", _kind, key] -> key in @playbook_keys
-        ["verification", "dev_server", key] -> key in @recipe_keys and Map.has_key?(get_map(document, ["verification", "dev_server"]), key) and not Map.has_key?(server, key)
-        _other -> false
+        ["auto_review", "playbooks", _kind, key] ->
+          key in @playbook_keys
+
+        ["verification", "dev_server", key] ->
+          key in @recipe_keys and Map.has_key?(get_map(document, ["verification", "dev_server"]), key) and
+            not Map.has_key?(server, key)
+
+        _other ->
+          false
       end
     end)
   end

@@ -2,6 +2,7 @@ defmodule SymphonyElixir.Config.SchemaTest do
   use ExUnit.Case, async: true
 
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.Config.Schema.Verification.DevServer
 
   test "the QA review refuses a playbook PlaybookSettings refuses, naming it" do
     changeset = Schema.AutoReview.changeset(%Schema.AutoReview{}, %{"playbooks" => %{"cli" => %{"live" => %{"start_cmd" => "x"}}}})
@@ -12,14 +13,14 @@ defmodule SymphonyElixir.Config.SchemaTest do
   end
 
   test "the project's server takes a runs rule from a closed set, symphony_host by default" do
-    assert Schema.Verification.DevServer.runs_values() == ~w(symphony_host every_qa_pass live_qa_pass)
-    assert %Schema.Verification.DevServer{runs: "symphony_host"} = %Schema.Verification.DevServer{}
+    assert DevServer.runs_values() == ~w(symphony_host every_qa_pass live_qa_pass)
+    assert %DevServer{runs: "symphony_host"} = %DevServer{}
 
-    for runs <- Schema.Verification.DevServer.runs_values() do
-      assert Schema.Verification.DevServer.changeset(%Schema.Verification.DevServer{}, %{"runs" => runs}).valid?
+    for runs <- DevServer.runs_values() do
+      assert DevServer.changeset(%DevServer{}, %{"runs" => runs}).valid?
     end
 
-    changeset = Schema.Verification.DevServer.changeset(%Schema.Verification.DevServer{}, %{"runs" => "sometimes"})
+    changeset = DevServer.changeset(%DevServer{}, %{"runs" => "sometimes"})
     assert {"must be one of symphony_host, every_qa_pass, live_qa_pass", _} = changeset.errors[:runs]
   end
 

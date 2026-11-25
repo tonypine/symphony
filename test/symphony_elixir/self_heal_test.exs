@@ -232,10 +232,14 @@ defmodule SymphonyElixir.SelfHealTest do
     end
 
     test "a repo that sets up a dev server but keeps it switched off has ruled it out, with the Mac app's pass named when it runs the server" do
-      assert SelfHeal.dev_server_ruled_out(repo_settings(%{"enabled" => false, "dev_server" => @own_dev_server}, @own_server_macos), @cli) =~
+      settings = repo_settings(%{"enabled" => false, "dev_server" => @own_dev_server}, @own_server_macos)
+
+      assert SelfHeal.dev_server_ruled_out(settings, @cli) =~
                "runs its own server only beside the app on the QA host"
 
-      assert SelfHeal.dev_server_ruled_out(repo_settings(%{"enabled" => false, "dev_server" => @live_dev_server}, @own_server_macos), @cli) =~
+      settings = repo_settings(%{"enabled" => false, "dev_server" => @live_dev_server}, @own_server_macos)
+
+      assert SelfHeal.dev_server_ruled_out(settings, @cli) =~
                "runs its own server only beside the app on the QA host"
 
       assert SelfHeal.dev_server_ruled_out(repo_settings(%{"enabled" => false, "dev_server" => @dev_server}), @cli) ==
