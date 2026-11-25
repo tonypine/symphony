@@ -859,7 +859,8 @@ defmodule SymphonyElixir.SelfHealTest do
       assert %{title: "Fix it", labels: ["qa"], team: :scope} = Process.get(:fixer_create)
 
       capture_log(fn ->
-        assert {:ok, %{identifier: "TP-900"}} = SelfHeal.file_ticket(issue(), @ticket, fixer: Fixer, hold: fn _, _, _ -> :ok end)
+        assert {:ok, %{identifier: "TP-900"}} =
+                 SelfHeal.file_ticket(issue(), @ticket, fixer: Fixer, hold: fn _, _, _ -> :ok end)
       end)
     end
 
