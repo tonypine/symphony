@@ -400,7 +400,14 @@ defmodule SymphonyElixir.QaPolicyTest do
 
       # The operator's symphony.yml names the build and the app; the repository adds the rest.
       macos_app = Map.merge(%{"build" => "make -C macos qa-app", "app" => "macos/build/Symphony.app"}, own)
-      settings = settings!(%{"auto_review" => %{"playbooks" => %{"cli" => %{"enabled" => false}, "macos_app" => macos_app}}})
+      assert config["verification"]["dev_server"]["runs"] == "live_qa_pass"
+
+      settings =
+        settings!(%{
+          "verification" => config["verification"],
+          "auto_review" => %{"playbooks" => %{"cli" => %{"enabled" => false}, "macos_app" => macos_app}}
+        })
+
       macos = fn {:run, playbooks, _reason} -> Enum.find(playbooks, &(&1.kind == "macos_app")) end
       both = ["lib/symphony_elixir/questions.ex", "macos/Sources/SymphonyBar/InboxView.swift"]
 
