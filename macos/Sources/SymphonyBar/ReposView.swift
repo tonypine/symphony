@@ -728,6 +728,12 @@ struct RepoPauseView: View {
     let send: (ControlAction) async -> Bool
     @State private var reason = ""
     @State private var working = false
+    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
+
+    /// The reason field's size. Offscreen, a stand-in of this size takes the field's place, so `ViewThatFits` picks
+    /// the same layout as in the window.
+    static let reasonFieldWidth: CGFloat = 240
+    static let reasonFieldHeight: CGFloat = 24
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
@@ -762,7 +768,19 @@ struct RepoPauseView: View {
 
     private var controls: some View {
         HStack(spacing: DesignTokens.Space.s2) {
-            if !control.isPaused {
+            if !control.isPaused && offscreenSnapshot {
+                // `ImageRenderer` can't draw the AppKit text field: it drew a placeholder sized by AppKit's own
+                // measurement, which differed from one process to the next (TP-1691). Its prompt stands in.
+                Text(RepoPauseControl.reasonPrompt)
+                    .font(DesignTokens.TypeStyle.body.font)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .padding(.horizontal, DesignTokens.Space.s2)
+                    .frame(width: Self.reasonFieldWidth, height: Self.reasonFieldHeight, alignment: .leading)
+                    .background(DesignTokens.Surface.content.color, in: RoundedRectangle(cornerRadius: 5))
+                    .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(DesignTokens.Surface.separator.color))
+                    .accessibilityHidden(true)
+            } else if !control.isPaused {
                 // No Form label: the prompt says what the field is for, and a label would stand beside it in the
                 // Repos window's Form and jump above the field once text is typed.
                 TextField(RepoPauseControl.reasonPrompt, text: $reason, prompt: Text(RepoPauseControl.reasonPrompt))
@@ -770,7 +788,7 @@ struct RepoPauseView: View {
                     .qaCursor(.iBeam)
                     .textFieldStyle(.roundedBorder)
                     .multilineTextAlignment(.leading)
-                    .frame(width: 240)
+                    .frame(width: Self.reasonFieldWidth)
                     .disabled(working)
                     .help(RepoPauseControl.reasonHelp)
                     .accessibilityLabel("Reason to pause \(control.key)")
