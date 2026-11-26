@@ -563,3 +563,7 @@ extension RunChanges.Commit {
     /// The sha's first seven characters.
     public var shortSHA: String { String(sha.prefix(7)) }
 }
+
+private extension String {
+    var nonEmpty: String? { isEmpty ? nil : self }
+}
