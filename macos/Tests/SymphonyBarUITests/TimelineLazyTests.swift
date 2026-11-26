@@ -129,6 +129,17 @@ final class TimelineLazyTests: XCTestCase {
         withExtendedLifetime(host) {}
     }
 
+    /// TP-1688's QA: a short timeline is one plain stack, so a step unfolded into a conversation taller than the window
+    /// is laid out once; only a long history is made lazily, and a snapshot never is.
+    func testOnlyALongHistoryIsMadeLazily() {
+        let long = TimelineSection.lines(Self.model(), idle: nil, clock: { _ in "" }).count
+        XCTAssertTrue(TimelineSection.isLazy(lines: long, offscreen: false))
+        XCTAssertFalse(TimelineSection.isLazy(lines: long, offscreen: true))
+        XCTAssertTrue(TimelineSection.isLazy(lines: TimelineSection.lazyFrom, offscreen: false))
+        XCTAssertFalse(TimelineSection.isLazy(lines: TimelineSection.lazyFrom - 1, offscreen: false))
+        XCTAssertFalse(TimelineSection.isLazy(lines: 7, offscreen: false))
+    }
+
     // MARK: - The flat list of lines
 
     func testTheLinesAreEachDaysSeparatorThenItsItemsWithTheMarkerAndTheIdleLine() {

@@ -166,7 +166,7 @@ public struct TimelineSection: View {
         return ids
     }
 
-    /// The timeline in a lazy stack: only the lines near the scroll view's visible part are made, and a folded run makes
+    /// The timeline in a lazy stack from `lazyFrom` lines on: only the lines near the scroll view's visible part are made, and a folded run makes
     /// no step rows, so a 500-event history costs about what a short one does to open and to scroll (TP-1481). The lines
     /// are one flat list so each item's row is the stack's own child, found by `scrollTo` before it is made.
     private func column(_ proxy: ScrollViewProxy) -> some View {
@@ -175,7 +175,7 @@ public struct TimelineSection: View {
         let moves = Self.moves(arriving: model.items.count(where: { !seen.contains($0.id) }), seen: seen.count)
         let lines = Self.lines(model, idle: idle, clock: clock)
         let connected = Self.connected(lines)
-        return TimelineStack(lazy: !offscreenSnapshot) {
+        return TimelineStack(lazy: Self.isLazy(lines: lines.count, offscreen: offscreenSnapshot)) {
             ForEach(lines) { line in
                 switch line {
                 case let .day(day):
@@ -220,6 +220,18 @@ public struct TimelineSection: View {
             growth?.top = top
         }
         .onChange(of: model.items.first) { _, _ in growth?.grew() }
+    }
+
+    /// The fewest lines the window's timeline makes lazily (TP-1481): a longer history makes only the rows near the
+    /// screen. A shorter one is one plain stack, which lays out a step unfolded into a conversation taller than the
+    /// window once: in the lazy stack, such a row under the run now kept the stack placing and estimating its rows on
+    /// every pass, so the page answered nothing (TP-1688's QA). 60 lines is about three windows of rows.
+    static let lazyFrom = 60
+
+    /// Whether the timeline's `lines` are made lazily: in the window, from `lazyFrom` lines on; never in a snapshot,
+    /// which has no scroll view to say what shows and draws the whole column.
+    static func isLazy(lines: Int, offscreen: Bool) -> Bool {
+        !offscreen && lines >= lazyFrom
     }
 
     /// The most items that enter with the motion at once: more is a history read whole, not events coming in.
@@ -297,8 +309,8 @@ public struct TimelineSection: View {
     }
 }
 
-/// The timeline's column: a lazy stack in the window; an eager one offscreen, where `ImageRenderer` has no scroll view
-/// to say what shows and a snapshot draws the whole column.
+/// The timeline's column: a lazy stack in the window for a long history; an eager one for a short one, and offscreen,
+/// where `ImageRenderer` has no scroll view to say what shows and a snapshot draws the whole column.
 private struct TimelineStack<Content: View>: View {
     let lazy: Bool
     @ViewBuilder let content: () -> Content
