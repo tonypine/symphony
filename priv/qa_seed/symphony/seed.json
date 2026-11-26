@@ -628,7 +628,7 @@
         "duration_ms": 600000
       },
       "transcript": {
-        "file": "run_transcripts/QA-104-review.jsonl",
+        "file": "transcripts/QA-104-review.jsonl",
         "label": "Code Review run 1 session"
       }
     },
@@ -730,7 +730,7 @@
         "duration_ms": 540000
       },
       "transcript": {
-        "file": "run_transcripts/QA-104-review2.jsonl",
+        "file": "transcripts/QA-104-review2.jsonl",
         "label": "Code Review run 2 session"
       }
     },
