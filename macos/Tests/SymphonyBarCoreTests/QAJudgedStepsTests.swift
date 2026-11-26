@@ -83,9 +83,9 @@ final class QAJudgedStepsTests: XCTestCase {
     func testABlockedStepHasItsOwnWordMarkAndTint() {
         let blocked = RunStep.State.blocked
         XCTAssertEqual(blocked.word, "Blocked")
-        XCTAssertEqual(blocked.status, .problem)
-        XCTAssertEqual(blocked.symbol, "exclamationmark.circle.fill")
-        XCTAssertEqual(blocked.markSymbol, "exclamationmark")
+        XCTAssertEqual(blocked.status, .idle)
+        XCTAssertEqual(blocked.symbol, "circle.slash")
+        XCTAssertEqual(blocked.markSymbol, "circle.slash")
     }
 
     // MARK: - The Conductor's message under it

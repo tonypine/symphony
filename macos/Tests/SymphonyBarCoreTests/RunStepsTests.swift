@@ -237,8 +237,8 @@ final class RunStepsTests: XCTestCase {
             verdict: .init(kind: "code_review", outcome: "rework", head: nil, at: nil), startedAt: nil, endedAt: nil, head: nil
         )
         let group = RunGroupModel.group(run, events: [], reference: reference)
-        XCTAssertEqual(group.state, .failed)
-        XCTAssertEqual(group.word, "Sent back")
+        XCTAssertEqual(group.state, .sentBack)
+        XCTAssertEqual(group.word, "Request changes")
         XCTAssertEqual(RunGroupModel.State.allStatuses, [.working, .done, .problem, .idle])
     }
 

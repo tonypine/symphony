@@ -131,10 +131,10 @@ SymphonyBarUI/QuestionBlock.swift disabled 2
 SymphonyBarUI/QuestionBlock.swift picker 1
 SymphonyBarUI/ReferencePopoverView.swift color 7
 SymphonyBarUI/ReferencePopoverView.swift button 1
-SymphonyBarUI/RunGroup.swift color 5
+SymphonyBarUI/RunGroup.swift color 4
 SymphonyBarUI/RunGroup.swift number 2
 SymphonyBarUI/SessionReaderView.swift font 6
-SymphonyBarUI/SessionReaderView.swift color 12
+SymphonyBarUI/SessionReaderView.swift color 11
 SymphonyBarUI/SessionReaderView.swift number 2
 SymphonyBarUI/StepList.swift font 8
 SymphonyBarUI/StepList.swift color 7
