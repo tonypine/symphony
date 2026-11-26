@@ -508,7 +508,7 @@
     {
       "issue": "QA-104",
       "run_id": "qa-seed-impl-QA-104",
-      "minutes_ago": 176,
+      "minutes_ago": 173,
       "type": "tests.ran",
       "payload": {
         "passed": 41,
@@ -521,7 +521,7 @@
     {
       "issue": "QA-104",
       "run_id": "qa-seed-impl-QA-104",
-      "minutes_ago": 175,
+      "minutes_ago": 173,
       "type": "check.proved",
       "payload": {
         "check_id": "c1",
@@ -787,7 +787,7 @@
     {
       "issue": "QA-104",
       "run_id": "qa-seed-qa-QA-104",
-      "minutes_ago": 52,
+      "minutes_ago": 53,
       "type": "evidence",
       "picture": {
         "file": "pictures/QA-104-activity-filter.png",
@@ -872,7 +872,7 @@
     {
       "issue": "QA-104",
       "run_id": "qa-seed-qa-QA-104",
-      "minutes_ago": 44,
+      "minutes_ago": 41,
       "type": "evidence",
       "actor": "agent",
       "run_kind": "qa",

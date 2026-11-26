@@ -190,7 +190,7 @@ private struct StepRow: View {
             .qaPart("head")
             // A walk that judged several walkthrough steps in one session: one line per step, with its own status,
             // folded or not.
-            if !unfolded, let results = step.answer?.results, !results.isEmpty {
+            if let results = step.answer?.results, !results.isEmpty {
                 CheckResultRows(results: results)
                     .padding(.leading, Self.linesLeading)
                     .padding(.vertical, DesignTokens.Space.s1)
