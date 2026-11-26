@@ -574,8 +574,9 @@ defmodule SymphonyElixir.QaDriver do
 
   It answers the base commit, the target's `appearance` and `width`, the file names `changed`,
   `new`, `removed` and `same`, and `files`: the paths under `qa-evidence/` of the pictures to
-  judge. A base with no build, a gallery that failed, or a picture that could not be read is an
-  error, never every entry to judge.
+  judge. A base whose stored app is gone from the QA host is built once more, as the pass's own
+  build is. A base with no build (or no usable app once built again), a gallery that failed, or a
+  picture that could not be read is an error, never every entry to judge.
   """
   @spec gallery_changes(pid() | nil) :: {:ok, map()} | {:error, tool_error()}
   def gallery_changes(nil), do: call_tool(nil, "qa_gallery", %{})
@@ -1264,14 +1265,24 @@ defmodule SymphonyElixir.QaDriver do
   end
 
   # The gallery of the base's app: the build Symphony stores for the merge-base's tree, asked for
-  # as the pass's own build is, and copied out of the store as every build is.
+  # as the pass's own build is, and copied out of the store as every build is. The store keeps only
+  # its newest trees, so a base's ready build may be gone from the QA host: like the pass's own
+  # build, it is then built once more, and an app still unusable fails the step naming the base.
   defp base_gallery(config) do
     with {:ok, base} <- merge_base(config),
-         {:ok, record} <- base_build(config, base),
-         {:ok, built} <- built_app(config, Path.dirname(record.app), Path.basename(record.app)),
+         {:ok, record} <- base_build(config, base, []),
+         {:ok, built} <- base_app(config, base, record),
          gallery = Gallery.path(built.executable),
          :ok <- Gallery.ensure_present(config, gallery) do
       {:ok, base, gallery}
+    end
+  end
+
+  defp base_app(config, base, record) do
+    with {:error, {:qa_tool, "qa_app_missing", _message}} <- built_app(config, record.app),
+         {:ok, rebuilt} <- base_build(config, base, rebuild: true),
+         {:error, {:qa_tool, "qa_app_missing", message}} <- built_app(config, rebuilt.app) do
+      no_base_build(base, "its app is still not usable after it was built again (#{message})")
     end
   end
 
@@ -1290,8 +1301,8 @@ defmodule SymphonyElixir.QaDriver do
   # The base is asked for by the ticket's name alone: it is no head of the ticket, so it never
   # replaces the build the ticket's head needs, nor holds the ticket. The pass's own build was
   # asked for the same way, so the ticket is there.
-  defp base_build(%{repo_key: repo_key, ticket: %{identifier: identifier}} = config, base) do
-    case config.qa_build.fetch(repo_key, base, %{identifier: identifier}, heartbeat: config.heartbeat) do
+  defp base_build(%{repo_key: repo_key, ticket: %{identifier: identifier}} = config, base, opts) do
+    case config.qa_build.fetch(repo_key, base, %{identifier: identifier}, [heartbeat: config.heartbeat] ++ opts) do
       %{status: :ready} = record -> {:ok, record}
       %{status: :failed} = record -> no_base_build(base, "it failed to build (exit #{record.exit_status})")
       %{status: :unavailable} = record -> no_base_build(base, "it could not be built: #{record.reason}")
@@ -1326,7 +1337,7 @@ defmodule SymphonyElixir.QaDriver do
   # The stored app becomes the pass's build through the same check and copy every build gets, so
   # every later tool reads it alike. A stored app that is gone from the QA host is built again once.
   defp use_build(%{status: :ready} = record, driver, config, head, attempt) do
-    with {:ok, built} <- built_app(config, Path.dirname(record.app), Path.basename(record.app)),
+    with {:ok, built} <- built_app(config, record.app),
          {:ok, ignored, _dirty} <- worktree_status(config) do
       GenServer.call(driver, {:record_build, built, ignored_signatures(config, ignored)})
       Logger.info("QA driver uses the build Symphony made for the pass #{config.log_context} repo_key=#{config.repo_key} tree=#{record.tree}")
@@ -1412,27 +1423,28 @@ defmodule SymphonyElixir.QaDriver do
 
   # Only Symphony writes the stored builds on the QA host, so the bundle is
   # checked and copied by one script there.
-  defp built_app(config, build_dir, app) do
+  # `bundle` is the stored app's path on the QA host; an app it cannot use is named by that path.
+  defp built_app(config, bundle) do
     destination = Path.join(config.host_dir, "builds/#{System.unique_integer([:positive])}")
-    args = ["-c", @remote_bundle_script, "sh", build_dir, app, destination]
+    args = ["-c", @remote_bundle_script, "sh", Path.dirname(bundle), Path.basename(bundle), destination]
 
     case config.host.cmd.("/bin/sh", args, timeout_ms: @helper_timeout_ms, output_limit: @output_limit) do
       {:ok, {output, 0}} ->
         case Regex.run(~r/^symphony-qa-app:(.+)$/m, output) do
           [_line, executable] -> {:ok, %{executable: executable}}
-          nil -> remote_app_missing(config, output)
+          nil -> remote_app_missing(bundle, output)
         end
 
       {:ok, {output, _status}} ->
-        remote_app_missing(config, output)
+        remote_app_missing(bundle, output)
 
       {:error, reason} ->
-        remote_app_missing(config, inspect(reason))
+        remote_app_missing(bundle, inspect(reason))
     end
   end
 
-  defp remote_app_missing(config, output) do
-    tool_error("qa_app_missing", "The configured app bundle #{config.app} is not a usable .app on the QA host: #{tail(String.trim(output), 500)}")
+  defp remote_app_missing(bundle, output) do
+    tool_error("qa_app_missing", "The stored app bundle #{bundle} is not a usable .app on the QA host: #{tail(String.trim(output), 500)}")
   end
 
   defp bundle_executable_name(config, bundle) do
