@@ -298,10 +298,24 @@ defmodule SymphonyElixir.QaDriverTest do
     defp failed(status, output), do: %{status: :failed, tree: "tree", exit_status: status, output: output}
   end
 
-  # `HostBuilder`, except that the base's commit (`base123`) gets `:qa_gallery_base_record`.
+  # `HostBuilder`, except that the base's commit (`base123`) gets `:qa_gallery_base_record`: one
+  # record for every ask, or a list answering each ask in turn, where `:build` is what
+  # `HostBuilder` builds. Each ask of the base is sent as `{:base_fetch, opts}`.
   defmodule BaseBuilder do
     @moduledoc false
-    def fetch(_repo_key, "base123", _ticket, _opts), do: Process.get(:qa_gallery_base_record)
+    def fetch(repo_key, "base123", ticket, opts) do
+      send(self(), {:base_fetch, Keyword.delete(opts, :heartbeat)})
+
+      case Process.get(:qa_gallery_base_record) do
+        [next | rest] ->
+          Process.put(:qa_gallery_base_record, rest)
+          if next == :build, do: HostBuilder.fetch(repo_key, "base123", ticket, opts), else: next
+
+        record ->
+          record
+      end
+    end
+
     def fetch(repo_key, head, ticket, opts), do: HostBuilder.fetch(repo_key, head, ticket, opts)
   end
 
@@ -4339,6 +4353,44 @@ defmodule SymphonyElixir.QaDriverTest do
       assert change_gallery != base_gallery
       assert Path.dirname(change_out) == host_dir and Path.dirname(base_out) == host_dir
       refute_received {:cmd, _gallery, ["--shot" | _rest], _opts}
+    end
+
+    test "gallery_changes/1 builds the base once more when its stored app is gone from the QA host", %{worktree: worktree} do
+      black = Picture.encode(2, 2, :binary.copy(<<0, 0, 0, 255>>, 4), 2)
+      grey = Picture.encode(2, 2, :binary.copy(<<9, 9, 9, 255>>, 4), 2)
+      change = [{"button-1-dark.png", grey}, {"home-busy-desktop-dark.png", black}, {"badge-1-dark.png", black}]
+      base = [{"button-1-dark.png", black}, {"home-busy-desktop-dark.png", black}, {"old-1-dark.png", black}]
+      # The store pruned the base's tree, but its record still says ready.
+      pruned = Path.join(System.tmp_dir!(), "qa-store-pruned-#{System.unique_integer([:positive])}/Symphony.app")
+      Process.put(:qa_gallery_base_record, [%{status: :ready, tree: "base-tree", app: pruned}, :build])
+      driver = built_gallery(worktree, git: base_git(), qa_build: BaseBuilder, drawn: [change, base])
+
+      assert {:ok, changes} = QaDriver.gallery_changes(driver)
+      assert changes["base"] == "base123"
+      assert changes["changed"] == ["button-1-dark.png"]
+      assert changes["new"] == ["badge-1-dark.png"]
+      assert changes["removed"] == ["old-1-dark.png"]
+      assert changes["same"] == ["home-busy-desktop-dark.png"]
+
+      # The first ask takes the stored record, the second builds the base again.
+      assert_received {:base_fetch, []}
+      assert_received {:base_fetch, [rebuild: true]}
+      refute_received {:base_fetch, _opts}
+      assert_received {:cmd, change_gallery, ["--shot-all" | _rest], _opts}
+      assert_received {:cmd, base_gallery, ["--shot-all" | _rest], _opts}
+      assert change_gallery != base_gallery
+
+      # A base whose app is still unusable once built again fails the step, naming the base and the
+      # stored path it checked, and draws no gallery.
+      Process.put(:qa_gallery_base_record, %{status: :ready, tree: "base-tree", app: pruned})
+      driver = built_gallery(worktree, git: base_git(), qa_build: BaseBuilder)
+      assert {:error, {:qa_tool, "qa_gallery_no_base", message}} = QaDriver.gallery_changes(driver)
+      assert message =~ "The base's app (commit base123) has no build to draw its Component Gallery with: its app is still not usable after it was built again"
+      assert message =~ "The stored app bundle #{pruned} is not a usable .app on the QA host: Symphony.app is not a directory"
+      assert_received {:base_fetch, []}
+      assert_received {:base_fetch, [rebuild: true]}
+      refute_received {:base_fetch, _opts}
+      refute_received {:cmd, _gallery, ["--shot-all" | _rest], _opts}
     end
 
     test "gallery_changes/1 fails with its reason, never with every entry to judge", %{worktree: worktree} do
