@@ -6,7 +6,7 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
   @types ~w(
     phase.entered hold.set hold.cleared run.started run.started_by_person run.ended run.changed attempt.pushed verdict.recorded
     decision.requested decision.withdrawn decision.recorded person.action
-    step.started step.completed evidence finding.recorded finding.resolved finding.confirmed checklist.answered
+    step.started step.completed evidence tests.ran finding.recorded finding.resolved finding.confirmed checklist.answered
     ticket.cancelled ticket.moved drift.detected drift.reverted drift.revert_failed
     pause.set pause.reason_added pause.reason_cleared pause.cleared
     question.asked question.answered question.withdrawn question.reopened question.not_asked park.backfilled workspace.synced workspace.rebuilt workspace.removed situation.changed rule.action ticket.filed ticket.filed_from note.read brief.written report.published note
@@ -99,6 +99,18 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       assert {:error, {:not_allowed, _reason}} = Types.validate("run.changed", payload, :agent, "implementation")
       copied = %{payload | files: [%{path: "a.ex", status: "copied"}]}
       assert Types.validate("run.changed", copied, :machine, nil) == {:error, {:invalid_payload, [:files]}}
+    end
+
+    test "a run's test result is the run's own fact: its passed and failed counts as numbers, refused without them or in another shape (TP-1697)" do
+      payload = %{passed: 41, failed: 1, skipped: 2, duration_ms: 95_000}
+
+      assert Types.validate("tests.ran", payload, :agent, "implementation") == {:ok, payload}
+      assert Types.validate("tests.ran", %{"passed" => 3, "failed" => 0}, :agent, "qa") == {:ok, %{passed: 3, failed: 0}}
+      assert Types.validate("tests.ran", %{passed: 3}, :agent, "implementation") == {:error, {:invalid_payload, [:failed]}}
+      assert Types.validate("tests.ran", %{passed: "41", failed: -1}, :agent, "implementation") == {:error, {:invalid_payload, [:passed, :failed]}}
+      assert Types.validate("tests.ran", %{passed: 1, failed: 0, output: "41 tests, 1 failure"}, :agent, "implementation") == {:error, {:invalid_payload, ["output"]}}
+      assert {:error, {:not_allowed, _reason}} = Types.validate("tests.ran", payload, :machine, nil)
+      assert Types.shape("tests.ran") == "{passed: integer, failed: integer, skipped?: integer, duration_ms?: integer}"
     end
 
     test "an agent never records a signal: only the machinery's events carry one" do
@@ -387,7 +399,7 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
 
   describe "agent_types/1" do
     test "a QA run and a Conductor turn also record findings, the runs that write the code a brief; every other run kind the same agent types; nothing else is an agent's" do
-      every = ~w(check.proved checklist.answered evidence finding.resolved note step.completed step.started)
+      every = ~w(check.proved checklist.answered evidence finding.resolved note step.completed step.started tests.ran)
       briefing = ~w(implementation rework review_feedback)
 
       assert Types.agent_types("qa") == Enum.sort(["finding.recorded" | every])

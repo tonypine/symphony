@@ -57,6 +57,7 @@ defmodule SymphonyElixir.TicketEvents.Journal do
     "finding.resolved" => "finding",
     "finding.confirmed" => "finding",
     "evidence" => "finding",
+    "tests.ran" => "run",
     "checklist.answered" => "finding",
     "person.action" => "person",
     "note" => "note",

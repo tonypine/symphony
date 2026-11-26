@@ -71,9 +71,14 @@ defmodule SymphonyElixir.TicketEvents.Types do
   as a Conductor turn's when a person picks its option to send the ticket to Rework,
   `SymphonyElixir.DecisionMove`, and as its own when the QA seed and fixtures on a head miss a QA
   check's walked-on state, `SymphonyElixir.QaState`); `finding.resolved`,
-  `step.started`, `step.completed`, `evidence`, `checklist.answered`, `check.proved` and `note` in any run. Every other type is the
+  `step.started`, `step.completed`, `evidence`, `tests.ran`, `checklist.answered`, `check.proved` and `note` in any run. Every other type is the
   machine's or a person's (a question is asked through the question tool), and a legacy type is
   never an agent's.
+
+  `tests.ran` is a run's test result, which the run that ran the tests records itself as data: how
+  many tests `passed` and how many `failed` (both required), and, when it knows them, how many were
+  `skipped` and how long they took (`duration_ms`). Nothing reads it out of a command's output or any
+  other text.
 
   An `evidence` may carry a `proof`: the walkthrough step it proves and the test. Its files are the
   event's artifacts (the tool's top-level `artifacts`), never a payload field: an evidence payload
@@ -719,6 +724,14 @@ defmodule SymphonyElixir.TicketEvents.Types do
           environment: {:enum, @environments},
           links: {:list, :string}
         ] ++ @signal,
+      idempotency: :writer
+    },
+    # A run's test result, as the run that ran the tests states it: counts, never read from output.
+    "tests.ran" => %{
+      writers: [:agent],
+      run_kinds: :any,
+      required: [passed: :non_neg_integer, failed: :non_neg_integer],
+      optional: [skipped: :non_neg_integer, duration_ms: :non_neg_integer],
       idempotency: :writer
     },
     "finding.recorded" => %{

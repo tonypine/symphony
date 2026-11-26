@@ -186,6 +186,21 @@ defmodule SymphonyElixir.AgentTools.TicketLedgerTest do
                call("ticket_record", %{"type" => "evidence", "payload" => good}, session(ctx))
     end
 
+    test "a run records its test result as counts it states; one without them or in another shape is refused with the shape (TP-1697)", ctx do
+      for payload <- [%{"passed" => 41}, %{"passed" => 41, "failed" => "1"}, %{"passed" => 41, "failed" => 1, "output" => "41 tests, 1 failure"}] do
+        assert {false, %{"error" => %{"reason" => "invalid_payload", "shape" => shape}}} = call("ticket_record", %{"type" => "tests.ran", "payload" => payload}, session(ctx))
+        assert shape == Types.shape("tests.ran")
+      end
+
+      nothing_written()
+      result = %{"passed" => 41, "failed" => 1, "skipped" => 2, "duration_ms" => 95_000}
+
+      assert {true, %{"event" => %{"type" => "tests.ran", "payload" => ^result, "summary" => %{"title" => "Tests ran: 1 failed, 41 passed, 2 skipped"}}}} =
+               call("ticket_record", %{"type" => "tests.ran", "payload" => result}, session(ctx))
+
+      assert [%{type: "tests.ran", payload: %{passed: 41, failed: 1}}] = RunStore.list_ticket_events(@issue_id, [])
+    end
+
     test "an artifact outside the workspace and $TMPDIR is refused, and nothing is written", ctx do
       write!(ctx.workspace, "ok.png", @png)
       outside = write!(ctx.outside, "secret.png", @png)

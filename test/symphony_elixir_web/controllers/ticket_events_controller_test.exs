@@ -307,6 +307,10 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
         assert %{"file" => "lib/web_shop/settings.ex", "line_range" => %{"start" => 42, "end" => 47}, "quoted_snippet" => "filter = " <> _, "suggested_fix" => _} = first
         assert %{"line_range" => %{"start" => 9, "end" => 9}, "decision" => "D1", "since_last_review" => "unchanged"} = second
 
+        # A run's test result, as the counts it recorded, and the check a test proves.
+        assert [%{"run_id" => "run-impl-1", "payload" => %{"passed" => 41, "failed" => 1, "skipped" => 2, "duration_ms" => 95_000}}] = of.("tests.ran")
+        assert [%{"payload" => %{"check_id" => "c1", "by" => "test", "test" => "test/web_shop/filter_test.exs: " <> _}}] = of.("check.proved")
+
         # The files a run edited and the commits it made.
         assert [%{"payload" => changed}] = of.("run.changed")
         assert %{"start_head" => "aaa1111", "head" => "bbb2222", "commit_count" => 3, "file_count" => 3} = changed
@@ -613,6 +617,7 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
     review = [run_id: "run-review-1"]
     qa = [run_id: "run-qa-1"]
     qa_agent = [actor: {:agent, "run-qa-1", "qa"}]
+    impl_agent = [actor: {:agent, "run-impl-1", "implementation"}]
     check = %{step_id: "check_1", title: "The filter survives a relaunch", mode: "orchestrated"}
     walk = %{step_id: "walk_2_3", title: "Walk a step 2, 3", mode: "orchestrated"}
     expected = "The filter is still Failed after a relaunch"
@@ -679,7 +684,9 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
             {"fx-13", 46, "step.started", Map.put(walk, :prompt_ref, "phases.qa.playbooks.macos_app.steps.walk_2_3"), qa},
             {"fx-14", 50, "step.completed", Map.merge(walk, %{outcome: "passed", duration_ms: 240_000, results: results}), qa},
             {"fx-15", 51, "verdict.recorded", %{kind: "qa", outcome: "pass", head: "bbb2222"}, qa},
-            {"fx-16", 52, "run.ended", %{run_id: "run-qa-1", run_kind: "qa", run_number: 1, exit: "ended normally", duration_ms: 720_000}, qa}
+            {"fx-16", 52, "run.ended", %{run_id: "run-qa-1", run_kind: "qa", run_number: 1, exit: "ended normally", duration_ms: 720_000}, qa},
+            {"fx-17", 18, "tests.ran", %{passed: 41, failed: 1, skipped: 2, duration_ms: 95_000}, impl_agent},
+            {"fx-18", 19, "check.proved", %{check_id: "c1", by: "test", test: "test/web_shop/filter_test.exs: keeps the filter after a relaunch"}, impl_agent}
           ] do
         {:ok, event} = TicketEvents.build(@repo_key, @issue_id, type, payload, Keyword.put(opts, :at, at(minute)))
         %{event | id: id}

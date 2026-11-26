@@ -101,7 +101,8 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
           "Record an event on the current ticket's history. A run records `finding.resolved` (an open or reopened finding it fixed, by `finding_id`; Symphony fills the head that fixes it), " <>
             "a delegated step's `step.started` and `step.completed` (`outcome` `passed`, `failed` with the step it `returns_to`, `paused` with the `question_id` it waits on, or `skipped` with a `reason`; Symphony records machine and orchestrated steps), " <>
             "`evidence` (with an optional `proof`: the walkthrough `step` number and the `test` that proves it; its measured values as `measures`, each a `measure`; " <>
-            "and for a QA step the `step` it walked with its answer as `result`, a `step_answer`), `checklist.answered`, " <>
+            "and for a QA step the `step` it walked with its answer as `result`, a `step_answer`), " <>
+            "`tests.ran` (a run that ran tests: how many `passed` and `failed`, as numbers it states, never pasted output), `checklist.answered`, " <>
             "`check.proved` (a check of the plan, by its `check_id`, and how: `by` `test` with the `test` that proves it, `qa`, `design`, `attached`, or `ci` for a `proof: ci` check the pull request's own CI run proves, with `details` naming the checks and the head) and `note` " <>
             "(with an optional `tag`: `discovery` for something found that is not this ticket's to solve, `base_fault` for a fault of the base branch); " <>
             "a QA run also records `finding.recorded`, and an implementation, rework or review-feedback run `brief.written` " <>

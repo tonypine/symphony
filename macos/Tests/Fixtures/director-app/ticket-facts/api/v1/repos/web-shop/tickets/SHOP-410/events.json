@@ -65,6 +65,69 @@
         },
         {
           "actor": {
+            "kind": "agent",
+            "run_id": "run-impl-1",
+            "run_kind": "implementation"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:18:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "fx-17",
+          "idempotency": null,
+          "new": true,
+          "parent": null,
+          "payload": {
+            "duration_ms": 95000,
+            "failed": 1,
+            "passed": 41,
+            "skipped": 2
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-impl-1",
+          "seq": 17,
+          "summary": {
+            "detail": "2 min",
+            "title": "Tests ran: 1 failed, 41 passed, 2 skipped"
+          },
+          "supersedes": null,
+          "type": "tests.ran"
+        },
+        {
+          "actor": {
+            "kind": "agent",
+            "run_id": "run-impl-1",
+            "run_kind": "implementation"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:19:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "fx-18",
+          "idempotency": null,
+          "new": true,
+          "parent": null,
+          "payload": {
+            "by": "test",
+            "check_id": "c1",
+            "test": "test/web_shop/filter_test.exs: keeps the filter after a relaunch"
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-impl-1",
+          "seq": 18,
+          "summary": {
+            "detail": "c1 · test/web_shop/filter_test.exs: keeps the filter after a relaunch",
+            "title": "Check proved by a test"
+          },
+          "supersedes": null,
+          "type": "check.proved"
+        },
+        {
+          "actor": {
             "kind": "machine"
           },
           "artifacts": [],
