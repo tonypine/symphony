@@ -196,7 +196,8 @@ public struct RunStep: Equatable, Identifiable {
             case .failed: .problem
             case .paused: .you
             case .skipped: .idle
-            case .blocked: .problem
+            // Blocked waits on nothing the person does: the idle grey, so amber stays for what waits on them.
+            case .blocked: .idle
             }
         }
 
@@ -208,7 +209,7 @@ public struct RunStep: Equatable, Identifiable {
             case .failed: "xmark.circle.fill"
             case .paused: "questionmark.circle.fill"
             case .skipped: "arrow.uturn.forward.circle"
-            case .blocked: "exclamationmark.circle.fill"
+            case .blocked: "circle.slash"
             }
         }
 
@@ -220,7 +221,7 @@ public struct RunStep: Equatable, Identifiable {
             case .failed: "xmark"
             case .paused: "questionmark"
             case .skipped: "arrow.uturn.forward"
-            case .blocked: "exclamationmark"
+            case .blocked: "circle.slash"
             }
         }
     }
@@ -332,14 +333,17 @@ public struct FoldState: Equatable {
 
 public struct RunGroupModel: Equatable, Identifiable {
     public enum State: String, Equatable {
-        case running, passed, failed, stopped
+        /// `sentBack`: a review that sent the work back (the prototype's Sent back: amber, the return arrow).
+        /// `blocked`: a review that could not go on; it waits on nothing the person does, so it reads idle.
+        case running, passed, failed, stopped, sentBack, blocked
 
         public var status: DesignTokens.Status {
             switch self {
             case .running: .working
             case .passed: .done
             case .failed: .problem
-            case .stopped: .idle
+            case .stopped, .blocked: .idle
+            case .sentBack: .you
             }
         }
 
@@ -350,6 +354,8 @@ public struct RunGroupModel: Equatable, Identifiable {
             case .passed: "checkmark.circle.fill"
             case .failed: "exclamationmark.triangle.fill"
             case .stopped: "stop.circle"
+            case .sentBack: "arrow.uturn.backward.circle.fill"
+            case .blocked: "circle.slash"
             }
         }
 
@@ -360,9 +366,34 @@ public struct RunGroupModel: Equatable, Identifiable {
             case .passed: "checkmark"
             case .failed: "exclamationmark"
             case .stopped: "stop.fill"
+            case .sentBack: "arrow.uturn.backward"
+            case .blocked: "circle.slash"
+            }
+        }
+
+        /// The glyph of the run's badge when it is not its status's own: the return arrow of a send-back, the struck
+        /// circle of a block.
+        public var badgeSymbol: String? {
+            switch self {
+            case .sentBack: "arrow.uturn.backward"
+            case .blocked: "circle.slash"
+            case .running, .passed, .failed, .stopped: nil
+            }
+        }
+
+        /// The state a review's verdict gives its run, from the verdict's kind and outcome as Symphony records them;
+        /// nil for a verdict that keeps the run's own state (an approve, a QA pass or fail).
+        public static func verdict(kind: String?, outcome: String?) -> (State, String)? {
+            switch (kind?.lowercased(), outcome?.trimmingWhitespace().lowercased()) {
+            case ("code_review"?, "request_changes"?), ("code_review"?, "rework"?): (.sentBack, RunGroupModel.requestChanges)
+            case (_, "block"?), (_, "blocked"?): (.blocked, RunStep.State.blocked.word)
+            default: nil
             }
         }
     }
+
+    /// The word of a Code Review run whose verdict sent the work back.
+    public static let requestChanges = "Request changes"
 
     /// The run's id.
     public var id: String
@@ -425,6 +456,14 @@ public struct RunGroupModel: Equatable, Identifiable {
 
     /// Unfolded by default while it runs; folded once it ended.
     public var opensByDefault: Bool { isLive }
+
+    /// The saved conversation of a run that walks no steps (a QA or Code Review run), once it ended: its session's
+    /// lines, which its body draws as it drew them while it ran.
+    public var savedConversation: TicketOutput? { steps.isEmpty && !isLive ? transcript : nil }
+
+    /// A run that walks no steps and has a conversation to draw: its newest lines while it runs, its saved session once
+    /// it ended. Its meta line carries "Show all events", as a step's header does for a step.
+    public var hasConversation: Bool { steps.isEmpty && (isLive ? !liveLines.isEmpty : transcript != nil) }
 
     /// "42 min so far" while it runs, "22 min" once it ended.
     public var duration: String? {
@@ -504,12 +543,17 @@ public struct RunGroupModel: Equatable, Identifiable {
         _ run: TicketEventsPayload.Run, events: [TicketEventsPayload.Event], runNow: RunNow? = nil, liveTokens: Int? = nil,
         reference: Date, conductorMessages: [ConductorMessage] = []
     ) -> RunGroupModel {
-        let (result, word) = TicketEventsPayload.runState(run)
-        let state: State = switch result {
+        let (result, runWord) = TicketEventsPayload.runState(run)
+        var state: State = switch result {
         case .current: .running
         case .done: .passed
         case .failed: .failed
         case .stopped: .stopped
+        }
+        var word = runWord
+        // A review that sent the work back or was blocked reads so, from its verdict's kind and outcome.
+        if let verdict = run.verdict, let picked = State.verdict(kind: verdict.kind, outcome: verdict.outcome) {
+            (state, word) = picked
         }
         let started = events.first { $0.type == "run.started" }
         let ended = events.last { $0.type == "run.ended" }

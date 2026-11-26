@@ -1,0 +1,114 @@
+{
+  "attempts": {
+    "current_retry_attempt": 0,
+    "restart_count": 0
+  },
+  "issue_id": "i-410",
+  "issue_identifier": "SHOP-410",
+  "last_error": null,
+  "logs": {
+    "codex_session_logs": []
+  },
+  "recent_events": [],
+  "repo_key": "web-shop",
+  "retry": null,
+  "running": {
+    "current_step": null,
+    "recent_lines": [
+      {
+        "kind": "tool",
+        "text": "Bash: git diff 2b54b5258..HEAD -- macos/Sources/SymphonyBarCore/HomeRead.swift macos/Sources/SymphonyBarCore/HomeQueue.swift",
+        "at": "2026-10-31T12:50:21Z",
+        "tool": "Bash"
+      },
+      {
+        "kind": "result",
+        "text": "diff --git a/macos/Sources/SymphonyBarCore/HomeQueue.swift b/macos/Sources/SymphonyBarCore/HomeQueue.swift",
+        "at": "2026-10-31T12:50:22Z",
+        "duration_ms": 900
+      },
+      {
+        "kind": "tool",
+        "text": "Bash: git diff 2b54b5258..HEAD -- macos/Sources/SymphonyBarUI macos/Sources/SymphonyBar",
+        "at": "2026-10-31T12:50:33Z",
+        "tool": "Bash"
+      },
+      {
+        "kind": "result",
+        "text": "diff --git a/macos/Sources/SymphonyBar/HomeView.swift b/macos/Sources/SymphonyBar/HomeView.swift",
+        "at": "2026-10-31T12:50:34Z",
+        "duration_ms": 700
+      },
+      {
+        "kind": "say",
+        "text": "Reading the diff against the plan's checks before I judge it.",
+        "at": "2026-10-31T12:50:40Z"
+      },
+      {
+        "kind": "tool",
+        "text": "Bash: cat macos/Tests/SymphonyBarCoreTests/RecentlyDoneTests.swift",
+        "at": "2026-10-31T12:50:34Z",
+        "tool": "Bash"
+      },
+      {
+        "kind": "result",
+        "text": "import Foundation\nimport XCTest\n@testable import SymphonyBarCore",
+        "at": "2026-10-31T12:50:35Z",
+        "duration_ms": 200
+      },
+      {
+        "kind": "tool",
+        "text": "Bash: sed -n 1,200p lib/symphony_elixir/home/recently_done.ex | grep -nE \"epic|done_at\"",
+        "at": "2026-10-31T12:50:57Z",
+        "tool": "Bash"
+      },
+      {
+        "kind": "result",
+        "text": "5:  Symphony saw reach done in a range, most recent first",
+        "at": "2026-10-31T12:50:58Z",
+        "duration_ms": 150
+      },
+      {
+        "kind": "tool",
+        "text": "Bash: sed -n 60,100p lib/symphony_elixir/home/recently_done.ex",
+        "at": "2026-10-31T12:51:00Z",
+        "tool": "Bash"
+      },
+      {
+        "kind": "result",
+        "text": "value ->\n        case Integer.parse(to_string(value)) do",
+        "at": "2026-10-31T12:51:01Z",
+        "duration_ms": 150
+      }
+    ],
+    "repo_key": "web-shop",
+    "session_id": "sess-review-2",
+    "started_at": "2026-10-31T12:50:00Z",
+    "state": "Code Review",
+    "turn_count": 1,
+    "tokens": {
+      "total_tokens": 320000
+    }
+  },
+  "status": "running",
+  "tracked": {},
+  "verdicts": [
+    {
+      "head_sha": "aaa1111",
+      "kind": "code_review",
+      "outcome": "request_changes",
+      "recorded_at": "2026-10-30T12:51:20Z"
+    },
+    {
+      "head_sha": "bbb2222",
+      "kind": "qa",
+      "outcome": "block",
+      "recorded_at": "2026-10-30T13:59:00Z"
+    }
+  ],
+  "watching": null,
+  "workspace": {
+    "host": null,
+    "path": "/Users/director/symphony-workspaces/web-shop/SHOP-410"
+  }
+}

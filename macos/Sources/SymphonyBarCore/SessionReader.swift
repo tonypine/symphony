@@ -83,7 +83,6 @@ public struct SessionReader: Equatable {
     public static let menuTitle = "Read the whole session"
     /// Why the item is off: the run has no step with lines to read.
     public static let nothingToRead = "This run has nothing to read yet"
-    public static let noSteps = "This run recorded no steps."
 
     /// Whether `run` has anything for the reader: a step with a transcript, or lines, or the step the run now is on;
     /// for a run that walks no steps, its newest lines or its session.

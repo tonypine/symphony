@@ -237,8 +237,8 @@ final class RunStepsTests: XCTestCase {
             verdict: .init(kind: "code_review", outcome: "rework", head: nil, at: nil), startedAt: nil, endedAt: nil, head: nil
         )
         let group = RunGroupModel.group(run, events: [], reference: reference)
-        XCTAssertEqual(group.state, .failed)
-        XCTAssertEqual(group.word, "Sent back")
+        XCTAssertEqual(group.state, .sentBack)
+        XCTAssertEqual(group.word, "Request changes")
         XCTAssertEqual(RunGroupModel.State.allStatuses, [.working, .done, .problem, .idle])
     }
 
@@ -529,6 +529,137 @@ final class RunStepsTests: XCTestCase {
         XCTAssertEqual(now.map(\.kind), [.actions, .failure, .note])
         XCTAssertEqual(now.last?.working, true)
         XCTAssertEqual(now.last?.gist.countText(soFar: true), "2 actions so far")
+    }
+
+    // MARK: - How a run without steps ends (TP-1689)
+
+    private static func reviewFixture() -> URL {
+        fixtures.deletingLastPathComponent().appendingPathComponent("director-app/ticket-review-conversation/api/v1")
+    }
+
+    /// The review fixture QA walks (`Fixtures/director-app/ticket-review-conversation`): SHOP-410's first Code Review run
+    /// ended with a saved session and a verdict that sent the work back, its QA run was blocked, and its second Code
+    /// Review run is the run now, on no step.
+    private func reviewRuns() throws -> [RunGroupModel] {
+        let api = Self.reviewFixture()
+        let history = try XCTUnwrap(TicketEventsPayload.decode(Data(contentsOf: api.appendingPathComponent("repos/web-shop/tickets/SHOP-410/events.json"))))
+        let runNow = try XCTUnwrap(RunNow.decode(issue: Data(contentsOf: api.appendingPathComponent("SHOP-410.json"))))
+        return RunGroupModel.groups(history, runNow: runNow, reference: reference)
+    }
+
+    @MainActor
+    func testAFinishedRunWithNoStepsKeepsItsConversationFromItsSavedTranscript() async throws {
+        let runs = try reviewRuns()
+        XCTAssertEqual(runs.map(\.title), ["Implementation run 1", "Code Review run 1", "Rework run 1", "QA run 1", "Code Review run 2"])
+        let review = runs[1]
+        XCTAssertTrue(review.steps.isEmpty)
+        XCTAssertFalse(review.isLive)
+        let saved = try XCTUnwrap(review.savedConversation)
+        XCTAssertEqual(saved, review.transcript)
+        XCTAssertTrue(saved.path.hasSuffix("/lines"))
+        XCTAssertTrue(review.hasConversation)
+
+        // The body reads the session's lines as a step's transcript is read, and draws the same entries as while it ran:
+        // the six actions folded into one line, then the review's note.
+        let file = Self.reviewFixture().appendingPathComponent(saved.path.replacingOccurrences(of: "api/v1/", with: "") + ".txt")
+        let body = try Data(contentsOf: file)
+        let transcripts = StepTranscripts { path in path == saved.path ? .answered(body, statusCode: 200) : .answered(Data(), statusCode: 404) }
+        await transcripts.load(saved)?.value
+        guard case let .loaded(lines) = transcripts.lines(saved) else { return XCTFail("the saved session was not read") }
+        let entries = RunConversation.entries(lines, timeZone: Self.utc)
+        XCTAssertEqual(entries.map(\.kind), [.actions, .note])
+        XCTAssertEqual(entries[0].actions.count, 6)
+        XCTAssertEqual(entries[1].note?.text.hasPrefix("I've finished the review of TP-1644"), true)
+        XCTAssertFalse(entries.contains(where: \.working))
+    }
+
+    func testARunWithNoStepsAndNothingSavedHasNoConversationAndNoSentence() {
+        let finished = RunGroupModel(id: "r", title: "QA run 1", state: .passed, word: "Passed")
+        XCTAssertNil(finished.savedConversation)
+        XCTAssertFalse(finished.hasConversation)
+        // The session reader draws nothing for it either: no step, no session.
+        let reader = SessionReader.build(identifier: "SHOP-410", run: finished) { _ in .loading }
+        XCTAssertEqual(reader.sections, [])
+        XCTAssertNil(reader.session)
+        XCTAssertEqual(reader.lines, [])
+        // A run with steps keeps its transcript for the reader and draws its steps, not a saved conversation.
+        var stepped = finished
+        stepped.steps = [RunStep(id: "code", stepID: "code", title: "Write the code", state: .done)]
+        stepped.transcript = TicketOutput(id: "t", label: "Session", path: "api/v1/artifacts/t/lines", available: true)
+        XCTAssertNil(stepped.savedConversation)
+        XCTAssertFalse(stepped.hasConversation)
+    }
+
+    func testARunningRunWithNoStepsHasItsConversationAndShowAllEvents() throws {
+        let running = try XCTUnwrap(reviewRuns().last)
+        XCTAssertEqual(running.state, .running)
+        XCTAssertTrue(running.steps.isEmpty)
+        XCTAssertTrue(running.hasConversation)
+        XCTAssertNil(running.savedConversation)
+        let entries = RunConversation.entries(running.liveLines, live: true, timeZone: Self.utc)
+        XCTAssertEqual(entries.map(\.kind), [.actions, .note])
+        XCTAssertEqual(entries.last?.working, true)
+        XCTAssertEqual(entries.last?.gist.countText(soFar: true), "3 actions so far")
+
+        // "Show all events" unfolds every group of the run's conversation; again, it folds them all.
+        var folds = ConversationFolds()
+        let groups = entries.filter(\.hasFold).map(\.id)
+        XCTAssertEqual(groups.count, 2)
+        folds.toggleAll()
+        XCTAssertEqual(groups.map(folds.isOpen), [true, true])
+        folds.toggleAll()
+        XCTAssertEqual(groups.map(folds.isOpen), [false, false])
+        // A run now with no line yet has nothing to unfold.
+        var quiet = running
+        quiet.liveLines = []
+        XCTAssertFalse(quiet.hasConversation)
+    }
+
+    func testAReviewThatSendsTheWorkBackReadsRequestChangesInTheSentBackTreatment() throws {
+        let review = try reviewRuns()[1]
+        XCTAssertEqual(review.state, .sentBack)
+        XCTAssertEqual(review.word, "Request changes")
+        XCTAssertEqual(review.state.status, .you)
+        XCTAssertEqual(review.state.markSymbol, "arrow.uturn.backward")
+        XCTAssertEqual(review.state.badgeSymbol, "arrow.uturn.backward")
+        XCTAssertNotEqual(review.state.status, .done)
+        XCTAssertNotEqual(review.state.markSymbol, RunGroupModel.State.passed.markSymbol)
+
+        // Both outcomes Symphony records for a Code Review send-back read the same, from the verdict's kind and outcome.
+        for outcome in ["request_changes", "rework"] {
+            let run = TicketEventsPayload.Run(
+                runID: "cr", runKind: "code_review", runNumber: 1, status: "ended", exit: "handoff",
+                verdict: TicketEventsPayload.Verdict(kind: "code_review", outcome: outcome)
+            )
+            let group = RunGroupModel.group(run, events: [], reference: reference)
+            XCTAssertEqual(group.state, .sentBack, outcome)
+            XCTAssertEqual(group.word, RunGroupModel.requestChanges, outcome)
+        }
+        // An approve keeps its green check; a QA fail keeps its own word.
+        XCTAssertNil(RunGroupModel.State.verdict(kind: "code_review", outcome: "approve"))
+        XCTAssertNil(RunGroupModel.State.verdict(kind: "qa", outcome: "fail"))
+        XCTAssertEqual(TicketEventsPayload.verdictState(kind: "code_review", outcome: "request_changes").0, .failed)
+    }
+
+    func testBlockedIsTheIdleGreyWithAStruckCircleAndAmberIsForWhatWaitsOnYou() throws {
+        let qa = try reviewRuns()[3]
+        XCTAssertEqual(qa.state, .blocked)
+        XCTAssertEqual(qa.word, "Blocked")
+        XCTAssertEqual(qa.state.status, .idle)
+        XCTAssertEqual(qa.state.markSymbol, "circle.slash")
+        XCTAssertEqual(qa.state.badgeSymbol, "circle.slash")
+        XCTAssertEqual(RunGroupModel.State.verdict(kind: "code_review", outcome: "block")?.0, .blocked)
+
+        XCTAssertEqual(RunStep.State.blocked.status, .idle)
+        XCTAssertEqual(RunStep.State.blocked.markSymbol, "circle.slash")
+        XCTAssertEqual(RunStep.State.blocked.symbol, "circle.slash")
+        XCTAssertEqual(RunStep.State.blocked.word, "Blocked")
+
+        // Amber (the `you` status) is only for what waits on the person: a question asked, or work sent back.
+        let steps: [RunStep.State] = [.done, .current, .failed, .paused, .skipped, .blocked]
+        XCTAssertEqual(steps.filter { $0.status == .you }, [.paused])
+        let runs: [RunGroupModel.State] = [.running, .passed, .failed, .stopped, .sentBack, .blocked]
+        XCTAssertEqual(runs.filter { $0.status == .you }, [.sentBack])
     }
 
     func testANotesMarkdownReadsAsParagraphsListsCodeAndBold() {

@@ -177,11 +177,11 @@ private struct StepRow: View {
                 accessibilityLabel: step.canUnfold ? step.foldAccessibilityLabel(folded: !unfolded) : step.accessibilityLabel,
                 toggle: toggle
             ) {
-                StepHeaderLabel(step: step, reserved: showsAllToggle ? StepShowAllButton.width : 0)
+                StepHeaderLabel(step: step, reserved: showsAllToggle ? ShowAllEventsButton.width : 0)
             }
             .overlay(alignment: .trailing) {
                 if showsAllToggle {
-                    StepShowAllButton(on: groups.showsAll) {
+                    ShowAllEventsButton(on: groups.showsAll) {
                         withAnimation(.motion(.standard, reduceMotion: reduceMotion)) { groups.toggleAll() }
                     }
                     .padding(.trailing, StepHeaderLabel.stateColumn + StepHeaderLabel.durationColumn + StepHeaderLabel.columnGaps)
@@ -377,37 +377,67 @@ private struct StepLines: View {
             if step.isLive, !step.liveLines.isEmpty || step.transcript == nil {
                 RunConversationView(entries: RunConversation.entries(step.liveLines, live: true), folds: $groups)
             } else if let transcript = step.transcript {
-                switch transcripts.lines(transcript) {
-                case .loading:
-                    Note(text: Self.loading)
-                case let .loaded(lines):
-                    if lines.isEmpty { Note(text: Self.empty) } else { RunConversationView(entries: RunConversation.entries(lines), folds: $groups) }
-                case .unavailable:
-                    Note(text: Self.unavailable)
-                case .failed:
-                    Note(text: Self.failed)
-                }
+                SavedConversation(transcript: transcript, transcripts: transcripts, groups: $groups, notes: .step)
             }
         }
         .onAppear { if let transcript = step.transcript { transcripts.load(transcript) } }
     }
+}
 
-    static let loading = "Reading what happened in this step…"
-    static let empty = "The agent said nothing in this step."
-    static let unavailable = "Symphony no longer keeps what happened in this step."
-    static let failed = "Couldn't read what happened in this step. Fold it and unfold it to try again."
+/// A saved transcript drawn as a conversation, read on its first appearance and kept by `transcripts`: a step's, or the
+/// session of a run that walks no steps. While it is read, once it is gone, or when it can't be read, a quiet note
+/// says so in its owner's words.
+struct SavedConversation: View {
+    let transcript: TicketOutput
+    @ObservedObject var transcripts: StepTranscripts
+    @Binding var groups: ConversationFolds
+    let notes: Notes
 
-    private struct Note: View {
-        let text: String
-        var body: some View {
-            Text(text).font(DesignTokens.TypeStyle.secondary.font).foregroundStyle(.secondary)
+    /// What it says when it has no lines to draw.
+    struct Notes: Equatable {
+        let loading, empty, unavailable, failed: String
+
+        static let step = Notes(
+            loading: "Reading what happened in this step…",
+            empty: "The agent said nothing in this step.",
+            unavailable: "Symphony no longer keeps what happened in this step.",
+            failed: "Couldn't read what happened in this step. Fold it and unfold it to try again."
+        )
+
+        static let run = Notes(
+            loading: "Reading what happened in this run…",
+            empty: "The agent said nothing in this run.",
+            unavailable: "Symphony no longer keeps what happened in this run.",
+            failed: "Couldn't read what happened in this run. Fold it and unfold it to try again."
+        )
+
+        /// The note for `lines`, nil when there are lines to draw.
+        func text(_ lines: StepTranscripts.Lines) -> String? {
+            switch lines {
+            case .loading: loading
+            case let .loaded(lines): lines.isEmpty ? empty : nil
+            case .unavailable: unavailable
+            case .failed: failed
+            }
         }
+    }
+
+    var body: some View {
+        let lines = transcripts.lines(transcript)
+        Group {
+            if let note = notes.text(lines) {
+                Text(note).font(DesignTokens.TypeStyle.secondary.font).foregroundStyle(.secondary)
+            } else if case let .loaded(lines) = lines {
+                RunConversationView(entries: RunConversation.entries(lines), folds: $groups)
+            }
+        }
+        .onAppear { transcripts.load(transcript) }
     }
 }
 
-/// "Show all events" in an unfolded step's header: unfolds every group of the step's conversation at once; on, it is
-/// selected, and a click folds them all again.
-private struct StepShowAllButton: View {
+/// "Show all events" in an unfolded step's header, or on the meta line of a run that walks no steps: unfolds every
+/// group of the conversation at once; on, it is selected, and a click folds them all again.
+struct ShowAllEventsButton: View {
     let on: Bool
     let toggle: () -> Void
 

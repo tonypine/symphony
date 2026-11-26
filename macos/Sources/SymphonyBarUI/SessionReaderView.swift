@@ -67,7 +67,7 @@ private struct SessionReaderHeader: View {
                 .font(DesignTokens.TypeStyle.heading.font)
                 .lineLimit(1)
                 .accessibilityAddTraits(.isHeader)
-            Badge(status: run.state.status, word: run.word)
+            Badge(status: run.state.status, word: run.word, symbol: run.state.badgeSymbol)
                 .fixedSize()
             Spacer(minLength: DesignTokens.Space.s2)
             ForEach([run.tokensText, run.model, run.duration].compactMap { $0 }, id: \.self) { fact in
@@ -98,10 +98,6 @@ private struct SessionReaderSections: View {
                 } else {
                     note(SessionReader.sessionNote(session))
                 }
-            } else if reader.sections.isEmpty {
-                Text(SessionReader.noSteps)
-                    .font(DesignTokens.TypeStyle.body.font)
-                    .foregroundStyle(.secondary)
             }
             ForEach(reader.sections) { section in
                 VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
