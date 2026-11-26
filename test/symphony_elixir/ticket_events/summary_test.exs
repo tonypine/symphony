@@ -486,7 +486,8 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
 
     test "only a run whose kind pushes is pushed and handed off" do
       pushed = fn kind ->
-        Summary.run_outcome([%Event{seq: 1, type: "run.started", payload: %{run_id: "run-1", run_kind: kind}, run_id: "run-1"}, ended("handoff")], nil)
+        started = %Event{seq: 1, type: "run.started", payload: %{run_id: "run-1", run_kind: kind}, run_id: "run-1"}
+        Summary.run_outcome([started, ended("handoff")], nil)
       end
 
       for kind <- ~w(implementation rework review_feedback ci_fix), do: assert(pushed.(kind) == "Pushed and handed off")
