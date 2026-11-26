@@ -575,6 +575,25 @@ A check the newest plan dropped is no longer listed; one it kept keeps its state
 ticket's history that every run's prompt carries opens, for a groomed ticket, with `Ask`, `Plan` and
 `Checks` in the brief's place.
 
+## The `tests.ran` event
+
+A run that ran tests records their result on the ticket's history as a `tests.ran` event, through
+`ticket_record`, as numbers it states: `passed` and `failed` (both required, integers of 0 or more) and,
+when it knows them, `skipped` and `duration_ms`. Symphony never reads them out of a command's output or
+any other text, and refuses a record missing a count or holding another field, with the valid shape. In
+the events feed (`GET /api/v1/repos/:repo_key/tickets/:issue_identifier/events`, with or without
+`group=run`) the event sits in its run's group, its `payload` holding those fields as recorded, and its
+`summary.title` reads "Tests ran: 1 failed, 41 passed, 2 skipped" (the failed and skipped counts only
+when above 0), with the duration as `summary.detail`.
+
+```json
+{ "type": "tests.ran", "run_id": "run-impl-1", "payload": { "passed": 41, "failed": 1, "skipped": 2, "duration_ms": 95000 } }
+```
+
+The check a test proves is the `check.proved` the feed already carries: with `by: "test"`, its
+`check_id` (the plan's check) and the `test` the run named. The Director reads both events into typed
+values from these fields only.
+
 ## `running`
 
 The live run, null when none is. Beside the run's session, workspace and tokens, it says what the run is

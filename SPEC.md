@@ -546,7 +546,9 @@ which a verdict stored before them still reads from), `decision.requested`,
 `restart`; `force` is legacy), `ticket.cancelled` (the Director's cancel, with its note), `ticket.moved` (the
 Director's free move into any phase, with its note, or the Conductor's own move of its ticket made
 through it, whose actor is the Conductor's turn and whose note is its reason), `step.started` and `step.completed` (the step
-model below), `evidence`, `finding.recorded` (QA
+model below), `evidence`, `tests.ran` (a run's test result, which the run that ran the tests records
+itself as data: how many `passed` and `failed`, both required, and optionally `skipped` and
+`duration_ms`; never read from a command's output or any other text), `finding.recorded` (QA
 runs), `finding.resolved`, `finding.confirmed` (machine only: a QA pass confirmed a resolution),
 `checklist.answered`, `drift.detected`, `drift.reverted`,
 `drift.revert_failed`, `pause.set`, `pause.reason_added`, `pause.reason_cleared`, `pause.cleared`,
@@ -5561,7 +5563,7 @@ Scoped GitHub tool extension contract:
   current plan, its checks with the state of each and the tagged notes of the ticket and its parent,
   and for a ticket with no plan a null plan and no checks. `ticket_record` MUST take only the types the
   event catalog allows the run's kind (`finding.recorded` in a QA run; `finding.resolved`, `step.*`,
-  `evidence`, `checklist.answered`, `check.proved` and `note` in any run; `brief.written` in an implementation, rework
+  `evidence`, `tests.ran`, `checklist.answered`, `check.proved` and `note` in any run; `brief.written` in an implementation, rework
   or review-feedback run), MUST refuse a `check.proved` naming no check of the current plan, naming
   the ids the plan holds, MUST fill the event's actor, run, phase
   and head itself, MUST take artifacts only from regular files under the workspace or the run's

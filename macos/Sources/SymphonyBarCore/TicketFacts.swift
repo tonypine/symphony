@@ -189,9 +189,50 @@ public struct RunChanges: Equatable, Hashable {
     }
 }
 
+/// A run's test result (`tests.ran`), as the run that ran the tests recorded it: how many passed and failed and, when
+/// it said, how many were skipped and how long they took. Never read from a command's output.
+public struct TicketTestResult: Equatable, Hashable {
+    public var passed: Int
+    public var failed: Int
+    public var skipped: Int?
+    public var durationMs: Int?
+
+    public init(passed: Int, failed: Int, skipped: Int? = nil, durationMs: Int? = nil) {
+        self.passed = passed
+        self.failed = failed
+        self.skipped = skipped
+        self.durationMs = durationMs
+    }
+
+    /// The result a payload holds; nil without its passed or its failed count, or with either of another type.
+    init?(fields: BlockFields?) {
+        guard let fields, let passed = fields.number("passed"), let failed = fields.number("failed") else { return nil }
+        self.init(passed: passed, failed: failed, skipped: fields.number("skipped"), durationMs: fields.number("durationMs"))
+    }
+}
+
+/// The check a test proves (`check.proved` whose `by` is `test`): the check's id in the plan and the test, as the run
+/// named it.
+public struct TicketProvedCheck: Equatable, Hashable {
+    public var checkID: String
+    public var test: String
+
+    public init(checkID: String, test: String) {
+        self.checkID = checkID
+        self.test = test
+    }
+
+    /// The check a payload proves by a test; nil when it is proved another way or names no check or no test.
+    init?(fields: BlockFields?) {
+        guard let fields, fields.text("by") == "test", let checkID = fields.text("checkId"), let test = fields.text("test") else { return nil }
+        self.init(checkID: checkID, test: test)
+    }
+}
+
 /// The facts an event of the ticket's history carries in a fixed shape, read from its fields as Symphony records them,
 /// never from its summary or any other text: the pictures an evidence holds, the values it measured, a QA step's
-/// answer, a code review's findings, what a run changed. An event in an older shape, or of any other type, has none.
+/// answer, a code review's findings, what a run changed, a run's test result, the check a test proves. An event in an
+/// older shape, or of any other type, has none.
 public struct TicketFacts: Equatable {
     public var pictures: [TicketPicture] = []
     /// An evidence's measured values (`measures`); a step answer's own are on its result.
@@ -202,19 +243,27 @@ public struct TicketFacts: Equatable {
     public var findings: [ReviewFinding] = []
     /// What a run changed (`run.changed`).
     public var changes: RunChanges?
+    /// A run's test result (`tests.ran`).
+    public var testResult: TicketTestResult?
+    /// The check a test proves (`check.proved` by a test).
+    public var provedCheck: TicketProvedCheck?
 
     public init(
         pictures: [TicketPicture] = [], measures: [TicketMeasure] = [], answer: StepAnswer? = nil, findings: [ReviewFinding] = [],
-        changes: RunChanges? = nil
+        changes: RunChanges? = nil, testResult: TicketTestResult? = nil, provedCheck: TicketProvedCheck? = nil
     ) {
         self.pictures = pictures
         self.measures = measures
         self.answer = answer
         self.findings = findings
         self.changes = changes
+        self.testResult = testResult
+        self.provedCheck = provedCheck
     }
 
-    public var isEmpty: Bool { pictures.isEmpty && measures.isEmpty && answer == nil && findings.isEmpty && changes == nil }
+    public var isEmpty: Bool {
+        pictures.isEmpty && measures.isEmpty && answer == nil && findings.isEmpty && changes == nil && testResult == nil && provedCheck == nil
+    }
 }
 
 extension TicketEventsPayload.Event {
@@ -225,7 +274,8 @@ extension TicketEventsPayload.Event {
             : []
         return TicketFacts(
             pictures: pictures, measures: payload.measures, answer: payload.answer.flatMap(Self.stepAnswer),
-            findings: type == "verdict.recorded" ? payload.findings : [], changes: type == "run.changed" ? payload.changes : nil
+            findings: type == "verdict.recorded" ? payload.findings : [], changes: type == "run.changed" ? payload.changes : nil,
+            testResult: type == "tests.ran" ? payload.testResult : nil, provedCheck: type == "check.proved" ? payload.provedCheck : nil
         )
     }
 

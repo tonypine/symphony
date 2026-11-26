@@ -268,6 +268,12 @@ defmodule SymphonyElixir.TicketEvents.Summary do
     {title <> suffix(", ", environment(text(payload, :environment))), [text(payload, :caption)]}
   end
 
+  # A run's test result, from the counts it recorded: the failures first, as they are what a person acts on.
+  defp summary("tests.ran", payload, _event) do
+    counts = [failed_count(count(payload, :failed)), "#{count(payload, :passed) || 0} passed", skipped_count(count(payload, :skipped))]
+    {"Tests ran: " <> Enum.join(present(counts), ", "), [duration(count(payload, :duration_ms))]}
+  end
+
   defp summary("finding.recorded", payload, event) do
     class = finding_class(words(text(payload, :class)))
     found = if is_binary(Map.get(event, :supersedes)), do: "QA reopened #{class}", else: "QA found #{class}"
@@ -643,6 +649,12 @@ defmodule SymphonyElixir.TicketEvents.Summary do
 
   defp changed_title(files, commits) when files > 0, do: "Changed " <> plural(files, "file") <> suffix(" in ", commits)
   defp changed_title(_files, commits), do: "Made " <> (commits || "no change")
+
+  defp failed_count(failed) when is_integer(failed) and failed > 0, do: "#{failed} failed"
+  defp failed_count(_failed), do: nil
+
+  defp skipped_count(skipped) when is_integer(skipped) and skipped > 0, do: "#{skipped} skipped"
+  defp skipped_count(_skipped), do: nil
 
   defp plural(0, _noun), do: nil
   defp plural(1, noun), do: "1 #{noun}"

@@ -115,12 +115,31 @@ final class TicketFactsTests: XCTestCase {
         XCTAssertNil(try event(payload, "fx-03").facts.changes)
     }
 
+    func testARunsTestResultIsTheCountsItRecorded() throws {
+        let payload = try XCTUnwrap(TicketEventsPayload.decode(Self.factsFeed()))
+        let ran = try event(payload, "fx-17")
+
+        XCTAssertEqual(ran.facts.testResult, TicketTestResult(passed: 41, failed: 1, skipped: 2, durationMs: 95_000))
+        XCTAssertEqual(ran.runID, "run-impl-1")
+        XCTAssertNil(ran.facts.provedCheck)
+        // The run's other events carry no test result.
+        XCTAssertNil(try event(payload, "fx-04").facts.testResult)
+    }
+
+    func testACheckProvedByATestIsTheChecksIdAndTheTest() throws {
+        let payload = try XCTUnwrap(TicketEventsPayload.decode(Self.factsFeed()))
+        let proved = try event(payload, "fx-18").facts
+
+        XCTAssertEqual(proved.provedCheck, TicketProvedCheck(checkID: "c1", test: "test/web_shop/filter_test.exs: keeps the filter after a relaunch"))
+        XCTAssertNil(proved.testResult)
+    }
+
     func testTheFactsFixturesTimelineBuildsAndEveryOtherEventCarriesNoFact() throws {
         let payload = try XCTUnwrap(TicketEventsPayload.decode(Self.factsFeed()))
 
         XCTAssertEqual(steps(payload).compactMap(\.runID), ["run-impl-1", "run-review-1", "run-qa-1"])
         let withFacts = payload.events.filter { !$0.facts.isEmpty }.map(\.id)
-        XCTAssertEqual(withFacts, ["fx-04", "fx-06", "fx-10", "fx-11", "fx-12", "fx-14"])
+        XCTAssertEqual(withFacts, ["fx-04", "fx-06", "fx-10", "fx-11", "fx-12", "fx-14", "fx-17", "fx-18"])
     }
 
     // MARK: - Older shapes
@@ -148,11 +167,16 @@ final class TicketFactsTests: XCTestCase {
           {"id": "o7", "seq": 7, "at": "2026-10-18T10:07:00Z", "type": "step.completed",
            "payload": {"step_id": "check", "title": "Check", "mode": "orchestrated", "outcome": "passed",
                        "result": {"status": "pass", "measures": "fast"}, "results": [{"step": 1, "status": "fail", "measures": [{"value": 1}]}]}},
-          {"id": "o8", "seq": 8, "at": "2026-10-18T10:08:00Z", "type": "evidence", "payload": "not a map"}
+          {"id": "o8", "seq": 8, "at": "2026-10-18T10:08:00Z", "type": "evidence", "payload": "not a map"},
+          {"id": "o9", "seq": 9, "at": "2026-10-18T10:09:00Z", "type": "tests.ran", "payload": {"passed": 41, "summary": "41 tests, 1 failure"}},
+          {"id": "o10", "seq": 10, "at": "2026-10-18T10:10:00Z", "type": "tests.ran", "payload": {"passed": "41", "failed": 1}},
+          {"id": "o11", "seq": 11, "at": "2026-10-18T10:11:00Z", "type": "check.proved", "payload": {"check_id": "c2", "by": "qa"}},
+          {"id": "o12", "seq": 12, "at": "2026-10-18T10:12:00Z", "type": "check.proved", "payload": {"check_id": "c3", "by": "test"}},
+          {"id": "o13", "seq": 13, "at": "2026-10-18T10:13:00Z", "type": "evidence", "payload": {"caption": "Counts on another type", "passed": 3, "failed": 0, "by": "test", "check_id": "c1", "test": "t"}}
         ]}
         """
         let payload = try XCTUnwrap(TicketEventsPayload.decode(Data(feed.utf8)))
-        XCTAssertEqual(payload.events.map(\.id), ["o1", "o2", "o3", "o4", "o5", "o6", "o7", "o8"])
+        XCTAssertEqual(payload.events.map(\.id), ["o1", "o2", "o3", "o4", "o5", "o6", "o7", "o8", "o9", "o10", "o11", "o12", "o13"])
 
         // An evidence written before: its picture reads, its step of another type is nothing, its status stays text.
         let old = try event(payload, "o1").facts
@@ -191,8 +215,15 @@ final class TicketFactsTests: XCTestCase {
 
         XCTAssertTrue(try event(payload, "o8").facts.isEmpty)
 
+        // A test result missing a count, or with one of another type, is none, whatever text it carries; a check proved
+        // another way, or by a test it does not name, is none; and the counts or the check on another type are nothing.
+        for id in ["o9", "o10", "o11", "o12", "o13"] {
+            XCTAssertNil(try event(payload, id).facts.testResult, id)
+            XCTAssertNil(try event(payload, id).facts.provedCheck, id)
+        }
+
         // The timeline builds from the feed that holds them: one row each.
-        XCTAssertEqual(steps(payload).count, 8)
+        XCTAssertEqual(steps(payload).count, 13)
     }
 
     func testTheSharedFeedFromBeforeTheseFactsStillReadsWithNoneButItsScreenshots() throws {

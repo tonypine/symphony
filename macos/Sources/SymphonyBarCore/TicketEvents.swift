@@ -200,6 +200,10 @@ public struct TicketEventsPayload: Equatable {
         public var findings: [ReviewFinding] = []
         /// What a run changed (`run.changed`): its heads, commits and files.
         public var changes: RunChanges?
+        /// A run's test result (`tests.ran`): how many tests passed and failed, as the run recorded them.
+        public var testResult: TicketTestResult?
+        /// The check a test proves (`check.proved` by a test): the check's id and the test.
+        public var provedCheck: TicketProvedCheck?
 
         enum CodingKeys: String, CodingKey {
             case kind, outcome, exit, stepId, title, reason, returnsTo, returnsToTitle, questionId, model, effort, tokens, durationMs
@@ -278,6 +282,8 @@ public struct TicketEventsPayload: Equatable {
             measures = TicketMeasure.list(fields, "measures")
             findings = ReviewFinding.list(fields)
             changes = RunChanges(fields: fields)
+            testResult = TicketTestResult(fields: fields)
+            provedCheck = TicketProvedCheck(fields: fields)
         }
     }
 
