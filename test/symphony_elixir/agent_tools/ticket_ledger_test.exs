@@ -648,6 +648,13 @@ defmodule SymphonyElixir.AgentTools.TicketLedgerTest do
         assert "ticket_plan" in names
       end
     end
+
+    test "name the session's current ticket, or refuse a session with none" do
+      issue = %Issue{id: @issue_id, identifier: "TP-1", repo_key: @repo_key}
+
+      assert {:ok, %{issue_id: @issue_id, repo_key: @repo_key}} = TicketLedger.current_ticket(%{issue: issue})
+      assert {:error, {:ticket_ledger, %{"reason" => "no_ticket"}}} = TicketLedger.current_ticket(%{})
+    end
   end
 
   describe "ticket_plan and a proved check" do
