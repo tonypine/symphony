@@ -166,29 +166,30 @@ public struct TimelineSection: View {
         return ids
     }
 
-    /// The timeline in a lazy stack: only the lines near the scroll view's visible part are made, and a folded run makes
+    /// The timeline in lazy stacks: only the lines near the scroll view's visible part are made, and a folded run makes
     /// no step rows, so a 500-event history costs about what a short one does to open and to scroll (TP-1481). The lines
-    /// are one flat list so each item's row is the stack's own child, found by `scrollTo` before it is made.
+    /// are one flat list so each item's row is a stack's own child, found by `scrollTo` before it is made. An unfolded
+    /// run is no lazy stack's child (`segments`): it is drawn whole between them, so every row a lazy stack makes and
+    /// estimates is a line or two tall.
     private func column(_ proxy: ScrollViewProxy) -> some View {
         let model = model
         let idle = model.runNow == nil ? idle : nil
         let moves = Self.moves(arriving: model.items.count(where: { !seen.contains($0.id) }), seen: seen.count)
         let lines = Self.lines(model, idle: idle, clock: clock)
         let connected = Self.connected(lines)
-        return TimelineStack(lazy: !offscreenSnapshot) {
-            ForEach(lines) { line in
-                switch line {
-                case let .day(day):
-                    DaySeparator(day: day)
-                case let .idle(idle):
-                    TimelineIdleRow(line: idle)
-                case let .marker(_, text):
-                    SinceLookedLine(text: text)
-                case let .item(item):
-                    row(item, connects: connected.contains(item.id))
-                        .modifier(TimelineEntering(entering: moves && !seen.contains(item.id), reduceMotion: reduceMotion) {
-                            seen.insert(item.id)
-                        })
+        // A snapshot has no scroll view to say what shows and draws the whole column: one plain stack.
+        let segments = offscreenSnapshot
+            ? [Segment.eager(lines)]
+            : Self.segments(lines) { runFolds.isUnfolded($0.id, byDefault: $0.opensByDefault) }
+        return VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+            ForEach(segments) { segment in
+                switch segment {
+                case let .lazy(_, stretch):
+                    LazyVStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+                        ForEach(stretch) { line in lineView(line, connects: connected.contains(line.id), moves: moves) }
+                    }
+                case let .eager(stretch):
+                    ForEach(stretch) { line in lineView(line, connects: connected.contains(line.id), moves: moves) }
                 }
             }
             if model.isEmpty {
@@ -220,6 +221,61 @@ public struct TimelineSection: View {
             growth?.top = top
         }
         .onChange(of: model.items.first) { _, _ in growth?.grew() }
+    }
+
+    @ViewBuilder private func lineView(_ line: Line, connects: Bool, moves: Bool) -> some View {
+        switch line {
+        case let .day(day):
+            DaySeparator(day: day)
+        case let .idle(idle):
+            TimelineIdleRow(line: idle)
+        case let .marker(_, text):
+            SinceLookedLine(text: text)
+        case let .item(item):
+            row(item, connects: connects)
+                .modifier(TimelineEntering(entering: moves && !seen.contains(item.id), reduceMotion: reduceMotion) {
+                    seen.insert(item.id)
+                })
+        }
+    }
+
+    /// A stretch of the timeline's lines: short lines a lazy stack makes as they come near the screen, or lines drawn
+    /// whole. A lazy stretch is known by what bounds it, the unfolded run `after` it (none for the timeline's head), not
+    /// by the lines it holds: newest first puts every event that lands while a run works at a stretch's head, and an id
+    /// from its first line would make SwiftUI tear its lazy stack down and build it again, its rows and their measured
+    /// heights lost, on each event.
+    enum Segment: Identifiable, Equatable {
+        case lazy(after: String?, [Line])
+        case eager([Line])
+
+        var id: String {
+            switch self {
+            case let .lazy(after, _): after.map { "lazy-after-\($0)" } ?? "lazy-head"
+            case let .eager(lines): "eager-\(lines.first?.id ?? "")"
+            }
+        }
+    }
+
+    /// The timeline's `lines` cut into stretches: each run `unfolded` says is open is drawn whole on its own, and the
+    /// lines between them go to lazy stacks. A lazy stack never holds an unfolded run, so no row it makes or estimates
+    /// is taller than a line or two: a step unfolded into a conversation taller than the window, in the lazy stack, kept
+    /// it placing and estimating its rows on every pass, and the page answered nothing (TP-1688's QA).
+    static func segments(_ lines: [Line], unfolded: (RunGroupModel) -> Bool) -> [Segment] {
+        var segments: [Segment] = []
+        var short: [Line] = []
+        var after: String?
+        for line in lines {
+            if case let .item(.run(run, _)) = line, unfolded(run) {
+                if !short.isEmpty { segments.append(.lazy(after: after, short)) }
+                short = []
+                after = line.id
+                segments.append(.eager([line]))
+            } else {
+                short.append(line)
+            }
+        }
+        if !short.isEmpty { segments.append(.lazy(after: after, short)) }
+        return segments
     }
 
     /// The most items that enter with the motion at once: more is a history read whole, not events coming in.
@@ -294,21 +350,6 @@ public struct TimelineSection: View {
                 }
             }
         )
-    }
-}
-
-/// The timeline's column: a lazy stack in the window; an eager one offscreen, where `ImageRenderer` has no scroll view
-/// to say what shows and a snapshot draws the whole column.
-private struct TimelineStack<Content: View>: View {
-    let lazy: Bool
-    @ViewBuilder let content: () -> Content
-
-    var body: some View {
-        if lazy {
-            LazyVStack(alignment: .leading, spacing: DesignTokens.Space.s1, content: content)
-        } else {
-            VStack(alignment: .leading, spacing: DesignTokens.Space.s1, content: content)
-        }
     }
 }
 

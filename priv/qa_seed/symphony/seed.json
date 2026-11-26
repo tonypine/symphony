@@ -496,6 +496,35 @@
     {
       "issue": "QA-104",
       "run_id": "qa-seed-impl-QA-104",
+      "minutes_ago": 199,
+      "type": "step.started",
+      "payload": {
+        "step_id": "code",
+        "title": "Write the code",
+        "mode": "delegated"
+      },
+      "actor": "agent"
+    },
+    {
+      "issue": "QA-104",
+      "run_id": "qa-seed-impl-QA-104",
+      "minutes_ago": 172,
+      "type": "step.completed",
+      "payload": {
+        "step_id": "code",
+        "title": "Write the code",
+        "mode": "delegated",
+        "outcome": "passed"
+      },
+      "actor": "agent",
+      "transcript": {
+        "file": "step_transcripts/QA-104-code.ndjson",
+        "label": "Write the code transcript"
+      }
+    },
+    {
+      "issue": "QA-104",
+      "run_id": "qa-seed-impl-QA-104",
       "minutes_ago": 170,
       "type": "run.ended",
       "payload": {

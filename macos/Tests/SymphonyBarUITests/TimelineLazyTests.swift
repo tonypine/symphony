@@ -129,6 +129,123 @@ final class TimelineLazyTests: XCTestCase {
         withExtendedLifetime(host) {}
     }
 
+    // MARK: - An unfolded run is drawn whole, outside the lazy stacks (TP-1688)
+
+    /// An `NSHostingView` that counts its layout passes.
+    private final class CountingHost<Content: View>: NSHostingView<Content> {
+        var layouts = 0
+
+        override func layout() {
+            layouts += 1
+            super.layout()
+        }
+    }
+
+    /// The long history with a running run on top whose current step's conversation is far taller than the window: 60
+    /// notes in Markdown, each followed by its tool calls, and a failure repeated back to back.
+    static func longModelWithATallRunNow() -> TimelineModel {
+        var lines: [TranscriptLine] = []
+        for index in 0 ..< 60 {
+            let at = String(format: "2026-11-11T12:%02d:00Z", index % 60)
+            lines.append(TranscriptLine(kind: .say, text: "**Note \(index)**: wrote `File\(index).swift`.\n\n- one\n- two", at: at))
+            lines.append(TranscriptLine(kind: .tool, text: "Write: File\(index).swift", at: at, tool: "Write", file: "Sources/File\(index).swift"))
+            lines.append(TranscriptLine(kind: .result, text: "ok", at: at))
+            lines.append(TranscriptLine(kind: .tool, text: "Bash: swift build", at: at, tool: "Bash"))
+            lines.append(TranscriptLine(kind: .result, text: "error: no such module\nline two", at: at, failed: true))
+            lines.append(TranscriptLine(kind: .tool, text: "Bash: swift build", at: at, tool: "Bash"))
+            lines.append(TranscriptLine(kind: .result, text: "error: no such module\nline two", at: at, failed: true))
+        }
+        let now = RunGroupModel(
+            id: "run-now", title: "Implementation run 101", state: .running, word: "Running", durationSeconds: 600,
+            steps: [RunStep(id: "code-now", stepID: "code", title: "Write the code", state: .current, liveLines: lines)]
+        )
+        var long = model()
+        long.days[0].items.insert(.run(now, at: start.addingTimeInterval(21 * 86_400)), at: 0)
+        return long
+    }
+
+    func testAnUnfoldedRunIsDrawnWholeBetweenLazyStretchesOfShortLines() {
+        let at = Self.start
+        func entry(_ id: String) -> TimelineItem { .entry(TimelineEntry(id: id, kind: .phase, at: at, title: id, actor: "Symphony")) }
+        func run(_ id: String) -> TimelineItem { .run(RunGroupModel(id: id, title: id, state: .passed, word: "Passed"), at: at) }
+        let model = TimelineModel(days: [
+            TimelineDay(id: "today", relative: "Today", date: "13 Nov", span: nil, items: [run("now"), entry("a"), run("old"), run("older"), entry("b")]),
+        ])
+        let lines = TimelineSection.lines(model, idle: nil, clock: { _ in "" })
+        let open: Set<String> = ["now", "older"]
+        let segments = TimelineSection.segments(lines) { open.contains($0.id) }
+        func ids(_ segment: TimelineSection.Segment) -> [String] {
+            switch segment {
+            case let .lazy(_, lines): ["lazy"] + lines.map(\.id)
+            case let .eager(lines): ["eager"] + lines.map(\.id)
+            }
+        }
+        XCTAssertEqual(segments.map(ids), [
+            ["lazy", "day-today"],
+            ["eager", run("now").id],
+            ["lazy", entry("a").id, run("old").id],
+            ["eager", run("older").id],
+            ["lazy", entry("b").id],
+        ])
+        let stretchIDs = ["lazy-head", "eager-\(run("now").id)", "lazy-after-\(run("now").id)", "eager-\(run("older").id)", "lazy-after-\(run("older").id)"]
+        XCTAssertEqual(segments.map(\.id), stretchIDs)
+
+        // A stretch is known by the unfolded run before it, not by its first line: an event landing at the head of the
+        // history under the run now, as every event does while it works, keeps every stretch's identity, so no lazy
+        // stack is torn down and built again.
+        let grown = TimelineModel(days: [
+            TimelineDay(id: "today", relative: "Today", date: "13 Nov", span: nil, items: [run("now"), entry("new"), entry("a"), run("old"), run("older"), entry("b")]),
+        ])
+        let grownSegments = TimelineSection.segments(TimelineSection.lines(grown, idle: nil, clock: { _ in "" })) { open.contains($0.id) }
+        XCTAssertEqual(grownSegments.map(\.id), stretchIDs)
+        XCTAssertEqual(grownSegments.map(ids)[2], ["lazy", entry("new").id, entry("a").id, run("old").id])
+
+        // Every run folded: one lazy stretch of every line; no line, no stretch.
+        XCTAssertEqual(TimelineSection.segments(lines) { _ in false }, [.lazy(after: nil, lines)])
+        XCTAssertEqual(TimelineSection.segments([]) { _ in true }, [])
+    }
+
+    /// QA's hang on TP-1688: a step unfolded into a conversation taller than the window, in a long history the lazy
+    /// stack makes. The run now's tall conversation and an older run unfolded are drawn whole, the history around them
+    /// stays lazy, and the page stops laying itself out.
+    func testALongHistoryWithATallUnfoldedConversationSettlesAndStaysLazy() throws {
+        let model = Self.longModelWithATallRunNow()
+        let older = try XCTUnwrap(model.items.compactMap(\.run).dropFirst(3).first)
+        let lines = TimelineSection.lines(model, idle: nil, clock: { _ in "" })
+        let unfolded: Set<String> = ["run-now", older.id]
+        XCTAssertEqual(TimelineSection.segments(lines) { unfolded.contains($0.id) }.count(where: { if case .eager = $0 { true } else { false } }), 2)
+
+        TimelineRowBodies.recorded = []
+        let page = ScrollView(.vertical) {
+            VStack(alignment: .leading, spacing: 8) {
+                TimelineSection(model: model, transcripts: StepTranscripts { _ in .unreachable }, calendar: utc, unfoldedRuns: unfolded)
+            }
+            .padding(24)
+        }
+        .frame(width: Self.size.width, height: Self.size.height)
+        .transaction { transaction in
+            transaction.animation = nil
+            transaction.disablesAnimations = true
+        }
+        let host = CountingHost(rootView: page)
+        host.frame = NSRect(origin: .zero, size: Self.size)
+        host.layoutSubtreeIfNeeded()
+        spin(0.3)
+        host.layoutSubtreeIfNeeded()
+        spin(0.3)
+
+        let settled = host.layouts
+        spin(0.5)
+        XCTAssertEqual(host.layouts, settled, "the page kept laying itself out")
+        XCTAssertFalse(host.needsLayout)
+        // The run now is made; the history under its tall conversation is not.
+        let made = TimelineRowBodies.recorded ?? []
+        XCTAssertTrue(made.contains("run-run-now"))
+        XCTAssertLessThan(Set(made).count, Self.firstDisplayBound)
+        XCTAssertFalse(made.contains("entry-e1"))
+        withExtendedLifetime(host) {}
+    }
+
     // MARK: - The flat list of lines
 
     func testTheLinesAreEachDaysSeparatorThenItsItemsWithTheMarkerAndTheIdleLine() {

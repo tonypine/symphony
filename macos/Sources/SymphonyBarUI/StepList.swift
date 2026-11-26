@@ -3,10 +3,9 @@ import SwiftUI
 import SymphonyBarCore
 
 // The catalog's Step list and Run group (`docs/design/director-ticket-page.md` §1 facts 4, 8 and 13, §4): a run folds
-// into its steps and a step into what the agent said, the tools it called and what came back. The fold opens its
-// height on the standard easing, its lines fade down into place 35 ms apart and its chevron turns on a spring; a new
-// line of the run now fades up at the bottom and flashes the working tint, and the agent's newest words carry a caret.
-// Under Reduce Motion everything is there at once and nothing flashes.
+// into its steps and a step into its conversation (`RunConversationView`): what the agent wrote, what it did after
+// each note folded into one line, and each failure in its own row. The fold opens its height on the standard easing
+// and its chevron turns on a spring; under Reduce Motion everything is there at once.
 
 // MARK: - Fold keys
 
@@ -20,55 +19,13 @@ public enum FoldKeys {
     }
 }
 
-// MARK: - Line entering
-
-/// How a line comes into an unfolded step: down into place with the fold, `delay` after the one above it, or up at
-/// the bottom of the run now with a flash of the working tint.
-private struct LineEntering: ViewModifier {
-    enum Entry: Equatable {
-        case fold(delay: Double)
-        case live
-    }
-
-    let entry: Entry
-    @State private var shown = false
-    @State private var flash = 0.0
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
-
-    func body(content: Content) -> some View {
-        let still = reduceMotion || offscreenSnapshot
-        let visible = shown || still
-        content
-            .background {
-                RoundedRectangle(cornerRadius: DesignTokens.Radius.mark, style: .continuous)
-                    .fill(DesignTokens.Status.working.tint.opacity(0.18 * flash))
-                    .padding(.horizontal, -DesignTokens.Space.s1)
-            }
-            .opacity(visible ? 1 : 0)
-            .offset(y: visible ? 0 : (entry == .live ? 6 : -6))
-            .onAppear {
-                guard !still else { return }
-                switch entry {
-                case let .fold(delay):
-                    withAnimation(.motion(.standard, reduceMotion: false).delay(delay)) { shown = true }
-                case .live:
-                    flash = 1
-                    withAnimation(.motion(.standard, reduceMotion: false)) { shown = true }
-                    withAnimation(.easeOut(duration: 1.2).delay(DesignTokens.Motion.standardDuration)) { flash = 0 }
-                }
-            }
-    }
-}
-
 // MARK: - A transcript line
 
-/// One line of a step: its time, a glyph for what it is, and its text. What the agent said reads in `ChipText`, its
-/// ticket and PR mentions chips; a tool call names its tool and its arguments in short; a result says how long its
-/// tool took and is marked when it failed. The agent's newest words in the run now carry a caret.
+/// One line of a step, as a group of its conversation unfolds into: its time, a glyph for what it is, and its text.
+/// What the agent said reads in `ChipText`, its ticket and PR mentions chips; a tool call names its tool and its
+/// arguments in short; a result says how long its tool took and is marked when it failed.
 struct TranscriptLineRow: View {
     let line: TranscriptLine
-    var typing = false
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
@@ -108,14 +65,7 @@ struct TranscriptLineRow: View {
     @ViewBuilder private var text: some View {
         switch line.kind {
         case .say:
-            if typing {
-                // The newest words, still being written: plain text with the caret after the last word.
-                (Text(line.text) + Text(" ▍").foregroundStyle(DesignTokens.Status.working.tint))
-                    .font(DesignTokens.TypeStyle.secondary.font)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else {
-                ChipText(text: line.text, font: DesignTokens.TypeStyle.secondary.nsFont)
-            }
+            ChipText(text: line.text, font: DesignTokens.TypeStyle.secondary.nsFont)
         case .tool:
             (Text(line.toolName.map { $0 + "  " } ?? "").fontWeight(.semibold) + Text(line.body))
                 .font(.system(.callout, design: .monospaced))
@@ -201,12 +151,18 @@ public struct StepList: View {
     public static let accessibilityLabel = "Steps of the run"
 }
 
-/// One step: its header line and, unfolded, its lines.
+/// One step: its header line and, unfolded, its conversation, with "Show all events" in the header to unfold every
+/// group of it at once.
 private struct StepRow: View {
     let step: RunStep
     @ObservedObject var transcripts: StepTranscripts
     let unfolded: Bool
     let toggle: () -> Void
+    @State private var groups = ConversationFolds()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// The step has lines to show: its transcript or the run now's.
+    private var showsAllToggle: Bool { unfolded && (step.transcript != nil || !step.liveLines.isEmpty) }
 
     /// A step's lines start under its name: past the chevron, the mark and the gaps between them.
     static let linesLeading: CGFloat = {
@@ -221,7 +177,15 @@ private struct StepRow: View {
                 accessibilityLabel: step.canUnfold ? step.foldAccessibilityLabel(folded: !unfolded) : step.accessibilityLabel,
                 toggle: toggle
             ) {
-                StepHeaderLabel(step: step)
+                StepHeaderLabel(step: step, reserved: showsAllToggle ? StepShowAllButton.width : 0)
+            }
+            .overlay(alignment: .trailing) {
+                if showsAllToggle {
+                    StepShowAllButton(on: groups.showsAll) {
+                        withAnimation(.motion(.standard, reduceMotion: reduceMotion)) { groups.toggleAll() }
+                    }
+                    .padding(.trailing, StepHeaderLabel.stateColumn + StepHeaderLabel.durationColumn + StepHeaderLabel.columnGaps)
+                }
             }
             .qaPart("head")
             // A walk that judged several walkthrough steps in one session: one line per step, with its own status,
@@ -243,7 +207,7 @@ private struct StepRow: View {
                         .padding(.leading, Self.linesLeading)
                         .padding(.top, DesignTokens.Space.s1)
                 }
-                StepLines(step: step, transcripts: transcripts)
+                StepLines(step: step, transcripts: transcripts, groups: $groups)
                     .padding(.leading, Self.linesLeading)
                     .padding(.top, DesignTokens.Space.s1)
                     .padding(.bottom, DesignTokens.Space.s2)
@@ -280,6 +244,8 @@ struct StepSummaryRow: View {
 /// duration in right-aligned columns, so the steps of a run line up.
 private struct StepHeaderLabel: View {
     let step: RunStep
+    /// Room kept before the state column for what the row draws over it ("Show all events").
+    var reserved: CGFloat = 0
 
     var body: some View {
         HStack(alignment: .center, spacing: DesignTokens.Space.s2) {
@@ -298,6 +264,7 @@ private struct StepHeaderLabel: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            if reserved > 0 { Color.clear.frame(width: reserved, height: 1) }
             Text(step.state.word + (step.answer?.result?.extraWord.map { " · " + $0 } ?? ""))
                 .font(DesignTokens.TypeStyle.secondary.font.weight(.medium))
                 .foregroundStyle(stateStyle)
@@ -326,6 +293,8 @@ private struct StepHeaderLabel: View {
     static let stateColumn: CGFloat = 96
     /// The duration's column (`.sl-dur`: at least 52 px, right-aligned).
     static let durationColumn: CGFloat = 52
+    /// The row's gaps after the reserved room: before the state column and before the duration column.
+    static let columnGaps: CGFloat = DesignTokens.Space.s2 + DesignTokens.Space.s2
 }
 
 /// The walkthrough steps a grouped walk judged, one line each in the step row's style: the check's mark, "Step 2" with
@@ -397,21 +366,22 @@ private struct StepMark: View {
     }
 }
 
-/// An unfolded step's lines: the run now's, else its transcript, read on the first unfold.
+/// An unfolded step's conversation: the run now's lines, else its transcript, read on the first unfold.
 private struct StepLines: View {
     let step: RunStep
     @ObservedObject var transcripts: StepTranscripts
+    @Binding var groups: ConversationFolds
 
     var body: some View {
         Group {
             if step.isLive, !step.liveLines.isEmpty || step.transcript == nil {
-                LineList(lines: step.liveLines, live: true)
+                RunConversationView(entries: RunConversation.entries(step.liveLines, live: true), folds: $groups)
             } else if let transcript = step.transcript {
                 switch transcripts.lines(transcript) {
                 case .loading:
                     Note(text: Self.loading)
                 case let .loaded(lines):
-                    if lines.isEmpty { Note(text: Self.empty) } else { LineList(lines: lines, live: false) }
+                    if lines.isEmpty { Note(text: Self.empty) } else { RunConversationView(entries: RunConversation.entries(lines), folds: $groups) }
                 case .unavailable:
                     Note(text: Self.unavailable)
                 case .failed:
@@ -435,39 +405,23 @@ private struct StepLines: View {
     }
 }
 
-/// The lines of a step, top to bottom. With the fold they fade down 35 ms apart; in the run now a line that comes
-/// after the step unfolded fades up at the bottom and flashes, and the agent's newest words carry a caret.
-struct LineList: View {
-    let lines: [TranscriptLine]
-    let live: Bool
-    /// The lines there when the step unfolded: they came with the fold, the rest came live.
-    @State private var known: Set<String>
-
-    init(lines: [TranscriptLine], live: Bool) {
-        self.lines = lines
-        self.live = live
-        _known = State(initialValue: Set(Self.keyed(lines).map(\.key)))
-    }
+/// "Show all events" in an unfolded step's header: unfolds every group of the step's conversation at once; on, it is
+/// selected, and a click folds them all again.
+private struct StepShowAllButton: View {
+    let on: Bool
+    let toggle: () -> Void
 
     var body: some View {
-        let keyed = Self.keyed(lines)
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
-            ForEach(Array(keyed.enumerated()), id: \.element.key) { index, entry in
-                TranscriptLineRow(line: entry.line, typing: live && index == keyed.count - 1 && entry.line.kind == .say)
-                    .modifier(LineEntering(entry: known.contains(entry.key) ? .fold(delay: DesignTokens.Motion.staggerDelay(index, reduceMotion: false)) : .live))
-            }
-        }
+        Button(ConversationFolds.showAll, action: toggle)
+            .directorButton(.quiet, size: .small, glyph: on ? "checkmark" : nil, selected: on)
+            .fixedSize()
+            .accessibilityAddTraits(.isToggle)
+            .accessibilityValue(on ? "On" : "Off")
+            .qaPart("show-all")
     }
 
-    /// Each line with a key that stays with it as the run now's window of lines slides.
-    static func keyed(_ lines: [TranscriptLine]) -> [(key: String, line: TranscriptLine)] {
-        var seen: [String: Int] = [:]
-        return lines.map { line in
-            let base = "\(line.at ?? "")|\(line.kind.rawValue)|\(line.text)"
-            seen[base, default: 0] += 1
-            return (seen[base]! == 1 ? base : "\(base)#\(seen[base]!)", line)
-        }
-    }
+    /// The room the header keeps for it.
+    static let width: CGFloat = 132
 }
 
 // MARK: - Marks

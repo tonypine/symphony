@@ -13,6 +13,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   alias SymphonyElixir.Config.Schema.Execution
   alias SymphonyElixir.Harnesses.{EventStream, ToolSession}
   alias SymphonyElixir.OpenRouter.Models, as: OpenRouterModels
+  alias SymphonyElixir.PhaseSteps.Transcript
   alias SymphonyElixir.ProjectGuidePrompt
   alias SymphonyElixir.Secret
   alias SymphonyElixir.SharedSkills
@@ -238,7 +239,9 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   @typep parsed_event ::
            {:session_started, String.t()}
            | {:tool_use, String.t()}
+           | {:tool_use, String.t(), map()}
            | {:tool_result, String.t()}
+           | {:tool_result, String.t(), :failed}
            | {:agent_text, String.t()}
            | {:notification, String.t()}
            | {:turn_completed, map()}
@@ -435,6 +438,29 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
       payload: %{
         method: "item/tool/call",
         params: %{tool: name}
+      }
+    }
+  end
+
+  # The call's input as the fields its line carries: what it does in short and the file it names.
+  def event_to_update({:tool_use, name, input}) when is_binary(name) and is_map(input) do
+    %{
+      event: :tool_use,
+      timestamp: DateTime.utc_now(),
+      payload: %{
+        method: "item/tool/call",
+        params: Map.merge(%{tool: name}, Transcript.tool_fields(input))
+      }
+    }
+  end
+
+  def event_to_update({:tool_result, text, :failed}) when is_binary(text) do
+    %{
+      event: :tool_result,
+      timestamp: DateTime.utc_now(),
+      payload: %{
+        method: "item/tool/result",
+        params: %{text: text, failed: true}
       }
     }
   end
@@ -1559,6 +1585,10 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   defp assistant_block_event(%{"type" => "text", "text" => text}) when is_binary(text),
     do: [{:agent_text, text}]
 
+  # A call's input goes with it, so the run's live lines say what the call does and name its file.
+  defp assistant_block_event(%{"type" => "tool_use", "name" => name, "input" => input}) when is_binary(name) and is_map(input),
+    do: [{:tool_use, name, input}]
+
   defp assistant_block_event(%{"type" => "tool_use", "name" => name}) when is_binary(name),
     do: [{:tool_use, name}]
 
@@ -1570,10 +1600,12 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
   defp extract_tool_result_events(_), do: []
 
+  # A result whose tool failed says so (`is_error`), so the live lines draw it as a failure.
   defp tool_result_block_event(%{"type" => "tool_result"} = block) do
-    case tool_result_text(block) do
-      nil -> []
-      text -> [{:tool_result, text}]
+    case {tool_result_text(block), Map.get(block, "is_error")} do
+      {nil, _error} -> []
+      {text, true} -> [{:tool_result, text, :failed}]
+      {text, _ok} -> [{:tool_result, text}]
     end
   end
 

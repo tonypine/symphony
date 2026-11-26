@@ -639,10 +639,11 @@ which must say why (`reason`); and `duration_ms`. Each of those fields is refuse
 outcome. A machine step's output is an artifact of kind `step_output` on its `step.completed`, served
 like any other artifact. An agent step's `step.completed` carries the step's slice of the session
 transcript as a `transcript` artifact (`.ndjson`, one line per entry: what the agent said, each tool
-call with its arguments summarised, each result summarised with its duration), cut at whole entries
+call with its arguments summarised and its tool and file as fields, each result's first lines with
+its duration; a note is kept whole), cut at whole entries
 so a session's slices concatenated are its whole transcript; an end the agent recorded mid-turn gets
 it once the turn is over. While a run is live, the ticket read's `running` says the step it is on
-(`current_step`) and the run's newest lines from the session stream (`recent_lines`, at most 20):
+(`current_step`) and the run's lines from the session stream (`recent_lines`, all the stream holds):
 that step's while one is open, else the lines since the run's last step completed, or the whole
 stream's for a run that walks no steps (a QA or Code Review run). There is no `step.skipped`: a skip is `step.completed` with `outcome:
 skipped`. A `question.answered` naming the question a paused step waits on resumes that step.

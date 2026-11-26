@@ -26,6 +26,9 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
   @facts_api Path.expand("../../../macos/Tests/Fixtures/director-app/ticket-facts/api/v1", __DIR__)
   # The QA seed's picture, so the seed and the fixture keep the same artifact.
   @picture Path.expand("../../../priv/qa_seed/symphony/pictures/QA-104-activity-filter.png", __DIR__)
+  # The QA seed's step transcript read as a conversation (TP-1688), so the seed and the step fixture
+  # keep the same lines.
+  @conversation Path.expand("../../../priv/qa_seed/symphony/step_transcripts/QA-104-code.ndjson", __DIR__)
   @test_output "1 test, 1 failure\n\n  1) test the timeline shows the failed step (TimelineTest)\n     Assertion with == failed\n     left:  :done\n     right: :failed\n"
 
   setup do
@@ -200,15 +203,17 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
     end
 
     test "the checked-in step fixture equals the answer for the step ticket, with its kept and its gone output", %{workspace: workspace} do
-      {kept, gone} = steps_ticket!(workspace)
+      {kept, gone, transcript} = steps_ticket!(workspace)
 
       body = json_response(get(build_conn(), @path <> "?group=run"), 200)
       text = response(get(build_conn(), "/api/v1/artifacts/#{kept}"), 200)
+      lines = response(get(build_conn(), "/api/v1/artifacts/#{transcript}"), 200)
       # The 410's error, without the times the ingest stamps on the rest of its answer.
       expired = Jason.encode!(%{"error" => json_response(get(build_conn(), "/api/v1/artifacts/#{gone}"), 410)["error"]})
       events = Path.join(@steps_api, "repos/web-shop/tickets/SHOP-410/events.json")
       kept_file = Path.join(@steps_api, "artifacts/#{kept}.txt")
       gone_file = Path.join(@steps_api, "artifacts/#{gone}.410.json")
+      transcript_file = Path.join(@steps_api, "artifacts/#{transcript}.txt")
 
       if System.get_env("SYMPHONY_WRITE_FIXTURES") == "1" do
         File.mkdir_p!(Path.dirname(events))
@@ -216,11 +221,17 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
         File.write!(events, [Jason.encode_to_iodata!(body, pretty: true), "\n"])
         File.write!(kept_file, text)
         File.write!(gone_file, expired)
+        File.write!(transcript_file, lines)
       end
 
       assert body == events |> File.read!() |> Jason.decode!()
       assert File.read!(kept_file) == @test_output
       assert File.read!(gone_file) == expired
+      assert File.read!(transcript_file) == File.read!(@conversation)
+
+      %{"events" => [_started, _code, %{"artifacts" => [saved]}, _ended]} = run(body["timeline"], "run-impl-2")
+      assert %{"id" => ^transcript, "kind" => "transcript", "mime" => "text/x-ndjson", "available" => true} = saved
+      assert %{"status" => "running", "events" => [_run_started, %{"type" => "step.started"}]} = run(body["timeline"], "run-impl-3")
 
       %{"events" => run_events} = run(body["timeline"], "run-impl-1")
       titles = for %{"type" => "step." <> _} = event <- run_events, do: event["summary"]["title"]
@@ -476,7 +487,10 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
   # The step ticket: an implementation run whose agent wrote the code, whose build passed with an
   # output Symphony no longer keeps, whose tests failed back to writing the code with their output
   # kept, and whose next attempt paused on a question. Fixed ids, times and bytes, so its answer
-  # never changes. Returns the kept output's id and the gone one's.
+  # never changes. Its second implementation run wrote the code with a saved transcript that reads as
+  # a conversation (the QA seed's: notes, folded actions, a repeated failure, a silent stretch), and
+  # its third is still writing the code. Returns the kept output's id, the gone one's and the
+  # transcript's.
   defp steps_ticket!(workspace) do
     [kept, gone] =
       for {name, label, bytes} <- [{"tests.txt", "Test output", @test_output}, {"build.txt", "Build output", "Compiling 3 files (.ex)\nGenerated symphony app\n"}] do
@@ -489,7 +503,14 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
 
     File.rm!(Store.path(gone))
     {:error, :expired} = Artifacts.path(gone)
+    lines_path = Path.join(workspace, "code.ndjson")
+    File.cp!(@conversation, lines_path)
+    lines_meta = %{repo_key: @repo_key, issue_id: @issue_id, run_id: "run-impl-2", label: "Write the code transcript", kind: "transcript"}
+    {:ok, %{id: transcript}} = Artifacts.ingest(lines_path, lines_meta, roots: [workspace])
     agent = {:agent, "run-impl-1", "implementation"}
+    second = {:agent, "run-impl-2", "implementation"}
+    third = {:agent, "run-impl-3", "implementation"}
+    write = %{step_id: "code", title: "Write the code", mode: "delegated"}
     code = %{step_id: "code", title: "writing the code", mode: "delegated"}
     build = %{step_id: "build", title: "building", mode: "machine"}
     tests = %{step_id: "tests", title: "tests", mode: "machine"}
@@ -507,14 +528,22 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
             {"st-08", 15, "step.completed", Map.merge(tests, failed), run_id: "run-impl-1", artifacts: [kept]},
             {"st-09", 15, "step.started", code, actor: agent},
             {"st-10", 20, "step.completed", Map.merge(code, %{outcome: "paused", question_id: "question-1"}), actor: agent},
-            {"st-11", 21, "run.ended", %{run_id: "run-impl-1", run_kind: "implementation", run_number: 1, exit: "paused", duration_ms: 1_140_000}, run_id: "run-impl-1"}
+            {"st-11", 21, "run.ended", %{run_id: "run-impl-1", run_kind: "implementation", run_number: 1, exit: "paused", duration_ms: 1_140_000}, run_id: "run-impl-1"},
+            # The seed's transcript runs from 08:41 to 08:53 on 2026-10-30: the second run holds it.
+            {"st-12", ~U[2026-10-30 08:40:00.000000Z], "run.started", %{run_id: "run-impl-2", run_kind: "implementation", run_number: 2, head: "bbb2222"}, run_id: "run-impl-2"},
+            {"st-13", ~U[2026-10-30 08:40:30.000000Z], "step.started", write, actor: second},
+            {"st-14", ~U[2026-10-30 08:54:00.000000Z], "step.completed", Map.put(write, :outcome, "passed"), actor: second, artifacts: [transcript]},
+            {"st-15", ~U[2026-10-30 08:55:00.000000Z], "run.ended", %{run_id: "run-impl-2", run_kind: "implementation", run_number: 2, exit: "success", duration_ms: 900_000}, run_id: "run-impl-2"},
+            # The third run is still writing the code: its lines are the ticket's run now (SHOP-410.json).
+            {"st-16", ~U[2026-10-30 09:00:00.000000Z], "run.started", %{run_id: "run-impl-3", run_kind: "implementation", run_number: 3, head: "ccc3333"}, run_id: "run-impl-3"},
+            {"st-17", ~U[2026-10-30 09:00:30.000000Z], "step.started", write, actor: third}
           ] do
         {:ok, event} = TicketEvents.build(@repo_key, @issue_id, type, payload, Keyword.put(opts, :at, at(minute)))
         %{event | id: id}
       end
 
     {:ok, _events} = RunStore.append_ticket_events(events)
-    {kept, gone}
+    {kept, gone, transcript}
   end
 
   # The grouped walk ticket: a QA pass that planned four checks, walked steps 1 to 3 (one Settings
@@ -660,5 +689,6 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
     picture
   end
 
+  defp at(%DateTime{} = at), do: at
   defp at(minute), do: DateTime.add(@base, minute * 60, :second)
 end

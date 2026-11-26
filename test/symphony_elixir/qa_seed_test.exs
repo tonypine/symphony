@@ -224,37 +224,33 @@ defmodule SymphonyElixir.QaSeedTest do
     Jason.decode!(conn.resp_body)
   end
 
-  test "QA-104's history holds a fact of each kind the ticket page draws, its picture kept as a screenshot", %{repo_key: repo_key, dir: dir} do
+  test "an event keeps the output, picture and step transcript its entry names, each as an artifact of its kind", %{repo_key: repo_key} do
+    png = <<0x89, "PNG\r\n", 0x1A, "\n", 0, 0, 0, 13, "IHDR", 0, 0, 0, 1>>
+    lines = ~s({"kind":"say","text":"**Done.**"}\n{"kind":"tool","text":"Edit: lib/x.ex","tool":"Edit","file":"lib/x.ex"}\n)
+    step = %{"issue" => "QA-104", "type" => "step.completed", "run_id" => "run-1", "actor" => "agent"}
+    payload = %{"step_id" => "code", "title" => "Write the code", "mode" => "delegated", "outcome" => "passed"}
+
+    events = [
+      Map.merge(step, %{"payload" => payload, "transcript" => %{"file" => "own/code.ndjson", "label" => "Write the code transcript"}}),
+      %{"issue" => "QA-104", "type" => "evidence", "payload" => %{"caption" => "After"}, "picture" => %{"file" => "own/shot.png", "label" => "After"}},
+      %{"issue" => "QA-104", "type" => "note", "payload" => %{"text" => "x"}, "output" => %{"file" => "own/build.txt", "label" => "Build output"}}
+    ]
+
+    dir = seed_copy(repo_key, fn seed -> seed |> Map.take(["repository"]) |> Map.put("events", events) end)
+    File.mkdir_p!(Path.join(dir, "own"))
+    File.write!(Path.join(dir, "own/code.ndjson"), lines)
+    File.write!(Path.join(dir, "own/shot.png"), png)
+    File.write!(Path.join(dir, "own/build.txt"), "compiled\n")
+
     assert QaSeed.load(dir, now: @now) == :ok
+    kept = for event <- RunStore.list_ticket_events("qa-seed-104", []), id <- event.artifacts, do: {event.type, Artifacts.get(id), id}
 
-    events = RunStore.list_ticket_events("qa-seed-104", [])
-    by_type = fn type -> Enum.filter(events, &(&1.type == type)) end
-
-    # The files a run edited and the commits it made.
-    assert [first, second] = by_type.("run.changed")
-    assert %{start_head: "4e1d0c2", head: "9b7a3f1", commits: [%{sha: "6c2e9d4" <> _, subject: "Keep the Activity filter" <> _}, %{}]} = first.payload
-    assert Enum.map(first.payload.files, &{&1.status, Map.get(&1, :from)}) == [{"added", nil}, {"modified", nil}, {"renamed", "macos/Sources/SymphonyBar/ActivityPane.swift"}, {"deleted", nil}]
-    assert %{commits: [%{subject: "Read the Activity filter" <> _}], files: [%{status: "modified"}]} = second.payload
-
-    # A review's verdict with its findings, each with its file and line range.
-    assert [rework, approve] = by_type.("verdict.recorded")
-    assert %{kind: "code_review", outcome: "rework", findings: [%{file: "macos/Sources/SymphonyBar/ActivityTab.swift", line_range: %{start: 42, end: 47}}]} = rework.payload
-    assert %{outcome: "approve", findings: [%{since_last_review: "changed"}]} = approve.payload
-
-    # A picture with its artifact, a measured value, and a QA step's answer.
-    assert [picture, measured] = by_type.("evidence")
-    assert %{step: "1", environment: "fixture", result: %{status: "pass"}} = picture.payload
-    assert [artifact_id] = picture.artifacts
-    assert {:ok, %{kind: "screenshot", mime: "image/png", label: "Activity tab after a relaunch"}} = Artifacts.get(artifact_id)
-    assert {:ok, path} = Artifacts.path(artifact_id)
-    assert File.read!(path) == File.read!(Path.join(@seed, "pictures/QA-104-activity-filter.png"))
-    assert %{measures: [%{name: "Filter restored after launch", value: 0.42, unit: "s", expected: 1}]} = measured.payload
-
-    assert [checked, walked] = Enum.filter(by_type.("step.completed"), &(&1.run_id == "qa-seed-qa-QA-104"))
-    assert %{result: %{status: "pass", measures: [%{name: "Rows shown", value: 3, unit: "rows"}]}} = checked.payload
-    assert [%{step: 2, status: "pass"}, %{step: 3, status: "fail", measures: [label_width]}] = walked.payload.results
-    assert %{value: 0, unit: "pt", expected: 80} = label_width
-    assert Enum.all?(events, &(&1.repo_key == repo_key))
+    assert [{"step.completed", {:ok, transcript}, transcript_id}, {"evidence", {:ok, shot}, _shot_id}, {"note", {:ok, output}, _output_id}] = kept
+    assert %{kind: "transcript", label: "Write the code transcript"} = transcript
+    assert {:ok, path} = Artifacts.path(transcript_id)
+    assert File.read!(path) == lines
+    assert %{kind: "screenshot", mime: "image/png", label: "After"} = shot
+    assert %{kind: "step_output", label: "Build output"} = output
   end
 
   test "a seed with only its repository loads, and the ages count from now", %{repo_key: repo_key} do

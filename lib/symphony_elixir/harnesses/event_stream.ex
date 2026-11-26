@@ -4,8 +4,10 @@ defmodule SymphonyElixir.Harnesses.EventStream do
 
   A launcher gives it the port and a parser that turns each line into an event:
 
-    * `{:session_started, id}`, `{:agent_text, text}`, `{:tool_use, name}`,
-      `{:tool_result, text}`, `{:tool_progress, name}`, `{:notification, text}`;
+    * `{:session_started, id}`, `{:agent_text, text}`, `{:tool_use, name}` (or
+      `{:tool_use, name, input}` with the call's input), `{:tool_result, text}` (or
+      `{:tool_result, text, :failed}` when the tool failed), `{:tool_progress, name}`,
+      `{:notification, text}`;
     * `{:token_usage_delta, usage}`, summed into the turn's token counts; a delta that names its
       model message (`:message_id`) counts once per message, as Claude repeats a message's usage
       on the line of each of its content blocks;
@@ -424,6 +426,10 @@ defmodule SymphonyElixir.Harnesses.EventStream do
     end)
   end
 
+  defp apply_command_tracking_event({kind, first, _detail}, active_tool_uses, command_deadline, timeout_ms, now)
+       when kind in [:tool_use, :tool_result],
+       do: apply_command_tracking_event({kind, first}, active_tool_uses, command_deadline, timeout_ms, now)
+
   defp apply_command_tracking_event({:tool_use, _}, active_tool_uses, _command_deadline, timeout_ms, now) do
     {active_tool_uses + 1, now + timeout_ms}
   end
@@ -568,6 +574,11 @@ defmodule SymphonyElixir.Harnesses.EventStream do
 
   defp apply_event({kind, _payload} = event, on_message, acc)
        when kind in [:tool_use, :tool_result, :notification, :agent_text] do
+    on_message.(event)
+    acc
+  end
+
+  defp apply_event({kind, _payload, _detail} = event, on_message, acc) when kind in [:tool_use, :tool_result] do
     on_message.(event)
     acc
   end

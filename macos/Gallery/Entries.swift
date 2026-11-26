@@ -244,6 +244,9 @@ let galleryEntries: [GalleryEntry] = [
     GalleryEntry(
         id: "recently-done-head", title: "Recently done head", kind: .component, prefixes: ["recently-done-head-"],
         files: ["SymphonyBarUI/DesignSystem/RecentlyDoneHead.swift", "SymphonyBarUI/DesignSystem/SegmentedControl.swift"]),
+    GalleryEntry(
+        id: "run-conversation", title: "Run conversation", kind: .component, prefixes: ["run-conversation-"],
+        files: ["SymphonyBarUI/DesignSystem/RunConversation.swift", "SymphonyBarCore/RunConversation.swift"]),
     GalleryEntry(id: "type-styles", title: "Type styles", kind: .component, prefixes: ["type-styles-"], files: []),
     // Screens.
     GalleryEntry(

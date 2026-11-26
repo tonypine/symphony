@@ -309,7 +309,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
 
       assert {:multi,
               [
-                {:tool_use, "bash"},
+                {:tool_use, "bash", %{}},
                 {:token_usage_delta, %{input_tokens: 10, output_tokens: 5, cached_input_tokens: 0}}
               ]} = AppServer.parse_event(line)
     end
@@ -321,9 +321,16 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       assert {:multi,
               [
                 {:agent_text, "Running ls"},
-                {:tool_use, "bash"},
+                {:tool_use, "bash", %{}},
                 {:token_usage_delta, %{input_tokens: 10, output_tokens: 5, cached_input_tokens: 0}}
               ]} = AppServer.parse_event(line)
+    end
+
+    test "a tool result whose tool failed is a failed result" do
+      line =
+        ~s({"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t-1","is_error":true,"content":"1 failure"},{"type":"tool_result","tool_use_id":"t-2","content":"ok"}]}})
+
+      assert {:multi, [{:tool_result, "1 failure", :failed}, {:tool_result, "ok"}]} = AppServer.parse_event(line)
     end
 
     test "parses assistant event with multiple tool_use blocks returns multi event" do
@@ -332,8 +339,8 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
 
       assert {:multi,
               [
-                {:tool_use, "bash"},
-                {:tool_use, "read"},
+                {:tool_use, "bash", %{}},
+                {:tool_use, "read", %{}},
                 {:token_usage_delta, %{input_tokens: 10, output_tokens: 5, cached_input_tokens: 0}}
               ]} = AppServer.parse_event(line)
     end
@@ -789,6 +796,13 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
                timestamp: %DateTime{},
                payload: %{method: "item/tool/call", params: %{tool: "bash"}}
              } = AppServer.event_to_update({:tool_use, "bash"})
+
+      # A call with its input carries what it does in short and the file it names; a failed result says so.
+      assert %{event: :tool_use, payload: %{params: %{tool: "Edit", summary: "lib/x.ex", file: "lib/x.ex"}}} =
+               AppServer.event_to_update({:tool_use, "Edit", %{"file_path" => "lib/x.ex", "old_string" => "a"}})
+
+      assert %{event: :tool_result, payload: %{params: %{text: "1 failure", failed: true}}} =
+               AppServer.event_to_update({:tool_result, "1 failure", :failed})
 
       assert %{
                event: :tool_result,
