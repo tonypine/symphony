@@ -733,7 +733,7 @@ struct RepoPauseView: View {
     /// The reason field's size. Offscreen, a stand-in of this size takes the field's place, so `ViewThatFits` picks
     /// the same layout as in the window.
     static let reasonFieldWidth: CGFloat = 240
-    static let reasonFieldHeight: CGFloat = 24
+    static let reasonFieldHeight = CGFloat(DesignTokens.Control.small.height)
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
@@ -766,6 +766,8 @@ struct RepoPauseView: View {
         .accessibilityLabel(control.accessibilityLabel)
     }
 
+    private var fieldRadius: Double { DesignTokens.Control.small.radius }
+
     private var controls: some View {
         HStack(spacing: DesignTokens.Space.s2) {
             if !control.isPaused && offscreenSnapshot {
@@ -773,12 +775,12 @@ struct RepoPauseView: View {
                 // measurement, which differed from one process to the next (TP-1691). Its prompt stands in.
                 Text(RepoPauseControl.reasonPrompt)
                     .font(DesignTokens.TypeStyle.body.font)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(DesignTokens.TextColor.tertiary.color)
                     .lineLimit(1)
                     .padding(.horizontal, DesignTokens.Space.s2)
                     .frame(width: Self.reasonFieldWidth, height: Self.reasonFieldHeight, alignment: .leading)
-                    .background(DesignTokens.Surface.content.color, in: RoundedRectangle(cornerRadius: 5))
-                    .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(DesignTokens.Surface.separator.color))
+                    .background(DesignTokens.Surface.content.color, in: RoundedRectangle(cornerRadius: fieldRadius))
+                    .overlay(RoundedRectangle(cornerRadius: fieldRadius).strokeBorder(DesignTokens.Surface.separator.color))
                     .accessibilityHidden(true)
             } else if !control.isPaused {
                 // No Form label: the prompt says what the field is for, and a label would stand beside it in the
