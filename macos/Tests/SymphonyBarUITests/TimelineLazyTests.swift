@@ -176,7 +176,7 @@ final class TimelineLazyTests: XCTestCase {
         let segments = TimelineSection.segments(lines) { open.contains($0.id) }
         func ids(_ segment: TimelineSection.Segment) -> [String] {
             switch segment {
-            case let .lazy(lines): ["lazy"] + lines.map(\.id)
+            case let .lazy(_, lines): ["lazy"] + lines.map(\.id)
             case let .eager(lines): ["eager"] + lines.map(\.id)
             }
         }
@@ -187,10 +187,21 @@ final class TimelineLazyTests: XCTestCase {
             ["eager", run("older").id],
             ["lazy", entry("b").id],
         ])
-        XCTAssertEqual(segments.map(\.id), ["lazy-day-today", "eager-\(run("now").id)", "lazy-\(entry("a").id)", "eager-\(run("older").id)", "lazy-\(entry("b").id)"])
+        let stretchIDs = ["lazy-head", "eager-\(run("now").id)", "lazy-after-\(run("now").id)", "eager-\(run("older").id)", "lazy-after-\(run("older").id)"]
+        XCTAssertEqual(segments.map(\.id), stretchIDs)
+
+        // A stretch is known by the unfolded run before it, not by its first line: an event landing at the head of the
+        // history under the run now, as every event does while it works, keeps every stretch's identity, so no lazy
+        // stack is torn down and built again.
+        let grown = TimelineModel(days: [
+            TimelineDay(id: "today", relative: "Today", date: "13 Nov", span: nil, items: [run("now"), entry("new"), entry("a"), run("old"), run("older"), entry("b")]),
+        ])
+        let grownSegments = TimelineSection.segments(TimelineSection.lines(grown, idle: nil, clock: { _ in "" })) { open.contains($0.id) }
+        XCTAssertEqual(grownSegments.map(\.id), stretchIDs)
+        XCTAssertEqual(grownSegments.map(ids)[2], ["lazy", entry("new").id, entry("a").id, run("old").id])
 
         // Every run folded: one lazy stretch of every line; no line, no stretch.
-        XCTAssertEqual(TimelineSection.segments(lines) { _ in false }, [.lazy(lines)])
+        XCTAssertEqual(TimelineSection.segments(lines) { _ in false }, [.lazy(after: nil, lines)])
         XCTAssertEqual(TimelineSection.segments([]) { _ in true }, [])
     }
 

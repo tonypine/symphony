@@ -184,7 +184,7 @@ public struct TimelineSection: View {
         return VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
             ForEach(segments) { segment in
                 switch segment {
-                case let .lazy(stretch):
+                case let .lazy(_, stretch):
                     LazyVStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
                         ForEach(stretch) { line in lineView(line, connects: connected.contains(line.id), moves: moves) }
                     }
@@ -240,14 +240,17 @@ public struct TimelineSection: View {
     }
 
     /// A stretch of the timeline's lines: short lines a lazy stack makes as they come near the screen, or lines drawn
-    /// whole.
+    /// whole. A lazy stretch is known by what bounds it, the unfolded run `after` it (none for the timeline's head), not
+    /// by the lines it holds: newest first puts every event that lands while a run works at a stretch's head, and an id
+    /// from its first line would make SwiftUI tear its lazy stack down and build it again, its rows and their measured
+    /// heights lost, on each event.
     enum Segment: Identifiable, Equatable {
-        case lazy([Line])
+        case lazy(after: String?, [Line])
         case eager([Line])
 
         var id: String {
             switch self {
-            case let .lazy(lines): "lazy-\(lines.first?.id ?? "")"
+            case let .lazy(after, _): after.map { "lazy-after-\($0)" } ?? "lazy-head"
             case let .eager(lines): "eager-\(lines.first?.id ?? "")"
             }
         }
@@ -260,16 +263,18 @@ public struct TimelineSection: View {
     static func segments(_ lines: [Line], unfolded: (RunGroupModel) -> Bool) -> [Segment] {
         var segments: [Segment] = []
         var short: [Line] = []
+        var after: String?
         for line in lines {
             if case let .item(.run(run, _)) = line, unfolded(run) {
-                if !short.isEmpty { segments.append(.lazy(short)) }
+                if !short.isEmpty { segments.append(.lazy(after: after, short)) }
                 short = []
+                after = line.id
                 segments.append(.eager([line]))
             } else {
                 short.append(line)
             }
         }
-        if !short.isEmpty { segments.append(.lazy(short)) }
+        if !short.isEmpty { segments.append(.lazy(after: after, short)) }
         return segments
     }
 
