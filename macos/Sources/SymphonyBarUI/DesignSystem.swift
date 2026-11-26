@@ -316,13 +316,16 @@ public struct Badge: View {
     let size: DesignTokens.Badge.Size
     let glyph: Bool
     let selected: Bool
+    /// The glyph in place of the status's own: a run sent back draws the return arrow in the amber of `you`.
+    var glyphSymbol: String?
     @Environment(\.backgroundProminence) private var prominence
 
     public init(
         status: DesignTokens.Status, word: String? = nil, size: DesignTokens.Badge.Size = .regular, glyph: Bool = true,
-        selected: Bool = false
+        selected: Bool = false, symbol: String? = nil
     ) {
         self.init(role: .status(status), word: word ?? status.word, size: size, glyph: glyph, selected: selected)
+        glyphSymbol = symbol
     }
 
     public init(role: Role, word: String, size: DesignTokens.Badge.Size = .regular, glyph: Bool = true, selected: Bool = false) {
@@ -343,7 +346,7 @@ public struct Badge: View {
     /// The glyph shown, if any: a status's symbol; the accent form has none.
     public var symbol: String? {
         guard glyph, case let .status(status) = role else { return nil }
-        return status.symbol
+        return glyphSymbol ?? status.symbol
     }
 
     public var body: some View {

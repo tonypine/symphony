@@ -33,6 +33,9 @@ public struct RunGroup: View {
 
     private var unfolded: Bool { fold?.wrappedValue ?? folded.map { !$0 } ?? run.opensByDefault }
 
+    /// "Show all events" on the meta line: the run is unfolded and walks no steps, with a conversation to draw.
+    private var showsAllToggle: Bool { unfolded && run.hasConversation }
+
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .center, spacing: DesignTokens.Space.s1) {
@@ -44,10 +47,21 @@ public struct RunGroup: View {
                 }
             }
             .padding(.vertical, DesignTokens.Space.s1)
-            if run.meta != nil {
-                RunMetaLine(run: run)
-                    .padding(.leading, Self.metaIndent)
-                    .padding(.bottom, DesignTokens.Space.s1)
+            if run.meta != nil || showsAllToggle {
+                HStack(alignment: .center, spacing: DesignTokens.Space.s2) {
+                    if run.meta != nil {
+                        RunMetaLine(run: run)
+                    }
+                    Spacer(minLength: 0)
+                    // A run that walks no steps unfolds every group of its conversation from here, as a step's header does.
+                    if showsAllToggle {
+                        ShowAllEventsButton(on: lineFolds.showsAll) {
+                            withAnimation(.motion(.standard, reduceMotion: reduceMotion)) { lineFolds.toggleAll() }
+                        }
+                    }
+                }
+                .padding(.leading, Self.metaIndent)
+                .padding(.bottom, DesignTokens.Space.s1)
             }
             if unfolded {
                 VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
@@ -58,20 +72,18 @@ public struct RunGroup: View {
                             ConductorRunNote(message: placed.message)
                         }
                     }
-                    // The run now on no step (a QA or Code Review run walks none) has its conversation here.
+                    // The run now on no step (a QA or Code Review run walks none) has its conversation here; once such
+                    // a run ended, its saved session draws the same notes and fold lines.
                     if !run.liveLines.isEmpty {
                         RunConversationView(entries: RunConversation.entries(run.liveLines, live: true), folds: $lineFolds)
+                    } else if let transcript = run.savedConversation {
+                        SavedConversation(transcript: transcript, transcripts: transcripts, groups: $lineFolds, notes: .run)
                     }
                     if !run.screenshots.isEmpty {
                         ScreenshotRow(shots: run.screenshots)
                     }
                     ForEach(run.steers) { steer in
                         RunSteerEntry(steer: steer)
-                    }
-                    if run.steps.isEmpty, run.liveLines.isEmpty, run.screenshots.isEmpty, run.steers.isEmpty, run.conductorMessages.isEmpty {
-                        Text(Self.noSteps)
-                            .font(DesignTokens.TypeStyle.secondary.font)
-                            .foregroundStyle(.secondary)
                     }
                 }
                 .padding(.leading, DesignTokens.Space.s4)
@@ -103,7 +115,6 @@ public struct RunGroup: View {
         }
     }
 
-    public static let noSteps = "This run recorded no steps."
     /// The meta line starts under the run's title: past the fold's chevron and the run's mark.
     static let metaIndent: CGFloat = 12 + DesignTokens.Space.s2 + TimelineMark.size + DesignTokens.Space.s2
 }
@@ -212,7 +223,7 @@ private struct RunHeaderLabel: View {
             .font(DesignTokens.TypeStyle.body.font.weight(.semibold))
             .lineLimit(1)
             .fixedSize()
-        Badge(status: run.state.status, word: run.word)
+        Badge(status: run.state.status, word: run.word, symbol: run.state.badgeSymbol)
             .fixedSize()
         if !run.steps.isEmpty {
             StepBars(steps: run.steps)

@@ -51,7 +51,9 @@ defmodule SymphonyElixir.QaSeed do
     `evidence` (`SymphonyElixir.AgentTools.QaPictures`). A `transcript` names a step's lines the same
     way (`file`, `label`), one JSON object a line (`SymphonyElixir.PhaseSteps.Transcript`), kept as
     the `transcript` artifact a step's `step.completed` carries, so the Director unfolds the step
-    into what the agent said and did.
+    into what the agent said and did. On a `run.ended` it names the run's whole session instead, a
+    Claude session JSONL file, which the Director reads as lines (`GET /api/v1/artifacts/:id/lines`)
+    for a run that walks no steps.
 
   It runs as a child of the application between the run store and the orchestrator, when the
   service was started with `--qa-seed <dir>`, so the orchestrator starts with the seeded runs and

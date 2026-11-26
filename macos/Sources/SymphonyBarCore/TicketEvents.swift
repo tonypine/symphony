@@ -599,7 +599,7 @@ public struct TicketEventsPayload: Equatable {
         case ("qa", "fail"): return (.failed, "failed")
         case ("qa", "skip"): return (.done, "skipped")
         case ("code_review", "approve"): return (.done, "approved")
-        case ("code_review", "rework"): return (.failed, "sent back")
+        case ("code_review", "rework"), ("code_review", "request_changes"): return (.failed, "sent back")
         case ("code_review", "block"): return (.failed, "blocked")
         case (_, "fail"), (_, "rework"), (_, "block"): return (.failed, outcome)
         default: return (.done, outcome.replacingOccurrences(of: "_", with: " "))

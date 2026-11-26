@@ -1,0 +1,521 @@
+{
+  "next_since": "2026-10-31T12:50:00.000000Z",
+  "timeline": [
+    {
+      "actor": {
+        "kind": "machine"
+      },
+      "artifacts": [],
+      "at": "2026-10-30T10:00:00.000000Z",
+      "bookkeeping": false,
+      "children": [],
+      "head_sha": null,
+      "id": "rc-01",
+      "idempotency": null,
+      "new": true,
+      "parent": null,
+      "payload": {
+        "from": "Todo",
+        "to": "In Progress"
+      },
+      "phase": null,
+      "rule": null,
+      "run_id": null,
+      "seq": 1,
+      "summary": {
+        "detail": null,
+        "title": "Entered In Progress from Todo"
+      },
+      "supersedes": null,
+      "type": "phase.entered"
+    },
+    {
+      "effort": "high",
+      "ended_at": "2026-10-30T12:40:00.000000Z",
+      "exit": "handoff",
+      "head": "aaa1111",
+      "kind": "run",
+      "model": "claude-opus-5-5",
+      "model_name": "Claude Opus 5.5",
+      "outcome": "Pushed and handed off",
+      "run_id": "run-impl-1",
+      "run_kind": "implementation",
+      "run_number": 1,
+      "started_at": "2026-10-30T10:02:00.000000Z",
+      "status": "ended",
+      "summary": {
+        "detail": "2 h 38 min",
+        "title": "Implementation run 1 ended: handoff"
+      },
+      "verdict": null,
+      "events": [
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-30T10:02:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "run-impl-1-s",
+          "idempotency": "run.started:run-impl-1",
+          "new": true,
+          "parent": null,
+          "payload": {
+            "head": "aaa0000",
+            "run_id": "run-impl-1",
+            "run_kind": "implementation",
+            "run_number": 1,
+            "model": "claude-opus-5-5",
+            "effort": "high"
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-impl-1",
+          "seq": 2,
+          "summary": {
+            "detail": "at aaa0000",
+            "title": "Implementation run 1 started"
+          },
+          "supersedes": null,
+          "type": "run.started"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-30T12:40:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "run-impl-1-e",
+          "idempotency": "run.ended:run-impl-1",
+          "new": true,
+          "parent": null,
+          "payload": {
+            "duration_ms": 9480000,
+            "exit": "handoff",
+            "run_id": "run-impl-1",
+            "run_kind": "implementation",
+            "run_number": 1,
+            "tokens": 1200000,
+            "model": "claude-opus-5-5",
+            "head": "aaa1111"
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-impl-1",
+          "seq": 3,
+          "summary": {
+            "detail": null,
+            "title": "Implementation run 1 ended: handoff"
+          },
+          "supersedes": null,
+          "type": "run.ended"
+        }
+      ]
+    },
+    {
+      "effort": "high",
+      "ended_at": "2026-10-30T12:52:00.000000Z",
+      "exit": "handoff",
+      "head": "aaa1111",
+      "kind": "run",
+      "model": "claude-opus-5-5",
+      "model_name": "Claude Opus 5.5",
+      "outcome": "Sent back to Rework",
+      "run_id": "run-review-1",
+      "run_kind": "code_review",
+      "run_number": 1,
+      "started_at": "2026-10-30T12:50:00.000000Z",
+      "status": "ended",
+      "summary": {
+        "detail": "2 min",
+        "title": "Code Review run 1 ended: handoff"
+      },
+      "verdict": {
+        "kind": "code_review",
+        "outcome": "request_changes",
+        "head": "aaa1111",
+        "at": "2026-10-30T12:51:20.000000Z"
+      },
+      "events": [
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-30T12:50:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "run-review-1-s",
+          "idempotency": "run.started:run-review-1",
+          "new": true,
+          "parent": null,
+          "payload": {
+            "head": "aaa1111",
+            "run_id": "run-review-1",
+            "run_kind": "code_review",
+            "run_number": 1,
+            "model": "claude-opus-5-5",
+            "effort": "high"
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-review-1",
+          "seq": 4,
+          "summary": {
+            "detail": "at aaa1111",
+            "title": "Code Review run 1 started"
+          },
+          "supersedes": null,
+          "type": "run.started"
+        },
+        {
+          "actor": {
+            "kind": "agent",
+            "run_id": "run-review-1",
+            "run_kind": "code_review"
+          },
+          "artifacts": [],
+          "at": "2026-10-30T12:51:20.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "run-review-1-v",
+          "idempotency": null,
+          "new": true,
+          "parent": null,
+          "payload": {
+            "kind": "code_review",
+            "outcome": "request_changes",
+            "head": "aaa1111",
+            "reason": "The proof of c6 tests a function the row never draws with."
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-review-1",
+          "seq": 5,
+          "summary": {
+            "detail": "The proof of c6 tests a function the row never draws with.",
+            "title": "Code Review verdict: request changes"
+          },
+          "supersedes": null,
+          "type": "verdict.recorded"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [
+            {
+              "available": true,
+              "id": "7c1e5a9b3d2f4e6a8c0b1d3f5e7a9c2b4d6f8e0a1c3e5b7d9f2a4c6e8b0d1f3a",
+              "kind": "transcript",
+              "label": "Code Review run 1 session",
+              "mime": "application/x-ndjson",
+              "url": "/api/v1/artifacts/7c1e5a9b3d2f4e6a8c0b1d3f5e7a9c2b4d6f8e0a1c3e5b7d9f2a4c6e8b0d1f3a"
+            }
+          ],
+          "at": "2026-10-30T12:52:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "run-review-1-e",
+          "idempotency": "run.ended:run-review-1",
+          "new": true,
+          "parent": null,
+          "payload": {
+            "duration_ms": 120000,
+            "exit": "handoff",
+            "run_id": "run-review-1",
+            "run_kind": "code_review",
+            "run_number": 1,
+            "tokens": 675000,
+            "model": "claude-opus-5-5",
+            "head": "aaa1111"
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-review-1",
+          "seq": 6,
+          "summary": {
+            "detail": null,
+            "title": "Code Review run 1 ended: handoff"
+          },
+          "supersedes": null,
+          "type": "run.ended"
+        }
+      ]
+    },
+    {
+      "effort": "high",
+      "ended_at": "2026-10-30T13:30:00.000000Z",
+      "exit": "handoff",
+      "head": "bbb2222",
+      "kind": "run",
+      "model": "claude-opus-5-5",
+      "model_name": "Claude Opus 5.5",
+      "outcome": "Pushed and handed off",
+      "run_id": "run-rework-1",
+      "run_kind": "rework",
+      "run_number": 1,
+      "started_at": "2026-10-30T13:00:00.000000Z",
+      "status": "ended",
+      "summary": {
+        "detail": "30 min",
+        "title": "Rework run 1 ended: handoff"
+      },
+      "verdict": null,
+      "events": [
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-30T13:00:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "run-rework-1-s",
+          "idempotency": "run.started:run-rework-1",
+          "new": true,
+          "parent": null,
+          "payload": {
+            "head": "aaa1111",
+            "run_id": "run-rework-1",
+            "run_kind": "rework",
+            "run_number": 1,
+            "model": "claude-opus-5-5",
+            "effort": "high"
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-rework-1",
+          "seq": 7,
+          "summary": {
+            "detail": "at aaa1111",
+            "title": "Rework run 1 started"
+          },
+          "supersedes": null,
+          "type": "run.started"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-30T13:30:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "run-rework-1-e",
+          "idempotency": "run.ended:run-rework-1",
+          "new": true,
+          "parent": null,
+          "payload": {
+            "duration_ms": 1800000,
+            "exit": "handoff",
+            "run_id": "run-rework-1",
+            "run_kind": "rework",
+            "run_number": 1,
+            "tokens": 800000,
+            "model": "claude-opus-5-5",
+            "head": "bbb2222"
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-rework-1",
+          "seq": 8,
+          "summary": {
+            "detail": null,
+            "title": "Rework run 1 ended: handoff"
+          },
+          "supersedes": null,
+          "type": "run.ended"
+        }
+      ]
+    },
+    {
+      "effort": "high",
+      "ended_at": "2026-10-30T14:00:00.000000Z",
+      "exit": "ended normally",
+      "head": "bbb2222",
+      "kind": "run",
+      "model": "claude-opus-5-5",
+      "model_name": "Claude Opus 5.5",
+      "outcome": "Raised a decision for you",
+      "run_id": "run-qa-1",
+      "run_kind": "qa",
+      "run_number": 1,
+      "started_at": "2026-10-30T13:40:00.000000Z",
+      "status": "ended",
+      "summary": {
+        "detail": "20 min",
+        "title": "QA run 1 ended: ended normally"
+      },
+      "verdict": {
+        "kind": "qa",
+        "outcome": "block",
+        "head": "bbb2222",
+        "at": "2026-10-30T13:59:00.000000Z"
+      },
+      "events": [
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-30T13:40:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "run-qa-1-s",
+          "idempotency": "run.started:run-qa-1",
+          "new": true,
+          "parent": null,
+          "payload": {
+            "head": "bbb2222",
+            "run_id": "run-qa-1",
+            "run_kind": "qa",
+            "run_number": 1,
+            "model": "claude-opus-5-5",
+            "effort": "high"
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-qa-1",
+          "seq": 9,
+          "summary": {
+            "detail": "at bbb2222",
+            "title": "QA run 1 started"
+          },
+          "supersedes": null,
+          "type": "run.started"
+        },
+        {
+          "actor": {
+            "kind": "agent",
+            "run_id": "run-qa-1",
+            "run_kind": "qa"
+          },
+          "artifacts": [],
+          "at": "2026-10-30T13:59:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "run-qa-1-v",
+          "idempotency": null,
+          "new": true,
+          "parent": null,
+          "payload": {
+            "kind": "qa",
+            "outcome": "block",
+            "head": "bbb2222",
+            "reason": "The QA machine has no signing identity, so the build can't be installed."
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-qa-1",
+          "seq": 10,
+          "summary": {
+            "detail": "The QA machine has no signing identity, so the build can't be installed.",
+            "title": "QA verdict: block"
+          },
+          "supersedes": null,
+          "type": "verdict.recorded"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-30T14:00:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "run-qa-1-e",
+          "idempotency": "run.ended:run-qa-1",
+          "new": true,
+          "parent": null,
+          "payload": {
+            "duration_ms": 1200000,
+            "exit": "ended normally",
+            "run_id": "run-qa-1",
+            "run_kind": "qa",
+            "run_number": 1,
+            "tokens": 210000,
+            "model": "claude-opus-5-5"
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-qa-1",
+          "seq": 11,
+          "summary": {
+            "detail": null,
+            "title": "QA run 1 ended: ended normally"
+          },
+          "supersedes": null,
+          "type": "run.ended"
+        }
+      ]
+    },
+    {
+      "effort": "high",
+      "ended_at": null,
+      "exit": null,
+      "head": "ccc3333",
+      "kind": "run",
+      "model": "claude-opus-5-5",
+      "model_name": "Claude Opus 5.5",
+      "outcome": null,
+      "run_id": "run-review-2",
+      "run_kind": "code_review",
+      "run_number": 2,
+      "started_at": "2026-10-31T12:50:00.000000Z",
+      "status": "running",
+      "summary": {
+        "detail": null,
+        "title": "Code Review run 2 started"
+      },
+      "verdict": null,
+      "events": [
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-31T12:50:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "run-review-2-s",
+          "idempotency": "run.started:run-review-2",
+          "new": true,
+          "parent": null,
+          "payload": {
+            "head": "ccc3333",
+            "run_id": "run-review-2",
+            "run_kind": "code_review",
+            "run_number": 2,
+            "model": "claude-opus-5-5",
+            "effort": "high"
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-review-2",
+          "seq": 12,
+          "summary": {
+            "detail": "at ccc3333",
+            "title": "Code Review run 2 started"
+          },
+          "supersedes": null,
+          "type": "run.started"
+        }
+      ]
+    }
+  ]
+}

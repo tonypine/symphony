@@ -185,7 +185,12 @@ run-conversation-implementation-show-all
 run-conversation-minute-line
 run-conversation-note
 run-conversation-note-code-block
+run-conversation-review-finished
+run-conversation-review-finished-folded
+run-conversation-review-running
+run-conversation-run-blocked
 run-conversation-silent-stretch-working
+run-conversation-step-blocked
 save-bar-changes-not-saved
 save-bar-no-scope
 save-bar-nothing-changed

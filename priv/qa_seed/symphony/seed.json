@@ -624,8 +624,12 @@
         "run_id": "qa-seed-review-QA-104",
         "run_kind": "code_review",
         "run_number": 1,
-        "exit": "ended normally",
+        "exit": "handoff",
         "duration_ms": 600000
+      },
+      "transcript": {
+        "file": "run_transcripts/QA-104-review.jsonl",
+        "label": "Code Review run 1 session"
       }
     },
     {
@@ -722,8 +726,12 @@
         "run_id": "qa-seed-review2-QA-104",
         "run_kind": "code_review",
         "run_number": 2,
-        "exit": "ended normally",
+        "exit": "handoff",
         "duration_ms": 540000
+      },
+      "transcript": {
+        "file": "run_transcripts/QA-104-review2.jsonl",
+        "label": "Code Review run 2 session"
       }
     },
     {

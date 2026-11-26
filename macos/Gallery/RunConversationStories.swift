@@ -1,7 +1,9 @@
 // The run conversation's components (TP-1688, `docs/design/prototypes/run-conversation/`, approved 2026-11-24): a
 // note, a fold line with its chips (folded, unfolded, working), a failure row with its count, the minute line, and a
-// whole step's conversation, the Implementation and Silent stretch scenes. Each is drawn by the shared views in
-// `SymphonyBarUI/DesignSystem/RunConversation.swift`; a fold line's click works on the live stories.
+// whole step's conversation, the Implementation and Silent stretch scenes; and (TP-1689) the Code Review scene's run
+// with no steps, running and finished with its saved session in the Sent back treatment, and the Blocked marks. Each
+// is drawn by the shared views in `SymphonyBarUI/DesignSystem/RunConversation.swift` and `SymphonyBarUI/RunGroup.swift`;
+// a fold line's click works on the live stories.
 import SwiftUI
 import SymphonyBarCore
 import SymphonyBarUI
@@ -68,6 +70,68 @@ let silentStoryLines: [TranscriptLine] = {
     return lines
 }()
 
+/// The Code Review scene's session (TP-1689): six actions, the verdict among them, then the review's note.
+let reviewStoryLines: [TranscriptLine] = [
+    storyCall("Bash", "git diff 2b54b5258..HEAD -- macos/Sources/SymphonyBarCore/HomeRead.swift macos/Sources/SymphonyBarCore/HomeQueue.swift", "12:50:21"),
+    storyLine(.result, "diff --git a/macos/Sources/SymphonyBarCore/HomeQueue.swift b/macos/Sources/SymphonyBarCore/HomeQueue.swift", "12:50:22", ms: 900),
+    storyCall("Bash", "git diff 2b54b5258..HEAD -- macos/Sources/SymphonyBarUI macos/Sources/SymphonyBar", "12:50:33"),
+    storyLine(.result, "diff --git a/macos/Sources/SymphonyBar/HomeView.swift b/macos/Sources/SymphonyBar/HomeView.swift", "12:50:34", ms: 700),
+    storyCall("Bash", "cat macos/Tests/SymphonyBarCoreTests/RecentlyDoneTests.swift", "12:50:34"),
+    storyLine(.result, "import Foundation\nimport XCTest\n@testable import SymphonyBarCore", "12:50:35", ms: 200),
+    storyCall("Bash", "sed -n 1,200p lib/symphony_elixir/home/recently_done.ex | grep -nE \"epic|done_at\"", "12:50:57"),
+    storyLine(.result, "5:  Symphony saw reach done in a range, most recent first", "12:50:58", ms: 150),
+    storyCall("Bash", "sed -n 60,100p lib/symphony_elixir/home/recently_done.ex", "12:51:00"),
+    storyLine(.result, "value ->\n        case Integer.parse(to_string(value)) do", "12:51:01", ms: 150),
+    storyCall("review_verdict", "{\"verdict\": \"request_changes\", \"reason\": \"The proof of c6 tests a function the row never draws with.\"}", "12:51:20"),
+    storyLine(.result, "{\"recorded\": true, \"verdict\": \"request_changes\"}", "12:51:21", ms: 600),
+    storyLine(.say, "I've finished the review of TP-1644 (pull request #1070) and recorded **request changes**. I read the code and did not run any tests.\n\n**Blocking findings:**\n1. **The test for c6 doesn't test what's drawn.** c6 says the place that uses the done row picks its cells (all of them, pull request and when, or when only). Its test checks `DoneRow.parts(_:epic:)`, but the row's `body` never calls that function; it picks the cells again with its own branches. So `parts` is only used by tests, and the test would still pass if the drawn row stopped matching it. The fix is to draw the trailing cells from `parts`, or to remove `parts` and test the rendered row.\n2. **The `recentHeight` token is never used.** It's set to 216 and a test asserts that value. The section's height actually comes from `HomeRecentlyDone.listHeight(rows:)`, which gives 214 because it leaves out the gap after the last row. The fix is to remove the token, or make the view use it and agree on the value.\n\n**What looks right:**\n- The app's decode matches what `GET /api/v1/home` returns (`recently_done.ex`): the range, both counts, the paging fields and every entry field, with the epic and pull request optional. No server change was needed.\n- Switching between Today and Week can't leave the list stale or empty. Reading past the first page appends rows correctly, and a page left over from the other range is ignored.\n- The relaunch test (c3) really builds a new model on the same store. The finish test (c5) goes through the queue notice and the re-read.\n\n**Not blocking:** each done row is identified by its ticket identifier alone. If a ticket finishes twice in a week, or a ticket finishes while a later page is being read, the same identifier can appear twice in the list. SwiftUI's `ForEach` misbehaves with duplicate identifiers.", "12:51:26"),
+]
+
+/// The Code Review scene's run: running on no step with its newest lines, or ended with its saved session and a verdict
+/// that sent the work back.
+func reviewStoryRun(running: Bool) -> RunGroupModel {
+    var run = RunGroupModel(
+        id: running ? "review-now" : "review-1", title: "Code Review run 1", state: running ? .running : .sentBack,
+        word: running ? "Running" : RunGroupModel.requestChanges, durationSeconds: running ? 60 : 120, tokens: running ? nil : 675_000,
+        model: "Claude Opus 5.5"
+    )
+    if running {
+        run.liveLines = Array(reviewStoryLines.prefix(4))
+            + [storyLine(.say, "Reading the diff against the plan's checks before I judge it.", "12:50:40")]
+            + Array(reviewStoryLines.dropFirst(4).prefix(6))
+    } else {
+        run.transcript = reviewStoryTranscript
+    }
+    return run
+}
+
+let reviewStoryTranscript = TicketOutput(id: "review-1-session/lines", label: "Session", path: "api/v1/artifacts/review-1-session/lines", available: true)
+
+/// A QA run whose verdict was blocked: its header alone, folded.
+let blockedStoryRun = RunGroupModel(
+    id: "qa-blocked", title: "QA run 1", state: .blocked, word: RunStep.State.blocked.word, durationSeconds: 1_200, model: "Claude Opus 5.5"
+)
+
+/// A QA run with a check that could not judge: the Blocked step's row in its run.
+let blockedStepStoryRun = RunGroupModel(
+    id: "qa-step-blocked", title: "QA run 2", state: .passed, word: "Passed", durationSeconds: 900, model: "Claude Opus 5.5",
+    steps: [
+        RunStep(id: "walk", stepID: "walk_1", title: "Walk step 1", state: .done, durationSeconds: 240),
+        RunStep(id: "design", stepID: "design_check", title: "Design check", state: .blocked, reason: "no signing identity", durationSeconds: 60),
+    ]
+)
+
+/// A run's group at the step column's width, its saved session already read.
+@MainActor
+func runGroupStory(_ run: RunGroupModel, unfolded: Bool) -> AnyView {
+    let transcripts = StepTranscripts { _ in .unreachable }
+    transcripts.keep(reviewStoryLines, for: reviewStoryTranscript.id)
+    return AnyView(
+        RunGroup(run: run, transcripts: transcripts, unfolded: unfolded, unfoldedSteps: [])
+            .frame(width: runConversationStoryWidth, alignment: .topLeading)
+    )
+}
+
 /// A whole step's conversation, its groups folded or not.
 private struct LiveConversation: View {
     let entries: [ConversationEntry]
@@ -113,5 +177,10 @@ let runConversationStories: [ComponentStory] = {
         story("implementation-group-open", height: 620) { runConversationStory(implementationStoryLines, open: 0) },
         story("implementation-show-all", height: 760) { runConversationStory(implementationStoryLines, showsAll: true) },
         story("silent-stretch-working", height: 320) { runConversationStory(silentStoryLines, live: true) },
+        story("review-running", height: 260) { runGroupStory(reviewStoryRun(running: true), unfolded: true) },
+        story("review-finished", height: 640) { runGroupStory(reviewStoryRun(running: false), unfolded: true) },
+        story("review-finished-folded", height: 72) { runGroupStory(reviewStoryRun(running: false), unfolded: false) },
+        story("run-blocked", height: 72) { runGroupStory(blockedStoryRun, unfolded: false) },
+        story("step-blocked", height: 140) { runGroupStory(blockedStepStoryRun, unfolded: true) },
     ]
 }()

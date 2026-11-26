@@ -474,17 +474,31 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
       assert Summary.run_outcome([started, paused, ended("ended normally")], verdict("code_review", "approve")) == "Asked you a question"
       assert Summary.run_outcome([started, passed, ended("handoff")], verdict("code_review", "approve")) == "Approved"
       assert Summary.run_outcome([started, ended("handoff")], verdict("code_review", "rework")) == "Sent back to Rework"
+      assert Summary.run_outcome([started, ended("handoff")], verdict("code_review", "request_changes")) == "Sent back to Rework"
       assert Summary.run_outcome([started, ended("handoff")], verdict("code_review", "block")) == "Raised a decision for you"
       assert Summary.run_outcome([started, ended("ended normally")], verdict("qa", "pass")) == "Every walkthrough step passed"
       assert Summary.run_outcome([started, ended("ended normally")], verdict("qa", "fail")) == "Sent back to Rework"
       assert Summary.run_outcome([started, ended("ended normally")], verdict("qa", "skip")) == "QA skipped"
       # A verdict the table doesn't name says nothing; the run's end does.
       assert Summary.run_outcome([started, ended("handoff")], verdict("epic_review", "pass")) == "Pushed and handed off"
-      assert Summary.run_outcome([ended("handoff")], %Event{type: "verdict.recorded", payload: nil}) == "Pushed and handed off"
+      assert Summary.run_outcome([started, ended("handoff")], %Event{type: "verdict.recorded", payload: nil}) == "Pushed and handed off"
+    end
+
+    test "only a run whose kind pushes is pushed and handed off" do
+      pushed = fn kind ->
+        Summary.run_outcome([%Event{seq: 1, type: "run.started", payload: %{run_id: "run-1", run_kind: kind}, run_id: "run-1"}, ended("handoff")], nil)
+      end
+
+      for kind <- ~w(implementation rework review_feedback ci_fix), do: assert(pushed.(kind) == "Pushed and handed off")
+      for kind <- ~w(code_review qa epic_review landing conductor), do: assert(pushed.(kind) == nil)
+      # The kind on the run's end is enough, and a run whose kind Symphony didn't record says nothing.
+      step = %Event{seq: 2, type: "step.completed", payload: %{step_id: "code", outcome: "passed"}, run_id: "run-1"}
+      assert Summary.run_outcome([step, %Event{ended("handoff") | payload: %{exit: "handoff", run_kind: "rework"}}], nil) == "Pushed and handed off"
+      assert Summary.run_outcome([ended("handoff")], nil) == nil
     end
 
     test "how a run ended, in a person's words" do
-      outcome = &Summary.run_outcome([ended(&1)], nil)
+      outcome = &Summary.run_outcome([%Event{seq: 1, type: "run.started", payload: %{run_kind: "implementation"}}, ended(&1)], nil)
 
       assert outcome.("handoff") == "Pushed and handed off"
       assert outcome.("usage limit") == "Stopped at the usage limit"

@@ -527,6 +527,18 @@ GitHub or Linear in QA:
   code": its last entry, the note "Found a subtle bug…", carries "Working" and its fold line
   reads "2 actions so far". On the live server the seed gives QA-104's first implementation run
   the same finished step, its saved transcript served by Symphony's own server.
+- **A run without steps keeps its conversation (TP-1689):** pass
+  `macos/Tests/Fixtures/director-app/ticket-review-conversation` as `api_fixtures` and open
+  SHOP-410. "Code Review run 1" ended: its header reads "Request changes" in amber with a return
+  arrow, its mark the same arrow in amber, no green check and no green chip, and its meta line
+  ("Claude Opus 5.5 · 2 min · 675K tokens · Sent back to Rework") never "Pushed and handed off".
+  Unfold it: its body reads its saved session, one fold line "6 actions · ran 5 commands, …" then
+  the review's note at reading size, and never "This run recorded no steps."; "Show all events"
+  sits at the end of its meta line, and a click opens every group (again, they fold). "QA run 1"
+  reads Blocked in the idle grey with a struck circle, neither amber nor red. "Code Review run 2"
+  is the run now, unfolded on no step: its note, a fold line "3 actions so far" with "Working",
+  and "Show all events" on its meta line. On the live server the seed gives QA-104's "Code Review
+  run 1" the same finished session, served by Symphony's own server.
 - **A grouped walk step (TP-1594):** pass
   `macos/Tests/Fixtures/director-app/ticket-grouped-walk` as `api_fixtures`, open Work ›
   Tickets (it lists SHOP-410 alone, in QA) and open SHOP-410. Its timeline holds "QA run 1" with the pass's steps, as Symphony's server writes

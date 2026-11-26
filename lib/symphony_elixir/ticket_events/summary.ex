@@ -99,6 +99,10 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   0.6M tokens · Asked you a question"), from its `run.started`, `run.ended` and step events in the
   order they were written and its `verdict.recorded` (or nil): a question its last step paused on,
   else its verdict, else how it ended. Nil while it runs, and for an end with nothing to add.
+
+  "Pushed and handed off" is said only of a run whose kind pushes (implementation, rework, review
+  feedback, CI fix), read from its `run.ended` or `run.started`: a review run on the head another run
+  handed off ends with the same `handoff` exit, and pushed nothing.
   """
   @spec run_outcome([Event.t()], Event.t() | nil) :: String.t() | nil
   def run_outcome(events, verdict) when is_list(events) do
@@ -109,8 +113,18 @@ defmodule SymphonyElixir.TicketEvents.Summary do
       is_nil(ended) -> nil
       paused?(last_step) -> "Asked you a question"
       outcome = verdict_outcome(verdict) -> outcome
-      true -> ended.payload |> map_or_empty() |> text(:exit) |> exit_outcome()
+      true -> ended.payload |> map_or_empty() |> text(:exit) |> exit_outcome(run_kind(events))
     end
+  end
+
+  # The run kinds that push their work: only their `handoff` exit was a push of their own.
+  @pushing_kinds ~w(implementation rework review_feedback ci_fix)
+
+  defp run_kind(events) do
+    Enum.find_value(events, fn
+      %Event{type: type, payload: %{} = payload} when type in ["run.ended", "run.started"] -> text(payload, :run_kind)
+      _event -> nil
+    end)
   end
 
   defp paused?(%Event{type: "step.completed", payload: %{} = step}), do: text(step, :outcome) == "paused"
@@ -118,6 +132,7 @@ defmodule SymphonyElixir.TicketEvents.Summary do
 
   @verdict_outcomes %{
     {"code_review", "approve"} => "Approved",
+    {"code_review", "request_changes"} => "Sent back to Rework",
     {"code_review", "rework"} => "Sent back to Rework",
     {"code_review", "block"} => "Raised a decision for you",
     {"qa", "pass"} => "Every walkthrough step passed",
@@ -129,14 +144,14 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   defp verdict_outcome(_verdict), do: nil
 
   # The run's exit, as `Orchestrator` writes it: "handoff", "ended normally", "stopped: …", "failed (…)".
-  defp exit_outcome("handoff"), do: "Pushed and handed off"
-  defp exit_outcome("usage limit"), do: "Stopped at the usage limit"
-  defp exit_outcome("model API unreachable"), do: "Couldn't reach the model"
-  defp exit_outcome("waiting for CI"), do: "Ended to wait for CI"
-  defp exit_outcome("stopped: " <> why), do: "Stopped: " <> why
-  defp exit_outcome("failed" <> _why), do: "Failed"
-  defp exit_outcome("token budget spent" <> _spent), do: "Stopped: its token budget was spent"
-  defp exit_outcome(_exit), do: nil
+  defp exit_outcome("handoff", kind) when kind in @pushing_kinds, do: "Pushed and handed off"
+  defp exit_outcome("usage limit", _kind), do: "Stopped at the usage limit"
+  defp exit_outcome("model API unreachable", _kind), do: "Couldn't reach the model"
+  defp exit_outcome("waiting for CI", _kind), do: "Ended to wait for CI"
+  defp exit_outcome("stopped: " <> why, _kind), do: "Stopped: " <> why
+  defp exit_outcome("failed" <> _why, _kind), do: "Failed"
+  defp exit_outcome("token budget spent" <> _spent, _kind), do: "Stopped: its token budget was spent"
+  defp exit_outcome(_exit, _kind), do: nil
 
   defp running(started, %Event{payload: %{} = step} = last) do
     run = run_name(map_or_empty(started.payload))
