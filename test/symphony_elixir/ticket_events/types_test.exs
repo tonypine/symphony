@@ -107,8 +107,13 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       assert Types.validate("tests.ran", payload, :agent, "implementation") == {:ok, payload}
       assert Types.validate("tests.ran", %{"passed" => 3, "failed" => 0}, :agent, "qa") == {:ok, %{passed: 3, failed: 0}}
       assert Types.validate("tests.ran", %{passed: 3}, :agent, "implementation") == {:error, {:invalid_payload, [:failed]}}
-      assert Types.validate("tests.ran", %{passed: "41", failed: -1}, :agent, "implementation") == {:error, {:invalid_payload, [:passed, :failed]}}
-      assert Types.validate("tests.ran", %{passed: 1, failed: 0, output: "41 tests, 1 failure"}, :agent, "implementation") == {:error, {:invalid_payload, ["output"]}}
+
+      assert Types.validate("tests.ran", %{passed: "41", failed: -1}, :agent, "implementation") ==
+               {:error, {:invalid_payload, [:passed, :failed]}}
+
+      assert Types.validate("tests.ran", %{passed: 1, failed: 0, output: "41 tests, 1 failure"}, :agent, "implementation") ==
+               {:error, {:invalid_payload, ["output"]}}
+
       assert {:error, {:not_allowed, _reason}} = Types.validate("tests.ran", payload, :machine, nil)
       assert Types.shape("tests.ran") == "{passed: integer, failed: integer, skipped?: integer, duration_ms?: integer}"
     end
