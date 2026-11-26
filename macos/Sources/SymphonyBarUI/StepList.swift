@@ -190,14 +190,16 @@ private struct StepRow: View {
             .qaPart("head")
             // A walk that judged several walkthrough steps in one session: one line per step, with its own status,
             // folded or not.
-            if let results = step.answer?.results, !results.isEmpty {
+            if !unfolded, let results = step.answer?.results, !results.isEmpty {
                 CheckResultRows(results: results)
                     .padding(.leading, Self.linesLeading)
                     .padding(.vertical, DesignTokens.Space.s1)
             }
-            // The screenshots the run recorded in this step, folded or not.
-            if !step.screenshots.isEmpty {
-                ScreenshotRow(shots: step.screenshots)
+            // The screenshots the run recorded in this step; unfolded, those its evidence holds stand in its
+            // conversation instead, where it took them.
+            let shots = unfolded ? step.screenshots.filter { !step.facts.pictureIDs.contains($0.id) } : step.screenshots
+            if !shots.isEmpty {
+                ScreenshotRow(shots: shots)
                     .padding(.leading, Self.linesLeading)
                     .padding(.vertical, DesignTokens.Space.s1)
             }
@@ -375,9 +377,11 @@ private struct StepLines: View {
     var body: some View {
         Group {
             if step.isLive, !step.liveLines.isEmpty || step.transcript == nil {
-                RunConversationView(entries: RunConversation.entries(step.liveLines, live: true), folds: $groups)
+                RunConversationView(entries: RunConversation.entries(step.liveLines, facts: step.facts, live: true), folds: $groups)
             } else if let transcript = step.transcript {
-                SavedConversation(transcript: transcript, transcripts: transcripts, groups: $groups, notes: .step)
+                SavedConversation(transcript: transcript, transcripts: transcripts, groups: $groups, notes: .step, facts: step.facts)
+            } else if !step.facts.isEmpty {
+                RunConversationView(entries: RunConversation.entries([], facts: step.facts), folds: $groups)
             }
         }
         .onAppear { if let transcript = step.transcript { transcripts.load(transcript) } }
@@ -392,6 +396,8 @@ struct SavedConversation: View {
     @ObservedObject var transcripts: StepTranscripts
     @Binding var groups: ConversationFolds
     let notes: Notes
+    /// The facts recorded while the lines were written, drawn among them; alone under the note when there are none.
+    var facts: [RunFact] = []
 
     /// What it says when it has no lines to draw.
     struct Notes: Equatable {
@@ -426,9 +432,14 @@ struct SavedConversation: View {
         let lines = transcripts.lines(transcript)
         Group {
             if let note = notes.text(lines) {
-                Text(note).font(DesignTokens.TypeStyle.secondary.font).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: RunConversationView.entrySpacing) {
+                    Text(note).font(DesignTokens.TypeStyle.secondary.font).foregroundStyle(.secondary)
+                    if !facts.isEmpty {
+                        RunConversationView(entries: RunConversation.entries([], facts: facts), folds: $groups)
+                    }
+                }
             } else if case let .loaded(lines) = lines {
-                RunConversationView(entries: RunConversation.entries(lines), folds: $groups)
+                RunConversationView(entries: RunConversation.entries(lines, facts: facts), folds: $groups)
             }
         }
         .onAppear { transcripts.load(transcript) }

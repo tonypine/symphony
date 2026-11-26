@@ -260,21 +260,31 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
     end
 
     test "the checked-in facts fixture equals the answer for a ticket with a fact of each kind, each as data", %{workspace: workspace} do
-      picture = facts_ticket!(workspace)
+      {picture, transcripts} = facts_ticket!(workspace)
 
       body = json_response(get(build_conn(), @path <> "?group=run"), 200)
       events = Path.join(@facts_api, "repos/web-shop/tickets/SHOP-410/events.json")
       picture_file = Path.join(@facts_api, "artifacts/#{picture}.png")
+      # A step's transcript is its lines, as the app reads them from the artifact's address.
+      transcript_files = Enum.map(transcripts, &{&1, Path.join(@facts_api, "artifacts/#{&1}.txt")})
 
       if System.get_env("SYMPHONY_WRITE_FIXTURES") == "1" do
         File.mkdir_p!(Path.dirname(events))
         File.mkdir_p!(Path.dirname(picture_file))
         File.write!(events, [Jason.encode_to_iodata!(body, pretty: true), "\n"])
         File.cp!(@picture, picture_file)
+
+        for {id, file} <- transcript_files do
+          File.write!(file, response(get(build_conn(), "/api/v1/artifacts/#{id}"), 200))
+        end
       end
 
       assert body == events |> File.read!() |> Jason.decode!()
       assert File.read!(picture_file) == response(get(build_conn(), "/api/v1/artifacts/#{picture}"), 200)
+
+      for {id, file} <- transcript_files do
+        assert File.read!(file) == response(get(build_conn(), "/api/v1/artifacts/#{id}"), 200)
+      end
 
       grouped = Enum.flat_map(body["timeline"], &Map.get(&1, "events", [&1]))
       %{"events" => flat} = json_response(get(build_conn(), @path), 200)
@@ -284,7 +294,8 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
         of = fn type -> Enum.filter(events, &(&1["type"] == type)) end
 
         # A picture: an evidence whose artifact is a screenshot, with its address.
-        assert [shot, measured] = of.("evidence")
+        assert [shot, measured, blocked] = of.("evidence")
+        assert %{"step" => "3", "result" => %{"status" => "blocked"}} = blocked["payload"]
         url = "/api/v1/artifacts/" <> picture
         assert [%{"id" => ^picture, "kind" => "screenshot", "mime" => "image/png", "available" => true, "url" => ^url}] = shot["artifacts"]
         assert %{"caption" => "Settings after the relaunch" <> _, "step" => "1", "environment" => "fixture"} = shot["payload"]
@@ -604,14 +615,17 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
 
   # The facts ticket: an implementation run that changed three files in two commits (of three, the
   # list cut), a code review that sent it back with two findings, and a QA pass whose check step
-  # answered with a measure, whose grouped walk judged two steps, which took a picture and measured
-  # the window, and which passed. Fixed ids, times and bytes, so its answer never changes. Returns
-  # the picture's id.
+  # answered with a measure, whose grouped walk judged two steps, which took a picture, measured
+  # the window, could not judge a crop, and passed; each QA step keeps its transcript, its notes,
+  # actions and failed commands written between the facts. Fixed ids, times and bytes, so its
+  # answer never changes. Returns the picture's id and the transcripts' ids.
   defp facts_ticket!(workspace) do
     path = Path.join(workspace, "settings.png")
     File.cp!(@picture, path)
     meta = %{repo_key: @repo_key, issue_id: @issue_id, run_id: "run-qa-1", label: "Settings after the relaunch", kind: "screenshot"}
     {:ok, %{id: picture}} = Artifacts.ingest(path, meta, roots: [workspace])
+    check_transcript = facts_transcript!(workspace, "check_1", "The filter survives a relaunch transcript", facts_check_lines())
+    walk_transcript = facts_transcript!(workspace, "walk_2_3", "Walk a step 2, 3 transcript", facts_walk_lines())
 
     impl = [run_id: "run-impl-1"]
     review = [run_id: "run-review-1"]
@@ -667,6 +681,13 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
     shot = %{caption: "Settings after the relaunch, filter still Failed", step: "1", environment: "fixture", result: %{status: "pass", expected: expected, actual: "It is Failed"}}
     measures = [%{name: "Window width", value: 1440, unit: "pt", expected: 1440}, %{name: "Filter restored after launch", value: 0.42, unit: "s"}]
 
+    blocked = %{
+      caption: "The filter menu's name at 2x: the crop was never written",
+      step: "3",
+      environment: "fixture",
+      result: %{status: "blocked", expected: "A 2x crop of the filter menu's name", actual: "The crop command found no screenshot"}
+    }
+
     events =
       for {id, minute, type, payload, opts} <- [
             {"fx-01", 1, "phase.entered", %{to: "In Progress", from: "Todo"}, phase: "In Progress"},
@@ -680,20 +701,68 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
             {"fx-09", 41, "step.started", Map.put(check, :prompt_ref, "phases.qa.playbooks.macos_app.steps.check_1"), qa},
             {"fx-10", 44, "evidence", shot, qa_agent ++ [artifacts: [picture]]},
             {"fx-11", 45, "evidence", %{caption: "The window and how long the filter took to come back", measures: measures}, qa_agent},
-            {"fx-12", 46, "step.completed", Map.merge(check, %{outcome: "passed", duration_ms: 300_000, result: check_result}), qa},
+            {"fx-12", 46, "step.completed", Map.merge(check, %{outcome: "passed", duration_ms: 300_000, result: check_result}), qa ++ [artifacts: [check_transcript]]},
             {"fx-13", 46, "step.started", Map.put(walk, :prompt_ref, "phases.qa.playbooks.macos_app.steps.walk_2_3"), qa},
-            {"fx-14", 50, "step.completed", Map.merge(walk, %{outcome: "passed", duration_ms: 240_000, results: results}), qa},
+            {"fx-14", 50, "step.completed", Map.merge(walk, %{outcome: "passed", duration_ms: 240_000, results: results}), qa ++ [artifacts: [walk_transcript]]},
             {"fx-15", 51, "verdict.recorded", %{kind: "qa", outcome: "pass", head: "bbb2222"}, qa},
             {"fx-16", 52, "run.ended", %{run_id: "run-qa-1", run_kind: "qa", run_number: 1, exit: "ended normally", duration_ms: 720_000}, qa},
             {"fx-17", 18, "tests.ran", %{passed: 41, failed: 1, skipped: 2, duration_ms: 95_000}, impl_agent},
-            {"fx-18", 19, "check.proved", %{check_id: "c1", by: "test", test: "test/web_shop/filter_test.exs: keeps the filter after a relaunch"}, impl_agent}
+            {"fx-18", 19, "check.proved", %{check_id: "c1", by: "test", test: "test/web_shop/filter_test.exs: keeps the filter after a relaunch"}, impl_agent},
+            {"fx-19", 48, "evidence", blocked, qa_agent}
           ] do
         {:ok, event} = TicketEvents.build(@repo_key, @issue_id, type, payload, Keyword.put(opts, :at, at(minute)))
         %{event | id: id}
       end
 
     {:ok, _events} = RunStore.append_ticket_events(events)
-    picture
+    {picture, [check_transcript, walk_transcript]}
+  end
+
+  # A QA step's transcript, as Symphony keeps one: its lines, one JSON object each.
+  defp facts_transcript!(workspace, step_id, label, lines) do
+    path = Path.join(workspace, "#{step_id}.ndjson")
+    File.write!(path, Enum.map(lines, &[Jason.encode!(&1), "\n"]))
+    meta = %{repo_key: @repo_key, issue_id: @issue_id, run_id: "run-qa-1", label: label, kind: "transcript"}
+    {:ok, %{id: id}} = Artifacts.ingest(path, meta, roots: [workspace])
+    id
+  end
+
+  defp line(kind, text, time, fields \\ %{}), do: Map.merge(%{kind: kind, text: text, at: "2026-10-18T#{time}Z"}, fields)
+
+  # The check step (10:41 to 10:46): its picture at 10:44 and its measures at 10:45 fall between its notes.
+  defp facts_check_lines do
+    [
+      line("say", "I'll launch the app on the facts fixture and open the Activity filter.", "10:41:05"),
+      line("tool", "qa_launch_app: fixture ticket-facts", "10:41:08", %{tool: "qa_launch_app"}),
+      line("result", "Launched the app, pid 4120", "10:41:20", %{duration_ms: 12_000}),
+      line("tool", "Bash: sips -c 900 1440 settings.png --out settings-crop.png", "10:41:30", %{tool: "Bash"}),
+      line("result", "Error: settings.png: no such file", "10:41:31", %{duration_ms: 400, failed: true}),
+      line("say", "The filter menu reads **Failed**. I'll relaunch the app and take its picture.", "10:42:00"),
+      line("tool", "qa_relaunched_app: fixture ticket-facts", "10:42:10", %{tool: "qa_relaunched_app"}),
+      line("result", "Relaunched, pid 4127", "10:42:22", %{duration_ms: 12_000}),
+      line("tool", "qa_screenshot: settings-after-relaunch", "10:43:10", %{tool: "qa_screenshot"}),
+      line("result", "Saved settings-after-relaunch.png", "10:43:12", %{duration_ms: 1_500}),
+      line("say", "The filter still reads `Failed` after the relaunch. I'll measure the window and how long the filter took to come back.", "10:44:30"),
+      line("tool", "qa_measure_elements: window, settings.filter", "10:44:40", %{tool: "qa_measure_elements"}),
+      line("result", "Window width 1440 pt; filter restored after 0.42 s", "10:44:42", %{duration_ms: 800}),
+      line("say", "Step 1 passes: the filter survives the relaunch.", "10:45:30")
+    ]
+  end
+
+  # The grouped walk (10:46 to 10:50): the same crop fails twice back to back before the blocked evidence at 10:48.
+  defp facts_walk_lines do
+    crop = "Bash: sips -c 40 160 --cropOffset 12 300 menu.png --out menu-2x.png"
+
+    [
+      line("say", "Now steps 2 and 3: clearing the filter, then the name in the filter menu.", "10:46:10"),
+      line("tool", "qa_press: Clear filter", "10:46:20", %{tool: "qa_press"}),
+      line("result", "Pressed Clear filter", "10:46:21", %{duration_ms: 300}),
+      line("tool", crop, "10:47:00", %{tool: "Bash"}),
+      line("result", "Error: menu.png: no such file", "10:47:01", %{duration_ms: 400, failed: true}),
+      line("tool", crop, "10:47:30", %{tool: "Bash"}),
+      line("result", "Error: menu.png: no such file", "10:47:31", %{duration_ms: 400, failed: true}),
+      line("say", "Clearing the filter shows every row, so step 2 passes. The filter menu shows no name, so step 3 fails; its 2x crop was never written.", "10:48:30")
+    ]
   end
 
   defp at(%DateTime{} = at), do: at

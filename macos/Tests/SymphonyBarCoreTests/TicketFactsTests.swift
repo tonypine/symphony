@@ -139,7 +139,7 @@ final class TicketFactsTests: XCTestCase {
 
         XCTAssertEqual(steps(payload).compactMap(\.runID), ["run-impl-1", "run-review-1", "run-qa-1"])
         let withFacts = payload.events.filter { !$0.facts.isEmpty }.map(\.id)
-        XCTAssertEqual(withFacts, ["fx-04", "fx-06", "fx-10", "fx-11", "fx-12", "fx-14", "fx-17", "fx-18"])
+        XCTAssertEqual(withFacts, ["fx-04", "fx-06", "fx-10", "fx-11", "fx-12", "fx-14", "fx-17", "fx-18", "fx-19"])
     }
 
     // MARK: - Older shapes

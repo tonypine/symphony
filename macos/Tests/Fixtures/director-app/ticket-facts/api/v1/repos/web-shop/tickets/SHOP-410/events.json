@@ -534,7 +534,16 @@
           "actor": {
             "kind": "machine"
           },
-          "artifacts": [],
+          "artifacts": [
+            {
+              "available": true,
+              "id": "1c0f6d02bd65a402278611512416888767a59e453d38ba410d5f06da24302c2f",
+              "kind": "transcript",
+              "label": "The filter survives a relaunch transcript",
+              "mime": "text/x-ndjson",
+              "url": "/api/v1/artifacts/1c0f6d02bd65a402278611512416888767a59e453d38ba410d5f06da24302c2f"
+            }
+          ],
           "at": "2026-10-18T10:46:00.000000Z",
           "bookkeeping": false,
           "children": [],
@@ -568,7 +577,7 @@
           "run_id": "run-qa-1",
           "seq": 12,
           "summary": {
-            "detail": "pass · It is Failed",
+            "detail": "pass · It is Failed · output kept",
             "title": "The filter survives a relaunch passed in 5 min"
           },
           "supersedes": null,
@@ -606,9 +615,54 @@
         },
         {
           "actor": {
-            "kind": "machine"
+            "kind": "agent",
+            "run_id": "run-qa-1",
+            "run_kind": "qa"
           },
           "artifacts": [],
+          "at": "2026-10-18T10:48:00.000000Z",
+          "bookkeeping": false,
+          "children": [],
+          "head_sha": null,
+          "id": "fx-19",
+          "idempotency": null,
+          "new": true,
+          "parent": null,
+          "payload": {
+            "caption": "The filter menu's name at 2x: the crop was never written",
+            "environment": "fixture",
+            "result": {
+              "actual": "The crop command found no screenshot",
+              "expected": "A 2x crop of the filter menu's name",
+              "status": "blocked"
+            },
+            "step": "3"
+          },
+          "phase": null,
+          "rule": null,
+          "run_id": "run-qa-1",
+          "seq": 19,
+          "summary": {
+            "detail": "The filter menu's name at 2x: the crop was never written",
+            "title": "Evidence recorded, on the fixtures"
+          },
+          "supersedes": null,
+          "type": "evidence"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [
+            {
+              "available": true,
+              "id": "06d129ef6ae8607ccdb538f445cebc07ba4862a9c593ea94fe25d41526662be3",
+              "kind": "transcript",
+              "label": "Walk a step 2, 3 transcript",
+              "mime": "text/x-ndjson",
+              "url": "/api/v1/artifacts/06d129ef6ae8607ccdb538f445cebc07ba4862a9c593ea94fe25d41526662be3"
+            }
+          ],
           "at": "2026-10-18T10:50:00.000000Z",
           "bookkeeping": false,
           "children": [],
@@ -650,7 +704,7 @@
           "run_id": "run-qa-1",
           "seq": 14,
           "summary": {
-            "detail": "Step 2: pass · Clearing the filter shows every row · Step 3: fail · The menu shows no name",
+            "detail": "Step 2: pass · Clearing the filter shows every row · Step 3: fail · The menu shows no name · output kept",
             "title": "Walk a step 2, 3 passed in 4 min"
           },
           "supersedes": null,
