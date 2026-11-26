@@ -51,10 +51,11 @@ defmodule SymphonyElixir.QaSeed do
     `evidence` (`SymphonyElixir.AgentTools.QaPictures`). A `transcript` names a step's lines the same
     way (`file`, `label`), one JSON object a line (`SymphonyElixir.PhaseSteps.Transcript`), kept as
     the `transcript` artifact a step's `step.completed` carries, so the Director unfolds the step
-    into what the agent said and did. Its lines' times (`at`) move so the last one falls at the
-    event's own time, and the facts the run recorded in the step fall among them. On a `run.ended`
-    it names the run's whole session instead, a Claude session JSONL file, which the Director reads
-    as lines (`GET /api/v1/artifacts/:id/lines`) for a run that walks no steps.
+    into what the agent said and did. On a `run.ended` it names the run's whole session instead, a
+    Claude session JSONL file, which the Director reads as lines (`GET /api/v1/artifacts/:id/lines`)
+    for a run that walks no steps. Either way its lines' times (`at`, or a session's `timestamp`)
+    move so the last one falls at the event's own time, and the facts the run recorded fall among
+    them.
 
   It runs as a child of the application between the run store and the orchestrator, when the
   service was started with `--qa-seed <dir>`, so the orchestrator starts with the seeded runs and
@@ -370,9 +371,9 @@ defmodule SymphonyElixir.QaSeed do
     end
   end
 
-  # A step's lines carry the times they were written at, while the seed's events count back from
-  # now: the lines move so the last one falls at the time of the event that keeps them, and a fact
-  # the run recorded in that step falls among them as it did when the seed was written.
+  # A transcript's lines carry the times they were written at, while the seed's events count back
+  # from now: the lines move so the last one falls at the time of the event that keeps them, and a
+  # fact the run recorded falls among them as it did when the seed was written.
   defp ingest(path, dir, %{kind: "transcript"} = meta, %DateTime{} = at) do
     with {:ok, bytes} <- File.read(path),
          {:ok, moved} <- moved_lines(bytes, at) do
@@ -398,23 +399,26 @@ defmodule SymphonyElixir.QaSeed do
       nil ->
         :unmoved
 
-      {_map, last} ->
+      {_map, _key, last} ->
         shift = at |> DateTime.truncate(:second) |> DateTime.diff(last, :second)
         {:ok, Enum.map_join(lines, "\n", &move(&1, shift))}
     end
   end
 
+  # A step's lines keep their time as `at`; a run's whole session, a Claude session JSONL file, as
+  # `timestamp`.
   defp line_at(line) do
-    with {:ok, %{"at" => text} = map} <- Jason.decode(line),
-         {:ok, at, _offset} <- DateTime.from_iso8601(text) do
-      {map, at}
+    with {:ok, %{} = map} <- Jason.decode(line),
+         key when is_binary(key) <- Enum.find(["at", "timestamp"], &is_binary(map[&1])),
+         {:ok, at, _offset} <- DateTime.from_iso8601(map[key]) do
+      {map, key, at}
     else
       _no_time -> nil
     end
   end
 
   defp move({line, nil}, _shift), do: line
-  defp move({_line, {map, at}}, shift), do: Jason.encode!(Map.put(map, "at", at |> DateTime.add(shift, :second) |> DateTime.to_iso8601()))
+  defp move({_line, {map, key, at}}, shift), do: Jason.encode!(Map.put(map, key, at |> DateTime.add(shift, :second) |> DateTime.to_iso8601()))
 
   # The store no longer holds the bytes; the next read of its path marks the artifact expired.
   defp gone(id) do
