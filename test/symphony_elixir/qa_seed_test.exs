@@ -253,6 +253,52 @@ defmodule SymphonyElixir.QaSeedTest do
     assert %{kind: "step_output", label: "Build output"} = output
   end
 
+  test "a step transcript's line times move so its last line falls at the time of the event that keeps it", %{repo_key: repo_key} do
+    lines =
+      ~s({"kind":"say","text":"Start","at":"2026-10-01T09:00:00Z"}\n) <>
+        ~s({"kind":"tool","text":"Bash: ls","tool":"Bash"}\n) <>
+        ~s({"kind":"say","text":"Done","at":"2026-10-01T09:05:30Z"}\n)
+
+    step = %{"issue" => "QA-104", "type" => "step.completed", "run_id" => "run-1", "actor" => "agent", "minutes_ago" => 10}
+    payload = %{"step_id" => "code", "title" => "Write the code", "mode" => "delegated", "outcome" => "passed"}
+    events = [Map.merge(step, %{"payload" => payload, "transcript" => %{"file" => "own/code.ndjson", "label" => "Write the code transcript"}})]
+
+    dir = seed_copy(repo_key, fn seed -> seed |> Map.take(["repository"]) |> Map.put("events", events) end)
+    File.mkdir_p!(Path.join(dir, "own"))
+    File.write!(Path.join(dir, "own/code.ndjson"), lines)
+
+    assert QaSeed.load(dir, now: @now) == :ok
+    assert [%{artifacts: [id]}] = RunStore.list_ticket_events("qa-seed-104", [])
+    assert {:ok, path} = Artifacts.path(id)
+
+    assert [first, untimed, last, ""] = path |> File.read!() |> String.split("\n")
+    assert %{"text" => "Start", "at" => "2026-10-30T11:44:30Z"} = Jason.decode!(first)
+    assert untimed == ~s({"kind":"tool","text":"Bash: ls","tool":"Bash"})
+    assert %{"text" => "Done", "at" => "2026-10-30T11:50:00Z"} = Jason.decode!(last)
+  end
+
+  test "a run's session moves its lines' timestamps so its last line falls at the time of the run's end", %{repo_key: repo_key} do
+    lines =
+      ~s({"type":"assistant","timestamp":"2026-10-01T09:00:00Z","message":{"role":"assistant","content":"Start"}}\n) <>
+        ~s({"type":"assistant","timestamp":"2026-10-01T09:02:00Z","message":{"role":"assistant","content":"Done"}}\n)
+
+    ended = %{"issue" => "QA-104", "type" => "run.ended", "run_id" => "run-1", "minutes_ago" => 10, "payload" => %{"run_id" => "run-1", "run_kind" => "code_review", "exit" => "handoff"}}
+    events = [Map.put(ended, "transcript", %{"file" => "own/session.jsonl", "label" => "Run session"})]
+
+    dir = seed_copy(repo_key, fn seed -> seed |> Map.take(["repository"]) |> Map.put("events", events) end)
+    File.mkdir_p!(Path.join(dir, "own"))
+    File.write!(Path.join(dir, "own/session.jsonl"), lines)
+
+    assert QaSeed.load(dir, now: @now) == :ok
+    assert [%{artifacts: [id]}] = RunStore.list_ticket_events("qa-seed-104", [])
+    assert {:ok, path} = Artifacts.path(id)
+
+    assert [first, last, ""] = path |> File.read!() |> String.split("\n")
+    assert %{"timestamp" => "2026-10-30T11:48:00Z", "message" => %{"content" => "Start"}} = Jason.decode!(first)
+    assert %{"timestamp" => "2026-10-30T11:50:00Z", "message" => %{"content" => "Done"}} = Jason.decode!(last)
+    refute Map.has_key?(Jason.decode!(last), "at")
+  end
+
   test "a seed with only its repository loads, and the ages count from now", %{repo_key: repo_key} do
     dir = seed_copy(repo_key, fn seed -> Map.take(seed, ["repository"]) end)
     File.write!(Path.join(dir, "seed.json"), Jason.encode!(%{"repository" => repo_key, "runs" => [%{"issue" => "QA-110"}], "pauses" => %{}}))

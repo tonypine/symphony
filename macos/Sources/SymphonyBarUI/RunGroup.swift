@@ -73,14 +73,18 @@ public struct RunGroup: View {
                         }
                     }
                     // The run now on no step (a QA or Code Review run walks none) has its conversation here; once such
-                    // a run ended, its saved session draws the same notes and fold lines.
+                    // a run ended, its saved session draws the same notes and fold lines. The facts it recorded outside
+                    // its steps stand in it where recorded, or alone after its steps.
                     if !run.liveLines.isEmpty {
-                        RunConversationView(entries: RunConversation.entries(run.liveLines, live: true), folds: $lineFolds)
+                        RunConversationView(entries: RunConversation.entries(run.liveLines, facts: run.facts, live: true), folds: $lineFolds)
                     } else if let transcript = run.savedConversation {
-                        SavedConversation(transcript: transcript, transcripts: transcripts, groups: $lineFolds, notes: .run)
+                        SavedConversation(transcript: transcript, transcripts: transcripts, groups: $lineFolds, notes: .run, facts: run.facts)
+                    } else if !run.facts.isEmpty {
+                        RunConversationView(entries: RunConversation.entries([], facts: run.facts), folds: $lineFolds)
                     }
-                    if !run.screenshots.isEmpty {
-                        ScreenshotRow(shots: run.screenshots)
+                    let shots = run.screenshots.filter { !run.facts.pictureIDs.contains($0.id) }
+                    if !shots.isEmpty {
+                        ScreenshotRow(shots: shots)
                     }
                     ForEach(run.steers) { steer in
                         RunSteerEntry(steer: steer)

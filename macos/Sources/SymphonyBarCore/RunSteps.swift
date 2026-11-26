@@ -242,6 +242,8 @@ public struct RunStep: Equatable, Identifiable {
     public var liveLines: [TranscriptLine] = []
     /// The screenshots the run recorded while it was in this step.
     public var screenshots: [TicketScreenshot] = []
+    /// The facts the run recorded while it was in this step, oldest first: drawn in its conversation where recorded.
+    public var facts: [RunFact] = []
 
     public init(
         id: String, stepID: String, title: String, state: State, reason: String? = nil, durationSeconds: Int? = nil,
@@ -277,7 +279,7 @@ public struct RunStep: Equatable, Identifiable {
 
     /// Whether the step has lines to unfold into: a transcript, or the run now's lines. The step the run now is on
     /// unfolds before its first line comes, so that line fades in where the person sees it.
-    public var canUnfold: Bool { isLive || transcript != nil || !liveLines.isEmpty || answer != nil || hasLongReason }
+    public var canUnfold: Bool { isLive || transcript != nil || !liveLines.isEmpty || answer != nil || hasLongReason || !facts.isEmpty }
 
     /// What the pointer shows on a step that can't unfold.
     public var cannotUnfoldReason: String? { canUnfold ? nil : Self.nothingYet }
@@ -424,6 +426,9 @@ public struct RunGroupModel: Equatable, Identifiable {
     public var transcript: TicketOutput?
     /// The screenshots the run recorded outside its steps, oldest first.
     public var screenshots: [TicketScreenshot] = []
+    /// The facts the run recorded outside its steps, oldest first: drawn in its conversation where recorded, or after
+    /// its steps.
+    public var facts: [RunFact] = []
     /// The Conductor's turn (run kind `conductor`): the timeline folds it behind "Show all events", where its update
     /// stands on its own.
     public var isMechanical = false
@@ -572,6 +577,7 @@ public struct RunGroupModel: Equatable, Identifiable {
         let live = state == .running
         var (steps, spans) = stepsAndSpans(events, live: live, runNow: runNow, reference: reference)
         let outside = placeScreenshots(events, in: &steps, spans: spans)
+        let outsideFacts = placeFacts(events, in: &steps, spans: spans)
         var group = RunGroupModel(
             id: run.runID,
             title: TicketEventsPayload.runTitle(kind: run.runKind, number: run.runNumber),
@@ -591,6 +597,7 @@ public struct RunGroupModel: Equatable, Identifiable {
         group.endAnswer = ended?.payload.answer.flatMap { $0.entries.isEmpty ? nil : $0 }
         group.transcript = ended?.artifacts.first { $0.kind == "transcript" }?.sessionLines
         group.screenshots = outside
+        group.facts = outsideFacts
         group.isMechanical = run.runKind == conductorKind
         // The steer's delivery stays a row of its own, unless the Conductor's message right beside it says the same words.
         let said = Set(conductorMessages.filter(\.actedOnRun).map(\.text))
@@ -632,6 +639,24 @@ public struct RunGroupModel: Equatable, Identifiable {
             guard !shots.isEmpty else { continue }
             let index = event.date.flatMap { date in steps.indices.last { spans[$0]?.contains(date) == true } }
             if let index { steps[index].screenshots += shots } else { outside += shots }
+        }
+        return outside
+    }
+
+    /// The facts the run's events carry (`RunFact.facts`), each in the step it was recorded in, else returned as the
+    /// run's own: a step's completion's in the step it completes, any other's in the newest step whose span holds when
+    /// it was recorded.
+    static func placeFacts(_ events: [TicketEventsPayload.Event], in steps: inout [RunStep], spans: [Int: StepSpan]) -> [RunFact] {
+        var outside: [RunFact] = []
+        for event in events {
+            let facts = RunFact.facts(event)
+            guard !facts.isEmpty else { continue }
+            var index: Int?
+            if event.type == "step.completed", let stepID = event.payload.stepID?.trimmingWhitespace().nonEmpty {
+                index = steps.indices.last { step in steps[step].stepID == stepID && (spans[step].map { span in span.end == event.date } ?? true) }
+            }
+            if index == nil { index = event.date.flatMap { date in steps.indices.last { spans[$0]?.contains(date) == true } } }
+            if let index { steps[index].facts += facts } else { outside += facts }
         }
         return outside
     }

@@ -508,7 +508,7 @@
     {
       "issue": "QA-104",
       "run_id": "qa-seed-impl-QA-104",
-      "minutes_ago": 176,
+      "minutes_ago": 173,
       "type": "tests.ran",
       "payload": {
         "passed": 41,
@@ -521,7 +521,7 @@
     {
       "issue": "QA-104",
       "run_id": "qa-seed-impl-QA-104",
-      "minutes_ago": 175,
+      "minutes_ago": 173,
       "type": "check.proved",
       "payload": {
         "check_id": "c1",
@@ -616,7 +616,7 @@
     {
       "issue": "QA-104",
       "run_id": "qa-seed-review-QA-104",
-      "minutes_ago": 150,
+      "minutes_ago": 151,
       "type": "verdict.recorded",
       "payload": {
         "kind": "code_review",
@@ -721,7 +721,7 @@
     {
       "issue": "QA-104",
       "run_id": "qa-seed-review2-QA-104",
-      "minutes_ago": 100,
+      "minutes_ago": 101,
       "type": "verdict.recorded",
       "payload": {
         "kind": "code_review",
@@ -787,7 +787,7 @@
     {
       "issue": "QA-104",
       "run_id": "qa-seed-qa-QA-104",
-      "minutes_ago": 52,
+      "minutes_ago": 53,
       "type": "evidence",
       "picture": {
         "file": "pictures/QA-104-activity-filter.png",
@@ -850,6 +850,10 @@
             }
           ]
         }
+      },
+      "transcript": {
+        "file": "step_transcripts/QA-104-qa-check_1.ndjson",
+        "label": "The filter survives a relaunch transcript"
       }
     },
     {
@@ -863,6 +867,24 @@
         "step_id": "walk_2_3",
         "title": "Walk steps 2 and 3",
         "mode": "delegated"
+      }
+    },
+    {
+      "issue": "QA-104",
+      "run_id": "qa-seed-qa-QA-104",
+      "minutes_ago": 41,
+      "type": "evidence",
+      "actor": "agent",
+      "run_kind": "qa",
+      "payload": {
+        "caption": "The filter menu's name at 2x: the crop was never written",
+        "step": "3",
+        "environment": "fixture",
+        "result": {
+          "status": "blocked",
+          "expected": "A 2x crop of the filter menu's name.",
+          "actual": "The crop command found no screenshot, so no crop was written."
+        }
       }
     },
     {
@@ -898,6 +920,10 @@
             ]
           }
         ]
+      },
+      "transcript": {
+        "file": "step_transcripts/QA-104-qa-walk_2_3.ndjson",
+        "label": "Walk steps 2 and 3 transcript"
       }
     },
     {

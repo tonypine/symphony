@@ -1,0 +1,14 @@
+{"kind": "say", "text": "I'll launch the app on the QA-104 fixtures and open the Activity tab, filtered to **Failed**.", "at": "2026-10-30T10:02:05Z"}
+{"kind": "tool", "text": "qa_launch_app: fixtures activity-filter", "at": "2026-10-30T10:02:08Z", "tool": "qa_launch_app"}
+{"kind": "result", "text": "Launched the app, pid 4120", "at": "2026-10-30T10:02:20Z", "duration_ms": 12000}
+{"kind": "tool", "text": "Bash: sips -c 900 1440 activity.png --out activity-crop.png", "at": "2026-10-30T10:02:30Z", "tool": "Bash"}
+{"kind": "result", "text": "Error: activity.png: no such file", "at": "2026-10-30T10:02:31Z", "duration_ms": 400, "failed": true}
+{"kind": "say", "text": "The crop needs the screenshot first. I'll relaunch the app and take it.", "at": "2026-10-30T10:03:00Z"}
+{"kind": "tool", "text": "qa_relaunched_app: activity-filter", "at": "2026-10-30T10:03:10Z", "tool": "qa_relaunched_app"}
+{"kind": "result", "text": "Relaunched, pid 4127", "at": "2026-10-30T10:03:22Z", "duration_ms": 12000}
+{"kind": "tool", "text": "qa_screenshot: activity-after-relaunch", "at": "2026-10-30T10:04:10Z", "tool": "qa_screenshot"}
+{"kind": "result", "text": "Saved activity-after-relaunch.png", "at": "2026-10-30T10:04:12Z", "duration_ms": 1500}
+{"kind": "say", "text": "The Activity tab still reads `Failed` after the relaunch. I'll measure how long the filter took to come back.", "at": "2026-10-30T10:05:30Z"}
+{"kind": "tool", "text": "qa_measure_elements: activity.filter", "at": "2026-10-30T10:05:40Z", "tool": "qa_measure_elements"}
+{"kind": "result", "text": "Filter restored after launch: 0.42 s", "at": "2026-10-30T10:05:42Z", "duration_ms": 800}
+{"kind": "say", "text": "Step 1 passes: the filter survives the relaunch.", "at": "2026-10-30T10:07:30Z"}

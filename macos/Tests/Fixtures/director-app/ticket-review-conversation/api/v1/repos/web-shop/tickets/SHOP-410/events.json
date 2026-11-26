@@ -193,7 +193,11 @@
             "kind": "code_review",
             "outcome": "request_changes",
             "head": "aaa1111",
-            "reason": "The proof of c6 tests a function the row never draws with."
+            "reason": "The proof of c6 tests a function the row never draws with.",
+            "findings": [
+              {"summary": "The test for c6 doesn't test what's drawn.", "file": "macos/Sources/SymphonyBarUI/DoneRow.swift", "line_range": {"start": 70, "end": 79}, "suggested_fix": "Draw the trailing cells from parts, or remove parts and test the rendered row."},
+              {"summary": "The recentHeight token is never used.", "file": "macos/Sources/SymphonyBarCore/DesignTokens.swift", "line_range": {"start": 1883, "end": 1885}, "suggested_fix": "Remove the token, or make the view use it and agree on the value."}
+            ]
           },
           "phase": null,
           "rule": null,

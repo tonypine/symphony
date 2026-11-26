@@ -62,6 +62,9 @@ struct ConversationEntryView: View {
             case .failure:
                 if let failure = entry.failure { ConversationFailureRow(action: failure, repeats: entry.repeats) }
                 if entry.working { ConversationWorkingMark().padding(.top, RunConversationView.foldSpacing) }
+            case .fact:
+                if let fact = entry.fact { ConversationFact(fact: fact) }
+                if entry.working { ConversationWorkingMark().padding(.top, RunConversationView.foldSpacing) }
             }
         }
     }
@@ -175,12 +178,15 @@ public struct ConversationFoldLine: View {
     }
 }
 
-/// A file written or edited, named in a fold line: its name after a document glyph, in a hairline capsule.
+/// A file written or edited, named in a fold line: its name after a document glyph, in a hairline capsule. A
+/// finding's file carries its lines after the name ("DoneRow.swift  70–79").
 public struct ConversationFileChip: View {
     let name: String
+    let detail: String?
 
-    public init(name: String) {
+    public init(name: String, detail: String? = nil) {
         self.name = name
+        self.detail = detail
     }
 
     public var body: some View {
@@ -191,6 +197,15 @@ public struct ConversationFileChip: View {
                 .font(DesignTokens.TypeStyle.caption.font)
                 .lineLimit(1)
                 .truncationMode(.middle)
+            if let detail {
+                Text(detail)
+                    .font(DesignTokens.TypeStyle.caption.font)
+                    .foregroundStyle(DesignTokens.TextColor.tertiary.color)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .fixedSize()
+                    .padding(.leading, 2)
+            }
         }
         .foregroundStyle(DesignTokens.TextColor.secondary.color)
         .padding(.horizontal, DesignTokens.Chip.padding + 1)
@@ -324,5 +339,342 @@ struct ConversationActionRows: View {
             }
         }
         .padding(.leading, DesignTokens.Space.s4)
+    }
+}
+
+// MARK: - Facts
+
+/// A fact the run recorded, as its component (TP-1698): a verdict chip with its findings' files and lines, a QA step's
+/// answer, evidence with its counts, measured values and named pictures, a test-result line, the checks a test proves,
+/// the files and commits a run changed. Drawn from the fact's typed values alone.
+public struct ConversationFact: View {
+    let fact: RunFact
+
+    public init(fact: RunFact) {
+        self.fact = fact
+    }
+
+    public var body: some View {
+        switch fact.kind {
+        case let .verdict(verdict):
+            ConversationVerdict(verdict: verdict)
+        case let .answer(marks, measures):
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+                if !marks.isEmpty { ConversationAnswerMarks(marks: marks) }
+                if !measures.isEmpty { ConversationMeasures(measures: measures) }
+            }
+        case let .evidence(counts, measures, pictures):
+            ConversationEvidence(counts: counts, measures: measures, pictures: pictures)
+        case let .testResult(result):
+            ConversationTestResultLine(result: result)
+        case let .provedChecks(test, checkIDs):
+            ConversationProvedChecks(test: test, checkIDs: checkIDs)
+        case let .changes(changes):
+            ConversationChanges(changes: changes)
+        }
+    }
+}
+
+/// A small capsule in a status's tint: its glyph, a title and, quieter, what it counts or says ("Step 6 evidence 4").
+public struct ConversationFactChip: View {
+    let status: DesignTokens.Status
+    let symbol: String
+    let title: String
+    let detail: String?
+
+    public init(status: DesignTokens.Status, symbol: String, title: String, detail: String? = nil) {
+        self.status = status
+        self.symbol = symbol
+        self.title = title
+        self.detail = detail
+    }
+
+    public var body: some View {
+        HStack(spacing: DesignTokens.Space.s1) {
+            Image(systemName: symbol)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(status.tint)
+            Text(title)
+                .font(DesignTokens.TypeStyle.caption.font.weight(.semibold))
+                .foregroundStyle(DesignTokens.TextColor.primary.color)
+                .lineLimit(1)
+            if let detail {
+                Text(detail)
+                    .font(DesignTokens.TypeStyle.caption.font)
+                    .foregroundStyle(status == .done || status == .idle ? DesignTokens.TextColor.secondary.color : status.text)
+                    .monospacedDigit()
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, DesignTokens.Chip.padding + 3)
+        .padding(.vertical, 2)
+        .background {
+            Capsule(style: .continuous).fill(status.tint.opacity(DesignTokens.Chip.tint))
+            Capsule(style: .continuous).strokeBorder(status.tint.opacity(0.35), lineWidth: 1)
+        }
+        .fixedSize()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(([title, detail].compactMap { $0 }).joined(separator: ", "))
+    }
+}
+
+/// A review's verdict: its chip in its run's treatment ("Request changes": amber, the return arrow), then each
+/// finding's file with its lines.
+public struct ConversationVerdict: View {
+    let verdict: RunFact.Verdict
+
+    public init(verdict: RunFact.Verdict) {
+        self.verdict = verdict
+    }
+
+    public var body: some View {
+        FlowLayout(spacing: DesignTokens.Space.s2, lineSpacing: DesignTokens.Space.s1) {
+            Badge(status: verdict.state.status, word: verdict.word, symbol: verdict.state.badgeSymbol)
+            ForEach(Array(verdict.findings.enumerated()), id: \.offset) { _, finding in
+                if let name = finding.fileName {
+                    ConversationFileChip(name: name, detail: finding.linesText)
+                        .help(finding.summary ?? finding.file ?? name)
+                }
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private var accessibilityLabel: String {
+        let files = verdict.findings.compactMap { finding in finding.fileName.map { name in finding.linesText.map { name + " lines " + $0 } ?? name } }
+        return (["Verdict: " + verdict.word] + files).joined(separator: ", ")
+    }
+}
+
+/// A QA step's answer: one chip per judged step, its state's glyph and word ("Step 3 Failed"); Blocked in the idle
+/// grey with a struck circle.
+public struct ConversationAnswerMarks: View {
+    let marks: [RunFact.Mark]
+
+    public init(marks: [RunFact.Mark]) {
+        self.marks = marks
+    }
+
+    public var body: some View {
+        FlowLayout(spacing: DesignTokens.Space.s2, lineSpacing: DesignTokens.Space.s1) {
+            ForEach(Array(marks.enumerated()), id: \.offset) { _, mark in
+                ConversationFactChip(status: mark.state.status, symbol: mark.state.symbol, title: mark.title, detail: mark.word)
+            }
+        }
+    }
+}
+
+/// Measured values, one quiet line each: "Window width 1440 pt"; one that missed its expected number says so in the
+/// problem tint.
+public struct ConversationMeasures: View {
+    let measures: [TicketMeasure]
+
+    public init(measures: [TicketMeasure]) {
+        self.measures = measures
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(Array(measures.enumerated()), id: \.offset) { _, measure in
+                HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s1) {
+                    Image(systemName: "ruler")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(DesignTokens.TextColor.tertiary.color)
+                    Text(measure.name)
+                        .font(DesignTokens.TypeStyle.secondary.font)
+                        .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                    Text(measure.valueText)
+                        .font(DesignTokens.TypeStyle.secondary.font.weight(.semibold))
+                        .foregroundStyle(measure.missed ? DesignTokens.Status.problem.text : DesignTokens.TextColor.primary.color)
+                        .monospacedDigit()
+                    if measure.missed, let expected = measure.expectedText {
+                        Text(expected)
+                            .font(DesignTokens.TypeStyle.secondary.font)
+                            .foregroundStyle(DesignTokens.TextColor.tertiary.color)
+                            .monospacedDigit()
+                    }
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(measure.text)
+            }
+        }
+    }
+}
+
+/// The evidence a run recorded side by side: a chip per step with how many it recorded, the values it measured, and
+/// each picture where it was taken, the real one, named under it.
+public struct ConversationEvidence: View {
+    let counts: [RunFact.EvidenceCount]
+    let measures: [TicketMeasure]
+    let pictures: [TicketPicture]
+
+    public init(counts: [RunFact.EvidenceCount], measures: [TicketMeasure], pictures: [TicketPicture]) {
+        self.counts = counts
+        self.measures = measures
+        self.pictures = pictures
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
+            if !counts.isEmpty {
+                FlowLayout(spacing: DesignTokens.Space.s2, lineSpacing: DesignTokens.Space.s1) {
+                    ForEach(Array(counts.enumerated()), id: \.offset) { _, count in
+                        ConversationFactChip(status: .done, symbol: DesignTokens.Status.done.symbol, title: count.title, detail: "\(count.count)")
+                    }
+                }
+            }
+            if !measures.isEmpty { ConversationMeasures(measures: measures) }
+            if !pictures.isEmpty { ConversationPictures(pictures: pictures) }
+        }
+    }
+}
+
+/// Pictures where the run took them: each the real picture read from its artifact's address, its name under it.
+public struct ConversationPictures: View {
+    let pictures: [TicketPicture]
+
+    public init(pictures: [TicketPicture]) {
+        self.pictures = pictures
+    }
+
+    public var body: some View {
+        ThumbnailSet(shots: pictures.map(\.screenshot), size: FindingShot.size, showsLabels: true)
+            .accessibilityLabel(Self.accessibilityLabel(pictures))
+    }
+
+    static func accessibilityLabel(_ pictures: [TicketPicture]) -> String {
+        "Pictures: " + pictures.map { $0.screenshot.label }.joined(separator: ", ")
+    }
+}
+
+/// A test result as the run recorded it: "Tests  41 passed, 1 failed, 2 skipped · 1 min 35 s", red when one failed.
+public struct ConversationTestResultLine: View {
+    let result: TicketTestResult
+
+    public init(result: TicketTestResult) {
+        self.result = result
+    }
+
+    public var body: some View {
+        let status: DesignTokens.Status = result.isRed ? .problem : .done
+        HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
+            Image(systemName: status.symbol)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(status.tint)
+            Text(Self.word)
+                .font(DesignTokens.TypeStyle.secondary.font.weight(.semibold))
+                .foregroundStyle(DesignTokens.TextColor.primary.color)
+            Text(result.text)
+                .font(DesignTokens.TypeStyle.secondary.font)
+                .foregroundStyle(result.isRed ? status.text : DesignTokens.TextColor.secondary.color)
+                .monospacedDigit()
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Self.word + ": " + result.text)
+    }
+
+    public static let word = "Tests"
+}
+
+/// The checks a test proves: the test, then each check's id as a chip.
+public struct ConversationProvedChecks: View {
+    let test: String
+    let checkIDs: [String]
+
+    public init(test: String, checkIDs: [String]) {
+        self.test = test
+        self.checkIDs = checkIDs
+    }
+
+    public var body: some View {
+        FlowLayout(spacing: DesignTokens.Space.s1, lineSpacing: 2) {
+            Image(systemName: "checkmark.seal")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(DesignTokens.Status.done.tint)
+            Text(test)
+                .font(DesignTokens.TypeStyle.mono.font)
+                .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Text(Self.covers)
+                .font(DesignTokens.TypeStyle.secondary.font)
+                .foregroundStyle(DesignTokens.TextColor.tertiary.color)
+            ForEach(checkIDs, id: \.self) { check in
+                ConversationFactChip(status: .done, symbol: DesignTokens.Status.done.symbol, title: check)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(test + " " + Self.covers + " " + checkIDs.joined(separator: ", "))
+    }
+
+    public static let covers = "covers"
+}
+
+/// What a run changed: the files as chips after "changed", then each commit, its short sha and subject.
+public struct ConversationChanges: View {
+    let changes: RunChanges
+
+    public init(changes: RunChanges) {
+        self.changes = changes
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+            if !changes.files.isEmpty {
+                FlowLayout(spacing: DesignTokens.Space.s1, lineSpacing: 2) {
+                    Text(Self.changedWord)
+                        .font(DesignTokens.TypeStyle.secondary.font)
+                        .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                    ForEach(Array(changes.files.enumerated()), id: \.offset) { _, file in
+                        ConversationFileChip(name: ActionGist.fileName(file.path), detail: Self.statusWord(file.status))
+                            .help(file.from.map { $0 + " → " + file.path } ?? file.path)
+                    }
+                    if changes.fileCount > changes.files.count {
+                        Text("+\(changes.fileCount - changes.files.count)")
+                            .font(DesignTokens.TypeStyle.caption.font)
+                            .foregroundStyle(DesignTokens.TextColor.tertiary.color)
+                    }
+                }
+            }
+            ForEach(Array(changes.commits.enumerated()), id: \.offset) { _, commit in
+                HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
+                    Image(systemName: "arrow.triangle.branch")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(DesignTokens.TextColor.tertiary.color)
+                    Text(commit.shortSHA)
+                        .font(DesignTokens.TypeStyle.mono.font)
+                        .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                    if let subject = commit.subject {
+                        Text(subject)
+                            .font(DesignTokens.TypeStyle.secondary.font)
+                            .foregroundStyle(DesignTokens.TextColor.primary.color)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Commit " + commit.shortSHA + (commit.subject.map { ", " + $0 } ?? ""))
+            }
+            if changes.commitCount > changes.commits.count {
+                Text("+\(changes.commitCount - changes.commits.count) more commits")
+                    .font(DesignTokens.TypeStyle.caption.font)
+                    .foregroundStyle(DesignTokens.TextColor.tertiary.color)
+            }
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    public static let changedWord = "changed"
+
+    /// "added", "deleted", "renamed"; nil for a file modified, the usual case.
+    static func statusWord(_ status: RunChanges.File.Status) -> String? {
+        switch status {
+        case .added: "added"
+        case .deleted: "deleted"
+        case .renamed: "renamed"
+        case .modified: nil
+        case let .unknown(word): word.isEmpty ? nil : word
+        }
     }
 }

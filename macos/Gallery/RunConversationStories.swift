@@ -1,7 +1,8 @@
 // The run conversation's components (TP-1688, `docs/design/prototypes/run-conversation/`, approved 2026-11-24): a
 // note, a fold line with its chips (folded, unfolded, working), a failure row with its count, the minute line, and a
 // whole step's conversation, the Implementation and Silent stretch scenes; and (TP-1689) the Code Review scene's run
-// with no steps, running and finished with its saved session in the Sent back treatment, and the Blocked marks. Each
+// with no steps, running and finished with its saved session in the Sent back treatment, and the Blocked marks; and
+// (TP-1698) the facts a run recorded, each component alone and the QA and Code Review scenes from the app's fixtures. Each
 // is drawn by the shared views in `SymphonyBarUI/DesignSystem/RunConversation.swift` and `SymphonyBarUI/RunGroup.swift`;
 // a fold line's click works on the live stories.
 import SwiftUI
@@ -182,5 +183,121 @@ let runConversationStories: [ComponentStory] = {
         story("review-finished-folded", height: 72) { runGroupStory(reviewStoryRun(running: false), unfolded: false) },
         story("run-blocked", height: 72) { runGroupStory(blockedStoryRun, unfolded: false) },
         story("step-blocked", height: 140) { runGroupStory(blockedStepStoryRun, unfolded: true) },
+    ] + runFactStories
+}()
+
+// MARK: - Facts (TP-1698)
+
+// The facts a run recorded, drawn where it recorded them: each component alone, then the QA and Code Review scenes read
+// from the app's own fixtures (`director-app/ticket-facts`, `director-app/ticket-review-conversation`), so a story draws
+// what the ticket page draws, the real picture included.
+
+/// The facts fixture's directory, and the review fixture's.
+let factsAPI = ticketPageAPI.appendingPathComponent("../../../ticket-facts/api/v1").standardizedFileURL
+let reviewConversationAPI = ticketPageAPI.appendingPathComponent("../../../ticket-review-conversation/api/v1").standardizedFileURL
+
+/// The runs of SHOP-410 in a fixture, as the ticket page builds them.
+func factsStoryRuns(_ api: URL) -> [RunGroupModel] {
+    guard let data = try? Data(contentsOf: api.appendingPathComponent("repos/web-shop/tickets/SHOP-410/events.json")),
+          let history = TicketEventsPayload.decode(data)
+    else { return [] }
+    return RunGroupModel.groups(history, reference: Date(timeIntervalSince1970: 1_800_000_000))
+}
+
+/// The transcripts of `runs` read from the fixture, at the addresses the app reads them from.
+@MainActor
+func factsStoryTranscripts(_ api: URL, _ runs: [RunGroupModel]) -> StepTranscripts {
+    let transcripts = StepTranscripts { _ in .unreachable }
+    let outputs = runs.flatMap { run in run.steps.compactMap(\.transcript) + [run.transcript].compactMap { $0 } }
+    for output in outputs {
+        let file = api.appendingPathComponent(output.path.replacingOccurrences(of: "api/v1/", with: "") + ".txt")
+        if let data = try? Data(contentsOf: file) { transcripts.keep(TranscriptLine.lines(data), for: output.id) }
+    }
+    return transcripts
+}
+
+/// The fixture's pictures, kept by their artifact's id as the app reads them.
+@MainActor
+func factsStoryImages(_ api: URL) -> ArtifactImages {
+    let images = ArtifactImages { _ in .unreachable }
+    let artifacts = api.appendingPathComponent("artifacts")
+    for file in (try? FileManager.default.contentsOfDirectory(at: artifacts, includingPropertiesForKeys: nil)) ?? [] where file.pathExtension == "png" {
+        if let data = try? Data(contentsOf: file) { images.keep(data, for: file.deletingPathExtension().lastPathComponent) }
+    }
+    return images
+}
+
+/// The run `title` of a fixture, unfolded with every step open, at the step column's width.
+@MainActor
+func factsSceneStory(_ api: URL, _ title: String) -> AnyView {
+    let runs = factsStoryRuns(api)
+    guard let run = runs.first(where: { $0.title == title }) else { return AnyView(Text("No \(title) in the fixture")) }
+    return AnyView(
+        RunGroup(run: run, transcripts: factsStoryTranscripts(api, runs), unfolded: true, unfoldedSteps: Set(run.steps.map(\.id)))
+            .frame(width: runConversationStoryWidth, alignment: .topLeading)
+            .environment(\.artifactImages, factsStoryImages(api))
+    )
+}
+
+private let storyPicture = TicketPicture(
+    caption: "Settings after the relaunch, filter still Failed", step: "1",
+    screenshot: TicketScreenshot(
+        id: "7763409689b96f805ef476477c10d809e7c5e3b42df5f4ceb05f69833bb1582d", label: "Settings after the relaunch",
+        path: "api/v1/artifacts/7763409689b96f805ef476477c10d809e7c5e3b42df5f4ceb05f69833bb1582d", available: true
+    )
+)
+
+private let storyFindings = [
+    ReviewFinding(summary: "The test for c6 doesn't test what's drawn.", file: "macos/Sources/SymphonyBarUI/DoneRow.swift", lineRange: .init(start: 70, end: 79)),
+    ReviewFinding(summary: "The recentHeight token is never used.", file: "macos/Sources/SymphonyBarCore/DesignTokens.swift", lineRange: .init(start: 1883, end: 1885)),
+]
+
+private let storyChanges = RunChanges(
+    startHead: "aaa1111", head: "bbb2222",
+    commits: [RunChanges.Commit(sha: "c0ffee1a2b3c4d5e6f708192a3b4c5d6e7f80912", subject: "Keep the filter in settings"),
+              RunChanges.Commit(sha: "bbb2222aa41f00d", subject: "Restore the filter at launch")],
+    files: [RunChanges.File(path: "lib/web_shop/filter.ex", status: .added), RunChanges.File(path: "lib/web_shop/settings.ex", status: .modified),
+            RunChanges.File(path: "lib/web_shop/tab.ex", status: .renamed, from: "lib/web_shop/pane.ex")],
+    commitCount: 3
+)
+
+@MainActor
+let runFactStories: [ComponentStory] = {
+    func story(_ id: String, height: CGFloat, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
+        ComponentStory(component: "run-conversation", id: id, title: "Run conversation", width: runConversationStoryWidth, height: height, draw: draw)
+    }
+    func fact(_ kind: RunFact.Kind) -> AnyView {
+        AnyView(ConversationFact(fact: RunFact(id: "story", date: nil, kind: kind)).frame(width: runConversationStoryWidth, alignment: .leading))
+    }
+    let measures = [
+        TicketMeasure(name: "Window width", value: 1440, unit: "pt", expected: 1440),
+        TicketMeasure(name: "Filter restored after launch", value: 0.42, unit: "s"),
+        TicketMeasure(name: "Menu label width", value: 0, unit: "pt", expected: 80),
+    ]
+    return [
+        story("fact-verdict-request-changes", height: 40) {
+            fact(.verdict(RunFact.Verdict(word: RunGroupModel.requestChanges, state: .sentBack, findings: storyFindings)))
+        },
+        story("fact-verdict-approved", height: 40) { fact(.verdict(RunFact.Verdict(word: "Approved", state: .passed))) },
+        story("fact-step-answers", height: 40) {
+            fact(.answer([RunFact.Mark(title: "Step 2", state: .done), RunFact.Mark(title: "Step 3", state: .failed),
+                          RunFact.Mark(title: "Step 6", state: .blocked)], measures: []))
+        },
+        story("fact-evidence-counts", height: 40) {
+            fact(.evidence(counts: [.init(step: "6", count: 4), .init(step: "12", count: 4)], measures: [], pictures: []))
+        },
+        story("fact-measures", height: 80) { fact(.evidence(counts: [.init(step: nil, count: 1)], measures: measures, pictures: [])) },
+        story("fact-pictures", height: 160) {
+            AnyView(fact(.evidence(counts: [.init(step: "1", count: 1)], measures: [], pictures: [storyPicture])).environment(\.artifactImages, factsStoryImages(factsAPI)))
+        },
+        story("fact-test-result", height: 28) { fact(.testResult(TicketTestResult(passed: 41, failed: 1, skipped: 2, durationMs: 95_000))) },
+        story("fact-test-result-green", height: 28) { fact(.testResult(TicketTestResult(passed: 12, failed: 0, durationMs: 41_000))) },
+        story("fact-proved-checks", height: 32) {
+            fact(.provedChecks(test: "test/web_shop/filter_test.exs: keeps the filter after a relaunch", checkIDs: ["c1", "c4"]))
+        },
+        story("fact-changes", height: 80) { fact(.changes(storyChanges)) },
+        story("qa-walk-facts", height: 1100) { factsSceneStory(factsAPI, "QA run 1") },
+        story("review-finished-facts", height: 700) { factsSceneStory(reviewConversationAPI, "Code Review run 1") },
+        story("implementation-facts", height: 200) { factsSceneStory(factsAPI, "Implementation run 1") },
     ]
 }()
